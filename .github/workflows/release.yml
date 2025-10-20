@@ -71,6 +71,7 @@ jobs:
             apps/server/build/out/sharkord-windows-x64.exe
             apps/server/build/out/sharkord-macos-x64
             apps/server/build/out/sharkord-macos-arm64
+            apps/server/build/out/release.json
           body: |
             ## Changes
             (TODO)

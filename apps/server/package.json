@@ -1,5 +1,6 @@
 {
   "name": "@sharkord/server",
+  "version": "0.0.0",
   "module": "/src/index.ts",
   "type": "module",
   "private": true,
@@ -50,6 +51,5 @@
     "yauzl": "^3.2.0",
     "yazl": "^3.3.1",
     "zod": "^4.1.11"
-  },
-  "version": "0.0.1"
+  }
 }

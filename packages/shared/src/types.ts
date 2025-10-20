@@ -72,19 +72,23 @@ export type TTempFile = {
   userId: number;
 };
 
-// export type TServerInfo = {
-//   serverId: string;
-//   version: string;
-//   name: string;
-//   description: string | null;
-//   logo: TFile | null;
-//   allowNewUsers: boolean;
-// };
-
 export type TServerInfo = Pick<
   TSettings,
   "serverId" | "name" | "description" | "allowNewUsers"
 > & {
   logo: TFile | null;
   version: string;
+};
+
+export type TArtifact = {
+  name: string;
+  target: string;
+  size: number;
+  checksum: string;
+};
+
+export type TVersionInfo = {
+  version: string;
+  releaseDate: string;
+  artifacts: TArtifact[];
 };
