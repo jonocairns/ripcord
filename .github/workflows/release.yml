@@ -2,6 +2,17 @@ name: Manual Release
 
 on:
   workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump"
+        required: true
+        type: choice
+        options:
+          - none
+          - patch
+          - minor
+          - major
+        default: "none"
 
 permissions:
   contents: write
@@ -48,18 +59,41 @@ jobs:
       - name: Build app
         run: |
           cd apps/server
-          bun run build
+          bun run build --bump ${{ inputs.bump }}
 
-      - name: Upload release artifacts
+      - name: Get new version
+        id: get_version
+        run: echo "::set-output name=version::$(jq -r .version package.json)"
+
+      - name: Identify user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit and push version bump
+        if: ${{ inputs.bump != 'none' }}
+        run: |
+          git add .
+          git commit -m "chore: bump version to ${{ steps.get_version.outputs.version }}"
+          git push
+
+      - name: Create Git tag
+        run: |
+          git tag -a "v${{ steps.get_version.outputs.version }}" -m "Release v${{ steps.get_version.outputs.version }}"
+          git push origin "v${{ steps.get_version.outputs.version }}"
+
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
-          name: v${{ needs.release-please.outputs.version }}
+          tag_name: v${{ steps.get_version.outputs.version }}
+          name: v${{ steps.get_version.outputs.version }}
+          draft: true
           files: |
             apps/server/build/out/sharkord-linux-x64
             apps/server/build/out/sharkord-linux-arm64
             apps/server/build/out/sharkord-windows-x64.exe
             apps/server/build/out/sharkord-macos-x64
             apps/server/build/out/sharkord-macos-arm64
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            ## Changes
+            (TODO)

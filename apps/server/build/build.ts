@@ -1,7 +1,44 @@
 import fs from 'fs/promises';
 import path from 'path';
+import semver from 'semver';
+import { parseArgs } from 'util';
 import { zipDirectory } from '../src/helpers/zip';
 import { compile } from './compile';
+import { getCurrentVersion, patchPackageJsons } from './helpers';
+
+const { values } = parseArgs({
+  args: Bun.argv,
+  options: {
+    bump: {
+      type: 'string',
+      default: 'patch'
+    }
+  },
+  strict: true,
+  allowPositionals: true
+});
+
+if (!values.bump) {
+  console.error(
+    'Please provide a version bump type with --bump (major, minor, patch)'
+  );
+  process.exit(1);
+} else if (!['major', 'minor', 'patch'].includes(values.bump)) {
+  console.error('Invalid bump type');
+  process.exit(1);
+}
+
+const newVersion = semver.inc(
+  await getCurrentVersion(),
+  values.bump as semver.ReleaseType
+);
+
+if (!newVersion) {
+  console.error('Failed to increment version');
+  process.exit(1);
+}
+
+await patchPackageJsons(newVersion);
 
 const clientCwd = path.resolve(process.cwd(), '..', 'client');
 const serverCwd = process.cwd();

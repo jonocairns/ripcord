@@ -32,6 +32,7 @@
     "@sharkord/shared": "workspace:*",
     "@trpc/server": "^11.6.0",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/semver": "^7.7.1",
     "@typescript-eslint/eslint-plugin": "^8.46.1",
     "chalk": "^5.6.2",
     "drizzle-orm": "^0.44.5",
@@ -43,10 +44,12 @@
     "mitt": "^3.0.1",
     "queue": "^7.0.0",
     "rxjs": "^7.8.2",
+    "semver": "^7.7.3",
     "winston": "^3.17.0",
     "ws": "^8.18.3",
     "yauzl": "^3.2.0",
     "yazl": "^3.3.1",
     "zod": "^4.1.11"
-  }
+  },
+  "version": "0.0.1"
 }
