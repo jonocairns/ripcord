@@ -6,9 +6,6 @@ on:
       force:
         type: boolean
         default: false
-  push:
-    branches:
-      - main
 
 permissions:
   contents: write
