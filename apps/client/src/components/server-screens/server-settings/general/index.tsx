@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/card';
 import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
+import { LoadingCard } from '@/components/ui/loading-card';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { closeServerScreens } from '@/features/server-screens/actions';
@@ -18,6 +19,10 @@ import { LogoManager } from './logo-manager';
 const General = memo(() => {
   const { settings, logo, loading, onChange, submit, errors, refetch } =
     useAdminGeneral();
+
+  if (loading) {
+    return <LoadingCard className="h-[600px]" />;
+  }
 
   return (
     <Card>

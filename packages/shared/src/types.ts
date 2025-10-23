@@ -1,22 +1,5 @@
 import { type TFile, type TSettings, type TUser } from ".";
 
-export enum StorageOverflowAction {
-  DELETE_OLD_FILES = "delete", // when new uploads exceed the quota, delete the oldest files
-  PREVENT_UPLOADS = "prevent", // when new uploads exceed the quota, prevent new uploads
-}
-
-export const STORAGE_OVERFLOW_ACTIONS_DICT = {
-  [StorageOverflowAction.DELETE_OLD_FILES]: "Delete old files",
-  [StorageOverflowAction.PREVENT_UPLOADS]: "Prevent new file uploads",
-};
-
-export const STORAGE_OVERFLOW_ACTIONS_DESCRIPTION = {
-  [StorageOverflowAction.DELETE_OLD_FILES]:
-    "When new uploads exceed the quota, the server will automatically delete the oldest files to make room for new uploads.",
-  [StorageOverflowAction.PREVENT_UPLOADS]:
-    "When new uploads exceed the quota, the server will prevent new uploads until the user deletes some files manually.",
-};
-
 export enum ChannelType {
   TEXT = "TEXT",
   VOICE = "VOICE",

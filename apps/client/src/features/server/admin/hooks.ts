@@ -1,13 +1,22 @@
 import { parseTrpcErrors, type TTrpcErrors } from '@/helpers/parse-trpc-errors';
+import { useForm } from '@/hooks/use-form';
 import { getTRPCClient } from '@/lib/trpc';
 import {
+  STORAGE_MAX_FILE_COUNT,
+  STORAGE_MAX_FILE_SIZE,
+  STORAGE_MAX_QUOTA_PER_USER,
+  STORAGE_OVERFLOW_ACTION,
+  StorageOverflowAction,
   type TChannel,
+  type TDiskMetrics,
   type TFile,
   type TJoinedEmoji,
   type TJoinedRole,
-  type TRole
+  type TRole,
+  type TStorageSettings
 } from '@sharkord/shared';
-import { useCallback, useEffect, useState } from 'react';
+import { filesize } from 'filesize';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 export const useAdminGeneral = () => {
@@ -44,7 +53,7 @@ export const useAdminGeneral = () => {
       await trpc.others.updateSettings.mutate({
         name: settings.name,
         description: settings.description,
-        password: settings.password || null,
+        password: settings.password || undefined,
         allowNewUsers: settings.allowNewUsers
       });
       toast.success('Settings updated');
@@ -203,5 +212,86 @@ export const useAdminRoles = () => {
     loading,
     errors,
     onChange
+  };
+};
+
+export const useAdminStorage = () => {
+  const [loading, setLoading] = useState(true);
+  const { values, setValues, setTrpcErrors, r, onChange } =
+    useForm<TStorageSettings>({
+      storageOverflowAction: STORAGE_OVERFLOW_ACTION,
+      storageSpaceQuotaByUser: STORAGE_MAX_QUOTA_PER_USER,
+      storageUploadEnabled: true,
+      storageUploadMaxFileCount: STORAGE_MAX_FILE_COUNT,
+      storageUploadMaxFileSize: STORAGE_MAX_FILE_SIZE
+    });
+  const [diskMetrics, setDiskMetrics] = useState<TDiskMetrics | undefined>(
+    undefined
+  );
+
+  const fetchStorageSettings = useCallback(async () => {
+    setLoading(true);
+
+    const trpc = getTRPCClient();
+    const { storageSettings, diskMetrics } =
+      await trpc.others.getStorageSettings.query();
+
+    setValues(storageSettings);
+    setDiskMetrics(diskMetrics);
+    setLoading(false);
+  }, [setValues]);
+
+  const submit = useCallback(async () => {
+    const trpc = getTRPCClient();
+
+    try {
+      await trpc.others.updateSettings.mutate({
+        storageUploadEnabled: values.storageUploadEnabled,
+        storageUploadMaxFileSize: values.storageUploadMaxFileSize,
+        storageUploadMaxFileCount: values.storageUploadMaxFileCount,
+        storageSpaceQuotaByUser: values.storageSpaceQuotaByUser,
+        storageOverflowAction:
+          values.storageOverflowAction as StorageOverflowAction
+      });
+      toast.success('Storage settings updated');
+    } catch (error) {
+      console.error('Error updating storage settings:', error);
+      setTrpcErrors(error);
+    }
+  }, [values, setTrpcErrors]);
+
+  const labels = useMemo(() => {
+    return {
+      storageUploadMaxFileSize: filesize(
+        Number(values.storageUploadMaxFileSize ?? 0),
+        {
+          output: 'object',
+          standard: 'jedec'
+        }
+      ),
+      storageUploadMaxFileCount: values.storageUploadMaxFileCount,
+      storageSpaceQuotaByUser: filesize(
+        Number(values.storageSpaceQuotaByUser ?? 0),
+        {
+          output: 'object',
+          standard: 'jedec'
+        }
+      )
+    };
+  }, [values]);
+
+  useEffect(() => {
+    fetchStorageSettings();
+  }, [fetchStorageSettings]);
+
+  return {
+    values,
+    labels,
+    refetch: fetchStorageSettings,
+    loading,
+    submit,
+    r,
+    onChange,
+    diskMetrics
   };
 };

@@ -62,6 +62,7 @@ const Connect = memo(() => {
       const data = (await response.json()) as { token: string };
 
       sessionStorage.setItem(SessionStorageKey.TOKEN, data.token);
+      localStorage.setItem(LocalStorageKey.USER_PASSWORD, values.password);
 
       await connect();
     } finally {

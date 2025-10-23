@@ -1,7 +1,7 @@
+import './helpers/ensure-server-dirs';
 import chalk from 'chalk';
 import { config, SERVER_PRIVATE_IP } from './config';
 import { loadDb } from './db';
-import './helpers/ensure-server-dirs';
 import { createServers } from './utils/create-servers';
 import { loadEmbeds } from './utils/embeds';
 import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';

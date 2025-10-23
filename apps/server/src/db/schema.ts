@@ -1,4 +1,10 @@
-import type { TMessageMetadata } from '@sharkord/shared';
+import {
+  STORAGE_MAX_FILE_COUNT,
+  STORAGE_MAX_FILE_SIZE,
+  STORAGE_MIN_QUOTA_PER_USER,
+  StorageOverflowAction,
+  type TMessageMetadata
+} from '@sharkord/shared';
 import {
   index,
   integer,
@@ -19,7 +25,22 @@ const settings = sqliteTable(
     logoId: integer('logoId').references(() => files.id),
     allowNewUsers: integer('allowNewUsers', { mode: 'boolean' })
       .notNull()
-      .default(true)
+      .default(true),
+    storageUploadEnabled: integer('storageUploadsEnabled', { mode: 'boolean' })
+      .notNull()
+      .default(true),
+    storageUploadMaxFileSize: integer('storageUploadMaxFileSize')
+      .notNull()
+      .default(STORAGE_MAX_FILE_SIZE),
+    storageUploadMaxFileCount: integer('storageUploadMaxFileCount')
+      .notNull()
+      .default(STORAGE_MAX_FILE_COUNT),
+    storageSpaceQuotaByUser: integer('storageSpaceQuotaByUser')
+      .notNull()
+      .default(STORAGE_MIN_QUOTA_PER_USER),
+    storageOverflowAction: text('storageOverflowAction')
+      .notNull()
+      .default(StorageOverflowAction.PREVENT_UPLOADS)
   },
   (t) => ({
     serverIdx: index('settings_server_idx').on(t.serverId)

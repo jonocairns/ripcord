@@ -45,6 +45,15 @@ export type TIEmoji = InferInsertModel<typeof emojis>;
 export type TINotificationSound = InferInsertModel<typeof notificationSounds>;
 export type TIMessageReaction = InferInsertModel<typeof messageReactions>;
 
+export type TStorageSettings = Pick<
+  TSettings,
+  | "storageUploadEnabled"
+  | "storageUploadMaxFileSize"
+  | "storageUploadMaxFileCount"
+  | "storageSpaceQuotaByUser"
+  | "storageOverflowAction"
+>;
+
 // joined types
 
 type TPublicUser = Pick<

@@ -1,4 +1,6 @@
 export * from "./permissions";
+export * from "./storage";
+export * from "./metrics";
 
 export const DEFAULT_MESSAGES_LIMIT = 30;
 
