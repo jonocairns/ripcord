@@ -9,7 +9,6 @@ import { getFileUrl, getUrlFromServer } from '@/helpers/get-file-url';
 import { useForm } from '@/hooks/use-form';
 import { LocalStorageKey, SessionStorageKey } from '@/types';
 import { memo, useCallback, useMemo, useState } from 'react';
-import { toast } from 'sonner';
 
 const Connect = memo(() => {
   const { values, r, setErrors, onChange } = useForm<{
@@ -70,37 +69,6 @@ const Connect = memo(() => {
     }
   }, [values.identity, values.password, setErrors]);
 
-  const onRegisterClick = useCallback(async () => {
-    setLoading(true);
-
-    try {
-      const url = getUrlFromServer();
-      const response = await fetch(`${url}/register`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          identity: values.identity,
-          password: values.password
-        })
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        setErrors(data.errors || {});
-        return;
-      }
-
-      localStorage.setItem(LocalStorageKey.IDENTITY, values.identity);
-      toast.success(
-        'Registration successful! You can now connect to the server.'
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [values.identity, values.password, setErrors]);
-
   const logoSrc = useMemo(() => {
     if (info?.logo) {
       return getFileUrl(info.logo);
@@ -155,22 +123,10 @@ const Connect = memo(() => {
             >
               Connect
             </Button>
-            <Button
-              className="w-full"
-              variant="outline"
-              onClick={onRegisterClick}
-              disabled={
-                loading ||
-                !values.identity ||
-                !values.password ||
-                !info?.allowNewUsers
-              }
-            >
-              Register
-            </Button>
             {!info?.allowNewUsers && (
               <span className="text-xs text-muted-foreground text-center">
-                New user registration is disabled on this server.
+                New user registrations are currently disabled. You need to be
+                invited by an existing user to join this server.
               </span>
             )}
           </div>

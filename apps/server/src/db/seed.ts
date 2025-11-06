@@ -174,7 +174,7 @@ const seedDatabase = async () => {
     ),
     chalk.white('Please read the documentation on how to use this token.'),
     chalk.yellowBright('────────────────────────────────────────────────────'),
-    chalk.bold(originalToken),
+    chalk.bold.redBright(originalToken),
     chalk.yellowBright('────────────────────────────────────────────────────')
   ].join('\n');
 

@@ -1,8 +1,11 @@
-import { sha256 } from '@sharkord/shared';
+import { sha256, type TJoinedUser } from '@sharkord/shared';
 import http from 'http';
 import jwt from 'jsonwebtoken';
 import z from 'zod';
+import { createUser } from '../db/mutations/users/create-user';
+import { publishUser } from '../db/publishers';
 import { getServerToken } from '../db/queries/others/get-server-token';
+import { getSettings } from '../db/queries/others/get-settings';
 import { getUserByIdentity } from '../db/queries/users/get-user-by-identity';
 import { getJsonBody } from './helpers';
 import { HttpValidationError } from './utils';
@@ -12,15 +15,44 @@ const zBody = z.object({
   password: z.string()
 });
 
+const registerUser = async (
+  identity: string,
+  password: string
+): Promise<TJoinedUser> => {
+  const hashedPassword = await sha256(password);
+  const createdUser = await createUser(identity, hashedPassword);
+
+  await publishUser(createdUser.id, 'create');
+
+  const registeredUser = await getUserByIdentity(identity);
+
+  if (!registeredUser) {
+    throw new Error('User registration failed');
+  }
+
+  return registeredUser;
+};
+
 const loginRouteHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse
 ) => {
   const data = zBody.parse(await getJsonBody(req));
-  const existingUser = await getUserByIdentity(data.identity);
+  let existingUser = await getUserByIdentity(data.identity);
+  const settings = await getSettings();
 
   if (!existingUser) {
-    throw new HttpValidationError('identity', 'Identity not found');
+    if (!settings.allowNewUsers) {
+      // check if user provided a valid invite code (not implemented yet)
+
+      throw new HttpValidationError(
+        'identity',
+        'Registration is disabled on this server.'
+      );
+    } else {
+      // user doesn't exist, but registration is open - create the user automatically
+      existingUser = await registerUser(data.identity, data.password);
+    }
   }
 
   if (existingUser.banned) {

@@ -1,3 +1,4 @@
+import chalk from 'chalk';
 import http from 'http';
 import z from 'zod';
 import { config } from '../config';
@@ -8,10 +9,8 @@ import { infoRouteHandler } from './info';
 import { interfaceRouteHandler } from './interface';
 import { loginRouteHandler } from './login';
 import { publicRouteHandler } from './public';
-import { registerRouteHandler } from './register';
 import { uploadFileRouteHandler } from './upload';
 import { HttpValidationError } from './utils';
-import chalk from 'chalk';
 
 // this http server implementation is temporary and will be moved to bun server later when things are more stable
 
@@ -25,7 +24,12 @@ const createHttpServer = async () => {
 
         const info = getWsInfo(undefined, req);
 
-        logger.debug(`${chalk.dim('[HTTP]')} %s - %s - [%s]`, req.method, req.url, info?.ip);
+        logger.debug(
+          `${chalk.dim('[HTTP]')} %s - %s - [%s]`,
+          req.method,
+          req.url,
+          info?.ip
+        );
 
         if (req.method === 'OPTIONS') {
           res.writeHead(200);
@@ -44,10 +48,6 @@ const createHttpServer = async () => {
 
           if (req.method === 'POST' && req.url === '/upload') {
             return await uploadFileRouteHandler(req, res);
-          }
-
-          if (req.method === 'POST' && req.url === '/register') {
-            return await registerRouteHandler(req, res);
           }
 
           if (req.method === 'POST' && req.url === '/login') {
