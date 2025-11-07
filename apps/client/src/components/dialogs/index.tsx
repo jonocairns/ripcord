@@ -4,6 +4,7 @@ import { createElement, memo } from 'react';
 import { ChangeRoleDialog } from './change-role';
 import ConfirmActionDialog from './confirm-action';
 import { CreateChannelDialog } from './create-channel';
+import { CreateInviteDialog } from './create-invite-dialog';
 import { Dialog } from './dialogs';
 import { ServerPasswordDialog } from './server-password';
 import { TextInputDialog } from './text-input';
@@ -14,7 +15,8 @@ const DialogsMap: any = {
   [Dialog.CREATE_CHANNEL]: CreateChannelDialog,
   [Dialog.TEXT_INPUT]: TextInputDialog,
   [Dialog.SERVER_PASSWORD]: ServerPasswordDialog,
-  [Dialog.CHANGE_ROLE]: ChangeRoleDialog
+  [Dialog.CHANGE_ROLE]: ChangeRoleDialog,
+  [Dialog.CREATE_INVITE]: CreateInviteDialog
 };
 
 const DialogsProvider = memo(() => {

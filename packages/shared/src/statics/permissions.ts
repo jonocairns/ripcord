@@ -16,6 +16,7 @@ export enum Permission {
   MANAGE_FILES = "MANAGE_FILES",
   MANAGE_MESSAGES = "MANAGE_MESSAGES",
   MANAGE_STORAGE = "MANAGE_STORAGE",
+  MANAGE_INVITES = "MANAGE_INVITES",
   VIEW_AUDIT_LOG = "VIEW_AUDIT_LOG",
   VIEW_SERVER_STATS = "VIEW_SERVER_STATS",
 }
@@ -37,6 +38,7 @@ export const permissionLabels: Record<Permission, string> = {
   [Permission.MANAGE_FILES]: "Manage files",
   [Permission.MANAGE_MESSAGES]: "Manage messages",
   [Permission.MANAGE_STORAGE]: "Manage storage",
+  [Permission.MANAGE_INVITES]: "Manage invites",
   [Permission.VIEW_AUDIT_LOG]: "View audit log",
   [Permission.VIEW_SERVER_STATS]: "View server stats",
 };
@@ -67,6 +69,8 @@ export const permissionDescriptions: Record<Permission, string> = {
     "Grants the ability to manage messages from all users by editing or deleting them.",
   [Permission.MANAGE_STORAGE]:
     "Grants the ability to manage storage, such as enabling or disabling uploads.",
+  [Permission.MANAGE_INVITES]:
+    "Grants the ability to create, edit, and delete server invites.",
   [Permission.VIEW_AUDIT_LOG]: "Grants the ability to view the audit log.",
   [Permission.VIEW_SERVER_STATS]:
     "Grants the ability to view server stats, such as CPU and RAM usage.",

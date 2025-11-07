@@ -13,6 +13,7 @@ import {
   emojis,
   notificationSounds,
   messageReactions,
+  invites,
 } from "../../../apps/server/src/db/schema";
 import type { UserStatus } from "./types";
 import type { Permission } from "./statics";
@@ -30,6 +31,7 @@ export type TRolePermission = InferSelectModel<typeof rolePermissions>;
 export type TEmoji = InferSelectModel<typeof emojis>;
 export type TNotificationSound = InferSelectModel<typeof notificationSounds>;
 export type TMessageReaction = InferSelectModel<typeof messageReactions>;
+export type TInvite = InferSelectModel<typeof invites>;
 
 export type TISettings = InferInsertModel<typeof settings>;
 export type TIRole = InferInsertModel<typeof roles>;
@@ -44,6 +46,7 @@ export type TIRolePermission = InferInsertModel<typeof rolePermissions>;
 export type TIEmoji = InferInsertModel<typeof emojis>;
 export type TINotificationSound = InferInsertModel<typeof notificationSounds>;
 export type TIMessageReaction = InferInsertModel<typeof messageReactions>;
+export type TIInvite = InferInsertModel<typeof invites>;
 
 export type TStorageSettings = Pick<
   TSettings,
@@ -104,4 +107,8 @@ export type TJoinedPublicUser = TPublicUser & {
 
 export type TJoinedSettings = TSettings & {
   logo: TFile | null;
+};
+
+export type TJoinedInvite = TInvite & {
+  creator: TJoinedPublicUser;
 };

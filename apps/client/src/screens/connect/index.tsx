@@ -1,3 +1,4 @@
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Group } from '@/components/ui/group';
@@ -14,24 +15,32 @@ const Connect = memo(() => {
   const { values, r, setErrors, onChange } = useForm<{
     identity: string;
     password: string;
-    rememberIdentity: boolean;
+    rememberCredentials: boolean;
   }>({
     identity: localStorage.getItem(LocalStorageKey.IDENTITY) || '',
     password: localStorage.getItem(LocalStorageKey.USER_PASSWORD) || '',
-    rememberIdentity: !!localStorage.getItem(LocalStorageKey.REMEMBER_IDENTITY)
+    rememberCredentials: !!localStorage.getItem(
+      LocalStorageKey.REMEMBER_CREDENTIALS
+    )
   });
 
   const [loading, setLoading] = useState(false);
   const info = useInfo();
 
-  const onRememberIdentityChange = useCallback(
+  const inviteCode = useMemo(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const invite = urlParams.get('invite');
+    return invite || undefined;
+  }, []);
+
+  const onRememberCredentialsChange = useCallback(
     (checked: boolean) => {
-      onChange('rememberIdentity', checked);
+      onChange('rememberCredentials', checked);
 
       if (checked) {
-        localStorage.setItem(LocalStorageKey.REMEMBER_IDENTITY, 'true');
+        localStorage.setItem(LocalStorageKey.REMEMBER_CREDENTIALS, 'true');
       } else {
-        localStorage.removeItem(LocalStorageKey.REMEMBER_IDENTITY);
+        localStorage.removeItem(LocalStorageKey.REMEMBER_CREDENTIALS);
       }
     },
     [onChange]
@@ -48,7 +57,8 @@ const Connect = memo(() => {
         },
         body: JSON.stringify({
           identity: values.identity,
-          password: values.password
+          password: values.password,
+          invite: inviteCode
         })
       });
 
@@ -61,13 +71,23 @@ const Connect = memo(() => {
       const data = (await response.json()) as { token: string };
 
       sessionStorage.setItem(SessionStorageKey.TOKEN, data.token);
-      localStorage.setItem(LocalStorageKey.USER_PASSWORD, values.password);
+
+      if (values.rememberCredentials) {
+        localStorage.setItem(LocalStorageKey.IDENTITY, values.identity);
+        localStorage.setItem(LocalStorageKey.USER_PASSWORD, values.password);
+      }
 
       await connect();
     } finally {
       setLoading(false);
     }
-  }, [values.identity, values.password, setErrors]);
+  }, [
+    values.identity,
+    values.password,
+    setErrors,
+    values.rememberCredentials,
+    inviteCode
+  ]);
 
   const logoSrc = useMemo(() => {
     if (info?.logo) {
@@ -106,10 +126,10 @@ const Connect = memo(() => {
                 onEnter={onConnectClick}
               />
             </Group>
-            <Group label="Remember Identity">
+            <Group label="Remember Credentials">
               <Switch
-                checked={values.rememberIdentity}
-                onCheckedChange={onRememberIdentityChange}
+                checked={values.rememberCredentials}
+                onCheckedChange={onRememberCredentialsChange}
               />
             </Group>
           </div>
@@ -124,10 +144,26 @@ const Connect = memo(() => {
               Connect
             </Button>
             {!info?.allowNewUsers && (
-              <span className="text-xs text-muted-foreground text-center">
-                New user registrations are currently disabled. You need to be
-                invited by an existing user to join this server.
-              </span>
+              <>
+                {!inviteCode && (
+                  <span className="text-xs text-muted-foreground text-center">
+                    New user registrations are currently disabled. If you do not
+                    have an account yet, you need to be invited by an existing
+                    user to join this server.
+                  </span>
+                )}
+              </>
+            )}
+
+            {inviteCode && (
+              <Alert variant="info">
+                <AlertTitle>You were invited to join this server</AlertTitle>
+                <AlertDescription>
+                  <span className="font-mono text-xs">
+                    Invite code: {inviteCode}
+                  </span>
+                </AlertDescription>
+              </Alert>
             )}
           </div>
         </CardContent>

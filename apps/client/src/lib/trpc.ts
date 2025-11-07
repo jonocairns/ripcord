@@ -60,6 +60,7 @@ const cleanup = () => {
     wsClient.close();
     wsClient = null;
   }
+
   trpc = null;
   currentHost = null;
 
@@ -67,6 +68,10 @@ const cleanup = () => {
   resetServerState();
   resetDialogs();
   resetApp();
+
+  sessionStorage.removeItem(SessionStorageKey.TOKEN);
 };
 
-export { cleanup, connectToTRPC, getTRPCClient, type AppRouter };
+const disconnect = cleanup;
+
+export { cleanup, connectToTRPC, disconnect, getTRPCClient, type AppRouter };

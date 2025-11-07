@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { openServerScreen } from '@/features/server-screens/actions';
 import { useServerName } from '@/features/server/hooks';
+import { disconnect } from '@/lib/trpc';
 import { Permission } from '@sharkord/shared';
 import { Menu } from 'lucide-react';
 import { memo } from 'react';
@@ -41,7 +42,9 @@ const LeftSidebar = memo(() => {
                   Settings
                 </DropdownMenuItem>
               </Protect>
-              <DropdownMenuItem>Disconnect</DropdownMenuItem>
+              <DropdownMenuItem onClick={disconnect}>
+                Disconnect
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

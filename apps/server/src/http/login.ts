@@ -2,8 +2,10 @@ import { sha256, type TJoinedUser } from '@sharkord/shared';
 import http from 'http';
 import jwt from 'jsonwebtoken';
 import z from 'zod';
+import { addInviteUse } from '../db/mutations/invites/add-invite-use';
 import { createUser } from '../db/mutations/users/create-user';
 import { publishUser } from '../db/publishers';
+import { isInviteValid } from '../db/queries/invites/is-invite-valid';
 import { getServerToken } from '../db/queries/others/get-server-token';
 import { getSettings } from '../db/queries/others/get-settings';
 import { getUserByIdentity } from '../db/queries/users/get-user-by-identity';
@@ -12,7 +14,8 @@ import { HttpValidationError } from './utils';
 
 const zBody = z.object({
   identity: z.string(),
-  password: z.string()
+  password: z.string(),
+  invite: z.string().optional()
 });
 
 const registerUser = async (
@@ -43,16 +46,17 @@ const loginRouteHandler = async (
 
   if (!existingUser) {
     if (!settings.allowNewUsers) {
-      // check if user provided a valid invite code (not implemented yet)
+      const inviteError = await isInviteValid(data.invite);
 
-      throw new HttpValidationError(
-        'identity',
-        'Registration is disabled on this server.'
-      );
-    } else {
-      // user doesn't exist, but registration is open - create the user automatically
-      existingUser = await registerUser(data.identity, data.password);
+      if (inviteError) {
+        throw new HttpValidationError('identity', inviteError);
+      }
+
+      await addInviteUse(data.invite!);
     }
+
+    // user doesn't exist, but registration is open OR invite was valid - create the user automatically
+    existingUser = await registerUser(data.identity, data.password);
   }
 
   if (existingUser.banned) {

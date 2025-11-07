@@ -2,6 +2,7 @@ import { t } from '../utils/trpc';
 import { channelsRouter } from './channels';
 import { emojisRouter } from './emojis';
 import { filesRouter } from './files';
+import { invitesRouter } from './invites';
 import { messagesRouter } from './messages';
 import { othersRouter } from './others';
 import { rolesRouter } from './roles';
@@ -14,7 +15,8 @@ const appRouter = t.router({
   channels: channelsRouter,
   files: filesRouter,
   emojis: emojisRouter,
-  roles: rolesRouter
+  roles: rolesRouter,
+  invites: invitesRouter
 });
 
 type AppRouter = typeof appRouter;

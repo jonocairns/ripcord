@@ -285,11 +285,31 @@ const messageReactions = sqliteTable(
   })
 );
 
+const invites = sqliteTable(
+  'invites',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    code: text('code').notNull().unique(),
+    creatorId: integer('creatorId')
+      .notNull()
+      .references(() => users.id),
+    maxUses: integer('maxUses'),
+    uses: integer('uses').notNull().default(0),
+    expiresAt: integer('expiresAt'),
+    createdAt: integer('createdAt').notNull()
+  },
+  (t) => ({
+    codeIdx: uniqueIndex('invites_code_idx').on(t.code),
+    creatorIdx: index('invites_creator_idx').on(t.creatorId)
+  })
+);
+
 export {
   categories,
   channels,
   emojis,
   files,
+  invites,
   logins,
   messageFiles,
   messageReactions,

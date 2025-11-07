@@ -11,6 +11,7 @@ import {
   type TDiskMetrics,
   type TFile,
   type TJoinedEmoji,
+  type TJoinedInvite,
   type TJoinedRole,
   type TJoinedUser,
   type TLogin,
@@ -359,5 +360,30 @@ export const useAdminUserInfo = (userId: number) => {
     refetch: fetchUser,
     loading,
     messages
+  };
+};
+
+export const useAdminInvites = () => {
+  const [loading, setLoading] = useState(true);
+  const [invites, setInvites] = useState<TJoinedInvite[]>([]);
+
+  const fetchInvites = useCallback(async () => {
+    setLoading(true);
+
+    const trpc = getTRPCClient();
+    const invites = await trpc.invites.getAll.query();
+
+    setInvites(invites);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchInvites();
+  }, [fetchInvites]);
+
+  return {
+    invites,
+    refetch: fetchInvites,
+    loading
   };
 };

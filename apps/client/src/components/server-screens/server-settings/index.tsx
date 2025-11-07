@@ -4,6 +4,7 @@ import type { TServerScreenBaseProps } from '../screens';
 import { ServerScreenLayout } from '../server-screen-layout';
 import { Emojis } from './emojis';
 import { General } from './general';
+import { Invites } from './invites';
 import { Roles } from './roles';
 import { Storage } from './storage';
 import { Users } from './users';
@@ -21,6 +22,7 @@ const ServerSettings = memo(({ close }: TServerSettingsProps) => {
             <TabsTrigger value="emojis">Emojis</TabsTrigger>
             <TabsTrigger value="storage">Storage</TabsTrigger>
             <TabsTrigger value="users">Users</TabsTrigger>
+            <TabsTrigger value="invites">Invites</TabsTrigger>
           </TabsList>
           <TabsContent value="general" className="space-y-6">
             <General />
@@ -36,6 +38,9 @@ const ServerSettings = memo(({ close }: TServerSettingsProps) => {
           </TabsContent>
           <TabsContent value="users" className="space-y-6">
             <Users />
+          </TabsContent>
+          <TabsContent value="invites" className="space-y-6">
+            <Invites />
           </TabsContent>
         </Tabs>
       </div>

@@ -32,7 +32,7 @@ export enum Resolution {
 
 export enum LocalStorageKey {
   IDENTITY = 'sharkord-identity',
-  REMEMBER_IDENTITY = 'sharkord-remember-identity',
+  REMEMBER_CREDENTIALS = 'sharkord-remember-identity',
   USER_PASSWORD = 'sharkord-user-password',
   SERVER_PASSWORD = 'sharkord-server-password'
 }

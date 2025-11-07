@@ -51,6 +51,20 @@ CREATE TABLE `files` (
 );
 --> statement-breakpoint
 CREATE INDEX `files_user_idx` ON `files` (`userId`);--> statement-breakpoint
+CREATE TABLE `invites` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`code` text NOT NULL,
+	`creatorId` integer NOT NULL,
+	`maxUses` integer,
+	`uses` integer DEFAULT 0 NOT NULL,
+	`expiresAt` integer,
+	`createdAt` integer NOT NULL,
+	FOREIGN KEY (`creatorId`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `invites_code_unique` ON `invites` (`code`);--> statement-breakpoint
+CREATE UNIQUE INDEX `invites_code_idx` ON `invites` (`code`);--> statement-breakpoint
+CREATE INDEX `invites_creator_idx` ON `invites` (`creatorId`);--> statement-breakpoint
 CREATE TABLE `logins` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`userId` integer NOT NULL,
