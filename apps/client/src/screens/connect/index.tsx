@@ -7,8 +7,15 @@ import { Switch } from '@/components/ui/switch';
 import { connect } from '@/features/server/actions';
 import { useInfo } from '@/features/server/hooks';
 import { getFileUrl, getUrlFromServer } from '@/helpers/get-file-url';
+import {
+  getLocalStorageItem,
+  LocalStorageKey,
+  removeLocalStorageItem,
+  SessionStorageKey,
+  setLocalStorageItem,
+  setSessionStorageItem
+} from '@/helpers/storage';
 import { useForm } from '@/hooks/use-form';
-import { LocalStorageKey, SessionStorageKey } from '@/types';
 import { memo, useCallback, useMemo, useState } from 'react';
 
 const Connect = memo(() => {
@@ -17,9 +24,9 @@ const Connect = memo(() => {
     password: string;
     rememberCredentials: boolean;
   }>({
-    identity: localStorage.getItem(LocalStorageKey.IDENTITY) || '',
-    password: localStorage.getItem(LocalStorageKey.USER_PASSWORD) || '',
-    rememberCredentials: !!localStorage.getItem(
+    identity: getLocalStorageItem(LocalStorageKey.IDENTITY) || '',
+    password: getLocalStorageItem(LocalStorageKey.USER_PASSWORD) || '',
+    rememberCredentials: !!getLocalStorageItem(
       LocalStorageKey.REMEMBER_CREDENTIALS
     )
   });
@@ -38,9 +45,9 @@ const Connect = memo(() => {
       onChange('rememberCredentials', checked);
 
       if (checked) {
-        localStorage.setItem(LocalStorageKey.REMEMBER_CREDENTIALS, 'true');
+        setLocalStorageItem(LocalStorageKey.REMEMBER_CREDENTIALS, 'true');
       } else {
-        localStorage.removeItem(LocalStorageKey.REMEMBER_CREDENTIALS);
+        removeLocalStorageItem(LocalStorageKey.REMEMBER_CREDENTIALS);
       }
     },
     [onChange]
@@ -70,11 +77,11 @@ const Connect = memo(() => {
 
       const data = (await response.json()) as { token: string };
 
-      sessionStorage.setItem(SessionStorageKey.TOKEN, data.token);
+      setSessionStorageItem(SessionStorageKey.TOKEN, data.token);
 
       if (values.rememberCredentials) {
-        localStorage.setItem(LocalStorageKey.IDENTITY, values.identity);
-        localStorage.setItem(LocalStorageKey.USER_PASSWORD, values.password);
+        setLocalStorageItem(LocalStorageKey.IDENTITY, values.identity);
+        setLocalStorageItem(LocalStorageKey.USER_PASSWORD, values.password);
       }
 
       await connect();

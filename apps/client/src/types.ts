@@ -30,17 +30,6 @@ export enum Resolution {
   '240p' = '240p'
 }
 
-export enum LocalStorageKey {
-  IDENTITY = 'sharkord-identity',
-  REMEMBER_CREDENTIALS = 'sharkord-remember-identity',
-  USER_PASSWORD = 'sharkord-user-password',
-  SERVER_PASSWORD = 'sharkord-server-password'
-}
-
-export enum SessionStorageKey {
-  TOKEN = 'sharkord-token'
-}
-
 export enum ChannelType {
   TEXT = 'TEXT',
   VOICE = 'VOICE'

@@ -49,14 +49,6 @@ const uploadFileRouteHandler = async (
   }
 
   const safePath = await fileManager.getSafeUploadPath(originalName);
-
-  logger.debug(
-    'Uploading file: %s (%d bytes) from %s',
-    originalName,
-    contentLength,
-    user.name
-  );
-
   const fileStream = fs.createWriteStream(safePath);
 
   req.pipe(fileStream);

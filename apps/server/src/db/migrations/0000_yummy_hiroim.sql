@@ -8,6 +8,9 @@ CREATE TABLE `activity_log` (
 	FOREIGN KEY (`userId`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
+CREATE INDEX `activity_log_user_idx` ON `activity_log` (`userId`);--> statement-breakpoint
+CREATE INDEX `activity_log_type_idx` ON `activity_log` (`type`);--> statement-breakpoint
+CREATE INDEX `activity_log_created_idx` ON `activity_log` (`createdAt`);--> statement-breakpoint
 CREATE TABLE `categories` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`name` text NOT NULL,
@@ -180,7 +183,7 @@ CREATE TABLE `settings` (
 	`description` text,
 	`password` text,
 	`server_id` text NOT NULL,
-	`secret_token` text,
+	`secretToken` text,
 	`logoId` integer,
 	`allowNewUsers` integer DEFAULT true NOT NULL,
 	`storageUploadsEnabled` integer DEFAULT true NOT NULL,

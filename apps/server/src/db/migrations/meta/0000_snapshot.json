@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "e6ced870-4681-4793-844b-cf9df55f28d6",
+  "id": "fdd3f2b8-9df3-40a1-a7f0-b0905eb4672b",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "activity_log": {
@@ -50,7 +50,29 @@
           "autoincrement": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "activity_log_user_idx": {
+          "name": "activity_log_user_idx",
+          "columns": [
+            "userId"
+          ],
+          "isUnique": false
+        },
+        "activity_log_type_idx": {
+          "name": "activity_log_type_idx",
+          "columns": [
+            "type"
+          ],
+          "isUnique": false
+        },
+        "activity_log_created_idx": {
+          "name": "activity_log_created_idx",
+          "columns": [
+            "createdAt"
+          ],
+          "isUnique": false
+        }
+      },
       "foreignKeys": {
         "activity_log_userId_users_id_fk": {
           "name": "activity_log_userId_users_id_fk",
@@ -1254,8 +1276,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "secret_token": {
-          "name": "secret_token",
+        "secretToken": {
+          "name": "secretToken",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

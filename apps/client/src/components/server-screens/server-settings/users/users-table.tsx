@@ -25,10 +25,10 @@ const UsersTable = memo(({ users }: TUsersTableProps) => {
         <>
           <div>Avatar</div>
           <div>User</div>
-          <div>Identity</div>
           <div>Role</div>
-          <div>Status</div>
           <div>Joined At</div>
+          <div>Last Join</div>
+          <div>Status</div>
           <div>Actions</div>
         </>
       }

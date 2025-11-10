@@ -22,7 +22,7 @@ const settings = sqliteTable(
     description: text('description'),
     password: text('password'),
     serverId: text('server_id').notNull(),
-    secretToken: text('secret_token'),
+    secretToken: text('secretToken'),
     logoId: integer('logoId').references(() => files.id),
     allowNewUsers: integer('allowNewUsers', { mode: 'boolean' })
       .notNull()
