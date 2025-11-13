@@ -5,6 +5,18 @@ export enum ChannelType {
   VOICE = "VOICE",
 }
 
+export enum StreamKind {
+  AUDIO = "audio",
+  VIDEO = "video",
+  SCREEN = "screen",
+}
+
+export type TRemoteProducerIds = {
+  remoteVideoIds: number[];
+  remoteAudioIds: number[];
+  remoteScreenIds: number[];
+};
+
 export type TPublicServerSettings = Pick<
   TSettings,
   | "name"

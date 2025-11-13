@@ -7,7 +7,8 @@ let mediaSoupWorker: mediasoup.types.Worker<mediasoup.types.AppData>;
 const loadMediasoup = async () => {
   mediaSoupWorker = await mediasoup.createWorker({
     rtcMaxPort: config.mediasoup.worker.rtcMaxPort,
-    rtcMinPort: config.mediasoup.worker.rtcMinPort
+    rtcMinPort: config.mediasoup.worker.rtcMinPort,
+    logLevel: 'debug'
   });
 
   mediaSoupWorker.on('died', (error) => {

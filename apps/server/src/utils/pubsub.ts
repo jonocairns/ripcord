@@ -1,12 +1,14 @@
 // src/utils/pubsub.ts
 import type {
   ServerEvents,
+  StreamKind,
   TChannel,
   TJoinedEmoji,
   TJoinedMessage,
   TJoinedPublicUser,
   TJoinedRole,
-  TSettings
+  TSettings,
+  TVoiceUserState
 } from '@sharkord/shared';
 import type { Unsubscribable } from '@trpc/server/observable';
 import { observable, type Observable } from '@trpc/server/observable';
@@ -33,6 +35,32 @@ type Events = {
   [ServerEvents.CHANNEL_CREATE]: TChannel;
   [ServerEvents.CHANNEL_UPDATE]: TChannel;
   [ServerEvents.CHANNEL_DELETE]: number;
+
+  [ServerEvents.USER_JOIN_VOICE]: {
+    channelId: number;
+    userId: number;
+    state: TVoiceUserState;
+  };
+  [ServerEvents.USER_LEAVE_VOICE]: {
+    channelId: number;
+    userId: number;
+  };
+  [ServerEvents.USER_VOICE_STATE_UPDATE]: {
+    channelId: number;
+    userId: number;
+    state: TVoiceUserState;
+  };
+
+  [ServerEvents.VOICE_NEW_PRODUCER]: {
+    channelId: number;
+    remoteUserId: number;
+    kind: StreamKind;
+  };
+  [ServerEvents.VOICE_PRODUCER_CLOSED]: {
+    channelId: number;
+    remoteUserId: number;
+    kind: StreamKind;
+  };
 
   [ServerEvents.EMOJI_CREATE]: TJoinedEmoji;
   [ServerEvents.EMOJI_UPDATE]: TJoinedEmoji;

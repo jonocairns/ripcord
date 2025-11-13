@@ -17,6 +17,7 @@ import { getWsInfo } from '../helpers/get-ws-info';
 import { logger } from '../logger';
 import { enqueueActivityLog } from '../queues/activity-log';
 import { appRouter } from '../routers';
+import { VoiceRuntime } from '../runtimes/voice';
 import { pubsub } from './pubsub';
 
 let wss: WebSocketServer;
@@ -51,9 +52,20 @@ const createWsServer = async (server: http.Server) => {
 
         if (!user) return;
 
-        logger.info('%s left the server', user.name);
+        const voiceRuntime = VoiceRuntime.findRuntimeByUserId(user.id);
+
+        if (voiceRuntime) {
+          voiceRuntime.removeUser(user.id);
+
+          pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+            channelId: voiceRuntime.id,
+            userId: user.id
+          });
+        }
 
         pubsub.publish(ServerEvents.USER_LEAVE, user.id);
+
+        logger.info('%s left the server', user.name);
 
         enqueueActivityLog({
           type: ActivityLogType.USER_LEFT,
@@ -185,6 +197,7 @@ const createWsServer = async (server: http.Server) => {
           authenticated: false,
           userId: decodedUser.id,
           handshakeHash: '',
+          currentVoiceChannelId: undefined,
           hasPermission,
           getOwnWs,
           getStatusById,

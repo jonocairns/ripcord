@@ -1,6 +1,7 @@
 import { TextChannel } from '@/components/channel-view/text';
+import { VoiceChannel } from '@/components/channel-view/voice';
 import { useSelectedChannel } from '@/features/server/channels/hooks';
-import { ChannelType } from '@/types';
+import { ChannelType } from '@sharkord/shared';
 import { memo } from 'react';
 
 const ContentWrapper = memo(() => {
@@ -15,9 +16,7 @@ const ContentWrapper = memo(() => {
       );
     } else if (selectedChannel.type === ChannelType.VOICE) {
       content = (
-        <div className="flex flex-1 items-center justify-center text-muted">
-          Voice Channel - TODO!
-        </div>
+        <VoiceChannel key={selectedChannel.id} channelId={selectedChannel.id} />
       );
     }
   } else {

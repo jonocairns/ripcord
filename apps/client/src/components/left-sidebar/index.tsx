@@ -17,6 +17,7 @@ import { ServerScreen } from '../server-screens/screens';
 import { Button } from '../ui/button';
 import { Categories } from './categories';
 import { UserControl } from './user-control';
+import { VoiceControl } from './voice-control';
 
 const LeftSidebar = memo(() => {
   const serverName = useServerName();
@@ -52,6 +53,7 @@ const LeftSidebar = memo(() => {
       <div className="flex-1 overflow-hidden">
         <Categories />
       </div>
+      <VoiceControl />
       <UserControl />
     </aside>
   );

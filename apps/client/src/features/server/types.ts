@@ -1,4 +1,8 @@
-import { type TJoinedMessage } from '@sharkord/shared';
+import {
+  type TJoinedMessage,
+  type TJoinedPublicUser,
+  type TVoiceUserState
+} from '@sharkord/shared';
 
 export enum NotificationSoundType {
   USER_JOINED_SERVER = 'user_joined_server',
@@ -51,4 +55,8 @@ export type TDisconnectInfo = {
   reason: string;
   wasClean: boolean;
   time: Date;
+};
+
+export type TVoiceUser = TJoinedPublicUser & {
+  state: TVoiceUserState;
 };

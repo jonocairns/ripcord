@@ -14,6 +14,7 @@ export type Context = {
   user: TUser;
   userId: number;
   token: string;
+  currentVoiceChannelId: number | undefined;
   hasPermission: (
     targetPermission: Permission | Permission[]
   ) => Promise<boolean>;

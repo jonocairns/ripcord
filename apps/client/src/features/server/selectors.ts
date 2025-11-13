@@ -2,12 +2,14 @@ import { createSelector } from '@reduxjs/toolkit';
 import type { IRootState } from '../store';
 import { typingMapSelector } from './messages/selectors';
 import { rolesSelector } from './roles/selectors';
+import type { TVoiceUser } from './types';
 import {
   ownUserIdSelector,
   ownUserSelector,
   userByIdSelector,
   usersSelector
 } from './users/selectors';
+import { voiceChannelStateSelector } from './voice/selectors';
 
 export const connectedSelector = (state: IRootState) => state.server.connected;
 
@@ -52,5 +54,28 @@ export const typingUsersByChannelIdSelector = createSelector(
       .filter((id) => id !== ownUserId)
       .map((id) => users.find((u) => u.id === id)!)
       .filter((u) => !!u);
+  }
+);
+
+export const voiceUsersByChannelIdSelector = createSelector(
+  [usersSelector, voiceChannelStateSelector],
+  (users, voiceState) => {
+    const voiceUsers: TVoiceUser[] = [];
+
+    if (!voiceState) return voiceUsers;
+
+    Object.entries(voiceState.users).forEach(([userIdStr, state]) => {
+      const userId = Number(userIdStr);
+      const user = users.find((u) => u.id === userId);
+
+      if (user) {
+        voiceUsers.push({
+          ...user,
+          state
+        });
+      }
+    });
+
+    return voiceUsers;
   }
 );

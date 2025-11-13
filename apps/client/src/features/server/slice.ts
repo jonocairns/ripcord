@@ -8,7 +8,8 @@ import type {
   TJoinedRole,
   TPublicServerSettings,
   TServerInfo,
-  TUser
+  TUser,
+  TVoiceUserState
 } from '@sharkord/shared';
 import type { TDisconnectInfo, TMessagesMap } from './types';
 
@@ -21,6 +22,7 @@ export interface IServerState {
   channels: TChannel[];
   emojis: TJoinedEmoji[];
   selectedChannelId: number | undefined;
+  currentVoiceChannelId: number | undefined;
   messagesMap: TMessagesMap;
   users: TJoinedPublicUser[];
   ownUser?: TUser;
@@ -31,6 +33,14 @@ export interface IServerState {
   typingMap: {
     [channelId: number]: number[];
   };
+  voice: {
+    [channelId: number]: {
+      users: {
+        [userId: number]: TVoiceUserState;
+      };
+    };
+  };
+  ownVoiceState: TVoiceUserState;
 }
 
 const initialState: IServerState = {
@@ -42,6 +52,7 @@ const initialState: IServerState = {
   channels: [],
   emojis: [],
   selectedChannelId: undefined,
+  currentVoiceChannelId: undefined,
   messagesMap: {},
   users: [],
   ownUser: undefined,
@@ -49,7 +60,14 @@ const initialState: IServerState = {
   publicSettings: undefined,
   info: undefined,
   loadingInfo: false,
-  typingMap: {}
+  typingMap: {},
+  voice: {},
+  ownVoiceState: {
+    micMuted: false,
+    soundMuted: false,
+    webcamEnabled: false,
+    sharingScreen: false
+  }
 };
 
 export const serverSlice = createSlice({
@@ -320,8 +338,15 @@ export const serverSlice = createSlice({
     ) => {
       state.selectedChannelId = action.payload;
     },
+    setCurrentVoiceChannelId: (
+      state,
+      action: PayloadAction<number | undefined>
+    ) => {
+      state.currentVoiceChannelId = action.payload;
+    },
 
     // EMOJIS ------------------------------------------------------------
+
     setEmojis: (state, action: PayloadAction<TJoinedEmoji[]>) => {
       state.emojis = action.payload;
     },
@@ -348,6 +373,62 @@ export const serverSlice = createSlice({
       state.emojis = state.emojis.filter(
         (e) => e.id !== action.payload.emojiId
       );
+    },
+
+    // VOICE ------------------------------------------------------------
+
+    addUserToVoiceChannel: (
+      state,
+      action: PayloadAction<{
+        channelId: number;
+        userId: number;
+        state: TVoiceUserState;
+      }>
+    ) => {
+      const { channelId, userId, state: userState } = action.payload;
+
+      if (!state.voice[channelId]) {
+        state.voice[channelId] = { users: {} };
+      }
+
+      state.voice[channelId].users[userId] = userState;
+    },
+    removeUserFromVoiceChannel: (
+      state,
+      action: PayloadAction<{ channelId: number; userId: number }>
+    ) => {
+      const { channelId, userId } = action.payload;
+
+      if (!state.voice[channelId]) return;
+
+      delete state.voice[channelId].users[userId];
+    },
+    updateVoiceUserState: (
+      state,
+      action: PayloadAction<{
+        channelId: number;
+        userId: number;
+        newState: Partial<TVoiceUserState>;
+      }>
+    ) => {
+      const { channelId, userId, newState } = action.payload;
+
+      if (!state.voice[channelId]) return;
+      if (!state.voice[channelId].users[userId]) return;
+
+      state.voice[channelId].users[userId] = {
+        ...state.voice[channelId].users[userId],
+        ...newState
+      };
+    },
+    updateOwnVoiceState: (
+      state,
+      action: PayloadAction<Partial<TVoiceUserState>>
+    ) => {
+      state.ownVoiceState = {
+        ...state.ownVoiceState,
+        ...action.payload
+      };
     }
   }
 });

@@ -11,6 +11,13 @@ export enum ServerEvents {
   CHANNEL_UPDATE = "channelUpdate",
   CHANNEL_DELETE = "channelDelete",
 
+  USER_JOIN_VOICE = "userJoinVoice",
+  USER_LEAVE_VOICE = "userLeaveVoice",
+  USER_VOICE_STATE_UPDATE = "userVoiceStateUpdate",
+
+  VOICE_NEW_PRODUCER = "voiceNewProducer",
+  VOICE_PRODUCER_CLOSED = "voiceProducerClosed",
+
   EMOJI_CREATE = "emojiCreate",
   EMOJI_UPDATE = "emojiUpdate",
   EMOJI_DELETE = "emojiDelete",

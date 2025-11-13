@@ -22,3 +22,6 @@ export const selectedChannelSelector = createSelector(
   (channels, selectedChannelId) =>
     channels.find((channel) => channel.id === selectedChannelId)
 );
+
+export const currentVoiceChannelIdSelector = (state: IRootState) =>
+  state.server.currentVoiceChannelId;

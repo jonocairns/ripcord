@@ -5,7 +5,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun --watch ./src/index.ts",
+    "dev": "DEBUG=\"mediasoup*\" bun --watch ./src/index.ts",
     "build": "tsc -b && bun ./build/build.ts",
     "db:gen": "bunx drizzle-kit generate --dialect sqlite --schema ./src/db/schema.ts --out ./src/db/migrations",
     "format": "prettier --write \"**/*.ts*\" --config ./.prettierrc.json",
@@ -41,7 +41,7 @@
     "ini": "^5.0.0",
     "jsonwebtoken": "^9.0.2",
     "link-preview-js": "^3.1.0",
-    "mediasoup": "^3.19.3",
+    "mediasoup": "^3.19.9",
     "mitt": "^3.0.1",
     "queue": "^7.0.0",
     "rxjs": "^7.8.2",

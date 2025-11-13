@@ -1,6 +1,7 @@
 import { OWNER_ROLE_ID, Permission } from '@sharkord/shared';
 import { useCallback } from 'react';
 import { useSelector } from 'react-redux';
+import type { IRootState } from '../store';
 import {
   connectedSelector,
   connectingSelector,
@@ -10,7 +11,8 @@ import {
   publicServerSettingsSelector,
   serverNameSelector,
   typingUsersByChannelIdSelector,
-  userRoleSelector
+  userRoleSelector,
+  voiceUsersByChannelIdSelector
 } from './selectors';
 
 export const useIsConnected = () => useSelector(connectedSelector);
@@ -54,7 +56,14 @@ export const useCan = () => {
 };
 
 export const useUserRole = (userId: number) =>
-  useSelector((state) => userRoleSelector(state, userId));
+  useSelector((state: IRootState) => userRoleSelector(state, userId));
 
 export const useTypingUsersByChannelId = (channelId: number) =>
-  useSelector((state) => typingUsersByChannelIdSelector(state, channelId));
+  useSelector((state: IRootState) =>
+    typingUsersByChannelIdSelector(state, channelId)
+  );
+
+export const useVoiceUsersByChannelId = (channelId: number) =>
+  useSelector((state: IRootState) =>
+    voiceUsersByChannelIdSelector(state, channelId)
+  );

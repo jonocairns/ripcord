@@ -29,14 +29,3 @@ export enum Resolution {
   '360p' = '360p',
   '240p' = '240p'
 }
-
-export enum ChannelType {
-  TEXT = 'TEXT',
-  VOICE = 'VOICE'
-}
-
-export enum StreamKind {
-  AUDIO = 'audio',
-  VIDEO = 'video',
-  SCREEN = 'screen'
-}

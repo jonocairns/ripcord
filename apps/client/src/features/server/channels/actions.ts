@@ -9,6 +9,9 @@ export const setChannels = (channels: TChannel[]) => {
 export const setSelectedChannelId = (channelId: number | undefined) =>
   store.dispatch(serverSliceActions.setSelectedChannelId(channelId));
 
+export const setCurrentVoiceChannelId = (channelId: number | undefined) =>
+  store.dispatch(serverSliceActions.setCurrentVoiceChannelId(channelId));
+
 export const addChannel = (channel: TChannel) => {
   store.dispatch(serverSliceActions.addChannel(channel));
 };
