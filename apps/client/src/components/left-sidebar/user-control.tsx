@@ -2,7 +2,7 @@ import { openServerScreen } from '@/features/server-screens/actions';
 import { useOwnPublicUser } from '@/features/server/users/hooks';
 import { useVoice } from '@/features/server/voice/hooks';
 import { cn } from '@/lib/utils';
-import { Mic, MicOff, Settings, Volume2, VolumeX } from 'lucide-react';
+import { HeadphoneOff, Headphones, Mic, MicOff, Settings } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { ServerScreen } from '../server-screens/screens';
 import { Button } from '../ui/button';
@@ -82,9 +82,9 @@ const UserControl = memo(() => {
           }
         >
           {ownVoiceState.soundMuted ? (
-            <VolumeX className="h-4 w-4" />
+            <HeadphoneOff className="h-4 w-4" />
           ) : (
-            <Volume2 className="h-4 w-4" />
+            <Headphones className="h-4 w-4" />
           )}
         </Button>
 

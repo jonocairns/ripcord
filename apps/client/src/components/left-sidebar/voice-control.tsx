@@ -2,13 +2,13 @@ import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
 import { useVoice } from '@/features/server/voice/hooks';
 import { cn } from '@/lib/utils';
-import { Mic, MicOff, Monitor, MonitorOff, Video, VideoOff, Volume2, VolumeX } from 'lucide-react';
+import { Monitor, MonitorOff, Video, VideoOff } from 'lucide-react';
 import { memo } from 'react';
 import { Button } from '../ui/button';
 
 const VoiceControl = memo(() => {
   const voiceChannelId = useCurrentVoiceChannelId();
-  const { ownVoiceState, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } = useVoice();
+  const { ownVoiceState, toggleWebcam, toggleScreenShare } = useVoice();
 
   if (!voiceChannelId) {
     return null;
@@ -20,53 +20,7 @@ const VoiceControl = memo(() => {
         Disconnect
       </Button>
 
-      <div className='flex gap-1'>
-        <Button
-          variant="ghost"
-          size="icon"
-          className={cn(
-            'h-8 w-8 hover:bg-muted/50',
-            ownVoiceState.micMuted
-              ? 'text-red-500 hover:text-red-400 bg-red-500/10 hover:bg-red-500/20'
-              : 'text-muted-foreground hover:text-foreground'
-          )}
-          onClick={toggleMic}
-          title={
-            ownVoiceState.micMuted
-              ? 'Unmute microphone (Ctrl+Shift+M)'
-              : 'Mute microphone (Ctrl+Shift+M)'
-          }
-        >
-          {ownVoiceState.micMuted ? (
-            <MicOff className="h-4 w-4" />
-          ) : (
-            <Mic className="h-4 w-4" />
-          )}
-        </Button>
-
-        <Button
-          variant="ghost"
-          size="icon"
-          className={cn(
-            'h-8 w-8 hover:bg-muted/50',
-            ownVoiceState.soundMuted
-              ? 'text-red-500 hover:text-red-400 bg-red-500/10 hover:bg-red-500/20'
-              : 'text-muted-foreground hover:text-foreground'
-          )}
-          onClick={toggleSound}
-          title={
-            ownVoiceState.soundMuted
-              ? 'Undeafen (Ctrl+Shift+D)'
-              : 'Deafen (Ctrl+Shift+D)'
-          }
-        >
-          {ownVoiceState.soundMuted ? (
-            <VolumeX className="h-4 w-4" />
-          ) : (
-            <Volume2 className="h-4 w-4" />
-          )}
-        </Button>
-
+      <div className="flex gap-1">
         <Button
           variant="ghost"
           size="icon"
@@ -78,9 +32,7 @@ const VoiceControl = memo(() => {
           )}
           onClick={toggleWebcam}
           title={
-            ownVoiceState.webcamEnabled
-              ? 'Turn off camera'
-              : 'Turn on camera'
+            ownVoiceState.webcamEnabled ? 'Turn off camera' : 'Turn on camera'
           }
         >
           {ownVoiceState.webcamEnabled ? (

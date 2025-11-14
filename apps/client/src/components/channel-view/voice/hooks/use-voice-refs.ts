@@ -2,6 +2,7 @@ import { useIsOwnUser } from '@/features/server/users/hooks';
 import { useVoice } from '@/features/server/voice/hooks';
 import { StreamKind } from '@sharkord/shared';
 import { useEffect, useMemo, useRef } from 'react';
+import { useAudioLevel } from './use-audio-level';
 
 const useVoiceRefs = (userId: number) => {
   const { remoteStreams, localVideoStream, localScreenShareStream } =
@@ -28,6 +29,9 @@ const useVoiceRefs = (userId: number) => {
     return remoteStreams[userId]?.[StreamKind.SCREEN];
   }, [remoteStreams, userId, isOwnUser, localScreenShareStream]);
 
+  // Audio level detection
+  const { audioLevel, isSpeaking, speakingIntensity } = useAudioLevel(audioStream);
+
   useEffect(() => {
     if (!videoStream || !videoRef.current) return;
 
@@ -52,7 +56,10 @@ const useVoiceRefs = (userId: number) => {
     screenShareRef,
     hasAudioStream: !!audioStream,
     hasVideoStream: !!videoStream,
-    hasScreenShareStream: !!screenShareStream
+    hasScreenShareStream: !!screenShareStream,
+    audioLevel,
+    isSpeaking,
+    speakingIntensity
   };
 };
 
