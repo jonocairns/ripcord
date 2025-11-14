@@ -30,6 +30,7 @@ const useTransports = ({
       [kind: string]: Consumer<AppData>;
     };
   }>({});
+  const consumeOperationsInProgress = useRef<Set<string>>(new Set());
 
   const createProducerTransport = useCallback(async (device: Device) => {
     logVoice('Creating producer transport', { device });
@@ -64,8 +65,28 @@ const useTransports = ({
       producerTransport.current.on('connectionstatechange', (state) => {
         logVoice('Producer transport connection state changed', { state });
 
-        if (['failed', 'disconnected', 'closed'].includes(state)) {
+        if (state === 'failed') {
+          logVoice('Producer transport failed, attempting cleanup');
           producerTransport.current?.close();
+          producerTransport.current = undefined;
+
+          // TODO: Implement reconnection logic here
+          // This should trigger a reconnection attempt after a delay
+        } else if (state === 'disconnected') {
+          logVoice('Producer transport disconnected, monitoring for recovery');
+
+          // Give some time for automatic recovery before declaring it failed
+          setTimeout(() => {
+            if (producerTransport.current?.connectionState === 'disconnected') {
+              logVoice(
+                'Producer transport still disconnected after timeout, cleaning up'
+              );
+              producerTransport.current?.close();
+              producerTransport.current = undefined;
+            }
+          }, 5000); // 5 second timeout
+        } else if (state === 'closed') {
+          logVoice('Producer transport closed');
           producerTransport.current = undefined;
         }
       });
@@ -131,6 +152,56 @@ const useTransports = ({
           }
         }
       );
+
+      consumerTransport.current.on('connectionstatechange', (state) => {
+        logVoice('Consumer transport connection state changed', { state });
+
+        if (state === 'failed') {
+          logVoice('Consumer transport failed, attempting cleanup');
+
+          // Clean up all consumers using this transport
+          Object.values(consumers.current).forEach((userConsumers) => {
+            Object.values(userConsumers).forEach((consumer) => {
+              consumer.close();
+            });
+          });
+          consumers.current = {};
+
+          consumerTransport.current?.close();
+          consumerTransport.current = undefined;
+
+          // TODO: Implement reconnection logic here
+        } else if (state === 'disconnected') {
+          logVoice('Consumer transport disconnected, monitoring for recovery');
+
+          // Give some time for automatic recovery
+          setTimeout(() => {
+            if (consumerTransport.current?.connectionState === 'disconnected') {
+              logVoice(
+                'Consumer transport still disconnected after timeout, cleaning up'
+              );
+
+              // Clean up all consumers
+              Object.values(consumers.current).forEach((userConsumers) => {
+                Object.values(userConsumers).forEach((consumer) => {
+                  consumer.close();
+                });
+              });
+              consumers.current = {};
+
+              consumerTransport.current?.close();
+              consumerTransport.current = undefined;
+            }
+          }, 5000); // 5 second timeout
+        } else if (state === 'closed') {
+          logVoice('Consumer transport closed');
+          consumerTransport.current = undefined;
+        }
+      });
+
+      consumerTransport.current.on('icecandidateerror', (error) => {
+        logVoice('Consumer transport ICE candidate error', { error });
+      });
     } catch (error) {
       logVoice('Failed to create consumer transport', { error });
     }
@@ -142,13 +213,28 @@ const useTransports = ({
       kind: StreamKind,
       routerRtpCapabilities: RtpCapabilities
     ) => {
-      if (!consumerTransport.current) return;
+      if (!consumerTransport.current) {
+        logVoice('Consumer transport not available');
+        return;
+      }
 
-      logVoice('Consuming remote producer', { remoteUserId, kind });
+      const operationKey = `${remoteUserId}-${kind}`;
 
-      const trpc = getTRPCClient();
+      if (consumeOperationsInProgress.current.has(operationKey)) {
+        logVoice('Consume operation already in progress', {
+          remoteUserId,
+          kind
+        });
+        return;
+      }
+
+      consumeOperationsInProgress.current.add(operationKey);
 
       try {
+        logVoice('Consuming remote producer', { remoteUserId, kind });
+
+        const trpc = getTRPCClient();
+
         const { producerId, consumerId, consumerKind, consumerRtpParameters } =
           await trpc.voice.consume.mutate({
             kind,
@@ -169,7 +255,9 @@ const useTransports = ({
 
         const existingConsumer = consumers.current[remoteUserId][consumerKind];
 
-        if (existingConsumer) {
+        if (existingConsumer && !existingConsumer.closed) {
+          logVoice('Closing existing consumer before creating new one');
+
           existingConsumer.close();
           delete consumers.current[remoteUserId][consumerKind];
         }
@@ -196,7 +284,16 @@ const useTransports = ({
         cleanupEvents.forEach((event) => {
           // @ts-expect-error - YOLO
           newConsumer?.on(event, () => {
+            logVoice(`Consumer cleanup event "${event}" triggered`, {
+              remoteUserId,
+              kind
+            });
+
             removeRemoteStream(remoteUserId, kind);
+
+            if (consumers.current[remoteUserId]?.[consumerKind]) {
+              delete consumers.current[remoteUserId][consumerKind];
+            }
           });
         });
 
@@ -209,6 +306,8 @@ const useTransports = ({
         addRemoteStream(remoteUserId, stream, kind);
       } catch (error) {
         logVoice('Error consuming remote producer', { error });
+      } finally {
+        consumeOperationsInProgress.current.delete(operationKey);
       }
     },
     [addRemoteStream, removeRemoteStream]

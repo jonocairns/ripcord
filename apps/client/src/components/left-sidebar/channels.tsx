@@ -118,7 +118,12 @@ const Channel = memo(({ channelId, isSelected }: TChannelProps) => {
         return;
       }
 
-      await init(response, channelId);
+      try {
+        await init(response, channelId);
+      } catch {
+        setSelectedChannelId(undefined);
+        toast.error('Failed to initialize voice connection');
+      }
     }
   }, [channelId, channel?.type, init]);
 

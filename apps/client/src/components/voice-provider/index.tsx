@@ -5,6 +5,7 @@ import {
   createContext,
   memo,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState
@@ -63,6 +64,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     addRemoteStream,
     removeRemoteStream,
     clearRemoteStreamsForUser,
+    clearRemoteStreams,
     remoteStreams
   } = useRemoteStreams();
   const {
@@ -88,82 +90,140 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   });
 
   const startMicStream = useCallback(async () => {
-    logVoice('Starting microphone stream');
+    try {
+      logVoice('Starting microphone stream');
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        sampleRate: 48000,
-        channelCount: 2,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false
-      },
-      video: false
-    });
-
-    logVoice('Microphone stream obtained', { stream });
-
-    setLocalAudioStream(stream);
-
-    const audioTrack = stream.getAudioTracks()[0];
-
-    if (audioTrack) {
-      logVoice('Obtained audio track', { audioTrack });
-
-      localAudioProducer.current = await producerTransport.current?.produce({
-        track: audioTrack,
-        appData: { kind: StreamKind.AUDIO }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 48000,
+          channelCount: 2,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        },
+        video: false
       });
 
-      logVoice('Microphone audio producer created', {
-        producer: localAudioProducer.current
-      });
-    } else {
-      logVoice('No audio track obtained from microphone stream');
+      logVoice('Microphone stream obtained', { stream });
+
+      setLocalAudioStream(stream);
+
+      const audioTrack = stream.getAudioTracks()[0];
+
+      if (audioTrack) {
+        logVoice('Obtained audio track', { audioTrack });
+
+        localAudioProducer.current = await producerTransport.current?.produce({
+          track: audioTrack,
+          appData: { kind: StreamKind.AUDIO }
+        });
+
+        logVoice('Microphone audio producer created', {
+          producer: localAudioProducer.current
+        });
+
+        localAudioProducer.current?.on('@close', async () => {
+          logVoice('Audio producer closed');
+
+          const trpc = getTRPCClient();
+
+          try {
+            await trpc.voice.closeProducer.mutate({
+              kind: StreamKind.AUDIO
+            });
+          } catch (error) {
+            logVoice('Error closing audio producer', { error });
+          }
+        });
+
+        audioTrack.onended = () => {
+          logVoice('Audio track ended, cleaning up microphone');
+
+          localAudioStream?.getAudioTracks().forEach((track) => {
+            track.stop();
+          });
+          localAudioProducer.current?.close();
+
+          setLocalAudioStream(undefined);
+        };
+      } else {
+        throw new Error('Failed to obtain audio track from microphone');
+      }
+    } catch (error) {
+      logVoice('Error starting microphone stream', { error });
+      throw error;
     }
-  }, [producerTransport, setLocalAudioStream, localAudioProducer]);
+  }, [
+    producerTransport,
+    setLocalAudioStream,
+    localAudioProducer,
+    localAudioStream
+  ]);
 
   const startWebcamStream = useCallback(async () => {
-    logVoice('Starting webcam stream');
+    try {
+      logVoice('Starting webcam stream');
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: true
-    });
-
-    logVoice('Webcam stream obtained', { stream });
-
-    setLocalVideoStream(stream);
-
-    const videoTrack = stream.getVideoTracks()[0];
-
-    if (videoTrack) {
-      logVoice('Obtained video track', { videoTrack });
-
-      localVideoProducer.current = await producerTransport.current?.produce({
-        track: videoTrack,
-        appData: { kind: StreamKind.VIDEO }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: true
       });
 
-      logVoice('Webcam video producer created', {
-        producer: localVideoProducer.current
-      });
+      logVoice('Webcam stream obtained', { stream });
 
-      localVideoProducer.current?.on('@close', async () => {
-        const trpc = getTRPCClient();
+      setLocalVideoStream(stream);
 
-        try {
-          await trpc.voice.closeProducer.mutate({
-            kind: StreamKind.VIDEO
+      const videoTrack = stream.getVideoTracks()[0];
+
+      if (videoTrack) {
+        logVoice('Obtained video track', { videoTrack });
+
+        localVideoProducer.current = await producerTransport.current?.produce({
+          track: videoTrack,
+          appData: { kind: StreamKind.VIDEO }
+        });
+
+        logVoice('Webcam video producer created', {
+          producer: localVideoProducer.current
+        });
+
+        localVideoProducer.current?.on('@close', async () => {
+          logVoice('Video producer closed');
+
+          const trpc = getTRPCClient();
+
+          try {
+            await trpc.voice.closeProducer.mutate({
+              kind: StreamKind.VIDEO
+            });
+          } catch (error) {
+            logVoice('Error closing video producer', { error });
+          }
+        });
+
+        videoTrack.onended = () => {
+          logVoice('Video track ended, cleaning up webcam');
+
+          localVideoStream?.getVideoTracks().forEach((track) => {
+            track.stop();
           });
-        } catch (error) {
-          logVoice('Error closing video producer', { error });
-        }
-      });
-    } else {
-      logVoice('No video track obtained from webcam stream');
+          localVideoProducer.current?.close();
+
+          setLocalVideoStream(undefined);
+        };
+      } else {
+        throw new Error('Failed to obtain video track from webcam');
+      }
+    } catch (error) {
+      logVoice('Error starting webcam stream', { error });
+      throw error;
     }
-  }, [setLocalVideoStream, localVideoProducer, producerTransport]);
+  }, [
+    setLocalVideoStream,
+    localVideoProducer,
+    producerTransport,
+    localVideoStream
+  ]);
 
   const stopWebcamStream = useCallback(() => {
     logVoice('Stopping webcam stream');
@@ -198,50 +258,69 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   }, [localScreenShareStream, setLocalScreenShare, localScreenShareProducer]);
 
   const startScreenShareStream = useCallback(async () => {
-    logVoice('Starting screen share stream');
+    try {
+      logVoice('Starting screen share stream');
 
-    const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        frameRate: 60
-      },
-      audio: true
-    });
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: 60
+        },
+        audio: true
+      });
 
-    logVoice('Screen share stream obtained', { stream });
+      logVoice('Screen share stream obtained', { stream });
+      setLocalScreenShare(stream);
 
-    setLocalScreenShare(stream);
+      const videoTrack = stream.getVideoTracks()[0];
 
-    const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        logVoice('Obtained video track', { videoTrack });
 
-    if (videoTrack) {
-      logVoice('Obtained video track', { videoTrack });
+        localScreenShareProducer.current =
+          await producerTransport.current?.produce({
+            track: videoTrack,
+            appData: { kind: StreamKind.SCREEN }
+          });
 
-      localScreenShareProducer.current =
-        await producerTransport.current?.produce({
-          track: videoTrack,
-          appData: { kind: StreamKind.SCREEN }
+        localScreenShareProducer.current?.on('@close', async () => {
+          logVoice('Screen share producer closed');
+
+          const trpc = getTRPCClient();
+
+          try {
+            await trpc.voice.closeProducer.mutate({
+              kind: StreamKind.SCREEN
+            });
+          } catch (error) {
+            logVoice('Error closing screen share producer', { error });
+          }
         });
 
-      localScreenShareProducer.current?.on('@close', async () => {
-        logVoice('Screen share producer closed');
+        videoTrack.onended = () => {
+          logVoice('Screen share track ended, cleaning up screen share');
 
-        const trpc = getTRPCClient();
-
-        try {
-          await trpc.voice.closeProducer.mutate({
-            kind: StreamKind.SCREEN
+          localScreenShareStream?.getTracks().forEach((track) => {
+            track.stop();
           });
-        } catch (error) {
-          logVoice('Error closing screen share producer', { error });
-        }
-      });
-    } else {
-      logVoice('No video track obtained from screen share stream');
-      throw new Error('No video track obtained for screen share');
-    }
+          localScreenShareProducer.current?.close();
 
-    return videoTrack;
-  }, [setLocalScreenShare, localScreenShareProducer, producerTransport]);
+          setLocalScreenShare(undefined);
+        };
+
+        return videoTrack;
+      } else {
+        throw new Error('No video track obtained for screen share');
+      }
+    } catch (error) {
+      logVoice('Error starting screen share stream', { error });
+      throw error;
+    }
+  }, [
+    setLocalScreenShare,
+    localScreenShareProducer,
+    producerTransport,
+    localScreenShareStream
+  ]);
 
   const init = useCallback(
     async (
@@ -253,20 +332,28 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         channelId
       });
 
-      setLoading(true);
-      routerRtpCapabilities.current = incomingRouterRtpCapabilities;
+      try {
+        setLoading(true);
 
-      const device = new Device();
-      await device.load({
-        routerRtpCapabilities: incomingRouterRtpCapabilities
-      });
+        routerRtpCapabilities.current = incomingRouterRtpCapabilities;
 
-      await createProducerTransport(device);
-      await createConsumerTransport(device);
-      await consumeExistingProducers(incomingRouterRtpCapabilities);
-      await startMicStream();
+        const device = new Device();
+        await device.load({
+          routerRtpCapabilities: incomingRouterRtpCapabilities
+        });
 
-      setLoading(false);
+        await createProducerTransport(device);
+        await createConsumerTransport(device);
+        await consumeExistingProducers(incomingRouterRtpCapabilities);
+        await startMicStream();
+
+        setLoading(false);
+      } catch (error) {
+        logVoice('Error initializing voice provider', { error });
+        setLoading(false);
+
+        throw error;
+      }
     },
     [
       createProducerTransport,
@@ -297,6 +384,40 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     clearRemoteStreamsForUser,
     rtpCapabilities: routerRtpCapabilities.current!
   });
+
+  useEffect(() => {
+    const producerTransportRef = producerTransport.current;
+    const audioProducerRef = localAudioProducer.current;
+    const videoProducerRef = localVideoProducer.current;
+    const screenShareProducerRef = localScreenShareProducer.current;
+
+    return () => {
+      logVoice('Voice provider unmounting, cleaning up resources');
+
+      localAudioStream?.getTracks().forEach((track) => {
+        track.stop();
+      });
+
+      localVideoStream?.getTracks().forEach((track) => {
+        track.stop();
+      });
+
+      localScreenShareStream?.getTracks().forEach((track) => {
+        track.stop();
+      });
+
+      audioProducerRef?.close();
+      videoProducerRef?.close();
+      screenShareProducerRef?.close();
+
+      clearRemoteStreams();
+
+      producerTransportRef?.close();
+
+      logVoice('Voice provider cleanup completed');
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const contextValue = useMemo<TVoiceProvider>(
     () => ({

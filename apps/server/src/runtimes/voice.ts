@@ -39,21 +39,7 @@ const defaultRouterOptions: RouterOptions<AppData> = {
   ]
 };
 
-// const defaultRtcTransportOptions: WebRtcTransportOptions<AppData> = {
-//   listenIps: ['127.0.0.1', '0.0.0.0', SERVER_PRIVATE_IP!]
-// };
-
-// const defaultRtcTransportOptions: WebRtcTransportOptions<AppData> = {
-//   listenIps: [
-//     {
-//       ip: '0.0.0.0',
-//       announcedIp: SERVER_PUBLIC_IP
-//     }
-//   ],
-//   enableUdp: true,
-//   enableTcp: true,
-//   preferUdp: true
-// };
+const RECONNECT_TIMEOUT_MS = 5000; // 5 seconds
 
 const defaultRtcTransportOptions: WebRtcTransportOptions<AppData> = {
   listenInfos: [
@@ -167,11 +153,11 @@ class VoiceRuntime {
       producer.close();
     });
 
-    // Object.values(this.consumers).forEach((consumers) => {
-    //   Object.values(consumers).forEach((consumer) => {
-    //     consumer.close();
-    //   });
-    // });
+    Object.values(this.consumers).forEach((consumers) => {
+      Object.values(consumers).forEach((consumer) => {
+        consumer.close();
+      });
+    });
 
     voiceRuntimes.delete(this.id);
   };
@@ -207,6 +193,35 @@ class VoiceRuntime {
 
   public removeUser = (userId: number) => {
     this.state.users = this.state.users.filter((u) => u.userId !== userId);
+
+    this.cleanupUserResources(userId);
+  };
+
+  private cleanupUserResources = (userId: number) => {
+    this.removeProducerTransport(userId);
+    this.removeConsumerTransport(userId);
+
+    this.removeProducer(userId, StreamKind.AUDIO);
+    this.removeProducer(userId, StreamKind.VIDEO);
+    this.removeProducer(userId, StreamKind.SCREEN);
+
+    if (this.consumers[userId]) {
+      Object.values(this.consumers[userId]).forEach((consumer) => {
+        consumer.close();
+      });
+
+      delete this.consumers[userId];
+    }
+
+    Object.keys(this.consumers).forEach((consumerUserIdStr) => {
+      const consumerId = parseInt(consumerUserIdStr);
+
+      if (consumerId !== userId && this.consumers[consumerId]?.[userId]) {
+        this.consumers[consumerId][userId].close();
+
+        delete this.consumers[consumerId][userId];
+      }
+    });
   };
 
   public updateUserState = (
@@ -274,6 +289,30 @@ class VoiceRuntime {
 
     transport.observer.on('close', () => {
       delete this.consumerTransports[userId];
+
+      if (this.consumers[userId]) {
+        Object.values(this.consumers[userId]).forEach((consumer) => {
+          consumer.close();
+        });
+
+        delete this.consumers[userId];
+      }
+    });
+
+    transport.on('dtlsstatechange', (state) => {
+      if (state === 'failed' || state === 'closed') {
+        this.removeConsumerTransport(userId);
+      }
+    });
+
+    transport.on('icestatechange', (state) => {
+      if (state === 'disconnected') {
+        setTimeout(() => {
+          if (transport.iceState === 'disconnected') {
+            this.removeConsumerTransport(userId);
+          }
+        }, RECONNECT_TIMEOUT_MS);
+      }
     });
 
     return params;
@@ -298,6 +337,27 @@ class VoiceRuntime {
 
     transport.observer.on('close', () => {
       delete this.producerTransports[userId];
+
+      this.removeProducer(userId, StreamKind.AUDIO);
+      this.removeProducer(userId, StreamKind.VIDEO);
+      this.removeProducer(userId, StreamKind.SCREEN);
+    });
+
+    transport.on('dtlsstatechange', (state) => {
+      if (state === 'failed' || state === 'closed') {
+        this.removeProducerTransport(userId);
+      }
+    });
+
+    transport.on('icestatechange', (state) => {
+      if (state === 'disconnected') {
+        logger.warn('Producer transport ICE disconnected for user %d', userId);
+        setTimeout(() => {
+          if (transport.iceState === 'disconnected') {
+            this.removeProducerTransport(userId);
+          }
+        }, RECONNECT_TIMEOUT_MS);
+      }
     });
 
     return params;

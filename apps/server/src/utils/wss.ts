@@ -63,6 +63,7 @@ const createWsServer = async (server: http.Server) => {
           });
         }
 
+        usersIpMap.delete(user.id);
         pubsub.publish(ServerEvents.USER_LEAVE, user.id);
 
         logger.info('%s left the server', user.name);

@@ -25,14 +25,14 @@ const closeProducerRoute = protectedProcedure
       message: 'Voice runtime not found for this channel'
     });
 
-    const producerTransport = runtime.getProducerTransport(ctx.user.id);
+    const producer = runtime.getProducer(input.kind, ctx.user.id);
 
-    invariant(producerTransport, {
+    invariant(producer, {
       code: 'NOT_FOUND',
-      message: 'Producer transport not found'
+      message: `Producer for ${input.kind} not found`
     });
 
-    producerTransport.close();
+    runtime.removeProducer(ctx.user.id, input.kind);
 
     ctx.pubsub.publish(ServerEvents.VOICE_PRODUCER_CLOSED, {
       channelId: ctx.currentVoiceChannelId,

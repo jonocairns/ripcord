@@ -47,6 +47,16 @@ const useRemoteStreams = () => {
 
   const clearRemoteStreamsForUser = useCallback((userId: number) => {
     setRemoteStreams((prev) => {
+      const userStreams = prev[userId];
+
+      if (userStreams) {
+        Object.values(userStreams).forEach((stream) => {
+          stream?.getTracks()?.forEach((track) => {
+            track?.stop?.();
+          });
+        });
+      }
+
       const newState = { ...prev };
 
       delete newState[userId];
