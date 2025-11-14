@@ -1,5 +1,6 @@
 import { createSelector } from '@reduxjs/toolkit';
 import type { IRootState } from '../store';
+import { currentVoiceChannelIdSelector } from './channels/selectors';
 import { typingMapSelector } from './messages/selectors';
 import { rolesSelector } from './roles/selectors';
 import type { TVoiceUser } from './types';
@@ -78,4 +79,19 @@ export const voiceUsersByChannelIdSelector = createSelector(
 
     return voiceUsers;
   }
+);
+
+export const ownVoiceUserSelector = createSelector(
+  [
+    ownUserIdSelector,
+    (state: IRootState) => {
+      const channelId = currentVoiceChannelIdSelector(state);
+
+      if (channelId === undefined) return undefined;
+
+      return voiceUsersByChannelIdSelector(state, channelId);
+    }
+  ],
+  (ownUserId, voiceUsers) =>
+    voiceUsers?.find((voiceUser) => voiceUser.id === ownUserId)
 );

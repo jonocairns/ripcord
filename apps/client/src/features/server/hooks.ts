@@ -8,6 +8,7 @@ import {
   disconnectInfoSelector,
   infoSelector,
   ownUserRoleSelector,
+  ownVoiceUserSelector,
   publicServerSettingsSelector,
   serverNameSelector,
   typingUsersByChannelIdSelector,
@@ -67,3 +68,5 @@ export const useVoiceUsersByChannelId = (channelId: number) =>
   useSelector((state: IRootState) =>
     voiceUsersByChannelIdSelector(state, channelId)
   );
+
+export const useOwnVoiceUser = () => useSelector(ownVoiceUserSelector);

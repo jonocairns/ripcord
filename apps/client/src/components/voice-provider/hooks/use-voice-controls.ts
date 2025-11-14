@@ -45,7 +45,9 @@ const useVoiceControls = ({
         micMuted: newState
       });
 
-      await startMicStream();
+      if (!localAudioStream) {
+        await startMicStream();
+      }
     } catch (error) {
       toast.error(getTrpcError(error, 'Failed to update microphone state'));
     }

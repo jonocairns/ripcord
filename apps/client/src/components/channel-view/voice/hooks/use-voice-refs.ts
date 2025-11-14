@@ -5,8 +5,13 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useAudioLevel } from './use-audio-level';
 
 const useVoiceRefs = (userId: number) => {
-  const { remoteStreams, localVideoStream, localScreenShareStream } =
-    useVoice();
+  const {
+    remoteStreams,
+    localAudioStream,
+    localVideoStream,
+    localScreenShareStream,
+    ownVoiceState
+  } = useVoice();
   const isOwnUser = useIsOwnUser(userId);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -20,8 +25,16 @@ const useVoiceRefs = (userId: number) => {
   }, [remoteStreams, userId, isOwnUser, localVideoStream]);
 
   const audioStream = useMemo(() => {
+    if (isOwnUser) return undefined;
+
     return remoteStreams[userId]?.[StreamKind.AUDIO];
-  }, [remoteStreams, userId]);
+  }, [remoteStreams, userId, isOwnUser]);
+
+  const audioStreamForLevel = useMemo(() => {
+    if (isOwnUser) return localAudioStream;
+
+    return remoteStreams[userId]?.[StreamKind.AUDIO];
+  }, [remoteStreams, userId, isOwnUser, localAudioStream]);
 
   const screenShareStream = useMemo(() => {
     if (isOwnUser) return localScreenShareStream;
@@ -29,8 +42,8 @@ const useVoiceRefs = (userId: number) => {
     return remoteStreams[userId]?.[StreamKind.SCREEN];
   }, [remoteStreams, userId, isOwnUser, localScreenShareStream]);
 
-  // Audio level detection
-  const { audioLevel, isSpeaking, speakingIntensity } = useAudioLevel(audioStream);
+  const { audioLevel, isSpeaking, speakingIntensity } =
+    useAudioLevel(audioStreamForLevel);
 
   useEffect(() => {
     if (!videoStream || !videoRef.current) return;
@@ -49,6 +62,12 @@ const useVoiceRefs = (userId: number) => {
 
     screenShareRef.current.srcObject = screenShareStream;
   }, [screenShareStream]);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+
+    audioRef.current.muted = ownVoiceState.soundMuted;
+  }, [ownVoiceState.soundMuted]);
 
   return {
     videoRef,

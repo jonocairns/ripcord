@@ -1,6 +1,8 @@
+import { useOwnVoiceUser } from '@/features/server/hooks';
 import { useEffect, useRef, useState } from 'react';
 
 // speaking intensity level (0 = silent, 1 = quiet, 2 = normal, 3 = loud)
+// this might need to be optimized
 
 enum SpeakingIntensity {
   Silent = 0,
@@ -21,9 +23,10 @@ const useAudioLevel = (audioStream: MediaStream | undefined) => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const ownVoiceUser = useOwnVoiceUser();
 
   useEffect(() => {
-    if (!audioStream) {
+    if (!audioStream || ownVoiceUser?.state.soundMuted) {
       setAudioLevel(0);
       setIsSpeaking(false);
       return;
@@ -89,7 +92,7 @@ const useAudioLevel = (audioStream: MediaStream | undefined) => {
       setAudioLevel(0);
       setIsSpeaking(false);
     };
-  }, [audioStream]);
+  }, [audioStream, ownVoiceUser?.state.soundMuted]);
 
   const speakingIntensity = isSpeaking
     ? audioLevel < 15
