@@ -4,6 +4,7 @@ import path from 'path';
 import {
   DRIZZLE_PATH,
   INTERFACE_PATH,
+  MEDIASOUP_PATH,
   SRC_MIGRATIONS_PATH
 } from '../helpers/paths';
 import { unzipBlobToDirectory } from '../helpers/zip';
@@ -24,6 +25,8 @@ const findEmbedFile = (fileName: string) => {
 };
 
 const loadEmbeds = async () => {
+  logger.debug('Loading embedded files...');
+
   if (IS_DEVELOPMENT) {
     // files are only embedded in production
     logger.debug('Development mode, skipping embedded files extraction');
@@ -36,12 +39,14 @@ const loadEmbeds = async () => {
 
   const interfaceBlob = findEmbedFile('interface.zip');
   const drizzleBlob = findEmbedFile('drizzle.zip');
+  const mediasoupBlob = findEmbedFile('mediasoup-worker');
 
-  if (!interfaceBlob || !drizzleBlob) {
+  if (!interfaceBlob || !drizzleBlob || !mediasoupBlob) {
     throw new Error('Embedded files not found');
   }
 
   try {
+    logger.debug('Extracting interface...');
     await unzipBlobToDirectory(interfaceBlob, INTERFACE_PATH);
   } catch (error) {
     logger.error('Failed to extract interface:', error);
@@ -49,10 +54,25 @@ const loadEmbeds = async () => {
   }
 
   try {
+    logger.debug('Extracting drizzle migrations...');
     await unzipBlobToDirectory(drizzleBlob, DRIZZLE_PATH);
   } catch (error) {
     logger.error('Failed to extract drizzle migrations:', error);
     process.exit(1);
+  }
+
+  try {
+    logger.debug('Extracting mediasoup worker...');
+
+    const mediasoupPath = path.join(MEDIASOUP_PATH, 'mediasoup-worker');
+
+    const arrayBuffer = await mediasoupBlob.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    await fs.writeFile(mediasoupPath, buffer);
+    await fs.chmod(mediasoupPath, 0o755);
+  } catch (error) {
+    logger.error('Failed to extract mediasoup worker:', error);
   }
 };
 

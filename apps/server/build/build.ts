@@ -49,7 +49,9 @@ const interfaceZipPath = path.join(buildTempPath, 'interface.zip');
 const drizzleZipPath = path.join(buildTempPath, 'drizzle.zip');
 
 await fs.rm(buildTempPath, { recursive: true, force: true });
+await fs.rm(outPath, { recursive: true });
 await fs.mkdir(buildTempPath, { recursive: true });
+await fs.mkdir(outPath, { recursive: true });
 
 console.log('Building client with Vite...');
 
@@ -81,7 +83,6 @@ const targets: TTarget[] = [
   { out: 'sharkord-linux-x64', target: 'bun-linux-x64' },
   { out: 'sharkord-linux-arm64', target: 'bun-linux-arm64' },
   { out: 'sharkord-windows-x64.exe', target: 'bun-windows-x64' },
-  { out: 'sharkord-macos-x64', target: 'bun-darwin-x64' },
   { out: 'sharkord-macos-arm64', target: 'bun-darwin-arm64' }
 ];
 

@@ -17,6 +17,7 @@ import type {
 } from 'mediasoup/types';
 import { SERVER_PUBLIC_IP } from '../config';
 import { logger } from '../logger';
+import { IS_PRODUCTION } from '../utils/env';
 import { mediaSoupWorker } from '../utils/mediasoup';
 
 const voiceRuntimes = new Map<number, VoiceRuntime>();
@@ -42,8 +43,25 @@ const defaultRouterOptions: RouterOptions<AppData> = {
 
 const RECONNECT_TIMEOUT_MS = 5000; // 5 seconds
 
-const defaultRtcTransportOptions: WebRtcTransportOptions<AppData> = {
-  listenInfos: [
+const getListenInfos = (): NonNullable<
+  WebRtcTransportOptions<AppData>['listenInfos']
+> => {
+  if (IS_PRODUCTION) {
+    return [
+      {
+        protocol: 'udp',
+        ip: '0.0.0.0',
+        announcedAddress: SERVER_PUBLIC_IP
+      },
+      {
+        protocol: 'tcp',
+        ip: '0.0.0.0',
+        announcedAddress: SERVER_PUBLIC_IP
+      }
+    ];
+  }
+
+  return [
     {
       protocol: 'udp',
       ip: '127.0.0.1',
@@ -53,24 +71,22 @@ const defaultRtcTransportOptions: WebRtcTransportOptions<AppData> = {
       protocol: 'tcp',
       ip: '127.0.0.1',
       announcedAddress: undefined
-    },
-    {
-      protocol: 'udp',
-      ip: '0.0.0.0',
-      announcedAddress: SERVER_PUBLIC_IP
-    },
-    {
-      protocol: 'tcp',
-      ip: '0.0.0.0',
-      announcedAddress: SERVER_PUBLIC_IP
     }
-  ],
+  ];
+};
+
+const defaultRtcTransportOptions: WebRtcTransportOptions<AppData> = {
+  listenInfos: getListenInfos(),
   enableUdp: true,
   enableTcp: true,
   preferUdp: true,
   preferTcp: false,
   initialAvailableOutgoingBitrate: 1000000
 };
+
+logger.debug(
+  `RTC Transport options\n ${JSON.stringify(defaultRtcTransportOptions, null, 2)}`
+);
 
 const defaultUserState: TVoiceUserState = {
   micMuted: false,

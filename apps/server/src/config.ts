@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import { parse, stringify } from 'ini';
+import { ensureServerDirs } from './helpers/ensure-server-dirs';
 import { getPrivateIp, getPublicIp } from './helpers/network';
 import { CONFIG_INI_PATH } from './helpers/paths';
 import { IS_DEVELOPMENT } from './utils/env';
@@ -43,6 +44,9 @@ let config: TConfig = {
   }
 };
 
+// TODO: get rid of this double write here, but it's fine for now
+await ensureServerDirs();
+
 if (!(await fs.exists(CONFIG_INI_PATH))) {
   await fs.writeFile(CONFIG_INI_PATH, stringify(config));
 }
@@ -50,6 +54,10 @@ if (!(await fs.exists(CONFIG_INI_PATH))) {
 const text = await fs.readFile(CONFIG_INI_PATH, {
   encoding: 'utf-8'
 });
+
+if (process.env.DEBUG) {
+  config.server.debug = true;
+}
 
 config = Object.freeze(parse(text) as TConfig);
 

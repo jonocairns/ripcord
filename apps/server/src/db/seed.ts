@@ -3,6 +3,10 @@ import {
   DEFAULT_ROLE_PERMISSIONS,
   Permission,
   sha256,
+  STORAGE_MAX_FILE_SIZE,
+  STORAGE_MIN_QUOTA_PER_USER,
+  STORAGE_OVERFLOW_ACTION,
+  STORAGE_QUOTA,
   type TICategory,
   type TIChannel,
   type TIMessage,
@@ -40,7 +44,13 @@ const seedDatabase = async () => {
       'This is the default Sharkord server description. Change me in the server settings!',
     password: '',
     serverId: Bun.randomUUIDv7(),
-    secretToken: await sha256(originalToken)
+    secretToken: await sha256(originalToken),
+    allowNewUsers: true,
+    storageUploadEnabled: true,
+    storageQuota: STORAGE_QUOTA,
+    storageUploadMaxFileSize: STORAGE_MAX_FILE_SIZE,
+    storageSpaceQuotaByUser: STORAGE_MIN_QUOTA_PER_USER,
+    storageOverflowAction: STORAGE_OVERFLOW_ACTION
   };
 
   await db.insert(settings).values(initialSettings);

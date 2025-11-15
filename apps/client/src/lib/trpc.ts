@@ -15,8 +15,10 @@ let trpc: ReturnType<typeof createTRPCProxyClient<AppRouter>> | null = null;
 let currentHost: string | null = null;
 
 const initializeTRPC = (host: string) => {
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+
   wsClient = createWSClient({
-    url: `ws://${host}`,
+    url: `${protocol}://${host}`,
     // @ts-expect-error - the onclose type is not correct in trpc
     onClose: (cause: CloseEvent) => {
       cleanup();

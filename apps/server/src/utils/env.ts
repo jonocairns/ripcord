@@ -1,6 +1,8 @@
-declare const SHARKORD_BUILD_VERSION: string | undefined;
-declare const SHARKORD_ENV: string | undefined;
-declare const SHARKORD_BUILD_DATE: string | undefined;
+// these values are injected at build time
+const SHARKORD_ENV = process.env.SHARKORD_ENV;
+const SHARKORD_BUILD_VERSION = process.env.SHARKORD_BUILD_VERSION;
+const SHARKORD_BUILD_DATE = process.env.SHARKORD_BUILD_DATE;
+const SHARKORD_MEDIASOUP_BIN_NAME = process.env.SHARKORD_MEDIASOUP_BIN_NAME;
 
 const SERVER_VERSION =
   typeof SHARKORD_BUILD_VERSION !== 'undefined'
@@ -14,4 +16,16 @@ const env = typeof SHARKORD_ENV !== 'undefined' ? SHARKORD_ENV : 'development';
 const IS_PRODUCTION = env === 'production';
 const IS_DEVELOPMENT = !IS_PRODUCTION;
 
-export { BUILD_DATE, IS_DEVELOPMENT, IS_PRODUCTION, SERVER_VERSION };
+if (IS_PRODUCTION) {
+  if (!SHARKORD_MEDIASOUP_BIN_NAME) {
+    throw new Error('SHARKORD_MEDIASOUP_BIN is not defined');
+  }
+}
+
+export {
+  BUILD_DATE,
+  IS_DEVELOPMENT,
+  IS_PRODUCTION,
+  SERVER_VERSION,
+  SHARKORD_MEDIASOUP_BIN_NAME
+};

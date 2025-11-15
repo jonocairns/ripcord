@@ -1,8 +1,4 @@
 import {
-  STORAGE_MAX_FILE_SIZE,
-  STORAGE_MIN_QUOTA_PER_USER,
-  STORAGE_QUOTA,
-  StorageOverflowAction,
   type TActivityLogDetailsMap,
   type TMessageMetadata
 } from '@sharkord/shared';
@@ -24,22 +20,14 @@ const settings = sqliteTable(
     serverId: text('server_id').notNull(),
     secretToken: text('secretToken'),
     logoId: integer('logoId').references(() => files.id),
-    allowNewUsers: integer('allowNewUsers', { mode: 'boolean' })
-      .notNull()
-      .default(true),
-    storageUploadEnabled: integer('storageUploadsEnabled', { mode: 'boolean' })
-      .notNull()
-      .default(true),
-    storageQuota: integer('storageQuota').notNull().default(STORAGE_QUOTA),
-    storageUploadMaxFileSize: integer('storageUploadMaxFileSize')
-      .notNull()
-      .default(STORAGE_MAX_FILE_SIZE),
-    storageSpaceQuotaByUser: integer('storageSpaceQuotaByUser')
-      .notNull()
-      .default(STORAGE_MIN_QUOTA_PER_USER),
-    storageOverflowAction: text('storageOverflowAction')
-      .notNull()
-      .default(StorageOverflowAction.PREVENT_UPLOADS)
+    allowNewUsers: integer('allowNewUsers', { mode: 'boolean' }).notNull(),
+    storageUploadEnabled: integer('storageUploadsEnabled', {
+      mode: 'boolean'
+    }).notNull(),
+    storageQuota: integer('storageQuota').notNull(),
+    storageUploadMaxFileSize: integer('storageUploadMaxFileSize').notNull(),
+    storageSpaceQuotaByUser: integer('storageSpaceQuotaByUser').notNull(),
+    storageOverflowAction: text('storageOverflowAction').notNull()
   },
   (t) => ({
     serverIdx: index('settings_server_idx').on(t.serverId)

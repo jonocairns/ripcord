@@ -5,7 +5,8 @@ import {
   BUILD_DATE,
   IS_DEVELOPMENT,
   IS_PRODUCTION,
-  SERVER_VERSION
+  SERVER_VERSION,
+  SHARKORD_MEDIASOUP_BIN_NAME
 } from './env';
 
 const printDebug = () => {
@@ -23,6 +24,10 @@ const printDebug = () => {
           .join('')
       )
     )}`,
+    `${chalk.blue('Config:')} ${chalk.bold(
+      String(JSON.stringify(config, null, 2))
+    )}`,
+    `${chalk.blue('SHARKORD_MEDIASOUP_BIN_NAME:')} ${chalk.bold(String(SHARKORD_MEDIASOUP_BIN_NAME))}`,
     `${chalk.blue('IS_DEVELOPMENT:')} ${chalk.bold(String(IS_DEVELOPMENT))}`,
     `${chalk.blue('IS_PRODUCTION:')} ${chalk.bold(String(IS_PRODUCTION))}`,
     `${chalk.blue('SERVER_VERSION:')} ${chalk.bold(String(SERVER_VERSION))}`,

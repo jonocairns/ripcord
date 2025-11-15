@@ -5,11 +5,14 @@ import { logger } from '../logger.js';
 let mediaSoupWorker: mediasoup.types.Worker<mediasoup.types.AppData>;
 
 const loadMediasoup = async () => {
-  mediaSoupWorker = await mediasoup.createWorker({
-    rtcMaxPort: config.mediasoup.worker.rtcMaxPort,
-    rtcMinPort: config.mediasoup.worker.rtcMinPort,
-    logLevel: 'debug'
-  });
+  const workerConfig: mediasoup.types.WorkerSettings = {
+    rtcMinPort: +config.mediasoup.worker.rtcMinPort,
+    rtcMaxPort: +config.mediasoup.worker.rtcMaxPort,
+    logLevel: 'debug',
+    disableLiburing: true
+  };
+
+  mediaSoupWorker = await mediasoup.createWorker(workerConfig);
 
   mediaSoupWorker.on('died', (error) => {
     logger.error('Mediasoup worker died', error);
