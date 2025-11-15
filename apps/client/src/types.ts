@@ -27,7 +27,8 @@ export enum Resolution {
   '720p' = '720p',
   '480p' = '480p',
   '360p' = '360p',
-  '240p' = '240p'
+  '240p' = '240p',
+  '144p' = '144p'
 }
 
 export type TDeviceSettings = {
