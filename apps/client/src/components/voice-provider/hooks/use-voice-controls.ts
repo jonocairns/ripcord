@@ -29,12 +29,12 @@ const useVoiceControls = ({
   const currentVoiceChannelId = useCurrentVoiceChannelId();
 
   const toggleMic = useCallback(async () => {
-    if (!currentVoiceChannelId) return;
-
     const newState = !ownVoiceState.micMuted;
     const trpc = getTRPCClient();
 
     updateOwnVoiceState({ micMuted: newState });
+
+    if (!currentVoiceChannelId) return;
 
     localAudioStream?.getAudioTracks().forEach((track) => {
       track.enabled = !newState;
@@ -59,12 +59,12 @@ const useVoiceControls = ({
   ]);
 
   const toggleSound = useCallback(async () => {
-    if (!currentVoiceChannelId) return;
-
     const newState = !ownVoiceState.soundMuted;
     const trpc = getTRPCClient();
 
     updateOwnVoiceState({ soundMuted: newState });
+
+    if (!currentVoiceChannelId) return;
 
     try {
       await trpc.voice.updateState.mutate({
