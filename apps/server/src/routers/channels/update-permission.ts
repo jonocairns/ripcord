@@ -7,6 +7,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannelPermissions } from '../../db/publishers';
+import { getAffectedUserIdsForChannel } from '../../db/queries/channels';
 import {
   channelRolePermissions,
   channelUserPermissions
@@ -35,6 +36,8 @@ const updatePermissionsRoute = protectedProcedure
   )
   .mutation(async ({ input, ctx }) => {
     await ctx.needsPermission(Permission.MANAGE_CHANNELS);
+
+    console.log('Updating permissions with input:', input);
 
     const permissions = input.isCreate ? [] : input.permissions;
 
@@ -80,10 +83,9 @@ const updatePermissionsRoute = protectedProcedure
       }
     });
 
-    publishChannelPermissions(input.channelId, {
-      targetUserId: input.userId,
-      targetRoleId: input.roleId
-    });
+    publishChannelPermissions(
+      await getAffectedUserIdsForChannel(input.channelId)
+    );
     enqueueActivityLog({
       type: ActivityLogType.UPDATED_CHANNEL_PERMISSIONS,
       userId: ctx.user.id,

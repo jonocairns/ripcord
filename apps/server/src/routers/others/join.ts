@@ -7,15 +7,12 @@ import {
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
-import {
-  getChannelsForUser,
-  getAllChannelUserPermissions
-} from '../../db/queries/channels';
+import { getAllChannelUserPermissions } from '../../db/queries/channels';
 import { getEmojis } from '../../db/queries/emojis';
 import { getRoles } from '../../db/queries/roles';
 import { getSettings } from '../../db/queries/server';
 import { getPublicUsers } from '../../db/queries/users';
-import { categories, users } from '../../db/schema';
+import { categories, channels, users } from '../../db/schema';
 import { logger } from '../../logger';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { enqueueLogin } from '../../queues/logins';
@@ -57,7 +54,7 @@ const joinServerRoute = t.procedure
       channelPermissions
     ] = await Promise.all([
       db.select().from(categories),
-      getChannelsForUser(ctx.user.id),
+      db.select().from(channels),
       getPublicUsers(true), // return identity to get status of already connected users
       getRoles(),
       getEmojis(),

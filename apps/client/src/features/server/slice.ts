@@ -306,7 +306,16 @@ export const serverSlice = createSlice({
     addChannel: (state, action: PayloadAction<TChannel>) => {
       const exists = state.channels.find((c) => c.id === action.payload.id);
 
-      if (exists) return;
+      if (exists) {
+        // remove existing channel to re-add it at the end
+        // we need to do this here because of permissions changes
+        // when the VIEW_CHANNEL permission is granted, the server publishes a CREATED_CHANNEL event
+        // but the channel may already exist in the client state (just hidden)
+        // so we remove it first to avoid inconsistencies
+        state.channels = state.channels.filter(
+          (c) => c.id !== action.payload.id
+        );
+      }
 
       state.channels.push(action.payload);
     },

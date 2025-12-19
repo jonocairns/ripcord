@@ -106,7 +106,7 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
     [removeFile]
   );
 
-  if (loading) {
+  if (loading || !channelCan(ChannelPermission.VIEW_CHANNEL)) {
     return <TextSkeleton />;
   }
 

@@ -21,7 +21,6 @@ const onChannelUpdateRoute = protectedProcedure.subscription(
 
 const onChannelPermissionsUpdateRoute = protectedProcedure.subscription(
   async ({ ctx }) => {
-    // Subscribe only for this user's events
     return ctx.pubsub.subscribeFor(
       ctx.userId,
       ServerEvents.CHANNEL_PERMISSIONS_UPDATE

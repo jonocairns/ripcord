@@ -180,7 +180,7 @@ const Channel = memo(({ channelId, isSelected }: TChannelProps) => {
     }
   }, [channelId, channel?.type, init, currentVoiceChannelId]);
 
-  if (!channel) {
+  if (!channel || !channelCan(ChannelPermission.VIEW_CHANNEL)) {
     return null;
   }
 

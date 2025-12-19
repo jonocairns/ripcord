@@ -1,4 +1,7 @@
-import { ChannelPermission, ServerEvents } from '@sharkord/shared';
+import {
+  ServerEvents,
+  type TChannelUserPermissionsMap
+} from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { db } from '.';
 import { pubsub } from '../utils/pubsub';
@@ -8,7 +11,7 @@ import { getMessage } from './queries/messages';
 import { getRole } from './queries/roles';
 import { getSettings } from './queries/server';
 import { getPublicUserById } from './queries/users';
-import { categories, channels, userRoles } from './schema';
+import { categories, channels } from './schema';
 
 const publishMessage = async (
   messageId: number | undefined,
@@ -156,65 +159,26 @@ const publishCategory = async (
   pubsub.publish(targetEvent, category);
 };
 
-const publishChannelPermissions = async (
-  channelId: number,
-  {
-    targetUserId,
-    targetRoleId
-  }: {
-    targetUserId?: number;
-    targetRoleId?: number;
-  }
-) => {
-  const channel = await db
-    .select()
-    .from(channels)
-    .where(eq(channels.id, channelId))
-    .get();
+const publishChannelPermissions = async (affectedUserIds: number[]) => {
+  const permissionsMap = new Map<number, TChannelUserPermissionsMap>();
+  const promises = affectedUserIds.map(async (userId) => {
+    const updatedPermissions = await getAllChannelUserPermissions(userId);
 
-  if (!channel) return;
+    permissionsMap.set(userId, updatedPermissions);
+  });
 
-  const affectedUserIds: number[] = [];
-
-  if (targetRoleId) {
-    // role permissions changed, need to find all users with that role and notify them
-    const usersWithRole = await db
-      .select({
-        userId: userRoles.userId
-      })
-      .from(userRoles)
-      .where(eq(userRoles.roleId, targetRoleId));
-
-    affectedUserIds.push(...usersWithRole.map((u) => u.userId));
-  } else if (targetUserId) {
-    // user-specific permissions changed, notify only that user
-    affectedUserIds.push(targetUserId);
-  }
+  await Promise.all(promises);
 
   for (const userId of affectedUserIds) {
-    // this is kinda inefficient because it does more than needed, but I don't feel like changing this shit right now
-    const updatedPermissions = await getAllChannelUserPermissions(userId);
+    const updatedPermissions = permissionsMap.get(userId);
+
+    if (!updatedPermissions) continue;
 
     pubsub.publishFor(
       userId,
       ServerEvents.CHANNEL_PERMISSIONS_UPDATE,
       updatedPermissions
     );
-
-    const viewChannelPermission =
-      updatedPermissions[channelId]?.permissions[
-        ChannelPermission.VIEW_CHANNEL
-      ] ?? false;
-
-    // TODO: in this case publishFor is not working. probably all channel events need to be pubsub.subscribeFor because they can be private
-
-    if (viewChannelPermission) {
-      // assumes the channel is not visible currently, publish it as CREATE so it's added to the client store
-      pubsub.publishFor(userId, ServerEvents.CHANNEL_CREATE, channel);
-    } else {
-      // assumes the channel is visible currently, publish it as DELETE so it's removed from the client store
-      pubsub.publishFor(userId, ServerEvents.CHANNEL_DELETE, channel.id);
-    }
   }
 };
 

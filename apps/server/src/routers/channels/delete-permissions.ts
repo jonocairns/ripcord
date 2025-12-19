@@ -1,11 +1,14 @@
-import { Permission } from '@sharkord/shared';
+import { ActivityLogType, Permission } from '@sharkord/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
+import { publishChannelPermissions } from '../../db/publishers';
+import { getAffectedUserIdsForChannel } from '../../db/queries/channels';
 import {
   channelRolePermissions,
   channelUserPermissions
 } from '../../db/schema';
+import { enqueueActivityLog } from '../../queues/activity-log';
 import { protectedProcedure } from '../../utils/trpc';
 
 const deletePermissionsRoute = protectedProcedure
@@ -26,6 +29,8 @@ const deletePermissionsRoute = protectedProcedure
   .mutation(async ({ input, ctx }) => {
     await ctx.needsPermission(Permission.MANAGE_CHANNELS);
 
+    const affectedUserIds = await getAffectedUserIdsForChannel(input.channelId);
+
     await db.transaction(async (tx) => {
       if (input.userId) {
         await tx
@@ -45,6 +50,17 @@ const deletePermissionsRoute = protectedProcedure
               eq(channelRolePermissions.roleId, input.roleId)
             )
           );
+      }
+    });
+
+    publishChannelPermissions(affectedUserIds);
+    enqueueActivityLog({
+      type: ActivityLogType.DELETED_CHANNEL_PERMISSIONS,
+      userId: ctx.user.id,
+      details: {
+        channelId: input.channelId,
+        targetUserId: input.userId,
+        targetRoleId: input.roleId
       }
     });
   });

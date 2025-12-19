@@ -26,10 +26,7 @@ const subscribeToChannels = () => {
 
   const onChannelPermissionsUpdateSub =
     trpc.channels.onPermissionsUpdate.subscribe(undefined, {
-      onData: (data) => {
-        console.log(`Your permissions for channel have changed!`, data);
-        setChannelPermissions(data);
-      },
+      onData: (data) => setChannelPermissions(data),
       onError: (err) =>
         console.error('onChannelPermissionsUpdate subscription error:', err)
     });

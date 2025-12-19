@@ -225,7 +225,7 @@ const OverridesList = memo(
       <Card className="w-64 flex-shrink-0">
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base">Overrides</CardTitle>
+            <CardTitle className="text-base">Roles/Users</CardTitle>
             <SearchPopover
               onSelect={onSelect}
               ignoreRoleIds={usedRolesIds}

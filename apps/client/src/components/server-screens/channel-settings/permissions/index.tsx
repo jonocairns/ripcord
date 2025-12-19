@@ -6,7 +6,10 @@ import {
   CardTitle
 } from '@/components/ui/card';
 import { LoadingCard } from '@/components/ui/loading-card';
-import { useAdminChannelPermissions } from '@/features/server/admin/hooks';
+import {
+  useAdminChannelGeneral,
+  useAdminChannelPermissions
+} from '@/features/server/admin/hooks';
 import { ChannelPermission } from '@sharkord/shared';
 import { memo, useMemo, useState } from 'react';
 import { Override } from './override';
@@ -21,6 +24,7 @@ const ChannelPermissions = memo(({ channelId }: TChannelPermissionsProps) => {
   const [selectedOverrideId, setSelectedOverrideId] = useState<
     string | undefined
   >();
+  const { channel } = useAdminChannelGeneral(channelId);
   const { rolePermissions, userPermissions, loading, refetch } =
     useAdminChannelPermissions(channelId);
 
@@ -57,8 +61,15 @@ const ChannelPermissions = memo(({ channelId }: TChannelPermissionsProps) => {
         <CardTitle>Permissions</CardTitle>
         <CardDescription>
           Manage channel-specific permissions for roles and users. These
-          permissions override server-level permissions. User permissions take
-          precedence over role permissions.
+          permissions are not inherited from server-level permissions. User
+          permissions take precedence over role permissions.{' '}
+          {!channel?.private && (
+            <span className="font-bold">
+              Note: this is a public channel; everyone has access by default.
+              These permissions will not restrict access. To restrict access,
+              make the channel private.
+            </span>
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -74,6 +85,7 @@ const ChannelPermissions = memo(({ channelId }: TChannelPermissionsProps) => {
 
           {selectedOverrideId ? (
             <Override
+              key={selectedOverrideId}
               channelId={channelId}
               overrideId={selectedOverrideId}
               permissions={selectedPermissions}
