@@ -14,7 +14,7 @@ const onMessageUpdateRoute = protectedProcedure.subscription(
 );
 
 const onMessageRoute = protectedProcedure.subscription(async ({ ctx }) => {
-  return ctx.pubsub.subscribe(ServerEvents.NEW_MESSAGE);
+  return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.NEW_MESSAGE);
 });
 
 const onMessageTypingRoute = protectedProcedure.subscription(

@@ -87,7 +87,6 @@ export enum UploadHeaders {
 export enum ChannelPermission {
   VIEW_CHANNEL = "VIEW_CHANNEL",
   SEND_MESSAGES = "SEND_MESSAGES",
-  UPLOAD_FILES = "UPLOAD_FILES",
   JOIN = "JOIN",
   SPEAK = "SPEAK",
   SHARE_SCREEN = "SHARE_SCREEN",
@@ -97,7 +96,6 @@ export enum ChannelPermission {
 export const channelPermissionLabels: Record<ChannelPermission, string> = {
   [ChannelPermission.VIEW_CHANNEL]: "View Channel",
   [ChannelPermission.SEND_MESSAGES]: "Send Messages",
-  [ChannelPermission.UPLOAD_FILES]: "Upload Files",
   [ChannelPermission.JOIN]: "Join Channel",
   [ChannelPermission.SPEAK]: "Speak",
   [ChannelPermission.SHARE_SCREEN]: "Share Screen",
@@ -108,7 +106,6 @@ export const channelPermissionDescriptions: Record<ChannelPermission, string> =
   {
     [ChannelPermission.VIEW_CHANNEL]: "Allows the user to view the channel.",
     [ChannelPermission.SEND_MESSAGES]: "Allows the user to send messages.",
-    [ChannelPermission.UPLOAD_FILES]: "Allows the user to upload files.",
     [ChannelPermission.JOIN]: "Allows the user to join the channel.",
     [ChannelPermission.SPEAK]: "Allows the user to speak in voice channels.",
     [ChannelPermission.SHARE_SCREEN]: "Allows the user to share their screen.",

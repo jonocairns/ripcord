@@ -1,12 +1,7 @@
-import {
-  ChannelPermission,
-  Permission,
-  ServerEvents,
-  type TFile,
-  type TJoinedMessage
-} from '@sharkord/shared';
+import { ChannelPermission, Permission } from '@sharkord/shared';
 import { z } from 'zod';
 import { db } from '../../db';
+import { publishMessage } from '../../db/publishers';
 import { messageFiles, messages } from '../../db/schema';
 import { enqueueProcessMetadata } from '../../queues/message-metadata';
 import { fileManager } from '../../utils/file-manager';
@@ -42,8 +37,6 @@ const sendMessageRoute = protectedProcedure
       .returning()
       .get();
 
-    const files: TFile[] = [];
-
     if (input.files.length > 0) {
       for (const tempFileId of input.files) {
         const newFile = await fileManager.saveFile(tempFileId, ctx.userId);
@@ -53,19 +46,10 @@ const sendMessageRoute = protectedProcedure
           fileId: newFile.id,
           createdAt: Date.now()
         });
-
-        files.push(newFile);
       }
     }
 
-    const messageWithFiles: TJoinedMessage = {
-      ...message,
-      files,
-      reactions: []
-    };
-
-    ctx.pubsub.publish(ServerEvents.NEW_MESSAGE, messageWithFiles);
-
+    publishMessage(message.id, input.channelId, 'create');
     enqueueProcessMetadata(input.content, message.id);
   });
 

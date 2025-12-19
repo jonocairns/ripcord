@@ -318,7 +318,10 @@ const getUserChannelPermissions = async (
 
 const getAffectedUserIdsForChannel = async (
   channelId: number,
-  forceAllUsers: boolean = false
+  options?: {
+    forceAllUsers?: boolean;
+    permission?: ChannelPermission;
+  }
 ): Promise<number[]> => {
   const [channel] = await db
     .select()
@@ -331,21 +334,40 @@ const getAffectedUserIdsForChannel = async (
   }
 
   // if channel is public, return all user IDs
-  if (!channel.private || forceAllUsers) {
+  if (!channel.private || options?.forceAllUsers) {
     const allUsers = await db.select({ id: users.id }).from(users);
 
     return allUsers.map((user) => user.id);
   }
 
+  // If a specific permission is required, filter by it
+  const permission = options?.permission;
+
   const usersWithDirectPerms = await db
     .select({ userId: channelUserPermissions.userId })
     .from(channelUserPermissions)
-    .where(eq(channelUserPermissions.channelId, channelId));
+    .where(
+      and(
+        eq(channelUserPermissions.channelId, channelId),
+        permission
+          ? eq(channelUserPermissions.permission, permission)
+          : undefined,
+        permission ? eq(channelUserPermissions.allow, true) : undefined
+      )
+    );
 
   const rolesWithPerms = await db
     .select({ roleId: channelRolePermissions.roleId })
     .from(channelRolePermissions)
-    .where(eq(channelRolePermissions.channelId, channelId));
+    .where(
+      and(
+        eq(channelRolePermissions.channelId, channelId),
+        permission
+          ? eq(channelRolePermissions.permission, permission)
+          : undefined,
+        permission ? eq(channelRolePermissions.allow, true) : undefined
+      )
+    );
 
   const roleIds = rolesWithPerms.map((r) => r.roleId);
 
@@ -360,23 +382,15 @@ const getAffectedUserIdsForChannel = async (
 
   // get users with the owner role because they have access to everything all the time
   const owners = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(
-      inArray(
-        users.id,
-        db
-          .select({ userId: userRoles.userId })
-          .from(userRoles)
-          .where(eq(userRoles.roleId, OWNER_ROLE_ID))
-      )
-    );
+    .select({ userId: userRoles.userId })
+    .from(userRoles)
+    .where(eq(userRoles.roleId, OWNER_ROLE_ID));
 
   const userIdSet = new Set<number>();
 
   usersWithDirectPerms.forEach((u) => userIdSet.add(u.userId));
   usersWithRoles.forEach((u) => userIdSet.add(u.userId));
-  owners.forEach((u) => userIdSet.add(u.id));
+  owners.forEach((u) => userIdSet.add(u.userId));
 
   return Array.from(userIdSet);
 };

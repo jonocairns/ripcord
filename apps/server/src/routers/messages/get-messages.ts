@@ -1,4 +1,5 @@
 import {
+  ChannelPermission,
   DEFAULT_MESSAGES_LIMIT,
   type TFile,
   type TJoinedMessage,
@@ -25,7 +26,12 @@ const getMessagesRoute = protectedProcedure
     })
   )
   .meta({ infinite: true })
-  .query(async ({ input }) => {
+  .query(async ({ ctx, input }) => {
+    await ctx.needsChannelPermission(
+      input.channelId,
+      ChannelPermission.VIEW_CHANNEL
+    );
+
     const { channelId, cursor, limit } = input;
 
     const rows: TMessage[] = await db
