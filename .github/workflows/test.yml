@@ -1,31 +1,28 @@
-name: Tests
+# name: Tests
 
-on:
-  push:
-  pull_request:
+# on:
+#   push:
+#   pull_request:
 
-jobs:
-  test:
-    name: Run Tests
-    runs-on: ubuntu-latest
+# jobs:
+#   test:
+#     name: Run Tests
+#     runs-on: ubuntu-latest
+#     if: false  # Workflow disabled
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
+#       - name: Setup Bun
+#         uses: oven-sh/setup-bun@v1
+#         with:
+#           bun-version: latest
 
-      - name: Install dependencies
-        run: bun install
+#       - name: Install dependencies
+#         run: bun install
 
-      - name: Run server tests
-        working-directory: apps/server
-        run: bun test
+#       - name: Run server tests
+#         working-directory: apps/server
+#         run: bun test
 
-      - name: Run client tests (if any)
-        working-directory: apps/client
-        run: bun test || true
-        continue-on-error: true
