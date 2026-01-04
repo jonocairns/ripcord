@@ -21,6 +21,8 @@ import {
 import { pubsub } from '../../utils/pubsub';
 import { protectedProcedure } from '../../utils/trpc';
 
+// TODO: improve this query
+
 const getMessagesRoute = protectedProcedure
   .input(
     z.object({
