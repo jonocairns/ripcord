@@ -18,7 +18,8 @@ const editMessageRoute = protectedProcedure
   .mutation(async ({ input, ctx }) => {
     const message = await db
       .select({
-        userId: messages.userId
+        userId: messages.userId,
+        channelId: messages.channelId
       })
       .from(messages)
       .where(eq(messages.id, input.messageId))
@@ -46,7 +47,7 @@ const editMessageRoute = protectedProcedure
       })
       .where(eq(messages.id, input.messageId));
 
-    publishMessage(input.messageId, undefined, 'update');
+    publishMessage(input.messageId, message.channelId, 'update');
     enqueueProcessMetadata(input.content, input.messageId);
   });
 

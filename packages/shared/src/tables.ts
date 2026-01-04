@@ -18,6 +18,7 @@ import {
   userRoles,
   channelRolePermissions,
   channelUserPermissions,
+  channelReadStates,
 } from "../../../apps/server/src/db/schema";
 import type { UserStatus } from "./types";
 import type { Permission } from "./statics";
@@ -44,6 +45,7 @@ export type TChannelRolePermission = InferSelectModel<
 export type TChannelUserPermission = InferSelectModel<
   typeof channelUserPermissions
 >;
+export type TChannelReadState = InferSelectModel<typeof channelReadStates>;
 
 export type TISettings = InferInsertModel<typeof settings>;
 export type TIRole = InferInsertModel<typeof roles>;
@@ -67,6 +69,7 @@ export type TIChannelRolePermission = InferInsertModel<
 export type TIChannelUserPermission = InferInsertModel<
   typeof channelUserPermissions
 >;
+export type TIChannelReadState = InferInsertModel<typeof channelReadStates>;
 
 export type TStorageSettings = Pick<
   TSettings,

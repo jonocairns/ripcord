@@ -22,6 +22,20 @@ CREATE TABLE `categories` (
 );
 --> statement-breakpoint
 CREATE INDEX `categories_position_idx` ON `categories` (`position`);--> statement-breakpoint
+CREATE TABLE `channel_read_states` (
+	`user_id` integer NOT NULL,
+	`channel_id` integer NOT NULL,
+	`last_read_message_id` integer,
+	`last_read_at` integer NOT NULL,
+	PRIMARY KEY(`user_id`, `channel_id`),
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`channel_id`) REFERENCES `channels`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`last_read_message_id`) REFERENCES `messages`(`id`) ON UPDATE no action ON DELETE set null
+);
+--> statement-breakpoint
+CREATE INDEX `channel_read_states_user_idx` ON `channel_read_states` (`user_id`);--> statement-breakpoint
+CREATE INDEX `channel_read_states_channel_idx` ON `channel_read_states` (`channel_id`);--> statement-breakpoint
+CREATE INDEX `channel_read_states_last_read_idx` ON `channel_read_states` (`last_read_message_id`);--> statement-breakpoint
 CREATE TABLE `channel_role_permissions` (
 	`channel_id` integer NOT NULL,
 	`role_id` integer NOT NULL,

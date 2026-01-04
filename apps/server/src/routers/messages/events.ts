@@ -9,7 +9,7 @@ const onMessageDeleteRoute = protectedProcedure.subscription(
 
 const onMessageUpdateRoute = protectedProcedure.subscription(
   async ({ ctx }) => {
-    return ctx.pubsub.subscribe(ServerEvents.MESSAGE_UPDATE);
+    return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.MESSAGE_UPDATE);
   }
 );
 

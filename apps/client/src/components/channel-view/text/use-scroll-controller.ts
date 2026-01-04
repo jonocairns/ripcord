@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef } from 'react';
 
 type TUseScrollControllerProps = {
   messages: unknown[];
-  loading: boolean;
+  fetching: boolean;
   hasMore: boolean;
   loadMore: () => Promise<unknown>;
 };
@@ -17,7 +17,7 @@ type TUseScrollControllerReturn = {
 
 const useScrollController = ({
   messages,
-  loading,
+  fetching,
   hasMore,
   loadMore
 }: TUseScrollControllerProps): TUseScrollControllerReturn => {
@@ -36,7 +36,7 @@ const useScrollController = ({
   const onScroll = useCallback(() => {
     const container = containerRef.current;
 
-    if (!container || loading) return;
+    if (!container || fetching) return;
 
     if (container.scrollTop <= 50 && hasMore) {
       const prevScrollHeight = container.scrollHeight;
@@ -47,12 +47,12 @@ const useScrollController = ({
           newScrollHeight - prevScrollHeight + container.scrollTop;
       });
     }
-  }, [loadMore, hasMore, loading]);
+  }, [loadMore, hasMore, fetching]);
 
   // Handle initial scroll after messages load
   useEffect(() => {
     if (!containerRef.current) return;
-    if (loading || messages.length === 0) return;
+    if (fetching || messages.length === 0) return;
 
     if (!hasInitialScroll.current) {
       // try multiple methods to ensure scroll happens after all content is rendered
@@ -79,7 +79,7 @@ const useScrollController = ({
         performScroll();
       }, 200);
     }
-  }, [loading, messages.length, scrollToBottom]);
+  }, [fetching, messages.length, scrollToBottom]);
 
   // auto-scroll on new messages if user is near bottom
   useEffect(() => {

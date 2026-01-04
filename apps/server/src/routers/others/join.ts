@@ -7,7 +7,10 @@ import {
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
-import { getAllChannelUserPermissions } from '../../db/queries/channels';
+import {
+  getAllChannelUserPermissions,
+  getChannelsReadStatesForUser
+} from '../../db/queries/channels';
 import { getEmojis } from '../../db/queries/emojis';
 import { getRoles } from '../../db/queries/roles';
 import { getSettings } from '../../db/queries/server';
@@ -60,15 +63,19 @@ const joinServerRoute = t.procedure
       publicUsers,
       roles,
       emojis,
-      channelPermissions
+      channelPermissions,
+      readStates
     ] = await Promise.all([
       db.select().from(categories),
       db.select().from(channels),
       getPublicUsers(true), // return identity to get status of already connected users
       getRoles(),
       getEmojis(),
-      getAllChannelUserPermissions(ctx.user.id)
+      getAllChannelUserPermissions(ctx.user.id),
+      getChannelsReadStatesForUser(ctx.user.id)
     ]);
+
+    console.log('Read states on join:', readStates);
 
     const processedPublicUsers = publicUsers.map((u) => ({
       ...u,
@@ -134,7 +141,8 @@ const joinServerRoute = t.procedure
       roles,
       emojis,
       publicSettings,
-      channelPermissions
+      channelPermissions,
+      readStates
     };
   });
 

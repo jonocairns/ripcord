@@ -421,9 +421,35 @@ const channelUserPermissions = sqliteTable(
   })
 );
 
+const channelReadStates = sqliteTable(
+  'channel_read_states',
+  {
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    channelId: integer('channel_id')
+      .notNull()
+      .references(() => channels.id, { onDelete: 'cascade' }),
+    lastReadMessageId: integer('last_read_message_id').references(
+      () => messages.id,
+      { onDelete: 'set null' }
+    ),
+    lastReadAt: integer('last_read_at').notNull()
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.channelId] }),
+    userIdx: index('channel_read_states_user_idx').on(t.userId),
+    channelIdx: index('channel_read_states_channel_idx').on(t.channelId),
+    lastReadIdx: index('channel_read_states_last_read_idx').on(
+      t.lastReadMessageId
+    )
+  })
+);
+
 export {
   activityLog,
   categories,
+  channelReadStates,
   channelRolePermissions,
   channels,
   channelUserPermissions,

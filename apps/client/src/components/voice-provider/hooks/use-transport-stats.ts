@@ -1,6 +1,6 @@
+import { logVoice } from '@/helpers/browser-logger';
 import type { Transport } from 'mediasoup-client/types';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { logVoice } from '../helpers';
 
 export type TransportStats = {
   bytesReceived: number;

@@ -9,7 +9,6 @@ import { getAppDataPath } from './fs';
 const DATA_PATH = IS_DEVELOPMENT
   ? path.resolve(process.cwd(), './data')
   : path.join(getAppDataPath(), 'sharkord');
-
 const DB_PATH = path.join(DATA_PATH, 'db.sqlite');
 const LOGS_PATH = path.join(DATA_PATH, 'logs');
 const PUBLIC_PATH = path.join(DATA_PATH, 'public');

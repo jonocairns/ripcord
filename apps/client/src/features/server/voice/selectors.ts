@@ -1,5 +1,4 @@
 import type { IRootState } from '@/features/store';
-import { createCachedSelector } from 're-reselect';
 
 export const voiceMapSelector = (state: IRootState) => state.server.voiceMap;
 
@@ -10,7 +9,7 @@ export const ownVoiceStateSelector = (state: IRootState) => {
 export const pinnedCardSelector = (state: IRootState) =>
   state.server.pinnedCard;
 
-export const voiceChannelStateSelector = createCachedSelector(
-  [voiceMapSelector, (_: IRootState, channelId: number) => channelId],
-  (voiceMap, channelId) => voiceMap[channelId]
-)((_, channelId: number) => channelId);
+export const voiceChannelStateSelector = (
+  state: IRootState,
+  channelId: number
+) => state.server.voiceMap[channelId];

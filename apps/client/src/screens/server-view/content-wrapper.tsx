@@ -1,29 +1,33 @@
 import { TextChannel } from '@/components/channel-view/text';
 import { VoiceChannel } from '@/components/channel-view/voice';
-import { useSelectedChannel } from '@/features/server/channels/hooks';
+import {
+  useSelectedChannelId,
+  useSelectedChannelType
+} from '@/features/server/channels/hooks';
 import { ChannelType } from '@sharkord/shared';
 import { memo } from 'react';
 
 const ContentWrapper = memo(() => {
-  const selectedChannel = useSelectedChannel();
+  const selectedChannelId = useSelectedChannelId();
+  const selectedChannelType = useSelectedChannelType();
 
   let content;
 
-  if (selectedChannel) {
-    if (selectedChannel.type === ChannelType.TEXT) {
+  if (selectedChannelId) {
+    if (selectedChannelType === ChannelType.TEXT) {
       content = (
-        <TextChannel key={selectedChannel.id} channelId={selectedChannel.id} />
+        <TextChannel key={selectedChannelId} channelId={selectedChannelId} />
       );
-    } else if (selectedChannel.type === ChannelType.VOICE) {
+    } else if (selectedChannelType === ChannelType.VOICE) {
       content = (
-        <VoiceChannel key={selectedChannel.id} channelId={selectedChannel.id} />
+        <VoiceChannel key={selectedChannelId} channelId={selectedChannelId} />
       );
     }
   } else {
     content = null;
   }
 
-  return <main className="flex flex-1 flex-col bg-background">{content}</main>;
+  return <main className="flex flex-1 flex-col bg-background relative">{content}</main>;
 });
 
 export { ContentWrapper };

@@ -25,12 +25,12 @@ type TChannelProps = {
 };
 
 const TextChannel = memo(({ channelId }: TChannelProps) => {
-  const { messages, hasMore, loadMore, loading, groupedMessages } =
+  const { messages, hasMore, loadMore, loading, fetching, groupedMessages } =
     useMessages(channelId);
   const [newMessage, setNewMessage] = useState('');
   const { containerRef, onScroll } = useScrollController({
     messages,
-    loading,
+    fetching,
     hasMore,
     loadMore
   });
@@ -95,10 +95,10 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
     async (fileId: string) => {
       removeFile(fileId);
 
-      try {
-        const trpc = getTRPCClient();
+      const trpc = getTRPCClient();
 
-        await trpc.files.deleteTemporary.mutate({ fileId });
+      try {
+        trpc.files.deleteTemporary.mutate({ fileId });
       } catch {
         // ignore error
       }
@@ -106,12 +106,23 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
     [removeFile]
   );
 
-  if (loading || !channelCan(ChannelPermission.VIEW_CHANNEL)) {
+  if (!channelCan(ChannelPermission.VIEW_CHANNEL) || loading) {
     return <TextSkeleton />;
   }
 
   return (
     <>
+      {fetching && (
+        <div className="absolute top-0 left-0 right-0 h-12 z-10 flex items-center justify-center">
+          <div className="flex items-center gap-2 bg-background/80 backdrop-blur-sm border border-border rounded-full px-4 py-2 shadow-lg">
+            <Spinner size="xs" />
+            <span className="text-sm text-muted-foreground">
+              Fetching older messages...
+            </span>
+          </div>
+        </div>
+      )}
+
       <div
         ref={containerRef}
         onScroll={onScroll}

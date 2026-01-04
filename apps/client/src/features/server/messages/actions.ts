@@ -1,5 +1,7 @@
 import { store } from '@/features/store';
+import { getTRPCClient } from '@/lib/trpc';
 import { TYPING_MS, type TJoinedMessage } from '@sharkord/shared';
+import { selectedChannelIdSelector } from '../channels/selectors';
 import { serverSliceActions } from '../slice';
 import { playSound } from '../sounds/actions';
 import { SoundType } from '../types';
@@ -16,6 +18,9 @@ export const addMessages = (
   opts: { prepend?: boolean } = {},
   isSubscriptionMessage = false
 ) => {
+  const state = store.getState();
+  const selectedChannelId = selectedChannelIdSelector(state);
+
   store.dispatch(serverSliceActions.addMessages({ channelId, messages, opts }));
 
   messages.forEach((message) => {
@@ -30,6 +35,17 @@ export const addMessages = (
 
     if (!isFromOwnUser) {
       playSound(SoundType.MESSAGE_RECEIVED);
+    }
+
+    if (channelId === selectedChannelId && !isFromOwnUser) {
+      // user is viewing this channel - mark messages as read
+      const trpc = getTRPCClient();
+
+      try {
+        trpc.channels.markAsRead.mutate({ channelId });
+      } catch {
+        // ignore errors
+      }
     }
   }
 };

@@ -1,10 +1,10 @@
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useOwnUserId } from '@/features/server/users/hooks';
+import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { StreamKind } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { useEffect } from 'react';
-import { logVoice } from '../helpers';
 
 type TEvents = {
   consume: (

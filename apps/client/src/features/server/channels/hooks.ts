@@ -8,7 +8,8 @@ import {
   currentVoiceChannelIdSelector,
   isCurrentVoiceChannelSelectedSelector,
   selectedChannelIdSelector,
-  selectedChannelSelector
+  selectedChannelSelector,
+  selectedChannelTypeSelector
 } from './selectors';
 
 export const useChannels = () =>
@@ -37,3 +38,6 @@ export const useChannelPermissionsById = (channelId: number) =>
   useSelector((state: IRootState) =>
     channelPermissionsByIdSelector(state, channelId)
   );
+
+export const useSelectedChannelType = () =>
+  useSelector(selectedChannelTypeSelector);

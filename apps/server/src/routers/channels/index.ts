@@ -6,10 +6,12 @@ import {
   onChannelCreateRoute,
   onChannelDeleteRoute,
   onChannelPermissionsUpdateRoute,
+  onChannelReadStatesUpdateRoute,
   onChannelUpdateRoute
 } from './events';
 import { getChannelRoute } from './get-channel';
 import { getPermissionsRoute } from './get-permissions';
+import { markAsReadRoute } from './mark-as-read';
 import { reorderChannelsRoute } from './reorder-channels';
 import { updateChannelRoute } from './update-channel';
 import { updatePermissionsRoute } from './update-permission';
@@ -23,8 +25,10 @@ export const channelsRouter = t.router({
   getPermissions: getPermissionsRoute,
   deletePermissions: deletePermissionsRoute,
   reorder: reorderChannelsRoute,
+  markAsRead: markAsReadRoute,
   onCreate: onChannelCreateRoute,
   onDelete: onChannelDeleteRoute,
   onUpdate: onChannelUpdateRoute,
-  onPermissionsUpdate: onChannelPermissionsUpdateRoute
+  onPermissionsUpdate: onChannelPermissionsUpdateRoute,
+  onReadStateUpdate: onChannelReadStatesUpdateRoute
 });

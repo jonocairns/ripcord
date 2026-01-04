@@ -112,3 +112,5 @@ export type TChannelUserPermissionsMap = Record<
   number,
   { channelId: number; permissions: TChannelPermissionsMap }
 >;
+
+export type TReadStateMap = Record<number, number>;

@@ -12,7 +12,7 @@ import { useServerName } from '@/features/server/hooks';
 import { disconnect } from '@/lib/trpc';
 import { Permission } from '@sharkord/shared';
 import { Menu } from 'lucide-react';
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { Dialog } from '../dialogs/dialogs';
 import { Protect } from '../protect';
 import { ServerScreen } from '../server-screens/screens';
@@ -23,6 +23,18 @@ import { VoiceControl } from './voice-control';
 
 const LeftSidebar = memo(() => {
   const serverName = useServerName();
+  const serverSettingsPermissions = useMemo(
+    () => [
+      Permission.MANAGE_SETTINGS,
+      Permission.MANAGE_ROLES,
+      Permission.MANAGE_EMOJIS,
+      Permission.MANAGE_STORAGE,
+      Permission.MANAGE_USERS,
+      Permission.MANAGE_INVITES,
+      Permission.MANAGE_UPDATES
+    ],
+    []
+  );
 
   return (
     <aside className="flex w-72 flex-col border-r border-border bg-card">
@@ -45,7 +57,7 @@ const LeftSidebar = memo(() => {
                   Add Category
                 </DropdownMenuItem>
               </Protect>
-              <Protect permission={Permission.MANAGE_SETTINGS}>
+              <Protect permission={serverSettingsPermissions}>
                 <DropdownMenuItem
                   onClick={() => openServerScreen(ServerScreen.SERVER_SETTINGS)}
                 >

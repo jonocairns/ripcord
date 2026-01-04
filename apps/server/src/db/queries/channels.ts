@@ -2,14 +2,17 @@ import {
   ChannelPermission,
   OWNER_ROLE_ID,
   type TChannel,
-  type TChannelUserPermissionsMap
+  type TChannelUserPermissionsMap,
+  type TReadStateMap
 } from '@sharkord/shared';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '..';
 import {
+  channelReadStates,
   channelRolePermissions,
   channels,
   channelUserPermissions,
+  messages,
   userRoles,
   users
 } from '../schema';
@@ -337,7 +340,7 @@ const getAffectedUserIdsForChannel = async (
     return allUsers.map((user) => user.id);
   }
 
-  // If a specific permission is required, filter by it
+  // if a specific permission is required, filter by it
   const permission = options?.permission;
 
   const usersWithDirectPerms = await db
@@ -392,11 +395,48 @@ const getAffectedUserIdsForChannel = async (
   return Array.from(userIdSet);
 };
 
+const getChannelsReadStatesForUser = async (
+  userId: number,
+  channelId?: number
+): Promise<TReadStateMap> => {
+  const results = await db
+    .select({
+      channelId: messages.channelId,
+      unreadCount: sql<number>`
+        COUNT(CASE
+          WHEN ${messages.userId} != ${userId}
+            AND (${channelReadStates.lastReadMessageId} IS NULL
+              OR ${messages.id} > ${channelReadStates.lastReadMessageId})
+          THEN 1
+        END)
+      `.as('unread_count')
+    })
+    .from(messages)
+    .leftJoin(
+      channelReadStates,
+      and(
+        eq(channelReadStates.channelId, messages.channelId),
+        eq(channelReadStates.userId, userId)
+      )
+    )
+    .where(channelId ? eq(messages.channelId, channelId) : undefined)
+    .groupBy(messages.channelId);
+
+  const readStateMap: TReadStateMap = {};
+
+  for (const result of results) {
+    readStateMap[result.channelId] = result.unreadCount;
+  }
+
+  return readStateMap;
+};
+
 export {
   channelUserCan,
   getAffectedUserIdsForChannel,
   getAllChannelUserPermissions,
   getChannelsForUser,
+  getChannelsReadStatesForUser,
   getRoleChannelPermissions,
   getUserChannelPermissions
 };

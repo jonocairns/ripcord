@@ -1,3 +1,4 @@
+import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import { StreamKind } from '@sharkord/shared';
 import { TRPCClientError } from '@trpc/client';
@@ -9,7 +10,6 @@ import {
   type Transport
 } from 'mediasoup-client/types';
 import { useCallback, useRef } from 'react';
-import { logVoice } from '../helpers';
 
 type TUseTransportParams = {
   addRemoteStream: (

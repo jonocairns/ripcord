@@ -8,8 +8,7 @@ import {
   Gavel,
   Globe,
   IdCard,
-  Network,
-  ShieldCheck
+  Network
 } from 'lucide-react';
 import { memo } from 'react';
 import { useModViewContext } from '../context';
@@ -91,12 +90,6 @@ const Details = memo(() => {
             icon={<Clock className="h-4 w-4 text-muted-foreground" />}
             label="Last Active"
             value={formatDistanceToNow(user.lastLoginAt, { addSuffix: true })}
-          />
-
-          <Row
-            icon={<ShieldCheck className="h-4 w-4 text-muted-foreground" />}
-            label="Account Status"
-            value="Verified"
           />
 
           {user.banned && (

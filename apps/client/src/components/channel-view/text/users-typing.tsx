@@ -15,8 +15,8 @@ const UsersTyping = memo(({ channelId }: TUsersTypingProps) => {
 
   return (
     <div className="flex items-center gap-1 text-xs text-muted-foreground px-1">
-      <div className="flex items-center gap-1">
-        <TypingDots />
+      <div className="flex items-center gap-2">
+        <TypingDots className="[&>div]:w-0.5 [&>div]:h-0.5" />
         <span>
           {typingUsers.length === 1
             ? `${typingUsers[0].name} is typing...`

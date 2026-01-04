@@ -12,6 +12,7 @@ import { ThemeProvider } from './components/theme-provider/index.tsx';
 import { store } from './features/store.ts';
 import { LocalStorageKey } from './helpers/storage.ts';
 import './index.css';
+import 'prosemirror-view/style/prosemirror.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

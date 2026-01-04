@@ -3,6 +3,7 @@ import {
   addChannel,
   removeChannel,
   setChannelPermissions,
+  setChannelReadState,
   updateChannel
 } from './actions';
 
@@ -31,11 +32,19 @@ const subscribeToChannels = () => {
         console.error('onChannelPermissionsUpdate subscription error:', err)
     });
 
+  const onChannelReadStatesUpdateSub =
+    trpc.channels.onReadStateUpdate.subscribe(undefined, {
+      onData: (data) => setChannelReadState(data.channelId, data.count),
+      onError: (err) =>
+        console.error('onChannelReadStatesUpdate subscription error:', err)
+    });
+
   return () => {
     onChannelCreateSub.unsubscribe();
     onChannelDeleteSub.unsubscribe();
     onChannelUpdateSub.unsubscribe();
     onChannelPermissionsUpdateSub.unsubscribe();
+    onChannelReadStatesUpdateSub.unsubscribe();
   };
 };
 

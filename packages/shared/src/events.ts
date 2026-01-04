@@ -11,6 +11,7 @@ export enum ServerEvents {
   CHANNEL_UPDATE = "channelUpdate",
   CHANNEL_DELETE = "channelDelete",
   CHANNEL_PERMISSIONS_UPDATE = "channelPermissionsUpdate",
+  CHANNEL_READ_STATES_UPDATE = "channelReadStatesUpdate",
 
   USER_JOIN_VOICE = "userJoinVoice",
   USER_LEAVE_VOICE = "userLeaveVoice",

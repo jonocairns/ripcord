@@ -12,21 +12,19 @@ import {
   applyWSSHandler,
   type CreateWSSContextFnOptions
 } from '@trpc/server/adapters/ws';
+import { eq } from 'drizzle-orm';
 import http from 'http';
 import { WebSocketServer } from 'ws';
-import { getWsInfo } from '../helpers/get-ws-info';
-import { logger } from '../logger';
-import { enqueueActivityLog } from '../queues/activity-log';
-import { appRouter } from '../routers';
-import { VoiceRuntime } from '../runtimes/voice';
-// // this needs to be here because of tsc weirdness, check this in the future (when check-types on client it spits server errors)
-// import '../types/websocket';
-import { eq } from 'drizzle-orm';
 import { db } from '../db';
 import { getAllChannelUserPermissions } from '../db/queries/channels';
 import { getUserById, getUserByToken } from '../db/queries/users';
 import { channels } from '../db/schema';
+import { getWsInfo } from '../helpers/get-ws-info';
+import { logger } from '../logger';
+import { enqueueActivityLog } from '../queues/activity-log';
+import { appRouter } from '../routers';
 import { getUserRoles } from '../routers/users/get-user-roles';
+import { VoiceRuntime } from '../runtimes/voice';
 import { invariant } from './invariant';
 import { pubsub } from './pubsub';
 import type { Context } from './trpc';

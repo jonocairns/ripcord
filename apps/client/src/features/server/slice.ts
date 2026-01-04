@@ -9,6 +9,7 @@ import type {
   TJoinedPublicUser,
   TJoinedRole,
   TPublicServerSettings,
+  TReadStateMap,
   TServerInfo,
   TVoiceMap,
   TVoiceUserState
@@ -39,6 +40,9 @@ export interface IServerState {
   ownVoiceState: TVoiceUserState;
   pinnedCard: TPinnedCard | undefined;
   channelPermissions: TChannelUserPermissionsMap;
+  readStatesMap: {
+    [channelId: number]: number | undefined;
+  };
 }
 
 const initialState: IServerState = {
@@ -67,7 +71,8 @@ const initialState: IServerState = {
     sharingScreen: false
   },
   pinnedCard: undefined,
-  channelPermissions: {}
+  channelPermissions: {},
+  readStatesMap: {}
 };
 
 export const serverSlice = createSlice({
@@ -115,6 +120,7 @@ export const serverSlice = createSlice({
         publicSettings: TPublicServerSettings | undefined;
         voiceMap: TVoiceMap;
         channelPermissions: TChannelUserPermissionsMap;
+        readStates: TReadStateMap;
       }>
     ) => {
       state.connected = true;
@@ -128,6 +134,7 @@ export const serverSlice = createSlice({
       state.voiceMap = action.payload.voiceMap;
       state.serverId = action.payload.serverId;
       state.channelPermissions = action.payload.channelPermissions;
+      state.readStatesMap = action.payload.readStates;
     },
     addMessages: (
       state,
@@ -320,6 +327,12 @@ export const serverSlice = createSlice({
       action: PayloadAction<number | undefined>
     ) => {
       state.selectedChannelId = action.payload;
+
+      if (action.payload) {
+        // reset unread count on select
+        // for now this is good enough
+        state.readStatesMap[action.payload] = 0;
+      }
     },
     setCurrentVoiceChannelId: (
       state,
@@ -332,6 +345,14 @@ export const serverSlice = createSlice({
       action: PayloadAction<TChannelUserPermissionsMap>
     ) => {
       state.channelPermissions = action.payload;
+    },
+    setChannelReadState: (
+      state,
+      action: PayloadAction<{ channelId: number; count: number | undefined }>
+    ) => {
+      const { channelId, count } = action.payload;
+
+      state.readStatesMap[channelId] = count;
     },
 
     // EMOJIS ------------------------------------------------------------

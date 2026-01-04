@@ -38,6 +38,10 @@ type Events = {
   [ServerEvents.CHANNEL_UPDATE]: TChannel;
   [ServerEvents.CHANNEL_DELETE]: number;
   [ServerEvents.CHANNEL_PERMISSIONS_UPDATE]: TChannelUserPermissionsMap;
+  [ServerEvents.CHANNEL_READ_STATES_UPDATE]: {
+    channelId: number;
+    count: number;
+  };
 
   [ServerEvents.USER_JOIN_VOICE]: {
     channelId: number;

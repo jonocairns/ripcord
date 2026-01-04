@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4abbcbb5-d374-4ec5-be53-f15845f10682",
+  "id": "90951f57-68b4-4c33-98fe-f288466ec187",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "activity_log": {
@@ -158,6 +158,114 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "channel_read_states": {
+      "name": "channel_read_states",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "channel_id": {
+          "name": "channel_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_read_message_id": {
+          "name": "last_read_message_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_read_at": {
+          "name": "last_read_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "channel_read_states_user_idx": {
+          "name": "channel_read_states_user_idx",
+          "columns": [
+            "user_id"
+          ],
+          "isUnique": false
+        },
+        "channel_read_states_channel_idx": {
+          "name": "channel_read_states_channel_idx",
+          "columns": [
+            "channel_id"
+          ],
+          "isUnique": false
+        },
+        "channel_read_states_last_read_idx": {
+          "name": "channel_read_states_last_read_idx",
+          "columns": [
+            "last_read_message_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "channel_read_states_user_id_users_id_fk": {
+          "name": "channel_read_states_user_id_users_id_fk",
+          "tableFrom": "channel_read_states",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "channel_read_states_channel_id_channels_id_fk": {
+          "name": "channel_read_states_channel_id_channels_id_fk",
+          "tableFrom": "channel_read_states",
+          "tableTo": "channels",
+          "columnsFrom": [
+            "channel_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "channel_read_states_last_read_message_id_messages_id_fk": {
+          "name": "channel_read_states_last_read_message_id_messages_id_fk",
+          "tableFrom": "channel_read_states",
+          "tableTo": "messages",
+          "columnsFrom": [
+            "last_read_message_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "channel_read_states_user_id_channel_id_pk": {
+          "columns": [
+            "user_id",
+            "channel_id"
+          ],
+          "name": "channel_read_states_user_id_channel_id_pk"
+        }
+      },
       "uniqueConstraints": {},
       "checkConstraints": {}
     },

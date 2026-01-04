@@ -10,6 +10,7 @@ import {
   useCan,
   useChannelCan,
   useTypingUsersByChannelId,
+  useUnreadMessagesCount,
   useVoiceUsersByChannelId
 } from '@/features/server/hooks';
 import { joinVoice } from '@/features/server/voice/actions';
@@ -78,6 +79,7 @@ type TTextProps = Omit<TItemWrapperProps, 'children'> & {
 
 const Text = memo(({ channel, ...props }: TTextProps) => {
   const typingUsers = useTypingUsersByChannelId(channel.id);
+  const unreadCount = useUnreadMessagesCount(channel.id);
   const hasTypingUsers = typingUsers.length > 0;
 
   return (
@@ -87,6 +89,11 @@ const Text = memo(({ channel, ...props }: TTextProps) => {
       {hasTypingUsers && (
         <div className="flex items-center gap-0.5 ml-auto">
           <TypingDots className="space-x-0.5" />
+        </div>
+      )}
+      {!hasTypingUsers && unreadCount > 0 && (
+        <div className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-medium text-primary-foreground">
+          {unreadCount > 99 ? '99+' : unreadCount}
         </div>
       )}
     </ItemWrapper>

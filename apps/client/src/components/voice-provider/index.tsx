@@ -1,5 +1,6 @@
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
+import { logVoice } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { getTRPCClient } from '@/lib/trpc';
 import { StreamKind } from '@sharkord/shared';
@@ -16,7 +17,6 @@ import {
 } from 'react';
 import { useDevices } from '../devices-provider/hooks/use-devices';
 import { FloatingPinnedCard } from './floating-pinned-card';
-import { logVoice } from './helpers';
 import { useLocalStreams } from './hooks/use-local-streams';
 import { useRemoteStreams } from './hooks/use-remote-streams';
 import {
