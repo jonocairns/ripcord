@@ -11,6 +11,7 @@ import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';
 import { ActivityLogType } from '@sharkord/shared';
 import chalk from 'chalk';
 import { config, SERVER_PRIVATE_IP } from './config';
+import { loadCrons } from './crons';
 import { loadDb } from './db';
 import { enqueueActivityLog } from './queues/activity-log';
 import { initVoiceRuntimes } from './runtimes';
@@ -23,6 +24,7 @@ await loadDb();
 await createServers();
 await loadMediasoup();
 await initVoiceRuntimes();
+await loadCrons();
 
 const host = IS_PRODUCTION ? SERVER_PRIVATE_IP : 'localhost';
 const url = `http://${host}:${config.server.port}/`;

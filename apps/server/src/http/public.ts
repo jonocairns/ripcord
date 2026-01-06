@@ -3,6 +3,7 @@ import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { db } from '../db';
+import { isFileOrphaned } from '../db/queries/files';
 import { files } from '../db/schema';
 import { PUBLIC_PATH } from '../helpers/paths';
 import { logger } from '../logger';
@@ -31,6 +32,14 @@ const publicRouteHandler = async (
     return;
   }
 
+  const isOrphaned = await isFileOrphaned(dbFile.id);
+
+  if (isOrphaned) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'File not found' }));
+    return;
+  }
+
   const filePath = path.join(PUBLIC_PATH, dbFile.name);
 
   if (!fs.existsSync(filePath)) {
@@ -41,18 +50,17 @@ const publicRouteHandler = async (
 
   const fileStream = fs.createReadStream(filePath);
 
-  // enable cache for 1 week
   res.writeHead(200, {
     'Content-Type': dbFile.mimeType,
     'Content-Length': dbFile.size,
     'Content-Disposition': `inline; filename="${dbFile.originalName}"`
-    // 'Cache-Control': 'public, max-age=604800, immutable'
   });
 
   fileStream.pipe(res);
 
   fileStream.on('error', (err) => {
     logger.error('Error serving file:', err);
+
     if (!res.headersSent) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Internal server error' }));

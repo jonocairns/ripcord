@@ -1,5 +1,11 @@
+import type { TTempFile } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
-import { getCaller, initTest } from '../../__tests__/helpers';
+import {
+  getCaller,
+  initTest,
+  login,
+  uploadFile
+} from '../../__tests__/helpers';
 import { TEST_SECRET_TOKEN } from '../../__tests__/seed';
 
 describe('others router', () => {
@@ -98,7 +104,37 @@ describe('others router', () => {
     expect(updatedUser?.roleIds).toContain(1);
   });
 
-  test.skip('should change logo', async () => {
-    // TODO: implement file upload mocking
+  test('should change logo', async () => {
+    const { caller } = await initTest(1);
+
+    const response = await login('testowner', 'password123');
+    const { token } = (await response.json()) as { token: string };
+
+    const logoFile = new File(['logo content'], 'logo.png', {
+      type: 'image/png'
+    });
+
+    const uploadResponse = await uploadFile(logoFile, token);
+    const tempFile = (await uploadResponse.json()) as TTempFile;
+
+    expect(tempFile).toBeDefined();
+    expect(tempFile.id).toBeDefined();
+
+    const settingsBefore = await caller.others.getSettings();
+
+    expect(settingsBefore.logo).toBeNull();
+
+    await caller.others.changeLogo({ fileId: tempFile.id });
+
+    const settingsAfter = await caller.others.getSettings();
+
+    expect(settingsAfter.logo).toBeDefined();
+    expect(settingsAfter.logo?.originalName).toBe(logoFile.name);
+
+    await caller.others.changeLogo({});
+
+    const settingsAfterRemoval = await caller.others.getSettings();
+
+    expect(settingsAfterRemoval.logo).toBeNull();
   });
 });

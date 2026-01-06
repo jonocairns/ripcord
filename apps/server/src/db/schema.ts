@@ -19,7 +19,9 @@ const settings = sqliteTable(
     password: text('password'),
     serverId: text('server_id').notNull(),
     secretToken: text('secret_token'),
-    logoId: integer('logo_id').references(() => files.id),
+    logoId: integer('logo_id').references(() => files.id, {
+      onDelete: 'set null'
+    }),
     allowNewUsers: integer('allow_new_users', { mode: 'boolean' }).notNull(),
     storageUploadEnabled: integer('storage_uploads_enabled', {
       mode: 'boolean'
@@ -68,7 +70,7 @@ const channels = sqliteTable(
     private: integer('private', { mode: 'boolean' }).notNull().default(false),
     position: integer('position').notNull(),
     categoryId: integer('category_id').references(() => categories.id, {
-      onDelete: 'set null'
+      onDelete: 'cascade'
     }),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at')
@@ -265,29 +267,6 @@ const emojis = sqliteTable(
   })
 );
 
-const notificationSounds = sqliteTable(
-  'notification_sounds',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    type: text('type').notNull().unique(),
-    fileId: integer('file_id')
-      .notNull()
-      .references(() => files.id, { onDelete: 'cascade' }),
-    userId: integer('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    volume: integer('volume').notNull(),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
-    createdAt: integer('created_at').notNull(),
-    updatedAt: integer('updated_at')
-  },
-  (t) => ({
-    typeIdx: uniqueIndex('notification_sounds_type_idx').on(t.type),
-    userIdx: index('notification_sounds_user_idx').on(t.userId),
-    userTypeIdx: index('notification_sounds_user_type_idx').on(t.userId, t.type)
-  })
-);
-
 const messageReactions = sqliteTable(
   'message_reactions',
   {
@@ -461,7 +440,6 @@ export {
   messageFiles,
   messageReactions,
   messages,
-  notificationSounds,
   rolePermissions,
   roles,
   settings,

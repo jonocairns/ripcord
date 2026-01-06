@@ -125,6 +125,16 @@ const seedDatabase = async (db: BunSQLiteDatabase) => {
 
   await db.insert(rolePermissions).values(defaultPermissions);
 
+  const guestRole: TIRole = {
+    name: 'Guest',
+    color: '#95a5a6',
+    isPersistent: false,
+    isDefault: false,
+    createdAt: firstStart
+  };
+
+  await db.insert(roles).values(guestRole);
+
   const ownerUser: TIUser = {
     name: 'Test Owner',
     identity: 'testowner',

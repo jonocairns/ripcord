@@ -45,6 +45,7 @@ const uploadFileRouteHandler = async (
         })
       );
     });
+
     return;
   }
 
@@ -56,6 +57,7 @@ const uploadFileRouteHandler = async (
         JSON.stringify({ error: 'File uploads are disabled on this server' })
       );
     });
+
     return;
   }
 

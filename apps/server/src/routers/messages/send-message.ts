@@ -51,6 +51,8 @@ const sendMessageRoute = protectedProcedure
 
     publishMessage(message.id, input.channelId, 'create');
     enqueueProcessMetadata(input.content, message.id);
+
+    return message.id;
   });
 
 export { sendMessageRoute };

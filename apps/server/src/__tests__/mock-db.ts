@@ -25,6 +25,9 @@ let tdb: BunSQLiteDatabase;
 
 const initDb = async () => {
   const sqlite = new Database(':memory:', { create: true, strict: true });
+
+  sqlite.run('PRAGMA foreign_keys = ON;');
+
   tdb = drizzle({ client: sqlite });
 
   await migrate(tdb, { migrationsFolder: DRIZZLE_PATH });

@@ -11,7 +11,6 @@ import {
   messageFiles,
   rolePermissions,
   emojis,
-  notificationSounds,
   messageReactions,
   invites,
   activityLog,
@@ -34,7 +33,6 @@ export type TMessage = InferSelectModel<typeof messages>;
 export type TMessageFile = InferSelectModel<typeof messageFiles>;
 export type TRolePermission = InferSelectModel<typeof rolePermissions>;
 export type TEmoji = InferSelectModel<typeof emojis>;
-export type TNotificationSound = InferSelectModel<typeof notificationSounds>;
 export type TMessageReaction = InferSelectModel<typeof messageReactions>;
 export type TInvite = InferSelectModel<typeof invites>;
 export type TActivityLog = InferSelectModel<typeof activityLog>;
@@ -58,7 +56,6 @@ export type TIMessage = InferInsertModel<typeof messages>;
 export type TIMessageFile = InferInsertModel<typeof messageFiles>;
 export type TIRolePermission = InferInsertModel<typeof rolePermissions>;
 export type TIEmoji = InferInsertModel<typeof emojis>;
-export type TINotificationSound = InferInsertModel<typeof notificationSounds>;
 export type TIMessageReaction = InferInsertModel<typeof messageReactions>;
 export type TIInvite = InferInsertModel<typeof invites>;
 export type TIActivityLog = InferInsertModel<typeof activityLog>;

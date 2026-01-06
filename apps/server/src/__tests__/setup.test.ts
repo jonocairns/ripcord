@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { channels, messages, roles, settings, users } from '../db/schema';
 import { tdb } from './setup';
 
-describe('Setup', () => {
+describe('tests setup', () => {
   test('should seed database with initial data', async () => {
     const [
       settingsResults,
@@ -21,7 +21,7 @@ describe('Setup', () => {
     expect(settingsResults.length).toBe(1);
     expect(usersResults.length).toBe(2);
     expect(channelsResults.length).toBe(2);
-    expect(rolesResults.length).toBe(2);
+    expect(rolesResults.length).toBe(3);
     expect(messagesResults.length).toBe(1);
   });
 });

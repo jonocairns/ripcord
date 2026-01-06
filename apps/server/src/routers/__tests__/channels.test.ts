@@ -606,9 +606,6 @@ describe('channels router', () => {
 
     const secondChannel = await caller.channels.get({ channelId: 4 });
 
-    console.log('First channel position:', firstChannel.position);
-    console.log('Second channel position:', secondChannel.position);
-
     expect(secondChannel.position).toBeGreaterThan(firstChannel.position);
   });
 

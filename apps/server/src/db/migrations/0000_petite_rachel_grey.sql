@@ -80,7 +80,7 @@ CREATE TABLE `channels` (
 	`category_id` integer,
 	`created_at` integer NOT NULL,
 	`updated_at` integer,
-	FOREIGN KEY (`category_id`) REFERENCES `categories`(`id`) ON UPDATE no action ON DELETE set null
+	FOREIGN KEY (`category_id`) REFERENCES `categories`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE INDEX `channels_category_idx` ON `channels` (`category_id`);--> statement-breakpoint
@@ -114,9 +114,11 @@ CREATE TABLE `files` (
 	`updated_at` integer
 );
 --> statement-breakpoint
+CREATE UNIQUE INDEX `files_name_unique` ON `files` (`name`);--> statement-breakpoint
 CREATE INDEX `files_user_idx` ON `files` (`user_id`);--> statement-breakpoint
 CREATE INDEX `files_md5_idx` ON `files` (`md5`);--> statement-breakpoint
 CREATE INDEX `files_created_idx` ON `files` (`created_at`);--> statement-breakpoint
+CREATE INDEX `files_name_idx` ON `files` (`name`);--> statement-breakpoint
 CREATE TABLE `invites` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`code` text NOT NULL,
@@ -201,23 +203,6 @@ CREATE INDEX `messages_user_idx` ON `messages` (`user_id`);--> statement-breakpo
 CREATE INDEX `messages_channel_idx` ON `messages` (`channel_id`);--> statement-breakpoint
 CREATE INDEX `messages_created_idx` ON `messages` (`created_at`);--> statement-breakpoint
 CREATE INDEX `messages_channel_created_idx` ON `messages` (`channel_id`,`created_at`);--> statement-breakpoint
-CREATE TABLE `notification_sounds` (
-	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-	`type` text NOT NULL,
-	`file_id` integer NOT NULL,
-	`user_id` integer NOT NULL,
-	`volume` integer NOT NULL,
-	`enabled` integer NOT NULL,
-	`created_at` integer NOT NULL,
-	`updated_at` integer,
-	FOREIGN KEY (`file_id`) REFERENCES `files`(`id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
-);
---> statement-breakpoint
-CREATE UNIQUE INDEX `notification_sounds_type_unique` ON `notification_sounds` (`type`);--> statement-breakpoint
-CREATE UNIQUE INDEX `notification_sounds_type_idx` ON `notification_sounds` (`type`);--> statement-breakpoint
-CREATE INDEX `notification_sounds_user_idx` ON `notification_sounds` (`user_id`);--> statement-breakpoint
-CREATE INDEX `notification_sounds_user_type_idx` ON `notification_sounds` (`user_id`,`type`);--> statement-breakpoint
 CREATE TABLE `role_permissions` (
 	`role_id` integer NOT NULL,
 	`permission` text NOT NULL,
@@ -252,7 +237,7 @@ CREATE TABLE `settings` (
 	`storage_upload_max_file_size` integer NOT NULL,
 	`storage_space_quota_by_user` integer NOT NULL,
 	`storage_overflow_action` text NOT NULL,
-	FOREIGN KEY (`logo_id`) REFERENCES `files`(`id`) ON UPDATE no action ON DELETE no action
+	FOREIGN KEY (`logo_id`) REFERENCES `files`(`id`) ON UPDATE no action ON DELETE set null
 );
 --> statement-breakpoint
 CREATE INDEX `settings_server_idx` ON `settings` (`server_id`);--> statement-breakpoint

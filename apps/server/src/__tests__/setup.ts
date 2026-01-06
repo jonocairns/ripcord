@@ -1,7 +1,9 @@
 import { Database } from 'bun:sqlite';
-import { afterEach, beforeAll, beforeEach, mock } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, mock } from 'bun:test';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import fs from 'node:fs/promises';
+import { DATA_PATH } from '../helpers/paths';
 import { createHttpServer } from '../http';
 import { loadMediasoup } from '../utils/mediasoup';
 import { DRIZZLE_PATH, setTestDb } from './mock-db';
@@ -20,6 +22,7 @@ import { seedDatabase } from './seed';
  */
 
 const DISABLE_CONSOLE = true;
+const CLEANUP_AFTER_FINISH = true;
 
 if (DISABLE_CONSOLE) {
   const noop = () => {};
@@ -62,6 +65,7 @@ beforeEach(async () => {
   }
 
   sqlite = new Database(':memory:', { create: true, strict: true });
+  sqlite.run('PRAGMA foreign_keys = ON;');
 
   tdb = drizzle({ client: sqlite });
 
@@ -81,6 +85,16 @@ afterEach(() => {
     } catch {
       // ignore
     }
+  }
+});
+
+afterAll(async () => {
+  if (!CLEANUP_AFTER_FINISH) return;
+
+  try {
+    await fs.rm(DATA_PATH, { recursive: true });
+  } catch {
+    // ignore
   }
 });
 

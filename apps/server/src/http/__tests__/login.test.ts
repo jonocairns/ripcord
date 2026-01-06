@@ -190,8 +190,6 @@ describe('/login', () => {
   test('should fail with missing identity', async () => {
     const response = await login('', 'somepassword');
 
-    console.log('Response status:', response.status);
-
     expect(response.status).toBe(400);
 
     const data = await response.json();

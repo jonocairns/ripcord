@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "90951f57-68b4-4c33-98fe-f288466ec187",
+  "id": "18adab32-a140-4a13-b410-fec2dfb47c21",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "activity_log": {
@@ -623,7 +623,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -814,6 +814,13 @@
         }
       },
       "indexes": {
+        "files_name_unique": {
+          "name": "files_name_unique",
+          "columns": [
+            "name"
+          ],
+          "isUnique": true
+        },
         "files_user_idx": {
           "name": "files_user_idx",
           "columns": [
@@ -832,6 +839,13 @@
           "name": "files_created_idx",
           "columns": [
             "created_at"
+          ],
+          "isUnique": false
+        },
+        "files_name_idx": {
+          "name": "files_name_idx",
+          "columns": [
+            "name"
           ],
           "isUnique": false
         }
@@ -1445,129 +1459,6 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "notification_sounds": {
-      "name": "notification_sounds",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "type": {
-          "name": "type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "file_id": {
-          "name": "file_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "volume": {
-          "name": "volume",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "enabled": {
-          "name": "enabled",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "notification_sounds_type_unique": {
-          "name": "notification_sounds_type_unique",
-          "columns": [
-            "type"
-          ],
-          "isUnique": true
-        },
-        "notification_sounds_type_idx": {
-          "name": "notification_sounds_type_idx",
-          "columns": [
-            "type"
-          ],
-          "isUnique": true
-        },
-        "notification_sounds_user_idx": {
-          "name": "notification_sounds_user_idx",
-          "columns": [
-            "user_id"
-          ],
-          "isUnique": false
-        },
-        "notification_sounds_user_type_idx": {
-          "name": "notification_sounds_user_type_idx",
-          "columns": [
-            "user_id",
-            "type"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "notification_sounds_file_id_files_id_fk": {
-          "name": "notification_sounds_file_id_files_id_fk",
-          "tableFrom": "notification_sounds",
-          "tableTo": "files",
-          "columnsFrom": [
-            "file_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "notification_sounds_user_id_users_id_fk": {
-          "name": "notification_sounds_user_id_users_id_fk",
-          "tableFrom": "notification_sounds",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
     "role_permissions": {
       "name": "role_permissions",
       "columns": {
@@ -1811,7 +1702,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

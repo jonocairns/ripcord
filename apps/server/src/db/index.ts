@@ -9,6 +9,8 @@ let db: BunSQLiteDatabase;
 const loadDb = async () => {
   const sqlite = new Database(DB_PATH, { create: true, strict: true });
 
+  sqlite.run('PRAGMA foreign_keys = ON;');
+
   db = drizzle({ client: sqlite });
 
   await migrate(db, { migrationsFolder: DRIZZLE_PATH });

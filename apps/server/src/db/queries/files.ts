@@ -1,5 +1,5 @@
 import type { TFile } from '@sharkord/shared';
-import { asc, eq, sum } from 'drizzle-orm';
+import { asc, eq, sql, sum } from 'drizzle-orm';
 import { db } from '..';
 import { files, messageFiles } from '../schema';
 import { getSettings } from './server';
@@ -75,9 +75,54 @@ const getUsedFileQuota = async (): Promise<number> => {
   return Number(result?.usedSpace ?? 0);
 };
 
+const getOrphanedFileIds = async (): Promise<number[]> => {
+  const orphanedFileIds = await db.all<{ id: number }>(sql`
+    SELECT f.id
+    FROM files f
+    WHERE NOT EXISTS (
+      SELECT 1 FROM message_files mf WHERE mf.file_id = f.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM users u WHERE u.avatar_id = f.id OR u.banner_id = f.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM emojis e WHERE e.file_id = f.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM message_reactions mr WHERE mr.file_id = f.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM settings s WHERE s.logo_id = f.id
+    )
+  `);
+
+  return orphanedFileIds.map(({ id }) => id);
+};
+
+const isFileOrphaned = async (fileId: number): Promise<boolean> => {
+  const result = await db.get(sql`
+    SELECT 
+      CASE 
+        WHEN NOT EXISTS (SELECT 1 FROM message_files mf WHERE mf.file_id = ${fileId})
+        AND NOT EXISTS (SELECT 1 FROM users u WHERE u.avatar_id = ${fileId} OR u.banner_id = ${fileId})
+        AND NOT EXISTS (SELECT 1 FROM emojis e WHERE e.file_id = ${fileId})
+        AND NOT EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.file_id = ${fileId})
+        AND NOT EXISTS (SELECT 1 FROM settings s WHERE s.logo_id = ${fileId})
+        THEN 1
+        ELSE 0
+      END as isOrphaned
+  `);
+
+  const isOrphaned = Array.isArray(result) ? result[0] === 1 : false;
+
+  return isOrphaned;
+};
+
 export {
   getExceedingOldFiles,
   getFilesByMessageId,
   getFilesByUserId,
-  getUsedFileQuota
+  getOrphanedFileIds,
+  getUsedFileQuota,
+  isFileOrphaned
 };
