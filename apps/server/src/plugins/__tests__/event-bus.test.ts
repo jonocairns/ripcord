@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { EventBus } from '../event-bus';
 
-describe('EventBus', () => {
+describe('event-bus', () => {
   let eventBus: EventBus;
 
   beforeEach(() => {
