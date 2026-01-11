@@ -1,7 +1,6 @@
 const onLoad = (ctx) => {
   ctx.log('Plugin B loaded');
 
-  // Register a command
   ctx.commands.register({
     name: 'test-command',
     description: 'A test command',
@@ -19,7 +18,6 @@ const onLoad = (ctx) => {
     }
   });
 
-  // Register another command
   ctx.commands.register({
     name: 'sum',
     description: 'Sum two numbers',

@@ -123,7 +123,7 @@ const PluginLogsDialog = memo(
     }, []);
 
     const sortedLogs = useMemo(() => {
-      const sorted = [...logs].sort((a, b) => a.timestamp - b.timestamp); // Oldest first
+      const sorted = [...logs].sort((a, b) => a.timestamp - b.timestamp);
 
       if (logLimit === 'all') {
         return sorted;
@@ -134,14 +134,13 @@ const PluginLogsDialog = memo(
       return sorted.slice(-limit);
     }, [logs, logLimit]);
 
-    // Auto-scroll to bottom when new logs arrive
+    // auto-scroll to bottom
     useEffect(() => {
       if (autoScroll && scrollRef.current) {
         scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
       }
     }, [sortedLogs, autoScroll]);
 
-    // Detect if user scrolled up manually
     const handleScroll = useCallback(() => {
       if (!scrollRef.current) return;
 
