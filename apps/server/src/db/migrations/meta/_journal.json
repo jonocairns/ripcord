@@ -5,15 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1767743051687,
-      "tag": "0000_open_juggernaut",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1767883933566,
-      "tag": "0001_luxuriant_oracle",
+      "when": 1768253752283,
+      "tag": "0000_curvy_wallop",
       "breakpoints": true
     }
   ]

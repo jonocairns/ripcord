@@ -12,7 +12,7 @@ const onLoad = (ctx) => {
         required: true
       }
     ],
-    async executes(args) {
+    async executes(invokerCtx, args) {
       ctx.log('Executing test-command with:', args);
       return { success: true, message: args.message };
     }
@@ -33,7 +33,7 @@ const onLoad = (ctx) => {
         required: true
       }
     ],
-    async executes(args) {
+    async executes(invokerCtx, args) {
       return { result: args.a + args.b };
     }
   });

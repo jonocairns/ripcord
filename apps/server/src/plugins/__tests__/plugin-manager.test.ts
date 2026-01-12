@@ -1,3 +1,4 @@
+import type { TInvokerContext } from '@sharkord/shared';
 import { beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import fs from 'fs/promises';
 import path from 'path';
@@ -10,6 +11,11 @@ import { PLUGINS_PATH } from '../../helpers/paths';
 describe('plugin-manager', () => {
   beforeAll(loadMockedPlugins);
   beforeEach(resetPluginMocks);
+
+  const mockInvokerCtx: TInvokerContext = {
+    userId: 1,
+    currentVoiceChannelId: undefined
+  };
 
   describe('load', () => {
     test('should load plugin-a correctly', async () => {
@@ -149,10 +155,15 @@ describe('plugin-manager', () => {
     test('should execute command successfully', async () => {
       await pluginManager.load('plugin-b');
 
-      const result = await pluginManager.executeCommand('plugin-b', 'sum', {
-        a: 5,
-        b: 3
-      });
+      const result = await pluginManager.executeCommand(
+        'plugin-b',
+        'sum',
+        mockInvokerCtx,
+        {
+          a: 5,
+          b: 3
+        }
+      );
 
       expect(result).toEqual({ result: 8 });
     });
@@ -163,6 +174,7 @@ describe('plugin-manager', () => {
       const result = await pluginManager.executeCommand(
         'plugin-b',
         'test-command',
+        mockInvokerCtx,
         {
           message: 'Hello World'
         }
@@ -176,7 +188,10 @@ describe('plugin-manager', () => {
       await pluginManager.togglePlugin('plugin-b', false);
 
       await expect(
-        pluginManager.executeCommand('plugin-b', 'sum', { a: 1, b: 2 })
+        pluginManager.executeCommand('plugin-b', 'sum', mockInvokerCtx, {
+          a: 1,
+          b: 2
+        })
       ).rejects.toThrow('is not enabled');
     });
 
@@ -184,7 +199,12 @@ describe('plugin-manager', () => {
       await pluginManager.load('plugin-a');
 
       await expect(
-        pluginManager.executeCommand('plugin-a', 'nonexistent', {})
+        pluginManager.executeCommand(
+          'plugin-a',
+          'nonexistent',
+          mockInvokerCtx,
+          {}
+        )
       ).rejects.toThrow('has no registered commands');
     });
 
@@ -192,7 +212,12 @@ describe('plugin-manager', () => {
       await pluginManager.load('plugin-b');
 
       await expect(
-        pluginManager.executeCommand('plugin-b', 'nonexistent', {})
+        pluginManager.executeCommand(
+          'plugin-b',
+          'nonexistent',
+          mockInvokerCtx,
+          {}
+        )
       ).rejects.toThrow('not found');
     });
 

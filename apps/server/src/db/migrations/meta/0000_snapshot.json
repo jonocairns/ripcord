@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8b301ca5-287d-4425-ada0-3eed32ebff0f",
+  "id": "48279670-609d-4202-a388-5bdcd2e7491f",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "activity_log": {
@@ -1395,6 +1395,14 @@
           "notNull": true,
           "autoincrement": false
         },
+        "editable": {
+          "name": "editable",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": true
+        },
         "metadata": {
           "name": "metadata",
           "type": "text",
@@ -1698,6 +1706,13 @@
         "storage_overflow_action": {
           "name": "storage_overflow_action",
           "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "enable_plugins": {
+          "name": "enable_plugins",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false

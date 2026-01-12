@@ -1,5 +1,11 @@
 import type { AppData, Producer, Router } from "mediasoup/types";
-import type { CommandDefinition, StreamKind } from "@sharkord/shared";
+import type {
+  CommandDefinition,
+  StreamKind,
+  TInvokerContext
+} from "@sharkord/shared";
+
+export type { TInvokerContext };
 
 export type ServerEvent =
   | "user:joined"

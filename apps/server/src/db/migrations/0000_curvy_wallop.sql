@@ -195,6 +195,7 @@ CREATE TABLE `messages` (
 	`content` text,
 	`user_id` integer NOT NULL,
 	`channel_id` integer NOT NULL,
+	`editable` integer DEFAULT true,
 	`metadata` text,
 	`created_at` integer NOT NULL,
 	`updated_at` integer,
@@ -240,6 +241,7 @@ CREATE TABLE `settings` (
 	`storage_upload_max_file_size` integer NOT NULL,
 	`storage_space_quota_by_user` integer NOT NULL,
 	`storage_overflow_action` text NOT NULL,
+	`enable_plugins` integer NOT NULL,
 	FOREIGN KEY (`logo_id`) REFERENCES `files`(`id`) ON UPDATE no action ON DELETE set null
 );
 --> statement-breakpoint

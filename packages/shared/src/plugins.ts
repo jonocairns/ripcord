@@ -43,13 +43,19 @@ export type TCommandArg = {
   description?: string;
   type: "string" | "number" | "boolean";
   required?: boolean;
+  sensitive?: boolean;
+};
+
+export type TInvokerContext = {
+  userId: number;
+  currentVoiceChannelId?: number;
 };
 
 export interface CommandDefinition<TArgs = void> {
   name: string;
   description?: string;
   args?: TCommandArg[];
-  executes(args: TArgs): Promise<unknown>;
+  executes(ctx: TInvokerContext, args: TArgs): Promise<unknown>;
 }
 
 export type TPluginCommand = {
@@ -67,4 +73,39 @@ export type TCommandInfo = {
 
 export type TCommandsMapByPlugin = {
   [pluginId: string]: TCommandInfo[];
+};
+
+export type RegisteredCommand = {
+  pluginId: string;
+  name: string;
+  description?: string;
+  args?: CommandDefinition<unknown>["args"];
+  command: CommandDefinition<unknown>;
+};
+
+export const zParsedDomCommand = z.object({
+  pluginId: z.string().min(1),
+  commandName: z.string().min(1),
+  status: z.enum(["pending", "completed", "failed"]).default("pending"),
+  response: z.string().optional(),
+  logo: z.url().optional(),
+  args: z.array(
+    z.object({
+      name: z.string(),
+      value: z.unknown(),
+    })
+  ),
+});
+
+export type TParsedDomCommand = z.infer<typeof zParsedDomCommand>;
+
+export type TCommandElement = {
+  attribs: {
+    "data-plugin-id"?: string;
+    "data-plugin-logo"?: string;
+    "data-command"?: string;
+    "data-status"?: string;
+    "data-args"?: string;
+    "data-response"?: string;
+  };
 };

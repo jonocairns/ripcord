@@ -126,7 +126,7 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
       <div
         ref={containerRef}
         onScroll={onScroll}
-        className="flex-1 overflow-y-auto p-2 animate-in fade-in duration-500"
+        className="flex-1 overflow-y-auto overflow-x-hidden p-2 animate-in fade-in duration-500"
       >
         <div className="space-y-4">
           {groupedMessages.map((group, index) => (

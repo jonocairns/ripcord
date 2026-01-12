@@ -112,6 +112,37 @@ Called when the plugin is unloaded or the server shuts down. Use this to:
 
 **Note:** All event listeners and commands are automatically unregistered when the plugin unloads.
 
+## Commands
+
+Plugins can register custom commands that users can execute. Commands can accept arguments and return results.
+
+### Registering a Command
+
+```typescript
+import type { PluginContext, TInvokerContext } from "@sharkord/plugin-sdk";
+
+const onLoad = (ctx: PluginContext) => {
+  ctx.commands.register({
+    name: "greet",
+    description: "Greet a user",
+    args: [
+      {
+        name: "username",
+        type: "string",
+        description: "The user to greet",
+        required: true,
+        sensitive: false, // set to true if the argument is sensitive (e.g., passwords), in the interface it will be shown as ****
+      },
+    ],
+    async executes(invokerCtx: TInvokerContext, args: { username: string }) {
+      ctx.log(`Greeting ${args.username} invoked by user ${invokerCtx.userId}`);
+
+      return "Hello, " + args.username + "!";
+    },
+  });
+};
+```
+
 ## Adding The Plugin to Sharkord
 
 1. Go to the Sharkord data directory (usually `~/.config/sharkord`).

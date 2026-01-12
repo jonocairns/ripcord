@@ -94,6 +94,7 @@ export enum ChannelPermission {
   SPEAK = "SPEAK",
   SHARE_SCREEN = "SHARE_SCREEN",
   WEBCAM = "WEBCAM",
+  EXECUTE_PLUGIN_COMMANDS = "EXECUTE_PLUGIN_COMMANDS",
 }
 
 export const channelPermissionLabels: Record<ChannelPermission, string> = {
@@ -103,6 +104,7 @@ export const channelPermissionLabels: Record<ChannelPermission, string> = {
   [ChannelPermission.SPEAK]: "Speak",
   [ChannelPermission.SHARE_SCREEN]: "Share Screen",
   [ChannelPermission.WEBCAM]: "Enable Webcam",
+  [ChannelPermission.EXECUTE_PLUGIN_COMMANDS]: "Execute Plugin Commands",
 };
 
 export const channelPermissionDescriptions: Record<ChannelPermission, string> =
@@ -113,4 +115,6 @@ export const channelPermissionDescriptions: Record<ChannelPermission, string> =
     [ChannelPermission.SPEAK]: "Allows the user to speak in voice channels.",
     [ChannelPermission.SHARE_SCREEN]: "Allows the user to share their screen.",
     [ChannelPermission.WEBCAM]: "Allows the user to enable their webcam.",
+    [ChannelPermission.EXECUTE_PLUGIN_COMMANDS]:
+      "Allows the user to execute plugin commands from the channel.",
   };

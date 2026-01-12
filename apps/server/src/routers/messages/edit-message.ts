@@ -20,7 +20,8 @@ const editMessageRoute = protectedProcedure
     const message = await db
       .select({
         userId: messages.userId,
-        channelId: messages.channelId
+        channelId: messages.channelId,
+        editable: messages.editable
       })
       .from(messages)
       .where(eq(messages.id, input.messageId))
@@ -30,6 +31,11 @@ const editMessageRoute = protectedProcedure
     invariant(message, {
       code: 'NOT_FOUND',
       message: 'Message not found'
+    });
+
+    invariant(message.editable, {
+      code: 'FORBIDDEN',
+      message: 'This message is not editable'
     });
 
     invariant(

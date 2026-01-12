@@ -3,7 +3,9 @@ import {
   ServerEvents,
   zPluginPackageJson,
   type CommandDefinition,
+  type RegisteredCommand,
   type TCommandsMapByPlugin,
+  type TInvokerContext,
   type TLogEntry,
   type TPluginInfo
 } from '@sharkord/shared';
@@ -20,14 +22,6 @@ import { eventBus } from './event-bus';
 type PluginModule = {
   onLoad: (ctx: PluginContext) => void | Promise<void>;
   onUnload?: (ctx: UnloadPluginContext) => void | Promise<void>;
-};
-
-type RegisteredCommand = {
-  pluginId: string;
-  name: string;
-  description?: string;
-  args?: CommandDefinition<unknown>['args'];
-  command: CommandDefinition<unknown>;
 };
 
 type PluginStatesMap = Record<string, boolean>;
@@ -76,6 +70,24 @@ class PluginManager {
   private setPluginEnabled = async (pluginId: string, enabled: boolean) => {
     this.pluginStates[pluginId] = enabled;
     await this.savePluginStates();
+  };
+
+  public getCommandByName = (
+    commandName: string | undefined
+  ): RegisteredCommand | undefined => {
+    if (!commandName) {
+      return undefined;
+    }
+
+    for (const commands of this.commands.values()) {
+      const foundCommand = commands.find((c) => c.name === commandName);
+
+      if (foundCommand) {
+        return foundCommand;
+      }
+    }
+
+    return undefined;
   };
 
   public getPluginsFromPath = async (): Promise<string[]> => {
@@ -214,6 +226,7 @@ class PluginManager {
   public executeCommand = async <TArgs = unknown>(
     pluginId: string,
     commandName: string,
+    invokerCtx: TInvokerContext,
     args: TArgs
   ): Promise<unknown> => {
     const isEnabled = this.isPluginEnabled(pluginId);
@@ -244,7 +257,7 @@ class PluginManager {
         args
       );
 
-      return await foundCommand.command.executes(args);
+      return await foundCommand.command.executes(invokerCtx, args);
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);

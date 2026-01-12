@@ -55,16 +55,17 @@ type TVoiceProps = Omit<TItemWrapperProps, 'children'> & {
 const Voice = memo(({ channel, ...props }: TVoiceProps) => {
   const users = useVoiceUsersByChannelId(channel.id);
   const externalStreams = useVoiceChannelExternalStreamsList(channel.id);
+  const unreadCount = useUnreadMessagesCount(channel.id);
 
   return (
     <>
       <ItemWrapper {...props}>
         <Volume2 className="h-4 w-4" />
         <span className="flex-1">{channel.name}</span>
-        {users.length > 0 && (
-          <span className="text-xs text-muted-foreground ml-auto">
-            {users.length}
-          </span>
+        {unreadCount > 0 && (
+          <div className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-medium text-primary-foreground">
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </div>
         )}
       </ItemWrapper>
       {channel.type === 'VOICE' && (

@@ -1,1 +1,0 @@
-ALTER TABLE `settings` ADD `enable_plugins` integer NOT NULL;

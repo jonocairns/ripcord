@@ -1,5 +1,6 @@
 import { ActivityLogType, Permission } from '@sharkord/shared';
 import z from 'zod';
+import { getInvokerCtxFromTrpcCtx } from '../../helpers/get-invoker-ctx-from-trpc-ctx';
 import { pluginManager } from '../../plugins';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
@@ -34,6 +35,7 @@ const executeCommandRoute = protectedProcedure
     const response = await pluginManager.executeCommand(
       input.pluginId,
       input.commandName,
+      getInvokerCtxFromTrpcCtx(ctx),
       input.args ?? {}
     );
 
