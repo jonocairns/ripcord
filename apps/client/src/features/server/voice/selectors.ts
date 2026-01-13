@@ -42,3 +42,11 @@ export const voiceChannelAudioExternalStreamsSelector = createCachedSelector(
       (stream) => stream.type === StreamKind.EXTERNAL_AUDIO
     )
 )((_state: IRootState, channelId: number) => channelId);
+
+export const voiceChannelVideoExternalStreamsSelector = createCachedSelector(
+  voiceChannelExternalStreamsListSelector,
+  (externalStreamsMap) =>
+    externalStreamsMap.filter(
+      (stream) => stream.type === StreamKind.EXTERNAL_VIDEO
+    )
+)((_state: IRootState, channelId: number) => channelId);

@@ -1,5 +1,5 @@
 import { useVoiceUsersByChannelId } from '@/features/server/hooks';
-import { useVoiceChannelExternalStreamsList } from '@/features/server/voice/hooks';
+import { useVoiceChannelVideoExternalStreams } from '@/features/server/voice/hooks';
 import { memo, useMemo } from 'react';
 import { ExternalVideoCard } from './external-video-card';
 import {
@@ -16,7 +16,7 @@ type TChannelProps = {
 
 const VoiceChannel = memo(({ channelId }: TChannelProps) => {
   const voiceUsers = useVoiceUsersByChannelId(channelId);
-  const externalStreams = useVoiceChannelExternalStreamsList(channelId);
+  const externalVideoStreams = useVoiceChannelVideoExternalStreams(channelId);
   const { pinnedCard, pinCard, unpinCard, isPinned } = usePinCardController();
 
   const cards = useMemo(() => {
@@ -64,7 +64,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
       }
     });
 
-    externalStreams.forEach((stream) => {
+    externalVideoStreams.forEach((stream) => {
       const externalStreamCardId = `external-stream-${stream.streamId}`;
 
       cards.push(
@@ -87,7 +87,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
     });
 
     return cards;
-  }, [voiceUsers, externalStreams, isPinned, pinCard, unpinCard]);
+  }, [voiceUsers, externalVideoStreams, isPinned, pinCard, unpinCard]);
 
   if (voiceUsers.length === 0) {
     return (

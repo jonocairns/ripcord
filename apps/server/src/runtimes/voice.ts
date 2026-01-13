@@ -238,6 +238,10 @@ class VoiceRuntime {
     });
 
     voiceRuntimes.delete(this.id);
+
+    eventBus.emit('voice:runtime_closed', {
+      channelId: this.id
+    });
   };
 
   public getState = (): TChannelState => {

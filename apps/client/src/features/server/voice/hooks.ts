@@ -8,7 +8,8 @@ import {
   voiceChannelAudioExternalStreamsSelector,
   voiceChannelExternalStreamsListSelector,
   voiceChannelExternalStreamsSelector,
-  voiceChannelStateSelector
+  voiceChannelStateSelector,
+  voiceChannelVideoExternalStreamsSelector
 } from './selectors';
 
 export const useVoiceChannelState = (channelId: number) =>
@@ -29,6 +30,11 @@ export const useVoiceChannelExternalStreamsList = (channelId: number) =>
 export const useVoiceChannelAudioExternalStreams = (channelId: number) =>
   useSelector((state: IRootState) =>
     voiceChannelAudioExternalStreamsSelector(state, channelId)
+  );
+
+export const useVoiceChannelVideoExternalStreams = (channelId: number) =>
+  useSelector((state: IRootState) =>
+    voiceChannelVideoExternalStreamsSelector(state, channelId)
   );
 
 export const useVoice = () => {

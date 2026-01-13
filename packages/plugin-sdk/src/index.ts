@@ -2,7 +2,7 @@ import type { AppData, Producer, Router } from "mediasoup/types";
 import type {
   CommandDefinition,
   StreamKind,
-  TInvokerContext
+  TInvokerContext,
 } from "@sharkord/shared";
 
 export type { TInvokerContext };
@@ -13,7 +13,8 @@ export type ServerEvent =
   | "message:created"
   | "message:updated"
   | "message:deleted"
-  | "voice:runtime_initialized";
+  | "voice:runtime_initialized"
+  | "voice:runtime_closed";
 
 export interface EventPayloads {
   "user:joined": {
@@ -41,6 +42,9 @@ export interface EventPayloads {
     channelId: number;
   };
   "voice:runtime_initialized": {
+    channelId: number;
+  };
+  "voice:runtime_closed": {
     channelId: number;
   };
 }

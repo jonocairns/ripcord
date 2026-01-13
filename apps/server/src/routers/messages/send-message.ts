@@ -12,6 +12,7 @@ import { getSettings } from '../../db/queries/server';
 import { messageFiles, messages } from '../../db/schema';
 import { getInvokerCtxFromTrpcCtx } from '../../helpers/get-invoker-ctx-from-trpc-ctx';
 import { getPlainTextFromHtml } from '../../helpers/get-plain-text-from-html';
+import { parseCommandArgs } from '../../helpers/parse-command-args';
 import { pluginManager } from '../../plugins';
 import { eventBus } from '../../plugins/event-bus';
 import { enqueueActivityLog } from '../../queues/activity-log';
@@ -54,18 +55,16 @@ const sendMessageRoute = protectedProcedure
         // when plugins are enabled, need to check if the message is a command
         // this might be improved in the future with a more robust parser
         const plainText = getPlainTextFromHtml(input.content);
-        const parts = plainText.split(' ');
-        const rawArgs = parts.slice(1);
-        const command = parts[0]?.substring(1);
-        const foundCommand = pluginManager.getCommandByName(command);
+        const { args, commandName } = parseCommandArgs(plainText);
+        const foundCommand = pluginManager.getCommandByName(commandName);
 
         if (foundCommand) {
           const argsObject: Record<string, unknown> = {};
 
           if (foundCommand.args) {
             foundCommand.args.forEach((argDef, index) => {
-              if (index < rawArgs.length) {
-                const value = rawArgs[index];
+              if (index < args.length) {
+                const value = args[index];
 
                 if (argDef.type === 'number') {
                   argsObject[argDef.name] = Number(value);
@@ -78,6 +77,13 @@ const sendMessageRoute = protectedProcedure
             });
           }
 
+          console.log('Executing command:', {
+            plainText,
+            args,
+            commandName,
+            argsObject
+          });
+
           const plugin = await pluginManager.getPluginInfo(
             foundCommand?.pluginId || ''
           );
@@ -85,7 +91,7 @@ const sendMessageRoute = protectedProcedure
           editable = false;
           targetContent = toDomCommand(
             { ...foundCommand, imageUrl: plugin?.logo, status: 'pending' },
-            rawArgs
+            args
           );
 
           // do not await, let it run in background
@@ -101,7 +107,7 @@ const sendMessageRoute = protectedProcedure
                   response,
                   status
                 },
-                rawArgs
+                args
               );
 
               db.update(messages)
