@@ -49,6 +49,9 @@ export interface EventPayloads {
   };
 }
 
+// this API is probably going to change a lot in the future
+// so consider it as experimental for now
+
 export interface PluginContext {
   path: string;
 
