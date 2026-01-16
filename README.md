@@ -78,7 +78,7 @@ Upon first run, Sharkord will generate a default configuration file located at `
 
 At the moment, Sharkord does not have built-in support for HTTPS. To secure your server with HTTPS, we recommend using a reverse proxy like Nginx or Caddy in front of Sharkord. This setup allows you to manage SSL/TLS certificates and handle secure connections.
 
-## Plugins
+## Plugins (experimental)
 
 See the [Plugin SDK](packages/plugin-sdk/README.md) for more information on creating and using plugins with Sharkord.
 

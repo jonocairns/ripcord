@@ -3,7 +3,7 @@
 The official SDK for building Sharkord plugins. This package provides TypeScript types and interfaces to extend Sharkord with custom functionality.
 
 > [!NOTE]
-> Sharkord is in alpha stage. The plugin API will most likely have breaking changes in future releases.
+> Sharkord plugins are an experimental feature and the SDK API may change in future releases.
 
 ## Creating a Plugin
 
