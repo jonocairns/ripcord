@@ -2,6 +2,7 @@ import { TiptapInput } from '@/components/tiptap-input';
 import Spinner from '@/components/ui/spinner';
 import { useCan, useChannelCan } from '@/features/server/hooks';
 import { useMessages } from '@/features/server/messages/hooks';
+import { useFlatPluginCommands } from '@/features/server/plugins/hooks';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
@@ -28,6 +29,7 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
   const { messages, hasMore, loadMore, loading, fetching, groupedMessages } =
     useMessages(channelId);
   const [newMessage, setNewMessage] = useState('');
+  const pluginCommands = useFlatPluginCommands();
   const { containerRef, onScroll } = useScrollController({
     messages,
     fetching,
@@ -165,6 +167,7 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
             onSubmit={onSendMessage}
             onTyping={sendTypingSignal}
             disabled={uploading || !canSendMessages}
+            commands={pluginCommands}
           />
           <Button
             size="icon"
