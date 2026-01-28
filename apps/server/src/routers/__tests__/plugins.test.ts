@@ -1,10 +1,10 @@
 import { type TPluginInfo } from '@sharkord/shared';
 import { beforeAll, beforeEach, describe, expect, test } from 'bun:test';
-import fs from 'fs/promises';
-import path from 'path';
+import { eq } from 'drizzle-orm';
 import { initTest } from '../../__tests__/helpers';
 import { loadMockedPlugins, resetPluginMocks } from '../../__tests__/mocks';
-import { PLUGINS_PATH } from '../../helpers/paths';
+import { tdb } from '../../__tests__/setup';
+import { pluginData } from '../../db/schema';
 import { pluginManager } from '../../plugins';
 
 describe('plugins router', () => {
@@ -25,7 +25,7 @@ describe('plugins router', () => {
     const { plugins } = await caller.plugins.get();
 
     expect(plugins).toBeDefined();
-    expect(plugins.length).toBe(6);
+    expect(plugins.length).toBe(7);
   });
 
   test('should include plugin metadata', async () => {
@@ -116,7 +116,7 @@ describe('plugins router', () => {
     expect(pluginA!.enabled).toBe(false);
   });
 
-  test('should persist plugin state to file', async () => {
+  test('should persist plugin state to database', async () => {
     const { caller } = await initTest();
 
     await caller.plugins.toggle({
@@ -124,11 +124,13 @@ describe('plugins router', () => {
       enabled: true
     });
 
-    const statesFile = path.join(PLUGINS_PATH, 'plugin-states.json');
-    const content = await fs.readFile(statesFile, 'utf-8');
-    const states = JSON.parse(content);
+    const row = await tdb
+      .select({ enabled: pluginData.enabled })
+      .from(pluginData)
+      .where(eq(pluginData.pluginId, 'plugin-a'))
+      .get();
 
-    expect(states['plugin-a']).toBe(true);
+    expect(row?.enabled).toBe(true);
   });
 
   test('should load plugin when enabled', async () => {

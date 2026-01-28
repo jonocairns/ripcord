@@ -23,7 +23,7 @@ const files = sqliteTable(
     mimeType: text('mime_type').notNull(),
     extension: text('extension').notNull(),
     createdAt: integer('created_at').notNull(),
-    updatedAt: integer('updated_at').notNull()
+    updatedAt: integer('updated_at')
   },
   (t) => [
     index('files_user_idx').on(t.userId),
@@ -420,6 +420,15 @@ const channelReadStates = sqliteTable(
   ]
 );
 
+const pluginData = sqliteTable('plugin_data', {
+  pluginId: text('plugin_id').notNull().primaryKey(),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
+  settings: text('settings', { mode: 'json' })
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default({})
+});
+
 export {
   activityLog,
   categories,
@@ -434,6 +443,7 @@ export {
   messageFiles,
   messageReactions,
   messages,
+  pluginData,
   rolePermissions,
   roles,
   settings,

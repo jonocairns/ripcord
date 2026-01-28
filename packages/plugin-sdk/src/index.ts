@@ -3,6 +3,7 @@ import type {
   CommandDefinition,
   StreamKind,
   TInvokerContext,
+  TPluginSettingDefinition,
 } from "@sharkord/shared";
 
 export type { TInvokerContext };
@@ -52,6 +53,27 @@ export interface EventPayloads {
 // this API is probably going to change a lot in the future
 // so consider it as experimental for now
 
+type SettingValueType<T extends TPluginSettingDefinition> =
+  T["type"] extends "string"
+    ? string
+    : T["type"] extends "number"
+      ? number
+      : T["type"] extends "boolean"
+        ? boolean
+        : unknown;
+
+export interface PluginSettings<
+  T extends readonly TPluginSettingDefinition[] = TPluginSettingDefinition[],
+> {
+  get<K extends T[number]["key"]>(
+    key: K,
+  ): SettingValueType<Extract<T[number], { key: K }>>;
+  set<K extends T[number]["key"]>(
+    key: K,
+    value: SettingValueType<Extract<T[number], { key: K }>>,
+  ): void;
+}
+
 export interface PluginContext {
   path: string;
 
@@ -62,7 +84,7 @@ export interface PluginContext {
   events: {
     on<E extends ServerEvent>(
       event: E,
-      handler: (payload: EventPayloads[E]) => void | Promise<void>
+      handler: (payload: EventPayloads[E]) => void | Promise<void>,
     ): void;
   };
 
@@ -73,7 +95,7 @@ export interface PluginContext {
         channelId: number,
         name: string,
         type: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO,
-        producer: Producer
+        producer: Producer,
       ): number;
       getListenInfo(): {
         ip: string;
@@ -84,6 +106,12 @@ export interface PluginContext {
 
   commands: {
     register<TArgs = void>(command: CommandDefinition<TArgs>): void;
+  };
+
+  settings: {
+    register<T extends readonly TPluginSettingDefinition[]>(
+      definitions: T,
+    ): Promise<PluginSettings<T>>;
   };
 }
 

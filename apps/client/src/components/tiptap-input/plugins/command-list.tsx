@@ -20,8 +20,6 @@ const CommandList = forwardRef<CommandListRef, CommandListProps>(
   ({ items, onSelect }, ref) => {
     const [selectedIndex, setSelectedIndex] = useState(0);
 
-    console.log('! items', items);
-
     useEffect(() => {
       setSelectedIndex(0);
     }, [items]);

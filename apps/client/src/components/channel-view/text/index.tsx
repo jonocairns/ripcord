@@ -29,7 +29,7 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
   const { messages, hasMore, loadMore, loading, fetching, groupedMessages } =
     useMessages(channelId);
   const [newMessage, setNewMessage] = useState('');
-  const pluginCommands = useFlatPluginCommands();
+  const allPluginCommands = useFlatPluginCommands();
   const { containerRef, onScroll } = useScrollController({
     messages,
     fetching,
@@ -44,6 +44,14 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
       channelCan(ChannelPermission.SEND_MESSAGES)
     );
   }, [can, channelCan]);
+
+  const pluginCommands = useMemo(
+    () =>
+      can(Permission.EXECUTE_PLUGIN_COMMANDS)
+        ? allPluginCommands
+        : undefined,
+    [can, allPluginCommands]
+  );
 
   const { files, removeFile, clearFiles, uploading, uploadingSize } =
     useUploadFiles(!canSendMessages);

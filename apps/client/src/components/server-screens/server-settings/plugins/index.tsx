@@ -24,6 +24,7 @@ import {
   FileText,
   Package,
   RefreshCw,
+  Settings,
   Terminal,
   User
 } from 'lucide-react';
@@ -63,6 +64,13 @@ const PluginItem = memo(({ plugin, onToggle }: TPluginItemProps) => {
       pluginId: plugin.id
     });
   }, [plugin.id]);
+
+  const handleViewSettings = useCallback(() => {
+    openDialog(Dialog.PLUGIN_SETTINGS, {
+      pluginId: plugin.id,
+      pluginName: plugin.name
+    });
+  }, [plugin.id, plugin.name]);
 
   return (
     <div className="flex items-start gap-4 p-4 rounded-lg border bg-card hover:bg-accent/50 transition-colors">
@@ -117,6 +125,16 @@ const PluginItem = memo(({ plugin, onToggle }: TPluginItemProps) => {
             >
               <Terminal className="w-4 h-4 mr-1.5" />
               Commands
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleViewSettings}
+              className="h-8"
+              disabled={!plugin.enabled}
+            >
+              <Settings className="w-4 h-4 mr-1.5" />
+              Settings
             </Button>
             {plugin.loadError ? (
               <Badge variant="destructive">Error</Badge>

@@ -9,6 +9,7 @@ import { CreateInviteDialog } from './create-invite-dialog';
 import { Dialog } from './dialogs';
 import { PluginCommandsDialog } from './plugin-commands';
 import { PluginLogsDialog } from './plugin-logs';
+import { PluginSettingsDialog } from './plugin-settings';
 import { ServerPasswordDialog } from './server-password';
 import { TextInputDialog } from './text-input';
 
@@ -22,7 +23,8 @@ const DialogsMap: any = {
   [Dialog.CREATE_INVITE]: CreateInviteDialog,
   [Dialog.CREATE_CATEGORY]: CreateCategoryDialog,
   [Dialog.PLUGIN_LOGS]: PluginLogsDialog,
-  [Dialog.PLUGIN_COMMANDS]: PluginCommandsDialog
+  [Dialog.PLUGIN_COMMANDS]: PluginCommandsDialog,
+  [Dialog.PLUGIN_SETTINGS]: PluginSettingsDialog
 };
 
 const DialogsProvider = memo(() => {

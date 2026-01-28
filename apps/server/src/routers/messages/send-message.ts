@@ -53,85 +53,88 @@ const sendMessageRoute = protectedProcedure
       const foundCommand = pluginManager.getCommandByName(commandName);
 
       if (foundCommand) {
-        await ctx.needsPermission(Permission.EXECUTE_PLUGIN_COMMANDS);
+        if (await ctx.hasPermission(Permission.EXECUTE_PLUGIN_COMMANDS)) {
+          const argsObject: Record<string, unknown> = {};
 
-        const argsObject: Record<string, unknown> = {};
+          if (foundCommand.args) {
+            foundCommand.args.forEach((argDef, index) => {
+              if (index < args.length) {
+                const value = args[index];
 
-        if (foundCommand.args) {
-          foundCommand.args.forEach((argDef, index) => {
-            if (index < args.length) {
-              const value = args[index];
-
-              if (argDef.type === 'number') {
-                argsObject[argDef.name] = Number(value);
-              } else if (argDef.type === 'boolean') {
-                argsObject[argDef.name] = value === 'true';
-              } else {
-                argsObject[argDef.name] = value;
-              }
-            }
-          });
-        }
-
-        const plugin = await pluginManager.getPluginInfo(
-          foundCommand?.pluginId || ''
-        );
-
-        editable = false;
-        targetContent = toDomCommand(
-          { ...foundCommand, imageUrl: plugin?.logo, status: 'pending' },
-          args
-        );
-
-        // do not await, let it run in background
-        commandExecutor = (messageId: number) => {
-          const updateCommandStatus = (
-            status: 'completed' | 'failed',
-            response?: unknown
-          ) => {
-            const updatedContent = toDomCommand(
-              {
-                ...foundCommand,
-                imageUrl: plugin?.logo,
-                response,
-                status
-              },
-              args
-            );
-
-            db.update(messages)
-              .set({ content: updatedContent })
-              .where(eq(messages.id, messageId))
-              .execute();
-
-            publishMessage(messageId, input.channelId, 'update');
-          };
-
-          pluginManager
-            .executeCommand(
-              foundCommand.pluginId,
-              foundCommand.name,
-              getInvokerCtxFromTrpcCtx(ctx),
-              argsObject
-            )
-            .then((response) => {
-              updateCommandStatus('completed', response);
-            })
-            .catch((error) => {
-              updateCommandStatus('failed', error?.message || 'Unknown error');
-            })
-            .finally(() => {
-              enqueueActivityLog({
-                type: ActivityLogType.EXECUTED_PLUGIN_COMMAND,
-                userId: ctx.user.id,
-                details: {
-                  pluginId: foundCommand.pluginId,
-                  commandName: foundCommand.name,
-                  args: argsObject
+                if (argDef.type === 'number') {
+                  argsObject[argDef.name] = Number(value);
+                } else if (argDef.type === 'boolean') {
+                  argsObject[argDef.name] = value === 'true';
+                } else {
+                  argsObject[argDef.name] = value;
                 }
-              });
+              }
             });
-        };
+          }
+
+          const plugin = await pluginManager.getPluginInfo(
+            foundCommand?.pluginId || ''
+          );
+
+          editable = false;
+          targetContent = toDomCommand(
+            { ...foundCommand, imageUrl: plugin?.logo, status: 'pending' },
+            args
+          );
+
+          // do not await, let it run in background
+          commandExecutor = (messageId: number) => {
+            const updateCommandStatus = (
+              status: 'completed' | 'failed',
+              response?: unknown
+            ) => {
+              const updatedContent = toDomCommand(
+                {
+                  ...foundCommand,
+                  imageUrl: plugin?.logo,
+                  response,
+                  status
+                },
+                args
+              );
+
+              db.update(messages)
+                .set({ content: updatedContent })
+                .where(eq(messages.id, messageId))
+                .execute();
+
+              publishMessage(messageId, input.channelId, 'update');
+            };
+
+            pluginManager
+              .executeCommand(
+                foundCommand.pluginId,
+                foundCommand.name,
+                getInvokerCtxFromTrpcCtx(ctx),
+                argsObject
+              )
+              .then((response) => {
+                updateCommandStatus('completed', response);
+              })
+              .catch((error) => {
+                updateCommandStatus(
+                  'failed',
+                  error?.message || 'Unknown error'
+                );
+              })
+              .finally(() => {
+                enqueueActivityLog({
+                  type: ActivityLogType.EXECUTED_PLUGIN_COMMAND,
+                  userId: ctx.user.id,
+                  details: {
+                    pluginId: foundCommand.pluginId,
+                    commandName: foundCommand.name,
+                    args: argsObject
+                  }
+                });
+              });
+          };
+        }
       }
     }
 

@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { settings } from '../../db/schema';
+import { pluginData, settings } from '../../db/schema';
 import { PLUGINS_PATH } from '../../helpers/paths';
 import { pluginManager } from '../../plugins';
 import { tdb } from '../setup';
@@ -18,14 +18,6 @@ const loadMockedPlugins = async () => {
     await fs.cp(src, dest, { recursive: true });
   }
 
-  await fs.writeFile(
-    path.join(PLUGINS_PATH, 'plugin-states.json'),
-    JSON.stringify({
-      'plugin-a': true,
-      'plugin-b': true,
-      'plugin-with-events': true
-    })
-  );
 };
 
 const resetPluginMocks = async () => {
@@ -36,17 +28,17 @@ const resetPluginMocks = async () => {
   await pluginManager.unloadPlugins();
 
   // reset plugin states - enable test plugins
-  await fs.writeFile(
-    path.join(PLUGINS_PATH, 'plugin-states.json'),
-    JSON.stringify({
-      'plugin-a': true,
-      'plugin-b': true,
-      'plugin-with-events': true,
-      'plugin-no-unload': true,
-      'plugin-no-onload': true,
-      'plugin-throws-error': true
-    })
-  );
+  await tdb.delete(pluginData);
+
+  await tdb.insert(pluginData).values([
+    { pluginId: 'plugin-a', enabled: true },
+    { pluginId: 'plugin-b', enabled: true },
+    { pluginId: 'plugin-with-events', enabled: true },
+    { pluginId: 'plugin-with-settings', enabled: true },
+    { pluginId: 'plugin-no-unload', enabled: true },
+    { pluginId: 'plugin-no-onload', enabled: true },
+    { pluginId: 'plugin-throws-error', enabled: true }
+  ]);
 
   // reload plugin states into memory
   await pluginManager.loadPlugins();

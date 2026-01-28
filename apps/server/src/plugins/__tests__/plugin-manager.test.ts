@@ -1,11 +1,12 @@
 import type { TInvokerContext } from '@sharkord/shared';
 import { beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { eq } from 'drizzle-orm';
 import fs from 'fs/promises';
 import path from 'path';
 import { pluginManager } from '..';
 import { loadMockedPlugins, resetPluginMocks } from '../../__tests__/mocks';
 import { tdb } from '../../__tests__/setup';
-import { settings } from '../../db/schema';
+import { pluginData, settings } from '../../db/schema';
 import { PLUGINS_PATH } from '../../helpers/paths';
 import { eventBus } from '../event-bus';
 
@@ -274,14 +275,16 @@ describe('plugin-manager', () => {
       expect(hasUnloadMessage).toBe(true);
     });
 
-    test('should persist enabled state to file', async () => {
+    test('should persist enabled state to database', async () => {
       await pluginManager.togglePlugin('plugin-a', true);
 
-      const statesFile = path.join(PLUGINS_PATH, 'plugin-states.json');
-      const content = await fs.readFile(statesFile, 'utf-8');
-      const states = JSON.parse(content);
+      const row = await tdb
+        .select({ enabled: pluginData.enabled })
+        .from(pluginData)
+        .where(eq(pluginData.pluginId, 'plugin-a'))
+        .get();
 
-      expect(states['plugin-a']).toBe(true);
+      expect(row?.enabled).toBe(true);
     });
   });
 
@@ -332,7 +335,7 @@ describe('plugin-manager', () => {
       const plugins = await pluginManager.getPluginsFromPath();
 
       expect(plugins).not.toContain('test-file.txt');
-      expect(plugins).not.toContain('plugin-states.json');
+      // only directories should be returned
 
       await fs.unlink(path.join(PLUGINS_PATH, 'test-file.txt'));
     });
@@ -596,6 +599,140 @@ describe('plugin-manager', () => {
       await expect(pluginManager.getPluginInfo('foo\0bar')).rejects.toThrow(
         'Invalid plugin ID'
       );
+    });
+  });
+
+  describe('settings', () => {
+    test('should register settings and return default values', async () => {
+      await pluginManager.load('plugin-with-settings');
+
+      const result = await pluginManager.executeCommand(
+        'plugin-with-settings',
+        'get-settings',
+        mockInvokerCtx,
+        {}
+      );
+
+      expect(result).toEqual({
+        greeting: 'Hello!',
+        maxRetries: 3,
+        enabled: true
+      });
+    });
+
+    test('should update settings via plugin command', async () => {
+      await pluginManager.load('plugin-with-settings');
+
+      await pluginManager.executeCommand(
+        'plugin-with-settings',
+        'set-greeting',
+        mockInvokerCtx,
+        { value: 'Welcome!' }
+      );
+
+      const result = await pluginManager.executeCommand(
+        'plugin-with-settings',
+        'get-settings',
+        mockInvokerCtx,
+        {}
+      );
+
+      expect((result as Record<string, unknown>).greeting).toBe('Welcome!');
+    });
+
+    test('should return settings definitions via getPluginSettings', async () => {
+      await pluginManager.load('plugin-with-settings');
+
+      const settings = await pluginManager.getPluginSettings(
+        'plugin-with-settings'
+      );
+
+      expect(settings.definitions).toHaveLength(3);
+      expect(settings.definitions[0]!.key).toBe('greeting');
+      expect(settings.definitions[1]!.key).toBe('maxRetries');
+      expect(settings.definitions[2]!.key).toBe('enabled');
+      expect(settings.values.greeting).toBe('Hello!');
+      expect(settings.values.maxRetries).toBe(3);
+      expect(settings.values.enabled).toBe(true);
+    });
+
+    test('should update settings via updatePluginSetting', async () => {
+      await pluginManager.load('plugin-with-settings');
+
+      await pluginManager.updatePluginSetting(
+        'plugin-with-settings',
+        'maxRetries',
+        5
+      );
+
+      const settings = await pluginManager.getPluginSettings(
+        'plugin-with-settings'
+      );
+
+      expect(settings.values.maxRetries).toBe(5);
+    });
+
+    test('should throw error when updating unregistered setting key', async () => {
+      await pluginManager.load('plugin-with-settings');
+
+      await expect(
+        pluginManager.updatePluginSetting(
+          'plugin-with-settings',
+          'nonexistent',
+          'value'
+        )
+      ).rejects.toThrow('not registered');
+    });
+
+    test('should throw error when plugin has no settings', async () => {
+      await pluginManager.load('plugin-a');
+
+      await expect(
+        pluginManager.updatePluginSetting('plugin-a', 'key', 'value')
+      ).rejects.toThrow('no registered settings');
+    });
+
+    test('should persist settings to DB and restore on reload', async () => {
+      await pluginManager.load('plugin-with-settings');
+
+      // update a setting
+      await pluginManager.updatePluginSetting(
+        'plugin-with-settings',
+        'greeting',
+        'Persisted!'
+      );
+
+      // unload and reload
+      await pluginManager.unload('plugin-with-settings');
+      await pluginManager.load('plugin-with-settings');
+
+      const result = await pluginManager.executeCommand(
+        'plugin-with-settings',
+        'get-settings',
+        mockInvokerCtx,
+        {}
+      );
+
+      expect((result as Record<string, unknown>).greeting).toBe('Persisted!');
+    });
+
+    test('should clean up in-memory settings on unload', async () => {
+      await pluginManager.load('plugin-with-settings');
+
+      const settingsBefore = await pluginManager.getPluginSettings(
+        'plugin-with-settings'
+      );
+
+      expect(settingsBefore.definitions).toHaveLength(3);
+
+      await pluginManager.unload('plugin-with-settings');
+
+      const settingsAfter = await pluginManager.getPluginSettings(
+        'plugin-with-settings'
+      );
+
+      // definitions should be empty since the plugin was unloaded
+      expect(settingsAfter.definitions).toHaveLength(0);
     });
   });
 
