@@ -92,8 +92,7 @@ const useVoiceRefs = (
     if (!audioStream || !audioRef.current) return;
 
     audioRef.current.srcObject = audioStream;
-    audioRef.current.volume = userVolume / 100;
-  }, [audioStream, audioRef, userVolume]);
+  }, [audioStream, audioRef]);
 
   useEffect(() => {
     if (!screenShareStream || !screenShareRef.current) return;
@@ -102,23 +101,34 @@ const useVoiceRefs = (
   }, [screenShareStream, screenShareRef]);
 
   useEffect(() => {
-    if (!audioRef.current) return;
-
-    audioRef.current.muted = ownVoiceState.soundMuted;
-  }, [ownVoiceState.soundMuted, audioRef]);
-
-  useEffect(() => {
     if (!externalAudioStream || !externalAudioRef.current) return;
 
     externalAudioRef.current.srcObject = externalAudioStream;
-    externalAudioRef.current.volume = externalVolume / 100;
-  }, [externalAudioStream, externalAudioRef, externalVolume]);
+  }, [externalAudioStream, externalAudioRef]);
 
   useEffect(() => {
     if (!externalVideoStream || !externalVideoRef.current) return;
 
     externalVideoRef.current.srcObject = externalVideoStream;
   }, [externalVideoStream, externalVideoRef]);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+
+    audioRef.current.volume = userVolume / 100;
+  }, [userVolume, audioRef]);
+
+  useEffect(() => {
+    if (!externalAudioRef.current) return;
+
+    externalAudioRef.current.volume = externalVolume / 100;
+  }, [externalVolume, externalAudioRef]);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+
+    audioRef.current.muted = ownVoiceState.soundMuted;
+  }, [ownVoiceState.soundMuted, audioRef]);
 
   return {
     videoRef,
