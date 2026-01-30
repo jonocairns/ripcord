@@ -1,12 +1,35 @@
 import type { AppData, Producer, Router } from "mediasoup/types";
 import type {
   CommandDefinition,
-  StreamKind,
   TInvokerContext,
   TPluginSettingDefinition,
 } from "@sharkord/shared";
 
 export type { TInvokerContext };
+
+export type TCreateStreamOptions = {
+  channelId: number;
+  title: string;
+  key: string;
+  avatarUrl?: string;
+  producers: {
+    audio?: Producer;
+    video?: Producer;
+  };
+};
+
+export type TExternalStreamHandle = {
+  streamId: number;
+  remove: () => void;
+  update: (options: {
+    title?: string;
+    avatarUrl?: string;
+    producers?: {
+      audio?: Producer;
+      video?: Producer;
+    };
+  }) => void;
+};
 
 export type ServerEvent =
   | "user:joined"
@@ -91,12 +114,7 @@ export interface PluginContext {
   actions: {
     voice: {
       getRouter(channelId: number): Router<AppData>;
-      addExternalStream(
-        channelId: number,
-        name: string,
-        type: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO,
-        producer: Producer,
-      ): number;
+      createStream(options: TCreateStreamOptions): TExternalStreamHandle;
       getListenInfo(): {
         ip: string;
         announcedAddress: string | undefined;

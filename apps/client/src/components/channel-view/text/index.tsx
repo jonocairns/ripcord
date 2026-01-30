@@ -47,9 +47,7 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 
   const pluginCommands = useMemo(
     () =>
-      can(Permission.EXECUTE_PLUGIN_COMMANDS)
-        ? allPluginCommands
-        : undefined,
+      can(Permission.EXECUTE_PLUGIN_COMMANDS) ? allPluginCommands : undefined,
     [can, allPluginCommands]
   );
 

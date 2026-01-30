@@ -17,7 +17,10 @@ type TEvents = {
     userId: number,
     kind: TRemoteUserStreamKinds
   ) => void;
-  removeExternalStream: (streamId: number) => void;
+  removeExternalStreamTrack: (
+    streamId: number,
+    kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO
+  ) => void;
   clearRemoteUserStreamsForUser: (userId: number) => void;
   rtpCapabilities: RtpCapabilities;
 };
@@ -25,7 +28,7 @@ type TEvents = {
 const useVoiceEvents = ({
   consume,
   removeRemoteUserStream,
-  removeExternalStream,
+  removeExternalStreamTrack,
   clearRemoteUserStreamsForUser,
   rtpCapabilities
 }: TEvents) => {
@@ -98,7 +101,7 @@ const useVoiceEvents = ({
               kind === StreamKind.EXTERNAL_VIDEO ||
               kind === StreamKind.EXTERNAL_AUDIO
             ) {
-              removeExternalStream(remoteId);
+              removeExternalStreamTrack(remoteId, kind);
             } else {
               removeRemoteUserStream(remoteId, kind);
             }
@@ -148,7 +151,7 @@ const useVoiceEvents = ({
     ownUserId,
     consume,
     removeRemoteUserStream,
-    removeExternalStream,
+    removeExternalStreamTrack,
     clearRemoteUserStreamsForUser,
     rtpCapabilities
   ]);

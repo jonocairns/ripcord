@@ -1,4 +1,8 @@
-import { useVoice } from '@/features/server/voice/hooks';
+import {
+  getLocalStorageItemAsJSON,
+  LocalStorageKey,
+  setLocalStorageItemAsJSON
+} from '@/helpers/storage';
 import {
   createContext,
   memo,
@@ -8,15 +12,20 @@ import {
   useState
 } from 'react';
 
-type VolumeKey = `user-${number}` | `external-${number}`;
+// volume keys are string-based for persistence
+// user volumes: "user-{userId}"
+// external stream volumes: "external-{pluginId}-{key}"
+type TVolumeKey = string;
+
+type TVolumeSettings = Record<TVolumeKey, number>;
 
 type TVolumeControlContext = {
-  volumes: Record<VolumeKey, number>;
-  getVolume: (key: VolumeKey) => number;
-  setVolume: (key: VolumeKey, volume: number) => void;
-  toggleMute: (key: VolumeKey) => void;
-  getUserVolumeKey: (userId: number) => VolumeKey;
-  getExternalVolumeKey: (streamId: number) => VolumeKey;
+  volumes: TVolumeSettings;
+  getVolume: (key: TVolumeKey) => number;
+  setVolume: (key: TVolumeKey, volume: number) => void;
+  toggleMute: (key: TVolumeKey) => void;
+  getUserVolumeKey: (userId: number) => TVolumeKey;
+  getExternalVolumeKey: (pluginId: string, key: string) => TVolumeKey;
 };
 
 const VolumeControlContext = createContext<TVolumeControlContext | null>(null);
@@ -25,54 +34,56 @@ type TVolumeControlProviderProps = {
   children: React.ReactNode;
 };
 
+const loadVolumesFromStorage = (): TVolumeSettings => {
+  try {
+    return (
+      getLocalStorageItemAsJSON<TVolumeSettings>(
+        LocalStorageKey.VOLUME_SETTINGS
+      ) ?? {}
+    );
+  } catch {
+    return {};
+  }
+};
+
+const saveVolumesToStorage = (volumes: TVolumeSettings) => {
+  try {
+    setLocalStorageItemAsJSON(LocalStorageKey.VOLUME_SETTINGS, volumes);
+  } catch {
+    // ignore
+  }
+};
+
 const VolumeControlProvider = memo(
   ({ children }: TVolumeControlProviderProps) => {
-    const { getOrCreateRefs } = useVoice();
-    const [volumes, setVolumes] = useState<Record<VolumeKey, number>>({});
-    const previousVolumesRef = useRef<Record<VolumeKey, number>>({});
+    const [volumes, setVolumes] = useState<TVolumeSettings>(
+      loadVolumesFromStorage
+    );
+
+    const previousVolumesRef = useRef<TVolumeSettings>({});
 
     const getVolume = useCallback(
-      (key: VolumeKey): number => {
+      (key: TVolumeKey): number => {
         return volumes[key] ?? 100;
       },
       [volumes]
     );
 
-    const applyVolumeToElement = useCallback(
-      (key: VolumeKey, volume: number) => {
-        const isExternal = key.startsWith('external-');
-        const id = parseInt(key.split('-')[1] || '0', 10);
-        const refs = getOrCreateRefs(id);
-        const audioElement = isExternal
-          ? refs.externalAudioRef.current
-          : refs.audioRef.current;
+    const setVolume = useCallback((key: TVolumeKey, volume: number) => {
+      setVolumes((prev) => {
+        const next = { ...prev, [key]: volume };
+        saveVolumesToStorage(next);
+        return next;
+      });
 
-        if (audioElement) {
-          audioElement.volume = volume / 100;
-        }
-      },
-      [getOrCreateRefs]
-    );
+      if (volume > 0) {
+        previousVolumesRef.current[key] = volume;
+      }
+    }, []);
 
-    const setVolume = useCallback(
-      (key: VolumeKey, volume: number) => {
-        setVolumes((prev) => ({
-          ...prev,
-          [key]: volume
-        }));
-
-        if (volume > 0) {
-          previousVolumesRef.current[key] = volume;
-        }
-
-        applyVolumeToElement(key, volume);
-      },
-      [applyVolumeToElement]
-    );
-
-    const toggleMute = useCallback(
-      (key: VolumeKey) => {
-        const currentVolume = volumes[key] ?? 100;
+    const toggleMute = useCallback((key: TVolumeKey) => {
+      setVolumes((prev) => {
+        const currentVolume = prev[key] ?? 100;
         const isMuted = currentVolume === 0;
         const newVolume = isMuted
           ? (previousVolumesRef.current[key] ?? 100)
@@ -82,23 +93,22 @@ const VolumeControlProvider = memo(
           previousVolumesRef.current[key] = currentVolume;
         }
 
-        setVolumes((prev) => ({
-          ...prev,
-          [key]: newVolume
-        }));
+        const next = { ...prev, [key]: newVolume };
+        saveVolumesToStorage(next);
+        return next;
+      });
+    }, []);
 
-        applyVolumeToElement(key, newVolume);
-      },
-      [volumes, applyVolumeToElement]
-    );
-
-    const getUserVolumeKey = useCallback((userId: number): VolumeKey => {
+    const getUserVolumeKey = useCallback((userId: number): TVolumeKey => {
       return `user-${userId}`;
     }, []);
 
-    const getExternalVolumeKey = useCallback((streamId: number): VolumeKey => {
-      return `external-${streamId}`;
-    }, []);
+    const getExternalVolumeKey = useCallback(
+      (pluginId: string, key: string): TVolumeKey => {
+        return `external-${pluginId}-${key}`;
+      },
+      []
+    );
 
     return (
       <VolumeControlContext.Provider
@@ -130,4 +140,4 @@ const useVolumeControl = () => {
 };
 
 export { useVolumeControl, VolumeControlContext, VolumeControlProvider };
-export type { TVolumeControlContext, VolumeKey };
+export type { TVolumeControlContext, TVolumeKey };

@@ -505,6 +505,21 @@ export const serverSlice = createSlice({
 
       state.externalStreamsMap[channelId][streamId] = stream;
     },
+    updateExternalStreamInChannel: (
+      state,
+      action: PayloadAction<{
+        channelId: number;
+        streamId: number;
+        stream: TExternalStream;
+      }>
+    ) => {
+      const { channelId, streamId, stream } = action.payload;
+
+      if (!state.externalStreamsMap[channelId]) return;
+      if (!state.externalStreamsMap[channelId][streamId]) return;
+
+      state.externalStreamsMap[channelId][streamId] = stream;
+    },
     removeExternalStreamFromChannel: (
       state,
       action: PayloadAction<{ channelId: number; streamId: number }>

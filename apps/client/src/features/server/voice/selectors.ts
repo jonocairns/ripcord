@@ -1,5 +1,4 @@
 import type { IRootState } from '@/features/store';
-import { StreamKind } from '@sharkord/shared';
 import { createCachedSelector } from 're-reselect';
 
 const DEFAULT_OBJECT = {};
@@ -37,16 +36,12 @@ export const voiceChannelExternalStreamsListSelector = createCachedSelector(
 
 export const voiceChannelAudioExternalStreamsSelector = createCachedSelector(
   voiceChannelExternalStreamsListSelector,
-  (externalStreamsMap) =>
-    externalStreamsMap.filter(
-      (stream) => stream.type === StreamKind.EXTERNAL_AUDIO
-    )
+  (externalStreams) =>
+    externalStreams.filter((stream) => stream.tracks?.audio === true)
 )((_state: IRootState, channelId: number) => channelId);
 
 export const voiceChannelVideoExternalStreamsSelector = createCachedSelector(
   voiceChannelExternalStreamsListSelector,
-  (externalStreamsMap) =>
-    externalStreamsMap.filter(
-      (stream) => stream.type === StreamKind.EXTERNAL_VIDEO
-    )
+  (externalStreams) =>
+    externalStreams.filter((stream) => stream.tracks?.video === true)
 )((_state: IRootState, channelId: number) => channelId);

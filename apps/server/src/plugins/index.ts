@@ -1,10 +1,13 @@
 import type {
   PluginContext,
   PluginSettings,
+  TCreateStreamOptions,
+  TExternalStreamHandle,
   UnloadPluginContext
 } from '@sharkord/plugin-sdk';
 import {
   ServerEvents,
+  StreamKind,
   zPluginPackageJson,
   type CommandDefinition,
   type RegisteredCommand,
@@ -693,33 +696,76 @@ class PluginManager {
 
             return channel.getRouter();
           },
-          addExternalStream: (channelId, name, type, producer) => {
-            const channel = VoiceRuntime.findById(channelId);
+          createStream: (
+            options: TCreateStreamOptions
+          ): TExternalStreamHandle => {
+            const channel = VoiceRuntime.findById(options.channelId);
 
             if (!channel) {
               throw new Error(
-                `Voice runtime not found for channel ID ${channelId}`
+                `Voice runtime not found for channel ID ${options.channelId}`
               );
             }
 
-            const streamId = channel.addExternalStream(name, type, producer);
+            const streamId = channel.createExternalStream({
+              title: options.title,
+              key: options.key,
+              pluginId,
+              avatarUrl: options.avatarUrl,
+              producers: options.producers
+            });
+
+            const stream = channel.getState().externalStreams[streamId]!;
 
             pubsub.publish(ServerEvents.VOICE_ADD_EXTERNAL_STREAM, {
-              channelId,
+              channelId: options.channelId,
               streamId,
-              stream: {
-                name,
-                type
+              stream
+            });
+
+            if (options.producers.audio) {
+              pubsub.publish(ServerEvents.VOICE_NEW_PRODUCER, {
+                channelId: options.channelId,
+                remoteId: streamId,
+                kind: StreamKind.EXTERNAL_AUDIO
+              });
+            }
+
+            if (options.producers.video) {
+              pubsub.publish(ServerEvents.VOICE_NEW_PRODUCER, {
+                channelId: options.channelId,
+                remoteId: streamId,
+                kind: StreamKind.EXTERNAL_VIDEO
+              });
+            }
+
+            this.logPlugin(
+              pluginId,
+              'debug',
+              `Created external stream '${options.title}' (key: ${options.key}, id: ${streamId}) with tracks: audio=${!!options.producers.audio}, video=${!!options.producers.video}`
+            );
+
+            return {
+              streamId,
+              remove: () => {
+                channel.removeExternalStream(streamId);
+
+                this.logPlugin(
+                  pluginId,
+                  'debug',
+                  `Removed external stream '${options.title}' (key: ${options.key}, id: ${streamId})`
+                );
+              },
+              update: (updateOptions) => {
+                channel.updateExternalStream(streamId, updateOptions);
+
+                this.logPlugin(
+                  pluginId,
+                  'debug',
+                  `Updated external stream '${options.title}' (key: ${options.key}, id: ${streamId})`
+                );
               }
-            });
-
-            pubsub.publish(ServerEvents.VOICE_NEW_PRODUCER, {
-              channelId,
-              remoteId: streamId,
-              kind: type
-            });
-
-            return streamId;
+            };
           },
           getListenInfo: () => VoiceRuntime.getListenInfo()
         }

@@ -1,5 +1,5 @@
 import type { IceCandidate, IceParameters } from "mediasoup/types";
-import type { StreamKind } from "./types";
+import type { TExternalStreamTracks } from "./types";
 
 export type TVoiceUserState = {
   micMuted: boolean;
@@ -14,8 +14,11 @@ export type TVoiceUser = {
 };
 
 export type TExternalStream = {
-  name: string;
-  type: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO;
+  title: string;
+  key: string;
+  pluginId: string;
+  avatarUrl?: string;
+  tracks: TExternalStreamTracks;
 };
 
 export type TChannelState = {

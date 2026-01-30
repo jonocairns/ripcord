@@ -7,7 +7,10 @@ import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Smile } from 'lucide-react';
 import { memo, useEffect, useMemo } from 'react';
-import { COMMANDS_STORAGE_KEY, CommandSuggestion } from './plugins/command-suggestion';
+import {
+  COMMANDS_STORAGE_KEY,
+  CommandSuggestion
+} from './plugins/command-suggestion';
 import { SlashCommands } from './plugins/slash-commands-extension';
 import { EmojiSuggestion } from './suggestions';
 import type { TEmojiItem } from './types';

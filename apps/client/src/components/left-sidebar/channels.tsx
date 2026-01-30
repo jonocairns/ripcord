@@ -76,8 +76,9 @@ const Voice = memo(({ channel, ...props }: TVoiceProps) => {
           {externalStreams.map((stream) => (
             <ExternalStream
               key={stream.streamId}
-              name={stream.name}
-              type={stream.type}
+              title={stream.title}
+              tracks={stream.tracks}
+              pluginId={stream.pluginId}
             />
           ))}
         </div>

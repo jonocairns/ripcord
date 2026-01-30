@@ -70,6 +70,11 @@ type Events = {
     streamId: number;
     stream: TExternalStream;
   };
+  [ServerEvents.VOICE_UPDATE_EXTERNAL_STREAM]: {
+    channelId: number;
+    streamId: number;
+    stream: TExternalStream;
+  };
   [ServerEvents.VOICE_REMOVE_EXTERNAL_STREAM]: {
     channelId: number;
     streamId: number;

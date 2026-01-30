@@ -9,7 +9,7 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { UserAvatar } from '@/components/user-avatar';
 import {
   useVolumeControl,
-  type VolumeKey
+  type TVolumeKey
 } from '@/components/voice-provider/volume-control-context';
 import { useVoiceUsersByChannelId } from '@/features/server/hooks';
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
@@ -19,7 +19,7 @@ import { memo, useMemo } from 'react';
 
 type AudioStreamControlProps = {
   userId?: number;
-  volumeKey: VolumeKey;
+  volumeKey: TVolumeKey;
   name: string;
 };
 
@@ -28,7 +28,7 @@ type VolumeControllerProps = {
 };
 
 type AudioStream = {
-  volumeKey: VolumeKey;
+  volumeKey: TVolumeKey;
   userId?: number;
   name: string;
 };
@@ -108,8 +108,8 @@ const VolumeController = memo(({ channelId }: VolumeControllerProps) => {
 
     externalAudioStreams.forEach((stream) => {
       streams.push({
-        volumeKey: getExternalVolumeKey(stream.streamId),
-        name: stream.name || 'External Audio'
+        volumeKey: getExternalVolumeKey(stream.pluginId, stream.key),
+        name: stream.title || 'External Audio'
       });
     });
 

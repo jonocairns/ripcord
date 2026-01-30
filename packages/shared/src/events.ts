@@ -18,6 +18,7 @@ export enum ServerEvents {
   USER_VOICE_STATE_UPDATE = "userVoiceStateUpdate",
 
   VOICE_ADD_EXTERNAL_STREAM = "voiceAddExternalStream",
+  VOICE_UPDATE_EXTERNAL_STREAM = "voiceUpdateExternalStream",
   VOICE_REMOVE_EXTERNAL_STREAM = "voiceRemoveExternalStream",
   VOICE_NEW_PRODUCER = "voiceNewProducer",
   VOICE_PRODUCER_CLOSED = "voiceProducerClosed",

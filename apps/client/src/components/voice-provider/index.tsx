@@ -134,8 +134,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   }, []);
 
   const {
-    addExternalStream,
-    removeExternalStream,
+    addExternalStreamTrack,
+    removeExternalStreamTrack,
     clearExternalStreams,
     addRemoteUserStream,
     removeRemoteUserStream,
@@ -167,8 +167,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     consumeExistingProducers,
     cleanupTransports
   } = useTransports({
-    addExternalStream,
-    removeExternalStream,
+    addExternalStreamTrack,
+    removeExternalStreamTrack,
     addRemoteUserStream,
     removeRemoteUserStream
   });
@@ -521,7 +521,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   useVoiceEvents({
     consume,
     removeRemoteUserStream,
-    removeExternalStream,
+    removeExternalStreamTrack,
     clearRemoteUserStreamsForUser,
     rtpCapabilities: routerRtpCapabilities.current!
   });
@@ -583,6 +583,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         <div className="relative">
           <FloatingPinnedCard
             remoteUserStreams={remoteUserStreams}
+            externalStreams={externalStreams}
             localScreenShareStream={localScreenShareStream}
             localVideoStream={localVideoStream}
           />

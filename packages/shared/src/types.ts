@@ -13,12 +13,18 @@ export enum StreamKind {
   EXTERNAL_AUDIO = "external_audio",
 }
 
+export type TExternalStreamTrackKind = "audio" | "video";
+
+export type TExternalStreamTracks = {
+  audio?: boolean;
+  video?: boolean;
+};
+
 export type TRemoteProducerIds = {
   remoteVideoIds: number[];
   remoteAudioIds: number[];
   remoteScreenIds: number[];
-  remoteExternalVideoIds: number[];
-  remoteExternalAudioIds: number[];
+  remoteExternalStreamIds: number[];
 };
 
 export type TPublicServerSettings = Pick<

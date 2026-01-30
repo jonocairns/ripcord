@@ -1,10 +1,15 @@
+import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import { useIsOwnUser } from '@/features/server/users/hooks';
 import { useVoice } from '@/features/server/voice/hooks';
 import { StreamKind } from '@sharkord/shared';
 import { useEffect, useMemo } from 'react';
 import { useAudioLevel } from './use-audio-level';
 
-const useVoiceRefs = (remoteId: number) => {
+const useVoiceRefs = (
+  remoteId: number,
+  pluginId?: string,
+  streamKey?: string
+) => {
   const {
     remoteUserStreams,
     externalStreams,
@@ -15,9 +20,16 @@ const useVoiceRefs = (remoteId: number) => {
     getOrCreateRefs
   } = useVoice();
   const isOwnUser = useIsOwnUser(remoteId);
+  const { getVolume, getUserVolumeKey, getExternalVolumeKey } =
+    useVolumeControl();
 
-  const { videoRef, audioRef, screenShareRef, externalAudioRef, externalVideoRef } =
-    getOrCreateRefs(remoteId);
+  const {
+    videoRef,
+    audioRef,
+    screenShareRef,
+    externalAudioRef,
+    externalVideoRef
+  } = getOrCreateRefs(remoteId);
 
   const videoStream = useMemo(() => {
     if (isOwnUser) return localVideoStream;
@@ -48,9 +60,7 @@ const useVoiceRefs = (remoteId: number) => {
 
     const external = externalStreams[remoteId];
 
-    return external?.kind === StreamKind.EXTERNAL_AUDIO
-      ? external.stream
-      : undefined;
+    return external?.audioStream;
   }, [externalStreams, remoteId, isOwnUser]);
 
   const externalVideoStream = useMemo(() => {
@@ -58,13 +68,19 @@ const useVoiceRefs = (remoteId: number) => {
 
     const external = externalStreams[remoteId];
 
-    return external?.kind === StreamKind.EXTERNAL_VIDEO
-      ? external.stream
-      : undefined;
+    return external?.videoStream;
   }, [externalStreams, remoteId, isOwnUser]);
 
   const { audioLevel, isSpeaking, speakingIntensity } =
     useAudioLevel(audioStreamForLevel);
+
+  const userVolumeKey = getUserVolumeKey(remoteId);
+  const userVolume = getVolume(userVolumeKey);
+
+  const externalVolumeKey =
+    pluginId && streamKey ? getExternalVolumeKey(pluginId, streamKey) : null;
+
+  const externalVolume = externalVolumeKey ? getVolume(externalVolumeKey) : 100;
 
   useEffect(() => {
     if (!videoStream || !videoRef.current) return;
@@ -75,32 +91,44 @@ const useVoiceRefs = (remoteId: number) => {
   useEffect(() => {
     if (!audioStream || !audioRef.current) return;
 
-    audioRef.current.srcObject = audioStream;
-  }, [audioStream, audioRef]);
+    if (audioRef.current.srcObject !== audioStream) {
+      audioRef.current.srcObject = audioStream;
+    }
+
+    audioRef.current.volume = userVolume / 100;
+  }, [audioStream, audioRef, userVolume]);
 
   useEffect(() => {
     if (!screenShareStream || !screenShareRef.current) return;
 
-    screenShareRef.current.srcObject = screenShareStream;
+    if (screenShareRef.current.srcObject !== screenShareStream) {
+      screenShareRef.current.srcObject = screenShareStream;
+    }
   }, [screenShareStream, screenShareRef]);
+
+  useEffect(() => {
+    if (!externalAudioStream || !externalAudioRef.current) return;
+
+    if (externalAudioRef.current.srcObject !== externalAudioStream) {
+      externalAudioRef.current.srcObject = externalAudioStream;
+    }
+
+    externalAudioRef.current.volume = externalVolume / 100;
+  }, [externalAudioStream, externalAudioRef, externalVolume]);
+
+  useEffect(() => {
+    if (!externalVideoStream || !externalVideoRef.current) return;
+
+    if (externalVideoRef.current.srcObject !== externalVideoStream) {
+      externalVideoRef.current.srcObject = externalVideoStream;
+    }
+  }, [externalVideoStream, externalVideoRef]);
 
   useEffect(() => {
     if (!audioRef.current) return;
 
     audioRef.current.muted = ownVoiceState.soundMuted;
   }, [ownVoiceState.soundMuted, audioRef]);
-
-  useEffect(() => {
-    if (!externalAudioStream || !externalAudioRef.current) return;
-
-    externalAudioRef.current.srcObject = externalAudioStream;
-  }, [externalAudioStream, externalAudioRef]);
-
-  useEffect(() => {
-    if (!externalVideoStream || !externalVideoRef.current) return;
-
-    externalVideoRef.current.srcObject = externalVideoStream;
-  }, [externalVideoStream, externalVideoRef]);
 
   return {
     videoRef,

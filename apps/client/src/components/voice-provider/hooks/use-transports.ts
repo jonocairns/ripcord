@@ -22,19 +22,22 @@ type TUseTransportParams = {
     userId: number,
     kind: TRemoteUserStreamKinds
   ) => void;
-  addExternalStream: (
+  addExternalStreamTrack: (
     streamId: number,
     stream: MediaStream,
     kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO
   ) => void;
-  removeExternalStream: (streamId: number) => void;
+  removeExternalStreamTrack: (
+    streamId: number,
+    kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO
+  ) => void;
 };
 
 const useTransports = ({
   addRemoteUserStream,
   removeRemoteUserStream,
-  addExternalStream,
-  removeExternalStream
+  addExternalStreamTrack,
+  removeExternalStreamTrack
 }: TUseTransportParams) => {
   const producerTransport = useRef<Transport<AppData> | undefined>(undefined);
   const consumerTransport = useRef<Transport<AppData> | undefined>(undefined);
@@ -274,7 +277,7 @@ const useTransports = ({
               kind === StreamKind.EXTERNAL_VIDEO ||
               kind === StreamKind.EXTERNAL_AUDIO
             ) {
-              removeExternalStream(remoteId);
+              removeExternalStreamTrack(remoteId, kind);
             } else {
               removeRemoteUserStream(remoteId, kind);
             }
@@ -295,7 +298,7 @@ const useTransports = ({
           kind === StreamKind.EXTERNAL_VIDEO ||
           kind === StreamKind.EXTERNAL_AUDIO
         ) {
-          addExternalStream(remoteId, stream, kind);
+          addExternalStreamTrack(remoteId, stream, kind);
         } else {
           addRemoteUserStream(remoteId, stream, kind);
         }
@@ -308,13 +311,18 @@ const useTransports = ({
     [
       addRemoteUserStream,
       removeRemoteUserStream,
-      addExternalStream,
-      removeExternalStream
+      addExternalStreamTrack,
+      removeExternalStreamTrack
     ]
   );
 
   const consumeExistingProducers = useCallback(
-    async (routerRtpCapabilities: RtpCapabilities) => {
+    async (
+      routerRtpCapabilities: RtpCapabilities,
+      externalStreamTracks?: {
+        [streamId: number]: { audio?: boolean; video?: boolean };
+      }
+    ) => {
       logVoice('Consuming existing producers', { routerRtpCapabilities });
 
       const trpc = getTRPCClient();
@@ -324,14 +332,14 @@ const useTransports = ({
           remoteAudioIds,
           remoteScreenIds,
           remoteVideoIds,
-          remoteExternalAudioIds,
-          remoteExternalVideoIds
+          remoteExternalStreamIds
         } = await trpc.voice.getProducers.query();
 
         logVoice('Got existing producers', {
           remoteAudioIds,
           remoteScreenIds,
-          remoteVideoIds
+          remoteVideoIds,
+          remoteExternalStreamIds
         });
 
         remoteAudioIds.forEach((remoteId) => {
@@ -346,12 +354,15 @@ const useTransports = ({
           consume(remoteId, StreamKind.SCREEN, routerRtpCapabilities);
         });
 
-        remoteExternalAudioIds.forEach((remoteId) => {
-          consume(remoteId, StreamKind.EXTERNAL_AUDIO, routerRtpCapabilities);
-        });
+        remoteExternalStreamIds.forEach((streamId: number) => {
+          const tracks = externalStreamTracks?.[streamId];
 
-        remoteExternalVideoIds.forEach((remoteId) => {
-          consume(remoteId, StreamKind.EXTERNAL_VIDEO, routerRtpCapabilities);
+          if (tracks?.audio !== false) {
+            consume(streamId, StreamKind.EXTERNAL_AUDIO, routerRtpCapabilities);
+          }
+          if (tracks?.video !== false) {
+            consume(streamId, StreamKind.EXTERNAL_VIDEO, routerRtpCapabilities);
+          }
         });
       } catch (error) {
         logVoice('Error consuming existing producers', { error });

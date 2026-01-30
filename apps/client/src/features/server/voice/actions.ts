@@ -72,6 +72,20 @@ export const addExternalStreamToVoiceChannel = (
   );
 };
 
+export const updateExternalStreamInVoiceChannel = (
+  channelId: number,
+  streamId: number,
+  stream: TExternalStream
+): void => {
+  store.dispatch(
+    serverSliceActions.updateExternalStreamInChannel({
+      channelId,
+      streamId,
+      stream
+    })
+  );
+};
+
 export const removeExternalStreamFromVoiceChannel = (
   channelId: number,
   streamId: number

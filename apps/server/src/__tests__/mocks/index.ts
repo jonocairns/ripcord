@@ -17,7 +17,6 @@ const loadMockedPlugins = async () => {
 
     await fs.cp(src, dest, { recursive: true });
   }
-
 };
 
 const resetPluginMocks = async () => {

@@ -37,6 +37,12 @@ const onVoiceAddExternalStreamRoute = protectedProcedure.subscription(
   }
 );
 
+const onVoiceUpdateExternalStreamRoute = protectedProcedure.subscription(
+  async ({ ctx }) => {
+    return ctx.pubsub.subscribe(ServerEvents.VOICE_UPDATE_EXTERNAL_STREAM);
+  }
+);
+
 const onVoiceRemoveExternalStreamRoute = protectedProcedure.subscription(
   async ({ ctx }) => {
     return ctx.pubsub.subscribe(ServerEvents.VOICE_REMOVE_EXTERNAL_STREAM);
@@ -50,5 +56,6 @@ export {
   onVoiceAddExternalStreamRoute,
   onVoiceNewProducerRoute,
   onVoiceProducerClosedRoute,
-  onVoiceRemoveExternalStreamRoute
+  onVoiceRemoveExternalStreamRoute,
+  onVoiceUpdateExternalStreamRoute
 };
