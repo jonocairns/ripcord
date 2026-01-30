@@ -25,14 +25,33 @@ export const CommandSuggestion = {
       return commands.slice(0, 10);
     }
 
+    const lowerQuery = query.toLowerCase();
+
     return commands
       .filter(
         (c) =>
-          c.name.toLowerCase().startsWith(query.toLowerCase()) ||
-          c.pluginId.toLowerCase().startsWith(query.toLowerCase()) ||
-          (c.description &&
-            c.description.toLowerCase().includes(query.toLowerCase()))
+          c.name.toLowerCase().includes(lowerQuery) ||
+          c.pluginId.toLowerCase().startsWith(lowerQuery) ||
+          (c.description && c.description.toLowerCase().includes(lowerQuery))
       )
+      .sort((a, b) => {
+        const aName = a.name.toLowerCase();
+        const bName = b.name.toLowerCase();
+        const aStartsWith = aName.startsWith(lowerQuery);
+        const bStartsWith = bName.startsWith(lowerQuery);
+
+        // exact prefix match comes first
+        if (aStartsWith && !bStartsWith) return -1;
+        if (!aStartsWith && bStartsWith) return 1;
+
+        // if both start with query, shorter name comes first (more exact match)
+        if (aStartsWith && bStartsWith) {
+          return aName.length - bName.length;
+        }
+
+        // otherwise maintain original order
+        return 0;
+      })
       .slice(0, 10);
   },
   allowSpaces: true,

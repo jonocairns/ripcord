@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import Spinner from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -198,9 +199,8 @@ const PluginSettingsDialog = memo(
           case 'string':
           default:
             return (
-              <Input
+              <Textarea
                 id={inputId}
-                type="text"
                 value={String(currentValue ?? '')}
                 onChange={(e) => handleDraftChange(def.key, e.target.value)}
                 className="max-w-md"

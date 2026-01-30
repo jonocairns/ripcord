@@ -218,15 +218,11 @@ const ExternalStreamCard = memo(
         <div className="absolute bottom-0 left-0 right-0 p-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
           <div className="flex items-center gap-2 min-w-0">
             {stream.avatarUrl ? (
-              <Avatar className="size-5 flex-shrink-0">
-                <AvatarImage
-                  src={stream.avatarUrl}
-                  alt={stream.title || 'External Stream'}
-                />
-                <AvatarFallback className="bg-purple-500/30">
-                  <Router className="size-3 text-purple-400" />
-                </AvatarFallback>
-              </Avatar>
+              <img
+                src={stream.avatarUrl}
+                alt={stream.title || 'External Stream'}
+                className="h-5 flex-shrink-0 rounded-full"
+              />
             ) : (
               <Router className="size-3.5 text-purple-400 flex-shrink-0" />
             )}
