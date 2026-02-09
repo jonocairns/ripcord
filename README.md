@@ -13,6 +13,9 @@
 
 ## What is Sharkord?
 
+> [!NOTE]
+> Sharkord is in alpha stage. Bugs, incomplete features and breaking changes are to be expected.
+
 Sharkord is a self-hosted communication platform that brings the most important Discord-like features to your own infrastructure. Host voice channels, text chat, and file sharing on your terms—no third-party dependencies, complete data ownership, and full control over your group's communication.
 
 ## Wanna Try It Out?
@@ -22,9 +25,6 @@ Check out the Live Demo at [demo.sharkord.com](https://demo.sharkord.com). You c
 ## Getting Started
 
 Sharkord is distributed as a standalone binary that bundles both server and client components. Get started by downloading the latest release for your platform from the [Releases](https://github.com/Sharkord/sharkord/releases) page. We ship binaries for Windows, macOS, and Linux.
-
-> [!NOTE]
-> Sharkord is in alpha stage. Bugs, incomplete features and breaking changes are to be expected.
 
 #### Linux x64
 
