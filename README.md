@@ -48,6 +48,35 @@ docker run \
   sharkord/sharkord:latest
 ```
 
+##### Docker Compose
+
+There is an example `docker-compose.yaml` in [docs/docker/docker-compose.yaml](docs/docker/docker-compose.yaml).
+
+## Configuration File
+
+The config file is created at: `sharkord.ini`
+
+Edit the config to customize:
+- Server port
+- WebRTC port range 
+- Debug logging
+
+After editing config, restart the container:
+```bash
+docker-compose restart sharkord
+```
+
+## Environment Variables
+
+Common settings you might want to customize. These override config file values and are useful for Docker deployments:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SHARKORD_PORT` | `4991` | HTTP/WebSocket listen port |
+| `SHARKORD_DEBUG` | `false` | Enable verbose logging |
+| `SHARKORD_RTC_MIN_PORT` | `40000` | Minimum UDP port for WebRTC media |
+| `SHARKORD_RTC_MAX_PORT` | `40020` | Maximum UDP port for WebRTC media |
+
 #### Windows
 
 1. Download the latest `sharkord-windows-x64.exe` from the [Releases](https://github.com/sharkord/sharkord/releases/latest) page.
@@ -84,8 +113,6 @@ Upon first run, Sharkord will generate a default configuration file located at `
 | ------------- | ------- | ------------------------------------------------------------------------------------------- |
 | `port`        | `4991`  | The port number on which the server will listen for HTTP and WebSocket connections          |
 | `debug`       | `false` | Enable debug logging for detailed server logs and diagnostics                               |
-| `maxFiles`    | `40`    | Maximum number of files that can be uploaded in a single request                            |
-| `maxFileSize` | `100`   | Maximum file size in megabytes (MB) allowed per uploaded file                               |
 | `rtcMinPort`  | `40000` | Minimum UDP port for WebRTC media traffic (voice/video)                                     |
 | `rtcMaxPort`  | `40020` | Maximum UDP port for WebRTC media traffic (voice/video)                                     |
 | `autoupdate`  | `false` | When enabled, it will automatically check for and install updates with no user intervention |
