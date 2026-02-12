@@ -48,25 +48,9 @@ docker run \
   sharkord/sharkord:latest
 ```
 
-##### Docker Compose
+#### Docker Compose
 
 There is an example `docker-compose.yaml` in [docs/docker/docker-compose.yaml](docs/docker/docker-compose.yaml).
-
-## Configuration File
-
-The config file is created at: `sharkord.ini`
-
-Edit the config to customize:
-- Server port
-- WebRTC port range 
-- Debug logging
-
-After editing config, restart the container:
-```bash
-docker-compose restart sharkord
-```
-
-## Environment Variables
 
 Common settings you might want to customize. These override config file values and are useful for Docker deployments:
 
