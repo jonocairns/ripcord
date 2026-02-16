@@ -1,4 +1,4 @@
-const isEmptyMessage = (content: string): boolean => {
+const isEmptyMessage = (content: string | undefined | null): boolean => {
   if (!content) return true;
 
   // check if it has media (eg: emojis will be detected here)
