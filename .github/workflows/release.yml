@@ -72,7 +72,7 @@ jobs:
             ${{ secrets.DOCKER_USERNAME }}/sharkord:v${{ steps.get_version.outputs.version }}
           labels: |
             org.opencontainers.image.title=Sharkord
-            org.opencontainers.image.description=Sharkord Server
+            org.opencontainers.image.description=Sharkord
             org.opencontainers.image.version=${{ steps.get_version.outputs.version }}
             org.opencontainers.image.source=https://github.com/Sharkord/sharkord
 

@@ -5,6 +5,7 @@ import {
   VideoCodecPreference,
   VoiceFilterStrength
 } from '@/types';
+import { normalizePushKeybind } from './push-keybind';
 
 type TLegacyDeviceSettings = Partial<TDeviceSettings> & {
   shareSystemAudio?: boolean;
@@ -12,6 +13,8 @@ type TLegacyDeviceSettings = Partial<TDeviceSettings> & {
 
 const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
   microphoneId: undefined,
+  pushToTalkKeybind: undefined,
+  pushToMuteKeybind: undefined,
   webcamId: undefined,
   webcamResolution: Resolution['720p'],
   webcamFramerate: 30,
@@ -46,6 +49,13 @@ const migrateDeviceSettings = (
       : ScreenAudioMode.NONE;
   }
 
+  const pushToTalkKeybind = normalizePushKeybind(
+    incomingSettings.pushToTalkKeybind
+  );
+  const pushToMuteKeybind = normalizePushKeybind(
+    incomingSettings.pushToMuteKeybind
+  );
+
   return {
     ...DEFAULT_DEVICE_SETTINGS,
     ...incomingSettings,
@@ -67,7 +77,12 @@ const migrateDeviceSettings = (
     experimentalRustCapture:
       typeof incomingSettings.experimentalRustCapture === 'boolean'
         ? incomingSettings.experimentalRustCapture
-        : DEFAULT_DEVICE_SETTINGS.experimentalRustCapture
+        : DEFAULT_DEVICE_SETTINGS.experimentalRustCapture,
+    pushToTalkKeybind,
+    pushToMuteKeybind:
+      pushToMuteKeybind && pushToMuteKeybind === pushToTalkKeybind
+        ? undefined
+        : pushToMuteKeybind
   };
 };
 

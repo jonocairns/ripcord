@@ -37,6 +37,8 @@
               pkgs.pkgsCross.mingwW64.windows.mingw_w64_pthreads
             else
               null;
+          mingwPthreadLib =
+            if mingwPthreads != null then "${mingwPthreads}/lib/libpthread.a" else "";
         in
         {
           default = pkgs.mkShell {
@@ -86,24 +88,30 @@
               done
 
               pthread_src=""
-              for probe_dir in \
-                "$mingw_libdir" \
-                "$mingw_libdir/../lib" \
-                "$mingw_libdir/../../lib" \
-                "$mingw_root/x86_64-w64-mingw32/lib" \
-                "$mingw_root/lib" \
-                $gcc_search_dirs; do
-                [ -d "$probe_dir" ] || continue
-                for candidate_name in libpthread.a libwinpthread.a libwinpthread.dll.a; do
-                  candidate_path="$probe_dir/$candidate_name"
-                  if [ -f "$candidate_path" ]; then
-                    pthread_src="$candidate_path"
-                    break 2
-                  fi
-                done
-              done
+              if [ -f "${mingwPthreadLib}" ]; then
+                pthread_src="${mingwPthreadLib}"
+              fi
 
               if [ -z "$pthread_src" ]; then
+                for probe_dir in \
+                  "$mingw_libdir" \
+                  "$mingw_libdir/../lib" \
+                  "$mingw_libdir/../../lib" \
+                  "$mingw_root/x86_64-w64-mingw32/lib" \
+                  "$mingw_root/lib" \
+                  $gcc_search_dirs; do
+                  [ -d "$probe_dir" ] || continue
+                  for candidate_name in libpthread.a libwinpthread.a libwinpthread.dll.a; do
+                    candidate_path="$probe_dir/$candidate_name"
+                    if [ -f "$candidate_path" ]; then
+                      pthread_src="$candidate_path"
+                      break 2
+                    fi
+                  done
+                done
+              fi
+
+              if [ -z "$pthread_src" ] && [ "''${SHARKORD_ALLOW_NIX_STORE_SCAN:-0}" = "1" ]; then
                 pthread_src="$(find /nix/store -type f \
                   \( -name libpthread.a -o -name libwinpthread.a -o -name libwinpthread.dll.a \) \
                   2>/dev/null | head -n 1)"

@@ -41,7 +41,7 @@ const DesktopServerSetup = memo(() => {
         <CardHeader>
           <CardTitle>Desktop Setup</CardTitle>
           <CardDescription>
-            Enter the Sharkord server URL this desktop client should connect to.
+            Enter Sharkord URL this desktop client should connect to.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

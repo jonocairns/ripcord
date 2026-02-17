@@ -3,6 +3,9 @@ import type {
   TAppAudioFrame,
   TAppAudioSession,
   TAppAudioStatusEvent,
+  TDesktopPushKeybindEvent,
+  TDesktopPushKeybindsInput,
+  TGlobalPushKeybindRegistrationResult,
   TDesktopAppAudioTargetsResult,
   TScreenShareSelection,
   TStartAppAudioCaptureInput,
@@ -33,6 +36,10 @@ const desktopBridge = {
     ipcRenderer.invoke("desktop:start-voice-filter-session", input),
   stopVoiceFilterSession: (sessionId?: string): Promise<void> =>
     ipcRenderer.invoke("desktop:stop-voice-filter-session", sessionId),
+  setGlobalPushKeybinds: (
+    input: TDesktopPushKeybindsInput,
+  ): Promise<TGlobalPushKeybindRegistrationResult> =>
+    ipcRenderer.invoke("desktop:set-global-push-keybinds", input),
   pushVoiceFilterFrame: (frame: TVoiceFilterFrame): void => {
     ipcRenderer.send("desktop:push-voice-filter-frame", frame);
   },
@@ -82,6 +89,19 @@ const desktopBridge = {
 
     return () => {
       ipcRenderer.removeListener("desktop:voice-filter-status", listener);
+    };
+  },
+  subscribeGlobalPushKeybindEvents: (
+    callback: (event: TDesktopPushKeybindEvent) => void,
+  ) => {
+    const listener = (_ipcEvent: unknown, event: TDesktopPushKeybindEvent) => {
+      callback(event);
+    };
+
+    ipcRenderer.on("desktop:global-push-keybind", listener);
+
+    return () => {
+      ipcRenderer.removeListener("desktop:global-push-keybind", listener);
     };
   },
   prepareScreenShare: (selection: TScreenShareSelection) =>

@@ -136,3 +136,23 @@ export type TStartVoiceFilterInput = {
   channels: number;
   suppressionLevel: TVoiceFilterStrength;
 };
+
+export type TPushKeybindKind = "talk" | "mute";
+
+export type TDesktopPushKeybindsInput = {
+  pushToTalkKeybind?: string;
+  pushToMuteKeybind?: string;
+};
+
+export type TDesktopPushKeybindEvent = {
+  kind: TPushKeybindKind;
+  active: boolean;
+};
+
+export type TGlobalPushKeybindRegistrationResult = {
+  talkRegistered: boolean;
+  muteRegistered: boolean;
+  talkAccelerator?: string;
+  muteAccelerator?: string;
+  errors: string[];
+};

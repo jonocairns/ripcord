@@ -11,6 +11,8 @@ describe('migrateDeviceSettings', () => {
     expect(migrateDeviceSettings(undefined)).toEqual(DEFAULT_DEVICE_SETTINGS);
     expect(DEFAULT_DEVICE_SETTINGS.experimentalRustCapture).toBe(false);
     expect(DEFAULT_DEVICE_SETTINGS.experimentalVoiceFilter).toBe(false);
+    expect(DEFAULT_DEVICE_SETTINGS.pushToTalkKeybind).toBeUndefined();
+    expect(DEFAULT_DEVICE_SETTINGS.pushToMuteKeybind).toBeUndefined();
     expect(DEFAULT_DEVICE_SETTINGS.voiceFilterStrength).toBe(
       VoiceFilterStrength.BALANCED
     );
@@ -83,5 +85,31 @@ describe('migrateDeviceSettings', () => {
       videoCodec: VideoCodecPreference.AV1
     });
     expect(migrated.videoCodec).toBe(VideoCodecPreference.AV1);
+  });
+
+  it('normalizes push keybinds from legacy aliases', () => {
+    const migrated = migrateDeviceSettings({
+      pushToTalkKeybind: 'Ctrl+Shift+KeyV'
+    });
+
+    expect(migrated.pushToTalkKeybind).toBe('Control+Shift+KeyV');
+  });
+
+  it('drops invalid push keybind values', () => {
+    const migrated = migrateDeviceSettings({
+      pushToTalkKeybind: 'Control+Alt+Shift'
+    });
+
+    expect(migrated.pushToTalkKeybind).toBeUndefined();
+  });
+
+  it('drops duplicate push-to-mute keybinds', () => {
+    const migrated = migrateDeviceSettings({
+      pushToTalkKeybind: 'Control+KeyV',
+      pushToMuteKeybind: 'Control+KeyV'
+    });
+
+    expect(migrated.pushToTalkKeybind).toBe('Control+KeyV');
+    expect(migrated.pushToMuteKeybind).toBeUndefined();
   });
 });

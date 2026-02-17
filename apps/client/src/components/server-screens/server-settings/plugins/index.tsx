@@ -234,7 +234,7 @@ const Plugins = memo(() => {
           <div>
             <CardTitle>Plugins</CardTitle>
             <CardDescription>
-              Manage installed plugins and extend your Sharkord server with
+              Manage installed plugins and extend Sharkord with
               additional features and functionality.
             </CardDescription>
           </div>
@@ -265,7 +265,7 @@ const Plugins = memo(() => {
                 </h3>
                 <p className="text-sm text-muted-foreground max-w-sm">
                   Install plugins to add new features and extend the
-                  functionality of your Sharkord server.
+                  functionality of Sharkord.
                 </p>
               </div>
             ) : (

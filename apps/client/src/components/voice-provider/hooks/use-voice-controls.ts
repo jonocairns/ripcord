@@ -23,6 +23,10 @@ type TUseVoiceControlsParams = {
   requestScreenShareSelection?: () => Promise<TDesktopScreenShareSelection | null>;
 };
 
+type TSetMicMutedOptions = {
+  playSound?: boolean;
+};
+
 const useVoiceControls = ({
   startMicStream,
   localAudioStream,
@@ -35,39 +39,57 @@ const useVoiceControls = ({
   const ownVoiceState = useOwnVoiceState();
   const currentVoiceChannelId = useCurrentVoiceChannelId();
 
-  const toggleMic = useCallback(async () => {
-    const newState = !ownVoiceState.micMuted;
-    const trpc = getTRPCClient();
+  const setMicMuted = useCallback(
+    async (newState: boolean, options?: TSetMicMutedOptions) => {
+      if (newState === ownVoiceState.micMuted) {
+        return;
+      }
 
-    updateOwnVoiceState({ micMuted: newState });
-    playSound(
-      newState ? SoundType.OWN_USER_MUTED_MIC : SoundType.OWN_USER_UNMUTED_MIC
-    );
+      const shouldPlaySound = options?.playSound ?? true;
+      const trpc = getTRPCClient();
 
-    if (!currentVoiceChannelId) return;
+      updateOwnVoiceState({ micMuted: newState });
 
-    localAudioStream?.getAudioTracks().forEach((track) => {
-      track.enabled = !newState;
-    });
+      if (shouldPlaySound) {
+        playSound(
+          newState
+            ? SoundType.OWN_USER_MUTED_MIC
+            : SoundType.OWN_USER_UNMUTED_MIC
+        );
+      }
 
-    try {
-      await trpc.voice.updateState.mutate({
-        micMuted: newState
+      if (!currentVoiceChannelId) return;
+
+      localAudioStream?.getAudioTracks().forEach((track) => {
+        track.enabled = !newState;
       });
 
-      if (!localAudioStream && !newState) {
-        await startMicStream();
+      try {
+        await trpc.voice.updateState.mutate({
+          micMuted: newState
+        });
+
+        if (!localAudioStream && !newState) {
+          await startMicStream();
+        }
+      } catch (error) {
+        updateOwnVoiceState({ micMuted: !newState });
+        toast.error(getTrpcError(error, 'Failed to update microphone state'));
       }
-    } catch (error) {
-      updateOwnVoiceState({ micMuted: !newState });
-      toast.error(getTrpcError(error, 'Failed to update microphone state'));
-    }
-  }, [
-    ownVoiceState.micMuted,
-    startMicStream,
-    currentVoiceChannelId,
-    localAudioStream
-  ]);
+    },
+    [
+      ownVoiceState.micMuted,
+      currentVoiceChannelId,
+      localAudioStream,
+      startMicStream
+    ]
+  );
+
+  const toggleMic = useCallback(async () => {
+    const newState = !ownVoiceState.micMuted;
+
+    await setMicMuted(newState, { playSound: true });
+  }, [ownVoiceState.micMuted, setMicMuted]);
 
   const toggleSound = useCallback(async () => {
     const newState = !ownVoiceState.soundMuted;
@@ -200,6 +222,7 @@ const useVoiceControls = ({
   ]);
 
   return {
+    setMicMuted,
     toggleMic,
     toggleSound,
     toggleWebcam,

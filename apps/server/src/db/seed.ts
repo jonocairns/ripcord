@@ -42,9 +42,9 @@ const seedDatabase = async () => {
   const originalToken = IS_DEVELOPMENT ? 'dev' : randomUUIDv7();
 
   const initialSettings: TISettings = {
-    name: 'sharkord Server',
+    name: 'sharkord',
     description:
-      'This is the default Sharkord server description. Change me in the server settings!',
+      'This is the default Sharkord description. Change me in the server settings!',
     password: '',
     serverId: Bun.randomUUIDv7(),
     secretToken: await sha256(originalToken),

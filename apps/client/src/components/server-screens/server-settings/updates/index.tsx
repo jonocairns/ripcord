@@ -33,7 +33,7 @@ const Updates = memo(() => {
       <CardHeader>
         <CardTitle>Updates</CardTitle>
         <CardDescription>
-          Check for and install updates to keep your Sharkord server running
+          Check for and install updates to keep Sharkord running
           with the latest features and security improvements.
         </CardDescription>
       </CardHeader>

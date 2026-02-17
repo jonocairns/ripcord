@@ -1,4 +1,8 @@
 import { useDevices } from '@/components/devices-provider/hooks/use-devices';
+import {
+  formatPushKeybindLabel,
+  pushKeybindFromKeyState
+} from '@/components/devices-provider/push-keybind';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -31,12 +35,13 @@ import {
 import { ScreenAudioMode } from '@/runtime/types';
 import { Resolution, VideoCodecPreference, VoiceFilterStrength } from '@/types';
 import { Info } from 'lucide-react';
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useAvailableDevices } from './hooks/use-available-devices';
 import ResolutionFpsControl from './resolution-fps-control';
 
 const DEFAULT_NAME = 'default';
+type TPushKeybindField = 'pushToTalkKeybind' | 'pushToMuteKeybind';
 
 const Devices = memo(() => {
   const hasDesktopBridge =
@@ -53,6 +58,9 @@ const Devices = memo(() => {
     getRuntimeServerConfig().serverUrl
   );
   const [savingServerUrl, setSavingServerUrl] = useState(false);
+  const [capturingKeybindField, setCapturingKeybindField] = useState<
+    TPushKeybindField | undefined
+  >(undefined);
 
   const saveDeviceSettings = useCallback(() => {
     saveDevices(values);
@@ -75,6 +83,81 @@ const Devices = memo(() => {
       setSavingServerUrl(false);
     }
   }, [desktopServerUrl]);
+
+  const clearPushKeybind = useCallback(
+    (field: TPushKeybindField) => {
+      onChange(field, undefined);
+
+      if (capturingKeybindField === field) {
+        setCapturingKeybindField(undefined);
+      }
+    },
+    [capturingKeybindField, onChange]
+  );
+
+  const startPushKeybindCapture = useCallback(
+    (field: TPushKeybindField) => {
+      if (!hasDesktopBridge) {
+        return;
+      }
+
+      setCapturingKeybindField(field);
+    },
+    [hasDesktopBridge]
+  );
+
+  useEffect(() => {
+    if (!capturingKeybindField || !hasDesktopBridge) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.code === 'Escape') {
+        setCapturingKeybindField(undefined);
+        return;
+      }
+
+      const nextKeybind = pushKeybindFromKeyState({
+        code: event.code,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+        metaKey: event.metaKey
+      });
+
+      if (!nextKeybind) {
+        return;
+      }
+
+      const conflictingKeybind =
+        capturingKeybindField === 'pushToTalkKeybind'
+          ? values.pushToMuteKeybind
+          : values.pushToTalkKeybind;
+
+      if (conflictingKeybind && conflictingKeybind === nextKeybind) {
+        toast.error('Push-to-talk and push-to-mute cannot use the same keybind');
+        return;
+      }
+
+      onChange(capturingKeybindField, nextKeybind);
+      setCapturingKeybindField(undefined);
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [
+    capturingKeybindField,
+    hasDesktopBridge,
+    onChange,
+    values.pushToMuteKeybind,
+    values.pushToTalkKeybind
+  ]);
 
   if (availableDevicesLoading || devicesLoading) {
     return <LoadingCard className="h-[600px]" />;
@@ -188,6 +271,68 @@ const Devices = memo(() => {
               </SelectContent>
             </Select>
           </Group>
+          {hasDesktopBridge && (
+            <Group label="Push keybinds (Desktop)">
+              <div className="w-[500px] space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-28 text-sm">Push to talk</span>
+                  <Button
+                    variant="outline"
+                    type="button"
+                    className="min-w-[220px] justify-start font-mono"
+                    data-push-keybind-capture={
+                      capturingKeybindField === 'pushToTalkKeybind'
+                        ? 'true'
+                        : undefined
+                    }
+                    onClick={() => startPushKeybindCapture('pushToTalkKeybind')}
+                  >
+                    {capturingKeybindField === 'pushToTalkKeybind'
+                      ? 'Press keys...'
+                      : formatPushKeybindLabel(values.pushToTalkKeybind)}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    onClick={() => clearPushKeybind('pushToTalkKeybind')}
+                    disabled={!values.pushToTalkKeybind}
+                  >
+                    Clear
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-28 text-sm">Push to mute</span>
+                  <Button
+                    variant="outline"
+                    type="button"
+                    className="min-w-[220px] justify-start font-mono"
+                    data-push-keybind-capture={
+                      capturingKeybindField === 'pushToMuteKeybind'
+                        ? 'true'
+                        : undefined
+                    }
+                    onClick={() => startPushKeybindCapture('pushToMuteKeybind')}
+                  >
+                    {capturingKeybindField === 'pushToMuteKeybind'
+                      ? 'Press keys...'
+                      : formatPushKeybindLabel(values.pushToMuteKeybind)}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    onClick={() => clearPushKeybind('pushToMuteKeybind')}
+                    disabled={!values.pushToMuteKeybind}
+                  >
+                    Clear
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Hold the configured key to temporarily unmute (push to talk) or
+                  mute (push to mute). Press Escape while capturing to cancel.
+                </p>
+              </div>
+            </Group>
+          )}
         </Group>
 
         <Group label="Webcam">

@@ -135,6 +135,26 @@ export type TStartVoiceFilterInput = {
   suppressionLevel: TVoiceFilterStrength;
 };
 
+export type TPushKeybindKind = 'talk' | 'mute';
+
+export type TDesktopPushKeybindsInput = {
+  pushToTalkKeybind?: string;
+  pushToMuteKeybind?: string;
+};
+
+export type TDesktopPushKeybindEvent = {
+  kind: TPushKeybindKind;
+  active: boolean;
+};
+
+export type TGlobalPushKeybindRegistrationResult = {
+  talkRegistered: boolean;
+  muteRegistered: boolean;
+  talkAccelerator?: string;
+  muteAccelerator?: string;
+  errors: string[];
+};
+
 export type TDesktopBridge = {
   getServerUrl: () => Promise<string>;
   setServerUrl: (serverUrl: string) => Promise<void>;
@@ -154,6 +174,9 @@ export type TDesktopBridge = {
     input: TStartVoiceFilterInput
   ) => Promise<TVoiceFilterSession>;
   stopVoiceFilterSession: (sessionId?: string) => Promise<void>;
+  setGlobalPushKeybinds: (
+    input: TDesktopPushKeybindsInput
+  ) => Promise<TGlobalPushKeybindRegistrationResult>;
   pushVoiceFilterFrame: (frame: TVoiceFilterFrame) => void;
   subscribeAppAudioFrames: (cb: (frame: TAppAudioFrame) => void) => () => void;
   subscribeAppAudioStatus: (
@@ -164,6 +187,9 @@ export type TDesktopBridge = {
   ) => () => void;
   subscribeVoiceFilterStatus: (
     cb: (statusEvent: TVoiceFilterStatusEvent) => void
+  ) => () => void;
+  subscribeGlobalPushKeybindEvents: (
+    cb: (event: TDesktopPushKeybindEvent) => void
   ) => () => void;
   prepareScreenShare: (
     selection: TDesktopScreenShareSelection

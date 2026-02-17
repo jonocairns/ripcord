@@ -50,6 +50,8 @@ export enum VoiceFilterStrength {
 
 export type TDeviceSettings = {
   microphoneId: string | undefined;
+  pushToTalkKeybind: string | undefined;
+  pushToMuteKeybind: string | undefined;
   webcamId: string | undefined;
   webcamResolution: Resolution;
   webcamFramerate: number;

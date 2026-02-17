@@ -1,4 +1,6 @@
 import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
+import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
+import { useChannelCan } from '@/features/server/hooks';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { useOwnVoiceState } from '@/features/server/voice/hooks';
@@ -13,7 +15,11 @@ import {
   type TDesktopScreenShareSelection
 } from '@/runtime/types';
 import { VideoCodecPreference } from '@/types';
-import { StreamKind, type TVoiceUserState } from '@sharkord/shared';
+import {
+  ChannelPermission,
+  StreamKind,
+  type TVoiceUserState
+} from '@sharkord/shared';
 import { Device } from 'mediasoup-client';
 import type {
   RtpCapabilities,
@@ -30,6 +36,7 @@ import {
 } from 'react';
 import { toast } from 'sonner';
 import { useDevices } from '../devices-provider/hooks/use-devices';
+import { matchesPushKeybind } from '../devices-provider/push-keybind';
 import {
   createDesktopAppAudioPipeline,
   type TDesktopAppAudioPipeline
@@ -95,6 +102,26 @@ const resolvePreferredVideoCodec = (
   });
 };
 
+const isEditableTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const tagName = target.tagName.toLowerCase();
+
+  return (
+    target.isContentEditable || tagName === 'input' || tagName === 'textarea'
+  );
+};
+
+const isPushKeybindCaptureTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(target.closest('[data-push-keybind-capture="true"]'));
+};
+
 export type TVoiceProvider = {
   loading: boolean;
   connectionStatus: ConnectionStatus;
@@ -143,6 +170,7 @@ const VoiceProviderContext = createContext<TVoiceProvider>({
     externalVideoRef: { current: null }
   }),
   init: () => Promise.resolve(),
+  setMicMuted: () => Promise.resolve(),
   toggleMic: () => Promise.resolve(),
   toggleSound: () => Promise.resolve(),
   toggleWebcam: () => Promise.resolve(),
@@ -175,6 +203,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   const sendRtpCapabilities = useRef<RtpCapabilities | null>(null);
   const audioVideoRefsMap = useRef<Map<number, AudioVideoRefs>>(new Map());
   const ownVoiceState = useOwnVoiceState();
+  const currentVoiceChannelId = useCurrentVoiceChannelId();
+  const channelCan = useChannelCan(currentVoiceChannelId);
   const { devices } = useDevices();
   const appAudioPipelineRef = useRef<TDesktopAppAudioPipeline | undefined>(
     undefined
@@ -199,6 +229,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   const standbyDisplayAudioStreamRef = useRef<MediaStream | undefined>(
     undefined
   );
+  const isPushToTalkHeldRef = useRef(false);
+  const isPushToMuteHeldRef = useRef(false);
+  const micMutedBeforePushRef = useRef<boolean | undefined>(undefined);
 
   const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
     if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -1034,7 +1067,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     ]
   );
 
-  const { toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =
+  const { setMicMuted, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =
     useVoiceControls({
       startMicStream,
       localAudioStream,
@@ -1046,6 +1079,264 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         ? requestDesktopScreenShareSelection
         : undefined
     });
+
+  const setMicMutedRef = useRef(setMicMuted);
+  const ownMicMutedRef = useRef(ownVoiceState.micMuted);
+  const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
+  const canSpeakRef = useRef(channelCan(ChannelPermission.SPEAK));
+
+  useEffect(() => {
+    setMicMutedRef.current = setMicMuted;
+  }, [setMicMuted]);
+
+  useEffect(() => {
+    ownMicMutedRef.current = ownVoiceState.micMuted;
+  }, [ownVoiceState.micMuted]);
+
+  useEffect(() => {
+    currentVoiceChannelIdRef.current = currentVoiceChannelId;
+    canSpeakRef.current = channelCan(ChannelPermission.SPEAK);
+  }, [channelCan, currentVoiceChannelId]);
+
+  const applyPushMicOverride = useCallback(() => {
+    if (isPushToMuteHeldRef.current) {
+      void setMicMutedRef.current(true, { playSound: false });
+      return;
+    }
+
+    if (isPushToTalkHeldRef.current) {
+      void setMicMutedRef.current(false, { playSound: false });
+      return;
+    }
+
+    if (typeof micMutedBeforePushRef.current === 'boolean') {
+      void setMicMutedRef.current(micMutedBeforePushRef.current, {
+        playSound: false
+      });
+    }
+
+    micMutedBeforePushRef.current = undefined;
+  }, []);
+
+  useEffect(() => {
+    const desktopBridge = getDesktopBridge();
+
+    if (!desktopBridge) {
+      return;
+    }
+
+    void desktopBridge
+      .setGlobalPushKeybinds({
+        pushToTalkKeybind: devices.pushToTalkKeybind,
+        pushToMuteKeybind: devices.pushToMuteKeybind
+      })
+      .then((result) => {
+        if (result.errors.length > 0) {
+          logVoice('Global push keybind registration issues', result);
+          toast.warning(result.errors[0]);
+        }
+      })
+      .catch((error) => {
+        logVoice('Failed to register global push keybinds', { error });
+      });
+
+    const removeGlobalKeybindSubscription =
+      desktopBridge.subscribeGlobalPushKeybindEvents((event) => {
+        if (
+          currentVoiceChannelIdRef.current === undefined ||
+          !canSpeakRef.current
+        ) {
+          if (event.kind === 'talk') {
+            isPushToTalkHeldRef.current = false;
+          }
+
+          if (event.kind === 'mute') {
+            isPushToMuteHeldRef.current = false;
+          }
+
+          applyPushMicOverride();
+          return;
+        }
+
+        if (
+          !isPushToTalkHeldRef.current &&
+          !isPushToMuteHeldRef.current &&
+          event.active &&
+          micMutedBeforePushRef.current === undefined
+        ) {
+          micMutedBeforePushRef.current = ownMicMutedRef.current;
+        }
+
+        if (event.kind === 'talk') {
+          isPushToTalkHeldRef.current = event.active;
+        }
+
+        if (event.kind === 'mute') {
+          isPushToMuteHeldRef.current = event.active;
+        }
+
+        applyPushMicOverride();
+      });
+
+    return () => {
+      removeGlobalKeybindSubscription();
+      isPushToTalkHeldRef.current = false;
+      isPushToMuteHeldRef.current = false;
+      applyPushMicOverride();
+      void desktopBridge.setGlobalPushKeybinds({}).catch((error) => {
+        logVoice('Failed to clear global push keybinds', { error });
+      });
+    };
+  }, [
+    applyPushMicOverride,
+    devices.pushToMuteKeybind,
+    devices.pushToTalkKeybind
+  ]);
+
+  useEffect(() => {
+    if (
+      currentVoiceChannelId === undefined ||
+      !channelCan(ChannelPermission.SPEAK)
+    ) {
+      isPushToTalkHeldRef.current = false;
+      isPushToMuteHeldRef.current = false;
+      applyPushMicOverride();
+    }
+  }, [applyPushMicOverride, channelCan, currentVoiceChannelId]);
+
+  useEffect(() => {
+    const isDesktopRuntime =
+      typeof window !== 'undefined' && Boolean(window.sharkordDesktop);
+    const hasPushKeybinds = Boolean(
+      devices.pushToTalkKeybind || devices.pushToMuteKeybind
+    );
+
+    if (!isDesktopRuntime || !hasPushKeybinds) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isPushToTalkKey = matchesPushKeybind(
+        {
+          code: event.code,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          shiftKey: event.shiftKey,
+          metaKey: event.metaKey
+        },
+        devices.pushToTalkKeybind
+      );
+      const isPushToMuteKey = matchesPushKeybind(
+        {
+          code: event.code,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          shiftKey: event.shiftKey,
+          metaKey: event.metaKey
+        },
+        devices.pushToMuteKeybind
+      );
+
+      if (!isPushToTalkKey && !isPushToMuteKey) {
+        return;
+      }
+
+      if (
+        isEditableTarget(event.target) ||
+        isPushKeybindCaptureTarget(event.target) ||
+        currentVoiceChannelIdRef.current === undefined ||
+        !canSpeakRef.current
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.repeat) {
+        return;
+      }
+
+      if (
+        !isPushToTalkHeldRef.current &&
+        !isPushToMuteHeldRef.current &&
+        micMutedBeforePushRef.current === undefined
+      ) {
+        micMutedBeforePushRef.current = ownMicMutedRef.current;
+      }
+
+      if (isPushToTalkKey) {
+        isPushToTalkHeldRef.current = true;
+      }
+
+      if (isPushToMuteKey) {
+        isPushToMuteHeldRef.current = true;
+      }
+
+      applyPushMicOverride();
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      const isPushToTalkKey = matchesPushKeybind(
+        {
+          code: event.code,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          shiftKey: event.shiftKey,
+          metaKey: event.metaKey
+        },
+        devices.pushToTalkKeybind
+      );
+      const isPushToMuteKey = matchesPushKeybind(
+        {
+          code: event.code,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          shiftKey: event.shiftKey,
+          metaKey: event.metaKey
+        },
+        devices.pushToMuteKeybind
+      );
+
+      if (!isPushToTalkKey && !isPushToMuteKey) {
+        return;
+      }
+
+      if (isPushToTalkKey) {
+        isPushToTalkHeldRef.current = false;
+      }
+
+      if (isPushToMuteKey) {
+        isPushToMuteHeldRef.current = false;
+      }
+
+      applyPushMicOverride();
+    };
+
+    const onWindowBlur = () => {
+      isPushToTalkHeldRef.current = false;
+      isPushToMuteHeldRef.current = false;
+      applyPushMicOverride();
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
+    window.addEventListener('blur', onWindowBlur);
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
+      window.removeEventListener('blur', onWindowBlur);
+
+      isPushToTalkHeldRef.current = false;
+      isPushToMuteHeldRef.current = false;
+      applyPushMicOverride();
+    };
+  }, [
+    applyPushMicOverride,
+    devices.pushToMuteKeybind,
+    devices.pushToTalkKeybind
+  ]);
 
   useVoiceEvents({
     consume,
@@ -1073,6 +1364,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       getOrCreateRefs,
       init,
 
+      setMicMuted,
       toggleMic,
       toggleSound,
       toggleWebcam,
@@ -1094,6 +1386,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       getOrCreateRefs,
       init,
 
+      setMicMuted,
       toggleMic,
       toggleSound,
       toggleWebcam,
