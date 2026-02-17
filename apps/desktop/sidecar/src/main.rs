@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
+use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -30,15 +31,17 @@ use windows::Win32::Media::Audio::{
     IActivateAudioInterfaceCompletionHandler, IAudioCaptureClient, IAudioClient,
     AUDIOCLIENT_ACTIVATION_PARAMS,
     AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_NOPERSIST,
+    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_E_INVALID_STREAM_FLAG,
+    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
     AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
     VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX,
 };
 #[cfg(windows)]
 use windows::Win32::System::Com::{
-    StructuredStorage::InitPropVariantFromBuffer, CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED,
+    CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED,
 };
+#[cfg(windows)]
+use windows::Win32::System::Variant::VT_BLOB;
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_NAME_WIN32,
@@ -134,6 +137,28 @@ impl CaptureEndReason {
             Self::AppExited => "app_exited",
             Self::CaptureError => "capture_error",
             Self::DeviceLost => "device_lost",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CaptureOutcome {
+    reason: CaptureEndReason,
+    error: Option<String>,
+}
+
+impl CaptureOutcome {
+    fn from_reason(reason: CaptureEndReason) -> Self {
+        Self {
+            reason,
+            error: None,
+        }
+    }
+
+    fn capture_error(error: String) -> Self {
+        Self {
+            reason: CaptureEndReason::CaptureError,
+            error: Some(error),
         }
     }
 }
@@ -577,19 +602,31 @@ fn activate_process_loopback_client(target_pid: u32) -> Result<IAudioClient, Str
         },
     };
 
-    let activation_prop = unsafe {
-        InitPropVariantFromBuffer(
-            (&mut activation_params as *mut AUDIOCLIENT_ACTIVATION_PARAMS).cast::<c_void>(),
-            std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
-        )
-        .map_err(|error| format!("InitPropVariantFromBuffer failed: {error}"))?
+    let activation_prop = windows_core::imp::PROPVARIANT {
+        Anonymous: windows_core::imp::PROPVARIANT_0 {
+            Anonymous: windows_core::imp::PROPVARIANT_0_0 {
+                vt: VT_BLOB.0,
+                wReserved1: 0,
+                wReserved2: 0,
+                wReserved3: 0,
+                Anonymous: windows_core::imp::PROPVARIANT_0_0_0 {
+                    blob: windows_core::imp::BLOB {
+                        cbSize: size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
+                        pBlobData: (&mut activation_params as *mut AUDIOCLIENT_ACTIVATION_PARAMS)
+                            .cast::<u8>(),
+                    },
+                },
+            },
+        },
     };
+    let activation_prop_ptr =
+        (&activation_prop as *const windows_core::imp::PROPVARIANT).cast::<windows_core::PROPVARIANT>();
 
     let operation = unsafe {
         ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&activation_prop as *const windows_core::PROPVARIANT),
+            Some(activation_prop_ptr),
             &callback,
         )
         .map_err(|error| format!("ActivateAudioInterfaceAsync failed: {error}"))?
@@ -616,9 +653,15 @@ fn activate_process_loopback_client(target_pid: u32) -> Result<IAudioClient, Str
             .map_err(|error| format!("GetActivateResult failed: {error}"))?
     };
 
-    activate_result
-        .ok()
-        .map_err(|error| format!("Activation returned failure HRESULT: {error}"))?;
+    activate_result.ok().map_err(|error| {
+        if error.code().0 == -2147024809 {
+            return format!(
+                "Activation returned failure HRESULT: {error}. Process loopback activation payload was rejected."
+            );
+        }
+
+        format!("Activation returned failure HRESULT: {error}")
+    })?;
 
     activated_interface
         .ok_or_else(|| "Activation returned no interface".to_string())?
@@ -633,10 +676,10 @@ fn capture_loopback_audio(
     target_pid: u32,
     stop_flag: Arc<AtomicBool>,
     frame_queue: Arc<FrameQueue>,
-) -> CaptureEndReason {
+) -> CaptureOutcome {
     let process_handle = match open_process_for_liveness(target_pid) {
         Some(handle) => handle,
-        None => return CaptureEndReason::AppExited,
+        None => return CaptureOutcome::from_reason(CaptureEndReason::AppExited),
     };
 
     let com_initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
@@ -656,7 +699,7 @@ fn capture_loopback_audio(
         let init_result = unsafe {
             audio_client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_NOPERSIST
+                AUDCLNT_STREAMFLAGS_LOOPBACK
                     | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
                     | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
                 20 * 10_000,
@@ -667,6 +710,11 @@ fn capture_loopback_audio(
         };
 
         if let Err(error) = init_result {
+            if error.code() == AUDCLNT_E_INVALID_STREAM_FLAG {
+                return Err(format!(
+                    "Failed to initialize loopback client: {error} (invalid stream flags for process loopback)"
+                ));
+            }
             return Err(format!("Failed to initialize loopback client: {error}"));
         }
 
@@ -781,8 +829,14 @@ fn capture_loopback_audio(
     }
 
     match reason {
-        Ok(value) => value,
-        Err(_) => CaptureEndReason::CaptureError,
+        Ok(value) => CaptureOutcome::from_reason(value),
+        Err(error) => {
+            eprintln!(
+                "[capture-sidecar] capture error targetId={} targetPid={}: {}",
+                target_id, target_pid, error
+            );
+            CaptureOutcome::capture_error(error)
+        }
     }
 }
 
@@ -793,8 +847,8 @@ fn capture_loopback_audio(
     _target_pid: u32,
     _stop_flag: Arc<AtomicBool>,
     _frame_queue: Arc<FrameQueue>,
-) -> CaptureEndReason {
-    CaptureEndReason::CaptureError
+) -> CaptureOutcome {
+    CaptureOutcome::capture_error("Per-app audio capture is only available on Windows.".to_string())
 }
 
 fn start_capture_thread(
@@ -806,7 +860,7 @@ fn start_capture_thread(
     stop_flag: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let reason = capture_loopback_audio(
+        let outcome = capture_loopback_audio(
             &session_id,
             &target_id,
             target_pid,
@@ -814,15 +868,21 @@ fn start_capture_thread(
             Arc::clone(&frame_queue),
         );
 
+        let mut ended_params = json!({
+            "sessionId": session_id,
+            "targetId": target_id,
+            "reason": outcome.reason.as_str(),
+            "protocolVersion": PROTOCOL_VERSION,
+        });
+
+        if let Some(error) = outcome.error {
+            ended_params["error"] = json!(error);
+        }
+
         write_event(
             &stdout,
             "audio_capture.ended",
-            json!({
-                "sessionId": session_id,
-                "targetId": target_id,
-                "reason": reason.as_str(),
-                "protocolVersion": PROTOCOL_VERSION,
-            }),
+            ended_params,
         );
     })
 }
@@ -936,6 +996,12 @@ fn handle_audio_capture_start(
     }
 
     let session_id = Uuid::new_v4().to_string();
+    let target_process_name =
+        process_name_from_pid(target_pid).unwrap_or_else(|| "unknown.exe".to_string());
+    eprintln!(
+        "[capture-sidecar] start session={} targetId={} targetPid={} targetProcess={}",
+        session_id, target_id, target_pid, target_process_name
+    );
     let stop_flag = Arc::new(AtomicBool::new(false));
     let handle = start_capture_thread(
         stdout,

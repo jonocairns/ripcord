@@ -115,7 +115,7 @@
                 extra_link_dir="$pthread_libdir"
 
                 if [ "$pthread_basename" != "libpthread.a" ]; then
-                  pthread_dir="${TMPDIR:-/tmp}/sharkord-mingw-lib"
+                  pthread_dir="''${TMPDIR:-/tmp}/sharkord-mingw-lib"
                   mkdir -p "$pthread_dir"
                   ln -sf "$pthread_src" "$pthread_dir/libpthread.a"
                   extra_link_dir="$pthread_dir"

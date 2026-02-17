@@ -150,6 +150,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   const removeAppAudioStatusSubscriptionRef = useRef<(() => void) | undefined>(
     undefined
   );
+  const appAudioStartupTimeoutRef = useRef<
+    ReturnType<typeof window.setTimeout> | undefined
+  >(undefined);
   const standbyDisplayAudioTrackRef = useRef<MediaStreamTrack | undefined>(
     undefined
   );
@@ -400,6 +403,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       preserveCurrentAudio?: boolean;
     } = {}) => {
       const desktopBridge = getDesktopBridge();
+      const startupTimeout = appAudioStartupTimeoutRef.current;
+      if (startupTimeout !== undefined) {
+        window.clearTimeout(startupTimeout);
+        appAudioStartupTimeoutRef.current = undefined;
+      }
 
       removeAppAudioFrameSubscriptionRef.current?.();
       removeAppAudioFrameSubscriptionRef.current = undefined;
@@ -428,54 +436,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       }
     },
     [setLocalScreenShareAudio]
-  );
-
-  const activateDisplayAudioFallback = useCallback(
-    async (reason: TAppAudioStatusEvent['reason']) => {
-      const standbyTrack = standbyDisplayAudioTrackRef.current;
-
-      if (!standbyTrack || standbyTrack.readyState !== 'live') {
-        return false;
-      }
-
-      const standbyStream =
-        standbyDisplayAudioStreamRef.current || new MediaStream([standbyTrack]);
-      standbyDisplayAudioStreamRef.current = standbyStream;
-
-      localScreenShareAudioProducer.current?.close();
-      localScreenShareAudioProducer.current = undefined;
-
-      const producer = await producerTransport.current?.produce({
-        track: standbyTrack,
-        appData: { kind: StreamKind.SCREEN_AUDIO }
-      });
-
-      if (!producer) {
-        return false;
-      }
-
-      localScreenShareAudioProducer.current = producer;
-      setLocalScreenShareAudio(standbyStream);
-
-      standbyTrack.onended = () => {
-        localScreenShareAudioProducer.current?.close();
-        localScreenShareAudioProducer.current = undefined;
-        setLocalScreenShareAudio(undefined);
-        standbyDisplayAudioTrackRef.current = undefined;
-        standbyDisplayAudioStreamRef.current = undefined;
-      };
-
-      toast.warning(
-        `Per-app audio ended (${reason}). Switched to system audio fallback.`
-      );
-
-      return true;
-    },
-    [
-      localScreenShareAudioProducer,
-      producerTransport,
-      setLocalScreenShareAudio
-    ]
   );
 
   const stopScreenShareStream = useCallback(() => {
@@ -569,19 +529,68 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           devices.experimentalRustCapture
         ) {
           try {
+            logVoice('Starting per-app sidecar capture', {
+              sourceId: desktopSelection.sourceId,
+              appAudioTargetId: desktopSelection.appAudioTargetId
+            });
             const appAudioSession = await desktopBridge.startAppAudioCapture({
               sourceId: desktopSelection.sourceId,
               appAudioTargetId: desktopSelection.appAudioTargetId
             });
+            logVoice('Per-app sidecar capture started', {
+              sessionId: appAudioSession.sessionId,
+              targetId: appAudioSession.targetId
+            });
             const appAudioPipeline =
               await createDesktopAppAudioPipeline(appAudioSession);
+            let hasReceivedSessionFrame = false;
 
             appAudioSessionRef.current = appAudioSession;
             appAudioPipelineRef.current = appAudioPipeline;
 
+            const startupTimeout = window.setTimeout(() => {
+              if (
+                hasReceivedSessionFrame ||
+                appAudioSessionRef.current?.sessionId !== appAudioSession.sessionId
+              ) {
+                return;
+              }
+
+              logVoice('Per-app sidecar produced no audio frames after startup', {
+                sessionId: appAudioSession.sessionId,
+                targetId: appAudioSession.targetId
+              });
+              toast.warning(
+                'Per-app audio started but produced no audio frames. Screen video will continue without shared audio.'
+              );
+              localScreenShareAudioProducer.current?.close();
+              localScreenShareAudioProducer.current = undefined;
+              setLocalScreenShareAudio(undefined);
+              void cleanupDesktopAppAudio({
+                stopCapture: true,
+                preserveCurrentAudio: false
+              });
+            }, 3000);
+            appAudioStartupTimeoutRef.current = startupTimeout;
+
             removeAppAudioFrameSubscriptionRef.current?.();
             removeAppAudioFrameSubscriptionRef.current =
               desktopBridge.subscribeAppAudioFrames((frame) => {
+                if (frame.sessionId === appAudioSession.sessionId) {
+                  if (!hasReceivedSessionFrame) {
+                    logVoice('Received first per-app audio frame', {
+                      sessionId: frame.sessionId,
+                      targetId: frame.targetId
+                    });
+                  }
+
+                  hasReceivedSessionFrame = true;
+
+                  if (appAudioStartupTimeoutRef.current !== undefined) {
+                    window.clearTimeout(appAudioStartupTimeoutRef.current);
+                    appAudioStartupTimeoutRef.current = undefined;
+                  }
+                }
                 appAudioPipelineRef.current?.pushFrame(frame);
               });
 
@@ -589,6 +598,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
             removeAppAudioStatusSubscriptionRef.current =
               desktopBridge.subscribeAppAudioStatus(
                 (statusEvent: TAppAudioStatusEvent) => {
+                  logVoice('Received per-app sidecar status event', {
+                    sessionId: statusEvent.sessionId,
+                    targetId: statusEvent.targetId,
+                    reason: statusEvent.reason,
+                    error: statusEvent.error
+                  });
                   if (
                     statusEvent.sessionId !== appAudioSessionRef.current?.sessionId
                   ) {
@@ -596,22 +611,22 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                   }
 
                   void (async () => {
-                    const switched = await activateDisplayAudioFallback(
-                      statusEvent.reason
-                    );
-
-                    if (!switched) {
-                      toast.warning(
-                        'Per-app audio capture ended and no fallback audio is available. Screen video will continue without shared audio.'
-                      );
-                      localScreenShareAudioProducer.current?.close();
-                      localScreenShareAudioProducer.current = undefined;
-                      setLocalScreenShareAudio(undefined);
+                    if (appAudioStartupTimeoutRef.current !== undefined) {
+                      window.clearTimeout(appAudioStartupTimeoutRef.current);
+                      appAudioStartupTimeoutRef.current = undefined;
                     }
+                    toast.warning(
+                      statusEvent.error
+                        ? `Per-app audio capture ended (${statusEvent.reason}): ${statusEvent.error}`
+                        : `Per-app audio capture ended (${statusEvent.reason}). Screen video will continue without shared audio.`
+                    );
+                    localScreenShareAudioProducer.current?.close();
+                    localScreenShareAudioProducer.current = undefined;
+                    setLocalScreenShareAudio(undefined);
 
                     await cleanupDesktopAppAudio({
                       stopCapture: false,
-                      preserveCurrentAudio: switched
+                      preserveCurrentAudio: false
                     });
                   })();
                 }
@@ -619,16 +634,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           } catch (error) {
             logVoice('Failed to start per-app sidecar audio capture', { error });
             toast.warning(
-              'Per-app audio capture failed. Falling back to system audio.'
+              'Per-app audio capture failed. Continuing without shared audio.'
             );
             await cleanupDesktopAppAudio();
-            audioMode = ScreenAudioMode.SYSTEM;
+            audioMode = ScreenAudioMode.NONE;
           }
         }
 
-        const shouldCaptureDisplayAudio =
-          audioMode === ScreenAudioMode.SYSTEM ||
-          audioMode === ScreenAudioMode.APP;
+        // Electron main only provides display-capture audio in system mode.
+        // Requesting audio in per-app mode can abort capture startup.
+        const shouldCaptureDisplayAudio = audioMode === ScreenAudioMode.SYSTEM;
 
         stream = await navigator.mediaDevices.getDisplayMedia({
           video: {
@@ -651,8 +666,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         const audioTrack = stream.getAudioTracks()[0];
 
         if (audioMode === ScreenAudioMode.APP && audioTrack) {
-          standbyDisplayAudioTrackRef.current = audioTrack;
-          standbyDisplayAudioStreamRef.current = new MediaStream([audioTrack]);
+          audioTrack.stop();
+          stream.removeTrack(audioTrack);
+          standbyDisplayAudioTrackRef.current = undefined;
+          standbyDisplayAudioStreamRef.current = undefined;
         } else {
           standbyDisplayAudioTrackRef.current = undefined;
           standbyDisplayAudioStreamRef.current = undefined;
@@ -757,7 +774,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     },
     [
       cleanupDesktopAppAudio,
-      activateDisplayAudioFallback,
       setLocalScreenShare,
       localScreenShareProducer,
       localScreenShareAudioProducer,

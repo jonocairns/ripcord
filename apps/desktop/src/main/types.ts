@@ -93,5 +93,6 @@ export type TAppAudioStatusEvent = {
   sessionId: string;
   targetId: string;
   reason: TAppAudioEndReason;
+  error?: string;
   protocolVersion?: number;
 };
