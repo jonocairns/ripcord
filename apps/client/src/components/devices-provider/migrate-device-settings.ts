@@ -14,6 +14,7 @@ const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
   noiseSuppression: false,
   autoGainControl: true,
   screenAudioMode: ScreenAudioMode.SYSTEM,
+  experimentalRustCapture: false,
   mirrorOwnVideo: false,
   screenResolution: Resolution['720p'],
   screenFramerate: 30
@@ -40,7 +41,11 @@ const migrateDeviceSettings = (
   return {
     ...DEFAULT_DEVICE_SETTINGS,
     ...incomingSettings,
-    screenAudioMode: screenAudioMode || ScreenAudioMode.SYSTEM
+    screenAudioMode: screenAudioMode || ScreenAudioMode.SYSTEM,
+    experimentalRustCapture:
+      typeof incomingSettings.experimentalRustCapture === 'boolean'
+        ? incomingSettings.experimentalRustCapture
+        : DEFAULT_DEVICE_SETTINGS.experimentalRustCapture
   };
 };
 

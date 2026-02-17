@@ -7,6 +7,8 @@ import {
   shell,
 } from "electron";
 import path from "path";
+import { resolveDesktopCaptureCapabilities } from "./capture-capabilities";
+import { captureSidecarManager } from "./capture-sidecar-manager";
 import {
   getDesktopCapabilities,
   resolveScreenAudioMode,
@@ -18,10 +20,24 @@ import {
   prepareScreenShareSelection,
 } from "./screen-share";
 import { getServerUrl, setServerUrl } from "./settings-store";
-import type { TScreenShareSelection } from "./types";
+import type { TScreenShareSelection, TStartAppAudioCaptureInput } from "./types";
 
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
 let mainWindow: BrowserWindow | null = null;
+
+const getEffectiveDesktopCapabilities = async (
+  experimentalRustCapture = true,
+) => {
+  const baseCapabilities = getDesktopCapabilities();
+  const sidecarStatus = await captureSidecarManager.getStatus();
+
+  return resolveDesktopCaptureCapabilities({
+    baseCapabilities,
+    sidecarAvailable: sidecarStatus.available,
+    sidecarReason: sidecarStatus.reason,
+    experimentalRustCapture,
+  });
+};
 
 const createMainWindow = () => {
   mainWindow = new BrowserWindow({
@@ -61,6 +77,10 @@ const createMainWindow = () => {
     "index.html",
   );
   void mainWindow.loadFile(indexPath);
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
 };
 
 const setupDisplayMediaHandler = () => {
@@ -89,12 +109,8 @@ const setupDisplayMediaHandler = () => {
             return;
           }
 
-          const capabilities = getDesktopCapabilities();
-          const resolved = resolveScreenAudioMode(
-            pendingSelection.audioMode,
-            capabilities,
-          );
-          const shouldShareAudio = resolved.effectiveMode !== "none";
+          // In hybrid v1 we keep display media audio only for system mode.
+          const shouldShareAudio = pendingSelection.audioMode === "system";
 
           callback({
             video: source,
@@ -127,8 +143,35 @@ const registerIpcHandlers = () => {
     },
   );
 
-  ipcMain.handle("desktop:get-capabilities", () => {
-    return getDesktopCapabilities();
+  ipcMain.handle(
+    "desktop:get-capabilities",
+    (_event: IpcMainInvokeEvent, options?: { experimentalRustCapture?: boolean }) => {
+      return getEffectiveDesktopCapabilities(
+        options?.experimentalRustCapture ?? true,
+      );
+    },
+  );
+
+  ipcMain.handle("desktop:list-app-audio-targets", (_event, sourceId?: string) => {
+    return captureSidecarManager.listAppAudioTargets(sourceId);
+  });
+
+  ipcMain.handle(
+    "desktop:start-app-audio-capture",
+    (_event, input: TStartAppAudioCaptureInput) => {
+      return captureSidecarManager.startAppAudioCapture(input);
+    },
+  );
+
+  ipcMain.handle(
+    "desktop:stop-app-audio-capture",
+    (_event, sessionId?: string) => {
+      return captureSidecarManager.stopAppAudioCapture(sessionId);
+    },
+  );
+
+  ipcMain.handle("desktop:ping-sidecar", () => {
+    return captureSidecarManager.getStatus();
   });
 
   ipcMain.handle("desktop:list-share-sources", () => {
@@ -137,16 +180,37 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle(
     "desktop:prepare-screen-share",
-    (_event: IpcMainInvokeEvent, selection: TScreenShareSelection) => {
-      const capabilities = getDesktopCapabilities();
-      const resolved = resolveScreenAudioMode(
+    async (_event: IpcMainInvokeEvent, selection: TScreenShareSelection) => {
+      const capabilities = await getEffectiveDesktopCapabilities(
+        selection.experimentalRustCapture ?? true,
+      );
+      let resolved = resolveScreenAudioMode(
         selection.audioMode,
         capabilities,
       );
 
+      if (
+        resolved.effectiveMode === "app" &&
+        selection.sourceId.startsWith("screen:") &&
+        !selection.appAudioTargetId
+      ) {
+        const fallbackMode =
+          capabilities.systemAudio === "unsupported" ? "none" : "system";
+
+        resolved = {
+          requestedMode: selection.audioMode,
+          effectiveMode: fallbackMode,
+          warning:
+            fallbackMode === "none"
+              ? "Per-app audio requires selecting a target app. Continuing without shared audio."
+              : "Per-app audio requires selecting a target app. Falling back to system audio.",
+        };
+      }
+
       prepareScreenShareSelection({
         sourceId: selection.sourceId,
         audioMode: resolved.effectiveMode,
+        appAudioTargetId: selection.appAudioTargetId,
       });
 
       return resolved;
@@ -157,6 +221,13 @@ const registerIpcHandlers = () => {
 void app
   .whenReady()
   .then(() => {
+    captureSidecarManager.onFrame((frame) => {
+      mainWindow?.webContents.send("desktop:app-audio-frame", frame);
+    });
+    captureSidecarManager.onStatus((event) => {
+      mainWindow?.webContents.send("desktop:app-audio-status", event);
+    });
+
     registerIpcHandlers();
     setupDisplayMediaHandler();
     createMainWindow();
@@ -175,4 +246,8 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  void captureSidecarManager.dispose();
 });

@@ -221,6 +221,17 @@ const Devices = memo(() => {
               onChange('screenResolution', value as Resolution)
             }
           />
+
+          {window.sharkordDesktop && (
+            <Group label="Use Rust sidecar capture (Experimental)">
+              <Switch
+                checked={!!values.experimentalRustCapture}
+                onCheckedChange={(checked) =>
+                  onChange('experimentalRustCapture', checked)
+                }
+              />
+            </Group>
+          )}
         </Group>
         {window.sharkordDesktop && (
           <Group label="Desktop Server URL">

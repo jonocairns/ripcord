@@ -43,6 +43,7 @@ export type TDeviceSettings = {
   noiseSuppression: boolean;
   autoGainControl: boolean;
   screenAudioMode: ScreenAudioMode;
+  experimentalRustCapture: boolean;
   mirrorOwnVideo: boolean;
   screenResolution: Resolution;
   screenFramerate: number;

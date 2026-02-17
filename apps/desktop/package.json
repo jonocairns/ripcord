@@ -8,12 +8,14 @@
   ],
   "main": "dist/main/index.cjs",
   "scripts": {
-    "dev": "concurrently -k \"cd ../client && bun run dev\" \"bun run dev:main\" \"bun run dev:electron\"",
+    "dev": "bun run build:sidecar:optional && concurrently -k \"cd ../client && bun run dev\" \"bun run dev:main\" \"bun run dev:electron\"",
     "dev:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --sourcemap --watch --clean",
     "dev:electron": "wait-on tcp:5173 file:dist/main/index.cjs && cross-env ELECTRON_RENDERER_URL=http://localhost:5173 electronmon .",
+    "build:sidecar": "node ./scripts/build-sidecar.mjs --release",
+    "build:sidecar:optional": "node ./scripts/build-sidecar.mjs --release --optional",
     "build:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --clean",
     "prepare:renderer": "node ./scripts/prepare-renderer-dist.mjs",
-    "build": "cd ../client && bun run build && cd ../desktop && bun run prepare:renderer && bun run build:main && bun run package:preview",
+    "build": "cd ../client && bun run build && cd ../desktop && bun run prepare:renderer && bun run build:sidecar && bun run build:main && bun run package:preview",
     "package:preview": "electron-builder --dir",
     "format": "prettier --write \"src/**/*.ts\" \"scripts/**/*.mjs\"",
     "check-types": "bun run typecheck",
@@ -32,6 +34,15 @@
       "dist/**/*",
       "renderer-dist/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "sidecar/bin",
+        "to": "sidecar/bin",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "mac": {
       "target": [

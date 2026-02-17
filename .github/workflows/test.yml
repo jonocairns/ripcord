@@ -24,3 +24,19 @@ jobs:
       - name: Run server tests
         working-directory: apps/server
         run: bun test
+
+  sidecar-windows:
+    name: Sidecar (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Rust sidecar
+        working-directory: apps/desktop/sidecar
+        run: cargo build --release
+
+      - name: Run Rust sidecar tests
+        working-directory: apps/desktop/sidecar
+        run: cargo test

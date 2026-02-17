@@ -29,3 +29,21 @@ When shared audio cannot be captured on the current platform or environment:
 1. Sharkord continues with screen video if possible.
 2. A non-blocking warning is shown.
 3. You can switch audio mode to `No shared audio` to suppress audio capture attempts.
+
+## Rust sidecar capture (Windows experimental)
+
+Per-app audio isolation depends on the Rust sidecar binary.
+
+1. In desktop development mode, run `bun run build:sidecar` in `apps/desktop`.
+2. In app settings, enable `Use Rust sidecar capture (Experimental)`.
+3. Use Windows 10 22H2 or newer (Windows 11 recommended) for the best loopback compatibility.
+4. If startup fails, Sharkord falls back to system audio (or no audio) and displays a warning.
+
+### Fallback matrix (audioMode = Per-app)
+
+1. Sidecar startup fails before sharing:
+   Sharkord falls back to `System audio` when available, otherwise `No shared audio`.
+2. Target app exits during sharing:
+   Sharkord keeps screen video active and switches to standby system audio.
+3. Capture device lost/error:
+   Sharkord keeps screen video active and switches to standby system audio if available, otherwise no audio.

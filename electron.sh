@@ -13,6 +13,9 @@ if [ ! -d "$ROOT_DIR/apps/desktop/node_modules" ]; then
   exit 1
 fi
 
+echo "Preparing optional Rust capture sidecar..."
+(cd "$ROOT_DIR/apps/desktop" && bun run build:sidecar:optional) || true
+
 SERVER_CMD='bun run dev'
 CLIENT_CMD='bun run dev'
 DESKTOP_MAIN_CMD='bun run dev:main'

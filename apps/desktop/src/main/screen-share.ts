@@ -11,6 +11,7 @@ const prepareScreenShareSelection = (selection: TScreenShareSelection) => {
   preparedScreenShare = {
     sourceId: selection.sourceId,
     audioMode: selection.audioMode,
+    appAudioTargetId: selection.appAudioTargetId,
   };
 };
 
