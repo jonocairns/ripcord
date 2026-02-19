@@ -229,30 +229,4 @@ const backfillDefaultRolePermissions = async () => {
     .onConflictDoNothing();
 };
 
-const backfillDevelopmentSharkordAccess = async () => {
-  if (!IS_DEVELOPMENT) return;
-
-  const sharkordUser = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.identity, 'sharkord'))
-    .limit(1)
-    .get();
-
-  if (!sharkordUser) return;
-
-  await db
-    .insert(userRoles)
-    .values({
-      userId: sharkordUser.id,
-      roleId: OWNER_ROLE_ID,
-      createdAt: Date.now()
-    })
-    .onConflictDoNothing();
-};
-
-export {
-  backfillDefaultRolePermissions,
-  backfillDevelopmentSharkordAccess,
-  seedDatabase
-};
+export { backfillDefaultRolePermissions, seedDatabase };

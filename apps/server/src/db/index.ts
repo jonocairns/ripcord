@@ -2,11 +2,7 @@ import { Database } from 'bun:sqlite';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
 import { DB_PATH, DRIZZLE_PATH } from '../helpers/paths';
-import {
-  backfillDefaultRolePermissions,
-  backfillDevelopmentSharkordAccess,
-  seedDatabase
-} from './seed';
+import { backfillDefaultRolePermissions, seedDatabase } from './seed';
 
 let db: BunSQLiteDatabase;
 
@@ -20,7 +16,6 @@ const loadDb = async () => {
   await migrate(db, { migrationsFolder: DRIZZLE_PATH });
   await seedDatabase();
   await backfillDefaultRolePermissions();
-  await backfillDevelopmentSharkordAccess();
 };
 
 export { db, loadDb };
