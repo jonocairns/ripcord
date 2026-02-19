@@ -4,6 +4,8 @@ import {
   type IpcMainEvent,
   type IpcMainInvokeEvent,
   ipcMain,
+  MessageChannelMain,
+  type MessagePortMain,
   session,
   shell,
 } from "electron";
@@ -31,10 +33,12 @@ import type {
   TStartAppAudioCaptureInput,
   TStartVoiceFilterInput,
   TVoiceFilterFrame,
+  TVoiceFilterPcmFrame,
 } from "./types";
 
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
 let mainWindow: BrowserWindow | null = null;
+let voiceFilterFrameIngressPort: MessagePortMain | undefined;
 
 if (process.platform === "win32") {
   app.setAppUserModelId("com.sharkord.desktop");
@@ -61,9 +65,7 @@ const setGlobalPushKeybinds = async (
   return await captureSidecarManager.setPushKeybinds(input || {});
 };
 
-const getEffectiveDesktopCapabilities = async (
-  experimentalRustCapture = true,
-) => {
+const getEffectiveDesktopCapabilities = async () => {
   const baseCapabilities = getDesktopCapabilities();
   const sidecarStatus = await captureSidecarManager.getStatus();
 
@@ -71,7 +73,6 @@ const getEffectiveDesktopCapabilities = async (
     baseCapabilities,
     sidecarAvailable: sidecarStatus.available,
     sidecarReason: sidecarStatus.reason,
-    experimentalRustCapture,
   });
 };
 
@@ -186,10 +187,8 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle(
     "desktop:get-capabilities",
-    (_event: IpcMainInvokeEvent, options?: { experimentalRustCapture?: boolean }) => {
-      return getEffectiveDesktopCapabilities(
-        options?.experimentalRustCapture ?? true,
-      );
+    (_event: IpcMainInvokeEvent) => {
+      return getEffectiveDesktopCapabilities();
     },
   );
 
@@ -239,6 +238,106 @@ const registerIpcHandlers = () => {
     },
   );
 
+  ipcMain.on("desktop:open-voice-filter-frame-channel", (event: IpcMainEvent) => {
+    const { port1, port2 } = new MessageChannelMain();
+    if (voiceFilterFrameIngressPort) {
+      try {
+        voiceFilterFrameIngressPort.close();
+      } catch {
+        // ignore
+      }
+      voiceFilterFrameIngressPort.removeAllListeners();
+    }
+    voiceFilterFrameIngressPort = port2;
+
+    port2.on("message", (portEvent) => {
+      const data = portEvent.data as
+        | {
+            sessionId?: unknown;
+            sequence?: unknown;
+            sampleRate?: unknown;
+            channels?: unknown;
+            frameCount?: unknown;
+            protocolVersion?: unknown;
+            pcmBuffer?: unknown;
+            pcmByteOffset?: unknown;
+            pcmByteLength?: unknown;
+          }
+        | undefined;
+
+      if (!data || typeof data !== "object") {
+        return;
+      }
+
+      const {
+        sessionId,
+        sequence,
+        sampleRate,
+        channels,
+        frameCount,
+        protocolVersion,
+        pcmBuffer,
+        pcmByteOffset,
+        pcmByteLength,
+      } = data;
+
+      if (
+        typeof sessionId !== "string" ||
+        typeof sequence !== "number" ||
+        typeof sampleRate !== "number" ||
+        typeof channels !== "number" ||
+        typeof frameCount !== "number" ||
+        !(pcmBuffer instanceof ArrayBuffer)
+      ) {
+        return;
+      }
+
+      const byteOffset =
+        typeof pcmByteOffset === "number" && Number.isInteger(pcmByteOffset)
+          ? pcmByteOffset
+          : 0;
+      const byteLength =
+        typeof pcmByteLength === "number" && Number.isInteger(pcmByteLength)
+          ? pcmByteLength
+          : pcmBuffer.byteLength;
+
+      if (
+        byteOffset < 0 ||
+        byteLength <= 0 ||
+        byteOffset + byteLength > pcmBuffer.byteLength ||
+        byteLength % Float32Array.BYTES_PER_ELEMENT !== 0
+      ) {
+        return;
+      }
+
+      const frame: TVoiceFilterPcmFrame = {
+        sessionId,
+        sequence,
+        sampleRate,
+        channels,
+        frameCount,
+        protocolVersion: typeof protocolVersion === "number" ? protocolVersion : 1,
+        pcm: new Float32Array(
+          pcmBuffer,
+          byteOffset,
+          byteLength / Float32Array.BYTES_PER_ELEMENT,
+        ),
+      };
+
+      captureSidecarManager.pushVoiceFilterPcmFrame(frame);
+    });
+
+    port2.on("close", () => {
+      if (voiceFilterFrameIngressPort === port2) {
+        voiceFilterFrameIngressPort = undefined;
+      }
+      port2.removeAllListeners();
+    });
+
+    port2.start();
+    event.sender.postMessage("desktop:voice-filter-frame-channel-ready", null, [port1]);
+  });
+
   ipcMain.handle("desktop:ping-sidecar", () => {
     return captureSidecarManager.getStatus();
   });
@@ -263,9 +362,7 @@ const registerIpcHandlers = () => {
   ipcMain.handle(
     "desktop:prepare-screen-share",
     async (_event: IpcMainInvokeEvent, selection: TScreenShareSelection) => {
-      const capabilities = await getEffectiveDesktopCapabilities(
-        selection.experimentalRustCapture ?? true,
-      );
+      const capabilities = await getEffectiveDesktopCapabilities();
       let resolved = resolveScreenAudioMode(
         selection.audioMode,
         capabilities,
@@ -344,6 +441,16 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  if (voiceFilterFrameIngressPort) {
+    try {
+      voiceFilterFrameIngressPort.close();
+    } catch {
+      // ignore
+    }
+    voiceFilterFrameIngressPort.removeAllListeners();
+    voiceFilterFrameIngressPort = undefined;
+  }
+
   desktopUpdater.dispose();
   void captureSidecarManager.dispose();
 });

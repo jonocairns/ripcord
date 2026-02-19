@@ -183,7 +183,7 @@ const ScreenShareCard = memo(
         <video
           ref={screenShareRef}
           autoPlay
-          muted
+          muted={isOwnUser}
           playsInline
           className="absolute inset-0 w-full h-full object-contain bg-black"
           style={{

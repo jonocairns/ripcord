@@ -8,8 +8,20 @@ type TDesktopAppAudioPipeline = {
   destroy: () => Promise<void>;
 };
 
+type TDesktopAppAudioPipelineMode = 'low-latency' | 'stable';
+
+type TDesktopAppAudioPipelineOptions = {
+  mode?: TDesktopAppAudioPipelineMode;
+  logLabel?: string;
+  insertSilenceOnDroppedFrames?: boolean;
+};
+
 const WORKLET_NAME = 'sharkord-pcm-queue-processor';
-const WORKLET_MAX_CHUNKS = 50;
+const LOW_LATENCY_TARGET_CHUNKS = 4;
+const LOW_LATENCY_MAX_CHUNKS = 8;
+const STABLE_TARGET_CHUNKS = 12;
+const STABLE_MAX_CHUNKS = 24;
+const MAX_RECOVERABLE_DROPPED_FRAMES = 50;
 let workletModuleUrl: string | undefined;
 
 const WORKLET_SOURCE = `
@@ -17,18 +29,38 @@ class PcmQueueProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
     this.channels = Math.max(1, options.processorOptions?.channels || 2);
-    this.maxChunks = Math.max(1, options.processorOptions?.maxChunks || 50);
+    this.targetChunks = Math.max(
+      1,
+      options.processorOptions?.targetChunks || 4
+    );
+    this.maxChunks = Math.max(1, options.processorOptions?.maxChunks || 8);
+    this.trimQueueForLowLatency = options.processorOptions?.trimQueueForLowLatency !== false;
     this.queue = [];
     this.currentChunk = null;
     this.chunkFrameOffset = 0;
     this.overflownChunks = 0;
+    this.trimmedChunks = 0;
 
     this.port.onmessage = (event) => {
       const data = event.data || {};
       if (data.type === 'pcm' && data.samples) {
-        if (this.queue.length >= this.maxChunks) {
+        while (this.queue.length >= this.maxChunks) {
           this.queue.shift();
           this.overflownChunks += 1;
+        }
+
+        // Keep the queue shallow to reduce perceived A/V lag for per-app audio.
+        // This intentionally prefers dropping oldest audio over accumulating delay.
+        while (this.trimQueueForLowLatency && this.queue.length >= this.targetChunks) {
+          this.queue.shift();
+          this.trimmedChunks += 1;
+        }
+
+        if (this.trimmedChunks > 0 && this.trimmedChunks % 10 === 0) {
+          this.port.postMessage({
+            type: 'queue-trim',
+            trimmedChunks: this.trimmedChunks
+          });
         }
 
         this.queue.push(data.samples);
@@ -47,6 +79,7 @@ class PcmQueueProcessor extends AudioWorkletProcessor {
         this.currentChunk = null;
         this.chunkFrameOffset = 0;
         this.overflownChunks = 0;
+        this.trimmedChunks = 0;
       }
     };
   }
@@ -131,10 +164,21 @@ const ensureWorkletModule = async (audioContext: AudioContext) => {
 };
 
 const createDesktopAppAudioPipeline = async (
-  session: TAppAudioSession
+  session: TAppAudioSession,
+  options?: TDesktopAppAudioPipelineOptions
 ): Promise<TDesktopAppAudioPipeline> => {
+  const mode = options?.mode || 'low-latency';
+  const logLabel = options?.logLabel || 'desktop-app-audio';
+  const insertSilenceOnDroppedFrames =
+    options?.insertSilenceOnDroppedFrames ?? false;
+  const targetChunks =
+    mode === 'stable' ? STABLE_TARGET_CHUNKS : LOW_LATENCY_TARGET_CHUNKS;
+  const maxChunks = mode === 'stable' ? STABLE_MAX_CHUNKS : LOW_LATENCY_MAX_CHUNKS;
+  const trimQueueForLowLatency = mode === 'low-latency';
+
   const audioContext = new AudioContext({
-    sampleRate: session.sampleRate
+    sampleRate: session.sampleRate,
+    latencyHint: 'interactive'
   });
 
   await ensureWorkletModule(audioContext);
@@ -147,7 +191,9 @@ const createDesktopAppAudioPipeline = async (
     outputChannelCount: [outputChannels],
     processorOptions: {
       channels: outputChannels,
-      maxChunks: WORKLET_MAX_CHUNKS
+      targetChunks,
+      maxChunks,
+      trimQueueForLowLatency
     }
   });
 
@@ -157,7 +203,12 @@ const createDesktopAppAudioPipeline = async (
     const data = event.data;
 
     if (data?.type === 'queue-overflow') {
-      console.warn('[desktop-app-audio] PCM queue overflow', data);
+      console.warn(`[${logLabel}] PCM queue overflow`, data);
+      return;
+    }
+
+    if (data?.type === 'queue-trim') {
+      console.warn(`[${logLabel}] PCM queue trimmed for low latency`, data);
     }
   };
 
@@ -182,7 +233,7 @@ const createDesktopAppAudioPipeline = async (
 
       if (frame.protocolVersion !== 1) {
         console.warn(
-          '[desktop-app-audio] Unsupported app audio protocol version',
+          `[${logLabel}] Unsupported app audio protocol version`,
           frame.protocolVersion
         );
         return;
@@ -190,16 +241,41 @@ const createDesktopAppAudioPipeline = async (
 
       if (frame.encoding !== 'f32le_base64') {
         console.warn(
-          '[desktop-app-audio] Unsupported app audio frame encoding',
+          `[${logLabel}] Unsupported app audio frame encoding`,
           frame.encoding
         );
         return;
       }
 
-      if (frame.droppedFrameCount && frame.droppedFrameCount > 0) {
-        console.warn('[desktop-app-audio] Sidecar dropped frames', {
-          droppedFrameCount: frame.droppedFrameCount
+      const droppedFrameCount = frame.droppedFrameCount || 0;
+      if (droppedFrameCount > 0) {
+        console.warn(`[${logLabel}] Sidecar dropped frames`, {
+          droppedFrameCount
         });
+
+        if (insertSilenceOnDroppedFrames) {
+          const recoverableDroppedFrames = Math.min(
+            droppedFrameCount,
+            MAX_RECOVERABLE_DROPPED_FRAMES
+          );
+          const silenceFrameCount = recoverableDroppedFrames * frame.frameCount;
+          const silence = new Float32Array(silenceFrameCount * outputChannels);
+
+          workletNode.port.postMessage(
+            {
+              type: 'pcm',
+              samples: silence
+            },
+            [silence.buffer]
+          );
+
+          if (recoverableDroppedFrames !== droppedFrameCount) {
+            console.warn(`[${logLabel}] Dropped frame recovery was capped`, {
+              droppedFrameCount,
+              recoverableDroppedFrames
+            });
+          }
+        }
       }
 
       const samples = decodePcmBase64(frame.pcmBase64);
@@ -228,4 +304,8 @@ const createDesktopAppAudioPipeline = async (
 };
 
 export { createDesktopAppAudioPipeline };
-export type { TDesktopAppAudioPipeline };
+export type {
+  TDesktopAppAudioPipeline,
+  TDesktopAppAudioPipelineMode,
+  TDesktopAppAudioPipelineOptions
+};

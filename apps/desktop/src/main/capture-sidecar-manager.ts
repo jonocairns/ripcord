@@ -1,6 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import EventEmitter from "node:events";
 import fs from "node:fs";
+import { createConnection, type Socket } from "node:net";
 import path from "node:path";
 import type {
   TAppAudioFrame,
@@ -13,6 +14,7 @@ import type {
   TStartAppAudioCaptureInput,
   TStartVoiceFilterInput,
   TVoiceFilterFrame,
+  TVoiceFilterPcmFrame,
   TVoiceFilterSession,
   TVoiceFilterStatusEvent,
 } from "./types";
@@ -42,6 +44,12 @@ type TSidecarStatus = {
   reason?: string;
 };
 
+type TVoiceFilterBinaryIngressInfo = {
+  port: number;
+  framing?: string;
+  protocolVersion?: number;
+};
+
 type TCaptureSidecarManagerOptions = {
   restartDelayMs?: number;
   resolveBinaryPath?: () => string | undefined;
@@ -52,6 +60,9 @@ const SIDECAR_BINARY_NAME =
   process.platform === "win32"
     ? "sharkord-capture-sidecar.exe"
     : "sharkord-capture-sidecar";
+const BINARY_VOICE_FILTER_INGRESS_HOST = "127.0.0.1";
+const BINARY_VOICE_FILTER_CONNECT_TIMEOUT_MS = 1_000;
+const MAX_BINARY_VOICE_FILTER_FRAME_SIZE_BYTES = 4 * 1024 * 1024;
 
 const runtimeRequire: NodeJS.Require | undefined =
   typeof require === "function" ? require : undefined;
@@ -106,6 +117,9 @@ class CaptureSidecarManager {
   private shuttingDown = false;
   private restartTimer: NodeJS.Timeout | undefined;
   private lastKnownError: string | undefined;
+  private voiceFilterBinarySocket: Socket | undefined;
+  private voiceFilterBinaryConnectPromise: Promise<void> | undefined;
+  private nextVoiceFilterBinaryRetryAt = 0;
   private readonly events = new EventEmitter();
   private readonly restartDelayMs: number;
   private readonly resolveBinaryPathOverride: (() => string | undefined) | undefined;
@@ -218,6 +232,9 @@ class CaptureSidecarManager {
     const response = await this.sendRequest("voice_filter.start", input);
     const session = response as TVoiceFilterSession;
     this.activeVoiceFilterSessionId = session.sessionId;
+    void this.ensureVoiceFilterBinaryIngress().catch((error) => {
+      console.warn("[desktop] Failed to initialize binary voice filter ingress", error);
+    });
 
     return session;
   }
@@ -248,6 +265,30 @@ class CaptureSidecarManager {
     });
   }
 
+  pushVoiceFilterPcmFrame(frame: TVoiceFilterPcmFrame): void {
+    const expectedSampleCount = frame.frameCount * frame.channels;
+    if (frame.pcm.length !== expectedSampleCount) {
+      console.warn("[desktop] Dropping malformed PCM voice filter frame", {
+        sessionId: frame.sessionId,
+        sequence: frame.sequence,
+        expectedSampleCount,
+        actualSampleCount: frame.pcm.length,
+      });
+      return;
+    }
+
+    if (this.tryPushVoiceFilterBinaryFrame(frame)) {
+      return;
+    }
+
+    if (Date.now() >= this.nextVoiceFilterBinaryRetryAt) {
+      void this.ensureVoiceFilterBinaryIngress().catch(() => {
+        this.nextVoiceFilterBinaryRetryAt = Date.now() + 3_000;
+      });
+    }
+    this.pushVoiceFilterFrame(this.toBase64VoiceFilterFrame(frame));
+  }
+
   async setPushKeybinds(
     input: TDesktopPushKeybindsInput,
   ): Promise<TGlobalPushKeybindRegistrationResult> {
@@ -262,6 +303,7 @@ class CaptureSidecarManager {
 
     await this.stopAppAudioCapture();
     await this.stopVoiceFilterSession();
+    this.closeVoiceFilterBinarySocket();
 
     if (this.sidecarProcess && !this.sidecarProcess.killed) {
       this.sidecarProcess.kill();
@@ -429,6 +471,7 @@ class CaptureSidecarManager {
   private handleSidecarExit(reason: string) {
     this.sidecarProcess = undefined;
     this.lastKnownError = reason;
+    this.closeVoiceFilterBinarySocket();
 
     for (const pendingRequest of this.pendingRequests.values()) {
       clearTimeout(pendingRequest.timeout);
@@ -540,6 +583,210 @@ class CaptureSidecarManager {
         this.pushKeybindActiveState[pushEvent.kind] = pushEvent.active;
         this.events.emit("push-keybind", pushEvent);
       }
+    }
+  }
+
+  private toBase64VoiceFilterFrame(frame: TVoiceFilterPcmFrame): TVoiceFilterFrame {
+    const pcmBytes = Buffer.from(
+      frame.pcm.buffer,
+      frame.pcm.byteOffset,
+      frame.pcm.byteLength,
+    );
+
+    return {
+      sessionId: frame.sessionId,
+      sequence: frame.sequence,
+      sampleRate: frame.sampleRate,
+      channels: frame.channels,
+      frameCount: frame.frameCount,
+      pcmBase64: pcmBytes.toString("base64"),
+      protocolVersion: frame.protocolVersion,
+      encoding: "f32le_base64",
+    };
+  }
+
+  private closeVoiceFilterBinarySocket() {
+    if (!this.voiceFilterBinarySocket) {
+      return;
+    }
+
+    this.voiceFilterBinarySocket.removeAllListeners();
+    this.voiceFilterBinarySocket.destroy();
+    this.voiceFilterBinarySocket = undefined;
+  }
+
+  private async ensureVoiceFilterBinaryIngress(): Promise<void> {
+    if (
+      this.voiceFilterBinarySocket &&
+      !this.voiceFilterBinarySocket.destroyed &&
+      this.voiceFilterBinarySocket.writable
+    ) {
+      return;
+    }
+
+    if (this.voiceFilterBinaryConnectPromise) {
+      return this.voiceFilterBinaryConnectPromise;
+    }
+
+    this.voiceFilterBinaryConnectPromise = (async () => {
+      await this.ensureSidecarReady();
+
+      const response = await this.sendRequest("voice_filter.binary_ingress_info", {});
+      const info = response as TVoiceFilterBinaryIngressInfo;
+
+      if (!Number.isInteger(info.port) || info.port <= 0 || info.port > 65_535) {
+        throw new Error("Invalid binary voice filter ingress port");
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        const socket = createConnection({
+          host: BINARY_VOICE_FILTER_INGRESS_HOST,
+          port: info.port,
+        });
+
+        const timeout = setTimeout(() => {
+          socket.destroy();
+          reject(new Error("Timed out connecting to binary voice filter ingress"));
+        }, BINARY_VOICE_FILTER_CONNECT_TIMEOUT_MS);
+
+        const cleanupTimeout = () => {
+          clearTimeout(timeout);
+        };
+
+        const onInitialError = (error: Error) => {
+          cleanupTimeout();
+          socket.destroy();
+          reject(error);
+        };
+
+        socket.once("connect", () => {
+          cleanupTimeout();
+          socket.removeListener("error", onInitialError);
+          socket.setNoDelay(true);
+
+          socket.on("error", (error) => {
+            console.warn("[desktop] Binary voice filter ingress socket error", error);
+            this.closeVoiceFilterBinarySocket();
+          });
+          socket.on("close", () => {
+            if (this.voiceFilterBinarySocket === socket) {
+              this.voiceFilterBinarySocket = undefined;
+            }
+          });
+
+          this.closeVoiceFilterBinarySocket();
+          this.voiceFilterBinarySocket = socket;
+          this.nextVoiceFilterBinaryRetryAt = 0;
+          resolve();
+        });
+
+        socket.once("error", onInitialError);
+      });
+    })().finally(() => {
+      this.voiceFilterBinaryConnectPromise = undefined;
+    });
+
+    return this.voiceFilterBinaryConnectPromise;
+  }
+
+  private tryPushVoiceFilterBinaryFrame(frame: TVoiceFilterPcmFrame): boolean {
+    const socket = this.voiceFilterBinarySocket;
+    if (!socket || socket.destroyed || !socket.writable) {
+      return false;
+    }
+
+    const sessionIdBytes = Buffer.from(frame.sessionId, "utf8");
+    if (sessionIdBytes.length === 0 || sessionIdBytes.length > 0xffff) {
+      return false;
+    }
+
+    const pcmBytes = Buffer.from(
+      frame.pcm.buffer,
+      frame.pcm.byteOffset,
+      frame.pcm.byteLength,
+    );
+    if (pcmBytes.length <= 0 || pcmBytes.length % Float32Array.BYTES_PER_ELEMENT !== 0) {
+      return false;
+    }
+
+    const payloadLength =
+      2 + // session id length
+      sessionIdBytes.length +
+      8 + // sequence
+      4 + // sample rate
+      2 + // channels
+      4 + // frame count
+      4 + // protocol version
+      4 + // pcm bytes length
+      pcmBytes.length;
+
+    if (payloadLength > MAX_BINARY_VOICE_FILTER_FRAME_SIZE_BYTES) {
+      return false;
+    }
+    if (
+      !Number.isInteger(frame.sequence) ||
+      frame.sequence < 0 ||
+      frame.sequence > Number.MAX_SAFE_INTEGER
+    ) {
+      return false;
+    }
+    if (
+      !Number.isInteger(frame.sampleRate) ||
+      frame.sampleRate <= 0 ||
+      frame.sampleRate > 0xffff_ffff
+    ) {
+      return false;
+    }
+    if (!Number.isInteger(frame.channels) || frame.channels <= 0 || frame.channels > 0xffff) {
+      return false;
+    }
+    if (
+      !Number.isInteger(frame.frameCount) ||
+      frame.frameCount <= 0 ||
+      frame.frameCount > 0xffff_ffff
+    ) {
+      return false;
+    }
+    if (
+      !Number.isInteger(frame.protocolVersion) ||
+      frame.protocolVersion <= 0 ||
+      frame.protocolVersion > 0xffff_ffff
+    ) {
+      return false;
+    }
+
+    const packet = Buffer.allocUnsafe(4 + payloadLength);
+    let offset = 0;
+
+    packet.writeUInt32LE(payloadLength, offset);
+    offset += 4;
+
+    packet.writeUInt16LE(sessionIdBytes.length, offset);
+    offset += 2;
+    sessionIdBytes.copy(packet, offset);
+    offset += sessionIdBytes.length;
+
+    packet.writeBigUInt64LE(BigInt(frame.sequence), offset);
+    offset += 8;
+
+    packet.writeUInt32LE(frame.sampleRate, offset);
+    offset += 4;
+    packet.writeUInt16LE(frame.channels, offset);
+    offset += 2;
+    packet.writeUInt32LE(frame.frameCount, offset);
+    offset += 4;
+    packet.writeUInt32LE(frame.protocolVersion, offset);
+    offset += 4;
+    packet.writeUInt32LE(pcmBytes.length, offset);
+    offset += 4;
+    pcmBytes.copy(packet, offset);
+
+    try {
+      socket.write(packet);
+      return true;
+    } catch {
+      this.closeVoiceFilterBinarySocket();
+      return false;
     }
   }
 

@@ -20,23 +20,9 @@ type TCreateMicAudioProcessingPipelineInput = {
   inputTrack: MediaStreamTrack;
   enabled: boolean;
   suppressionLevel: VoiceFilterStrength;
-};
-
-const encodePcmBase64 = (samples: Float32Array): string => {
-  const bytes = new Uint8Array(
-    samples.buffer,
-    samples.byteOffset,
-    samples.byteLength
-  );
-  const chunkSize = 0x8000;
-  let binary = '';
-
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
-    binary += String.fromCharCode(...chunk);
-  }
-
-  return btoa(binary);
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+  echoCancellation: boolean;
 };
 
 const getScriptProcessorBufferSize = (preferredFrameSize: number): number => {
@@ -53,11 +39,17 @@ const getScriptProcessorBufferSize = (preferredFrameSize: number): number => {
 const createNativeDesktopMicAudioProcessingPipeline = async ({
   inputTrack,
   channels,
-  suppressionLevel
+  suppressionLevel,
+  noiseSuppression,
+  autoGainControl,
+  echoCancellation
 }: {
   inputTrack: MediaStreamTrack;
   channels: number;
   suppressionLevel: VoiceFilterStrength;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+  echoCancellation: boolean;
 }): Promise<TMicAudioProcessingPipeline | undefined> => {
   const desktopBridge = getDesktopBridge();
 
@@ -68,7 +60,10 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   const session = await desktopBridge.startVoiceFilterSession({
     sampleRate: 48_000,
     channels,
-    suppressionLevel: suppressionLevel as unknown as TRuntimeVoiceFilterStrength
+    suppressionLevel: suppressionLevel as unknown as TRuntimeVoiceFilterStrength,
+    noiseSuppression,
+    autoGainControl,
+    echoCancellation
   });
 
   const outputPipeline = await createDesktopAppAudioPipeline({
@@ -79,6 +74,10 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
     framesPerBuffer: session.framesPerBuffer,
     protocolVersion: session.protocolVersion,
     encoding: session.encoding
+  }, {
+    mode: 'stable',
+    logLabel: 'mic-voice-filter',
+    insertSilenceOnDroppedFrames: true
   });
 
   const AudioContextClass =
@@ -159,15 +158,14 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
       }
     }
 
-    desktopBridge.pushVoiceFilterFrame({
+    desktopBridge.pushVoiceFilterPcmFrame({
       sessionId: session.sessionId,
       sequence,
       sampleRate: session.sampleRate,
       channels: session.channels,
       frameCount,
-      pcmBase64: encodePcmBase64(interleaved),
-      protocolVersion: 1,
-      encoding: 'f32le_base64'
+      pcm: interleaved,
+      protocolVersion: 1
     });
 
     sequence += 1;
@@ -176,6 +174,8 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   sourceNode.connect(processorNode);
   processorNode.connect(sinkNode);
   sinkNode.connect(captureContext.destination);
+
+  void desktopBridge.ensureVoiceFilterFrameChannel();
 
   if (captureContext.state !== 'running') {
     await captureContext.resume();
@@ -224,7 +224,10 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
 const createMicAudioProcessingPipeline = async ({
   inputTrack,
   enabled,
-  suppressionLevel
+  suppressionLevel,
+  noiseSuppression,
+  autoGainControl,
+  echoCancellation
 }: TCreateMicAudioProcessingPipelineInput): Promise<
   TMicAudioProcessingPipeline | undefined
 > => {
@@ -247,7 +250,10 @@ const createMicAudioProcessingPipeline = async ({
     return await createNativeDesktopMicAudioProcessingPipeline({
       inputTrack,
       channels: outputChannels,
-      suppressionLevel
+      suppressionLevel,
+      noiseSuppression,
+      autoGainControl,
+      echoCancellation
     });
   } catch (error) {
     console.warn(

@@ -12,17 +12,113 @@ import type {
   TStartAppAudioCaptureInput,
   TStartVoiceFilterInput,
   TVoiceFilterFrame,
+  TVoiceFilterPcmFrame,
   TVoiceFilterSession,
   TVoiceFilterStatusEvent,
 } from "../main/types";
+
+const VOICE_FILTER_CHANNEL_INIT_TIMEOUT_MS = 3_000;
+let voiceFilterFramePort: MessagePort | undefined;
+let voiceFilterFramePortPromise: Promise<boolean> | undefined;
+
+const encodePcmBase64 = (samples: Float32Array): string => {
+  const bytes = new Uint8Array(
+    samples.buffer,
+    samples.byteOffset,
+    samples.byteLength,
+  );
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
+};
+
+const toFallbackVoiceFilterFrame = (frame: TVoiceFilterPcmFrame): TVoiceFilterFrame => {
+  return {
+    sessionId: frame.sessionId,
+    sequence: frame.sequence,
+    sampleRate: frame.sampleRate,
+    channels: frame.channels,
+    frameCount: frame.frameCount,
+    pcmBase64: encodePcmBase64(frame.pcm),
+    protocolVersion: frame.protocolVersion,
+    encoding: "f32le_base64",
+  };
+};
+
+const ensureVoiceFilterFrameChannel = (): Promise<boolean> => {
+  if (voiceFilterFramePort) {
+    return Promise.resolve(true);
+  }
+
+  if (voiceFilterFramePortPromise) {
+    return voiceFilterFramePortPromise;
+  }
+
+  voiceFilterFramePortPromise = new Promise<boolean>((resolve) => {
+    let settled = false;
+    const onPortReady = (event: unknown) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      window.clearTimeout(timeout);
+
+      const port = (event as { ports?: MessagePort[] }).ports?.[0];
+      if (!port) {
+        voiceFilterFramePortPromise = undefined;
+        resolve(false);
+        return;
+      }
+
+      voiceFilterFramePort = port;
+      voiceFilterFramePort.onmessageerror = () => {
+        voiceFilterFramePort = undefined;
+      };
+
+      try {
+        voiceFilterFramePort.start();
+      } catch {
+        // ignore unsupported start() implementations
+      }
+
+      voiceFilterFramePortPromise = undefined;
+      resolve(true);
+    };
+
+    const timeout = window.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      ipcRenderer.removeListener(
+        "desktop:voice-filter-frame-channel-ready",
+        onPortReady,
+      );
+      voiceFilterFramePortPromise = undefined;
+      resolve(false);
+    }, VOICE_FILTER_CHANNEL_INIT_TIMEOUT_MS);
+    ipcRenderer.once("desktop:voice-filter-frame-channel-ready", onPortReady);
+
+    ipcRenderer.send("desktop:open-voice-filter-frame-channel");
+  });
+
+  return voiceFilterFramePortPromise;
+};
 
 const desktopBridge = {
   getServerUrl: (): Promise<string> =>
     ipcRenderer.invoke("desktop:get-server-url"),
   setServerUrl: (serverUrl: string): Promise<void> =>
     ipcRenderer.invoke("desktop:set-server-url", serverUrl),
-  getCapabilities: (options?: { experimentalRustCapture?: boolean }) =>
-    ipcRenderer.invoke("desktop:get-capabilities", options),
+  getCapabilities: () => ipcRenderer.invoke("desktop:get-capabilities"),
   pingSidecar: () => ipcRenderer.invoke("desktop:ping-sidecar"),
   getUpdateStatus: (): Promise<TDesktopUpdateStatus> =>
     ipcRenderer.invoke("desktop:get-update-status"),
@@ -43,10 +139,42 @@ const desktopBridge = {
     ipcRenderer.invoke("desktop:start-voice-filter-session", input),
   stopVoiceFilterSession: (sessionId?: string): Promise<void> =>
     ipcRenderer.invoke("desktop:stop-voice-filter-session", sessionId),
+  ensureVoiceFilterFrameChannel: (): Promise<boolean> =>
+    ensureVoiceFilterFrameChannel(),
   setGlobalPushKeybinds: (
     input: TDesktopPushKeybindsInput,
   ): Promise<TGlobalPushKeybindRegistrationResult> =>
     ipcRenderer.invoke("desktop:set-global-push-keybinds", input),
+  pushVoiceFilterPcmFrame: (frame: TVoiceFilterPcmFrame): void => {
+    if (voiceFilterFramePort) {
+      const { pcm } = frame;
+      try {
+        voiceFilterFramePort.postMessage(
+          {
+            sessionId: frame.sessionId,
+            sequence: frame.sequence,
+            sampleRate: frame.sampleRate,
+            channels: frame.channels,
+            frameCount: frame.frameCount,
+            protocolVersion: frame.protocolVersion,
+            pcmBuffer: pcm.buffer,
+            pcmByteOffset: pcm.byteOffset,
+            pcmByteLength: pcm.byteLength,
+          },
+          [pcm.buffer],
+        );
+        return;
+      } catch {
+        voiceFilterFramePort = undefined;
+      }
+    }
+
+    void ensureVoiceFilterFrameChannel();
+    ipcRenderer.send(
+      "desktop:push-voice-filter-frame",
+      toFallbackVoiceFilterFrame(frame),
+    );
+  },
   pushVoiceFilterFrame: (frame: TVoiceFilterFrame): void => {
     ipcRenderer.send("desktop:push-voice-filter-frame", frame);
   },

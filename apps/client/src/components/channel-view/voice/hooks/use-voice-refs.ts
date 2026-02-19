@@ -65,6 +65,23 @@ const useVoiceRefs = (
 
     return remoteUserStreams[remoteId]?.[StreamKind.SCREEN_AUDIO];
   }, [remoteUserStreams, remoteId, isOwnUser]);
+  const combinedScreenShareStream = useMemo(() => {
+    if (!screenShareStream) {
+      return undefined;
+    }
+
+    const combinedStream = new MediaStream();
+
+    screenShareStream.getVideoTracks().forEach((track) => {
+      combinedStream.addTrack(track);
+    });
+
+    screenShareAudioStream?.getAudioTracks().forEach((track) => {
+      combinedStream.addTrack(track);
+    });
+
+    return combinedStream;
+  }, [screenShareStream, screenShareAudioStream]);
 
   const externalAudioStream = useMemo(() => {
     if (isOwnUser) return undefined;
@@ -113,22 +130,43 @@ const useVoiceRefs = (
   }, [audioStream, audioRef, userVolume]);
 
   useEffect(() => {
-    if (!screenShareAudioStream || !screenShareAudioRef.current) return;
+    if (!combinedScreenShareStream || !screenShareRef.current) return;
+
+    if (screenShareRef.current.srcObject !== combinedScreenShareStream) {
+      screenShareRef.current.srcObject = combinedScreenShareStream;
+    }
+
+    screenShareRef.current.volume = userScreenVolume / 100;
+  }, [combinedScreenShareStream, screenShareRef, userScreenVolume]);
+
+  useEffect(() => {
+    if (!screenShareAudioRef.current) {
+      return;
+    }
+
+    // Screen share audio is now attached to the video element to keep A/V clocks aligned.
+    if (screenShareStream) {
+      if (screenShareAudioRef.current.srcObject) {
+        screenShareAudioRef.current.srcObject = null;
+      }
+      return;
+    }
+
+    if (!screenShareAudioStream) {
+      return;
+    }
 
     if (screenShareAudioRef.current.srcObject !== screenShareAudioStream) {
       screenShareAudioRef.current.srcObject = screenShareAudioStream;
     }
 
     screenShareAudioRef.current.volume = userScreenVolume / 100;
-  }, [screenShareAudioStream, screenShareAudioRef, userScreenVolume]);
-
-  useEffect(() => {
-    if (!screenShareStream || !screenShareRef.current) return;
-
-    if (screenShareRef.current.srcObject !== screenShareStream) {
-      screenShareRef.current.srcObject = screenShareStream;
-    }
-  }, [screenShareStream, screenShareRef]);
+  }, [
+    screenShareStream,
+    screenShareAudioStream,
+    screenShareAudioRef,
+    userScreenVolume
+  ]);
 
   useEffect(() => {
     if (!externalAudioStream || !externalAudioRef.current) return;

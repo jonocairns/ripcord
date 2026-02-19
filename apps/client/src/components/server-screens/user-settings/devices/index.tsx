@@ -242,9 +242,10 @@ const Devices = memo(() => {
             </Group>
           </div>
           <p className="text-xs text-muted-foreground">
-            Uses desktop sidecar DeepFilterNet suppression. Higher strength
-            reduces more background noise but may affect voice quality. This
-            filter is available in the desktop app.
+            Uses desktop sidecar processing for noise suppression and automatic
+            gain control. Echo cancellation remains browser-based for now.
+            Higher strength reduces more background noise but may affect voice
+            quality. This filter is available in the desktop app.
           </p>
           <Group label="Voice filter strength">
             <Select
@@ -438,16 +439,6 @@ const Devices = memo(() => {
             }
           />
 
-          {window.sharkordDesktop && (
-            <Group label="Use Rust sidecar capture (Experimental)">
-              <Switch
-                checked={!!values.experimentalRustCapture}
-                onCheckedChange={(checked) =>
-                  onChange('experimentalRustCapture', checked)
-                }
-              />
-            </Group>
-          )}
         </Group>
         {window.sharkordDesktop && (
           <Group label="Desktop Server URL">
