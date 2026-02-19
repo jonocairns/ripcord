@@ -5,6 +5,7 @@ import type {
   TAppAudioStatusEvent,
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
+  TDesktopUpdateStatus,
   TGlobalPushKeybindRegistrationResult,
   TDesktopAppAudioTargetsResult,
   TScreenShareSelection,
@@ -23,6 +24,12 @@ const desktopBridge = {
   getCapabilities: (options?: { experimentalRustCapture?: boolean }) =>
     ipcRenderer.invoke("desktop:get-capabilities", options),
   pingSidecar: () => ipcRenderer.invoke("desktop:ping-sidecar"),
+  getUpdateStatus: (): Promise<TDesktopUpdateStatus> =>
+    ipcRenderer.invoke("desktop:get-update-status"),
+  checkForUpdates: (): Promise<TDesktopUpdateStatus> =>
+    ipcRenderer.invoke("desktop:check-for-updates"),
+  installUpdateAndRestart: (): Promise<boolean> =>
+    ipcRenderer.invoke("desktop:install-update-and-restart"),
   listShareSources: () => ipcRenderer.invoke("desktop:list-share-sources"),
   listAppAudioTargets: (sourceId?: string): Promise<TDesktopAppAudioTargetsResult> =>
     ipcRenderer.invoke("desktop:list-app-audio-targets", sourceId),
@@ -102,6 +109,17 @@ const desktopBridge = {
 
     return () => {
       ipcRenderer.removeListener("desktop:global-push-keybind", listener);
+    };
+  },
+  subscribeUpdateStatus: (callback: (status: TDesktopUpdateStatus) => void) => {
+    const listener = (_event: unknown, status: TDesktopUpdateStatus) => {
+      callback(status);
+    };
+
+    ipcRenderer.on("desktop:update-status", listener);
+
+    return () => {
+      ipcRenderer.removeListener("desktop:update-status", listener);
     };
   },
   prepareScreenShare: (selection: TScreenShareSelection) =>

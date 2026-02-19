@@ -131,6 +131,28 @@ export type TVoiceFilterStatusEvent = {
   protocolVersion?: number;
 };
 
+export type TDesktopUpdateState =
+  | "disabled"
+  | "idle"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "downloading"
+  | "downloaded"
+  | "error";
+
+export type TDesktopUpdateStatus = {
+  state: TDesktopUpdateState;
+  currentVersion: string;
+  availableVersion?: string;
+  checkedAtIso?: string;
+  percent?: number;
+  bytesPerSecond?: number;
+  transferredBytes?: number;
+  totalBytes?: number;
+  message?: string;
+};
+
 export type TStartVoiceFilterInput = {
   sampleRate: number;
   channels: number;

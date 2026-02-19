@@ -22,6 +22,7 @@ import {
   prepareScreenShareSelection,
 } from "./screen-share";
 import { getServerUrl, setServerUrl } from "./settings-store";
+import { desktopUpdater } from "./updater";
 import type {
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
@@ -242,6 +243,19 @@ const registerIpcHandlers = () => {
     return captureSidecarManager.getStatus();
   });
 
+  ipcMain.handle("desktop:get-update-status", () => {
+    return desktopUpdater.getStatus();
+  });
+
+  ipcMain.handle("desktop:check-for-updates", async () => {
+    await desktopUpdater.checkForUpdates();
+    return desktopUpdater.getStatus();
+  });
+
+  ipcMain.handle("desktop:install-update-and-restart", () => {
+    return desktopUpdater.installUpdateAndRestart();
+  });
+
   ipcMain.handle("desktop:list-share-sources", () => {
     return listShareSources();
   });
@@ -305,6 +319,10 @@ void app
       emitPushKeybindEvent(event);
     });
 
+    desktopUpdater.start((status) => {
+      mainWindow?.webContents.send("desktop:update-status", status);
+    });
+
     registerIpcHandlers();
     setupDisplayMediaHandler();
     createMainWindow();
@@ -326,5 +344,6 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  desktopUpdater.dispose();
   void captureSidecarManager.dispose();
 });

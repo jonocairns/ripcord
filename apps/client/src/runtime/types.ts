@@ -129,6 +129,28 @@ export type TVoiceFilterStatusEvent = {
   protocolVersion?: number;
 };
 
+export type TDesktopUpdateState =
+  | 'disabled'
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'not-available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error';
+
+export type TDesktopUpdateStatus = {
+  state: TDesktopUpdateState;
+  currentVersion: string;
+  availableVersion?: string;
+  checkedAtIso?: string;
+  percent?: number;
+  bytesPerSecond?: number;
+  transferredBytes?: number;
+  totalBytes?: number;
+  message?: string;
+};
+
 export type TStartVoiceFilterInput = {
   sampleRate: number;
   channels: number;
@@ -160,6 +182,9 @@ export type TDesktopBridge = {
     experimentalRustCapture?: boolean;
   }) => Promise<TDesktopCapabilities>;
   pingSidecar: () => Promise<{ available: boolean; reason?: string }>;
+  getUpdateStatus: () => Promise<TDesktopUpdateStatus>;
+  checkForUpdates: () => Promise<TDesktopUpdateStatus>;
+  installUpdateAndRestart: () => Promise<boolean>;
   listShareSources: () => Promise<TDesktopShareSource[]>;
   listAppAudioTargets: (
     sourceId?: string
@@ -188,6 +213,9 @@ export type TDesktopBridge = {
   ) => () => void;
   subscribeGlobalPushKeybindEvents: (
     cb: (event: TDesktopPushKeybindEvent) => void
+  ) => () => void;
+  subscribeUpdateStatus: (
+    cb: (status: TDesktopUpdateStatus) => void
   ) => () => void;
   prepareScreenShare: (
     selection: TDesktopScreenShareSelection
