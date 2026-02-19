@@ -15,7 +15,7 @@ const MessageEditInline = memo(
     const [value, setValue] = useState<string>(message.content ?? '');
 
     const onSubmit = useCallback(
-      async (newValue: string | undefined) => {
+      async (newValue: string) => {
         if (isEmptyMessage(newValue)) {
           toast.error('Message cannot be empty');
           onBlur();

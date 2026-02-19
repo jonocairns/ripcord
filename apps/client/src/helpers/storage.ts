@@ -1,6 +1,7 @@
 export enum LocalStorageKey {
+  AUTH_TOKEN = 'sharkord-auth-token',
+  REFRESH_TOKEN = 'sharkord-refresh-token',
   IDENTITY = 'sharkord-identity',
-  REMEMBER_CREDENTIALS = 'sharkord-remember-identity',
   USER_PASSWORD = 'sharkord-user-password',
   SERVER_PASSWORD = 'sharkord-server-password',
   VITE_UI_THEME = 'vite-ui-theme',
@@ -58,13 +59,67 @@ const removeSessionStorageItem = (key: SessionStorageKey): void => {
   sessionStorage.removeItem(key);
 };
 
+const getAuthToken = (): string | null => {
+  return (
+    getSessionStorageItem(SessionStorageKey.TOKEN) ||
+    getLocalStorageItem(LocalStorageKey.AUTH_TOKEN)
+  );
+};
+
+const hydrateSessionToken = (): string | null => {
+  const sessionToken = getSessionStorageItem(SessionStorageKey.TOKEN);
+
+  if (sessionToken) {
+    return sessionToken;
+  }
+
+  const localToken = getLocalStorageItem(LocalStorageKey.AUTH_TOKEN);
+
+  if (localToken) {
+    setSessionStorageItem(SessionStorageKey.TOKEN, localToken);
+  }
+
+  return localToken;
+};
+
+const setAuthToken = (token: string): void => {
+  setSessionStorageItem(SessionStorageKey.TOKEN, token);
+  setLocalStorageItem(LocalStorageKey.AUTH_TOKEN, token);
+};
+
+const getRefreshToken = (): string | null => {
+  return getLocalStorageItem(LocalStorageKey.REFRESH_TOKEN);
+};
+
+const setRefreshToken = (refreshToken: string): void => {
+  setLocalStorageItem(LocalStorageKey.REFRESH_TOKEN, refreshToken);
+};
+
+const setAuthTokens = (token: string, refreshToken: string): void => {
+  setAuthToken(token);
+  setRefreshToken(refreshToken);
+};
+
+const clearAuthToken = (): void => {
+  removeSessionStorageItem(SessionStorageKey.TOKEN);
+  removeLocalStorageItem(LocalStorageKey.AUTH_TOKEN);
+  removeLocalStorageItem(LocalStorageKey.REFRESH_TOKEN);
+};
+
 export {
+  clearAuthToken,
+  getAuthToken,
   getLocalStorageItem,
   getLocalStorageItemAsJSON,
+  getRefreshToken,
   getSessionStorageItem,
+  hydrateSessionToken,
   removeLocalStorageItem,
   removeSessionStorageItem,
+  setAuthToken,
+  setAuthTokens,
   setLocalStorageItem,
   setLocalStorageItemAsJSON,
+  setRefreshToken,
   setSessionStorageItem
 };

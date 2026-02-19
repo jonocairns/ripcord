@@ -1,4 +1,10 @@
 import { Dialog } from '@/components/dialogs/dialogs';
+import {
+  ScreenAudioMode,
+  type TDesktopCapabilities,
+  type TDesktopScreenShareSelection,
+  type TDesktopShareSource
+} from '@/runtime/types';
 import type { TGenericObject } from '@sharkord/shared';
 import { store } from '../store';
 import { dialogSliceActions } from './slice';
@@ -101,4 +107,33 @@ export const requestTextInput = async ({
 
 export const resetDialogs = () => {
   store.dispatch(dialogSliceActions.resetDialogs());
+};
+
+export const requestScreenShareSelection = async ({
+  sources,
+  capabilities,
+  defaultAudioMode,
+  experimentalRustCapture
+}: {
+  sources: TDesktopShareSource[];
+  capabilities: TDesktopCapabilities;
+  defaultAudioMode: ScreenAudioMode;
+  experimentalRustCapture: boolean;
+}): Promise<TDesktopScreenShareSelection | null> => {
+  return new Promise((resolve) => {
+    openDialog(Dialog.SCREEN_SHARE_PICKER, {
+      sources,
+      capabilities,
+      defaultAudioMode,
+      experimentalRustCapture,
+      onConfirm: (selection: TDesktopScreenShareSelection) => {
+        closeDialogs();
+        resolve(selection);
+      },
+      onCancel: () => {
+        closeDialogs();
+        resolve(null);
+      }
+    });
+  });
 };

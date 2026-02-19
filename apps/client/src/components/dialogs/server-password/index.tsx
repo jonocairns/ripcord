@@ -9,19 +9,10 @@ import {
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
 import { AutoFocus } from '@/components/ui/auto-focus';
-import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
 import { joinServer } from '@/features/server/actions';
-import {
-  getLocalStorageItem,
-  LocalStorageKey,
-  removeLocalStorageItem,
-  setLocalStorageItem
-} from '@/helpers/storage';
 import { useForm } from '@/hooks/use-form';
 import { cleanup } from '@/lib/trpc';
-import {} from '@/types';
 import { memo, useCallback, useState } from 'react';
 import type { TDialogBaseProps } from '../types';
 
@@ -29,14 +20,11 @@ type TServerPasswordDialogProps = TDialogBaseProps & {
   handshakeHash: string;
 };
 
-const savedPassword = getLocalStorageItem(LocalStorageKey.SERVER_PASSWORD);
-
 const ServerPasswordDialog = memo(
   ({ isOpen, close, handshakeHash }: TServerPasswordDialogProps) => {
     const { r, values, setTrpcErrors, errors } = useForm({
-      password: savedPassword || ''
+      password: ''
     });
-    const [savePassword, setSavePassword] = useState<boolean>(!!savedPassword);
     const [loading, setLoading] = useState(false);
 
     const onSubmit = useCallback(async () => {
@@ -44,19 +32,13 @@ const ServerPasswordDialog = memo(
         setLoading(true);
         await joinServer(handshakeHash, values.password);
 
-        if (savePassword) {
-          setLocalStorageItem(LocalStorageKey.SERVER_PASSWORD, values.password);
-        } else {
-          removeLocalStorageItem(LocalStorageKey.SERVER_PASSWORD);
-        }
-
         close();
       } catch (error) {
         setTrpcErrors(error);
       } finally {
         setLoading(false);
       }
-    }, [handshakeHash, values.password, close, setTrpcErrors, savePassword]);
+    }, [handshakeHash, values.password, close, setTrpcErrors]);
 
     const onCancel = useCallback(() => {
       cleanup();
@@ -83,12 +65,9 @@ const ServerPasswordDialog = memo(
               />
             </AutoFocus>
 
-            <Group label="Save password">
-              <Switch
-                checked={savePassword}
-                onCheckedChange={setSavePassword}
-              />
-            </Group>
+            <p className="text-xs text-muted-foreground">
+              Password will only be kept for this session.
+            </p>
           </div>
           <AlertDialogFooter className="gap-2">
             <AlertDialogCancel onClick={onCancel}>Cancel</AlertDialogCancel>

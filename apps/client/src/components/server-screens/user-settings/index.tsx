@@ -15,7 +15,7 @@ const UserSettings = memo(({ close }: TUserSettingsProps) => {
         <Tabs defaultValue="profile" className="w-full">
           <TabsList className="mb-6">
             <TabsTrigger value="profile">Profile</TabsTrigger>
-            <TabsTrigger value="devices">Devices</TabsTrigger>
+            <TabsTrigger value="devices">Settings</TabsTrigger>
             <TabsTrigger value="password">Password</TabsTrigger>
           </TabsList>
 

@@ -17,6 +17,7 @@ import {
 } from '@sharkord/shared';
 import { randomUUIDv7 } from 'bun';
 import chalk from 'chalk';
+import { hashPassword } from '../helpers/password';
 import { logger } from '../logger';
 import { IS_DEVELOPMENT } from '../utils/env';
 import { db } from './index';
@@ -42,9 +43,9 @@ const seedDatabase = async () => {
   const originalToken = IS_DEVELOPMENT ? 'dev' : randomUUIDv7();
 
   const initialSettings: TISettings = {
-    name: 'sharkord Server',
+    name: 'sharkord',
     description:
-      'This is the default Sharkord server description. Change me in the server settings!',
+      'This is the default Sharkord description. Change me in the server settings!',
     password: '',
     serverId: Bun.randomUUIDv7(),
     secretToken: await sha256(originalToken),
@@ -137,7 +138,7 @@ const seedDatabase = async () => {
       identity: await sha256(randomUUIDv7()),
       name: 'Sharkord',
       avatarId: null,
-      password: 'sharkord',
+      password: await hashPassword('sharkord'),
       bannerId: null,
       bio: 'Hey, I am Sharkord!',
       bannerColor:

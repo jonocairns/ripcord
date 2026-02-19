@@ -1,24 +1,30 @@
+import { getRuntimeServerConfig } from '@/runtime/server-config';
 import type { TFile } from '@sharkord/shared';
 
 const getHostFromServer = () => {
-  if (import.meta.env.MODE === 'development') {
-    return 'localhost:4991';
+  const runtimeConfig = getRuntimeServerConfig();
+
+  if (runtimeConfig.serverHost) {
+    return runtimeConfig.serverHost;
   }
 
-  return window.location.host;
+  return import.meta.env.MODE === 'development'
+    ? 'localhost:4991'
+    : window.location.host;
 };
 
 const getUrlFromServer = () => {
+  const runtimeConfig = getRuntimeServerConfig();
+
+  if (runtimeConfig.serverUrl) {
+    return runtimeConfig.serverUrl;
+  }
+
   if (import.meta.env.MODE === 'development') {
     return 'http://localhost:4991';
   }
 
-  const host = window.location.host;
-  const currentProtocol = window.location.protocol;
-
-  const finalUrl = `${currentProtocol}//${host}`;
-
-  return finalUrl;
+  return `${window.location.protocol}//${window.location.host}`;
 };
 
 const getFileUrl = (file: TFile | undefined | null) => {

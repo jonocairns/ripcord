@@ -1,17 +1,17 @@
 const IP_CACHE_TTL = 1000 * 60 * 60; // 1 hour
 
 class IpInfoCache {
-  private cache: Record<string, any>;
+  private cache: Record<string, unknown>;
 
   constructor() {
     this.cache = {};
   }
 
-  get(ip: string) {
-    return this.cache[ip];
+  get<T = unknown>(ip: string): T | undefined {
+    return this.cache[ip] as T | undefined;
   }
 
-  set(ip: string, data: any) {
+  set(ip: string, data: unknown) {
     this.cache[ip] = data;
 
     setTimeout(() => {

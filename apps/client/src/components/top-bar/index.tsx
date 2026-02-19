@@ -7,7 +7,6 @@ import { cn } from '@/lib/utils';
 import { MessageSquare, PanelRight, PanelRightClose } from 'lucide-react';
 import { memo } from 'react';
 import { Tooltip } from '../ui/tooltip';
-import { VolumeController } from './volume-controller';
 
 type TTopBarProps = {
   onToggleRightSidebar: () => void;
@@ -30,7 +29,6 @@ const TopBar = memo(
       <div className="hidden lg:flex h-8 w-full bg-card border-b border-border items-center justify-end px-4 transition-all duration-300 ease-in-out gap-2">
         {isCurrentVoiceChannelSelected && currentVoiceChannelId && (
           <>
-            <VolumeController channelId={currentVoiceChannelId} />
             <Button
               variant="ghost"
               size="sm"

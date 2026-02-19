@@ -194,6 +194,29 @@ const logins = sqliteTable(
   ]
 );
 
+const refreshTokens = sqliteTable(
+  'refresh_tokens',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    expiresAt: integer('expires_at').notNull(),
+    revokedAt: integer('revoked_at'),
+    replacedByTokenHash: text('replaced_by_token_hash'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at')
+  },
+  (t) => [
+    index('refresh_tokens_user_idx').on(t.userId),
+    index('refresh_tokens_token_hash_idx').on(t.tokenHash),
+    index('refresh_tokens_expires_idx').on(t.expiresAt),
+    index('refresh_tokens_revoked_idx').on(t.revokedAt),
+    index('refresh_tokens_user_expires_idx').on(t.userId, t.expiresAt)
+  ]
+);
+
 const messages = sqliteTable(
   'messages',
   {
@@ -444,6 +467,7 @@ export {
   messageReactions,
   messages,
   pluginData,
+  refreshTokens,
   rolePermissions,
   roles,
   settings,

@@ -38,6 +38,13 @@ type PluginModule = {
 
 type PluginStatesMap = Record<string, boolean>;
 
+const pathExists = async (pathToCheck: string) => {
+  return fs
+    .access(pathToCheck)
+    .then(() => true)
+    .catch(() => false);
+};
+
 class PluginManager {
   private loadedPlugins = new Map<string, PluginModule>();
   private loadErrors = new Map<string, string>();
@@ -73,7 +80,7 @@ class PluginManager {
     const statesFile = path.join(PLUGINS_PATH, 'plugin-states.json');
 
     try {
-      if (!(await fs.exists(statesFile))) return;
+      if (!(await pathExists(statesFile))) return;
 
       const content = await fs.readFile(statesFile, 'utf-8');
       const states = JSON.parse(content) as PluginStatesMap;
@@ -438,7 +445,7 @@ class PluginManager {
     const pluginPath = this.getPluginPath(pluginId);
     const packageJsonPath = path.join(pluginPath, 'package.json');
 
-    if (!(await fs.exists(packageJsonPath))) {
+    if (!(await pathExists(packageJsonPath))) {
       throw new Error('package.json not found');
     }
 
@@ -448,7 +455,7 @@ class PluginManager {
 
     const entryFilePath = path.join(pluginPath, packageJson.sharkord.entry);
 
-    if (!(await fs.exists(entryFilePath))) {
+    if (!(await pathExists(entryFilePath))) {
       throw new Error('Plugin entry file not found');
     }
 

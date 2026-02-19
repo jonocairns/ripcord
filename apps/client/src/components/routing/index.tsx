@@ -4,7 +4,9 @@ import {
   useIsConnected,
   useServerName
 } from '@/features/server/hooks';
+import { isDesktopServerSetupRequired } from '@/runtime/server-config';
 import { Connect } from '@/screens/connect';
+import { DesktopServerSetup } from '@/screens/desktop-server-setup';
 import { Disconnected } from '@/screens/disconnected';
 import { LoadingApp } from '@/screens/loading-app';
 import { ServerView } from '@/screens/server-view';
@@ -25,6 +27,10 @@ const Routing = memo(() => {
 
     document.title = 'Sharkord';
   }, [isConnected, serverName]);
+
+  if (isDesktopServerSetupRequired()) {
+    return <DesktopServerSetup />;
+  }
 
   if (isAppLoading) {
     return <LoadingApp />;

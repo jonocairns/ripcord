@@ -14,6 +14,10 @@ export default defineConfig([
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     languageOptions: {
       ecmaVersion: 2020,
+      parserOptions: {
+        project: ['./tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname
+      },
       globals: globals.browser
     },
     plugins: {
@@ -37,7 +41,22 @@ export default defineConfig([
           argsIgnorePattern: '^_'
         }
       ],
-      'react-refresh/only-export-components': 'warn'
+      'react-refresh/only-export-components': [
+        'warn',
+        {
+          allowConstantExport: true,
+          allowExportNames: [
+            'ModViewContext',
+            'ModViewScreen',
+            'useModViewContext',
+            'VolumeControlContext',
+            'useVolumeControl',
+            'badgeVariants',
+            'buttonVariants',
+            'iconButtonVariants'
+          ]
+        }
+      ]
     }
   }
 ]);

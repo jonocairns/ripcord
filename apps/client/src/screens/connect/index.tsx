@@ -3,36 +3,38 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
 import { connect } from '@/features/server/actions';
 import { useInfo } from '@/features/server/hooks';
 import { getFileUrl, getUrlFromServer } from '@/helpers/get-file-url';
 import {
   getLocalStorageItem,
   LocalStorageKey,
-  removeLocalStorageItem,
-  SessionStorageKey,
+  setAuthTokens,
   setLocalStorageItem,
-  setSessionStorageItem
 } from '@/helpers/storage';
 import { useForm } from '@/hooks/use-form';
+import {
+  getRuntimeServerConfig,
+  normalizeServerUrl,
+  updateDesktopServerUrl
+} from '@/runtime/server-config';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 const Connect = memo(() => {
-  const { values, r, setErrors, onChange } = useForm<{
+  const { values, r, setErrors } = useForm<{
     identity: string;
     password: string;
-    rememberCredentials: boolean;
   }>({
     identity: getLocalStorageItem(LocalStorageKey.IDENTITY) || '',
-    password: getLocalStorageItem(LocalStorageKey.USER_PASSWORD) || '',
-    rememberCredentials: !!getLocalStorageItem(
-      LocalStorageKey.REMEMBER_CREDENTIALS
-    )
+    password: ''
   });
 
   const [loading, setLoading] = useState(false);
+  const [savingServerUrl, setSavingServerUrl] = useState(false);
+  const [desktopServerUrl, setDesktopServerUrl] = useState(
+    getRuntimeServerConfig().serverUrl
+  );
   const info = useInfo();
 
   const inviteCode = useMemo(() => {
@@ -40,19 +42,6 @@ const Connect = memo(() => {
     const invite = urlParams.get('invite');
     return invite || undefined;
   }, []);
-
-  const onRememberCredentialsChange = useCallback(
-    (checked: boolean) => {
-      onChange('rememberCredentials', checked);
-
-      if (checked) {
-        setLocalStorageItem(LocalStorageKey.REMEMBER_CREDENTIALS, 'true');
-      } else {
-        removeLocalStorageItem(LocalStorageKey.REMEMBER_CREDENTIALS);
-      }
-    },
-    [onChange]
-  );
 
   const onConnectClick = useCallback(async () => {
     setLoading(true);
@@ -78,14 +67,13 @@ const Connect = memo(() => {
         return;
       }
 
-      const data = (await response.json()) as { token: string };
+      const data = (await response.json()) as {
+        token: string;
+        refreshToken: string;
+      };
 
-      setSessionStorageItem(SessionStorageKey.TOKEN, data.token);
-
-      if (values.rememberCredentials) {
-        setLocalStorageItem(LocalStorageKey.IDENTITY, values.identity);
-        setLocalStorageItem(LocalStorageKey.USER_PASSWORD, values.password);
-      }
+      setAuthTokens(data.token, data.refreshToken);
+      setLocalStorageItem(LocalStorageKey.IDENTITY, values.identity);
 
       await connect();
     } catch (error) {
@@ -100,9 +88,24 @@ const Connect = memo(() => {
     values.identity,
     values.password,
     setErrors,
-    values.rememberCredentials,
     inviteCode
   ]);
+
+  const onSaveServerUrl = useCallback(async () => {
+    setSavingServerUrl(true);
+
+    try {
+      const normalized = normalizeServerUrl(desktopServerUrl);
+      await updateDesktopServerUrl(normalized.url);
+      window.location.reload();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Could not save server URL';
+
+      toast.error(message);
+      setSavingServerUrl(false);
+    }
+  }, [desktopServerUrl]);
 
   const logoSrc = useMemo(() => {
     if (info?.logo) {
@@ -146,16 +149,42 @@ const Connect = memo(() => {
                 onEnter={onConnectClick}
               />
             </Group>
-            <Group label="Remember Credentials">
-              <Switch
-                checked={values.rememberCredentials}
-                onCheckedChange={onRememberCredentialsChange}
-              />
-            </Group>
           </div>
 
           <div className="flex flex-col gap-2">
-            {!window.isSecureContext && (
+            {window.sharkordDesktop && (
+              <Group label="Desktop Server URL">
+                <div className="flex gap-2">
+                  <Input
+                    value={desktopServerUrl}
+                    onChange={(event) =>
+                      setDesktopServerUrl(event.target.value)
+                    }
+                    onEnter={onSaveServerUrl}
+                    placeholder="http://localhost:4991"
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={onSaveServerUrl}
+                    disabled={!desktopServerUrl.trim() || savingServerUrl}
+                  >
+                    Save URL
+                  </Button>
+                </div>
+              </Group>
+            )}
+
+            {!info && (
+              <Alert variant="destructive">
+                <AlertTitle>Server Unavailable</AlertTitle>
+                <AlertDescription>
+                  Could not fetch server info from the configured host. Verify
+                  the server URL and try again.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {!window.sharkordDesktop && !window.isSecureContext && (
               <Alert variant="destructive">
                 <AlertTitle>Insecure Connection</AlertTitle>
                 <AlertDescription>

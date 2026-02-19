@@ -13,6 +13,7 @@ const rootCwd = path.resolve(serverCwd, '..', '..');
 const rootPckJson = path.join(rootCwd, 'package.json');
 const serverPckJson = path.join(rootCwd, 'apps', 'server', 'package.json');
 const clientPckJson = path.join(rootCwd, 'apps', 'client', 'package.json');
+const desktopPckJson = path.join(rootCwd, 'apps', 'desktop', 'package.json');
 const sharedPckJson = path.join(rootCwd, 'packages', 'shared', 'package.json');
 
 const unpack = async (tgzPath: string, outDir: string) => {
@@ -98,6 +99,7 @@ const patchPackageJsons = async (newVersion: string) => {
     rootPckJson,
     serverPckJson,
     clientPckJson,
+    desktopPckJson,
     sharedPckJson
   ];
 

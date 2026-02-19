@@ -5,12 +5,11 @@ type Handler<E extends ServerEvent> = (
   payload: EventPayloads[E]
 ) => void | Promise<void>;
 
+type AnyHandler = Handler<ServerEvent>;
+
 class EventBus {
-  private listeners = new Map<ServerEvent, Set<Handler<any>>>();
-  private pluginHandlers = new Map<
-    string,
-    Map<ServerEvent, Set<Handler<any>>>
-  >();
+  private listeners = new Map<ServerEvent, Set<AnyHandler>>();
+  private pluginHandlers = new Map<string, Map<ServerEvent, Set<AnyHandler>>>();
 
   public register = <E extends ServerEvent>(
     pluginId: string,
@@ -24,7 +23,7 @@ class EventBus {
       this.listeners.set(event, handlers);
     }
 
-    handlers.add(handler);
+    handlers.add(handler as AnyHandler);
 
     let pluginEvents = this.pluginHandlers.get(pluginId);
 
@@ -40,7 +39,7 @@ class EventBus {
       pluginEvents.set(event, pluginEventHandlers);
     }
 
-    pluginEventHandlers.add(handler);
+    pluginEventHandlers.add(handler as AnyHandler);
   };
 
   public unload = (pluginId: string) => {
@@ -76,18 +75,18 @@ class EventBus {
       this.listeners.set(event, handlers);
     }
 
-    handlers.add(handler);
+    handlers.add(handler as AnyHandler);
   };
 
   public off = <E extends ServerEvent>(event: E, handler: Handler<E>) => {
-    this.listeners.get(event)?.delete(handler);
+    this.listeners.get(event)?.delete(handler as AnyHandler);
   };
 
   public emit = async <E extends ServerEvent>(
     event: E,
     payload: EventPayloads[E]
   ) => {
-    const handlers = this.listeners.get(event);
+    const handlers = this.listeners.get(event) as Set<Handler<E>> | undefined;
 
     if (!handlers) return;
 

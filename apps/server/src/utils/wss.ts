@@ -14,7 +14,8 @@ import {
 } from '@trpc/server/adapters/ws';
 import { eq } from 'drizzle-orm';
 import http from 'http';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, type WebSocket } from 'ws';
+import { config } from '../config';
 import { db } from '../db';
 import { getAllChannelUserPermissions } from '../db/queries/channels';
 import { getUserById, getUserByToken } from '../db/queries/users';
@@ -30,6 +31,12 @@ import { pubsub } from './pubsub';
 import type { Context } from './trpc';
 
 let wss: WebSocketServer | undefined;
+type TTrackedWebSocket = WebSocket & { userId?: number; token: string };
+
+const getTrackedClients = () => {
+  if (!wss) return [] as TTrackedWebSocket[];
+  return Array.from(wss.clients) as TTrackedWebSocket[];
+};
 
 const usersIpMap = new Map<number, string>();
 
@@ -122,20 +129,18 @@ const createContext = async ({
 
   const getOwnWs = () => {
     if (!wss) return undefined;
-    return Array.from(wss.clients).find((client) => client.token === token);
+    return getTrackedClients().find((client) => client.token === token);
   };
 
   const getUserWs = (userId: number) => {
     if (!wss) return undefined;
-    return Array.from(wss.clients).find((client) => client.userId === userId);
+    return getTrackedClients().find((client) => client.userId === userId);
   };
 
   const getStatusById = (userId: number) => {
     if (!wss) return UserStatus.OFFLINE;
 
-    const isConnected = Array.from(wss.clients).some(
-      (ws) => ws.userId === userId
-    );
+    const isConnected = getTrackedClients().some((ws) => ws.userId === userId);
 
     return isConnected ? UserStatus.ONLINE : UserStatus.OFFLINE;
   };
@@ -143,7 +148,7 @@ const createContext = async ({
   const setWsUserId = (userId: number) => {
     if (!wss) return;
 
-    const ws = Array.from(wss.clients).find((client) => client.token === token);
+    const ws = getTrackedClients().find((client) => client.token === token);
 
     if (ws) {
       ws.userId = userId;
@@ -151,13 +156,19 @@ const createContext = async ({
   };
 
   const getConnectionInfo = () => {
-    if (!wss) return getWsInfo(undefined, req);
+    if (!wss) {
+      return getWsInfo(undefined, req, {
+        trustProxy: config.server.trustProxy
+      });
+    }
 
-    const ws = Array.from(wss.clients).find((client) => client.token === token);
+    const ws = getTrackedClients().find((client) => client.token === token);
 
     if (!ws) return undefined;
 
-    return getWsInfo(ws, req);
+    return getWsInfo(ws, req, {
+      trustProxy: config.server.trustProxy
+    });
   };
 
   const needsPermission = async (
@@ -224,22 +235,23 @@ const createWsServer = async (server: http.Server) => {
     wss = new WebSocketServer({ server });
 
     wss.on('connection', (ws) => {
-      ws.userId = undefined;
-      ws.token = '';
+      const trackedWs = ws as TTrackedWebSocket;
+      trackedWs.userId = undefined;
+      trackedWs.token = '';
 
-      ws.once('message', async (message) => {
+      trackedWs.once('message', async (message) => {
         try {
           const parsed = JSON.parse(message.toString());
           const { token } = parsed.data as TConnectionParams;
 
-          ws.token = token;
+          trackedWs.token = token;
         } catch {
           logger.error('Failed to parse initial WebSocket message');
         }
       });
 
-      ws.on('close', async () => {
-        const user = await getUserByToken(ws.token);
+      trackedWs.on('close', async () => {
+        const user = await getUserByToken(trackedWs.token);
 
         if (!user) return;
 
@@ -265,7 +277,7 @@ const createWsServer = async (server: http.Server) => {
         });
       });
 
-      ws.on('error', (err) => {
+      trackedWs.on('error', (err) => {
         logger.error('WebSocket client error:', err);
       });
     });

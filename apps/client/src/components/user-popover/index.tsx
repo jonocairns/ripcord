@@ -16,9 +16,10 @@ import { UserStatusBadge } from '../user-status';
 type TUserPopoverProps = {
   userId: number;
   children: React.ReactNode;
+  footer?: React.ReactNode;
 };
 
-const UserPopover = memo(({ userId, children }: TUserPopoverProps) => {
+const UserPopover = memo(({ userId, children, footer }: TUserPopoverProps) => {
   const user = useUserById(userId);
   const roles = useUserRoles(userId);
 
@@ -107,6 +108,10 @@ const UserPopover = memo(({ userId, children }: TUserPopoverProps) => {
               />
             </Protect>
           </div>
+
+          {footer && (
+            <div className="mt-4 pt-3 border-t border-border">{footer}</div>
+          )}
         </div>
       </PopoverContent>
     </Popover>

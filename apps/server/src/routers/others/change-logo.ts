@@ -1,3 +1,4 @@
+import { Permission } from '@sharkord/shared';
 import z from 'zod';
 import { removeFile } from '../../db/mutations/files';
 import { updateSettings } from '../../db/mutations/server';
@@ -13,6 +14,8 @@ const changeLogoRoute = protectedProcedure
     })
   )
   .mutation(async ({ ctx, input }) => {
+    await ctx.needsPermission(Permission.MANAGE_SETTINGS);
+
     const settings = await getSettings();
 
     if (settings.logoId) {

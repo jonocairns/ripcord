@@ -1,12 +1,30 @@
+import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
+import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
+import { useChannelCan } from '@/features/server/hooks';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { useOwnVoiceState } from '@/features/server/voice/hooks';
 import { logVoice } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { getTRPCClient } from '@/lib/trpc';
-import { StreamKind, type TVoiceUserState } from '@sharkord/shared';
+import { getDesktopBridge } from '@/runtime/desktop-bridge';
+import {
+  ScreenAudioMode,
+  type TAppAudioStatusEvent,
+  type TAppAudioSession,
+  type TDesktopScreenShareSelection
+} from '@/runtime/types';
+import { VideoCodecPreference } from '@/types';
+import {
+  ChannelPermission,
+  StreamKind,
+  type TVoiceUserState
+} from '@sharkord/shared';
 import { Device } from 'mediasoup-client';
-import type { RtpCapabilities } from 'mediasoup-client/types';
+import type {
+  RtpCapabilities,
+  RtpCodecCapability
+} from 'mediasoup-client/types';
 import {
   createContext,
   memo,
@@ -16,8 +34,17 @@ import {
   useRef,
   useState
 } from 'react';
+import { toast } from 'sonner';
 import { useDevices } from '../devices-provider/hooks/use-devices';
+import {
+  createDesktopAppAudioPipeline,
+  type TDesktopAppAudioPipeline
+} from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
+import {
+  createMicAudioProcessingPipeline,
+  type TMicAudioProcessingPipeline
+} from './mic-audio-processing';
 import { useLocalStreams } from './hooks/use-local-streams';
 import { useRemoteStreams } from './hooks/use-remote-streams';
 import {
@@ -27,6 +54,7 @@ import {
 import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
+import { getVideoBitratePolicy } from './video-bitrate-policy';
 import { VolumeControlProvider } from './volume-control-context';
 
 type AudioVideoRefs = {
@@ -46,6 +74,32 @@ enum ConnectionStatus {
   CONNECTED = 'connected',
   FAILED = 'failed'
 }
+
+const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
+  [VideoCodecPreference.VP8]: 'video/VP8',
+  [VideoCodecPreference.H264]: 'video/H264',
+  [VideoCodecPreference.AV1]: 'video/AV1'
+};
+
+const resolvePreferredVideoCodec = (
+  rtpCapabilities: RtpCapabilities | null,
+  preference: VideoCodecPreference
+): RtpCodecCapability | undefined => {
+  if (!rtpCapabilities || preference === VideoCodecPreference.AUTO) {
+    return undefined;
+  }
+
+  const preferredMimeType =
+    VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE[preference]?.toLowerCase();
+
+  if (!preferredMimeType) {
+    return undefined;
+  }
+
+  return (rtpCapabilities.codecs ?? []).find((codec) => {
+    return codec.mimeType.toLowerCase() === preferredMimeType;
+  });
+};
 
 export type TVoiceProvider = {
   loading: boolean;
@@ -95,6 +149,7 @@ const VoiceProviderContext = createContext<TVoiceProvider>({
     externalVideoRef: { current: null }
   }),
   init: () => Promise.resolve(),
+  setMicMuted: () => Promise.resolve(),
   toggleMic: () => Promise.resolve(),
   toggleSound: () => Promise.resolve(),
   toggleWebcam: () => Promise.resolve(),
@@ -124,9 +179,38 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     ConnectionStatus.DISCONNECTED
   );
   const routerRtpCapabilities = useRef<RtpCapabilities | null>(null);
+  const sendRtpCapabilities = useRef<RtpCapabilities | null>(null);
   const audioVideoRefsMap = useRef<Map<number, AudioVideoRefs>>(new Map());
   const ownVoiceState = useOwnVoiceState();
+  const currentVoiceChannelId = useCurrentVoiceChannelId();
+  const channelCan = useChannelCan(currentVoiceChannelId);
   const { devices } = useDevices();
+  const appAudioPipelineRef = useRef<TDesktopAppAudioPipeline | undefined>(
+    undefined
+  );
+  const appAudioSessionRef = useRef<TAppAudioSession | undefined>(undefined);
+  const removeAppAudioFrameSubscriptionRef = useRef<(() => void) | undefined>(
+    undefined
+  );
+  const removeAppAudioStatusSubscriptionRef = useRef<(() => void) | undefined>(
+    undefined
+  );
+  const appAudioStartupTimeoutRef = useRef<
+    number | ReturnType<typeof setTimeout> | undefined
+  >(undefined);
+  const rawMicStreamRef = useRef<MediaStream | undefined>(undefined);
+  const micAudioPipelineRef = useRef<TMicAudioProcessingPipeline | undefined>(
+    undefined
+  );
+  const standbyDisplayAudioTrackRef = useRef<MediaStreamTrack | undefined>(
+    undefined
+  );
+  const standbyDisplayAudioStreamRef = useRef<MediaStream | undefined>(
+    undefined
+  );
+  const isPushToTalkHeldRef = useRef(false);
+  const isPushToMuteHeldRef = useRef(false);
+  const micMutedBeforePushRef = useRef<boolean | undefined>(undefined);
 
   const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
     if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -168,6 +252,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     setLocalAudioStream,
     setLocalVideoStream,
     setLocalScreenShare,
+    setLocalScreenShareAudio,
     clearLocalStreams
   } = useLocalStreams();
 
@@ -193,9 +278,31 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     resetStats
   } = useTransportStats();
 
+  const cleanupMicAudioPipeline = useCallback(async () => {
+    const rawMicStream = rawMicStreamRef.current;
+    rawMicStreamRef.current = undefined;
+
+    rawMicStream?.getTracks().forEach((track) => {
+      track.stop();
+    });
+
+    const pipeline = micAudioPipelineRef.current;
+    micAudioPipelineRef.current = undefined;
+
+    if (pipeline) {
+      try {
+        await pipeline.destroy();
+      } catch (error) {
+        logVoice('Failed to clean up microphone processing pipeline', { error });
+      }
+    }
+  }, []);
+
   const startMicStream = useCallback(async () => {
     try {
       logVoice('Starting microphone stream');
+
+      await cleanupMicAudioPipeline();
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -213,17 +320,45 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
       logVoice('Microphone stream obtained', { stream });
 
-      setLocalAudioStream(stream);
+      rawMicStreamRef.current = stream;
 
-      const audioTrack = stream.getAudioTracks()[0];
+      const rawAudioTrack = stream.getAudioTracks()[0];
 
-      if (audioTrack) {
-        audioTrack.enabled = !ownVoiceState.micMuted;
+      if (rawAudioTrack) {
+        let outboundStream = stream;
+        let outboundAudioTrack = rawAudioTrack;
+        try {
+          const micAudioPipeline = await createMicAudioProcessingPipeline({
+            inputTrack: rawAudioTrack,
+            enabled: devices.experimentalVoiceFilter,
+            suppressionLevel: devices.voiceFilterStrength
+          });
 
-        logVoice('Obtained audio track', { audioTrack });
+          if (micAudioPipeline) {
+            micAudioPipelineRef.current = micAudioPipeline;
+            outboundStream = micAudioPipeline.stream;
+            outboundAudioTrack = micAudioPipeline.track;
+            logVoice('Microphone voice filter enabled', {
+              backend: micAudioPipeline.backend,
+              suppressionLevel: devices.voiceFilterStrength
+            });
+          } else {
+            micAudioPipelineRef.current = undefined;
+          }
+        } catch (error) {
+          micAudioPipelineRef.current = undefined;
+          logVoice('Failed to initialize microphone voice filter, using raw mic', {
+            error
+          });
+        }
+
+        setLocalAudioStream(outboundStream);
+        outboundAudioTrack.enabled = !ownVoiceState.micMuted;
+
+        logVoice('Obtained audio track', { audioTrack: outboundAudioTrack });
 
         localAudioProducer.current = await producerTransport.current?.produce({
-          track: audioTrack,
+          track: outboundAudioTrack,
           appData: { kind: StreamKind.AUDIO }
         });
 
@@ -245,12 +380,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           }
         });
 
-        audioTrack.onended = () => {
+        outboundAudioTrack.onended = () => {
           logVoice('Audio track ended, cleaning up microphone');
 
-          localAudioStream?.getAudioTracks().forEach((track) => {
-            track.stop();
-          });
+          void cleanupMicAudioPipeline();
           localAudioProducer.current?.close();
 
           setLocalAudioStream(undefined);
@@ -260,16 +393,20 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       }
     } catch (error) {
       logVoice('Error starting microphone stream', { error });
+      await cleanupMicAudioPipeline();
+      setLocalAudioStream(undefined);
     }
   }, [
+    cleanupMicAudioPipeline,
     producerTransport,
     setLocalAudioStream,
     localAudioProducer,
-    localAudioStream,
     devices.microphoneId,
     devices.autoGainControl,
     devices.echoCancellation,
     devices.noiseSuppression,
+    devices.experimentalVoiceFilter,
+    devices.voiceFilterStrength,
     ownVoiceState.micMuted
   ]);
 
@@ -277,12 +414,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     try {
       logVoice('Starting webcam stream');
 
+      const requestedWebcamResolution = getResWidthHeight(
+        devices?.webcamResolution
+      );
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
           deviceId: { exact: devices?.webcamId },
           frameRate: devices.webcamFramerate,
-          ...getResWidthHeight(devices?.webcamResolution)
+          ...requestedWebcamResolution
         }
       });
 
@@ -295,8 +436,38 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       if (videoTrack) {
         logVoice('Obtained video track', { videoTrack });
 
+        const preferredVideoCodec = resolvePreferredVideoCodec(
+          sendRtpCapabilities.current,
+          devices.videoCodec
+        );
+
+        if (
+          devices.videoCodec !== VideoCodecPreference.AUTO &&
+          !preferredVideoCodec
+        ) {
+          logVoice('Preferred webcam codec unavailable, falling back to auto', {
+            preferredCodec: devices.videoCodec
+          });
+        }
+
+        const webcamTrackSettings = videoTrack.getSettings();
+        const webcamBitratePolicy = getVideoBitratePolicy({
+          profile: 'camera',
+          width: webcamTrackSettings.width ?? requestedWebcamResolution.width,
+          height: webcamTrackSettings.height ?? requestedWebcamResolution.height,
+          frameRate: webcamTrackSettings.frameRate ?? devices.webcamFramerate,
+          codecMimeType: preferredVideoCodec?.mimeType
+        });
+
         localVideoProducer.current = await producerTransport.current?.produce({
           track: videoTrack,
+          codec: preferredVideoCodec,
+          encodings: [{ maxBitrate: webcamBitratePolicy.maxBitrateBps }],
+          codecOptions: {
+            videoGoogleMinBitrate: webcamBitratePolicy.minKbps,
+            videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
+            videoGoogleMaxBitrate: webcamBitratePolicy.maxKbps
+          },
           appData: { kind: StreamKind.VIDEO }
         });
 
@@ -342,7 +513,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     localVideoStream,
     devices.webcamId,
     devices.webcamFramerate,
-    devices.webcamResolution
+    devices.webcamResolution,
+    devices.videoCodec
   ]);
 
   const stopWebcamStream = useCallback(() => {
@@ -361,6 +533,50 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     setLocalVideoStream(undefined);
   }, [localVideoStream, setLocalVideoStream, localVideoProducer]);
 
+  const cleanupDesktopAppAudio = useCallback(
+    async ({
+      stopCapture = true,
+      preserveCurrentAudio = false
+    }: {
+      stopCapture?: boolean;
+      preserveCurrentAudio?: boolean;
+    } = {}) => {
+      const desktopBridge = getDesktopBridge();
+      const startupTimeout = appAudioStartupTimeoutRef.current;
+      if (startupTimeout !== undefined) {
+        window.clearTimeout(startupTimeout);
+        appAudioStartupTimeoutRef.current = undefined;
+      }
+
+      removeAppAudioFrameSubscriptionRef.current?.();
+      removeAppAudioFrameSubscriptionRef.current = undefined;
+
+      removeAppAudioStatusSubscriptionRef.current?.();
+      removeAppAudioStatusSubscriptionRef.current = undefined;
+
+      const activeSession = appAudioSessionRef.current;
+      appAudioSessionRef.current = undefined;
+
+      if (stopCapture && desktopBridge && activeSession?.sessionId) {
+        try {
+          await desktopBridge.stopAppAudioCapture(activeSession.sessionId);
+        } catch (error) {
+          logVoice('Failed to stop desktop app audio capture', { error });
+        }
+      }
+
+      if (appAudioPipelineRef.current) {
+        await appAudioPipelineRef.current.destroy();
+      }
+      appAudioPipelineRef.current = undefined;
+
+      if (!preserveCurrentAudio) {
+        setLocalScreenShareAudio(undefined);
+      }
+    },
+    [setLocalScreenShareAudio]
+  );
+
   const stopScreenShareStream = useCallback(() => {
     logVoice('Stopping screen share stream');
 
@@ -373,113 +589,402 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
     localScreenShareProducer.current?.close();
     localScreenShareProducer.current = undefined;
+    localScreenShareAudioProducer.current?.close();
+    localScreenShareAudioProducer.current = undefined;
+    standbyDisplayAudioTrackRef.current = undefined;
+    standbyDisplayAudioStreamRef.current = undefined;
+
+    void cleanupDesktopAppAudio();
 
     setLocalScreenShare(undefined);
-  }, [localScreenShareStream, setLocalScreenShare, localScreenShareProducer]);
+    setLocalScreenShareAudio(undefined);
+  }, [
+    cleanupDesktopAppAudio,
+    localScreenShareStream,
+    setLocalScreenShare,
+    setLocalScreenShareAudio,
+    localScreenShareProducer,
+    localScreenShareAudioProducer
+  ]);
 
-  const startScreenShareStream = useCallback(async () => {
-    try {
-      logVoice('Starting screen share stream');
+  const requestDesktopScreenShareSelection =
+    useCallback(async (): Promise<TDesktopScreenShareSelection | null> => {
+      const desktopBridge = getDesktopBridge();
 
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          ...getResWidthHeight(devices?.screenResolution),
-          frameRate: devices?.screenFramerate
-        },
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false
+      if (!desktopBridge) {
+        return null;
+      }
+
+      try {
+        const [sources, capabilities] = await Promise.all([
+          desktopBridge.listShareSources(),
+          desktopBridge.getCapabilities({
+            experimentalRustCapture: devices.experimentalRustCapture
+          })
+        ]);
+
+        if (sources.length === 0) {
+          toast.error('No windows or screens were detected for sharing.');
+          return null;
         }
-      });
 
-      logVoice('Screen share stream obtained', { stream });
-      setLocalScreenShare(stream);
+        return requestScreenShareSelectionDialog({
+          sources,
+          capabilities,
+          defaultAudioMode: devices.screenAudioMode,
+          experimentalRustCapture: devices.experimentalRustCapture
+        });
+      } catch (error) {
+        logVoice('Failed to open desktop screen share picker', { error });
+        toast.error('Failed to load shareable sources.');
+        return null;
+      }
+    }, [devices.experimentalRustCapture, devices.screenAudioMode]);
 
-      const videoTrack = stream.getVideoTracks()[0];
-      const audioTrack = stream.getAudioTracks()[0];
+  const startScreenShareStream = useCallback(
+    async (desktopSelection?: TDesktopScreenShareSelection) => {
+      let stream: MediaStream | undefined;
 
-      if (videoTrack) {
-        logVoice('Obtained video track', { videoTrack });
+      try {
+        logVoice('Starting screen share stream');
 
-        localScreenShareProducer.current =
-          await producerTransport.current?.produce({
-            track: videoTrack,
-            appData: { kind: StreamKind.SCREEN }
-          });
+        let audioMode = devices.screenAudioMode;
+        const desktopBridge = getDesktopBridge();
 
-        localScreenShareProducer.current?.on('@close', async () => {
-          logVoice('Screen share producer closed');
+        if (desktopBridge && desktopSelection) {
+          const resolved =
+            await desktopBridge.prepareScreenShare(desktopSelection);
+          audioMode = resolved.effectiveMode;
 
-          const trpc = getTRPCClient();
-
-          try {
-            await trpc.voice.closeProducer.mutate({
-              kind: StreamKind.SCREEN
-            });
-          } catch (error) {
-            logVoice('Error closing screen share producer', { error });
+          if (resolved.warning) {
+            toast.warning(resolved.warning);
           }
+        }
+
+        if (
+          desktopBridge &&
+          desktopSelection &&
+          audioMode === ScreenAudioMode.APP &&
+          devices.experimentalRustCapture
+        ) {
+          try {
+            logVoice('Starting per-app sidecar capture', {
+              sourceId: desktopSelection.sourceId,
+              appAudioTargetId: desktopSelection.appAudioTargetId
+            });
+            const appAudioSession = await desktopBridge.startAppAudioCapture({
+              sourceId: desktopSelection.sourceId,
+              appAudioTargetId: desktopSelection.appAudioTargetId
+            });
+            logVoice('Per-app sidecar capture started', {
+              sessionId: appAudioSession.sessionId,
+              targetId: appAudioSession.targetId
+            });
+            const appAudioPipeline =
+              await createDesktopAppAudioPipeline(appAudioSession);
+            let hasReceivedSessionFrame = false;
+
+            appAudioSessionRef.current = appAudioSession;
+            appAudioPipelineRef.current = appAudioPipeline;
+
+            const startupTimeout = window.setTimeout(() => {
+              if (
+                hasReceivedSessionFrame ||
+                appAudioSessionRef.current?.sessionId !== appAudioSession.sessionId
+              ) {
+                return;
+              }
+
+              logVoice('Per-app sidecar produced no audio frames after startup', {
+                sessionId: appAudioSession.sessionId,
+                targetId: appAudioSession.targetId
+              });
+              toast.warning(
+                'Per-app audio started but produced no audio frames. Screen video will continue without shared audio.'
+              );
+              localScreenShareAudioProducer.current?.close();
+              localScreenShareAudioProducer.current = undefined;
+              setLocalScreenShareAudio(undefined);
+              void cleanupDesktopAppAudio({
+                stopCapture: true,
+                preserveCurrentAudio: false
+              });
+            }, 3000);
+            appAudioStartupTimeoutRef.current = startupTimeout;
+
+            removeAppAudioFrameSubscriptionRef.current?.();
+            removeAppAudioFrameSubscriptionRef.current =
+              desktopBridge.subscribeAppAudioFrames((frame) => {
+                if (frame.sessionId === appAudioSession.sessionId) {
+                  if (!hasReceivedSessionFrame) {
+                    logVoice('Received first per-app audio frame', {
+                      sessionId: frame.sessionId,
+                      targetId: frame.targetId
+                    });
+                  }
+
+                  hasReceivedSessionFrame = true;
+
+                  if (appAudioStartupTimeoutRef.current !== undefined) {
+                    window.clearTimeout(appAudioStartupTimeoutRef.current);
+                    appAudioStartupTimeoutRef.current = undefined;
+                  }
+                }
+                appAudioPipelineRef.current?.pushFrame(frame);
+              });
+
+            removeAppAudioStatusSubscriptionRef.current?.();
+            removeAppAudioStatusSubscriptionRef.current =
+              desktopBridge.subscribeAppAudioStatus(
+                (statusEvent: TAppAudioStatusEvent) => {
+                  logVoice('Received per-app sidecar status event', {
+                    sessionId: statusEvent.sessionId,
+                    targetId: statusEvent.targetId,
+                    reason: statusEvent.reason,
+                    error: statusEvent.error
+                  });
+                  if (
+                    statusEvent.sessionId !== appAudioSessionRef.current?.sessionId
+                  ) {
+                    return;
+                  }
+
+                  void (async () => {
+                    if (appAudioStartupTimeoutRef.current !== undefined) {
+                      window.clearTimeout(appAudioStartupTimeoutRef.current);
+                      appAudioStartupTimeoutRef.current = undefined;
+                    }
+                    toast.warning(
+                      statusEvent.error
+                        ? `Per-app audio capture ended (${statusEvent.reason}): ${statusEvent.error}`
+                        : `Per-app audio capture ended (${statusEvent.reason}). Screen video will continue without shared audio.`
+                    );
+                    localScreenShareAudioProducer.current?.close();
+                    localScreenShareAudioProducer.current = undefined;
+                    setLocalScreenShareAudio(undefined);
+
+                    await cleanupDesktopAppAudio({
+                      stopCapture: false,
+                      preserveCurrentAudio: false
+                    });
+                  })();
+                }
+              );
+          } catch (error) {
+            logVoice('Failed to start per-app sidecar audio capture', { error });
+            toast.warning(
+              'Per-app audio capture failed. Continuing without shared audio.'
+            );
+            await cleanupDesktopAppAudio();
+            audioMode = ScreenAudioMode.NONE;
+          }
+        }
+
+        // Electron main only provides display-capture audio in system mode.
+        // Requesting audio in per-app mode can abort capture startup.
+        const shouldCaptureDisplayAudio = audioMode === ScreenAudioMode.SYSTEM;
+        const requestedScreenResolution = getResWidthHeight(
+          devices?.screenResolution
+        );
+
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            ...requestedScreenResolution,
+            frameRate: devices?.screenFramerate
+          },
+          audio: shouldCaptureDisplayAudio
+            ? {
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false
+              }
+            : false
         });
 
-        videoTrack.onended = () => {
-          logVoice('Screen share track ended, cleaning up screen share');
+        logVoice('Screen share stream obtained', { stream });
+        setLocalScreenShare(stream);
 
-          localScreenShareStream?.getTracks().forEach((track) => {
-            track.stop();
-          });
-          localScreenShareProducer.current?.close();
+        const videoTrack = stream.getVideoTracks()[0];
+        const audioTrack = stream.getAudioTracks()[0];
 
-          setLocalScreenShare(undefined);
-        };
-
-        if (audioTrack) {
-          logVoice('Obtained audio track', { audioTrack });
-
-          localScreenShareAudioProducer.current =
-            await producerTransport.current?.produce({
-              track: audioTrack,
-              appData: { kind: StreamKind.SCREEN_AUDIO }
-            });
-
-          audioTrack.onended = () => {
-            localScreenShareAudioProducer.current?.close();
-            localScreenShareAudioProducer.current = undefined;
-          };
+        if (audioMode === ScreenAudioMode.APP && audioTrack) {
+          audioTrack.stop();
+          stream.removeTrack(audioTrack);
+          standbyDisplayAudioTrackRef.current = undefined;
+          standbyDisplayAudioStreamRef.current = undefined;
+        } else {
+          standbyDisplayAudioTrackRef.current = undefined;
+          standbyDisplayAudioStreamRef.current = undefined;
         }
 
-        return videoTrack;
-      } else {
-        throw new Error('No video track obtained for screen share');
+        if (videoTrack) {
+          logVoice('Obtained video track', { videoTrack });
+
+          // Favor text/detail preservation for desktop/screen content.
+          videoTrack.contentHint = 'detail';
+
+          const preferredVideoCodec = resolvePreferredVideoCodec(
+            sendRtpCapabilities.current,
+            devices.videoCodec
+          );
+
+          if (
+            devices.videoCodec !== VideoCodecPreference.AUTO &&
+            !preferredVideoCodec
+          ) {
+            logVoice(
+              'Preferred screen share codec unavailable, falling back to auto',
+              {
+                preferredCodec: devices.videoCodec
+              }
+            );
+          }
+
+          const screenTrackSettings = videoTrack.getSettings();
+          const screenBitratePolicy = getVideoBitratePolicy({
+            profile: 'screen',
+            width: screenTrackSettings.width ?? requestedScreenResolution.width,
+            height: screenTrackSettings.height ?? requestedScreenResolution.height,
+            frameRate: screenTrackSettings.frameRate ?? devices.screenFramerate,
+            codecMimeType: preferredVideoCodec?.mimeType
+          });
+
+          localScreenShareProducer.current =
+            await producerTransport.current?.produce({
+              track: videoTrack,
+              encodings: [{ maxBitrate: screenBitratePolicy.maxBitrateBps }],
+              codecOptions: {
+                videoGoogleMinBitrate: screenBitratePolicy.minKbps,
+                videoGoogleStartBitrate: screenBitratePolicy.startKbps,
+                videoGoogleMaxBitrate: screenBitratePolicy.maxKbps
+              },
+              codec: preferredVideoCodec,
+              appData: { kind: StreamKind.SCREEN }
+            });
+
+          localScreenShareProducer.current?.on('@close', async () => {
+            logVoice('Screen share producer closed');
+
+            const trpc = getTRPCClient();
+
+            try {
+              await trpc.voice.closeProducer.mutate({
+                kind: StreamKind.SCREEN
+              });
+            } catch (error) {
+              logVoice('Error closing screen share producer', { error });
+            }
+          });
+
+          videoTrack.onended = () => {
+            logVoice('Screen share track ended, cleaning up screen share');
+
+            localScreenShareStream?.getTracks().forEach((track) => {
+              track.stop();
+            });
+            localScreenShareProducer.current?.close();
+            localScreenShareAudioProducer.current?.close();
+            standbyDisplayAudioTrackRef.current = undefined;
+            standbyDisplayAudioStreamRef.current = undefined;
+            void cleanupDesktopAppAudio();
+
+            setLocalScreenShare(undefined);
+            setLocalScreenShareAudio(undefined);
+          };
+
+          if (
+            audioMode === ScreenAudioMode.APP &&
+            appAudioPipelineRef.current?.track
+          ) {
+            const appAudioTrack = appAudioPipelineRef.current.track;
+            setLocalScreenShareAudio(appAudioPipelineRef.current.stream);
+
+            localScreenShareAudioProducer.current =
+              await producerTransport.current?.produce({
+                track: appAudioTrack,
+                appData: { kind: StreamKind.SCREEN_AUDIO }
+              });
+
+            appAudioTrack.onended = () => {
+              localScreenShareAudioProducer.current?.close();
+              localScreenShareAudioProducer.current = undefined;
+              setLocalScreenShareAudio(undefined);
+
+              void cleanupDesktopAppAudio({
+                stopCapture: false
+              });
+            };
+          } else if (audioTrack) {
+            logVoice('Obtained audio track', { audioTrack });
+            setLocalScreenShareAudio(new MediaStream([audioTrack]));
+
+            localScreenShareAudioProducer.current =
+              await producerTransport.current?.produce({
+                track: audioTrack,
+                appData: { kind: StreamKind.SCREEN_AUDIO }
+              });
+
+            audioTrack.onended = () => {
+              localScreenShareAudioProducer.current?.close();
+              localScreenShareAudioProducer.current = undefined;
+              setLocalScreenShareAudio(undefined);
+            };
+          } else {
+            await cleanupDesktopAppAudio();
+            setLocalScreenShareAudio(undefined);
+          }
+
+          return videoTrack;
+        } else {
+          throw new Error('No video track obtained for screen share');
+        }
+      } catch (error) {
+        stream?.getTracks().forEach((track) => {
+          track.stop();
+        });
+        standbyDisplayAudioTrackRef.current = undefined;
+        standbyDisplayAudioStreamRef.current = undefined;
+        await cleanupDesktopAppAudio();
+
+        logVoice('Error starting screen share stream', { error });
+        throw error;
       }
-    } catch (error) {
-      logVoice('Error starting screen share stream', { error });
-      throw error;
-    }
-  }, [
-    setLocalScreenShare,
-    localScreenShareProducer,
-    localScreenShareAudioProducer,
-    producerTransport,
-    localScreenShareStream,
-    devices.screenResolution,
-    devices.screenFramerate
-  ]);
+    },
+    [
+      cleanupDesktopAppAudio,
+      setLocalScreenShare,
+      localScreenShareProducer,
+      localScreenShareAudioProducer,
+      producerTransport,
+      localScreenShareStream,
+      setLocalScreenShareAudio,
+      devices.experimentalRustCapture,
+      devices.screenAudioMode,
+      devices.screenResolution,
+      devices.screenFramerate,
+      devices.videoCodec
+    ]
+  );
 
   const cleanup = useCallback(() => {
     logVoice('Running voice provider cleanup');
 
+    void cleanupDesktopAppAudio();
+    void cleanupMicAudioPipeline();
     stopMonitoring();
     resetStats();
     clearLocalStreams();
     clearRemoteUserStreams();
     clearExternalStreams();
     cleanupTransports();
+    sendRtpCapabilities.current = null;
 
     setConnectionStatus(ConnectionStatus.DISCONNECTED);
   }, [
     stopMonitoring,
     resetStats,
+    cleanupDesktopAppAudio,
+    cleanupMicAudioPipeline,
     clearLocalStreams,
     clearRemoteUserStreams,
     clearExternalStreams,
@@ -509,6 +1014,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         await device.load({
           routerRtpCapabilities: incomingRouterRtpCapabilities
         });
+        sendRtpCapabilities.current = device.rtpCapabilities;
 
         await createProducerTransport(device);
         await createConsumerTransport(device);
@@ -540,15 +1046,142 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     ]
   );
 
-  const { toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =
+  const { setMicMuted, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =
     useVoiceControls({
       startMicStream,
       localAudioStream,
       startWebcamStream,
       stopWebcamStream,
       startScreenShareStream,
-      stopScreenShareStream
+      stopScreenShareStream,
+      requestScreenShareSelection: getDesktopBridge()
+        ? requestDesktopScreenShareSelection
+        : undefined
     });
+
+  const setMicMutedRef = useRef(setMicMuted);
+  const ownMicMutedRef = useRef(ownVoiceState.micMuted);
+  const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
+  const canSpeakRef = useRef(channelCan(ChannelPermission.SPEAK));
+
+  useEffect(() => {
+    setMicMutedRef.current = setMicMuted;
+  }, [setMicMuted]);
+
+  useEffect(() => {
+    ownMicMutedRef.current = ownVoiceState.micMuted;
+  }, [ownVoiceState.micMuted]);
+
+  useEffect(() => {
+    currentVoiceChannelIdRef.current = currentVoiceChannelId;
+    canSpeakRef.current = channelCan(ChannelPermission.SPEAK);
+  }, [channelCan, currentVoiceChannelId]);
+
+  const applyPushMicOverride = useCallback(() => {
+    if (isPushToMuteHeldRef.current) {
+      void setMicMutedRef.current(true, { playSound: false });
+      return;
+    }
+
+    if (isPushToTalkHeldRef.current) {
+      void setMicMutedRef.current(false, { playSound: false });
+      return;
+    }
+
+    if (typeof micMutedBeforePushRef.current === 'boolean') {
+      void setMicMutedRef.current(micMutedBeforePushRef.current, {
+        playSound: false
+      });
+    }
+
+    micMutedBeforePushRef.current = undefined;
+  }, []);
+
+  useEffect(() => {
+    const desktopBridge = getDesktopBridge();
+
+    if (!desktopBridge) {
+      return;
+    }
+
+    void desktopBridge
+      .setGlobalPushKeybinds({
+        pushToTalkKeybind: devices.pushToTalkKeybind,
+        pushToMuteKeybind: devices.pushToMuteKeybind
+      })
+      .then((result) => {
+        if (result.errors.length > 0) {
+          logVoice('Global push keybind registration issues', result);
+          toast.warning(result.errors[0]);
+        }
+      })
+      .catch((error) => {
+        logVoice('Failed to register global push keybinds', { error });
+      });
+
+    const removeGlobalKeybindSubscription =
+      desktopBridge.subscribeGlobalPushKeybindEvents((event) => {
+        if (
+          currentVoiceChannelIdRef.current === undefined ||
+          !canSpeakRef.current
+        ) {
+          if (event.kind === 'talk') {
+            isPushToTalkHeldRef.current = false;
+          }
+
+          if (event.kind === 'mute') {
+            isPushToMuteHeldRef.current = false;
+          }
+
+          applyPushMicOverride();
+          return;
+        }
+
+        if (
+          !isPushToTalkHeldRef.current &&
+          !isPushToMuteHeldRef.current &&
+          event.active &&
+          micMutedBeforePushRef.current === undefined
+        ) {
+          micMutedBeforePushRef.current = ownMicMutedRef.current;
+        }
+
+        if (event.kind === 'talk') {
+          isPushToTalkHeldRef.current = event.active;
+        }
+
+        if (event.kind === 'mute') {
+          isPushToMuteHeldRef.current = event.active;
+        }
+
+        applyPushMicOverride();
+      });
+
+    return () => {
+      removeGlobalKeybindSubscription();
+      isPushToTalkHeldRef.current = false;
+      isPushToMuteHeldRef.current = false;
+      applyPushMicOverride();
+      void desktopBridge.setGlobalPushKeybinds({}).catch((error) => {
+        logVoice('Failed to clear global push keybinds', { error });
+      });
+    };
+  }, [
+    applyPushMicOverride,
+    devices.pushToMuteKeybind,
+    devices.pushToTalkKeybind
+  ]);
+
+  useEffect(() => {
+    if (
+      currentVoiceChannelId === undefined ||
+      !channelCan(ChannelPermission.SPEAK)
+    ) {
+      isPushToTalkHeldRef.current = false;
+      isPushToMuteHeldRef.current = false;
+      applyPushMicOverride();
+    }
+  }, [applyPushMicOverride, channelCan, currentVoiceChannelId]);
 
   useVoiceEvents({
     consume,
@@ -576,6 +1209,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       getOrCreateRefs,
       init,
 
+      setMicMuted,
       toggleMic,
       toggleSound,
       toggleWebcam,
@@ -597,6 +1231,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       getOrCreateRefs,
       init,
 
+      setMicMuted,
       toggleMic,
       toggleSound,
       toggleWebcam,

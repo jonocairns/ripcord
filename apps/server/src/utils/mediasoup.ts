@@ -8,8 +8,18 @@ let mediaSoupWorker: mediasoup.types.Worker<mediasoup.types.AppData>;
 let webRtcServer: mediasoup.types.WebRtcServer<mediasoup.types.AppData>;
 let webRtcServerListenInfo: { ip: string; announcedAddress?: string };
 
+const getWebRtcPort = () => {
+  const envPort = Number.parseInt(process.env.SHARKORD_WEBRTC_PORT || '', 10);
+
+  if (Number.isInteger(envPort) && envPort > 0) {
+    return envPort;
+  }
+
+  return +config.webRtc.port;
+};
+
 const loadMediasoup = async () => {
-  const port = +config.webRtc.port;
+  const port = getWebRtcPort();
 
   const workerConfig: mediasoup.types.WorkerSettings = {
     logLevel: 'debug',

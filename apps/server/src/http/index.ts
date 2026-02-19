@@ -13,7 +13,9 @@ import { healthRouteHandler } from './healthz';
 import { infoRouteHandler } from './info';
 import { interfaceRouteHandler } from './interface';
 import { loginRouteHandler } from './login';
+import { logoutRouteHandler } from './logout';
 import { publicRouteHandler } from './public';
+import { refreshRouteHandler } from './refresh';
 import { uploadFileRouteHandler } from './upload';
 import { HttpValidationError } from './utils';
 
@@ -21,6 +23,18 @@ import { HttpValidationError } from './utils';
 const loginRateLimiter = createRateLimiter({
   maxRequests: config.rateLimiters.joinServer.maxRequests,
   windowMs: config.rateLimiters.joinServer.windowMs
+});
+
+// 10 attempts per minute per IP for refresh route
+const refreshRateLimiter = createRateLimiter({
+  maxRequests: 10,
+  windowMs: 60_000
+});
+
+// 20 attempts per minute per IP for logout route
+const logoutRateLimiter = createRateLimiter({
+  maxRequests: 20,
+  windowMs: 60_000
 });
 
 // this http server implementation is temporary and will be moved to bun server later when things are more stable
@@ -32,7 +46,9 @@ const createHttpServer = async (port: number = config.server.port) => {
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', '*');
 
-        const info = getWsInfo(undefined, req);
+        const info = getWsInfo(undefined, req, {
+          trustProxy: config.server.trustProxy
+        });
 
         logger.debug(
           `${chalk.dim('[HTTP]')} ${req.method} ${req.url} - ${info?.ip}`
@@ -91,6 +107,62 @@ const createHttpServer = async (port: number = config.server.port) => {
             }
 
             return await loginRouteHandler(req, res);
+          }
+
+          if (req.method === 'POST' && req.url === '/refresh') {
+            if (info?.ip) {
+              const key = getClientRateLimitKey(info.ip);
+              const rateLimit = refreshRateLimiter.consume(key);
+
+              if (!rateLimit.allowed) {
+                logger.debug(
+                  `${chalk.dim('[Rate Limiter HTTP]')} /refresh rate limited for key "${key}"`
+                );
+
+                res.setHeader(
+                  'Retry-After',
+                  getRateLimitRetrySeconds(rateLimit.retryAfterMs)
+                );
+
+                res.writeHead(429, { 'Content-Type': 'application/json' });
+                res.end(
+                  JSON.stringify({
+                    error: 'Too many refresh attempts. Please try again shortly.'
+                  })
+                );
+                return;
+              }
+            }
+
+            return await refreshRouteHandler(req, res);
+          }
+
+          if (req.method === 'POST' && req.url === '/logout') {
+            if (info?.ip) {
+              const key = getClientRateLimitKey(info.ip);
+              const rateLimit = logoutRateLimiter.consume(key);
+
+              if (!rateLimit.allowed) {
+                logger.debug(
+                  `${chalk.dim('[Rate Limiter HTTP]')} /logout rate limited for key "${key}"`
+                );
+
+                res.setHeader(
+                  'Retry-After',
+                  getRateLimitRetrySeconds(rateLimit.retryAfterMs)
+                );
+
+                res.writeHead(429, { 'Content-Type': 'application/json' });
+                res.end(
+                  JSON.stringify({
+                    error: 'Too many logout attempts. Please try again shortly.'
+                  })
+                );
+                return;
+              }
+            }
+
+            return await logoutRouteHandler(req, res);
           }
 
           if (req.method === 'GET' && req.url?.startsWith('/public')) {

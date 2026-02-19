@@ -1,5 +1,6 @@
 import { Dialog } from '@/components/dialogs/dialogs';
 import { logDebug } from '@/helpers/browser-logger';
+import { refreshAccessToken, revokeRefreshToken } from '@/helpers/auth';
 import { getHostFromServer } from '@/helpers/get-file-url';
 import { cleanup, connectToTRPC, getTRPCClient } from '@/lib/trpc';
 import { type TPublicServerSettings, type TServerInfo } from '@sharkord/shared';
@@ -47,25 +48,35 @@ export const setInfo = (info: TServerInfo | undefined) => {
 export const connect = async () => {
   const state = store.getState();
   const info = infoSelector(state);
+  const serverId = info?.serverId ?? 'unknown-server';
 
-  if (!info) {
-    throw new Error('Failed to fetch server info');
+  const attemptConnect = async () => {
+    const host = getHostFromServer();
+    const trpc = await connectToTRPC(host);
+
+    const { hasPassword, handshakeHash } = await trpc.others.handshake.query();
+
+    if (hasPassword) {
+      // show password prompt
+      openDialog(Dialog.SERVER_PASSWORD, { handshakeHash, serverId });
+      return;
+    }
+
+    await joinServer(handshakeHash);
+  };
+
+  try {
+    await attemptConnect();
+  } catch (error) {
+    const refreshed = await refreshAccessToken();
+
+    if (!refreshed) {
+      throw error;
+    }
+
+    cleanup();
+    await attemptConnect();
   }
-
-  const { serverId } = info;
-
-  const host = getHostFromServer();
-  const trpc = await connectToTRPC(host);
-
-  const { hasPassword, handshakeHash } = await trpc.others.handshake.query();
-
-  if (hasPassword) {
-    // show password prompt
-    openDialog(Dialog.SERVER_PASSWORD, { handshakeHash, serverId });
-    return;
-  }
-
-  await joinServer(handshakeHash);
 };
 
 export const joinServer = async (handshakeHash: string, password?: string) => {
@@ -74,15 +85,21 @@ export const joinServer = async (handshakeHash: string, password?: string) => {
 
   logDebug('joinServer', data);
 
-  unsubscribeFromServer = initSubscriptions();
-
   store.dispatch(serverSliceActions.setInitialData(data));
+
+  unsubscribeFromServer = initSubscriptions();
 
   setPluginCommands(data.commands);
 };
 
 export const disconnectFromServer = () => {
   cleanup();
+  unsubscribeFromServer?.();
+};
+
+export const logoutFromServer = async () => {
+  await revokeRefreshToken();
+  cleanup({ clearAuth: true });
   unsubscribeFromServer?.();
 };
 

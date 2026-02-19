@@ -3,7 +3,7 @@ import {
   LocalStorageKey,
   setLocalStorageItemAsJSON
 } from '@/helpers/storage';
-import { Resolution, type TDeviceSettings } from '@/types';
+import type { TDeviceSettings } from '@/types';
 import {
   createContext,
   memo,
@@ -13,20 +13,10 @@ import {
   useState
 } from 'react';
 import { useAvailableDevices } from './hooks/use-available-devices';
-
-const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
-  microphoneId: undefined,
-  webcamId: undefined,
-  webcamResolution: Resolution['720p'],
-  webcamFramerate: 30,
-  echoCancellation: false,
-  noiseSuppression: false,
-  autoGainControl: true,
-  shareSystemAudio: true,
-  mirrorOwnVideo: false,
-  screenResolution: Resolution['720p'],
-  screenFramerate: 30
-};
+import {
+  DEFAULT_DEVICE_SETTINGS,
+  migrateDeviceSettings
+} from './migrate-device-settings';
 
 export type TDevicesProvider = {
   loading: boolean;
@@ -66,9 +56,7 @@ const DevicesProvider = memo(({ children }: TDevicesProviderProps) => {
       LocalStorageKey.DEVICES_SETTINGS
     );
 
-    if (savedSettings) {
-      setDevices(savedSettings);
-    }
+    setDevices(migrateDeviceSettings(savedSettings));
 
     setLoading(false);
   }, [devicesLoading]);

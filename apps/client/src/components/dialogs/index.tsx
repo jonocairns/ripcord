@@ -10,6 +10,7 @@ import { Dialog } from './dialogs';
 import { PluginCommandsDialog } from './plugin-commands';
 import { PluginLogsDialog } from './plugin-logs';
 import { PluginSettingsDialog } from './plugin-settings';
+import { ScreenSharePickerDialog } from './screen-share-picker';
 import { ServerPasswordDialog } from './server-password';
 import { TextInputDialog } from './text-input';
 
@@ -24,7 +25,8 @@ const DialogsMap: any = {
   [Dialog.CREATE_CATEGORY]: CreateCategoryDialog,
   [Dialog.PLUGIN_LOGS]: PluginLogsDialog,
   [Dialog.PLUGIN_COMMANDS]: PluginCommandsDialog,
-  [Dialog.PLUGIN_SETTINGS]: PluginSettingsDialog
+  [Dialog.PLUGIN_SETTINGS]: PluginSettingsDialog,
+  [Dialog.SCREEN_SHARE_PICKER]: ScreenSharePickerDialog
 };
 
 const DialogsProvider = memo(() => {

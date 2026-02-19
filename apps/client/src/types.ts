@@ -1,4 +1,5 @@
 import type { StreamKind } from '@sharkord/shared';
+import { ScreenAudioMode } from './runtime/types';
 
 export type TDevices = {
   input: {
@@ -33,18 +34,38 @@ export enum Resolution {
   '144p' = '144p'
 }
 
+export enum VideoCodecPreference {
+  AUTO = 'auto',
+  VP8 = 'vp8',
+  H264 = 'h264',
+  AV1 = 'av1'
+}
+
+export enum VoiceFilterStrength {
+  LOW = 'low',
+  BALANCED = 'balanced',
+  HIGH = 'high',
+  AGGRESSIVE = 'aggressive'
+}
+
 export type TDeviceSettings = {
   microphoneId: string | undefined;
+  pushToTalkKeybind: string | undefined;
+  pushToMuteKeybind: string | undefined;
   webcamId: string | undefined;
   webcamResolution: Resolution;
   webcamFramerate: number;
   echoCancellation: boolean;
   noiseSuppression: boolean;
   autoGainControl: boolean;
-  shareSystemAudio: boolean;
+  experimentalVoiceFilter: boolean;
+  voiceFilterStrength: VoiceFilterStrength;
+  screenAudioMode: ScreenAudioMode;
+  experimentalRustCapture: boolean;
   mirrorOwnVideo: boolean;
   screenResolution: Resolution;
   screenFramerate: number;
+  videoCodec: VideoCodecPreference;
 };
 
 export type TRemoteUserStreamKinds =

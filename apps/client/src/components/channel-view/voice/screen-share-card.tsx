@@ -5,8 +5,8 @@ import {
 } from '@/components/voice-provider/volume-control-context';
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
 import { cn } from '@/lib/utils';
-import { Monitor, ZoomIn, ZoomOut } from 'lucide-react';
-import { memo, useCallback } from 'react';
+import { Maximize2, Minimize2, Monitor, ZoomIn, ZoomOut } from 'lucide-react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { CardControls } from './card-controls';
 import { CardGradient } from './card-gradient';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
@@ -19,9 +19,11 @@ type tScreenShareControlsProps = {
   isZoomEnabled: boolean;
   handlePinToggle: () => void;
   handleToggleZoom: () => void;
+  handleToggleFullscreen: () => void;
   showPinControls: boolean;
   showAudioControl: boolean;
   volumeKey: TVolumeKey;
+  isFullscreen: boolean;
 };
 
 const ScreenShareControls = memo(
@@ -30,13 +32,22 @@ const ScreenShareControls = memo(
     isZoomEnabled,
     handlePinToggle,
     handleToggleZoom,
+    handleToggleFullscreen,
     showPinControls,
     showAudioControl,
-    volumeKey
+    volumeKey,
+    isFullscreen
   }: tScreenShareControlsProps) => {
     return (
       <CardControls>
         {showAudioControl && <VolumeButton volumeKey={volumeKey} />}
+        <IconButton
+          variant={isFullscreen ? 'default' : 'ghost'}
+          icon={isFullscreen ? Minimize2 : Maximize2}
+          onClick={handleToggleFullscreen}
+          title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+          size="sm"
+        />
         {showPinControls && isPinned && (
           <IconButton
             variant={isZoomEnabled ? 'default' : 'ghost'}
@@ -98,6 +109,7 @@ const ScreenShareCard = memo(
       getCursor,
       resetZoom
     } = useScreenShareZoom();
+    const [isFullscreen, setIsFullscreen] = useState(false);
 
     const handlePinToggle = useCallback(() => {
       if (isPinned) {
@@ -107,6 +119,31 @@ const ScreenShareCard = memo(
         onPin?.();
       }
     }, [isPinned, onPin, onUnpin, resetZoom]);
+
+    const handleToggleFullscreen = useCallback(() => {
+      const container = containerRef.current;
+
+      if (!container) return;
+
+      if (document.fullscreenElement === container) {
+        void document.exitFullscreen();
+      } else {
+        void container.requestFullscreen();
+      }
+    }, [containerRef]);
+
+    useEffect(() => {
+      const handleFullscreenChange = () => {
+        setIsFullscreen(document.fullscreenElement === containerRef.current);
+      };
+
+      document.addEventListener('fullscreenchange', handleFullscreenChange);
+      handleFullscreenChange();
+
+      return () => {
+        document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      };
+    }, [containerRef]);
 
     if (!user || !hasScreenShareStream) return null;
 
@@ -136,9 +173,11 @@ const ScreenShareCard = memo(
           isZoomEnabled={isZoomEnabled}
           handlePinToggle={handlePinToggle}
           handleToggleZoom={handleToggleZoom}
+          handleToggleFullscreen={handleToggleFullscreen}
           showPinControls={showPinControls}
           showAudioControl={!isOwnUser && hasScreenShareAudioStream}
           volumeKey={volumeKey}
+          isFullscreen={isFullscreen}
         />
 
         <video
@@ -151,6 +190,7 @@ const ScreenShareCard = memo(
             transform: `scale(${zoom}) translate(${position.x / zoom}px, ${position.y / zoom}px)`,
             transition: isDragging ? 'none' : 'transform 0.1s ease-out'
           }}
+          onDoubleClick={handleToggleFullscreen}
         />
 
         <audio

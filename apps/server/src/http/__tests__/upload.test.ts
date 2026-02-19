@@ -7,6 +7,12 @@ import { tdb, testsBaseUrl } from '../../__tests__/setup';
 import { settings } from '../../db/schema';
 import { TMP_PATH } from '../../helpers/paths';
 
+type TUploadErrorResponse = {
+  token: string;
+  errors: Record<string, string>;
+  error?: string;
+};
+
 const getMockFile = (content: string): File => {
   const blob = new Blob([content], { type: 'text/plain' });
 
@@ -20,7 +26,7 @@ describe('/upload', () => {
     if (token) return;
 
     const response = await login('testowner', 'password123');
-    const data: any = await response.json();
+    const data = (await response.json()) as TUploadErrorResponse;
 
     token = data.token;
   });
@@ -68,7 +74,7 @@ describe('/upload', () => {
 
     expect(response.status).toBe(400);
 
-    const data: any = await response.json();
+    const data = (await response.json()) as TUploadErrorResponse;
 
     expect(data).toHaveProperty('errors');
     expect(data.errors[UploadHeaders.TOKEN]).toBeDefined();
@@ -81,7 +87,7 @@ describe('/upload', () => {
 
     expect(response.status).toBe(401);
 
-    const data: any = await response.json();
+    const data = (await response.json()) as TUploadErrorResponse;
 
     expect(data).toHaveProperty('error', 'Unauthorized');
   });
@@ -94,7 +100,7 @@ describe('/upload', () => {
 
     expect(response.status).toBe(403);
 
-    const data: any = await response.json();
+    const data = (await response.json()) as TUploadErrorResponse;
 
     expect(data).toHaveProperty(
       'error',
@@ -113,7 +119,7 @@ describe('/upload', () => {
 
     expect(response.status).toBe(413);
 
-    const data: any = await response.json();
+    const data = (await response.json()) as TUploadErrorResponse;
 
     expect(data).toHaveProperty(
       'error',

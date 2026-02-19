@@ -17,6 +17,8 @@ services:
       # Server configuration
       SHARKORD_PORT: "4991"
       SHARKORD_DEBUG: "false"
+      # Only enable when Sharkord is behind a trusted reverse proxy that rewrites forwarded headers.
+      SHARKORD_TRUST_PROXY: "true"
 
       # WebRTC configuration
       SHARKORD_WEBRTC_PORT: "40000"

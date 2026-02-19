@@ -1,8 +1,9 @@
-import { sha256, type TTempFile } from '@sharkord/shared';
+import { type TTempFile } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { initTest, uploadFile } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
+import { verifyPassword } from '../../helpers/password';
 import { users } from '../../db/schema';
 
 describe('users router', () => {
@@ -175,10 +176,8 @@ describe('users router', () => {
     // should not be plain text
     expect(row!.password).not.toBe(newPassword);
 
-    const hashedPassword = await sha256(newPassword);
-
-    // should be hashed
-    expect(row!.password).toBe(hashedPassword);
+    const matches = await verifyPassword(newPassword, row!.password);
+    expect(matches).toBe(true);
   });
 
   test('should throw when current password is incorrect', async () => {

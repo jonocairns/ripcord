@@ -13,23 +13,34 @@ import { ThemeProvider } from './components/theme-provider/index.tsx';
 import { store } from './features/store.ts';
 import { LocalStorageKey } from './helpers/storage.ts';
 import './index.css';
+import { initializeRuntimeServerConfig } from './runtime/server-config.ts';
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ThemeProvider
-      defaultTheme="dark"
-      storageKey={LocalStorageKey.VITE_UI_THEME}
-    >
-      <DebugInfo />
-      <Toaster />
-      <Provider store={store}>
-        <StoreDebug />
-        <DevicesProvider>
-          <DialogsProvider />
-          <ServerScreensProvider />
-          <Routing />
-        </DevicesProvider>
-      </Provider>
-    </ThemeProvider>
-  </StrictMode>
-);
+const bootstrap = async () => {
+  try {
+    await initializeRuntimeServerConfig();
+  } catch (error) {
+    console.error('Failed to initialize runtime server configuration', error);
+  }
+
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <ThemeProvider
+        defaultTheme="dark"
+        storageKey={LocalStorageKey.VITE_UI_THEME}
+      >
+        <DebugInfo />
+        <Toaster />
+        <Provider store={store}>
+          <StoreDebug />
+          <DevicesProvider>
+            <DialogsProvider />
+            <ServerScreensProvider />
+            <Routing />
+          </DevicesProvider>
+        </Provider>
+      </ThemeProvider>
+    </StrictMode>
+  );
+};
+
+void bootstrap();

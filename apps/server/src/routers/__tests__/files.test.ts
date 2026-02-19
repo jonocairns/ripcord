@@ -4,13 +4,17 @@ import fs from 'fs/promises';
 import { initTest, login, uploadFile } from '../../__tests__/helpers';
 import { fileManager } from '../../utils/file-manager';
 
+type TLoginBody = {
+  token: string;
+};
+
 describe('files router', () => {
   let tempFile: TTempFile;
   let counter = 0;
 
   beforeEach(async () => {
     const response = await login('testowner', 'password123');
-    const data: any = await response.json();
+    const data = (await response.json()) as TLoginBody;
 
     const res = await uploadFile(
       new File(['test'], `file-${counter++}.txt`, { type: 'text/plain' }),

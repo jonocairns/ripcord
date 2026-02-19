@@ -1,7 +1,12 @@
 import { getUrlFromServer } from '@/helpers/get-file-url';
+import {
+  getAuthToken,
+  getRefreshToken,
+  hydrateSessionToken
+} from '@/helpers/storage';
 import type { TServerInfo } from '@sharkord/shared';
 import { toast } from 'sonner';
-import { setInfo } from '../server/actions';
+import { connect, setInfo } from '../server/actions';
 import { store } from '../store';
 import { appSliceActions } from './slice';
 
@@ -26,16 +31,32 @@ export const fetchServerInfo = async (): Promise<TServerInfo | undefined> => {
 };
 
 export const loadApp = async () => {
-  const info = await fetchServerInfo();
+  try {
+    const info = await fetchServerInfo();
 
-  if (!info) {
-    console.error('Failed to load server info during app load');
-    toast.error('Failed to load server info');
-    return;
+    if (!info) {
+      console.error('Failed to load server info during app load');
+      toast.error('Failed to load server info');
+      return;
+    }
+
+    setInfo(info);
+
+    const existingToken = getAuthToken();
+    const existingRefreshToken = getRefreshToken();
+
+    if (existingToken || existingRefreshToken) {
+      hydrateSessionToken();
+
+      try {
+        await connect();
+      } catch (error) {
+        console.error('Failed to auto-connect with persisted auth token', error);
+      }
+    }
+  } finally {
+    setAppLoading(false);
   }
-
-  setInfo(info);
-  setAppLoading(false);
 };
 
 export const setModViewOpen = (isOpen: boolean, userId?: number) =>

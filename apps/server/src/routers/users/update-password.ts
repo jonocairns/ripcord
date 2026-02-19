@@ -1,8 +1,9 @@
-import { ActivityLogType, sha256 } from '@sharkord/shared';
+import { ActivityLogType } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { users } from '../../db/schema';
+import { hashPassword, verifyPassword } from '../../helpers/password';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
@@ -29,9 +30,12 @@ const updatePasswordRoute = protectedProcedure
       message: 'User not found'
     });
 
-    const hashedCurrentPassword = await sha256(input.currentPassword);
+    const isCurrentPasswordValid = await verifyPassword(
+      input.currentPassword,
+      user.password
+    );
 
-    if (user.password !== hashedCurrentPassword) {
+    if (!isCurrentPasswordValid) {
       ctx.throwValidationError(
         'currentPassword',
         'Current password is incorrect'
@@ -45,7 +49,7 @@ const updatePasswordRoute = protectedProcedure
       );
     }
 
-    const hashedNewPassword = await sha256(input.newPassword);
+    const hashedNewPassword = await hashPassword(input.newPassword);
 
     await db
       .update(users)

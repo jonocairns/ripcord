@@ -1,7 +1,17 @@
 /node_modules
+/TMPDIR:-/
 /.github/copilot-instructions.md
 /cenas.txt
 /cenas.md
 /DockerCenas
 /experiments
 .direnv/
+apps/desktop/dist/
+apps/desktop/build/
+apps/desktop/renderer-dist/
+apps/desktop/node_modules/
+apps/desktop/*.log
+apps/desktop/.DS_Store
+apps/desktop/*.tsbuildinfo
+apps/desktop/sidecar/target/
+apps/desktop/sidecar/bin/

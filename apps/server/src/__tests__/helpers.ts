@@ -52,6 +52,24 @@ const login = async (identity: string, password: string, invite?: string) =>
     })
   });
 
+const refresh = async (refreshToken: string) =>
+  fetch(`${testsBaseUrl}/refresh`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ refreshToken })
+  });
+
+const logout = async (refreshToken: string) =>
+  fetch(`${testsBaseUrl}/logout`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ refreshToken })
+  });
+
 const uploadFile = async (file: File, token: string) =>
   fetch(`${testsBaseUrl}/upload`, {
     method: 'POST',
@@ -65,4 +83,12 @@ const uploadFile = async (file: File, token: string) =>
     body: file
   });
 
-export { getCaller, getMockedToken, initTest, login, uploadFile };
+export {
+  getCaller,
+  getMockedToken,
+  initTest,
+  login,
+  logout,
+  refresh,
+  uploadFile
+};

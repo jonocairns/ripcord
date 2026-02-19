@@ -1,0 +1,9 @@
+.git
+.direnv
+node_modules
+**/node_modules
+apps/client/dist
+apps/server/build/out
+apps/server/build/temp
+apps/desktop/build
+*.log

@@ -1,23 +1,34 @@
 import { UploadHeaders, type TTempFile } from '@sharkord/shared';
 import { toast } from 'sonner';
+import { refreshAccessToken } from './auth';
 import { getUrlFromServer } from './get-file-url';
-import { getSessionStorageItem, SessionStorageKey } from './storage';
+import { getAuthToken } from './storage';
 
 const uploadFile = async (file: File) => {
   const url = getUrlFromServer();
 
-  const res = await fetch(`${url}/upload`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      [UploadHeaders.TYPE]: file.type,
-      [UploadHeaders.CONTENT_LENGTH]: file.size.toString(),
-      [UploadHeaders.ORIGINAL_NAME]: file.name,
-      [UploadHeaders.TOKEN]:
-        getSessionStorageItem(SessionStorageKey.TOKEN) ?? ''
-    },
-    body: file
-  });
+  const requestUpload = () =>
+    fetch(`${url}/upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        [UploadHeaders.TYPE]: file.type,
+        [UploadHeaders.CONTENT_LENGTH]: file.size.toString(),
+        [UploadHeaders.ORIGINAL_NAME]: file.name,
+        [UploadHeaders.TOKEN]: getAuthToken() ?? ''
+      },
+      body: file
+    });
+
+  let res = await requestUpload();
+
+  if (res.status === 401) {
+    const refreshed = await refreshAccessToken();
+
+    if (refreshed) {
+      res = await requestUpload();
+    }
+  }
 
   if (!res.ok) {
     const errorData = await res.json();

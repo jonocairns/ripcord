@@ -1,5 +1,5 @@
 import { getTRPCClient } from '@/lib/trpc';
-import { type TPublicServerSettings } from '@sharkord/shared';
+import { Permission, type TPublicServerSettings } from '@sharkord/shared';
 import { setPublicServerSettings } from './actions';
 import { subscribeToCategories } from './categories/subscriptions';
 import { subscribeToChannels } from './channels/subscriptions';
@@ -9,6 +9,9 @@ import { subscribeToPlugins } from './plugins/subscriptions';
 import { subscribeToRoles } from './roles/subscriptions';
 import { subscribeToUsers } from './users/subscriptions';
 import { subscribeToVoice } from './voice/subscriptions';
+import { rolesSelector } from './roles/selectors';
+import { store } from '../store';
+import { ownUserSelector } from './users/selectors';
 
 const subscribeToServer = () => {
   const trpc = getTRPCClient();
@@ -29,6 +32,16 @@ const subscribeToServer = () => {
 };
 
 const initSubscriptions = () => {
+  const state = store.getState();
+  const ownUser = ownUserSelector(state);
+  const roles = rolesSelector(state);
+  const ownRoleIds = new Set(ownUser?.roleIds ?? []);
+
+  const canSubscribeToPluginCommands = roles.some((role) => {
+    if (!ownRoleIds.has(role.id)) return false;
+    return role.permissions.includes(Permission.EXECUTE_PLUGIN_COMMANDS);
+  });
+
   const subscriptors = [
     subscribeToChannels,
     subscribeToServer,
@@ -37,9 +50,12 @@ const initSubscriptions = () => {
     subscribeToUsers,
     subscribeToMessages,
     subscribeToVoice,
-    subscribeToCategories,
-    subscribeToPlugins
+    subscribeToCategories
   ];
+
+  if (canSubscribeToPluginCommands) {
+    subscriptors.push(subscribeToPlugins);
+  }
 
   const unsubscribes = subscriptors.map((subscriptor) => subscriptor());
 

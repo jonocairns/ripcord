@@ -18,11 +18,30 @@ const emojiSelectFields = {
   }
 };
 
-// TODO: check this any
-const parseEmoji = (row: any): TJoinedEmoji => ({
+type TEmojiRow = {
+  emoji: Omit<TJoinedEmoji, 'file' | 'user'>;
+  file: TJoinedEmoji['file'];
+  user: Pick<
+    TJoinedEmoji['user'],
+    | 'id'
+    | 'name'
+    | 'bannerColor'
+    | 'bio'
+    | 'createdAt'
+    | 'banned'
+    | 'avatarId'
+    | 'bannerId'
+  >;
+};
+
+const parseEmoji = (row: TEmojiRow): TJoinedEmoji => ({
   ...row.emoji,
   file: row.file,
-  user: row.user
+  user: {
+    ...row.user,
+    avatar: null,
+    banner: null
+  }
 });
 
 const getEmojiById = async (id: number): Promise<TJoinedEmoji | undefined> => {

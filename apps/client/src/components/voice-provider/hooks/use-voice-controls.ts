@@ -5,6 +5,7 @@ import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useOwnVoiceState } from '@/features/server/voice/hooks';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
+import type { TDesktopScreenShareSelection } from '@/runtime/types';
 import { useCallback } from 'react';
 import { toast } from 'sonner';
 
@@ -15,8 +16,15 @@ type TUseVoiceControlsParams = {
   startWebcamStream: () => Promise<void>;
   stopWebcamStream: () => void;
 
-  startScreenShareStream: () => Promise<MediaStreamTrack>;
+  startScreenShareStream: (
+    selection?: TDesktopScreenShareSelection
+  ) => Promise<MediaStreamTrack>;
   stopScreenShareStream: () => void;
+  requestScreenShareSelection?: () => Promise<TDesktopScreenShareSelection | null>;
+};
+
+type TSetMicMutedOptions = {
+  playSound?: boolean;
 };
 
 const useVoiceControls = ({
@@ -25,44 +33,63 @@ const useVoiceControls = ({
   startWebcamStream,
   stopWebcamStream,
   startScreenShareStream,
-  stopScreenShareStream
+  stopScreenShareStream,
+  requestScreenShareSelection
 }: TUseVoiceControlsParams) => {
   const ownVoiceState = useOwnVoiceState();
   const currentVoiceChannelId = useCurrentVoiceChannelId();
 
-  const toggleMic = useCallback(async () => {
-    const newState = !ownVoiceState.micMuted;
-    const trpc = getTRPCClient();
+  const setMicMuted = useCallback(
+    async (newState: boolean, options?: TSetMicMutedOptions) => {
+      if (newState === ownVoiceState.micMuted) {
+        return;
+      }
 
-    updateOwnVoiceState({ micMuted: newState });
-    playSound(
-      newState ? SoundType.OWN_USER_MUTED_MIC : SoundType.OWN_USER_UNMUTED_MIC
-    );
+      const shouldPlaySound = options?.playSound ?? true;
+      const trpc = getTRPCClient();
 
-    if (!currentVoiceChannelId) return;
+      updateOwnVoiceState({ micMuted: newState });
 
-    localAudioStream?.getAudioTracks().forEach((track) => {
-      track.enabled = !newState;
-    });
+      if (shouldPlaySound) {
+        playSound(
+          newState
+            ? SoundType.OWN_USER_MUTED_MIC
+            : SoundType.OWN_USER_UNMUTED_MIC
+        );
+      }
 
-    try {
-      await trpc.voice.updateState.mutate({
-        micMuted: newState
+      if (!currentVoiceChannelId) return;
+
+      localAudioStream?.getAudioTracks().forEach((track) => {
+        track.enabled = !newState;
       });
 
-      if (!localAudioStream && !newState) {
-        await startMicStream();
+      try {
+        await trpc.voice.updateState.mutate({
+          micMuted: newState
+        });
+
+        if (!localAudioStream && !newState) {
+          await startMicStream();
+        }
+      } catch (error) {
+        updateOwnVoiceState({ micMuted: !newState });
+        toast.error(getTrpcError(error, 'Failed to update microphone state'));
       }
-    } catch (error) {
-      updateOwnVoiceState({ micMuted: !newState });
-      toast.error(getTrpcError(error, 'Failed to update microphone state'));
-    }
-  }, [
-    ownVoiceState.micMuted,
-    startMicStream,
-    currentVoiceChannelId,
-    localAudioStream
-  ]);
+    },
+    [
+      ownVoiceState.micMuted,
+      currentVoiceChannelId,
+      localAudioStream,
+      startMicStream
+    ]
+  );
+
+  const toggleMic = useCallback(async () => {
+    const newState = !ownVoiceState.micMuted;
+
+    await setMicMuted(newState, { playSound: true });
+  }, [ownVoiceState.micMuted, setMicMuted]);
 
   const toggleSound = useCallback(async () => {
     const newState = !ownVoiceState.soundMuted;
@@ -110,7 +137,7 @@ const useVoiceControls = ({
       await trpc.voice.updateState.mutate({
         webcamEnabled: newState
       });
-     } catch (error) {
+    } catch (error) {
       updateOwnVoiceState({ webcamEnabled: false });
 
       try {
@@ -129,8 +156,19 @@ const useVoiceControls = ({
   ]);
 
   const toggleScreenShare = useCallback(async () => {
+    if (!currentVoiceChannelId) return;
+
     const newState = !ownVoiceState.sharingScreen;
     const trpc = getTRPCClient();
+    let selection: TDesktopScreenShareSelection | null | undefined = undefined;
+
+    if (newState && requestScreenShareSelection) {
+      selection = await requestScreenShareSelection();
+
+      if (!selection) {
+        return;
+      }
+    }
 
     updateOwnVoiceState({ sharingScreen: newState });
 
@@ -142,8 +180,8 @@ const useVoiceControls = ({
 
     try {
       if (newState) {
-        const video = await startScreenShareStream();
-        
+        const video = await startScreenShareStream(selection || undefined);
+
         // handle native screen share end
         video.onended = async () => {
           stopScreenShareStream();
@@ -179,10 +217,12 @@ const useVoiceControls = ({
     ownVoiceState.sharingScreen,
     startScreenShareStream,
     stopScreenShareStream,
-    currentVoiceChannelId
+    currentVoiceChannelId,
+    requestScreenShareSelection
   ]);
 
   return {
+    setMicMuted,
     toggleMic,
     toggleSound,
     toggleWebcam,

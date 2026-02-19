@@ -34,7 +34,7 @@ const defaultRouterOptions: RouterOptions<AppData> = {
       mimeType: 'video/VP8',
       clockRate: 90000,
       parameters: {
-        'x-google-start-bitrate': 1000
+        'x-google-start-bitrate': 2500
       }
     },
     {
@@ -43,9 +43,17 @@ const defaultRouterOptions: RouterOptions<AppData> = {
       clockRate: 90000,
       parameters: {
         'packetization-mode': 1,
-        'profile-level-id': '42e01f',
+        'profile-level-id': '42e02a',
         'level-asymmetry-allowed': 1,
-        'x-google-start-bitrate': 1000
+        'x-google-start-bitrate': 2500
+      }
+    },
+    {
+      kind: 'video',
+      mimeType: 'video/AV1',
+      clockRate: 90000,
+      parameters: {
+        'x-google-start-bitrate': 2500
       }
     },
     {
@@ -324,7 +332,7 @@ class VoiceRuntime {
       enableTcp: true,
       preferUdp: true,
       preferTcp: false,
-      initialAvailableOutgoingBitrate: 1000000
+      initialAvailableOutgoingBitrate: 3000000
     });
 
     const params: TTransportParams = {

@@ -1,11 +1,19 @@
 import { openServerScreen } from '@/features/server-screens/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useChannelCan } from '@/features/server/hooks';
+import { logoutFromServer } from '@/features/server/actions';
 import { useOwnPublicUser } from '@/features/server/users/hooks';
 import { useVoice } from '@/features/server/voice/hooks';
 import { cn } from '@/lib/utils';
 import { ChannelPermission } from '@sharkord/shared';
-import { HeadphoneOff, Headphones, Mic, MicOff, Settings } from 'lucide-react';
+import {
+  HeadphoneOff,
+  Headphones,
+  LogOut,
+  Mic,
+  MicOff,
+  Settings
+} from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { ServerScreen } from '../server-screens/screens';
 import { Button } from '../ui/button';
@@ -102,6 +110,18 @@ const UserControl = memo(() => {
           title="User settings"
         >
           <Settings className="h-4 w-4" />
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+          onClick={() => {
+            void logoutFromServer();
+          }}
+          title="Log out"
+        >
+          <LogOut className="h-4 w-4" />
         </Button>
       </div>
     </div>

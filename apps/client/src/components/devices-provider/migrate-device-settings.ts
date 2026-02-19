@@ -1,0 +1,89 @@
+import { ScreenAudioMode } from '@/runtime/types';
+import {
+  Resolution,
+  type TDeviceSettings,
+  VideoCodecPreference,
+  VoiceFilterStrength
+} from '@/types';
+import { normalizePushKeybind } from './push-keybind';
+
+type TLegacyDeviceSettings = Partial<TDeviceSettings> & {
+  shareSystemAudio?: boolean;
+};
+
+const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
+  microphoneId: undefined,
+  pushToTalkKeybind: undefined,
+  pushToMuteKeybind: undefined,
+  webcamId: undefined,
+  webcamResolution: Resolution['720p'],
+  webcamFramerate: 30,
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: true,
+  experimentalVoiceFilter: false,
+  voiceFilterStrength: VoiceFilterStrength.BALANCED,
+  screenAudioMode: ScreenAudioMode.SYSTEM,
+  experimentalRustCapture: false,
+  mirrorOwnVideo: false,
+  screenResolution: Resolution['720p'],
+  screenFramerate: 30,
+  videoCodec: VideoCodecPreference.AUTO
+};
+
+const migrateDeviceSettings = (
+  incomingSettings: TLegacyDeviceSettings | undefined
+): TDeviceSettings => {
+  if (!incomingSettings) {
+    return DEFAULT_DEVICE_SETTINGS;
+  }
+
+  let screenAudioMode = incomingSettings.screenAudioMode;
+
+  if (
+    !screenAudioMode &&
+    typeof incomingSettings.shareSystemAudio === 'boolean'
+  ) {
+    screenAudioMode = incomingSettings.shareSystemAudio
+      ? ScreenAudioMode.SYSTEM
+      : ScreenAudioMode.NONE;
+  }
+
+  const pushToTalkKeybind = normalizePushKeybind(
+    incomingSettings.pushToTalkKeybind
+  );
+  const pushToMuteKeybind = normalizePushKeybind(
+    incomingSettings.pushToMuteKeybind
+  );
+
+  return {
+    ...DEFAULT_DEVICE_SETTINGS,
+    ...incomingSettings,
+    screenAudioMode: screenAudioMode || ScreenAudioMode.SYSTEM,
+    videoCodec: Object.values(VideoCodecPreference).includes(
+      incomingSettings.videoCodec as VideoCodecPreference
+    )
+      ? (incomingSettings.videoCodec as VideoCodecPreference)
+      : VideoCodecPreference.AUTO,
+    experimentalVoiceFilter:
+      typeof incomingSettings.experimentalVoiceFilter === 'boolean'
+        ? incomingSettings.experimentalVoiceFilter
+        : DEFAULT_DEVICE_SETTINGS.experimentalVoiceFilter,
+    voiceFilterStrength: Object.values(VoiceFilterStrength).includes(
+      incomingSettings.voiceFilterStrength as VoiceFilterStrength
+    )
+      ? (incomingSettings.voiceFilterStrength as VoiceFilterStrength)
+      : DEFAULT_DEVICE_SETTINGS.voiceFilterStrength,
+    experimentalRustCapture:
+      typeof incomingSettings.experimentalRustCapture === 'boolean'
+        ? incomingSettings.experimentalRustCapture
+        : DEFAULT_DEVICE_SETTINGS.experimentalRustCapture,
+    pushToTalkKeybind,
+    pushToMuteKeybind:
+      pushToMuteKeybind && pushToMuteKeybind === pushToTalkKeybind
+        ? undefined
+        : pushToMuteKeybind
+  };
+};
+
+export { DEFAULT_DEVICE_SETTINGS, migrateDeviceSettings };
