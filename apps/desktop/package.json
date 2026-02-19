@@ -34,8 +34,8 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "Sharkord",
-        "repo": "sharkord"
+        "owner": "jonocairns",
+        "repo": "swsh"
       }
     ],
     "asar": true,

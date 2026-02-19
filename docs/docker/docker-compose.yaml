@@ -1,7 +1,7 @@
 services:
-  sharkord:
-    image: sharkord/sharkord:latest
-    container_name: sharkord
+  swsh:
+    image: ghcr.io/jonocairns/swsh:latest
+    container_name: swsh
     restart: unless-stopped
     ports:
       # Main HTTP/WebSocket port
