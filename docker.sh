@@ -58,7 +58,7 @@ IMAGE="ghcr.io/$GHCR_OWNER/$IMAGE_NAME"
 
 if [ "$SKIP_BUILD" != "1" ]; then
   require_cmd bun
-  echo "Building Sharkord binaries..."
+  echo "Building swsh binaries..."
   (cd "$SERVER_DIR" && bun run build)
 fi
 
