@@ -1,4 +1,5 @@
 /node_modules
+/TMPDIR:-/
 /.github/copilot-instructions.md
 /cenas.txt
 /cenas.md
