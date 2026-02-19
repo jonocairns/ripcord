@@ -43,6 +43,6 @@ jobs:
         with:
           workspaces: apps/desktop/sidecar -> target
 
-      - name: Build and test Rust sidecar
+      - name: Build and test Rust sidecar (debug profile)
         working-directory: apps/desktop/sidecar
-        run: cargo test --release --locked
+        run: cargo test --locked
