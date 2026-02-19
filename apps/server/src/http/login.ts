@@ -1,4 +1,4 @@
-import { ActivityLogType, type TJoinedUser } from '@sharkord/shared';
+import { ActivityLogType, OWNER_ROLE_ID, type TJoinedUser } from '@sharkord/shared';
 import { eq, sql } from 'drizzle-orm';
 import http from 'http';
 import z from 'zod';
@@ -13,6 +13,7 @@ import { invites, userRoles, users } from '../db/schema';
 import { getWsInfo } from '../helpers/get-ws-info';
 import { hashPassword, isArgon2Hash, verifyPassword } from '../helpers/password';
 import { enqueueActivityLog } from '../queues/activity-log';
+import { IS_DEVELOPMENT } from '../utils/env';
 import { invariant } from '../utils/invariant';
 import { issueAuthTokens } from './auth-tokens';
 import { getJsonBody } from './helpers';
@@ -39,6 +40,9 @@ const registerUser = async (
     message: 'Default role not found'
   });
 
+  const isDevSharkordIdentity = IS_DEVELOPMENT && identity === 'sharkord';
+  const roleIdToAssign = isDevSharkordIdentity ? OWNER_ROLE_ID : defaultRole.id;
+
   const user = await db
     .insert(users)
     .values({
@@ -51,7 +55,7 @@ const registerUser = async (
     .get();
 
   await db.insert(userRoles).values({
-    roleId: defaultRole.id,
+    roleId: roleIdToAssign,
     userId: user.id,
     createdAt: Date.now()
   });
@@ -111,6 +115,17 @@ const loginRouteHandler = async (
       data.invite,
       connectionInfo?.ip
     );
+  }
+
+  if (IS_DEVELOPMENT && data.identity === 'sharkord') {
+    await db
+      .insert(userRoles)
+      .values({
+        roleId: OWNER_ROLE_ID,
+        userId: existingUser.id,
+        createdAt: Date.now()
+      })
+      .onConflictDoNothing();
   }
 
   if (existingUser.banned) {

@@ -136,7 +136,8 @@ const seedDatabase = async () => {
 
   const initialUsers: TIUser[] = [
     {
-      identity: await sha256(randomUUIDv7()),
+      // In development, keep the bootstrap account identity predictable.
+      identity: IS_DEVELOPMENT ? 'sharkord' : await sha256(randomUUIDv7()),
       name: 'Sharkord',
       avatarId: null,
       password: await hashPassword('sharkord'),
@@ -228,4 +229,30 @@ const backfillDefaultRolePermissions = async () => {
     .onConflictDoNothing();
 };
 
-export { backfillDefaultRolePermissions, seedDatabase };
+const backfillDevelopmentSharkordAccess = async () => {
+  if (!IS_DEVELOPMENT) return;
+
+  const sharkordUser = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.identity, 'sharkord'))
+    .limit(1)
+    .get();
+
+  if (!sharkordUser) return;
+
+  await db
+    .insert(userRoles)
+    .values({
+      userId: sharkordUser.id,
+      roleId: OWNER_ROLE_ID,
+      createdAt: Date.now()
+    })
+    .onConflictDoNothing();
+};
+
+export {
+  backfillDefaultRolePermissions,
+  backfillDevelopmentSharkordAccess,
+  seedDatabase
+};
