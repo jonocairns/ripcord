@@ -38,7 +38,7 @@ const ContentWrapper = memo(() => {
         <Alert variant="destructive" className="max-w-md">
           <AlertTriangle />
           <AlertDescription>
-            Sharkord is not optimized for mobile devices yet. The experience
+            Ripcord is not optimized for mobile devices yet. The experience
             will not be ideal.
           </AlertDescription>
         </Alert>

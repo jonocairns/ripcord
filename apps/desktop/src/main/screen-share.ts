@@ -32,11 +32,51 @@ const getDesktopSources = async () => {
   });
 };
 
+const isScreenSource = (source: DesktopCapturerSource) => {
+  return source.id.startsWith("screen:");
+};
+
+const fallbackSourceName = (source: DesktopCapturerSource) => {
+  const idSegments = source.id.split(":");
+
+  if (isScreenSource(source)) {
+    const displayIndex = Number.parseInt(idSegments[1] ?? "", 10);
+    if (Number.isFinite(displayIndex)) {
+      return `Display ${displayIndex + 1}`;
+    }
+
+    return "Display";
+  }
+
+  const windowToken = idSegments[1];
+  if (windowToken) {
+    return `Window ${windowToken}`;
+  }
+
+  return "Window";
+};
+
+const compareSources = (left: DesktopCapturerSource, right: DesktopCapturerSource) => {
+  const leftKindOrder = isScreenSource(left) ? 0 : 1;
+  const rightKindOrder = isScreenSource(right) ? 0 : 1;
+
+  if (leftKindOrder !== rightKindOrder) {
+    return leftKindOrder - rightKindOrder;
+  }
+
+  return left.name.localeCompare(right.name, undefined, {
+    sensitivity: "base",
+    numeric: true,
+  });
+};
+
 const serializeSource = (source: DesktopCapturerSource): TShareSource => {
+  const normalizedName = source.name.trim();
+
   return {
     id: source.id,
-    name: source.name,
-    kind: source.id.startsWith("screen:") ? "screen" : "window",
+    name: normalizedName || fallbackSourceName(source),
+    kind: isScreenSource(source) ? "screen" : "window",
     thumbnailDataUrl: source.thumbnail.toDataURL(),
     appIconDataUrl: source.appIcon?.toDataURL(),
   };
@@ -44,7 +84,7 @@ const serializeSource = (source: DesktopCapturerSource): TShareSource => {
 
 const listShareSources = async (): Promise<TShareSource[]> => {
   const sources = await getDesktopSources();
-  return sources.map(serializeSource);
+  return sources.sort(compareSources).map(serializeSource);
 };
 
 const getSourceById = async (sourceId: string) => {

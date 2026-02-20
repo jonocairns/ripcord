@@ -12,7 +12,7 @@ class Updater {
   constructor() {
     this.bunUpdater = new BunUpdater({
       repoOwner: 'jonocairns',
-      repoName: 'swsh',
+      repoName: 'ripcord',
       currentVersion: SERVER_VERSION
     });
 

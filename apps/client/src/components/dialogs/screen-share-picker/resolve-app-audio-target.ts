@@ -5,7 +5,7 @@ import {
 
 type TResolveAppAudioTargetBehaviorInput = {
   audioMode: ScreenAudioMode;
-  experimentalRustCapture: boolean;
+  perAppAudioSupported: boolean;
   sourceKind: TDesktopShareSourceKind | undefined;
   suggestedTargetId: string | undefined;
 };
@@ -17,14 +17,12 @@ type TResolveAppAudioTargetBehaviorResult = {
 
 const resolveAppAudioTargetBehavior = ({
   audioMode,
-  experimentalRustCapture,
+  perAppAudioSupported,
   sourceKind,
   suggestedTargetId
 }: TResolveAppAudioTargetBehaviorInput): TResolveAppAudioTargetBehaviorResult => {
   const shouldResolveAppAudioTargets =
-    experimentalRustCapture &&
-    audioMode === ScreenAudioMode.APP &&
-    !!sourceKind;
+    perAppAudioSupported && audioMode === ScreenAudioMode.APP && !!sourceKind;
 
   const requiresManualAppAudioTarget =
     shouldResolveAppAudioTargets &&

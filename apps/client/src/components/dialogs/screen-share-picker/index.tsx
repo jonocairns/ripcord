@@ -33,7 +33,6 @@ type TScreenSharePickerDialogProps = TDialogBaseProps & {
   sources: TDesktopShareSource[];
   capabilities: TDesktopCapabilities;
   defaultAudioMode: ScreenAudioMode;
-  experimentalRustCapture: boolean;
   onConfirm?: (selection: TDesktopScreenShareSelection) => void;
   onCancel?: () => void;
 };
@@ -50,7 +49,6 @@ const ScreenSharePickerDialog = memo(
     sources,
     capabilities,
     defaultAudioMode,
-    experimentalRustCapture,
     onConfirm,
     onCancel
   }: TScreenSharePickerDialogProps) => {
@@ -66,6 +64,14 @@ const ScreenSharePickerDialog = memo(
     const [loadingAppAudioTargets, setLoadingAppAudioTargets] = useState(false);
 
     const hasSources = sources.length > 0;
+    const displaySources = useMemo(
+      () => sources.filter((source) => source.kind === 'screen'),
+      [sources]
+    );
+    const windowSources = useMemo(
+      () => sources.filter((source) => source.kind === 'window'),
+      [sources]
+    );
     const selectedSource = useMemo(() => {
       if (!selectedSourceId) {
         return undefined;
@@ -75,7 +81,7 @@ const ScreenSharePickerDialog = memo(
     }, [selectedSourceId, sources]);
     const appAudioTargetBehavior = resolveAppAudioTargetBehavior({
       audioMode,
-      experimentalRustCapture,
+      perAppAudioSupported: capabilities.perAppAudio === 'supported',
       sourceKind: selectedSource?.kind,
       suggestedTargetId: appAudioTargetsResult.suggestedTargetId
     });
@@ -112,8 +118,7 @@ const ScreenSharePickerDialog = memo(
       onConfirm?.({
         sourceId: selectedSourceId,
         audioMode,
-        appAudioTargetId: resolvedAppAudioTargetId,
-        experimentalRustCapture
+        appAudioTargetId: resolvedAppAudioTargetId
       });
     };
 
@@ -227,6 +232,11 @@ const ScreenSharePickerDialog = memo(
               </div>
             )}
 
+            <p className="text-xs text-muted-foreground">
+              Fullscreen or exclusive apps may only be shareable by selecting a
+              display.
+            </p>
+
             <div>
               <label className="text-sm font-medium">Audio mode</label>
               <Select
@@ -310,40 +320,92 @@ const ScreenSharePickerDialog = memo(
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[420px] overflow-y-auto pr-1">
-              {sources.map((source) => {
-                const isSelected = selectedSourceId === source.id;
+            <div className="max-h-[420px] overflow-y-auto pr-1 space-y-4">
+              {displaySources.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Displays
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {displaySources.map((source) => {
+                      const isSelected = selectedSourceId === source.id;
 
-                return (
-                  <button
-                    type="button"
-                    key={source.id}
-                    onClick={() => setSelectedSourceId(source.id)}
-                    className={cn(
-                      'text-left rounded-md border transition-colors overflow-hidden',
-                      isSelected
-                        ? 'border-primary ring-2 ring-primary/30'
-                        : 'border-border hover:border-primary/40'
-                    )}
-                  >
-                    <img
-                      src={source.thumbnailDataUrl}
-                      alt={source.name}
-                      className="h-36 w-full object-cover bg-muted"
-                    />
-                    <div className="p-3 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium truncate">
-                          {source.name}
-                        </span>
-                        <Badge variant="secondary" className="text-[10px]">
-                          {source.kind}
-                        </Badge>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
+                      return (
+                        <button
+                          type="button"
+                          key={source.id}
+                          onClick={() => setSelectedSourceId(source.id)}
+                          className={cn(
+                            'text-left rounded-md border transition-colors overflow-hidden',
+                            isSelected
+                              ? 'border-primary ring-2 ring-primary/30'
+                              : 'border-border hover:border-primary/40'
+                          )}
+                        >
+                          <img
+                            src={source.thumbnailDataUrl}
+                            alt={source.name}
+                            className="h-36 w-full object-cover bg-muted"
+                          />
+                          <div className="p-3 space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium truncate">
+                                {source.name}
+                              </span>
+                              <Badge variant="secondary" className="text-[10px]">
+                                {source.kind}
+                              </Badge>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {windowSources.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Windows
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {windowSources.map((source) => {
+                      const isSelected = selectedSourceId === source.id;
+
+                      return (
+                        <button
+                          type="button"
+                          key={source.id}
+                          onClick={() => setSelectedSourceId(source.id)}
+                          className={cn(
+                            'text-left rounded-md border transition-colors overflow-hidden',
+                            isSelected
+                              ? 'border-primary ring-2 ring-primary/30'
+                              : 'border-border hover:border-primary/40'
+                          )}
+                        >
+                          <img
+                            src={source.thumbnailDataUrl}
+                            alt={source.name}
+                            className="h-36 w-full object-cover bg-muted"
+                          />
+                          <div className="p-3 space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium truncate">
+                                {source.name}
+                              </span>
+                              <Badge variant="secondary" className="text-[10px]">
+                                {source.kind}
+                              </Badge>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

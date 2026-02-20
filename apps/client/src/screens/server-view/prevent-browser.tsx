@@ -1,12 +1,14 @@
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { usePreventExit } from '@/hooks/use-prevent-exit';
+import { isDesktopRuntime } from '@/runtime/desktop-bridge';
 import { memo } from 'react';
 
 const PreventBrowser = memo(() => {
   const currentVoiceChannelId = useCurrentVoiceChannelId();
+  const shouldPreventExit = !isDesktopRuntime() && !!currentVoiceChannelId;
 
-  // this will prevent the user from closing the browser tab/window when connected to a voice channel
-  usePreventExit(!!currentVoiceChannelId);
+  // Keep browser-tab protection, but allow Electron window close to quit directly.
+  usePreventExit(shouldPreventExit);
 
   return null;
 });

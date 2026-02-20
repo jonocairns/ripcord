@@ -112,20 +112,17 @@ export const resetDialogs = () => {
 export const requestScreenShareSelection = async ({
   sources,
   capabilities,
-  defaultAudioMode,
-  experimentalRustCapture
+  defaultAudioMode
 }: {
   sources: TDesktopShareSource[];
   capabilities: TDesktopCapabilities;
   defaultAudioMode: ScreenAudioMode;
-  experimentalRustCapture: boolean;
 }): Promise<TDesktopScreenShareSelection | null> => {
   return new Promise((resolve) => {
     openDialog(Dialog.SCREEN_SHARE_PICKER, {
       sources,
       capabilities,
       defaultAudioMode,
-      experimentalRustCapture,
       onConfirm: (selection: TDesktopScreenShareSelection) => {
         closeDialogs();
         resolve(selection);

@@ -11,7 +11,7 @@ const LoadingApp = memo(() => {
   return (
     <div className="flex flex-col justify-center items-center h-full gap-2">
       <Spinner size="lg" />
-      <span className="text-xl">Loading Sharkord</span>
+      <span className="text-xl">Loading Ripcord</span>
     </div>
   );
 });

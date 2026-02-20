@@ -251,9 +251,11 @@ const Devices = memo(() => {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Uses desktop AI noise reduction (DeepFilterNet). Higher strength
-            removes more background noise but may affect voice quality. This
-            filter is available in the desktop app.
+            Uses desktop sidecar AI noise reduction (DeepFilterNet) for noise
+            suppression and automatic gain control. Echo cancellation remains
+            browser-based for now. Higher strength removes more background
+            noise but may affect voice quality. This filter is available in the
+            desktop app.
           </p>
 
           <div className="max-w-sm space-y-2">
@@ -442,7 +444,7 @@ const Devices = memo(() => {
               </Select>
               <p className="text-xs text-muted-foreground">
                 Auto is recommended. AV1 may be unavailable on some devices, in
-                which case Sharkord automatically falls back.
+                which case Ripcord automatically falls back.
               </p>
             </div>
 
@@ -485,19 +487,6 @@ const Devices = memo(() => {
             />
           </div>
 
-          {hasDesktopBridge && (
-            <div className="flex max-w-md items-center justify-between gap-3">
-              <Label className="cursor-default">
-                Use Rust sidecar capture (Experimental)
-              </Label>
-              <Switch
-                checked={!!values.experimentalRustCapture}
-                onCheckedChange={(checked) =>
-                  onChange('experimentalRustCapture', checked)
-                }
-              />
-            </div>
-          )}
         </section>
 
         {hasDesktopBridge && <Separator />}

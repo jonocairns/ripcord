@@ -6,7 +6,7 @@ describe('resolveAppAudioTargetBehavior', () => {
   it('requires manual target for screen shares in app mode', () => {
     const result = resolveAppAudioTargetBehavior({
       audioMode: ScreenAudioMode.APP,
-      experimentalRustCapture: true,
+      perAppAudioSupported: true,
       sourceKind: 'screen',
       suggestedTargetId: undefined
     });
@@ -18,7 +18,7 @@ describe('resolveAppAudioTargetBehavior', () => {
   it('does not require manual target for mapped window shares', () => {
     const result = resolveAppAudioTargetBehavior({
       audioMode: ScreenAudioMode.APP,
-      experimentalRustCapture: true,
+      perAppAudioSupported: true,
       sourceKind: 'window',
       suggestedTargetId: 'pid:1234'
     });
@@ -27,10 +27,22 @@ describe('resolveAppAudioTargetBehavior', () => {
     expect(result.requiresManualAppAudioTarget).toBe(false);
   });
 
-  it('skips target resolution when experimental mode is disabled', () => {
+  it('skips target resolution when app mode is not selected', () => {
+    const result = resolveAppAudioTargetBehavior({
+      audioMode: ScreenAudioMode.SYSTEM,
+      perAppAudioSupported: true,
+      sourceKind: 'window',
+      suggestedTargetId: undefined
+    });
+
+    expect(result.shouldResolveAppAudioTargets).toBe(false);
+    expect(result.requiresManualAppAudioTarget).toBe(false);
+  });
+
+  it('skips target resolution when per-app audio is unsupported', () => {
     const result = resolveAppAudioTargetBehavior({
       audioMode: ScreenAudioMode.APP,
-      experimentalRustCapture: false,
+      perAppAudioSupported: false,
       sourceKind: 'window',
       suggestedTargetId: undefined
     });
