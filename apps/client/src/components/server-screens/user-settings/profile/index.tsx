@@ -25,7 +25,7 @@ const DEFAULT_BANNER_COLOR = '#FFFFFF';
 
 const Profile = memo(() => {
   const ownPublicUser = useOwnPublicUser();
-  const { setTrpcErrors, r, values, setValues } = useForm({
+  const { setTrpcErrors, r, values, setValues, setError } = useForm({
     name: ownPublicUser?.name ?? '',
     bannerColor: ownPublicUser?.bannerColor ?? '#FFFFFF',
     bio: ownPublicUser?.bio ?? ''
@@ -56,6 +56,12 @@ const Profile = memo(() => {
       ? values.bannerColor.trim()
       : DEFAULT_BANNER_COLOR;
 
+    if (name.length === 0) {
+      setError('name', 'Username is required');
+      toast.error('Username is required');
+      return;
+    }
+
     const payload = {
       name,
       bannerColor,
@@ -81,7 +87,15 @@ const Profile = memo(() => {
       setTrpcErrors(error);
       toast.error('Could not update profile');
     }
-  }, [ownPublicUser, setTrpcErrors, setValues, values.bio, values.bannerColor, values.name]);
+  }, [
+    ownPublicUser,
+    setError,
+    setTrpcErrors,
+    setValues,
+    values.bio,
+    values.bannerColor,
+    values.name
+  ]);
 
   if (!ownPublicUser) return null;
 
