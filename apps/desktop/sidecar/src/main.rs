@@ -7,12 +7,13 @@ use serde_json::{json, Value};
 use std::collections::VecDeque;
 #[cfg(any(windows, test))]
 use std::collections::HashMap;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[cfg(windows)]
@@ -24,7 +25,7 @@ use std::path::Path;
 #[cfg(windows)]
 use std::ptr;
 #[cfg(windows)]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[cfg(windows)]
 use windows::core::{IUnknown, Interface, PWSTR};
@@ -65,6 +66,11 @@ const TARGET_CHANNELS: usize = 2;
 const FRAME_SIZE: usize = 960;
 const PROTOCOL_VERSION: u32 = 1;
 const PCM_ENCODING: &str = "f32le_base64";
+const APP_AUDIO_BINARY_EGRESS_FRAMING: &str = "length_prefixed_f32le_v1";
+const VOICE_FILTER_BINARY_FRAMING: &str = "length_prefixed_f32le_v1";
+#[cfg(windows)]
+const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
+const MAX_VOICE_FILTER_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct SidecarRequest {
@@ -152,6 +158,9 @@ struct StartVoiceFilterParams {
     sample_rate: usize,
     channels: usize,
     suppression_level: VoiceFilterStrength,
+    noise_suppression: Option<bool>,
+    auto_gain_control: Option<bool>,
+    echo_cancellation: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -277,8 +286,19 @@ struct DeepFilterProcessor {
     output_buffers: Vec<VecDeque<f32>>,
 }
 
+// SAFETY: `DeepFilterProcessor` is never accessed concurrently. It is always
+// stored inside `SidecarState`, which is guarded by `Mutex<SidecarState>`.
+// This guarantees serialized access when the state is touched from different
+// threads (command loop and binary-ingress worker).
+unsafe impl Send for DeepFilterProcessor {}
+
+struct AutoGainControlState {
+    current_gain: f32,
+}
+
 enum VoiceFilterProcessor {
     DeepFilter(DeepFilterProcessor),
+    Passthrough,
 }
 
 struct VoiceFilterSession {
@@ -286,6 +306,35 @@ struct VoiceFilterSession {
     sample_rate: usize,
     channels: usize,
     processor: VoiceFilterProcessor,
+    auto_gain_control: bool,
+    auto_gain_state: AutoGainControlState,
+    echo_cancellation: bool,
+}
+
+#[derive(Debug)]
+struct AppAudioBinaryEgress {
+    port: u16,
+    stream: Arc<Mutex<Option<TcpStream>>>,
+    stop_flag: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
+}
+
+#[derive(Debug)]
+struct VoiceFilterBinaryIngress {
+    port: u16,
+    stop_flag: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
+}
+
+#[derive(Debug)]
+struct VoiceFilterBinaryFrame {
+    session_id: String,
+    sequence: u64,
+    sample_rate: usize,
+    channels: usize,
+    frame_count: usize,
+    protocol_version: u32,
+    samples: Vec<f32>,
 }
 
 #[derive(Default)]
@@ -468,6 +517,98 @@ fn enqueue_frame_event(
     }
 }
 
+#[cfg(windows)]
+fn try_write_app_audio_binary_frame(
+    stream_slot: &Arc<Mutex<Option<TcpStream>>>,
+    session_id: &str,
+    target_id: &str,
+    sequence: u64,
+    sample_rate: usize,
+    channels: usize,
+    frame_count: usize,
+    protocol_version: u32,
+    dropped_frame_count: u32,
+    frame_samples: &[f32],
+) -> bool {
+    let session_id_bytes = session_id.as_bytes();
+    let target_id_bytes = target_id.as_bytes();
+
+    if session_id_bytes.is_empty() || session_id_bytes.len() > u16::MAX as usize {
+        return false;
+    }
+    if target_id_bytes.is_empty() || target_id_bytes.len() > u16::MAX as usize {
+        return false;
+    }
+    if sample_rate == 0 || sample_rate > u32::MAX as usize {
+        return false;
+    }
+    if channels == 0 || channels > u16::MAX as usize {
+        return false;
+    }
+    if frame_count == 0 || frame_count > u32::MAX as usize {
+        return false;
+    }
+    if frame_samples.is_empty() || frame_samples.len() % channels != 0 {
+        return false;
+    }
+
+    let pcm_bytes = bytemuck::cast_slice(frame_samples);
+    if pcm_bytes.is_empty() || pcm_bytes.len() > u32::MAX as usize {
+        return false;
+    }
+
+    let payload_len =
+        2 + // session id length
+        session_id_bytes.len() +
+        2 + // target id length
+        target_id_bytes.len() +
+        8 + // sequence
+        4 + // sample rate
+        2 + // channels
+        4 + // frame count
+        4 + // protocol version
+        4 + // dropped frame count
+        4 + // pcm byte length
+        pcm_bytes.len();
+
+    if payload_len == 0 || payload_len > MAX_APP_AUDIO_BINARY_FRAME_BYTES {
+        return false;
+    }
+
+    let mut packet = Vec::with_capacity(4 + payload_len);
+    packet.extend_from_slice(&(payload_len as u32).to_le_bytes());
+    packet.extend_from_slice(&(session_id_bytes.len() as u16).to_le_bytes());
+    packet.extend_from_slice(session_id_bytes);
+    packet.extend_from_slice(&(target_id_bytes.len() as u16).to_le_bytes());
+    packet.extend_from_slice(target_id_bytes);
+    packet.extend_from_slice(&sequence.to_le_bytes());
+    packet.extend_from_slice(&(sample_rate as u32).to_le_bytes());
+    packet.extend_from_slice(&(channels as u16).to_le_bytes());
+    packet.extend_from_slice(&(frame_count as u32).to_le_bytes());
+    packet.extend_from_slice(&protocol_version.to_le_bytes());
+    packet.extend_from_slice(&dropped_frame_count.to_le_bytes());
+    packet.extend_from_slice(&(pcm_bytes.len() as u32).to_le_bytes());
+    packet.extend_from_slice(pcm_bytes);
+
+    let mut lock = match stream_slot.lock() {
+        Ok(lock) => lock,
+        Err(_) => return false,
+    };
+
+    let Some(stream) = lock.as_mut() else {
+        return false;
+    };
+
+    match stream.write_all(&packet) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("[capture-sidecar] app-audio binary egress write failed: {error}");
+            *lock = None;
+            false
+        }
+    }
+}
+
 fn enqueue_voice_filter_frame_event(
     queue: &Arc<FrameQueue>,
     session_id: &str,
@@ -614,6 +755,9 @@ fn create_voice_filter_session(
     sample_rate: usize,
     channels: usize,
     suppression_level: VoiceFilterStrength,
+    noise_suppression: bool,
+    auto_gain_control: bool,
+    echo_cancellation: bool,
 ) -> Result<VoiceFilterSession, String> {
     if sample_rate != TARGET_SAMPLE_RATE as usize {
         return Err("DeepFilterNet currently requires 48kHz input".to_string());
@@ -623,13 +767,23 @@ fn create_voice_filter_session(
         return Err("Unsupported voice filter channel count".to_string());
     }
 
-    let processor = create_deep_filter_processor(channels, suppression_level)?;
+    let processor = if noise_suppression {
+        VoiceFilterProcessor::DeepFilter(create_deep_filter_processor(
+            channels,
+            suppression_level,
+        )?)
+    } else {
+        VoiceFilterProcessor::Passthrough
+    };
 
     Ok(VoiceFilterSession {
         session_id,
         sample_rate,
         channels,
-        processor: VoiceFilterProcessor::DeepFilter(processor),
+        processor,
+        auto_gain_control,
+        auto_gain_state: AutoGainControlState { current_gain: 1.0 },
+        echo_cancellation,
     })
 }
 
@@ -651,6 +805,44 @@ fn decode_f32le_base64(pcm_base64: &str) -> Result<Vec<f32>, String> {
     Ok(samples)
 }
 
+const AGC_TARGET_RMS: f32 = 0.12;
+const AGC_MIN_RMS: f32 = 0.0005;
+const AGC_MIN_GAIN: f32 = 0.5;
+const AGC_MAX_GAIN: f32 = 3.0;
+const AGC_ATTACK_SMOOTHING: f32 = 0.3;
+const AGC_RELEASE_SMOOTHING: f32 = 0.08;
+const AGC_LIMITER: f32 = 0.98;
+
+fn apply_auto_gain_control(samples: &mut [f32], state: &mut AutoGainControlState) {
+    if samples.is_empty() {
+        return;
+    }
+
+    let mut sum_squares = 0.0_f64;
+    for sample in samples.iter() {
+        let sample_f64 = f64::from(*sample);
+        sum_squares += sample_f64 * sample_f64;
+    }
+
+    let rms = (sum_squares / samples.len() as f64).sqrt() as f32;
+    let desired_gain = if rms <= AGC_MIN_RMS {
+        AGC_MAX_GAIN
+    } else {
+        (AGC_TARGET_RMS / rms).clamp(AGC_MIN_GAIN, AGC_MAX_GAIN)
+    };
+
+    let smoothing = if desired_gain < state.current_gain {
+        AGC_ATTACK_SMOOTHING
+    } else {
+        AGC_RELEASE_SMOOTHING
+    };
+    state.current_gain = state.current_gain * (1.0 - smoothing) + desired_gain * smoothing;
+
+    for sample in samples.iter_mut() {
+        *sample = (*sample * state.current_gain).clamp(-AGC_LIMITER, AGC_LIMITER);
+    }
+}
+
 fn process_voice_filter_frame(
     session: &mut VoiceFilterSession,
     samples: &mut [f32],
@@ -670,7 +862,7 @@ fn process_voice_filter_frame(
         return Err("Voice filter frame sample count mismatch".to_string());
     }
 
-    match &mut session.processor {
+    let processed_frame_count = match &mut session.processor {
         VoiceFilterProcessor::DeepFilter(processor) => {
             let hop_size = processor.hop_size;
 
@@ -722,14 +914,26 @@ fn process_voice_filter_frame(
                 }
             }
 
-            Ok(frame_count)
+            frame_count
         }
+        VoiceFilterProcessor::Passthrough => frame_count,
+    };
+
+    if session.auto_gain_control {
+        apply_auto_gain_control(samples, &mut session.auto_gain_state);
     }
+
+    if session.echo_cancellation {
+        // Placeholder for future reference-based AEC.
+    }
+
+    Ok(processed_frame_count)
 }
 
 fn voice_filter_frames_per_buffer(session: &VoiceFilterSession) -> usize {
     match &session.processor {
         VoiceFilterProcessor::DeepFilter(processor) => processor.hop_size,
+        VoiceFilterProcessor::Passthrough => FRAME_SIZE,
     }
 }
 
@@ -1284,6 +1488,7 @@ fn capture_loopback_audio(
     target_pid: u32,
     stop_flag: Arc<AtomicBool>,
     frame_queue: Arc<FrameQueue>,
+    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
     let process_handle = match open_process_for_liveness(target_pid) {
         Some(handle) => handle,
@@ -1403,18 +1608,38 @@ fn capture_loopback_audio(
                 while pending.len() >= FRAME_SIZE * TARGET_CHANNELS {
                     let frame_samples: Vec<f32> =
                         pending.drain(..FRAME_SIZE * TARGET_CHANNELS).collect();
-                    let frame_bytes = bytemuck::cast_slice(&frame_samples);
-                    let pcm_base64 = BASE64.encode(frame_bytes);
+                    let wrote_binary = app_audio_binary_stream
+                        .as_ref()
+                        .map(|stream_slot| {
+                            try_write_app_audio_binary_frame(
+                                stream_slot,
+                                session_id,
+                                target_id,
+                                sequence,
+                                TARGET_SAMPLE_RATE as usize,
+                                TARGET_CHANNELS,
+                                FRAME_SIZE,
+                                PROTOCOL_VERSION,
+                                0,
+                                &frame_samples,
+                            )
+                        })
+                        .unwrap_or(false);
 
-                    enqueue_frame_event(
-                        &frame_queue,
-                        session_id,
-                        target_id,
-                        sequence,
-                        TARGET_SAMPLE_RATE as usize,
-                        FRAME_SIZE,
-                        pcm_base64,
-                    );
+                    if !wrote_binary {
+                        let frame_bytes = bytemuck::cast_slice(&frame_samples);
+                        let pcm_base64 = BASE64.encode(frame_bytes);
+
+                        enqueue_frame_event(
+                            &frame_queue,
+                            session_id,
+                            target_id,
+                            sequence,
+                            TARGET_SAMPLE_RATE as usize,
+                            FRAME_SIZE,
+                            pcm_base64,
+                        );
+                    }
 
                     sequence = sequence.saturating_add(1);
                 }
@@ -1454,6 +1679,7 @@ fn capture_loopback_audio(
     _target_pid: u32,
     _stop_flag: Arc<AtomicBool>,
     _frame_queue: Arc<FrameQueue>,
+    _app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
     CaptureOutcome::capture_error("Per-app audio capture is only available on Windows.".to_string())
 }
@@ -1461,6 +1687,7 @@ fn capture_loopback_audio(
 fn start_capture_thread(
     stdout: Arc<Mutex<io::Stdout>>,
     frame_queue: Arc<FrameQueue>,
+    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
     session_id: String,
     target_id: String,
     target_pid: u32,
@@ -1473,6 +1700,7 @@ fn start_capture_thread(
             target_pid,
             Arc::clone(&stop_flag),
             Arc::clone(&frame_queue),
+            app_audio_binary_stream.clone(),
         );
 
         let mut ended_params = json!({
@@ -1600,6 +1828,7 @@ fn stop_voice_filter_session(
 fn handle_audio_capture_start(
     stdout: Arc<Mutex<io::Stdout>>,
     frame_queue: Arc<FrameQueue>,
+    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
     state: &mut SidecarState,
     params: Value,
 ) -> Result<Value, String> {
@@ -1647,6 +1876,7 @@ fn handle_audio_capture_start(
     let handle = start_capture_thread(
         stdout,
         frame_queue,
+        app_audio_binary_stream,
         session_id.clone(),
         target_id.clone(),
         target_pid,
@@ -1772,6 +2002,16 @@ fn handle_voice_filter_start(
         return Err("Unsupported voice filter channel count".to_string());
     }
 
+    let noise_suppression = parsed.noise_suppression.unwrap_or(true);
+    let auto_gain_control = parsed.auto_gain_control.unwrap_or(false);
+    let echo_cancellation = parsed.echo_cancellation.unwrap_or(false);
+
+    if echo_cancellation {
+        eprintln!(
+            "[capture-sidecar] Echo cancellation requested for voice filter session, but reference-based AEC is not implemented yet"
+        );
+    }
+
     stop_voice_filter_session(state, &frame_queue, None, "capture_stopped", None);
 
     let session_id = Uuid::new_v4().to_string();
@@ -1780,6 +2020,9 @@ fn handle_voice_filter_start(
         parsed.sample_rate,
         parsed.channels,
         parsed.suppression_level,
+        noise_suppression,
+        auto_gain_control,
+        echo_cancellation,
     )?;
     let frames_per_buffer = voice_filter_frames_per_buffer(&session);
 
@@ -1795,6 +2038,65 @@ fn handle_voice_filter_start(
     }))
 }
 
+fn process_voice_filter_samples(
+    frame_queue: &Arc<FrameQueue>,
+    state: &mut SidecarState,
+    session_id: &str,
+    sequence: u64,
+    sample_rate: usize,
+    channels: usize,
+    frame_count: usize,
+    protocol_version: Option<u32>,
+    mut samples: Vec<f32>,
+) -> Result<(), String> {
+    let Some(session) = state.voice_filter_session.as_mut() else {
+        return Err("No active voice filter session".to_string());
+    };
+
+    if session.session_id != session_id {
+        return Err("Voice filter session mismatch".to_string());
+    }
+
+    if let Some(protocol_version) = protocol_version {
+        if protocol_version != PROTOCOL_VERSION {
+            return Err("Unsupported voice filter protocol version".to_string());
+        }
+    }
+
+    if sample_rate != session.sample_rate {
+        return Err("Voice filter sample rate mismatch".to_string());
+    }
+
+    if channels != session.channels {
+        return Err("Voice filter channel count mismatch".to_string());
+    }
+
+    if channels == 0 || channels > 2 {
+        return Err("Unsupported voice filter frame channel count".to_string());
+    }
+
+    process_voice_filter_frame(session, &mut samples, channels)?;
+
+    if samples.len() != frame_count * channels {
+        return Err("Voice filter frame sample count mismatch".to_string());
+    }
+
+    let frame_bytes = bytemuck::cast_slice(&samples);
+    let pcm_base64 = BASE64.encode(frame_bytes);
+
+    enqueue_voice_filter_frame_event(
+        frame_queue,
+        &session.session_id,
+        sequence,
+        sample_rate,
+        channels,
+        frame_count,
+        pcm_base64,
+    );
+
+    Ok(())
+}
+
 fn handle_voice_filter_push_frame(
     frame_queue: Arc<FrameQueue>,
     state: &mut SidecarState,
@@ -1803,59 +2105,25 @@ fn handle_voice_filter_push_frame(
     let parsed: VoiceFilterPushFrameParams =
         serde_json::from_value(params).map_err(|error| format!("invalid params: {error}"))?;
 
-    let Some(session) = state.voice_filter_session.as_mut() else {
-        return Err("No active voice filter session".to_string());
-    };
-
-    if session.session_id != parsed.session_id {
-        return Err("Voice filter session mismatch".to_string());
-    }
-
-    if let Some(protocol_version) = parsed.protocol_version {
-        if protocol_version != PROTOCOL_VERSION {
-            return Err("Unsupported voice filter protocol version".to_string());
-        }
-    }
-
     if let Some(encoding) = parsed.encoding {
         if encoding != PCM_ENCODING {
             return Err("Unsupported voice filter frame encoding".to_string());
         }
     }
 
-    if parsed.sample_rate != session.sample_rate {
-        return Err("Voice filter sample rate mismatch".to_string());
-    }
+    let samples = decode_f32le_base64(&parsed.pcm_base64)?;
 
-    if parsed.channels != session.channels {
-        return Err("Voice filter channel count mismatch".to_string());
-    }
-
-    if parsed.channels == 0 || parsed.channels > 2 {
-        return Err("Unsupported voice filter frame channel count".to_string());
-    }
-
-    let mut samples = decode_f32le_base64(&parsed.pcm_base64)?;
-    process_voice_filter_frame(session, &mut samples, parsed.channels)?;
-
-    let expected_frame_count = parsed.frame_count;
-
-    if samples.len() != expected_frame_count * parsed.channels {
-        return Err("Voice filter frame sample count mismatch".to_string());
-    }
-
-    let frame_bytes = bytemuck::cast_slice(&samples);
-    let pcm_base64 = BASE64.encode(frame_bytes);
-
-    enqueue_voice_filter_frame_event(
+    process_voice_filter_samples(
         &frame_queue,
-        &session.session_id,
+        state,
+        &parsed.session_id,
         parsed.sequence,
         parsed.sample_rate,
         parsed.channels,
-        expected_frame_count,
-        pcm_base64,
-    );
+        parsed.frame_count,
+        parsed.protocol_version,
+        samples,
+    )?;
 
     Ok(json!({
         "accepted": true,
@@ -1885,6 +2153,336 @@ fn handle_voice_filter_stop(
     }))
 }
 
+fn start_app_audio_binary_egress() -> Result<AppAudioBinaryEgress, String> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|error| format!("Failed to bind app-audio binary egress listener: {error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("Failed to configure app-audio binary egress listener: {error}"))?;
+
+    let port = listener
+        .local_addr()
+        .map_err(|error| format!("Failed to read app-audio binary egress listener port: {error}"))?
+        .port();
+
+    let stream = Arc::new(Mutex::new(None::<TcpStream>));
+    let worker_stream = Arc::clone(&stream);
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let worker_stop_flag = Arc::clone(&stop_flag);
+
+    let handle = thread::spawn(move || {
+        while !worker_stop_flag.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((accepted_stream, _peer)) => {
+                    let _ = accepted_stream.set_nodelay(true);
+                    let _ = accepted_stream.set_write_timeout(Some(Duration::from_millis(15)));
+
+                    if let Ok(mut lock) = worker_stream.lock() {
+                        *lock = Some(accepted_stream);
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => {
+                    eprintln!("[capture-sidecar] app-audio binary egress accept error: {error}");
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+
+        if let Ok(mut lock) = worker_stream.lock() {
+            *lock = None;
+        }
+    });
+
+    Ok(AppAudioBinaryEgress {
+        port,
+        stream,
+        stop_flag,
+        handle,
+    })
+}
+
+fn handle_audio_capture_binary_egress_info(
+    app_audio_binary_egress: &AppAudioBinaryEgress,
+) -> Result<Value, String> {
+    Ok(json!({
+        "port": app_audio_binary_egress.port,
+        "framing": APP_AUDIO_BINARY_EGRESS_FRAMING,
+        "protocolVersion": PROTOCOL_VERSION,
+    }))
+}
+
+fn read_exact_with_stop(
+    stream: &mut TcpStream,
+    buffer: &mut [u8],
+    stop_flag: &Arc<AtomicBool>,
+) -> io::Result<bool> {
+    let mut offset = 0;
+
+    while offset < buffer.len() {
+        if stop_flag.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+
+        match stream.read(&mut buffer[offset..]) {
+            Ok(0) => {
+                if offset == 0 {
+                    return Ok(false);
+                }
+
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "stream closed while reading frame",
+                ));
+            }
+            Ok(read_len) => {
+                offset += read_len;
+            }
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.kind() == io::ErrorKind::TimedOut =>
+            {
+                continue;
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(true)
+}
+
+fn parse_voice_filter_binary_frame(payload: &[u8]) -> Result<VoiceFilterBinaryFrame, String> {
+    let mut offset = 0usize;
+
+    let read_u16 = |payload: &[u8], offset: &mut usize| -> Result<u16, String> {
+        if payload.len() < *offset + 2 {
+            return Err("Binary voice filter frame is truncated".to_string());
+        }
+
+        let value = u16::from_le_bytes([payload[*offset], payload[*offset + 1]]);
+        *offset += 2;
+        Ok(value)
+    };
+
+    let read_u32 = |payload: &[u8], offset: &mut usize| -> Result<u32, String> {
+        if payload.len() < *offset + 4 {
+            return Err("Binary voice filter frame is truncated".to_string());
+        }
+
+        let value = u32::from_le_bytes([
+            payload[*offset],
+            payload[*offset + 1],
+            payload[*offset + 2],
+            payload[*offset + 3],
+        ]);
+        *offset += 4;
+        Ok(value)
+    };
+
+    let read_u64 = |payload: &[u8], offset: &mut usize| -> Result<u64, String> {
+        if payload.len() < *offset + 8 {
+            return Err("Binary voice filter frame is truncated".to_string());
+        }
+
+        let value = u64::from_le_bytes([
+            payload[*offset],
+            payload[*offset + 1],
+            payload[*offset + 2],
+            payload[*offset + 3],
+            payload[*offset + 4],
+            payload[*offset + 5],
+            payload[*offset + 6],
+            payload[*offset + 7],
+        ]);
+        *offset += 8;
+        Ok(value)
+    };
+
+    let session_id_len = read_u16(payload, &mut offset)? as usize;
+    if session_id_len == 0 {
+        return Err("Binary voice filter frame is missing a session id".to_string());
+    }
+    if payload.len() < offset + session_id_len {
+        return Err("Binary voice filter frame session id is truncated".to_string());
+    }
+
+    let session_id = std::str::from_utf8(&payload[offset..offset + session_id_len])
+        .map_err(|error| format!("Binary voice filter frame has invalid UTF-8 session id: {error}"))?
+        .to_string();
+    offset += session_id_len;
+
+    let sequence = read_u64(payload, &mut offset)?;
+    let sample_rate = read_u32(payload, &mut offset)? as usize;
+    let channels = read_u16(payload, &mut offset)? as usize;
+    let frame_count = read_u32(payload, &mut offset)? as usize;
+    let protocol_version = read_u32(payload, &mut offset)?;
+    let pcm_byte_length = read_u32(payload, &mut offset)? as usize;
+
+    if pcm_byte_length == 0 {
+        return Err("Binary voice filter frame has no PCM payload".to_string());
+    }
+    if pcm_byte_length % std::mem::size_of::<f32>() != 0 {
+        return Err("Binary voice filter PCM payload is not f32-aligned".to_string());
+    }
+    if payload.len() != offset + pcm_byte_length {
+        return Err("Binary voice filter frame payload length mismatch".to_string());
+    }
+
+    let mut samples = Vec::with_capacity(pcm_byte_length / std::mem::size_of::<f32>());
+    for chunk in payload[offset..offset + pcm_byte_length].chunks_exact(4) {
+        samples.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+
+    Ok(VoiceFilterBinaryFrame {
+        session_id,
+        sequence,
+        sample_rate,
+        channels,
+        frame_count,
+        protocol_version,
+        samples,
+    })
+}
+
+fn handle_voice_filter_binary_stream(
+    mut stream: TcpStream,
+    frame_queue: Arc<FrameQueue>,
+    state: Arc<Mutex<SidecarState>>,
+    stop_flag: Arc<AtomicBool>,
+) {
+    let _ = stream.set_nodelay(true);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+
+    loop {
+        if stop_flag.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let mut frame_length_bytes = [0u8; 4];
+        match read_exact_with_stop(&mut stream, &mut frame_length_bytes, &stop_flag) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                eprintln!("[capture-sidecar] binary ingress read error: {error}");
+                return;
+            }
+        }
+
+        let frame_length = u32::from_le_bytes(frame_length_bytes) as usize;
+        if frame_length == 0 || frame_length > MAX_VOICE_FILTER_BINARY_FRAME_BYTES {
+            eprintln!(
+                "[capture-sidecar] binary ingress rejected frame with invalid size {}",
+                frame_length
+            );
+            return;
+        }
+
+        let mut payload = vec![0u8; frame_length];
+        match read_exact_with_stop(&mut stream, &mut payload, &stop_flag) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                eprintln!("[capture-sidecar] binary ingress payload read error: {error}");
+                return;
+            }
+        }
+
+        let frame = match parse_voice_filter_binary_frame(&payload) {
+            Ok(frame) => frame,
+            Err(error) => {
+                eprintln!("[capture-sidecar] invalid binary voice filter frame: {error}");
+                continue;
+            }
+        };
+
+        let mut state_lock = match state.lock() {
+            Ok(state_lock) => state_lock,
+            Err(_) => {
+                eprintln!("[capture-sidecar] sidecar state lock poisoned");
+                return;
+            }
+        };
+
+        if let Err(error) = process_voice_filter_samples(
+            &frame_queue,
+            &mut state_lock,
+            &frame.session_id,
+            frame.sequence,
+            frame.sample_rate,
+            frame.channels,
+            frame.frame_count,
+            Some(frame.protocol_version),
+            frame.samples,
+        ) {
+            eprintln!("[capture-sidecar] binary voice filter frame rejected: {error}");
+        }
+    }
+}
+
+fn start_voice_filter_binary_ingress(
+    frame_queue: Arc<FrameQueue>,
+    state: Arc<Mutex<SidecarState>>,
+) -> Result<VoiceFilterBinaryIngress, String> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|error| format!("Failed to bind binary voice filter ingress listener: {error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("Failed to configure binary voice filter listener: {error}"))?;
+
+    let port = listener
+        .local_addr()
+        .map_err(|error| format!("Failed to read binary voice filter listener port: {error}"))?
+        .port();
+
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let worker_stop_flag = Arc::clone(&stop_flag);
+    let worker_frame_queue = Arc::clone(&frame_queue);
+    let worker_state = Arc::clone(&state);
+
+    let handle = thread::spawn(move || {
+        while !worker_stop_flag.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((stream, _peer)) => {
+                    handle_voice_filter_binary_stream(
+                        stream,
+                        Arc::clone(&worker_frame_queue),
+                        Arc::clone(&worker_state),
+                        Arc::clone(&worker_stop_flag),
+                    );
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => {
+                    eprintln!("[capture-sidecar] binary ingress accept error: {error}");
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    });
+
+    Ok(VoiceFilterBinaryIngress {
+        port,
+        stop_flag,
+        handle,
+    })
+}
+
+fn handle_voice_filter_binary_ingress_info(
+    binary_ingress: &VoiceFilterBinaryIngress,
+) -> Result<Value, String> {
+    Ok(json!({
+        "port": binary_ingress.port,
+        "framing": VOICE_FILTER_BINARY_FRAMING,
+        "protocolVersion": PROTOCOL_VERSION,
+    }))
+}
+
 fn main() {
     eprintln!("[capture-sidecar] starting");
 
@@ -1892,7 +2490,36 @@ fn main() {
     let stdout = Arc::new(Mutex::new(io::stdout()));
     let frame_queue = Arc::new(FrameQueue::new(50));
     let frame_writer = start_frame_writer(Arc::clone(&stdout), Arc::clone(&frame_queue));
-    let mut state = SidecarState::default();
+    let state = Arc::new(Mutex::new(SidecarState::default()));
+    let app_audio_binary_egress = match start_app_audio_binary_egress() {
+        Ok(app_audio_binary_egress) => {
+            eprintln!(
+                "[capture-sidecar] app-audio binary egress listening on 127.0.0.1:{}",
+                app_audio_binary_egress.port
+            );
+            Some(app_audio_binary_egress)
+        }
+        Err(error) => {
+            eprintln!("[capture-sidecar] app-audio binary egress unavailable: {error}");
+            None
+        }
+    };
+    let binary_ingress = match start_voice_filter_binary_ingress(
+        Arc::clone(&frame_queue),
+        Arc::clone(&state),
+    ) {
+        Ok(binary_ingress) => {
+            eprintln!(
+                "[capture-sidecar] voice filter binary ingress listening on 127.0.0.1:{}",
+                binary_ingress.port
+            );
+            Some(binary_ingress)
+        }
+        Err(error) => {
+            eprintln!("[capture-sidecar] voice filter binary ingress unavailable: {error}");
+            None
+        }
+    };
 
     for line in stdin.lock().lines() {
         let Ok(line) = line else {
@@ -1919,27 +2546,58 @@ fn main() {
             "capabilities.get" => handle_capabilities_get(),
             "windows.resolve_source" => handle_windows_resolve_source(request.params),
             "audio_targets.list" => handle_audio_targets_list(request.params),
-            "audio_capture.start" => handle_audio_capture_start(
-                Arc::clone(&request_stdout),
-                request_frame_queue,
-                &mut state,
-                request.params,
-            ),
-            "audio_capture.stop" => handle_audio_capture_stop(&mut state, request.params),
-            "push_keybinds.set" => {
-                handle_push_keybinds_set(request_frame_queue.clone(), &mut state, request.params)
-            }
-            "voice_filter.start" => {
-                handle_voice_filter_start(request_frame_queue.clone(), &mut state, request.params)
-            }
-            "voice_filter.push_frame" => handle_voice_filter_push_frame(
-                request_frame_queue.clone(),
-                &mut state,
-                request.params,
-            ),
-            "voice_filter.stop" => {
-                handle_voice_filter_stop(request_frame_queue.clone(), &mut state, request.params)
-            }
+            "audio_capture.binary_egress_info" => match app_audio_binary_egress.as_ref() {
+                Some(app_audio_binary_egress) => {
+                    handle_audio_capture_binary_egress_info(app_audio_binary_egress)
+                }
+                None => Err("Binary app-audio egress is unavailable".to_string()),
+            },
+            "voice_filter.binary_ingress_info" => match binary_ingress.as_ref() {
+                Some(binary_ingress) => handle_voice_filter_binary_ingress_info(binary_ingress),
+                None => Err("Binary voice filter ingress is unavailable".to_string()),
+            },
+            "audio_capture.start" => match state.lock() {
+                Ok(mut state_lock) => handle_audio_capture_start(
+                    Arc::clone(&request_stdout),
+                    request_frame_queue,
+                    app_audio_binary_egress
+                        .as_ref()
+                        .map(|binary_egress| Arc::clone(&binary_egress.stream)),
+                    &mut state_lock,
+                    request.params,
+                ),
+                Err(_) => Err("Sidecar state lock poisoned".to_string()),
+            },
+            "audio_capture.stop" => match state.lock() {
+                Ok(mut state_lock) => handle_audio_capture_stop(&mut state_lock, request.params),
+                Err(_) => Err("Sidecar state lock poisoned".to_string()),
+            },
+            "push_keybinds.set" => match state.lock() {
+                Ok(mut state_lock) => {
+                    handle_push_keybinds_set(request_frame_queue.clone(), &mut state_lock, request.params)
+                }
+                Err(_) => Err("Sidecar state lock poisoned".to_string()),
+            },
+            "voice_filter.start" => match state.lock() {
+                Ok(mut state_lock) => {
+                    handle_voice_filter_start(request_frame_queue.clone(), &mut state_lock, request.params)
+                }
+                Err(_) => Err("Sidecar state lock poisoned".to_string()),
+            },
+            "voice_filter.push_frame" => match state.lock() {
+                Ok(mut state_lock) => handle_voice_filter_push_frame(
+                    request_frame_queue.clone(),
+                    &mut state_lock,
+                    request.params,
+                ),
+                Err(_) => Err("Sidecar state lock poisoned".to_string()),
+            },
+            "voice_filter.stop" => match state.lock() {
+                Ok(mut state_lock) => {
+                    handle_voice_filter_stop(request_frame_queue.clone(), &mut state_lock, request.params)
+                }
+                Err(_) => Err("Sidecar state lock poisoned".to_string()),
+            },
             _ => Err(format!("Unknown method: {}", request.method)),
         };
 
@@ -1953,9 +2611,25 @@ fn main() {
         }
     }
 
-    stop_capture_session(&mut state, None);
-    stop_push_keybind_watcher(&mut state);
-    stop_voice_filter_session(&mut state, &frame_queue, None, "capture_stopped", None);
+    if let Some(app_audio_binary_egress) = app_audio_binary_egress {
+        app_audio_binary_egress
+            .stop_flag
+            .store(true, Ordering::Relaxed);
+        let _ = app_audio_binary_egress.handle.join();
+    }
+
+    if let Some(binary_ingress) = binary_ingress {
+        binary_ingress.stop_flag.store(true, Ordering::Relaxed);
+        let _ = binary_ingress.handle.join();
+    }
+
+    if let Ok(mut state_lock) = state.lock() {
+        stop_capture_session(&mut state_lock, None);
+        stop_push_keybind_watcher(&mut state_lock);
+        stop_voice_filter_session(&mut state_lock, &frame_queue, None, "capture_stopped", None);
+    } else {
+        eprintln!("[capture-sidecar] sidecar state lock poisoned during shutdown");
+    }
     frame_queue.close();
     let _ = frame_writer.join();
 

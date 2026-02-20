@@ -1,111 +1,40 @@
-import type { TAppAudioFrame, TAppAudioSession } from '@/runtime/types';
+import type {
+  TAppAudioSession
+} from '@/runtime/types';
+import desktopAppAudioWorkletModuleUrl from './desktop-app-audio.worklet.js?url&no-inline';
+import {
+  computeRecoverableMissingFrameCount,
+  isPcmFrame,
+  type TDesktopAppAudioFrame,
+  validateDesktopAppAudioFrame
+} from './desktop-app-audio-frame-policy';
 
 type TDesktopAppAudioPipeline = {
   sessionId: string;
   stream: MediaStream;
   track: MediaStreamTrack;
-  pushFrame: (frame: TAppAudioFrame) => void;
+  pushFrame: (frame: TDesktopAppAudioFrame) => void;
   destroy: () => Promise<void>;
 };
 
+type TDesktopAppAudioPipelineMode = 'low-latency' | 'stable';
+
+type TDesktopAppAudioPipelineOptions = {
+  mode?: TDesktopAppAudioPipelineMode;
+  logLabel?: string;
+  insertSilenceOnDroppedFrames?: boolean;
+  emitQueueTelemetry?: boolean;
+  queueTelemetryIntervalMs?: number;
+};
+
 const WORKLET_NAME = 'sharkord-pcm-queue-processor';
-const WORKLET_MAX_CHUNKS = 50;
-let workletModuleUrl: string | undefined;
-
-const WORKLET_SOURCE = `
-class PcmQueueProcessor extends AudioWorkletProcessor {
-  constructor(options) {
-    super();
-    this.channels = Math.max(1, options.processorOptions?.channels || 2);
-    this.maxChunks = Math.max(1, options.processorOptions?.maxChunks || 50);
-    this.queue = [];
-    this.currentChunk = null;
-    this.chunkFrameOffset = 0;
-    this.overflownChunks = 0;
-
-    this.port.onmessage = (event) => {
-      const data = event.data || {};
-      if (data.type === 'pcm' && data.samples) {
-        if (this.queue.length >= this.maxChunks) {
-          this.queue.shift();
-          this.overflownChunks += 1;
-        }
-
-        this.queue.push(data.samples);
-
-        if (this.overflownChunks > 0 && this.overflownChunks % 10 === 0) {
-          this.port.postMessage({
-            type: 'queue-overflow',
-            droppedChunks: this.overflownChunks
-          });
-        }
-        return;
-      }
-
-      if (data.type === 'reset') {
-        this.queue = [];
-        this.currentChunk = null;
-        this.chunkFrameOffset = 0;
-        this.overflownChunks = 0;
-      }
-    };
-  }
-
-  process(_inputs, outputs) {
-    const output = outputs[0];
-    if (!output || output.length === 0) {
-      return true;
-    }
-
-    const frameCount = output[0].length;
-
-    for (let channelIndex = 0; channelIndex < output.length; channelIndex += 1) {
-      output[channelIndex].fill(0);
-    }
-
-    let writtenFrames = 0;
-
-    while (writtenFrames < frameCount) {
-      if (!this.currentChunk) {
-        this.currentChunk = this.queue.shift() || null;
-        this.chunkFrameOffset = 0;
-
-        if (!this.currentChunk) {
-          break;
-        }
-      }
-
-      const availableFrames =
-        this.currentChunk.length / this.channels - this.chunkFrameOffset;
-      const framesToCopy = Math.min(frameCount - writtenFrames, availableFrames);
-
-      for (let frameOffset = 0; frameOffset < framesToCopy; frameOffset += 1) {
-        const sourceFrameIndex = this.chunkFrameOffset + frameOffset;
-        const sourceBaseOffset = sourceFrameIndex * this.channels;
-        const outputFrameIndex = writtenFrames + frameOffset;
-
-        for (let channelIndex = 0; channelIndex < output.length; channelIndex += 1) {
-          const sourceChannelIndex = Math.min(channelIndex, this.channels - 1);
-          output[channelIndex][outputFrameIndex] =
-            this.currentChunk[sourceBaseOffset + sourceChannelIndex] || 0;
-        }
-      }
-
-      writtenFrames += framesToCopy;
-      this.chunkFrameOffset += framesToCopy;
-
-      if (this.chunkFrameOffset >= this.currentChunk.length / this.channels) {
-        this.currentChunk = null;
-        this.chunkFrameOffset = 0;
-      }
-    }
-
-    return true;
-  }
-}
-
-registerProcessor('${WORKLET_NAME}', PcmQueueProcessor);
-`;
+const LOW_LATENCY_TARGET_CHUNKS = 6;
+const LOW_LATENCY_TRIM_START_CHUNKS = 10;
+const LOW_LATENCY_MAX_CHUNKS = 16;
+const STABLE_TARGET_CHUNKS = 12;
+const STABLE_MAX_CHUNKS = 24;
+const LOG_RATE_LIMIT_MS = 2_000;
+const TELEMETRY_LOG_INTERVAL_MS = 10_000;
 
 const decodePcmBase64 = (pcmBase64: string): Float32Array => {
   const binaryString = atob(pcmBase64);
@@ -120,21 +49,45 @@ const decodePcmBase64 = (pcmBase64: string): Float32Array => {
 };
 
 const ensureWorkletModule = async (audioContext: AudioContext) => {
-  if (!workletModuleUrl) {
-    const blob = new Blob([WORKLET_SOURCE], {
-      type: 'application/javascript'
-    });
-    workletModuleUrl = URL.createObjectURL(blob);
-  }
-
-  await audioContext.audioWorklet.addModule(workletModuleUrl);
+  await audioContext.audioWorklet.addModule(desktopAppAudioWorkletModuleUrl);
 };
 
 const createDesktopAppAudioPipeline = async (
-  session: TAppAudioSession
+  session: TAppAudioSession,
+  options?: TDesktopAppAudioPipelineOptions
 ): Promise<TDesktopAppAudioPipeline> => {
+  const mode = options?.mode || 'low-latency';
+  const logLabel = options?.logLabel || 'desktop-app-audio';
+  const insertSilenceOnDroppedFrames =
+    options?.insertSilenceOnDroppedFrames ?? false;
+  const emitQueueTelemetry = options?.emitQueueTelemetry ?? false;
+  const queueTelemetryIntervalMs = Math.max(
+    250,
+    Math.floor(options?.queueTelemetryIntervalMs ?? 1_000)
+  );
+  const targetChunks =
+    mode === 'stable' ? STABLE_TARGET_CHUNKS : LOW_LATENCY_TARGET_CHUNKS;
+  const trimStartChunks =
+    mode === 'stable' ? STABLE_MAX_CHUNKS : LOW_LATENCY_TRIM_START_CHUNKS;
+  const maxChunks = mode === 'stable' ? STABLE_MAX_CHUNKS : LOW_LATENCY_MAX_CHUNKS;
+  const trimQueueForLowLatency = mode === 'low-latency';
+  let nextQueueOverflowLogAt = 0;
+  let suppressedQueueOverflowEvents = 0;
+  let nextQueueTrimLogAt = 0;
+  let suppressedQueueTrimEvents = 0;
+  let nextDroppedFrameLogAt = 0;
+  let droppedFrameEventsSinceLastLog = 0;
+  let droppedFramesSinceLastLog = 0;
+  let nextMalformedFrameLogAt = 0;
+  let malformedFrameDropsSinceLastLog = 0;
+  let nextSequenceAnomalyLogAt = 0;
+  let sequenceAnomaliesSinceLastLog = 0;
+  let nextQueueTelemetryLogAt = 0;
+  let lastSequence: number | undefined;
+
   const audioContext = new AudioContext({
-    sampleRate: session.sampleRate
+    sampleRate: session.sampleRate,
+    latencyHint: 'interactive'
   });
 
   await ensureWorkletModule(audioContext);
@@ -147,7 +100,12 @@ const createDesktopAppAudioPipeline = async (
     outputChannelCount: [outputChannels],
     processorOptions: {
       channels: outputChannels,
-      maxChunks: WORKLET_MAX_CHUNKS
+      targetChunks,
+      trimStartChunks,
+      maxChunks,
+      trimQueueForLowLatency,
+      emitQueueTelemetry,
+      queueTelemetryIntervalMs
     }
   });
 
@@ -157,7 +115,40 @@ const createDesktopAppAudioPipeline = async (
     const data = event.data;
 
     if (data?.type === 'queue-overflow') {
-      console.warn('[desktop-app-audio] PCM queue overflow', data);
+      const now = Date.now();
+      suppressedQueueOverflowEvents += 1;
+      if (now >= nextQueueOverflowLogAt) {
+        console.warn(`[${logLabel}] PCM queue overflow`, {
+          ...data,
+          eventsSinceLastLog: suppressedQueueOverflowEvents
+        });
+        suppressedQueueOverflowEvents = 0;
+        nextQueueOverflowLogAt = now + LOG_RATE_LIMIT_MS;
+      }
+
+      return;
+    }
+
+    if (data?.type === 'queue-trim') {
+      const now = Date.now();
+      suppressedQueueTrimEvents += 1;
+      if (now >= nextQueueTrimLogAt) {
+        console.warn(`[${logLabel}] PCM queue trimmed for low latency`, {
+          ...data,
+          eventsSinceLastLog: suppressedQueueTrimEvents
+        });
+        suppressedQueueTrimEvents = 0;
+        nextQueueTrimLogAt = now + LOG_RATE_LIMIT_MS;
+      }
+      return;
+    }
+
+    if (data?.type === 'queue-stats' && emitQueueTelemetry) {
+      const now = Date.now();
+      if (now >= nextQueueTelemetryLogAt) {
+        console.info(`[${logLabel}] PCM queue telemetry`, data);
+        nextQueueTelemetryLogAt = now + TELEMETRY_LOG_INTERVAL_MS;
+      }
     }
   };
 
@@ -176,33 +167,170 @@ const createDesktopAppAudioPipeline = async (
     stream: destinationNode.stream,
     track,
     pushFrame: (frame) => {
-      if (frame.sessionId !== session.sessionId) {
+      const frameValidation = validateDesktopAppAudioFrame({
+        frame,
+        sessionId: session.sessionId,
+        sessionSampleRate: session.sampleRate,
+        outputChannels,
+        lastSequence
+      });
+
+      if (!frameValidation.accepted) {
+        switch (frameValidation.reason) {
+          case 'session-mismatch':
+            return;
+          case 'unsupported-protocol':
+            console.warn(
+              `[${logLabel}] Unsupported app audio protocol version`,
+              frame.protocolVersion
+            );
+            return;
+          case 'unsupported-encoding':
+            console.warn(
+              `[${logLabel}] Unsupported app audio frame encoding`,
+              'encoding' in frame ? frame.encoding : undefined
+            );
+            return;
+          case 'sample-rate-mismatch': {
+            const now = Date.now();
+            malformedFrameDropsSinceLastLog += 1;
+            if (now >= nextMalformedFrameLogAt) {
+              console.warn(
+                `[${logLabel}] Dropping app audio frame with sample-rate mismatch`,
+                {
+                  frameSampleRate: frame.sampleRate,
+                  expectedSampleRate: session.sampleRate,
+                  malformedFrameDropsSinceLastLog
+                }
+              );
+              malformedFrameDropsSinceLastLog = 0;
+              nextMalformedFrameLogAt = now + LOG_RATE_LIMIT_MS;
+            }
+            return;
+          }
+          case 'invalid-sequence': {
+            const now = Date.now();
+            malformedFrameDropsSinceLastLog += 1;
+            if (now >= nextMalformedFrameLogAt) {
+              console.warn(`[${logLabel}] Dropping app audio frame with invalid sequence`, {
+                sequence: frame.sequence,
+                malformedFrameDropsSinceLastLog
+              });
+              malformedFrameDropsSinceLastLog = 0;
+              nextMalformedFrameLogAt = now + LOG_RATE_LIMIT_MS;
+            }
+            return;
+          }
+          case 'out-of-order-sequence': {
+            const now = Date.now();
+            sequenceAnomaliesSinceLastLog += 1;
+            if (now >= nextSequenceAnomalyLogAt) {
+              console.warn(`[${logLabel}] Dropping out-of-order app audio frame`, {
+                sequence: frame.sequence,
+                lastSequence,
+                sequenceAnomaliesSinceLastLog
+              });
+              sequenceAnomaliesSinceLastLog = 0;
+              nextSequenceAnomalyLogAt = now + LOG_RATE_LIMIT_MS;
+            }
+            return;
+          }
+          case 'malformed-header': {
+            const now = Date.now();
+            malformedFrameDropsSinceLastLog += 1;
+            if (now >= nextMalformedFrameLogAt) {
+              console.warn(`[${logLabel}] Dropping malformed app audio frame header`, {
+                channels: frame.channels,
+                frameCount: frame.frameCount,
+                malformedFrameDropsSinceLastLog
+              });
+              malformedFrameDropsSinceLastLog = 0;
+              nextMalformedFrameLogAt = now + LOG_RATE_LIMIT_MS;
+            }
+            return;
+          }
+          case 'channel-mismatch': {
+            const now = Date.now();
+            malformedFrameDropsSinceLastLog += 1;
+            if (now >= nextMalformedFrameLogAt) {
+              console.warn(`[${logLabel}] Dropping app audio frame with channel mismatch`, {
+                frameChannels: frame.channels,
+                outputChannels,
+                malformedFrameDropsSinceLastLog
+              });
+              malformedFrameDropsSinceLastLog = 0;
+              nextMalformedFrameLogAt = now + LOG_RATE_LIMIT_MS;
+            }
+            return;
+          }
+        }
+      }
+
+      const { droppedFrameCount, missingFrameCount, sequenceGapFrames } =
+        frameValidation;
+
+      if (missingFrameCount > 0) {
+        const now = Date.now();
+        droppedFrameEventsSinceLastLog += 1;
+        droppedFramesSinceLastLog += missingFrameCount;
+
+        if (now >= nextDroppedFrameLogAt) {
+          console.warn(`[${logLabel}] Missing app audio frames detected`, {
+            droppedFrameCount,
+            sequenceGapFrames,
+            droppedFramesSinceLastLog,
+            droppedFrameEventsSinceLastLog
+          });
+          droppedFrameEventsSinceLastLog = 0;
+          droppedFramesSinceLastLog = 0;
+          nextDroppedFrameLogAt = now + LOG_RATE_LIMIT_MS;
+        }
+
+        if (insertSilenceOnDroppedFrames) {
+          const recoverableDroppedFrames =
+            computeRecoverableMissingFrameCount(missingFrameCount);
+          const silenceFrameCount = recoverableDroppedFrames * frame.frameCount;
+          const silence = new Float32Array(silenceFrameCount * outputChannels);
+
+          workletNode.port.postMessage(
+            {
+              type: 'pcm',
+              samples: silence
+            },
+            [silence.buffer]
+          );
+
+          if (recoverableDroppedFrames !== missingFrameCount) {
+            console.warn(`[${logLabel}] Missing frame recovery was capped`, {
+              missingFrameCount,
+              recoverableDroppedFrames
+            });
+          }
+        }
+      }
+
+      const samples = isPcmFrame(frame)
+        ? frame.pcm
+        : decodePcmBase64(frame.pcmBase64);
+
+      const expectedSampleCount = frame.frameCount * frame.channels;
+      if (samples.length !== expectedSampleCount) {
+        const now = Date.now();
+        malformedFrameDropsSinceLastLog += 1;
+        if (now >= nextMalformedFrameLogAt) {
+          console.warn(`[${logLabel}] Dropping malformed app audio frame payload`, {
+            expectedSampleCount,
+            actualSampleCount: samples.length,
+            frameCount: frame.frameCount,
+            channels: frame.channels,
+            malformedFrameDropsSinceLastLog
+          });
+          malformedFrameDropsSinceLastLog = 0;
+          nextMalformedFrameLogAt = now + LOG_RATE_LIMIT_MS;
+        }
         return;
       }
 
-      if (frame.protocolVersion !== 1) {
-        console.warn(
-          '[desktop-app-audio] Unsupported app audio protocol version',
-          frame.protocolVersion
-        );
-        return;
-      }
-
-      if (frame.encoding !== 'f32le_base64') {
-        console.warn(
-          '[desktop-app-audio] Unsupported app audio frame encoding',
-          frame.encoding
-        );
-        return;
-      }
-
-      if (frame.droppedFrameCount && frame.droppedFrameCount > 0) {
-        console.warn('[desktop-app-audio] Sidecar dropped frames', {
-          droppedFrameCount: frame.droppedFrameCount
-        });
-      }
-
-      const samples = decodePcmBase64(frame.pcmBase64);
       workletNode.port.postMessage(
         {
           type: 'pcm',
@@ -210,6 +338,7 @@ const createDesktopAppAudioPipeline = async (
         },
         [samples.buffer]
       );
+      lastSequence = frame.sequence;
     },
     destroy: async () => {
       try {
@@ -228,4 +357,8 @@ const createDesktopAppAudioPipeline = async (
 };
 
 export { createDesktopAppAudioPipeline };
-export type { TDesktopAppAudioPipeline };
+export type {
+  TDesktopAppAudioPipeline,
+  TDesktopAppAudioPipelineMode,
+  TDesktopAppAudioPipelineOptions
+};

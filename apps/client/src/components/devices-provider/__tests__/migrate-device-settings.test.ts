@@ -9,7 +9,6 @@ import {
 describe('migrateDeviceSettings', () => {
   it('returns defaults when no saved data exists', () => {
     expect(migrateDeviceSettings(undefined)).toEqual(DEFAULT_DEVICE_SETTINGS);
-    expect(DEFAULT_DEVICE_SETTINGS.experimentalRustCapture).toBe(false);
     expect(DEFAULT_DEVICE_SETTINGS.experimentalVoiceFilter).toBe(false);
     expect(DEFAULT_DEVICE_SETTINGS.pushToTalkKeybind).toBeUndefined();
     expect(DEFAULT_DEVICE_SETTINGS.pushToMuteKeybind).toBeUndefined();
@@ -41,14 +40,6 @@ describe('migrateDeviceSettings', () => {
     });
 
     expect(migrated.screenAudioMode).toBe(ScreenAudioMode.APP);
-  });
-
-  it('preserves explicit experimentalRustCapture values', () => {
-    const migrated = migrateDeviceSettings({
-      experimentalRustCapture: true
-    });
-
-    expect(migrated.experimentalRustCapture).toBe(true);
   });
 
   it('preserves explicit experimentalVoiceFilter values', () => {

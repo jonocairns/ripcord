@@ -2,8 +2,15 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { describe, it } from "node:test";
 import path from "path";
-import { CaptureSidecarManager } from "../capture-sidecar-manager";
-import type { TAppAudioFrame, TAppAudioStatusEvent } from "../types";
+import {
+  CaptureSidecarManager,
+  toPcmAppAudioFrame,
+} from "../capture-sidecar-manager";
+import type {
+  TAppAudioFrame,
+  TAppAudioPcmFrame,
+  TAppAudioStatusEvent,
+} from "../types";
 
 const fakeSidecarPath = path.resolve(
   import.meta.dirname,
@@ -59,10 +66,14 @@ void describe("CaptureSidecarManager", () => {
     });
 
     const frames: TAppAudioFrame[] = [];
+    const pcmFrames: TAppAudioPcmFrame[] = [];
     const statusEvents: TAppAudioStatusEvent[] = [];
 
     const offFrame = manager.onFrame((frame) => {
       frames.push(frame);
+    });
+    const offPcmFrame = manager.onPcmFrame((frame) => {
+      pcmFrames.push(frame);
     });
     const offStatus = manager.onStatus((statusEvent) => {
       statusEvents.push(statusEvent);
@@ -78,8 +89,11 @@ void describe("CaptureSidecarManager", () => {
       assert.ok(session.sessionId);
 
       await waitFor(() => frames.length > 0);
+      await waitFor(() => pcmFrames.length > 0);
       assert.equal(frames[0]?.protocolVersion, 1);
       assert.equal(frames[0]?.encoding, "f32le_base64");
+      assert.equal(pcmFrames[0]?.protocolVersion, 1);
+      assert.equal(pcmFrames[0]?.pcm.length, 960 * 2);
 
       await manager.stopAppAudioCapture(session.sessionId);
       await waitFor(() =>
@@ -87,7 +101,51 @@ void describe("CaptureSidecarManager", () => {
       );
     } finally {
       offFrame();
+      offPcmFrame();
       offStatus();
+      await manager.dispose();
+    }
+  });
+
+  void it("drops malformed app audio frames for pcm forwarding", async () => {
+    const manager = new CaptureSidecarManager({
+      resolveBinaryPath: () => undefined,
+      restartDelayMs: 10,
+    });
+
+    try {
+      const samples = new Float32Array(4);
+      const validBase64 = Buffer.from(samples.buffer).toString("base64");
+
+      const validFrame: TAppAudioFrame = {
+        sessionId: "session-1",
+        targetId: "pid:1234",
+        sequence: 1,
+        sampleRate: 48_000,
+        channels: 2,
+        frameCount: 2,
+        pcmBase64: validBase64,
+        protocolVersion: 1,
+        encoding: "f32le_base64",
+      };
+
+      const validPcmFrame = toPcmAppAudioFrame(validFrame);
+      assert.equal(validPcmFrame?.pcm.length, 4);
+
+      const malformedByteLength = toPcmAppAudioFrame({
+        ...validFrame,
+        sequence: 2,
+        pcmBase64: Buffer.from([1, 2, 3]).toString("base64"),
+      });
+      assert.equal(malformedByteLength, undefined);
+
+      const mismatchedSampleCount = toPcmAppAudioFrame({
+        ...validFrame,
+        sequence: 3,
+        frameCount: 3,
+      });
+      assert.equal(mismatchedSampleCount, undefined);
+    } finally {
       await manager.dispose();
     }
   });

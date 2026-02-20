@@ -24,7 +24,6 @@ const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
   experimentalVoiceFilter: false,
   voiceFilterStrength: VoiceFilterStrength.BALANCED,
   screenAudioMode: ScreenAudioMode.SYSTEM,
-  experimentalRustCapture: false,
   mirrorOwnVideo: false,
   screenResolution: Resolution['720p'],
   screenFramerate: 30,
@@ -74,10 +73,6 @@ const migrateDeviceSettings = (
     )
       ? (incomingSettings.voiceFilterStrength as VoiceFilterStrength)
       : DEFAULT_DEVICE_SETTINGS.voiceFilterStrength,
-    experimentalRustCapture:
-      typeof incomingSettings.experimentalRustCapture === 'boolean'
-        ? incomingSettings.experimentalRustCapture
-        : DEFAULT_DEVICE_SETTINGS.experimentalRustCapture,
     pushToTalkKeybind,
     pushToMuteKeybind:
       pushToMuteKeybind && pushToMuteKeybind === pushToTalkKeybind

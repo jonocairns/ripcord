@@ -61,7 +61,6 @@ export type TDeviceSettings = {
   experimentalVoiceFilter: boolean;
   voiceFilterStrength: VoiceFilterStrength;
   screenAudioMode: ScreenAudioMode;
-  experimentalRustCapture: boolean;
   mirrorOwnVideo: boolean;
   screenResolution: Resolution;
   screenFramerate: number;

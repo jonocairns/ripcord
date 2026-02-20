@@ -30,7 +30,6 @@ export type TDesktopScreenShareSelection = {
   sourceId: string;
   audioMode: ScreenAudioMode;
   appAudioTargetId?: string;
-  experimentalRustCapture?: boolean;
 };
 
 export type TResolvedScreenAudioMode = {
@@ -80,6 +79,18 @@ export type TAppAudioFrame = {
   droppedFrameCount?: number;
 };
 
+export type TAppAudioPcmFrame = {
+  sessionId: string;
+  targetId: string;
+  sequence: number;
+  sampleRate: number;
+  channels: number;
+  frameCount: number;
+  pcm: Float32Array;
+  protocolVersion: number;
+  droppedFrameCount?: number;
+};
+
 export type TAppAudioEndReason =
   | 'capture_stopped'
   | 'app_exited'
@@ -122,6 +133,16 @@ export type TVoiceFilterFrame = {
   droppedFrameCount?: number;
 };
 
+export type TVoiceFilterPcmFrame = {
+  sessionId: string;
+  sequence: number;
+  sampleRate: number;
+  channels: number;
+  frameCount: number;
+  pcm: Float32Array;
+  protocolVersion: number;
+};
+
 export type TVoiceFilterStatusEvent = {
   sessionId: string;
   reason: 'capture_stopped' | 'capture_error' | 'sidecar_exited';
@@ -155,6 +176,9 @@ export type TStartVoiceFilterInput = {
   sampleRate: number;
   channels: number;
   suppressionLevel: TVoiceFilterStrength;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+  echoCancellation: boolean;
 };
 
 export type TPushKeybindKind = 'talk' | 'mute';
@@ -178,9 +202,7 @@ export type TGlobalPushKeybindRegistrationResult = {
 export type TDesktopBridge = {
   getServerUrl: () => Promise<string>;
   setServerUrl: (serverUrl: string) => Promise<void>;
-  getCapabilities: (options?: {
-    experimentalRustCapture?: boolean;
-  }) => Promise<TDesktopCapabilities>;
+  getCapabilities: () => Promise<TDesktopCapabilities>;
   pingSidecar: () => Promise<{ available: boolean; reason?: string }>;
   getUpdateStatus: () => Promise<TDesktopUpdateStatus>;
   checkForUpdates: () => Promise<TDesktopUpdateStatus>;
@@ -197,11 +219,15 @@ export type TDesktopBridge = {
     input: TStartVoiceFilterInput
   ) => Promise<TVoiceFilterSession>;
   stopVoiceFilterSession: (sessionId?: string) => Promise<void>;
+  ensureVoiceFilterFrameChannel: () => Promise<boolean>;
   setGlobalPushKeybinds: (
     input: TDesktopPushKeybindsInput
   ) => Promise<TGlobalPushKeybindRegistrationResult>;
+  pushVoiceFilterPcmFrame: (frame: TVoiceFilterPcmFrame) => void;
   pushVoiceFilterFrame: (frame: TVoiceFilterFrame) => void;
-  subscribeAppAudioFrames: (cb: (frame: TAppAudioFrame) => void) => () => void;
+  subscribeAppAudioFrames: (
+    cb: (frame: TAppAudioFrame | TAppAudioPcmFrame) => void
+  ) => () => void;
   subscribeAppAudioStatus: (
     cb: (statusEvent: TAppAudioStatusEvent) => void
   ) => () => void;

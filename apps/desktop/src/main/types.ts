@@ -18,7 +18,6 @@ export type TScreenShareSelection = {
   sourceId: string;
   audioMode: TScreenAudioMode;
   appAudioTargetId?: string;
-  experimentalRustCapture?: boolean;
 };
 
 export type TDesktopCapabilities = {
@@ -82,6 +81,18 @@ export type TAppAudioFrame = {
   droppedFrameCount?: number;
 };
 
+export type TAppAudioPcmFrame = {
+  sessionId: string;
+  targetId: string;
+  sequence: number;
+  sampleRate: number;
+  channels: number;
+  frameCount: number;
+  pcm: Float32Array;
+  protocolVersion: number;
+  droppedFrameCount?: number;
+};
+
 export type TAppAudioEndReason =
   | "capture_stopped"
   | "app_exited"
@@ -124,6 +135,16 @@ export type TVoiceFilterFrame = {
   droppedFrameCount?: number;
 };
 
+export type TVoiceFilterPcmFrame = {
+  sessionId: string;
+  sequence: number;
+  sampleRate: number;
+  channels: number;
+  frameCount: number;
+  pcm: Float32Array;
+  protocolVersion: number;
+};
+
 export type TVoiceFilterStatusEvent = {
   sessionId: string;
   reason: "capture_stopped" | "capture_error" | "sidecar_exited";
@@ -157,6 +178,9 @@ export type TStartVoiceFilterInput = {
   sampleRate: number;
   channels: number;
   suppressionLevel: TVoiceFilterStrength;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+  echoCancellation: boolean;
 };
 
 export type TPushKeybindKind = "talk" | "mute";

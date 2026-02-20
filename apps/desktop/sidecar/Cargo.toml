@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 base64 = "0.22.1"
 bytemuck = "1.20.0"
-deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet.git", package = "deep_filter", default-features = false, features = ["tract", "logging", "default-model-ll"] }
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet.git", package = "deep_filter", default-features = false, features = ["tract", "logging", "default-model"] }
 ndarray = "0.15.6"
 serde = { version = "1.0.214", features = ["derive"] }
 serde_json = "1.0.132"

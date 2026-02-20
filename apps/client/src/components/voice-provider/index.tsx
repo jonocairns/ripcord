@@ -310,17 +310,28 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
       await cleanupMicAudioPipeline();
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          deviceId: {
-            exact: devices.microphoneId
-          },
-          autoGainControl: devices.autoGainControl,
-          echoCancellation: devices.echoCancellation,
-          noiseSuppression: devices.noiseSuppression,
-          sampleRate: 48000,
-          channelCount: 2
+      const sidecarVoiceProcessingEnabled = devices.experimentalVoiceFilter;
+      const browserAutoGainControl = sidecarVoiceProcessingEnabled
+        ? false
+        : devices.autoGainControl;
+      const browserNoiseSuppression = sidecarVoiceProcessingEnabled
+        ? false
+        : devices.noiseSuppression;
+      const micChannelCount = sidecarVoiceProcessingEnabled ? 1 : 2;
+      // Keep browser AEC enabled until sidecar reference-based echo cancellation is implemented.
+      const micConstraints = {
+        deviceId: {
+          exact: devices.microphoneId
         },
+        autoGainControl: browserAutoGainControl,
+        echoCancellation: devices.echoCancellation,
+        noiseSuppression: browserNoiseSuppression,
+        sampleRate: 48000,
+        channelCount: micChannelCount
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: micConstraints,
         video: false
       });
 
@@ -336,8 +347,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         try {
           const micAudioPipeline = await createMicAudioProcessingPipeline({
             inputTrack: rawAudioTrack,
-            enabled: devices.experimentalVoiceFilter,
-            suppressionLevel: devices.voiceFilterStrength
+            enabled: sidecarVoiceProcessingEnabled,
+            suppressionLevel: devices.voiceFilterStrength,
+            noiseSuppression: devices.noiseSuppression,
+            autoGainControl: devices.autoGainControl,
+            echoCancellation: devices.echoCancellation
           });
 
           if (micAudioPipeline) {
@@ -356,6 +370,40 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           logVoice('Failed to initialize microphone voice filter, using raw mic', {
             error
           });
+
+          if (
+            sidecarVoiceProcessingEnabled &&
+            (devices.autoGainControl || devices.noiseSuppression)
+          ) {
+            try {
+              const fallbackStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                  ...micConstraints,
+                  autoGainControl: devices.autoGainControl,
+                  noiseSuppression: devices.noiseSuppression
+                },
+                video: false
+              });
+              stream.getTracks().forEach((track) => {
+                track.stop();
+              });
+              rawMicStreamRef.current = fallbackStream;
+
+              const fallbackTrack = fallbackStream.getAudioTracks()[0];
+              if (fallbackTrack) {
+                outboundStream = fallbackStream;
+                outboundAudioTrack = fallbackTrack;
+                logVoice(
+                  'Restored browser microphone processing after sidecar initialization failure'
+                );
+              }
+            } catch (fallbackError) {
+              logVoice(
+                'Failed to restore browser microphone processing after sidecar failure',
+                { fallbackError }
+              );
+            }
+          }
         }
 
         setLocalAudioStream(outboundStream);
@@ -624,9 +672,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       try {
         const [sources, capabilities] = await Promise.all([
           desktopBridge.listShareSources(),
-          desktopBridge.getCapabilities({
-            experimentalRustCapture: devices.experimentalRustCapture
-          })
+          desktopBridge.getCapabilities()
         ]);
 
         if (sources.length === 0) {
@@ -637,15 +683,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         return requestScreenShareSelectionDialog({
           sources,
           capabilities,
-          defaultAudioMode: devices.screenAudioMode,
-          experimentalRustCapture: devices.experimentalRustCapture
+          defaultAudioMode: devices.screenAudioMode
         });
       } catch (error) {
         logVoice('Failed to open desktop screen share picker', { error });
         toast.error('Failed to load shareable sources.');
         return null;
       }
-    }, [devices.experimentalRustCapture, devices.screenAudioMode]);
+    }, [devices.screenAudioMode]);
 
   const startScreenShareStream = useCallback(
     async (desktopSelection?: TDesktopScreenShareSelection) => {
@@ -670,8 +715,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         if (
           desktopBridge &&
           desktopSelection &&
-          audioMode === ScreenAudioMode.APP &&
-          devices.experimentalRustCapture
+          audioMode === ScreenAudioMode.APP
         ) {
           try {
             logVoice('Starting per-app sidecar capture', {
@@ -686,8 +730,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
               sessionId: appAudioSession.sessionId,
               targetId: appAudioSession.targetId
             });
-            const appAudioPipeline =
-              await createDesktopAppAudioPipeline(appAudioSession);
+            const appAudioPipeline = await createDesktopAppAudioPipeline(
+              appAudioSession,
+              {
+                mode: 'stable',
+                logLabel: 'per-app-audio',
+                insertSilenceOnDroppedFrames: true,
+                emitQueueTelemetry: true,
+                queueTelemetryIntervalMs: 1_000
+              }
+            );
             let hasReceivedSessionFrame = false;
 
             appAudioSessionRef.current = appAudioSession;
@@ -964,7 +1016,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       producerTransport,
       localScreenShareStream,
       setLocalScreenShareAudio,
-      devices.experimentalRustCapture,
       devices.screenAudioMode,
       devices.screenResolution,
       devices.screenFramerate,

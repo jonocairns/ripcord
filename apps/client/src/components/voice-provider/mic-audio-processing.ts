@@ -6,6 +6,7 @@ import type {
 } from '@/runtime/types';
 import { VoiceFilterStrength } from '@/types';
 import { createDesktopAppAudioPipeline } from './desktop-app-audio';
+import micCaptureWorkletModuleUrl from './mic-capture.worklet.js?url&no-inline';
 
 type TMicAudioProcessingBackend = 'sidecar-native';
 
@@ -20,24 +21,13 @@ type TCreateMicAudioProcessingPipelineInput = {
   inputTrack: MediaStreamTrack;
   enabled: boolean;
   suppressionLevel: VoiceFilterStrength;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+  echoCancellation: boolean;
 };
 
-const encodePcmBase64 = (samples: Float32Array): string => {
-  const bytes = new Uint8Array(
-    samples.buffer,
-    samples.byteOffset,
-    samples.byteLength
-  );
-  const chunkSize = 0x8000;
-  let binary = '';
-
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
-    binary += String.fromCharCode(...chunk);
-  }
-
-  return btoa(binary);
-};
+const MIC_CAPTURE_WORKLET_NAME = 'sharkord-mic-capture-processor';
+const FIRST_FILTERED_FRAME_TIMEOUT_MS = 4_000;
 
 const getScriptProcessorBufferSize = (preferredFrameSize: number): number => {
   const clamped = Math.max(256, Math.min(16_384, Math.floor(preferredFrameSize)));
@@ -50,14 +40,24 @@ const getScriptProcessorBufferSize = (preferredFrameSize: number): number => {
   return size;
 };
 
+const ensureMicCaptureWorkletModule = async (audioContext: AudioContext) => {
+  await audioContext.audioWorklet.addModule(micCaptureWorkletModuleUrl);
+};
+
 const createNativeDesktopMicAudioProcessingPipeline = async ({
   inputTrack,
   channels,
-  suppressionLevel
+  suppressionLevel,
+  noiseSuppression,
+  autoGainControl,
+  echoCancellation
 }: {
   inputTrack: MediaStreamTrack;
   channels: number;
   suppressionLevel: VoiceFilterStrength;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+  echoCancellation: boolean;
 }): Promise<TMicAudioProcessingPipeline | undefined> => {
   const desktopBridge = getDesktopBridge();
 
@@ -68,7 +68,17 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   const session = await desktopBridge.startVoiceFilterSession({
     sampleRate: 48_000,
     channels,
-    suppressionLevel: suppressionLevel as unknown as TRuntimeVoiceFilterStrength
+    suppressionLevel: suppressionLevel as unknown as TRuntimeVoiceFilterStrength,
+    noiseSuppression,
+    autoGainControl,
+    echoCancellation
+  });
+  console.warn('[voice-filter-debug] Started native voice-filter session', {
+    sessionId: session.sessionId,
+    sampleRate: session.sampleRate,
+    channels: session.channels,
+    framesPerBuffer: session.framesPerBuffer,
+    protocolVersion: session.protocolVersion
   });
 
   const outputPipeline = await createDesktopAppAudioPipeline({
@@ -79,6 +89,10 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
     framesPerBuffer: session.framesPerBuffer,
     protocolVersion: session.protocolVersion,
     encoding: session.encoding
+  }, {
+    mode: 'stable',
+    logLabel: 'mic-voice-filter',
+    insertSilenceOnDroppedFrames: true
   });
 
   const AudioContextClass =
@@ -97,16 +111,46 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   });
   const captureInputStream = new MediaStream([inputTrack]);
   const sourceNode = captureContext.createMediaStreamSource(captureInputStream);
-  const frameSize = getScriptProcessorBufferSize(session.framesPerBuffer || 480);
-  const processorNode = captureContext.createScriptProcessor(
-    frameSize,
-    session.channels,
-    session.channels
-  );
+  const targetFrameSize = Math.max(1, Math.floor(session.framesPerBuffer || 480));
+  const scriptProcessorFrameSize = getScriptProcessorBufferSize(targetFrameSize);
+  let workletNode: AudioWorkletNode | undefined;
+  let processorNode: ScriptProcessorNode | undefined;
   const sinkNode = captureContext.createGain();
   sinkNode.gain.value = 0;
+  let hasReceivedFilteredFrame = false;
+  let settleFirstFilteredFrame: ((error?: Error) => void) | undefined;
+  const firstFilteredFramePromise = new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const timeout = window.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      reject(
+        new Error(`Native voice filter produced no frames (session=${session.sessionId})`)
+      );
+    }, FIRST_FILTERED_FRAME_TIMEOUT_MS);
+
+    settleFirstFilteredFrame = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      window.clearTimeout(timeout);
+
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    };
+  });
 
   let sequence = 0;
+  let hasSentInputFrame = false;
 
   const removeFrameSubscription = desktopBridge.subscribeVoiceFilterFrames(
     (frame: TVoiceFilterFrame) => {
@@ -118,6 +162,17 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
         ...frame,
         targetId: 'native-mic-filter'
       });
+
+      if (!hasReceivedFilteredFrame) {
+        hasReceivedFilteredFrame = true;
+        console.warn('[voice-filter-debug] Received first processed voice-filter frame', {
+          sessionId: frame.sessionId,
+          sequence: frame.sequence,
+          frameCount: frame.frameCount,
+          channels: frame.channels
+        });
+        settleFirstFilteredFrame?.();
+      }
     }
   );
 
@@ -129,53 +184,137 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
 
       if (statusEvent.reason !== 'capture_stopped') {
         console.warn('[voice-filter] Native voice filter session ended', statusEvent);
+        if (statusEvent.error) {
+          console.warn(
+            '[voice-filter-debug] Native voice filter status error detail',
+            statusEvent.error
+          );
+        }
+      }
+
+      if (!hasReceivedFilteredFrame) {
+        settleFirstFilteredFrame?.(
+          new Error(`Native voice filter ended before frames (${statusEvent.reason})`)
+        );
       }
     }
   );
 
-  processorNode.onaudioprocess = (event) => {
-    const inputBuffer = event.inputBuffer;
-    const frameCount = inputBuffer.length;
-
-    if (frameCount === 0) {
+  const pushInterleavedPcmFrame = (samples: Float32Array, frameCount: number) => {
+    if (frameCount <= 0) {
       return;
     }
 
-    const interleaved = new Float32Array(frameCount * session.channels);
-
-    for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
-      for (let channelIndex = 0; channelIndex < session.channels; channelIndex += 1) {
-        const sourceChannelIndex = Math.min(
-          channelIndex,
-          Math.max(0, inputBuffer.numberOfChannels - 1)
-        );
-        const sourceChannelData =
-          inputBuffer.numberOfChannels > 0
-            ? inputBuffer.getChannelData(sourceChannelIndex)
-            : undefined;
-
-        interleaved[frameIndex * session.channels + channelIndex] =
-          sourceChannelData?.[frameIndex] ?? 0;
-      }
+    if (!hasSentInputFrame) {
+      hasSentInputFrame = true;
+      console.warn('[voice-filter-debug] Sending first PCM frame to sidecar', {
+        sessionId: session.sessionId,
+        sequence,
+        frameCount,
+        channels: session.channels,
+        sampleRate: session.sampleRate
+      });
     }
 
-    desktopBridge.pushVoiceFilterFrame({
+    desktopBridge.pushVoiceFilterPcmFrame({
       sessionId: session.sessionId,
       sequence,
       sampleRate: session.sampleRate,
       channels: session.channels,
       frameCount,
-      pcmBase64: encodePcmBase64(interleaved),
-      protocolVersion: 1,
-      encoding: 'f32le_base64'
+      pcm: samples,
+      protocolVersion: 1
     });
 
     sequence += 1;
   };
 
-  sourceNode.connect(processorNode);
-  processorNode.connect(sinkNode);
+  if (
+    typeof AudioWorkletNode !== 'undefined' &&
+    typeof captureContext.audioWorklet !== 'undefined'
+  ) {
+    try {
+      await ensureMicCaptureWorkletModule(captureContext);
+
+      workletNode = new AudioWorkletNode(captureContext, MIC_CAPTURE_WORKLET_NAME, {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [session.channels],
+        processorOptions: {
+          channels: session.channels,
+          targetFrameSize
+        }
+      });
+
+      workletNode.port.onmessage = (messageEvent) => {
+        const data = messageEvent.data;
+        if (!data || data.type !== 'pcm' || !data.samples) {
+          return;
+        }
+
+        const samples = data.samples as Float32Array;
+        const frameCount =
+          typeof data.frameCount === 'number'
+            ? Math.floor(data.frameCount)
+            : Math.floor(samples.length / session.channels);
+
+        pushInterleavedPcmFrame(samples, frameCount);
+      };
+    } catch (error) {
+      console.warn(
+        '[voice-filter] AudioWorklet mic capture unavailable, using ScriptProcessor fallback',
+        error
+      );
+      workletNode = undefined;
+    }
+  }
+
+  if (workletNode) {
+    sourceNode.connect(workletNode);
+    workletNode.connect(sinkNode);
+  } else {
+    processorNode = captureContext.createScriptProcessor(
+      scriptProcessorFrameSize,
+      session.channels,
+      session.channels
+    );
+
+    processorNode.onaudioprocess = (event) => {
+      const inputBuffer = event.inputBuffer;
+      const frameCount = inputBuffer.length;
+
+      if (frameCount === 0) {
+        return;
+      }
+
+      const interleaved = new Float32Array(frameCount * session.channels);
+
+      for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+        for (let channelIndex = 0; channelIndex < session.channels; channelIndex += 1) {
+          const sourceChannelIndex = Math.min(
+            channelIndex,
+            Math.max(0, inputBuffer.numberOfChannels - 1)
+          );
+          const sourceChannelData =
+            inputBuffer.numberOfChannels > 0
+              ? inputBuffer.getChannelData(sourceChannelIndex)
+              : undefined;
+
+          interleaved[frameIndex * session.channels + channelIndex] =
+            sourceChannelData?.[frameIndex] ?? 0;
+        }
+      }
+
+      pushInterleavedPcmFrame(interleaved, frameCount);
+    };
+
+    sourceNode.connect(processorNode);
+    processorNode.connect(sinkNode);
+  }
+
   sinkNode.connect(captureContext.destination);
+
+  void desktopBridge.ensureVoiceFilterFrameChannel();
 
   if (captureContext.state !== 'running') {
     await captureContext.resume();
@@ -187,12 +326,26 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
     // ignore unsupported contentHint implementations
   }
 
-  return {
+  const pipeline: TMicAudioProcessingPipeline = {
     stream: outputPipeline.stream,
     track: outputPipeline.track,
     backend: 'sidecar-native',
     destroy: async () => {
-      processorNode.onaudioprocess = null;
+      if (processorNode) {
+        processorNode.onaudioprocess = null;
+      }
+
+      if (workletNode) {
+        try {
+          workletNode.port.onmessage = null;
+          workletNode.port.postMessage({
+            type: 'reset'
+          });
+        } catch {
+          // ignore
+        }
+      }
+
       removeFrameSubscription();
       removeStatusSubscription();
 
@@ -203,7 +356,13 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
       }
 
       try {
-        processorNode.disconnect();
+        processorNode?.disconnect();
+      } catch {
+        // ignore
+      }
+
+      try {
+        workletNode?.disconnect();
       } catch {
         // ignore
       }
@@ -219,12 +378,24 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
       await captureContext.close();
     }
   };
+
+  try {
+    await firstFilteredFramePromise;
+  } catch (error) {
+    await pipeline.destroy();
+    throw error;
+  }
+
+  return pipeline;
 };
 
 const createMicAudioProcessingPipeline = async ({
   inputTrack,
   enabled,
-  suppressionLevel
+  suppressionLevel,
+  noiseSuppression,
+  autoGainControl,
+  echoCancellation
 }: TCreateMicAudioProcessingPipelineInput): Promise<
   TMicAudioProcessingPipeline | undefined
 > => {
@@ -232,24 +403,42 @@ const createMicAudioProcessingPipeline = async ({
     return undefined;
   }
 
-  const inputSettings = inputTrack.getSettings();
-  const outputChannels = Math.max(
-    1,
-    Math.min(
-      2,
-      typeof inputSettings.channelCount === 'number'
-        ? inputSettings.channelCount
-        : 1
-    )
-  );
-
   try {
     return await createNativeDesktopMicAudioProcessingPipeline({
       inputTrack,
-      channels: outputChannels,
-      suppressionLevel
+      // Force mono for sidecar filter sessions to reduce runtime edge cases.
+      channels: 1,
+      suppressionLevel,
+      noiseSuppression,
+      autoGainControl,
+      echoCancellation
     });
   } catch (error) {
+    if (noiseSuppression) {
+      try {
+        const fallbackPipeline = await createNativeDesktopMicAudioProcessingPipeline({
+          inputTrack,
+          channels: 1,
+          suppressionLevel,
+          noiseSuppression: false,
+          autoGainControl,
+          echoCancellation
+        });
+
+        if (fallbackPipeline) {
+          console.warn(
+            '[voice-filter] Native filter fallback enabled without DeepFilter noise suppression'
+          );
+          return fallbackPipeline;
+        }
+      } catch (fallbackError) {
+        console.warn(
+          '[voice-filter] Native filter fallback (passthrough) failed, using raw mic',
+          fallbackError
+        );
+      }
+    }
+
     console.warn(
       '[voice-filter] Native desktop voice filter unavailable, using raw mic',
       error
