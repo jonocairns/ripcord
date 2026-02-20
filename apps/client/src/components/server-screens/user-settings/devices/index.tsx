@@ -25,15 +25,16 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useForm } from '@/hooks/use-form';
+import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import {
   getRuntimeServerConfig,
   normalizeServerUrl,
   updateDesktopServerUrl
 } from '@/runtime/server-config';
-import { ScreenAudioMode } from '@/runtime/types';
+import { ScreenAudioMode, type TDesktopUpdateStatus } from '@/runtime/types';
 import { Resolution, VideoCodecPreference, VoiceFilterStrength } from '@/types';
 import { Info } from 'lucide-react';
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { useAvailableDevices } from './hooks/use-available-devices';
 import ResolutionFpsControl from './resolution-fps-control';
@@ -41,9 +42,40 @@ import ResolutionFpsControl from './resolution-fps-control';
 const DEFAULT_NAME = 'default';
 type TPushKeybindField = 'pushToTalkKeybind' | 'pushToMuteKeybind';
 
+const resolveDesktopUpdateSummary = (status?: TDesktopUpdateStatus) => {
+  if (!status) {
+    return 'Loading update status...';
+  }
+
+  switch (status.state) {
+    case 'disabled':
+      return status.message || 'Desktop auto-updates are disabled.';
+    case 'idle':
+      return 'Desktop app periodically checks for updates.';
+    case 'checking':
+      return 'Checking for updates...';
+    case 'available':
+      return status.availableVersion
+        ? `Version ${status.availableVersion} is available and downloading in the background.`
+        : 'An update is available and downloading in the background.';
+    case 'downloading':
+      return typeof status.percent === 'number'
+        ? `Downloading update... ${Math.round(status.percent)}%`
+        : 'Downloading update...';
+    case 'downloaded':
+      return status.availableVersion
+        ? `Version ${status.availableVersion} is downloaded and ready to install.`
+        : 'An update is downloaded and ready to install.';
+    case 'not-available':
+      return 'You are on the latest version.';
+    case 'error':
+      return status.message || 'Failed to update desktop app.';
+  }
+};
+
 const Devices = memo(() => {
-  const hasDesktopBridge =
-    typeof window !== 'undefined' && Boolean(window.sharkordDesktop);
+  const desktopBridge = getDesktopBridge();
+  const hasDesktopBridge = Boolean(desktopBridge);
   const currentVoiceChannelId = useCurrentVoiceChannelId();
   const {
     inputDevices,
@@ -56,6 +88,10 @@ const Devices = memo(() => {
     getRuntimeServerConfig().serverUrl
   );
   const [savingServerUrl, setSavingServerUrl] = useState(false);
+  const [desktopUpdateStatus, setDesktopUpdateStatus] =
+    useState<TDesktopUpdateStatus>();
+  const [checkingDesktopUpdates, setCheckingDesktopUpdates] = useState(false);
+  const [installingDesktopUpdate, setInstallingDesktopUpdate] = useState(false);
   const [capturingKeybindField, setCapturingKeybindField] = useState<
     TPushKeybindField | undefined
   >(undefined);
@@ -81,6 +117,54 @@ const Devices = memo(() => {
       setSavingServerUrl(false);
     }
   }, [desktopServerUrl]);
+
+  const checkForDesktopUpdates = useCallback(async () => {
+    if (!desktopBridge) {
+      return;
+    }
+
+    setCheckingDesktopUpdates(true);
+
+    try {
+      const status = await desktopBridge.checkForUpdates();
+      setDesktopUpdateStatus(status);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Could not check for desktop updates';
+      toast.error(message);
+    } finally {
+      setCheckingDesktopUpdates(false);
+    }
+  }, [desktopBridge]);
+
+  const installDesktopUpdateAndRestart = useCallback(async () => {
+    if (!desktopBridge) {
+      return;
+    }
+
+    setInstallingDesktopUpdate(true);
+
+    try {
+      const started = await desktopBridge.installUpdateAndRestart();
+
+      if (!started) {
+        toast.error('No downloaded update is ready to install yet');
+        return;
+      }
+
+      toast.success('Installing update and restarting app...');
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Could not start desktop update install';
+      toast.error(message);
+    } finally {
+      setInstallingDesktopUpdate(false);
+    }
+  }, [desktopBridge]);
 
   const clearPushKeybind = useCallback(
     (field: TPushKeybindField) => {
@@ -156,6 +240,46 @@ const Devices = memo(() => {
     values.pushToMuteKeybind,
     values.pushToTalkKeybind
   ]);
+
+  useEffect(() => {
+    if (!desktopBridge) {
+      return;
+    }
+
+    let disposed = false;
+
+    void desktopBridge
+      .getUpdateStatus()
+      .then((status) => {
+        if (disposed) {
+          return;
+        }
+
+        setDesktopUpdateStatus(status);
+      })
+      .catch(() => {
+        // ignore initial status errors; subscriptions may still recover later
+      });
+
+    const unsubscribe = desktopBridge.subscribeUpdateStatus((status) => {
+      if (disposed) {
+        return;
+      }
+
+      setDesktopUpdateStatus(status);
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [desktopBridge]);
+
+  const desktopUpdateSummary = useMemo(() => {
+    return resolveDesktopUpdateSummary(desktopUpdateStatus);
+  }, [desktopUpdateStatus]);
+
+  const isDesktopUpdateReady = desktopUpdateStatus?.state === 'downloaded';
 
   if (availableDevicesLoading || devicesLoading) {
     return <LoadingCard className="h-[600px]" />;
@@ -488,6 +612,59 @@ const Devices = memo(() => {
           </div>
 
         </section>
+
+        {hasDesktopBridge && <Separator />}
+
+        {hasDesktopBridge && (
+          <section className="space-y-4">
+            <div className="space-y-1">
+              <h3 className="text-base font-semibold">Desktop App Updates</h3>
+              <p className="text-sm text-muted-foreground">
+                Keep the desktop app up to date without reinstalling manually.
+              </p>
+            </div>
+
+            <div className="rounded-md border p-3 space-y-2">
+              <div className="text-sm">
+                Current version:{' '}
+                <span className="font-mono">
+                  {desktopUpdateStatus?.currentVersion || 'Unknown'}
+                </span>
+              </div>
+
+              {desktopUpdateStatus?.availableVersion && (
+                <div className="text-sm">
+                  Available version:{' '}
+                  <span className="font-mono">
+                    {desktopUpdateStatus.availableVersion}
+                  </span>
+                </div>
+              )}
+
+              <p className="text-xs text-muted-foreground">
+                {desktopUpdateSummary}
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button
+                variant="outline"
+                onClick={checkForDesktopUpdates}
+                disabled={checkingDesktopUpdates || installingDesktopUpdate}
+              >
+                {checkingDesktopUpdates ? 'Checking...' : 'Check for Updates'}
+              </Button>
+              <Button
+                onClick={installDesktopUpdateAndRestart}
+                disabled={!isDesktopUpdateReady || installingDesktopUpdate}
+              >
+                {installingDesktopUpdate
+                  ? 'Restarting...'
+                  : 'Restart to Update'}
+              </Button>
+            </div>
+          </section>
+        )}
 
         {hasDesktopBridge && <Separator />}
 

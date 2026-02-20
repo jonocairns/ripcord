@@ -44,6 +44,10 @@ Examples:
 - `nix develop -c bun install`
 - `nix develop -c ./start.sh`
 - `nix develop -c bun run --filter @sharkord/server test`
+- `nix develop -c bun run check-types`
+- `nix develop -c bun run lint`
+- `nix develop -c bun run format`
+- `nix develop -c bun run magic`
 
 ### What the flake provides
 
@@ -82,3 +86,17 @@ Supported flake systems in `flake.nix`:
 - Keep changes scoped to the task.
 - Do not commit unrelated formatting or lockfile changes unless required.
 - If you change behavior, add or update tests in the touched package when feasible.
+
+## API compatibility (server + desktop)
+
+- Treat shipped desktop clients as potentially behind the latest server/API version.
+- Default policy: API changes must be backward compatible.
+- Prefer additive changes:
+  - add new fields/endpoints/events instead of changing or removing existing ones.
+  - keep existing request/response shapes stable.
+- When a breaking change is unavoidable:
+  - gate it behind explicit versioning (for example a new route/versioned contract).
+  - keep old behavior available during a deprecation window.
+  - document the migration path in the same PR.
+- For protocol/schema changes, ensure old desktop clients fail gracefully (clear error or fallback) instead of crashing.
+- Do not remove deprecated API surface until the current desktop release channel has had time to update.
