@@ -10,7 +10,6 @@ import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
-import { closeServerScreens } from '@/features/server-screens/actions';
 import { useAdminChannelGeneral } from '@/features/server/admin/hooks';
 import { memo } from 'react';
 
@@ -61,9 +60,6 @@ const General = memo(({ channelId }: TGeneralProps) => {
         </Group>
 
         <div className="flex justify-end gap-2 pt-4">
-          <Button variant="outline" onClick={closeServerScreens}>
-            Cancel
-          </Button>
           <Button onClick={submit} disabled={loading}>
             Save Changes
           </Button>

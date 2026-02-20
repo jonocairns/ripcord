@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { Permission } from '@sharkord/shared';
 import { initTest } from '../../__tests__/helpers';
 
 describe('messages router', () => {
@@ -56,6 +57,20 @@ describe('messages router', () => {
   test('should throw when user lacks permissions (toggleReaction)', async () => {
     const { caller: caller1 } = await initTest(1);
     const { caller: caller2 } = await initTest(2);
+
+    const roles = await caller1.roles.getAll();
+    const memberRole = roles.find((role) => role.isDefault);
+
+    expect(memberRole).toBeDefined();
+
+    await caller1.roles.update({
+      roleId: memberRole!.id,
+      name: memberRole!.name,
+      color: memberRole!.color,
+      permissions: memberRole!.permissions.filter(
+        (permission) => permission !== Permission.REACT_TO_MESSAGES
+      )
+    });
 
     await caller1.messages.send({
       channelId: 1,

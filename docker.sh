@@ -40,10 +40,10 @@ require_cmd docker
 
 DEFAULT_OWNER="$(resolve_default_owner || true)"
 GHCR_OWNER="${GHCR_OWNER:-$DEFAULT_OWNER}"
-IMAGE_NAME="${IMAGE_NAME:-swsh}"
+IMAGE_NAME="${IMAGE_NAME:-ripcord}"
 IMAGE_VERSION="${IMAGE_VERSION:-$(resolve_image_version)}"
 DOCKER_PLATFORMS="${DOCKER_PLATFORMS:-linux/amd64,linux/arm64}"
-BUILDX_BUILDER="${BUILDX_BUILDER:-swsh-builder}"
+BUILDX_BUILDER="${BUILDX_BUILDER:-ripcord-builder}"
 SKIP_BUILD="${SKIP_BUILD:-1}"
 SKIP_PUSH="${SKIP_PUSH:-0}"
 
@@ -58,7 +58,7 @@ IMAGE="ghcr.io/$GHCR_OWNER/$IMAGE_NAME"
 
 if [ "$SKIP_BUILD" != "1" ]; then
   require_cmd bun
-  echo "Building swsh binaries..."
+  echo "Building ripcord binaries..."
   (cd "$SERVER_DIR" && bun run build)
 fi
 

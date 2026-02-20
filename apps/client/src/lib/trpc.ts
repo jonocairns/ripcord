@@ -1,7 +1,10 @@
 import { resetApp } from '@/features/app/actions';
 import { resetDialogs } from '@/features/dialogs/actions';
 import { resetServerScreens } from '@/features/server-screens/actions';
+import { currentVoiceChannelIdSelector } from '@/features/server/channels/selectors';
+import { setPendingVoiceReconnectChannelId } from '@/features/server/reconnect-state';
 import { resetServerState, setDisconnectInfo } from '@/features/server/actions';
+import { store } from '@/features/store';
 import {
   clearAuthToken,
   getAuthToken
@@ -25,7 +28,14 @@ const initializeTRPC = (host: string) => {
     url: `${protocol}://${host}`,
     // @ts-expect-error - the onclose type is not correct in trpc
     onClose: (cause: CloseEvent) => {
-      cleanup();
+      const state = store.getState();
+      const currentVoiceChannelId = currentVoiceChannelIdSelector(state);
+
+      setPendingVoiceReconnectChannelId(
+        !cause.wasClean ? currentVoiceChannelId : undefined
+      );
+
+      cleanup({ skipSocketClose: true });
       setDisconnectInfo({
         code: cause.code,
         reason: cause.reason,
@@ -65,11 +75,13 @@ const getTRPCClient = () => {
   return trpc;
 };
 
-const cleanup = (opts: { clearAuth?: boolean } = {}) => {
-  if (wsClient) {
+const cleanup = (
+  opts: { clearAuth?: boolean; skipSocketClose?: boolean } = {}
+) => {
+  if (wsClient && !opts.skipSocketClose) {
     wsClient.close();
-    wsClient = null;
   }
+  wsClient = null;
 
   trpc = null;
   currentHost = null;

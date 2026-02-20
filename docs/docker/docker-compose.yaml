@@ -1,7 +1,7 @@
 services:
-  swsh:
-    image: ghcr.io/jonocairns/swsh:latest
-    container_name: swsh
+  ripcord:
+    image: ghcr.io/jonocairns/ripcord:latest
+    container_name: ripcord
     restart: unless-stopped
     ports:
       # Main HTTP/WebSocket port
@@ -17,7 +17,7 @@ services:
       # Server configuration
       SHARKORD_PORT: "4991"
       SHARKORD_DEBUG: "false"
-      # Only enable when Sharkord is behind a trusted reverse proxy that rewrites forwarded headers.
+      # Only enable when Ripcord is behind a trusted reverse proxy that rewrites forwarded headers.
       SHARKORD_TRUST_PROXY: "true"
 
       # WebRTC configuration

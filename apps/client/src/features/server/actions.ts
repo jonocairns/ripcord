@@ -6,6 +6,7 @@ import { cleanup, connectToTRPC, getTRPCClient } from '@/lib/trpc';
 import { type TPublicServerSettings, type TServerInfo } from '@sharkord/shared';
 import { toast } from 'sonner';
 import { openDialog } from '../dialogs/actions';
+import { clearPendingVoiceReconnectChannelId } from './reconnect-state';
 import { store } from '../store';
 import { setPluginCommands } from './plugins/actions';
 import { infoSelector } from './selectors';
@@ -14,6 +15,7 @@ import { initSubscriptions } from './subscriptions';
 import { type TDisconnectInfo } from './types';
 
 let unsubscribeFromServer: (() => void) | null = null;
+let connectPromise: Promise<void> | null = null;
 
 export const setConnected = (status: boolean) => {
   store.dispatch(serverSliceActions.setConnected(status));
@@ -46,37 +48,50 @@ export const setInfo = (info: TServerInfo | undefined) => {
 };
 
 export const connect = async () => {
-  const state = store.getState();
-  const info = infoSelector(state);
-  const serverId = info?.serverId ?? 'unknown-server';
-
-  const attemptConnect = async () => {
-    const host = getHostFromServer();
-    const trpc = await connectToTRPC(host);
-
-    const { hasPassword, handshakeHash } = await trpc.others.handshake.query();
-
-    if (hasPassword) {
-      // show password prompt
-      openDialog(Dialog.SERVER_PASSWORD, { handshakeHash, serverId });
-      return;
-    }
-
-    await joinServer(handshakeHash);
-  };
-
-  try {
-    await attemptConnect();
-  } catch (error) {
-    const refreshed = await refreshAccessToken();
-
-    if (!refreshed) {
-      throw error;
-    }
-
-    cleanup();
-    await attemptConnect();
+  if (connectPromise) {
+    return connectPromise;
   }
+
+  connectPromise = (async () => {
+    setConnecting(true);
+
+    const state = store.getState();
+    const info = infoSelector(state);
+    const serverId = info?.serverId ?? 'unknown-server';
+
+    const attemptConnect = async () => {
+      const host = getHostFromServer();
+      const trpc = await connectToTRPC(host);
+
+      const { hasPassword, handshakeHash } = await trpc.others.handshake.query();
+
+      if (hasPassword) {
+        // show password prompt
+        openDialog(Dialog.SERVER_PASSWORD, { handshakeHash, serverId });
+        return;
+      }
+
+      await joinServer(handshakeHash);
+    };
+
+    try {
+      await attemptConnect();
+    } catch (error) {
+      const refreshed = await refreshAccessToken();
+
+      if (!refreshed) {
+        throw error;
+      }
+
+      cleanup();
+      await attemptConnect();
+    } finally {
+      setConnecting(false);
+      connectPromise = null;
+    }
+  })();
+
+  return connectPromise;
 };
 
 export const joinServer = async (handshakeHash: string, password?: string) => {
@@ -86,6 +101,7 @@ export const joinServer = async (handshakeHash: string, password?: string) => {
   logDebug('joinServer', data);
 
   store.dispatch(serverSliceActions.setInitialData(data));
+  setDisconnectInfo(undefined);
 
   unsubscribeFromServer = initSubscriptions();
 
@@ -93,11 +109,13 @@ export const joinServer = async (handshakeHash: string, password?: string) => {
 };
 
 export const disconnectFromServer = () => {
+  clearPendingVoiceReconnectChannelId();
   cleanup();
   unsubscribeFromServer?.();
 };
 
 export const logoutFromServer = async () => {
+  clearPendingVoiceReconnectChannelId();
   await revokeRefreshToken();
   cleanup({ clearAuth: true });
   unsubscribeFromServer?.();

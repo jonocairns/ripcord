@@ -3,19 +3,14 @@ import { useAdminEmojis } from '@/features/server/admin/hooks';
 import { uploadFiles } from '@/helpers/upload-file';
 import { useFilePicker } from '@/hooks/use-file-picker';
 import { getTRPCClient } from '@/lib/trpc';
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useState } from 'react';
 import { toast } from 'sonner';
 import { EmojiList } from './emoji-list';
-import { UpdateEmoji } from './update-emoji';
-import { UploadEmoji } from './upload-emoji';
 
 const Emojis = memo(() => {
   const { emojis, refetch, loading } = useAdminEmojis();
   const openFilePicker = useFilePicker();
 
-  const [selectedEmojiId, setSelectedEmojiId] = useState<number | undefined>(
-    undefined
-  );
   const [isUploading, setIsUploading] = useState(false);
 
   const uploadEmoji = useCallback(async () => {
@@ -48,35 +43,17 @@ const Emojis = memo(() => {
     }
   }, [openFilePicker, refetch]);
 
-  const selectedEmoji = useMemo(
-    () => emojis.find((e) => e.id === selectedEmojiId),
-    [emojis, selectedEmojiId]
-  );
-
   if (loading) {
     return <LoadingCard className="h-[600px]" />;
   }
 
   return (
-    <div className="flex gap-6">
+    <div className="space-y-4">
       <EmojiList
         emojis={emojis}
-        setSelectedEmojiId={(id) => setSelectedEmojiId(id)}
-        selectedEmojiId={selectedEmojiId ?? -1}
         uploadEmoji={uploadEmoji}
         isUploading={isUploading}
       />
-
-      {selectedEmoji ? (
-        <UpdateEmoji
-          key={selectedEmoji.id}
-          selectedEmoji={selectedEmoji}
-          setSelectedEmojiId={setSelectedEmojiId}
-          refetch={refetch}
-        />
-      ) : (
-        <UploadEmoji uploadEmoji={uploadEmoji} isUploading={isUploading} />
-      )}
     </div>
   );
 });

@@ -33,7 +33,7 @@ const Updates = memo(() => {
       <CardHeader>
         <CardTitle>Updates</CardTitle>
         <CardDescription>
-          Check for and install updates to keep Sharkord running
+          Check for and install updates to keep Ripcord running
           with the latest features and security improvements.
         </CardDescription>
       </CardHeader>
@@ -80,7 +80,7 @@ const Updates = memo(() => {
                 <CheckCircle />
                 <AlertTitle>Up to Date</AlertTitle>
                 <AlertDescription>
-                  Your server is running the latest version of Sharkord.
+                  Your server is running the latest version of Ripcord.
                 </AlertDescription>
               </Alert>
             )}

@@ -25,8 +25,8 @@ import {
   categories,
   channels,
   messages,
-  rolePermissions,
   roles,
+  rolePermissions,
   settings,
   userRoles,
   users
@@ -135,7 +135,8 @@ const seedDatabase = async () => {
 
   const initialUsers: TIUser[] = [
     {
-      identity: await sha256(randomUUIDv7()),
+      // In development, keep the bootstrap account identity predictable.
+      identity: IS_DEVELOPMENT ? 'sharkord' : await sha256(randomUUIDv7()),
       name: 'Sharkord',
       avatarId: null,
       password: await hashPassword('sharkord'),

@@ -19,6 +19,10 @@ import { SoundType } from '../types';
 import { ownUserIdSelector } from '../users/selectors';
 import { ownVoiceStateSelector } from './selectors';
 
+type TLeaveVoiceOptions = {
+  playOwnLeaveSound: boolean;
+};
+
 export const addUserToVoiceChannel = (
   userId: number,
   channelId: number,
@@ -127,7 +131,7 @@ export const joinVoice = async (
 
   if (currentChannelId) {
     // is already in a voice channel, leave it first
-    await leaveVoice();
+    await leaveVoiceInternal({ playOwnLeaveSound: false });
   }
 
   setCurrentVoiceChannelId(channelId);
@@ -143,13 +147,16 @@ export const joinVoice = async (
 
     return routerRtpCapabilities;
   } catch (error) {
+    setCurrentVoiceChannelId(undefined);
     toast.error(getTrpcError(error, 'Failed to join voice channel'));
   }
 
   return undefined;
 };
 
-export const leaveVoice = async (): Promise<void> => {
+const leaveVoiceInternal = async (
+  options: TLeaveVoiceOptions
+): Promise<void> => {
   const state = store.getState();
   const currentChannelId = currentVoiceChannelIdSelector(state);
   const selectedChannelId = selectedChannelIdSelector(state);
@@ -166,14 +173,21 @@ export const leaveVoice = async (): Promise<void> => {
   updateOwnVoiceState({ webcamEnabled: false, sharingScreen: false });
   setPinnedCard(undefined);
 
+  if (options.playOwnLeaveSound) {
+    playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+  }
+
   const client = getTRPCClient();
 
   try {
     await client.voice.leave.mutate();
-    playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
   } catch (error) {
     toast.error(getTrpcError(error, 'Failed to leave voice channel'));
   }
+};
+
+export const leaveVoice = async (): Promise<void> => {
+  await leaveVoiceInternal({ playOwnLeaveSound: true });
 };
 
 export const setPinnedCard = (pinnedCard: TPinnedCard | undefined): void => {

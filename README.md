@@ -1,14 +1,14 @@
 <div align="center">
-  <h1>swsh</h1>
+  <h1>ripcord</h1>
   <p><strong>A lightweight, self-hosted real-time communication platform</strong></p>
 </div>
 
-## What is swsh?
+## What is ripcord?
 
 > [!NOTE]
-> swsh is in alpha stage. Bugs, incomplete features and breaking changes are to be expected.
+> ripcord is in alpha stage. Bugs, incomplete features and breaking changes are to be expected.
 
-swsh is a self-hosted communication platform that brings the most important Discord-like features to your own infrastructure. Host voice channels, text chat, and file sharing on your terms—no third-party dependencies, complete data ownership, and full control over your group's communication.
+ripcord is a self-hosted communication platform that brings the most important Discord-like features to your own infrastructure. Host voice channels, text chat, and file sharing on your terms—no third-party dependencies, complete data ownership, and full control over your group's communication.
 
 ## Contributing
 
@@ -30,4 +30,3 @@ Built with amazing open-source technologies:
 - [Radix UI](https://www.radix-ui.com)
 - [ShadCN UI](https://ui.shadcn.com/)
 - [Tailwind CSS](https://tailwindcss.com)
-

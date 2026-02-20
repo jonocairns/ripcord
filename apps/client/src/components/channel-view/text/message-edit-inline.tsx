@@ -41,14 +41,17 @@ const MessageEditInline = memo(
 
     return (
       <div className="flex flex-col gap-2">
-        <AutoFocus>
-          <TiptapInput
-            value={value}
-            onChange={setValue}
-            onSubmit={() => onSubmit(value)}
-            onCancel={onBlur}
-          />
-        </AutoFocus>
+        <div className="bg-muted/60 flex items-center gap-2 rounded-xl border border-border px-2 py-2">
+          <AutoFocus>
+            <TiptapInput
+              value={value}
+              onChange={setValue}
+              onSubmit={() => onSubmit(value)}
+              onCancel={onBlur}
+              variant="chat-composer"
+            />
+          </AutoFocus>
+        </div>
         <span className="text-xs text-primary/60">
           Press Enter to save, Esc to cancel
         </span>

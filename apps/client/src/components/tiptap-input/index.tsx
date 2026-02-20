@@ -1,6 +1,7 @@
 import { EmojiPicker } from '@/components/emoji-picker';
 import { Button } from '@/components/ui/button';
 import { useCustomEmojis } from '@/features/server/emojis/hooks';
+import { cn } from '@/lib/utils';
 import type { TCommandInfo } from '@sharkord/shared';
 import Emoji, { gitHubEmojis } from '@tiptap/extension-emoji';
 import { EditorContent, useEditor } from '@tiptap/react';
@@ -24,6 +25,7 @@ type TTiptapInputProps = {
   onCancel?: () => void;
   onTyping?: () => void;
   commands?: TCommandInfo[];
+  variant?: 'chat-composer' | 'default';
 };
 
 const TiptapInput = memo(
@@ -35,7 +37,8 @@ const TiptapInput = memo(
     onTyping,
     disabled,
     readOnly,
-    commands
+    commands,
+    variant = 'default'
   }: TTiptapInputProps) => {
     const readOnlyRef = useRef(readOnly);
     readOnlyRef.current = readOnly;
@@ -95,7 +98,9 @@ const TiptapInput = memo(
             return true;
           }
 
-          const suggestionElement = document.querySelector('.bg-popover');
+          const suggestionElement = document.querySelector(
+            '.tiptap-suggestion-menu'
+          );
           const hasSuggestions =
             suggestionElement && document.body.contains(suggestionElement);
 
@@ -183,17 +188,39 @@ const TiptapInput = memo(
       }
     }, [editor, disabled]);
 
+    const isChatComposer = variant === 'chat-composer';
+
     return (
-      <div className="flex flex-1 items-center gap-2 min-w-0">
+      <div
+        className={cn(
+          'flex min-w-0 flex-1 items-center',
+          isChatComposer ? 'gap-1' : 'gap-2'
+        )}
+      >
         <EditorContent
           editor={editor}
-          className={`border p-2 rounded w-full min-h-[40px] max-h-[5rem] tiptap overflow-auto ${
-            disabled ? 'opacity-50 cursor-not-allowed bg-muted' : ''
-          }`}
+          className={cn(
+            'tiptap w-full overflow-auto',
+            isChatComposer
+              ? 'min-h-[38px] max-h-[7rem] rounded-md pl-1 pr-2 py-1.5 text-[15px] [&_.ProseMirror]:min-h-[22px] [&_.ProseMirror]:break-words [&_.ProseMirror]:leading-5 [&_.ProseMirror]:outline-none'
+              : 'min-h-[40px] max-h-[5rem] rounded border p-2',
+            disabled &&
+              (isChatComposer
+                ? 'opacity-50 cursor-not-allowed'
+                : 'opacity-50 cursor-not-allowed bg-muted')
+          )}
         />
 
         <EmojiPicker onEmojiSelect={handleEmojiSelect}>
-          <Button variant="ghost" size="icon" disabled={disabled}>
+          <Button
+            variant="ghost"
+            size="icon"
+            disabled={disabled}
+            className={cn(
+              isChatComposer &&
+                'h-8 w-8 text-muted-foreground hover:text-foreground'
+            )}
+          >
             <Smile className="h-5 w-5" />
           </Button>
         </EmojiPicker>

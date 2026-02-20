@@ -8,6 +8,7 @@ export enum LocalStorageKey {
   DEVICES_SETTINGS = 'sharkord-devices-settings',
   FLOATING_CARD_POSITION = 'sharkord-floating-card-position',
   RIGHT_SIDEBAR_STATE = 'sharkord-right-sidebar-state',
+  RIGHT_SIDEBAR_COLLAPSED = 'sharkord-right-sidebar-collapsed',
   VOICE_CHAT_SIDEBAR_STATE = 'sharkord-voice-chat-sidebar-state',
   VOICE_CHAT_SIDEBAR_WIDTH = 'sharkord-voice-chat-sidebar-width',
   VOLUME_SETTINGS = 'sharkord-volume-settings',

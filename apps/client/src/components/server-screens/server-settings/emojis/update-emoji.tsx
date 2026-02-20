@@ -1,5 +1,12 @@
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle
+} from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { requestConfirmation } from '@/features/dialogs/actions';
@@ -66,23 +73,33 @@ const UpdateEmoji = memo(
     );
 
     return (
-      <Card className="flex-1">
-        <CardHeader>
+      <Card className="flex-1 gap-0 py-0">
+        <CardHeader className="border-b py-6">
           <div className="flex items-center justify-between">
-            <CardTitle>Edit Emoji</CardTitle>
-            <Button size="icon" variant="ghost" onClick={onDeleteEmoji}>
+            <div className="space-y-1">
+              <CardTitle>Edit Emoji</CardTitle>
+              <CardDescription>
+                Update the emoji name or remove it from the server.
+              </CardDescription>
+            </div>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={onDeleteEmoji}
+              title="Delete emoji"
+            >
               <Trash2 className="h-4 w-4" />
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="flex items-center gap-4 p-4 rounded-lg bg-muted">
+        <CardContent className="flex-1 space-y-6 overflow-y-auto py-6">
+          <div className="bg-muted flex items-center gap-4 rounded-lg border p-4">
             <Emoji
               src={getFileUrl(selectedEmoji.file)}
               name={selectedEmoji.name}
               className="h-16 w-16"
             />
-            <div>
+            <div className="min-w-0">
               <div className="font-medium">:{selectedEmoji.name}:</div>
               <div className="text-sm text-muted-foreground">
                 {filesize(selectedEmoji.file.size)} • Uploaded by{' '}
@@ -102,26 +119,26 @@ const UpdateEmoji = memo(
                 error={errors.name}
               />
               <p className="text-xs text-muted-foreground">
-                This will be used as :{selectedEmoji.name}: in messages
+                This emoji will be used as :{name || selectedEmoji.name}: in
+                messages
               </p>
             </div>
           </div>
-
-          <div className="flex justify-end gap-2 pt-4">
-            <Button
-              variant="outline"
-              onClick={() => setSelectedEmojiId(undefined)}
-            >
-              Close
-            </Button>
-            <Button
-              onClick={onUpdateEmoji}
-              disabled={selectedEmoji.name === name}
-            >
-              Save Changes
-            </Button>
-          </div>
         </CardContent>
+        <CardFooter className="border-t justify-end gap-2 py-4">
+          <Button
+            variant="outline"
+            onClick={() => setSelectedEmojiId(undefined)}
+          >
+            Close
+          </Button>
+          <Button
+            onClick={onUpdateEmoji}
+            disabled={selectedEmoji.name === name}
+          >
+            Save Changes
+          </Button>
+        </CardFooter>
       </Card>
     );
   }

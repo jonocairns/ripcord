@@ -68,8 +68,8 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ghcr.io/${{ steps.ghcr.outputs.owner }}/swsh:latest
-            ghcr.io/${{ steps.ghcr.outputs.owner }}/swsh:v${{ steps.get_version.outputs.version }}
+            ghcr.io/${{ steps.ghcr.outputs.owner }}/ripcord:latest
+            ghcr.io/${{ steps.ghcr.outputs.owner }}/ripcord:v${{ steps.get_version.outputs.version }}
 
       - name: Commit and push version bump
         if: ${{ inputs.bump != 'none' }}
@@ -101,5 +101,5 @@ jobs:
 
             ## Docker Image
             ```bash
-            docker pull ghcr.io/${{ steps.ghcr.outputs.owner }}/swsh:v${{ steps.get_version.outputs.version }}
+            docker pull ghcr.io/${{ steps.ghcr.outputs.owner }}/ripcord:v${{ steps.get_version.outputs.version }}
             ```

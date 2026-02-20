@@ -7,6 +7,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
+import { cn } from '@/lib/utils';
 import { memo } from 'react';
 
 type TResolutionFpsControlProps = {
@@ -15,6 +16,7 @@ type TResolutionFpsControlProps = {
   onResolutionChange: (resolution: string) => void;
   onFramerateChange: (framerate: number) => void;
   disabled?: boolean;
+  className?: string;
 };
 
 const ResolutionFpsControl = memo(
@@ -23,17 +25,19 @@ const ResolutionFpsControl = memo(
     framerate,
     onResolutionChange,
     onFramerateChange,
-    disabled
+    disabled,
+    className
   }: TResolutionFpsControlProps) => {
     return (
-      <div className="flex items-center gap-2">
-        <Label content="Resolution">
+      <div className={cn('grid gap-4 md:grid-cols-2', className)}>
+        <div className="space-y-2">
+          <Label>Resolution</Label>
           <Select
             value={resolution}
             onValueChange={onResolutionChange}
             disabled={disabled}
           >
-            <SelectTrigger className="w-[160px]">
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="Select the input device" />
             </SelectTrigger>
             <SelectContent>
@@ -48,15 +52,16 @@ const ResolutionFpsControl = memo(
               </SelectGroup>
             </SelectContent>
           </Select>
-        </Label>
+        </div>
 
-        <Label content="Framerate">
+        <div className="space-y-2">
+          <Label>Framerate</Label>
           <Select
             value={framerate.toString()}
             onValueChange={(value) => onFramerateChange(+value)}
             disabled={disabled}
           >
-            <SelectTrigger className="w-[160px]">
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="Select the input device" />
             </SelectTrigger>
             <SelectContent>
@@ -71,7 +76,7 @@ const ResolutionFpsControl = memo(
               </SelectGroup>
             </SelectContent>
           </Select>
-        </Label>
+        </div>
       </div>
     );
   }

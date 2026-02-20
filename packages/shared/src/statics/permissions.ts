@@ -79,6 +79,7 @@ export const permissionDescriptions: Record<Permission, string> = {
 export const DEFAULT_ROLE_PERMISSIONS = [
   Permission.JOIN_VOICE_CHANNELS,
   Permission.SEND_MESSAGES,
+  Permission.REACT_TO_MESSAGES,
   Permission.UPLOAD_FILES,
   Permission.SHARE_SCREEN,
   Permission.ENABLE_WEBCAM,

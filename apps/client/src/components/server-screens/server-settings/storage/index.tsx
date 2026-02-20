@@ -17,7 +17,6 @@ import {
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
-import { closeServerScreens } from '@/features/server-screens/actions';
 import { useAdminStorage } from '@/features/server/admin/hooks';
 import {
   STORAGE_MAX_FILE_SIZE,
@@ -160,9 +159,6 @@ const Storage = memo(() => {
         </Group>
 
         <div className="flex justify-end gap-2 pt-4">
-          <Button variant="outline" onClick={closeServerScreens}>
-            Cancel
-          </Button>
           <Button onClick={submit} disabled={loading}>
             Save Changes
           </Button>

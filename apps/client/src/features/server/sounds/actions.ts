@@ -299,7 +299,7 @@ const sfxRemoteUserLeftVoiceChannel = () => {
   });
 };
 
-export const playSound = (type: SoundType) => {
+const playSoundEffect = (type: SoundType) => {
   switch (type) {
     case SoundType.MESSAGE_RECEIVED:
       return sfxMessageReceived();
@@ -339,4 +339,20 @@ export const playSound = (type: SoundType) => {
     default:
       return;
   }
+};
+
+export const playSound = (type: SoundType) => {
+  if (audioCtx.state === 'running') {
+    playSoundEffect(type);
+    return;
+  }
+
+  void audioCtx
+    .resume()
+    .then(() => {
+      playSoundEffect(type);
+    })
+    .catch(() => {
+      // Browser may block resume until a user gesture.
+    });
 };

@@ -1,20 +1,19 @@
-import { Button, buttonVariants } from '@/components/ui/button';
-import { Group } from '@/components/ui/group';
+import { Button } from '@/components/ui/button';
 import { getFileUrl } from '@/helpers/get-file-url';
 import { uploadFile } from '@/helpers/upload-file';
 import { useFilePicker } from '@/hooks/use-file-picker';
 import { getTRPCClient } from '@/lib/trpc';
-import { cn } from '@/lib/utils';
 import type { TJoinedPublicUser } from '@sharkord/shared';
-import { Upload } from 'lucide-react';
+import { Upload, X } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { toast } from 'sonner';
 
 type TBannerManagerProps = {
   user: TJoinedPublicUser;
+  hideHeader?: boolean;
 };
 
-const BannerManager = memo(({ user }: TBannerManagerProps) => {
+const BannerManager = memo(({ user, hideHeader = false }: TBannerManagerProps) => {
   const openFilePicker = useFilePicker();
 
   const removeBanner = useCallback(async () => {
@@ -51,41 +50,55 @@ const BannerManager = memo(({ user }: TBannerManagerProps) => {
   }, [openFilePicker]);
 
   return (
-    <Group label="Banner">
-      <div className="space-y-2">
-        <div
-          className="relative group cursor-pointer w-80 h-24"
-          onClick={onBannerClick}
-        >
-          {user.banner ? (
-            <img
-              src={getFileUrl(user.banner)}
-              alt="User Banner"
-              className="w-80 h-24 object-cover rounded-md transition-opacity group-hover:opacity-70"
-            />
-          ) : (
-            <div
-              className={cn(
-                buttonVariants({ variant: 'outline' }),
-                'w-80 h-24 cursor-pointer transition-opacity group-hover:opacity-70'
-              )}
-            />
-          )}
-          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-md">
-            <div className="bg-black/50 rounded-full p-3">
-              <Upload className="h-6 w-6 text-white" />
-            </div>
-          </div>
-        </div>
-      </div>
-      {user.bannerId && (
-        <div>
-          <Button size="sm" variant="outline" onClick={removeBanner}>
-            Remove banner
-          </Button>
+    <div className="space-y-3">
+      {!hideHeader && (
+        <div className="space-y-1 md:min-h-16">
+          <p className="text-sm font-medium">Banner</p>
+          <p className="text-xs text-muted-foreground">
+            Upload a wide image to personalize your profile header.
+          </p>
         </div>
       )}
-    </Group>
+
+      <div className="space-y-3">
+        <div className="relative">
+          <button
+            type="button"
+            className="relative group h-24 w-full cursor-pointer overflow-hidden rounded-md border border-border/60 bg-muted/20"
+            onClick={onBannerClick}
+          >
+            {user.banner ? (
+              <img
+                src={getFileUrl(user.banner)}
+                alt="User Banner"
+                className="h-full w-full object-cover transition-opacity group-hover:opacity-70"
+              />
+            ) : (
+              <div className="h-full w-full transition-opacity group-hover:opacity-70" />
+            )}
+            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-md">
+              <div className="bg-black/50 rounded-full p-3">
+                <Upload className="h-6 w-6 text-white" />
+              </div>
+            </div>
+          </button>
+
+          {user.bannerId && (
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="secondary"
+              className="absolute top-2 right-2 h-7 w-7 rounded-full border border-border/60 bg-background/90 shadow-sm"
+              onClick={removeBanner}
+              aria-label="Remove banner"
+              title="Remove banner"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 });
 

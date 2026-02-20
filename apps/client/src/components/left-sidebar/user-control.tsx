@@ -1,7 +1,7 @@
 import { openServerScreen } from '@/features/server-screens/actions';
+import { logoutFromServer } from '@/features/server/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useChannelCan } from '@/features/server/hooks';
-import { logoutFromServer } from '@/features/server/actions';
 import { useOwnPublicUser } from '@/features/server/users/hooks';
 import { useVoice } from '@/features/server/voice/hooks';
 import { cn } from '@/lib/utils';
@@ -107,7 +107,7 @@ const UserControl = memo(() => {
           size="icon"
           className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/50"
           onClick={handleSettingsClick}
-          title="User settings"
+          title="Settings"
         >
           <Settings className="h-4 w-4" />
         </Button>

@@ -74,11 +74,11 @@ const EmojiList = forwardRef<EmojiListRef, EmojiListProps>(
       return null;
     }
     return (
-      <div className="bg-popover text-popover-foreground border rounded-md shadow-md min-w-[12rem] max-w-[16rem] p-1 z-50">
+      <div className="tiptap-suggestion-menu bg-popover text-popover-foreground border rounded-md shadow-md min-w-[12rem] max-w-[16rem] p-1 z-50">
         {items.map((item, index) => (
           <button
             key={item.shortcodes[0]}
-            className={`w-full text-left px-2 py-1.5 text-sm rounded-sm hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex items-center gap-2 cursor-default select-none outline-none transition-colors ${
+            className={`w-full text-left px-2 py-1.5 text-sm rounded-sm hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex items-center gap-2 cursor-pointer select-none outline-none transition-colors ${
               index === selectedIndex ? 'bg-accent text-accent-foreground' : ''
             }`}
             type="button"

@@ -19,9 +19,9 @@ type TPermissionProps = {
 const Permission = memo(
   ({ permission, enabled, onChange, disabled }: TPermissionProps) => {
     return (
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-4 p-4">
         <div className="flex flex-col">
-          <Label>{permissionLabels[permission]}</Label>
+          <Label className="text-sm">{permissionLabels[permission]}</Label>
           <span className="text-sm text-muted-foreground">
             {permissionDescriptions[permission]}
           </span>
@@ -59,7 +59,7 @@ const PermissionList = memo(
       <div className="space-y-4">
         <h3 className="text-sm font-semibold">Permissions</h3>
 
-        <div className="space-y-3">
+        <div className="divide-y divide-border overflow-hidden rounded-md border">
           {availablePermissions.map((permission) => (
             <Permission
               key={permission}

@@ -3,16 +3,19 @@ import {
   Card,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle
 } from '@/components/ui/card';
 import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
-import { closeServerScreens } from '@/features/server-screens/actions';
 import { useForm } from '@/hooks/use-form';
 import { getTRPCClient } from '@/lib/trpc';
-import { memo, useCallback } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+
+const MIN_PASSWORD_LENGTH = 8;
 
 const Password = memo(() => {
   const { setTrpcErrors, r, values } = useForm({
@@ -20,8 +23,33 @@ const Password = memo(() => {
     newPassword: '',
     confirmNewPassword: ''
   });
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  const hasAllFields = useMemo(
+    () =>
+      values.currentPassword.length > 0 &&
+      values.newPassword.length > 0 &&
+      values.confirmNewPassword.length > 0,
+    [values.confirmNewPassword, values.currentPassword, values.newPassword]
+  );
+  const isDirty = useMemo(
+    () =>
+      values.currentPassword.length > 0 ||
+      values.newPassword.length > 0 ||
+      values.confirmNewPassword.length > 0,
+    [values.confirmNewPassword, values.currentPassword, values.newPassword]
+  );
+  const isPasswordLongEnough = values.newPassword.length >= MIN_PASSWORD_LENGTH;
+  const passwordsMatch = values.newPassword === values.confirmNewPassword;
+  const canSubmit = hasAllFields && isDirty && isPasswordLongEnough && passwordsMatch;
 
   const updatePassword = useCallback(async () => {
+    if (!canSubmit) {
+      return;
+    }
+
     const trpc = getTRPCClient();
 
     try {
@@ -30,7 +58,7 @@ const Password = memo(() => {
     } catch (error) {
       setTrpcErrors(error);
     }
-  }, [values, setTrpcErrors]);
+  }, [canSubmit, values, setTrpcErrors]);
 
   return (
     <Card>
@@ -42,24 +70,104 @@ const Password = memo(() => {
       </CardHeader>
       <CardContent className="space-y-4">
         <Group label="Current Password">
-          <Input {...r('currentPassword', 'password')} />
+          <div className="relative">
+            <Input
+              {...r('currentPassword')}
+              type={showCurrentPassword ? 'text' : 'password'}
+              className="pr-10"
+              onEnter={canSubmit ? updatePassword : undefined}
+            />
+            <button
+              type="button"
+              className="absolute top-[18px] right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              onClick={() => setShowCurrentPassword((prev) => !prev)}
+              aria-label={
+                showCurrentPassword
+                  ? 'Hide current password'
+                  : 'Show current password'
+              }
+            >
+              {showCurrentPassword ? (
+                <EyeOff className="h-4 w-4" />
+              ) : (
+                <Eye className="h-4 w-4" />
+              )}
+            </button>
+          </div>
         </Group>
 
         <Group label="New Password">
-          <Input {...r('newPassword', 'password')} />
+          <div className="space-y-1">
+            <div className="relative">
+              <Input
+                {...r('newPassword')}
+                type={showNewPassword ? 'text' : 'password'}
+                className="pr-10"
+                onEnter={canSubmit ? updatePassword : undefined}
+              />
+              <button
+                type="button"
+                className="absolute top-[18px] right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowNewPassword((prev) => !prev)}
+                aria-label={
+                  showNewPassword ? 'Hide new password' : 'Show new password'
+                }
+              >
+                {showNewPassword ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Must be at least {MIN_PASSWORD_LENGTH} characters.
+            </p>
+            {values.newPassword.length > 0 && !isPasswordLongEnough && (
+              <p className="text-xs text-destructive">
+                Password must be at least {MIN_PASSWORD_LENGTH} characters.
+              </p>
+            )}
+          </div>
         </Group>
 
         <Group label="Confirm New Password">
-          <Input {...r('confirmNewPassword', 'password')} />
+          <div className="space-y-1">
+            <div className="relative">
+              <Input
+                {...r('confirmNewPassword')}
+                type={showConfirmPassword ? 'text' : 'password'}
+                className="pr-10"
+                onEnter={canSubmit ? updatePassword : undefined}
+              />
+              <button
+                type="button"
+                className="absolute top-[18px] right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowConfirmPassword((prev) => !prev)}
+                aria-label={
+                  showConfirmPassword
+                    ? 'Hide confirm password'
+                    : 'Show confirm password'
+                }
+              >
+                {showConfirmPassword ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+            {values.confirmNewPassword.length > 0 && !passwordsMatch && (
+              <p className="text-xs text-destructive">Passwords do not match.</p>
+            )}
+          </div>
         </Group>
-
-        <div className="flex justify-end gap-2 pt-4">
-          <Button variant="outline" onClick={closeServerScreens}>
-            Cancel
-          </Button>
-          <Button onClick={updatePassword}>Save Changes</Button>
-        </div>
       </CardContent>
+      <CardFooter className="border-t items-stretch justify-end gap-2 sm:items-center">
+        <Button onClick={updatePassword} disabled={!canSubmit}>
+          Update Password
+        </Button>
+      </CardFooter>
     </Card>
   );
 });

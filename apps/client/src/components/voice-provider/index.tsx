@@ -1,8 +1,13 @@
 import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useChannelCan } from '@/features/server/hooks';
+import {
+  clearPendingVoiceReconnectChannelId,
+  consumePendingVoiceReconnectChannelId
+} from '@/features/server/reconnect-state';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
+import { joinVoice } from '@/features/server/voice/actions';
 import { useOwnVoiceState } from '@/features/server/voice/hooks';
 import { logVoice } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
@@ -211,6 +216,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   const isPushToTalkHeldRef = useRef(false);
   const isPushToMuteHeldRef = useRef(false);
   const micMutedBeforePushRef = useRef<boolean | undefined>(undefined);
+  const reconnectingVoiceRef = useRef(false);
 
   const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
     if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -1234,6 +1240,42 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     clearRemoteUserStreamsForUser,
     rtpCapabilities: routerRtpCapabilities.current!
   });
+
+  useEffect(() => {
+    if (currentVoiceChannelId !== undefined) {
+      clearPendingVoiceReconnectChannelId();
+      return;
+    }
+
+    if (reconnectingVoiceRef.current) {
+      return;
+    }
+
+    const pendingChannelId = consumePendingVoiceReconnectChannelId();
+
+    if (pendingChannelId === undefined) {
+      return;
+    }
+
+    reconnectingVoiceRef.current = true;
+
+    void (async () => {
+      try {
+        const incomingRouterRtpCapabilities = await joinVoice(pendingChannelId);
+
+        if (!incomingRouterRtpCapabilities) {
+          return;
+        }
+
+        await init(incomingRouterRtpCapabilities, pendingChannelId);
+      } catch (error) {
+        logVoice('Failed to auto-rejoin previous voice channel', { error });
+        toast.error('Failed to restore voice connection');
+      } finally {
+        reconnectingVoiceRef.current = false;
+      }
+    })();
+  }, [currentVoiceChannelId, init]);
 
   useEffect(() => {
     return () => {
