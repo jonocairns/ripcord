@@ -1,13 +1,14 @@
+import { Card, CardContent } from '@/components/ui/card';
 import { LoadingCard } from '@/components/ui/loading-card';
 import { useAdminEmojis } from '@/features/server/admin/hooks';
 import { uploadFiles } from '@/helpers/upload-file';
 import { useFilePicker } from '@/hooks/use-file-picker';
 import { getTRPCClient } from '@/lib/trpc';
+import { Smile } from 'lucide-react';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { EmojiList } from './emoji-list';
 import { UpdateEmoji } from './update-emoji';
-import { UploadEmoji } from './upload-emoji';
 
 const Emojis = memo(() => {
   const { emojis, refetch, loading } = useAdminEmojis();
@@ -58,11 +59,11 @@ const Emojis = memo(() => {
   }
 
   return (
-    <div className="flex gap-6">
+    <div className="space-y-4">
       <EmojiList
         emojis={emojis}
         setSelectedEmojiId={(id) => setSelectedEmojiId(id)}
-        selectedEmojiId={selectedEmojiId ?? -1}
+        selectedEmojiId={selectedEmojiId}
         uploadEmoji={uploadEmoji}
         isUploading={isUploading}
       />
@@ -75,7 +76,19 @@ const Emojis = memo(() => {
           refetch={refetch}
         />
       ) : (
-        <UploadEmoji uploadEmoji={uploadEmoji} isUploading={isUploading} />
+        <Card className="border-dashed">
+          <CardContent className="flex h-full flex-col items-center justify-center gap-3 py-16 text-center">
+            <div className="bg-muted flex h-12 w-12 items-center justify-center rounded-full">
+              <Smile className="text-muted-foreground h-6 w-6" />
+            </div>
+            <p className="text-foreground text-base font-medium">
+              Select an emoji to edit
+            </p>
+            <p className="max-w-md text-sm text-muted-foreground">
+              Use the + button above to upload new emojis.
+            </p>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

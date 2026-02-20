@@ -1,7 +1,8 @@
 import { Card, CardContent } from '@/components/ui/card';
 import { LoadingCard } from '@/components/ui/loading-card';
 import { useAdminRoles } from '@/features/server/admin/hooks';
-import { memo, useMemo, useState } from 'react';
+import { Shield } from 'lucide-react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { RolesList } from './roles-list';
 import { UpdateRole } from './update-role';
 
@@ -9,6 +10,18 @@ const Roles = memo(() => {
   const { roles, refetch, loading } = useAdminRoles();
 
   const [selectedRoleId, setSelectedRoleId] = useState<number | undefined>();
+
+  useEffect(() => {
+    if (roles.length === 0) return;
+
+    const roleExists = roles.some((role) => role.id === selectedRoleId);
+
+    if (selectedRoleId && roleExists) return;
+
+    const nextRoleId = roles.find((role) => role.isDefault)?.id ?? roles[0].id;
+
+    setSelectedRoleId(nextRoleId);
+  }, [roles, selectedRoleId]);
 
   const selectedRole = useMemo(() => {
     return roles.find((r) => r.id === selectedRoleId) || null;
@@ -19,14 +32,13 @@ const Roles = memo(() => {
   }
 
   return (
-    <div className="flex gap-6">
+    <div className="grid items-start gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
       <RolesList
         roles={roles}
         selectedRoleId={selectedRoleId}
         setSelectedRoleId={setSelectedRoleId}
         refetch={refetch}
       />
-
       {selectedRole ? (
         <UpdateRole
           key={selectedRole.id}
@@ -35,9 +47,17 @@ const Roles = memo(() => {
           refetch={refetch}
         />
       ) : (
-        <Card className="flex flex-1 items-center justify-center">
-          <CardContent className="py-12 text-center text-muted-foreground">
-            Select a role to edit or create a new one
+        <Card className="min-h-[560px] border-dashed">
+          <CardContent className="flex h-full flex-col items-center justify-center gap-3 py-16 text-center">
+            <div className="bg-muted flex h-12 w-12 items-center justify-center rounded-full">
+              <Shield className="text-muted-foreground h-6 w-6" />
+            </div>
+            <p className="text-foreground text-base font-medium">
+              Select a role to edit
+            </p>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              Choose a role from the list, or create a new one.
+            </p>
           </CardContent>
         </Card>
       )}

@@ -10,7 +10,7 @@ import {
   getLocalStorageItem,
   LocalStorageKey,
   setAuthTokens,
-  setLocalStorageItem,
+  setLocalStorageItem
 } from '@/helpers/storage';
 import { useForm } from '@/hooks/use-form';
 import {
@@ -84,12 +84,7 @@ const Connect = memo(() => {
     } finally {
       setLoading(false);
     }
-  }, [
-    values.identity,
-    values.password,
-    setErrors,
-    inviteCode
-  ]);
+  }, [values.identity, values.password, setErrors, inviteCode]);
 
   const onSaveServerUrl = useCallback(async () => {
     setSavingServerUrl(true);
@@ -114,14 +109,21 @@ const Connect = memo(() => {
 
     return '/logo.webp';
   }, [info]);
+  const hasServerLogo = !!info?.logo;
 
   return (
     <div className="flex flex-col gap-2 justify-center items-center h-full">
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle className="flex flex-col items-center gap-2 text-center">
-            <img src={logoSrc} alt="Sharkord" className="w-32 h-32" />
-            {info?.name && (
+            <div className="flex h-32 w-32 items-center justify-center rounded-full">
+              <img
+                src={logoSrc}
+                alt="Sharkord"
+                className="h-32 w-32 rounded-full object-cover"
+              />
+            </div>
+            {info?.name && !hasServerLogo && (
               <span className="text-xl font-bold leading-tight">
                 {info.name}
               </span>

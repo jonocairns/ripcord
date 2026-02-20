@@ -1,10 +1,13 @@
 import type { IRootState } from '@/features/store';
 import { getTRPCClient } from '@/lib/trpc';
-import { DEFAULT_MESSAGES_LIMIT, type TJoinedMessage } from '@sharkord/shared';
+import type { TJoinedMessage } from '@sharkord/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { addMessages } from './actions';
 import { messagesByChannelIdSelector } from './selectors';
+
+const INITIAL_MESSAGES_LIMIT = 20;
+const OLDER_MESSAGES_LIMIT = 20;
 
 export const useMessagesByChannelId = (channelId: number) =>
   useSelector((state: IRootState) =>
@@ -20,7 +23,7 @@ export const useMessages = (channelId: number) => {
   const [hasMore, setHasMore] = useState(true);
 
   const fetchMessages = useCallback(
-    async (cursorToFetch: number | null) => {
+    async (cursorToFetch: number | null, limit: number) => {
       const trpcClient = getTRPCClient();
 
       setFetching(true);
@@ -30,7 +33,7 @@ export const useMessages = (channelId: number) => {
           await trpcClient.messages.get.query({
             channelId,
             cursor: cursorToFetch,
-            limit: DEFAULT_MESSAGES_LIMIT
+            limit
           });
 
         const page = [...rawPage].reverse();
@@ -46,9 +49,7 @@ export const useMessages = (channelId: number) => {
         }
 
         setCursor(nextCursor);
-        setHasMore(
-          nextCursor !== null && filtered.length === DEFAULT_MESSAGES_LIMIT
-        );
+        setHasMore(nextCursor !== null);
 
         return { success: true };
       } finally {
@@ -62,13 +63,13 @@ export const useMessages = (channelId: number) => {
   const loadMore = useCallback(async () => {
     if (fetching || !hasMore) return;
 
-    await fetchMessages(cursor);
+    await fetchMessages(cursor, OLDER_MESSAGES_LIMIT);
   }, [fetching, hasMore, cursor, fetchMessages]);
 
   useEffect(() => {
     if (inited.current) return;
 
-    fetchMessages(null);
+    fetchMessages(null, INITIAL_MESSAGES_LIMIT);
 
     inited.current = true;
   }, [fetchMessages]);
