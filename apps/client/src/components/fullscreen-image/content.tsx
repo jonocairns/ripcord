@@ -118,7 +118,7 @@ const FullScreenImage = memo((props: TFullScreenImageProps) => {
     <>
       <div
         className={cn(
-          'fixed inset-0 flex justify-center items-center backdrop-blur-sm bg-black/30 z-50 transition-opacity duration-300',
+          'fixed inset-0 flex cursor-pointer justify-center items-center backdrop-blur-sm bg-black/30 z-50 transition-opacity duration-300',
           visible ? 'opacity-100' : 'opacity-0',
           open ? 'pointer-events-auto' : 'pointer-events-none'
         )}

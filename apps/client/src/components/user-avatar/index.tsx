@@ -30,7 +30,10 @@ const UserAvatar = memo(
     if (!user) return null;
 
     const content = (
-      <div className="relative w-fit h-fit" onClick={onClick}>
+      <div
+        className={cn('relative h-fit w-fit', onClick && 'cursor-pointer')}
+        onClick={onClick}
+      >
         <Avatar className={cn('h-8 w-8', className)}>
           <AvatarImage src={getFileUrl(user.avatar)} key={user.avatarId} />
           <AvatarFallback className="bg-muted text-xs">

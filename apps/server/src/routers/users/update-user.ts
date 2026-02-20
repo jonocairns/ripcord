@@ -16,7 +16,7 @@ const updateUserRoute = protectedProcedure
     })
   )
   .mutation(async ({ ctx, input }) => {
-    const updatedUser = await db
+    await db
       .update(users)
       .set({
         name: input.name,
@@ -24,10 +24,9 @@ const updateUserRoute = protectedProcedure
         bio: input.bio ?? null
       })
       .where(eq(users.id, ctx.userId))
-      .returning()
-      .get();
+      .run();
 
-    publishUser(updatedUser.id, 'update');
+    publishUser(ctx.userId, 'update');
   });
 
 export { updateUserRoute };

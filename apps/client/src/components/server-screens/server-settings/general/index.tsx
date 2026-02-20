@@ -11,7 +11,6 @@ import { Input } from '@/components/ui/input';
 import { LoadingCard } from '@/components/ui/loading-card';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
-import { closeServerScreens } from '@/features/server-screens/actions';
 import { useAdminGeneral } from '@/features/server/admin/hooks';
 import { memo } from 'react';
 import { LogoManager } from './logo-manager';
@@ -83,9 +82,6 @@ const General = memo(() => {
         </Group>
 
         <div className="flex justify-end gap-2 pt-4">
-          <Button variant="outline" onClick={closeServerScreens}>
-            Cancel
-          </Button>
           <Button onClick={submit} disabled={loading}>
             Save Changes
           </Button>

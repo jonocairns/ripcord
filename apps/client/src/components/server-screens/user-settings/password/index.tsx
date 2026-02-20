@@ -9,7 +9,6 @@ import {
 } from '@/components/ui/card';
 import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
-import { closeServerScreens } from '@/features/server-screens/actions';
 import { useForm } from '@/hooks/use-form';
 import { getTRPCClient } from '@/lib/trpc';
 import { Eye, EyeOff } from 'lucide-react';
@@ -165,9 +164,6 @@ const Password = memo(() => {
         </Group>
       </CardContent>
       <CardFooter className="border-t items-stretch justify-end gap-2 sm:items-center">
-        <Button variant="outline" onClick={closeServerScreens}>
-          Cancel
-        </Button>
         <Button onClick={updatePassword} disabled={!canSubmit}>
           Update Password
         </Button>

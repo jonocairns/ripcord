@@ -78,7 +78,7 @@ const CommandList = forwardRef<CommandListRef, CommandListProps>(
         {items.map((item, index) => (
           <button
             key={`${item.pluginId}:${item.name}`}
-            className={`w-full text-left px-2 py-1.5 text-sm rounded-sm hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex flex-col gap-0.5 cursor-default select-none outline-none transition-colors ${
+            className={`w-full text-left px-2 py-1.5 text-sm rounded-sm hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex flex-col gap-0.5 cursor-pointer select-none outline-none transition-colors ${
               index === selectedIndex ? 'bg-accent text-accent-foreground' : ''
             }`}
             type="button"

@@ -23,7 +23,6 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { closeServerScreens } from '@/features/server-screens/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useForm } from '@/hooks/use-form';
 import {
@@ -532,9 +531,6 @@ const Devices = memo(() => {
 
       </CardContent>
       <CardFooter className="border-t items-stretch justify-end gap-2 sm:items-center">
-        <Button variant="outline" onClick={closeServerScreens}>
-          Cancel
-        </Button>
         <Button onClick={saveDeviceSettings}>Save Changes</Button>
       </CardFooter>
     </Card>

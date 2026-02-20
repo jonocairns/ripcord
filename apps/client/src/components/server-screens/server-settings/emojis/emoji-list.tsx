@@ -9,7 +9,6 @@ import {
 import { Input } from '@/components/ui/input';
 import Spinner from '@/components/ui/spinner';
 import { getFileUrl } from '@/helpers/get-file-url';
-import { cn } from '@/lib/utils';
 import type { TJoinedEmoji } from '@sharkord/shared';
 import { Plus, Search } from 'lucide-react';
 import { memo, useMemo, useState } from 'react';
@@ -17,8 +16,6 @@ import { Emoji } from './emoji';
 
 type TEmojiListProps = {
   emojis: TJoinedEmoji[];
-  setSelectedEmojiId: (id: number) => void;
-  selectedEmojiId: number | undefined;
   uploadEmoji: () => void;
   isUploading: boolean;
 };
@@ -26,8 +23,6 @@ type TEmojiListProps = {
 const EmojiList = memo(
   ({
     emojis,
-    setSelectedEmojiId,
-    selectedEmojiId,
     uploadEmoji,
     isUploading
   }: TEmojiListProps) => {
@@ -82,18 +77,13 @@ const EmojiList = memo(
                 {search ? 'No emojis found' : 'No custom emojis yet'}
               </div>
             ) : (
-              <div className="grid grid-cols-6 gap-2">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(3rem,1fr))] gap-2">
                 {filteredEmojis.map((emoji) => (
                   <Emoji
                     key={emoji.id}
                     src={getFileUrl(emoji.file)}
                     name={emoji.name}
-                    onClick={() => setSelectedEmojiId(emoji.id)}
-                    className={cn(
-                      'h-full w-full border border-transparent',
-                      selectedEmojiId === emoji.id &&
-                        'bg-accent ring-primary ring-2'
-                    )}
+                    className="h-12 w-12"
                   />
                 ))}
               </div>

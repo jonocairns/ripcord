@@ -4,7 +4,7 @@ import { uploadFile } from '@/helpers/upload-file';
 import { useFilePicker } from '@/hooks/use-file-picker';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TJoinedPublicUser } from '@sharkord/shared';
-import { Upload } from 'lucide-react';
+import { Upload, X } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { toast } from 'sonner';
 
@@ -61,32 +61,42 @@ const BannerManager = memo(({ user, hideHeader = false }: TBannerManagerProps) =
       )}
 
       <div className="space-y-3">
-        <button
-          type="button"
-          className="relative group h-24 w-full cursor-pointer overflow-hidden rounded-md border border-border/60 bg-muted/20"
-          onClick={onBannerClick}
-        >
-          {user.banner ? (
-            <img
-              src={getFileUrl(user.banner)}
-              alt="User Banner"
-              className="h-full w-full object-cover transition-opacity group-hover:opacity-70"
-            />
-          ) : (
-            <div className="h-full w-full transition-opacity group-hover:opacity-70" />
-          )}
-          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-md">
-            <div className="bg-black/50 rounded-full p-3">
-              <Upload className="h-6 w-6 text-white" />
+        <div className="relative">
+          <button
+            type="button"
+            className="relative group h-24 w-full cursor-pointer overflow-hidden rounded-md border border-border/60 bg-muted/20"
+            onClick={onBannerClick}
+          >
+            {user.banner ? (
+              <img
+                src={getFileUrl(user.banner)}
+                alt="User Banner"
+                className="h-full w-full object-cover transition-opacity group-hover:opacity-70"
+              />
+            ) : (
+              <div className="h-full w-full transition-opacity group-hover:opacity-70" />
+            )}
+            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-md">
+              <div className="bg-black/50 rounded-full p-3">
+                <Upload className="h-6 w-6 text-white" />
+              </div>
             </div>
-          </div>
-        </button>
+          </button>
 
-        {user.bannerId && (
-          <Button size="sm" variant="outline" onClick={removeBanner}>
-            Remove banner
-          </Button>
-        )}
+          {user.bannerId && (
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="secondary"
+              className="absolute top-2 right-2 h-7 w-7 rounded-full border border-border/60 bg-background/90 shadow-sm"
+              onClick={removeBanner}
+              aria-label="Remove banner"
+              title="Remove banner"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );

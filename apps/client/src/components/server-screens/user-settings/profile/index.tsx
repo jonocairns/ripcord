@@ -11,33 +11,77 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
-import { closeServerScreens } from '@/features/server-screens/actions';
+import { updateUser as updateUserAction } from '@/features/server/users/actions';
 import { useOwnPublicUser } from '@/features/server/users/hooks';
 import { useForm } from '@/hooks/use-form';
 import { getTRPCClient } from '@/lib/trpc';
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { AvatarManager } from './avatar-manager';
 import { BannerManager } from './banner-manager';
 
+const HEX_COLOR_REGEX = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;
+const DEFAULT_BANNER_COLOR = '#FFFFFF';
+
 const Profile = memo(() => {
   const ownPublicUser = useOwnPublicUser();
-  const { setTrpcErrors, r, values } = useForm({
+  const { setTrpcErrors, r, values, setValues } = useForm({
     name: ownPublicUser?.name ?? '',
     bannerColor: ownPublicUser?.bannerColor ?? '#FFFFFF',
     bio: ownPublicUser?.bio ?? ''
   });
+  const hydratedUserId = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    if (!ownPublicUser || hydratedUserId.current === ownPublicUser.id) {
+      return;
+    }
+
+    setValues({
+      name: ownPublicUser.name,
+      bannerColor: ownPublicUser.bannerColor ?? '#FFFFFF',
+      bio: ownPublicUser.bio ?? ''
+    });
+    hydratedUserId.current = ownPublicUser.id;
+  }, [ownPublicUser, setValues]);
 
   const onUpdateUser = useCallback(async () => {
+    if (!ownPublicUser) {
+      return;
+    }
+
+    const name = values.name.trim();
+    const bio = values.bio.trim();
+    const bannerColor = HEX_COLOR_REGEX.test(values.bannerColor.trim())
+      ? values.bannerColor.trim()
+      : DEFAULT_BANNER_COLOR;
+
+    const payload = {
+      name,
+      bannerColor,
+      bio: bio.length > 0 ? bio : undefined
+    };
+
     const trpc = getTRPCClient();
 
     try {
-      await trpc.users.update.mutate(values);
+      await trpc.users.update.mutate(payload);
+      updateUserAction(ownPublicUser.id, {
+        name: payload.name,
+        bannerColor: payload.bannerColor,
+        bio: payload.bio ?? null
+      });
+      setValues({
+        name: payload.name,
+        bannerColor: payload.bannerColor,
+        bio: payload.bio ?? ''
+      });
       toast.success('Profile updated');
     } catch (error) {
       setTrpcErrors(error);
+      toast.error('Could not update profile');
     }
-  }, [values, setTrpcErrors]);
+  }, [ownPublicUser, setTrpcErrors, setValues, values.bio, values.bannerColor, values.name]);
 
   if (!ownPublicUser) return null;
 
@@ -86,9 +130,6 @@ const Profile = memo(() => {
 
       </CardContent>
       <CardFooter className="border-t items-stretch justify-end gap-2 sm:items-center">
-        <Button variant="outline" onClick={closeServerScreens}>
-          Cancel
-        </Button>
         <Button onClick={onUpdateUser}>Save Changes</Button>
       </CardFooter>
     </Card>

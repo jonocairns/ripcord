@@ -4,7 +4,6 @@ import { cn } from '@/lib/utils';
 import { PanelRight, PanelRightClose } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import { Button } from '../ui/button';
-import { Tooltip } from '../ui/tooltip';
 import { UserPopover } from '../user-popover';
 
 const MAX_USERS_TO_SHOW = 100;
@@ -23,7 +22,7 @@ const User = memo(
         <div
           className={cn(
             'flex items-center gap-3 rounded px-2 py-1.5 hover:bg-accent select-none',
-            isCollapsed && 'lg:justify-center lg:px-1 lg:py-1'
+            isCollapsed && 'lg:justify-center lg:gap-0 lg:px-1 lg:py-1'
           )}
           title={name}
         >
@@ -90,7 +89,7 @@ const RightSidebar = memo(
             <div
               className={cn(
                 'flex h-12 items-center border-b border-border px-3 justify-between',
-                isCollapsed && 'lg:px-2 lg:justify-center'
+                isCollapsed && 'lg:px-0 lg:justify-center'
               )}
             >
               <div
@@ -102,22 +101,21 @@ const RightSidebar = memo(
                 Members
               </div>
               {onToggleCollapse && (
-                <Tooltip
-                  content={isCollapsed ? 'Expand Members' : 'Collapse Members'}
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className={cn(
+                    'hidden lg:inline-flex',
+                    isCollapsed && 'lg:mx-auto'
+                  )}
+                  onClick={onToggleCollapse}
                 >
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="hidden lg:inline-flex"
-                    onClick={onToggleCollapse}
-                  >
-                    {isCollapsed ? (
-                      <PanelRight className="h-4 w-4" />
-                    ) : (
-                      <PanelRightClose className="h-4 w-4" />
-                    )}
-                  </Button>
-                </Tooltip>
+                  {isCollapsed ? (
+                    <PanelRight className="h-4 w-4" />
+                  ) : (
+                    <PanelRightClose className="h-4 w-4" />
+                  )}
+                </Button>
               )}
             </div>
             <div
