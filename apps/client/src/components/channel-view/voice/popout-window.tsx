@@ -12,9 +12,50 @@ type TPopoutWindowProps = {
 };
 
 const DEFAULT_WINDOW_FEATURES =
-  'popup=yes,width=1280,height=720,resizable=yes,scrollbars=no';
+  'popup=yes,width=1280,height=720,resizable=yes,scrollbars=no,menubar=no,toolbar=no,location=no,status=no';
 
 const ROOT_ID = 'sharkord-popout-root';
+
+const syncPopoutIcons = (targetWindow: Window) => {
+  const sourceIcons = Array.from(
+    window.document.querySelectorAll<HTMLLinkElement>(
+      "link[rel~='icon'], link[rel='apple-touch-icon']"
+    )
+  );
+
+  if (sourceIcons.length === 0) {
+    return;
+  }
+
+  const popoutHead = targetWindow.document.head;
+  const existingIcons = popoutHead.querySelectorAll(
+    "link[rel~='icon'], link[rel='apple-touch-icon']"
+  );
+
+  existingIcons.forEach((icon) => {
+    icon.remove();
+  });
+
+  sourceIcons.forEach((sourceIcon) => {
+    const clonedIcon = targetWindow.document.createElement('link');
+
+    if (sourceIcon.rel) {
+      clonedIcon.rel = sourceIcon.rel;
+    }
+
+    if (sourceIcon.type) {
+      clonedIcon.type = sourceIcon.type;
+    }
+
+    const sizes = sourceIcon.getAttribute('sizes');
+    if (sizes) {
+      clonedIcon.setAttribute('sizes', sizes);
+    }
+
+    clonedIcon.href = sourceIcon.href;
+    popoutHead.appendChild(clonedIcon);
+  });
+};
 
 const setupPopoutDocument = (
   targetWindow: Window,
@@ -22,6 +63,7 @@ const setupPopoutDocument = (
 ): HTMLDivElement => {
   const popoutDocument = targetWindow.document;
   popoutDocument.title = title;
+  syncPopoutIcons(targetWindow);
 
   let root = popoutDocument.getElementById(ROOT_ID) as HTMLDivElement | null;
 

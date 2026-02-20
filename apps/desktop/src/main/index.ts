@@ -166,7 +166,14 @@ const createMainWindow = () => {
     const policy = classifyWindowOpenUrl(url);
 
     if (policy.action === "allow") {
-      return { action: "allow" };
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          icon,
+          autoHideMenuBar: true,
+          backgroundColor: "#000000",
+        },
+      };
     }
 
     if (policy.openExternal) {
@@ -174,6 +181,15 @@ const createMainWindow = () => {
     }
 
     return { action: "deny" };
+  });
+
+  mainWindow.webContents.on("did-create-window", (childWindow, details) => {
+    if (!details.url.startsWith("about:blank")) {
+      return;
+    }
+
+    childWindow.setAutoHideMenuBar(true);
+    childWindow.setMenuBarVisibility(false);
   });
 
   if (RENDERER_URL) {

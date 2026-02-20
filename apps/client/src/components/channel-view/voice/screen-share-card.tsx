@@ -20,6 +20,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent
 } from 'react';
@@ -103,6 +104,8 @@ type TScreenShareCardProps = {
   showPinControls: boolean;
 };
 
+const POPOUT_CONTROLS_IDLE_HIDE_MS = 2500;
+
 const ScreenShareCard = memo(
   ({
     userId,
@@ -149,6 +152,9 @@ const ScreenShareCard = memo(
     } = useScreenShareZoom();
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [isPoppedOut, setIsPoppedOut] = useState(false);
+    const [isPopoutFullscreen, setIsPopoutFullscreen] = useState(false);
+    const [showPopoutWindowControls, setShowPopoutWindowControls] = useState(true);
+    const hidePopoutWindowControlsTimeoutRef = useRef<number | null>(null);
     const popoutWindowName = useMemo(() => `screen-share-${userId}`, [userId]);
 
     const handlePinToggle = useCallback(() => {
@@ -209,6 +215,25 @@ const ScreenShareCard = memo(
       toggleMute(volumeKey);
     }, [toggleMute, volumeKey]);
 
+    const clearPopoutControlsHideTimeout = useCallback(() => {
+      if (hidePopoutWindowControlsTimeoutRef.current === null) {
+        return;
+      }
+
+      window.clearTimeout(hidePopoutWindowControlsTimeoutRef.current);
+      hidePopoutWindowControlsTimeoutRef.current = null;
+    }, []);
+
+    const revealPopoutWindowControls = useCallback(() => {
+      setShowPopoutWindowControls(true);
+      clearPopoutControlsHideTimeout();
+
+      hidePopoutWindowControlsTimeoutRef.current = window.setTimeout(() => {
+        setShowPopoutWindowControls(false);
+        hidePopoutWindowControlsTimeoutRef.current = null;
+      }, POPOUT_CONTROLS_IDLE_HIDE_MS);
+    }, [clearPopoutControlsHideTimeout]);
+
     useEffect(() => {
       const handleFullscreenChange = () => {
         setIsFullscreen(document.fullscreenElement === containerRef.current);
@@ -221,6 +246,23 @@ const ScreenShareCard = memo(
         document.removeEventListener('fullscreenchange', handleFullscreenChange);
       };
     }, [containerRef]);
+
+    useEffect(() => {
+      if (!isPoppedOut) {
+        clearPopoutControlsHideTimeout();
+        setShowPopoutWindowControls(true);
+        setIsPopoutFullscreen(false);
+        return;
+      }
+
+      revealPopoutWindowControls();
+    }, [clearPopoutControlsHideTimeout, isPoppedOut, revealPopoutWindowControls]);
+
+    useEffect(() => {
+      return () => {
+        clearPopoutControlsHideTimeout();
+      };
+    }, [clearPopoutControlsHideTimeout]);
 
     useEffect(() => {
       if (!screenShareAudioRef.current) {
@@ -246,6 +288,71 @@ const ScreenShareCard = memo(
         popoutVideo.srcObject = screenShareStream;
       }
     }, [isPoppedOut, popoutVideoElement, screenShareStream]);
+
+    useEffect(() => {
+      if (!isPoppedOut || !popoutVideoElement) {
+        return;
+      }
+
+      const popoutDocument = popoutVideoElement.ownerDocument;
+      const popoutWindow = popoutDocument.defaultView;
+
+      if (!popoutWindow) {
+        return;
+      }
+
+      const handlePopoutMouseMove = () => {
+        if (!popoutDocument.hasFocus()) {
+          return;
+        }
+
+        revealPopoutWindowControls();
+      };
+
+      const handlePopoutFocus = () => {
+        revealPopoutWindowControls();
+      };
+
+      const handlePopoutBlur = () => {
+        clearPopoutControlsHideTimeout();
+        setShowPopoutWindowControls(false);
+      };
+
+      const handlePopoutFullscreenChange = () => {
+        setIsPopoutFullscreen(!!popoutDocument.fullscreenElement);
+      };
+
+      popoutDocument.addEventListener('mousemove', handlePopoutMouseMove);
+      popoutDocument.addEventListener(
+        'fullscreenchange',
+        handlePopoutFullscreenChange
+      );
+      popoutWindow.addEventListener('focus', handlePopoutFocus);
+      popoutWindow.addEventListener('blur', handlePopoutBlur);
+
+      handlePopoutFullscreenChange();
+
+      if (popoutDocument.hasFocus()) {
+        revealPopoutWindowControls();
+      } else {
+        setShowPopoutWindowControls(false);
+      }
+
+      return () => {
+        popoutDocument.removeEventListener('mousemove', handlePopoutMouseMove);
+        popoutDocument.removeEventListener(
+          'fullscreenchange',
+          handlePopoutFullscreenChange
+        );
+        popoutWindow.removeEventListener('focus', handlePopoutFocus);
+        popoutWindow.removeEventListener('blur', handlePopoutBlur);
+      };
+    }, [
+      clearPopoutControlsHideTimeout,
+      isPoppedOut,
+      popoutVideoElement,
+      revealPopoutWindowControls
+    ]);
 
     useEffect(() => {
       const popoutAudio = popoutAudioElement;
@@ -392,53 +499,99 @@ const ScreenShareCard = memo(
             style={{
               width: '100%',
               height: '100%',
-              display: 'flex',
-              flexDirection: 'column',
+              position: 'relative',
               backgroundColor: '#000000',
               color: '#ffffff'
             }}
           >
             <div
               style={{
+                position: 'absolute',
+                top: '12px',
+                right: '12px',
+                zIndex: 20,
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
-                padding: '8px 10px',
-                borderBottom: '1px solid rgba(255, 255, 255, 0.16)',
-                backgroundColor: 'rgba(15, 15, 15, 0.95)'
+                opacity: showPopoutWindowControls ? 1 : 0,
+                pointerEvents: showPopoutWindowControls ? 'auto' : 'none',
+                transition: 'opacity 140ms ease'
               }}
             >
               <button
                 type="button"
-                onClick={handleClosePopout}
-                style={{
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
-                  background: 'transparent',
-                  color: '#ffffff',
-                  borderRadius: '6px',
-                  padding: '4px 8px',
-                  cursor: 'pointer'
-                }}
-              >
-                Close
-              </button>
-              <button
-                type="button"
                 onClick={handleTogglePopoutFullscreen}
+                title={isPopoutFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+                aria-label={
+                  isPopoutFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'
+                }
                 style={{
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
-                  background: 'transparent',
+                  border: '1px solid rgba(255, 255, 255, 0.55)',
+                  background: 'rgba(15, 23, 42, 0.88)',
                   color: '#ffffff',
-                  borderRadius: '6px',
-                  padding: '4px 8px',
+                  borderRadius: '10px',
+                  width: '40px',
+                  height: '40px',
+                  padding: '0',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 6px 18px rgba(0, 0, 0, 0.45)',
                   cursor: 'pointer'
                 }}
               >
-                Fullscreen
+                {isPopoutFullscreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
               </button>
+            </div>
+
+            <div
+              style={{
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '100%',
+                height: '100%',
+                backgroundColor: '#000000'
+              }}
+            >
+              <video
+                ref={setPopoutVideoElement}
+                autoPlay
+                muted
+                playsInline
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain',
+                  backgroundColor: '#000000'
+                }}
+              />
+              {!isOwnUser && hasScreenShareAudioStream && (
+                <audio
+                  ref={setPopoutAudioElement}
+                  autoPlay
+                  playsInline
+                  style={{ display: 'none' }}
+                />
+              )}
 
               {!isOwnUser && hasScreenShareAudioStream && (
-                <>
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: '12px',
+                    bottom: '12px',
+                    zIndex: 20,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                    background: 'rgba(0, 0, 0, 0.55)',
+                    borderRadius: '8px',
+                    padding: '6px 8px'
+                  }}
+                >
                   <button
                     type="button"
                     onClick={handlePopoutMuteToggle}
@@ -467,39 +620,7 @@ const ScreenShareCard = memo(
                     style={{ width: '120px', cursor: 'pointer' }}
                   />
                   <span style={{ fontSize: '12px', opacity: 0.8 }}>{volume}%</span>
-                </>
-              )}
-            </div>
-
-            <div
-              style={{
-                position: 'relative',
-                flex: 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: '#000000'
-              }}
-            >
-              <video
-                ref={setPopoutVideoElement}
-                autoPlay
-                muted
-                playsInline
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'contain',
-                  backgroundColor: '#000000'
-                }}
-              />
-              {!isOwnUser && hasScreenShareAudioStream && (
-                <audio
-                  ref={setPopoutAudioElement}
-                  autoPlay
-                  playsInline
-                  style={{ display: 'none' }}
-                />
+                </div>
               )}
             </div>
           </div>
