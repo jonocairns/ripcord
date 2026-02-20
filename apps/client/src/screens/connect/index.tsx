@@ -116,13 +116,7 @@ const Connect = memo(() => {
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle className="flex flex-col items-center gap-2 text-center">
-            <div className="flex h-32 w-32 items-center justify-center rounded-full">
-              <img
-                src={logoSrc}
-                alt="Sharkord"
-                className="h-32 w-32 rounded-full object-cover"
-              />
-            </div>
+            <img src={logoSrc} alt="Ripcord" className="w-32 h-32" />
             {info?.name && !hasServerLogo && (
               <span className="text-xl font-bold leading-tight">
                 {info.name}
@@ -239,7 +233,7 @@ const Connect = memo(() => {
       <div className="flex justify-center gap-2 text-xs text-muted-foreground select-none">
         <span>v{VITE_APP_VERSION}</span>
         <a
-          href="https://github.com/sharkord/sharkord"
+          href="https://github.com/jonocairns/ripcord"
           target="_blank"
           rel="noopener noreferrer"
         >
@@ -248,11 +242,11 @@ const Connect = memo(() => {
 
         <a
           className="text-xs"
-          href="https://sharkord.com"
+          href="https://ripcord.com"
           target="_blank"
           rel="noopener noreferrer"
         >
-          Sharkord
+          Ripcord
         </a>
       </div>
     </div>

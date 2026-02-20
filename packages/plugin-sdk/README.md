@@ -1,9 +1,9 @@
-# Sharkord Plugin SDK
+# Ripcord Plugin SDK
 
-The official SDK for building Sharkord plugins. This package provides TypeScript types and interfaces to extend Sharkord with custom functionality.
+The official SDK for building Ripcord plugins. This package provides TypeScript types and interfaces to extend Ripcord with custom functionality.
 
 > [!NOTE]
-> Sharkord plugins are an experimental feature and the SDK API may change in future releases.
+> Ripcord plugins are an experimental feature and the SDK API may change in future releases.
 
 ## Creating a Plugin
 
@@ -43,7 +43,7 @@ Example `package.json`:
     "entry": "index.js",
     "author": "Me",
     "homepage": "https://some-page.com",
-    "description": "This is my first Sharkord plugin!",
+    "description": "This is my first Ripcord plugin!",
     "logo": "https://some-page.com/logo.png"
   },
   "type": "module",
@@ -146,14 +146,14 @@ const onLoad = (ctx: PluginContext) => {
 };
 ```
 
-## Adding The Plugin to Sharkord
+## Adding The Plugin to Ripcord
 
-1. Go to the Sharkord data directory (usually `~/.config/sharkord`).
+1. Go to the Ripcord data directory (usually `~/.config/sharkord`).
 2. Create a `plugins` folder if it doesn't exist.
 3. Create a folder for your plugin (e.g., `my-plugin`).
 4. Copy your compiled plugin files (e.g., from `dist/`) into the `my-plugin` folder.
 5. Enable your plugin in the server settings under the "Plugins" section.
-6. Restart Sharkord or reload plugins from the admin panel.
+6. Restart Ripcord or reload plugins from the admin panel.
 7. Your plugin should now be loaded and active!
 
 ## Best Practices
@@ -172,4 +172,4 @@ No documentation available yet. Use the types in `packages/plugin-sdk/src/index.
 
 ## License
 
-This SDK is part of the Sharkord project. See the main repository for license information.
+This SDK is part of the Ripcord project. See the main repository for license information.

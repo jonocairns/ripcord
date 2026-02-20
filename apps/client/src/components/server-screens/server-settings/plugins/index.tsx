@@ -234,7 +234,7 @@ const Plugins = memo(() => {
           <div>
             <CardTitle>Plugins</CardTitle>
             <CardDescription>
-              Manage installed plugins and extend Sharkord with
+              Manage installed plugins and extend Ripcord with
               additional features and functionality.
             </CardDescription>
           </div>
@@ -265,7 +265,7 @@ const Plugins = memo(() => {
                 </h3>
                 <p className="text-sm text-muted-foreground max-w-sm">
                   Install plugins to add new features and extend the
-                  functionality of Sharkord.
+                  functionality of Ripcord.
                 </p>
               </div>
             ) : (

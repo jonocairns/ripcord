@@ -21,11 +21,11 @@ const Routing = memo(() => {
 
   useEffect(() => {
     if (isConnected && serverName) {
-      document.title = `${serverName} - Sharkord`;
+      document.title = `${serverName} - Ripcord`;
       return;
     }
 
-    document.title = 'Sharkord';
+    document.title = 'Ripcord';
   }, [isConnected, serverName]);
 
   if (isDesktopServerSetupRequired()) {

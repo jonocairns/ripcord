@@ -442,7 +442,7 @@ const Devices = memo(() => {
               </Select>
               <p className="text-xs text-muted-foreground">
                 Auto is recommended. AV1 may be unavailable on some devices, in
-                which case Sharkord automatically falls back.
+                which case Ripcord automatically falls back.
               </p>
             </div>
 
