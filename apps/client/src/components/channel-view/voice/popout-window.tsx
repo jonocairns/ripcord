@@ -9,6 +9,7 @@ type TPopoutWindowProps = {
   children: React.ReactNode;
   onBlocked?: () => void;
   features?: string;
+  targetWindow?: Window | null;
 };
 
 const DEFAULT_WINDOW_FEATURES =
@@ -94,7 +95,8 @@ const PopoutWindow = memo(
     onClose,
     children,
     onBlocked,
-    features = DEFAULT_WINDOW_FEATURES
+    features = DEFAULT_WINDOW_FEATURES,
+    targetWindow
   }: TPopoutWindowProps) => {
     const popoutWindowRef = useRef<Window | null>(null);
     const [container, setContainer] = useState<HTMLDivElement | null>(null);
@@ -104,23 +106,24 @@ const PopoutWindow = memo(
         return;
       }
 
-      let targetWindow = popoutWindowRef.current;
+      let activeWindow =
+        targetWindow && !targetWindow.closed ? targetWindow : popoutWindowRef.current;
 
-      if (!targetWindow || targetWindow.closed) {
-        targetWindow = window.open('', windowName, features);
+      if (!activeWindow || activeWindow.closed) {
+        activeWindow = window.open('', windowName, features);
 
-        if (!targetWindow) {
+        if (!activeWindow) {
           onBlocked?.();
           onClose();
           return;
         }
-
-        popoutWindowRef.current = targetWindow;
       }
 
-      const root = setupPopoutDocument(targetWindow, title);
+      popoutWindowRef.current = activeWindow;
+
+      const root = setupPopoutDocument(activeWindow, title);
       setContainer(root);
-      targetWindow.focus();
+      activeWindow.focus();
 
       const handleUnload = () => {
         setContainer(null);
@@ -128,14 +131,14 @@ const PopoutWindow = memo(
         onClose();
       };
 
-      targetWindow.addEventListener('beforeunload', handleUnload);
-      targetWindow.addEventListener('unload', handleUnload);
+      activeWindow.addEventListener('beforeunload', handleUnload);
+      activeWindow.addEventListener('unload', handleUnload);
 
       return () => {
-        targetWindow?.removeEventListener('beforeunload', handleUnload);
-        targetWindow?.removeEventListener('unload', handleUnload);
+        activeWindow?.removeEventListener('beforeunload', handleUnload);
+        activeWindow?.removeEventListener('unload', handleUnload);
       };
-    }, [features, isOpen, onBlocked, onClose, title, windowName]);
+    }, [features, isOpen, onBlocked, onClose, targetWindow, title, windowName]);
 
     useEffect(() => {
       if (!isOpen && popoutWindowRef.current && !popoutWindowRef.current.closed) {
@@ -173,3 +176,4 @@ const PopoutWindow = memo(
 PopoutWindow.displayName = 'PopoutWindow';
 
 export { PopoutWindow };
+export { DEFAULT_WINDOW_FEATURES };
