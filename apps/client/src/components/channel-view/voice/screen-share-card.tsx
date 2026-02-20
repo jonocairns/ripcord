@@ -30,7 +30,7 @@ import { CardGradient } from './card-gradient';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
-import { PopoutWindow } from './popout-window';
+import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
 import { VolumeButton } from './volume-button';
 
 type tScreenShareControlsProps = {
@@ -152,6 +152,7 @@ const ScreenShareCard = memo(
     } = useScreenShareZoom();
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [isPoppedOut, setIsPoppedOut] = useState(false);
+    const [popoutWindow, setPopoutWindow] = useState<Window | null>(null);
     const [isPopoutFullscreen, setIsPopoutFullscreen] = useState(false);
     const [showPopoutWindowControls, setShowPopoutWindowControls] = useState(true);
     const hidePopoutWindowControlsTimeoutRef = useRef<number | null>(null);
@@ -167,16 +168,36 @@ const ScreenShareCard = memo(
     }, [isPinned, onPin, onUnpin, resetZoom]);
 
     const handleTogglePopout = useCallback(() => {
-      setIsPoppedOut((prev) => !prev);
-    }, []);
+      if (isPoppedOut) {
+        setIsPoppedOut(false);
+        return;
+      }
+
+      const activePopoutWindow =
+        popoutWindow && !popoutWindow.closed
+          ? popoutWindow
+          : window.open('', popoutWindowName, DEFAULT_WINDOW_FEATURES);
+
+      if (!activePopoutWindow) {
+        toast.error('Pop-out was blocked. Allow pop-ups and try again.');
+        setIsPoppedOut(false);
+        return;
+      }
+
+      setPopoutWindow(activePopoutWindow);
+      setIsPoppedOut(true);
+      activePopoutWindow.focus();
+    }, [isPoppedOut, popoutWindow, popoutWindowName]);
 
     const handleClosePopout = useCallback(() => {
       setIsPoppedOut(false);
+      setPopoutWindow(null);
     }, []);
 
     const handlePopoutBlocked = useCallback(() => {
       toast.error('Pop-out was blocked. Allow pop-ups and try again.');
       setIsPoppedOut(false);
+      setPopoutWindow(null);
     }, []);
 
     const handleToggleFullscreen = useCallback(() => {
@@ -388,6 +409,7 @@ const ScreenShareCard = memo(
       }
 
       setIsPoppedOut(false);
+      setPopoutWindow(null);
     }, [hasScreenShareStream]);
 
     if (!user || !hasScreenShareStream) return null;
@@ -494,6 +516,7 @@ const ScreenShareCard = memo(
           title={`${user.name}'s screen - Sharkord`}
           onClose={handleClosePopout}
           onBlocked={handlePopoutBlocked}
+          targetWindow={popoutWindow}
         >
           <div
             style={{
