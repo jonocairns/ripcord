@@ -10,7 +10,6 @@ import {
   CardContent,
   CardFooter,
 } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { LoadingCard } from '@/components/ui/loading-card';
 import { Separator } from '@/components/ui/separator';
@@ -26,52 +25,21 @@ import { Switch } from '@/components/ui/switch';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useForm } from '@/hooks/use-form';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
+import { ScreenAudioMode } from '@/runtime/types';
 import {
-  getRuntimeServerConfig,
-  normalizeServerUrl,
-  updateDesktopServerUrl
-} from '@/runtime/server-config';
-import { ScreenAudioMode, type TDesktopUpdateStatus } from '@/runtime/types';
-import { Resolution, VideoCodecPreference, VoiceFilterStrength } from '@/types';
+  MicQualityMode,
+  Resolution,
+  VideoCodecPreference,
+  VoiceFilterStrength
+} from '@/types';
 import { Info } from 'lucide-react';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useAvailableDevices } from './hooks/use-available-devices';
 import ResolutionFpsControl from './resolution-fps-control';
 
 const DEFAULT_NAME = 'default';
 type TPushKeybindField = 'pushToTalkKeybind' | 'pushToMuteKeybind';
-
-const resolveDesktopUpdateSummary = (status?: TDesktopUpdateStatus) => {
-  if (!status) {
-    return 'Loading update status...';
-  }
-
-  switch (status.state) {
-    case 'disabled':
-      return status.message || 'Desktop auto-updates are disabled.';
-    case 'idle':
-      return 'Desktop app periodically checks for updates.';
-    case 'checking':
-      return 'Checking for updates...';
-    case 'available':
-      return status.availableVersion
-        ? `Version ${status.availableVersion} is available and downloading in the background.`
-        : 'An update is available and downloading in the background.';
-    case 'downloading':
-      return typeof status.percent === 'number'
-        ? `Downloading update... ${Math.round(status.percent)}%`
-        : 'Downloading update...';
-    case 'downloaded':
-      return status.availableVersion
-        ? `Version ${status.availableVersion} is downloaded and ready to install.`
-        : 'An update is downloaded and ready to install.';
-    case 'not-available':
-      return 'You are on the latest version.';
-    case 'error':
-      return status.message || 'Failed to update desktop app.';
-  }
-};
 
 const Devices = memo(() => {
   const desktopBridge = getDesktopBridge();
@@ -84,14 +52,7 @@ const Devices = memo(() => {
   } = useAvailableDevices();
   const { devices, saveDevices, loading: devicesLoading } = useDevices();
   const { values, onChange } = useForm(devices);
-  const [desktopServerUrl, setDesktopServerUrl] = useState(
-    getRuntimeServerConfig().serverUrl
-  );
-  const [savingServerUrl, setSavingServerUrl] = useState(false);
-  const [desktopUpdateStatus, setDesktopUpdateStatus] =
-    useState<TDesktopUpdateStatus>();
-  const [checkingDesktopUpdates, setCheckingDesktopUpdates] = useState(false);
-  const [installingDesktopUpdate, setInstallingDesktopUpdate] = useState(false);
+  const [desktopAppVersion, setDesktopAppVersion] = useState<string>();
   const [capturingKeybindField, setCapturingKeybindField] = useState<
     TPushKeybindField | undefined
   >(undefined);
@@ -100,71 +61,6 @@ const Devices = memo(() => {
     saveDevices(values);
     toast.success('Device settings saved');
   }, [saveDevices, values]);
-
-  const saveDesktopServerUrl = useCallback(async () => {
-    setSavingServerUrl(true);
-
-    try {
-      const normalized = normalizeServerUrl(desktopServerUrl);
-      await updateDesktopServerUrl(normalized.url);
-      toast.success('Desktop server URL saved');
-      window.location.reload();
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Could not save desktop URL';
-
-      toast.error(message);
-      setSavingServerUrl(false);
-    }
-  }, [desktopServerUrl]);
-
-  const checkForDesktopUpdates = useCallback(async () => {
-    if (!desktopBridge) {
-      return;
-    }
-
-    setCheckingDesktopUpdates(true);
-
-    try {
-      const status = await desktopBridge.checkForUpdates();
-      setDesktopUpdateStatus(status);
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Could not check for desktop updates';
-      toast.error(message);
-    } finally {
-      setCheckingDesktopUpdates(false);
-    }
-  }, [desktopBridge]);
-
-  const installDesktopUpdateAndRestart = useCallback(async () => {
-    if (!desktopBridge) {
-      return;
-    }
-
-    setInstallingDesktopUpdate(true);
-
-    try {
-      const started = await desktopBridge.installUpdateAndRestart();
-
-      if (!started) {
-        toast.error('No downloaded update is ready to install yet');
-        return;
-      }
-
-      toast.success('Installing update and restarting app...');
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Could not start desktop update install';
-      toast.error(message);
-    } finally {
-      setInstallingDesktopUpdate(false);
-    }
-  }, [desktopBridge]);
 
   const clearPushKeybind = useCallback(
     (field: TPushKeybindField) => {
@@ -246,40 +142,16 @@ const Devices = memo(() => {
       return;
     }
 
-    let disposed = false;
-
     void desktopBridge
       .getUpdateStatus()
       .then((status) => {
-        if (disposed) {
-          return;
-        }
-
-        setDesktopUpdateStatus(status);
+        setDesktopAppVersion(status.currentVersion);
       })
       .catch(() => {
-        // ignore initial status errors; subscriptions may still recover later
+        // ignore version lookup failures
       });
-
-    const unsubscribe = desktopBridge.subscribeUpdateStatus((status) => {
-      if (disposed) {
-        return;
-      }
-
-      setDesktopUpdateStatus(status);
-    });
-
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
   }, [desktopBridge]);
-
-  const desktopUpdateSummary = useMemo(() => {
-    return resolveDesktopUpdateSummary(desktopUpdateStatus);
-  }, [desktopUpdateStatus]);
-
-  const isDesktopUpdateReady = desktopUpdateStatus?.state === 'downloaded';
+  const isMicAutoMode = values.micQualityMode === MicQualityMode.AUTO;
 
   if (availableDevicesLoading || devicesLoading) {
     return <LoadingCard className="h-[600px]" />;
@@ -329,85 +201,116 @@ const Devices = memo(() => {
             </Select>
           </div>
 
-          <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
-            <div className="flex items-center justify-between gap-3">
-              <Label className="cursor-default">Echo cancellation</Label>
-              <Switch
-                checked={!!values.echoCancellation}
-                onCheckedChange={(checked) =>
-                  onChange('echoCancellation', checked)
-                }
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-3">
-              <Label className="cursor-default">Noise suppression</Label>
-              <Switch
-                checked={!!values.noiseSuppression}
-                onCheckedChange={(checked) =>
-                  onChange('noiseSuppression', checked)
-                }
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-3">
-              <Label className="cursor-default">Automatic gain control</Label>
-              <Switch
-                checked={!!values.autoGainControl}
-                onCheckedChange={(checked) =>
-                  onChange('autoGainControl', checked)
-                }
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-3">
-              <Label className="cursor-default">
-                Background noise filter (Desktop)
-              </Label>
-              <Switch
-                checked={!!values.experimentalVoiceFilter}
-                onCheckedChange={(checked) =>
-                  onChange('experimentalVoiceFilter', checked)
-                }
-                disabled={!hasDesktopBridge}
-              />
-            </div>
-          </div>
-
-          <p className="text-xs text-muted-foreground">
-            Uses desktop sidecar AI noise reduction (DeepFilterNet) for noise
-            suppression and automatic gain control. Echo cancellation remains
-            browser-based for now. Higher strength removes more background
-            noise but may affect voice quality. This filter is available in the
-            desktop app.
-          </p>
-
           <div className="max-w-sm space-y-2">
-            <Label>Voice filter strength</Label>
+            <Label>Mic quality mode</Label>
             <Select
               onValueChange={(value) =>
-                onChange('voiceFilterStrength', value as VoiceFilterStrength)
+                onChange('micQualityMode', value as MicQualityMode)
               }
-              value={values.voiceFilterStrength}
-              disabled={!hasDesktopBridge || !values.experimentalVoiceFilter}
+              value={values.micQualityMode}
             >
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select a filter preset" />
+                <SelectValue placeholder="Select mic quality mode" />
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
-                  <SelectItem value={VoiceFilterStrength.LOW}>Low</SelectItem>
-                  <SelectItem value={VoiceFilterStrength.BALANCED}>
-                    Balanced
+                  <SelectItem value={MicQualityMode.AUTO}>
+                    Auto (recommended)
                   </SelectItem>
-                  <SelectItem value={VoiceFilterStrength.HIGH}>High</SelectItem>
-                  <SelectItem value={VoiceFilterStrength.AGGRESSIVE}>
-                    Aggressive
-                  </SelectItem>
+                  <SelectItem value={MicQualityMode.MANUAL}>Custom</SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>
           </div>
+
+          {isMicAutoMode ? (
+            <p className="text-xs text-muted-foreground">
+              Auto mic quality manages echo cancellation, noise suppression, gain
+              control, and desktop filtering automatically.
+            </p>
+          ) : (
+            <>
+              <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="cursor-default">Echo cancellation</Label>
+                  <Switch
+                    checked={!!values.echoCancellation}
+                    onCheckedChange={(checked) =>
+                      onChange('echoCancellation', checked)
+                    }
+                  />
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="cursor-default">Noise suppression</Label>
+                  <Switch
+                    checked={!!values.noiseSuppression}
+                    onCheckedChange={(checked) =>
+                      onChange('noiseSuppression', checked)
+                    }
+                  />
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="cursor-default">Automatic gain control</Label>
+                  <Switch
+                    checked={!!values.autoGainControl}
+                    onCheckedChange={(checked) =>
+                      onChange('autoGainControl', checked)
+                    }
+                  />
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="cursor-default">
+                    Background noise filter (Desktop)
+                  </Label>
+                  <Switch
+                    checked={!!values.experimentalVoiceFilter}
+                    onCheckedChange={(checked) =>
+                      onChange('experimentalVoiceFilter', checked)
+                    }
+                    disabled={!hasDesktopBridge}
+                  />
+                </div>
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Uses desktop sidecar AI noise reduction (DeepFilterNet) for noise
+                suppression and automatic gain control. Echo cancellation remains
+                browser-based for now. Higher strength removes more background
+                noise but may affect voice quality. This filter is available in the
+                desktop app.
+              </p>
+
+              <div className="max-w-sm space-y-2">
+                <Label>Voice filter strength</Label>
+                <Select
+                  onValueChange={(value) =>
+                    onChange('voiceFilterStrength', value as VoiceFilterStrength)
+                  }
+                  value={values.voiceFilterStrength}
+                  disabled={!hasDesktopBridge || !values.experimentalVoiceFilter}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a filter preset" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={VoiceFilterStrength.LOW}>Low</SelectItem>
+                      <SelectItem value={VoiceFilterStrength.BALANCED}>
+                        Balanced
+                      </SelectItem>
+                      <SelectItem value={VoiceFilterStrength.HIGH}>High</SelectItem>
+                      <SelectItem value={VoiceFilterStrength.AGGRESSIVE}>
+                        Aggressive
+                      </SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
 
           {hasDesktopBridge && (
             <div className="max-w-2xl space-y-3">
@@ -616,81 +519,18 @@ const Devices = memo(() => {
         {hasDesktopBridge && <Separator />}
 
         {hasDesktopBridge && (
-          <section className="space-y-4">
-            <div className="space-y-1">
-              <h3 className="text-base font-semibold">Desktop App Updates</h3>
-              <p className="text-sm text-muted-foreground">
-                Keep the desktop app up to date without reinstalling manually.
-              </p>
-            </div>
-
-            <div className="rounded-md border p-3 space-y-2">
-              <div className="text-sm">
-                Current version:{' '}
-                <span className="font-mono">
-                  {desktopUpdateStatus?.currentVersion || 'Unknown'}
-                </span>
-              </div>
-
-              {desktopUpdateStatus?.availableVersion && (
-                <div className="text-sm">
-                  Available version:{' '}
-                  <span className="font-mono">
-                    {desktopUpdateStatus.availableVersion}
-                  </span>
-                </div>
-              )}
-
-              <p className="text-xs text-muted-foreground">
-                {desktopUpdateSummary}
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <Button
-                variant="outline"
-                onClick={checkForDesktopUpdates}
-                disabled={checkingDesktopUpdates || installingDesktopUpdate}
-              >
-                {checkingDesktopUpdates ? 'Checking...' : 'Check for Updates'}
-              </Button>
-              <Button
-                onClick={installDesktopUpdateAndRestart}
-                disabled={!isDesktopUpdateReady || installingDesktopUpdate}
-              >
-                {installingDesktopUpdate
-                  ? 'Restarting...'
-                  : 'Restart to Update'}
-              </Button>
-            </div>
-          </section>
-        )}
-
-        {hasDesktopBridge && <Separator />}
-
-        {hasDesktopBridge && (
           <section className="space-y-3">
             <div className="space-y-1">
-              <h3 className="text-base font-semibold">Desktop Server URL</h3>
+              <h3 className="text-base font-semibold">Desktop</h3>
               <p className="text-sm text-muted-foreground">
-                Set the URL used by the desktop bridge.
+                Desktop app details.
               </p>
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <Input
-                value={desktopServerUrl}
-                onChange={(event) => setDesktopServerUrl(event.target.value)}
-                onEnter={saveDesktopServerUrl}
-                placeholder="http://localhost:4991"
-              />
-              <Button
-                variant="outline"
-                onClick={saveDesktopServerUrl}
-                disabled={!desktopServerUrl.trim() || savingServerUrl}
-                className="sm:w-auto"
-              >
-                Save URL
-              </Button>
+              <p className="text-xs text-muted-foreground">
+                Desktop app version:{' '}
+                <span className="font-mono">
+                  {desktopAppVersion || 'Unknown'}
+                </span>
+              </p>
             </div>
           </section>
         )}

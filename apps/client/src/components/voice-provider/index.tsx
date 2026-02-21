@@ -19,7 +19,12 @@ import {
   type TAppAudioSession,
   type TDesktopScreenShareSelection
 } from '@/runtime/types';
-import { VideoCodecPreference } from '@/types';
+import {
+  MicQualityMode,
+  type TDeviceSettings,
+  VideoCodecPreference,
+  VoiceFilterStrength
+} from '@/types';
 import {
   ChannelPermission,
   StreamKind,
@@ -86,6 +91,24 @@ const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
   [VideoCodecPreference.AV1]: 'video/AV1'
 };
 const AUDIO_OPUS_TARGET_BITRATE_BPS = 128_000;
+const AUDIO_OPUS_PACKET_LOSS_PERC = 15;
+const AUDIO_OPUS_CODEC_OPTIONS = {
+  opusMaxAverageBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS,
+  opusDtx: true,
+  opusFec: true,
+  opusPacketLossPerc: AUDIO_OPUS_PACKET_LOSS_PERC
+} as const;
+
+type ResolvedMicProcessingConfig = {
+  sidecarVoiceProcessingEnabled: boolean;
+  browserAutoGainControl: boolean;
+  browserNoiseSuppression: boolean;
+  browserEchoCancellation: boolean;
+  sidecarNoiseSuppression: boolean;
+  sidecarAutoGainControl: boolean;
+  sidecarEchoCancellation: boolean;
+  sidecarSuppressionLevel: VoiceFilterStrength;
+};
 
 const resolvePreferredVideoCodec = (
   rtpCapabilities: RtpCapabilities | null,
@@ -105,6 +128,44 @@ const resolvePreferredVideoCodec = (
   return (rtpCapabilities.codecs ?? []).find((codec) => {
     return codec.mimeType.toLowerCase() === preferredMimeType;
   });
+};
+
+const resolveMicProcessingConfig = (
+  devices: TDeviceSettings,
+  hasDesktopBridge: boolean
+): ResolvedMicProcessingConfig => {
+  if (devices.micQualityMode === MicQualityMode.AUTO) {
+    const sidecarVoiceProcessingEnabled = hasDesktopBridge;
+
+    return {
+      sidecarVoiceProcessingEnabled,
+      browserAutoGainControl: !sidecarVoiceProcessingEnabled,
+      browserNoiseSuppression: !sidecarVoiceProcessingEnabled,
+      browserEchoCancellation: true,
+      sidecarNoiseSuppression: true,
+      sidecarAutoGainControl: true,
+      sidecarEchoCancellation: false,
+      sidecarSuppressionLevel: VoiceFilterStrength.HIGH
+    };
+  }
+
+  const sidecarVoiceProcessingEnabled =
+    hasDesktopBridge && devices.experimentalVoiceFilter;
+
+  return {
+    sidecarVoiceProcessingEnabled,
+    browserAutoGainControl: sidecarVoiceProcessingEnabled
+      ? false
+      : devices.autoGainControl,
+    browserNoiseSuppression: sidecarVoiceProcessingEnabled
+      ? false
+      : devices.noiseSuppression,
+    browserEchoCancellation: devices.echoCancellation,
+    sidecarNoiseSuppression: devices.noiseSuppression,
+    sidecarAutoGainControl: devices.autoGainControl,
+    sidecarEchoCancellation: devices.echoCancellation,
+    sidecarSuppressionLevel: devices.voiceFilterStrength
+  };
 };
 
 export type TVoiceProvider = {
@@ -311,21 +372,18 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
       await cleanupMicAudioPipeline();
 
-      const sidecarVoiceProcessingEnabled = devices.experimentalVoiceFilter;
-      const browserAutoGainControl = sidecarVoiceProcessingEnabled
-        ? false
-        : devices.autoGainControl;
-      const browserNoiseSuppression = sidecarVoiceProcessingEnabled
-        ? false
-        : devices.noiseSuppression;
+      const micProcessingConfig = resolveMicProcessingConfig(
+        devices,
+        Boolean(getDesktopBridge())
+      );
       // Keep browser AEC enabled until sidecar reference-based echo cancellation is implemented.
       const micConstraints = {
         deviceId: {
           exact: devices.microphoneId
         },
-        autoGainControl: browserAutoGainControl,
-        echoCancellation: devices.echoCancellation,
-        noiseSuppression: browserNoiseSuppression,
+        autoGainControl: micProcessingConfig.browserAutoGainControl,
+        echoCancellation: micProcessingConfig.browserEchoCancellation,
+        noiseSuppression: micProcessingConfig.browserNoiseSuppression,
         sampleRate: 48000
       };
 
@@ -346,11 +404,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         try {
           const micAudioPipeline = await createMicAudioProcessingPipeline({
             inputTrack: rawAudioTrack,
-            enabled: sidecarVoiceProcessingEnabled,
-            suppressionLevel: devices.voiceFilterStrength,
-            noiseSuppression: devices.noiseSuppression,
-            autoGainControl: devices.autoGainControl,
-            echoCancellation: devices.echoCancellation
+            enabled: micProcessingConfig.sidecarVoiceProcessingEnabled,
+            suppressionLevel: micProcessingConfig.sidecarSuppressionLevel,
+            noiseSuppression: micProcessingConfig.sidecarNoiseSuppression,
+            autoGainControl: micProcessingConfig.sidecarAutoGainControl,
+            echoCancellation: micProcessingConfig.sidecarEchoCancellation
           });
 
           if (micAudioPipeline) {
@@ -359,7 +417,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
             outboundAudioTrack = micAudioPipeline.track;
             logVoice('Microphone voice filter enabled', {
               backend: micAudioPipeline.backend,
-              suppressionLevel: devices.voiceFilterStrength
+              suppressionLevel: micProcessingConfig.sidecarSuppressionLevel
             });
           } else {
             micAudioPipelineRef.current = undefined;
@@ -371,15 +429,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           });
 
           if (
-            sidecarVoiceProcessingEnabled &&
-            (devices.autoGainControl || devices.noiseSuppression)
+            micProcessingConfig.sidecarVoiceProcessingEnabled &&
+            (micProcessingConfig.sidecarAutoGainControl ||
+              micProcessingConfig.sidecarNoiseSuppression)
           ) {
             try {
               const fallbackStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                   ...micConstraints,
-                  autoGainControl: devices.autoGainControl,
-                  noiseSuppression: devices.noiseSuppression
+                  autoGainControl: micProcessingConfig.sidecarAutoGainControl,
+                  noiseSuppression: micProcessingConfig.sidecarNoiseSuppression
                 },
                 video: false
               });
@@ -413,9 +472,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         localAudioProducer.current = await producerTransport.current?.produce({
           track: outboundAudioTrack,
           encodings: [{ maxBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS }],
-          codecOptions: {
-            opusMaxAverageBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS
-          },
+          codecOptions: AUDIO_OPUS_CODEC_OPTIONS,
           appData: { kind: StreamKind.AUDIO }
         });
 
@@ -459,6 +516,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     setLocalAudioStream,
     localAudioProducer,
     devices.microphoneId,
+    devices.micQualityMode,
     devices.autoGainControl,
     devices.echoCancellation,
     devices.noiseSuppression,

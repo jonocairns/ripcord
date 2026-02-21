@@ -1,5 +1,6 @@
 import { ScreenAudioMode } from '@/runtime/types';
 import {
+  MicQualityMode,
   Resolution,
   type TDeviceSettings,
   VideoCodecPreference,
@@ -13,13 +14,14 @@ type TLegacyDeviceSettings = Partial<TDeviceSettings> & {
 
 const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
   microphoneId: undefined,
+  micQualityMode: MicQualityMode.AUTO,
   pushToTalkKeybind: undefined,
   pushToMuteKeybind: undefined,
   webcamId: undefined,
   webcamResolution: Resolution['720p'],
   webcamFramerate: 30,
-  echoCancellation: false,
-  noiseSuppression: false,
+  echoCancellation: true,
+  noiseSuppression: true,
   autoGainControl: true,
   experimentalVoiceFilter: false,
   voiceFilterStrength: VoiceFilterStrength.BALANCED,
@@ -58,6 +60,11 @@ const migrateDeviceSettings = (
   return {
     ...DEFAULT_DEVICE_SETTINGS,
     ...incomingSettings,
+    micQualityMode: Object.values(MicQualityMode).includes(
+      incomingSettings.micQualityMode as MicQualityMode
+    )
+      ? (incomingSettings.micQualityMode as MicQualityMode)
+      : MicQualityMode.MANUAL,
     screenAudioMode: screenAudioMode || ScreenAudioMode.SYSTEM,
     videoCodec: Object.values(VideoCodecPreference).includes(
       incomingSettings.videoCodec as VideoCodecPreference

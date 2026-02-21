@@ -1,5 +1,9 @@
 import { ScreenAudioMode } from '@/runtime/types';
-import { VideoCodecPreference, VoiceFilterStrength } from '@/types';
+import {
+  MicQualityMode,
+  VideoCodecPreference,
+  VoiceFilterStrength
+} from '@/types';
 import { describe, expect, it } from 'bun:test';
 import {
   DEFAULT_DEVICE_SETTINGS,
@@ -10,11 +14,30 @@ describe('migrateDeviceSettings', () => {
   it('returns defaults when no saved data exists', () => {
     expect(migrateDeviceSettings(undefined)).toEqual(DEFAULT_DEVICE_SETTINGS);
     expect(DEFAULT_DEVICE_SETTINGS.experimentalVoiceFilter).toBe(false);
+    expect(DEFAULT_DEVICE_SETTINGS.micQualityMode).toBe(MicQualityMode.AUTO);
     expect(DEFAULT_DEVICE_SETTINGS.pushToTalkKeybind).toBeUndefined();
     expect(DEFAULT_DEVICE_SETTINGS.pushToMuteKeybind).toBeUndefined();
+    expect(DEFAULT_DEVICE_SETTINGS.echoCancellation).toBe(true);
+    expect(DEFAULT_DEVICE_SETTINGS.noiseSuppression).toBe(true);
     expect(DEFAULT_DEVICE_SETTINGS.voiceFilterStrength).toBe(
       VoiceFilterStrength.BALANCED
     );
+  });
+
+  it('defaults legacy settings to manual mic quality mode', () => {
+    const migrated = migrateDeviceSettings({
+      microphoneId: 'legacy-device'
+    });
+
+    expect(migrated.micQualityMode).toBe(MicQualityMode.MANUAL);
+  });
+
+  it('preserves explicit mic quality mode values', () => {
+    const migrated = migrateDeviceSettings({
+      micQualityMode: MicQualityMode.AUTO
+    });
+
+    expect(migrated.micQualityMode).toBe(MicQualityMode.AUTO);
   });
 
   it('migrates legacy shareSystemAudio=true to system mode', () => {

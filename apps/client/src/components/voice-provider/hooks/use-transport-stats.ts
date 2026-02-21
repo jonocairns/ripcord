@@ -72,6 +72,13 @@ const useTransportStats = () => {
         if (stat.type === 'outbound-rtp' && isProducer) {
           bytesSent += stat.bytesSent || 0;
           packetsSent += stat.packetsSent || 0;
+        } else if (stat.type === 'remote-inbound-rtp' && isProducer) {
+          packetsLost += stat.packetsLost || 0;
+          jitter += stat.jitter || 0;
+
+          if (typeof stat.roundTripTime === 'number') {
+            rtt = Math.max(rtt, stat.roundTripTime * 1000);
+          }
         } else if (stat.type === 'inbound-rtp' && !isProducer) {
           bytesReceived += stat.bytesReceived || 0;
           packetsReceived += stat.packetsReceived || 0;
@@ -81,7 +88,7 @@ const useTransportStats = () => {
           stat.type === 'candidate-pair' &&
           stat.state === 'succeeded'
         ) {
-          rtt = (stat.currentRoundTripTime || 0) * 1000;
+          rtt = Math.max(rtt, (stat.currentRoundTripTime || 0) * 1000);
         }
       }
 

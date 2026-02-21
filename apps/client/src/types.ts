@@ -48,8 +48,14 @@ export enum VoiceFilterStrength {
   AGGRESSIVE = 'aggressive'
 }
 
+export enum MicQualityMode {
+  AUTO = 'auto',
+  MANUAL = 'manual'
+}
+
 export type TDeviceSettings = {
   microphoneId: string | undefined;
+  micQualityMode: MicQualityMode;
   pushToTalkKeybind: string | undefined;
   pushToMuteKeybind: string | undefined;
   webcamId: string | undefined;

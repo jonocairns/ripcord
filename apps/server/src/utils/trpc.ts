@@ -42,6 +42,7 @@ export type Context = {
   getOwnWs: () => WebSocket | undefined;
   getStatusById: (userId: number) => UserStatus;
   setWsUserId: (userId: number) => void;
+  setWsVoiceChannelId: (channelId: number | undefined) => void;
   getUserWs: (userId: number) => WebSocket | undefined;
   getConnectionInfo: () => TConnectionInfo | undefined;
   throwValidationError: (field: string, message: string) => never;

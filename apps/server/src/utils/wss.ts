@@ -14,7 +14,7 @@ import {
 } from '@trpc/server/adapters/ws';
 import { eq } from 'drizzle-orm';
 import http from 'http';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { config } from '../config';
 import { db } from '../db';
 import { getAllChannelUserPermissions } from '../db/queries/channels';
@@ -31,11 +31,27 @@ import { pubsub } from './pubsub';
 import type { Context } from './trpc';
 
 let wss: WebSocketServer | undefined;
-type TTrackedWebSocket = WebSocket & { userId?: number; token: string };
+type TTrackedWebSocket = WebSocket & {
+  userId?: number;
+  token: string;
+  currentVoiceChannelId?: number;
+};
 
 const getTrackedClients = () => {
   if (!wss) return [] as TTrackedWebSocket[];
   return Array.from(wss.clients) as TTrackedWebSocket[];
+};
+
+const hasOtherOpenUserConnection = (
+  userId: number,
+  currentWs: TTrackedWebSocket
+) => {
+  return getTrackedClients().some(
+    (client) =>
+      client !== currentWs &&
+      client.userId === userId &&
+      client.readyState === WebSocket.OPEN
+  );
 };
 
 const usersIpMap = new Map<number, string>();
@@ -46,9 +62,11 @@ const getUserIp = (userId: number): string | undefined => {
 
 const createContext = async ({
   info,
-  req
+  req,
+  res
 }: CreateWSSContextFnOptions): Promise<Context> => {
   const { token } = info.connectionParams as TConnectionParams;
+  const connectionWs = res as TTrackedWebSocket | undefined;
 
   const decodedUser = await getUserByToken(token);
 
@@ -129,6 +147,7 @@ const createContext = async ({
 
   const getOwnWs = () => {
     if (!wss) return undefined;
+    if (connectionWs) return connectionWs;
     return getTrackedClients().find((client) => client.token === token);
   };
 
@@ -146,12 +165,34 @@ const createContext = async ({
   };
 
   const setWsUserId = (userId: number) => {
+    if (connectionWs) {
+      connectionWs.userId = userId;
+      return;
+    }
+
     if (!wss) return;
 
     const ws = getTrackedClients().find((client) => client.token === token);
 
     if (ws) {
       ws.userId = userId;
+    }
+  };
+
+  const setWsVoiceChannelId = (channelId: number | undefined) => {
+    if (connectionWs) {
+      connectionWs.currentVoiceChannelId = channelId;
+      return;
+    }
+
+    if (!wss) return;
+
+    const ws = getTrackedClients().find(
+      (client) => client.token === token && client.userId === decodedUser.id
+    );
+
+    if (ws) {
+      ws.currentVoiceChannelId = channelId;
     }
   };
 
@@ -162,7 +203,9 @@ const createContext = async ({
       });
     }
 
-    const ws = getTrackedClients().find((client) => client.token === token);
+    const ws =
+      connectionWs ??
+      getTrackedClients().find((client) => client.token === token);
 
     if (!ws) return undefined;
 
@@ -223,6 +266,7 @@ const createContext = async ({
     getOwnWs,
     getStatusById,
     setWsUserId,
+    setWsVoiceChannelId,
     getUserWs,
     getConnectionInfo,
     throwValidationError,
@@ -238,6 +282,7 @@ const createWsServer = async (server: http.Server) => {
       const trackedWs = ws as TTrackedWebSocket;
       trackedWs.userId = undefined;
       trackedWs.token = '';
+      trackedWs.currentVoiceChannelId = undefined;
 
       trackedWs.once('message', async (message) => {
         try {
@@ -251,29 +296,51 @@ const createWsServer = async (server: http.Server) => {
       });
 
       trackedWs.on('close', async () => {
-        const user = await getUserByToken(trackedWs.token);
+        if (!trackedWs.userId) return;
 
-        if (!user) return;
+        const userId = trackedWs.userId;
+        const hasOtherConnections = hasOtherOpenUserConnection(userId, trackedWs);
 
-        const voiceRuntime = VoiceRuntime.findRuntimeByUserId(user.id);
+        let voiceRuntime: VoiceRuntime | undefined;
 
-        if (voiceRuntime) {
-          voiceRuntime.removeUser(user.id);
+        if (trackedWs.currentVoiceChannelId !== undefined) {
+          voiceRuntime = VoiceRuntime.findById(trackedWs.currentVoiceChannelId);
+        } else if (!hasOtherConnections) {
+          // Fallback for sessions that may not have tracked voice channel state.
+          voiceRuntime = VoiceRuntime.findRuntimeByUserId(userId);
+        }
+
+        if (voiceRuntime?.getUser(userId)) {
+          voiceRuntime.removeUser(userId);
 
           pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
             channelId: voiceRuntime.id,
-            userId: user.id
+            userId
           });
         }
 
-        usersIpMap.delete(user.id);
-        pubsub.publish(ServerEvents.USER_LEAVE, user.id);
+        trackedWs.currentVoiceChannelId = undefined;
+
+        if (hasOtherConnections) {
+          logger.debug(
+            'User %s disconnected from one session, but is still connected elsewhere',
+            userId
+          );
+          return;
+        }
+
+        const user = await getUserById(userId);
+
+        if (!user) return;
+
+        usersIpMap.delete(userId);
+        pubsub.publish(ServerEvents.USER_LEAVE, userId);
 
         logger.info('%s left the server', user.name);
 
         enqueueActivityLog({
           type: ActivityLogType.USER_LEFT,
-          userId: user.id
+          userId
         });
       });
 
