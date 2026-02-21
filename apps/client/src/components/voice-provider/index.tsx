@@ -85,6 +85,7 @@ const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
   [VideoCodecPreference.H264]: 'video/H264',
   [VideoCodecPreference.AV1]: 'video/AV1'
 };
+const AUDIO_OPUS_TARGET_BITRATE_BPS = 128_000;
 
 const resolvePreferredVideoCodec = (
   rtpCapabilities: RtpCapabilities | null,
@@ -317,7 +318,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       const browserNoiseSuppression = sidecarVoiceProcessingEnabled
         ? false
         : devices.noiseSuppression;
-      const micChannelCount = sidecarVoiceProcessingEnabled ? 1 : 2;
       // Keep browser AEC enabled until sidecar reference-based echo cancellation is implemented.
       const micConstraints = {
         deviceId: {
@@ -326,8 +326,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         autoGainControl: browserAutoGainControl,
         echoCancellation: devices.echoCancellation,
         noiseSuppression: browserNoiseSuppression,
-        sampleRate: 48000,
-        channelCount: micChannelCount
+        sampleRate: 48000
       };
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -413,6 +412,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
         localAudioProducer.current = await producerTransport.current?.produce({
           track: outboundAudioTrack,
+          encodings: [{ maxBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS }],
+          codecOptions: {
+            opusMaxAverageBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS
+          },
           appData: { kind: StreamKind.AUDIO }
         });
 

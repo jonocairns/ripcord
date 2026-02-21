@@ -75,6 +75,7 @@
       "icon": "icons/icon.png"
     },
     "nsis": {
+      "artifactName": "Ripcord.Desktop.Setup.${version}.${ext}",
       "installerIcon": "icons/icon.ico",
       "uninstallerIcon": "icons/icon.ico",
       "installerHeaderIcon": "icons/icon.ico"

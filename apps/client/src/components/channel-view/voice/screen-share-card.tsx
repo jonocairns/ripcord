@@ -541,6 +541,63 @@ const ScreenShareCard = memo(
                 transition: 'opacity 140ms ease'
               }}
             >
+              {!isOwnUser && hasScreenShareAudioStream && (
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    border: '1px solid rgba(255, 255, 255, 0.55)',
+                    background: 'rgba(15, 23, 42, 0.88)',
+                    borderRadius: '10px',
+                    padding: '4px 8px',
+                    boxShadow: '0 6px 18px rgba(0, 0, 0, 0.45)'
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={handlePopoutMuteToggle}
+                    title={isMuted ? 'Unmute stream audio' : 'Mute stream audio'}
+                    aria-label={isMuted ? 'Unmute stream audio' : 'Mute stream audio'}
+                    style={{
+                      border: '1px solid rgba(255, 255, 255, 0.55)',
+                      background: 'rgba(15, 23, 42, 0.88)',
+                      color: '#ffffff',
+                      borderRadius: '8px',
+                      width: '32px',
+                      height: '32px',
+                      padding: '0',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                  </button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={volume}
+                    onChange={handlePopoutVolumeChange}
+                    aria-label="Pop-out volume"
+                    style={{ width: '96px', cursor: 'pointer' }}
+                  />
+                  <span
+                    style={{
+                      width: '34px',
+                      textAlign: 'right',
+                      fontSize: '12px',
+                      opacity: 0.85
+                    }}
+                  >
+                    {volume}%
+                  </span>
+                </div>
+              )}
+
               <button
                 type="button"
                 onClick={handleTogglePopoutFullscreen}
@@ -586,7 +643,7 @@ const ScreenShareCard = memo(
                 style={{
                   width: '100%',
                   height: '100%',
-                  objectFit: 'contain',
+                  objectFit: 'cover',
                   backgroundColor: '#000000'
                 }}
               />
@@ -597,53 +654,6 @@ const ScreenShareCard = memo(
                   playsInline
                   style={{ display: 'none' }}
                 />
-              )}
-
-              {!isOwnUser && hasScreenShareAudioStream && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: '12px',
-                    bottom: '12px',
-                    zIndex: 20,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    border: '1px solid rgba(255, 255, 255, 0.2)',
-                    background: 'rgba(0, 0, 0, 0.55)',
-                    borderRadius: '8px',
-                    padding: '6px 8px'
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={handlePopoutMuteToggle}
-                    style={{
-                      border: '1px solid rgba(255, 255, 255, 0.2)',
-                      background: 'transparent',
-                      color: '#ffffff',
-                      borderRadius: '6px',
-                      padding: '4px 8px',
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px'
-                    }}
-                  >
-                    {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
-                    {isMuted ? 'Unmute' : 'Mute'}
-                  </button>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={volume}
-                    onChange={handlePopoutVolumeChange}
-                    style={{ width: '120px', cursor: 'pointer' }}
-                  />
-                  <span style={{ fontSize: '12px', opacity: 0.8 }}>{volume}%</span>
-                </div>
               )}
             </div>
           </div>

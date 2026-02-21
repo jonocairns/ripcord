@@ -44,6 +44,15 @@ const ensureMicCaptureWorkletModule = async (audioContext: AudioContext) => {
   await audioContext.audioWorklet.addModule(micCaptureWorkletModuleUrl);
 };
 
+const resolveInputChannelCount = (track: MediaStreamTrack): number => {
+  const channelCount = track.getSettings().channelCount;
+  if (typeof channelCount !== 'number' || !Number.isFinite(channelCount)) {
+    return 1;
+  }
+
+  return Math.max(1, Math.min(2, Math.floor(channelCount)));
+};
+
 const createNativeDesktopMicAudioProcessingPipeline = async ({
   inputTrack,
   channels,
@@ -320,12 +329,6 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
     await captureContext.resume();
   }
 
-  try {
-    outputPipeline.track.contentHint = 'speech';
-  } catch {
-    // ignore unsupported contentHint implementations
-  }
-
   const pipeline: TMicAudioProcessingPipeline = {
     stream: outputPipeline.stream,
     track: outputPipeline.track,
@@ -403,11 +406,12 @@ const createMicAudioProcessingPipeline = async ({
     return undefined;
   }
 
+  const channels = resolveInputChannelCount(inputTrack);
+
   try {
     return await createNativeDesktopMicAudioProcessingPipeline({
       inputTrack,
-      // Force mono for sidecar filter sessions to reduce runtime edge cases.
-      channels: 1,
+      channels,
       suppressionLevel,
       noiseSuppression,
       autoGainControl,
@@ -418,7 +422,7 @@ const createMicAudioProcessingPipeline = async ({
       try {
         const fallbackPipeline = await createNativeDesktopMicAudioProcessingPipeline({
           inputTrack,
-          channels: 1,
+          channels,
           suppressionLevel,
           noiseSuppression: false,
           autoGainControl,

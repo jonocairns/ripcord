@@ -74,7 +74,7 @@ const MAX_BINARY_VOICE_FILTER_INGRESS_QUEUE_PACKETS = 24;
 const MAX_BINARY_VOICE_FILTER_INGRESS_QUEUE_BYTES = 512 * 1024;
 const BINARY_VOICE_FILTER_INGRESS_DROP_LOG_INTERVAL = 25;
 const ENABLE_BINARY_VOICE_FILTER_INGRESS = true;
-const VOICE_FILTER_BINARY_FIRST_FRAME_TIMEOUT_MS = 750;
+const VOICE_FILTER_BINARY_FIRST_FRAME_TIMEOUT_MS = 2_000;
 const VOICE_FILTER_BINARY_RECOVERY_COOLDOWN_MS = 10_000;
 const VOICE_FILTER_JSON_FALLBACK_GRACE_MS = 1_500;
 const VOICE_FILTER_DIAGNOSTIC_LOG_RATE_LIMIT_MS = 2_000;
@@ -435,7 +435,6 @@ class CaptureSidecarManager {
     this.voiceFilterJsonFallbackErrorCount = 0;
     this.lastVoiceFilterSidecarBinaryError = undefined;
     this.lastVoiceFilterSidecarJsonError = undefined;
-    this.armVoiceFilterBinaryFirstFrameWatchdog(session.sessionId);
     console.warn("[voice-filter-debug] Started sidecar voice-filter session", {
       sessionId: session.sessionId,
       sampleRate: session.sampleRate,
@@ -497,6 +496,9 @@ class CaptureSidecarManager {
   pushVoiceFilterPcmFrame(frame: TVoiceFilterPcmFrame): void {
     if (!this.hasLoggedVoiceFilterInputFrame) {
       this.hasLoggedVoiceFilterInputFrame = true;
+      // Start first-frame watchdog when PCM input actually begins, not at session creation.
+      // This avoids premature JSON fallback during startup scheduling jitter.
+      this.armVoiceFilterBinaryFirstFrameWatchdog(frame.sessionId);
       console.warn("[voice-filter-debug] Received first PCM input frame from renderer", {
         sessionId: frame.sessionId,
         sequence: frame.sequence,

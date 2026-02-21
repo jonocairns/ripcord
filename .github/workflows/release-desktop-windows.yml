@@ -74,6 +74,38 @@ jobs:
         working-directory: apps/desktop
         run: bunx electron-builder --win nsis --x64 --publish never
 
+      - name: Validate updater metadata
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          metadata_file="$(ls build/out/latest*.yml 2>/dev/null | head -n1 || true)"
+          if [ -z "${metadata_file}" ]; then
+            echo "No latest*.yml updater metadata found in apps/desktop/build/out"
+            ls -la build/out || true
+            exit 1
+          fi
+
+          installer_path="$(sed -n 's/^path:[[:space:]]*//p' "${metadata_file}" | tr -d '\r' | head -n1)"
+          installer_path="${installer_path#\"}"
+          installer_path="${installer_path%\"}"
+
+          if [ -z "${installer_path}" ]; then
+            echo "Could not parse installer path from ${metadata_file}"
+            sed -n '1,120p' "${metadata_file}" || true
+            exit 1
+          fi
+
+          if [ ! -f "build/out/${installer_path}" ]; then
+            echo "Updater metadata points to missing installer: build/out/${installer_path}"
+            ls -la build/out || true
+            sed -n '1,120p' "${metadata_file}" || true
+            exit 1
+          fi
+
+          echo "Validated updater metadata installer path: ${installer_path}"
+
       - name: Upload desktop assets to GitHub release
         uses: softprops/action-gh-release@v2
         with:

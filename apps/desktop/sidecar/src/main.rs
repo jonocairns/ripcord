@@ -71,6 +71,7 @@ const VOICE_FILTER_BINARY_FRAMING: &str = "length_prefixed_f32le_v1";
 #[cfg(windows)]
 const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_VOICE_FILTER_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
+const DEEP_FILTER_WARMUP_BLOCKS: usize = 20;
 
 #[derive(Debug, Deserialize)]
 struct SidecarRequest {
@@ -294,6 +295,7 @@ unsafe impl Send for DeepFilterProcessor {}
 
 struct AutoGainControlState {
     current_gain: f32,
+    post_pause_hold_blocks_remaining: u32,
 }
 
 enum VoiceFilterProcessor {
@@ -306,9 +308,27 @@ struct VoiceFilterSession {
     sample_rate: usize,
     channels: usize,
     processor: VoiceFilterProcessor,
+    suppression_startup_ramp_ms_remaining: u32,
+    dry_sample_buf: Vec<f32>,
     auto_gain_control: bool,
     auto_gain_state: AutoGainControlState,
+    agc_startup_bypass_ms_remaining: u32,
     echo_cancellation: bool,
+}
+
+impl VoiceFilterSession {
+    fn get_or_resize_dry_buf(&mut self, len: usize) -> &mut [f32] {
+        if self.dry_sample_buf.len() != len {
+            self.dry_sample_buf.resize(len, 0.0);
+        }
+
+        &mut self.dry_sample_buf
+    }
+
+    fn capture_dry_samples(&mut self, samples: &[f32]) {
+        let dry_buf = self.get_or_resize_dry_buf(samples.len());
+        dry_buf.copy_from_slice(samples);
+    }
 }
 
 #[derive(Debug)]
@@ -738,9 +758,21 @@ fn create_deep_filter_processor(
         );
 
     let df_params = DfParams::default();
-    let model = DfTract::new(df_params, &runtime_params)
+    let mut model = DfTract::new(df_params, &runtime_params)
         .map_err(|error| format!("Failed to initialize DeepFilterNet runtime: {error}"))?;
     let hop_size = model.hop_size;
+
+    // Warm the model upfront so first live frames don't pay cold-start inference cost.
+    if DEEP_FILTER_WARMUP_BLOCKS > 0 {
+        let noisy = Array2::<f32>::zeros((channels, hop_size));
+        let mut enhanced = Array2::<f32>::zeros((channels, hop_size));
+        for _ in 0..DEEP_FILTER_WARMUP_BLOCKS {
+            model
+                .process(noisy.view(), enhanced.view_mut())
+                .map_err(|error| format!("Failed to warm DeepFilterNet runtime: {error}"))?;
+            enhanced.fill(0.0);
+        }
+    }
 
     Ok(DeepFilterProcessor {
         model,
@@ -781,8 +813,18 @@ fn create_voice_filter_session(
         sample_rate,
         channels,
         processor,
+        suppression_startup_ramp_ms_remaining: if noise_suppression {
+            SUPPRESSION_STARTUP_RAMP_MS
+        } else {
+            0
+        },
+        dry_sample_buf: Vec::new(),
         auto_gain_control,
-        auto_gain_state: AutoGainControlState { current_gain: 1.0 },
+        auto_gain_state: AutoGainControlState {
+            current_gain: 1.0,
+            post_pause_hold_blocks_remaining: 0,
+        },
+        agc_startup_bypass_ms_remaining: AGC_STARTUP_BYPASS_MS,
         echo_cancellation,
     })
 }
@@ -812,6 +854,19 @@ const AGC_MAX_GAIN: f32 = 3.0;
 const AGC_ATTACK_SMOOTHING: f32 = 0.3;
 const AGC_RELEASE_SMOOTHING: f32 = 0.08;
 const AGC_LIMITER: f32 = 0.98;
+const AGC_PAUSE_RMS_THRESHOLD: f32 = 0.006;
+const AGC_PAUSE_RECOVERY_SMOOTHING: f32 = 0.3;
+const AGC_POST_PAUSE_HOLD_BLOCKS: u32 = 20;
+const AGC_STARTUP_BYPASS_MS: u32 = 1_500;
+const SUPPRESSION_STARTUP_RAMP_MS: u32 = 750;
+
+fn suppression_startup_wet_mix(elapsed_ms: f32) -> f32 {
+    if elapsed_ms <= 0.0 {
+        return 0.0;
+    }
+
+    (elapsed_ms / SUPPRESSION_STARTUP_RAMP_MS as f32).clamp(0.0, 1.0)
+}
 
 fn apply_auto_gain_control(samples: &mut [f32], state: &mut AutoGainControlState) {
     if samples.is_empty() {
@@ -825,16 +880,29 @@ fn apply_auto_gain_control(samples: &mut [f32], state: &mut AutoGainControlState
     }
 
     let rms = (sum_squares / samples.len() as f64).sqrt() as f32;
-    let desired_gain = if rms <= AGC_MIN_RMS {
-        AGC_MAX_GAIN
+    let (desired_gain, smoothing) = if rms <= AGC_PAUSE_RMS_THRESHOLD {
+        state.post_pause_hold_blocks_remaining = AGC_POST_PAUSE_HOLD_BLOCKS;
+        // Avoid AGC ramp-up during pauses; it over-amplifies the next phrase onset.
+        (1.0, AGC_PAUSE_RECOVERY_SMOOTHING)
+    } else if state.post_pause_hold_blocks_remaining > 0 {
+        state.post_pause_hold_blocks_remaining =
+            state.post_pause_hold_blocks_remaining.saturating_sub(1);
+        // Hold AGC at unity briefly after silence so phrase onsets stay natural.
+        (1.0, AGC_PAUSE_RECOVERY_SMOOTHING)
     } else {
-        (AGC_TARGET_RMS / rms).clamp(AGC_MIN_GAIN, AGC_MAX_GAIN)
-    };
+        let desired_gain = if rms <= AGC_MIN_RMS {
+            AGC_MAX_GAIN
+        } else {
+            (AGC_TARGET_RMS / rms).clamp(AGC_MIN_GAIN, AGC_MAX_GAIN)
+        };
 
-    let smoothing = if desired_gain < state.current_gain {
-        AGC_ATTACK_SMOOTHING
-    } else {
-        AGC_RELEASE_SMOOTHING
+        let smoothing = if desired_gain < state.current_gain {
+            AGC_ATTACK_SMOOTHING
+        } else {
+            AGC_RELEASE_SMOOTHING
+        };
+
+        (desired_gain, smoothing)
     };
     state.current_gain = state.current_gain * (1.0 - smoothing) + desired_gain * smoothing;
 
@@ -860,6 +928,12 @@ fn process_voice_filter_frame(
 
     if samples.len() != frame_count * channels {
         return Err("Voice filter frame sample count mismatch".to_string());
+    }
+
+    let should_apply_startup_ramp = session.suppression_startup_ramp_ms_remaining > 0
+        && matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_));
+    if should_apply_startup_ramp {
+        session.capture_dry_samples(samples);
     }
 
     let processed_frame_count = match &mut session.processor {
@@ -919,8 +993,64 @@ fn process_voice_filter_frame(
         VoiceFilterProcessor::Passthrough => frame_count,
     };
 
+    if should_apply_startup_ramp {
+        let processed_ms = if session.sample_rate > 0 {
+            ((processed_frame_count.saturating_mul(1000)) / session.sample_rate) as u32
+        } else {
+            0
+        }
+        .max(1);
+
+        let ramp_ms_start = session.suppression_startup_ramp_ms_remaining;
+        session.suppression_startup_ramp_ms_remaining = session
+            .suppression_startup_ramp_ms_remaining
+            .saturating_sub(processed_ms);
+        let ramp_elapsed_start_ms =
+            SUPPRESSION_STARTUP_RAMP_MS.saturating_sub(ramp_ms_start) as f32;
+        let frame_duration_ms = if session.sample_rate > 0 {
+            1000.0 / session.sample_rate as f32
+        } else {
+            0.0
+        };
+
+        let dry_samples = &session.dry_sample_buf;
+        for frame_index in 0..frame_count {
+            let frame_elapsed_ms =
+                ramp_elapsed_start_ms + frame_index as f32 * frame_duration_ms;
+            let wet_mix = suppression_startup_wet_mix(frame_elapsed_ms);
+            let dry_mix = 1.0 - wet_mix;
+
+            for channel_index in 0..channels {
+                let index = frame_index * channels + channel_index;
+                samples[index] = dry_samples[index] * dry_mix + samples[index] * wet_mix;
+            }
+        }
+    }
+
     if session.auto_gain_control {
-        apply_auto_gain_control(samples, &mut session.auto_gain_state);
+        if session.agc_startup_bypass_ms_remaining > 0 {
+            let processed_ms = if session.sample_rate > 0 {
+                ((processed_frame_count.saturating_mul(1000)) / session.sample_rate) as u32
+            } else {
+                0
+            }
+            .max(1);
+
+            session.agc_startup_bypass_ms_remaining = session
+                .agc_startup_bypass_ms_remaining
+                .saturating_sub(processed_ms);
+
+            // During AGC startup bypass, keep gain pinned at unity to avoid
+            // startup attenuation while the filter settles.
+            session.auto_gain_state.current_gain = 1.0;
+
+            for sample in samples.iter_mut() {
+                *sample = (*sample * session.auto_gain_state.current_gain)
+                    .clamp(-AGC_LIMITER, AGC_LIMITER);
+            }
+        } else {
+            apply_auto_gain_control(samples, &mut session.auto_gain_state);
+        }
     }
 
     if session.echo_cancellation {

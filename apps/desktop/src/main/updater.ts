@@ -1,4 +1,6 @@
 import { app } from "electron";
+import fs from "node:fs";
+import path from "node:path";
 import {
   autoUpdater,
   type ProgressInfo,
@@ -7,6 +9,7 @@ import {
 import type { TDesktopUpdateStatus } from "./types";
 
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const APP_UPDATE_CONFIG_FILENAME = "app-update.yml";
 
 type TStatusListener = (status: TDesktopUpdateStatus) => void;
 
@@ -14,6 +17,15 @@ const createBaseStatus = (): TDesktopUpdateStatus => ({
   state: "idle",
   currentVersion: app.getVersion(),
 });
+
+const hasAppUpdateConfig = (): boolean => {
+  const appUpdateConfigPath = path.join(
+    process.resourcesPath,
+    APP_UPDATE_CONFIG_FILENAME,
+  );
+
+  return fs.existsSync(appUpdateConfigPath);
+};
 
 class DesktopUpdater {
   private status: TDesktopUpdateStatus = createBaseStatus();
@@ -111,6 +123,13 @@ class DesktopUpdater {
 
     if (process.platform !== "win32") {
       this.markDisabled("Auto-update is currently enabled for Windows only.");
+      return;
+    }
+
+    if (!hasAppUpdateConfig()) {
+      this.markDisabled(
+        "Auto-update metadata is missing (app-update.yml). Install the packaged desktop app to enable updates.",
+      );
       return;
     }
 
