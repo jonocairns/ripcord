@@ -164,6 +164,7 @@ export type TDesktopUpdateStatus = {
   state: TDesktopUpdateState;
   currentVersion: string;
   availableVersion?: string;
+  manualInstallRequired?: boolean;
   checkedAtIso?: string;
   percent?: number;
   bytesPerSecond?: number;

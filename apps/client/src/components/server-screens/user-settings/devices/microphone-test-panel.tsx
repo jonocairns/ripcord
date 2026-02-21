@@ -190,6 +190,15 @@ const MicrophoneTestPanel = memo(
     }, [microphoneId, resolvedMicProcessingConfig]);
 
     const stopRecordingClip = useCallback(async () => {
+      const clearRecordingStopTracking = (resolvePendingStop: boolean) => {
+        if (resolvePendingStop) {
+          recordingStopResolveRef.current?.();
+        }
+
+        recordingStopResolveRef.current = undefined;
+        recordingStopPromiseRef.current = undefined;
+      };
+
       if (recordingTimeoutRef.current !== undefined) {
         clearTimeout(recordingTimeoutRef.current);
         recordingTimeoutRef.current = undefined;
@@ -200,6 +209,7 @@ const MicrophoneTestPanel = memo(
       if (!recorder) {
         recordingChunksRef.current = [];
         setIsRecordingClip(false);
+        clearRecordingStopTracking(true);
         return;
       }
 
@@ -207,6 +217,7 @@ const MicrophoneTestPanel = memo(
         mediaRecorderRef.current = undefined;
         recordingChunksRef.current = [];
         setIsRecordingClip(false);
+        clearRecordingStopTracking(true);
         return;
       }
 
@@ -505,6 +516,27 @@ const MicrophoneTestPanel = memo(
           setRecordingError(
             event.error?.message || 'Failed to record microphone clip.'
           );
+
+          if (recordingTimeoutRef.current !== undefined) {
+            clearTimeout(recordingTimeoutRef.current);
+            recordingTimeoutRef.current = undefined;
+          }
+
+          if (recorder.state !== 'inactive') {
+            try {
+              recorder.stop();
+              return;
+            } catch {
+              // fall through to local cleanup
+            }
+          }
+
+          mediaRecorderRef.current = undefined;
+          recordingChunksRef.current = [];
+          setIsRecordingClip(false);
+          recordingStopResolveRef.current?.();
+          recordingStopResolveRef.current = undefined;
+          recordingStopPromiseRef.current = undefined;
         };
 
         recorder.onstop = () => {

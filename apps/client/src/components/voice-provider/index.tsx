@@ -180,8 +180,13 @@ const resolveMicProcessingConfig = (
 
 const collectPlaybackReferenceStreams = (
   remoteUserStreams: TRemoteStreams,
-  externalStreams: TExternalStreamsMap
+  externalStreams: TExternalStreamsMap,
+  playbackEnabled: boolean
 ): MediaStream[] => {
+  if (!playbackEnabled) {
+    return [];
+  }
+
   const streams: MediaStream[] = [];
   const seenTrackIds = new Set<string>();
   const addTrack = (track: MediaStreamTrack | undefined) => {
@@ -413,9 +418,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     }
 
     referencePipeline.updateStreams(
-      collectPlaybackReferenceStreams(remoteUserStreams, externalStreams)
+      collectPlaybackReferenceStreams(
+        remoteUserStreams,
+        externalStreams,
+        !ownVoiceState.soundMuted
+      )
     );
-  }, [externalStreams, remoteUserStreams]);
+  }, [externalStreams, remoteUserStreams, ownVoiceState.soundMuted]);
 
   const cleanupMicReferenceAudioPipeline = useCallback(async () => {
     const referencePipeline = micReferenceAudioPipelineRef.current;
@@ -539,7 +548,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                 referencePipeline.updateStreams(
                   collectPlaybackReferenceStreams(
                     remoteUserStreamsRef.current,
-                    externalStreamsRef.current
+                    externalStreamsRef.current,
+                    !ownVoiceState.soundMuted
                   )
                 );
                 logVoice('Voice filter playback reference pipeline enabled', {
@@ -657,7 +667,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     devices.noiseSuppression,
     devices.experimentalVoiceFilter,
     devices.voiceFilterStrength,
-    ownVoiceState.micMuted
+    ownVoiceState.micMuted,
+    ownVoiceState.soundMuted
   ]);
 
   const startWebcamStream = useCallback(async () => {

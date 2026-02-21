@@ -11,6 +11,8 @@ import type { TDesktopUpdateStatus } from "./types";
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const APP_UPDATE_CONFIG_FILENAME = "app-update.yml";
 const MAX_UPDATE_ERROR_MESSAGE_LENGTH = 280;
+const MANUAL_INSTALL_REQUIRED_ERROR_PATTERN =
+  /ERR_UPDATER_INVALID_SIGNATURE|not signed by the application owner|sign verification failed/i;
 
 type TStatusListener = (status: TDesktopUpdateStatus) => void;
 
@@ -31,10 +33,8 @@ const hasAppUpdateConfig = (): boolean => {
 const resolveUserFacingUpdateErrorMessage = (error: Error): string => {
   const rawMessage = error.message?.trim() || "Unknown updater error.";
   const normalized = rawMessage.replace(/\s+/g, " ").trim();
-  const signatureFailurePattern =
-    /ERR_UPDATER_INVALID_SIGNATURE|not signed by the application owner|sign verification failed/i;
 
-  if (signatureFailurePattern.test(normalized)) {
+  if (MANUAL_INSTALL_REQUIRED_ERROR_PATTERN.test(normalized)) {
     return (
       "Update package signature could not be verified on this machine. " +
       "Please download and install the latest Ripcord version manually."
@@ -48,6 +48,12 @@ const resolveUserFacingUpdateErrorMessage = (error: Error): string => {
   }
 
   return `${compact.slice(0, MAX_UPDATE_ERROR_MESSAGE_LENGTH - 1)}…`;
+};
+
+const isManualInstallRequiredError = (error: Error): boolean => {
+  const rawMessage = error.message?.trim() || "";
+  const normalized = rawMessage.replace(/\s+/g, " ").trim();
+  return MANUAL_INSTALL_REQUIRED_ERROR_PATTERN.test(normalized);
 };
 
 class DesktopUpdater {
@@ -74,6 +80,7 @@ class DesktopUpdater {
     this.setStatus({
       state: "available",
       availableVersion: info.version,
+      manualInstallRequired: undefined,
       checkedAtIso: new Date().toISOString(),
       message: undefined,
     });
@@ -83,6 +90,7 @@ class DesktopUpdater {
     this.setStatus({
       state: "not-available",
       availableVersion: info.version,
+      manualInstallRequired: undefined,
       checkedAtIso: new Date().toISOString(),
       percent: undefined,
       bytesPerSecond: undefined,
@@ -95,6 +103,7 @@ class DesktopUpdater {
   private handleDownloadProgress(progress: ProgressInfo) {
     this.setStatus({
       state: "downloading",
+      manualInstallRequired: undefined,
       percent: progress.percent,
       bytesPerSecond: progress.bytesPerSecond,
       transferredBytes: progress.transferred,
@@ -107,6 +116,7 @@ class DesktopUpdater {
     this.setStatus({
       state: "downloaded",
       availableVersion: info.version,
+      manualInstallRequired: undefined,
       checkedAtIso: new Date().toISOString(),
       percent: 100,
       message: "Update downloaded. Restart the app to install it.",
@@ -115,9 +125,11 @@ class DesktopUpdater {
 
   private handleUpdateError(error: Error) {
     console.error("[desktop] Auto-update error", error);
+    const manualInstallRequired = isManualInstallRequiredError(error);
 
     this.setStatus({
       state: "error",
+      manualInstallRequired,
       checkedAtIso: new Date().toISOString(),
       message: resolveUserFacingUpdateErrorMessage(error),
     });
@@ -127,6 +139,7 @@ class DesktopUpdater {
     this.enabled = false;
     this.setStatus({
       state: "disabled",
+      manualInstallRequired: undefined,
       message: reason,
     });
   }
@@ -165,6 +178,7 @@ class DesktopUpdater {
     autoUpdater.on("checking-for-update", () => {
       this.setStatus({
         state: "checking",
+        manualInstallRequired: undefined,
         message: undefined,
       });
     });

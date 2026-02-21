@@ -56,10 +56,12 @@ const resolveCalloutContent = (
   }
 
   if (status.state === 'error' && status.message) {
-    if (status.availableVersion) {
+    if (status.manualInstallRequired) {
       return {
         title: 'Install update manually',
-        description: `Version ${status.availableVersion} is available. Automatic install wasn't available on this machine.`,
+        description: status.availableVersion
+          ? `Version ${status.availableVersion} is available. Automatic install wasn't available on this machine.`
+          : "Automatic install wasn't available on this machine.",
         icon: <Download className="h-4 w-4 text-amber-500" />,
         toneClassName: 'bg-card'
       };
@@ -188,7 +190,7 @@ const DesktopUpdateCallout = memo(() => {
           </Button>
         )}
 
-        {status.state === 'error' && status.availableVersion && (
+        {status.state === 'error' && status.manualInstallRequired && (
           <Button
             size="sm"
             variant="outline"
