@@ -1,4 +1,3 @@
-import { DesktopUpdateNotifier } from '@/components/desktop-update-notifier';
 import { Toaster } from '@/components/ui/sonner';
 import 'prosemirror-view/style/prosemirror.css';
 import { StrictMode } from 'react';
@@ -31,7 +30,6 @@ const bootstrap = async () => {
       >
         <DebugInfo />
         <Toaster />
-        <DesktopUpdateNotifier />
         <Provider store={store}>
           <StoreDebug />
           <DevicesProvider>

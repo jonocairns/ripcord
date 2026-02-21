@@ -18,7 +18,7 @@ import type {
   TVoiceFilterPcmFrame,
   TVoiceFilterSession,
   TVoiceFilterStatusEvent,
-} from "./types.js";
+} from "./types";
 
 type TSidecarResponse = {
   id: string;
@@ -212,7 +212,7 @@ class CaptureSidecarManager {
   private lastVoiceFilterSidecarJsonError: string | undefined;
   private appAudioBinaryEgressSocket: Socket | undefined;
   private appAudioBinaryEgressConnectPromise: Promise<void> | undefined;
-  private appAudioBinaryEgressReadBuffer = Buffer.alloc(0);
+  private appAudioBinaryEgressReadBuffer: Buffer = Buffer.alloc(0);
   private appAudioBinarySessionIds = new Set<string>();
   private nextAppAudioBinaryEgressRetryAt = 0;
   private appAudioBinaryEgressUnsupported = false;
@@ -491,6 +491,16 @@ class CaptureSidecarManager {
         error instanceof Error ? error.message : String(error);
       console.warn("[desktop] Failed to push voice filter frame", error);
     });
+  }
+
+  pushVoiceFilterReferenceFrame(frame: TVoiceFilterFrame): void {
+    void this.sendNotification("voice_filter.push_reference_frame", frame).catch((error) => {
+      console.warn("[desktop] Failed to push voice filter reference frame", error);
+    });
+  }
+
+  pushVoiceFilterReferencePcmFrame(frame: TVoiceFilterPcmFrame): void {
+    this.pushVoiceFilterReferenceFrame(this.toBase64VoiceFilterFrame(frame));
   }
 
   pushVoiceFilterPcmFrame(frame: TVoiceFilterPcmFrame): void {

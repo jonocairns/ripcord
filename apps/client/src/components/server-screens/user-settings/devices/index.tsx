@@ -35,6 +35,7 @@ import {
 import { Info } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { MicrophoneTestPanel } from './microphone-test-panel';
 import { useAvailableDevices } from './hooks/use-available-devices';
 import ResolutionFpsControl from './resolution-fps-control';
 
@@ -222,6 +223,17 @@ const Devices = memo(() => {
               </SelectContent>
             </Select>
           </div>
+
+          <MicrophoneTestPanel
+            microphoneId={values.microphoneId}
+            micQualityMode={values.micQualityMode}
+            experimentalVoiceFilter={!!values.experimentalVoiceFilter}
+            voiceFilterStrength={values.voiceFilterStrength}
+            echoCancellation={!!values.echoCancellation}
+            noiseSuppression={!!values.noiseSuppression}
+            autoGainControl={!!values.autoGainControl}
+            hasDesktopBridge={hasDesktopBridge}
+          />
 
           {isMicAutoMode ? (
             <p className="text-xs text-muted-foreground">

@@ -324,6 +324,13 @@ const registerIpcHandlers = () => {
     },
   );
 
+  ipcMain.on(
+    "desktop:push-voice-filter-reference-frame",
+    (_event: IpcMainEvent, frame: TVoiceFilterFrame) => {
+      captureSidecarManager.pushVoiceFilterReferenceFrame(frame);
+    },
+  );
+
   ipcMain.on("desktop:open-app-audio-frame-channel", (event: IpcMainEvent) => {
     const { port1, port2 } = new MessageChannelMain();
     disposeAppAudioFrameEgressPort();
@@ -348,6 +355,7 @@ const registerIpcHandlers = () => {
     port2.on("message", (portEvent) => {
       const data = portEvent.data as
         | {
+            frameKind?: unknown;
             sessionId?: unknown;
             sequence?: unknown;
             sampleRate?: unknown;
@@ -366,6 +374,7 @@ const registerIpcHandlers = () => {
       }
 
       const {
+        frameKind,
         sessionId,
         sequence,
         sampleRate,
@@ -537,8 +546,12 @@ const registerIpcHandlers = () => {
         protocolVersion: typeof protocolVersion === "number" ? protocolVersion : 1,
         pcm,
       };
-
-      captureSidecarManager.pushVoiceFilterPcmFrame(frame);
+      const resolvedFrameKind = frameKind === "reference" ? "reference" : "mic";
+      if (resolvedFrameKind === "reference") {
+        captureSidecarManager.pushVoiceFilterReferencePcmFrame(frame);
+      } else {
+        captureSidecarManager.pushVoiceFilterPcmFrame(frame);
+      }
     });
 
     port2.on("close", () => {

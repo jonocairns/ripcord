@@ -11,6 +11,10 @@ import micCaptureWorkletModuleUrl from './mic-capture.worklet.js?url&no-inline';
 type TMicAudioProcessingBackend = 'sidecar-native';
 
 type TMicAudioProcessingPipeline = {
+  sessionId: string;
+  sampleRate: number;
+  channels: number;
+  framesPerBuffer: number;
   stream: MediaStream;
   track: MediaStreamTrack;
   backend: TMicAudioProcessingBackend;
@@ -330,6 +334,10 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   }
 
   const pipeline: TMicAudioProcessingPipeline = {
+    sessionId: session.sessionId,
+    sampleRate: session.sampleRate,
+    channels: session.channels,
+    framesPerBuffer: targetFrameSize,
     stream: outputPipeline.stream,
     track: outputPipeline.track,
     backend: 'sidecar-native',

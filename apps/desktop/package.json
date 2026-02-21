@@ -65,6 +65,7 @@
         "nsis"
       ],
       "executableName": "Ripcord",
+      "publisherName": "Sharkord Dev Code Signing",
       "icon": "icons/icon.ico"
     },
     "linux": {

@@ -224,6 +224,7 @@ export type TDesktopBridge = {
     input: TDesktopPushKeybindsInput
   ) => Promise<TGlobalPushKeybindRegistrationResult>;
   pushVoiceFilterPcmFrame: (frame: TVoiceFilterPcmFrame) => void;
+  pushVoiceFilterReferencePcmFrame: (frame: TVoiceFilterPcmFrame) => void;
   pushVoiceFilterFrame: (frame: TVoiceFilterFrame) => void;
   subscribeAppAudioFrames: (
     cb: (frame: TAppAudioFrame | TAppAudioPcmFrame) => void

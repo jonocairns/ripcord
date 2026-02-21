@@ -10,6 +10,7 @@ import type { TDesktopUpdateStatus } from "./types";
 
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const APP_UPDATE_CONFIG_FILENAME = "app-update.yml";
+const MAX_UPDATE_ERROR_MESSAGE_LENGTH = 280;
 
 type TStatusListener = (status: TDesktopUpdateStatus) => void;
 
@@ -25,6 +26,28 @@ const hasAppUpdateConfig = (): boolean => {
   );
 
   return fs.existsSync(appUpdateConfigPath);
+};
+
+const resolveUserFacingUpdateErrorMessage = (error: Error): string => {
+  const rawMessage = error.message?.trim() || "Unknown updater error.";
+  const normalized = rawMessage.replace(/\s+/g, " ").trim();
+  const signatureFailurePattern =
+    /ERR_UPDATER_INVALID_SIGNATURE|not signed by the application owner|sign verification failed/i;
+
+  if (signatureFailurePattern.test(normalized)) {
+    return (
+      "Update package signature could not be verified on this machine. " +
+      "Please download and install the latest Ripcord version manually."
+    );
+  }
+
+  const withoutRawInfo = normalized.replace(/\s*raw info:\s*.+$/i, "");
+  const compact = withoutRawInfo || normalized;
+  if (compact.length <= MAX_UPDATE_ERROR_MESSAGE_LENGTH) {
+    return compact;
+  }
+
+  return `${compact.slice(0, MAX_UPDATE_ERROR_MESSAGE_LENGTH - 1)}…`;
 };
 
 class DesktopUpdater {
@@ -91,10 +114,12 @@ class DesktopUpdater {
   }
 
   private handleUpdateError(error: Error) {
+    console.error("[desktop] Auto-update error", error);
+
     this.setStatus({
       state: "error",
       checkedAtIso: new Date().toISOString(),
-      message: error.message,
+      message: resolveUserFacingUpdateErrorMessage(error),
     });
   }
 

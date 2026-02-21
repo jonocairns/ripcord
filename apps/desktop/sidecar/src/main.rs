@@ -72,6 +72,11 @@ const VOICE_FILTER_BINARY_FRAMING: &str = "length_prefixed_f32le_v1";
 const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_VOICE_FILTER_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const DEEP_FILTER_WARMUP_BLOCKS: usize = 20;
+const ECHO_REFERENCE_MAX_BUFFER_MS: usize = 1_200;
+const ECHO_REFERENCE_DELAY_MS: usize = 80;
+const ECHO_REFERENCE_MIN_ENERGY: f32 = 1e-6;
+const ECHO_SUBTRACTION_MAX: f32 = 0.85;
+const ECHO_DUCKING_MIN_GAIN: f32 = 0.55;
 
 #[derive(Debug, Deserialize)]
 struct SidecarRequest {
@@ -173,6 +178,19 @@ struct StopVoiceFilterParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VoiceFilterPushFrameParams {
+    session_id: String,
+    sequence: u64,
+    sample_rate: usize,
+    channels: usize,
+    frame_count: usize,
+    pcm_base64: String,
+    protocol_version: Option<u32>,
+    encoding: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VoiceFilterPushReferenceFrameParams {
     session_id: String,
     sequence: u64,
     sample_rate: usize,
@@ -314,6 +332,7 @@ struct VoiceFilterSession {
     auto_gain_state: AutoGainControlState,
     agc_startup_bypass_ms_remaining: u32,
     echo_cancellation: bool,
+    echo_reference_interleaved: VecDeque<f32>,
 }
 
 impl VoiceFilterSession {
@@ -328,6 +347,94 @@ impl VoiceFilterSession {
     fn capture_dry_samples(&mut self, samples: &[f32]) {
         let dry_buf = self.get_or_resize_dry_buf(samples.len());
         dry_buf.copy_from_slice(samples);
+    }
+
+    fn push_echo_reference_samples(
+        &mut self,
+        input_samples: &[f32],
+        input_channels: usize,
+    ) -> Result<(), String> {
+        if input_channels == 0 || input_channels > 2 {
+            return Err("Unsupported reference frame channel count".to_string());
+        }
+
+        if self.channels == 0 || self.channels > 2 {
+            return Err("Unsupported voice filter session channel count".to_string());
+        }
+
+        if input_samples.is_empty() {
+            return Ok(());
+        }
+
+        let input_frame_count = input_samples.len() / input_channels;
+        if input_frame_count == 0 || input_samples.len() != input_frame_count * input_channels {
+            return Err("Reference frame sample count mismatch".to_string());
+        }
+
+        let max_reference_frames =
+            ((self.sample_rate * ECHO_REFERENCE_MAX_BUFFER_MS) / 1_000).max(FRAME_SIZE);
+        let max_reference_samples = max_reference_frames * self.channels;
+        let incoming_samples = input_frame_count * self.channels;
+        if incoming_samples > max_reference_samples {
+            return Ok(());
+        }
+
+        for frame_index in 0..input_frame_count {
+            match (input_channels, self.channels) {
+                (1, 1) | (2, 2) => {
+                    for channel_index in 0..self.channels {
+                        let sample = input_samples[frame_index * input_channels + channel_index];
+                        self.echo_reference_interleaved.push_back(sample);
+                    }
+                }
+                (1, 2) => {
+                    let sample = input_samples[frame_index];
+                    self.echo_reference_interleaved.push_back(sample);
+                    self.echo_reference_interleaved.push_back(sample);
+                }
+                (2, 1) => {
+                    let left = input_samples[frame_index * 2];
+                    let right = input_samples[frame_index * 2 + 1];
+                    self.echo_reference_interleaved
+                        .push_back((left + right) * 0.5);
+                }
+                _ => {
+                    return Err("Unsupported reference channel conversion".to_string());
+                }
+            }
+        }
+
+        while self.echo_reference_interleaved.len() > max_reference_samples {
+            let _ = self.echo_reference_interleaved.pop_front();
+        }
+
+        Ok(())
+    }
+
+    fn get_echo_reference_window(&self, sample_len: usize) -> Option<Vec<f32>> {
+        if sample_len == 0 {
+            return None;
+        }
+
+        let required_delay_samples =
+            ((self.sample_rate * ECHO_REFERENCE_DELAY_MS) / 1_000) * self.channels;
+        let total_required_samples = required_delay_samples + sample_len;
+        if self.echo_reference_interleaved.len() < total_required_samples {
+            return None;
+        }
+
+        let start = self.echo_reference_interleaved.len() - total_required_samples;
+        let end = start + sample_len;
+        let mut out = Vec::with_capacity(sample_len);
+        out.extend(
+            self.echo_reference_interleaved
+                .iter()
+                .skip(start)
+                .take(end - start)
+                .copied(),
+        );
+
+        Some(out)
     }
 }
 
@@ -826,6 +933,7 @@ fn create_voice_filter_session(
         },
         agc_startup_bypass_ms_remaining: AGC_STARTUP_BYPASS_MS,
         echo_cancellation,
+        echo_reference_interleaved: VecDeque::new(),
     })
 }
 
@@ -908,6 +1016,59 @@ fn apply_auto_gain_control(samples: &mut [f32], state: &mut AutoGainControlState
 
     for sample in samples.iter_mut() {
         *sample = (*sample * state.current_gain).clamp(-AGC_LIMITER, AGC_LIMITER);
+    }
+}
+
+fn apply_reference_echo_cancellation(session: &VoiceFilterSession, samples: &mut [f32]) {
+    if samples.is_empty() {
+        return;
+    }
+
+    let Some(reference_samples) = session.get_echo_reference_window(samples.len()) else {
+        return;
+    };
+
+    let mut near_energy = 0.0_f64;
+    let mut reference_energy = 0.0_f64;
+    let mut near_reference_dot = 0.0_f64;
+
+    for index in 0..samples.len() {
+        let near = f64::from(samples[index]);
+        let reference = f64::from(reference_samples[index]);
+        near_energy += near * near;
+        reference_energy += reference * reference;
+        near_reference_dot += near * reference;
+    }
+
+    if reference_energy <= f64::from(ECHO_REFERENCE_MIN_ENERGY) {
+        return;
+    }
+
+    let near_rms = (near_energy / samples.len() as f64).sqrt() as f32;
+    let reference_rms = (reference_energy / samples.len() as f64).sqrt() as f32;
+
+    let mut subtraction_gain =
+        (near_reference_dot / reference_energy).clamp(0.0, f64::from(ECHO_SUBTRACTION_MAX)) as f32;
+    let near_dominance = near_rms / (reference_rms + 1e-6);
+    if near_dominance > 1.35 {
+        subtraction_gain *= 0.5;
+    } else if near_dominance > 1.1 {
+        subtraction_gain *= 0.75;
+    }
+
+    let ducking_gain = if reference_rms > near_rms * 0.8 {
+        ECHO_DUCKING_MIN_GAIN
+    } else if reference_rms > near_rms * 0.55 {
+        0.72
+    } else if reference_rms > near_rms * 0.35 {
+        0.86
+    } else {
+        1.0
+    };
+
+    for index in 0..samples.len() {
+        let canceled = samples[index] - reference_samples[index] * subtraction_gain;
+        samples[index] = canceled * ducking_gain;
     }
 }
 
@@ -1054,7 +1215,7 @@ fn process_voice_filter_frame(
     }
 
     if session.echo_cancellation {
-        // Placeholder for future reference-based AEC.
+        apply_reference_echo_cancellation(session, samples);
     }
 
     Ok(processed_frame_count)
@@ -2137,9 +2298,7 @@ fn handle_voice_filter_start(
     let echo_cancellation = parsed.echo_cancellation.unwrap_or(false);
 
     if echo_cancellation {
-        eprintln!(
-            "[capture-sidecar] Echo cancellation requested for voice filter session, but reference-based AEC is not implemented yet"
-        );
+        eprintln!("[capture-sidecar] Voice filter echo cancellation enabled");
     }
 
     stop_voice_filter_session(state, &frame_queue, None, "capture_stopped", None);
@@ -2227,6 +2386,45 @@ fn process_voice_filter_samples(
     Ok(())
 }
 
+fn process_voice_filter_reference_samples(
+    state: &mut SidecarState,
+    session_id: &str,
+    sample_rate: usize,
+    channels: usize,
+    frame_count: usize,
+    protocol_version: Option<u32>,
+    samples: Vec<f32>,
+) -> Result<(), String> {
+    let Some(session) = state.voice_filter_session.as_mut() else {
+        return Err("No active voice filter session".to_string());
+    };
+
+    if session.session_id != session_id {
+        return Err("Voice filter session mismatch".to_string());
+    }
+
+    if let Some(protocol_version) = protocol_version {
+        if protocol_version != PROTOCOL_VERSION {
+            return Err("Unsupported voice filter protocol version".to_string());
+        }
+    }
+
+    if sample_rate != session.sample_rate {
+        return Err("Voice filter sample rate mismatch".to_string());
+    }
+
+    if channels == 0 || channels > 2 {
+        return Err("Unsupported voice filter reference channel count".to_string());
+    }
+
+    if samples.len() != frame_count * channels {
+        return Err("Voice filter reference frame sample count mismatch".to_string());
+    }
+
+    session.push_echo_reference_samples(&samples, channels)?;
+    Ok(())
+}
+
 fn handle_voice_filter_push_frame(
     frame_queue: Arc<FrameQueue>,
     state: &mut SidecarState,
@@ -2248,6 +2446,38 @@ fn handle_voice_filter_push_frame(
         state,
         &parsed.session_id,
         parsed.sequence,
+        parsed.sample_rate,
+        parsed.channels,
+        parsed.frame_count,
+        parsed.protocol_version,
+        samples,
+    )?;
+
+    Ok(json!({
+        "accepted": true,
+        "protocolVersion": PROTOCOL_VERSION,
+    }))
+}
+
+fn handle_voice_filter_push_reference_frame(
+    state: &mut SidecarState,
+    params: Value,
+) -> Result<Value, String> {
+    let parsed: VoiceFilterPushReferenceFrameParams =
+        serde_json::from_value(params).map_err(|error| format!("invalid params: {error}"))?;
+
+    if let Some(encoding) = parsed.encoding {
+        if encoding != PCM_ENCODING {
+            return Err("Unsupported voice filter reference frame encoding".to_string());
+        }
+    }
+
+    let samples = decode_f32le_base64(&parsed.pcm_base64)?;
+    let _sequence = parsed.sequence;
+
+    process_voice_filter_reference_samples(
+        state,
+        &parsed.session_id,
         parsed.sample_rate,
         parsed.channels,
         parsed.frame_count,
@@ -2720,6 +2950,12 @@ fn main() {
                     &mut state_lock,
                     request.params,
                 ),
+                Err(_) => Err("Sidecar state lock poisoned".to_string()),
+            },
+            "voice_filter.push_reference_frame" => match state.lock() {
+                Ok(mut state_lock) => {
+                    handle_voice_filter_push_reference_frame(&mut state_lock, request.params)
+                }
                 Err(_) => Err("Sidecar state lock poisoned".to_string()),
             },
             "voice_filter.stop" => match state.lock() {
