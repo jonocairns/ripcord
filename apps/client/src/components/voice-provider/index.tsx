@@ -349,9 +349,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
             enabled: sidecarVoiceProcessingEnabled,
             suppressionLevel: devices.voiceFilterStrength,
             noiseSuppression: devices.noiseSuppression,
-            // Sidecar AGC currently causes phrase-onset artifacts for some mics.
-            // Keep it disabled until we have a more stable gain strategy.
-            autoGainControl: false,
+            autoGainControl: devices.autoGainControl,
             echoCancellation: devices.echoCancellation
           });
 
@@ -408,11 +406,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         }
 
         setLocalAudioStream(outboundStream);
-        try {
-          outboundAudioTrack.contentHint = 'speech';
-        } catch {
-          // ignore unsupported contentHint implementations
-        }
         outboundAudioTrack.enabled = !ownVoiceState.micMuted;
 
         logVoice('Obtained audio track', { audioTrack: outboundAudioTrack });

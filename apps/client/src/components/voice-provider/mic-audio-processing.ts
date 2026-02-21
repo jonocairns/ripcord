@@ -329,12 +329,6 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
     await captureContext.resume();
   }
 
-  try {
-    outputPipeline.track.contentHint = 'speech';
-  } catch {
-    // ignore unsupported contentHint implementations
-  }
-
   const pipeline: TMicAudioProcessingPipeline = {
     stream: outputPipeline.stream,
     track: outputPipeline.track,
