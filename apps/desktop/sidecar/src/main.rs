@@ -309,10 +309,26 @@ struct VoiceFilterSession {
     channels: usize,
     processor: VoiceFilterProcessor,
     suppression_startup_ramp_ms_remaining: u32,
+    dry_sample_buf: Vec<f32>,
     auto_gain_control: bool,
     auto_gain_state: AutoGainControlState,
     agc_startup_bypass_ms_remaining: u32,
     echo_cancellation: bool,
+}
+
+impl VoiceFilterSession {
+    fn get_or_resize_dry_buf(&mut self, len: usize) -> &mut [f32] {
+        if self.dry_sample_buf.len() != len {
+            self.dry_sample_buf.resize(len, 0.0);
+        }
+
+        &mut self.dry_sample_buf
+    }
+
+    fn capture_dry_samples(&mut self, samples: &[f32]) {
+        let dry_buf = self.get_or_resize_dry_buf(samples.len());
+        dry_buf.copy_from_slice(samples);
+    }
 }
 
 #[derive(Debug)]
@@ -802,6 +818,7 @@ fn create_voice_filter_session(
         } else {
             0
         },
+        dry_sample_buf: Vec::new(),
         auto_gain_control,
         auto_gain_state: AutoGainControlState {
             current_gain: 1.0,
@@ -915,11 +932,9 @@ fn process_voice_filter_frame(
 
     let should_apply_startup_ramp = session.suppression_startup_ramp_ms_remaining > 0
         && matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_));
-    let dry_samples = if should_apply_startup_ramp {
-        Some(samples.to_vec())
-    } else {
-        None
-    };
+    if should_apply_startup_ramp {
+        session.capture_dry_samples(samples);
+    }
 
     let processed_frame_count = match &mut session.processor {
         VoiceFilterProcessor::DeepFilter(processor) => {
@@ -979,36 +994,35 @@ fn process_voice_filter_frame(
     };
 
     if should_apply_startup_ramp {
-        if let Some(dry_samples) = dry_samples {
-            let processed_ms = if session.sample_rate > 0 {
-                ((processed_frame_count.saturating_mul(1000)) / session.sample_rate) as u32
-            } else {
-                0
-            }
-            .max(1);
+        let processed_ms = if session.sample_rate > 0 {
+            ((processed_frame_count.saturating_mul(1000)) / session.sample_rate) as u32
+        } else {
+            0
+        }
+        .max(1);
 
-            let ramp_ms_start = session.suppression_startup_ramp_ms_remaining;
-            session.suppression_startup_ramp_ms_remaining = session
-                .suppression_startup_ramp_ms_remaining
-                .saturating_sub(processed_ms);
-            let ramp_elapsed_start_ms =
-                SUPPRESSION_STARTUP_RAMP_MS.saturating_sub(ramp_ms_start) as f32;
-            let frame_duration_ms = if session.sample_rate > 0 {
-                1000.0 / session.sample_rate as f32
-            } else {
-                0.0
-            };
+        let ramp_ms_start = session.suppression_startup_ramp_ms_remaining;
+        session.suppression_startup_ramp_ms_remaining = session
+            .suppression_startup_ramp_ms_remaining
+            .saturating_sub(processed_ms);
+        let ramp_elapsed_start_ms =
+            SUPPRESSION_STARTUP_RAMP_MS.saturating_sub(ramp_ms_start) as f32;
+        let frame_duration_ms = if session.sample_rate > 0 {
+            1000.0 / session.sample_rate as f32
+        } else {
+            0.0
+        };
 
-            for frame_index in 0..frame_count {
-                let frame_elapsed_ms =
-                    ramp_elapsed_start_ms + frame_index as f32 * frame_duration_ms;
-                let wet_mix = suppression_startup_wet_mix(frame_elapsed_ms);
-                let dry_mix = 1.0 - wet_mix;
+        let dry_samples = &session.dry_sample_buf;
+        for frame_index in 0..frame_count {
+            let frame_elapsed_ms =
+                ramp_elapsed_start_ms + frame_index as f32 * frame_duration_ms;
+            let wet_mix = suppression_startup_wet_mix(frame_elapsed_ms);
+            let dry_mix = 1.0 - wet_mix;
 
-                for channel_index in 0..channels {
-                    let index = frame_index * channels + channel_index;
-                    samples[index] = dry_samples[index] * dry_mix + samples[index] * wet_mix;
-                }
+            for channel_index in 0..channels {
+                let index = frame_index * channels + channel_index;
+                samples[index] = dry_samples[index] * dry_mix + samples[index] * wet_mix;
             }
         }
     }
