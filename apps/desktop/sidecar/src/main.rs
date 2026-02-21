@@ -1026,9 +1026,9 @@ fn process_voice_filter_frame(
                 .agc_startup_bypass_ms_remaining
                 .saturating_sub(processed_ms);
 
-            session.auto_gain_state.current_gain = session.auto_gain_state.current_gain
-                * (1.0 - AGC_PAUSE_RECOVERY_SMOOTHING)
-                + AGC_PAUSE_RECOVERY_SMOOTHING;
+            // During AGC startup bypass, keep gain pinned at unity to avoid
+            // startup attenuation while the filter settles.
+            session.auto_gain_state.current_gain = 1.0;
 
             for sample in samples.iter_mut() {
                 *sample = (*sample * session.auto_gain_state.current_gain)
