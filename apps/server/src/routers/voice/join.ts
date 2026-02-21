@@ -71,6 +71,7 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
     const state = runtime.getUserState(ctx.user.id);
 
     ctx.currentVoiceChannelId = channel.id;
+    ctx.setWsVoiceChannelId(channel.id);
     ctx.pubsub.publish(ServerEvents.USER_JOIN_VOICE, {
       channelId: input.channelId,
       userId: ctx.user.id,

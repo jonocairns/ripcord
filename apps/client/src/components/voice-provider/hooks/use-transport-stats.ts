@@ -88,7 +88,7 @@ const useTransportStats = () => {
           stat.type === 'candidate-pair' &&
           stat.state === 'succeeded'
         ) {
-          rtt = (stat.currentRoundTripTime || 0) * 1000;
+          rtt = Math.max(rtt, (stat.currentRoundTripTime || 0) * 1000);
         }
       }
 

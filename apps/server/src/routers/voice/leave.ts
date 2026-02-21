@@ -52,6 +52,7 @@ const leaveVoiceRoute = protectedProcedure.mutation(async ({ ctx }) => {
     userId: ctx.user.id
   });
   ctx.currentVoiceChannelId = undefined;
+  ctx.setWsVoiceChannelId(undefined);
 
   logger.info('%s left voice channel %s', ctx.user.name, channel.name);
 });

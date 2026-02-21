@@ -31,7 +31,11 @@ import { pubsub } from './pubsub';
 import type { Context } from './trpc';
 
 let wss: WebSocketServer | undefined;
-type TTrackedWebSocket = WebSocket & { userId?: number; token: string };
+type TTrackedWebSocket = WebSocket & {
+  userId?: number;
+  token: string;
+  currentVoiceChannelId?: number;
+};
 
 const getTrackedClients = () => {
   if (!wss) return [] as TTrackedWebSocket[];
@@ -58,9 +62,11 @@ const getUserIp = (userId: number): string | undefined => {
 
 const createContext = async ({
   info,
-  req
+  req,
+  res
 }: CreateWSSContextFnOptions): Promise<Context> => {
   const { token } = info.connectionParams as TConnectionParams;
+  const connectionWs = res as TTrackedWebSocket | undefined;
 
   const decodedUser = await getUserByToken(token);
 
@@ -141,6 +147,7 @@ const createContext = async ({
 
   const getOwnWs = () => {
     if (!wss) return undefined;
+    if (connectionWs) return connectionWs;
     return getTrackedClients().find((client) => client.token === token);
   };
 
@@ -158,12 +165,34 @@ const createContext = async ({
   };
 
   const setWsUserId = (userId: number) => {
+    if (connectionWs) {
+      connectionWs.userId = userId;
+      return;
+    }
+
     if (!wss) return;
 
-    for (const ws of getTrackedClients()) {
-      if (ws.token === token) {
-        ws.userId = userId;
-      }
+    const ws = getTrackedClients().find((client) => client.token === token);
+
+    if (ws) {
+      ws.userId = userId;
+    }
+  };
+
+  const setWsVoiceChannelId = (channelId: number | undefined) => {
+    if (connectionWs) {
+      connectionWs.currentVoiceChannelId = channelId;
+      return;
+    }
+
+    if (!wss) return;
+
+    const ws = getTrackedClients().find(
+      (client) => client.token === token && client.userId === decodedUser.id
+    );
+
+    if (ws) {
+      ws.currentVoiceChannelId = channelId;
     }
   };
 
@@ -174,7 +203,9 @@ const createContext = async ({
       });
     }
 
-    const ws = getTrackedClients().find((client) => client.token === token);
+    const ws =
+      connectionWs ??
+      getTrackedClients().find((client) => client.token === token);
 
     if (!ws) return undefined;
 
@@ -235,6 +266,7 @@ const createContext = async ({
     getOwnWs,
     getStatusById,
     setWsUserId,
+    setWsVoiceChannelId,
     getUserWs,
     getConnectionInfo,
     throwValidationError,
@@ -250,6 +282,7 @@ const createWsServer = async (server: http.Server) => {
       const trackedWs = ws as TTrackedWebSocket;
       trackedWs.userId = undefined;
       trackedWs.token = '';
+      trackedWs.currentVoiceChannelId = undefined;
 
       trackedWs.once('message', async (message) => {
         try {
@@ -263,37 +296,51 @@ const createWsServer = async (server: http.Server) => {
       });
 
       trackedWs.on('close', async () => {
-        const user = await getUserByToken(trackedWs.token);
+        if (!trackedWs.userId) return;
 
-        if (!user) return;
+        const userId = trackedWs.userId;
+        const hasOtherConnections = hasOtherOpenUserConnection(userId, trackedWs);
 
-        if (hasOtherOpenUserConnection(user.id, trackedWs)) {
+        let voiceRuntime: VoiceRuntime | undefined;
+
+        if (trackedWs.currentVoiceChannelId !== undefined) {
+          voiceRuntime = VoiceRuntime.findById(trackedWs.currentVoiceChannelId);
+        } else if (!hasOtherConnections) {
+          // Fallback for sessions that may not have tracked voice channel state.
+          voiceRuntime = VoiceRuntime.findRuntimeByUserId(userId);
+        }
+
+        if (voiceRuntime?.getUser(userId)) {
+          voiceRuntime.removeUser(userId);
+
+          pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+            channelId: voiceRuntime.id,
+            userId
+          });
+        }
+
+        trackedWs.currentVoiceChannelId = undefined;
+
+        if (hasOtherConnections) {
           logger.debug(
-            '%s disconnected from one session, but is still connected elsewhere',
-            user.name
+            'User %s disconnected from one session, but is still connected elsewhere',
+            userId
           );
           return;
         }
 
-        const voiceRuntime = VoiceRuntime.findRuntimeByUserId(user.id);
+        const user = await getUserById(userId);
 
-        if (voiceRuntime) {
-          voiceRuntime.removeUser(user.id);
+        if (!user) return;
 
-          pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
-            channelId: voiceRuntime.id,
-            userId: user.id
-          });
-        }
-
-        usersIpMap.delete(user.id);
-        pubsub.publish(ServerEvents.USER_LEAVE, user.id);
+        usersIpMap.delete(userId);
+        pubsub.publish(ServerEvents.USER_LEAVE, userId);
 
         logger.info('%s left the server', user.name);
 
         enqueueActivityLog({
           type: ActivityLogType.USER_LEFT,
-          userId: user.id
+          userId
         });
       });
 
