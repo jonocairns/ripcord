@@ -1069,7 +1069,7 @@ fn decode_f32le_base64(pcm_base64: &str) -> Result<Vec<f32>, String> {
 const AGC_TARGET_RMS: f32 = 0.12;
 const AGC_MIN_RMS: f32 = 0.0005;
 const AGC_MIN_GAIN: f32 = 0.5;
-const AGC_MAX_GAIN: f32 = 3.0;
+const AGC_MAX_GAIN: f32 = 6.0; // raised from 3.0 — far-field mics at -35 dBFS need ~6.7× to reach target
 const AGC_ATTACK_SMOOTHING: f32 = 0.3;
 const AGC_RELEASE_SMOOTHING: f32 = 0.08;
 const AGC_LIMITER: f32 = 0.98;
