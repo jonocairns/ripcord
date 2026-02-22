@@ -40,7 +40,9 @@ declare global {
   }
 }
 
-window.ncDiagnostics = null;
+if (typeof window !== 'undefined') {
+  window.ncDiagnostics = null;
+}
 
 const createNcDiagnosticsAggregator = (sessionId: string) => {
   const lsnrValues: number[] = [];
@@ -92,7 +94,9 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
       timestampMs: Date.now()
     };
 
-    window.ncDiagnostics = snapshot;
+    if (typeof window !== 'undefined') {
+      window.ncDiagnostics = snapshot;
+    }
 
     const lsnr = snapshot.lsnrMean !== null ? snapshot.lsnrMean.toFixed(1) : 'n/a';
     const lsnrRange =
