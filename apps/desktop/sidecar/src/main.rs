@@ -88,6 +88,17 @@ const ECHO_REFERENCE_DELAY_MS: usize = 80;
 const ECHO_REFERENCE_MIN_ENERGY: f32 = 1e-6;
 const ECHO_SUBTRACTION_MAX: f32 = 0.85;
 const ECHO_DUCKING_MIN_GAIN: f32 = 0.55;
+// High-pass filter: 2nd-order Butterworth at 80 Hz / 48 kHz (Direct Form II transposed).
+// Removes DC offset and low-frequency rumble (HVAC, desk vibration, electrical hum) before
+// DeepFilterNet sees the signal.  Sub-80 Hz energy registers as broadband noise and causes
+// the model to over-suppress uncertain bands — a common far-field mic problem.
+// Coefficients computed via bilinear transform: fc=80 Hz, Q=1/√2, fs=48 kHz.
+const HP_B0: f32 = 0.992_617;
+const HP_B1: f32 = -1.985_234;
+const HP_B2: f32 = 0.992_617;
+const HP_A1: f32 = -1.985_207;
+const HP_A2: f32 = 0.985_307;
+
 // Limiter: threshold just below full scale, ~1ms attack, ~100ms release at 48kHz
 #[cfg(windows)]
 const MIC_CAPTURE_FRAME_SIZE: usize = 480; // 10ms at 48kHz — matches DeepFilterNet hop size
@@ -375,6 +386,7 @@ struct VoiceFilterSession {
     processor: VoiceFilterProcessor,
     suppression_startup_ramp_ms_remaining: u32,
     dry_sample_buf: Vec<f32>,
+    high_pass_filters: Vec<HighPassFilter>,
     auto_gain_control: bool,
     auto_gain_state: AutoGainControlState,
     agc_startup_bypass_ms_remaining: u32,
@@ -871,6 +883,24 @@ fn enqueue_push_keybind_state_event(queue: &Arc<FrameQueue>, kind: PushKeybindKi
     }
 }
 
+struct HighPassFilter {
+    s1: f32,
+    s2: f32,
+}
+
+impl HighPassFilter {
+    fn new() -> Self {
+        Self { s1: 0.0, s2: 0.0 }
+    }
+
+    fn process(&mut self, x: f32) -> f32 {
+        let y = HP_B0 * x + self.s1;
+        self.s1 = HP_B1 * x - HP_A1 * y + self.s2;
+        self.s2 = HP_B2 * x - HP_A2 * y;
+        y
+    }
+}
+
 struct VoiceFilterDiagnostics {
     // Per-buffer LSNR stats from DeepFilterNet (None when running in passthrough mode).
     // Low values indicate the model sees mostly noise — the primary signal for over-suppression.
@@ -1010,6 +1040,7 @@ fn create_voice_filter_session(
             0
         },
         dry_sample_buf: Vec::new(),
+        high_pass_filters: (0..channels).map(|_| HighPassFilter::new()).collect(),
         agc_startup_bypass_ms_remaining: AGC_STARTUP_BYPASS_MS,
         echo_cancellation,
         echo_reference_interleaved: VecDeque::new(),
@@ -1186,6 +1217,19 @@ fn process_voice_filter_frame(
         && matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_));
     if should_apply_startup_ramp {
         session.capture_dry_samples(samples);
+    }
+
+    // High-pass filter: strip DC and sub-80 Hz rumble before the model sees the signal.
+    // Only applied when DeepFilterNet is active — passthrough mode should not modify audio.
+    if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
+        for frame_index in 0..frame_count {
+            for channel_index in 0..channels {
+                let idx = frame_index * channels + channel_index;
+                if let Some(filter) = session.high_pass_filters.get_mut(channel_index) {
+                    samples[idx] = filter.process(samples[idx]);
+                }
+            }
+        }
     }
 
     // AGC runs before DeepFilterNet so the model receives a level-normalised signal
