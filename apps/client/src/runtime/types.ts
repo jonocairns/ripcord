@@ -128,8 +128,6 @@ export type TVoiceFilterFrameDiag = {
   lsnrMean?: number;
   lsnrMin?: number;
   lsnrMax?: number;
-  /** Noise gate gain at the end of the buffer (0 = fully gated, 1 = fully open). */
-  gateGain: number;
   /** AGC gain applied. undefined when AGC is disabled. High values (> 3×) indicate
    *  the mic is very quiet — common with far-field setups. */
   agcGain?: number;

@@ -27,7 +27,6 @@ type TNcDiagSnapshot = {
   lsnrMean: number | null;
   lsnrMin: number | null;
   lsnrMax: number | null;
-  gateGainMean: number;
   agcGainMean: number | null;
   /** How many frames had the startup ramp still active (rampWetMix < 1). */
   rampActiveFrames: number;
@@ -45,7 +44,6 @@ window.ncDiagnostics = null;
 
 const createNcDiagnosticsAggregator = (sessionId: string) => {
   const lsnrValues: number[] = [];
-  const gateGainValues: number[] = [];
   const agcGainValues: number[] = [];
   let rampActiveFrames = 0;
   let totalDropped = 0;
@@ -63,9 +61,6 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
       lsnrValues.push(d.lsnrMean);
       if (lsnrValues.length > NC_DIAG_WINDOW_SIZE) lsnrValues.shift();
     }
-
-    gateGainValues.push(d.gateGain);
-    if (gateGainValues.length > NC_DIAG_WINDOW_SIZE) gateGainValues.shift();
 
     if (d.agcGain !== undefined) {
       agcGainValues.push(d.agcGain);
@@ -91,7 +86,6 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
       lsnrMean: avg(lsnrValues),
       lsnrMin: lsnrValues.length > 0 ? Math.min(...lsnrValues) : null,
       lsnrMax: lsnrValues.length > 0 ? Math.max(...lsnrValues) : null,
-      gateGainMean: avg(gateGainValues) ?? 1,
       agcGainMean: avg(agcGainValues),
       rampActiveFrames,
       droppedFrames: totalDropped,
@@ -105,12 +99,11 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
       snapshot.lsnrMin !== null && snapshot.lsnrMax !== null
         ? `[${snapshot.lsnrMin.toFixed(1)}, ${snapshot.lsnrMax.toFixed(1)}]`
         : 'n/a';
-    const gate = snapshot.gateGainMean.toFixed(2);
     const agc =
       snapshot.agcGainMean !== null ? `${snapshot.agcGainMean.toFixed(2)}×` : 'off';
 
     console.warn(
-      `[nc-diag] lsnr=${lsnr} dB range=${lsnrRange} gate=${gate} agc=${agc}` +
+      `[nc-diag] lsnr=${lsnr} dB range=${lsnrRange} agc=${agc}` +
         ` rampFrames=${snapshot.rampActiveFrames} dropped=${snapshot.droppedFrames}` +
         ` frames=${snapshot.frameCount}`
     );

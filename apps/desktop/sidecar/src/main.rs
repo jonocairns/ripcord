@@ -95,15 +95,6 @@ const LIMITER_THRESHOLD: f32 = 0.95;
 const LIMITER_ATTACK_COEFF: f32 = 0.979_2; // exp(-1/48)
 const LIMITER_RELEASE_COEFF: f32 = 0.999_8; // exp(-1/4800)
 
-// Noise gate — applied per DeepFilterNet hop using the lsnr value returned by process().
-// lsnr > threshold → speech detected → gate opens; lsnr <= threshold → gate closes.
-// DeepFilterNet returns -15.0 for near-silence and positive values for clear speech.
-const GATE_LSNR_THRESHOLD: f32 = -3.0; // dB; tune upward to gate more aggressively
-// lsnr is smoothed before threshold comparison to prevent chattering during sustained
-// sounds (e.g. singing) where lsnr fluctuates briefly around the threshold.
-const GATE_LSNR_SMOOTH_COEFF: f32 = 0.904_8; // exp(-1/10): ~100 ms smoothing (10 hops)
-const GATE_ATTACK_COEFF: f32 = 0.606_5; // exp(-1/2): ~20 ms to open (2 × 10 ms hops)
-const GATE_RELEASE_COEFF: f32 = 0.980_2; // exp(-1/50): ~500 ms time constant to close
 
 #[derive(Debug, Deserialize)]
 struct SidecarRequest {
@@ -390,8 +381,6 @@ struct VoiceFilterSession {
     echo_cancellation: bool,
     echo_reference_interleaved: VecDeque<f32>,
     limiter_gain: f32,
-    gate_gain: f32,
-    gate_lsnr_smooth: f32,
 }
 
 impl VoiceFilterSession {
@@ -817,7 +806,6 @@ fn enqueue_voice_filter_frame_event(
         "protocolVersion": PROTOCOL_VERSION,
         "encoding": PCM_ENCODING,
         "diag": {
-            "gateGain": diagnostics.gate_gain,
             "rampWetMix": diagnostics.ramp_wet_mix,
         },
     });
@@ -889,8 +877,6 @@ struct VoiceFilterDiagnostics {
     lsnr_mean: Option<f32>,
     lsnr_min: Option<f32>,
     lsnr_max: Option<f32>,
-    // Gate gain at the end of the buffer (0.0 = fully gated, 1.0 = fully open).
-    gate_gain: f32,
     // AGC gain applied to this buffer (None when AGC is disabled).
     agc_gain: Option<f32>,
     // Dry/wet mix at the end of the startup ramp (0.0 = fully dry, 1.0 = fully wet/processed).
@@ -1028,8 +1014,6 @@ fn create_voice_filter_session(
         echo_cancellation,
         echo_reference_interleaved: VecDeque::new(),
         limiter_gain: 1.0,
-        gate_gain: 1.0,
-        gate_lsnr_smooth: 0.0,
     })
 }
 
@@ -1177,7 +1161,6 @@ fn process_voice_filter_frame(
             lsnr_mean: None,
             lsnr_min: None,
             lsnr_max: None,
-            gate_gain: session.gate_gain,
             agc_gain: None,
             ramp_wet_mix: 1.0,
         });
@@ -1190,7 +1173,6 @@ fn process_voice_filter_frame(
             lsnr_mean: None,
             lsnr_min: None,
             lsnr_max: None,
-            gate_gain: session.gate_gain,
             agc_gain: None,
             ramp_wet_mix: 1.0,
         });
@@ -1227,11 +1209,6 @@ fn process_voice_filter_frame(
             apply_auto_gain_control(samples, &mut session.auto_gain_state);
         }
     }
-
-    // Pull gate state out before the match to avoid a partial-borrow conflict
-    // with session.processor.  Written back after the match.
-    let mut gate_gain = session.gate_gain;
-    let mut gate_lsnr_smooth = session.gate_lsnr_smooth;
 
     // Diagnostics accumulators — populated only by the DeepFilter path.
     let mut lsnr_sum = 0.0_f32;
@@ -1277,28 +1254,10 @@ fn process_voice_filter_frame(
                 if lsnr < lsnr_min { lsnr_min = lsnr; }
                 if lsnr > lsnr_max { lsnr_max = lsnr; }
 
-                // Smooth lsnr before thresholding so brief fluctuations during
-                // sustained sounds (e.g. singing a held note) don't cause chattering.
-                gate_lsnr_smooth = gate_lsnr_smooth * GATE_LSNR_SMOOTH_COEFF
-                    + lsnr * (1.0 - GATE_LSNR_SMOOTH_COEFF);
-
-                // Noise gate: move gate gain toward open (1.0) when speech is detected,
-                // or toward closed (0.0) otherwise.  Attack is fast (~20 ms) so the
-                // start of speech isn't clipped; release is slow (~500 ms) so word
-                // endings and sustained tones trail off naturally.
-                let target_gain = if gate_lsnr_smooth > GATE_LSNR_THRESHOLD { 1.0_f32 } else { 0.0_f32 };
-                if target_gain > gate_gain {
-                    gate_gain = gate_gain * GATE_ATTACK_COEFF
-                        + target_gain * (1.0 - GATE_ATTACK_COEFF);
-                } else {
-                    gate_gain = gate_gain * GATE_RELEASE_COEFF
-                        + target_gain * (1.0 - GATE_RELEASE_COEFF);
-                }
-
                 for channel_index in 0..channels {
                     for sample_index in 0..hop_size {
                         processor.output_buffers[channel_index]
-                            .push_back(enhanced[(channel_index, sample_index)] * gate_gain);
+                            .push_back(enhanced[(channel_index, sample_index)]);
                     }
                 }
             }
@@ -1316,9 +1275,6 @@ fn process_voice_filter_frame(
         }
         VoiceFilterProcessor::Passthrough => {}
     }
-
-    session.gate_gain = gate_gain;
-    session.gate_lsnr_smooth = gate_lsnr_smooth;
 
     if should_apply_startup_ramp {
         let processed_ms = if session.sample_rate > 0 {
@@ -1371,7 +1327,6 @@ fn process_voice_filter_frame(
         lsnr_mean,
         lsnr_min: lsnr_min_out,
         lsnr_max: lsnr_max_out,
-        gate_gain,
         agc_gain: if session.auto_gain_control {
             Some(session.auto_gain_state.current_gain)
         } else {
