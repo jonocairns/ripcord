@@ -99,8 +99,11 @@ const LIMITER_RELEASE_COEFF: f32 = 0.999_8; // exp(-1/4800)
 // lsnr > threshold → speech detected → gate opens; lsnr <= threshold → gate closes.
 // DeepFilterNet returns -15.0 for near-silence and positive values for clear speech.
 const GATE_LSNR_THRESHOLD: f32 = -3.0; // dB; tune upward to gate more aggressively
+// lsnr is smoothed before threshold comparison to prevent chattering during sustained
+// sounds (e.g. singing) where lsnr fluctuates briefly around the threshold.
+const GATE_LSNR_SMOOTH_COEFF: f32 = 0.904_8; // exp(-1/10): ~100 ms smoothing (10 hops)
 const GATE_ATTACK_COEFF: f32 = 0.606_5; // exp(-1/2): ~20 ms to open (2 × 10 ms hops)
-const GATE_RELEASE_COEFF: f32 = 0.951_2; // exp(-1/20): ~200 ms time constant to close
+const GATE_RELEASE_COEFF: f32 = 0.980_2; // exp(-1/50): ~500 ms time constant to close
 
 #[derive(Debug, Deserialize)]
 struct SidecarRequest {
@@ -386,6 +389,7 @@ struct VoiceFilterSession {
     echo_reference_interleaved: VecDeque<f32>,
     limiter_gain: f32,
     gate_gain: f32,
+    gate_lsnr_smooth: f32,
 }
 
 impl VoiceFilterSession {
@@ -971,6 +975,7 @@ fn create_voice_filter_session(
         echo_reference_interleaved: VecDeque::new(),
         limiter_gain: 1.0,
         gate_gain: 0.0,
+        gate_lsnr_smooth: -15.0,
     })
 }
 
@@ -1141,9 +1146,10 @@ fn process_voice_filter_frame(
         }
     }
 
-    // Pull gate_gain out before the match to avoid a partial-borrow conflict
+    // Pull gate state out before the match to avoid a partial-borrow conflict
     // with session.processor.  Written back after the match.
     let mut gate_gain = session.gate_gain;
+    let mut gate_lsnr_smooth = session.gate_lsnr_smooth;
 
     match &mut session.processor {
         VoiceFilterProcessor::DeepFilter(processor) => {
@@ -1178,11 +1184,16 @@ fn process_voice_filter_frame(
                     .process(noisy.view(), enhanced.view_mut())
                     .map_err(|error| format!("DeepFilterNet processing failed: {error}"))?;
 
-                // Noise gate: smooth the gate gain toward open (1.0) when the model
-                // reports speech (lsnr > threshold), or toward closed (0.0) otherwise.
-                // Attack is fast (~20 ms) so speech isn't clipped; release is slower
-                // (~200 ms) so word endings aren't cut off.
-                let target_gain = if lsnr > GATE_LSNR_THRESHOLD { 1.0_f32 } else { 0.0_f32 };
+                // Smooth lsnr before thresholding so brief fluctuations during
+                // sustained sounds (e.g. singing a held note) don't cause chattering.
+                gate_lsnr_smooth = gate_lsnr_smooth * GATE_LSNR_SMOOTH_COEFF
+                    + lsnr * (1.0 - GATE_LSNR_SMOOTH_COEFF);
+
+                // Noise gate: move gate gain toward open (1.0) when speech is detected,
+                // or toward closed (0.0) otherwise.  Attack is fast (~20 ms) so the
+                // start of speech isn't clipped; release is slow (~500 ms) so word
+                // endings and sustained tones trail off naturally.
+                let target_gain = if gate_lsnr_smooth > GATE_LSNR_THRESHOLD { 1.0_f32 } else { 0.0_f32 };
                 if target_gain > gate_gain {
                     gate_gain = gate_gain * GATE_ATTACK_COEFF
                         + target_gain * (1.0 - GATE_ATTACK_COEFF);
@@ -1214,6 +1225,7 @@ fn process_voice_filter_frame(
     }
 
     session.gate_gain = gate_gain;
+    session.gate_lsnr_smooth = gate_lsnr_smooth;
 
     if session.echo_cancellation {
         apply_reference_echo_cancellation(session, samples);
