@@ -76,15 +76,18 @@ const resolveMicTestProcessingConfig = ({
     };
   }
 
-  // Standard (AUTO) and legacy MANUAL — browser-only, no sidecar
+  // Standard (AUTO) and legacy MANUAL — browser-only, no sidecar.
+  // Echo cancellation is forced off for the test: the monitor plays your mic
+  // back through speakers, which the browser AEC would treat as echo and cancel,
+  // making the playback sound broken.
   return {
     sidecarVoiceProcessingEnabled: false,
     browserAutoGainControl: autoGainControl,
     browserNoiseSuppression: noiseSuppression,
-    browserEchoCancellation: echoCancellation,
+    browserEchoCancellation: false,
     sidecarNoiseSuppression: noiseSuppression,
     sidecarAutoGainControl: autoGainControl,
-    sidecarEchoCancellation: echoCancellation,
+    sidecarEchoCancellation: false,
     sidecarSuppressionLevel: voiceFilterStrength
   };
 };
@@ -511,7 +514,7 @@ const MicrophoneTestPanel = memo(
           return true;
         });
         const recorder = mimeType
-          ? new MediaRecorderClass(recordingStream, { mimeType })
+          ? new MediaRecorderClass(recordingStream, { mimeType, audioBitsPerSecond: 128_000 })
           : new MediaRecorderClass(recordingStream);
 
         mediaRecorderRef.current = recorder;
