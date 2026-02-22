@@ -73,7 +73,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows_core::implement;
 
 const TARGET_SAMPLE_RATE: u32 = 48_000;
-const TARGET_CHANNELS: usize = 2;
+const TARGET_CHANNELS: usize = 1;
 const FRAME_SIZE: usize = 960;
 const PROTOCOL_VERSION: u32 = 1;
 const PCM_ENCODING: &str = "f32le_base64";
@@ -370,11 +370,6 @@ struct DeepFilterProcessor {
 // threads (command loop and binary-ingress worker).
 unsafe impl Send for DeepFilterProcessor {}
 
-struct AutoGainControlState {
-    envelope: f32,
-    current_gain: f32,
-}
-
 enum VoiceFilterProcessor {
     DeepFilter(DeepFilterProcessor),
     Passthrough,
@@ -388,11 +383,17 @@ struct VoiceFilterSession {
     suppression_startup_ramp_ms_remaining: u32,
     high_pass_filters: Vec<HighPassFilter>,
     auto_gain_control: bool,
-    auto_gain_state: AutoGainControlState,
+    trim_level_rms: f32,
+    trim_gain: f32,
     agc_startup_bypass_ms_remaining: u32,
     echo_cancellation: bool,
     echo_reference_interleaved: VecDeque<f32>,
     limiter_gain: f32,
+    expander_envelope: f32,
+    expander_gain: f32,
+    expander_hangover_samples_remaining: u32,
+    dfn_output_rms_prev: f32,
+    noise_rng_state: u32,
 }
 
 impl VoiceFilterSession {
@@ -1138,35 +1139,41 @@ fn create_voice_filter_session(
         return Err("Unsupported voice filter channel count".to_string());
     }
 
+    // Always operate in mono — DeepFilterNet quality is optimal on mono input,
+    // and stereo doubles the model workload for no perceptual gain on voice.
+    let mono_channels = 1;
+
     let processor = if noise_suppression {
         VoiceFilterProcessor::DeepFilter(create_deep_filter_processor(
-            channels,
+            mono_channels,
             suppression_level,
         )?)
     } else {
         VoiceFilterProcessor::Passthrough
     };
-
     Ok(VoiceFilterSession {
         session_id,
         sample_rate,
-        channels,
+        channels: mono_channels,
         processor,
         auto_gain_control,
-        auto_gain_state: AutoGainControlState {
-            envelope: 0.0,
-            current_gain: 1.0,
-        },
+        trim_level_rms: 0.0,
+        trim_gain: 1.0,
         suppression_startup_ramp_ms_remaining: if noise_suppression {
             SUPPRESSION_STARTUP_RAMP_MS
         } else {
             0
         },
-        high_pass_filters: (0..channels).map(|_| HighPassFilter::new()).collect(),
+        high_pass_filters: (0..mono_channels).map(|_| HighPassFilter::new()).collect(),
         agc_startup_bypass_ms_remaining: AGC_STARTUP_BYPASS_MS,
         echo_cancellation,
         echo_reference_interleaved: VecDeque::new(),
         limiter_gain: 1.0,
+        expander_envelope: 0.0,
+        expander_gain: 1.0,
+        expander_hangover_samples_remaining: 0,
+        dfn_output_rms_prev: 0.0,
+        noise_rng_state: 0x9e37_79b9, // arbitrary non-zero seed for xorshift32
     })
 }
 
@@ -1188,23 +1195,41 @@ fn decode_f32le_base64(pcm_base64: &str) -> Result<Vec<f32>, String> {
     Ok(samples)
 }
 
-const AGC_TARGET_RMS: f32 = 0.12;
-const AGC_MIN_RMS: f32 = 0.0005;
-const AGC_MIN_GAIN: f32 = 0.5;
-const AGC_MAX_GAIN: f32 = 6.0;
-const AGC_LIMITER: f32 = 0.98;
-// Per-sample envelope follower time constants.
-// Fast attack tracks rising signal immediately; slow release means brief
-// inter-word pauses don't trigger a gain boost.
-const AGC_ENVELOPE_ATTACK_S: f32 = 0.005;  // 5 ms
-const AGC_ENVELOPE_RELEASE_S: f32 = 0.500; // 500 ms
-// Gain smoother time constants.
-// Fast attack (gain reduction) prevents clipping on loud onsets.
-// Slow release (gain increase) avoids pumping between words and sentences.
-const AGC_GAIN_ATTACK_S: f32 = 0.010; // 10 ms
-const AGC_GAIN_RELEASE_S: f32 = 1.500; // 1.5 s
+// Slow post-DFN trim: a long-time-constant RMS normaliser that makes coarse gain
+// adjustments without any within-frame dynamics.  Updates once per 10ms frame.
+// "Trim, not AGC" — the slew limit of ±0.1 dB/frame (= ±1 dB/100ms) means even
+// large level changes take several hundred milliseconds to track, eliminating the
+// watery pumping artifacts caused by fast pre-model gain riding.
+const TRIM_TARGET_RMS: f32 = 0.12;           // desired long-term RMS level
+const TRIM_LEVEL_TC_S: f32 = 0.400;          // 400ms IIR for level measurement
+const TRIM_MIN_GAIN: f32 = 0.5;              // floor: -6 dB
+const TRIM_MAX_GAIN: f32 = 4.0;              // ceil: +12 dB
+const TRIM_SLEW_DB_PER_FRAME: f32 = 0.1;    // max change per 10ms frame = ±1 dB/100ms
 const AGC_STARTUP_BYPASS_MS: u32 = 1_500;
+// Suppression slew limit: cap how fast DFN can drop its output RMS per frame.
+// Prevents abrupt suppression onsets from creating "clipped tail" artifacts.
+const DFN_SLEW_MAX_DROP_DB_PER_FRAME: f32 = 6.0;  // max drop per 10ms = 60 dB/s
+const DFN_SLEW_MIN_ACTIVE_DBFS: f32 = -60.0;      // don't apply below this (true silence)
+// Comfort noise: inject shaped noise to prevent dead-flat digital silence.
+const COMFORT_NOISE_THRESHOLD_DBFS: f32 = -65.0;  // apply when output RMS < this
+const COMFORT_NOISE_LEVEL_DBFS: f32 = -72.0;      // injected noise amplitude
 const SUPPRESSION_STARTUP_RAMP_MS: u32 = 1_000;
+
+// Downward expander — gentle noise-floor suppression placed after echo cancellation.
+// A 1.5:1 expansion ratio attenuates residual noise without killing tails or plosives.
+// The 150 ms hangover keeps gain at unity through brief inter-word silences so words
+// don't clip at their onset.
+const EXPANDER_THRESHOLD_DBFS: f32 = -35.0;    // dBFS gate point (baseline)
+const EXPANDER_RATIO: f32 = 1.5;               // expansion ratio below threshold
+const EXPANDER_ATTACK_MS: f32 = 2.0;           // envelope follower attack (ms)
+const EXPANDER_RELEASE_MS: f32 = 250.0;        // envelope follower / gain release (ms)
+const EXPANDER_HANGOVER_MS: f32 = 150.0;       // hold time after signal drops (ms)
+// LSNR-driven threshold nudge: when DFN reports a low log-SNR the expander threshold
+// is raised (more aggressive) so residual noise is suppressed harder.  When LSNR is
+// clearly positive the threshold returns to baseline so clean speech is not touched.
+const EXPANDER_LSNR_NUDGE_LOW_DB: f32 = -10.0;  // LSNR at/below this → full nudge
+const EXPANDER_LSNR_NUDGE_HIGH_DB: f32 = 5.0;   // LSNR at/above this → no nudge
+const EXPANDER_LSNR_THRESHOLD_RAISE_DB: f32 = 8.0; // max upward shift applied to threshold
 
 
 fn suppression_startup_wet_mix(elapsed_ms: f32) -> f32 {
@@ -1214,42 +1239,79 @@ fn suppression_startup_wet_mix(elapsed_ms: f32) -> f32 {
     (elapsed_ms / SUPPRESSION_STARTUP_RAMP_MS as f32).clamp(0.0, 1.0)
 }
 
-fn apply_auto_gain_control(
+// apply_slow_trim: per-frame RMS normaliser with a slew-rate-limited gain.
+// Always updates the level estimate (trim_level_rms) so it warms up during the
+// startup bypass.  Only applies the gain change when `active` is true.
+fn apply_slow_trim(
     samples: &mut [f32],
-    state: &mut AutoGainControlState,
+    trim_level_rms: &mut f32,
+    trim_gain: &mut f32,
     sample_rate: usize,
+    active: bool,
 ) {
     if samples.is_empty() || sample_rate == 0 {
         return;
     }
 
-    let sr = sample_rate as f32;
+    // Per-frame RMS measurement.
+    let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
+    let frame_rms = (sum_sq / samples.len() as f32).sqrt();
 
-    // IIR coefficients derived from time constants — computed once per call.
-    // α = exp(-1 / (sample_rate × τ))  — standard first-order IIR design.
-    let env_attack = (-1.0_f32 / (sr * AGC_ENVELOPE_ATTACK_S)).exp();
-    let env_release = (-1.0_f32 / (sr * AGC_ENVELOPE_RELEASE_S)).exp();
-    let gain_attack = (-1.0_f32 / (sr * AGC_GAIN_ATTACK_S)).exp();
-    let gain_release = (-1.0_f32 / (sr * AGC_GAIN_RELEASE_S)).exp();
+    // Slow IIR level smoother — one coefficient applied across the whole frame.
+    // α = exp(-frame_len / (sample_rate * TC_S))
+    let level_coeff = (-(samples.len() as f32 / (sample_rate as f32 * TRIM_LEVEL_TC_S))).exp();
+    *trim_level_rms = level_coeff * *trim_level_rms + (1.0 - level_coeff) * frame_rms;
 
-    for sample in samples.iter_mut() {
-        // Peak envelope follower — fast rise, slow fall.
-        let abs_val = sample.abs();
-        let env_coeff = if abs_val > state.envelope { env_attack } else { env_release };
-        state.envelope = env_coeff * state.envelope + (1.0 - env_coeff) * abs_val;
+    if !active {
+        return;
+    }
 
-        // Map envelope level to desired gain via compression curve.
-        let desired_gain = if state.envelope < AGC_MIN_RMS {
-            AGC_MAX_GAIN
-        } else {
-            (AGC_TARGET_RMS / state.envelope).clamp(AGC_MIN_GAIN, AGC_MAX_GAIN)
-        };
+    // Desired gain from smoothed level.  Hold current gain when signal is silent.
+    let desired_gain = if *trim_level_rms < 1e-6 {
+        *trim_gain
+    } else {
+        (TRIM_TARGET_RMS / *trim_level_rms).clamp(TRIM_MIN_GAIN, TRIM_MAX_GAIN)
+    };
 
-        // Smooth gain changes: fast reduction avoids clipping, slow increase avoids pumping.
-        let gain_coeff = if desired_gain < state.current_gain { gain_attack } else { gain_release };
-        state.current_gain = gain_coeff * state.current_gain + (1.0 - gain_coeff) * desired_gain;
+    // Slew-limit: max ±TRIM_SLEW_DB_PER_FRAME per call.
+    let slew_factor = 10.0f32.powf(TRIM_SLEW_DB_PER_FRAME / 20.0);
+    *trim_gain = if desired_gain > *trim_gain {
+        (*trim_gain * slew_factor).min(desired_gain)
+    } else {
+        (*trim_gain / slew_factor).max(desired_gain)
+    };
 
-        *sample = (*sample * state.current_gain).clamp(-AGC_LIMITER, AGC_LIMITER);
+    // Apply as a constant gain across the whole frame — no within-frame variation.
+    for s in samples.iter_mut() {
+        *s = (*s * *trim_gain).clamp(-1.0, 1.0);
+    }
+}
+
+// inject_comfort_noise: add shaped white noise at a very low level to prevent
+// the dead-flat digital silence that makes processed audio sound unnatural.
+// Uses a xorshift32 PRNG — cheap and sufficient for comfort noise.
+fn inject_comfort_noise(samples: &mut [f32], rng_state: &mut u32) {
+    if samples.is_empty() {
+        return;
+    }
+
+    let threshold = 10.0f32.powf(COMFORT_NOISE_THRESHOLD_DBFS / 20.0);
+    let noise_amp = 10.0f32.powf(COMFORT_NOISE_LEVEL_DBFS / 20.0);
+
+    let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
+    let rms = (sum_sq / samples.len() as f32).sqrt();
+
+    if rms >= threshold {
+        return;
+    }
+
+    for s in samples.iter_mut() {
+        // xorshift32
+        *rng_state ^= *rng_state << 13;
+        *rng_state ^= *rng_state >> 17;
+        *rng_state ^= *rng_state << 5;
+        let noise = (*rng_state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+        *s += noise * noise_amp;
     }
 }
 
@@ -1306,6 +1368,78 @@ fn apply_reference_echo_cancellation(session: &VoiceFilterSession, samples: &mut
     }
 }
 
+fn apply_downward_expander(
+    session: &mut VoiceFilterSession,
+    samples: &mut [f32],
+    lsnr_mean: Option<f32>,
+) {
+    if samples.is_empty() || session.sample_rate == 0 {
+        return;
+    }
+
+    let sr = session.sample_rate as f32;
+    let attack_coeff = (-1.0f32 / (sr * EXPANDER_ATTACK_MS / 1000.0)).exp();
+    let release_coeff = (-1.0f32 / (sr * EXPANDER_RELEASE_MS / 1000.0)).exp();
+
+    // LSNR nudge: low SNR → raise threshold (gate more aggressively),
+    // high SNR → baseline threshold (let clean speech through unaffected).
+    let threshold_dbfs = if let Some(lsnr) = lsnr_mean {
+        let t = ((lsnr - EXPANDER_LSNR_NUDGE_LOW_DB)
+            / (EXPANDER_LSNR_NUDGE_HIGH_DB - EXPANDER_LSNR_NUDGE_LOW_DB))
+            .clamp(0.0, 1.0);
+        EXPANDER_THRESHOLD_DBFS + EXPANDER_LSNR_THRESHOLD_RAISE_DB * (1.0 - t)
+    } else {
+        EXPANDER_THRESHOLD_DBFS
+    };
+    let threshold_linear = 10.0f32.powf(threshold_dbfs / 20.0);
+    let hangover_samples = (sr * EXPANDER_HANGOVER_MS / 1000.0) as u32;
+
+    for sample in samples.iter_mut() {
+        let abs_val = sample.abs();
+
+        // Peak envelope follower: fast attack, slow release.
+        let env_coeff = if abs_val > session.expander_envelope {
+            attack_coeff
+        } else {
+            release_coeff
+        };
+        session.expander_envelope =
+            env_coeff * session.expander_envelope + (1.0 - env_coeff) * abs_val;
+
+        let desired_gain = if session.expander_envelope >= threshold_linear {
+            // Above threshold: reset hangover, no expansion.
+            session.expander_hangover_samples_remaining = hangover_samples;
+            1.0f32
+        } else if session.expander_hangover_samples_remaining > 0 {
+            // Below threshold but inside hangover window: hold at unity.
+            session.expander_hangover_samples_remaining -= 1;
+            1.0f32
+        } else {
+            // Below threshold after hangover: apply downward expansion.
+            // gain = (level / threshold) ^ (ratio - 1)
+            // For ratio=1.5 this is a square-root taper — gentle and musical.
+            if session.expander_envelope > 0.0 {
+                (session.expander_envelope / threshold_linear)
+                    .powf(EXPANDER_RATIO - 1.0)
+                    .clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+
+        // Smooth gain changes with the same time constants as the envelope follower.
+        let gain_coeff = if desired_gain < session.expander_gain {
+            attack_coeff
+        } else {
+            release_coeff
+        };
+        session.expander_gain =
+            gain_coeff * session.expander_gain + (1.0 - gain_coeff) * desired_gain;
+
+        *sample *= session.expander_gain;
+    }
+}
+
 fn process_voice_filter_frame(
     session: &mut VoiceFilterSession,
     samples: &mut [f32],
@@ -1348,11 +1482,17 @@ fn process_voice_filter_frame(
                 }
             }
         }
+
+        // Input safety limiter: hard-clip at ±1.0 before the model.
+        // Prevents grossly over-driven input from confusing DFN's noise classifier.
+        // In normal use this is a no-op; it only fires on pathological levels.
+        for s in samples.iter_mut() {
+            *s = s.clamp(-1.0, 1.0);
+        }
     }
 
-    // Advance the AGC startup-bypass timer. The actual levelling is applied after
-    // DeepFilterNet output is drained (below) so AGC works on clean speech, not
-    // the noisy input — which would amplify exactly what DFN is trying to suppress.
+    // Advance the trim startup-bypass timer.  The level estimate (trim_level_rms) is
+    // updated even during bypass so it has converged before the gain is first applied.
     if session.auto_gain_control && session.agc_startup_bypass_ms_remaining > 0 {
         let input_ms = if session.sample_rate > 0 {
             ((frame_count.saturating_mul(1000)) / session.sample_rate) as u32
@@ -1364,9 +1504,6 @@ fn process_voice_filter_frame(
         session.agc_startup_bypass_ms_remaining = session
             .agc_startup_bypass_ms_remaining
             .saturating_sub(input_ms);
-
-        // Hold current_gain at unity so diagnostics reflect the bypass state.
-        session.auto_gain_state.current_gain = 1.0;
     }
 
     // Startup ramp: compute wet-mix at frame start.  A single value per 10 ms frame is
@@ -1463,11 +1600,43 @@ fn process_voice_filter_frame(
         VoiceFilterProcessor::Passthrough => {}
     }
 
-    // Post-DFN AGC: level the clean speech signal after noise suppression.
-    // During the startup-bypass window (first 1500 ms) current_gain == 1.0,
-    // matching the dry capture so there is no level discontinuity at ramp end.
-    if session.auto_gain_control && session.agc_startup_bypass_ms_remaining == 0 {
-        apply_auto_gain_control(samples, &mut session.auto_gain_state, session.sample_rate);
+    // Suppression slew limit: prevent DFN from dropping its output RMS by more than
+    // DFN_SLEW_MAX_DROP_DB_PER_FRAME in a single 10ms frame.  Scales the frame up
+    // if the drop exceeds the limit; bypassed when the previous RMS is near silence.
+    if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
+        let slew_active_floor = 10.0f32.powf(DFN_SLEW_MIN_ACTIVE_DBFS / 20.0);
+        let max_drop_factor = 10.0f32.powf(-DFN_SLEW_MAX_DROP_DB_PER_FRAME / 20.0);
+        let slew_floor = session.dfn_output_rms_prev * max_drop_factor;
+
+        if slew_floor > slew_active_floor {
+            let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
+            let frame_rms = (sum_sq / samples.len() as f32).sqrt();
+            if frame_rms < slew_floor && frame_rms > 0.0 {
+                let scale = slew_floor / frame_rms;
+                for s in samples.iter_mut() {
+                    *s *= scale;
+                }
+                session.dfn_output_rms_prev = slew_floor;
+            } else {
+                session.dfn_output_rms_prev = frame_rms;
+            }
+        } else {
+            let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
+            session.dfn_output_rms_prev = (sum_sq / samples.len() as f32).sqrt();
+        }
+    }
+
+    // Post-DFN slow trim: long-time-constant RMS normaliser, slew-limited to ±1 dB/100ms.
+    // Level estimate warms up during startup bypass; gain is only applied afterwards.
+    if session.auto_gain_control {
+        let active = session.agc_startup_bypass_ms_remaining == 0;
+        apply_slow_trim(
+            samples,
+            &mut session.trim_level_rms,
+            &mut session.trim_gain,
+            session.sample_rate,
+            active,
+        );
     }
 
     // Advance startup-ramp timer.  The per-hop blend is done inside the DFN loop above.
@@ -1487,6 +1656,7 @@ fn process_voice_filter_frame(
         apply_reference_echo_cancellation(session, samples);
     }
 
+    // Compute per-frame LSNR mean now so the expander can use it to nudge its threshold.
     let (lsnr_mean, lsnr_min_out, lsnr_max_out) = if lsnr_hop_count > 0 {
         (
             Some(lsnr_sum / lsnr_hop_count as f32),
@@ -1497,12 +1667,22 @@ fn process_voice_filter_frame(
         (None, None, None)
     };
 
+    // Downward expander: gently attenuate residual noise floor after all processing.
+    // LSNR is passed so low-SNR frames raise the threshold (more aggressive gating)
+    // while frames with positive LSNR (clear speech) use the baseline threshold.
+    // Only active in DeepFilter mode — passthrough should not touch the signal.
+    if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
+        apply_downward_expander(session, samples, lsnr_mean);
+        // Comfort noise: inject shaped noise to prevent dead-flat digital silence.
+        inject_comfort_noise(samples, &mut session.noise_rng_state);
+    }
+
     Ok(VoiceFilterDiagnostics {
         lsnr_mean,
         lsnr_min: lsnr_min_out,
         lsnr_max: lsnr_max_out,
         agc_gain: if session.auto_gain_control {
-            Some(session.auto_gain_state.current_gain)
+            Some(session.trim_gain)
         } else {
             None
         },
@@ -2912,10 +3092,6 @@ fn handle_voice_filter_start_with_capture(
         return Err("DeepFilterNet currently supports only 48kHz input".to_string());
     }
 
-    if parsed.channels == 0 || parsed.channels > 2 {
-        return Err("Unsupported voice filter channel count".to_string());
-    }
-
     let noise_suppression = parsed.noise_suppression.unwrap_or(true);
     let auto_gain_control = parsed.auto_gain_control.unwrap_or(false);
     let echo_cancellation = parsed.echo_cancellation.unwrap_or(false);
@@ -2932,6 +3108,7 @@ fn handle_voice_filter_start_with_capture(
         auto_gain_control,
         echo_cancellation,
     )?;
+    let session_channels = session.channels; // always 1 (forced mono)
     // Native capture always sends MIC_CAPTURE_FRAME_SIZE frames per buffer,
     // regardless of whether DeepFilterNet is active.  Report the actual size
     // so the client pipeline can size its buffers correctly.
@@ -2968,7 +3145,7 @@ fn handle_voice_filter_start_with_capture(
     Ok(json!({
         "sessionId": session_id,
         "sampleRate": parsed.sample_rate,
-        "channels": parsed.channels,
+        "channels": session_channels,
         "framesPerBuffer": frames_per_buffer,
         "protocolVersion": PROTOCOL_VERSION,
         "encoding": PCM_ENCODING,
@@ -2985,10 +3162,6 @@ fn handle_voice_filter_start(
 
     if parsed.sample_rate != TARGET_SAMPLE_RATE as usize {
         return Err("DeepFilterNet currently supports only 48kHz input".to_string());
-    }
-
-    if parsed.channels == 0 || parsed.channels > 2 {
-        return Err("Unsupported voice filter channel count".to_string());
     }
 
     let noise_suppression = parsed.noise_suppression.unwrap_or(true);
@@ -3011,6 +3184,7 @@ fn handle_voice_filter_start(
         auto_gain_control,
         echo_cancellation,
     )?;
+    let session_channels = session.channels; // always 1 (forced mono)
     let frames_per_buffer = voice_filter_frames_per_buffer(&session);
 
     state.voice_filter_session = Some(session);
@@ -3018,7 +3192,7 @@ fn handle_voice_filter_start(
     Ok(json!({
         "sessionId": session_id,
         "sampleRate": parsed.sample_rate,
-        "channels": parsed.channels,
+        "channels": session_channels,
         "framesPerBuffer": frames_per_buffer,
         "protocolVersion": PROTOCOL_VERSION,
         "encoding": PCM_ENCODING,
@@ -3079,13 +3253,30 @@ fn process_voice_filter_samples(
         return Err("Voice filter sample rate mismatch".to_string());
     }
 
-    if channels != session.channels {
-        return Err("Voice filter channel count mismatch".to_string());
+    if channels == 0 {
+        return Err("Voice filter frame channel count must be > 0".to_string());
     }
 
-    if channels == 0 || channels > 2 {
-        return Err("Unsupported voice filter frame channel count".to_string());
-    }
+    // Downmix to mono if the incoming frame has more channels than the session.
+    // The session always runs in mono (session.channels == 1) to minimise model
+    // workload and reduce warble on the DFN stereo path.
+    let channels = if channels > session.channels {
+        let mono_frame_count = samples.len() / channels;
+        let mut mono = Vec::with_capacity(mono_frame_count);
+        for frame_index in 0..mono_frame_count {
+            let mut sum = 0.0f32;
+            for ch in 0..channels {
+                sum += samples[frame_index * channels + ch];
+            }
+            mono.push(sum / channels as f32);
+        }
+        samples = mono;
+        session.channels
+    } else if channels == session.channels {
+        channels
+    } else {
+        return Err("Voice filter channel count mismatch".to_string());
+    };
 
     let diagnostics = process_voice_filter_frame(session, &mut samples, channels)?;
 
