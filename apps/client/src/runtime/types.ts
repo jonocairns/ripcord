@@ -134,6 +134,9 @@ export type TVoiceFilterFrameDiag = {
   /** Startup ramp wet-mix at the end of the buffer (0 = dry, 1 = fully processed).
    *  Stays at 1.0 after the ramp completes. */
   rampWetMix: number;
+  /** Noise gate gain (1.0 = open, ~0 = closed). undefined in passthrough mode or
+   *  during the startup ramp. Values < 1 indicate non-speech is being attenuated. */
+  gateGain?: number;
 };
 
 export type TVoiceFilterFrame = {
