@@ -886,9 +886,9 @@ struct VoiceFilterDiagnostics {
 
 fn voice_filter_config(strength: VoiceFilterStrength) -> VoiceFilterConfig {
     // post_filter_beta sharpens the spectral mask toward binary (0/1), which
-    // trades extra noise suppression for metallic "notching" artifacts.  With the
-    // noise gate handling gross silence, we keep beta at 0 across all presets so
-    // the model's soft mask is used directly and far-field voices stay natural.
+    // trades extra noise suppression for metallic "notching" artifacts.  Keep it
+    // at 0 across all presets so the model's soft mask is used directly and
+    // far-field voices stay natural.
     match strength {
         VoiceFilterStrength::Low => VoiceFilterConfig {
             post_filter_beta: 0.0,
@@ -899,21 +899,21 @@ fn voice_filter_config(strength: VoiceFilterStrength) -> VoiceFilterConfig {
         },
         VoiceFilterStrength::Balanced => VoiceFilterConfig {
             post_filter_beta: 0.0,
-            atten_lim_db: 35.0,
+            atten_lim_db: 30.0,
             min_db_thresh: -15.0,
             max_db_erb_thresh: 33.0,
             max_db_df_thresh: 18.0,
         },
         VoiceFilterStrength::High => VoiceFilterConfig {
             post_filter_beta: 0.0,
-            atten_lim_db: 50.0,
+            atten_lim_db: 45.0,
             min_db_thresh: -18.0,
             max_db_erb_thresh: 30.0,
             max_db_df_thresh: 15.0,
         },
         VoiceFilterStrength::Aggressive => VoiceFilterConfig {
             post_filter_beta: 0.0,
-            atten_lim_db: 70.0,
+            atten_lim_db: 55.0,
             min_db_thresh: -20.0,
             max_db_erb_thresh: 28.0,
             max_db_df_thresh: 12.0,
