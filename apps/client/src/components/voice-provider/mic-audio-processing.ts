@@ -1,8 +1,8 @@
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import type {
   TDesktopBridge,
-  TVoiceFilterFrame,
   TVoiceFilterFrameDiag,
+  TVoiceFilterPcmFrame,
   TVoiceFilterStatusEvent,
   TVoiceFilterStrength as TRuntimeVoiceFilterStrength
 } from '@/runtime/types';
@@ -52,7 +52,7 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
   let totalFrames = 0;
   let lastLogTime = Date.now();
 
-  const push = (frame: TVoiceFilterFrame) => {
+  const push = (frame: TVoiceFilterPcmFrame) => {
     totalFrames++;
     if (frame.droppedFrameCount) totalDropped += frame.droppedFrameCount;
 
@@ -264,7 +264,7 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   const ncDiag = createNcDiagnosticsAggregator(session.sessionId);
 
   const removeFrameSubscription = desktopBridge.subscribeVoiceFilterFrames(
-    (frame: TVoiceFilterFrame) => {
+    (frame: TVoiceFilterPcmFrame) => {
       if (frame.sessionId !== session.sessionId) {
         return;
       }
@@ -392,6 +392,7 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   sinkNode.connect(captureContext.destination);
 
   void desktopBridge.ensureVoiceFilterFrameChannel();
+  void desktopBridge.openVoiceFilterFrameEgressChannel();
 
   if (captureContext.state !== 'running') {
     await captureContext.resume();
@@ -516,8 +517,10 @@ const createNativeSidecarMicCapturePipeline = async ({
 
   const ncDiag = createNcDiagnosticsAggregator(session.sessionId);
 
+  void desktopBridge.openVoiceFilterFrameEgressChannel();
+
   const removeFrameSubscription = desktopBridge.subscribeVoiceFilterFrames(
-    (frame: TVoiceFilterFrame) => {
+    (frame: TVoiceFilterPcmFrame) => {
       if (frame.sessionId !== session.sessionId) return;
 
       ncDiag.push(frame);

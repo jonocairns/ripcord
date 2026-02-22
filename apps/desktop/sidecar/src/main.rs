@@ -82,6 +82,7 @@ const VOICE_FILTER_BINARY_FRAMING: &str = "length_prefixed_f32le_v1";
 #[cfg(windows)]
 const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_VOICE_FILTER_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
+const VOICE_FILTER_BINARY_EGRESS_FRAMING: &str = "length_prefixed_f32le_diag_v1";
 const DEEP_FILTER_WARMUP_BLOCKS: usize = 20;
 const ECHO_REFERENCE_MAX_BUFFER_MS: usize = 1_200;
 const ECHO_REFERENCE_DELAY_MS: usize = 80;
@@ -385,7 +386,6 @@ struct VoiceFilterSession {
     channels: usize,
     processor: VoiceFilterProcessor,
     suppression_startup_ramp_ms_remaining: u32,
-    dry_sample_buf: Vec<f32>,
     high_pass_filters: Vec<HighPassFilter>,
     auto_gain_control: bool,
     auto_gain_state: AutoGainControlState,
@@ -396,18 +396,6 @@ struct VoiceFilterSession {
 }
 
 impl VoiceFilterSession {
-    fn get_or_resize_dry_buf(&mut self, len: usize) -> &mut [f32] {
-        if self.dry_sample_buf.len() != len {
-            self.dry_sample_buf.resize(len, 0.0);
-        }
-        &mut self.dry_sample_buf
-    }
-
-    fn capture_dry_samples(&mut self, samples: &[f32]) {
-        let dry_buf = self.get_or_resize_dry_buf(samples.len());
-        dry_buf.copy_from_slice(samples);
-    }
-
     fn push_echo_reference_samples(
         &mut self,
         input_samples: &[f32],
@@ -506,6 +494,14 @@ struct AppAudioBinaryEgress {
 }
 
 #[derive(Debug)]
+struct VoiceFilterBinaryEgress {
+    port: u16,
+    stream: Arc<Mutex<Option<TcpStream>>>,
+    stop_flag: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
+}
+
+#[derive(Debug)]
 struct VoiceFilterBinaryIngress {
     port: u16,
     stop_flag: Arc<AtomicBool>,
@@ -529,6 +525,9 @@ struct SidecarState {
     voice_filter_session: Option<VoiceFilterSession>,
     push_keybind_watcher: Option<PushKeybindWatcher>,
     mic_capture_stop_flag: Option<Arc<AtomicBool>>,
+    // Binary egress stream for processed voice-filter frames. None until the
+    // egress TCP server is started and set by main(). Arc clone is cheap.
+    voice_filter_binary_egress_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 }
 
 #[derive(Default)]
@@ -796,6 +795,129 @@ fn try_write_app_audio_binary_frame(
     }
 }
 
+// Write one processed voice-filter frame as a length-prefixed binary packet.
+//
+// Frame layout (all values little-endian):
+//   [4]  payload_length (u32)
+//   [2]  session_id_len (u16)
+//   [N]  session_id (UTF-8)
+//   [8]  sequence (u64)
+//   [4]  sample_rate (u32)
+//   [2]  channels (u16)
+//   [4]  frame_count (u32)
+//   [4]  protocol_version (u32)
+//   [4]  dropped_frame_count (u32)
+//   [1]  diag_flags  (bit 0 = lsnr present, bit 1 = agc_gain present)
+//   [4]  ramp_wet_mix (f32, always)
+//   [12] lsnr_mean + lsnr_min + lsnr_max (f32 each, if bit 0)
+//   [4]  agc_gain (f32, if bit 1)
+//   [4]  pcm_byte_length (u32)
+//   [M]  pcm data (f32le)
+fn try_write_voice_filter_binary_egress_frame(
+    stream_slot: &Arc<Mutex<Option<TcpStream>>>,
+    session_id: &str,
+    sequence: u64,
+    sample_rate: usize,
+    channels: usize,
+    frame_count: usize,
+    protocol_version: u32,
+    dropped_frame_count: u32,
+    diagnostics: &VoiceFilterDiagnostics,
+    frame_samples: &[f32],
+) -> bool {
+    let session_id_bytes = session_id.as_bytes();
+    if session_id_bytes.is_empty() || session_id_bytes.len() > u16::MAX as usize {
+        return false;
+    }
+    if sample_rate == 0 || sample_rate > u32::MAX as usize {
+        return false;
+    }
+    if channels == 0 || channels > u16::MAX as usize {
+        return false;
+    }
+    if frame_count == 0 || frame_count > u32::MAX as usize {
+        return false;
+    }
+    if frame_samples.is_empty() {
+        return false;
+    }
+
+    let pcm_bytes = bytemuck::cast_slice(frame_samples);
+    if pcm_bytes.len() > u32::MAX as usize {
+        return false;
+    }
+
+    let mut diag_flags: u8 = 0;
+    if diagnostics.lsnr_mean.is_some() {
+        diag_flags |= 0x01;
+    }
+    if diagnostics.agc_gain.is_some() {
+        diag_flags |= 0x02;
+    }
+    let lsnr_bytes: usize = if diag_flags & 0x01 != 0 { 12 } else { 0 };
+    let agc_bytes: usize = if diag_flags & 0x02 != 0 { 4 } else { 0 };
+
+    let payload_len = 2
+        + session_id_bytes.len()
+        + 8  // sequence
+        + 4  // sample_rate
+        + 2  // channels
+        + 4  // frame_count
+        + 4  // protocol_version
+        + 4  // dropped_frame_count
+        + 1  // diag_flags
+        + 4  // ramp_wet_mix
+        + lsnr_bytes
+        + agc_bytes
+        + 4  // pcm_byte_length
+        + pcm_bytes.len();
+
+    if payload_len > MAX_VOICE_FILTER_BINARY_FRAME_BYTES {
+        return false;
+    }
+
+    let mut packet = Vec::with_capacity(4 + payload_len);
+    packet.extend_from_slice(&(payload_len as u32).to_le_bytes());
+    packet.extend_from_slice(&(session_id_bytes.len() as u16).to_le_bytes());
+    packet.extend_from_slice(session_id_bytes);
+    packet.extend_from_slice(&sequence.to_le_bytes());
+    packet.extend_from_slice(&(sample_rate as u32).to_le_bytes());
+    packet.extend_from_slice(&(channels as u16).to_le_bytes());
+    packet.extend_from_slice(&(frame_count as u32).to_le_bytes());
+    packet.extend_from_slice(&protocol_version.to_le_bytes());
+    packet.extend_from_slice(&dropped_frame_count.to_le_bytes());
+    packet.push(diag_flags);
+    packet.extend_from_slice(&diagnostics.ramp_wet_mix.to_le_bytes());
+    if let Some(mean) = diagnostics.lsnr_mean {
+        packet.extend_from_slice(&mean.to_le_bytes());
+        packet.extend_from_slice(&diagnostics.lsnr_min.unwrap_or(0.0).to_le_bytes());
+        packet.extend_from_slice(&diagnostics.lsnr_max.unwrap_or(0.0).to_le_bytes());
+    }
+    if let Some(gain) = diagnostics.agc_gain {
+        packet.extend_from_slice(&gain.to_le_bytes());
+    }
+    packet.extend_from_slice(&(pcm_bytes.len() as u32).to_le_bytes());
+    packet.extend_from_slice(pcm_bytes);
+
+    let mut lock = match stream_slot.lock() {
+        Ok(lock) => lock,
+        Err(_) => return false,
+    };
+
+    let Some(stream) = lock.as_mut() else {
+        return false;
+    };
+
+    match stream.write_all(&packet) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("[capture-sidecar] voice-filter binary egress write failed: {error}");
+            *lock = None;
+            false
+        }
+    }
+}
+
 fn enqueue_voice_filter_frame_event(
     queue: &Arc<FrameQueue>,
     session_id: &str,
@@ -1040,7 +1162,6 @@ fn create_voice_filter_session(
         } else {
             0
         },
-        dry_sample_buf: Vec::new(),
         high_pass_filters: (0..channels).map(|_| HighPassFilter::new()).collect(),
         agc_startup_bypass_ms_remaining: AGC_STARTUP_BYPASS_MS,
         echo_cancellation,
@@ -1216,12 +1337,6 @@ fn process_voice_filter_frame(
         return Err("Voice filter frame sample count mismatch".to_string());
     }
 
-    let should_apply_startup_ramp = session.suppression_startup_ramp_ms_remaining > 0
-        && matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_));
-    if should_apply_startup_ramp {
-        session.capture_dry_samples(samples);
-    }
-
     // High-pass filter: strip DC and sub-80 Hz rumble before the model sees the signal.
     // Only applied when DeepFilterNet is active — passthrough mode should not modify audio.
     if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
@@ -1253,6 +1368,20 @@ fn process_voice_filter_frame(
         // Hold current_gain at unity so diagnostics reflect the bypass state.
         session.auto_gain_state.current_gain = 1.0;
     }
+
+    // Startup ramp: compute wet-mix at frame start.  A single value per 10 ms frame is
+    // imperceptible since the ramp spans SUPPRESSION_STARTUP_RAMP_MS.
+    let ramp_wet_mix_at_frame_start: f32 =
+        if session.suppression_startup_ramp_ms_remaining > 0
+            && matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_))
+        {
+            let elapsed_ms = SUPPRESSION_STARTUP_RAMP_MS
+                .saturating_sub(session.suppression_startup_ramp_ms_remaining)
+                as f32;
+            suppression_startup_wet_mix(elapsed_ms)
+        } else {
+            1.0
+        };
 
     // Diagnostics accumulators — populated only by the DeepFilter path.
     let mut lsnr_sum = 0.0_f32;
@@ -1298,6 +1427,20 @@ fn process_voice_filter_frame(
                 if lsnr < lsnr_min { lsnr_min = lsnr; }
                 if lsnr > lsnr_max { lsnr_max = lsnr; }
 
+                // Startup ramp: blend noisy×(1−t) + enhanced×t per hop.
+                // Blending at the hop level (rather than mixing separate dry/wet PCM streams)
+                // is phase-coherent — noisy and enhanced share the same signal path —
+                // so there is no comb-filtering artifact at the crossover point.
+                if ramp_wet_mix_at_frame_start < 1.0 {
+                    let dry_mix = 1.0 - ramp_wet_mix_at_frame_start;
+                    for ch in 0..channels {
+                        for s in 0..hop_size {
+                            enhanced[(ch, s)] = noisy[(ch, s)] * dry_mix
+                                + enhanced[(ch, s)] * ramp_wet_mix_at_frame_start;
+                        }
+                    }
+                }
+
                 for channel_index in 0..channels {
                     for sample_index in 0..hop_size {
                         processor.output_buffers[channel_index]
@@ -1327,37 +1470,17 @@ fn process_voice_filter_frame(
         apply_auto_gain_control(samples, &mut session.auto_gain_state, session.sample_rate);
     }
 
-    if should_apply_startup_ramp {
+    // Advance startup-ramp timer.  The per-hop blend is done inside the DFN loop above.
+    if ramp_wet_mix_at_frame_start < 1.0 {
         let processed_ms = if session.sample_rate > 0 {
             ((frame_count.saturating_mul(1000)) / session.sample_rate) as u32
         } else {
             0
         }
         .max(1);
-
-        let ramp_ms_start = session.suppression_startup_ramp_ms_remaining;
         session.suppression_startup_ramp_ms_remaining = session
             .suppression_startup_ramp_ms_remaining
             .saturating_sub(processed_ms);
-        let ramp_elapsed_start_ms =
-            SUPPRESSION_STARTUP_RAMP_MS.saturating_sub(ramp_ms_start) as f32;
-        let frame_duration_ms = if session.sample_rate > 0 {
-            1000.0 / session.sample_rate as f32
-        } else {
-            0.0
-        };
-
-        let dry_samples = &session.dry_sample_buf;
-        for frame_index in 0..frame_count {
-            let frame_elapsed_ms =
-                ramp_elapsed_start_ms + frame_index as f32 * frame_duration_ms;
-            let wet_mix = suppression_startup_wet_mix(frame_elapsed_ms);
-            let dry_mix = 1.0 - wet_mix;
-            for channel_index in 0..channels {
-                let index = frame_index * channels + channel_index;
-                samples[index] = dry_samples[index] * dry_mix + samples[index] * wet_mix;
-            }
-        }
     }
 
     if session.echo_cancellation {
@@ -2934,6 +3057,10 @@ fn process_voice_filter_samples(
     protocol_version: Option<u32>,
     mut samples: Vec<f32>,
 ) -> Result<(), String> {
+    // Clone the Arc before borrowing voice_filter_session so we can use it
+    // later without a borrow conflict on `state`.
+    let egress_stream = state.voice_filter_binary_egress_stream.clone();
+
     let Some(session) = state.voice_filter_session.as_mut() else {
         return Err("No active voice filter session".to_string());
     };
@@ -2972,19 +3099,40 @@ fn process_voice_filter_samples(
         apply_limiter(&mut samples, &mut session.limiter_gain);
     }
 
-    let frame_bytes = bytemuck::cast_slice(&samples);
-    let pcm_base64 = BASE64.encode(frame_bytes);
+    // Try binary egress first — bypasses the FrameQueue, avoids base64 allocation
+    // and JSON serialization entirely. Falls back to JSON stdout on write failure
+    // or when no client has connected yet.
+    let wrote_binary = if let Some(stream) = egress_stream.as_ref() {
+        try_write_voice_filter_binary_egress_frame(
+            stream,
+            session_id,
+            sequence,
+            sample_rate,
+            channels,
+            frame_count,
+            PROTOCOL_VERSION,
+            0, // dropped_frame_count — FrameQueue not used on binary path
+            &diagnostics,
+            &samples,
+        )
+    } else {
+        false
+    };
 
-    enqueue_voice_filter_frame_event(
-        frame_queue,
-        &session.session_id,
-        sequence,
-        sample_rate,
-        channels,
-        frame_count,
-        pcm_base64,
-        &diagnostics,
-    );
+    if !wrote_binary {
+        let frame_bytes = bytemuck::cast_slice(&samples);
+        let pcm_base64 = BASE64.encode(frame_bytes);
+        enqueue_voice_filter_frame_event(
+            frame_queue,
+            session_id,
+            sequence,
+            sample_rate,
+            channels,
+            frame_count,
+            pcm_base64,
+            &diagnostics,
+        );
+    }
 
     Ok(())
 }
@@ -3173,6 +3321,66 @@ fn handle_audio_capture_binary_egress_info(
     Ok(json!({
         "port": app_audio_binary_egress.port,
         "framing": APP_AUDIO_BINARY_EGRESS_FRAMING,
+        "protocolVersion": PROTOCOL_VERSION,
+    }))
+}
+
+fn start_voice_filter_binary_egress() -> Result<VoiceFilterBinaryEgress, String> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|error| format!("Failed to bind voice-filter binary egress listener: {error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("Failed to configure voice-filter binary egress listener: {error}"))?;
+
+    let port = listener
+        .local_addr()
+        .map_err(|error| format!("Failed to read voice-filter binary egress listener port: {error}"))?
+        .port();
+
+    let stream = Arc::new(Mutex::new(None::<TcpStream>));
+    let worker_stream = Arc::clone(&stream);
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let worker_stop_flag = Arc::clone(&stop_flag);
+
+    let handle = thread::spawn(move || {
+        while !worker_stop_flag.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((accepted_stream, _peer)) => {
+                    let _ = accepted_stream.set_nodelay(true);
+                    let _ = accepted_stream.set_write_timeout(Some(Duration::from_millis(15)));
+                    if let Ok(mut lock) = worker_stream.lock() {
+                        *lock = Some(accepted_stream);
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => {
+                    eprintln!("[capture-sidecar] voice-filter binary egress accept error: {error}");
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+
+        if let Ok(mut lock) = worker_stream.lock() {
+            *lock = None;
+        }
+    });
+
+    Ok(VoiceFilterBinaryEgress {
+        port,
+        stream,
+        stop_flag,
+        handle,
+    })
+}
+
+fn handle_voice_filter_binary_egress_info(
+    egress: &VoiceFilterBinaryEgress,
+) -> Result<Value, String> {
+    Ok(json!({
+        "port": egress.port,
+        "framing": VOICE_FILTER_BINARY_EGRESS_FRAMING,
         "protocolVersion": PROTOCOL_VERSION,
     }))
 }
@@ -3467,6 +3675,28 @@ fn main() {
             None
         }
     };
+    let voice_filter_binary_egress = match start_voice_filter_binary_egress() {
+        Ok(egress) => {
+            eprintln!(
+                "[capture-sidecar] voice-filter binary egress listening on 127.0.0.1:{}",
+                egress.port
+            );
+            Some(egress)
+        }
+        Err(error) => {
+            eprintln!("[capture-sidecar] voice-filter binary egress unavailable: {error}");
+            None
+        }
+    };
+
+    // Publish the egress stream into shared state so process_voice_filter_samples
+    // can write binary frames without going through the FrameQueue.
+    if let Some(egress) = voice_filter_binary_egress.as_ref() {
+        if let Ok(mut state_lock) = state.lock() {
+            state_lock.voice_filter_binary_egress_stream = Some(Arc::clone(&egress.stream));
+        }
+    }
+
     let binary_ingress = match start_voice_filter_binary_ingress(
         Arc::clone(&frame_queue),
         Arc::clone(&state),
@@ -3514,6 +3744,10 @@ fn main() {
                     handle_audio_capture_binary_egress_info(app_audio_binary_egress)
                 }
                 None => Err("Binary app-audio egress is unavailable".to_string()),
+            },
+            "voice_filter.binary_egress_info" => match voice_filter_binary_egress.as_ref() {
+                Some(egress) => handle_voice_filter_binary_egress_info(egress),
+                None => Err("Binary voice filter egress is unavailable".to_string()),
             },
             "voice_filter.binary_ingress_info" => match binary_ingress.as_ref() {
                 Some(binary_ingress) => handle_voice_filter_binary_ingress_info(binary_ingress),
@@ -3595,6 +3829,11 @@ fn main() {
             .stop_flag
             .store(true, Ordering::Relaxed);
         let _ = app_audio_binary_egress.handle.join();
+    }
+
+    if let Some(vf_egress) = voice_filter_binary_egress {
+        vf_egress.stop_flag.store(true, Ordering::Relaxed);
+        let _ = vf_egress.handle.join();
     }
 
     if let Some(binary_ingress) = binary_ingress {

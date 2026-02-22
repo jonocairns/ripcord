@@ -35,6 +35,7 @@ import type {
   TStartAppAudioCaptureInput,
   TStartVoiceFilterInput,
   TStartVoiceFilterWithCaptureInput,
+  TVoiceFilterFrameDiag,
   TVoiceFilterFrame,
   TVoiceFilterPcmFrame,
 } from "./types";
@@ -43,6 +44,7 @@ const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
 let mainWindow: BrowserWindow | null = null;
 let appAudioFrameEgressPort: MessagePortMain | undefined;
 let voiceFilterFrameIngressPort: MessagePortMain | undefined;
+let voiceFilterFrameEgressPort: MessagePortMain | undefined;
 const VOICE_FILTER_INGRESS_DROP_LOG_RATE_LIMIT_MS = 2_000;
 let nextVoiceFilterIngressDropLogAt = 0;
 
@@ -91,6 +93,26 @@ const disposeVoiceFilterFrameIngressPort = (
 
   if (voiceFilterFrameIngressPort === port) {
     voiceFilterFrameIngressPort = undefined;
+  }
+
+  try {
+    port.close();
+  } catch {
+    // ignore
+  }
+
+  port.removeAllListeners();
+};
+
+const disposeVoiceFilterFrameEgressPort = (
+  port: MessagePortMain | undefined = voiceFilterFrameEgressPort,
+): void => {
+  if (!port) {
+    return;
+  }
+
+  if (voiceFilterFrameEgressPort === port) {
+    voiceFilterFrameEgressPort = undefined;
   }
 
   try {
@@ -356,6 +378,22 @@ const registerIpcHandlers = () => {
 
     port2.start();
     event.sender.postMessage("desktop:app-audio-frame-channel-ready", null, [port1]);
+  });
+
+  ipcMain.on("desktop:open-voice-filter-frame-egress-channel", (event: IpcMainEvent) => {
+    const { port1, port2 } = new MessageChannelMain();
+    disposeVoiceFilterFrameEgressPort();
+
+    voiceFilterFrameEgressPort = port2;
+    port2.on("close", () => {
+      if (voiceFilterFrameEgressPort === port2) {
+        voiceFilterFrameEgressPort = undefined;
+      }
+      port2.removeAllListeners();
+    });
+
+    port2.start();
+    event.sender.postMessage("desktop:voice-filter-frame-egress-channel-ready", null, [port1]);
   });
 
   ipcMain.on("desktop:open-voice-filter-frame-channel", (event: IpcMainEvent) => {
@@ -675,9 +713,36 @@ void app
     captureSidecarManager.onStatus((event) => {
       mainWindow?.webContents.send("desktop:app-audio-status", event);
     });
-    captureSidecarManager.onVoiceFilterFrame((frame) => {
-      mainWindow?.webContents.send("desktop:voice-filter-frame", frame);
-    });
+    captureSidecarManager.onVoiceFilterPcmFrame(
+      (frame: TVoiceFilterPcmFrame, diag: TVoiceFilterFrameDiag, droppedFrameCount?: number) => {
+        const egressPort = voiceFilterFrameEgressPort;
+        if (!egressPort) {
+          return;
+        }
+        const { pcm } = frame;
+        try {
+          egressPort.postMessage({
+            sessionId: frame.sessionId,
+            sequence: frame.sequence,
+            sampleRate: frame.sampleRate,
+            channels: frame.channels,
+            frameCount: frame.frameCount,
+            protocolVersion: frame.protocolVersion,
+            droppedFrameCount,
+            rampWetMix: diag.rampWetMix,
+            lsnrMean: diag.lsnrMean,
+            lsnrMin: diag.lsnrMin,
+            lsnrMax: diag.lsnrMax,
+            agcGain: diag.agcGain,
+            pcmBuffer: pcm.buffer,
+            pcmByteOffset: pcm.byteOffset,
+            pcmByteLength: pcm.byteLength,
+          });
+        } catch {
+          disposeVoiceFilterFrameEgressPort(egressPort);
+        }
+      },
+    );
     captureSidecarManager.onVoiceFilterStatus((event) => {
       mainWindow?.webContents.send("desktop:voice-filter-status", event);
     });
@@ -712,6 +777,7 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   disposeAppAudioFrameEgressPort();
   disposeVoiceFilterFrameIngressPort();
+  disposeVoiceFilterFrameEgressPort();
 
   desktopUpdater.dispose();
   void captureSidecarManager.dispose();

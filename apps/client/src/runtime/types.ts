@@ -157,6 +157,8 @@ export type TVoiceFilterPcmFrame = {
   frameCount: number;
   pcm: Float32Array;
   protocolVersion: number;
+  droppedFrameCount?: number;
+  diag?: TVoiceFilterFrameDiag;
 };
 
 export type TVoiceFilterStatusEvent = {
@@ -247,6 +249,7 @@ export type TDesktopBridge = {
   ) => Promise<TVoiceFilterSession>;
   stopVoiceFilterSession: (sessionId?: string) => Promise<void>;
   ensureVoiceFilterFrameChannel: () => Promise<boolean>;
+  openVoiceFilterFrameEgressChannel: () => Promise<boolean>;
   setGlobalPushKeybinds: (
     input: TDesktopPushKeybindsInput
   ) => Promise<TGlobalPushKeybindRegistrationResult>;
@@ -260,7 +263,7 @@ export type TDesktopBridge = {
     cb: (statusEvent: TAppAudioStatusEvent) => void
   ) => () => void;
   subscribeVoiceFilterFrames: (
-    cb: (frame: TVoiceFilterFrame) => void
+    cb: (frame: TVoiceFilterPcmFrame) => void
   ) => () => void;
   subscribeVoiceFilterStatus: (
     cb: (statusEvent: TVoiceFilterStatusEvent) => void
