@@ -370,8 +370,8 @@ struct DeepFilterProcessor {
 unsafe impl Send for DeepFilterProcessor {}
 
 struct AutoGainControlState {
+    envelope: f32,
     current_gain: f32,
-    post_pause_hold_blocks_remaining: u32,
 }
 
 enum VoiceFilterProcessor {
@@ -395,7 +395,6 @@ struct VoiceFilterSession {
     limiter_gain: f32,
     // lsnr-based noise gate — only active after startup ramp completes.
     gate_gain: f32,
-    gate_lsnr_smooth: f32,
 }
 
 impl VoiceFilterSession {
@@ -1041,8 +1040,8 @@ fn create_voice_filter_session(
         processor,
         auto_gain_control,
         auto_gain_state: AutoGainControlState {
+            envelope: 0.0,
             current_gain: 1.0,
-            post_pause_hold_blocks_remaining: 0,
         },
         suppression_startup_ramp_ms_remaining: if noise_suppression {
             SUPPRESSION_STARTUP_RAMP_MS
@@ -1056,7 +1055,6 @@ fn create_voice_filter_session(
         echo_reference_interleaved: VecDeque::new(),
         limiter_gain: 1.0,
         gate_gain: 1.0,
-        gate_lsnr_smooth: 0.0,
     })
 }
 
@@ -1081,21 +1079,26 @@ fn decode_f32le_base64(pcm_base64: &str) -> Result<Vec<f32>, String> {
 const AGC_TARGET_RMS: f32 = 0.12;
 const AGC_MIN_RMS: f32 = 0.0005;
 const AGC_MIN_GAIN: f32 = 0.5;
-const AGC_MAX_GAIN: f32 = 6.0; // raised from 3.0 — far-field mics at -35 dBFS need ~6.7× to reach target
-const AGC_ATTACK_SMOOTHING: f32 = 0.3;
-const AGC_RELEASE_SMOOTHING: f32 = 0.08;
+const AGC_MAX_GAIN: f32 = 6.0;
 const AGC_LIMITER: f32 = 0.98;
-const AGC_PAUSE_RMS_THRESHOLD: f32 = 0.006;
-const AGC_PAUSE_RECOVERY_SMOOTHING: f32 = 0.3;
-const AGC_POST_PAUSE_HOLD_BLOCKS: u32 = 20;
+// Per-sample envelope follower time constants.
+// Fast attack tracks rising signal immediately; slow release means brief
+// inter-word pauses don't trigger a gain boost.
+const AGC_ENVELOPE_ATTACK_S: f32 = 0.005;  // 5 ms
+const AGC_ENVELOPE_RELEASE_S: f32 = 0.500; // 500 ms
+// Gain smoother time constants.
+// Fast attack (gain reduction) prevents clipping on loud onsets.
+// Slow release (gain increase) avoids pumping between words and sentences.
+const AGC_GAIN_ATTACK_S: f32 = 0.010; // 10 ms
+const AGC_GAIN_RELEASE_S: f32 = 1.500; // 1.5 s
 const AGC_STARTUP_BYPASS_MS: u32 = 1_500;
 const SUPPRESSION_STARTUP_RAMP_MS: u32 = 1_000;
 
 // Noise gate driven by DeepFilterNet's per-hop lsnr estimate.
 // lsnr < GATE_LSNR_THRESHOLD means the model sees mostly noise → close gate.
-// Smoothing prevents chattering on brief pauses between words.
+// The gate_gain IIR (attack/release) is the only smoothing — no separate lsnr
+// smoother, which would lag speech onsets and cause per-word clipping.
 const GATE_LSNR_THRESHOLD: f32 = -3.0;
-const GATE_LSNR_SMOOTH_COEFF: f32 = 0.904_8; // ~100 ms time constant
 const GATE_ATTACK_COEFF: f32 = 0.606_5; // ~20 ms open
 const GATE_RELEASE_COEFF: f32 = 0.980_2; // ~500 ms close
 
@@ -1106,45 +1109,41 @@ fn suppression_startup_wet_mix(elapsed_ms: f32) -> f32 {
     (elapsed_ms / SUPPRESSION_STARTUP_RAMP_MS as f32).clamp(0.0, 1.0)
 }
 
-fn apply_auto_gain_control(samples: &mut [f32], state: &mut AutoGainControlState) {
-    if samples.is_empty() {
+fn apply_auto_gain_control(
+    samples: &mut [f32],
+    state: &mut AutoGainControlState,
+    sample_rate: usize,
+) {
+    if samples.is_empty() || sample_rate == 0 {
         return;
     }
 
-    let mut sum_squares = 0.0_f64;
-    for sample in samples.iter() {
-        let sample_f64 = f64::from(*sample);
-        sum_squares += sample_f64 * sample_f64;
-    }
+    let sr = sample_rate as f32;
 
-    let rms = (sum_squares / samples.len() as f64).sqrt() as f32;
-    let (desired_gain, smoothing) = if rms <= AGC_PAUSE_RMS_THRESHOLD {
-        state.post_pause_hold_blocks_remaining = AGC_POST_PAUSE_HOLD_BLOCKS;
-        // Avoid AGC ramp-up during pauses; it over-amplifies the next phrase onset.
-        (1.0, AGC_PAUSE_RECOVERY_SMOOTHING)
-    } else if state.post_pause_hold_blocks_remaining > 0 {
-        state.post_pause_hold_blocks_remaining =
-            state.post_pause_hold_blocks_remaining.saturating_sub(1);
-        // Hold AGC at unity briefly after silence so phrase onsets stay natural.
-        (1.0, AGC_PAUSE_RECOVERY_SMOOTHING)
-    } else {
-        let desired_gain = if rms <= AGC_MIN_RMS {
-            AGC_MAX_GAIN
-        } else {
-            (AGC_TARGET_RMS / rms).clamp(AGC_MIN_GAIN, AGC_MAX_GAIN)
-        };
-
-        let smoothing = if desired_gain < state.current_gain {
-            AGC_ATTACK_SMOOTHING
-        } else {
-            AGC_RELEASE_SMOOTHING
-        };
-
-        (desired_gain, smoothing)
-    };
-    state.current_gain = state.current_gain * (1.0 - smoothing) + desired_gain * smoothing;
+    // IIR coefficients derived from time constants — computed once per call.
+    // α = exp(-1 / (sample_rate × τ))  — standard first-order IIR design.
+    let env_attack = (-1.0_f32 / (sr * AGC_ENVELOPE_ATTACK_S)).exp();
+    let env_release = (-1.0_f32 / (sr * AGC_ENVELOPE_RELEASE_S)).exp();
+    let gain_attack = (-1.0_f32 / (sr * AGC_GAIN_ATTACK_S)).exp();
+    let gain_release = (-1.0_f32 / (sr * AGC_GAIN_RELEASE_S)).exp();
 
     for sample in samples.iter_mut() {
+        // Peak envelope follower — fast rise, slow fall.
+        let abs_val = sample.abs();
+        let env_coeff = if abs_val > state.envelope { env_attack } else { env_release };
+        state.envelope = env_coeff * state.envelope + (1.0 - env_coeff) * abs_val;
+
+        // Map envelope level to desired gain via compression curve.
+        let desired_gain = if state.envelope < AGC_MIN_RMS {
+            AGC_MAX_GAIN
+        } else {
+            (AGC_TARGET_RMS / state.envelope).clamp(AGC_MIN_GAIN, AGC_MAX_GAIN)
+        };
+
+        // Smooth gain changes: fast reduction avoids clipping, slow increase avoids pumping.
+        let gain_coeff = if desired_gain < state.current_gain { gain_attack } else { gain_release };
+        state.current_gain = gain_coeff * state.current_gain + (1.0 - gain_coeff) * desired_gain;
+
         *sample = (*sample * state.current_gain).clamp(-AGC_LIMITER, AGC_LIMITER);
     }
 }
@@ -1272,7 +1271,7 @@ fn process_voice_filter_frame(
             // so raw mic audio isn't hard-clipped before DeepFilterNet warms up.
             session.auto_gain_state.current_gain = 1.0;
         } else {
-            apply_auto_gain_control(samples, &mut session.auto_gain_state);
+            apply_auto_gain_control(samples, &mut session.auto_gain_state, session.sample_rate);
         }
     }
 
@@ -1281,6 +1280,11 @@ fn process_voice_filter_frame(
     let mut lsnr_min = f32::MAX;
     let mut lsnr_max = f32::MIN;
     let mut lsnr_hop_count = 0u32;
+
+    // Gate state is extracted before the match to avoid borrow conflicts with
+    // `session.processor`. Written back after the match completes.
+    let mut gate_gain = session.gate_gain;
+    let gate_active = session.suppression_startup_ramp_ms_remaining == 0;
 
     match &mut session.processor {
         VoiceFilterProcessor::DeepFilter(processor) => {
@@ -1320,6 +1324,22 @@ fn process_voice_filter_frame(
                 if lsnr < lsnr_min { lsnr_min = lsnr; }
                 if lsnr > lsnr_max { lsnr_max = lsnr; }
 
+                // Gate: update and apply per-hop so brief low-lsnr phonemes
+                // don't clip — the gate_gain IIR (500 ms release) bridges gaps.
+                if gate_active {
+                    let target_gain = if lsnr >= GATE_LSNR_THRESHOLD { 1.0_f32 } else { 0.0_f32 };
+                    let coeff = if target_gain > gate_gain { GATE_ATTACK_COEFF } else { GATE_RELEASE_COEFF };
+                    gate_gain = coeff * gate_gain + (1.0 - coeff) * target_gain;
+
+                    if gate_gain < 0.999 {
+                        for channel_index in 0..channels {
+                            for sample_index in 0..hop_size {
+                                enhanced[(channel_index, sample_index)] *= gate_gain;
+                            }
+                        }
+                    }
+                }
+
                 for channel_index in 0..channels {
                     for sample_index in 0..hop_size {
                         processor.output_buffers[channel_index]
@@ -1341,6 +1361,8 @@ fn process_voice_filter_frame(
         }
         VoiceFilterProcessor::Passthrough => {}
     }
+
+    session.gate_gain = gate_gain;
 
     if should_apply_startup_ramp {
         let processed_ms = if session.sample_rate > 0 {
@@ -1389,36 +1411,7 @@ fn process_voice_filter_frame(
         (None, None, None)
     };
 
-    // Noise gate: apply only after the startup ramp has completed so the gate
-    // does not fight the dry/wet blend during model warm-up.
-    let gate_gain_out = if let Some(lsnr) = lsnr_mean {
-        if session.suppression_startup_ramp_ms_remaining == 0 {
-            session.gate_lsnr_smooth = GATE_LSNR_SMOOTH_COEFF * session.gate_lsnr_smooth
-                + (1.0 - GATE_LSNR_SMOOTH_COEFF) * lsnr;
-
-            let target_gain = if session.gate_lsnr_smooth >= GATE_LSNR_THRESHOLD {
-                1.0_f32
-            } else {
-                0.0_f32
-            };
-
-            let coeff = if target_gain > session.gate_gain {
-                GATE_ATTACK_COEFF
-            } else {
-                GATE_RELEASE_COEFF
-            };
-            session.gate_gain = coeff * session.gate_gain + (1.0 - coeff) * target_gain;
-
-            if session.gate_gain < 0.999 {
-                for sample in samples.iter_mut() {
-                    *sample *= session.gate_gain;
-                }
-            }
-        }
-        Some(session.gate_gain)
-    } else {
-        None
-    };
+    let gate_gain_out = if lsnr_hop_count > 0 { Some(session.gate_gain) } else { None };
 
     Ok(VoiceFilterDiagnostics {
         lsnr_mean,
