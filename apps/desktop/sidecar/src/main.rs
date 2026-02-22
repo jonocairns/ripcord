@@ -28,7 +28,7 @@ use std::ptr;
 use std::time::Instant;
 
 #[cfg(windows)]
-use windows::core::{IUnknown, Interface, PWSTR};
+use windows::core::{IUnknown, Interface, PCWSTR, PWSTR};
 #[cfg(windows)]
 use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM, WAIT_TIMEOUT};
 #[cfg(windows)]
@@ -43,7 +43,17 @@ use windows::Win32::Media::Audio::{
     VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX,
 };
 #[cfg(windows)]
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+use windows::Win32::Media::Audio::{
+    eCapture, eConsole, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
+};
+#[cfg(windows)]
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+};
+#[cfg(windows)]
+use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
+#[cfg(windows)]
+use windows::core::GUID;
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_NAME_WIN32,
@@ -77,6 +87,12 @@ const ECHO_REFERENCE_DELAY_MS: usize = 80;
 const ECHO_REFERENCE_MIN_ENERGY: f32 = 1e-6;
 const ECHO_SUBTRACTION_MAX: f32 = 0.85;
 const ECHO_DUCKING_MIN_GAIN: f32 = 0.55;
+// Limiter: threshold just below full scale, ~1ms attack, ~100ms release at 48kHz
+#[cfg(windows)]
+const MIC_CAPTURE_FRAME_SIZE: usize = 480; // 10ms at 48kHz — matches DeepFilterNet hop size
+const LIMITER_THRESHOLD: f32 = 0.95;
+const LIMITER_ATTACK_COEFF: f32 = 0.979_2; // exp(-1/48)
+const LIMITER_RELEASE_COEFF: f32 = 0.999_8; // exp(-1/4800)
 
 #[derive(Debug, Deserialize)]
 struct SidecarRequest {
@@ -107,6 +123,23 @@ struct SidecarEvent<'a> {
     event: &'a str,
     params: Value,
 }
+
+#[derive(Debug, Serialize, Clone)]
+struct MicDevice {
+    id: String,
+    label: String,
+}
+
+#[cfg(windows)]
+const PKEY_DEVICE_FRIENDLY_NAME: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_values(
+        0xa45c_254e,
+        0xdf1c,
+        0x4efd,
+        [0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0],
+    ),
+    pid: 14,
+};
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -167,6 +200,18 @@ struct StartVoiceFilterParams {
     noise_suppression: Option<bool>,
     auto_gain_control: Option<bool>,
     echo_cancellation: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartVoiceFilterWithCaptureParams {
+    sample_rate: usize,
+    channels: usize,
+    suppression_level: VoiceFilterStrength,
+    noise_suppression: Option<bool>,
+    auto_gain_control: Option<bool>,
+    echo_cancellation: Option<bool>,
+    device_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -326,29 +371,15 @@ struct VoiceFilterSession {
     sample_rate: usize,
     channels: usize,
     processor: VoiceFilterProcessor,
-    suppression_startup_ramp_ms_remaining: u32,
-    dry_sample_buf: Vec<f32>,
     auto_gain_control: bool,
     auto_gain_state: AutoGainControlState,
     agc_startup_bypass_ms_remaining: u32,
     echo_cancellation: bool,
     echo_reference_interleaved: VecDeque<f32>,
+    limiter_gain: f32,
 }
 
 impl VoiceFilterSession {
-    fn get_or_resize_dry_buf(&mut self, len: usize) -> &mut [f32] {
-        if self.dry_sample_buf.len() != len {
-            self.dry_sample_buf.resize(len, 0.0);
-        }
-
-        &mut self.dry_sample_buf
-    }
-
-    fn capture_dry_samples(&mut self, samples: &[f32]) {
-        let dry_buf = self.get_or_resize_dry_buf(samples.len());
-        dry_buf.copy_from_slice(samples);
-    }
-
     fn push_echo_reference_samples(
         &mut self,
         input_samples: &[f32],
@@ -469,6 +500,7 @@ struct SidecarState {
     capture_session: Option<CaptureSession>,
     voice_filter_session: Option<VoiceFilterSession>,
     push_keybind_watcher: Option<PushKeybindWatcher>,
+    mic_capture_stop_flag: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Default)]
@@ -920,12 +952,6 @@ fn create_voice_filter_session(
         sample_rate,
         channels,
         processor,
-        suppression_startup_ramp_ms_remaining: if noise_suppression {
-            SUPPRESSION_STARTUP_RAMP_MS
-        } else {
-            0
-        },
-        dry_sample_buf: Vec::new(),
         auto_gain_control,
         auto_gain_state: AutoGainControlState {
             current_gain: 1.0,
@@ -934,6 +960,7 @@ fn create_voice_filter_session(
         agc_startup_bypass_ms_remaining: AGC_STARTUP_BYPASS_MS,
         echo_cancellation,
         echo_reference_interleaved: VecDeque::new(),
+        limiter_gain: 1.0,
     })
 }
 
@@ -966,15 +993,6 @@ const AGC_PAUSE_RMS_THRESHOLD: f32 = 0.006;
 const AGC_PAUSE_RECOVERY_SMOOTHING: f32 = 0.3;
 const AGC_POST_PAUSE_HOLD_BLOCKS: u32 = 20;
 const AGC_STARTUP_BYPASS_MS: u32 = 1_500;
-const SUPPRESSION_STARTUP_RAMP_MS: u32 = 750;
-
-fn suppression_startup_wet_mix(elapsed_ms: f32) -> f32 {
-    if elapsed_ms <= 0.0 {
-        return 0.0;
-    }
-
-    (elapsed_ms / SUPPRESSION_STARTUP_RAMP_MS as f32).clamp(0.0, 1.0)
-}
 
 fn apply_auto_gain_control(samples: &mut [f32], state: &mut AutoGainControlState) {
     if samples.is_empty() {
@@ -1076,28 +1094,44 @@ fn process_voice_filter_frame(
     session: &mut VoiceFilterSession,
     samples: &mut [f32],
     channels: usize,
-) -> Result<usize, String> {
+) -> Result<(), String> {
     if samples.is_empty() || channels == 0 {
-        return Ok(0);
+        return Ok(());
     }
 
     let frame_count = samples.len() / channels;
 
     if frame_count == 0 {
-        return Ok(0);
+        return Ok(());
     }
 
     if samples.len() != frame_count * channels {
         return Err("Voice filter frame sample count mismatch".to_string());
     }
 
-    let should_apply_startup_ramp = session.suppression_startup_ramp_ms_remaining > 0
-        && matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_));
-    if should_apply_startup_ramp {
-        session.capture_dry_samples(samples);
+    // AGC runs before DeepFilterNet so the model receives a level-normalised signal
+    if session.auto_gain_control {
+        if session.agc_startup_bypass_ms_remaining > 0 {
+            let input_ms = if session.sample_rate > 0 {
+                ((frame_count.saturating_mul(1000)) / session.sample_rate) as u32
+            } else {
+                0
+            }
+            .max(1);
+
+            session.agc_startup_bypass_ms_remaining = session
+                .agc_startup_bypass_ms_remaining
+                .saturating_sub(input_ms);
+
+            // Hold gain at unity during startup — pass samples through unmodified
+            // so raw mic audio isn't hard-clipped before DeepFilterNet warms up.
+            session.auto_gain_state.current_gain = 1.0;
+        } else {
+            apply_auto_gain_control(samples, &mut session.auto_gain_state);
+        }
     }
 
-    let processed_frame_count = match &mut session.processor {
+    match &mut session.processor {
         VoiceFilterProcessor::DeepFilter(processor) => {
             let hop_size = processor.hop_size;
 
@@ -1149,76 +1183,15 @@ fn process_voice_filter_frame(
                 }
             }
 
-            frame_count
         }
-        VoiceFilterProcessor::Passthrough => frame_count,
-    };
-
-    if should_apply_startup_ramp {
-        let processed_ms = if session.sample_rate > 0 {
-            ((processed_frame_count.saturating_mul(1000)) / session.sample_rate) as u32
-        } else {
-            0
-        }
-        .max(1);
-
-        let ramp_ms_start = session.suppression_startup_ramp_ms_remaining;
-        session.suppression_startup_ramp_ms_remaining = session
-            .suppression_startup_ramp_ms_remaining
-            .saturating_sub(processed_ms);
-        let ramp_elapsed_start_ms =
-            SUPPRESSION_STARTUP_RAMP_MS.saturating_sub(ramp_ms_start) as f32;
-        let frame_duration_ms = if session.sample_rate > 0 {
-            1000.0 / session.sample_rate as f32
-        } else {
-            0.0
-        };
-
-        let dry_samples = &session.dry_sample_buf;
-        for frame_index in 0..frame_count {
-            let frame_elapsed_ms =
-                ramp_elapsed_start_ms + frame_index as f32 * frame_duration_ms;
-            let wet_mix = suppression_startup_wet_mix(frame_elapsed_ms);
-            let dry_mix = 1.0 - wet_mix;
-
-            for channel_index in 0..channels {
-                let index = frame_index * channels + channel_index;
-                samples[index] = dry_samples[index] * dry_mix + samples[index] * wet_mix;
-            }
-        }
-    }
-
-    if session.auto_gain_control {
-        if session.agc_startup_bypass_ms_remaining > 0 {
-            let processed_ms = if session.sample_rate > 0 {
-                ((processed_frame_count.saturating_mul(1000)) / session.sample_rate) as u32
-            } else {
-                0
-            }
-            .max(1);
-
-            session.agc_startup_bypass_ms_remaining = session
-                .agc_startup_bypass_ms_remaining
-                .saturating_sub(processed_ms);
-
-            // During AGC startup bypass, keep gain pinned at unity to avoid
-            // startup attenuation while the filter settles.
-            session.auto_gain_state.current_gain = 1.0;
-
-            for sample in samples.iter_mut() {
-                *sample = (*sample * session.auto_gain_state.current_gain)
-                    .clamp(-AGC_LIMITER, AGC_LIMITER);
-            }
-        } else {
-            apply_auto_gain_control(samples, &mut session.auto_gain_state);
-        }
+        VoiceFilterProcessor::Passthrough => {}
     }
 
     if session.echo_cancellation {
         apply_reference_echo_cancellation(session, samples);
     }
 
-    Ok(processed_frame_count)
+    Ok(())
 }
 
 fn voice_filter_frames_per_buffer(session: &VoiceFilterSession) -> usize {
@@ -2093,6 +2066,12 @@ fn stop_push_keybind_watcher(state: &mut SidecarState) {
     let _ = active_watcher.handle.join();
 }
 
+fn stop_mic_capture(state: &mut SidecarState) {
+    if let Some(flag) = state.mic_capture_stop_flag.take() {
+        flag.store(true, Ordering::Relaxed);
+    }
+}
+
 fn stop_voice_filter_session(
     state: &mut SidecarState,
     frame_queue: &Arc<FrameQueue>,
@@ -2109,6 +2088,7 @@ fn stop_voice_filter_session(
         .unwrap_or(true);
 
     if should_stop {
+        stop_mic_capture(state);
         enqueue_voice_filter_ended_event(frame_queue, &active_session.session_id, reason, error);
         return;
     }
@@ -2277,6 +2257,358 @@ fn handle_push_keybinds_set(
     }
 }
 
+/// Read a `VT_LPWSTR` string value out of a `PROPVARIANT` by inspecting
+/// raw memory. The COM spec guarantees `PROPVARIANT` is 16 bytes on x64:
+///   [vt: u16, wReserved1-3: 3*u16, value: 8 bytes]
+/// For `VT_LPWSTR` (31) the 8-byte value is a `*const u16` pointer
+/// to a null-terminated UTF-16 string allocated with `CoTaskMem`.
+/// We read the string here (which copies the chars) and let `prop`
+/// be dropped normally so windows-rs calls `PropVariantClear`.
+#[cfg(windows)]
+unsafe fn read_propvariant_lpwstr(prop: &windows_core::PROPVARIANT) -> Option<String> {
+    const VT_LPWSTR: u16 = 31;
+    let raw = prop as *const windows_core::PROPVARIANT as *const u8;
+    let vt = u16::from_ne_bytes([*raw, *raw.add(1)]);
+    if vt != VT_LPWSTR {
+        return None;
+    }
+    // Pointer is at byte offset 8
+    let pwstr_ptr = *(raw.add(8) as *const *const u16);
+    if pwstr_ptr.is_null() {
+        return None;
+    }
+    windows::core::PCWSTR(pwstr_ptr).to_string().ok()
+}
+
+#[cfg(windows)]
+fn list_mic_devices_windows() -> Vec<MicDevice> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+
+    let com_initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
+
+    let mut devices = Vec::new();
+
+    let result = (|| -> Result<(), windows::core::Error> {
+        let enumerator: IMMDeviceEnumerator = unsafe {
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?
+        };
+
+        let collection = unsafe { enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)? };
+        let count = unsafe { collection.GetCount()? };
+
+        for index in 0..count {
+            let device = match unsafe { collection.Item(index) } {
+                Ok(device) => device,
+                Err(_) => continue,
+            };
+
+            let id_pwstr = match unsafe { device.GetId() } {
+                Ok(pwstr) => pwstr,
+                Err(_) => continue,
+            };
+
+            let id = unsafe { id_pwstr.to_string() }.unwrap_or_default();
+            unsafe { CoTaskMemFree(Some(id_pwstr.0 as *const c_void)) };
+
+            if id.is_empty() {
+                continue;
+            }
+
+            let label = (|| -> Option<String> {
+                // STGM_READ = 0 (read-only access mode)
+                let store: IPropertyStore = unsafe {
+                    device
+                        .OpenPropertyStore(windows::Win32::System::Com::STGM(0))
+                        .ok()?
+                };
+                let prop = unsafe { store.GetValue(&PKEY_DEVICE_FRIENDLY_NAME).ok()? };
+                unsafe { read_propvariant_lpwstr(&prop) }
+            })()
+            .unwrap_or_default();
+
+            devices.push(MicDevice { id, label });
+        }
+
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        eprintln!("[capture-sidecar] list_mic_devices error: {error}");
+    }
+
+    if com_initialized {
+        unsafe { CoUninitialize() };
+    }
+
+    devices
+}
+
+fn handle_mic_devices_list() -> Result<Value, String> {
+    #[cfg(windows)]
+    {
+        let devices = list_mic_devices_windows();
+        return Ok(json!({ "devices": devices }));
+    }
+
+    #[cfg(not(windows))]
+    {
+        let empty: Vec<MicDevice> = Vec::new();
+        Ok(json!({ "devices": empty }))
+    }
+}
+
+#[cfg(windows)]
+fn capture_mic_audio(
+    session_id: String,
+    device_id: Option<String>,
+    stop_flag: Arc<AtomicBool>,
+    state: Arc<Mutex<SidecarState>>,
+    frame_queue: Arc<FrameQueue>,
+) {
+    let com_initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
+
+    let result: Result<(), String> = (|| {
+        let enumerator: IMMDeviceEnumerator = unsafe {
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|error| format!("CoCreateInstance IMMDeviceEnumerator failed: {error}"))?
+        };
+
+        let device = if let Some(ref id) = device_id {
+            let id_wide: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
+            unsafe {
+                enumerator
+                    .GetDevice(PCWSTR(id_wide.as_ptr()))
+                    .map_err(|error| format!("GetDevice failed: {error}"))?
+            }
+        } else {
+            unsafe {
+                enumerator
+                    .GetDefaultAudioEndpoint(eCapture, eConsole)
+                    .map_err(|error| format!("GetDefaultAudioEndpoint failed: {error}"))?
+            }
+        };
+
+        let audio_client: IAudioClient = unsafe {
+            device
+                .Activate(CLSCTX_ALL, None)
+                .map_err(|error| format!("IMMDevice::Activate IAudioClient failed: {error}"))?
+        };
+
+        let capture_format = WAVEFORMATEX {
+            wFormatTag: 0x0003, // WAVE_FORMAT_IEEE_FLOAT
+            nChannels: TARGET_CHANNELS as u16,
+            nSamplesPerSec: TARGET_SAMPLE_RATE,
+            nAvgBytesPerSec: TARGET_SAMPLE_RATE * TARGET_CHANNELS as u32 * 4,
+            nBlockAlign: (TARGET_CHANNELS * 4) as u16,
+            wBitsPerSample: 32,
+            cbSize: 0,
+        };
+
+        unsafe {
+            audio_client
+                .Initialize(
+                    AUDCLNT_SHAREMODE_SHARED,
+                    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                    20 * 10_000,
+                    0,
+                    &capture_format,
+                    None,
+                )
+                .map_err(|error| format!("IAudioClient::Initialize failed: {error}"))?
+        };
+
+        let capture_client: IAudioCaptureClient = unsafe {
+            audio_client
+                .GetService()
+                .map_err(|error| format!("GetService IAudioCaptureClient failed: {error}"))?
+        };
+
+        unsafe {
+            audio_client
+                .Start()
+                .map_err(|error| format!("IAudioClient::Start failed: {error}"))?
+        };
+
+        let mut pending = Vec::<f32>::new();
+        let mut sequence: u64 = 0;
+
+        loop {
+            if stop_flag.load(Ordering::Relaxed) {
+                let _ = unsafe { audio_client.Stop() };
+                return Ok(());
+            }
+
+            let packet_size = match unsafe { capture_client.GetNextPacketSize() } {
+                Ok(size) => size,
+                Err(_) => {
+                    let _ = unsafe { audio_client.Stop() };
+                    return Err("GetNextPacketSize failed (device lost)".to_string());
+                }
+            };
+
+            if packet_size == 0 {
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+
+            let mut data_ptr: *mut u8 = ptr::null_mut();
+            let mut frame_count = 0u32;
+            let mut flags = 0u32;
+
+            if unsafe {
+                capture_client.GetBuffer(&mut data_ptr, &mut frame_count, &mut flags, None, None)
+            }
+            .is_err()
+            {
+                let _ = unsafe { audio_client.Stop() };
+                return Err("GetBuffer failed".to_string());
+            }
+
+            let is_silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
+
+            if !is_silent {
+                let sample_count = frame_count as usize * TARGET_CHANNELS;
+                let chunk =
+                    unsafe { std::slice::from_raw_parts(data_ptr as *const f32, sample_count) };
+                pending.extend_from_slice(chunk);
+            }
+
+            let _ = unsafe { capture_client.ReleaseBuffer(frame_count) };
+
+            while pending.len() >= MIC_CAPTURE_FRAME_SIZE * TARGET_CHANNELS {
+                let samples: Vec<f32> = pending.drain(..MIC_CAPTURE_FRAME_SIZE * TARGET_CHANNELS).collect();
+
+                let processed = {
+                    let mut state_lock = match state.lock() {
+                        Ok(guard) => guard,
+                        Err(_) => {
+                            let _ = unsafe { audio_client.Stop() };
+                            return Err("State lock poisoned in capture thread".to_string());
+                        }
+                    };
+
+                    if let Some(ref vf_session) = state_lock.voice_filter_session {
+                        if vf_session.session_id != session_id {
+                            let _ = unsafe { audio_client.Stop() };
+                            return Ok(());
+                        }
+                    } else {
+                        let _ = unsafe { audio_client.Stop() };
+                        return Ok(());
+                    }
+
+                    process_voice_filter_samples(
+                        &frame_queue,
+                        &mut state_lock,
+                        &session_id,
+                        sequence,
+                        TARGET_SAMPLE_RATE as usize,
+                        TARGET_CHANNELS,
+                        MIC_CAPTURE_FRAME_SIZE,
+                        None,
+                        samples,
+                    )
+                };
+
+                if let Err(error) = processed {
+                    eprintln!("[capture-sidecar] mic capture process error: {error}");
+                }
+
+                sequence = sequence.saturating_add(1);
+            }
+        }
+    })();
+
+    if com_initialized {
+        unsafe { CoUninitialize() };
+    }
+
+    if let Err(error) = result {
+        eprintln!("[capture-sidecar] mic capture thread error: {error}");
+        enqueue_voice_filter_ended_event(&frame_queue, &session_id, "capture_error", Some(error));
+    }
+}
+
+#[cfg(not(windows))]
+fn capture_mic_audio(
+    _session_id: String,
+    _device_id: Option<String>,
+    _stop_flag: Arc<AtomicBool>,
+    _state: Arc<Mutex<SidecarState>>,
+    _frame_queue: Arc<FrameQueue>,
+) {
+}
+
+fn handle_voice_filter_start_with_capture(
+    state_arc: Arc<Mutex<SidecarState>>,
+    frame_queue: Arc<FrameQueue>,
+    state: &mut SidecarState,
+    params: Value,
+) -> Result<Value, String> {
+    let parsed: StartVoiceFilterWithCaptureParams =
+        serde_json::from_value(params).map_err(|error| format!("invalid params: {error}"))?;
+
+    if parsed.sample_rate != TARGET_SAMPLE_RATE as usize {
+        return Err("DeepFilterNet currently supports only 48kHz input".to_string());
+    }
+
+    if parsed.channels == 0 || parsed.channels > 2 {
+        return Err("Unsupported voice filter channel count".to_string());
+    }
+
+    let noise_suppression = parsed.noise_suppression.unwrap_or(true);
+    let auto_gain_control = parsed.auto_gain_control.unwrap_or(false);
+    let echo_cancellation = parsed.echo_cancellation.unwrap_or(false);
+
+    stop_voice_filter_session(state, &frame_queue, None, "capture_stopped", None);
+
+    let session_id = Uuid::new_v4().to_string();
+    let session = create_voice_filter_session(
+        session_id.clone(),
+        parsed.sample_rate,
+        parsed.channels,
+        parsed.suppression_level,
+        noise_suppression,
+        auto_gain_control,
+        echo_cancellation,
+    )?;
+    let frames_per_buffer = voice_filter_frames_per_buffer(&session);
+
+    state.voice_filter_session = Some(session);
+
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    state.mic_capture_stop_flag = Some(Arc::clone(&stop_flag));
+
+    let thread_session_id = session_id.clone();
+    let thread_device_id = parsed.device_id.clone();
+    let thread_state = Arc::clone(&state_arc);
+    let thread_queue = Arc::clone(&frame_queue);
+
+    eprintln!(
+        "[capture-sidecar] voice_filter.start_with_capture session={} deviceId={:?}",
+        session_id, parsed.device_id
+    );
+
+    thread::spawn(move || {
+        capture_mic_audio(
+            thread_session_id,
+            thread_device_id,
+            stop_flag,
+            thread_state,
+            thread_queue,
+        );
+    });
+
+    Ok(json!({
+        "sessionId": session_id,
+        "sampleRate": parsed.sample_rate,
+        "channels": parsed.channels,
+        "framesPerBuffer": frames_per_buffer,
+        "protocolVersion": PROTOCOL_VERSION,
+        "encoding": PCM_ENCODING,
+    }))
+}
+
 fn handle_voice_filter_start(
     frame_queue: Arc<FrameQueue>,
     state: &mut SidecarState,
@@ -2327,6 +2659,27 @@ fn handle_voice_filter_start(
     }))
 }
 
+fn apply_limiter(samples: &mut [f32], gain: &mut f32) {
+    for sample in samples.iter_mut() {
+        let abs_val = sample.abs();
+        let target_gain = if abs_val > LIMITER_THRESHOLD {
+            LIMITER_THRESHOLD / abs_val
+        } else {
+            1.0
+        };
+
+        if target_gain < *gain {
+            // Attack: fast gain reduction
+            *gain = *gain * LIMITER_ATTACK_COEFF + target_gain * (1.0 - LIMITER_ATTACK_COEFF);
+        } else {
+            // Release: slow restore toward 1.0
+            *gain = (*gain + (1.0 - *gain) * (1.0 - LIMITER_RELEASE_COEFF)).min(1.0);
+        }
+
+        *sample *= *gain;
+    }
+}
+
 fn process_voice_filter_samples(
     frame_queue: &Arc<FrameQueue>,
     state: &mut SidecarState,
@@ -2369,6 +2722,8 @@ fn process_voice_filter_samples(
     if samples.len() != frame_count * channels {
         return Err("Voice filter frame sample count mismatch".to_string());
     }
+
+    apply_limiter(&mut samples, &mut session.limiter_gain);
 
     let frame_bytes = bytemuck::cast_slice(&samples);
     let pcm_base64 = BASE64.encode(frame_bytes);
@@ -2936,6 +3291,16 @@ fn main() {
                 Ok(mut state_lock) => {
                     handle_push_keybinds_set(request_frame_queue.clone(), &mut state_lock, request.params)
                 }
+                Err(_) => Err("Sidecar state lock poisoned".to_string()),
+            },
+            "mic_devices.list" => handle_mic_devices_list(),
+            "voice_filter.start_with_capture" => match state.lock() {
+                Ok(mut state_lock) => handle_voice_filter_start_with_capture(
+                    Arc::clone(&state),
+                    request_frame_queue.clone(),
+                    &mut state_lock,
+                    request.params,
+                ),
                 Err(_) => Err("Sidecar state lock poisoned".to_string()),
             },
             "voice_filter.start" => match state.lock() {

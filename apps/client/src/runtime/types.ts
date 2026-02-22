@@ -182,6 +182,12 @@ export type TStartVoiceFilterInput = {
   echoCancellation: boolean;
 };
 
+export type TMicDevice = { id: string; label: string };
+export type TMicDevicesResult = { devices: TMicDevice[] };
+export type TStartVoiceFilterWithCaptureInput = TStartVoiceFilterInput & {
+  deviceId?: string;
+};
+
 export type TPushKeybindKind = 'talk' | 'mute';
 
 export type TDesktopPushKeybindsInput = {
@@ -216,6 +222,10 @@ export type TDesktopBridge = {
     input: TStartAppAudioCaptureInput
   ) => Promise<TAppAudioSession>;
   stopAppAudioCapture: (sessionId?: string) => Promise<void>;
+  listMicDevices: () => Promise<TMicDevicesResult>;
+  startVoiceFilterSessionWithCapture: (
+    input: TStartVoiceFilterWithCaptureInput
+  ) => Promise<TVoiceFilterSession>;
   startVoiceFilterSession: (
     input: TStartVoiceFilterInput
   ) => Promise<TVoiceFilterSession>;

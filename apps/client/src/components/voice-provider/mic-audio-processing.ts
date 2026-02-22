@@ -1,5 +1,6 @@
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import type {
+  TDesktopBridge,
   TVoiceFilterFrame,
   TVoiceFilterStatusEvent,
   TVoiceFilterStrength as TRuntimeVoiceFilterStrength
@@ -28,6 +29,7 @@ type TCreateMicAudioProcessingPipelineInput = {
   noiseSuppression: boolean;
   autoGainControl: boolean;
   echoCancellation: boolean;
+  sidecarDeviceId?: string;
 };
 
 const MIC_CAPTURE_WORKLET_NAME = 'sharkord-mic-capture-processor';
@@ -339,6 +341,132 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   return pipeline;
 };
 
+const createNativeSidecarMicCapturePipeline = async ({
+  suppressionLevel,
+  noiseSuppression,
+  autoGainControl,
+  echoCancellation,
+  sidecarDeviceId,
+  desktopBridge
+}: {
+  suppressionLevel: VoiceFilterStrength;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+  echoCancellation: boolean;
+  sidecarDeviceId: string | undefined;
+  desktopBridge: TDesktopBridge;
+}): Promise<TMicAudioProcessingPipeline | undefined> => {
+  const session = await desktopBridge.startVoiceFilterSessionWithCapture({
+    sampleRate: 48_000,
+    channels: 2,
+    suppressionLevel: suppressionLevel as unknown as TRuntimeVoiceFilterStrength,
+    noiseSuppression,
+    autoGainControl,
+    echoCancellation,
+    deviceId: sidecarDeviceId
+  });
+  console.warn('[voice-filter-debug] Started native sidecar mic-capture session', session);
+
+  const outputPipeline = await createDesktopAppAudioPipeline({
+    sessionId: session.sessionId,
+    targetId: 'native-mic-filter',
+    sampleRate: session.sampleRate,
+    channels: session.channels,
+    framesPerBuffer: session.framesPerBuffer,
+    protocolVersion: session.protocolVersion,
+    encoding: session.encoding
+  }, {
+    mode: 'stable',
+    logLabel: 'mic-voice-filter',
+    insertSilenceOnDroppedFrames: true
+  });
+
+  let hasReceivedFilteredFrame = false;
+  let settleFirstFilteredFrame: ((error?: Error) => void) | undefined;
+  const firstFilteredFramePromise = new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const timeout = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`Native sidecar mic-capture produced no frames (session=${session.sessionId})`));
+    }, FIRST_FILTERED_FRAME_TIMEOUT_MS);
+
+    settleFirstFilteredFrame = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    };
+  });
+
+  const removeFrameSubscription = desktopBridge.subscribeVoiceFilterFrames(
+    (frame: TVoiceFilterFrame) => {
+      if (frame.sessionId !== session.sessionId) return;
+
+      outputPipeline.pushFrame({ ...frame, targetId: 'native-mic-filter' });
+
+      if (!hasReceivedFilteredFrame) {
+        hasReceivedFilteredFrame = true;
+        console.warn('[voice-filter-debug] Received first processed voice-filter frame', {
+          sessionId: frame.sessionId,
+          sequence: frame.sequence,
+          frameCount: frame.frameCount,
+          channels: frame.channels
+        });
+        settleFirstFilteredFrame?.();
+      }
+    }
+  );
+
+  const removeStatusSubscription = desktopBridge.subscribeVoiceFilterStatus(
+    (statusEvent: TVoiceFilterStatusEvent) => {
+      if (statusEvent.sessionId !== session.sessionId) return;
+
+      if (statusEvent.reason !== 'capture_stopped') {
+        console.warn('[voice-filter] Native sidecar mic-capture session ended', statusEvent);
+        if (statusEvent.error) {
+          console.warn('[voice-filter-debug] Native sidecar mic-capture error detail', statusEvent.error);
+        }
+      }
+
+      if (!hasReceivedFilteredFrame) {
+        settleFirstFilteredFrame?.(
+          new Error(`Native sidecar mic-capture ended before frames (${statusEvent.reason})`)
+        );
+      }
+    }
+  );
+
+  const pipeline: TMicAudioProcessingPipeline = {
+    sessionId: session.sessionId,
+    sampleRate: session.sampleRate,
+    channels: session.channels,
+    framesPerBuffer: session.framesPerBuffer,
+    stream: outputPipeline.stream,
+    track: outputPipeline.track,
+    backend: 'sidecar-native',
+    destroy: async () => {
+      removeFrameSubscription();
+      removeStatusSubscription();
+      await desktopBridge.stopVoiceFilterSession(session.sessionId);
+      await outputPipeline.destroy();
+    }
+  };
+
+  try {
+    await firstFilteredFramePromise;
+  } catch (error) {
+    await pipeline.destroy();
+    throw error;
+  }
+
+  return pipeline;
+};
+
 const createMicAudioProcessingPipeline = async ({
   inputTrack,
   enabled,
@@ -398,5 +526,5 @@ const createMicAudioProcessingPipeline = async ({
   }
 };
 
-export { createMicAudioProcessingPipeline };
+export { createMicAudioProcessingPipeline, createNativeSidecarMicCapturePipeline };
 export type { TMicAudioProcessingBackend, TMicAudioProcessingPipeline };

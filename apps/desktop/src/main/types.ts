@@ -201,3 +201,9 @@ export type TGlobalPushKeybindRegistrationResult = {
   muteRegistered: boolean;
   errors: string[];
 };
+
+export type TMicDevice = { id: string; label: string };
+export type TMicDevicesResult = { devices: TMicDevice[] };
+export type TStartVoiceFilterWithCaptureInput = TStartVoiceFilterInput & {
+  deviceId?: string;
+};

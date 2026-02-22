@@ -9,9 +9,11 @@ import type {
   TDesktopUpdateStatus,
   TGlobalPushKeybindRegistrationResult,
   TDesktopAppAudioTargetsResult,
+  TMicDevicesResult,
   TScreenShareSelection,
   TStartAppAudioCaptureInput,
   TStartVoiceFilterInput,
+  TStartVoiceFilterWithCaptureInput,
   TVoiceFilterFrame,
   TVoiceFilterPcmFrame,
   TVoiceFilterSession,
@@ -492,6 +494,12 @@ const desktopBridge = {
     ipcRenderer.invoke("desktop:stop-app-audio-capture", sessionId).finally(() => {
       trackAppAudioCaptureStop(sessionId);
     }),
+  listMicDevices: (): Promise<TMicDevicesResult> =>
+    ipcRenderer.invoke("desktop:list-mic-devices"),
+  startVoiceFilterSessionWithCapture: (
+    input: TStartVoiceFilterWithCaptureInput,
+  ): Promise<TVoiceFilterSession> =>
+    ipcRenderer.invoke("desktop:start-voice-filter-with-capture", input),
   startVoiceFilterSession: (
     input: TStartVoiceFilterInput,
   ): Promise<TVoiceFilterSession> =>

@@ -12,8 +12,10 @@ import type {
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
   TGlobalPushKeybindRegistrationResult,
+  TMicDevicesResult,
   TStartAppAudioCaptureInput,
   TStartVoiceFilterInput,
+  TStartVoiceFilterWithCaptureInput,
   TVoiceFilterFrame,
   TVoiceFilterPcmFrame,
   TVoiceFilterSession,
@@ -449,6 +451,35 @@ class CaptureSidecarManager {
       });
     }
 
+    return session;
+  }
+
+  async listMicDevices(): Promise<TMicDevicesResult> {
+    const response = await this.sendRequest("mic_devices.list", {});
+    return response as TMicDevicesResult;
+  }
+
+  async startVoiceFilterSessionWithCapture(
+    input: TStartVoiceFilterWithCaptureInput,
+  ): Promise<TVoiceFilterSession> {
+    const response = await this.sendRequest("voice_filter.start_with_capture", input);
+    const session = response as TVoiceFilterSession;
+    this.activeVoiceFilterSessionId = session.sessionId;
+    this.forceVoiceFilterJsonFallback = false;
+    this.hasLoggedVoiceFilterInputFrame = false;
+    this.hasLoggedVoiceFilterOutputFrame = false;
+    this.hasConnectedVoiceFilterBinarySocketSinceSessionStart = false;
+    this.hasAcceptedVoiceFilterBinaryPushSinceSessionStart = false;
+    this.lastVoiceFilterBinaryPushFailureReason = undefined;
+    this.voiceFilterJsonFallbackPushCount = 0;
+    this.voiceFilterJsonFallbackErrorCount = 0;
+    this.lastVoiceFilterSidecarBinaryError = undefined;
+    this.lastVoiceFilterSidecarJsonError = undefined;
+    if (ENABLE_BINARY_VOICE_FILTER_INGRESS) {
+      void this.ensureVoiceFilterBinaryIngress().catch((error) => {
+        console.warn("[desktop] Failed to initialize binary voice filter ingress", error);
+      });
+    }
     return session;
   }
 

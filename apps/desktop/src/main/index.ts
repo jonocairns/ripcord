@@ -34,6 +34,7 @@ import type {
   TScreenShareSelection,
   TStartAppAudioCaptureInput,
   TStartVoiceFilterInput,
+  TStartVoiceFilterWithCaptureInput,
   TVoiceFilterFrame,
   TVoiceFilterPcmFrame,
 } from "./types";
@@ -308,6 +309,16 @@ const registerIpcHandlers = () => {
     (_event, sessionId?: string) => {
       return captureSidecarManager.stopVoiceFilterSession(sessionId);
     },
+  );
+
+  ipcMain.handle("desktop:list-mic-devices", () =>
+    captureSidecarManager.listMicDevices(),
+  );
+
+  ipcMain.handle(
+    "desktop:start-voice-filter-with-capture",
+    (_event, input: TStartVoiceFilterWithCaptureInput) =>
+      captureSidecarManager.startVoiceFilterSessionWithCapture(input),
   );
 
   ipcMain.handle(

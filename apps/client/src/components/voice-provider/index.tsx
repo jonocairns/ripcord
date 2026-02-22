@@ -17,6 +17,7 @@ import {
   ScreenAudioMode,
   type TAppAudioStatusEvent,
   type TAppAudioSession,
+  type TDesktopBridge,
   type TDesktopScreenShareSelection
 } from '@/runtime/types';
 import {
@@ -54,6 +55,7 @@ import {
 import { FloatingPinnedCard } from './floating-pinned-card';
 import {
   createMicAudioProcessingPipeline,
+  createNativeSidecarMicCapturePipeline,
   type TMicAudioProcessingPipeline
 } from './mic-audio-processing';
 import {
@@ -142,35 +144,25 @@ const resolveMicProcessingConfig = (
   devices: TDeviceSettings,
   hasDesktopBridge: boolean
 ): ResolvedMicProcessingConfig => {
-  if (devices.micQualityMode === MicQualityMode.AUTO) {
-    const sidecarVoiceProcessingEnabled = hasDesktopBridge;
-
+  if (devices.micQualityMode === MicQualityMode.EXPERIMENTAL) {
     return {
-      sidecarVoiceProcessingEnabled,
-      browserAutoGainControl: !sidecarVoiceProcessingEnabled,
-      browserNoiseSuppression: !sidecarVoiceProcessingEnabled,
-      browserEchoCancellation: !sidecarVoiceProcessingEnabled,
-      sidecarNoiseSuppression: true,
-      sidecarAutoGainControl: true,
-      sidecarEchoCancellation: sidecarVoiceProcessingEnabled,
-      sidecarSuppressionLevel: VoiceFilterStrength.HIGH
+      sidecarVoiceProcessingEnabled: hasDesktopBridge,
+      browserAutoGainControl: false,
+      browserNoiseSuppression: false,
+      browserEchoCancellation: false,
+      sidecarNoiseSuppression: devices.noiseSuppression,
+      sidecarAutoGainControl: devices.autoGainControl,
+      sidecarEchoCancellation: devices.echoCancellation,
+      sidecarSuppressionLevel: devices.voiceFilterStrength
     };
   }
 
-  const sidecarVoiceProcessingEnabled =
-    hasDesktopBridge && devices.experimentalVoiceFilter;
-
+  // Standard (AUTO) and legacy MANUAL — browser-only, no sidecar
   return {
-    sidecarVoiceProcessingEnabled,
-    browserAutoGainControl: sidecarVoiceProcessingEnabled
-      ? false
-      : devices.autoGainControl,
-    browserNoiseSuppression: sidecarVoiceProcessingEnabled
-      ? false
-      : devices.noiseSuppression,
-    browserEchoCancellation: sidecarVoiceProcessingEnabled
-      ? false
-      : devices.echoCancellation,
+    sidecarVoiceProcessingEnabled: false,
+    browserAutoGainControl: devices.autoGainControl,
+    browserNoiseSuppression: devices.noiseSuppression,
+    browserEchoCancellation: devices.echoCancellation,
     sidecarNoiseSuppression: devices.noiseSuppression,
     sidecarAutoGainControl: devices.autoGainControl,
     sidecarEchoCancellation: devices.echoCancellation,
@@ -222,6 +214,28 @@ const collectPlaybackReferenceStreams = (
   });
 
   return streams;
+};
+
+const resolveSidecarDeviceId = async (
+  browserDeviceId: string | undefined,
+  desktopBridge: TDesktopBridge
+): Promise<string | undefined> => {
+  try {
+    const [browserDevices, sidecarResult] = await Promise.all([
+      navigator.mediaDevices.enumerateDevices(),
+      desktopBridge.listMicDevices()
+    ]);
+    const browserLabel = browserDevices
+      .find((d) => d.deviceId === browserDeviceId)
+      ?.label?.trim()
+      .toLowerCase();
+    if (!browserLabel) return undefined;
+    return sidecarResult.devices.find(
+      (d) => d.label.trim().toLowerCase() === browserLabel
+    )?.id;
+  } catch {
+    return undefined;
+  }
 };
 
 export type TVoiceProvider = {
@@ -475,6 +489,110 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         devices,
         Boolean(desktopBridge)
       );
+
+      // Resolve sidecar device ID best-effort before acquiring getUserMedia
+      let sidecarDeviceId: string | undefined;
+      if (micProcessingConfig.sidecarVoiceProcessingEnabled && desktopBridge) {
+        sidecarDeviceId = await resolveSidecarDeviceId(devices.microphoneId, desktopBridge);
+      }
+
+      // Try native sidecar capture first (no getUserMedia needed)
+      if (micProcessingConfig.sidecarVoiceProcessingEnabled && desktopBridge) {
+        try {
+          const nativePipeline = await createNativeSidecarMicCapturePipeline({
+            suppressionLevel: micProcessingConfig.sidecarSuppressionLevel,
+            noiseSuppression: micProcessingConfig.sidecarNoiseSuppression,
+            autoGainControl: micProcessingConfig.sidecarAutoGainControl,
+            echoCancellation: micProcessingConfig.sidecarEchoCancellation,
+            sidecarDeviceId,
+            desktopBridge
+          });
+
+          if (nativePipeline) {
+            micAudioPipelineRef.current = nativePipeline;
+            const outboundStream = nativePipeline.stream;
+            const outboundAudioTrack = nativePipeline.track;
+            const activeVoiceFilterSessionId = nativePipeline.sessionId;
+
+            logVoice('Microphone native capture enabled', {
+              backend: nativePipeline.backend,
+              suppressionLevel: micProcessingConfig.sidecarSuppressionLevel
+            });
+
+            if (
+              micProcessingConfig.sidecarEchoCancellation &&
+              activeVoiceFilterSessionId
+            ) {
+              const referencePipeline = await createMicReferenceAudioPipeline({
+                sampleRate: nativePipeline.sampleRate,
+                channels: nativePipeline.channels,
+                targetFrameSize: nativePipeline.framesPerBuffer,
+                onFrame: (samples, frameCount) => {
+                  desktopBridge.pushVoiceFilterReferencePcmFrame({
+                    sessionId: activeVoiceFilterSessionId,
+                    sequence: micReferenceSequenceRef.current,
+                    sampleRate: nativePipeline.sampleRate,
+                    channels: nativePipeline.channels,
+                    frameCount,
+                    pcm: samples,
+                    protocolVersion: 1
+                  });
+                  micReferenceSequenceRef.current += 1;
+                }
+              });
+
+              if (referencePipeline) {
+                micReferenceAudioPipelineRef.current = referencePipeline;
+                referencePipeline.updateStreams(
+                  collectPlaybackReferenceStreams(
+                    remoteUserStreamsRef.current,
+                    externalStreamsRef.current,
+                    !ownVoiceState.soundMuted
+                  )
+                );
+              }
+            }
+
+            setLocalAudioStream(outboundStream);
+            outboundAudioTrack.enabled = !ownVoiceState.micMuted;
+
+            logVoice('Obtained audio track (native capture)', { audioTrack: outboundAudioTrack });
+
+            localAudioProducer.current = await producerTransport.current?.produce({
+              track: outboundAudioTrack,
+              encodings: [{ maxBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS }],
+              codecOptions: AUDIO_OPUS_CODEC_OPTIONS,
+              appData: { kind: StreamKind.AUDIO }
+            });
+
+            logVoice('Microphone audio producer created (native capture)', {
+              producer: localAudioProducer.current
+            });
+
+            localAudioProducer.current?.on('@close', async () => {
+              logVoice('Audio producer closed');
+              const trpc = getTRPCClient();
+              try {
+                await trpc.voice.closeProducer.mutate({ kind: StreamKind.AUDIO });
+              } catch (error) {
+                logVoice('Error closing audio producer', { error });
+              }
+            });
+
+            outboundAudioTrack.onended = () => {
+              logVoice('Audio track ended, cleaning up microphone');
+              void cleanupMicAudioPipeline();
+              localAudioProducer.current?.close();
+              setLocalAudioStream(undefined);
+            };
+
+            return;
+          }
+        } catch (nativeError) {
+          logVoice('Native sidecar mic-capture failed, falling back to getUserMedia', { nativeError });
+        }
+      }
+
       const micConstraints = {
         deviceId: {
           exact: devices.microphoneId
@@ -660,13 +778,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     producerTransport,
     setLocalAudioStream,
     localAudioProducer,
-    devices.microphoneId,
-    devices.micQualityMode,
-    devices.autoGainControl,
-    devices.echoCancellation,
-    devices.noiseSuppression,
-    devices.experimentalVoiceFilter,
-    devices.voiceFilterStrength,
+    devices,
     ownVoiceState.micMuted,
     ownVoiceState.soundMuted
   ]);

@@ -50,7 +50,8 @@ export enum VoiceFilterStrength {
 
 export enum MicQualityMode {
   AUTO = 'auto',
-  MANUAL = 'manual'
+  MANUAL = 'manual',       // kept for migration only
+  EXPERIMENTAL = 'experimental'
 }
 
 export type TDeviceSettings = {

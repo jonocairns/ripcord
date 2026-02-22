@@ -152,7 +152,7 @@ const Devices = memo(() => {
         // ignore version lookup failures
       });
   }, [desktopBridge]);
-  const isMicAutoMode = values.micQualityMode === MicQualityMode.AUTO;
+  const isExperimentalMode = values.micQualityMode === MicQualityMode.EXPERIMENTAL;
 
   if (availableDevicesLoading || devicesLoading) {
     return <LoadingCard className="h-[600px]" />;
@@ -215,114 +215,98 @@ const Devices = memo(() => {
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
-                  <SelectItem value={MicQualityMode.AUTO}>
-                    Auto (recommended)
+                  <SelectItem value={MicQualityMode.AUTO}>Standard</SelectItem>
+                  <SelectItem value={MicQualityMode.EXPERIMENTAL} disabled={!hasDesktopBridge}>
+                    Experimental (Desktop)
                   </SelectItem>
-                  <SelectItem value={MicQualityMode.MANUAL}>Custom</SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>
           </div>
 
+          <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
+            {!isExperimentalMode && (
+              <div className="flex items-center justify-between gap-3">
+                <Label className="cursor-default">Echo cancellation</Label>
+                <Switch
+                  checked={!!values.echoCancellation}
+                  onCheckedChange={(checked) =>
+                    onChange('echoCancellation', checked)
+                  }
+                />
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-3">
+              <Label className="cursor-default">
+                {isExperimentalMode ? 'Noise suppression (DeepFilterNet)' : 'Noise suppression'}
+              </Label>
+              <Switch
+                checked={!!values.noiseSuppression}
+                onCheckedChange={(checked) =>
+                  onChange('noiseSuppression', checked)
+                }
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-3">
+              <Label className="cursor-default">Automatic gain control</Label>
+              <Switch
+                checked={!!values.autoGainControl}
+                onCheckedChange={(checked) =>
+                  onChange('autoGainControl', checked)
+                }
+              />
+            </div>
+          </div>
+
+          {isExperimentalMode && values.noiseSuppression && (
+            <div className="max-w-sm space-y-2">
+              <Label>DeepFilterNet strength</Label>
+              <Select
+                onValueChange={(value) =>
+                  onChange('voiceFilterStrength', value as VoiceFilterStrength)
+                }
+                value={values.voiceFilterStrength}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select a filter preset" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value={VoiceFilterStrength.LOW}>Low</SelectItem>
+                    <SelectItem value={VoiceFilterStrength.BALANCED}>
+                      Balanced
+                    </SelectItem>
+                    <SelectItem value={VoiceFilterStrength.HIGH}>High</SelectItem>
+                    <SelectItem value={VoiceFilterStrength.AGGRESSIVE}>
+                      Aggressive
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {isExperimentalMode ? (
+            <p className="text-xs text-muted-foreground">
+              Audio is captured and processed natively by the desktop sidecar. DeepFilterNet removes background noise and reverberation. Automatic gain control normalises input levels.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Uses browser-based audio processing. Echo cancellation, noise suppression, and gain control are handled by the browser.
+            </p>
+          )}
+
           <MicrophoneTestPanel
             microphoneId={values.microphoneId}
             micQualityMode={values.micQualityMode}
-            experimentalVoiceFilter={!!values.experimentalVoiceFilter}
             voiceFilterStrength={values.voiceFilterStrength}
             echoCancellation={!!values.echoCancellation}
             noiseSuppression={!!values.noiseSuppression}
             autoGainControl={!!values.autoGainControl}
             hasDesktopBridge={hasDesktopBridge}
           />
-
-          {isMicAutoMode ? (
-            <p className="text-xs text-muted-foreground">
-              Auto mic quality manages echo cancellation, noise suppression, gain
-              control, and desktop filtering automatically.
-            </p>
-          ) : (
-            <>
-              <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
-                <div className="flex items-center justify-between gap-3">
-                  <Label className="cursor-default">Echo cancellation</Label>
-                  <Switch
-                    checked={!!values.echoCancellation}
-                    onCheckedChange={(checked) =>
-                      onChange('echoCancellation', checked)
-                    }
-                  />
-                </div>
-
-                <div className="flex items-center justify-between gap-3">
-                  <Label className="cursor-default">Noise suppression</Label>
-                  <Switch
-                    checked={!!values.noiseSuppression}
-                    onCheckedChange={(checked) =>
-                      onChange('noiseSuppression', checked)
-                    }
-                  />
-                </div>
-
-                <div className="flex items-center justify-between gap-3">
-                  <Label className="cursor-default">Automatic gain control</Label>
-                  <Switch
-                    checked={!!values.autoGainControl}
-                    onCheckedChange={(checked) =>
-                      onChange('autoGainControl', checked)
-                    }
-                  />
-                </div>
-
-                <div className="flex items-center justify-between gap-3">
-                  <Label className="cursor-default">
-                    Background noise filter (Desktop)
-                  </Label>
-                  <Switch
-                    checked={!!values.experimentalVoiceFilter}
-                    onCheckedChange={(checked) =>
-                      onChange('experimentalVoiceFilter', checked)
-                    }
-                    disabled={!hasDesktopBridge}
-                  />
-                </div>
-              </div>
-
-              <p className="text-xs text-muted-foreground">
-                Uses desktop sidecar AI noise reduction (DeepFilterNet) for noise
-                suppression and automatic gain control. Echo cancellation remains
-                browser-based for now. Higher strength removes more background
-                noise but may affect voice quality. This filter is available in the
-                desktop app.
-              </p>
-
-              <div className="max-w-sm space-y-2">
-                <Label>Voice filter strength</Label>
-                <Select
-                  onValueChange={(value) =>
-                    onChange('voiceFilterStrength', value as VoiceFilterStrength)
-                  }
-                  value={values.voiceFilterStrength}
-                  disabled={!hasDesktopBridge || !values.experimentalVoiceFilter}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select a filter preset" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value={VoiceFilterStrength.LOW}>Low</SelectItem>
-                      <SelectItem value={VoiceFilterStrength.BALANCED}>
-                        Balanced
-                      </SelectItem>
-                      <SelectItem value={VoiceFilterStrength.HIGH}>High</SelectItem>
-                      <SelectItem value={VoiceFilterStrength.AGGRESSIVE}>
-                        Aggressive
-                      </SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-            </>
-          )}
 
           {hasDesktopBridge && (
             <div className="max-w-2xl space-y-3">
