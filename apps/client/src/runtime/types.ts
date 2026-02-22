@@ -121,6 +121,24 @@ export type TVoiceFilterSession = {
   encoding?: 'f32le_base64';
 };
 
+export type TVoiceFilterFrameDiag = {
+  /** DeepFilterNet log-SNR estimate for this buffer. Low values (< -3 dB) mean the
+   *  model sees mostly noise — the primary indicator of over-suppression. undefined
+   *  in passthrough mode. */
+  lsnrMean?: number;
+  lsnrMin?: number;
+  lsnrMax?: number;
+  /** AGC gain applied. undefined when AGC is disabled. High values (> 3×) indicate
+   *  the mic is very quiet — common with far-field setups. */
+  agcGain?: number;
+  /** Startup ramp wet-mix at the end of the buffer (0 = dry, 1 = fully processed).
+   *  Stays at 1.0 after the ramp completes. */
+  rampWetMix: number;
+  /** Noise gate gain (1.0 = open, ~0 = closed). undefined in passthrough mode or
+   *  during the startup ramp. Values < 1 indicate non-speech is being attenuated. */
+  gateGain?: number;
+};
+
 export type TVoiceFilterFrame = {
   sessionId: string;
   sequence: number;
@@ -131,6 +149,7 @@ export type TVoiceFilterFrame = {
   protocolVersion: number;
   encoding: 'f32le_base64';
   droppedFrameCount?: number;
+  diag?: TVoiceFilterFrameDiag;
 };
 
 export type TVoiceFilterPcmFrame = {

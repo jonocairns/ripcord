@@ -17,7 +17,6 @@ import {
   ScreenAudioMode,
   type TAppAudioStatusEvent,
   type TAppAudioSession,
-  type TDesktopBridge,
   type TDesktopScreenShareSelection
 } from '@/runtime/types';
 import {
@@ -56,6 +55,7 @@ import { FloatingPinnedCard } from './floating-pinned-card';
 import {
   createMicAudioProcessingPipeline,
   createNativeSidecarMicCapturePipeline,
+  resolveSidecarDeviceId,
   type TMicAudioProcessingPipeline
 } from './mic-audio-processing';
 import {
@@ -216,27 +216,6 @@ const collectPlaybackReferenceStreams = (
   return streams;
 };
 
-const resolveSidecarDeviceId = async (
-  browserDeviceId: string | undefined,
-  desktopBridge: TDesktopBridge
-): Promise<string | undefined> => {
-  try {
-    const [browserDevices, sidecarResult] = await Promise.all([
-      navigator.mediaDevices.enumerateDevices(),
-      desktopBridge.listMicDevices()
-    ]);
-    const browserLabel = browserDevices
-      .find((d) => d.deviceId === browserDeviceId)
-      ?.label?.trim()
-      .toLowerCase();
-    if (!browserLabel) return undefined;
-    return sidecarResult.devices.find(
-      (d) => d.label.trim().toLowerCase() === browserLabel
-    )?.id;
-  } catch {
-    return undefined;
-  }
-};
 
 export type TVoiceProvider = {
   loading: boolean;

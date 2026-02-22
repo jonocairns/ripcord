@@ -88,6 +88,17 @@ const ECHO_REFERENCE_DELAY_MS: usize = 80;
 const ECHO_REFERENCE_MIN_ENERGY: f32 = 1e-6;
 const ECHO_SUBTRACTION_MAX: f32 = 0.85;
 const ECHO_DUCKING_MIN_GAIN: f32 = 0.55;
+// High-pass filter: 2nd-order Butterworth at 80 Hz / 48 kHz (Direct Form II transposed).
+// Removes DC offset and low-frequency rumble (HVAC, desk vibration, electrical hum) before
+// DeepFilterNet sees the signal.  Sub-80 Hz energy registers as broadband noise and causes
+// the model to over-suppress uncertain bands — a common far-field mic problem.
+// Coefficients computed via bilinear transform: fc=80 Hz, Q=1/√2, fs=48 kHz.
+const HP_B0: f32 = 0.992_617;
+const HP_B1: f32 = -1.985_234;
+const HP_B2: f32 = 0.992_617;
+const HP_A1: f32 = -1.985_207;
+const HP_A2: f32 = 0.985_307;
+
 // Limiter: threshold just below full scale, ~1ms attack, ~100ms release at 48kHz
 #[cfg(windows)]
 const MIC_CAPTURE_FRAME_SIZE: usize = 480; // 10ms at 48kHz — matches DeepFilterNet hop size
@@ -95,15 +106,6 @@ const LIMITER_THRESHOLD: f32 = 0.95;
 const LIMITER_ATTACK_COEFF: f32 = 0.979_2; // exp(-1/48)
 const LIMITER_RELEASE_COEFF: f32 = 0.999_8; // exp(-1/4800)
 
-// Noise gate — applied per DeepFilterNet hop using the lsnr value returned by process().
-// lsnr > threshold → speech detected → gate opens; lsnr <= threshold → gate closes.
-// DeepFilterNet returns -15.0 for near-silence and positive values for clear speech.
-const GATE_LSNR_THRESHOLD: f32 = -3.0; // dB; tune upward to gate more aggressively
-// lsnr is smoothed before threshold comparison to prevent chattering during sustained
-// sounds (e.g. singing) where lsnr fluctuates briefly around the threshold.
-const GATE_LSNR_SMOOTH_COEFF: f32 = 0.904_8; // exp(-1/10): ~100 ms smoothing (10 hops)
-const GATE_ATTACK_COEFF: f32 = 0.606_5; // exp(-1/2): ~20 ms to open (2 × 10 ms hops)
-const GATE_RELEASE_COEFF: f32 = 0.980_2; // exp(-1/50): ~500 ms time constant to close
 
 #[derive(Debug, Deserialize)]
 struct SidecarRequest {
@@ -382,17 +384,33 @@ struct VoiceFilterSession {
     sample_rate: usize,
     channels: usize,
     processor: VoiceFilterProcessor,
+    suppression_startup_ramp_ms_remaining: u32,
+    dry_sample_buf: Vec<f32>,
+    high_pass_filters: Vec<HighPassFilter>,
     auto_gain_control: bool,
     auto_gain_state: AutoGainControlState,
     agc_startup_bypass_ms_remaining: u32,
     echo_cancellation: bool,
     echo_reference_interleaved: VecDeque<f32>,
     limiter_gain: f32,
+    // lsnr-based noise gate — only active after startup ramp completes.
     gate_gain: f32,
     gate_lsnr_smooth: f32,
 }
 
 impl VoiceFilterSession {
+    fn get_or_resize_dry_buf(&mut self, len: usize) -> &mut [f32] {
+        if self.dry_sample_buf.len() != len {
+            self.dry_sample_buf.resize(len, 0.0);
+        }
+        &mut self.dry_sample_buf
+    }
+
+    fn capture_dry_samples(&mut self, samples: &[f32]) {
+        let dry_buf = self.get_or_resize_dry_buf(samples.len());
+        dry_buf.copy_from_slice(samples);
+    }
+
     fn push_echo_reference_samples(
         &mut self,
         input_samples: &[f32],
@@ -789,6 +807,7 @@ fn enqueue_voice_filter_frame_event(
     channels: usize,
     frame_count: usize,
     pcm_base64: String,
+    diagnostics: &VoiceFilterDiagnostics,
 ) {
     let dropped_count = queue.take_dropped_count();
 
@@ -801,7 +820,24 @@ fn enqueue_voice_filter_frame_event(
         "pcmBase64": pcm_base64,
         "protocolVersion": PROTOCOL_VERSION,
         "encoding": PCM_ENCODING,
+        "diag": {
+            "rampWetMix": diagnostics.ramp_wet_mix,
+        },
     });
+
+    if let Some(mean) = diagnostics.lsnr_mean {
+        params["diag"]["lsnrMean"] = json!(mean);
+        params["diag"]["lsnrMin"] = json!(diagnostics.lsnr_min);
+        params["diag"]["lsnrMax"] = json!(diagnostics.lsnr_max);
+    }
+
+    if let Some(gain) = diagnostics.agc_gain {
+        params["diag"]["agcGain"] = json!(gain);
+    }
+
+    if let Some(gate) = diagnostics.gate_gain {
+        params["diag"]["gateGain"] = json!(gate);
+    }
 
     if dropped_count > 0 {
         params["droppedFrameCount"] = json!(dropped_count);
@@ -854,32 +890,70 @@ fn enqueue_push_keybind_state_event(queue: &Arc<FrameQueue>, kind: PushKeybindKi
     }
 }
 
+struct HighPassFilter {
+    s1: f32,
+    s2: f32,
+}
+
+impl HighPassFilter {
+    fn new() -> Self {
+        Self { s1: 0.0, s2: 0.0 }
+    }
+
+    fn process(&mut self, x: f32) -> f32 {
+        let y = HP_B0 * x + self.s1;
+        self.s1 = HP_B1 * x - HP_A1 * y + self.s2;
+        self.s2 = HP_B2 * x - HP_A2 * y;
+        y
+    }
+}
+
+struct VoiceFilterDiagnostics {
+    // Per-buffer LSNR stats from DeepFilterNet (None when running in passthrough mode).
+    // Low values indicate the model sees mostly noise — the primary signal for over-suppression.
+    lsnr_mean: Option<f32>,
+    lsnr_min: Option<f32>,
+    lsnr_max: Option<f32>,
+    // AGC gain applied to this buffer (None when AGC is disabled).
+    agc_gain: Option<f32>,
+    // Dry/wet mix at the end of the startup ramp (0.0 = fully dry, 1.0 = fully wet/processed).
+    // 1.0 once the ramp has completed.
+    ramp_wet_mix: f32,
+    // Current noise gate gain (1.0 = open, ~0.0 = closed). None in passthrough mode.
+    gate_gain: Option<f32>,
+}
+
 fn voice_filter_config(strength: VoiceFilterStrength) -> VoiceFilterConfig {
+    // post_filter_beta sharpens the soft mask toward binary (0/1).  Low and
+    // Balanced keep it at 0 to maximise naturalness.  High and Aggressive use
+    // small values to push uncertain non-speech bands (key clicks, mouse, HVAC)
+    // closer to zero.  The startup ramp (1 s dry/wet blend) protects against the
+    // onset tinniness that large beta values caused before.
     match strength {
         VoiceFilterStrength::Low => VoiceFilterConfig {
             post_filter_beta: 0.0,
-            atten_lim_db: 24.0,
+            atten_lim_db: 20.0,
             min_db_thresh: -15.0,
             max_db_erb_thresh: 35.0,
             max_db_df_thresh: 20.0,
         },
         VoiceFilterStrength::Balanced => VoiceFilterConfig {
-            post_filter_beta: 0.01,
-            atten_lim_db: 40.0,
+            post_filter_beta: 0.0,
+            atten_lim_db: 30.0,
             min_db_thresh: -15.0,
             max_db_erb_thresh: 33.0,
             max_db_df_thresh: 18.0,
         },
         VoiceFilterStrength::High => VoiceFilterConfig {
-            post_filter_beta: 0.02,
-            atten_lim_db: 55.0,
+            post_filter_beta: 0.0,
+            atten_lim_db: 45.0,
             min_db_thresh: -18.0,
             max_db_erb_thresh: 30.0,
             max_db_df_thresh: 15.0,
         },
         VoiceFilterStrength::Aggressive => VoiceFilterConfig {
-            post_filter_beta: 0.03,
-            atten_lim_db: 70.0,
+            post_filter_beta: 0.0,
+            atten_lim_db: 55.0,
             min_db_thresh: -20.0,
             max_db_erb_thresh: 28.0,
             max_db_df_thresh: 12.0,
@@ -970,12 +1044,19 @@ fn create_voice_filter_session(
             current_gain: 1.0,
             post_pause_hold_blocks_remaining: 0,
         },
+        suppression_startup_ramp_ms_remaining: if noise_suppression {
+            SUPPRESSION_STARTUP_RAMP_MS
+        } else {
+            0
+        },
+        dry_sample_buf: Vec::new(),
+        high_pass_filters: (0..channels).map(|_| HighPassFilter::new()).collect(),
         agc_startup_bypass_ms_remaining: AGC_STARTUP_BYPASS_MS,
         echo_cancellation,
         echo_reference_interleaved: VecDeque::new(),
         limiter_gain: 1.0,
-        gate_gain: 0.0,
-        gate_lsnr_smooth: -15.0,
+        gate_gain: 1.0,
+        gate_lsnr_smooth: 0.0,
     })
 }
 
@@ -1000,7 +1081,7 @@ fn decode_f32le_base64(pcm_base64: &str) -> Result<Vec<f32>, String> {
 const AGC_TARGET_RMS: f32 = 0.12;
 const AGC_MIN_RMS: f32 = 0.0005;
 const AGC_MIN_GAIN: f32 = 0.5;
-const AGC_MAX_GAIN: f32 = 3.0;
+const AGC_MAX_GAIN: f32 = 6.0; // raised from 3.0 — far-field mics at -35 dBFS need ~6.7× to reach target
 const AGC_ATTACK_SMOOTHING: f32 = 0.3;
 const AGC_RELEASE_SMOOTHING: f32 = 0.08;
 const AGC_LIMITER: f32 = 0.98;
@@ -1008,6 +1089,22 @@ const AGC_PAUSE_RMS_THRESHOLD: f32 = 0.006;
 const AGC_PAUSE_RECOVERY_SMOOTHING: f32 = 0.3;
 const AGC_POST_PAUSE_HOLD_BLOCKS: u32 = 20;
 const AGC_STARTUP_BYPASS_MS: u32 = 1_500;
+const SUPPRESSION_STARTUP_RAMP_MS: u32 = 1_000;
+
+// Noise gate driven by DeepFilterNet's per-hop lsnr estimate.
+// lsnr < GATE_LSNR_THRESHOLD means the model sees mostly noise → close gate.
+// Smoothing prevents chattering on brief pauses between words.
+const GATE_LSNR_THRESHOLD: f32 = -3.0;
+const GATE_LSNR_SMOOTH_COEFF: f32 = 0.904_8; // ~100 ms time constant
+const GATE_ATTACK_COEFF: f32 = 0.606_5; // ~20 ms open
+const GATE_RELEASE_COEFF: f32 = 0.980_2; // ~500 ms close
+
+fn suppression_startup_wet_mix(elapsed_ms: f32) -> f32 {
+    if elapsed_ms <= 0.0 {
+        return 0.0;
+    }
+    (elapsed_ms / SUPPRESSION_STARTUP_RAMP_MS as f32).clamp(0.0, 1.0)
+}
 
 fn apply_auto_gain_control(samples: &mut [f32], state: &mut AutoGainControlState) {
     if samples.is_empty() {
@@ -1109,19 +1206,52 @@ fn process_voice_filter_frame(
     session: &mut VoiceFilterSession,
     samples: &mut [f32],
     channels: usize,
-) -> Result<(), String> {
+) -> Result<VoiceFilterDiagnostics, String> {
     if samples.is_empty() || channels == 0 {
-        return Ok(());
+        return Ok(VoiceFilterDiagnostics {
+            lsnr_mean: None,
+            lsnr_min: None,
+            lsnr_max: None,
+            agc_gain: None,
+            ramp_wet_mix: 1.0,
+            gate_gain: None,
+        });
     }
 
     let frame_count = samples.len() / channels;
 
     if frame_count == 0 {
-        return Ok(());
+        return Ok(VoiceFilterDiagnostics {
+            lsnr_mean: None,
+            lsnr_min: None,
+            lsnr_max: None,
+            agc_gain: None,
+            ramp_wet_mix: 1.0,
+            gate_gain: None,
+        });
     }
 
     if samples.len() != frame_count * channels {
         return Err("Voice filter frame sample count mismatch".to_string());
+    }
+
+    let should_apply_startup_ramp = session.suppression_startup_ramp_ms_remaining > 0
+        && matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_));
+    if should_apply_startup_ramp {
+        session.capture_dry_samples(samples);
+    }
+
+    // High-pass filter: strip DC and sub-80 Hz rumble before the model sees the signal.
+    // Only applied when DeepFilterNet is active — passthrough mode should not modify audio.
+    if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
+        for frame_index in 0..frame_count {
+            for channel_index in 0..channels {
+                let idx = frame_index * channels + channel_index;
+                if let Some(filter) = session.high_pass_filters.get_mut(channel_index) {
+                    samples[idx] = filter.process(samples[idx]);
+                }
+            }
+        }
     }
 
     // AGC runs before DeepFilterNet so the model receives a level-normalised signal
@@ -1146,10 +1276,11 @@ fn process_voice_filter_frame(
         }
     }
 
-    // Pull gate state out before the match to avoid a partial-borrow conflict
-    // with session.processor.  Written back after the match.
-    let mut gate_gain = session.gate_gain;
-    let mut gate_lsnr_smooth = session.gate_lsnr_smooth;
+    // Diagnostics accumulators — populated only by the DeepFilter path.
+    let mut lsnr_sum = 0.0_f32;
+    let mut lsnr_min = f32::MAX;
+    let mut lsnr_max = f32::MIN;
+    let mut lsnr_hop_count = 0u32;
 
     match &mut session.processor {
         VoiceFilterProcessor::DeepFilter(processor) => {
@@ -1184,28 +1315,15 @@ fn process_voice_filter_frame(
                     .process(noisy.view(), enhanced.view_mut())
                     .map_err(|error| format!("DeepFilterNet processing failed: {error}"))?;
 
-                // Smooth lsnr before thresholding so brief fluctuations during
-                // sustained sounds (e.g. singing a held note) don't cause chattering.
-                gate_lsnr_smooth = gate_lsnr_smooth * GATE_LSNR_SMOOTH_COEFF
-                    + lsnr * (1.0 - GATE_LSNR_SMOOTH_COEFF);
-
-                // Noise gate: move gate gain toward open (1.0) when speech is detected,
-                // or toward closed (0.0) otherwise.  Attack is fast (~20 ms) so the
-                // start of speech isn't clipped; release is slow (~500 ms) so word
-                // endings and sustained tones trail off naturally.
-                let target_gain = if gate_lsnr_smooth > GATE_LSNR_THRESHOLD { 1.0_f32 } else { 0.0_f32 };
-                if target_gain > gate_gain {
-                    gate_gain = gate_gain * GATE_ATTACK_COEFF
-                        + target_gain * (1.0 - GATE_ATTACK_COEFF);
-                } else {
-                    gate_gain = gate_gain * GATE_RELEASE_COEFF
-                        + target_gain * (1.0 - GATE_RELEASE_COEFF);
-                }
+                lsnr_sum += lsnr;
+                lsnr_hop_count += 1;
+                if lsnr < lsnr_min { lsnr_min = lsnr; }
+                if lsnr > lsnr_max { lsnr_max = lsnr; }
 
                 for channel_index in 0..channels {
                     for sample_index in 0..hop_size {
                         processor.output_buffers[channel_index]
-                            .push_back(enhanced[(channel_index, sample_index)] * gate_gain);
+                            .push_back(enhanced[(channel_index, sample_index)]);
                     }
                 }
             }
@@ -1224,14 +1342,104 @@ fn process_voice_filter_frame(
         VoiceFilterProcessor::Passthrough => {}
     }
 
-    session.gate_gain = gate_gain;
-    session.gate_lsnr_smooth = gate_lsnr_smooth;
+    if should_apply_startup_ramp {
+        let processed_ms = if session.sample_rate > 0 {
+            ((frame_count.saturating_mul(1000)) / session.sample_rate) as u32
+        } else {
+            0
+        }
+        .max(1);
+
+        let ramp_ms_start = session.suppression_startup_ramp_ms_remaining;
+        session.suppression_startup_ramp_ms_remaining = session
+            .suppression_startup_ramp_ms_remaining
+            .saturating_sub(processed_ms);
+        let ramp_elapsed_start_ms =
+            SUPPRESSION_STARTUP_RAMP_MS.saturating_sub(ramp_ms_start) as f32;
+        let frame_duration_ms = if session.sample_rate > 0 {
+            1000.0 / session.sample_rate as f32
+        } else {
+            0.0
+        };
+
+        let dry_samples = &session.dry_sample_buf;
+        for frame_index in 0..frame_count {
+            let frame_elapsed_ms =
+                ramp_elapsed_start_ms + frame_index as f32 * frame_duration_ms;
+            let wet_mix = suppression_startup_wet_mix(frame_elapsed_ms);
+            let dry_mix = 1.0 - wet_mix;
+            for channel_index in 0..channels {
+                let index = frame_index * channels + channel_index;
+                samples[index] = dry_samples[index] * dry_mix + samples[index] * wet_mix;
+            }
+        }
+    }
 
     if session.echo_cancellation {
         apply_reference_echo_cancellation(session, samples);
     }
 
-    Ok(())
+    let (lsnr_mean, lsnr_min_out, lsnr_max_out) = if lsnr_hop_count > 0 {
+        (
+            Some(lsnr_sum / lsnr_hop_count as f32),
+            Some(lsnr_min),
+            Some(lsnr_max),
+        )
+    } else {
+        (None, None, None)
+    };
+
+    // Noise gate: apply only after the startup ramp has completed so the gate
+    // does not fight the dry/wet blend during model warm-up.
+    let gate_gain_out = if let Some(lsnr) = lsnr_mean {
+        if session.suppression_startup_ramp_ms_remaining == 0 {
+            session.gate_lsnr_smooth = GATE_LSNR_SMOOTH_COEFF * session.gate_lsnr_smooth
+                + (1.0 - GATE_LSNR_SMOOTH_COEFF) * lsnr;
+
+            let target_gain = if session.gate_lsnr_smooth >= GATE_LSNR_THRESHOLD {
+                1.0_f32
+            } else {
+                0.0_f32
+            };
+
+            let coeff = if target_gain > session.gate_gain {
+                GATE_ATTACK_COEFF
+            } else {
+                GATE_RELEASE_COEFF
+            };
+            session.gate_gain = coeff * session.gate_gain + (1.0 - coeff) * target_gain;
+
+            if session.gate_gain < 0.999 {
+                for sample in samples.iter_mut() {
+                    *sample *= session.gate_gain;
+                }
+            }
+        }
+        Some(session.gate_gain)
+    } else {
+        None
+    };
+
+    Ok(VoiceFilterDiagnostics {
+        lsnr_mean,
+        lsnr_min: lsnr_min_out,
+        lsnr_max: lsnr_max_out,
+        agc_gain: if session.auto_gain_control {
+            Some(session.auto_gain_state.current_gain)
+        } else {
+            None
+        },
+        ramp_wet_mix: if session.suppression_startup_ramp_ms_remaining > 0 {
+            suppression_startup_wet_mix(
+                (SUPPRESSION_STARTUP_RAMP_MS
+                    .saturating_sub(session.suppression_startup_ramp_ms_remaining))
+                    as f32,
+            )
+        } else {
+            1.0
+        },
+        gate_gain: gate_gain_out,
+    })
 }
 
 fn voice_filter_frames_per_buffer(session: &VoiceFilterSession) -> usize {
@@ -2799,7 +3007,7 @@ fn process_voice_filter_samples(
         return Err("Unsupported voice filter frame channel count".to_string());
     }
 
-    process_voice_filter_frame(session, &mut samples, channels)?;
+    let diagnostics = process_voice_filter_frame(session, &mut samples, channels)?;
 
     if samples.len() != frame_count * channels {
         return Err("Voice filter frame sample count mismatch".to_string());
@@ -2822,6 +3030,7 @@ fn process_voice_filter_samples(
         channels,
         frame_count,
         pcm_base64,
+        &diagnostics,
     );
 
     Ok(())

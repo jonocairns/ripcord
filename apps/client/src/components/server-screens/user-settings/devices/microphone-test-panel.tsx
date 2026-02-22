@@ -2,8 +2,8 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import {
-  createMicAudioProcessingPipeline,
   createNativeSidecarMicCapturePipeline,
+  resolveSidecarDeviceId,
   type TMicAudioProcessingPipeline
 } from '@/components/voice-provider/mic-audio-processing';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
@@ -344,30 +344,26 @@ const MicrophoneTestPanel = memo(
         if (inVoiceChannel && outputStream) {
           usesInCallStream = true;
         } else {
-          // Try native sidecar capture first (no getUserMedia needed)
           if (resolvedMicProcessingConfig.sidecarVoiceProcessingEnabled && !inVoiceChannel) {
+            // Sidecar mode — fail hard so the test reflects the real processing path.
             const desktopBridge = getDesktopBridge();
-            if (desktopBridge) {
-              try {
-                sidecarPipeline = await createNativeSidecarMicCapturePipeline({
-                  suppressionLevel: resolvedMicProcessingConfig.sidecarSuppressionLevel,
-                  noiseSuppression: resolvedMicProcessingConfig.sidecarNoiseSuppression,
-                  autoGainControl: resolvedMicProcessingConfig.sidecarAutoGainControl,
-                  echoCancellation: resolvedMicProcessingConfig.sidecarEchoCancellation,
-                  sidecarDeviceId: undefined,
-                  desktopBridge
-                });
-
-                if (sidecarPipeline) {
-                  outputStream = sidecarPipeline.stream;
-                }
-              } catch {
-                sidecarPipeline = undefined;
-              }
+            if (!desktopBridge) {
+              throw new Error('Desktop bridge unavailable for sidecar microphone test.');
             }
-          }
-
-          if (!sidecarPipeline) {
+            const sidecarDeviceId = await resolveSidecarDeviceId(microphoneId, desktopBridge);
+            sidecarPipeline = await createNativeSidecarMicCapturePipeline({
+              suppressionLevel: resolvedMicProcessingConfig.sidecarSuppressionLevel,
+              noiseSuppression: resolvedMicProcessingConfig.sidecarNoiseSuppression,
+              autoGainControl: resolvedMicProcessingConfig.sidecarAutoGainControl,
+              echoCancellation: resolvedMicProcessingConfig.sidecarEchoCancellation,
+              sidecarDeviceId,
+              desktopBridge
+            });
+            if (!sidecarPipeline) {
+              throw new Error('Failed to start native sidecar microphone capture.');
+            }
+            outputStream = sidecarPipeline.stream;
+          } else {
             rawStream = await navigator.mediaDevices.getUserMedia({
               audio: resolveMicAudioConstraints()
             });
@@ -378,21 +374,6 @@ const MicrophoneTestPanel = memo(
             }
 
             outputStream = rawStream;
-
-            if (resolvedMicProcessingConfig.sidecarVoiceProcessingEnabled && !inVoiceChannel) {
-              sidecarPipeline = await createMicAudioProcessingPipeline({
-                inputTrack: rawTrack,
-                enabled: true,
-                suppressionLevel: resolvedMicProcessingConfig.sidecarSuppressionLevel,
-                noiseSuppression: resolvedMicProcessingConfig.sidecarNoiseSuppression,
-                autoGainControl: resolvedMicProcessingConfig.sidecarAutoGainControl,
-                echoCancellation: resolvedMicProcessingConfig.sidecarEchoCancellation
-              });
-
-              if (sidecarPipeline) {
-                outputStream = sidecarPipeline.stream;
-              }
-            }
           }
         }
 
@@ -471,6 +452,7 @@ const MicrophoneTestPanel = memo(
       }
     }, [
       maybeDeafenForTest,
+      microphoneId,
       monitorEnabled,
       localAudioStream,
       currentVoiceChannelId,
