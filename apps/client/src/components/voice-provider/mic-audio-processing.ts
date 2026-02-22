@@ -2,12 +2,122 @@ import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import type {
   TDesktopBridge,
   TVoiceFilterFrame,
+  TVoiceFilterFrameDiag,
   TVoiceFilterStatusEvent,
   TVoiceFilterStrength as TRuntimeVoiceFilterStrength
 } from '@/runtime/types';
 import { VoiceFilterStrength } from '@/types';
 import { createDesktopAppAudioPipeline } from './desktop-app-audio';
 import micCaptureWorkletModuleUrl from './mic-capture.worklet.js?url&no-inline';
+
+// ---------------------------------------------------------------------------
+// NC diagnostics aggregator
+// ---------------------------------------------------------------------------
+// Accumulates per-frame diagnostics from the sidecar and logs a rolling
+// summary every NC_DIAG_LOG_INTERVAL_MS.  The latest snapshot is also
+// exposed on window.ncDiagnostics for manual inspection in DevTools.
+// ---------------------------------------------------------------------------
+
+const NC_DIAG_LOG_INTERVAL_MS = 5_000;
+const NC_DIAG_WINDOW_SIZE = 500; // frames (~5 s at 10 ms/frame)
+
+type TNcDiagSnapshot = {
+  sessionId: string;
+  frameCount: number;
+  lsnrMean: number | null;
+  lsnrMin: number | null;
+  lsnrMax: number | null;
+  gateGainMean: number;
+  agcGainMean: number | null;
+  /** How many frames had the startup ramp still active (rampWetMix < 1). */
+  rampActiveFrames: number;
+  droppedFrames: number;
+  timestampMs: number;
+};
+
+declare global {
+  interface Window {
+    ncDiagnostics: TNcDiagSnapshot | null;
+  }
+}
+
+window.ncDiagnostics = null;
+
+const createNcDiagnosticsAggregator = (sessionId: string) => {
+  const lsnrValues: number[] = [];
+  const gateGainValues: number[] = [];
+  const agcGainValues: number[] = [];
+  let rampActiveFrames = 0;
+  let totalDropped = 0;
+  let totalFrames = 0;
+  let lastLogTime = Date.now();
+
+  const push = (frame: TVoiceFilterFrame) => {
+    totalFrames++;
+    if (frame.droppedFrameCount) totalDropped += frame.droppedFrameCount;
+
+    const d: TVoiceFilterFrameDiag | undefined = frame.diag;
+    if (!d) return;
+
+    if (d.lsnrMean !== undefined) {
+      lsnrValues.push(d.lsnrMean);
+      if (lsnrValues.length > NC_DIAG_WINDOW_SIZE) lsnrValues.shift();
+    }
+
+    gateGainValues.push(d.gateGain);
+    if (gateGainValues.length > NC_DIAG_WINDOW_SIZE) gateGainValues.shift();
+
+    if (d.agcGain !== undefined) {
+      agcGainValues.push(d.agcGain);
+      if (agcGainValues.length > NC_DIAG_WINDOW_SIZE) agcGainValues.shift();
+    }
+
+    if (d.rampWetMix < 1.0) rampActiveFrames++;
+
+    const now = Date.now();
+    if (now - lastLogTime >= NC_DIAG_LOG_INTERVAL_MS) {
+      lastLogTime = now;
+      logSnapshot();
+    }
+  };
+
+  const avg = (arr: number[]) =>
+    arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+
+  const logSnapshot = () => {
+    const snapshot: TNcDiagSnapshot = {
+      sessionId,
+      frameCount: totalFrames,
+      lsnrMean: avg(lsnrValues),
+      lsnrMin: lsnrValues.length > 0 ? Math.min(...lsnrValues) : null,
+      lsnrMax: lsnrValues.length > 0 ? Math.max(...lsnrValues) : null,
+      gateGainMean: avg(gateGainValues) ?? 1,
+      agcGainMean: avg(agcGainValues),
+      rampActiveFrames,
+      droppedFrames: totalDropped,
+      timestampMs: Date.now()
+    };
+
+    window.ncDiagnostics = snapshot;
+
+    const lsnr = snapshot.lsnrMean !== null ? snapshot.lsnrMean.toFixed(1) : 'n/a';
+    const lsnrRange =
+      snapshot.lsnrMin !== null && snapshot.lsnrMax !== null
+        ? `[${snapshot.lsnrMin.toFixed(1)}, ${snapshot.lsnrMax.toFixed(1)}]`
+        : 'n/a';
+    const gate = snapshot.gateGainMean.toFixed(2);
+    const agc =
+      snapshot.agcGainMean !== null ? `${snapshot.agcGainMean.toFixed(2)}×` : 'off';
+
+    console.warn(
+      `[nc-diag] lsnr=${lsnr} dB range=${lsnrRange} gate=${gate} agc=${agc}` +
+        ` rampFrames=${snapshot.rampActiveFrames} dropped=${snapshot.droppedFrames}` +
+        ` frames=${snapshot.frameCount}`
+    );
+  };
+
+  return { push };
+};
 
 type TMicAudioProcessingBackend = 'sidecar-native';
 
@@ -77,7 +187,7 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
     autoGainControl,
     echoCancellation
   });
-  console.warn('[voice-filter-debug] Started native voice-filter session', {
+  console.log('[voice-filter-debug] Started native voice-filter session', {
     sessionId: session.sessionId,
     sampleRate: session.sampleRate,
     channels: session.channels,
@@ -154,11 +264,15 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   let sequence = 0;
   let hasSentInputFrame = false;
 
+  const ncDiag = createNcDiagnosticsAggregator(session.sessionId);
+
   const removeFrameSubscription = desktopBridge.subscribeVoiceFilterFrames(
     (frame: TVoiceFilterFrame) => {
       if (frame.sessionId !== session.sessionId) {
         return;
       }
+
+      ncDiag.push(frame);
 
       outputPipeline.pushFrame({
         ...frame,
@@ -167,7 +281,7 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
 
       if (!hasReceivedFilteredFrame) {
         hasReceivedFilteredFrame = true;
-        console.warn('[voice-filter-debug] Received first processed voice-filter frame', {
+        console.log('[voice-filter-debug] Received first processed voice-filter frame', {
           sessionId: frame.sessionId,
           sequence: frame.sequence,
           frameCount: frame.frameCount,
@@ -185,7 +299,7 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
       }
 
       if (statusEvent.reason !== 'capture_stopped') {
-        console.warn('[voice-filter] Native voice filter session ended', statusEvent);
+        console.log('[voice-filter] Native voice filter session ended', statusEvent);
         if (statusEvent.error) {
           console.warn(
             '[voice-filter-debug] Native voice filter status error detail',
@@ -209,7 +323,7 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
 
     if (!hasSentInputFrame) {
       hasSentInputFrame = true;
-      console.warn('[voice-filter-debug] Sending first PCM frame to sidecar', {
+      console.log('[voice-filter-debug] Sending first PCM frame to sidecar', {
         sessionId: session.sessionId,
         sequence,
         frameCount,
@@ -365,7 +479,7 @@ const createNativeSidecarMicCapturePipeline = async ({
     echoCancellation,
     deviceId: sidecarDeviceId
   });
-  console.warn('[voice-filter-debug] Started native sidecar mic-capture session', session);
+  console.log('[voice-filter-debug] Started native sidecar mic-capture session', session);
 
   const outputPipeline = await createDesktopAppAudioPipeline({
     sessionId: session.sessionId,
@@ -403,15 +517,19 @@ const createNativeSidecarMicCapturePipeline = async ({
     };
   });
 
+  const ncDiag = createNcDiagnosticsAggregator(session.sessionId);
+
   const removeFrameSubscription = desktopBridge.subscribeVoiceFilterFrames(
     (frame: TVoiceFilterFrame) => {
       if (frame.sessionId !== session.sessionId) return;
+
+      ncDiag.push(frame);
 
       outputPipeline.pushFrame({ ...frame, targetId: 'native-mic-filter' });
 
       if (!hasReceivedFilteredFrame) {
         hasReceivedFilteredFrame = true;
-        console.warn('[voice-filter-debug] Received first processed voice-filter frame', {
+        console.log('[voice-filter-debug] Received first processed voice-filter frame', {
           sessionId: frame.sessionId,
           sequence: frame.sequence,
           frameCount: frame.frameCount,
@@ -427,7 +545,7 @@ const createNativeSidecarMicCapturePipeline = async ({
       if (statusEvent.sessionId !== session.sessionId) return;
 
       if (statusEvent.reason !== 'capture_stopped') {
-        console.warn('[voice-filter] Native sidecar mic-capture session ended', statusEvent);
+        console.log('[voice-filter] Native sidecar mic-capture session ended', statusEvent);
         if (statusEvent.error) {
           console.warn('[voice-filter-debug] Native sidecar mic-capture error detail', statusEvent.error);
         }
@@ -526,5 +644,34 @@ const createMicAudioProcessingPipeline = async ({
   }
 };
 
-export { createMicAudioProcessingPipeline, createNativeSidecarMicCapturePipeline };
+// Matches a browser deviceId to a WASAPI device ID by comparing friendly names.
+// Best-effort — returns undefined on any failure so callers fall back to the
+// default capture device.
+const resolveSidecarDeviceId = async (
+  browserDeviceId: string | undefined,
+  desktopBridge: TDesktopBridge
+): Promise<string | undefined> => {
+  try {
+    const [browserDevices, sidecarResult] = await Promise.all([
+      navigator.mediaDevices.enumerateDevices(),
+      desktopBridge.listMicDevices()
+    ]);
+    const browserLabel = browserDevices
+      .find((d) => d.deviceId === browserDeviceId)
+      ?.label?.trim()
+      .toLowerCase();
+    if (!browserLabel) return undefined;
+    return sidecarResult.devices.find(
+      (d) => d.label.trim().toLowerCase() === browserLabel
+    )?.id;
+  } catch {
+    return undefined;
+  }
+};
+
+export {
+  createMicAudioProcessingPipeline,
+  createNativeSidecarMicCapturePipeline,
+  resolveSidecarDeviceId
+};
 export type { TMicAudioProcessingBackend, TMicAudioProcessingPipeline };
