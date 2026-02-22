@@ -393,8 +393,6 @@ struct VoiceFilterSession {
     echo_cancellation: bool,
     echo_reference_interleaved: VecDeque<f32>,
     limiter_gain: f32,
-    // lsnr-based noise gate — only active after startup ramp completes.
-    gate_gain: f32,
 }
 
 impl VoiceFilterSession {
@@ -834,10 +832,6 @@ fn enqueue_voice_filter_frame_event(
         params["diag"]["agcGain"] = json!(gain);
     }
 
-    if let Some(gate) = diagnostics.gate_gain {
-        params["diag"]["gateGain"] = json!(gate);
-    }
-
     if dropped_count > 0 {
         params["droppedFrameCount"] = json!(dropped_count);
     }
@@ -918,8 +912,6 @@ struct VoiceFilterDiagnostics {
     // Dry/wet mix at the end of the startup ramp (0.0 = fully dry, 1.0 = fully wet/processed).
     // 1.0 once the ramp has completed.
     ramp_wet_mix: f32,
-    // Current noise gate gain (1.0 = open, ~0.0 = closed). None in passthrough mode.
-    gate_gain: Option<f32>,
 }
 
 fn voice_filter_config(strength: VoiceFilterStrength) -> VoiceFilterConfig {
@@ -1054,7 +1046,6 @@ fn create_voice_filter_session(
         echo_cancellation,
         echo_reference_interleaved: VecDeque::new(),
         limiter_gain: 1.0,
-        gate_gain: 1.0,
     })
 }
 
@@ -1094,13 +1085,6 @@ const AGC_GAIN_RELEASE_S: f32 = 1.500; // 1.5 s
 const AGC_STARTUP_BYPASS_MS: u32 = 1_500;
 const SUPPRESSION_STARTUP_RAMP_MS: u32 = 1_000;
 
-// Noise gate driven by DeepFilterNet's per-hop lsnr estimate.
-// lsnr < GATE_LSNR_THRESHOLD means the model sees mostly noise → close gate.
-// The gate_gain IIR (attack/release) is the only smoothing — no separate lsnr
-// smoother, which would lag speech onsets and cause per-word clipping.
-const GATE_LSNR_THRESHOLD: f32 = -3.0;
-const GATE_ATTACK_COEFF: f32 = 0.606_5; // ~20 ms open
-const GATE_RELEASE_COEFF: f32 = 0.980_2; // ~500 ms close
 
 fn suppression_startup_wet_mix(elapsed_ms: f32) -> f32 {
     if elapsed_ms <= 0.0 {
@@ -1213,7 +1197,6 @@ fn process_voice_filter_frame(
             lsnr_max: None,
             agc_gain: None,
             ramp_wet_mix: 1.0,
-            gate_gain: None,
         });
     }
 
@@ -1226,7 +1209,6 @@ fn process_voice_filter_frame(
             lsnr_max: None,
             agc_gain: None,
             ramp_wet_mix: 1.0,
-            gate_gain: None,
         });
     }
 
@@ -1253,26 +1235,23 @@ fn process_voice_filter_frame(
         }
     }
 
-    // AGC runs before DeepFilterNet so the model receives a level-normalised signal
-    if session.auto_gain_control {
-        if session.agc_startup_bypass_ms_remaining > 0 {
-            let input_ms = if session.sample_rate > 0 {
-                ((frame_count.saturating_mul(1000)) / session.sample_rate) as u32
-            } else {
-                0
-            }
-            .max(1);
-
-            session.agc_startup_bypass_ms_remaining = session
-                .agc_startup_bypass_ms_remaining
-                .saturating_sub(input_ms);
-
-            // Hold gain at unity during startup — pass samples through unmodified
-            // so raw mic audio isn't hard-clipped before DeepFilterNet warms up.
-            session.auto_gain_state.current_gain = 1.0;
+    // Advance the AGC startup-bypass timer. The actual levelling is applied after
+    // DeepFilterNet output is drained (below) so AGC works on clean speech, not
+    // the noisy input — which would amplify exactly what DFN is trying to suppress.
+    if session.auto_gain_control && session.agc_startup_bypass_ms_remaining > 0 {
+        let input_ms = if session.sample_rate > 0 {
+            ((frame_count.saturating_mul(1000)) / session.sample_rate) as u32
         } else {
-            apply_auto_gain_control(samples, &mut session.auto_gain_state, session.sample_rate);
+            0
         }
+        .max(1);
+
+        session.agc_startup_bypass_ms_remaining = session
+            .agc_startup_bypass_ms_remaining
+            .saturating_sub(input_ms);
+
+        // Hold current_gain at unity so diagnostics reflect the bypass state.
+        session.auto_gain_state.current_gain = 1.0;
     }
 
     // Diagnostics accumulators — populated only by the DeepFilter path.
@@ -1280,11 +1259,6 @@ fn process_voice_filter_frame(
     let mut lsnr_min = f32::MAX;
     let mut lsnr_max = f32::MIN;
     let mut lsnr_hop_count = 0u32;
-
-    // Gate state is extracted before the match to avoid borrow conflicts with
-    // `session.processor`. Written back after the match completes.
-    let mut gate_gain = session.gate_gain;
-    let gate_active = session.suppression_startup_ramp_ms_remaining == 0;
 
     match &mut session.processor {
         VoiceFilterProcessor::DeepFilter(processor) => {
@@ -1324,22 +1298,6 @@ fn process_voice_filter_frame(
                 if lsnr < lsnr_min { lsnr_min = lsnr; }
                 if lsnr > lsnr_max { lsnr_max = lsnr; }
 
-                // Gate: update and apply per-hop so brief low-lsnr phonemes
-                // don't clip — the gate_gain IIR (500 ms release) bridges gaps.
-                if gate_active {
-                    let target_gain = if lsnr >= GATE_LSNR_THRESHOLD { 1.0_f32 } else { 0.0_f32 };
-                    let coeff = if target_gain > gate_gain { GATE_ATTACK_COEFF } else { GATE_RELEASE_COEFF };
-                    gate_gain = coeff * gate_gain + (1.0 - coeff) * target_gain;
-
-                    if gate_gain < 0.999 {
-                        for channel_index in 0..channels {
-                            for sample_index in 0..hop_size {
-                                enhanced[(channel_index, sample_index)] *= gate_gain;
-                            }
-                        }
-                    }
-                }
-
                 for channel_index in 0..channels {
                     for sample_index in 0..hop_size {
                         processor.output_buffers[channel_index]
@@ -1362,7 +1320,12 @@ fn process_voice_filter_frame(
         VoiceFilterProcessor::Passthrough => {}
     }
 
-    session.gate_gain = gate_gain;
+    // Post-DFN AGC: level the clean speech signal after noise suppression.
+    // During the startup-bypass window (first 1500 ms) current_gain == 1.0,
+    // matching the dry capture so there is no level discontinuity at ramp end.
+    if session.auto_gain_control && session.agc_startup_bypass_ms_remaining == 0 {
+        apply_auto_gain_control(samples, &mut session.auto_gain_state, session.sample_rate);
+    }
 
     if should_apply_startup_ramp {
         let processed_ms = if session.sample_rate > 0 {
@@ -1411,8 +1374,6 @@ fn process_voice_filter_frame(
         (None, None, None)
     };
 
-    let gate_gain_out = if lsnr_hop_count > 0 { Some(session.gate_gain) } else { None };
-
     Ok(VoiceFilterDiagnostics {
         lsnr_mean,
         lsnr_min: lsnr_min_out,
@@ -1431,7 +1392,6 @@ fn process_voice_filter_frame(
         } else {
             1.0
         },
-        gate_gain: gate_gain_out,
     })
 }
 
