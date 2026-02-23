@@ -1234,7 +1234,7 @@ const SUPPRESSION_STARTUP_PRE_WARM_MS: f32 = 200.0; // hold fully dry while DFN 
 // The 150 ms hangover keeps gain at unity through brief inter-word silences so words
 // don't clip at their onset.
 const EXPANDER_THRESHOLD_DBFS: f32 = -35.0;    // dBFS gate point (baseline)
-const EXPANDER_RATIO: f32 = 1.5;               // expansion ratio below threshold
+const EXPANDER_RATIO: f32 = 1.2;               // expansion ratio below threshold
 const EXPANDER_ATTACK_MS: f32 = 2.0;           // envelope follower attack (ms)
 const EXPANDER_RELEASE_MS: f32 = 600.0;        // envelope follower / gain release (ms)
 const EXPANDER_HANGOVER_MS: f32 = 150.0;       // hold time after signal drops (ms)
@@ -1260,7 +1260,7 @@ const VAD_SPEECH_THRESHOLD: f32 = 0.6;        // p_smooth to enter Speech
 const VAD_SILENCE_THRESHOLD: f32 = 0.3;       // p_smooth to begin offset counter
 const VAD_ONSET_FRAMES: u32 = 2;              // consecutive high-p frames to confirm onset (20ms)
 const VAD_OFFSET_FRAMES: u32 = 8;             // consecutive low-p frames to confirm offset (80ms)
-const VAD_HANGOVER_FRAMES: u32 = 50;          // hold time in Hangover state after Speech exits (at 10ms/frame = 500 ms)
+const VAD_HANGOVER_FRAMES: u32 = 100;         // hold time in Hangover state after Speech exits (at 10ms/frame = 1 s)
 const VAD_ONSET_PROTECTION_FRAMES: u32 = 60;  // expander fully bypassed on new-speech onset (at 10ms/frame = 600 ms)
 const VAD_NOISE_ADAPT_RATE: f32 = 0.002;      // noise floor adaptation speed (Silence frames only)
 const VAD_SNR_LOW_DB: f32 = -3.0;             // SNR at/below → p_raw = 0.0
