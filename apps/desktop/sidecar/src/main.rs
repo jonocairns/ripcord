@@ -1233,7 +1233,7 @@ const SUPPRESSION_STARTUP_RAMP_MS: u32 = 1_000;
 const EXPANDER_THRESHOLD_DBFS: f32 = -35.0;    // dBFS gate point (baseline)
 const EXPANDER_RATIO: f32 = 1.5;               // expansion ratio below threshold
 const EXPANDER_ATTACK_MS: f32 = 2.0;           // envelope follower attack (ms)
-const EXPANDER_RELEASE_MS: f32 = 250.0;        // envelope follower / gain release (ms)
+const EXPANDER_RELEASE_MS: f32 = 600.0;        // envelope follower / gain release (ms)
 const EXPANDER_HANGOVER_MS: f32 = 150.0;       // hold time after signal drops (ms)
 // LSNR-driven threshold nudge: when DFN reports a low log-SNR the expander threshold
 // is raised (more aggressive) so residual noise is suppressed harder.  When LSNR is
@@ -1268,7 +1268,7 @@ const VAD_TRIM_HANGOVER_RATE: f32 = 0.30;     // trim IIR / slew rate multiplier
 // suppression knocks down the click's snap without thinning the voice's body.
 // Post-DFN crest factors are lower than raw-mic values: DFN smooths peak energy so a
 // keyboard press that measures crest≈15 at the mic is typically crest≈7–9 post-model.
-const TRANS_CREST_THRESHOLD: f32 = 7.0;       // peak/RMS trigger (post-DFN keyboard ≈7–9, speech ≈3–5)
+const TRANS_CREST_THRESHOLD: f32 = 6.0;       // peak/RMS trigger (post-DFN keyboard ≈7–9, speech ≈3–5)
 const TRANS_HOLD_MS: u32 = 30;                // hold at peak attenuation (30ms covers mechanical key decay)
 const TRANS_RELEASE_MS: f32 = 100.0;          // gain recovery time after hold (100ms)
 const TRANS_DEBOUNCE_MS: u32 = 60;            // minimum interval between triggers — prevents cumulative thinning
@@ -1282,6 +1282,13 @@ const TRANS_CROSSOVER_HZ: f32 = 300.0;        // LP/HP crossover frequency
 // Hangover guard: require a sudden energy rise above prev frame before triggering.
 // A keyboard hit jumps from near-silence; a speech tail declines gradually.
 const TRANS_ENERGY_JUMP_RATIO: f32 = 4.0;     // ×4 linear = 12 dB above prev frame RMS
+// Spike repair: replace isolated single-sample spikes (mouse clicks, cable ticks, digital pops)
+// with the average of their two neighbours.  Two conditions must both be true:
+//   1. sample amplitude is at least SPIKE_CREST_THRESHOLD × local frame RMS
+//   2. both immediate neighbours are less than SPIKE_NEIGHBOR_RATIO × the spike amplitude
+// Conservative thresholds mean legitimate signal peaks are never touched.
+const SPIKE_CREST_THRESHOLD: f32 = 8.0;       // sample/local_rms to flag as spike
+const SPIKE_NEIGHBOR_RATIO: f32 = 0.5;        // each neighbour must be < 50% of spike abs
 
 struct TransientSuppressorState {
     /// Current low-band gain ∈ [floor, 1.0].
@@ -1509,6 +1516,29 @@ fn apply_output_dezipper(samples: &mut [f32], prev_sample: &mut f32) {
     }
 }
 
+// repair_spikes: single-sample interpolation for isolated amplitude spikes.
+// Kills mouse clicks, digital pops, and cable ticks that appear as one outlier sample
+// flanked by much-quieter neighbours.  Stateless — safe to call every frame.
+fn repair_spikes(samples: &mut [f32]) {
+    if samples.len() < 3 {
+        return;
+    }
+
+    let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
+    let local_rms = (sum_sq / samples.len() as f32).sqrt().max(1e-6);
+    let threshold = local_rms * SPIKE_CREST_THRESHOLD;
+
+    for i in 1..samples.len() - 1 {
+        let abs_s = samples[i].abs();
+        if abs_s > threshold
+            && samples[i - 1].abs() < abs_s * SPIKE_NEIGHBOR_RATIO
+            && samples[i + 1].abs() < abs_s * SPIKE_NEIGHBOR_RATIO
+        {
+            samples[i] = 0.5 * (samples[i - 1] + samples[i + 1]);
+        }
+    }
+}
+
 // apply_transient_suppressor: crest-factor impulse detector with instant-snap attack.
 // Only triggers in Silence — leaving speech and hangover completely untouched.
 // A clap/thud has crest factor ≥10 post-DFN; steady noise/voice sits at 3–6.
@@ -1608,7 +1638,7 @@ fn analyze_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> VadOu
     // Per-frame RMS → SNR relative to adaptive noise floor → p_raw ∈ [0, 1].
     let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
     let frame_rms = (sum_sq / samples.len() as f32).sqrt().max(1e-9);
-    let snr_db = 20.0 * (frame_rms / vad.noise_floor_rms).log10();
+    let snr_db = 20.0 * (frame_rms / vad.noise_floor_rms.max(1e-6)).log10();
     let p_raw = ((snr_db - VAD_SNR_LOW_DB) / (VAD_SNR_HIGH_DB - VAD_SNR_LOW_DB)).clamp(0.0, 1.0);
 
     // EWMA smoothing: ~50ms time constant at 10ms frames.
@@ -1957,6 +1987,12 @@ fn process_voice_filter_frame(
             let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
             session.dfn_output_rms_prev = (sum_sq / samples.len() as f32).sqrt();
         }
+    }
+
+    // Spike repair: interpolate isolated single-sample outliers before the transient
+    // suppressor so the crest-factor detector sees a cleaner signal.  Stateless and cheap.
+    if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
+        repair_spikes(samples);
     }
 
     // Transient suppressor: crest-factor detector that knocks down claps/thuds in Silence.
