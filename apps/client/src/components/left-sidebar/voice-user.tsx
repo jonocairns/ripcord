@@ -96,7 +96,7 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
           showStatusBadge={false}
         />
 
-        <span className="flex-1 text-muted-foreground truncate text-xs">
+        <span className="flex-1 text-muted-foreground truncate text-sm">
           {user.name}
         </span>
 

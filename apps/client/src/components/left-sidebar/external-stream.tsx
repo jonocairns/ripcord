@@ -33,7 +33,7 @@ const ExternalStream = memo(
           )}
         </Tooltip>
 
-        <span className="flex-1 text-muted-foreground truncate text-xs">
+        <span className="flex-1 text-muted-foreground truncate text-sm">
           {title}
         </span>
 

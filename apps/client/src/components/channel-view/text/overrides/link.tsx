@@ -15,7 +15,7 @@ const LinkOverride = memo(({ link, label, className }: TLinkOverrideProps) => {
         href={link}
         target="_blank"
         rel="noreferrer"
-        className="text-xs hover:underline text-primary/60"
+        className="text-sm hover:underline text-primary/60"
       >
         {label || link}
       </a>
