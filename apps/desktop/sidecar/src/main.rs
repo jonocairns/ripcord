@@ -1260,8 +1260,8 @@ const VAD_SPEECH_THRESHOLD: f32 = 0.6;        // p_smooth to enter Speech
 const VAD_SILENCE_THRESHOLD: f32 = 0.3;       // p_smooth to begin offset counter
 const VAD_ONSET_FRAMES: u32 = 2;              // consecutive high-p frames to confirm onset (20ms)
 const VAD_OFFSET_FRAMES: u32 = 8;             // consecutive low-p frames to confirm offset (80ms)
-const VAD_HANGOVER_MS: u32 = 200;             // hold time in Hangover state after Speech exits
-const VAD_ONSET_PROTECTION_MS: u32 = 60;      // expander fully bypassed on new-speech onset
+const VAD_HANGOVER_FRAMES: u32 = 50;          // hold time in Hangover state after Speech exits (at 10ms/frame = 500 ms)
+const VAD_ONSET_PROTECTION_FRAMES: u32 = 60;  // expander fully bypassed on new-speech onset (at 10ms/frame = 600 ms)
 const VAD_NOISE_ADAPT_RATE: f32 = 0.002;      // noise floor adaptation speed (Silence frames only)
 const VAD_SNR_LOW_DB: f32 = -3.0;             // SNR at/below → p_raw = 0.0
 const VAD_SNR_HIGH_DB: f32 = 12.0;            // SNR at/above → p_raw = 1.0
@@ -1671,11 +1671,8 @@ fn analyze_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> VadOu
                 if vad.onset_counter >= VAD_ONSET_FRAMES {
                     vad.speech_state = VadSpeechState::Speech;
                     vad.onset_counter = 0;
-                    // Onset protection: bypass expander for the first VAD_ONSET_PROTECTION_MS.
-                    let frames_per_ms = sample_rate as f32 / (samples.len() as f32 * 100.0);
-                    let protection_frames =
-                        (VAD_ONSET_PROTECTION_MS as f32 * frames_per_ms).ceil() as u32;
-                    vad.onset_protection_frames_remaining = protection_frames.max(1);
+                    // Onset protection: bypass expander for VAD_ONSET_PROTECTION_FRAMES frames.
+                    vad.onset_protection_frames_remaining = VAD_ONSET_PROTECTION_FRAMES.max(1);
                 }
             } else {
                 vad.onset_counter = 0;
@@ -1688,11 +1685,8 @@ fn analyze_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> VadOu
             if vad.p_smooth < VAD_SILENCE_THRESHOLD {
                 vad.offset_counter += 1;
                 if vad.offset_counter >= VAD_OFFSET_FRAMES {
-                    // Enter hangover — compute remaining frames from MS constant.
-                    let frames_per_ms = sample_rate as f32 / (samples.len() as f32 * 100.0);
-                    let hangover_frames =
-                        (VAD_HANGOVER_MS as f32 * frames_per_ms).ceil() as u32;
-                    vad.hangover_frames_remaining = hangover_frames.max(1);
+                    // Enter hangover — hold for VAD_HANGOVER_FRAMES frames.
+                    vad.hangover_frames_remaining = VAD_HANGOVER_FRAMES.max(1);
                     vad.speech_state = VadSpeechState::Hangover;
                     vad.offset_counter = 0;
                 }
@@ -2076,8 +2070,8 @@ fn process_voice_filter_frame(
     // LSNR nudges the threshold; VAD controls bypass so speech is never expanded.
     //
     // expander_bypass: 1.0 = fully bypassed (speech / onset-protection), 0.0 = full effect.
-    // Onset protection forces bypass for the first VAD_ONSET_PROTECTION_MS of each new
-    // speech segment, protecting soft consonant attacks ("t/k/p") that are below threshold.
+    // Onset protection forces bypass for the first VAD_ONSET_PROTECTION_FRAMES frames of each
+    // new speech segment, protecting soft consonant attacks ("t/k/p") that are below threshold.
     // After onset, p_speech decays naturally as hangover expires → expander engages gradually.
     //
     // Comfort noise is injected only outside Speech (no need during speech; expander is
@@ -3735,7 +3729,7 @@ fn process_voice_filter_samples(
             channels,
             frame_count,
             PROTOCOL_VERSION,
-            0, // dropped_frame_count — FrameQueue not used on binary path
+            0, // dropped_frame_count — always 0 on binary path; TCP socket drops lose frames silently
             &diagnostics,
             &samples,
         )
