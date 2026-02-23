@@ -1263,24 +1263,51 @@ const VAD_TRIM_SILENCE_RATE: f32 = 0.0;       // trim fully frozen in Silence �
 const VAD_TRIM_HANGOVER_RATE: f32 = 0.30;     // trim IIR / slew rate multiplier in Hangover
 
 // Transient suppressor (clap / impulse detector).
-// Detects frames with unusually high crest factor (peak/RMS) that are not speech,
-// then applies a fast attack → hold → release gain envelope to knock them down.
-// Gated to Silence state only — claps during speech or hangover are left alone.
-const TRANS_CREST_THRESHOLD: f32 = 10.0;      // peak/RMS ratio to trigger (claps ≈15–20, speech ≈3–6)
-const TRANS_HOLD_MS: u32 = 20;                // hold at peak attenuation (20ms)
+// Detects frames with unusually high crest factor (peak/RMS) outside Speech state,
+// then applies a band-split AHR gain envelope — highs cut more than lows — so the
+// suppression knocks down the click's snap without thinning the voice's body.
+// Post-DFN crest factors are lower than raw-mic values: DFN smooths peak energy so a
+// keyboard press that measures crest≈15 at the mic is typically crest≈7–9 post-model.
+const TRANS_CREST_THRESHOLD: f32 = 7.0;       // peak/RMS trigger (post-DFN keyboard ≈7–9, speech ≈3–5)
+const TRANS_HOLD_MS: u32 = 30;                // hold at peak attenuation (30ms covers mechanical key decay)
 const TRANS_RELEASE_MS: f32 = 100.0;          // gain recovery time after hold (100ms)
-const TRANS_MAX_ATTENUATION_DB: f32 = -12.0;  // floor: -12 dB (≈ 0.25 linear)
+const TRANS_DEBOUNCE_MS: u32 = 60;            // minimum interval between triggers — prevents cumulative thinning
+// Band-split gains: lows are cut less than highs, preserving warmth.
+// LP + HP = identity when both gains = 1.0, so the split adds zero coloration at rest.
+const TRANS_GAIN_LOW_DB: f32 = -6.0;          // low-band floor in Silence  (−6 dB  ≈ 0.50 linear)
+const TRANS_GAIN_HIGH_DB: f32 = -15.0;        // high-band floor in Silence (−15 dB ≈ 0.18 linear)
+const TRANS_GAIN_HO_LOW_DB: f32 = -3.0;       // low-band floor in Hangover (−3 dB  ≈ 0.71) — gentler
+const TRANS_GAIN_HO_HIGH_DB: f32 = -12.0;     // high-band floor in Hangover (−12 dB ≈ 0.25)
+const TRANS_CROSSOVER_HZ: f32 = 300.0;        // LP/HP crossover frequency
+// Hangover guard: require a sudden energy rise above prev frame before triggering.
+// A keyboard hit jumps from near-silence; a speech tail declines gradually.
+const TRANS_ENERGY_JUMP_RATIO: f32 = 4.0;     // ×4 linear = 12 dB above prev frame RMS
 
 struct TransientSuppressorState {
-    /// Current gain ∈ [TRANS_MAX_ATTENUATION_LINEAR, 1.0].
-    gain: f32,
+    /// Current low-band gain ∈ [floor, 1.0].
+    gain_low: f32,
+    /// Current high-band gain ∈ [floor, 1.0].
+    gain_high: f32,
     /// Remaining samples to hold at peak attenuation.
     hold_samples_remaining: u32,
+    /// Remaining samples before a new trigger is allowed (debounce).
+    debounce_samples_remaining: u32,
+    /// RMS of the previous frame; used by the Hangover energy-jump guard.
+    prev_rms: f32,
+    /// One-pole LP filter state for the band split.
+    lp_state: f32,
 }
 
 impl Default for TransientSuppressorState {
     fn default() -> Self {
-        Self { gain: 1.0, hold_samples_remaining: 0 }
+        Self {
+            gain_low: 1.0,
+            gain_high: 1.0,
+            hold_samples_remaining: 0,
+            debounce_samples_remaining: 0,
+            prev_rms: 0.0,
+            lp_state: 0.0,
+        }
     }
 }
 
@@ -1502,34 +1529,72 @@ fn apply_transient_suppressor(
         return;
     }
 
+    let sr = sample_rate as f32;
     let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
     let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
     let rms = (sum_sq / samples.len() as f32).sqrt();
     let crest = peak / (rms + 1e-6);
 
-    let attenuation_floor = 10.0f32.powf(TRANS_MAX_ATTENUATION_DB / 20.0);
-    let release_coeff = (-1.0f32 / (sample_rate as f32 * TRANS_RELEASE_MS / 1000.0)).exp();
-    let hold_samples = ((sample_rate as f32 * TRANS_HOLD_MS as f32) / 1000.0) as u32;
+    let release_coeff = (-1.0f32 / (sr * TRANS_RELEASE_MS / 1000.0)).exp();
+    let hold_samples = ((sr * TRANS_HOLD_MS as f32) / 1000.0) as u32;
+    let debounce_samples = ((sr * TRANS_DEBOUNCE_MS as f32) / 1000.0) as u32;
 
-    // Trigger only in Silence — never eat consonants or trailing speech.
-    // Snap gain to the floor instantly: crest was computed over the whole frame,
-    // so every sample in this frame (including the impulse itself) is affected.
-    if matches!(vad_state, VadSpeechState::Silence) && crest > TRANS_CREST_THRESHOLD {
-        state.gain = attenuation_floor;
+    // Trigger rules (Speech always excluded; debounce prevents cumulative thinning):
+    //   Silence  — crest > threshold; stable background means few false positives.
+    //   Hangover — crest > threshold AND sudden energy rise vs. previous frame.
+    //              A keyboard hit jumps from near-silence (×4 or more); a speech tail
+    //              declines gradually so prev_rms ≈ current rms, blocking the trigger.
+    let triggered = state.debounce_samples_remaining == 0
+        && match vad_state {
+            VadSpeechState::Silence => crest > TRANS_CREST_THRESHOLD,
+            VadSpeechState::Hangover => {
+                crest > TRANS_CREST_THRESHOLD
+                    && state.prev_rms > 0.0
+                    && rms > state.prev_rms * TRANS_ENERGY_JUMP_RATIO
+            }
+            VadSpeechState::Speech => false,
+        };
+
+    if triggered {
+        // Band-split floors: lows less attenuated than highs, preserving voice warmth.
+        // Hangover uses a gentler floor than Silence — less risk of hitting speech tails.
+        let (floor_low, floor_high) = match vad_state {
+            VadSpeechState::Silence => (
+                10.0f32.powf(TRANS_GAIN_LOW_DB / 20.0),
+                10.0f32.powf(TRANS_GAIN_HIGH_DB / 20.0),
+            ),
+            _ => (
+                10.0f32.powf(TRANS_GAIN_HO_LOW_DB / 20.0),
+                10.0f32.powf(TRANS_GAIN_HO_HIGH_DB / 20.0),
+            ),
+        };
+        state.gain_low = floor_low;
+        state.gain_high = floor_high;
         state.hold_samples_remaining = hold_samples.max(1);
+        state.debounce_samples_remaining = debounce_samples;
     }
 
-    // Apply gain to the frame; advance hold counter and release per-sample.
+    // Band-split via one-pole LP / complementary HP.
+    // LP + HP = identity at unity gain → zero coloration when not attenuating.
+    // LP state runs every frame so the filter is primed for smooth onset/release.
+    let lp_coeff = (-2.0 * std::f32::consts::PI * TRANS_CROSSOVER_HZ / sr).exp();
+
     for s in samples.iter_mut() {
-        *s *= state.gain;
+        state.lp_state = lp_coeff * state.lp_state + (1.0 - lp_coeff) * *s;
+        let hp = *s - state.lp_state;
+        *s = state.lp_state * state.gain_low + hp * state.gain_high;
 
         if state.hold_samples_remaining > 0 {
             state.hold_samples_remaining -= 1;
         } else {
-            // Slow release back toward unity.
-            state.gain = release_coeff * state.gain + (1.0 - release_coeff) * 1.0;
+            state.gain_low = release_coeff * state.gain_low + (1.0 - release_coeff) * 1.0;
+            state.gain_high = release_coeff * state.gain_high + (1.0 - release_coeff) * 1.0;
         }
     }
+
+    state.prev_rms = rms;
+    state.debounce_samples_remaining =
+        state.debounce_samples_remaining.saturating_sub(samples.len() as u32);
 }
 
 // analyze_vad: energy-based VAD tap.  Call once per 10ms frame on post-dezipper audio.
