@@ -459,7 +459,7 @@ class CaptureSidecarManager {
     this.voiceFilterJsonFallbackErrorCount = 0;
     this.lastVoiceFilterSidecarBinaryError = undefined;
     this.lastVoiceFilterSidecarJsonError = undefined;
-    console.warn("[voice-filter-debug] Started sidecar voice-filter session", {
+    console.log("[voice-filter-debug] Started sidecar voice-filter session", {
       sessionId: session.sessionId,
       sampleRate: session.sampleRate,
       channels: session.channels,
