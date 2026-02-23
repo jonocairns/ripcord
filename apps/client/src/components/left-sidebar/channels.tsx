@@ -140,7 +140,7 @@ const ItemWrapper = memo(
         {...dragHandleProps}
         style={style}
         className={cn(
-          'flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground select-none cursor-pointer',
+          'flex w-full items-center gap-2 rounded px-2 py-1.5 text-base text-muted-foreground hover:bg-accent hover:text-accent-foreground select-none cursor-pointer',
           {
             'bg-accent text-accent-foreground': isSelected,
             'cursor-default opacity-50 hover:bg-transparent hover:text-muted-foreground':

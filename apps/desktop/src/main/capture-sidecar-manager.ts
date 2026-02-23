@@ -17,6 +17,7 @@ import type {
   TStartVoiceFilterInput,
   TStartVoiceFilterWithCaptureInput,
   TVoiceFilterFrame,
+  TVoiceFilterFrameDiag,
   TVoiceFilterPcmFrame,
   TVoiceFilterSession,
   TVoiceFilterStatusEvent,
@@ -75,15 +76,17 @@ const MAX_BINARY_VOICE_FILTER_FRAME_SIZE_BYTES = 4 * 1024 * 1024;
 const MAX_BINARY_VOICE_FILTER_INGRESS_QUEUE_PACKETS = 24;
 const MAX_BINARY_VOICE_FILTER_INGRESS_QUEUE_BYTES = 512 * 1024;
 const BINARY_VOICE_FILTER_INGRESS_DROP_LOG_INTERVAL = 25;
-const ENABLE_BINARY_VOICE_FILTER_INGRESS = true;
 const VOICE_FILTER_BINARY_FIRST_FRAME_TIMEOUT_MS = 2_000;
-const VOICE_FILTER_BINARY_RECOVERY_COOLDOWN_MS = 10_000;
-const VOICE_FILTER_JSON_FALLBACK_GRACE_MS = 1_500;
 const VOICE_FILTER_DIAGNOSTIC_LOG_RATE_LIMIT_MS = 2_000;
+const BINARY_VF_EGRESS_RECONNECT_DELAY_MS = 1_000;
 const BINARY_APP_AUDIO_EGRESS_HOST = "127.0.0.1";
 const BINARY_APP_AUDIO_EGRESS_CONNECT_TIMEOUT_MS = 1_000;
 const MAX_BINARY_APP_AUDIO_FRAME_SIZE_BYTES = 4 * 1024 * 1024;
 const BINARY_APP_AUDIO_EGRESS_RETRY_DELAY_MS = 3_000;
+const BINARY_VF_EGRESS_HOST = "127.0.0.1";
+const BINARY_VF_EGRESS_CONNECT_TIMEOUT_MS = 1_000;
+const MAX_BINARY_VF_EGRESS_FRAME_SIZE_BYTES = 4 * 1024 * 1024;
+const BINARY_VF_EGRESS_RETRY_DELAY_MS = 3_000;
 
 const runtimeRequire: NodeJS.Require | undefined =
   typeof require === "function" ? require : undefined;
@@ -201,23 +204,23 @@ class CaptureSidecarManager {
   private nextVoiceFilterBinaryDropLogAt = BINARY_VOICE_FILTER_INGRESS_DROP_LOG_INTERVAL;
   private voiceFilterBinaryFirstFrameTimer: NodeJS.Timeout | undefined;
   private hasReceivedVoiceFilterFrameSinceSessionStart = false;
-  private forceVoiceFilterJsonFallback = false;
   private hasLoggedVoiceFilterInputFrame = false;
   private hasLoggedVoiceFilterOutputFrame = false;
   private nextVoiceFilterBinaryDiagnosticLogAt = 0;
   private hasConnectedVoiceFilterBinarySocketSinceSessionStart = false;
   private hasAcceptedVoiceFilterBinaryPushSinceSessionStart = false;
   private lastVoiceFilterBinaryPushFailureReason: string | undefined;
-  private voiceFilterJsonFallbackPushCount = 0;
-  private voiceFilterJsonFallbackErrorCount = 0;
   private lastVoiceFilterSidecarBinaryError: string | undefined;
-  private lastVoiceFilterSidecarJsonError: string | undefined;
   private appAudioBinaryEgressSocket: Socket | undefined;
   private appAudioBinaryEgressConnectPromise: Promise<void> | undefined;
   private appAudioBinaryEgressReadBuffer: Buffer = Buffer.alloc(0);
   private appAudioBinarySessionIds = new Set<string>();
   private nextAppAudioBinaryEgressRetryAt = 0;
   private appAudioBinaryEgressUnsupported = false;
+  private voiceFilterBinaryEgressSocket: Socket | undefined;
+  private voiceFilterBinaryEgressConnectPromise: Promise<void> | undefined;
+  private voiceFilterBinaryEgressReadBuffer: Buffer = Buffer.alloc(0);
+  private nextVoiceFilterBinaryEgressRetryAt = 0;
   private readonly events = new EventEmitter();
   private readonly restartDelayMs: number;
   private readonly resolveBinaryPathOverride: (() => string | undefined) | undefined;
@@ -252,10 +255,16 @@ class CaptureSidecarManager {
     };
   }
 
-  onVoiceFilterFrame(listener: (frame: TVoiceFilterFrame) => void) {
-    this.events.on("voice-filter-frame", listener);
+  onVoiceFilterPcmFrame(
+    listener: (
+      frame: TVoiceFilterPcmFrame,
+      diag: TVoiceFilterFrameDiag,
+      droppedFrameCount?: number,
+    ) => void,
+  ) {
+    this.events.on("voice-filter-pcm-frame", listener);
     return () => {
-      this.events.off("voice-filter-frame", listener);
+      this.events.off("voice-filter-pcm-frame", listener);
     };
   }
 
@@ -286,10 +295,6 @@ class CaptureSidecarManager {
     this.clearVoiceFilterBinaryFirstFrameTimer();
     this.hasReceivedVoiceFilterFrameSinceSessionStart = false;
 
-    if (!ENABLE_BINARY_VOICE_FILTER_INGRESS) {
-      return;
-    }
-
     this.voiceFilterBinaryFirstFrameTimer = setTimeout(() => {
       this.voiceFilterBinaryFirstFrameTimer = undefined;
 
@@ -301,45 +306,18 @@ class CaptureSidecarManager {
         return;
       }
 
-      this.forceVoiceFilterJsonFallback = true;
-      this.nextVoiceFilterBinaryRetryAt =
-        Date.now() + VOICE_FILTER_BINARY_RECOVERY_COOLDOWN_MS;
-      this.closeVoiceFilterBinarySocket();
-      console.warn(
-        "[desktop] No binary voice-filter frames received after session start; falling back to JSON transport",
-        { sessionId, retryInMs: VOICE_FILTER_BINARY_RECOVERY_COOLDOWN_MS },
-      );
-
-      // Allow JSON fallback frames a short grace period before failing the session.
-      this.voiceFilterBinaryFirstFrameTimer = setTimeout(() => {
-        this.voiceFilterBinaryFirstFrameTimer = undefined;
-
-        if (this.activeVoiceFilterSessionId !== sessionId) {
-          return;
-        }
-
-        if (this.hasReceivedVoiceFilterFrameSinceSessionStart) {
-          return;
-        }
-
-        this.events.emit("voice-filter-status", {
-          sessionId,
-          reason: "capture_error",
-          error:
-            "No processed voice-filter frames received before watchdog timeout. " +
-            `inputFrameSeen=${this.hasLoggedVoiceFilterInputFrame};` +
-            `binaryFallbackForced=${this.forceVoiceFilterJsonFallback};` +
-            `binaryReconnectAtMs=${this.nextVoiceFilterBinaryRetryAt};` +
-            `binarySocketConnected=${this.hasConnectedVoiceFilterBinarySocketSinceSessionStart};` +
-            `binaryPushAccepted=${this.hasAcceptedVoiceFilterBinaryPushSinceSessionStart};` +
-            `lastBinaryPushFailure=${this.lastVoiceFilterBinaryPushFailureReason || "none"};` +
-            `jsonFallbackPushes=${this.voiceFilterJsonFallbackPushCount};` +
-            `jsonFallbackErrors=${this.voiceFilterJsonFallbackErrorCount};` +
-            `sidecarBinaryError=${this.lastVoiceFilterSidecarBinaryError || "none"};` +
-            `sidecarJsonError=${this.lastVoiceFilterSidecarJsonError || "none"}`,
-          protocolVersion: 1,
-        } satisfies TVoiceFilterStatusEvent);
-      }, VOICE_FILTER_JSON_FALLBACK_GRACE_MS);
+      this.events.emit("voice-filter-status", {
+        sessionId,
+        reason: "capture_error",
+        error:
+          "No processed voice-filter frames received before watchdog timeout. " +
+          `inputFrameSeen=${this.hasLoggedVoiceFilterInputFrame};` +
+          `binarySocketConnected=${this.hasConnectedVoiceFilterBinarySocketSinceSessionStart};` +
+          `binaryPushAccepted=${this.hasAcceptedVoiceFilterBinaryPushSinceSessionStart};` +
+          `lastBinaryPushFailure=${this.lastVoiceFilterBinaryPushFailureReason || "none"};` +
+          `sidecarBinaryError=${this.lastVoiceFilterSidecarBinaryError || "none"}`,
+        protocolVersion: 1,
+      } satisfies TVoiceFilterStatusEvent);
     }, VOICE_FILTER_BINARY_FIRST_FRAME_TIMEOUT_MS);
   }
 
@@ -427,29 +405,26 @@ class CaptureSidecarManager {
     const response = await this.sendRequest("voice_filter.start", input);
     const session = response as TVoiceFilterSession;
     this.activeVoiceFilterSessionId = session.sessionId;
-    this.forceVoiceFilterJsonFallback = false;
     this.hasLoggedVoiceFilterInputFrame = false;
     this.hasLoggedVoiceFilterOutputFrame = false;
     this.hasConnectedVoiceFilterBinarySocketSinceSessionStart = false;
     this.hasAcceptedVoiceFilterBinaryPushSinceSessionStart = false;
     this.lastVoiceFilterBinaryPushFailureReason = undefined;
-    this.voiceFilterJsonFallbackPushCount = 0;
-    this.voiceFilterJsonFallbackErrorCount = 0;
     this.lastVoiceFilterSidecarBinaryError = undefined;
-    this.lastVoiceFilterSidecarJsonError = undefined;
-    console.warn("[voice-filter-debug] Started sidecar voice-filter session", {
+    console.log("[voice-filter-debug] Started sidecar voice-filter session", {
       sessionId: session.sessionId,
       sampleRate: session.sampleRate,
       channels: session.channels,
       framesPerBuffer: session.framesPerBuffer,
       protocolVersion: session.protocolVersion,
-      binaryIngressEnabled: ENABLE_BINARY_VOICE_FILTER_INGRESS,
     });
-    if (ENABLE_BINARY_VOICE_FILTER_INGRESS) {
-      void this.ensureVoiceFilterBinaryIngress().catch((error) => {
-        console.warn("[desktop] Failed to initialize binary voice filter ingress", error);
-      });
-    }
+    void this.ensureVoiceFilterBinaryIngress().catch((error) => {
+      console.warn("[desktop] Failed to initialize binary voice filter ingress", error);
+    });
+    await this.ensureVoiceFilterBinaryEgress().catch((error) => {
+      console.warn("[desktop] Failed to initialize binary voice-filter egress; will retry", error);
+      this.scheduleVoiceFilterBinaryEgressReconnect();
+    });
 
     return session;
   }
@@ -465,21 +440,19 @@ class CaptureSidecarManager {
     const response = await this.sendRequest("voice_filter.start_with_capture", input);
     const session = response as TVoiceFilterSession;
     this.activeVoiceFilterSessionId = session.sessionId;
-    this.forceVoiceFilterJsonFallback = false;
     this.hasLoggedVoiceFilterInputFrame = false;
     this.hasLoggedVoiceFilterOutputFrame = false;
     this.hasConnectedVoiceFilterBinarySocketSinceSessionStart = false;
     this.hasAcceptedVoiceFilterBinaryPushSinceSessionStart = false;
     this.lastVoiceFilterBinaryPushFailureReason = undefined;
-    this.voiceFilterJsonFallbackPushCount = 0;
-    this.voiceFilterJsonFallbackErrorCount = 0;
     this.lastVoiceFilterSidecarBinaryError = undefined;
-    this.lastVoiceFilterSidecarJsonError = undefined;
-    if (ENABLE_BINARY_VOICE_FILTER_INGRESS) {
-      void this.ensureVoiceFilterBinaryIngress().catch((error) => {
-        console.warn("[desktop] Failed to initialize binary voice filter ingress", error);
-      });
-    }
+    void this.ensureVoiceFilterBinaryIngress().catch((error) => {
+      console.warn("[desktop] Failed to initialize binary voice filter ingress", error);
+    });
+    await this.ensureVoiceFilterBinaryEgress().catch((error) => {
+      console.warn("[desktop] Failed to initialize binary voice-filter egress; will retry", error);
+      this.scheduleVoiceFilterBinaryEgressReconnect();
+    });
     return session;
   }
 
@@ -500,28 +473,15 @@ class CaptureSidecarManager {
       if (!sessionId || sessionId === this.activeVoiceFilterSessionId) {
         this.clearVoiceFilterBinaryFirstFrameTimer();
         this.hasReceivedVoiceFilterFrameSinceSessionStart = false;
-        this.forceVoiceFilterJsonFallback = false;
         this.hasLoggedVoiceFilterInputFrame = false;
         this.hasLoggedVoiceFilterOutputFrame = false;
         this.hasConnectedVoiceFilterBinarySocketSinceSessionStart = false;
         this.hasAcceptedVoiceFilterBinaryPushSinceSessionStart = false;
         this.lastVoiceFilterBinaryPushFailureReason = undefined;
-        this.voiceFilterJsonFallbackPushCount = 0;
-        this.voiceFilterJsonFallbackErrorCount = 0;
         this.lastVoiceFilterSidecarBinaryError = undefined;
-        this.lastVoiceFilterSidecarJsonError = undefined;
         this.activeVoiceFilterSessionId = undefined;
       }
     }
-  }
-
-  pushVoiceFilterFrame(frame: TVoiceFilterFrame): void {
-    void this.sendNotification("voice_filter.push_frame", frame).catch((error) => {
-      this.voiceFilterJsonFallbackErrorCount += 1;
-      this.lastVoiceFilterSidecarJsonError =
-        error instanceof Error ? error.message : String(error);
-      console.warn("[desktop] Failed to push voice filter frame", error);
-    });
   }
 
   pushVoiceFilterReferenceFrame(frame: TVoiceFilterFrame): void {
@@ -561,64 +521,34 @@ class CaptureSidecarManager {
       return;
     }
 
-    if (
-      ENABLE_BINARY_VOICE_FILTER_INGRESS &&
-      this.forceVoiceFilterJsonFallback &&
-      Date.now() >= this.nextVoiceFilterBinaryRetryAt
-    ) {
-      this.forceVoiceFilterJsonFallback = false;
-      this.armVoiceFilterBinaryFirstFrameWatchdog(frame.sessionId);
+    const binaryPush = this.tryPushVoiceFilterBinaryFrame(frame);
+    if (binaryPush.accepted) {
+      this.hasAcceptedVoiceFilterBinaryPushSinceSessionStart = true;
+      this.lastVoiceFilterBinaryPushFailureReason = undefined;
+      return;
     }
 
-    if (
-      ENABLE_BINARY_VOICE_FILTER_INGRESS &&
-      !this.forceVoiceFilterJsonFallback
-    ) {
-      const binaryPush = this.tryPushVoiceFilterBinaryFrame(frame);
-      if (binaryPush.accepted) {
-        this.hasAcceptedVoiceFilterBinaryPushSinceSessionStart = true;
-        this.lastVoiceFilterBinaryPushFailureReason = undefined;
-        return;
-      }
-      this.lastVoiceFilterBinaryPushFailureReason = binaryPush.reason;
-
-      if (
-        binaryPush.reason &&
-        Date.now() >= this.nextVoiceFilterBinaryDiagnosticLogAt
-      ) {
-        console.warn("[voice-filter-debug] Binary ingress frame push failed", {
-          sessionId: frame.sessionId,
-          sequence: frame.sequence,
-          reason: binaryPush.reason,
-          socketReady:
-            !!this.voiceFilterBinarySocket &&
-            !this.voiceFilterBinarySocket.destroyed &&
-            this.voiceFilterBinarySocket.writable,
-          forceVoiceFilterJsonFallback: this.forceVoiceFilterJsonFallback,
-        });
-        this.nextVoiceFilterBinaryDiagnosticLogAt =
-          Date.now() + VOICE_FILTER_DIAGNOSTIC_LOG_RATE_LIMIT_MS;
-      }
-
-      if (Date.now() >= this.nextVoiceFilterBinaryRetryAt) {
-        void this.ensureVoiceFilterBinaryIngress().catch(() => {
-          this.nextVoiceFilterBinaryRetryAt = Date.now() + 3_000;
-        });
-      }
-    }
+    this.lastVoiceFilterBinaryPushFailureReason = binaryPush.reason;
 
     if (Date.now() >= this.nextVoiceFilterBinaryDiagnosticLogAt) {
-      console.warn("[voice-filter-debug] Using JSON fallback for voice-filter frame", {
+      console.warn("[voice-filter-debug] Binary ingress frame push failed; frame dropped", {
         sessionId: frame.sessionId,
         sequence: frame.sequence,
-        forceVoiceFilterJsonFallback: this.forceVoiceFilterJsonFallback,
+        reason: binaryPush.reason,
+        socketReady:
+          !!this.voiceFilterBinarySocket &&
+          !this.voiceFilterBinarySocket.destroyed &&
+          this.voiceFilterBinarySocket.writable,
       });
       this.nextVoiceFilterBinaryDiagnosticLogAt =
         Date.now() + VOICE_FILTER_DIAGNOSTIC_LOG_RATE_LIMIT_MS;
     }
 
-    this.voiceFilterJsonFallbackPushCount += 1;
-    this.pushVoiceFilterFrame(this.toBase64VoiceFilterFrame(frame));
+    if (Date.now() >= this.nextVoiceFilterBinaryRetryAt) {
+      void this.ensureVoiceFilterBinaryIngress().catch(() => {
+        this.nextVoiceFilterBinaryRetryAt = Date.now() + 3_000;
+      });
+    }
   }
 
   async setPushKeybinds(
@@ -637,6 +567,7 @@ class CaptureSidecarManager {
     await this.stopVoiceFilterSession();
     this.closeAppAudioBinaryEgressSocket();
     this.closeVoiceFilterBinarySocket();
+    this.closeVoiceFilterBinaryEgressSocket();
 
     if (this.sidecarProcess && !this.sidecarProcess.killed) {
       this.sidecarProcess.kill();
@@ -756,10 +687,6 @@ class CaptureSidecarManager {
             this.lastVoiceFilterSidecarBinaryError = line;
           }
 
-          if (line.includes("notification method=voice_filter.push_frame failed:")) {
-            this.lastVoiceFilterSidecarJsonError = line;
-          }
-
           console.info("[capture-sidecar]", line);
         }
 
@@ -833,16 +760,12 @@ class CaptureSidecarManager {
     this.lastKnownError = reason;
     this.clearVoiceFilterBinaryFirstFrameTimer();
     this.hasReceivedVoiceFilterFrameSinceSessionStart = false;
-    this.forceVoiceFilterJsonFallback = false;
     this.hasLoggedVoiceFilterInputFrame = false;
     this.hasLoggedVoiceFilterOutputFrame = false;
     this.hasConnectedVoiceFilterBinarySocketSinceSessionStart = false;
     this.hasAcceptedVoiceFilterBinaryPushSinceSessionStart = false;
     this.lastVoiceFilterBinaryPushFailureReason = undefined;
-    this.voiceFilterJsonFallbackPushCount = 0;
-    this.voiceFilterJsonFallbackErrorCount = 0;
     this.lastVoiceFilterSidecarBinaryError = undefined;
-    this.lastVoiceFilterSidecarJsonError = undefined;
     this.closeAppAudioBinaryEgressSocket();
     this.closeVoiceFilterBinarySocket();
 
@@ -947,42 +870,16 @@ class CaptureSidecarManager {
         return;
       }
 
-      if (parsedLine.event === "voice_filter.frame") {
-        const frame = parsedLine.params as TVoiceFilterFrame;
-        if (frame.sessionId === this.activeVoiceFilterSessionId) {
-          this.hasReceivedVoiceFilterFrameSinceSessionStart = true;
-          this.clearVoiceFilterBinaryFirstFrameTimer();
-          if (!this.hasLoggedVoiceFilterOutputFrame) {
-            this.hasLoggedVoiceFilterOutputFrame = true;
-            console.warn("[voice-filter-debug] Received first processed frame from sidecar", {
-              sessionId: frame.sessionId,
-              sequence: frame.sequence,
-              sampleRate: frame.sampleRate,
-              channels: frame.channels,
-              frameCount: frame.frameCount,
-              protocolVersion: frame.protocolVersion,
-            });
-          }
-        }
-
-        this.events.emit("voice-filter-frame", frame);
-        return;
-      }
-
       if (parsedLine.event === "voice_filter.ended") {
         const statusEvent = parsedLine.params as TVoiceFilterStatusEvent;
 
         if (statusEvent.sessionId === this.activeVoiceFilterSessionId) {
           this.clearVoiceFilterBinaryFirstFrameTimer();
           this.hasReceivedVoiceFilterFrameSinceSessionStart = false;
-          this.forceVoiceFilterJsonFallback = false;
           this.hasConnectedVoiceFilterBinarySocketSinceSessionStart = false;
           this.hasAcceptedVoiceFilterBinaryPushSinceSessionStart = false;
           this.lastVoiceFilterBinaryPushFailureReason = undefined;
-          this.voiceFilterJsonFallbackPushCount = 0;
-          this.voiceFilterJsonFallbackErrorCount = 0;
           this.lastVoiceFilterSidecarBinaryError = undefined;
-          this.lastVoiceFilterSidecarJsonError = undefined;
           this.activeVoiceFilterSessionId = undefined;
         }
 
@@ -1028,6 +925,288 @@ class CaptureSidecarManager {
     this.appAudioBinaryEgressSocket = undefined;
     socket.removeAllListeners();
     socket.destroy();
+  }
+
+  private closeVoiceFilterBinaryEgressSocket(socket?: Socket) {
+    const s = socket ?? this.voiceFilterBinaryEgressSocket;
+    if (!s) {
+      return;
+    }
+    if (this.voiceFilterBinaryEgressSocket === s) {
+      this.voiceFilterBinaryEgressSocket = undefined;
+      this.voiceFilterBinaryEgressReadBuffer = Buffer.alloc(0);
+    }
+    s.removeAllListeners();
+    s.destroy();
+  }
+
+  private scheduleVoiceFilterBinaryEgressReconnect() {
+    if (!this.activeVoiceFilterSessionId || this.shuttingDown) {
+      return;
+    }
+
+    setTimeout(() => {
+      if (!this.activeVoiceFilterSessionId || this.shuttingDown) {
+        return;
+      }
+
+      this.nextVoiceFilterBinaryEgressRetryAt = 0;
+      void this.ensureVoiceFilterBinaryEgress().catch((error) => {
+        console.warn("[desktop] Binary VF egress reconnect attempt failed; will retry", error);
+        this.scheduleVoiceFilterBinaryEgressReconnect();
+      });
+    }, BINARY_VF_EGRESS_RECONNECT_DELAY_MS);
+  }
+
+  private handleVoiceFilterBinaryEgressData(data: Buffer): void {
+    this.voiceFilterBinaryEgressReadBuffer = Buffer.concat([
+      this.voiceFilterBinaryEgressReadBuffer,
+      data,
+    ]);
+
+    const buffer = this.voiceFilterBinaryEgressReadBuffer;
+    let offset = 0;
+
+    while (offset + 4 <= buffer.length) {
+      const payloadLen = buffer.readUInt32LE(offset);
+
+      if (payloadLen === 0 || payloadLen > MAX_BINARY_VF_EGRESS_FRAME_SIZE_BYTES) {
+        this.closeVoiceFilterBinaryEgressSocket();
+        return;
+      }
+
+      if (offset + 4 + payloadLen > buffer.length) {
+        break;
+      }
+
+      const payload = buffer.subarray(offset + 4, offset + 4 + payloadLen);
+      this.parseVoiceFilterBinaryEgressFrame(payload);
+      offset += 4 + payloadLen;
+    }
+
+    if (offset <= 0) {
+      return;
+    }
+
+    this.voiceFilterBinaryEgressReadBuffer =
+      offset >= buffer.length ? Buffer.alloc(0) : Buffer.from(buffer.subarray(offset));
+  }
+
+  private parseVoiceFilterBinaryEgressFrame(payload: Buffer): void {
+    let offset = 0;
+
+    const readU8 = (): number | undefined => {
+      if (offset + 1 > payload.length) return undefined;
+      return payload.readUInt8(offset++);
+    };
+    const readU16 = (): number | undefined => {
+      if (offset + 2 > payload.length) return undefined;
+      const v = payload.readUInt16LE(offset);
+      offset += 2;
+      return v;
+    };
+    const readU32 = (): number | undefined => {
+      if (offset + 4 > payload.length) return undefined;
+      const v = payload.readUInt32LE(offset);
+      offset += 4;
+      return v;
+    };
+    const readF32 = (): number | undefined => {
+      if (offset + 4 > payload.length) return undefined;
+      const v = payload.readFloatLE(offset);
+      offset += 4;
+      return v;
+    };
+    const readU64AsNumber = (): number | undefined => {
+      if (offset + 8 > payload.length) return undefined;
+      const v = Number(payload.readBigUInt64LE(offset));
+      offset += 8;
+      return v;
+    };
+
+    const sessionIdLen = readU16();
+    if (sessionIdLen === undefined || offset + sessionIdLen > payload.length) return;
+    const sessionId = payload.toString("utf8", offset, offset + sessionIdLen);
+    offset += sessionIdLen;
+
+    const sequence = readU64AsNumber();
+    const sampleRate = readU32();
+    const channels = readU16();
+    const frameCount = readU32();
+    const protocolVersion = readU32();
+    const droppedFrameCountRaw = readU32();
+    const diagFlags = readU8();
+    const rampWetMix = readF32();
+
+    if (
+      sequence === undefined ||
+      sampleRate === undefined ||
+      channels === undefined ||
+      frameCount === undefined ||
+      protocolVersion === undefined ||
+      droppedFrameCountRaw === undefined ||
+      diagFlags === undefined ||
+      rampWetMix === undefined
+    ) {
+      return;
+    }
+
+    let lsnrMean: number | undefined;
+    let lsnrMin: number | undefined;
+    let lsnrMax: number | undefined;
+    if (diagFlags & 0x01) {
+      lsnrMean = readF32();
+      lsnrMin = readF32();
+      lsnrMax = readF32();
+      if (lsnrMean === undefined || lsnrMin === undefined || lsnrMax === undefined) return;
+    }
+
+    let agcGain: number | undefined;
+    if (diagFlags & 0x02) {
+      agcGain = readF32();
+      if (agcGain === undefined) return;
+    }
+
+    const pcmByteLen = readU32();
+    if (pcmByteLen === undefined || offset + pcmByteLen > payload.length) return;
+    if (pcmByteLen % Float32Array.BYTES_PER_ELEMENT !== 0) return;
+
+    // Slice a standalone ArrayBuffer — payload.buffer is a shared Node.js pool allocation;
+    // .slice() produces an independent, transferable copy for zero-copy port transfer.
+    const pcmArrayBuffer = payload.buffer.slice(
+      payload.byteOffset + offset,
+      payload.byteOffset + offset + pcmByteLen,
+    );
+    const pcm = new Float32Array(pcmArrayBuffer);
+
+    const diag: TVoiceFilterFrameDiag = { rampWetMix };
+    if (lsnrMean !== undefined) {
+      diag.lsnrMean = lsnrMean;
+      diag.lsnrMin = lsnrMin;
+      diag.lsnrMax = lsnrMax;
+    }
+    if (agcGain !== undefined) {
+      diag.agcGain = agcGain;
+    }
+
+    const droppedFrameCount = droppedFrameCountRaw > 0 ? droppedFrameCountRaw : undefined;
+
+    if (sessionId === this.activeVoiceFilterSessionId) {
+      this.hasReceivedVoiceFilterFrameSinceSessionStart = true;
+      this.clearVoiceFilterBinaryFirstFrameTimer();
+      if (!this.hasLoggedVoiceFilterOutputFrame) {
+        this.hasLoggedVoiceFilterOutputFrame = true;
+        console.warn(
+          "[voice-filter-debug] Received first processed binary egress frame from sidecar",
+          { sessionId, sequence },
+        );
+      }
+    }
+
+    const pcmFrame: TVoiceFilterPcmFrame = {
+      sessionId,
+      sequence,
+      sampleRate,
+      channels,
+      frameCount,
+      pcm,
+      protocolVersion,
+    };
+    this.events.emit("voice-filter-pcm-frame", pcmFrame, diag, droppedFrameCount);
+  }
+
+  private async ensureVoiceFilterBinaryEgress(): Promise<void> {
+    if (
+      this.voiceFilterBinaryEgressSocket &&
+      !this.voiceFilterBinaryEgressSocket.destroyed &&
+      this.voiceFilterBinaryEgressSocket.readable
+    ) {
+      return;
+    }
+
+    if (this.voiceFilterBinaryEgressConnectPromise) {
+      return this.voiceFilterBinaryEgressConnectPromise;
+    }
+
+    if (Date.now() < this.nextVoiceFilterBinaryEgressRetryAt) {
+      return;
+    }
+
+    this.voiceFilterBinaryEgressConnectPromise = (async () => {
+      await this.ensureSidecarReady();
+
+      const response = await this.sendRequest("voice_filter.binary_egress_info", {});
+      const info = response as { port?: unknown };
+
+      if (
+        !Number.isInteger(info.port) ||
+        (info.port as number) <= 0 ||
+        (info.port as number) > 65_535
+      ) {
+        throw new Error("Invalid binary voice-filter egress port");
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        const socket = createConnection({
+          host: BINARY_VF_EGRESS_HOST,
+          port: info.port as number,
+        });
+
+        const timeout = setTimeout(() => {
+          socket.destroy();
+          reject(new Error("Timed out connecting to binary voice-filter egress"));
+        }, BINARY_VF_EGRESS_CONNECT_TIMEOUT_MS);
+
+        const cleanupTimeout = () => {
+          clearTimeout(timeout);
+        };
+
+        const onInitialError = (error: Error) => {
+          cleanupTimeout();
+          socket.destroy();
+          reject(error);
+        };
+
+        socket.once("connect", () => {
+          cleanupTimeout();
+          socket.removeListener("error", onInitialError);
+          socket.setNoDelay(true);
+
+          socket.on("data", (chunk: Buffer) => {
+            this.handleVoiceFilterBinaryEgressData(chunk);
+          });
+
+          socket.on("error", (error) => {
+            console.warn("[desktop] Binary voice-filter egress socket error", error);
+            this.closeVoiceFilterBinaryEgressSocket(socket);
+            this.scheduleVoiceFilterBinaryEgressReconnect();
+          });
+
+          socket.on("close", () => {
+            if (this.voiceFilterBinaryEgressSocket === socket) {
+              this.closeVoiceFilterBinaryEgressSocket(socket);
+              this.scheduleVoiceFilterBinaryEgressReconnect();
+            }
+          });
+
+          this.closeVoiceFilterBinaryEgressSocket();
+          this.voiceFilterBinaryEgressSocket = socket;
+          this.nextVoiceFilterBinaryEgressRetryAt = 0;
+          resolve();
+        });
+
+        socket.once("error", onInitialError);
+      });
+    })()
+      .catch((error) => {
+        this.nextVoiceFilterBinaryEgressRetryAt = Date.now() + BINARY_VF_EGRESS_RETRY_DELAY_MS;
+        throw error;
+      })
+      .finally(() => {
+        this.voiceFilterBinaryEgressConnectPromise = undefined;
+      });
+
+    return this.voiceFilterBinaryEgressConnectPromise;
   }
 
   private parseAppAudioBinaryFramePayload(

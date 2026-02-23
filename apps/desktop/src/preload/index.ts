@@ -14,7 +14,6 @@ import type {
   TStartAppAudioCaptureInput,
   TStartVoiceFilterInput,
   TStartVoiceFilterWithCaptureInput,
-  TVoiceFilterFrame,
   TVoiceFilterPcmFrame,
   TVoiceFilterSession,
   TVoiceFilterStatusEvent,
@@ -41,36 +40,11 @@ let appAudioHasReceivedFrameSinceCaptureStart = false;
 let appAudioLastFrameAt = 0;
 let voiceFilterFramePort: MessagePort | undefined;
 let voiceFilterFramePortPromise: Promise<boolean> | undefined;
-
-const encodePcmBase64 = (samples: Float32Array): string => {
-  const bytes = new Uint8Array(
-    samples.buffer,
-    samples.byteOffset,
-    samples.byteLength,
-  );
-  const chunkSize = 0x8000;
-  let binary = "";
-
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
-    binary += String.fromCharCode(...chunk);
-  }
-
-  return btoa(binary);
-};
-
-const toFallbackVoiceFilterFrame = (frame: TVoiceFilterPcmFrame): TVoiceFilterFrame => {
-  return {
-    sessionId: frame.sessionId,
-    sequence: frame.sequence,
-    sampleRate: frame.sampleRate,
-    channels: frame.channels,
-    frameCount: frame.frameCount,
-    pcmBase64: encodePcmBase64(frame.pcm),
-    protocolVersion: frame.protocolVersion,
-    encoding: "f32le_base64",
-  };
-};
+let voiceFilterEgressFramePort: MessagePort | undefined;
+let voiceFilterEgressFramePortPromise: Promise<boolean> | undefined;
+const voiceFilterEgressFrameSubscribers = new Set<
+  (frame: TVoiceFilterPcmFrame) => void
+>();
 
 const dispatchAppAudioFrame = (frame: TAppAudioFrame | TAppAudioPcmFrame) => {
   appAudioHasReceivedFrameSinceCaptureStart = true;
@@ -461,6 +435,177 @@ const ensureVoiceFilterFrameChannel = (): Promise<boolean> => {
   return voiceFilterFramePortPromise;
 };
 
+const ensureVoiceFilterEgressFrameChannel = (): Promise<boolean> => {
+  if (voiceFilterEgressFramePort) {
+    return Promise.resolve(true);
+  }
+
+  if (voiceFilterEgressFramePortPromise) {
+    return voiceFilterEgressFramePortPromise;
+  }
+
+  voiceFilterEgressFramePortPromise = new Promise<boolean>((resolve) => {
+    let settled = false;
+
+    const onPortReady = (event: unknown) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      window.clearTimeout(timeout);
+
+      const port = (event as { ports?: MessagePort[] }).ports?.[0];
+      if (!port) {
+        voiceFilterEgressFramePortPromise = undefined;
+        resolve(false);
+        return;
+      }
+
+      voiceFilterEgressFramePort = port;
+      voiceFilterEgressFramePort.onmessage = (portEvent) => {
+        const data = portEvent.data as
+          | {
+              sessionId?: unknown;
+              sequence?: unknown;
+              sampleRate?: unknown;
+              channels?: unknown;
+              frameCount?: unknown;
+              protocolVersion?: unknown;
+              droppedFrameCount?: unknown;
+              rampWetMix?: unknown;
+              lsnrMean?: unknown;
+              lsnrMin?: unknown;
+              lsnrMax?: unknown;
+              agcGain?: unknown;
+              pcmBuffer?: unknown;
+              pcmByteOffset?: unknown;
+              pcmByteLength?: unknown;
+            }
+          | undefined;
+
+        if (!data || typeof data !== "object") {
+          return;
+        }
+
+        const {
+          sessionId,
+          sequence,
+          sampleRate,
+          channels,
+          frameCount,
+          protocolVersion,
+          droppedFrameCount,
+          rampWetMix,
+          lsnrMean,
+          lsnrMin,
+          lsnrMax,
+          agcGain,
+          pcmBuffer,
+          pcmByteOffset,
+          pcmByteLength,
+        } = data;
+
+        if (
+          typeof sessionId !== "string" ||
+          typeof sequence !== "number" ||
+          typeof sampleRate !== "number" ||
+          typeof channels !== "number" ||
+          typeof frameCount !== "number" ||
+          typeof protocolVersion !== "number" ||
+          !(pcmBuffer instanceof ArrayBuffer)
+        ) {
+          return;
+        }
+
+        const byteOffset =
+          typeof pcmByteOffset === "number" && Number.isInteger(pcmByteOffset)
+            ? pcmByteOffset
+            : 0;
+        const byteLength =
+          typeof pcmByteLength === "number" && Number.isInteger(pcmByteLength)
+            ? pcmByteLength
+            : pcmBuffer.byteLength;
+
+        if (
+          byteOffset < 0 ||
+          byteLength <= 0 ||
+          byteOffset + byteLength > pcmBuffer.byteLength ||
+          byteLength % Float32Array.BYTES_PER_ELEMENT !== 0
+        ) {
+          return;
+        }
+
+        const frame: TVoiceFilterPcmFrame = {
+          sessionId,
+          sequence,
+          sampleRate,
+          channels,
+          frameCount,
+          protocolVersion,
+          droppedFrameCount:
+            typeof droppedFrameCount === "number" ? droppedFrameCount : undefined,
+          pcm: new Float32Array(
+            pcmBuffer,
+            byteOffset,
+            byteLength / Float32Array.BYTES_PER_ELEMENT,
+          ),
+          diag:
+            typeof rampWetMix === "number"
+              ? {
+                  rampWetMix,
+                  lsnrMean: typeof lsnrMean === "number" ? lsnrMean : undefined,
+                  lsnrMin: typeof lsnrMin === "number" ? lsnrMin : undefined,
+                  lsnrMax: typeof lsnrMax === "number" ? lsnrMax : undefined,
+                  agcGain: typeof agcGain === "number" ? agcGain : undefined,
+                }
+              : undefined,
+        };
+
+        for (const cb of voiceFilterEgressFrameSubscribers) {
+          cb(frame);
+        }
+      };
+      voiceFilterEgressFramePort.onmessageerror = () => {
+        voiceFilterEgressFramePort = undefined;
+      };
+
+      try {
+        voiceFilterEgressFramePort.start();
+      } catch {
+        // ignore
+      }
+
+      console.warn(`${VOICE_FILTER_DEBUG_LOG_PREFIX} Voice-filter egress MessagePort ready`);
+
+      voiceFilterEgressFramePortPromise = undefined;
+      resolve(true);
+    };
+
+    const timeout = window.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      ipcRenderer.removeListener(
+        "desktop:voice-filter-frame-egress-channel-ready",
+        onPortReady,
+      );
+      voiceFilterEgressFramePortPromise = undefined;
+      console.warn(
+        `${VOICE_FILTER_DEBUG_LOG_PREFIX} Timed out waiting for voice-filter egress MessagePort`,
+      );
+      resolve(false);
+    }, VOICE_FILTER_CHANNEL_INIT_TIMEOUT_MS);
+
+    ipcRenderer.once("desktop:voice-filter-frame-egress-channel-ready", onPortReady);
+    ipcRenderer.send("desktop:open-voice-filter-frame-egress-channel");
+  });
+
+  return voiceFilterEgressFramePortPromise;
+};
+
 const desktopBridge = {
   getServerUrl: (): Promise<string> =>
     ipcRenderer.invoke("desktop:get-server-url"),
@@ -513,75 +658,66 @@ const desktopBridge = {
   ): Promise<TGlobalPushKeybindRegistrationResult> =>
     ipcRenderer.invoke("desktop:set-global-push-keybinds", input),
   pushVoiceFilterPcmFrame: (frame: TVoiceFilterPcmFrame): void => {
-    if (voiceFilterFramePort) {
-      const { pcm } = frame;
-      try {
-        const pcmCopy = new Float32Array(pcm.length);
-        pcmCopy.set(pcm);
-
-        voiceFilterFramePort.postMessage(
-          {
-            frameKind: "mic",
-            sessionId: frame.sessionId,
-            sequence: frame.sequence,
-            sampleRate: frame.sampleRate,
-            channels: frame.channels,
-            frameCount: frame.frameCount,
-            protocolVersion: frame.protocolVersion,
-            pcmSamples: pcmCopy,
-          },
-        );
-        return;
-      } catch {
-        console.warn(
-          `${VOICE_FILTER_DEBUG_LOG_PREFIX} Failed to post PCM frame via MessagePort; switching to JSON fallback`,
-        );
-        voiceFilterFramePort = undefined;
-      }
+    if (!voiceFilterFramePort) {
+      void ensureVoiceFilterFrameChannel();
+      return;
     }
 
-    void ensureVoiceFilterFrameChannel();
-    ipcRenderer.send(
-      "desktop:push-voice-filter-frame",
-      toFallbackVoiceFilterFrame(frame),
-    );
+    const { pcm } = frame;
+    try {
+      const pcmCopy = new Float32Array(pcm.length);
+      pcmCopy.set(pcm);
+
+      voiceFilterFramePort.postMessage(
+        {
+          frameKind: "mic",
+          sessionId: frame.sessionId,
+          sequence: frame.sequence,
+          sampleRate: frame.sampleRate,
+          channels: frame.channels,
+          frameCount: frame.frameCount,
+          protocolVersion: frame.protocolVersion,
+          pcmSamples: pcmCopy,
+        },
+      );
+    } catch {
+      console.warn(
+        `${VOICE_FILTER_DEBUG_LOG_PREFIX} Failed to post PCM frame via MessagePort; frame dropped`,
+      );
+      voiceFilterFramePort = undefined;
+      void ensureVoiceFilterFrameChannel();
+    }
   },
   pushVoiceFilterReferencePcmFrame: (frame: TVoiceFilterPcmFrame): void => {
-    if (voiceFilterFramePort) {
-      const { pcm } = frame;
-      try {
-        const pcmCopy = new Float32Array(pcm.length);
-        pcmCopy.set(pcm);
-
-        voiceFilterFramePort.postMessage(
-          {
-            frameKind: "reference",
-            sessionId: frame.sessionId,
-            sequence: frame.sequence,
-            sampleRate: frame.sampleRate,
-            channels: frame.channels,
-            frameCount: frame.frameCount,
-            protocolVersion: frame.protocolVersion,
-            pcmSamples: pcmCopy,
-          },
-        );
-        return;
-      } catch {
-        console.warn(
-          `${VOICE_FILTER_DEBUG_LOG_PREFIX} Failed to post reference PCM frame via MessagePort; switching to JSON fallback`,
-        );
-        voiceFilterFramePort = undefined;
-      }
+    if (!voiceFilterFramePort) {
+      void ensureVoiceFilterFrameChannel();
+      return;
     }
 
-    void ensureVoiceFilterFrameChannel();
-    ipcRenderer.send(
-      "desktop:push-voice-filter-reference-frame",
-      toFallbackVoiceFilterFrame(frame),
-    );
-  },
-  pushVoiceFilterFrame: (frame: TVoiceFilterFrame): void => {
-    ipcRenderer.send("desktop:push-voice-filter-frame", frame);
+    const { pcm } = frame;
+    try {
+      const pcmCopy = new Float32Array(pcm.length);
+      pcmCopy.set(pcm);
+
+      voiceFilterFramePort.postMessage(
+        {
+          frameKind: "reference",
+          sessionId: frame.sessionId,
+          sequence: frame.sequence,
+          sampleRate: frame.sampleRate,
+          channels: frame.channels,
+          frameCount: frame.frameCount,
+          protocolVersion: frame.protocolVersion,
+          pcmSamples: pcmCopy,
+        },
+      );
+    } catch {
+      console.warn(
+        `${VOICE_FILTER_DEBUG_LOG_PREFIX} Failed to post reference PCM frame via MessagePort; frame dropped`,
+      );
+      voiceFilterFramePort = undefined;
+      void ensureVoiceFilterFrameChannel();
+    }
   },
   subscribeAppAudioFrames: (
     callback: (frame: TAppAudioFrame | TAppAudioPcmFrame) => void,
@@ -617,17 +753,16 @@ const desktopBridge = {
       ipcRenderer.removeListener("desktop:app-audio-status", listener);
     };
   },
-  subscribeVoiceFilterFrames: (callback: (frame: TVoiceFilterFrame) => void) => {
-    const listener = (_event: unknown, frame: TVoiceFilterFrame) => {
-      callback(frame);
-    };
-
-    ipcRenderer.on("desktop:voice-filter-frame", listener);
+  subscribeVoiceFilterFrames: (callback: (frame: TVoiceFilterPcmFrame) => void) => {
+    voiceFilterEgressFrameSubscribers.add(callback);
+    void ensureVoiceFilterEgressFrameChannel();
 
     return () => {
-      ipcRenderer.removeListener("desktop:voice-filter-frame", listener);
+      voiceFilterEgressFrameSubscribers.delete(callback);
     };
   },
+  openVoiceFilterFrameEgressChannel: (): Promise<boolean> =>
+    ensureVoiceFilterEgressFrameChannel(),
   subscribeVoiceFilterStatus: (
     callback: (statusEvent: TVoiceFilterStatusEvent) => void,
   ) => {

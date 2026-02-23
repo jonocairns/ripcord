@@ -169,11 +169,11 @@ const DesktopUpdateCallout = memo(() => {
           {calloutContent.icon}
           <div className="min-w-0">
             <p
-              className={`text-xs font-semibold text-foreground ${calloutContent.pulseTitleClassName || ''}`}
+              className={`text-sm font-semibold text-foreground ${calloutContent.pulseTitleClassName || ''}`}
             >
               {calloutContent.title}
             </p>
-            <p className="mt-0.5 text-xs text-muted-foreground leading-snug">
+            <p className="mt-0.5 text-sm text-muted-foreground leading-snug">
               {calloutContent.description}
             </p>
           </div>

@@ -123,6 +123,14 @@ export type TVoiceFilterSession = {
   encoding?: "f32le_base64";
 };
 
+export type TVoiceFilterFrameDiag = {
+  lsnrMean?: number;
+  lsnrMin?: number;
+  lsnrMax?: number;
+  agcGain?: number;
+  rampWetMix: number;
+};
+
 export type TVoiceFilterFrame = {
   sessionId: string;
   sequence: number;
@@ -133,6 +141,7 @@ export type TVoiceFilterFrame = {
   protocolVersion: number;
   encoding: "f32le_base64";
   droppedFrameCount?: number;
+  diag?: TVoiceFilterFrameDiag;
 };
 
 export type TVoiceFilterPcmFrame = {
@@ -143,6 +152,8 @@ export type TVoiceFilterPcmFrame = {
   frameCount: number;
   pcm: Float32Array;
   protocolVersion: number;
+  droppedFrameCount?: number;
+  diag?: TVoiceFilterFrameDiag;
 };
 
 export type TVoiceFilterStatusEvent = {

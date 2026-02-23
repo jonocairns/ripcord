@@ -121,16 +121,19 @@ export type TVoiceFilterSession = {
   encoding?: 'f32le_base64';
 };
 
-export type TVoiceFilterFrame = {
-  sessionId: string;
-  sequence: number;
-  sampleRate: number;
-  channels: number;
-  frameCount: number;
-  pcmBase64: string;
-  protocolVersion: number;
-  encoding: 'f32le_base64';
-  droppedFrameCount?: number;
+export type TVoiceFilterFrameDiag = {
+  /** DeepFilterNet log-SNR estimate for this buffer. Low values (< -3 dB) mean the
+   *  model sees mostly noise — the primary indicator of over-suppression. undefined
+   *  in passthrough mode. */
+  lsnrMean?: number;
+  lsnrMin?: number;
+  lsnrMax?: number;
+  /** AGC gain applied. undefined when AGC is disabled. High values (> 3×) indicate
+   *  the mic is very quiet — common with far-field setups. */
+  agcGain?: number;
+  /** Startup ramp wet-mix at the end of the buffer (0 = dry, 1 = fully processed).
+   *  Stays at 1.0 after the ramp completes. */
+  rampWetMix: number;
 };
 
 export type TVoiceFilterPcmFrame = {
@@ -141,6 +144,8 @@ export type TVoiceFilterPcmFrame = {
   frameCount: number;
   pcm: Float32Array;
   protocolVersion: number;
+  droppedFrameCount?: number;
+  diag?: TVoiceFilterFrameDiag;
 };
 
 export type TVoiceFilterStatusEvent = {
@@ -231,12 +236,12 @@ export type TDesktopBridge = {
   ) => Promise<TVoiceFilterSession>;
   stopVoiceFilterSession: (sessionId?: string) => Promise<void>;
   ensureVoiceFilterFrameChannel: () => Promise<boolean>;
+  openVoiceFilterFrameEgressChannel: () => Promise<boolean>;
   setGlobalPushKeybinds: (
     input: TDesktopPushKeybindsInput
   ) => Promise<TGlobalPushKeybindRegistrationResult>;
   pushVoiceFilterPcmFrame: (frame: TVoiceFilterPcmFrame) => void;
   pushVoiceFilterReferencePcmFrame: (frame: TVoiceFilterPcmFrame) => void;
-  pushVoiceFilterFrame: (frame: TVoiceFilterFrame) => void;
   subscribeAppAudioFrames: (
     cb: (frame: TAppAudioFrame | TAppAudioPcmFrame) => void
   ) => () => void;
@@ -244,7 +249,7 @@ export type TDesktopBridge = {
     cb: (statusEvent: TAppAudioStatusEvent) => void
   ) => () => void;
   subscribeVoiceFilterFrames: (
-    cb: (frame: TVoiceFilterFrame) => void
+    cb: (frame: TVoiceFilterPcmFrame) => void
   ) => () => void;
   subscribeVoiceFilterStatus: (
     cb: (statusEvent: TVoiceFilterStatusEvent) => void
