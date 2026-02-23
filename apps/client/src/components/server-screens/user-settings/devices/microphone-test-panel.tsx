@@ -610,6 +610,18 @@ const MicrophoneTestPanel = memo(
       };
     }, [stopTest]);
 
+    // Restart the running test automatically when processing config changes (e.g. AGC toggle)
+    // so the new session reflects the updated settings without requiring a manual stop/start.
+    const isTestingMicRef = useRef(false);
+    useEffect(() => {
+      isTestingMicRef.current = isTestingMic;
+    }, [isTestingMic]);
+    useEffect(() => {
+      if (!isTestingMicRef.current) return;
+      void startTest();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [resolvedMicProcessingConfig]);
+
     useEffect(() => {
       return () => {
         const currentClipUrl = recordedClipUrlRef.current;

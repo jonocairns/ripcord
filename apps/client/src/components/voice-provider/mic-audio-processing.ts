@@ -106,7 +106,7 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
     const agc =
       snapshot.agcGainMean !== null ? `${snapshot.agcGainMean.toFixed(2)}×` : 'off';
 
-    console.warn(
+    console.log(
       `[nc-diag] lsnr=${lsnr} dB range=${lsnrRange} agc=${agc}` +
         ` rampFrames=${snapshot.rampActiveFrames} dropped=${snapshot.droppedFrames}` +
         ` frames=${snapshot.frameCount}`

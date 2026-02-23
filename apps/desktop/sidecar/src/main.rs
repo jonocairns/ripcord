@@ -397,6 +397,7 @@ struct VoiceFilterSession {
     dezipper_prev_sample: f32,
     vad: VadState,
     transient_suppressor: TransientSuppressorState,
+    lsnr_smoothed: f32,
 }
 
 impl VoiceFilterSession {
@@ -1180,6 +1181,7 @@ fn create_voice_filter_session(
         dezipper_prev_sample: 0.0,
         vad: VadState::default(),
         transient_suppressor: TransientSuppressorState::default(),
+        lsnr_smoothed: 0.0,
     })
 }
 
@@ -1209,7 +1211,7 @@ fn decode_f32le_base64(pcm_base64: &str) -> Result<Vec<f32>, String> {
 const TRIM_TARGET_RMS: f32 = 0.12;           // desired long-term RMS level
 const TRIM_LEVEL_TC_S: f32 = 0.400;          // 400ms IIR for level measurement
 const TRIM_MIN_GAIN: f32 = 0.5;              // floor: -6 dB
-const TRIM_MAX_GAIN: f32 = 4.0;              // ceil: +12 dB
+const TRIM_MAX_GAIN: f32 = 2.0;              // ceil: +6 dB (4.0/+12 dB caused onset pumping)
 const TRIM_SLEW_DB_PER_FRAME: f32 = 0.1;    // max change per 10ms frame = ±1 dB/100ms
 const AGC_STARTUP_BYPASS_MS: u32 = 1_500;
 // Suppression slew limit: cap how fast DFN can drop its output RMS per frame.
@@ -1241,6 +1243,9 @@ const EXPANDER_HANGOVER_MS: f32 = 150.0;       // hold time after signal drops (
 const EXPANDER_LSNR_NUDGE_LOW_DB: f32 = -10.0;  // LSNR at/below this → full nudge
 const EXPANDER_LSNR_NUDGE_HIGH_DB: f32 = 5.0;   // LSNR at/above this → no nudge
 const EXPANDER_LSNR_THRESHOLD_RAISE_DB: f32 = 8.0; // max upward shift applied to threshold
+// EWMA smoothing for the LSNR value that drives the threshold nudge.
+// α=0.9 at 10ms frames → ~95ms time constant; kills frame-to-frame jitter.
+const EXPANDER_LSNR_SMOOTH_ALPHA: f32 = 0.9;
 
 // VAD: lightweight energy-based voice activity detector.
 // Produces a speech probability and state machine per 10ms frame used as a control
@@ -1260,7 +1265,7 @@ const VAD_NOISE_ADAPT_RATE: f32 = 0.002;      // noise floor adaptation speed (S
 const VAD_SNR_LOW_DB: f32 = -3.0;             // SNR at/below → p_raw = 0.0
 const VAD_SNR_HIGH_DB: f32 = 12.0;            // SNR at/above → p_raw = 1.0
 const VAD_TRIM_SILENCE_RATE: f32 = 0.0;       // trim fully frozen in Silence — no drift
-const VAD_TRIM_HANGOVER_RATE: f32 = 0.30;     // trim IIR / slew rate multiplier in Hangover
+const VAD_TRIM_HANGOVER_RATE: f32 = 0.05;     // trim IIR / slew rate multiplier in Hangover (near-frozen)
 
 // Transient suppressor (clap / impulse detector).
 // Detects frames with unusually high crest factor (peak/RMS) outside Speech state,
@@ -1268,14 +1273,14 @@ const VAD_TRIM_HANGOVER_RATE: f32 = 0.30;     // trim IIR / slew rate multiplier
 // suppression knocks down the click's snap without thinning the voice's body.
 // Post-DFN crest factors are lower than raw-mic values: DFN smooths peak energy so a
 // keyboard press that measures crest≈15 at the mic is typically crest≈7–9 post-model.
-const TRANS_CREST_THRESHOLD: f32 = 6.0;       // peak/RMS trigger (post-DFN keyboard ≈7–9, speech ≈3–5)
+const TRANS_CREST_THRESHOLD: f32 = 5.8;       // peak/RMS trigger (post-DFN keyboard ≈7–9, speech ≈3–5)
 const TRANS_HOLD_MS: u32 = 30;                // hold at peak attenuation (30ms covers mechanical key decay)
 const TRANS_RELEASE_MS: f32 = 100.0;          // gain recovery time after hold (100ms)
 const TRANS_DEBOUNCE_MS: u32 = 60;            // minimum interval between triggers — prevents cumulative thinning
 // Band-split gains: lows are cut less than highs, preserving warmth.
 // LP + HP = identity when both gains = 1.0, so the split adds zero coloration at rest.
 const TRANS_GAIN_LOW_DB: f32 = -6.0;          // low-band floor in Silence  (−6 dB  ≈ 0.50 linear)
-const TRANS_GAIN_HIGH_DB: f32 = -15.0;        // high-band floor in Silence (−15 dB ≈ 0.18 linear)
+const TRANS_GAIN_HIGH_DB: f32 = -17.0;        // high-band floor in Silence (−17 dB ≈ 0.14 linear)
 const TRANS_GAIN_HO_LOW_DB: f32 = -3.0;       // low-band floor in Hangover (−3 dB  ≈ 0.71) — gentler
 const TRANS_GAIN_HO_HIGH_DB: f32 = -12.0;     // high-band floor in Hangover (−12 dB ≈ 0.25)
 const TRANS_CROSSOVER_HZ: f32 = 300.0;        // LP/HP crossover frequency
@@ -1554,6 +1559,7 @@ fn apply_transient_suppressor(
     samples: &mut [f32],
     sample_rate: usize,
     vad_state: VadSpeechState,
+    noise_floor_rms: f32,
 ) {
     if samples.is_empty() || sample_rate == 0 {
         return;
@@ -1570,13 +1576,20 @@ fn apply_transient_suppressor(
     let debounce_samples = ((sr * TRANS_DEBOUNCE_MS as f32) / 1000.0) as u32;
 
     // Trigger rules (Speech always excluded; debounce prevents cumulative thinning):
-    //   Silence  — crest > threshold; stable background means few false positives.
+    //   Silence  — crest > threshold OR (sudden frame jump ×2 AND above noise floor ×2);
+    //              the noise-floor gate stops bed fluctuations from triggering — only
+    //              genuine impulses that rise well above the tracked background pass.
     //   Hangover — crest > threshold AND sudden energy rise vs. previous frame.
     //              A keyboard hit jumps from near-silence (×4 or more); a speech tail
     //              declines gradually so prev_rms ≈ current rms, blocking the trigger.
     let triggered = state.debounce_samples_remaining == 0
         && match vad_state {
-            VadSpeechState::Silence => crest > TRANS_CREST_THRESHOLD,
+            VadSpeechState::Silence => {
+                crest > TRANS_CREST_THRESHOLD
+                    || (state.prev_rms > 0.0
+                        && rms > state.prev_rms * 2.0
+                        && rms > noise_floor_rms * 2.0)
+            }
             VadSpeechState::Hangover => {
                 crest > TRANS_CREST_THRESHOLD
                     && state.prev_rms > 0.0
@@ -2004,6 +2017,7 @@ fn process_voice_filter_frame(
             samples,
             session.sample_rate,
             vad_out.speech_state,
+            session.vad.noise_floor_rms,
         );
     }
 
@@ -2083,7 +2097,11 @@ fn process_voice_filter_frame(
         // noise_mix = 1.0 → full noise (silence); noise_mix = 0.0 → no noise (speech).
         let noise_mix = 1.0 - expander_bypass;
         inject_comfort_noise(samples, &mut session.noise_rng_state, noise_mix);
-        apply_downward_expander(session, samples, lsnr_mean, expander_bypass);
+        if let Some(lsnr) = lsnr_mean {
+            session.lsnr_smoothed = EXPANDER_LSNR_SMOOTH_ALPHA * session.lsnr_smoothed
+                + (1.0 - EXPANDER_LSNR_SMOOTH_ALPHA) * lsnr;
+        }
+        apply_downward_expander(session, samples, Some(session.lsnr_smoothed), expander_bypass);
     }
 
     Ok(VoiceFilterDiagnostics {
