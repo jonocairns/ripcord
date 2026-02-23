@@ -351,13 +351,6 @@ const registerIpcHandlers = () => {
   );
 
   ipcMain.on(
-    "desktop:push-voice-filter-frame",
-    (_event: IpcMainEvent, frame: TVoiceFilterFrame) => {
-      captureSidecarManager.pushVoiceFilterFrame(frame);
-    },
-  );
-
-  ipcMain.on(
     "desktop:push-voice-filter-reference-frame",
     (_event: IpcMainEvent, frame: TVoiceFilterFrame) => {
       captureSidecarManager.pushVoiceFilterReferenceFrame(frame);

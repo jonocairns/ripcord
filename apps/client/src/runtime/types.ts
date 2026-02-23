@@ -136,19 +136,6 @@ export type TVoiceFilterFrameDiag = {
   rampWetMix: number;
 };
 
-export type TVoiceFilterFrame = {
-  sessionId: string;
-  sequence: number;
-  sampleRate: number;
-  channels: number;
-  frameCount: number;
-  pcmBase64: string;
-  protocolVersion: number;
-  encoding: 'f32le_base64';
-  droppedFrameCount?: number;
-  diag?: TVoiceFilterFrameDiag;
-};
-
 export type TVoiceFilterPcmFrame = {
   sessionId: string;
   sequence: number;
@@ -255,7 +242,6 @@ export type TDesktopBridge = {
   ) => Promise<TGlobalPushKeybindRegistrationResult>;
   pushVoiceFilterPcmFrame: (frame: TVoiceFilterPcmFrame) => void;
   pushVoiceFilterReferencePcmFrame: (frame: TVoiceFilterPcmFrame) => void;
-  pushVoiceFilterFrame: (frame: TVoiceFilterFrame) => void;
   subscribeAppAudioFrames: (
     cb: (frame: TAppAudioFrame | TAppAudioPcmFrame) => void
   ) => () => void;
