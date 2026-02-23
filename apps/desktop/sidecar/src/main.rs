@@ -1229,6 +1229,11 @@ const COMFORT_NOISE_LEVEL_DBFS: f32 = -72.0;      // injected noise amplitude
 const DEZIPPER_COEFF: f32 = 0.25;
 const SUPPRESSION_STARTUP_RAMP_MS: u32 = 1_000;
 const SUPPRESSION_STARTUP_PRE_WARM_MS: f32 = 200.0; // hold fully dry while DFN calibrates
+// Per-utterance onset ramp: on each new speech segment the DFN wet-mix is held at 0
+// and ramped linearly to 1.0 over this many frames (10 ms each = 100 ms total).
+// Gives the DFN model time to update its spectral mask from noise-suppression to
+// speech-preservation mode before operating at full depth, eliminating onset tinniness.
+const ONSET_WET_RAMP_FRAMES: u32 = 10;
 
 // Downward expander — gentle noise-floor suppression placed after echo cancellation.
 // A 1.5:1 expansion ratio attenuates residual noise without killing tails or plosives.
@@ -1273,7 +1278,7 @@ const VAD_TRIM_HANGOVER_RATE: f32 = 0.05;     // trim IIR / slew rate multiplier
 // as an impulse — onset_counter is reset rather than incremented.  Crest threshold
 // sits above the post-DFN speech ceiling (~6) and below the keyboard/clap floor (~7+).
 const VAD_IMPULSE_CREST_THRESHOLD: f32 = 7.0; // crest above this in Silence → impulse, not speech onset
-const VAD_IMPULSE_ENERGY_JUMP: f32 = 2.5;     // frame RMS must also be ×4 above previous frame
+const VAD_IMPULSE_ENERGY_JUMP: f32 = 4.0;     // frame RMS must also be ×4 above previous frame
 
 // Transient suppressor (clap / impulse detector).
 // Detects frames with unusually high crest factor (peak/RMS) outside Speech state,
@@ -1350,6 +1355,8 @@ struct VadState {
     hangover_frames_remaining: u32,
     /// Remaining frames of expander bypass at the start of a new Speech segment.
     onset_protection_frames_remaining: u32,
+    /// Remaining frames of the per-utterance DFN wet-mix ramp (0 = inactive / ramp complete).
+    onset_wet_ramp_frames_remaining: u32,
     /// Adaptive noise floor RMS; updated only during Silence.
     noise_floor_rms: f32,
     /// RMS of the previous frame; used by the impulse guard to detect sudden energy jumps.
@@ -1365,6 +1372,7 @@ impl Default for VadState {
             offset_counter: 0,
             hangover_frames_remaining: 0,
             onset_protection_frames_remaining: 0,
+            onset_wet_ramp_frames_remaining: 0,
             noise_floor_rms: 1e-4, // small non-zero initial noise floor
             prev_frame_rms: 0.0,
         }
@@ -1372,8 +1380,6 @@ impl Default for VadState {
 }
 
 struct VadOutput {
-    /// Smoothed speech probability ∈ [0, 1].
-    p_speech: f32,
     speech_state: VadSpeechState,
 }
 
@@ -1661,7 +1667,7 @@ fn apply_transient_suppressor(
 // The noise floor estimate adapts only during Silence, preventing speech from corrupting it.
 fn analyze_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> VadOutput {
     if samples.is_empty() || sample_rate == 0 {
-        return VadOutput { p_speech: vad.p_smooth, speech_state: vad.speech_state };
+        return VadOutput { speech_state: vad.speech_state };
     }
 
     // Per-frame RMS → SNR relative to adaptive noise floor → p_raw ∈ [0, 1].
@@ -1692,6 +1698,8 @@ fn analyze_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> VadOu
                     vad.onset_counter = 0;
                     // Onset protection: bypass expander for VAD_ONSET_PROTECTION_FRAMES frames.
                     vad.onset_protection_frames_remaining = VAD_ONSET_PROTECTION_FRAMES.max(1);
+                    // Per-utterance DFN onset ramp: start wet-mix at 0 and ramp to 1.
+                    vad.onset_wet_ramp_frames_remaining = ONSET_WET_RAMP_FRAMES;
                 }
             } else {
                 vad.onset_counter = 0;
@@ -1729,7 +1737,7 @@ fn analyze_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> VadOu
     }
 
     vad.prev_frame_rms = frame_rms;
-    VadOutput { p_speech: vad.p_smooth, speech_state: vad.speech_state }
+    VadOutput { speech_state: vad.speech_state }
 }
 
 fn apply_downward_expander(
@@ -1796,7 +1804,7 @@ fn apply_downward_expander(
 
         // VAD bypass: blend desired_gain toward 1.0 based on speech probability.
         // During speech (bypass→1.0) the expander is essentially inactive.
-        // During hangover p_speech naturally decays, so expander engagement is gradual.
+        // During hangover bypass decays via hangover_frames_remaining, so expander engages gradually.
         let bypass = expander_bypass.clamp(0.0, 1.0);
         let effective_desired_gain = desired_gain + (1.0 - desired_gain) * bypass;
 
@@ -1893,6 +1901,18 @@ fn process_voice_filter_frame(
             1.0
         };
 
+    // Per-utterance onset ramp: wet-mix starts at 0 on the first post-onset frame and
+    // advances linearly to 1.0 over ONSET_WET_RAMP_FRAMES.  Combined with the session
+    // startup ramp via min() so the drier of the two always wins.
+    let onset_wet_mix = if session.vad.onset_wet_ramp_frames_remaining > 0
+        && matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_))
+    {
+        1.0 - session.vad.onset_wet_ramp_frames_remaining as f32 / ONSET_WET_RAMP_FRAMES as f32
+    } else {
+        1.0
+    };
+    let effective_wet_mix = ramp_wet_mix_at_frame_start.min(onset_wet_mix);
+
     // AEC before DFN: remove echo from the mic signal first so DFN sees a cleaner
     // input.  If AEC is disabled this is a no-op and has no performance cost.
     if session.echo_cancellation {
@@ -1947,12 +1967,12 @@ fn process_voice_filter_frame(
                 // Blending at the hop level (rather than mixing separate dry/wet PCM streams)
                 // is phase-coherent — noisy and enhanced share the same signal path —
                 // so there is no comb-filtering artifact at the crossover point.
-                if ramp_wet_mix_at_frame_start < 1.0 {
-                    let dry_mix = 1.0 - ramp_wet_mix_at_frame_start;
+                if effective_wet_mix < 1.0 {
+                    let dry_mix = 1.0 - effective_wet_mix;
                     for ch in 0..channels {
                         for s in 0..hop_size {
                             enhanced[(ch, s)] = noisy[(ch, s)] * dry_mix
-                                + enhanced[(ch, s)] * ramp_wet_mix_at_frame_start;
+                                + enhanced[(ch, s)] * effective_wet_mix;
                         }
                     }
                 }
@@ -1986,14 +2006,14 @@ fn process_voice_filter_frame(
     }
 
     // Step 7.5: VAD analysis tap — post-dezipper, no audio modification.
-    // Produces speech_state and p_speech used as control signals for trim and expander.
+    // Produces speech_state used as control signal for trim and expander.
     // Tapping here (after DFN + de-zipper, before dynamics) means:
     //   • fewer false positives (signal is already noise-reduced)
     //   • dynamics don't "teach" VAD what speech looks like
     let vad_out = if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
         analyze_vad(&mut session.vad, samples, session.sample_rate)
     } else {
-        VadOutput { p_speech: 1.0, speech_state: VadSpeechState::Speech }
+        VadOutput { speech_state: VadSpeechState::Speech }
     };
 
     // Suppression slew limit: prevent DFN from dropping its output RMS by more than
@@ -2062,6 +2082,11 @@ fn process_voice_filter_frame(
         );
     }
 
+    // Advance onset wet ramp (frame-counted; one step per 10 ms frame).
+    if session.vad.onset_wet_ramp_frames_remaining > 0 {
+        session.vad.onset_wet_ramp_frames_remaining -= 1;
+    }
+
     // Advance startup-ramp timer.  The per-hop blend is done inside the DFN loop above.
     if ramp_wet_mix_at_frame_start < 1.0 {
         let processed_ms = if session.sample_rate > 0 {
@@ -2092,23 +2117,30 @@ fn process_voice_filter_frame(
     // expander_bypass: 1.0 = fully bypassed (speech / onset-protection), 0.0 = full effect.
     // Onset protection forces bypass for the first VAD_ONSET_PROTECTION_FRAMES frames of each
     // new speech segment, protecting soft consonant attacks ("t/k/p") that are below threshold.
-    // After onset, p_speech decays naturally as hangover expires → expander engages gradually.
+    // After onset, a time-based ramp (hangover_frames_remaining / VAD_HANGOVER_FRAMES) drives
+    // bypass 1.0→0.0 over the hangover window, independent of signal-level fluctuations.
     //
     // Comfort noise is injected only outside Speech (no need during speech; expander is
     // bypassed anyway and noise at -72 dBFS is inaudible under voice).  Gating keeps the
     // noise bed stable — it never "wobbles" with the speech signal.
     if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
         // State-driven bypass — binary for Speech/Silence, shaped curve in Hangover.
-        // Using raw p_speech during Speech would let quiet/borderline speech partially
+        // Using p_smooth during Speech would let quiet/borderline speech partially
         // engage the expander, which is worse than not engaging at all.
         let expander_bypass = if session.vad.onset_protection_frames_remaining > 0 {
             1.0f32 // onset protection: full bypass regardless of state
         } else {
             match vad_out.speech_state {
                 VadSpeechState::Speech => 1.0,
-                // Hangover: p_smooth decays naturally as silence frames accumulate,
-                // giving a smooth ramp from ~bypass=0.6 → 0 over the hangover window.
-                VadSpeechState::Hangover => vad_out.p_speech,
+                // Hangover: use a monotonic time-based ramp (1.0 → 0.0) anchored to
+                // hangover_frames_remaining so the expander engages smoothly over the
+                // hangover window regardless of signal-level fluctuations.  Using
+                // p_smooth here caused audible pumping whenever any sound (keyboard
+                // click, clap, background noise) occurred during hangover.
+                VadSpeechState::Hangover => {
+                    session.vad.hangover_frames_remaining as f32
+                        / VAD_HANGOVER_FRAMES as f32
+                }
                 VadSpeechState::Silence => 0.0,
             }
         };
