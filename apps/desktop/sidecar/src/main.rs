@@ -1227,6 +1227,7 @@ const COMFORT_NOISE_LEVEL_DBFS: f32 = -72.0;      // injected noise amplitude
 // but enough to attenuate model-rate micro-variation at the hop boundary.
 const DEZIPPER_COEFF: f32 = 0.25;
 const SUPPRESSION_STARTUP_RAMP_MS: u32 = 1_000;
+const SUPPRESSION_STARTUP_PRE_WARM_MS: f32 = 200.0; // hold fully dry while DFN calibrates
 
 // Downward expander — gentle noise-floor suppression placed after echo cancellation.
 // A 1.5:1 expansion ratio attenuates residual noise without killing tails or plosives.
@@ -1367,10 +1368,15 @@ struct VadOutput {
 }
 
 fn suppression_startup_wet_mix(elapsed_ms: f32) -> f32 {
-    if elapsed_ms <= 0.0 {
-        return 0.0;
+    if elapsed_ms <= SUPPRESSION_STARTUP_PRE_WARM_MS {
+        return 0.0; // hold fully dry while DFN sees audio and calibrates its noise model
     }
-    (elapsed_ms / SUPPRESSION_STARTUP_RAMP_MS as f32).clamp(0.0, 1.0)
+    // Quadratic ease-in over the remaining window: t² keeps the signal mostly dry
+    // while DFN continues to stabilise, then transitions faster once it has converged.
+    let ramp_elapsed = elapsed_ms - SUPPRESSION_STARTUP_PRE_WARM_MS;
+    let ramp_total = SUPPRESSION_STARTUP_RAMP_MS as f32 - SUPPRESSION_STARTUP_PRE_WARM_MS;
+    let t = (ramp_elapsed / ramp_total).clamp(0.0, 1.0);
+    t * t
 }
 
 // apply_slow_trim: per-frame RMS normaliser with a slew-rate-limited gain.
