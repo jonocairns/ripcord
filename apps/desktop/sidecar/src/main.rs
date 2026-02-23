@@ -1268,6 +1268,12 @@ const VAD_SNR_LOW_DB: f32 = -3.0;             // SNR at/below → p_raw = 0.0
 const VAD_SNR_HIGH_DB: f32 = 12.0;            // SNR at/above → p_raw = 1.0
 const VAD_TRIM_SILENCE_RATE: f32 = 0.0;       // trim fully frozen in Silence — no drift
 const VAD_TRIM_HANGOVER_RATE: f32 = 0.05;     // trim IIR / slew rate multiplier in Hangover (near-frozen)
+// VAD impulse guard: prevents claps/thuds from being mistaken for speech onset.
+// A frame with very high crest AND a sudden large energy jump in Silence is treated
+// as an impulse — onset_counter is reset rather than incremented.  Crest threshold
+// sits above the post-DFN speech ceiling (~6) and below the keyboard/clap floor (~7+).
+const VAD_IMPULSE_CREST_THRESHOLD: f32 = 7.0; // crest above this in Silence → impulse, not speech onset
+const VAD_IMPULSE_ENERGY_JUMP: f32 = 2.5;     // frame RMS must also be ×4 above previous frame
 
 // Transient suppressor (clap / impulse detector).
 // Detects frames with unusually high crest factor (peak/RMS) outside Speech state,
@@ -1346,6 +1352,8 @@ struct VadState {
     onset_protection_frames_remaining: u32,
     /// Adaptive noise floor RMS; updated only during Silence.
     noise_floor_rms: f32,
+    /// RMS of the previous frame; used by the impulse guard to detect sudden energy jumps.
+    prev_frame_rms: f32,
 }
 
 impl Default for VadState {
@@ -1358,6 +1366,7 @@ impl Default for VadState {
             hangover_frames_remaining: 0,
             onset_protection_frames_remaining: 0,
             noise_floor_rms: 1e-4, // small non-zero initial noise floor
+            prev_frame_rms: 0.0,
         }
     }
 }
@@ -1664,10 +1673,19 @@ fn analyze_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> VadOu
     // EWMA smoothing: ~50ms time constant at 10ms frames.
     vad.p_smooth = VAD_ALPHA * vad.p_smooth + (1.0 - VAD_ALPHA) * p_raw;
 
+    // Impulse guard: clap/thud detection used to suppress false speech-onset transitions.
+    // Requires both high crest (impulse shape) and a large sudden energy jump (from near-silence).
+    // Speech onsets have crest ~3–6 and rise gradually; claps are ≥10 with an abrupt jump.
+    let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+    let crest = peak / (frame_rms + 1e-6);
+    let is_impulse = crest > VAD_IMPULSE_CREST_THRESHOLD
+        && vad.prev_frame_rms > 0.0
+        && frame_rms > vad.prev_frame_rms * VAD_IMPULSE_ENERGY_JUMP;
+
     // State machine.
     match vad.speech_state {
         VadSpeechState::Silence => {
-            if vad.p_smooth >= VAD_SPEECH_THRESHOLD {
+            if vad.p_smooth >= VAD_SPEECH_THRESHOLD && !is_impulse {
                 vad.onset_counter += 1;
                 if vad.onset_counter >= VAD_ONSET_FRAMES {
                     vad.speech_state = VadSpeechState::Speech;
@@ -1710,6 +1728,7 @@ fn analyze_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> VadOu
         }
     }
 
+    vad.prev_frame_rms = frame_rms;
     VadOutput { p_speech: vad.p_smooth, speech_state: vad.speech_state }
 }
 
