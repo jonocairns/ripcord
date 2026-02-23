@@ -472,7 +472,7 @@ class CaptureSidecarManager {
         console.warn("[desktop] Failed to initialize binary voice filter ingress", error);
       });
     }
-    void this.ensureVoiceFilterBinaryEgress().catch((error) => {
+    await this.ensureVoiceFilterBinaryEgress().catch((error) => {
       console.warn("[desktop] Failed to initialize binary voice-filter egress", error);
     });
 
@@ -505,7 +505,7 @@ class CaptureSidecarManager {
         console.warn("[desktop] Failed to initialize binary voice filter ingress", error);
       });
     }
-    void this.ensureVoiceFilterBinaryEgress().catch((error) => {
+    await this.ensureVoiceFilterBinaryEgress().catch((error) => {
       console.warn("[desktop] Failed to initialize binary voice-filter egress", error);
     });
     return session;
