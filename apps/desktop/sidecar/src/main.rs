@@ -1042,37 +1042,38 @@ struct VoiceFilterDiagnostics {
 }
 
 fn voice_filter_config(strength: VoiceFilterStrength) -> VoiceFilterConfig {
-    // post_filter_beta sharpens the soft mask toward binary (0/1).  Low and
-    // Balanced keep it at 0 to maximise naturalness.  High and Aggressive use
-    // small values to push uncertain non-speech bands (key clicks, mouse, HVAC)
-    // closer to zero.  The startup ramp (1 s dry/wet blend) protects against the
-    // onset tinniness that large beta values caused before.
+    // post_filter_beta sharpens the soft mask toward binary (0/1): speech bands
+    // approach 1.0 (untouched), noise bands approach 0.0 (suppressed).  Small
+    // values reduce the partial-suppression smearing that causes tinniness.
+    // atten_lim_db caps the maximum suppression depth; lower ceilings prevent
+    // the model from making deep mistakes on ambiguous speech bands.
+    // min_db_thresh sets the SNR floor below which full suppression is applied.
     match strength {
         VoiceFilterStrength::Low => VoiceFilterConfig {
-            post_filter_beta: 0.0,
-            atten_lim_db: 20.0,
-            min_db_thresh: -15.0,
+            post_filter_beta: 0.03,
+            atten_lim_db: 15.0,
+            min_db_thresh: -10.0,
             max_db_erb_thresh: 35.0,
             max_db_df_thresh: 20.0,
         },
         VoiceFilterStrength::Balanced => VoiceFilterConfig {
-            post_filter_beta: 0.0,
-            atten_lim_db: 30.0,
-            min_db_thresh: -15.0,
+            post_filter_beta: 0.07,
+            atten_lim_db: 25.0,
+            min_db_thresh: -12.0,
             max_db_erb_thresh: 33.0,
             max_db_df_thresh: 18.0,
         },
         VoiceFilterStrength::High => VoiceFilterConfig {
-            post_filter_beta: 0.0,
-            atten_lim_db: 45.0,
-            min_db_thresh: -18.0,
+            post_filter_beta: 0.13,
+            atten_lim_db: 35.0,
+            min_db_thresh: -15.0,
             max_db_erb_thresh: 30.0,
             max_db_df_thresh: 15.0,
         },
         VoiceFilterStrength::Aggressive => VoiceFilterConfig {
-            post_filter_beta: 0.0,
-            atten_lim_db: 55.0,
-            min_db_thresh: -20.0,
+            post_filter_beta: 0.18,
+            atten_lim_db: 45.0,
+            min_db_thresh: -18.0,
             max_db_erb_thresh: 28.0,
             max_db_df_thresh: 12.0,
         },
