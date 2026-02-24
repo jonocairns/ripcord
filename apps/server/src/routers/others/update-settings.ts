@@ -1,8 +1,14 @@
-import { ActivityLogType, Permission, StorageOverflowAction } from '@sharkord/shared';
+import {
+  ActivityLogType,
+  Permission,
+  StorageOverflowAction,
+  type TSettings
+} from '@sharkord/shared';
 import { z } from 'zod';
 import { updateSettings } from '../../db/mutations/server';
 import { publishSettings } from '../../db/publishers';
 import { getSettings } from '../../db/queries/server';
+import { hashPassword } from '../../helpers/password';
 import { pluginManager } from '../../plugins';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { protectedProcedure } from '../../utils/trpc';
@@ -12,7 +18,7 @@ const updateSettingsRoute = protectedProcedure
     z.object({
       name: z.string().min(2).max(24).optional(),
       description: z.string().max(128).optional(),
-      password: z.string().min(1).max(32).optional().nullable().default(null),
+      password: z.string().min(1).max(128).optional().nullable(),
       allowNewUsers: z.boolean().optional(),
       storageUploadEnabled: z.boolean().optional(),
       storageUploadMaxFileSize: z.number().min(0).optional(),
@@ -25,18 +31,24 @@ const updateSettingsRoute = protectedProcedure
     await ctx.needsPermission(Permission.MANAGE_SETTINGS);
 
     const { enablePlugins: oldEnablePlugins } = await getSettings();
-
-    await updateSettings({
+    const updatePayload: Partial<TSettings> = {
       name: input.name,
       description: input.description,
-      password: input.password,
       allowNewUsers: input.allowNewUsers,
       storageUploadEnabled: input.storageUploadEnabled,
       storageUploadMaxFileSize: input.storageUploadMaxFileSize,
       storageSpaceQuotaByUser: input.storageSpaceQuotaByUser,
       storageOverflowAction: input.storageOverflowAction,
       enablePlugins: input.enablePlugins
-    });
+    };
+
+    if (input.password !== undefined) {
+      updatePayload.password = input.password
+        ? await hashPassword(input.password)
+        : '';
+    }
+
+    await updateSettings(updatePayload);
 
     if (oldEnablePlugins !== input.enablePlugins) {
       if (input.enablePlugins) {
@@ -51,7 +63,15 @@ const updateSettingsRoute = protectedProcedure
     enqueueActivityLog({
       type: ActivityLogType.EDIT_SERVER_SETTINGS,
       userId: ctx.userId,
-      details: { values: input }
+      details: {
+        values:
+          input.password === undefined
+            ? input
+            : {
+                ...input,
+                password: '[REDACTED]'
+              }
+      }
     });
   });
 

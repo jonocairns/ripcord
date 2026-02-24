@@ -7,7 +7,11 @@ const getSettingsRoute = protectedProcedure.query(async ({ ctx }) => {
 
   const settings = await getSettings();
 
-  return settings;
+  return {
+    ...settings,
+    password: '',
+    secretToken: null
+  };
 });
 
 export { getSettingsRoute };

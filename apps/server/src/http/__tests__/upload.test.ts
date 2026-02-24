@@ -1,10 +1,11 @@
 import { UploadHeaders, type TTempFile } from '@sharkord/shared';
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
+import { eq } from 'drizzle-orm';
 import fs from 'fs/promises';
 import path from 'path';
 import { login, uploadFile } from '../../__tests__/helpers';
 import { tdb, testsBaseUrl } from '../../__tests__/setup';
-import { settings } from '../../db/schema';
+import { settings, users } from '../../db/schema';
 import { TMP_PATH } from '../../helpers/paths';
 
 type TUploadErrorResponse = {
@@ -84,6 +85,23 @@ describe('/upload', () => {
   test('should throw when upload token is invalid', async () => {
     const file = getMockFile('This upload will fail due to invalid token.');
     const response = await uploadFile(file, 'invalid-token');
+
+    expect(response.status).toBe(401);
+
+    const data = (await response.json()) as TUploadErrorResponse;
+
+    expect(data).toHaveProperty('error', 'Unauthorized');
+  });
+
+  test('should reject uploads for banned users with valid token', async () => {
+    await tdb
+      .update(users)
+      .set({ banned: true, banReason: 'test ban' })
+      .where(eq(users.id, 1))
+      .execute();
+
+    const file = getMockFile('This upload should fail due to ban.');
+    const response = await uploadFile(file, token);
 
     expect(response.status).toBe(401);
 

@@ -8,6 +8,7 @@ import {
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
+import { updateSettings } from '../../db/mutations/server';
 import {
   getAllChannelUserPermissions,
   getChannelsForUser,
@@ -18,6 +19,7 @@ import { getRoles } from '../../db/queries/roles';
 import { getSettings } from '../../db/queries/server';
 import { getPublicUsers } from '../../db/queries/users';
 import { categories, users } from '../../db/schema';
+import { hashPassword, isArgon2Hash, verifyPassword } from '../../helpers/password';
 import { logger } from '../../logger';
 import { pluginManager } from '../../plugins';
 import { eventBus } from '../../plugins/event-bus';
@@ -41,7 +43,8 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
   .query(async ({ input, ctx }) => {
     const connectionInfo = ctx.getConnectionInfo();
     const settings = await getSettings();
-    const hasPassword = !!settings?.password;
+    const serverPassword = settings.password ?? '';
+    const hasPassword = serverPassword.length > 0;
 
     invariant(
       input.handshakeHash &&
@@ -53,10 +56,24 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
       }
     );
 
-    invariant(hasPassword ? input.password === settings?.password : true, {
-      code: 'FORBIDDEN',
-      message: 'Invalid password'
-    });
+    if (hasPassword) {
+      const providedPassword = input.password ?? '';
+      const passwordMatches = await verifyPassword(
+        providedPassword,
+        serverPassword
+      );
+
+      invariant(passwordMatches, {
+        code: 'FORBIDDEN',
+        message: 'Invalid password'
+      });
+
+      if (!isArgon2Hash(serverPassword)) {
+        await updateSettings({
+          password: await hashPassword(providedPassword)
+        });
+      }
+    }
 
     invariant(ctx.user, {
       code: 'UNAUTHORIZED',

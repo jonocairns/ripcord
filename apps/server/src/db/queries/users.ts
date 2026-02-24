@@ -282,13 +282,26 @@ const getUserByIdentity = async (
   };
 };
 
-const getUserByToken = async (token: string | undefined) => {
+const getUserByToken = async (
+  token: string | undefined,
+  options?: {
+    allowBanned?: boolean;
+  }
+) => {
   try {
     if (!token) return undefined;
 
     const decoded = jwt.verify(token, await getServerToken()) as TTokenPayload;
 
     const user = await getUserById(decoded.userId);
+
+    if (!user) {
+      return undefined;
+    }
+
+    if (user.banned && !options?.allowBanned) {
+      return undefined;
+    }
 
     return user;
   } catch {

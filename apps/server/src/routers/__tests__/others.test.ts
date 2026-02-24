@@ -6,7 +6,9 @@ import {
   login,
   uploadFile
 } from '../../__tests__/helpers';
+import { tdb } from '../../__tests__/setup';
 import { TEST_SECRET_TOKEN } from '../../__tests__/seed';
+import { settings } from '../../db/schema';
 
 describe('others router', () => {
   test('should throw when user tries to join with no handshake', async () => {
@@ -60,6 +62,46 @@ describe('others router', () => {
     const { hasPassword: hasPasswordAfter } = await caller.others.handshake();
 
     expect(hasPasswordAfter).toBe(true);
+
+    const row = await tdb
+      .select({ password: settings.password })
+      .from(settings)
+      .get();
+
+    expect(row?.password?.startsWith('argon2$')).toBe(true);
+  });
+
+  test('should redact sensitive settings fields', async () => {
+    const { caller } = await initTest(1);
+
+    await caller.others.updateSettings({
+      password: 'testpassword'
+    });
+
+    const currentSettings = await caller.others.getSettings();
+
+    expect(currentSettings.password).toBe('');
+    expect(currentSettings.secretToken).toBeNull();
+  });
+
+  test('should verify and upgrade legacy server password on join', async () => {
+    await tdb.update(settings).set({ password: 'legacy-server-pass' }).execute();
+
+    const { caller } = await getCaller(1);
+    const { handshakeHash } = await caller.others.handshake();
+
+    await caller.others.joinServer({
+      handshakeHash,
+      password: 'legacy-server-pass'
+    });
+
+    const updated = await tdb
+      .select({ password: settings.password })
+      .from(settings)
+      .get();
+
+    expect(updated?.password).not.toBe('legacy-server-pass');
+    expect(updated?.password?.startsWith('argon2$')).toBe(true);
   });
 
   test('should update server settings', async () => {

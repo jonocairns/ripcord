@@ -68,7 +68,7 @@ const createContext = async ({
   const { token } = info.connectionParams as TConnectionParams;
   const connectionWs = res as TTrackedWebSocket | undefined;
 
-  const decodedUser = await getUserByToken(token);
+  const decodedUser = await getUserByToken(token, { allowBanned: true });
 
   invariant(decodedUser, {
     code: 'UNAUTHORIZED',
