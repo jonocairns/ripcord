@@ -47,7 +47,7 @@ describe('/login', () => {
     const data = (await response.json()) as TLoginResponse;
 
     expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('password', 'Invalid password');
+    expect(data.errors).toHaveProperty('password', 'Invalid credentials');
   });
 
   test('should login with legacy plaintext password and upgrade hash', async () => {
@@ -125,7 +125,7 @@ describe('/login', () => {
     const data = (await response.json()) as TLoginResponse;
 
     expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('identity', 'Invalid invite code');
+    expect(data.errors).toHaveProperty('password', 'Invalid credentials');
   });
 
   test('should allow registration with valid invite when allowNewUsers is false', async () => {
@@ -182,7 +182,7 @@ describe('/login', () => {
     const data = (await response.json()) as TLoginResponse;
 
     expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('identity');
+    expect(data.errors).toHaveProperty('password', 'Invalid credentials');
   });
 
   test('should fail with maxed out invite', async () => {
@@ -209,7 +209,7 @@ describe('/login', () => {
     const data = (await response.json()) as TLoginResponse;
 
     expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('identity');
+    expect(data.errors).toHaveProperty('password', 'Invalid credentials');
   });
 
   test('should fail with non-existent invite', async () => {
@@ -226,7 +226,7 @@ describe('/login', () => {
     const data = (await response.json()) as TLoginResponse;
 
     expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('identity');
+    expect(data.errors).toHaveProperty('password', 'Invalid credentials');
   });
 
   test('should fail login for banned user', async () => {
@@ -245,8 +245,7 @@ describe('/login', () => {
     const data = (await response.json()) as TLoginResponse;
 
     expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('identity');
-    expect(data.errors.identity).toContain('banned');
+    expect(data.errors).toHaveProperty('password', 'Invalid credentials');
   });
 
   test('should fail with missing identity', async () => {

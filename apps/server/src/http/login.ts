@@ -23,6 +23,7 @@ import { getJsonBody } from './helpers';
 import { HttpValidationError } from './utils';
 
 const LOGIN_JSON_BODY_MAX_BYTES = 16 * 1024;
+const INVALID_CREDENTIALS_MESSAGE = 'Invalid credentials';
 
 const zBody = z.object({
   identity: z.string().min(1, 'Identity is required'),
@@ -101,11 +102,11 @@ const loginRouteHandler = async (
       const inviteConsumed = await consumeInvite(data.invite);
 
       if (!inviteConsumed) {
-        const inviteError = await isInviteValid(data.invite);
+        await isInviteValid(data.invite);
 
         throw new HttpValidationError(
-          'identity',
-          inviteError || 'Invalid invite code'
+          'password',
+          INVALID_CREDENTIALS_MESSAGE
         );
       }
     }
@@ -121,8 +122,8 @@ const loginRouteHandler = async (
 
   if (existingUser.banned) {
     throw new HttpValidationError(
-      'identity',
-      `Identity banned: ${existingUser.banReason || 'No reason provided'}`
+      'password',
+      INVALID_CREDENTIALS_MESSAGE
     );
   }
 
@@ -132,7 +133,7 @@ const loginRouteHandler = async (
   );
 
   if (!passwordMatches) {
-    throw new HttpValidationError('password', 'Invalid password');
+    throw new HttpValidationError('password', INVALID_CREDENTIALS_MESSAGE);
   }
 
   if (!isArgon2Hash(existingUser.password)) {

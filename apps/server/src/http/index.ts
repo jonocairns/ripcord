@@ -43,6 +43,18 @@ const uploadRateLimiter = createRateLimiter({
   windowMs: 60_000
 });
 
+// 120 public-file requests per minute per IP
+const publicRouteRateLimiter = createRateLimiter({
+  maxRequests: 120,
+  windowMs: 60_000
+});
+
+// 240 interface/static file requests per minute per IP
+const interfaceRouteRateLimiter = createRateLimiter({
+  maxRequests: 240,
+  windowMs: 60_000
+});
+
 const corsAllowedOrigins = config.server.allowedOrigins
   .split(',')
   .map((value) => value.trim())
@@ -250,10 +262,54 @@ const createHttpServer = async (port: number = config.server.port) => {
           }
 
           if (req.method === 'GET' && req.url?.startsWith('/public')) {
+            const key = getClientRateLimitKey(info?.ip);
+            const rateLimit = publicRouteRateLimiter.consume(key);
+
+            if (!rateLimit.allowed) {
+              logger.debug(
+                `${chalk.dim('[Rate Limiter HTTP]')} /public rate limited for key "${key}"`
+              );
+
+              res.setHeader(
+                'Retry-After',
+                getRateLimitRetrySeconds(rateLimit.retryAfterMs)
+              );
+
+              res.writeHead(429, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  error: 'Too many file requests. Please try again shortly.'
+                })
+              );
+              return;
+            }
+
             return await publicRouteHandler(req, res);
           }
 
           if (req.method === 'GET' && req.url?.startsWith('/')) {
+            const key = getClientRateLimitKey(info?.ip);
+            const rateLimit = interfaceRouteRateLimiter.consume(key);
+
+            if (!rateLimit.allowed) {
+              logger.debug(
+                `${chalk.dim('[Rate Limiter HTTP]')} / interface rate limited for key "${key}"`
+              );
+
+              res.setHeader(
+                'Retry-After',
+                getRateLimitRetrySeconds(rateLimit.retryAfterMs)
+              );
+
+              res.writeHead(429, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  error: 'Too many requests. Please try again shortly.'
+                })
+              );
+              return;
+            }
+
             return await interfaceRouteHandler(req, res);
           }
         } catch (error) {

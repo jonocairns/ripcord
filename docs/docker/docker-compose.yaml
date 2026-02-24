@@ -18,6 +18,9 @@ services:
       # Server configuration
       SHARKORD_PORT: "4991"
       SHARKORD_DEBUG: "false"
+      # Production first-start behavior:
+      # - Open registration is disabled by default.
+      # - Use the bootstrap invite + secret token shown in startup logs to claim admin.
       # Only enable when Ripcord is behind a trusted reverse proxy that rewrites forwarded headers.
       SHARKORD_TRUST_PROXY: "false"
       # Comma-separated trusted proxy CIDRs used when SHARKORD_TRUST_PROXY=true.

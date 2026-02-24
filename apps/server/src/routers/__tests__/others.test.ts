@@ -146,6 +146,30 @@ describe('others router', () => {
     expect(updatedUser?.roleIds).toContain(1);
   });
 
+  test('should disable open registration after secret token is used', async () => {
+    const { caller } = await initTest(2);
+
+    await caller.others.useSecretToken({ token: TEST_SECRET_TOKEN });
+
+    const updatedSettings = await tdb
+      .select({ allowNewUsers: settings.allowNewUsers })
+      .from(settings)
+      .get();
+
+    expect(updatedSettings?.allowNewUsers).toBe(false);
+  });
+
+  test('should reject secret token reuse after bootstrap ownership is claimed', async () => {
+    const { caller: caller2 } = await initTest(2);
+    const { caller: caller3 } = await initTest(3);
+
+    await caller2.others.useSecretToken({ token: TEST_SECRET_TOKEN });
+
+    await expect(
+      caller3.others.useSecretToken({ token: TEST_SECRET_TOKEN })
+    ).rejects.toThrow('Bootstrap token is no longer available');
+  });
+
   test('should change logo', async () => {
     const { caller } = await initTest(1);
 
