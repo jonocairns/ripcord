@@ -43,17 +43,62 @@ const uploadRateLimiter = createRateLimiter({
   windowMs: 60_000
 });
 
+const corsAllowedOrigins = config.server.allowedOrigins
+  .split(',')
+  .map((value) => value.trim())
+  .filter((value) => value.length > 0);
+
+const normalizeOrigin = (origin: unknown): string | undefined => {
+  if (typeof origin === 'string') {
+    return origin;
+  }
+
+  if (Array.isArray(origin)) {
+    return typeof origin[0] === 'string' ? origin[0] : undefined;
+  }
+
+  return undefined;
+};
+
+const getAllowedOrigin = (
+  requestOrigin: string | undefined
+): string | undefined => {
+  if (!requestOrigin) {
+    return undefined;
+  }
+
+  if (corsAllowedOrigins.includes('*')) {
+    return '*';
+  }
+
+  return corsAllowedOrigins.includes(requestOrigin) ? requestOrigin : undefined;
+};
+
 // this http server implementation is temporary and will be moved to bun server later when things are more stable
 const createHttpServer = async (port: number = config.server.port) => {
   return new Promise<http.Server>((resolve) => {
     const server = http.createServer(
       async (req: http.IncomingMessage, res: http.ServerResponse) => {
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', '*');
+        const requestOrigin = normalizeOrigin(req.headers.origin);
+        const allowedOrigin = getAllowedOrigin(requestOrigin);
+
+        if (allowedOrigin) {
+          res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+          res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+          res.setHeader(
+            'Access-Control-Allow-Headers',
+            'Content-Type, Authorization, X-Token, X-File-Name, X-File-Type, Content-Length'
+          );
+          res.setHeader('Access-Control-Max-Age', '600');
+
+          if (allowedOrigin !== '*') {
+            res.setHeader('Vary', 'Origin');
+          }
+        }
 
         const info = getWsInfo(undefined, req, {
-          trustProxy: config.server.trustProxy
+          trustProxy: config.server.trustProxy,
+          trustedProxyCidrs: config.server.trustedProxyCidrs
         });
 
         logger.debug(
@@ -61,6 +106,12 @@ const createHttpServer = async (port: number = config.server.port) => {
         );
 
         if (req.method === 'OPTIONS') {
+          if (requestOrigin && !allowedOrigin) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'CORS origin forbidden' }));
+            return;
+          }
+
           res.writeHead(204);
           res.end();
           return;

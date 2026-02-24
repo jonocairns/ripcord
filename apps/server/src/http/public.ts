@@ -10,6 +10,33 @@ import { verifyFileToken } from '../helpers/files-crypto';
 import { PUBLIC_PATH } from '../helpers/paths';
 import { logger } from '../logger';
 
+const isPathWithinBase = (targetPath: string, basePath: string): boolean => {
+  const relative = path.relative(basePath, targetPath);
+
+  return (
+    relative === '' ||
+    (!relative.startsWith('..') && !path.isAbsolute(relative))
+  );
+};
+
+const stripAsciiControlChars = (value: string): string => {
+  return Array.from(value)
+    .filter((char) => {
+      const code = char.charCodeAt(0);
+      return code >= 32 && code !== 127;
+    })
+    .join('');
+};
+
+const sanitizeContentDispositionFileName = (value: string): string => {
+  const sanitized = stripAsciiControlChars(value)
+    .replace(/[\\/]/g, '_')
+    .replace(/"/g, '')
+    .trim();
+
+  return sanitized || 'download';
+};
+
 const publicRouteHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse
@@ -71,7 +98,14 @@ const publicRouteHandler = async (
     }
   }
 
-  const filePath = path.join(PUBLIC_PATH, dbFile.name);
+  const basePublicPath = path.resolve(PUBLIC_PATH);
+  const filePath = path.resolve(basePublicPath, dbFile.name);
+
+  if (!isPathWithinBase(filePath, basePublicPath)) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'File not found on disk' }));
+    return;
+  }
 
   if (!fs.existsSync(filePath)) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -94,11 +128,15 @@ const publicRouteHandler = async (
   const contentDisposition = inlineAllowlist.includes(dbFile.mimeType)
     ? 'inline'
     : 'attachment';
+  const safeDownloadName = sanitizeContentDispositionFileName(
+    dbFile.originalName
+  );
 
   res.writeHead(200, {
     'Content-Type': dbFile.mimeType,
     'Content-Length': dbFile.size,
-    'Content-Disposition': `${contentDisposition}; filename="${dbFile.originalName}"`
+    'Content-Disposition': `${contentDisposition}; filename="${safeDownloadName}"`,
+    'X-Content-Type-Options': 'nosniff'
   });
 
   fileStream.pipe(res);

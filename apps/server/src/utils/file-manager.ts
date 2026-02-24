@@ -26,6 +26,42 @@ import { PUBLIC_PATH, TMP_PATH, UPLOADS_PATH } from '../helpers/paths';
  */
 
 const TEMP_FILE_TTL = 1000 * 60 * 1; // 1 minute
+const MAX_ORIGINAL_FILE_NAME_LENGTH = 255;
+
+const stripAsciiControlChars = (value: string): string => {
+  return Array.from(value)
+    .filter((char) => {
+      const code = char.charCodeAt(0);
+      return code >= 32 && code !== 127;
+    })
+    .join('');
+};
+
+const sanitizeOriginalFileName = (value: string): string => {
+  const withoutControlChars = stripAsciiControlChars(value);
+  const normalizedSlashes = withoutControlChars.replace(/\\/g, '/');
+  const baseName = path.posix.basename(normalizedSlashes).trim();
+  const compactBaseName = baseName.replace(/\s+/g, ' ');
+
+  if (
+    compactBaseName.length === 0 ||
+    compactBaseName === '.' ||
+    compactBaseName === '..'
+  ) {
+    return 'file';
+  }
+
+  return compactBaseName.slice(0, MAX_ORIGINAL_FILE_NAME_LENGTH);
+};
+
+const isPathWithinBase = (targetPath: string, basePath: string): boolean => {
+  const relative = path.relative(basePath, targetPath);
+
+  return (
+    relative === '' ||
+    (!relative.startsWith('..') && !path.isAbsolute(relative))
+  );
+};
 
 const md5File = async (path: string): Promise<string> => {
   const file = await fs.readFile(path);
@@ -145,6 +181,54 @@ class TemporaryFileManager {
     this.reservations.delete(reservationId);
   };
 
+  public resizeTemporaryUploadReservation = ({
+    reservationId,
+    size,
+    maxUserBytes,
+    maxTotalBytes
+  }: {
+    reservationId: string;
+    size: number;
+    maxUserBytes?: number;
+    maxTotalBytes?: number;
+  }): void => {
+    const reservation = this.reservations.get(reservationId);
+
+    if (!reservation) {
+      throw new Error('Temporary upload reservation not found');
+    }
+
+    const nextSize = Math.max(size, reservation.size);
+
+    if (nextSize === reservation.size) {
+      return;
+    }
+
+    const currentUserUsage =
+      this.getTemporaryUsageByUser(reservation.userId) - reservation.size;
+    const currentTotalUsage = this.getTotalTemporaryUsage() - reservation.size;
+
+    if (
+      typeof maxUserBytes === 'number' &&
+      currentUserUsage + nextSize > maxUserBytes
+    ) {
+      throw new Error(
+        'Too much temporary upload data pending for this user. Try again in a moment.'
+      );
+    }
+
+    if (
+      typeof maxTotalBytes === 'number' &&
+      currentTotalUsage + nextSize > maxTotalBytes
+    ) {
+      throw new Error(
+        'Server temporary upload capacity is full. Try again in a moment.'
+      );
+    }
+
+    reservation.size = nextSize;
+  };
+
   public addTemporaryFile = async ({
     filePath,
     size,
@@ -156,15 +240,16 @@ class TemporaryFileManager {
     originalName: string;
     userId: number;
   }): Promise<TTempFile> => {
+    const safeOriginalName = sanitizeOriginalFileName(originalName);
     const md5 = await md5File(filePath);
     const fileId = randomUUIDv7();
-    const ext = path.extname(originalName);
+    const ext = path.extname(safeOriginalName);
 
     const tempFilePath = path.join(TMP_PATH, `${fileId}${ext}`);
 
     const tempFile: TTempFile = {
       id: fileId,
-      originalName,
+      originalName: safeOriginalName,
       size,
       md5,
       path: tempFilePath,
@@ -228,7 +313,7 @@ class TemporaryFileManager {
   };
 
   public getSafeUploadPath = async (name: string): Promise<string> => {
-    const ext = path.extname(name);
+    const ext = path.extname(sanitizeOriginalFileName(name));
     const safePath = path.join(UPLOADS_PATH, `${randomUUIDv7()}${ext}`);
 
     return safePath;
@@ -249,6 +334,8 @@ class FileManager {
   public getTemporaryUsageByUser = this.tempFileManager.getTemporaryUsageByUser;
   public getTotalTemporaryUsage = this.tempFileManager.getTotalTemporaryUsage;
   public reserveTemporaryUpload = this.tempFileManager.reserveTemporaryUpload;
+  public resizeTemporaryUploadReservation =
+    this.tempFileManager.resizeTemporaryUploadReservation;
   public releaseTemporaryUploadReservation =
     this.tempFileManager.releaseTemporaryUploadReservation;
   public clearTemporaryFilesForTests = this.tempFileManager.clearTemporaryFiles;
@@ -294,10 +381,14 @@ class FileManager {
   };
 
   private getUniqueName = async (originalName: string): Promise<string> => {
-    const baseName = path.basename(originalName, path.extname(originalName));
-    const extension = path.extname(originalName);
+    const safeOriginalName = sanitizeOriginalFileName(originalName);
+    const baseName = path.basename(
+      safeOriginalName,
+      path.extname(safeOriginalName)
+    );
+    const extension = path.extname(safeOriginalName);
 
-    let fileName = originalName;
+    let fileName = safeOriginalName;
     let counter = 2;
 
     // eslint-disable-next-line no-constant-condition
@@ -333,7 +424,12 @@ class FileManager {
     await this.handleStorageLimits(tempFile);
 
     const fileName = await this.getUniqueName(tempFile.originalName);
-    const destinationPath = path.join(PUBLIC_PATH, fileName);
+    const basePublicPath = path.resolve(PUBLIC_PATH);
+    const destinationPath = path.resolve(basePublicPath, fileName);
+
+    if (!isPathWithinBase(destinationPath, basePublicPath)) {
+      throw new Error('Invalid file path');
+    }
 
     await moveFile(tempFile.path, destinationPath);
     await this.removeTemporaryFile(tempFileId, true);

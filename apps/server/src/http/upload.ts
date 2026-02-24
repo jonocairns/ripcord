@@ -130,7 +130,27 @@ const uploadFileRouteHandler = async (
   const safePath = await fileManager.getSafeUploadPath(originalName);
   const fileStream = fs.createWriteStream(safePath);
   let streamedSize = 0;
-  let abortedForSize = false;
+  let abortedUpload = false;
+
+  const abortUpload = (statusCode: number, error: string) => {
+    if (abortedUpload) {
+      return;
+    }
+
+    abortedUpload = true;
+    releaseReservation();
+    req.unpipe(fileStream);
+    fileStream.destroy();
+
+    fs.promises.unlink(safePath).catch(() => {
+      // ignore cleanup errors
+    });
+
+    if (!res.headersSent) {
+      res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error }));
+    }
+  };
 
   req.on('aborted', () => {
     releaseReservation();
@@ -143,37 +163,36 @@ const uploadFileRouteHandler = async (
   req.on('data', (chunk) => {
     streamedSize += chunk.length;
 
+    try {
+      if (reservationId) {
+        fileManager.resizeTemporaryUploadReservation({
+          reservationId,
+          size: streamedSize,
+          maxUserBytes: maxUserTempBytes,
+          maxTotalBytes: maxTotalTempBytes
+        });
+      }
+    } catch (error) {
+      abortUpload(
+        413,
+        error instanceof Error
+          ? error.message
+          : 'Temporary upload capacity exceeded'
+      );
+      return;
+    }
+
     if (streamedSize <= settings.storageUploadMaxFileSize) {
       return;
     }
 
-    if (abortedForSize) {
-      return;
-    }
-
-    abortedForSize = true;
-    releaseReservation();
-    req.unpipe(fileStream);
-    fileStream.destroy();
-
-    fs.promises.unlink(safePath).catch(() => {
-      // ignore cleanup errors
-    });
-
-    if (!res.headersSent) {
-      res.writeHead(413, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          error: `File ${originalName} exceeds the maximum allowed size`
-        })
-      );
-    }
+    abortUpload(413, `File ${originalName} exceeds the maximum allowed size`);
   });
 
   req.pipe(fileStream);
 
   fileStream.on('finish', async () => {
-    if (abortedForSize) {
+    if (abortedUpload) {
       releaseReservation();
       return;
     }
@@ -226,7 +245,7 @@ const uploadFileRouteHandler = async (
   fileStream.on('error', (err) => {
     releaseReservation();
 
-    if (abortedForSize || res.headersSent) {
+    if (abortedUpload || res.headersSent) {
       return;
     }
 

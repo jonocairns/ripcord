@@ -11,7 +11,11 @@ import { getSettings } from '../db/queries/server';
 import { getUserByIdentity } from '../db/queries/users';
 import { userRoles, users } from '../db/schema';
 import { getWsInfo } from '../helpers/get-ws-info';
-import { hashPassword, isArgon2Hash, verifyPassword } from '../helpers/password';
+import {
+  hashPassword,
+  isArgon2Hash,
+  verifyPassword
+} from '../helpers/password';
 import { enqueueActivityLog } from '../queues/activity-log';
 import { invariant } from '../utils/invariant';
 import { issueAuthTokens } from './auth-tokens';
@@ -88,7 +92,8 @@ const loginRouteHandler = async (
   const settings = await getSettings();
   let existingUser = await getUserByIdentity(data.identity);
   const connectionInfo = getWsInfo(undefined, req, {
-    trustProxy: config.server.trustProxy
+    trustProxy: config.server.trustProxy,
+    trustedProxyCidrs: config.server.trustedProxyCidrs
   });
 
   if (!existingUser) {
@@ -121,7 +126,10 @@ const loginRouteHandler = async (
     );
   }
 
-  const passwordMatches = await verifyPassword(data.password, existingUser.password);
+  const passwordMatches = await verifyPassword(
+    data.password,
+    existingUser.password
+  );
 
   if (!passwordMatches) {
     throw new HttpValidationError('password', 'Invalid password');

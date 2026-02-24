@@ -29,6 +29,9 @@ declare module 'bun' {
     SHARKORD_PORT?: string;
     SHARKORD_DEBUG?: string;
     SHARKORD_AUTOUPDATE?: string;
+    SHARKORD_TRUST_PROXY?: string;
+    SHARKORD_TRUSTED_PROXIES?: string;
+    SHARKORD_ALLOWED_ORIGINS?: string;
     SHARKORD_WEBRTC_PORT?: string;
     SHARKORD_WEBRTC_ANNOUNCED_ADDRESS?: string;
   }

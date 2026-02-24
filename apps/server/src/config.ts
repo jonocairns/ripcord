@@ -19,7 +19,9 @@ const zConfig = z.object({
     port: z.coerce.number().int().positive(),
     debug: z.coerce.boolean(),
     autoupdate: z.coerce.boolean(),
-    trustProxy: z.coerce.boolean()
+    trustProxy: z.coerce.boolean(),
+    trustedProxyCidrs: z.string(),
+    allowedOrigins: z.string()
   }),
   webRtc: z.object({
     port: z.coerce.number().int().positive(),
@@ -48,7 +50,10 @@ const defaultConfig: TConfig = {
     port: 4991,
     debug: IS_DEVELOPMENT,
     autoupdate: false,
-    trustProxy: false
+    trustProxy: false,
+    trustedProxyCidrs:
+      '127.0.0.1/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16',
+    allowedOrigins: IS_DEVELOPMENT ? 'http://localhost:5173' : ''
   },
   webRtc: {
     port: 40000,
@@ -112,6 +117,8 @@ config = applyEnvOverrides(config, {
   'server.debug': 'SHARKORD_DEBUG',
   'server.autoupdate': 'SHARKORD_AUTOUPDATE',
   'server.trustProxy': 'SHARKORD_TRUST_PROXY',
+  'server.trustedProxyCidrs': 'SHARKORD_TRUSTED_PROXIES',
+  'server.allowedOrigins': 'SHARKORD_ALLOWED_ORIGINS',
   'webRtc.port': 'SHARKORD_WEBRTC_PORT',
   'webRtc.announcedAddress': 'SHARKORD_WEBRTC_ANNOUNCED_ADDRESS'
 });

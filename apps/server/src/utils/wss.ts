@@ -199,7 +199,8 @@ const createContext = async ({
   const getConnectionInfo = () => {
     if (!wss) {
       return getWsInfo(undefined, req, {
-        trustProxy: config.server.trustProxy
+        trustProxy: config.server.trustProxy,
+        trustedProxyCidrs: config.server.trustedProxyCidrs
       });
     }
 
@@ -210,7 +211,8 @@ const createContext = async ({
     if (!ws) return undefined;
 
     return getWsInfo(ws, req, {
-      trustProxy: config.server.trustProxy
+      trustProxy: config.server.trustProxy,
+      trustedProxyCidrs: config.server.trustedProxyCidrs
     });
   };
 
@@ -299,7 +301,10 @@ const createWsServer = async (server: http.Server) => {
         if (!trackedWs.userId) return;
 
         const userId = trackedWs.userId;
-        const hasOtherConnections = hasOtherOpenUserConnection(userId, trackedWs);
+        const hasOtherConnections = hasOtherOpenUserConnection(
+          userId,
+          trackedWs
+        );
 
         let voiceRuntime: VoiceRuntime | undefined;
 
