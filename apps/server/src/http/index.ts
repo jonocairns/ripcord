@@ -74,11 +74,27 @@ const getAllowedOrigin = (
   return corsAllowedOrigins.includes(requestOrigin) ? requestOrigin : undefined;
 };
 
+const setDefaultSecurityHeaders = (res: http.ServerResponse) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader(
+    'Permissions-Policy',
+    'camera=(self), microphone=(self), geolocation=(), payment=()'
+  );
+  res.setHeader(
+    'Strict-Transport-Security',
+    'max-age=31536000; includeSubDomains'
+  );
+};
+
 // this http server implementation is temporary and will be moved to bun server later when things are more stable
 const createHttpServer = async (port: number = config.server.port) => {
   return new Promise<http.Server>((resolve) => {
     const server = http.createServer(
       async (req: http.IncomingMessage, res: http.ServerResponse) => {
+        setDefaultSecurityHeaders(res);
+
         const requestOrigin = normalizeOrigin(req.headers.origin);
         const allowedOrigin = getAllowedOrigin(requestOrigin);
 
@@ -286,6 +302,19 @@ const createHttpServer = async (port: number = config.server.port) => {
     server.on('listening', () => {
       logger.debug('HTTP server is listening on port %d', port);
       resolve(server);
+    });
+
+    server.requestTimeout = config.server.httpRequestTimeoutMs;
+    server.headersTimeout = config.server.httpHeadersTimeoutMs;
+    server.keepAliveTimeout = config.server.httpKeepAliveTimeoutMs;
+    server.maxHeadersCount = config.server.maxHttpHeadersCount;
+
+    server.on('clientError', (error, socket) => {
+      logger.warn('HTTP client connection error: %s', error.message);
+
+      if (socket.writable) {
+        socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+      }
     });
 
     server.on('close', () => {

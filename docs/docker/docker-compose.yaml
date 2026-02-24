@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     ports:
       # Main HTTP/WebSocket port
+      # If you run a reverse proxy on the same host, prefer "127.0.0.1:4991:4991"
+      # and expose only 80/443 on the proxy.
       - "4991:4991"
 
       # WebRTC media port (multiplexed UDP+TCP)
@@ -23,9 +25,22 @@ services:
       # Comma-separated browser origins allowed for cross-origin API calls.
       # Leave empty to disable cross-origin browser access.
       SHARKORD_ALLOWED_ORIGINS: ""
+      # HTTP anti-DoS tuning
+      SHARKORD_HTTP_REQUEST_TIMEOUT_MS: "120000"
+      SHARKORD_HTTP_HEADERS_TIMEOUT_MS: "15000"
+      SHARKORD_HTTP_KEEPALIVE_TIMEOUT_MS: "5000"
+      SHARKORD_HTTP_MAX_HEADERS_COUNT: "100"
+      # WebSocket anti-DoS tuning
+      SHARKORD_WS_MAX_PAYLOAD_BYTES: "1048576"
+      SHARKORD_WS_AUTH_TIMEOUT_MS: "10000"
+      SHARKORD_WS_MAX_CONNECTIONS_PER_IP: "50"
 
       # WebRTC configuration
       SHARKORD_WEBRTC_PORT: "40000"
+
+      # TLS note:
+      # Terminate TLS at a reverse proxy and force HTTPS there.
+      # Keep SHARKORD_TRUST_PROXY=false unless your proxy is configured and trusted.
 
     # Volume mounts for persistent data
     volumes:

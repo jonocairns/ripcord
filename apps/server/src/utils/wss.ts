@@ -34,6 +34,7 @@ let wss: WebSocketServer | undefined;
 type TTrackedWebSocket = WebSocket & {
   userId?: number;
   token: string;
+  connectionIp?: string;
   currentVoiceChannelId?: number;
 };
 
@@ -58,6 +59,12 @@ const usersIpMap = new Map<number, string>();
 
 const getUserIp = (userId: number): string | undefined => {
   return usersIpMap.get(userId);
+};
+
+const countOpenConnectionsForIp = (ip: string): number => {
+  return getTrackedClients().filter(
+    (client) => client.readyState === WebSocket.OPEN && client.connectionIp === ip
+  ).length;
 };
 
 const createContext = async ({
@@ -278,26 +285,65 @@ const createContext = async ({
 
 const createWsServer = async (server: http.Server) => {
   return new Promise<WebSocketServer>((resolve) => {
-    wss = new WebSocketServer({ server });
+    wss = new WebSocketServer({
+      server,
+      maxPayload: config.server.wsMaxPayloadBytes
+    });
 
-    wss.on('connection', (ws) => {
+    wss.on('connection', (ws, req) => {
       const trackedWs = ws as TTrackedWebSocket;
       trackedWs.userId = undefined;
       trackedWs.token = '';
+      trackedWs.connectionIp = getWsInfo(ws, req, {
+        trustProxy: config.server.trustProxy,
+        trustedProxyCidrs: config.server.trustedProxyCidrs
+      })?.ip;
       trackedWs.currentVoiceChannelId = undefined;
 
+      if (trackedWs.connectionIp) {
+        const openConnectionsForIp = countOpenConnectionsForIp(
+          trackedWs.connectionIp
+        );
+
+        if (openConnectionsForIp > config.server.wsMaxConnectionsPerIp) {
+          logger.warn(
+            'Rejecting websocket connection from %s: too many open connections (%d)',
+            trackedWs.connectionIp,
+            openConnectionsForIp
+          );
+          trackedWs.close(1013, 'Too many connections');
+          return;
+        }
+      }
+
+      const authTimeout = setTimeout(() => {
+        if (trackedWs.readyState === WebSocket.OPEN && !trackedWs.token) {
+          trackedWs.close(1008, 'Authentication timeout');
+        }
+      }, config.server.wsAuthTimeoutMs);
+
       trackedWs.once('message', async (message) => {
+        clearTimeout(authTimeout);
+
         try {
           const parsed = JSON.parse(message.toString());
-          const { token } = parsed.data as TConnectionParams;
+          const { token } = parsed.data as Partial<TConnectionParams>;
+
+          if (typeof token !== 'string' || token.length === 0) {
+            trackedWs.close(1008, 'Invalid authentication payload');
+            return;
+          }
 
           trackedWs.token = token;
         } catch {
           logger.error('Failed to parse initial WebSocket message');
+          trackedWs.close(1008, 'Invalid authentication payload');
         }
       });
 
       trackedWs.on('close', async () => {
+        clearTimeout(authTimeout);
+
         if (!trackedWs.userId) return;
 
         const userId = trackedWs.userId;
