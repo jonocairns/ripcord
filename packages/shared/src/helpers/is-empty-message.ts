@@ -1,13 +1,16 @@
 const isEmptyMessage = (content: string | undefined | null): boolean => {
   if (!content) return true;
 
-  // check if it has media (eg: emojis will be detected here)
-  const hasMedia = /<(img|video|audio|iframe)\b/i.test(content);
-
-  const cleaned = content
-    // remove PM separators
+  const contentWithoutPmPlaceholders = content
     .replace(/<img[^>]*ProseMirror-separator[^>]*>/gi, "")
-    .replace(/<br[^>]*ProseMirror-trailingBreak[^>]*>/gi, "")
+    .replace(/<br[^>]*ProseMirror-trailingBreak[^>]*>/gi, "");
+
+  // check if it has media (eg: emojis will be detected here)
+  const hasMedia = /<(img|video|audio|iframe)\b/i.test(
+    contentWithoutPmPlaceholders
+  );
+
+  const cleaned = contentWithoutPmPlaceholders
     // remove all remaining tags
     .replace(/<[^>]*>/g, "")
     // normalize spaces

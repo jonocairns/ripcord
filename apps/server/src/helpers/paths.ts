@@ -28,7 +28,7 @@ const MEDIASOUP_BINARY_PATH = IS_DEVELOPMENT
       SHARKORD_MEDIASOUP_BIN_NAME || 'mediasoup-worker'
     );
 const PLUGINS_PATH = path.join(DATA_PATH, 'plugins');
-const SRC_MIGRATIONS_PATH = path.join(process.cwd(), 'src', 'db', 'migrations');
+const SRC_MIGRATIONS_PATH = path.resolve(import.meta.dir, '../db/migrations');
 
 export {
   CONFIG_INI_PATH,

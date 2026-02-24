@@ -1,2 +1,6 @@
 [test]
-maxConcurrency = 1
+preload = [
+  "./apps/server/src/__tests__/prepare.ts",
+  "./apps/server/src/__tests__/mock-db.ts",
+  "./apps/server/src/__tests__/setup.ts",
+]

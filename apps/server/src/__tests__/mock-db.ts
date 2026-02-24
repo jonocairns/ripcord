@@ -3,7 +3,6 @@ import { mock } from 'bun:test';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import fs from 'fs';
-import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'path';
 import { DRIZZLE_PATH as EMBEDDED_DRIZZLE_PATH } from '../helpers/paths';
 import { seedDatabase } from './seed';
@@ -25,11 +24,7 @@ import { seedDatabase } from './seed';
  */
 
 let tdb: BunSQLiteDatabase;
-const testDbStorage = new AsyncLocalStorage<BunSQLiteDatabase>();
-
-const getActiveDb = (): BunSQLiteDatabase => {
-  return testDbStorage.getStore() ?? tdb;
-};
+const isServerTestFile = Bun.main.includes('/apps/server/');
 
 const sourceMigrationsPath = path.resolve(import.meta.dir, '../db/migrations');
 
@@ -52,31 +47,38 @@ const initDb = async () => {
   return tdb;
 };
 
-await initDb();
+if (isServerTestFile) {
+  await initDb();
 
-// create a Proxy that forwards all operations to the current test context db
-const dbProxy = new Proxy({} as BunSQLiteDatabase, {
-  get(_target, prop) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (getActiveDb() as any)[prop];
-  },
-  set(_target, prop, value) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (getActiveDb() as any)[prop] = value;
-    return true;
-  }
-});
+  // create a Proxy that forwards all operations to the current test context db
+  const dbProxy = new Proxy({} as BunSQLiteDatabase, {
+    get(_target, prop) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (tdb as any)[prop];
+    },
+    set(_target, prop, value) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (tdb as any)[prop] = value;
+      return true;
+    }
+  });
 
-mock.module('../db/index', () => ({
-  db: dbProxy,
-  loadDb: async () => {} // No-op in tests
-}));
+  mock.module('../db/index', () => ({
+    db: dbProxy,
+    loadDb: async () => {} // No-op in tests
+  }));
+}
 
 const setTestDb = (newDb: BunSQLiteDatabase) => {
   tdb = newDb;
-  testDbStorage.enterWith(newDb);
 };
 
-const getTestDb = () => getActiveDb();
+const getTestDb = () => {
+  if (!tdb) {
+    throw new Error('Test database is not initialized');
+  }
+
+  return tdb;
+};
 
 export { DRIZZLE_PATH, getTestDb, setTestDb };

@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { channels, messages, roles, settings, users } from '../db/schema';
-import { tdb } from './setup';
+import { getTestDb } from './mock-db';
 
 describe('tests setup', () => {
   test('should seed database with initial data', async () => {
+    const db = getTestDb();
+
     const [
       settingsResults,
       usersResults,
@@ -11,11 +13,11 @@ describe('tests setup', () => {
       rolesResults,
       messagesResults
     ] = await Promise.all([
-      tdb.select().from(settings),
-      tdb.select().from(users),
-      tdb.select().from(channels),
-      tdb.select().from(roles),
-      tdb.select().from(messages)
+      db.select().from(settings),
+      db.select().from(users),
+      db.select().from(channels),
+      db.select().from(roles),
+      db.select().from(messages)
     ]);
 
     expect(settingsResults.length).toBe(1);

@@ -1,13 +1,11 @@
 import { Database } from 'bun:sqlite';
-import { afterAll, afterEach, beforeAll, beforeEach, mock } from 'bun:test';
+import { afterEach, beforeAll, beforeEach, mock } from 'bun:test';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-import fs from 'fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { createServer as createTcpServer } from 'node:net';
-import { DATA_PATH } from '../helpers/paths';
 import { createHttpServer } from '../http';
 import { fileManager } from '../utils/file-manager';
 import { loadMediasoup } from '../utils/mediasoup';
@@ -31,7 +29,7 @@ import { seedDatabase } from './seed';
  */
 
 const DISABLE_CONSOLE = true;
-const CLEANUP_AFTER_FINISH = true;
+const isServerTestFile = Bun.main.includes('/apps/server/');
 
 if (DISABLE_CONSOLE) {
   const noop = () => {};
@@ -178,56 +176,48 @@ const getTestHttpPort = (): Promise<number> =>
     });
   });
 
-beforeAll(async () => {
-  clearRateLimitersForTests();
-  process.env.SHARKORD_WEBRTC_PORT = String(await getTestWebRtcPort());
+if (isServerTestFile) {
+  beforeAll(async () => {
+    clearRateLimitersForTests();
+    process.env.SHARKORD_WEBRTC_PORT = String(await getTestWebRtcPort());
 
-  const httpPort = await getTestHttpPort();
+    const httpPort = await getTestHttpPort();
 
-  await createHttpServer(httpPort);
-  await loadMediasoup();
+    await createHttpServer(httpPort);
+    await loadMediasoup();
 
-  testsBaseUrl = `http://localhost:${httpPort}`;
-});
+    testsBaseUrl = `http://localhost:${httpPort}`;
+  });
 
-beforeEach(async () => {
-  setRateLimiterScopeForTests(randomUUID());
-  await fileManager.clearTemporaryFilesForTests();
+  beforeEach(async () => {
+    setRateLimiterScopeForTests(randomUUID());
+    await fileManager.clearTemporaryFilesForTests();
 
-  const sqlite = new Database(':memory:', { create: true, strict: true });
-  sqlite.run('PRAGMA foreign_keys = ON;');
-  sqliteStorage.enterWith(sqlite);
+    const sqlite = new Database(':memory:', { create: true, strict: true });
+    sqlite.run('PRAGMA foreign_keys = ON;');
+    sqliteStorage.enterWith(sqlite);
 
-  const db = drizzle({ client: sqlite });
+    const db = drizzle({ client: sqlite });
 
-  // updates the mocked db to use this new test database
-  setTestDb(db);
+    // updates the mocked db to use this new test database
+    setTestDb(db);
 
-  // apply migrations and seed data for this test
-  await migrate(db, { migrationsFolder: DRIZZLE_PATH });
-  await seedDatabase(db);
-});
+    // apply migrations and seed data for this test
+    await migrate(db, { migrationsFolder: DRIZZLE_PATH });
+    await seedDatabase(db);
+  });
 
-afterEach(() => {
-  const sqlite = sqliteStorage.getStore();
+  afterEach(() => {
+    const sqlite = sqliteStorage.getStore();
 
-  if (!sqlite) return;
+    if (!sqlite) return;
 
-  try {
-    sqlite.close();
-  } catch {
-    // ignore
-  }
-});
-
-afterAll(async () => {
-  if (!CLEANUP_AFTER_FINISH) return;
-
-  try {
-    await fs.rm(DATA_PATH, { recursive: true });
-  } catch {
-    // ignore
-  }
-});
+    try {
+      sqlite.close();
+    } catch {
+      // ignore
+    }
+  });
+}
 
 export { tdb, testsBaseUrl };

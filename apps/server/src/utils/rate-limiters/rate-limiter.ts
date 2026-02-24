@@ -1,8 +1,7 @@
 import { FixedWindowRateLimiter } from '.';
-import { AsyncLocalStorage } from 'node:async_hooks';
 
 const trackedRateLimiters = new Set<FixedWindowRateLimiter>();
-const testRateLimiterScopeStorage = new AsyncLocalStorage<string>();
+let testRateLimiterScope: string | undefined;
 
 const createRateLimiter = (
   options: ConstructorParameters<typeof FixedWindowRateLimiter>[0]
@@ -20,19 +19,20 @@ const getRateLimitRetrySeconds = (retryAfterMs: number): number => {
 
 const getClientRateLimitKey = (input?: string): string => {
   const baseKey = input && input.trim().length > 0 ? input.trim() : 'unknown';
-  const scope = testRateLimiterScopeStorage.getStore();
 
-  return scope ? `${scope}:${baseKey}` : baseKey;
+  return testRateLimiterScope ? `${testRateLimiterScope}:${baseKey}` : baseKey;
 };
 
 const clearRateLimitersForTests = () => {
   for (const limiter of trackedRateLimiters) {
     limiter.clear();
   }
+
+  testRateLimiterScope = undefined;
 };
 
 const setRateLimiterScopeForTests = (scope: string) => {
-  testRateLimiterScopeStorage.enterWith(scope);
+  testRateLimiterScope = scope;
 };
 
 export {
