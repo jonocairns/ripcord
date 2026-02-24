@@ -3,14 +3,19 @@ import { afterAll, afterEach, beforeAll, beforeEach, mock } from 'bun:test';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import fs from 'fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { createServer as createTcpServer } from 'node:net';
 import { DATA_PATH } from '../helpers/paths';
 import { createHttpServer } from '../http';
 import { fileManager } from '../utils/file-manager';
 import { loadMediasoup } from '../utils/mediasoup';
-import { clearRateLimitersForTests } from '../utils/rate-limiters/rate-limiter';
-import { DRIZZLE_PATH, setTestDb } from './mock-db';
+import {
+  clearRateLimitersForTests,
+  setRateLimiterScopeForTests
+} from '../utils/rate-limiters/rate-limiter';
+import { DRIZZLE_PATH, getTestDb, setTestDb } from './mock-db';
 import { seedDatabase } from './seed';
 
 /**
@@ -48,9 +53,20 @@ if (DISABLE_CONSOLE) {
   }));
 }
 
-let tdb: BunSQLiteDatabase;
-let sqlite: Database | null = null;
 let testsBaseUrl: string;
+const sqliteStorage = new AsyncLocalStorage<Database>();
+
+const tdb = new Proxy({} as BunSQLiteDatabase, {
+  get(_target, prop) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (getTestDb() as any)[prop];
+  },
+  set(_target, prop, value) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (getTestDb() as any)[prop] = value;
+    return true;
+  }
+});
 
 type TErrorEmitter = {
   once?: (event: 'error', listener: (...args: unknown[]) => void) => void;
@@ -113,6 +129,12 @@ const isWebRtcPortAvailable = (port: number): Promise<boolean> =>
   });
 
 const getTestWebRtcPort = async (): Promise<number> => {
+  const configuredPort = Number.parseInt(process.env.SHARKORD_WEBRTC_PORT || '', 10);
+
+  if (Number.isInteger(configuredPort) && configuredPort > 0) {
+    return configuredPort;
+  }
+
   for (let i = 0; i < 100; i += 1) {
     const port = 41000 + Math.floor(Math.random() * 20000);
 
@@ -121,51 +143,80 @@ const getTestWebRtcPort = async (): Promise<number> => {
     }
   }
 
-  throw new Error('Failed to find an available WebRTC test port');
+  // Fall back to a deterministic port so tests can still attempt startup
+  // in constrained environments where availability probing may be blocked.
+  return 49999;
 };
 
+const getTestHttpPort = (): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const server = createTcpServer();
+    server.unref();
+
+    onErrorOnce(server, (...args) => {
+      reject(args[0]);
+    });
+
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+
+      if (!address || typeof address === 'string') {
+        server.close(() => reject(new Error('Failed to allocate HTTP test port')));
+        return;
+      }
+
+      const { port } = address;
+
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve(port);
+      });
+    });
+  });
+
 beforeAll(async () => {
+  clearRateLimitersForTests();
   process.env.SHARKORD_WEBRTC_PORT = String(await getTestWebRtcPort());
 
-  await createHttpServer(9999);
+  const httpPort = await getTestHttpPort();
+
+  await createHttpServer(httpPort);
   await loadMediasoup();
 
-  testsBaseUrl = 'http://localhost:9999';
+  testsBaseUrl = `http://localhost:${httpPort}`;
 });
 
 beforeEach(async () => {
-  clearRateLimitersForTests();
+  setRateLimiterScopeForTests(randomUUID());
   await fileManager.clearTemporaryFilesForTests();
 
-  if (sqlite) {
-    try {
-      sqlite.close();
-    } catch {
-      // ignore
-    }
-  }
-
-  sqlite = new Database(':memory:', { create: true, strict: true });
+  const sqlite = new Database(':memory:', { create: true, strict: true });
   sqlite.run('PRAGMA foreign_keys = ON;');
+  sqliteStorage.enterWith(sqlite);
 
-  tdb = drizzle({ client: sqlite });
+  const db = drizzle({ client: sqlite });
 
   // updates the mocked db to use this new test database
-  setTestDb(tdb);
+  setTestDb(db);
 
   // apply migrations and seed data for this test
-  await migrate(tdb, { migrationsFolder: DRIZZLE_PATH });
-  await seedDatabase(tdb);
+  await migrate(db, { migrationsFolder: DRIZZLE_PATH });
+  await seedDatabase(db);
 });
 
 afterEach(() => {
-  if (sqlite) {
-    try {
-      sqlite.close();
-      sqlite = null;
-    } catch {
-      // ignore
-    }
+  const sqlite = sqliteStorage.getStore();
+
+  if (!sqlite) return;
+
+  try {
+    sqlite.close();
+  } catch {
+    // ignore
   }
 });
 

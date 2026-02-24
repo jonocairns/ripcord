@@ -1,4 +1,4 @@
-import type { TTempFile } from '@sharkord/shared';
+import { sha256, type TTempFile } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
 import {
   getCaller,
@@ -8,7 +8,7 @@ import {
 } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
 import { TEST_SECRET_TOKEN } from '../../__tests__/seed';
-import { settings } from '../../db/schema';
+import { settings, userRoles, users } from '../../db/schema';
 
 describe('others router', () => {
   test('should throw when user tries to join with no handshake', async () => {
@@ -162,7 +162,30 @@ describe('others router', () => {
 
   test('should reject secret token reuse after bootstrap ownership is claimed', async () => {
     const { caller: caller2 } = await initTest(2);
-    const { caller: caller3 } = await initTest(3);
+
+    const now = Date.now();
+    const insertedUser = await tdb
+      .insert(users)
+      .values({
+        name: 'Bootstrap Candidate',
+        identity: 'bootstrap-candidate',
+        password: await sha256('password123'),
+        avatarId: null,
+        bannerId: null,
+        bio: null,
+        bannerColor: null,
+        createdAt: now
+      })
+      .returning({ id: users.id })
+      .get();
+
+    await tdb.insert(userRoles).values({
+      userId: insertedUser!.id,
+      roleId: 2,
+      createdAt: now
+    });
+
+    const { caller: caller3 } = await initTest(insertedUser!.id);
 
     await caller2.others.useSecretToken({ token: TEST_SECRET_TOKEN });
 

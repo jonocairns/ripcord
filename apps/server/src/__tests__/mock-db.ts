@@ -2,7 +2,10 @@ import { Database } from 'bun:sqlite';
 import { mock } from 'bun:test';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-import { DRIZZLE_PATH } from '../helpers/paths';
+import fs from 'fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import path from 'path';
+import { DRIZZLE_PATH as EMBEDDED_DRIZZLE_PATH } from '../helpers/paths';
 import { seedDatabase } from './seed';
 
 /**
@@ -22,6 +25,19 @@ import { seedDatabase } from './seed';
  */
 
 let tdb: BunSQLiteDatabase;
+const testDbStorage = new AsyncLocalStorage<BunSQLiteDatabase>();
+
+const getActiveDb = (): BunSQLiteDatabase => {
+  return testDbStorage.getStore() ?? tdb;
+};
+
+const sourceMigrationsPath = path.resolve(import.meta.dir, '../db/migrations');
+
+const DRIZZLE_PATH = fs.existsSync(
+  path.join(EMBEDDED_DRIZZLE_PATH, 'meta', '_journal.json')
+)
+  ? EMBEDDED_DRIZZLE_PATH
+  : sourceMigrationsPath;
 
 const initDb = async () => {
   const sqlite = new Database(':memory:', { create: true, strict: true });
@@ -38,15 +54,15 @@ const initDb = async () => {
 
 await initDb();
 
-// create a Proxy that forwards all operations to the current tdb
+// create a Proxy that forwards all operations to the current test context db
 const dbProxy = new Proxy({} as BunSQLiteDatabase, {
   get(_target, prop) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (tdb as any)[prop];
+    return (getActiveDb() as any)[prop];
   },
   set(_target, prop, value) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (tdb as any)[prop] = value;
+    (getActiveDb() as any)[prop] = value;
     return true;
   }
 });
@@ -58,8 +74,9 @@ mock.module('../db/index', () => ({
 
 const setTestDb = (newDb: BunSQLiteDatabase) => {
   tdb = newDb;
+  testDbStorage.enterWith(newDb);
 };
 
-const getTestDb = () => tdb;
+const getTestDb = () => getActiveDb();
 
 export { DRIZZLE_PATH, getTestDb, setTestDb };

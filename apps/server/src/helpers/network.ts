@@ -1,13 +1,17 @@
 import os from 'os';
 
 const getPrivateIp = async () => {
-  const interfaces = os.networkInterfaces();
-  const addresses = Object.values(interfaces)
-    .flat()
-    .filter((iface) => iface?.family === 'IPv4' && !iface.internal)
-    .map((iface) => iface?.address);
+  try {
+    const interfaces = os.networkInterfaces();
+    const addresses = Object.values(interfaces)
+      .flat()
+      .filter((iface) => iface?.family === 'IPv4' && !iface.internal)
+      .map((iface) => iface?.address);
 
-  return addresses[0];
+    return addresses[0];
+  } catch {
+    return undefined;
+  }
 };
 
 const getPublicIpFromIpify = async (): Promise<string | undefined> => {

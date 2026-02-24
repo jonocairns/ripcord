@@ -96,18 +96,17 @@ const rateLimitedProcedure = (
 
   const rateLimitMiddleware = t.middleware(async ({ ctx, next, path }) => {
     const connectionInfo = ctx.getConnectionInfo();
+    const keySource = ctx.token || connectionInfo?.ip;
 
-    if (!connectionInfo?.ip) {
-      // if we have no IP, it means we have no way to identify the client
-      // if we can't identify the client, we can't apply rate limiting, so we log a warning and skip it for this request
+    if (!keySource) {
       logger.warn(
-        `${chalk.dim('[Rate Limiter tRPC]')} Missing IP address in connection info, skipping rate limiting for this request. Path: ${path}`
+        `${chalk.dim('[Rate Limiter tRPC]')} Missing client identifier, skipping rate limiting for this request. Path: ${path}`
       );
 
       return next();
     }
 
-    const key = getClientRateLimitKey(connectionInfo.ip);
+    const key = getClientRateLimitKey(keySource);
     const rateLimit = limiter.consume(key);
 
     if (!rateLimit.allowed) {
