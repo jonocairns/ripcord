@@ -1,4 +1,5 @@
 import type { TJoinedSettings, TPublicServerSettings } from '@sharkord/shared';
+import crypto from 'crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '..';
 import { files, settings } from '../schema';
@@ -52,13 +53,22 @@ const getServerTokenSync = (): string => {
 const getServerToken = async (): Promise<string> => {
   if (token) return token;
 
-  const { secretToken } = await getSettings();
+  const currentSettings = await getSettings();
 
-  if (!secretToken) {
-    throw new Error('Secret token not found in database settings');
+  if (currentSettings.authToken) {
+    token = currentSettings.authToken;
+    return token;
   }
 
-  token = secretToken;
+  const nextAuthToken = crypto.randomBytes(32).toString('hex');
+
+  await db
+    .update(settings)
+    .set({ authToken: nextAuthToken })
+    .where(eq(settings.serverId, currentSettings.serverId))
+    .run();
+
+  token = nextAuthToken;
 
   return token;
 };

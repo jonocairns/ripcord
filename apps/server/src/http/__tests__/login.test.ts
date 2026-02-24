@@ -1,9 +1,8 @@
-import { sha256 } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import jwt from 'jsonwebtoken';
 import { login, logout, refresh } from '../../__tests__/helpers';
-import { TEST_SECRET_TOKEN } from '../../__tests__/seed';
+import { TEST_AUTH_TOKEN } from '../../__tests__/seed';
 import { tdb, testsBaseUrl } from '../../__tests__/setup';
 import {
   invites,
@@ -34,7 +33,7 @@ describe('/login', () => {
     expect(data).toHaveProperty('token');
     expect(data).toHaveProperty('refreshToken');
 
-    const decoded = jwt.verify(data.token, await sha256(TEST_SECRET_TOKEN));
+    const decoded = jwt.verify(data.token, TEST_AUTH_TOKEN);
 
     expect(decoded).toHaveProperty('userId');
   });
@@ -277,7 +276,7 @@ describe('/login', () => {
 
     const decoded = jwt.verify(
       data.token,
-      await sha256(TEST_SECRET_TOKEN)
+      TEST_AUTH_TOKEN
     ) as jwt.JwtPayload;
 
     expect(decoded).toHaveProperty('userId');

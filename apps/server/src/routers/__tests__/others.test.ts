@@ -82,6 +82,7 @@ describe('others router', () => {
 
     expect(currentSettings.password).toBe('');
     expect(currentSettings.secretToken).toBeNull();
+    expect(currentSettings.authToken).toBeNull();
   });
 
   test('should verify and upgrade legacy server password on join', async () => {

@@ -10,7 +10,8 @@ const getSettingsRoute = protectedProcedure.query(async ({ ctx }) => {
   return {
     ...settings,
     password: '',
-    secretToken: null
+    secretToken: null,
+    authToken: null
   };
 });
 

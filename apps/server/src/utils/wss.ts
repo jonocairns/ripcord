@@ -21,6 +21,11 @@ import { getAllChannelUserPermissions } from '../db/queries/channels';
 import { getUserById, getUserByToken } from '../db/queries/users';
 import { channels } from '../db/schema';
 import { getWsInfo } from '../helpers/get-ws-info';
+import {
+  isOriginAllowedForRequest,
+  normalizeOrigin,
+  parseAllowedOrigins
+} from '../helpers/origin';
 import { logger } from '../logger';
 import { enqueueActivityLog } from '../queues/activity-log';
 import { appRouter } from '../routers';
@@ -31,6 +36,8 @@ import { pubsub } from './pubsub';
 import type { Context } from './trpc';
 
 let wss: WebSocketServer | undefined;
+const wsAllowedOrigins = parseAllowedOrigins(config.server.allowedOrigins);
+
 type TTrackedWebSocket = WebSocket & {
   userId?: number;
   token: string;
@@ -292,6 +299,25 @@ const createWsServer = async (server: http.Server) => {
 
     wss.on('connection', (ws, req) => {
       const trackedWs = ws as TTrackedWebSocket;
+      const requestOrigin = normalizeOrigin(req.headers.origin);
+
+      if (
+        requestOrigin &&
+        !isOriginAllowedForRequest({
+          requestOrigin,
+          requestHost: req.headers.host,
+          allowedOrigins: wsAllowedOrigins
+        })
+      ) {
+        logger.warn(
+          'Rejecting websocket connection from origin %s: origin not allowed',
+          requestOrigin
+        );
+
+        trackedWs.close(1008, 'Origin not allowed');
+        return;
+      }
+
       trackedWs.userId = undefined;
       trackedWs.token = '';
       trackedWs.connectionIp = getWsInfo(ws, req, {

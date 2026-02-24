@@ -18,6 +18,7 @@ import {
 } from '@sharkord/shared';
 import { randomUUIDv7 } from 'bun';
 import chalk from 'chalk';
+import crypto from 'crypto';
 import { hashPassword } from '../helpers/password';
 import { logger } from '../logger';
 import { IS_DEVELOPMENT } from '../utils/env';
@@ -52,6 +53,7 @@ const seedDatabase = async () => {
     password: '',
     serverId: Bun.randomUUIDv7(),
     secretToken: await sha256(originalToken),
+    authToken: crypto.randomBytes(32).toString('hex'),
     allowNewUsers: IS_DEVELOPMENT,
     storageUploadEnabled: true,
     storageQuota: STORAGE_QUOTA,

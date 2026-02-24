@@ -3,6 +3,12 @@ import http from 'http';
 import z from 'zod';
 import { config } from '../config';
 import { getWsInfo } from '../helpers/get-ws-info';
+import {
+  getAllowedOrigin,
+  isOriginAllowedForRequest,
+  normalizeOrigin,
+  parseAllowedOrigins
+} from '../helpers/origin';
 import { logger } from '../logger';
 import {
   createRateLimiter,
@@ -55,36 +61,7 @@ const interfaceRouteRateLimiter = createRateLimiter({
   windowMs: 60_000
 });
 
-const corsAllowedOrigins = config.server.allowedOrigins
-  .split(',')
-  .map((value) => value.trim())
-  .filter((value) => value.length > 0);
-
-const normalizeOrigin = (origin: unknown): string | undefined => {
-  if (typeof origin === 'string') {
-    return origin;
-  }
-
-  if (Array.isArray(origin)) {
-    return typeof origin[0] === 'string' ? origin[0] : undefined;
-  }
-
-  return undefined;
-};
-
-const getAllowedOrigin = (
-  requestOrigin: string | undefined
-): string | undefined => {
-  if (!requestOrigin) {
-    return undefined;
-  }
-
-  if (corsAllowedOrigins.includes('*')) {
-    return '*';
-  }
-
-  return corsAllowedOrigins.includes(requestOrigin) ? requestOrigin : undefined;
-};
+const corsAllowedOrigins = parseAllowedOrigins(config.server.allowedOrigins);
 
 const setDefaultSecurityHeaders = (res: http.ServerResponse) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -108,7 +85,12 @@ const createHttpServer = async (port: number = config.server.port) => {
         setDefaultSecurityHeaders(res);
 
         const requestOrigin = normalizeOrigin(req.headers.origin);
-        const allowedOrigin = getAllowedOrigin(requestOrigin);
+        const allowedOrigin = getAllowedOrigin(requestOrigin, corsAllowedOrigins);
+        const originAllowedForRequest = isOriginAllowedForRequest({
+          requestOrigin,
+          requestHost: req.headers.host,
+          allowedOrigins: corsAllowedOrigins
+        });
 
         if (allowedOrigin) {
           res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
@@ -134,7 +116,7 @@ const createHttpServer = async (port: number = config.server.port) => {
         );
 
         if (req.method === 'OPTIONS') {
-          if (requestOrigin && !allowedOrigin) {
+          if (requestOrigin && !originAllowedForRequest) {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'CORS origin forbidden' }));
             return;
@@ -142,6 +124,12 @@ const createHttpServer = async (port: number = config.server.port) => {
 
           res.writeHead(204);
           res.end();
+          return;
+        }
+
+        if (req.method !== 'GET' && requestOrigin && !originAllowedForRequest) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'CORS origin forbidden' }));
           return;
         }
 

@@ -47,17 +47,20 @@ services:
 
     # Volume mounts for persistent data
     volumes:
+      # Note: current images run as non-root user "bun".
+      # If upgrading from older root-based images, move existing data from
+      # /root/.config/sharkord to /home/bun/.config/sharkord on the host mount.
       # Map to host directory
-      - ./data:/root/.config/sharkord
+      - ./data:/home/bun/.config/sharkord
 
       # Or use Docker volumes
-      # - sharkord_data:/root/.config/sharkord
+      # - sharkord_data:/home/bun/.config/sharkord
 
       # Uploads directory (optional, if you want uploads outside data dir)
-      # - sharkord_uploads:/root/.config/sharkord/uploads
+      # - sharkord_uploads:/home/bun/.config/sharkord/uploads
 
       # Plugins directory (optional, for plugin management)
-      # - sharkord_plugins:/root/.config/sharkord/plugins
+      # - sharkord_plugins:/home/bun/.config/sharkord/plugins
 
 # If using Docker volumes:
 # volumes:
