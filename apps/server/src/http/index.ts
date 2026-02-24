@@ -17,7 +17,7 @@ import { logoutRouteHandler } from './logout';
 import { publicRouteHandler } from './public';
 import { refreshRouteHandler } from './refresh';
 import { uploadFileRouteHandler } from './upload';
-import { HttpValidationError } from './utils';
+import { HttpBodyTooLargeError, HttpValidationError } from './utils';
 
 // 5 attempts per minute per IP for login route
 const loginRateLimiter = createRateLimiter({
@@ -33,6 +33,12 @@ const refreshRateLimiter = createRateLimiter({
 
 // 20 attempts per minute per IP for logout route
 const logoutRateLimiter = createRateLimiter({
+  maxRequests: 20,
+  windowMs: 60_000
+});
+
+// 20 upload attempts per minute per IP (or shared unknown bucket if IP is unavailable)
+const uploadRateLimiter = createRateLimiter({
   maxRequests: 20,
   windowMs: 60_000
 });
@@ -70,96 +76,107 @@ const createHttpServer = async (port: number = config.server.port) => {
           }
 
           if (req.method === 'POST' && req.url === '/upload') {
+            const key = getClientRateLimitKey(info?.ip);
+            const rateLimit = uploadRateLimiter.consume(key);
+
+            if (!rateLimit.allowed) {
+              logger.debug(
+                `${chalk.dim('[Rate Limiter HTTP]')} /upload rate limited for key "${key}"`
+              );
+
+              res.setHeader(
+                'Retry-After',
+                getRateLimitRetrySeconds(rateLimit.retryAfterMs)
+              );
+
+              res.writeHead(429, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  error: 'Too many upload attempts. Please try again shortly.'
+                })
+              );
+
+              return;
+            }
+
             return await uploadFileRouteHandler(req, res);
           }
 
           if (req.method === 'POST' && req.url === '/login') {
-            if (info?.ip) {
-              // we can only rate limit if we have the client's IP
+            const key = getClientRateLimitKey(info?.ip);
+            const rateLimit = loginRateLimiter.consume(key);
 
-              const key = getClientRateLimitKey(info?.ip);
-              const rateLimit = loginRateLimiter.consume(key);
-
-              if (!rateLimit.allowed) {
-                logger.debug(
-                  `${chalk.dim('[Rate Limiter HTTP]')} /login rate limited for key "${key}"`
-                );
-
-                res.setHeader(
-                  'Retry-After',
-                  getRateLimitRetrySeconds(rateLimit.retryAfterMs)
-                );
-
-                res.writeHead(429, { 'Content-Type': 'application/json' });
-
-                res.end(
-                  JSON.stringify({
-                    error: 'Too many login attempts. Please try again shortly.'
-                  })
-                );
-
-                return;
-              }
-            } else {
-              logger.warn(
-                `${chalk.dim('[Rate Limiter HTTP]')} Missing IP address in request info, skipping rate limiting for /login route.`
+            if (!rateLimit.allowed) {
+              logger.debug(
+                `${chalk.dim('[Rate Limiter HTTP]')} /login rate limited for key "${key}"`
               );
+
+              res.setHeader(
+                'Retry-After',
+                getRateLimitRetrySeconds(rateLimit.retryAfterMs)
+              );
+
+              res.writeHead(429, { 'Content-Type': 'application/json' });
+
+              res.end(
+                JSON.stringify({
+                  error: 'Too many login attempts. Please try again shortly.'
+                })
+              );
+
+              return;
             }
 
             return await loginRouteHandler(req, res);
           }
 
           if (req.method === 'POST' && req.url === '/refresh') {
-            if (info?.ip) {
-              const key = getClientRateLimitKey(info.ip);
-              const rateLimit = refreshRateLimiter.consume(key);
+            const key = getClientRateLimitKey(info?.ip);
+            const rateLimit = refreshRateLimiter.consume(key);
 
-              if (!rateLimit.allowed) {
-                logger.debug(
-                  `${chalk.dim('[Rate Limiter HTTP]')} /refresh rate limited for key "${key}"`
-                );
+            if (!rateLimit.allowed) {
+              logger.debug(
+                `${chalk.dim('[Rate Limiter HTTP]')} /refresh rate limited for key "${key}"`
+              );
 
-                res.setHeader(
-                  'Retry-After',
-                  getRateLimitRetrySeconds(rateLimit.retryAfterMs)
-                );
+              res.setHeader(
+                'Retry-After',
+                getRateLimitRetrySeconds(rateLimit.retryAfterMs)
+              );
 
-                res.writeHead(429, { 'Content-Type': 'application/json' });
-                res.end(
-                  JSON.stringify({
-                    error: 'Too many refresh attempts. Please try again shortly.'
-                  })
-                );
-                return;
-              }
+              res.writeHead(429, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  error: 'Too many refresh attempts. Please try again shortly.'
+                })
+              );
+              return;
             }
 
             return await refreshRouteHandler(req, res);
           }
 
           if (req.method === 'POST' && req.url === '/logout') {
-            if (info?.ip) {
-              const key = getClientRateLimitKey(info.ip);
-              const rateLimit = logoutRateLimiter.consume(key);
+            const key = getClientRateLimitKey(info?.ip);
+            const rateLimit = logoutRateLimiter.consume(key);
 
-              if (!rateLimit.allowed) {
-                logger.debug(
-                  `${chalk.dim('[Rate Limiter HTTP]')} /logout rate limited for key "${key}"`
-                );
+            if (!rateLimit.allowed) {
+              logger.debug(
+                `${chalk.dim('[Rate Limiter HTTP]')} /logout rate limited for key "${key}"`
+              );
 
-                res.setHeader(
-                  'Retry-After',
-                  getRateLimitRetrySeconds(rateLimit.retryAfterMs)
-                );
+              res.setHeader(
+                'Retry-After',
+                getRateLimitRetrySeconds(rateLimit.retryAfterMs)
+              );
 
-                res.writeHead(429, { 'Content-Type': 'application/json' });
-                res.end(
-                  JSON.stringify({
-                    error: 'Too many logout attempts. Please try again shortly.'
-                  })
-                );
-                return;
-              }
+              res.writeHead(429, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  error: 'Too many logout attempts. Please try again shortly.'
+                })
+              );
+              return;
             }
 
             return await logoutRouteHandler(req, res);
@@ -192,6 +209,14 @@ const createHttpServer = async (port: number = config.server.port) => {
 
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ errors: errorsMap }));
+            return;
+          } else if (error instanceof HttpBodyTooLargeError) {
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                error: `Request body too large. Maximum size is ${error.maxBytes} bytes.`
+              })
+            );
             return;
           }
 

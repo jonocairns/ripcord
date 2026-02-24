@@ -46,7 +46,9 @@ const uploadFileRouteHandler = async (
   if (!hasUploadPermission) {
     req.resume();
     res.writeHead(403, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'You do not have permission to upload files' }));
+    res.end(
+      JSON.stringify({ error: 'You do not have permission to upload files' })
+    );
     return;
   }
 
@@ -78,10 +80,65 @@ const uploadFileRouteHandler = async (
     return;
   }
 
+  const maxUserTempBytes =
+    settings.storageSpaceQuotaByUser > 0
+      ? Math.min(
+          settings.storageSpaceQuotaByUser,
+          settings.storageUploadMaxFileSize
+        )
+      : settings.storageUploadMaxFileSize;
+  const maxTotalTempBytes =
+    settings.storageQuota > 0
+      ? Math.min(settings.storageQuota, settings.storageUploadMaxFileSize * 4)
+      : settings.storageUploadMaxFileSize * 4;
+
+  let reservationId: string | undefined;
+  let reservationReleased = false;
+  const releaseReservation = () => {
+    if (!reservationId || reservationReleased) {
+      return;
+    }
+
+    fileManager.releaseTemporaryUploadReservation(reservationId);
+    reservationReleased = true;
+  };
+
+  try {
+    reservationId = fileManager.reserveTemporaryUpload({
+      userId: user.id,
+      size: contentLength,
+      maxUserBytes: maxUserTempBytes,
+      maxTotalBytes: maxTotalTempBytes
+    });
+  } catch (error) {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Temporary upload capacity exceeded'
+        })
+      );
+    });
+
+    return;
+  }
+
   const safePath = await fileManager.getSafeUploadPath(originalName);
   const fileStream = fs.createWriteStream(safePath);
   let streamedSize = 0;
   let abortedForSize = false;
+
+  req.on('aborted', () => {
+    releaseReservation();
+  });
+
+  req.on('error', () => {
+    releaseReservation();
+  });
 
   req.on('data', (chunk) => {
     streamedSize += chunk.length;
@@ -95,6 +152,7 @@ const uploadFileRouteHandler = async (
     }
 
     abortedForSize = true;
+    releaseReservation();
     req.unpipe(fileStream);
     fileStream.destroy();
 
@@ -116,6 +174,7 @@ const uploadFileRouteHandler = async (
 
   fileStream.on('finish', async () => {
     if (abortedForSize) {
+      releaseReservation();
       return;
     }
 
@@ -159,10 +218,14 @@ const uploadFileRouteHandler = async (
       logger.error('Error processing uploaded file:', error);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'File processing failed' }));
+    } finally {
+      releaseReservation();
     }
   });
 
   fileStream.on('error', (err) => {
+    releaseReservation();
+
     if (abortedForSize || res.headersSent) {
       return;
     }

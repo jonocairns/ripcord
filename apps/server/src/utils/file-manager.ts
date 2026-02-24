@@ -55,6 +55,7 @@ class TemporaryFileManager {
   private timeouts: {
     [id: string]: NodeJS.Timeout;
   } = {};
+  private reservations = new Map<string, { userId: number; size: number }>();
 
   public getTemporaryFile = (id: string): TTempFile | undefined => {
     return this.temporaryFiles.find((file) => file.id === id);
@@ -62,6 +63,86 @@ class TemporaryFileManager {
 
   public temporaryFileExists = (id: string): boolean => {
     return !!this.temporaryFiles.find((file) => file.id === id);
+  };
+
+  public getTemporaryUsageByUser = (userId: number): number => {
+    const committedUsage = this.temporaryFiles.reduce((acc, file) => {
+      if (file.userId !== userId) {
+        return acc;
+      }
+
+      return acc + file.size;
+    }, 0);
+
+    const reservedUsage = Array.from(this.reservations.values()).reduce(
+      (acc, reservation) => {
+        if (reservation.userId !== userId) {
+          return acc;
+        }
+
+        return acc + reservation.size;
+      },
+      0
+    );
+
+    return committedUsage + reservedUsage;
+  };
+
+  public getTotalTemporaryUsage = (): number => {
+    const committedUsage = this.temporaryFiles.reduce(
+      (acc, file) => acc + file.size,
+      0
+    );
+
+    const reservedUsage = Array.from(this.reservations.values()).reduce(
+      (acc, reservation) => acc + reservation.size,
+      0
+    );
+
+    return committedUsage + reservedUsage;
+  };
+
+  public reserveTemporaryUpload = ({
+    userId,
+    size,
+    maxUserBytes,
+    maxTotalBytes
+  }: {
+    userId: number;
+    size: number;
+    maxUserBytes?: number;
+    maxTotalBytes?: number;
+  }): string => {
+    const currentUserUsage = this.getTemporaryUsageByUser(userId);
+    const currentTotalUsage = this.getTotalTemporaryUsage();
+
+    if (
+      typeof maxUserBytes === 'number' &&
+      currentUserUsage + size > maxUserBytes
+    ) {
+      throw new Error(
+        'Too much temporary upload data pending for this user. Try again in a moment.'
+      );
+    }
+
+    if (
+      typeof maxTotalBytes === 'number' &&
+      currentTotalUsage + size > maxTotalBytes
+    ) {
+      throw new Error(
+        'Server temporary upload capacity is full. Try again in a moment.'
+      );
+    }
+
+    const reservationId = randomUUIDv7();
+
+    this.reservations.set(reservationId, { userId, size });
+
+    return reservationId;
+  };
+
+  public releaseTemporaryUploadReservation = (reservationId: string): void => {
+    this.reservations.delete(reservationId);
   };
 
   public addTemporaryFile = async ({
@@ -125,6 +206,27 @@ class TemporaryFileManager {
     this.temporaryFiles = this.temporaryFiles.filter((file) => file.id !== id);
   };
 
+  public clearTemporaryFiles = async (): Promise<void> => {
+    const files = [...this.temporaryFiles];
+
+    this.temporaryFiles = [];
+    this.reservations.clear();
+
+    for (const timeoutId of Object.values(this.timeouts)) {
+      clearTimeout(timeoutId);
+    }
+
+    this.timeouts = {};
+
+    await Promise.all(
+      files.map((file) =>
+        fs.unlink(file.path).catch(() => {
+          // ignore cleanup errors
+        })
+      )
+    );
+  };
+
   public getSafeUploadPath = async (name: string): Promise<string> => {
     const ext = path.extname(name);
     const safePath = path.join(UPLOADS_PATH, `${randomUUIDv7()}${ext}`);
@@ -144,6 +246,12 @@ class FileManager {
 
   public getTemporaryFile = this.tempFileManager.getTemporaryFile;
   public temporaryFileExists = this.tempFileManager.temporaryFileExists;
+  public getTemporaryUsageByUser = this.tempFileManager.getTemporaryUsageByUser;
+  public getTotalTemporaryUsage = this.tempFileManager.getTotalTemporaryUsage;
+  public reserveTemporaryUpload = this.tempFileManager.reserveTemporaryUpload;
+  public releaseTemporaryUploadReservation =
+    this.tempFileManager.releaseTemporaryUploadReservation;
+  public clearTemporaryFilesForTests = this.tempFileManager.clearTemporaryFiles;
 
   private handleStorageLimits = async (tempFile: TTempFile) => {
     const [settings, userStorage, serverStorage] = await Promise.all([

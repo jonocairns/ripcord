@@ -127,6 +127,48 @@ describe('/upload', () => {
     );
   });
 
+  test('should enforce temporary upload capacity per user', async () => {
+    await tdb
+      .update(settings)
+      .set({ storageUploadMaxFileSize: 1024, storageSpaceQuotaByUser: 0 });
+
+    const firstFile = getMockFile('A'.repeat(700));
+    const secondFile = getMockFile('B'.repeat(700));
+
+    const firstResponse = await uploadFile(firstFile, token);
+    expect(firstResponse.status).toBe(200);
+
+    const secondResponse = await uploadFile(secondFile, token);
+    expect(secondResponse.status).toBe(413);
+
+    const data = (await secondResponse.json()) as TUploadErrorResponse;
+
+    expect(data).toHaveProperty(
+      'error',
+      'Too much temporary upload data pending for this user. Try again in a moment.'
+    );
+  });
+
+  test('should rate limit excessive upload attempts', async () => {
+    const file = getMockFile('rate-limit-test');
+    const attempts = 21;
+    let lastResponse: Response | undefined;
+
+    for (let i = 0; i < attempts; i++) {
+      lastResponse = await uploadFile(file, token);
+    }
+
+    expect(lastResponse).toBeDefined();
+    expect(lastResponse!.status).toBe(429);
+
+    const data = (await lastResponse!.json()) as TUploadErrorResponse;
+
+    expect(data).toHaveProperty(
+      'error',
+      'Too many upload attempts. Please try again shortly.'
+    );
+  });
+
   test('should handle files with special characters in name', async () => {
     const specialContent = 'File with special name';
     const blob = new Blob([specialContent], { type: 'text/plain' });

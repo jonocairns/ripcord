@@ -1,15 +1,15 @@
 import { ActivityLogType, type TJoinedUser } from '@sharkord/shared';
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import http from 'http';
 import z from 'zod';
 import { config } from '../config';
 import { db } from '../db';
 import { publishUser } from '../db/publishers';
-import { isInviteValid } from '../db/queries/invites';
+import { consumeInvite, isInviteValid } from '../db/queries/invites';
 import { getDefaultRole } from '../db/queries/roles';
 import { getSettings } from '../db/queries/server';
 import { getUserByIdentity } from '../db/queries/users';
-import { invites, userRoles, users } from '../db/schema';
+import { userRoles, users } from '../db/schema';
 import { getWsInfo } from '../helpers/get-ws-info';
 import { hashPassword, isArgon2Hash, verifyPassword } from '../helpers/password';
 import { enqueueActivityLog } from '../queues/activity-log';
@@ -17,6 +17,8 @@ import { invariant } from '../utils/invariant';
 import { issueAuthTokens } from './auth-tokens';
 import { getJsonBody } from './helpers';
 import { HttpValidationError } from './utils';
+
+const LOGIN_JSON_BODY_MAX_BYTES = 16 * 1024;
 
 const zBody = z.object({
   identity: z.string().min(1, 'Identity is required'),
@@ -80,7 +82,9 @@ const loginRouteHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse
 ) => {
-  const data = zBody.parse(await getJsonBody(req));
+  const data = zBody.parse(
+    await getJsonBody(req, { maxBytes: LOGIN_JSON_BODY_MAX_BYTES })
+  );
   const settings = await getSettings();
   let existingUser = await getUserByIdentity(data.identity);
   const connectionInfo = getWsInfo(undefined, req, {
@@ -89,19 +93,16 @@ const loginRouteHandler = async (
 
   if (!existingUser) {
     if (!settings.allowNewUsers) {
-      const inviteError = await isInviteValid(data.invite);
+      const inviteConsumed = await consumeInvite(data.invite);
 
-      if (inviteError) {
-        throw new HttpValidationError('identity', inviteError);
+      if (!inviteConsumed) {
+        const inviteError = await isInviteValid(data.invite);
+
+        throw new HttpValidationError(
+          'identity',
+          inviteError || 'Invalid invite code'
+        );
       }
-
-      await db
-        .update(invites)
-        .set({
-          uses: sql`${invites.uses} + 1`
-        })
-        .where(eq(invites.code, data.invite!))
-        .execute();
     }
 
     // user doesn't exist, but registration is open OR invite was valid - create the user automatically

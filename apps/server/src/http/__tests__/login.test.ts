@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import jwt from 'jsonwebtoken';
 import { login, logout, refresh } from '../../__tests__/helpers';
 import { TEST_SECRET_TOKEN } from '../../__tests__/seed';
-import { tdb } from '../../__tests__/setup';
+import { tdb, testsBaseUrl } from '../../__tests__/setup';
 import {
   invites,
   refreshTokens,
@@ -99,7 +99,7 @@ describe('/login', () => {
 
     expect(response.status).toBe(200);
 
-    const data = await response.json();
+    const data = (await response.json()) as { error?: string };
 
     expect(data).toHaveProperty('success', true);
     expect(data).toHaveProperty('token');
@@ -144,7 +144,7 @@ describe('/login', () => {
 
     expect(response.status).toBe(200);
 
-    const data = await response.json();
+    const data = (await response.json()) as { error?: string };
 
     expect(data).toHaveProperty('success', true);
     expect(data).toHaveProperty('token');
@@ -254,7 +254,7 @@ describe('/login', () => {
 
     expect(response.status).toBe(400);
 
-    const data = await response.json();
+    const data = (await response.json()) as { error?: string };
 
     expect(data).toHaveProperty('errors');
   });
@@ -264,7 +264,7 @@ describe('/login', () => {
 
     expect(response.status).toBe(400);
 
-    const data = await response.json();
+    const data = (await response.json()) as { error?: string };
 
     expect(data).toHaveProperty('errors');
   });
@@ -354,7 +354,7 @@ describe('/login', () => {
 
     expect(response.status).toBe(401);
 
-    const data = await response.json();
+    const data = (await response.json()) as { error?: string };
 
     expect(data).toHaveProperty('error', 'Invalid refresh token');
   });
@@ -374,6 +374,64 @@ describe('/login', () => {
     const refreshResponse = await refresh(refreshToken);
 
     expect(refreshResponse.status).toBe(401);
+  });
+
+  test('should reject oversized login payloads', async () => {
+    const response = await fetch(`${testsBaseUrl}/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        identity: 'x'.repeat(20_000),
+        password: 'password123'
+      })
+    });
+
+    expect(response.status).toBe(413);
+
+    const data = (await response.json()) as { error?: string };
+
+    expect(data).toHaveProperty('error');
+    expect(data.error).toContain('Request body too large');
+  });
+
+  test('should reject oversized refresh payloads', async () => {
+    const response = await fetch(`${testsBaseUrl}/refresh`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        refreshToken: 'x'.repeat(20_000)
+      })
+    });
+
+    expect(response.status).toBe(413);
+
+    const data = (await response.json()) as { error?: string };
+
+    expect(data).toHaveProperty('error');
+    expect(data.error).toContain('Request body too large');
+  });
+
+  test('should reject oversized logout payloads', async () => {
+    const response = await fetch(`${testsBaseUrl}/logout`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        refreshToken: 'x'.repeat(20_000)
+      })
+    });
+
+    expect(response.status).toBe(413);
+
+    const data = (await response.json()) as { error?: string };
+
+    expect(data).toHaveProperty('error');
+    expect(data.error).toContain('Request body too large');
   });
 
   test('should rate limit excessive login attempts', async () => {

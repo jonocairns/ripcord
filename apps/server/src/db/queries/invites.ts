@@ -1,5 +1,5 @@
 import type { TJoinedInvite } from '@sharkord/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 import { db } from '..';
 import { files, invites, userRoles, users } from '../schema';
@@ -30,6 +30,31 @@ const isInviteValid = async (
   }
 
   return undefined;
+};
+
+const consumeInvite = async (code: string | undefined): Promise<boolean> => {
+  if (!code) {
+    return false;
+  }
+
+  const now = Date.now();
+
+  const consumedInvite = await db
+    .update(invites)
+    .set({
+      uses: sql`${invites.uses} + 1`
+    })
+    .where(
+      and(
+        eq(invites.code, code),
+        or(isNull(invites.expiresAt), gt(invites.expiresAt, now)),
+        or(isNull(invites.maxUses), lt(invites.uses, invites.maxUses))
+      )
+    )
+    .returning({ id: invites.id })
+    .get();
+
+  return !!consumedInvite;
 };
 
 const getInvites = async (): Promise<TJoinedInvite[]> => {
@@ -85,4 +110,4 @@ const getInvites = async (): Promise<TJoinedInvite[]> => {
   }));
 };
 
-export { getInvites, isInviteValid };
+export { consumeInvite, getInvites, isInviteValid };
