@@ -1,19 +1,53 @@
+import { Parser } from "htmlparser2";
+
+const MEDIA_TAGS = new Set(["img", "video", "audio", "iframe"]);
+
+const hasClass = (className: string | undefined, target: string): boolean => {
+  if (!className) return false;
+  return className.split(/\s+/).some((name) => name === target);
+};
+
 const isEmptyMessage = (content: string | undefined | null): boolean => {
   if (!content) return true;
 
-  const contentWithoutPmPlaceholders = content
-    .replace(/<img[^>]*ProseMirror-separator[^>]*>/gi, "")
-    .replace(/<br[^>]*ProseMirror-trailingBreak[^>]*>/gi, "");
+  let hasMedia = false;
+  const textParts: string[] = [];
 
-  // check if it has media (eg: emojis will be detected here)
-  const hasMedia = /<(img|video|audio|iframe)\b/i.test(
-    contentWithoutPmPlaceholders
+  const parser = new Parser(
+    {
+      onopentag(name, attributes) {
+        const normalizedName = name.toLowerCase();
+
+        if (
+          normalizedName === "img" &&
+          hasClass(attributes.class, "ProseMirror-separator")
+        ) {
+          return;
+        }
+
+        if (
+          normalizedName === "br" &&
+          hasClass(attributes.class, "ProseMirror-trailingBreak")
+        ) {
+          return;
+        }
+
+        if (MEDIA_TAGS.has(normalizedName)) {
+          hasMedia = true;
+        }
+      },
+      ontext(text) {
+        textParts.push(text);
+      },
+    },
+    { decodeEntities: true },
   );
 
-  const cleaned = contentWithoutPmPlaceholders
-    // remove all remaining tags
-    .replace(/<[^>]*>/g, "")
-    // normalize spaces
+  parser.write(content);
+  parser.end();
+
+  const cleaned = textParts
+    .join("")
     .replace(/&nbsp;/gi, " ")
     .replace(/\u00A0/g, " ")
     .trim();

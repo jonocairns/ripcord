@@ -29,6 +29,10 @@ describe("is-empty-message", () => {
     expect(isEmptyMessage("<p><br></p>")).toBe(true);
   });
 
+  test("should return false for overlapping tag markers with remaining text", () => {
+    expect(isEmptyMessage("<<script></script>>")).toBe(false);
+  });
+
   test("should return true for ProseMirror separator elements", () => {
     expect(isEmptyMessage('<img class="ProseMirror-separator">')).toBe(true);
     expect(isEmptyMessage('<img src="" class="ProseMirror-separator" />')).toBe(
