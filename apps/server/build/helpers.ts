@@ -29,6 +29,77 @@ const unpack = async (tgzPath: string, outDir: string) => {
   }
 };
 
+const RETRYABLE_HTTP_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RETRYABLE_FETCH_ERROR_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'ETIMEDOUT',
+  'EAI_AGAIN'
+]);
+
+const getErrorCode = (error: unknown) => {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof (error as { code: unknown }).code === 'string'
+  ) {
+    return (error as { code: string }).code;
+  }
+
+  return '';
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const fetchArrayBufferWithRetry = async (
+  url: string,
+  attempts = 5
+): Promise<ArrayBuffer> => {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        const retryableStatus = RETRYABLE_HTTP_STATUS_CODES.has(response.status);
+
+        if (!retryableStatus || attempt === attempts) {
+          throw new Error(
+            `Failed to download mediasoup binary: HTTP ${response.status} ${response.statusText}`
+          );
+        }
+
+        const waitMs = Math.min(1000 * 2 ** (attempt - 1), 10_000);
+
+        console.warn(
+          `Download failed with HTTP ${response.status}. Retrying in ${waitMs}ms (attempt ${attempt}/${attempts})...`
+        );
+        await sleep(waitMs);
+        continue;
+      }
+
+      return await response.arrayBuffer();
+    } catch (error) {
+      const errorCode = getErrorCode(error);
+      const retryableError = RETRYABLE_FETCH_ERROR_CODES.has(errorCode);
+
+      if (!retryableError || attempt === attempts) {
+        throw error;
+      }
+
+      const waitMs = Math.min(1000 * 2 ** (attempt - 1), 10_000);
+
+      console.warn(
+        `Download failed with ${errorCode}. Retrying in ${waitMs}ms (attempt ${attempt}/${attempts})...`
+      );
+      await sleep(waitMs);
+    }
+  }
+
+  throw new Error('Failed to download mediasoup binary after retries');
+};
+
 const downloadMediasoupBinary = async (
   version: string,
   target: Bun.Build.Target
@@ -57,15 +128,7 @@ const downloadMediasoupBinary = async (
       throw new Error(`Unsupported target for mediasoup binary: ${target}`);
   }
 
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to download mediasoup binary for target ${target}: ${response.statusText}`
-    );
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
+  const arrayBuffer = await fetchArrayBufferWithRetry(url);
   const buffer = Buffer.from(arrayBuffer);
   const targetPath = path.join(
     serverCwd,
