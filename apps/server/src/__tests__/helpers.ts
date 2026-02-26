@@ -1,14 +1,12 @@
-import { sha256, UploadHeaders } from '@sharkord/shared';
+import { UploadHeaders } from '@sharkord/shared';
 import jwt from 'jsonwebtoken';
 import { appRouter } from '../routers';
 import { createMockContext } from './context';
-import { TEST_SECRET_TOKEN } from './seed';
+import { TEST_AUTH_TOKEN_SECRET } from './seed';
 import { testsBaseUrl } from './setup';
 
 const getMockedToken = async (userId: number) => {
-  const hashedToken = await sha256(TEST_SECRET_TOKEN);
-
-  const token = jwt.sign({ userId: userId }, hashedToken, {
+  const token = jwt.sign({ userId: userId }, TEST_AUTH_TOKEN_SECRET, {
     expiresIn: '86400s'
   });
 

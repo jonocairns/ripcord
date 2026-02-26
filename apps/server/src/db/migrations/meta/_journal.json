@@ -15,6 +15,13 @@
       "when": 1771401600000,
       "tag": "0001_bright_refresh_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1772064000000,
+      "tag": "0002_glossy_auth_token_secret",
+      "breakpoints": true
     }
   ]
 }

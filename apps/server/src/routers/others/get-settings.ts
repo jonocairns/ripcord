@@ -1,5 +1,5 @@
 import { Permission } from '@sharkord/shared';
-import { getSettings } from '../../db/queries/server';
+import { getSettings, redactSettings } from '../../db/queries/server';
 import { protectedProcedure } from '../../utils/trpc';
 
 const getSettingsRoute = protectedProcedure.query(async ({ ctx }) => {
@@ -7,7 +7,7 @@ const getSettingsRoute = protectedProcedure.query(async ({ ctx }) => {
 
   const settings = await getSettings();
 
-  return settings;
+  return redactSettings(settings);
 });
 
 export { getSettingsRoute };

@@ -41,6 +41,7 @@ const settings = sqliteTable(
     password: text('password'),
     serverId: text('server_id').notNull(),
     secretToken: text('secret_token'),
+    authTokenSecret: text('auth_token_secret').notNull(),
     logoId: integer('logo_id').references(() => files.id, {
       onDelete: 'set null'
     }),

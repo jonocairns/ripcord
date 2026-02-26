@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import jwt from 'jsonwebtoken';
 import { login, logout, refresh } from '../../__tests__/helpers';
-import { TEST_SECRET_TOKEN } from '../../__tests__/seed';
+import { TEST_AUTH_TOKEN_SECRET, TEST_SECRET_TOKEN } from '../../__tests__/seed';
 import { tdb } from '../../__tests__/setup';
 import {
   invites,
@@ -34,9 +34,20 @@ describe('/login', () => {
     expect(data).toHaveProperty('token');
     expect(data).toHaveProperty('refreshToken');
 
-    const decoded = jwt.verify(data.token, await sha256(TEST_SECRET_TOKEN));
+    const decoded = jwt.verify(data.token, TEST_AUTH_TOKEN_SECRET);
 
     expect(decoded).toHaveProperty('userId');
+  });
+
+  test('should not verify JWT with bootstrap secret token hash', async () => {
+    const response = await login('testowner', 'password123');
+
+    expect(response.status).toBe(200);
+
+    const data = (await response.json()) as { token: string };
+    const bootstrapSecretHash = await sha256(TEST_SECRET_TOKEN);
+
+    expect(() => jwt.verify(data.token, bootstrapSecretHash)).toThrow();
   });
 
   test('should fail login with invalid password', async () => {
@@ -278,7 +289,7 @@ describe('/login', () => {
 
     const decoded = jwt.verify(
       data.token,
-      await sha256(TEST_SECRET_TOKEN)
+      TEST_AUTH_TOKEN_SECRET
     ) as jwt.JwtPayload;
 
     expect(decoded).toHaveProperty('userId');

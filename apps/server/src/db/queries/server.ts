@@ -1,10 +1,10 @@
 import type { TJoinedSettings, TPublicServerSettings } from '@sharkord/shared';
-import { eq } from 'drizzle-orm';
+import { eq, isNotNull } from 'drizzle-orm';
 import { db } from '..';
 import { files, settings } from '../schema';
 
 // since this is static, we can keep it in memory to avoid querying the DB every time
-let token: string;
+let authToken: string;
 
 const getSettings = async (): Promise<TJoinedSettings> => {
   const serverSettings = await db.select().from(settings).get()!;
@@ -41,26 +41,60 @@ const getPublicSettings: () => Promise<TPublicServerSettings> = async () => {
   return publicSettings;
 };
 
+type TRedactedSettings = Omit<TJoinedSettings, 'authTokenSecret' | 'secretToken'>;
+
+const redactSettings = (serverSettings: TJoinedSettings): TRedactedSettings => {
+  const {
+    authTokenSecret: _authTokenSecret,
+    secretToken: _secretToken,
+    ...safeSettings
+  } = serverSettings;
+
+  return safeSettings;
+};
+
 const getServerTokenSync = (): string => {
-  if (!token) {
-    throw new Error('Server token has not been initialized yet');
+  if (!authToken) {
+    throw new Error('Server auth token has not been initialized yet');
   }
 
-  return token;
+  return authToken;
 };
 
 const getServerToken = async (): Promise<string> => {
-  if (token) return token;
+  if (authToken) return authToken;
 
-  const { secretToken } = await getSettings();
+  const serverSettings = await db
+    .select({ authTokenSecret: settings.authTokenSecret })
+    .from(settings)
+    .get();
 
-  if (!secretToken) {
-    throw new Error('Secret token not found in database settings');
+  if (!serverSettings) {
+    throw new Error('Server settings not found');
   }
 
-  token = secretToken;
+  if (!serverSettings.authTokenSecret) {
+    const generatedAuthToken = `${Bun.randomUUIDv7()}.${Bun.randomUUIDv7()}`;
 
-  return token;
+    await db
+      .update(settings)
+      .set({ authTokenSecret: generatedAuthToken })
+      .where(isNotNull(settings.serverId))
+      .run();
+
+    authToken = generatedAuthToken;
+    return authToken;
+  }
+
+  authToken = serverSettings.authTokenSecret;
+
+  return authToken;
 };
 
-export { getPublicSettings, getServerToken, getServerTokenSync, getSettings };
+export {
+  getPublicSettings,
+  getServerToken,
+  getServerTokenSync,
+  getSettings,
+  redactSettings
+};

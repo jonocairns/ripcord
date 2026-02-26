@@ -82,6 +82,8 @@ describe('others router', () => {
     expect(settings.storageUploadEnabled).toBe(
       newSettings.storageUploadEnabled
     );
+    expect(settings).not.toHaveProperty('secretToken');
+    expect(settings).not.toHaveProperty('authTokenSecret');
   });
 
   test('should throw when using invalid secret token', async () => {
