@@ -18,9 +18,12 @@ const signalTypingRoute = protectedProcedure
       ChannelPermission.SEND_MESSAGES
     );
 
-    const affectedUserIds = await getAffectedUserIdsForChannel(input.channelId, {
-      permission: ChannelPermission.VIEW_CHANNEL
-    });
+    const affectedUserIds = await getAffectedUserIdsForChannel(
+      input.channelId,
+      {
+        permission: ChannelPermission.VIEW_CHANNEL
+      }
+    );
 
     ctx.pubsub.publishFor(affectedUserIds, ServerEvents.MESSAGE_TYPING, {
       channelId: input.channelId,

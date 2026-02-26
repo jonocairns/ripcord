@@ -16,8 +16,8 @@ import {
 } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { useVoiceRefs } from '../channel-view/voice/hooks/use-voice-refs';
-import { useVolumeControl } from '../voice-provider/volume-control-context';
 import { UserPopover } from '../user-popover';
+import { useVolumeControl } from '../voice-provider/volume-control-context';
 
 type TVoiceUserProps = {
   user: TVoiceUser;

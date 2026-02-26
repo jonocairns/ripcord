@@ -3,8 +3,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, mock } from 'bun:test';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import fs from 'fs/promises';
-import { createServer as createTcpServer } from 'node:net';
 import { createSocket } from 'node:dgram';
+import { createServer as createTcpServer } from 'node:net';
 import { DATA_PATH } from '../helpers/paths';
 import { createHttpServer } from '../http';
 import { loadMediasoup } from '../utils/mediasoup';
@@ -60,7 +60,10 @@ const onErrorOnce = (
   emitter: unknown,
   listener: (...args: unknown[]) => void
 ) => {
-  if (!emitter || (typeof emitter !== 'object' && typeof emitter !== 'function'))
+  if (
+    !emitter ||
+    (typeof emitter !== 'object' && typeof emitter !== 'function')
+  )
     return;
 
   const typedEmitter = emitter as TErrorEmitter;

@@ -3,8 +3,11 @@ import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import jwt from 'jsonwebtoken';
 import { login, logout, refresh } from '../../__tests__/helpers';
-import { TEST_AUTH_TOKEN_SECRET, TEST_SECRET_TOKEN } from '../../__tests__/seed';
-import { tdb } from '../../__tests__/setup';
+import {
+  TEST_AUTH_TOKEN_SECRET,
+  TEST_SECRET_TOKEN
+} from '../../__tests__/seed';
+import { tdb, testsBaseUrl } from '../../__tests__/setup';
 import {
   invites,
   refreshTokens,
@@ -405,5 +408,60 @@ describe('/login', () => {
       'error',
       'Too many login attempts. Please try again shortly.'
     );
+  });
+
+  test('should reject oversized login payloads', async () => {
+    const response = await fetch(`${testsBaseUrl}/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        identity: 'a'.repeat(10_000),
+        password: 'password123'
+      })
+    });
+
+    expect(response.status).toBe(413);
+
+    const data = await response.json();
+
+    expect(data).toHaveProperty('error', 'Request body too large');
+  });
+
+  test('should reject oversized refresh payloads', async () => {
+    const response = await fetch(`${testsBaseUrl}/refresh`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        refreshToken: 'a'.repeat(10_000)
+      })
+    });
+
+    expect(response.status).toBe(413);
+
+    const data = await response.json();
+
+    expect(data).toHaveProperty('error', 'Request body too large');
+  });
+
+  test('should reject oversized logout payloads', async () => {
+    const response = await fetch(`${testsBaseUrl}/logout`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        refreshToken: 'a'.repeat(10_000)
+      })
+    });
+
+    expect(response.status).toBe(413);
+
+    const data = await response.json();
+
+    expect(data).toHaveProperty('error', 'Request body too large');
   });
 });

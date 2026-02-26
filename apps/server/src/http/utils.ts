@@ -9,4 +9,15 @@ class HttpValidationError extends Error {
   }
 }
 
-export { HttpValidationError };
+class HttpPayloadTooLargeError extends Error {
+  maxBytes: number;
+
+  constructor(maxBytes: number) {
+    super('Request body too large');
+    this.name = 'HttpPayloadTooLargeError';
+    this.maxBytes = maxBytes;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export { HttpPayloadTooLargeError, HttpValidationError };

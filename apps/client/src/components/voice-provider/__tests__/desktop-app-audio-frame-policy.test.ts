@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'bun:test';
 import type { TAppAudioFrame } from '@/runtime/types';
+import { describe, expect, it } from 'bun:test';
 import {
   computeRecoverableMissingFrameCount,
   validateDesktopAppAudioFrame
 } from '../desktop-app-audio-frame-policy';
 
-const createFrame = (overrides: Partial<TAppAudioFrame> = {}): TAppAudioFrame => {
+const createFrame = (
+  overrides: Partial<TAppAudioFrame> = {}
+): TAppAudioFrame => {
   return {
     sessionId: 'session-1',
     targetId: 'pid:1234',

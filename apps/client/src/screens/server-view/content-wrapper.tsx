@@ -38,8 +38,8 @@ const ContentWrapper = memo(() => {
         <Alert variant="destructive" className="max-w-md">
           <AlertTriangle />
           <AlertDescription>
-            Ripcord is not optimized for mobile devices yet. The experience
-            will not be ideal.
+            Ripcord is not optimized for mobile devices yet. The experience will
+            not be ideal.
           </AlertDescription>
         </Alert>
         <div className="flex flex-col gap-3 text-sm text-muted-foreground">

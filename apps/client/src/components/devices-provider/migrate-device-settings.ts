@@ -64,7 +64,7 @@ const migrateDeviceSettings = (
       incomingSettings.micQualityMode as MicQualityMode
     )
       ? (incomingSettings.micQualityMode as MicQualityMode)
-      : MicQualityMode.AUTO,   // MANUAL and unknown → Standard
+      : MicQualityMode.AUTO, // MANUAL and unknown → Standard
     screenAudioMode: screenAudioMode || ScreenAudioMode.SYSTEM,
     videoCodec: Object.values(VideoCodecPreference).includes(
       incomingSettings.videoCodec as VideoCodecPreference

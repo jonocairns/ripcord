@@ -1,13 +1,11 @@
-import type {
-  TAppAudioSession
-} from '@/runtime/types';
-import desktopAppAudioWorkletModuleUrl from './desktop-app-audio.worklet.js?url&no-inline';
+import type { TAppAudioSession } from '@/runtime/types';
 import {
   computeRecoverableMissingFrameCount,
   isPcmFrame,
   type TDesktopAppAudioFrame,
   validateDesktopAppAudioFrame
 } from './desktop-app-audio-frame-policy';
+import desktopAppAudioWorkletModuleUrl from './desktop-app-audio.worklet.js?url&no-inline';
 
 type TDesktopAppAudioPipeline = {
   sessionId: string;
@@ -69,7 +67,8 @@ const createDesktopAppAudioPipeline = async (
     mode === 'stable' ? STABLE_TARGET_CHUNKS : LOW_LATENCY_TARGET_CHUNKS;
   const trimStartChunks =
     mode === 'stable' ? STABLE_MAX_CHUNKS : LOW_LATENCY_TRIM_START_CHUNKS;
-  const maxChunks = mode === 'stable' ? STABLE_MAX_CHUNKS : LOW_LATENCY_MAX_CHUNKS;
+  const maxChunks =
+    mode === 'stable' ? STABLE_MAX_CHUNKS : LOW_LATENCY_MAX_CHUNKS;
   const trimQueueForLowLatency = mode === 'low-latency';
   let nextQueueOverflowLogAt = 0;
   let suppressedQueueOverflowEvents = 0;
@@ -159,7 +158,9 @@ const createDesktopAppAudioPipeline = async (
   const track = destinationNode.stream.getAudioTracks()[0];
 
   if (!track) {
-    throw new Error('Failed to create MediaStreamTrack from app audio pipeline');
+    throw new Error(
+      'Failed to create MediaStreamTrack from app audio pipeline'
+    );
   }
 
   return {
@@ -212,10 +213,13 @@ const createDesktopAppAudioPipeline = async (
             const now = Date.now();
             malformedFrameDropsSinceLastLog += 1;
             if (now >= nextMalformedFrameLogAt) {
-              console.warn(`[${logLabel}] Dropping app audio frame with invalid sequence`, {
-                sequence: frame.sequence,
-                malformedFrameDropsSinceLastLog
-              });
+              console.warn(
+                `[${logLabel}] Dropping app audio frame with invalid sequence`,
+                {
+                  sequence: frame.sequence,
+                  malformedFrameDropsSinceLastLog
+                }
+              );
               malformedFrameDropsSinceLastLog = 0;
               nextMalformedFrameLogAt = now + LOG_RATE_LIMIT_MS;
             }
@@ -225,11 +229,14 @@ const createDesktopAppAudioPipeline = async (
             const now = Date.now();
             sequenceAnomaliesSinceLastLog += 1;
             if (now >= nextSequenceAnomalyLogAt) {
-              console.warn(`[${logLabel}] Dropping out-of-order app audio frame`, {
-                sequence: frame.sequence,
-                lastSequence,
-                sequenceAnomaliesSinceLastLog
-              });
+              console.warn(
+                `[${logLabel}] Dropping out-of-order app audio frame`,
+                {
+                  sequence: frame.sequence,
+                  lastSequence,
+                  sequenceAnomaliesSinceLastLog
+                }
+              );
               sequenceAnomaliesSinceLastLog = 0;
               nextSequenceAnomalyLogAt = now + LOG_RATE_LIMIT_MS;
             }
@@ -239,11 +246,14 @@ const createDesktopAppAudioPipeline = async (
             const now = Date.now();
             malformedFrameDropsSinceLastLog += 1;
             if (now >= nextMalformedFrameLogAt) {
-              console.warn(`[${logLabel}] Dropping malformed app audio frame header`, {
-                channels: frame.channels,
-                frameCount: frame.frameCount,
-                malformedFrameDropsSinceLastLog
-              });
+              console.warn(
+                `[${logLabel}] Dropping malformed app audio frame header`,
+                {
+                  channels: frame.channels,
+                  frameCount: frame.frameCount,
+                  malformedFrameDropsSinceLastLog
+                }
+              );
               malformedFrameDropsSinceLastLog = 0;
               nextMalformedFrameLogAt = now + LOG_RATE_LIMIT_MS;
             }
@@ -253,11 +263,14 @@ const createDesktopAppAudioPipeline = async (
             const now = Date.now();
             malformedFrameDropsSinceLastLog += 1;
             if (now >= nextMalformedFrameLogAt) {
-              console.warn(`[${logLabel}] Dropping app audio frame with channel mismatch`, {
-                frameChannels: frame.channels,
-                outputChannels,
-                malformedFrameDropsSinceLastLog
-              });
+              console.warn(
+                `[${logLabel}] Dropping app audio frame with channel mismatch`,
+                {
+                  frameChannels: frame.channels,
+                  outputChannels,
+                  malformedFrameDropsSinceLastLog
+                }
+              );
               malformedFrameDropsSinceLastLog = 0;
               nextMalformedFrameLogAt = now + LOG_RATE_LIMIT_MS;
             }
@@ -318,13 +331,16 @@ const createDesktopAppAudioPipeline = async (
         const now = Date.now();
         malformedFrameDropsSinceLastLog += 1;
         if (now >= nextMalformedFrameLogAt) {
-          console.warn(`[${logLabel}] Dropping malformed app audio frame payload`, {
-            expectedSampleCount,
-            actualSampleCount: samples.length,
-            frameCount: frame.frameCount,
-            channels: frame.channels,
-            malformedFrameDropsSinceLastLog
-          });
+          console.warn(
+            `[${logLabel}] Dropping malformed app audio frame payload`,
+            {
+              expectedSampleCount,
+              actualSampleCount: samples.length,
+              frameCount: frame.frameCount,
+              channels: frame.channels,
+              malformedFrameDropsSinceLastLog
+            }
+          );
           malformedFrameDropsSinceLastLog = 0;
           nextMalformedFrameLogAt = now + LOG_RATE_LIMIT_MS;
         }

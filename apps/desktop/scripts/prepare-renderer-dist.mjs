@@ -41,7 +41,7 @@ for (const entry of assetEntries) {
   const filePath = path.resolve(assetsPath, entry.name);
   const contents = await fs.readFile(filePath, "utf8");
   const patchedContents = contents
-    .replace(/(["'])\/assets\//g, '$1./assets/')
+    .replace(/(["'])\/assets\//g, "$1./assets/")
     .replace(/url\(\s*\/assets\//g, "url(./assets/");
 
   if (patchedContents !== contents) {

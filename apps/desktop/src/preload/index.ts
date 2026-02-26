@@ -112,7 +112,10 @@ const ensureAppAudioFrameWatchdog = () => {
       return;
     }
 
-    if (!appAudioHasReceivedFrameSinceCaptureStart || appAudioLastFrameAt <= 0) {
+    if (
+      !appAudioHasReceivedFrameSinceCaptureStart ||
+      appAudioLastFrameAt <= 0
+    ) {
       return;
     }
 
@@ -154,7 +157,11 @@ const scheduleAppAudioFrameChannelReconnect = () => {
     return;
   }
 
-  if (appAudioFramePort || appAudioFramePortPromise || appAudioFrameReconnectTimer !== undefined) {
+  if (
+    appAudioFramePort ||
+    appAudioFramePortPromise ||
+    appAudioFrameReconnectTimer !== undefined
+  ) {
     return;
   }
 
@@ -318,7 +325,9 @@ const ensureAppAudioFrameChannel = (): Promise<boolean> => {
           frameCount,
           protocolVersion,
           droppedFrameCount:
-            typeof droppedFrameCount === "number" ? droppedFrameCount : undefined,
+            typeof droppedFrameCount === "number"
+              ? droppedFrameCount
+              : undefined,
           pcm: new Float32Array(
             pcmBuffer,
             byteOffset,
@@ -405,7 +414,9 @@ const ensureVoiceFilterFrameChannel = (): Promise<boolean> => {
         // ignore unsupported start() implementations
       }
 
-      console.warn(`${VOICE_FILTER_DEBUG_LOG_PREFIX} Voice-filter MessagePort ready`);
+      console.warn(
+        `${VOICE_FILTER_DEBUG_LOG_PREFIX} Voice-filter MessagePort ready`,
+      );
 
       voiceFilterFramePortPromise = undefined;
       resolve(true);
@@ -544,7 +555,9 @@ const ensureVoiceFilterEgressFrameChannel = (): Promise<boolean> => {
           frameCount,
           protocolVersion,
           droppedFrameCount:
-            typeof droppedFrameCount === "number" ? droppedFrameCount : undefined,
+            typeof droppedFrameCount === "number"
+              ? droppedFrameCount
+              : undefined,
           pcm: new Float32Array(
             pcmBuffer,
             byteOffset,
@@ -576,7 +589,9 @@ const ensureVoiceFilterEgressFrameChannel = (): Promise<boolean> => {
         // ignore
       }
 
-      console.warn(`${VOICE_FILTER_DEBUG_LOG_PREFIX} Voice-filter egress MessagePort ready`);
+      console.warn(
+        `${VOICE_FILTER_DEBUG_LOG_PREFIX} Voice-filter egress MessagePort ready`,
+      );
 
       voiceFilterEgressFramePortPromise = undefined;
       resolve(true);
@@ -599,7 +614,10 @@ const ensureVoiceFilterEgressFrameChannel = (): Promise<boolean> => {
       resolve(false);
     }, VOICE_FILTER_CHANNEL_INIT_TIMEOUT_MS);
 
-    ipcRenderer.once("desktop:voice-filter-frame-egress-channel-ready", onPortReady);
+    ipcRenderer.once(
+      "desktop:voice-filter-frame-egress-channel-ready",
+      onPortReady,
+    );
     ipcRenderer.send("desktop:open-voice-filter-frame-egress-channel");
   });
 
@@ -620,9 +638,13 @@ const desktopBridge = {
   installUpdateAndRestart: (): Promise<boolean> =>
     ipcRenderer.invoke("desktop:install-update-and-restart"),
   listShareSources: () => ipcRenderer.invoke("desktop:list-share-sources"),
-  listAppAudioTargets: (sourceId?: string): Promise<TDesktopAppAudioTargetsResult> =>
+  listAppAudioTargets: (
+    sourceId?: string,
+  ): Promise<TDesktopAppAudioTargetsResult> =>
     ipcRenderer.invoke("desktop:list-app-audio-targets", sourceId),
-  startAppAudioCapture: (input: TStartAppAudioCaptureInput): Promise<TAppAudioSession> =>
+  startAppAudioCapture: (
+    input: TStartAppAudioCaptureInput,
+  ): Promise<TAppAudioSession> =>
     ipcRenderer
       .invoke("desktop:start-app-audio-capture", input)
       .then((session: TAppAudioSession) => {
@@ -636,9 +658,11 @@ const desktopBridge = {
         return session;
       }),
   stopAppAudioCapture: (sessionId?: string): Promise<void> =>
-    ipcRenderer.invoke("desktop:stop-app-audio-capture", sessionId).finally(() => {
-      trackAppAudioCaptureStop(sessionId);
-    }),
+    ipcRenderer
+      .invoke("desktop:stop-app-audio-capture", sessionId)
+      .finally(() => {
+        trackAppAudioCaptureStop(sessionId);
+      }),
   listMicDevices: (): Promise<TMicDevicesResult> =>
     ipcRenderer.invoke("desktop:list-mic-devices"),
   startVoiceFilterSessionWithCapture: (
@@ -668,18 +692,16 @@ const desktopBridge = {
       const pcmCopy = new Float32Array(pcm.length);
       pcmCopy.set(pcm);
 
-      voiceFilterFramePort.postMessage(
-        {
-          frameKind: "mic",
-          sessionId: frame.sessionId,
-          sequence: frame.sequence,
-          sampleRate: frame.sampleRate,
-          channels: frame.channels,
-          frameCount: frame.frameCount,
-          protocolVersion: frame.protocolVersion,
-          pcmSamples: pcmCopy,
-        },
-      );
+      voiceFilterFramePort.postMessage({
+        frameKind: "mic",
+        sessionId: frame.sessionId,
+        sequence: frame.sequence,
+        sampleRate: frame.sampleRate,
+        channels: frame.channels,
+        frameCount: frame.frameCount,
+        protocolVersion: frame.protocolVersion,
+        pcmSamples: pcmCopy,
+      });
     } catch {
       console.warn(
         `${VOICE_FILTER_DEBUG_LOG_PREFIX} Failed to post PCM frame via MessagePort; frame dropped`,
@@ -699,18 +721,16 @@ const desktopBridge = {
       const pcmCopy = new Float32Array(pcm.length);
       pcmCopy.set(pcm);
 
-      voiceFilterFramePort.postMessage(
-        {
-          frameKind: "reference",
-          sessionId: frame.sessionId,
-          sequence: frame.sequence,
-          sampleRate: frame.sampleRate,
-          channels: frame.channels,
-          frameCount: frame.frameCount,
-          protocolVersion: frame.protocolVersion,
-          pcmSamples: pcmCopy,
-        },
-      );
+      voiceFilterFramePort.postMessage({
+        frameKind: "reference",
+        sessionId: frame.sessionId,
+        sequence: frame.sequence,
+        sampleRate: frame.sampleRate,
+        channels: frame.channels,
+        frameCount: frame.frameCount,
+        protocolVersion: frame.protocolVersion,
+        pcmSamples: pcmCopy,
+      });
     } catch {
       console.warn(
         `${VOICE_FILTER_DEBUG_LOG_PREFIX} Failed to post reference PCM frame via MessagePort; frame dropped`,
@@ -753,7 +773,9 @@ const desktopBridge = {
       ipcRenderer.removeListener("desktop:app-audio-status", listener);
     };
   },
-  subscribeVoiceFilterFrames: (callback: (frame: TVoiceFilterPcmFrame) => void) => {
+  subscribeVoiceFilterFrames: (
+    callback: (frame: TVoiceFilterPcmFrame) => void,
+  ) => {
     voiceFilterEgressFrameSubscribers.add(callback);
     void ensureVoiceFilterEgressFrameChannel();
 
@@ -766,7 +788,10 @@ const desktopBridge = {
   subscribeVoiceFilterStatus: (
     callback: (statusEvent: TVoiceFilterStatusEvent) => void,
   ) => {
-    const listener = (_event: unknown, statusEvent: TVoiceFilterStatusEvent) => {
+    const listener = (
+      _event: unknown,
+      statusEvent: TVoiceFilterStatusEvent,
+    ) => {
       callback(statusEvent);
     };
 

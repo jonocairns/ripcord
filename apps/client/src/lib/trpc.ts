@@ -1,14 +1,11 @@
 import { resetApp } from '@/features/app/actions';
 import { resetDialogs } from '@/features/dialogs/actions';
 import { resetServerScreens } from '@/features/server-screens/actions';
+import { resetServerState, setDisconnectInfo } from '@/features/server/actions';
 import { currentVoiceChannelIdSelector } from '@/features/server/channels/selectors';
 import { setPendingVoiceReconnectChannelId } from '@/features/server/reconnect-state';
-import { resetServerState, setDisconnectInfo } from '@/features/server/actions';
 import { store } from '@/features/store';
-import {
-  clearAuthToken,
-  getAuthToken
-} from '@/helpers/storage';
+import { clearAuthToken, getAuthToken } from '@/helpers/storage';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import type { AppRouter, TConnectionParams } from '@sharkord/shared';
 import { createTRPCProxyClient, createWSClient, wsLink } from '@trpc/client';

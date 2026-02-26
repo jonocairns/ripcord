@@ -293,7 +293,9 @@ const ScreenSharePickerDialog = memo(
                 {!loadingAppAudioTargets && requiresManualAppAudioTarget && (
                   <Select
                     value={selectedAppAudioTargetId}
-                    onValueChange={(value) => setSelectedAppAudioTargetId(value)}
+                    onValueChange={(value) =>
+                      setSelectedAppAudioTargetId(value)
+                    }
                   >
                     <SelectTrigger className="w-[340px]">
                       <SelectValue placeholder="Select app audio target" />
@@ -352,7 +354,10 @@ const ScreenSharePickerDialog = memo(
                               <span className="font-medium truncate">
                                 {source.name}
                               </span>
-                              <Badge variant="secondary" className="text-[10px]">
+                              <Badge
+                                variant="secondary"
+                                className="text-[10px]"
+                              >
                                 {source.kind}
                               </Badge>
                             </div>
@@ -395,7 +400,10 @@ const ScreenSharePickerDialog = memo(
                               <span className="font-medium truncate">
                                 {source.name}
                               </span>
-                              <Badge variant="secondary" className="text-[10px]">
+                              <Badge
+                                variant="secondary"
+                                className="text-[10px]"
+                              >
                                 {source.kind}
                               </Badge>
                             </div>
@@ -413,10 +421,7 @@ const ScreenSharePickerDialog = memo(
             <Button variant="outline" onClick={onCancelClick}>
               Cancel
             </Button>
-            <Button
-              onClick={onSubmit}
-              disabled={!canConfirmShare}
-            >
+            <Button onClick={onSubmit} disabled={!canConfirmShare}>
               Share
             </Button>
           </DialogFooter>

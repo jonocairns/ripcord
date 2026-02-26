@@ -57,7 +57,8 @@ const logVoiceFilterIngressDrop = (
     return;
   }
 
-  nextVoiceFilterIngressDropLogAt = now + VOICE_FILTER_INGRESS_DROP_LOG_RATE_LIMIT_MS;
+  nextVoiceFilterIngressDropLogAt =
+    now + VOICE_FILTER_INGRESS_DROP_LOG_RATE_LIMIT_MS;
   console.warn("[voice-filter-debug] Dropping voice-filter ingress frame", {
     reason,
     ...(details || {}),
@@ -130,7 +131,14 @@ if (process.platform === "win32") {
 
 const resolveAppIconPath = (): string | undefined => {
   const iconFile = process.platform === "win32" ? "icon.ico" : "icon.png";
-  const iconPath = path.join(__dirname, "..", "..", "assets", "icons", iconFile);
+  const iconPath = path.join(
+    __dirname,
+    "..",
+    "..",
+    "assets",
+    "icons",
+    iconFile,
+  );
 
   if (!fs.existsSync(iconPath)) {
     return undefined;
@@ -294,16 +302,16 @@ const registerIpcHandlers = () => {
     },
   );
 
+  ipcMain.handle("desktop:get-capabilities", () => {
+    return getEffectiveDesktopCapabilities();
+  });
+
   ipcMain.handle(
-    "desktop:get-capabilities",
-    () => {
-      return getEffectiveDesktopCapabilities();
+    "desktop:list-app-audio-targets",
+    (_event, sourceId?: string) => {
+      return captureSidecarManager.listAppAudioTargets(sourceId);
     },
   );
-
-  ipcMain.handle("desktop:list-app-audio-targets", (_event, sourceId?: string) => {
-    return captureSidecarManager.listAppAudioTargets(sourceId);
-  });
 
   ipcMain.handle(
     "desktop:start-app-audio-capture",
@@ -370,242 +378,265 @@ const registerIpcHandlers = () => {
     });
 
     port2.start();
-    event.sender.postMessage("desktop:app-audio-frame-channel-ready", null, [port1]);
+    event.sender.postMessage("desktop:app-audio-frame-channel-ready", null, [
+      port1,
+    ]);
   });
 
-  ipcMain.on("desktop:open-voice-filter-frame-egress-channel", (event: IpcMainEvent) => {
-    const { port1, port2 } = new MessageChannelMain();
-    disposeVoiceFilterFrameEgressPort();
+  ipcMain.on(
+    "desktop:open-voice-filter-frame-egress-channel",
+    (event: IpcMainEvent) => {
+      const { port1, port2 } = new MessageChannelMain();
+      disposeVoiceFilterFrameEgressPort();
 
-    voiceFilterFrameEgressPort = port2;
-    port2.on("close", () => {
-      if (voiceFilterFrameEgressPort === port2) {
-        voiceFilterFrameEgressPort = undefined;
-      }
-      port2.removeAllListeners();
-    });
+      voiceFilterFrameEgressPort = port2;
+      port2.on("close", () => {
+        if (voiceFilterFrameEgressPort === port2) {
+          voiceFilterFrameEgressPort = undefined;
+        }
+        port2.removeAllListeners();
+      });
 
-    port2.start();
-    event.sender.postMessage("desktop:voice-filter-frame-egress-channel-ready", null, [port1]);
-  });
+      port2.start();
+      event.sender.postMessage(
+        "desktop:voice-filter-frame-egress-channel-ready",
+        null,
+        [port1],
+      );
+    },
+  );
 
-  ipcMain.on("desktop:open-voice-filter-frame-channel", (event: IpcMainEvent) => {
-    const { port1, port2 } = new MessageChannelMain();
-    disposeVoiceFilterFrameIngressPort();
-    voiceFilterFrameIngressPort = port2;
+  ipcMain.on(
+    "desktop:open-voice-filter-frame-channel",
+    (event: IpcMainEvent) => {
+      const { port1, port2 } = new MessageChannelMain();
+      disposeVoiceFilterFrameIngressPort();
+      voiceFilterFrameIngressPort = port2;
 
-    port2.on("message", (portEvent) => {
-      const data = portEvent.data as
-        | {
-            frameKind?: unknown;
-            sessionId?: unknown;
-            sequence?: unknown;
-            sampleRate?: unknown;
-            channels?: unknown;
-            frameCount?: unknown;
-            protocolVersion?: unknown;
-            pcmSamples?: unknown;
-            pcmBuffer?: unknown;
-            pcmByteOffset?: unknown;
-            pcmByteLength?: unknown;
-          }
-        | undefined;
-
-      if (!data || typeof data !== "object") {
-        return;
-      }
-
-      const {
-        frameKind,
-        sessionId,
-        sequence,
-        sampleRate,
-        channels,
-        frameCount,
-        protocolVersion,
-        pcmSamples,
-        pcmBuffer,
-        pcmByteOffset,
-        pcmByteLength,
-      } = data;
-
-      let pcm: Float32Array | undefined;
-      let pcmSampleCount: number | undefined;
-
-      const pcmBufferSource =
-        pcmBuffer instanceof ArrayBuffer
-          ? {
-              buffer: pcmBuffer as ArrayBufferLike,
-              baseByteOffset: 0,
-              byteLength: pcmBuffer.byteLength,
+      port2.on("message", (portEvent) => {
+        const data = portEvent.data as
+          | {
+              frameKind?: unknown;
+              sessionId?: unknown;
+              sequence?: unknown;
+              sampleRate?: unknown;
+              channels?: unknown;
+              frameCount?: unknown;
+              protocolVersion?: unknown;
+              pcmSamples?: unknown;
+              pcmBuffer?: unknown;
+              pcmByteOffset?: unknown;
+              pcmByteLength?: unknown;
             }
-          : ArrayBuffer.isView(pcmBuffer)
+          | undefined;
+
+        if (!data || typeof data !== "object") {
+          return;
+        }
+
+        const {
+          frameKind,
+          sessionId,
+          sequence,
+          sampleRate,
+          channels,
+          frameCount,
+          protocolVersion,
+          pcmSamples,
+          pcmBuffer,
+          pcmByteOffset,
+          pcmByteLength,
+        } = data;
+
+        let pcm: Float32Array | undefined;
+        let pcmSampleCount: number | undefined;
+
+        const pcmBufferSource =
+          pcmBuffer instanceof ArrayBuffer
             ? {
-                buffer: pcmBuffer.buffer,
-                baseByteOffset: pcmBuffer.byteOffset,
+                buffer: pcmBuffer as ArrayBufferLike,
+                baseByteOffset: 0,
                 byteLength: pcmBuffer.byteLength,
               }
-            : undefined;
+            : ArrayBuffer.isView(pcmBuffer)
+              ? {
+                  buffer: pcmBuffer.buffer,
+                  baseByteOffset: pcmBuffer.byteOffset,
+                  byteLength: pcmBuffer.byteLength,
+                }
+              : undefined;
 
-      const hasPcmSamplesPayload =
-        pcmSamples instanceof Float32Array ||
-        ArrayBuffer.isView(pcmSamples) ||
-        Array.isArray(pcmSamples);
-
-      if (
-        typeof sessionId !== "string" ||
-        typeof sequence !== "number" ||
-        typeof sampleRate !== "number" ||
-        typeof channels !== "number" ||
-        typeof frameCount !== "number" ||
-        !hasPcmSamplesPayload &&
-          !pcmBufferSource
-      ) {
-        logVoiceFilterIngressDrop("invalid_header_or_buffer_type", {
-          sessionIdType: typeof sessionId,
-          sequenceType: typeof sequence,
-          sampleRateType: typeof sampleRate,
-          channelsType: typeof channels,
-          frameCountType: typeof frameCount,
-          pcmSamplesType:
-            pcmSamples === null
-              ? "null"
-              : Array.isArray(pcmSamples)
-                ? "array"
-                : typeof pcmSamples,
-          pcmSamplesCtor:
-            pcmSamples &&
-            typeof pcmSamples === "object" &&
-            "constructor" in pcmSamples
-              ? (
-                  pcmSamples as {
-                    constructor?: { name?: unknown };
-                  }
-                ).constructor?.name
-              : undefined,
-          pcmBufferType:
-            pcmBuffer === null
-              ? "null"
-              : Array.isArray(pcmBuffer)
-                ? "array"
-                : typeof pcmBuffer,
-          pcmBufferCtor:
-            pcmBuffer && typeof pcmBuffer === "object" && "constructor" in pcmBuffer
-              ? (
-                  pcmBuffer as {
-                    constructor?: { name?: unknown };
-                  }
-                ).constructor?.name
-              : undefined,
-        });
-        return;
-      }
-
-      const expectedSampleCount = frameCount * channels;
-
-      if (pcmSamples instanceof Float32Array) {
-        pcm = new Float32Array(pcmSamples);
-        pcmSampleCount = pcm.length;
-      } else if (ArrayBuffer.isView(pcmSamples)) {
-        const sampleView = new Float32Array(
-          pcmSamples.buffer,
-          pcmSamples.byteOffset,
-          Math.floor(pcmSamples.byteLength / Float32Array.BYTES_PER_ELEMENT),
-        );
-        pcm = new Float32Array(sampleView);
-        pcmSampleCount = pcm.length;
-      } else if (Array.isArray(pcmSamples)) {
-        pcm = Float32Array.from(pcmSamples);
-        pcmSampleCount = pcm.length;
-      }
-
-      if (!pcm) {
-        if (!pcmBufferSource) {
-          logVoiceFilterIngressDrop("missing_pcm_payload", {
-            sessionId,
-            sequence,
-          });
-          return;
-        }
-
-        const relativeByteOffset =
-          typeof pcmByteOffset === "number" && Number.isInteger(pcmByteOffset)
-            ? pcmByteOffset
-            : 0;
-        const byteLength =
-          typeof pcmByteLength === "number" && Number.isInteger(pcmByteLength)
-            ? pcmByteLength
-            : pcmBufferSource.byteLength;
+        const hasPcmSamplesPayload =
+          pcmSamples instanceof Float32Array ||
+          ArrayBuffer.isView(pcmSamples) ||
+          Array.isArray(pcmSamples);
 
         if (
-          relativeByteOffset < 0 ||
-          byteLength <= 0 ||
-          relativeByteOffset + byteLength > pcmBufferSource.byteLength ||
-          byteLength % Float32Array.BYTES_PER_ELEMENT !== 0
+          typeof sessionId !== "string" ||
+          typeof sequence !== "number" ||
+          typeof sampleRate !== "number" ||
+          typeof channels !== "number" ||
+          typeof frameCount !== "number" ||
+          (!hasPcmSamplesPayload && !pcmBufferSource)
         ) {
-          logVoiceFilterIngressDrop("invalid_pcm_bounds", {
-            relativeByteOffset,
-            byteLength,
-            pcmBufferByteLength: pcmBufferSource.byteLength,
+          logVoiceFilterIngressDrop("invalid_header_or_buffer_type", {
+            sessionIdType: typeof sessionId,
+            sequenceType: typeof sequence,
+            sampleRateType: typeof sampleRate,
+            channelsType: typeof channels,
+            frameCountType: typeof frameCount,
+            pcmSamplesType:
+              pcmSamples === null
+                ? "null"
+                : Array.isArray(pcmSamples)
+                  ? "array"
+                  : typeof pcmSamples,
+            pcmSamplesCtor:
+              pcmSamples &&
+              typeof pcmSamples === "object" &&
+              "constructor" in pcmSamples
+                ? (
+                    pcmSamples as {
+                      constructor?: { name?: unknown };
+                    }
+                  ).constructor?.name
+                : undefined,
+            pcmBufferType:
+              pcmBuffer === null
+                ? "null"
+                : Array.isArray(pcmBuffer)
+                  ? "array"
+                  : typeof pcmBuffer,
+            pcmBufferCtor:
+              pcmBuffer &&
+              typeof pcmBuffer === "object" &&
+              "constructor" in pcmBuffer
+                ? (
+                    pcmBuffer as {
+                      constructor?: { name?: unknown };
+                    }
+                  ).constructor?.name
+                : undefined,
           });
           return;
         }
 
-        const absoluteByteOffset = pcmBufferSource.baseByteOffset + relativeByteOffset;
-        try {
-          const pcmBytes = new Uint8Array(
-            pcmBufferSource.buffer,
-            absoluteByteOffset,
-            byteLength,
+        const expectedSampleCount = frameCount * channels;
+
+        if (pcmSamples instanceof Float32Array) {
+          pcm = new Float32Array(pcmSamples);
+          pcmSampleCount = pcm.length;
+        } else if (ArrayBuffer.isView(pcmSamples)) {
+          const sampleView = new Float32Array(
+            pcmSamples.buffer,
+            pcmSamples.byteOffset,
+            Math.floor(pcmSamples.byteLength / Float32Array.BYTES_PER_ELEMENT),
           );
-          const alignedPcmBytes = new Uint8Array(byteLength);
-          alignedPcmBytes.set(pcmBytes);
-          pcm = new Float32Array(alignedPcmBytes.buffer);
-        } catch (error) {
-          logVoiceFilterIngressDrop("failed_to_construct_pcm_view", {
-            absoluteByteOffset,
-            byteLength,
-            error: error instanceof Error ? error.message : String(error),
+          pcm = new Float32Array(sampleView);
+          pcmSampleCount = pcm.length;
+        } else if (Array.isArray(pcmSamples)) {
+          pcm = Float32Array.from(pcmSamples);
+          pcmSampleCount = pcm.length;
+        }
+
+        if (!pcm) {
+          if (!pcmBufferSource) {
+            logVoiceFilterIngressDrop("missing_pcm_payload", {
+              sessionId,
+              sequence,
+            });
+            return;
+          }
+
+          const relativeByteOffset =
+            typeof pcmByteOffset === "number" && Number.isInteger(pcmByteOffset)
+              ? pcmByteOffset
+              : 0;
+          const byteLength =
+            typeof pcmByteLength === "number" && Number.isInteger(pcmByteLength)
+              ? pcmByteLength
+              : pcmBufferSource.byteLength;
+
+          if (
+            relativeByteOffset < 0 ||
+            byteLength <= 0 ||
+            relativeByteOffset + byteLength > pcmBufferSource.byteLength ||
+            byteLength % Float32Array.BYTES_PER_ELEMENT !== 0
+          ) {
+            logVoiceFilterIngressDrop("invalid_pcm_bounds", {
+              relativeByteOffset,
+              byteLength,
+              pcmBufferByteLength: pcmBufferSource.byteLength,
+            });
+            return;
+          }
+
+          const absoluteByteOffset =
+            pcmBufferSource.baseByteOffset + relativeByteOffset;
+          try {
+            const pcmBytes = new Uint8Array(
+              pcmBufferSource.buffer,
+              absoluteByteOffset,
+              byteLength,
+            );
+            const alignedPcmBytes = new Uint8Array(byteLength);
+            alignedPcmBytes.set(pcmBytes);
+            pcm = new Float32Array(alignedPcmBytes.buffer);
+          } catch (error) {
+            logVoiceFilterIngressDrop("failed_to_construct_pcm_view", {
+              absoluteByteOffset,
+              byteLength,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return;
+          }
+        }
+
+        if (
+          pcmSampleCount !== undefined &&
+          pcmSampleCount !== expectedSampleCount
+        ) {
+          logVoiceFilterIngressDrop("invalid_pcm_samples_length", {
+            expectedSampleCount,
+            actualSampleCount: pcmSampleCount,
           });
           return;
         }
-      }
 
-      if (pcmSampleCount !== undefined && pcmSampleCount !== expectedSampleCount) {
-        logVoiceFilterIngressDrop("invalid_pcm_samples_length", {
-          expectedSampleCount,
-          actualSampleCount: pcmSampleCount,
-        });
-        return;
-      }
+        const frame: TVoiceFilterPcmFrame = {
+          sessionId,
+          sequence,
+          sampleRate,
+          channels,
+          frameCount,
+          protocolVersion:
+            typeof protocolVersion === "number" ? protocolVersion : 1,
+          pcm,
+        };
+        const resolvedFrameKind =
+          frameKind === "reference" ? "reference" : "mic";
+        if (resolvedFrameKind === "reference") {
+          captureSidecarManager.pushVoiceFilterReferencePcmFrame(frame);
+        } else {
+          captureSidecarManager.pushVoiceFilterPcmFrame(frame);
+        }
+      });
 
-      const frame: TVoiceFilterPcmFrame = {
-        sessionId,
-        sequence,
-        sampleRate,
-        channels,
-        frameCount,
-        protocolVersion: typeof protocolVersion === "number" ? protocolVersion : 1,
-        pcm,
-      };
-      const resolvedFrameKind = frameKind === "reference" ? "reference" : "mic";
-      if (resolvedFrameKind === "reference") {
-        captureSidecarManager.pushVoiceFilterReferencePcmFrame(frame);
-      } else {
-        captureSidecarManager.pushVoiceFilterPcmFrame(frame);
-      }
-    });
+      port2.on("close", () => {
+        if (voiceFilterFrameIngressPort === port2) {
+          voiceFilterFrameIngressPort = undefined;
+        }
+        port2.removeAllListeners();
+      });
 
-    port2.on("close", () => {
-      if (voiceFilterFrameIngressPort === port2) {
-        voiceFilterFrameIngressPort = undefined;
-      }
-      port2.removeAllListeners();
-    });
-
-    port2.start();
-    event.sender.postMessage("desktop:voice-filter-frame-channel-ready", null, [port1]);
-  });
+      port2.start();
+      event.sender.postMessage(
+        "desktop:voice-filter-frame-channel-ready",
+        null,
+        [port1],
+      );
+    },
+  );
 
   ipcMain.handle("desktop:ping-sidecar", () => {
     return captureSidecarManager.getStatus();
@@ -632,10 +663,7 @@ const registerIpcHandlers = () => {
     "desktop:prepare-screen-share",
     async (_event: IpcMainInvokeEvent, selection: TScreenShareSelection) => {
       const capabilities = await getEffectiveDesktopCapabilities();
-      let resolved = resolveScreenAudioMode(
-        selection.audioMode,
-        capabilities,
-      );
+      let resolved = resolveScreenAudioMode(selection.audioMode, capabilities);
 
       if (
         resolved.effectiveMode === "app" &&
@@ -684,21 +712,19 @@ void app
 
       const { pcm } = frame;
       try {
-        egressPort.postMessage(
-          {
-            sessionId: frame.sessionId,
-            targetId: frame.targetId,
-            sequence: frame.sequence,
-            sampleRate: frame.sampleRate,
-            channels: frame.channels,
-            frameCount: frame.frameCount,
-            protocolVersion: frame.protocolVersion,
-            droppedFrameCount: frame.droppedFrameCount,
-            pcmBuffer: pcm.buffer,
-            pcmByteOffset: pcm.byteOffset,
-            pcmByteLength: pcm.byteLength,
-          }
-        );
+        egressPort.postMessage({
+          sessionId: frame.sessionId,
+          targetId: frame.targetId,
+          sequence: frame.sequence,
+          sampleRate: frame.sampleRate,
+          channels: frame.channels,
+          frameCount: frame.frameCount,
+          protocolVersion: frame.protocolVersion,
+          droppedFrameCount: frame.droppedFrameCount,
+          pcmBuffer: pcm.buffer,
+          pcmByteOffset: pcm.byteOffset,
+          pcmByteLength: pcm.byteLength,
+        });
       } catch {
         disposeAppAudioFrameEgressPort(egressPort);
       }
@@ -707,7 +733,11 @@ void app
       mainWindow?.webContents.send("desktop:app-audio-status", event);
     });
     captureSidecarManager.onVoiceFilterPcmFrame(
-      (frame: TVoiceFilterPcmFrame, diag: TVoiceFilterFrameDiag, droppedFrameCount?: number) => {
+      (
+        frame: TVoiceFilterPcmFrame,
+        diag: TVoiceFilterFrameDiag,
+        droppedFrameCount?: number,
+      ) => {
         const egressPort = voiceFilterFrameEgressPort;
         if (!egressPort) {
           return;

@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
 import { Permission } from '@sharkord/shared';
+import { describe, expect, test } from 'bun:test';
 import { initTest } from '../../__tests__/helpers';
 
 describe('messages router', () => {

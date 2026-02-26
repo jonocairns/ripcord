@@ -1,17 +1,17 @@
 import { getTRPCClient } from '@/lib/trpc';
 import { Permission, type TPublicServerSettings } from '@sharkord/shared';
+import { store } from '../store';
 import { setPublicServerSettings } from './actions';
 import { subscribeToCategories } from './categories/subscriptions';
 import { subscribeToChannels } from './channels/subscriptions';
 import { subscribeToEmojis } from './emojis/subscriptions';
 import { subscribeToMessages } from './messages/subscriptions';
 import { subscribeToPlugins } from './plugins/subscriptions';
+import { rolesSelector } from './roles/selectors';
 import { subscribeToRoles } from './roles/subscriptions';
+import { ownUserSelector } from './users/selectors';
 import { subscribeToUsers } from './users/subscriptions';
 import { subscribeToVoice } from './voice/subscriptions';
-import { rolesSelector } from './roles/selectors';
-import { store } from '../store';
-import { ownUserSelector } from './users/selectors';
 
 const subscribeToServer = () => {
   const trpc = getTRPCClient();

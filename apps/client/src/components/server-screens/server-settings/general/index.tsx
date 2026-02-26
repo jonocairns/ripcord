@@ -16,8 +16,16 @@ import { memo } from 'react';
 import { LogoManager } from './logo-manager';
 
 const General = memo(() => {
-  const { settings, logo, loading, onChange, submit, errors, refetch } =
-    useAdminGeneral();
+  const {
+    settings,
+    logo,
+    loading,
+    onChange,
+    submit,
+    errors,
+    refetch,
+    hasPassword
+  } = useAdminGeneral();
 
   if (loading) {
     return <LoadingCard className="h-[600px]" />;
@@ -54,7 +62,11 @@ const General = memo(() => {
           <Input
             value={settings.password}
             onChange={(e) => onChange('password', e.target.value)}
-            placeholder="Leave empty for no password"
+            placeholder={
+              hasPassword
+                ? 'A password is set. Enter a new password to replace it.'
+                : 'Leave empty for no password'
+            }
             error={errors.password}
           />
         </Group>

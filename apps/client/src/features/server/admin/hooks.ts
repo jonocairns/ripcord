@@ -42,6 +42,8 @@ export const useAdminGeneral = () => {
     allowNewUsers: false,
     enablePlugins: false
   });
+  const [hasPassword, setHasPassword] = useState(false);
+  const [passwordTouched, setPasswordTouched] = useState(false);
   const [logo, setLogo] = useState<TFile | null>(null);
 
   const fetchSettings = useCallback(async () => {
@@ -53,34 +55,49 @@ export const useAdminGeneral = () => {
     setSettings({
       name: settings.name,
       description: settings.description ?? '',
-      password: settings.password ?? '',
+      password: '',
       allowNewUsers: settings.allowNewUsers ?? false,
       enablePlugins: settings.enablePlugins ?? false
     });
+    setHasPassword(settings.hasPassword ?? false);
+    setPasswordTouched(false);
     setLoading(false);
     setLogo(settings.logo);
   }, []);
 
   const submit = useCallback(async () => {
     const trpc = getTRPCClient();
+    const nextPassword = passwordTouched
+      ? settings.password
+        ? settings.password
+        : null
+      : undefined;
 
     try {
       await trpc.others.updateSettings.mutate({
         name: settings.name,
         description: settings.description,
-        password: settings.password || undefined,
+        password: nextPassword,
         allowNewUsers: settings.allowNewUsers,
         enablePlugins: settings.enablePlugins
       });
+      if (passwordTouched) {
+        setHasPassword(!!settings.password);
+        setPasswordTouched(false);
+      }
       toast.success('Settings updated');
     } catch (error) {
       console.error('Error updating settings:', error);
       setErrors(parseTrpcErrors(error));
     }
-  }, [settings]);
+  }, [passwordTouched, settings]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const onChange = useCallback((field: keyof typeof settings, value: any) => {
+    if (field === 'password') {
+      setPasswordTouched(true);
+    }
+
     setSettings((s) => ({ ...s, [field]: value }));
     setErrors((e) => ({ ...e, [field]: undefined }));
   }, []);
@@ -96,7 +113,8 @@ export const useAdminGeneral = () => {
     submit,
     errors,
     onChange,
-    logo
+    logo,
+    hasPassword
   };
 };
 

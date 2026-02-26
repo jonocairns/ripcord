@@ -1,69 +1,69 @@
-import fs from 'fs/promises';
-import path from 'path';
-import { spawnSync } from 'node:child_process';
+import fs from "fs/promises";
+import path from "path";
+import { spawnSync } from "node:child_process";
 
 const cwd = process.cwd();
-const sidecarDir = path.resolve(cwd, 'sidecar');
-const manifestPath = path.resolve(sidecarDir, 'Cargo.toml');
+const sidecarDir = path.resolve(cwd, "sidecar");
+const manifestPath = path.resolve(sidecarDir, "Cargo.toml");
 const args = process.argv.slice(2);
 
-const isRelease = args.includes('--release');
-const optional = args.includes('--optional');
-const profile = isRelease ? 'release' : 'debug';
+const isRelease = args.includes("--release");
+const optional = args.includes("--optional");
+const profile = isRelease ? "release" : "debug";
 const binaryName =
-  process.platform === 'win32'
-    ? 'sharkord-capture-sidecar.exe'
-    : 'sharkord-capture-sidecar';
+  process.platform === "win32"
+    ? "sharkord-capture-sidecar.exe"
+    : "sharkord-capture-sidecar";
 const binarySourcePath = path.resolve(
   sidecarDir,
-  'target',
+  "target",
   profile,
-  binaryName
+  binaryName,
 );
 const binaryTargetPath = path.resolve(
   sidecarDir,
-  'bin',
+  "bin",
   process.platform,
-  binaryName
+  binaryName,
 );
 
 const runCargoBuild = () => {
-  const cargoCheck = spawnSync('cargo', ['--version'], {
+  const cargoCheck = spawnSync("cargo", ["--version"], {
     cwd: sidecarDir,
-    stdio: 'pipe'
+    stdio: "pipe",
   });
 
   if (cargoCheck.error || cargoCheck.status !== 0) {
     if (optional) {
       console.warn(
-        '[desktop] Rust sidecar build skipped: cargo is not installed.'
+        "[desktop] Rust sidecar build skipped: cargo is not installed.",
       );
       return false;
     }
 
     throw new Error(
-      'cargo is required to build the capture sidecar. Install Rust toolchain first.'
+      "cargo is required to build the capture sidecar. Install Rust toolchain first.",
     );
   }
 
-  const buildArgs = ['build', '--manifest-path', manifestPath];
+  const buildArgs = ["build", "--manifest-path", manifestPath];
 
   if (isRelease) {
-    buildArgs.push('--release');
+    buildArgs.push("--release");
   }
 
-  const result = spawnSync('cargo', buildArgs, {
+  const result = spawnSync("cargo", buildArgs, {
     cwd: sidecarDir,
-    stdio: 'inherit'
+    stdio: "inherit",
   });
 
   if (result.status !== 0) {
     if (optional) {
-      console.warn('[desktop] Rust sidecar build failed in optional mode.');
+      console.warn("[desktop] Rust sidecar build failed in optional mode.");
       return false;
     }
 
-    throw new Error('Rust sidecar build failed.');
+    throw new Error("Rust sidecar build failed.");
   }
 
   return true;
@@ -74,7 +74,7 @@ const copySidecarBinary = async () => {
   await fs.mkdir(path.dirname(binaryTargetPath), { recursive: true });
   await fs.copyFile(binarySourcePath, binaryTargetPath);
 
-  if (process.platform !== 'win32') {
+  if (process.platform !== "win32") {
     await fs.chmod(binaryTargetPath, 0o755);
   }
 };

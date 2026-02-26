@@ -108,11 +108,7 @@ export type TAppAudioStatusEvent = {
   protocolVersion?: number;
 };
 
-export type TVoiceFilterStrength =
-  | "low"
-  | "balanced"
-  | "high"
-  | "aggressive";
+export type TVoiceFilterStrength = "low" | "balanced" | "high" | "aggressive";
 
 export type TVoiceFilterSession = {
   sessionId: string;

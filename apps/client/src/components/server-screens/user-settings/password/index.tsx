@@ -43,7 +43,8 @@ const Password = memo(() => {
   );
   const isPasswordLongEnough = values.newPassword.length >= MIN_PASSWORD_LENGTH;
   const passwordsMatch = values.newPassword === values.confirmNewPassword;
-  const canSubmit = hasAllFields && isDirty && isPasswordLongEnough && passwordsMatch;
+  const canSubmit =
+    hasAllFields && isDirty && isPasswordLongEnough && passwordsMatch;
 
   const updatePassword = useCallback(async () => {
     if (!canSubmit) {
@@ -158,7 +159,9 @@ const Password = memo(() => {
               </button>
             </div>
             {values.confirmNewPassword.length > 0 && !passwordsMatch && (
-              <p className="text-xs text-destructive">Passwords do not match.</p>
+              <p className="text-xs text-destructive">
+                Passwords do not match.
+              </p>
             )}
           </div>
         </Group>

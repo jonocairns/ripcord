@@ -58,7 +58,9 @@ describe('push-keybind', () => {
   });
 
   it('formats keybind labels for UI', () => {
-    expect(formatPushKeybindLabel('Control+Shift+KeyV')).toBe('Ctrl + Shift + V');
+    expect(formatPushKeybindLabel('Control+Shift+KeyV')).toBe(
+      'Ctrl + Shift + V'
+    );
     expect(formatPushKeybindLabel(undefined)).toBe('Not set');
   });
 });

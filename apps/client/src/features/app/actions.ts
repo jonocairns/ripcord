@@ -51,7 +51,10 @@ export const loadApp = async () => {
       try {
         await connect();
       } catch (error) {
-        console.error('Failed to auto-connect with persisted auth token', error);
+        console.error(
+          'Failed to auto-connect with persisted auth token',
+          error
+        );
       }
     }
   } finally {
