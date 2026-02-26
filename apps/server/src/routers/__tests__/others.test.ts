@@ -81,7 +81,8 @@ describe('others router', () => {
       })
     ).rejects.toThrow('Invalid password');
 
-    const { handshakeHash: nextHandshakeHash } = await caller.others.handshake();
+    const { handshakeHash: nextHandshakeHash } =
+      await caller.others.handshake();
 
     await caller.others.joinServer({
       handshakeHash: nextHandshakeHash,

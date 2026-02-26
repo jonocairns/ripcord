@@ -92,9 +92,9 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 
   if (voiceUsers.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-muted-foreground text-lg mb-2">
+      <div className="voice-stage relative flex-1 flex items-center justify-center p-6">
+        <div className="rounded-2xl border border-border/70 bg-card/40 px-8 py-6 text-center shadow-2xl backdrop-blur-md">
+          <p className="text-foreground text-lg font-semibold mb-2">
             No one in the voice channel
           </p>
           <p className="text-muted-foreground text-sm">
@@ -106,7 +106,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
   }
 
   return (
-    <div className="flex-1 relative bg-background overflow-hidden">
+    <div className="voice-stage relative flex-1 overflow-hidden">
       <VoiceGrid pinnedCardId={pinnedCard?.id} className="h-full">
         {cards}
       </VoiceGrid>

@@ -64,7 +64,7 @@ const MessagesGroup = memo(({ group }: TMessagesGroupProps) => {
             <RelativeTime date={date}>
               {(relativeTime) => (
                 <span
-                  className="text-primary/60 text-xs"
+                  className="text-xs text-muted-foreground"
                   title={format(date, 'PPpp')}
                 >
                   {relativeTime}

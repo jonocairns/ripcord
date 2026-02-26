@@ -19,7 +19,11 @@ import { getRoles } from '../../db/queries/roles';
 import { getSettings } from '../../db/queries/server';
 import { getPublicUsers } from '../../db/queries/users';
 import { categories, users } from '../../db/schema';
-import { hashPassword, isArgon2Hash, verifyPassword } from '../../helpers/password';
+import {
+  hashPassword,
+  isArgon2Hash,
+  verifyPassword
+} from '../../helpers/password';
 import { logger } from '../../logger';
 import { pluginManager } from '../../plugins';
 import { eventBus } from '../../plugins/event-bus';

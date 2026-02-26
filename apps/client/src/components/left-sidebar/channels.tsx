@@ -140,9 +140,9 @@ const ItemWrapper = memo(
         {...dragHandleProps}
         style={style}
         className={cn(
-          'flex w-full items-center gap-2 rounded px-2 py-1.5 text-base text-muted-foreground hover:bg-accent hover:text-accent-foreground select-none cursor-pointer',
+          'relative flex w-full cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1.5 text-sm font-medium text-muted-foreground/95 transition-colors hover:bg-accent/60 hover:text-foreground',
           {
-            'bg-accent text-accent-foreground': isSelected,
+            'bg-accent/85 pl-3 text-foreground': isSelected,
             'cursor-default opacity-50 hover:bg-transparent hover:text-muted-foreground':
               disabled
           },
@@ -150,6 +150,12 @@ const ItemWrapper = memo(
         )}
         onClick={disabled ? undefined : onClick}
       >
+        {isSelected && (
+          <span
+            className="absolute top-1.5 bottom-1.5 left-0.5 w-1 rounded-full bg-primary/90"
+            aria-hidden
+          />
+        )}
         {children}
       </div>
     );

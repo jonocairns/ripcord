@@ -12,7 +12,26 @@ import {
 import { toast } from 'sonner';
 import { Button } from '../ui/button';
 
-const MANUAL_UPDATE_URL = 'https://github.com/jonocairns/ripcord/releases';
+const MANUAL_UPDATE_BASE_URL = 'https://github.com/jonocairns/ripcord/releases';
+
+const resolveManualUpdateUrl = (availableVersion?: string): string => {
+  const normalizedVersion = availableVersion?.trim();
+  if (!normalizedVersion) {
+    return MANUAL_UPDATE_BASE_URL;
+  }
+
+  const versionWithoutTagPrefix = normalizedVersion.replace(/^v/i, '');
+  if (!versionWithoutTagPrefix) {
+    return MANUAL_UPDATE_BASE_URL;
+  }
+
+  const releaseTag = normalizedVersion.startsWith('v')
+    ? normalizedVersion
+    : `v${normalizedVersion}`;
+  const installerFileName = `Ripcord.Desktop.Setup.${versionWithoutTagPrefix}.exe`;
+
+  return `${MANUAL_UPDATE_BASE_URL}/download/${encodeURIComponent(releaseTag)}/${encodeURIComponent(installerFileName)}`;
+};
 
 type TCalloutContent = {
   title: string;
@@ -165,9 +184,14 @@ const DesktopUpdateCallout = memo(() => {
     return resolveCalloutContent(status);
   }, [status]);
 
+  const manualInstallUrl = useMemo(
+    () => resolveManualUpdateUrl(status?.availableVersion),
+    [status?.availableVersion]
+  );
+
   const handleOpenManualInstall = useCallback(() => {
-    window.open(MANUAL_UPDATE_URL, '_blank', 'noopener,noreferrer');
-  }, []);
+    window.open(manualInstallUrl, '_blank', 'noopener,noreferrer');
+  }, [manualInstallUrl]);
 
   if (!status || !calloutContent) {
     return null;
@@ -208,7 +232,7 @@ const DesktopUpdateCallout = memo(() => {
             className="mt-2 w-full"
             onClick={handleOpenManualInstall}
           >
-            Open Releases
+            {status.availableVersion ? 'Download Installer' : 'Open Releases'}
           </Button>
         )}
       </div>

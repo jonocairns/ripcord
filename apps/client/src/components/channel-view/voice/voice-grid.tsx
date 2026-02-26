@@ -67,13 +67,16 @@ const VoiceGrid = memo(
     if (pinnedCardId && pinnedCard) {
       return (
         <div className={cn('flex flex-col h-full', className)}>
-          <div className="flex-1 p-2 min-h-0">{pinnedCard}</div>
+          <div className="flex-1 min-h-0 p-3 md:p-4">{pinnedCard}</div>
 
           {regularCards.length > 0 && (
-            <div className="flex-shrink-0 border-t border-border bg-card/50">
-              <div className="flex justify-center gap-2 p-2 overflow-x-auto">
+            <div className="flex-shrink-0 border-t border-border/70 bg-card/45 backdrop-blur-sm">
+              <div className="flex justify-center gap-2.5 p-3 overflow-x-auto">
                 {regularCards.map((card, index) => (
-                  <div key={index} className="flex-shrink-0 w-40 h-24">
+                  <div
+                    key={index}
+                    className="h-24 w-40 flex-shrink-0 overflow-hidden rounded-lg border border-border/70"
+                  >
                     {card}
                   </div>
                 ))}
@@ -107,10 +110,25 @@ const VoiceGrid = memo(
 
     const rows = getRowCount(regularCards.length, gridCols);
 
+    if (regularCards.length === 1) {
+      return (
+        <div
+          className={cn(
+            'flex h-full items-center justify-center p-4',
+            className
+          )}
+        >
+          <div className="h-full w-full max-h-[82vh] max-w-5xl overflow-hidden rounded-2xl border border-border/70 shadow-2xl">
+            {regularCards[0]}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div
         className={cn(
-          'grid h-full p-2 gap-2',
+          'grid h-full gap-3 p-3 md:gap-4 md:p-4',
           getGridClass(gridCols),
           getGridRowsClass(rows),
           className

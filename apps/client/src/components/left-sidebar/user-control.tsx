@@ -7,6 +7,7 @@ import { useVoice } from '@/features/server/voice/hooks';
 import { cn } from '@/lib/utils';
 import { ChannelPermission } from '@sharkord/shared';
 import {
+  EllipsisVertical,
   HeadphoneOff,
   Headphones,
   LogOut,
@@ -17,6 +18,12 @@ import {
 import { memo, useCallback } from 'react';
 import { ServerScreen } from '../server-screens/screens';
 import { Button } from '../ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '../ui/dropdown-menu';
 import { UserAvatar } from '../user-avatar';
 import { UserPopover } from '../user-popover';
 
@@ -28,6 +35,9 @@ const UserControl = memo(() => {
 
   const handleSettingsClick = useCallback(() => {
     openServerScreen(ServerScreen.USER_SETTINGS);
+  }, []);
+  const handleLogoutClick = useCallback(() => {
+    void logoutFromServer();
   }, []);
 
   if (!ownPublicUser) return null;
@@ -54,12 +64,12 @@ const UserControl = memo(() => {
         </div>
       </UserPopover>
 
-      <div className="flex items-center space-x-0.5">
+      <div className="flex items-center gap-1">
         <Button
           variant="ghost"
           size="icon"
           className={cn(
-            'h-8 w-8 hover:bg-muted/50',
+            'h-9 w-9 hover:bg-muted/50',
             ownVoiceState.micMuted
               ? 'text-red-500 hover:text-red-400 bg-red-500/10 hover:bg-red-500/20'
               : 'text-muted-foreground hover:text-foreground'
@@ -83,7 +93,7 @@ const UserControl = memo(() => {
           variant="ghost"
           size="icon"
           className={cn(
-            'h-8 w-8 hover:bg-muted/50',
+            'h-9 w-9 hover:bg-muted/50',
             ownVoiceState.soundMuted
               ? 'text-red-500 hover:text-red-400 bg-red-500/10 hover:bg-red-500/20'
               : 'text-muted-foreground hover:text-foreground'
@@ -102,27 +112,28 @@ const UserControl = memo(() => {
           )}
         </Button>
 
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-          onClick={handleSettingsClick}
-          title="Settings"
-        >
-          <Settings className="h-4 w-4" />
-        </Button>
-
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-          onClick={() => {
-            void logoutFromServer();
-          }}
-          title="Log out"
-        >
-          <LogOut className="h-4 w-4" />
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              title="User actions"
+            >
+              <EllipsisVertical className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" side="top" className="w-40">
+            <DropdownMenuItem onClick={handleSettingsClick}>
+              <Settings className="h-4 w-4" />
+              Settings
+            </DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" onClick={handleLogoutClick}>
+              <LogOut className="h-4 w-4" />
+              Log out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );
