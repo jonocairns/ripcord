@@ -3,7 +3,5 @@
 import { ensureServerDirs } from '../helpers/ensure-server-dirs';
 import { loadEmbeds } from '../utils/embeds';
 
-if (Bun.main.includes('/apps/server/')) {
-  await ensureServerDirs();
-  await loadEmbeds();
-}
+await ensureServerDirs();
+await loadEmbeds();

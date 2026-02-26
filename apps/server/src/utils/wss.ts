@@ -21,11 +21,6 @@ import { getAllChannelUserPermissions } from '../db/queries/channels';
 import { getUserById, getUserByToken } from '../db/queries/users';
 import { channels } from '../db/schema';
 import { getWsInfo } from '../helpers/get-ws-info';
-import {
-  isOriginAllowedForRequest,
-  normalizeOrigin,
-  parseAllowedOrigins
-} from '../helpers/origin';
 import { logger } from '../logger';
 import { enqueueActivityLog } from '../queues/activity-log';
 import { appRouter } from '../routers';
@@ -36,12 +31,9 @@ import { pubsub } from './pubsub';
 import type { Context } from './trpc';
 
 let wss: WebSocketServer | undefined;
-const wsAllowedOrigins = parseAllowedOrigins(config.server.allowedOrigins);
-
 type TTrackedWebSocket = WebSocket & {
   userId?: number;
   token: string;
-  connectionIp?: string;
   currentVoiceChannelId?: number;
 };
 
@@ -68,12 +60,6 @@ const getUserIp = (userId: number): string | undefined => {
   return usersIpMap.get(userId);
 };
 
-const countOpenConnectionsForIp = (ip: string): number => {
-  return getTrackedClients().filter(
-    (client) => client.readyState === WebSocket.OPEN && client.connectionIp === ip
-  ).length;
-};
-
 const createContext = async ({
   info,
   req,
@@ -82,7 +68,7 @@ const createContext = async ({
   const { token } = info.connectionParams as TConnectionParams;
   const connectionWs = res as TTrackedWebSocket | undefined;
 
-  const decodedUser = await getUserByToken(token, { allowBanned: true });
+  const decodedUser = await getUserByToken(token);
 
   invariant(decodedUser, {
     code: 'UNAUTHORIZED',
@@ -213,8 +199,7 @@ const createContext = async ({
   const getConnectionInfo = () => {
     if (!wss) {
       return getWsInfo(undefined, req, {
-        trustProxy: config.server.trustProxy,
-        trustedProxyCidrs: config.server.trustedProxyCidrs
+        trustProxy: config.server.trustProxy
       });
     }
 
@@ -225,8 +210,7 @@ const createContext = async ({
     if (!ws) return undefined;
 
     return getWsInfo(ws, req, {
-      trustProxy: config.server.trustProxy,
-      trustedProxyCidrs: config.server.trustedProxyCidrs
+      trustProxy: config.server.trustProxy
     });
   };
 
@@ -292,91 +276,30 @@ const createContext = async ({
 
 const createWsServer = async (server: http.Server) => {
   return new Promise<WebSocketServer>((resolve) => {
-    wss = new WebSocketServer({
-      server,
-      maxPayload: config.server.wsMaxPayloadBytes
-    });
+    wss = new WebSocketServer({ server });
 
-    wss.on('connection', (ws, req) => {
+    wss.on('connection', (ws) => {
       const trackedWs = ws as TTrackedWebSocket;
-      const requestOrigin = normalizeOrigin(req.headers.origin);
-
-      if (
-        requestOrigin &&
-        !isOriginAllowedForRequest({
-          requestOrigin,
-          requestHost: req.headers.host,
-          allowedOrigins: wsAllowedOrigins
-        })
-      ) {
-        logger.warn(
-          'Rejecting websocket connection from origin %s: origin not allowed',
-          requestOrigin
-        );
-
-        trackedWs.close(1008, 'Origin not allowed');
-        return;
-      }
-
       trackedWs.userId = undefined;
       trackedWs.token = '';
-      trackedWs.connectionIp = getWsInfo(ws, req, {
-        trustProxy: config.server.trustProxy,
-        trustedProxyCidrs: config.server.trustedProxyCidrs
-      })?.ip;
       trackedWs.currentVoiceChannelId = undefined;
 
-      if (trackedWs.connectionIp) {
-        const openConnectionsForIp = countOpenConnectionsForIp(
-          trackedWs.connectionIp
-        );
-
-        if (openConnectionsForIp > config.server.wsMaxConnectionsPerIp) {
-          logger.warn(
-            'Rejecting websocket connection from %s: too many open connections (%d)',
-            trackedWs.connectionIp,
-            openConnectionsForIp
-          );
-          trackedWs.close(1013, 'Too many connections');
-          return;
-        }
-      }
-
-      const authTimeout = setTimeout(() => {
-        if (trackedWs.readyState === WebSocket.OPEN && !trackedWs.token) {
-          trackedWs.close(1008, 'Authentication timeout');
-        }
-      }, config.server.wsAuthTimeoutMs);
-
       trackedWs.once('message', async (message) => {
-        clearTimeout(authTimeout);
-
         try {
           const parsed = JSON.parse(message.toString());
-          const { token } = parsed.data as Partial<TConnectionParams>;
-
-          if (typeof token !== 'string' || token.length === 0) {
-            trackedWs.close(1008, 'Invalid authentication payload');
-            return;
-          }
+          const { token } = parsed.data as TConnectionParams;
 
           trackedWs.token = token;
         } catch {
           logger.error('Failed to parse initial WebSocket message');
-          trackedWs.close(1008, 'Invalid authentication payload');
         }
       });
 
       trackedWs.on('close', async () => {
-        clearTimeout(authTimeout);
-
         if (!trackedWs.userId) return;
 
         const userId = trackedWs.userId;
-        const hasOtherConnections = hasOtherOpenUserConnection(
-          userId,
-          trackedWs
-        );
+        const hasOtherConnections = hasOtherOpenUserConnection(userId, trackedWs);
 
         let voiceRuntime: VoiceRuntime | undefined;
 

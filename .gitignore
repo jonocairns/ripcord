@@ -6,7 +6,6 @@
 /DockerCenas
 /experiments
 .direnv/
-/data-test/
 apps/desktop/dist/
 apps/desktop/build/
 apps/desktop/renderer-dist/

@@ -93,8 +93,7 @@ const loginRouteHandler = async (
   const settings = await getSettings();
   let existingUser = await getUserByIdentity(data.identity);
   const connectionInfo = getWsInfo(undefined, req, {
-    trustProxy: config.server.trustProxy,
-    trustedProxyCidrs: config.server.trustedProxyCidrs
+    trustProxy: config.server.trustProxy
   });
 
   if (!existingUser) {

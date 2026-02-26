@@ -19,16 +19,7 @@ const zConfig = z.object({
     port: z.coerce.number().int().positive(),
     debug: z.coerce.boolean(),
     autoupdate: z.coerce.boolean(),
-    trustProxy: z.coerce.boolean(),
-    trustedProxyCidrs: z.string(),
-    allowedOrigins: z.string(),
-    httpRequestTimeoutMs: z.coerce.number().int().positive(),
-    httpHeadersTimeoutMs: z.coerce.number().int().positive(),
-    httpKeepAliveTimeoutMs: z.coerce.number().int().positive(),
-    maxHttpHeadersCount: z.coerce.number().int().positive(),
-    wsMaxPayloadBytes: z.coerce.number().int().positive(),
-    wsAuthTimeoutMs: z.coerce.number().int().positive(),
-    wsMaxConnectionsPerIp: z.coerce.number().int().positive()
+    trustProxy: z.coerce.boolean()
   }),
   webRtc: z.object({
     port: z.coerce.number().int().positive(),
@@ -57,17 +48,7 @@ const defaultConfig: TConfig = {
     port: 4991,
     debug: IS_DEVELOPMENT,
     autoupdate: false,
-    trustProxy: false,
-    trustedProxyCidrs:
-      '127.0.0.1/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16',
-    allowedOrigins: IS_DEVELOPMENT ? 'http://localhost:5173' : '',
-    httpRequestTimeoutMs: 120_000,
-    httpHeadersTimeoutMs: 15_000,
-    httpKeepAliveTimeoutMs: 5_000,
-    maxHttpHeadersCount: 100,
-    wsMaxPayloadBytes: 1024 * 1024,
-    wsAuthTimeoutMs: 10_000,
-    wsMaxConnectionsPerIp: 50
+    trustProxy: false
   },
   webRtc: {
     port: 40000,
@@ -131,15 +112,6 @@ config = applyEnvOverrides(config, {
   'server.debug': 'SHARKORD_DEBUG',
   'server.autoupdate': 'SHARKORD_AUTOUPDATE',
   'server.trustProxy': 'SHARKORD_TRUST_PROXY',
-  'server.trustedProxyCidrs': 'SHARKORD_TRUSTED_PROXIES',
-  'server.allowedOrigins': 'SHARKORD_ALLOWED_ORIGINS',
-  'server.httpRequestTimeoutMs': 'SHARKORD_HTTP_REQUEST_TIMEOUT_MS',
-  'server.httpHeadersTimeoutMs': 'SHARKORD_HTTP_HEADERS_TIMEOUT_MS',
-  'server.httpKeepAliveTimeoutMs': 'SHARKORD_HTTP_KEEPALIVE_TIMEOUT_MS',
-  'server.maxHttpHeadersCount': 'SHARKORD_HTTP_MAX_HEADERS_COUNT',
-  'server.wsMaxPayloadBytes': 'SHARKORD_WS_MAX_PAYLOAD_BYTES',
-  'server.wsAuthTimeoutMs': 'SHARKORD_WS_AUTH_TIMEOUT_MS',
-  'server.wsMaxConnectionsPerIp': 'SHARKORD_WS_MAX_CONNECTIONS_PER_IP',
   'webRtc.port': 'SHARKORD_WEBRTC_PORT',
   'webRtc.announcedAddress': 'SHARKORD_WEBRTC_ANNOUNCED_ADDRESS'
 });

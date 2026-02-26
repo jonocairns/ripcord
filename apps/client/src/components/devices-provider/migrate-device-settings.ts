@@ -60,12 +60,11 @@ const migrateDeviceSettings = (
   return {
     ...DEFAULT_DEVICE_SETTINGS,
     ...incomingSettings,
-    // Legacy saved settings may not include this field; keep them on MANUAL.
-    micQualityMode: Object.values(MicQualityMode).includes(
+    micQualityMode: [MicQualityMode.AUTO, MicQualityMode.EXPERIMENTAL].includes(
       incomingSettings.micQualityMode as MicQualityMode
     )
       ? (incomingSettings.micQualityMode as MicQualityMode)
-      : MicQualityMode.MANUAL,
+      : MicQualityMode.AUTO,   // MANUAL and unknown → Standard
     screenAudioMode: screenAudioMode || ScreenAudioMode.SYSTEM,
     videoCodec: Object.values(VideoCodecPreference).includes(
       incomingSettings.videoCodec as VideoCodecPreference

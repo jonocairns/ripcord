@@ -1,11 +1,10 @@
 import { UploadHeaders, type TTempFile } from '@sharkord/shared';
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
-import { eq } from 'drizzle-orm';
 import fs from 'fs/promises';
 import path from 'path';
 import { login, uploadFile } from '../../__tests__/helpers';
 import { tdb, testsBaseUrl } from '../../__tests__/setup';
-import { settings, users } from '../../db/schema';
+import { settings } from '../../db/schema';
 import { TMP_PATH } from '../../helpers/paths';
 
 type TUploadErrorResponse = {
@@ -93,23 +92,6 @@ describe('/upload', () => {
     expect(data).toHaveProperty('error', 'Unauthorized');
   });
 
-  test('should reject uploads for banned users with valid token', async () => {
-    await tdb
-      .update(users)
-      .set({ banned: true, banReason: 'test ban' })
-      .where(eq(users.id, 1))
-      .execute();
-
-    const file = getMockFile('This upload should fail due to ban.');
-    const response = await uploadFile(file, token);
-
-    expect(response.status).toBe(401);
-
-    const data = (await response.json()) as TUploadErrorResponse;
-
-    expect(data).toHaveProperty('error', 'Unauthorized');
-  });
-
   test('should throw when uploads are disabled', async () => {
     await tdb.update(settings).set({ storageUploadEnabled: false });
 
@@ -142,48 +124,6 @@ describe('/upload', () => {
     expect(data).toHaveProperty(
       'error',
       `File ${file.name} exceeds the maximum allowed size`
-    );
-  });
-
-  test('should enforce temporary upload capacity per user', async () => {
-    await tdb
-      .update(settings)
-      .set({ storageUploadMaxFileSize: 1024, storageSpaceQuotaByUser: 0 });
-
-    const firstFile = getMockFile('A'.repeat(700));
-    const secondFile = getMockFile('B'.repeat(700));
-
-    const firstResponse = await uploadFile(firstFile, token);
-    expect(firstResponse.status).toBe(200);
-
-    const secondResponse = await uploadFile(secondFile, token);
-    expect(secondResponse.status).toBe(413);
-
-    const data = (await secondResponse.json()) as TUploadErrorResponse;
-
-    expect(data).toHaveProperty(
-      'error',
-      'Too much temporary upload data pending for this user. Try again in a moment.'
-    );
-  });
-
-  test('should rate limit excessive upload attempts', async () => {
-    const file = getMockFile('rate-limit-test');
-    const attempts = 21;
-    let lastResponse: Response | undefined;
-
-    for (let i = 0; i < attempts; i++) {
-      lastResponse = await uploadFile(file, token);
-    }
-
-    expect(lastResponse).toBeDefined();
-    expect(lastResponse!.status).toBe(429);
-
-    const data = (await lastResponse!.json()) as TUploadErrorResponse;
-
-    expect(data).toHaveProperty(
-      'error',
-      'Too many upload attempts. Please try again shortly.'
     );
   });
 

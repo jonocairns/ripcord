@@ -1,5 +1,4 @@
 import type http from 'http';
-import * as ipaddr from 'ipaddr.js';
 import { UAParser } from 'ua-parser-js';
 import type { TConnectionInfo } from '../types';
 
@@ -12,7 +11,6 @@ type TSocketLike = {
 
 type TGetWsInfoOptions = {
   trustProxy?: boolean;
-  trustedProxyCidrs?: string;
 };
 
 const normalizeIpCandidate = (value: unknown): string | undefined => {
@@ -20,54 +18,6 @@ const normalizeIpCandidate = (value: unknown): string | undefined => {
   if (Array.isArray(value)) return value[0];
   if (value === null || value === undefined) return undefined;
   return String(value);
-};
-
-const parseTrustedProxyCidrs = (cidrsText?: string): string[] => {
-  if (!cidrsText) {
-    return [];
-  }
-
-  return cidrsText
-    .split(',')
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-};
-
-const isIpTrustedProxy = (
-  ip: string | undefined,
-  cidrsText?: string
-): boolean => {
-  if (!ip) {
-    return false;
-  }
-
-  const cidrs = parseTrustedProxyCidrs(cidrsText);
-
-  if (cidrs.length === 0) {
-    return false;
-  }
-
-  try {
-    let parsedIp = ipaddr.parse(ip);
-
-    if (
-      parsedIp.kind() === 'ipv6' &&
-      (parsedIp as ipaddr.IPv6).isIPv4MappedAddress()
-    ) {
-      parsedIp = (parsedIp as ipaddr.IPv6).toIPv4Address();
-    }
-
-    return cidrs.some((cidr) => {
-      try {
-        const [rangeIp, prefixLength] = ipaddr.parseCIDR(cidr);
-        return parsedIp.match(rangeIp, prefixLength);
-      } catch {
-        return false;
-      }
-    });
-  } catch {
-    return false;
-  }
 };
 
 const getWsIp = (
@@ -88,10 +38,7 @@ const getWsIp = (
       req?.connection?.remoteAddress
   );
 
-  const canTrustForwardedHeaders =
-    trustProxy && isIpTrustedProxy(proxyIp, options?.trustedProxyCidrs);
-
-  let ip = canTrustForwardedHeaders
+  let ip = trustProxy
     ? normalizeIpCandidate(
         headers['cf-connecting-ip'] ||
           headers['cf-real-ip'] ||

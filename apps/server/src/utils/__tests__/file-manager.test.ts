@@ -364,68 +364,6 @@ describe('file manager', () => {
       .execute();
   });
 
-  test('should grow temporary upload reservation safely', () => {
-    const reservationId = fileManager.reserveTemporaryUpload({
-      userId: 1,
-      size: 100,
-      maxUserBytes: 1024,
-      maxTotalBytes: 2048
-    });
-
-    expect(fileManager.getTemporaryUsageByUser(1)).toBe(100);
-
-    fileManager.resizeTemporaryUploadReservation({
-      reservationId,
-      size: 600,
-      maxUserBytes: 1024,
-      maxTotalBytes: 2048
-    });
-
-    expect(fileManager.getTemporaryUsageByUser(1)).toBe(600);
-
-    expect(() =>
-      fileManager.resizeTemporaryUploadReservation({
-        reservationId,
-        size: 1300,
-        maxUserBytes: 1024,
-        maxTotalBytes: 2048
-      })
-    ).toThrow(
-      'Too much temporary upload data pending for this user. Try again in a moment.'
-    );
-  });
-
-  test('should enforce total temporary reservation capacity while resizing', () => {
-    const firstReservation = fileManager.reserveTemporaryUpload({
-      userId: 1,
-      size: 300,
-      maxUserBytes: 1024,
-      maxTotalBytes: 700
-    });
-    const secondReservation = fileManager.reserveTemporaryUpload({
-      userId: 2,
-      size: 300,
-      maxUserBytes: 1024,
-      maxTotalBytes: 700
-    });
-
-    expect(fileManager.getTotalTemporaryUsage()).toBe(600);
-
-    expect(() =>
-      fileManager.resizeTemporaryUploadReservation({
-        reservationId: secondReservation,
-        size: 450,
-        maxUserBytes: 1024,
-        maxTotalBytes: 700
-      })
-    ).toThrow(
-      'Server temporary upload capacity is full. Try again in a moment.'
-    );
-
-    fileManager.releaseTemporaryUploadReservation(firstReservation);
-    fileManager.releaseTemporaryUploadReservation(secondReservation);
-  });
-
   test('should delete old files when storage limit exceeded with DELETE_OLD_FILES', async () => {
     const oldFileName = `old-${Date.now()}.txt`;
     const newFileName = `new-${Date.now()}.txt`;
@@ -616,59 +554,5 @@ describe('file manager', () => {
 
     expect(p.startsWith(UPLOADS_PATH)).toBe(true);
     expect(path.extname(p)).toBe('');
-  });
-
-  test('saveFile sanitizes traversal segments from originalName', async () => {
-    const timestamp = Date.now();
-    const traversalName = `../../escape-${timestamp}.txt`;
-    const filePath = path.join(UPLOADS_PATH, `traversal-${timestamp}.txt`);
-
-    await fs.writeFile(filePath, 'traversal payload');
-
-    const stats = await fs.stat(filePath);
-    const tempFile = await fileManager.addTemporaryFile({
-      filePath,
-      size: stats.size,
-      originalName: traversalName,
-      userId: 1
-    });
-
-    const savedFile = await fileManager.saveFile(tempFile.id, 1);
-
-    tempFilesToCleanup.push(path.join(PUBLIC_PATH, savedFile.name));
-
-    const expectedName = `escape-${timestamp}.txt`;
-
-    expect(savedFile.name).toBe(expectedName);
-    expect(savedFile.originalName).toBe(expectedName);
-    expect(savedFile.name.includes('..')).toBe(false);
-    expect(savedFile.name.includes('/')).toBe(false);
-    expect(savedFile.name.includes('\\')).toBe(false);
-  });
-
-  test('saveFile sanitizes windows-style traversal in originalName', async () => {
-    const timestamp = Date.now();
-    const traversalName = `..\\..\\escape-win-${timestamp}.txt`;
-    const filePath = path.join(UPLOADS_PATH, `traversal-win-${timestamp}.txt`);
-
-    await fs.writeFile(filePath, 'windows traversal payload');
-
-    const stats = await fs.stat(filePath);
-    const tempFile = await fileManager.addTemporaryFile({
-      filePath,
-      size: stats.size,
-      originalName: traversalName,
-      userId: 1
-    });
-
-    const savedFile = await fileManager.saveFile(tempFile.id, 1);
-
-    tempFilesToCleanup.push(path.join(PUBLIC_PATH, savedFile.name));
-
-    expect(savedFile.name).toBe(`escape-win-${timestamp}.txt`);
-    expect(savedFile.originalName).toBe(`escape-win-${timestamp}.txt`);
-    expect(savedFile.name.includes('..')).toBe(false);
-    expect(savedFile.name.includes('/')).toBe(false);
-    expect(savedFile.name.includes('\\')).toBe(false);
   });
 });

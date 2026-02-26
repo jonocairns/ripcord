@@ -1,7 +1,6 @@
 import { FixedWindowRateLimiter } from '.';
 
 const trackedRateLimiters = new Set<FixedWindowRateLimiter>();
-let testRateLimiterScope: string | undefined;
 
 const createRateLimiter = (
   options: ConstructorParameters<typeof FixedWindowRateLimiter>[0]
@@ -18,21 +17,13 @@ const getRateLimitRetrySeconds = (retryAfterMs: number): number => {
 };
 
 const getClientRateLimitKey = (input?: string): string => {
-  const baseKey = input && input.trim().length > 0 ? input.trim() : 'unknown';
-
-  return testRateLimiterScope ? `${testRateLimiterScope}:${baseKey}` : baseKey;
+  return input && input.trim().length > 0 ? input.trim() : 'unknown';
 };
 
 const clearRateLimitersForTests = () => {
   for (const limiter of trackedRateLimiters) {
     limiter.clear();
   }
-
-  testRateLimiterScope = undefined;
-};
-
-const setRateLimiterScopeForTests = (scope: string) => {
-  testRateLimiterScope = scope;
 };
 
 export {
@@ -40,6 +31,5 @@ export {
   createRateLimiter,
   FixedWindowRateLimiter,
   getClientRateLimitKey,
-  getRateLimitRetrySeconds,
-  setRateLimiterScopeForTests
+  getRateLimitRetrySeconds
 };

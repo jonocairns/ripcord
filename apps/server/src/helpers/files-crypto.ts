@@ -1,53 +1,32 @@
 import crypto from 'crypto';
 import { getServerTokenSync } from '../db/queries/server';
 
-const FILE_ACCESS_TOKEN_TTL_MS = 1000 * 60 * 15;
-
 const generateFileToken = (
   fileId: number,
-  channelAccessToken: string,
-  now: number = Date.now()
+  channelAccessToken: string
 ): string => {
-  const expiresAt = now + FILE_ACCESS_TOKEN_TTL_MS;
   const hmac = crypto.createHmac('sha256', getServerTokenSync());
 
-  hmac.update(`${fileId}:${channelAccessToken}:${expiresAt}`);
+  hmac.update(`${fileId}:${channelAccessToken}`);
 
-  const signature = hmac.digest('hex');
-
-  return `${expiresAt}.${signature}`;
+  return hmac.digest('hex');
 };
 
 const verifyFileToken = (
   fileId: number,
   channelAccessToken: string,
-  providedToken: string,
-  now: number = Date.now()
+  providedToken: string
 ): boolean => {
-  const [expiresAtRaw, providedSignature] = providedToken.split('.', 2);
+  const expectedToken = generateFileToken(fileId, channelAccessToken);
 
-  if (!expiresAtRaw || !providedSignature) {
-    return false;
-  }
-
-  const expiresAt = Number(expiresAtRaw);
-
-  if (!Number.isInteger(expiresAt) || expiresAt <= now) {
-    return false;
-  }
-
-  const hmac = crypto.createHmac('sha256', getServerTokenSync());
-  hmac.update(`${fileId}:${channelAccessToken}:${expiresAt}`);
-  const expectedSignature = hmac.digest('hex');
-
-  if (expectedSignature.length !== providedSignature.length) {
+  if (expectedToken.length !== providedToken.length) {
     return false;
   }
 
   return crypto.timingSafeEqual(
-    Buffer.from(expectedSignature),
-    Buffer.from(providedSignature)
+    Buffer.from(expectedToken),
+    Buffer.from(providedToken)
   );
 };
 
-export { FILE_ACCESS_TOKEN_TTL_MS, generateFileToken, verifyFileToken };
+export { generateFileToken, verifyFileToken };

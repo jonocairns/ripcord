@@ -3,8 +3,8 @@ import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { initTest, uploadFile } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
-import { files, users } from '../../db/schema';
 import { verifyPassword } from '../../helpers/password';
+import { users } from '../../db/schema';
 
 describe('users router', () => {
   test('should throw when user lacks permissions (getAll)', async () => {
@@ -77,16 +77,6 @@ describe('users router', () => {
         roleId: 2
       })
     ).rejects.toThrow('Insufficient permissions');
-  });
-
-  test('should throw when non-owner tries to delete user', async () => {
-    const { caller } = await initTest(2);
-
-    await expect(
-      caller.users.delete({
-        userId: 3
-      })
-    ).rejects.toThrow('Only the server owner can delete users');
   });
 
   test('should get all users', async () => {
@@ -458,60 +448,6 @@ describe('users router', () => {
 
     expect(info.user.banned).toBe(false);
     expect(info.user.banReason).toBeNull();
-  });
-
-  test('should delete a user and remove their uploaded files', async () => {
-    const { caller: ownerCaller } = await initTest();
-    const { caller: targetCaller, mockedToken: targetToken } = await initTest(2);
-
-    const avatarFile = new File(['avatar content'], 'avatar.png', {
-      type: 'image/png'
-    });
-
-    const uploadResponse = await uploadFile(avatarFile, targetToken);
-    const uploadData = (await uploadResponse.json()) as TTempFile;
-
-    await targetCaller.users.changeAvatar({
-      fileId: uploadData.id
-    });
-
-    const beforeDeleteFiles = await tdb
-      .select({ id: files.id })
-      .from(files)
-      .where(eq(files.userId, 2))
-      .all();
-
-    expect(beforeDeleteFiles.length).toBeGreaterThan(0);
-
-    await ownerCaller.users.delete({
-      userId: 2
-    });
-
-    const removedUser = await tdb
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.id, 2))
-      .get();
-
-    expect(removedUser).toBeUndefined();
-
-    const remainingFiles = await tdb
-      .select({ id: files.id })
-      .from(files)
-      .where(eq(files.userId, 2))
-      .all();
-
-    expect(remainingFiles.length).toBe(0);
-  });
-
-  test('should not allow deleting yourself even as owner', async () => {
-    const { caller } = await initTest();
-
-    await expect(
-      caller.users.delete({
-        userId: 1
-      })
-    ).rejects.toThrow('You cannot delete yourself');
   });
 
   test('should throw when kicking non-connected user', async () => {

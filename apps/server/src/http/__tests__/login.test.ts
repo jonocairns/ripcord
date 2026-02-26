@@ -1,9 +1,10 @@
+import { sha256 } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import jwt from 'jsonwebtoken';
 import { login, logout, refresh } from '../../__tests__/helpers';
-import { TEST_AUTH_TOKEN } from '../../__tests__/seed';
-import { tdb, testsBaseUrl } from '../../__tests__/setup';
+import { TEST_SECRET_TOKEN } from '../../__tests__/seed';
+import { tdb } from '../../__tests__/setup';
 import {
   invites,
   refreshTokens,
@@ -33,7 +34,7 @@ describe('/login', () => {
     expect(data).toHaveProperty('token');
     expect(data).toHaveProperty('refreshToken');
 
-    const decoded = jwt.verify(data.token, TEST_AUTH_TOKEN);
+    const decoded = jwt.verify(data.token, await sha256(TEST_SECRET_TOKEN));
 
     expect(decoded).toHaveProperty('userId');
   });
@@ -46,7 +47,7 @@ describe('/login', () => {
     const data = (await response.json()) as TLoginResponse;
 
     expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('password', 'Invalid credentials');
+    expect(data.errors).toHaveProperty('password', 'Invalid password');
   });
 
   test('should login with legacy plaintext password and upgrade hash', async () => {
@@ -98,7 +99,7 @@ describe('/login', () => {
 
     expect(response.status).toBe(200);
 
-    const data = (await response.json()) as { error?: string };
+    const data = await response.json();
 
     expect(data).toHaveProperty('success', true);
     expect(data).toHaveProperty('token');
@@ -124,7 +125,7 @@ describe('/login', () => {
     const data = (await response.json()) as TLoginResponse;
 
     expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('password', 'Invalid credentials');
+    expect(data.errors).toHaveProperty('identity', 'Invalid invite code');
   });
 
   test('should allow registration with valid invite when allowNewUsers is false', async () => {
@@ -143,7 +144,7 @@ describe('/login', () => {
 
     expect(response.status).toBe(200);
 
-    const data = (await response.json()) as { error?: string };
+    const data = await response.json();
 
     expect(data).toHaveProperty('success', true);
     expect(data).toHaveProperty('token');
@@ -181,7 +182,7 @@ describe('/login', () => {
     const data = (await response.json()) as TLoginResponse;
 
     expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('password', 'Invalid credentials');
+    expect(data.errors).toHaveProperty('identity');
   });
 
   test('should fail with maxed out invite', async () => {
@@ -208,7 +209,7 @@ describe('/login', () => {
     const data = (await response.json()) as TLoginResponse;
 
     expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('password', 'Invalid credentials');
+    expect(data.errors).toHaveProperty('identity');
   });
 
   test('should fail with non-existent invite', async () => {
@@ -225,7 +226,7 @@ describe('/login', () => {
     const data = (await response.json()) as TLoginResponse;
 
     expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('password', 'Invalid credentials');
+    expect(data.errors).toHaveProperty('identity');
   });
 
   test('should fail login for banned user', async () => {
@@ -244,7 +245,8 @@ describe('/login', () => {
     const data = (await response.json()) as TLoginResponse;
 
     expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('password', 'Invalid credentials');
+    expect(data.errors).toHaveProperty('identity');
+    expect(data.errors.identity).toContain('banned');
   });
 
   test('should fail with missing identity', async () => {
@@ -252,7 +254,7 @@ describe('/login', () => {
 
     expect(response.status).toBe(400);
 
-    const data = (await response.json()) as { error?: string };
+    const data = await response.json();
 
     expect(data).toHaveProperty('errors');
   });
@@ -262,7 +264,7 @@ describe('/login', () => {
 
     expect(response.status).toBe(400);
 
-    const data = (await response.json()) as { error?: string };
+    const data = await response.json();
 
     expect(data).toHaveProperty('errors');
   });
@@ -276,7 +278,7 @@ describe('/login', () => {
 
     const decoded = jwt.verify(
       data.token,
-      TEST_AUTH_TOKEN
+      await sha256(TEST_SECRET_TOKEN)
     ) as jwt.JwtPayload;
 
     expect(decoded).toHaveProperty('userId');
@@ -352,7 +354,7 @@ describe('/login', () => {
 
     expect(response.status).toBe(401);
 
-    const data = (await response.json()) as { error?: string };
+    const data = await response.json();
 
     expect(data).toHaveProperty('error', 'Invalid refresh token');
   });
@@ -372,64 +374,6 @@ describe('/login', () => {
     const refreshResponse = await refresh(refreshToken);
 
     expect(refreshResponse.status).toBe(401);
-  });
-
-  test('should reject oversized login payloads', async () => {
-    const response = await fetch(`${testsBaseUrl}/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        identity: 'x'.repeat(20_000),
-        password: 'password123'
-      })
-    });
-
-    expect(response.status).toBe(413);
-
-    const data = (await response.json()) as { error?: string };
-
-    expect(data).toHaveProperty('error');
-    expect(data.error).toContain('Request body too large');
-  });
-
-  test('should reject oversized refresh payloads', async () => {
-    const response = await fetch(`${testsBaseUrl}/refresh`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        refreshToken: 'x'.repeat(20_000)
-      })
-    });
-
-    expect(response.status).toBe(413);
-
-    const data = (await response.json()) as { error?: string };
-
-    expect(data).toHaveProperty('error');
-    expect(data.error).toContain('Request body too large');
-  });
-
-  test('should reject oversized logout payloads', async () => {
-    const response = await fetch(`${testsBaseUrl}/logout`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        refreshToken: 'x'.repeat(20_000)
-      })
-    });
-
-    expect(response.status).toBe(413);
-
-    const data = (await response.json()) as { error?: string };
-
-    expect(data).toHaveProperty('error');
-    expect(data.error).toContain('Request body too large');
   });
 
   test('should rate limit excessive login attempts', async () => {

@@ -1,7 +1,6 @@
 import {
   ChannelType,
   DEFAULT_ROLE_PERMISSIONS,
-  getRandomString,
   OWNER_ROLE_ID,
   Permission,
   sha256,
@@ -18,7 +17,6 @@ import {
 } from '@sharkord/shared';
 import { randomUUIDv7 } from 'bun';
 import chalk from 'chalk';
-import crypto from 'crypto';
 import { hashPassword } from '../helpers/password';
 import { logger } from '../logger';
 import { IS_DEVELOPMENT } from '../utils/env';
@@ -26,7 +24,6 @@ import { db } from './index';
 import {
   categories,
   channels,
-  invites,
   messages,
   roles,
   rolePermissions,
@@ -44,7 +41,6 @@ const seedDatabase = async () => {
 
   const firstStart = Date.now();
   const originalToken = IS_DEVELOPMENT ? 'dev' : randomUUIDv7();
-  const bootstrapInviteCode = IS_DEVELOPMENT ? undefined : getRandomString(24);
 
   const initialSettings: TISettings = {
     name: 'sharkord',
@@ -53,8 +49,7 @@ const seedDatabase = async () => {
     password: '',
     serverId: Bun.randomUUIDv7(),
     secretToken: await sha256(originalToken),
-    authToken: crypto.randomBytes(32).toString('hex'),
-    allowNewUsers: IS_DEVELOPMENT,
+    allowNewUsers: true,
     storageUploadEnabled: true,
     storageQuota: STORAGE_QUOTA,
     storageUploadMaxFileSize: STORAGE_MAX_FILE_SIZE,
@@ -176,17 +171,6 @@ const seedDatabase = async () => {
   await db.insert(users).values(initialUsers);
   await db.insert(messages).values(initialMessages);
 
-  if (bootstrapInviteCode) {
-    await db.insert(invites).values({
-      code: bootstrapInviteCode,
-      creatorId: 1,
-      maxUses: 1,
-      uses: 0,
-      expiresAt: null,
-      createdAt: firstStart
-    });
-  }
-
   for (const [roleId, permissions] of Object.entries(initialRolePermissions)) {
     for (const permission of permissions) {
       await db.insert(rolePermissions).values({
@@ -213,23 +197,9 @@ const seedDatabase = async () => {
     chalk.whiteBright(
       'The access token below is used to gain admin privileges. Anyone with this token can take over the server.'
     ),
-    ...(bootstrapInviteCode
-      ? [
-          chalk.whiteBright(
-            'Open registration is disabled by default in production. Use the bootstrap invite code below to register your first account.'
-          )
-        ]
-      : []),
     chalk.white('Please read the documentation on how to use this token.'),
     chalk.yellowBright('────────────────────────────────────────────────────'),
     chalk.bold.greenBright(originalToken),
-    ...(bootstrapInviteCode
-      ? [
-          chalk.yellowBright('────────────────────────────────────────────────────'),
-          chalk.whiteBright('Bootstrap invite code:'),
-          chalk.bold.cyanBright(bootstrapInviteCode)
-        ]
-      : []),
     chalk.yellowBright('────────────────────────────────────────────────────')
   ].join('\n');
 

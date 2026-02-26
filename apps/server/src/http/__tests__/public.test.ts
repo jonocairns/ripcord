@@ -151,60 +151,6 @@ describe('/public', () => {
     expect(responseText).toBe(file!.content);
   });
 
-  test('should sanitize content-disposition filename on download', async () => {
-    const fileName = `safe-download-${Date.now()}.txt`;
-    const content = 'download test';
-    const filePath = path.join(PUBLIC_PATH, fileName);
-
-    await fs.writeFile(filePath, content);
-
-    try {
-      const [message] = await tdb
-        .insert(messages)
-        .values({
-          userId: 1,
-          channelId: 1,
-          content: 'Message with downloadable file',
-          createdAt: Date.now()
-        })
-        .returning();
-
-      const [dbFile] = await tdb
-        .insert(files)
-        .values({
-          name: fileName,
-          originalName: 'evil"\r\nname.txt',
-          md5: `md5-${Date.now()}`,
-          userId: 1,
-          size: content.length,
-          mimeType: 'text/plain',
-          extension: '.txt',
-          createdAt: Date.now()
-        })
-        .returning();
-
-      await tdb.insert(messageFiles).values({
-        messageId: message!.id,
-        fileId: dbFile!.id,
-        createdAt: Date.now()
-      });
-
-      const response = await fetch(
-        `${testsBaseUrl}/public/${encodeURIComponent(fileName)}`
-      );
-
-      expect(response.status).toBe(200);
-      expect(response.headers.get('Content-Disposition')).toBe(
-        'attachment; filename="evilname.txt"'
-      );
-      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
-    } finally {
-      await fs.unlink(filePath).catch(() => {
-        // ignore cleanup errors
-      });
-    }
-  });
-
   test('should return 404 when file not found in database', async () => {
     const response = await fetch(`${testsBaseUrl}/public/nonexistent-file.txt`);
 

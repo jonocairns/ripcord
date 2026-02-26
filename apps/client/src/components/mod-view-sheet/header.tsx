@@ -1,17 +1,16 @@
 import { Button } from '@/components/ui/button';
 import { UserAvatar } from '@/components/user-avatar';
-import { setModViewOpen } from '@/features/app/actions';
 import {
   openDialog,
   requestConfirmation,
   requestTextInput
 } from '@/features/dialogs/actions';
-import { useIsOwnUserOwner, useUserRoles } from '@/features/server/hooks';
+import { useUserRoles } from '@/features/server/hooks';
 import { useOwnUserId, useUserStatus } from '@/features/server/users/hooks';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import { UserStatus } from '@sharkord/shared';
-import { Gavel, Plus, Trash2, UserMinus } from 'lucide-react';
+import { Gavel, Plus, UserMinus } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { toast } from 'sonner';
 import { Dialog } from '../dialogs/dialogs';
@@ -20,7 +19,6 @@ import { useModViewContext } from './context';
 
 const Header = memo(() => {
   const ownUserId = useOwnUserId();
-  const isOwnUserOwner = useIsOwnUserOwner();
   const { user, refetch } = useModViewContext();
   const status = useUserStatus(user.id);
   const userRoles = useUserRoles(user.id);
@@ -134,33 +132,6 @@ const Header = memo(() => {
     }
   }, [user.id, refetch]);
 
-  const onDelete = useCallback(async () => {
-    const answer = await requestConfirmation({
-      title: 'Delete User',
-      message:
-        'Are you sure you want to permanently delete this user and all of their uploaded files?',
-      confirmLabel: 'Delete',
-      cancelLabel: 'Cancel'
-    });
-
-    if (!answer) {
-      return;
-    }
-
-    const trpc = getTRPCClient();
-
-    try {
-      await trpc.users.delete.mutate({
-        userId: user.id
-      });
-      toast.success('User deleted successfully');
-      setModViewOpen(false);
-    } catch (error) {
-      toast.error(getTrpcError(error, 'Failed to delete user'));
-      refetch();
-    }
-  }, [user.id, refetch]);
-
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-3">
@@ -187,17 +158,6 @@ const Header = memo(() => {
           <Gavel className="h-4 w-4" />
           {user.banned ? 'Unban' : 'Ban'}
         </Button>
-        {isOwnUserOwner && (
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={onDelete}
-            disabled={user.id === ownUserId}
-          >
-            <Trash2 className="h-4 w-4" />
-            Delete
-          </Button>
-        )}
       </div>
 
       <div className="flex flex-wrap gap-1.5 items-center">

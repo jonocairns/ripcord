@@ -256,9 +256,6 @@ export const serverSlice = createSlice({
 
       state.users.push(action.payload);
     },
-    removeUser: (state, action: PayloadAction<{ userId: number }>) => {
-      state.users = state.users.filter((u) => u.id !== action.payload.userId);
-    },
 
     // SERVER SETTINGS ------------------------------------------------------------
 
