@@ -32,7 +32,9 @@ const isInviteValid = async (
   return undefined;
 };
 
-const consumeInvite = async (code: string | undefined): Promise<string | undefined> => {
+const consumeInvite = async (
+  code: string | undefined
+): Promise<string | undefined> => {
   if (!code) {
     return 'Invalid invite code';
   }

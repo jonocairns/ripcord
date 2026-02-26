@@ -139,7 +139,9 @@ class TemporaryFileManager {
 
     const settings = await getSettings();
     const totalFileCount = this.temporaryFiles.length;
-    const userFiles = this.temporaryFiles.filter((file) => file.userId === userId);
+    const userFiles = this.temporaryFiles.filter(
+      (file) => file.userId === userId
+    );
     const userFileCount = userFiles.length;
 
     if (
@@ -151,13 +153,19 @@ class TemporaryFileManager {
       );
     }
 
-    const totalBytes = this.temporaryFiles.reduce((sum, file) => sum + file.size, 0);
+    const totalBytes = this.temporaryFiles.reduce(
+      (sum, file) => sum + file.size,
+      0
+    );
     const userBytes = userFiles.reduce((sum, file) => sum + file.size, 0);
     const maxUploadSize = Math.max(settings.storageUploadMaxFileSize, 1);
     const globalByteLimit = maxUploadSize * TEMP_MAX_GLOBAL_BYTES_MULTIPLIER;
     const userByteLimit = maxUploadSize * TEMP_MAX_USER_BYTES_MULTIPLIER;
 
-    if (totalBytes + size > globalByteLimit || userBytes + size > userByteLimit) {
+    if (
+      totalBytes + size > globalByteLimit ||
+      userBytes + size > userByteLimit
+    ) {
       throw new TemporaryFileCapacityError(
         'Temporary upload storage limit exceeded'
       );
@@ -368,5 +376,4 @@ class FileManager {
 
 const fileManager = new FileManager();
 
-export { fileManager };
-export { TemporaryFileCapacityError };
+export { fileManager, TemporaryFileCapacityError };

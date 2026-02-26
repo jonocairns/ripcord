@@ -472,9 +472,9 @@ describe('file manager', () => {
 
     expect(savedFile.name).toBe('payload.txt');
     expect(savedFile.originalName).toBe('payload.txt');
-    expect(resolvedSavedPath.startsWith(`${resolvedPublicPath}${path.sep}`)).toBe(
-      true
-    );
+    expect(
+      resolvedSavedPath.startsWith(`${resolvedPublicPath}${path.sep}`)
+    ).toBe(true);
   });
 
   test('should reject temporary uploads that exceed staged-capacity limits', async () => {

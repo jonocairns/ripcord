@@ -128,10 +128,7 @@ const UserControl = memo(() => {
               <Settings className="h-4 w-4" />
               Settings
             </DropdownMenuItem>
-            <DropdownMenuItem
-              variant="destructive"
-              onClick={handleLogoutClick}
-            >
+            <DropdownMenuItem variant="destructive" onClick={handleLogoutClick}>
               <LogOut className="h-4 w-4" />
               Log out
             </DropdownMenuItem>

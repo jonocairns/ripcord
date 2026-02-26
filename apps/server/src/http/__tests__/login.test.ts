@@ -282,8 +282,16 @@ describe('/login', () => {
     expect(updatedInvite?.uses).toBe(1);
 
     const [firstUser, secondUser] = await Promise.all([
-      tdb.select().from(users).where(eq(users.identity, 'singleinviteuser1')).get(),
-      tdb.select().from(users).where(eq(users.identity, 'singleinviteuser2')).get()
+      tdb
+        .select()
+        .from(users)
+        .where(eq(users.identity, 'singleinviteuser1'))
+        .get(),
+      tdb
+        .select()
+        .from(users)
+        .where(eq(users.identity, 'singleinviteuser2'))
+        .get()
     ]);
 
     const createdUsers = [firstUser, secondUser].filter(Boolean);

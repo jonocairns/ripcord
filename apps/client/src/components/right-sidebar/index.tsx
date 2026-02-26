@@ -66,13 +66,19 @@ type TUserSection = {
 
 const getMemberSections = (users: TMember[]): TUserSection[] => {
   const online = users.filter(
-    (user) => !user.banned && String(user.status ?? UserStatus.OFFLINE) === UserStatus.ONLINE
+    (user) =>
+      !user.banned &&
+      String(user.status ?? UserStatus.OFFLINE) === UserStatus.ONLINE
   );
   const idle = users.filter(
-    (user) => !user.banned && String(user.status ?? UserStatus.OFFLINE) === UserStatus.IDLE
+    (user) =>
+      !user.banned &&
+      String(user.status ?? UserStatus.OFFLINE) === UserStatus.IDLE
   );
   const offline = users.filter(
-    (user) => !user.banned && String(user.status ?? UserStatus.OFFLINE) === UserStatus.OFFLINE
+    (user) =>
+      !user.banned &&
+      String(user.status ?? UserStatus.OFFLINE) === UserStatus.OFFLINE
   );
   const banned = users.filter((user) => user.banned);
 
@@ -106,7 +112,10 @@ const RightSidebar = memo(
     );
 
     const hasHiddenUsers = users.length > MAX_USERS_TO_SHOW;
-    const sections = useMemo(() => getMemberSections(usersToShow), [usersToShow]);
+    const sections = useMemo(
+      () => getMemberSections(usersToShow),
+      [usersToShow]
+    );
 
     return (
       <aside
@@ -159,7 +168,12 @@ const RightSidebar = memo(
               )}
             </div>
 
-            <div className={cn('flex-1 overflow-y-auto p-2', isCollapsed && 'lg:p-1')}>
+            <div
+              className={cn(
+                'flex-1 overflow-y-auto p-2',
+                isCollapsed && 'lg:p-1'
+              )}
+            >
               {isCollapsed ? (
                 <div className="space-y-2 lg:flex lg:flex-col lg:items-center">
                   {usersToShow.map((user) => (

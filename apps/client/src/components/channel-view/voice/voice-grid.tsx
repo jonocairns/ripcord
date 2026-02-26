@@ -112,7 +112,12 @@ const VoiceGrid = memo(
 
     if (regularCards.length === 1) {
       return (
-        <div className={cn('flex h-full items-center justify-center p-4', className)}>
+        <div
+          className={cn(
+            'flex h-full items-center justify-center p-4',
+            className
+          )}
+        >
           <div className="h-full w-full max-h-[82vh] max-w-5xl overflow-hidden rounded-2xl border border-border/70 shadow-2xl">
             {regularCards[0]}
           </div>
