@@ -27,6 +27,8 @@ describe("is-empty-message", () => {
     expect(isEmptyMessage("<div><span></span></div>")).toBe(true);
     expect(isEmptyMessage("<br>")).toBe(true);
     expect(isEmptyMessage("<p><br></p>")).toBe(true);
+    expect(isEmptyMessage("<script>alert('x')</script>")).toBe(true);
+    expect(isEmptyMessage("<style>body{color:red}</style>")).toBe(true);
   });
 
   test("should return true for ProseMirror separator elements", () => {

@@ -144,6 +144,22 @@ describe('/upload', () => {
     expect(await fs.exists(data.path)).toBe(true);
   });
 
+  test('should sanitize path traversal attempts in original filename', async () => {
+    const blob = new Blob(['malicious'], { type: 'text/plain' });
+    const file = new File([blob], '../../payload.txt', {
+      type: 'text/plain'
+    });
+
+    const response = await uploadFile(file, token);
+
+    expect(response.status).toBe(200);
+
+    const data = (await response.json()) as TTempFile;
+
+    expect(data.originalName).toBe('payload.txt');
+    expect(data.extension).toBe('.txt');
+  });
+
   test('should handle empty files', async () => {
     const blob = new Blob([], { type: 'text/plain' });
     const file = new File([blob], 'empty.txt', { type: 'text/plain' });
@@ -218,7 +234,8 @@ describe('/upload', () => {
 
     const data = (await response.json()) as TTempFile;
 
-    expect(data.originalName).toBe(longName);
+    expect(data.originalName.endsWith('.txt')).toBe(true);
+    expect(data.originalName.length).toBeLessThanOrEqual(124);
     expect(await fs.exists(data.path)).toBe(true);
   });
 

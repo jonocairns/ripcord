@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { updateSettings } from '../../db/mutations/server';
 import { publishSettings } from '../../db/publishers';
 import { getSettings } from '../../db/queries/server';
+import { hashPassword } from '../../helpers/password';
 import { pluginManager } from '../../plugins';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { protectedProcedure } from '../../utils/trpc';
@@ -27,12 +28,16 @@ const updateSettingsRoute = protectedProcedure
   )
   .mutation(async ({ input, ctx }) => {
     await ctx.needsPermission(Permission.MANAGE_SETTINGS);
-    const nextPassword =
+    const nextPasswordInput =
       input.password === undefined
         ? undefined
         : input.password
           ? input.password
           : null;
+    const nextPassword =
+      typeof nextPasswordInput === 'string'
+        ? await hashPassword(nextPasswordInput)
+        : nextPasswordInput;
 
     const { enablePlugins: oldEnablePlugins } = await getSettings();
 

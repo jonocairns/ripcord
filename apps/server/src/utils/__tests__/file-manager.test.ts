@@ -451,6 +451,50 @@ describe('file manager', () => {
     expect(savedFile.id).toBeGreaterThan(0);
   });
 
+  test('should sanitize unsafe original names before saving', async () => {
+    const unsafeName = '../../windows\\..\\payload.txt';
+    const stats = await fs.stat(testFilePath);
+
+    const tempFile = await fileManager.addTemporaryFile({
+      filePath: testFilePath,
+      size: stats.size,
+      originalName: unsafeName,
+      userId: 1
+    });
+
+    expect(tempFile.originalName).toBe('payload.txt');
+
+    const savedFile = await fileManager.saveFile(tempFile.id, 1);
+    const resolvedPublicPath = path.resolve(PUBLIC_PATH);
+    const resolvedSavedPath = path.resolve(PUBLIC_PATH, savedFile.name);
+
+    tempFilesToCleanup.push(path.join(PUBLIC_PATH, savedFile.name));
+
+    expect(savedFile.name).toBe('payload.txt');
+    expect(savedFile.originalName).toBe('payload.txt');
+    expect(resolvedSavedPath.startsWith(`${resolvedPublicPath}${path.sep}`)).toBe(
+      true
+    );
+  });
+
+  test('should reject temporary uploads that exceed staged-capacity limits', async () => {
+    const [currentSettings] = await tdb.select().from(settings).limit(1);
+    const filePath = path.join(UPLOADS_PATH, `cap-${Date.now()}.txt`);
+
+    await fs.writeFile(filePath, 'x');
+
+    tempFilesToCleanup.push(filePath);
+
+    await expect(
+      fileManager.addTemporaryFile({
+        filePath,
+        size: currentSettings!.storageUploadMaxFileSize + 1,
+        originalName: 'cap.txt',
+        userId: 1
+      })
+    ).rejects.toThrow('Temporary upload storage limit exceeded');
+  });
+
   test('should generate safe upload path with correct extension', async () => {
     const path1 = await fileManager.getSafeUploadPath(testFileName);
     const path2 = await fileManager.getSafeUploadPath('another.jpg');

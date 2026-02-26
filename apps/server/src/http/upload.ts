@@ -6,7 +6,7 @@ import { getSettings } from '../db/queries/server';
 import { getUserByToken } from '../db/queries/users';
 import { logger } from '../logger';
 import { getUserRoles } from '../routers/users/get-user-roles';
-import { fileManager } from '../utils/file-manager';
+import { fileManager, TemporaryFileCapacityError } from '../utils/file-manager';
 
 const zHeaders = z.object({
   [UploadHeaders.TOKEN]: z.string(),
@@ -84,6 +84,10 @@ const uploadFileRouteHandler = async (
   const fileStream = fs.createWriteStream(safePath);
   let streamedSize = 0;
   let abortedForSize = false;
+  const cleanupStagedUpload = () =>
+    fs.promises.unlink(safePath).catch(() => {
+      // ignore cleanup errors
+    });
 
   req.on('data', (chunk) => {
     streamedSize += chunk.length;
@@ -100,9 +104,7 @@ const uploadFileRouteHandler = async (
     req.unpipe(fileStream);
     fileStream.destroy();
 
-    fs.promises.unlink(safePath).catch(() => {
-      // ignore cleanup errors
-    });
+    cleanupStagedUpload();
 
     if (!res.headersSent) {
       res.writeHead(413, { 'Content-Type': 'application/json' });
@@ -112,6 +114,11 @@ const uploadFileRouteHandler = async (
         })
       );
     }
+  });
+
+  req.on('aborted', () => {
+    fileStream.destroy();
+    cleanupStagedUpload();
   });
 
   req.pipe(fileStream);
@@ -158,6 +165,18 @@ const uploadFileRouteHandler = async (
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(tempFile));
     } catch (error) {
+      await cleanupStagedUpload();
+
+      if (error instanceof TemporaryFileCapacityError) {
+        res.writeHead(429, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error: error.message
+          })
+        );
+        return;
+      }
+
       logger.error('Error processing uploaded file:', error);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'File processing failed' }));
@@ -169,6 +188,7 @@ const uploadFileRouteHandler = async (
       return;
     }
 
+    cleanupStagedUpload();
     logger.error('Error uploading file:', err);
 
     res.writeHead(500, { 'Content-Type': 'application/json' });
