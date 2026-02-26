@@ -119,6 +119,18 @@ describe('messages router', () => {
     expect(sentMessage!.userId).toBe(1);
   });
 
+  test('should reject script-only content as empty message', async () => {
+    const { caller } = await initTest();
+
+    await expect(
+      caller.messages.send({
+        channelId: 1,
+        content: '<script>alert("xss")</script>',
+        files: []
+      })
+    ).rejects.toThrow('Message cannot be empty.');
+  });
+
   test('should get messages from channel', async () => {
     const { caller } = await initTest();
 
@@ -187,6 +199,29 @@ describe('messages router', () => {
     expect(editedMessage!.content).toBe('Edited content');
     expect(editedMessage!.updatedAt).toBeDefined();
     expect(editedMessage!.updatedAt).not.toBeNull();
+  });
+
+  test('should reject editing message to style-only content', async () => {
+    const { caller } = await initTest();
+
+    await caller.messages.send({
+      channelId: 1,
+      content: 'Editable content',
+      files: []
+    });
+
+    const messages = await caller.messages.get({
+      channelId: 1,
+      cursor: null,
+      limit: 50
+    });
+
+    await expect(
+      caller.messages.edit({
+        messageId: messages.messages[0]!.id,
+        content: '<style>body{color:red}</style>'
+      })
+    ).rejects.toThrow('Message cannot be empty.');
   });
 
   test('should allow admin to edit any message', async () => {

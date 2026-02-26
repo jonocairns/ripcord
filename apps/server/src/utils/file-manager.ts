@@ -26,6 +26,62 @@ import { PUBLIC_PATH, TMP_PATH, UPLOADS_PATH } from '../helpers/paths';
  */
 
 const TEMP_FILE_TTL = 1000 * 60 * 1; // 1 minute
+const TEMP_MAX_FILES_PER_USER = 256;
+const TEMP_MAX_FILES_GLOBAL = 2048;
+const TEMP_MAX_USER_BYTES_MULTIPLIER = 1;
+const TEMP_MAX_GLOBAL_BYTES_MULTIPLIER = 4;
+const MAX_EXTENSION_LENGTH = 16;
+const MAX_BASE_NAME_LENGTH = 120;
+const UNSAFE_FILE_NAME_CHARS = /[<>:"/\\|?*]/g;
+const WINDOWS_RESERVED_BASE_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+class TemporaryFileCapacityError extends Error {}
+
+const stripControlChars = (value: string): string =>
+  Array.from(value)
+    .filter((char) => {
+      const code = char.charCodeAt(0);
+
+      return code >= 32 && code !== 127;
+    })
+    .join('');
+
+const sanitizeBaseName = (baseName: string): string => {
+  const normalized = stripControlChars(baseName.normalize('NFKC'))
+    .replace(UNSAFE_FILE_NAME_CHARS, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/g, '')
+    .replace(/^\.+$/, '')
+    .slice(0, MAX_BASE_NAME_LENGTH);
+
+  const fallback = normalized || 'file';
+
+  if (WINDOWS_RESERVED_BASE_NAMES.test(fallback)) {
+    return `${fallback}-file`;
+  }
+
+  return fallback;
+};
+
+const sanitizeExtension = (extension: string): string => {
+  const normalized = stripControlChars(extension.normalize('NFKC'))
+    .toLowerCase()
+    .replace(/[^a-z0-9.]/g, '')
+    .slice(0, MAX_EXTENSION_LENGTH);
+
+  return /^\.[a-z0-9]+$/.test(normalized) ? normalized : '';
+};
+
+const sanitizeOriginalName = (originalName: string): string => {
+  const normalized = stripControlChars(originalName.normalize('NFKC')).trim();
+  const basePath = path.basename(normalized.replace(/\\/g, '/'));
+  const rawExtension = path.extname(basePath);
+  const extension = sanitizeExtension(rawExtension);
+  const baseName = sanitizeBaseName(path.basename(basePath, rawExtension));
+
+  return `${baseName}${extension}`;
+};
 
 const md5File = async (path: string): Promise<string> => {
   const file = await fs.readFile(path);
@@ -56,6 +112,58 @@ class TemporaryFileManager {
     [id: string]: NodeJS.Timeout;
   } = {};
 
+  private pruneMissingTemporaryFiles = async (): Promise<void> => {
+    const existingFiles = await Promise.all(
+      this.temporaryFiles.map(async (file) => {
+        try {
+          await fs.access(file.path);
+          return file;
+        } catch {
+          clearTimeout(this.timeouts[file.id]);
+          delete this.timeouts[file.id];
+          return undefined;
+        }
+      })
+    );
+
+    this.temporaryFiles = existingFiles.filter(
+      (file): file is TTempFile => file !== undefined
+    );
+  };
+
+  private assertWithinTemporaryCapacity = async (
+    size: number,
+    userId: number
+  ): Promise<void> => {
+    await this.pruneMissingTemporaryFiles();
+
+    const settings = await getSettings();
+    const totalFileCount = this.temporaryFiles.length;
+    const userFiles = this.temporaryFiles.filter((file) => file.userId === userId);
+    const userFileCount = userFiles.length;
+
+    if (
+      totalFileCount >= TEMP_MAX_FILES_GLOBAL ||
+      userFileCount >= TEMP_MAX_FILES_PER_USER
+    ) {
+      throw new TemporaryFileCapacityError(
+        'Too many temporary uploads in progress'
+      );
+    }
+
+    const totalBytes = this.temporaryFiles.reduce((sum, file) => sum + file.size, 0);
+    const userBytes = userFiles.reduce((sum, file) => sum + file.size, 0);
+    const maxUploadSize = Math.max(settings.storageUploadMaxFileSize, 1);
+    const globalByteLimit = maxUploadSize * TEMP_MAX_GLOBAL_BYTES_MULTIPLIER;
+    const userByteLimit = maxUploadSize * TEMP_MAX_USER_BYTES_MULTIPLIER;
+
+    if (totalBytes + size > globalByteLimit || userBytes + size > userByteLimit) {
+      throw new TemporaryFileCapacityError(
+        'Temporary upload storage limit exceeded'
+      );
+    }
+  };
+
   public getTemporaryFile = (id: string): TTempFile | undefined => {
     return this.temporaryFiles.find((file) => file.id === id);
   };
@@ -75,15 +183,18 @@ class TemporaryFileManager {
     originalName: string;
     userId: number;
   }): Promise<TTempFile> => {
+    const safeOriginalName = sanitizeOriginalName(originalName);
+    await this.assertWithinTemporaryCapacity(size, userId);
+
     const md5 = await md5File(filePath);
     const fileId = randomUUIDv7();
-    const ext = path.extname(originalName);
+    const ext = sanitizeExtension(path.extname(safeOriginalName));
 
     const tempFilePath = path.join(TMP_PATH, `${fileId}${ext}`);
 
     const tempFile: TTempFile = {
       id: fileId,
-      originalName,
+      originalName: safeOriginalName,
       size,
       md5,
       path: tempFilePath,
@@ -123,10 +234,12 @@ class TemporaryFileManager {
     }
 
     this.temporaryFiles = this.temporaryFiles.filter((file) => file.id !== id);
+    delete this.timeouts[id];
   };
 
   public getSafeUploadPath = async (name: string): Promise<string> => {
-    const ext = path.extname(name);
+    const safeOriginalName = sanitizeOriginalName(name);
+    const ext = sanitizeExtension(path.extname(safeOriginalName));
     const safePath = path.join(UPLOADS_PATH, `${randomUUIDv7()}${ext}`);
 
     return safePath;
@@ -186,10 +299,14 @@ class FileManager {
   };
 
   private getUniqueName = async (originalName: string): Promise<string> => {
-    const baseName = path.basename(originalName, path.extname(originalName));
-    const extension = path.extname(originalName);
+    const safeOriginalName = sanitizeOriginalName(originalName);
+    const rawExtension = path.extname(safeOriginalName);
+    const extension = sanitizeExtension(rawExtension);
+    const baseName = sanitizeBaseName(
+      path.basename(safeOriginalName, rawExtension)
+    );
 
-    let fileName = originalName;
+    let fileName = `${baseName}${extension}`;
     let counter = 2;
 
     // eslint-disable-next-line no-constant-condition
@@ -252,3 +369,4 @@ class FileManager {
 const fileManager = new FileManager();
 
 export { fileManager };
+export { TemporaryFileCapacityError };

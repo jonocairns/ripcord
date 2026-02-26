@@ -7,6 +7,8 @@ import {
   uploadFile
 } from '../../__tests__/helpers';
 import { TEST_SECRET_TOKEN } from '../../__tests__/seed';
+import { tdb } from '../../__tests__/setup';
+import { settings } from '../../db/schema';
 
 describe('others router', () => {
   test('should throw when user tries to join with no handshake', async () => {
@@ -60,6 +62,37 @@ describe('others router', () => {
     const { hasPassword: hasPasswordAfter } = await caller.others.handshake();
 
     expect(hasPasswordAfter).toBe(true);
+  });
+
+  test('should verify and upgrade server password to hashed format on join', async () => {
+    const { caller } = await initTest(1);
+
+    await caller.others.updateSettings({
+      password: 'testpassword'
+    });
+
+    const { handshakeHash } = await caller.others.handshake();
+
+    await expect(
+      caller.others.joinServer({
+        handshakeHash
+      })
+    ).rejects.toThrow('Invalid password');
+
+    const { handshakeHash: nextHandshakeHash } = await caller.others.handshake();
+
+    await caller.others.joinServer({
+      handshakeHash: nextHandshakeHash,
+      password: 'testpassword'
+    });
+
+    const stored = await tdb
+      .select({ password: settings.password })
+      .from(settings)
+      .limit(1)
+      .get();
+
+    expect(stored?.password?.startsWith('argon2$')).toBe(true);
   });
 
   test('should redact password in settings payloads', async () => {
