@@ -1,4 +1,3 @@
-import Spinner from '@/components/ui/spinner';
 import { loadApp } from '@/features/app/actions';
 import { useStrictEffect } from '@/hooks/use-strict-effect';
 import { memo } from 'react';
@@ -9,9 +8,8 @@ const LoadingApp = memo(() => {
   }, []);
 
   return (
-    <div className="flex flex-col justify-center items-center h-full gap-2">
-      <Spinner size="lg" />
-      <span className="text-xl">Loading Ripcord</span>
+    <div className="flex flex-col justify-center items-center h-full">
+      <div className="logo-loader" aria-hidden="true" />
     </div>
   );
 });

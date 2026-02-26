@@ -25,15 +25,15 @@ const loginRateLimiter = createRateLimiter({
   windowMs: config.rateLimiters.joinServer.windowMs
 });
 
-// 10 attempts per minute per IP for refresh route
+// 60 attempts per minute per IP for refresh route
 const refreshRateLimiter = createRateLimiter({
-  maxRequests: 10,
+  maxRequests: 60,
   windowMs: 60_000
 });
 
-// 20 attempts per minute per IP for logout route
+// 60 attempts per minute per IP for logout route
 const logoutRateLimiter = createRateLimiter({
-  maxRequests: 20,
+  maxRequests: 60,
   windowMs: 60_000
 });
 

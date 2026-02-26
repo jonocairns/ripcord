@@ -2,6 +2,8 @@ import { Permission } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
 import { initTest } from '../../__tests__/helpers';
 
+const SEND_AND_EDIT_MESSAGE_MAX_REQUESTS_PER_MINUTE = 60;
+
 describe('messages router', () => {
   test('should throw when user lacks permissions (edit - not own message)', async () => {
     const { caller: caller1 } = await initTest(1);
@@ -658,7 +660,7 @@ describe('messages router', () => {
   test('should rate limit excessive send message attempts', async () => {
     const { caller } = await initTest(1);
 
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < SEND_AND_EDIT_MESSAGE_MAX_REQUESTS_PER_MINUTE; i++) {
       await caller.messages.send({
         channelId: 1,
         content: `Message ${i}`,
@@ -684,7 +686,7 @@ describe('messages router', () => {
       files: []
     });
 
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < SEND_AND_EDIT_MESSAGE_MAX_REQUESTS_PER_MINUTE; i++) {
       await caller.messages.edit({
         messageId,
         content: `Edit ${i}`

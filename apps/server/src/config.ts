@@ -56,11 +56,11 @@ const defaultConfig: TConfig = {
   },
   rateLimiters: {
     sendAndEditMessage: {
-      maxRequests: 15,
+      maxRequests: 60,
       windowMs: 60_000
     },
     joinVoiceChannel: {
-      maxRequests: 20,
+      maxRequests: 60,
       windowMs: 60_000
     },
     joinServer: {

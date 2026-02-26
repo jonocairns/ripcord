@@ -29,10 +29,13 @@ import { VoiceRuntime } from '../../runtimes/voice';
 import { invariant } from '../../utils/invariant';
 import { rateLimitedProcedure, t } from '../../utils/trpc';
 
+const JOIN_SERVER_MAX_REQUESTS_PER_MINUTE = 60;
+
 const joinServerRoute = rateLimitedProcedure(t.procedure, {
-  maxRequests: 5,
+  maxRequests: JOIN_SERVER_MAX_REQUESTS_PER_MINUTE,
   windowMs: 60_000,
-  logLabel: 'joinServer'
+  logLabel: 'joinServer',
+  keyBy: 'user'
 })
   .input(
     z.object({

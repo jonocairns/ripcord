@@ -109,7 +109,6 @@ const Connect = memo(() => {
 
     return '/logo.webp';
   }, [info]);
-  const hasServerLogo = !!info?.logo;
 
   return (
     <div className="flex flex-col gap-2 justify-center items-center h-full">
@@ -117,11 +116,6 @@ const Connect = memo(() => {
         <CardHeader>
           <CardTitle className="flex flex-col items-center gap-2 text-center">
             <img src={logoSrc} alt="Ripcord" className="w-32 h-32" />
-            {info?.name && !hasServerLogo && (
-              <span className="text-xl font-bold leading-tight">
-                {info.name}
-              </span>
-            )}
           </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
