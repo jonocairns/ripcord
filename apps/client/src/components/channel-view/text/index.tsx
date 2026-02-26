@@ -263,12 +263,12 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
           </div>
         )}
         <div className="flex items-center px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:h-14 md:p-2">
-          <div className="bg-muted/60 flex h-10 w-full items-center gap-1 rounded-xl border border-border px-2">
+          <div className="bg-muted/60 flex h-10 w-full items-center gap-1 rounded-md border border-border px-1">
             <input {...fileInputProps} />
             <Button
               size="icon"
               variant="ghost"
-              className="h-8 w-8 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
+              className="h-8 w-8 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
               disabled={uploading || !canUploadFiles}
               onClick={openFileDialog}
               title="Upload files"
@@ -288,7 +288,7 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
             <Button
               size="icon"
               variant="secondary"
-              className="h-8 w-8 shrink-0 rounded-full"
+              className="h-8 w-8 shrink-0 rounded-md"
               onClick={onSendMessage}
               disabled={
                 uploading || sending || !newMessage.trim() || !canSendMessages

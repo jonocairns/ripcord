@@ -52,10 +52,10 @@ const VoiceUserCard = memo(
     return (
       <div
         className={cn(
-          'relative bg-card rounded-lg overflow-hidden group',
+          'relative bg-card rounded-xl overflow-hidden group',
           'flex items-center justify-center',
           'w-full h-full',
-          'border border-border',
+          'border border-border/70 shadow-[0_10px_32px_rgb(0_0_0/0.38)]',
           isActivelySpeaking
             ? speakingIntensity === 1
               ? 'speaking-effect-low'
@@ -82,7 +82,7 @@ const VoiceUserCard = memo(
             muted
             playsInline
             className={cn(
-              'absolute inset-0 w-full h-full object-contain',
+              'absolute inset-0 h-full w-full bg-black/40 object-contain',
               isOwnUser && devices.mirrorOwnVideo && '-scale-x-100'
             )}
           />
@@ -90,14 +90,14 @@ const VoiceUserCard = memo(
         {!hasVideoStream && (
           <UserAvatar
             userId={userId}
-            className="w-12 h-12 md:w-16 md:h-16 lg:w-24 lg:h-24"
+            className="h-20 w-20 md:h-24 md:w-24 lg:h-28 lg:w-28"
             showStatusBadge={false}
           />
         )}
 
-        <div className="absolute bottom-0 left-0 right-0 p-2">
-          <div className="flex items-center justify-between">
-            <span className="text-white font-medium text-xs truncate">
+        <div className="absolute bottom-0 left-0 right-0 z-10 p-2">
+          <div className="flex items-center justify-between rounded-md border border-white/10 bg-black/45 px-2 py-1 backdrop-blur-sm">
+            <span className="truncate text-sm font-medium text-white">
               {voiceUser.name}
             </span>
 
@@ -111,11 +111,11 @@ const VoiceUserCard = memo(
               )}
 
               {voiceUser.state.webcamEnabled && (
-                <Video className="size-3.5 text-blue-600/80" />
+                <Video className="size-3.5 text-sky-400/90" />
               )}
 
               {voiceUser.state.sharingScreen && (
-                <Monitor className="size-3.5 text-purple-500/80" />
+                <Monitor className="size-3.5 text-cyan-400/90" />
               )}
             </div>
           </div>

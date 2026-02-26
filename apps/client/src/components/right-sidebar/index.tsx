@@ -1,6 +1,7 @@
 import { UserAvatar } from '@/components/user-avatar';
 import { useUsers } from '@/features/server/users/hooks';
 import { cn } from '@/lib/utils';
+import { UserStatus } from '@sharkord/shared';
 import { PanelRight, PanelRightClose } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import { Button } from '../ui/button';
@@ -8,45 +9,80 @@ import { UserPopover } from '../user-popover';
 
 const MAX_USERS_TO_SHOW = 100;
 
-type TUserProps = {
-  userId: number;
+type TMember = {
+  id: number;
   name: string;
   banned: boolean;
+  status?: string | null;
+};
+
+type TUserProps = {
+  user: TMember;
   isCollapsed?: boolean;
 };
 
-const User = memo(
-  ({ userId, name, banned, isCollapsed = false }: TUserProps) => {
-    return (
-      <UserPopover userId={userId}>
+const User = memo(({ user, isCollapsed = false }: TUserProps) => {
+  const status = String(user.status ?? UserStatus.OFFLINE);
+  const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+
+  return (
+    <UserPopover userId={user.id}>
+      <div
+        className={cn(
+          'flex select-none items-center gap-3 rounded-md px-2.5 py-1.5 transition-colors hover:bg-accent/65',
+          isCollapsed && 'lg:justify-center lg:gap-0 lg:px-1 lg:py-1'
+        )}
+        title={user.name}
+      >
+        <UserAvatar userId={user.id} className="h-8 w-8" />
         <div
           className={cn(
-            'flex items-center gap-3 rounded px-2 py-1.5 hover:bg-accent select-none',
-            isCollapsed && 'lg:justify-center lg:gap-0 lg:px-1 lg:py-1'
+            'min-w-0 overflow-hidden lg:max-w-[10rem] lg:opacity-100 lg:transition-[max-width,opacity] lg:duration-200 lg:ease-out',
+            isCollapsed && 'lg:max-w-0 lg:opacity-0'
           )}
-          title={name}
         >
-          <UserAvatar userId={userId} className="h-8 w-8" />
-          <div
+          <span
             className={cn(
-              'min-w-0 overflow-hidden lg:max-w-[9.5rem] lg:opacity-100 lg:transition-[max-width,opacity] lg:duration-200 lg:ease-out',
-              isCollapsed && 'lg:max-w-0 lg:opacity-0'
+              'block truncate text-sm font-medium text-foreground',
+              user.banned && 'line-through text-muted-foreground'
             )}
           >
-            <span
-              className={cn(
-                'block truncate text-sm text-foreground',
-                banned && 'line-through text-muted-foreground'
-              )}
-            >
-              {name}
-            </span>
-          </div>
+            {user.name}
+          </span>
+          <span className="block truncate text-[11px] text-muted-foreground">
+            {statusLabel}
+          </span>
         </div>
-      </UserPopover>
-    );
-  }
-);
+      </div>
+    </UserPopover>
+  );
+});
+
+type TUserSection = {
+  id: string;
+  label: string;
+  users: TMember[];
+};
+
+const getMemberSections = (users: TMember[]): TUserSection[] => {
+  const online = users.filter(
+    (user) => !user.banned && String(user.status ?? UserStatus.OFFLINE) === UserStatus.ONLINE
+  );
+  const idle = users.filter(
+    (user) => !user.banned && String(user.status ?? UserStatus.OFFLINE) === UserStatus.IDLE
+  );
+  const offline = users.filter(
+    (user) => !user.banned && String(user.status ?? UserStatus.OFFLINE) === UserStatus.OFFLINE
+  );
+  const banned = users.filter((user) => user.banned);
+
+  return [
+    { id: 'online', label: 'Online', users: online },
+    { id: 'idle', label: 'Idle', users: idle },
+    { id: 'offline', label: 'Offline', users: offline },
+    { id: 'banned', label: 'Banned', users: banned }
+  ].filter((section) => section.users.length > 0);
+};
 
 type TRightSidebarProps = {
   className?: string;
@@ -65,16 +101,17 @@ const RightSidebar = memo(
     const users = useUsers();
 
     const usersToShow = useMemo(
-      () => users.slice(0, MAX_USERS_TO_SHOW),
+      () => users.slice(0, MAX_USERS_TO_SHOW) as TMember[],
       [users]
     );
 
     const hasHiddenUsers = users.length > MAX_USERS_TO_SHOW;
+    const sections = useMemo(() => getMemberSections(usersToShow), [usersToShow]);
 
     return (
       <aside
         className={cn(
-          'flex flex-col border-l border-border bg-card h-full transition-all duration-500 ease-in-out',
+          'flex h-full flex-col border-l border-border/70 bg-card/85 backdrop-blur-sm transition-all duration-500 ease-in-out',
           isOpen && isCollapsed
             ? 'w-60 lg:w-16'
             : isOpen
@@ -88,17 +125,20 @@ const RightSidebar = memo(
           <>
             <div
               className={cn(
-                'flex h-12 items-center border-b border-border px-3 justify-between',
+                'flex h-12 items-center justify-between border-b border-border/70 px-3',
                 isCollapsed && 'lg:px-0 lg:justify-center'
               )}
             >
               <div
                 className={cn(
-                  'overflow-hidden whitespace-nowrap text-sm font-semibold text-foreground lg:max-w-28 lg:opacity-100 lg:transition-[max-width,opacity] lg:duration-200 lg:ease-out',
+                  'flex items-center gap-2 overflow-hidden whitespace-nowrap text-sm font-semibold text-foreground lg:max-w-36 lg:opacity-100 lg:transition-[max-width,opacity] lg:duration-200 lg:ease-out',
                   isCollapsed && 'lg:max-w-0 lg:opacity-0'
                 )}
               >
-                Members
+                <span>Members</span>
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                  {users.length}
+                </span>
               </div>
               {onToggleCollapse && (
                 <Button
@@ -118,39 +158,41 @@ const RightSidebar = memo(
                 </Button>
               )}
             </div>
-            <div
-              className={cn(
-                'flex-1 overflow-y-auto p-2',
-                isCollapsed && 'lg:p-1'
+
+            <div className={cn('flex-1 overflow-y-auto p-2', isCollapsed && 'lg:p-1')}>
+              {isCollapsed ? (
+                <div className="space-y-2 lg:flex lg:flex-col lg:items-center">
+                  {usersToShow.map((user) => (
+                    <User key={user.id} user={user} isCollapsed />
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {sections.map((section) => (
+                    <section key={section.id} className="space-y-1">
+                      <div className="px-2 text-[11px] font-semibold tracking-wide text-muted-foreground/80 uppercase">
+                        {section.label} ({section.users.length})
+                      </div>
+                      <div className="space-y-1">
+                        {section.users.map((user) => (
+                          <User key={user.id} user={user} />
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
               )}
-            >
-              <div
-                className={cn(
-                  'space-y-1',
-                  isCollapsed &&
-                    'lg:flex lg:flex-col lg:items-center lg:space-y-2'
-                )}
-              >
-                {usersToShow.map((user) => (
-                  <User
-                    key={user.id}
-                    userId={user.id}
-                    name={user.name}
-                    banned={user.banned}
-                    isCollapsed={isCollapsed}
-                  />
-                ))}
-                {hasHiddenUsers && (
-                  <div
-                    className={cn(
-                      'text-sm text-muted-foreground px-2 py-1.5',
-                      isCollapsed && 'lg:hidden'
-                    )}
-                  >
-                    More members...
-                  </div>
-                )}
-              </div>
+
+              {hasHiddenUsers && (
+                <div
+                  className={cn(
+                    'px-2 py-2 text-xs text-muted-foreground',
+                    isCollapsed && 'lg:hidden'
+                  )}
+                >
+                  More members...
+                </div>
+              )}
             </div>
           </>
         )}

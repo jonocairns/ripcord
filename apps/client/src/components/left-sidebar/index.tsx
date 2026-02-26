@@ -86,17 +86,17 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
   return (
     <aside
       className={cn(
-        'flex w-72 flex-col border-r border-border bg-card h-full',
+        'flex h-full w-72 flex-col border-r border-sidebar-border bg-sidebar/95 backdrop-blur-sm',
         className
       )}
     >
-      <div className="flex w-full h-12 items-center border-b border-border px-2">
+      <div className="flex h-12 w-full items-center border-b border-sidebar-border px-2">
         {hasServerActions ? (
           <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
-                className="h-10 w-full justify-between px-2 text-left"
+                className="h-10 w-full justify-between rounded-md px-2 text-left hover:bg-sidebar-accent"
               >
                 {headerContent}
               </Button>
@@ -138,7 +138,7 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
             </DropdownMenuContent>
           </DropdownMenu>
         ) : (
-          <div className="flex h-10 w-full items-center justify-between px-2 text-left">
+          <div className="flex h-10 w-full items-center justify-between rounded-md px-2 text-left">
             {headerContent}
           </div>
         )}
