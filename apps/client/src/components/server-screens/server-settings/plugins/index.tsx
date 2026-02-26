@@ -234,8 +234,8 @@ const Plugins = memo(() => {
           <div>
             <CardTitle>Plugins</CardTitle>
             <CardDescription>
-              Manage installed plugins and extend Ripcord with
-              additional features and functionality.
+              Manage installed plugins and extend Ripcord with additional
+              features and functionality.
             </CardDescription>
           </div>
           <Button

@@ -56,7 +56,10 @@ const fallbackSourceName = (source: DesktopCapturerSource) => {
   return "Window";
 };
 
-const compareSources = (left: DesktopCapturerSource, right: DesktopCapturerSource) => {
+const compareSources = (
+  left: DesktopCapturerSource,
+  right: DesktopCapturerSource,
+) => {
   const leftKindOrder = isScreenSource(left) ? 0 : 1;
   const rightKindOrder = isScreenSource(right) ? 0 : 1;
 

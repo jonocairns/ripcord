@@ -299,7 +299,10 @@ const createWsServer = async (server: http.Server) => {
         if (!trackedWs.userId) return;
 
         const userId = trackedWs.userId;
-        const hasOtherConnections = hasOtherOpenUserConnection(userId, trackedWs);
+        const hasOtherConnections = hasOtherOpenUserConnection(
+          userId,
+          trackedWs
+        );
 
         let voiceRuntime: VoiceRuntime | undefined;
 

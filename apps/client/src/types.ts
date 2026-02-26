@@ -50,7 +50,7 @@ export enum VoiceFilterStrength {
 
 export enum MicQualityMode {
   AUTO = 'auto',
-  MANUAL = 'manual',       // kept for migration only
+  MANUAL = 'manual', // kept for migration only
   EXPERIMENTAL = 'experimental'
 }
 

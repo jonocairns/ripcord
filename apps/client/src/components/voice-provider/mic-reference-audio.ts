@@ -38,7 +38,10 @@ const createMicReferenceAudioPipeline = async ({
   }
 
   const outputChannels = Math.max(1, Math.min(2, Math.floor(channels || 1)));
-  const normalizedTargetFrameSize = Math.max(1, Math.floor(targetFrameSize || 480));
+  const normalizedTargetFrameSize = Math.max(
+    1,
+    Math.floor(targetFrameSize || 480)
+  );
   const audioContext = new AudioContextClass({
     sampleRate
   });
@@ -81,7 +84,10 @@ const createMicReferenceAudioPipeline = async ({
         const sourceEnd = sourceOffset + framesToCopy * outputChannels;
         const destinationOffset = writtenFrames * outputChannels;
 
-        frameSamples.set(chunk.subarray(sourceOffset, sourceEnd), destinationOffset);
+        frameSamples.set(
+          chunk.subarray(sourceOffset, sourceEnd),
+          destinationOffset
+        );
 
         writtenFrames += framesToCopy;
         pendingFrameOffset += framesToCopy;

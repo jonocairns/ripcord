@@ -21,11 +21,7 @@ type TEmojiListProps = {
 };
 
 const EmojiList = memo(
-  ({
-    emojis,
-    uploadEmoji,
-    isUploading
-  }: TEmojiListProps) => {
+  ({ emojis, uploadEmoji, isUploading }: TEmojiListProps) => {
     const [search, setSearch] = useState('');
 
     const filteredEmojis = useMemo(() => {

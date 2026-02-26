@@ -161,4 +161,8 @@ const getVideoBitratePolicy = ({
 };
 
 export { getVideoBitratePolicy };
-export type { TVideoBitratePolicy, TVideoBitratePolicyInput, TVideoBitrateProfile };
+export type {
+  TVideoBitratePolicy,
+  TVideoBitratePolicyInput,
+  TVideoBitrateProfile
+};

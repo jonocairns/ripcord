@@ -11,7 +11,11 @@ type TEmojiProps = {
 const Emoji = memo(({ src, name, onClick, className }: TEmojiProps) => {
   return (
     <div
-      className={cn('aspect-square rounded-md', onClick && 'cursor-pointer', className)}
+      className={cn(
+        'aspect-square rounded-md',
+        onClick && 'cursor-pointer',
+        className
+      )}
       onClick={onClick}
     >
       <img

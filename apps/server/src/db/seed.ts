@@ -25,8 +25,8 @@ import {
   categories,
   channels,
   messages,
-  roles,
   rolePermissions,
+  roles,
   settings,
   userRoles,
   users

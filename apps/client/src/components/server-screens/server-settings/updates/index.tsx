@@ -33,8 +33,8 @@ const Updates = memo(() => {
       <CardHeader>
         <CardTitle>Updates</CardTitle>
         <CardDescription>
-          Check for and install updates to keep Ripcord running
-          with the latest features and security improvements.
+          Check for and install updates to keep Ripcord running with the latest
+          features and security improvements.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

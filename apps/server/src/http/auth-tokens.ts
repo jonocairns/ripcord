@@ -1,5 +1,5 @@
-import { randomUUIDv7 } from 'bun';
 import { sha256 } from '@sharkord/shared';
+import { randomUUIDv7 } from 'bun';
 import jwt from 'jsonwebtoken';
 import { db } from '../db';
 import { getServerToken } from '../db/queries/server';
@@ -33,8 +33,8 @@ const issueAuthTokens = async (userId: number) => {
 };
 
 export {
-  REFRESH_TOKEN_TTL_MS,
   createAccessToken,
   createRefreshTokenValue,
-  issueAuthTokens
+  issueAuthTokens,
+  REFRESH_TOKEN_TTL_MS
 };

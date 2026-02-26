@@ -3,8 +3,8 @@ import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { initTest, uploadFile } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
-import { verifyPassword } from '../../helpers/password';
 import { users } from '../../db/schema';
+import { verifyPassword } from '../../helpers/password';
 
 describe('users router', () => {
   test('should throw when user lacks permissions (getAll)', async () => {

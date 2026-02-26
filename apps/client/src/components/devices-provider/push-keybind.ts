@@ -68,7 +68,9 @@ const serializePushKeybind = ({
   return parts.join('+');
 };
 
-const normalizePushKeybind = (keybind: string | undefined): string | undefined => {
+const normalizePushKeybind = (
+  keybind: string | undefined
+): string | undefined => {
   if (!keybind || typeof keybind !== 'string') {
     return undefined;
   }
@@ -101,9 +103,7 @@ const normalizePushKeybind = (keybind: string | undefined): string | undefined =
   return serializePushKeybind(parsed);
 };
 
-const pushKeybindFromKeyState = (
-  keyState: TKeybindState
-): string | undefined =>
+const pushKeybindFromKeyState = (keyState: TKeybindState): string | undefined =>
   serializePushKeybind({
     code: keyState.code,
     ctrlKey: keyState.ctrlKey,
@@ -180,10 +180,10 @@ const formatPushKeybindLabel = (keybind: string | undefined): string => {
   ].join(' + ');
 };
 
-export type { TKeybindState };
 export {
   formatPushKeybindLabel,
   matchesPushKeybind,
   normalizePushKeybind,
   pushKeybindFromKeyState
 };
+export type { TKeybindState };

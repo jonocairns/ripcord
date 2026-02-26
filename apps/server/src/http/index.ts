@@ -17,7 +17,7 @@ import { logoutRouteHandler } from './logout';
 import { publicRouteHandler } from './public';
 import { refreshRouteHandler } from './refresh';
 import { uploadFileRouteHandler } from './upload';
-import { HttpValidationError } from './utils';
+import { HttpPayloadTooLargeError, HttpValidationError } from './utils';
 
 // 5 attempts per minute per IP for login route
 const loginRateLimiter = createRateLimiter({
@@ -127,7 +127,8 @@ const createHttpServer = async (port: number = config.server.port) => {
                 res.writeHead(429, { 'Content-Type': 'application/json' });
                 res.end(
                   JSON.stringify({
-                    error: 'Too many refresh attempts. Please try again shortly.'
+                    error:
+                      'Too many refresh attempts. Please try again shortly.'
                   })
                 );
                 return;
@@ -192,6 +193,14 @@ const createHttpServer = async (port: number = config.server.port) => {
 
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ errors: errorsMap }));
+            return;
+          } else if (error instanceof HttpPayloadTooLargeError) {
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: error.message }));
+            return;
+          } else if (error instanceof SyntaxError) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid JSON payload' }));
             return;
           }
 

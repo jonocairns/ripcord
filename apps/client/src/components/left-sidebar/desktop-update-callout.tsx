@@ -1,7 +1,14 @@
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import type { TDesktopUpdateStatus } from '@/runtime/types';
 import { AlertTriangle, Download, Loader2, Rocket } from 'lucide-react';
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState
+} from 'react';
 import { toast } from 'sonner';
 import { Button } from '../ui/button';
 
@@ -31,7 +38,9 @@ const resolveCalloutContent = (
 
   if (status.state === 'downloading') {
     const progressText =
-      typeof status.percent === 'number' ? `${Math.round(status.percent)}%` : '';
+      typeof status.percent === 'number'
+        ? `${Math.round(status.percent)}%`
+        : '';
 
     return {
       title: 'Downloading update',
@@ -139,7 +148,9 @@ const DesktopUpdateCallout = memo(() => {
       toast.success('Installing update and restarting app...');
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : 'Failed to start update install';
+        error instanceof Error
+          ? error.message
+          : 'Failed to start update install';
       toast.error(message);
     } finally {
       setInstallingUpdate(false);

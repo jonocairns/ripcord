@@ -11,15 +11,21 @@ import { getSettings } from '../db/queries/server';
 import { getUserByIdentity } from '../db/queries/users';
 import { userRoles, users } from '../db/schema';
 import { getWsInfo } from '../helpers/get-ws-info';
-import { hashPassword, isArgon2Hash, verifyPassword } from '../helpers/password';
+import {
+  hashPassword,
+  isArgon2Hash,
+  verifyPassword
+} from '../helpers/password';
 import { enqueueActivityLog } from '../queues/activity-log';
 import { invariant } from '../utils/invariant';
 import { issueAuthTokens } from './auth-tokens';
 import { getJsonBody } from './helpers';
 import { HttpValidationError } from './utils';
 
+const AUTH_REQUEST_MAX_BODY_BYTES = 8 * 1024;
+
 const zBody = z.object({
-  identity: z.string().min(1, 'Identity is required'),
+  identity: z.string().min(1, 'Identity is required').max(255),
   password: z.string().min(4, 'Password is required').max(128),
   invite: z.string().optional()
 });
@@ -80,7 +86,9 @@ const loginRouteHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse
 ) => {
-  const data = zBody.parse(await getJsonBody(req));
+  const data = zBody.parse(
+    await getJsonBody(req, { maxBytes: AUTH_REQUEST_MAX_BODY_BYTES })
+  );
   const settings = await getSettings();
   let existingUser = await getUserByIdentity(data.identity);
   const connectionInfo = getWsInfo(undefined, req, {
@@ -112,7 +120,10 @@ const loginRouteHandler = async (
     );
   }
 
-  const passwordMatches = await verifyPassword(data.password, existingUser.password);
+  const passwordMatches = await verifyPassword(
+    data.password,
+    existingUser.password
+  );
 
   if (!passwordMatches) {
     throw new HttpValidationError('password', 'Invalid password');

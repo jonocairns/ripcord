@@ -62,6 +62,37 @@ describe('others router', () => {
     expect(hasPasswordAfter).toBe(true);
   });
 
+  test('should redact password in settings payloads', async () => {
+    const { caller } = await initTest(1);
+
+    await caller.others.updateSettings({
+      password: 'testpassword'
+    });
+
+    const settings = await caller.others.getSettings();
+
+    expect(settings).not.toHaveProperty('password');
+    expect(settings).toHaveProperty('hasPassword', true);
+    expect(settings).not.toHaveProperty('secretToken');
+    expect(settings).not.toHaveProperty('authTokenSecret');
+  });
+
+  test('should keep password when update payload omits password', async () => {
+    const { caller } = await initTest(1);
+
+    await caller.others.updateSettings({
+      password: 'testpassword'
+    });
+
+    await caller.others.updateSettings({
+      description: 'no password change'
+    });
+
+    const { hasPassword } = await caller.others.handshake();
+
+    expect(hasPassword).toBe(true);
+  });
+
   test('should update server settings', async () => {
     const { caller } = await initTest(1);
 
@@ -82,6 +113,8 @@ describe('others router', () => {
     expect(settings.storageUploadEnabled).toBe(
       newSettings.storageUploadEnabled
     );
+    expect(settings).not.toHaveProperty('password');
+    expect(settings).toHaveProperty('hasPassword', false);
     expect(settings).not.toHaveProperty('secretToken');
     expect(settings).not.toHaveProperty('authTokenSecret');
   });

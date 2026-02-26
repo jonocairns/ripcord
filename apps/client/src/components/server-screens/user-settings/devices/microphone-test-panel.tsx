@@ -6,11 +6,11 @@ import {
   resolveSidecarDeviceId,
   type TMicAudioProcessingPipeline
 } from '@/components/voice-provider/mic-audio-processing';
-import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
 import { getTRPCClient } from '@/lib/trpc';
+import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { MicQualityMode, VoiceFilterStrength } from '@/types';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -133,7 +133,9 @@ const MicrophoneTestPanel = memo(
     const mediaRecorderRef = useRef<MediaRecorder | undefined>(undefined);
     const recordingTimeoutRef = useRef<number | undefined>(undefined);
     const recordingChunksRef = useRef<BlobPart[]>([]);
-    const recordingStopPromiseRef = useRef<Promise<void> | undefined>(undefined);
+    const recordingStopPromiseRef = useRef<Promise<void> | undefined>(
+      undefined
+    );
     const recordingStopResolveRef = useRef<(() => void) | undefined>(undefined);
     const recordedClipUrlRef = useRef<string | undefined>(undefined);
     const soundMutedRef = useRef(ownVoiceState.soundMuted);
@@ -156,7 +158,8 @@ const MicrophoneTestPanel = memo(
       voiceFilterStrength
     ]);
     const canRecordClip =
-      typeof window !== 'undefined' && typeof window.MediaRecorder !== 'undefined';
+      typeof window !== 'undefined' &&
+      typeof window.MediaRecorder !== 'undefined';
 
     const setClipUrl = useCallback((nextUrl: string | undefined) => {
       const previousUrl = recordedClipUrlRef.current;
@@ -169,14 +172,15 @@ const MicrophoneTestPanel = memo(
       setRecordedClipUrl(nextUrl);
     }, []);
 
-    const resolveMicAudioConstraints = useCallback((): MediaTrackConstraints => {
-      return {
-        ...(microphoneId ? { deviceId: { exact: microphoneId } } : {}),
-        autoGainControl: resolvedMicProcessingConfig.browserAutoGainControl,
-        echoCancellation: resolvedMicProcessingConfig.browserEchoCancellation,
-        noiseSuppression: resolvedMicProcessingConfig.browserNoiseSuppression
-      };
-    }, [microphoneId, resolvedMicProcessingConfig]);
+    const resolveMicAudioConstraints =
+      useCallback((): MediaTrackConstraints => {
+        return {
+          ...(microphoneId ? { deviceId: { exact: microphoneId } } : {}),
+          autoGainControl: resolvedMicProcessingConfig.browserAutoGainControl,
+          echoCancellation: resolvedMicProcessingConfig.browserEchoCancellation,
+          noiseSuppression: resolvedMicProcessingConfig.browserNoiseSuppression
+        };
+      }, [microphoneId, resolvedMicProcessingConfig]);
 
     const stopRecordingClip = useCallback(async () => {
       const clearRecordingStopTracking = (resolvePendingStop: boolean) => {
@@ -344,23 +348,37 @@ const MicrophoneTestPanel = memo(
         if (inVoiceChannel && outputStream) {
           usesInCallStream = true;
         } else {
-          if (resolvedMicProcessingConfig.sidecarVoiceProcessingEnabled && !inVoiceChannel) {
+          if (
+            resolvedMicProcessingConfig.sidecarVoiceProcessingEnabled &&
+            !inVoiceChannel
+          ) {
             // Sidecar mode — fail hard so the test reflects the real processing path.
             const desktopBridge = getDesktopBridge();
             if (!desktopBridge) {
-              throw new Error('Desktop bridge unavailable for sidecar microphone test.');
+              throw new Error(
+                'Desktop bridge unavailable for sidecar microphone test.'
+              );
             }
-            const sidecarDeviceId = await resolveSidecarDeviceId(microphoneId, desktopBridge);
+            const sidecarDeviceId = await resolveSidecarDeviceId(
+              microphoneId,
+              desktopBridge
+            );
             sidecarPipeline = await createNativeSidecarMicCapturePipeline({
-              suppressionLevel: resolvedMicProcessingConfig.sidecarSuppressionLevel,
-              noiseSuppression: resolvedMicProcessingConfig.sidecarNoiseSuppression,
-              autoGainControl: resolvedMicProcessingConfig.sidecarAutoGainControl,
-              echoCancellation: resolvedMicProcessingConfig.sidecarEchoCancellation,
+              suppressionLevel:
+                resolvedMicProcessingConfig.sidecarSuppressionLevel,
+              noiseSuppression:
+                resolvedMicProcessingConfig.sidecarNoiseSuppression,
+              autoGainControl:
+                resolvedMicProcessingConfig.sidecarAutoGainControl,
+              echoCancellation:
+                resolvedMicProcessingConfig.sidecarEchoCancellation,
               sidecarDeviceId,
               desktopBridge
             });
             if (!sidecarPipeline) {
-              throw new Error('Failed to start native sidecar microphone capture.');
+              throw new Error(
+                'Failed to start native sidecar microphone capture.'
+              );
             }
             outputStream = sidecarPipeline.stream;
           } else {
@@ -378,7 +396,9 @@ const MicrophoneTestPanel = memo(
         }
 
         if (!outputStream) {
-          throw new Error('Unable to access an audio stream for microphone testing.');
+          throw new Error(
+            'Unable to access an audio stream for microphone testing.'
+          );
         }
 
         const audioContext = new AudioContextClass();
@@ -470,7 +490,9 @@ const MicrophoneTestPanel = memo(
       setRecordingError(undefined);
 
       if (!canRecordClip) {
-        setRecordingError('Short clip recording is not supported in this browser.');
+        setRecordingError(
+          'Short clip recording is not supported in this browser.'
+        );
         return;
       }
 
@@ -496,7 +518,10 @@ const MicrophoneTestPanel = memo(
           return true;
         });
         const recorder = mimeType
-          ? new MediaRecorderClass(recordingStream, { mimeType, audioBitsPerSecond: 128_000 })
+          ? new MediaRecorderClass(recordingStream, {
+              mimeType,
+              audioBitsPerSecond: 128_000
+            })
           : new MediaRecorderClass(recordingStream);
 
         mediaRecorderRef.current = recorder;
@@ -683,8 +708,8 @@ const MicrophoneTestPanel = memo(
               {testUsesInCallStream
                 ? 'In-call voice stream (active channel)'
                 : testUsesSidecar
-                ? 'Desktop sidecar (matches in-call processing)'
-                : 'Browser capture path'}
+                  ? 'Desktop sidecar (matches in-call processing)'
+                  : 'Browser capture path'}
             </p>
           )}
         </div>
@@ -736,12 +761,14 @@ const MicrophoneTestPanel = memo(
 
         {hasDesktopBridge && micQualityMode === MicQualityMode.EXPERIMENTAL && (
           <p className="text-xs text-muted-foreground">
-            Experimental mode uses desktop sidecar processing to match
-            in-call audio quality.
+            Experimental mode uses desktop sidecar processing to match in-call
+            audio quality.
           </p>
         )}
 
-        {micTestError && <p className="text-xs text-destructive">{micTestError}</p>}
+        {micTestError && (
+          <p className="text-xs text-destructive">{micTestError}</p>
+        )}
       </div>
     );
   }

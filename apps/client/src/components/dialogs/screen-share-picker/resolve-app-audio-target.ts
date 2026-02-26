@@ -1,7 +1,4 @@
-import {
-  ScreenAudioMode,
-  type TDesktopShareSourceKind
-} from '@/runtime/types';
+import { ScreenAudioMode, type TDesktopShareSourceKind } from '@/runtime/types';
 
 type TResolveAppAudioTargetBehaviorInput = {
   audioMode: ScreenAudioMode;

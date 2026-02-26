@@ -140,23 +140,29 @@ const toPcmAppAudioFrame = (
   }
 
   if (pcmBytes.length % Float32Array.BYTES_PER_ELEMENT !== 0) {
-    console.warn("[desktop] Dropping malformed app audio frame with invalid PCM byte length", {
-      sessionId: frame.sessionId,
-      sequence: frame.sequence,
-      pcmByteLength: pcmBytes.length,
-    });
+    console.warn(
+      "[desktop] Dropping malformed app audio frame with invalid PCM byte length",
+      {
+        sessionId: frame.sessionId,
+        sequence: frame.sequence,
+        pcmByteLength: pcmBytes.length,
+      },
+    );
     return undefined;
   }
 
   const expectedBytes =
     frame.frameCount * frame.channels * Float32Array.BYTES_PER_ELEMENT;
   if (expectedBytes !== pcmBytes.length) {
-    console.warn("[desktop] Dropping malformed app audio frame with mismatched sample count", {
-      sessionId: frame.sessionId,
-      sequence: frame.sequence,
-      expectedBytes,
-      actualBytes: pcmBytes.length,
-    });
+    console.warn(
+      "[desktop] Dropping malformed app audio frame with mismatched sample count",
+      {
+        sessionId: frame.sessionId,
+        sequence: frame.sequence,
+        expectedBytes,
+        actualBytes: pcmBytes.length,
+      },
+    );
     return undefined;
   }
 
@@ -201,7 +207,8 @@ class CaptureSidecarManager {
   private voiceFilterBinaryPendingBytes = 0;
   private voiceFilterBinaryDroppedPackets = 0;
   private voiceFilterBinaryDroppedBytes = 0;
-  private nextVoiceFilterBinaryDropLogAt = BINARY_VOICE_FILTER_INGRESS_DROP_LOG_INTERVAL;
+  private nextVoiceFilterBinaryDropLogAt =
+    BINARY_VOICE_FILTER_INGRESS_DROP_LOG_INTERVAL;
   private voiceFilterBinaryFirstFrameTimer: NodeJS.Timeout | undefined;
   private hasReceivedVoiceFilterFrameSinceSessionStart = false;
   private hasLoggedVoiceFilterInputFrame = false;
@@ -223,7 +230,9 @@ class CaptureSidecarManager {
   private nextVoiceFilterBinaryEgressRetryAt = 0;
   private readonly events = new EventEmitter();
   private readonly restartDelayMs: number;
-  private readonly resolveBinaryPathOverride: (() => string | undefined) | undefined;
+  private readonly resolveBinaryPathOverride:
+    | (() => string | undefined)
+    | undefined;
   private readonly spawnSidecarOverride:
     | (() => ChildProcessWithoutNullStreams)
     | undefined;
@@ -365,7 +374,10 @@ class CaptureSidecarManager {
 
         this.nextAppAudioBinaryEgressRetryAt =
           Date.now() + BINARY_APP_AUDIO_EGRESS_RETRY_DELAY_MS;
-        console.warn("[desktop] Failed to initialize binary app-audio egress", error);
+        console.warn(
+          "[desktop] Failed to initialize binary app-audio egress",
+          error,
+        );
       });
     }
 
@@ -419,10 +431,16 @@ class CaptureSidecarManager {
       protocolVersion: session.protocolVersion,
     });
     void this.ensureVoiceFilterBinaryIngress().catch((error) => {
-      console.warn("[desktop] Failed to initialize binary voice filter ingress", error);
+      console.warn(
+        "[desktop] Failed to initialize binary voice filter ingress",
+        error,
+      );
     });
     await this.ensureVoiceFilterBinaryEgress().catch((error) => {
-      console.warn("[desktop] Failed to initialize binary voice-filter egress; will retry", error);
+      console.warn(
+        "[desktop] Failed to initialize binary voice-filter egress; will retry",
+        error,
+      );
       this.scheduleVoiceFilterBinaryEgressReconnect();
     });
 
@@ -437,7 +455,10 @@ class CaptureSidecarManager {
   async startVoiceFilterSessionWithCapture(
     input: TStartVoiceFilterWithCaptureInput,
   ): Promise<TVoiceFilterSession> {
-    const response = await this.sendRequest("voice_filter.start_with_capture", input);
+    const response = await this.sendRequest(
+      "voice_filter.start_with_capture",
+      input,
+    );
     const session = response as TVoiceFilterSession;
     this.activeVoiceFilterSessionId = session.sessionId;
     this.hasLoggedVoiceFilterInputFrame = false;
@@ -447,10 +468,16 @@ class CaptureSidecarManager {
     this.lastVoiceFilterBinaryPushFailureReason = undefined;
     this.lastVoiceFilterSidecarBinaryError = undefined;
     void this.ensureVoiceFilterBinaryIngress().catch((error) => {
-      console.warn("[desktop] Failed to initialize binary voice filter ingress", error);
+      console.warn(
+        "[desktop] Failed to initialize binary voice filter ingress",
+        error,
+      );
     });
     await this.ensureVoiceFilterBinaryEgress().catch((error) => {
-      console.warn("[desktop] Failed to initialize binary voice-filter egress; will retry", error);
+      console.warn(
+        "[desktop] Failed to initialize binary voice-filter egress; will retry",
+        error,
+      );
       this.scheduleVoiceFilterBinaryEgressReconnect();
     });
     return session;
@@ -485,8 +512,14 @@ class CaptureSidecarManager {
   }
 
   pushVoiceFilterReferenceFrame(frame: TVoiceFilterFrame): void {
-    void this.sendNotification("voice_filter.push_reference_frame", frame).catch((error) => {
-      console.warn("[desktop] Failed to push voice filter reference frame", error);
+    void this.sendNotification(
+      "voice_filter.push_reference_frame",
+      frame,
+    ).catch((error) => {
+      console.warn(
+        "[desktop] Failed to push voice filter reference frame",
+        error,
+      );
     });
   }
 
@@ -500,14 +533,17 @@ class CaptureSidecarManager {
       // Start first-frame watchdog when PCM input actually begins, not at session creation.
       // This avoids premature JSON fallback during startup scheduling jitter.
       this.armVoiceFilterBinaryFirstFrameWatchdog(frame.sessionId);
-      console.warn("[voice-filter-debug] Received first PCM input frame from renderer", {
-        sessionId: frame.sessionId,
-        sequence: frame.sequence,
-        sampleRate: frame.sampleRate,
-        channels: frame.channels,
-        frameCount: frame.frameCount,
-        protocolVersion: frame.protocolVersion,
-      });
+      console.warn(
+        "[voice-filter-debug] Received first PCM input frame from renderer",
+        {
+          sessionId: frame.sessionId,
+          sequence: frame.sequence,
+          sampleRate: frame.sampleRate,
+          channels: frame.channels,
+          frameCount: frame.frameCount,
+          protocolVersion: frame.protocolVersion,
+        },
+      );
     }
 
     const expectedSampleCount = frame.frameCount * frame.channels;
@@ -531,15 +567,18 @@ class CaptureSidecarManager {
     this.lastVoiceFilterBinaryPushFailureReason = binaryPush.reason;
 
     if (Date.now() >= this.nextVoiceFilterBinaryDiagnosticLogAt) {
-      console.warn("[voice-filter-debug] Binary ingress frame push failed; frame dropped", {
-        sessionId: frame.sessionId,
-        sequence: frame.sequence,
-        reason: binaryPush.reason,
-        socketReady:
-          !!this.voiceFilterBinarySocket &&
-          !this.voiceFilterBinarySocket.destroyed &&
-          this.voiceFilterBinarySocket.writable,
-      });
+      console.warn(
+        "[voice-filter-debug] Binary ingress frame push failed; frame dropped",
+        {
+          sessionId: frame.sessionId,
+          sequence: frame.sequence,
+          reason: binaryPush.reason,
+          socketReady:
+            !!this.voiceFilterBinarySocket &&
+            !this.voiceFilterBinarySocket.destroyed &&
+            this.voiceFilterBinarySocket.writable,
+        },
+      );
       this.nextVoiceFilterBinaryDiagnosticLogAt =
         Date.now() + VOICE_FILTER_DIAGNOSTIC_LOG_RATE_LIMIT_MS;
     }
@@ -589,12 +628,7 @@ class CaptureSidecarManager {
         ),
       );
       candidates.push(
-        path.join(
-          process.resourcesPath,
-          "sidecar",
-          "bin",
-          SIDECAR_BINARY_NAME,
-        ),
+        path.join(process.resourcesPath, "sidecar", "bin", SIDECAR_BINARY_NAME),
       );
 
       return candidates;
@@ -696,10 +730,13 @@ class CaptureSidecarManager {
 
     const processEvents = processRef as unknown as NodeJS.EventEmitter;
 
-    processEvents.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
-      const reason = `Capture sidecar exited (code=${code ?? "null"}, signal=${signal ?? "null"})`;
-      this.handleSidecarExit(reason);
-    });
+    processEvents.on(
+      "exit",
+      (code: number | null, signal: NodeJS.Signals | null) => {
+        const reason = `Capture sidecar exited (code=${code ?? "null"}, signal=${signal ?? "null"})`;
+        this.handleSidecarExit(reason);
+      },
+    );
 
     processEvents.on("error", (error: Error) => {
       this.handleSidecarExit(`Capture sidecar error: ${error.message}`);
@@ -888,11 +925,12 @@ class CaptureSidecarManager {
       }
 
       if (parsedLine.event === "mic_capture.status") {
-        const { rawModeEnabled, rawModeStatus, sessionId } = parsedLine.params as {
-          rawModeEnabled: boolean;
-          rawModeStatus: string;
-          sessionId: string;
-        };
+        const { rawModeEnabled, rawModeStatus, sessionId } =
+          parsedLine.params as {
+            rawModeEnabled: boolean;
+            rawModeStatus: string;
+            sessionId: string;
+          };
         console.warn("[voice-filter-debug] Mic capture raw mode status", {
           sessionId,
           rawModeEnabled,
@@ -952,7 +990,10 @@ class CaptureSidecarManager {
 
       this.nextVoiceFilterBinaryEgressRetryAt = 0;
       void this.ensureVoiceFilterBinaryEgress().catch((error) => {
-        console.warn("[desktop] Binary VF egress reconnect attempt failed; will retry", error);
+        console.warn(
+          "[desktop] Binary VF egress reconnect attempt failed; will retry",
+          error,
+        );
         this.scheduleVoiceFilterBinaryEgressReconnect();
       });
     }, BINARY_VF_EGRESS_RECONNECT_DELAY_MS);
@@ -970,7 +1011,10 @@ class CaptureSidecarManager {
     while (offset + 4 <= buffer.length) {
       const payloadLen = buffer.readUInt32LE(offset);
 
-      if (payloadLen === 0 || payloadLen > MAX_BINARY_VF_EGRESS_FRAME_SIZE_BYTES) {
+      if (
+        payloadLen === 0 ||
+        payloadLen > MAX_BINARY_VF_EGRESS_FRAME_SIZE_BYTES
+      ) {
         this.closeVoiceFilterBinaryEgressSocket();
         return;
       }
@@ -989,7 +1033,9 @@ class CaptureSidecarManager {
     }
 
     this.voiceFilterBinaryEgressReadBuffer =
-      offset >= buffer.length ? Buffer.alloc(0) : Buffer.from(buffer.subarray(offset));
+      offset >= buffer.length
+        ? Buffer.alloc(0)
+        : Buffer.from(buffer.subarray(offset));
   }
 
   private parseVoiceFilterBinaryEgressFrame(payload: Buffer): void {
@@ -1025,7 +1071,8 @@ class CaptureSidecarManager {
     };
 
     const sessionIdLen = readU16();
-    if (sessionIdLen === undefined || offset + sessionIdLen > payload.length) return;
+    if (sessionIdLen === undefined || offset + sessionIdLen > payload.length)
+      return;
     const sessionId = payload.toString("utf8", offset, offset + sessionIdLen);
     offset += sessionIdLen;
 
@@ -1058,7 +1105,12 @@ class CaptureSidecarManager {
       lsnrMean = readF32();
       lsnrMin = readF32();
       lsnrMax = readF32();
-      if (lsnrMean === undefined || lsnrMin === undefined || lsnrMax === undefined) return;
+      if (
+        lsnrMean === undefined ||
+        lsnrMin === undefined ||
+        lsnrMax === undefined
+      )
+        return;
     }
 
     let agcGain: number | undefined;
@@ -1068,7 +1120,8 @@ class CaptureSidecarManager {
     }
 
     const pcmByteLen = readU32();
-    if (pcmByteLen === undefined || offset + pcmByteLen > payload.length) return;
+    if (pcmByteLen === undefined || offset + pcmByteLen > payload.length)
+      return;
     if (pcmByteLen % Float32Array.BYTES_PER_ELEMENT !== 0) return;
 
     // Slice a standalone ArrayBuffer — payload.buffer is a shared Node.js pool allocation;
@@ -1089,7 +1142,8 @@ class CaptureSidecarManager {
       diag.agcGain = agcGain;
     }
 
-    const droppedFrameCount = droppedFrameCountRaw > 0 ? droppedFrameCountRaw : undefined;
+    const droppedFrameCount =
+      droppedFrameCountRaw > 0 ? droppedFrameCountRaw : undefined;
 
     if (sessionId === this.activeVoiceFilterSessionId) {
       this.hasReceivedVoiceFilterFrameSinceSessionStart = true;
@@ -1112,7 +1166,12 @@ class CaptureSidecarManager {
       pcm,
       protocolVersion,
     };
-    this.events.emit("voice-filter-pcm-frame", pcmFrame, diag, droppedFrameCount);
+    this.events.emit(
+      "voice-filter-pcm-frame",
+      pcmFrame,
+      diag,
+      droppedFrameCount,
+    );
   }
 
   private async ensureVoiceFilterBinaryEgress(): Promise<void> {
@@ -1135,7 +1194,10 @@ class CaptureSidecarManager {
     this.voiceFilterBinaryEgressConnectPromise = (async () => {
       await this.ensureSidecarReady();
 
-      const response = await this.sendRequest("voice_filter.binary_egress_info", {});
+      const response = await this.sendRequest(
+        "voice_filter.binary_egress_info",
+        {},
+      );
       const info = response as { port?: unknown };
 
       if (
@@ -1154,7 +1216,9 @@ class CaptureSidecarManager {
 
         const timeout = setTimeout(() => {
           socket.destroy();
-          reject(new Error("Timed out connecting to binary voice-filter egress"));
+          reject(
+            new Error("Timed out connecting to binary voice-filter egress"),
+          );
         }, BINARY_VF_EGRESS_CONNECT_TIMEOUT_MS);
 
         const cleanupTimeout = () => {
@@ -1177,7 +1241,10 @@ class CaptureSidecarManager {
           });
 
           socket.on("error", (error) => {
-            console.warn("[desktop] Binary voice-filter egress socket error", error);
+            console.warn(
+              "[desktop] Binary voice-filter egress socket error",
+              error,
+            );
             this.closeVoiceFilterBinaryEgressSocket(socket);
             this.scheduleVoiceFilterBinaryEgressReconnect();
           });
@@ -1199,7 +1266,8 @@ class CaptureSidecarManager {
       });
     })()
       .catch((error) => {
-        this.nextVoiceFilterBinaryEgressRetryAt = Date.now() + BINARY_VF_EGRESS_RETRY_DELAY_MS;
+        this.nextVoiceFilterBinaryEgressRetryAt =
+          Date.now() + BINARY_VF_EGRESS_RETRY_DELAY_MS;
         throw error;
       })
       .finally(() => {
@@ -1253,7 +1321,11 @@ class CaptureSidecarManager {
     if (!sessionIdLength || payload.length < offset + sessionIdLength) {
       return undefined;
     }
-    const sessionId = payload.toString("utf8", offset, offset + sessionIdLength);
+    const sessionId = payload.toString(
+      "utf8",
+      offset,
+      offset + sessionIdLength,
+    );
     offset += sessionIdLength;
 
     const targetIdLength = readUInt16();
@@ -1375,7 +1447,9 @@ class CaptureSidecarManager {
         this.appAudioBinarySessionIds.add(frame.sessionId);
         this.events.emit("frame-pcm", frame);
       } else {
-        console.warn("[desktop] Dropping malformed binary app-audio frame payload");
+        console.warn(
+          "[desktop] Dropping malformed binary app-audio frame payload",
+        );
       }
 
       offset = payloadEnd;
@@ -1409,10 +1483,17 @@ class CaptureSidecarManager {
     this.appAudioBinaryEgressConnectPromise = (async () => {
       await this.ensureSidecarReady();
 
-      const response = await this.sendRequest("audio_capture.binary_egress_info", {});
+      const response = await this.sendRequest(
+        "audio_capture.binary_egress_info",
+        {},
+      );
       const info = response as TAppAudioBinaryEgressInfo;
 
-      if (!Number.isInteger(info.port) || info.port <= 0 || info.port > 65_535) {
+      if (
+        !Number.isInteger(info.port) ||
+        info.port <= 0 ||
+        info.port > 65_535
+      ) {
         throw new Error("Invalid binary app-audio egress port");
       }
 
@@ -1447,7 +1528,10 @@ class CaptureSidecarManager {
           });
 
           socket.on("error", (error) => {
-            console.warn("[desktop] Binary app-audio egress socket error", error);
+            console.warn(
+              "[desktop] Binary app-audio egress socket error",
+              error,
+            );
             this.closeAppAudioBinaryEgressSocket();
           });
 
@@ -1473,7 +1557,9 @@ class CaptureSidecarManager {
     return this.appAudioBinaryEgressConnectPromise;
   }
 
-  private toBase64VoiceFilterFrame(frame: TVoiceFilterPcmFrame): TVoiceFilterFrame {
+  private toBase64VoiceFilterFrame(
+    frame: TVoiceFilterPcmFrame,
+  ): TVoiceFilterFrame {
     const pcmBytes = Buffer.from(
       frame.pcm.buffer,
       frame.pcm.byteOffset,
@@ -1510,10 +1596,14 @@ class CaptureSidecarManager {
     this.voiceFilterBinaryPendingBytes = 0;
     this.voiceFilterBinaryDroppedPackets = 0;
     this.voiceFilterBinaryDroppedBytes = 0;
-    this.nextVoiceFilterBinaryDropLogAt = BINARY_VOICE_FILTER_INGRESS_DROP_LOG_INTERVAL;
+    this.nextVoiceFilterBinaryDropLogAt =
+      BINARY_VOICE_FILTER_INGRESS_DROP_LOG_INTERVAL;
   }
 
-  private recordVoiceFilterBinaryQueueDrops(droppedPackets: number, droppedBytes: number) {
+  private recordVoiceFilterBinaryQueueDrops(
+    droppedPackets: number,
+    droppedBytes: number,
+  ) {
     if (droppedPackets <= 0 || droppedBytes < 0) {
       return;
     }
@@ -1521,20 +1611,26 @@ class CaptureSidecarManager {
     this.voiceFilterBinaryDroppedPackets += droppedPackets;
     this.voiceFilterBinaryDroppedBytes += droppedBytes;
 
-    if (this.voiceFilterBinaryDroppedPackets < this.nextVoiceFilterBinaryDropLogAt) {
+    if (
+      this.voiceFilterBinaryDroppedPackets < this.nextVoiceFilterBinaryDropLogAt
+    ) {
       return;
     }
 
-    console.warn("[desktop] Dropping queued binary ingress packets to limit latency", {
-      droppedPackets: this.voiceFilterBinaryDroppedPackets,
-      droppedBytes: this.voiceFilterBinaryDroppedBytes,
-      queuedPackets: this.voiceFilterBinaryPendingPackets.length,
-      queuedBytes: this.voiceFilterBinaryPendingBytes,
-      policy: "drop_oldest",
-    });
+    console.warn(
+      "[desktop] Dropping queued binary ingress packets to limit latency",
+      {
+        droppedPackets: this.voiceFilterBinaryDroppedPackets,
+        droppedBytes: this.voiceFilterBinaryDroppedBytes,
+        queuedPackets: this.voiceFilterBinaryPendingPackets.length,
+        queuedBytes: this.voiceFilterBinaryPendingBytes,
+        policy: "drop_oldest",
+      },
+    );
 
     this.nextVoiceFilterBinaryDropLogAt =
-      this.voiceFilterBinaryDroppedPackets + BINARY_VOICE_FILTER_INGRESS_DROP_LOG_INTERVAL;
+      this.voiceFilterBinaryDroppedPackets +
+      BINARY_VOICE_FILTER_INGRESS_DROP_LOG_INTERVAL;
   }
 
   private enqueueVoiceFilterBinaryPacket(packet: Buffer) {
@@ -1551,7 +1647,8 @@ class CaptureSidecarManager {
     let droppedBytes = 0;
 
     while (
-      this.voiceFilterBinaryPendingPackets.length >= MAX_BINARY_VOICE_FILTER_INGRESS_QUEUE_PACKETS ||
+      this.voiceFilterBinaryPendingPackets.length >=
+        MAX_BINARY_VOICE_FILTER_INGRESS_QUEUE_PACKETS ||
       this.voiceFilterBinaryPendingBytes + packet.length >
         MAX_BINARY_VOICE_FILTER_INGRESS_QUEUE_BYTES
     ) {
@@ -1574,7 +1671,11 @@ class CaptureSidecarManager {
   }
 
   private flushVoiceFilterBinaryQueue(socket: Socket) {
-    if (socket !== this.voiceFilterBinarySocket || socket.destroyed || !socket.writable) {
+    if (
+      socket !== this.voiceFilterBinarySocket ||
+      socket.destroyed ||
+      !socket.writable
+    ) {
       return;
     }
 
@@ -1609,12 +1710,22 @@ class CaptureSidecarManager {
     this.voiceFilterBinaryWriteBlocked = false;
   }
 
-  private writeVoiceFilterBinaryPacket(socket: Socket, packet: Buffer): boolean {
-    if (socket !== this.voiceFilterBinarySocket || socket.destroyed || !socket.writable) {
+  private writeVoiceFilterBinaryPacket(
+    socket: Socket,
+    packet: Buffer,
+  ): boolean {
+    if (
+      socket !== this.voiceFilterBinarySocket ||
+      socket.destroyed ||
+      !socket.writable
+    ) {
       return false;
     }
 
-    if (this.voiceFilterBinaryWriteBlocked || this.voiceFilterBinaryPendingPackets.length > 0) {
+    if (
+      this.voiceFilterBinaryWriteBlocked ||
+      this.voiceFilterBinaryPendingPackets.length > 0
+    ) {
       this.enqueueVoiceFilterBinaryPacket(packet);
       if (!this.voiceFilterBinaryWriteBlocked) {
         this.flushVoiceFilterBinaryQueue(socket);
@@ -1650,10 +1761,17 @@ class CaptureSidecarManager {
     this.voiceFilterBinaryConnectPromise = (async () => {
       await this.ensureSidecarReady();
 
-      const response = await this.sendRequest("voice_filter.binary_ingress_info", {});
+      const response = await this.sendRequest(
+        "voice_filter.binary_ingress_info",
+        {},
+      );
       const info = response as TVoiceFilterBinaryIngressInfo;
 
-      if (!Number.isInteger(info.port) || info.port <= 0 || info.port > 65_535) {
+      if (
+        !Number.isInteger(info.port) ||
+        info.port <= 0 ||
+        info.port > 65_535
+      ) {
         throw new Error("Invalid binary voice filter ingress port");
       }
 
@@ -1665,7 +1783,9 @@ class CaptureSidecarManager {
 
         const timeout = setTimeout(() => {
           socket.destroy();
-          reject(new Error("Timed out connecting to binary voice filter ingress"));
+          reject(
+            new Error("Timed out connecting to binary voice filter ingress"),
+          );
         }, BINARY_VOICE_FILTER_CONNECT_TIMEOUT_MS);
 
         const cleanupTimeout = () => {
@@ -1683,15 +1803,21 @@ class CaptureSidecarManager {
           socket.removeListener("error", onInitialError);
           socket.setNoDelay(true);
           this.hasConnectedVoiceFilterBinarySocketSinceSessionStart = true;
-          console.warn("[voice-filter-debug] Connected binary voice-filter ingress socket", {
-            host: BINARY_VOICE_FILTER_INGRESS_HOST,
-            port: info.port,
-            framing: info.framing,
-            protocolVersion: info.protocolVersion,
-          });
+          console.warn(
+            "[voice-filter-debug] Connected binary voice-filter ingress socket",
+            {
+              host: BINARY_VOICE_FILTER_INGRESS_HOST,
+              port: info.port,
+              framing: info.framing,
+              protocolVersion: info.protocolVersion,
+            },
+          );
 
           socket.on("error", (error) => {
-            console.warn("[desktop] Binary voice filter ingress socket error", error);
+            console.warn(
+              "[desktop] Binary voice filter ingress socket error",
+              error,
+            );
             this.closeVoiceFilterBinarySocket();
           });
           socket.on("drain", () => {
@@ -1719,9 +1845,10 @@ class CaptureSidecarManager {
     return this.voiceFilterBinaryConnectPromise;
   }
 
-  private tryPushVoiceFilterBinaryFrame(
-    frame: TVoiceFilterPcmFrame,
-  ): { accepted: boolean; reason?: string } {
+  private tryPushVoiceFilterBinaryFrame(frame: TVoiceFilterPcmFrame): {
+    accepted: boolean;
+    reason?: string;
+  } {
     const socket = this.voiceFilterBinarySocket;
     if (!socket || socket.destroyed || !socket.writable) {
       return { accepted: false, reason: "socket_unavailable" };
@@ -1737,7 +1864,10 @@ class CaptureSidecarManager {
       frame.pcm.byteOffset,
       frame.pcm.byteLength,
     );
-    if (pcmBytes.length <= 0 || pcmBytes.length % Float32Array.BYTES_PER_ELEMENT !== 0) {
+    if (
+      pcmBytes.length <= 0 ||
+      pcmBytes.length % Float32Array.BYTES_PER_ELEMENT !== 0
+    ) {
       return { accepted: false, reason: "invalid_pcm_payload_length" };
     }
 
@@ -1769,7 +1899,11 @@ class CaptureSidecarManager {
     ) {
       return { accepted: false, reason: "invalid_sample_rate" };
     }
-    if (!Number.isInteger(frame.channels) || frame.channels <= 0 || frame.channels > 0xffff) {
+    if (
+      !Number.isInteger(frame.channels) ||
+      frame.channels <= 0 ||
+      frame.channels > 0xffff
+    ) {
       return { accepted: false, reason: "invalid_channels" };
     }
     if (

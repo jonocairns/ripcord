@@ -39,11 +39,19 @@ const MAX_RECOVERABLE_MISSING_FRAMES = Math.max(
   MAX_RECOVERABLE_SEQUENCE_GAP_FRAMES
 );
 
-const isPcmFrame = (frame: TDesktopAppAudioFrame): frame is TAppAudioPcmFrame => {
-  return 'pcm' in frame && frame.pcm instanceof Float32Array && !('encoding' in frame);
+const isPcmFrame = (
+  frame: TDesktopAppAudioFrame
+): frame is TAppAudioPcmFrame => {
+  return (
+    'pcm' in frame &&
+    frame.pcm instanceof Float32Array &&
+    !('encoding' in frame)
+  );
 };
 
-const computeRecoverableMissingFrameCount = (missingFrameCount: number): number => {
+const computeRecoverableMissingFrameCount = (
+  missingFrameCount: number
+): number => {
   if (!Number.isFinite(missingFrameCount)) {
     return 0;
   }

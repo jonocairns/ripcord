@@ -46,7 +46,9 @@ const uploadFileRouteHandler = async (
   if (!hasUploadPermission) {
     req.resume();
     res.writeHead(403, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'You do not have permission to upload files' }));
+    res.end(
+      JSON.stringify({ error: 'You do not have permission to upload files' })
+    );
     return;
   }
 

@@ -141,7 +141,6 @@ const Profile = memo(() => {
             <BannerManager user={ownPublicUser} />
           </div>
         </section>
-
       </CardContent>
       <CardFooter className="border-t items-stretch justify-end gap-2 sm:items-center">
         <Button onClick={onUpdateUser}>Save Changes</Button>

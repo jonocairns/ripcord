@@ -5,14 +5,9 @@ import {
 } from '@/components/devices-provider/push-keybind';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-} from '@/components/ui/card';
+import { Card, CardContent, CardFooter } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { LoadingCard } from '@/components/ui/loading-card';
-import { Separator } from '@/components/ui/separator';
 import {
   Select,
   SelectContent,
@@ -21,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
+import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useForm } from '@/hooks/use-form';
@@ -35,8 +31,8 @@ import {
 import { Info } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { MicrophoneTestPanel } from './microphone-test-panel';
 import { useAvailableDevices } from './hooks/use-available-devices';
+import { MicrophoneTestPanel } from './microphone-test-panel';
 import ResolutionFpsControl from './resolution-fps-control';
 
 const DEFAULT_NAME = 'default';
@@ -117,7 +113,9 @@ const Devices = memo(() => {
           : values.pushToTalkKeybind;
 
       if (conflictingKeybind && conflictingKeybind === nextKeybind) {
-        toast.error('Push-to-talk and push-to-mute cannot use the same keybind');
+        toast.error(
+          'Push-to-talk and push-to-mute cannot use the same keybind'
+        );
         return;
       }
 
@@ -152,7 +150,8 @@ const Devices = memo(() => {
         // ignore version lookup failures
       });
   }, [desktopBridge]);
-  const isExperimentalMode = values.micQualityMode === MicQualityMode.EXPERIMENTAL;
+  const isExperimentalMode =
+    values.micQualityMode === MicQualityMode.EXPERIMENTAL;
 
   if (availableDevicesLoading || devicesLoading) {
     return <LoadingCard className="h-[600px]" />;
@@ -174,7 +173,8 @@ const Devices = memo(() => {
           <div className="space-y-1">
             <h3 className="text-base font-semibold">Microphone</h3>
             <p className="text-sm text-muted-foreground">
-              Configure your input source, processing, and push-to-talk controls.
+              Configure your input source, processing, and push-to-talk
+              controls.
             </p>
           </div>
 
@@ -216,7 +216,10 @@ const Devices = memo(() => {
               <SelectContent>
                 <SelectGroup>
                   <SelectItem value={MicQualityMode.AUTO}>Standard</SelectItem>
-                  <SelectItem value={MicQualityMode.EXPERIMENTAL} disabled={!hasDesktopBridge}>
+                  <SelectItem
+                    value={MicQualityMode.EXPERIMENTAL}
+                    disabled={!hasDesktopBridge}
+                  >
                     Experimental (Desktop)
                   </SelectItem>
                 </SelectGroup>
@@ -239,7 +242,9 @@ const Devices = memo(() => {
 
             <div className="flex items-center justify-between gap-3">
               <Label className="cursor-default">
-                {isExperimentalMode ? 'Noise suppression (DeepFilterNet)' : 'Noise suppression'}
+                {isExperimentalMode
+                  ? 'Noise suppression (DeepFilterNet)'
+                  : 'Noise suppression'}
               </Label>
               <Switch
                 checked={!!values.noiseSuppression}
@@ -278,7 +283,9 @@ const Devices = memo(() => {
                     <SelectItem value={VoiceFilterStrength.BALANCED}>
                       Balanced
                     </SelectItem>
-                    <SelectItem value={VoiceFilterStrength.HIGH}>High</SelectItem>
+                    <SelectItem value={VoiceFilterStrength.HIGH}>
+                      High
+                    </SelectItem>
                     <SelectItem value={VoiceFilterStrength.AGGRESSIVE}>
                       Aggressive
                     </SelectItem>
@@ -290,11 +297,14 @@ const Devices = memo(() => {
 
           {isExperimentalMode ? (
             <p className="text-xs text-muted-foreground">
-              Audio is captured and processed natively by the desktop sidecar. DeepFilterNet removes background noise and reverberation. Automatic gain control normalises input levels.
+              Audio is captured and processed natively by the desktop sidecar.
+              DeepFilterNet removes background noise and reverberation.
+              Automatic gain control normalises input levels.
             </p>
           ) : (
             <p className="text-xs text-muted-foreground">
-              Uses browser-based audio processing. Echo cancellation, noise suppression, and gain control are handled by the browser.
+              Uses browser-based audio processing. Echo cancellation, noise
+              suppression, and gain control are handled by the browser.
             </p>
           )}
 
@@ -313,8 +323,9 @@ const Devices = memo(() => {
               <div className="space-y-1">
                 <p className="text-sm font-medium">Push keybinds (Desktop)</p>
                 <p className="text-xs text-muted-foreground">
-                  Hold the configured key to temporarily unmute (push to talk) or
-                  mute (push to mute). Press Escape while capturing to cancel.
+                  Hold the configured key to temporarily unmute (push to talk)
+                  or mute (push to mute). Press Escape while capturing to
+                  cancel.
                 </p>
               </div>
               <div className="space-y-2">
@@ -456,9 +467,15 @@ const Devices = memo(() => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectItem value={VideoCodecPreference.AUTO}>Auto</SelectItem>
-                    <SelectItem value={VideoCodecPreference.VP8}>VP8</SelectItem>
-                    <SelectItem value={VideoCodecPreference.H264}>H264</SelectItem>
+                    <SelectItem value={VideoCodecPreference.AUTO}>
+                      Auto
+                    </SelectItem>
+                    <SelectItem value={VideoCodecPreference.VP8}>
+                      VP8
+                    </SelectItem>
+                    <SelectItem value={VideoCodecPreference.H264}>
+                      H264
+                    </SelectItem>
                     <SelectItem value={VideoCodecPreference.AV1}>
                       AV1 (experimental)
                     </SelectItem>
@@ -509,7 +526,6 @@ const Devices = memo(() => {
               }
             />
           </div>
-
         </section>
 
         {hasDesktopBridge && <Separator />}
@@ -530,7 +546,6 @@ const Devices = memo(() => {
             </div>
           </section>
         )}
-
       </CardContent>
       <CardFooter className="border-t items-stretch justify-end gap-2 sm:items-center">
         <Button onClick={saveDeviceSettings}>Save Changes</Button>

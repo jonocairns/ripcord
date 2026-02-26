@@ -15,16 +15,16 @@ import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import {
   ScreenAudioMode,
-  type TAppAudioStatusEvent,
   type TAppAudioSession,
+  type TAppAudioStatusEvent,
   type TDesktopScreenShareSelection
 } from '@/runtime/types';
 import {
   MicQualityMode,
-  type TDeviceSettings,
-  type TRemoteStreams,
   VideoCodecPreference,
-  VoiceFilterStrength
+  VoiceFilterStrength,
+  type TDeviceSettings,
+  type TRemoteStreams
 } from '@/types';
 import {
   ChannelPermission,
@@ -52,16 +52,6 @@ import {
   type TDesktopAppAudioPipeline
 } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
-import {
-  createMicAudioProcessingPipeline,
-  createNativeSidecarMicCapturePipeline,
-  resolveSidecarDeviceId,
-  type TMicAudioProcessingPipeline
-} from './mic-audio-processing';
-import {
-  createMicReferenceAudioPipeline,
-  type TMicReferenceAudioPipeline
-} from './mic-reference-audio';
 import { useLocalStreams } from './hooks/use-local-streams';
 import {
   useRemoteStreams,
@@ -74,6 +64,16 @@ import {
 import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
+import {
+  createMicAudioProcessingPipeline,
+  createNativeSidecarMicCapturePipeline,
+  resolveSidecarDeviceId,
+  type TMicAudioProcessingPipeline
+} from './mic-audio-processing';
+import {
+  createMicReferenceAudioPipeline,
+  type TMicReferenceAudioPipeline
+} from './mic-reference-audio';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
 import { VolumeControlProvider } from './volume-control-context';
 
@@ -215,7 +215,6 @@ const collectPlaybackReferenceStreams = (
 
   return streams;
 };
-
 
 export type TVoiceProvider = {
   loading: boolean;
@@ -431,7 +430,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     try {
       await referencePipeline.destroy();
     } catch (error) {
-      logVoice('Failed to clean up microphone reference audio pipeline', { error });
+      logVoice('Failed to clean up microphone reference audio pipeline', {
+        error
+      });
     }
   }, []);
 
@@ -452,7 +453,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       try {
         await pipeline.destroy();
       } catch (error) {
-        logVoice('Failed to clean up microphone processing pipeline', { error });
+        logVoice('Failed to clean up microphone processing pipeline', {
+          error
+        });
       }
     }
   }, [cleanupMicReferenceAudioPipeline]);
@@ -472,7 +475,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       // Resolve sidecar device ID best-effort before acquiring getUserMedia
       let sidecarDeviceId: string | undefined;
       if (micProcessingConfig.sidecarVoiceProcessingEnabled && desktopBridge) {
-        sidecarDeviceId = await resolveSidecarDeviceId(devices.microphoneId, desktopBridge);
+        sidecarDeviceId = await resolveSidecarDeviceId(
+          devices.microphoneId,
+          desktopBridge
+        );
       }
 
       // Try native sidecar capture first (no getUserMedia needed)
@@ -535,14 +541,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
             setLocalAudioStream(outboundStream);
             outboundAudioTrack.enabled = !ownVoiceState.micMuted;
 
-            logVoice('Obtained audio track (native capture)', { audioTrack: outboundAudioTrack });
-
-            localAudioProducer.current = await producerTransport.current?.produce({
-              track: outboundAudioTrack,
-              encodings: [{ maxBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS }],
-              codecOptions: AUDIO_OPUS_CODEC_OPTIONS,
-              appData: { kind: StreamKind.AUDIO }
+            logVoice('Obtained audio track (native capture)', {
+              audioTrack: outboundAudioTrack
             });
+
+            localAudioProducer.current =
+              await producerTransport.current?.produce({
+                track: outboundAudioTrack,
+                encodings: [{ maxBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS }],
+                codecOptions: AUDIO_OPUS_CODEC_OPTIONS,
+                appData: { kind: StreamKind.AUDIO }
+              });
 
             logVoice('Microphone audio producer created (native capture)', {
               producer: localAudioProducer.current
@@ -552,7 +561,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
               logVoice('Audio producer closed');
               const trpc = getTRPCClient();
               try {
-                await trpc.voice.closeProducer.mutate({ kind: StreamKind.AUDIO });
+                await trpc.voice.closeProducer.mutate({
+                  kind: StreamKind.AUDIO
+                });
               } catch (error) {
                 logVoice('Error closing audio producer', { error });
               }
@@ -568,7 +579,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
             return;
           }
         } catch (nativeError) {
-          logVoice('Native sidecar mic-capture failed, falling back to getUserMedia', { nativeError });
+          logVoice(
+            'Native sidecar mic-capture failed, falling back to getUserMedia',
+            { nativeError }
+          );
         }
       }
 
@@ -655,7 +669,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                   sampleRate: micAudioPipeline.sampleRate
                 });
               } else {
-                logVoice('Playback reference pipeline unavailable; sidecar AEC inactive');
+                logVoice(
+                  'Playback reference pipeline unavailable; sidecar AEC inactive'
+                );
               }
             }
           } else {
@@ -665,9 +681,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         } catch (error) {
           micAudioPipelineRef.current = undefined;
           await cleanupMicReferenceAudioPipeline();
-          logVoice('Failed to initialize microphone voice filter, using raw mic', {
-            error
-          });
+          logVoice(
+            'Failed to initialize microphone voice filter, using raw mic',
+            {
+              error
+            }
+          );
 
           if (
             micProcessingConfig.sidecarVoiceProcessingEnabled &&
@@ -806,7 +825,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         const webcamBitratePolicy = getVideoBitratePolicy({
           profile: 'camera',
           width: webcamTrackSettings.width ?? requestedWebcamResolution.width,
-          height: webcamTrackSettings.height ?? requestedWebcamResolution.height,
+          height:
+            webcamTrackSettings.height ?? requestedWebcamResolution.height,
           frameRate: webcamTrackSettings.frameRate ?? devices.webcamFramerate,
           codecMimeType: preferredVideoCodec?.mimeType
         });
@@ -1046,15 +1066,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
             const startupTimeout = window.setTimeout(() => {
               if (
                 hasReceivedSessionFrame ||
-                appAudioSessionRef.current?.sessionId !== appAudioSession.sessionId
+                appAudioSessionRef.current?.sessionId !==
+                  appAudioSession.sessionId
               ) {
                 return;
               }
 
-              logVoice('Per-app sidecar produced no audio frames after startup', {
-                sessionId: appAudioSession.sessionId,
-                targetId: appAudioSession.targetId
-              });
+              logVoice(
+                'Per-app sidecar produced no audio frames after startup',
+                {
+                  sessionId: appAudioSession.sessionId,
+                  targetId: appAudioSession.targetId
+                }
+              );
               toast.warning(
                 'Per-app audio started but produced no audio frames. Screen video will continue without shared audio.'
               );
@@ -1100,7 +1124,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                     error: statusEvent.error
                   });
                   if (
-                    statusEvent.sessionId !== appAudioSessionRef.current?.sessionId
+                    statusEvent.sessionId !==
+                    appAudioSessionRef.current?.sessionId
                   ) {
                     return;
                   }
@@ -1127,7 +1152,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                 }
               );
           } catch (error) {
-            logVoice('Failed to start per-app sidecar audio capture', { error });
+            logVoice('Failed to start per-app sidecar audio capture', {
+              error
+            });
             toast.warning(
               'Per-app audio capture failed. Continuing without shared audio.'
             );
@@ -1200,7 +1227,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           const screenBitratePolicy = getVideoBitratePolicy({
             profile: 'screen',
             width: screenTrackSettings.width ?? requestedScreenResolution.width,
-            height: screenTrackSettings.height ?? requestedScreenResolution.height,
+            height:
+              screenTrackSettings.height ?? requestedScreenResolution.height,
             frameRate: screenTrackSettings.frameRate ?? devices.screenFramerate,
             codecMimeType: preferredVideoCodec?.mimeType
           });
@@ -1401,18 +1429,23 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     ]
   );
 
-  const { setMicMuted, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =
-    useVoiceControls({
-      startMicStream,
-      localAudioStream,
-      startWebcamStream,
-      stopWebcamStream,
-      startScreenShareStream,
-      stopScreenShareStream,
-      requestScreenShareSelection: getDesktopBridge()
-        ? requestDesktopScreenShareSelection
-        : undefined
-    });
+  const {
+    setMicMuted,
+    toggleMic,
+    toggleSound,
+    toggleWebcam,
+    toggleScreenShare
+  } = useVoiceControls({
+    startMicStream,
+    localAudioStream,
+    startWebcamStream,
+    stopWebcamStream,
+    startScreenShareStream,
+    stopScreenShareStream,
+    requestScreenShareSelection: getDesktopBridge()
+      ? requestDesktopScreenShareSelection
+      : undefined
+  });
 
   const setMicMutedRef = useRef(setMicMuted);
   const ownMicMutedRef = useRef(ownVoiceState.micMuted);

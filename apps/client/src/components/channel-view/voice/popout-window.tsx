@@ -107,7 +107,9 @@ const PopoutWindow = memo(
       }
 
       let activeWindow =
-        targetWindow && !targetWindow.closed ? targetWindow : popoutWindowRef.current;
+        targetWindow && !targetWindow.closed
+          ? targetWindow
+          : popoutWindowRef.current;
 
       if (!activeWindow || activeWindow.closed) {
         activeWindow = window.open('', windowName, features);
@@ -141,7 +143,11 @@ const PopoutWindow = memo(
     }, [features, isOpen, onBlocked, onClose, targetWindow, title, windowName]);
 
     useEffect(() => {
-      if (!isOpen && popoutWindowRef.current && !popoutWindowRef.current.closed) {
+      if (
+        !isOpen &&
+        popoutWindowRef.current &&
+        !popoutWindowRef.current.closed
+      ) {
         popoutWindowRef.current.close();
       }
 
@@ -175,5 +181,4 @@ const PopoutWindow = memo(
 
 PopoutWindow.displayName = 'PopoutWindow';
 
-export { PopoutWindow };
-export { DEFAULT_WINDOW_FEATURES };
+export { DEFAULT_WINDOW_FEATURES, PopoutWindow };

@@ -35,7 +35,9 @@ const StatsPopover = memo(({ children }: StatsPopoverProps) => {
                   <div>Rate: {filesize(currentBitrateSent)}/s</div>
                   <div>Packets: {producer.packetsSent}</div>
                   {producer.packetsLost > 0 && (
-                    <div className="text-red-400">Lost: {producer.packetsLost}</div>
+                    <div className="text-red-400">
+                      Lost: {producer.packetsLost}
+                    </div>
                   )}
                   <div>RTT: {producer.rtt.toFixed(1)} ms</div>
                 </div>

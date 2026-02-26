@@ -41,16 +41,25 @@ const getPublicSettings: () => Promise<TPublicServerSettings> = async () => {
   return publicSettings;
 };
 
-type TRedactedSettings = Omit<TJoinedSettings, 'authTokenSecret' | 'secretToken'>;
+type TRedactedSettings = Omit<
+  TJoinedSettings,
+  'authTokenSecret' | 'password' | 'secretToken'
+> & {
+  hasPassword: boolean;
+};
 
 const redactSettings = (serverSettings: TJoinedSettings): TRedactedSettings => {
   const {
     authTokenSecret: _authTokenSecret,
+    password,
     secretToken: _secretToken,
     ...safeSettings
   } = serverSettings;
 
-  return safeSettings;
+  return {
+    ...safeSettings,
+    hasPassword: !!password
+  };
 };
 
 const getServerTokenSync = (): string => {

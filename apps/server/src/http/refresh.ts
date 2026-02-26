@@ -11,6 +11,8 @@ import {
 } from './auth-tokens';
 import { getJsonBody } from './helpers';
 
+const AUTH_REQUEST_MAX_BODY_BYTES = 8 * 1024;
+
 const zBody = z.object({
   refreshToken: z.string().min(1, 'Refresh token is required')
 });
@@ -19,7 +21,9 @@ const refreshRouteHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse
 ) => {
-  const { refreshToken } = zBody.parse(await getJsonBody(req));
+  const { refreshToken } = zBody.parse(
+    await getJsonBody(req, { maxBytes: AUTH_REQUEST_MAX_BODY_BYTES })
+  );
   const refreshTokenHash = await sha256(refreshToken);
   const now = Date.now();
   const newRefreshToken = createRefreshTokenValue();

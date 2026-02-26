@@ -154,7 +154,8 @@ const ScreenShareCard = memo(
     const [isPoppedOut, setIsPoppedOut] = useState(false);
     const [popoutWindow, setPopoutWindow] = useState<Window | null>(null);
     const [isPopoutFullscreen, setIsPopoutFullscreen] = useState(false);
-    const [showPopoutWindowControls, setShowPopoutWindowControls] = useState(true);
+    const [showPopoutWindowControls, setShowPopoutWindowControls] =
+      useState(true);
     const hidePopoutWindowControlsTimeoutRef = useRef<number | null>(null);
     const popoutWindowName = useMemo(() => `screen-share-${userId}`, [userId]);
 
@@ -264,7 +265,10 @@ const ScreenShareCard = memo(
       handleFullscreenChange();
 
       return () => {
-        document.removeEventListener('fullscreenchange', handleFullscreenChange);
+        document.removeEventListener(
+          'fullscreenchange',
+          handleFullscreenChange
+        );
       };
     }, [containerRef]);
 
@@ -277,7 +281,11 @@ const ScreenShareCard = memo(
       }
 
       revealPopoutWindowControls();
-    }, [clearPopoutControlsHideTimeout, isPoppedOut, revealPopoutWindowControls]);
+    }, [
+      clearPopoutControlsHideTimeout,
+      isPoppedOut,
+      revealPopoutWindowControls
+    ]);
 
     useEffect(() => {
       return () => {
@@ -444,7 +452,9 @@ const ScreenShareCard = memo(
             handleToggleZoom={handleToggleZoom}
             handleToggleFullscreen={handleToggleFullscreen}
             showPinControls={showPinControls}
-            showAudioControl={!isOwnUser && hasScreenShareAudioStream && !isPoppedOut}
+            showAudioControl={
+              !isOwnUser && hasScreenShareAudioStream && !isPoppedOut
+            }
             volumeKey={volumeKey}
             isFullscreen={isFullscreen}
             isPoppedOut={isPoppedOut}
@@ -478,7 +488,9 @@ const ScreenShareCard = memo(
               <Monitor className="size-8 text-purple-400" />
               <div className="space-y-1">
                 <p className="text-sm font-semibold">{user.name}'s screen</p>
-                <p className="text-xs text-white/70">Opened in a pop-out window</p>
+                <p className="text-xs text-white/70">
+                  Opened in a pop-out window
+                </p>
               </div>
               <button
                 type="button"
@@ -557,8 +569,12 @@ const ScreenShareCard = memo(
                   <button
                     type="button"
                     onClick={handlePopoutMuteToggle}
-                    title={isMuted ? 'Unmute stream audio' : 'Mute stream audio'}
-                    aria-label={isMuted ? 'Unmute stream audio' : 'Mute stream audio'}
+                    title={
+                      isMuted ? 'Unmute stream audio' : 'Mute stream audio'
+                    }
+                    aria-label={
+                      isMuted ? 'Unmute stream audio' : 'Mute stream audio'
+                    }
                     style={{
                       border: '1px solid rgba(255, 255, 255, 0.55)',
                       background: 'rgba(15, 23, 42, 0.88)',
@@ -601,7 +617,9 @@ const ScreenShareCard = memo(
               <button
                 type="button"
                 onClick={handleTogglePopoutFullscreen}
-                title={isPopoutFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+                title={
+                  isPopoutFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'
+                }
                 aria-label={
                   isPopoutFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'
                 }
@@ -620,7 +638,11 @@ const ScreenShareCard = memo(
                   cursor: 'pointer'
                 }}
               >
-                {isPopoutFullscreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
+                {isPopoutFullscreen ? (
+                  <Minimize2 size={20} />
+                ) : (
+                  <Maximize2 size={20} />
+                )}
               </button>
             </div>
 
