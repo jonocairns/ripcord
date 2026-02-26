@@ -229,6 +229,54 @@ describe('/login', () => {
     expect(data.errors).toHaveProperty('identity');
   });
 
+  test('should only allow one concurrent registration with a single-use invite', async () => {
+    await tdb.update(settings).set({ allowNewUsers: false });
+
+    await tdb.insert(invites).values({
+      code: 'SINGLEUSEINVITE',
+      creatorId: 1,
+      maxUses: 1,
+      uses: 0,
+      expiresAt: Date.now() + 86400000,
+      createdAt: Date.now()
+    });
+
+    const [firstAttempt, secondAttempt] = await Promise.all([
+      login('singleinviteuser1', 'password123', 'SINGLEUSEINVITE'),
+      login('singleinviteuser2', 'password123', 'SINGLEUSEINVITE')
+    ]);
+
+    const statuses = [firstAttempt.status, secondAttempt.status].sort(
+      (a, b) => a - b
+    );
+
+    expect(statuses).toEqual([200, 400]);
+
+    const failedResponse =
+      firstAttempt.status === 400 ? firstAttempt : secondAttempt;
+    const failedData = (await failedResponse.json()) as TLoginResponse;
+
+    expect(failedData).toHaveProperty('errors');
+    expect(failedData.errors).toHaveProperty('identity');
+
+    const updatedInvite = await tdb
+      .select()
+      .from(invites)
+      .where(eq(invites.code, 'SINGLEUSEINVITE'))
+      .get();
+
+    expect(updatedInvite?.uses).toBe(1);
+
+    const [firstUser, secondUser] = await Promise.all([
+      tdb.select().from(users).where(eq(users.identity, 'singleinviteuser1')).get(),
+      tdb.select().from(users).where(eq(users.identity, 'singleinviteuser2')).get()
+    ]);
+
+    const createdUsers = [firstUser, secondUser].filter(Boolean);
+
+    expect(createdUsers).toHaveLength(1);
+  });
+
   test('should fail login for banned user', async () => {
     await tdb
       .update(users)
@@ -347,6 +395,47 @@ describe('/login', () => {
     const revokedSessions = sessions.filter((session) => !!session.revokedAt);
 
     expect(revokedSessions.length).toBeGreaterThan(0);
+  });
+
+  test('should allow only one concurrent refresh for the same token', async () => {
+    const response = await login('testowner', 'password123');
+
+    expect(response.status).toBe(200);
+
+    const loginData = (await response.json()) as TLoginResponse;
+    const originalRefreshToken = loginData.refreshToken;
+
+    const [firstRefresh, secondRefresh] = await Promise.all([
+      refresh(originalRefreshToken),
+      refresh(originalRefreshToken)
+    ]);
+
+    const statuses = [firstRefresh.status, secondRefresh.status].sort(
+      (a, b) => a - b
+    );
+
+    expect(statuses).toEqual([200, 401]);
+
+    const successfulResponse =
+      firstRefresh.status === 200 ? firstRefresh : secondRefresh;
+    const failedResponse =
+      firstRefresh.status === 401 ? firstRefresh : secondRefresh;
+    const successfulData = (await successfulResponse.json()) as TLoginResponse;
+    const failedData = (await failedResponse.json()) as TLoginResponse;
+
+    expect(successfulData).toHaveProperty('token');
+    expect(successfulData).toHaveProperty('refreshToken');
+    expect(successfulData.refreshToken).not.toBe(originalRefreshToken);
+    expect(failedData).toHaveProperty('error', 'Invalid refresh token');
+
+    const followUpRefresh = await refresh(successfulData.refreshToken);
+
+    expect(followUpRefresh.status).toBe(200);
+
+    const sessions = await tdb.select().from(refreshTokens);
+    const activeSessions = sessions.filter((session) => !session.revokedAt);
+
+    expect(activeSessions).toHaveLength(1);
   });
 
   test('should return 401 for invalid refresh token', async () => {
