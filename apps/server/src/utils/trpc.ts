@@ -82,12 +82,15 @@ type TRateLimitedProcedureOptions = {
   windowMs: number;
   logLabel: string;
   maxEntries?: number;
+  keyBy?: 'ip' | 'user' | 'userOrIp';
 };
 
 const rateLimitedProcedure = (
   procedure: typeof t.procedure,
   options: TRateLimitedProcedureOptions
 ) => {
+  const keyBy = options.keyBy ?? 'userOrIp';
+
   const limiter = createRateLimiter({
     maxRequests: options.maxRequests,
     windowMs: options.windowMs,
@@ -95,19 +98,35 @@ const rateLimitedProcedure = (
   });
 
   const rateLimitMiddleware = t.middleware(async ({ ctx, next, path }) => {
+    const hasUserId = Number.isInteger(ctx.userId) && ctx.userId > 0;
     const connectionInfo = ctx.getConnectionInfo();
+    const hasIp = !!connectionInfo?.ip;
 
-    if (!connectionInfo?.ip) {
-      // if we have no IP, it means we have no way to identify the client
-      // if we can't identify the client, we can't apply rate limiting, so we log a warning and skip it for this request
+    let key: string | undefined;
+
+    if (keyBy === 'user') {
+      if (hasUserId) {
+        key = `user:${ctx.userId}`;
+      }
+    } else if (keyBy === 'ip') {
+      if (hasIp) {
+        key = getClientRateLimitKey(connectionInfo.ip!);
+      }
+    } else {
+      if (hasUserId) {
+        key = `user:${ctx.userId}`;
+      } else if (hasIp) {
+        key = getClientRateLimitKey(connectionInfo.ip!);
+      }
+    }
+
+    if (!key) {
       logger.warn(
-        `${chalk.dim('[Rate Limiter tRPC]')} Missing IP address in connection info, skipping rate limiting for this request. Path: ${path}`
+        `${chalk.dim('[Rate Limiter tRPC]')} No rate-limit key available (${keyBy}), skipping request. Path: ${path}`
       );
-
       return next();
     }
 
-    const key = getClientRateLimitKey(connectionInfo.ip);
     const rateLimit = limiter.consume(key);
 
     if (!rateLimit.allowed) {

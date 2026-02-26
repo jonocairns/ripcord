@@ -10,6 +10,8 @@ import { TEST_SECRET_TOKEN } from '../../__tests__/seed';
 import { tdb } from '../../__tests__/setup';
 import { settings } from '../../db/schema';
 
+const JOIN_SERVER_MAX_REQUESTS_PER_MINUTE = 60;
+
 describe('others router', () => {
   test('should throw when user tries to join with no handshake', async () => {
     const { caller } = await getCaller(1);
@@ -209,7 +211,7 @@ describe('others router', () => {
   test('should rate limit excessive join attempts', async () => {
     const { caller } = await getCaller(1);
 
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < JOIN_SERVER_MAX_REQUESTS_PER_MINUTE; i++) {
       await expect(
         caller.others.joinServer({
           handshakeHash: ''
