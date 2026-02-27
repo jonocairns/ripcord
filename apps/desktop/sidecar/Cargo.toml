@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+aec3 = "0.1.5"
 base64 = "0.22.1"
 bytemuck = "1.20.0"
 deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet.git", package = "deep_filter", default-features = false, features = ["tract", "logging", "default-model-ll"] }

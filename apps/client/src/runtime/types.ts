@@ -115,7 +115,7 @@ export type TVoiceFilterSession = {
   framesPerBuffer: number;
   protocolVersion?: number;
   encoding?: 'f32le_base64';
-  echoCancellationBackend?: 'adaptive_nlms';
+  echoCancellationBackend?: 'adaptive_nlms' | 'webrtc_aec3';
 };
 
 export type TVoiceFilterFrameDiag = {

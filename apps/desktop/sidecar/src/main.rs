@@ -1,3 +1,4 @@
+use aec3::voip::VoipAec3;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use deep_filter::tract::{DfParams, DfTract, ReduceMask, RuntimeParams};
@@ -99,7 +100,8 @@ const ECHO_CANCELLER_RESIDUAL_CORRELATION_FLOOR: f32 = 0.2;
 const ECHO_CANCELLER_DOUBLE_TALK_MIX: f32 = 0.35;
 const ECHO_CANCELLER_NEAR_DOMINANT_MIX: f32 = 0.7;
 const ECHO_CANCELLER_COEFFICIENT_LIMIT: f32 = 2.0;
-const ECHO_CANCELLATION_BACKEND: &str = "adaptive_nlms";
+const ECHO_CANCELLATION_BACKEND_ADAPTIVE: &str = "adaptive_nlms";
+const ECHO_CANCELLATION_BACKEND_WEBRTC: &str = "webrtc_aec3";
 // High-pass filter: 2nd-order Butterworth at 80 Hz / 48 kHz (Direct Form II transposed).
 // Removes DC offset and low-frequency rumble (HVAC, desk vibration, electrical hum) before
 // DeepFilterNet sees the signal.  Sub-80 Hz energy registers as broadband noise and causes
@@ -555,6 +557,73 @@ impl AdaptiveEchoCanceller {
     }
 }
 
+struct WebRtcEchoCanceller {
+    processor: VoipAec3,
+    block_sample_len: usize,
+    capture_output: Vec<f32>,
+}
+
+// SAFETY: same rationale as DeepFilterProcessor. The processor is always held
+// behind the sidecar state mutex and accessed serially.
+unsafe impl Send for WebRtcEchoCanceller {}
+
+impl WebRtcEchoCanceller {
+    fn new(sample_rate: usize, channels: usize) -> Result<Self, String> {
+        let block_sample_len = (sample_rate / 100)
+            .checked_mul(channels)
+            .ok_or_else(|| "WebRTC AEC3 block size overflow".to_string())?;
+        let processor = VoipAec3::builder(sample_rate, channels, channels)
+            .build()
+            .map_err(|error| format!("Failed to initialize WebRTC AEC3: {error}"))?;
+
+        Ok(Self {
+            processor,
+            block_sample_len,
+            capture_output: vec![0.0; block_sample_len],
+        })
+    }
+
+    fn process_block(
+        &mut self,
+        near: &mut [f32],
+        reference_block: &[f32],
+    ) -> Result<AdaptiveEchoMetrics, String> {
+        if near.len() != self.block_sample_len || reference_block.len() != self.block_sample_len {
+            return Err("WebRTC AEC3 block size mismatch".to_string());
+        }
+
+        self.processor
+            .handle_render_frame(reference_block)
+            .map_err(|error| format!("WebRTC AEC3 render processing failed: {error}"))?;
+
+        let metrics = self
+            .processor
+            .process_capture_frame(near, false, &mut self.capture_output)
+            .map_err(|error| format!("WebRTC AEC3 capture processing failed: {error}"))?;
+        near.copy_from_slice(&self.capture_output);
+
+        Ok(AdaptiveEchoMetrics {
+            erle_db: Some(metrics.echo_return_loss_enhancement as f32),
+            delay_ms: Some(metrics.delay_ms as f32),
+            double_talk_confidence: None,
+        })
+    }
+}
+
+enum EchoCancellerBackend {
+    AdaptiveNlms(AdaptiveEchoCanceller),
+    WebRtcAec3(WebRtcEchoCanceller),
+}
+
+impl EchoCancellerBackend {
+    fn backend_name(&self) -> &'static str {
+        match self {
+            Self::AdaptiveNlms(_) => ECHO_CANCELLATION_BACKEND_ADAPTIVE,
+            Self::WebRtcAec3(_) => ECHO_CANCELLATION_BACKEND_WEBRTC,
+        }
+    }
+}
+
 struct VoiceFilterSession {
     session_id: String,
     sample_rate: usize,
@@ -566,8 +635,7 @@ struct VoiceFilterSession {
     trim_level_rms: f32,
     trim_gain: f32,
     agc_startup_bypass_ms_remaining: u32,
-    echo_cancellation: bool,
-    adaptive_echo_canceller: AdaptiveEchoCanceller,
+    echo_canceller: Option<EchoCancellerBackend>,
     echo_reference_interleaved: VecDeque<f32>,
     limiter_gain: f32,
     expander_envelope: f32,
@@ -582,6 +650,12 @@ struct VoiceFilterSession {
 }
 
 impl VoiceFilterSession {
+    fn echo_cancellation_backend(&self) -> Option<&'static str> {
+        self.echo_canceller
+            .as_ref()
+            .map(EchoCancellerBackend::backend_name)
+    }
+
     fn push_echo_reference_samples(
         &mut self,
         input_samples: &[f32],
@@ -668,6 +742,27 @@ impl VoiceFilterSession {
         );
 
         Some(out)
+    }
+
+    fn pop_echo_reference_block_or_silence(&mut self, sample_len: usize) -> Vec<f32> {
+        if sample_len == 0 {
+            return Vec::new();
+        }
+
+        let available_samples = sample_len.min(self.echo_reference_interleaved.len());
+        let mut out = Vec::with_capacity(sample_len);
+
+        for _ in 0..available_samples {
+            if let Some(sample) = self.echo_reference_interleaved.pop_front() {
+                out.push(sample);
+            }
+        }
+
+        if out.len() < sample_len {
+            out.resize(sample_len, 0.0);
+        }
+
+        out
     }
 }
 
@@ -1363,6 +1458,13 @@ fn create_voice_filter_session(
     } else {
         VoiceFilterProcessor::Passthrough
     };
+
+    let echo_canceller = if echo_cancellation {
+        Some(create_echo_canceller_backend(sample_rate, mono_channels))
+    } else {
+        None
+    };
+
     Ok(VoiceFilterSession {
         session_id,
         sample_rate,
@@ -1378,8 +1480,7 @@ fn create_voice_filter_session(
         },
         high_pass_filters: (0..mono_channels).map(|_| HighPassFilter::new()).collect(),
         agc_startup_bypass_ms_remaining: AGC_STARTUP_BYPASS_MS,
-        echo_cancellation,
-        adaptive_echo_canceller: AdaptiveEchoCanceller::new(),
+        echo_canceller,
         echo_reference_interleaved: VecDeque::new(),
         limiter_gain: 1.0,
         expander_envelope: 0.0,
@@ -1410,6 +1511,18 @@ fn decode_f32le_base64(pcm_base64: &str) -> Result<Vec<f32>, String> {
     }
 
     Ok(samples)
+}
+
+fn create_echo_canceller_backend(sample_rate: usize, channels: usize) -> EchoCancellerBackend {
+    match WebRtcEchoCanceller::new(sample_rate, channels) {
+        Ok(canceller) => EchoCancellerBackend::WebRtcAec3(canceller),
+        Err(error) => {
+            eprintln!(
+                "[capture-sidecar] WebRTC AEC3 unavailable, falling back to adaptive NLMS: {error}"
+            );
+            EchoCancellerBackend::AdaptiveNlms(AdaptiveEchoCanceller::new())
+        }
+    }
 }
 
 // Slow post-DFN trim: a long-time-constant RMS normaliser that makes coarse gain
@@ -1700,10 +1813,7 @@ fn apply_adaptive_echo_cancellation(
         return AdaptiveEchoMetrics::default();
     }
 
-    let filter_history_len = session
-        .adaptive_echo_canceller
-        .filter_len()
-        .saturating_sub(1);
+    let filter_history_len = ECHO_CANCELLER_FILTER_TAPS.saturating_sub(1);
     let Some(reference_samples) =
         session.get_echo_reference_window(samples.len(), filter_history_len)
     else {
@@ -1723,11 +1833,16 @@ fn apply_adaptive_echo_cancellation(
         let sample_end = (sample_offset + block_sample_len).min(samples.len());
         let reference_start = sample_offset;
         let reference_end = filter_history_len + sample_end;
-        session.adaptive_echo_canceller.process_block(
-            &mut samples[sample_offset..sample_end],
-            &reference_samples[reference_start..reference_end],
-        );
-        let block_metrics = session.adaptive_echo_canceller.last_metrics();
+        let block_metrics = match session.echo_canceller.as_mut() {
+            Some(EchoCancellerBackend::AdaptiveNlms(canceller)) => {
+                canceller.process_block(
+                    &mut samples[sample_offset..sample_end],
+                    &reference_samples[reference_start..reference_end],
+                );
+                canceller.last_metrics()
+            }
+            _ => AdaptiveEchoMetrics::default(),
+        };
         if let Some(erle_db) = block_metrics.erle_db {
             erle_sum += erle_db;
             erle_count += 1;
@@ -1754,6 +1869,64 @@ fn apply_adaptive_echo_cancellation(
         } else {
             None
         },
+    }
+}
+
+fn apply_webrtc_echo_cancellation(
+    session: &mut VoiceFilterSession,
+    samples: &mut [f32],
+) -> AdaptiveEchoMetrics {
+    if samples.is_empty() {
+        return AdaptiveEchoMetrics::default();
+    }
+
+    let block_frames = ((session.sample_rate * ECHO_CANCELLER_BLOCK_MS) / 1_000).max(1);
+    let block_sample_len = block_frames * session.channels;
+    let mut sample_offset = 0usize;
+    let mut erle_sum = 0.0f32;
+    let mut erle_count = 0u32;
+    let mut delay_ms = None;
+
+    while sample_offset < samples.len() {
+        let sample_end = (sample_offset + block_sample_len).min(samples.len());
+        if sample_end - sample_offset != block_sample_len {
+            break;
+        }
+
+        let reference_block = session.pop_echo_reference_block_or_silence(block_sample_len);
+        let block_metrics = match session.echo_canceller.as_mut() {
+            Some(EchoCancellerBackend::WebRtcAec3(canceller)) => {
+                match canceller.process_block(&mut samples[sample_offset..sample_end], &reference_block)
+                {
+                    Ok(metrics) => metrics,
+                    Err(error) => {
+                        eprintln!("[capture-sidecar] WebRTC AEC3 processing failed: {error}");
+                        AdaptiveEchoMetrics::default()
+                    }
+                }
+            }
+            _ => AdaptiveEchoMetrics::default(),
+        };
+
+        if let Some(erle_db) = block_metrics.erle_db {
+            erle_sum += erle_db;
+            erle_count += 1;
+        }
+        if let Some(block_delay_ms) = block_metrics.delay_ms {
+            delay_ms = Some(block_delay_ms);
+        }
+
+        sample_offset = sample_end;
+    }
+
+    AdaptiveEchoMetrics {
+        erle_db: if erle_count > 0 {
+            Some(erle_sum / erle_count as f32)
+        } else {
+            None
+        },
+        delay_ms,
+        double_talk_confidence: None,
     }
 }
 
@@ -2146,10 +2319,13 @@ fn process_voice_filter_frame(
 
     // AEC before DFN: remove echo from the mic signal first so DFN sees a cleaner
     // input.  If AEC is disabled this is a no-op and has no performance cost.
-    let mut aec_metrics = AdaptiveEchoMetrics::default();
-    if session.echo_cancellation {
-        aec_metrics = apply_adaptive_echo_cancellation(session, samples);
-    }
+    let aec_metrics = match session.echo_cancellation_backend() {
+        Some(ECHO_CANCELLATION_BACKEND_WEBRTC) => apply_webrtc_echo_cancellation(session, samples),
+        Some(ECHO_CANCELLATION_BACKEND_ADAPTIVE) => {
+            apply_adaptive_echo_cancellation(session, samples)
+        }
+        _ => AdaptiveEchoMetrics::default(),
+    };
 
     // Diagnostics accumulators — populated only by the DeepFilter path.
     let mut lsnr_sum = 0.0_f32;
@@ -3931,8 +4107,12 @@ fn handle_voice_filter_start_with_capture(
         "protocolVersion": PROTOCOL_VERSION,
         "encoding": PCM_ENCODING,
     });
-    if echo_cancellation {
-        response["echoCancellationBackend"] = json!(ECHO_CANCELLATION_BACKEND);
+    if let Some(backend) = state
+        .voice_filter_session
+        .as_ref()
+        .and_then(VoiceFilterSession::echo_cancellation_backend)
+    {
+        response["echoCancellationBackend"] = json!(backend);
     }
     Ok(response)
 }
@@ -3982,8 +4162,12 @@ fn handle_voice_filter_start(
         "protocolVersion": PROTOCOL_VERSION,
         "encoding": PCM_ENCODING,
     });
-    if echo_cancellation {
-        response["echoCancellationBackend"] = json!(ECHO_CANCELLATION_BACKEND);
+    if let Some(backend) = state
+        .voice_filter_session
+        .as_ref()
+        .and_then(VoiceFilterSession::echo_cancellation_backend)
+    {
+        response["echoCancellationBackend"] = json!(backend);
     }
     Ok(response)
 }
@@ -4841,8 +5025,10 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
+        create_echo_canceller_backend,
         dedupe_window_entries_by_pid, parse_target_pid, parse_window_source_id,
-        AdaptiveEchoCanceller, CaptureEndReason, ECHO_REFERENCE_DELAY_MS,
+        AdaptiveEchoCanceller, CaptureEndReason, ECHO_CANCELLATION_BACKEND_WEBRTC,
+        ECHO_REFERENCE_DELAY_MS,
     };
     use std::collections::VecDeque;
 
@@ -4926,6 +5112,12 @@ mod tests {
         assert_eq!(CaptureEndReason::AppExited.as_str(), "app_exited");
         #[cfg(windows)]
         assert_eq!(CaptureEndReason::DeviceLost.as_str(), "device_lost");
+    }
+
+    #[test]
+    fn prefers_webrtc_aec3_backend_for_48khz_mono() {
+        let backend = create_echo_canceller_backend(48_000, 1);
+        assert_eq!(backend.backend_name(), ECHO_CANCELLATION_BACKEND_WEBRTC);
     }
 
     #[test]

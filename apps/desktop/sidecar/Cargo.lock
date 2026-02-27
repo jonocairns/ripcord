@@ -18,6 +18,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aec3"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc7f9648bf56a5c3b3f351ee02aea40ce28dda4986ba59ff35b523681a724a29"
+dependencies = [
+ "crossbeam-channel",
+ "log",
+ "num-complex",
+ "rustfft",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1114,6 +1126,7 @@ dependencies = [
 name = "sharkord-capture-sidecar"
 version = "0.1.0"
 dependencies = [
+ "aec3",
  "base64",
  "bytemuck",
  "deep_filter",
