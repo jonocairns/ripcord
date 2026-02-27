@@ -30,18 +30,21 @@ use std::time::Instant;
 #[cfg(windows)]
 use windows::core::{IUnknown, Interface, PCWSTR, PWSTR};
 #[cfg(windows)]
-use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM, WAIT_TIMEOUT};
+use windows::Win32::Foundation::{
+    BOOL, HANDLE, HWND, LPARAM, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
 #[cfg(windows)]
 use windows::Win32::Media::Audio::{
     ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
     IActivateAudioInterfaceCompletionHandler, IAudioCaptureClient, IAudioClient, IAudioClient2,
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_E_INVALID_STREAM_FLAG, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AUDIOCLIENT_ACTIVATION_PARAMS,
-    AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, AudioClientProperties,
-    AUDCLNT_STREAMOPTIONS_RAW, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
-    VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+    AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
+    AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
+    AudioClientProperties, AUDCLNT_STREAMOPTIONS_RAW,
+    PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+    WAVEFORMATEX,
 };
 #[cfg(windows)]
 use windows::Win32::Media::Audio::{
@@ -57,8 +60,8 @@ use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
 use windows::core::GUID;
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    CreateEventW, OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
 };
 #[cfg(windows)]
 use windows::Win32::System::Variant::VT_BLOB;
@@ -107,6 +110,22 @@ const LIMITER_THRESHOLD: f32 = 0.95;
 const LIMITER_ATTACK_COEFF: f32 = 0.979_2; // exp(-1/48)
 const LIMITER_RELEASE_COEFF: f32 = 0.999_8; // exp(-1/4800)
 
+#[cfg(windows)]
+struct OwnedHandle(HANDLE);
+
+#[cfg(windows)]
+impl OwnedHandle {
+    fn raw(&self) -> HANDLE {
+        self.0
+    }
+}
+
+#[cfg(windows)]
+impl Drop for OwnedHandle {
+    fn drop(&mut self) {
+        let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct SidecarRequest {
@@ -3410,14 +3429,37 @@ fn capture_mic_audio(
             audio_client
                 .Initialize(
                     AUDCLNT_SHAREMODE_SHARED,
-                    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-                    20 * 10_000,
+                    AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+                        | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                        | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                    0,
                     0,
                     &capture_format,
                     None,
                 )
                 .map_err(|error| format!("IAudioClient::Initialize failed: {error}"))?
         };
+
+        let mut engine_period_hns = 0i64;
+        unsafe {
+            audio_client
+                .GetDevicePeriod(Some(&mut engine_period_hns), None)
+                .map_err(|error| format!("IAudioClient::GetDevicePeriod failed: {error}"))?
+        };
+
+        let capture_ready_event = OwnedHandle(
+            unsafe { CreateEventW(None, false, false, None) }
+                .map_err(|error| format!("CreateEventW failed: {error}"))?,
+        );
+
+        unsafe {
+            audio_client
+                .SetEventHandle(capture_ready_event.raw())
+                .map_err(|error| format!("IAudioClient::SetEventHandle failed: {error}"))?
+        };
+
+        let engine_period_ms = ((engine_period_hns.max(0) as u64) + 9_999) / 10_000;
+        let wait_timeout_ms = engine_period_ms.clamp(1, u32::MAX as u64) as u32;
 
         let capture_client: IAudioCaptureClient = unsafe {
             audio_client
@@ -3457,7 +3499,24 @@ fn capture_mic_audio(
                 return Ok(());
             }
 
-            let packet_size = match unsafe { capture_client.GetNextPacketSize() } {
+            let wait_result =
+                unsafe { WaitForSingleObject(capture_ready_event.raw(), wait_timeout_ms) };
+            if wait_result == WAIT_TIMEOUT {
+                continue;
+            }
+            if wait_result == WAIT_FAILED {
+                let _ = unsafe { audio_client.Stop() };
+                return Err("WaitForSingleObject failed for mic capture event".to_string());
+            }
+            if wait_result != WAIT_OBJECT_0 {
+                let _ = unsafe { audio_client.Stop() };
+                return Err(format!(
+                    "Unexpected wait result for mic capture event: {}",
+                    wait_result.0
+                ));
+            }
+
+            let mut packet_size = match unsafe { capture_client.GetNextPacketSize() } {
                 Ok(size) => size,
                 Err(_) => {
                     let _ = unsafe { audio_client.Stop() };
@@ -3466,74 +3525,92 @@ fn capture_mic_audio(
             };
 
             if packet_size == 0 {
-                thread::sleep(Duration::from_millis(5));
                 continue;
             }
 
-            let mut data_ptr: *mut u8 = ptr::null_mut();
-            let mut frame_count = 0u32;
-            let mut flags = 0u32;
+            while packet_size > 0 {
+                let mut data_ptr: *mut u8 = ptr::null_mut();
+                let mut frame_count = 0u32;
+                let mut flags = 0u32;
 
-            if unsafe {
-                capture_client.GetBuffer(&mut data_ptr, &mut frame_count, &mut flags, None, None)
-            }
-            .is_err()
-            {
-                let _ = unsafe { audio_client.Stop() };
-                return Err("GetBuffer failed".to_string());
-            }
+                if unsafe {
+                    capture_client.GetBuffer(
+                        &mut data_ptr,
+                        &mut frame_count,
+                        &mut flags,
+                        None,
+                        None,
+                    )
+                }
+                .is_err()
+                {
+                    let _ = unsafe { audio_client.Stop() };
+                    return Err("GetBuffer failed".to_string());
+                }
 
-            let is_silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
+                let chunk = if (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0 {
+                    vec![0.0f32; frame_count as usize * TARGET_CHANNELS]
+                } else {
+                    let sample_count = frame_count as usize * TARGET_CHANNELS;
+                    unsafe { std::slice::from_raw_parts(data_ptr as *const f32, sample_count) }
+                        .to_vec()
+                };
 
-            if !is_silent {
-                let sample_count = frame_count as usize * TARGET_CHANNELS;
-                let chunk =
-                    unsafe { std::slice::from_raw_parts(data_ptr as *const f32, sample_count) };
-                pending.extend_from_slice(chunk);
-            }
+                pending.extend_from_slice(&chunk);
 
-            let _ = unsafe { capture_client.ReleaseBuffer(frame_count) };
+                let _ = unsafe { capture_client.ReleaseBuffer(frame_count) };
 
-            while pending.len() >= MIC_CAPTURE_FRAME_SIZE * TARGET_CHANNELS {
-                let samples: Vec<f32> = pending.drain(..MIC_CAPTURE_FRAME_SIZE * TARGET_CHANNELS).collect();
+                while pending.len() >= MIC_CAPTURE_FRAME_SIZE * TARGET_CHANNELS {
+                    let samples: Vec<f32> = pending
+                        .drain(..MIC_CAPTURE_FRAME_SIZE * TARGET_CHANNELS)
+                        .collect();
 
-                let processed = {
-                    let mut state_lock = match state.lock() {
-                        Ok(guard) => guard,
-                        Err(_) => {
-                            let _ = unsafe { audio_client.Stop() };
-                            return Err("State lock poisoned in capture thread".to_string());
-                        }
-                    };
+                    let processed = {
+                        let mut state_lock = match state.lock() {
+                            Ok(guard) => guard,
+                            Err(_) => {
+                                let _ = unsafe { audio_client.Stop() };
+                                return Err("State lock poisoned in capture thread".to_string());
+                            }
+                        };
 
-                    if let Some(ref vf_session) = state_lock.voice_filter_session {
-                        if vf_session.session_id != session_id {
+                        if let Some(ref vf_session) = state_lock.voice_filter_session {
+                            if vf_session.session_id != session_id {
+                                let _ = unsafe { audio_client.Stop() };
+                                return Ok(());
+                            }
+                        } else {
                             let _ = unsafe { audio_client.Stop() };
                             return Ok(());
                         }
-                    } else {
-                        let _ = unsafe { audio_client.Stop() };
-                        return Ok(());
+
+                        process_voice_filter_samples(
+                            &frame_queue,
+                            &mut state_lock,
+                            &session_id,
+                            sequence,
+                            TARGET_SAMPLE_RATE as usize,
+                            TARGET_CHANNELS,
+                            MIC_CAPTURE_FRAME_SIZE,
+                            None,
+                            samples,
+                        )
+                    };
+
+                    if let Err(error) = processed {
+                        eprintln!("[capture-sidecar] mic capture process error: {error}");
                     }
 
-                    process_voice_filter_samples(
-                        &frame_queue,
-                        &mut state_lock,
-                        &session_id,
-                        sequence,
-                        TARGET_SAMPLE_RATE as usize,
-                        TARGET_CHANNELS,
-                        MIC_CAPTURE_FRAME_SIZE,
-                        None,
-                        samples,
-                    )
-                };
-
-                if let Err(error) = processed {
-                    eprintln!("[capture-sidecar] mic capture process error: {error}");
+                    sequence = sequence.saturating_add(1);
                 }
 
-                sequence = sequence.saturating_add(1);
+                packet_size = match unsafe { capture_client.GetNextPacketSize() } {
+                    Ok(size) => size,
+                    Err(_) => {
+                        let _ = unsafe { audio_client.Stop() };
+                        return Err("GetNextPacketSize failed (device lost)".to_string());
+                    }
+                };
             }
         }
     })();
