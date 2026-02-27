@@ -107,6 +107,7 @@ export type TAppAudioStatusEvent = {
 };
 
 export type TVoiceFilterStrength = 'low' | 'balanced' | 'high' | 'aggressive';
+export type TVoiceDereverbMode = 'off' | 'tail';
 
 export type TVoiceFilterSession = {
   sessionId: string;
@@ -116,6 +117,7 @@ export type TVoiceFilterSession = {
   protocolVersion?: number;
   encoding?: 'f32le_base64';
   echoCancellationBackend?: 'adaptive_nlms' | 'webrtc_aec3';
+  dereverbMode?: TVoiceDereverbMode;
 };
 
 export type TVoiceFilterFrameDiag = {
@@ -189,6 +191,7 @@ export type TStartVoiceFilterInput = {
   noiseSuppression: boolean;
   autoGainControl: boolean;
   echoCancellation: boolean;
+  dereverbMode?: TVoiceDereverbMode;
 };
 
 export type TMicDevice = { id: string; label: string };

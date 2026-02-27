@@ -1,6 +1,7 @@
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import type {
   TDesktopBridge,
+  TVoiceDereverbMode as TRuntimeVoiceDereverbMode,
   TVoiceFilterStrength as TRuntimeVoiceFilterStrength,
   TVoiceFilterFrameDiag,
   TVoiceFilterPcmFrame,
@@ -239,7 +240,9 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
       suppressionLevel as unknown as TRuntimeVoiceFilterStrength,
     noiseSuppression,
     autoGainControl,
-    echoCancellation
+    echoCancellation,
+    dereverbMode:
+      (noiseSuppression ? 'tail' : 'off') as TRuntimeVoiceDereverbMode
   });
   console.log('[voice-filter-debug] Started native voice-filter session', {
     sessionId: session.sessionId,
@@ -557,6 +560,8 @@ const createNativeSidecarMicCapturePipeline = async ({
     noiseSuppression,
     autoGainControl,
     echoCancellation,
+    dereverbMode:
+      (noiseSuppression ? 'tail' : 'off') as TRuntimeVoiceDereverbMode,
     deviceId: sidecarDeviceId
   });
   console.log(

@@ -100,6 +100,8 @@ const ECHO_CANCELLER_NEAR_DOMINANT_MIX: f32 = 0.7;
 const ECHO_CANCELLER_COEFFICIENT_LIMIT: f32 = 2.0;
 const ECHO_CANCELLATION_BACKEND_ADAPTIVE: &str = "adaptive_nlms";
 const ECHO_CANCELLATION_BACKEND_WEBRTC: &str = "webrtc_aec3";
+const DEREVERB_MODE_OFF: &str = "off";
+const DEREVERB_MODE_TAIL: &str = "tail";
 // High-pass filter: 2nd-order Butterworth at 80 Hz / 48 kHz (Direct Form II transposed).
 // Removes DC offset and low-frequency rumble (HVAC, desk vibration, electrical hum) before
 // DeepFilterNet sees the signal.  Sub-80 Hz energy registers as broadband noise and causes
@@ -232,6 +234,22 @@ enum VoiceFilterStrength {
     Aggressive,
 }
 
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum VoiceDereverbMode {
+    Off,
+    Tail,
+}
+
+impl VoiceDereverbMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => DEREVERB_MODE_OFF,
+            Self::Tail => DEREVERB_MODE_TAIL,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StartVoiceFilterParams {
@@ -241,6 +259,7 @@ struct StartVoiceFilterParams {
     noise_suppression: Option<bool>,
     auto_gain_control: Option<bool>,
     echo_cancellation: Option<bool>,
+    dereverb_mode: Option<VoiceDereverbMode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -252,6 +271,7 @@ struct StartVoiceFilterWithCaptureParams {
     noise_suppression: Option<bool>,
     auto_gain_control: Option<bool>,
     echo_cancellation: Option<bool>,
+    dereverb_mode: Option<VoiceDereverbMode>,
     device_id: Option<String>,
 }
 
@@ -402,6 +422,74 @@ unsafe impl Send for DeepFilterProcessor {}
 enum VoiceFilterProcessor {
     DeepFilter(DeepFilterProcessor),
     Passthrough,
+}
+
+#[derive(Clone, Copy)]
+struct TailDereverbProcessor {
+    fast_envelope: f32,
+    tail_envelope: f32,
+    gain: f32,
+}
+
+impl TailDereverbProcessor {
+    fn new() -> Self {
+        Self {
+            fast_envelope: 0.0,
+            tail_envelope: 0.0,
+            gain: 1.0,
+        }
+    }
+
+    fn process(&mut self, samples: &mut [f32], sample_rate: usize) {
+        if samples.is_empty() || sample_rate == 0 {
+            return;
+        }
+
+        let sr = sample_rate as f32;
+        let fast_attack_coeff = (-1.0f32 / (sr * DEREVERB_FAST_ATTACK_MS / 1000.0)).exp();
+        let fast_release_coeff = (-1.0f32 / (sr * DEREVERB_FAST_RELEASE_MS / 1000.0)).exp();
+        let tail_attack_coeff = (-1.0f32 / (sr * DEREVERB_TAIL_ATTACK_MS / 1000.0)).exp();
+        let tail_release_coeff = (-1.0f32 / (sr * DEREVERB_TAIL_RELEASE_MS / 1000.0)).exp();
+        let gain_attack_coeff = (-1.0f32 / (sr * DEREVERB_GAIN_ATTACK_MS / 1000.0)).exp();
+        let gain_release_coeff = (-1.0f32 / (sr * DEREVERB_GAIN_RELEASE_MS / 1000.0)).exp();
+        let min_level = 10.0f32.powf(DEREVERB_MIN_LEVEL_DBFS / 20.0);
+        let min_gain = 10.0f32.powf(-DEREVERB_MAX_ATTENUATION_DB / 20.0);
+
+        for sample in samples.iter_mut() {
+            let abs_val = sample.abs();
+
+            let fast_coeff = if abs_val > self.fast_envelope {
+                fast_attack_coeff
+            } else {
+                fast_release_coeff
+            };
+            self.fast_envelope = fast_coeff * self.fast_envelope + (1.0 - fast_coeff) * abs_val;
+
+            let tail_coeff = if abs_val > self.tail_envelope {
+                tail_attack_coeff
+            } else {
+                tail_release_coeff
+            };
+            self.tail_envelope = tail_coeff * self.tail_envelope + (1.0 - tail_coeff) * abs_val;
+
+            let target_gain = if self.tail_envelope <= min_level {
+                1.0
+            } else {
+                let tail_ratio = ((self.tail_envelope - self.fast_envelope)
+                    / (self.tail_envelope + 1e-6))
+                    .clamp(0.0, 1.0);
+                (1.0 - tail_ratio * (1.0 - min_gain)).clamp(min_gain, 1.0)
+            };
+
+            let gain_coeff = if target_gain < self.gain {
+                gain_attack_coeff
+            } else {
+                gain_release_coeff
+            };
+            self.gain = gain_coeff * self.gain + (1.0 - gain_coeff) * target_gain;
+            *sample *= self.gain;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -632,6 +720,7 @@ struct VoiceFilterSession {
     sample_rate: usize,
     channels: usize,
     processor: VoiceFilterProcessor,
+    dereverb: Option<TailDereverbProcessor>,
     suppression_startup_ramp_ms_remaining: u32,
     high_pass_filters: Vec<HighPassFilter>,
     auto_gain_control: bool,
@@ -777,6 +866,14 @@ impl VoiceFilterSession {
         self.echo_canceller
             .as_ref()
             .map(EchoCancellerBackend::backend_name)
+    }
+
+    fn dereverb_mode(&self) -> VoiceDereverbMode {
+        if self.dereverb.is_some() {
+            VoiceDereverbMode::Tail
+        } else {
+            VoiceDereverbMode::Off
+        }
     }
 
     fn push_echo_reference_samples(
@@ -1616,6 +1713,7 @@ fn create_voice_filter_session(
     noise_suppression: bool,
     auto_gain_control: bool,
     echo_cancellation: bool,
+    dereverb_mode: VoiceDereverbMode,
 ) -> Result<VoiceFilterSession, String> {
     if sample_rate != TARGET_SAMPLE_RATE as usize {
         return Err("DeepFilterNet currently requires 48kHz input".to_string());
@@ -1644,11 +1742,17 @@ fn create_voice_filter_session(
         None
     };
 
+    let dereverb = match dereverb_mode {
+        VoiceDereverbMode::Off => None,
+        VoiceDereverbMode::Tail => Some(TailDereverbProcessor::new()),
+    };
+
     Ok(VoiceFilterSession {
         session_id,
         sample_rate,
         channels: mono_channels,
         processor,
+        dereverb,
         auto_gain_control,
         trim_level_rms: 0.0,
         trim_gain: 1.0,
@@ -1736,6 +1840,14 @@ const SUPPRESSION_STARTUP_PRE_WARM_MS: f32 = 200.0; // hold fully dry while DFN 
 // Gives the DFN model time to update its spectral mask from noise-suppression to
 // speech-preservation mode before operating at full depth, eliminating onset tinniness.
 const ONSET_WET_RAMP_FRAMES: u32 = 10;
+const DEREVERB_MIN_LEVEL_DBFS: f32 = -52.0;
+const DEREVERB_MAX_ATTENUATION_DB: f32 = 6.0;
+const DEREVERB_FAST_ATTACK_MS: f32 = 2.0;
+const DEREVERB_FAST_RELEASE_MS: f32 = 35.0;
+const DEREVERB_TAIL_ATTACK_MS: f32 = 18.0;
+const DEREVERB_TAIL_RELEASE_MS: f32 = 220.0;
+const DEREVERB_GAIN_ATTACK_MS: f32 = 8.0;
+const DEREVERB_GAIN_RELEASE_MS: f32 = 120.0;
 
 // Downward expander — gentle noise-floor suppression placed after echo cancellation.
 // A 1.5:1 expansion ratio attenuates residual noise without killing tails or plosives.
@@ -2612,6 +2724,10 @@ fn process_voice_filter_frame(
     // musical noise before the slew limit / trim / expander chain processes them.
     if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
         apply_output_dezipper(samples, &mut session.dezipper_prev_sample);
+    }
+
+    if let Some(dereverb) = session.dereverb.as_mut() {
+        dereverb.process(samples, session.sample_rate);
     }
 
     // Step 7.5: VAD analysis tap — post-dezipper, no audio modification.
@@ -4250,6 +4366,11 @@ fn handle_voice_filter_start_with_capture(
     let noise_suppression = parsed.noise_suppression.unwrap_or(true);
     let auto_gain_control = parsed.auto_gain_control.unwrap_or(false);
     let echo_cancellation = parsed.echo_cancellation.unwrap_or(false);
+    let dereverb_mode = parsed.dereverb_mode.unwrap_or(if noise_suppression {
+        VoiceDereverbMode::Tail
+    } else {
+        VoiceDereverbMode::Off
+    });
 
     stop_voice_filter_session(state, &frame_queue, None, "capture_stopped", None);
 
@@ -4262,6 +4383,7 @@ fn handle_voice_filter_start_with_capture(
         noise_suppression,
         auto_gain_control,
         echo_cancellation,
+        dereverb_mode,
     )?;
     let session_channels = session.channels; // always 1 (forced mono)
     // Native capture always sends MIC_CAPTURE_FRAME_SIZE frames per buffer,
@@ -4312,6 +4434,13 @@ fn handle_voice_filter_start_with_capture(
     {
         response["echoCancellationBackend"] = json!(backend);
     }
+    if let Some(mode) = state
+        .voice_filter_session
+        .as_ref()
+        .map(|session| session.dereverb_mode().as_str())
+    {
+        response["dereverbMode"] = json!(mode);
+    }
     Ok(response)
 }
 
@@ -4330,6 +4459,11 @@ fn handle_voice_filter_start(
     let noise_suppression = parsed.noise_suppression.unwrap_or(true);
     let auto_gain_control = parsed.auto_gain_control.unwrap_or(false);
     let echo_cancellation = parsed.echo_cancellation.unwrap_or(false);
+    let dereverb_mode = parsed.dereverb_mode.unwrap_or(if noise_suppression {
+        VoiceDereverbMode::Tail
+    } else {
+        VoiceDereverbMode::Off
+    });
 
     if echo_cancellation {
         eprintln!("[capture-sidecar] Voice filter echo cancellation enabled");
@@ -4346,6 +4480,7 @@ fn handle_voice_filter_start(
         noise_suppression,
         auto_gain_control,
         echo_cancellation,
+        dereverb_mode,
     )?;
     let session_channels = session.channels; // always 1 (forced mono)
     let frames_per_buffer = voice_filter_frames_per_buffer(&session);
@@ -4366,6 +4501,13 @@ fn handle_voice_filter_start(
         .and_then(VoiceFilterSession::echo_cancellation_backend)
     {
         response["echoCancellationBackend"] = json!(backend);
+    }
+    if let Some(mode) = state
+        .voice_filter_session
+        .as_ref()
+        .map(|session| session.dereverb_mode().as_str())
+    {
+        response["dereverbMode"] = json!(mode);
     }
     Ok(response)
 }
