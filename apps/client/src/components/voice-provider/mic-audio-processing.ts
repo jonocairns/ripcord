@@ -21,6 +21,26 @@ import micCaptureWorkletModuleUrl from './mic-capture.worklet.js?url&no-inline';
 const NC_DIAG_LOG_INTERVAL_MS = 5_000;
 const NC_DIAG_WINDOW_SIZE = 500; // frames (~5 s at 10 ms/frame)
 
+const nowSteadyEpochMs = (): number => {
+  if (typeof performance === 'undefined') {
+    return Date.now();
+  }
+
+  const now =
+    typeof performance.now === 'function' ? performance.now() : undefined;
+  if (typeof now !== 'number' || !Number.isFinite(now)) {
+    return Date.now();
+  }
+
+  const timeOrigin =
+    typeof performance.timeOrigin === 'number' &&
+    Number.isFinite(performance.timeOrigin)
+      ? performance.timeOrigin
+      : Date.now() - now;
+
+  return timeOrigin + now;
+};
+
 type TNcDiagSnapshot = {
   sessionId: string;
   frameCount: number;
@@ -116,7 +136,7 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
       agcGainMean: avg(agcGainValues),
       rampActiveFrames,
       droppedFrames: totalDropped,
-      timestampMs: Date.now()
+      timestampMs: nowSteadyEpochMs()
     };
 
     if (typeof window !== 'undefined') {
@@ -391,7 +411,7 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
       sampleRate: session.sampleRate,
       channels: session.channels,
       frameCount,
-      timestampMs: Date.now(),
+      timestampMs: nowSteadyEpochMs(),
       pcm: samples,
       protocolVersion: 1
     });
@@ -756,6 +776,7 @@ const resolveSidecarDeviceId = async (
 export {
   createMicAudioProcessingPipeline,
   createNativeSidecarMicCapturePipeline,
+  nowSteadyEpochMs,
   resolveSidecarDeviceId
 };
 export type { TMicAudioProcessingBackend, TMicAudioProcessingPipeline };

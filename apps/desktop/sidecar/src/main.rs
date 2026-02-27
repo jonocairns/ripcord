@@ -12,6 +12,8 @@ use std::io::{self, BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+#[cfg(windows)]
+use std::sync::OnceLock;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1055,6 +1057,20 @@ fn now_unix_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
+}
+
+#[cfg(windows)]
+fn steady_now_ms() -> f64 {
+    static START_TIME: OnceLock<(SystemTime, Instant)> = OnceLock::new();
+
+    let (start_system_time, start_instant) =
+        START_TIME.get_or_init(|| (SystemTime::now(), Instant::now()));
+    let start_ms = start_system_time
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64() * 1_000.0)
+        .unwrap_or(0.0);
+
+    start_ms + start_instant.elapsed().as_secs_f64() * 1_000.0
 }
 
 fn write_json_line<T: Serialize>(stdout: &Arc<Mutex<io::Stdout>>, payload: &T) {
@@ -4174,7 +4190,7 @@ fn capture_mic_audio(
                             TARGET_SAMPLE_RATE as usize,
                             TARGET_CHANNELS,
                             MIC_CAPTURE_FRAME_SIZE,
-                            Some(now_unix_ms() as f64),
+                            Some(steady_now_ms()),
                             None,
                             samples,
                         )

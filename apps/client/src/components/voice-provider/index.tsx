@@ -67,6 +67,7 @@ import { useVoiceEvents } from './hooks/use-voice-events';
 import {
   createMicAudioProcessingPipeline,
   createNativeSidecarMicCapturePipeline,
+  nowSteadyEpochMs,
   resolveSidecarDeviceId,
   type TMicAudioProcessingPipeline
 } from './mic-audio-processing';
@@ -575,7 +576,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                     sampleRate: nativePipeline.sampleRate,
                     channels: nativePipeline.channels,
                     frameCount,
-                    timestampMs: Date.now(),
+                    timestampMs: nowSteadyEpochMs(),
                     pcm: samples,
                     protocolVersion: 1
                   });
@@ -705,7 +706,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                     sampleRate: micAudioPipeline.sampleRate,
                     channels: micAudioPipeline.channels,
                     frameCount,
-                    timestampMs: Date.now(),
+                    timestampMs: nowSteadyEpochMs(),
                     pcm: samples,
                     protocolVersion: 1
                   });
