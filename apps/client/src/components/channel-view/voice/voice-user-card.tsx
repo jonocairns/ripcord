@@ -96,12 +96,12 @@ const VoiceUserCard = memo(
         )}
 
         <div className="absolute bottom-0 left-0 right-0 z-10 p-2">
-          <div className="flex items-center justify-between rounded-md border border-white/10 bg-black/45 px-2 py-1 backdrop-blur-sm">
-            <span className="truncate text-sm font-medium text-white">
+          <div className="relative flex w-fit max-w-[calc(100%-0.5rem)] items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1 shadow-lg backdrop-blur-sm">
+            <span className="max-w-[14ch] truncate text-xs font-semibold text-white/95 md:max-w-[22ch] md:text-sm">
               {voiceUser.name}
             </span>
 
-            <div className="flex items-center gap-1">
+            <div className="ml-0.5 flex items-center gap-1">
               {voiceUser.state.micMuted && (
                 <MicOff className="size-3.5 text-red-500/80" />
               )}

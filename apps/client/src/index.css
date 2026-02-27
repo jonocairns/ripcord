@@ -170,7 +170,7 @@ body,
   display: inline-block;
   width: 68px;
   height: 68px;
-  background: url('/logo.webp') center / contain no-repeat;
+  object-fit: contain;
   transform-origin: center;
   will-change: transform, opacity;
   animation:
