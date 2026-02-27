@@ -41,13 +41,17 @@ const initSubscriptions = () => {
     if (!ownRoleIds.has(role.id)) return false;
     return role.permissions.includes(Permission.EXECUTE_PLUGIN_COMMANDS);
   });
+  const canSubscribeToUserDelete = roles.some((role) => {
+    if (!ownRoleIds.has(role.id)) return false;
+    return role.permissions.includes(Permission.MANAGE_USERS);
+  });
 
   const subscriptors = [
     subscribeToChannels,
     subscribeToServer,
     subscribeToEmojis,
     subscribeToRoles,
-    subscribeToUsers,
+    () => subscribeToUsers({ canSubscribeToDelete: canSubscribeToUserDelete }),
     subscribeToMessages,
     subscribeToVoice,
     subscribeToCategories

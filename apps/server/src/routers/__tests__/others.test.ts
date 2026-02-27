@@ -1,5 +1,6 @@
 import type { TTempFile } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
+import { eq } from 'drizzle-orm';
 import {
   getCaller,
   initTest,
@@ -8,7 +9,7 @@ import {
 } from '../../__tests__/helpers';
 import { TEST_SECRET_TOKEN } from '../../__tests__/seed';
 import { tdb } from '../../__tests__/setup';
-import { settings } from '../../db/schema';
+import { logins, settings, users } from '../../db/schema';
 
 const JOIN_SERVER_MAX_REQUESTS_PER_MINUTE = 60;
 
@@ -49,6 +50,65 @@ describe('others router', () => {
     for (const user of result.users) {
       expect(user._identity).toBeUndefined();
     }
+  });
+
+  test('should return restricted payload when password reset is required', async () => {
+    const joiningUserId = 2;
+
+    const before = await tdb
+      .select({ lastLoginAt: users.lastLoginAt })
+      .from(users)
+      .where(eq(users.id, joiningUserId))
+      .get();
+
+    const loginsBefore = await tdb
+      .select({ id: logins.id })
+      .from(logins)
+      .where(eq(logins.userId, joiningUserId))
+      .all();
+
+    await tdb
+      .update(users)
+      .set({ mustChangePassword: true })
+      .where(eq(users.id, joiningUserId))
+      .run();
+
+    const { caller } = await getCaller(joiningUserId);
+    const { handshakeHash } = await caller.others.handshake();
+
+    const result = await caller.others.joinServer({
+      handshakeHash
+    });
+
+    expect(result.mustChangePassword).toBe(true);
+    expect(result.serverId).toBe('');
+    expect(result.serverName).toBe('');
+    expect(result.categories).toEqual([]);
+    expect(result.channels).toEqual([]);
+    expect(result.users).toEqual([]);
+    expect(result.roles).toEqual([]);
+    expect(result.emojis).toEqual([]);
+    expect(result.publicSettings).toBeUndefined();
+    expect(result.channelPermissions).toEqual({});
+    expect(result.readStates).toEqual({});
+    expect(result.commands).toEqual({});
+    expect(result.externalStreamsMap).toEqual({});
+    expect(result.voiceMap).toEqual({});
+
+    const after = await tdb
+      .select({ lastLoginAt: users.lastLoginAt })
+      .from(users)
+      .where(eq(users.id, joiningUserId))
+      .get();
+
+    const loginsAfter = await tdb
+      .select({ id: logins.id })
+      .from(logins)
+      .where(eq(logins.userId, joiningUserId))
+      .all();
+
+    expect(after?.lastLoginAt).toBe(before?.lastLoginAt);
+    expect(loginsAfter.length).toBe(loginsBefore.length);
   });
 
   test('should ask for password if server has one set', async () => {

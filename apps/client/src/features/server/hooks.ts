@@ -10,6 +10,7 @@ import {
   disconnectInfoSelector,
   infoSelector,
   isOwnUserOwnerSelector,
+  mustChangePasswordSelector,
   ownUserRolesSelector,
   ownVoiceUserSelector,
   pluginsEnabledSelector,
@@ -23,6 +24,8 @@ import {
 export const useIsConnected = () => useSelector(connectedSelector);
 
 export const useIsConnecting = () => useSelector(connectingSelector);
+
+export const useMustChangePassword = () => useSelector(mustChangePasswordSelector);
 
 export const useDisconnectInfo = () => useSelector(disconnectInfoSelector);
 

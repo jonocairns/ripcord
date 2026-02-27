@@ -11,13 +11,19 @@ import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
 import { useForm } from '@/hooks/use-form';
 import { getTRPCClient } from '@/lib/trpc';
+import { logoutFromServer, setMustChangePassword } from '@/features/server/actions';
 import { Eye, EyeOff } from 'lucide-react';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 const MIN_PASSWORD_LENGTH = 8;
 
-const Password = memo(() => {
+type TPasswordProps = {
+  forceMode?: boolean;
+  onSuccess?: () => void;
+};
+
+const Password = memo(({ forceMode = false, onSuccess }: TPasswordProps) => {
   const { setTrpcErrors, r, values } = useForm({
     currentPassword: '',
     newPassword: '',
@@ -55,18 +61,27 @@ const Password = memo(() => {
 
     try {
       await trpc.users.updatePassword.mutate(values);
+      setMustChangePassword(false);
       toast.success('Password updated!');
+
+      if (forceMode) {
+        await logoutFromServer();
+      }
+
+      onSuccess?.();
     } catch (error) {
       setTrpcErrors(error);
     }
-  }, [canSubmit, values, setTrpcErrors]);
+  }, [canSubmit, values, setTrpcErrors, forceMode, onSuccess]);
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Password</CardTitle>
         <CardDescription>
-          In this section, you can update your password.
+          {forceMode
+            ? 'Your password was reset by a server owner. Set a new password to continue.'
+            : 'In this section, you can update your password.'}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -168,7 +183,7 @@ const Password = memo(() => {
       </CardContent>
       <CardFooter className="border-t items-stretch justify-end gap-2 sm:items-center">
         <Button onClick={updatePassword} disabled={!canSubmit}>
-          Update Password
+          {forceMode ? 'Set New Password' : 'Update Password'}
         </Button>
       </CardFooter>
     </Card>

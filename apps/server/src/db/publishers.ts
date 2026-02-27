@@ -1,5 +1,6 @@
 import {
   ChannelPermission,
+  Permission,
   ServerEvents,
   type TChannelUserPermissionsMap
 } from '@sharkord/shared';
@@ -15,7 +16,7 @@ import { getEmojiById } from './queries/emojis';
 import { getMessage } from './queries/messages';
 import { getRole } from './queries/roles';
 import { getPublicSettings } from './queries/server';
-import { getPublicUserById } from './queries/users';
+import { getPublicUserById, getUserIdsWithPermission } from './queries/users';
 import { categories, channels } from './schema';
 
 const publishMessage = async (
@@ -113,7 +114,11 @@ const publishUser = async (
   if (!userId) return;
 
   if (type === 'delete') {
-    pubsub.publish(ServerEvents.USER_DELETE, userId);
+    const affectedUserIds = await getUserIdsWithPermission(
+      Permission.MANAGE_USERS
+    );
+
+    pubsub.publishFor(affectedUserIds, ServerEvents.USER_DELETE, userId);
     return;
   }
 

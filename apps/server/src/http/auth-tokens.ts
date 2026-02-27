@@ -8,15 +8,15 @@ import { refreshTokens } from '../db/schema';
 const ACCESS_TOKEN_EXPIRES_IN = '86400s'; // 1 day
 const REFRESH_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
-const createAccessToken = async (userId: number) =>
-  jwt.sign({ userId }, await getServerToken(), {
+const createAccessToken = async (userId: number, tokenVersion: number) =>
+  jwt.sign({ userId, tokenVersion }, await getServerToken(), {
     expiresIn: ACCESS_TOKEN_EXPIRES_IN
   });
 
 const createRefreshTokenValue = () => `${randomUUIDv7()}.${randomUUIDv7()}`;
 
-const issueAuthTokens = async (userId: number) => {
-  const token = await createAccessToken(userId);
+const issueAuthTokens = async (userId: number, tokenVersion: number) => {
+  const token = await createAccessToken(userId, tokenVersion);
   const refreshToken = createRefreshTokenValue();
   const refreshTokenHash = await sha256(refreshToken);
   const now = Date.now();

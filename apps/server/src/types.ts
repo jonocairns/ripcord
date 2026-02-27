@@ -1,5 +1,6 @@
 export type TTokenPayload = {
   userId: number;
+  tokenVersion: number;
   exp: number;
 };
 

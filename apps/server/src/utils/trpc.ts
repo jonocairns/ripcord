@@ -44,6 +44,7 @@ export type Context = {
   setWsUserId: (userId: number) => void;
   setWsVoiceChannelId: (channelId: number | undefined) => void;
   getUserWs: (userId: number) => WebSocket | undefined;
+  getUserWss: (userId: number) => WebSocket[];
   getConnectionInfo: () => TConnectionInfo | undefined;
   throwValidationError: (field: string, message: string) => never;
   saveUserIp: (userId: number, ip: string) => Promise<void>;
@@ -76,6 +77,25 @@ const authMiddleware = t.middleware(async ({ ctx, next }) => {
 
   return next();
 });
+
+const PASSWORD_RESET_REQUIRED_ALLOWED_PATHS = new Set(['users.updatePassword']);
+
+const passwordResetRequiredMiddleware = t.middleware(
+  async ({ ctx, next, path }) => {
+    if (!ctx.user.mustChangePassword) {
+      return next();
+    }
+
+    if (PASSWORD_RESET_REQUIRED_ALLOWED_PATHS.has(path)) {
+      return next();
+    }
+
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You must change your password before using the server.'
+    });
+  }
+);
 
 type TRateLimitedProcedureOptions = {
   maxRequests: number;
@@ -150,7 +170,8 @@ const rateLimitedProcedure = (
 // it prevents users that only are connected to the wss but did not join the server from accessing protected procedures
 const protectedProcedure = t.procedure
   .use(timingMiddleware)
-  .use(authMiddleware);
+  .use(authMiddleware)
+  .use(passwordResetRequiredMiddleware);
 
 const publicProcedure = t.procedure.use(timingMiddleware);
 
