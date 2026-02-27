@@ -131,7 +131,7 @@ export const serverSlice = createSlice({
         mustChangePassword: boolean;
         roles: TJoinedRole[];
         emojis: TJoinedEmoji[];
-        publicSettings: TPublicServerSettings | undefined;
+        publicSettings?: TPublicServerSettings;
         voiceMap: TVoiceMap;
         externalStreamsMap: TExternalStreamsMap;
         channelPermissions: TChannelUserPermissionsMap;
