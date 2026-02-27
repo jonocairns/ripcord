@@ -5,7 +5,11 @@ import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
 import { connect } from '@/features/server/actions';
 import { useInfo } from '@/features/server/hooks';
-import { getFileUrl, getUrlFromServer } from '@/helpers/get-file-url';
+import {
+  getFileUrl,
+  getPublicAssetUrl,
+  getUrlFromServer
+} from '@/helpers/get-file-url';
 import {
   getLocalStorageItem,
   LocalStorageKey,
@@ -107,7 +111,7 @@ const Connect = memo(() => {
       return getFileUrl(info.logo);
     }
 
-    return '/logo.webp';
+    return getPublicAssetUrl('logo.webp');
   }, [info]);
 
   return (

@@ -59,10 +59,11 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
   const headerContent = (
     <>
       <span className="flex min-w-0 items-center gap-2">
-        <Avatar className="h-6 w-6 rounded-md">
+        <Avatar className="h-6 w-8 rounded-md bg-sidebar-accent/40">
           <AvatarImage
             src={getFileUrl(serverInfo?.logo)}
             key={serverInfo?.logo?.id}
+            className="object-contain p-0.5"
           />
           <AvatarFallback className="rounded-md bg-muted/80 text-[10px] font-semibold text-foreground">
             {getInitialsFromName(safeServerName)}

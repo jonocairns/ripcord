@@ -23,28 +23,27 @@ const ImagePicker = memo(
       <>
         <div className="space-y-2">
           <div
-            className={cn('relative group cursor-pointer w-80 h-24', className)}
+            className={cn(
+              'relative group cursor-pointer w-80 h-24 overflow-hidden rounded-md border border-border/60 bg-muted/20',
+              className
+            )}
             onClick={onImageClick}
           >
             {image ? (
               <img
                 src={getFileUrl(image)}
                 alt="Image"
-                className={cn(
-                  'w-80 h-24 object-cover rounded-md transition-opacity group-hover:opacity-70',
-                  className
-                )}
+                className="h-full w-full object-contain p-2 transition-opacity group-hover:opacity-70"
               />
             ) : (
               <div
                 className={cn(
                   buttonVariants({ variant: 'outline' }),
-                  'w-80 h-24 cursor-pointer transition-opacity group-hover:opacity-70',
-                  className
+                  'h-full w-full cursor-pointer transition-opacity group-hover:opacity-70'
                 )}
               />
             )}
-            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-md">
+            <div className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">
               <div className="bg-black/50 rounded-full p-3">
                 <Upload className="h-6 w-6 text-white" />
               </div>

@@ -41,4 +41,14 @@ const getFileUrl = (file: TFile | undefined | null) => {
   return encodeURI(baseUrl);
 };
 
-export { getFileUrl, getHostFromServer, getUrlFromServer };
+const getPublicAssetUrl = (assetPath: string) => {
+  const normalizedAssetPath = assetPath.replace(/^\/+/, '');
+
+  if (window.location.protocol === 'file:') {
+    return `./${normalizedAssetPath}`;
+  }
+
+  return `/${normalizedAssetPath}`;
+};
+
+export { getFileUrl, getHostFromServer, getPublicAssetUrl, getUrlFromServer };

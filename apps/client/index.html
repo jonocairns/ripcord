@@ -7,10 +7,14 @@
     <link rel="apple-touch-icon" href="/favicon.png?v=7" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
+      :root {
+        --initial-background: oklch(0.165 0.012 258);
+      }
+
       html,
       body,
       #root {
-        background: #000;
+        background: var(--initial-background);
         margin: 0;
         min-height: 100%;
       }
