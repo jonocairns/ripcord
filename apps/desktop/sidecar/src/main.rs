@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[cfg(windows)]
@@ -25,9 +25,6 @@ use std::mem::size_of;
 use std::path::Path;
 #[cfg(windows)]
 use std::ptr;
-#[cfg(windows)]
-use std::time::Instant;
-
 #[cfg(windows)]
 use windows::core::GUID;
 #[cfg(windows)]
@@ -88,7 +85,6 @@ const MAX_VOICE_FILTER_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const VOICE_FILTER_BINARY_EGRESS_FRAMING: &str = "length_prefixed_f32le_diag_v1";
 const DEEP_FILTER_WARMUP_BLOCKS: usize = 20;
 const ECHO_REFERENCE_MAX_BUFFER_MS: usize = 1_200;
-const ECHO_REFERENCE_DELAY_MS: usize = 80;
 const ECHO_CANCELLER_BLOCK_MS: usize = 10;
 const ECHO_CANCELLER_FILTER_TAPS: usize = 192;
 const ECHO_CANCELLER_REFERENCE_RMS_FLOOR: f32 = 3e-4;
@@ -271,6 +267,7 @@ struct VoiceFilterPushFrameParams {
     sample_rate: usize,
     channels: usize,
     frame_count: usize,
+    timestamp_ms: Option<f64>,
     pcm_base64: String,
     protocol_version: Option<u32>,
     encoding: Option<String>,
@@ -284,6 +281,7 @@ struct VoiceFilterPushReferenceFrameParams {
     sample_rate: usize,
     channels: usize,
     frame_count: usize,
+    timestamp_ms: Option<f64>,
     pcm_base64: String,
     protocol_version: Option<u32>,
     encoding: Option<String>,
@@ -434,7 +432,12 @@ impl AdaptiveEchoCanceller {
         self.last_metrics
     }
 
-    fn process_block(&mut self, near: &mut [f32], reference_window: &[f32]) {
+    fn process_block(
+        &mut self,
+        near: &mut [f32],
+        reference_window: &[f32],
+        reference_delay_ms: Option<f32>,
+    ) {
         let filter_len = self.filter_len();
         self.last_metrics = AdaptiveEchoMetrics::default();
         if near.is_empty()
@@ -486,24 +489,22 @@ impl AdaptiveEchoCanceller {
         let near_dominance_confidence = ((near_dominance - 1.0)
             / (ECHO_CANCELLER_NEAR_DOMINANCE_THRESHOLD - 1.0))
             .clamp(0.0, 1.0);
-        let decorrelation_confidence =
-            (1.0 - residual_correlation / ECHO_CANCELLER_RESIDUAL_CORRELATION_FLOOR)
-                .clamp(0.0, 1.0);
+        let decorrelation_confidence = (1.0
+            - residual_correlation / ECHO_CANCELLER_RESIDUAL_CORRELATION_FLOOR)
+            .clamp(0.0, 1.0);
         let double_talk_confidence = near_dominance_confidence * decorrelation_confidence;
         let double_talk = double_talk_confidence >= 0.6;
 
         let erle_db = if estimated_echo_energy > ECHO_CANCELLER_NLMS_ENERGY_FLOOR
             && residual_energy > ECHO_CANCELLER_NLMS_ENERGY_FLOOR
         {
-            Some(
-                (10.0 * (estimated_echo_energy / residual_energy).log10()).clamp(-20.0, 45.0),
-            )
+            Some((10.0 * (estimated_echo_energy / residual_energy).log10()).clamp(-20.0, 45.0))
         } else {
             None
         };
         self.last_metrics = AdaptiveEchoMetrics {
             erle_db,
-            delay_ms: Some(ECHO_REFERENCE_DELAY_MS as f32),
+            delay_ms: reference_delay_ms,
             double_talk_confidence: Some(double_talk_confidence),
         };
 
@@ -637,6 +638,8 @@ struct VoiceFilterSession {
     agc_startup_bypass_ms_remaining: u32,
     echo_canceller: Option<EchoCancellerBackend>,
     echo_reference_interleaved: VecDeque<f32>,
+    echo_reference_frames: VecDeque<TimedEchoReferenceFrame>,
+    echo_reference_frame_samples: usize,
     limiter_gain: f32,
     expander_envelope: f32,
     expander_gain: f32,
@@ -647,6 +650,124 @@ struct VoiceFilterSession {
     vad: VadState,
     transient_suppressor: TransientSuppressorState,
     lsnr_smoothed: f32,
+}
+
+#[derive(Clone)]
+struct TimedEchoReferenceFrame {
+    sequence: u64,
+    received_at: Instant,
+    source_timestamp_ms: Option<f64>,
+    samples: Vec<f32>,
+}
+
+fn collect_timed_reference_window(
+    frames: &VecDeque<TimedEchoReferenceFrame>,
+    required_samples: usize,
+    capture_time: Instant,
+) -> Option<(Vec<f32>, Option<f32>)> {
+    if required_samples == 0 {
+        return None;
+    }
+
+    let end_index = frames
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, frame)| (frame.received_at <= capture_time).then_some(index))?;
+
+    let mut remaining = required_samples;
+    let mut chunks: Vec<&[f32]> = Vec::new();
+
+    for index in (0..=end_index).rev() {
+        let frame = frames.get(index)?;
+        if frame.samples.is_empty() {
+            continue;
+        }
+
+        let take = remaining.min(frame.samples.len());
+        let start = frame.samples.len().saturating_sub(take);
+        chunks.push(&frame.samples[start..]);
+        remaining = remaining.saturating_sub(take);
+
+        if remaining == 0 {
+            break;
+        }
+    }
+
+    if remaining > 0 {
+        return None;
+    }
+
+    chunks.reverse();
+
+    let mut window = Vec::with_capacity(required_samples);
+    for chunk in chunks {
+        window.extend_from_slice(chunk);
+    }
+
+    let delay_ms = frames
+        .get(end_index)
+        .and_then(|frame| capture_time.checked_duration_since(frame.received_at))
+        .map(|duration| duration.as_secs_f32() * 1_000.0);
+
+    Some((window, delay_ms))
+}
+
+fn collect_source_timed_reference_window(
+    frames: &VecDeque<TimedEchoReferenceFrame>,
+    required_samples: usize,
+    capture_timestamp_ms: f64,
+) -> Option<(Vec<f32>, Option<f32>)> {
+    if required_samples == 0 || !capture_timestamp_ms.is_finite() {
+        return None;
+    }
+
+    let end_index = frames.iter().enumerate().rev().find_map(|(index, frame)| {
+        let source_timestamp_ms = frame.source_timestamp_ms?;
+        (source_timestamp_ms <= capture_timestamp_ms).then_some(index)
+    })?;
+
+    let mut remaining = required_samples;
+    let mut chunks: Vec<&[f32]> = Vec::new();
+
+    for index in (0..=end_index).rev() {
+        let frame = frames.get(index)?;
+        if frame.samples.is_empty() {
+            continue;
+        }
+
+        if frame.source_timestamp_ms.is_none() {
+            return None;
+        }
+
+        let take = remaining.min(frame.samples.len());
+        let start = frame.samples.len().saturating_sub(take);
+        chunks.push(&frame.samples[start..]);
+        remaining = remaining.saturating_sub(take);
+
+        if remaining == 0 {
+            break;
+        }
+    }
+
+    if remaining > 0 {
+        return None;
+    }
+
+    chunks.reverse();
+
+    let mut window = Vec::with_capacity(required_samples);
+    for chunk in chunks {
+        window.extend_from_slice(chunk);
+    }
+
+    let delay_ms = frames.get(end_index).and_then(|frame| {
+        frame.source_timestamp_ms.map(|source_timestamp_ms| {
+            (capture_timestamp_ms - source_timestamp_ms).max(0.0) as f32
+        })
+    });
+
+    Some((window, delay_ms))
 }
 
 impl VoiceFilterSession {
@@ -660,6 +781,9 @@ impl VoiceFilterSession {
         &mut self,
         input_samples: &[f32],
         input_channels: usize,
+        sequence: u64,
+        received_at: Instant,
+        source_timestamp_ms: Option<f64>,
     ) -> Result<(), String> {
         if input_channels == 0 || input_channels > 2 {
             return Err("Unsupported reference frame channel count".to_string());
@@ -686,24 +810,36 @@ impl VoiceFilterSession {
             return Ok(());
         }
 
+        if let Some(previous_sequence) = self
+            .echo_reference_frames
+            .back()
+            .map(|frame| frame.sequence)
+        {
+            if sequence <= previous_sequence {
+                self.echo_reference_interleaved.clear();
+                self.echo_reference_frames.clear();
+                self.echo_reference_frame_samples = 0;
+            }
+        }
+
+        let mut normalized_samples = Vec::with_capacity(incoming_samples);
         for frame_index in 0..input_frame_count {
             match (input_channels, self.channels) {
                 (1, 1) | (2, 2) => {
                     for channel_index in 0..self.channels {
                         let sample = input_samples[frame_index * input_channels + channel_index];
-                        self.echo_reference_interleaved.push_back(sample);
+                        normalized_samples.push(sample);
                     }
                 }
                 (1, 2) => {
                     let sample = input_samples[frame_index];
-                    self.echo_reference_interleaved.push_back(sample);
-                    self.echo_reference_interleaved.push_back(sample);
+                    normalized_samples.push(sample);
+                    normalized_samples.push(sample);
                 }
                 (2, 1) => {
                     let left = input_samples[frame_index * 2];
                     let right = input_samples[frame_index * 2 + 1];
-                    self.echo_reference_interleaved
-                        .push_back((left + right) * 0.5);
+                    normalized_samples.push((left + right) * 0.5);
                 }
                 _ => {
                     return Err("Unsupported reference channel conversion".to_string());
@@ -711,37 +847,63 @@ impl VoiceFilterSession {
             }
         }
 
+        for &sample in &normalized_samples {
+            self.echo_reference_interleaved.push_back(sample);
+        }
+
+        self.echo_reference_frame_samples = self
+            .echo_reference_frame_samples
+            .saturating_add(normalized_samples.len());
+        self.echo_reference_frames
+            .push_back(TimedEchoReferenceFrame {
+                sequence,
+                received_at,
+                source_timestamp_ms: source_timestamp_ms.filter(|value| value.is_finite()),
+                samples: normalized_samples,
+            });
+
         while self.echo_reference_interleaved.len() > max_reference_samples {
             let _ = self.echo_reference_interleaved.pop_front();
+        }
+
+        while self.echo_reference_frame_samples > max_reference_samples {
+            let Some(frame) = self.echo_reference_frames.pop_front() else {
+                break;
+            };
+            self.echo_reference_frame_samples = self
+                .echo_reference_frame_samples
+                .saturating_sub(frame.samples.len());
         }
 
         Ok(())
     }
 
-    fn get_echo_reference_window(&self, sample_len: usize, history_len: usize) -> Option<Vec<f32>> {
+    fn get_echo_reference_window(
+        &self,
+        sample_len: usize,
+        history_len: usize,
+        capture_time: Instant,
+        capture_source_timestamp_ms: Option<f64>,
+    ) -> Option<(Vec<f32>, Option<f32>)> {
         if sample_len == 0 {
             return None;
         }
 
-        let required_delay_samples =
-            ((self.sample_rate * ECHO_REFERENCE_DELAY_MS) / 1_000) * self.channels;
-        let total_required_samples = required_delay_samples + history_len + sample_len;
-        if self.echo_reference_interleaved.len() < total_required_samples {
-            return None;
+        if let Some(capture_source_timestamp_ms) = capture_source_timestamp_ms {
+            if let Some(reference_window) = collect_source_timed_reference_window(
+                &self.echo_reference_frames,
+                history_len + sample_len,
+                capture_source_timestamp_ms,
+            ) {
+                return Some(reference_window);
+            }
         }
 
-        let start = self.echo_reference_interleaved.len() - total_required_samples;
-        let end = start + history_len + sample_len;
-        let mut out = Vec::with_capacity(sample_len);
-        out.extend(
-            self.echo_reference_interleaved
-                .iter()
-                .skip(start)
-                .take(end - start)
-                .copied(),
-        );
-
-        Some(out)
+        collect_timed_reference_window(
+            &self.echo_reference_frames,
+            history_len + sample_len,
+            capture_time,
+        )
     }
 
     fn pop_echo_reference_block_or_silence(&mut self, sample_len: usize) -> Vec<f32> {
@@ -796,6 +958,7 @@ struct VoiceFilterBinaryFrame {
     sample_rate: usize,
     channels: usize,
     frame_count: usize,
+    timestamp_ms: Option<f64>,
     protocol_version: u32,
     samples: Vec<f32>,
 }
@@ -1482,6 +1645,8 @@ fn create_voice_filter_session(
         agc_startup_bypass_ms_remaining: AGC_STARTUP_BYPASS_MS,
         echo_canceller,
         echo_reference_interleaved: VecDeque::new(),
+        echo_reference_frames: VecDeque::new(),
+        echo_reference_frame_samples: 0,
         limiter_gain: 1.0,
         expander_envelope: 0.0,
         expander_gain: 1.0,
@@ -1808,14 +1973,21 @@ fn inject_comfort_noise(samples: &mut [f32], rng_state: &mut u32, mix: f32) {
 fn apply_adaptive_echo_cancellation(
     session: &mut VoiceFilterSession,
     samples: &mut [f32],
+    capture_time: Instant,
+    capture_source_timestamp_ms: Option<f64>,
 ) -> AdaptiveEchoMetrics {
     if samples.is_empty() {
         return AdaptiveEchoMetrics::default();
     }
 
     let filter_history_len = ECHO_CANCELLER_FILTER_TAPS.saturating_sub(1);
-    let Some(reference_samples) =
-        session.get_echo_reference_window(samples.len(), filter_history_len)
+    let Some((reference_samples, reference_delay_ms)) =
+        session.get_echo_reference_window(
+            samples.len(),
+            filter_history_len,
+            capture_time,
+            capture_source_timestamp_ms,
+        )
     else {
         return AdaptiveEchoMetrics::default();
     };
@@ -1838,6 +2010,7 @@ fn apply_adaptive_echo_cancellation(
                 canceller.process_block(
                     &mut samples[sample_offset..sample_end],
                     &reference_samples[reference_start..reference_end],
+                    reference_delay_ms,
                 );
                 canceller.last_metrics()
             }
@@ -1896,7 +2069,8 @@ fn apply_webrtc_echo_cancellation(
         let reference_block = session.pop_echo_reference_block_or_silence(block_sample_len);
         let block_metrics = match session.echo_canceller.as_mut() {
             Some(EchoCancellerBackend::WebRtcAec3(canceller)) => {
-                match canceller.process_block(&mut samples[sample_offset..sample_end], &reference_block)
+                match canceller
+                    .process_block(&mut samples[sample_offset..sample_end], &reference_block)
                 {
                     Ok(metrics) => metrics,
                     Err(error) => {
@@ -2224,6 +2398,8 @@ fn process_voice_filter_frame(
     session: &mut VoiceFilterSession,
     samples: &mut [f32],
     channels: usize,
+    capture_time: Instant,
+    capture_source_timestamp_ms: Option<f64>,
 ) -> Result<VoiceFilterDiagnostics, String> {
     if samples.is_empty() || channels == 0 {
         return Ok(VoiceFilterDiagnostics {
@@ -2322,7 +2498,12 @@ fn process_voice_filter_frame(
     let aec_metrics = match session.echo_cancellation_backend() {
         Some(ECHO_CANCELLATION_BACKEND_WEBRTC) => apply_webrtc_echo_cancellation(session, samples),
         Some(ECHO_CANCELLATION_BACKEND_ADAPTIVE) => {
-            apply_adaptive_echo_cancellation(session, samples)
+            apply_adaptive_echo_cancellation(
+                session,
+                samples,
+                capture_time,
+                capture_source_timestamp_ms,
+            )
         }
         _ => AdaptiveEchoMetrics::default(),
     };
@@ -3993,6 +4174,7 @@ fn capture_mic_audio(
                             TARGET_SAMPLE_RATE as usize,
                             TARGET_CHANNELS,
                             MIC_CAPTURE_FRAME_SIZE,
+                            Some(now_unix_ms() as f64),
                             None,
                             samples,
                         )
@@ -4201,12 +4383,15 @@ fn process_voice_filter_samples(
     sample_rate: usize,
     channels: usize,
     frame_count: usize,
+    source_timestamp_ms: Option<f64>,
     protocol_version: Option<u32>,
     mut samples: Vec<f32>,
 ) -> Result<(), String> {
     // Clone the Arc before borrowing voice_filter_session so we can use it
     // later without a borrow conflict on `state`.
     let egress_stream = state.voice_filter_binary_egress_stream.clone();
+    let capture_time = Instant::now();
+    let source_timestamp_ms = source_timestamp_ms.filter(|value| value.is_finite());
 
     let Some(session) = state.voice_filter_session.as_mut() else {
         return Err("No active voice filter session".to_string());
@@ -4251,7 +4436,13 @@ fn process_voice_filter_samples(
         return Err("Voice filter channel count mismatch".to_string());
     };
 
-    let diagnostics = process_voice_filter_frame(session, &mut samples, channels)?;
+    let diagnostics = process_voice_filter_frame(
+        session,
+        &mut samples,
+        channels,
+        capture_time,
+        source_timestamp_ms,
+    )?;
 
     if samples.len() != frame_count * channels {
         return Err("Voice filter frame sample count mismatch".to_string());
@@ -4304,9 +4495,11 @@ fn process_voice_filter_samples(
 fn process_voice_filter_reference_samples(
     state: &mut SidecarState,
     session_id: &str,
+    sequence: u64,
     sample_rate: usize,
     channels: usize,
     frame_count: usize,
+    source_timestamp_ms: Option<f64>,
     protocol_version: Option<u32>,
     samples: Vec<f32>,
 ) -> Result<(), String> {
@@ -4336,7 +4529,13 @@ fn process_voice_filter_reference_samples(
         return Err("Voice filter reference frame sample count mismatch".to_string());
     }
 
-    session.push_echo_reference_samples(&samples, channels)?;
+    session.push_echo_reference_samples(
+        &samples,
+        channels,
+        sequence,
+        Instant::now(),
+        source_timestamp_ms,
+    )?;
     Ok(())
 }
 
@@ -4364,6 +4563,7 @@ fn handle_voice_filter_push_frame(
         parsed.sample_rate,
         parsed.channels,
         parsed.frame_count,
+        parsed.timestamp_ms,
         parsed.protocol_version,
         samples,
     )?;
@@ -4388,14 +4588,15 @@ fn handle_voice_filter_push_reference_frame(
     }
 
     let samples = decode_f32le_base64(&parsed.pcm_base64)?;
-    let _sequence = parsed.sequence;
 
     process_voice_filter_reference_samples(
         state,
         &parsed.session_id,
+        parsed.sequence,
         parsed.sample_rate,
         parsed.channels,
         parsed.frame_count,
+        parsed.timestamp_ms,
         parsed.protocol_version,
         samples,
     )?;
@@ -4640,6 +4841,25 @@ fn parse_voice_filter_binary_frame(payload: &[u8]) -> Result<VoiceFilterBinaryFr
         Ok(value)
     };
 
+    let read_f64 = |payload: &[u8], offset: &mut usize| -> Result<f64, String> {
+        if payload.len() < *offset + 8 {
+            return Err("Binary voice filter frame is truncated".to_string());
+        }
+
+        let value = f64::from_le_bytes([
+            payload[*offset],
+            payload[*offset + 1],
+            payload[*offset + 2],
+            payload[*offset + 3],
+            payload[*offset + 4],
+            payload[*offset + 5],
+            payload[*offset + 6],
+            payload[*offset + 7],
+        ]);
+        *offset += 8;
+        Ok(value)
+    };
+
     let session_id_len = read_u16(payload, &mut offset)? as usize;
     if session_id_len == 0 {
         return Err("Binary voice filter frame is missing a session id".to_string());
@@ -4659,6 +4879,7 @@ fn parse_voice_filter_binary_frame(payload: &[u8]) -> Result<VoiceFilterBinaryFr
     let sample_rate = read_u32(payload, &mut offset)? as usize;
     let channels = read_u16(payload, &mut offset)? as usize;
     let frame_count = read_u32(payload, &mut offset)? as usize;
+    let timestamp_ms = read_f64(payload, &mut offset)?;
     let protocol_version = read_u32(payload, &mut offset)?;
     let pcm_byte_length = read_u32(payload, &mut offset)? as usize;
 
@@ -4683,6 +4904,7 @@ fn parse_voice_filter_binary_frame(payload: &[u8]) -> Result<VoiceFilterBinaryFr
         sample_rate,
         channels,
         frame_count,
+        timestamp_ms: timestamp_ms.is_finite().then_some(timestamp_ms),
         protocol_version,
         samples,
     })
@@ -4755,6 +4977,7 @@ fn handle_voice_filter_binary_stream(
             frame.sample_rate,
             frame.channels,
             frame.frame_count,
+            frame.timestamp_ms,
             Some(frame.protocol_version),
             frame.samples,
         ) {
@@ -4865,22 +5088,20 @@ fn main() {
         }
     }
 
-    let binary_ingress = match start_voice_filter_binary_ingress(
-        Arc::clone(&frame_queue),
-        Arc::clone(&state),
-    ) {
-        Ok(binary_ingress) => {
-            eprintln!(
-                "[capture-sidecar] voice filter binary ingress listening on 127.0.0.1:{}",
-                binary_ingress.port
-            );
-            Some(binary_ingress)
-        }
-        Err(error) => {
-            eprintln!("[capture-sidecar] voice filter binary ingress unavailable: {error}");
-            None
-        }
-    };
+    let binary_ingress =
+        match start_voice_filter_binary_ingress(Arc::clone(&frame_queue), Arc::clone(&state)) {
+            Ok(binary_ingress) => {
+                eprintln!(
+                    "[capture-sidecar] voice filter binary ingress listening on 127.0.0.1:{}",
+                    binary_ingress.port
+                );
+                Some(binary_ingress)
+            }
+            Err(error) => {
+                eprintln!("[capture-sidecar] voice filter binary ingress unavailable: {error}");
+                None
+            }
+        };
 
     for line in stdin.lock().lines() {
         let Ok(line) = line else {
@@ -4938,9 +5159,11 @@ fn main() {
                 Err(_) => Err("Sidecar state lock poisoned".to_string()),
             },
             "push_keybinds.set" => match state.lock() {
-                Ok(mut state_lock) => {
-                    handle_push_keybinds_set(request_frame_queue.clone(), &mut state_lock, request.params)
-                }
+                Ok(mut state_lock) => handle_push_keybinds_set(
+                    request_frame_queue.clone(),
+                    &mut state_lock,
+                    request.params,
+                ),
                 Err(_) => Err("Sidecar state lock poisoned".to_string()),
             },
             "mic_devices.list" => handle_mic_devices_list(),
@@ -4954,9 +5177,11 @@ fn main() {
                 Err(_) => Err("Sidecar state lock poisoned".to_string()),
             },
             "voice_filter.start" => match state.lock() {
-                Ok(mut state_lock) => {
-                    handle_voice_filter_start(request_frame_queue.clone(), &mut state_lock, request.params)
-                }
+                Ok(mut state_lock) => handle_voice_filter_start(
+                    request_frame_queue.clone(),
+                    &mut state_lock,
+                    request.params,
+                ),
                 Err(_) => Err("Sidecar state lock poisoned".to_string()),
             },
             "voice_filter.push_frame" => match state.lock() {
@@ -4974,9 +5199,11 @@ fn main() {
                 Err(_) => Err("Sidecar state lock poisoned".to_string()),
             },
             "voice_filter.stop" => match state.lock() {
-                Ok(mut state_lock) => {
-                    handle_voice_filter_stop(request_frame_queue.clone(), &mut state_lock, request.params)
-                }
+                Ok(mut state_lock) => handle_voice_filter_stop(
+                    request_frame_queue.clone(),
+                    &mut state_lock,
+                    request.params,
+                ),
                 Err(_) => Err("Sidecar state lock poisoned".to_string()),
             },
             _ => Err(format!("Unknown method: {}", request.method)),
@@ -5025,12 +5252,14 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
+        collect_source_timed_reference_window, collect_timed_reference_window,
         create_echo_canceller_backend,
         dedupe_window_entries_by_pid, parse_target_pid, parse_window_source_id,
-        AdaptiveEchoCanceller, CaptureEndReason, ECHO_CANCELLATION_BACKEND_WEBRTC,
-        ECHO_REFERENCE_DELAY_MS,
+        AdaptiveEchoCanceller, CaptureEndReason, TimedEchoReferenceFrame,
+        ECHO_CANCELLATION_BACKEND_WEBRTC,
     };
     use std::collections::VecDeque;
+    use std::time::{Duration, Instant};
 
     const TEST_AEC_BLOCK_SIZE: usize = 480;
 
@@ -5142,7 +5371,7 @@ mod tests {
                 input_rms_sum += rms(&near_block);
             }
 
-            canceller.process_block(&mut near_block, &reference_window);
+            canceller.process_block(&mut near_block, &reference_window, Some(24.0));
 
             if block_index >= 80 {
                 output_rms_sum += rms(&near_block);
@@ -5151,7 +5380,7 @@ mod tests {
 
         let metrics = canceller.last_metrics();
         assert!(metrics.erle_db.is_some());
-        assert_eq!(metrics.delay_ms, Some(ECHO_REFERENCE_DELAY_MS as f32));
+        assert_eq!(metrics.delay_ms, Some(24.0));
         assert!(output_rms_sum < input_rms_sum * 0.45);
     }
 
@@ -5170,7 +5399,7 @@ mod tests {
                 build_reference_window(&mut history, &reference_block, filter_len);
             let mut near_block: Vec<f32> =
                 reference_block.iter().map(|sample| sample * 0.55).collect();
-            canceller.process_block(&mut near_block, &reference_window);
+            canceller.process_block(&mut near_block, &reference_window, Some(18.0));
         }
 
         let start = 90 * TEST_AEC_BLOCK_SIZE;
@@ -5188,12 +5417,75 @@ mod tests {
             .collect();
         let input_error = mean_abs_diff(&mixed_block, &speech_block);
 
-        canceller.process_block(&mut mixed_block, &reference_window);
+        canceller.process_block(&mut mixed_block, &reference_window, Some(18.0));
 
         let output_error = mean_abs_diff(&mixed_block, &speech_block);
         let metrics = canceller.last_metrics();
         assert!(metrics.double_talk_confidence.is_some());
         assert!(output_error < input_error);
         assert!(rms(&mixed_block) > rms(&speech_block) * 0.6);
+    }
+
+    #[test]
+    fn timed_reference_window_tracks_latest_frame_before_capture_time() {
+        let start = Instant::now();
+        let frames = VecDeque::from(vec![
+            TimedEchoReferenceFrame {
+                sequence: 10,
+                received_at: start,
+                source_timestamp_ms: Some(100.0),
+                samples: vec![1.0, 2.0],
+            },
+            TimedEchoReferenceFrame {
+                sequence: 11,
+                received_at: start + Duration::from_millis(10),
+                source_timestamp_ms: Some(110.0),
+                samples: vec![3.0, 4.0],
+            },
+            TimedEchoReferenceFrame {
+                sequence: 12,
+                received_at: start + Duration::from_millis(20),
+                source_timestamp_ms: Some(120.0),
+                samples: vec![5.0, 6.0],
+            },
+        ]);
+
+        let (window, delay_ms) =
+            collect_timed_reference_window(&frames, 4, start + Duration::from_millis(26))
+                .expect("expected aligned reference window");
+
+        assert_eq!(window, vec![3.0, 4.0, 5.0, 6.0]);
+        assert!((delay_ms.unwrap_or_default() - 6.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn source_timed_reference_window_tracks_latest_frame_before_capture_timestamp() {
+        let start = Instant::now();
+        let frames = VecDeque::from(vec![
+            TimedEchoReferenceFrame {
+                sequence: 20,
+                received_at: start,
+                source_timestamp_ms: Some(250.0),
+                samples: vec![1.0, 2.0],
+            },
+            TimedEchoReferenceFrame {
+                sequence: 21,
+                received_at: start + Duration::from_millis(5),
+                source_timestamp_ms: Some(260.0),
+                samples: vec![3.0, 4.0],
+            },
+            TimedEchoReferenceFrame {
+                sequence: 22,
+                received_at: start + Duration::from_millis(10),
+                source_timestamp_ms: Some(270.0),
+                samples: vec![5.0, 6.0],
+            },
+        ]);
+
+        let (window, delay_ms) = collect_source_timed_reference_window(&frames, 4, 276.0)
+            .expect("expected source-timed reference window");
+
+        assert_eq!(window, vec![3.0, 4.0, 5.0, 6.0]);
+        assert!((delay_ms.unwrap_or_default() - 6.0).abs() < 0.1);
     }
 }

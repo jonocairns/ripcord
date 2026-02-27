@@ -391,6 +391,7 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
       sampleRate: session.sampleRate,
       channels: session.channels,
       frameCount,
+      timestampMs: Date.now(),
       pcm: samples,
       protocolVersion: 1
     });

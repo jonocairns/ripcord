@@ -137,6 +137,7 @@ export type TVoiceFilterFrame = {
   sampleRate: number;
   channels: number;
   frameCount: number;
+  timestampMs?: number;
   pcmBase64: string;
   protocolVersion: number;
   encoding: "f32le_base64";
@@ -150,6 +151,7 @@ export type TVoiceFilterPcmFrame = {
   sampleRate: number;
   channels: number;
   frameCount: number;
+  timestampMs?: number;
   pcm: Float32Array;
   protocolVersion: number;
   droppedFrameCount?: number;

@@ -145,6 +145,7 @@ export type TVoiceFilterPcmFrame = {
   sampleRate: number;
   channels: number;
   frameCount: number;
+  timestampMs?: number;
   pcm: Float32Array;
   protocolVersion: number;
   droppedFrameCount?: number;

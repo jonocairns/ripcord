@@ -713,6 +713,7 @@ const desktopBridge = {
         sampleRate: frame.sampleRate,
         channels: frame.channels,
         frameCount: frame.frameCount,
+        timestampMs: frame.timestampMs,
         protocolVersion: frame.protocolVersion,
         pcmSamples: pcmCopy,
       });
@@ -742,6 +743,7 @@ const desktopBridge = {
         sampleRate: frame.sampleRate,
         channels: frame.channels,
         frameCount: frame.frameCount,
+        timestampMs: frame.timestampMs,
         protocolVersion: frame.protocolVersion,
         pcmSamples: pcmCopy,
       });

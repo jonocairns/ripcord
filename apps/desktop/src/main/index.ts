@@ -422,6 +422,7 @@ const registerIpcHandlers = () => {
               sampleRate?: unknown;
               channels?: unknown;
               frameCount?: unknown;
+              timestampMs?: unknown;
               protocolVersion?: unknown;
               pcmSamples?: unknown;
               pcmBuffer?: unknown;
@@ -441,6 +442,7 @@ const registerIpcHandlers = () => {
           sampleRate,
           channels,
           frameCount,
+          timestampMs,
           protocolVersion,
           pcmSamples,
           pcmBuffer,
@@ -609,6 +611,10 @@ const registerIpcHandlers = () => {
           sampleRate,
           channels,
           frameCount,
+          timestampMs:
+            typeof timestampMs === "number" && Number.isFinite(timestampMs)
+              ? timestampMs
+              : undefined,
           protocolVersion:
             typeof protocolVersion === "number" ? protocolVersion : 1,
           pcm,

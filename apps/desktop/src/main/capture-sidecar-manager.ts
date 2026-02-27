@@ -1594,6 +1594,10 @@ class CaptureSidecarManager {
       sampleRate: frame.sampleRate,
       channels: frame.channels,
       frameCount: frame.frameCount,
+      timestampMs:
+        typeof frame.timestampMs === "number" && Number.isFinite(frame.timestampMs)
+          ? frame.timestampMs
+          : undefined,
       pcmBase64: pcmBytes.toString("base64"),
       protocolVersion: frame.protocolVersion,
       encoding: "f32le_base64",
@@ -1900,6 +1904,7 @@ class CaptureSidecarManager {
       4 + // sample rate
       2 + // channels
       4 + // frame count
+      8 + // timestamp ms (f64, NaN when unavailable)
       4 + // protocol version
       4 + // pcm bytes length
       pcmBytes.length;
@@ -1942,6 +1947,12 @@ class CaptureSidecarManager {
     ) {
       return { accepted: false, reason: "invalid_protocol_version" };
     }
+    if (
+      frame.timestampMs !== undefined &&
+      (typeof frame.timestampMs !== "number" || !Number.isFinite(frame.timestampMs))
+    ) {
+      return { accepted: false, reason: "invalid_timestamp_ms" };
+    }
 
     const packet = Buffer.allocUnsafe(4 + payloadLength);
     let offset = 0;
@@ -1963,6 +1974,8 @@ class CaptureSidecarManager {
     offset += 2;
     packet.writeUInt32LE(frame.frameCount, offset);
     offset += 4;
+    packet.writeDoubleLE(frame.timestampMs ?? Number.NaN, offset);
+    offset += 8;
     packet.writeUInt32LE(frame.protocolVersion, offset);
     offset += 4;
     packet.writeUInt32LE(pcmBytes.length, offset);

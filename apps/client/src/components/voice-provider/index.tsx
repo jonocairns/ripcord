@@ -170,9 +170,44 @@ const resolveMicProcessingConfig = (
   };
 };
 
+const playbackCaptureStreamCache = new WeakMap<HTMLMediaElement, MediaStream>();
+
+const getPlaybackCaptureStream = (
+  element: HTMLMediaElement | null | undefined
+): MediaStream | undefined => {
+  if (!element) {
+    return undefined;
+  }
+
+  const cachedStream = playbackCaptureStreamCache.get(element);
+  if (cachedStream) {
+    return cachedStream;
+  }
+
+  const mediaElement = element as HTMLMediaElement & {
+    captureStream?: () => MediaStream;
+    mozCaptureStream?: () => MediaStream;
+  };
+  const captureStream =
+    mediaElement.captureStream ?? mediaElement.mozCaptureStream;
+
+  if (!captureStream) {
+    return undefined;
+  }
+
+  try {
+    const stream = captureStream.call(mediaElement);
+    playbackCaptureStreamCache.set(element, stream);
+    return stream;
+  } catch {
+    return undefined;
+  }
+};
+
 const collectPlaybackReferenceStreams = (
   remoteUserStreams: TRemoteStreams,
   externalStreams: TExternalStreamsMap,
+  audioVideoRefs: Map<number, AudioVideoRefs>,
   playbackEnabled: boolean
 ): MediaStream[] => {
   if (!playbackEnabled) {
@@ -194,23 +229,43 @@ const collectPlaybackReferenceStreams = (
     streams.push(new MediaStream([track]));
   };
 
-  Object.values(remoteUserStreams).forEach((userStreams) => {
+  const addStream = (stream: MediaStream | undefined) => {
+    stream?.getAudioTracks().forEach((track) => {
+      addTrack(track);
+    });
+  };
+
+  const addCapturedAudio = (
+    element: HTMLMediaElement | null | undefined
+  ): boolean => {
+    const trackCountBefore = seenTrackIds.size;
+    addStream(getPlaybackCaptureStream(element));
+    return seenTrackIds.size > trackCountBefore;
+  };
+
+  Object.entries(remoteUserStreams).forEach(([remoteIdKey, userStreams]) => {
     if (!userStreams) {
       return;
     }
 
-    userStreams[StreamKind.AUDIO]?.getAudioTracks().forEach((track) => {
-      addTrack(track);
-    });
-    userStreams[StreamKind.SCREEN_AUDIO]?.getAudioTracks().forEach((track) => {
-      addTrack(track);
-    });
+    const refs = audioVideoRefs.get(Number(remoteIdKey));
+    if (!addCapturedAudio(refs?.audioRef.current)) {
+      addStream(userStreams[StreamKind.AUDIO]);
+    }
+
+    if (
+      !addCapturedAudio(refs?.screenShareRef.current) &&
+      !addCapturedAudio(refs?.screenShareAudioRef.current)
+    ) {
+      addStream(userStreams[StreamKind.SCREEN_AUDIO]);
+    }
   });
 
-  Object.values(externalStreams).forEach((streamState) => {
-    streamState.audioStream?.getAudioTracks().forEach((track) => {
-      addTrack(track);
-    });
+  Object.entries(externalStreams).forEach(([remoteIdKey, streamState]) => {
+    const refs = audioVideoRefs.get(Number(remoteIdKey));
+    if (!addCapturedAudio(refs?.externalAudioRef.current)) {
+      addStream(streamState.audioStream);
+    }
   });
 
   return streams;
@@ -413,6 +468,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       collectPlaybackReferenceStreams(
         remoteUserStreams,
         externalStreams,
+        audioVideoRefsMap.current,
         !ownVoiceState.soundMuted
       )
     );
@@ -519,6 +575,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                     sampleRate: nativePipeline.sampleRate,
                     channels: nativePipeline.channels,
                     frameCount,
+                    timestampMs: Date.now(),
                     pcm: samples,
                     protocolVersion: 1
                   });
@@ -532,6 +589,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                   collectPlaybackReferenceStreams(
                     remoteUserStreamsRef.current,
                     externalStreamsRef.current,
+                    audioVideoRefsMap.current,
                     !ownVoiceState.soundMuted
                   )
                 );
@@ -647,6 +705,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                     sampleRate: micAudioPipeline.sampleRate,
                     channels: micAudioPipeline.channels,
                     frameCount,
+                    timestampMs: Date.now(),
                     pcm: samples,
                     protocolVersion: 1
                   });
@@ -660,6 +719,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                   collectPlaybackReferenceStreams(
                     remoteUserStreamsRef.current,
                     externalStreamsRef.current,
+                    audioVideoRefsMap.current,
                     !ownVoiceState.soundMuted
                   )
                 );
