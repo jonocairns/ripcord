@@ -24,40 +24,45 @@ const resetPasswordRoute = protectedProcedure
       message: 'You cannot reset your own password'
     });
 
-    const targetUser = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.id, input.userId))
-      .get();
-
-    invariant(targetUser, {
-      code: 'NOT_FOUND',
-      message: 'User not found'
-    });
-
     const now = Date.now();
     const hashedPassword = await hashPassword(input.newPassword);
 
-    await db
-      .update(users)
-      .set({
-        password: hashedPassword,
-        tokenVersion: sql`${users.tokenVersion} + 1`,
-        mustChangePassword: true
-      })
-      .where(eq(users.id, input.userId))
-      .run();
+    await db.transaction(async (tx) => {
+      const targetUser = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.id, input.userId))
+        .get();
 
-    await db
-      .update(refreshTokens)
-      .set({
-        revokedAt: now,
-        updatedAt: now
-      })
-      .where(
-        and(eq(refreshTokens.userId, input.userId), isNull(refreshTokens.revokedAt))
-      )
-      .run();
+      invariant(targetUser, {
+        code: 'NOT_FOUND',
+        message: 'User not found'
+      });
+
+      await tx
+        .update(users)
+        .set({
+          password: hashedPassword,
+          tokenVersion: sql`${users.tokenVersion} + 1`,
+          mustChangePassword: true
+        })
+        .where(eq(users.id, input.userId))
+        .run();
+
+      await tx
+        .update(refreshTokens)
+        .set({
+          revokedAt: now,
+          updatedAt: now
+        })
+        .where(
+          and(
+            eq(refreshTokens.userId, input.userId),
+            isNull(refreshTokens.revokedAt)
+          )
+        )
+        .run();
+    });
 
     const userWss = ctx.getUserWss(input.userId);
 

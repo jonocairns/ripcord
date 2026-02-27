@@ -89,6 +89,26 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
     ctx.authenticated = true;
     ctx.setWsUserId(ctx.user.id);
 
+    if (ctx.user.mustChangePassword) {
+      return {
+        categories: [],
+        channels: [],
+        users: [],
+        serverId: '',
+        serverName: '',
+        ownUserId: ctx.user.id,
+        mustChangePassword: true,
+        voiceMap: {},
+        roles: [],
+        emojis: [],
+        publicSettings: undefined,
+        channelPermissions: {},
+        readStates: {},
+        commands: {},
+        externalStreamsMap: {}
+      };
+    }
+
     const [
       allCategories,
       channelsForUser,
@@ -172,7 +192,7 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
       serverId: settings.serverId,
       serverName: settings.name,
       ownUserId: ctx.user.id,
-      mustChangePassword: ctx.user.mustChangePassword,
+      mustChangePassword: false,
       voiceMap,
       roles,
       emojis,
