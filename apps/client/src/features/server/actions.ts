@@ -34,6 +34,10 @@ export const setConnecting = (status: boolean) => {
   store.dispatch(serverSliceActions.setConnecting(status));
 };
 
+export const setMustChangePassword = (status: boolean) => {
+  store.dispatch(serverSliceActions.setMustChangePassword(status));
+};
+
 export const setServerId = (id: string) => {
   store.dispatch(serverSliceActions.setServerId(id));
 };
@@ -116,9 +120,16 @@ export const joinServer = async (
   store.dispatch(serverSliceActions.setInitialData(data));
   setDisconnectInfo(undefined);
 
-  unsubscribeFromServer = initSubscriptions();
+  unsubscribeFromServer?.();
+  unsubscribeFromServer = null;
 
-  setPluginCommands(data.commands);
+  if (!data.mustChangePassword) {
+    unsubscribeFromServer = initSubscriptions();
+    setPluginCommands(data.commands);
+    return;
+  }
+
+  setPluginCommands({});
 };
 
 export const disconnectFromServer = () => {

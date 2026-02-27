@@ -23,6 +23,7 @@ import type { TDisconnectInfo, TMessagesMap } from './types';
 export interface IServerState {
   connected: boolean;
   connecting: boolean;
+  mustChangePassword: boolean;
   disconnectInfo?: TDisconnectInfo;
   serverId?: string;
   categories: TCategory[];
@@ -54,6 +55,7 @@ export interface IServerState {
 const initialState: IServerState = {
   connected: false,
   connecting: false,
+  mustChangePassword: false,
   disconnectInfo: undefined,
   serverId: undefined,
   ownUserId: undefined,
@@ -100,6 +102,9 @@ export const serverSlice = createSlice({
     setConnecting: (state, action: PayloadAction<boolean>) => {
       state.connecting = action.payload;
     },
+    setMustChangePassword: (state, action: PayloadAction<boolean>) => {
+      state.mustChangePassword = action.payload;
+    },
     setServerId: (state, action: PayloadAction<string | undefined>) => {
       state.serverId = action.payload;
     },
@@ -123,6 +128,7 @@ export const serverSlice = createSlice({
         channels: TChannel[];
         users: TJoinedPublicUser[];
         ownUserId: number;
+        mustChangePassword: boolean;
         roles: TJoinedRole[];
         emojis: TJoinedEmoji[];
         publicSettings: TPublicServerSettings | undefined;
@@ -133,6 +139,7 @@ export const serverSlice = createSlice({
       }>
     ) => {
       state.connected = true;
+      state.mustChangePassword = action.payload.mustChangePassword;
       state.categories = action.payload.categories;
       state.channels = action.payload.channels;
       state.emojis = action.payload.emojis;
@@ -255,6 +262,9 @@ export const serverSlice = createSlice({
       if (exists) return;
 
       state.users.push(action.payload);
+    },
+    removeUser: (state, action: PayloadAction<{ userId: number }>) => {
+      state.users = state.users.filter((u) => u.id !== action.payload.userId);
     },
 
     // SERVER SETTINGS ------------------------------------------------------------

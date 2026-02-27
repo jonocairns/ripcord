@@ -172,6 +172,7 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
       serverId: settings.serverId,
       serverName: settings.name,
       ownUserId: ctx.user.id,
+      mustChangePassword: ctx.user.mustChangePassword,
       voiceMap,
       roles,
       emojis,

@@ -532,6 +532,38 @@ export const useAdminUsers = () => {
 
   useEffect(() => {
     fetchUsers();
+
+    const trpc = getTRPCClient();
+    const onUserCreateSub = trpc.users.onCreate.subscribe(undefined, {
+      onData: () => {
+        fetchUsers();
+      },
+      onError: (error) => {
+        console.error('Error in users.onCreate subscription:', error);
+      }
+    });
+    const onUserUpdateSub = trpc.users.onUpdate.subscribe(undefined, {
+      onData: () => {
+        fetchUsers();
+      },
+      onError: (error) => {
+        console.error('Error in users.onUpdate subscription:', error);
+      }
+    });
+    const onUserDeleteSub = trpc.users.onDelete.subscribe(undefined, {
+      onData: () => {
+        fetchUsers();
+      },
+      onError: (error) => {
+        console.error('Error in users.onDelete subscription:', error);
+      }
+    });
+
+    return () => {
+      onUserCreateSub.unsubscribe();
+      onUserUpdateSub.unsubscribe();
+      onUserDeleteSub.unsubscribe();
+    };
   }, [fetchUsers]);
 
   return {

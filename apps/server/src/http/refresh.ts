@@ -56,7 +56,8 @@ const refreshRouteHandler = async (
     const user = await tx
       .select({
         id: users.id,
-        banned: users.banned
+        banned: users.banned,
+        tokenVersion: users.tokenVersion
       })
       .from(users)
       .where(eq(users.id, existingSession.userId))
@@ -83,7 +84,11 @@ const refreshRouteHandler = async (
       .where(eq(refreshTokens.id, existingSession.id))
       .run();
 
-    return { status: 'ok' as const, userId: user.id };
+    return {
+      status: 'ok' as const,
+      userId: user.id,
+      tokenVersion: user.tokenVersion
+    };
   });
 
   if (rotationResult.status === 'invalid') {
@@ -98,7 +103,10 @@ const refreshRouteHandler = async (
     return;
   }
 
-  const token = await createAccessToken(rotationResult.userId);
+  const token = await createAccessToken(
+    rotationResult.userId,
+    rotationResult.tokenVersion
+  );
 
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(

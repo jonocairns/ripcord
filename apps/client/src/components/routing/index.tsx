@@ -2,6 +2,7 @@ import { useIsAppLoading } from '@/features/app/hooks';
 import {
   useDisconnectInfo,
   useIsConnected,
+  useMustChangePassword,
   useServerName
 } from '@/features/server/hooks';
 import { isDesktopServerSetupRequired } from '@/runtime/server-config';
@@ -9,6 +10,7 @@ import { Connect } from '@/screens/connect';
 import { DesktopServerSetup } from '@/screens/desktop-server-setup';
 import { Disconnected } from '@/screens/disconnected';
 import { LoadingApp } from '@/screens/loading-app';
+import { ForcePasswordReset } from '@/screens/force-password-reset';
 import { ServerView } from '@/screens/server-view';
 import { DisconnectCode } from '@sharkord/shared';
 import { memo, useEffect } from 'react';
@@ -17,6 +19,7 @@ const Routing = memo(() => {
   const isConnected = useIsConnected();
   const isAppLoading = useIsAppLoading();
   const disconnectInfo = useDisconnectInfo();
+  const mustChangePassword = useMustChangePassword();
   const serverName = useServerName();
 
   useEffect(() => {
@@ -47,6 +50,10 @@ const Routing = memo(() => {
     }
 
     return <Connect />;
+  }
+
+  if (mustChangePassword) {
+    return <ForcePasswordReset />;
   }
 
   return <ServerView />;

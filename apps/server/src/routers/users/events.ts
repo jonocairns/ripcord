@@ -1,4 +1,4 @@
-import { ServerEvents } from '@sharkord/shared';
+import { Permission, ServerEvents } from '@sharkord/shared';
 import { protectedProcedure } from '../../utils/trpc';
 
 const onUserJoinRoute = protectedProcedure.subscription(async ({ ctx }) => {
@@ -17,8 +17,15 @@ const onUserCreateRoute = protectedProcedure.subscription(async ({ ctx }) => {
   return ctx.pubsub.subscribe(ServerEvents.USER_CREATE);
 });
 
+const onUserDeleteRoute = protectedProcedure.subscription(async ({ ctx }) => {
+  await ctx.needsPermission(Permission.MANAGE_USERS);
+
+  return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.USER_DELETE);
+});
+
 export {
   onUserCreateRoute,
+  onUserDeleteRoute,
   onUserJoinRoute,
   onUserLeaveRoute,
   onUserUpdateRoute

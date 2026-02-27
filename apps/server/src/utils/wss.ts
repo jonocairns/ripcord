@@ -156,6 +156,15 @@ const createContext = async ({
     return getTrackedClients().find((client) => client.userId === userId);
   };
 
+  const getUserWss = (userId: number) => {
+    if (!wss) return [];
+
+    return getTrackedClients().filter(
+      (client) =>
+        client.userId === userId && client.readyState === WebSocket.OPEN
+    );
+  };
+
   const getStatusById = (userId: number) => {
     if (!wss) return UserStatus.OFFLINE;
 
@@ -268,6 +277,7 @@ const createContext = async ({
     setWsUserId,
     setWsVoiceChannelId,
     getUserWs,
+    getUserWss,
     getConnectionInfo,
     throwValidationError,
     saveUserIp

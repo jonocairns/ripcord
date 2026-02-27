@@ -1,14 +1,16 @@
 import {
+  OWNER_ROLE_ID,
+  type Permission,
   type TJoinedPublicUser,
   type TJoinedUser,
   type TStorageData
 } from '@sharkord/shared';
-import { count, eq, sum } from 'drizzle-orm';
+import { count, eq, or, sum } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 import jwt from 'jsonwebtoken';
 import { db } from '..';
 import type { TTokenPayload } from '../../types';
-import { files, userRoles, users } from '../schema';
+import { files, rolePermissions, userRoles, users } from '../schema';
 import { getServerToken } from './server';
 
 const getPublicUserById = async (
@@ -207,6 +209,8 @@ const getUserById = async (
       createdAt: users.createdAt,
       updatedAt: users.updatedAt,
       lastLoginAt: users.lastLoginAt,
+      tokenVersion: users.tokenVersion,
+      mustChangePassword: users.mustChangePassword,
       banned: users.banned,
       banReason: users.banReason,
       bannedAt: users.bannedAt,
@@ -254,6 +258,8 @@ const getUserByIdentity = async (
       updatedAt: users.updatedAt,
       password: users.password,
       lastLoginAt: users.lastLoginAt,
+      tokenVersion: users.tokenVersion,
+      mustChangePassword: users.mustChangePassword,
       banned: users.banned,
       banReason: users.banReason,
       bannedAt: users.bannedAt,
@@ -290,6 +296,9 @@ const getUserByToken = async (token: string | undefined) => {
 
     const user = await getUserById(decoded.userId);
 
+    if (!user) return undefined;
+    if (decoded.tokenVersion !== user.tokenVersion) return undefined;
+
     return user;
   } catch {
     return undefined;
@@ -313,6 +322,8 @@ const getUsers = async (): Promise<TJoinedUser[]> => {
       identity: users.identity,
       password: users.password,
       lastLoginAt: users.lastLoginAt,
+      tokenVersion: users.tokenVersion,
+      mustChangePassword: users.mustChangePassword,
       banned: users.banned,
       banReason: users.banReason,
       bannedAt: users.bannedAt,
@@ -356,11 +367,34 @@ const getUsers = async (): Promise<TJoinedUser[]> => {
     identity: result.identity,
     password: result.password,
     lastLoginAt: result.lastLoginAt,
+    tokenVersion: result.tokenVersion,
+    mustChangePassword: result.mustChangePassword,
     banned: result.banned,
     banReason: result.banReason,
     bannedAt: result.bannedAt,
     roleIds: rolesMap[result.id] || []
   }));
+};
+
+const getUserIdsWithPermission = async (
+  permission: Permission
+): Promise<number[]> => {
+  const rows = await db
+    .select({
+      userId: userRoles.userId
+    })
+    .from(userRoles)
+    .leftJoin(rolePermissions, eq(userRoles.roleId, rolePermissions.roleId))
+    .where(
+      or(
+        eq(userRoles.roleId, OWNER_ROLE_ID),
+        eq(rolePermissions.permission, permission)
+      )
+    )
+    .groupBy(userRoles.userId)
+    .all();
+
+  return rows.map((row) => row.userId);
 };
 
 export {
@@ -369,6 +403,7 @@ export {
   getStorageUsageByUserId,
   getUserById,
   getUserByIdentity,
+  getUserIdsWithPermission,
   getUserByToken,
   getUsers
 };

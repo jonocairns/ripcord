@@ -11,6 +11,10 @@ export const addUser = (user: TJoinedPublicUser) => {
   store.dispatch(serverSliceActions.addUser(user));
 };
 
+export const removeUser = (userId: number) => {
+  store.dispatch(serverSliceActions.removeUser({ userId }));
+};
+
 export const updateUser = (
   userId: number,
   user: Partial<TJoinedPublicUser>

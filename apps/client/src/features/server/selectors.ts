@@ -22,6 +22,9 @@ export const disconnectInfoSelector = (state: IRootState) =>
 export const connectingSelector = (state: IRootState) =>
   state.server.connecting;
 
+export const mustChangePasswordSelector = (state: IRootState) =>
+  state.server.mustChangePassword;
+
 export const serverNameSelector = (state: IRootState) =>
   state.server.publicSettings?.name;
 

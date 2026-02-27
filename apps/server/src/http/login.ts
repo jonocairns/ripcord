@@ -139,7 +139,10 @@ const loginRouteHandler = async (
       .run();
   }
 
-  const { token, refreshToken } = await issueAuthTokens(existingUser.id);
+  const { token, refreshToken } = await issueAuthTokens(
+    existingUser.id,
+    existingUser.tokenVersion
+  );
 
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ success: true, token, refreshToken }));

@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { initTest, uploadFile } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
-import { users } from '../../db/schema';
+import { refreshTokens, users } from '../../db/schema';
 import { verifyPassword } from '../../helpers/password';
 
 describe('users router', () => {
@@ -77,6 +77,27 @@ describe('users router', () => {
         roleId: 2
       })
     ).rejects.toThrow('Insufficient permissions');
+  });
+
+  test('should throw when user lacks owner role (delete)', async () => {
+    const { caller } = await initTest(2);
+
+    await expect(
+      caller.users.delete({
+        userId: 1
+      })
+    ).rejects.toThrow('Only server owners can perform this action');
+  });
+
+  test('should throw when user lacks owner role (resetPassword)', async () => {
+    const { caller } = await initTest(2);
+
+    await expect(
+      caller.users.resetPassword({
+        userId: 1,
+        newPassword: 'newpassword123'
+      })
+    ).rejects.toThrow('Only server owners can perform this action');
   });
 
   test('should get all users', async () => {
@@ -202,6 +223,209 @@ describe('users router', () => {
         confirmNewPassword: 'differentpassword'
       })
     ).rejects.toThrow('New password and confirmation do not match');
+  });
+
+  test('should allow owner to reset another user password', async () => {
+    const { caller } = await initTest();
+
+    const newPassword = 'ownerreset123';
+
+    await caller.users.resetPassword({
+      userId: 2,
+      newPassword
+    });
+
+    const row = await tdb
+      .select({
+        password: users.password
+      })
+      .from(users)
+      .where(eq(users.id, 2))
+      .get();
+
+    expect(row).toBeDefined();
+    expect(row!.password).not.toBe(newPassword);
+
+    const matches = await verifyPassword(newPassword, row!.password);
+    expect(matches).toBe(true);
+  });
+
+  test('should throw when owner tries to reset own password', async () => {
+    const { caller } = await initTest();
+
+    await expect(
+      caller.users.resetPassword({
+        userId: 1,
+        newPassword: 'ownerreset123'
+      })
+    ).rejects.toThrow('You cannot reset your own password');
+  });
+
+  test('should revoke active refresh tokens when owner resets password', async () => {
+    const { caller } = await initTest();
+    const now = Date.now();
+
+    await tdb.insert(refreshTokens).values([
+      {
+        userId: 2,
+        tokenHash: 'target-token-hash',
+        expiresAt: now + 1000000,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        userId: 1,
+        tokenHash: 'owner-token-hash',
+        expiresAt: now + 1000000,
+        createdAt: now,
+        updatedAt: now
+      }
+    ]);
+
+    await caller.users.resetPassword({
+      userId: 2,
+      newPassword: 'ownerreset123'
+    });
+
+    const targetToken = await tdb
+      .select({
+        revokedAt: refreshTokens.revokedAt
+      })
+      .from(refreshTokens)
+      .where(eq(refreshTokens.tokenHash, 'target-token-hash'))
+      .get();
+
+    const ownerToken = await tdb
+      .select({
+        revokedAt: refreshTokens.revokedAt
+      })
+      .from(refreshTokens)
+      .where(eq(refreshTokens.tokenHash, 'owner-token-hash'))
+      .get();
+
+    expect(targetToken?.revokedAt).toBeDefined();
+    expect(ownerToken?.revokedAt).toBeNull();
+  });
+
+  test('should require target user to change password after owner reset', async () => {
+    const { caller } = await initTest();
+
+    await caller.users.resetPassword({
+      userId: 2,
+      newPassword: 'ownerreset123'
+    });
+
+    const row = await tdb
+      .select({
+        mustChangePassword: users.mustChangePassword
+      })
+      .from(users)
+      .where(eq(users.id, 2))
+      .get();
+
+    expect(row?.mustChangePassword).toBe(true);
+  });
+
+  test('should block non-password procedures while password reset is required', async () => {
+    await tdb
+      .update(users)
+      .set({ mustChangePassword: true })
+      .where(eq(users.id, 2))
+      .run();
+
+    const { caller } = await initTest(2);
+
+    await expect(
+      caller.users.update({
+        name: 'Blocked User',
+        bannerColor: '#00ff00'
+      })
+    ).rejects.toThrow('You must change your password before using the server.');
+  });
+
+  test('should clear mustChangePassword and rotate sessions when user updates required password', async () => {
+    const now = Date.now();
+
+    await tdb
+      .update(users)
+      .set({
+        mustChangePassword: true
+      })
+      .where(eq(users.id, 2))
+      .run();
+
+    await tdb.insert(refreshTokens).values({
+      userId: 2,
+      tokenHash: 'forced-reset-token-hash',
+      expiresAt: now + 1000000,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const before = await tdb
+      .select({
+        tokenVersion: users.tokenVersion
+      })
+      .from(users)
+      .where(eq(users.id, 2))
+      .get();
+
+    const { caller } = await initTest(2);
+
+    await caller.users.updatePassword({
+      currentPassword: 'password123',
+      newPassword: 'newpassword456',
+      confirmNewPassword: 'newpassword456'
+    });
+
+    const after = await tdb
+      .select({
+        mustChangePassword: users.mustChangePassword,
+        tokenVersion: users.tokenVersion
+      })
+      .from(users)
+      .where(eq(users.id, 2))
+      .get();
+
+    const rotatedToken = await tdb
+      .select({
+        revokedAt: refreshTokens.revokedAt
+      })
+      .from(refreshTokens)
+      .where(eq(refreshTokens.tokenHash, 'forced-reset-token-hash'))
+      .get();
+
+    expect(after?.mustChangePassword).toBe(false);
+    expect(after?.tokenVersion).toBe((before?.tokenVersion ?? 0) + 1);
+    expect(rotatedToken?.revokedAt).toBeDefined();
+  });
+
+  test('should allow owner to delete another user', async () => {
+    const { caller } = await initTest();
+
+    await caller.users.delete({
+      userId: 2
+    });
+
+    const row = await tdb
+      .select({
+        id: users.id
+      })
+      .from(users)
+      .where(eq(users.id, 2))
+      .get();
+
+    expect(row).toBeUndefined();
+  });
+
+  test('should throw when owner tries to delete own account', async () => {
+    const { caller } = await initTest();
+
+    await expect(
+      caller.users.delete({
+        userId: 1
+      })
+    ).rejects.toThrow('You cannot delete your own account');
   });
 
   test('should change avatar', async () => {
