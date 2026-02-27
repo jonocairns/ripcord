@@ -603,7 +603,7 @@ const ensureVoiceFilterEgressFrameChannel = (): Promise<boolean> => {
         // ignore
       }
 
-      console.warn(
+      console.log(
         `${VOICE_FILTER_DEBUG_LOG_PREFIX} Voice-filter egress MessagePort ready`,
       );
 

@@ -245,9 +245,7 @@ const Devices = memo(() => {
           <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
             <div className="flex items-center justify-between gap-3">
               <Label className="cursor-default">
-                {isExperimentalMode
-                  ? 'Echo cancellation (AEC)'
-                  : 'Echo cancellation'}
+                Echo cancellation
               </Label>
               <Switch
                 checked={!!values.echoCancellation}
@@ -259,9 +257,7 @@ const Devices = memo(() => {
 
             <div className="flex items-center justify-between gap-3">
               <Label className="cursor-default">
-                {isExperimentalMode
-                  ? 'Noise suppression (DeepFilterNet)'
-                  : 'Noise suppression'}
+                Noise suppression
               </Label>
               <Switch
                 checked={!!values.noiseSuppression}
