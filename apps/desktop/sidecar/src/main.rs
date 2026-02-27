@@ -11,9 +11,9 @@ use std::collections::VecDeque;
 use std::io::{self, BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
 #[cfg(windows)]
 use std::sync::OnceLock;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -73,6 +73,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 #[cfg(windows)]
 use windows_core::implement;
+
+mod pipeline;
 
 const TARGET_SAMPLE_RATE: u32 = 48_000;
 const TARGET_CHANNELS: usize = 1;
@@ -853,9 +855,9 @@ fn collect_source_timed_reference_window(
     }
 
     let delay_ms = frames.get(end_index).and_then(|frame| {
-        frame.source_timestamp_ms.map(|source_timestamp_ms| {
-            (capture_timestamp_ms - source_timestamp_ms).max(0.0) as f32
-        })
+        frame
+            .source_timestamp_ms
+            .map(|source_timestamp_ms| (capture_timestamp_ms - source_timestamp_ms).max(0.0) as f32)
     });
 
     Some((window, delay_ms))
@@ -1529,8 +1531,7 @@ fn enqueue_voice_filter_frame_event(
     if let Some(erle_db) = diagnostics.aec_erle_db {
         params["diag"]["aecErleDb"] = json!(erle_db);
         params["diag"]["aecDelayMs"] = json!(diagnostics.aec_delay_ms);
-        params["diag"]["aecDoubleTalkConfidence"] =
-            json!(diagnostics.aec_double_talk_confidence);
+        params["diag"]["aecDoubleTalkConfidence"] = json!(diagnostics.aec_double_talk_confidence);
     }
 
     if dropped_count > 0 {
@@ -1815,30 +1816,30 @@ fn create_echo_canceller_backend(sample_rate: usize, channels: usize) -> EchoCan
 // "Trim, not AGC" — the slew limit of ±0.1 dB/frame (= ±1 dB/100ms) means even
 // large level changes take several hundred milliseconds to track, eliminating the
 // watery pumping artifacts caused by fast pre-model gain riding.
-const TRIM_TARGET_RMS: f32 = 0.12;           // desired long-term RMS level
-const TRIM_LEVEL_TC_S: f32 = 0.400;          // 400ms IIR for level measurement
-const TRIM_MIN_GAIN: f32 = 0.5;              // floor: -6 dB
-const TRIM_MAX_GAIN: f32 = 2.0;              // ceil: +6 dB (4.0/+12 dB caused onset pumping)
-const TRIM_SLEW_DB_PER_FRAME: f32 = 0.1;    // max change per 10ms frame = ±1 dB/100ms
+const TRIM_TARGET_RMS: f32 = 0.12; // desired long-term RMS level
+const TRIM_LEVEL_TC_S: f32 = 0.400; // 400ms IIR for level measurement
+const TRIM_MIN_GAIN: f32 = 0.5; // floor: -6 dB
+const TRIM_MAX_GAIN: f32 = 2.0; // ceil: +6 dB (4.0/+12 dB caused onset pumping)
+const TRIM_SLEW_DB_PER_FRAME: f32 = 0.1; // max change per 10ms frame = ±1 dB/100ms
 const AGC_STARTUP_BYPASS_MS: u32 = 1_500;
 // Suppression slew limit: cap how fast DFN can drop its output RMS per frame.
 // Prevents abrupt suppression onsets from creating "clipped tail" artifacts.
-const DFN_SLEW_MAX_DROP_DB_PER_FRAME: f32 = 6.0;  // max drop per 10ms = 60 dB/s
-const DFN_SLEW_MIN_ACTIVE_DBFS: f32 = -60.0;      // don't apply below this (true silence)
-// Comfort noise: inject shaped noise to prevent dead-flat digital silence.
-const COMFORT_NOISE_THRESHOLD_DBFS: f32 = -65.0;  // apply when output RMS < this
-const COMFORT_NOISE_LEVEL_DBFS: f32 = -72.0;      // injected noise amplitude
-// Output de-zipper: one-pole IIR applied to the raw DFN output to smooth inter-hop
-// amplitude discontinuities and mild musical noise before the slew limit / trim / expander
-// chain.  Coefficient α=0.25 → -3dB at ≈10.6 kHz, -1.6 dB at 8 kHz — barely audible
-// but enough to attenuate model-rate micro-variation at the hop boundary.
+const DFN_SLEW_MAX_DROP_DB_PER_FRAME: f32 = 6.0; // max drop per 10ms = 60 dB/s
+const DFN_SLEW_MIN_ACTIVE_DBFS: f32 = -60.0; // don't apply below this (true silence)
+                                             // Comfort noise: inject shaped noise to prevent dead-flat digital silence.
+const COMFORT_NOISE_THRESHOLD_DBFS: f32 = -65.0; // apply when output RMS < this
+const COMFORT_NOISE_LEVEL_DBFS: f32 = -72.0; // injected noise amplitude
+                                             // Output de-zipper: one-pole IIR applied to the raw DFN output to smooth inter-hop
+                                             // amplitude discontinuities and mild musical noise before the slew limit / trim / expander
+                                             // chain.  Coefficient α=0.25 → -3dB at ≈10.6 kHz, -1.6 dB at 8 kHz — barely audible
+                                             // but enough to attenuate model-rate micro-variation at the hop boundary.
 const DEZIPPER_COEFF: f32 = 0.25;
 const SUPPRESSION_STARTUP_RAMP_MS: u32 = 1_000;
 const SUPPRESSION_STARTUP_PRE_WARM_MS: f32 = 200.0; // hold fully dry while DFN calibrates
-// Per-utterance onset ramp: on each new speech segment the DFN wet-mix is held at 0
-// and ramped linearly to 1.0 over this many frames (10 ms each = 100 ms total).
-// Gives the DFN model time to update its spectral mask from noise-suppression to
-// speech-preservation mode before operating at full depth, eliminating onset tinniness.
+                                                    // Per-utterance onset ramp: on each new speech segment the DFN wet-mix is held at 0
+                                                    // and ramped linearly to 1.0 over this many frames (10 ms each = 100 ms total).
+                                                    // Gives the DFN model time to update its spectral mask from noise-suppression to
+                                                    // speech-preservation mode before operating at full depth, eliminating onset tinniness.
 const ONSET_WET_RAMP_FRAMES: u32 = 10;
 const DEREVERB_MIN_LEVEL_DBFS: f32 = -52.0;
 const DEREVERB_MAX_ATTENUATION_DB: f32 = 6.0;
@@ -1853,19 +1854,19 @@ const DEREVERB_GAIN_RELEASE_MS: f32 = 120.0;
 // A 1.5:1 expansion ratio attenuates residual noise without killing tails or plosives.
 // The 150 ms hangover keeps gain at unity through brief inter-word silences so words
 // don't clip at their onset.
-const EXPANDER_THRESHOLD_DBFS: f32 = -35.0;    // dBFS gate point (baseline)
-const EXPANDER_RATIO: f32 = 1.2;               // expansion ratio below threshold
-const EXPANDER_ATTACK_MS: f32 = 2.0;           // envelope follower attack (ms)
-const EXPANDER_RELEASE_MS: f32 = 600.0;        // envelope follower / gain release (ms)
-const EXPANDER_HANGOVER_MS: f32 = 150.0;       // hold time after signal drops (ms)
-// LSNR-driven threshold nudge: when DFN reports a low log-SNR the expander threshold
-// is raised (more aggressive) so residual noise is suppressed harder.  When LSNR is
-// clearly positive the threshold returns to baseline so clean speech is not touched.
-const EXPANDER_LSNR_NUDGE_LOW_DB: f32 = -10.0;  // LSNR at/below this → full nudge
-const EXPANDER_LSNR_NUDGE_HIGH_DB: f32 = 5.0;   // LSNR at/above this → no nudge
+const EXPANDER_THRESHOLD_DBFS: f32 = -35.0; // dBFS gate point (baseline)
+const EXPANDER_RATIO: f32 = 1.2; // expansion ratio below threshold
+const EXPANDER_ATTACK_MS: f32 = 2.0; // envelope follower attack (ms)
+const EXPANDER_RELEASE_MS: f32 = 600.0; // envelope follower / gain release (ms)
+const EXPANDER_HANGOVER_MS: f32 = 150.0; // hold time after signal drops (ms)
+                                         // LSNR-driven threshold nudge: when DFN reports a low log-SNR the expander threshold
+                                         // is raised (more aggressive) so residual noise is suppressed harder.  When LSNR is
+                                         // clearly positive the threshold returns to baseline so clean speech is not touched.
+const EXPANDER_LSNR_NUDGE_LOW_DB: f32 = -10.0; // LSNR at/below this → full nudge
+const EXPANDER_LSNR_NUDGE_HIGH_DB: f32 = 5.0; // LSNR at/above this → no nudge
 const EXPANDER_LSNR_THRESHOLD_RAISE_DB: f32 = 8.0; // max upward shift applied to threshold
-// EWMA smoothing for the LSNR value that drives the threshold nudge.
-// α=0.9 at 10ms frames → ~95ms time constant; kills frame-to-frame jitter.
+                                                   // EWMA smoothing for the LSNR value that drives the threshold nudge.
+                                                   // α=0.9 at 10ms frames → ~95ms time constant; kills frame-to-frame jitter.
 const EXPANDER_LSNR_SMOOTH_ALPHA: f32 = 0.9;
 
 // VAD: lightweight energy-based voice activity detector.
@@ -1875,24 +1876,24 @@ const EXPANDER_LSNR_SMOOTH_ALPHA: f32 = 0.9;
 //   p_raw   = SNR(frame_rms / noise_floor) mapped to [0, 1] via linear ramp
 //   p_smooth = EWMA(p_raw, α=VAD_ALPHA)  — ≈50ms smoothing at 10ms frames
 //   state machine: Silence → Speech (onset) → Hangover → Silence (offset)
-const VAD_ALPHA: f32 = 0.85;                  // EWMA smoothing coefficient
-const VAD_SPEECH_THRESHOLD: f32 = 0.6;        // p_smooth to enter Speech
-const VAD_SILENCE_THRESHOLD: f32 = 0.3;       // p_smooth to begin offset counter
-const VAD_ONSET_FRAMES: u32 = 2;              // consecutive high-p frames to confirm onset (20ms)
-const VAD_OFFSET_FRAMES: u32 = 8;             // consecutive low-p frames to confirm offset (80ms)
-const VAD_HANGOVER_FRAMES: u32 = 100;         // hold time in Hangover state after Speech exits (at 10ms/frame = 1 s)
-const VAD_ONSET_PROTECTION_FRAMES: u32 = 60;  // expander fully bypassed on new-speech onset (at 10ms/frame = 600 ms)
-const VAD_NOISE_ADAPT_RATE: f32 = 0.002;      // noise floor adaptation speed (Silence frames only)
-const VAD_SNR_LOW_DB: f32 = -3.0;             // SNR at/below → p_raw = 0.0
-const VAD_SNR_HIGH_DB: f32 = 12.0;            // SNR at/above → p_raw = 1.0
-const VAD_TRIM_SILENCE_RATE: f32 = 0.0;       // trim fully frozen in Silence — no drift
-const VAD_TRIM_HANGOVER_RATE: f32 = 0.05;     // trim IIR / slew rate multiplier in Hangover (near-frozen)
-// VAD impulse guard: prevents claps/thuds from being mistaken for speech onset.
-// A frame with very high crest AND a sudden large energy jump in Silence is treated
-// as an impulse — onset_counter is reset rather than incremented.  Crest threshold
-// sits above the post-DFN speech ceiling (~6) and below the keyboard/clap floor (~7+).
+const VAD_ALPHA: f32 = 0.85; // EWMA smoothing coefficient
+const VAD_SPEECH_THRESHOLD: f32 = 0.6; // p_smooth to enter Speech
+const VAD_SILENCE_THRESHOLD: f32 = 0.3; // p_smooth to begin offset counter
+const VAD_ONSET_FRAMES: u32 = 2; // consecutive high-p frames to confirm onset (20ms)
+const VAD_OFFSET_FRAMES: u32 = 8; // consecutive low-p frames to confirm offset (80ms)
+const VAD_HANGOVER_FRAMES: u32 = 100; // hold time in Hangover state after Speech exits (at 10ms/frame = 1 s)
+const VAD_ONSET_PROTECTION_FRAMES: u32 = 60; // expander fully bypassed on new-speech onset (at 10ms/frame = 600 ms)
+const VAD_NOISE_ADAPT_RATE: f32 = 0.002; // noise floor adaptation speed (Silence frames only)
+const VAD_SNR_LOW_DB: f32 = -3.0; // SNR at/below → p_raw = 0.0
+const VAD_SNR_HIGH_DB: f32 = 12.0; // SNR at/above → p_raw = 1.0
+const VAD_TRIM_SILENCE_RATE: f32 = 0.0; // trim fully frozen in Silence — no drift
+const VAD_TRIM_HANGOVER_RATE: f32 = 0.05; // trim IIR / slew rate multiplier in Hangover (near-frozen)
+                                          // VAD impulse guard: prevents claps/thuds from being mistaken for speech onset.
+                                          // A frame with very high crest AND a sudden large energy jump in Silence is treated
+                                          // as an impulse — onset_counter is reset rather than incremented.  Crest threshold
+                                          // sits above the post-DFN speech ceiling (~6) and below the keyboard/clap floor (~7+).
 const VAD_IMPULSE_CREST_THRESHOLD: f32 = 7.0; // crest above this in Silence → impulse, not speech onset
-const VAD_IMPULSE_ENERGY_JUMP: f32 = 4.0;     // frame RMS must also be ×4 above previous frame
+const VAD_IMPULSE_ENERGY_JUMP: f32 = 4.0; // frame RMS must also be ×4 above previous frame
 
 // Transient suppressor (clap / impulse detector).
 // Detects frames with unusually high crest factor (peak/RMS) outside Speech state,
@@ -1900,27 +1901,27 @@ const VAD_IMPULSE_ENERGY_JUMP: f32 = 4.0;     // frame RMS must also be ×4 abov
 // suppression knocks down the click's snap without thinning the voice's body.
 // Post-DFN crest factors are lower than raw-mic values: DFN smooths peak energy so a
 // keyboard press that measures crest≈15 at the mic is typically crest≈7–9 post-model.
-const TRANS_CREST_THRESHOLD: f32 = 5.8;       // peak/RMS trigger (post-DFN keyboard ≈7–9, speech ≈3–5)
-const TRANS_HOLD_MS: u32 = 30;                // hold at peak attenuation (30ms covers mechanical key decay)
-const TRANS_RELEASE_MS: f32 = 100.0;          // gain recovery time after hold (100ms)
-const TRANS_DEBOUNCE_MS: u32 = 60;            // minimum interval between triggers — prevents cumulative thinning
-// Band-split gains: lows are cut less than highs, preserving warmth.
-// LP + HP = identity when both gains = 1.0, so the split adds zero coloration at rest.
-const TRANS_GAIN_LOW_DB: f32 = -6.0;          // low-band floor in Silence  (−6 dB  ≈ 0.50 linear)
-const TRANS_GAIN_HIGH_DB: f32 = -17.0;        // high-band floor in Silence (−17 dB ≈ 0.14 linear)
-const TRANS_GAIN_HO_LOW_DB: f32 = -3.0;       // low-band floor in Hangover (−3 dB  ≈ 0.71) — gentler
-const TRANS_GAIN_HO_HIGH_DB: f32 = -12.0;     // high-band floor in Hangover (−12 dB ≈ 0.25)
-const TRANS_CROSSOVER_HZ: f32 = 300.0;        // LP/HP crossover frequency
-// Hangover guard: require a sudden energy rise above prev frame before triggering.
-// A keyboard hit jumps from near-silence; a speech tail declines gradually.
-const TRANS_ENERGY_JUMP_RATIO: f32 = 4.0;     // ×4 linear = 12 dB above prev frame RMS
-// Spike repair: replace isolated single-sample spikes (mouse clicks, cable ticks, digital pops)
-// with the average of their two neighbours.  Two conditions must both be true:
-//   1. sample amplitude is at least SPIKE_CREST_THRESHOLD × local frame RMS
-//   2. both immediate neighbours are less than SPIKE_NEIGHBOR_RATIO × the spike amplitude
-// Conservative thresholds mean legitimate signal peaks are never touched.
-const SPIKE_CREST_THRESHOLD: f32 = 8.0;       // sample/local_rms to flag as spike
-const SPIKE_NEIGHBOR_RATIO: f32 = 0.5;        // each neighbour must be < 50% of spike abs
+const TRANS_CREST_THRESHOLD: f32 = 5.8; // peak/RMS trigger (post-DFN keyboard ≈7–9, speech ≈3–5)
+const TRANS_HOLD_MS: u32 = 30; // hold at peak attenuation (30ms covers mechanical key decay)
+const TRANS_RELEASE_MS: f32 = 100.0; // gain recovery time after hold (100ms)
+const TRANS_DEBOUNCE_MS: u32 = 60; // minimum interval between triggers — prevents cumulative thinning
+                                   // Band-split gains: lows are cut less than highs, preserving warmth.
+                                   // LP + HP = identity when both gains = 1.0, so the split adds zero coloration at rest.
+const TRANS_GAIN_LOW_DB: f32 = -6.0; // low-band floor in Silence  (−6 dB  ≈ 0.50 linear)
+const TRANS_GAIN_HIGH_DB: f32 = -17.0; // high-band floor in Silence (−17 dB ≈ 0.14 linear)
+const TRANS_GAIN_HO_LOW_DB: f32 = -3.0; // low-band floor in Hangover (−3 dB  ≈ 0.71) — gentler
+const TRANS_GAIN_HO_HIGH_DB: f32 = -12.0; // high-band floor in Hangover (−12 dB ≈ 0.25)
+const TRANS_CROSSOVER_HZ: f32 = 300.0; // LP/HP crossover frequency
+                                       // Hangover guard: require a sudden energy rise above prev frame before triggering.
+                                       // A keyboard hit jumps from near-silence; a speech tail declines gradually.
+const TRANS_ENERGY_JUMP_RATIO: f32 = 4.0; // ×4 linear = 12 dB above prev frame RMS
+                                          // Spike repair: replace isolated single-sample spikes (mouse clicks, cable ticks, digital pops)
+                                          // with the average of their two neighbours.  Two conditions must both be true:
+                                          //   1. sample amplitude is at least SPIKE_CREST_THRESHOLD × local frame RMS
+                                          //   2. both immediate neighbours are less than SPIKE_NEIGHBOR_RATIO × the spike amplitude
+                                          // Conservative thresholds mean legitimate signal peaks are never touched.
+const SPIKE_CREST_THRESHOLD: f32 = 8.0; // sample/local_rms to flag as spike
+const SPIKE_NEIGHBOR_RATIO: f32 = 0.5; // each neighbour must be < 50% of spike abs
 
 struct TransientSuppressorState {
     /// Current low-band gain ∈ [floor, 1.0].
@@ -2109,14 +2110,12 @@ fn apply_adaptive_echo_cancellation(
     }
 
     let filter_history_len = ECHO_CANCELLER_FILTER_TAPS.saturating_sub(1);
-    let Some((reference_samples, reference_delay_ms)) =
-        session.get_echo_reference_window(
-            samples.len(),
-            filter_history_len,
-            capture_time,
-            capture_source_timestamp_ms,
-        )
-    else {
+    let Some((reference_samples, reference_delay_ms)) = session.get_echo_reference_window(
+        samples.len(),
+        filter_history_len,
+        capture_time,
+        capture_source_timestamp_ms,
+    ) else {
         return AdaptiveEchoMetrics::default();
     };
 
@@ -2625,14 +2624,12 @@ fn process_voice_filter_frame(
     // input.  If AEC is disabled this is a no-op and has no performance cost.
     let aec_metrics = match session.echo_cancellation_backend() {
         Some(ECHO_CANCELLATION_BACKEND_WEBRTC) => apply_webrtc_echo_cancellation(session, samples),
-        Some(ECHO_CANCELLATION_BACKEND_ADAPTIVE) => {
-            apply_adaptive_echo_cancellation(
-                session,
-                samples,
-                capture_time,
-                capture_source_timestamp_ms,
-            )
-        }
+        Some(ECHO_CANCELLATION_BACKEND_ADAPTIVE) => apply_adaptive_echo_cancellation(
+            session,
+            samples,
+            capture_time,
+            capture_source_timestamp_ms,
+        ),
         _ => AdaptiveEchoMetrics::default(),
     };
 
@@ -4073,283 +4070,6 @@ fn handle_mic_devices_list() -> Result<Value, String> {
     }
 }
 
-#[cfg(windows)]
-fn capture_mic_audio(
-    session_id: String,
-    device_id: Option<String>,
-    stop_flag: Arc<AtomicBool>,
-    state: Arc<Mutex<SidecarState>>,
-    frame_queue: Arc<FrameQueue>,
-) {
-    let com_initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
-
-    let result: Result<(), String> = (|| {
-        let enumerator: IMMDeviceEnumerator = unsafe {
-            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-                .map_err(|error| format!("CoCreateInstance IMMDeviceEnumerator failed: {error}"))?
-        };
-
-        let device = if let Some(ref id) = device_id {
-            let id_wide: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
-            unsafe {
-                enumerator
-                    .GetDevice(PCWSTR(id_wide.as_ptr()))
-                    .map_err(|error| format!("GetDevice failed: {error}"))?
-            }
-        } else {
-            unsafe {
-                enumerator
-                    .GetDefaultAudioEndpoint(eCapture, eConsole)
-                    .map_err(|error| format!("GetDefaultAudioEndpoint failed: {error}"))?
-            }
-        };
-
-        let audio_client: IAudioClient = unsafe {
-            device
-                .Activate(CLSCTX_ALL, None)
-                .map_err(|error| format!("IMMDevice::Activate IAudioClient failed: {error}"))?
-        };
-
-        // Request RAW mode to bypass Windows APOs (audio processing objects) such as
-        // noise suppression, equalisation, and other driver-level enhancements that
-        // would otherwise interfere with our own signal chain.  This is best-effort:
-        // some devices/Windows versions do not support raw mode, in which case we
-        // silently continue without it.
-        let raw_mode_result: Result<(), String> = match audio_client.cast::<IAudioClient2>() {
-            Err(error) => Err(format!("IAudioClient2 not available: {error}")),
-            Ok(audio_client2) => {
-                let props = AudioClientProperties {
-                    cbSize: std::mem::size_of::<AudioClientProperties>() as u32,
-                    bIsOffload: false.into(),
-                    eCategory: windows::Win32::Media::Audio::AudioCategory_Communications,
-                    Options: AUDCLNT_STREAMOPTIONS_RAW,
-                };
-                unsafe { audio_client2.SetClientProperties(&props) }
-                    .map_err(|error| format!("SetClientProperties failed: {error}"))
-            }
-        };
-
-        let capture_format = WAVEFORMATEX {
-            wFormatTag: 0x0003, // WAVE_FORMAT_IEEE_FLOAT
-            nChannels: TARGET_CHANNELS as u16,
-            nSamplesPerSec: TARGET_SAMPLE_RATE,
-            nAvgBytesPerSec: TARGET_SAMPLE_RATE * TARGET_CHANNELS as u32 * 4,
-            nBlockAlign: (TARGET_CHANNELS * 4) as u16,
-            wBitsPerSample: 32,
-            cbSize: 0,
-        };
-
-        unsafe {
-            audio_client
-                .Initialize(
-                    AUDCLNT_SHAREMODE_SHARED,
-                    AUDCLNT_STREAMFLAGS_EVENTCALLBACK
-                        | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
-                        | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-                    0,
-                    0,
-                    &capture_format,
-                    None,
-                )
-                .map_err(|error| format!("IAudioClient::Initialize failed: {error}"))?
-        };
-
-        let mut engine_period_hns = 0i64;
-        unsafe {
-            audio_client
-                .GetDevicePeriod(Some(&mut engine_period_hns), None)
-                .map_err(|error| format!("IAudioClient::GetDevicePeriod failed: {error}"))?
-        };
-
-        let capture_ready_event = OwnedHandle(
-            unsafe { CreateEventW(None, false, false, None) }
-                .map_err(|error| format!("CreateEventW failed: {error}"))?,
-        );
-
-        unsafe {
-            audio_client
-                .SetEventHandle(capture_ready_event.raw())
-                .map_err(|error| format!("IAudioClient::SetEventHandle failed: {error}"))?
-        };
-
-        let engine_period_ms = ((engine_period_hns.max(0) as u64) + 9_999) / 10_000;
-        let wait_timeout_ms = engine_period_ms.clamp(1, u32::MAX as u64) as u32;
-
-        let capture_client: IAudioCaptureClient = unsafe {
-            audio_client
-                .GetService()
-                .map_err(|error| format!("GetService IAudioCaptureClient failed: {error}"))?
-        };
-
-        unsafe {
-            audio_client
-                .Start()
-                .map_err(|error| format!("IAudioClient::Start failed: {error}"))?
-        };
-
-        // Emit raw mode status as a sidecar event so the renderer can log it.
-        let raw_mode_status = match &raw_mode_result {
-            Ok(()) => "enabled".to_string(),
-            Err(reason) => format!("failed: {reason}"),
-        };
-        eprintln!("[sidecar] mic capture raw mode: {raw_mode_status}");
-        if let Ok(event_json) = serde_json::to_string(&SidecarEvent {
-            event: "mic_capture.status",
-            params: json!({
-                "sessionId": session_id,
-                "rawModeEnabled": raw_mode_result.is_ok(),
-                "rawModeStatus": raw_mode_status,
-            }),
-        }) {
-            frame_queue.push_line(event_json);
-        }
-
-        let mut pending = Vec::<f32>::new();
-        let mut sequence: u64 = 0;
-
-        loop {
-            if stop_flag.load(Ordering::Relaxed) {
-                let _ = unsafe { audio_client.Stop() };
-                return Ok(());
-            }
-
-            let wait_result =
-                unsafe { WaitForSingleObject(capture_ready_event.raw(), wait_timeout_ms) };
-            if wait_result == WAIT_TIMEOUT {
-                continue;
-            }
-            if wait_result == WAIT_FAILED {
-                let _ = unsafe { audio_client.Stop() };
-                return Err("WaitForSingleObject failed for mic capture event".to_string());
-            }
-            if wait_result != WAIT_OBJECT_0 {
-                let _ = unsafe { audio_client.Stop() };
-                return Err(format!(
-                    "Unexpected wait result for mic capture event: {}",
-                    wait_result.0
-                ));
-            }
-
-            let mut packet_size = match unsafe { capture_client.GetNextPacketSize() } {
-                Ok(size) => size,
-                Err(_) => {
-                    let _ = unsafe { audio_client.Stop() };
-                    return Err("GetNextPacketSize failed (device lost)".to_string());
-                }
-            };
-
-            if packet_size == 0 {
-                continue;
-            }
-
-            while packet_size > 0 {
-                let mut data_ptr: *mut u8 = ptr::null_mut();
-                let mut frame_count = 0u32;
-                let mut flags = 0u32;
-
-                if unsafe {
-                    capture_client.GetBuffer(
-                        &mut data_ptr,
-                        &mut frame_count,
-                        &mut flags,
-                        None,
-                        None,
-                    )
-                }
-                .is_err()
-                {
-                    let _ = unsafe { audio_client.Stop() };
-                    return Err("GetBuffer failed".to_string());
-                }
-
-                let chunk = if (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0 {
-                    vec![0.0f32; frame_count as usize * TARGET_CHANNELS]
-                } else {
-                    let sample_count = frame_count as usize * TARGET_CHANNELS;
-                    unsafe { std::slice::from_raw_parts(data_ptr as *const f32, sample_count) }
-                        .to_vec()
-                };
-
-                pending.extend_from_slice(&chunk);
-
-                let _ = unsafe { capture_client.ReleaseBuffer(frame_count) };
-
-                while pending.len() >= MIC_CAPTURE_FRAME_SIZE * TARGET_CHANNELS {
-                    let samples: Vec<f32> = pending
-                        .drain(..MIC_CAPTURE_FRAME_SIZE * TARGET_CHANNELS)
-                        .collect();
-
-                    let processed = {
-                        let mut state_lock = match state.lock() {
-                            Ok(guard) => guard,
-                            Err(_) => {
-                                let _ = unsafe { audio_client.Stop() };
-                                return Err("State lock poisoned in capture thread".to_string());
-                            }
-                        };
-
-                        if let Some(ref vf_session) = state_lock.voice_filter_session {
-                            if vf_session.session_id != session_id {
-                                let _ = unsafe { audio_client.Stop() };
-                                return Ok(());
-                            }
-                        } else {
-                            let _ = unsafe { audio_client.Stop() };
-                            return Ok(());
-                        }
-
-                        process_voice_filter_samples(
-                            &frame_queue,
-                            &mut state_lock,
-                            &session_id,
-                            sequence,
-                            TARGET_SAMPLE_RATE as usize,
-                            TARGET_CHANNELS,
-                            MIC_CAPTURE_FRAME_SIZE,
-                            Some(steady_now_ms()),
-                            None,
-                            samples,
-                        )
-                    };
-
-                    if let Err(error) = processed {
-                        eprintln!("[capture-sidecar] mic capture process error: {error}");
-                    }
-
-                    sequence = sequence.saturating_add(1);
-                }
-
-                packet_size = match unsafe { capture_client.GetNextPacketSize() } {
-                    Ok(size) => size,
-                    Err(_) => {
-                        let _ = unsafe { audio_client.Stop() };
-                        return Err("GetNextPacketSize failed (device lost)".to_string());
-                    }
-                };
-            }
-        }
-    })();
-
-    if com_initialized {
-        unsafe { CoUninitialize() };
-    }
-
-    if let Err(error) = result {
-        eprintln!("[capture-sidecar] mic capture thread error: {error}");
-        enqueue_voice_filter_ended_event(&frame_queue, &session_id, "capture_error", Some(error));
-    }
-}
-
-#[cfg(not(windows))]
-fn capture_mic_audio(
-    _session_id: String,
-    _device_id: Option<String>,
-    _stop_flag: Arc<AtomicBool>,
-    _state: Arc<Mutex<SidecarState>>,
-    _frame_queue: Arc<FrameQueue>,
-) {
-}
-
 fn handle_voice_filter_start_with_capture(
     state_arc: Arc<Mutex<SidecarState>>,
     frame_queue: Arc<FrameQueue>,
@@ -4385,10 +4105,10 @@ fn handle_voice_filter_start_with_capture(
         echo_cancellation,
         dereverb_mode,
     )?;
-    let session_channels = session.channels; // always 1 (forced mono)
     // Native capture always sends MIC_CAPTURE_FRAME_SIZE frames per buffer,
-    // regardless of whether DeepFilterNet is active.  Report the actual size
+    // regardless of whether DeepFilterNet is active. Report the actual size
     // so the client pipeline can size its buffers correctly.
+    let session_channels = session.channels; // always 1 (forced mono)
     #[cfg(windows)]
     let frames_per_buffer = MIC_CAPTURE_FRAME_SIZE;
     #[cfg(not(windows))]
@@ -4410,7 +4130,7 @@ fn handle_voice_filter_start_with_capture(
     );
 
     thread::spawn(move || {
-        capture_mic_audio(
+        pipeline::capture_mic_audio(
             thread_session_id,
             thread_device_id,
             stop_flag,
@@ -4533,6 +4253,121 @@ fn apply_limiter(samples: &mut [f32], gain: &mut f32) {
     }
 }
 
+fn process_voice_filter_audio_frame(
+    state: &mut SidecarState,
+    session_id: &str,
+    frame: &mut pipeline::AudioFrame,
+) -> Result<VoiceFilterDiagnostics, String> {
+    let capture_time = Instant::now();
+
+    let Some(session) = state.voice_filter_session.as_mut() else {
+        return Err("No active voice filter session".to_string());
+    };
+
+    if session.session_id != session_id {
+        return Err("Voice filter session mismatch".to_string());
+    }
+
+    if let Some(protocol_version) = frame.protocol_version {
+        if protocol_version != PROTOCOL_VERSION {
+            return Err("Unsupported voice filter protocol version".to_string());
+        }
+    }
+
+    if frame.sample_rate != session.sample_rate {
+        return Err("Voice filter sample rate mismatch".to_string());
+    }
+
+    if frame.channels == 0 {
+        return Err("Voice filter frame channel count must be > 0".to_string());
+    }
+
+    // Downmix to mono if the incoming frame has more channels than the session.
+    // The session always runs in mono (session.channels == 1) to minimise model
+    // workload and reduce warble on the DFN stereo path.
+    let channels = if frame.channels > session.channels {
+        let mono_frame_count = frame.samples.len() / frame.channels;
+        let mut mono = Vec::with_capacity(mono_frame_count);
+        for frame_index in 0..mono_frame_count {
+            let mut sum = 0.0f32;
+            for ch in 0..frame.channels {
+                sum += frame.samples[frame_index * frame.channels + ch];
+            }
+            mono.push(sum / frame.channels as f32);
+        }
+        frame.samples = mono;
+        session.channels
+    } else if frame.channels == session.channels {
+        frame.channels
+    } else {
+        return Err("Voice filter channel count mismatch".to_string());
+    };
+
+    let diagnostics = process_voice_filter_frame(
+        session,
+        &mut frame.samples,
+        channels,
+        capture_time,
+        frame.timestamp_ms,
+    )?;
+
+    if frame.samples.len() % channels != 0 {
+        return Err("Voice filter frame sample count mismatch".to_string());
+    }
+
+    // Limiter is only needed after DeepFilterNet to guard against model output peaks.
+    // In passthrough mode the raw signal should not be modified.
+    if matches!(session.processor, VoiceFilterProcessor::DeepFilter(_)) {
+        apply_limiter(&mut frame.samples, &mut session.limiter_gain);
+    }
+
+    frame.channels = channels;
+
+    Ok(diagnostics)
+}
+
+fn emit_voice_filter_audio_frame(
+    frame_queue: &Arc<FrameQueue>,
+    egress_stream: Option<&Arc<Mutex<Option<TcpStream>>>>,
+    session_id: &str,
+    frame: &pipeline::AudioFrame,
+    diagnostics: &VoiceFilterDiagnostics,
+) {
+    let frame_count = frame.frame_count();
+
+    let wrote_binary = if let Some(stream) = egress_stream {
+        try_write_voice_filter_binary_egress_frame(
+            stream,
+            session_id,
+            frame.sequence,
+            frame.sample_rate,
+            frame.channels,
+            frame_count,
+            PROTOCOL_VERSION,
+            0, // dropped_frame_count — always 0 on binary path; TCP socket drops lose frames silently
+            diagnostics,
+            &frame.samples,
+        )
+    } else {
+        false
+    };
+
+    if !wrote_binary {
+        let frame_bytes = bytemuck::cast_slice(&frame.samples);
+        let pcm_base64 = BASE64.encode(frame_bytes);
+        enqueue_voice_filter_frame_event(
+            frame_queue,
+            session_id,
+            frame.sequence,
+            frame.sample_rate,
+            frame.channels,
+            frame_count,
+            pcm_base64,
+            diagnostics,
+        );
+    }
+}
+
 fn process_voice_filter_samples(
     frame_queue: &Arc<FrameQueue>,
     state: &mut SidecarState,
@@ -4543,110 +4378,33 @@ fn process_voice_filter_samples(
     frame_count: usize,
     source_timestamp_ms: Option<f64>,
     protocol_version: Option<u32>,
-    mut samples: Vec<f32>,
+    samples: Vec<f32>,
 ) -> Result<(), String> {
-    // Clone the Arc before borrowing voice_filter_session so we can use it
-    // later without a borrow conflict on `state`.
-    let egress_stream = state.voice_filter_binary_egress_stream.clone();
-    let capture_time = Instant::now();
-    let source_timestamp_ms = source_timestamp_ms.filter(|value| value.is_finite());
-
-    let Some(session) = state.voice_filter_session.as_mut() else {
-        return Err("No active voice filter session".to_string());
-    };
-
-    if session.session_id != session_id {
-        return Err("Voice filter session mismatch".to_string());
-    }
-
-    if let Some(protocol_version) = protocol_version {
-        if protocol_version != PROTOCOL_VERSION {
-            return Err("Unsupported voice filter protocol version".to_string());
-        }
-    }
-
-    if sample_rate != session.sample_rate {
-        return Err("Voice filter sample rate mismatch".to_string());
-    }
-
     if channels == 0 {
         return Err("Voice filter frame channel count must be > 0".to_string());
     }
 
-    // Downmix to mono if the incoming frame has more channels than the session.
-    // The session always runs in mono (session.channels == 1) to minimise model
-    // workload and reduce warble on the DFN stereo path.
-    let channels = if channels > session.channels {
-        let mono_frame_count = samples.len() / channels;
-        let mut mono = Vec::with_capacity(mono_frame_count);
-        for frame_index in 0..mono_frame_count {
-            let mut sum = 0.0f32;
-            for ch in 0..channels {
-                sum += samples[frame_index * channels + ch];
-            }
-            mono.push(sum / channels as f32);
-        }
-        samples = mono;
-        session.channels
-    } else if channels == session.channels {
-        channels
-    } else {
-        return Err("Voice filter channel count mismatch".to_string());
-    };
-
-    let diagnostics = process_voice_filter_frame(
-        session,
-        &mut samples,
-        channels,
-        capture_time,
-        source_timestamp_ms,
-    )?;
-
-    if samples.len() != frame_count * channels {
+    if samples.len() != frame_count.saturating_mul(channels) {
         return Err("Voice filter frame sample count mismatch".to_string());
     }
 
-    // Limiter is only needed after DeepFilterNet to guard against model output peaks.
-    // In passthrough mode the raw signal should not be modified.
-    if matches!(session.processor, VoiceFilterProcessor::DeepFilter(_)) {
-        apply_limiter(&mut samples, &mut session.limiter_gain);
-    }
-
-    // Try binary egress first — bypasses the FrameQueue, avoids base64 allocation
-    // and JSON serialization entirely. Falls back to JSON stdout on write failure
-    // or when no client has connected yet.
-    let wrote_binary = if let Some(stream) = egress_stream.as_ref() {
-        try_write_voice_filter_binary_egress_frame(
-            stream,
-            session_id,
-            sequence,
-            sample_rate,
-            channels,
-            frame_count,
-            PROTOCOL_VERSION,
-            0, // dropped_frame_count — always 0 on binary path; TCP socket drops lose frames silently
-            &diagnostics,
-            &samples,
-        )
-    } else {
-        false
-    };
-
-    if !wrote_binary {
-        let frame_bytes = bytemuck::cast_slice(&samples);
-        let pcm_base64 = BASE64.encode(frame_bytes);
-        enqueue_voice_filter_frame_event(
-            frame_queue,
-            session_id,
-            sequence,
-            sample_rate,
-            channels,
-            frame_count,
-            pcm_base64,
-            &diagnostics,
-        );
-    }
-
+    let egress_stream = state.voice_filter_binary_egress_stream.clone();
+    let mut frame = pipeline::AudioFrame::new(
+        samples,
+        sample_rate,
+        channels,
+        source_timestamp_ms,
+        sequence,
+        protocol_version,
+    )?;
+    let diagnostics = process_voice_filter_audio_frame(state, session_id, &mut frame)?;
+    emit_voice_filter_audio_frame(
+        frame_queue,
+        egress_stream.as_ref(),
+        session_id,
+        &frame,
+        &diagnostics,
+    );
     Ok(())
 }
 
@@ -5411,9 +5169,8 @@ fn main() {
 mod tests {
     use super::{
         collect_source_timed_reference_window, collect_timed_reference_window,
-        create_echo_canceller_backend,
-        dedupe_window_entries_by_pid, parse_target_pid, parse_window_source_id,
-        AdaptiveEchoCanceller, CaptureEndReason, TimedEchoReferenceFrame,
+        create_echo_canceller_backend, dedupe_window_entries_by_pid, parse_target_pid,
+        parse_window_source_id, AdaptiveEchoCanceller, CaptureEndReason, TimedEchoReferenceFrame,
         ECHO_CANCELLATION_BACKEND_WEBRTC,
     };
     use std::collections::VecDeque;
