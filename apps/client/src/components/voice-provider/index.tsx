@@ -834,11 +834,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         localVideoProducer.current = await producerTransport.current?.produce({
           track: videoTrack,
           codec: preferredVideoCodec,
-          encodings: [{ maxBitrate: webcamBitratePolicy.maxBitrateBps }],
           codecOptions: {
-            videoGoogleMinBitrate: webcamBitratePolicy.minKbps,
-            videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
-            videoGoogleMaxBitrate: webcamBitratePolicy.maxKbps
+            videoGoogleStartBitrate: webcamBitratePolicy.startKbps
           },
           appData: { kind: StreamKind.VIDEO }
         });
@@ -1236,11 +1233,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           localScreenShareProducer.current =
             await producerTransport.current?.produce({
               track: videoTrack,
-              encodings: [{ maxBitrate: screenBitratePolicy.maxBitrateBps }],
               codecOptions: {
-                videoGoogleMinBitrate: screenBitratePolicy.minKbps,
-                videoGoogleStartBitrate: screenBitratePolicy.startKbps,
-                videoGoogleMaxBitrate: screenBitratePolicy.maxKbps
+                videoGoogleStartBitrate: screenBitratePolicy.startKbps
               },
               codec: preferredVideoCodec,
               appData: { kind: StreamKind.SCREEN }
