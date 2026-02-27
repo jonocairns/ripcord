@@ -1,0 +1,95 @@
+#ifndef MS_RTC_PIPECONSUMER_HPP
+#define MS_RTC_PIPECONSUMER_HPP
+
+#include "RTC/Consumer.hpp"
+#include "RTC/SeqManager.hpp"
+#include "RTC/Shared.hpp"
+#include <map>
+
+namespace RTC
+{
+	class PipeConsumer : public RTC::Consumer, public RTC::RTP::RtpStreamSend::Listener
+	{
+	private:
+		static void StorePacketInTargetLayerRetransmissionBuffer(
+		  std::map<uint16_t, RTC::RTP::SharedPacket, RTC::SeqManager<uint16_t>::SeqLowerThan>&
+		    targetLayerRetransmissionBuffer,
+		  RTC::RTP::Packet* packet,
+		  RTC::RTP::SharedPacket& sharedPacket);
+
+	public:
+		PipeConsumer(
+		  RTC::Shared* shared,
+		  const std::string& id,
+		  const std::string& producerId,
+		  RTC::Consumer::Listener* listener,
+		  const FBS::Transport::ConsumeRequest* data);
+		~PipeConsumer() override;
+
+	public:
+		flatbuffers::Offset<FBS::Consumer::DumpResponse> FillBuffer(
+		  flatbuffers::FlatBufferBuilder& builder) const;
+		flatbuffers::Offset<FBS::Consumer::GetStatsResponse> FillBufferStats(
+		  flatbuffers::FlatBufferBuilder& builder) override;
+		flatbuffers::Offset<FBS::Consumer::ConsumerScore> FillBufferScore(
+		  flatbuffers::FlatBufferBuilder& builder) const override;
+		void ProducerRtpStream(RTC::RTP::RtpStreamRecv* rtpStream, uint32_t mappedSsrc) override;
+		void ProducerNewRtpStream(RTC::RTP::RtpStreamRecv* rtpStream, uint32_t mappedSsrc) override;
+		void ProducerRtpStreamScore(
+		  RTC::RTP::RtpStreamRecv* rtpStream, uint8_t score, uint8_t previousScore) override;
+		void ProducerRtcpSenderReport(RTC::RTP::RtpStreamRecv* rtpStream, bool first) override;
+		uint8_t GetBitratePriority() const override;
+		uint32_t IncreaseLayer(uint32_t bitrate, bool considerLoss) override;
+		void ApplyLayers() override;
+		uint32_t GetDesiredBitrate() const override;
+		void SendRtpPacket(RTC::RTP::Packet* packet, RTC::RTP::SharedPacket& sharedPacket) override;
+		bool GetRtcp(RTC::RTCP::CompoundPacket* packet, uint64_t nowMs) override;
+		const std::vector<RTC::RTP::RtpStreamSend*>& GetRtpStreams() const override
+		{
+			return this->rtpStreams;
+		}
+		void NeedWorstRemoteFractionLost(uint32_t mappedSsrc, uint8_t& worstRemoteFractionLost) override;
+		void ReceiveNack(RTC::RTCP::FeedbackRtpNackPacket* nackPacket) override;
+		void ReceiveKeyFrameRequest(RTC::RTCP::FeedbackPs::MessageType messageType, uint32_t ssrc) override;
+		void ReceiveRtcpReceiverReport(RTC::RTCP::ReceiverReport* report) override;
+		void ReceiveRtcpXrReceiverReferenceTime(RTC::RTCP::ReceiverReferenceTime* report) override;
+		uint32_t GetTransmissionRate(uint64_t nowMs) override;
+		float GetRtt() const override;
+
+		/* Methods inherited from Channel::ChannelSocket::RequestHandler. */
+	public:
+		void HandleRequest(Channel::ChannelRequest* request) override;
+
+	private:
+		void UserOnTransportConnected() override;
+		void UserOnTransportDisconnected() override;
+		void UserOnPaused() override;
+		void UserOnResumed() override;
+		void CreateRtpStreams();
+		void RequestKeyFrame();
+
+		/* Pure virtual methods inherited from RtpStreamSend::Listener. */
+	public:
+		void OnRtpStreamScore(RTC::RTP::RtpStream* rtpStream, uint8_t score, uint8_t previousScore) override;
+		void OnRtpStreamRetransmitRtpPacket(
+		  RTC::RTP::RtpStreamSend* rtpStream, RTC::RTP::Packet* packet) override;
+
+	private:
+		// Allocated by this.
+		std::vector<RTC::RTP::RtpStreamSend*> rtpStreams;
+		// Others.
+		absl::flat_hash_map<uint32_t, uint32_t> mapMappedSsrcSsrc;
+		absl::flat_hash_map<uint32_t, RTC::RTP::RtpStreamSend*> mapSsrcRtpStream;
+		bool keyFrameSupported{ false };
+		absl::flat_hash_map<RTC::RTP::RtpStreamSend*, bool> mapRtpStreamSyncRequired;
+		absl::flat_hash_map<RTC::RTP::RtpStreamSend*, RTC::SeqManager<uint16_t>> mapRtpStreamRtpSeqManager;
+		// Buffers to store packets that arrive earlier than the first packet of the
+		// video key frame.
+		absl::flat_hash_map<
+		  RTC::RTP::RtpStreamSend*,
+		  std::map<uint16_t, RTC::RTP::SharedPacket, RTC::SeqManager<uint16_t>::SeqLowerThan>>
+		  mapRtpStreamTargetLayerRetransmissionBuffer;
+	};
+} // namespace RTC
+
+#endif

@@ -1,0 +1,13 @@
+{
+	"name": "mediasoup-worker-dev-tools",
+	"version": "0.0.1",
+	"description": "mediasoup worker dev tools",
+	"scripts": {
+		"lint": "node clang-scripts.mjs lint",
+		"format": "node clang-scripts.mjs format",
+		"tidy": "node clang-scripts.mjs tidy"
+	},
+	"dependencies": {
+		"glob": "^13.0.0"
+	}
+}

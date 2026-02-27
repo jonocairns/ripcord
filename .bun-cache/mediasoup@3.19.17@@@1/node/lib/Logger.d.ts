@@ -1,0 +1,20 @@
+import type { EnhancedEventEmitter } from './enhancedEvents';
+type LoggerEmitterEvents = {
+    debuglog: [string, string];
+    warnlog: [string, string];
+    errorlog: [string, string, Error?];
+};
+export type LoggerEmitter = EnhancedEventEmitter<LoggerEmitterEvents>;
+export declare class Logger {
+    #private;
+    private static debugLogEmitter?;
+    private static warnLogEmitter?;
+    private static errorLogEmitter?;
+    static setEmitters(debugLogEmitter?: LoggerEmitter, warnLogEmitter?: LoggerEmitter, errorLogEmitter?: LoggerEmitter): void;
+    constructor(prefix?: string);
+    debug(log: string): void;
+    warn(log: string): void;
+    error(log: string, error?: Error): void;
+}
+export {};
+//# sourceMappingURL=Logger.d.ts.map

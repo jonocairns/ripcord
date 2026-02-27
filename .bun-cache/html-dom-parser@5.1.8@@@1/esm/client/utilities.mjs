@@ -1,0 +1,149 @@
+import { CARRIAGE_RETURN_REGEX, CARRIAGE_RETURN_PLACEHOLDER, CARRIAGE_RETURN_PLACEHOLDER_REGEX, CARRIAGE_RETURN, CASE_SENSITIVE_TAG_NAMES_MAP } from './constants.mjs';
+import { Comment, Text, Element, ProcessingInstruction } from './node_modules/domhandler/lib/esm/node.mjs';
+
+/**
+ * Gets case-sensitive tag name.
+ *
+ * @param tagName - Tag name in lowercase.
+ * @returns - Case-sensitive tag name.
+ */
+function getCaseSensitiveTagName(tagName) {
+    return CASE_SENSITIVE_TAG_NAMES_MAP[tagName];
+}
+/**
+ * Formats DOM attributes to a hash map.
+ *
+ * @param attributes - List of attributes.
+ * @returns - Map of attribute name to value.
+ */
+function formatAttributes(attributes) {
+    var map = {};
+    var index = 0;
+    var attributesLength = attributes.length;
+    // `NamedNodeMap` is array-like
+    for (; index < attributesLength; index++) {
+        var attribute = attributes[index];
+        map[attribute.name] = attribute.value;
+    }
+    return map;
+}
+/**
+ * Corrects the tag name if it is case-sensitive (SVG).
+ * Otherwise, returns the lowercase tag name (HTML).
+ *
+ * @param tagName - Lowercase tag name.
+ * @returns - Formatted tag name.
+ */
+function formatTagName(tagName) {
+    tagName = tagName.toLowerCase();
+    var caseSensitiveTagName = getCaseSensitiveTagName(tagName);
+    if (caseSensitiveTagName) {
+        return caseSensitiveTagName;
+    }
+    return tagName;
+}
+/**
+ * Checks if an HTML string contains an opening tag (case-insensitive).
+ *
+ * @param html - HTML string.
+ * @param tagName - Tag name to search for (e.g., 'head' or 'body').
+ * @returns - Whether the tag is found.
+ */
+function hasOpenTag(html, tagName) {
+    var openTag = '<' + tagName;
+    var index = html.toLowerCase().indexOf(openTag);
+    if (index === -1) {
+        return false;
+    }
+    var char = html[index + openTag.length];
+    // the character after the tag name must be '>' or whitespace (for attributes)
+    return (char === '>' ||
+        char === ' ' ||
+        char === '\t' ||
+        char === '\n' ||
+        char === '\r' ||
+        char === '/');
+}
+/**
+ * Escapes special characters before parsing.
+ *
+ * @param html - The HTML string.
+ * @returns - HTML string with escaped special characters.
+ */
+function escapeSpecialCharacters(html) {
+    return html.replace(CARRIAGE_RETURN_REGEX, CARRIAGE_RETURN_PLACEHOLDER);
+}
+/**
+ * Reverts escaped special characters back to actual characters.
+ *
+ * @param text - The text with escaped characters.
+ * @returns - Text with escaped characters reverted.
+ */
+function revertEscapedCharacters(text) {
+    return text.replace(CARRIAGE_RETURN_PLACEHOLDER_REGEX, CARRIAGE_RETURN);
+}
+/**
+ * Transforms DOM nodes to `domhandler` nodes.
+ *
+ * @param nodes - DOM nodes.
+ * @param parent - Parent node.
+ * @param directive - Directive.
+ * @returns - Nodes.
+ */
+function formatDOM(nodes, parent, directive) {
+    var _a, _b, _c, _d;
+    if (parent === void 0) { parent = null; }
+    var domNodes = [];
+    var current;
+    var index = 0;
+    var nodesLength = nodes.length;
+    for (; index < nodesLength; index++) {
+        var node = nodes[index];
+        // set the node data given the type
+        switch (node.nodeType) {
+            case 1: {
+                var tagName = formatTagName(node.nodeName);
+                // script, style, or tag
+                current = new Element(tagName, formatAttributes(node.attributes));
+                current.children = formatDOM(
+                // template children are on content
+                tagName === 'template'
+                    ? node.content.childNodes
+                    : node.childNodes, current);
+                break;
+            }
+            case 3:
+                current = new Text(revertEscapedCharacters((_a = node.nodeValue) !== null && _a !== void 0 ? _a : ''));
+                break;
+            case 8:
+                current = new Comment((_b = node.nodeValue) !== null && _b !== void 0 ? _b : '');
+                break;
+            default:
+                continue;
+        }
+        // set previous node next
+        var prev = (_c = domNodes[index - 1]) !== null && _c !== void 0 ? _c : null;
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+        if (prev) {
+            prev.next = current;
+        }
+        // set properties for current node
+        current.parent = parent;
+        current.prev = prev;
+        current.next = null;
+        domNodes.push(current);
+    }
+    if (directive) {
+        current = new ProcessingInstruction(directive.substring(0, directive.indexOf(' ')).toLowerCase(), directive);
+        current.next = (_d = domNodes[0]) !== null && _d !== void 0 ? _d : null;
+        current.parent = parent;
+        domNodes.unshift(current);
+        if (domNodes[1]) {
+            domNodes[1].prev = domNodes[0];
+        }
+    }
+    return domNodes;
+}
+
+export { escapeSpecialCharacters, formatAttributes, formatDOM, hasOpenTag, revertEscapedCharacters };
+//# sourceMappingURL=utilities.mjs.map

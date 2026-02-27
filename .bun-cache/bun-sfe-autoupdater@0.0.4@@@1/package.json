@@ -1,0 +1,41 @@
+{
+  "name": "bun-sfe-autoupdater",
+  "version": "0.0.4",
+  "description": "Auto-updater library for Bun single file executables",
+  "homepage": "https://github.com/diogomartino/bun-sfe-autoupdater",
+  "repository": "https://github.com/diogomartino/bun-sfe-autoupdater",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "bun --watch ./src/index.ts",
+    "build:lib": "cd build && bun run build-lib.ts",
+    "build:updater": "cd build && bun run build.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "prettier": "^3.5.3",
+    "prettier-plugin-organize-imports": "^4.1.0",
+    "eslint": "^8.56.0",
+    "eslint-plugin-unused-imports": "^4.1.4",
+    "@typescript-eslint/eslint-plugin": "^8.46.1",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@types/debug": "^4.1.12",
+    "@types/semver": "^7.7.1",
+    "debug": "^4.4.3",
+    "semver": "^7.7.3",
+    "zod": "^4.2.1"
+  }
+}

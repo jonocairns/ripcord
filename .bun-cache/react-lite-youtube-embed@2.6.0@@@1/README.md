@@ -1,0 +1,511 @@
+ <div align="center">
+
+  <h1>📺  React Lite YouTube Embed</h1>
+  <blockquote>A private by default, faster and cleaner YouTube embed component for React applications</blockquote>
+
+[![TypeScript](https://badges.frapsoft.com/typescript/code/typescript.svg?v=101)](https://www.typescriptlang.org/)
+
+[![Version](https://img.shields.io/npm/v/react-lite-youtube-embed?label=latest%20version)](https://www.npmjs.com/package/react-lite-youtube-embed)&nbsp; &nbsp;&nbsp; &nbsp;![Total Downloads](https://img.shields.io/npm/dt/react-lite-youtube-embed?color=%23FF0000&logo=npm)&nbsp; &nbsp;&nbsp; &nbsp;[![License](https://badgen.net/github/license/ibrahimcesar/react-lite-youtube-embed)](./LICENSE)&nbsp; &nbsp;  &nbsp;![GitHub issues by-label](https://img.shields.io/github/issues/ibrahimcesar/react-lite-youtube-embed/bug)
+
+
+<p>Developed in 🇧🇷 <span role="img" aria-label="Flag for Brazil">Brazil</p>
+
+<strong>Port of Paul Irish's [Lite YouTube Embed](https://github.com/paulirish/lite-youtube-embed) to a React Component. Provide videos with a supercharged focus on visual performance. The gain is not the same as the web component of the original implementation but saves some requests and gives you more control of the embed visual. An ["Adaptive Loading"](https://www.youtube.com/watch?v=puUPpVrIRkc) way to handle iframes for YouTube.</strong>
+
+[![iFrame example](_example_lite.gif)](https://ibrahimcesar.github.io/react-lite-youtube-embed)
+
+## ✨ [View Live Demo](https://ibrahimcesar.github.io/react-lite-youtube-embed)
+
+> **Live demo automatically updated with each release** - Try out all features and see code examples
+
+</div>
+
+## 🔒 Up 2.0.0 Privacy by Default
+
+The biggest change is, from 2.0.0 this component is private by default. Meaning that will not preconnect with the ad network from Google and connect to YouTube via the Privacy-Enhanced Mode using https://www.youtube-nocookie.com.
+
+## 🚀 Install
+
+Use your favorite package manager:
+
+```bash
+yarn add react-lite-youtube-embed
+```
+
+```bash
+npm install react-lite-youtube-embed -S
+```
+## 🕹️ Basic Usage
+
+```javascript
+import React from "react";
+import { render } from "react-dom";
+import LiteYouTubeEmbed from 'react-lite-youtube-embed';
+import 'react-lite-youtube-embed/dist/LiteYouTubeEmbed.css';
+
+const App = () => (
+  <div>
+    <LiteYouTubeEmbed
+        id="L2vS_050c-M"
+        title="What's new in Material Design for the web (Chrome Dev Summit 2019)"
+    />
+  </div>
+);
+
+render(<App />, document.getElementById("root"));
+```
+
+And that's it.
+
+## 🔍 SEO & Search Engine Optimization
+
+Improve your video discoverability in search engines with structured data and fallback links.
+
+### Why SEO Matters
+
+By default, search engine crawlers cannot discover videos embedded with lite embeds because:
+- No followable links exist before user interaction
+- No structured metadata for search engines to index
+- The facade pattern is invisible to crawlers
+
+This component now supports **JSON-LD structured data** and **noscript fallbacks** to solve these issues.
+
+### Basic SEO Setup
+
+```javascript
+<LiteYouTubeEmbed
+  id="L2vS_050c-M"
+  title="What's new in Material Design"
+  seo={{
+    name: "What's new in Material Design for the web",
+    description: "Learn about the latest Material Design updates presented at Chrome Dev Summit 2019",
+    uploadDate: "2019-11-11T08:00:00Z",
+    duration: "PT15M33S"
+  }}
+/>
+```
+
+This will generate:
+- ✅ **JSON-LD structured data** following [schema.org VideoObject](https://schema.org/VideoObject)
+- ✅ **Noscript fallback** with direct YouTube link (enabled by default)
+- ✅ **Google rich results** eligibility (video carousels, thumbnails in search)
+
+### Fetching Video Metadata
+
+Use the included helper script to quickly fetch video metadata:
+
+```bash
+# Make the script executable (first time only)
+chmod +x scripts/fetch-youtube-metadata.sh
+
+# Fetch metadata in JSON format
+./scripts/fetch-youtube-metadata.sh dQw4w9WgXcQ
+
+# Get ready-to-use React component code
+./scripts/fetch-youtube-metadata.sh dQw4w9WgXcQ --format react
+```
+
+**Requirements:** `curl` and `jq` must be installed.
+
+The script uses YouTube's oEmbed API (no auth required) and provides:
+- Video title
+- Thumbnail URL
+- Template with TODO fields for description, upload date, and duration
+
+### Manual Metadata Collection
+
+For complete metadata, you can:
+
+1. **Visit the video page** and manually copy:
+   - Description
+   - Upload date (convert to ISO 8601: `YYYY-MM-DDTHH:MM:SSZ`)
+   - Duration (convert to ISO 8601: `PT#H#M#S`)
+
+2. **Use YouTube Data API v3** ([get free API key](https://console.cloud.google.com/apis/credentials)):
+   ```bash
+   curl "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=VIDEO_ID&key=YOUR_API_KEY"
+   ```
+
+3. **Browser DevTools approach**:
+   - Open video page → Inspect → Search for `"datePublished"` and `"duration"` in HTML
+
+### Duration Format Examples
+
+ISO 8601 duration format: `PT#H#M#S`
+
+- `"PT3M33S"` - 3 minutes 33 seconds
+- `"PT15M"` - 15 minutes
+- `"PT1H30M"` - 1 hour 30 minutes
+- `"PT2H15M30S"` - 2 hours 15 minutes 30 seconds
+
+### SEO Prop Reference
+
+```typescript
+interface VideoSEO {
+  name?: string;           // Video title (falls back to title prop)
+  description?: string;    // Video description (50-160 chars recommended)
+  uploadDate?: string;     // ISO 8601 date (e.g., "2024-01-15T08:00:00Z")
+  duration?: string;       // ISO 8601 duration (e.g., "PT3M33S")
+  thumbnailUrl?: string;   // Custom thumbnail (auto-generated if omitted)
+  contentUrl?: string;     // YouTube watch URL (auto-generated)
+  embedUrl?: string;       // Embed URL (auto-generated)
+}
+```
+
+### Disabling Noscript Fallback
+
+The noscript fallback is enabled by default. To disable:
+
+```javascript
+<LiteYouTubeEmbed
+  id="L2vS_050c-M"
+  title="Video Title"
+  noscriptFallback={false}
+/>
+```
+
+### Verify Your SEO Setup
+
+Test your structured data with Google's tools:
+- [Rich Results Test](https://search.google.com/test/rich-results)
+- [Schema Markup Validator](https://validator.schema.org/)
+
+**Note:** Playlists do not support SEO structured data (only individual videos).
+
+## 💎 Pro Usage
+
+```javascript
+const App = () => (
+  <div>
+    <LiteYouTubeEmbed
+       id="L2vS_050c-M" // Default none, id of the video or playlist
+       adNetwork={false} // Default false, to preconnect or not to doubleclick addresses called by YouTube iframe (the adnetwork from Google)
+       params="" // any params you want to pass to the URL, assume we already had '&' and pass your parameters string
+       playlist={false} // Use true when your ID be from a playlist
+       playlistCoverId="L2vS_050c-M" // The ids for playlists did not bring the cover in a pattern to render so you'll need pick up a video from the playlist (or in fact, whatever id) and use to render the cover. There's a programmatic way to get the cover from YouTube API v3 but the aim of this component is do not make any another call and reduce requests and bandwidth usage as much as possibe
+       poster="hqdefault" // Defines the image size to call on first render as poster image. Possible values are "default","mqdefault",  "hqdefault", "sddefault" and "maxresdefault". Default value for this prop is "hqdefault". Please be aware that "sddefault" and "maxresdefault", high resolution images are not always avaialble for every video. See: https://stackoverflow.com/questions/2068344/how-do-i-get-a-youtube-video-thumbnail-from-the-youtube-api
+       title="YouTube Embed" // a11y, always provide a title for iFrames: https://dequeuniversity.com/tips/provide-iframe-titles Help the web be accessible ;)
+       cookie={false} // Default false, don't connect to YouTube via the Privacy-Enhanced Mode using https://www.youtube-nocookie.com
+       ref={myRef} // Use this ref prop to programmatically access the underlying iframe element. It will only have a value after the user pressed the play button
+    />
+  </div>
+);
+```
+
+## ⚡ Performance: Lazy Loading
+
+Improve Lighthouse scores and reduce bandwidth by enabling lazy loading for thumbnail images:
+
+```javascript
+<LiteYouTubeEmbed
+  id="L2vS_050c-M"
+  title="What's new in Material Design"
+  lazyLoad={true}
+/>
+```
+
+**How it works:**
+- **Default behavior** (`lazyLoad={false}`): Uses CSS `background-image` with preload link
+- **With lazy loading** (`lazyLoad={true}`): Uses `<img loading="lazy">` for native browser lazy loading
+
+**Benefits:**
+- ✅ Defers loading of offscreen images
+- ✅ Reduces initial page bandwidth (especially for pages with multiple videos)
+- ✅ Improves Lighthouse "defer offscreen images" score
+- ✅ Better mobile performance on slow connections
+- ✅ 97%+ browser support
+
+**When to use:**
+- Pages with multiple YouTube embeds
+- Videos placed below the fold
+- Mobile-first applications
+- Performance-critical pages
+
+**Example with multiple embeds:**
+
+```javascript
+const VideoGallery = () => (
+  <div>
+    <LiteYouTubeEmbed
+      id="dQw4w9WgXcQ"
+      title="Video 1"
+      lazyLoad
+    />
+    <LiteYouTubeEmbed
+      id="L2vS_050c-M"
+      title="Video 2"
+      lazyLoad
+    />
+    {/* Only loads visible thumbnails initially */}
+  </div>
+);
+```
+
+## 🧰 Bring Your Own Styles
+
+React Lite YouTube Embed comes with all original styles from Paul Irish's [Lite YouTube Embed](https://github.com/paulirish/lite-youtube-embed) but you can customize them as you wish passing as a props.
+
+```javascript
+const App = () => (
+  <div>
+    <LiteYouTubeEmbed
+       id="L2vS_050c-M"
+       activeClass="lyt-activated" // Default as "lyt-activated", gives control to wrapper once clicked
+       iframeClass="" // Default none, gives control to add a class to iframe element itself
+       playerClass="lty-playbtn" // Default as "lty-playbtn" to control player button styles
+       wrapperClass="yt-lite" // Default as "yt-lite" for the div wrapping the area, the most important class and needs extra attention, please refer to LiteYouTubeEmbed.css for a reference.
+    />
+  </div>
+);
+```
+
+## 🤖 Controlling the player
+
+You can programmatically control the YouTube player via [YouTubes IFrame Player API](https://developers.google.com/youtube/iframe_api_reference). However typically YouTube requires you to load an additional script from their servers (`https://www.youtube.com/iframe_api`), which is small but it will load another script. So this is neither performant nor very privacy-friendly. Instead, you can also send messages to the iframe via (`postMessage`)[https://developer.mozilla.org/en-US/docs/Web/API/Window/postMessage] using the ref prop. If you don't want to create the `postMessage()` calls yourself, there is also a little (wrapper library)[https://github.com/mich418/youtube-iframe-ctrl] for controlling the iframe with this method.
+
+> [!WARNING]  
+> This will only work if you set the `enableJsApi` prop to true. Also, the ref will only be defined, when the iframe has been loaded (which happens after clicking on the poster). So you can't start the player through this method. If you really want the player to always load the iframe right away (which is not good in terms of privacy), you can use the `alwaysLoadIframe` prop to do this.
+
+```jsx
+const App = () => (
+  const ytRef = useRef(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  return (
+    <div>
+      <button
+        onClick={() => {
+          setIsPlaying((oldState) => !oldState);
+          ytRef.current?.contentWindow?.postMessage(
+            `{"event": "command", "func": "${isPlaying ? "pauseVideo" : "playVideo"}"}`,
+            "*",
+          );
+        }}
+      >
+        External Play Button
+      </button>
+      <LiteYouTubeEmbed
+        title="My Video"
+        id="L2vS_050c-M"
+        ref={ytRef}
+        enableJsApi
+        alwaysLoadIframe
+      />
+    </div>
+  );
+};
+);
+
+```
+
+## ⚠️ After version 1.0.0 - BREAKING CHANGES ⚠️
+
+To play nice with new frameworks like [NextJS](https://nextjs.org/), we now don't import the `.css` necessary. Since version `2.0.9` you can pass custom aspect-ratio props, so be aware of any changes needed in the CSS options. Instead use now you have three options:
+
+> **📘 Using Next.js or SSR?** Check out the [SSR Guide](./SSR_GUIDE.md) for setup instructions, troubleshooting, and best practices.
+
+### Option 1
+
+Place the necessary CSS in your Global CSS file method of preference
+
+<details>
+
+<summary> Show me the code!</summary>
+
+```css
+.yt-lite {
+    background-color: #000;
+    position: relative;
+    display: block;
+    contain: content;
+    background-position: center center;
+    background-size: cover;
+    cursor: pointer;
+}
+
+/* gradient */
+.yt-lite::before {
+    content: '';
+    display: block;
+    position: absolute;
+    top: 0;
+    background-position: top;
+    background-repeat: repeat-x;
+    height: 60px;
+    padding-bottom: 50px;
+    width: 100%;
+    transition: all 0.2s cubic-bezier(0, 0, 0.2, 1);
+}
+
+/* responsive iframe with a 16:9 aspect ratio
+    thanks https://css-tricks.com/responsive-iframes/
+*/
+.yt-lite::after {
+    content: "";
+    display: block;
+    padding-bottom: calc(100% / (16 / 9));
+}
+.yt-lite > iframe {
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+/* play button */
+.yt-lite > .lty-playbtn {
+    width: 65px;
+    height: 46px;
+    z-index: 1;
+    opacity: 0.8;
+    border: none;
+    background: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20xmlns%3Axlink%3D%22http%3A%2F%2Fwww.w3.org%2F1999%2Fxlink%22%20version%3D%221.1%22%20id%3D%22YouTube_Icon%22%20x%3D%220px%22%20y%3D%220px%22%20viewBox%3D%220%200%201024%20721%22%20enable-background%3D%22new%200%200%201024%20721%22%20xml%3Aspace%3D%22preserve%22%3E%3Cscript%20xmlns%3D%22%22%3E%0A%20%20%20%20try%20%7B%0A%20%20%20%20%20%20Object.defineProperty(navigator%2C%20%22globalPrivacyControl%22%2C%20%7B%0A%20%20%20%20%20%20%20%20value%3A%20false%2C%0A%20%20%20%20%20%20%20%20configurable%3A%20false%2C%0A%20%20%20%20%20%20%20%20writable%3A%20false%0A%20%20%20%20%20%20%7D)%3B%0A%20%20%20%20%20%20document.currentScript.parentElement.removeChild(document.currentScript)%3B%0A%20%20%20%20%7D%20catch(e)%20%7B%7D%3B%0A%20%20%20%20%20%20%3C%2Fscript%3E%0A%3Cpath%20id%3D%22Triangle%22%20fill%3D%22%23FFFFFF%22%20d%3D%22M407%2C493l276-143L407%2C206V493z%22%2F%3E%0A%3Cpath%20id%3D%22The_Sharpness%22%20opacity%3D%220.12%22%20fill%3D%22%23420000%22%20d%3D%22M407%2C206l242%2C161.6l34-17.6L407%2C206z%22%2F%3E%0A%3Cg%20id%3D%22Lozenge%22%3E%0A%09%3Cg%3E%0A%09%09%0A%09%09%09%3ClinearGradient%20id%3D%22SVGID_1_%22%20gradientUnits%3D%22userSpaceOnUse%22%20x1%3D%22512.5%22%20y1%3D%22719.7%22%20x2%3D%22512.5%22%20y2%3D%221.2%22%20gradientTransform%3D%22matrix(1%200%200%20-1%200%20721)%22%3E%0A%09%09%09%3Cstop%20offset%3D%220%22%20style%3D%22stop-color%3A%23E52D27%22%2F%3E%0A%09%09%09%3Cstop%20offset%3D%221%22%20style%3D%22stop-color%3A%23BF171D%22%2F%3E%0A%09%09%3C%2FlinearGradient%3E%0A%09%09%3Cpath%20fill%3D%22url(%23SVGID_1_)%22%20d%3D%22M1013%2C156.3c0%2C0-10-70.4-40.6-101.4C933.6%2C14.2%2C890%2C14%2C870.1%2C11.6C727.1%2C1.3%2C512.7%2C1.3%2C512.7%2C1.3%20%20%20%20h-0.4c0%2C0-214.4%2C0-357.4%2C10.3C135%2C14%2C91.4%2C14.2%2C52.6%2C54.9C22%2C85.9%2C12%2C156.3%2C12%2C156.3S1.8%2C238.9%2C1.8%2C321.6v77.5%20%20%20%20C1.8%2C481.8%2C12%2C564.4%2C12%2C564.4s10%2C70.4%2C40.6%2C101.4c38.9%2C40.7%2C89.9%2C39.4%2C112.6%2C43.7c81.7%2C7.8%2C347.3%2C10.3%2C347.3%2C10.3%20%20%20%20s214.6-0.3%2C357.6-10.7c20-2.4%2C63.5-2.6%2C102.3-43.3c30.6-31%2C40.6-101.4%2C40.6-101.4s10.2-82.7%2C10.2-165.3v-77.5%20%20%20%20C1023.2%2C238.9%2C1013%2C156.3%2C1013%2C156.3z%20M407%2C493V206l276%2C144L407%2C493z%22%2F%3E%0A%09%3C%2Fg%3E%0A%3C%2Fg%3E%0A%3C%2Fsvg%3E");
+    transition: all 0.2s cubic-bezier(0, 0, 0.2, 1);
+}
+.yt-lite:hover > .lty-playbtn {
+    opacity: 1;
+}
+/* play button triangle */
+.yt-lite > .lty-playbtn:before {
+    content: '';
+    border-style: solid;
+    border-width: 11px 0 11px 19px;
+    border-color: transparent transparent transparent #fff;
+}
+
+.yt-lite > .lty-playbtn,
+.yt-lite > .lty-playbtn:before {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate3d(-50%, -50%, 0);
+}
+
+/* Post-click styles */
+.yt-lite.lyt-activated {
+    cursor: unset;
+}
+.yt-lite.lyt-activated::before,
+.yt-lite.lyt-activated > .lty-playbtn {
+    opacity: 0;
+    pointer-events: none;
+}
+```
+
+For example, for NextJS:
+
+```jsx
+<style jsx global>{`
+        html,
+        body {
+          padding: 0;
+          margin: 0;
+          font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto,
+            Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue,
+            sans-serif;
+        }
+
+        * {
+          box-sizing: border-box;
+
+        // CSS above
+
+`}</style>
+
+```
+
+</details>
+
+### Option 2
+
+Using your CSS-In-JS tool of choice encapsulate this component and use the css provided as a guide.
+
+### Option 3
+
+Not work on every framework but you can import the css directly, check what works best with your bundler / framework.
+
+<details>
+<summary>Show me the code!</summary>
+
+```ts
+import 'react-lite-youtube-embed/dist/index.css';
+```
+
+or in a *.css/scss etc:
+
+```css
+@import "~react-lite-youtube-embed/dist/index.css";
+```
+
+</details>
+
+## All our props belongs to you
+
+The most minimalist implementation requires two props: `id` from the YouTube you want to render and `title`, for the iFrame.
+
+| Prop   |      Type      |  Default | Description |
+|----------|:--------:|:--------:|------------|
+| **id** |  string | - | **Required**. ID of the video or playlist |
+| **title** |    string   | - | **Required**. Video title for the iFrame. Always provide a title for iFrames: [https://dequeuniversity.com/tips/provide-iframe-titles](https://dequeuniversity.com/tips/provide-iframe-titles) Help the web be accessible ;) #a11y |
+| activeClass | string | `"lyt-activated"` | Pass the string class for the active state |
+| adNetwork | boolean | `false` | To preconnect or not to doubleclick addresses called by YouTube iframe (the adnetwork from Google) |
+| alwaysLoadIframe | boolean | `false` | If enabled, the original YouTube iframe will always be loaded right away (not recommended for privacy) |
+| announce |    string   | `"Watch"` | Text added to the button for screen readers as `Clickable {announce}, {title}, button`. Customize to match your language #a11y #i18n |
+| aspectHeight |    number   | `9` | Use this optional prop if you want a custom aspect-ratio. Please be aware of aspect height and width relation and also any custom CSS you are using |
+| aspectWidth |    number   | `16` | Use this optional prop if you want a custom aspect-ratio. Please be aware of aspect height and width relation and also any custom CSS you are using |
+| autoplay | boolean | `false` | Enables autoplay videos. Important: only works with `muted={true}` and `alwaysLoadIframe={true}` |
+| containerElement | string | `"article"` | The HTML element to be used for the container |
+| cookie | boolean | `false` | Set to `true` to use https://www.youtube.com instead of Privacy-Enhanced Mode (https://www.youtube-nocookie.com) |
+| enableJsApi | boolean | `false` | If enabled, you can send messages to the iframe (via the `ref` prop) to control the player programmatically |
+| focusOnLoad | boolean | `false` | Automatically focus iframe when loaded (useful for keyboard navigation) |
+| iframeClass | string | `""` | Pass the string class for the iframe element itself |
+| lazyLoad | boolean | `false` | Enable native lazy loading for thumbnail images. Improves Lighthouse scores and reduces bandwidth for below-fold videos. Uses `<img loading="lazy">` instead of CSS background-image |
+| muted | boolean | `false` | If the video has sound or not. Required for `autoplay={true}` to work |
+| noCookie | boolean | `false` | **⚠️ DEPRECATED** - Use `cookie` prop instead |
+| noscriptFallback | boolean | `true` | Include noscript tag with YouTube link for accessibility and SEO crawlers |
+| onIframeAdded | function | `undefined` | Callback fired when iframe loads |
+| params | string | `""` | Additional params to pass to the URL. Format: `start=1150&other=value`. Don't include `?` or leading `&`. Note: use `start` not `t` for time |
+| playerClass | string | `"lty-playbtn"` | Pass the string class for the player button to customize it |
+| playlist | boolean | `false` | Set to `true` when your id is from a playlist |
+| playlistCoverId | string | `undefined` | Video ID to use for playlist cover image. Playlists don't have a standard cover pattern |
+| poster | `"default"` \| `"mqdefault"` \| `"hqdefault"` \| `"sddefault"` \| `"maxresdefault"` | `"hqdefault"` | Defines the image size for the poster. Note: `sddefault` and `maxresdefault` aren't always available. See: [YouTube API docs](https://stackoverflow.com/questions/2068344/how-do-i-get-a-youtube-video-thumbnail-from-the-youtube-api) |
+| referrerPolicy | string | `"strict-origin-when-cross-origin"` | Sets the referrer policy for the iframe |
+| rel | string | `"preload"` | Allows for `prefetch` or `preload` of the link url |
+| seo | VideoSEO | `undefined` | SEO metadata for search engines. Generates JSON-LD structured data. See [SEO section](#-seo--search-engine-optimization) for details |
+| style | object | `{}` | Style object for the container, overriding any root styles |
+| thumbnail | string | `undefined` | Pass an optional image url to override the default poster and set a custom poster image |
+| webp | boolean | `false` | When set, uses the WebP format for poster images |
+| wrapperClass | string | `"yt-lite"` | Pass the string class that wraps the iFrame. **Important**: This class needs extra attention, refer to LiteYouTubeEmbed.css |
+
+## 🙇‍♂️ Thanks
+
+- Paul Irish ([paulirish](https://github.com/paulirish)) for [Lite YouTube Embed](https://github.com/paulirish/lite-youtube-embed)
+- Addy Osmani ([addyosmani](https://github.com/addyosmani)) for the Adaptive Loading ideas
+- [All contributors](https://github.com/ibrahimcesar/react-lite-youtube-embed/graphs/contributors)
+
+### 📝 Read more
+
+- [Why I made my open source React component private by default](https://ibrahimcesar.cloud/blog/why-i-made-my-open-source-react-component-private-by-default/)
+
+## MIT License
+
+Copyright (c) 2021 — 2025 [Ibrahim Cesar](https://ibrahimcesar.cloud)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
