@@ -117,12 +117,16 @@ export type TVoiceFilterSession = {
   framesPerBuffer: number;
   protocolVersion?: number;
   encoding?: "f32le_base64";
+  echoCancellationBackend?: "adaptive_nlms";
 };
 
 export type TVoiceFilterFrameDiag = {
   lsnrMean?: number;
   lsnrMin?: number;
   lsnrMax?: number;
+  aecErleDb?: number;
+  aecDelayMs?: number;
+  aecDoubleTalkConfidence?: number;
   agcGain?: number;
   rampWetMix: number;
 };

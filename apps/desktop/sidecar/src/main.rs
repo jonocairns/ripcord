@@ -4,9 +4,9 @@ use deep_filter::tract::{DfParams, DfTract, ReduceMask, RuntimeParams};
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::VecDeque;
 #[cfg(any(windows, test))]
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::io::{self, BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -28,6 +28,8 @@ use std::ptr;
 use std::time::Instant;
 
 #[cfg(windows)]
+use windows::core::GUID;
+#[cfg(windows)]
 use windows::core::{IUnknown, Interface, PCWSTR, PWSTR};
 #[cfg(windows)]
 use windows::Win32::Foundation::{
@@ -35,38 +37,35 @@ use windows::Win32::Foundation::{
 };
 #[cfg(windows)]
 use windows::Win32::Media::Audio::{
-    ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
+    eCapture, eConsole, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
+};
+#[cfg(windows)]
+use windows::Win32::Media::Audio::{
+    ActivateAudioInterfaceAsync, AudioClientProperties, IActivateAudioInterfaceAsyncOperation,
     IActivateAudioInterfaceCompletionHandler, IAudioCaptureClient, IAudioClient, IAudioClient2,
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_E_INVALID_STREAM_FLAG, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
     AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-    AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
+    AUDCLNT_STREAMOPTIONS_RAW, AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
     AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-    AudioClientProperties, AUDCLNT_STREAMOPTIONS_RAW,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
     WAVEFORMATEX,
-};
-#[cfg(windows)]
-use windows::Win32::Media::Audio::{
-    eCapture, eConsole, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
 };
 #[cfg(windows)]
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
 #[cfg(windows)]
-use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
-#[cfg(windows)]
-use windows::core::GUID;
-#[cfg(windows)]
 use windows::Win32::System::Threading::{
-    CreateEventW, OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject,
-    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    CreateEventW, OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
 };
 #[cfg(windows)]
 use windows::Win32::System::Variant::VT_BLOB;
 #[cfg(windows)]
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+#[cfg(windows)]
+use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindow, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW,
@@ -89,9 +88,18 @@ const VOICE_FILTER_BINARY_EGRESS_FRAMING: &str = "length_prefixed_f32le_diag_v1"
 const DEEP_FILTER_WARMUP_BLOCKS: usize = 20;
 const ECHO_REFERENCE_MAX_BUFFER_MS: usize = 1_200;
 const ECHO_REFERENCE_DELAY_MS: usize = 80;
-const ECHO_REFERENCE_MIN_ENERGY: f32 = 1e-6;
-const ECHO_SUBTRACTION_MAX: f32 = 0.85;
-const ECHO_DUCKING_MIN_GAIN: f32 = 0.55;
+const ECHO_CANCELLER_BLOCK_MS: usize = 10;
+const ECHO_CANCELLER_FILTER_TAPS: usize = 192;
+const ECHO_CANCELLER_REFERENCE_RMS_FLOOR: f32 = 3e-4;
+const ECHO_CANCELLER_NLMS_STEP_SIZE: f32 = 0.14;
+const ECHO_CANCELLER_NLMS_LEAK: f32 = 0.999_8;
+const ECHO_CANCELLER_NLMS_ENERGY_FLOOR: f32 = 1e-4;
+const ECHO_CANCELLER_NEAR_DOMINANCE_THRESHOLD: f32 = 1.8;
+const ECHO_CANCELLER_RESIDUAL_CORRELATION_FLOOR: f32 = 0.2;
+const ECHO_CANCELLER_DOUBLE_TALK_MIX: f32 = 0.35;
+const ECHO_CANCELLER_NEAR_DOMINANT_MIX: f32 = 0.7;
+const ECHO_CANCELLER_COEFFICIENT_LIMIT: f32 = 2.0;
+const ECHO_CANCELLATION_BACKEND: &str = "adaptive_nlms";
 // High-pass filter: 2nd-order Butterworth at 80 Hz / 48 kHz (Direct Form II transposed).
 // Removes DC offset and low-frequency rumble (HVAC, desk vibration, electrical hum) before
 // DeepFilterNet sees the signal.  Sub-80 Hz energy registers as broadband noise and causes
@@ -394,6 +402,159 @@ enum VoiceFilterProcessor {
     Passthrough,
 }
 
+#[derive(Clone, Copy, Default)]
+struct AdaptiveEchoMetrics {
+    erle_db: Option<f32>,
+    delay_ms: Option<f32>,
+    double_talk_confidence: Option<f32>,
+}
+
+struct AdaptiveEchoCanceller {
+    coefficients: Vec<f32>,
+    estimated_echo: Vec<f32>,
+    last_metrics: AdaptiveEchoMetrics,
+}
+
+impl AdaptiveEchoCanceller {
+    fn new() -> Self {
+        Self {
+            coefficients: vec![0.0; ECHO_CANCELLER_FILTER_TAPS],
+            estimated_echo: Vec::new(),
+            last_metrics: AdaptiveEchoMetrics::default(),
+        }
+    }
+
+    fn filter_len(&self) -> usize {
+        self.coefficients.len()
+    }
+
+    fn last_metrics(&self) -> AdaptiveEchoMetrics {
+        self.last_metrics
+    }
+
+    fn process_block(&mut self, near: &mut [f32], reference_window: &[f32]) {
+        let filter_len = self.filter_len();
+        self.last_metrics = AdaptiveEchoMetrics::default();
+        if near.is_empty()
+            || filter_len == 0
+            || reference_window.len() < near.len() + filter_len.saturating_sub(1)
+        {
+            return;
+        }
+
+        self.estimated_echo.resize(near.len(), 0.0);
+
+        let mut near_energy = 0.0_f32;
+        let mut reference_energy = 0.0_f32;
+        let mut estimated_echo_energy = 0.0_f32;
+        let mut residual_energy = 0.0_f32;
+        let mut residual_reference_dot = 0.0_f32;
+
+        for sample_index in 0..near.len() {
+            let mut estimated_echo = 0.0_f32;
+
+            for tap_index in 0..filter_len {
+                let reference = reference_window[sample_index + filter_len - 1 - tap_index];
+                estimated_echo += self.coefficients[tap_index] * reference;
+            }
+
+            let near_sample = near[sample_index];
+            let residual = near_sample - estimated_echo;
+            let current_reference = reference_window[sample_index + filter_len - 1];
+
+            self.estimated_echo[sample_index] = estimated_echo;
+            near_energy += near_sample * near_sample;
+            reference_energy += current_reference * current_reference;
+            estimated_echo_energy += estimated_echo * estimated_echo;
+            residual_energy += residual * residual;
+            residual_reference_dot += residual * current_reference;
+        }
+
+        let frame_len = near.len() as f32;
+        let near_rms = (near_energy / frame_len).sqrt();
+        let reference_rms = (reference_energy / frame_len).sqrt();
+        if reference_rms < ECHO_CANCELLER_REFERENCE_RMS_FLOOR {
+            return;
+        }
+
+        let residual_rms = (residual_energy / frame_len).sqrt();
+        let residual_correlation = residual_reference_dot.abs()
+            / (residual_energy.sqrt() * reference_energy.sqrt() + 1e-6);
+        let near_dominance = near_rms / (reference_rms + 1e-6);
+        let near_dominance_confidence = ((near_dominance - 1.0)
+            / (ECHO_CANCELLER_NEAR_DOMINANCE_THRESHOLD - 1.0))
+            .clamp(0.0, 1.0);
+        let decorrelation_confidence =
+            (1.0 - residual_correlation / ECHO_CANCELLER_RESIDUAL_CORRELATION_FLOOR)
+                .clamp(0.0, 1.0);
+        let double_talk_confidence = near_dominance_confidence * decorrelation_confidence;
+        let double_talk = double_talk_confidence >= 0.6;
+
+        let erle_db = if estimated_echo_energy > ECHO_CANCELLER_NLMS_ENERGY_FLOOR
+            && residual_energy > ECHO_CANCELLER_NLMS_ENERGY_FLOOR
+        {
+            Some(
+                (10.0 * (estimated_echo_energy / residual_energy).log10()).clamp(-20.0, 45.0),
+            )
+        } else {
+            None
+        };
+        self.last_metrics = AdaptiveEchoMetrics {
+            erle_db,
+            delay_ms: Some(ECHO_REFERENCE_DELAY_MS as f32),
+            double_talk_confidence: Some(double_talk_confidence),
+        };
+
+        let cancellation_mix = if double_talk {
+            ECHO_CANCELLER_DOUBLE_TALK_MIX
+        } else if near_dominance > 1.25 {
+            ECHO_CANCELLER_NEAR_DOMINANT_MIX
+        } else {
+            1.0
+        };
+
+        let mut adaptation_gate = if double_talk {
+            0.0
+        } else if near_dominance > 1.5 {
+            0.35
+        } else {
+            1.0
+        };
+        adaptation_gate *= (residual_rms / (reference_rms + 1e-6)).clamp(0.15, 1.0);
+
+        for sample_index in 0..near.len() {
+            let near_sample = near[sample_index];
+            let mut estimated_echo = 0.0_f32;
+            let mut reference_energy_sum = 0.0_f32;
+            for tap_index in 0..filter_len {
+                let reference = reference_window[sample_index + filter_len - 1 - tap_index];
+                estimated_echo += self.coefficients[tap_index] * reference;
+                reference_energy_sum += reference * reference;
+            }
+
+            near[sample_index] = near_sample - estimated_echo * cancellation_mix;
+
+            if adaptation_gate <= 0.0 {
+                continue;
+            }
+
+            let residual = near_sample - estimated_echo;
+            let step = ECHO_CANCELLER_NLMS_STEP_SIZE * adaptation_gate * residual
+                / (reference_energy_sum + ECHO_CANCELLER_NLMS_ENERGY_FLOOR);
+
+            for tap_index in 0..filter_len {
+                let reference = reference_window[sample_index + filter_len - 1 - tap_index];
+                self.coefficients[tap_index] =
+                    (self.coefficients[tap_index] * ECHO_CANCELLER_NLMS_LEAK + step * reference)
+                        .clamp(
+                            -ECHO_CANCELLER_COEFFICIENT_LIMIT,
+                            ECHO_CANCELLER_COEFFICIENT_LIMIT,
+                        );
+            }
+        }
+    }
+}
+
 struct VoiceFilterSession {
     session_id: String,
     sample_rate: usize,
@@ -406,6 +567,7 @@ struct VoiceFilterSession {
     trim_gain: f32,
     agc_startup_bypass_ms_remaining: u32,
     echo_cancellation: bool,
+    adaptive_echo_canceller: AdaptiveEchoCanceller,
     echo_reference_interleaved: VecDeque<f32>,
     limiter_gain: f32,
     expander_envelope: f32,
@@ -482,20 +644,20 @@ impl VoiceFilterSession {
         Ok(())
     }
 
-    fn get_echo_reference_window(&self, sample_len: usize) -> Option<Vec<f32>> {
+    fn get_echo_reference_window(&self, sample_len: usize, history_len: usize) -> Option<Vec<f32>> {
         if sample_len == 0 {
             return None;
         }
 
         let required_delay_samples =
             ((self.sample_rate * ECHO_REFERENCE_DELAY_MS) / 1_000) * self.channels;
-        let total_required_samples = required_delay_samples + sample_len;
+        let total_required_samples = required_delay_samples + history_len + sample_len;
         if self.echo_reference_interleaved.len() < total_required_samples {
             return None;
         }
 
         let start = self.echo_reference_interleaved.len() - total_required_samples;
-        let end = start + sample_len;
+        let end = start + history_len + sample_len;
         let mut out = Vec::with_capacity(sample_len);
         out.extend(
             self.echo_reference_interleaved
@@ -767,8 +929,7 @@ fn try_write_app_audio_binary_frame(
         return false;
     }
 
-    let payload_len =
-        2 + // session id length
+    let payload_len = 2 + // session id length
         session_id_bytes.len() +
         2 + // target id length
         target_id_bytes.len() +
@@ -831,10 +992,11 @@ fn try_write_app_audio_binary_frame(
 //   [4]  frame_count (u32)
 //   [4]  protocol_version (u32)
 //   [4]  dropped_frame_count (u32)
-//   [1]  diag_flags  (bit 0 = lsnr present, bit 1 = agc_gain present)
+//   [1]  diag_flags  (bit 0 = lsnr present, bit 1 = agc_gain present, bit 2 = aec present)
 //   [4]  ramp_wet_mix (f32, always)
 //   [12] lsnr_mean + lsnr_min + lsnr_max (f32 each, if bit 0)
 //   [4]  agc_gain (f32, if bit 1)
+//   [12] aec_erle_db + aec_delay_ms + aec_double_talk_confidence (f32 each, if bit 2)
 //   [4]  pcm_byte_length (u32)
 //   [M]  pcm data (f32le)
 fn try_write_voice_filter_binary_egress_frame(
@@ -878,8 +1040,12 @@ fn try_write_voice_filter_binary_egress_frame(
     if diagnostics.agc_gain.is_some() {
         diag_flags |= 0x02;
     }
+    if diagnostics.aec_erle_db.is_some() {
+        diag_flags |= 0x04;
+    }
     let lsnr_bytes: usize = if diag_flags & 0x01 != 0 { 12 } else { 0 };
     let agc_bytes: usize = if diag_flags & 0x02 != 0 { 4 } else { 0 };
+    let aec_bytes: usize = if diag_flags & 0x04 != 0 { 12 } else { 0 };
 
     let payload_len = 2
         + session_id_bytes.len()
@@ -893,6 +1059,7 @@ fn try_write_voice_filter_binary_egress_frame(
         + 4  // ramp_wet_mix
         + lsnr_bytes
         + agc_bytes
+        + aec_bytes
         + 4  // pcm_byte_length
         + pcm_bytes.len();
 
@@ -919,6 +1086,16 @@ fn try_write_voice_filter_binary_egress_frame(
     }
     if let Some(gain) = diagnostics.agc_gain {
         packet.extend_from_slice(&gain.to_le_bytes());
+    }
+    if let Some(erle_db) = diagnostics.aec_erle_db {
+        packet.extend_from_slice(&erle_db.to_le_bytes());
+        packet.extend_from_slice(&diagnostics.aec_delay_ms.unwrap_or(0.0).to_le_bytes());
+        packet.extend_from_slice(
+            &diagnostics
+                .aec_double_talk_confidence
+                .unwrap_or(0.0)
+                .to_le_bytes(),
+        );
     }
     packet.extend_from_slice(&(pcm_bytes.len() as u32).to_le_bytes());
     packet.extend_from_slice(pcm_bytes);
@@ -976,6 +1153,13 @@ fn enqueue_voice_filter_frame_event(
 
     if let Some(gain) = diagnostics.agc_gain {
         params["diag"]["agcGain"] = json!(gain);
+    }
+
+    if let Some(erle_db) = diagnostics.aec_erle_db {
+        params["diag"]["aecErleDb"] = json!(erle_db);
+        params["diag"]["aecDelayMs"] = json!(diagnostics.aec_delay_ms);
+        params["diag"]["aecDoubleTalkConfidence"] =
+            json!(diagnostics.aec_double_talk_confidence);
     }
 
     if dropped_count > 0 {
@@ -1053,6 +1237,10 @@ struct VoiceFilterDiagnostics {
     lsnr_mean: Option<f32>,
     lsnr_min: Option<f32>,
     lsnr_max: Option<f32>,
+    // Adaptive AEC metrics (None when AEC is disabled or has no valid reference).
+    aec_erle_db: Option<f32>,
+    aec_delay_ms: Option<f32>,
+    aec_double_talk_confidence: Option<f32>,
     // AGC gain applied to this buffer (None when AGC is disabled).
     agc_gain: Option<f32>,
     // Dry/wet mix at the end of the startup ramp (0.0 = fully dry, 1.0 = fully wet/processed).
@@ -1191,6 +1379,7 @@ fn create_voice_filter_session(
         high_pass_filters: (0..mono_channels).map(|_| HighPassFilter::new()).collect(),
         agc_startup_bypass_ms_remaining: AGC_STARTUP_BYPASS_MS,
         echo_cancellation,
+        adaptive_echo_canceller: AdaptiveEchoCanceller::new(),
         echo_reference_interleaved: VecDeque::new(),
         limiter_gain: 1.0,
         expander_envelope: 0.0,
@@ -1444,7 +1633,8 @@ fn apply_slow_trim(
     //   rate=1.0 → α^1 = normal TC; rate=0.0 → α^0 = 1.0 → frozen.
     let level_coeff = (-(samples.len() as f32 / (sample_rate as f32 * TRIM_LEVEL_TC_S))).exp();
     let effective_level_coeff = level_coeff.powf(rate);
-    *trim_level_rms = effective_level_coeff * *trim_level_rms + (1.0 - effective_level_coeff) * frame_rms;
+    *trim_level_rms =
+        effective_level_coeff * *trim_level_rms + (1.0 - effective_level_coeff) * frame_rms;
 
     if !active {
         return;
@@ -1502,56 +1692,68 @@ fn inject_comfort_noise(samples: &mut [f32], rng_state: &mut u32, mix: f32) {
     }
 }
 
-fn apply_reference_echo_cancellation(session: &VoiceFilterSession, samples: &mut [f32]) {
+fn apply_adaptive_echo_cancellation(
+    session: &mut VoiceFilterSession,
+    samples: &mut [f32],
+) -> AdaptiveEchoMetrics {
     if samples.is_empty() {
-        return;
+        return AdaptiveEchoMetrics::default();
     }
 
-    let Some(reference_samples) = session.get_echo_reference_window(samples.len()) else {
-        return;
+    let filter_history_len = session
+        .adaptive_echo_canceller
+        .filter_len()
+        .saturating_sub(1);
+    let Some(reference_samples) =
+        session.get_echo_reference_window(samples.len(), filter_history_len)
+    else {
+        return AdaptiveEchoMetrics::default();
     };
 
-    let mut near_energy = 0.0_f64;
-    let mut reference_energy = 0.0_f64;
-    let mut near_reference_dot = 0.0_f64;
+    let block_frames = ((session.sample_rate * ECHO_CANCELLER_BLOCK_MS) / 1_000).max(1);
+    let block_sample_len = block_frames * session.channels;
+    let mut sample_offset = 0usize;
+    let mut erle_sum = 0.0f32;
+    let mut erle_count = 0u32;
+    let mut delay_ms = None;
+    let mut double_talk_sum = 0.0f32;
+    let mut double_talk_count = 0u32;
 
-    for index in 0..samples.len() {
-        let near = f64::from(samples[index]);
-        let reference = f64::from(reference_samples[index]);
-        near_energy += near * near;
-        reference_energy += reference * reference;
-        near_reference_dot += near * reference;
+    while sample_offset < samples.len() {
+        let sample_end = (sample_offset + block_sample_len).min(samples.len());
+        let reference_start = sample_offset;
+        let reference_end = filter_history_len + sample_end;
+        session.adaptive_echo_canceller.process_block(
+            &mut samples[sample_offset..sample_end],
+            &reference_samples[reference_start..reference_end],
+        );
+        let block_metrics = session.adaptive_echo_canceller.last_metrics();
+        if let Some(erle_db) = block_metrics.erle_db {
+            erle_sum += erle_db;
+            erle_count += 1;
+        }
+        if let Some(block_delay_ms) = block_metrics.delay_ms {
+            delay_ms = Some(block_delay_ms);
+        }
+        if let Some(double_talk_confidence) = block_metrics.double_talk_confidence {
+            double_talk_sum += double_talk_confidence;
+            double_talk_count += 1;
+        }
+        sample_offset = sample_end;
     }
 
-    if reference_energy <= f64::from(ECHO_REFERENCE_MIN_ENERGY) {
-        return;
-    }
-
-    let near_rms = (near_energy / samples.len() as f64).sqrt() as f32;
-    let reference_rms = (reference_energy / samples.len() as f64).sqrt() as f32;
-
-    let mut subtraction_gain =
-        (near_reference_dot / reference_energy).clamp(0.0, f64::from(ECHO_SUBTRACTION_MAX)) as f32;
-    let near_dominance = near_rms / (reference_rms + 1e-6);
-    if near_dominance > 1.35 {
-        subtraction_gain *= 0.5;
-    } else if near_dominance > 1.1 {
-        subtraction_gain *= 0.75;
-    }
-
-    let ducking_gain = if reference_rms > near_rms * 0.8 {
-        ECHO_DUCKING_MIN_GAIN
-    } else if reference_rms > near_rms * 0.55 {
-        0.72
-    } else if reference_rms > near_rms * 0.35 {
-        0.86
-    } else {
-        1.0
-    };
-
-    for index in 0..samples.len() {
-        let canceled = samples[index] - reference_samples[index] * subtraction_gain;
-        samples[index] = canceled * ducking_gain;
+    AdaptiveEchoMetrics {
+        erle_db: if erle_count > 0 {
+            Some(erle_sum / erle_count as f32)
+        } else {
+            None
+        },
+        delay_ms,
+        double_talk_confidence: if double_talk_count > 0 {
+            Some(double_talk_sum / double_talk_count as f32)
+        } else {
+            None
+        },
     }
 }
 
@@ -1677,8 +1879,9 @@ fn apply_transient_suppressor(
     }
 
     state.prev_rms = rms;
-    state.debounce_samples_remaining =
-        state.debounce_samples_remaining.saturating_sub(samples.len() as u32);
+    state.debounce_samples_remaining = state
+        .debounce_samples_remaining
+        .saturating_sub(samples.len() as u32);
 }
 
 // analyze_vad: energy-based VAD tap.  Call once per 10ms frame on post-dezipper audio.
@@ -1686,7 +1889,9 @@ fn apply_transient_suppressor(
 // The noise floor estimate adapts only during Silence, preventing speech from corrupting it.
 fn analyze_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> VadOutput {
     if samples.is_empty() || sample_rate == 0 {
-        return VadOutput { speech_state: vad.speech_state };
+        return VadOutput {
+            speech_state: vad.speech_state,
+        };
     }
 
     // Per-frame RMS → SNR relative to adaptive noise floor → p_raw ∈ [0, 1].
@@ -1756,7 +1961,9 @@ fn analyze_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> VadOu
     }
 
     vad.prev_frame_rms = frame_rms;
-    VadOutput { speech_state: vad.speech_state }
+    VadOutput {
+        speech_state: vad.speech_state,
+    }
 }
 
 fn apply_downward_expander(
@@ -1850,6 +2057,9 @@ fn process_voice_filter_frame(
             lsnr_mean: None,
             lsnr_min: None,
             lsnr_max: None,
+            aec_erle_db: None,
+            aec_delay_ms: None,
+            aec_double_talk_confidence: None,
             agc_gain: None,
             ramp_wet_mix: 1.0,
         });
@@ -1862,6 +2072,9 @@ fn process_voice_filter_frame(
             lsnr_mean: None,
             lsnr_min: None,
             lsnr_max: None,
+            aec_erle_db: None,
+            aec_delay_ms: None,
+            aec_double_talk_confidence: None,
             agc_gain: None,
             ramp_wet_mix: 1.0,
         });
@@ -1908,17 +2121,16 @@ fn process_voice_filter_frame(
 
     // Startup ramp: compute wet-mix at frame start.  A single value per 10 ms frame is
     // imperceptible since the ramp spans SUPPRESSION_STARTUP_RAMP_MS.
-    let ramp_wet_mix_at_frame_start: f32 =
-        if session.suppression_startup_ramp_ms_remaining > 0
-            && matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_))
-        {
-            let elapsed_ms = SUPPRESSION_STARTUP_RAMP_MS
-                .saturating_sub(session.suppression_startup_ramp_ms_remaining)
-                as f32;
-            suppression_startup_wet_mix(elapsed_ms)
-        } else {
-            1.0
-        };
+    let ramp_wet_mix_at_frame_start: f32 = if session.suppression_startup_ramp_ms_remaining > 0
+        && matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_))
+    {
+        let elapsed_ms = SUPPRESSION_STARTUP_RAMP_MS
+            .saturating_sub(session.suppression_startup_ramp_ms_remaining)
+            as f32;
+        suppression_startup_wet_mix(elapsed_ms)
+    } else {
+        1.0
+    };
 
     // Per-utterance onset ramp: wet-mix starts at 0 on the first post-onset frame and
     // advances linearly to 1.0 over ONSET_WET_RAMP_FRAMES.  Combined with the session
@@ -1934,8 +2146,9 @@ fn process_voice_filter_frame(
 
     // AEC before DFN: remove echo from the mic signal first so DFN sees a cleaner
     // input.  If AEC is disabled this is a no-op and has no performance cost.
+    let mut aec_metrics = AdaptiveEchoMetrics::default();
     if session.echo_cancellation {
-        apply_reference_echo_cancellation(session, samples);
+        aec_metrics = apply_adaptive_echo_cancellation(session, samples);
     }
 
     // Diagnostics accumulators — populated only by the DeepFilter path.
@@ -1979,8 +2192,12 @@ fn process_voice_filter_frame(
 
                 lsnr_sum += lsnr;
                 lsnr_hop_count += 1;
-                if lsnr < lsnr_min { lsnr_min = lsnr; }
-                if lsnr > lsnr_max { lsnr_max = lsnr; }
+                if lsnr < lsnr_min {
+                    lsnr_min = lsnr;
+                }
+                if lsnr > lsnr_max {
+                    lsnr_max = lsnr;
+                }
 
                 // Startup ramp: blend noisy×(1−t) + enhanced×t per hop.
                 // Blending at the hop level (rather than mixing separate dry/wet PCM streams)
@@ -1990,8 +2207,8 @@ fn process_voice_filter_frame(
                     let dry_mix = 1.0 - effective_wet_mix;
                     for ch in 0..channels {
                         for s in 0..hop_size {
-                            enhanced[(ch, s)] = noisy[(ch, s)] * dry_mix
-                                + enhanced[(ch, s)] * effective_wet_mix;
+                            enhanced[(ch, s)] =
+                                noisy[(ch, s)] * dry_mix + enhanced[(ch, s)] * effective_wet_mix;
                         }
                     }
                 }
@@ -2032,7 +2249,9 @@ fn process_voice_filter_frame(
     let vad_out = if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
         analyze_vad(&mut session.vad, samples, session.sample_rate)
     } else {
-        VadOutput { speech_state: VadSpeechState::Speech }
+        VadOutput {
+            speech_state: VadSpeechState::Speech,
+        }
     };
 
     // Suppression slew limit: prevent DFN from dropping its output RMS by more than
@@ -2157,8 +2376,7 @@ fn process_voice_filter_frame(
                 // p_smooth here caused audible pumping whenever any sound (keyboard
                 // click, clap, background noise) occurred during hangover.
                 VadSpeechState::Hangover => {
-                    session.vad.hangover_frames_remaining as f32
-                        / VAD_HANGOVER_FRAMES as f32
+                    session.vad.hangover_frames_remaining as f32 / VAD_HANGOVER_FRAMES as f32
                 }
                 VadSpeechState::Silence => 0.0,
             }
@@ -2172,13 +2390,21 @@ fn process_voice_filter_frame(
             session.lsnr_smoothed = EXPANDER_LSNR_SMOOTH_ALPHA * session.lsnr_smoothed
                 + (1.0 - EXPANDER_LSNR_SMOOTH_ALPHA) * lsnr;
         }
-        apply_downward_expander(session, samples, Some(session.lsnr_smoothed), expander_bypass);
+        apply_downward_expander(
+            session,
+            samples,
+            Some(session.lsnr_smoothed),
+            expander_bypass,
+        );
     }
 
     Ok(VoiceFilterDiagnostics {
         lsnr_mean,
         lsnr_min: lsnr_min_out,
         lsnr_max: lsnr_max_out,
+        aec_erle_db: aec_metrics.erle_db,
+        aec_delay_ms: aec_metrics.delay_ms,
+        aec_double_talk_confidence: aec_metrics.double_talk_confidence,
         agc_gain: if session.auto_gain_control {
             Some(session.trim_gain)
         } else {
@@ -3291,9 +3517,8 @@ fn list_mic_devices_windows() -> Vec<MicDevice> {
     let mut devices = Vec::new();
 
     let result = (|| -> Result<(), windows::core::Error> {
-        let enumerator: IMMDeviceEnumerator = unsafe {
-            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?
-        };
+        let enumerator: IMMDeviceEnumerator =
+            unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
 
         let collection = unsafe { enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)? };
         let count = unsafe { collection.GetCount()? };
@@ -3698,14 +3923,18 @@ fn handle_voice_filter_start_with_capture(
         );
     });
 
-    Ok(json!({
+    let mut response = json!({
         "sessionId": session_id,
         "sampleRate": parsed.sample_rate,
         "channels": session_channels,
         "framesPerBuffer": frames_per_buffer,
         "protocolVersion": PROTOCOL_VERSION,
         "encoding": PCM_ENCODING,
-    }))
+    });
+    if echo_cancellation {
+        response["echoCancellationBackend"] = json!(ECHO_CANCELLATION_BACKEND);
+    }
+    Ok(response)
 }
 
 fn handle_voice_filter_start(
@@ -3745,14 +3974,18 @@ fn handle_voice_filter_start(
 
     state.voice_filter_session = Some(session);
 
-    Ok(json!({
+    let mut response = json!({
         "sessionId": session_id,
         "sampleRate": parsed.sample_rate,
         "channels": session_channels,
         "framesPerBuffer": frames_per_buffer,
         "protocolVersion": PROTOCOL_VERSION,
         "encoding": PCM_ENCODING,
-    }))
+    });
+    if echo_cancellation {
+        response["echoCancellationBackend"] = json!(ECHO_CANCELLATION_BACKEND);
+    }
+    Ok(response)
 }
 
 fn apply_limiter(samples: &mut [f32], gain: &mut f32) {
@@ -4014,9 +4247,9 @@ fn handle_voice_filter_stop(
 fn start_app_audio_binary_egress() -> Result<AppAudioBinaryEgress, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .map_err(|error| format!("Failed to bind app-audio binary egress listener: {error}"))?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|error| format!("Failed to configure app-audio binary egress listener: {error}"))?;
+    listener.set_nonblocking(true).map_err(|error| {
+        format!("Failed to configure app-audio binary egress listener: {error}")
+    })?;
 
     let port = listener
         .local_addr()
@@ -4075,13 +4308,15 @@ fn handle_audio_capture_binary_egress_info(
 fn start_voice_filter_binary_egress() -> Result<VoiceFilterBinaryEgress, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .map_err(|error| format!("Failed to bind voice-filter binary egress listener: {error}"))?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|error| format!("Failed to configure voice-filter binary egress listener: {error}"))?;
+    listener.set_nonblocking(true).map_err(|error| {
+        format!("Failed to configure voice-filter binary egress listener: {error}")
+    })?;
 
     let port = listener
         .local_addr()
-        .map_err(|error| format!("Failed to read voice-filter binary egress listener port: {error}"))?
+        .map_err(|error| {
+            format!("Failed to read voice-filter binary egress listener port: {error}")
+        })?
         .port();
 
     let stream = Arc::new(Mutex::new(None::<TcpStream>));
@@ -4230,7 +4465,9 @@ fn parse_voice_filter_binary_frame(payload: &[u8]) -> Result<VoiceFilterBinaryFr
     }
 
     let session_id = std::str::from_utf8(&payload[offset..offset + session_id_len])
-        .map_err(|error| format!("Binary voice filter frame has invalid UTF-8 session id: {error}"))?
+        .map_err(|error| {
+            format!("Binary voice filter frame has invalid UTF-8 session id: {error}")
+        })?
         .to_string();
     offset += session_id_len;
 
@@ -4604,8 +4841,55 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        dedupe_window_entries_by_pid, parse_target_pid, parse_window_source_id, CaptureEndReason,
+        dedupe_window_entries_by_pid, parse_target_pid, parse_window_source_id,
+        AdaptiveEchoCanceller, CaptureEndReason, ECHO_REFERENCE_DELAY_MS,
     };
+    use std::collections::VecDeque;
+
+    const TEST_AEC_BLOCK_SIZE: usize = 480;
+
+    fn synthetic_reference_sample(index: usize) -> f32 {
+        let t = index as f32;
+        (t * 0.073).sin() * 0.55 + (t * 0.017).cos() * 0.25
+    }
+
+    fn synthetic_speech_sample(index: usize) -> f32 {
+        let t = index as f32;
+        (t * 0.041).sin() * 0.45 + (t * 0.011).cos() * 0.18
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        let sum_sq: f32 = samples.iter().map(|sample| sample * sample).sum();
+        (sum_sq / samples.len() as f32).sqrt()
+    }
+
+    fn mean_abs_diff(lhs: &[f32], rhs: &[f32]) -> f32 {
+        lhs.iter()
+            .zip(rhs.iter())
+            .map(|(left, right)| (left - right).abs())
+            .sum::<f32>()
+            / lhs.len() as f32
+    }
+
+    fn build_reference_window(
+        history: &mut VecDeque<f32>,
+        block: &[f32],
+        filter_len: usize,
+    ) -> Vec<f32> {
+        let history_len = filter_len.saturating_sub(1);
+        let mut window = Vec::with_capacity(history_len + block.len());
+        window.extend(history.iter().copied());
+        window.extend_from_slice(block);
+
+        for sample in block {
+            history.push_back(*sample);
+            while history.len() > history_len {
+                let _ = history.pop_front();
+            }
+        }
+
+        window
+    }
 
     #[test]
     fn parses_window_source_id() {
@@ -4642,5 +4926,82 @@ mod tests {
         assert_eq!(CaptureEndReason::AppExited.as_str(), "app_exited");
         #[cfg(windows)]
         assert_eq!(CaptureEndReason::DeviceLost.as_str(), "device_lost");
+    }
+
+    #[test]
+    fn adaptive_echo_canceller_converges_on_correlated_echo() {
+        let mut canceller = AdaptiveEchoCanceller::new();
+        let filter_len = canceller.filter_len();
+        let mut history = VecDeque::from(vec![0.0; filter_len.saturating_sub(1)]);
+        let mut input_rms_sum = 0.0_f32;
+        let mut output_rms_sum = 0.0_f32;
+
+        for block_index in 0..120 {
+            let start = block_index * TEST_AEC_BLOCK_SIZE;
+            let reference_block: Vec<f32> = (0..TEST_AEC_BLOCK_SIZE)
+                .map(|offset| synthetic_reference_sample(start + offset))
+                .collect();
+            let reference_window =
+                build_reference_window(&mut history, &reference_block, filter_len);
+            let mut near_block: Vec<f32> =
+                reference_block.iter().map(|sample| sample * 0.65).collect();
+
+            if block_index >= 80 {
+                input_rms_sum += rms(&near_block);
+            }
+
+            canceller.process_block(&mut near_block, &reference_window);
+
+            if block_index >= 80 {
+                output_rms_sum += rms(&near_block);
+            }
+        }
+
+        let metrics = canceller.last_metrics();
+        assert!(metrics.erle_db.is_some());
+        assert_eq!(metrics.delay_ms, Some(ECHO_REFERENCE_DELAY_MS as f32));
+        assert!(output_rms_sum < input_rms_sum * 0.45);
+    }
+
+    #[test]
+    fn adaptive_echo_canceller_preserves_double_talk() {
+        let mut canceller = AdaptiveEchoCanceller::new();
+        let filter_len = canceller.filter_len();
+        let mut history = VecDeque::from(vec![0.0; filter_len.saturating_sub(1)]);
+
+        for block_index in 0..90 {
+            let start = block_index * TEST_AEC_BLOCK_SIZE;
+            let reference_block: Vec<f32> = (0..TEST_AEC_BLOCK_SIZE)
+                .map(|offset| synthetic_reference_sample(start + offset))
+                .collect();
+            let reference_window =
+                build_reference_window(&mut history, &reference_block, filter_len);
+            let mut near_block: Vec<f32> =
+                reference_block.iter().map(|sample| sample * 0.55).collect();
+            canceller.process_block(&mut near_block, &reference_window);
+        }
+
+        let start = 90 * TEST_AEC_BLOCK_SIZE;
+        let reference_block: Vec<f32> = (0..TEST_AEC_BLOCK_SIZE)
+            .map(|offset| synthetic_reference_sample(start + offset))
+            .collect();
+        let speech_block: Vec<f32> = (0..TEST_AEC_BLOCK_SIZE)
+            .map(|offset| synthetic_speech_sample(start + offset))
+            .collect();
+        let reference_window = build_reference_window(&mut history, &reference_block, filter_len);
+        let mut mixed_block: Vec<f32> = speech_block
+            .iter()
+            .zip(reference_block.iter())
+            .map(|(speech, reference)| speech + reference * 0.45)
+            .collect();
+        let input_error = mean_abs_diff(&mixed_block, &speech_block);
+
+        canceller.process_block(&mut mixed_block, &reference_window);
+
+        let output_error = mean_abs_diff(&mixed_block, &speech_block);
+        let metrics = canceller.last_metrics();
+        assert!(metrics.double_talk_confidence.is_some());
+        assert!(output_error < input_error);
+        assert!(rms(&mixed_block) > rms(&speech_block) * 0.6);
     }
 }

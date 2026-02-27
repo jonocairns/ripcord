@@ -27,6 +27,9 @@ type TNcDiagSnapshot = {
   lsnrMean: number | null;
   lsnrMin: number | null;
   lsnrMax: number | null;
+  aecErleMean: number | null;
+  aecDelayMs: number | null;
+  aecDoubleTalkFrames: number;
   agcGainMean: number | null;
   /** How many frames had the startup ramp still active (rampWetMix < 1). */
   rampActiveFrames: number;
@@ -46,7 +49,10 @@ if (typeof window !== 'undefined') {
 
 const createNcDiagnosticsAggregator = (sessionId: string) => {
   const lsnrValues: number[] = [];
+  const aecErleValues: number[] = [];
   const agcGainValues: number[] = [];
+  let lastAecDelayMs: number | null = null;
+  let aecDoubleTalkFrames = 0;
   let rampActiveFrames = 0;
   let totalDropped = 0;
   let totalFrames = 0;
@@ -69,6 +75,22 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
       if (agcGainValues.length > NC_DIAG_WINDOW_SIZE) agcGainValues.shift();
     }
 
+    if (d.aecErleDb !== undefined) {
+      aecErleValues.push(d.aecErleDb);
+      if (aecErleValues.length > NC_DIAG_WINDOW_SIZE) aecErleValues.shift();
+    }
+
+    if (d.aecDelayMs !== undefined) {
+      lastAecDelayMs = d.aecDelayMs;
+    }
+
+    if (
+      d.aecDoubleTalkConfidence !== undefined &&
+      d.aecDoubleTalkConfidence >= 0.6
+    ) {
+      aecDoubleTalkFrames++;
+    }
+
     if (d.rampWetMix < 1.0) rampActiveFrames++;
 
     const now = Date.now();
@@ -88,6 +110,9 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
       lsnrMean: avg(lsnrValues),
       lsnrMin: lsnrValues.length > 0 ? Math.min(...lsnrValues) : null,
       lsnrMax: lsnrValues.length > 0 ? Math.max(...lsnrValues) : null,
+      aecErleMean: avg(aecErleValues),
+      aecDelayMs: lastAecDelayMs,
+      aecDoubleTalkFrames,
       agcGainMean: avg(agcGainValues),
       rampActiveFrames,
       droppedFrames: totalDropped,
@@ -108,9 +133,17 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
       snapshot.agcGainMean !== null
         ? `${snapshot.agcGainMean.toFixed(2)}×`
         : 'off';
+    const aecErle =
+      snapshot.aecErleMean !== null
+        ? `${snapshot.aecErleMean.toFixed(1)} dB`
+        : 'off';
+    const aecDelay =
+      snapshot.aecDelayMs !== null ? `${snapshot.aecDelayMs.toFixed(0)} ms` : 'n/a';
 
     console.log(
       `[nc-diag] lsnr=${lsnr} dB range=${lsnrRange} agc=${agc}` +
+        ` aec=${aecErle} delay=${aecDelay}` +
+        ` doubleTalk=${snapshot.aecDoubleTalkFrames}` +
         ` rampFrames=${snapshot.rampActiveFrames} dropped=${snapshot.droppedFrames}` +
         ` frames=${snapshot.frameCount}`
     );

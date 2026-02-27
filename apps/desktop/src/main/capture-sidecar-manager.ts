@@ -429,6 +429,7 @@ class CaptureSidecarManager {
       channels: session.channels,
       framesPerBuffer: session.framesPerBuffer,
       protocolVersion: session.protocolVersion,
+      echoCancellationBackend: session.echoCancellationBackend,
     });
     void this.ensureVoiceFilterBinaryIngress().catch((error) => {
       console.warn(
@@ -1119,6 +1120,22 @@ class CaptureSidecarManager {
       if (agcGain === undefined) return;
     }
 
+    let aecErleDb: number | undefined;
+    let aecDelayMs: number | undefined;
+    let aecDoubleTalkConfidence: number | undefined;
+    if (diagFlags & 0x04) {
+      aecErleDb = readF32();
+      aecDelayMs = readF32();
+      aecDoubleTalkConfidence = readF32();
+      if (
+        aecErleDb === undefined ||
+        aecDelayMs === undefined ||
+        aecDoubleTalkConfidence === undefined
+      ) {
+        return;
+      }
+    }
+
     const pcmByteLen = readU32();
     if (pcmByteLen === undefined || offset + pcmByteLen > payload.length)
       return;
@@ -1140,6 +1157,11 @@ class CaptureSidecarManager {
     }
     if (agcGain !== undefined) {
       diag.agcGain = agcGain;
+    }
+    if (aecErleDb !== undefined) {
+      diag.aecErleDb = aecErleDb;
+      diag.aecDelayMs = aecDelayMs;
+      diag.aecDoubleTalkConfidence = aecDoubleTalkConfidence;
     }
 
     const droppedFrameCount =

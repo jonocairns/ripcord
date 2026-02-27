@@ -115,6 +115,7 @@ export type TVoiceFilterSession = {
   framesPerBuffer: number;
   protocolVersion?: number;
   encoding?: 'f32le_base64';
+  echoCancellationBackend?: 'adaptive_nlms';
 };
 
 export type TVoiceFilterFrameDiag = {
@@ -124,6 +125,12 @@ export type TVoiceFilterFrameDiag = {
   lsnrMean?: number;
   lsnrMin?: number;
   lsnrMax?: number;
+  /** Estimated echo return loss enhancement from the sidecar AEC. Higher is better. */
+  aecErleDb?: number;
+  /** Current render-to-capture delay estimate in milliseconds. */
+  aecDelayMs?: number;
+  /** 0..1 confidence that the current frame contains double-talk. */
+  aecDoubleTalkConfidence?: number;
   /** AGC gain applied. undefined when AGC is disabled. High values (> 3×) indicate
    *  the mic is very quiet — common with far-field setups. */
   agcGain?: number;
