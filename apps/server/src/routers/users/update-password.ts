@@ -1,5 +1,5 @@
 import { ActivityLogType } from '@sharkord/shared';
-import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { refreshTokens, users } from '../../db/schema';
@@ -54,19 +54,11 @@ const updatePasswordRoute = protectedProcedure
 
       const hashedNewPassword = await hashPassword(input.newPassword);
 
-      const shouldRotateSessions = user.mustChangePassword;
-      const userUpdateData: {
-        password: string;
-        mustChangePassword: boolean;
-        tokenVersion?: SQL;
-      } = {
+      const userUpdateData = {
         password: hashedNewPassword,
-        mustChangePassword: false
+        mustChangePassword: false,
+        tokenVersion: sql`${users.tokenVersion} + 1`
       };
-
-      if (shouldRotateSessions) {
-        userUpdateData.tokenVersion = sql`${users.tokenVersion} + 1`;
-      }
 
       await tx
         .update(users)
@@ -74,21 +66,16 @@ const updatePasswordRoute = protectedProcedure
         .where(eq(users.id, ctx.userId))
         .run();
 
-      if (shouldRotateSessions) {
-        await tx
-          .update(refreshTokens)
-          .set({
-            revokedAt: now,
-            updatedAt: now
-          })
-          .where(
-            and(
-              eq(refreshTokens.userId, ctx.userId),
-              isNull(refreshTokens.revokedAt)
-            )
-          )
-          .run();
-      }
+      await tx
+        .update(refreshTokens)
+        .set({
+          revokedAt: now,
+          updatedAt: now
+        })
+        .where(
+          and(eq(refreshTokens.userId, ctx.userId), isNull(refreshTokens.revokedAt))
+        )
+        .run();
     });
 
     enqueueActivityLog({

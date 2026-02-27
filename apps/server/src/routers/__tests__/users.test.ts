@@ -172,11 +172,28 @@ describe('users router', () => {
     expect(updatedUser!.bannerColor).toBe('#00ff00');
   });
 
-  test('should update password successfully', async () => {
+  test('should update password successfully and rotate active sessions', async () => {
     const { caller } = await initTest();
+    const now = Date.now();
 
     const currentPassword = 'password123';
     const newPassword = 'newpassword456';
+
+    await tdb.insert(refreshTokens).values({
+      userId: 1,
+      tokenHash: 'user-1-refresh-token-hash',
+      expiresAt: now + 1000000,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const before = await tdb
+      .select({
+        tokenVersion: users.tokenVersion
+      })
+      .from(users)
+      .where(eq(users.id, 1))
+      .get();
 
     await caller.users.updatePassword({
       currentPassword,
@@ -186,10 +203,19 @@ describe('users router', () => {
 
     const row = await tdb
       .select({
-        password: users.password
+        password: users.password,
+        tokenVersion: users.tokenVersion
       })
       .from(users)
       .where(eq(users.id, 1))
+      .get();
+
+    const tokenRow = await tdb
+      .select({
+        revokedAt: refreshTokens.revokedAt
+      })
+      .from(refreshTokens)
+      .where(eq(refreshTokens.tokenHash, 'user-1-refresh-token-hash'))
       .get();
 
     expect(row).toBeDefined();
@@ -199,6 +225,8 @@ describe('users router', () => {
 
     const matches = await verifyPassword(newPassword, row!.password);
     expect(matches).toBe(true);
+    expect(row!.tokenVersion).toBe((before?.tokenVersion ?? 0) + 1);
+    expect(tokenRow?.revokedAt).toBeDefined();
   });
 
   test('should throw when current password is incorrect', async () => {
