@@ -6,7 +6,7 @@ import { memo } from 'react';
 const ForcePasswordReset = memo(() => {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-xl space-y-4">
+      <div className="mx-auto w-full max-w-4xl space-y-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-lg">
