@@ -243,17 +243,19 @@ const Devices = memo(() => {
           </Alert>
 
           <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
-            {!isExperimentalMode && (
-              <div className="flex items-center justify-between gap-3">
-                <Label className="cursor-default">Echo cancellation</Label>
-                <Switch
-                  checked={!!values.echoCancellation}
-                  onCheckedChange={(checked) =>
-                    onChange('echoCancellation', checked)
-                  }
-                />
-              </div>
-            )}
+            <div className="flex items-center justify-between gap-3">
+              <Label className="cursor-default">
+                {isExperimentalMode
+                  ? 'Echo cancellation (AEC)'
+                  : 'Echo cancellation'}
+              </Label>
+              <Switch
+                checked={!!values.echoCancellation}
+                onCheckedChange={(checked) =>
+                  onChange('echoCancellation', checked)
+                }
+              />
+            </div>
 
             <div className="flex items-center justify-between gap-3">
               <Label className="cursor-default">
