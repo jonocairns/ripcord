@@ -227,6 +227,23 @@ const Devices = memo(() => {
             </Select>
           </div>
 
+          <Alert variant="default" className="max-w-2xl">
+            <Info />
+            <AlertDescription>
+              For best microphone results on NVIDIA GPUs, install NVIDIA
+              Broadcast and select its microphone device here.{' '}
+              <a
+                href="https://www.nvidia.com/en-us/geforce/broadcasting/broadcast-app/"
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                Download NVIDIA Broadcast
+              </a>
+              .
+            </AlertDescription>
+          </Alert>
+
           <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
             {!isExperimentalMode && (
               <div className="flex items-center justify-between gap-3">
