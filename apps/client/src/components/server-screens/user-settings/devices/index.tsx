@@ -3,7 +3,7 @@ import {
   formatPushKeybindLabel,
   pushKeybindFromKeyState
 } from '@/components/devices-provider/push-keybind';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -227,20 +227,18 @@ const Devices = memo(() => {
             </Select>
           </div>
 
-          <Alert variant="default" className="max-w-2xl">
+          <Alert
+            variant="info"
+            className="max-w-2xl border-primary/40 bg-primary/10"
+          >
             <Info />
-            <AlertDescription>
-              For best microphone results on NVIDIA GPUs, install NVIDIA
-              Broadcast and select its microphone device here.{' '}
-              <a
-                href="https://www.nvidia.com/en-us/geforce/broadcasting/broadcast-app/"
-                target="_blank"
-                rel="noreferrer"
-                className="underline"
-              >
-                Download NVIDIA Broadcast
-              </a>
-              .
+            <AlertTitle>NVIDIA Broadcast Recommended</AlertTitle>
+            <AlertDescription className="block text-foreground/90">
+              Using an NVIDIA GPU? Install{' '}
+              <strong className="font-semibold text-foreground">
+                NVIDIA Broadcast
+              </strong>{' '}
+              for clearer microphone voice processing.
             </AlertDescription>
           </Alert>
 

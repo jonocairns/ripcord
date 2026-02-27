@@ -83,9 +83,15 @@ export const connect = async () => {
     try {
       await attemptConnect();
     } catch (error) {
+      const trpcErrorCode =
+        error instanceof TRPCClientError ? error.data?.code : undefined;
+
+      // Some auth failures from the WS handshake surface as TRPC "Unknown error"
+      // without a typed error code. In that case, still attempt refresh.
       if (
         error instanceof TRPCClientError &&
-        error.data?.code !== 'UNAUTHORIZED'
+        trpcErrorCode &&
+        trpcErrorCode !== 'UNAUTHORIZED'
       ) {
         throw error;
       }
