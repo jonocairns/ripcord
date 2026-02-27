@@ -3,7 +3,7 @@ import {
   formatPushKeybindLabel,
   pushKeybindFromKeyState
 } from '@/components/devices-provider/push-keybind';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -226,6 +226,21 @@ const Devices = memo(() => {
               </SelectContent>
             </Select>
           </div>
+
+          <Alert
+            variant="info"
+            className="max-w-2xl border-primary/40 bg-primary/10"
+          >
+            <Info />
+            <AlertTitle>NVIDIA Broadcast Recommended</AlertTitle>
+            <AlertDescription className="block text-foreground/90">
+              Using an NVIDIA GPU? Install{' '}
+              <strong className="font-semibold text-foreground">
+                NVIDIA Broadcast
+              </strong>{' '}
+              for clearer microphone voice processing.
+            </AlertDescription>
+          </Alert>
 
           <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
             {!isExperimentalMode && (

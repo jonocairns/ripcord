@@ -9,6 +9,7 @@ import {
   updateDesktopServerUrl
 } from '@/runtime/server-config';
 import { DisconnectCode } from '@sharkord/shared';
+import { TRPCClientError } from '@trpc/client';
 import { AlertCircle, Gavel, RefreshCw, WifiOff } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -18,6 +19,34 @@ type TDisconnectedProps = {
 };
 
 const RECONNECT_POLL_INTERVAL_MS = 5_000;
+const GENERIC_CLIENT_ERROR_CODE = 400;
+
+const isClientErrorDisconnectCode = (code: number) => {
+  return (
+    (code >= 400 && code < 500) ||
+    (code >= DisconnectCode.KICKED && code < 50000)
+  );
+};
+
+const isNonRetriableReconnectError = (error: unknown): boolean => {
+  if (!(error instanceof TRPCClientError)) {
+    return false;
+  }
+
+  const trpcCode = error.data?.code;
+  const httpStatus = error.data?.httpStatus;
+
+  if (typeof httpStatus === 'number' && httpStatus >= 400 && httpStatus < 500) {
+    return true;
+  }
+
+  return (
+    trpcCode === 'BAD_REQUEST' ||
+    trpcCode === 'UNAUTHORIZED' ||
+    trpcCode === 'FORBIDDEN' ||
+    trpcCode === 'NOT_FOUND'
+  );
+};
 
 const Disconnected = memo(({ info }: TDisconnectedProps) => {
   const hasDesktopBridge =
@@ -53,6 +82,16 @@ const Disconnected = memo(({ info }: TDisconnectedProps) => {
       };
     }
 
+    if (isClientErrorDisconnectCode(code)) {
+      return {
+        icon: <AlertCircle className="h-8 w-8 text-yellow-500" />,
+        title: 'Reconnect paused',
+        message: info.reason || 'Server rejected reconnect attempts.',
+        canReconnect: true,
+        autoReconnect: false
+      };
+    }
+
     return {
       icon: <WifiOff className="h-8 w-8 text-gray-500" />,
       title: 'Connection lost',
@@ -82,6 +121,24 @@ const Disconnected = memo(({ info }: TDisconnectedProps) => {
       try {
         await connect();
       } catch (error) {
+        if (isNonRetriableReconnectError(error)) {
+          setDisconnectInfo({
+            code: GENERIC_CLIENT_ERROR_CODE,
+            reason:
+              'Reconnect stopped because the server rejected the request (4xx).',
+            wasClean: false,
+            time: new Date()
+          });
+
+          if (opts.manual) {
+            toast.error(
+              'Reconnect stopped: server rejected the request (4xx).'
+            );
+          }
+
+          return;
+        }
+
         if (opts.manual) {
           const errorMessage =
             error instanceof Error ? error.message : 'Failed to reconnect';

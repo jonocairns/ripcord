@@ -2,61 +2,64 @@ import { describe, expect, it } from 'bun:test';
 import { getVideoBitratePolicy } from '../video-bitrate-policy';
 
 describe('getVideoBitratePolicy', () => {
-  it('scales bitrate upward as resolution and framerate increase', () => {
-    const baseline = getVideoBitratePolicy({
+  it('uses hardcoded start bitrate for common screen combos', () => {
+    const fullHd30 = getVideoBitratePolicy({
       profile: 'screen',
       width: 1920,
       height: 1080,
-      frameRate: 30,
-      codecMimeType: 'video/H264'
+      frameRate: 30
     });
-    const highLoad = getVideoBitratePolicy({
+    const fullHd60 = getVideoBitratePolicy({
       profile: 'screen',
-      width: 3840,
-      height: 2160,
-      frameRate: 120,
-      codecMimeType: 'video/H264'
+      width: 1920,
+      height: 1080,
+      frameRate: 60
     });
-
-    expect(highLoad.minKbps).toBeGreaterThan(baseline.minKbps);
-    expect(highLoad.startKbps).toBeGreaterThan(baseline.startKbps);
-    expect(highLoad.maxKbps).toBeGreaterThan(baseline.maxKbps);
-  });
-
-  it('uses lower bitrate targets for AV1 than VP8 at same profile and size', () => {
-    const vp8 = getVideoBitratePolicy({
+    const qhd30 = getVideoBitratePolicy({
       profile: 'screen',
       width: 2560,
       height: 1440,
-      frameRate: 30,
-      codecMimeType: 'video/VP8'
-    });
-    const av1 = getVideoBitratePolicy({
-      profile: 'screen',
-      width: 2560,
-      height: 1440,
-      frameRate: 30,
-      codecMimeType: 'video/AV1'
+      frameRate: 30
     });
 
-    expect(av1.minKbps).toBeLessThan(vp8.minKbps);
-    expect(av1.startKbps).toBeLessThan(vp8.startKbps);
-    expect(av1.maxKbps).toBeLessThan(vp8.maxKbps);
+    expect(fullHd30.startKbps).toBe(5000);
+    expect(fullHd60.startKbps).toBe(7600);
+    expect(qhd30.startKbps).toBe(7000);
   });
 
-  it('keeps values ordered and capped for extreme requests', () => {
-    const policy = getVideoBitratePolicy({
+  it('uses hardcoded camera buckets by resolution and frame rate', () => {
+    const hd30 = getVideoBitratePolicy({
+      profile: 'camera',
+      width: 1280,
+      height: 720,
+      frameRate: 30
+    });
+    const fullHd60 = getVideoBitratePolicy({
+      profile: 'camera',
+      width: 1920,
+      height: 1080,
+      frameRate: 60
+    });
+
+    expect(hd30.startKbps).toBe(1400);
+    expect(fullHd60.startKbps).toBe(3500);
+  });
+
+  it('caps to highest bucket for extreme requests', () => {
+    const screenExtreme = getVideoBitratePolicy({
       profile: 'screen',
       width: 7680,
       height: 4320,
-      frameRate: 120,
-      codecMimeType: 'video/H264'
+      frameRate: 240
+    });
+    const cameraExtreme = getVideoBitratePolicy({
+      profile: 'camera',
+      width: 9999,
+      height: 9999,
+      frameRate: 240
     });
 
-    expect(policy.minKbps).toBeGreaterThan(0);
-    expect(policy.startKbps).toBeGreaterThan(policy.minKbps);
-    expect(policy.maxKbps).toBeGreaterThan(policy.startKbps);
-    expect(policy.maxKbps).toBeLessThanOrEqual(45_000);
-    expect(policy.maxBitrateBps).toBe(policy.maxKbps * 1000);
+    expect(screenExtreme.startKbps).toBe(30000);
+    expect(cameraExtreme.startKbps).toBe(11000);
   });
 });

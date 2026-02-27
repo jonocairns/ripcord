@@ -9,80 +9,129 @@ type TVideoBitratePolicyInput = {
 };
 
 type TVideoBitratePolicy = {
-  minKbps: number;
   startKbps: number;
-  maxKbps: number;
-  maxBitrateBps: number;
 };
 
-type TPolicyTuning = {
-  baseWidth: number;
-  baseHeight: number;
-  baseFrameRate: number;
-  exponent: number;
-  baseMinKbps: number;
-  baseStartKbps: number;
-  baseMaxKbps: number;
-  minRange: [number, number];
-  startRange: [number, number];
-  maxRange: [number, number];
+type TFpsTier = {
+  maxFrameRate: number;
+  startKbps: number;
 };
 
-const POLICY_TUNING: Record<TVideoBitrateProfile, TPolicyTuning> = {
-  camera: {
-    baseWidth: 1280,
-    baseHeight: 720,
-    baseFrameRate: 30,
-    exponent: 0.65,
-    baseMinKbps: 700,
-    baseStartKbps: 1400,
-    baseMaxKbps: 2800,
-    minRange: [250, 6000],
-    startRange: [500, 12000],
-    maxRange: [1000, 18000]
-  },
-  screen: {
-    baseWidth: 1920,
-    baseHeight: 1080,
-    baseFrameRate: 30,
-    exponent: 0.75,
-    baseMinKbps: 3000,
-    baseStartKbps: 5000,
-    baseMaxKbps: 9000,
-    minRange: [600, 18000],
-    startRange: [1200, 30000],
-    maxRange: [2500, 45000]
-  }
+type TResolutionTier = {
+  maxPixels: number;
+  fpsTiers: TFpsTier[];
+};
+
+const START_BITRATE_TABLE: Record<TVideoBitrateProfile, TResolutionTier[]> = {
+  camera: [
+    {
+      maxPixels: 640 * 360,
+      fpsTiers: [
+        { maxFrameRate: 15, startKbps: 600 },
+        { maxFrameRate: 30, startKbps: 900 },
+        { maxFrameRate: 60, startKbps: 1400 },
+        { maxFrameRate: 120, startKbps: 2200 }
+      ]
+    },
+    {
+      maxPixels: 1280 * 720,
+      fpsTiers: [
+        { maxFrameRate: 15, startKbps: 900 },
+        { maxFrameRate: 30, startKbps: 1400 },
+        { maxFrameRate: 60, startKbps: 2200 },
+        { maxFrameRate: 120, startKbps: 3500 }
+      ]
+    },
+    {
+      maxPixels: 1920 * 1080,
+      fpsTiers: [
+        { maxFrameRate: 15, startKbps: 1400 },
+        { maxFrameRate: 30, startKbps: 2200 },
+        { maxFrameRate: 60, startKbps: 3500 },
+        { maxFrameRate: 120, startKbps: 5200 }
+      ]
+    },
+    {
+      maxPixels: 2560 * 1440,
+      fpsTiers: [
+        { maxFrameRate: 15, startKbps: 2200 },
+        { maxFrameRate: 30, startKbps: 3200 },
+        { maxFrameRate: 60, startKbps: 5000 },
+        { maxFrameRate: 120, startKbps: 7500 }
+      ]
+    },
+    {
+      maxPixels: 7680 * 4320,
+      fpsTiers: [
+        { maxFrameRate: 15, startKbps: 3200 },
+        { maxFrameRate: 30, startKbps: 4500 },
+        { maxFrameRate: 60, startKbps: 7000 },
+        { maxFrameRate: 120, startKbps: 11000 }
+      ]
+    }
+  ],
+  screen: [
+    {
+      maxPixels: 1280 * 720,
+      fpsTiers: [
+        { maxFrameRate: 15, startKbps: 1800 },
+        { maxFrameRate: 30, startKbps: 2800 },
+        { maxFrameRate: 60, startKbps: 4200 },
+        { maxFrameRate: 120, startKbps: 6500 }
+      ]
+    },
+    {
+      maxPixels: 1920 * 1080,
+      fpsTiers: [
+        { maxFrameRate: 15, startKbps: 3200 },
+        { maxFrameRate: 30, startKbps: 5000 },
+        { maxFrameRate: 60, startKbps: 7600 },
+        { maxFrameRate: 120, startKbps: 11000 }
+      ]
+    },
+    {
+      maxPixels: 2560 * 1440,
+      fpsTiers: [
+        { maxFrameRate: 15, startKbps: 4600 },
+        { maxFrameRate: 30, startKbps: 7000 },
+        { maxFrameRate: 60, startKbps: 10500 },
+        { maxFrameRate: 120, startKbps: 15000 }
+      ]
+    },
+    {
+      maxPixels: 3840 * 2160,
+      fpsTiers: [
+        { maxFrameRate: 15, startKbps: 7000 },
+        { maxFrameRate: 30, startKbps: 10500 },
+        { maxFrameRate: 60, startKbps: 15000 },
+        { maxFrameRate: 120, startKbps: 22000 }
+      ]
+    },
+    {
+      maxPixels: 7680 * 4320,
+      fpsTiers: [
+        { maxFrameRate: 15, startKbps: 9000 },
+        { maxFrameRate: 30, startKbps: 14000 },
+        { maxFrameRate: 60, startKbps: 22000 },
+        { maxFrameRate: 120, startKbps: 30000 }
+      ]
+    }
+  ]
 };
 
 const clamp = (value: number, min: number, max: number) => {
   return Math.max(min, Math.min(max, value));
 };
 
-const roundKbps = (value: number) => {
-  return Math.max(1, Math.round(value / 50) * 50);
+const resolveResolutionTier = (
+  tiers: TResolutionTier[],
+  pixelCount: number
+): TResolutionTier => {
+  return tiers.find((tier) => pixelCount <= tier.maxPixels) ?? tiers[tiers.length - 1]!;
 };
 
-const getCodecBitrateMultiplier = (codecMimeType?: string) => {
-  const normalized = codecMimeType?.toLowerCase();
-
-  if (!normalized) {
-    return 1;
-  }
-
-  if (normalized === 'video/av1') {
-    return 0.75;
-  }
-
-  if (normalized === 'video/h265' || normalized === 'video/hevc') {
-    return 0.85;
-  }
-
-  if (normalized === 'video/vp8') {
-    return 1.15;
-  }
-
-  return 1;
+const resolveFpsTier = (tiers: TFpsTier[], frameRate: number): TFpsTier => {
+  return tiers.find((tier) => frameRate <= tier.maxFrameRate) ?? tiers[tiers.length - 1]!;
 };
 
 const getVideoBitratePolicy = ({
@@ -92,71 +141,22 @@ const getVideoBitratePolicy = ({
   frameRate,
   codecMimeType
 }: TVideoBitratePolicyInput): TVideoBitratePolicy => {
-  const tuning = POLICY_TUNING[profile];
-  const safeWidth = clamp(width ?? tuning.baseWidth, 160, 7680);
-  const safeHeight = clamp(height ?? tuning.baseHeight, 120, 4320);
-  const safeFrameRate = clamp(frameRate ?? tuning.baseFrameRate, 5, 120);
+  // Start bitrate now follows explicit resolution/fps buckets.
+  void codecMimeType;
 
-  const pixelRate = safeWidth * safeHeight * safeFrameRate;
-  const basePixelRate =
-    tuning.baseWidth * tuning.baseHeight * tuning.baseFrameRate;
-  const relativePixelRate = clamp(pixelRate / basePixelRate, 0.1, 20);
-  const scaledRate = Math.pow(relativePixelRate, tuning.exponent);
-  const codecMultiplier = getCodecBitrateMultiplier(codecMimeType);
+  const safeWidth = clamp(width ?? 1280, 160, 7680);
+  const safeHeight = clamp(height ?? 720, 120, 4320);
+  const safeFrameRate = clamp(frameRate ?? 30, 5, 120);
+  const pixelCount = safeWidth * safeHeight;
 
-  let minKbps = clamp(
-    tuning.baseMinKbps * scaledRate * codecMultiplier,
-    tuning.minRange[0],
-    tuning.minRange[1]
+  const resolutionTier = resolveResolutionTier(
+    START_BITRATE_TABLE[profile],
+    pixelCount
   );
-  let startKbps = clamp(
-    tuning.baseStartKbps * scaledRate * codecMultiplier,
-    tuning.startRange[0],
-    tuning.startRange[1]
-  );
-  let maxKbps = clamp(
-    tuning.baseMaxKbps * scaledRate * codecMultiplier,
-    tuning.maxRange[0],
-    tuning.maxRange[1]
-  );
-
-  startKbps = Math.max(startKbps, minKbps * 1.25);
-  maxKbps = Math.max(maxKbps, startKbps * 1.25);
-
-  if (startKbps > tuning.startRange[1]) {
-    startKbps = tuning.startRange[1];
-  }
-  if (maxKbps > tuning.maxRange[1]) {
-    maxKbps = tuning.maxRange[1];
-  }
-
-  if (startKbps >= maxKbps) {
-    startKbps = maxKbps * 0.8;
-  }
-
-  if (minKbps >= startKbps) {
-    minKbps = startKbps * 0.7;
-  }
-
-  minKbps = roundKbps(
-    clamp(minKbps, tuning.minRange[0], Math.max(tuning.minRange[0], startKbps))
-  );
-  startKbps = roundKbps(
-    clamp(
-      startKbps,
-      Math.max(tuning.startRange[0], minKbps),
-      Math.max(tuning.startRange[0], maxKbps)
-    )
-  );
-  maxKbps = roundKbps(
-    clamp(maxKbps, Math.max(tuning.maxRange[0], startKbps), tuning.maxRange[1])
-  );
+  const fpsTier = resolveFpsTier(resolutionTier.fpsTiers, safeFrameRate);
 
   return {
-    minKbps,
-    startKbps,
-    maxKbps,
-    maxBitrateBps: maxKbps * 1000
+    startKbps: fpsTier.startKbps
   };
 };
 
