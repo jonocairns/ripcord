@@ -72,3 +72,6 @@ You can also run the assertion step directly:
 ```
 ./audio-tests/analyze.py --assert-baseline
 ```
+
+Experiment notes for accepted and rejected audio-tuning changes live in
+`audio-tests/README.md`.
