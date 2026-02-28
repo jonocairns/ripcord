@@ -30,3 +30,48 @@ Built with amazing open-source technologies:
 - [Radix UI](https://www.radix-ui.com)
 - [ShadCN UI](https://ui.shadcn.com/)
 - [Tailwind CSS](https://tailwindcss.com)
+
+
+Added a parallel test runner at run-all.sh and gitignored its output folder in .gitignore.
+
+The script builds voice-filter-file-test once, finds every .wav under audio-tests, runs them concurrently, and writes:
+
+filtered audio to *.filtered.wav
+per-file logs to *.log
+By default it uses:
+
+--noise-suppression
+--suppression-level high
+--experimental-aggressive-mode
+--dereverb-mode off
+--debug-diag
+Use it like this:
+
+```
+./audio-tests/run-all.sh
+```
+
+Useful variants:
+
+```
+./audio-tests/run-all.sh --jobs 4
+./audio-tests/run-all.sh --out-dir audio-tests/.outputs-alt
+./audio-tests/run-all.sh -- --mix 1.0 --attenuation-limit-db 60
+```
+
+To turn the current metrics into a repeatable regression check, the repo now includes
+`audio-tests/baseline.json` and a wrapper that asserts the analyzed values stay within
+configured min/max thresholds:
+
+```
+./audio-tests/test.sh
+```
+
+You can also run the assertion step directly:
+
+```
+./audio-tests/analyze.py --assert-baseline
+```
+
+Experiment notes for accepted and rejected audio-tuning changes live in
+`audio-tests/README.md`.

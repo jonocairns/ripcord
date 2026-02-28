@@ -1,4 +1,5 @@
 /node_modules
+/.bun-cache/
 /TMPDIR:-/
 /.github/copilot-instructions.md
 /cenas.txt
@@ -15,4 +16,6 @@ apps/desktop/.DS_Store
 apps/desktop/*.tsbuildinfo
 apps/desktop/sidecar/target/
 apps/desktop/sidecar/bin/
+audio-tests/.outputs/
+__pycache__/
 .env

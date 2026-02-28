@@ -67,6 +67,7 @@ import { useVoiceEvents } from './hooks/use-voice-events';
 import {
   createMicAudioProcessingPipeline,
   createNativeSidecarMicCapturePipeline,
+  nowSteadyEpochMs,
   resolveSidecarDeviceId,
   type TMicAudioProcessingPipeline
 } from './mic-audio-processing';
@@ -118,6 +119,10 @@ type ResolvedMicProcessingConfig = {
   sidecarAutoGainControl: boolean;
   sidecarEchoCancellation: boolean;
   sidecarSuppressionLevel: VoiceFilterStrength;
+  sidecarDfnMix: number;
+  sidecarDfnAttenuationLimitDb?: number;
+  sidecarExperimentalAggressiveMode: boolean;
+  sidecarNoiseGateFloorDbfs?: number;
 };
 
 const resolvePreferredVideoCodec = (
@@ -153,7 +158,12 @@ const resolveMicProcessingConfig = (
       sidecarNoiseSuppression: devices.noiseSuppression,
       sidecarAutoGainControl: devices.autoGainControl,
       sidecarEchoCancellation: devices.echoCancellation,
-      sidecarSuppressionLevel: devices.voiceFilterStrength
+      sidecarSuppressionLevel: devices.voiceFilterStrength,
+      sidecarDfnMix: devices.sidecarDfnMix,
+      sidecarDfnAttenuationLimitDb: devices.sidecarDfnAttenuationLimitDb,
+      sidecarExperimentalAggressiveMode:
+        devices.sidecarExperimentalAggressiveMode,
+      sidecarNoiseGateFloorDbfs: devices.sidecarNoiseGateFloorDbfs
     };
   }
 
@@ -166,13 +176,52 @@ const resolveMicProcessingConfig = (
     sidecarNoiseSuppression: devices.noiseSuppression,
     sidecarAutoGainControl: devices.autoGainControl,
     sidecarEchoCancellation: devices.echoCancellation,
-    sidecarSuppressionLevel: devices.voiceFilterStrength
+    sidecarSuppressionLevel: devices.voiceFilterStrength,
+    sidecarDfnMix: devices.sidecarDfnMix,
+    sidecarDfnAttenuationLimitDb: devices.sidecarDfnAttenuationLimitDb,
+    sidecarExperimentalAggressiveMode: devices.sidecarExperimentalAggressiveMode,
+    sidecarNoiseGateFloorDbfs: devices.sidecarNoiseGateFloorDbfs
   };
+};
+
+const playbackCaptureStreamCache = new WeakMap<HTMLMediaElement, MediaStream>();
+
+const getPlaybackCaptureStream = (
+  element: HTMLMediaElement | null | undefined
+): MediaStream | undefined => {
+  if (!element) {
+    return undefined;
+  }
+
+  const cachedStream = playbackCaptureStreamCache.get(element);
+  if (cachedStream) {
+    return cachedStream;
+  }
+
+  const mediaElement = element as HTMLMediaElement & {
+    captureStream?: () => MediaStream;
+    mozCaptureStream?: () => MediaStream;
+  };
+  const captureStream =
+    mediaElement.captureStream ?? mediaElement.mozCaptureStream;
+
+  if (!captureStream) {
+    return undefined;
+  }
+
+  try {
+    const stream = captureStream.call(mediaElement);
+    playbackCaptureStreamCache.set(element, stream);
+    return stream;
+  } catch {
+    return undefined;
+  }
 };
 
 const collectPlaybackReferenceStreams = (
   remoteUserStreams: TRemoteStreams,
   externalStreams: TExternalStreamsMap,
+  audioVideoRefs: Map<number, AudioVideoRefs>,
   playbackEnabled: boolean
 ): MediaStream[] => {
   if (!playbackEnabled) {
@@ -194,23 +243,43 @@ const collectPlaybackReferenceStreams = (
     streams.push(new MediaStream([track]));
   };
 
-  Object.values(remoteUserStreams).forEach((userStreams) => {
+  const addStream = (stream: MediaStream | undefined) => {
+    stream?.getAudioTracks().forEach((track) => {
+      addTrack(track);
+    });
+  };
+
+  const addCapturedAudio = (
+    element: HTMLMediaElement | null | undefined
+  ): boolean => {
+    const trackCountBefore = seenTrackIds.size;
+    addStream(getPlaybackCaptureStream(element));
+    return seenTrackIds.size > trackCountBefore;
+  };
+
+  Object.entries(remoteUserStreams).forEach(([remoteIdKey, userStreams]) => {
     if (!userStreams) {
       return;
     }
 
-    userStreams[StreamKind.AUDIO]?.getAudioTracks().forEach((track) => {
-      addTrack(track);
-    });
-    userStreams[StreamKind.SCREEN_AUDIO]?.getAudioTracks().forEach((track) => {
-      addTrack(track);
-    });
+    const refs = audioVideoRefs.get(Number(remoteIdKey));
+    if (!addCapturedAudio(refs?.audioRef.current)) {
+      addStream(userStreams[StreamKind.AUDIO]);
+    }
+
+    if (
+      !addCapturedAudio(refs?.screenShareRef.current) &&
+      !addCapturedAudio(refs?.screenShareAudioRef.current)
+    ) {
+      addStream(userStreams[StreamKind.SCREEN_AUDIO]);
+    }
   });
 
-  Object.values(externalStreams).forEach((streamState) => {
-    streamState.audioStream?.getAudioTracks().forEach((track) => {
-      addTrack(track);
-    });
+  Object.entries(externalStreams).forEach(([remoteIdKey, streamState]) => {
+    const refs = audioVideoRefs.get(Number(remoteIdKey));
+    if (!addCapturedAudio(refs?.externalAudioRef.current)) {
+      addStream(streamState.audioStream);
+    }
   });
 
   return streams;
@@ -413,6 +482,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       collectPlaybackReferenceStreams(
         remoteUserStreams,
         externalStreams,
+        audioVideoRefsMap.current,
         !ownVoiceState.soundMuted
       )
     );
@@ -489,6 +559,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
             noiseSuppression: micProcessingConfig.sidecarNoiseSuppression,
             autoGainControl: micProcessingConfig.sidecarAutoGainControl,
             echoCancellation: micProcessingConfig.sidecarEchoCancellation,
+            dfnMix: micProcessingConfig.sidecarDfnMix,
+            dfnAttenuationLimitDb:
+              micProcessingConfig.sidecarDfnAttenuationLimitDb,
+            dfnExperimentalAggressiveMode:
+              micProcessingConfig.sidecarExperimentalAggressiveMode,
+            dfnNoiseGateFloorDbfs:
+              micProcessingConfig.sidecarNoiseGateFloorDbfs,
             sidecarDeviceId,
             desktopBridge
           });
@@ -519,6 +596,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                     sampleRate: nativePipeline.sampleRate,
                     channels: nativePipeline.channels,
                     frameCount,
+                    timestampMs: nowSteadyEpochMs(),
                     pcm: samples,
                     protocolVersion: 1
                   });
@@ -532,6 +610,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                   collectPlaybackReferenceStreams(
                     remoteUserStreamsRef.current,
                     externalStreamsRef.current,
+                    audioVideoRefsMap.current,
                     !ownVoiceState.soundMuted
                   )
                 );
@@ -618,7 +697,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
             suppressionLevel: micProcessingConfig.sidecarSuppressionLevel,
             noiseSuppression: micProcessingConfig.sidecarNoiseSuppression,
             autoGainControl: micProcessingConfig.sidecarAutoGainControl,
-            echoCancellation: micProcessingConfig.sidecarEchoCancellation
+            echoCancellation: micProcessingConfig.sidecarEchoCancellation,
+            dfnMix: micProcessingConfig.sidecarDfnMix,
+            dfnAttenuationLimitDb:
+              micProcessingConfig.sidecarDfnAttenuationLimitDb,
+            dfnExperimentalAggressiveMode:
+              micProcessingConfig.sidecarExperimentalAggressiveMode,
+            dfnNoiseGateFloorDbfs:
+              micProcessingConfig.sidecarNoiseGateFloorDbfs
           });
 
           if (micAudioPipeline) {
@@ -647,6 +733,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                     sampleRate: micAudioPipeline.sampleRate,
                     channels: micAudioPipeline.channels,
                     frameCount,
+                    timestampMs: nowSteadyEpochMs(),
                     pcm: samples,
                     protocolVersion: 1
                   });
@@ -660,6 +747,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                   collectPlaybackReferenceStreams(
                     remoteUserStreamsRef.current,
                     externalStreamsRef.current,
+                    audioVideoRefsMap.current,
                     !ownVoiceState.soundMuted
                   )
                 );

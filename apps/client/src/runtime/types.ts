@@ -107,6 +107,7 @@ export type TAppAudioStatusEvent = {
 };
 
 export type TVoiceFilterStrength = 'low' | 'balanced' | 'high' | 'aggressive';
+export type TVoiceDereverbMode = 'off' | 'tail';
 
 export type TVoiceFilterSession = {
   sessionId: string;
@@ -115,6 +116,8 @@ export type TVoiceFilterSession = {
   framesPerBuffer: number;
   protocolVersion?: number;
   encoding?: 'f32le_base64';
+  echoCancellationBackend?: 'adaptive_nlms' | 'webrtc_aec3';
+  dereverbMode?: TVoiceDereverbMode;
 };
 
 export type TVoiceFilterFrameDiag = {
@@ -124,6 +127,12 @@ export type TVoiceFilterFrameDiag = {
   lsnrMean?: number;
   lsnrMin?: number;
   lsnrMax?: number;
+  /** Estimated echo return loss enhancement from the sidecar AEC. Higher is better. */
+  aecErleDb?: number;
+  /** Current render-to-capture delay estimate in milliseconds. */
+  aecDelayMs?: number;
+  /** 0..1 confidence that the current frame contains double-talk. */
+  aecDoubleTalkConfidence?: number;
   /** AGC gain applied. undefined when AGC is disabled. High values (> 3×) indicate
    *  the mic is very quiet — common with far-field setups. */
   agcGain?: number;
@@ -138,6 +147,7 @@ export type TVoiceFilterPcmFrame = {
   sampleRate: number;
   channels: number;
   frameCount: number;
+  timestampMs?: number;
   pcm: Float32Array;
   protocolVersion: number;
   droppedFrameCount?: number;
@@ -174,6 +184,13 @@ export type TDesktopUpdateStatus = {
   message?: string;
 };
 
+export type TVoiceFilterDfnTuningInput = {
+  attenuationLimitDb?: number;
+  mix?: number;
+  experimentalAggressiveMode?: boolean;
+  noiseGateFloorDbfs?: number;
+};
+
 export type TStartVoiceFilterInput = {
   sampleRate: number;
   channels: number;
@@ -181,7 +198,8 @@ export type TStartVoiceFilterInput = {
   noiseSuppression: boolean;
   autoGainControl: boolean;
   echoCancellation: boolean;
-};
+  dereverbMode?: TVoiceDereverbMode;
+} & TVoiceFilterDfnTuningInput;
 
 export type TMicDevice = { id: string; label: string };
 export type TMicDevicesResult = { devices: TMicDevice[] };

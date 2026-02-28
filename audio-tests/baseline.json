@@ -1,0 +1,143 @@
+{
+  "files": {
+    "desk-taps.wav": {
+      "out_db": {
+        "max": -30.0
+      },
+      "onset_ratio_count": {
+        "min": 4
+      },
+      "onset_ratio_min": {
+        "min": 0.1
+      },
+      "onset_ratio_avg": {
+        "min": 0.2
+      }
+    },
+    "loud-reaction.wav": {
+      "out_db": {
+        "min": -26.0,
+        "max": -23.0
+      },
+      "silence_pct": {
+        "max": 5.0
+      },
+      "onset_ratio_count": {
+        "min": 2
+      },
+      "onset_ratio_min": {
+        "min": 0.015
+      },
+      "onset_ratio_avg": {
+        "min": 0.15
+      }
+    },
+    "mouse-clicks.wav": {
+      "out_db": {
+        "max": -58.0
+      },
+      "silence_pct": {
+        "min": 50.0
+      },
+      "onset_ratio_max": {
+        "max": 0.03
+      }
+    },
+    "nvidia/sample-naked.wav": {
+      "out_db": {
+        "max": -32.0
+      },
+      "silence_pct": {
+        "min": 15.0
+      },
+      "onset_ratio_avg": {
+        "max": 0.02
+      }
+    },
+    "nvidia/sample-nvidia-broadcast.wav": {
+      "out_db": {
+        "min": -38.0,
+        "max": -34.0
+      },
+      "silence_pct": {
+        "min": 25.0,
+        "max": 45.0
+      },
+      "onset_ratio_max": {
+        "min": 0.8
+      },
+      "onset_ratio_avg": {
+        "min": 0.45
+      }
+    },
+    "room-tone.wav": {
+      "out_db": {
+        "max": -65.0
+      },
+      "silence_pct": {
+        "min": 55.0
+      },
+      "onset_ratio_count": {
+        "max": 0
+      }
+    },
+    "single-key-taps.wav": {
+      "out_db": {
+        "max": -70.0
+      },
+      "silence_pct": {
+        "min": 75.0
+      },
+      "onset_ratio_max": {
+        "max": 0.005
+      }
+    },
+    "speech-only.wav": {
+      "out_db": {
+        "min": -36.5,
+        "max": -33.0
+      },
+      "silence_pct": {
+        "max": 20.0
+      },
+      "onset_ratio_count": {
+        "min": 2
+      },
+      "onset_ratio_min": {
+        "min": 0.004
+      },
+      "onset_ratio_avg": {
+        "min": 0.045
+      }
+    },
+    "speech-while-typing.wav": {
+      "out_db": {
+        "min": -36.5,
+        "max": -34.0
+      },
+      "silence_pct": {
+        "max": 20.0
+      }
+    },
+    "speed-plus-fan.wav": {
+      "out_db": {
+        "min": -34.5,
+        "max": -32.0
+      },
+      "silence_pct": {
+        "max": 18.0
+      }
+    },
+    "typing-only.wav": {
+      "out_db": {
+        "max": -85.0
+      },
+      "silence_pct": {
+        "min": 90.0
+      },
+      "onset_ratio_max": {
+        "max": 0.02
+      }
+    }
+  }
+}
