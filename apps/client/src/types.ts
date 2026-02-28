@@ -67,6 +67,10 @@ export type TDeviceSettings = {
   autoGainControl: boolean;
   experimentalVoiceFilter: boolean;
   voiceFilterStrength: VoiceFilterStrength;
+  sidecarDfnMix: number;
+  sidecarDfnAttenuationLimitDb?: number;
+  sidecarExperimentalAggressiveMode: boolean;
+  sidecarNoiseGateFloorDbfs?: number;
   screenAudioMode: ScreenAudioMode;
   mirrorOwnVideo: boolean;
   screenResolution: Resolution;

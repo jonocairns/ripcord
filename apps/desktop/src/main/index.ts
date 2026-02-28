@@ -422,6 +422,7 @@ const registerIpcHandlers = () => {
               sampleRate?: unknown;
               channels?: unknown;
               frameCount?: unknown;
+              timestampMs?: unknown;
               protocolVersion?: unknown;
               pcmSamples?: unknown;
               pcmBuffer?: unknown;
@@ -441,6 +442,7 @@ const registerIpcHandlers = () => {
           sampleRate,
           channels,
           frameCount,
+          timestampMs,
           protocolVersion,
           pcmSamples,
           pcmBuffer,
@@ -609,6 +611,10 @@ const registerIpcHandlers = () => {
           sampleRate,
           channels,
           frameCount,
+          timestampMs:
+            typeof timestampMs === "number" && Number.isFinite(timestampMs)
+              ? timestampMs
+              : undefined,
           protocolVersion:
             typeof protocolVersion === "number" ? protocolVersion : 1,
           pcm,
@@ -756,6 +762,9 @@ void app
             lsnrMean: diag.lsnrMean,
             lsnrMin: diag.lsnrMin,
             lsnrMax: diag.lsnrMax,
+            aecErleDb: diag.aecErleDb,
+            aecDelayMs: diag.aecDelayMs,
+            aecDoubleTalkConfidence: diag.aecDoubleTalkConfidence,
             agcGain: diag.agcGain,
             pcmBuffer: pcm.buffer,
             pcmByteOffset: pcm.byteOffset,

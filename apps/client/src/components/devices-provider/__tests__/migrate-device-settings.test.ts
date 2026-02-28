@@ -20,16 +20,16 @@ describe('migrateDeviceSettings', () => {
     expect(DEFAULT_DEVICE_SETTINGS.echoCancellation).toBe(true);
     expect(DEFAULT_DEVICE_SETTINGS.noiseSuppression).toBe(true);
     expect(DEFAULT_DEVICE_SETTINGS.voiceFilterStrength).toBe(
-      VoiceFilterStrength.BALANCED
+      VoiceFilterStrength.HIGH
     );
   });
 
-  it('defaults legacy settings to manual mic quality mode', () => {
+  it('defaults legacy settings to auto mic quality mode', () => {
     const migrated = migrateDeviceSettings({
       microphoneId: 'legacy-device'
     });
 
-    expect(migrated.micQualityMode).toBe(MicQualityMode.MANUAL);
+    expect(migrated.micQualityMode).toBe(MicQualityMode.AUTO);
   });
 
   it('preserves explicit mic quality mode values', () => {
@@ -81,12 +81,26 @@ describe('migrateDeviceSettings', () => {
     expect(migrated.voiceFilterStrength).toBe(VoiceFilterStrength.AGGRESSIVE);
   });
 
-  it('falls back to balanced for invalid voiceFilterStrength values', () => {
+  it('coerces legacy low and balanced voiceFilterStrength values to high', () => {
+    expect(
+      migrateDeviceSettings({
+        voiceFilterStrength: VoiceFilterStrength.LOW
+      }).voiceFilterStrength
+    ).toBe(VoiceFilterStrength.HIGH);
+
+    expect(
+      migrateDeviceSettings({
+        voiceFilterStrength: VoiceFilterStrength.BALANCED
+      }).voiceFilterStrength
+    ).toBe(VoiceFilterStrength.HIGH);
+  });
+
+  it('falls back to high for invalid voiceFilterStrength values', () => {
     const migrated = migrateDeviceSettings({
       voiceFilterStrength: 'invalid' as VoiceFilterStrength
     });
 
-    expect(migrated.voiceFilterStrength).toBe(VoiceFilterStrength.BALANCED);
+    expect(migrated.voiceFilterStrength).toBe(VoiceFilterStrength.HIGH);
   });
 
   it('defaults video codec to auto for legacy settings', () => {

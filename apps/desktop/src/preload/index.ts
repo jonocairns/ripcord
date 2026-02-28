@@ -488,6 +488,9 @@ const ensureVoiceFilterEgressFrameChannel = (): Promise<boolean> => {
               lsnrMean?: unknown;
               lsnrMin?: unknown;
               lsnrMax?: unknown;
+              aecErleDb?: unknown;
+              aecDelayMs?: unknown;
+              aecDoubleTalkConfidence?: unknown;
               agcGain?: unknown;
               pcmBuffer?: unknown;
               pcmByteOffset?: unknown;
@@ -511,6 +514,9 @@ const ensureVoiceFilterEgressFrameChannel = (): Promise<boolean> => {
           lsnrMean,
           lsnrMin,
           lsnrMax,
+          aecErleDb,
+          aecDelayMs,
+          aecDoubleTalkConfidence,
           agcGain,
           pcmBuffer,
           pcmByteOffset,
@@ -570,6 +576,14 @@ const ensureVoiceFilterEgressFrameChannel = (): Promise<boolean> => {
                   lsnrMean: typeof lsnrMean === "number" ? lsnrMean : undefined,
                   lsnrMin: typeof lsnrMin === "number" ? lsnrMin : undefined,
                   lsnrMax: typeof lsnrMax === "number" ? lsnrMax : undefined,
+                  aecErleDb:
+                    typeof aecErleDb === "number" ? aecErleDb : undefined,
+                  aecDelayMs:
+                    typeof aecDelayMs === "number" ? aecDelayMs : undefined,
+                  aecDoubleTalkConfidence:
+                    typeof aecDoubleTalkConfidence === "number"
+                      ? aecDoubleTalkConfidence
+                      : undefined,
                   agcGain: typeof agcGain === "number" ? agcGain : undefined,
                 }
               : undefined,
@@ -589,7 +603,7 @@ const ensureVoiceFilterEgressFrameChannel = (): Promise<boolean> => {
         // ignore
       }
 
-      console.warn(
+      console.log(
         `${VOICE_FILTER_DEBUG_LOG_PREFIX} Voice-filter egress MessagePort ready`,
       );
 
@@ -699,6 +713,7 @@ const desktopBridge = {
         sampleRate: frame.sampleRate,
         channels: frame.channels,
         frameCount: frame.frameCount,
+        timestampMs: frame.timestampMs,
         protocolVersion: frame.protocolVersion,
         pcmSamples: pcmCopy,
       });
@@ -728,6 +743,7 @@ const desktopBridge = {
         sampleRate: frame.sampleRate,
         channels: frame.channels,
         frameCount: frame.frameCount,
+        timestampMs: frame.timestampMs,
         protocolVersion: frame.protocolVersion,
         pcmSamples: pcmCopy,
       });

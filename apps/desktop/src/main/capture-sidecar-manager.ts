@@ -429,6 +429,7 @@ class CaptureSidecarManager {
       channels: session.channels,
       framesPerBuffer: session.framesPerBuffer,
       protocolVersion: session.protocolVersion,
+      echoCancellationBackend: session.echoCancellationBackend,
     });
     void this.ensureVoiceFilterBinaryIngress().catch((error) => {
       console.warn(
@@ -1119,6 +1120,22 @@ class CaptureSidecarManager {
       if (agcGain === undefined) return;
     }
 
+    let aecErleDb: number | undefined;
+    let aecDelayMs: number | undefined;
+    let aecDoubleTalkConfidence: number | undefined;
+    if (diagFlags & 0x04) {
+      aecErleDb = readF32();
+      aecDelayMs = readF32();
+      aecDoubleTalkConfidence = readF32();
+      if (
+        aecErleDb === undefined ||
+        aecDelayMs === undefined ||
+        aecDoubleTalkConfidence === undefined
+      ) {
+        return;
+      }
+    }
+
     const pcmByteLen = readU32();
     if (pcmByteLen === undefined || offset + pcmByteLen > payload.length)
       return;
@@ -1140,6 +1157,11 @@ class CaptureSidecarManager {
     }
     if (agcGain !== undefined) {
       diag.agcGain = agcGain;
+    }
+    if (aecErleDb !== undefined) {
+      diag.aecErleDb = aecErleDb;
+      diag.aecDelayMs = aecDelayMs;
+      diag.aecDoubleTalkConfidence = aecDoubleTalkConfidence;
     }
 
     const droppedFrameCount =
@@ -1572,6 +1594,10 @@ class CaptureSidecarManager {
       sampleRate: frame.sampleRate,
       channels: frame.channels,
       frameCount: frame.frameCount,
+      timestampMs:
+        typeof frame.timestampMs === "number" && Number.isFinite(frame.timestampMs)
+          ? frame.timestampMs
+          : undefined,
       pcmBase64: pcmBytes.toString("base64"),
       protocolVersion: frame.protocolVersion,
       encoding: "f32le_base64",
@@ -1878,6 +1904,7 @@ class CaptureSidecarManager {
       4 + // sample rate
       2 + // channels
       4 + // frame count
+      8 + // timestamp ms (f64, NaN when unavailable)
       4 + // protocol version
       4 + // pcm bytes length
       pcmBytes.length;
@@ -1920,6 +1947,12 @@ class CaptureSidecarManager {
     ) {
       return { accepted: false, reason: "invalid_protocol_version" };
     }
+    if (
+      frame.timestampMs !== undefined &&
+      (typeof frame.timestampMs !== "number" || !Number.isFinite(frame.timestampMs))
+    ) {
+      return { accepted: false, reason: "invalid_timestamp_ms" };
+    }
 
     const packet = Buffer.allocUnsafe(4 + payloadLength);
     let offset = 0;
@@ -1941,6 +1974,8 @@ class CaptureSidecarManager {
     offset += 2;
     packet.writeUInt32LE(frame.frameCount, offset);
     offset += 4;
+    packet.writeDoubleLE(frame.timestampMs ?? Number.NaN, offset);
+    offset += 8;
     packet.writeUInt32LE(frame.protocolVersion, offset);
     offset += 4;
     packet.writeUInt32LE(pcmBytes.length, offset);

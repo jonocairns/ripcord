@@ -109,6 +109,7 @@ export type TAppAudioStatusEvent = {
 };
 
 export type TVoiceFilterStrength = "low" | "balanced" | "high" | "aggressive";
+export type TVoiceDereverbMode = "off" | "tail";
 
 export type TVoiceFilterSession = {
   sessionId: string;
@@ -117,12 +118,17 @@ export type TVoiceFilterSession = {
   framesPerBuffer: number;
   protocolVersion?: number;
   encoding?: "f32le_base64";
+  echoCancellationBackend?: "adaptive_nlms" | "webrtc_aec3";
+  dereverbMode?: TVoiceDereverbMode;
 };
 
 export type TVoiceFilterFrameDiag = {
   lsnrMean?: number;
   lsnrMin?: number;
   lsnrMax?: number;
+  aecErleDb?: number;
+  aecDelayMs?: number;
+  aecDoubleTalkConfidence?: number;
   agcGain?: number;
   rampWetMix: number;
 };
@@ -133,6 +139,7 @@ export type TVoiceFilterFrame = {
   sampleRate: number;
   channels: number;
   frameCount: number;
+  timestampMs?: number;
   pcmBase64: string;
   protocolVersion: number;
   encoding: "f32le_base64";
@@ -146,6 +153,7 @@ export type TVoiceFilterPcmFrame = {
   sampleRate: number;
   channels: number;
   frameCount: number;
+  timestampMs?: number;
   pcm: Float32Array;
   protocolVersion: number;
   droppedFrameCount?: number;
@@ -182,6 +190,13 @@ export type TDesktopUpdateStatus = {
   message?: string;
 };
 
+export type TVoiceFilterDfnTuningInput = {
+  attenuationLimitDb?: number;
+  mix?: number;
+  experimentalAggressiveMode?: boolean;
+  noiseGateFloorDbfs?: number;
+};
+
 export type TStartVoiceFilterInput = {
   sampleRate: number;
   channels: number;
@@ -189,7 +204,8 @@ export type TStartVoiceFilterInput = {
   noiseSuppression: boolean;
   autoGainControl: boolean;
   echoCancellation: boolean;
-};
+  dereverbMode?: TVoiceDereverbMode;
+} & TVoiceFilterDfnTuningInput;
 
 export type TPushKeybindKind = "talk" | "mute";
 

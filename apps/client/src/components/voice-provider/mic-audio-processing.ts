@@ -1,6 +1,7 @@
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import type {
   TDesktopBridge,
+  TVoiceDereverbMode as TRuntimeVoiceDereverbMode,
   TVoiceFilterStrength as TRuntimeVoiceFilterStrength,
   TVoiceFilterFrameDiag,
   TVoiceFilterPcmFrame,
@@ -21,12 +22,35 @@ import micCaptureWorkletModuleUrl from './mic-capture.worklet.js?url&no-inline';
 const NC_DIAG_LOG_INTERVAL_MS = 5_000;
 const NC_DIAG_WINDOW_SIZE = 500; // frames (~5 s at 10 ms/frame)
 
+const nowSteadyEpochMs = (): number => {
+  if (typeof performance === 'undefined') {
+    return Date.now();
+  }
+
+  const now =
+    typeof performance.now === 'function' ? performance.now() : undefined;
+  if (typeof now !== 'number' || !Number.isFinite(now)) {
+    return Date.now();
+  }
+
+  const timeOrigin =
+    typeof performance.timeOrigin === 'number' &&
+    Number.isFinite(performance.timeOrigin)
+      ? performance.timeOrigin
+      : Date.now() - now;
+
+  return timeOrigin + now;
+};
+
 type TNcDiagSnapshot = {
   sessionId: string;
   frameCount: number;
   lsnrMean: number | null;
   lsnrMin: number | null;
   lsnrMax: number | null;
+  aecErleMean: number | null;
+  aecDelayMs: number | null;
+  aecDoubleTalkFrames: number;
   agcGainMean: number | null;
   /** How many frames had the startup ramp still active (rampWetMix < 1). */
   rampActiveFrames: number;
@@ -46,7 +70,10 @@ if (typeof window !== 'undefined') {
 
 const createNcDiagnosticsAggregator = (sessionId: string) => {
   const lsnrValues: number[] = [];
+  const aecErleValues: number[] = [];
   const agcGainValues: number[] = [];
+  let lastAecDelayMs: number | null = null;
+  let aecDoubleTalkFrames = 0;
   let rampActiveFrames = 0;
   let totalDropped = 0;
   let totalFrames = 0;
@@ -69,6 +96,22 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
       if (agcGainValues.length > NC_DIAG_WINDOW_SIZE) agcGainValues.shift();
     }
 
+    if (d.aecErleDb !== undefined) {
+      aecErleValues.push(d.aecErleDb);
+      if (aecErleValues.length > NC_DIAG_WINDOW_SIZE) aecErleValues.shift();
+    }
+
+    if (d.aecDelayMs !== undefined) {
+      lastAecDelayMs = d.aecDelayMs;
+    }
+
+    if (
+      d.aecDoubleTalkConfidence !== undefined &&
+      d.aecDoubleTalkConfidence >= 0.6
+    ) {
+      aecDoubleTalkFrames++;
+    }
+
     if (d.rampWetMix < 1.0) rampActiveFrames++;
 
     const now = Date.now();
@@ -88,10 +131,13 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
       lsnrMean: avg(lsnrValues),
       lsnrMin: lsnrValues.length > 0 ? Math.min(...lsnrValues) : null,
       lsnrMax: lsnrValues.length > 0 ? Math.max(...lsnrValues) : null,
+      aecErleMean: avg(aecErleValues),
+      aecDelayMs: lastAecDelayMs,
+      aecDoubleTalkFrames,
       agcGainMean: avg(agcGainValues),
       rampActiveFrames,
       droppedFrames: totalDropped,
-      timestampMs: Date.now()
+      timestampMs: nowSteadyEpochMs()
     };
 
     if (typeof window !== 'undefined') {
@@ -108,9 +154,17 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
       snapshot.agcGainMean !== null
         ? `${snapshot.agcGainMean.toFixed(2)}×`
         : 'off';
+    const aecErle =
+      snapshot.aecErleMean !== null
+        ? `${snapshot.aecErleMean.toFixed(1)} dB`
+        : 'off';
+    const aecDelay =
+      snapshot.aecDelayMs !== null ? `${snapshot.aecDelayMs.toFixed(0)} ms` : 'n/a';
 
     console.log(
       `[nc-diag] lsnr=${lsnr} dB range=${lsnrRange} agc=${agc}` +
+        ` aec=${aecErle} delay=${aecDelay}` +
+        ` doubleTalk=${snapshot.aecDoubleTalkFrames}` +
         ` rampFrames=${snapshot.rampActiveFrames} dropped=${snapshot.droppedFrames}` +
         ` frames=${snapshot.frameCount}`
     );
@@ -139,6 +193,10 @@ type TCreateMicAudioProcessingPipelineInput = {
   noiseSuppression: boolean;
   autoGainControl: boolean;
   echoCancellation: boolean;
+  dfnMix: number;
+  dfnAttenuationLimitDb?: number;
+  dfnExperimentalAggressiveMode: boolean;
+  dfnNoiseGateFloorDbfs?: number;
   sidecarDeviceId?: string;
 };
 
@@ -164,7 +222,11 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   suppressionLevel,
   noiseSuppression,
   autoGainControl,
-  echoCancellation
+  echoCancellation,
+  dfnMix,
+  dfnAttenuationLimitDb,
+  dfnExperimentalAggressiveMode,
+  dfnNoiseGateFloorDbfs
 }: {
   inputTrack: MediaStreamTrack;
   channels: number;
@@ -172,6 +234,10 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   noiseSuppression: boolean;
   autoGainControl: boolean;
   echoCancellation: boolean;
+  dfnMix: number;
+  dfnAttenuationLimitDb?: number;
+  dfnExperimentalAggressiveMode: boolean;
+  dfnNoiseGateFloorDbfs?: number;
 }): Promise<TMicAudioProcessingPipeline | undefined> => {
   const desktopBridge = getDesktopBridge();
 
@@ -186,7 +252,13 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
       suppressionLevel as unknown as TRuntimeVoiceFilterStrength,
     noiseSuppression,
     autoGainControl,
-    echoCancellation
+    echoCancellation,
+    mix: dfnMix,
+    attenuationLimitDb: dfnAttenuationLimitDb,
+    experimentalAggressiveMode: dfnExperimentalAggressiveMode,
+    noiseGateFloorDbfs: dfnNoiseGateFloorDbfs,
+    dereverbMode:
+      (noiseSuppression ? 'tail' : 'off') as TRuntimeVoiceDereverbMode
   });
   console.log('[voice-filter-debug] Started native voice-filter session', {
     sessionId: session.sessionId,
@@ -358,6 +430,7 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
       sampleRate: session.sampleRate,
       channels: session.channels,
       frameCount,
+      timestampMs: nowSteadyEpochMs(),
       pcm: samples,
       protocolVersion: 1
     });
@@ -485,6 +558,10 @@ const createNativeSidecarMicCapturePipeline = async ({
   noiseSuppression,
   autoGainControl,
   echoCancellation,
+  dfnMix,
+  dfnAttenuationLimitDb,
+  dfnExperimentalAggressiveMode,
+  dfnNoiseGateFloorDbfs,
   sidecarDeviceId,
   desktopBridge
 }: {
@@ -492,6 +569,10 @@ const createNativeSidecarMicCapturePipeline = async ({
   noiseSuppression: boolean;
   autoGainControl: boolean;
   echoCancellation: boolean;
+  dfnMix: number;
+  dfnAttenuationLimitDb?: number;
+  dfnExperimentalAggressiveMode: boolean;
+  dfnNoiseGateFloorDbfs?: number;
   sidecarDeviceId: string | undefined;
   desktopBridge: TDesktopBridge;
 }): Promise<TMicAudioProcessingPipeline | undefined> => {
@@ -503,6 +584,12 @@ const createNativeSidecarMicCapturePipeline = async ({
     noiseSuppression,
     autoGainControl,
     echoCancellation,
+    mix: dfnMix,
+    attenuationLimitDb: dfnAttenuationLimitDb,
+    experimentalAggressiveMode: dfnExperimentalAggressiveMode,
+    noiseGateFloorDbfs: dfnNoiseGateFloorDbfs,
+    dereverbMode:
+      (noiseSuppression ? 'tail' : 'off') as TRuntimeVoiceDereverbMode,
     deviceId: sidecarDeviceId
   });
   console.log(
@@ -640,7 +727,11 @@ const createMicAudioProcessingPipeline = async ({
   suppressionLevel,
   noiseSuppression,
   autoGainControl,
-  echoCancellation
+  echoCancellation,
+  dfnMix,
+  dfnAttenuationLimitDb,
+  dfnExperimentalAggressiveMode,
+  dfnNoiseGateFloorDbfs
 }: TCreateMicAudioProcessingPipelineInput): Promise<
   TMicAudioProcessingPipeline | undefined
 > => {
@@ -657,7 +748,11 @@ const createMicAudioProcessingPipeline = async ({
       suppressionLevel,
       noiseSuppression,
       autoGainControl,
-      echoCancellation
+      echoCancellation,
+      dfnMix,
+      dfnAttenuationLimitDb,
+      dfnExperimentalAggressiveMode,
+      dfnNoiseGateFloorDbfs
     });
   } catch (error) {
     if (noiseSuppression) {
@@ -669,7 +764,11 @@ const createMicAudioProcessingPipeline = async ({
             suppressionLevel,
             noiseSuppression: false,
             autoGainControl,
-            echoCancellation
+            echoCancellation,
+            dfnMix,
+            dfnAttenuationLimitDb,
+            dfnExperimentalAggressiveMode,
+            dfnNoiseGateFloorDbfs
           });
 
         if (fallbackPipeline) {
@@ -722,6 +821,7 @@ const resolveSidecarDeviceId = async (
 export {
   createMicAudioProcessingPipeline,
   createNativeSidecarMicCapturePipeline,
+  nowSteadyEpochMs,
   resolveSidecarDeviceId
 };
 export type { TMicAudioProcessingBackend, TMicAudioProcessingPipeline };
