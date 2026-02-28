@@ -54,6 +54,50 @@ export enum MicQualityMode {
   EXPERIMENTAL = 'experimental'
 }
 
+export type TStrengthDefaults = {
+  dfnMix: number;
+  dfnAttenuationLimitDb: number;
+  dfnExperimentalAggressiveMode: boolean;
+  dfnNoiseGateFloorDbfs: number | undefined;
+};
+
+const NOISE_GATE_FLOOR_DBFS = -58;
+
+export const getStrengthDefaults = (
+  strength: VoiceFilterStrength
+): TStrengthDefaults => {
+  switch (strength) {
+    case VoiceFilterStrength.LOW:
+      return {
+        dfnMix: 1.0,
+        dfnAttenuationLimitDb: 40,
+        dfnExperimentalAggressiveMode: true,
+        dfnNoiseGateFloorDbfs: NOISE_GATE_FLOOR_DBFS
+      };
+    case VoiceFilterStrength.BALANCED:
+      return {
+        dfnMix: 1.0,
+        dfnAttenuationLimitDb: 60,
+        dfnExperimentalAggressiveMode: true,
+        dfnNoiseGateFloorDbfs: NOISE_GATE_FLOOR_DBFS
+      };
+    case VoiceFilterStrength.HIGH:
+      return {
+        dfnMix: 1.0,
+        dfnAttenuationLimitDb: 80,
+        dfnExperimentalAggressiveMode: true,
+        dfnNoiseGateFloorDbfs: NOISE_GATE_FLOOR_DBFS
+      };
+    case VoiceFilterStrength.AGGRESSIVE:
+      return {
+        dfnMix: 1.0,
+        dfnAttenuationLimitDb: 100,
+        dfnExperimentalAggressiveMode: true,
+        dfnNoiseGateFloorDbfs: NOISE_GATE_FLOOR_DBFS
+      };
+  }
+};
+
 export type TDeviceSettings = {
   microphoneId: string | undefined;
   micQualityMode: MicQualityMode;

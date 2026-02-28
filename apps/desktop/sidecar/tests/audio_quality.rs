@@ -287,6 +287,7 @@ fn repo_root() -> PathBuf {
         .expect("failed to resolve repo root")
 }
 
+/// Matches the client-side "High" strength defaults from `getStrengthDefaults`.
 fn test_config() -> FileTestConfig {
     FileTestConfig {
         suppression_level: VoiceFilterStrength::High,
@@ -295,8 +296,10 @@ fn test_config() -> FileTestConfig {
         echo_cancellation: false,
         dereverb_mode: Some(VoiceDereverbMode::Off),
         dfn_tuning: VoiceFilterDfnTuningParams {
+            mix: Some(1.0),
+            attenuation_limit_db: Some(80.0),
             experimental_aggressive_mode: Some(true),
-            ..VoiceFilterDfnTuningParams::default()
+            noise_gate_floor_dbfs: Some(-58.0),
         },
         debug_diagnostics: true,
     }

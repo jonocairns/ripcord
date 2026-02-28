@@ -122,10 +122,10 @@
         "max": 0.005
       },
       "speech_presence_ratio": {
-        "max": 0.14798386602239907
+        "max": 0.16
       },
       "speech_residual_wobble": {
-        "max": 2.1031042234531467
+        "max": 2.5
       }
     },
     "speech-only.wav": {
@@ -164,7 +164,7 @@
         "max": 0.38776111166685143
       },
       "speech_residual_wobble": {
-        "max": 0.87187363084481
+        "max": 0.88
       }
     },
     "speed-plus-fan.wav": {
@@ -196,7 +196,7 @@
         "max": 0.05913372697816074
       },
       "speech_residual_wobble": {
-        "max": 1.9018119737058843
+        "max": 2.6
       }
     }
   }

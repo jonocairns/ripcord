@@ -11,7 +11,7 @@ import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
 import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
-import { MicQualityMode, VoiceFilterStrength } from '@/types';
+import { MicQualityMode, VoiceFilterStrength, getStrengthDefaults } from '@/types';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const ANALYSER_FFT_SIZE = 512;
@@ -34,10 +34,6 @@ type TMicrophoneTestPanelProps = {
   echoCancellation: boolean;
   noiseSuppression: boolean;
   autoGainControl: boolean;
-  sidecarDfnMix: number;
-  sidecarDfnAttenuationLimitDb?: number;
-  sidecarExperimentalAggressiveMode: boolean;
-  sidecarNoiseGateFloorDbfs?: number;
   hasDesktopBridge: boolean;
 };
 
@@ -62,11 +58,7 @@ const resolveMicTestProcessingConfig = ({
   voiceFilterStrength,
   echoCancellation,
   noiseSuppression,
-  autoGainControl,
-  sidecarDfnMix,
-  sidecarDfnAttenuationLimitDb,
-  sidecarExperimentalAggressiveMode,
-  sidecarNoiseGateFloorDbfs
+  autoGainControl
 }: {
   micQualityMode: MicQualityMode;
   hasDesktopBridge: boolean;
@@ -74,11 +66,9 @@ const resolveMicTestProcessingConfig = ({
   echoCancellation: boolean;
   noiseSuppression: boolean;
   autoGainControl: boolean;
-  sidecarDfnMix: number;
-  sidecarDfnAttenuationLimitDb?: number;
-  sidecarExperimentalAggressiveMode: boolean;
-  sidecarNoiseGateFloorDbfs?: number;
 }): TResolvedMicTestProcessingConfig => {
+  const defaults = getStrengthDefaults(voiceFilterStrength);
+
   if (micQualityMode === MicQualityMode.EXPERIMENTAL) {
     return {
       sidecarVoiceProcessingEnabled: hasDesktopBridge,
@@ -89,10 +79,10 @@ const resolveMicTestProcessingConfig = ({
       sidecarAutoGainControl: autoGainControl,
       sidecarEchoCancellation: echoCancellation,
       sidecarSuppressionLevel: voiceFilterStrength,
-      sidecarDfnMix,
-      sidecarDfnAttenuationLimitDb,
-      sidecarExperimentalAggressiveMode,
-      sidecarNoiseGateFloorDbfs
+      sidecarDfnMix: defaults.dfnMix,
+      sidecarDfnAttenuationLimitDb: defaults.dfnAttenuationLimitDb,
+      sidecarExperimentalAggressiveMode: defaults.dfnExperimentalAggressiveMode,
+      sidecarNoiseGateFloorDbfs: defaults.dfnNoiseGateFloorDbfs
     };
   }
 
@@ -109,10 +99,10 @@ const resolveMicTestProcessingConfig = ({
     sidecarAutoGainControl: autoGainControl,
     sidecarEchoCancellation: false,
     sidecarSuppressionLevel: voiceFilterStrength,
-    sidecarDfnMix,
-    sidecarDfnAttenuationLimitDb,
-    sidecarExperimentalAggressiveMode,
-    sidecarNoiseGateFloorDbfs
+    sidecarDfnMix: defaults.dfnMix,
+    sidecarDfnAttenuationLimitDb: defaults.dfnAttenuationLimitDb,
+    sidecarExperimentalAggressiveMode: defaults.dfnExperimentalAggressiveMode,
+    sidecarNoiseGateFloorDbfs: defaults.dfnNoiseGateFloorDbfs
   };
 };
 
@@ -124,10 +114,6 @@ const MicrophoneTestPanel = memo(
     echoCancellation,
     noiseSuppression,
     autoGainControl,
-    sidecarDfnMix,
-    sidecarDfnAttenuationLimitDb,
-    sidecarExperimentalAggressiveMode,
-    sidecarNoiseGateFloorDbfs,
     hasDesktopBridge
   }: TMicrophoneTestPanelProps) => {
     const currentVoiceChannelId = useCurrentVoiceChannelId();
@@ -175,11 +161,7 @@ const MicrophoneTestPanel = memo(
         voiceFilterStrength,
         echoCancellation,
         noiseSuppression,
-        autoGainControl,
-        sidecarDfnMix,
-        sidecarDfnAttenuationLimitDb,
-        sidecarExperimentalAggressiveMode,
-        sidecarNoiseGateFloorDbfs
+        autoGainControl
       });
     }, [
       autoGainControl,
@@ -187,10 +169,6 @@ const MicrophoneTestPanel = memo(
       hasDesktopBridge,
       micQualityMode,
       noiseSuppression,
-      sidecarDfnAttenuationLimitDb,
-      sidecarDfnMix,
-      sidecarExperimentalAggressiveMode,
-      sidecarNoiseGateFloorDbfs,
       voiceFilterStrength
     ]);
     const canRecordClip =
