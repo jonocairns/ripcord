@@ -107,7 +107,7 @@ const MessageActions = memo(
           </>
         )}
         <Protect permission={Permission.REACT_TO_MESSAGES}>
-          <div className="flex items-center gap-1 border-l border-border pl-1.5">
+          <div className="flex items-center gap-1">
             {recentEmojisToShow.map((emoji) => (
               <button
                 key={emoji.name}
