@@ -726,6 +726,11 @@ pub struct VoiceFilterSession {
     pub pre_dfn_vad_tap: ModelVadTapState,
     pub transient_suppressor: TransientSuppressorState,
     pub transient_lookback_frame: Option<Vec<f32>>,
+    /// VAD speech state captured at the same time as the lookback frame, so that
+    /// downstream consumers (voice polish, limiter) use the state that matches
+    /// the delayed audio rather than the current frame's state.
+    pub transient_lookback_vad_state: VadSpeechState,
+    pub transient_lookback_lsnr: f32,
     pub lsnr_smoothed: f32,
 }
 
@@ -1734,6 +1739,8 @@ pub fn create_voice_filter_session(
         pre_dfn_vad_tap: ModelVadTapState::default(),
         transient_suppressor: TransientSuppressorState::default(),
         transient_lookback_frame: None,
+        transient_lookback_vad_state: VadSpeechState::Silence,
+        transient_lookback_lsnr: 0.0,
         lsnr_smoothed: 0.0,
     })
 }
@@ -2922,6 +2929,8 @@ pub fn process_voice_filter_frame(
 
     if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
         let current_frame = samples.to_vec();
+        let current_vad_state = session.vad.speech_state;
+        let current_lsnr = session.lsnr_smoothed;
 
         if let Some(mut delayed_frame) = session.transient_lookback_frame.take() {
             if delayed_frame.len() == samples.len() {
@@ -2947,6 +2956,11 @@ pub fn process_voice_filter_frame(
         }
 
         session.transient_lookback_frame = Some(current_frame);
+        // Snapshot the VAD state and LSNR that correspond to the frame we just
+        // stored, so voice polish and limiter in the caller use the state that
+        // matches the delayed audio they will actually process.
+        session.transient_lookback_vad_state = current_vad_state;
+        session.transient_lookback_lsnr = current_lsnr;
     }
 
     Ok(VoiceFilterDiagnostics {
@@ -3064,13 +3078,16 @@ pub fn process_voice_filter_frame_in_place(
     )?;
 
     // Limiter is only needed after DeepFilterNet to guard against model output peaks.
+    // Use the lookback VAD state and LSNR that were captured alongside the delayed
+    // frame — session.vad.speech_state reflects the *current* input frame, but
+    // frame.samples is one frame behind due to the transient lookback buffer.
     if matches!(session.processor, VoiceFilterProcessor::DeepFilter(_)) {
         session.voice_polish.process(
             &mut frame.samples,
             frame.channels,
             session.sample_rate,
-            session.vad.speech_state,
-            Some(session.lsnr_smoothed),
+            session.transient_lookback_vad_state,
+            Some(session.transient_lookback_lsnr),
         );
         apply_limiter(&mut frame.samples, &mut session.limiter_gain);
     }
