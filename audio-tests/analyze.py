@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze voice-filter output quality: onset timing, silence suppression, and levels.
+"""Analyze voice-filter output quality: onset timing, suppression, and spectral stability.
 
 Compares each input WAV in audio-tests/ with its filtered counterpart in
 audio-tests/.outputs/ and prints a summary table plus optional per-file detail.
@@ -28,6 +28,15 @@ SPEECH_ONSET_THRESHOLD_DBFS = -40.0
 SPEECH_OFFSET_THRESHOLD_DBFS = -55.0
 STARTUP_SKIP_FRAMES = 120  # skip first 1.2s (startup ramp)
 MIN_SILENCE_GAP_FRAMES = 10  # 100ms minimum silence before counting as onset
+MIN_SPEECH_METRIC_FRAMES = 20  # 200ms minimum active speech for spectral metrics
+
+# Band definitions for additional speech-quality metrics.
+LOW_MID_BAND_LOW_HZ = 300.0
+LOW_MID_BAND_HIGH_HZ = 1500.0
+PRESENCE_BAND_LOW_HZ = 2000.0
+PRESENCE_BAND_HIGH_HZ = 5000.0
+RESIDUAL_BAND_LOW_HZ = 120.0
+RESIDUAL_BAND_HIGH_HZ = 1200.0
 
 
 def read_wav(path):
@@ -88,6 +97,35 @@ def to_dbfs(linear):
     return 20 * math.log10(linear + 1e-10)
 
 
+def one_pole_alpha(cutoff_hz):
+    """Return a stable one-pole low-pass coefficient for the fixed sample rate."""
+    cutoff_hz = max(0.0, min(cutoff_hz, SAMPLE_RATE * 0.45))
+    if cutoff_hz <= 0.0:
+        return 1.0
+    omega = 2.0 * math.pi * cutoff_hz / SAMPLE_RATE
+    return max(0.0, min(1.0, 1.0 - math.exp(-omega)))
+
+
+def lowpass_filter(samples, cutoff_hz):
+    """Apply a simple one-pole low-pass filter and return the filtered signal."""
+    alpha = one_pole_alpha(cutoff_hz)
+    state = 0.0
+    out = []
+    for sample in samples:
+        state += (sample - state) * alpha
+        out.append(state)
+    return out
+
+
+def bandpass_filter(samples, low_cut_hz, high_cut_hz):
+    """Approximate a band-pass region by subtracting one-pole low-pass signals."""
+    high = lowpass_filter(samples, high_cut_hz)
+    if low_cut_hz <= 0.0:
+        return high
+    low = lowpass_filter(samples, low_cut_hz)
+    return [hi - lo for hi, lo in zip(high, low)]
+
+
 def find_onsets(samples, n_frames):
     """Find silence->speech transitions after the startup skip."""
     threshold_speech = 10 ** (SPEECH_ONSET_THRESHOLD_DBFS / 20)
@@ -110,6 +148,27 @@ def find_onsets(samples, n_frames):
     return onsets
 
 
+def find_speech_frames(samples, n_frames):
+    """Return frame indices that fall within threshold-based speech-active regions."""
+    threshold_speech = 10 ** (SPEECH_ONSET_THRESHOLD_DBFS / 20)
+    threshold_silence = 10 ** (SPEECH_OFFSET_THRESHOLD_DBFS / 20)
+
+    in_speech = False
+    speech_frames = []
+
+    for i in range(STARTUP_SKIP_FRAMES, n_frames):
+        rms = frame_rms(samples, i)
+        if not in_speech and rms > threshold_speech:
+            in_speech = True
+        elif in_speech and rms < threshold_silence:
+            in_speech = False
+
+        if in_speech:
+            speech_frames.append(i)
+
+    return speech_frames
+
+
 def summarize_onset_ratios(onset_ratios):
     """Return aggregate onset metrics for threshold-based assertions."""
     values = [ratio for _, ratio in onset_ratios]
@@ -127,6 +186,55 @@ def summarize_onset_ratios(onset_ratios):
         "onset_ratio_max": max(values),
         "onset_ratio_avg": sum(values) / len(values),
     }
+
+
+def compute_speech_quality_metrics(inp, out, n_frames):
+    """Compute speech-frame spectral metrics that catch 'tinny' output and residual wobble."""
+    speech_frames = find_speech_frames(inp, n_frames)
+    if len(speech_frames) < MIN_SPEECH_METRIC_FRAMES:
+        return {
+            "speech_frame_count": len(speech_frames),
+            "speech_presence_ratio": None,
+            "speech_residual_wobble": None,
+        }
+
+    out_low_mid = bandpass_filter(out, LOW_MID_BAND_LOW_HZ, LOW_MID_BAND_HIGH_HZ)
+    out_presence = bandpass_filter(out, PRESENCE_BAND_LOW_HZ, PRESENCE_BAND_HIGH_HZ)
+    out_residual = bandpass_filter(out, RESIDUAL_BAND_LOW_HZ, RESIDUAL_BAND_HIGH_HZ)
+
+    presence_ratios = []
+    residual_band_rms = []
+    speech_rms = []
+
+    for frame_idx in speech_frames:
+        low_mid_rms = frame_rms(out_low_mid, frame_idx)
+        presence_rms = frame_rms(out_presence, frame_idx)
+        residual_rms = frame_rms(out_residual, frame_idx)
+        out_rms = frame_rms(out, frame_idx)
+
+        presence_ratios.append(presence_rms / (low_mid_rms + 1e-10))
+        residual_band_rms.append(residual_rms)
+        speech_rms.append(out_rms)
+
+    mean_speech_rms = sum(speech_rms) / len(speech_rms)
+    residual_mean = sum(residual_band_rms) / len(residual_band_rms)
+    residual_var = (
+        sum((value - residual_mean) ** 2 for value in residual_band_rms)
+        / len(residual_band_rms)
+    )
+
+    return {
+        "speech_frame_count": len(speech_frames),
+        "speech_presence_ratio": sum(presence_ratios) / len(presence_ratios),
+        "speech_residual_wobble": math.sqrt(residual_var) / (mean_speech_rms + 1e-10),
+    }
+
+
+def format_optional_metric(value, width=6, precision=2):
+    """Format optional numeric metrics for the summary table."""
+    if value is None:
+        return f"{'n/a':>{width}s}"
+    return f"{value:{width}.{precision}f}"
 
 
 def analyze_file(inp_path, out_path, show_detail=False):
@@ -176,9 +284,25 @@ def analyze_file(inp_path, out_path, show_detail=False):
         "onset_ratios": onset_ratios,
     }
     result.update(summarize_onset_ratios(onset_ratios))
+    result.update(compute_speech_quality_metrics(inp, out, n_frames))
+
+    if show_detail:
+        presence_str = (
+            f"{result['speech_presence_ratio']:.2f}"
+            if result["speech_presence_ratio"] is not None
+            else "n/a"
+        )
+        wobble_str = (
+            f"{result['speech_residual_wobble']:.2f}"
+            if result["speech_residual_wobble"] is not None
+            else "n/a"
+        )
+        print(
+            f"\n  Speech metrics: frames={result['speech_frame_count']}  presence={presence_str}  wobble={wobble_str}"
+        )
 
     if show_detail and onset_ratios:
-        print(f"\n  Onset detail:")
+        print("\n  Onset detail:")
         for onset_frame, _ in onset_ratios[:6]:
             start = max(0, onset_frame - 3)
             end = min(n_frames, onset_frame + 12)
@@ -328,7 +452,10 @@ def main():
         print(f"No .wav files found under {input_root}", file=sys.stderr)
         sys.exit(1)
 
-    header = f"{'File':35s} | {'IN':>7} {'OUT':>7} | {'Silent':>7} | Onset ratios (OUT/IN at transition)"
+    header = (
+        f"{'File':35s} | {'IN':>7} {'OUT':>7} | {'Silent':>7} | "
+        f"{'Pres':>6} | {'Wobble':>6} | Onset ratios (OUT/IN at transition)"
+    )
     print(header)
     print("-" * len(header) + "-" * 30)
 
@@ -348,11 +475,9 @@ def main():
             args.detail == "" or args.detail.lower() in rel.lower()
         )
 
-        print(f"{rel:35s}", end=" | ")
-
         result = analyze_file(inp_path, out_path, show_detail=show_detail)
         if result is None:
-            print("SKIP (unsupported format)")
+            print(f"{rel:35s} | SKIP (unsupported format)")
             if baseline_by_file is not None:
                 results_by_file[rel] = None
             continue
@@ -368,7 +493,12 @@ def main():
         )
 
         print(
-            f"{result['inp_db']:6.1f}dB {result['out_db']:6.1f}dB | {result['silence_pct']:5.1f}%  | {onset_str}"
+            f"{rel:35s} | "
+            f"{result['inp_db']:6.1f}dB {result['out_db']:6.1f}dB | "
+            f"{result['silence_pct']:5.1f}%  | "
+            f"{format_optional_metric(result['speech_presence_ratio'])} | "
+            f"{format_optional_metric(result['speech_residual_wobble'])} | "
+            f"{onset_str}"
         )
 
     if baseline_by_file is None:
