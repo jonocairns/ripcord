@@ -17,6 +17,7 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
+import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useForm } from '@/hooks/use-form';
@@ -36,7 +37,24 @@ import { MicrophoneTestPanel } from './microphone-test-panel';
 import ResolutionFpsControl from './resolution-fps-control';
 
 const DEFAULT_NAME = 'default';
+const DEFAULT_SIDECAR_DFN_MIX = 0.9;
+const DEFAULT_SIDECAR_NOISE_GATE_FLOOR_DBFS = -58;
 type TPushKeybindField = 'pushToTalkKeybind' | 'pushToMuteKeybind';
+
+const getDefaultAttenuationLimitDb = (
+  strength: VoiceFilterStrength
+): number => {
+  switch (strength) {
+    case VoiceFilterStrength.LOW:
+      return 15;
+    case VoiceFilterStrength.BALANCED:
+      return 25;
+    case VoiceFilterStrength.HIGH:
+      return 35;
+    case VoiceFilterStrength.AGGRESSIVE:
+      return 45;
+  }
+};
 
 const Devices = memo(() => {
   const desktopBridge = getDesktopBridge();
@@ -279,32 +297,118 @@ const Devices = memo(() => {
           </div>
 
           {isExperimentalMode && values.noiseSuppression && (
-            <div className="max-w-sm space-y-2">
-              <Label>DeepFilterNet strength</Label>
-              <Select
-                onValueChange={(value) =>
-                  onChange('voiceFilterStrength', value as VoiceFilterStrength)
-                }
-                value={values.voiceFilterStrength}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select a filter preset" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value={VoiceFilterStrength.LOW}>Low</SelectItem>
-                    <SelectItem value={VoiceFilterStrength.BALANCED}>
-                      Balanced
-                    </SelectItem>
-                    <SelectItem value={VoiceFilterStrength.HIGH}>
-                      High
-                    </SelectItem>
-                    <SelectItem value={VoiceFilterStrength.AGGRESSIVE}>
-                      Aggressive
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
+            <div className="max-w-xl space-y-4">
+              <div className="max-w-sm space-y-2">
+                <Label>DeepFilterNet strength</Label>
+                <Select
+                  onValueChange={(value) =>
+                    onChange(
+                      'voiceFilterStrength',
+                      value as VoiceFilterStrength
+                    )
+                  }
+                  value={values.voiceFilterStrength}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a filter preset" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={VoiceFilterStrength.HIGH}>
+                        High
+                      </SelectItem>
+                      <SelectItem value={VoiceFilterStrength.AGGRESSIVE}>
+                        Aggressive
+                      </SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <Label>Dry/wet mix</Label>
+                  <span className="text-xs text-muted-foreground">
+                    {Math.round(
+                      (values.sidecarDfnMix ?? DEFAULT_SIDECAR_DFN_MIX) * 100
+                    )}
+                    %
+                  </span>
+                </div>
+                <Slider
+                  value={[values.sidecarDfnMix ?? DEFAULT_SIDECAR_DFN_MIX]}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  onValueChange={([value]) =>
+                    onChange('sidecarDfnMix', value ?? DEFAULT_SIDECAR_DFN_MIX)
+                  }
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <Label>Attenuation limit</Label>
+                  <span className="text-xs text-muted-foreground">
+                    {Math.round(
+                      values.sidecarDfnAttenuationLimitDb ??
+                        getDefaultAttenuationLimitDb(values.voiceFilterStrength)
+                    )}{' '}
+                    dB
+                  </span>
+                </div>
+                <Slider
+                  value={[
+                    values.sidecarDfnAttenuationLimitDb ??
+                      getDefaultAttenuationLimitDb(values.voiceFilterStrength)
+                  ]}
+                  min={0}
+                  max={60}
+                  step={1}
+                  onValueChange={([value]) =>
+                    onChange('sidecarDfnAttenuationLimitDb', value)
+                  }
+                />
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-3 py-2">
+                  <div className="space-y-1">
+                    <Label className="cursor-default">
+                      Experimental aggressive mode
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Pushes the spectral mask harder when you need maximum
+                      suppression.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={!!values.sidecarExperimentalAggressiveMode}
+                    onCheckedChange={(checked) =>
+                      onChange('sidecarExperimentalAggressiveMode', checked)
+                    }
+                  />
+                </div>
+
+                <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-3 py-2">
+                  <div className="space-y-1">
+                    <Label className="cursor-default">Gentle noise gate</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Adds a soft floor to keep the tail from dropping into
+                      brittle silence.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={typeof values.sidecarNoiseGateFloorDbfs === 'number'}
+                    onCheckedChange={(checked) =>
+                      onChange(
+                        'sidecarNoiseGateFloorDbfs',
+                        checked ? DEFAULT_SIDECAR_NOISE_GATE_FLOOR_DBFS : undefined
+                      )
+                    }
+                  />
+                </div>
+              </div>
             </div>
           )}
 
@@ -328,6 +432,12 @@ const Devices = memo(() => {
             echoCancellation={!!values.echoCancellation}
             noiseSuppression={!!values.noiseSuppression}
             autoGainControl={!!values.autoGainControl}
+            sidecarDfnMix={values.sidecarDfnMix}
+            sidecarDfnAttenuationLimitDb={values.sidecarDfnAttenuationLimitDb}
+            sidecarExperimentalAggressiveMode={
+              !!values.sidecarExperimentalAggressiveMode
+            }
+            sidecarNoiseGateFloorDbfs={values.sidecarNoiseGateFloorDbfs}
             hasDesktopBridge={hasDesktopBridge}
           />
 

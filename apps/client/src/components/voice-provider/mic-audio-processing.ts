@@ -193,6 +193,10 @@ type TCreateMicAudioProcessingPipelineInput = {
   noiseSuppression: boolean;
   autoGainControl: boolean;
   echoCancellation: boolean;
+  dfnMix: number;
+  dfnAttenuationLimitDb?: number;
+  dfnExperimentalAggressiveMode: boolean;
+  dfnNoiseGateFloorDbfs?: number;
   sidecarDeviceId?: string;
 };
 
@@ -218,7 +222,11 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   suppressionLevel,
   noiseSuppression,
   autoGainControl,
-  echoCancellation
+  echoCancellation,
+  dfnMix,
+  dfnAttenuationLimitDb,
+  dfnExperimentalAggressiveMode,
+  dfnNoiseGateFloorDbfs
 }: {
   inputTrack: MediaStreamTrack;
   channels: number;
@@ -226,6 +234,10 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
   noiseSuppression: boolean;
   autoGainControl: boolean;
   echoCancellation: boolean;
+  dfnMix: number;
+  dfnAttenuationLimitDb?: number;
+  dfnExperimentalAggressiveMode: boolean;
+  dfnNoiseGateFloorDbfs?: number;
 }): Promise<TMicAudioProcessingPipeline | undefined> => {
   const desktopBridge = getDesktopBridge();
 
@@ -241,6 +253,10 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
     noiseSuppression,
     autoGainControl,
     echoCancellation,
+    mix: dfnMix,
+    attenuationLimitDb: dfnAttenuationLimitDb,
+    experimentalAggressiveMode: dfnExperimentalAggressiveMode,
+    noiseGateFloorDbfs: dfnNoiseGateFloorDbfs,
     dereverbMode:
       (noiseSuppression ? 'tail' : 'off') as TRuntimeVoiceDereverbMode
   });
@@ -542,6 +558,10 @@ const createNativeSidecarMicCapturePipeline = async ({
   noiseSuppression,
   autoGainControl,
   echoCancellation,
+  dfnMix,
+  dfnAttenuationLimitDb,
+  dfnExperimentalAggressiveMode,
+  dfnNoiseGateFloorDbfs,
   sidecarDeviceId,
   desktopBridge
 }: {
@@ -549,6 +569,10 @@ const createNativeSidecarMicCapturePipeline = async ({
   noiseSuppression: boolean;
   autoGainControl: boolean;
   echoCancellation: boolean;
+  dfnMix: number;
+  dfnAttenuationLimitDb?: number;
+  dfnExperimentalAggressiveMode: boolean;
+  dfnNoiseGateFloorDbfs?: number;
   sidecarDeviceId: string | undefined;
   desktopBridge: TDesktopBridge;
 }): Promise<TMicAudioProcessingPipeline | undefined> => {
@@ -560,6 +584,10 @@ const createNativeSidecarMicCapturePipeline = async ({
     noiseSuppression,
     autoGainControl,
     echoCancellation,
+    mix: dfnMix,
+    attenuationLimitDb: dfnAttenuationLimitDb,
+    experimentalAggressiveMode: dfnExperimentalAggressiveMode,
+    noiseGateFloorDbfs: dfnNoiseGateFloorDbfs,
     dereverbMode:
       (noiseSuppression ? 'tail' : 'off') as TRuntimeVoiceDereverbMode,
     deviceId: sidecarDeviceId
@@ -699,7 +727,11 @@ const createMicAudioProcessingPipeline = async ({
   suppressionLevel,
   noiseSuppression,
   autoGainControl,
-  echoCancellation
+  echoCancellation,
+  dfnMix,
+  dfnAttenuationLimitDb,
+  dfnExperimentalAggressiveMode,
+  dfnNoiseGateFloorDbfs
 }: TCreateMicAudioProcessingPipelineInput): Promise<
   TMicAudioProcessingPipeline | undefined
 > => {
@@ -716,7 +748,11 @@ const createMicAudioProcessingPipeline = async ({
       suppressionLevel,
       noiseSuppression,
       autoGainControl,
-      echoCancellation
+      echoCancellation,
+      dfnMix,
+      dfnAttenuationLimitDb,
+      dfnExperimentalAggressiveMode,
+      dfnNoiseGateFloorDbfs
     });
   } catch (error) {
     if (noiseSuppression) {
@@ -728,7 +764,11 @@ const createMicAudioProcessingPipeline = async ({
             suppressionLevel,
             noiseSuppression: false,
             autoGainControl,
-            echoCancellation
+            echoCancellation,
+            dfnMix,
+            dfnAttenuationLimitDb,
+            dfnExperimentalAggressiveMode,
+            dfnNoiseGateFloorDbfs
           });
 
         if (fallbackPipeline) {

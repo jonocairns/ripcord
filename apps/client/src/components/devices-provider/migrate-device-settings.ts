@@ -12,6 +12,8 @@ type TLegacyDeviceSettings = Partial<TDeviceSettings> & {
   shareSystemAudio?: boolean;
 };
 
+const DEFAULT_SIDECAR_DFN_MIX = 0.9;
+
 const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
   microphoneId: undefined,
   micQualityMode: MicQualityMode.AUTO,
@@ -24,12 +26,31 @@ const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
   noiseSuppression: true,
   autoGainControl: true,
   experimentalVoiceFilter: false,
-  voiceFilterStrength: VoiceFilterStrength.BALANCED,
+  voiceFilterStrength: VoiceFilterStrength.HIGH,
+  sidecarDfnMix: DEFAULT_SIDECAR_DFN_MIX,
+  sidecarDfnAttenuationLimitDb: undefined,
+  sidecarExperimentalAggressiveMode: false,
+  sidecarNoiseGateFloorDbfs: undefined,
   screenAudioMode: ScreenAudioMode.SYSTEM,
   mirrorOwnVideo: false,
   screenResolution: Resolution['720p'],
   screenFramerate: 30,
   videoCodec: VideoCodecPreference.AUTO
+};
+
+const normalizeVoiceFilterStrength = (
+  strength: unknown
+): VoiceFilterStrength => {
+  switch (strength) {
+    case VoiceFilterStrength.AGGRESSIVE:
+      return VoiceFilterStrength.AGGRESSIVE;
+    case VoiceFilterStrength.LOW:
+    case VoiceFilterStrength.BALANCED:
+    case VoiceFilterStrength.HIGH:
+      return VoiceFilterStrength.HIGH;
+    default:
+      return DEFAULT_DEVICE_SETTINGS.voiceFilterStrength;
+  }
 };
 
 const migrateDeviceSettings = (
@@ -56,6 +77,21 @@ const migrateDeviceSettings = (
   const pushToMuteKeybind = normalizePushKeybind(
     incomingSettings.pushToMuteKeybind
   );
+  const sidecarDfnMix =
+    typeof incomingSettings.sidecarDfnMix === 'number' &&
+    Number.isFinite(incomingSettings.sidecarDfnMix)
+      ? Math.min(1, Math.max(0, incomingSettings.sidecarDfnMix))
+      : DEFAULT_DEVICE_SETTINGS.sidecarDfnMix;
+  const sidecarDfnAttenuationLimitDb =
+    typeof incomingSettings.sidecarDfnAttenuationLimitDb === 'number' &&
+    Number.isFinite(incomingSettings.sidecarDfnAttenuationLimitDb)
+      ? Math.min(60, Math.max(0, incomingSettings.sidecarDfnAttenuationLimitDb))
+      : undefined;
+  const sidecarNoiseGateFloorDbfs =
+    typeof incomingSettings.sidecarNoiseGateFloorDbfs === 'number' &&
+    Number.isFinite(incomingSettings.sidecarNoiseGateFloorDbfs)
+      ? Math.min(-36, Math.max(-80, incomingSettings.sidecarNoiseGateFloorDbfs))
+      : undefined;
 
   return {
     ...DEFAULT_DEVICE_SETTINGS,
@@ -75,11 +111,16 @@ const migrateDeviceSettings = (
       typeof incomingSettings.experimentalVoiceFilter === 'boolean'
         ? incomingSettings.experimentalVoiceFilter
         : DEFAULT_DEVICE_SETTINGS.experimentalVoiceFilter,
-    voiceFilterStrength: Object.values(VoiceFilterStrength).includes(
-      incomingSettings.voiceFilterStrength as VoiceFilterStrength
-    )
-      ? (incomingSettings.voiceFilterStrength as VoiceFilterStrength)
-      : DEFAULT_DEVICE_SETTINGS.voiceFilterStrength,
+    voiceFilterStrength: normalizeVoiceFilterStrength(
+      incomingSettings.voiceFilterStrength
+    ),
+    sidecarDfnMix,
+    sidecarDfnAttenuationLimitDb,
+    sidecarExperimentalAggressiveMode:
+      typeof incomingSettings.sidecarExperimentalAggressiveMode === 'boolean'
+        ? incomingSettings.sidecarExperimentalAggressiveMode
+        : DEFAULT_DEVICE_SETTINGS.sidecarExperimentalAggressiveMode,
+    sidecarNoiseGateFloorDbfs,
     pushToTalkKeybind,
     pushToMuteKeybind:
       pushToMuteKeybind && pushToMuteKeybind === pushToTalkKeybind

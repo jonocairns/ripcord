@@ -119,6 +119,10 @@ type ResolvedMicProcessingConfig = {
   sidecarAutoGainControl: boolean;
   sidecarEchoCancellation: boolean;
   sidecarSuppressionLevel: VoiceFilterStrength;
+  sidecarDfnMix: number;
+  sidecarDfnAttenuationLimitDb?: number;
+  sidecarExperimentalAggressiveMode: boolean;
+  sidecarNoiseGateFloorDbfs?: number;
 };
 
 const resolvePreferredVideoCodec = (
@@ -154,7 +158,12 @@ const resolveMicProcessingConfig = (
       sidecarNoiseSuppression: devices.noiseSuppression,
       sidecarAutoGainControl: devices.autoGainControl,
       sidecarEchoCancellation: devices.echoCancellation,
-      sidecarSuppressionLevel: devices.voiceFilterStrength
+      sidecarSuppressionLevel: devices.voiceFilterStrength,
+      sidecarDfnMix: devices.sidecarDfnMix,
+      sidecarDfnAttenuationLimitDb: devices.sidecarDfnAttenuationLimitDb,
+      sidecarExperimentalAggressiveMode:
+        devices.sidecarExperimentalAggressiveMode,
+      sidecarNoiseGateFloorDbfs: devices.sidecarNoiseGateFloorDbfs
     };
   }
 
@@ -167,7 +176,11 @@ const resolveMicProcessingConfig = (
     sidecarNoiseSuppression: devices.noiseSuppression,
     sidecarAutoGainControl: devices.autoGainControl,
     sidecarEchoCancellation: devices.echoCancellation,
-    sidecarSuppressionLevel: devices.voiceFilterStrength
+    sidecarSuppressionLevel: devices.voiceFilterStrength,
+    sidecarDfnMix: devices.sidecarDfnMix,
+    sidecarDfnAttenuationLimitDb: devices.sidecarDfnAttenuationLimitDb,
+    sidecarExperimentalAggressiveMode: devices.sidecarExperimentalAggressiveMode,
+    sidecarNoiseGateFloorDbfs: devices.sidecarNoiseGateFloorDbfs
   };
 };
 
@@ -546,6 +559,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
             noiseSuppression: micProcessingConfig.sidecarNoiseSuppression,
             autoGainControl: micProcessingConfig.sidecarAutoGainControl,
             echoCancellation: micProcessingConfig.sidecarEchoCancellation,
+            dfnMix: micProcessingConfig.sidecarDfnMix,
+            dfnAttenuationLimitDb:
+              micProcessingConfig.sidecarDfnAttenuationLimitDb,
+            dfnExperimentalAggressiveMode:
+              micProcessingConfig.sidecarExperimentalAggressiveMode,
+            dfnNoiseGateFloorDbfs:
+              micProcessingConfig.sidecarNoiseGateFloorDbfs,
             sidecarDeviceId,
             desktopBridge
           });
@@ -677,7 +697,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
             suppressionLevel: micProcessingConfig.sidecarSuppressionLevel,
             noiseSuppression: micProcessingConfig.sidecarNoiseSuppression,
             autoGainControl: micProcessingConfig.sidecarAutoGainControl,
-            echoCancellation: micProcessingConfig.sidecarEchoCancellation
+            echoCancellation: micProcessingConfig.sidecarEchoCancellation,
+            dfnMix: micProcessingConfig.sidecarDfnMix,
+            dfnAttenuationLimitDb:
+              micProcessingConfig.sidecarDfnAttenuationLimitDb,
+            dfnExperimentalAggressiveMode:
+              micProcessingConfig.sidecarExperimentalAggressiveMode,
+            dfnNoiseGateFloorDbfs:
+              micProcessingConfig.sidecarNoiseGateFloorDbfs
           });
 
           if (micAudioPipeline) {

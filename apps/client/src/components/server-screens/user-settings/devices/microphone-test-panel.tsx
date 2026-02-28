@@ -34,6 +34,10 @@ type TMicrophoneTestPanelProps = {
   echoCancellation: boolean;
   noiseSuppression: boolean;
   autoGainControl: boolean;
+  sidecarDfnMix: number;
+  sidecarDfnAttenuationLimitDb?: number;
+  sidecarExperimentalAggressiveMode: boolean;
+  sidecarNoiseGateFloorDbfs?: number;
   hasDesktopBridge: boolean;
 };
 
@@ -46,6 +50,10 @@ type TResolvedMicTestProcessingConfig = {
   sidecarAutoGainControl: boolean;
   sidecarEchoCancellation: boolean;
   sidecarSuppressionLevel: VoiceFilterStrength;
+  sidecarDfnMix: number;
+  sidecarDfnAttenuationLimitDb?: number;
+  sidecarExperimentalAggressiveMode: boolean;
+  sidecarNoiseGateFloorDbfs?: number;
 };
 
 const resolveMicTestProcessingConfig = ({
@@ -54,7 +62,11 @@ const resolveMicTestProcessingConfig = ({
   voiceFilterStrength,
   echoCancellation,
   noiseSuppression,
-  autoGainControl
+  autoGainControl,
+  sidecarDfnMix,
+  sidecarDfnAttenuationLimitDb,
+  sidecarExperimentalAggressiveMode,
+  sidecarNoiseGateFloorDbfs
 }: {
   micQualityMode: MicQualityMode;
   hasDesktopBridge: boolean;
@@ -62,6 +74,10 @@ const resolveMicTestProcessingConfig = ({
   echoCancellation: boolean;
   noiseSuppression: boolean;
   autoGainControl: boolean;
+  sidecarDfnMix: number;
+  sidecarDfnAttenuationLimitDb?: number;
+  sidecarExperimentalAggressiveMode: boolean;
+  sidecarNoiseGateFloorDbfs?: number;
 }): TResolvedMicTestProcessingConfig => {
   if (micQualityMode === MicQualityMode.EXPERIMENTAL) {
     return {
@@ -72,7 +88,11 @@ const resolveMicTestProcessingConfig = ({
       sidecarNoiseSuppression: noiseSuppression,
       sidecarAutoGainControl: autoGainControl,
       sidecarEchoCancellation: echoCancellation,
-      sidecarSuppressionLevel: voiceFilterStrength
+      sidecarSuppressionLevel: voiceFilterStrength,
+      sidecarDfnMix,
+      sidecarDfnAttenuationLimitDb,
+      sidecarExperimentalAggressiveMode,
+      sidecarNoiseGateFloorDbfs
     };
   }
 
@@ -88,7 +108,11 @@ const resolveMicTestProcessingConfig = ({
     sidecarNoiseSuppression: noiseSuppression,
     sidecarAutoGainControl: autoGainControl,
     sidecarEchoCancellation: false,
-    sidecarSuppressionLevel: voiceFilterStrength
+    sidecarSuppressionLevel: voiceFilterStrength,
+    sidecarDfnMix,
+    sidecarDfnAttenuationLimitDb,
+    sidecarExperimentalAggressiveMode,
+    sidecarNoiseGateFloorDbfs
   };
 };
 
@@ -100,6 +124,10 @@ const MicrophoneTestPanel = memo(
     echoCancellation,
     noiseSuppression,
     autoGainControl,
+    sidecarDfnMix,
+    sidecarDfnAttenuationLimitDb,
+    sidecarExperimentalAggressiveMode,
+    sidecarNoiseGateFloorDbfs,
     hasDesktopBridge
   }: TMicrophoneTestPanelProps) => {
     const currentVoiceChannelId = useCurrentVoiceChannelId();
@@ -147,7 +175,11 @@ const MicrophoneTestPanel = memo(
         voiceFilterStrength,
         echoCancellation,
         noiseSuppression,
-        autoGainControl
+        autoGainControl,
+        sidecarDfnMix,
+        sidecarDfnAttenuationLimitDb,
+        sidecarExperimentalAggressiveMode,
+        sidecarNoiseGateFloorDbfs
       });
     }, [
       autoGainControl,
@@ -155,6 +187,10 @@ const MicrophoneTestPanel = memo(
       hasDesktopBridge,
       micQualityMode,
       noiseSuppression,
+      sidecarDfnAttenuationLimitDb,
+      sidecarDfnMix,
+      sidecarExperimentalAggressiveMode,
+      sidecarNoiseGateFloorDbfs,
       voiceFilterStrength
     ]);
     const canRecordClip =
@@ -372,6 +408,13 @@ const MicrophoneTestPanel = memo(
                 resolvedMicProcessingConfig.sidecarAutoGainControl,
               echoCancellation:
                 resolvedMicProcessingConfig.sidecarEchoCancellation,
+              dfnMix: resolvedMicProcessingConfig.sidecarDfnMix,
+              dfnAttenuationLimitDb:
+                resolvedMicProcessingConfig.sidecarDfnAttenuationLimitDb,
+              dfnExperimentalAggressiveMode:
+                resolvedMicProcessingConfig.sidecarExperimentalAggressiveMode,
+              dfnNoiseGateFloorDbfs:
+                resolvedMicProcessingConfig.sidecarNoiseGateFloorDbfs,
               sidecarDeviceId,
               desktopBridge
             });

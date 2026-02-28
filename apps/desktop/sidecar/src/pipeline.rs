@@ -7,46 +7,6 @@ const MIC_CAPTURE_RING_BUFFER_FRAMES: usize = 32;
 #[cfg(windows)]
 const MIC_CAPTURE_WORKER_IDLE_WAIT: Duration = Duration::from_millis(5);
 
-pub(crate) struct AudioFrame {
-    pub(crate) samples: Vec<f32>,
-    pub(crate) sample_rate: usize,
-    pub(crate) channels: usize,
-    pub(crate) timestamp_ms: Option<f64>,
-    pub(crate) sequence: u64,
-    pub(crate) protocol_version: Option<u32>,
-}
-
-impl AudioFrame {
-    pub(crate) fn new(
-        samples: Vec<f32>,
-        sample_rate: usize,
-        channels: usize,
-        timestamp_ms: Option<f64>,
-        sequence: u64,
-        protocol_version: Option<u32>,
-    ) -> Result<Self, String> {
-        if channels == 0 {
-            return Err("Audio frame channel count must be > 0".to_string());
-        }
-
-        if samples.len() % channels != 0 {
-            return Err("Audio frame sample count mismatch".to_string());
-        }
-
-        Ok(Self {
-            samples,
-            sample_rate,
-            channels,
-            timestamp_ms: timestamp_ms.filter(|value| value.is_finite()),
-            sequence,
-            protocol_version,
-        })
-    }
-
-    pub(crate) fn frame_count(&self) -> usize {
-        self.samples.len() / self.channels
-    }
-}
 
 #[cfg(windows)]
 #[derive(Clone, Copy, Default)]

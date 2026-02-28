@@ -190,6 +190,13 @@ export type TDesktopUpdateStatus = {
   message?: string;
 };
 
+export type TVoiceFilterDfnTuningInput = {
+  attenuationLimitDb?: number;
+  mix?: number;
+  experimentalAggressiveMode?: boolean;
+  noiseGateFloorDbfs?: number;
+};
+
 export type TStartVoiceFilterInput = {
   sampleRate: number;
   channels: number;
@@ -198,7 +205,7 @@ export type TStartVoiceFilterInput = {
   autoGainControl: boolean;
   echoCancellation: boolean;
   dereverbMode?: TVoiceDereverbMode;
-};
+} & TVoiceFilterDfnTuningInput;
 
 export type TPushKeybindKind = "talk" | "mute";
 
