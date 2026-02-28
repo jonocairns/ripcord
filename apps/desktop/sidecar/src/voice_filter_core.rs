@@ -77,6 +77,11 @@ pub const DEZIPPER_COEFF: f32 = 0.25;
 pub const SUPPRESSION_STARTUP_RAMP_MS: u32 = 1_000;
 pub const SUPPRESSION_STARTUP_PRE_WARM_MS: f32 = 200.0;
 pub const ONSET_WET_RAMP_FRAMES: u32 = 10;
+pub const PRE_DFN_ONSET_ASSIST_WET_MIX_FLOOR: f32 = 0.55;
+pub const PRE_DFN_ONSET_ASSIST_SCORE_THRESHOLD: f32 = 0.72;
+pub const PRE_DFN_ONSET_ASSIST_NOISE_FLOOR_MULTIPLIER: f32 = 3.0;
+pub const PRE_DFN_ONSET_ASSIST_MAX_CREST: f32 = 5.8;
+pub const PRE_DFN_ONSET_ASSIST_MAX_DIFF_RATIO: f32 = 0.8;
 
 pub const DEREVERB_MIN_LEVEL_DBFS: f32 = -52.0;
 pub const DEREVERB_MAX_ATTENUATION_DB: f32 = 6.0;
@@ -595,6 +600,7 @@ pub struct VoiceFilterSession {
     pub noise_rng_state: u32,
     pub dezipper_prev_sample: f32,
     pub vad: VadState,
+    pub pre_dfn_vad_tap: ModelVadTapState,
     pub transient_suppressor: TransientSuppressorState,
     pub transient_lookback_frame: Option<Vec<f32>>,
     pub lsnr_smoothed: f32,
@@ -982,6 +988,37 @@ pub struct VadState {
     pub silence_gate_frames: u32,
 }
 
+pub struct ModelVadTapState {
+    /// Model-based VAD detector running on a 16 kHz sliding window.
+    pub detector: Detector,
+    /// Pending 16 kHz mono samples waiting to be fed into the model.
+    pub model_frame: VecDeque<f32>,
+    /// Scratch buffer to hand a contiguous 256-sample frame to the model.
+    pub model_frame_scratch: [f32; VAD_MODEL_FRAME_SAMPLES],
+    /// Last score produced by the model; reused until another 256-sample chunk is ready.
+    pub model_last_score: f32,
+    /// Phase accumulator for crude streaming resampling into 16 kHz.
+    pub model_resample_phase: usize,
+    /// Running bucket sum for the next 16 kHz sample.
+    pub model_resample_bucket_sum: f32,
+    /// Number of source samples accumulated into the current resample bucket.
+    pub model_resample_bucket_count: usize,
+}
+
+impl Default for ModelVadTapState {
+    fn default() -> Self {
+        Self {
+            detector: Detector::default(),
+            model_frame: VecDeque::with_capacity(VAD_MODEL_FRAME_SAMPLES * 2),
+            model_frame_scratch: [0.0; VAD_MODEL_FRAME_SAMPLES],
+            model_last_score: 0.0,
+            model_resample_phase: 0,
+            model_resample_bucket_sum: 0.0,
+            model_resample_bucket_count: 0,
+        }
+    }
+}
+
 impl Default for VadState {
     fn default() -> Self {
         Self {
@@ -1011,6 +1048,10 @@ fn push_vad_model_sample(vad: &mut VadState, sample: f32) {
     vad.model_frame.push_back(sample.clamp(-1.0, 1.0));
 }
 
+fn push_model_vad_tap_sample(vad: &mut ModelVadTapState, sample: f32) {
+    vad.model_frame.push_back(sample.clamp(-1.0, 1.0));
+}
+
 fn predict_model_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> Option<f32> {
     if samples.is_empty() || sample_rate < VAD_MODEL_SAMPLE_RATE {
         return None;
@@ -1030,6 +1071,51 @@ fn predict_model_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) ->
             vad.model_resample_bucket_sum = 0.0;
             vad.model_resample_bucket_count = 0;
             push_vad_model_sample(vad, averaged);
+            emitted = true;
+        }
+    }
+
+    while vad.model_frame.len() >= VAD_MODEL_FRAME_SAMPLES {
+        for slot in vad.model_frame_scratch.iter_mut() {
+            *slot = vad
+                .model_frame
+                .pop_front()
+                .expect("model frame length already checked");
+        }
+        vad.model_last_score = vad.detector.predict_f32(&vad.model_frame_scratch);
+        emitted = true;
+    }
+
+    if emitted || !vad.model_frame.is_empty() {
+        Some(vad.model_last_score)
+    } else {
+        None
+    }
+}
+
+fn predict_model_vad_tap(
+    vad: &mut ModelVadTapState,
+    samples: &[f32],
+    sample_rate: usize,
+) -> Option<f32> {
+    if samples.is_empty() || sample_rate < VAD_MODEL_SAMPLE_RATE {
+        return None;
+    }
+
+    let mut emitted = false;
+
+    for &sample in samples {
+        vad.model_resample_bucket_sum += sample;
+        vad.model_resample_bucket_count += 1;
+        vad.model_resample_phase += VAD_MODEL_SAMPLE_RATE;
+
+        if vad.model_resample_phase >= sample_rate {
+            let bucket_count = vad.model_resample_bucket_count.max(1) as f32;
+            let averaged = vad.model_resample_bucket_sum / bucket_count;
+            vad.model_resample_phase -= sample_rate;
+            vad.model_resample_bucket_sum = 0.0;
+            vad.model_resample_bucket_count = 0;
+            push_model_vad_tap_sample(vad, averaged);
             emitted = true;
         }
     }
@@ -1521,6 +1607,7 @@ pub fn create_voice_filter_session(
         noise_rng_state: 0x9e37_79b9, // arbitrary non-zero seed for xorshift32
         dezipper_prev_sample: 0.0,
         vad: VadState::default(),
+        pre_dfn_vad_tap: ModelVadTapState::default(),
         transient_suppressor: TransientSuppressorState::default(),
         transient_lookback_frame: None,
         lsnr_smoothed: 0.0,
@@ -2442,7 +2529,7 @@ pub fn process_voice_filter_frame(
     } else {
         1.0
     };
-    let effective_wet_mix = ramp_wet_mix_at_frame_start.min(onset_wet_mix);
+    let base_effective_wet_mix = ramp_wet_mix_at_frame_start.min(onset_wet_mix);
 
     // AEC before DFN: remove echo from the mic signal first so DFN sees a cleaner
     // input.  If AEC is disabled this is a no-op and has no performance cost.
@@ -2461,6 +2548,36 @@ pub fn process_voice_filter_frame(
     let input_sum_sq: f32 = samples.iter().map(|s| s * s).sum();
     let input_rms = (input_sum_sq / samples.len() as f32).sqrt();
     let input_prev_rms = session.transient_input_prev_rms;
+    let input_diff_sum_sq: f32 = samples
+        .windows(2)
+        .map(|window| {
+            let delta = window[1] - window[0];
+            delta * delta
+        })
+        .sum();
+    let input_diff_rms = if samples.len() > 1 {
+        (input_diff_sum_sq / (samples.len() - 1) as f32).sqrt()
+    } else {
+        0.0
+    };
+    let input_crest = input_peak / (input_rms + 1e-6);
+    let input_diff_ratio = input_diff_rms / (input_rms + 1e-6);
+    let pre_dfn_sidechain_score =
+        predict_model_vad_tap(&mut session.pre_dfn_vad_tap, samples, session.sample_rate)
+            .unwrap_or(0.0);
+    let likely_pre_dfn_speech_attack = matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_))
+        && session.vad.speech_state == VadSpeechState::Silence
+        && session.vad.onset_protection_frames_remaining == 0
+        && session.vad.startup_noise_calibration_frames_remaining == 0
+        && pre_dfn_sidechain_score >= PRE_DFN_ONSET_ASSIST_SCORE_THRESHOLD
+        && input_rms > session.vad.noise_floor_rms * PRE_DFN_ONSET_ASSIST_NOISE_FLOOR_MULTIPLIER
+        && input_crest < PRE_DFN_ONSET_ASSIST_MAX_CREST
+        && input_diff_ratio < PRE_DFN_ONSET_ASSIST_MAX_DIFF_RATIO;
+    let effective_wet_mix = if likely_pre_dfn_speech_attack {
+        base_effective_wet_mix.min(PRE_DFN_ONSET_ASSIST_WET_MIX_FLOOR)
+    } else {
+        base_effective_wet_mix
+    };
     session.transient_input_prev_rms = input_rms;
 
     let mut dfn_stats = DfnStageStats::default();
