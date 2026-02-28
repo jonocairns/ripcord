@@ -4,6 +4,7 @@ use earshot::Detector;
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::f32::consts::PI;
 use std::time::Instant;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -73,6 +74,21 @@ pub const COMFORT_NOISE_LEVEL_DBFS: f32 = -78.0;
 
 // Output de-zipper
 pub const DEZIPPER_COEFF: f32 = 0.25;
+
+// Late-stage voice polish. This is intentionally subtle and speech-gated so it
+// restores a bit of presence without re-opening the suppressed noise floor.
+pub const VOICE_POLISH_HIGH_SHELF_HZ: f32 = 4_800.0;
+pub const VOICE_POLISH_PRESENCE_FAST_HZ: f32 = 3_400.0;
+pub const VOICE_POLISH_PRESENCE_SLOW_HZ: f32 = 1_200.0;
+pub const VOICE_POLISH_EXCITER_HZ: f32 = 2_600.0;
+pub const VOICE_POLISH_HIGH_SHELF_MIX: f32 = 0.10;
+pub const VOICE_POLISH_PRESENCE_MIX: f32 = 0.04;
+pub const VOICE_POLISH_EXCITER_MIX: f32 = 0.015;
+pub const VOICE_POLISH_EXCITER_DRIVE: f32 = 1.8;
+pub const VOICE_POLISH_HANGOVER_MIX: f32 = 0.22;
+pub const VOICE_POLISH_LSNR_FLOOR_DB: f32 = -6.0;
+pub const VOICE_POLISH_LSNR_CEIL_DB: f32 = 8.0;
+pub const VOICE_POLISH_LSNR_MIN_MIX: f32 = 0.45;
 
 pub const SUPPRESSION_STARTUP_RAMP_MS: u32 = 1_000;
 pub const SUPPRESSION_STARTUP_PRE_WARM_MS: f32 = 200.0;
@@ -352,6 +368,112 @@ impl TailDereverbProcessor {
     }
 }
 
+pub struct VoicePolishProcessor {
+    pub high_shelf_lowpass: Vec<f32>,
+    pub presence_fast_lowpass: Vec<f32>,
+    pub presence_slow_lowpass: Vec<f32>,
+    pub exciter_lowpass: Vec<f32>,
+}
+
+impl VoicePolishProcessor {
+    pub fn new(channels: usize) -> Self {
+        let state_len = channels.max(1);
+
+        Self {
+            high_shelf_lowpass: vec![0.0; state_len],
+            presence_fast_lowpass: vec![0.0; state_len],
+            presence_slow_lowpass: vec![0.0; state_len],
+            exciter_lowpass: vec![0.0; state_len],
+        }
+    }
+
+    pub fn process(
+        &mut self,
+        samples: &mut [f32],
+        channels: usize,
+        sample_rate: usize,
+        speech_state: VadSpeechState,
+        lsnr_db: Option<f32>,
+    ) {
+        if samples.is_empty() || channels == 0 || sample_rate == 0 {
+            return;
+        }
+
+        let speech_mix = match speech_state {
+            VadSpeechState::Speech => 1.0,
+            VadSpeechState::Hangover => VOICE_POLISH_HANGOVER_MIX,
+            VadSpeechState::Silence => 0.0,
+        };
+
+        if speech_mix <= 0.0 {
+            return;
+        }
+
+        let lsnr_mix = if let Some(lsnr_db) = lsnr_db {
+            let t = ((lsnr_db - VOICE_POLISH_LSNR_FLOOR_DB)
+                / (VOICE_POLISH_LSNR_CEIL_DB - VOICE_POLISH_LSNR_FLOOR_DB))
+                .clamp(0.0, 1.0);
+            VOICE_POLISH_LSNR_MIN_MIX + (1.0 - VOICE_POLISH_LSNR_MIN_MIX) * t
+        } else {
+            1.0
+        };
+        let polish_mix = speech_mix * lsnr_mix;
+
+        self.ensure_channels(channels);
+
+        let high_shelf_alpha = one_pole_alpha(sample_rate, VOICE_POLISH_HIGH_SHELF_HZ);
+        let presence_fast_alpha = one_pole_alpha(sample_rate, VOICE_POLISH_PRESENCE_FAST_HZ);
+        let presence_slow_alpha = one_pole_alpha(sample_rate, VOICE_POLISH_PRESENCE_SLOW_HZ);
+        let exciter_alpha = one_pole_alpha(sample_rate, VOICE_POLISH_EXCITER_HZ);
+
+        for (sample_index, sample) in samples.iter_mut().enumerate() {
+            let channel_index = sample_index % channels;
+            let dry = *sample;
+
+            let high_shelf_lp = one_pole_lowpass_step(
+                &mut self.high_shelf_lowpass[channel_index],
+                dry,
+                high_shelf_alpha,
+            );
+            let high_band = dry - high_shelf_lp;
+
+            let presence_fast = one_pole_lowpass_step(
+                &mut self.presence_fast_lowpass[channel_index],
+                dry,
+                presence_fast_alpha,
+            );
+            let presence_slow = one_pole_lowpass_step(
+                &mut self.presence_slow_lowpass[channel_index],
+                dry,
+                presence_slow_alpha,
+            );
+            let presence_band = presence_fast - presence_slow;
+
+            let exciter_lp = one_pole_lowpass_step(
+                &mut self.exciter_lowpass[channel_index],
+                dry,
+                exciter_alpha,
+            );
+            let exciter_high = dry - exciter_lp;
+            let excited = (exciter_high * VOICE_POLISH_EXCITER_DRIVE).tanh();
+
+            *sample = dry
+                + high_band * VOICE_POLISH_HIGH_SHELF_MIX * polish_mix
+                + presence_band * VOICE_POLISH_PRESENCE_MIX * polish_mix
+                + excited * VOICE_POLISH_EXCITER_MIX * polish_mix;
+        }
+    }
+
+    fn ensure_channels(&mut self, channels: usize) {
+        if self.high_shelf_lowpass.len() < channels {
+            self.high_shelf_lowpass.resize(channels, 0.0);
+            self.presence_fast_lowpass.resize(channels, 0.0);
+            self.presence_slow_lowpass.resize(channels, 0.0);
+            self.exciter_lowpass.resize(channels, 0.0);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct AdaptiveEchoMetrics {
     pub erle_db: Option<f32>,
@@ -581,6 +703,7 @@ pub struct VoiceFilterSession {
     pub channels: usize,
     pub processor: VoiceFilterProcessor,
     pub dereverb: Option<TailDereverbProcessor>,
+    pub voice_polish: VoicePolishProcessor,
     pub suppression_startup_ramp_ms_remaining: u32,
     pub high_pass_filters: Vec<HighPassFilter>,
     pub auto_gain_control: bool,
@@ -603,6 +726,11 @@ pub struct VoiceFilterSession {
     pub pre_dfn_vad_tap: ModelVadTapState,
     pub transient_suppressor: TransientSuppressorState,
     pub transient_lookback_frame: Option<Vec<f32>>,
+    /// VAD speech state captured at the same time as the lookback frame, so that
+    /// downstream consumers (voice polish, limiter) use the state that matches
+    /// the delayed audio rather than the current frame's state.
+    pub transient_lookback_vad_state: VadSpeechState,
+    pub transient_lookback_lsnr: f32,
     pub lsnr_smoothed: f32,
 }
 
@@ -1584,6 +1712,7 @@ pub fn create_voice_filter_session(
         channels: mono_channels,
         processor,
         dereverb,
+        voice_polish: VoicePolishProcessor::new(mono_channels),
         auto_gain_control,
         trim_level_rms: 0.0,
         trim_gain: 1.0,
@@ -1610,6 +1739,8 @@ pub fn create_voice_filter_session(
         pre_dfn_vad_tap: ModelVadTapState::default(),
         transient_suppressor: TransientSuppressorState::default(),
         transient_lookback_frame: None,
+        transient_lookback_vad_state: VadSpeechState::Silence,
+        transient_lookback_lsnr: 0.0,
         lsnr_smoothed: 0.0,
     })
 }
@@ -1864,6 +1995,21 @@ pub fn apply_output_dezipper(samples: &mut [f32], prev_sample: &mut f32) {
         *prev_sample = *prev_sample * DEZIPPER_COEFF + *s * (1.0 - DEZIPPER_COEFF);
         *s = *prev_sample;
     }
+}
+
+pub fn one_pole_alpha(sample_rate: usize, cutoff_hz: f32) -> f32 {
+    if sample_rate == 0 || !cutoff_hz.is_finite() || cutoff_hz <= 0.0 {
+        return 1.0;
+    }
+
+    let nyquist_safe_cutoff = cutoff_hz.min(sample_rate as f32 * 0.45);
+    let omega = 2.0 * PI * nyquist_safe_cutoff / sample_rate as f32;
+    (1.0 - (-omega).exp()).clamp(0.0, 1.0)
+}
+
+pub fn one_pole_lowpass_step(state: &mut f32, input: f32, alpha: f32) -> f32 {
+    *state += (input - *state) * alpha.clamp(0.0, 1.0);
+    *state
 }
 
 // repair_spikes: single-sample interpolation for isolated amplitude spikes.
@@ -2783,6 +2929,8 @@ pub fn process_voice_filter_frame(
 
     if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
         let current_frame = samples.to_vec();
+        let current_vad_state = session.vad.speech_state;
+        let current_lsnr = session.lsnr_smoothed;
 
         if let Some(mut delayed_frame) = session.transient_lookback_frame.take() {
             if delayed_frame.len() == samples.len() {
@@ -2808,6 +2956,11 @@ pub fn process_voice_filter_frame(
         }
 
         session.transient_lookback_frame = Some(current_frame);
+        // Snapshot the VAD state and LSNR that correspond to the frame we just
+        // stored, so voice polish and limiter in the caller use the state that
+        // matches the delayed audio they will actually process.
+        session.transient_lookback_vad_state = current_vad_state;
+        session.transient_lookback_lsnr = current_lsnr;
     }
 
     Ok(VoiceFilterDiagnostics {
@@ -2925,9 +3078,58 @@ pub fn process_voice_filter_frame_in_place(
     )?;
 
     // Limiter is only needed after DeepFilterNet to guard against model output peaks.
+    // Use the lookback VAD state and LSNR that were captured alongside the delayed
+    // frame — session.vad.speech_state reflects the *current* input frame, but
+    // frame.samples is one frame behind due to the transient lookback buffer.
     if matches!(session.processor, VoiceFilterProcessor::DeepFilter(_)) {
+        session.voice_polish.process(
+            &mut frame.samples,
+            frame.channels,
+            session.sample_rate,
+            session.transient_lookback_vad_state,
+            Some(session.transient_lookback_lsnr),
+        );
         apply_limiter(&mut frame.samples, &mut session.limiter_gain);
     }
 
     Ok(diagnostics)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn voice_polish_is_disabled_in_silence() {
+        let mut polish = VoicePolishProcessor::new(1);
+        let mut samples = vec![0.002, -0.001, 0.003, -0.002];
+        let original = samples.clone();
+
+        polish.process(
+            &mut samples,
+            1,
+            TARGET_SAMPLE_RATE as usize,
+            VadSpeechState::Silence,
+            None,
+        );
+
+        assert_eq!(samples, original);
+    }
+
+    #[test]
+    fn voice_polish_stays_bounded_on_speech() {
+        let mut polish = VoicePolishProcessor::new(1);
+        let mut samples = vec![0.0, 0.08, -0.12, 0.1, -0.07, 0.04];
+
+        polish.process(
+            &mut samples,
+            1,
+            TARGET_SAMPLE_RATE as usize,
+            VadSpeechState::Speech,
+            Some(6.0),
+        );
+
+        assert!(samples.iter().all(|sample| sample.is_finite()));
+        assert!(samples.iter().map(|sample| sample.abs()).fold(0.0, f32::max) < 0.25);
+    }
 }

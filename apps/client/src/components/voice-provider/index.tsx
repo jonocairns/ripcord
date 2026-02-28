@@ -23,6 +23,7 @@ import {
   MicQualityMode,
   VideoCodecPreference,
   VoiceFilterStrength,
+  getStrengthDefaults,
   type TDeviceSettings,
   type TRemoteStreams
 } from '@/types';
@@ -149,6 +150,8 @@ const resolveMicProcessingConfig = (
   devices: TDeviceSettings,
   hasDesktopBridge: boolean
 ): ResolvedMicProcessingConfig => {
+  const defaults = getStrengthDefaults(devices.voiceFilterStrength);
+
   if (devices.micQualityMode === MicQualityMode.EXPERIMENTAL) {
     return {
       sidecarVoiceProcessingEnabled: hasDesktopBridge,
@@ -159,11 +162,11 @@ const resolveMicProcessingConfig = (
       sidecarAutoGainControl: devices.autoGainControl,
       sidecarEchoCancellation: devices.echoCancellation,
       sidecarSuppressionLevel: devices.voiceFilterStrength,
-      sidecarDfnMix: devices.sidecarDfnMix,
-      sidecarDfnAttenuationLimitDb: devices.sidecarDfnAttenuationLimitDb,
+      sidecarDfnMix: defaults.dfnMix,
+      sidecarDfnAttenuationLimitDb: defaults.dfnAttenuationLimitDb,
       sidecarExperimentalAggressiveMode:
-        devices.sidecarExperimentalAggressiveMode,
-      sidecarNoiseGateFloorDbfs: devices.sidecarNoiseGateFloorDbfs
+        defaults.dfnExperimentalAggressiveMode,
+      sidecarNoiseGateFloorDbfs: defaults.dfnNoiseGateFloorDbfs
     };
   }
 
@@ -177,10 +180,10 @@ const resolveMicProcessingConfig = (
     sidecarAutoGainControl: devices.autoGainControl,
     sidecarEchoCancellation: devices.echoCancellation,
     sidecarSuppressionLevel: devices.voiceFilterStrength,
-    sidecarDfnMix: devices.sidecarDfnMix,
-    sidecarDfnAttenuationLimitDb: devices.sidecarDfnAttenuationLimitDb,
-    sidecarExperimentalAggressiveMode: devices.sidecarExperimentalAggressiveMode,
-    sidecarNoiseGateFloorDbfs: devices.sidecarNoiseGateFloorDbfs
+    sidecarDfnMix: defaults.dfnMix,
+    sidecarDfnAttenuationLimitDb: defaults.dfnAttenuationLimitDb,
+    sidecarExperimentalAggressiveMode: defaults.dfnExperimentalAggressiveMode,
+    sidecarNoiseGateFloorDbfs: defaults.dfnNoiseGateFloorDbfs
   };
 };
 
