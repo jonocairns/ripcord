@@ -278,6 +278,27 @@ const sfxRemoteUserJoinedVoiceChannel = () => {
   });
 };
 
+// REMOTE STREAM STARTED — compact bright cue
+const sfxRemoteUserStartedStream = () => {
+  const tones = [
+    { freq: 784, gain: 0.06, delay: 0 }, // G
+    { freq: 988, gain: 0.05, delay: 0.05 }, // B
+    { freq: 1175, gain: 0.035, delay: 0.1 } // D
+  ];
+
+  tones.forEach(({ freq, gain: g, delay }) => {
+    const t = now() + delay;
+    const osc = createOsc('triangle', freq);
+    const gain = createGain(g);
+
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.14);
+  });
+};
+
 // REMOTE LEAVE — layered descending tones
 const sfxRemoteUserLeftVoiceChannel = () => {
   const tones = [
@@ -296,6 +317,46 @@ const sfxRemoteUserLeftVoiceChannel = () => {
     osc.connect(gain).connect(audioCtx.destination);
     osc.start(t);
     osc.stop(t + 0.2);
+  });
+};
+
+// STREAM WATCHER JOINED — light confirmation pulse
+const sfxStreamWatcherJoined = () => {
+  const tones = [
+    { freq: 659, gain: 0.055, delay: 0 },
+    { freq: 880, gain: 0.045, delay: 0.045 }
+  ];
+
+  tones.forEach(({ freq, gain: g, delay }) => {
+    const t = now() + delay;
+    const osc = createOsc('triangle', freq);
+    const gain = createGain(g);
+
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.12);
+  });
+};
+
+// STREAM WATCHER LEFT — soft descending pulse
+const sfxStreamWatcherLeft = () => {
+  const tones = [
+    { freq: 740, gain: 0.05, delay: 0 },
+    { freq: 587, gain: 0.04, delay: 0.05 }
+  ];
+
+  tones.forEach(({ freq, gain: g, delay }) => {
+    const t = now() + delay;
+    const osc = createOsc('triangle', freq);
+    const gain = createGain(g);
+
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.12);
   });
 };
 
@@ -333,6 +394,12 @@ const playSoundEffect = (type: SoundType) => {
 
     case SoundType.REMOTE_USER_JOINED_VOICE_CHANNEL:
       return sfxRemoteUserJoinedVoiceChannel();
+    case SoundType.REMOTE_USER_STARTED_STREAM:
+      return sfxRemoteUserStartedStream();
+    case SoundType.STREAM_WATCHER_JOINED:
+      return sfxStreamWatcherJoined();
+    case SoundType.STREAM_WATCHER_LEFT:
+      return sfxStreamWatcherLeft();
     case SoundType.REMOTE_USER_LEFT_VOICE_CHANNEL:
       return sfxRemoteUserLeftVoiceChannel();
 

@@ -3,7 +3,14 @@ import { IconButton } from '@/components/ui/icon-button';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import { cn } from '@/lib/utils';
 import type { TExternalStream } from '@sharkord/shared';
-import { Headphones, Router, Video, ZoomIn, ZoomOut } from 'lucide-react';
+import {
+  EyeOff,
+  Headphones,
+  Router,
+  Video,
+  ZoomIn,
+  ZoomOut
+} from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { CardControls } from './card-controls';
 import { CardGradient } from './card-gradient';
@@ -24,6 +31,7 @@ type TExternalStreamControlsProps = {
   isMuted: boolean;
   onVolumeChange: (volume: number) => void;
   onMuteToggle: () => void;
+  onStopWatching?: () => void;
 };
 
 const ExternalStreamControls = memo(
@@ -38,10 +46,20 @@ const ExternalStreamControls = memo(
     volume,
     isMuted,
     onVolumeChange,
-    onMuteToggle
+    onMuteToggle,
+    onStopWatching
   }: TExternalStreamControlsProps) => {
     return (
       <CardControls>
+        {onStopWatching && (
+          <IconButton
+            variant="ghost"
+            icon={EyeOff}
+            onClick={onStopWatching}
+            title="Stop Watching"
+            size="sm"
+          />
+        )}
         {hasAudio && (
           <StreamSettingsPopover
             volume={volume}
@@ -75,6 +93,7 @@ type TExternalStreamCardProps = {
   onUnpin: () => void;
   className?: string;
   showPinControls: boolean;
+  onStopWatching?: () => void;
 };
 
 const ExternalStreamCard = memo(
@@ -85,7 +104,8 @@ const ExternalStreamCard = memo(
     onPin,
     onUnpin,
     className,
-    showPinControls = true
+    showPinControls = true,
+    onStopWatching
   }: TExternalStreamCardProps) => {
     const {
       externalVideoRef,
@@ -172,6 +192,7 @@ const ExternalStreamCard = memo(
           isMuted={isMuted}
           onVolumeChange={handleVolumeChange}
           onMuteToggle={handleMuteToggle}
+          onStopWatching={onStopWatching}
         />
 
         {hasVideo ? (

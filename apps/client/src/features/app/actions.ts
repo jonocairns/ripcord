@@ -1,12 +1,13 @@
 import { getUrlFromServer } from '@/helpers/get-file-url';
 import {
+  clearAuthToken,
   getAuthToken,
   getRefreshToken,
   hydrateSessionToken
 } from '@/helpers/storage';
 import type { TServerInfo } from '@sharkord/shared';
 import { toast } from 'sonner';
-import { connect, setInfo } from '../server/actions';
+import { connect, setDisconnectInfo, setInfo } from '../server/actions';
 import { store } from '../store';
 import { appSliceActions } from './slice';
 
@@ -55,6 +56,14 @@ export const loadApp = async () => {
           'Failed to auto-connect with persisted auth token',
           error
         );
+
+        if (existingToken && !existingRefreshToken) {
+          clearAuthToken();
+        }
+
+        if (!getAuthToken() && !getRefreshToken()) {
+          setDisconnectInfo(undefined);
+        }
       }
     }
   } finally {

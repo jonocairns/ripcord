@@ -2,6 +2,7 @@ import { getTRPCClient } from '@/lib/trpc';
 import {
   addExternalStreamToVoiceChannel,
   addUserToVoiceChannel,
+  handleStreamWatcherActivity,
   removeExternalStreamFromVoiceChannel,
   removeUserFromVoiceChannel,
   updateExternalStreamInVoiceChannel,
@@ -62,6 +63,15 @@ const subscribeToVoice = () => {
         console.error('onVoiceRemoveExternalStreamSub subscription error:', err)
     });
 
+  const onVoiceStreamWatcherActivitySub =
+    trpc.voice.onStreamWatcherActivity.subscribe(undefined, {
+      onData: (activity) => {
+        handleStreamWatcherActivity(activity);
+      },
+      onError: (err) =>
+        console.error('onVoiceStreamWatcherActivitySub subscription error:', err)
+    });
+
   return () => {
     onUserJoinVoiceSub.unsubscribe();
     onUserLeaveVoiceSub.unsubscribe();
@@ -69,6 +79,7 @@ const subscribeToVoice = () => {
     onVoiceAddExternalStreamSub.unsubscribe();
     onVoiceUpdateExternalStreamSub.unsubscribe();
     onVoiceRemoveExternalStreamSub.unsubscribe();
+    onVoiceStreamWatcherActivitySub.unsubscribe();
   };
 };
 

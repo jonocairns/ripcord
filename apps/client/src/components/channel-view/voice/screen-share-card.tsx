@@ -6,6 +6,7 @@ import {
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
 import { cn } from '@/lib/utils';
 import {
+  EyeOff,
   ExternalLink,
   Maximize2,
   Minimize2,
@@ -45,6 +46,8 @@ type tScreenShareControlsProps = {
   volumeKey: TVolumeKey;
   isFullscreen: boolean;
   isPoppedOut: boolean;
+  canStopWatching: boolean;
+  onStopWatching?: () => void;
 };
 
 const ScreenShareControls = memo(
@@ -59,10 +62,21 @@ const ScreenShareControls = memo(
     showAudioControl,
     volumeKey,
     isFullscreen,
-    isPoppedOut
+    isPoppedOut,
+    canStopWatching,
+    onStopWatching
   }: tScreenShareControlsProps) => {
     return (
       <CardControls>
+        {canStopWatching && onStopWatching && (
+          <IconButton
+            variant="ghost"
+            icon={EyeOff}
+            onClick={onStopWatching}
+            title="Stop Watching"
+            size="sm"
+          />
+        )}
         {showAudioControl && <VolumeButton volumeKey={volumeKey} />}
         <IconButton
           variant={isPoppedOut ? 'default' : 'ghost'}
@@ -102,6 +116,7 @@ type TScreenShareCardProps = {
   onUnpin: () => void;
   className?: string;
   showPinControls: boolean;
+  onStopWatching?: () => void;
 };
 
 const POPOUT_CONTROLS_IDLE_HIDE_MS = 2500;
@@ -113,7 +128,8 @@ const ScreenShareCard = memo(
     onPin,
     onUnpin,
     className,
-    showPinControls = true
+    showPinControls = true,
+    onStopWatching
   }: TScreenShareCardProps) => {
     const user = useUserById(userId);
     const ownUserId = useOwnUserId();
@@ -458,6 +474,8 @@ const ScreenShareCard = memo(
             volumeKey={volumeKey}
             isFullscreen={isFullscreen}
             isPoppedOut={isPoppedOut}
+            canStopWatching={!isOwnUser}
+            onStopWatching={onStopWatching}
           />
 
           <video

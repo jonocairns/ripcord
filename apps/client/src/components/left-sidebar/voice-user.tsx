@@ -1,3 +1,4 @@
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { UserAvatar } from '@/components/user-avatar';
@@ -33,6 +34,7 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
   const volume = getVolume(volumeKey);
   const isMuted = volume === 0;
   const isActivelySpeaking = !user.state.micMuted && isSpeaking;
+  const isLive = user.state.webcamEnabled || user.state.sharingScreen;
   const handleVolumeChange = useCallback(
     (values: number[]) => {
       setVolume(volumeKey, values[0] || 0);
@@ -99,6 +101,12 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
         <span className="flex-1 text-muted-foreground truncate text-sm">
           {user.name}
         </span>
+
+        {isLive && (
+          <Badge className="border-transparent bg-red-500/90 px-1.5 py-0 text-[10px] font-bold tracking-[0.12em] text-white">
+            LIVE
+          </Badge>
+        )}
 
         <div className="flex items-center gap-1 opacity-60">
           <div>

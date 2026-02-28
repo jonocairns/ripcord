@@ -88,6 +88,11 @@ type Events = {
     remoteId: number;
     kind: StreamKind;
   };
+  [ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY]: {
+    watcherId: number;
+    kind: StreamKind.VIDEO | StreamKind.SCREEN;
+    action: 'joined' | 'left';
+  };
 
   [ServerEvents.PLUGIN_LOG]: TLogEntry;
   [ServerEvents.PLUGIN_COMMANDS_CHANGE]: TCommandsMapByPlugin;
