@@ -89,10 +89,10 @@ pub const DEREVERB_GAIN_RELEASE_MS: f32 = 120.0;
 
 // Downward expander
 pub const EXPANDER_THRESHOLD_DBFS: f32 = -35.0;
-pub const EXPANDER_RATIO: f32 = 1.2;
+pub const EXPANDER_RATIO: f32 = 1.5;
 pub const EXPANDER_ATTACK_MS: f32 = 2.0;
-pub const EXPANDER_RELEASE_MS: f32 = 250.0;
-pub const EXPANDER_HANGOVER_MS: f32 = 70.0;
+pub const EXPANDER_RELEASE_MS: f32 = 80.0;
+pub const EXPANDER_HANGOVER_MS: f32 = 120.0;
 pub const EXPANDER_LSNR_NUDGE_LOW_DB: f32 = -10.0;
 pub const EXPANDER_LSNR_NUDGE_HIGH_DB: f32 = 5.0;
 pub const EXPANDER_LSNR_THRESHOLD_RAISE_DB: f32 = 8.0;
@@ -106,7 +106,7 @@ pub const VAD_MODEL_FRAME_SAMPLES: usize = 256;
 pub const VAD_ALPHA: f32 = 0.85;
 pub const VAD_SPEECH_THRESHOLD: f32 = 0.6;
 pub const VAD_SILENCE_THRESHOLD: f32 = 0.3;
-pub const VAD_ONSET_FRAMES: u32 = 2;
+pub const VAD_ONSET_FRAMES: u32 = 1;
 pub const VAD_OFFSET_FRAMES: u32 = 5;
 pub const VAD_HANGOVER_FRAMES: u32 = 50;
 pub const VAD_ONSET_PROTECTION_FRAMES: u32 = 60;
@@ -115,7 +115,11 @@ pub const VAD_NOISE_ADAPT_RATE: f32 = 0.002;
 pub const VAD_SNR_LOW_DB: f32 = -3.0;
 pub const VAD_SNR_HIGH_DB: f32 = 12.0;
 pub const VAD_TRIM_SILENCE_RATE: f32 = 0.0;
-pub const VAD_TRIM_HANGOVER_RATE: f32 = 0.05;
+pub const VAD_TRIM_HANGOVER_RATE: f32 = 0.0;
+/// Frames of confirmed Silence before the silence gate fully closes (10ms/frame).
+/// 80 frames = 800ms — closes before DFN adaptation leak becomes audible (~1-2s)
+/// but leaves enough time that brief pauses don't trigger muting.
+pub const VAD_SILENCE_GATE_FADE_FRAMES: u32 = 80;
 pub const VAD_IMPULSE_CREST_THRESHOLD: f32 = 7.0;
 pub const VAD_IMPULSE_ENERGY_JUMP: f32 = 4.0;
 pub const VAD_TRANSIENT_NOISE_DIFF_RATIO_THRESHOLD: f32 = 0.95;
@@ -974,6 +978,8 @@ pub struct VadState {
     pub noise_floor_rms: f32,
     /// RMS of the previous frame; used by the impulse guard to detect sudden energy jumps.
     pub prev_frame_rms: f32,
+    /// Frames spent in continuous Silence state; drives the slow-fade silence gate.
+    pub silence_gate_frames: u32,
 }
 
 impl Default for VadState {
@@ -996,6 +1002,7 @@ impl Default for VadState {
             startup_noise_calibration_frames_remaining: VAD_STARTUP_NOISE_CALIBRATION_FRAMES,
             noise_floor_rms: 1e-4, // small non-zero initial noise floor
             prev_frame_rms: 0.0,
+            silence_gate_frames: 0,
         }
     }
 }
@@ -1047,6 +1054,8 @@ fn predict_model_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) ->
 
 pub struct VadOutput {
     pub speech_state: VadSpeechState,
+    /// Unsmoothed speech probability for this frame (instant onset response).
+    pub p_raw: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -1173,29 +1182,29 @@ pub fn voice_filter_config(
 ) -> VoiceFilterConfig {
     let mut config = match strength {
         VoiceFilterStrength::Low => VoiceFilterConfig {
-            post_filter_beta: 0.03,
-            atten_lim_db: 15.0,
+            post_filter_beta: 0.02,
+            atten_lim_db: 40.0,
             min_db_thresh: -10.0,
             max_db_erb_thresh: 35.0,
             max_db_df_thresh: 20.0,
         },
         VoiceFilterStrength::Balanced => VoiceFilterConfig {
-            post_filter_beta: 0.07,
-            atten_lim_db: 25.0,
+            post_filter_beta: 0.03,
+            atten_lim_db: 50.0,
             min_db_thresh: -12.0,
             max_db_erb_thresh: 33.0,
             max_db_df_thresh: 18.0,
         },
         VoiceFilterStrength::High => VoiceFilterConfig {
-            post_filter_beta: 0.13,
-            atten_lim_db: 35.0,
+            post_filter_beta: 0.04,
+            atten_lim_db: 60.0,
             min_db_thresh: -15.0,
             max_db_erb_thresh: 30.0,
             max_db_df_thresh: 15.0,
         },
         VoiceFilterStrength::Aggressive => VoiceFilterConfig {
-            post_filter_beta: 0.18,
-            atten_lim_db: 45.0,
+            post_filter_beta: 0.05,
+            atten_lim_db: 80.0,
             min_db_thresh: -18.0,
             max_db_erb_thresh: 28.0,
             max_db_df_thresh: 12.0,
@@ -1203,7 +1212,7 @@ pub fn voice_filter_config(
     };
 
     if experimental_aggressive_mode {
-        config.post_filter_beta = (config.post_filter_beta + 0.04).min(0.24);
+        config.post_filter_beta = (config.post_filter_beta + 0.01).min(0.05);
         config.min_db_thresh -= 2.0;
         config.max_db_erb_thresh = (config.max_db_erb_thresh - 3.0).max(18.0);
         config.max_db_df_thresh = (config.max_db_df_thresh - 2.0).max(8.0);
@@ -2104,6 +2113,7 @@ pub fn analyze_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> V
     if samples.is_empty() || sample_rate == 0 {
         return VadOutput {
             speech_state: vad.speech_state,
+            p_raw: 0.0,
         };
     }
 
@@ -2211,6 +2221,7 @@ pub fn analyze_vad(vad: &mut VadState, samples: &[f32], sample_rate: usize) -> V
     vad.prev_frame_rms = frame_rms;
     VadOutput {
         speech_state: vad.speech_state,
+        p_raw,
     }
 }
 
@@ -2481,6 +2492,7 @@ pub fn process_voice_filter_frame(
     } else {
         VadOutput {
             speech_state: VadSpeechState::Speech,
+            p_raw: 1.0,
         }
     };
     let transient_vad_state = transient_control_state(vad_out.speech_state, session.vad.p_smooth);
@@ -2614,15 +2626,31 @@ pub fn process_voice_filter_frame(
                         session.vad.hangover_frames_remaining as f32 / VAD_HANGOVER_FRAMES as f32;
                     hangover_bypass.min(speech_bypass)
                 }
-                VadSpeechState::Silence => 0.0,
+                VadSpeechState::Silence => speech_bypass,
             }
         };
         expander_bypass_out = Some(expander_bypass);
-        // Fade comfort noise with the inverse of expander_bypass so the room tone
-        // crossfades smoothly with speech dynamics rather than popping in/out.
-        // noise_mix = 1.0 → full noise (silence); noise_mix = 0.0 → no noise (speech).
-        let noise_mix = 1.0 - expander_bypass;
-        inject_comfort_noise(samples, &mut session.noise_rng_state, noise_mix);
+        // Silence gate: "instant on, slow off".
+        // - Any state other than Silence: gate_gain = 1.0 instantly (no onset clipping).
+        // - Input energy well above noise floor: gate_gain = 1.0 instantly — catches
+        //   speech onset before the VAD state machine confirms, with zero latency.
+        // - Silence with low input energy: fades 1.0→0.0 over VAD_SILENCE_GATE_FADE_FRAMES
+        //   (~800ms), closing before DFN model adaptation leaks audible ambient (~1-2s).
+        let input_above_noise_floor = input_rms > session.vad.noise_floor_rms * 6.0;
+        let silence_gate_active = vad_out.speech_state == VadSpeechState::Silence
+            && session.vad.onset_protection_frames_remaining == 0
+            && !input_above_noise_floor;
+        if silence_gate_active {
+            session.vad.silence_gate_frames =
+                (session.vad.silence_gate_frames + 1).min(VAD_SILENCE_GATE_FADE_FRAMES);
+        } else {
+            session.vad.silence_gate_frames = 0;
+        }
+        let gate_gain = 1.0
+            - (session.vad.silence_gate_frames as f32 / VAD_SILENCE_GATE_FADE_FRAMES as f32);
+        for s in samples.iter_mut() {
+            *s *= gate_gain;
+        }
         if let Some(lsnr) = lsnr_mean {
             session.lsnr_smoothed = EXPANDER_LSNR_SMOOTH_ALPHA * session.lsnr_smoothed
                 + (1.0 - EXPANDER_LSNR_SMOOTH_ALPHA) * lsnr;

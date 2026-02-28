@@ -46,13 +46,13 @@ const getDefaultAttenuationLimitDb = (
 ): number => {
   switch (strength) {
     case VoiceFilterStrength.LOW:
-      return 15;
+      return 40;
     case VoiceFilterStrength.BALANCED:
-      return 25;
+      return 50;
     case VoiceFilterStrength.HIGH:
-      return 35;
+      return 60;
     case VoiceFilterStrength.AGGRESSIVE:
-      return 45;
+      return 80;
   }
 };
 
@@ -314,6 +314,12 @@ const Devices = memo(() => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
+                      <SelectItem value={VoiceFilterStrength.LOW}>
+                        Low
+                      </SelectItem>
+                      <SelectItem value={VoiceFilterStrength.BALANCED}>
+                        Balanced
+                      </SelectItem>
                       <SelectItem value={VoiceFilterStrength.HIGH}>
                         High
                       </SelectItem>

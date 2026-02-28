@@ -58,3 +58,17 @@ Useful variants:
 ./audio-tests/run-all.sh --out-dir audio-tests/.outputs-alt
 ./audio-tests/run-all.sh -- --mix 1.0 --attenuation-limit-db 60
 ```
+
+To turn the current metrics into a repeatable regression check, the repo now includes
+`audio-tests/baseline.json` and a wrapper that asserts the analyzed values stay within
+configured min/max thresholds:
+
+```
+./audio-tests/test.sh
+```
+
+You can also run the assertion step directly:
+
+```
+./audio-tests/analyze.py --assert-baseline
+```
