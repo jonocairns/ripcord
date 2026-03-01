@@ -47,23 +47,6 @@ const VoiceGrid = memo(
       };
     }, [children, pinnedCardId]);
 
-    const getGridClass = (cols: number) => {
-      switch (cols) {
-        case 1:
-          return 'grid-cols-1';
-        case 2:
-          return 'grid-cols-2';
-        case 3:
-          return 'grid-cols-3';
-        case 4:
-          return 'grid-cols-4';
-        case 5:
-          return 'grid-cols-5';
-        default:
-          return 'grid-cols-4';
-      }
-    };
-
     if (pinnedCardId && pinnedCard) {
       return (
         <div className={cn('flex flex-col h-full', className)}>
@@ -91,23 +74,6 @@ const VoiceGrid = memo(
       return Math.ceil(totalCards / cols);
     };
 
-    const getGridRowsClass = (rows: number) => {
-      switch (rows) {
-        case 1:
-          return 'grid-rows-1';
-        case 2:
-          return 'grid-rows-2';
-        case 3:
-          return 'grid-rows-3';
-        case 4:
-          return 'grid-rows-4';
-        case 5:
-          return 'grid-rows-5';
-        default:
-          return 'grid-rows-4';
-      }
-    };
-
     const rows = getRowCount(regularCards.length, gridCols);
 
     if (regularCards.length === 1) {
@@ -129,10 +95,12 @@ const VoiceGrid = memo(
       <div
         className={cn(
           'grid h-full gap-3 p-3 md:gap-4 md:p-4',
-          getGridClass(gridCols),
-          getGridRowsClass(rows),
           className
         )}
+        style={{
+          gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
+          gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`
+        }}
       >
         {regularCards}
       </div>
