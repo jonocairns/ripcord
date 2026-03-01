@@ -7,8 +7,6 @@ import { useOwnUserId } from '@/features/server/users/hooks';
 import { cn } from '@/lib/utils';
 import {
   HeadphoneOff,
-  Headphones,
-  Mic,
   MicOff,
   Monitor,
   Video,
@@ -109,21 +107,11 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
         )}
 
         <div className="flex items-center gap-1 opacity-60">
-          <div>
-            {user.state.micMuted ? (
-              <MicOff className="h-3 w-3 text-red-500" />
-            ) : (
-              <Mic className="h-3 w-3 text-green-500" />
-            )}
-          </div>
+          {user.state.micMuted && <MicOff className="h-3 w-3 text-red-500" />}
 
-          <div>
-            {user.state.soundMuted ? (
-              <HeadphoneOff className="h-3 w-3 text-red-500" />
-            ) : (
-              <Headphones className="h-3 w-3 text-green-500" />
-            )}
-          </div>
+          {user.state.soundMuted && (
+            <HeadphoneOff className="h-3 w-3 text-red-500" />
+          )}
 
           {user.state.webcamEnabled && (
             <Video className="h-3 w-3 text-blue-500" />

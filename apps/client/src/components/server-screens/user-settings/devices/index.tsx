@@ -164,8 +164,9 @@ const Devices = memo(() => {
           <Alert variant="default">
             <Info />
             <AlertDescription>
-              You are in a voice channel, changes will only take effect after
-              you leave and rejoin the channel.
+              Saved microphone and webcam changes apply immediately while you
+              stay connected. Screen share changes apply the next time you start
+              sharing.
             </AlertDescription>
           </Alert>
         )}

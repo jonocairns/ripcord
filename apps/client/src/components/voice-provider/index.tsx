@@ -194,6 +194,39 @@ const resolveMicProcessingConfig = (
   };
 };
 
+const didMicCaptureSettingsChange = (
+  previousDevices: TDeviceSettings,
+  nextDevices: TDeviceSettings
+) => {
+  return (
+    previousDevices.microphoneId !== nextDevices.microphoneId ||
+    previousDevices.micQualityMode !== nextDevices.micQualityMode ||
+    previousDevices.echoCancellation !== nextDevices.echoCancellation ||
+    previousDevices.noiseSuppression !== nextDevices.noiseSuppression ||
+    previousDevices.autoGainControl !== nextDevices.autoGainControl ||
+    previousDevices.voiceFilterStrength !== nextDevices.voiceFilterStrength ||
+    previousDevices.sidecarDfnMix !== nextDevices.sidecarDfnMix ||
+    previousDevices.sidecarDfnAttenuationLimitDb !==
+      nextDevices.sidecarDfnAttenuationLimitDb ||
+    previousDevices.sidecarExperimentalAggressiveMode !==
+      nextDevices.sidecarExperimentalAggressiveMode ||
+    previousDevices.sidecarNoiseGateFloorDbfs !==
+      nextDevices.sidecarNoiseGateFloorDbfs
+  );
+};
+
+const didWebcamCaptureSettingsChange = (
+  previousDevices: TDeviceSettings,
+  nextDevices: TDeviceSettings
+) => {
+  return (
+    previousDevices.webcamId !== nextDevices.webcamId ||
+    previousDevices.webcamResolution !== nextDevices.webcamResolution ||
+    previousDevices.webcamFramerate !== nextDevices.webcamFramerate ||
+    previousDevices.videoCodec !== nextDevices.videoCodec
+  );
+};
+
 type TMicGainPipeline = {
   audioContext: AudioContext;
   gainNode: GainNode;
@@ -521,6 +554,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   const isPushToMuteHeldRef = useRef(false);
   const micMutedBeforePushRef = useRef<boolean | undefined>(undefined);
   const reconnectingVoiceRef = useRef(false);
+  const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 
   const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
     if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -694,6 +728,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   const cleanupMicAudioPipeline = useCallback(async () => {
     await cleanupMicReferenceAudioPipeline();
 
+    const currentAudioProducer = localAudioProducer.current;
+    localAudioProducer.current = undefined;
+    currentAudioProducer?.close();
+
     const micGainPipeline = micGainPipelineRef.current;
     micGainPipelineRef.current = undefined;
 
@@ -835,20 +873,23 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
               audioTrack: outboundAudioTrack
             });
 
-            localAudioProducer.current =
-              await producerTransport.current?.produce({
-                track: outboundAudioTrack,
-                encodings: [{ maxBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS }],
-                codecOptions: AUDIO_OPUS_CODEC_OPTIONS,
-                appData: { kind: StreamKind.AUDIO }
-              });
+            const audioProducer = await producerTransport.current?.produce({
+              track: outboundAudioTrack,
+              encodings: [{ maxBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS }],
+              codecOptions: AUDIO_OPUS_CODEC_OPTIONS,
+              appData: { kind: StreamKind.AUDIO }
+            });
+            localAudioProducer.current = audioProducer;
 
             logVoice('Microphone audio producer created (native capture)', {
-              producer: localAudioProducer.current
+              producer: audioProducer
             });
 
-            localAudioProducer.current?.on('@close', async () => {
+            audioProducer?.on('@close', async () => {
               logVoice('Audio producer closed');
+              if (localAudioProducer.current === audioProducer) {
+                localAudioProducer.current = undefined;
+              }
               const trpc = getTRPCClient();
               try {
                 await trpc.voice.closeProducer.mutate({
@@ -862,8 +903,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
             outboundAudioTrack.onended = () => {
               logVoice('Audio track ended, cleaning up microphone');
               void cleanupMicAudioPipeline();
-              localAudioProducer.current?.close();
-              setLocalAudioStream(undefined);
+              audioProducer?.close();
+              setLocalAudioStream((currentStream) => {
+                return currentStream === outboundStream
+                  ? undefined
+                  : currentStream;
+              });
             };
 
             return;
@@ -1039,19 +1084,24 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
         logVoice('Obtained audio track', { audioTrack: outboundAudioTrack });
 
-        localAudioProducer.current = await producerTransport.current?.produce({
+        const audioProducer = await producerTransport.current?.produce({
           track: outboundAudioTrack,
           encodings: [{ maxBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS }],
           codecOptions: AUDIO_OPUS_CODEC_OPTIONS,
           appData: { kind: StreamKind.AUDIO }
         });
+        localAudioProducer.current = audioProducer;
 
         logVoice('Microphone audio producer created', {
-          producer: localAudioProducer.current
+          producer: audioProducer
         });
 
-        localAudioProducer.current?.on('@close', async () => {
+        audioProducer?.on('@close', async () => {
           logVoice('Audio producer closed');
+
+          if (localAudioProducer.current === audioProducer) {
+            localAudioProducer.current = undefined;
+          }
 
           const trpc = getTRPCClient();
 
@@ -1068,9 +1118,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           logVoice('Audio track ended, cleaning up microphone');
 
           void cleanupMicAudioPipeline();
-          localAudioProducer.current?.close();
+          audioProducer?.close();
 
-          setLocalAudioStream(undefined);
+          setLocalAudioStream((currentStream) => {
+            return currentStream === outboundStream ? undefined : currentStream;
+          });
         };
       } else {
         throw new Error('Failed to obtain audio track from microphone');
@@ -1141,7 +1193,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           codecMimeType: preferredVideoCodec?.mimeType
         });
 
-        localVideoProducer.current = await producerTransport.current?.produce({
+        const videoProducer = await producerTransport.current?.produce({
           track: videoTrack,
           codec: preferredVideoCodec,
           codecOptions: {
@@ -1149,13 +1201,18 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           },
           appData: { kind: StreamKind.VIDEO }
         });
+        localVideoProducer.current = videoProducer;
 
         logVoice('Webcam video producer created', {
-          producer: localVideoProducer.current
+          producer: videoProducer
         });
 
-        localVideoProducer.current?.on('@close', async () => {
+        videoProducer?.on('@close', async () => {
           logVoice('Video producer closed');
+
+          if (localVideoProducer.current === videoProducer) {
+            localVideoProducer.current = undefined;
+          }
 
           const trpc = getTRPCClient();
 
@@ -1171,12 +1228,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         videoTrack.onended = () => {
           logVoice('Video track ended, cleaning up webcam');
 
-          localVideoStream?.getVideoTracks().forEach((track) => {
+          stream.getVideoTracks().forEach((track) => {
             track.stop();
           });
-          localVideoProducer.current?.close();
+          videoProducer?.close();
 
-          setLocalVideoStream(undefined);
+          setLocalVideoStream((currentStream) => {
+            return currentStream === stream ? undefined : currentStream;
+          });
         };
       } else {
         throw new Error('Failed to obtain video track from webcam');
@@ -1211,6 +1270,54 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
     setLocalVideoStream(undefined);
   }, [localVideoStream, setLocalVideoStream, localVideoProducer]);
+
+  useEffect(() => {
+    const previousDevices = previousDevicesRef.current;
+    previousDevicesRef.current = devices;
+
+    if (!previousDevices || currentVoiceChannelId === undefined) {
+      return;
+    }
+
+    const shouldRestartMic = didMicCaptureSettingsChange(previousDevices, devices);
+    const shouldRestartWebcam =
+      ownVoiceState.webcamEnabled &&
+      didWebcamCaptureSettingsChange(previousDevices, devices);
+
+    if (!shouldRestartMic && !shouldRestartWebcam) {
+      return;
+    }
+
+    void (async () => {
+      if (shouldRestartMic) {
+        try {
+          logVoice('Applying updated microphone settings live');
+          await startMicStream();
+        } catch (error) {
+          logVoice('Failed to apply microphone settings live', { error });
+          toast.error('Failed to apply microphone settings');
+        }
+      }
+
+      if (shouldRestartWebcam) {
+        try {
+          logVoice('Applying updated webcam settings live');
+          stopWebcamStream();
+          await startWebcamStream();
+        } catch (error) {
+          logVoice('Failed to apply webcam settings live', { error });
+          toast.error('Failed to apply webcam settings');
+        }
+      }
+    })();
+  }, [
+    devices,
+    currentVoiceChannelId,
+    ownVoiceState.webcamEnabled,
+    startMicStream,
+    startWebcamStream,
+    stopWebcamStream
+  ]);
 
   const cleanupDesktopAppAudio = useCallback(
     async ({
