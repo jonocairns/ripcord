@@ -101,6 +101,7 @@ const useVoiceControls = ({
     const newState = !ownVoiceState.soundMuted;
     const trpc = getTRPCClient();
     const previousMicMuted = ownVoiceState.micMuted;
+    const previousMicMutedBeforeDeafen = micMutedBeforeDeafenRef.current;
     let nextMicMuted = previousMicMuted;
 
     if (newState) {
@@ -138,9 +139,7 @@ const useVoiceControls = ({
         await startMicStream();
       }
     } catch (error) {
-      micMutedBeforeDeafenRef.current = ownVoiceState.soundMuted
-        ? previousMicMuted
-        : undefined;
+      micMutedBeforeDeafenRef.current = previousMicMutedBeforeDeafen;
       updateOwnVoiceState({
         soundMuted: ownVoiceState.soundMuted,
         micMuted: previousMicMuted
