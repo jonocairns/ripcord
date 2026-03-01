@@ -173,7 +173,7 @@ const Override = memo(
             >
               Cancel
             </Button>
-            <Button onClick={onUpdateOverride}>Save Changes</Button>
+            <Button onClick={onUpdateOverride}>Apply</Button>
           </div>
         </CardContent>
       </Card>

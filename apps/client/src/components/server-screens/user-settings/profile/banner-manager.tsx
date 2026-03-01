@@ -53,7 +53,7 @@ const BannerManager = memo(
     return (
       <div className="space-y-3">
         {!hideHeader && (
-          <div className="space-y-1 md:min-h-16">
+          <div className="space-y-1">
             <p className="text-sm font-medium">Banner</p>
             <p className="text-xs text-muted-foreground">
               Upload a wide image to personalize your profile header.

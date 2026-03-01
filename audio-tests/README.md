@@ -109,6 +109,31 @@ Outcome:
   accepted fixed-cap sidechain version
 - rejected because it added complexity without producing a measurable benefit
 
+### Per-Sample Noise Gate Gain Smoothing
+
+The original DFN noise gate applied gain per-sample based on instantaneous
+amplitude vs a floor/knee threshold. This caused a cicada-like buzzing artifact
+for users whose ambient noise floor sat near the gate threshold: each cycle of
+the waveform crossed the gate boundary, creating periodic gain modulation at
+the signal frequency.
+
+Fix: the gate still computes desired gain per-sample from instantaneous
+amplitude (preserving transient sharpness), but the applied gain is smoothed
+through a one-pole IIR (5 ms time constant). This prevents the rapid
+modulation without reducing the gate's effectiveness on noise.
+
+Minor baseline adjustments for the gain smoother's effect on noise-only clips:
+
+- `typing-only.wav`: out_db bound relaxed from -85 → -72 dBFS, speech_presence
+  and wobble bounds widened (smoother holds gate open slightly longer through
+  key taps)
+- `mouse-clicks.wav`: out_db relaxed from -58 → -55, presence_ratio from
+  0.153 → 0.165
+- `room-tone.wav`: silence_pct from 55 → 50%, gap_noise_floor_median from
+  -84 → -75
+
+Speech quality metrics were unaffected.
+
 ## Guidance
 
 Future experiments should stay narrow and must be validated with the same

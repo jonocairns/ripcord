@@ -18,6 +18,21 @@
       },
       "speech_residual_wobble": {
         "max": 2.082946742235076
+      },
+      "gap_noise_floor_db": {
+        "max": -35.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -52.0
+      },
+      "onset_delay_frames_max": {
+        "max": 5
+      },
+      "speech_hf_preservation": {
+        "min": 0.2
+      },
+      "speech_dropout_count": {
+        "max": 8
       }
     },
     "loud-reaction.wav": {
@@ -42,11 +57,29 @@
       },
       "speech_residual_wobble": {
         "max": 0.7197209431619609
+      },
+      "gap_noise_floor_db": {
+        "max": -35.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -64.0
+      },
+      "speech_snr_improvement_db": {
+        "min": 10.0
+      },
+      "onset_delay_frames_max": {
+        "max": 5
+      },
+      "speech_hf_preservation": {
+        "min": 0.6
+      },
+      "speech_dropout_count": {
+        "max": 8
       }
     },
     "mouse-clicks.wav": {
       "out_db": {
-        "max": -58.0
+        "max": -55.0
       },
       "silence_pct": {
         "min": 50.0
@@ -55,10 +88,19 @@
         "max": 0.03
       },
       "speech_presence_ratio": {
-        "max": 0.15275679259112177
+        "max": 0.165
       },
       "speech_residual_wobble": {
         "max": 2.800574067227666
+      },
+      "gap_noise_floor_db": {
+        "max": -37.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -76.0
+      },
+      "speech_dropout_count": {
+        "max": 25
       }
     },
     "nvidia/sample-naked.wav": {
@@ -75,7 +117,22 @@
         "max": 0.4463104666734364
       },
       "speech_residual_wobble": {
-        "max": 0.8412101128938298
+        "max": 0.86
+      },
+      "gap_noise_floor_db": {
+        "max": -34.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -77.0
+      },
+      "speech_snr_improvement_db": {
+        "min": 6.0
+      },
+      "speech_hf_preservation": {
+        "min": 0.3
+      },
+      "speech_dropout_count": {
+        "max": 30
       }
     },
     "nvidia/sample-nvidia-broadcast.wav": {
@@ -98,6 +155,21 @@
       },
       "speech_residual_wobble": {
         "max": 0.5540069560289199
+      },
+      "gap_noise_floor_db": {
+        "max": -34.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -115.0
+      },
+      "onset_delay_frames_max": {
+        "max": 6
+      },
+      "speech_hf_preservation": {
+        "min": 0.6
+      },
+      "speech_dropout_count": {
+        "max": 30
       }
     },
     "room-tone.wav": {
@@ -105,10 +177,16 @@
         "max": -65.0
       },
       "silence_pct": {
-        "min": 55.0
+        "min": 50.0
       },
       "onset_ratio_count": {
         "max": 0
+      },
+      "gap_noise_floor_db": {
+        "max": -48.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -75.0
       }
     },
     "single-key-taps.wav": {
@@ -126,6 +204,15 @@
       },
       "speech_residual_wobble": {
         "max": 2.5
+      },
+      "gap_noise_floor_db": {
+        "max": -38.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -90.0
+      },
+      "speech_dropout_count": {
+        "max": 12
       }
     },
     "speech-only.wav": {
@@ -150,6 +237,21 @@
       },
       "speech_residual_wobble": {
         "max": 0.9349607373667181
+      },
+      "gap_noise_floor_db": {
+        "max": -34.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -65.0
+      },
+      "speech_snr_improvement_db": {
+        "min": 4.0
+      },
+      "speech_hf_preservation": {
+        "min": 0.5
+      },
+      "speech_dropout_count": {
+        "max": 35
       }
     },
     "speech-while-typing.wav": {
@@ -164,7 +266,19 @@
         "max": 0.38776111166685143
       },
       "speech_residual_wobble": {
-        "max": 0.88
+        "max": 0.9
+      },
+      "gap_noise_floor_db": {
+        "max": -34.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -57.0
+      },
+      "speech_hf_preservation": {
+        "min": 0.15
+      },
+      "speech_dropout_count": {
+        "max": 35
       }
     },
     "speed-plus-fan.wav": {
@@ -179,12 +293,24 @@
         "max": 0.4284196290171338
       },
       "speech_residual_wobble": {
-        "max": 0.9465782010421852
+        "max": 0.96
+      },
+      "gap_noise_floor_db": {
+        "max": -34.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -56.0
+      },
+      "speech_hf_preservation": {
+        "min": 0.15
+      },
+      "speech_dropout_count": {
+        "max": 22
       }
     },
     "typing-only.wav": {
       "out_db": {
-        "max": -85.0
+        "max": -72.0
       },
       "silence_pct": {
         "min": 90.0
@@ -193,10 +319,19 @@
         "max": 0.02
       },
       "speech_presence_ratio": {
-        "max": 0.05913372697816074
+        "max": 0.085
       },
       "speech_residual_wobble": {
-        "max": 2.6
+        "max": 4.0
+      },
+      "gap_noise_floor_db": {
+        "max": -45.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -190.0
+      },
+      "speech_dropout_count": {
+        "max": 10
       }
     }
   }

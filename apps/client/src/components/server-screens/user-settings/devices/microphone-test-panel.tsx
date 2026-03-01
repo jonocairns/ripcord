@@ -16,14 +16,14 @@ import {
   VoiceFilterStrength,
   getStrengthDefaults
 } from '@/types';
+import { Circle, Mic, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const ANALYSER_FFT_SIZE = 512;
-const ANALYSER_SMOOTHING = 0.85;
+const ANALYSER_SMOOTHING = 0.8;
 const LEVEL_FLOOR = 0;
 const LEVEL_CEILING = 100;
 const RMS_NORMALIZATION = 0.3;
-const MIC_CLIP_MAX_DURATION_MS = 6_000;
 const PREFERRED_RECORDING_MIME_TYPES = [
   'audio/webm;codecs=opus',
   'audio/webm',
@@ -125,7 +125,7 @@ const MicrophoneTestPanel = memo(
     const ownVoiceState = useOwnVoiceState();
     const [isTestingMic, setIsTestingMic] = useState(false);
     const [monitorEnabled, setMonitorEnabled] = useState(false);
-    const [inputLevel, setInputLevel] = useState(0);
+    const levelBarRef = useRef<HTMLDivElement>(null);
     const [micTestError, setMicTestError] = useState<string | undefined>(
       undefined
     );
@@ -156,7 +156,9 @@ const MicrophoneTestPanel = memo(
     );
     const recordingStopResolveRef = useRef<(() => void) | undefined>(undefined);
     const recordedClipUrlRef = useRef<string | undefined>(undefined);
+    const micMutedRef = useRef(ownVoiceState.micMuted);
     const soundMutedRef = useRef(ownVoiceState.soundMuted);
+    const micMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
     const soundMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
     const resolvedMicProcessingConfig = useMemo(() => {
       return resolveMicTestProcessingConfig({
@@ -178,6 +180,7 @@ const MicrophoneTestPanel = memo(
     const canRecordClip =
       typeof window !== 'undefined' &&
       typeof window.MediaRecorder !== 'undefined';
+    const showDevRecordingControls = import.meta.env.DEV;
 
     const setClipUrl = useCallback((nextUrl: string | undefined) => {
       const previousUrl = recordedClipUrlRef.current;
@@ -242,15 +245,29 @@ const MicrophoneTestPanel = memo(
       await recordingStopPromiseRef.current;
     }, []);
 
-    const setSoundMutedForTest = useCallback(
-      async (nextSoundMuted: boolean) => {
-        if (soundMutedRef.current === nextSoundMuted) {
+    const setMutedStateForTest = useCallback(
+      async ({
+        nextMicMuted,
+        nextSoundMuted
+      }: {
+        nextMicMuted: boolean;
+        nextSoundMuted: boolean;
+      }) => {
+        if (
+          micMutedRef.current === nextMicMuted &&
+          soundMutedRef.current === nextSoundMuted
+        ) {
           return;
         }
 
+        const previousMicMuted = micMutedRef.current;
         const previousSoundMuted = soundMutedRef.current;
+        micMutedRef.current = nextMicMuted;
         soundMutedRef.current = nextSoundMuted;
-        updateOwnVoiceState({ soundMuted: nextSoundMuted });
+        updateOwnVoiceState({
+          micMuted: nextMicMuted,
+          soundMuted: nextSoundMuted
+        });
 
         if (currentVoiceChannelId === undefined) {
           return;
@@ -258,42 +275,62 @@ const MicrophoneTestPanel = memo(
 
         try {
           await getTRPCClient().voice.updateState.mutate({
+            micMuted: nextMicMuted,
             soundMuted: nextSoundMuted
           });
         } catch {
+          micMutedRef.current = previousMicMuted;
           soundMutedRef.current = previousSoundMuted;
-          updateOwnVoiceState({ soundMuted: previousSoundMuted });
+          updateOwnVoiceState({
+            micMuted: previousMicMuted,
+            soundMuted: previousSoundMuted
+          });
         }
       },
       [currentVoiceChannelId]
     );
 
-    const maybeDeafenForTest = useCallback(async () => {
+    const maybeMuteForTest = useCallback(async () => {
       if (currentVoiceChannelId === undefined) {
         return;
       }
 
-      if (typeof soundMutedBeforeTestRef.current === 'boolean') {
+      if (
+        typeof micMutedBeforeTestRef.current === 'boolean' ||
+        typeof soundMutedBeforeTestRef.current === 'boolean'
+      ) {
         return;
       }
 
+      micMutedBeforeTestRef.current = micMutedRef.current;
       soundMutedBeforeTestRef.current = soundMutedRef.current;
 
-      if (!soundMutedRef.current) {
-        await setSoundMutedForTest(true);
+      if (!micMutedRef.current || !soundMutedRef.current) {
+        await setMutedStateForTest({
+          nextMicMuted: true,
+          nextSoundMuted: true
+        });
       }
-    }, [currentVoiceChannelId, setSoundMutedForTest]);
+    }, [currentVoiceChannelId, setMutedStateForTest]);
 
-    const maybeRestoreDeafenAfterTest = useCallback(async () => {
+    const maybeRestoreMuteAfterTest = useCallback(async () => {
+      const previousMicMuted = micMutedBeforeTestRef.current;
       const previousSoundMuted = soundMutedBeforeTestRef.current;
 
-      if (typeof previousSoundMuted !== 'boolean') {
+      if (
+        typeof previousMicMuted !== 'boolean' ||
+        typeof previousSoundMuted !== 'boolean'
+      ) {
         return;
       }
 
+      micMutedBeforeTestRef.current = undefined;
       soundMutedBeforeTestRef.current = undefined;
-      await setSoundMutedForTest(previousSoundMuted);
-    }, [setSoundMutedForTest]);
+      await setMutedStateForTest({
+        nextMicMuted: previousMicMuted,
+        nextSoundMuted: previousSoundMuted
+      });
+    }, [setMutedStateForTest]);
 
     const stopTest = useCallback(async () => {
       runVersionRef.current += 1;
@@ -335,16 +372,18 @@ const MicrophoneTestPanel = memo(
       setIsTestingMic(false);
       setTestUsesSidecar(false);
       setTestUsesInCallStream(false);
-      setInputLevel(0);
-      await maybeRestoreDeafenAfterTest();
-    }, [maybeRestoreDeafenAfterTest, stopRecordingClip]);
+      if (levelBarRef.current) {
+        levelBarRef.current.style.width = '0%';
+      }
+      await maybeRestoreMuteAfterTest();
+    }, [maybeRestoreMuteAfterTest, stopRecordingClip]);
 
     const startTest = useCallback(async () => {
       const runVersion = runVersionRef.current + 1;
       await stopTest();
       runVersionRef.current = runVersion;
       setMicTestError(undefined);
-      await maybeDeafenForTest();
+      await maybeMuteForTest();
 
       const AudioContextClass =
         window.AudioContext ||
@@ -457,6 +496,9 @@ const MicrophoneTestPanel = memo(
         }
 
         const timeDomainData = new Float32Array(analyser.fftSize);
+        let displayLevel = 0;
+        const ATTACK_COEFF = 0.3;
+        const RELEASE_COEFF = 0.08;
         const updateInputLevel = () => {
           analyser.getFloatTimeDomainData(timeDomainData);
 
@@ -467,11 +509,16 @@ const MicrophoneTestPanel = memo(
           }
 
           const rms = Math.sqrt(sumSquares / timeDomainData.length);
-          const normalizedLevel = Math.min(
+          const targetLevel = Math.min(
             LEVEL_CEILING,
             Math.max(LEVEL_FLOOR, (rms / RMS_NORMALIZATION) * LEVEL_CEILING)
           );
-          setInputLevel(normalizedLevel);
+          const coeff =
+            targetLevel > displayLevel ? ATTACK_COEFF : RELEASE_COEFF;
+          displayLevel += (targetLevel - displayLevel) * coeff;
+          if (levelBarRef.current) {
+            levelBarRef.current.style.width = `${displayLevel}%`;
+          }
           animationFrameRef.current = requestAnimationFrame(updateInputLevel);
         };
 
@@ -496,7 +543,7 @@ const MicrophoneTestPanel = memo(
         await stopTest();
       }
     }, [
-      maybeDeafenForTest,
+      maybeMuteForTest,
       microphoneId,
       monitorEnabled,
       localAudioStream,
@@ -612,14 +659,9 @@ const MicrophoneTestPanel = memo(
         };
 
         setClipUrl(undefined);
+        setMonitorEnabled(false);
         recorder.start();
         setIsRecordingClip(true);
-        recordingTimeoutRef.current = window.setTimeout(() => {
-          const activeRecorder = mediaRecorderRef.current;
-          if (activeRecorder && activeRecorder.state !== 'inactive') {
-            activeRecorder.stop();
-          }
-        }, MIC_CLIP_MAX_DURATION_MS);
       } catch (error) {
         setRecordingError(
           error instanceof Error
@@ -651,6 +693,10 @@ const MicrophoneTestPanel = memo(
     }, [monitorEnabled]);
 
     useEffect(() => {
+      micMutedRef.current = ownVoiceState.micMuted;
+    }, [ownVoiceState.micMuted]);
+
+    useEffect(() => {
       soundMutedRef.current = ownVoiceState.soundMuted;
     }, [ownVoiceState.soundMuted]);
 
@@ -660,14 +706,17 @@ const MicrophoneTestPanel = memo(
       };
     }, [stopTest]);
 
-    // Restart the running test automatically when processing config changes (e.g. AGC toggle)
-    // so the new session reflects the updated settings without requiring a manual stop/start.
+    // Restart the running test automatically when processing config changes.
     const isTestingMicRef = useRef(false);
     useEffect(() => {
       isTestingMicRef.current = isTestingMic;
     }, [isTestingMic]);
+
     useEffect(() => {
-      if (!isTestingMicRef.current) return;
+      if (!isTestingMicRef.current) {
+        return;
+      }
+
       void startTest();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [resolvedMicProcessingConfig]);
@@ -683,112 +732,129 @@ const MicrophoneTestPanel = memo(
     }, []);
 
     return (
-      <div className="max-w-2xl space-y-3 rounded-md border p-4">
+      <div className="space-y-4 rounded-xl border-l-2 border-l-primary/40 bg-secondary p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <p className="text-sm font-medium">Microphone test</p>
-            <p className="text-xs text-muted-foreground">
-              Preview your microphone input level and optionally monitor your
-              own voice locally.
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant={isTestingMic ? 'secondary' : 'outline'}
-            onClick={() => {
-              if (isTestingMic) {
-                void stopTest();
-                return;
-              }
-
-              void startTest();
-            }}
-          >
-            {isTestingMic ? 'Stop test' : 'Start test'}
-          </Button>
-        </div>
-
-        <div className="flex items-center justify-between gap-3">
-          <Label className="cursor-default">Hear yourself</Label>
-          <Switch
-            checked={monitorEnabled}
-            onCheckedChange={setMonitorEnabled}
-            disabled={!isTestingMic}
-          />
-        </div>
-
-        <div className="space-y-1">
-          <p className="text-xs text-muted-foreground">Input level</p>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full rounded-full bg-emerald-500 transition-[width] duration-100 ease-linear"
-              style={{
-                width: `${Math.max(0, Math.min(100, inputLevel))}%`
-              }}
-            />
-          </div>
-          {isTestingMic && (
-            <p className="text-xs text-muted-foreground">
-              Processing path:{' '}
-              {testUsesInCallStream
-                ? 'In-call voice stream (active channel)'
-                : testUsesSidecar
-                  ? 'Desktop sidecar (matches in-call processing)'
-                  : 'Browser capture path'}
-            </p>
-          )}
-        </div>
-
-        <div className="space-y-2 border-t pt-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+              <Mic
+                className="h-4 w-4 text-primary"
+              />
+            </div>
             <div className="space-y-1">
-              <p className="text-xs font-medium">Short recording</p>
+              <p className="text-sm font-medium">Microphone test</p>
               <p className="text-xs text-muted-foreground">
-                Capture a short sample (up to 6 seconds) and play it back.
+                 Preview your microphone input level.
               </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Label className="cursor-default text-xs text-muted-foreground">
+                Hear yourself
+              </Label>
+              <Switch
+                checked={monitorEnabled}
+                onCheckedChange={setMonitorEnabled}
+                disabled={!isTestingMic}
+              />
             </div>
             <Button
               type="button"
-              variant={isRecordingClip ? 'secondary' : 'outline'}
+              variant={isTestingMic ? 'secondary' : 'outline'}
+              size="sm"
               onClick={() => {
-                void startRecordingClip();
+                if (isTestingMic) {
+                  void stopTest();
+                  return;
+                }
+
+                void startTest();
               }}
-              disabled={!canRecordClip}
             >
-              {isRecordingClip ? 'Stop recording' : 'Record 6s clip'}
+              {isTestingMic ? 'Stop test' : 'Start test'}
             </Button>
           </div>
-
-          {!canRecordClip && (
-            <p className="text-xs text-muted-foreground">
-              Clip recording is not supported in this browser.
-            </p>
-          )}
-
-          {recordedClipUrl && (
-            <div className="space-y-2">
-              <audio controls src={recordedClipUrl} className="w-full" />
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-auto px-0 text-xs"
-                onClick={clearRecordedClip}
-              >
-                Clear clip
-              </Button>
-            </div>
-          )}
-
-          {recordingError && (
-            <p className="text-xs text-destructive">{recordingError}</p>
-          )}
         </div>
 
-        {hasDesktopBridge && micQualityMode === MicQualityMode.EXPERIMENTAL && (
-          <p className="text-xs text-muted-foreground">
-            Experimental mode uses desktop sidecar processing to match in-call
-            audio quality.
-          </p>
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-muted-foreground">Input level</p>
+            {isTestingMic && (
+              <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {testUsesInCallStream
+                  ? 'In-call stream'
+                  : testUsesSidecar
+                    ? 'Enhanced processing'
+                    : 'Browser capture'}
+              </span>
+            )}
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-background/60">
+            <div
+              ref={levelBarRef}
+              className="h-full rounded-full bg-white"
+              style={{ width: '0%' }}
+            />
+          </div>
+        </div>
+
+        {showDevRecordingControls && (
+          <div className="space-y-2 border-t border-border/40 pt-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-1">
+                <p className="text-xs font-medium">Short recording</p>
+                <p className="text-xs text-muted-foreground">
+                  Record a clip and play it back.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  void startRecordingClip();
+                }}
+                disabled={!canRecordClip}
+              >
+                {isRecordingClip ? (
+                  <>
+                    <Circle className="h-3 w-3 animate-pulse fill-red-500 text-red-500" />
+                    Stop
+                  </>
+                ) : (
+                  <>
+                    <Circle className="h-3 w-3 fill-current" />
+                    Record
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {!canRecordClip && (
+              <p className="text-xs text-muted-foreground">
+                Clip recording is not supported in this browser.
+              </p>
+            )}
+
+            {recordedClipUrl && (
+              <div className="mt-4 flex items-center gap-2">
+                <audio controls src={recordedClipUrl} className="h-8 flex-1" />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  onClick={clearRecordedClip}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )}
+
+            {recordingError && (
+              <p className="text-xs text-destructive">{recordingError}</p>
+            )}
+          </div>
         )}
 
         {micTestError && (

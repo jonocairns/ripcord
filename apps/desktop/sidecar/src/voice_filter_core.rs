@@ -37,6 +37,11 @@ pub const DFN_ENERGY_COLLAPSE_MAX_DRY_BOOST: f32 = 0.2;
 pub const DFN_SAMPLE_SANITIZE_FLOOR: f32 = 1e-20;
 pub const DFN_NOISE_GATE_ATTENUATION: f32 = 0.65;
 pub const DFN_NOISE_GATE_KNEE_MULTIPLIER: f32 = 3.0;
+// Gain smoothing prevents per-sample gate modulation (anti-cicada).
+// The gate still decides per-sample, but the applied gain is smoothed
+// through a one-pole IIR so rapid oscillations around the threshold
+// don't produce audible periodic modulation.
+pub const DFN_NOISE_GATE_GAIN_SMOOTH_MS: f32 = 5.0;
 
 pub const ECHO_REFERENCE_MAX_BUFFER_MS: usize = 1_200;
 pub const ECHO_CANCELLER_BLOCK_MS: usize = 10;
@@ -70,7 +75,9 @@ pub const DFN_SLEW_MIN_ACTIVE_DBFS: f32 = -60.0;
 
 // Comfort noise
 pub const COMFORT_NOISE_THRESHOLD_DBFS: f32 = -65.0;
-pub const COMFORT_NOISE_LEVEL_DBFS: f32 = -78.0;
+pub const COMFORT_NOISE_LEVEL_DBFS: f32 = -84.0;
+// First-order lowpass cutoff for pink-ish shaping (removes harsh high-frequency content)
+pub const COMFORT_NOISE_LOWPASS_HZ: f32 = 1_200.0;
 
 // Output de-zipper
 pub const DEZIPPER_COEFF: f32 = 0.25;
@@ -287,6 +294,8 @@ pub struct DfnStage {
     pub dry_delay_buffer: VecDeque<f32>,
     pub gain_compensation: f32,
     pub config: DfnStageConfig,
+    /// Smoothed gain state for the noise gate (anti-cicada).
+    pub noise_gate_gain: f32,
 }
 
 // SAFETY: `DfnStage` is never accessed concurrently. It is always
@@ -409,6 +418,13 @@ impl VoicePolishProcessor {
             return;
         }
 
+        // Exciter uses tanh() drive which generates harmonics from residual noise.
+        // Gate it to Speech-only so it doesn't create static during hangover/silence.
+        let exciter_mix = match speech_state {
+            VadSpeechState::Speech => 1.0,
+            _ => 0.0,
+        };
+
         let lsnr_mix = if let Some(lsnr_db) = lsnr_db {
             let t = ((lsnr_db - VOICE_POLISH_LSNR_FLOOR_DB)
                 / (VOICE_POLISH_LSNR_CEIL_DB - VOICE_POLISH_LSNR_FLOOR_DB))
@@ -460,7 +476,7 @@ impl VoicePolishProcessor {
             *sample = dry
                 + high_band * VOICE_POLISH_HIGH_SHELF_MIX * polish_mix
                 + presence_band * VOICE_POLISH_PRESENCE_MIX * polish_mix
-                + excited * VOICE_POLISH_EXCITER_MIX * polish_mix;
+                + excited * VOICE_POLISH_EXCITER_MIX * exciter_mix;
         }
     }
 
@@ -721,6 +737,7 @@ pub struct VoiceFilterSession {
     pub dfn_output_rms_prev: f32,
     pub transient_input_prev_rms: f32,
     pub noise_rng_state: u32,
+    pub comfort_noise_lp_state: f32,
     pub dezipper_prev_sample: f32,
     pub vad: VadState,
     pub pre_dfn_vad_tap: ModelVadTapState,
@@ -1539,6 +1556,7 @@ impl DfnStage {
                 mix: tuning.mix.unwrap_or(DFN_DEFAULT_WET_MIX),
                 noise_gate_floor: tuning.noise_gate_floor_dbfs.map(dbfs_to_linear),
             },
+            noise_gate_gain: 1.0,
         })
     }
 
@@ -1557,26 +1575,38 @@ impl DfnStage {
         delayed
     }
 
-    pub fn apply_noise_gate(&self, samples: &mut [f32]) {
+    /// Per-sample noise gate with gain smoothing. The gate decision (floor/knee)
+    /// is computed from instantaneous amplitude so it stays sharp on transients,
+    /// but the applied gain is smoothed through a one-pole IIR to prevent the
+    /// rapid per-sample modulation that creates cicada-like buzzing when the
+    /// signal oscillates around the gate threshold.
+    pub fn apply_noise_gate(&mut self, samples: &mut [f32]) {
         let Some(floor) = self.config.noise_gate_floor else {
             return;
         };
 
+        let sr = 48_000.0f32; // DFN always runs at 48 kHz
+        let gain_smooth_coeff = (-1.0 / (sr * DFN_NOISE_GATE_GAIN_SMOOTH_MS / 1000.0)).exp();
         let knee = floor * DFN_NOISE_GATE_KNEE_MULTIPLIER;
+
         for sample in samples.iter_mut() {
             let abs_val = sample.abs();
-            if abs_val <= floor {
-                *sample *= DFN_NOISE_GATE_ATTENUATION;
-                continue;
-            }
 
-            if abs_val >= knee {
-                continue;
-            }
+            // Per-sample desired gain from instantaneous amplitude.
+            let desired_gain = if abs_val <= floor {
+                DFN_NOISE_GATE_ATTENUATION
+            } else if abs_val >= knee {
+                1.0
+            } else {
+                let t = ((abs_val - floor) / (knee - floor)).clamp(0.0, 1.0);
+                DFN_NOISE_GATE_ATTENUATION + (1.0 - DFN_NOISE_GATE_ATTENUATION) * t
+            };
 
-            let t = ((abs_val - floor) / (knee - floor)).clamp(0.0, 1.0);
-            let gain = DFN_NOISE_GATE_ATTENUATION + (1.0 - DFN_NOISE_GATE_ATTENUATION) * t;
-            *sample *= gain;
+            // Smooth the gain to prevent rapid modulation (anti-cicada).
+            self.noise_gate_gain =
+                gain_smooth_coeff * self.noise_gate_gain + (1.0 - gain_smooth_coeff) * desired_gain;
+
+            *sample *= self.noise_gate_gain;
         }
     }
 
@@ -1734,6 +1764,7 @@ pub fn create_voice_filter_session(
         dfn_output_rms_prev: 0.0,
         transient_input_prev_rms: 0.0,
         noise_rng_state: 0x9e37_79b9, // arbitrary non-zero seed for xorshift32
+            comfort_noise_lp_state: 0.0,
         dezipper_prev_sample: 0.0,
         vad: VadState::default(),
         pre_dfn_vad_tap: ModelVadTapState::default(),
@@ -1828,13 +1859,20 @@ pub fn apply_slow_trim(
     }
 }
 
-// inject_comfort_noise: add shaped white noise at a very low level to prevent
+// inject_comfort_noise: add pink-shaped noise at a very low level to prevent
 // the dead-flat digital silence that makes processed audio sound unnatural.
 // `mix` ∈ [0.0, 1.0] scales the noise amplitude so callers can fade it smoothly
 // rather than hard-gating — prevents audible pops when speech starts/ends.
-// Uses a xorshift32 PRNG — cheap and sufficient for comfort noise.
-pub fn inject_comfort_noise(samples: &mut [f32], rng_state: &mut u32, mix: f32) {
-    if samples.is_empty() || mix <= 0.0 {
+// Uses a xorshift32 PRNG with a first-order lowpass for pink-ish spectral shaping
+// so the noise sounds natural rather than "staticky".
+pub fn inject_comfort_noise(
+    samples: &mut [f32],
+    rng_state: &mut u32,
+    lp_state: &mut f32,
+    sample_rate: usize,
+    mix: f32,
+) {
+    if samples.is_empty() || mix <= 0.0 || sample_rate == 0 {
         return;
     }
 
@@ -1848,13 +1886,17 @@ pub fn inject_comfort_noise(samples: &mut [f32], rng_state: &mut u32, mix: f32) 
         return;
     }
 
+    let alpha = one_pole_alpha(sample_rate, COMFORT_NOISE_LOWPASS_HZ);
+
     for s in samples.iter_mut() {
         // xorshift32
         *rng_state ^= *rng_state << 13;
         *rng_state ^= *rng_state >> 17;
         *rng_state ^= *rng_state << 5;
-        let noise = (*rng_state as f32 / u32::MAX as f32) * 2.0 - 1.0;
-        *s += noise * noise_amp;
+        let white = (*rng_state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+        // First-order lowpass → pink-ish roll-off above COMFORT_NOISE_LOWPASS_HZ
+        *lp_state = *lp_state * alpha + white * (1.0 - alpha);
+        *s += *lp_state * noise_amp;
     }
 }
 

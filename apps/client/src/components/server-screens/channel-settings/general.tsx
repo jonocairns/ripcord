@@ -61,7 +61,7 @@ const General = memo(({ channelId }: TGeneralProps) => {
 
         <div className="flex justify-end gap-2 pt-4">
           <Button onClick={submit} disabled={loading}>
-            Save Changes
+            Apply
           </Button>
         </div>
       </CardContent>
