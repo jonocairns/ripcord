@@ -94,6 +94,7 @@ const PendingStreamCard = memo(
             <UserAvatar
               userId={userId}
               className="h-20 w-20 border-2 border-white/15 md:h-24 md:w-24"
+              fallbackClassName="text-2xl md:text-3xl"
               showStatusBadge={false}
             />
           ) : (
