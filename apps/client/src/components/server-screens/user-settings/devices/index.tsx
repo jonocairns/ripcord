@@ -28,7 +28,7 @@ import {
   VideoCodecPreference,
   VoiceFilterStrength
 } from '@/types';
-import { Info } from 'lucide-react';
+import { Info, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useAvailableDevices } from './hooks/use-available-devices';
@@ -331,17 +331,18 @@ const Devices = memo(() => {
                 <p className="text-sm font-medium">Push keybinds (Desktop)</p>
                 <p className="text-xs text-muted-foreground">
                   Hold the configured key to temporarily unmute (push to talk)
-                  or mute (push to mute). Press Escape while capturing to
+                  or mute (push to mute). <br />Press Escape while capturing to
                   cancel.
                 </p>
               </div>
               <div className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <span className="text-sm sm:w-28">Push to talk</span>
+                  <Label className="sm:w-23">Push to talk</Label>
+            
                   <Button
                     variant="outline"
                     type="button"
-                    className="w-full justify-start font-mono sm:w-[260px]"
+                    className="w-full justify-start font-mono sm:w-[90px]"
                     data-push-keybind-capture={
                       capturingKeybindField === 'pushToTalkKeybind'
                         ? 'true'
@@ -354,22 +355,23 @@ const Devices = memo(() => {
                       : formatPushKeybindLabel(values.pushToTalkKeybind)}
                   </Button>
                   <Button
-                    variant="ghost"
                     type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9 shrink-0"
                     onClick={() => clearPushKeybind('pushToTalkKeybind')}
                     disabled={!values.pushToTalkKeybind}
-                    className="sm:ml-auto"
                   >
-                    Clear
+                    <X className="h-3.5 w-3.5" />
                   </Button>
                 </div>
 
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <span className="text-sm sm:w-28">Push to mute</span>
+                  <Label className="sm:w-23">Push to mute</Label>
                   <Button
                     variant="outline"
                     type="button"
-                    className="w-full justify-start font-mono sm:w-[260px]"
+                    className="w-full justify-start font-mono sm:w-[90px]"
                     data-push-keybind-capture={
                       capturingKeybindField === 'pushToMuteKeybind'
                         ? 'true'
@@ -382,13 +384,14 @@ const Devices = memo(() => {
                       : formatPushKeybindLabel(values.pushToMuteKeybind)}
                   </Button>
                   <Button
-                    variant="ghost"
                     type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9 shrink-0"
                     onClick={() => clearPushKeybind('pushToMuteKeybind')}
                     disabled={!values.pushToMuteKeybind}
-                    className="sm:ml-auto"
                   >
-                    Clear
+                  <X className="h-3.5 w-3.5" />
                   </Button>
                 </div>
               </div>
