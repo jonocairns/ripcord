@@ -7,9 +7,7 @@ import {
   type TMicAudioProcessingPipeline
 } from '@/components/voice-provider/mic-audio-processing';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
-import { updateOwnVoiceState } from '@/features/server/voice/actions';
-import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
-import { getTRPCClient } from '@/lib/trpc';
+import { useVoice } from '@/features/server/voice/hooks';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import {
   MicQualityMode,
@@ -122,7 +120,6 @@ const MicrophoneTestPanel = memo(
   }: TMicrophoneTestPanelProps) => {
     const currentVoiceChannelId = useCurrentVoiceChannelId();
     const { localAudioStream } = useVoice();
-    const ownVoiceState = useOwnVoiceState();
     const [isTestingMic, setIsTestingMic] = useState(false);
     const [monitorEnabled, setMonitorEnabled] = useState(false);
     const levelBarRef = useRef<HTMLDivElement>(null);
@@ -156,8 +153,6 @@ const MicrophoneTestPanel = memo(
     );
     const recordingStopResolveRef = useRef<(() => void) | undefined>(undefined);
     const recordedClipUrlRef = useRef<string | undefined>(undefined);
-    const soundMutedRef = useRef(ownVoiceState.soundMuted);
-    const soundMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
     const resolvedMicProcessingConfig = useMemo(() => {
       return resolveMicTestProcessingConfig({
         micQualityMode,
@@ -242,59 +237,6 @@ const MicrophoneTestPanel = memo(
       await recordingStopPromiseRef.current;
     }, []);
 
-    const setSoundMutedForTest = useCallback(
-      async (nextSoundMuted: boolean) => {
-        if (soundMutedRef.current === nextSoundMuted) {
-          return;
-        }
-
-        const previousSoundMuted = soundMutedRef.current;
-        soundMutedRef.current = nextSoundMuted;
-        updateOwnVoiceState({ soundMuted: nextSoundMuted });
-
-        if (currentVoiceChannelId === undefined) {
-          return;
-        }
-
-        try {
-          await getTRPCClient().voice.updateState.mutate({
-            soundMuted: nextSoundMuted
-          });
-        } catch {
-          soundMutedRef.current = previousSoundMuted;
-          updateOwnVoiceState({ soundMuted: previousSoundMuted });
-        }
-      },
-      [currentVoiceChannelId]
-    );
-
-    const maybeDeafenForTest = useCallback(async () => {
-      if (currentVoiceChannelId === undefined) {
-        return;
-      }
-
-      if (typeof soundMutedBeforeTestRef.current === 'boolean') {
-        return;
-      }
-
-      soundMutedBeforeTestRef.current = soundMutedRef.current;
-
-      if (!soundMutedRef.current) {
-        await setSoundMutedForTest(true);
-      }
-    }, [currentVoiceChannelId, setSoundMutedForTest]);
-
-    const maybeRestoreDeafenAfterTest = useCallback(async () => {
-      const previousSoundMuted = soundMutedBeforeTestRef.current;
-
-      if (typeof previousSoundMuted !== 'boolean') {
-        return;
-      }
-
-      soundMutedBeforeTestRef.current = undefined;
-      await setSoundMutedForTest(previousSoundMuted);
-    }, [setSoundMutedForTest]);
-
     const stopTest = useCallback(async () => {
       runVersionRef.current += 1;
       await stopRecordingClip();
@@ -338,15 +280,13 @@ const MicrophoneTestPanel = memo(
       if (levelBarRef.current) {
         levelBarRef.current.style.width = '0%';
       }
-      await maybeRestoreDeafenAfterTest();
-    }, [maybeRestoreDeafenAfterTest, stopRecordingClip]);
+    }, [stopRecordingClip]);
 
     const startTest = useCallback(async () => {
       const runVersion = runVersionRef.current + 1;
       await stopTest();
       runVersionRef.current = runVersion;
       setMicTestError(undefined);
-      await maybeDeafenForTest();
 
       const AudioContextClass =
         window.AudioContext ||
@@ -506,7 +446,6 @@ const MicrophoneTestPanel = memo(
         await stopTest();
       }
     }, [
-      maybeDeafenForTest,
       microphoneId,
       monitorEnabled,
       localAudioStream,
@@ -654,10 +593,6 @@ const MicrophoneTestPanel = memo(
 
       monitorGainNode.gain.value = monitorEnabled ? 1 : 0;
     }, [monitorEnabled]);
-
-    useEffect(() => {
-      soundMutedRef.current = ownVoiceState.soundMuted;
-    }, [ownVoiceState.soundMuted]);
 
     useEffect(() => {
       void startTest();
