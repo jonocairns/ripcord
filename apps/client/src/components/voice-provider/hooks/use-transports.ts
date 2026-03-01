@@ -32,6 +32,7 @@ type TUseTransportParams = {
     kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO
   ) => void;
   addPendingStream: (remoteId: number, kind: StreamKind) => void;
+  removePendingStream: (remoteId: number, kind: StreamKind) => void;
   clearAllPendingStreams: () => void;
 };
 
@@ -41,6 +42,7 @@ const useTransports = ({
   addExternalStreamTrack,
   removeExternalStreamTrack,
   addPendingStream,
+  removePendingStream,
   clearAllPendingStreams
 }: TUseTransportParams) => {
   const producerTransport = useRef<Transport<AppData> | undefined>(undefined);
@@ -307,6 +309,8 @@ const useTransports = ({
         } else {
           addRemoteUserStream(remoteId, stream, kind);
         }
+
+        removePendingStream(remoteId, kind);
       } catch (error) {
         logVoice('Error consuming remote producer', { error });
       } finally {
@@ -317,7 +321,8 @@ const useTransports = ({
       addRemoteUserStream,
       removeRemoteUserStream,
       addExternalStreamTrack,
-      removeExternalStreamTrack
+      removeExternalStreamTrack,
+      removePendingStream
     ]
   );
 

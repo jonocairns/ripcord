@@ -9,6 +9,15 @@ export type TPendingStream = {
 export const getPendingStreamKey = (remoteId: number, kind: StreamKind) =>
   `${remoteId}-${kind}`;
 
+const isUserPendingStreamKind = (kind: StreamKind) => {
+  return (
+    kind === StreamKind.AUDIO ||
+    kind === StreamKind.VIDEO ||
+    kind === StreamKind.SCREEN ||
+    kind === StreamKind.SCREEN_AUDIO
+  );
+};
+
 const usePendingStreams = () => {
   const [pendingStreams, setPendingStreams] = useState<Map<string, TPendingStream>>(
     () => new Map()
@@ -53,7 +62,10 @@ const usePendingStreams = () => {
       const next = new Map(prev);
 
       next.forEach((stream, key) => {
-        if (stream.remoteId !== remoteId) {
+        if (
+          stream.remoteId !== remoteId ||
+          !isUserPendingStreamKind(stream.kind)
+        ) {
           return;
         }
 

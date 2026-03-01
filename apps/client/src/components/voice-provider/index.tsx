@@ -479,6 +479,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     addRemoteUserStream,
     removeRemoteUserStream,
     addPendingStream,
+    removePendingStream,
     clearAllPendingStreams
   });
 
@@ -494,10 +495,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         return;
       }
 
-      removePendingStream(remoteId, kind);
       void consume(remoteId, kind, currentRouterRtpCapabilities);
     },
-    [consume, removePendingStream]
+    [consume]
   );
 
   const {
