@@ -4,7 +4,7 @@ import { UserAvatar } from '@/components/user-avatar';
 import { useOwnPublicUser } from '@/features/server/users/hooks';
 import { cn } from '@/lib/utils';
 import { KeyRound, Laptop2, Search, UserRound } from 'lucide-react';
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { TServerScreenBaseProps } from '../screens';
 import { ServerScreenLayout } from '../server-screen-layout';
 import { Devices } from './devices';
@@ -45,8 +45,14 @@ const UserSettings = memo(({ close, initialSection }: TUserSettingsProps) => {
     initialSection || 'profile'
   );
   const [search, setSearch] = useState('');
+  const hasMountedRef = useRef(false);
 
   useEffect(() => {
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      return;
+    }
+
     setActiveSection(initialSection || 'profile');
   }, [initialSection]);
 

@@ -298,18 +298,30 @@ class VoiceRuntime {
     Object.keys(this.consumers).forEach((consumerUserIdStr) => {
       const consumerId = parseInt(consumerUserIdStr);
 
-      if (consumerId !== userId && this.consumers[consumerId]?.[userId]) {
-        Object.values(this.consumers[consumerId][userId]).forEach(
-          (consumer) => {
-            consumer?.close();
-          }
-        );
+      if (consumerId === userId) {
+        return;
+      }
 
-        delete this.consumers[consumerId][userId];
+      const consumerGroups = this.consumers[consumerId];
+      const remoteConsumers = consumerGroups?.[userId];
 
-        if (Object.keys(this.consumers[consumerId]).length === 0) {
-          delete this.consumers[consumerId];
-        }
+      if (!consumerGroups || !remoteConsumers) {
+        return;
+      }
+
+      Object.values(remoteConsumers).forEach((consumer) => {
+        consumer?.close();
+      });
+
+      if (consumerGroups[userId]) {
+        delete consumerGroups[userId];
+      }
+
+      if (
+        this.consumers[consumerId] === consumerGroups &&
+        Object.keys(consumerGroups).length === 0
+      ) {
+        delete this.consumers[consumerId];
       }
     });
   };

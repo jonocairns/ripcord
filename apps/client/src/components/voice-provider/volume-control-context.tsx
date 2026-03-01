@@ -8,6 +8,7 @@ import {
   memo,
   useCallback,
   useContext,
+  useEffect,
   useRef,
   useState
 } from 'react';
@@ -86,8 +87,12 @@ const VolumeControlProvider = memo(
     const [volumes, setVolumes] = useState<TVolumeSettings>(
       loadVolumesFromStorage
     );
-
+    const volumesRef = useRef(volumes);
     const previousVolumesRef = useRef<TVolumeSettings>({});
+
+    useEffect(() => {
+      volumesRef.current = volumes;
+    }, [volumes]);
 
     const getVolume = useCallback(
       (key: TVolumeKey): number => {
@@ -96,37 +101,39 @@ const VolumeControlProvider = memo(
       [volumes]
     );
 
+    const commitVolumes = useCallback((nextVolumes: TVolumeSettings) => {
+      volumesRef.current = nextVolumes;
+      setVolumes(nextVolumes);
+      saveVolumesToStorage(nextVolumes);
+    }, []);
+
     const setVolume = useCallback((key: TVolumeKey, volume: number) => {
-      setVolumes((prev) => {
-        const next = { ...prev, [key]: volume };
-        saveVolumesToStorage(next);
-        dispatchVolumeSettingsUpdated({ key, volume });
-        return next;
-      });
+      const nextVolumes = { ...volumesRef.current, [key]: volume };
+
+      commitVolumes(nextVolumes);
+      dispatchVolumeSettingsUpdated({ key, volume });
 
       if (volume > 0) {
         previousVolumesRef.current[key] = volume;
       }
-    }, []);
+    }, [commitVolumes]);
 
     const toggleMute = useCallback((key: TVolumeKey) => {
-      setVolumes((prev) => {
-        const currentVolume = prev[key] ?? 100;
-        const isMuted = currentVolume === 0;
-        const newVolume = isMuted
-          ? (previousVolumesRef.current[key] ?? 100)
-          : 0;
+      const currentVolume = volumesRef.current[key] ?? 100;
+      const isMuted = currentVolume === 0;
+      const newVolume = isMuted
+        ? (previousVolumesRef.current[key] ?? 100)
+        : 0;
 
-        if (!isMuted) {
-          previousVolumesRef.current[key] = currentVolume;
-        }
+      if (!isMuted) {
+        previousVolumesRef.current[key] = currentVolume;
+      }
 
-        const next = { ...prev, [key]: newVolume };
-        saveVolumesToStorage(next);
-        dispatchVolumeSettingsUpdated({ key, volume: newVolume });
-        return next;
-      });
-    }, []);
+      const nextVolumes = { ...volumesRef.current, [key]: newVolume };
+
+      commitVolumes(nextVolumes);
+      dispatchVolumeSettingsUpdated({ key, volume: newVolume });
+    }, [commitVolumes]);
 
     const getUserVolumeKey = useCallback((userId: number): TVolumeKey => {
       return `user-${userId}`;

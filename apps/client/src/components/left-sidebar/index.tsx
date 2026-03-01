@@ -65,6 +65,7 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
   const categories = useCategories();
   const can = useCan();
   const sidebarRef = useRef<HTMLElement>(null);
+  const widthRef = useRef(width);
   const safeServerName = serverName ?? 'Server';
   const firstCategoryId = categories[0]?.id;
   const serverSettingsPermissions = useMemo(
@@ -91,6 +92,10 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
   }, []);
 
   useEffect(() => {
+    widthRef.current = width;
+  }, [width]);
+
+  useEffect(() => {
     if (!isResizing) {
       return;
     }
@@ -104,14 +109,15 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
       const nextWidth = event.clientX - rect.left;
       const clampedWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, nextWidth));
 
+      widthRef.current = clampedWidth;
       setWidth(clampedWidth);
-      setLocalStorageItem(
-        LocalStorageKey.LEFT_SIDEBAR_WIDTH,
-        String(clampedWidth)
-      );
     };
 
     const handleMouseUp = () => {
+      setLocalStorageItem(
+        LocalStorageKey.LEFT_SIDEBAR_WIDTH,
+        String(widthRef.current)
+      );
       setIsResizing(false);
     };
 
@@ -156,7 +162,7 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
     <aside
       ref={sidebarRef}
       className={cn(
-        'relative flex h-full w-full flex-col border-r border-sidebar-border bg-sidebar/95 backdrop-blur-sm md:w-[var(--left-sidebar-width)] md:min-w-[var(--left-sidebar-width)] md:max-w-[var(--left-sidebar-width)]',
+        'relative flex h-full w-[calc(100vw-3rem)] max-w-72 flex-col border-r border-sidebar-border bg-sidebar/95 backdrop-blur-sm md:w-[var(--left-sidebar-width)] md:min-w-[var(--left-sidebar-width)] md:max-w-[var(--left-sidebar-width)]',
         !isResizing && 'md:transition-[width] md:duration-150',
         className
       )}
