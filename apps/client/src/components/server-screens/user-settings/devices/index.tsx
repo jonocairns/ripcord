@@ -150,6 +150,17 @@ const Devices = memo(() => {
         // ignore version lookup failures
       });
   }, [desktopBridge]);
+
+  useEffect(() => {
+    if (hasDesktopBridge) {
+      return;
+    }
+
+    if (values.screenAudioMode === ScreenAudioMode.APP) {
+      onChange('screenAudioMode', ScreenAudioMode.SYSTEM);
+    }
+  }, [hasDesktopBridge, onChange, values.screenAudioMode]);
+
   const isExperimentalMode =
     values.micQualityMode === MicQualityMode.EXPERIMENTAL;
 
@@ -514,7 +525,10 @@ const Devices = memo(() => {
                     <SelectItem value={ScreenAudioMode.SYSTEM}>
                       System audio
                     </SelectItem>
-                    <SelectItem value={ScreenAudioMode.APP}>
+                    <SelectItem
+                      value={ScreenAudioMode.APP}
+                      disabled={!hasDesktopBridge}
+                    >
                       Per-app audio
                     </SelectItem>
                     <SelectItem value={ScreenAudioMode.NONE}>
@@ -523,6 +537,11 @@ const Devices = memo(() => {
                   </SelectGroup>
                 </SelectContent>
               </Select>
+              {!hasDesktopBridge && (
+                <p className="text-xs text-muted-foreground">
+                  Per-app audio is only available in the desktop app.
+                </p>
+              )}
             </div>
           </div>
 

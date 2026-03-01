@@ -68,23 +68,6 @@ const useVoiceRefs = (
 
     return remoteUserStreams[remoteId]?.[StreamKind.SCREEN_AUDIO];
   }, [remoteUserStreams, remoteId, isOwnUser]);
-  const combinedScreenShareStream = useMemo(() => {
-    if (!screenShareStream) {
-      return undefined;
-    }
-
-    const combinedStream = new MediaStream();
-
-    screenShareStream.getVideoTracks().forEach((track) => {
-      combinedStream.addTrack(track);
-    });
-
-    screenShareAudioStream?.getAudioTracks().forEach((track) => {
-      combinedStream.addTrack(track);
-    });
-
-    return combinedStream;
-  }, [screenShareStream, screenShareAudioStream]);
 
   const externalAudioStream = useMemo(() => {
     if (isOwnUser) return undefined;
@@ -138,29 +121,22 @@ const useVoiceRefs = (
   }, [audioStream, audioRef, userPlaybackVolume]);
 
   useEffect(() => {
-    if (!combinedScreenShareStream || !screenShareRef.current) return;
+    if (!screenShareStream || !screenShareRef.current) return;
 
-    if (screenShareRef.current.srcObject !== combinedScreenShareStream) {
-      screenShareRef.current.srcObject = combinedScreenShareStream;
+    if (screenShareRef.current.srcObject !== screenShareStream) {
+      screenShareRef.current.srcObject = screenShareStream;
     }
-
-    screenShareRef.current.volume = screenSharePlaybackVolume;
-  }, [combinedScreenShareStream, screenShareRef, screenSharePlaybackVolume]);
+  }, [screenShareStream, screenShareRef]);
 
   useEffect(() => {
     if (!screenShareAudioRef.current) {
       return;
     }
 
-    // Screen share audio is now attached to the video element to keep A/V clocks aligned.
-    if (screenShareStream) {
+    if (!screenShareAudioStream) {
       if (screenShareAudioRef.current.srcObject) {
         screenShareAudioRef.current.srcObject = null;
       }
-      return;
-    }
-
-    if (!screenShareAudioStream) {
       return;
     }
 
