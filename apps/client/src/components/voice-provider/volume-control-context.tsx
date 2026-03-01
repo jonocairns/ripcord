@@ -16,8 +16,15 @@ import {
 // user volumes: "user-{userId}"
 // external stream volumes: "external-{pluginId}-{key}"
 type TVolumeKey = string;
+const MASTER_OUTPUT_VOLUME_KEY = 'master-output';
+const OWN_MIC_VOLUME_KEY = 'own-mic';
+const VOLUME_SETTINGS_UPDATED_EVENT = 'sharkord:volume-settings-updated';
 
 type TVolumeSettings = Record<TVolumeKey, number>;
+type TVolumeSettingsUpdatedDetail = {
+  key: TVolumeKey;
+  volume: number;
+};
 
 type TVolumeControlContext = {
   volumes: TVolumeSettings;
@@ -55,6 +62,23 @@ const saveVolumesToStorage = (volumes: TVolumeSettings) => {
   }
 };
 
+const dispatchVolumeSettingsUpdated = (detail: TVolumeSettingsUpdatedDetail) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.dispatchEvent(
+    new CustomEvent<TVolumeSettingsUpdatedDetail>(
+      VOLUME_SETTINGS_UPDATED_EVENT,
+      { detail }
+    )
+  );
+};
+
+const getStoredVolume = (key: TVolumeKey): number => {
+  return loadVolumesFromStorage()[key] ?? 100;
+};
+
 const VolumeControlProvider = memo(
   ({ children }: TVolumeControlProviderProps) => {
     const [volumes, setVolumes] = useState<TVolumeSettings>(
@@ -74,6 +98,7 @@ const VolumeControlProvider = memo(
       setVolumes((prev) => {
         const next = { ...prev, [key]: volume };
         saveVolumesToStorage(next);
+        dispatchVolumeSettingsUpdated({ key, volume });
         return next;
       });
 
@@ -96,6 +121,7 @@ const VolumeControlProvider = memo(
 
         const next = { ...prev, [key]: newVolume };
         saveVolumesToStorage(next);
+        dispatchVolumeSettingsUpdated({ key, volume: newVolume });
         return next;
       });
     }, []);
@@ -146,4 +172,14 @@ const useVolumeControl = () => {
 };
 
 export { useVolumeControl, VolumeControlContext, VolumeControlProvider };
-export type { TVolumeControlContext, TVolumeKey };
+export {
+  MASTER_OUTPUT_VOLUME_KEY,
+  OWN_MIC_VOLUME_KEY,
+  VOLUME_SETTINGS_UPDATED_EVENT,
+  getStoredVolume
+};
+export type {
+  TVolumeControlContext,
+  TVolumeKey,
+  TVolumeSettingsUpdatedDetail
+};

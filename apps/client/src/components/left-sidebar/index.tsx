@@ -12,10 +12,24 @@ import { useCategories } from '@/features/server/categories/hooks';
 import { useCan, useInfo, useServerName } from '@/features/server/hooks';
 import { getFileUrl } from '@/helpers/get-file-url';
 import { getInitialsFromName } from '@/helpers/get-initials-from-name';
+import {
+  getLocalStorageItem,
+  LocalStorageKey,
+  setLocalStorageItem
+} from '@/helpers/storage';
 import { cn } from '@/lib/utils';
 import { Permission } from '@sharkord/shared';
 import { ChevronDown, FolderPlus, Hash, Settings } from 'lucide-react';
-import { memo, useMemo, useState } from 'react';
+import {
+  memo,
+  type MouseEvent as ReactMouseEvent,
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import { Dialog } from '../dialogs/dialogs';
 import { ServerScreen } from '../server-screens/screens';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
@@ -29,12 +43,28 @@ type TLeftSidebarProps = {
   className?: string;
 };
 
+const MIN_WIDTH = 240;
+const MAX_WIDTH = 420;
+const DEFAULT_WIDTH = 288;
+
 const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
   const serverName = useServerName();
   const serverInfo = useInfo();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [width, setWidth] = useState(() => {
+    const savedWidth = getLocalStorageItem(LocalStorageKey.LEFT_SIDEBAR_WIDTH);
+    const parsedWidth = savedWidth ? Number.parseInt(savedWidth, 10) : NaN;
+
+    if (Number.isNaN(parsedWidth)) {
+      return DEFAULT_WIDTH;
+    }
+
+    return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, parsedWidth));
+  });
+  const [isResizing, setIsResizing] = useState(false);
   const categories = useCategories();
   const can = useCan();
+  const sidebarRef = useRef<HTMLElement>(null);
   const safeServerName = serverName ?? 'Server';
   const firstCategoryId = categories[0]?.id;
   const serverSettingsPermissions = useMemo(
@@ -55,6 +85,44 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
   const canManageCategories = can(Permission.MANAGE_CATEGORIES);
   const hasServerActions =
     canManageServerSettings || canManageChannels || canManageCategories;
+  const handleResizeStart = useCallback((event: ReactMouseEvent) => {
+    event.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) {
+      return;
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!sidebarRef.current) {
+        return;
+      }
+
+      const rect = sidebarRef.current.getBoundingClientRect();
+      const nextWidth = event.clientX - rect.left;
+      const clampedWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, nextWidth));
+
+      setWidth(clampedWidth);
+      setLocalStorageItem(
+        LocalStorageKey.LEFT_SIDEBAR_WIDTH,
+        String(clampedWidth)
+      );
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
 
   const headerContent = (
     <>
@@ -86,11 +154,25 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
 
   return (
     <aside
+      ref={sidebarRef}
       className={cn(
-        'flex h-full w-72 flex-col border-r border-sidebar-border bg-sidebar/95 backdrop-blur-sm',
+        'relative flex h-full w-full flex-col border-r border-sidebar-border bg-sidebar/95 backdrop-blur-sm md:w-[var(--left-sidebar-width)] md:min-w-[var(--left-sidebar-width)] md:max-w-[var(--left-sidebar-width)]',
+        !isResizing && 'md:transition-[width] md:duration-150',
         className
       )}
+      style={
+        {
+          '--left-sidebar-width': `${width}px`
+        } as CSSProperties
+      }
     >
+      <div
+        className={cn(
+          'absolute top-0 right-0 hidden h-full w-1 cursor-col-resize bg-transparent transition-colors md:block',
+          isResizing ? 'bg-primary/70' : 'hover:bg-primary/40'
+        )}
+        onMouseDown={handleResizeStart}
+      />
       <div className="flex h-12 w-full items-center border-b border-sidebar-border px-2">
         {hasServerActions ? (
           <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>

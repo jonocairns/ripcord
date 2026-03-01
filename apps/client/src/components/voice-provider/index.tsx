@@ -78,7 +78,13 @@ import {
   type TMicReferenceAudioPipeline
 } from './mic-reference-audio';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
-import { VolumeControlProvider } from './volume-control-context';
+import {
+  getStoredVolume,
+  OWN_MIC_VOLUME_KEY,
+  VOLUME_SETTINGS_UPDATED_EVENT,
+  VolumeControlProvider
+} from './volume-control-context';
+import type { TVolumeSettingsUpdatedDetail } from './volume-control-context';
 
 type AudioVideoRefs = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -185,6 +191,108 @@ const resolveMicProcessingConfig = (
     sidecarDfnAttenuationLimitDb: defaults.dfnAttenuationLimitDb,
     sidecarExperimentalAggressiveMode: defaults.dfnExperimentalAggressiveMode,
     sidecarNoiseGateFloorDbfs: defaults.dfnNoiseGateFloorDbfs
+  };
+};
+
+type TMicGainPipeline = {
+  audioContext: AudioContext;
+  gainNode: GainNode;
+  track: MediaStreamTrack;
+  stream: MediaStream;
+  destroy: () => Promise<void>;
+};
+
+const clampVolumePercent = (value: number) => {
+  return Math.min(100, Math.max(0, value));
+};
+
+const getAudioContextClass = () => {
+  return (
+    window.AudioContext ||
+    (window as typeof window & {
+      webkitAudioContext?: typeof AudioContext;
+    }).webkitAudioContext
+  );
+};
+
+const createMicGainPipeline = async (
+  inputStream: MediaStream,
+  volume: number
+): Promise<TMicGainPipeline | undefined> => {
+  const inputTrack = inputStream.getAudioTracks()[0];
+
+  if (!inputTrack) {
+    return undefined;
+  }
+
+  const AudioContextClass = getAudioContextClass();
+
+  if (!AudioContextClass) {
+    return undefined;
+  }
+
+  const audioContext = new AudioContextClass();
+
+  try {
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
+    }
+  } catch {
+    // ignore resume failures and continue with the browser-managed state
+  }
+
+  const sourceNode = audioContext.createMediaStreamSource(
+    new MediaStream([inputTrack])
+  );
+  const gainNode = audioContext.createGain();
+  const destinationNode = audioContext.createMediaStreamDestination();
+  const outputTrack = destinationNode.stream.getAudioTracks()[0];
+
+  if (!outputTrack) {
+    await audioContext.close();
+    return undefined;
+  }
+
+  gainNode.gain.value = clampVolumePercent(volume) / 100;
+  sourceNode.connect(gainNode);
+  gainNode.connect(destinationNode);
+
+  const handleInputEnded = () => {
+    outputTrack.stop();
+  };
+
+  inputTrack.addEventListener('ended', handleInputEnded);
+
+  return {
+    audioContext,
+    gainNode,
+    track: outputTrack,
+    stream: destinationNode.stream,
+    destroy: async () => {
+      inputTrack.removeEventListener('ended', handleInputEnded);
+
+      try {
+        sourceNode.disconnect();
+      } catch {
+        // ignore disconnect failures
+      }
+
+      try {
+        gainNode.disconnect();
+      } catch {
+        // ignore disconnect failures
+      }
+
+      try {
+        destinationNode.disconnect();
+      } catch {
+        // ignore disconnect failures
+      }
+
+      if (audioContext.state !== 'closed') {
+        await audioContext.close();
+      }
+    }
   };
 };
 
@@ -396,6 +504,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   const micAudioPipelineRef = useRef<TMicAudioProcessingPipeline | undefined>(
     undefined
   );
+  const micGainPipelineRef = useRef<TMicGainPipeline | undefined>(undefined);
   const micReferenceAudioPipelineRef = useRef<
     TMicReferenceAudioPipeline | undefined
   >(undefined);
@@ -526,6 +635,44 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     );
   }, [externalStreams, remoteUserStreams, ownVoiceState.soundMuted]);
 
+  const applyMicGainVolume = useCallback((volume: number) => {
+    const micGainPipeline = micGainPipelineRef.current;
+
+    if (!micGainPipeline) {
+      return;
+    }
+
+    const nextVolume = clampVolumePercent(volume) / 100;
+    const currentTime = micGainPipeline.audioContext.currentTime;
+
+    micGainPipeline.gainNode.gain.cancelScheduledValues(currentTime);
+    micGainPipeline.gainNode.gain.setValueAtTime(nextVolume, currentTime);
+  }, []);
+
+  useEffect(() => {
+    const handleVolumeSettingsUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<TVolumeSettingsUpdatedDetail>;
+
+      if (customEvent.detail.key !== OWN_MIC_VOLUME_KEY) {
+        return;
+      }
+
+      applyMicGainVolume(customEvent.detail.volume);
+    };
+
+    window.addEventListener(
+      VOLUME_SETTINGS_UPDATED_EVENT,
+      handleVolumeSettingsUpdated
+    );
+
+    return () => {
+      window.removeEventListener(
+        VOLUME_SETTINGS_UPDATED_EVENT,
+        handleVolumeSettingsUpdated
+      );
+    };
+  }, [applyMicGainVolume]);
+
   const cleanupMicReferenceAudioPipeline = useCallback(async () => {
     const referencePipeline = micReferenceAudioPipelineRef.current;
     micReferenceAudioPipelineRef.current = undefined;
@@ -546,6 +693,21 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
   const cleanupMicAudioPipeline = useCallback(async () => {
     await cleanupMicReferenceAudioPipeline();
+
+    const micGainPipeline = micGainPipelineRef.current;
+    micGainPipelineRef.current = undefined;
+
+    if (micGainPipeline) {
+      micGainPipeline.track.onended = null;
+
+      try {
+        await micGainPipeline.destroy();
+      } catch (error) {
+        logVoice('Failed to clean up microphone gain pipeline', {
+          error
+        });
+      }
+    }
 
     const rawMicStream = rawMicStreamRef.current;
     rawMicStreamRef.current = undefined;
@@ -610,8 +772,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
           if (nativePipeline) {
             micAudioPipelineRef.current = nativePipeline;
-            const outboundStream = nativePipeline.stream;
-            const outboundAudioTrack = nativePipeline.track;
+            let outboundStream = nativePipeline.stream;
+            let outboundAudioTrack = nativePipeline.track;
             const activeVoiceFilterSessionId = nativePipeline.sessionId;
 
             logVoice('Microphone native capture enabled', {
@@ -653,6 +815,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
                   )
                 );
               }
+            }
+
+            const micGainPipeline = await createMicGainPipeline(
+              outboundStream,
+              getStoredVolume(OWN_MIC_VOLUME_KEY)
+            );
+
+            if (micGainPipeline) {
+              micGainPipelineRef.current = micGainPipeline;
+              outboundStream = micGainPipeline.stream;
+              outboundAudioTrack = micGainPipeline.track;
             }
 
             setLocalAudioStream(outboundStream);
@@ -848,6 +1021,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
               );
             }
           }
+        }
+
+        const micGainPipeline = await createMicGainPipeline(
+          outboundStream,
+          getStoredVolume(OWN_MIC_VOLUME_KEY)
+        );
+
+        if (micGainPipeline) {
+          micGainPipelineRef.current = micGainPipeline;
+          outboundStream = micGainPipeline.stream;
+          outboundAudioTrack = micGainPipeline.track;
         }
 
         setLocalAudioStream(outboundStream);
