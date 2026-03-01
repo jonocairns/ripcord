@@ -8,7 +8,6 @@ import {
 } from '@/components/ui/card';
 import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
-import { closeServerScreens } from '@/features/server-screens/actions';
 import { useAdminCategoryGeneral } from '@/features/server/admin/hooks';
 import { memo } from 'react';
 
@@ -41,11 +40,8 @@ const General = memo(({ categoryId }: TGeneralProps) => {
         </Group>
 
         <div className="flex justify-end gap-2 pt-4">
-          <Button variant="outline" onClick={closeServerScreens}>
-            Cancel
-          </Button>
           <Button onClick={submit} disabled={loading}>
-            Save Changes
+            Apply
           </Button>
         </div>
       </CardContent>

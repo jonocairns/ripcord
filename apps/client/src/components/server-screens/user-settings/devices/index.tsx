@@ -190,7 +190,7 @@ const Devices = memo(() => {
             </p>
           </div>
 
-          <div className="max-w-2xl space-y-2">
+          <div className=" space-y-2">
             <Label>Input device</Label>
             <Select
               onValueChange={(value) => onChange('microphoneId', value)}
@@ -214,35 +214,64 @@ const Devices = memo(() => {
             </Select>
           </div>
 
-          <div className="max-w-sm space-y-2">
-            <Label>Voice processing</Label>
-            <Select
-              onValueChange={(value) =>
-                onChange('micQualityMode', value as MicQualityMode)
-              }
-              value={values.micQualityMode}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select voice processing mode" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value={MicQualityMode.AUTO}>Standard</SelectItem>
-                  <SelectItem
-                    value={MicQualityMode.EXPERIMENTAL}
-                    disabled={!hasDesktopBridge}
-                  >
-                    Enhanced (Desktop)
-                  </SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+          <div className="flex flex-col gap-4 sm:flex-row">
+            <div className="min-w-0 flex-1 space-y-2">
+              <Label>Voice processing</Label>
+              <Select
+                onValueChange={(value) =>
+                  onChange('micQualityMode', value as MicQualityMode)
+                }
+                value={values.micQualityMode}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select voice processing mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value={MicQualityMode.AUTO}>Standard</SelectItem>
+                    <SelectItem
+                      value={MicQualityMode.EXPERIMENTAL}
+                      disabled={!hasDesktopBridge}
+                    >
+                      Enhanced (Desktop)
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {isExperimentalMode && values.noiseSuppression && (
+              <div className="min-w-0 flex-1 space-y-2">
+                <Label>Noise suppression strength</Label>
+                <Select
+                  onValueChange={(value) =>
+                    onChange('voiceFilterStrength', value as VoiceFilterStrength)
+                  }
+                  value={values.voiceFilterStrength}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a filter preset" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={VoiceFilterStrength.LOW}>Low</SelectItem>
+                      <SelectItem value={VoiceFilterStrength.BALANCED}>
+                        Balanced
+                      </SelectItem>
+                      <SelectItem value={VoiceFilterStrength.HIGH}>
+                        High
+                      </SelectItem>
+                      <SelectItem value={VoiceFilterStrength.AGGRESSIVE}>
+                        Aggressive
+                      </SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
 
-          <Alert
-            variant="info"
-            className="max-w-2xl border-primary/40 bg-primary/10"
-          >
+          <Alert variant="info" className="border-primary/40 bg-primary/10">
             <Info />
             <AlertTitle>NVIDIA Broadcast Recommended</AlertTitle>
             <AlertDescription className="block text-foreground/90">
@@ -254,7 +283,7 @@ const Devices = memo(() => {
             </AlertDescription>
           </Alert>
 
-          <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
+          <div className="grid gap-x-8 gap-y-3 md:grid-cols-2 my-4 pl-2">
             <div className="flex items-center gap-3">
               <Switch
                 checked={!!values.echoCancellation}
@@ -286,49 +315,6 @@ const Devices = memo(() => {
             </div>
           </div>
 
-          {isExperimentalMode && values.noiseSuppression && (
-            <div className="max-w-sm space-y-2">
-              <Label>Noise suppression strength</Label>
-              <Select
-                onValueChange={(value) =>
-                  onChange('voiceFilterStrength', value as VoiceFilterStrength)
-                }
-                value={values.voiceFilterStrength}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select a filter preset" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value={VoiceFilterStrength.LOW}>Low</SelectItem>
-                    <SelectItem value={VoiceFilterStrength.BALANCED}>
-                      Balanced
-                    </SelectItem>
-                    <SelectItem value={VoiceFilterStrength.HIGH}>
-                      High
-                    </SelectItem>
-                    <SelectItem value={VoiceFilterStrength.AGGRESSIVE}>
-                      Aggressive
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          {isExperimentalMode ? (
-            <p className="text-xs text-muted-foreground">
-              Audio is captured and processed natively by the desktop sidecar.
-              DeepFilterNet removes background noise and reverberation.
-              Automatic gain control normalises input levels.
-            </p>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              Uses browser-based audio processing. Echo cancellation, noise
-              suppression, and gain control are handled by the browser.
-            </p>
-          )}
-
           <MicrophoneTestPanel
             microphoneId={values.microphoneId}
             micQualityMode={values.micQualityMode}
@@ -340,7 +326,7 @@ const Devices = memo(() => {
           />
 
           {hasDesktopBridge && (
-            <div className="max-w-2xl space-y-3">
+            <div className=" space-y-3">
               <div className="space-y-1">
                 <p className="text-sm font-medium">Push keybinds (Desktop)</p>
                 <p className="text-xs text-muted-foreground">
@@ -420,7 +406,7 @@ const Devices = memo(() => {
             </p>
           </div>
 
-          <div className="max-w-2xl space-y-2">
+          <div className=" space-y-2">
             <Label>Input device</Label>
             <Select
               onValueChange={(value) => onChange('webcamId', value)}
@@ -444,7 +430,7 @@ const Devices = memo(() => {
             </Select>
           </div>
 
-          <div className="max-w-md">
+          <div >
             <ResolutionFpsControl
               framerate={values.webcamFramerate}
               resolution={values.webcamResolution}
@@ -455,12 +441,13 @@ const Devices = memo(() => {
             />
           </div>
 
-          <div className="flex max-w-md items-center justify-between gap-3">
-            <Label className="cursor-default">Mirror own video</Label>
-            <Switch
+          <div className="flex items-center gap-3 pl-2">
+             <Switch
               checked={!!values.mirrorOwnVideo}
               onCheckedChange={(checked) => onChange('mirrorOwnVideo', checked)}
             />
+            <Label className="cursor-default">Mirror own video</Label>
+           
           </div>
         </section>
 
@@ -545,7 +532,7 @@ const Devices = memo(() => {
             </div>
           </div>
 
-          <div className="max-w-md">
+          <div>
             <ResolutionFpsControl
               framerate={values.screenFramerate}
               resolution={values.screenResolution}
@@ -576,8 +563,8 @@ const Devices = memo(() => {
           </section>
         )}
       </CardContent>
-      <CardFooter className="border-t items-stretch justify-end gap-2 sm:items-center">
-        <Button onClick={saveDeviceSettings}>Save Changes</Button>
+      <CardFooter className="items-stretch justify-end gap-2 sm:items-center">
+        <Button onClick={saveDeviceSettings}>Apply</Button>
       </CardFooter>
     </Card>
   );

@@ -1,4 +1,5 @@
 import { useUserById } from '@/features/server/users/hooks';
+import { getAvatarColor } from '@/helpers/get-avatar-color';
 import { getFileUrl } from '@/helpers/get-file-url';
 import { getInitialsFromName } from '@/helpers/get-initials-from-name';
 import { cn } from '@/lib/utils';
@@ -36,7 +37,9 @@ const UserAvatar = memo(
       >
         <Avatar className={cn('h-8 w-8', className)}>
           <AvatarImage src={getFileUrl(user.avatar)} key={user.avatarId} />
-          <AvatarFallback className="bg-muted text-xs">
+          <AvatarFallback
+            className={cn('text-xs text-white', getAvatarColor(userId))}
+          >
             {getInitialsFromName(user.name)}
           </AvatarFallback>
         </Avatar>

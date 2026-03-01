@@ -183,7 +183,7 @@ const UpdateRole = memo(
             }
           />
         </CardContent>
-        <CardFooter className="border-t justify-end gap-2 py-4">
+        <CardFooter className="justify-end gap-2 py-4">
           <Button
             variant="outline"
             onClick={() => setSelectedRoleId(undefined)}

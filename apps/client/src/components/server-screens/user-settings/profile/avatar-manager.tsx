@@ -49,8 +49,8 @@ const AvatarManager = memo(({ user }: TAvatarManagerProps) => {
   }, [openFilePicker]);
 
   return (
-    <div className="space-y-3">
-      <div className="space-y-1 md:min-h-16">
+    <div className="space-y-2">
+      <div className="space-y-1">
         <p className="text-sm font-medium">Avatar</p>
         <p className="text-xs text-muted-foreground">
           Upload a new avatar image.

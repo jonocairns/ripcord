@@ -125,7 +125,7 @@ const UpdateEmoji = memo(
             </div>
           </div>
         </CardContent>
-        <CardFooter className="border-t justify-end gap-2 py-4">
+        <CardFooter className="justify-end gap-2 py-4">
           <Button
             variant="outline"
             onClick={() => setSelectedEmojiId(undefined)}
@@ -136,7 +136,7 @@ const UpdateEmoji = memo(
             onClick={onUpdateEmoji}
             disabled={selectedEmoji.name === name}
           >
-            Save Changes
+            Apply
           </Button>
         </CardFooter>
       </Card>

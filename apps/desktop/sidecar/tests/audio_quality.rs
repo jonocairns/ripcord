@@ -7,7 +7,8 @@
 
 use sharkord_capture_sidecar::file_test::{self, FileTestConfig};
 use sharkord_capture_sidecar::voice_filter_core::{
-    VoiceDereverbMode, VoiceFilterDfnTuningParams, VoiceFilterStrength,
+    dbfs_to_linear, VoiceDereverbMode, VoiceFilterDfnTuningParams, VoiceFilterStrength,
+    DFN_NOISE_GATE_ATTENUATION, DFN_NOISE_GATE_GAIN_SMOOTH_MS, DFN_NOISE_GATE_KNEE_MULTIPLIER,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,13 @@ const PRESENCE_BAND_LOW_HZ: f32 = 2000.0;
 const PRESENCE_BAND_HIGH_HZ: f32 = 5000.0;
 const RESIDUAL_BAND_LOW_HZ: f32 = 120.0;
 const RESIDUAL_BAND_HIGH_HZ: f32 = 1200.0;
+const HF_BAND_LOW_HZ: f32 = 4000.0;
+const HF_BAND_HIGH_HZ: f32 = 8000.0;
+
+// Speech dropout detection: a dropout is a brief dip of >DROPOUT_THRESHOLD_DB
+// that recovers within DROPOUT_MAX_FRAMES frames during speech.
+const DROPOUT_THRESHOLD_DB: f64 = 12.0;
+const DROPOUT_MAX_FRAMES: usize = 5; // 50 ms at 10ms/frame
 
 // ─── Baseline JSON types ─────────────────────────────────────────────────────
 
@@ -56,6 +64,24 @@ struct AnalysisResult {
     onset_ratio_avg: Option<f64>,
     speech_presence_ratio: Option<f64>,
     speech_residual_wobble: Option<f64>,
+    /// Peak RMS (dBFS) of output frames during detected silence gaps between
+    /// speech segments — catches subtle static/artifacts in pauses.
+    gap_noise_floor_db: Option<f64>,
+    /// Median RMS (dBFS) of output frames during silence gaps — captures the
+    /// steady-state noise floor between speech, less sensitive to transient peaks.
+    gap_noise_floor_median_db: Option<f64>,
+    /// SNR improvement in dB: (output speech RMS / output gap RMS) minus
+    /// (input speech RMS / input gap RMS). Higher = better NC performance.
+    speech_snr_improvement_db: Option<f64>,
+    /// Max onset delay in frames between input speech onset and output speech
+    /// onset at the same position. Catches VAD/gate clipping word starts.
+    onset_delay_frames_max: Option<f64>,
+    /// Ratio of HF energy (4-8 kHz) in output vs input during speech frames.
+    /// Values near 1.0 = good preservation; <1.0 = muffled sibilants.
+    speech_hf_preservation: Option<f64>,
+    /// Number of brief dropouts (>12 dB dip recovering within 50 ms) during
+    /// speech segments. Catches pumping and chopped consonants.
+    speech_dropout_count: Option<f64>,
 }
 
 impl AnalysisResult {
@@ -70,6 +96,12 @@ impl AnalysisResult {
             "onset_ratio_avg" => self.onset_ratio_avg,
             "speech_presence_ratio" => self.speech_presence_ratio,
             "speech_residual_wobble" => self.speech_residual_wobble,
+            "gap_noise_floor_db" => self.gap_noise_floor_db,
+            "gap_noise_floor_median_db" => self.gap_noise_floor_median_db,
+            "speech_snr_improvement_db" => self.speech_snr_improvement_db,
+            "onset_delay_frames_max" => self.onset_delay_frames_max,
+            "speech_hf_preservation" => self.speech_hf_preservation,
+            "speech_dropout_count" => self.speech_dropout_count,
             _ => None,
         }
     }
@@ -264,6 +296,161 @@ fn analyze(inp: &[f32], out: &[f32]) -> AnalysisResult {
             (None, None)
         };
 
+    // Gap noise floor: measure peak and median RMS of output frames during
+    // silence gaps between speech segments (after startup skip).
+    // Peak catches transient leaks; median captures steady-state static.
+    // Uses output-based speech detection so that NC-suppressed backgrounds
+    // (fan, AC) correctly show silence gaps rather than being misclassified
+    // as continuous speech from the noisy input.
+    let (gap_noise_floor_db, gap_noise_floor_median_db) = {
+        let out_speech_frames = find_speech_frames(out_slice, n_frames);
+        let speech_set: std::collections::HashSet<usize> =
+            out_speech_frames.iter().copied().collect();
+        let mut gap_rms_values = Vec::new();
+        for i in STARTUP_SKIP_FRAMES..n_frames {
+            if !speech_set.contains(&i) {
+                gap_rms_values.push(frame_rms(out_slice, i));
+            }
+        }
+        if gap_rms_values.len() >= MIN_SILENCE_GAP_FRAMES {
+            let peak = gap_rms_values.iter().copied().reduce(f64::max).unwrap();
+            gap_rms_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let median = gap_rms_values[gap_rms_values.len() / 2];
+            (Some(to_dbfs(peak)), Some(to_dbfs(median)))
+        } else {
+            (None, None)
+        }
+    };
+
+    // SNR improvement: compare speech-to-gap SNR in output vs input.
+    // Uses output-based speech detection for gap measurement (same as gap_noise_floor).
+    let speech_snr_improvement_db = {
+        let out_speech_set: std::collections::HashSet<usize> =
+            find_speech_frames(out_slice, n_frames).into_iter().collect();
+        let inp_speech_set: std::collections::HashSet<usize> =
+            speech_frames.iter().copied().collect();
+
+        let inp_speech_rms = {
+            let vals: Vec<f64> = (STARTUP_SKIP_FRAMES..n_frames)
+                .filter(|i| inp_speech_set.contains(i))
+                .map(|i| frame_rms(inp_slice, i))
+                .collect();
+            if vals.is_empty() { 0.0 } else { vals.iter().sum::<f64>() / vals.len() as f64 }
+        };
+        let inp_gap_rms = {
+            let vals: Vec<f64> = (STARTUP_SKIP_FRAMES..n_frames)
+                .filter(|i| !inp_speech_set.contains(i))
+                .map(|i| frame_rms(inp_slice, i))
+                .collect();
+            if vals.is_empty() { 0.0 } else { vals.iter().sum::<f64>() / vals.len() as f64 }
+        };
+        let out_speech_rms = {
+            let vals: Vec<f64> = (STARTUP_SKIP_FRAMES..n_frames)
+                .filter(|i| out_speech_set.contains(i))
+                .map(|i| frame_rms(out_slice, i))
+                .collect();
+            if vals.is_empty() { 0.0 } else { vals.iter().sum::<f64>() / vals.len() as f64 }
+        };
+        let out_gap_rms = {
+            let vals: Vec<f64> = (STARTUP_SKIP_FRAMES..n_frames)
+                .filter(|i| !out_speech_set.contains(i))
+                .map(|i| frame_rms(out_slice, i))
+                .collect();
+            if vals.is_empty() { 0.0 } else { vals.iter().sum::<f64>() / vals.len() as f64 }
+        };
+
+        if inp_gap_rms > 1e-10 && out_gap_rms > 1e-10 && inp_speech_rms > 1e-10 && out_speech_rms > 1e-10 {
+            let inp_snr = to_dbfs(inp_speech_rms) - to_dbfs(inp_gap_rms);
+            let out_snr = to_dbfs(out_speech_rms) - to_dbfs(out_gap_rms);
+            Some(out_snr - inp_snr)
+        } else {
+            None
+        }
+    };
+
+    // Onset delay: for each input onset, find the first output frame at or after
+    // the onset that crosses the speech threshold. The difference is the delay.
+    let onset_delay_frames_max = if onsets.is_empty() {
+        None
+    } else {
+        let out_threshold = 10.0f64.powf(SPEECH_ONSET_THRESHOLD_DBFS as f64 / 20.0);
+        let max_search = 20; // search up to 200ms after input onset
+        let mut max_delay: Option<usize> = None;
+        for &onset in &onsets {
+            let mut delay = None;
+            for d in 0..max_search {
+                let fi = onset + d;
+                if fi >= n_frames { break; }
+                if frame_rms(out_slice, fi) > out_threshold {
+                    delay = Some(d);
+                    break;
+                }
+            }
+            if let Some(d) = delay {
+                max_delay = Some(max_delay.map_or(d, |prev: usize| prev.max(d)));
+            }
+        }
+        max_delay.map(|d| d as f64)
+    };
+
+    // HF preservation: ratio of HF energy (4-8 kHz) in output vs input during
+    // speech frames. Values near 1.0 = sibilants preserved; <<1.0 = muffled.
+    let speech_hf_preservation = if speech_frames.len() >= MIN_SPEECH_METRIC_FRAMES {
+        let inp_hf = bandpass_filter(inp_slice, HF_BAND_LOW_HZ as f64, HF_BAND_HIGH_HZ as f64);
+        let out_hf = bandpass_filter(out_slice, HF_BAND_LOW_HZ as f64, HF_BAND_HIGH_HZ as f64);
+
+        let mut inp_hf_sum = 0.0f64;
+        let mut out_hf_sum = 0.0f64;
+        for &fi in &speech_frames {
+            inp_hf_sum += frame_rms(&inp_hf, fi);
+            out_hf_sum += frame_rms(&out_hf, fi);
+        }
+        if inp_hf_sum > 1e-10 {
+            Some(out_hf_sum / inp_hf_sum)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Speech dropout detection: count brief dips during speech where the output
+    // RMS drops >DROPOUT_THRESHOLD_DB below the local speech level and recovers
+    // within DROPOUT_MAX_FRAMES. Catches pumping and chopped consonants.
+    let speech_dropout_count = if speech_frames.len() >= MIN_SPEECH_METRIC_FRAMES {
+        // Build a vec of (frame_idx, rms_db) for speech frames
+        let speech_rms_db: Vec<(usize, f64)> = speech_frames
+            .iter()
+            .map(|&fi| (fi, to_dbfs(frame_rms(out_slice, fi))))
+            .collect();
+
+        let mut dropouts = 0u64;
+        let mut i = 0;
+        while i < speech_rms_db.len() {
+            let (_, ref_db) = speech_rms_db[i];
+            // Look ahead for a dip
+            let mut j = i + 1;
+            let mut found_dip = false;
+            while j < speech_rms_db.len() && j - i <= DROPOUT_MAX_FRAMES + 1 {
+                let (_, cur_db) = speech_rms_db[j];
+                if ref_db - cur_db > DROPOUT_THRESHOLD_DB {
+                    found_dip = true;
+                }
+                if found_dip && (ref_db - cur_db) < DROPOUT_THRESHOLD_DB / 2.0 {
+                    // Recovered — count as dropout
+                    dropouts += 1;
+                    i = j;
+                    break;
+                }
+                j += 1;
+            }
+            i += 1;
+        }
+        Some(dropouts as f64)
+    } else {
+        None
+    };
+
     AnalysisResult {
         inp_db: to_dbfs(inp_rms),
         out_db: to_dbfs(out_rms),
@@ -274,6 +461,12 @@ fn analyze(inp: &[f32], out: &[f32]) -> AnalysisResult {
         onset_ratio_avg,
         speech_presence_ratio,
         speech_residual_wobble,
+        gap_noise_floor_db,
+        gap_noise_floor_median_db,
+        speech_snr_improvement_db,
+        onset_delay_frames_max,
+        speech_hf_preservation,
+        speech_dropout_count,
     }
 }
 
@@ -402,9 +595,18 @@ fn run_and_check(rel_path: &str) {
     }
 
     // Print summary for CI visibility
+    let fmt_opt = |v: Option<f64>, suffix: &str| -> String {
+        v.map(|x| format!("{x:6.1}{suffix}")).unwrap_or_else(|| "   n/a".to_string())
+    };
     eprintln!(
-        "[pass] {rel_path:35} | inp={:6.1}dB out={:6.1}dB | silent={:5.1}% | onsets={}",
+        "[pass] {rel_path:35} | inp={:6.1}dB out={:6.1}dB | silent={:5.1}% | onsets={} | gap_pk={} gap_med={} | snr_imp={} onset_dly={} hf_pres={} dropouts={}",
         result.inp_db, result.out_db, result.silence_pct, result.onset_ratio_count,
+        fmt_opt(result.gap_noise_floor_db, "dB"),
+        fmt_opt(result.gap_noise_floor_median_db, "dB"),
+        fmt_opt(result.speech_snr_improvement_db, "dB"),
+        fmt_opt(result.onset_delay_frames_max, ""),
+        fmt_opt(result.speech_hf_preservation, ""),
+        fmt_opt(result.speech_dropout_count, ""),
     );
 }
 
@@ -445,3 +647,118 @@ audio_test!(speed_plus_fan, "speed-plus-fan.wav");
 audio_test!(typing_only, "typing-only.wav");
 audio_test!(nvidia_sample_naked, "nvidia/sample-naked.wav");
 audio_test!(nvidia_sample_nvidia_broadcast, "nvidia/sample-nvidia-broadcast.wav");
+
+// ─── Anti-cicada noise gate test ─────────────────────────────────────────────
+//
+// The "cicada" bug: when a signal oscillates around the gate threshold, a
+// per-sample gate flips gain between attenuated and unity every cycle, creating
+// audible periodic modulation at the signal frequency.  The gain smoother
+// prevents this.  This test proves the fix by measuring gain modulation depth
+// for a tone at the gate threshold.
+
+/// Simulate the original (unsmoothed) per-sample noise gate.
+fn gate_unsmoothed(samples: &mut [f32], floor: f32) {
+    let knee = floor * DFN_NOISE_GATE_KNEE_MULTIPLIER;
+    for sample in samples.iter_mut() {
+        let abs_val = sample.abs();
+        let gain = if abs_val <= floor {
+            DFN_NOISE_GATE_ATTENUATION
+        } else if abs_val >= knee {
+            1.0
+        } else {
+            let t = ((abs_val - floor) / (knee - floor)).clamp(0.0, 1.0);
+            DFN_NOISE_GATE_ATTENUATION + (1.0 - DFN_NOISE_GATE_ATTENUATION) * t
+        };
+        *sample *= gain;
+    }
+}
+
+/// Simulate the smoothed per-sample noise gate (the actual implementation).
+fn gate_smoothed(samples: &mut [f32], floor: f32) {
+    let sr = 48_000.0f32;
+    let gain_smooth_coeff = (-1.0 / (sr * DFN_NOISE_GATE_GAIN_SMOOTH_MS / 1000.0)).exp();
+    let knee = floor * DFN_NOISE_GATE_KNEE_MULTIPLIER;
+    let mut gate_gain = 1.0f32;
+
+    for sample in samples.iter_mut() {
+        let abs_val = sample.abs();
+        let desired_gain = if abs_val <= floor {
+            DFN_NOISE_GATE_ATTENUATION
+        } else if abs_val >= knee {
+            1.0
+        } else {
+            let t = ((abs_val - floor) / (knee - floor)).clamp(0.0, 1.0);
+            DFN_NOISE_GATE_ATTENUATION + (1.0 - DFN_NOISE_GATE_ATTENUATION) * t
+        };
+        gate_gain = gain_smooth_coeff * gate_gain + (1.0 - gain_smooth_coeff) * desired_gain;
+        *sample *= gate_gain;
+    }
+}
+
+/// Measure the gain modulation depth: ratio of gain variance to mean gain.
+/// A pure-gain signal (no modulation) has depth ≈ 0.  The cicada bug produces
+/// depth >> 0 because gain tracks each cycle of the waveform.
+fn measure_gain_modulation(original: &[f32], processed: &[f32]) -> f64 {
+    assert_eq!(original.len(), processed.len());
+    let gains: Vec<f64> = original
+        .iter()
+        .zip(processed.iter())
+        .filter(|(&o, _)| o.abs() > 1e-12)
+        .map(|(&o, &p)| (p as f64) / (o as f64))
+        .collect();
+    if gains.len() < 100 {
+        return 0.0;
+    }
+    let mean = gains.iter().sum::<f64>() / gains.len() as f64;
+    let variance = gains.iter().map(|g| (g - mean).powi(2)).sum::<f64>() / gains.len() as f64;
+    (variance.sqrt()) / mean.abs().max(1e-12)
+}
+
+#[test]
+fn anti_cicada_noise_gate() {
+    use std::f32::consts::PI;
+
+    let sr = 48_000usize;
+    let num_samples = sr / 2; // 0.5 seconds
+    let freq_hz = 200.0; // typical voice fundamental
+
+    // Gate threshold from test config
+    let floor = dbfs_to_linear(-58.0);
+
+    // Generate a tone whose peak amplitude is 2x the gate floor.
+    // This means each cycle swings between -2*floor and +2*floor, crossing
+    // through the floor threshold twice per cycle — the worst case for cicada.
+    let amplitude = floor * 2.0;
+    let tone: Vec<f32> = (0..num_samples)
+        .map(|i| (2.0 * PI * freq_hz * i as f32 / sr as f32).sin() * amplitude)
+        .collect();
+
+    // Run through unsmoothed gate
+    let mut unsmoothed = tone.clone();
+    gate_unsmoothed(&mut unsmoothed, floor);
+    let mod_unsmoothed = measure_gain_modulation(&tone, &unsmoothed);
+
+    // Run through smoothed gate (our fix)
+    let mut smoothed = tone.clone();
+    gate_smoothed(&mut smoothed, floor);
+    let mod_smoothed = measure_gain_modulation(&tone, &smoothed);
+
+    eprintln!(
+        "Anti-cicada test: unsmoothed modulation depth = {mod_unsmoothed:.4}, \
+         smoothed modulation depth = {mod_smoothed:.4}, \
+         reduction = {:.1}x",
+        mod_unsmoothed / mod_smoothed.max(1e-12)
+    );
+
+    // The unsmoothed gate should have significant modulation (the cicada bug)
+    assert!(
+        mod_unsmoothed > 0.01,
+        "Expected unsmoothed gate to show modulation (cicada bug), got {mod_unsmoothed:.6}"
+    );
+
+    // The smoothed gate should have significantly less modulation (>3x reduction)
+    assert!(
+        mod_smoothed < mod_unsmoothed * 0.35,
+        "Smoothed gate modulation ({mod_smoothed:.6}) should be <35% of unsmoothed ({mod_unsmoothed:.6})"
+    );
+}

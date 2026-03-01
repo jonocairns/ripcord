@@ -184,7 +184,7 @@ const Password = memo(({ forceMode = false, onSuccess }: TPasswordProps) => {
           </div>
         </Group>
       </CardContent>
-      <CardFooter className="border-t items-stretch justify-end gap-2 sm:items-center">
+      <CardFooter className="items-stretch justify-end gap-2 sm:items-center">
         <Button onClick={updatePassword} disabled={!canSubmit}>
           {forceMode ? 'Set New Password' : 'Update Password'}
         </Button>

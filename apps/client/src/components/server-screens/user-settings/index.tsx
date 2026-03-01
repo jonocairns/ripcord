@@ -81,8 +81,8 @@ const UserSettings = memo(({ close, initialSection }: TUserSettingsProps) => {
 
   return (
     <ServerScreenLayout close={close} title="Settings">
-      <div className="mx-auto flex w-full max-w-7xl gap-6">
-        <aside className="w-full max-w-xs shrink-0 border-r border-border pr-4">
+      <div className="mx-auto flex w-full max-w-5xl gap-6 h-full">
+        <aside className="w-full max-w-xs shrink-0 py-6">
           <div className="space-y-4">
             <div className="flex items-center gap-3 px-2">
               {ownPublicUser && (
@@ -151,7 +151,7 @@ const UserSettings = memo(({ close, initialSection }: TUserSettingsProps) => {
           </div>
         </aside>
 
-        <section className="min-w-0 flex-1">
+        <section className="min-w-0 flex-1 py-6">
           {selectedSection.value === 'profile' && <Profile />}
           {selectedSection.value === 'devices' && <Devices />}
           {selectedSection.value === 'password' && <Password />}

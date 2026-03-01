@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { useRoleById } from '@/features/server/roles/hooks';
 import { useUserById } from '@/features/server/users/hooks';
+import { getAvatarColor } from '@/helpers/get-avatar-color';
 import { getInitialsFromName } from '@/helpers/get-initials-from-name';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
@@ -78,7 +79,9 @@ const UserItem = memo(
       >
         <div className="flex items-center gap-2">
           <Avatar className="h-5 w-5">
-            <AvatarFallback className="text-[10px]">
+            <AvatarFallback
+              className={cn('text-[10px] text-white', getAvatarColor(userId))}
+            >
               {getInitialsFromName(user.name)}
             </AvatarFallback>
           </Avatar>

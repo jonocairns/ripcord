@@ -142,8 +142,8 @@ const Profile = memo(() => {
           </div>
         </section>
       </CardContent>
-      <CardFooter className="border-t items-stretch justify-end gap-2 sm:items-center">
-        <Button onClick={onUpdateUser}>Save Changes</Button>
+      <CardFooter className="items-stretch justify-end gap-2 sm:items-center">
+        <Button onClick={onUpdateUser}>Apply</Button>
       </CardFooter>
     </Card>
   );

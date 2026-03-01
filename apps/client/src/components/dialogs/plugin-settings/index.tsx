@@ -342,7 +342,7 @@ const PluginSettingsDialog = memo(
                             disabled={dirtyKeys.size === 0 || isSaving}
                           >
                             <Save className="w-4 h-4 mr-2" />
-                            {isSaving ? 'Saving...' : 'Save Changes'}
+                            {isSaving ? 'Applying...' : 'Apply'}
                           </Button>
                         </div>
                       </div>
