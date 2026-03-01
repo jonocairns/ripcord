@@ -6,7 +6,7 @@ import { useOwnVoiceState } from '@/features/server/voice/hooks';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 
 type TUseVoiceControlsParams = {
@@ -38,10 +38,15 @@ const useVoiceControls = ({
 }: TUseVoiceControlsParams) => {
   const ownVoiceState = useOwnVoiceState();
   const currentVoiceChannelId = useCurrentVoiceChannelId();
+  const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
 
   const setMicMuted = useCallback(
     async (newState: boolean, options?: TSetMicMutedOptions) => {
       if (newState === ownVoiceState.micMuted) {
+        return;
+      }
+
+      if (ownVoiceState.soundMuted && !newState) {
         return;
       }
 
@@ -79,6 +84,7 @@ const useVoiceControls = ({
     },
     [
       ownVoiceState.micMuted,
+      ownVoiceState.soundMuted,
       currentVoiceChannelId,
       localAudioStream,
       startMicStream
@@ -94,8 +100,27 @@ const useVoiceControls = ({
   const toggleSound = useCallback(async () => {
     const newState = !ownVoiceState.soundMuted;
     const trpc = getTRPCClient();
+    const previousMicMuted = ownVoiceState.micMuted;
+    const previousMicMutedBeforeDeafen = micMutedBeforeDeafenRef.current;
+    let nextMicMuted = previousMicMuted;
 
-    updateOwnVoiceState({ soundMuted: newState });
+    if (newState) {
+      micMutedBeforeDeafenRef.current = previousMicMuted;
+      nextMicMuted = true;
+    } else if (micMutedBeforeDeafenRef.current !== undefined) {
+      nextMicMuted = micMutedBeforeDeafenRef.current;
+      micMutedBeforeDeafenRef.current = undefined;
+    }
+
+    updateOwnVoiceState({
+      soundMuted: newState,
+      micMuted: nextMicMuted
+    });
+
+    localAudioStream?.getAudioTracks().forEach((track) => {
+      track.enabled = !nextMicMuted;
+    });
+
     playSound(
       newState
         ? SoundType.OWN_USER_MUTED_SOUND
@@ -106,12 +131,31 @@ const useVoiceControls = ({
 
     try {
       await trpc.voice.updateState.mutate({
-        soundMuted: newState
+        soundMuted: newState,
+        micMuted: nextMicMuted
       });
+
+      if (!localAudioStream && !nextMicMuted) {
+        await startMicStream();
+      }
     } catch (error) {
+      micMutedBeforeDeafenRef.current = previousMicMutedBeforeDeafen;
+      updateOwnVoiceState({
+        soundMuted: ownVoiceState.soundMuted,
+        micMuted: previousMicMuted
+      });
+      localAudioStream?.getAudioTracks().forEach((track) => {
+        track.enabled = !previousMicMuted;
+      });
       toast.error(getTrpcError(error, 'Failed to update sound state'));
     }
-  }, [ownVoiceState.soundMuted, currentVoiceChannelId]);
+  }, [
+    ownVoiceState.soundMuted,
+    ownVoiceState.micMuted,
+    currentVoiceChannelId,
+    localAudioStream,
+    startMicStream
+  ]);
 
   const toggleWebcam = useCallback(async () => {
     if (!currentVoiceChannelId) return;

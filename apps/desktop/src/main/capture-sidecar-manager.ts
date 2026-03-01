@@ -1595,7 +1595,8 @@ class CaptureSidecarManager {
       channels: frame.channels,
       frameCount: frame.frameCount,
       timestampMs:
-        typeof frame.timestampMs === "number" && Number.isFinite(frame.timestampMs)
+        typeof frame.timestampMs === "number" &&
+        Number.isFinite(frame.timestampMs)
           ? frame.timestampMs
           : undefined,
       pcmBase64: pcmBytes.toString("base64"),
@@ -1949,7 +1950,8 @@ class CaptureSidecarManager {
     }
     if (
       frame.timestampMs !== undefined &&
-      (typeof frame.timestampMs !== "number" || !Number.isFinite(frame.timestampMs))
+      (typeof frame.timestampMs !== "number" ||
+        !Number.isFinite(frame.timestampMs))
     ) {
       return { accepted: false, reason: "invalid_timestamp_ms" };
     }

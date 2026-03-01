@@ -298,18 +298,30 @@ class VoiceRuntime {
     Object.keys(this.consumers).forEach((consumerUserIdStr) => {
       const consumerId = parseInt(consumerUserIdStr);
 
-      if (consumerId !== userId && this.consumers[consumerId]?.[userId]) {
-        Object.values(this.consumers[consumerId][userId]).forEach(
-          (consumer) => {
-            consumer?.close();
-          }
-        );
+      if (consumerId === userId) {
+        return;
+      }
 
-        delete this.consumers[consumerId][userId];
+      const consumerGroups = this.consumers[consumerId];
+      const remoteConsumers = consumerGroups?.[userId];
 
-        if (Object.keys(this.consumers[consumerId]).length === 0) {
-          delete this.consumers[consumerId];
-        }
+      if (!consumerGroups || !remoteConsumers) {
+        return;
+      }
+
+      Object.values(remoteConsumers).forEach((consumer) => {
+        consumer?.close();
+      });
+
+      if (consumerGroups[userId]) {
+        delete consumerGroups[userId];
+      }
+
+      if (
+        this.consumers[consumerId] === consumerGroups &&
+        Object.keys(consumerGroups).length === 0
+      ) {
+        delete this.consumers[consumerId];
       }
     });
   };
@@ -555,11 +567,15 @@ class VoiceRuntime {
       }
 
       if (kind === StreamKind.VIDEO || kind === StreamKind.SCREEN) {
-        pubsub.publishFor(remoteId, ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY, {
-          watcherId: userId,
-          kind,
-          action: 'left'
-        });
+        pubsub.publishFor(
+          remoteId,
+          ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY,
+          {
+            watcherId: userId,
+            kind,
+            action: 'left'
+          }
+        );
       }
 
       delete this.consumers[userId]?.[remoteId]?.[kind];
@@ -572,7 +588,10 @@ class VoiceRuntime {
         }
       }
 
-      if (this.consumers[userId] && Object.keys(this.consumers[userId]).length === 0) {
+      if (
+        this.consumers[userId] &&
+        Object.keys(this.consumers[userId]).length === 0
+      ) {
         delete this.consumers[userId];
       }
     });

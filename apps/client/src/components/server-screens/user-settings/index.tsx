@@ -4,18 +4,21 @@ import { UserAvatar } from '@/components/user-avatar';
 import { useOwnPublicUser } from '@/features/server/users/hooks';
 import { cn } from '@/lib/utils';
 import { KeyRound, Laptop2, Search, UserRound } from 'lucide-react';
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { TServerScreenBaseProps } from '../screens';
 import { ServerScreenLayout } from '../server-screen-layout';
 import { Devices } from './devices';
 import { Password } from './password';
 import { Profile } from './profile';
 
-type TUserSettingsProps = TServerScreenBaseProps;
 type TUserSettingsSection = {
   keywords: string[];
   label: string;
   value: 'devices' | 'password' | 'profile';
+};
+type TUserSettingsSectionValue = TUserSettingsSection['value'];
+type TUserSettingsProps = TServerScreenBaseProps & {
+  initialSection?: TUserSettingsSectionValue;
 };
 
 const USER_SETTINGS_SECTIONS: TUserSettingsSection[] = [
@@ -36,11 +39,22 @@ const USER_SETTINGS_SECTIONS: TUserSettingsSection[] = [
   }
 ];
 
-const UserSettings = memo(({ close }: TUserSettingsProps) => {
+const UserSettings = memo(({ close, initialSection }: TUserSettingsProps) => {
   const ownPublicUser = useOwnPublicUser();
-  const [activeSection, setActiveSection] =
-    useState<TUserSettingsSection['value']>('profile');
+  const [activeSection, setActiveSection] = useState<TUserSettingsSectionValue>(
+    initialSection || 'profile'
+  );
   const [search, setSearch] = useState('');
+  const hasMountedRef = useRef(false);
+
+  useEffect(() => {
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      return;
+    }
+
+    setActiveSection(initialSection || 'profile');
+  }, [initialSection]);
 
   const filteredSections = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();

@@ -150,6 +150,17 @@ const Devices = memo(() => {
         // ignore version lookup failures
       });
   }, [desktopBridge]);
+
+  useEffect(() => {
+    if (hasDesktopBridge) {
+      return;
+    }
+
+    if (values.screenAudioMode === ScreenAudioMode.APP) {
+      onChange('screenAudioMode', ScreenAudioMode.SYSTEM);
+    }
+  }, [hasDesktopBridge, onChange, values.screenAudioMode]);
+
   const isExperimentalMode =
     values.micQualityMode === MicQualityMode.EXPERIMENTAL;
 
@@ -164,8 +175,9 @@ const Devices = memo(() => {
           <Alert variant="default">
             <Info />
             <AlertDescription>
-              You are in a voice channel, changes will only take effect after
-              you leave and rejoin the channel.
+              Saved microphone and webcam changes apply immediately while you
+              stay connected. Screen share changes apply the next time you start
+              sharing.
             </AlertDescription>
           </Alert>
         )}
@@ -250,9 +262,7 @@ const Devices = memo(() => {
                   onChange('echoCancellation', checked)
                 }
               />
-              <Label className="cursor-default">
-                Echo cancellation
-              </Label>
+              <Label className="cursor-default">Echo cancellation</Label>
             </div>
 
             <div className="flex items-center gap-3">
@@ -262,9 +272,7 @@ const Devices = memo(() => {
                   onChange('noiseSuppression', checked)
                 }
               />
-              <Label className="cursor-default">
-                Noise suppression
-              </Label>
+              <Label className="cursor-default">Noise suppression</Label>
             </div>
 
             <div className="flex items-center gap-3">
@@ -283,10 +291,7 @@ const Devices = memo(() => {
               <Label>Noise suppression strength</Label>
               <Select
                 onValueChange={(value) =>
-                  onChange(
-                    'voiceFilterStrength',
-                    value as VoiceFilterStrength
-                  )
+                  onChange('voiceFilterStrength', value as VoiceFilterStrength)
                 }
                 value={values.voiceFilterStrength}
               >
@@ -295,9 +300,7 @@ const Devices = memo(() => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectItem value={VoiceFilterStrength.LOW}>
-                      Low
-                    </SelectItem>
+                    <SelectItem value={VoiceFilterStrength.LOW}>Low</SelectItem>
                     <SelectItem value={VoiceFilterStrength.BALANCED}>
                       Balanced
                     </SelectItem>
@@ -522,7 +525,10 @@ const Devices = memo(() => {
                     <SelectItem value={ScreenAudioMode.SYSTEM}>
                       System audio
                     </SelectItem>
-                    <SelectItem value={ScreenAudioMode.APP}>
+                    <SelectItem
+                      value={ScreenAudioMode.APP}
+                      disabled={!hasDesktopBridge}
+                    >
                       Per-app audio
                     </SelectItem>
                     <SelectItem value={ScreenAudioMode.NONE}>
@@ -531,6 +537,11 @@ const Devices = memo(() => {
                   </SelectGroup>
                 </SelectContent>
               </Select>
+              {!hasDesktopBridge && (
+                <p className="text-xs text-muted-foreground">
+                  Per-app audio is only available in the desktop app.
+                </p>
+              )}
             </div>
           </div>
 

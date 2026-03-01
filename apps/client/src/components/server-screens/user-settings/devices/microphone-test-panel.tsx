@@ -11,7 +11,11 @@ import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
 import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
-import { MicQualityMode, VoiceFilterStrength, getStrengthDefaults } from '@/types';
+import {
+  MicQualityMode,
+  VoiceFilterStrength,
+  getStrengthDefaults
+} from '@/types';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const ANALYSER_FFT_SIZE = 512;

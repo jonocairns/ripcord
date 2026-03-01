@@ -141,65 +141,68 @@ const useTransports = ({
     }
   }, []);
 
-  const createConsumerTransport = useCallback(async (device: Device) => {
-    logVoice('Creating consumer transport', { device });
+  const createConsumerTransport = useCallback(
+    async (device: Device) => {
+      logVoice('Creating consumer transport', { device });
 
-    const trpc = getTRPCClient();
+      const trpc = getTRPCClient();
 
-    try {
-      const params = await trpc.voice.createConsumerTransport.mutate();
+      try {
+        const params = await trpc.voice.createConsumerTransport.mutate();
 
-      logVoice('Got consumer transport parameters', { params });
+        logVoice('Got consumer transport parameters', { params });
 
-      consumerTransport.current = device.createRecvTransport(params);
+        consumerTransport.current = device.createRecvTransport(params);
 
-      consumerTransport.current.on(
-        'connect',
-        async ({ dtlsParameters }, callback, errback) => {
-          logVoice('Consumer transport connected', { dtlsParameters });
+        consumerTransport.current.on(
+          'connect',
+          async ({ dtlsParameters }, callback, errback) => {
+            logVoice('Consumer transport connected', { dtlsParameters });
 
-          try {
-            await trpc.voice.connectConsumerTransport.mutate({
-              dtlsParameters
-            });
+            try {
+              await trpc.voice.connectConsumerTransport.mutate({
+                dtlsParameters
+              });
 
-            callback();
-          } catch (error) {
-            errback(error as Error);
-            logVoice('Consumer transport connect error', { error });
+              callback();
+            } catch (error) {
+              errback(error as Error);
+              logVoice('Consumer transport connect error', { error });
+            }
           }
-        }
-      );
+        );
 
-      consumerTransport.current.on('connectionstatechange', (state) => {
-        logVoice('Consumer transport connection state changed', { state });
+        consumerTransport.current.on('connectionstatechange', (state) => {
+          logVoice('Consumer transport connection state changed', { state });
 
-        if (state === 'failed' || state === 'disconnected') {
-          logVoice(`Consumer transport ${state}, attempting cleanup`);
+          if (state === 'failed' || state === 'disconnected') {
+            logVoice(`Consumer transport ${state}, attempting cleanup`);
 
-          Object.values(consumers.current).forEach((userConsumers) => {
-            Object.values(userConsumers).forEach((consumer) => {
-              consumer.close();
+            Object.values(consumers.current).forEach((userConsumers) => {
+              Object.values(userConsumers).forEach((consumer) => {
+                consumer.close();
+              });
             });
-          });
-          consumers.current = {};
-          clearAllPendingStreams();
+            consumers.current = {};
+            clearAllPendingStreams();
 
-          consumerTransport.current?.close();
-          consumerTransport.current = undefined;
-        } else if (state === 'closed') {
-          logVoice('Consumer transport closed');
-          consumerTransport.current = undefined;
-        }
-      });
+            consumerTransport.current?.close();
+            consumerTransport.current = undefined;
+          } else if (state === 'closed') {
+            logVoice('Consumer transport closed');
+            consumerTransport.current = undefined;
+          }
+        });
 
-      consumerTransport.current.on('icecandidateerror', (error) => {
-        logVoice('Consumer transport ICE candidate error', { error });
-      });
-    } catch (error) {
-      logVoice('Failed to create consumer transport', { error });
-    }
-  }, [clearAllPendingStreams]);
+        consumerTransport.current.on('icecandidateerror', (error) => {
+          logVoice('Consumer transport ICE candidate error', { error });
+        });
+      } catch (error) {
+        logVoice('Failed to create consumer transport', { error });
+      }
+    },
+    [clearAllPendingStreams]
+  );
 
   const consume = useCallback(
     async (

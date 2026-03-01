@@ -159,7 +159,9 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
         ? `${snapshot.aecErleMean.toFixed(1)} dB`
         : 'off';
     const aecDelay =
-      snapshot.aecDelayMs !== null ? `${snapshot.aecDelayMs.toFixed(0)} ms` : 'n/a';
+      snapshot.aecDelayMs !== null
+        ? `${snapshot.aecDelayMs.toFixed(0)} ms`
+        : 'n/a';
 
     console.log(
       `[nc-diag] lsnr=${lsnr} dB range=${lsnrRange} agc=${agc}` +
@@ -257,8 +259,9 @@ const createNativeDesktopMicAudioProcessingPipeline = async ({
     attenuationLimitDb: dfnAttenuationLimitDb,
     experimentalAggressiveMode: dfnExperimentalAggressiveMode,
     noiseGateFloorDbfs: dfnNoiseGateFloorDbfs,
-    dereverbMode:
-      (noiseSuppression ? 'tail' : 'off') as TRuntimeVoiceDereverbMode
+    dereverbMode: (noiseSuppression
+      ? 'tail'
+      : 'off') as TRuntimeVoiceDereverbMode
   });
   console.log('[voice-filter-debug] Started native voice-filter session', {
     sessionId: session.sessionId,
@@ -588,8 +591,9 @@ const createNativeSidecarMicCapturePipeline = async ({
     attenuationLimitDb: dfnAttenuationLimitDb,
     experimentalAggressiveMode: dfnExperimentalAggressiveMode,
     noiseGateFloorDbfs: dfnNoiseGateFloorDbfs,
-    dereverbMode:
-      (noiseSuppression ? 'tail' : 'off') as TRuntimeVoiceDereverbMode,
+    dereverbMode: (noiseSuppression
+      ? 'tail'
+      : 'off') as TRuntimeVoiceDereverbMode,
     deviceId: sidecarDeviceId
   });
   console.log(

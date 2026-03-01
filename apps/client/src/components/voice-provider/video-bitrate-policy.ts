@@ -127,11 +127,17 @@ const resolveResolutionTier = (
   tiers: TResolutionTier[],
   pixelCount: number
 ): TResolutionTier => {
-  return tiers.find((tier) => pixelCount <= tier.maxPixels) ?? tiers[tiers.length - 1]!;
+  return (
+    tiers.find((tier) => pixelCount <= tier.maxPixels) ??
+    tiers[tiers.length - 1]!
+  );
 };
 
 const resolveFpsTier = (tiers: TFpsTier[], frameRate: number): TFpsTier => {
-  return tiers.find((tier) => frameRate <= tier.maxFrameRate) ?? tiers[tiers.length - 1]!;
+  return (
+    tiers.find((tier) => frameRate <= tier.maxFrameRate) ??
+    tiers[tiers.length - 1]!
+  );
 };
 
 const getVideoBitratePolicy = ({

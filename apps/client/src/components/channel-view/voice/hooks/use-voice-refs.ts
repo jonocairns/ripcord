@@ -1,4 +1,7 @@
-import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
+import {
+  MASTER_OUTPUT_VOLUME_KEY,
+  useVolumeControl
+} from '@/components/voice-provider/volume-control-context';
 import { useIsOwnUser } from '@/features/server/users/hooks';
 import { useVoice } from '@/features/server/voice/hooks';
 import { StreamKind } from '@sharkord/shared';
@@ -65,23 +68,6 @@ const useVoiceRefs = (
 
     return remoteUserStreams[remoteId]?.[StreamKind.SCREEN_AUDIO];
   }, [remoteUserStreams, remoteId, isOwnUser]);
-  const combinedScreenShareStream = useMemo(() => {
-    if (!screenShareStream) {
-      return undefined;
-    }
-
-    const combinedStream = new MediaStream();
-
-    screenShareStream.getVideoTracks().forEach((track) => {
-      combinedStream.addTrack(track);
-    });
-
-    screenShareAudioStream?.getAudioTracks().forEach((track) => {
-      combinedStream.addTrack(track);
-    });
-
-    return combinedStream;
-  }, [screenShareStream, screenShareAudioStream]);
 
   const externalAudioStream = useMemo(() => {
     if (isOwnUser) return undefined;
@@ -104,6 +90,7 @@ const useVoiceRefs = (
 
   const userVolumeKey = getUserVolumeKey(remoteId);
   const userVolume = getVolume(userVolumeKey);
+  const masterOutputVolume = getVolume(MASTER_OUTPUT_VOLUME_KEY);
 
   const userScreenVolumeKey = getUserScreenVolumeKey(remoteId);
   const userScreenVolume = getVolume(userScreenVolumeKey);
@@ -112,6 +99,10 @@ const useVoiceRefs = (
     pluginId && streamKey ? getExternalVolumeKey(pluginId, streamKey) : null;
 
   const externalVolume = externalVolumeKey ? getVolume(externalVolumeKey) : 100;
+  const userPlaybackVolume = (userVolume * masterOutputVolume) / 10000;
+  const screenSharePlaybackVolume =
+    (userScreenVolume * masterOutputVolume) / 10000;
+  const externalPlaybackVolume = (externalVolume * masterOutputVolume) / 10000;
 
   useEffect(() => {
     if (!videoStream || !videoRef.current) return;
@@ -126,33 +117,26 @@ const useVoiceRefs = (
       audioRef.current.srcObject = audioStream;
     }
 
-    audioRef.current.volume = userVolume / 100;
-  }, [audioStream, audioRef, userVolume]);
+    audioRef.current.volume = userPlaybackVolume;
+  }, [audioStream, audioRef, userPlaybackVolume]);
 
   useEffect(() => {
-    if (!combinedScreenShareStream || !screenShareRef.current) return;
+    if (!screenShareStream || !screenShareRef.current) return;
 
-    if (screenShareRef.current.srcObject !== combinedScreenShareStream) {
-      screenShareRef.current.srcObject = combinedScreenShareStream;
+    if (screenShareRef.current.srcObject !== screenShareStream) {
+      screenShareRef.current.srcObject = screenShareStream;
     }
-
-    screenShareRef.current.volume = userScreenVolume / 100;
-  }, [combinedScreenShareStream, screenShareRef, userScreenVolume]);
+  }, [screenShareStream, screenShareRef]);
 
   useEffect(() => {
     if (!screenShareAudioRef.current) {
       return;
     }
 
-    // Screen share audio is now attached to the video element to keep A/V clocks aligned.
-    if (screenShareStream) {
+    if (!screenShareAudioStream) {
       if (screenShareAudioRef.current.srcObject) {
         screenShareAudioRef.current.srcObject = null;
       }
-      return;
-    }
-
-    if (!screenShareAudioStream) {
       return;
     }
 
@@ -160,12 +144,12 @@ const useVoiceRefs = (
       screenShareAudioRef.current.srcObject = screenShareAudioStream;
     }
 
-    screenShareAudioRef.current.volume = userScreenVolume / 100;
+    screenShareAudioRef.current.volume = screenSharePlaybackVolume;
   }, [
     screenShareStream,
     screenShareAudioStream,
     screenShareAudioRef,
-    userScreenVolume
+    screenSharePlaybackVolume
   ]);
 
   useEffect(() => {
@@ -175,8 +159,8 @@ const useVoiceRefs = (
       externalAudioRef.current.srcObject = externalAudioStream;
     }
 
-    externalAudioRef.current.volume = externalVolume / 100;
-  }, [externalAudioStream, externalAudioRef, externalVolume]);
+    externalAudioRef.current.volume = externalPlaybackVolume;
+  }, [externalAudioStream, externalAudioRef, externalPlaybackVolume]);
 
   useEffect(() => {
     if (!externalVideoStream || !externalVideoRef.current) return;

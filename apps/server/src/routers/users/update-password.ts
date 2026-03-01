@@ -73,7 +73,10 @@ const updatePasswordRoute = protectedProcedure
           updatedAt: now
         })
         .where(
-          and(eq(refreshTokens.userId, ctx.userId), isNull(refreshTokens.revokedAt))
+          and(
+            eq(refreshTokens.userId, ctx.userId),
+            isNull(refreshTokens.revokedAt)
+          )
         )
         .run();
     });

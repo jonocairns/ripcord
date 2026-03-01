@@ -6,9 +6,13 @@ import { TEST_AUTH_TOKEN_SECRET } from './seed';
 import { testsBaseUrl } from './setup';
 
 const getMockedToken = async (userId: number) => {
-  const token = jwt.sign({ userId: userId, tokenVersion: 0 }, TEST_AUTH_TOKEN_SECRET, {
-    expiresIn: '86400s'
-  });
+  const token = jwt.sign(
+    { userId: userId, tokenVersion: 0 },
+    TEST_AUTH_TOKEN_SECRET,
+    {
+      expiresIn: '86400s'
+    }
+  );
 
   return token;
 };

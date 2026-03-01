@@ -1,13 +1,10 @@
 import { IconButton } from '@/components/ui/icon-button';
-import {
-  useVolumeControl,
-  type TVolumeKey
-} from '@/components/voice-provider/volume-control-context';
+import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
 import { cn } from '@/lib/utils';
 import {
-  EyeOff,
   ExternalLink,
+  EyeOff,
   Maximize2,
   Minimize2,
   Monitor,
@@ -32,7 +29,7 @@ import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
 import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
-import { VolumeButton } from './volume-button';
+import { StreamSettingsPopover } from './stream-settings-popover';
 
 type tScreenShareControlsProps = {
   isPinned: boolean;
@@ -43,7 +40,10 @@ type tScreenShareControlsProps = {
   handleToggleFullscreen: () => void;
   showPinControls: boolean;
   showAudioControl: boolean;
-  volumeKey: TVolumeKey;
+  volume: number;
+  isMuted: boolean;
+  onVolumeChange: (volume: number) => void;
+  onMuteToggle: () => void;
   isFullscreen: boolean;
   isPoppedOut: boolean;
   canStopWatching: boolean;
@@ -60,7 +60,10 @@ const ScreenShareControls = memo(
     handleToggleFullscreen,
     showPinControls,
     showAudioControl,
-    volumeKey,
+    volume,
+    isMuted,
+    onVolumeChange,
+    onMuteToggle,
     isFullscreen,
     isPoppedOut,
     canStopWatching,
@@ -77,7 +80,14 @@ const ScreenShareControls = memo(
             size="sm"
           />
         )}
-        {showAudioControl && <VolumeButton volumeKey={volumeKey} />}
+        {showAudioControl && (
+          <StreamSettingsPopover
+            volume={volume}
+            isMuted={isMuted}
+            onVolumeChange={onVolumeChange}
+            onMuteToggle={onMuteToggle}
+          />
+        )}
         <IconButton
           variant={isPoppedOut ? 'default' : 'ghost'}
           icon={ExternalLink}
@@ -242,16 +252,23 @@ const ScreenShareCard = memo(
       void popoutDocument.documentElement.requestFullscreen();
     }, [popoutVideoElement]);
 
+    const handleVolumeChange = useCallback(
+      (newVolume: number) => {
+        setVolume(volumeKey, newVolume);
+      },
+      [setVolume, volumeKey]
+    );
+
+    const handleMuteToggle = useCallback(() => {
+      toggleMute(volumeKey);
+    }, [toggleMute, volumeKey]);
+
     const handlePopoutVolumeChange = useCallback(
       (e: ChangeEvent<HTMLInputElement>) => {
         setVolume(volumeKey, Number(e.target.value));
       },
       [setVolume, volumeKey]
     );
-
-    const handlePopoutMuteToggle = useCallback(() => {
-      toggleMute(volumeKey);
-    }, [toggleMute, volumeKey]);
 
     const clearPopoutControlsHideTimeout = useCallback(() => {
       if (hidePopoutWindowControlsTimeoutRef.current === null) {
@@ -471,7 +488,10 @@ const ScreenShareCard = memo(
             showAudioControl={
               !isOwnUser && hasScreenShareAudioStream && !isPoppedOut
             }
-            volumeKey={volumeKey}
+            volume={volume}
+            isMuted={isMuted}
+            onVolumeChange={handleVolumeChange}
+            onMuteToggle={handleMuteToggle}
             isFullscreen={isFullscreen}
             isPoppedOut={isPoppedOut}
             canStopWatching={!isOwnUser}
@@ -586,7 +606,7 @@ const ScreenShareCard = memo(
                 >
                   <button
                     type="button"
-                    onClick={handlePopoutMuteToggle}
+                    onClick={handleMuteToggle}
                     title={
                       isMuted ? 'Unmute stream audio' : 'Mute stream audio'
                     }

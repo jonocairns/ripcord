@@ -5,6 +5,7 @@ import {
 } from '@/features/server/voice/hooks';
 import { StreamKind } from '@sharkord/shared';
 import { memo, useMemo } from 'react';
+import { getPendingStreamKey } from '../../voice-provider/hooks/use-pending-streams';
 import { ControlsBar } from './controls-bar';
 import { ExternalStreamCard } from './external-stream-card';
 import {
@@ -15,7 +16,6 @@ import { PendingStreamCard } from './pending-stream-card';
 import { ScreenShareCard } from './screen-share-card';
 import { VoiceGrid } from './voice-grid';
 import { VoiceUserCard } from './voice-user-card';
-import { getPendingStreamKey } from '../../voice-provider/hooks/use-pending-streams';
 
 type TChannelProps = {
   channelId: number;

@@ -29,7 +29,9 @@ const unpack = async (tgzPath: string, outDir: string) => {
   }
 };
 
-const RETRYABLE_HTTP_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RETRYABLE_HTTP_STATUS_CODES = new Set([
+  408, 425, 429, 500, 502, 503, 504
+]);
 const RETRYABLE_FETCH_ERROR_CODES = new Set([
   'ECONNRESET',
   'ECONNREFUSED',
@@ -62,7 +64,9 @@ const fetchArrayBufferWithRetry = async (
       const response = await fetch(url);
 
       if (!response.ok) {
-        const retryableStatus = RETRYABLE_HTTP_STATUS_CODES.has(response.status);
+        const retryableStatus = RETRYABLE_HTTP_STATUS_CODES.has(
+          response.status
+        );
 
         if (!retryableStatus || attempt === attempts) {
           throw new Error(

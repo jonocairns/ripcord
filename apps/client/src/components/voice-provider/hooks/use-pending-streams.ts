@@ -19,9 +19,9 @@ const isUserPendingStreamKind = (kind: StreamKind) => {
 };
 
 const usePendingStreams = () => {
-  const [pendingStreams, setPendingStreams] = useState<Map<string, TPendingStream>>(
-    () => new Map()
-  );
+  const [pendingStreams, setPendingStreams] = useState<
+    Map<string, TPendingStream>
+  >(() => new Map());
 
   const addPendingStream = useCallback((remoteId: number, kind: StreamKind) => {
     setPendingStreams((prev) => {

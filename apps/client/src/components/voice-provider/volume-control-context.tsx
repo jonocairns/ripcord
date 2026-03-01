@@ -8,6 +8,7 @@ import {
   memo,
   useCallback,
   useContext,
+  useEffect,
   useRef,
   useState
 } from 'react';
@@ -16,8 +17,15 @@ import {
 // user volumes: "user-{userId}"
 // external stream volumes: "external-{pluginId}-{key}"
 type TVolumeKey = string;
+const MASTER_OUTPUT_VOLUME_KEY = 'master-output';
+const OWN_MIC_VOLUME_KEY = 'own-mic';
+const VOLUME_SETTINGS_UPDATED_EVENT = 'sharkord:volume-settings-updated';
 
 type TVolumeSettings = Record<TVolumeKey, number>;
+type TVolumeSettingsUpdatedDetail = {
+  key: TVolumeKey;
+  volume: number;
+};
 
 type TVolumeControlContext = {
   volumes: TVolumeSettings;
@@ -55,13 +63,36 @@ const saveVolumesToStorage = (volumes: TVolumeSettings) => {
   }
 };
 
+const dispatchVolumeSettingsUpdated = (
+  detail: TVolumeSettingsUpdatedDetail
+) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.dispatchEvent(
+    new CustomEvent<TVolumeSettingsUpdatedDetail>(
+      VOLUME_SETTINGS_UPDATED_EVENT,
+      { detail }
+    )
+  );
+};
+
+const getStoredVolume = (key: TVolumeKey): number => {
+  return loadVolumesFromStorage()[key] ?? 100;
+};
+
 const VolumeControlProvider = memo(
   ({ children }: TVolumeControlProviderProps) => {
     const [volumes, setVolumes] = useState<TVolumeSettings>(
       loadVolumesFromStorage
     );
-
+    const volumesRef = useRef(volumes);
     const previousVolumesRef = useRef<TVolumeSettings>({});
+
+    useEffect(() => {
+      volumesRef.current = volumes;
+    }, [volumes]);
 
     const getVolume = useCallback(
       (key: TVolumeKey): number => {
@@ -70,35 +101,39 @@ const VolumeControlProvider = memo(
       [volumes]
     );
 
+    const commitVolumes = useCallback((nextVolumes: TVolumeSettings) => {
+      volumesRef.current = nextVolumes;
+      setVolumes(nextVolumes);
+      saveVolumesToStorage(nextVolumes);
+    }, []);
+
     const setVolume = useCallback((key: TVolumeKey, volume: number) => {
-      setVolumes((prev) => {
-        const next = { ...prev, [key]: volume };
-        saveVolumesToStorage(next);
-        return next;
-      });
+      const nextVolumes = { ...volumesRef.current, [key]: volume };
+
+      commitVolumes(nextVolumes);
+      dispatchVolumeSettingsUpdated({ key, volume });
 
       if (volume > 0) {
         previousVolumesRef.current[key] = volume;
       }
-    }, []);
+    }, [commitVolumes]);
 
     const toggleMute = useCallback((key: TVolumeKey) => {
-      setVolumes((prev) => {
-        const currentVolume = prev[key] ?? 100;
-        const isMuted = currentVolume === 0;
-        const newVolume = isMuted
-          ? (previousVolumesRef.current[key] ?? 100)
-          : 0;
+      const currentVolume = volumesRef.current[key] ?? 100;
+      const isMuted = currentVolume === 0;
+      const newVolume = isMuted
+        ? (previousVolumesRef.current[key] ?? 100)
+        : 0;
 
-        if (!isMuted) {
-          previousVolumesRef.current[key] = currentVolume;
-        }
+      if (!isMuted) {
+        previousVolumesRef.current[key] = currentVolume;
+      }
 
-        const next = { ...prev, [key]: newVolume };
-        saveVolumesToStorage(next);
-        return next;
-      });
-    }, []);
+      const nextVolumes = { ...volumesRef.current, [key]: newVolume };
+
+      commitVolumes(nextVolumes);
+      dispatchVolumeSettingsUpdated({ key, volume: newVolume });
+    }, [commitVolumes]);
 
     const getUserVolumeKey = useCallback((userId: number): TVolumeKey => {
       return `user-${userId}`;
@@ -145,5 +180,13 @@ const useVolumeControl = () => {
   return context;
 };
 
-export { useVolumeControl, VolumeControlContext, VolumeControlProvider };
-export type { TVolumeControlContext, TVolumeKey };
+export {
+  getStoredVolume,
+  MASTER_OUTPUT_VOLUME_KEY,
+  OWN_MIC_VOLUME_KEY,
+  useVolumeControl,
+  VOLUME_SETTINGS_UPDATED_EVENT,
+  VolumeControlContext,
+  VolumeControlProvider
+};
+export type { TVolumeControlContext, TVolumeKey, TVolumeSettingsUpdatedDetail };
