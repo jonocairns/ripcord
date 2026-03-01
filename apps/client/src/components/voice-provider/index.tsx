@@ -20,10 +20,10 @@ import {
   type TDesktopScreenShareSelection
 } from '@/runtime/types';
 import {
+  getStrengthDefaults,
   MicQualityMode,
   VideoCodecPreference,
   VoiceFilterStrength,
-  getStrengthDefaults,
   type TDeviceSettings,
   type TRemoteStreams
 } from '@/types';
@@ -78,13 +78,13 @@ import {
   type TMicReferenceAudioPipeline
 } from './mic-reference-audio';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
+import type { TVolumeSettingsUpdatedDetail } from './volume-control-context';
 import {
   getStoredVolume,
   OWN_MIC_VOLUME_KEY,
   VOLUME_SETTINGS_UPDATED_EVENT,
   VolumeControlProvider
 } from './volume-control-context';
-import type { TVolumeSettingsUpdatedDetail } from './volume-control-context';
 
 type AudioVideoRefs = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -171,8 +171,7 @@ const resolveMicProcessingConfig = (
       sidecarSuppressionLevel: devices.voiceFilterStrength,
       sidecarDfnMix: defaults.dfnMix,
       sidecarDfnAttenuationLimitDb: defaults.dfnAttenuationLimitDb,
-      sidecarExperimentalAggressiveMode:
-        defaults.dfnExperimentalAggressiveMode,
+      sidecarExperimentalAggressiveMode: defaults.dfnExperimentalAggressiveMode,
       sidecarNoiseGateFloorDbfs: defaults.dfnNoiseGateFloorDbfs
     };
   }
@@ -242,9 +241,11 @@ const clampVolumePercent = (value: number) => {
 const getAudioContextClass = () => {
   return (
     window.AudioContext ||
-    (window as typeof window & {
-      webkitAudioContext?: typeof AudioContext;
-    }).webkitAudioContext
+    (
+      window as typeof window & {
+        webkitAudioContext?: typeof AudioContext;
+      }
+    ).webkitAudioContext
   );
 };
 
@@ -959,8 +960,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
               micProcessingConfig.sidecarDfnAttenuationLimitDb,
             dfnExperimentalAggressiveMode:
               micProcessingConfig.sidecarExperimentalAggressiveMode,
-            dfnNoiseGateFloorDbfs:
-              micProcessingConfig.sidecarNoiseGateFloorDbfs
+            dfnNoiseGateFloorDbfs: micProcessingConfig.sidecarNoiseGateFloorDbfs
           });
 
           if (micAudioPipeline) {
@@ -1279,7 +1279,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       return;
     }
 
-    const shouldRestartMic = didMicCaptureSettingsChange(previousDevices, devices);
+    const shouldRestartMic = didMicCaptureSettingsChange(
+      previousDevices,
+      devices
+    );
     const shouldRestartWebcam =
       ownVoiceState.webcamEnabled &&
       didWebcamCaptureSettingsChange(previousDevices, devices);

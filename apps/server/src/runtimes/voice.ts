@@ -555,11 +555,15 @@ class VoiceRuntime {
       }
 
       if (kind === StreamKind.VIDEO || kind === StreamKind.SCREEN) {
-        pubsub.publishFor(remoteId, ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY, {
-          watcherId: userId,
-          kind,
-          action: 'left'
-        });
+        pubsub.publishFor(
+          remoteId,
+          ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY,
+          {
+            watcherId: userId,
+            kind,
+            action: 'left'
+          }
+        );
       }
 
       delete this.consumers[userId]?.[remoteId]?.[kind];
@@ -572,7 +576,10 @@ class VoiceRuntime {
         }
       }
 
-      if (this.consumers[userId] && Object.keys(this.consumers[userId]).length === 0) {
+      if (
+        this.consumers[userId] &&
+        Object.keys(this.consumers[userId]).length === 0
+      ) {
         delete this.consumers[userId];
       }
     });

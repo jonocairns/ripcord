@@ -6,8 +6,8 @@ import {
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
 import { cn } from '@/lib/utils';
 import {
-  EyeOff,
   ExternalLink,
+  EyeOff,
   Maximize2,
   Minimize2,
   Monitor,

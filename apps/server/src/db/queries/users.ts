@@ -403,7 +403,7 @@ export {
   getStorageUsageByUserId,
   getUserById,
   getUserByIdentity,
-  getUserIdsWithPermission,
   getUserByToken,
+  getUserIdsWithPermission,
   getUsers
 };

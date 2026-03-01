@@ -1,6 +1,6 @@
 import { useDevices } from '@/components/devices-provider/hooks/use-devices';
-import { UserAvatar } from '@/components/user-avatar';
 import { IconButton } from '@/components/ui/icon-button';
+import { UserAvatar } from '@/components/user-avatar';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import type { TVoiceUser } from '@/features/server/types';
 import { useOwnUserId } from '@/features/server/users/hooks';

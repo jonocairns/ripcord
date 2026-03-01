@@ -69,7 +69,10 @@ const subscribeToVoice = () => {
         handleStreamWatcherActivity(activity);
       },
       onError: (err) =>
-        console.error('onVoiceStreamWatcherActivitySub subscription error:', err)
+        console.error(
+          'onVoiceStreamWatcherActivitySub subscription error:',
+          err
+        )
     });
 
   return () => {

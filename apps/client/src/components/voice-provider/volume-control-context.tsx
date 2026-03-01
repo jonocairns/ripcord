@@ -62,7 +62,9 @@ const saveVolumesToStorage = (volumes: TVolumeSettings) => {
   }
 };
 
-const dispatchVolumeSettingsUpdated = (detail: TVolumeSettingsUpdatedDetail) => {
+const dispatchVolumeSettingsUpdated = (
+  detail: TVolumeSettingsUpdatedDetail
+) => {
   if (typeof window === 'undefined') {
     return;
   }
@@ -171,15 +173,13 @@ const useVolumeControl = () => {
   return context;
 };
 
-export { useVolumeControl, VolumeControlContext, VolumeControlProvider };
 export {
+  getStoredVolume,
   MASTER_OUTPUT_VOLUME_KEY,
   OWN_MIC_VOLUME_KEY,
+  useVolumeControl,
   VOLUME_SETTINGS_UPDATED_EVENT,
-  getStoredVolume
+  VolumeControlContext,
+  VolumeControlProvider
 };
-export type {
-  TVolumeControlContext,
-  TVolumeKey,
-  TVolumeSettingsUpdatedDetail
-};
+export type { TVolumeControlContext, TVolumeKey, TVolumeSettingsUpdatedDetail };

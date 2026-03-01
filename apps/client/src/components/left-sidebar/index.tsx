@@ -21,9 +21,9 @@ import { cn } from '@/lib/utils';
 import { Permission } from '@sharkord/shared';
 import { ChevronDown, FolderPlus, Hash, Settings } from 'lucide-react';
 import {
+  type CSSProperties,
   memo,
   type MouseEvent as ReactMouseEvent,
-  type CSSProperties,
   useCallback,
   useEffect,
   useMemo,

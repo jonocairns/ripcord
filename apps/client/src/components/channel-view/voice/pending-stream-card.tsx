@@ -1,6 +1,6 @@
-import { UserAvatar } from '@/components/user-avatar';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import { UserAvatar } from '@/components/user-avatar';
 import { useUserById } from '@/features/server/users/hooks';
 import { cn } from '@/lib/utils';
 import { StreamKind } from '@sharkord/shared';
@@ -71,10 +71,11 @@ const PendingStreamCard = memo(
   }: TPendingStreamCardProps) => {
     const user = useUserById(userId ?? 0);
     const displayName = user?.name || streamTitle || 'This stream';
-    const { label, description, icon: Icon } = getPendingStreamDetails(
-      kind,
-      displayName
-    );
+    const {
+      label,
+      description,
+      icon: Icon
+    } = getPendingStreamDetails(kind, displayName);
 
     return (
       <div

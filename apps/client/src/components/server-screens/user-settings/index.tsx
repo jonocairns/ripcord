@@ -41,8 +41,9 @@ const USER_SETTINGS_SECTIONS: TUserSettingsSection[] = [
 
 const UserSettings = memo(({ close, initialSection }: TUserSettingsProps) => {
   const ownPublicUser = useOwnPublicUser();
-  const [activeSection, setActiveSection] =
-    useState<TUserSettingsSectionValue>(initialSection || 'profile');
+  const [activeSection, setActiveSection] = useState<TUserSettingsSectionValue>(
+    initialSection || 'profile'
+  );
   const [search, setSearch] = useState('');
 
   useEffect(() => {

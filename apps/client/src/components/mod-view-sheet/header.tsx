@@ -1,11 +1,11 @@
 import { Button } from '@/components/ui/button';
 import { UserAvatar } from '@/components/user-avatar';
+import { setModViewOpen } from '@/features/app/actions';
 import {
   openDialog,
   requestConfirmation,
   requestTextInput
 } from '@/features/dialogs/actions';
-import { setModViewOpen } from '@/features/app/actions';
 import { useIsOwnUserOwner, useUserRoles } from '@/features/server/hooks';
 import { useOwnUserId, useUserStatus } from '@/features/server/users/hooks';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
@@ -248,18 +248,18 @@ const Header = memo(() => {
           Roles
         </p>
         <div className="flex flex-wrap items-center gap-2">
-        {userRoles.map((role) => (
-          <RoleBadge key={role.id} role={role} onRemoveRole={onRemoveRole} />
-        ))}
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 px-2.5 text-xs"
-          onClick={() => openDialog(Dialog.ASSIGN_ROLE, { user, refetch })}
-        >
-          <Plus className="h-3 w-3" />
-          Assign Role
-        </Button>
+          {userRoles.map((role) => (
+            <RoleBadge key={role.id} role={role} onRemoveRole={onRemoveRole} />
+          ))}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2.5 text-xs"
+            onClick={() => openDialog(Dialog.ASSIGN_ROLE, { user, refetch })}
+          >
+            <Plus className="h-3 w-3" />
+            Assign Role
+          </Button>
         </div>
       </div>
     </div>

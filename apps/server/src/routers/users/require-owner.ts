@@ -1,6 +1,6 @@
 import { OWNER_ROLE_ID } from '@sharkord/shared';
-import type { Context } from '../../utils/trpc';
 import { invariant } from '../../utils/invariant';
+import type { Context } from '../../utils/trpc';
 import { getUserRoles } from './get-user-roles';
 
 const requireOwner = async (ctx: Context) => {

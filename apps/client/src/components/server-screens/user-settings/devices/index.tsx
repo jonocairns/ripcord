@@ -251,9 +251,7 @@ const Devices = memo(() => {
                   onChange('echoCancellation', checked)
                 }
               />
-              <Label className="cursor-default">
-                Echo cancellation
-              </Label>
+              <Label className="cursor-default">Echo cancellation</Label>
             </div>
 
             <div className="flex items-center gap-3">
@@ -263,9 +261,7 @@ const Devices = memo(() => {
                   onChange('noiseSuppression', checked)
                 }
               />
-              <Label className="cursor-default">
-                Noise suppression
-              </Label>
+              <Label className="cursor-default">Noise suppression</Label>
             </div>
 
             <div className="flex items-center gap-3">
@@ -284,10 +280,7 @@ const Devices = memo(() => {
               <Label>Noise suppression strength</Label>
               <Select
                 onValueChange={(value) =>
-                  onChange(
-                    'voiceFilterStrength',
-                    value as VoiceFilterStrength
-                  )
+                  onChange('voiceFilterStrength', value as VoiceFilterStrength)
                 }
                 value={values.voiceFilterStrength}
               >
@@ -296,9 +289,7 @@ const Devices = memo(() => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectItem value={VoiceFilterStrength.LOW}>
-                      Low
-                    </SelectItem>
+                    <SelectItem value={VoiceFilterStrength.LOW}>Low</SelectItem>
                     <SelectItem value={VoiceFilterStrength.BALANCED}>
                       Balanced
                     </SelectItem>
