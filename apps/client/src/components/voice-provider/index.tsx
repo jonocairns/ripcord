@@ -54,6 +54,7 @@ import {
 } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
 import { useLocalStreams } from './hooks/use-local-streams';
+import { usePendingStreams } from './hooks/use-pending-streams';
 import {
   useRemoteStreams,
   type TExternalStreamsMap
@@ -295,6 +296,8 @@ export type TVoiceProvider = {
   audioVideoRefsMap: Map<number, AudioVideoRefs>;
   ownVoiceState: TVoiceUserState;
   getOrCreateRefs: (remoteId: number) => AudioVideoRefs;
+  acceptStream: (remoteId: number, kind: StreamKind) => void;
+  stopWatchingStream: (remoteId: number, kind: StreamKind) => void;
   init: (
     routerRtpCapabilities: RtpCapabilities,
     channelId: number
@@ -310,6 +313,7 @@ export type TVoiceProvider = {
     ReturnType<typeof useRemoteStreams>,
     'remoteUserStreams' | 'externalStreams'
   > &
+  Pick<ReturnType<typeof usePendingStreams>, 'pendingStreams'> &
   ReturnType<typeof useVoiceControls>;
 
 const VoiceProviderContext = createContext<TVoiceProvider>({
@@ -335,6 +339,8 @@ const VoiceProviderContext = createContext<TVoiceProvider>({
     externalAudioRef: { current: null },
     externalVideoRef: { current: null }
   }),
+  acceptStream: () => undefined,
+  stopWatchingStream: () => undefined,
   init: () => Promise.resolve(),
   setMicMuted: () => Promise.resolve(),
   toggleMic: () => Promise.resolve(),
@@ -353,7 +359,8 @@ const VoiceProviderContext = createContext<TVoiceProvider>({
   localScreenShareAudioStream: undefined,
 
   remoteUserStreams: {},
-  externalStreams: {}
+  externalStreams: {},
+  pendingStreams: new Map()
 });
 
 type TVoiceProviderProps = {
@@ -433,6 +440,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     externalStreams,
     remoteUserStreams
   } = useRemoteStreams();
+  const {
+    pendingStreams,
+    addPendingStream,
+    removePendingStream,
+    clearPendingStreamsForUser,
+    clearAllPendingStreams
+  } = usePendingStreams();
 
   const {
     localAudioProducer,
@@ -457,13 +471,34 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     createConsumerTransport,
     consume,
     consumeExistingProducers,
+    stopWatchingStream,
     cleanupTransports
   } = useTransports({
     addExternalStreamTrack,
     removeExternalStreamTrack,
     addRemoteUserStream,
-    removeRemoteUserStream
+    removeRemoteUserStream,
+    addPendingStream,
+    removePendingStream,
+    clearAllPendingStreams
   });
+
+  const acceptStream = useCallback(
+    (remoteId: number, kind: StreamKind) => {
+      const currentRouterRtpCapabilities = routerRtpCapabilities.current;
+
+      if (!currentRouterRtpCapabilities) {
+        logVoice('Cannot accept pending stream before voice is initialized', {
+          remoteId,
+          kind
+        });
+        return;
+      }
+
+      void consume(remoteId, kind, currentRouterRtpCapabilities);
+    },
+    [consume]
+  );
 
   const {
     stats: transportStats,
@@ -1658,10 +1693,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
   useVoiceEvents({
     consume,
+    addPendingStream,
+    removePendingStream,
     removeRemoteUserStream,
     removeExternalStreamTrack,
     removeExternalStream,
     clearRemoteUserStreamsForUser,
+    clearPendingStreamsForUser,
     rtpCapabilities: routerRtpCapabilities.current!
   });
 
@@ -1716,6 +1754,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       transportStats,
       audioVideoRefsMap: audioVideoRefsMap.current,
       getOrCreateRefs,
+      acceptStream,
+      stopWatchingStream,
       init,
 
       setMicMuted,
@@ -1731,13 +1771,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       localScreenShareAudioStream,
 
       remoteUserStreams,
-      externalStreams
+      externalStreams,
+      pendingStreams
     }),
     [
       loading,
       connectionStatus,
       transportStats,
       getOrCreateRefs,
+      acceptStream,
+      stopWatchingStream,
       init,
 
       setMicMuted,
@@ -1752,7 +1795,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       localScreenShareStream,
       localScreenShareAudioStream,
       remoteUserStreams,
-      externalStreams
+      externalStreams,
+      pendingStreams
     ]
   );
 

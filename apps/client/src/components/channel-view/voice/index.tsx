@@ -1,5 +1,9 @@
 import { useVoiceUsersByChannelId } from '@/features/server/hooks';
-import { useVoiceChannelExternalStreamsList } from '@/features/server/voice/hooks';
+import {
+  useVoice,
+  useVoiceChannelExternalStreamsList
+} from '@/features/server/voice/hooks';
+import { StreamKind } from '@sharkord/shared';
 import { memo, useMemo } from 'react';
 import { ControlsBar } from './controls-bar';
 import { ExternalStreamCard } from './external-stream-card';
@@ -7,9 +11,11 @@ import {
   PinnedCardType,
   usePinCardController
 } from './hooks/use-pin-card-controller';
+import { PendingStreamCard } from './pending-stream-card';
 import { ScreenShareCard } from './screen-share-card';
 import { VoiceGrid } from './voice-grid';
 import { VoiceUserCard } from './voice-user-card';
+import { getPendingStreamKey } from '../../voice-provider/hooks/use-pending-streams';
 
 type TChannelProps = {
   channelId: number;
@@ -18,6 +24,13 @@ type TChannelProps = {
 const VoiceChannel = memo(({ channelId }: TChannelProps) => {
   const voiceUsers = useVoiceUsersByChannelId(channelId);
   const externalStreams = useVoiceChannelExternalStreamsList(channelId);
+  const {
+    acceptStream,
+    stopWatchingStream,
+    pendingStreams,
+    remoteUserStreams,
+    externalStreams: activeExternalStreams
+  } = useVoice();
   const { pinnedCard, pinCard, unpinCard, isPinned } = usePinCardController();
 
   const cards = useMemo(() => {
@@ -25,70 +38,179 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 
     voiceUsers.forEach((voiceUser) => {
       const userCardId = `user-${voiceUser.id}`;
+      const hasPendingVideo = pendingStreams.has(
+        getPendingStreamKey(voiceUser.id, StreamKind.VIDEO)
+      );
+      const hasConsumedVideo =
+        !!remoteUserStreams[voiceUser.id]?.[StreamKind.VIDEO];
 
       cards.push(
-        <VoiceUserCard
-          key={userCardId}
-          userId={voiceUser.id}
-          isPinned={isPinned(userCardId)}
-          onPin={() =>
-            pinCard({
-              id: userCardId,
-              type: PinnedCardType.USER,
-              userId: voiceUser.id
-            })
-          }
-          onUnpin={unpinCard}
-          voiceUser={voiceUser}
-        />
-      );
-
-      if (voiceUser.state.sharingScreen) {
-        const screenShareCardId = `screen-share-${voiceUser.id}`;
-
-        cards.push(
-          <ScreenShareCard
-            key={screenShareCardId}
+        hasPendingVideo && !hasConsumedVideo ? (
+          <PendingStreamCard
+            key={userCardId}
+            kind={StreamKind.VIDEO}
             userId={voiceUser.id}
-            isPinned={isPinned(screenShareCardId)}
+            onWatch={() => {
+              acceptStream(voiceUser.id, StreamKind.VIDEO);
+            }}
+          />
+        ) : (
+          <VoiceUserCard
+            key={userCardId}
+            userId={voiceUser.id}
+            isPinned={isPinned(userCardId)}
             onPin={() =>
               pinCard({
-                id: screenShareCardId,
-                type: PinnedCardType.SCREEN_SHARE,
+                id: userCardId,
+                type: PinnedCardType.USER,
                 userId: voiceUser.id
               })
             }
             onUnpin={unpinCard}
-            showPinControls
+            voiceUser={voiceUser}
+            onStopWatching={() => {
+              stopWatchingStream(voiceUser.id, StreamKind.VIDEO);
+            }}
           />
+        )
+      );
+
+      if (voiceUser.state.sharingScreen) {
+        const screenShareCardId = `screen-share-${voiceUser.id}`;
+        const hasPendingScreen = pendingStreams.has(
+          getPendingStreamKey(voiceUser.id, StreamKind.SCREEN)
+        );
+        const hasPendingScreenAudio = pendingStreams.has(
+          getPendingStreamKey(voiceUser.id, StreamKind.SCREEN_AUDIO)
+        );
+        const hasConsumedScreen =
+          !!remoteUserStreams[voiceUser.id]?.[StreamKind.SCREEN];
+        const showPendingScreenCard =
+          hasPendingScreen || (!hasConsumedScreen && hasPendingScreenAudio);
+
+        cards.push(
+          showPendingScreenCard ? (
+            <PendingStreamCard
+              key={screenShareCardId}
+              kind={StreamKind.SCREEN}
+              userId={voiceUser.id}
+              onWatch={() => {
+                if (hasPendingScreen) {
+                  acceptStream(voiceUser.id, StreamKind.SCREEN);
+                }
+
+                if (hasPendingScreenAudio) {
+                  acceptStream(voiceUser.id, StreamKind.SCREEN_AUDIO);
+                }
+              }}
+            />
+          ) : (
+            <ScreenShareCard
+              key={screenShareCardId}
+              userId={voiceUser.id}
+              isPinned={isPinned(screenShareCardId)}
+              onPin={() =>
+                pinCard({
+                  id: screenShareCardId,
+                  type: PinnedCardType.SCREEN_SHARE,
+                  userId: voiceUser.id
+                })
+              }
+              onUnpin={unpinCard}
+              showPinControls
+              onStopWatching={() => {
+                stopWatchingStream(voiceUser.id, StreamKind.SCREEN);
+
+                if (
+                  remoteUserStreams[voiceUser.id]?.[StreamKind.SCREEN_AUDIO]
+                ) {
+                  stopWatchingStream(voiceUser.id, StreamKind.SCREEN_AUDIO);
+                }
+              }}
+            />
+          )
         );
       }
     });
 
     externalStreams.forEach((stream) => {
       const externalStreamCardId = `external-stream-${stream.streamId}`;
+      const hasPendingExternalVideo = pendingStreams.has(
+        getPendingStreamKey(stream.streamId, StreamKind.EXTERNAL_VIDEO)
+      );
+      const hasPendingExternalAudio = pendingStreams.has(
+        getPendingStreamKey(stream.streamId, StreamKind.EXTERNAL_AUDIO)
+      );
+      const hasConsumedExternalMedia =
+        !!activeExternalStreams[stream.streamId]?.audioStream ||
+        !!activeExternalStreams[stream.streamId]?.videoStream;
+      const showPendingExternalCard =
+        !hasConsumedExternalMedia &&
+        (hasPendingExternalVideo || hasPendingExternalAudio);
 
       cards.push(
-        <ExternalStreamCard
-          key={externalStreamCardId}
-          streamId={stream.streamId}
-          stream={stream}
-          isPinned={isPinned(externalStreamCardId)}
-          onPin={() =>
-            pinCard({
-              id: externalStreamCardId,
-              type: PinnedCardType.EXTERNAL_STREAM,
-              userId: stream.streamId
-            })
-          }
-          onUnpin={unpinCard}
-          showPinControls
-        />
+        showPendingExternalCard ? (
+          <PendingStreamCard
+            key={externalStreamCardId}
+            kind={
+              hasPendingExternalVideo
+                ? StreamKind.EXTERNAL_VIDEO
+                : StreamKind.EXTERNAL_AUDIO
+            }
+            streamTitle={stream.title || 'External Stream'}
+            streamAvatarUrl={stream.avatarUrl}
+            onWatch={() => {
+              if (hasPendingExternalVideo) {
+                acceptStream(stream.streamId, StreamKind.EXTERNAL_VIDEO);
+              }
+
+              if (hasPendingExternalAudio) {
+                acceptStream(stream.streamId, StreamKind.EXTERNAL_AUDIO);
+              }
+            }}
+          />
+        ) : (
+          <ExternalStreamCard
+            key={externalStreamCardId}
+            streamId={stream.streamId}
+            stream={stream}
+            isPinned={isPinned(externalStreamCardId)}
+            onPin={() =>
+              pinCard({
+                id: externalStreamCardId,
+                type: PinnedCardType.EXTERNAL_STREAM,
+                userId: stream.streamId
+              })
+            }
+            onUnpin={unpinCard}
+            showPinControls
+            onStopWatching={() => {
+              if (activeExternalStreams[stream.streamId]?.videoStream) {
+                stopWatchingStream(stream.streamId, StreamKind.EXTERNAL_VIDEO);
+              }
+
+              if (activeExternalStreams[stream.streamId]?.audioStream) {
+                stopWatchingStream(stream.streamId, StreamKind.EXTERNAL_AUDIO);
+              }
+            }}
+          />
+        )
       );
     });
 
     return cards;
-  }, [voiceUsers, externalStreams, isPinned, pinCard, unpinCard]);
+  }, [
+    voiceUsers,
+    externalStreams,
+    activeExternalStreams,
+    acceptStream,
+    stopWatchingStream,
+    pendingStreams,
+    remoteUserStreams,
+    isPinned,
+    pinCard,
+    unpinCard
+  ]);
 
   if (voiceUsers.length === 0) {
     return (

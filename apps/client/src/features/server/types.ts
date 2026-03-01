@@ -19,6 +19,9 @@ export enum SoundType {
   OWN_USER_STARTED_SCREENSHARE = 'own_user_started_screenshare',
   OWN_USER_STOPPED_SCREENSHARE = 'own_user_stopped_screenshare',
 
+  REMOTE_USER_STARTED_STREAM = 'remote_user_started_stream',
+  STREAM_WATCHER_JOINED = 'stream_watcher_joined',
+  STREAM_WATCHER_LEFT = 'stream_watcher_left',
   REMOTE_USER_JOINED_VOICE_CHANNEL = 'remote_user_joined_voice_channel',
   REMOTE_USER_LEFT_VOICE_CHANNEL = 'remote_user_left_voice_channel'
 }

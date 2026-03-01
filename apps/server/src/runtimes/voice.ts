@@ -86,7 +86,7 @@ type TProducerMap = {
 
 type TConsumerMap = {
   [userId: number]: {
-    [remoteId: number]: Consumer<AppData>;
+    [remoteId: number]: Partial<Record<StreamKind, Consumer<AppData>>>;
   };
 };
 
@@ -228,8 +228,10 @@ class VoiceRuntime {
     });
 
     Object.values(this.consumers).forEach((consumers) => {
-      Object.values(consumers).forEach((consumer) => {
-        consumer.close();
+      Object.values(consumers).forEach((remoteConsumers) => {
+        Object.values(remoteConsumers).forEach((consumer) => {
+          consumer?.close();
+        });
       });
     });
 
@@ -284,8 +286,10 @@ class VoiceRuntime {
     this.removeProducer(userId, StreamKind.SCREEN);
 
     if (this.consumers[userId]) {
-      Object.values(this.consumers[userId]).forEach((consumer) => {
-        consumer.close();
+      Object.values(this.consumers[userId]).forEach((remoteConsumers) => {
+        Object.values(remoteConsumers).forEach((consumer) => {
+          consumer?.close();
+        });
       });
 
       delete this.consumers[userId];
@@ -295,9 +299,17 @@ class VoiceRuntime {
       const consumerId = parseInt(consumerUserIdStr);
 
       if (consumerId !== userId && this.consumers[consumerId]?.[userId]) {
-        this.consumers[consumerId][userId].close();
+        Object.values(this.consumers[consumerId][userId]).forEach(
+          (consumer) => {
+            consumer?.close();
+          }
+        );
 
         delete this.consumers[consumerId][userId];
+
+        if (Object.keys(this.consumers[consumerId]).length === 0) {
+          delete this.consumers[consumerId];
+        }
       }
     });
   };
@@ -358,8 +370,10 @@ class VoiceRuntime {
       delete this.consumerTransports[userId];
 
       if (this.consumers[userId]) {
-        Object.values(this.consumers[userId]).forEach((consumer) => {
-          consumer.close();
+        Object.values(this.consumers[userId]).forEach((remoteConsumers) => {
+          Object.values(remoteConsumers).forEach((consumer) => {
+            consumer?.close();
+          });
         });
 
         delete this.consumers[userId];
@@ -506,17 +520,76 @@ class VoiceRuntime {
   public addConsumer = (
     userId: number,
     remoteId: number,
+    kind: StreamKind,
     consumer: Consumer<AppData>
   ) => {
     if (!this.consumers[userId]) {
       this.consumers[userId] = {};
     }
 
-    this.consumers[userId][remoteId] = consumer;
+    if (!this.consumers[userId][remoteId]) {
+      this.consumers[userId][remoteId] = {};
+    }
+
+    const existingConsumer = this.consumers[userId][remoteId][kind];
+
+    if (existingConsumer && !existingConsumer.closed) {
+      existingConsumer.close();
+    }
+
+    this.consumers[userId][remoteId][kind] = consumer;
+
+    if (kind === StreamKind.VIDEO || kind === StreamKind.SCREEN) {
+      pubsub.publishFor(remoteId, ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY, {
+        watcherId: userId,
+        kind,
+        action: 'joined'
+      });
+    }
 
     consumer.observer.on('close', () => {
-      delete this.consumers[userId]?.[remoteId];
+      const activeConsumer = this.consumers[userId]?.[remoteId]?.[kind];
+
+      if (activeConsumer !== consumer) {
+        return;
+      }
+
+      if (kind === StreamKind.VIDEO || kind === StreamKind.SCREEN) {
+        pubsub.publishFor(remoteId, ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY, {
+          watcherId: userId,
+          kind,
+          action: 'left'
+        });
+      }
+
+      delete this.consumers[userId]?.[remoteId]?.[kind];
+
+      if (this.consumers[userId]?.[remoteId]) {
+        const remoteConsumers = this.consumers[userId][remoteId];
+
+        if (Object.keys(remoteConsumers).length === 0) {
+          delete this.consumers[userId][remoteId];
+        }
+      }
+
+      if (this.consumers[userId] && Object.keys(this.consumers[userId]).length === 0) {
+        delete this.consumers[userId];
+      }
     });
+  };
+
+  public removeConsumer = (
+    userId: number,
+    remoteId: number,
+    kind: StreamKind
+  ) => {
+    const consumer = this.consumers[userId]?.[remoteId]?.[kind];
+
+    if (!consumer) {
+      return;
+    }
+
+    consumer.close();
   };
 
   public createExternalStream = (options: {

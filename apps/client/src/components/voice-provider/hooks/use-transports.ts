@@ -31,13 +31,19 @@ type TUseTransportParams = {
     streamId: number,
     kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO
   ) => void;
+  addPendingStream: (remoteId: number, kind: StreamKind) => void;
+  removePendingStream: (remoteId: number, kind: StreamKind) => void;
+  clearAllPendingStreams: () => void;
 };
 
 const useTransports = ({
   addRemoteUserStream,
   removeRemoteUserStream,
   addExternalStreamTrack,
-  removeExternalStreamTrack
+  removeExternalStreamTrack,
+  addPendingStream,
+  removePendingStream,
+  clearAllPendingStreams
 }: TUseTransportParams) => {
   const producerTransport = useRef<Transport<AppData> | undefined>(undefined);
   const consumerTransport = useRef<Transport<AppData> | undefined>(undefined);
@@ -177,6 +183,7 @@ const useTransports = ({
             });
           });
           consumers.current = {};
+          clearAllPendingStreams();
 
           consumerTransport.current?.close();
           consumerTransport.current = undefined;
@@ -192,7 +199,7 @@ const useTransports = ({
     } catch (error) {
       logVoice('Failed to create consumer transport', { error });
     }
-  }, []);
+  }, [clearAllPendingStreams]);
 
   const consume = useCallback(
     async (
@@ -302,6 +309,8 @@ const useTransports = ({
         } else {
           addRemoteUserStream(remoteId, stream, kind);
         }
+
+        removePendingStream(remoteId, kind);
       } catch (error) {
         logVoice('Error consuming remote producer', { error });
       } finally {
@@ -312,7 +321,8 @@ const useTransports = ({
       addRemoteUserStream,
       removeRemoteUserStream,
       addExternalStreamTrack,
-      removeExternalStreamTrack
+      removeExternalStreamTrack,
+      removePendingStream
     ]
   );
 
@@ -348,32 +358,68 @@ const useTransports = ({
         });
 
         remoteVideoIds.forEach((remoteId) => {
-          consume(remoteId, StreamKind.VIDEO, routerRtpCapabilities);
+          addPendingStream(remoteId, StreamKind.VIDEO);
         });
 
         remoteScreenIds.forEach((remoteId) => {
-          consume(remoteId, StreamKind.SCREEN, routerRtpCapabilities);
+          addPendingStream(remoteId, StreamKind.SCREEN);
         });
 
         remoteScreenAudioIds.forEach((remoteId) => {
-          consume(remoteId, StreamKind.SCREEN_AUDIO, routerRtpCapabilities);
+          addPendingStream(remoteId, StreamKind.SCREEN_AUDIO);
         });
 
         remoteExternalStreamIds.forEach((streamId: number) => {
           const tracks = externalStreamTracks?.[streamId];
 
           if (tracks?.audio !== false) {
-            consume(streamId, StreamKind.EXTERNAL_AUDIO, routerRtpCapabilities);
+            addPendingStream(streamId, StreamKind.EXTERNAL_AUDIO);
           }
           if (tracks?.video !== false) {
-            consume(streamId, StreamKind.EXTERNAL_VIDEO, routerRtpCapabilities);
+            addPendingStream(streamId, StreamKind.EXTERNAL_VIDEO);
           }
         });
       } catch (error) {
         logVoice('Error consuming existing producers', { error });
       }
     },
-    [consume]
+    [addPendingStream, consume]
+  );
+
+  const stopWatchingStream = useCallback(
+    async (remoteId: number, kind: StreamKind) => {
+      if (kind === StreamKind.AUDIO) {
+        logVoice('Ignoring stop-watch request for audio stream', {
+          remoteId,
+          kind
+        });
+        return;
+      }
+
+      const existingConsumer = consumers.current[remoteId]?.[kind];
+
+      if (existingConsumer && !existingConsumer.closed) {
+        existingConsumer.close();
+      }
+
+      addPendingStream(remoteId, kind);
+
+      try {
+        const trpc = getTRPCClient();
+
+        await trpc.voice.closeConsumer.mutate({
+          remoteId,
+          kind
+        });
+      } catch (error) {
+        logVoice('Error closing remote consumer', {
+          error,
+          remoteId,
+          kind
+        });
+      }
+    },
+    [addPendingStream]
   );
 
   const cleanupTransports = useCallback(() => {
@@ -390,6 +436,7 @@ const useTransports = ({
     consumers.current = {};
 
     consumeOperationsInProgress.current.clear();
+    clearAllPendingStreams();
 
     if (producerTransport.current && !producerTransport.current.closed) {
       producerTransport.current.close();
@@ -404,7 +451,7 @@ const useTransports = ({
     consumerTransport.current = undefined;
 
     logVoice('Transports cleanup complete');
-  }, []);
+  }, [clearAllPendingStreams]);
 
   return {
     producerTransport,
@@ -414,6 +461,7 @@ const useTransports = ({
     createConsumerTransport,
     consume,
     consumeExistingProducers,
+    stopWatchingStream,
     cleanupTransports
   };
 };

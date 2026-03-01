@@ -74,6 +74,15 @@ const onVoiceProducerClosedRoute = protectedProcedure.subscription(
   }
 );
 
+const onVoiceStreamWatcherActivityRoute = protectedProcedure.subscription(
+  async ({ ctx }) => {
+    return ctx.pubsub.subscribeFor(
+      ctx.user.id,
+      ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY
+    );
+  }
+);
+
 export {
   onUserJoinVoiceRoute,
   onUserLeaveVoiceRoute,
@@ -82,5 +91,6 @@ export {
   onVoiceNewProducerRoute,
   onVoiceProducerClosedRoute,
   onVoiceRemoveExternalStreamRoute,
+  onVoiceStreamWatcherActivityRoute,
   onVoiceUpdateExternalStreamRoute
 };

@@ -23,6 +23,28 @@ type TLeaveVoiceOptions = {
   playOwnLeaveSound: boolean;
 };
 
+const channelHasAvailableStreams = (
+  channelId: number,
+  opts: { excludeUserId?: number } = {}
+): boolean => {
+  const state = store.getState();
+  const users = state.server.voiceMap[channelId]?.users ?? {};
+  const externalStreams = state.server.externalStreamsMap[channelId] ?? {};
+
+  const hasUserStream = Object.entries(users).some(([userId, voiceState]) => {
+    if (
+      opts.excludeUserId !== undefined &&
+      Number(userId) === opts.excludeUserId
+    ) {
+      return false;
+    }
+
+    return voiceState.webcamEnabled || voiceState.sharingScreen;
+  });
+
+  return hasUserStream || Object.keys(externalStreams).length > 0;
+};
+
 export const addUserToVoiceChannel = (
   userId: number,
   channelId: number,
@@ -67,6 +89,11 @@ export const addExternalStreamToVoiceChannel = (
   streamId: number,
   stream: TExternalStream
 ): void => {
+  const state = store.getState();
+  const currentChannelId = currentVoiceChannelIdSelector(state);
+  const shouldPlayStartedStreamSound =
+    channelId === currentChannelId && !channelHasAvailableStreams(channelId);
+
   store.dispatch(
     serverSliceActions.addExternalStreamToChannel({
       channelId,
@@ -74,6 +101,10 @@ export const addExternalStreamToVoiceChannel = (
       stream
     })
   );
+
+  if (shouldPlayStartedStreamSound) {
+    playSound(SoundType.REMOTE_USER_STARTED_STREAM);
+  }
 };
 
 export const updateExternalStreamInVoiceChannel = (
@@ -107,8 +138,35 @@ export const updateVoiceUserState = (
   channelId: number,
   newState: Partial<TVoiceUserState>
 ): void => {
+  const state = store.getState();
+  const currentChannelId = currentVoiceChannelIdSelector(state);
+  const ownUserId = ownUserIdSelector(state);
+  const currentUserState = state.server.voiceMap[channelId]?.users[userId];
+
+  const shouldPlayStartedStreamSound =
+    userId !== ownUserId &&
+    channelId === currentChannelId &&
+    !!currentUserState &&
+    !channelHasAvailableStreams(channelId, { excludeUserId: userId }) &&
+    ((newState.webcamEnabled === true && !currentUserState.webcamEnabled) ||
+      (newState.sharingScreen === true && !currentUserState.sharingScreen));
+
   store.dispatch(
     serverSliceActions.updateVoiceUserState({ userId, channelId, newState })
+  );
+
+  if (shouldPlayStartedStreamSound) {
+    playSound(SoundType.REMOTE_USER_STARTED_STREAM);
+  }
+};
+
+export const handleStreamWatcherActivity = (activity: {
+  action: 'joined' | 'left';
+}): void => {
+  playSound(
+    activity.action === 'joined'
+      ? SoundType.STREAM_WATCHER_JOINED
+      : SoundType.STREAM_WATCHER_LEFT
   );
 };
 

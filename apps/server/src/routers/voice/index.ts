@@ -1,4 +1,5 @@
 import { t } from '../../utils/trpc';
+import { closeConsumerRoute } from './close-consumer';
 import { closeProducerRoute } from './close-producer';
 import { connectConsumerTransportRoute } from './connect-consumer-transport';
 import { connectProducerTransportRoute } from './connect-producer-transport';
@@ -13,6 +14,7 @@ import {
   onVoiceNewProducerRoute,
   onVoiceProducerClosedRoute,
   onVoiceRemoveExternalStreamRoute,
+  onVoiceStreamWatcherActivityRoute,
   onVoiceUpdateExternalStreamRoute
 } from './events';
 import { getProducersRoute } from './get-producers';
@@ -29,6 +31,7 @@ export const voiceRouter = t.router({
   connectProducerTransport: connectProducerTransportRoute,
   createConsumerTransport: createConsumerTransportRoute,
   connectConsumerTransport: connectConsumerTransportRoute,
+  closeConsumer: closeConsumerRoute,
   closeProducer: closeProducerRoute,
   produce: produceRoute,
   consume: consumeRoute,
@@ -38,6 +41,7 @@ export const voiceRouter = t.router({
   onUpdateState: onUserUpdateVoiceStateRoute,
   onNewProducer: onVoiceNewProducerRoute,
   onProducerClosed: onVoiceProducerClosedRoute,
+  onStreamWatcherActivity: onVoiceStreamWatcherActivityRoute,
   onAddExternalStream: onVoiceAddExternalStreamRoute,
   onUpdateExternalStream: onVoiceUpdateExternalStreamRoute,
   onRemoveExternalStream: onVoiceRemoveExternalStreamRoute

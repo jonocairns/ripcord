@@ -13,6 +13,8 @@ type TEvents = {
     kind: StreamKind,
     routerRtpCapabilities: RtpCapabilities
   ) => Promise<void>;
+  addPendingStream: (remoteId: number, kind: StreamKind) => void;
+  removePendingStream: (remoteId: number, kind: StreamKind) => void;
   removeRemoteUserStream: (
     userId: number,
     kind: TRemoteUserStreamKinds
@@ -23,15 +25,19 @@ type TEvents = {
   ) => void;
   removeExternalStream: (streamId: number) => void;
   clearRemoteUserStreamsForUser: (userId: number) => void;
+  clearPendingStreamsForUser: (userId: number) => void;
   rtpCapabilities: RtpCapabilities;
 };
 
 const useVoiceEvents = ({
   consume,
+  addPendingStream,
+  removePendingStream,
   removeRemoteUserStream,
   removeExternalStreamTrack,
   removeExternalStream,
   clearRemoteUserStreamsForUser,
+  clearPendingStreamsForUser,
   rtpCapabilities
 }: TEvents) => {
   const currentVoiceChannelId = useCurrentVoiceChannelId();
@@ -70,16 +76,12 @@ const useVoiceEvents = ({
             channelId
           });
 
-          try {
-            consume(remoteId, kind, rtpCapabilities);
-          } catch (error) {
-            logVoice('Error consuming new producer', {
-              error,
-              remoteId,
-              kind,
-              channelId
-            });
+          if (kind === StreamKind.AUDIO) {
+            void consume(remoteId, kind, rtpCapabilities);
+            return;
           }
+
+          addPendingStream(remoteId, kind);
         },
         onError: (error) => {
           logVoice('onVoiceNewProducer subscription error', { error });
@@ -100,6 +102,8 @@ const useVoiceEvents = ({
           });
 
           try {
+            removePendingStream(remoteId, kind);
+
             if (
               kind === StreamKind.EXTERNAL_VIDEO ||
               kind === StreamKind.EXTERNAL_AUDIO
@@ -130,6 +134,7 @@ const useVoiceEvents = ({
         logVoice('User leave event received', { userId, channelId });
 
         try {
+          clearPendingStreamsForUser(userId);
           clearRemoteUserStreamsForUser(userId);
         } catch (error) {
           logVoice('Error clearing remote streams for user', { error });
@@ -151,6 +156,8 @@ const useVoiceEvents = ({
           });
 
           try {
+            removePendingStream(streamId, StreamKind.EXTERNAL_AUDIO);
+            removePendingStream(streamId, StreamKind.EXTERNAL_VIDEO);
             removeExternalStream(streamId);
           } catch (error) {
             logVoice('Error removing external stream', {
@@ -179,10 +186,13 @@ const useVoiceEvents = ({
     currentVoiceChannelId,
     ownUserId,
     consume,
+    addPendingStream,
+    removePendingStream,
     removeRemoteUserStream,
     removeExternalStreamTrack,
     removeExternalStream,
     clearRemoteUserStreamsForUser,
+    clearPendingStreamsForUser,
     rtpCapabilities
   ]);
 };
