@@ -34,9 +34,16 @@ const getFileUrl = (file: TFile | undefined | null) => {
 
   let baseUrl = `${url}/public/${file.name}`;
 
+  const params = new URLSearchParams();
+
   if (file._accessToken) {
-    baseUrl += `?accessToken=${file._accessToken}`;
+    params.set('accessToken', file._accessToken);
   }
+
+  // Cache-bust: file.id changes on each upload even if the filename is reused
+  params.set('v', String(file.id));
+
+  baseUrl += `?${params.toString()}`;
 
   return encodeURI(baseUrl);
 };
