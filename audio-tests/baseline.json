@@ -91,7 +91,7 @@
         "max": 0.165
       },
       "speech_residual_wobble": {
-        "max": 2.800574067227666
+        "max": 3.1
       },
       "gap_noise_floor_db": {
         "max": -37.0
@@ -233,7 +233,7 @@
         "min": 0.045
       },
       "speech_presence_ratio": {
-        "max": 0.4698289463151144
+        "max": 0.48
       },
       "speech_residual_wobble": {
         "max": 0.9349607373667181
