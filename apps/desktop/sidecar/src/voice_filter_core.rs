@@ -126,7 +126,7 @@ pub const EXPANDER_LSNR_NUDGE_HIGH_DB: f32 = 5.0;
 pub const EXPANDER_LSNR_THRESHOLD_RAISE_DB: f32 = 8.0;
 pub const EXPANDER_LSNR_SMOOTH_ALPHA: f32 = 0.9;
 pub const EXPANDER_BYPASS_SPEECH_FLOOR: f32 = 0.25;
-pub const EXPANDER_BYPASS_SPEECH_FULL: f32 = 0.65;
+pub const EXPANDER_BYPASS_SPEECH_FULL: f32 = 0.50;
 
 // VAD
 pub const VAD_MODEL_SAMPLE_RATE: usize = 16_000;
@@ -160,8 +160,8 @@ pub const TRANS_NON_SPEECH_DIFF_RATIO_THRESHOLD: f32 = 0.7;
 pub const TRANS_NON_SPEECH_HP_RATIO_THRESHOLD: f32 = 0.72;
 pub const TRANS_NON_SPEECH_RMS_JUMP_RATIO: f32 = 1.25;
 pub const TRANS_NON_SPEECH_NOISE_FLOOR_RATIO: f32 = 1.3;
-pub const TRANS_SPEECH_CREST_THRESHOLD: f32 = 5.4;
-pub const TRANS_SPEECH_HP_CREST_THRESHOLD: f32 = 5.8;
+pub const TRANS_SPEECH_CREST_THRESHOLD: f32 = 7.0;
+pub const TRANS_SPEECH_HP_CREST_THRESHOLD: f32 = 7.5;
 pub const TRANS_SPEECH_DIFF_RATIO_THRESHOLD: f32 = 0.62;
 pub const TRANS_SPEECH_HP_RATIO_THRESHOLD: f32 = 0.6;
 pub const TRANS_SPEECH_BURST_PEAK_THRESHOLD: f32 = 0.8;
@@ -177,7 +177,7 @@ pub const TRANS_GAIN_HIGH_DB: f32 = -30.0;
 pub const TRANS_GAIN_HO_LOW_DB: f32 = -12.0;
 pub const TRANS_GAIN_HO_HIGH_DB: f32 = -24.0;
 pub const TRANS_GAIN_SP_LOW_DB: f32 = -10.0;
-pub const TRANS_GAIN_SP_HIGH_DB: f32 = -30.0;
+pub const TRANS_GAIN_SP_HIGH_DB: f32 = -18.0;
 pub const TRANS_CROSSOVER_HZ: f32 = 300.0;
 pub const TRANS_ENERGY_JUMP_RATIO: f32 = 4.0;
 pub const TRANS_NON_SPEECH_RESIDUAL_PEAK: f32 = 0.003;
@@ -2805,9 +2805,15 @@ pub fn process_voice_filter_frame(
     // Suppression slew limit: prevent DFN from dropping its output RMS by more than
     // DFN_SLEW_MAX_DROP_DB_PER_FRAME in a single 10ms frame.  Scales the frame up
     // if the drop exceeds the limit; bypassed when the previous RMS is near silence.
+    // During confirmed speech, tighten the limit to reduce mid-utterance dropouts.
     if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
         let slew_active_floor = 10.0f32.powf(DFN_SLEW_MIN_ACTIVE_DBFS / 20.0);
-        let max_drop_factor = 10.0f32.powf(-DFN_SLEW_MAX_DROP_DB_PER_FRAME / 20.0);
+        let slew_db = if vad_out.speech_state == VadSpeechState::Speech {
+            DFN_SLEW_MAX_DROP_DB_PER_FRAME * 0.5 // 3 dB during speech
+        } else {
+            DFN_SLEW_MAX_DROP_DB_PER_FRAME
+        };
+        let max_drop_factor = 10.0f32.powf(-slew_db / 20.0);
         let slew_floor = session.dfn_output_rms_prev * max_drop_factor;
 
         if slew_floor > slew_active_floor {

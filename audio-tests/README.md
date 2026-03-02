@@ -134,7 +134,50 @@ Minor baseline adjustments for the gain smoother's effect on noise-only clips:
 
 Speech quality metrics were unaffected.
 
+### Pause-Time Gate Floor Replacement
+
+The pause-time non-speech gate and low-burst gate used hard-zero gain (complete
+signal erasure) when triggered. This was replaced with a -18 dB floor (linear
+0.125) to preserve some signal during brief pauses.
+
+Outcome:
+
+- 6 of 15 tests failed: `single-key-taps.wav`, `room-tone.wav`, `mouse-clicks.wav`,
+  `speech-only.wav`, `speech-while-typing.wav`, `typing-only.wav`, `nvidia/sample-naked.wav`
+- the gates are load-bearing for suppression of non-speech transients
+- rejected because the suppression regression was severe
+
+### Silence Gate Energy Guard Threshold Reduction
+
+The silence gate's instant-open energy guard checked `input_rms > noise_floor * 6.0`.
+This was reduced to 3.5x, 4.5x, and 5.0x to catch softer speech onsets before VAD
+confirms.
+
+Outcome:
+
+- all values ≤ 5.0x failed `room-tone.wav` (silence_pct dropped below 50%)
+  and `single-key-taps.wav` (out_db too high)
+- ambient noise near the noise floor keeps the gate open, defeating suppression
+- rejected because there is no value between 5.0 and 6.0 that helps speech
+  without regressing pure-noise samples
+
+### Aggressive Expander VAD Bypass Ramp Widening
+
+The expander's VAD bypass ramp was widened from floor=0.25/full=0.65 to
+floor=0.10/full=0.45, with attack softened from 2ms to 5ms.
+
+Outcome:
+
+- 6 of 15 tests failed: `room-tone.wav`, `mouse-clicks.wav`, `single-key-taps.wav`,
+  `typing-only.wav`, `desk-taps.wav`, `nvidia/sample-nvidia-broadcast.wav`
+- the wider bypass let non-speech transients (key taps, clicks) pass through
+  the expander before it could clamp them
+- a moderate version (floor=0.20/full=0.55, attack=3ms) nearly passed but still
+  failed `single-key-taps.wav` (out_db -68 vs max -70, wobble 2.88 vs max 2.5)
+- rejected because any floor below 0.25 lets key-tap energy through
+
 ## Guidance
 
 Future experiments should stay narrow and must be validated with the same
 workflow above. Do not update `baseline.json` for exploratory regressions.
+
