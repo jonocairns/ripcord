@@ -79,8 +79,6 @@ const publicRouteHandler = async (
     return;
   }
 
-  const fileStream = fs.createReadStream(filePath);
-
   const inlineAllowlist = [
     'image/png',
     'image/jpeg',
@@ -95,13 +93,23 @@ const publicRouteHandler = async (
     ? 'inline'
     : 'attachment';
 
+  const etag = `"${dbFile.md5}"`;
+
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304);
+    res.end();
+    return;
+  }
+
   res.writeHead(200, {
     'Content-Type': dbFile.mimeType,
     'Content-Length': dbFile.size,
     'Content-Disposition': `${contentDisposition}; filename="${dbFile.originalName}"`,
-    'Cache-Control': 'no-cache',
-    ETag: `"${dbFile.md5}"`
+    'Cache-Control': 'public, max-age=31536000, immutable',
+    ETag: etag
   });
+
+  const fileStream = fs.createReadStream(filePath);
 
   fileStream.pipe(res);
 
