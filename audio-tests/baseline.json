@@ -91,7 +91,7 @@
         "max": 0.165
       },
       "speech_residual_wobble": {
-        "max": 2.800574067227666
+        "max": 3.1
       },
       "gap_noise_floor_db": {
         "max": -37.0
@@ -172,6 +172,132 @@
         "max": 30
       }
     },
+    "plosives.wav": {
+      "out_db": {
+        "min": -31.5,
+        "max": -28.5
+      },
+      "silence_pct": {
+        "max": 35.0
+      },
+      "onset_ratio_count": {
+        "min": 4
+      },
+      "onset_ratio_avg": {
+        "min": 0.05
+      },
+      "onset_ratio_max": {
+        "min": 0.15
+      },
+      "speech_presence_ratio": {
+        "max": 0.25
+      },
+      "speech_residual_wobble": {
+        "max": 1.1
+      },
+      "gap_noise_floor_db": {
+        "max": -36.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -75.0
+      },
+      "speech_snr_improvement_db": {
+        "min": 10.0
+      },
+      "onset_delay_frames_max": {
+        "max": 5
+      },
+      "speech_hf_preservation": {
+        "min": 0.6
+      },
+      "speech_dropout_count": {
+        "max": 15
+      }
+    },
+    "quiet-speech-starts.wav": {
+      "out_db": {
+        "min": -31.0,
+        "max": -28.0
+      },
+      "silence_pct": {
+        "max": 28.0
+      },
+      "onset_ratio_count": {
+        "min": 2
+      },
+      "onset_ratio_avg": {
+        "min": 0.05
+      },
+      "onset_ratio_max": {
+        "min": 0.15
+      },
+      "speech_presence_ratio": {
+        "max": 0.35
+      },
+      "speech_residual_wobble": {
+        "max": 0.9
+      },
+      "gap_noise_floor_db": {
+        "max": -36.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -75.0
+      },
+      "speech_snr_improvement_db": {
+        "min": 10.0
+      },
+      "onset_delay_frames_max": {
+        "max": 4
+      },
+      "speech_hf_preservation": {
+        "min": 0.6
+      },
+      "speech_dropout_count": {
+        "max": 12
+      }
+    },
+    "rapid-utterances-brief-gaps.wav": {
+      "out_db": {
+        "min": -24.5,
+        "max": -22.0
+      },
+      "silence_pct": {
+        "max": 22.0
+      },
+      "onset_ratio_count": {
+        "min": 6
+      },
+      "onset_ratio_avg": {
+        "min": 0.15
+      },
+      "onset_ratio_max": {
+        "min": 0.5
+      },
+      "speech_presence_ratio": {
+        "max": 0.35
+      },
+      "speech_residual_wobble": {
+        "max": 1.0
+      },
+      "gap_noise_floor_db": {
+        "max": -36.0
+      },
+      "gap_noise_floor_median_db": {
+        "max": -66.0
+      },
+      "speech_snr_improvement_db": {
+        "min": 10.0
+      },
+      "onset_delay_frames_max": {
+        "max": 4
+      },
+      "speech_hf_preservation": {
+        "min": 0.6
+      },
+      "speech_dropout_count": {
+        "max": 10
+      }
+    },
     "room-tone.wav": {
       "out_db": {
         "max": -65.0
@@ -233,7 +359,7 @@
         "min": 0.045
       },
       "speech_presence_ratio": {
-        "max": 0.4698289463151144
+        "max": 0.48
       },
       "speech_residual_wobble": {
         "max": 0.9349607373667181

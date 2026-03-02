@@ -599,7 +599,7 @@ fn run_and_check(rel_path: &str) {
         v.map(|x| format!("{x:6.1}{suffix}")).unwrap_or_else(|| "   n/a".to_string())
     };
     eprintln!(
-        "[pass] {rel_path:35} | inp={:6.1}dB out={:6.1}dB | silent={:5.1}% | onsets={} | gap_pk={} gap_med={} | snr_imp={} onset_dly={} hf_pres={} dropouts={}",
+        "[pass] {rel_path:35} | inp={:6.1}dB out={:6.1}dB | silent={:5.1}% | onsets={} | gap_pk={} gap_med={} | snr_imp={} onset_dly={} hf_pres={} dropouts={} | onset_min={} onset_avg={} onset_max={} pres={} wobble={}",
         result.inp_db, result.out_db, result.silence_pct, result.onset_ratio_count,
         fmt_opt(result.gap_noise_floor_db, "dB"),
         fmt_opt(result.gap_noise_floor_median_db, "dB"),
@@ -607,6 +607,11 @@ fn run_and_check(rel_path: &str) {
         fmt_opt(result.onset_delay_frames_max, ""),
         fmt_opt(result.speech_hf_preservation, ""),
         fmt_opt(result.speech_dropout_count, ""),
+        fmt_opt(result.onset_ratio_min, ""),
+        fmt_opt(result.onset_ratio_avg, ""),
+        fmt_opt(result.onset_ratio_max, ""),
+        fmt_opt(result.speech_presence_ratio, ""),
+        fmt_opt(result.speech_residual_wobble, ""),
     );
 }
 
@@ -647,6 +652,9 @@ audio_test!(speed_plus_fan, "speed-plus-fan.wav");
 audio_test!(typing_only, "typing-only.wav");
 audio_test!(nvidia_sample_naked, "nvidia/sample-naked.wav");
 audio_test!(nvidia_sample_nvidia_broadcast, "nvidia/sample-nvidia-broadcast.wav");
+audio_test!(plosives, "plosives.wav");
+audio_test!(quiet_speech_starts, "quiet-speech-starts.wav");
+audio_test!(rapid_utterances_brief_gaps, "rapid-utterances-brief-gaps.wav");
 
 // ─── Anti-cicada noise gate test ─────────────────────────────────────────────
 //

@@ -79,8 +79,10 @@ pub const COMFORT_NOISE_LEVEL_DBFS: f32 = -84.0;
 // First-order lowpass cutoff for pink-ish shaping (removes harsh high-frequency content)
 pub const COMFORT_NOISE_LOWPASS_HZ: f32 = 1_200.0;
 
-// Output de-zipper
-pub const DEZIPPER_COEFF: f32 = 0.25;
+// Output de-zipper — smooths inter-hop DFN amplitude discontinuities.
+// Lower values preserve faster speech transients (plosives, consonant attacks)
+// while still catching 10ms hop-boundary glitches.
+pub const DEZIPPER_COEFF: f32 = 0.12;
 
 // Late-stage voice polish. This is intentionally subtle and speech-gated so it
 // restores a bit of presence without re-opening the suppressed noise floor.
@@ -126,7 +128,7 @@ pub const EXPANDER_LSNR_NUDGE_HIGH_DB: f32 = 5.0;
 pub const EXPANDER_LSNR_THRESHOLD_RAISE_DB: f32 = 8.0;
 pub const EXPANDER_LSNR_SMOOTH_ALPHA: f32 = 0.9;
 pub const EXPANDER_BYPASS_SPEECH_FLOOR: f32 = 0.25;
-pub const EXPANDER_BYPASS_SPEECH_FULL: f32 = 0.65;
+pub const EXPANDER_BYPASS_SPEECH_FULL: f32 = 0.50;
 
 // VAD
 pub const VAD_MODEL_SAMPLE_RATE: usize = 16_000;
@@ -160,8 +162,8 @@ pub const TRANS_NON_SPEECH_DIFF_RATIO_THRESHOLD: f32 = 0.7;
 pub const TRANS_NON_SPEECH_HP_RATIO_THRESHOLD: f32 = 0.72;
 pub const TRANS_NON_SPEECH_RMS_JUMP_RATIO: f32 = 1.25;
 pub const TRANS_NON_SPEECH_NOISE_FLOOR_RATIO: f32 = 1.3;
-pub const TRANS_SPEECH_CREST_THRESHOLD: f32 = 5.4;
-pub const TRANS_SPEECH_HP_CREST_THRESHOLD: f32 = 5.8;
+pub const TRANS_SPEECH_CREST_THRESHOLD: f32 = 7.0;
+pub const TRANS_SPEECH_HP_CREST_THRESHOLD: f32 = 7.5;
 pub const TRANS_SPEECH_DIFF_RATIO_THRESHOLD: f32 = 0.62;
 pub const TRANS_SPEECH_HP_RATIO_THRESHOLD: f32 = 0.6;
 pub const TRANS_SPEECH_BURST_PEAK_THRESHOLD: f32 = 0.8;
@@ -177,7 +179,7 @@ pub const TRANS_GAIN_HIGH_DB: f32 = -30.0;
 pub const TRANS_GAIN_HO_LOW_DB: f32 = -12.0;
 pub const TRANS_GAIN_HO_HIGH_DB: f32 = -24.0;
 pub const TRANS_GAIN_SP_LOW_DB: f32 = -10.0;
-pub const TRANS_GAIN_SP_HIGH_DB: f32 = -30.0;
+pub const TRANS_GAIN_SP_HIGH_DB: f32 = -18.0;
 pub const TRANS_CROSSOVER_HZ: f32 = 300.0;
 pub const TRANS_ENERGY_JUMP_RATIO: f32 = 4.0;
 pub const TRANS_NON_SPEECH_RESIDUAL_PEAK: f32 = 0.003;
@@ -1131,6 +1133,9 @@ pub struct VadState {
     pub prev_frame_rms: f32,
     /// Frames spent in continuous Silence state; drives the slow-fade silence gate.
     pub silence_gate_frames: u32,
+    /// Gate gain at the end of the previous frame; enables within-frame ramping
+    /// so speech onsets don't get the stale gate gain applied to the whole frame.
+    pub silence_gate_gain_prev: f32,
 }
 
 pub struct ModelVadTapState {
@@ -1185,6 +1190,7 @@ impl Default for VadState {
             noise_floor_rms: 1e-4, // small non-zero initial noise floor
             prev_frame_rms: 0.0,
             silence_gate_frames: 0,
+            silence_gate_gain_prev: 1.0,
         }
     }
 }
@@ -2805,9 +2811,15 @@ pub fn process_voice_filter_frame(
     // Suppression slew limit: prevent DFN from dropping its output RMS by more than
     // DFN_SLEW_MAX_DROP_DB_PER_FRAME in a single 10ms frame.  Scales the frame up
     // if the drop exceeds the limit; bypassed when the previous RMS is near silence.
+    // During confirmed speech, tighten the limit to reduce mid-utterance dropouts.
     if matches!(&session.processor, VoiceFilterProcessor::DeepFilter(_)) {
         let slew_active_floor = 10.0f32.powf(DFN_SLEW_MIN_ACTIVE_DBFS / 20.0);
-        let max_drop_factor = 10.0f32.powf(-DFN_SLEW_MAX_DROP_DB_PER_FRAME / 20.0);
+        let slew_db = if vad_out.speech_state == VadSpeechState::Speech {
+            DFN_SLEW_MAX_DROP_DB_PER_FRAME * 0.5 // 3 dB during speech
+        } else {
+            DFN_SLEW_MAX_DROP_DB_PER_FRAME
+        };
+        let max_drop_factor = 10.0f32.powf(-slew_db / 20.0);
         let slew_floor = session.dfn_output_rms_prev * max_drop_factor;
 
         if slew_floor > slew_active_floor {
@@ -2935,12 +2947,17 @@ pub fn process_voice_filter_frame(
             }
         };
         expander_bypass_out = Some(expander_bypass);
-        // Silence gate: "instant on, slow off".
+        // Silence gate: "instant on, slow off" with within-frame ramping.
         // - Any state other than Silence: gate_gain = 1.0 instantly (no onset clipping).
         // - Input energy well above noise floor: gate_gain = 1.0 instantly — catches
         //   speech onset before the VAD state machine confirms, with zero latency.
         // - Silence with low input energy: fades 1.0→0.0 over VAD_SILENCE_GATE_FADE_FRAMES
         //   (~800ms), closing before DFN model adaptation leaks audible ambient (~1-2s).
+        //
+        // Within-frame ramping: instead of applying a single gate_gain to every sample,
+        // linearly interpolate from the previous frame's gain to this frame's gain.
+        // This prevents the leading edge of speech onsets from being fully attenuated
+        // when the gate was partially closed on the previous frame.
         let input_above_noise_floor = input_rms > session.vad.noise_floor_rms * 6.0;
         let silence_gate_active = vad_out.speech_state == VadSpeechState::Silence
             && session.vad.onset_protection_frames_remaining == 0
@@ -2953,9 +2970,22 @@ pub fn process_voice_filter_frame(
         }
         let gate_gain = 1.0
             - (session.vad.silence_gate_frames as f32 / VAD_SILENCE_GATE_FADE_FRAMES as f32);
-        for s in samples.iter_mut() {
-            *s *= gate_gain;
+        let gate_gain_prev = session.vad.silence_gate_gain_prev;
+        if (gate_gain - gate_gain_prev).abs() < 1e-6 {
+            // No transition — apply constant gain (fast path).
+            for s in samples.iter_mut() {
+                *s *= gate_gain;
+            }
+        } else {
+            // Ramp from previous gain to current gain across the frame.
+            let n = samples.len() as f32;
+            for (i, s) in samples.iter_mut().enumerate() {
+                let t = (i as f32 + 1.0) / n;
+                let g = gate_gain_prev + (gate_gain - gate_gain_prev) * t;
+                *s *= g;
+            }
         }
+        session.vad.silence_gate_gain_prev = gate_gain;
         if let Some(lsnr) = lsnr_mean {
             session.lsnr_smoothed = EXPANDER_LSNR_SMOOTH_ALPHA * session.lsnr_smoothed
                 + (1.0 - EXPANDER_LSNR_SMOOTH_ALPHA) * lsnr;
