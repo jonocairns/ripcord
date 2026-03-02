@@ -98,7 +98,9 @@ const publicRouteHandler = async (
   res.writeHead(200, {
     'Content-Type': dbFile.mimeType,
     'Content-Length': dbFile.size,
-    'Content-Disposition': `${contentDisposition}; filename="${dbFile.originalName}"`
+    'Content-Disposition': `${contentDisposition}; filename="${dbFile.originalName}"`,
+    'Cache-Control': 'no-cache',
+    ETag: `"${dbFile.md5}"`
   });
 
   fileStream.pipe(res);
