@@ -785,7 +785,7 @@ const MicrophoneTestPanel = memo(
                   ? 'In-call stream'
                   : testUsesSidecar
                     ? 'Enhanced processing'
-                    : 'Browser capture'}
+                    : 'Standard capture'}
               </span>
             )}
           </div>

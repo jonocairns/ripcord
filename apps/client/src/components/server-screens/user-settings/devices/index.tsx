@@ -231,9 +231,9 @@ const Devices = memo(() => {
                     <SelectItem value={MicQualityMode.AUTO}>Standard</SelectItem>
                     <SelectItem
                       value={MicQualityMode.EXPERIMENTAL}
-                      disabled={!hasDesktopBridge}
+                      disabled={true}
                     >
-                      Enhanced (Desktop)
+                      Enhanced
                     </SelectItem>
                   </SelectGroup>
                 </SelectContent>
