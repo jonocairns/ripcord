@@ -11,6 +11,14 @@ const VoiceGrid = memo(
   ({ children, pinnedCardId, className }: TVoiceGridProps) => {
     const { gridCols, pinnedCard, regularCards } = useMemo(() => {
       const childArray = Array.isArray(children) ? children : [children];
+      const getGridCols = (totalCards: number) => {
+        if (totalCards <= 1) return 1;
+        if (totalCards <= 4) return 2;
+        if (totalCards <= 9) return 3;
+        if (totalCards <= 16) return 4;
+
+        return 5;
+      };
 
       if (pinnedCardId) {
         const pinned = childArray.find(
@@ -23,25 +31,19 @@ const VoiceGrid = memo(
             !isValidElement(child) || child.key !== pinnedCardId
         );
 
-        return {
-          gridCols: regular.length <= 4 ? regular.length : 4,
-          pinnedCard: pinned,
-          regularCards: regular
-        };
+        if (pinned) {
+          return {
+            gridCols: regular.length <= 4 ? regular.length : 4,
+            pinnedCard: pinned,
+            regularCards: regular
+          };
+        }
       }
 
       const totalCards = childArray.length;
 
-      let cols = 1;
-
-      if (totalCards <= 1) cols = 1;
-      else if (totalCards <= 4) cols = 2;
-      else if (totalCards <= 9) cols = 3;
-      else if (totalCards <= 16) cols = 4;
-      else cols = 5;
-
       return {
-        gridCols: cols,
+        gridCols: getGridCols(totalCards),
         pinnedCard: null,
         regularCards: childArray
       };
