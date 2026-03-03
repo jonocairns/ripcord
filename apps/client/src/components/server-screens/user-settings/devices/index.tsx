@@ -22,12 +22,7 @@ import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useForm } from '@/hooks/use-form';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { ScreenAudioMode } from '@/runtime/types';
-import {
-  MicQualityMode,
-  Resolution,
-  VideoCodecPreference,
-  VoiceFilterStrength
-} from '@/types';
+import { Resolution, VideoCodecPreference } from '@/types';
 import { Info, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
@@ -37,6 +32,20 @@ import ResolutionFpsControl from './resolution-fps-control';
 
 const DEFAULT_NAME = 'default';
 type TPushKeybindField = 'pushToTalkKeybind' | 'pushToMuteKeybind';
+
+const getDefaultDeviceId = (
+  availableDevices: (MediaDeviceInfo | undefined)[]
+): string | undefined => {
+  const device = availableDevices.find(
+    (candidate): candidate is MediaDeviceInfo => Boolean(candidate)
+  );
+
+  if (!device) {
+    return undefined;
+  }
+
+  return device.deviceId || DEFAULT_NAME;
+};
 
 const Devices = memo(() => {
   const desktopBridge = getDesktopBridge();
@@ -48,7 +57,7 @@ const Devices = memo(() => {
     loading: availableDevicesLoading
   } = useAvailableDevices();
   const { devices, saveDevices, loading: devicesLoading } = useDevices();
-  const { values, onChange } = useForm(devices);
+  const { values, onChange, setValues } = useForm(devices);
   const [desktopAppVersion, setDesktopAppVersion] = useState<string>();
   const [capturingKeybindField, setCapturingKeybindField] = useState<
     TPushKeybindField | undefined
@@ -161,8 +170,33 @@ const Devices = memo(() => {
     }
   }, [hasDesktopBridge, onChange, values.screenAudioMode]);
 
-  const isExperimentalMode =
-    values.micQualityMode === MicQualityMode.EXPERIMENTAL;
+  useEffect(() => {
+    setValues(devices);
+  }, [devices, setValues]);
+
+  useEffect(() => {
+    const defaultMicrophoneId = getDefaultDeviceId(inputDevices);
+    const defaultWebcamId = getDefaultDeviceId(videoDevices);
+
+    setValues((currentValues) => {
+      const nextMicrophoneId =
+        currentValues.microphoneId || defaultMicrophoneId;
+      const nextWebcamId = currentValues.webcamId || defaultWebcamId;
+
+      if (
+        nextMicrophoneId === currentValues.microphoneId &&
+        nextWebcamId === currentValues.webcamId
+      ) {
+        return currentValues;
+      }
+
+      return {
+        ...currentValues,
+        microphoneId: nextMicrophoneId,
+        webcamId: nextWebcamId
+      };
+    });
+  }, [inputDevices, setValues, videoDevices]);
 
   if (availableDevicesLoading || devicesLoading) {
     return <LoadingCard className="h-[600px]" />;
@@ -185,7 +219,7 @@ const Devices = memo(() => {
           <div className="space-y-1">
             <h3 className="text-base font-semibold">Microphone</h3>
             <p className="text-sm text-muted-foreground">
-              Configure your input source, processing, and push-to-talk
+              Configure your input source, audio cleanup, and push-to-talk
               controls.
             </p>
           </div>
@@ -194,7 +228,7 @@ const Devices = memo(() => {
             <Label>Input device</Label>
             <Select
               onValueChange={(value) => onChange('microphoneId', value)}
-              value={values.microphoneId}
+              value={values.microphoneId || getDefaultDeviceId(inputDevices)}
             >
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select the input device" />
@@ -212,63 +246,6 @@ const Devices = memo(() => {
                 </SelectGroup>
               </SelectContent>
             </Select>
-          </div>
-
-          <div className="flex flex-col gap-4 sm:flex-row">
-            <div className="min-w-0 flex-1 space-y-2">
-              <Label>Voice processing</Label>
-              <Select
-                onValueChange={(value) =>
-                  onChange('micQualityMode', value as MicQualityMode)
-                }
-                value={values.micQualityMode}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select voice processing mode" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value={MicQualityMode.AUTO}>Standard</SelectItem>
-                    <SelectItem
-                      value={MicQualityMode.EXPERIMENTAL}
-                      disabled={!hasDesktopBridge}
-                    >
-                      Enhanced (Desktop)
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {isExperimentalMode && values.noiseSuppression && (
-              <div className="min-w-0 flex-1 space-y-2">
-                <Label>Noise suppression strength</Label>
-                <Select
-                  onValueChange={(value) =>
-                    onChange('voiceFilterStrength', value as VoiceFilterStrength)
-                  }
-                  value={values.voiceFilterStrength}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select a filter preset" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value={VoiceFilterStrength.LOW}>Low</SelectItem>
-                      <SelectItem value={VoiceFilterStrength.BALANCED}>
-                        Balanced
-                      </SelectItem>
-                      <SelectItem value={VoiceFilterStrength.HIGH}>
-                        High
-                      </SelectItem>
-                      <SelectItem value={VoiceFilterStrength.AGGRESSIVE}>
-                        Aggressive
-                      </SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
           </div>
 
           <Alert variant="info" className="border-primary/40 bg-primary/10">
@@ -413,7 +390,7 @@ const Devices = memo(() => {
             <Label>Input device</Label>
             <Select
               onValueChange={(value) => onChange('webcamId', value)}
-              value={values.webcamId}
+              value={values.webcamId || getDefaultDeviceId(videoDevices)}
             >
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select the input device" />

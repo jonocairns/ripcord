@@ -17,7 +17,7 @@ import { serverSliceActions } from '../slice';
 import { playSound } from '../sounds/actions';
 import { SoundType } from '../types';
 import { ownUserIdSelector } from '../users/selectors';
-import { ownVoiceStateSelector } from './selectors';
+import { ownVoiceStateSelector, pinnedCardSelector } from './selectors';
 
 type TLeaveVoiceOptions = {
   playOwnLeaveSound: boolean;
@@ -43,6 +43,16 @@ const channelHasAvailableStreams = (
   });
 
   return hasUserStream || Object.keys(externalStreams).length > 0;
+};
+
+const clearPinnedCardById = (cardId: string): void => {
+  const pinnedCard = pinnedCardSelector(store.getState());
+
+  if (pinnedCard?.id !== cardId) {
+    return;
+  }
+
+  store.dispatch(serverSliceActions.setPinnedCard(undefined));
 };
 
 export const addUserToVoiceChannel = (
@@ -78,6 +88,9 @@ export const removeUserFromVoiceChannel = (
   store.dispatch(
     serverSliceActions.removeUserFromVoiceChannel({ userId, channelId })
   );
+
+  clearPinnedCardById(`user-${userId}`);
+  clearPinnedCardById(`screen-share-${userId}`);
 
   if (userId !== ownUserId && channelId === currentChannelId) {
     playSound(SoundType.REMOTE_USER_LEFT_VOICE_CHANNEL);
@@ -131,6 +144,8 @@ export const removeExternalStreamFromVoiceChannel = (
       streamId
     })
   );
+
+  clearPinnedCardById(`external-stream-${streamId}`);
 };
 
 export const updateVoiceUserState = (
@@ -154,6 +169,10 @@ export const updateVoiceUserState = (
   store.dispatch(
     serverSliceActions.updateVoiceUserState({ userId, channelId, newState })
   );
+
+  if (newState.sharingScreen === false) {
+    clearPinnedCardById(`screen-share-${userId}`);
+  }
 
   if (shouldPlayStartedStreamSound) {
     playSound(SoundType.REMOTE_USER_STARTED_STREAM);

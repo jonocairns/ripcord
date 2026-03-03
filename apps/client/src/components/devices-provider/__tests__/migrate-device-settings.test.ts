@@ -40,6 +40,14 @@ describe('migrateDeviceSettings', () => {
     expect(migrated.micQualityMode).toBe(MicQualityMode.AUTO);
   });
 
+  it('normalizes experimental mic quality mode to auto', () => {
+    const migrated = migrateDeviceSettings({
+      micQualityMode: MicQualityMode.EXPERIMENTAL
+    });
+
+    expect(migrated.micQualityMode).toBe(MicQualityMode.AUTO);
+  });
+
   it('migrates legacy shareSystemAudio=true to system mode', () => {
     const migrated = migrateDeviceSettings({
       shareSystemAudio: true
