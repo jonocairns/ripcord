@@ -22,14 +22,9 @@ import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useForm } from '@/hooks/use-form';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { ScreenAudioMode } from '@/runtime/types';
-import {
-  MicQualityMode,
-  Resolution,
-  VideoCodecPreference,
-  VoiceFilterStrength
-} from '@/types';
+import { Resolution, VideoCodecPreference } from '@/types';
 import { Info, X } from 'lucide-react';
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useAvailableDevices } from './hooks/use-available-devices';
 import { MicrophoneTestPanel } from './microphone-test-panel';
@@ -37,6 +32,20 @@ import ResolutionFpsControl from './resolution-fps-control';
 
 const DEFAULT_NAME = 'default';
 type TPushKeybindField = 'pushToTalkKeybind' | 'pushToMuteKeybind';
+
+const getDefaultDeviceId = (
+  availableDevices: (MediaDeviceInfo | undefined)[]
+): string | undefined => {
+  const device = availableDevices.find(
+    (candidate): candidate is MediaDeviceInfo => Boolean(candidate)
+  );
+
+  if (!device) {
+    return undefined;
+  }
+
+  return device.deviceId || DEFAULT_NAME;
+};
 
 const Devices = memo(() => {
   const desktopBridge = getDesktopBridge();
@@ -48,16 +57,25 @@ const Devices = memo(() => {
     loading: availableDevicesLoading
   } = useAvailableDevices();
   const { devices, saveDevices, loading: devicesLoading } = useDevices();
-  const { values, onChange } = useForm(devices);
+  const { values, onChange, setValues } = useForm(devices);
+  const lastLoadedDevicesRef = useRef(devices);
   const [desktopAppVersion, setDesktopAppVersion] = useState<string>();
   const [capturingKeybindField, setCapturingKeybindField] = useState<
     TPushKeybindField | undefined
   >(undefined);
+  const defaultMicrophoneId = getDefaultDeviceId(inputDevices);
+  const defaultWebcamId = getDefaultDeviceId(videoDevices);
+  const selectedMicrophoneId = values.microphoneId || defaultMicrophoneId;
+  const selectedWebcamId = values.webcamId || defaultWebcamId;
 
   const saveDeviceSettings = useCallback(() => {
-    saveDevices(values);
+    saveDevices({
+      ...values,
+      microphoneId: selectedMicrophoneId,
+      webcamId: selectedWebcamId
+    });
     toast.success('Device settings saved');
-  }, [saveDevices, values]);
+  }, [saveDevices, selectedMicrophoneId, selectedWebcamId, values]);
 
   const clearPushKeybind = useCallback(
     (field: TPushKeybindField) => {
@@ -161,8 +179,36 @@ const Devices = memo(() => {
     }
   }, [hasDesktopBridge, onChange, values.screenAudioMode]);
 
-  const isExperimentalMode =
-    values.micQualityMode === MicQualityMode.EXPERIMENTAL;
+  useEffect(() => {
+    setValues((currentValues) => {
+      if (lastLoadedDevicesRef.current !== devices) {
+        lastLoadedDevicesRef.current = devices;
+
+        return {
+          ...devices,
+          microphoneId: devices.microphoneId || defaultMicrophoneId,
+          webcamId: devices.webcamId || defaultWebcamId
+        };
+      }
+
+      const nextMicrophoneId =
+        currentValues.microphoneId || defaultMicrophoneId;
+      const nextWebcamId = currentValues.webcamId || defaultWebcamId;
+
+      if (
+        nextMicrophoneId === currentValues.microphoneId &&
+        nextWebcamId === currentValues.webcamId
+      ) {
+        return currentValues;
+      }
+
+      return {
+        ...currentValues,
+        microphoneId: nextMicrophoneId,
+        webcamId: nextWebcamId
+      };
+    });
+  }, [defaultMicrophoneId, defaultWebcamId, devices, setValues]);
 
   if (availableDevicesLoading || devicesLoading) {
     return <LoadingCard className="h-[600px]" />;
@@ -185,7 +231,7 @@ const Devices = memo(() => {
           <div className="space-y-1">
             <h3 className="text-base font-semibold">Microphone</h3>
             <p className="text-sm text-muted-foreground">
-              Configure your input source, processing, and push-to-talk
+              Configure your input source, audio cleanup, and push-to-talk
               controls.
             </p>
           </div>
@@ -194,7 +240,7 @@ const Devices = memo(() => {
             <Label>Input device</Label>
             <Select
               onValueChange={(value) => onChange('microphoneId', value)}
-              value={values.microphoneId}
+              value={selectedMicrophoneId}
             >
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select the input device" />
@@ -212,63 +258,6 @@ const Devices = memo(() => {
                 </SelectGroup>
               </SelectContent>
             </Select>
-          </div>
-
-          <div className="flex flex-col gap-4 sm:flex-row">
-            <div className="min-w-0 flex-1 space-y-2">
-              <Label>Voice processing</Label>
-              <Select
-                onValueChange={(value) =>
-                  onChange('micQualityMode', value as MicQualityMode)
-                }
-                value={values.micQualityMode}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select voice processing mode" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value={MicQualityMode.AUTO}>Standard</SelectItem>
-                    <SelectItem
-                      value={MicQualityMode.EXPERIMENTAL}
-                      disabled={!hasDesktopBridge}
-                    >
-                      Enhanced (Desktop)
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {isExperimentalMode && values.noiseSuppression && (
-              <div className="min-w-0 flex-1 space-y-2">
-                <Label>Noise suppression strength</Label>
-                <Select
-                  onValueChange={(value) =>
-                    onChange('voiceFilterStrength', value as VoiceFilterStrength)
-                  }
-                  value={values.voiceFilterStrength}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select a filter preset" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value={VoiceFilterStrength.LOW}>Low</SelectItem>
-                      <SelectItem value={VoiceFilterStrength.BALANCED}>
-                        Balanced
-                      </SelectItem>
-                      <SelectItem value={VoiceFilterStrength.HIGH}>
-                        High
-                      </SelectItem>
-                      <SelectItem value={VoiceFilterStrength.AGGRESSIVE}>
-                        Aggressive
-                      </SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
           </div>
 
           <Alert variant="info" className="border-primary/40 bg-primary/10">
@@ -316,7 +305,7 @@ const Devices = memo(() => {
           </div>
 
           <MicrophoneTestPanel
-            microphoneId={values.microphoneId}
+            microphoneId={selectedMicrophoneId}
             micQualityMode={values.micQualityMode}
             voiceFilterStrength={values.voiceFilterStrength}
             echoCancellation={!!values.echoCancellation}
@@ -336,63 +325,78 @@ const Devices = memo(() => {
                 </p>
               </div>
               <div className="space-y-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <Label className="sm:w-23">Push to talk</Label>
-            
-                  <Button
-                    variant="outline"
-                    type="button"
-                    className="w-full justify-start font-mono sm:w-[90px]"
-                    data-push-keybind-capture={
-                      capturingKeybindField === 'pushToTalkKeybind'
-                        ? 'true'
-                        : undefined
-                    }
-                    onClick={() => startPushKeybindCapture('pushToTalkKeybind')}
-                  >
-                    {capturingKeybindField === 'pushToTalkKeybind'
-                      ? 'Press keys...'
-                      : formatPushKeybindLabel(values.pushToTalkKeybind)}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    className="h-9 w-9 shrink-0"
-                    onClick={() => clearPushKeybind('pushToTalkKeybind')}
-                    disabled={!values.pushToTalkKeybind}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
+                <div className="flex items-center gap-3">
+                  <Label className="w-24 shrink-0 text-sm">Push to talk</Label>
+                  <div className="flex items-center">
+                    <Button
+                      variant="outline"
+                      type="button"
+                      className={`min-w-[140px] justify-start rounded-r-none border-r-0 font-mono text-xs${
+                        capturingKeybindField === 'pushToTalkKeybind'
+                          ? ' ring-2 ring-ring'
+                          : ''
+                      }`}
+                      data-push-keybind-capture={
+                        capturingKeybindField === 'pushToTalkKeybind'
+                          ? 'true'
+                          : undefined
+                      }
+                      onClick={() =>
+                        startPushKeybindCapture('pushToTalkKeybind')
+                      }
+                    >
+                      {capturingKeybindField === 'pushToTalkKeybind'
+                        ? 'Press keys...'
+                        : formatPushKeybindLabel(values.pushToTalkKeybind)}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-9 w-9 shrink-0 rounded-l-none"
+                      onClick={() => clearPushKeybind('pushToTalkKeybind')}
+                      disabled={!values.pushToTalkKeybind}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
 
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <Label className="sm:w-23">Push to mute</Label>
-                  <Button
-                    variant="outline"
-                    type="button"
-                    className="w-full justify-start font-mono sm:w-[90px]"
-                    data-push-keybind-capture={
-                      capturingKeybindField === 'pushToMuteKeybind'
-                        ? 'true'
-                        : undefined
-                    }
-                    onClick={() => startPushKeybindCapture('pushToMuteKeybind')}
-                  >
-                    {capturingKeybindField === 'pushToMuteKeybind'
-                      ? 'Press keys...'
-                      : formatPushKeybindLabel(values.pushToMuteKeybind)}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    className="h-9 w-9 shrink-0"
-                    onClick={() => clearPushKeybind('pushToMuteKeybind')}
-                    disabled={!values.pushToMuteKeybind}
-                  >
-                  <X className="h-3.5 w-3.5" />
-                  </Button>
+                <div className="flex items-center gap-3">
+                  <Label className="w-24 shrink-0 text-sm">Push to mute</Label>
+                  <div className="flex items-center">
+                    <Button
+                      variant="outline"
+                      type="button"
+                      className={`min-w-[140px] justify-start rounded-r-none border-r-0 font-mono text-xs${
+                        capturingKeybindField === 'pushToMuteKeybind'
+                          ? ' ring-2 ring-ring'
+                          : ''
+                      }`}
+                      data-push-keybind-capture={
+                        capturingKeybindField === 'pushToMuteKeybind'
+                          ? 'true'
+                          : undefined
+                      }
+                      onClick={() =>
+                        startPushKeybindCapture('pushToMuteKeybind')
+                      }
+                    >
+                      {capturingKeybindField === 'pushToMuteKeybind'
+                        ? 'Press keys...'
+                        : formatPushKeybindLabel(values.pushToMuteKeybind)}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-9 w-9 shrink-0 rounded-l-none"
+                      onClick={() => clearPushKeybind('pushToMuteKeybind')}
+                      disabled={!values.pushToMuteKeybind}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -413,7 +417,7 @@ const Devices = memo(() => {
             <Label>Input device</Label>
             <Select
               onValueChange={(value) => onChange('webcamId', value)}
-              value={values.webcamId}
+              value={selectedWebcamId}
             >
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select the input device" />

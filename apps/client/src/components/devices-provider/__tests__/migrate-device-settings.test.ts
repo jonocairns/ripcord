@@ -32,9 +32,17 @@ describe('migrateDeviceSettings', () => {
     expect(migrated.micQualityMode).toBe(MicQualityMode.AUTO);
   });
 
-  it('preserves explicit mic quality mode values', () => {
+  it('keeps explicit auto mic quality mode as auto', () => {
     const migrated = migrateDeviceSettings({
       micQualityMode: MicQualityMode.AUTO
+    });
+
+    expect(migrated.micQualityMode).toBe(MicQualityMode.AUTO);
+  });
+
+  it('normalizes experimental mic quality mode to auto', () => {
+    const migrated = migrateDeviceSettings({
+      micQualityMode: MicQualityMode.EXPERIMENTAL
     });
 
     expect(migrated.micQualityMode).toBe(MicQualityMode.AUTO);
