@@ -20,12 +20,8 @@ import {
   type TDesktopScreenShareSelection
 } from '@/runtime/types';
 import {
-  getStrengthDefaults,
-  MicQualityMode,
   VideoCodecPreference,
-  VoiceFilterStrength,
-  type TDeviceSettings,
-  type TRemoteStreams
+  type TDeviceSettings
 } from '@/types';
 import {
   ChannelPermission,
@@ -55,10 +51,7 @@ import {
 import { FloatingPinnedCard } from './floating-pinned-card';
 import { useLocalStreams } from './hooks/use-local-streams';
 import { usePendingStreams } from './hooks/use-pending-streams';
-import {
-  useRemoteStreams,
-  type TExternalStreamsMap
-} from './hooks/use-remote-streams';
+import { useRemoteStreams } from './hooks/use-remote-streams';
 import {
   useTransportStats,
   type TransportStatsData
@@ -66,17 +59,6 @@ import {
 import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
-import {
-  createMicAudioProcessingPipeline,
-  createNativeSidecarMicCapturePipeline,
-  nowSteadyEpochMs,
-  resolveSidecarDeviceId,
-  type TMicAudioProcessingPipeline
-} from './mic-audio-processing';
-import {
-  createMicReferenceAudioPipeline,
-  type TMicReferenceAudioPipeline
-} from './mic-reference-audio';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
 import type { TVolumeSettingsUpdatedDetail } from './volume-control-context';
 import {
@@ -119,18 +101,9 @@ const AUDIO_OPUS_CODEC_OPTIONS = {
 } as const;
 
 type ResolvedMicProcessingConfig = {
-  sidecarVoiceProcessingEnabled: boolean;
   browserAutoGainControl: boolean;
   browserNoiseSuppression: boolean;
   browserEchoCancellation: boolean;
-  sidecarNoiseSuppression: boolean;
-  sidecarAutoGainControl: boolean;
-  sidecarEchoCancellation: boolean;
-  sidecarSuppressionLevel: VoiceFilterStrength;
-  sidecarDfnMix: number;
-  sidecarDfnAttenuationLimitDb?: number;
-  sidecarExperimentalAggressiveMode: boolean;
-  sidecarNoiseGateFloorDbfs?: number;
 };
 
 const resolvePreferredVideoCodec = (
@@ -154,42 +127,12 @@ const resolvePreferredVideoCodec = (
 };
 
 const resolveMicProcessingConfig = (
-  devices: TDeviceSettings,
-  hasDesktopBridge: boolean
+  devices: TDeviceSettings
 ): ResolvedMicProcessingConfig => {
-  const defaults = getStrengthDefaults(devices.voiceFilterStrength);
-
-  if (devices.micQualityMode === MicQualityMode.EXPERIMENTAL) {
-    return {
-      sidecarVoiceProcessingEnabled: hasDesktopBridge,
-      browserAutoGainControl: false,
-      browserNoiseSuppression: false,
-      browserEchoCancellation: false,
-      sidecarNoiseSuppression: devices.noiseSuppression,
-      sidecarAutoGainControl: devices.autoGainControl,
-      sidecarEchoCancellation: devices.echoCancellation,
-      sidecarSuppressionLevel: devices.voiceFilterStrength,
-      sidecarDfnMix: defaults.dfnMix,
-      sidecarDfnAttenuationLimitDb: defaults.dfnAttenuationLimitDb,
-      sidecarExperimentalAggressiveMode: defaults.dfnExperimentalAggressiveMode,
-      sidecarNoiseGateFloorDbfs: defaults.dfnNoiseGateFloorDbfs
-    };
-  }
-
-  // Standard (AUTO) and legacy MANUAL — browser-only, no sidecar
   return {
-    sidecarVoiceProcessingEnabled: false,
     browserAutoGainControl: devices.autoGainControl,
     browserNoiseSuppression: devices.noiseSuppression,
-    browserEchoCancellation: devices.echoCancellation,
-    sidecarNoiseSuppression: devices.noiseSuppression,
-    sidecarAutoGainControl: devices.autoGainControl,
-    sidecarEchoCancellation: devices.echoCancellation,
-    sidecarSuppressionLevel: devices.voiceFilterStrength,
-    sidecarDfnMix: defaults.dfnMix,
-    sidecarDfnAttenuationLimitDb: defaults.dfnAttenuationLimitDb,
-    sidecarExperimentalAggressiveMode: defaults.dfnExperimentalAggressiveMode,
-    sidecarNoiseGateFloorDbfs: defaults.dfnNoiseGateFloorDbfs
+    browserEchoCancellation: devices.echoCancellation
   };
 };
 
@@ -202,15 +145,7 @@ const didMicCaptureSettingsChange = (
     previousDevices.micQualityMode !== nextDevices.micQualityMode ||
     previousDevices.echoCancellation !== nextDevices.echoCancellation ||
     previousDevices.noiseSuppression !== nextDevices.noiseSuppression ||
-    previousDevices.autoGainControl !== nextDevices.autoGainControl ||
-    previousDevices.voiceFilterStrength !== nextDevices.voiceFilterStrength ||
-    previousDevices.sidecarDfnMix !== nextDevices.sidecarDfnMix ||
-    previousDevices.sidecarDfnAttenuationLimitDb !==
-      nextDevices.sidecarDfnAttenuationLimitDb ||
-    previousDevices.sidecarExperimentalAggressiveMode !==
-      nextDevices.sidecarExperimentalAggressiveMode ||
-    previousDevices.sidecarNoiseGateFloorDbfs !==
-      nextDevices.sidecarNoiseGateFloorDbfs
+    previousDevices.autoGainControl !== nextDevices.autoGainControl
   );
 };
 
@@ -330,107 +265,6 @@ const createMicGainPipeline = async (
   };
 };
 
-const playbackCaptureStreamCache = new WeakMap<HTMLMediaElement, MediaStream>();
-
-const getPlaybackCaptureStream = (
-  element: HTMLMediaElement | null | undefined
-): MediaStream | undefined => {
-  if (!element) {
-    return undefined;
-  }
-
-  const cachedStream = playbackCaptureStreamCache.get(element);
-  if (cachedStream) {
-    return cachedStream;
-  }
-
-  const mediaElement = element as HTMLMediaElement & {
-    captureStream?: () => MediaStream;
-    mozCaptureStream?: () => MediaStream;
-  };
-  const captureStream =
-    mediaElement.captureStream ?? mediaElement.mozCaptureStream;
-
-  if (!captureStream) {
-    return undefined;
-  }
-
-  try {
-    const stream = captureStream.call(mediaElement);
-    playbackCaptureStreamCache.set(element, stream);
-    return stream;
-  } catch {
-    return undefined;
-  }
-};
-
-const collectPlaybackReferenceStreams = (
-  remoteUserStreams: TRemoteStreams,
-  externalStreams: TExternalStreamsMap,
-  audioVideoRefs: Map<number, AudioVideoRefs>,
-  playbackEnabled: boolean
-): MediaStream[] => {
-  if (!playbackEnabled) {
-    return [];
-  }
-
-  const streams: MediaStream[] = [];
-  const seenTrackIds = new Set<string>();
-  const addTrack = (track: MediaStreamTrack | undefined) => {
-    if (!track || track.kind !== 'audio' || track.readyState !== 'live') {
-      return;
-    }
-
-    if (seenTrackIds.has(track.id)) {
-      return;
-    }
-
-    seenTrackIds.add(track.id);
-    streams.push(new MediaStream([track]));
-  };
-
-  const addStream = (stream: MediaStream | undefined) => {
-    stream?.getAudioTracks().forEach((track) => {
-      addTrack(track);
-    });
-  };
-
-  const addCapturedAudio = (
-    element: HTMLMediaElement | null | undefined
-  ): boolean => {
-    const trackCountBefore = seenTrackIds.size;
-    addStream(getPlaybackCaptureStream(element));
-    return seenTrackIds.size > trackCountBefore;
-  };
-
-  Object.entries(remoteUserStreams).forEach(([remoteIdKey, userStreams]) => {
-    if (!userStreams) {
-      return;
-    }
-
-    const refs = audioVideoRefs.get(Number(remoteIdKey));
-    if (!addCapturedAudio(refs?.audioRef.current)) {
-      addStream(userStreams[StreamKind.AUDIO]);
-    }
-
-    if (
-      !addCapturedAudio(refs?.screenShareRef.current) &&
-      !addCapturedAudio(refs?.screenShareAudioRef.current)
-    ) {
-      addStream(userStreams[StreamKind.SCREEN_AUDIO]);
-    }
-  });
-
-  Object.entries(externalStreams).forEach(([remoteIdKey, streamState]) => {
-    const refs = audioVideoRefs.get(Number(remoteIdKey));
-    if (!addCapturedAudio(refs?.externalAudioRef.current)) {
-      addStream(streamState.audioStream);
-    }
-  });
-
-  return streams;
-};
-
 export type TVoiceProvider = {
   loading: boolean;
   connectionStatus: ConnectionStatus;
@@ -535,16 +369,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     number | ReturnType<typeof setTimeout> | undefined
   >(undefined);
   const rawMicStreamRef = useRef<MediaStream | undefined>(undefined);
-  const micAudioPipelineRef = useRef<TMicAudioProcessingPipeline | undefined>(
-    undefined
-  );
   const micGainPipelineRef = useRef<TMicGainPipeline | undefined>(undefined);
-  const micReferenceAudioPipelineRef = useRef<
-    TMicReferenceAudioPipeline | undefined
-  >(undefined);
-  const micReferenceSequenceRef = useRef(0);
-  const remoteUserStreamsRef = useRef<TRemoteStreams>({});
-  const externalStreamsRef = useRef<TExternalStreamsMap>({});
   const standbyDisplayAudioTrackRef = useRef<MediaStreamTrack | undefined>(
     undefined
   );
@@ -651,25 +476,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     resetStats
   } = useTransportStats();
 
-  useEffect(() => {
-    remoteUserStreamsRef.current = remoteUserStreams;
-    externalStreamsRef.current = externalStreams;
-
-    const referencePipeline = micReferenceAudioPipelineRef.current;
-    if (!referencePipeline) {
-      return;
-    }
-
-    referencePipeline.updateStreams(
-      collectPlaybackReferenceStreams(
-        remoteUserStreams,
-        externalStreams,
-        audioVideoRefsMap.current,
-        !ownVoiceState.soundMuted
-      )
-    );
-  }, [externalStreams, remoteUserStreams, ownVoiceState.soundMuted]);
-
   const applyMicGainVolume = useCallback((volume: number) => {
     const micGainPipeline = micGainPipelineRef.current;
 
@@ -708,27 +514,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     };
   }, [applyMicGainVolume]);
 
-  const cleanupMicReferenceAudioPipeline = useCallback(async () => {
-    const referencePipeline = micReferenceAudioPipelineRef.current;
-    micReferenceAudioPipelineRef.current = undefined;
-    micReferenceSequenceRef.current = 0;
-
-    if (!referencePipeline) {
-      return;
-    }
-
-    try {
-      await referencePipeline.destroy();
-    } catch (error) {
-      logVoice('Failed to clean up microphone reference audio pipeline', {
-        error
-      });
-    }
-  }, []);
-
   const cleanupMicAudioPipeline = useCallback(async () => {
-    await cleanupMicReferenceAudioPipeline();
-
     const currentAudioProducer = localAudioProducer.current;
     localAudioProducer.current = undefined;
     currentAudioProducer?.close();
@@ -754,173 +540,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     rawMicStream?.getTracks().forEach((track) => {
       track.stop();
     });
-
-    const pipeline = micAudioPipelineRef.current;
-    micAudioPipelineRef.current = undefined;
-
-    if (pipeline) {
-      try {
-        await pipeline.destroy();
-      } catch (error) {
-        logVoice('Failed to clean up microphone processing pipeline', {
-          error
-        });
-      }
-    }
-  }, [cleanupMicReferenceAudioPipeline]);
+  }, [localAudioProducer]);
 
   const startMicStream = useCallback(async () => {
     try {
       logVoice('Starting microphone stream');
 
       await cleanupMicAudioPipeline();
-      const desktopBridge = getDesktopBridge();
-
-      const micProcessingConfig = resolveMicProcessingConfig(
-        devices,
-        Boolean(desktopBridge)
-      );
-
-      // Resolve sidecar device ID best-effort before acquiring getUserMedia
-      let sidecarDeviceId: string | undefined;
-      if (micProcessingConfig.sidecarVoiceProcessingEnabled && desktopBridge) {
-        sidecarDeviceId = await resolveSidecarDeviceId(
-          devices.microphoneId,
-          desktopBridge
-        );
-      }
-
-      // Try native sidecar capture first (no getUserMedia needed)
-      if (micProcessingConfig.sidecarVoiceProcessingEnabled && desktopBridge) {
-        try {
-          const nativePipeline = await createNativeSidecarMicCapturePipeline({
-            suppressionLevel: micProcessingConfig.sidecarSuppressionLevel,
-            noiseSuppression: micProcessingConfig.sidecarNoiseSuppression,
-            autoGainControl: micProcessingConfig.sidecarAutoGainControl,
-            echoCancellation: micProcessingConfig.sidecarEchoCancellation,
-            dfnMix: micProcessingConfig.sidecarDfnMix,
-            dfnAttenuationLimitDb:
-              micProcessingConfig.sidecarDfnAttenuationLimitDb,
-            dfnExperimentalAggressiveMode:
-              micProcessingConfig.sidecarExperimentalAggressiveMode,
-            dfnNoiseGateFloorDbfs:
-              micProcessingConfig.sidecarNoiseGateFloorDbfs,
-            sidecarDeviceId,
-            desktopBridge
-          });
-
-          if (nativePipeline) {
-            micAudioPipelineRef.current = nativePipeline;
-            let outboundStream = nativePipeline.stream;
-            let outboundAudioTrack = nativePipeline.track;
-            const activeVoiceFilterSessionId = nativePipeline.sessionId;
-
-            logVoice('Microphone native capture enabled', {
-              backend: nativePipeline.backend,
-              suppressionLevel: micProcessingConfig.sidecarSuppressionLevel
-            });
-
-            if (
-              micProcessingConfig.sidecarEchoCancellation &&
-              activeVoiceFilterSessionId
-            ) {
-              const referencePipeline = await createMicReferenceAudioPipeline({
-                sampleRate: nativePipeline.sampleRate,
-                channels: nativePipeline.channels,
-                targetFrameSize: nativePipeline.framesPerBuffer,
-                onFrame: (samples, frameCount) => {
-                  desktopBridge.pushVoiceFilterReferencePcmFrame({
-                    sessionId: activeVoiceFilterSessionId,
-                    sequence: micReferenceSequenceRef.current,
-                    sampleRate: nativePipeline.sampleRate,
-                    channels: nativePipeline.channels,
-                    frameCount,
-                    timestampMs: nowSteadyEpochMs(),
-                    pcm: samples,
-                    protocolVersion: 1
-                  });
-                  micReferenceSequenceRef.current += 1;
-                }
-              });
-
-              if (referencePipeline) {
-                micReferenceAudioPipelineRef.current = referencePipeline;
-                referencePipeline.updateStreams(
-                  collectPlaybackReferenceStreams(
-                    remoteUserStreamsRef.current,
-                    externalStreamsRef.current,
-                    audioVideoRefsMap.current,
-                    !ownVoiceState.soundMuted
-                  )
-                );
-              }
-            }
-
-            const micGainPipeline = await createMicGainPipeline(
-              outboundStream,
-              getStoredVolume(OWN_MIC_VOLUME_KEY)
-            );
-
-            if (micGainPipeline) {
-              micGainPipelineRef.current = micGainPipeline;
-              outboundStream = micGainPipeline.stream;
-              outboundAudioTrack = micGainPipeline.track;
-            }
-
-            setLocalAudioStream(outboundStream);
-            outboundAudioTrack.enabled = !ownVoiceState.micMuted;
-
-            logVoice('Obtained audio track (native capture)', {
-              audioTrack: outboundAudioTrack
-            });
-
-            const audioProducer = await producerTransport.current?.produce({
-              track: outboundAudioTrack,
-              encodings: [{ maxBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS }],
-              codecOptions: AUDIO_OPUS_CODEC_OPTIONS,
-              appData: { kind: StreamKind.AUDIO }
-            });
-            localAudioProducer.current = audioProducer;
-
-            logVoice('Microphone audio producer created (native capture)', {
-              producer: audioProducer
-            });
-
-            audioProducer?.on('@close', async () => {
-              logVoice('Audio producer closed');
-              if (localAudioProducer.current === audioProducer) {
-                localAudioProducer.current = undefined;
-              }
-              const trpc = getTRPCClient();
-              try {
-                await trpc.voice.closeProducer.mutate({
-                  kind: StreamKind.AUDIO
-                });
-              } catch (error) {
-                logVoice('Error closing audio producer', { error });
-              }
-            });
-
-            outboundAudioTrack.onended = () => {
-              logVoice('Audio track ended, cleaning up microphone');
-              void cleanupMicAudioPipeline();
-              audioProducer?.close();
-              setLocalAudioStream((currentStream) => {
-                return currentStream === outboundStream
-                  ? undefined
-                  : currentStream;
-              });
-            };
-
-            return;
-          }
-        } catch (nativeError) {
-          logVoice(
-            'Native sidecar mic-capture failed, falling back to getUserMedia',
-            { nativeError }
-          );
-        }
-      }
+      const micProcessingConfig = resolveMicProcessingConfig(devices);
 
       const micConstraints = {
         deviceId: {
@@ -946,127 +573,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       if (rawAudioTrack) {
         let outboundStream = stream;
         let outboundAudioTrack = rawAudioTrack;
-        let activeVoiceFilterSessionId: string | undefined;
-        try {
-          const micAudioPipeline = await createMicAudioProcessingPipeline({
-            inputTrack: rawAudioTrack,
-            enabled: micProcessingConfig.sidecarVoiceProcessingEnabled,
-            suppressionLevel: micProcessingConfig.sidecarSuppressionLevel,
-            noiseSuppression: micProcessingConfig.sidecarNoiseSuppression,
-            autoGainControl: micProcessingConfig.sidecarAutoGainControl,
-            echoCancellation: micProcessingConfig.sidecarEchoCancellation,
-            dfnMix: micProcessingConfig.sidecarDfnMix,
-            dfnAttenuationLimitDb:
-              micProcessingConfig.sidecarDfnAttenuationLimitDb,
-            dfnExperimentalAggressiveMode:
-              micProcessingConfig.sidecarExperimentalAggressiveMode,
-            dfnNoiseGateFloorDbfs: micProcessingConfig.sidecarNoiseGateFloorDbfs
-          });
-
-          if (micAudioPipeline) {
-            micAudioPipelineRef.current = micAudioPipeline;
-            outboundStream = micAudioPipeline.stream;
-            outboundAudioTrack = micAudioPipeline.track;
-            activeVoiceFilterSessionId = micAudioPipeline.sessionId;
-            logVoice('Microphone voice filter enabled', {
-              backend: micAudioPipeline.backend,
-              suppressionLevel: micProcessingConfig.sidecarSuppressionLevel
-            });
-
-            if (
-              micProcessingConfig.sidecarEchoCancellation &&
-              desktopBridge &&
-              activeVoiceFilterSessionId
-            ) {
-              const referencePipeline = await createMicReferenceAudioPipeline({
-                sampleRate: micAudioPipeline.sampleRate,
-                channels: micAudioPipeline.channels,
-                targetFrameSize: micAudioPipeline.framesPerBuffer,
-                onFrame: (samples, frameCount) => {
-                  desktopBridge.pushVoiceFilterReferencePcmFrame({
-                    sessionId: activeVoiceFilterSessionId!,
-                    sequence: micReferenceSequenceRef.current,
-                    sampleRate: micAudioPipeline.sampleRate,
-                    channels: micAudioPipeline.channels,
-                    frameCount,
-                    timestampMs: nowSteadyEpochMs(),
-                    pcm: samples,
-                    protocolVersion: 1
-                  });
-                  micReferenceSequenceRef.current += 1;
-                }
-              });
-
-              if (referencePipeline) {
-                micReferenceAudioPipelineRef.current = referencePipeline;
-                referencePipeline.updateStreams(
-                  collectPlaybackReferenceStreams(
-                    remoteUserStreamsRef.current,
-                    externalStreamsRef.current,
-                    audioVideoRefsMap.current,
-                    !ownVoiceState.soundMuted
-                  )
-                );
-                logVoice('Voice filter playback reference pipeline enabled', {
-                  sessionId: activeVoiceFilterSessionId,
-                  channels: micAudioPipeline.channels,
-                  sampleRate: micAudioPipeline.sampleRate
-                });
-              } else {
-                logVoice(
-                  'Playback reference pipeline unavailable; sidecar AEC inactive'
-                );
-              }
-            }
-          } else {
-            micAudioPipelineRef.current = undefined;
-            await cleanupMicReferenceAudioPipeline();
-          }
-        } catch (error) {
-          micAudioPipelineRef.current = undefined;
-          await cleanupMicReferenceAudioPipeline();
-          logVoice(
-            'Failed to initialize microphone voice filter, using raw mic',
-            {
-              error
-            }
-          );
-
-          if (
-            micProcessingConfig.sidecarVoiceProcessingEnabled &&
-            (micProcessingConfig.sidecarAutoGainControl ||
-              micProcessingConfig.sidecarNoiseSuppression)
-          ) {
-            try {
-              const fallbackStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                  ...micConstraints,
-                  autoGainControl: micProcessingConfig.sidecarAutoGainControl,
-                  noiseSuppression: micProcessingConfig.sidecarNoiseSuppression
-                },
-                video: false
-              });
-              stream.getTracks().forEach((track) => {
-                track.stop();
-              });
-              rawMicStreamRef.current = fallbackStream;
-
-              const fallbackTrack = fallbackStream.getAudioTracks()[0];
-              if (fallbackTrack) {
-                outboundStream = fallbackStream;
-                outboundAudioTrack = fallbackTrack;
-                logVoice(
-                  'Restored browser microphone processing after sidecar initialization failure'
-                );
-              }
-            } catch (fallbackError) {
-              logVoice(
-                'Failed to restore browser microphone processing after sidecar failure',
-                { fallbackError }
-              );
-            }
-          }
-        }
 
         const micGainPipeline = await createMicGainPipeline(
           outboundStream,
@@ -1134,13 +640,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     }
   }, [
     cleanupMicAudioPipeline,
-    cleanupMicReferenceAudioPipeline,
     producerTransport,
     setLocalAudioStream,
     localAudioProducer,
     devices,
-    ownVoiceState.micMuted,
-    ownVoiceState.soundMuted
+    ownVoiceState.micMuted
   ]);
 
   const startWebcamStream = useCallback(async () => {
@@ -1248,7 +752,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     setLocalVideoStream,
     localVideoProducer,
     producerTransport,
-    localVideoStream,
     devices.webcamId,
     devices.webcamFramerate,
     devices.webcamResolution,

@@ -1,23 +1,12 @@
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import {
-  createNativeSidecarMicCapturePipeline,
-  resolveSidecarDeviceId,
-  type TMicAudioProcessingPipeline
-} from '@/components/voice-provider/mic-audio-processing';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
 import { getTRPCClient } from '@/lib/trpc';
-import { getDesktopBridge } from '@/runtime/desktop-bridge';
-import {
-  MicQualityMode,
-  VoiceFilterStrength,
-  getStrengthDefaults
-} from '@/types';
-import { Circle, Mic, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Circle, Mic, X } from 'lucide-react';
 
 const ANALYSER_FFT_SIZE = 512;
 const ANALYSER_SMOOTHING = 0.8;
@@ -33,92 +22,38 @@ const PREFERRED_RECORDING_MIME_TYPES = [
 
 type TMicrophoneTestPanelProps = {
   microphoneId: string | undefined;
-  micQualityMode: MicQualityMode;
-  voiceFilterStrength: VoiceFilterStrength;
-  echoCancellation: boolean;
   noiseSuppression: boolean;
   autoGainControl: boolean;
-  hasDesktopBridge: boolean;
 };
 
 type TResolvedMicTestProcessingConfig = {
-  sidecarVoiceProcessingEnabled: boolean;
   browserAutoGainControl: boolean;
   browserNoiseSuppression: boolean;
   browserEchoCancellation: boolean;
-  sidecarNoiseSuppression: boolean;
-  sidecarAutoGainControl: boolean;
-  sidecarEchoCancellation: boolean;
-  sidecarSuppressionLevel: VoiceFilterStrength;
-  sidecarDfnMix: number;
-  sidecarDfnAttenuationLimitDb?: number;
-  sidecarExperimentalAggressiveMode: boolean;
-  sidecarNoiseGateFloorDbfs?: number;
 };
 
 const resolveMicTestProcessingConfig = ({
-  micQualityMode,
-  hasDesktopBridge,
-  voiceFilterStrength,
-  echoCancellation,
   noiseSuppression,
   autoGainControl
 }: {
-  micQualityMode: MicQualityMode;
-  hasDesktopBridge: boolean;
-  voiceFilterStrength: VoiceFilterStrength;
-  echoCancellation: boolean;
   noiseSuppression: boolean;
   autoGainControl: boolean;
 }): TResolvedMicTestProcessingConfig => {
-  const defaults = getStrengthDefaults(voiceFilterStrength);
-
-  if (micQualityMode === MicQualityMode.EXPERIMENTAL) {
-    return {
-      sidecarVoiceProcessingEnabled: hasDesktopBridge,
-      browserAutoGainControl: false,
-      browserNoiseSuppression: false,
-      browserEchoCancellation: false,
-      sidecarNoiseSuppression: noiseSuppression,
-      sidecarAutoGainControl: autoGainControl,
-      sidecarEchoCancellation: echoCancellation,
-      sidecarSuppressionLevel: voiceFilterStrength,
-      sidecarDfnMix: defaults.dfnMix,
-      sidecarDfnAttenuationLimitDb: defaults.dfnAttenuationLimitDb,
-      sidecarExperimentalAggressiveMode: defaults.dfnExperimentalAggressiveMode,
-      sidecarNoiseGateFloorDbfs: defaults.dfnNoiseGateFloorDbfs
-    };
-  }
-
-  // Standard (AUTO) and legacy MANUAL — browser-only, no sidecar.
   // Echo cancellation is forced off for the test: the monitor plays your mic
   // back through speakers, which the browser AEC would treat as echo and cancel,
   // making the playback sound broken.
   return {
-    sidecarVoiceProcessingEnabled: false,
     browserAutoGainControl: autoGainControl,
     browserNoiseSuppression: noiseSuppression,
-    browserEchoCancellation: false,
-    sidecarNoiseSuppression: noiseSuppression,
-    sidecarAutoGainControl: autoGainControl,
-    sidecarEchoCancellation: false,
-    sidecarSuppressionLevel: voiceFilterStrength,
-    sidecarDfnMix: defaults.dfnMix,
-    sidecarDfnAttenuationLimitDb: defaults.dfnAttenuationLimitDb,
-    sidecarExperimentalAggressiveMode: defaults.dfnExperimentalAggressiveMode,
-    sidecarNoiseGateFloorDbfs: defaults.dfnNoiseGateFloorDbfs
+    browserEchoCancellation: false
   };
 };
 
 const MicrophoneTestPanel = memo(
   ({
     microphoneId,
-    micQualityMode,
-    voiceFilterStrength,
-    echoCancellation,
     noiseSuppression,
-    autoGainControl,
-    hasDesktopBridge
+    autoGainControl
   }: TMicrophoneTestPanelProps) => {
     const currentVoiceChannelId = useCurrentVoiceChannelId();
     const { localAudioStream } = useVoice();
@@ -130,7 +65,6 @@ const MicrophoneTestPanel = memo(
       undefined
     );
     const [isRecordingClip, setIsRecordingClip] = useState(false);
-    const [testUsesSidecar, setTestUsesSidecar] = useState(false);
     const [testUsesInCallStream, setTestUsesInCallStream] = useState(false);
     const [recordingError, setRecordingError] = useState<string | undefined>(
       undefined
@@ -145,9 +79,6 @@ const MicrophoneTestPanel = memo(
     const monitorGainNodeRef = useRef<GainNode | undefined>(undefined);
     const animationFrameRef = useRef<number | undefined>(undefined);
     const runVersionRef = useRef(0);
-    const micAudioPipelineRef = useRef<TMicAudioProcessingPipeline | undefined>(
-      undefined
-    );
     const mediaRecorderRef = useRef<MediaRecorder | undefined>(undefined);
     const recordingTimeoutRef = useRef<number | undefined>(undefined);
     const recordingChunksRef = useRef<BlobPart[]>([]);
@@ -162,21 +93,10 @@ const MicrophoneTestPanel = memo(
     const soundMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
     const resolvedMicProcessingConfig = useMemo(() => {
       return resolveMicTestProcessingConfig({
-        micQualityMode,
-        hasDesktopBridge,
-        voiceFilterStrength,
-        echoCancellation,
         noiseSuppression,
         autoGainControl
       });
-    }, [
-      autoGainControl,
-      echoCancellation,
-      hasDesktopBridge,
-      micQualityMode,
-      noiseSuppression,
-      voiceFilterStrength
-    ]);
+    }, [autoGainControl, noiseSuppression]);
     const canRecordClip =
       typeof window !== 'undefined' &&
       typeof window.MediaRecorder !== 'undefined';
@@ -351,15 +271,6 @@ const MicrophoneTestPanel = memo(
       analyserRef.current = undefined;
       monitorGainNodeRef.current = undefined;
 
-      const micAudioPipeline = micAudioPipelineRef.current;
-      micAudioPipelineRef.current = undefined;
-
-      if (micAudioPipeline) {
-        await micAudioPipeline.destroy().catch(() => {
-          // ignore cleanup failures
-        });
-      }
-
       const audioContext = audioContextRef.current;
       audioContextRef.current = undefined;
 
@@ -370,7 +281,6 @@ const MicrophoneTestPanel = memo(
       }
 
       setIsTestingMic(false);
-      setTestUsesSidecar(false);
       setTestUsesInCallStream(false);
       if (levelBarRef.current) {
         levelBarRef.current.style.width = '0%';
@@ -399,64 +309,21 @@ const MicrophoneTestPanel = memo(
         const inVoiceChannel = currentVoiceChannelId !== undefined;
         let rawStream: MediaStream | undefined;
         let outputStream = localAudioStream;
-        let sidecarPipeline: TMicAudioProcessingPipeline | undefined;
         let usesInCallStream = false;
 
         if (inVoiceChannel && outputStream) {
           usesInCallStream = true;
         } else {
-          if (
-            resolvedMicProcessingConfig.sidecarVoiceProcessingEnabled &&
-            !inVoiceChannel
-          ) {
-            // Sidecar mode — fail hard so the test reflects the real processing path.
-            const desktopBridge = getDesktopBridge();
-            if (!desktopBridge) {
-              throw new Error(
-                'Desktop bridge unavailable for sidecar microphone test.'
-              );
-            }
-            const sidecarDeviceId = await resolveSidecarDeviceId(
-              microphoneId,
-              desktopBridge
-            );
-            sidecarPipeline = await createNativeSidecarMicCapturePipeline({
-              suppressionLevel:
-                resolvedMicProcessingConfig.sidecarSuppressionLevel,
-              noiseSuppression:
-                resolvedMicProcessingConfig.sidecarNoiseSuppression,
-              autoGainControl:
-                resolvedMicProcessingConfig.sidecarAutoGainControl,
-              echoCancellation:
-                resolvedMicProcessingConfig.sidecarEchoCancellation,
-              dfnMix: resolvedMicProcessingConfig.sidecarDfnMix,
-              dfnAttenuationLimitDb:
-                resolvedMicProcessingConfig.sidecarDfnAttenuationLimitDb,
-              dfnExperimentalAggressiveMode:
-                resolvedMicProcessingConfig.sidecarExperimentalAggressiveMode,
-              dfnNoiseGateFloorDbfs:
-                resolvedMicProcessingConfig.sidecarNoiseGateFloorDbfs,
-              sidecarDeviceId,
-              desktopBridge
-            });
-            if (!sidecarPipeline) {
-              throw new Error(
-                'Failed to start native sidecar microphone capture.'
-              );
-            }
-            outputStream = sidecarPipeline.stream;
-          } else {
-            rawStream = await navigator.mediaDevices.getUserMedia({
-              audio: resolveMicAudioConstraints()
-            });
-            const rawTrack = rawStream.getAudioTracks()[0];
+          rawStream = await navigator.mediaDevices.getUserMedia({
+            audio: resolveMicAudioConstraints()
+          });
+          const rawTrack = rawStream.getAudioTracks()[0];
 
-            if (!rawTrack) {
-              throw new Error('Unable to access microphone track for testing.');
-            }
-
-            outputStream = rawStream;
+          if (!rawTrack) {
+            throw new Error('Unable to access microphone track for testing.');
           }
+
+          outputStream = rawStream;
         }
 
         if (!outputStream) {
@@ -485,9 +352,6 @@ const MicrophoneTestPanel = memo(
         if (runVersionRef.current !== runVersion) {
           rawStream?.getTracks().forEach((track) => {
             track.stop();
-          });
-          await sidecarPipeline?.destroy().catch(() => {
-            // ignore stale cleanup failures
           });
           await audioContext.close().catch(() => {
             // ignore stale cleanup failures
@@ -527,10 +391,8 @@ const MicrophoneTestPanel = memo(
         audioContextRef.current = audioContext;
         analyserRef.current = analyser;
         monitorGainNodeRef.current = monitorGainNode;
-        micAudioPipelineRef.current = sidecarPipeline;
 
         setIsTestingMic(true);
-        setTestUsesSidecar(Boolean(sidecarPipeline));
         setTestUsesInCallStream(usesInCallStream);
         setMicTestError(undefined);
         updateInputLevel();
@@ -544,11 +406,9 @@ const MicrophoneTestPanel = memo(
       }
     }, [
       maybeMuteForTest,
-      microphoneId,
       monitorEnabled,
       localAudioStream,
       currentVoiceChannelId,
-      resolvedMicProcessingConfig,
       resolveMicAudioConstraints,
       stopTest
     ]);
@@ -781,11 +641,7 @@ const MicrophoneTestPanel = memo(
             <p className="text-xs text-muted-foreground">Input level</p>
             {isTestingMic && (
               <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                {testUsesInCallStream
-                  ? 'In-call stream'
-                  : testUsesSidecar
-                    ? 'Enhanced processing'
-                    : 'Standard capture'}
+                {testUsesInCallStream ? 'In-call stream' : 'Local test capture'}
               </span>
             )}
           </div>

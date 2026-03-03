@@ -12,11 +12,6 @@ import type {
   TMicDevicesResult,
   TScreenShareSelection,
   TStartAppAudioCaptureInput,
-  TStartVoiceFilterInput,
-  TStartVoiceFilterWithCaptureInput,
-  TVoiceFilterPcmFrame,
-  TVoiceFilterSession,
-  TVoiceFilterStatusEvent,
 } from "../main/types";
 
 const APP_AUDIO_CHANNEL_INIT_TIMEOUT_MS = 3_000;
@@ -24,8 +19,6 @@ const APP_AUDIO_CHANNEL_RECONNECT_BASE_DELAY_MS = 250;
 const APP_AUDIO_CHANNEL_RECONNECT_MAX_DELAY_MS = 2_000;
 const APP_AUDIO_CHANNEL_WATCHDOG_INTERVAL_MS = 2_000;
 const APP_AUDIO_CHANNEL_STALL_TIMEOUT_MS = 8_000;
-const VOICE_FILTER_CHANNEL_INIT_TIMEOUT_MS = 3_000;
-const VOICE_FILTER_DEBUG_LOG_PREFIX = "[voice-filter-debug]";
 const appAudioFrameSubscribers = new Set<
   (frame: TAppAudioFrame | TAppAudioPcmFrame) => void
 >();
@@ -38,13 +31,6 @@ let appAudioFrameReconnectAttempts = 0;
 let appAudioFrameWatchdogTimer: number | undefined;
 let appAudioHasReceivedFrameSinceCaptureStart = false;
 let appAudioLastFrameAt = 0;
-let voiceFilterFramePort: MessagePort | undefined;
-let voiceFilterFramePortPromise: Promise<boolean> | undefined;
-let voiceFilterEgressFramePort: MessagePort | undefined;
-let voiceFilterEgressFramePortPromise: Promise<boolean> | undefined;
-const voiceFilterEgressFrameSubscribers = new Set<
-  (frame: TVoiceFilterPcmFrame) => void
->();
 
 const dispatchAppAudioFrame = (frame: TAppAudioFrame | TAppAudioPcmFrame) => {
   appAudioHasReceivedFrameSinceCaptureStart = true;
@@ -374,270 +360,6 @@ const ensureAppAudioFrameChannel = (): Promise<boolean> => {
   return appAudioFramePortPromise;
 };
 
-const ensureVoiceFilterFrameChannel = (): Promise<boolean> => {
-  if (voiceFilterFramePort) {
-    return Promise.resolve(true);
-  }
-
-  if (voiceFilterFramePortPromise) {
-    return voiceFilterFramePortPromise;
-  }
-
-  voiceFilterFramePortPromise = new Promise<boolean>((resolve) => {
-    let settled = false;
-    const onPortReady = (event: unknown) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      window.clearTimeout(timeout);
-
-      const port = (event as { ports?: MessagePort[] }).ports?.[0];
-      if (!port) {
-        voiceFilterFramePortPromise = undefined;
-        resolve(false);
-        return;
-      }
-
-      voiceFilterFramePort = port;
-      voiceFilterFramePort.onmessageerror = () => {
-        console.warn(
-          `${VOICE_FILTER_DEBUG_LOG_PREFIX} Voice-filter MessagePort message error; resetting channel`,
-        );
-        voiceFilterFramePort = undefined;
-      };
-
-      try {
-        voiceFilterFramePort.start();
-      } catch {
-        // ignore unsupported start() implementations
-      }
-
-      console.warn(
-        `${VOICE_FILTER_DEBUG_LOG_PREFIX} Voice-filter MessagePort ready`,
-      );
-
-      voiceFilterFramePortPromise = undefined;
-      resolve(true);
-    };
-
-    const timeout = window.setTimeout(() => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      ipcRenderer.removeListener(
-        "desktop:voice-filter-frame-channel-ready",
-        onPortReady,
-      );
-      voiceFilterFramePortPromise = undefined;
-      console.warn(
-        `${VOICE_FILTER_DEBUG_LOG_PREFIX} Timed out waiting for voice-filter MessagePort`,
-      );
-      resolve(false);
-    }, VOICE_FILTER_CHANNEL_INIT_TIMEOUT_MS);
-    ipcRenderer.once("desktop:voice-filter-frame-channel-ready", onPortReady);
-
-    ipcRenderer.send("desktop:open-voice-filter-frame-channel");
-  });
-
-  return voiceFilterFramePortPromise;
-};
-
-const ensureVoiceFilterEgressFrameChannel = (): Promise<boolean> => {
-  if (voiceFilterEgressFramePort) {
-    return Promise.resolve(true);
-  }
-
-  if (voiceFilterEgressFramePortPromise) {
-    return voiceFilterEgressFramePortPromise;
-  }
-
-  voiceFilterEgressFramePortPromise = new Promise<boolean>((resolve) => {
-    let settled = false;
-
-    const onPortReady = (event: unknown) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      window.clearTimeout(timeout);
-
-      const port = (event as { ports?: MessagePort[] }).ports?.[0];
-      if (!port) {
-        voiceFilterEgressFramePortPromise = undefined;
-        resolve(false);
-        return;
-      }
-
-      voiceFilterEgressFramePort = port;
-      voiceFilterEgressFramePort.onmessage = (portEvent) => {
-        const data = portEvent.data as
-          | {
-              sessionId?: unknown;
-              sequence?: unknown;
-              sampleRate?: unknown;
-              channels?: unknown;
-              frameCount?: unknown;
-              protocolVersion?: unknown;
-              droppedFrameCount?: unknown;
-              rampWetMix?: unknown;
-              lsnrMean?: unknown;
-              lsnrMin?: unknown;
-              lsnrMax?: unknown;
-              aecErleDb?: unknown;
-              aecDelayMs?: unknown;
-              aecDoubleTalkConfidence?: unknown;
-              agcGain?: unknown;
-              pcmBuffer?: unknown;
-              pcmByteOffset?: unknown;
-              pcmByteLength?: unknown;
-            }
-          | undefined;
-
-        if (!data || typeof data !== "object") {
-          return;
-        }
-
-        const {
-          sessionId,
-          sequence,
-          sampleRate,
-          channels,
-          frameCount,
-          protocolVersion,
-          droppedFrameCount,
-          rampWetMix,
-          lsnrMean,
-          lsnrMin,
-          lsnrMax,
-          aecErleDb,
-          aecDelayMs,
-          aecDoubleTalkConfidence,
-          agcGain,
-          pcmBuffer,
-          pcmByteOffset,
-          pcmByteLength,
-        } = data;
-
-        if (
-          typeof sessionId !== "string" ||
-          typeof sequence !== "number" ||
-          typeof sampleRate !== "number" ||
-          typeof channels !== "number" ||
-          typeof frameCount !== "number" ||
-          typeof protocolVersion !== "number" ||
-          !(pcmBuffer instanceof ArrayBuffer)
-        ) {
-          return;
-        }
-
-        const byteOffset =
-          typeof pcmByteOffset === "number" && Number.isInteger(pcmByteOffset)
-            ? pcmByteOffset
-            : 0;
-        const byteLength =
-          typeof pcmByteLength === "number" && Number.isInteger(pcmByteLength)
-            ? pcmByteLength
-            : pcmBuffer.byteLength;
-
-        if (
-          byteOffset < 0 ||
-          byteLength <= 0 ||
-          byteOffset + byteLength > pcmBuffer.byteLength ||
-          byteLength % Float32Array.BYTES_PER_ELEMENT !== 0
-        ) {
-          return;
-        }
-
-        const frame: TVoiceFilterPcmFrame = {
-          sessionId,
-          sequence,
-          sampleRate,
-          channels,
-          frameCount,
-          protocolVersion,
-          droppedFrameCount:
-            typeof droppedFrameCount === "number"
-              ? droppedFrameCount
-              : undefined,
-          pcm: new Float32Array(
-            pcmBuffer,
-            byteOffset,
-            byteLength / Float32Array.BYTES_PER_ELEMENT,
-          ),
-          diag:
-            typeof rampWetMix === "number"
-              ? {
-                  rampWetMix,
-                  lsnrMean: typeof lsnrMean === "number" ? lsnrMean : undefined,
-                  lsnrMin: typeof lsnrMin === "number" ? lsnrMin : undefined,
-                  lsnrMax: typeof lsnrMax === "number" ? lsnrMax : undefined,
-                  aecErleDb:
-                    typeof aecErleDb === "number" ? aecErleDb : undefined,
-                  aecDelayMs:
-                    typeof aecDelayMs === "number" ? aecDelayMs : undefined,
-                  aecDoubleTalkConfidence:
-                    typeof aecDoubleTalkConfidence === "number"
-                      ? aecDoubleTalkConfidence
-                      : undefined,
-                  agcGain: typeof agcGain === "number" ? agcGain : undefined,
-                }
-              : undefined,
-        };
-
-        for (const cb of voiceFilterEgressFrameSubscribers) {
-          cb(frame);
-        }
-      };
-      voiceFilterEgressFramePort.onmessageerror = () => {
-        voiceFilterEgressFramePort = undefined;
-      };
-
-      try {
-        voiceFilterEgressFramePort.start();
-      } catch {
-        // ignore
-      }
-
-      console.log(
-        `${VOICE_FILTER_DEBUG_LOG_PREFIX} Voice-filter egress MessagePort ready`,
-      );
-
-      voiceFilterEgressFramePortPromise = undefined;
-      resolve(true);
-    };
-
-    const timeout = window.setTimeout(() => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      ipcRenderer.removeListener(
-        "desktop:voice-filter-frame-egress-channel-ready",
-        onPortReady,
-      );
-      voiceFilterEgressFramePortPromise = undefined;
-      console.warn(
-        `${VOICE_FILTER_DEBUG_LOG_PREFIX} Timed out waiting for voice-filter egress MessagePort`,
-      );
-      resolve(false);
-    }, VOICE_FILTER_CHANNEL_INIT_TIMEOUT_MS);
-
-    ipcRenderer.once(
-      "desktop:voice-filter-frame-egress-channel-ready",
-      onPortReady,
-    );
-    ipcRenderer.send("desktop:open-voice-filter-frame-egress-channel");
-  });
-
-  return voiceFilterEgressFramePortPromise;
-};
-
 const desktopBridge = {
   getServerUrl: (): Promise<string> =>
     ipcRenderer.invoke("desktop:get-server-url"),
@@ -679,82 +401,10 @@ const desktopBridge = {
       }),
   listMicDevices: (): Promise<TMicDevicesResult> =>
     ipcRenderer.invoke("desktop:list-mic-devices"),
-  startVoiceFilterSessionWithCapture: (
-    input: TStartVoiceFilterWithCaptureInput,
-  ): Promise<TVoiceFilterSession> =>
-    ipcRenderer.invoke("desktop:start-voice-filter-with-capture", input),
-  startVoiceFilterSession: (
-    input: TStartVoiceFilterInput,
-  ): Promise<TVoiceFilterSession> =>
-    ipcRenderer.invoke("desktop:start-voice-filter-session", input),
-  stopVoiceFilterSession: (sessionId?: string): Promise<void> =>
-    ipcRenderer.invoke("desktop:stop-voice-filter-session", sessionId),
-  ensureVoiceFilterFrameChannel: (): Promise<boolean> =>
-    ensureVoiceFilterFrameChannel(),
   setGlobalPushKeybinds: (
     input: TDesktopPushKeybindsInput,
   ): Promise<TGlobalPushKeybindRegistrationResult> =>
     ipcRenderer.invoke("desktop:set-global-push-keybinds", input),
-  pushVoiceFilterPcmFrame: (frame: TVoiceFilterPcmFrame): void => {
-    if (!voiceFilterFramePort) {
-      void ensureVoiceFilterFrameChannel();
-      return;
-    }
-
-    const { pcm } = frame;
-    try {
-      const pcmCopy = new Float32Array(pcm.length);
-      pcmCopy.set(pcm);
-
-      voiceFilterFramePort.postMessage({
-        frameKind: "mic",
-        sessionId: frame.sessionId,
-        sequence: frame.sequence,
-        sampleRate: frame.sampleRate,
-        channels: frame.channels,
-        frameCount: frame.frameCount,
-        timestampMs: frame.timestampMs,
-        protocolVersion: frame.protocolVersion,
-        pcmSamples: pcmCopy,
-      });
-    } catch {
-      console.warn(
-        `${VOICE_FILTER_DEBUG_LOG_PREFIX} Failed to post PCM frame via MessagePort; frame dropped`,
-      );
-      voiceFilterFramePort = undefined;
-      void ensureVoiceFilterFrameChannel();
-    }
-  },
-  pushVoiceFilterReferencePcmFrame: (frame: TVoiceFilterPcmFrame): void => {
-    if (!voiceFilterFramePort) {
-      void ensureVoiceFilterFrameChannel();
-      return;
-    }
-
-    const { pcm } = frame;
-    try {
-      const pcmCopy = new Float32Array(pcm.length);
-      pcmCopy.set(pcm);
-
-      voiceFilterFramePort.postMessage({
-        frameKind: "reference",
-        sessionId: frame.sessionId,
-        sequence: frame.sequence,
-        sampleRate: frame.sampleRate,
-        channels: frame.channels,
-        frameCount: frame.frameCount,
-        timestampMs: frame.timestampMs,
-        protocolVersion: frame.protocolVersion,
-        pcmSamples: pcmCopy,
-      });
-    } catch {
-      console.warn(
-        `${VOICE_FILTER_DEBUG_LOG_PREFIX} Failed to post reference PCM frame via MessagePort; frame dropped`,
-      );
-      voiceFilterFramePort = undefined;
-      void ensureVoiceFilterFrameChannel();
-    }
-  },
   subscribeAppAudioFrames: (
     callback: (frame: TAppAudioFrame | TAppAudioPcmFrame) => void,
   ) => {
@@ -787,34 +437,6 @@ const desktopBridge = {
 
     return () => {
       ipcRenderer.removeListener("desktop:app-audio-status", listener);
-    };
-  },
-  subscribeVoiceFilterFrames: (
-    callback: (frame: TVoiceFilterPcmFrame) => void,
-  ) => {
-    voiceFilterEgressFrameSubscribers.add(callback);
-    void ensureVoiceFilterEgressFrameChannel();
-
-    return () => {
-      voiceFilterEgressFrameSubscribers.delete(callback);
-    };
-  },
-  openVoiceFilterFrameEgressChannel: (): Promise<boolean> =>
-    ensureVoiceFilterEgressFrameChannel(),
-  subscribeVoiceFilterStatus: (
-    callback: (statusEvent: TVoiceFilterStatusEvent) => void,
-  ) => {
-    const listener = (
-      _event: unknown,
-      statusEvent: TVoiceFilterStatusEvent,
-    ) => {
-      callback(statusEvent);
-    };
-
-    ipcRenderer.on("desktop:voice-filter-status", listener);
-
-    return () => {
-      ipcRenderer.removeListener("desktop:voice-filter-status", listener);
     };
   },
   subscribeGlobalPushKeybindEvents: (
