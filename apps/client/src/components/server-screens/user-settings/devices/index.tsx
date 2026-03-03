@@ -24,7 +24,7 @@ import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { ScreenAudioMode } from '@/runtime/types';
 import { Resolution, VideoCodecPreference } from '@/types';
 import { Info, X } from 'lucide-react';
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useAvailableDevices } from './hooks/use-available-devices';
 import { MicrophoneTestPanel } from './microphone-test-panel';
@@ -58,15 +58,24 @@ const Devices = memo(() => {
   } = useAvailableDevices();
   const { devices, saveDevices, loading: devicesLoading } = useDevices();
   const { values, onChange, setValues } = useForm(devices);
+  const lastLoadedDevicesRef = useRef(devices);
   const [desktopAppVersion, setDesktopAppVersion] = useState<string>();
   const [capturingKeybindField, setCapturingKeybindField] = useState<
     TPushKeybindField | undefined
   >(undefined);
+  const defaultMicrophoneId = getDefaultDeviceId(inputDevices);
+  const defaultWebcamId = getDefaultDeviceId(videoDevices);
+  const selectedMicrophoneId = values.microphoneId || defaultMicrophoneId;
+  const selectedWebcamId = values.webcamId || defaultWebcamId;
 
   const saveDeviceSettings = useCallback(() => {
-    saveDevices(values);
+    saveDevices({
+      ...values,
+      microphoneId: selectedMicrophoneId,
+      webcamId: selectedWebcamId
+    });
     toast.success('Device settings saved');
-  }, [saveDevices, values]);
+  }, [saveDevices, selectedMicrophoneId, selectedWebcamId, values]);
 
   const clearPushKeybind = useCallback(
     (field: TPushKeybindField) => {
@@ -171,14 +180,17 @@ const Devices = memo(() => {
   }, [hasDesktopBridge, onChange, values.screenAudioMode]);
 
   useEffect(() => {
-    setValues(devices);
-  }, [devices, setValues]);
-
-  useEffect(() => {
-    const defaultMicrophoneId = getDefaultDeviceId(inputDevices);
-    const defaultWebcamId = getDefaultDeviceId(videoDevices);
-
     setValues((currentValues) => {
+      if (lastLoadedDevicesRef.current !== devices) {
+        lastLoadedDevicesRef.current = devices;
+
+        return {
+          ...devices,
+          microphoneId: devices.microphoneId || defaultMicrophoneId,
+          webcamId: devices.webcamId || defaultWebcamId
+        };
+      }
+
       const nextMicrophoneId =
         currentValues.microphoneId || defaultMicrophoneId;
       const nextWebcamId = currentValues.webcamId || defaultWebcamId;
@@ -196,7 +208,7 @@ const Devices = memo(() => {
         webcamId: nextWebcamId
       };
     });
-  }, [inputDevices, setValues, videoDevices]);
+  }, [defaultMicrophoneId, defaultWebcamId, devices, setValues]);
 
   if (availableDevicesLoading || devicesLoading) {
     return <LoadingCard className="h-[600px]" />;
@@ -228,7 +240,7 @@ const Devices = memo(() => {
             <Label>Input device</Label>
             <Select
               onValueChange={(value) => onChange('microphoneId', value)}
-              value={values.microphoneId || getDefaultDeviceId(inputDevices)}
+              value={selectedMicrophoneId}
             >
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select the input device" />
@@ -293,7 +305,7 @@ const Devices = memo(() => {
           </div>
 
           <MicrophoneTestPanel
-            microphoneId={values.microphoneId}
+            microphoneId={selectedMicrophoneId}
             micQualityMode={values.micQualityMode}
             voiceFilterStrength={values.voiceFilterStrength}
             echoCancellation={!!values.echoCancellation}
@@ -390,7 +402,7 @@ const Devices = memo(() => {
             <Label>Input device</Label>
             <Select
               onValueChange={(value) => onChange('webcamId', value)}
-              value={values.webcamId || getDefaultDeviceId(videoDevices)}
+              value={selectedWebcamId}
             >
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select the input device" />
