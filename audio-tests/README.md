@@ -176,6 +176,52 @@ Outcome:
   failed `single-key-taps.wav` (out_db -68 vs max -70, wobble 2.88 vs max 2.5)
 - rejected because any floor below 0.25 lets key-tap energy through
 
+Experiment Summary: Lookahead Buffer + Dry Rescue
+Goal: Fix first-word clipping when a speaker starts talking quietly.
+
+Root cause identified: The DFN (DeepFilterNet) model itself suppresses quiet speech (-42 to -52 dB) to zero, treating it as noise. The silence gate and expander are actually open during these frames — they're not the problem.
+
+What we tried (in order):
+Silence gate floor (gate fades to 0.04 instead of 0.0) — No effect, because the gate was already open. DFN kills the signal before the gate acts.
+
+Lookahead confirmation buffer (7 frames / 70ms) — Defers gate/expander decisions until future VAD context confirms speech. Retroactively opens the gate for onset frames. Works mechanically but doesn't help because, again, the gate was already open.
+
+Pre-DFN dry rescue — Snapshots audio before DFN, then blends it back (30% mix) when DFN over-suppresses. Required expander bypass for rescued frames. This did move the onset earlier (1210ms → 690ms on speech-only.wav), but:
+
+Noise discrimination problem — Low thresholds let keyboard/mouse noise through (7/15 tests failing). Iteratively raised energy ratio (5× → 25×) and confirmation frames (3 → 10) to pass tests, but conservative thresholds made rescue fire too late to help.
+
+Silero VAD integration — Added silero-rs hoping it would detect quiet speech better than earshot. It scored lower (0.08-0.19 vs earshot's 0.2-0.38) on quiet speech. Neither model reliably detects speech at -42 to -52 dB.
+
+Dual-gate approach (Silero ≥ 0.05 AND energy ≥ 5× noise floor) — All 15 tests passed, but frame-by-frame analysis showed identical onset timing to the original code. No measurable improvement.
+
+Conclusion
+Post-DFN rescue is a dead end for this problem. The DFN model's internal suppression decision is the bottleneck, and no amount of downstream correction can reliably recover what the model has already destroyed without also letting noise through.
+
+### Pre-DFN Input Level Normalization
+
+Each DFN hop was boosted to a target RMS (~-20 dBFS) before `model.process()`,
+then the same gain was divided out of the enhanced output.  The hypothesis was
+that DFN makes a level-dependent (not just SNR-dependent) suppression decision,
+so normalizing quiet input into DFN's training range would prevent it from
+treating quiet speech as noise.
+
+Outcome:
+
+- 10 of 15 tests failed
+- non-speech suppression degraded severely: `typing-only.wav` out_db rose from
+  -72 → -68 dB, `mouse-clicks.wav`, `desk-taps.wav`, and `room-tone.wav` all
+  failed their suppression bounds
+- speech onset ratios got *worse*, not better: `loud-reaction.wav` onset_ratio_avg
+  dropped from 0.15 to 0.054, `plosives.wav` from 0.05 to 0.007
+- DFN's internal spectral state (LSNR tracking, ERB band history) responds
+  differently to amplified noise vs natural-level noise, so the boost-then-undo
+  trick does not cancel cleanly
+- confirms DFN's suppression is fundamentally SNR-based; boosting signal and
+  noise equally preserves SNR, so the model makes the same core decision, but
+  nonlinear spectral processing produces different residuals at different
+  absolute levels
+- rejected because it made both speech and non-speech metrics worse
+
 ## Guidance
 
 Future experiments should stay narrow and must be validated with the same
