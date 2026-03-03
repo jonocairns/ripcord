@@ -50,7 +50,7 @@ const VoiceControl = memo(() => {
     );
     const nextIndex =
       currentIndex < 0
-        ? 1 % selectableVideoDevices.length
+        ? 0
         : (currentIndex + 1) % selectableVideoDevices.length;
     const nextDevice = selectableVideoDevices[nextIndex];
 
