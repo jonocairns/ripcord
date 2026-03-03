@@ -106,61 +106,6 @@ export type TAppAudioStatusEvent = {
   protocolVersion?: number;
 };
 
-export type TVoiceFilterStrength = 'low' | 'balanced' | 'high' | 'aggressive';
-export type TVoiceDereverbMode = 'off' | 'tail';
-
-export type TVoiceFilterSession = {
-  sessionId: string;
-  sampleRate: number;
-  channels: number;
-  framesPerBuffer: number;
-  protocolVersion?: number;
-  encoding?: 'f32le_base64';
-  echoCancellationBackend?: 'adaptive_nlms' | 'webrtc_aec3';
-  dereverbMode?: TVoiceDereverbMode;
-};
-
-export type TVoiceFilterFrameDiag = {
-  /** DeepFilterNet log-SNR estimate for this buffer. Low values (< -3 dB) mean the
-   *  model sees mostly noise — the primary indicator of over-suppression. undefined
-   *  in passthrough mode. */
-  lsnrMean?: number;
-  lsnrMin?: number;
-  lsnrMax?: number;
-  /** Estimated echo return loss enhancement from the sidecar AEC. Higher is better. */
-  aecErleDb?: number;
-  /** Current render-to-capture delay estimate in milliseconds. */
-  aecDelayMs?: number;
-  /** 0..1 confidence that the current frame contains double-talk. */
-  aecDoubleTalkConfidence?: number;
-  /** AGC gain applied. undefined when AGC is disabled. High values (> 3×) indicate
-   *  the mic is very quiet — common with far-field setups. */
-  agcGain?: number;
-  /** Startup ramp wet-mix at the end of the buffer (0 = dry, 1 = fully processed).
-   *  Stays at 1.0 after the ramp completes. */
-  rampWetMix: number;
-};
-
-export type TVoiceFilterPcmFrame = {
-  sessionId: string;
-  sequence: number;
-  sampleRate: number;
-  channels: number;
-  frameCount: number;
-  timestampMs?: number;
-  pcm: Float32Array;
-  protocolVersion: number;
-  droppedFrameCount?: number;
-  diag?: TVoiceFilterFrameDiag;
-};
-
-export type TVoiceFilterStatusEvent = {
-  sessionId: string;
-  reason: 'capture_stopped' | 'capture_error' | 'sidecar_exited';
-  error?: string;
-  protocolVersion?: number;
-};
-
 export type TDesktopUpdateState =
   | 'disabled'
   | 'idle'
@@ -184,28 +129,8 @@ export type TDesktopUpdateStatus = {
   message?: string;
 };
 
-export type TVoiceFilterDfnTuningInput = {
-  attenuationLimitDb?: number;
-  mix?: number;
-  experimentalAggressiveMode?: boolean;
-  noiseGateFloorDbfs?: number;
-};
-
-export type TStartVoiceFilterInput = {
-  sampleRate: number;
-  channels: number;
-  suppressionLevel: TVoiceFilterStrength;
-  noiseSuppression: boolean;
-  autoGainControl: boolean;
-  echoCancellation: boolean;
-  dereverbMode?: TVoiceDereverbMode;
-} & TVoiceFilterDfnTuningInput;
-
 export type TMicDevice = { id: string; label: string };
 export type TMicDevicesResult = { devices: TMicDevice[] };
-export type TStartVoiceFilterWithCaptureInput = TStartVoiceFilterInput & {
-  deviceId?: string;
-};
 
 export type TPushKeybindKind = 'talk' | 'mute';
 
@@ -242,31 +167,14 @@ export type TDesktopBridge = {
   ) => Promise<TAppAudioSession>;
   stopAppAudioCapture: (sessionId?: string) => Promise<void>;
   listMicDevices: () => Promise<TMicDevicesResult>;
-  startVoiceFilterSessionWithCapture: (
-    input: TStartVoiceFilterWithCaptureInput
-  ) => Promise<TVoiceFilterSession>;
-  startVoiceFilterSession: (
-    input: TStartVoiceFilterInput
-  ) => Promise<TVoiceFilterSession>;
-  stopVoiceFilterSession: (sessionId?: string) => Promise<void>;
-  ensureVoiceFilterFrameChannel: () => Promise<boolean>;
-  openVoiceFilterFrameEgressChannel: () => Promise<boolean>;
   setGlobalPushKeybinds: (
     input: TDesktopPushKeybindsInput
   ) => Promise<TGlobalPushKeybindRegistrationResult>;
-  pushVoiceFilterPcmFrame: (frame: TVoiceFilterPcmFrame) => void;
-  pushVoiceFilterReferencePcmFrame: (frame: TVoiceFilterPcmFrame) => void;
   subscribeAppAudioFrames: (
     cb: (frame: TAppAudioFrame | TAppAudioPcmFrame) => void
   ) => () => void;
   subscribeAppAudioStatus: (
     cb: (statusEvent: TAppAudioStatusEvent) => void
-  ) => () => void;
-  subscribeVoiceFilterFrames: (
-    cb: (frame: TVoiceFilterPcmFrame) => void
-  ) => () => void;
-  subscribeVoiceFilterStatus: (
-    cb: (statusEvent: TVoiceFilterStatusEvent) => void
   ) => () => void;
   subscribeGlobalPushKeybindEvents: (
     cb: (event: TDesktopPushKeybindEvent) => void

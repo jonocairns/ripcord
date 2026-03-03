@@ -22,12 +22,7 @@ import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useForm } from '@/hooks/use-form';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { ScreenAudioMode } from '@/runtime/types';
-import {
-  MicQualityMode,
-  Resolution,
-  VideoCodecPreference,
-  VoiceFilterStrength
-} from '@/types';
+import { Resolution, VideoCodecPreference } from '@/types';
 import { Info, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
@@ -160,10 +155,6 @@ const Devices = memo(() => {
       onChange('screenAudioMode', ScreenAudioMode.SYSTEM);
     }
   }, [hasDesktopBridge, onChange, values.screenAudioMode]);
-
-  const isExperimentalMode =
-    values.micQualityMode === MicQualityMode.EXPERIMENTAL;
-
   if (availableDevicesLoading || devicesLoading) {
     return <LoadingCard className="h-[600px]" />;
   }
@@ -185,8 +176,9 @@ const Devices = memo(() => {
           <div className="space-y-1">
             <h3 className="text-base font-semibold">Microphone</h3>
             <p className="text-sm text-muted-foreground">
-              Configure your input source, processing, and push-to-talk
-              controls.
+              Configure your input source, browser processing, and push-to-talk
+              controls. For hardware noise removal, use NVIDIA Broadcast as
+              your selected microphone.
             </p>
           </div>
 
@@ -214,63 +206,6 @@ const Devices = memo(() => {
             </Select>
           </div>
 
-          <div className="flex flex-col gap-4 sm:flex-row">
-            <div className="min-w-0 flex-1 space-y-2">
-              <Label>Voice processing</Label>
-              <Select
-                onValueChange={(value) =>
-                  onChange('micQualityMode', value as MicQualityMode)
-                }
-                value={values.micQualityMode}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select voice processing mode" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value={MicQualityMode.AUTO}>Standard</SelectItem>
-                    <SelectItem
-                      value={MicQualityMode.EXPERIMENTAL}
-                      disabled={true}
-                    >
-                      Enhanced
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {isExperimentalMode && values.noiseSuppression && (
-              <div className="min-w-0 flex-1 space-y-2">
-                <Label>Noise suppression strength</Label>
-                <Select
-                  onValueChange={(value) =>
-                    onChange('voiceFilterStrength', value as VoiceFilterStrength)
-                  }
-                  value={values.voiceFilterStrength}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select a filter preset" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value={VoiceFilterStrength.LOW}>Low</SelectItem>
-                      <SelectItem value={VoiceFilterStrength.BALANCED}>
-                        Balanced
-                      </SelectItem>
-                      <SelectItem value={VoiceFilterStrength.HIGH}>
-                        High
-                      </SelectItem>
-                      <SelectItem value={VoiceFilterStrength.AGGRESSIVE}>
-                        Aggressive
-                      </SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-          </div>
-
           <Alert variant="info" className="border-primary/40 bg-primary/10">
             <Info />
             <AlertTitle>NVIDIA Broadcast Recommended</AlertTitle>
@@ -279,7 +214,8 @@ const Devices = memo(() => {
               <strong className="font-semibold text-foreground">
                 NVIDIA Broadcast
               </strong>{' '}
-              for clearer microphone voice processing.
+              and select its virtual microphone above for the best background
+              noise suppression.
             </AlertDescription>
           </Alert>
 
@@ -317,12 +253,8 @@ const Devices = memo(() => {
 
           <MicrophoneTestPanel
             microphoneId={values.microphoneId}
-            micQualityMode={values.micQualityMode}
-            voiceFilterStrength={values.voiceFilterStrength}
-            echoCancellation={!!values.echoCancellation}
             noiseSuppression={!!values.noiseSuppression}
             autoGainControl={!!values.autoGainControl}
-            hasDesktopBridge={hasDesktopBridge}
           />
 
           {hasDesktopBridge && (
