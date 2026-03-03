@@ -10,14 +10,17 @@ import {
   Monitor,
   MonitorOff,
   PhoneOff,
+  SwitchCamera,
   Video,
   VideoOff,
   Wifi,
   WifiOff
 } from 'lucide-react';
-import { memo, useMemo } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import { ExternalAudioStreams } from '../channel-view/voice/external-audio-streams';
 import { VoiceAudioStreams } from '../channel-view/voice/voice-audio-streams';
+import { useAvailableDevices } from '../devices-provider/hooks/use-available-devices';
+import { useDevices } from '../devices-provider/hooks/use-devices';
 import { Button } from '../ui/button';
 import { StatsPopover } from './stats-popover';
 
@@ -26,6 +29,40 @@ const VoiceControl = memo(() => {
   const channelCan = useChannelCan(voiceChannelId);
   const { ownVoiceState, toggleWebcam, toggleScreenShare, connectionStatus } =
     useVoice();
+  const { devices, saveDevices } = useDevices();
+  const { videoDevices } = useAvailableDevices();
+  const selectableVideoDevices = useMemo(
+    () =>
+      videoDevices.filter(
+        (device): device is MediaDeviceInfo => Boolean(device?.deviceId)
+      ),
+    [videoDevices]
+  );
+  const canSwitchCamera = selectableVideoDevices.length > 1;
+
+  const switchCamera = useCallback(() => {
+    if (!canSwitchCamera) {
+      return;
+    }
+
+    const currentIndex = selectableVideoDevices.findIndex(
+      (device) => device.deviceId === devices.webcamId
+    );
+    const nextIndex =
+      currentIndex < 0
+        ? 0
+        : (currentIndex + 1) % selectableVideoDevices.length;
+    const nextDevice = selectableVideoDevices[nextIndex];
+
+    if (!nextDevice) {
+      return;
+    }
+
+    saveDevices({
+      ...devices,
+      webcamId: nextDevice.deviceId
+    });
+  }, [canSwitchCamera, devices, saveDevices, selectableVideoDevices]);
 
   const connectionInfo = useMemo(() => {
     switch (connectionStatus) {
@@ -105,6 +142,20 @@ const VoiceControl = memo(() => {
                 <VideoOff className="h-4 w-4" />
               )}
             </Button>
+
+            {canSwitchCamera && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-md transition-all duration-200 bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground"
+                onClick={switchCamera}
+                title="Switch camera"
+                aria-label="Switch camera"
+                disabled={!channelCan(ChannelPermission.WEBCAM)}
+              >
+                <SwitchCamera className="h-4 w-4" />
+              </Button>
+            )}
 
             <Button
               variant="ghost"
