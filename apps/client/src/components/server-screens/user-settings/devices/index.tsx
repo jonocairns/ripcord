@@ -325,63 +325,78 @@ const Devices = memo(() => {
                 </p>
               </div>
               <div className="space-y-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <Label className="sm:w-23">Push to talk</Label>
-            
-                  <Button
-                    variant="outline"
-                    type="button"
-                    className="w-full justify-start font-mono sm:w-[90px]"
-                    data-push-keybind-capture={
-                      capturingKeybindField === 'pushToTalkKeybind'
-                        ? 'true'
-                        : undefined
-                    }
-                    onClick={() => startPushKeybindCapture('pushToTalkKeybind')}
-                  >
-                    {capturingKeybindField === 'pushToTalkKeybind'
-                      ? 'Press keys...'
-                      : formatPushKeybindLabel(values.pushToTalkKeybind)}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    className="h-9 w-9 shrink-0"
-                    onClick={() => clearPushKeybind('pushToTalkKeybind')}
-                    disabled={!values.pushToTalkKeybind}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
+                <div className="flex items-center gap-3">
+                  <Label className="w-24 shrink-0 text-sm">Push to talk</Label>
+                  <div className="flex items-center">
+                    <Button
+                      variant="outline"
+                      type="button"
+                      className={`min-w-[140px] justify-start rounded-r-none border-r-0 font-mono text-xs${
+                        capturingKeybindField === 'pushToTalkKeybind'
+                          ? ' ring-2 ring-ring'
+                          : ''
+                      }`}
+                      data-push-keybind-capture={
+                        capturingKeybindField === 'pushToTalkKeybind'
+                          ? 'true'
+                          : undefined
+                      }
+                      onClick={() =>
+                        startPushKeybindCapture('pushToTalkKeybind')
+                      }
+                    >
+                      {capturingKeybindField === 'pushToTalkKeybind'
+                        ? 'Press keys...'
+                        : formatPushKeybindLabel(values.pushToTalkKeybind)}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-9 w-9 shrink-0 rounded-l-none"
+                      onClick={() => clearPushKeybind('pushToTalkKeybind')}
+                      disabled={!values.pushToTalkKeybind}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
 
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <Label className="sm:w-23">Push to mute</Label>
-                  <Button
-                    variant="outline"
-                    type="button"
-                    className="w-full justify-start font-mono sm:w-[90px]"
-                    data-push-keybind-capture={
-                      capturingKeybindField === 'pushToMuteKeybind'
-                        ? 'true'
-                        : undefined
-                    }
-                    onClick={() => startPushKeybindCapture('pushToMuteKeybind')}
-                  >
-                    {capturingKeybindField === 'pushToMuteKeybind'
-                      ? 'Press keys...'
-                      : formatPushKeybindLabel(values.pushToMuteKeybind)}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    className="h-9 w-9 shrink-0"
-                    onClick={() => clearPushKeybind('pushToMuteKeybind')}
-                    disabled={!values.pushToMuteKeybind}
-                  >
-                  <X className="h-3.5 w-3.5" />
-                  </Button>
+                <div className="flex items-center gap-3">
+                  <Label className="w-24 shrink-0 text-sm">Push to mute</Label>
+                  <div className="flex items-center">
+                    <Button
+                      variant="outline"
+                      type="button"
+                      className={`min-w-[140px] justify-start rounded-r-none border-r-0 font-mono text-xs${
+                        capturingKeybindField === 'pushToMuteKeybind'
+                          ? ' ring-2 ring-ring'
+                          : ''
+                      }`}
+                      data-push-keybind-capture={
+                        capturingKeybindField === 'pushToMuteKeybind'
+                          ? 'true'
+                          : undefined
+                      }
+                      onClick={() =>
+                        startPushKeybindCapture('pushToMuteKeybind')
+                      }
+                    >
+                      {capturingKeybindField === 'pushToMuteKeybind'
+                        ? 'Press keys...'
+                        : formatPushKeybindLabel(values.pushToMuteKeybind)}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-9 w-9 shrink-0 rounded-l-none"
+                      onClick={() => clearPushKeybind('pushToMuteKeybind')}
+                      disabled={!values.pushToMuteKeybind}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
