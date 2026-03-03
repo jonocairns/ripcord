@@ -1,5 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
+import { useAvailableDevices } from '@/components/devices-provider/hooks/use-available-devices';
+import { useDevices } from '@/components/devices-provider/hooks/use-devices';
 import { useChannelCan } from '@/features/server/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
 import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
@@ -11,10 +13,11 @@ import {
   Monitor,
   PhoneOff,
   ScreenShareOff,
+  SwitchCamera,
   Video,
   VideoOff
 } from 'lucide-react';
-import { memo, useMemo } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import { ControlToggleButton } from './control-toggle-button';
 import { useControlsBarVisibility } from './hooks/use-controls-bar-visibility';
 
@@ -27,6 +30,16 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
   const ownVoiceState = useOwnVoiceState();
   const channelCan = useChannelCan(channelId);
   const isVisible = useControlsBarVisibility();
+  const { devices, saveDevices } = useDevices();
+  const { videoDevices } = useAvailableDevices();
+  const selectableVideoDevices = useMemo(
+    () =>
+      videoDevices.filter(
+        (device): device is MediaDeviceInfo => Boolean(device?.deviceId)
+      ),
+    [videoDevices]
+  );
+  const canSwitchCamera = selectableVideoDevices.length > 1;
 
   const permissions = useMemo(
     () => ({
@@ -36,6 +49,30 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
     }),
     [channelCan]
   );
+
+  const switchCamera = useCallback(() => {
+    if (!canSwitchCamera) {
+      return;
+    }
+
+    const currentIndex = selectableVideoDevices.findIndex(
+      (device) => device.deviceId === devices.webcamId
+    );
+    const nextIndex =
+      currentIndex < 0
+        ? 1 % selectableVideoDevices.length
+        : (currentIndex + 1) % selectableVideoDevices.length;
+    const nextDevice = selectableVideoDevices[nextIndex];
+
+    if (!nextDevice) {
+      return;
+    }
+
+    saveDevices({
+      ...devices,
+      webcamId: nextDevice.deviceId
+    });
+  }, [canSwitchCamera, devices, saveDevices, selectableVideoDevices]);
 
   return (
     <div
@@ -73,6 +110,25 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
           onClick={toggleWebcam}
           disabled={!permissions.canWebcam}
         />
+
+        {canSwitchCamera && (
+          <Tooltip content="Switch Camera">
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(
+                'rounded-md h-10 w-10 transition-all duration-200',
+                'hover:bg-muted/60',
+                !permissions.canWebcam && 'opacity-60 hover:bg-transparent'
+              )}
+              onClick={switchCamera}
+              disabled={!permissions.canWebcam}
+              aria-label="Switch Camera"
+            >
+              <SwitchCamera size={22} />
+            </Button>
+          </Tooltip>
+        )}
 
         <ControlToggleButton
           enabled={ownVoiceState.sharingScreen}
