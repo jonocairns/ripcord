@@ -7,20 +7,10 @@ const STATUS_ORDER: Record<string, number> = {
   offline: 2
 };
 
-let lastUsersInput: IServerState['users'] | undefined;
-let lastSortedUsers: TJoinedPublicUser[] = [];
-let lastUsernamesInput: TJoinedPublicUser[] | undefined;
-let lastUsernames: Record<number, string> = {};
-
 export const ownUserIdSelector = (state: IServerState) => state.ownUserId;
 
-export const usersSelector = (state: IServerState) => {
-  if (state.users === lastUsersInput) {
-    return lastSortedUsers;
-  }
-
-  lastUsersInput = state.users;
-  lastSortedUsers = [...state.users].sort((a, b) => {
+export const sortUsers = (users: TJoinedPublicUser[]) => {
+  return [...users].sort((a, b) => {
     const aBanned = Boolean(a.banned);
     const bBanned = Boolean(b.banned);
 
@@ -37,40 +27,34 @@ export const usersSelector = (state: IServerState) => {
 
     return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
   });
-
-  return lastSortedUsers;
 };
 
+export const usersSelector = (state: IServerState) => state.users;
+
 export const ownUserSelector = (state: IServerState) =>
-  usersSelector(state).find((user) => user.id === ownUserIdSelector(state));
+  state.users.find((user) => user.id === ownUserIdSelector(state));
 
 export const userByIdSelector = (state: IServerState, userId: number) =>
-  usersSelector(state).find((user) => user.id === userId);
+  state.users.find((user) => user.id === userId);
 
 export const isOwnUserSelector = (state: IServerState, userId: number) =>
   ownUserIdSelector(state) === userId;
 
 export const ownPublicUserSelector = (state: IServerState) =>
-  usersSelector(state).find((user) => user.id === ownUserIdSelector(state));
+  state.users.find((user) => user.id === ownUserIdSelector(state));
 
 export const userStatusSelector = (state: IServerState, userId: number) =>
   userByIdSelector(state, userId)?.status ?? UserStatus.OFFLINE;
 
-export const usernamesSelector = (state: IServerState) => {
-  const users = usersSelector(state);
-
-  if (users === lastUsernamesInput) {
-    return lastUsernames;
-  }
-
+export const toUsernamesMap = (users: TJoinedPublicUser[]) => {
   const map: Record<number, string> = {};
 
   users.forEach((user) => {
     map[user.id] = user.name;
   });
 
-  lastUsernamesInput = users;
-  lastUsernames = map;
-
-  return lastUsernames;
+  return map;
 };
+
+export const usernamesSelector = (state: IServerState) =>
+  toUsernamesMap(state.users);

@@ -1,16 +1,22 @@
+import { useMemo } from 'react';
 import { useServerStore } from '../slice';
 import {
   isOwnUserSelector,
   ownPublicUserSelector,
   ownUserIdSelector,
   ownUserSelector,
+  sortUsers,
+  toUsernamesMap,
   userByIdSelector,
-  usernamesSelector,
   usersSelector,
   userStatusSelector
 } from './selectors';
 
-export const useUsers = () => useServerStore(usersSelector);
+export const useUsers = () => {
+  const users = useServerStore(usersSelector);
+
+  return useMemo(() => sortUsers(users), [users]);
+};
 
 export const useOwnUser = () => useServerStore(ownUserSelector);
 
@@ -28,4 +34,8 @@ export const useOwnPublicUser = () =>
 export const useUserStatus = (userId: number) =>
   useServerStore((state) => userStatusSelector(state, userId));
 
-export const useUsernames = () => useServerStore(usernamesSelector);
+export const useUsernames = () => {
+  const users = useServerStore(usersSelector);
+
+  return useMemo(() => toUsernamesMap(users), [users]);
+};
