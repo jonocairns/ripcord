@@ -1,10 +1,8 @@
-import { createSelector } from '@reduxjs/toolkit';
 import { OWNER_ROLE_ID } from '@sharkord/shared';
-import { createCachedSelector } from 're-reselect';
-import type { IRootState } from '../store';
 import { currentVoiceChannelIdSelector } from './channels/selectors';
 import { typingMapSelector } from './messages/selectors';
 import { rolesSelector } from './roles/selectors';
+import type { IServerState } from './slice';
 import type { TVoiceUser } from './types';
 import {
   ownUserIdSelector,
@@ -14,108 +12,109 @@ import {
 } from './users/selectors';
 import { voiceChannelStateSelector } from './voice/selectors';
 
-export const connectedSelector = (state: IRootState) => state.server.connected;
+export const connectedSelector = (state: IServerState) => state.connected;
 
-export const disconnectInfoSelector = (state: IRootState) =>
-  state.server.disconnectInfo;
+export const disconnectInfoSelector = (state: IServerState) =>
+  state.disconnectInfo;
 
-export const connectingSelector = (state: IRootState) =>
-  state.server.connecting;
+export const connectingSelector = (state: IServerState) => state.connecting;
 
-export const mustChangePasswordSelector = (state: IRootState) =>
-  state.server.mustChangePassword;
+export const mustChangePasswordSelector = (state: IServerState) =>
+  state.mustChangePassword;
 
-export const serverNameSelector = (state: IRootState) =>
-  state.server.publicSettings?.name;
+export const serverNameSelector = (state: IServerState) =>
+  state.publicSettings?.name;
 
-export const serverIdSelector = (state: IRootState) =>
-  state.server.publicSettings?.serverId;
+export const serverIdSelector = (state: IServerState) =>
+  state.publicSettings?.serverId;
 
-export const publicServerSettingsSelector = (state: IRootState) =>
-  state.server.publicSettings;
+export const publicServerSettingsSelector = (state: IServerState) =>
+  state.publicSettings;
 
-export const pluginsEnabledSelector = (state: IRootState) =>
-  !!state.server.publicSettings?.enablePlugins;
+export const pluginsEnabledSelector = (state: IServerState) =>
+  !!state.publicSettings?.enablePlugins;
 
-export const infoSelector = (state: IRootState) => state.server.info;
+export const infoSelector = (state: IServerState) => state.info;
 
-export const ownUserRolesSelector = createSelector(
-  [ownUserSelector, rolesSelector],
-  (ownUser, roles) => {
-    if (!ownUser?.roleIds) return [];
-    return roles.filter((role) => ownUser.roleIds.includes(role.id));
+export const ownUserRolesSelector = (state: IServerState) => {
+  const ownUser = ownUserSelector(state);
+  const roles = rolesSelector(state);
+
+  if (!ownUser?.roleIds) {
+    return [];
   }
-);
 
-export const isOwnUserOwnerSelector = createSelector(
-  [ownUserRolesSelector],
-  (ownUserRoles) => ownUserRoles.some((role) => role.id === OWNER_ROLE_ID)
-);
+  return roles.filter((role) => ownUser.roleIds.includes(role.id));
+};
 
-export const userRolesSelector = createSelector(
-  [rolesSelector, userByIdSelector],
-  (roles, user) => {
-    if (!user?.roleIds) return [];
-    return roles.filter((role) => user.roleIds.includes(role.id));
+export const isOwnUserOwnerSelector = (state: IServerState) =>
+  ownUserRolesSelector(state).some((role) => role.id === OWNER_ROLE_ID);
+
+export const userRolesSelector = (state: IServerState, userId: number) => {
+  const roles = rolesSelector(state);
+  const user = userByIdSelector(state, userId);
+
+  if (!user?.roleIds) {
+    return [];
   }
-);
 
-export const userRolesIdsSelector = createSelector(
-  [userByIdSelector],
-  (user) => user?.roleIds || []
-);
+  return roles.filter((role) => user.roleIds.includes(role.id));
+};
 
-export const typingUsersByChannelIdSelector = createCachedSelector(
-  [
-    typingMapSelector,
-    (_: IRootState, channelId: number) => channelId,
-    ownUserIdSelector,
-    usersSelector
-  ],
-  (typingMap, channelId, ownUserId, users) => {
-    const userIds = typingMap[channelId] || [];
+export const userRolesIdsSelector = (state: IServerState, userId: number) =>
+  userByIdSelector(state, userId)?.roleIds || [];
 
-    return userIds
-      .filter((id) => id !== ownUserId)
-      .map((id) => users.find((u) => u.id === id)!)
-      .filter((u) => !!u);
-  }
-)((_, channelId: number) => channelId);
+export const typingUsersByChannelIdSelector = (
+  state: IServerState,
+  channelId: number
+) => {
+  const typingMap = typingMapSelector(state);
+  const ownUserId = ownUserIdSelector(state);
+  const users = usersSelector(state);
+  const userIds = typingMap[channelId] || [];
 
-export const voiceUsersByChannelIdSelector = createSelector(
-  [usersSelector, voiceChannelStateSelector],
-  (users, voiceState) => {
-    const voiceUsers: TVoiceUser[] = [];
+  return userIds
+    .filter((id) => id !== ownUserId)
+    .map((id) => users.find((user) => user.id === id))
+    .filter((user): user is NonNullable<typeof user> => !!user);
+};
 
-    if (!voiceState) return voiceUsers;
+export const voiceUsersByChannelIdSelector = (
+  state: IServerState,
+  channelId: number
+) => {
+  const users = usersSelector(state);
+  const voiceState = voiceChannelStateSelector(state, channelId);
+  const voiceUsers: TVoiceUser[] = [];
 
-    Object.entries(voiceState.users).forEach(([userIdStr, state]) => {
-      const userId = Number(userIdStr);
-      const user = users.find((u) => u.id === userId);
-
-      if (user) {
-        voiceUsers.push({
-          ...user,
-          state
-        });
-      }
-    });
-
+  if (!voiceState) {
     return voiceUsers;
   }
-);
 
-export const ownVoiceUserSelector = createSelector(
-  [
-    ownUserIdSelector,
-    (state: IRootState) => {
-      const channelId = currentVoiceChannelIdSelector(state);
+  Object.entries(voiceState.users).forEach(([userIdStr, userState]) => {
+    const userId = Number(userIdStr);
+    const user = users.find((entry) => entry.id === userId);
 
-      if (channelId === undefined) return undefined;
-
-      return voiceUsersByChannelIdSelector(state, channelId);
+    if (user) {
+      voiceUsers.push({
+        ...user,
+        state: userState
+      });
     }
-  ],
-  (ownUserId, voiceUsers) =>
-    voiceUsers?.find((voiceUser) => voiceUser.id === ownUserId)
-);
+  });
+
+  return voiceUsers;
+};
+
+export const ownVoiceUserSelector = (state: IServerState) => {
+  const ownUserId = ownUserIdSelector(state);
+  const channelId = currentVoiceChannelIdSelector(state);
+
+  if (channelId === undefined) {
+    return undefined;
+  }
+
+  return voiceUsersByChannelIdSelector(state, channelId).find(
+    (voiceUser) => voiceUser.id === ownUserId
+  );
+};

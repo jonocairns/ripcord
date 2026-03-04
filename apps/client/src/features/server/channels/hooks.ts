@@ -1,9 +1,8 @@
-import type { IRootState } from '@/features/store';
-import { useSelector } from 'react-redux';
+import { useMemo } from 'react';
+import { useServerStore } from '../slice';
 import {
   channelByIdSelector,
   channelPermissionsByIdSelector,
-  channelsByCategoryIdSelector,
   channelsSelector,
   currentVoiceChannelIdSelector,
   isCurrentVoiceChannelSelectedSelector,
@@ -12,32 +11,37 @@ import {
   selectedChannelTypeSelector
 } from './selectors';
 
-export const useChannels = () =>
-  useSelector((state: IRootState) => channelsSelector(state));
+export const useChannels = () => useServerStore(channelsSelector);
 
 export const useChannelById = (channelId: number) =>
-  useSelector((state: IRootState) => channelByIdSelector(state, channelId));
+  useServerStore((state) => channelByIdSelector(state, channelId));
 
-export const useChannelsByCategoryId = (categoryId: number) =>
-  useSelector((state: IRootState) =>
-    channelsByCategoryIdSelector(state, categoryId)
+export const useChannelsByCategoryId = (categoryId: number) => {
+  const channels = useServerStore(channelsSelector);
+
+  return useMemo(
+    () =>
+      channels
+        .filter((channel) => channel.categoryId === categoryId)
+        .sort((a, b) => a.position - b.position),
+    [categoryId, channels]
   );
+};
 
-export const useSelectedChannelId = () =>
-  useSelector(selectedChannelIdSelector);
+export const useSelectedChannelId = () => useServerStore(selectedChannelIdSelector);
 
-export const useSelectedChannel = () => useSelector(selectedChannelSelector);
+export const useSelectedChannel = () => useServerStore(selectedChannelSelector);
 
 export const useCurrentVoiceChannelId = () =>
-  useSelector(currentVoiceChannelIdSelector);
+  useServerStore(currentVoiceChannelIdSelector);
 
 export const useIsCurrentVoiceChannelSelected = () =>
-  useSelector(isCurrentVoiceChannelSelectedSelector);
+  useServerStore(isCurrentVoiceChannelSelectedSelector);
 
 export const useChannelPermissionsById = (channelId: number) =>
-  useSelector((state: IRootState) =>
+  useServerStore((state) =>
     channelPermissionsByIdSelector(state, channelId)
   );
 
 export const useSelectedChannelType = () =>
-  useSelector(selectedChannelTypeSelector);
+  useServerStore(selectedChannelTypeSelector);

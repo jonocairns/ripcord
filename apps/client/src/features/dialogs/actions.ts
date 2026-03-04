@@ -6,19 +6,22 @@ import {
   type TDesktopShareSource
 } from '@/runtime/types';
 import type { TGenericObject } from '@sharkord/shared';
-import { store } from '../store';
-import { dialogSliceActions } from './slice';
+import { getInitialDialogState, useDialogStore } from './slice';
 
 export const openDialog = (dialog: Dialog, props?: TGenericObject) => {
-  store.dispatch(dialogSliceActions.openDialog({ dialog, props }));
+  useDialogStore.setState({
+    openDialog: dialog,
+    props: props || {},
+    isOpen: true
+  });
 };
 
 export const closeDialogs = () => {
-  store.dispatch(dialogSliceActions.setClosing(true));
+  useDialogStore.setState({ closing: true });
 
   // allow fade out animation to complete before stopping rendering, otherwise it looks choppy
   setTimeout(() => {
-    store.dispatch(dialogSliceActions.closeDialogs());
+    useDialogStore.setState(getInitialDialogState());
 
     setTimeout(() => {
       // https://github.com/radix-ui/primitives/issues/1241
@@ -106,7 +109,7 @@ export const requestTextInput = async ({
 };
 
 export const resetDialogs = () => {
-  store.dispatch(dialogSliceActions.resetDialogs());
+  useDialogStore.setState(getInitialDialogState());
 };
 
 export const requestScreenShareSelection = async ({

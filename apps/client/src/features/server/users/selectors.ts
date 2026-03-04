@@ -1,7 +1,5 @@
-import type { IRootState } from '@/features/store';
-import { createSelector } from '@reduxjs/toolkit';
-import { UserStatus } from '@sharkord/shared';
-import { createCachedSelector } from 're-reselect';
+import { UserStatus, type TJoinedPublicUser } from '@sharkord/shared';
+import type { IServerState } from '../slice';
 
 const STATUS_ORDER: Record<string, number> = {
   online: 0,
@@ -9,62 +7,70 @@ const STATUS_ORDER: Record<string, number> = {
   offline: 2
 };
 
-export const ownUserIdSelector = (state: IRootState) => state.server.ownUserId;
+let lastUsersInput: IServerState['users'] | undefined;
+let lastSortedUsers: TJoinedPublicUser[] = [];
+let lastUsernamesInput: TJoinedPublicUser[] | undefined;
+let lastUsernames: Record<number, string> = {};
 
-export const usersSelector = createSelector(
-  (state: IRootState) => state.server.users,
-  (users) => {
-    return [...users].sort((a, b) => {
-      const aBanned = Boolean(a.banned);
-      const bBanned = Boolean(b.banned);
+export const ownUserIdSelector = (state: IServerState) => state.ownUserId;
 
-      if (aBanned !== bBanned) {
-        return aBanned ? 1 : -1;
-      }
-
-      const aStatus = STATUS_ORDER[String(a.status ?? UserStatus.OFFLINE)] ?? 3;
-      const bStatus = STATUS_ORDER[String(b.status ?? UserStatus.OFFLINE)] ?? 3;
-
-      if (aStatus !== bStatus) {
-        return aStatus - bStatus;
-      }
-
-      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-    });
+export const usersSelector = (state: IServerState) => {
+  if (state.users === lastUsersInput) {
+    return lastSortedUsers;
   }
-);
 
-export const ownUserSelector = createSelector(
-  [ownUserIdSelector, usersSelector],
-  (ownUserId, users) => users.find((user) => user.id === ownUserId)
-);
+  lastUsersInput = state.users;
+  lastSortedUsers = [...state.users].sort((a, b) => {
+    const aBanned = Boolean(a.banned);
+    const bBanned = Boolean(b.banned);
 
-export const userByIdSelector = createCachedSelector(
-  [usersSelector, (_: IRootState, userId: number) => userId],
-  (users, userId) => users.find((user) => user.id === userId)
-)((_, userId: number) => userId);
+    if (aBanned !== bBanned) {
+      return aBanned ? 1 : -1;
+    }
 
-export const isOwnUserSelector = createCachedSelector(
-  [ownUserIdSelector, (_: IRootState, userId: number) => userId],
-  (ownUserId, userId) => ownUserId === userId
-)((_, userId: number) => userId);
+    const aStatus = STATUS_ORDER[String(a.status ?? UserStatus.OFFLINE)] ?? 3;
+    const bStatus = STATUS_ORDER[String(b.status ?? UserStatus.OFFLINE)] ?? 3;
 
-export const ownPublicUserSelector = createSelector(
-  [ownUserIdSelector, usersSelector],
-  (ownUserId, users) => users.find((user) => user.id === ownUserId)
-);
+    if (aStatus !== bStatus) {
+      return aStatus - bStatus;
+    }
 
-export const userStatusSelector = createSelector(
-  [userByIdSelector],
-  (user) => user?.status ?? UserStatus.OFFLINE
-);
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
 
-export const usernamesSelector = createSelector([usersSelector], (users) => {
+  return lastSortedUsers;
+};
+
+export const ownUserSelector = (state: IServerState) =>
+  usersSelector(state).find((user) => user.id === ownUserIdSelector(state));
+
+export const userByIdSelector = (state: IServerState, userId: number) =>
+  usersSelector(state).find((user) => user.id === userId);
+
+export const isOwnUserSelector = (state: IServerState, userId: number) =>
+  ownUserIdSelector(state) === userId;
+
+export const ownPublicUserSelector = (state: IServerState) =>
+  usersSelector(state).find((user) => user.id === ownUserIdSelector(state));
+
+export const userStatusSelector = (state: IServerState, userId: number) =>
+  userByIdSelector(state, userId)?.status ?? UserStatus.OFFLINE;
+
+export const usernamesSelector = (state: IServerState) => {
+  const users = usersSelector(state);
+
+  if (users === lastUsernamesInput) {
+    return lastUsernames;
+  }
+
   const map: Record<number, string> = {};
 
   users.forEach((user) => {
     map[user.id] = user.name;
   });
 
-  return map;
-});
+  lastUsernamesInput = users;
+  lastUsernames = map;
+
+  return lastUsernames;
+};

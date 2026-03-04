@@ -1,4 +1,4 @@
-import { useSelector } from 'react-redux';
+import { useServerStore } from '../slice';
 import { customEmojisSelector } from './selectors';
 
-export const useCustomEmojis = () => useSelector(customEmojisSelector);
+export const useCustomEmojis = () => useServerStore(customEmojisSelector);

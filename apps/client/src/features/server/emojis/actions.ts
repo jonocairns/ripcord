@@ -1,19 +1,18 @@
-import { store } from '@/features/store';
 import type { TJoinedEmoji } from '@sharkord/shared';
-import { serverSliceActions } from '../slice';
+import { useServerStore } from '../slice';
 
 export const setEmojis = (emojis: TJoinedEmoji[]) => {
-  store.dispatch(serverSliceActions.setEmojis(emojis));
+  useServerStore.getState().setEmojis(emojis);
 };
 
 export const addEmoji = (emoji: TJoinedEmoji) => {
-  store.dispatch(serverSliceActions.addEmoji(emoji));
+  useServerStore.getState().addEmoji(emoji);
 };
 
 export const updateEmoji = (emojiId: number, emoji: Partial<TJoinedEmoji>) => {
-  store.dispatch(serverSliceActions.updateEmoji({ emojiId, emoji }));
+  useServerStore.getState().updateEmoji({ emojiId, emoji });
 };
 
 export const removeEmoji = (emojiId: number) => {
-  store.dispatch(serverSliceActions.removeEmoji({ emojiId }));
+  useServerStore.getState().removeEmoji({ emojiId });
 };

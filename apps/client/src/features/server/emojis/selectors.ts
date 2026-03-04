@@ -1,21 +1,25 @@
-import type { IRootState } from '@/features/store';
 import { getFileUrl } from '@/helpers/get-file-url';
-import { createSelector } from '@reduxjs/toolkit';
 import type { EmojiItem } from '@tiptap/extension-emoji';
+import type { IServerState } from '../slice';
 
-export const emojisSelector = (state: IRootState) => state.server.emojis;
+let lastEmojisInput: IServerState['emojis'] | undefined;
+let lastCustomEmojis: EmojiItem[] = [];
 
-export const customEmojisSelector = createSelector(
-  [emojisSelector],
-  (emojis) => {
-    const items: EmojiItem[] = emojis.map((emoji) => ({
-      name: emoji.name,
-      shortcodes: [emoji.name],
-      tags: ['custom'],
-      group: 'Custom',
-      fallbackImage: getFileUrl(emoji.file)
-    }));
+export const emojisSelector = (state: IServerState) => state.emojis;
 
-    return items;
+export const customEmojisSelector = (state: IServerState) => {
+  if (state.emojis === lastEmojisInput) {
+    return lastCustomEmojis;
   }
-);
+
+  lastEmojisInput = state.emojis;
+  lastCustomEmojis = state.emojis.map((emoji) => ({
+    name: emoji.name,
+    shortcodes: [emoji.name],
+    tags: ['custom'],
+    group: 'Custom',
+    fallbackImage: getFileUrl(emoji.file)
+  }));
+
+  return lastCustomEmojis;
+};

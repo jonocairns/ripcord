@@ -1,19 +1,19 @@
 import { useMemo } from 'react';
-import { useSelector } from 'react-redux';
 import {
   appLoadingSelector,
   devicesSelector,
   modViewOpenSelector,
   modViewUserIdSelector
 } from './selectors';
+import { useAppStore } from './slice';
 
-export const useIsAppLoading = () => useSelector(appLoadingSelector);
+export const useIsAppLoading = () => useAppStore(appLoadingSelector);
 
-export const useDevices = () => useSelector(devicesSelector);
+export const useDevices = () => useAppStore(devicesSelector);
 
 export const useModViewOpen = () => {
-  const isOpen = useSelector(modViewOpenSelector);
-  const userId = useSelector(modViewUserIdSelector);
+  const isOpen = useAppStore(modViewOpenSelector);
+  const userId = useAppStore(modViewUserIdSelector);
 
   return useMemo(() => ({ isOpen, userId }), [isOpen, userId]);
 };

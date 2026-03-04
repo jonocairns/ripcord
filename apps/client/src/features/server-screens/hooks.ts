@@ -1,4 +1,5 @@
-import { useSelector } from 'react-redux';
 import { serverScreensInfoSelector } from './selectors';
+import { useServerScreensStore } from './slice';
 
-export const useServerScreenInfo = () => useSelector(serverScreensInfoSelector);
+export const useServerScreenInfo = () =>
+  useServerScreensStore(serverScreensInfoSelector);

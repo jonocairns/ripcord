@@ -1,4 +1,3 @@
-import type { IRootState } from '../store';
+import type { TServerScreenState } from './slice';
 
-export const serverScreensInfoSelector = (state: IRootState) =>
-  state.serverScreen;
+export const serverScreensInfoSelector = (state: TServerScreenState) => state;

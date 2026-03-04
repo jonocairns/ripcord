@@ -1,8 +1,7 @@
-import type { IRootState } from '@/features/store';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TJoinedMessage } from '@sharkord/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSelector } from 'react-redux';
+import { useServerStore } from '../slice';
 import { addMessages } from './actions';
 import { messagesByChannelIdSelector } from './selectors';
 
@@ -10,7 +9,7 @@ const INITIAL_MESSAGES_LIMIT = 20;
 const OLDER_MESSAGES_LIMIT = 20;
 
 export const useMessagesByChannelId = (channelId: number) =>
-  useSelector((state: IRootState) =>
+  useServerStore((state) =>
     messagesByChannelIdSelector(state, channelId)
   );
 

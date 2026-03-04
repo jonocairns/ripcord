@@ -7,11 +7,10 @@ import { type TPublicServerSettings, type TServerInfo } from '@sharkord/shared';
 import { TRPCClientError } from '@trpc/client';
 import { toast } from 'sonner';
 import { openDialog } from '../dialogs/actions';
-import { store } from '../store';
 import { setPluginCommands } from './plugins/actions';
 import { clearPendingVoiceReconnectChannelId } from './reconnect-state';
 import { infoSelector } from './selectors';
-import { serverSliceActions } from './slice';
+import { useServerStore } from './slice';
 import { initSubscriptions } from './subscriptions';
 import { type TDisconnectInfo } from './types';
 
@@ -19,37 +18,37 @@ let unsubscribeFromServer: (() => void) | null = null;
 let connectPromise: Promise<void> | null = null;
 
 export const setConnected = (status: boolean) => {
-  store.dispatch(serverSliceActions.setConnected(status));
+  useServerStore.getState().setConnected(status);
 };
 
 export const resetServerState = () => {
-  store.dispatch(serverSliceActions.resetState());
+  useServerStore.getState().resetState();
 };
 
 export const setDisconnectInfo = (info: TDisconnectInfo | undefined) => {
-  store.dispatch(serverSliceActions.setDisconnectInfo(info));
+  useServerStore.getState().setDisconnectInfo(info);
 };
 
 export const setConnecting = (status: boolean) => {
-  store.dispatch(serverSliceActions.setConnecting(status));
+  useServerStore.getState().setConnecting(status);
 };
 
 export const setMustChangePassword = (status: boolean) => {
-  store.dispatch(serverSliceActions.setMustChangePassword(status));
+  useServerStore.getState().setMustChangePassword(status);
 };
 
 export const setServerId = (id: string) => {
-  store.dispatch(serverSliceActions.setServerId(id));
+  useServerStore.getState().setServerId(id);
 };
 
 export const setPublicServerSettings = (
   settings: TPublicServerSettings | undefined
 ) => {
-  store.dispatch(serverSliceActions.setPublicSettings(settings));
+  useServerStore.getState().setPublicSettings(settings);
 };
 
 export const setInfo = (info: TServerInfo | undefined) => {
-  store.dispatch(serverSliceActions.setInfo(info));
+  useServerStore.getState().setInfo(info);
 };
 
 export const connect = async () => {
@@ -60,7 +59,7 @@ export const connect = async () => {
   connectPromise = (async () => {
     setConnecting(true);
 
-    const state = store.getState();
+    const state = useServerStore.getState();
     const info = infoSelector(state);
     const serverId = info?.serverId ?? 'unknown-server';
 
@@ -123,7 +122,7 @@ export const joinServer = async (
 
   logDebug('joinServer', data);
 
-  store.dispatch(serverSliceActions.setInitialData(data));
+  useServerStore.getState().setInitialData(data);
   setDisconnectInfo(undefined);
 
   unsubscribeFromServer?.();

@@ -1,61 +1,48 @@
-import type { IRootState } from '@/features/store';
-import { createSelector } from '@reduxjs/toolkit';
-import { createCachedSelector } from 're-reselect';
+import type { IServerState } from '../slice';
 
 const DEFAULT_OBJECT = {};
 
-export const channelsSelector = (state: IRootState) => state.server.channels;
+export const channelsSelector = (state: IServerState) => state.channels;
 
-export const selectedChannelIdSelector = (state: IRootState) =>
-  state.server.selectedChannelId;
+export const selectedChannelIdSelector = (state: IServerState) =>
+  state.selectedChannelId;
 
-export const selectedChannelTypeSelector = createSelector(
-  [channelsSelector, selectedChannelIdSelector],
-  (channels, selectedChannelId) =>
-    channels.find((channel) => channel.id === selectedChannelId)?.type
-);
+export const selectedChannelTypeSelector = (state: IServerState) =>
+  state.channels.find((channel) => channel.id === state.selectedChannelId)?.type;
 
-export const currentVoiceChannelIdSelector = (state: IRootState) =>
-  state.server.currentVoiceChannelId;
+export const currentVoiceChannelIdSelector = (state: IServerState) =>
+  state.currentVoiceChannelId;
 
-export const channelPermissionsSelector = (state: IRootState) =>
-  state.server.channelPermissions;
+export const channelPermissionsSelector = (state: IServerState) =>
+  state.channelPermissions;
 
-export const channelsReadStatesSelector = (state: IRootState) =>
-  state.server.readStatesMap;
+export const channelsReadStatesSelector = (state: IServerState) =>
+  state.readStatesMap;
 
 export const channelReadStateByIdSelector = (
-  state: IRootState,
+  state: IServerState,
   channelId: number
-) => state.server.readStatesMap[channelId] ?? 0;
+) => state.readStatesMap[channelId] ?? 0;
 
-export const channelByIdSelector = createCachedSelector(
-  [channelsSelector, (_: IRootState, channelId: number) => channelId],
-  (channels, channelId) => channels.find((channel) => channel.id === channelId)
-)((_, channelId: number) => channelId);
+export const channelByIdSelector = (state: IServerState, channelId: number) =>
+  state.channels.find((channel) => channel.id === channelId);
 
-export const channelsByCategoryIdSelector = createCachedSelector(
-  [channelsSelector, (_: IRootState, categoryId: number) => categoryId],
-  (channels, categoryId) =>
-    channels
-      .filter((channel) => channel.categoryId === categoryId)
-      .sort((a, b) => a.position - b.position)
-)((_, categoryId: number) => categoryId);
+export const channelsByCategoryIdSelector = (
+  state: IServerState,
+  categoryId: number
+) =>
+  state.channels
+    .filter((channel) => channel.categoryId === categoryId)
+    .sort((a, b) => a.position - b.position);
 
-export const selectedChannelSelector = createSelector(
-  [channelsSelector, selectedChannelIdSelector],
-  (channels, selectedChannelId) =>
-    channels.find((channel) => channel.id === selectedChannelId)
-);
+export const selectedChannelSelector = (state: IServerState) =>
+  state.channels.find((channel) => channel.id === state.selectedChannelId);
 
-export const isCurrentVoiceChannelSelectedSelector = createSelector(
-  [selectedChannelIdSelector, currentVoiceChannelIdSelector],
-  (selectedChannelId, currentVoiceChannelId) =>
-    currentVoiceChannelId !== undefined &&
-    selectedChannelId === currentVoiceChannelId
-);
+export const isCurrentVoiceChannelSelectedSelector = (state: IServerState) =>
+  state.currentVoiceChannelId !== undefined &&
+  state.selectedChannelId === state.currentVoiceChannelId;
 
 export const channelPermissionsByIdSelector = (
-  state: IRootState,
+  state: IServerState,
   channelId: number
-) => state.server.channelPermissions[channelId] || DEFAULT_OBJECT;
+) => state.channelPermissions[channelId] || DEFAULT_OBJECT;

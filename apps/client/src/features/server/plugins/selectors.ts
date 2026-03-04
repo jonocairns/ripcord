@@ -1,12 +1,18 @@
-import type { IRootState } from '@/features/store';
-import { createSelector } from '@reduxjs/toolkit';
+import type { TCommandInfo } from '@sharkord/shared';
+import type { IServerState } from '../slice';
 
-export const commandsSelector = (state: IRootState) =>
-  state.server.pluginCommands;
+let lastCommandsInput: IServerState['pluginCommands'] | undefined;
+let lastFlatCommands: TCommandInfo[] = [];
 
-export const flatCommandsSelector = createSelector(
-  [commandsSelector],
-  (commandsMap) => {
-    return Object.values(commandsMap).flat();
+export const commandsSelector = (state: IServerState) => state.pluginCommands;
+
+export const flatCommandsSelector = (state: IServerState) => {
+  if (state.pluginCommands === lastCommandsInput) {
+    return lastFlatCommands;
   }
-);
+
+  lastCommandsInput = state.pluginCommands;
+  lastFlatCommands = Object.values(state.pluginCommands).flat();
+
+  return lastFlatCommands;
+};

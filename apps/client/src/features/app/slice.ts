@@ -1,5 +1,5 @@
 import type { TDevices } from '@/types';
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { create } from 'zustand';
 
 export interface TAppState {
   loading: boolean;
@@ -15,30 +15,4 @@ const initialState: TAppState = {
   modViewUserId: undefined
 };
 
-export const appSlice = createSlice({
-  name: 'app',
-  initialState,
-  reducers: {
-    setAppLoading: (state, action: PayloadAction<boolean>) => {
-      state.loading = action.payload;
-    },
-    setDevices: (state, action: PayloadAction<TDevices>) => {
-      state.devices = action.payload;
-    },
-    setModViewOpen: (
-      state,
-      action: PayloadAction<{
-        modViewOpen: boolean;
-        userId?: number;
-      }>
-    ) => {
-      state.modViewOpen = action.payload.modViewOpen;
-      state.modViewUserId = action.payload.userId;
-    }
-  }
-});
-
-const appSliceActions = appSlice.actions;
-const appSliceReducer = appSlice.reducer;
-
-export { appSliceActions, appSliceReducer };
+export const useAppStore = create<TAppState>(() => initialState);

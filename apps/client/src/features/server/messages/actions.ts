@@ -1,8 +1,7 @@
-import { store } from '@/features/store';
 import { getTRPCClient } from '@/lib/trpc';
 import { TYPING_MS, type TJoinedMessage } from '@sharkord/shared';
 import { selectedChannelIdSelector } from '../channels/selectors';
-import { serverSliceActions } from '../slice';
+import { useServerStore } from '../slice';
 import { playSound } from '../sounds/actions';
 import { SoundType } from '../types';
 import { ownUserIdSelector } from '../users/selectors';
@@ -18,17 +17,17 @@ export const addMessages = (
   opts: { prepend?: boolean } = {},
   isSubscriptionMessage = false
 ) => {
-  const state = store.getState();
+  const state = useServerStore.getState();
   const selectedChannelId = selectedChannelIdSelector(state);
 
-  store.dispatch(serverSliceActions.addMessages({ channelId, messages, opts }));
+  useServerStore.getState().addMessages({ channelId, messages, opts });
 
   messages.forEach((message) => {
     removeTypingUser(channelId, message.userId);
   });
 
   if (isSubscriptionMessage && messages.length > 0) {
-    const state = store.getState();
+    const state = useServerStore.getState();
     const ownUserId = ownUserIdSelector(state);
     const targetMessage = messages[0];
     const isFromOwnUser = ownUserId === targetMessage.userId;
@@ -51,15 +50,15 @@ export const addMessages = (
 };
 
 export const updateMessage = (channelId: number, message: TJoinedMessage) => {
-  store.dispatch(serverSliceActions.updateMessage({ channelId, message }));
+  useServerStore.getState().updateMessage({ channelId, message });
 };
 
 export const deleteMessage = (channelId: number, messageId: number) => {
-  store.dispatch(serverSliceActions.deleteMessage({ channelId, messageId }));
+  useServerStore.getState().deleteMessage({ channelId, messageId });
 };
 
 export const addTypingUser = (channelId: number, userId: number) => {
-  store.dispatch(serverSliceActions.addTypingUser({ channelId, userId }));
+  useServerStore.getState().addTypingUser({ channelId, userId });
 
   const timeoutKey = getTypingKey(channelId, userId);
 
@@ -74,5 +73,5 @@ export const addTypingUser = (channelId: number, userId: number) => {
 };
 
 export const removeTypingUser = (channelId: number, userId: number) => {
-  store.dispatch(serverSliceActions.removeTypingUser({ channelId, userId }));
+  useServerStore.getState().removeTypingUser({ channelId, userId });
 };

@@ -8,11 +8,10 @@ import {
 import type { TServerInfo } from '@sharkord/shared';
 import { toast } from 'sonner';
 import { connect, setDisconnectInfo, setInfo } from '../server/actions';
-import { store } from '../store';
-import { appSliceActions } from './slice';
+import { useAppStore } from './slice';
 
 export const setAppLoading = (loading: boolean) =>
-  store.dispatch(appSliceActions.setAppLoading(loading));
+  useAppStore.setState({ loading });
 
 export const fetchServerInfo = async (): Promise<TServerInfo | undefined> => {
   try {
@@ -72,18 +71,14 @@ export const loadApp = async () => {
 };
 
 export const setModViewOpen = (isOpen: boolean, userId?: number) =>
-  store.dispatch(
-    appSliceActions.setModViewOpen({
-      modViewOpen: isOpen,
-      userId
-    })
-  );
+  useAppStore.setState({
+    modViewOpen: isOpen,
+    modViewUserId: userId
+  });
 
 export const resetApp = () => {
-  store.dispatch(
-    appSliceActions.setModViewOpen({
-      modViewOpen: false,
-      userId: undefined
-    })
-  );
+  useAppStore.setState({
+    modViewOpen: false,
+    modViewUserId: undefined
+  });
 };
