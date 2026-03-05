@@ -402,9 +402,10 @@ export const useServerStore = create<TServerStore>((set, get) => ({
     set({ users: nextUsers });
   },
   addUser: (user) => {
-    const nextUsers = addById(get().users, user);
+    const users = get().users;
+    const nextUsers = addById(users, user);
 
-    if (nextUsers === get().users) {
+    if (nextUsers === users) {
       return;
     }
 
@@ -431,9 +432,10 @@ export const useServerStore = create<TServerStore>((set, get) => ({
     set({ roles: nextRoles });
   },
   addRole: (role) => {
-    const nextRoles = addById(get().roles, role);
+    const roles = get().roles;
+    const nextRoles = addById(roles, role);
 
-    if (nextRoles === get().roles) {
+    if (nextRoles === roles) {
       return;
     }
 
@@ -457,9 +459,10 @@ export const useServerStore = create<TServerStore>((set, get) => ({
     set({ channels: nextChannels });
   },
   addChannel: (channel) => {
-    const nextChannels = addById(get().channels, channel);
+    const channels = get().channels;
+    const nextChannels = addById(channels, channel);
 
-    if (nextChannels === get().channels) {
+    if (nextChannels === channels) {
       return;
     }
 
@@ -513,9 +516,10 @@ export const useServerStore = create<TServerStore>((set, get) => ({
     set({ emojis: nextEmojis });
   },
   addEmoji: (emoji) => {
-    const nextEmojis = addById(get().emojis, emoji);
+    const emojis = get().emojis;
+    const nextEmojis = addById(emojis, emoji);
 
-    if (nextEmojis === get().emojis) {
+    if (nextEmojis === emojis) {
       return;
     }
 
@@ -530,9 +534,10 @@ export const useServerStore = create<TServerStore>((set, get) => ({
     set({ categories });
   },
   addCategory: (category) => {
-    const nextCategories = addById(get().categories, category);
+    const categories = get().categories;
+    const nextCategories = addById(categories, category);
 
-    if (nextCategories === get().categories) {
+    if (nextCategories === categories) {
       return;
     }
 
