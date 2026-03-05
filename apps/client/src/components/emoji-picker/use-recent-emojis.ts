@@ -7,6 +7,7 @@ import {
 import { useCallback, useSyncExternalStore } from 'react';
 
 const MAX_RECENT_EMOJIS = 32;
+const RECENT_EMOJIS_CHANGED_EVENT = 'sharkord:recent-emojis-changed';
 
 type StoredEmoji = {
   name: string;
@@ -15,17 +16,9 @@ type StoredEmoji = {
   emoji?: string;
 };
 
-let recentEmojisCache: TEmojiItem[] | null = null;
-
-const subscribers = new Set<() => void>();
-
-const notifySubscribers = () => {
-  subscribers.forEach((callback) => callback());
-};
-
 const loadRecentEmojis = (): TEmojiItem[] => {
-  if (recentEmojisCache !== null) {
-    return recentEmojisCache;
+  if (typeof window === 'undefined') {
+    return [];
   }
 
   const stored = getLocalStorageItemAsJSON<StoredEmoji[]>(
@@ -33,12 +26,14 @@ const loadRecentEmojis = (): TEmojiItem[] => {
     []
   );
 
-  recentEmojisCache = stored ?? [];
-
-  return recentEmojisCache;
+  return stored ?? [];
 };
 
 const saveRecentEmojis = (emojis: TEmojiItem[]): void => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
   const toStore: StoredEmoji[] = emojis.map((e) => ({
     name: e.name,
     shortcodes: e.shortcodes,
@@ -47,10 +42,7 @@ const saveRecentEmojis = (emojis: TEmojiItem[]): void => {
   }));
 
   setLocalStorageItemAsJSON(LocalStorageKey.RECENT_EMOJIS, toStore);
-
-  recentEmojisCache = emojis;
-
-  notifySubscribers();
+  window.dispatchEvent(new Event(RECENT_EMOJIS_CHANGED_EVENT));
 };
 
 const addRecentEmoji = (emoji: TEmojiItem): void => {
@@ -63,20 +55,35 @@ const addRecentEmoji = (emoji: TEmojiItem): void => {
 };
 
 const subscribe = (callback: () => void): (() => void) => {
-  subscribers.add(callback);
+  if (typeof window === 'undefined') {
+    return () => undefined;
+  }
 
-  return () => subscribers.delete(callback);
+  const handleRecentEmojisChanged = () => callback();
+
+  window.addEventListener(RECENT_EMOJIS_CHANGED_EVENT, handleRecentEmojisChanged);
+  window.addEventListener('storage', handleRecentEmojisChanged);
+
+  return () => {
+    window.removeEventListener(
+      RECENT_EMOJIS_CHANGED_EVENT,
+      handleRecentEmojisChanged
+    );
+    window.removeEventListener('storage', handleRecentEmojisChanged);
+  };
 };
 
 const getSnapshot = (): TEmojiItem[] => {
   return loadRecentEmojis();
 };
 
+const getServerSnapshot = (): TEmojiItem[] => [];
+
 const useRecentEmojis = () => {
   const recentEmojis = useSyncExternalStore(
     subscribe,
     getSnapshot,
-    getSnapshot
+    getServerSnapshot
   );
 
   const addRecent = useCallback((emoji: TEmojiItem) => {
