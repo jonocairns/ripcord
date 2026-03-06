@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import { useServerStore } from '../slice';
 import {
   isOwnUserSelector,
-  ownPublicUserSelector,
   ownUserIdSelector,
   ownUserSelector,
   sortUsers,
@@ -29,7 +28,7 @@ export const useUserById = (userId: number) =>
   useServerStore((state) => userByIdSelector(state, userId));
 
 export const useOwnPublicUser = () =>
-  useServerStore(ownPublicUserSelector);
+  useServerStore(ownUserSelector);
 
 export const useUserStatus = (userId: number) =>
   useServerStore((state) => userStatusSelector(state, userId));

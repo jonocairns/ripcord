@@ -40,9 +40,6 @@ export const userByIdSelector = (state: IServerState, userId: number) =>
 export const isOwnUserSelector = (state: IServerState, userId: number) =>
   ownUserIdSelector(state) === userId;
 
-export const ownPublicUserSelector = (state: IServerState) =>
-  state.users.find((user) => user.id === ownUserIdSelector(state));
-
 export const userStatusSelector = (state: IServerState, userId: number) =>
   userByIdSelector(state, userId)?.status ?? UserStatus.OFFLINE;
 
