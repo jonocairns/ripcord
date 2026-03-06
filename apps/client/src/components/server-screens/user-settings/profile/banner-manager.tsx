@@ -7,6 +7,7 @@ import type { TJoinedPublicUser } from '@sharkord/shared';
 import { Upload, X } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { toast } from 'sonner';
+import { getTrpcError } from '@/helpers/parse-trpc-errors';
 
 type TBannerManagerProps = {
   user: TJoinedPublicUser;
@@ -24,8 +25,8 @@ const BannerManager = memo(
         await trpc.users.changeBanner.mutate({ fileId: undefined });
 
         toast.success('Banner removed successfully!');
-      } catch {
-        toast.error('Could not remove banner. Please try again.');
+      } catch (error) {
+        toast.error(getTrpcError(error, 'Could not remove banner. Please try again.'));
       }
     }, []);
 
@@ -45,8 +46,8 @@ const BannerManager = memo(
         await trpc.users.changeBanner.mutate({ fileId: temporaryFile.id });
 
         toast.success('Banner updated successfully!');
-      } catch {
-        toast.error('Could not update banner. Please try again.');
+      } catch (error) {
+        toast.error(getTrpcError(error, 'Could not update banner. Please try again.'));
       }
     }, [openFilePicker]);
 

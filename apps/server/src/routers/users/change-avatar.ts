@@ -41,9 +41,9 @@ const changeAvatarRoute = protectedProcedure
         message: 'Temporary file not found'
       });
 
-      invariant(tempFile.size <= 3 * 1024 * 1024, {
+      invariant(tempFile.size <= 20 * 1024 * 1024, {
         code: 'BAD_REQUEST',
-        message: 'File size exceeds the limit of 3 MB'
+        message: 'File size exceeds the limit of 20 MB'
       });
 
       const newFile = await fileManager.saveFile(input.fileId, ctx.userId);

@@ -6,7 +6,19 @@ const audioCtx = new (
   (window as any).webkitAudioContext
 )();
 
-const SOUNDS_VOLUME = 2;
+const SOUNDS_VOLUME = 4;
+
+const masterGain = audioCtx.createGain();
+masterGain.gain.setValueAtTime(1, 0);
+
+const limiter = audioCtx.createDynamicsCompressor();
+limiter.threshold.setValueAtTime(-1, 0);
+limiter.knee.setValueAtTime(0, 0);
+limiter.ratio.setValueAtTime(20, 0);
+limiter.attack.setValueAtTime(0.001, 0);
+limiter.release.setValueAtTime(0.01, 0);
+
+masterGain.connect(limiter).connect(masterGain);
 
 const now = () => audioCtx.currentTime;
 
@@ -34,7 +46,7 @@ const sfxMessageReceived = () => {
 
   gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.05);
 
-  osc.connect(gain).connect(audioCtx.destination);
+  osc.connect(gain).connect(masterGain);
   osc.start();
   osc.stop(now() + 0.05);
 };
@@ -46,7 +58,7 @@ const sfxMessageSent = () => {
 
   gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.04);
 
-  osc.connect(gain).connect(audioCtx.destination);
+  osc.connect(gain).connect(masterGain);
   osc.start();
   osc.stop(now() + 0.04);
 };
@@ -66,7 +78,7 @@ const sfxOwnUserJoinedVoiceChannel = () => {
 
     gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.25);
 
-    osc.connect(gain).connect(audioCtx.destination);
+    osc.connect(gain).connect(masterGain);
     osc.start();
     osc.stop(now() + 0.25);
   });
@@ -83,7 +95,7 @@ const sfxOwnUserJoinedVoiceChannel = () => {
 
     gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.3);
 
-    osc.connect(gain).connect(audioCtx.destination);
+    osc.connect(gain).connect(masterGain);
     osc.start(now() + 0.08);
     osc.stop(now() + 0.3);
   });
@@ -104,7 +116,7 @@ const sfxOwnUserLeftVoiceChannel = () => {
 
     gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.3);
 
-    osc.connect(gain).connect(audioCtx.destination);
+    osc.connect(gain).connect(masterGain);
     osc.start();
     osc.stop(now() + 0.3);
   });
@@ -115,7 +127,7 @@ const sfxOwnUserLeftVoiceChannel = () => {
 
   gain2.gain.exponentialRampToValueAtTime(0.0001, now() + 0.25);
 
-  osc2.connect(gain2).connect(audioCtx.destination);
+  osc2.connect(gain2).connect(masterGain);
   osc2.start(now() + 0.05);
   osc2.stop(now() + 0.3);
 };
@@ -127,7 +139,7 @@ const sfxOwnUserMutedMic = () => {
 
   gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.06);
 
-  osc.connect(gain).connect(audioCtx.destination);
+  osc.connect(gain).connect(masterGain);
   osc.start();
   osc.stop(now() + 0.06);
 };
@@ -139,7 +151,7 @@ const sfxOwnUserUnmutedMic = () => {
 
   gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.06);
 
-  osc.connect(gain).connect(audioCtx.destination);
+  osc.connect(gain).connect(masterGain);
   osc.start();
   osc.stop(now() + 0.06);
 };
@@ -151,7 +163,7 @@ const sfxOwnUserMutedSound = () => {
 
   gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.06);
 
-  osc.connect(gain).connect(audioCtx.destination);
+  osc.connect(gain).connect(masterGain);
   osc.start();
   osc.stop(now() + 0.06);
 };
@@ -163,7 +175,7 @@ const sfxOwnUserUnmutedSound = () => {
 
   gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.06);
 
-  osc.connect(gain).connect(audioCtx.destination);
+  osc.connect(gain).connect(masterGain);
   osc.start();
   osc.stop(now() + 0.06);
 };
@@ -175,7 +187,7 @@ const sfxOwnUserStartedWebcam = () => {
 
   gain1.gain.exponentialRampToValueAtTime(0.0001, now() + 0.12);
 
-  osc1.connect(gain1).connect(audioCtx.destination);
+  osc1.connect(gain1).connect(masterGain);
   osc1.start();
   osc1.stop(now() + 0.12);
 
@@ -184,7 +196,7 @@ const sfxOwnUserStartedWebcam = () => {
 
   gain2.gain.exponentialRampToValueAtTime(0.0001, now() + 0.1);
 
-  osc2.connect(gain2).connect(audioCtx.destination);
+  osc2.connect(gain2).connect(masterGain);
   osc2.start(now() + 0.04);
   osc2.stop(now() + 0.12);
 };
@@ -197,7 +209,7 @@ const sfxOwnUserStoppedWebcam = () => {
   osc1.frequency.exponentialRampToValueAtTime(500, now() + 0.12);
   gain1.gain.exponentialRampToValueAtTime(0.0001, now() + 0.14);
 
-  osc1.connect(gain1).connect(audioCtx.destination);
+  osc1.connect(gain1).connect(masterGain);
   osc1.start();
   osc1.stop(now() + 0.14);
 };
@@ -218,7 +230,7 @@ const sfxOwnUserStartedScreenshare = () => {
 
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
 
-    osc.connect(gain).connect(audioCtx.destination);
+    osc.connect(gain).connect(masterGain);
     osc.start(t);
     osc.stop(t + 0.1);
   });
@@ -229,7 +241,7 @@ const sfxOwnUserStartedScreenshare = () => {
 
   gain2.gain.exponentialRampToValueAtTime(0.0001, now() + 0.2);
 
-  osc2.connect(gain2).connect(audioCtx.destination);
+  osc2.connect(gain2).connect(masterGain);
   osc2.start(now() + 0.08);
   osc2.stop(now() + 0.22);
 };
@@ -242,7 +254,7 @@ const sfxOwnUserStoppedScreenshare = () => {
   osc1.frequency.exponentialRampToValueAtTime(550, now() + 0.18);
   gain1.gain.exponentialRampToValueAtTime(0.0001, now() + 0.2);
 
-  osc1.connect(gain1).connect(audioCtx.destination);
+  osc1.connect(gain1).connect(masterGain);
   osc1.start();
   osc1.stop(now() + 0.2);
 
@@ -252,7 +264,7 @@ const sfxOwnUserStoppedScreenshare = () => {
   osc2.frequency.exponentialRampToValueAtTime(700, now() + 0.18);
   gain2.gain.exponentialRampToValueAtTime(0.0001, now() + 0.2);
 
-  osc2.connect(gain2).connect(audioCtx.destination);
+  osc2.connect(gain2).connect(masterGain);
   osc2.start(now() + 0.05);
   osc2.stop(now() + 0.2);
 };
@@ -272,7 +284,7 @@ const sfxRemoteUserJoinedVoiceChannel = () => {
 
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
 
-    osc.connect(gain).connect(audioCtx.destination);
+    osc.connect(gain).connect(masterGain);
     osc.start(t);
     osc.stop(t + 0.2);
   });
@@ -293,7 +305,7 @@ const sfxRemoteUserStartedStream = () => {
 
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
 
-    osc.connect(gain).connect(audioCtx.destination);
+    osc.connect(gain).connect(masterGain);
     osc.start(t);
     osc.stop(t + 0.14);
   });
@@ -314,7 +326,7 @@ const sfxRemoteUserLeftVoiceChannel = () => {
 
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
 
-    osc.connect(gain).connect(audioCtx.destination);
+    osc.connect(gain).connect(masterGain);
     osc.start(t);
     osc.stop(t + 0.2);
   });
@@ -334,7 +346,7 @@ const sfxStreamWatcherJoined = () => {
 
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
 
-    osc.connect(gain).connect(audioCtx.destination);
+    osc.connect(gain).connect(masterGain);
     osc.start(t);
     osc.stop(t + 0.12);
   });
@@ -354,7 +366,7 @@ const sfxStreamWatcherLeft = () => {
 
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
 
-    osc.connect(gain).connect(audioCtx.destination);
+    osc.connect(gain).connect(masterGain);
     osc.start(t);
     osc.stop(t + 0.12);
   });
