@@ -7,6 +7,7 @@ import type { TJoinedPublicUser } from '@sharkord/shared';
 import { Upload, X } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { toast } from 'sonner';
+import { getTrpcError } from '@/helpers/parse-trpc-errors';
 
 type TAvatarManagerProps = {
   user: TJoinedPublicUser;
@@ -22,8 +23,8 @@ const AvatarManager = memo(({ user }: TAvatarManagerProps) => {
       await trpc.users.changeAvatar.mutate({ fileId: undefined });
 
       toast.success('Avatar removed successfully!');
-    } catch {
-      toast.error('Could not remove avatar. Please try again.');
+    } catch (error) {
+      toast.error(getTrpcError(error, 'Could not remove avatar. Please try again.'));
     }
   }, []);
 
@@ -43,8 +44,8 @@ const AvatarManager = memo(({ user }: TAvatarManagerProps) => {
       await trpc.users.changeAvatar.mutate({ fileId: temporaryFile.id });
 
       toast.success('Avatar updated successfully!');
-    } catch {
-      toast.error('Could not update avatar. Please try again.');
+    } catch (error) {
+      toast.error(getTrpcError(error, 'Could not update avatar. Please try again.'));
     }
   }, [openFilePicker]);
 

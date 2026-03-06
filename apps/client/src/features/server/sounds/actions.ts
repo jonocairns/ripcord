@@ -6,7 +6,7 @@ const audioCtx = new (
   (window as any).webkitAudioContext
 )();
 
-const SOUNDS_VOLUME = 2;
+const SOUNDS_VOLUME = 4;
 
 const now = () => audioCtx.currentTime;
 
