@@ -1,47 +1,46 @@
-import type { IRootState } from '@/features/store';
-import { createCachedSelector } from 're-reselect';
+import type { IServerState } from '../slice';
 
 const DEFAULT_OBJECT = {};
 
-export const voiceMapSelector = (state: IRootState) => state.server.voiceMap;
+export const voiceMapSelector = (state: IServerState) => state.voiceMap;
 
-export const ownVoiceStateSelector = (state: IRootState) => {
-  return state.server.ownVoiceState;
-};
+export const ownVoiceStateSelector = (state: IServerState) => state.ownVoiceState;
 
-export const pinnedCardSelector = (state: IRootState) =>
-  state.server.pinnedCard;
+export const pinnedCardSelector = (state: IServerState) => state.pinnedCard;
 
 export const voiceChannelStateSelector = (
-  state: IRootState,
+  state: IServerState,
   channelId: number
-) => state.server.voiceMap[channelId];
+) => state.voiceMap[channelId];
 
 export const voiceChannelExternalStreamsSelector = (
-  state: IRootState,
+  state: IServerState,
   channelId: number
-) => state.server.externalStreamsMap[channelId];
+) => state.externalStreamsMap[channelId];
 
-export const voiceChannelExternalStreamsListSelector = createCachedSelector(
-  voiceChannelExternalStreamsSelector,
-  (externalStreamsMap) => {
-    return Object.entries(externalStreamsMap || DEFAULT_OBJECT).map(
-      ([streamId, stream]) => ({
-        streamId: Number(streamId),
-        ...stream
-      })
-    );
-  }
-)((_state: IRootState, channelId: number) => channelId);
+export const voiceChannelExternalStreamsListSelector = (
+  state: IServerState,
+  channelId: number
+) =>
+  Object.entries(voiceChannelExternalStreamsSelector(state, channelId) || DEFAULT_OBJECT).map(
+    ([streamId, stream]) => ({
+      streamId: Number(streamId),
+      ...stream
+    })
+  );
 
-export const voiceChannelAudioExternalStreamsSelector = createCachedSelector(
-  voiceChannelExternalStreamsListSelector,
-  (externalStreams) =>
-    externalStreams.filter((stream) => stream.tracks?.audio === true)
-)((_state: IRootState, channelId: number) => channelId);
+export const voiceChannelAudioExternalStreamsSelector = (
+  state: IServerState,
+  channelId: number
+) =>
+  voiceChannelExternalStreamsListSelector(state, channelId).filter(
+    (stream) => stream.tracks?.audio === true
+  );
 
-export const voiceChannelVideoExternalStreamsSelector = createCachedSelector(
-  voiceChannelExternalStreamsListSelector,
-  (externalStreams) =>
-    externalStreams.filter((stream) => stream.tracks?.video === true)
-)((_state: IRootState, channelId: number) => channelId);
+export const voiceChannelVideoExternalStreamsSelector = (
+  state: IServerState,
+  channelId: number
+) =>
+  voiceChannelExternalStreamsListSelector(state, channelId).filter(
+    (stream) => stream.tracks?.video === true
+  );

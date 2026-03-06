@@ -1,21 +1,25 @@
 import type { ServerScreen } from '@/components/server-screens/screens';
 import type { TGenericObject } from '@sharkord/shared';
-import { store } from '../store';
-import { serverScreenSliceActions } from './slice';
+import {
+  getInitialServerScreenState,
+  useServerScreensStore
+} from './slice';
 
 export const openServerScreen = (
   serverScreen: ServerScreen,
   props?: TGenericObject
 ) => {
-  store.dispatch(
-    serverScreenSliceActions.openServerScreen({ serverScreen, props })
-  );
+  useServerScreensStore.setState({
+    openServerScreen: serverScreen,
+    props: props || {},
+    isOpen: true
+  });
 };
 
 export const closeServerScreens = () => {
-  store.dispatch(serverScreenSliceActions.closeServerScreens());
+  useServerScreensStore.setState(getInitialServerScreenState());
 };
 
 export const resetServerScreens = () => {
-  store.dispatch(serverScreenSliceActions.resetServerScreens());
+  useServerScreensStore.setState(getInitialServerScreenState());
 };

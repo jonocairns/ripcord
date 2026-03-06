@@ -1,5 +1,4 @@
 import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-card-controller';
-import { store } from '@/features/store';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import { type TExternalStream, type TVoiceUserState } from '@sharkord/shared';
@@ -13,7 +12,7 @@ import {
   currentVoiceChannelIdSelector,
   selectedChannelIdSelector
 } from '../channels/selectors';
-import { serverSliceActions } from '../slice';
+import { useServerStore } from '../slice';
 import { playSound } from '../sounds/actions';
 import { SoundType } from '../types';
 import { ownUserIdSelector } from '../users/selectors';
@@ -27,9 +26,9 @@ const channelHasAvailableStreams = (
   channelId: number,
   opts: { excludeUserId?: number } = {}
 ): boolean => {
-  const state = store.getState();
-  const users = state.server.voiceMap[channelId]?.users ?? {};
-  const externalStreams = state.server.externalStreamsMap[channelId] ?? {};
+  const state = useServerStore.getState();
+  const users = state.voiceMap[channelId]?.users ?? {};
+  const externalStreams = state.externalStreamsMap[channelId] ?? {};
 
   const hasUserStream = Object.entries(users).some(([userId, voiceState]) => {
     if (
@@ -46,13 +45,13 @@ const channelHasAvailableStreams = (
 };
 
 const clearPinnedCardById = (cardId: string): void => {
-  const pinnedCard = pinnedCardSelector(store.getState());
+  const pinnedCard = pinnedCardSelector(useServerStore.getState());
 
   if (pinnedCard?.id !== cardId) {
     return;
   }
 
-  store.dispatch(serverSliceActions.setPinnedCard(undefined));
+  useServerStore.getState().setPinnedCard(undefined);
 };
 
 export const addUserToVoiceChannel = (
@@ -60,17 +59,15 @@ export const addUserToVoiceChannel = (
   channelId: number,
   voiceState: TVoiceUserState
 ): void => {
-  const state = store.getState();
+  const state = useServerStore.getState();
   const ownUserId = ownUserIdSelector(state);
   const currentChannelId = currentVoiceChannelIdSelector(state);
 
-  store.dispatch(
-    serverSliceActions.addUserToVoiceChannel({
-      userId,
-      channelId,
-      state: voiceState
-    })
-  );
+  useServerStore.getState().addUserToVoiceChannel({
+    userId,
+    channelId,
+    state: voiceState
+  });
 
   if (userId !== ownUserId && channelId === currentChannelId) {
     playSound(SoundType.REMOTE_USER_JOINED_VOICE_CHANNEL);
@@ -81,13 +78,11 @@ export const removeUserFromVoiceChannel = (
   userId: number,
   channelId: number
 ): void => {
-  const state = store.getState();
+  const state = useServerStore.getState();
   const ownUserId = ownUserIdSelector(state);
   const currentChannelId = currentVoiceChannelIdSelector(state);
 
-  store.dispatch(
-    serverSliceActions.removeUserFromVoiceChannel({ userId, channelId })
-  );
+  useServerStore.getState().removeUserFromVoiceChannel({ userId, channelId });
 
   clearPinnedCardById(`user-${userId}`);
   clearPinnedCardById(`screen-share-${userId}`);
@@ -102,18 +97,16 @@ export const addExternalStreamToVoiceChannel = (
   streamId: number,
   stream: TExternalStream
 ): void => {
-  const state = store.getState();
+  const state = useServerStore.getState();
   const currentChannelId = currentVoiceChannelIdSelector(state);
   const shouldPlayStartedStreamSound =
     channelId === currentChannelId && !channelHasAvailableStreams(channelId);
 
-  store.dispatch(
-    serverSliceActions.addExternalStreamToChannel({
-      channelId,
-      streamId,
-      stream
-    })
-  );
+  useServerStore.getState().addExternalStreamToChannel({
+    channelId,
+    streamId,
+    stream
+  });
 
   if (shouldPlayStartedStreamSound) {
     playSound(SoundType.REMOTE_USER_STARTED_STREAM);
@@ -125,25 +118,21 @@ export const updateExternalStreamInVoiceChannel = (
   streamId: number,
   stream: TExternalStream
 ): void => {
-  store.dispatch(
-    serverSliceActions.updateExternalStreamInChannel({
-      channelId,
-      streamId,
-      stream
-    })
-  );
+  useServerStore.getState().updateExternalStreamInChannel({
+    channelId,
+    streamId,
+    stream
+  });
 };
 
 export const removeExternalStreamFromVoiceChannel = (
   channelId: number,
   streamId: number
 ): void => {
-  store.dispatch(
-    serverSliceActions.removeExternalStreamFromChannel({
-      channelId,
-      streamId
-    })
-  );
+  useServerStore.getState().removeExternalStreamFromChannel({
+    channelId,
+    streamId
+  });
 
   clearPinnedCardById(`external-stream-${streamId}`);
 };
@@ -153,10 +142,10 @@ export const updateVoiceUserState = (
   channelId: number,
   newState: Partial<TVoiceUserState>
 ): void => {
-  const state = store.getState();
+  const state = useServerStore.getState();
   const currentChannelId = currentVoiceChannelIdSelector(state);
   const ownUserId = ownUserIdSelector(state);
-  const currentUserState = state.server.voiceMap[channelId]?.users[userId];
+  const currentUserState = state.voiceMap[channelId]?.users[userId];
 
   const shouldPlayStartedStreamSound =
     userId !== ownUserId &&
@@ -166,9 +155,11 @@ export const updateVoiceUserState = (
     ((newState.webcamEnabled === true && !currentUserState.webcamEnabled) ||
       (newState.sharingScreen === true && !currentUserState.sharingScreen));
 
-  store.dispatch(
-    serverSliceActions.updateVoiceUserState({ userId, channelId, newState })
-  );
+  useServerStore.getState().updateVoiceUserState({
+    userId,
+    channelId,
+    newState
+  });
 
   if (newState.sharingScreen === false) {
     clearPinnedCardById(`screen-share-${userId}`);
@@ -192,13 +183,13 @@ export const handleStreamWatcherActivity = (activity: {
 export const updateOwnVoiceState = (
   newState: Partial<TVoiceUserState>
 ): void => {
-  store.dispatch(serverSliceActions.updateOwnVoiceState(newState));
+  useServerStore.getState().updateOwnVoiceState(newState);
 };
 
 export const joinVoice = async (
   channelId: number
 ): Promise<RtpCapabilities | undefined> => {
-  const state = store.getState();
+  const state = useServerStore.getState();
   const currentChannelId = currentVoiceChannelIdSelector(state);
 
   if (channelId === currentChannelId) {
@@ -234,7 +225,7 @@ export const joinVoice = async (
 const leaveVoiceInternal = async (
   options: TLeaveVoiceOptions
 ): Promise<void> => {
-  const state = store.getState();
+  const state = useServerStore.getState();
   const currentChannelId = currentVoiceChannelIdSelector(state);
   const selectedChannelId = selectedChannelIdSelector(state);
 
@@ -268,5 +259,5 @@ export const leaveVoice = async (): Promise<void> => {
 };
 
 export const setPinnedCard = (pinnedCard: TPinnedCard | undefined): void => {
-  store.dispatch(serverSliceActions.setPinnedCard(pinnedCard));
+  useServerStore.getState().setPinnedCard(pinnedCard);
 };

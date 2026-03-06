@@ -1,6 +1,11 @@
-import { useSelector } from 'react-redux';
-import { commandsSelector, flatCommandsSelector } from './selectors';
+import { useMemo } from 'react';
+import { useServerStore } from '../slice';
+import { commandsSelector, toFlatCommands } from './selectors';
 
-export const usePluginCommands = () => useSelector(commandsSelector);
+export const usePluginCommands = () => useServerStore(commandsSelector);
 
-export const useFlatPluginCommands = () => useSelector(flatCommandsSelector);
+export const useFlatPluginCommands = () => {
+  const pluginCommands = useServerStore(commandsSelector);
+
+  return useMemo(() => toFlatCommands(pluginCommands), [pluginCommands]);
+};

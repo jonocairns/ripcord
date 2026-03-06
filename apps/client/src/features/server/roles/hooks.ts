@@ -1,8 +1,7 @@
-import type { IRootState } from '@/features/store';
-import { useSelector } from 'react-redux';
+import { useServerStore } from '../slice';
 import { roleByIdSelector, rolesSelector } from './selectors';
 
 export const useRoleById = (roleId: number) =>
-  useSelector((state: IRootState) => roleByIdSelector(state, roleId));
+  useServerStore((state) => roleByIdSelector(state, roleId));
 
-export const useRoles = () => useSelector(rolesSelector);
+export const useRoles = () => useServerStore(rolesSelector);

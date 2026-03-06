@@ -1,9 +1,6 @@
-import type { IRootState } from '@/features/store';
-import { createCachedSelector } from 're-reselect';
+import type { IServerState } from '../slice';
 
-export const rolesSelector = (state: IRootState) => state.server.roles;
+export const rolesSelector = (state: IServerState) => state.roles;
 
-export const roleByIdSelector = createCachedSelector(
-  [rolesSelector, (_: IRootState, roleId: number) => roleId],
-  (roles, roleId) => roles.find((role) => role.id === roleId)
-)((_, roleId: number) => roleId);
+export const roleByIdSelector = (state: IServerState, roleId: number) =>
+  state.roles.find((role) => role.id === roleId);

@@ -1,8 +1,16 @@
-import type { IRootState } from '@/features/store';
-import { useSelector } from 'react-redux';
-import { categoriesSelector, categoryByIdSelector } from './selectors';
+import { useMemo } from 'react';
+import { useServerStore } from '../slice';
+import {
+  categoriesSelector,
+  categoryByIdSelector,
+  sortCategories
+} from './selectors';
 
-export const useCategories = () => useSelector(categoriesSelector);
+export const useCategories = () => {
+  const categories = useServerStore(categoriesSelector);
+
+  return useMemo(() => sortCategories(categories), [categories]);
+};
 
 export const useCategoryById = (categoryId: number) =>
-  useSelector((state: IRootState) => categoryByIdSelector(state, categoryId));
+  useServerStore((state) => categoryByIdSelector(state, categoryId));

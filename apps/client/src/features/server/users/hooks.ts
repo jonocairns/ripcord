@@ -1,32 +1,40 @@
-import type { IRootState } from '@/features/store';
-import { useSelector } from 'react-redux';
+import { useMemo } from 'react';
+import { useServerStore } from '../slice';
 import {
   isOwnUserSelector,
-  ownPublicUserSelector,
   ownUserIdSelector,
   ownUserSelector,
+  sortUsers,
+  toUsernamesMap,
   userByIdSelector,
-  usernamesSelector,
   usersSelector,
   userStatusSelector
 } from './selectors';
 
-export const useUsers = () => useSelector(usersSelector);
+export const useUsers = () => {
+  const users = useServerStore(usersSelector);
 
-export const useOwnUser = () => useSelector(ownUserSelector);
+  return useMemo(() => sortUsers(users), [users]);
+};
 
-export const useOwnUserId = () => useSelector(ownUserIdSelector);
+export const useOwnUser = () => useServerStore(ownUserSelector);
+
+export const useOwnUserId = () => useServerStore(ownUserIdSelector);
 
 export const useIsOwnUser = (userId: number) =>
-  useSelector((state: IRootState) => isOwnUserSelector(state, userId));
+  useServerStore((state) => isOwnUserSelector(state, userId));
 
 export const useUserById = (userId: number) =>
-  useSelector((state: IRootState) => userByIdSelector(state, userId));
+  useServerStore((state) => userByIdSelector(state, userId));
 
 export const useOwnPublicUser = () =>
-  useSelector((state: IRootState) => ownPublicUserSelector(state));
+  useServerStore(ownUserSelector);
 
 export const useUserStatus = (userId: number) =>
-  useSelector((state: IRootState) => userStatusSelector(state, userId));
+  useServerStore((state) => userStatusSelector(state, userId));
 
-export const useUsernames = () => useSelector(usernamesSelector);
+export const useUsernames = () => {
+  const users = useServerStore(usersSelector);
+
+  return useMemo(() => toUsernamesMap(users), [users]);
+};

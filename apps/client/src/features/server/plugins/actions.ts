@@ -1,12 +1,11 @@
-import { store } from '@/features/store';
 import type { TCommandInfo, TCommandsMapByPlugin } from '@sharkord/shared';
-import { serverSliceActions } from '../slice';
+import { useServerStore } from '../slice';
 
 export const setPluginCommands = (commands: TCommandsMapByPlugin) =>
-  store.dispatch(serverSliceActions.setPluginCommands(commands));
+  useServerStore.getState().setPluginCommands(commands);
 
 export const addPluginCommand = (command: TCommandInfo) =>
-  store.dispatch(serverSliceActions.addPluginCommand(command));
+  useServerStore.getState().addPluginCommand(command);
 
 export const removePluginCommand = (commandName: string) =>
-  store.dispatch(serverSliceActions.removePluginCommand({ commandName }));
+  useServerStore.getState().removePluginCommand({ commandName });

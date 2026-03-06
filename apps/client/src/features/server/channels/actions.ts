@@ -1,6 +1,5 @@
-import { store } from '@/features/store';
 import type { TChannel, TChannelUserPermissionsMap } from '@sharkord/shared';
-import { serverSliceActions } from '../slice';
+import { useServerStore } from '../slice';
 import {
   channelByIdSelector,
   channelReadStateByIdSelector,
@@ -8,37 +7,37 @@ import {
 } from './selectors';
 
 export const setChannels = (channels: TChannel[]) => {
-  store.dispatch(serverSliceActions.setChannels(channels));
+  useServerStore.getState().setChannels(channels);
 };
 
 export const setSelectedChannelId = (channelId: number | undefined) => {
-  store.dispatch(serverSliceActions.setSelectedChannelId(channelId));
+  useServerStore.getState().setSelectedChannelId(channelId);
 };
 
 export const setCurrentVoiceChannelId = (channelId: number | undefined) =>
-  store.dispatch(serverSliceActions.setCurrentVoiceChannelId(channelId));
+  useServerStore.getState().setCurrentVoiceChannelId(channelId);
 
 export const addChannel = (channel: TChannel) => {
-  store.dispatch(serverSliceActions.addChannel(channel));
+  useServerStore.getState().addChannel(channel);
 };
 
 export const updateChannel = (
   channelId: number,
   channel: Partial<TChannel>
 ) => {
-  store.dispatch(serverSliceActions.updateChannel({ channelId, channel }));
+  useServerStore.getState().updateChannel({ channelId, channel });
 };
 
 export const removeChannel = (channelId: number) => {
-  store.dispatch(serverSliceActions.removeChannel({ channelId }));
+  useServerStore.getState().removeChannel({ channelId });
 };
 
 export const setChannelPermissions = (
   permissions: TChannelUserPermissionsMap
 ) => {
-  store.dispatch(serverSliceActions.setChannelPermissions(permissions));
+  useServerStore.getState().setChannelPermissions(permissions);
 
-  const state = store.getState();
+  const state = useServerStore.getState();
   const selectedChannel = selectedChannelIdSelector(state);
 
   if (!selectedChannel) return;
@@ -64,7 +63,7 @@ export const setChannelReadState = (
     delta?: number;
   }
 ) => {
-  const state = store.getState();
+  const state = useServerStore.getState();
   const selectedChannel = selectedChannelIdSelector(state);
   const currentCount = channelReadStateByIdSelector(state, channelId);
 
@@ -87,7 +86,8 @@ export const setChannelReadState = (
     // we can't do it here to avoid infinite loops
   }
 
-  store.dispatch(
-    serverSliceActions.setChannelReadState({ channelId, count: actualCount })
-  );
+  useServerStore.getState().setChannelReadState({
+    channelId,
+    count: actualCount
+  });
 };

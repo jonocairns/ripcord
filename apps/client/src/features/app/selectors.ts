@@ -1,10 +1,9 @@
-import type { IRootState } from '../store';
+import type { TAppState } from './slice';
 
-export const appLoadingSelector = (state: IRootState) => state.app.loading;
+export const appLoadingSelector = (state: TAppState) => state.loading;
 
-export const devicesSelector = (state: IRootState) => state.app.devices;
+export const devicesSelector = (state: TAppState) => state.devices;
 
-export const modViewOpenSelector = (state: IRootState) => state.app.modViewOpen;
+export const modViewOpenSelector = (state: TAppState) => state.modViewOpen;
 
-export const modViewUserIdSelector = (state: IRootState) =>
-  state.app.modViewUserId;
+export const modViewUserIdSelector = (state: TAppState) => state.modViewUserId;

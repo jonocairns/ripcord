@@ -1,41 +1,53 @@
 import { VoiceProviderContext } from '@/components/voice-provider';
-import type { IRootState } from '@/features/store';
-import { useContext } from 'react';
-import { useSelector } from 'react-redux';
+import { useContext, useMemo } from 'react';
+import { useServerStore } from '../slice';
 import {
   ownVoiceStateSelector,
   pinnedCardSelector,
-  voiceChannelAudioExternalStreamsSelector,
-  voiceChannelExternalStreamsListSelector,
   voiceChannelExternalStreamsSelector,
   voiceChannelStateSelector,
-  voiceChannelVideoExternalStreamsSelector
 } from './selectors';
 
 export const useVoiceChannelState = (channelId: number) =>
-  useSelector((state: IRootState) =>
+  useServerStore((state) =>
     voiceChannelStateSelector(state, channelId)
   );
 
 export const useVoiceChannelExternalStreams = (channelId: number) =>
-  useSelector((state: IRootState) =>
+  useServerStore((state) =>
     voiceChannelExternalStreamsSelector(state, channelId)
   );
 
-export const useVoiceChannelExternalStreamsList = (channelId: number) =>
-  useSelector((state: IRootState) =>
-    voiceChannelExternalStreamsListSelector(state, channelId)
-  );
+export const useVoiceChannelExternalStreamsList = (channelId: number) => {
+  const externalStreams = useVoiceChannelExternalStreams(channelId);
 
-export const useVoiceChannelAudioExternalStreams = (channelId: number) =>
-  useSelector((state: IRootState) =>
-    voiceChannelAudioExternalStreamsSelector(state, channelId)
+  return useMemo(
+    () =>
+      Object.entries(externalStreams || {}).map(([streamId, stream]) => ({
+        streamId: Number(streamId),
+        ...stream
+      })),
+    [externalStreams]
   );
+};
 
-export const useVoiceChannelVideoExternalStreams = (channelId: number) =>
-  useSelector((state: IRootState) =>
-    voiceChannelVideoExternalStreamsSelector(state, channelId)
+export const useVoiceChannelAudioExternalStreams = (channelId: number) => {
+  const streams = useVoiceChannelExternalStreamsList(channelId);
+
+  return useMemo(
+    () => streams.filter((stream) => stream.tracks?.audio === true),
+    [streams]
   );
+};
+
+export const useVoiceChannelVideoExternalStreams = (channelId: number) => {
+  const streams = useVoiceChannelExternalStreamsList(channelId);
+
+  return useMemo(
+    () => streams.filter((stream) => stream.tracks?.video === true),
+    [streams]
+  );
+};
 
 export const useVoice = () => {
   const context = useContext(VoiceProviderContext);
@@ -49,6 +61,6 @@ export const useVoice = () => {
   return context;
 };
 
-export const useOwnVoiceState = () => useSelector(ownVoiceStateSelector);
+export const useOwnVoiceState = () => useServerStore(ownVoiceStateSelector);
 
-export const usePinnedCard = () => useSelector(pinnedCardSelector);
+export const usePinnedCard = () => useServerStore(pinnedCardSelector);

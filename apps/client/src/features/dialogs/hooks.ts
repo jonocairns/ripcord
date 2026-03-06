@@ -1,4 +1,4 @@
-import { useSelector } from 'react-redux';
 import { dialogInfoSelector } from './selectors';
+import { useDialogStore } from './slice';
 
-export const useDialogInfo = () => useSelector(dialogInfoSelector);
+export const useDialogInfo = () => useDialogStore(dialogInfoSelector);

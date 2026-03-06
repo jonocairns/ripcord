@@ -4,7 +4,7 @@ import { resetServerScreens } from '@/features/server-screens/actions';
 import { resetServerState, setDisconnectInfo } from '@/features/server/actions';
 import { currentVoiceChannelIdSelector } from '@/features/server/channels/selectors';
 import { setPendingVoiceReconnectChannelId } from '@/features/server/reconnect-state';
-import { store } from '@/features/store';
+import { useServerStore } from '@/features/server/slice';
 import { clearAuthToken, getAuthToken } from '@/helpers/storage';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import type { AppRouter, TConnectionParams } from '@sharkord/shared';
@@ -25,7 +25,7 @@ const initializeTRPC = (host: string) => {
     url: `${protocol}://${host}`,
     // @ts-expect-error - the onclose type is not correct in trpc
     onClose: (cause: CloseEvent) => {
-      const state = store.getState();
+      const state = useServerStore.getState();
       const currentVoiceChannelId = currentVoiceChannelIdSelector(state);
 
       setPendingVoiceReconnectChannelId(

@@ -1,6 +1,5 @@
 import { getTRPCClient } from '@/lib/trpc';
 import { Permission, type TPublicServerSettings } from '@sharkord/shared';
-import { store } from '../store';
 import { setPublicServerSettings } from './actions';
 import { subscribeToCategories } from './categories/subscriptions';
 import { subscribeToChannels } from './channels/subscriptions';
@@ -9,6 +8,7 @@ import { subscribeToMessages } from './messages/subscriptions';
 import { subscribeToPlugins } from './plugins/subscriptions';
 import { rolesSelector } from './roles/selectors';
 import { subscribeToRoles } from './roles/subscriptions';
+import { useServerStore } from './slice';
 import { ownUserSelector } from './users/selectors';
 import { subscribeToUsers } from './users/subscriptions';
 import { subscribeToVoice } from './voice/subscriptions';
@@ -32,7 +32,7 @@ const subscribeToServer = () => {
 };
 
 const initSubscriptions = () => {
-  const state = store.getState();
+  const state = useServerStore.getState();
   const ownUser = ownUserSelector(state);
   const roles = rolesSelector(state);
   const ownRoleIds = new Set(ownUser?.roleIds ?? []);

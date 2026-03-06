@@ -1,7 +1,5 @@
-import type { IRootState } from '@/features/store';
-import { createSelector } from '@reduxjs/toolkit';
-import { UserStatus } from '@sharkord/shared';
-import { createCachedSelector } from 're-reselect';
+import { UserStatus, type TJoinedPublicUser } from '@sharkord/shared';
+import type { IServerState } from '../slice';
 
 const STATUS_ORDER: Record<string, number> = {
   online: 0,
@@ -9,57 +7,43 @@ const STATUS_ORDER: Record<string, number> = {
   offline: 2
 };
 
-export const ownUserIdSelector = (state: IRootState) => state.server.ownUserId;
+export const ownUserIdSelector = (state: IServerState) => state.ownUserId;
 
-export const usersSelector = createSelector(
-  (state: IRootState) => state.server.users,
-  (users) => {
-    return [...users].sort((a, b) => {
-      const aBanned = Boolean(a.banned);
-      const bBanned = Boolean(b.banned);
+export const sortUsers = (users: TJoinedPublicUser[]) => {
+  return [...users].sort((a, b) => {
+    const aBanned = Boolean(a.banned);
+    const bBanned = Boolean(b.banned);
 
-      if (aBanned !== bBanned) {
-        return aBanned ? 1 : -1;
-      }
+    if (aBanned !== bBanned) {
+      return aBanned ? 1 : -1;
+    }
 
-      const aStatus = STATUS_ORDER[String(a.status ?? UserStatus.OFFLINE)] ?? 3;
-      const bStatus = STATUS_ORDER[String(b.status ?? UserStatus.OFFLINE)] ?? 3;
+    const aStatus = STATUS_ORDER[String(a.status ?? UserStatus.OFFLINE)] ?? 3;
+    const bStatus = STATUS_ORDER[String(b.status ?? UserStatus.OFFLINE)] ?? 3;
 
-      if (aStatus !== bStatus) {
-        return aStatus - bStatus;
-      }
+    if (aStatus !== bStatus) {
+      return aStatus - bStatus;
+    }
 
-      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-    });
-  }
-);
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
+};
 
-export const ownUserSelector = createSelector(
-  [ownUserIdSelector, usersSelector],
-  (ownUserId, users) => users.find((user) => user.id === ownUserId)
-);
+export const usersSelector = (state: IServerState) => state.users;
 
-export const userByIdSelector = createCachedSelector(
-  [usersSelector, (_: IRootState, userId: number) => userId],
-  (users, userId) => users.find((user) => user.id === userId)
-)((_, userId: number) => userId);
+export const ownUserSelector = (state: IServerState) =>
+  state.users.find((user) => user.id === ownUserIdSelector(state));
 
-export const isOwnUserSelector = createCachedSelector(
-  [ownUserIdSelector, (_: IRootState, userId: number) => userId],
-  (ownUserId, userId) => ownUserId === userId
-)((_, userId: number) => userId);
+export const userByIdSelector = (state: IServerState, userId: number) =>
+  state.users.find((user) => user.id === userId);
 
-export const ownPublicUserSelector = createSelector(
-  [ownUserIdSelector, usersSelector],
-  (ownUserId, users) => users.find((user) => user.id === ownUserId)
-);
+export const isOwnUserSelector = (state: IServerState, userId: number) =>
+  ownUserIdSelector(state) === userId;
 
-export const userStatusSelector = createSelector(
-  [userByIdSelector],
-  (user) => user?.status ?? UserStatus.OFFLINE
-);
+export const userStatusSelector = (state: IServerState, userId: number) =>
+  userByIdSelector(state, userId)?.status ?? UserStatus.OFFLINE;
 
-export const usernamesSelector = createSelector([usersSelector], (users) => {
+export const toUsernamesMap = (users: TJoinedPublicUser[]) => {
   const map: Record<number, string> = {};
 
   users.forEach((user) => {
@@ -67,4 +51,7 @@ export const usernamesSelector = createSelector([usersSelector], (users) => {
   });
 
   return map;
-});
+};
+
+export const usernamesSelector = (state: IServerState) =>
+  toUsernamesMap(state.users);

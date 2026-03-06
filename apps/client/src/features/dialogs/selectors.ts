@@ -1,3 +1,3 @@
-import type { IRootState } from '../store';
+import type { TDialogState } from './slice';
 
-export const dialogInfoSelector = (state: IRootState) => state.dialog;
+export const dialogInfoSelector = (state: TDialogState) => state;

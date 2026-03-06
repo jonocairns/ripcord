@@ -1,14 +1,13 @@
-import type { IRootState } from '@/features/store';
+import type { TJoinedMessage } from '@sharkord/shared';
+import type { IServerState } from '../slice';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const DEFAULT_ARRAY: any[] = [];
+const DEFAULT_ARRAY: TJoinedMessage[] = [];
 
-export const messagesMapSelector = (state: IRootState) =>
-  state.server.messagesMap;
+export const messagesMapSelector = (state: IServerState) => state.messagesMap;
 
-export const typingMapSelector = (state: IRootState) => state.server.typingMap;
+export const typingMapSelector = (state: IServerState) => state.typingMap;
 
 export const messagesByChannelIdSelector = (
-  state: IRootState,
+  state: IServerState,
   channelId: number
-) => state.server.messagesMap[channelId] || DEFAULT_ARRAY;
+) => state.messagesMap[channelId] || DEFAULT_ARRAY;

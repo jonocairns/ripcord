@@ -1,14 +1,12 @@
-import type { IRootState } from '@/features/store';
-import { createSelector } from '@reduxjs/toolkit';
-import { createCachedSelector } from 're-reselect';
+import type { TCategory } from '@sharkord/shared';
+import type { IServerState } from '../slice';
 
-export const categoriesSelector = createSelector(
-  [(state: IRootState) => state.server.categories],
-  (categories) => [...categories].sort((a, b) => a.position - b.position)
-);
+export const sortCategories = (categories: TCategory[]) =>
+  [...categories].sort((a, b) => a.position - b.position);
 
-export const categoryByIdSelector = createCachedSelector(
-  [categoriesSelector, (_: IRootState, categoryId: number) => categoryId],
-  (categories, categoryId) =>
-    categories.find((category) => category.id === categoryId)
-)((_, categoryId: number) => categoryId);
+export const categoriesSelector = (state: IServerState) => state.categories;
+
+export const categoryByIdSelector = (
+  state: IServerState,
+  categoryId: number
+) => state.categories.find((category) => category.id === categoryId);
