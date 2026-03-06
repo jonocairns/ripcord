@@ -320,8 +320,8 @@ const Devices = memo(() => {
                 <p className="text-sm font-medium">Push keybinds (Desktop)</p>
                 <p className="text-xs text-muted-foreground">
                   Hold the configured key to temporarily unmute (push to talk)
-                  or mute (push to mute). <br />Press Escape while capturing to
-                  cancel.
+                  or mute (push to mute). <br />
+                  Press Escape while capturing to cancel.
                 </p>
               </div>
               <div className="space-y-2">
@@ -437,7 +437,7 @@ const Devices = memo(() => {
             </Select>
           </div>
 
-          <div >
+          <div>
             <ResolutionFpsControl
               framerate={values.webcamFramerate}
               resolution={values.webcamResolution}
@@ -449,12 +449,11 @@ const Devices = memo(() => {
           </div>
 
           <div className="flex items-center gap-3 pl-2">
-             <Switch
+            <Switch
               checked={!!values.mirrorOwnVideo}
               onCheckedChange={(checked) => onChange('mirrorOwnVideo', checked)}
             />
             <Label className="cursor-default">Mirror own video</Label>
-           
           </div>
         </section>
 

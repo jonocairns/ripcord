@@ -9,9 +9,7 @@ const INITIAL_MESSAGES_LIMIT = 20;
 const OLDER_MESSAGES_LIMIT = 20;
 
 export const useMessagesByChannelId = (channelId: number) =>
-  useServerStore((state) =>
-    messagesByChannelIdSelector(state, channelId)
-  );
+  useServerStore((state) => messagesByChannelIdSelector(state, channelId));
 
 export const useMessages = (channelId: number) => {
   const messages = useMessagesByChannelId(channelId);

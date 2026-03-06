@@ -189,6 +189,8 @@ const useVoiceRefs = (
     hasScreenShareAudioStream: !!screenShareAudioStream,
     hasExternalAudioStream: !!externalAudioStream,
     hasExternalVideoStream: !!externalVideoStream,
+    externalAudioStream,
+    externalVideoStream,
     screenShareStream,
     screenShareAudioStream,
     audioLevel,

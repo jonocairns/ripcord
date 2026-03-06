@@ -1,10 +1,11 @@
-import { Button } from '@/components/ui/button';
-import { Tooltip } from '@/components/ui/tooltip';
 import { useAvailableDevices } from '@/components/devices-provider/hooks/use-available-devices';
 import { useDevices } from '@/components/devices-provider/hooks/use-devices';
+import { Button } from '@/components/ui/button';
+import { Tooltip } from '@/components/ui/tooltip';
 import { useChannelCan } from '@/features/server/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
 import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
+import { getTRPCClient } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { ChannelPermission } from '@sharkord/shared';
 import {
@@ -17,9 +18,10 @@ import {
   Video,
   VideoOff
 } from 'lucide-react';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { ControlToggleButton } from './control-toggle-button';
 import { useControlsBarVisibility } from './hooks/use-controls-bar-visibility';
+import { IptvChannelSelector } from './iptv-channel-selector';
 
 type TControlsBarProps = {
   channelId: number;
@@ -34,21 +36,46 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
   const { videoDevices } = useAvailableDevices();
   const selectableVideoDevices = useMemo(
     () =>
-      videoDevices.filter(
-        (device): device is MediaDeviceInfo => Boolean(device?.deviceId)
+      videoDevices.filter((device): device is MediaDeviceInfo =>
+        Boolean(device?.deviceId)
       ),
     [videoDevices]
   );
   const canSwitchCamera = selectableVideoDevices.length > 1;
+  const [hasIptvConfig, setHasIptvConfig] = useState(false);
 
   const permissions = useMemo(
     () => ({
       canSpeak: channelCan(ChannelPermission.SPEAK),
       canWebcam: channelCan(ChannelPermission.WEBCAM),
-      canShareScreen: channelCan(ChannelPermission.SHARE_SCREEN)
+      canShareScreen: channelCan(ChannelPermission.SHARE_SCREEN),
+      canManageIptv: channelCan(ChannelPermission.MANAGE_IPTV)
     }),
     [channelCan]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    const trpc = getTRPCClient();
+
+    void (async () => {
+      try {
+        const config = await trpc.iptv.getConfig.query({ channelId });
+
+        if (!cancelled) {
+          setHasIptvConfig(!!config);
+        }
+      } catch {
+        if (!cancelled) {
+          setHasIptvConfig(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [channelId]);
 
   const switchCamera = useCallback(() => {
     if (!canSwitchCamera) {
@@ -59,9 +86,7 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
       (device) => device.deviceId === devices.webcamId
     );
     const nextIndex =
-      currentIndex < 0
-        ? 0
-        : (currentIndex + 1) % selectableVideoDevices.length;
+      currentIndex < 0 ? 0 : (currentIndex + 1) % selectableVideoDevices.length;
     const nextDevice = selectableVideoDevices[nextIndex];
 
     if (!nextDevice) {
@@ -139,6 +164,12 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
           enabledClassName="bg-blue-500/20 text-blue-500 hover:bg-blue-500/30 hover:text-blue-500"
           onClick={toggleScreenShare}
           disabled={!permissions.canShareScreen}
+        />
+
+        <IptvChannelSelector
+          channelId={channelId}
+          canManageIptv={permissions.canManageIptv}
+          visible={hasIptvConfig}
         />
       </div>
 

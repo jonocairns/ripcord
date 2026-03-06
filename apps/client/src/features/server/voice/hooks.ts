@@ -5,13 +5,11 @@ import {
   ownVoiceStateSelector,
   pinnedCardSelector,
   voiceChannelExternalStreamsSelector,
-  voiceChannelStateSelector,
+  voiceChannelStateSelector
 } from './selectors';
 
 export const useVoiceChannelState = (channelId: number) =>
-  useServerStore((state) =>
-    voiceChannelStateSelector(state, channelId)
-  );
+  useServerStore((state) => voiceChannelStateSelector(state, channelId));
 
 export const useVoiceChannelExternalStreams = (channelId: number) =>
   useServerStore((state) =>

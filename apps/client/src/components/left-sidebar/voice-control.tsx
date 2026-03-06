@@ -33,8 +33,8 @@ const VoiceControl = memo(() => {
   const { videoDevices } = useAvailableDevices();
   const selectableVideoDevices = useMemo(
     () =>
-      videoDevices.filter(
-        (device): device is MediaDeviceInfo => Boolean(device?.deviceId)
+      videoDevices.filter((device): device is MediaDeviceInfo =>
+        Boolean(device?.deviceId)
       ),
     [videoDevices]
   );
@@ -49,9 +49,7 @@ const VoiceControl = memo(() => {
       (device) => device.deviceId === devices.webcamId
     );
     const nextIndex =
-      currentIndex < 0
-        ? 0
-        : (currentIndex + 1) % selectableVideoDevices.length;
+      currentIndex < 0 ? 0 : (currentIndex + 1) % selectableVideoDevices.length;
     const nextDevice = selectableVideoDevices[nextIndex];
 
     if (!nextDevice) {

@@ -115,6 +115,23 @@ const channels = sqliteTable(
   ]
 );
 
+const iptvSources = sqliteTable(
+  'iptv_sources',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    channelId: integer('channel_id')
+      .notNull()
+      .unique()
+      .references(() => channels.id, { onDelete: 'cascade' }),
+    playlistUrl: text('playlist_url').notNull(),
+    activeChannelIndex: integer('active_channel_index'),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at')
+  },
+  (t) => [index('iptv_sources_channel_idx').on(t.channelId)]
+);
+
 const users = sqliteTable(
   'users',
   {
@@ -467,6 +484,7 @@ export {
   emojis,
   files,
   invites,
+  iptvSources,
   logins,
   messageFiles,
   messageReactions,

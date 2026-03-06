@@ -5,6 +5,7 @@ import {
   categories,
   channels,
   files,
+  iptvSources,
   users,
   logins,
   messages,
@@ -39,6 +40,7 @@ export type TMessageReaction = InferSelectModel<typeof messageReactions>;
 export type TInvite = InferSelectModel<typeof invites>;
 export type TActivityLog = InferSelectModel<typeof activityLog>;
 export type TUserRole = InferSelectModel<typeof userRoles>;
+export type TIptvSource = InferSelectModel<typeof iptvSources>;
 export type TChannelRolePermission = InferSelectModel<
   typeof channelRolePermissions
 >;
@@ -62,6 +64,7 @@ export type TIMessageReaction = InferInsertModel<typeof messageReactions>;
 export type TIInvite = InferInsertModel<typeof invites>;
 export type TIActivityLog = InferInsertModel<typeof activityLog>;
 export type TIUserRole = InferInsertModel<typeof userRoles>;
+export type TIIptvSource = InferInsertModel<typeof iptvSources>;
 export type TIChannelRolePermission = InferInsertModel<
   typeof channelRolePermissions
 >;

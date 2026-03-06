@@ -1,8 +1,11 @@
+import { IptvConfigDialog } from '@/components/dialogs/iptv-config-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useChannelById } from '@/features/server/channels/hooks';
+import { useCan } from '@/features/server/hooks';
 import { cn } from '@/lib/utils';
-import { Lock, Search, Shield, SlidersHorizontal } from 'lucide-react';
+import { Permission } from '@sharkord/shared';
+import { Lock, Search, Shield, SlidersHorizontal, Tv } from 'lucide-react';
 import { memo, useMemo, useState } from 'react';
 import type { TServerScreenBaseProps } from '../screens';
 import { ServerScreenLayout } from '../server-screen-layout';
@@ -13,7 +16,7 @@ import { Security } from './security';
 type TChannelSettingsProps = TServerScreenBaseProps & {
   channelId: number;
 };
-type TChannelSettingsValue = 'general' | 'permissions' | 'security';
+type TChannelSettingsValue = 'general' | 'permissions' | 'security' | 'iptv';
 type TChannelSettingsSection = {
   keywords: string[];
   label: string;
@@ -35,37 +38,54 @@ const CHANNEL_SETTINGS_SECTIONS: TChannelSettingsSection[] = [
     value: 'security',
     label: 'Security',
     keywords: ['security', 'limits', 'slowmode', 'privacy']
+  },
+  {
+    value: 'iptv',
+    label: 'IPTV',
+    keywords: ['iptv', 'stream', 'playlist', 'm3u8']
   }
 ];
 
 const ChannelSettings = memo(({ close, channelId }: TChannelSettingsProps) => {
   const channel = useChannelById(channelId);
+  const can = useCan();
   const [activeSection, setActiveSection] =
     useState<TChannelSettingsValue>('general');
   const [search, setSearch] = useState('');
+
+  const visibleSections = useMemo(() => {
+    return CHANNEL_SETTINGS_SECTIONS.filter((section) => {
+      if (section.value !== 'iptv') {
+        return true;
+      }
+
+      return channel?.type === 'VOICE' && can(Permission.MANAGE_CHANNELS);
+    });
+  }, [can, channel?.type]);
 
   const filteredSections = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
 
     if (!normalizedSearch) {
-      return CHANNEL_SETTINGS_SECTIONS;
+      return visibleSections;
     }
 
-    return CHANNEL_SETTINGS_SECTIONS.filter(({ label, keywords }) => {
+    return visibleSections.filter(({ label, keywords }) => {
       return (
         label.toLowerCase().includes(normalizedSearch) ||
         keywords.some((keyword) => keyword.includes(normalizedSearch))
       );
     });
-  }, [search]);
+  }, [search, visibleSections]);
 
   const selectedSection = useMemo(() => {
     return (
       filteredSections.find(({ value }) => value === activeSection) ??
       filteredSections[0] ??
+      visibleSections[0] ??
       CHANNEL_SETTINGS_SECTIONS[0]
     );
-  }, [activeSection, filteredSections]);
+  }, [activeSection, filteredSections, visibleSections]);
 
   return (
     <ServerScreenLayout close={close} title="Channel Settings">
@@ -102,7 +122,9 @@ const ChannelSettings = memo(({ close, channelId }: TChannelSettingsProps) => {
                       ? SlidersHorizontal
                       : section.value === 'permissions'
                         ? Shield
-                        : Lock;
+                        : section.value === 'security'
+                          ? Lock
+                          : Tv;
 
                   return (
                     <Button
@@ -141,6 +163,9 @@ const ChannelSettings = memo(({ close, channelId }: TChannelSettingsProps) => {
           )}
           {selectedSection.value === 'security' && (
             <Security channelId={channelId} />
+          )}
+          {selectedSection.value === 'iptv' && (
+            <IptvConfigDialog channelId={channelId} />
           )}
         </section>
       </div>

@@ -4,6 +4,7 @@ import { channelsRouter } from './channels';
 import { emojisRouter } from './emojis';
 import { filesRouter } from './files';
 import { invitesRouter } from './invites';
+import { iptvRouter } from './iptv';
 import { messagesRouter } from './messages';
 import { othersRouter } from './others';
 import { pluginsRouter } from './plugins';
@@ -20,6 +21,7 @@ const appRouter = t.router({
   emojis: emojisRouter,
   roles: rolesRouter,
   invites: invitesRouter,
+  iptv: iptvRouter,
   voice: voiceRouter,
   categories: categoriesRouter,
   plugins: pluginsRouter

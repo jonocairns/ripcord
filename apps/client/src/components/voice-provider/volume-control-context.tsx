@@ -107,33 +107,39 @@ const VolumeControlProvider = memo(
       saveVolumesToStorage(nextVolumes);
     }, []);
 
-    const setVolume = useCallback((key: TVolumeKey, volume: number) => {
-      const nextVolumes = { ...volumesRef.current, [key]: volume };
+    const setVolume = useCallback(
+      (key: TVolumeKey, volume: number) => {
+        const nextVolumes = { ...volumesRef.current, [key]: volume };
 
-      commitVolumes(nextVolumes);
-      dispatchVolumeSettingsUpdated({ key, volume });
+        commitVolumes(nextVolumes);
+        dispatchVolumeSettingsUpdated({ key, volume });
 
-      if (volume > 0) {
-        previousVolumesRef.current[key] = volume;
-      }
-    }, [commitVolumes]);
+        if (volume > 0) {
+          previousVolumesRef.current[key] = volume;
+        }
+      },
+      [commitVolumes]
+    );
 
-    const toggleMute = useCallback((key: TVolumeKey) => {
-      const currentVolume = volumesRef.current[key] ?? 100;
-      const isMuted = currentVolume === 0;
-      const newVolume = isMuted
-        ? (previousVolumesRef.current[key] ?? 100)
-        : 0;
+    const toggleMute = useCallback(
+      (key: TVolumeKey) => {
+        const currentVolume = volumesRef.current[key] ?? 100;
+        const isMuted = currentVolume === 0;
+        const newVolume = isMuted
+          ? (previousVolumesRef.current[key] ?? 100)
+          : 0;
 
-      if (!isMuted) {
-        previousVolumesRef.current[key] = currentVolume;
-      }
+        if (!isMuted) {
+          previousVolumesRef.current[key] = currentVolume;
+        }
 
-      const nextVolumes = { ...volumesRef.current, [key]: newVolume };
+        const nextVolumes = { ...volumesRef.current, [key]: newVolume };
 
-      commitVolumes(nextVolumes);
-      dispatchVolumeSettingsUpdated({ key, volume: newVolume });
-    }, [commitVolumes]);
+        commitVolumes(nextVolumes);
+        dispatchVolumeSettingsUpdated({ key, volume: newVolume });
+      },
+      [commitVolumes]
+    );
 
     const getUserVolumeKey = useCallback((userId: number): TVolumeKey => {
       return `user-${userId}`;

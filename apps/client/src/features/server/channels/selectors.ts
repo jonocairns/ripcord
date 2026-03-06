@@ -8,7 +8,8 @@ export const selectedChannelIdSelector = (state: IServerState) =>
   state.selectedChannelId;
 
 export const selectedChannelTypeSelector = (state: IServerState) =>
-  state.channels.find((channel) => channel.id === state.selectedChannelId)?.type;
+  state.channels.find((channel) => channel.id === state.selectedChannelId)
+    ?.type;
 
 export const currentVoiceChannelIdSelector = (state: IServerState) =>
   state.currentVoiceChannelId;

@@ -36,6 +36,20 @@
       "when": 1772236800000,
       "tag": "0004_user_must_change_password",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1772780671172,
+      "tag": "0005_cold_chat",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1772791707162,
+      "tag": "0006_red_radioactive_man",
+      "breakpoints": true
     }
   ]
 }

@@ -736,14 +736,12 @@ const MicrophoneTestPanel = memo(
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
             <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-              <Mic
-                className="h-4 w-4 text-primary"
-              />
+              <Mic className="h-4 w-4 text-primary" />
             </div>
             <div className="space-y-1">
               <p className="text-sm font-medium">Microphone test</p>
               <p className="text-xs text-muted-foreground">
-                 Preview your microphone input level.
+                Preview your microphone input level.
               </p>
             </div>
           </div>

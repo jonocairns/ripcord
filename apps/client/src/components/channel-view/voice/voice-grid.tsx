@@ -95,10 +95,7 @@ const VoiceGrid = memo(
 
     return (
       <div
-        className={cn(
-          'grid h-full gap-3 p-3 md:gap-4 md:p-4',
-          className
-        )}
+        className={cn('grid h-full gap-3 p-3 md:gap-4 md:p-4', className)}
         style={{
           gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
           gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`
