@@ -437,12 +437,15 @@ const ExternalStreamCard = memo(
       }
 
       setHasVideoPlaybackStarted(false);
-      setIsPoppedOut(false);
-      setIsPopoutAudioEnabled(false);
-      clearPopoutControlsHideTimeout();
-      setShowPopoutWindowControls(true);
-      setPopoutWindow(null);
-    }, [clearPopoutControlsHideTimeout, hasVideo]);
+
+      if (!isIptvStream) {
+        setIsPoppedOut(false);
+        setIsPopoutAudioEnabled(false);
+        clearPopoutControlsHideTimeout();
+        setShowPopoutWindowControls(true);
+        setPopoutWindow(null);
+      }
+    }, [clearPopoutControlsHideTimeout, hasVideo, isIptvStream]);
 
     useEffect(() => {
       if (hasAudio) {

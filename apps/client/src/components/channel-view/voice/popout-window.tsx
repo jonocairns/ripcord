@@ -148,16 +148,17 @@ const PopoutWindow = memo(
       if (
         !isOpen &&
         popoutWindowRef.current &&
-        !popoutWindowRef.current.closed
+        !popoutWindowRef.current.closed &&
+        !preserveOnUnmount
       ) {
         popoutWindowRef.current.close();
       }
 
-      if (!isOpen) {
+      if (!isOpen && !preserveOnUnmount) {
         popoutWindowRef.current = null;
         setContainer(null);
       }
-    }, [isOpen]);
+    }, [isOpen, preserveOnUnmount]);
 
     useEffect(() => {
       if (popoutWindowRef.current && !popoutWindowRef.current.closed) {
