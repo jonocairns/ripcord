@@ -11,6 +11,7 @@ const getPrepareChannelSource = (session: IptvSession) => {
     videoCodec?: string;
     videoFilter?: string;
     targetVideoCrf?: number;
+    targetVideoBitrateKbps?: number;
     targetVideoMaxRateKbps?: number;
     targetVideoBufferSizeKbps?: number;
   }>;
@@ -135,8 +136,9 @@ describe('IptvSession', () => {
       videoCodec: undefined,
       videoFilter: undefined,
       targetVideoCrf: 18,
-      targetVideoMaxRateKbps: 20_000,
-      targetVideoBufferSizeKbps: 40_000
+      targetVideoBitrateKbps: 6_000,
+      targetVideoMaxRateKbps: 8_000,
+      targetVideoBufferSizeKbps: 16_000
     });
   });
 
@@ -185,8 +187,9 @@ describe('IptvSession', () => {
       videoCodec: 'h264',
       videoFilter: undefined,
       targetVideoCrf: 18,
-      targetVideoMaxRateKbps: 20_000,
-      targetVideoBufferSizeKbps: 40_000
+      targetVideoBitrateKbps: 8_000,
+      targetVideoMaxRateKbps: 10_000,
+      targetVideoBufferSizeKbps: 20_000
     });
   });
 
@@ -236,12 +239,13 @@ describe('IptvSession', () => {
       videoCodec: 'h264',
       videoFilter: undefined,
       targetVideoCrf: 18,
-      targetVideoMaxRateKbps: 20_000,
-      targetVideoBufferSizeKbps: 40_000
+      targetVideoBitrateKbps: 8_000,
+      targetVideoMaxRateKbps: 10_000,
+      targetVideoBufferSizeKbps: 20_000
     });
   });
 
-  test('uses a CRF profile with a safety ceiling for 720p30 transcodes', async () => {
+  test('uses a bounded bitrate ladder for 720p30 transcodes', async () => {
     const session = new IptvSession(42, {
       playlistUrl: 'https://playlist.example/list.m3u',
       enabled: true
@@ -286,8 +290,9 @@ describe('IptvSession', () => {
       videoCodec: 'mpeg2video',
       videoFilter: undefined,
       targetVideoCrf: 18,
-      targetVideoMaxRateKbps: 20_000,
-      targetVideoBufferSizeKbps: 40_000
+      targetVideoBitrateKbps: 6_000,
+      targetVideoMaxRateKbps: 8_000,
+      targetVideoBufferSizeKbps: 16_000
     });
   });
 
@@ -337,8 +342,9 @@ describe('IptvSession', () => {
       videoFilter:
         'scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=50',
       targetVideoCrf: 18,
-      targetVideoMaxRateKbps: 20_000,
-      targetVideoBufferSizeKbps: 40_000
+      targetVideoBitrateKbps: 18_000,
+      targetVideoMaxRateKbps: 25_000,
+      targetVideoBufferSizeKbps: 50_000
     });
   });
 
@@ -387,6 +393,7 @@ describe('IptvSession', () => {
       videoCodec: 'mpeg2video',
       videoFilter: 'yadif=mode=send_frame:parity=auto:deint=all',
       targetVideoCrf: 18,
+      targetVideoBitrateKbps: 14_000,
       targetVideoMaxRateKbps: 20_000,
       targetVideoBufferSizeKbps: 40_000
     });
