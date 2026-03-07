@@ -416,7 +416,9 @@ const formatResolutionLabel = (
   return `${width}x${height}`;
 };
 
-const formatFrameRateLabel = (frameRate: number | undefined): string | undefined => {
+const formatFrameRateLabel = (
+  frameRate: number | undefined
+): string | undefined => {
   if (frameRate === undefined) {
     return undefined;
   }
@@ -429,7 +431,9 @@ const formatFrameRateLabel = (frameRate: number | undefined): string | undefined
   return `${rounded}fps`;
 };
 
-const formatBitrateLabel = (bitrate: number | undefined): string | undefined => {
+const formatBitrateLabel = (
+  bitrate: number | undefined
+): string | undefined => {
   if (bitrate === undefined) {
     return undefined;
   }
@@ -1544,7 +1548,8 @@ class IptvSession {
 
   private runHealthCheck = async () => {
     if (
-      (this.status.status !== 'starting' && this.status.status !== 'streaming') ||
+      (this.status.status !== 'starting' &&
+        this.status.status !== 'streaming') ||
       !this.videoProducer ||
       !this.audioProducer
     ) {

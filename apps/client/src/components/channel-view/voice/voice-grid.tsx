@@ -58,10 +58,7 @@ const VoiceGrid = memo(
             <div className="flex-shrink-0 border-t border-border/70 bg-card/45 backdrop-blur-sm">
               <div className="flex justify-center gap-2.5 p-3 overflow-x-auto">
                 {regularCards.map((card, index) => (
-                  <div
-                    key={index}
-                    className="h-24 w-40 flex-shrink-0 p-1"
-                  >
+                  <div key={index} className="h-24 w-40 flex-shrink-0 p-1">
                     {card}
                   </div>
                 ))}

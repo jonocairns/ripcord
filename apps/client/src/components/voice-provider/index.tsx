@@ -843,36 +843,38 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       return;
     }
 
-    Object.entries(currentChannelExternalStreams).forEach(([streamId, stream]) => {
-      if (stream.key !== `iptv:${currentVoiceChannelId}`) {
-        return;
-      }
-
-      const numericStreamId = Number(streamId);
-      const activeExternalStream = externalStreams[numericStreamId];
-      const hasPendingExternalAudio = pendingStreams.has(
-        getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_AUDIO)
-      );
-      const hasPendingExternalVideo = pendingStreams.has(
-        getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_VIDEO)
-      );
-
-      if (stream.tracks.audio && !activeExternalStream?.audioStream) {
-        if (!hasPendingExternalAudio) {
-          addPendingStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
+    Object.entries(currentChannelExternalStreams).forEach(
+      ([streamId, stream]) => {
+        if (stream.key !== `iptv:${currentVoiceChannelId}`) {
+          return;
         }
 
-        void acceptStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
-      }
+        const numericStreamId = Number(streamId);
+        const activeExternalStream = externalStreams[numericStreamId];
+        const hasPendingExternalAudio = pendingStreams.has(
+          getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_AUDIO)
+        );
+        const hasPendingExternalVideo = pendingStreams.has(
+          getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_VIDEO)
+        );
 
-      if (stream.tracks.video && !activeExternalStream?.videoStream) {
-        if (!hasPendingExternalVideo) {
-          addPendingStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
+        if (stream.tracks.audio && !activeExternalStream?.audioStream) {
+          if (!hasPendingExternalAudio) {
+            addPendingStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
+          }
+
+          void acceptStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
         }
 
-        void acceptStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
+        if (stream.tracks.video && !activeExternalStream?.videoStream) {
+          if (!hasPendingExternalVideo) {
+            addPendingStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
+          }
+
+          void acceptStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
+        }
       }
-    });
+    );
   }, [
     acceptStream,
     addPendingStream,
