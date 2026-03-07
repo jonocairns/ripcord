@@ -26,6 +26,7 @@ import {
 import { pubsub } from '../utils/pubsub';
 
 const voiceRuntimes = new Map<number, VoiceRuntime>();
+const INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS = 8_000_000;
 
 const defaultRouterOptions: RouterOptions<AppData> = {
   mediaCodecs: [
@@ -360,7 +361,7 @@ class VoiceRuntime {
       enableTcp: true,
       preferUdp: true,
       preferTcp: false,
-      initialAvailableOutgoingBitrate: 3000000
+      initialAvailableOutgoingBitrate: INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS
     });
 
     const params: TTransportParams = {
@@ -677,8 +678,16 @@ class VoiceRuntime {
       if (!internal) return;
 
       if (kind === 'audio') {
+        if (internal.producers.audioProducer !== producer) {
+          return;
+        }
+
         delete internal.producers.audioProducer;
       } else {
+        if (internal.producers.videoProducer !== producer) {
+          return;
+        }
+
         delete internal.producers.videoProducer;
       }
 

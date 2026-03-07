@@ -5,6 +5,7 @@ import {
   PopoverTrigger
 } from '@/components/ui/popover';
 import { Slider } from '@/components/ui/slider';
+import { cn } from '@/lib/utils';
 import { Settings, Volume2, VolumeX } from 'lucide-react';
 import { memo } from 'react';
 
@@ -13,6 +14,8 @@ type TStreamSettingsPopoverProps = {
   isMuted: boolean;
   onVolumeChange: (volume: number) => void;
   onMuteToggle: () => void;
+  buttonClassName?: string;
+  buttonSize?: 'sm' | 'default' | 'lg' | 'xl' | 'xs';
 };
 
 const StreamSettingsPopover = memo(
@@ -20,7 +23,9 @@ const StreamSettingsPopover = memo(
     volume,
     isMuted,
     onVolumeChange,
-    onMuteToggle
+    onMuteToggle,
+    buttonClassName,
+    buttonSize = 'sm'
   }: TStreamSettingsPopoverProps) => {
     return (
       <Popover>
@@ -29,7 +34,8 @@ const StreamSettingsPopover = memo(
             variant="ghost"
             icon={Settings}
             title="Stream Settings"
-            size="sm"
+            size={buttonSize}
+            className={cn(buttonClassName)}
           />
         </PopoverTrigger>
         <PopoverContent

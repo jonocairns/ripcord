@@ -4,9 +4,7 @@ import type { IServerState } from '../slice';
 
 export const emojisSelector = (state: IServerState) => state.emojis;
 
-export const toCustomEmojis = (
-  emojis: IServerState['emojis']
-): EmojiItem[] => {
+export const toCustomEmojis = (emojis: IServerState['emojis']): EmojiItem[] => {
   return emojis.map((emoji) => ({
     name: emoji.name,
     shortcodes: [emoji.name],

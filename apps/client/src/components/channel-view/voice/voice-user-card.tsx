@@ -8,7 +8,6 @@ import { cn } from '@/lib/utils';
 import { EyeOff, HeadphoneOff, MicOff, Monitor, Video } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { CardControls } from './card-controls';
-import { CardGradient } from './card-gradient';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
 import { VolumeButton } from './volume-button';
@@ -69,8 +68,6 @@ const VoiceUserCard = memo(
           className
         )}
       >
-        <CardGradient />
-
         <CardControls>
           {!isOwnUser && hasVideoStream && onStopWatching && (
             <IconButton

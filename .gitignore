@@ -17,5 +17,7 @@ apps/desktop/*.tsbuildinfo
 apps/desktop/sidecar/target/
 apps/desktop/sidecar/bin/
 audio-tests/.outputs/
+data-test/logs/app.log
+data-test/logs/error.log
 __pycache__/
 .env

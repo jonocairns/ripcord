@@ -1,0 +1,191 @@
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import {
+  assertSafeIptvUrl,
+  clearIptvPlaylistCache,
+  fetchAndParsePlaylist,
+  parsePlaylist
+} from '../iptv-playlist';
+
+describe('iptv-playlist parser', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    clearIptvPlaylistCache();
+  });
+
+  afterEach(() => {
+    clearIptvPlaylistCache();
+    globalThis.fetch = originalFetch;
+  });
+
+  test('parses multi-channel playlists with metadata', () => {
+    const channels = parsePlaylist(`#EXTM3U
+#EXTINF:-1 tvg-name="News 24" tvg-logo="https://img.local/news.png" group-title="News",News 24
+https://stream.local/news.m3u8
+#EXTINF:-1 tvg-name="Sports One" group-title="Sports",Sports One
+https://stream.local/sports.m3u8`);
+
+    expect(channels).toEqual([
+      {
+        name: 'News 24',
+        logo: 'https://img.local/news.png',
+        group: 'News',
+        url: 'https://stream.local/news.m3u8'
+      },
+      {
+        name: 'Sports One',
+        group: 'Sports',
+        url: 'https://stream.local/sports.m3u8'
+      }
+    ]);
+  });
+
+  test('parses unquoted and single-quoted attributes', () => {
+    const channels = parsePlaylist(`#EXTM3U
+#EXTINF:-1 tvg-id=123 tvg-name=News24 group-title=News,
+https://stream.local/news24.m3u8
+#EXTINF:-1 tvg-name='Sports One' group-title='Live Sports',Fallback Name
+https://stream.local/sports-one.m3u8`);
+
+    expect(channels).toEqual([
+      {
+        name: 'News24',
+        group: 'News',
+        url: 'https://stream.local/news24.m3u8'
+      },
+      {
+        name: 'Sports One',
+        group: 'Live Sports',
+        url: 'https://stream.local/sports-one.m3u8'
+      }
+    ]);
+  });
+
+  test('parses single-channel playlists without optional metadata', () => {
+    const channels = parsePlaylist(`#EXTM3U
+#EXTINF:-1,Music TV
+https://stream.local/music.m3u8`);
+
+    expect(channels).toEqual([
+      {
+        name: 'Music TV',
+        url: 'https://stream.local/music.m3u8'
+      }
+    ]);
+  });
+
+  test('skips malformed entries that do not provide stream URLs', () => {
+    const channels = parsePlaylist(`#EXTM3U
+#EXTINF:-1 tvg-name="Broken",Broken
+#EXTINF:-1,Valid
+https://stream.local/valid.m3u8`);
+
+    expect(channels).toEqual([
+      {
+        name: 'Valid',
+        url: 'https://stream.local/valid.m3u8'
+      }
+    ]);
+  });
+
+  test('blocks private IPTV URLs', async () => {
+    await expect(
+      assertSafeIptvUrl('http://127.0.0.1/private.m3u8')
+    ).rejects.toThrow();
+  });
+
+  test('blocks non-http IPTV URLs', async () => {
+    await expect(
+      assertSafeIptvUrl('file:///tmp/playlist.m3u8')
+    ).rejects.toThrow();
+  });
+
+  test('caches fetch results for the same playlist URL', async () => {
+    let fetchCalls = 0;
+
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(
+        '#EXTM3U\n#EXTINF:-1,Channel A\nhttps://8.8.4.4/a.m3u8',
+        {
+          status: 200
+        }
+      );
+    }) as unknown as typeof fetch;
+
+    const first = await fetchAndParsePlaylist('https://8.8.8.8/tv.m3u8');
+    const second = await fetchAndParsePlaylist('https://8.8.8.8/tv.m3u8');
+
+    expect(first).toEqual(second);
+    expect(fetchCalls).toBe(1);
+  });
+
+  test('drops unsafe logo URLs from fetched playlists', async () => {
+    globalThis.fetch = (async () => {
+      return new Response(
+        '#EXTM3U\n#EXTINF:-1 tvg-logo=\"http://127.0.0.1/admin\",Channel A\nhttps://8.8.4.4/a.m3u8',
+        {
+          status: 200
+        }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      fetchAndParsePlaylist('https://8.8.8.8/tv.m3u8')
+    ).resolves.toEqual([
+      {
+        name: 'Channel A',
+        logo: undefined,
+        url: 'https://8.8.4.4/a.m3u8'
+      }
+    ]);
+  });
+
+  test('resolves and keeps safe relative logo URLs from fetched playlists', async () => {
+    globalThis.fetch = (async () => {
+      return new Response(
+        '#EXTM3U\n#EXTINF:-1 tvg-logo=\"/logos/channel-a.png\",Channel A\n/live/a.m3u8',
+        {
+          status: 200
+        }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      fetchAndParsePlaylist('https://8.8.8.8/iptv/list.m3u8')
+    ).resolves.toEqual([
+      {
+        name: 'Channel A',
+        logo: 'https://8.8.8.8/logos/channel-a.png',
+        url: 'https://8.8.8.8/live/a.m3u8'
+      }
+    ]);
+  });
+
+  test('fetches playlists with a timeout signal', async () => {
+    let receivedSignal: AbortSignal | undefined;
+
+    globalThis.fetch = (async (
+      ...[_input, init]: Parameters<typeof fetch>
+    ): Promise<Response> => {
+      receivedSignal = init?.signal ?? undefined;
+
+      return new Response(
+        '#EXTM3U\n#EXTINF:-1,Channel A\nhttps://8.8.4.4/a.m3u8',
+        {
+          status: 200
+        }
+      );
+    }) as unknown as typeof fetch;
+
+    await fetchAndParsePlaylist('https://8.8.8.8/tv.m3u8');
+
+    expect(receivedSignal).toBeDefined();
+
+    if (!receivedSignal) {
+      throw new Error('Expected fetch to receive an AbortSignal');
+    }
+
+    expect(receivedSignal.aborted).toBe(false);
+  });
+});

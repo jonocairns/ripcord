@@ -24,7 +24,6 @@ import {
 } from 'react';
 import { toast } from 'sonner';
 import { CardControls } from './card-controls';
-import { CardGradient } from './card-gradient';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
@@ -475,8 +474,6 @@ const ScreenShareCard = memo(
             cursor: isPoppedOut ? 'default' : getCursor()
           }}
         >
-          <CardGradient />
-
           <ScreenShareControls
             isPinned={isPinned}
             isZoomEnabled={isZoomEnabled}
@@ -539,25 +536,6 @@ const ScreenShareCard = memo(
               </button>
             </div>
           )}
-
-          <div className="absolute bottom-0 left-0 right-0 p-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-            <div className="flex items-center gap-2 min-w-0">
-              <Monitor className="size-3.5 text-purple-400 flex-shrink-0" />
-              <span className="text-white font-medium text-xs truncate">
-                {user.name}'s screen
-              </span>
-              {isPoppedOut && (
-                <span className="text-white/70 text-xs ml-auto flex-shrink-0">
-                  Popped out
-                </span>
-              )}
-              {!isPoppedOut && isZoomEnabled && zoom > 1 && (
-                <span className="text-white/70 text-xs ml-auto flex-shrink-0">
-                  {Math.round(zoom * 100)}%
-                </span>
-              )}
-            </div>
-          </div>
         </div>
 
         <PopoutWindow

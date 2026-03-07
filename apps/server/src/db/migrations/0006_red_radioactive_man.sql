@@ -1,0 +1,1 @@
+ALTER TABLE `iptv_sources` ADD `active_channel_index` integer;

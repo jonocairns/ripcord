@@ -1,0 +1,1 @@
+ALTER TABLE `iptv_sources` ADD `always_transcode_video` integer DEFAULT false NOT NULL;

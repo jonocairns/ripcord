@@ -58,10 +58,7 @@ const VoiceGrid = memo(
             <div className="flex-shrink-0 border-t border-border/70 bg-card/45 backdrop-blur-sm">
               <div className="flex justify-center gap-2.5 p-3 overflow-x-auto">
                 {regularCards.map((card, index) => (
-                  <div
-                    key={index}
-                    className="h-24 w-40 flex-shrink-0 overflow-hidden rounded-lg border border-border/70"
-                  >
+                  <div key={index} className="h-24 w-40 flex-shrink-0 p-1">
                     {card}
                   </div>
                 ))}
@@ -95,10 +92,7 @@ const VoiceGrid = memo(
 
     return (
       <div
-        className={cn(
-          'grid h-full gap-3 p-3 md:gap-4 md:p-4',
-          className
-        )}
+        className={cn('grid h-full gap-3 p-3 md:gap-4 md:p-4', className)}
         style={{
           gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
           gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`

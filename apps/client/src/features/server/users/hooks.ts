@@ -27,8 +27,7 @@ export const useIsOwnUser = (userId: number) =>
 export const useUserById = (userId: number) =>
   useServerStore((state) => userByIdSelector(state, userId));
 
-export const useOwnPublicUser = () =>
-  useServerStore(ownUserSelector);
+export const useOwnPublicUser = () => useServerStore(ownUserSelector);
 
 export const useUserStatus = (userId: number) =>
   useServerStore((state) => userStatusSelector(state, userId));

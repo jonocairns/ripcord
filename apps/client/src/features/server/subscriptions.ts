@@ -4,6 +4,7 @@ import { setPublicServerSettings } from './actions';
 import { subscribeToCategories } from './categories/subscriptions';
 import { subscribeToChannels } from './channels/subscriptions';
 import { subscribeToEmojis } from './emojis/subscriptions';
+import { subscribeToIptv } from './iptv/subscriptions';
 import { subscribeToMessages } from './messages/subscriptions';
 import { subscribeToPlugins } from './plugins/subscriptions';
 import { rolesSelector } from './roles/selectors';
@@ -54,6 +55,7 @@ const initSubscriptions = () => {
     () => subscribeToUsers({ canSubscribeToDelete: canSubscribeToUserDelete }),
     subscribeToMessages,
     subscribeToVoice,
+    subscribeToIptv,
     subscribeToCategories
   ];
 

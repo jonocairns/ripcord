@@ -23,11 +23,11 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { Slider } from '../ui/slider';
 import { UserAvatar } from '../user-avatar';
 import { UserPopover } from '../user-popover';
+import { useVolumeControl } from '../voice-provider/volume-control-context';
 import {
   MASTER_OUTPUT_VOLUME_KEY,
-  OWN_MIC_VOLUME_KEY,
-  useVolumeControl
-} from '../voice-provider/volume-control-context';
+  OWN_MIC_VOLUME_KEY
+} from '../voice-provider/volume-control-storage';
 
 type TAudioLevelPopoverProps = {
   label: string;

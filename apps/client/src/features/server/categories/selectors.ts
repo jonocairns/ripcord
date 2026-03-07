@@ -6,7 +6,5 @@ export const sortCategories = (categories: TCategory[]) =>
 
 export const categoriesSelector = (state: IServerState) => state.categories;
 
-export const categoryByIdSelector = (
-  state: IServerState,
-  categoryId: number
-) => state.categories.find((category) => category.id === categoryId);
+export const categoryByIdSelector = (state: IServerState, categoryId: number) =>
+  state.categories.find((category) => category.id === categoryId);

@@ -28,7 +28,8 @@ export const useChannelsByCategoryId = (categoryId: number) => {
   );
 };
 
-export const useSelectedChannelId = () => useServerStore(selectedChannelIdSelector);
+export const useSelectedChannelId = () =>
+  useServerStore(selectedChannelIdSelector);
 
 export const useSelectedChannel = () => useServerStore(selectedChannelSelector);
 
@@ -39,9 +40,7 @@ export const useIsCurrentVoiceChannelSelected = () =>
   useServerStore(isCurrentVoiceChannelSelectedSelector);
 
 export const useChannelPermissionsById = (channelId: number) =>
-  useServerStore((state) =>
-    channelPermissionsByIdSelector(state, channelId)
-  );
+  useServerStore((state) => channelPermissionsByIdSelector(state, channelId));
 
 export const useSelectedChannelType = () =>
   useServerStore(selectedChannelTypeSelector);

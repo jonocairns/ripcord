@@ -1,10 +1,12 @@
 import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useChannelCan } from '@/features/server/hooks';
+import { setIptvStatus } from '@/features/server/iptv/actions';
 import {
   clearPendingVoiceReconnectChannelId,
   consumePendingVoiceReconnectChannelId
 } from '@/features/server/reconnect-state';
+import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { joinVoice } from '@/features/server/voice/actions';
@@ -30,6 +32,7 @@ import {
 import {
   ChannelPermission,
   StreamKind,
+  type TExternalStream,
   type TVoiceUserState
 } from '@sharkord/shared';
 import { Device } from 'mediasoup-client';
@@ -54,7 +57,10 @@ import {
 } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
 import { useLocalStreams } from './hooks/use-local-streams';
-import { usePendingStreams } from './hooks/use-pending-streams';
+import {
+  getPendingStreamKey,
+  usePendingStreams
+} from './hooks/use-pending-streams';
 import {
   useRemoteStreams,
   type TExternalStreamsMap
@@ -78,13 +84,13 @@ import {
   type TMicReferenceAudioPipeline
 } from './mic-reference-audio';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
-import type { TVolumeSettingsUpdatedDetail } from './volume-control-context';
+import { VolumeControlProvider } from './volume-control-provider';
+import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
 import {
   getStoredVolume,
   OWN_MIC_VOLUME_KEY,
-  VOLUME_SETTINGS_UPDATED_EVENT,
-  VolumeControlProvider
-} from './volume-control-context';
+  VOLUME_SETTINGS_UPDATED_EVENT
+} from './volume-control-storage';
 
 type AudioVideoRefs = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -236,6 +242,37 @@ type TMicGainPipeline = {
 
 const clampVolumePercent = (value: number) => {
   return Math.min(100, Math.max(0, value));
+};
+
+type TTrackedExternalWatchState = {
+  audio: boolean;
+  video: boolean;
+};
+
+type TChannelExternalStreams = {
+  [streamId: number]: TExternalStream;
+};
+
+const EMPTY_CHANNEL_EXTERNAL_STREAMS: TChannelExternalStreams = {};
+
+const isExternalStreamKind = (
+  kind: StreamKind
+): kind is StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO => {
+  return (
+    kind === StreamKind.EXTERNAL_AUDIO || kind === StreamKind.EXTERNAL_VIDEO
+  );
+};
+
+const getExternalStreamWatchIdentity = (
+  stream: Pick<TExternalStream, 'pluginId' | 'key'>
+) => {
+  return `${stream.pluginId}:${stream.key}`;
+};
+
+const getTrackedExternalWatchField = (
+  kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO
+): keyof TTrackedExternalWatchState => {
+  return kind === StreamKind.EXTERNAL_AUDIO ? 'audio' : 'video';
 };
 
 const getAudioContextClass = () => {
@@ -520,6 +557,18 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   const ownVoiceState = useOwnVoiceState();
   const currentVoiceChannelId = useCurrentVoiceChannelId();
   const channelCan = useChannelCan(currentVoiceChannelId);
+  const currentChannelExternalStreams = useServerStore<TChannelExternalStreams>(
+    (state) => {
+      if (currentVoiceChannelId === undefined) {
+        return EMPTY_CHANNEL_EXTERNAL_STREAMS;
+      }
+
+      return (
+        state.externalStreamsMap[currentVoiceChannelId] ??
+        EMPTY_CHANNEL_EXTERNAL_STREAMS
+      );
+    }
+  );
   const { devices } = useDevices();
   const appAudioPipelineRef = useRef<TDesktopAppAudioPipeline | undefined>(
     undefined
@@ -556,6 +605,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   const micMutedBeforePushRef = useRef<boolean | undefined>(undefined);
   const reconnectingVoiceRef = useRef(false);
   const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
+  const watchedExternalStreamsRef = useRef<
+    Record<string, TTrackedExternalWatchState>
+  >({});
 
   const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
     if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -615,7 +667,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     createConsumerTransport,
     consume,
     consumeExistingProducers,
-    stopWatchingStream,
+    stopWatchingStream: stopWatchingConsumedStream,
     cleanupTransports
   } = useTransports({
     addExternalStreamTrack,
@@ -629,6 +681,27 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
   const acceptStream = useCallback(
     (remoteId: number, kind: StreamKind) => {
+      if (isExternalStreamKind(kind)) {
+        const stream = currentChannelExternalStreams[remoteId];
+
+        if (stream) {
+          const identity = getExternalStreamWatchIdentity(stream);
+          const field = getTrackedExternalWatchField(kind);
+          const trackedState = watchedExternalStreamsRef.current[identity] ?? {
+            audio: false,
+            video: false
+          };
+
+          watchedExternalStreamsRef.current = {
+            ...watchedExternalStreamsRef.current,
+            [identity]: {
+              ...trackedState,
+              [field]: true
+            }
+          };
+        }
+      }
+
       const currentRouterRtpCapabilities = routerRtpCapabilities.current;
 
       if (!currentRouterRtpCapabilities) {
@@ -641,7 +714,45 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
       void consume(remoteId, kind, currentRouterRtpCapabilities);
     },
-    [consume]
+    [consume, currentChannelExternalStreams]
+  );
+
+  const stopWatchingStream = useCallback(
+    (remoteId: number, kind: StreamKind) => {
+      if (isExternalStreamKind(kind)) {
+        const stream = currentChannelExternalStreams[remoteId];
+
+        if (stream) {
+          const identity = getExternalStreamWatchIdentity(stream);
+          const field = getTrackedExternalWatchField(kind);
+          const trackedState = watchedExternalStreamsRef.current[identity];
+
+          if (trackedState) {
+            const nextTrackedState = {
+              ...trackedState,
+              [field]: false
+            };
+
+            if (!nextTrackedState.audio && !nextTrackedState.video) {
+              const nextTrackedStreams = {
+                ...watchedExternalStreamsRef.current
+              };
+
+              delete nextTrackedStreams[identity];
+              watchedExternalStreamsRef.current = nextTrackedStreams;
+            } else {
+              watchedExternalStreamsRef.current = {
+                ...watchedExternalStreamsRef.current,
+                [identity]: nextTrackedState
+              };
+            }
+          }
+        }
+      }
+
+      void stopWatchingConsumedStream(remoteId, kind);
+    },
+    [currentChannelExternalStreams, stopWatchingConsumedStream]
   );
 
   const {
@@ -669,6 +780,109 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       )
     );
   }, [externalStreams, remoteUserStreams, ownVoiceState.soundMuted]);
+
+  useEffect(() => {
+    if (currentVoiceChannelId === undefined) {
+      watchedExternalStreamsRef.current = {};
+      return;
+    }
+
+    const currentRouterRtpCapabilities = routerRtpCapabilities.current;
+
+    if (!currentRouterRtpCapabilities) {
+      return;
+    }
+
+    Object.entries(currentChannelExternalStreams).forEach(
+      ([streamId, stream]) => {
+        const trackedState =
+          watchedExternalStreamsRef.current[
+            getExternalStreamWatchIdentity(stream)
+          ];
+
+        if (!trackedState) {
+          return;
+        }
+
+        const numericStreamId = Number(streamId);
+
+        if (
+          trackedState.audio &&
+          stream.tracks.audio &&
+          pendingStreams.has(`${numericStreamId}-${StreamKind.EXTERNAL_AUDIO}`)
+        ) {
+          void consume(
+            numericStreamId,
+            StreamKind.EXTERNAL_AUDIO,
+            currentRouterRtpCapabilities
+          );
+        }
+
+        if (
+          trackedState.video &&
+          stream.tracks.video &&
+          pendingStreams.has(`${numericStreamId}-${StreamKind.EXTERNAL_VIDEO}`)
+        ) {
+          void consume(
+            numericStreamId,
+            StreamKind.EXTERNAL_VIDEO,
+            currentRouterRtpCapabilities
+          );
+        }
+      }
+    );
+  }, [
+    consume,
+    currentChannelExternalStreams,
+    currentVoiceChannelId,
+    pendingStreams
+  ]);
+
+  useEffect(() => {
+    if (currentVoiceChannelId === undefined) {
+      return;
+    }
+
+    Object.entries(currentChannelExternalStreams).forEach(
+      ([streamId, stream]) => {
+        if (stream.key !== `iptv:${currentVoiceChannelId}`) {
+          return;
+        }
+
+        const numericStreamId = Number(streamId);
+        const activeExternalStream = externalStreams[numericStreamId];
+        const hasPendingExternalAudio = pendingStreams.has(
+          getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_AUDIO)
+        );
+        const hasPendingExternalVideo = pendingStreams.has(
+          getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_VIDEO)
+        );
+
+        if (stream.tracks.audio && !activeExternalStream?.audioStream) {
+          if (!hasPendingExternalAudio) {
+            addPendingStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
+          }
+
+          void acceptStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
+        }
+
+        if (stream.tracks.video && !activeExternalStream?.videoStream) {
+          if (!hasPendingExternalVideo) {
+            addPendingStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
+          }
+
+          void acceptStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
+        }
+      }
+    );
+  }, [
+    acceptStream,
+    addPendingStream,
+    currentChannelExternalStreams,
+    currentVoiceChannelId,
+    externalStreams,
+    pendingStreams
+  ]);
 
   const applyMicGainVolume = useCallback((volume: number) => {
     const micGainPipeline = micGainPipelineRef.current;
@@ -767,7 +981,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         });
       }
     }
-  }, [cleanupMicReferenceAudioPipeline]);
+  }, [cleanupMicReferenceAudioPipeline, localAudioProducer]);
 
   const startMicStream = useCallback(async () => {
     try {
@@ -1195,6 +1409,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
         const videoProducer = await producerTransport.current?.produce({
           track: videoTrack,
+          encodings: [{ maxBitrate: webcamBitratePolicy.maxKbps * 1000 }],
           codec: preferredVideoCodec,
           codecOptions: {
             videoGoogleStartBitrate: webcamBitratePolicy.startKbps
@@ -1248,7 +1463,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     setLocalVideoStream,
     localVideoProducer,
     producerTransport,
-    localVideoStream,
     devices.webcamId,
     devices.webcamFramerate,
     devices.webcamResolution,
@@ -1653,6 +1867,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           localScreenShareProducer.current =
             await producerTransport.current?.produce({
               track: videoTrack,
+              encodings: [{ maxBitrate: screenBitratePolicy.maxKbps * 1000 }],
               codecOptions: {
                 videoGoogleStartBitrate: screenBitratePolicy.startKbps
               },
@@ -1996,6 +2211,44 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     clearPendingStreamsForUser,
     rtpCapabilities: routerRtpCapabilities.current!
   });
+
+  useEffect(() => {
+    if (currentVoiceChannelId === undefined) {
+      return;
+    }
+
+    let cancelled = false;
+    const trpc = getTRPCClient();
+
+    void (async () => {
+      try {
+        const config = await trpc.iptv.getViewerConfig.query({
+          channelId: currentVoiceChannelId
+        });
+
+        if (!config.configured || !config.enabled || cancelled) {
+          return;
+        }
+
+        const status = await trpc.iptv.getStatus.query({
+          channelId: currentVoiceChannelId
+        });
+
+        if (!cancelled) {
+          setIptvStatus(currentVoiceChannelId, status);
+        }
+      } catch (error) {
+        logVoice('Failed to fetch IPTV status', {
+          error,
+          channelId: currentVoiceChannelId
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentVoiceChannelId]);
 
   useEffect(() => {
     if (currentVoiceChannelId !== undefined) {

@@ -11,6 +11,9 @@ SIDECAR_TARGET_DIR="$DESKTOP_DIR/sidecar/bin/win32"
 SIDECAR_TARGET="$SIDECAR_TARGET_DIR/$SIDECAR_BINARY"
 WINDOWS_BUILD_DIR="$DESKTOP_DIR/build/out/win-unpacked"
 DESKTOP_OUTPUT_DIR="$HOME/Desktop/sharkord-win-unpacked"
+PREVIEW_RUNTIME_CONFIG_FILE="sharkord-preview-runtime.json"
+PREVIEW_RUNTIME_USER_DATA_SUFFIX="Preview"
+PREVIEW_RUNTIME_APP_USER_MODEL_ID="com.sharkord.desktop.preview"
 
 require_cmd() {
   local cmd="$1"
@@ -96,6 +99,16 @@ if [ ! -d "$WINDOWS_BUILD_DIR" ]; then
   echo "Expected packaged output not found: $WINDOWS_BUILD_DIR"
   exit 1
 fi
+
+PREVIEW_RUNTIME_CONFIG_TARGET="$WINDOWS_BUILD_DIR/resources/$PREVIEW_RUNTIME_CONFIG_FILE"
+mkdir -p "$(dirname "$PREVIEW_RUNTIME_CONFIG_TARGET")"
+cat >"$PREVIEW_RUNTIME_CONFIG_TARGET" <<EOF
+{
+  "appUserModelId": "$PREVIEW_RUNTIME_APP_USER_MODEL_ID",
+  "userDataSuffix": "$PREVIEW_RUNTIME_USER_DATA_SUFFIX"
+}
+EOF
+echo "Preview runtime config written to: $PREVIEW_RUNTIME_CONFIG_TARGET"
 
 desktop_parent_dir="$(resolve_desktop_dir || true)"
 if [ -n "$desktop_parent_dir" ]; then

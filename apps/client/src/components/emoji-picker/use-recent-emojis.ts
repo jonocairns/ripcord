@@ -68,10 +68,7 @@ const subscribe = (callback: () => void): (() => void) => {
   };
 
   const handleStorage = (event: StorageEvent) => {
-    if (
-      event.key !== null &&
-      event.key !== LocalStorageKey.RECENT_EMOJIS
-    ) {
+    if (event.key !== null && event.key !== LocalStorageKey.RECENT_EMOJIS) {
       return;
     }
 
@@ -79,7 +76,10 @@ const subscribe = (callback: () => void): (() => void) => {
     callback();
   };
 
-  window.addEventListener(RECENT_EMOJIS_CHANGED_EVENT, handleRecentEmojisChanged);
+  window.addEventListener(
+    RECENT_EMOJIS_CHANGED_EVENT,
+    handleRecentEmojisChanged
+  );
   window.addEventListener('storage', handleStorage);
 
   return () => {

@@ -1,7 +1,5 @@
-import {
-  MASTER_OUTPUT_VOLUME_KEY,
-  useVolumeControl
-} from '@/components/voice-provider/volume-control-context';
+import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
+import { MASTER_OUTPUT_VOLUME_KEY } from '@/components/voice-provider/volume-control-storage';
 import { useIsOwnUser } from '@/features/server/users/hooks';
 import { useVoice } from '@/features/server/voice/hooks';
 import { StreamKind } from '@sharkord/shared';
@@ -189,6 +187,8 @@ const useVoiceRefs = (
     hasScreenShareAudioStream: !!screenShareAudioStream,
     hasExternalAudioStream: !!externalAudioStream,
     hasExternalVideoStream: !!externalVideoStream,
+    externalAudioStream,
+    externalVideoStream,
     screenShareStream,
     screenShareAudioStream,
     audioLevel,

@@ -2,7 +2,6 @@ import { ChannelPermission, OWNER_ROLE_ID, Permission } from '@sharkord/shared';
 import { useCallback, useMemo } from 'react';
 import { useChannelById, useChannelPermissionsById } from './channels/hooks';
 import { channelReadStateByIdSelector } from './channels/selectors';
-import { useServerStore } from './slice';
 import {
   connectedSelector,
   connectingSelector,
@@ -13,6 +12,7 @@ import {
   publicServerSettingsSelector,
   serverNameSelector
 } from './selectors';
+import { useServerStore } from './slice';
 import type { TVoiceUser } from './types';
 import { voiceChannelStateSelector } from './voice/selectors';
 

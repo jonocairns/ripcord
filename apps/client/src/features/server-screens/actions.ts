@@ -1,9 +1,6 @@
 import type { ServerScreen } from '@/components/server-screens/screens';
 import type { TGenericObject } from '@sharkord/shared';
-import {
-  getInitialServerScreenState,
-  useServerScreensStore
-} from './slice';
+import { getInitialServerScreenState, useServerScreensStore } from './slice';
 
 export const openServerScreen = (
   serverScreen: ServerScreen,

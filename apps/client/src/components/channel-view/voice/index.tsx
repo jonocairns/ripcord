@@ -1,9 +1,13 @@
-import { useVoiceUsersByChannelId } from '@/features/server/hooks';
+import {
+  useChannelCan,
+  useVoiceUsersByChannelId
+} from '@/features/server/hooks';
+import { useIptvStatusByChannelId } from '@/features/server/iptv/hooks';
 import {
   useVoice,
   useVoiceChannelExternalStreamsList
 } from '@/features/server/voice/hooks';
-import { StreamKind } from '@sharkord/shared';
+import { ChannelPermission, StreamKind } from '@sharkord/shared';
 import { memo, useMemo } from 'react';
 import { getPendingStreamKey } from '../../voice-provider/hooks/use-pending-streams';
 import { ControlsBar } from './controls-bar';
@@ -12,6 +16,8 @@ import {
   PinnedCardType,
   usePinCardController
 } from './hooks/use-pin-card-controller';
+import { IptvChannelSelector } from './iptv-channel-selector';
+import { IptvStatusCard } from './iptv-status-card';
 import { PendingStreamCard } from './pending-stream-card';
 import { ScreenShareCard } from './screen-share-card';
 import { VoiceGrid } from './voice-grid';
@@ -24,6 +30,8 @@ type TChannelProps = {
 const VoiceChannel = memo(({ channelId }: TChannelProps) => {
   const voiceUsers = useVoiceUsersByChannelId(channelId);
   const externalStreams = useVoiceChannelExternalStreamsList(channelId);
+  const channelCan = useChannelCan(channelId);
+  const iptvStatus = useIptvStatusByChannelId(channelId);
   const {
     acceptStream,
     stopWatchingStream,
@@ -32,9 +40,13 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
     externalStreams: activeExternalStreams
   } = useVoice();
   const { pinnedCard, pinCard, unpinCard, isPinned } = usePinCardController();
+  const canManageIptv = channelCan(ChannelPermission.MANAGE_IPTV);
 
   const cards = useMemo(() => {
     const cards: React.ReactNode[] = [];
+    const hasActiveIptvStream = externalStreams.some(
+      (stream) => stream.key === `iptv:${channelId}`
+    );
 
     voiceUsers.forEach((voiceUser) => {
       const userCardId = `user-${voiceUser.id}`;
@@ -174,6 +186,9 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
             key={externalStreamCardId}
             streamId={stream.streamId}
             stream={stream}
+            iptvStatus={
+              stream.key === `iptv:${channelId}` ? iptvStatus : undefined
+            }
             isPinned={isPinned(externalStreamCardId)}
             onPin={() =>
               pinCard({
@@ -198,15 +213,32 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
       );
     });
 
+    if (
+      iptvStatus &&
+      (iptvStatus.status === 'starting' || iptvStatus.status === 'error') &&
+      !hasActiveIptvStream
+    ) {
+      cards.push(
+        <IptvStatusCard
+          key={`iptv-status-${channelId}`}
+          status={iptvStatus}
+          canManageIptv={canManageIptv}
+        />
+      );
+    }
+
     return cards;
   }, [
     voiceUsers,
+    channelId,
     externalStreams,
     activeExternalStreams,
     acceptStream,
     stopWatchingStream,
     pendingStreams,
     remoteUserStreams,
+    iptvStatus,
+    canManageIptv,
     isPinned,
     pinCard,
     unpinCard
@@ -229,6 +261,11 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 
   return (
     <div className="voice-stage relative flex-1 overflow-hidden">
+      <IptvChannelSelector
+        channelId={channelId}
+        canManageIptv={canManageIptv}
+        className="absolute right-4 bottom-4 z-50 pointer-events-auto sm:right-6 sm:bottom-6"
+      />
       <VoiceGrid
         pinnedCardId={pinnedCard?.id}
         className="h-full pb-24 md:pb-28"

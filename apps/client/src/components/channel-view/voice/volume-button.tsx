@@ -5,10 +5,8 @@ import {
   PopoverTrigger
 } from '@/components/ui/popover';
 import { Slider } from '@/components/ui/slider';
-import {
-  useVolumeControl,
-  type TVolumeKey
-} from '@/components/voice-provider/volume-control-context';
+import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
+import type { TVolumeKey } from '@/components/voice-provider/volume-control-storage';
 import { Volume2, VolumeX } from 'lucide-react';
 import { memo, useCallback } from 'react';
 

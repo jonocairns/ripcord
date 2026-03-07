@@ -1,7 +1,7 @@
-import { Button } from '@/components/ui/button';
-import { Tooltip } from '@/components/ui/tooltip';
 import { useAvailableDevices } from '@/components/devices-provider/hooks/use-available-devices';
 import { useDevices } from '@/components/devices-provider/hooks/use-devices';
+import { Button } from '@/components/ui/button';
+import { Tooltip } from '@/components/ui/tooltip';
 import { useChannelCan } from '@/features/server/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
 import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
@@ -34,8 +34,8 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
   const { videoDevices } = useAvailableDevices();
   const selectableVideoDevices = useMemo(
     () =>
-      videoDevices.filter(
-        (device): device is MediaDeviceInfo => Boolean(device?.deviceId)
+      videoDevices.filter((device): device is MediaDeviceInfo =>
+        Boolean(device?.deviceId)
       ),
     [videoDevices]
   );
@@ -59,9 +59,7 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
       (device) => device.deviceId === devices.webcamId
     );
     const nextIndex =
-      currentIndex < 0
-        ? 0
-        : (currentIndex + 1) % selectableVideoDevices.length;
+      currentIndex < 0 ? 0 : (currentIndex + 1) % selectableVideoDevices.length;
     const nextDevice = selectableVideoDevices[nextIndex];
 
     if (!nextDevice) {

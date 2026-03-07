@@ -3,7 +3,6 @@ import { cn } from '@/lib/utils';
 import { Video, ZoomIn, ZoomOut } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { CardControls } from './card-controls';
-import { CardGradient } from './card-gradient';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
@@ -110,8 +109,6 @@ const ExternalVideoCard = memo(
           cursor: getCursor()
         }}
       >
-        <CardGradient />
-
         <ExternalVideoControls
           isPinned={isPinned}
           isZoomEnabled={isZoomEnabled}

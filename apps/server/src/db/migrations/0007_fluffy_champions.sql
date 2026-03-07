@@ -1,0 +1,1 @@
+ALTER TABLE `iptv_sources` ADD `pinned_channel_urls` text DEFAULT '[]' NOT NULL;
