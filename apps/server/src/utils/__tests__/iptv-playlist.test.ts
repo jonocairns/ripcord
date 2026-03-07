@@ -100,10 +100,12 @@ https://stream.local/valid.m3u8`);
   });
 
   test('fetches playlists with a timeout signal', async () => {
-    let receivedSignal: AbortSignal | null = null;
+    let receivedSignal: AbortSignal | undefined;
 
-    globalThis.fetch = (async (_input, init) => {
-      receivedSignal = init?.signal ?? null;
+    globalThis.fetch = (async (
+      ...[_input, init]: Parameters<typeof fetch>
+    ): Promise<Response> => {
+      receivedSignal = init?.signal ?? undefined;
 
       return new Response(
         '#EXTM3U\n#EXTINF:-1,Channel A\nhttps://8.8.4.4/a.m3u8',
@@ -115,7 +117,12 @@ https://stream.local/valid.m3u8`);
 
     await fetchAndParsePlaylist('https://8.8.8.8/tv.m3u8');
 
-    expect(receivedSignal).not.toBeNull();
-    expect(receivedSignal?.aborted).toBe(false);
+    expect(receivedSignal).toBeDefined();
+
+    if (!receivedSignal) {
+      throw new Error('Expected fetch to receive an AbortSignal');
+    }
+
+    expect(receivedSignal.aborted).toBe(false);
   });
 });
