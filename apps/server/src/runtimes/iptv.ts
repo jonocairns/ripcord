@@ -16,6 +16,7 @@ import { db } from '../db';
 import { iptvSources } from '../db/schema';
 import { logger } from '../logger';
 import { eventBus } from '../plugins/event-bus';
+import { IS_DOCKER } from '../utils/env';
 import {
   assertSafeIptvUrl,
   fetchAndParsePlaylist
@@ -40,8 +41,14 @@ const MAX_TRANSCODE_VIDEO_WIDTH = 1920;
 const MAX_TRANSCODE_VIDEO_HEIGHT = 1080;
 const MAX_TRANSCODE_VIDEO_FRAME_RATE = 50;
 const TRANSCODE_VIDEO_CRF = 18;
+const TRANSCODE_VIDEO_KEYFRAME_INTERVAL_SECONDS = 1;
+const DEFAULT_TRANSCODE_VIDEO_PRESET = IS_DOCKER ? 'veryfast' : 'faster';
+const TRANSCODE_VIDEO_PRESET =
+  process.env.SHARKORD_IPTV_TRANSCODE_PRESET?.trim() ||
+  DEFAULT_TRANSCODE_VIDEO_PRESET;
 const DEFAULT_TRANSCODE_VIDEO_MAX_RATE_KBPS = 10_000;
-const DEFAULT_TRANSCODE_VIDEO_BUFFER_SIZE_KBPS = 20_000;
+const DEFAULT_TRANSCODE_VIDEO_BUFFER_SIZE_KBPS = 10_000;
+const DEFAULT_TRANSCODE_VIDEO_KEYFRAME_INTERVAL_FRAMES = 30;
 
 type TIptvSessionConfig = {
   playlistUrl: string;
@@ -74,10 +81,17 @@ type TIptvChannelPreparation = {
   targetVideoCrf?: number;
   targetVideoMaxRateKbps?: number;
   targetVideoBufferSizeKbps?: number;
+  targetVideoKeyframeIntervalFrames?: number;
 };
 
 type TTranscodeVideoProfile = {
   crf: number;
+  maxRateKbps: number;
+  bufferSizeKbps: number;
+  keyframeIntervalFrames: number;
+};
+
+type TTranscodeVideoLadderProfile = {
   maxRateKbps: number;
   bufferSizeKbps: number;
 };
@@ -601,46 +615,72 @@ const resolveTargetVideoFrameRate = (
   return Math.min(sourceFrameRate, MAX_TRANSCODE_VIDEO_FRAME_RATE);
 };
 
+const resolveEffectiveTargetVideoFrameRate = (
+  probeSummary: TIptvSourceProbeSummary | undefined
+): number => {
+  const sourceFrameRate = resolveTargetVideoFrameRate(probeSummary);
+
+  if (!needsDeinterlace(probeSummary)) {
+    return sourceFrameRate;
+  }
+
+  return Math.min(sourceFrameRate * 2, MAX_TRANSCODE_VIDEO_FRAME_RATE);
+};
+
 const resolveTranscodeVideoProfile = (
   probeSummary: TIptvSourceProbeSummary | undefined
 ): TTranscodeVideoProfile => {
   const targetDimensions = resolveTargetVideoDimensions(probeSummary);
   const targetWidth = targetDimensions?.width ?? 1280;
   const targetHeight = targetDimensions?.height ?? 720;
-  const sourceFrameRate = resolveTargetVideoFrameRate(probeSummary);
-  const effectiveFrameRate = needsDeinterlace(probeSummary)
-    ? Math.min(sourceFrameRate * 2, MAX_TRANSCODE_VIDEO_FRAME_RATE)
-    : sourceFrameRate;
-  const targetPixelsPerSecond = targetWidth * targetHeight * effectiveFrameRate;
+  const effectiveFrameRate = resolveEffectiveTargetVideoFrameRate(probeSummary);
+  const roundedFrameRate = Math.max(1, Math.round(effectiveFrameRate));
+  const isHighFrameRate = effectiveFrameRate > 30.01;
+  let ladderProfile: TTranscodeVideoLadderProfile = {
+    maxRateKbps: DEFAULT_TRANSCODE_VIDEO_MAX_RATE_KBPS,
+    bufferSizeKbps: 16_000
+  };
 
-  if (targetPixelsPerSecond <= 1280 * 720 * 30) {
-    return {
-      crf: TRANSCODE_VIDEO_CRF,
-      maxRateKbps: 8_000,
-      bufferSizeKbps: 16_000
-    };
-  }
-
-  if (targetPixelsPerSecond <= 1280 * 720 * 50) {
-    return {
-      crf: TRANSCODE_VIDEO_CRF,
-      maxRateKbps: 10_000,
-      bufferSizeKbps: 20_000
-    };
-  }
-
-  if (targetPixelsPerSecond <= 1920 * 1080 * 30) {
-    return {
-      crf: TRANSCODE_VIDEO_CRF,
-      maxRateKbps: 20_000,
-      bufferSizeKbps: 40_000
-    };
+  if (targetWidth <= 960 && targetHeight <= 540) {
+    ladderProfile = isHighFrameRate
+      ? {
+          maxRateKbps: 7_000,
+          bufferSizeKbps: 10_500
+        }
+      : {
+          maxRateKbps: 5_000,
+          bufferSizeKbps: 7_500
+        };
+  } else if (targetWidth <= 1280 && targetHeight <= 720) {
+    ladderProfile = isHighFrameRate
+      ? {
+          maxRateKbps: 10_000,
+          bufferSizeKbps: 15_000
+        }
+      : {
+          maxRateKbps: 8_000,
+          bufferSizeKbps: 12_000
+        };
+  } else {
+    ladderProfile = isHighFrameRate
+      ? {
+          maxRateKbps: 18_000,
+          bufferSizeKbps: 27_000
+        }
+      : {
+          maxRateKbps: 14_000,
+          bufferSizeKbps: 21_000
+        };
   }
 
   return {
     crf: TRANSCODE_VIDEO_CRF,
-    maxRateKbps: 25_000,
-    bufferSizeKbps: 50_000
+    maxRateKbps: ladderProfile.maxRateKbps,
+    bufferSizeKbps: ladderProfile.bufferSizeKbps,
+    keyframeIntervalFrames: Math.max(
+      roundedFrameRate,
+      Math.round(roundedFrameRate * TRANSCODE_VIDEO_KEYFRAME_INTERVAL_SECONDS)
+    )
   };
 };
 
@@ -895,7 +935,7 @@ class IptvSession {
     const mode = sourcePreparation.shouldTranscodeVideo ? 'transcode' : 'copy';
     const outputVideo = sourcePreparation.shouldTranscodeVideo
       ? `h264${formatProbeDetails([
-          `preset=faster`,
+          `preset=${TRANSCODE_VIDEO_PRESET}`,
           sourcePreparation.targetVideoCrf !== undefined
             ? `crf=${sourcePreparation.targetVideoCrf}`
             : undefined,
@@ -907,6 +947,9 @@ class IptvSession {
             : undefined,
           sourcePreparation.targetVideoBufferSizeKbps
             ? `bufsize=${sourcePreparation.targetVideoBufferSizeKbps}k`
+            : undefined,
+          sourcePreparation.targetVideoKeyframeIntervalFrames
+            ? `gop=${sourcePreparation.targetVideoKeyframeIntervalFrames}`
             : undefined
         ])}`
       : 'copy';
@@ -951,6 +994,8 @@ class IptvSession {
       targetVideoCrf: transcodeVideoProfile.crf,
       targetVideoMaxRateKbps: transcodeVideoProfile.maxRateKbps,
       targetVideoBufferSizeKbps: transcodeVideoProfile.bufferSizeKbps,
+      targetVideoKeyframeIntervalFrames:
+        transcodeVideoProfile.keyframeIntervalFrames,
       videoCodec: probeSummary?.videoCodec
     };
 
@@ -1325,7 +1370,9 @@ class IptvSession {
       videoFilter: sourcePreparation.videoFilter,
       targetVideoCrf: sourcePreparation.targetVideoCrf,
       targetVideoMaxRateKbps: sourcePreparation.targetVideoMaxRateKbps,
-      targetVideoBufferSizeKbps: sourcePreparation.targetVideoBufferSizeKbps
+      targetVideoBufferSizeKbps: sourcePreparation.targetVideoBufferSizeKbps,
+      targetVideoKeyframeIntervalFrames:
+        sourcePreparation.targetVideoKeyframeIntervalFrames
     });
 
     this.resetHealthTracking();
@@ -1415,7 +1462,9 @@ class IptvSession {
       videoFilter: sourcePreparation.videoFilter,
       targetVideoCrf: sourcePreparation.targetVideoCrf,
       targetVideoMaxRateKbps: sourcePreparation.targetVideoMaxRateKbps,
-      targetVideoBufferSizeKbps: sourcePreparation.targetVideoBufferSizeKbps
+      targetVideoBufferSizeKbps: sourcePreparation.targetVideoBufferSizeKbps,
+      targetVideoKeyframeIntervalFrames:
+        sourcePreparation.targetVideoKeyframeIntervalFrames
     });
 
     this.resetHealthTracking();
@@ -1490,6 +1539,7 @@ class IptvSession {
     targetVideoCrf?: number;
     targetVideoMaxRateKbps?: number;
     targetVideoBufferSizeKbps?: number;
+    targetVideoKeyframeIntervalFrames?: number;
   }) => {
     const videoCodecArgs = options.transcodeVideo
       ? [
@@ -1502,7 +1552,7 @@ class IptvSession {
           '-level:v',
           '4.2',
           '-preset',
-          'faster',
+          TRANSCODE_VIDEO_PRESET,
           '-tune',
           'zerolatency',
           '-bf:v',
@@ -1512,7 +1562,21 @@ class IptvSession {
           '-maxrate',
           `${options.targetVideoMaxRateKbps ?? DEFAULT_TRANSCODE_VIDEO_MAX_RATE_KBPS}k`,
           '-bufsize',
-          `${options.targetVideoBufferSizeKbps ?? DEFAULT_TRANSCODE_VIDEO_BUFFER_SIZE_KBPS}k`
+          `${options.targetVideoBufferSizeKbps ?? DEFAULT_TRANSCODE_VIDEO_BUFFER_SIZE_KBPS}k`,
+          '-g',
+          String(
+            options.targetVideoKeyframeIntervalFrames ??
+              DEFAULT_TRANSCODE_VIDEO_KEYFRAME_INTERVAL_FRAMES
+          ),
+          '-keyint_min',
+          String(
+            options.targetVideoKeyframeIntervalFrames ??
+              DEFAULT_TRANSCODE_VIDEO_KEYFRAME_INTERVAL_FRAMES
+          ),
+          '-sc_threshold',
+          '0',
+          '-x264-params',
+          'repeat-headers=1'
         ]
       : ['-c:v', 'copy'];
     const videoFilterArgs =

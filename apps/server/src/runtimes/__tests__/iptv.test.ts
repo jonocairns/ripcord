@@ -13,6 +13,7 @@ const getPrepareChannelSource = (session: IptvSession) => {
     targetVideoCrf?: number;
     targetVideoMaxRateKbps?: number;
     targetVideoBufferSizeKbps?: number;
+    targetVideoKeyframeIntervalFrames?: number;
   }>;
 };
 
@@ -136,7 +137,8 @@ describe('IptvSession', () => {
       videoFilter: undefined,
       targetVideoCrf: 18,
       targetVideoMaxRateKbps: 8_000,
-      targetVideoBufferSizeKbps: 16_000
+      targetVideoBufferSizeKbps: 12_000,
+      targetVideoKeyframeIntervalFrames: 30
     });
   });
 
@@ -186,7 +188,8 @@ describe('IptvSession', () => {
       videoFilter: undefined,
       targetVideoCrf: 18,
       targetVideoMaxRateKbps: 10_000,
-      targetVideoBufferSizeKbps: 20_000
+      targetVideoBufferSizeKbps: 15_000,
+      targetVideoKeyframeIntervalFrames: 50
     });
   });
 
@@ -237,7 +240,8 @@ describe('IptvSession', () => {
       videoFilter: undefined,
       targetVideoCrf: 18,
       targetVideoMaxRateKbps: 10_000,
-      targetVideoBufferSizeKbps: 20_000
+      targetVideoBufferSizeKbps: 15_000,
+      targetVideoKeyframeIntervalFrames: 50
     });
   });
 
@@ -287,7 +291,59 @@ describe('IptvSession', () => {
       videoFilter: undefined,
       targetVideoCrf: 18,
       targetVideoMaxRateKbps: 8_000,
-      targetVideoBufferSizeKbps: 16_000
+      targetVideoBufferSizeKbps: 12_000,
+      targetVideoKeyframeIntervalFrames: 30
+    });
+  });
+
+  test('keeps 540p50 transcodes on the lower real-time bitrate rung', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const prepareChannelSource = getPrepareChannelSource(session);
+
+    Reflect.set(
+      session,
+      'inspectSourceStreams',
+      async (): Promise<{
+        summary: {
+          hasVideo: boolean;
+          hasAudio: boolean;
+          videoCodec: string;
+          videoFieldOrder?: string;
+          videoWidth: number;
+          videoHeight: number;
+          videoFrameRate: number;
+        };
+      }> => {
+        return {
+          summary: {
+            hasVideo: true,
+            hasAudio: true,
+            videoCodec: 'hevc',
+            videoFieldOrder: 'progressive',
+            videoWidth: 960,
+            videoHeight: 540,
+            videoFrameRate: 50
+          }
+        };
+      }
+    );
+
+    const result = await prepareChannelSource.call(session, {
+      name: 'Sports SD+',
+      url: 'https://8.8.8.8/sports-sd-plus.m3u8'
+    });
+
+    expect(result).toEqual({
+      shouldTranscodeVideo: true,
+      videoCodec: 'hevc',
+      videoFilter: undefined,
+      targetVideoCrf: 18,
+      targetVideoMaxRateKbps: 7_000,
+      targetVideoBufferSizeKbps: 10_500,
+      targetVideoKeyframeIntervalFrames: 50
     });
   });
 
@@ -337,8 +393,9 @@ describe('IptvSession', () => {
       videoFilter:
         'scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=50',
       targetVideoCrf: 18,
-      targetVideoMaxRateKbps: 25_000,
-      targetVideoBufferSizeKbps: 50_000
+      targetVideoMaxRateKbps: 18_000,
+      targetVideoBufferSizeKbps: 27_000,
+      targetVideoKeyframeIntervalFrames: 50
     });
   });
 
@@ -387,8 +444,9 @@ describe('IptvSession', () => {
       videoCodec: 'mpeg2video',
       videoFilter: 'yadif=mode=send_frame:parity=auto:deint=all',
       targetVideoCrf: 18,
-      targetVideoMaxRateKbps: 25_000,
-      targetVideoBufferSizeKbps: 50_000
+      targetVideoMaxRateKbps: 18_000,
+      targetVideoBufferSizeKbps: 27_000,
+      targetVideoKeyframeIntervalFrames: 50
     });
   });
 
@@ -878,6 +936,7 @@ describe('IptvSession', () => {
         targetVideoCrf?: number;
         targetVideoMaxRateKbps?: number;
         targetVideoBufferSizeKbps?: number;
+        targetVideoKeyframeIntervalFrames?: number;
       }> => {
         return {
           shouldTranscodeVideo: false,
