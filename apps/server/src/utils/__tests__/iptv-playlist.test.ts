@@ -98,4 +98,24 @@ https://stream.local/valid.m3u8`);
     expect(first).toEqual(second);
     expect(fetchCalls).toBe(1);
   });
+
+  test('fetches playlists with a timeout signal', async () => {
+    let receivedSignal: AbortSignal | null = null;
+
+    globalThis.fetch = (async (_input, init) => {
+      receivedSignal = init?.signal ?? null;
+
+      return new Response(
+        '#EXTM3U\n#EXTINF:-1,Channel A\nhttps://8.8.4.4/a.m3u8',
+        {
+          status: 200
+        }
+      );
+    }) as unknown as typeof fetch;
+
+    await fetchAndParsePlaylist('https://8.8.8.8/tv.m3u8');
+
+    expect(receivedSignal).not.toBeNull();
+    expect(receivedSignal?.aborted).toBe(false);
+  });
 });

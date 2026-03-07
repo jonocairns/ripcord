@@ -27,6 +27,14 @@ const getRunHealthCheck = (session: IptvSession) => {
   return Reflect.get(session, 'runHealthCheck') as () => Promise<void>;
 };
 
+const getStartSelectedChannelInternal = (session: IptvSession) => {
+  return Reflect.get(session, 'startSelectedChannelInternal') as () => Promise<void>;
+};
+
+const getRestartFfmpegInternal = (session: IptvSession) => {
+  return Reflect.get(session, 'restartFfmpegInternal') as () => Promise<void>;
+};
+
 describe('IptvSession', () => {
   test('fails URL re-check before starting a stream', async () => {
     const session = new IptvSession(42, {
@@ -528,5 +536,191 @@ describe('IptvSession', () => {
     expect(Reflect.get(session, 'ffmpegProcess')).toBeUndefined();
     expect(Reflect.get(session, 'ffmpegStderr')).toBe('');
     expect(Reflect.get(session, 'sourceProbeSummary')).toBeUndefined();
+  });
+
+  test('closes partially created mediasoup resources when producer setup fails', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const startSelectedChannelInternal = getStartSelectedChannelInternal(session);
+    const produceError = new Error('audio producer failed');
+
+    const videoProducer = {
+      closed: false,
+      close() {
+        this.closed = true;
+      }
+    };
+    const videoTransport = {
+      closed: false,
+      tuple: { localPort: 5004 },
+      rtcpTuple: { localPort: 5005 },
+      close() {
+        this.closed = true;
+      },
+      produce: async () => {
+        return videoProducer;
+      }
+    };
+    const audioTransport = {
+      closed: false,
+      tuple: { localPort: 5006 },
+      rtcpTuple: { localPort: 5007 },
+      close() {
+        this.closed = true;
+      },
+      produce: async () => {
+        throw produceError;
+      }
+    };
+
+    Reflect.set(session, 'activeChannelIndex', 0);
+    Reflect.set(session, 'listChannels', async (): Promise<TIptvChannel[]> => {
+      return [
+        {
+          name: 'Sports HD',
+          logo: 'https://cdn.example/sports.png',
+          url: 'https://8.8.8.8/live.m3u8'
+        }
+      ];
+    });
+    Reflect.set(session, 'prepareChannelSource', async () => {
+      return {
+        shouldTranscodeVideo: false
+      };
+    });
+    Reflect.set(session, 'stopStreamInternal', async () => {});
+
+    let createPlainTransportCalls = 0;
+    let createExternalStreamCalls = 0;
+    const originalFindById = VoiceRuntime.findById;
+    VoiceRuntime.findById = ((_) => {
+      return {
+        getRouter: () => ({
+          createPlainTransport: async () => {
+            createPlainTransportCalls += 1;
+
+            return createPlainTransportCalls === 1
+              ? videoTransport
+              : audioTransport;
+          }
+        }),
+        createExternalStream: () => {
+          createExternalStreamCalls += 1;
+          return 0;
+        }
+      } as unknown as VoiceRuntime;
+    }) as typeof VoiceRuntime.findById;
+
+    try {
+      await expect(startSelectedChannelInternal.call(session)).rejects.toThrow(
+        produceError.message
+      );
+    } finally {
+      VoiceRuntime.findById = originalFindById;
+    }
+
+    expect(createPlainTransportCalls).toBe(2);
+    expect(createExternalStreamCalls).toBe(0);
+    expect(videoProducer.closed).toBe(true);
+    expect(videoTransport.closed).toBe(true);
+    expect(audioTransport.closed).toBe(true);
+    expect(Reflect.get(session, 'videoTransport')).toBeUndefined();
+    expect(Reflect.get(session, 'audioTransport')).toBeUndefined();
+    expect(Reflect.get(session, 'videoProducer')).toBeUndefined();
+    expect(Reflect.get(session, 'audioProducer')).toBeUndefined();
+    expect(Reflect.get(session, 'externalStreamId')).toBeUndefined();
+  });
+
+  test('clears ffmpeg state when restart shutdown times out', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const restartFfmpegInternal = getRestartFfmpegInternal(session);
+    const stopError = new Error('Timed out waiting for ffmpeg to stop');
+
+    Reflect.set(session, 'activeChannelIndex', 0);
+    Reflect.set(session, 'videoTransport', {
+      tuple: { localPort: 5004 },
+      rtcpTuple: { localPort: 5005 }
+    });
+    Reflect.set(session, 'audioTransport', {
+      tuple: { localPort: 5006 },
+      rtcpTuple: { localPort: 5007 }
+    });
+    Reflect.set(session, 'videoProducer', {});
+    Reflect.set(session, 'audioProducer', {});
+    Reflect.set(session, 'externalStreamId', 123);
+    Reflect.set(session, 'ffmpegProcess', { exitCode: null });
+    Reflect.set(session, 'ffmpegStderr', 'ffmpeg stderr');
+    Reflect.set(session, 'expectedStop', false);
+    Reflect.set(session, 'listChannels', async (): Promise<TIptvChannel[]> => {
+      return [
+        {
+          name: 'Sports HD',
+          logo: 'https://cdn.example/sports.png',
+          url: 'https://8.8.8.8/live.m3u8'
+        }
+      ];
+    });
+    Reflect.set(
+      session,
+      'prepareChannelSource',
+      async (): Promise<{
+        shouldTranscodeVideo: boolean;
+        videoCodec?: string;
+        videoFilter?: string;
+        targetVideoCrf?: number;
+        targetVideoMaxRateKbps?: number;
+        targetVideoBufferSizeKbps?: number;
+      }> => {
+        return {
+          shouldTranscodeVideo: false,
+          videoCodec: 'h264'
+        };
+      }
+    );
+    Reflect.set(session, 'stopFfmpegProcess', async () => {
+      throw stopError;
+    });
+
+    const updatedStreams: Array<{
+      streamId: number;
+      data: { title: string; avatarUrl?: string };
+    }> = [];
+    const originalFindById = VoiceRuntime.findById;
+    VoiceRuntime.findById = ((_) => {
+      return {
+        updateExternalStream: (
+          streamId: number,
+          data: { title: string; avatarUrl?: string }
+        ) => {
+          updatedStreams.push({ streamId, data });
+        }
+      } as unknown as VoiceRuntime;
+    }) as typeof VoiceRuntime.findById;
+
+    try {
+      await expect(restartFfmpegInternal.call(session)).rejects.toThrow(
+        stopError.message
+      );
+    } finally {
+      VoiceRuntime.findById = originalFindById;
+    }
+
+    expect(updatedStreams).toEqual([
+      {
+        streamId: 123,
+        data: {
+          title: 'Sports HD',
+          avatarUrl: 'https://cdn.example/sports.png'
+        }
+      }
+    ]);
+    expect(Reflect.get(session, 'expectedStop')).toBe(false);
+    expect(Reflect.get(session, 'ffmpegProcess')).toBeUndefined();
+    expect(Reflect.get(session, 'ffmpegStderr')).toBe('');
   });
 });

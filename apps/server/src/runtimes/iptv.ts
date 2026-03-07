@@ -1069,41 +1069,81 @@ class IptvSession {
       throw new Error('Voice runtime not found');
     }
 
-    const videoTransport = await runtime.getRouter().createPlainTransport({
-      listenInfo: {
-        protocol: 'udp',
-        ip: '127.0.0.1'
-      },
-      rtcpMux: false,
-      comedia: true
-    });
-    const audioTransport = await runtime.getRouter().createPlainTransport({
-      listenInfo: {
-        protocol: 'udp',
-        ip: '127.0.0.1'
-      },
-      rtcpMux: false,
-      comedia: true
-    });
-    const videoTuple = videoTransport.tuple;
-    const videoRtcpTuple = videoTransport.rtcpTuple;
-    const audioTuple = audioTransport.tuple;
-    const audioRtcpTuple = audioTransport.rtcpTuple;
+    let videoTransport: PlainTransport<AppData> | undefined;
+    let audioTransport: PlainTransport<AppData> | undefined;
+    let videoProducer: Producer<AppData> | undefined;
+    let audioProducer: Producer<AppData> | undefined;
+    let videoTuple: PlainTransport<AppData>['tuple'] | undefined;
+    let videoRtcpTuple: PlainTransport<AppData>['rtcpTuple'] | undefined;
+    let audioTuple: PlainTransport<AppData>['tuple'] | undefined;
+    let audioRtcpTuple: PlainTransport<AppData>['rtcpTuple'] | undefined;
 
-    if (!videoTuple || !videoRtcpTuple || !audioTuple || !audioRtcpTuple) {
-      videoTransport.close();
-      audioTransport.close();
-      throw new Error('Failed to initialize plain transport tuples');
+    try {
+      videoTransport = await runtime.getRouter().createPlainTransport({
+        listenInfo: {
+          protocol: 'udp',
+          ip: '127.0.0.1'
+        },
+        rtcpMux: false,
+        comedia: true
+      });
+      audioTransport = await runtime.getRouter().createPlainTransport({
+        listenInfo: {
+          protocol: 'udp',
+          ip: '127.0.0.1'
+        },
+        rtcpMux: false,
+        comedia: true
+      });
+      videoTuple = videoTransport.tuple;
+      videoRtcpTuple = videoTransport.rtcpTuple;
+      audioTuple = audioTransport.tuple;
+      audioRtcpTuple = audioTransport.rtcpTuple;
+
+      if (!videoTuple || !videoRtcpTuple || !audioTuple || !audioRtcpTuple) {
+        throw new Error('Failed to initialize plain transport tuples');
+      }
+
+      videoProducer = await videoTransport.produce({
+        kind: 'video',
+        rtpParameters: getVideoRtpParameters()
+      });
+      audioProducer = await audioTransport.produce({
+        kind: 'audio',
+        rtpParameters: getAudioRtpParameters()
+      });
+    } catch (error) {
+      if (videoProducer && !videoProducer.closed) {
+        videoProducer.close();
+      }
+
+      if (audioProducer && !audioProducer.closed) {
+        audioProducer.close();
+      }
+
+      if (videoTransport && !videoTransport.closed) {
+        videoTransport.close();
+      }
+
+      if (audioTransport && !audioTransport.closed) {
+        audioTransport.close();
+      }
+
+      throw error;
     }
 
-    const videoProducer = await videoTransport.produce({
-      kind: 'video',
-      rtpParameters: getVideoRtpParameters()
-    });
-    const audioProducer = await audioTransport.produce({
-      kind: 'audio',
-      rtpParameters: getAudioRtpParameters()
-    });
+    if (
+      !videoTransport ||
+      !audioTransport ||
+      !videoProducer ||
+      !audioProducer ||
+      !videoTuple ||
+      !videoRtcpTuple ||
+      !audioTuple ||
+      !audioRtcpTuple
+    ) {
+      throw new Error('Failed to initialize IPTV stream resources');
+    }
 
     const streamId = runtime.createExternalStream({
       title: channel.name,
@@ -1230,10 +1270,9 @@ class IptvSession {
       await this.stopFfmpegProcess();
     } finally {
       this.expectedStop = false;
+      this.ffmpegProcess = undefined;
+      this.ffmpegStderr = '';
     }
-
-    this.ffmpegProcess = undefined;
-    this.ffmpegStderr = '';
     logger.info(
       '[IPTV %s] relaunching ffmpeg for "%s" (retry=%s, videoCopy=%s, videoCodec=%s, videoFilter=%s)',
       this.channelId,

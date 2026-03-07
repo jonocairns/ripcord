@@ -5,6 +5,7 @@ import { isIP } from 'net';
 
 const PLAYLIST_CACHE_TTL_MS = 60_000;
 const MAX_PLAYLIST_REDIRECTS = 5;
+const PLAYLIST_FETCH_TIMEOUT_MS = 15_000;
 const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
 
 type TPlaylistCacheEntry = {
@@ -127,7 +128,8 @@ const fetchPlaylistContent = async (
     await assertSafeIptvUrl(currentUrl);
 
     const response = await fetch(currentUrl, {
-      redirect: 'manual'
+      redirect: 'manual',
+      signal: AbortSignal.timeout(PLAYLIST_FETCH_TIMEOUT_MS)
     });
 
     if (isRedirectStatus(response.status)) {
