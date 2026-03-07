@@ -90,6 +90,24 @@ describe('IptvSession', () => {
     expect(session.getStatus()).toEqual({ status: 'idle' });
   });
 
+  test('rejects switchChannel for destroyed sessions before persisting', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    let persistCalled = false;
+
+    Reflect.set(session, 'destroyed', true);
+    Reflect.set(session, 'persistActiveChannelIndex', async () => {
+      persistCalled = true;
+    });
+
+    await expect(session.switchChannel(1)).rejects.toThrow(
+      'IPTV session has been destroyed'
+    );
+    expect(persistCalled).toBe(false);
+  });
+
   test('transcodes video when ffprobe cannot inspect the source stream', async () => {
     const session = new IptvSession(42, {
       playlistUrl: 'https://playlist.example/list.m3u',
@@ -489,6 +507,50 @@ describe('IptvSession', () => {
         name: 'Sports HD'
       }
     });
+  });
+
+  test('uses stopStreamAndClearSelection when idle timeout stops the stream', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const runHealthCheck = getRunHealthCheck(session);
+    const stopCalls: Array<{ publishIdle?: boolean }> = [];
+
+    Reflect.set(session, 'status', {
+      status: 'streaming',
+      activeChannel: {
+        index: 0,
+        name: 'Sports HD'
+      }
+    });
+    Reflect.set(session, 'videoProducer', {});
+    Reflect.set(session, 'audioProducer', {});
+    Reflect.set(session, 'noViewerSince', Date.now() - 15_001);
+    Reflect.set(
+      session,
+      'stopStreamAndClearSelection',
+      async (options?: { publishIdle?: boolean }) => {
+        stopCalls.push(options ?? {});
+      }
+    );
+
+    const originalFindById = VoiceRuntime.findById;
+    VoiceRuntime.findById = ((_) => {
+      return {
+        getState: () => ({
+          users: []
+        })
+      } as unknown as VoiceRuntime;
+    }) as typeof VoiceRuntime.findById;
+
+    try {
+      await runHealthCheck.call(session);
+    } finally {
+      VoiceRuntime.findById = originalFindById;
+    }
+
+    expect(stopCalls).toEqual([{ publishIdle: true }]);
   });
 
   test('swallows restart scheduling failures after unexpected ffmpeg exits', async () => {

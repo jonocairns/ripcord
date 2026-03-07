@@ -40,6 +40,27 @@ https://stream.local/sports.m3u8`);
     ]);
   });
 
+  test('parses unquoted and single-quoted attributes', () => {
+    const channels = parsePlaylist(`#EXTM3U
+#EXTINF:-1 tvg-id=123 tvg-name=News24 group-title=News,
+https://stream.local/news24.m3u8
+#EXTINF:-1 tvg-name='Sports One' group-title='Live Sports',Fallback Name
+https://stream.local/sports-one.m3u8`);
+
+    expect(channels).toEqual([
+      {
+        name: 'News24',
+        group: 'News',
+        url: 'https://stream.local/news24.m3u8'
+      },
+      {
+        name: 'Sports One',
+        group: 'Live Sports',
+        url: 'https://stream.local/sports-one.m3u8'
+      }
+    ]);
+  });
+
   test('parses single-channel playlists without optional metadata', () => {
     const channels = parsePlaylist(`#EXTM3U
 #EXTINF:-1,Music TV

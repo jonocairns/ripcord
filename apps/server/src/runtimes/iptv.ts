@@ -911,6 +911,10 @@ class IptvSession {
 
   public switchChannel = async (channelIndex: number): Promise<TIptvStatus> => {
     return await this.enqueueLifecycle(async () => {
+      if (this.destroyed) {
+        throw new Error('IPTV session has been destroyed');
+      }
+
       if (!this.enabled) {
         throw new Error('IPTV source is disabled');
       }
@@ -1686,24 +1690,19 @@ class IptvSession {
         );
 
         try {
-          await this.clearPersistedActiveChannel();
+          await this.stopStreamAndClearSelection({ publishIdle: true });
         } catch (error) {
           const message =
             error instanceof Error
               ? error.message
-              : 'Unknown IPTV state clear error';
+              : 'Unknown IPTV idle stop error';
 
           logger.warn(
-            '[IPTV %s] failed to clear persisted channel after idle stop: %s',
+            '[IPTV %s] failed to stop stream and clear selection after idle stop: %s',
             this.channelId,
             message
           );
         }
-
-        await this.stopStream({
-          publishIdle: true,
-          clearActiveChannel: true
-        });
       }
 
       return;

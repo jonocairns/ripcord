@@ -161,13 +161,13 @@ const fetchPlaylistContent = async (
 
 const parseAttributes = (rawAttributes: string): Record<string, string> => {
   const attributes: Record<string, string> = {};
-  const attrRegex = /([A-Za-z0-9_-]+)="([^"]*)"/g;
+  const attrRegex = /([A-Za-z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^,\s]+))/g;
 
   let match = attrRegex.exec(rawAttributes);
 
   while (match) {
     const key = match[1];
-    const value = match[2];
+    const value = match[2] ?? match[3] ?? match[4];
 
     if (key) {
       attributes[key] = value ?? '';
