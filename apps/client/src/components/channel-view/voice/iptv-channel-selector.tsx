@@ -5,6 +5,7 @@ import {
   PopoverContent,
   PopoverTrigger
 } from '@/components/ui/popover';
+import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { setIptvStatus } from '@/features/server/iptv/actions';
 import { useIptvStatusByChannelId } from '@/features/server/iptv/hooks';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
@@ -62,12 +63,11 @@ const IPTV_STATUS_LABELS: Record<
   streaming: 'Streaming',
   error: 'Error'
 };
-const VIEWER_CONFIG_MAX_RETRIES = 10;
-const VIEWER_CONFIG_RETRY_DELAY_MS = 500;
-
 const IptvChannelSelector = memo(
   ({ channelId, canManageIptv, className }: TIptvChannelSelectorProps) => {
     const status = useIptvStatusByChannelId(channelId);
+    const currentVoiceChannelId = useCurrentVoiceChannelId();
+    const isInVoiceChannel = currentVoiceChannelId === channelId;
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
     const [channels, setChannels] = useState<TIptvChannel[]>([]);
@@ -84,18 +84,22 @@ const IptvChannelSelector = memo(
     const normalizedSearch = search.trim().toLowerCase();
 
     useEffect(() => {
+      isMountedRef.current = true;
+
       return () => {
         isMountedRef.current = false;
       };
     }, []);
 
     useEffect(() => {
+      if (!isInVoiceChannel) {
+        return;
+      }
+
       let cancelled = false;
-      let retryTimeout: ReturnType<typeof setTimeout> | undefined;
-      let attempts = 0;
       const trpc = getTRPCClient();
 
-      const loadViewerConfig = async () => {
+      void (async () => {
         try {
           const config = await trpc.iptv.getViewerConfig.query({
             channelId
@@ -109,35 +113,18 @@ const IptvChannelSelector = memo(
           setEnabled(config.enabled);
           setPinnedChannelUrls(config.pinnedChannelUrls);
         } catch {
-          if (cancelled) {
-            return;
-          }
-
-          attempts += 1;
-
-          if (attempts >= VIEWER_CONFIG_MAX_RETRIES) {
+          if (!cancelled) {
             setConfigured(false);
             setEnabled(false);
             setPinnedChannelUrls([]);
-            return;
           }
-
-          retryTimeout = setTimeout(() => {
-            void loadViewerConfig();
-          }, VIEWER_CONFIG_RETRY_DELAY_MS);
         }
-      };
-
-      void loadViewerConfig();
+      })();
 
       return () => {
         cancelled = true;
-
-        if (retryTimeout) {
-          clearTimeout(retryTimeout);
-        }
       };
-    }, [channelId]);
+    }, [channelId, isInVoiceChannel]);
 
     const filteredChannels = useMemo(
       () =>
