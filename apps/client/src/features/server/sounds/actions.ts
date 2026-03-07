@@ -18,7 +18,7 @@ limiter.ratio.setValueAtTime(20, 0);
 limiter.attack.setValueAtTime(0.001, 0);
 limiter.release.setValueAtTime(0.01, 0);
 
-masterGain.connect(limiter).connect(masterGain);
+masterGain.connect(limiter).connect(audioCtx.destination);
 
 const now = () => audioCtx.currentTime;
 

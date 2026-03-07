@@ -610,8 +610,11 @@ const resolveTranscodeVideoProfile = (
   const targetDimensions = resolveTargetVideoDimensions(probeSummary);
   const targetWidth = targetDimensions?.width ?? 1280;
   const targetHeight = targetDimensions?.height ?? 720;
-  const targetFrameRate = resolveTargetVideoFrameRate(probeSummary);
-  const targetPixelsPerSecond = targetWidth * targetHeight * targetFrameRate;
+  const sourceFrameRate = resolveTargetVideoFrameRate(probeSummary);
+  const effectiveFrameRate = needsDeinterlace(probeSummary)
+    ? Math.min(sourceFrameRate * 2, MAX_TRANSCODE_VIDEO_FRAME_RATE)
+    : sourceFrameRate;
+  const targetPixelsPerSecond = targetWidth * targetHeight * effectiveFrameRate;
 
   if (targetPixelsPerSecond <= 1280 * 720 * 30) {
     return {
@@ -1332,6 +1335,7 @@ class IptvSession {
       transcodeVideo: sourcePreparation.shouldTranscodeVideo,
       videoFilter: sourcePreparation.videoFilter,
       targetVideoCrf: sourcePreparation.targetVideoCrf,
+      targetVideoBitrateKbps: sourcePreparation.targetVideoBitrateKbps,
       targetVideoMaxRateKbps: sourcePreparation.targetVideoMaxRateKbps,
       targetVideoBufferSizeKbps: sourcePreparation.targetVideoBufferSizeKbps
     });
@@ -1422,6 +1426,7 @@ class IptvSession {
       transcodeVideo: sourcePreparation.shouldTranscodeVideo,
       videoFilter: sourcePreparation.videoFilter,
       targetVideoCrf: sourcePreparation.targetVideoCrf,
+      targetVideoBitrateKbps: sourcePreparation.targetVideoBitrateKbps,
       targetVideoMaxRateKbps: sourcePreparation.targetVideoMaxRateKbps,
       targetVideoBufferSizeKbps: sourcePreparation.targetVideoBufferSizeKbps
     });

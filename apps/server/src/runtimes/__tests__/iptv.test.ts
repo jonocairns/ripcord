@@ -393,9 +393,9 @@ describe('IptvSession', () => {
       videoCodec: 'mpeg2video',
       videoFilter: 'yadif=mode=send_frame:parity=auto:deint=all',
       targetVideoCrf: 18,
-      targetVideoBitrateKbps: 14_000,
-      targetVideoMaxRateKbps: 20_000,
-      targetVideoBufferSizeKbps: 40_000
+      targetVideoBitrateKbps: 18_000,
+      targetVideoMaxRateKbps: 25_000,
+      targetVideoBufferSizeKbps: 50_000
     });
   });
 
