@@ -10,6 +10,7 @@ type TVideoBitratePolicyInput = {
 
 type TVideoBitratePolicy = {
   startKbps: number;
+  maxKbps: number;
 };
 
 type TFpsTier = {
@@ -140,6 +141,15 @@ const resolveFpsTier = (tiers: TFpsTier[], frameRate: number): TFpsTier => {
   );
 };
 
+const resolveMaxBitrateKbps = (
+  profile: TVideoBitrateProfile,
+  startKbps: number
+): number => {
+  const headroomMultiplier = profile === 'screen' ? 1.5 : 1.35;
+
+  return Math.max(startKbps, Math.round(startKbps * headroomMultiplier));
+};
+
 const getVideoBitratePolicy = ({
   profile,
   width,
@@ -162,7 +172,8 @@ const getVideoBitratePolicy = ({
   const fpsTier = resolveFpsTier(resolutionTier.fpsTiers, safeFrameRate);
 
   return {
-    startKbps: fpsTier.startKbps
+    startKbps: fpsTier.startKbps,
+    maxKbps: resolveMaxBitrateKbps(profile, fpsTier.startKbps)
   };
 };
 

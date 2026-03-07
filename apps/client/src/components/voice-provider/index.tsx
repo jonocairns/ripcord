@@ -1409,6 +1409,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
         const videoProducer = await producerTransport.current?.produce({
           track: videoTrack,
+          encodings: [{ maxBitrate: webcamBitratePolicy.maxKbps * 1000 }],
           codec: preferredVideoCodec,
           codecOptions: {
             videoGoogleStartBitrate: webcamBitratePolicy.startKbps
@@ -1866,6 +1867,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           localScreenShareProducer.current =
             await producerTransport.current?.produce({
               track: videoTrack,
+              encodings: [{ maxBitrate: screenBitratePolicy.maxKbps * 1000 }],
               codecOptions: {
                 videoGoogleStartBitrate: screenBitratePolicy.startKbps
               },
