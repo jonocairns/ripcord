@@ -32,6 +32,7 @@ import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
 import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
+import { useStreamStats, type StreamStats } from './hooks/use-stream-stats';
 import { StreamSettingsPopover } from './stream-settings-popover';
 
 type TExternalStreamControlsProps = {
@@ -51,6 +52,7 @@ type TExternalStreamControlsProps = {
   onVolumeChange: (volume: number) => void;
   onMuteToggle: () => void;
   onStopWatching?: () => void;
+  streamStats?: StreamStats | null;
 };
 
 const ExternalStreamControls = memo(
@@ -70,7 +72,8 @@ const ExternalStreamControls = memo(
     isMuted,
     onVolumeChange,
     onMuteToggle,
-    onStopWatching
+    onStopWatching,
+    streamStats
   }: TExternalStreamControlsProps) => {
     const controlButtonClassName =
       'h-10 w-10 rounded-[10px] border border-white/55 bg-slate-950/88 text-white shadow-[0_6px_18px_rgba(0,0,0,0.45)] backdrop-blur-sm hover:bg-slate-900/95 hover:text-white';
@@ -97,6 +100,7 @@ const ExternalStreamControls = memo(
             onMuteToggle={onMuteToggle}
             buttonSize="default"
             buttonClassName={controlButtonClassName}
+            streamStats={streamStats}
           />
         )}
         {hasVideo && (
@@ -267,6 +271,8 @@ const ExternalStreamCard = memo(
     const handleMuteToggle = useCallback(() => {
       toggleMute(volumeKey);
     }, [volumeKey, toggleMute]);
+    const streamStats = useStreamStats(externalVideoRef, externalVideoStream);
+
     const hasVideo = stream.tracks?.video && hasExternalVideoStream;
     const hasAudio = stream.tracks?.audio && hasExternalAudioStream;
     const hasIptvPlaybackStarted = hasVideo
@@ -668,6 +674,7 @@ const ExternalStreamCard = memo(
             onVolumeChange={handleVolumeChange}
             onMuteToggle={handleMuteToggle}
             onStopWatching={onStopWatching}
+            streamStats={streamStats}
           />
 
           {showIptvLoadingState && (
