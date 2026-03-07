@@ -126,7 +126,7 @@ const configureRoute = protectedProcedure
     });
 
     if (!source.enabled) {
-      await session.stopStream();
+      await session.stopStreamAndClearSelection();
     }
 
     return source;

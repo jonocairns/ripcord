@@ -68,7 +68,7 @@ describe('IptvSession', () => {
     expect(firstAudioSsrc).not.toBe(secondAudioSsrc);
   });
 
-  test('fails URL re-check before starting a stream', async () => {
+  test('fails URL re-check before switching to a stream', async () => {
     const session = new IptvSession(42, {
       playlistUrl: 'https://playlist.example/list.m3u',
       enabled: true
@@ -84,7 +84,7 @@ describe('IptvSession', () => {
       ];
     });
 
-    await expect(session.startStream(0)).rejects.toThrow(
+    await expect(session.switchChannel(0)).rejects.toThrow(
       'Private or special IP addresses are not allowed'
     );
     expect(session.getStatus()).toEqual({ status: 'idle' });

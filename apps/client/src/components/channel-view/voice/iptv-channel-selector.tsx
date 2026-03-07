@@ -20,7 +20,7 @@ import {
   Square,
   Tv
 } from 'lucide-react';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Virtuoso } from 'react-virtuoso';
 import { toast } from 'sonner';
 
@@ -78,7 +78,14 @@ const IptvChannelSelector = memo(
       string | undefined
     >();
     const [stopping, setStopping] = useState(false);
+    const isMountedRef = useRef(true);
     const normalizedSearch = search.trim().toLowerCase();
+
+    useEffect(() => {
+      return () => {
+        isMountedRef.current = false;
+      };
+    }, []);
 
     useEffect(() => {
       let cancelled = false;
@@ -219,6 +226,10 @@ const IptvChannelSelector = memo(
           channelId
         });
 
+        if (!isMountedRef.current) {
+          return;
+        }
+
         if (!config.configured) {
           setConfigured(false);
           setEnabled(false);
@@ -238,6 +249,11 @@ const IptvChannelSelector = memo(
         if (!config.enabled) {
           setChannels([]);
           const currentStatus = await currentStatusPromise;
+
+          if (!isMountedRef.current) {
+            return;
+          }
+
           setIptvStatus(channelId, currentStatus);
           return;
         }
@@ -246,14 +262,27 @@ const IptvChannelSelector = memo(
           channelId
         });
 
+        if (!isMountedRef.current) {
+          return;
+        }
+
         setChannels(list);
 
         const currentStatus = await currentStatusPromise;
+
+        if (!isMountedRef.current) {
+          return;
+        }
+
         setIptvStatus(channelId, currentStatus);
       } catch (error) {
-        toast.error(getTrpcError(error, 'Failed to load IPTV channels'));
+        if (isMountedRef.current) {
+          toast.error(getTrpcError(error, 'Failed to load IPTV channels'));
+        }
       } finally {
-        setLoading(false);
+        if (isMountedRef.current) {
+          setLoading(false);
+        }
       }
     }, [channelId]);
 

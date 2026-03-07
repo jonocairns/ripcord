@@ -224,6 +224,48 @@ describe('iptv router', () => {
     }
   });
 
+  test('configure disable clears the persisted selected channel', async () => {
+    const caller = await createCaller();
+    const now = Date.now();
+
+    await tdb.insert(iptvSources).values({
+      channelId: VOICE_CHANNEL_ID,
+      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
+      pinnedChannelUrls: [],
+      activeChannelIndex: 0,
+      enabled: true,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const session = upsertIptvSession(VOICE_CHANNEL_ID, {
+      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
+      enabled: true,
+      activeChannelIndex: 0
+    });
+
+    try {
+      const source = await caller.iptv.configure({
+        channelId: VOICE_CHANNEL_ID,
+        playlistUrl: 'https://8.8.8.8/playlist.m3u8',
+        enabled: false,
+        alwaysTranscodeVideo: false
+      });
+
+      const persistedSource = await tdb
+        .select()
+        .from(iptvSources)
+        .where(eq(iptvSources.channelId, VOICE_CHANNEL_ID))
+        .get();
+
+      expect(source.enabled).toBe(false);
+      expect(persistedSource?.activeChannelIndex).toBeNull();
+      expect(Reflect.get(session, 'activeChannelIndex')).toBeUndefined();
+    } finally {
+      await removeIptvSession(VOICE_CHANNEL_ID);
+    }
+  });
+
   test('getConfig requires manage channels permission', async () => {
     const caller = await createCaller({
       userId: 2

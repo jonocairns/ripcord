@@ -889,27 +889,6 @@ class IptvSession {
     return await next;
   };
 
-  public startStream = async (channelIndex: number): Promise<TIptvStatus> => {
-    return await this.enqueueLifecycle(async () => {
-      if (this.destroyed) {
-        throw new Error('IPTV session has been destroyed');
-      }
-
-      if (!this.enabled) {
-        throw new Error('IPTV source is disabled');
-      }
-
-      await this.persistActiveChannelIndex(channelIndex);
-      this.activeChannelIndex = channelIndex;
-      this.retryCount = 0;
-      this.forceVideoTranscode = false;
-
-      await this.startSelectedChannelInternal();
-
-      return this.status;
-    });
-  };
-
   public switchChannel = async (channelIndex: number): Promise<TIptvStatus> => {
     return await this.enqueueLifecycle(async () => {
       if (this.destroyed) {
