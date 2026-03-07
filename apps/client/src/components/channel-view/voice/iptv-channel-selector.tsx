@@ -62,6 +62,8 @@ const IPTV_STATUS_LABELS: Record<
   streaming: 'Streaming',
   error: 'Error'
 };
+const VIEWER_CONFIG_MAX_RETRIES = 10;
+const VIEWER_CONFIG_RETRY_DELAY_MS = 500;
 
 const IptvChannelSelector = memo(
   ({ channelId, canManageIptv, className }: TIptvChannelSelectorProps) => {
@@ -89,9 +91,11 @@ const IptvChannelSelector = memo(
 
     useEffect(() => {
       let cancelled = false;
+      let retryTimeout: ReturnType<typeof setTimeout> | undefined;
+      let attempts = 0;
       const trpc = getTRPCClient();
 
-      void (async () => {
+      const loadViewerConfig = async () => {
         try {
           const config = await trpc.iptv.getViewerConfig.query({
             channelId
@@ -105,16 +109,33 @@ const IptvChannelSelector = memo(
           setEnabled(config.enabled);
           setPinnedChannelUrls(config.pinnedChannelUrls);
         } catch {
-          if (!cancelled) {
+          if (cancelled) {
+            return;
+          }
+
+          attempts += 1;
+
+          if (attempts >= VIEWER_CONFIG_MAX_RETRIES) {
             setConfigured(false);
             setEnabled(false);
             setPinnedChannelUrls([]);
+            return;
           }
+
+          retryTimeout = setTimeout(() => {
+            void loadViewerConfig();
+          }, VIEWER_CONFIG_RETRY_DELAY_MS);
         }
-      })();
+      };
+
+      void loadViewerConfig();
 
       return () => {
         cancelled = true;
+
+        if (retryTimeout) {
+          clearTimeout(retryTimeout);
+        }
       };
     }, [channelId]);
 

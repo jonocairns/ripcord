@@ -1,4 +1,5 @@
 import {
+  useCan,
   useChannelCan,
   useVoiceUsersByChannelId
 } from '@/features/server/hooks';
@@ -7,7 +8,7 @@ import {
   useVoice,
   useVoiceChannelExternalStreamsList
 } from '@/features/server/voice/hooks';
-import { ChannelPermission, StreamKind } from '@sharkord/shared';
+import { ChannelPermission, Permission, StreamKind } from '@sharkord/shared';
 import { memo, useMemo } from 'react';
 import { getPendingStreamKey } from '../../voice-provider/hooks/use-pending-streams';
 import { ControlsBar } from './controls-bar';
@@ -31,6 +32,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
   const voiceUsers = useVoiceUsersByChannelId(channelId);
   const externalStreams = useVoiceChannelExternalStreamsList(channelId);
   const channelCan = useChannelCan(channelId);
+  const can = useCan();
   const iptvStatus = useIptvStatusByChannelId(channelId);
   const {
     acceptStream,
@@ -40,7 +42,9 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
     externalStreams: activeExternalStreams
   } = useVoice();
   const { pinnedCard, pinCard, unpinCard, isPinned } = usePinCardController();
-  const canManageIptv = channelCan(ChannelPermission.MANAGE_IPTV);
+  const canManageIptv =
+    can(Permission.MANAGE_CHANNELS) ||
+    channelCan(ChannelPermission.MANAGE_IPTV);
 
   const cards = useMemo(() => {
     const cards: React.ReactNode[] = [];

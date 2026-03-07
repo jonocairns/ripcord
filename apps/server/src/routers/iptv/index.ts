@@ -21,11 +21,22 @@ import {
   clearIptvPlaylistCache,
   fetchAndParsePlaylist
 } from '../../utils/iptv-playlist';
-import { protectedProcedure, t } from '../../utils/trpc';
+import { type Context, protectedProcedure, t } from '../../utils/trpc';
 
 const channelInput = z.object({
   channelId: z.number()
 });
+
+const needsIptvManagementPermission = async (
+  ctx: Context,
+  channelId: number
+) => {
+  if (await ctx.hasPermission(Permission.MANAGE_CHANNELS)) {
+    return;
+  }
+
+  await ctx.needsChannelPermission(channelId, ChannelPermission.MANAGE_IPTV);
+};
 
 const normalizePinnedChannelUrls = (channelUrls: string[]): string[] => {
   const normalizedUrls: string[] = [];
@@ -239,10 +250,7 @@ const playRoute = protectedProcedure
     })
   )
   .mutation(async ({ input, ctx }) => {
-    await ctx.needsChannelPermission(
-      input.channelId,
-      ChannelPermission.MANAGE_IPTV
-    );
+    await needsIptvManagementPermission(ctx, input.channelId);
 
     invariant(ctx.currentVoiceChannelId === input.channelId, {
       code: 'FORBIDDEN',
@@ -280,10 +288,7 @@ const playRoute = protectedProcedure
 const stopRoute = protectedProcedure
   .input(channelInput)
   .mutation(async ({ input, ctx }) => {
-    await ctx.needsChannelPermission(
-      input.channelId,
-      ChannelPermission.MANAGE_IPTV
-    );
+    await needsIptvManagementPermission(ctx, input.channelId);
 
     invariant(ctx.currentVoiceChannelId === input.channelId, {
       code: 'FORBIDDEN',
@@ -320,10 +325,7 @@ const setPinnedChannelRoute = protectedProcedure
     })
   )
   .mutation(async ({ input, ctx }) => {
-    await ctx.needsChannelPermission(
-      input.channelId,
-      ChannelPermission.MANAGE_IPTV
-    );
+    await needsIptvManagementPermission(ctx, input.channelId);
 
     invariant(ctx.currentVoiceChannelId === input.channelId, {
       code: 'FORBIDDEN',
