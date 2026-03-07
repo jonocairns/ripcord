@@ -8,9 +8,9 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { config } from '../../config';
 import { db } from '../../db';
-import { channels, iptvSources } from '../../db/schema';
+import { channels } from '../../db/schema';
 import { logger } from '../../logger';
-import { upsertIptvSession } from '../../runtimes/iptv';
+import { getIptvSession } from '../../runtimes/iptv';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
@@ -73,23 +73,9 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
     const viewerCount = runtime.getState().users.length;
 
     if (viewerCount === 1) {
-      const iptvSource = await db
-        .select()
-        .from(iptvSources)
-        .where(eq(iptvSources.channelId, input.channelId))
-        .get();
+      const session = getIptvSession(input.channelId);
 
-      if (
-        iptvSource &&
-        iptvSource.enabled &&
-        iptvSource.activeChannelIndex !== null
-      ) {
-        const session = upsertIptvSession(input.channelId, {
-          playlistUrl: iptvSource.playlistUrl,
-          enabled: iptvSource.enabled,
-          activeChannelIndex: iptvSource.activeChannelIndex
-        });
-
+      if (session?.getStatus().status === 'error') {
         try {
           await session.resumeIfPossible();
         } catch (error) {
@@ -98,7 +84,7 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
               ? error.message
               : 'Unknown IPTV resume error';
           logger.warn(
-            '[IPTV %s] failed to resume persisted channel: %s',
+            '[IPTV %s] failed to resume errored stream: %s',
             input.channelId,
             message
           );

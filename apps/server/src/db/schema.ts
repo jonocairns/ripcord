@@ -124,6 +124,10 @@ const iptvSources = sqliteTable(
       .unique()
       .references(() => channels.id, { onDelete: 'cascade' }),
     playlistUrl: text('playlist_url').notNull(),
+    pinnedChannelUrls: text('pinned_channel_urls', { mode: 'json' })
+      .$type<string[]>()
+      .notNull()
+      .default([]),
     activeChannelIndex: integer('active_channel_index'),
     enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
     createdAt: integer('created_at').notNull(),

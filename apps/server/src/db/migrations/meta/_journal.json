@@ -50,6 +50,13 @@
       "when": 1772791707162,
       "tag": "0006_red_radioactive_man",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1772843085571,
+      "tag": "0007_fluffy_champions",
+      "breakpoints": true
     }
   ]
 }

@@ -677,8 +677,16 @@ class VoiceRuntime {
       if (!internal) return;
 
       if (kind === 'audio') {
+        if (internal.producers.audioProducer !== producer) {
+          return;
+        }
+
         delete internal.producers.audioProducer;
       } else {
+        if (internal.producers.videoProducer !== producer) {
+          return;
+        }
+
         delete internal.producers.videoProducer;
       }
 

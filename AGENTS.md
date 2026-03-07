@@ -7,5 +7,6 @@
 - Default policy: API changes must be backward compatible.
 - Naming pitfall: `useChannelPermissionsById` returns channel-permission data, not user roles. Avoid role-like variable names for its result (for example `ownUserRoles`).
 - Migration pitfall: `nix develop -c bun run --filter @sharkord/server db:gen` can sometimes generate a migration that re-includes older schema changes (for example `refresh_tokens` or prior `ALTER TABLE` steps). Always review the generated SQL and keep only the intended new delta before committing.
+- IPTV pitfall: transient IPTV retry/reconnect paths should preserve the existing external stream identity when possible. Tearing down the external stream object during ffmpeg retries causes visible leave/join churn in clients.
 
 The role of this file is to describe common mistakes and confusion points that agents might encounter on this project. If you ever encounter something in the project that surprises you, please alert the developer working with you and indicate that this is the case in the AGENTS.md file to help prevent future agents from having the same issue.

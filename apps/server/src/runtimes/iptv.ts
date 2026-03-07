@@ -569,6 +569,94 @@ class IptvSession {
     });
   };
 
+  private restartFfmpegInternal = async (): Promise<void> => {
+    if (this.activeChannelIndex === undefined) {
+      throw new Error('No active IPTV channel selected');
+    }
+
+    if (
+      !this.videoTransport ||
+      !this.audioTransport ||
+      !this.videoProducer ||
+      !this.audioProducer ||
+      this.externalStreamId === undefined
+    ) {
+      await this.startSelectedChannelInternal();
+      return;
+    }
+
+    const channels = await this.listChannels();
+    const channel = channels[this.activeChannelIndex];
+
+    if (!channel) {
+      throw new Error('IPTV channel index is out of range');
+    }
+
+    this.activeChannel = {
+      index: this.activeChannelIndex,
+      name: channel.name,
+      logo: channel.logo
+    };
+
+    const runtime = VoiceRuntime.findById(this.channelId);
+
+    if (!runtime) {
+      throw new Error('Voice runtime not found');
+    }
+
+    runtime.updateExternalStream(this.externalStreamId, {
+      title: channel.name,
+      avatarUrl: channel.logo
+    });
+
+    const videoTuple = this.videoTransport.tuple;
+    const videoRtcpTuple = this.videoTransport.rtcpTuple;
+    const audioTuple = this.audioTransport.tuple;
+    const audioRtcpTuple = this.audioTransport.rtcpTuple;
+
+    if (!videoTuple || !videoRtcpTuple || !audioTuple || !audioRtcpTuple) {
+      throw new Error('Failed to initialize plain transport tuples');
+    }
+
+    await assertSafeIptvUrl(channel.url);
+
+    const codec = await detectVideoCodec(channel.url);
+    const shouldTranscodeVideo =
+      this.forceVideoTranscode || (!!codec && codec !== 'h264');
+
+    this.usingVideoCopy = !shouldTranscodeVideo;
+    this.expectedStop = true;
+
+    try {
+      await this.stopFfmpegProcess();
+    } finally {
+      this.expectedStop = false;
+    }
+
+    this.ffmpegProcess = undefined;
+    this.ffmpegStderr = '';
+
+    this.spawnFfmpeg({
+      streamUrl: channel.url,
+      videoRtpPort: videoTuple.localPort,
+      videoRtcpPort: videoRtcpTuple.localPort,
+      audioRtpPort: audioTuple.localPort,
+      audioRtcpPort: audioRtcpTuple.localPort,
+      transcodeVideo: shouldTranscodeVideo
+    });
+
+    this.lastTotalBytes = 0;
+    this.lastDataAt = Date.now();
+    this.noViewerSince = 0;
+    this.startHealthCheck();
+    this.startStableTimer();
+
+    this.updateStatus({
+      status: 'streaming',
+      activeChannel: this.activeChannel
+    });
+  };
+
   private waitForProcessExit = async (
     process: ChildProcess,
     timeoutMs: number
@@ -751,13 +839,14 @@ class IptvSession {
       if (this.destroyed || this.activeChannelIndex === undefined) {
         return;
       }
-
-      await this.stopStreamInternal({
-        publishIdle: false,
-        clearActiveChannel: false
-      });
+      this.clearTimers();
+      this.noViewerSince = 0;
 
       if (this.retryCount >= MAX_RETRIES) {
+        await this.stopStreamInternal({
+          publishIdle: false,
+          clearActiveChannel: false
+        });
         this.updateStatus({
           status: 'error',
           activeChannel: this.activeChannel,
@@ -774,11 +863,15 @@ class IptvSession {
         RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
 
       this.retryCount += 1;
+      this.updateStatus({
+        status: 'starting',
+        activeChannel: this.activeChannel
+      });
       this.retryTimer = setTimeout(() => {
         this.retryTimer = undefined;
         void this.enqueueLifecycle(async () => {
           try {
-            await this.startSelectedChannelInternal();
+            await this.restartFfmpegInternal();
           } catch (error: unknown) {
             const message =
               error instanceof Error

@@ -11,20 +11,52 @@ import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { type TIptvChannel } from '@sharkord/shared';
-import { LoaderCircle, Play, Search, Square, Tv } from 'lucide-react';
-import { memo, useCallback, useMemo, useState } from 'react';
+import {
+  LoaderCircle,
+  Pin,
+  PinOff,
+  Play,
+  Search,
+  Square,
+  Tv
+} from 'lucide-react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { Virtuoso } from 'react-virtuoso';
 import { toast } from 'sonner';
 
 type TIptvChannelSelectorProps = {
   channelId: number;
   canManageIptv: boolean;
-  visible: boolean;
+  className?: string;
 };
 
 type TGroupedChannels = Array<{
   group: string;
   channels: Array<{ index: number; channel: TIptvChannel }>;
 }>;
+
+type TChannelEntry = {
+  index: number;
+  channel: TIptvChannel;
+};
+
+type TChannelListCacheEntry = {
+  channels: TIptvChannel[];
+  expiresAt: number;
+};
+
+type TChannelListRow =
+  | {
+      type: 'header';
+      key: string;
+      label: string;
+    }
+  | {
+      type: 'channel';
+      key: string;
+      index: number;
+      channel: TIptvChannel;
+    };
 
 const IPTV_STATUS_LABELS: Record<
   'idle' | 'starting' | 'streaming' | 'error',
@@ -35,9 +67,44 @@ const IPTV_STATUS_LABELS: Record<
   streaming: 'Streaming',
   error: 'Error'
 };
+const CHANNEL_LIST_CACHE_TTL_MS = 5 * 60_000;
+const channelListCache = new Map<string, TChannelListCacheEntry>();
+
+const getChannelListCacheKey = (channelId: number, playlistUrl: string) =>
+  `${channelId}:${playlistUrl}`;
+
+const getCachedChannelList = (
+  channelId: number,
+  playlistUrl: string
+): TIptvChannel[] | undefined => {
+  const cacheKey = getChannelListCacheKey(channelId, playlistUrl);
+  const cached = channelListCache.get(cacheKey);
+
+  if (!cached) {
+    return undefined;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    channelListCache.delete(cacheKey);
+    return undefined;
+  }
+
+  return cached.channels;
+};
+
+const setCachedChannelList = (
+  channelId: number,
+  playlistUrl: string,
+  channels: TIptvChannel[]
+) => {
+  channelListCache.set(getChannelListCacheKey(channelId, playlistUrl), {
+    channels,
+    expiresAt: Date.now() + CHANNEL_LIST_CACHE_TTL_MS
+  });
+};
 
 const IptvChannelSelector = memo(
-  ({ channelId, canManageIptv, visible }: TIptvChannelSelectorProps) => {
+  ({ channelId, canManageIptv, className }: TIptvChannelSelectorProps) => {
     const status = useIptvStatusByChannelId(channelId);
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
@@ -45,9 +112,44 @@ const IptvChannelSelector = memo(
     const [search, setSearch] = useState('');
     const [configured, setConfigured] = useState(false);
     const [enabled, setEnabled] = useState(false);
+    const [pinnedChannelUrls, setPinnedChannelUrls] = useState<string[]>([]);
     const [actionIndex, setActionIndex] = useState<number | undefined>();
+    const [pinningChannelUrl, setPinningChannelUrl] = useState<
+      string | undefined
+    >();
     const [stopping, setStopping] = useState(false);
     const normalizedSearch = search.trim().toLowerCase();
+
+    useEffect(() => {
+      let cancelled = false;
+      const trpc = getTRPCClient();
+
+      void (async () => {
+        try {
+          const config = await trpc.iptv.getConfig.query({
+            channelId
+          });
+
+          if (cancelled) {
+            return;
+          }
+
+          setConfigured(!!config);
+          setEnabled(config?.enabled ?? false);
+          setPinnedChannelUrls(config?.pinnedChannelUrls ?? []);
+        } catch {
+          if (!cancelled) {
+            setConfigured(false);
+            setEnabled(false);
+            setPinnedChannelUrls([]);
+          }
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [channelId]);
 
     const filteredChannels = useMemo(
       () =>
@@ -72,6 +174,19 @@ const IptvChannelSelector = memo(
       [channels, normalizedSearch]
     );
 
+    const pinnedChannelUrlSet = useMemo(
+      () => new Set(pinnedChannelUrls),
+      [pinnedChannelUrls]
+    );
+
+    const pinnedChannels = useMemo<TChannelEntry[]>(
+      () =>
+        filteredChannels.filter(({ channel }) =>
+          pinnedChannelUrlSet.has(channel.url)
+        ),
+      [filteredChannels, pinnedChannelUrlSet]
+    );
+
     const groupedChannels = useMemo<TGroupedChannels>(() => {
       const grouped = new Map<
         string,
@@ -79,6 +194,10 @@ const IptvChannelSelector = memo(
       >();
 
       filteredChannels.forEach(({ channel, index }) => {
+        if (pinnedChannelUrlSet.has(channel.url)) {
+          return;
+        }
+
         const groupName = channel.group?.trim() || 'Other';
         const existing = grouped.get(groupName) ?? [];
 
@@ -89,7 +208,47 @@ const IptvChannelSelector = memo(
         group,
         channels: groupedChannels
       }));
-    }, [filteredChannels]);
+    }, [filteredChannels, pinnedChannelUrlSet]);
+    const channelRows = useMemo<TChannelListRow[]>(() => {
+      const rows: TChannelListRow[] = [];
+
+      if (pinnedChannels.length > 0) {
+        rows.push({
+          type: 'header',
+          key: 'header-pinned',
+          label: 'Pinned'
+        });
+
+        pinnedChannels.forEach(({ index, channel }) => {
+          rows.push({
+            type: 'channel',
+            key: `pinned-${channel.url}-${index}`,
+            index,
+            channel
+          });
+        });
+      }
+
+      groupedChannels.forEach((grouped) => {
+        rows.push({
+          type: 'header',
+          key: `header-${grouped.group}`,
+          label: grouped.group
+        });
+
+        grouped.channels.forEach(({ index, channel }) => {
+          rows.push({
+            type: 'channel',
+            key: `${grouped.group}-${channel.url}-${index}`,
+            index,
+            channel
+          });
+        });
+      });
+
+      return rows;
+    }, [groupedChannels, pinnedChannels]);
+    const hasVisibleChannels = channelRows.length > 0;
 
     const refresh = useCallback(async () => {
       setLoading(true);
@@ -103,29 +262,44 @@ const IptvChannelSelector = memo(
         if (!config) {
           setConfigured(false);
           setEnabled(false);
+          setPinnedChannelUrls([]);
           setChannels([]);
           return;
         }
 
         setConfigured(true);
         setEnabled(config.enabled);
+        setPinnedChannelUrls(config.pinnedChannelUrls ?? []);
 
-        const currentStatus = await trpc.iptv.getStatus.query({
+        const currentStatusPromise = trpc.iptv.getStatus.query({
           channelId
         });
-
-        setIptvStatus(channelId, currentStatus);
 
         if (!config.enabled) {
           setChannels([]);
+          const currentStatus = await currentStatusPromise;
+          setIptvStatus(channelId, currentStatus);
           return;
         }
 
-        const list = await trpc.iptv.listChannels.query({
-          channelId
-        });
+        const cachedChannels = getCachedChannelList(
+          channelId,
+          config.playlistUrl
+        );
 
-        setChannels(list);
+        if (cachedChannels) {
+          setChannels(cachedChannels);
+        } else {
+          const list = await trpc.iptv.listChannels.query({
+            channelId
+          });
+
+          setChannels(list);
+          setCachedChannelList(channelId, config.playlistUrl, list);
+        }
+
+        const currentStatus = await currentStatusPromise;
+        setIptvStatus(channelId, currentStatus);
       } catch (error) {
         toast.error(getTrpcError(error, 'Failed to load IPTV channels'));
       } finally {
@@ -147,6 +321,28 @@ const IptvChannelSelector = memo(
         }
       },
       [refresh]
+    );
+
+    const setPinnedChannel = useCallback(
+      async (channelUrl: string, pinned: boolean) => {
+        setPinningChannelUrl(channelUrl);
+        const trpc = getTRPCClient();
+
+        try {
+          const result = await trpc.iptv.setPinnedChannel.mutate({
+            channelId,
+            channelUrl,
+            pinned
+          });
+
+          setPinnedChannelUrls(result.pinnedChannelUrls);
+        } catch (error) {
+          toast.error(getTrpcError(error, 'Failed to update pinned channel'));
+        } finally {
+          setPinningChannelUrl(undefined);
+        }
+      },
+      [channelId]
     );
 
     const playChannel = useCallback(
@@ -187,183 +383,222 @@ const IptvChannelSelector = memo(
       }
     }, [channelId]);
 
-    if (!visible) {
+    if (!configured) {
       return null;
     }
 
     const currentStatus = status?.status ?? 'idle';
     const activeIndex = status?.activeChannel?.index;
+    const renderChannelRow = (index: number, channel: TIptvChannel) => {
+      const isActive = status?.status === 'streaming' && activeIndex === index;
+      const isPinned = pinnedChannelUrlSet.has(channel.url);
+
+      return (
+        <div
+          className={cn(
+            'flex items-center justify-between rounded-md border p-2',
+            isActive && 'border-emerald-500/50 bg-emerald-500/10'
+          )}
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {channel.logo ? (
+              <img
+                src={channel.logo}
+                alt={channel.name}
+                className="h-5 w-5 shrink-0 rounded-sm object-cover"
+              />
+            ) : (
+              <Tv className="size-4 shrink-0 text-muted-foreground" />
+            )}
+            <span
+              className="block min-w-0 flex-1 truncate text-sm"
+              title={channel.name}
+            >
+              {channel.name}
+            </span>
+          </div>
+
+          {canManageIptv && (
+            <div className="ml-2 flex shrink-0 items-center gap-1">
+              <Button
+                variant={isPinned ? 'secondary' : 'ghost'}
+                size="icon"
+                onClick={() => void setPinnedChannel(channel.url, !isPinned)}
+                disabled={pinningChannelUrl === channel.url}
+                className="h-7 w-7"
+                aria-label={
+                  isPinned ? 'Unpin IPTV channel' : 'Pin IPTV channel'
+                }
+              >
+                {pinningChannelUrl === channel.url ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : isPinned ? (
+                  <PinOff className="size-3.5" />
+                ) : (
+                  <Pin className="size-3.5" />
+                )}
+              </Button>
+              <Button
+                size="sm"
+                variant={isActive ? 'secondary' : 'default'}
+                onClick={() => void playChannel(index)}
+                disabled={actionIndex !== undefined || stopping}
+                className="h-7 shrink-0"
+              >
+                {actionIndex === index ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <Play className="size-3.5" />
+                )}
+                {isActive ? 'Playing' : 'Play'}
+              </Button>
+            </div>
+          )}
+        </div>
+      );
+    };
 
     return (
-      <Popover open={open} onOpenChange={onOpenChange}>
-        <PopoverTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="rounded-md h-10 w-10 transition-all duration-200 hover:bg-muted/60"
-            aria-label="IPTV channels"
-          >
-            <Tv size={22} />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="center" className="w-[24rem] max-w-[90vw] p-3">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Tv className="size-4" />
-                <h4 className="text-sm font-semibold">IPTV</h4>
-                <span
-                  className={cn(
-                    'h-2 w-2 rounded-full',
-                    currentStatus === 'streaming'
-                      ? 'bg-emerald-500'
-                      : currentStatus === 'starting'
-                        ? 'bg-amber-500'
-                        : currentStatus === 'error'
-                          ? 'bg-red-500'
-                          : 'bg-muted-foreground/50'
-                  )}
-                />
-                <span className="text-xs text-muted-foreground">
-                  {IPTV_STATUS_LABELS[currentStatus]}
-                </span>
+      <div className={className}>
+        <Popover open={open} onOpenChange={onOpenChange}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-10 w-10 rounded-md border border-border/50 bg-card/90 shadow-xl backdrop-blur-md transition-all duration-200 hover:bg-muted/60"
+              aria-label="IPTV channels"
+            >
+              <Tv size={22} />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-[24rem] max-w-[90vw] p-3">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Tv className="size-4" />
+                  <h4 className="text-sm font-semibold">IPTV</h4>
+                  <span
+                    className={cn(
+                      'h-2 w-2 rounded-full',
+                      currentStatus === 'streaming'
+                        ? 'bg-emerald-500'
+                        : currentStatus === 'starting'
+                          ? 'bg-amber-500'
+                          : currentStatus === 'error'
+                            ? 'bg-red-500'
+                            : 'bg-muted-foreground/50'
+                    )}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    {IPTV_STATUS_LABELS[currentStatus]}
+                  </span>
+                </div>
+                {canManageIptv && status?.status === 'streaming' && (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={stopStream}
+                    disabled={stopping}
+                    className="h-7"
+                  >
+                    {stopping ? (
+                      <LoaderCircle className="size-3.5 animate-spin" />
+                    ) : (
+                      <Square className="size-3.5" />
+                    )}
+                    Stop
+                  </Button>
+                )}
               </div>
-              {canManageIptv && status?.status === 'streaming' && (
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={stopStream}
-                  disabled={stopping}
-                  className="h-7"
-                >
-                  {stopping ? (
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                  ) : (
-                    <Square className="size-3.5" />
-                  )}
-                  Stop
-                </Button>
+
+              {status?.error && (
+                <p className="text-xs text-red-500">{status.error}</p>
               )}
-            </div>
 
-            {status?.error && (
-              <p className="text-xs text-red-500">{status.error}</p>
-            )}
-
-            {!configured && (
-              <p className="text-xs text-muted-foreground">
-                IPTV is not configured for this channel.
-              </p>
-            )}
-
-            {configured && !enabled && (
-              <p className="text-xs text-muted-foreground">
-                IPTV is configured but currently disabled by an admin.
-              </p>
-            )}
-
-            {loading && (
-              <div className="flex items-center justify-center py-6 text-muted-foreground">
-                <LoaderCircle className="size-4 animate-spin" />
-              </div>
-            )}
-
-            {!loading && enabled && channels.length === 0 && (
-              <p className="text-xs text-muted-foreground">
-                No channels found in this playlist.
-              </p>
-            )}
-
-            {!loading && enabled && channels.length > 0 && (
-              <div className="relative">
-                <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search channels..."
-                  className="h-8 pl-7 text-xs"
-                />
-              </div>
-            )}
-
-            {!loading &&
-              enabled &&
-              channels.length > 0 &&
-              groupedChannels.length === 0 &&
-              normalizedSearch && (
+              {!enabled && (
                 <p className="text-xs text-muted-foreground">
-                  No channels matched &quot;{search.trim()}&quot;.
+                  IPTV is configured but currently disabled by an admin.
                 </p>
               )}
 
-            {!loading && enabled && groupedChannels.length > 0 && (
-              <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
-                {groupedChannels.map((grouped) => (
-                  <div key={grouped.group} className="space-y-1">
-                    <p className="text-xs font-medium text-muted-foreground">
-                      {grouped.group}
-                    </p>
-                    {grouped.channels.map(({ index, channel }) => {
-                      const isActive =
-                        status?.status === 'streaming' && activeIndex === index;
+              {loading && (
+                <div className="flex items-center justify-center py-6 text-muted-foreground">
+                  <LoaderCircle className="size-4 animate-spin" />
+                </div>
+              )}
 
+              {!loading && enabled && channels.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No channels found in this playlist.
+                </p>
+              )}
+
+              {!loading && enabled && channels.length > 0 && (
+                <div className="relative">
+                  <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search channels..."
+                    className="h-8 pl-7 text-xs"
+                  />
+                </div>
+              )}
+
+              {!loading &&
+                enabled &&
+                channels.length > 0 &&
+                !hasVisibleChannels &&
+                normalizedSearch && (
+                  <p className="text-xs text-muted-foreground">
+                    No channels matched &quot;{search.trim()}&quot;.
+                  </p>
+                )}
+
+              {!loading && enabled && hasVisibleChannels && (
+                <Virtuoso
+                  style={{ height: 288 }}
+                  totalCount={channelRows.length}
+                  overscan={320}
+                  computeItemKey={(rowIndex) =>
+                    channelRows[rowIndex]?.key ?? rowIndex
+                  }
+                  itemContent={(rowIndex) => {
+                    const row = channelRows[rowIndex];
+
+                    if (!row) {
+                      return null;
+                    }
+
+                    if (row.type === 'header') {
                       return (
-                        <div
-                          key={`${grouped.group}-${index}`}
-                          className={cn(
-                            'flex items-center justify-between rounded-md border p-2',
-                            isActive &&
-                              'border-emerald-500/50 bg-emerald-500/10'
-                          )}
-                        >
-                          <div className="flex min-w-0 items-center gap-2">
-                            {channel.logo ? (
-                              <img
-                                src={channel.logo}
-                                alt={channel.name}
-                                className="h-5 w-5 rounded-sm object-cover"
-                              />
-                            ) : (
-                              <Tv className="size-4 text-muted-foreground" />
-                            )}
-                            <span className="truncate text-sm">
-                              {channel.name}
-                            </span>
-                          </div>
-
-                          {canManageIptv && (
-                            <Button
-                              size="sm"
-                              variant={isActive ? 'secondary' : 'default'}
-                              onClick={() => void playChannel(index)}
-                              disabled={actionIndex !== undefined || stopping}
-                              className="h-7"
-                            >
-                              {actionIndex === index ? (
-                                <LoaderCircle className="size-3.5 animate-spin" />
-                              ) : (
-                                <Play className="size-3.5" />
-                              )}
-                              {isActive ? 'Playing' : 'Play'}
-                            </Button>
-                          )}
+                        <div className="pb-1 pt-2 first:pt-0">
+                          <p className="text-xs font-medium text-muted-foreground">
+                            {row.label}
+                          </p>
                         </div>
                       );
-                    })}
-                  </div>
-                ))}
-              </div>
-            )}
+                    }
 
-            {!canManageIptv && configured && enabled && (
-              <p className="text-xs text-muted-foreground">
-                You can browse channels, but only users with Manage IPTV can
-                switch streams.
-              </p>
-            )}
-          </div>
-        </PopoverContent>
-      </Popover>
+                    return (
+                      <div className="pb-1">
+                        {renderChannelRow(row.index, row.channel)}
+                      </div>
+                    );
+                  }}
+                />
+              )}
+
+              {!canManageIptv && enabled && (
+                <p className="text-xs text-muted-foreground">
+                  You can browse channels, but only users with Manage IPTV can
+                  switch streams.
+                </p>
+              )}
+            </div>
+          </PopoverContent>
+        </Popover>
+      </div>
     );
   }
 );

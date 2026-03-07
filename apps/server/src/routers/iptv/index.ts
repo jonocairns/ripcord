@@ -26,6 +26,24 @@ const channelInput = z.object({
   channelId: z.number()
 });
 
+const normalizePinnedChannelUrls = (channelUrls: string[]): string[] => {
+  const normalizedUrls: string[] = [];
+  const seenUrls = new Set<string>();
+
+  for (const channelUrl of channelUrls) {
+    const normalizedUrl = channelUrl.trim();
+
+    if (!normalizedUrl || seenUrls.has(normalizedUrl)) {
+      continue;
+    }
+
+    seenUrls.add(normalizedUrl);
+    normalizedUrls.push(normalizedUrl);
+  }
+
+  return normalizedUrls;
+};
+
 const configureRoute = protectedProcedure
   .input(
     z.object({
@@ -79,6 +97,7 @@ const configureRoute = protectedProcedure
           .values({
             channelId: input.channelId,
             playlistUrl: input.playlistUrl,
+            pinnedChannelUrls: [],
             enabled: input.enabled,
             createdAt: now
           })
@@ -249,6 +268,68 @@ const stopRoute = protectedProcedure
     return session.getStatus();
   });
 
+const setPinnedChannelRoute = protectedProcedure
+  .input(
+    z.object({
+      channelId: z.number(),
+      channelUrl: z.string().url(),
+      pinned: z.boolean()
+    })
+  )
+  .mutation(async ({ input, ctx }) => {
+    await ctx.needsChannelPermission(
+      input.channelId,
+      ChannelPermission.MANAGE_IPTV
+    );
+
+    invariant(ctx.currentVoiceChannelId === input.channelId, {
+      code: 'FORBIDDEN',
+      message: 'You must be in this voice channel'
+    });
+
+    await assertSafeIptvUrl(input.channelUrl);
+
+    const source = await db
+      .select({
+        pinnedChannelUrls: iptvSources.pinnedChannelUrls
+      })
+      .from(iptvSources)
+      .where(eq(iptvSources.channelId, input.channelId))
+      .get();
+
+    invariant(source, {
+      code: 'NOT_FOUND',
+      message: 'IPTV is not configured for this channel'
+    });
+
+    const nextPinnedChannelUrls = normalizePinnedChannelUrls(
+      input.pinned
+        ? [...source.pinnedChannelUrls, input.channelUrl]
+        : source.pinnedChannelUrls.filter(
+            (channelUrl) => channelUrl !== input.channelUrl
+          )
+    );
+
+    const updatedSource = await db
+      .update(iptvSources)
+      .set({
+        pinnedChannelUrls: nextPinnedChannelUrls,
+        updatedAt: Date.now()
+      })
+      .where(eq(iptvSources.channelId, input.channelId))
+      .returning({
+        pinnedChannelUrls: iptvSources.pinnedChannelUrls
+      })
+      .get();
+
+    invariant(updatedSource, {
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to update pinned IPTV channels'
+    });
+
+    return updatedSource;
+  });
+
 const getStatusRoute = protectedProcedure
   .input(channelInput)
   .query(async ({ input }) => {
@@ -266,6 +347,7 @@ export const iptvRouter = t.router({
   listChannels: listChannelsRoute,
   play: playRoute,
   stop: stopRoute,
+  setPinnedChannel: setPinnedChannelRoute,
   getStatus: getStatusRoute,
   onStatusChange: onStatusChangeRoute
 });
