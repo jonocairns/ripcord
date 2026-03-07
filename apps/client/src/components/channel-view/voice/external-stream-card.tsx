@@ -170,6 +170,11 @@ type TExternalStreamCardProps = {
 
 const POPOUT_CONTROLS_IDLE_HIDE_MS = 2500;
 
+const preservedPopoutWindows = new Map<string, Window>();
+
+const getPopoutIdentity = (stream: Pick<TExternalStream, 'pluginId' | 'key'>) =>
+  `${stream.pluginId}:${stream.key}`;
+
 const ExternalStreamCard = memo(
   ({
     streamId,
@@ -213,9 +218,20 @@ const ExternalStreamCard = memo(
       getCursor,
       resetZoom
     } = useScreenShareZoom();
+    const popoutIdentity = getPopoutIdentity(stream);
+    const popoutWindowName = useMemo(
+      () => `external-stream-${stream.pluginId}-${stream.key}`,
+      [stream.pluginId, stream.key]
+    );
+
+    const preservedWindow = preservedPopoutWindows.get(popoutIdentity);
+    const hasPreservedWindow = !!preservedWindow && !preservedWindow.closed;
+
     const [isFullscreen, setIsFullscreen] = useState(false);
-    const [isPoppedOut, setIsPoppedOut] = useState(false);
-    const [popoutWindow, setPopoutWindow] = useState<Window | null>(null);
+    const [isPoppedOut, setIsPoppedOut] = useState(hasPreservedWindow);
+    const [popoutWindow, setPopoutWindow] = useState<Window | null>(
+      hasPreservedWindow ? preservedWindow : null
+    );
     const [popoutVideoElement, setPopoutVideoElement] =
       useState<HTMLVideoElement | null>(null);
     const [isPopoutFullscreen, setIsPopoutFullscreen] = useState(false);
@@ -227,10 +243,10 @@ const ExternalStreamCard = memo(
     const [showPopoutWindowControls, setShowPopoutWindowControls] =
       useState(true);
     const hidePopoutWindowControlsTimeoutRef = useRef<number | null>(null);
-    const popoutWindowName = useMemo(
-      () => `external-stream-${streamId}`,
-      [streamId]
-    );
+    const popoutWindowRef = useRef(popoutWindow);
+    popoutWindowRef.current = popoutWindow;
+    const popoutIdentityRef = useRef(popoutIdentity);
+    popoutIdentityRef.current = popoutIdentity;
 
     const handlePinToggle = useCallback(() => {
       if (isPinned) {
@@ -338,10 +354,11 @@ const ExternalStreamCard = memo(
     }, [isPoppedOut, popoutWindow, popoutWindowName]);
 
     const handleClosePopout = useCallback(() => {
+      preservedPopoutWindows.delete(popoutIdentity);
       setIsPoppedOut(false);
       setIsPopoutAudioEnabled(false);
       setPopoutWindow(null);
-    }, []);
+    }, [popoutIdentity]);
 
     const handlePopoutBlocked = useCallback(() => {
       toast.error('Pop-out was blocked. Allow pop-ups and try again.');
@@ -378,6 +395,25 @@ const ExternalStreamCard = memo(
 
       void popoutDocument.documentElement.requestFullscreen();
     }, [popoutVideoElement]);
+
+    useEffect(() => {
+      preservedPopoutWindows.delete(popoutIdentity);
+    }, [popoutIdentity]);
+
+    useEffect(() => {
+      return () => {
+        if (
+          isIptvStream &&
+          popoutWindowRef.current &&
+          !popoutWindowRef.current.closed
+        ) {
+          preservedPopoutWindows.set(
+            popoutIdentityRef.current,
+            popoutWindowRef.current
+          );
+        }
+      };
+    }, [isIptvStream]);
 
     useEffect(() => {
       const handleFullscreenChange = () => {
@@ -790,6 +826,7 @@ const ExternalStreamCard = memo(
           onClose={handleClosePopout}
           onBlocked={handlePopoutBlocked}
           targetWindow={popoutWindow}
+          preserveOnUnmount={isIptvStream}
         >
           <div
             style={{

@@ -850,7 +850,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         }
 
         const numericStreamId = Number(streamId);
-        const activeExternalStream = externalStreams[numericStreamId];
         const hasPendingExternalAudio = pendingStreams.has(
           getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_AUDIO)
         );
@@ -858,29 +857,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_VIDEO)
         );
 
-        if (stream.tracks.audio && !activeExternalStream?.audioStream) {
-          if (!hasPendingExternalAudio) {
-            addPendingStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
-          }
-
-          void acceptStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
+        if (stream.tracks.audio && !hasPendingExternalAudio) {
+          addPendingStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
         }
 
-        if (stream.tracks.video && !activeExternalStream?.videoStream) {
-          if (!hasPendingExternalVideo) {
-            addPendingStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
-          }
-
-          void acceptStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
+        if (stream.tracks.video && !hasPendingExternalVideo) {
+          addPendingStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
         }
       }
     );
   }, [
-    acceptStream,
     addPendingStream,
     currentChannelExternalStreams,
     currentVoiceChannelId,
-    externalStreams,
     pendingStreams
   ]);
 

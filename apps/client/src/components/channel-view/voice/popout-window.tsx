@@ -10,6 +10,7 @@ type TPopoutWindowProps = {
   onBlocked?: () => void;
   features?: string;
   targetWindow?: Window | null;
+  preserveOnUnmount?: boolean;
 };
 
 const DEFAULT_WINDOW_FEATURES =
@@ -96,7 +97,8 @@ const PopoutWindow = memo(
     children,
     onBlocked,
     features = DEFAULT_WINDOW_FEATURES,
-    targetWindow
+    targetWindow,
+    preserveOnUnmount = false
   }: TPopoutWindowProps) => {
     const popoutWindowRef = useRef<Window | null>(null);
     const [container, setContainer] = useState<HTMLDivElement | null>(null);
@@ -165,11 +167,15 @@ const PopoutWindow = memo(
 
     useEffect(() => {
       return () => {
-        if (popoutWindowRef.current && !popoutWindowRef.current.closed) {
+        if (
+          !preserveOnUnmount &&
+          popoutWindowRef.current &&
+          !popoutWindowRef.current.closed
+        ) {
           popoutWindowRef.current.close();
         }
       };
-    }, []);
+    }, [preserveOnUnmount]);
 
     if (!isOpen || !container) {
       return null;
