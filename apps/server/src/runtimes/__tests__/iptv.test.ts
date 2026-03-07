@@ -553,6 +553,87 @@ describe('IptvSession', () => {
     expect(stopCalls).toEqual([{ publishIdle: true }]);
   });
 
+  test('ignores overlapping health checks while one is already running', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const runHealthCheck = getRunHealthCheck(session);
+
+    Reflect.set(session, 'status', {
+      status: 'streaming',
+      activeChannel: {
+        index: 0,
+        name: 'Sports HD'
+      }
+    });
+    Reflect.set(session, 'activeChannel', {
+      index: 0,
+      name: 'Sports HD'
+    });
+    Reflect.set(session, 'lastDataAt', Date.now() - 15_000);
+    Reflect.set(session, 'lastVideoDataAt', Date.now() - 15_000);
+
+    let resolveStats: (() => void) | undefined;
+    const statsGate = new Promise<void>((resolve) => {
+      resolveStats = resolve;
+    });
+
+    let videoStatsCalls = 0;
+    let audioStatsCalls = 0;
+    let restartCalls = 0;
+
+    Reflect.set(session, 'videoProducer', {
+      getStats: async () => {
+        videoStatsCalls += 1;
+        await statsGate;
+
+        return [{ byteCount: 0 }];
+      }
+    });
+    Reflect.set(session, 'audioProducer', {
+      getStats: async () => {
+        audioStatsCalls += 1;
+        await statsGate;
+
+        return [{ byteCount: 0 }];
+      }
+    });
+    Reflect.set(session, 'scheduleRestart', async () => {
+      restartCalls += 1;
+    });
+
+    const originalFindById = VoiceRuntime.findById;
+    VoiceRuntime.findById = ((_) => {
+      return {
+        getState: () => ({
+          users: [{ id: 1 }]
+        })
+      } as unknown as VoiceRuntime;
+    }) as typeof VoiceRuntime.findById;
+
+    try {
+      const firstRun = runHealthCheck.call(session);
+      const secondRun = runHealthCheck.call(session);
+
+      await Promise.resolve();
+
+      if (!resolveStats) {
+        throw new Error('Expected health check to wait on stats');
+      }
+
+      resolveStats();
+
+      await Promise.all([firstRun, secondRun]);
+    } finally {
+      VoiceRuntime.findById = originalFindById;
+    }
+
+    expect(videoStatsCalls).toBe(1);
+    expect(audioStatsCalls).toBe(1);
+    expect(restartCalls).toBe(1);
+  });
+
   test('swallows restart scheduling failures after unexpected ffmpeg exits', async () => {
     const session = new IptvSession(42, {
       playlistUrl: 'https://playlist.example/list.m3u',

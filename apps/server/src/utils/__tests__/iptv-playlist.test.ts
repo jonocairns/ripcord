@@ -120,6 +120,48 @@ https://stream.local/valid.m3u8`);
     expect(fetchCalls).toBe(1);
   });
 
+  test('drops unsafe logo URLs from fetched playlists', async () => {
+    globalThis.fetch = (async () => {
+      return new Response(
+        '#EXTM3U\n#EXTINF:-1 tvg-logo=\"http://127.0.0.1/admin\",Channel A\nhttps://8.8.4.4/a.m3u8',
+        {
+          status: 200
+        }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      fetchAndParsePlaylist('https://8.8.8.8/tv.m3u8')
+    ).resolves.toEqual([
+      {
+        name: 'Channel A',
+        logo: undefined,
+        url: 'https://8.8.4.4/a.m3u8'
+      }
+    ]);
+  });
+
+  test('resolves and keeps safe relative logo URLs from fetched playlists', async () => {
+    globalThis.fetch = (async () => {
+      return new Response(
+        '#EXTM3U\n#EXTINF:-1 tvg-logo=\"/logos/channel-a.png\",Channel A\n/live/a.m3u8',
+        {
+          status: 200
+        }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      fetchAndParsePlaylist('https://8.8.8.8/iptv/list.m3u8')
+    ).resolves.toEqual([
+      {
+        name: 'Channel A',
+        logo: 'https://8.8.8.8/logos/channel-a.png',
+        url: 'https://8.8.8.8/live/a.m3u8'
+      }
+    ]);
+  });
+
   test('fetches playlists with a timeout signal', async () => {
     let receivedSignal: AbortSignal | undefined;
 

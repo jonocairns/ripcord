@@ -256,6 +256,14 @@ const parsePlaylist = (playlistContent: string): TIptvChannel[] => {
   return channels;
 };
 
+const resolvePlaylistUrl = (inputUrl: string, baseUrl: string): string => {
+  if (URL.canParse(inputUrl, baseUrl)) {
+    return new URL(inputUrl, baseUrl).toString();
+  }
+
+  return inputUrl;
+};
+
 const fetchAndParsePlaylist = async (url: string): Promise<TIptvChannel[]> => {
   const now = Date.now();
   const cached = playlistCache.get(url);
@@ -269,25 +277,41 @@ const fetchAndParsePlaylist = async (url: string): Promise<TIptvChannel[]> => {
   const channelSafetyCache = new Map<string, Promise<void>>();
   const safeChannels: TIptvChannel[] = [];
 
+  const getValidationPromise = (inputUrl: string): Promise<void> => {
+    const cachedPromise = channelSafetyCache.get(inputUrl);
+
+    if (cachedPromise) {
+      return cachedPromise;
+    }
+
+    const validationPromise = assertSafeIptvUrl(inputUrl);
+    channelSafetyCache.set(inputUrl, validationPromise);
+    return validationPromise;
+  };
+
   for (const channel of parsedChannels) {
-    let resolvedUrl = channel.url;
-
-    if (URL.canParse(channel.url, finalUrl)) {
-      resolvedUrl = new URL(channel.url, finalUrl).toString();
-    }
-
-    let validationPromise = channelSafetyCache.get(resolvedUrl);
-
-    if (!validationPromise) {
-      validationPromise = assertSafeIptvUrl(resolvedUrl);
-      channelSafetyCache.set(resolvedUrl, validationPromise);
-    }
+    const resolvedUrl = resolvePlaylistUrl(channel.url, finalUrl);
 
     try {
-      await validationPromise;
+      await getValidationPromise(resolvedUrl);
+
+      let safeLogoUrl: string | undefined;
+
+      if (channel.logo) {
+        const resolvedLogoUrl = resolvePlaylistUrl(channel.logo, finalUrl);
+
+        try {
+          await getValidationPromise(resolvedLogoUrl);
+          safeLogoUrl = resolvedLogoUrl;
+        } catch {
+          safeLogoUrl = undefined;
+        }
+      }
+
       safeChannels.push({
         ...channel,
-        url: resolvedUrl
+        url: resolvedUrl,
+        logo: safeLogoUrl
       });
     } catch {
       continue;

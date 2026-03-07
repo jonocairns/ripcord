@@ -653,6 +653,7 @@ class IptvSession {
   private retryTimer?: ReturnType<typeof setTimeout>;
   private stableTimer?: ReturnType<typeof setTimeout>;
   private healthTimer?: ReturnType<typeof setInterval>;
+  private healthCheckInProgress = false;
   private lastTotalBytes = 0;
   private lastVideoBytes = 0;
   private lastAudioBytes = 0;
@@ -1668,51 +1669,57 @@ class IptvSession {
   };
 
   private runHealthCheck = async () => {
-    if (
-      (this.status.status !== 'starting' &&
-        this.status.status !== 'streaming') ||
-      !this.videoProducer ||
-      !this.audioProducer
-    ) {
+    if (this.healthCheckInProgress) {
       return;
     }
 
-    const runtime = VoiceRuntime.findById(this.channelId);
-    const viewerCount = runtime?.getState().users.length ?? 0;
-
-    if (viewerCount === 0) {
-      if (!this.noViewerSince) {
-        this.noViewerSince = Date.now();
-      }
-
-      if (Date.now() - this.noViewerSince >= AUTO_STOP_NO_VIEWERS_MS) {
-        logger.info(
-          '[IPTV %s] stopping stream because there are no viewers',
-          this.channelId
-        );
-
-        try {
-          await this.stopStreamAndClearSelection({ publishIdle: true });
-        } catch (error) {
-          const message =
-            error instanceof Error
-              ? error.message
-              : 'Unknown IPTV idle stop error';
-
-          logger.warn(
-            '[IPTV %s] failed to stop stream and clear selection after idle stop: %s',
-            this.channelId,
-            message
-          );
-        }
-      }
-
-      return;
-    }
-
-    this.noViewerSince = 0;
+    this.healthCheckInProgress = true;
 
     try {
+      if (
+        (this.status.status !== 'starting' &&
+          this.status.status !== 'streaming') ||
+        !this.videoProducer ||
+        !this.audioProducer
+      ) {
+        return;
+      }
+
+      const runtime = VoiceRuntime.findById(this.channelId);
+      const viewerCount = runtime?.getState().users.length ?? 0;
+
+      if (viewerCount === 0) {
+        if (!this.noViewerSince) {
+          this.noViewerSince = Date.now();
+        }
+
+        if (Date.now() - this.noViewerSince >= AUTO_STOP_NO_VIEWERS_MS) {
+          logger.info(
+            '[IPTV %s] stopping stream because there are no viewers',
+            this.channelId
+          );
+
+          try {
+            await this.stopStreamAndClearSelection({ publishIdle: true });
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message
+                : 'Unknown IPTV idle stop error';
+
+            logger.warn(
+              '[IPTV %s] failed to stop stream and clear selection after idle stop: %s',
+              this.channelId,
+              message
+            );
+          }
+        }
+
+        return;
+      }
+
+      this.noViewerSince = 0;
+
       const [videoStats, audioStats] = await Promise.all([
         this.videoProducer.getStats(),
         this.audioProducer.getStats()
@@ -1814,6 +1821,8 @@ class IptvSession {
       const message =
         error instanceof Error ? error.message : 'Unknown IPTV health error';
       logger.warn('[IPTV %s] health check failed: %s', this.channelId, message);
+    } finally {
+      this.healthCheckInProgress = false;
     }
   };
 
