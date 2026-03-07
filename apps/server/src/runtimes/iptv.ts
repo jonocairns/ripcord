@@ -34,7 +34,7 @@ const STABLE_STREAM_MS = 30_000;
 const HEALTH_CHECK_INTERVAL_MS = 5000;
 const HEALTH_TIMEOUT_MS = 10_000;
 const AUTO_STOP_NO_VIEWERS_MS = 15_000;
-const FFPROBE_TIMEOUT_MS = 5000;
+const FFPROBE_TIMEOUT_MS = 15_000;
 const FFMPEG_EXIT_GRACE_MS = 1500;
 const FFMPEG_EXIT_KILL_MS = 1000;
 
@@ -173,7 +173,7 @@ const inspectSourceStreams = async (
     const timeout = setTimeout(() => {
       ffprobe.kill('SIGKILL');
       finish({
-        failureReason: 'ffprobe timed out after 5000ms'
+        failureReason: `ffprobe timed out after ${FFPROBE_TIMEOUT_MS}ms`
       });
     }, FFPROBE_TIMEOUT_MS);
 
@@ -457,6 +457,7 @@ class IptvSession {
     return {
       shouldTranscodeVideo:
         this.forceVideoTranscode ||
+        !probeSummary ||
         (!!probeSummary?.videoCodec && probeSummary.videoCodec !== 'h264'),
       videoCodec: probeSummary?.videoCodec
     };
