@@ -29,10 +29,10 @@ import {
 import { toast } from 'sonner';
 import { CardControls } from './card-controls';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
+import { useStreamStats, type StreamStats } from './hooks/use-stream-stats';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
 import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
-import { useStreamStats, type StreamStats } from './hooks/use-stream-stats';
 import { StreamSettingsPopover } from './stream-settings-popover';
 
 type TExternalStreamControlsProps = {
