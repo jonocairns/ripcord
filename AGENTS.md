@@ -3,6 +3,7 @@
 - Underscore prefix for unused vars (^_)
 - Avoid TypeScript as casting; prefer explicit types, narrowing, and fragment-driven typing. The only acceptable use of as is in test files for constructing partial mock data (e.g. as unknown as SomeType), and even then only when the full type is impractical to construct.
 - Use nix for running repo commands with bun `nix develop -c bun run magic`
+- Before committing, run `nix develop -c bun run magic` to catch formatting, typecheck, and lint issues together.
 - Treat shipped desktop clients as potentially behind the latest server/API version.
 - Default policy: API changes must be backward compatible.
 - Naming pitfall: `useChannelPermissionsById` returns channel-permission data, not user roles. Avoid role-like variable names for its result (for example `ownUserRoles`).

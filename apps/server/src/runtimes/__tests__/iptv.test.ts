@@ -28,7 +28,10 @@ const getRunHealthCheck = (session: IptvSession) => {
 };
 
 const getStartSelectedChannelInternal = (session: IptvSession) => {
-  return Reflect.get(session, 'startSelectedChannelInternal') as () => Promise<void>;
+  return Reflect.get(
+    session,
+    'startSelectedChannelInternal'
+  ) as () => Promise<void>;
 };
 
 const getRestartFfmpegInternal = (session: IptvSession) => {
@@ -543,7 +546,8 @@ describe('IptvSession', () => {
       playlistUrl: 'https://playlist.example/list.m3u',
       enabled: true
     });
-    const startSelectedChannelInternal = getStartSelectedChannelInternal(session);
+    const startSelectedChannelInternal =
+      getStartSelectedChannelInternal(session);
     const produceError = new Error('audio producer failed');
 
     const videoProducer = {
