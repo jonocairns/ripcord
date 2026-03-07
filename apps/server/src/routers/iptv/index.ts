@@ -50,7 +50,8 @@ const configureRoute = protectedProcedure
     z.object({
       channelId: z.number(),
       playlistUrl: z.string().url(),
-      enabled: z.boolean().default(true)
+      enabled: z.boolean().default(true),
+      alwaysTranscodeVideo: z.boolean().default(false)
     })
   )
   .mutation(async ({ input, ctx }) => {
@@ -93,6 +94,7 @@ const configureRoute = protectedProcedure
           .set({
             playlistUrl: input.playlistUrl,
             enabled: input.enabled,
+            alwaysTranscodeVideo: input.alwaysTranscodeVideo,
             updatedAt: now
           })
           .where(eq(iptvSources.channelId, input.channelId))
@@ -105,6 +107,7 @@ const configureRoute = protectedProcedure
             playlistUrl: input.playlistUrl,
             pinnedChannelUrls: [],
             enabled: input.enabled,
+            alwaysTranscodeVideo: input.alwaysTranscodeVideo,
             createdAt: now
           })
           .returning()
@@ -118,7 +121,8 @@ const configureRoute = protectedProcedure
     const session = upsertIptvSession(input.channelId, {
       playlistUrl: source.playlistUrl,
       enabled: source.enabled,
-      activeChannelIndex: source.activeChannelIndex
+      activeChannelIndex: source.activeChannelIndex,
+      alwaysTranscodeVideo: source.alwaysTranscodeVideo
     });
 
     if (!source.enabled) {
@@ -264,7 +268,8 @@ const playRoute = protectedProcedure
     const session = upsertIptvSession(input.channelId, {
       playlistUrl: source.playlistUrl,
       enabled: source.enabled,
-      activeChannelIndex: source.activeChannelIndex
+      activeChannelIndex: source.activeChannelIndex,
+      alwaysTranscodeVideo: source.alwaysTranscodeVideo
     });
 
     await session.switchChannel(input.channelIndex);

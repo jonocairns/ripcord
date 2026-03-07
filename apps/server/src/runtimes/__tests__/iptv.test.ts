@@ -6,7 +6,14 @@ import { VoiceRuntime } from '../voice';
 const getPrepareChannelSource = (session: IptvSession) => {
   return Reflect.get(session, 'prepareChannelSource') as (
     channel: TIptvChannel
-  ) => Promise<{ shouldTranscodeVideo: boolean; videoCodec?: string }>;
+  ) => Promise<{
+    shouldTranscodeVideo: boolean;
+    videoCodec?: string;
+    videoFilter?: string;
+    targetVideoCrf?: number;
+    targetVideoMaxRateKbps?: number;
+    targetVideoBufferSizeKbps?: number;
+  }>;
 };
 
 const getStopStreamInternal = (session: IptvSession) => {
@@ -62,11 +69,15 @@ describe('IptvSession', () => {
 
     expect(result).toEqual({
       shouldTranscodeVideo: true,
-      videoCodec: undefined
+      videoCodec: undefined,
+      videoFilter: undefined,
+      targetVideoCrf: 18,
+      targetVideoMaxRateKbps: 20_000,
+      targetVideoBufferSizeKbps: 40_000
     });
   });
 
-  test('keeps video copy mode when ffprobe identifies an h264 source', async () => {
+  test('keeps copy mode for in-cap h264 sources by default', async () => {
     const session = new IptvSession(42, {
       playlistUrl: 'https://playlist.example/list.m3u',
       enabled: true
@@ -77,13 +88,25 @@ describe('IptvSession', () => {
       session,
       'inspectSourceStreams',
       async (): Promise<{
-        summary: { hasVideo: boolean; hasAudio: boolean; videoCodec: string };
+        summary: {
+          hasVideo: boolean;
+          hasAudio: boolean;
+          videoCodec: string;
+          videoFieldOrder?: string;
+          videoWidth: number;
+          videoHeight: number;
+          videoFrameRate: number;
+        };
       }> => {
         return {
           summary: {
             hasVideo: true,
             hasAudio: true,
-            videoCodec: 'h264'
+            videoCodec: 'h264',
+            videoFieldOrder: 'progressive',
+            videoWidth: 1280,
+            videoHeight: 720,
+            videoFrameRate: 50
           }
         };
       }
@@ -96,7 +119,273 @@ describe('IptvSession', () => {
 
     expect(result).toEqual({
       shouldTranscodeVideo: false,
-      videoCodec: 'h264'
+      videoCodec: 'h264',
+      videoFilter: undefined,
+      targetVideoCrf: 18,
+      targetVideoMaxRateKbps: 20_000,
+      targetVideoBufferSizeKbps: 40_000
+    });
+  });
+
+  test('transcodes in-cap h264 sources when alwaysTranscodeVideo is enabled', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true,
+      alwaysTranscodeVideo: true
+    });
+    const prepareChannelSource = getPrepareChannelSource(session);
+
+    Reflect.set(
+      session,
+      'inspectSourceStreams',
+      async (): Promise<{
+        summary: {
+          hasVideo: boolean;
+          hasAudio: boolean;
+          videoCodec: string;
+          videoFieldOrder?: string;
+          videoWidth: number;
+          videoHeight: number;
+          videoFrameRate: number;
+        };
+      }> => {
+        return {
+          summary: {
+            hasVideo: true,
+            hasAudio: true,
+            videoCodec: 'h264',
+            videoFieldOrder: 'progressive',
+            videoWidth: 1280,
+            videoHeight: 720,
+            videoFrameRate: 50
+          }
+        };
+      }
+    );
+
+    const result = await prepareChannelSource.call(session, {
+      name: 'News 24',
+      url: 'https://8.8.8.8/news.m3u8'
+    });
+
+    expect(result).toEqual({
+      shouldTranscodeVideo: true,
+      videoCodec: 'h264',
+      videoFilter: undefined,
+      targetVideoCrf: 18,
+      targetVideoMaxRateKbps: 20_000,
+      targetVideoBufferSizeKbps: 40_000
+    });
+  });
+
+  test('uses a CRF profile with a safety ceiling for 720p30 transcodes', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const prepareChannelSource = getPrepareChannelSource(session);
+
+    Reflect.set(
+      session,
+      'inspectSourceStreams',
+      async (): Promise<{
+        summary: {
+          hasVideo: boolean;
+          hasAudio: boolean;
+          videoCodec: string;
+          videoFieldOrder?: string;
+          videoWidth: number;
+          videoHeight: number;
+          videoFrameRate: number;
+        };
+      }> => {
+        return {
+          summary: {
+            hasVideo: true,
+            hasAudio: true,
+            videoCodec: 'mpeg2video',
+            videoFieldOrder: 'progressive',
+            videoWidth: 1280,
+            videoHeight: 720,
+            videoFrameRate: 30
+          }
+        };
+      }
+    );
+
+    const result = await prepareChannelSource.call(session, {
+      name: 'News HD',
+      url: 'https://8.8.8.8/news.m3u8'
+    });
+
+    expect(result).toEqual({
+      shouldTranscodeVideo: true,
+      videoCodec: 'mpeg2video',
+      videoFilter: undefined,
+      targetVideoCrf: 18,
+      targetVideoMaxRateKbps: 20_000,
+      targetVideoBufferSizeKbps: 40_000
+    });
+  });
+
+  test('transcodes high-resolution high-frame-rate h264 sources to the configured caps', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const prepareChannelSource = getPrepareChannelSource(session);
+
+    Reflect.set(
+      session,
+      'inspectSourceStreams',
+      async (): Promise<{
+        summary: {
+          hasVideo: boolean;
+          hasAudio: boolean;
+          videoCodec: string;
+          videoFieldOrder?: string;
+          videoWidth: number;
+          videoHeight: number;
+          videoFrameRate: number;
+        };
+      }> => {
+        return {
+          summary: {
+            hasVideo: true,
+            hasAudio: true,
+            videoCodec: 'h264',
+            videoFieldOrder: 'progressive',
+            videoWidth: 3840,
+            videoHeight: 2160,
+            videoFrameRate: 59.94
+          }
+        };
+      }
+    );
+
+    const result = await prepareChannelSource.call(session, {
+      name: 'Sports UHD',
+      url: 'https://8.8.8.8/sports.m3u8'
+    });
+
+    expect(result).toEqual({
+      shouldTranscodeVideo: true,
+      videoCodec: 'h264',
+      videoFilter:
+        'scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=50',
+      targetVideoCrf: 18,
+      targetVideoMaxRateKbps: 20_000,
+      targetVideoBufferSizeKbps: 40_000
+    });
+  });
+
+  test('adds deinterlacing when the probe reports an interlaced source', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const prepareChannelSource = getPrepareChannelSource(session);
+
+    Reflect.set(
+      session,
+      'inspectSourceStreams',
+      async (): Promise<{
+        summary: {
+          hasVideo: boolean;
+          hasAudio: boolean;
+          videoCodec: string;
+          videoFieldOrder: string;
+          videoWidth: number;
+          videoHeight: number;
+          videoFrameRate: number;
+        };
+      }> => {
+        return {
+          summary: {
+            hasVideo: true,
+            hasAudio: true,
+            videoCodec: 'mpeg2video',
+            videoFieldOrder: 'tt',
+            videoWidth: 1920,
+            videoHeight: 1080,
+            videoFrameRate: 25
+          }
+        };
+      }
+    );
+
+    const result = await prepareChannelSource.call(session, {
+      name: 'Broadcast Feed',
+      url: 'https://8.8.8.8/broadcast.m3u8'
+    });
+
+    expect(result).toEqual({
+      shouldTranscodeVideo: true,
+      videoCodec: 'mpeg2video',
+      videoFilter: 'yadif=mode=send_frame:parity=auto:deint=all',
+      targetVideoCrf: 18,
+      targetVideoMaxRateKbps: 20_000,
+      targetVideoBufferSizeKbps: 40_000
+    });
+  });
+
+  test('stores enriched probe metadata for later runtime decisions', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const prepareChannelSource = getPrepareChannelSource(session);
+
+    Reflect.set(
+      session,
+      'inspectSourceStreams',
+      async (): Promise<{
+        summary: {
+          hasVideo: boolean;
+          hasAudio: boolean;
+          videoCodec: string;
+          audioCodec: string;
+          videoFieldOrder?: string;
+          videoWidth: number;
+          videoHeight: number;
+          videoFrameRate: number;
+          videoBitrate: number;
+          audioBitrate: number;
+        };
+      }> => {
+        return {
+          summary: {
+            hasVideo: true,
+            hasAudio: true,
+            videoCodec: 'h264',
+            audioCodec: 'aac',
+            videoFieldOrder: 'progressive',
+            videoWidth: 1920,
+            videoHeight: 1080,
+            videoFrameRate: 50,
+            videoBitrate: 8_000_000,
+            audioBitrate: 192_000
+          }
+        };
+      }
+    );
+
+    await prepareChannelSource.call(session, {
+      name: 'Sports HD',
+      url: 'https://8.8.8.8/sports.m3u8'
+    });
+
+    expect(Reflect.get(session, 'sourceProbeSummary')).toEqual({
+      hasVideo: true,
+      hasAudio: true,
+      videoCodec: 'h264',
+      audioCodec: 'aac',
+      videoFieldOrder: 'progressive',
+      videoWidth: 1920,
+      videoHeight: 1080,
+      videoFrameRate: 50,
+      videoBitrate: 8_000_000,
+      audioBitrate: 192_000
     });
   });
 

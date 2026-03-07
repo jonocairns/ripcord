@@ -37,10 +37,17 @@ const AUTO_STOP_NO_VIEWERS_MS = 15_000;
 const FFPROBE_TIMEOUT_MS = 15_000;
 const FFMPEG_EXIT_GRACE_MS = 1500;
 const FFMPEG_EXIT_KILL_MS = 1000;
+const MAX_TRANSCODE_VIDEO_WIDTH = 1920;
+const MAX_TRANSCODE_VIDEO_HEIGHT = 1080;
+const MAX_TRANSCODE_VIDEO_FRAME_RATE = 50;
+const TRANSCODE_VIDEO_CRF = 18;
+const TRANSCODE_VIDEO_MAX_RATE_KBPS = 20_000;
+const TRANSCODE_VIDEO_BUFFER_SIZE_KBPS = 40_000;
 
 type TIptvSessionConfig = {
   playlistUrl: string;
   enabled: boolean;
+  alwaysTranscodeVideo?: boolean;
   activeChannelIndex?: number | null;
 };
 
@@ -50,6 +57,12 @@ type TIptvSourceProbeSummary = {
   hasAudio: boolean;
   videoCodec?: string;
   audioCodec?: string;
+  videoFieldOrder?: string;
+  videoWidth?: number;
+  videoHeight?: number;
+  videoFrameRate?: number;
+  videoBitrate?: number;
+  audioBitrate?: number;
 };
 type TIptvSourceProbeResult = {
   summary?: TIptvSourceProbeSummary;
@@ -58,6 +71,10 @@ type TIptvSourceProbeResult = {
 type TIptvChannelPreparation = {
   shouldTranscodeVideo: boolean;
   videoCodec?: string;
+  videoFilter?: string;
+  targetVideoCrf?: number;
+  targetVideoMaxRateKbps?: number;
+  targetVideoBufferSizeKbps?: number;
 };
 
 const isRecord = (value: unknown): value is TRecordValue => {
@@ -90,6 +107,75 @@ const getStringProp = (value: unknown, key: string): string | undefined => {
   }
 
   return prop;
+};
+
+const parseNumericString = (value: string): number | undefined => {
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  const parsed = Number(normalized);
+
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+
+  return parsed;
+};
+
+const parseProbeFrameRate = (value: string | undefined): number | undefined => {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (!normalized.includes('/')) {
+    const parsed = parseNumericString(normalized);
+
+    return parsed && parsed > 0 ? parsed : undefined;
+  }
+
+  const parts = normalized.split('/');
+
+  if (parts.length !== 2) {
+    return undefined;
+  }
+
+  const numerator = parseNumericString(parts[0] ?? '');
+  const denominator = parseNumericString(parts[1] ?? '');
+
+  if (
+    numerator === undefined ||
+    denominator === undefined ||
+    denominator <= 0
+  ) {
+    return undefined;
+  }
+
+  const frameRate = numerator / denominator;
+
+  return frameRate > 0 ? frameRate : undefined;
+};
+
+const parseProbeBitrate = (value: unknown): number | undefined => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  }
+
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const parsed = parseNumericString(value);
+
+  return parsed && parsed > 0 ? parsed : undefined;
 };
 
 const getArrayProp = (value: unknown, key: string): unknown[] | undefined => {
@@ -149,7 +235,7 @@ const inspectSourceStreams = async (
       '-v',
       'error',
       '-show_entries',
-      'stream=codec_type,codec_name',
+      'stream=codec_type,codec_name,field_order,width,height,avg_frame_rate,r_frame_rate,bit_rate',
       '-of',
       'json',
       streamUrl
@@ -216,6 +302,12 @@ const inspectSourceStreams = async (
         let hasAudio = false;
         let videoCodec: string | undefined;
         let audioCodec: string | undefined;
+        let videoFieldOrder: string | undefined;
+        let videoWidth: number | undefined;
+        let videoHeight: number | undefined;
+        let videoFrameRate: number | undefined;
+        let videoBitrate: number | undefined;
+        let audioBitrate: number | undefined;
 
         for (const stream of streams) {
           const codecType = getStringProp(stream, 'codec_type');
@@ -227,6 +319,40 @@ const inspectSourceStreams = async (
             if (!videoCodec && codecName) {
               videoCodec = codecName.toLowerCase();
             }
+
+            if (videoFieldOrder === undefined) {
+              const fieldOrder = getStringProp(stream, 'field_order');
+
+              if (fieldOrder) {
+                videoFieldOrder = fieldOrder.toLowerCase();
+              }
+            }
+
+            if (videoWidth === undefined) {
+              const width = getNumberProp(stream, 'width');
+
+              if (width !== undefined && width > 0) {
+                videoWidth = width;
+              }
+            }
+
+            if (videoHeight === undefined) {
+              const height = getNumberProp(stream, 'height');
+
+              if (height !== undefined && height > 0) {
+                videoHeight = height;
+              }
+            }
+
+            if (videoFrameRate === undefined) {
+              videoFrameRate =
+                parseProbeFrameRate(getStringProp(stream, 'avg_frame_rate')) ??
+                parseProbeFrameRate(getStringProp(stream, 'r_frame_rate'));
+            }
+
+            if (videoBitrate === undefined && isRecord(stream)) {
+              videoBitrate = parseProbeBitrate(stream.bit_rate);
+            }
           }
 
           if (codecType === 'audio') {
@@ -234,6 +360,10 @@ const inspectSourceStreams = async (
 
             if (!audioCodec && codecName) {
               audioCodec = codecName.toLowerCase();
+            }
+
+            if (audioBitrate === undefined && isRecord(stream)) {
+              audioBitrate = parseProbeBitrate(stream.bit_rate);
             }
           }
         }
@@ -243,7 +373,13 @@ const inspectSourceStreams = async (
             hasVideo,
             hasAudio,
             videoCodec,
-            audioCodec
+            audioCodec,
+            videoFieldOrder,
+            videoWidth,
+            videoHeight,
+            videoFrameRate,
+            videoBitrate,
+            audioBitrate
           }
         });
       } catch {
@@ -267,6 +403,150 @@ const formatCodecLabel = (
   }
 
   return codec ?? `present (${type} codec unknown)`;
+};
+
+const formatResolutionLabel = (
+  width: number | undefined,
+  height: number | undefined
+): string | undefined => {
+  if (width === undefined || height === undefined) {
+    return undefined;
+  }
+
+  return `${width}x${height}`;
+};
+
+const formatFrameRateLabel = (frameRate: number | undefined): string | undefined => {
+  if (frameRate === undefined) {
+    return undefined;
+  }
+
+  const rounded =
+    Math.abs(frameRate - Math.round(frameRate)) < 0.01
+      ? String(Math.round(frameRate))
+      : frameRate.toFixed(2);
+
+  return `${rounded}fps`;
+};
+
+const formatBitrateLabel = (bitrate: number | undefined): string | undefined => {
+  if (bitrate === undefined) {
+    return undefined;
+  }
+
+  return `${(bitrate / 1000).toFixed(0)}kbps`;
+};
+
+const formatProbeDetails = (details: Array<string | undefined>): string => {
+  const populatedDetails = details.filter(
+    (detail): detail is string => detail !== undefined
+  );
+
+  if (populatedDetails.length === 0) {
+    return ' (details unavailable)';
+  }
+
+  return ` (${populatedDetails.join(', ')})`;
+};
+
+const formatSourceVideoSummary = (
+  probeSummary: TIptvSourceProbeSummary | undefined
+): string => {
+  if (!probeSummary?.hasVideo) {
+    return 'none';
+  }
+
+  return `${probeSummary.videoCodec ?? 'unknown'}${formatProbeDetails([
+    probeSummary.videoFieldOrder,
+    formatResolutionLabel(probeSummary.videoWidth, probeSummary.videoHeight),
+    formatFrameRateLabel(probeSummary.videoFrameRate),
+    formatBitrateLabel(probeSummary.videoBitrate)
+  ])}`;
+};
+
+const formatSourceAudioSummary = (
+  probeSummary: TIptvSourceProbeSummary | undefined
+): string => {
+  if (!probeSummary?.hasAudio) {
+    return 'none';
+  }
+
+  return `${probeSummary.audioCodec ?? 'unknown'}${formatProbeDetails([
+    formatBitrateLabel(probeSummary.audioBitrate)
+  ])}`;
+};
+
+const needsResolutionCap = (
+  probeSummary: TIptvSourceProbeSummary | undefined
+): boolean => {
+  if (!probeSummary?.hasVideo) {
+    return false;
+  }
+
+  return (
+    (probeSummary.videoWidth ?? 0) > MAX_TRANSCODE_VIDEO_WIDTH ||
+    (probeSummary.videoHeight ?? 0) > MAX_TRANSCODE_VIDEO_HEIGHT
+  );
+};
+
+const needsFrameRateCap = (
+  probeSummary: TIptvSourceProbeSummary | undefined
+): boolean => {
+  if (!probeSummary?.hasVideo || probeSummary.videoFrameRate === undefined) {
+    return false;
+  }
+
+  return probeSummary.videoFrameRate > MAX_TRANSCODE_VIDEO_FRAME_RATE + 0.01;
+};
+
+const needsDeinterlace = (
+  probeSummary: TIptvSourceProbeSummary | undefined
+): boolean => {
+  const fieldOrder = probeSummary?.videoFieldOrder;
+
+  if (!probeSummary?.hasVideo || !fieldOrder) {
+    return false;
+  }
+
+  return fieldOrder !== 'progressive' && fieldOrder !== 'unknown';
+};
+
+const buildVideoFilter = (
+  probeSummary: TIptvSourceProbeSummary | undefined
+): string | undefined => {
+  const filters: string[] = [];
+
+  if (needsDeinterlace(probeSummary)) {
+    filters.push('yadif=mode=send_frame:parity=auto:deint=all');
+  }
+
+  if (needsResolutionCap(probeSummary)) {
+    filters.push(
+      `scale=${MAX_TRANSCODE_VIDEO_WIDTH}:${MAX_TRANSCODE_VIDEO_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2`
+    );
+  }
+
+  if (needsFrameRateCap(probeSummary)) {
+    filters.push(`fps=${MAX_TRANSCODE_VIDEO_FRAME_RATE}`);
+  }
+
+  if (filters.length === 0) {
+    return undefined;
+  }
+
+  return filters.join(',');
+};
+
+const resolveTranscodeVideoProfile = (): {
+  crf: number;
+  maxRateKbps: number;
+  bufferSizeKbps: number;
+} => {
+  return {
+    crf: TRANSCODE_VIDEO_CRF,
+    maxRateKbps: TRANSCODE_VIDEO_MAX_RATE_KBPS,
+    bufferSizeKbps: TRANSCODE_VIDEO_BUFFER_SIZE_KBPS
+  };
 };
 
 const getStderrTail = (stderrOutput: string): string | undefined => {
@@ -331,6 +611,7 @@ class IptvSession {
   public readonly channelId: number;
   private playlistUrl: string;
   private enabled: boolean;
+  private alwaysTranscodeVideo: boolean;
   private destroyed = false;
 
   private status: TIptvStatus = { status: 'idle' };
@@ -367,12 +648,14 @@ class IptvSession {
     this.channelId = channelId;
     this.playlistUrl = config.playlistUrl;
     this.enabled = config.enabled;
+    this.alwaysTranscodeVideo = config.alwaysTranscodeVideo ?? false;
     this.activeChannelIndex = config.activeChannelIndex ?? undefined;
   }
 
   public updateConfig = (config: TIptvSessionConfig) => {
     this.playlistUrl = config.playlistUrl;
     this.enabled = config.enabled;
+    this.alwaysTranscodeVideo = config.alwaysTranscodeVideo ?? false;
 
     if (config.activeChannelIndex !== undefined) {
       this.activeChannelIndex = config.activeChannelIndex ?? undefined;
@@ -419,11 +702,24 @@ class IptvSession {
     }
 
     logger.info(
-      '[IPTV %s] source probe for "%s": video=%s, audio=%s',
+      '[IPTV %s] source probe for "%s": video=%s%s, audio=%s%s',
       this.channelId,
       channelName,
       formatCodecLabel(probeSummary.hasVideo, probeSummary.videoCodec, 'video'),
-      formatCodecLabel(probeSummary.hasAudio, probeSummary.audioCodec, 'audio')
+      probeSummary.hasVideo
+        ? formatProbeDetails([
+            formatResolutionLabel(
+              probeSummary.videoWidth,
+              probeSummary.videoHeight
+            ),
+            formatFrameRateLabel(probeSummary.videoFrameRate),
+            formatBitrateLabel(probeSummary.videoBitrate)
+          ])
+        : '',
+      formatCodecLabel(probeSummary.hasAudio, probeSummary.audioCodec, 'audio'),
+      probeSummary.hasAudio
+        ? formatProbeDetails([formatBitrateLabel(probeSummary.audioBitrate)])
+        : ''
     );
 
     if (!probeSummary.hasVideo) {
@@ -443,6 +739,74 @@ class IptvSession {
     }
   };
 
+  private logStreamDecision = (
+    channelName: string,
+    sourcePreparation: TIptvChannelPreparation
+  ) => {
+    const probeSummary = this.sourceProbeSummary;
+    const decisionReasons: string[] = [];
+
+    if (this.forceVideoTranscode) {
+      decisionReasons.push('copy-mode fallback');
+    }
+
+    if (this.alwaysTranscodeVideo) {
+      decisionReasons.push('video copy disabled by config');
+    }
+
+    if (!probeSummary) {
+      decisionReasons.push('probe unavailable');
+    } else {
+      if (probeSummary.videoCodec && probeSummary.videoCodec !== 'h264') {
+        decisionReasons.push(`codec=${probeSummary.videoCodec}`);
+      }
+
+      if (needsResolutionCap(probeSummary)) {
+        decisionReasons.push('resolution cap');
+      }
+
+      if (needsFrameRateCap(probeSummary)) {
+        decisionReasons.push('frame-rate cap');
+      }
+
+      if (needsDeinterlace(probeSummary)) {
+        decisionReasons.push(`deinterlace=${probeSummary.videoFieldOrder}`);
+      }
+    }
+
+    const mode = sourcePreparation.shouldTranscodeVideo ? 'transcode' : 'copy';
+    const outputVideo = sourcePreparation.shouldTranscodeVideo
+      ? `h264${formatProbeDetails([
+          `preset=faster`,
+          sourcePreparation.targetVideoCrf !== undefined
+            ? `crf=${sourcePreparation.targetVideoCrf}`
+            : undefined,
+          sourcePreparation.videoFilter
+            ? `filter=${sourcePreparation.videoFilter}`
+            : 'filter=none',
+          sourcePreparation.targetVideoMaxRateKbps
+            ? `maxrate=${sourcePreparation.targetVideoMaxRateKbps}k`
+            : undefined,
+          sourcePreparation.targetVideoBufferSizeKbps
+            ? `bufsize=${sourcePreparation.targetVideoBufferSizeKbps}k`
+            : undefined
+        ])}`
+      : 'copy';
+    const outputAudio = 'opus (bitrate=128k, channels=2, rate=48000)';
+
+    logger.info(
+      '[IPTV %s] stream decision for "%s": mode=%s%s, sourceVideo=%s, sourceAudio=%s, outputVideo=%s, outputAudio=%s',
+      this.channelId,
+      channelName,
+      mode,
+      decisionReasons.length > 0 ? ` (${decisionReasons.join(', ')})` : '',
+      formatSourceVideoSummary(probeSummary),
+      formatSourceAudioSummary(probeSummary),
+      outputVideo,
+      outputAudio
+    );
+  };
+
   private prepareChannelSource = async (
     channel: TIptvChannel
   ): Promise<TIptvChannelPreparation> => {
@@ -450,17 +814,31 @@ class IptvSession {
 
     const probeResult = await this.inspectSourceStreams(channel.url);
     const probeSummary = probeResult.summary;
+    const transcodeVideoProfile = resolveTranscodeVideoProfile();
+    const shouldTranscodeVideo =
+      this.alwaysTranscodeVideo ||
+      this.forceVideoTranscode ||
+      !probeSummary ||
+      probeSummary.videoCodec !== 'h264' ||
+      needsResolutionCap(probeSummary) ||
+      needsFrameRateCap(probeSummary) ||
+      needsDeinterlace(probeSummary);
 
     this.sourceProbeSummary = probeSummary;
     this.logSourceProbe(channel.name, probeResult);
 
-    return {
-      shouldTranscodeVideo:
-        this.forceVideoTranscode ||
-        !probeSummary ||
-        (!!probeSummary?.videoCodec && probeSummary.videoCodec !== 'h264'),
+    const sourcePreparation: TIptvChannelPreparation = {
+      shouldTranscodeVideo,
+      videoFilter: buildVideoFilter(probeSummary),
+      targetVideoCrf: transcodeVideoProfile.crf,
+      targetVideoMaxRateKbps: transcodeVideoProfile.maxRateKbps,
+      targetVideoBufferSizeKbps: transcodeVideoProfile.bufferSizeKbps,
       videoCodec: probeSummary?.videoCodec
     };
+
+    this.logStreamDecision(channel.name, sourcePreparation);
+
+    return sourcePreparation;
   };
 
   private inspectSourceStreams = async (
@@ -758,12 +1136,13 @@ class IptvSession {
 
     this.usingVideoCopy = !sourcePreparation.shouldTranscodeVideo;
     logger.info(
-      '[IPTV %s] launching ffmpeg for "%s" (retry=%s, videoCopy=%s, videoCodec=%s)',
+      '[IPTV %s] launching ffmpeg for "%s" (retry=%s, videoCopy=%s, videoCodec=%s, videoFilter=%s)',
       this.channelId,
       channel.name,
       this.retryCount,
       this.usingVideoCopy,
-      sourcePreparation.videoCodec ?? 'unknown'
+      sourcePreparation.videoCodec ?? 'unknown',
+      sourcePreparation.videoFilter ?? 'none'
     );
 
     this.spawnFfmpeg({
@@ -772,7 +1151,11 @@ class IptvSession {
       videoRtcpPort: videoRtcpTuple.localPort,
       audioRtpPort: audioTuple.localPort,
       audioRtcpPort: audioRtcpTuple.localPort,
-      transcodeVideo: sourcePreparation.shouldTranscodeVideo
+      transcodeVideo: sourcePreparation.shouldTranscodeVideo,
+      videoFilter: sourcePreparation.videoFilter,
+      targetVideoCrf: sourcePreparation.targetVideoCrf,
+      targetVideoMaxRateKbps: sourcePreparation.targetVideoMaxRateKbps,
+      targetVideoBufferSizeKbps: sourcePreparation.targetVideoBufferSizeKbps
     });
 
     this.resetHealthTracking();
@@ -849,12 +1232,13 @@ class IptvSession {
     this.ffmpegProcess = undefined;
     this.ffmpegStderr = '';
     logger.info(
-      '[IPTV %s] relaunching ffmpeg for "%s" (retry=%s, videoCopy=%s, videoCodec=%s)',
+      '[IPTV %s] relaunching ffmpeg for "%s" (retry=%s, videoCopy=%s, videoCodec=%s, videoFilter=%s)',
       this.channelId,
       channel.name,
       this.retryCount,
       this.usingVideoCopy,
-      sourcePreparation.videoCodec ?? 'unknown'
+      sourcePreparation.videoCodec ?? 'unknown',
+      sourcePreparation.videoFilter ?? 'none'
     );
 
     this.spawnFfmpeg({
@@ -863,7 +1247,11 @@ class IptvSession {
       videoRtcpPort: videoRtcpTuple.localPort,
       audioRtpPort: audioTuple.localPort,
       audioRtcpPort: audioRtcpTuple.localPort,
-      transcodeVideo: sourcePreparation.shouldTranscodeVideo
+      transcodeVideo: sourcePreparation.shouldTranscodeVideo,
+      videoFilter: sourcePreparation.videoFilter,
+      targetVideoCrf: sourcePreparation.targetVideoCrf,
+      targetVideoMaxRateKbps: sourcePreparation.targetVideoMaxRateKbps,
+      targetVideoBufferSizeKbps: sourcePreparation.targetVideoBufferSizeKbps
     });
 
     this.resetHealthTracking();
@@ -939,19 +1327,37 @@ class IptvSession {
     audioRtpPort: number;
     audioRtcpPort: number;
     transcodeVideo: boolean;
+    videoFilter?: string;
+    targetVideoCrf?: number;
+    targetVideoMaxRateKbps?: number;
+    targetVideoBufferSizeKbps?: number;
   }) => {
     const videoCodecArgs = options.transcodeVideo
       ? [
           '-c:v',
           'libx264',
+          '-pix_fmt',
+          'yuv420p',
+          '-profile:v',
+          'baseline',
+          '-level:v',
+          '4.2',
           '-preset',
-          'veryfast',
-          '-tune',
-          'zerolatency',
-          '-b:v',
-          '4000k'
+          'faster',
+          '-bf:v',
+          '0',
+          '-crf',
+          String(options.targetVideoCrf ?? TRANSCODE_VIDEO_CRF),
+          '-maxrate',
+          `${options.targetVideoMaxRateKbps ?? TRANSCODE_VIDEO_MAX_RATE_KBPS}k`,
+          '-bufsize',
+          `${options.targetVideoBufferSizeKbps ?? TRANSCODE_VIDEO_BUFFER_SIZE_KBPS}k`
         ]
       : ['-c:v', 'copy'];
+    const videoFilterArgs =
+      options.transcodeVideo && options.videoFilter
+        ? ['-vf', options.videoFilter]
+        : [];
     const args = [
       '-nostdin',
       '-hide_banner',
@@ -969,6 +1375,7 @@ class IptvSession {
       '-map',
       '0:v:0?',
       ...videoCodecArgs,
+      ...videoFilterArgs,
       '-f',
       'rtp',
       '-ssrc',

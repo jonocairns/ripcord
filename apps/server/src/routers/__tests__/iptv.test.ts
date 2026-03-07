@@ -28,6 +28,26 @@ const createCaller = async (options?: {
 };
 
 describe('iptv router', () => {
+  test('configure persists the always-transcode setting', async () => {
+    const caller = await createCaller();
+
+    const source = await caller.iptv.configure({
+      channelId: VOICE_CHANNEL_ID,
+      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
+      enabled: true,
+      alwaysTranscodeVideo: true
+    });
+
+    const persistedSource = await tdb
+      .select()
+      .from(iptvSources)
+      .where(eq(iptvSources.channelId, VOICE_CHANNEL_ID))
+      .get();
+
+    expect(source.alwaysTranscodeVideo).toBe(true);
+    expect(persistedSource?.alwaysTranscodeVideo).toBe(true);
+  });
+
   test('manual stop clears the selected channel for a live session', async () => {
     const caller = await createCaller({
       currentVoiceChannelId: VOICE_CHANNEL_ID

@@ -35,6 +35,7 @@ const IptvConfigDialog = memo(({ channelId }: TIptvConfigDialogProps) => {
   const [configured, setConfigured] = useState(false);
   const [playlistUrl, setPlaylistUrl] = useState('');
   const [enabled, setEnabled] = useState(true);
+  const [alwaysTranscodeVideo, setAlwaysTranscodeVideo] = useState(false);
 
   const fetchConfig = useCallback(async () => {
     setLoading(true);
@@ -46,6 +47,7 @@ const IptvConfigDialog = memo(({ channelId }: TIptvConfigDialogProps) => {
       setConfigured(!!config);
       setPlaylistUrl(config?.playlistUrl ?? '');
       setEnabled(config?.enabled ?? true);
+      setAlwaysTranscodeVideo(config?.alwaysTranscodeVideo ?? false);
     } catch (error) {
       toast.error(getTrpcError(error, 'Failed to fetch IPTV configuration'));
     } finally {
@@ -66,7 +68,8 @@ const IptvConfigDialog = memo(({ channelId }: TIptvConfigDialogProps) => {
       await trpc.iptv.configure.mutate({
         channelId,
         playlistUrl: playlistUrl.trim(),
-        enabled
+        enabled,
+        alwaysTranscodeVideo
       });
 
       toast.success('IPTV configuration saved');
@@ -76,7 +79,7 @@ const IptvConfigDialog = memo(({ channelId }: TIptvConfigDialogProps) => {
     } finally {
       setSaving(false);
     }
-  }, [channelId, enabled, playlistUrl]);
+  }, [alwaysTranscodeVideo, channelId, enabled, playlistUrl]);
 
   const removeConfig = useCallback(async () => {
     setSaving(true);
@@ -87,6 +90,7 @@ const IptvConfigDialog = memo(({ channelId }: TIptvConfigDialogProps) => {
       setConfigured(false);
       setPlaylistUrl('');
       setEnabled(true);
+      setAlwaysTranscodeVideo(false);
       toast.success('IPTV configuration removed');
       setOpen(false);
     } catch (error) {
@@ -177,6 +181,15 @@ const IptvConfigDialog = memo(({ channelId }: TIptvConfigDialogProps) => {
                 description="When disabled, IPTV playback controls are unavailable."
               >
                 <Switch checked={enabled} onCheckedChange={setEnabled} />
+              </Group>
+              <Group
+                label="Always transcode video"
+                description="Higher CPU usage, but more consistent quality and frame pacing than copy mode."
+              >
+                <Switch
+                  checked={alwaysTranscodeVideo}
+                  onCheckedChange={setAlwaysTranscodeVideo}
+                />
               </Group>
             </div>
           )}

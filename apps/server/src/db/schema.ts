@@ -130,6 +130,11 @@ const iptvSources = sqliteTable(
       .default([]),
     activeChannelIndex: integer('active_channel_index'),
     enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    alwaysTranscodeVideo: integer('always_transcode_video', {
+      mode: 'boolean'
+    })
+      .notNull()
+      .default(false),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at')
   },
