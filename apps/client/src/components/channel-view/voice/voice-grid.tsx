@@ -60,7 +60,7 @@ const VoiceGrid = memo(
                 {regularCards.map((card, index) => (
                   <div
                     key={index}
-                    className="h-24 w-40 flex-shrink-0 overflow-hidden rounded-lg border border-border/70"
+                    className="h-24 w-40 flex-shrink-0 p-1"
                   >
                     {card}
                   </div>

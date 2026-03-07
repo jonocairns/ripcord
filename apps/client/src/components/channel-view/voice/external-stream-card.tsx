@@ -253,10 +253,13 @@ const ExternalStreamCard = memo(
     }, [volumeKey, toggleMute]);
     const hasVideo = stream.tracks?.video && hasExternalVideoStream;
     const hasAudio = stream.tracks?.audio && hasExternalAudioStream;
+    const hasIptvPlaybackStarted = hasVideo
+      ? hasVideoPlaybackStarted
+      : hasAudio && hasAudioPlaybackStarted;
     const showIptvLoadingState =
       isIptvStream &&
       iptvStatus.status !== 'error' &&
-      (iptvStatus.status === 'starting' ||
+      ((iptvStatus.status === 'starting' && !hasIptvPlaybackStarted) ||
         (hasVideo && !hasVideoPlaybackStarted) ||
         (!hasVideo && hasAudio && !hasAudioPlaybackStarted));
 
