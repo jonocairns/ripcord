@@ -258,6 +258,10 @@ export const leaveVoice = async (): Promise<void> => {
   await leaveVoiceInternal({ playOwnLeaveSound: true });
 };
 
+export const leaveVoiceSilently = async (): Promise<void> => {
+  await leaveVoiceInternal({ playOwnLeaveSound: false });
+};
+
 export const setPinnedCard = (pinnedCard: TPinnedCard | undefined): void => {
   useServerStore.getState().setPinnedCard(pinnedCard);
 };

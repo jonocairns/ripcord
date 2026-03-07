@@ -13,7 +13,7 @@ import {
   useUnreadMessagesCount,
   useVoiceUsersByChannelId
 } from '@/features/server/hooks';
-import { joinVoice } from '@/features/server/voice/actions';
+import { joinVoice, leaveVoiceSilently } from '@/features/server/voice/actions';
 import {
   useVoice,
   useVoiceChannelExternalStreamsList
@@ -203,6 +203,7 @@ const Channel = memo(({ channelId, isSelected }: TChannelProps) => {
       try {
         await init(response, channelId);
       } catch {
+        await leaveVoiceSilently();
         setSelectedChannelId(undefined);
         toast.error('Failed to initialize voice connection');
       }

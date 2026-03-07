@@ -6,11 +6,8 @@ const setPendingVoiceReconnectChannelId = (
   pendingVoiceReconnectChannelId = channelId;
 };
 
-const consumePendingVoiceReconnectChannelId = (): number | undefined => {
-  const channelId = pendingVoiceReconnectChannelId;
-  pendingVoiceReconnectChannelId = undefined;
-  return channelId;
-};
+const getPendingVoiceReconnectChannelId = (): number | undefined =>
+  pendingVoiceReconnectChannelId;
 
 const clearPendingVoiceReconnectChannelId = (): void => {
   pendingVoiceReconnectChannelId = undefined;
@@ -18,6 +15,6 @@ const clearPendingVoiceReconnectChannelId = (): void => {
 
 export {
   clearPendingVoiceReconnectChannelId,
-  consumePendingVoiceReconnectChannelId,
+  getPendingVoiceReconnectChannelId,
   setPendingVoiceReconnectChannelId
 };

@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { connect, setDisconnectInfo } from '@/features/server/actions';
+import { isReconnectPausedDisconnectCode } from '@/features/server/disconnect-utils';
 import type { TDisconnectInfo } from '@/features/server/types';
 import { getAuthToken, getRefreshToken } from '@/helpers/storage';
 import {
@@ -20,13 +21,6 @@ type TDisconnectedProps = {
 
 const RECONNECT_POLL_INTERVAL_MS = 5_000;
 const GENERIC_CLIENT_ERROR_CODE = 400;
-
-const isClientErrorDisconnectCode = (code: number) => {
-  return (
-    (code >= 400 && code < 500) ||
-    (code >= DisconnectCode.KICKED && code < 50000)
-  );
-};
 
 const isNonRetriableReconnectError = (error: unknown): boolean => {
   if (!(error instanceof TRPCClientError)) {
@@ -82,7 +76,19 @@ const Disconnected = memo(({ info }: TDisconnectedProps) => {
       };
     }
 
-    if (isClientErrorDisconnectCode(code)) {
+    if (code === DisconnectCode.SERVER_SHUTDOWN) {
+      return {
+        icon: <WifiOff className="h-8 w-8 text-gray-500" />,
+        title: 'Server restarting',
+        message:
+          info.reason ||
+          'The server is shutting down or restarting. Reconnect will resume automatically.',
+        canReconnect: true,
+        autoReconnect: true
+      };
+    }
+
+    if (isReconnectPausedDisconnectCode(code)) {
       return {
         icon: <AlertCircle className="h-8 w-8 text-yellow-500" />,
         title: 'Reconnect paused',

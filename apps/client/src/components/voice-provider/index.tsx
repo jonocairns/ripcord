@@ -1,15 +1,15 @@
 import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
-import { useChannelCan } from '@/features/server/hooks';
+import { useChannelCan, useIsConnected } from '@/features/server/hooks';
 import { setIptvStatus } from '@/features/server/iptv/actions';
 import {
   clearPendingVoiceReconnectChannelId,
-  consumePendingVoiceReconnectChannelId
+  getPendingVoiceReconnectChannelId
 } from '@/features/server/reconnect-state';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
-import { joinVoice } from '@/features/server/voice/actions';
+import { joinVoice, leaveVoiceSilently } from '@/features/server/voice/actions';
 import { useOwnVoiceState } from '@/features/server/voice/hooks';
 import { logVoice } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
@@ -548,6 +548,7 @@ type TVoiceProviderProps = {
 
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   const [loading, setLoading] = useState(false);
+  const [voiceReconnectRetryToken, setVoiceReconnectRetryToken] = useState(0);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(
     ConnectionStatus.DISCONNECTED
   );
@@ -556,6 +557,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   const audioVideoRefsMap = useRef<Map<number, AudioVideoRefs>>(new Map());
   const ownVoiceState = useOwnVoiceState();
   const currentVoiceChannelId = useCurrentVoiceChannelId();
+  const isConnected = useIsConnected();
   const channelCan = useChannelCan(currentVoiceChannelId);
   const currentChannelExternalStreams = useServerStore<TChannelExternalStreams>(
     (state) => {
@@ -2250,8 +2252,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   }, [currentVoiceChannelId]);
 
   useEffect(() => {
+    if (!isConnected) {
+      return;
+    }
+
     if (currentVoiceChannelId !== undefined) {
-      clearPendingVoiceReconnectChannelId();
+      if (connectionStatus === ConnectionStatus.CONNECTED) {
+        clearPendingVoiceReconnectChannelId();
+      }
+
       return;
     }
 
@@ -2259,31 +2268,60 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       return;
     }
 
-    const pendingChannelId = consumePendingVoiceReconnectChannelId();
+    const pendingChannelId = getPendingVoiceReconnectChannelId();
 
     if (pendingChannelId === undefined) {
       return;
     }
 
     reconnectingVoiceRef.current = true;
+    let cancelled = false;
+    let retryTimeoutId: number | undefined;
 
     void (async () => {
       try {
         const incomingRouterRtpCapabilities = await joinVoice(pendingChannelId);
 
         if (!incomingRouterRtpCapabilities) {
+          if (!cancelled) {
+            retryTimeoutId = window.setTimeout(() => {
+              setVoiceReconnectRetryToken((value) => value + 1);
+            }, 2_000);
+          }
+
           return;
         }
 
         await init(incomingRouterRtpCapabilities, pendingChannelId);
+        clearPendingVoiceReconnectChannelId();
       } catch (error) {
         logVoice('Failed to auto-rejoin previous voice channel', { error });
-        toast.error('Failed to restore voice connection');
+        await leaveVoiceSilently();
+
+        if (!cancelled) {
+          retryTimeoutId = window.setTimeout(() => {
+            setVoiceReconnectRetryToken((value) => value + 1);
+          }, 2_000);
+        }
       } finally {
         reconnectingVoiceRef.current = false;
       }
     })();
-  }, [currentVoiceChannelId, init]);
+
+    return () => {
+      cancelled = true;
+
+      if (retryTimeoutId !== undefined) {
+        window.clearTimeout(retryTimeoutId);
+      }
+    };
+  }, [
+    connectionStatus,
+    currentVoiceChannelId,
+    init,
+    isConnected,
+    voiceReconnectRetryToken
+  ]);
 
   useEffect(() => {
     return () => {

@@ -63,6 +63,27 @@ const sfxMessageSent = () => {
   osc.stop(now() + 0.04);
 };
 
+// SERVER_DISCONNECTED — short descending alert
+const sfxServerDisconnected = () => {
+  const tones = [
+    { freq: 880, gain: 0.06, delay: 0 },
+    { freq: 659, gain: 0.05, delay: 0.08 },
+    { freq: 494, gain: 0.04, delay: 0.16 }
+  ];
+
+  tones.forEach(({ freq, gain: g, delay }) => {
+    const t = now() + delay;
+    const osc = createOsc('triangle', freq);
+    const gain = createGain(g);
+
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+
+    osc.connect(gain).connect(masterGain);
+    osc.start(t);
+    osc.stop(t + 0.18);
+  });
+};
+
 // OWN_USER_JOINED_VOICE_CHANNEL — rich chord progression
 const sfxOwnUserJoinedVoiceChannel = () => {
   // First chord (C major feel)
@@ -378,6 +399,8 @@ const playSoundEffect = (type: SoundType) => {
       return sfxMessageReceived();
     case SoundType.MESSAGE_SENT:
       return sfxMessageSent();
+    case SoundType.SERVER_DISCONNECTED:
+      return sfxServerDisconnected();
 
     case SoundType.OWN_USER_JOINED_VOICE_CHANNEL:
       return sfxOwnUserJoinedVoiceChannel();
