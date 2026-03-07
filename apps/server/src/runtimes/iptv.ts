@@ -1631,14 +1631,16 @@ class IptvSession {
               message
             );
 
-            try {
-              await this.scheduleRestart();
-            } catch (scheduleRestartError) {
+            // Fire-and-forget: do NOT await scheduleRestart here.
+            // We are inside an enqueueLifecycle slot; awaiting scheduleRestart
+            // would enqueue a new lifecycle slot that can't run until this one
+            // finishes, deadlocking the queue.
+            void this.scheduleRestart().catch((scheduleRestartError) => {
               this.logScheduleRestartError(
                 'scheduleRestart threw after restart failure',
                 scheduleRestartError
               );
-            }
+            });
           }
         });
       }, retryDelay);
