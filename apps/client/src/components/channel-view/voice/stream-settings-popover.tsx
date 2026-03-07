@@ -8,6 +8,7 @@ import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
 import { Settings, Volume2, VolumeX } from 'lucide-react';
 import { memo } from 'react';
+import type { StreamStats } from './hooks/use-stream-stats';
 
 type TStreamSettingsPopoverProps = {
   volume: number;
@@ -16,6 +17,7 @@ type TStreamSettingsPopoverProps = {
   onMuteToggle: () => void;
   buttonClassName?: string;
   buttonSize?: 'sm' | 'default' | 'lg' | 'xl' | 'xs';
+  streamStats?: StreamStats | null;
 };
 
 const StreamSettingsPopover = memo(
@@ -25,7 +27,8 @@ const StreamSettingsPopover = memo(
     onVolumeChange,
     onMuteToggle,
     buttonClassName,
-    buttonSize = 'sm'
+    buttonSize = 'sm',
+    streamStats
   }: TStreamSettingsPopoverProps) => {
     return (
       <Popover>
@@ -69,6 +72,38 @@ const StreamSettingsPopover = memo(
                 {Math.round(volume)}%
               </span>
             </div>
+            {streamStats && (
+              <>
+                <div className="border-t border-border" />
+                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Stream Info
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  <span className="text-muted-foreground">Resolution</span>
+                  <span className="text-right font-medium">
+                    {streamStats.width}×{streamStats.height}
+                  </span>
+                  {streamStats.frameRate !== null && (
+                    <>
+                      <span className="text-muted-foreground">Frame Rate</span>
+                      <span className="text-right font-medium">
+                        {Math.round(streamStats.frameRate)} fps
+                      </span>
+                    </>
+                  )}
+                  {streamStats.bitrate !== null && (
+                    <>
+                      <span className="text-muted-foreground">Bitrate</span>
+                      <span className="text-right font-medium">
+                        {streamStats.bitrate >= 1_000_000
+                          ? `${(streamStats.bitrate / 1_000_000).toFixed(1)} Mbps`
+                          : `${Math.round(streamStats.bitrate / 1000)} kbps`}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </PopoverContent>
       </Popover>

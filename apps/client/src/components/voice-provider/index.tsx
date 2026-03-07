@@ -858,25 +858,24 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_VIDEO)
         );
 
-        if (stream.tracks.audio && !activeExternalStream?.audioStream) {
-          if (!hasPendingExternalAudio) {
-            addPendingStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
-          }
-
-          void acceptStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
+        if (
+          stream.tracks.audio &&
+          !activeExternalStream?.audioStream &&
+          !hasPendingExternalAudio
+        ) {
+          addPendingStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
         }
 
-        if (stream.tracks.video && !activeExternalStream?.videoStream) {
-          if (!hasPendingExternalVideo) {
-            addPendingStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
-          }
-
-          void acceptStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
+        if (
+          stream.tracks.video &&
+          !activeExternalStream?.videoStream &&
+          !hasPendingExternalVideo
+        ) {
+          addPendingStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
         }
       }
     );
   }, [
-    acceptStream,
     addPendingStream,
     currentChannelExternalStreams,
     currentVoiceChannelId,

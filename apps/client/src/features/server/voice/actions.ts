@@ -202,8 +202,6 @@ export const joinVoice = async (
     await leaveVoiceInternal({ playOwnLeaveSound: false });
   }
 
-  setCurrentVoiceChannelId(channelId);
-
   const { micMuted, soundMuted } = ownVoiceStateSelector(state);
   const client = getTRPCClient();
 
@@ -212,6 +210,8 @@ export const joinVoice = async (
       channelId,
       state: { micMuted, soundMuted }
     });
+
+    setCurrentVoiceChannelId(channelId);
 
     return routerRtpCapabilities;
   } catch (error) {

@@ -5,6 +5,7 @@ import {
   PopoverContent,
   PopoverTrigger
 } from '@/components/ui/popover';
+import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { setIptvStatus } from '@/features/server/iptv/actions';
 import { useIptvStatusByChannelId } from '@/features/server/iptv/hooks';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
@@ -62,10 +63,11 @@ const IPTV_STATUS_LABELS: Record<
   streaming: 'Streaming',
   error: 'Error'
 };
-
 const IptvChannelSelector = memo(
   ({ channelId, canManageIptv, className }: TIptvChannelSelectorProps) => {
     const status = useIptvStatusByChannelId(channelId);
+    const currentVoiceChannelId = useCurrentVoiceChannelId();
+    const isInVoiceChannel = currentVoiceChannelId === channelId;
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
     const [channels, setChannels] = useState<TIptvChannel[]>([]);
@@ -82,12 +84,18 @@ const IptvChannelSelector = memo(
     const normalizedSearch = search.trim().toLowerCase();
 
     useEffect(() => {
+      isMountedRef.current = true;
+
       return () => {
         isMountedRef.current = false;
       };
     }, []);
 
     useEffect(() => {
+      if (!isInVoiceChannel) {
+        return;
+      }
+
       let cancelled = false;
       const trpc = getTRPCClient();
 
@@ -116,7 +124,7 @@ const IptvChannelSelector = memo(
       return () => {
         cancelled = true;
       };
-    }, [channelId]);
+    }, [channelId, isInVoiceChannel]);
 
     const filteredChannels = useMemo(
       () =>

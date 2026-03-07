@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { UserAvatar } from '@/components/user-avatar';
+import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { uploadFile } from '@/helpers/upload-file';
 import { useFilePicker } from '@/hooks/use-file-picker';
 import { getTRPCClient } from '@/lib/trpc';
@@ -7,7 +8,6 @@ import type { TJoinedPublicUser } from '@sharkord/shared';
 import { Upload, X } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { toast } from 'sonner';
-import { getTrpcError } from '@/helpers/parse-trpc-errors';
 
 type TAvatarManagerProps = {
   user: TJoinedPublicUser;
@@ -24,7 +24,9 @@ const AvatarManager = memo(({ user }: TAvatarManagerProps) => {
 
       toast.success('Avatar removed successfully!');
     } catch (error) {
-      toast.error(getTrpcError(error, 'Could not remove avatar. Please try again.'));
+      toast.error(
+        getTrpcError(error, 'Could not remove avatar. Please try again.')
+      );
     }
   }, []);
 
@@ -45,7 +47,9 @@ const AvatarManager = memo(({ user }: TAvatarManagerProps) => {
 
       toast.success('Avatar updated successfully!');
     } catch (error) {
-      toast.error(getTrpcError(error, 'Could not update avatar. Please try again.'));
+      toast.error(
+        getTrpcError(error, 'Could not update avatar. Please try again.')
+      );
     }
   }, [openFilePicker]);
 

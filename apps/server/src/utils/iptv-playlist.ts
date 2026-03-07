@@ -274,48 +274,61 @@ const fetchAndParsePlaylist = async (url: string): Promise<TIptvChannel[]> => {
 
   const { content, finalUrl } = await fetchPlaylistContent(url);
   const parsedChannels = parsePlaylist(content);
-  const channelSafetyCache = new Map<string, Promise<void>>();
-  const safeChannels: TIptvChannel[] = [];
+  const validationCache = new Map<string, Promise<boolean>>();
 
-  const getValidationPromise = (inputUrl: string): Promise<void> => {
-    const cachedPromise = channelSafetyCache.get(inputUrl);
+  const isSafeUrl = (inputUrl: string): Promise<boolean> => {
+    const cached = validationCache.get(inputUrl);
 
-    if (cachedPromise) {
-      return cachedPromise;
+    if (cached) {
+      return cached;
     }
 
-    const validationPromise = assertSafeIptvUrl(inputUrl);
-    channelSafetyCache.set(inputUrl, validationPromise);
-    return validationPromise;
+    const promise = assertSafeIptvUrl(inputUrl).then(
+      () => true,
+      () => false
+    );
+
+    validationCache.set(inputUrl, promise);
+    return promise;
   };
 
-  for (const channel of parsedChannels) {
-    const resolvedUrl = resolvePlaylistUrl(channel.url, finalUrl);
+  const resolved = parsedChannels.map((channel) => ({
+    channel,
+    resolvedUrl: resolvePlaylistUrl(channel.url, finalUrl),
+    resolvedLogoUrl: channel.logo
+      ? resolvePlaylistUrl(channel.logo, finalUrl)
+      : undefined
+  }));
 
-    try {
-      await getValidationPromise(resolvedUrl);
+  const urlsToValidate = new Set<string>();
 
-      let safeLogoUrl: string | undefined;
+  for (const entry of resolved) {
+    urlsToValidate.add(entry.resolvedUrl);
 
-      if (channel.logo) {
-        const resolvedLogoUrl = resolvePlaylistUrl(channel.logo, finalUrl);
+    if (entry.resolvedLogoUrl) {
+      urlsToValidate.add(entry.resolvedLogoUrl);
+    }
+  }
 
-        try {
-          await getValidationPromise(resolvedLogoUrl);
-          safeLogoUrl = resolvedLogoUrl;
-        } catch {
-          safeLogoUrl = undefined;
-        }
-      }
+  await Promise.all([...urlsToValidate].map((u) => isSafeUrl(u)));
 
-      safeChannels.push({
-        ...channel,
-        url: resolvedUrl,
-        logo: safeLogoUrl
-      });
-    } catch {
+  const safeChannels: TIptvChannel[] = [];
+
+  for (const { channel, resolvedUrl, resolvedLogoUrl } of resolved) {
+    if (!(await isSafeUrl(resolvedUrl))) {
       continue;
     }
+
+    const safeLogoUrl =
+      resolvedLogoUrl && (await isSafeUrl(resolvedLogoUrl))
+        ? resolvedLogoUrl
+        : undefined;
+
+    safeChannels.push({
+      ...channel,
+      url: resolvedUrl,
+      logo: safeLogoUrl
+    });
   }
 
   if (safeChannels.length === 0) {

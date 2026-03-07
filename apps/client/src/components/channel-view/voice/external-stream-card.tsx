@@ -29,6 +29,7 @@ import {
 import { toast } from 'sonner';
 import { CardControls } from './card-controls';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
+import { useStreamStats, type StreamStats } from './hooks/use-stream-stats';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
 import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
@@ -51,6 +52,7 @@ type TExternalStreamControlsProps = {
   onVolumeChange: (volume: number) => void;
   onMuteToggle: () => void;
   onStopWatching?: () => void;
+  streamStats?: StreamStats | null;
 };
 
 const ExternalStreamControls = memo(
@@ -70,7 +72,8 @@ const ExternalStreamControls = memo(
     isMuted,
     onVolumeChange,
     onMuteToggle,
-    onStopWatching
+    onStopWatching,
+    streamStats
   }: TExternalStreamControlsProps) => {
     const controlButtonClassName =
       'h-10 w-10 rounded-[10px] border border-white/55 bg-slate-950/88 text-white shadow-[0_6px_18px_rgba(0,0,0,0.45)] backdrop-blur-sm hover:bg-slate-900/95 hover:text-white';
@@ -97,6 +100,7 @@ const ExternalStreamControls = memo(
             onMuteToggle={onMuteToggle}
             buttonSize="default"
             buttonClassName={controlButtonClassName}
+            streamStats={streamStats}
           />
         )}
         {hasVideo && (
@@ -170,6 +174,11 @@ type TExternalStreamCardProps = {
 
 const POPOUT_CONTROLS_IDLE_HIDE_MS = 2500;
 
+const preservedPopoutWindows = new Map<string, Window>();
+
+const getPopoutIdentity = (stream: Pick<TExternalStream, 'pluginId' | 'key'>) =>
+  `${stream.pluginId}:${stream.key}`;
+
 const ExternalStreamCard = memo(
   ({
     streamId,
@@ -213,9 +222,20 @@ const ExternalStreamCard = memo(
       getCursor,
       resetZoom
     } = useScreenShareZoom();
+    const popoutIdentity = getPopoutIdentity(stream);
+    const popoutWindowName = useMemo(
+      () => `external-stream-${stream.pluginId}-${stream.key}`,
+      [stream.pluginId, stream.key]
+    );
+
+    const preservedWindow = preservedPopoutWindows.get(popoutIdentity);
+    const hasPreservedWindow = !!preservedWindow && !preservedWindow.closed;
+
     const [isFullscreen, setIsFullscreen] = useState(false);
-    const [isPoppedOut, setIsPoppedOut] = useState(false);
-    const [popoutWindow, setPopoutWindow] = useState<Window | null>(null);
+    const [isPoppedOut, setIsPoppedOut] = useState(hasPreservedWindow);
+    const [popoutWindow, setPopoutWindow] = useState<Window | null>(
+      hasPreservedWindow ? preservedWindow : null
+    );
     const [popoutVideoElement, setPopoutVideoElement] =
       useState<HTMLVideoElement | null>(null);
     const [isPopoutFullscreen, setIsPopoutFullscreen] = useState(false);
@@ -227,10 +247,10 @@ const ExternalStreamCard = memo(
     const [showPopoutWindowControls, setShowPopoutWindowControls] =
       useState(true);
     const hidePopoutWindowControlsTimeoutRef = useRef<number | null>(null);
-    const popoutWindowName = useMemo(
-      () => `external-stream-${streamId}`,
-      [streamId]
-    );
+    const popoutWindowRef = useRef(popoutWindow);
+    popoutWindowRef.current = popoutWindow;
+    const popoutIdentityRef = useRef(popoutIdentity);
+    popoutIdentityRef.current = popoutIdentity;
 
     const handlePinToggle = useCallback(() => {
       if (isPinned) {
@@ -251,6 +271,8 @@ const ExternalStreamCard = memo(
     const handleMuteToggle = useCallback(() => {
       toggleMute(volumeKey);
     }, [volumeKey, toggleMute]);
+    const streamStats = useStreamStats(externalVideoRef, externalVideoStream);
+
     const hasVideo = stream.tracks?.video && hasExternalVideoStream;
     const hasAudio = stream.tracks?.audio && hasExternalAudioStream;
     const hasIptvPlaybackStarted = hasVideo
@@ -338,10 +360,11 @@ const ExternalStreamCard = memo(
     }, [isPoppedOut, popoutWindow, popoutWindowName]);
 
     const handleClosePopout = useCallback(() => {
+      preservedPopoutWindows.delete(popoutIdentity);
       setIsPoppedOut(false);
       setIsPopoutAudioEnabled(false);
       setPopoutWindow(null);
-    }, []);
+    }, [popoutIdentity]);
 
     const handlePopoutBlocked = useCallback(() => {
       toast.error('Pop-out was blocked. Allow pop-ups and try again.');
@@ -380,6 +403,25 @@ const ExternalStreamCard = memo(
     }, [popoutVideoElement]);
 
     useEffect(() => {
+      preservedPopoutWindows.delete(popoutIdentity);
+    }, [popoutIdentity]);
+
+    useEffect(() => {
+      return () => {
+        if (
+          isIptvStream &&
+          popoutWindowRef.current &&
+          !popoutWindowRef.current.closed
+        ) {
+          preservedPopoutWindows.set(
+            popoutIdentityRef.current,
+            popoutWindowRef.current
+          );
+        }
+      };
+    }, [isIptvStream]);
+
+    useEffect(() => {
       const handleFullscreenChange = () => {
         setIsFullscreen(document.fullscreenElement === containerRef.current);
       };
@@ -401,12 +443,15 @@ const ExternalStreamCard = memo(
       }
 
       setHasVideoPlaybackStarted(false);
-      setIsPoppedOut(false);
-      setIsPopoutAudioEnabled(false);
-      clearPopoutControlsHideTimeout();
-      setShowPopoutWindowControls(true);
-      setPopoutWindow(null);
-    }, [clearPopoutControlsHideTimeout, hasVideo]);
+
+      if (!isIptvStream) {
+        setIsPoppedOut(false);
+        setIsPopoutAudioEnabled(false);
+        clearPopoutControlsHideTimeout();
+        setShowPopoutWindowControls(true);
+        setPopoutWindow(null);
+      }
+    }, [clearPopoutControlsHideTimeout, hasVideo, isIptvStream]);
 
     useEffect(() => {
       if (hasAudio) {
@@ -629,6 +674,7 @@ const ExternalStreamCard = memo(
             onVolumeChange={handleVolumeChange}
             onMuteToggle={handleMuteToggle}
             onStopWatching={onStopWatching}
+            streamStats={streamStats}
           />
 
           {showIptvLoadingState && (
@@ -790,6 +836,7 @@ const ExternalStreamCard = memo(
           onClose={handleClosePopout}
           onBlocked={handlePopoutBlocked}
           targetWindow={popoutWindow}
+          preserveOnUnmount={isIptvStream}
         >
           <div
             style={{

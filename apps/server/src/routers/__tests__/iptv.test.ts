@@ -1,3 +1,4 @@
+import { Permission } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { createMockContext } from '../../__tests__/context';
@@ -16,6 +17,23 @@ const createCaller = async (options?: {
   userId?: number;
   currentVoiceChannelId?: number;
 }) => {
+  return await createCallerWithOverrides(options);
+};
+
+const createCallerWithOverrides = async (
+  options?: {
+    userId?: number;
+    currentVoiceChannelId?: number;
+  } & Partial<
+    Pick<
+      Awaited<ReturnType<typeof createMockContext>>,
+      | 'hasPermission'
+      | 'needsPermission'
+      | 'hasChannelPermission'
+      | 'needsChannelPermission'
+    >
+  >
+) => {
   const token = await getMockedToken(options?.userId ?? 1);
   const ctx = await createMockContext({
     customToken: token
@@ -23,6 +41,18 @@ const createCaller = async (options?: {
 
   ctx.authenticated = true;
   ctx.currentVoiceChannelId = options?.currentVoiceChannelId;
+  if (options?.hasPermission) {
+    ctx.hasPermission = options.hasPermission;
+  }
+  if (options?.needsPermission) {
+    ctx.needsPermission = options.needsPermission;
+  }
+  if (options?.hasChannelPermission) {
+    ctx.hasChannelPermission = options.hasChannelPermission;
+  }
+  if (options?.needsChannelPermission) {
+    ctx.needsChannelPermission = options.needsChannelPermission;
+  }
 
   return appRouter.createCaller(ctx);
 };
@@ -172,6 +202,67 @@ describe('iptv router', () => {
     }
   });
 
+  test('play allows channel managers without an explicit manage IPTV override', async () => {
+    const caller = await createCallerWithOverrides({
+      userId: 2,
+      currentVoiceChannelId: VOICE_CHANNEL_ID,
+      hasPermission: async (targetPermission) => {
+        const permissions = Array.isArray(targetPermission)
+          ? targetPermission
+          : [targetPermission];
+
+        return permissions.includes(Permission.MANAGE_CHANNELS);
+      },
+      needsChannelPermission: async () => {
+        throw new Error('needsChannelPermission should not be called');
+      }
+    });
+    const now = Date.now();
+
+    await tdb.insert(iptvSources).values({
+      channelId: VOICE_CHANNEL_ID,
+      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
+      pinnedChannelUrls: [],
+      activeChannelIndex: 0,
+      enabled: true,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const session = upsertIptvSession(VOICE_CHANNEL_ID, {
+      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
+      enabled: true,
+      activeChannelIndex: 0
+    });
+
+    Reflect.set(session, 'switchChannel', async (channelIndex: number) => {
+      Reflect.set(session, 'status', {
+        status: 'streaming',
+        activeChannel: {
+          index: channelIndex,
+          name: 'Sports HD'
+        }
+      });
+    });
+
+    try {
+      const status = await caller.iptv.play({
+        channelId: VOICE_CHANNEL_ID,
+        channelIndex: 1
+      });
+
+      expect(status).toEqual({
+        status: 'streaming',
+        activeChannel: {
+          index: 1,
+          name: 'Sports HD'
+        }
+      });
+    } finally {
+      await removeIptvSession(VOICE_CHANNEL_ID);
+    }
+  });
+
   test('manual stop clears persisted selection before teardown completes', async () => {
     const caller = await createCaller({
       currentVoiceChannelId: VOICE_CHANNEL_ID
@@ -222,6 +313,44 @@ describe('iptv router', () => {
       Reflect.set(session, 'stopFfmpegProcess', originalStopFfmpegProcess);
       await removeIptvSession(VOICE_CHANNEL_ID);
     }
+  });
+
+  test('pinning channels allows channel managers without an explicit manage IPTV override', async () => {
+    const caller = await createCallerWithOverrides({
+      userId: 2,
+      currentVoiceChannelId: VOICE_CHANNEL_ID,
+      hasPermission: async (targetPermission) => {
+        const permissions = Array.isArray(targetPermission)
+          ? targetPermission
+          : [targetPermission];
+
+        return permissions.includes(Permission.MANAGE_CHANNELS);
+      },
+      needsChannelPermission: async () => {
+        throw new Error('needsChannelPermission should not be called');
+      }
+    });
+    const now = Date.now();
+
+    await tdb.insert(iptvSources).values({
+      channelId: VOICE_CHANNEL_ID,
+      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
+      pinnedChannelUrls: [],
+      activeChannelIndex: null,
+      enabled: true,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const updatedSource = await caller.iptv.setPinnedChannel({
+      channelId: VOICE_CHANNEL_ID,
+      channelUrl: 'https://example.com/sports-1.m3u8',
+      pinned: true
+    });
+
+    expect(updatedSource).toEqual({
+      pinnedChannelUrls: ['https://example.com/sports-1.m3u8']
+    });
   });
 
   test('configure disable clears the persisted selected channel', async () => {

@@ -40,8 +40,8 @@ const MAX_TRANSCODE_VIDEO_WIDTH = 1920;
 const MAX_TRANSCODE_VIDEO_HEIGHT = 1080;
 const MAX_TRANSCODE_VIDEO_FRAME_RATE = 50;
 const TRANSCODE_VIDEO_CRF = 18;
-const TRANSCODE_VIDEO_MAX_RATE_KBPS = 20_000;
-const TRANSCODE_VIDEO_BUFFER_SIZE_KBPS = 40_000;
+const DEFAULT_TRANSCODE_VIDEO_MAX_RATE_KBPS = 10_000;
+const DEFAULT_TRANSCODE_VIDEO_BUFFER_SIZE_KBPS = 20_000;
 
 type TIptvSessionConfig = {
   playlistUrl: string;
@@ -74,6 +74,12 @@ type TIptvChannelPreparation = {
   targetVideoCrf?: number;
   targetVideoMaxRateKbps?: number;
   targetVideoBufferSizeKbps?: number;
+};
+
+type TTranscodeVideoProfile = {
+  crf: number;
+  maxRateKbps: number;
+  bufferSizeKbps: number;
 };
 
 const isRecord = (value: unknown): value is TRecordValue => {
@@ -540,15 +546,101 @@ const buildVideoFilter = (
   return filters.join(',');
 };
 
-const resolveTranscodeVideoProfile = (): {
-  crf: number;
-  maxRateKbps: number;
-  bufferSizeKbps: number;
-} => {
+const clampEven = (value: number): number => {
+  const rounded = Math.floor(value);
+
+  if (rounded <= 2) {
+    return 2;
+  }
+
+  return rounded % 2 === 0 ? rounded : rounded - 1;
+};
+
+const resolveTargetVideoDimensions = (
+  probeSummary: TIptvSourceProbeSummary | undefined
+): { width: number; height: number } | undefined => {
+  const sourceWidth = probeSummary?.videoWidth;
+  const sourceHeight = probeSummary?.videoHeight;
+
+  if (
+    sourceWidth === undefined ||
+    sourceHeight === undefined ||
+    sourceWidth <= 0 ||
+    sourceHeight <= 0
+  ) {
+    return undefined;
+  }
+
+  if (!needsResolutionCap(probeSummary)) {
+    return {
+      width: clampEven(sourceWidth),
+      height: clampEven(sourceHeight)
+    };
+  }
+
+  const scaleFactor = Math.min(
+    MAX_TRANSCODE_VIDEO_WIDTH / sourceWidth,
+    MAX_TRANSCODE_VIDEO_HEIGHT / sourceHeight
+  );
+
+  return {
+    width: clampEven(sourceWidth * scaleFactor),
+    height: clampEven(sourceHeight * scaleFactor)
+  };
+};
+
+const resolveTargetVideoFrameRate = (
+  probeSummary: TIptvSourceProbeSummary | undefined
+): number => {
+  const sourceFrameRate = probeSummary?.videoFrameRate;
+
+  if (sourceFrameRate === undefined || sourceFrameRate <= 0) {
+    return 30;
+  }
+
+  return Math.min(sourceFrameRate, MAX_TRANSCODE_VIDEO_FRAME_RATE);
+};
+
+const resolveTranscodeVideoProfile = (
+  probeSummary: TIptvSourceProbeSummary | undefined
+): TTranscodeVideoProfile => {
+  const targetDimensions = resolveTargetVideoDimensions(probeSummary);
+  const targetWidth = targetDimensions?.width ?? 1280;
+  const targetHeight = targetDimensions?.height ?? 720;
+  const sourceFrameRate = resolveTargetVideoFrameRate(probeSummary);
+  const effectiveFrameRate = needsDeinterlace(probeSummary)
+    ? Math.min(sourceFrameRate * 2, MAX_TRANSCODE_VIDEO_FRAME_RATE)
+    : sourceFrameRate;
+  const targetPixelsPerSecond = targetWidth * targetHeight * effectiveFrameRate;
+
+  if (targetPixelsPerSecond <= 1280 * 720 * 30) {
+    return {
+      crf: TRANSCODE_VIDEO_CRF,
+      maxRateKbps: 8_000,
+      bufferSizeKbps: 16_000
+    };
+  }
+
+  if (targetPixelsPerSecond <= 1280 * 720 * 50) {
+    return {
+      crf: TRANSCODE_VIDEO_CRF,
+      maxRateKbps: 10_000,
+      bufferSizeKbps: 20_000
+    };
+  }
+
+  if (targetPixelsPerSecond <= 1920 * 1080 * 30) {
+    return {
+      crf: TRANSCODE_VIDEO_CRF,
+      maxRateKbps: 20_000,
+      bufferSizeKbps: 40_000
+    };
+  }
+
   return {
     crf: TRANSCODE_VIDEO_CRF,
-    maxRateKbps: TRANSCODE_VIDEO_MAX_RATE_KBPS,
-    bufferSizeKbps: TRANSCODE_VIDEO_BUFFER_SIZE_KBPS
+    maxRateKbps: 25_000,
+    bufferSizeKbps: 50_000
   };
 };
 
@@ -840,7 +932,7 @@ class IptvSession {
 
     const probeResult = await this.inspectSourceStreams(channel.url);
     const probeSummary = probeResult.summary;
-    const transcodeVideoProfile = resolveTranscodeVideoProfile();
+    const transcodeVideoProfile = resolveTranscodeVideoProfile(probeSummary);
     const shouldTranscodeVideo =
       this.alwaysTranscodeVideo ||
       this.forceVideoTranscode ||
@@ -1411,14 +1503,16 @@ class IptvSession {
           '4.2',
           '-preset',
           'faster',
+          '-tune',
+          'zerolatency',
           '-bf:v',
           '0',
           '-crf',
           String(options.targetVideoCrf ?? TRANSCODE_VIDEO_CRF),
           '-maxrate',
-          `${options.targetVideoMaxRateKbps ?? TRANSCODE_VIDEO_MAX_RATE_KBPS}k`,
+          `${options.targetVideoMaxRateKbps ?? DEFAULT_TRANSCODE_VIDEO_MAX_RATE_KBPS}k`,
           '-bufsize',
-          `${options.targetVideoBufferSizeKbps ?? TRANSCODE_VIDEO_BUFFER_SIZE_KBPS}k`
+          `${options.targetVideoBufferSizeKbps ?? DEFAULT_TRANSCODE_VIDEO_BUFFER_SIZE_KBPS}k`
         ]
       : ['-c:v', 'copy'];
     const videoFilterArgs =
