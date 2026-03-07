@@ -17,6 +17,7 @@ import {
   getDesktopCapabilities,
   resolveScreenAudioMode,
 } from "./platform-capabilities";
+import { previewRuntimeConfig } from "./preview-runtime-config";
 import {
   consumeScreenShareSelection,
   getSourceById,
@@ -126,7 +127,9 @@ const disposeVoiceFilterFrameEgressPort = (
 };
 
 if (process.platform === "win32") {
-  app.setAppUserModelId("com.sharkord.desktop");
+  app.setAppUserModelId(
+    previewRuntimeConfig?.appUserModelId || "com.sharkord.desktop",
+  );
 }
 
 const resolveAppIconPath = (): string | undefined => {
