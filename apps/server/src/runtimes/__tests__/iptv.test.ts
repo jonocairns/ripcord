@@ -38,13 +38,43 @@ const getRestartFfmpegInternal = (session: IptvSession) => {
   return Reflect.get(session, 'restartFfmpegInternal') as () => Promise<void>;
 };
 
+const getHandleUnexpectedExit = (session: IptvSession) => {
+  return Reflect.get(session, 'handleUnexpectedExit') as (
+    code: number | null,
+    signal: NodeJS.Signals | null,
+    stderrOutput: string
+  ) => Promise<void>;
+};
+
 describe('IptvSession', () => {
+  test('allocates distinct RTP SSRCs per session', () => {
+    const firstSession = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const secondSession = new IptvSession(43, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+
+    const firstVideoSsrc = Reflect.get(firstSession, 'videoSsrc') as number;
+    const firstAudioSsrc = Reflect.get(firstSession, 'audioSsrc') as number;
+    const secondVideoSsrc = Reflect.get(secondSession, 'videoSsrc') as number;
+    const secondAudioSsrc = Reflect.get(secondSession, 'audioSsrc') as number;
+
+    expect(firstVideoSsrc).not.toBe(firstAudioSsrc);
+    expect(secondVideoSsrc).not.toBe(secondAudioSsrc);
+    expect(firstVideoSsrc).not.toBe(secondVideoSsrc);
+    expect(firstAudioSsrc).not.toBe(secondAudioSsrc);
+  });
+
   test('fails URL re-check before starting a stream', async () => {
     const session = new IptvSession(42, {
       playlistUrl: 'https://playlist.example/list.m3u',
       enabled: true
     });
 
+    Reflect.set(session, 'persistActiveChannelIndex', async () => {});
     Reflect.set(session, 'listChannels', async (): Promise<TIptvChannel[]> => {
       return [
         {
@@ -461,6 +491,23 @@ describe('IptvSession', () => {
     });
   });
 
+  test('swallows restart scheduling failures after unexpected ffmpeg exits', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const handleUnexpectedExit = getHandleUnexpectedExit(session);
+    const scheduleError = new Error('Timed out waiting for ffmpeg to stop');
+
+    Reflect.set(session, 'scheduleRestart', async () => {
+      throw scheduleError;
+    });
+
+    await expect(
+      handleUnexpectedExit.call(session, 1, null, 'ffmpeg stderr output')
+    ).resolves.toBeUndefined();
+  });
+
   test('cleans up transports and external stream when ffmpeg shutdown throws', async () => {
     const session = new IptvSession(42, {
       playlistUrl: 'https://playlist.example/list.m3u',
@@ -635,6 +682,15 @@ describe('IptvSession', () => {
     expect(Reflect.get(session, 'videoProducer')).toBeUndefined();
     expect(Reflect.get(session, 'audioProducer')).toBeUndefined();
     expect(Reflect.get(session, 'externalStreamId')).toBeUndefined();
+    expect(session.getStatus()).toEqual({
+      status: 'error',
+      activeChannel: {
+        index: 0,
+        name: 'Sports HD',
+        logo: 'https://cdn.example/sports.png'
+      },
+      error: produceError.message
+    });
   });
 
   test('clears ffmpeg state when restart shutdown times out', async () => {

@@ -24,10 +24,9 @@ import { pubsub } from '../utils/pubsub';
 import { VoiceRuntime } from './voice';
 
 const IPTV_PLUGIN_ID = '__iptv__';
-const VIDEO_SSRC = 1111;
-const AUDIO_SSRC = 2222;
 const VIDEO_PAYLOAD_TYPE = 96;
 const AUDIO_PAYLOAD_TYPE = 97;
+const MAX_SSRC = 0xffff_fffe;
 const MAX_RETRIES = 5;
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 const STABLE_STREAM_MS = 30_000;
@@ -566,7 +565,21 @@ const getStderrTail = (stderrOutput: string): string | undefined => {
   return lines.slice(-4).join(' | ');
 };
 
-const getVideoRtpParameters = (): RtpParameters => {
+let nextIptvSsrc = 1;
+
+const allocateSsrc = (): number => {
+  const ssrc = nextIptvSsrc;
+
+  nextIptvSsrc += 1;
+
+  if (nextIptvSsrc > MAX_SSRC) {
+    nextIptvSsrc = 1;
+  }
+
+  return ssrc;
+};
+
+const getVideoRtpParameters = (ssrc: number): RtpParameters => {
   return {
     codecs: [
       {
@@ -586,12 +599,12 @@ const getVideoRtpParameters = (): RtpParameters => {
         ]
       }
     ],
-    encodings: [{ ssrc: VIDEO_SSRC }],
+    encodings: [{ ssrc }],
     rtcp: { cname: 'iptv-video' }
   };
 };
 
-const getAudioRtpParameters = (): RtpParameters => {
+const getAudioRtpParameters = (ssrc: number): RtpParameters => {
   return {
     codecs: [
       {
@@ -606,7 +619,7 @@ const getAudioRtpParameters = (): RtpParameters => {
         rtcpFeedback: [{ type: 'transport-cc' }]
       }
     ],
-    encodings: [{ ssrc: AUDIO_SSRC }],
+    encodings: [{ ssrc }],
     rtcp: { cname: 'iptv-audio' }
   };
 };
@@ -617,6 +630,8 @@ class IptvSession {
   private enabled: boolean;
   private alwaysTranscodeVideo: boolean;
   private destroyed = false;
+  private readonly videoSsrc: number;
+  private readonly audioSsrc: number;
 
   private status: TIptvStatus = { status: 'idle' };
   private activeChannel?: { index: number; name: string; logo?: string };
@@ -656,6 +671,8 @@ class IptvSession {
     this.enabled = config.enabled;
     this.alwaysTranscodeVideo = config.alwaysTranscodeVideo ?? false;
     this.activeChannelIndex = config.activeChannelIndex ?? undefined;
+    this.videoSsrc = allocateSsrc();
+    this.audioSsrc = allocateSsrc();
   }
 
   public updateConfig = (config: TIptvSessionConfig) => {
@@ -881,6 +898,7 @@ class IptvSession {
         throw new Error('IPTV source is disabled');
       }
 
+      await this.persistActiveChannelIndex(channelIndex);
       this.activeChannelIndex = channelIndex;
       this.retryCount = 0;
       this.forceVideoTranscode = false;
@@ -897,6 +915,7 @@ class IptvSession {
         throw new Error('IPTV source is disabled');
       }
 
+      await this.persistActiveChannelIndex(channelIndex);
       this.activeChannelIndex = channelIndex;
       this.retryCount = 0;
       this.forceVideoTranscode = false;
@@ -948,19 +967,37 @@ class IptvSession {
     });
   };
 
-  private clearPersistedActiveChannel = async () => {
-    this.activeChannel = undefined;
-    this.activeChannelIndex = undefined;
-    this.forceVideoTranscode = false;
-
+  private persistActiveChannelIndex = async (
+    activeChannelIndex: number | null
+  ) => {
     await db
       .update(iptvSources)
       .set({
-        activeChannelIndex: null,
+        activeChannelIndex,
         updatedAt: Date.now()
       })
       .where(eq(iptvSources.channelId, this.channelId))
       .run();
+  };
+
+  private clearPersistedActiveChannel = async () => {
+    await this.persistActiveChannelIndex(null);
+
+    this.activeChannel = undefined;
+    this.activeChannelIndex = undefined;
+    this.forceVideoTranscode = false;
+  };
+
+  public stopStreamAndClearSelection = async (options?: {
+    publishIdle?: boolean;
+  }) => {
+    await this.enqueueLifecycle(async () => {
+      await this.clearPersistedActiveChannel();
+      await this.stopStreamInternal({
+        publishIdle: options?.publishIdle,
+        clearActiveChannel: false
+      });
+    });
   };
 
   private stopStreamInternal = async (options?: {
@@ -1106,11 +1143,11 @@ class IptvSession {
 
       videoProducer = await videoTransport.produce({
         kind: 'video',
-        rtpParameters: getVideoRtpParameters()
+        rtpParameters: getVideoRtpParameters(this.videoSsrc)
       });
       audioProducer = await audioTransport.produce({
         kind: 'audio',
-        rtpParameters: getAudioRtpParameters()
+        rtpParameters: getAudioRtpParameters(this.audioSsrc)
       });
     } catch (error) {
       if (videoProducer && !videoProducer.closed) {
@@ -1128,6 +1165,15 @@ class IptvSession {
       if (audioTransport && !audioTransport.closed) {
         audioTransport.close();
       }
+
+      this.updateStatus({
+        status: 'error',
+        activeChannel: this.activeChannel,
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Failed to create stream resources'
+      });
 
       throw error;
     }
@@ -1416,7 +1462,7 @@ class IptvSession {
       '-f',
       'rtp',
       '-ssrc',
-      String(VIDEO_SSRC),
+      String(this.videoSsrc),
       '-payload_type',
       String(VIDEO_PAYLOAD_TYPE),
       `rtp://127.0.0.1:${options.videoRtpPort}?rtcpport=${options.videoRtcpPort}`,
@@ -1433,7 +1479,7 @@ class IptvSession {
       '-f',
       'rtp',
       '-ssrc',
-      String(AUDIO_SSRC),
+      String(this.audioSsrc),
       '-payload_type',
       String(AUDIO_PAYLOAD_TYPE),
       `rtp://127.0.0.1:${options.audioRtpPort}?rtcpport=${options.audioRtcpPort}`
@@ -1494,11 +1540,34 @@ class IptvSession {
       );
       this.forceVideoTranscode = true;
       this.retryCount = 0;
-      await this.scheduleRestart(0);
+      try {
+        await this.scheduleRestart(0);
+      } catch (error) {
+        this.logScheduleRestartError(
+          'scheduleRestart threw during unexpected exit copy-mode recovery',
+          error
+        );
+      }
       return;
     }
 
-    await this.scheduleRestart();
+    try {
+      await this.scheduleRestart();
+    } catch (error) {
+      this.logScheduleRestartError(
+        'scheduleRestart threw during unexpected exit handling',
+        error
+      );
+    }
+  };
+
+  private logScheduleRestartError = (context: string, error: unknown) => {
+    const message =
+      error instanceof Error
+        ? error.message
+        : 'Unknown IPTV restart scheduling error';
+
+    logger.error('[IPTV %s] %s: %s', this.channelId, context, message);
   };
 
   private scheduleRestart = async (delayMs?: number) => {
@@ -1558,7 +1627,14 @@ class IptvSession {
               message
             );
 
-            void this.scheduleRestart();
+            try {
+              await this.scheduleRestart();
+            } catch (scheduleRestartError) {
+              this.logScheduleRestartError(
+                'scheduleRestart threw after restart failure',
+                scheduleRestartError
+              );
+            }
           }
         });
       }, retryDelay);

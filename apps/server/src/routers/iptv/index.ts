@@ -274,15 +274,6 @@ const playRoute = protectedProcedure
 
     await session.switchChannel(input.channelIndex);
 
-    await db
-      .update(iptvSources)
-      .set({
-        activeChannelIndex: input.channelIndex,
-        updatedAt: Date.now()
-      })
-      .where(eq(iptvSources.channelId, input.channelId))
-      .run();
-
     return session.getStatus();
   });
 
@@ -315,18 +306,7 @@ const stopRoute = protectedProcedure
       return idleStatus;
     }
 
-    await session.stopStream({
-      clearActiveChannel: true
-    });
-
-    await db
-      .update(iptvSources)
-      .set({
-        activeChannelIndex: null,
-        updatedAt: Date.now()
-      })
-      .where(eq(iptvSources.channelId, input.channelId))
-      .run();
+    await session.stopStreamAndClearSelection();
 
     return session.getStatus();
   });

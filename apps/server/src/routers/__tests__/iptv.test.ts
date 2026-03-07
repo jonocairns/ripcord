@@ -125,6 +125,105 @@ describe('iptv router', () => {
     }
   });
 
+  test('play persists the requested channel index when startup fails', async () => {
+    const caller = await createCaller({
+      currentVoiceChannelId: VOICE_CHANNEL_ID
+    });
+    const now = Date.now();
+    const startError = new Error('worker crashed during startup');
+
+    await tdb.insert(iptvSources).values({
+      channelId: VOICE_CHANNEL_ID,
+      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
+      pinnedChannelUrls: [],
+      activeChannelIndex: 0,
+      enabled: true,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const session = upsertIptvSession(VOICE_CHANNEL_ID, {
+      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
+      enabled: true,
+      activeChannelIndex: 0
+    });
+
+    Reflect.set(session, 'startSelectedChannelInternal', async () => {
+      throw startError;
+    });
+
+    try {
+      await expect(
+        caller.iptv.play({
+          channelId: VOICE_CHANNEL_ID,
+          channelIndex: 1
+        })
+      ).rejects.toThrow(startError.message);
+
+      const source = await tdb
+        .select()
+        .from(iptvSources)
+        .where(eq(iptvSources.channelId, VOICE_CHANNEL_ID))
+        .get();
+
+      expect(source?.activeChannelIndex).toBe(1);
+    } finally {
+      await removeIptvSession(VOICE_CHANNEL_ID);
+    }
+  });
+
+  test('manual stop clears persisted selection before teardown completes', async () => {
+    const caller = await createCaller({
+      currentVoiceChannelId: VOICE_CHANNEL_ID
+    });
+    const now = Date.now();
+    const stopError = new Error('Timed out waiting for ffmpeg to stop');
+
+    await tdb.insert(iptvSources).values({
+      channelId: VOICE_CHANNEL_ID,
+      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
+      pinnedChannelUrls: [],
+      activeChannelIndex: 0,
+      enabled: true,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const session = upsertIptvSession(VOICE_CHANNEL_ID, {
+      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
+      enabled: true,
+      activeChannelIndex: 0
+    });
+
+    const originalStopFfmpegProcess = Reflect.get(
+      session,
+      'stopFfmpegProcess'
+    ) as () => Promise<void>;
+
+    Reflect.set(session, 'stopFfmpegProcess', async () => {
+      throw stopError;
+    });
+
+    try {
+      await expect(
+        caller.iptv.stop({
+          channelId: VOICE_CHANNEL_ID
+        })
+      ).rejects.toThrow(stopError.message);
+
+      const source = await tdb
+        .select()
+        .from(iptvSources)
+        .where(eq(iptvSources.channelId, VOICE_CHANNEL_ID))
+        .get();
+
+      expect(source?.activeChannelIndex).toBeNull();
+    } finally {
+      Reflect.set(session, 'stopFfmpegProcess', originalStopFfmpegProcess);
+      await removeIptvSession(VOICE_CHANNEL_ID);
+    }
+  });
+
   test('getConfig requires manage channels permission', async () => {
     const caller = await createCaller({
       userId: 2
