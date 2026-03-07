@@ -45,6 +45,16 @@ type TIptvSessionConfig = {
 };
 
 type TRecordValue = Record<string, unknown>;
+type TIptvSourceProbeSummary = {
+  hasVideo: boolean;
+  hasAudio: boolean;
+  videoCodec?: string;
+  audioCodec?: string;
+};
+type TIptvSourceProbeResult = {
+  summary?: TIptvSourceProbeSummary;
+  failureReason?: string;
+};
 
 const isRecord = (value: unknown): value is TRecordValue => {
   return typeof value === 'object' && value !== null;
@@ -58,6 +68,34 @@ const getNumberProp = (value: unknown, key: string): number | undefined => {
   const prop = value[key];
 
   if (typeof prop !== 'number') {
+    return undefined;
+  }
+
+  return prop;
+};
+
+const getStringProp = (value: unknown, key: string): string | undefined => {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const prop = value[key];
+
+  if (typeof prop !== 'string') {
+    return undefined;
+  }
+
+  return prop;
+};
+
+const getArrayProp = (value: unknown, key: string): unknown[] | undefined => {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const prop = value[key];
+
+  if (!Array.isArray(prop)) {
     return undefined;
   }
 
@@ -97,62 +135,145 @@ const isVideoCopyFailure = (stderrOutput: string): boolean => {
   );
 };
 
-const detectVideoCodec = async (
+const inspectSourceStreams = async (
   streamUrl: string
-): Promise<string | undefined> => {
+): Promise<TIptvSourceProbeResult> => {
   return await new Promise((resolve) => {
     const args = [
       '-v',
       'error',
-      '-select_streams',
-      'v:0',
       '-show_entries',
-      'stream=codec_name',
+      'stream=codec_type,codec_name',
       '-of',
-      'default=noprint_wrappers=1:nokey=1',
+      'json',
       streamUrl
     ];
     const ffprobe = spawn('ffprobe', args, {
-      stdio: ['ignore', 'pipe', 'ignore']
+      stdio: ['ignore', 'pipe', 'pipe']
     });
     let output = '';
+    let stderr = '';
     let resolved = false;
 
-    const finish = (codec: string | undefined) => {
+    const finish = (result: TIptvSourceProbeResult) => {
       if (resolved) {
         return;
       }
 
       resolved = true;
-      resolve(codec);
+      resolve(result);
     };
 
     const timeout = setTimeout(() => {
       ffprobe.kill('SIGKILL');
-      finish(undefined);
+      finish({
+        failureReason: 'ffprobe timed out after 5000ms'
+      });
     }, FFPROBE_TIMEOUT_MS);
 
     ffprobe.stdout?.on('data', (chunk) => {
       output += chunk.toString();
     });
 
-    ffprobe.on('error', () => {
+    ffprobe.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+
+      if (stderr.length > 10_000) {
+        stderr = stderr.slice(-10_000);
+      }
+    });
+
+    ffprobe.on('error', (error: Error) => {
       clearTimeout(timeout);
-      finish(undefined);
+      finish({
+        failureReason: `ffprobe spawn error: ${error.message}`
+      });
     });
 
     ffprobe.on('close', (code: number | null) => {
       clearTimeout(timeout);
+      const stderrTail = getStderrTail(stderr);
 
       if (code !== 0) {
-        finish(undefined);
+        finish({
+          failureReason: stderrTail
+            ? `ffprobe exited with code ${code}; stderr=${stderrTail}`
+            : `ffprobe exited with code ${code}`
+        });
         return;
       }
 
-      const codec = output.trim().toLowerCase();
-      finish(codec || undefined);
+      try {
+        const parsed: unknown = JSON.parse(output);
+        const streams = getArrayProp(parsed, 'streams') ?? [];
+        let hasVideo = false;
+        let hasAudio = false;
+        let videoCodec: string | undefined;
+        let audioCodec: string | undefined;
+
+        for (const stream of streams) {
+          const codecType = getStringProp(stream, 'codec_type');
+          const codecName = getStringProp(stream, 'codec_name');
+
+          if (codecType === 'video') {
+            hasVideo = true;
+
+            if (!videoCodec && codecName) {
+              videoCodec = codecName.toLowerCase();
+            }
+          }
+
+          if (codecType === 'audio') {
+            hasAudio = true;
+
+            if (!audioCodec && codecName) {
+              audioCodec = codecName.toLowerCase();
+            }
+          }
+        }
+
+        finish({
+          summary: {
+            hasVideo,
+            hasAudio,
+            videoCodec,
+            audioCodec
+          }
+        });
+      } catch {
+        finish({
+          failureReason: stderrTail
+            ? `ffprobe returned invalid JSON; stderr=${stderrTail}`
+            : 'ffprobe returned invalid JSON'
+        });
+      }
     });
   });
+};
+
+const formatCodecLabel = (
+  hasStream: boolean,
+  codec: string | undefined,
+  type: 'video' | 'audio'
+): string => {
+  if (!hasStream) {
+    return `none (${type} stream missing)`;
+  }
+
+  return codec ?? `present (${type} codec unknown)`;
+};
+
+const getStderrTail = (stderrOutput: string): string | undefined => {
+  const lines = stderrOutput
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    return undefined;
+  }
+
+  return lines.slice(-4).join(' | ');
 };
 
 const getVideoRtpParameters = (): RtpParameters => {
@@ -227,8 +348,14 @@ class IptvSession {
   private stableTimer?: ReturnType<typeof setTimeout>;
   private healthTimer?: ReturnType<typeof setInterval>;
   private lastTotalBytes = 0;
+  private lastVideoBytes = 0;
+  private lastAudioBytes = 0;
   private lastDataAt = 0;
+  private lastVideoDataAt = 0;
+  private lastAudioDataAt = 0;
   private noViewerSince = 0;
+  private sourceProbeSummary?: TIptvSourceProbeSummary;
+  private audioOnlyWarningLogged = false;
   private lifecycleQueue: Promise<void> = Promise.resolve();
 
   constructor(channelId: number, config: TIptvSessionConfig) {
@@ -257,6 +384,59 @@ class IptvSession {
 
   public listChannels = async (): Promise<TIptvChannel[]> => {
     return await fetchAndParsePlaylist(this.playlistUrl);
+  };
+
+  private resetHealthTracking = () => {
+    const now = Date.now();
+
+    this.lastTotalBytes = 0;
+    this.lastVideoBytes = 0;
+    this.lastAudioBytes = 0;
+    this.lastDataAt = now;
+    this.lastVideoDataAt = now;
+    this.lastAudioDataAt = now;
+    this.audioOnlyWarningLogged = false;
+  };
+
+  private logSourceProbe = (
+    channelName: string,
+    probeResult: TIptvSourceProbeResult
+  ) => {
+    const { summary: probeSummary, failureReason } = probeResult;
+
+    if (!probeSummary) {
+      logger.warn(
+        '[IPTV %s] ffprobe could not inspect source streams for "%s"%s',
+        this.channelId,
+        channelName,
+        failureReason ? `: ${failureReason}` : ''
+      );
+      return;
+    }
+
+    logger.info(
+      '[IPTV %s] source probe for "%s": video=%s, audio=%s',
+      this.channelId,
+      channelName,
+      formatCodecLabel(probeSummary.hasVideo, probeSummary.videoCodec, 'video'),
+      formatCodecLabel(probeSummary.hasAudio, probeSummary.audioCodec, 'audio')
+    );
+
+    if (!probeSummary.hasVideo) {
+      logger.warn(
+        '[IPTV %s] source "%s" does not expose a video stream',
+        this.channelId,
+        channelName
+      );
+    }
+
+    if (!probeSummary.hasAudio) {
+      logger.warn(
+        '[IPTV %s] source "%s" does not expose an audio stream',
+        this.channelId,
+        channelName
+      );
+    }
   };
 
   private enqueueLifecycle = async <T>(
@@ -374,11 +554,13 @@ class IptvSession {
     this.clearTimers();
     this.expectedStop = true;
     this.noViewerSince = 0;
+    this.resetHealthTracking();
 
     await this.stopFfmpegProcess();
 
     this.ffmpegProcess = undefined;
     this.ffmpegStderr = '';
+    this.sourceProbeSummary = undefined;
 
     if (this.videoProducer && !this.videoProducer.closed) {
       this.videoProducer.close();
@@ -542,11 +724,23 @@ class IptvSession {
 
     await assertSafeIptvUrl(channel.url);
 
-    const codec = await detectVideoCodec(channel.url);
+    const probeResult = await inspectSourceStreams(channel.url);
+    const probeSummary = probeResult.summary;
+    this.sourceProbeSummary = probeSummary;
+    this.logSourceProbe(channel.name, probeResult);
     const shouldTranscodeVideo =
-      this.forceVideoTranscode || (!!codec && codec !== 'h264');
+      this.forceVideoTranscode ||
+      (!!probeSummary?.videoCodec && probeSummary.videoCodec !== 'h264');
 
     this.usingVideoCopy = !shouldTranscodeVideo;
+    logger.info(
+      '[IPTV %s] launching ffmpeg for "%s" (retry=%s, videoCopy=%s, videoCodec=%s)',
+      this.channelId,
+      channel.name,
+      this.retryCount,
+      this.usingVideoCopy,
+      probeSummary?.videoCodec ?? 'unknown'
+    );
 
     this.spawnFfmpeg({
       streamUrl: channel.url,
@@ -557,8 +751,7 @@ class IptvSession {
       transcodeVideo: shouldTranscodeVideo
     });
 
-    this.lastTotalBytes = 0;
-    this.lastDataAt = Date.now();
+    this.resetHealthTracking();
     this.noViewerSince = 0;
     this.startHealthCheck();
     this.startStableTimer();
@@ -620,9 +813,13 @@ class IptvSession {
 
     await assertSafeIptvUrl(channel.url);
 
-    const codec = await detectVideoCodec(channel.url);
+    const probeResult = await inspectSourceStreams(channel.url);
+    const probeSummary = probeResult.summary;
+    this.sourceProbeSummary = probeSummary;
+    this.logSourceProbe(channel.name, probeResult);
     const shouldTranscodeVideo =
-      this.forceVideoTranscode || (!!codec && codec !== 'h264');
+      this.forceVideoTranscode ||
+      (!!probeSummary?.videoCodec && probeSummary.videoCodec !== 'h264');
 
     this.usingVideoCopy = !shouldTranscodeVideo;
     this.expectedStop = true;
@@ -635,6 +832,14 @@ class IptvSession {
 
     this.ffmpegProcess = undefined;
     this.ffmpegStderr = '';
+    logger.info(
+      '[IPTV %s] relaunching ffmpeg for "%s" (retry=%s, videoCopy=%s, videoCodec=%s)',
+      this.channelId,
+      channel.name,
+      this.retryCount,
+      this.usingVideoCopy,
+      probeSummary?.videoCodec ?? 'unknown'
+    );
 
     this.spawnFfmpeg({
       streamUrl: channel.url,
@@ -645,8 +850,7 @@ class IptvSession {
       transcodeVideo: shouldTranscodeVideo
     });
 
-    this.lastTotalBytes = 0;
-    this.lastDataAt = Date.now();
+    this.resetHealthTracking();
     this.noViewerSince = 0;
     this.startHealthCheck();
     this.startStableTimer();
@@ -813,11 +1017,14 @@ class IptvSession {
       return;
     }
 
+    const stderrTail = getStderrTail(stderrOutput);
+
     logger.warn(
-      '[IPTV %s] ffmpeg exited unexpectedly (code=%s signal=%s)',
+      '[IPTV %s] ffmpeg exited unexpectedly (code=%s signal=%s%s)',
       this.channelId,
       code,
-      signal
+      signal,
+      stderrTail ? ` stderr=${stderrTail}` : ''
     );
 
     if (this.usingVideoCopy && isVideoCopyFailure(stderrOutput)) {
@@ -863,6 +1070,13 @@ class IptvSession {
         RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
 
       this.retryCount += 1;
+      logger.warn(
+        '[IPTV %s] scheduling restart attempt %s/%s in %sms',
+        this.channelId,
+        this.retryCount,
+        MAX_RETRIES,
+        retryDelay
+      );
       this.updateStatus({
         status: 'starting',
         activeChannel: this.activeChannel
@@ -965,19 +1179,53 @@ class IptvSession {
         this.videoProducer.getStats(),
         this.audioProducer.getStats()
       ]);
-      const totalBytes =
-        extractByteCount(videoStats) + extractByteCount(audioStats);
+      const now = Date.now();
+      const videoBytes = extractByteCount(videoStats);
+      const audioBytes = extractByteCount(audioStats);
+      const totalBytes = videoBytes + audioBytes;
+      const hasNewVideoData = videoBytes > this.lastVideoBytes;
+      const hasNewAudioData = audioBytes > this.lastAudioBytes;
+
+      if (hasNewVideoData) {
+        this.lastVideoBytes = videoBytes;
+        this.lastVideoDataAt = now;
+        this.audioOnlyWarningLogged = false;
+      }
+
+      if (hasNewAudioData) {
+        this.lastAudioBytes = audioBytes;
+        this.lastAudioDataAt = now;
+      }
 
       if (totalBytes > this.lastTotalBytes) {
         this.lastTotalBytes = totalBytes;
-        this.lastDataAt = Date.now();
-        return;
+        this.lastDataAt = now;
       }
 
-      if (Date.now() - this.lastDataAt > HEALTH_TIMEOUT_MS) {
+      if (
+        hasNewAudioData &&
+        !hasNewVideoData &&
+        !this.audioOnlyWarningLogged &&
+        now - this.lastVideoDataAt > HEALTH_TIMEOUT_MS &&
+        this.sourceProbeSummary?.hasVideo !== false
+      ) {
         logger.warn(
-          '[IPTV %s] health check detected no data, restarting stream',
-          this.channelId
+          '[IPTV %s] audio packets are flowing without video packets for "%s" (videoBytes=%s audioBytes=%s, lastVideoMsAgo=%s)',
+          this.channelId,
+          this.activeChannel?.name ?? 'unknown channel',
+          videoBytes,
+          audioBytes,
+          now - this.lastVideoDataAt
+        );
+        this.audioOnlyWarningLogged = true;
+      }
+
+      if (now - this.lastDataAt > HEALTH_TIMEOUT_MS) {
+        logger.warn(
+          '[IPTV %s] health check detected no data, restarting stream (videoBytes=%s audioBytes=%s)',
+          this.channelId,
+          videoBytes,
+          audioBytes
         );
         await this.scheduleRestart();
       }

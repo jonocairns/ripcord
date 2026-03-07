@@ -638,7 +638,7 @@ const ExternalStreamCard = memo(
                     'Connecting IPTV stream'}
                 </p>
                 <p className="text-xs text-white/70">
-                  Waiting for video or audio from the source.
+                  Waiting for source stream...
                 </p>
               </div>
             </div>
