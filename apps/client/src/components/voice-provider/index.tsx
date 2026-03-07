@@ -81,13 +81,13 @@ import {
   type TMicReferenceAudioPipeline
 } from './mic-reference-audio';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
-import type { TVolumeSettingsUpdatedDetail } from './volume-control-context';
+import { VolumeControlProvider } from './volume-control-provider';
+import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
 import {
   getStoredVolume,
   OWN_MIC_VOLUME_KEY,
-  VOLUME_SETTINGS_UPDATED_EVENT,
-  VolumeControlProvider
-} from './volume-control-context';
+  VOLUME_SETTINGS_UPDATED_EVENT
+} from './volume-control-storage';
 
 type AudioVideoRefs = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -932,7 +932,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         });
       }
     }
-  }, [cleanupMicReferenceAudioPipeline]);
+  }, [cleanupMicReferenceAudioPipeline, localAudioProducer]);
 
   const startMicStream = useCallback(async () => {
     try {
@@ -1413,7 +1413,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     setLocalVideoStream,
     localVideoProducer,
     producerTransport,
-    localVideoStream,
     devices.webcamId,
     devices.webcamFramerate,
     devices.webcamResolution,
@@ -2172,11 +2171,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
     void (async () => {
       try {
-        const config = await trpc.iptv.getConfig.query({
+        const config = await trpc.iptv.getViewerConfig.query({
           channelId: currentVoiceChannelId
         });
 
-        if (!config || !config.enabled || cancelled) {
+        if (!config.configured || !config.enabled || cancelled) {
           return;
         }
 

@@ -55,6 +55,10 @@ type TIptvSourceProbeResult = {
   summary?: TIptvSourceProbeSummary;
   failureReason?: string;
 };
+type TIptvChannelPreparation = {
+  shouldTranscodeVideo: boolean;
+  videoCodec?: string;
+};
 
 const isRecord = (value: unknown): value is TRecordValue => {
   return typeof value === 'object' && value !== null;
@@ -126,13 +130,15 @@ const extractByteCount = (stats: unknown[]): number => {
 const isVideoCopyFailure = (stderrOutput: string): boolean => {
   const normalized = stderrOutput.toLowerCase();
 
-  return (
-    normalized.includes('error while opening encoder') ||
-    normalized.includes('could not find tag for codec') ||
-    normalized.includes('could not write header') ||
-    normalized.includes('h264') ||
-    normalized.includes('bitstream')
-  );
+  return [
+    'could not find tag for codec',
+    'could not write header',
+    'tag avc1 incompatible with output codec id',
+    'packet header is not contained in global extradata',
+    'malformed bitstream',
+    'bitstream malformed',
+    'global headers'
+  ].some((pattern) => normalized.includes(pattern));
 };
 
 const inspectSourceStreams = async (
@@ -352,7 +358,6 @@ class IptvSession {
   private lastAudioBytes = 0;
   private lastDataAt = 0;
   private lastVideoDataAt = 0;
-  private lastAudioDataAt = 0;
   private noViewerSince = 0;
   private sourceProbeSummary?: TIptvSourceProbeSummary;
   private audioOnlyWarningLogged = false;
@@ -394,7 +399,6 @@ class IptvSession {
     this.lastAudioBytes = 0;
     this.lastDataAt = now;
     this.lastVideoDataAt = now;
-    this.lastAudioDataAt = now;
     this.audioOnlyWarningLogged = false;
   };
 
@@ -437,6 +441,25 @@ class IptvSession {
         channelName
       );
     }
+  };
+
+  private prepareChannelSource = async (
+    channel: TIptvChannel
+  ): Promise<TIptvChannelPreparation> => {
+    await assertSafeIptvUrl(channel.url);
+
+    const probeResult = await inspectSourceStreams(channel.url);
+    const probeSummary = probeResult.summary;
+
+    this.sourceProbeSummary = probeSummary;
+    this.logSourceProbe(channel.name, probeResult);
+
+    return {
+      shouldTranscodeVideo:
+        this.forceVideoTranscode ||
+        (!!probeSummary?.videoCodec && probeSummary.videoCodec !== 'h264'),
+      videoCodec: probeSummary?.videoCodec
+    };
   };
 
   private enqueueLifecycle = async <T>(
@@ -632,6 +655,8 @@ class IptvSession {
       logo: channel.logo
     };
 
+    const sourcePreparation = await this.prepareChannelSource(channel);
+
     await this.stopStreamInternal({
       publishIdle: false,
       clearActiveChannel: false
@@ -722,24 +747,14 @@ class IptvSession {
     this.audioProducer = audioProducer;
     this.externalStreamId = streamId;
 
-    await assertSafeIptvUrl(channel.url);
-
-    const probeResult = await inspectSourceStreams(channel.url);
-    const probeSummary = probeResult.summary;
-    this.sourceProbeSummary = probeSummary;
-    this.logSourceProbe(channel.name, probeResult);
-    const shouldTranscodeVideo =
-      this.forceVideoTranscode ||
-      (!!probeSummary?.videoCodec && probeSummary.videoCodec !== 'h264');
-
-    this.usingVideoCopy = !shouldTranscodeVideo;
+    this.usingVideoCopy = !sourcePreparation.shouldTranscodeVideo;
     logger.info(
       '[IPTV %s] launching ffmpeg for "%s" (retry=%s, videoCopy=%s, videoCodec=%s)',
       this.channelId,
       channel.name,
       this.retryCount,
       this.usingVideoCopy,
-      probeSummary?.videoCodec ?? 'unknown'
+      sourcePreparation.videoCodec ?? 'unknown'
     );
 
     this.spawnFfmpeg({
@@ -748,7 +763,7 @@ class IptvSession {
       videoRtcpPort: videoRtcpTuple.localPort,
       audioRtpPort: audioTuple.localPort,
       audioRtcpPort: audioRtcpTuple.localPort,
-      transcodeVideo: shouldTranscodeVideo
+      transcodeVideo: sourcePreparation.shouldTranscodeVideo
     });
 
     this.resetHealthTracking();
@@ -797,11 +812,6 @@ class IptvSession {
       throw new Error('Voice runtime not found');
     }
 
-    runtime.updateExternalStream(this.externalStreamId, {
-      title: channel.name,
-      avatarUrl: channel.logo
-    });
-
     const videoTuple = this.videoTransport.tuple;
     const videoRtcpTuple = this.videoTransport.rtcpTuple;
     const audioTuple = this.audioTransport.tuple;
@@ -811,17 +821,14 @@ class IptvSession {
       throw new Error('Failed to initialize plain transport tuples');
     }
 
-    await assertSafeIptvUrl(channel.url);
+    const sourcePreparation = await this.prepareChannelSource(channel);
 
-    const probeResult = await inspectSourceStreams(channel.url);
-    const probeSummary = probeResult.summary;
-    this.sourceProbeSummary = probeSummary;
-    this.logSourceProbe(channel.name, probeResult);
-    const shouldTranscodeVideo =
-      this.forceVideoTranscode ||
-      (!!probeSummary?.videoCodec && probeSummary.videoCodec !== 'h264');
+    runtime.updateExternalStream(this.externalStreamId, {
+      title: channel.name,
+      avatarUrl: channel.logo
+    });
 
-    this.usingVideoCopy = !shouldTranscodeVideo;
+    this.usingVideoCopy = !sourcePreparation.shouldTranscodeVideo;
     this.expectedStop = true;
 
     try {
@@ -838,7 +845,7 @@ class IptvSession {
       channel.name,
       this.retryCount,
       this.usingVideoCopy,
-      probeSummary?.videoCodec ?? 'unknown'
+      sourcePreparation.videoCodec ?? 'unknown'
     );
 
     this.spawnFfmpeg({
@@ -847,7 +854,7 @@ class IptvSession {
       videoRtcpPort: videoRtcpTuple.localPort,
       audioRtpPort: audioTuple.localPort,
       audioRtcpPort: audioRtcpTuple.localPort,
-      transcodeVideo: shouldTranscodeVideo
+      transcodeVideo: sourcePreparation.shouldTranscodeVideo
     });
 
     this.resetHealthTracking();
@@ -1194,7 +1201,6 @@ class IptvSession {
 
       if (hasNewAudioData) {
         this.lastAudioBytes = audioBytes;
-        this.lastAudioDataAt = now;
       }
 
       if (totalBytes > this.lastTotalBytes) {

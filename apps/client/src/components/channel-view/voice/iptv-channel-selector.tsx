@@ -40,11 +40,6 @@ type TChannelEntry = {
   channel: TIptvChannel;
 };
 
-type TChannelListCacheEntry = {
-  channels: TIptvChannel[];
-  expiresAt: number;
-};
-
 type TChannelListRow =
   | {
       type: 'header';
@@ -66,41 +61,6 @@ const IPTV_STATUS_LABELS: Record<
   starting: 'Starting',
   streaming: 'Streaming',
   error: 'Error'
-};
-const CHANNEL_LIST_CACHE_TTL_MS = 5 * 60_000;
-const channelListCache = new Map<string, TChannelListCacheEntry>();
-
-const getChannelListCacheKey = (channelId: number, playlistUrl: string) =>
-  `${channelId}:${playlistUrl}`;
-
-const getCachedChannelList = (
-  channelId: number,
-  playlistUrl: string
-): TIptvChannel[] | undefined => {
-  const cacheKey = getChannelListCacheKey(channelId, playlistUrl);
-  const cached = channelListCache.get(cacheKey);
-
-  if (!cached) {
-    return undefined;
-  }
-
-  if (cached.expiresAt <= Date.now()) {
-    channelListCache.delete(cacheKey);
-    return undefined;
-  }
-
-  return cached.channels;
-};
-
-const setCachedChannelList = (
-  channelId: number,
-  playlistUrl: string,
-  channels: TIptvChannel[]
-) => {
-  channelListCache.set(getChannelListCacheKey(channelId, playlistUrl), {
-    channels,
-    expiresAt: Date.now() + CHANNEL_LIST_CACHE_TTL_MS
-  });
 };
 
 const IptvChannelSelector = memo(
@@ -126,7 +86,7 @@ const IptvChannelSelector = memo(
 
       void (async () => {
         try {
-          const config = await trpc.iptv.getConfig.query({
+          const config = await trpc.iptv.getViewerConfig.query({
             channelId
           });
 
@@ -134,9 +94,9 @@ const IptvChannelSelector = memo(
             return;
           }
 
-          setConfigured(!!config);
-          setEnabled(config?.enabled ?? false);
-          setPinnedChannelUrls(config?.pinnedChannelUrls ?? []);
+          setConfigured(config.configured);
+          setEnabled(config.enabled);
+          setPinnedChannelUrls(config.pinnedChannelUrls);
         } catch {
           if (!cancelled) {
             setConfigured(false);
@@ -255,11 +215,11 @@ const IptvChannelSelector = memo(
       const trpc = getTRPCClient();
 
       try {
-        const config = await trpc.iptv.getConfig.query({
+        const config = await trpc.iptv.getViewerConfig.query({
           channelId
         });
 
-        if (!config) {
+        if (!config.configured) {
           setConfigured(false);
           setEnabled(false);
           setPinnedChannelUrls([]);
@@ -269,7 +229,7 @@ const IptvChannelSelector = memo(
 
         setConfigured(true);
         setEnabled(config.enabled);
-        setPinnedChannelUrls(config.pinnedChannelUrls ?? []);
+        setPinnedChannelUrls(config.pinnedChannelUrls);
 
         const currentStatusPromise = trpc.iptv.getStatus.query({
           channelId
@@ -282,21 +242,11 @@ const IptvChannelSelector = memo(
           return;
         }
 
-        const cachedChannels = getCachedChannelList(
-          channelId,
-          config.playlistUrl
-        );
+        const list = await trpc.iptv.listChannels.query({
+          channelId
+        });
 
-        if (cachedChannels) {
-          setChannels(cachedChannels);
-        } else {
-          const list = await trpc.iptv.listChannels.query({
-            channelId
-          });
-
-          setChannels(list);
-          setCachedChannelList(channelId, config.playlistUrl, list);
-        }
+        setChannels(list);
 
         const currentStatus = await currentStatusPromise;
         setIptvStatus(channelId, currentStatus);
@@ -316,9 +266,7 @@ const IptvChannelSelector = memo(
           return;
         }
 
-        if (nextOpen) {
-          void refresh();
-        }
+        void refresh();
       },
       [refresh]
     );

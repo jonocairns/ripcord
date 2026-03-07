@@ -139,7 +139,9 @@ const removeRoute = protectedProcedure
 
 const getConfigRoute = protectedProcedure
   .input(channelInput)
-  .query(async ({ input }) => {
+  .query(async ({ input, ctx }) => {
+    await ctx.needsPermission(Permission.MANAGE_CHANNELS);
+
     return (
       (await db
         .select()
@@ -147,6 +149,38 @@ const getConfigRoute = protectedProcedure
         .where(eq(iptvSources.channelId, input.channelId))
         .get()) ?? null
     );
+  });
+
+const getViewerConfigRoute = protectedProcedure
+  .input(channelInput)
+  .query(async ({ input, ctx }) => {
+    invariant(ctx.currentVoiceChannelId === input.channelId, {
+      code: 'FORBIDDEN',
+      message: 'You must be in this voice channel'
+    });
+
+    const source = await db
+      .select({
+        enabled: iptvSources.enabled,
+        pinnedChannelUrls: iptvSources.pinnedChannelUrls
+      })
+      .from(iptvSources)
+      .where(eq(iptvSources.channelId, input.channelId))
+      .get();
+
+    if (!source) {
+      return {
+        configured: false,
+        enabled: false,
+        pinnedChannelUrls: []
+      };
+    }
+
+    return {
+      configured: true,
+      enabled: source.enabled,
+      pinnedChannelUrls: source.pinnedChannelUrls
+    };
   });
 
 const listChannelsRoute = protectedProcedure
@@ -257,13 +291,31 @@ const stopRoute = protectedProcedure
     const session = getIptvSession(input.channelId);
 
     if (!session) {
+      await db
+        .update(iptvSources)
+        .set({
+          activeChannelIndex: null,
+          updatedAt: Date.now()
+        })
+        .where(eq(iptvSources.channelId, input.channelId))
+        .run();
+
       const idleStatus: TIptvStatus = { status: 'idle' };
       return idleStatus;
     }
 
     await session.stopStream({
-      clearActiveChannel: false
+      clearActiveChannel: true
     });
+
+    await db
+      .update(iptvSources)
+      .set({
+        activeChannelIndex: null,
+        updatedAt: Date.now()
+      })
+      .where(eq(iptvSources.channelId, input.channelId))
+      .run();
 
     return session.getStatus();
   });
@@ -344,6 +396,7 @@ export const iptvRouter = t.router({
   configure: configureRoute,
   remove: removeRoute,
   getConfig: getConfigRoute,
+  getViewerConfig: getViewerConfigRoute,
   listChannels: listChannelsRoute,
   play: playRoute,
   stop: stopRoute,
