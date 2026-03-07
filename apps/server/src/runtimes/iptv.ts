@@ -448,7 +448,7 @@ class IptvSession {
   ): Promise<TIptvChannelPreparation> => {
     await assertSafeIptvUrl(channel.url);
 
-    const probeResult = await inspectSourceStreams(channel.url);
+    const probeResult = await this.inspectSourceStreams(channel.url);
     const probeSummary = probeResult.summary;
 
     this.sourceProbeSummary = probeSummary;
@@ -461,6 +461,12 @@ class IptvSession {
         (!!probeSummary?.videoCodec && probeSummary.videoCodec !== 'h264'),
       videoCodec: probeSummary?.videoCodec
     };
+  };
+
+  private inspectSourceStreams = async (
+    streamUrl: string
+  ): Promise<TIptvSourceProbeResult> => {
+    return await inspectSourceStreams(streamUrl);
   };
 
   private enqueueLifecycle = async <T>(
