@@ -157,4 +157,16 @@ describe('iptv router', () => {
       })
     ).rejects.toThrow('You must be in this voice channel');
   });
+
+  test('getStatus requires the caller to be in the voice channel', async () => {
+    const caller = await createCaller({
+      userId: 2
+    });
+
+    await expect(
+      caller.iptv.getStatus({
+        channelId: VOICE_CHANNEL_ID
+      })
+    ).rejects.toThrow('You must be in this voice channel');
+  });
 });

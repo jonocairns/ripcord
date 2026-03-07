@@ -18,6 +18,7 @@ import {
 import { invariant } from '../../utils/invariant';
 import {
   assertSafeIptvUrl,
+  clearIptvPlaylistCache,
   fetchAndParsePlaylist
 } from '../../utils/iptv-playlist';
 import { protectedProcedure, t } from '../../utils/trpc';
@@ -81,6 +82,11 @@ const configureRoute = protectedProcedure
       .from(iptvSources)
       .where(eq(iptvSources.channelId, input.channelId))
       .get();
+
+    if (existing && existing.playlistUrl !== input.playlistUrl) {
+      clearIptvPlaylistCache();
+    }
+
     const source = existing
       ? await db
           .update(iptvSources)
@@ -384,13 +390,28 @@ const setPinnedChannelRoute = protectedProcedure
 
 const getStatusRoute = protectedProcedure
   .input(channelInput)
-  .query(async ({ input }) => {
+  .query(async ({ input, ctx }) => {
+    invariant(ctx.currentVoiceChannelId === input.channelId, {
+      code: 'FORBIDDEN',
+      message: 'You must be in this voice channel'
+    });
+
     return getIptvStatus(input.channelId);
   });
 
-const onStatusChangeRoute = protectedProcedure.subscription(async ({ ctx }) => {
-  return ctx.pubsub.subscribe(ServerEvents.IPTV_STATUS_CHANGE);
-});
+const onStatusChangeRoute = protectedProcedure
+  .input(channelInput)
+  .subscription(async ({ input, ctx }) => {
+    invariant(ctx.currentVoiceChannelId === input.channelId, {
+      code: 'FORBIDDEN',
+      message: 'You must be in this voice channel'
+    });
+
+    return ctx.pubsub.subscribeForChannel(
+      input.channelId,
+      ServerEvents.IPTV_STATUS_CHANGE
+    );
+  });
 
 export const iptvRouter = t.router({
   configure: configureRoute,

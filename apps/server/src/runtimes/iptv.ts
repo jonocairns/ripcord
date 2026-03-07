@@ -586,40 +586,42 @@ class IptvSession {
     this.noViewerSince = 0;
     this.resetHealthTracking();
 
-    await this.stopFfmpegProcess();
+    try {
+      await this.stopFfmpegProcess();
+    } finally {
+      this.ffmpegProcess = undefined;
+      this.ffmpegStderr = '';
+      this.sourceProbeSummary = undefined;
 
-    this.ffmpegProcess = undefined;
-    this.ffmpegStderr = '';
-    this.sourceProbeSummary = undefined;
+      if (this.videoProducer && !this.videoProducer.closed) {
+        this.videoProducer.close();
+      }
 
-    if (this.videoProducer && !this.videoProducer.closed) {
-      this.videoProducer.close();
+      if (this.audioProducer && !this.audioProducer.closed) {
+        this.audioProducer.close();
+      }
+
+      if (this.videoTransport && !this.videoTransport.closed) {
+        this.videoTransport.close();
+      }
+
+      if (this.audioTransport && !this.audioTransport.closed) {
+        this.audioTransport.close();
+      }
+
+      this.videoProducer = undefined;
+      this.audioProducer = undefined;
+      this.videoTransport = undefined;
+      this.audioTransport = undefined;
+
+      const runtime = VoiceRuntime.findById(this.channelId);
+
+      if (runtime && this.externalStreamId !== undefined) {
+        runtime.removeExternalStream(this.externalStreamId);
+      }
+
+      this.externalStreamId = undefined;
     }
-
-    if (this.audioProducer && !this.audioProducer.closed) {
-      this.audioProducer.close();
-    }
-
-    if (this.videoTransport && !this.videoTransport.closed) {
-      this.videoTransport.close();
-    }
-
-    if (this.audioTransport && !this.audioTransport.closed) {
-      this.audioTransport.close();
-    }
-
-    this.videoProducer = undefined;
-    this.audioProducer = undefined;
-    this.videoTransport = undefined;
-    this.audioTransport = undefined;
-
-    const runtime = VoiceRuntime.findById(this.channelId);
-
-    if (runtime && this.externalStreamId !== undefined) {
-      runtime.removeExternalStream(this.externalStreamId);
-    }
-
-    this.externalStreamId = undefined;
 
     if (options?.clearActiveChannel !== false) {
       this.activeChannel = undefined;
@@ -1269,7 +1271,7 @@ class IptvSession {
   private updateStatus = (nextStatus: TIptvStatus) => {
     this.status = nextStatus;
 
-    pubsub.publish(ServerEvents.IPTV_STATUS_CHANGE, {
+    pubsub.publishForChannel(this.channelId, ServerEvents.IPTV_STATUS_CHANGE, {
       channelId: this.channelId,
       ...nextStatus
     });
