@@ -642,6 +642,8 @@ class IptvSession {
   private noViewerSince = 0;
   private sourceProbeSummary?: TIptvSourceProbeSummary;
   private audioOnlyWarningLogged = false;
+  private firstVideoPacketLogged = false;
+  private firstAudioPacketLogged = false;
   private lifecycleQueue: Promise<void> = Promise.resolve();
 
   constructor(channelId: number, config: TIptvSessionConfig) {
@@ -683,6 +685,8 @@ class IptvSession {
     this.lastDataAt = now;
     this.lastVideoDataAt = now;
     this.audioOnlyWarningLogged = false;
+    this.firstVideoPacketLogged = false;
+    this.firstAudioPacketLogged = false;
   };
 
   private logSourceProbe = (
@@ -1162,11 +1166,6 @@ class IptvSession {
     this.noViewerSince = 0;
     this.startHealthCheck();
     this.startStableTimer();
-
-    this.updateStatus({
-      status: 'streaming',
-      activeChannel: this.activeChannel
-    });
   };
 
   private restartFfmpegInternal = async (): Promise<void> => {
@@ -1258,11 +1257,6 @@ class IptvSession {
     this.noViewerSince = 0;
     this.startHealthCheck();
     this.startStableTimer();
-
-    this.updateStatus({
-      status: 'streaming',
-      activeChannel: this.activeChannel
-    });
   };
 
   private waitForProcessExit = async (
@@ -1550,7 +1544,7 @@ class IptvSession {
 
   private runHealthCheck = async () => {
     if (
-      this.status.status !== 'streaming' ||
+      (this.status.status !== 'starting' && this.status.status !== 'streaming') ||
       !this.videoProducer ||
       !this.audioProducer
     ) {
@@ -1608,18 +1602,62 @@ class IptvSession {
       const totalBytes = videoBytes + audioBytes;
       const hasNewVideoData = videoBytes > this.lastVideoBytes;
       const hasNewAudioData = audioBytes > this.lastAudioBytes;
+      const startupLatencyMs = now - this.lastDataAt;
 
       if (hasNewVideoData) {
+        if (!this.firstVideoPacketLogged) {
+          logger.info(
+            '[IPTV %s] first video packets received for "%s" after %sms (videoBytes=%s)',
+            this.channelId,
+            this.activeChannel?.name ?? 'unknown channel',
+            startupLatencyMs,
+            videoBytes
+          );
+          this.firstVideoPacketLogged = true;
+        }
+
         this.lastVideoBytes = videoBytes;
         this.lastVideoDataAt = now;
         this.audioOnlyWarningLogged = false;
       }
 
       if (hasNewAudioData) {
+        if (!this.firstAudioPacketLogged) {
+          logger.info(
+            '[IPTV %s] first audio packets received for "%s" after %sms (audioBytes=%s)',
+            this.channelId,
+            this.activeChannel?.name ?? 'unknown channel',
+            startupLatencyMs,
+            audioBytes
+          );
+          this.firstAudioPacketLogged = true;
+        }
+
         this.lastAudioBytes = audioBytes;
       }
 
       if (totalBytes > this.lastTotalBytes) {
+        if (this.status.status === 'starting') {
+          const canPromoteToStreaming =
+            hasNewVideoData ||
+            (this.sourceProbeSummary?.hasVideo === false && hasNewAudioData);
+
+          if (canPromoteToStreaming) {
+            logger.info(
+              '[IPTV %s] first media received for "%s" after %sms; stream is now live (videoBytes=%s audioBytes=%s)',
+              this.channelId,
+              this.activeChannel?.name ?? 'unknown channel',
+              startupLatencyMs,
+              videoBytes,
+              audioBytes
+            );
+            this.updateStatus({
+              status: 'streaming',
+              activeChannel: this.activeChannel
+            });
+          }
+        }
+
         this.lastTotalBytes = totalBytes;
         this.lastDataAt = now;
       }

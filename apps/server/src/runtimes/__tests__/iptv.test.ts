@@ -23,6 +23,10 @@ const getStopStreamInternal = (session: IptvSession) => {
   }) => Promise<void>;
 };
 
+const getRunHealthCheck = (session: IptvSession) => {
+  return Reflect.get(session, 'runHealthCheck') as () => Promise<void>;
+};
+
 describe('IptvSession', () => {
   test('fails URL re-check before starting a stream', async () => {
     const session = new IptvSession(42, {
@@ -386,6 +390,63 @@ describe('IptvSession', () => {
       videoFrameRate: 50,
       videoBitrate: 8_000_000,
       audioBitrate: 192_000
+    });
+  });
+
+  test('promotes starting IPTV streams to streaming after first video packets arrive', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const runHealthCheck = getRunHealthCheck(session);
+
+    Reflect.set(session, 'status', {
+      status: 'starting',
+      activeChannel: {
+        index: 0,
+        name: 'Sports HD'
+      }
+    });
+    Reflect.set(session, 'activeChannel', {
+      index: 0,
+      name: 'Sports HD'
+    });
+    Reflect.set(session, 'sourceProbeSummary', {
+      hasVideo: true,
+      hasAudio: true,
+      videoCodec: 'h264',
+      audioCodec: 'aac'
+    });
+    Reflect.set(session, 'lastDataAt', Date.now() - 500);
+    Reflect.set(session, 'lastVideoDataAt', Date.now() - 500);
+    Reflect.set(session, 'videoProducer', {
+      getStats: async () => [{ byteCount: 4096 }]
+    });
+    Reflect.set(session, 'audioProducer', {
+      getStats: async () => [{ byteCount: 512 }]
+    });
+
+    const originalFindById = VoiceRuntime.findById;
+    VoiceRuntime.findById = ((_) => {
+      return {
+        getState: () => ({
+          users: [{ id: 1 }]
+        })
+      } as unknown as VoiceRuntime;
+    }) as typeof VoiceRuntime.findById;
+
+    try {
+      await runHealthCheck.call(session);
+    } finally {
+      VoiceRuntime.findById = originalFindById;
+    }
+
+    expect(session.getStatus()).toEqual({
+      status: 'streaming',
+      activeChannel: {
+        index: 0,
+        name: 'Sports HD'
+      }
     });
   });
 
