@@ -50,6 +50,26 @@ const getHandleUnexpectedExit = (session: IptvSession) => {
   ) => Promise<void>;
 };
 
+const getBuildFfmpegArgs = (session: IptvSession) => {
+  return Reflect.get(session, 'buildFfmpegArgs') as (options: {
+    streamUrl: string;
+    videoRtpPort: number;
+    videoRtcpPort: number;
+    audioRtpPort: number;
+    audioRtcpPort: number;
+    transcodeVideo: boolean;
+    useNvidiaTranscode?: boolean;
+    sourceVideoCodec?: string;
+    videoFilter?: string;
+    targetVideoCrf?: number;
+    targetVideoMaxRateKbps?: number;
+    targetVideoBufferSizeKbps?: number;
+    targetVideoKeyframeIntervalFrames?: number;
+    targetVideoWidth?: number;
+    targetVideoHeight?: number;
+  }) => string[];
+};
+
 describe('IptvSession', () => {
   test('allocates distinct RTP SSRCs per session', () => {
     const firstSession = new IptvSession(42, {
@@ -414,6 +434,45 @@ describe('IptvSession', () => {
         process.env.SHARKORD_IPTV_USE_NVIDIA = originalUseNvidia;
       }
     }
+  });
+
+  test('adds an NVENC cq floor alongside VBR bitrate limits', () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const buildFfmpegArgs = getBuildFfmpegArgs(session);
+
+    const args = buildFfmpegArgs.call(session, {
+      streamUrl: 'https://8.8.8.8/sports-uhd.m3u8',
+      videoRtpPort: 5004,
+      videoRtcpPort: 5005,
+      audioRtpPort: 5006,
+      audioRtcpPort: 5007,
+      transcodeVideo: true,
+      useNvidiaTranscode: true,
+      sourceVideoCodec: 'hevc',
+      targetVideoCrf: 18,
+      targetVideoMaxRateKbps: 18_000,
+      targetVideoBufferSizeKbps: 27_000,
+      targetVideoKeyframeIntervalFrames: 50,
+      targetVideoWidth: 1920,
+      targetVideoHeight: 1080
+    });
+
+    const rcIndex = args.indexOf('-rc:v');
+
+    expect(rcIndex).toBeGreaterThan(-1);
+    expect(args.slice(rcIndex, rcIndex + 8)).toEqual([
+      '-rc:v',
+      'vbr',
+      '-cq',
+      '18',
+      '-b:v',
+      '18000k',
+      '-maxrate',
+      '18000k'
+    ]);
   });
 
   test('transcodes high-resolution high-frame-rate h264 sources to the configured caps', async () => {

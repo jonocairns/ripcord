@@ -96,6 +96,24 @@ type TTranscodeVideoProfile = {
   keyframeIntervalFrames: number;
 };
 
+type TFfmpegSpawnOptions = {
+  streamUrl: string;
+  videoRtpPort: number;
+  videoRtcpPort: number;
+  audioRtpPort: number;
+  audioRtcpPort: number;
+  transcodeVideo: boolean;
+  useNvidiaTranscode?: boolean;
+  sourceVideoCodec?: string;
+  videoFilter?: string;
+  targetVideoCrf?: number;
+  targetVideoMaxRateKbps?: number;
+  targetVideoBufferSizeKbps?: number;
+  targetVideoKeyframeIntervalFrames?: number;
+  targetVideoWidth?: number;
+  targetVideoHeight?: number;
+};
+
 type TTranscodeVideoLadderProfile = {
   maxRateKbps: number;
   bufferSizeKbps: number;
@@ -260,13 +278,11 @@ const isNvidiaTranscodeFailure = (stderrOutput: string): boolean => {
     'cannot load libcuda',
     'no device available',
     'no nvenc capable devices found',
-    'operation not permitted',
     'device setup failed',
     'no such filter',
     'scale_cuda',
     'cuvid',
-    'cannot init cuda',
-    'error while opening decoder for input stream'
+    'cannot init cuda'
   ].some((pattern) => normalized.includes(pattern));
 };
 
@@ -996,6 +1012,14 @@ class IptvSession {
     }
 
     const mode = sourcePreparation.shouldTranscodeVideo ? 'transcode' : 'copy';
+    const outputVideoFilter =
+      sourcePreparation.useNvidiaTranscode &&
+      sourcePreparation.targetVideoWidth &&
+      sourcePreparation.targetVideoHeight
+        ? `filter=scale_cuda=${sourcePreparation.targetVideoWidth}:${sourcePreparation.targetVideoHeight}:format=nv12`
+        : sourcePreparation.videoFilter
+          ? `filter=${sourcePreparation.videoFilter}`
+          : 'filter=none';
     const outputVideo = sourcePreparation.shouldTranscodeVideo
       ? `${sourcePreparation.useNvidiaTranscode ? 'h264_nvenc' : 'h264'}${formatProbeDetails(
           [
@@ -1005,9 +1029,7 @@ class IptvSession {
             sourcePreparation.targetVideoCrf !== undefined
               ? `crf=${sourcePreparation.targetVideoCrf}`
               : undefined,
-            sourcePreparation.videoFilter
-              ? `filter=${sourcePreparation.videoFilter}`
-              : 'filter=none',
+            outputVideoFilter,
             sourcePreparation.targetVideoMaxRateKbps
               ? `maxrate=${sourcePreparation.targetVideoMaxRateKbps}k`
               : undefined,
@@ -1619,23 +1641,7 @@ class IptvSession {
     }
   };
 
-  private spawnFfmpeg = (options: {
-    streamUrl: string;
-    videoRtpPort: number;
-    videoRtcpPort: number;
-    audioRtpPort: number;
-    audioRtcpPort: number;
-    transcodeVideo: boolean;
-    useNvidiaTranscode?: boolean;
-    sourceVideoCodec?: string;
-    videoFilter?: string;
-    targetVideoCrf?: number;
-    targetVideoMaxRateKbps?: number;
-    targetVideoBufferSizeKbps?: number;
-    targetVideoKeyframeIntervalFrames?: number;
-    targetVideoWidth?: number;
-    targetVideoHeight?: number;
-  }) => {
+  private buildFfmpegArgs = (options: TFfmpegSpawnOptions): string[] => {
     const nvidiaDecoderCodec = getNvidiaDecoderCodec(options.sourceVideoCodec);
     const videoInputArgs =
       options.useNvidiaTranscode && nvidiaDecoderCodec
@@ -1664,6 +1670,8 @@ class IptvSession {
                 'll',
                 '-rc:v',
                 'vbr',
+                '-cq',
+                String(options.targetVideoCrf ?? TRANSCODE_VIDEO_CRF),
                 '-b:v',
                 `${options.targetVideoMaxRateKbps ?? DEFAULT_TRANSCODE_VIDEO_MAX_RATE_KBPS}k`,
                 '-maxrate',
@@ -1778,6 +1786,12 @@ class IptvSession {
       String(AUDIO_PAYLOAD_TYPE),
       `rtp://127.0.0.1:${options.audioRtpPort}?rtcpport=${options.audioRtcpPort}`
     ];
+
+    return args;
+  };
+
+  private spawnFfmpeg = (options: TFfmpegSpawnOptions) => {
+    const args = this.buildFfmpegArgs(options);
     const process = spawn('ffmpeg', args, {
       stdio: ['ignore', 'ignore', 'pipe']
     });
