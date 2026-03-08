@@ -1033,5 +1033,13 @@ describe('IptvSession', () => {
     expect(args[args.indexOf('-thread_queue_size') + 1]).toBe('1024');
     expect(args).toContain('-threads');
     expect(args[args.indexOf('-threads') + 1]).toBe('0');
+
+    const iIndex = args.indexOf('-i');
+    expect(args.indexOf('-fflags')).toBeLessThan(iIndex);
+    expect(args.indexOf('-flags')).toBeLessThan(iIndex);
+    expect(args.indexOf('-analyzeduration')).toBeLessThan(iIndex);
+    expect(args.indexOf('-probesize')).toBeLessThan(iIndex);
+    expect(args.indexOf('-thread_queue_size')).toBeLessThan(iIndex);
+    expect(args.indexOf('-threads')).toBeLessThan(iIndex);
   });
 });
