@@ -1009,7 +1009,7 @@ describe('IptvSession', () => {
     });
     const buildFfmpegArgs = getBuildFfmpegArgs(session);
 
-    const args = buildFfmpegArgs.call(session, {
+    const args = buildFfmpegArgs({
       streamUrl: 'https://8.8.8.8/live.m3u8',
       videoRtpPort: 5004,
       videoRtcpPort: 5005,
@@ -1026,6 +1026,8 @@ describe('IptvSession', () => {
     expect(args).toContain('-flags');
     expect(args[args.indexOf('-flags') + 1]).toBe('low_delay');
     expect(args).toContain('-analyzeduration');
+    expect(args[args.indexOf('-analyzeduration') + 1]).toBe('2000000');
     expect(args).toContain('-probesize');
+    expect(args[args.indexOf('-probesize') + 1]).toBe('1000000');
   });
 });
