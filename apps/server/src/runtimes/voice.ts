@@ -27,6 +27,7 @@ import { pubsub } from '../utils/pubsub';
 
 const voiceRuntimes = new Map<number, VoiceRuntime>();
 const INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS = 15_000_000;
+const MAX_OUTGOING_BITRATE_BPS = 10_000_000;
 
 const defaultRouterOptions: RouterOptions<AppData> = {
   mediaCodecs: [
@@ -376,6 +377,8 @@ class VoiceRuntime {
 
   public createConsumerTransport = async (userId: number) => {
     const { transport, params } = await this.createTransport();
+
+    await transport.setMaxOutgoingBitrate(MAX_OUTGOING_BITRATE_BPS);
 
     this.consumerTransports[userId] = transport;
 
