@@ -1,5 +1,6 @@
 import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-card-controller';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
+import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
 import { type TExternalStream, type TVoiceUserState } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
@@ -186,15 +187,30 @@ export const updateOwnVoiceState = (
   useServerStore.getState().updateOwnVoiceState(newState);
 };
 
+export type TJoinVoiceResult =
+  | {
+      kind: 'joined';
+      routerRtpCapabilities: RtpCapabilities;
+    }
+  | {
+      kind: 'already-joined';
+    }
+  | {
+      kind: 'retryable-failure';
+    }
+  | {
+      kind: 'non-retriable-failure';
+    };
+
 export const joinVoice = async (
   channelId: number
-): Promise<RtpCapabilities | undefined> => {
+): Promise<TJoinVoiceResult> => {
   const state = useServerStore.getState();
   const currentChannelId = currentVoiceChannelIdSelector(state);
 
   if (channelId === currentChannelId) {
     // already in the desired channel
-    return undefined;
+    return { kind: 'already-joined' };
   }
 
   if (currentChannelId) {
@@ -213,13 +229,20 @@ export const joinVoice = async (
 
     setCurrentVoiceChannelId(channelId);
 
-    return routerRtpCapabilities;
+    return {
+      kind: 'joined',
+      routerRtpCapabilities
+    };
   } catch (error) {
     setCurrentVoiceChannelId(undefined);
     toast.error(getTrpcError(error, 'Failed to join voice channel'));
-  }
 
-  return undefined;
+    return {
+      kind: isNonRetriableTrpcError(error)
+        ? 'non-retriable-failure'
+        : 'retryable-failure'
+    };
+  }
 };
 
 const leaveVoiceInternal = async (

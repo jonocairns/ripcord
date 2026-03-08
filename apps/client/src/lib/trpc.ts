@@ -12,11 +12,14 @@ import { clearAuthToken, getAuthToken } from '@/helpers/storage';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import type { AppRouter, TConnectionParams } from '@sharkord/shared';
 import { createTRPCProxyClient, createWSClient, wsLink } from '@trpc/client';
+import {
+  markSocketCloseEventIgnored,
+  shouldIgnoreSocketCloseEvent
+} from './websocket-close-ignore';
 
 let wsClient: ReturnType<typeof createWSClient> | null = null;
 let trpc: ReturnType<typeof createTRPCProxyClient<AppRouter>> | null = null;
 let currentHost: string | null = null;
-let ignoredSocketCloseEvents = 0;
 
 const initializeTRPC = (host: string) => {
   const runtimeServerUrl = getRuntimeServerConfig().serverUrl;
@@ -29,8 +32,7 @@ const initializeTRPC = (host: string) => {
     url: `${protocol}://${host}`,
     // @ts-expect-error - the onclose type is not correct in trpc
     onClose: (cause: CloseEvent) => {
-      if (ignoredSocketCloseEvents > 0) {
-        ignoredSocketCloseEvents -= 1;
+      if (shouldIgnoreSocketCloseEvent(cause)) {
         return;
       }
 
@@ -98,7 +100,7 @@ const cleanup = (
 ) => {
   if (wsClient && !opts.skipSocketClose) {
     if (opts.ignoreSocketCloseEvent) {
-      ignoredSocketCloseEvents += 1;
+      markSocketCloseEventIgnored(wsClient.connection?.ws);
     }
 
     wsClient.close();
