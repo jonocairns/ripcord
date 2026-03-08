@@ -1553,8 +1553,6 @@ class IptvSession {
           '4.2',
           '-preset',
           TRANSCODE_VIDEO_PRESET,
-          '-tune',
-          'zerolatency',
           '-bf:v',
           '0',
           '-crf',
@@ -1576,7 +1574,7 @@ class IptvSession {
           '-sc_threshold',
           '0',
           '-x264-params',
-          'repeat-headers=1'
+          'repeat-headers=1:rc-lookahead=0:sync-lookahead=0'
         ]
       : ['-c:v', 'copy'];
     const videoFilterArgs =
