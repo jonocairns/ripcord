@@ -23,9 +23,9 @@ import './utils/updater';
 
 await loadDb();
 await pluginManager.loadPlugins();
-await createServers();
 await loadMediasoup();
 await initVoiceRuntimes();
+await createServers();
 await loadCrons();
 
 const host = IS_PRODUCTION ? SERVER_PRIVATE_IP : 'localhost';

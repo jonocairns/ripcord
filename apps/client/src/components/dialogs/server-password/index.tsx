@@ -41,7 +41,7 @@ const ServerPasswordDialog = memo(
     }, [handshakeHash, values.password, close, setTrpcErrors]);
 
     const onCancel = useCallback(() => {
-      cleanup();
+      cleanup({ ignoreSocketCloseEvent: true });
       close();
     }, [close]);
 

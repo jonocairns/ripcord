@@ -3,12 +3,19 @@ import { resetDialogs } from '@/features/dialogs/actions';
 import { resetServerScreens } from '@/features/server-screens/actions';
 import { resetServerState, setDisconnectInfo } from '@/features/server/actions';
 import { currentVoiceChannelIdSelector } from '@/features/server/channels/selectors';
+import { shouldRestoreVoiceAfterDisconnect } from '@/features/server/disconnect-utils';
 import { setPendingVoiceReconnectChannelId } from '@/features/server/reconnect-state';
 import { useServerStore } from '@/features/server/slice';
+import { playSound } from '@/features/server/sounds/actions';
+import { SoundType } from '@/features/server/types';
 import { clearAuthToken, getAuthToken } from '@/helpers/storage';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import type { AppRouter, TConnectionParams } from '@sharkord/shared';
 import { createTRPCProxyClient, createWSClient, wsLink } from '@trpc/client';
+import {
+  markSocketCloseEventIgnored,
+  shouldIgnoreSocketCloseEvent
+} from './websocket-close-ignore';
 
 let wsClient: ReturnType<typeof createWSClient> | null = null;
 let trpc: ReturnType<typeof createTRPCProxyClient<AppRouter>> | null = null;
@@ -25,14 +32,26 @@ const initializeTRPC = (host: string) => {
     url: `${protocol}://${host}`,
     // @ts-expect-error - the onclose type is not correct in trpc
     onClose: (cause: CloseEvent) => {
+      if (shouldIgnoreSocketCloseEvent(cause)) {
+        return;
+      }
+
       const state = useServerStore.getState();
+      const wasConnected = state.connected;
       const currentVoiceChannelId = currentVoiceChannelIdSelector(state);
 
-      setPendingVoiceReconnectChannelId(
-        !cause.wasClean ? currentVoiceChannelId : undefined
-      );
+      if (wasConnected) {
+        setPendingVoiceReconnectChannelId(
+          shouldRestoreVoiceAfterDisconnect(cause.code)
+            ? currentVoiceChannelId
+            : undefined
+        );
+      }
 
       cleanup({ skipSocketClose: true });
+      if (wasConnected) {
+        playSound(SoundType.SERVER_DISCONNECTED);
+      }
       setDisconnectInfo({
         code: cause.code,
         reason: cause.reason,
@@ -73,9 +92,17 @@ const getTRPCClient = () => {
 };
 
 const cleanup = (
-  opts: { clearAuth?: boolean; skipSocketClose?: boolean } = {}
+  opts: {
+    clearAuth?: boolean;
+    ignoreSocketCloseEvent?: boolean;
+    skipSocketClose?: boolean;
+  } = {}
 ) => {
   if (wsClient && !opts.skipSocketClose) {
+    if (opts.ignoreSocketCloseEvent) {
+      markSocketCloseEventIgnored(wsClient.connection?.ws);
+    }
+
     wsClient.close();
   }
   wsClient = null;

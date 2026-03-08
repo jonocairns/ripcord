@@ -4,7 +4,10 @@ import {
   useIsCurrentVoiceChannelSelected
 } from '@/features/server/channels/hooks';
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
-import { usePinnedCard } from '@/features/server/voice/hooks';
+import {
+  usePinnedCard,
+  useVoiceChannelExternalStreamsList
+} from '@/features/server/voice/hooks';
 import type { TRemoteStreams } from '@/types';
 import { ArrowDownLeft, SendToBack, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -21,6 +24,12 @@ type TFloatingPinnedCardProps = {
   localScreenShareStream: MediaStream | undefined;
 };
 
+type TFloatingCardContent = {
+  id: string;
+  title: string;
+  videoStream: MediaStream;
+};
+
 const FloatingPinnedCard = memo(
   ({
     remoteUserStreams,
@@ -33,39 +42,92 @@ const FloatingPinnedCard = memo(
     const [open, setOpen] = useState(true);
     const pinnedCard = usePinnedCard();
     const ownUserId = useOwnUserId();
-    const currentVoiceChannelSelected = useCurrentVoiceChannelId();
+    const currentVoiceChannelId = useCurrentVoiceChannelId();
     const isCurrentVoiceChannelSelected = useIsCurrentVoiceChannelSelected();
+    const currentVoiceChannelExternalStreams =
+      useVoiceChannelExternalStreamsList(currentVoiceChannelId ?? -1);
     const pinnedUser = useUserById(pinnedCard?.userId || -1);
 
     const isExternalStream =
       pinnedCard?.type === PinnedCardType.EXTERNAL_STREAM;
 
-    const pinnedCardVideoStream = useMemo(() => {
-      if (!pinnedCard) return undefined;
+    const floatingCardContent = useMemo<
+      TFloatingCardContent | undefined
+    >(() => {
+      if (pinnedCard) {
+        if (isExternalStream) {
+          const externalStreamState = externalStreams[pinnedCard.userId];
+          const externalStream = currentVoiceChannelExternalStreams.find(
+            (stream) => stream.streamId === pinnedCard.userId
+          );
 
-      if (isExternalStream) {
-        const externalStream = externalStreams[pinnedCard.userId];
+          if (!externalStreamState?.videoStream) {
+            return undefined;
+          }
 
-        return externalStream?.videoStream;
+          return {
+            id: pinnedCard.id,
+            title: externalStream?.title || 'External Stream',
+            videoStream: externalStreamState.videoStream
+          };
+        }
+
+        if (pinnedCard.userId === ownUserId) {
+          const ownVideoStream = localScreenShareStream || localVideoStream;
+
+          return ownVideoStream
+            ? {
+                id: pinnedCard.id,
+                title: 'Your Stream',
+                videoStream: ownVideoStream
+              }
+            : undefined;
+        }
+
+        const streamInfo = remoteUserStreams[pinnedCard.userId];
+        const remoteVideoStream = streamInfo?.screen || streamInfo?.video;
+
+        return remoteVideoStream
+          ? {
+              id: pinnedCard.id,
+              title: pinnedUser?.name || 'Pinned Stream',
+              videoStream: remoteVideoStream
+            }
+          : undefined;
       }
 
-      if (pinnedCard.userId === ownUserId) {
-        return localScreenShareStream || localVideoStream || undefined;
+      if (currentVoiceChannelId === undefined) {
+        return undefined;
       }
 
-      const streamInfo = remoteUserStreams[pinnedCard.userId];
+      const iptvStream = currentVoiceChannelExternalStreams.find(
+        (stream) => stream.key === `iptv:${currentVoiceChannelId}`
+      );
 
-      if (!streamInfo) return undefined;
+      if (!iptvStream) {
+        return undefined;
+      }
 
-      return streamInfo.screen || streamInfo.video || undefined;
+      const iptvVideoStream = externalStreams[iptvStream.streamId]?.videoStream;
+
+      return iptvVideoStream
+        ? {
+            id: `external-stream-${iptvStream.streamId}`,
+            title: iptvStream.title || 'IPTV',
+            videoStream: iptvVideoStream
+          }
+        : undefined;
     }, [
-      pinnedCard,
-      remoteUserStreams,
+      currentVoiceChannelExternalStreams,
+      currentVoiceChannelId,
       externalStreams,
-      ownUserId,
-      localVideoStream,
+      isExternalStream,
       localScreenShareStream,
-      isExternalStream
+      localVideoStream,
+      ownUserId,
+      pinnedCard,
+      pinnedUser?.name,
+      remoteUserStreams
     ]);
 
     const onCloseClick = useCallback(() => {
@@ -73,20 +135,24 @@ const FloatingPinnedCard = memo(
     }, []);
 
     const onGoToVoiceChannelClick = useCallback(() => {
-      setSelectedChannelId(currentVoiceChannelSelected);
-    }, [currentVoiceChannelSelected]);
+      if (currentVoiceChannelId === undefined) {
+        return;
+      }
+
+      setSelectedChannelId(currentVoiceChannelId);
+    }, [currentVoiceChannelId]);
 
     useEffect(() => {
-      if (videoRef.current && pinnedCardVideoStream) {
-        videoRef.current.srcObject = pinnedCardVideoStream;
+      if (videoRef.current && floatingCardContent?.videoStream) {
+        videoRef.current.srcObject = floatingCardContent.videoStream;
       }
-    }, [pinnedCardVideoStream, isCurrentVoiceChannelSelected]);
+    }, [floatingCardContent?.videoStream, isCurrentVoiceChannelSelected]);
 
     useEffect(() => {
       setOpen(true);
-    }, [pinnedCard?.id, isCurrentVoiceChannelSelected]);
+    }, [floatingCardContent?.id, isCurrentVoiceChannelSelected]);
 
-    if (!pinnedCardVideoStream || isCurrentVoiceChannelSelected || !open) {
+    if (!floatingCardContent || isCurrentVoiceChannelSelected || !open) {
       return null;
     }
 
@@ -121,9 +187,9 @@ const FloatingPinnedCard = memo(
           />
         </CardControls>
 
-        {pinnedUser && (
+        {floatingCardContent.title && (
           <div className="absolute bottom-2 left-2 bg-black/50 rounded-md px-2 py-1 text-xs z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-            {pinnedUser.name}
+            {floatingCardContent.title}
           </div>
         )}
 

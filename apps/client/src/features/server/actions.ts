@@ -101,7 +101,7 @@ export const connect = async () => {
         throw error;
       }
 
-      cleanup();
+      cleanup({ ignoreSocketCloseEvent: true });
       await attemptConnect();
     } finally {
       setConnecting(false);
@@ -139,14 +139,14 @@ export const joinServer = async (
 
 export const disconnectFromServer = () => {
   clearPendingVoiceReconnectChannelId();
-  cleanup();
+  cleanup({ ignoreSocketCloseEvent: true });
   unsubscribeFromServer?.();
 };
 
 export const logoutFromServer = async () => {
   clearPendingVoiceReconnectChannelId();
   await revokeRefreshToken();
-  cleanup({ clearAuth: true });
+  cleanup({ clearAuth: true, ignoreSocketCloseEvent: true });
   unsubscribeFromServer?.();
 };
 

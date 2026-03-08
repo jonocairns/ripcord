@@ -13,7 +13,7 @@ import {
   useUnreadMessagesCount,
   useVoiceUsersByChannelId
 } from '@/features/server/hooks';
-import { joinVoice } from '@/features/server/voice/actions';
+import { joinVoice, leaveVoiceSilently } from '@/features/server/voice/actions';
 import {
   useVoice,
   useVoiceChannelExternalStreamsList
@@ -190,19 +190,21 @@ const Channel = memo(({ channelId, isSelected }: TChannelProps) => {
       channel?.type === ChannelType.VOICE &&
       currentVoiceChannelId !== channelId
     ) {
-      const response = await joinVoice(channelId);
+      const joinResult = await joinVoice(channelId);
 
-      if (!response) {
+      if (joinResult.kind !== 'joined') {
         // joining voice failed
-        setSelectedChannelId(undefined);
-        toast.error('Failed to join voice channel');
+        if (joinResult.kind !== 'already-joined') {
+          setSelectedChannelId(undefined);
+        }
 
         return;
       }
 
       try {
-        await init(response, channelId);
+        await init(joinResult.routerRtpCapabilities, channelId);
       } catch {
+        await leaveVoiceSilently();
         setSelectedChannelId(undefined);
         toast.error('Failed to initialize voice connection');
       }

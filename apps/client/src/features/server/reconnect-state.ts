@@ -1,23 +1,33 @@
 let pendingVoiceReconnectChannelId: number | undefined;
+let pendingVoiceReconnectRetryCount = 0;
 
 const setPendingVoiceReconnectChannelId = (
   channelId: number | undefined
 ): void => {
   pendingVoiceReconnectChannelId = channelId;
+  pendingVoiceReconnectRetryCount = 0;
 };
 
-const consumePendingVoiceReconnectChannelId = (): number | undefined => {
-  const channelId = pendingVoiceReconnectChannelId;
-  pendingVoiceReconnectChannelId = undefined;
-  return channelId;
+const getPendingVoiceReconnectChannelId = (): number | undefined =>
+  pendingVoiceReconnectChannelId;
+
+const getPendingVoiceReconnectRetryCount = (): number =>
+  pendingVoiceReconnectRetryCount;
+
+const incrementPendingVoiceReconnectRetryCount = (): number => {
+  pendingVoiceReconnectRetryCount += 1;
+  return pendingVoiceReconnectRetryCount;
 };
 
 const clearPendingVoiceReconnectChannelId = (): void => {
   pendingVoiceReconnectChannelId = undefined;
+  pendingVoiceReconnectRetryCount = 0;
 };
 
 export {
   clearPendingVoiceReconnectChannelId,
-  consumePendingVoiceReconnectChannelId,
+  getPendingVoiceReconnectChannelId,
+  getPendingVoiceReconnectRetryCount,
+  incrementPendingVoiceReconnectRetryCount,
   setPendingVoiceReconnectChannelId
 };

@@ -743,23 +743,6 @@ const ExternalStreamCard = memo(
             </div>
           )}
 
-          {hasAudio && (
-            <audio
-              ref={externalAudioRef}
-              autoPlay
-              className="hidden"
-              onLoadedData={() => {
-                setHasAudioPlaybackStarted(true);
-              }}
-              onCanPlay={() => {
-                setHasAudioPlaybackStarted(true);
-              }}
-              onPlaying={() => {
-                setHasAudioPlaybackStarted(true);
-              }}
-            />
-          )}
-
           {isPoppedOut && hasVideo && (
             <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/85 text-white p-4 text-center">
               <Video className="size-8 text-blue-400" />

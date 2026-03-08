@@ -54,6 +54,20 @@ const hasOtherOpenUserConnection = (
   );
 };
 
+const hasOtherOpenUserVoiceConnection = (
+  userId: number,
+  currentWs: TTrackedWebSocket,
+  channelId: number
+) => {
+  return getTrackedClients().some(
+    (client) =>
+      client !== currentWs &&
+      client.userId === userId &&
+      client.readyState === WebSocket.OPEN &&
+      client.currentVoiceChannelId === channelId
+  );
+};
+
 const usersIpMap = new Map<number, string>();
 
 const getUserIp = (userId: number): string | undefined => {
@@ -313,10 +327,21 @@ const createWsServer = async (server: http.Server) => {
           userId,
           trackedWs
         );
+        const hasOtherVoiceConnection =
+          trackedWs.currentVoiceChannelId !== undefined
+            ? hasOtherOpenUserVoiceConnection(
+                userId,
+                trackedWs,
+                trackedWs.currentVoiceChannelId
+              )
+            : false;
 
         let voiceRuntime: VoiceRuntime | undefined;
 
-        if (trackedWs.currentVoiceChannelId !== undefined) {
+        if (
+          trackedWs.currentVoiceChannelId !== undefined &&
+          !hasOtherVoiceConnection
+        ) {
           voiceRuntime = VoiceRuntime.findById(trackedWs.currentVoiceChannelId);
         } else if (!hasOtherConnections) {
           // Fallback for sessions that may not have tracked voice channel state.

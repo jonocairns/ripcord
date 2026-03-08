@@ -12,7 +12,6 @@ import { Disconnected } from '@/screens/disconnected';
 import { ForcePasswordReset } from '@/screens/force-password-reset';
 import { LoadingApp } from '@/screens/loading-app';
 import { ServerView } from '@/screens/server-view';
-import { DisconnectCode } from '@sharkord/shared';
 import { memo, useEffect } from 'react';
 
 const Routing = memo(() => {
@@ -40,12 +39,7 @@ const Routing = memo(() => {
   }
 
   if (!isConnected) {
-    if (
-      disconnectInfo &&
-      (!disconnectInfo.wasClean ||
-        disconnectInfo.code === DisconnectCode.KICKED ||
-        disconnectInfo.code === DisconnectCode.BANNED)
-    ) {
+    if (disconnectInfo) {
       return <Disconnected info={disconnectInfo} />;
     }
 
