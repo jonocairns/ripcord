@@ -1553,8 +1553,6 @@ class IptvSession {
           '4.2',
           '-preset',
           TRANSCODE_VIDEO_PRESET,
-          '-tune',
-          'zerolatency',
           '-bf:v',
           '0',
           '-crf',
