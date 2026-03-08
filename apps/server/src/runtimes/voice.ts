@@ -26,7 +26,7 @@ import {
 import { pubsub } from '../utils/pubsub';
 
 const voiceRuntimes = new Map<number, VoiceRuntime>();
-const INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS = 8_000_000;
+const INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS = 15_000_000;
 
 const defaultRouterOptions: RouterOptions<AppData> = {
   mediaCodecs: [
