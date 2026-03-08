@@ -1240,7 +1240,9 @@ class IptvSession {
       videoTransport = await runtime.getRouter().createPlainTransport({
         listenInfo: {
           protocol: 'udp',
-          ip: '127.0.0.1'
+          ip: '127.0.0.1',
+          recvBufferSize: 2_097_152,
+          sendBufferSize: 2_097_152
         },
         rtcpMux: false,
         comedia: true

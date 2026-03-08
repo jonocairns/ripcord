@@ -46,7 +46,14 @@ const loadMediasoup = async () => {
 
     webRtcServer = await mediaSoupWorker.createWebRtcServer({
       listenInfos: [
-        { protocol: 'udp', ip: '0.0.0.0', announcedAddress, port },
+        {
+          protocol: 'udp',
+          ip: '0.0.0.0',
+          announcedAddress,
+          port,
+          recvBufferSize: 2_097_152,
+          sendBufferSize: 2_097_152
+        },
         { protocol: 'tcp', ip: '0.0.0.0', announcedAddress, port }
       ]
     });
