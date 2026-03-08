@@ -203,7 +203,10 @@ export type TJoinVoiceResult =
     };
 
 export const joinVoice = async (
-  channelId: number
+  channelId: number,
+  opts: {
+    silent?: boolean;
+  } = {}
 ): Promise<TJoinVoiceResult> => {
   const state = useServerStore.getState();
   const currentChannelId = currentVoiceChannelIdSelector(state);
@@ -235,7 +238,10 @@ export const joinVoice = async (
     };
   } catch (error) {
     setCurrentVoiceChannelId(undefined);
-    toast.error(getTrpcError(error, 'Failed to join voice channel'));
+
+    if (!opts.silent) {
+      toast.error(getTrpcError(error, 'Failed to join voice channel'));
+    }
 
     return {
       kind: isNonRetriableTrpcError(error)

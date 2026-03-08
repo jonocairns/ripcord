@@ -2303,7 +2303,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
     void (async () => {
       try {
-        const joinResult = await joinVoice(pendingChannelId);
+        const joinResult = await joinVoice(pendingChannelId, {
+          silent: true
+        });
 
         if (joinResult.kind === 'non-retriable-failure') {
           clearPendingVoiceReconnectChannelId();
