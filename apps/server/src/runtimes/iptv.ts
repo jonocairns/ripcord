@@ -40,7 +40,7 @@ const FFMPEG_EXIT_KILL_MS = 1000;
 const MAX_TRANSCODE_VIDEO_WIDTH = 1920;
 const MAX_TRANSCODE_VIDEO_HEIGHT = 1080;
 const MAX_TRANSCODE_VIDEO_FRAME_RATE = 50;
-const TRANSCODE_VIDEO_CRF = 18;
+const TRANSCODE_VIDEO_CRF = 20;
 const TRANSCODE_VIDEO_KEYFRAME_INTERVAL_SECONDS = 1;
 const DEFAULT_TRANSCODE_VIDEO_PRESET = IS_DOCKER ? 'veryfast' : 'faster';
 const TRANSCODE_VIDEO_PRESET =
@@ -664,12 +664,12 @@ const resolveTranscodeVideoProfile = (
   } else {
     ladderProfile = isHighFrameRate
       ? {
-          maxRateKbps: 18_000,
-          bufferSizeKbps: 27_000
+          maxRateKbps: 12_000,
+          bufferSizeKbps: 18_000
         }
       : {
-          maxRateKbps: 14_000,
-          bufferSizeKbps: 21_000
+          maxRateKbps: 10_000,
+          bufferSizeKbps: 15_000
         };
   }
 
@@ -1528,7 +1528,7 @@ class IptvSession {
     }
   };
 
-  private spawnFfmpeg = (options: {
+  private buildFfmpegArgs = (options: {
     streamUrl: string;
     videoRtpPort: number;
     videoRtcpPort: number;
@@ -1540,7 +1540,7 @@ class IptvSession {
     targetVideoMaxRateKbps?: number;
     targetVideoBufferSizeKbps?: number;
     targetVideoKeyframeIntervalFrames?: number;
-  }) => {
+  }): string[] => {
     const videoCodecArgs = options.transcodeVideo
       ? [
           '-c:v',
@@ -1583,12 +1583,20 @@ class IptvSession {
       options.transcodeVideo && options.videoFilter
         ? ['-vf', options.videoFilter]
         : [];
-    const args = [
+
+    return [
       '-nostdin',
       '-hide_banner',
       '-loglevel',
       'warning',
-      '-re',
+      '-fflags',
+      '+nobuffer+discardcorrupt',
+      '-flags',
+      'low_delay',
+      '-analyzeduration',
+      '2000000',
+      '-probesize',
+      '1000000',
       '-reconnect',
       '1',
       '-reconnect_streamed',
@@ -1626,6 +1634,22 @@ class IptvSession {
       String(AUDIO_PAYLOAD_TYPE),
       `rtp://127.0.0.1:${options.audioRtpPort}?rtcpport=${options.audioRtcpPort}`
     ];
+  };
+
+  private spawnFfmpeg = (options: {
+    streamUrl: string;
+    videoRtpPort: number;
+    videoRtcpPort: number;
+    audioRtpPort: number;
+    audioRtcpPort: number;
+    transcodeVideo: boolean;
+    videoFilter?: string;
+    targetVideoCrf?: number;
+    targetVideoMaxRateKbps?: number;
+    targetVideoBufferSizeKbps?: number;
+    targetVideoKeyframeIntervalFrames?: number;
+  }) => {
+    const args = this.buildFfmpegArgs(options);
     const process = spawn('ffmpeg', args, {
       stdio: ['ignore', 'ignore', 'pipe']
     });
