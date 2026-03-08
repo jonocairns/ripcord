@@ -47,7 +47,6 @@ const getBuildFfmpegArgs = (session: IptvSession) => {
     audioRtpPort: number;
     audioRtcpPort: number;
     transcodeVideo: boolean;
-    sourceVideoCodec?: string;
     videoFilter?: string;
     targetVideoCrf?: number;
     targetVideoMaxRateKbps?: number;
