@@ -14,6 +14,9 @@ const getPrepareChannelSource = (session: IptvSession) => {
     targetVideoMaxRateKbps?: number;
     targetVideoBufferSizeKbps?: number;
     targetVideoKeyframeIntervalFrames?: number;
+    useNvidiaTranscode?: boolean;
+    targetVideoWidth?: number;
+    targetVideoHeight?: number;
   }>;
 };
 
@@ -345,6 +348,72 @@ describe('IptvSession', () => {
       targetVideoBufferSizeKbps: 10_500,
       targetVideoKeyframeIntervalFrames: 50
     });
+  });
+
+  test('uses NVIDIA offload for 4k50 HEVC transcodes when enabled', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const prepareChannelSource = getPrepareChannelSource(session);
+    const originalUseNvidia = process.env.SHARKORD_IPTV_USE_NVIDIA;
+
+    process.env.SHARKORD_IPTV_USE_NVIDIA = 'true';
+
+    Reflect.set(
+      session,
+      'inspectSourceStreams',
+      async (): Promise<{
+        summary: {
+          hasVideo: boolean;
+          hasAudio: boolean;
+          videoCodec: string;
+          videoFieldOrder?: string;
+          videoWidth: number;
+          videoHeight: number;
+          videoFrameRate: number;
+        };
+      }> => {
+        return {
+          summary: {
+            hasVideo: true,
+            hasAudio: true,
+            videoCodec: 'hevc',
+            videoFieldOrder: 'progressive',
+            videoWidth: 3840,
+            videoHeight: 2160,
+            videoFrameRate: 50
+          }
+        };
+      }
+    );
+
+    try {
+      const result = await prepareChannelSource.call(session, {
+        name: 'Sports UHD',
+        url: 'https://8.8.8.8/sports-uhd.m3u8'
+      });
+
+      expect(result).toEqual({
+        shouldTranscodeVideo: true,
+        videoCodec: 'hevc',
+        videoFilter:
+          'scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2',
+        targetVideoCrf: 18,
+        targetVideoMaxRateKbps: 18_000,
+        targetVideoBufferSizeKbps: 27_000,
+        targetVideoKeyframeIntervalFrames: 50,
+        useNvidiaTranscode: true,
+        targetVideoWidth: 1920,
+        targetVideoHeight: 1080
+      });
+    } finally {
+      if (originalUseNvidia === undefined) {
+        delete process.env.SHARKORD_IPTV_USE_NVIDIA;
+      } else {
+        process.env.SHARKORD_IPTV_USE_NVIDIA = originalUseNvidia;
+      }
+    }
   });
 
   test('transcodes high-resolution high-frame-rate h264 sources to the configured caps', async () => {
@@ -707,6 +776,33 @@ describe('IptvSession', () => {
     await expect(
       handleUnexpectedExit.call(session, 1, null, 'ffmpeg stderr output')
     ).resolves.toBeUndefined();
+  });
+
+  test('falls back to CPU transcode when NVIDIA ffmpeg setup fails', async () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const handleUnexpectedExit = getHandleUnexpectedExit(session);
+    const restartDelays: Array<number | undefined> = [];
+
+    Reflect.set(session, 'usingNvidiaTranscode', true);
+    Reflect.set(session, 'scheduleRestart', async (delayMs?: number) => {
+      restartDelays.push(delayMs);
+    });
+
+    await expect(
+      handleUnexpectedExit.call(
+        session,
+        1,
+        null,
+        "Unknown encoder 'h264_nvenc'"
+      )
+    ).resolves.toBeUndefined();
+
+    expect(Reflect.get(session, 'nvidiaTranscodeDisabled')).toBe(true);
+    expect(Reflect.get(session, 'usingNvidiaTranscode')).toBe(false);
+    expect(restartDelays).toEqual([0]);
   });
 
   test('cleans up transports and external stream when ffmpeg shutdown throws', async () => {
