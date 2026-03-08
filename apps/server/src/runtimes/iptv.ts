@@ -46,6 +46,8 @@ const DEFAULT_TRANSCODE_VIDEO_PRESET = IS_DOCKER ? 'veryfast' : 'faster';
 const TRANSCODE_VIDEO_PRESET =
   process.env.SHARKORD_IPTV_TRANSCODE_PRESET?.trim() ||
   DEFAULT_TRANSCODE_VIDEO_PRESET;
+const NVIDIA_TRANSCODE_PRESET =
+  process.env.SHARKORD_IPTV_NVIDIA_PRESET?.trim() || 'p5';
 const DEFAULT_TRANSCODE_VIDEO_MAX_RATE_KBPS = 10_000;
 const DEFAULT_TRANSCODE_VIDEO_BUFFER_SIZE_KBPS = 10_000;
 const DEFAULT_TRANSCODE_VIDEO_KEYFRAME_INTERVAL_FRAMES = 30;
@@ -82,6 +84,9 @@ type TIptvChannelPreparation = {
   targetVideoMaxRateKbps?: number;
   targetVideoBufferSizeKbps?: number;
   targetVideoKeyframeIntervalFrames?: number;
+  useNvidiaTranscode?: boolean;
+  targetVideoWidth?: number;
+  targetVideoHeight?: number;
 };
 
 type TTranscodeVideoProfile = {
@@ -89,6 +94,24 @@ type TTranscodeVideoProfile = {
   maxRateKbps: number;
   bufferSizeKbps: number;
   keyframeIntervalFrames: number;
+};
+
+type TFfmpegSpawnOptions = {
+  streamUrl: string;
+  videoRtpPort: number;
+  videoRtcpPort: number;
+  audioRtpPort: number;
+  audioRtcpPort: number;
+  transcodeVideo: boolean;
+  useNvidiaTranscode?: boolean;
+  sourceVideoCodec?: string;
+  videoFilter?: string;
+  targetVideoCrf?: number;
+  targetVideoMaxRateKbps?: number;
+  targetVideoBufferSizeKbps?: number;
+  targetVideoKeyframeIntervalFrames?: number;
+  targetVideoWidth?: number;
+  targetVideoHeight?: number;
 };
 
 type TTranscodeVideoLadderProfile = {
@@ -243,6 +266,23 @@ const isVideoCopyFailure = (stderrOutput: string): boolean => {
     'malformed bitstream',
     'bitstream malformed',
     'global headers'
+  ].some((pattern) => normalized.includes(pattern));
+};
+
+const isNvidiaTranscodeFailure = (stderrOutput: string): boolean => {
+  const normalized = stderrOutput.toLowerCase();
+
+  return [
+    'unknown encoder',
+    'h264_nvenc',
+    'cannot load libcuda',
+    'no device available',
+    'no nvenc capable devices found',
+    'device setup failed',
+    'no such filter',
+    'scale_cuda',
+    'cuvid',
+    'cannot init cuda'
   ].some((pattern) => normalized.includes(pattern));
 };
 
@@ -534,6 +574,43 @@ const needsDeinterlace = (
   return fieldOrder !== 'progressive' && fieldOrder !== 'unknown';
 };
 
+const isNvidiaTranscodeEnabled = (): boolean => {
+  return process.env.SHARKORD_IPTV_USE_NVIDIA === 'true';
+};
+
+const getNvidiaDecoderCodec = (
+  videoCodec: string | undefined
+): string | undefined => {
+  if (!videoCodec) {
+    return undefined;
+  }
+
+  switch (videoCodec) {
+    case 'h264':
+      return 'h264_cuvid';
+    case 'hevc':
+      return 'hevc_cuvid';
+    case 'mpeg2video':
+      return 'mpeg2_cuvid';
+    default:
+      return undefined;
+  }
+};
+
+const canUseNvidiaTranscode = (
+  probeSummary: TIptvSourceProbeSummary | undefined
+): boolean => {
+  if (!isNvidiaTranscodeEnabled() || !probeSummary?.hasVideo) {
+    return false;
+  }
+
+  return (
+    getNvidiaDecoderCodec(probeSummary.videoCodec) !== undefined &&
+    !needsDeinterlace(probeSummary) &&
+    !needsFrameRateCap(probeSummary)
+  );
+};
+
 const buildVideoFilter = (
   probeSummary: TIptvSourceProbeSummary | undefined
 ): string | undefined => {
@@ -772,6 +849,8 @@ class IptvSession {
   private ffmpegProcess?: ChildProcess;
   private ffmpegStderr = '';
   private usingVideoCopy = false;
+  private usingNvidiaTranscode = false;
+  private nvidiaTranscodeDisabled = false;
   private forceVideoTranscode = false;
   private expectedStop = false;
 
@@ -933,25 +1012,35 @@ class IptvSession {
     }
 
     const mode = sourcePreparation.shouldTranscodeVideo ? 'transcode' : 'copy';
+    const outputVideoFilter =
+      sourcePreparation.useNvidiaTranscode &&
+      sourcePreparation.targetVideoWidth &&
+      sourcePreparation.targetVideoHeight
+        ? `filter=scale_cuda=${sourcePreparation.targetVideoWidth}:${sourcePreparation.targetVideoHeight}:format=nv12`
+        : sourcePreparation.videoFilter
+          ? `filter=${sourcePreparation.videoFilter}`
+          : 'filter=none';
     const outputVideo = sourcePreparation.shouldTranscodeVideo
-      ? `h264${formatProbeDetails([
-          `preset=${TRANSCODE_VIDEO_PRESET}`,
-          sourcePreparation.targetVideoCrf !== undefined
-            ? `crf=${sourcePreparation.targetVideoCrf}`
-            : undefined,
-          sourcePreparation.videoFilter
-            ? `filter=${sourcePreparation.videoFilter}`
-            : 'filter=none',
-          sourcePreparation.targetVideoMaxRateKbps
-            ? `maxrate=${sourcePreparation.targetVideoMaxRateKbps}k`
-            : undefined,
-          sourcePreparation.targetVideoBufferSizeKbps
-            ? `bufsize=${sourcePreparation.targetVideoBufferSizeKbps}k`
-            : undefined,
-          sourcePreparation.targetVideoKeyframeIntervalFrames
-            ? `gop=${sourcePreparation.targetVideoKeyframeIntervalFrames}`
-            : undefined
-        ])}`
+      ? `${sourcePreparation.useNvidiaTranscode ? 'h264_nvenc' : 'h264'}${formatProbeDetails(
+          [
+            sourcePreparation.useNvidiaTranscode
+              ? `preset=${NVIDIA_TRANSCODE_PRESET}`
+              : `preset=${TRANSCODE_VIDEO_PRESET}`,
+            sourcePreparation.targetVideoCrf !== undefined
+              ? `crf=${sourcePreparation.targetVideoCrf}`
+              : undefined,
+            outputVideoFilter,
+            sourcePreparation.targetVideoMaxRateKbps
+              ? `maxrate=${sourcePreparation.targetVideoMaxRateKbps}k`
+              : undefined,
+            sourcePreparation.targetVideoBufferSizeKbps
+              ? `bufsize=${sourcePreparation.targetVideoBufferSizeKbps}k`
+              : undefined,
+            sourcePreparation.targetVideoKeyframeIntervalFrames
+              ? `gop=${sourcePreparation.targetVideoKeyframeIntervalFrames}`
+              : undefined
+          ]
+        )}`
       : 'copy';
     const outputAudio = 'opus (bitrate=128k, channels=2, rate=48000)';
 
@@ -976,6 +1065,7 @@ class IptvSession {
     const probeResult = await this.inspectSourceStreams(channel.url);
     const probeSummary = probeResult.summary;
     const transcodeVideoProfile = resolveTranscodeVideoProfile(probeSummary);
+    const targetVideoDimensions = resolveTargetVideoDimensions(probeSummary);
     const shouldTranscodeVideo =
       this.alwaysTranscodeVideo ||
       this.forceVideoTranscode ||
@@ -984,6 +1074,10 @@ class IptvSession {
       needsResolutionCap(probeSummary) ||
       needsFrameRateCap(probeSummary) ||
       needsDeinterlace(probeSummary);
+    const useNvidiaTranscode =
+      shouldTranscodeVideo &&
+      !this.nvidiaTranscodeDisabled &&
+      canUseNvidiaTranscode(probeSummary);
 
     this.sourceProbeSummary = probeSummary;
     this.logSourceProbe(channel.name, probeResult);
@@ -998,6 +1092,12 @@ class IptvSession {
         transcodeVideoProfile.keyframeIntervalFrames,
       videoCodec: probeSummary?.videoCodec
     };
+
+    if (useNvidiaTranscode) {
+      sourcePreparation.useNvidiaTranscode = true;
+      sourcePreparation.targetVideoWidth = targetVideoDimensions?.width;
+      sourcePreparation.targetVideoHeight = targetVideoDimensions?.height;
+    }
 
     this.logStreamDecision(channel.name, sourcePreparation);
 
@@ -1135,6 +1235,7 @@ class IptvSession {
     } finally {
       this.ffmpegProcess = undefined;
       this.ffmpegStderr = '';
+      this.usingNvidiaTranscode = false;
       this.sourceProbeSummary = undefined;
 
       if (this.videoProducer && !this.videoProducer.closed) {
@@ -1350,12 +1451,14 @@ class IptvSession {
     this.externalStreamId = streamId;
 
     this.usingVideoCopy = !sourcePreparation.shouldTranscodeVideo;
+    this.usingNvidiaTranscode = sourcePreparation.useNvidiaTranscode ?? false;
     logger.info(
-      '[IPTV %s] launching ffmpeg for "%s" (retry=%s, videoCopy=%s, videoCodec=%s, videoFilter=%s)',
+      '[IPTV %s] launching ffmpeg for "%s" (retry=%s, videoCopy=%s, nvidia=%s, videoCodec=%s, videoFilter=%s)',
       this.channelId,
       channel.name,
       this.retryCount,
       this.usingVideoCopy,
+      this.usingNvidiaTranscode,
       sourcePreparation.videoCodec ?? 'unknown',
       sourcePreparation.videoFilter ?? 'none'
     );
@@ -1367,12 +1470,16 @@ class IptvSession {
       audioRtpPort: audioTuple.localPort,
       audioRtcpPort: audioRtcpTuple.localPort,
       transcodeVideo: sourcePreparation.shouldTranscodeVideo,
+      useNvidiaTranscode: sourcePreparation.useNvidiaTranscode,
+      sourceVideoCodec: sourcePreparation.videoCodec,
       videoFilter: sourcePreparation.videoFilter,
       targetVideoCrf: sourcePreparation.targetVideoCrf,
       targetVideoMaxRateKbps: sourcePreparation.targetVideoMaxRateKbps,
       targetVideoBufferSizeKbps: sourcePreparation.targetVideoBufferSizeKbps,
       targetVideoKeyframeIntervalFrames:
-        sourcePreparation.targetVideoKeyframeIntervalFrames
+        sourcePreparation.targetVideoKeyframeIntervalFrames,
+      targetVideoWidth: sourcePreparation.targetVideoWidth,
+      targetVideoHeight: sourcePreparation.targetVideoHeight
     });
 
     this.resetHealthTracking();
@@ -1433,6 +1540,7 @@ class IptvSession {
     });
 
     this.usingVideoCopy = !sourcePreparation.shouldTranscodeVideo;
+    this.usingNvidiaTranscode = sourcePreparation.useNvidiaTranscode ?? false;
     this.expectedStop = true;
 
     try {
@@ -1443,11 +1551,12 @@ class IptvSession {
       this.ffmpegStderr = '';
     }
     logger.info(
-      '[IPTV %s] relaunching ffmpeg for "%s" (retry=%s, videoCopy=%s, videoCodec=%s, videoFilter=%s)',
+      '[IPTV %s] relaunching ffmpeg for "%s" (retry=%s, videoCopy=%s, nvidia=%s, videoCodec=%s, videoFilter=%s)',
       this.channelId,
       channel.name,
       this.retryCount,
       this.usingVideoCopy,
+      this.usingNvidiaTranscode,
       sourcePreparation.videoCodec ?? 'unknown',
       sourcePreparation.videoFilter ?? 'none'
     );
@@ -1459,12 +1568,16 @@ class IptvSession {
       audioRtpPort: audioTuple.localPort,
       audioRtcpPort: audioRtcpTuple.localPort,
       transcodeVideo: sourcePreparation.shouldTranscodeVideo,
+      useNvidiaTranscode: sourcePreparation.useNvidiaTranscode,
+      sourceVideoCodec: sourcePreparation.videoCodec,
       videoFilter: sourcePreparation.videoFilter,
       targetVideoCrf: sourcePreparation.targetVideoCrf,
       targetVideoMaxRateKbps: sourcePreparation.targetVideoMaxRateKbps,
       targetVideoBufferSizeKbps: sourcePreparation.targetVideoBufferSizeKbps,
       targetVideoKeyframeIntervalFrames:
-        sourcePreparation.targetVideoKeyframeIntervalFrames
+        sourcePreparation.targetVideoKeyframeIntervalFrames,
+      targetVideoWidth: sourcePreparation.targetVideoWidth,
+      targetVideoHeight: sourcePreparation.targetVideoHeight
     });
 
     this.resetHealthTracking();
@@ -1528,61 +1641,107 @@ class IptvSession {
     }
   };
 
-  private spawnFfmpeg = (options: {
-    streamUrl: string;
-    videoRtpPort: number;
-    videoRtcpPort: number;
-    audioRtpPort: number;
-    audioRtcpPort: number;
-    transcodeVideo: boolean;
-    videoFilter?: string;
-    targetVideoCrf?: number;
-    targetVideoMaxRateKbps?: number;
-    targetVideoBufferSizeKbps?: number;
-    targetVideoKeyframeIntervalFrames?: number;
-  }) => {
+  private buildFfmpegArgs = (options: TFfmpegSpawnOptions): string[] => {
+    const nvidiaDecoderCodec = getNvidiaDecoderCodec(options.sourceVideoCodec);
+    const videoInputArgs =
+      options.useNvidiaTranscode && nvidiaDecoderCodec
+        ? [
+            '-hwaccel',
+            'cuda',
+            '-hwaccel_output_format',
+            'cuda',
+            '-c:v',
+            nvidiaDecoderCodec
+          ]
+        : [];
     const videoCodecArgs = options.transcodeVideo
       ? [
-          '-c:v',
-          'libx264',
-          '-pix_fmt',
-          'yuv420p',
-          '-profile:v',
-          'baseline',
-          '-level:v',
-          '4.2',
-          '-preset',
-          TRANSCODE_VIDEO_PRESET,
-          '-tune',
-          'zerolatency',
-          '-bf:v',
-          '0',
-          '-crf',
-          String(options.targetVideoCrf ?? TRANSCODE_VIDEO_CRF),
-          '-maxrate',
-          `${options.targetVideoMaxRateKbps ?? DEFAULT_TRANSCODE_VIDEO_MAX_RATE_KBPS}k`,
-          '-bufsize',
-          `${options.targetVideoBufferSizeKbps ?? DEFAULT_TRANSCODE_VIDEO_BUFFER_SIZE_KBPS}k`,
-          '-g',
-          String(
-            options.targetVideoKeyframeIntervalFrames ??
-              DEFAULT_TRANSCODE_VIDEO_KEYFRAME_INTERVAL_FRAMES
-          ),
-          '-keyint_min',
-          String(
-            options.targetVideoKeyframeIntervalFrames ??
-              DEFAULT_TRANSCODE_VIDEO_KEYFRAME_INTERVAL_FRAMES
-          ),
-          '-sc_threshold',
-          '0',
-          '-x264-params',
-          'repeat-headers=1'
+          ...(options.useNvidiaTranscode
+            ? [
+                '-c:v',
+                'h264_nvenc',
+                '-profile:v',
+                'baseline',
+                '-level:v',
+                '4.2',
+                '-preset',
+                NVIDIA_TRANSCODE_PRESET,
+                '-tune',
+                'll',
+                '-rc:v',
+                'vbr',
+                '-cq',
+                String(options.targetVideoCrf ?? TRANSCODE_VIDEO_CRF),
+                '-b:v',
+                `${options.targetVideoMaxRateKbps ?? DEFAULT_TRANSCODE_VIDEO_MAX_RATE_KBPS}k`,
+                '-maxrate',
+                `${options.targetVideoMaxRateKbps ?? DEFAULT_TRANSCODE_VIDEO_MAX_RATE_KBPS}k`,
+                '-bufsize',
+                `${options.targetVideoBufferSizeKbps ?? DEFAULT_TRANSCODE_VIDEO_BUFFER_SIZE_KBPS}k`,
+                '-g',
+                String(
+                  options.targetVideoKeyframeIntervalFrames ??
+                    DEFAULT_TRANSCODE_VIDEO_KEYFRAME_INTERVAL_FRAMES
+                ),
+                '-keyint_min',
+                String(
+                  options.targetVideoKeyframeIntervalFrames ??
+                    DEFAULT_TRANSCODE_VIDEO_KEYFRAME_INTERVAL_FRAMES
+                ),
+                '-forced-idr',
+                '1',
+                '-bf:v',
+                '0'
+              ]
+            : [
+                '-c:v',
+                'libx264',
+                '-pix_fmt',
+                'yuv420p',
+                '-profile:v',
+                'baseline',
+                '-level:v',
+                '4.2',
+                '-preset',
+                TRANSCODE_VIDEO_PRESET,
+                '-tune',
+                'zerolatency',
+                '-bf:v',
+                '0',
+                '-crf',
+                String(options.targetVideoCrf ?? TRANSCODE_VIDEO_CRF),
+                '-maxrate',
+                `${options.targetVideoMaxRateKbps ?? DEFAULT_TRANSCODE_VIDEO_MAX_RATE_KBPS}k`,
+                '-bufsize',
+                `${options.targetVideoBufferSizeKbps ?? DEFAULT_TRANSCODE_VIDEO_BUFFER_SIZE_KBPS}k`,
+                '-g',
+                String(
+                  options.targetVideoKeyframeIntervalFrames ??
+                    DEFAULT_TRANSCODE_VIDEO_KEYFRAME_INTERVAL_FRAMES
+                ),
+                '-keyint_min',
+                String(
+                  options.targetVideoKeyframeIntervalFrames ??
+                    DEFAULT_TRANSCODE_VIDEO_KEYFRAME_INTERVAL_FRAMES
+                ),
+                '-sc_threshold',
+                '0',
+                '-x264-params',
+                'repeat-headers=1'
+              ])
         ]
       : ['-c:v', 'copy'];
     const videoFilterArgs =
-      options.transcodeVideo && options.videoFilter
-        ? ['-vf', options.videoFilter]
-        : [];
+      options.transcodeVideo && options.useNvidiaTranscode
+        ? options.targetVideoWidth && options.targetVideoHeight
+          ? [
+              '-vf',
+              `scale_cuda=${options.targetVideoWidth}:${options.targetVideoHeight}:format=nv12`
+            ]
+          : []
+        : options.transcodeVideo && options.videoFilter
+          ? ['-vf', options.videoFilter]
+          : [];
     const args = [
       '-nostdin',
       '-hide_banner',
@@ -1595,6 +1754,7 @@ class IptvSession {
       '1',
       '-reconnect_delay_max',
       '5',
+      ...videoInputArgs,
       '-i',
       options.streamUrl,
       '-map',
@@ -1626,6 +1786,12 @@ class IptvSession {
       String(AUDIO_PAYLOAD_TYPE),
       `rtp://127.0.0.1:${options.audioRtpPort}?rtcpport=${options.audioRtcpPort}`
     ];
+
+    return args;
+  };
+
+  private spawnFfmpeg = (options: TFfmpegSpawnOptions) => {
+    const args = this.buildFfmpegArgs(options);
     const process = spawn('ffmpeg', args, {
       stdio: ['ignore', 'ignore', 'pipe']
     });
@@ -1687,6 +1853,26 @@ class IptvSession {
       } catch (error) {
         this.logScheduleRestartError(
           'scheduleRestart threw during unexpected exit copy-mode recovery',
+          error
+        );
+      }
+      return;
+    }
+
+    if (this.usingNvidiaTranscode && isNvidiaTranscodeFailure(stderrOutput)) {
+      logger.warn(
+        '[IPTV %s] NVIDIA IPTV transcode failed, disabling GPU offload for this session and retrying on CPU',
+        this.channelId
+      );
+      this.nvidiaTranscodeDisabled = true;
+      this.retryCount = 0;
+      this.usingNvidiaTranscode = false;
+
+      try {
+        await this.scheduleRestart(0);
+      } catch (error) {
+        this.logScheduleRestartError(
+          'scheduleRestart threw during unexpected exit NVIDIA recovery',
           error
         );
       }
