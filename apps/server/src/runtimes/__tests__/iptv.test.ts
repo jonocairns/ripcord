@@ -39,6 +39,22 @@ const getRestartFfmpegInternal = (session: IptvSession) => {
   return Reflect.get(session, 'restartFfmpegInternal') as () => Promise<void>;
 };
 
+const getBuildFfmpegArgs = (session: IptvSession) => {
+  return Reflect.get(session, 'buildFfmpegArgs') as (options: {
+    streamUrl: string;
+    videoRtpPort: number;
+    videoRtcpPort: number;
+    audioRtpPort: number;
+    audioRtcpPort: number;
+    transcodeVideo: boolean;
+    videoFilter?: string;
+    targetVideoCrf?: number;
+    targetVideoMaxRateKbps?: number;
+    targetVideoBufferSizeKbps?: number;
+    targetVideoKeyframeIntervalFrames?: number;
+  }) => string[];
+};
+
 const getHandleUnexpectedExit = (session: IptvSession) => {
   return Reflect.get(session, 'handleUnexpectedExit') as (
     code: number | null,
@@ -135,7 +151,7 @@ describe('IptvSession', () => {
       shouldTranscodeVideo: true,
       videoCodec: undefined,
       videoFilter: undefined,
-      targetVideoCrf: 18,
+      targetVideoCrf: 20,
       targetVideoMaxRateKbps: 8_000,
       targetVideoBufferSizeKbps: 12_000,
       targetVideoKeyframeIntervalFrames: 30
@@ -186,7 +202,7 @@ describe('IptvSession', () => {
       shouldTranscodeVideo: false,
       videoCodec: 'h264',
       videoFilter: undefined,
-      targetVideoCrf: 18,
+      targetVideoCrf: 20,
       targetVideoMaxRateKbps: 10_000,
       targetVideoBufferSizeKbps: 15_000,
       targetVideoKeyframeIntervalFrames: 50
@@ -238,7 +254,7 @@ describe('IptvSession', () => {
       shouldTranscodeVideo: true,
       videoCodec: 'h264',
       videoFilter: undefined,
-      targetVideoCrf: 18,
+      targetVideoCrf: 20,
       targetVideoMaxRateKbps: 10_000,
       targetVideoBufferSizeKbps: 15_000,
       targetVideoKeyframeIntervalFrames: 50
@@ -289,7 +305,7 @@ describe('IptvSession', () => {
       shouldTranscodeVideo: true,
       videoCodec: 'mpeg2video',
       videoFilter: undefined,
-      targetVideoCrf: 18,
+      targetVideoCrf: 20,
       targetVideoMaxRateKbps: 8_000,
       targetVideoBufferSizeKbps: 12_000,
       targetVideoKeyframeIntervalFrames: 30
@@ -340,7 +356,7 @@ describe('IptvSession', () => {
       shouldTranscodeVideo: true,
       videoCodec: 'hevc',
       videoFilter: undefined,
-      targetVideoCrf: 18,
+      targetVideoCrf: 20,
       targetVideoMaxRateKbps: 7_000,
       targetVideoBufferSizeKbps: 10_500,
       targetVideoKeyframeIntervalFrames: 50
@@ -392,9 +408,9 @@ describe('IptvSession', () => {
       videoCodec: 'h264',
       videoFilter:
         'scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=50',
-      targetVideoCrf: 18,
-      targetVideoMaxRateKbps: 18_000,
-      targetVideoBufferSizeKbps: 27_000,
+      targetVideoCrf: 20,
+      targetVideoMaxRateKbps: 12_000,
+      targetVideoBufferSizeKbps: 18_000,
       targetVideoKeyframeIntervalFrames: 50
     });
   });
@@ -443,9 +459,9 @@ describe('IptvSession', () => {
       shouldTranscodeVideo: true,
       videoCodec: 'mpeg2video',
       videoFilter: 'yadif=mode=send_frame:parity=auto:deint=all',
-      targetVideoCrf: 18,
-      targetVideoMaxRateKbps: 18_000,
-      targetVideoBufferSizeKbps: 27_000,
+      targetVideoCrf: 20,
+      targetVideoMaxRateKbps: 12_000,
+      targetVideoBufferSizeKbps: 18_000,
       targetVideoKeyframeIntervalFrames: 50
     });
   });
@@ -984,5 +1000,34 @@ describe('IptvSession', () => {
     expect(Reflect.get(session, 'expectedStop')).toBe(false);
     expect(Reflect.get(session, 'ffmpegProcess')).toBeUndefined();
     expect(Reflect.get(session, 'ffmpegStderr')).toBe('');
+  });
+
+  test('uses low-latency input flags instead of -re for live streams', () => {
+    const session = new IptvSession(42, {
+      playlistUrl: 'https://playlist.example/list.m3u',
+      enabled: true
+    });
+    const buildFfmpegArgs = getBuildFfmpegArgs(session);
+
+    const args = buildFfmpegArgs({
+      streamUrl: 'https://8.8.8.8/live.m3u8',
+      videoRtpPort: 5004,
+      videoRtcpPort: 5005,
+      audioRtpPort: 5006,
+      audioRtcpPort: 5007,
+      transcodeVideo: false
+    });
+
+    expect(args).not.toContain('-re');
+    expect(args).toContain('-fflags');
+    expect(args[args.indexOf('-fflags') + 1]).toBe(
+      '+nobuffer+discardcorrupt'
+    );
+    expect(args).toContain('-flags');
+    expect(args[args.indexOf('-flags') + 1]).toBe('low_delay');
+    expect(args).toContain('-analyzeduration');
+    expect(args[args.indexOf('-analyzeduration') + 1]).toBe('2000000');
+    expect(args).toContain('-probesize');
+    expect(args[args.indexOf('-probesize') + 1]).toBe('1000000');
   });
 });
