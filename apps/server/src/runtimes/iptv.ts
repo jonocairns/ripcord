@@ -726,7 +726,6 @@ const getVideoRtpParameters = (ssrc: number): RtpParameters => {
         rtcpFeedback: [
           { type: 'nack' },
           { type: 'nack', parameter: 'pli' },
-          { type: 'goog-remb' },
           { type: 'transport-cc' }
         ]
       }
