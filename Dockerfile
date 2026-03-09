@@ -13,10 +13,6 @@ ARG TARGETARCH
 ENV RUNNING_IN_DOCKER=true
 ENV SHARKORD_TRUST_PROXY=true
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY --from=build /app/apps/server/build/out/sharkord-linux-x64 /tmp/sharkord-linux-x64
 COPY --from=build /app/apps/server/build/out/sharkord-linux-arm64 /tmp/sharkord-linux-arm64
 

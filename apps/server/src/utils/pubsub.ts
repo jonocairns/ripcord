@@ -6,7 +6,6 @@ import type {
   TChannelUserPermissionsMap,
   TCommandsMapByPlugin,
   TExternalStream,
-  TIptvStatus,
   TJoinedEmoji,
   TJoinedMessage,
   TJoinedPublicUser,
@@ -94,10 +93,6 @@ type Events = {
     kind: StreamKind.VIDEO | StreamKind.SCREEN;
     action: 'joined' | 'left';
   };
-
-  [ServerEvents.IPTV_STATUS_CHANGE]: {
-    channelId: number;
-  } & TIptvStatus;
 
   [ServerEvents.PLUGIN_LOG]: TLogEntry;
   [ServerEvents.PLUGIN_COMMANDS_CHANGE]: TCommandsMapByPlugin;
