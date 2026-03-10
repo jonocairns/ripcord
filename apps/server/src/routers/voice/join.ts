@@ -10,7 +10,6 @@ import { config } from '../../config';
 import { db } from '../../db';
 import { channels } from '../../db/schema';
 import { logger } from '../../logger';
-import { getIptvSession } from '../../runtimes/iptv';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
@@ -70,27 +69,6 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
     runtime.addUser(ctx.user.id, input.state);
 
     const state = runtime.getUserState(ctx.user.id);
-    const viewerCount = runtime.getState().users.length;
-
-    if (viewerCount === 1) {
-      const session = getIptvSession(input.channelId);
-
-      if (session?.getStatus().status === 'error') {
-        try {
-          await session.resumeIfPossible();
-        } catch (error) {
-          const message =
-            error instanceof Error
-              ? error.message
-              : 'Unknown IPTV resume error';
-          logger.warn(
-            '[IPTV %s] failed to resume errored stream: %s',
-            input.channelId,
-            message
-          );
-        }
-      }
-    }
 
     ctx.currentVoiceChannelId = channel.id;
     ctx.setWsVoiceChannelId(channel.id);

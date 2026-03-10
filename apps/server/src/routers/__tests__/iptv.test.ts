@@ -1,462 +1,97 @@
-import { Permission } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
-import { eq } from 'drizzle-orm';
-import { createMockContext } from '../../__tests__/context';
-import { getMockedToken } from '../../__tests__/helpers';
-import { tdb } from '../../__tests__/setup';
-import { iptvSources } from '../../db/schema';
-import { appRouter } from '../../routers';
-import {
-  getIptvSession,
-  removeIptvSession,
-  upsertIptvSession
-} from '../../runtimes/iptv';
-
-const VOICE_CHANNEL_ID = 2;
-const createCaller = async (options?: {
-  userId?: number;
-  currentVoiceChannelId?: number;
-}) => {
-  return await createCallerWithOverrides(options);
-};
-
-const createCallerWithOverrides = async (
-  options?: {
-    userId?: number;
-    currentVoiceChannelId?: number;
-  } & Partial<
-    Pick<
-      Awaited<ReturnType<typeof createMockContext>>,
-      | 'hasPermission'
-      | 'needsPermission'
-      | 'hasChannelPermission'
-      | 'needsChannelPermission'
-    >
-  >
-) => {
-  const token = await getMockedToken(options?.userId ?? 1);
-  const ctx = await createMockContext({
-    customToken: token
-  });
-
-  ctx.authenticated = true;
-  ctx.currentVoiceChannelId = options?.currentVoiceChannelId;
-  if (options?.hasPermission) {
-    ctx.hasPermission = options.hasPermission;
-  }
-  if (options?.needsPermission) {
-    ctx.needsPermission = options.needsPermission;
-  }
-  if (options?.hasChannelPermission) {
-    ctx.hasChannelPermission = options.hasChannelPermission;
-  }
-  if (options?.needsChannelPermission) {
-    ctx.needsChannelPermission = options.needsChannelPermission;
-  }
-
-  return appRouter.createCaller(ctx);
-};
+import { initTest } from '../../__tests__/helpers';
 
 describe('iptv router', () => {
-  test('configure persists the always-transcode setting', async () => {
-    const caller = await createCaller();
+  test('should keep legacy IPTV procedures as inert compatibility handlers', async () => {
+    const { caller } = await initTest();
 
-    const source = await caller.iptv.configure({
-      channelId: VOICE_CHANNEL_ID,
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      enabled: true,
-      alwaysTranscodeVideo: true
-    });
-
-    const persistedSource = await tdb
-      .select()
-      .from(iptvSources)
-      .where(eq(iptvSources.channelId, VOICE_CHANNEL_ID))
-      .get();
-
-    expect(source.alwaysTranscodeVideo).toBe(true);
-    expect(persistedSource?.alwaysTranscodeVideo).toBe(true);
-  });
-
-  test('manual stop clears the selected channel for a live session', async () => {
-    const caller = await createCaller({
-      currentVoiceChannelId: VOICE_CHANNEL_ID
-    });
-    const now = Date.now();
-
-    await tdb.insert(iptvSources).values({
-      channelId: VOICE_CHANNEL_ID,
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      pinnedChannelUrls: [],
-      activeChannelIndex: 0,
-      enabled: true,
-      createdAt: now,
-      updatedAt: now
-    });
-
-    const session = upsertIptvSession(VOICE_CHANNEL_ID, {
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      enabled: true,
-      activeChannelIndex: 0
-    });
-
-    try {
-      const status = await caller.iptv.stop({
-        channelId: VOICE_CHANNEL_ID
-      });
-
-      const source = await tdb
-        .select()
-        .from(iptvSources)
-        .where(eq(iptvSources.channelId, VOICE_CHANNEL_ID))
-        .get();
-
-      expect(status).toEqual({ status: 'idle' });
-      expect(session.getStatus()).toEqual({ status: 'idle' });
-      expect(source?.activeChannelIndex).toBeNull();
-      expect(getIptvSession(VOICE_CHANNEL_ID)).toBe(session);
-    } finally {
-      await removeIptvSession(VOICE_CHANNEL_ID);
-    }
-  });
-
-  test('manual stop clears persisted selection even without a live session', async () => {
-    const caller = await createCaller({
-      currentVoiceChannelId: VOICE_CHANNEL_ID
-    });
-    const now = Date.now();
-
-    await tdb.insert(iptvSources).values({
-      channelId: VOICE_CHANNEL_ID,
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      pinnedChannelUrls: [],
-      activeChannelIndex: 0,
-      enabled: true,
-      createdAt: now,
-      updatedAt: now
-    });
-
-    try {
-      const status = await caller.iptv.stop({
-        channelId: VOICE_CHANNEL_ID
-      });
-
-      const source = await tdb
-        .select()
-        .from(iptvSources)
-        .where(eq(iptvSources.channelId, VOICE_CHANNEL_ID))
-        .get();
-
-      expect(status).toEqual({ status: 'idle' });
-      expect(source?.activeChannelIndex).toBeNull();
-      expect(getIptvSession(VOICE_CHANNEL_ID)).toBeUndefined();
-    } finally {
-      await removeIptvSession(VOICE_CHANNEL_ID);
-    }
-  });
-
-  test('play persists the requested channel index when startup fails', async () => {
-    const caller = await createCaller({
-      currentVoiceChannelId: VOICE_CHANNEL_ID
-    });
-    const now = Date.now();
-    const startError = new Error('worker crashed during startup');
-
-    await tdb.insert(iptvSources).values({
-      channelId: VOICE_CHANNEL_ID,
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      pinnedChannelUrls: [],
-      activeChannelIndex: 0,
-      enabled: true,
-      createdAt: now,
-      updatedAt: now
-    });
-
-    const session = upsertIptvSession(VOICE_CHANNEL_ID, {
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      enabled: true,
-      activeChannelIndex: 0
-    });
-
-    Reflect.set(session, 'startSelectedChannelInternal', async () => {
-      throw startError;
-    });
-
-    try {
-      await expect(
-        caller.iptv.play({
-          channelId: VOICE_CHANNEL_ID,
-          channelIndex: 1
-        })
-      ).rejects.toThrow(startError.message);
-
-      const source = await tdb
-        .select()
-        .from(iptvSources)
-        .where(eq(iptvSources.channelId, VOICE_CHANNEL_ID))
-        .get();
-
-      expect(source?.activeChannelIndex).toBe(1);
-    } finally {
-      await removeIptvSession(VOICE_CHANNEL_ID);
-    }
-  });
-
-  test('play allows channel managers without an explicit manage IPTV override', async () => {
-    const caller = await createCallerWithOverrides({
-      userId: 2,
-      currentVoiceChannelId: VOICE_CHANNEL_ID,
-      hasPermission: async (targetPermission) => {
-        const permissions = Array.isArray(targetPermission)
-          ? targetPermission
-          : [targetPermission];
-
-        return permissions.includes(Permission.MANAGE_CHANNELS);
-      },
-      needsChannelPermission: async () => {
-        throw new Error('needsChannelPermission should not be called');
-      }
-    });
-    const now = Date.now();
-
-    await tdb.insert(iptvSources).values({
-      channelId: VOICE_CHANNEL_ID,
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      pinnedChannelUrls: [],
-      activeChannelIndex: 0,
-      enabled: true,
-      createdAt: now,
-      updatedAt: now
-    });
-
-    const session = upsertIptvSession(VOICE_CHANNEL_ID, {
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      enabled: true,
-      activeChannelIndex: 0
-    });
-
-    Reflect.set(session, 'switchChannel', async (channelIndex: number) => {
-      Reflect.set(session, 'status', {
-        status: 'streaming',
-        activeChannel: {
-          index: channelIndex,
-          name: 'Sports HD'
-        }
-      });
-    });
-
-    try {
-      const status = await caller.iptv.play({
-        channelId: VOICE_CHANNEL_ID,
-        channelIndex: 1
-      });
-
-      expect(status).toEqual({
-        status: 'streaming',
-        activeChannel: {
-          index: 1,
-          name: 'Sports HD'
-        }
-      });
-    } finally {
-      await removeIptvSession(VOICE_CHANNEL_ID);
-    }
-  });
-
-  test('manual stop clears persisted selection before teardown completes', async () => {
-    const caller = await createCaller({
-      currentVoiceChannelId: VOICE_CHANNEL_ID
-    });
-    const now = Date.now();
-    const stopError = new Error('Timed out waiting for ffmpeg to stop');
-
-    await tdb.insert(iptvSources).values({
-      channelId: VOICE_CHANNEL_ID,
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      pinnedChannelUrls: [],
-      activeChannelIndex: 0,
-      enabled: true,
-      createdAt: now,
-      updatedAt: now
-    });
-
-    const session = upsertIptvSession(VOICE_CHANNEL_ID, {
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      enabled: true,
-      activeChannelIndex: 0
-    });
-
-    const originalStopFfmpegProcess = Reflect.get(
-      session,
-      'stopFfmpegProcess'
-    ) as () => Promise<void>;
-
-    Reflect.set(session, 'stopFfmpegProcess', async () => {
-      throw stopError;
-    });
-
-    try {
-      await expect(
-        caller.iptv.stop({
-          channelId: VOICE_CHANNEL_ID
-        })
-      ).rejects.toThrow(stopError.message);
-
-      const source = await tdb
-        .select()
-        .from(iptvSources)
-        .where(eq(iptvSources.channelId, VOICE_CHANNEL_ID))
-        .get();
-
-      expect(source?.activeChannelIndex).toBeNull();
-    } finally {
-      Reflect.set(session, 'stopFfmpegProcess', originalStopFfmpegProcess);
-      await removeIptvSession(VOICE_CHANNEL_ID);
-    }
-  });
-
-  test('pinning channels allows channel managers without an explicit manage IPTV override', async () => {
-    const caller = await createCallerWithOverrides({
-      userId: 2,
-      currentVoiceChannelId: VOICE_CHANNEL_ID,
-      hasPermission: async (targetPermission) => {
-        const permissions = Array.isArray(targetPermission)
-          ? targetPermission
-          : [targetPermission];
-
-        return permissions.includes(Permission.MANAGE_CHANNELS);
-      },
-      needsChannelPermission: async () => {
-        throw new Error('needsChannelPermission should not be called');
-      }
-    });
-    const now = Date.now();
-
-    await tdb.insert(iptvSources).values({
-      channelId: VOICE_CHANNEL_ID,
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      pinnedChannelUrls: [],
-      activeChannelIndex: null,
-      enabled: true,
-      createdAt: now,
-      updatedAt: now
-    });
-
-    const updatedSource = await caller.iptv.setPinnedChannel({
-      channelId: VOICE_CHANNEL_ID,
-      channelUrl: 'https://example.com/sports-1.m3u8',
-      pinned: true
-    });
-
-    expect(updatedSource).toEqual({
-      pinnedChannelUrls: ['https://example.com/sports-1.m3u8']
-    });
-  });
-
-  test('configure disable clears the persisted selected channel', async () => {
-    const caller = await createCaller();
-    const now = Date.now();
-
-    await tdb.insert(iptvSources).values({
-      channelId: VOICE_CHANNEL_ID,
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      pinnedChannelUrls: [],
-      activeChannelIndex: 0,
-      enabled: true,
-      createdAt: now,
-      updatedAt: now
-    });
-
-    const session = upsertIptvSession(VOICE_CHANNEL_ID, {
-      playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-      enabled: true,
-      activeChannelIndex: 0
-    });
-
-    try {
-      const source = await caller.iptv.configure({
-        channelId: VOICE_CHANNEL_ID,
-        playlistUrl: 'https://8.8.8.8/playlist.m3u8',
-        enabled: false,
+    await expect(
+      caller.iptv.configure({
+        channelId: 1,
+        playlistUrl: 'https://example.com/playlist.m3u8',
+        enabled: true,
         alwaysTranscodeVideo: false
-      });
+      })
+    ).resolves.toBeNull();
 
-      const persistedSource = await tdb
-        .select()
-        .from(iptvSources)
-        .where(eq(iptvSources.channelId, VOICE_CHANNEL_ID))
-        .get();
-
-      expect(source.enabled).toBe(false);
-      expect(persistedSource?.activeChannelIndex).toBeNull();
-      expect(Reflect.get(session, 'activeChannelIndex')).toBeUndefined();
-    } finally {
-      await removeIptvSession(VOICE_CHANNEL_ID);
-    }
-  });
-
-  test('getConfig requires manage channels permission', async () => {
-    const caller = await createCaller({
-      userId: 2
-    });
+    await expect(
+      caller.iptv.remove({
+        channelId: 1
+      })
+    ).resolves.toEqual({ removed: true });
 
     await expect(
       caller.iptv.getConfig({
-        channelId: VOICE_CHANNEL_ID
+        channelId: 1
       })
-    ).rejects.toThrow('Insufficient permissions');
-  });
-
-  test('getViewerConfig returns a redacted config for in-channel viewers', async () => {
-    const caller = await createCaller({
-      userId: 2,
-      currentVoiceChannelId: VOICE_CHANNEL_ID
-    });
-    const now = Date.now();
-
-    await tdb.insert(iptvSources).values({
-      channelId: VOICE_CHANNEL_ID,
-      playlistUrl: 'https://example.com/playlist.m3u8?token=secret',
-      pinnedChannelUrls: ['https://example.com/channel-1.m3u8'],
-      activeChannelIndex: 0,
-      enabled: true,
-      createdAt: now,
-      updatedAt: now
-    });
-
-    const config = await caller.iptv.getViewerConfig({
-      channelId: VOICE_CHANNEL_ID
-    });
-
-    expect(config).toEqual({
-      configured: true,
-      enabled: true,
-      pinnedChannelUrls: ['https://example.com/channel-1.m3u8']
-    });
-    expect('playlistUrl' in config).toBe(false);
-  });
-
-  test('getViewerConfig requires the caller to be in the voice channel', async () => {
-    const caller = await createCaller({
-      userId: 2
-    });
+    ).resolves.toBeNull();
 
     await expect(
       caller.iptv.getViewerConfig({
-        channelId: VOICE_CHANNEL_ID
+        channelId: 1
       })
-    ).rejects.toThrow('You must be in this voice channel');
-  });
+    ).resolves.toEqual({
+      configured: false,
+      enabled: false,
+      pinnedChannelUrls: []
+    });
 
-  test('getStatus requires the caller to be in the voice channel', async () => {
-    const caller = await createCaller({
-      userId: 2
+    await expect(
+      caller.iptv.listChannels({
+        channelId: 1
+      })
+    ).resolves.toEqual([]);
+
+    await expect(
+      caller.iptv.listChannels({
+        channelId: 1,
+        playlistUrl: 'https://example.com/playlist.m3u8'
+      })
+    ).resolves.toEqual([]);
+
+    await expect(
+      caller.iptv.play({
+        channelId: 1,
+        channelIndex: 0
+      })
+    ).resolves.toEqual({ status: 'idle' });
+
+    await expect(
+      caller.iptv.stop({
+        channelId: 1
+      })
+    ).resolves.toEqual({ status: 'idle' });
+
+    await expect(
+      caller.iptv.setPinnedChannel({
+        channelId: 1,
+        channelUrl: 'https://example.com/channel.m3u8',
+        pinned: true
+      })
+    ).resolves.toEqual({
+      pinnedChannelUrls: []
     });
 
     await expect(
       caller.iptv.getStatus({
-        channelId: VOICE_CHANNEL_ID
+        channelId: 1
       })
-    ).rejects.toThrow('You must be in this voice channel');
+    ).resolves.toEqual({ status: 'idle' });
+  });
+
+  test('should expose a cancellable compatibility status subscription', async () => {
+    const { caller } = await initTest();
+    const timeoutSentinel = { timedOut: true };
+
+    const result = await Promise.race([
+      caller.iptv.onStatusChange({
+        channelId: 1
+      }),
+      new Promise<typeof timeoutSentinel>((resolve) => {
+        setTimeout(() => resolve(timeoutSentinel), 50);
+      })
+    ]);
+
+    expect(result).not.toBe(timeoutSentinel);
   });
 });

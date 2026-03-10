@@ -7,7 +7,6 @@ import type {
   TCommandsMapByPlugin,
   TExternalStream,
   TExternalStreamsMap,
-  TIptvStatus,
   TJoinedEmoji,
   TJoinedMessage,
   TJoinedPublicUser,
@@ -45,7 +44,6 @@ export interface IServerState {
   voiceMap: TVoiceMap;
   externalStreamsMap: TExternalStreamsMap;
   ownVoiceState: TVoiceUserState;
-  iptvStatusMap: { [channelId: number]: TIptvStatus };
   pinnedCard: TPinnedCard | undefined;
   channelPermissions: TChannelUserPermissionsMap;
   readStatesMap: {
@@ -167,8 +165,6 @@ type TServerStore = IServerState & {
     channelId: number;
     streamId: number;
   }) => void;
-  setIptvStatus: (payload: { channelId: number; status: TIptvStatus }) => void;
-  clearIptvStatus: (channelId: number) => void;
   setPluginCommands: (pluginCommands: TCommandsMapByPlugin) => void;
   addPluginCommand: (command: TCommandInfo) => void;
   removePluginCommand: (payload: { commandName: string }) => void;
@@ -201,7 +197,6 @@ const initialState: IServerState = {
     webcamEnabled: false,
     sharingScreen: false
   },
-  iptvStatusMap: {},
   pinnedCard: undefined,
   channelPermissions: {},
   readStatesMap: {},
@@ -286,7 +281,6 @@ export const useServerStore = create<TServerStore>((set, get) => ({
       publicSettings: data.publicSettings,
       voiceMap: data.voiceMap,
       externalStreamsMap: data.externalStreamsMap,
-      iptvStatusMap: {},
       serverId: data.serverId,
       channelPermissions: data.channelPermissions,
       readStatesMap: data.readStates
@@ -684,23 +678,6 @@ export const useServerStore = create<TServerStore>((set, get) => ({
         ...storeState.externalStreamsMap,
         [channelId]: nextChannelStreams
       }
-    });
-  },
-  setIptvStatus: ({ channelId, status }) => {
-    set({
-      iptvStatusMap: {
-        ...get().iptvStatusMap,
-        [channelId]: status
-      }
-    });
-  },
-  clearIptvStatus: (channelId) => {
-    const nextStatusMap = { ...get().iptvStatusMap };
-
-    delete nextStatusMap[channelId];
-
-    set({
-      iptvStatusMap: nextStatusMap
     });
   },
   setPluginCommands: (pluginCommands) => {

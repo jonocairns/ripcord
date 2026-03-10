@@ -96,30 +96,9 @@ const FloatingPinnedCard = memo(
           : undefined;
       }
 
-      if (currentVoiceChannelId === undefined) {
-        return undefined;
-      }
-
-      const iptvStream = currentVoiceChannelExternalStreams.find(
-        (stream) => stream.key === `iptv:${currentVoiceChannelId}`
-      );
-
-      if (!iptvStream) {
-        return undefined;
-      }
-
-      const iptvVideoStream = externalStreams[iptvStream.streamId]?.videoStream;
-
-      return iptvVideoStream
-        ? {
-            id: `external-stream-${iptvStream.streamId}`,
-            title: iptvStream.title || 'IPTV',
-            videoStream: iptvVideoStream
-          }
-        : undefined;
+      return undefined;
     }, [
       currentVoiceChannelExternalStreams,
-      currentVoiceChannelId,
       externalStreams,
       isExternalStream,
       localScreenShareStream,

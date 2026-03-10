@@ -99,7 +99,6 @@ export enum ChannelPermission {
   SPEAK = "SPEAK",
   SHARE_SCREEN = "SHARE_SCREEN",
   WEBCAM = "WEBCAM",
-  MANAGE_IPTV = "MANAGE_IPTV",
 }
 
 export const channelPermissionLabels: Record<ChannelPermission, string> = {
@@ -109,7 +108,6 @@ export const channelPermissionLabels: Record<ChannelPermission, string> = {
   [ChannelPermission.SPEAK]: "Speak",
   [ChannelPermission.SHARE_SCREEN]: "Share Screen",
   [ChannelPermission.WEBCAM]: "Enable Webcam",
-  [ChannelPermission.MANAGE_IPTV]: "Manage IPTV",
 };
 
 export const channelPermissionDescriptions: Record<ChannelPermission, string> =
@@ -120,6 +118,4 @@ export const channelPermissionDescriptions: Record<ChannelPermission, string> =
     [ChannelPermission.SPEAK]: "Allows the user to speak in voice channels.",
     [ChannelPermission.SHARE_SCREEN]: "Allows the user to share their screen.",
     [ChannelPermission.WEBCAM]: "Allows the user to enable their webcam.",
-    [ChannelPermission.MANAGE_IPTV]:
-      "Allows the user to start, stop, and switch IPTV channels.",
   };

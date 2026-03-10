@@ -24,7 +24,6 @@ export enum ServerEvents {
   VOICE_NEW_PRODUCER = "voiceNewProducer",
   VOICE_PRODUCER_CLOSED = "voiceProducerClosed",
   VOICE_STREAM_WATCHER_ACTIVITY = "voiceStreamWatcherActivity",
-  IPTV_STATUS_CHANGE = "iptvStatusChange",
 
   EMOJI_CREATE = "emojiCreate",
   EMOJI_UPDATE = "emojiUpdate",

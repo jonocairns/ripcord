@@ -1,7 +1,6 @@
 import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useChannelCan, useIsConnected } from '@/features/server/hooks';
-import { setIptvStatus } from '@/features/server/iptv/actions';
 import {
   clearPendingVoiceReconnectChannelId,
   getPendingVoiceReconnectChannelId,
@@ -846,16 +845,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   ]);
 
   useEffect(() => {
-    if (currentVoiceChannelId === undefined) {
-      return;
-    }
-
     Object.entries(currentChannelExternalStreams).forEach(
       ([streamId, stream]) => {
-        if (stream.key !== `iptv:${currentVoiceChannelId}`) {
-          return;
-        }
-
         const numericStreamId = Number(streamId);
         const activeExternalStream = externalStreams[numericStreamId];
         const hasPendingExternalAudio = pendingStreams.has(
@@ -885,7 +876,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   }, [
     addPendingStream,
     currentChannelExternalStreams,
-    currentVoiceChannelId,
     externalStreams,
     pendingStreams
   ]);
@@ -2217,44 +2207,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     clearPendingStreamsForUser,
     rtpCapabilities: routerRtpCapabilities.current!
   });
-
-  useEffect(() => {
-    if (currentVoiceChannelId === undefined) {
-      return;
-    }
-
-    let cancelled = false;
-    const trpc = getTRPCClient();
-
-    void (async () => {
-      try {
-        const config = await trpc.iptv.getViewerConfig.query({
-          channelId: currentVoiceChannelId
-        });
-
-        if (!config.configured || !config.enabled || cancelled) {
-          return;
-        }
-
-        const status = await trpc.iptv.getStatus.query({
-          channelId: currentVoiceChannelId
-        });
-
-        if (!cancelled) {
-          setIptvStatus(currentVoiceChannelId, status);
-        }
-      } catch (error) {
-        logVoice('Failed to fetch IPTV status', {
-          error,
-          channelId: currentVoiceChannelId
-        });
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentVoiceChannelId]);
 
   useEffect(() => {
     if (!isConnected) {
