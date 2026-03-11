@@ -311,8 +311,12 @@ const useTransports = ({
               // Tell the browser to buffer broadcast content for smoother
               // playback. Without this, the default jitter buffer is tuned
               // for interactive calls and drops frames on any network jitter.
-              (receiver as unknown as { playoutDelayHint: number }).playoutDelayHint = 0.5;
-              (receiver as unknown as { jitterBufferTarget: number }).jitterBufferTarget = 500;
+              (
+                receiver as unknown as { playoutDelayHint: number }
+              ).playoutDelayHint = 0.5;
+              (
+                receiver as unknown as { jitterBufferTarget: number }
+              ).jitterBufferTarget = 500;
             } catch {
               // Older browsers may not support these properties
             }

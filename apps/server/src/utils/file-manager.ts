@@ -252,6 +252,43 @@ class TemporaryFileManager {
 
     return safePath;
   };
+
+  // Deletes files in a directory that are older than maxAgeMs.
+  // Called at startup to recover files orphaned by a previous crash.
+  private cleanupDirectory = async (
+    dir: string,
+    maxAgeMs: number
+  ): Promise<void> => {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(dir);
+    } catch {
+      return; // directory doesn't exist yet
+    }
+
+    const now = Date.now();
+
+    await Promise.allSettled(
+      entries.map(async (name) => {
+        const filePath = path.join(dir, name);
+        try {
+          const { mtimeMs } = await fs.stat(filePath);
+          if (now - mtimeMs > maxAgeMs) {
+            await fs.unlink(filePath);
+          }
+        } catch {
+          // ignore — file may have been deleted concurrently
+        }
+      })
+    );
+  };
+
+  public cleanupStaleFiles = async (): Promise<void> => {
+    await Promise.all([
+      this.cleanupDirectory(UPLOADS_PATH, TEMP_FILE_TTL),
+      this.cleanupDirectory(TMP_PATH, TEMP_FILE_TTL)
+    ]);
+  };
 }
 
 class FileManager {
@@ -265,6 +302,7 @@ class FileManager {
 
   public getTemporaryFile = this.tempFileManager.getTemporaryFile;
   public temporaryFileExists = this.tempFileManager.temporaryFileExists;
+  public initialize = this.tempFileManager.cleanupStaleFiles;
 
   private handleStorageLimits = async (tempFile: TTempFile) => {
     const [settings, userStorage, serverStorage] = await Promise.all([

@@ -11,7 +11,9 @@ const loginsQueue = new Queue({
   timeout: 3000
 });
 
-loginsQueue.autostart = true;
+loginsQueue.addEventListener('error', (event) => {
+  logger.error('Logins queue error', event.detail.error);
+});
 
 const enqueueLogin = (userId: number, info: TConnectionInfo | undefined) => {
   loginsQueue.push(async (callback) => {

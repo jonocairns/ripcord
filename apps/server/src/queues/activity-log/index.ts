@@ -12,7 +12,9 @@ const activityLogQueue = new Queue({
   timeout: 3000
 });
 
-activityLogQueue.autostart = true;
+activityLogQueue.addEventListener('error', (event) => {
+  logger.error('Activity log queue error', event.detail.error);
+});
 
 type TEnqueueActivityLog<T extends ActivityLogType = ActivityLogType> = {
   type: T;

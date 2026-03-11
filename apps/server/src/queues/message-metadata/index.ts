@@ -1,5 +1,6 @@
 import Queue from 'queue';
 import { publishMessage } from '../../db/publishers';
+import { logger } from '../../logger';
 import { processMessageMetadata } from './get-message-metadata';
 
 const messageMetadataQueue = new Queue({
@@ -8,7 +9,9 @@ const messageMetadataQueue = new Queue({
   timeout: 3000
 });
 
-messageMetadataQueue.autostart = true;
+messageMetadataQueue.addEventListener('error', (event) => {
+  logger.error('Message metadata queue error', event.detail.error);
+});
 
 const enqueueProcessMetadata = (content: string, messageId: number) => {
   messageMetadataQueue.push(async (callback) => {
