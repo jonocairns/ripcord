@@ -34,11 +34,6 @@ const StatsPopover = memo(({ children }: StatsPopoverProps) => {
                 <div className="space-y-1 text-muted-foreground">
                   <div>Rate: {filesize(currentBitrateSent)}/s</div>
                   <div>Packets: {producer.packetsSent}</div>
-                  {producer.packetsLost > 0 && (
-                    <div className="text-red-400">
-                      Lost: {producer.packetsLost}
-                    </div>
-                  )}
                   <div>RTT: {producer.rtt.toFixed(1)} ms</div>
                 </div>
               ) : (
@@ -52,11 +47,6 @@ const StatsPopover = memo(({ children }: StatsPopoverProps) => {
                 <div className="space-y-1 text-muted-foreground">
                   <div>Rate: {filesize(currentBitrateReceived)}/s</div>
                   <div>Packets: {consumer.packetsReceived}</div>
-                  {consumer.packetsLost > 0 && (
-                    <div className="text-red-400">
-                      Lost: {consumer.packetsLost}
-                    </div>
-                  )}
                 </div>
               ) : (
                 <div className="text-muted-foreground">No remote streams</div>
