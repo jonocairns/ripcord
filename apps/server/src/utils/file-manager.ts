@@ -284,9 +284,13 @@ class TemporaryFileManager {
   };
 
   public cleanupStaleFiles = async (): Promise<void> => {
+    // At boot there are no active uploads or sessions, so all temp files are
+    // stale. Using 0 avoids orphaning files younger than TEMP_FILE_TTL that
+    // survived a crash (they'd never be registered in-memory and would persist
+    // on disk indefinitely).
     await Promise.all([
-      this.cleanupDirectory(UPLOADS_PATH, TEMP_FILE_TTL),
-      this.cleanupDirectory(TMP_PATH, TEMP_FILE_TTL)
+      this.cleanupDirectory(UPLOADS_PATH, 0),
+      this.cleanupDirectory(TMP_PATH, 0)
     ]);
   };
 }
