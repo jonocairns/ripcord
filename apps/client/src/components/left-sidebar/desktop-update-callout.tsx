@@ -1,6 +1,6 @@
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import type { TDesktopUpdateStatus } from '@/runtime/types';
-import { AlertTriangle, Download, Loader2, Rocket } from 'lucide-react';
+import { Download } from 'lucide-react';
 import {
   memo,
   type ReactNode,
@@ -9,7 +9,6 @@ import {
   useMemo,
   useState
 } from 'react';
-import { toast } from 'sonner';
 import { Button } from '../ui/button';
 
 const MANUAL_UPDATE_BASE_URL = 'https://github.com/jonocairns/ripcord/releases';
@@ -44,62 +43,15 @@ type TCalloutContent = {
 const resolveCalloutContent = (
   status: TDesktopUpdateStatus
 ): TCalloutContent | undefined => {
-  if (status.state === 'available') {
+  if (status.state === 'available' && status.manualInstallRequired) {
     return {
       title: 'Update available',
       description: status.availableVersion
-        ? `Version ${status.availableVersion} is downloading in the background.`
-        : 'A new version is downloading in the background.',
-      icon: <Download className="h-4 w-4 text-amber-500" />,
-      toneClassName: 'bg-card'
-    };
-  }
-
-  if (status.state === 'downloading') {
-    const progressText =
-      typeof status.percent === 'number'
-        ? `${Math.round(status.percent)}%`
-        : '';
-
-    return {
-      title: 'Downloading update',
-      description: progressText
-        ? `Update download in progress (${progressText}).`
-        : 'Update download in progress.',
-      icon: <Loader2 className="h-4 w-4 animate-spin text-amber-500" />,
-      toneClassName: 'bg-card'
-    };
-  }
-
-  if (status.state === 'downloaded') {
-    return {
-      title: 'Update ready',
-      description: status.availableVersion
-        ? `Version ${status.availableVersion} is ready to install.`
-        : 'A new version is ready to install.',
-      icon: <Rocket className="h-4 w-4 text-emerald-500" />,
+        ? `Version ${status.availableVersion} is available to download.`
+        : 'A new version is available to download.',
+      icon: <Download className="h-4 w-4 text-emerald-500" />,
       toneClassName: 'bg-card',
       pulseTitleClassName: 'animate-pulse'
-    };
-  }
-
-  if (status.state === 'error' && status.message) {
-    if (status.manualInstallRequired) {
-      return {
-        title: 'Install update manually',
-        description: status.availableVersion
-          ? `Version ${status.availableVersion} is available. Automatic install wasn't available on this machine.`
-          : "Automatic install wasn't available on this machine.",
-        icon: <Download className="h-4 w-4 text-amber-500" />,
-        toneClassName: 'bg-card'
-      };
-    }
-
-    return {
-      title: 'Update unavailable',
-      description: status.message,
-      icon: <AlertTriangle className="h-4 w-4 text-red-500" />,
-      toneClassName: 'bg-card'
     };
   }
 
@@ -109,7 +61,6 @@ const resolveCalloutContent = (
 const DesktopUpdateCallout = memo(() => {
   const desktopBridge = getDesktopBridge();
   const [status, setStatus] = useState<TDesktopUpdateStatus | undefined>();
-  const [installingUpdate, setInstallingUpdate] = useState(false);
 
   useEffect(() => {
     if (!desktopBridge) {
@@ -144,37 +95,6 @@ const DesktopUpdateCallout = memo(() => {
       unsubscribe();
     };
   }, [desktopBridge]);
-
-  const handleInstallUpdate = useCallback(async () => {
-    if (status?.state !== 'downloaded') {
-      return;
-    }
-
-    if (!desktopBridge) {
-      return;
-    }
-
-    setInstallingUpdate(true);
-
-    try {
-      const started = await desktopBridge.installUpdateAndRestart();
-
-      if (!started) {
-        toast.error('Update is not ready to install yet.');
-        return;
-      }
-
-      toast.success('Installing update and restarting app...');
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Failed to start update install';
-      toast.error(message);
-    } finally {
-      setInstallingUpdate(false);
-    }
-  }, [desktopBridge, status?.state]);
 
   const calloutContent = useMemo(() => {
     if (!status) {
@@ -214,27 +134,13 @@ const DesktopUpdateCallout = memo(() => {
           </div>
         </div>
 
-        {status.state === 'downloaded' && (
-          <Button
-            size="sm"
-            className="mt-2 w-full"
-            onClick={handleInstallUpdate}
-            disabled={installingUpdate}
-          >
-            {installingUpdate ? 'Restarting...' : 'Restart to Update'}
-          </Button>
-        )}
-
-        {status.state === 'error' && status.manualInstallRequired && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="mt-2 w-full"
-            onClick={handleOpenManualInstall}
-          >
-            {status.availableVersion ? 'Download Installer' : 'Open Releases'}
-          </Button>
-        )}
+        <Button
+          size="sm"
+          className="mt-2 w-full"
+          onClick={handleOpenManualInstall}
+        >
+          {status.availableVersion ? 'Download Installer' : 'Open Releases'}
+        </Button>
       </div>
     </div>
   );
