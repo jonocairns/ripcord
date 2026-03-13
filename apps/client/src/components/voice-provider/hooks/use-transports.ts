@@ -208,7 +208,7 @@ const useTransports = ({
     async (
       remoteId: number,
       kind: StreamKind,
-      routerRtpCapabilities: RtpCapabilities
+      rtpCapabilities: RtpCapabilities
     ) => {
       if (!consumerTransport.current) {
         logVoice('Consumer transport not available');
@@ -236,7 +236,7 @@ const useTransports = ({
           await trpc.voice.consume.mutate({
             kind,
             remoteId,
-            rtpCapabilities: routerRtpCapabilities
+            rtpCapabilities
           });
 
         logVoice('Got consumer parameters', {
@@ -354,12 +354,12 @@ const useTransports = ({
 
   const consumeExistingProducers = useCallback(
     async (
-      routerRtpCapabilities: RtpCapabilities,
+      rtpCapabilities: RtpCapabilities,
       externalStreamTracks?: {
         [streamId: number]: { audio?: boolean; video?: boolean };
       }
     ) => {
-      logVoice('Consuming existing producers', { routerRtpCapabilities });
+      logVoice('Consuming existing producers', { rtpCapabilities });
 
       const trpc = getTRPCClient();
 
@@ -380,7 +380,7 @@ const useTransports = ({
         });
 
         remoteAudioIds.forEach((remoteId) => {
-          consume(remoteId, StreamKind.AUDIO, routerRtpCapabilities);
+          consume(remoteId, StreamKind.AUDIO, rtpCapabilities);
         });
 
         remoteVideoIds.forEach((remoteId) => {

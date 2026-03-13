@@ -708,9 +708,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         }
       }
 
-      const currentRouterRtpCapabilities = routerRtpCapabilities.current;
+      const currentRtpCapabilities = sendRtpCapabilities.current;
 
-      if (!currentRouterRtpCapabilities) {
+      if (!currentRtpCapabilities) {
         logVoice('Cannot accept pending stream before voice is initialized', {
           remoteId,
           kind
@@ -718,7 +718,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         return;
       }
 
-      void consume(remoteId, kind, currentRouterRtpCapabilities);
+      void consume(remoteId, kind, currentRtpCapabilities);
     },
     [consume, currentChannelExternalStreams]
   );
@@ -793,9 +793,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       return;
     }
 
-    const currentRouterRtpCapabilities = routerRtpCapabilities.current;
+    const currentRtpCapabilities = sendRtpCapabilities.current;
 
-    if (!currentRouterRtpCapabilities) {
+    if (!currentRtpCapabilities) {
       return;
     }
 
@@ -820,7 +820,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           void consume(
             numericStreamId,
             StreamKind.EXTERNAL_AUDIO,
-            currentRouterRtpCapabilities
+            currentRtpCapabilities
           );
         }
 
@@ -832,7 +832,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           void consume(
             numericStreamId,
             StreamKind.EXTERNAL_VIDEO,
-            currentRouterRtpCapabilities
+            currentRtpCapabilities
           );
         }
       }
@@ -2026,7 +2026,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
         await createProducerTransport(device);
         await createConsumerTransport(device);
-        await consumeExistingProducers(incomingRouterRtpCapabilities);
+        await consumeExistingProducers(device.rtpCapabilities);
         await startMicStream();
 
         startMonitoring(producerTransport.current, consumerTransport.current);
@@ -2205,7 +2205,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     removeExternalStream,
     clearRemoteUserStreamsForUser,
     clearPendingStreamsForUser,
-    rtpCapabilities: routerRtpCapabilities.current!
+    rtpCapabilities: sendRtpCapabilities.current
   });
 
   useEffect(() => {
