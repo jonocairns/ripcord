@@ -252,6 +252,47 @@ class TemporaryFileManager {
 
     return safePath;
   };
+
+  // Deletes files in a directory that are older than maxAgeMs.
+  // Called at startup to recover files orphaned by a previous crash.
+  private cleanupDirectory = async (
+    dir: string,
+    maxAgeMs: number
+  ): Promise<void> => {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(dir);
+    } catch {
+      return; // directory doesn't exist yet
+    }
+
+    const now = Date.now();
+
+    await Promise.allSettled(
+      entries.map(async (name) => {
+        const filePath = path.join(dir, name);
+        try {
+          const { mtimeMs } = await fs.stat(filePath);
+          if (now - mtimeMs > maxAgeMs) {
+            await fs.unlink(filePath);
+          }
+        } catch {
+          // ignore — file may have been deleted concurrently
+        }
+      })
+    );
+  };
+
+  public cleanupStaleFiles = async (): Promise<void> => {
+    // At boot there are no active uploads or sessions, so all temp files are
+    // stale. Using 0 avoids orphaning files younger than TEMP_FILE_TTL that
+    // survived a crash (they'd never be registered in-memory and would persist
+    // on disk indefinitely).
+    await Promise.all([
+      this.cleanupDirectory(UPLOADS_PATH, 0),
+      this.cleanupDirectory(TMP_PATH, 0)
+    ]);
+  };
 }
 
 class FileManager {
@@ -265,6 +306,7 @@ class FileManager {
 
   public getTemporaryFile = this.tempFileManager.getTemporaryFile;
   public temporaryFileExists = this.tempFileManager.temporaryFileExists;
+  public initialize = this.tempFileManager.cleanupStaleFiles;
 
   private handleStorageLimits = async (tempFile: TTempFile) => {
     const [settings, userStorage, serverStorage] = await Promise.all([

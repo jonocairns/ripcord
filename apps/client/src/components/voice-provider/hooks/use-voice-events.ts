@@ -11,7 +11,7 @@ type TEvents = {
   consume: (
     remoteId: number,
     kind: StreamKind,
-    routerRtpCapabilities: RtpCapabilities
+    rtpCapabilities: RtpCapabilities
   ) => Promise<void>;
   addPendingStream: (remoteId: number, kind: StreamKind) => void;
   removePendingStream: (remoteId: number, kind: StreamKind) => void;
@@ -26,7 +26,7 @@ type TEvents = {
   removeExternalStream: (streamId: number) => void;
   clearRemoteUserStreamsForUser: (userId: number) => void;
   clearPendingStreamsForUser: (userId: number) => void;
-  rtpCapabilities: RtpCapabilities;
+  rtpCapabilities: RtpCapabilities | null;
 };
 
 const useVoiceEvents = ({
@@ -77,6 +77,15 @@ const useVoiceEvents = ({
           });
 
           if (kind === StreamKind.AUDIO) {
+            if (!rtpCapabilities) {
+              logVoice('Skipping audio consume - missing RTP capabilities', {
+                remoteId,
+                kind,
+                channelId
+              });
+              return;
+            }
+
             void consume(remoteId, kind, rtpCapabilities);
             return;
           }

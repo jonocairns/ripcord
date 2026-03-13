@@ -37,7 +37,7 @@ const VolumeButton = memo(({ volumeKey }: TVolumeButtonProps) => {
           variant={isMuted ? 'destructive' : 'ghost'}
           icon={isMuted ? VolumeX : Volume2}
           title={isMuted ? 'Unmute' : 'Volume'}
-          size="sm"
+          size="default"
         />
       </PopoverTrigger>
       <PopoverContent

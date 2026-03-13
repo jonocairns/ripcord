@@ -64,6 +64,7 @@ const urlMetadataParser = async (
       }
 
       const metadata = await getLinkPreview(url, {
+        timeout: 5000,
         followRedirects: 'follow',
         resolveDNSHost: async (url: string) => {
           return new Promise((resolve, reject) => {

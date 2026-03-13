@@ -204,6 +204,7 @@ const createMainWindow = () => {
         action: "allow",
         overrideBrowserWindowOptions: {
           icon,
+          frame: false,
           autoHideMenuBar: true,
           backgroundColor: "#000000",
         },
@@ -658,10 +659,6 @@ const registerIpcHandlers = () => {
   ipcMain.handle("desktop:check-for-updates", async () => {
     await desktopUpdater.checkForUpdates();
     return desktopUpdater.getStatus();
-  });
-
-  ipcMain.handle("desktop:install-update-and-restart", () => {
-    return desktopUpdater.installUpdateAndRestart();
   });
 
   ipcMain.handle("desktop:list-share-sources", () => {

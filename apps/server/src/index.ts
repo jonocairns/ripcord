@@ -17,12 +17,14 @@ import { pluginManager } from './plugins';
 import { enqueueActivityLog } from './queues/activity-log';
 import { initVoiceRuntimes } from './runtimes';
 import { createServers } from './utils/create-servers';
+import { fileManager } from './utils/file-manager';
 import { loadMediasoup } from './utils/mediasoup';
 import { printDebug } from './utils/print-debug';
 import './utils/updater';
 
 await loadDb();
 await pluginManager.loadPlugins();
+await fileManager.initialize();
 await loadMediasoup();
 await initVoiceRuntimes();
 await createServers();

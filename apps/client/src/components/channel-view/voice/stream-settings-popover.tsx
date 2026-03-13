@@ -27,7 +27,7 @@ const StreamSettingsPopover = memo(
     onVolumeChange,
     onMuteToggle,
     buttonClassName,
-    buttonSize = 'sm',
+    buttonSize = 'default',
     streamStats
   }: TStreamSettingsPopoverProps) => {
     return (

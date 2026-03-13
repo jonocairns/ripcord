@@ -232,7 +232,6 @@ export type TDesktopBridge = {
   pingSidecar: () => Promise<{ available: boolean; reason?: string }>;
   getUpdateStatus: () => Promise<TDesktopUpdateStatus>;
   checkForUpdates: () => Promise<TDesktopUpdateStatus>;
-  installUpdateAndRestart: () => Promise<boolean>;
   listShareSources: () => Promise<TDesktopShareSource[]>;
   listAppAudioTargets: (
     sourceId?: string

@@ -10,7 +10,7 @@ const CardControls = memo(({ children, className }: TCardControlsProps) => {
   return (
     <div
       className={cn(
-        'absolute top-1.5 right-1.5 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100',
+        'absolute top-3 right-3 z-10 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100',
         className
       )}
     >
