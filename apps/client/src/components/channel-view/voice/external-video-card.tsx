@@ -1,6 +1,5 @@
-import { IconButton } from '@/components/ui/icon-button';
 import { cn } from '@/lib/utils';
-import { Video, ZoomIn, ZoomOut } from 'lucide-react';
+import { Video } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { CardControls } from './card-controls';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
@@ -9,31 +8,18 @@ import { PinButton } from './pin-button';
 
 type TExternalVideoControlsProps = {
   isPinned: boolean;
-  isZoomEnabled: boolean;
   handlePinToggle: () => void;
-  handleToggleZoom: () => void;
   showPinControls: boolean;
 };
 
 const ExternalVideoControls = memo(
   ({
     isPinned,
-    isZoomEnabled,
     handlePinToggle,
-    handleToggleZoom,
     showPinControls
   }: TExternalVideoControlsProps) => {
     return (
       <CardControls>
-        {showPinControls && isPinned && (
-          <IconButton
-            variant={isZoomEnabled ? 'default' : 'ghost'}
-            icon={isZoomEnabled ? ZoomOut : ZoomIn}
-            onClick={handleToggleZoom}
-            title={isZoomEnabled ? 'Disable Zoom' : 'Enable Zoom'}
-            size="sm"
-          />
-        )}
         {showPinControls && (
           <PinButton isPinned={isPinned} handlePinToggle={handlePinToggle} />
         )}
@@ -66,11 +52,9 @@ const ExternalVideoCard = memo(
 
     const {
       containerRef,
-      isZoomEnabled,
       zoom,
       position,
       isDragging,
-      handleToggleZoom,
       handleWheel,
       handleMouseDown,
       handleMouseMove,
@@ -111,9 +95,7 @@ const ExternalVideoCard = memo(
       >
         <ExternalVideoControls
           isPinned={isPinned}
-          isZoomEnabled={isZoomEnabled}
           handlePinToggle={handlePinToggle}
-          handleToggleZoom={handleToggleZoom}
           showPinControls={showPinControls}
         />
 
@@ -135,7 +117,7 @@ const ExternalVideoCard = memo(
             <span className="text-white font-medium text-xs truncate">
               {name || 'External Video'}
             </span>
-            {isZoomEnabled && zoom > 1 && (
+            {zoom > 1 && (
               <span className="text-white/70 text-xs ml-auto flex-shrink-0">
                 {Math.round(zoom * 100)}%
               </span>

@@ -133,6 +133,7 @@ class DesktopUpdater {
       console.warn(
         `[desktop] Transient update error persisted after ${MAX_TRANSIENT_RETRIES} retries, surfacing to user`,
       );
+      this.consecutiveTransientFailures = 0;
     }
 
     const manualInstallRequired = isManualInstallRequiredError(error);
@@ -241,20 +242,6 @@ class DesktopUpdater {
 
   public getStatus() {
     return this.status;
-  }
-
-  public installUpdateAndRestart() {
-    if (!this.enabled || this.status.state !== "downloaded") {
-      return false;
-    }
-
-    try {
-      autoUpdater.quitAndInstall();
-      return true;
-    } catch (error) {
-      this.handleUpdateError(error as Error);
-      return false;
-    }
   }
 
   public dispose() {

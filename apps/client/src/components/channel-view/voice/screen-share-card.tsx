@@ -7,11 +7,7 @@ import {
   EyeOff,
   Maximize2,
   Minimize2,
-  Monitor,
-  Volume2,
-  VolumeX,
-  ZoomIn,
-  ZoomOut
+  Monitor
 } from 'lucide-react';
 import {
   memo,
@@ -28,14 +24,16 @@ import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
 import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
+import {
+  PopoutVolumePanel,
+  PopoutWindowControls
+} from './popout-window-controls';
 import { StreamSettingsPopover } from './stream-settings-popover';
 
 type tScreenShareControlsProps = {
   isPinned: boolean;
-  isZoomEnabled: boolean;
   handlePinToggle: () => void;
   handleTogglePopout: () => void;
-  handleToggleZoom: () => void;
   handleToggleFullscreen: () => void;
   showPinControls: boolean;
   showAudioControl: boolean;
@@ -52,10 +50,8 @@ type tScreenShareControlsProps = {
 const ScreenShareControls = memo(
   ({
     isPinned,
-    isZoomEnabled,
     handlePinToggle,
     handleTogglePopout,
-    handleToggleZoom,
     handleToggleFullscreen,
     showPinControls,
     showAudioControl,
@@ -76,7 +72,7 @@ const ScreenShareControls = memo(
             icon={EyeOff}
             onClick={onStopWatching}
             title="Stop Watching"
-            size="sm"
+            size="default"
           />
         )}
         {showAudioControl && (
@@ -92,24 +88,15 @@ const ScreenShareControls = memo(
           icon={ExternalLink}
           onClick={handleTogglePopout}
           title={isPoppedOut ? 'Return to In-App' : 'Pop Out Stream'}
-          size="sm"
+          size="default"
         />
         <IconButton
           variant={isFullscreen ? 'default' : 'ghost'}
           icon={isFullscreen ? Minimize2 : Maximize2}
           onClick={handleToggleFullscreen}
           title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-          size="sm"
+          size="default"
         />
-        {showPinControls && isPinned && (
-          <IconButton
-            variant={isZoomEnabled ? 'default' : 'ghost'}
-            icon={isZoomEnabled ? ZoomOut : ZoomIn}
-            onClick={handleToggleZoom}
-            title={isZoomEnabled ? 'Disable Zoom' : 'Enable Zoom'}
-            size="sm"
-          />
-        )}
         {showPinControls && (
           <PinButton isPinned={isPinned} handlePinToggle={handlePinToggle} />
         )}
@@ -163,11 +150,9 @@ const ScreenShareCard = memo(
 
     const {
       containerRef,
-      isZoomEnabled,
       zoom,
       position,
       isDragging,
-      handleToggleZoom,
       handleWheel,
       handleMouseDown,
       handleMouseMove,
@@ -476,10 +461,8 @@ const ScreenShareCard = memo(
         >
           <ScreenShareControls
             isPinned={isPinned}
-            isZoomEnabled={isZoomEnabled}
             handlePinToggle={handlePinToggle}
             handleTogglePopout={handleTogglePopout}
-            handleToggleZoom={handleToggleZoom}
             handleToggleFullscreen={handleToggleFullscreen}
             showPinControls={showPinControls}
             showAudioControl={
@@ -555,112 +538,20 @@ const ScreenShareCard = memo(
               color: '#ffffff'
             }}
           >
-            <div
-              style={{
-                position: 'absolute',
-                top: '12px',
-                right: '12px',
-                zIndex: 20,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                opacity: showPopoutWindowControls ? 1 : 0,
-                pointerEvents: showPopoutWindowControls ? 'auto' : 'none',
-                transition: 'opacity 140ms ease'
-              }}
+            <PopoutWindowControls
+              visible={showPopoutWindowControls}
+              isFullscreen={isPopoutFullscreen}
+              onToggleFullscreen={handleTogglePopoutFullscreen}
             >
               {!isOwnUser && hasScreenShareAudioStream && (
-                <div
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    border: '1px solid rgba(255, 255, 255, 0.55)',
-                    background: 'rgba(15, 23, 42, 0.88)',
-                    borderRadius: '10px',
-                    padding: '4px 8px',
-                    boxShadow: '0 6px 18px rgba(0, 0, 0, 0.45)'
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={handleMuteToggle}
-                    title={
-                      isMuted ? 'Unmute stream audio' : 'Mute stream audio'
-                    }
-                    aria-label={
-                      isMuted ? 'Unmute stream audio' : 'Mute stream audio'
-                    }
-                    style={{
-                      border: '1px solid rgba(255, 255, 255, 0.55)',
-                      background: 'rgba(15, 23, 42, 0.88)',
-                      color: '#ffffff',
-                      borderRadius: '8px',
-                      width: '32px',
-                      height: '32px',
-                      padding: '0',
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}
-                  >
-                    {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-                  </button>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={volume}
-                    onChange={handlePopoutVolumeChange}
-                    aria-label="Pop-out volume"
-                    style={{ width: '96px', cursor: 'pointer' }}
-                  />
-                  <span
-                    style={{
-                      width: '34px',
-                      textAlign: 'right',
-                      fontSize: '12px',
-                      opacity: 0.85
-                    }}
-                  >
-                    {volume}%
-                  </span>
-                </div>
+                <PopoutVolumePanel
+                  volume={volume}
+                  isMuted={isMuted}
+                  onMuteToggle={handleMuteToggle}
+                  onVolumeChange={handlePopoutVolumeChange}
+                />
               )}
-
-              <button
-                type="button"
-                onClick={handleTogglePopoutFullscreen}
-                title={
-                  isPopoutFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'
-                }
-                aria-label={
-                  isPopoutFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'
-                }
-                style={{
-                  border: '1px solid rgba(255, 255, 255, 0.55)',
-                  background: 'rgba(15, 23, 42, 0.88)',
-                  color: '#ffffff',
-                  borderRadius: '10px',
-                  width: '40px',
-                  height: '40px',
-                  padding: '0',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 6px 18px rgba(0, 0, 0, 0.45)',
-                  cursor: 'pointer'
-                }}
-              >
-                {isPopoutFullscreen ? (
-                  <Minimize2 size={20} />
-                ) : (
-                  <Maximize2 size={20} />
-                )}
-              </button>
-            </div>
+            </PopoutWindowControls>
 
             <div
               style={{

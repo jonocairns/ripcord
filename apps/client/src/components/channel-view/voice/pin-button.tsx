@@ -10,7 +10,12 @@ type TPinButtonProps = {
 };
 
 const PinButton = memo(
-  ({ isPinned, handlePinToggle, className, size = 'sm' }: TPinButtonProps) => {
+  ({
+    isPinned,
+    handlePinToggle,
+    className,
+    size = 'default'
+  }: TPinButtonProps) => {
     return (
       <IconButton
         variant={isPinned ? 'default' : 'ghost'}

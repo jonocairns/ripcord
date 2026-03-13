@@ -75,7 +75,7 @@ const VoiceUserCard = memo(
               icon={EyeOff}
               onClick={onStopWatching}
               title="Stop Watching"
-              size="sm"
+              size="default"
             />
           )}
           {!isOwnUser && <VolumeButton volumeKey={getUserVolumeKey(userId)} />}
@@ -105,29 +105,30 @@ const VoiceUserCard = memo(
           />
         )}
 
-        <div className="absolute bottom-0 left-0 right-0 z-10 p-2">
-          <div className="relative flex w-fit max-w-[calc(100%-0.5rem)] items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1 shadow-lg backdrop-blur-sm">
-            <span className="max-w-[14ch] truncate text-xs font-semibold text-white/95 md:max-w-[22ch] md:text-sm">
+        <div className="absolute bottom-0 left-0 right-0 p-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-white font-medium text-xs truncate">
               {voiceUser.name}
             </span>
-
-            <div className="ml-0.5 flex items-center gap-1">
-              {voiceUser.state.micMuted && (
-                <MicOff className="size-3.5 text-red-500/80" />
-              )}
-
-              {voiceUser.state.soundMuted && (
-                <HeadphoneOff className="size-3.5 text-red-500/80" />
-              )}
-
-              {voiceUser.state.webcamEnabled && (
-                <Video className="size-3.5 text-sky-400/90" />
-              )}
-
-              {voiceUser.state.sharingScreen && (
-                <Monitor className="size-3.5 text-cyan-400/90" />
-              )}
-            </div>
+            {(voiceUser.state.micMuted ||
+              voiceUser.state.soundMuted ||
+              voiceUser.state.webcamEnabled ||
+              voiceUser.state.sharingScreen) && (
+              <div className="flex items-center gap-1 ml-auto">
+                {voiceUser.state.micMuted && (
+                  <MicOff className="size-3.5 text-red-500/80" />
+                )}
+                {voiceUser.state.soundMuted && (
+                  <HeadphoneOff className="size-3.5 text-red-500/80" />
+                )}
+                {voiceUser.state.webcamEnabled && (
+                  <Video className="size-3.5 text-sky-400/90" />
+                )}
+                {voiceUser.state.sharingScreen && (
+                  <Monitor className="size-3.5 text-cyan-400/90" />
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

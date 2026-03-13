@@ -649,8 +649,6 @@ const desktopBridge = {
     ipcRenderer.invoke("desktop:get-update-status"),
   checkForUpdates: (): Promise<TDesktopUpdateStatus> =>
     ipcRenderer.invoke("desktop:check-for-updates"),
-  installUpdateAndRestart: (): Promise<boolean> =>
-    ipcRenderer.invoke("desktop:install-update-and-restart"),
   listShareSources: () => ipcRenderer.invoke("desktop:list-share-sources"),
   listAppAudioTargets: (
     sourceId?: string,
