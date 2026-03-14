@@ -264,7 +264,8 @@ const useTransports = ({
 
               if (
                 consumerTransport.current === transport &&
-                transport.connectionState === 'disconnected'
+                transport.connectionState === 'disconnected' &&
+                !transport.closed
               ) {
                 logVoice('Consumer transport did not recover, closing');
                 closeConsumerTransport();

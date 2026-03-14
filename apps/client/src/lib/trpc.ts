@@ -4,7 +4,10 @@ import { resetServerScreens } from '@/features/server-screens/actions';
 import { resetServerState, setDisconnectInfo } from '@/features/server/actions';
 import { currentVoiceChannelIdSelector } from '@/features/server/channels/selectors';
 import { shouldRestoreVoiceAfterDisconnect } from '@/features/server/disconnect-utils';
-import { setPendingVoiceReconnectChannelId } from '@/features/server/reconnect-state';
+import {
+  getPendingVoiceReconnectChannelId,
+  setPendingVoiceReconnectChannelId
+} from '@/features/server/reconnect-state';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
@@ -54,11 +57,12 @@ const initializeTRPC = (host: string) => {
       const state = useServerStore.getState();
       const wasConnected = state.connected;
       const currentVoiceChannelId = currentVoiceChannelIdSelector(state);
+      const pendingVoiceChannelId = getPendingVoiceReconnectChannelId();
 
       if (wasConnected) {
         setPendingVoiceReconnectChannelId(
           shouldRestoreVoiceAfterDisconnect(cause.code)
-            ? currentVoiceChannelId
+            ? (currentVoiceChannelId ?? pendingVoiceChannelId)
             : undefined
         );
       }
