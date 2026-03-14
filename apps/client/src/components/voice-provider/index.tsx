@@ -668,10 +668,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   } = useLocalStreams();
 
   const voiceCleanupRef = useRef<(() => void) | undefined>(undefined);
+  const hasHandledTransportFailureRef = useRef(false);
   const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
   const isConnectedRef = useRef(isConnected);
 
   const onTransportFailure = useCallback(() => {
+    if (hasHandledTransportFailureRef.current) {
+      logVoice('Transport failure already handled, skipping duplicate cleanup');
+      return;
+    }
+
+    hasHandledTransportFailureRef.current = true;
     logVoice('Transport failure detected, triggering voice cleanup');
 
     const channelId = currentVoiceChannelIdRef.current;
@@ -2031,6 +2038,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       });
 
       cleanup();
+      hasHandledTransportFailureRef.current = false;
 
       try {
         setLoading(true);

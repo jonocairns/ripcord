@@ -251,8 +251,10 @@ const useTransports = ({
 
           if (state === 'failed') {
             logVoice('Consumer transport failed, cleaning up');
-            closeConsumerTransport();
-            onTransportFailure();
+            if (consumerTransport.current === transport) {
+              closeConsumerTransport();
+              onTransportFailure();
+            }
           } else if (state === 'disconnected') {
             logVoice(
               'Consumer transport disconnected, waiting for recovery...'

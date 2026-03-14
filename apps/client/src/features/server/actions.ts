@@ -28,6 +28,11 @@ let wsReconnectGeneration = 0;
 const didGenerationChange = (generation: number): boolean =>
   generation !== wsReconnectGeneration;
 
+const cleanupServerSubscriptions = () => {
+  unsubscribeFromServer?.();
+  unsubscribeFromServer = null;
+};
+
 export const setConnected = (status: boolean) => {
   useServerStore.getState().setConnected(status);
 };
@@ -136,8 +141,7 @@ export const joinServer = async (
   useServerStore.getState().setInitialData(data);
   setDisconnectInfo(undefined);
 
-  unsubscribeFromServer?.();
-  unsubscribeFromServer = null;
+  cleanupServerSubscriptions();
 
   if (!data.mustChangePassword) {
     unsubscribeFromServer = initSubscriptions();
@@ -196,6 +200,7 @@ export const joinServer = async (
           // fall through to teardown so the user sees the password prompt
           // on next connect.
           cleanup({ ignoreSocketCloseEvent: true });
+          cleanupServerSubscriptions();
         }
       } catch (error) {
         if (didGenerationChange(generation)) {
@@ -227,6 +232,7 @@ export const joinServer = async (
 
               if (result === 'password-required') {
                 cleanup({ ignoreSocketCloseEvent: true });
+                cleanupServerSubscriptions();
                 return;
               }
             } catch (retryError) {
@@ -256,7 +262,7 @@ export const disconnectFromServer = () => {
   clearPendingVoiceReconnectChannelId();
   setOnWsReconnect(null);
   cleanup({ ignoreSocketCloseEvent: true });
-  unsubscribeFromServer?.();
+  cleanupServerSubscriptions();
 };
 
 export const logoutFromServer = async () => {
@@ -265,7 +271,7 @@ export const logoutFromServer = async () => {
   setOnWsReconnect(null);
   await revokeRefreshToken();
   cleanup({ clearAuth: true, ignoreSocketCloseEvent: true });
-  unsubscribeFromServer?.();
+  cleanupServerSubscriptions();
 };
 
 window.useToken = async (token: string) => {
