@@ -3,10 +3,9 @@ import { getAvatarColor } from '@/helpers/get-avatar-color';
 import { getFileUrl } from '@/helpers/get-file-url';
 import { getInitialsFromName } from '@/helpers/get-initials-from-name';
 import { cn } from '@/lib/utils';
-import { AvatarImage } from '@radix-ui/react-avatar';
 import { UserStatus } from '@sharkord/shared';
 import { memo } from 'react';
-import { Avatar, AvatarFallback } from '../ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { UserPopover } from '../user-popover';
 import { UserStatusBadge } from '../user-status';
 
