@@ -29,7 +29,7 @@ const User = memo(({ user, isCollapsed = false }: TUserProps) => {
     <UserPopover userId={user.id}>
       <div
         className={cn(
-          'flex select-none items-center gap-3 rounded-md px-2.5 py-1.5 transition-colors hover:bg-accent/65',
+          'flex select-none items-center gap-3 rounded-xl px-2.5 py-2 transition-colors hover:bg-accent/45',
           isCollapsed && 'lg:justify-center lg:gap-0 lg:px-1 lg:py-1'
         )}
         title={user.name}
@@ -106,8 +106,8 @@ const RightSidebar = memo(
   }: TRightSidebarProps) => {
     const users = useUsers();
 
-    const usersToShow = useMemo(
-      () => users.slice(0, MAX_USERS_TO_SHOW) as TMember[],
+    const usersToShow = useMemo<TMember[]>(
+      () => users.slice(0, MAX_USERS_TO_SHOW),
       [users]
     );
 
@@ -120,7 +120,7 @@ const RightSidebar = memo(
     return (
       <aside
         className={cn(
-          'flex h-full flex-col border-l border-border/70 bg-card/85 backdrop-blur-sm transition-all duration-500 ease-in-out',
+          'flex h-full flex-col border-l border-border/70 bg-[linear-gradient(180deg,_rgb(20_24_32),_rgb(16_19_26))] backdrop-blur-sm transition-all duration-500 ease-in-out',
           isOpen && isCollapsed
             ? 'w-60 lg:w-16'
             : isOpen
@@ -134,7 +134,7 @@ const RightSidebar = memo(
           <>
             <div
               className={cn(
-                'flex h-12 items-center justify-between border-b border-border/70 px-3',
+                'flex h-14 items-center justify-between border-b border-border/70 bg-background/20 px-4',
                 isCollapsed && 'lg:px-0 lg:justify-center'
               )}
             >
@@ -170,7 +170,7 @@ const RightSidebar = memo(
 
             <div
               className={cn(
-                'flex-1 overflow-y-auto p-2',
+                'flex-1 overflow-y-auto p-3',
                 isCollapsed && 'lg:p-1'
               )}
             >
@@ -181,10 +181,10 @@ const RightSidebar = memo(
                   ))}
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-5">
                   {sections.map((section) => (
-                    <section key={section.id} className="space-y-1">
-                      <div className="px-2 text-[11px] font-semibold tracking-wide text-muted-foreground/80 uppercase">
+                    <section key={section.id} className="space-y-2 px-1">
+                      <div className="px-1 text-[11px] font-semibold tracking-[0.18em] text-muted-foreground/80 uppercase">
                         {section.label} ({section.users.length})
                       </div>
                       <div className="space-y-1">

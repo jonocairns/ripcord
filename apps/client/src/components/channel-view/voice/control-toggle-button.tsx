@@ -12,6 +12,8 @@ type TControlToggleButtonProps = {
   enabled: boolean;
   enabledLabel: string;
   disabledLabel: string;
+  visibleLabel?: string;
+  showLabel?: boolean;
   enabledIcon: TIconComponent;
   disabledIcon: TIconComponent;
 
@@ -27,6 +29,8 @@ const ControlToggleButton = memo(
     enabled,
     enabledLabel,
     disabledLabel,
+    visibleLabel,
+    showLabel = true,
     enabledIcon: EnabledIcon,
     disabledIcon: DisabledIcon,
     enabledClassName,
@@ -40,9 +44,12 @@ const ControlToggleButton = memo(
       <Tooltip content={label}>
         <Button
           variant="ghost"
-          size="icon"
           className={cn(
-            'rounded-md h-10 w-10 transition-all duration-200',
+            showLabel
+              ? 'h-10 min-w-[3.25rem] rounded-lg px-2 py-1'
+              : 'h-10 w-10 rounded-lg p-0',
+            showLabel ? 'flex-col gap-1' : 'shrink-0',
+            'transition-all duration-200',
             enabled
               ? enabledClassName
               : (disabledClassName ?? 'hover:bg-muted/60'),
@@ -52,7 +59,12 @@ const ControlToggleButton = memo(
           disabled={disabled}
           aria-label={label}
         >
-          {enabled ? <EnabledIcon size={22} /> : <DisabledIcon size={22} />}
+          {enabled ? <EnabledIcon size={18} /> : <DisabledIcon size={18} />}
+          {showLabel && (
+            <span className="text-[9px] font-medium leading-none">
+              {visibleLabel ?? label}
+            </span>
+          )}
         </Button>
       </Tooltip>
     );

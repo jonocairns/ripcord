@@ -1,4 +1,7 @@
-import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
+import {
+  useChannelById,
+  useCurrentVoiceChannelId
+} from '@/features/server/channels/hooks';
 import { useChannelCan } from '@/features/server/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
 import { useVoice } from '@/features/server/voice/hooks';
@@ -6,61 +9,27 @@ import { cn } from '@/lib/utils';
 import { ChannelPermission } from '@sharkord/shared';
 import {
   AlertTriangle,
+  HeadphoneOff,
+  Headphones,
   Loader2,
-  Monitor,
-  MonitorOff,
+  Mic,
+  MicOff,
   PhoneOff,
-  SwitchCamera,
-  Video,
-  VideoOff,
   Wifi,
   WifiOff
 } from 'lucide-react';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { ExternalAudioStreams } from '../channel-view/voice/external-audio-streams';
 import { VoiceAudioStreams } from '../channel-view/voice/voice-audio-streams';
-import { useAvailableDevices } from '../devices-provider/hooks/use-available-devices';
-import { useDevices } from '../devices-provider/hooks/use-devices';
 import { Button } from '../ui/button';
 import { StatsPopover } from './stats-popover';
 
 const VoiceControl = memo(() => {
   const voiceChannelId = useCurrentVoiceChannelId();
+  const voiceChannel = useChannelById(voiceChannelId ?? 0);
   const channelCan = useChannelCan(voiceChannelId);
-  const { ownVoiceState, toggleWebcam, toggleScreenShare, connectionStatus } =
+  const { ownVoiceState, toggleMic, toggleSound, connectionStatus } =
     useVoice();
-  const { devices, saveDevices } = useDevices();
-  const { videoDevices } = useAvailableDevices();
-  const selectableVideoDevices = useMemo(
-    () =>
-      videoDevices.filter((device): device is MediaDeviceInfo =>
-        Boolean(device?.deviceId)
-      ),
-    [videoDevices]
-  );
-  const canSwitchCamera = selectableVideoDevices.length > 1;
-
-  const switchCamera = useCallback(() => {
-    if (!canSwitchCamera) {
-      return;
-    }
-
-    const currentIndex = selectableVideoDevices.findIndex(
-      (device) => device.deviceId === devices.webcamId
-    );
-    const nextIndex =
-      currentIndex < 0 ? 0 : (currentIndex + 1) % selectableVideoDevices.length;
-    const nextDevice = selectableVideoDevices[nextIndex];
-
-    if (!nextDevice) {
-      return;
-    }
-
-    saveDevices({
-      ...devices,
-      webcamId: nextDevice.deviceId
-    });
-  }, [canSwitchCamera, devices, saveDevices, selectableVideoDevices]);
 
   const connectionInfo = useMemo(() => {
     switch (connectionStatus) {
@@ -100,83 +69,83 @@ const VoiceControl = memo(() => {
     <>
       <VoiceAudioStreams channelId={voiceChannelId} />
       <ExternalAudioStreams channelId={voiceChannelId} />
-      <div className="bg-secondary/30 border-t border-border">
-        <StatsPopover>
-          <div className="flex items-center px-2 py-1.5 gap-2 bg-secondary/50 cursor-pointer hover:bg-secondary/60 transition-colors">
-            {connectionInfo.icon}
-            <span className={cn('text-xs font-medium', connectionInfo.color)}>
-              {connectionInfo.text}
-            </span>
-          </div>
-        </StatsPopover>
+      <div className="border-t border-border bg-secondary/20 px-2 py-2">
+        <div className="flex items-center gap-3 px-1">
+          <StatsPopover>
+            <div className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+              {connectionInfo.icon}
+              <div className="min-w-0">
+                <span className="block truncate text-sm font-medium text-foreground">
+                  {voiceChannel?.name ?? 'Voice channel'}
+                </span>
+                <p
+                  className={cn(
+                    'truncate text-[11px] font-medium',
+                    connectionInfo.color
+                  )}
+                >
+                  {connectionInfo.text}
+                </p>
+              </div>
+            </div>
+          </StatsPopover>
 
-        <div className="flex items-center justify-between px-2 py-2">
-          <Button variant="outline" size="sm" onClick={leaveVoice}>
-            <PhoneOff className="h-3.5 w-3.5 mr-1.5" />
-            Disconnect
-          </Button>
-
-          <div className="flex gap-1">
+          <div className="flex items-center gap-1">
             <Button
               variant="ghost"
               size="icon"
               className={cn(
-                'h-8 w-8 rounded-md transition-all duration-200',
-                ownVoiceState.webcamEnabled
-                  ? 'bg-green-500/15 hover:bg-green-500/25 text-green-400 hover:text-green-300'
-                  : 'bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground'
+                'h-8 w-8 rounded-lg transition-all duration-200',
+                ownVoiceState.micMuted
+                  ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25 hover:text-red-300'
+                  : 'text-muted-foreground hover:bg-background/40 hover:text-foreground'
               )}
-              onClick={toggleWebcam}
+              onClick={toggleMic}
               title={
-                ownVoiceState.webcamEnabled
-                  ? 'Turn off camera'
-                  : 'Turn on camera'
+                ownVoiceState.micMuted
+                  ? 'Unmute microphone (Ctrl+Shift+M)'
+                  : 'Mute microphone (Ctrl+Shift+M)'
               }
-              disabled={!channelCan(ChannelPermission.WEBCAM)}
+              disabled={!channelCan(ChannelPermission.SPEAK)}
             >
-              {ownVoiceState.webcamEnabled ? (
-                <Video className="h-4 w-4" />
+              {ownVoiceState.micMuted ? (
+                <MicOff className="h-4 w-4" />
               ) : (
-                <VideoOff className="h-4 w-4" />
+                <Mic className="h-4 w-4" />
               )}
             </Button>
 
-            {canSwitchCamera && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 rounded-md transition-all duration-200 bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground"
-                onClick={switchCamera}
-                title="Switch camera"
-                aria-label="Switch camera"
-                disabled={!channelCan(ChannelPermission.WEBCAM)}
-              >
-                <SwitchCamera className="h-4 w-4" />
-              </Button>
-            )}
-
             <Button
               variant="ghost"
               size="icon"
               className={cn(
-                'h-8 w-8 rounded-md transition-all duration-200',
-                ownVoiceState.sharingScreen
-                  ? 'bg-blue-500/15 hover:bg-blue-500/25 text-blue-400 hover:text-blue-300'
-                  : 'bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground'
+                'h-8 w-8 rounded-lg transition-all duration-200',
+                ownVoiceState.soundMuted
+                  ? 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 hover:text-amber-300'
+                  : 'text-muted-foreground hover:bg-background/40 hover:text-foreground'
               )}
-              onClick={toggleScreenShare}
+              onClick={toggleSound}
               title={
-                ownVoiceState.sharingScreen
-                  ? 'Stop screen share'
-                  : 'Start screen share'
+                ownVoiceState.soundMuted
+                  ? 'Undeafen (Ctrl+Shift+D)'
+                  : 'Deafen (Ctrl+Shift+D)'
               }
-              disabled={!channelCan(ChannelPermission.SHARE_SCREEN)}
             >
-              {ownVoiceState.sharingScreen ? (
-                <Monitor className="h-4 w-4" />
+              {ownVoiceState.soundMuted ? (
+                <HeadphoneOff className="h-4 w-4" />
               ) : (
-                <MonitorOff className="h-4 w-4" />
+                <Headphones className="h-4 w-4" />
               )}
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 rounded-lg text-red-400 transition-all duration-200 hover:bg-red-500/20 hover:text-red-300"
+              onClick={leaveVoice}
+              title="Disconnect"
+            >
+              <PhoneOff className="h-4 w-4" />
             </Button>
           </div>
         </div>

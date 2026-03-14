@@ -65,9 +65,9 @@ const Category = memo(({ categoryId }: TCategoryProps) => {
         transition,
         opacity: isDragging ? 0.5 : 1
       }}
-      className="mb-4"
+      className="mb-5"
     >
-      <div className="mb-1 flex w-full items-center px-2 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground/80 uppercase">
+      <div className="mb-1.5 flex w-full items-center rounded-lg px-2 py-1 text-[11px] font-semibold tracking-[0.18em] text-muted-foreground/80 uppercase">
         <div className="flex w-full items-center gap-1">
           <IconButton
             variant="ghost"
@@ -127,8 +127,8 @@ const Categories = memo(() => {
         return;
       }
 
-      const oldIndex = categoryIds.indexOf(active.id as number);
-      const newIndex = categoryIds.indexOf(over.id as number);
+      const oldIndex = categoryIds.indexOf(Number(active.id));
+      const newIndex = categoryIds.indexOf(Number(over.id));
 
       if (oldIndex === -1 || newIndex === -1) {
         return;
@@ -151,7 +151,7 @@ const Categories = memo(() => {
   );
 
   return (
-    <div className="flex-1 overflow-y-auto p-2">
+    <div className="flex-1 overflow-y-auto px-2.5 py-3">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}

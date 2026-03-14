@@ -56,20 +56,26 @@ const Voice = memo(({ channel, ...props }: TVoiceProps) => {
   const users = useVoiceUsersByChannelId(channel.id);
   const externalStreams = useVoiceChannelExternalStreamsList(channel.id);
   const unreadCount = useUnreadMessagesCount(channel.id);
+  const activeParticipants = users.length + externalStreams.length;
 
   return (
     <>
       <ItemWrapper {...props}>
         <Volume2 className="h-4 w-4" />
         <span className="flex-1">{channel.name}</span>
+        {activeParticipants > 0 && (
+          <div className="flex h-5 min-w-5 items-center justify-center rounded-full border border-border/70 bg-background/60 px-1.5 text-[11px] font-medium text-muted-foreground">
+            {activeParticipants}
+          </div>
+        )}
         {unreadCount > 0 && (
           <div className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-medium text-primary-foreground">
             {unreadCount > 99 ? '99+' : unreadCount}
           </div>
         )}
       </ItemWrapper>
-      {channel.type === 'VOICE' && (
-        <div className="ml-6 space-y-1 mt-1">
+      {channel.type === 'VOICE' && activeParticipants > 0 && (
+        <div className="ml-4 mt-1.5 space-y-0.5 pl-2">
           {users.map((user) => (
             <VoiceUser key={user.id} user={user} />
           ))}
@@ -140,9 +146,10 @@ const ItemWrapper = memo(
         {...dragHandleProps}
         style={style}
         className={cn(
-          'relative flex w-full cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1.5 text-sm font-medium text-muted-foreground/95 transition-colors hover:bg-accent/60 hover:text-foreground',
+          'relative flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground/95 transition-colors hover:bg-accent/60 hover:text-foreground',
           {
-            'bg-accent/85 pl-3 text-foreground': isSelected,
+            'bg-accent/85 pl-3 text-foreground shadow-[inset_0_0_0_1px_rgb(255_255_255/0.04)]':
+              isSelected,
             'cursor-default opacity-50 hover:bg-transparent hover:text-muted-foreground':
               disabled
           },
@@ -152,7 +159,7 @@ const ItemWrapper = memo(
       >
         {isSelected && (
           <span
-            className="absolute top-1.5 bottom-1.5 left-0.5 w-1 rounded-full bg-primary/90"
+            className="absolute bottom-2 left-1 top-2 w-1 rounded-full bg-primary/90"
             aria-hidden
           />
         )}
@@ -280,8 +287,8 @@ const Channels = memo(({ categoryId }: TChannelsProps) => {
         return;
       }
 
-      const oldIndex = channelIds.indexOf(active.id as number);
-      const newIndex = channelIds.indexOf(over.id as number);
+      const oldIndex = channelIds.indexOf(Number(active.id));
+      const newIndex = channelIds.indexOf(Number(over.id));
 
       if (oldIndex === -1 || newIndex === -1) {
         return;
@@ -307,7 +314,7 @@ const Channels = memo(({ categoryId }: TChannelsProps) => {
   );
 
   return (
-    <div className="space-y-0.5">
+    <div className="space-y-1">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}

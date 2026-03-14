@@ -33,6 +33,13 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
   const isMuted = volume === 0;
   const isActivelySpeaking = !user.state.micMuted && isSpeaking;
   const isLive = user.state.webcamEnabled || user.state.sharingScreen;
+  const statusLabel = isActivelySpeaking
+    ? 'Speaking'
+    : user.state.micMuted
+      ? 'Muted'
+      : isLive
+        ? 'Broadcasting'
+        : undefined;
   const handleVolumeChange = useCallback(
     (values: number[]) => {
       setVolume(volumeKey, values[0] || 0);
@@ -79,26 +86,33 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
         )
       }
     >
-      <div className="flex items-center gap-2 px-2 py-1 rounded hover:bg-accent/30 text-sm">
+      <div className="group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-accent/35">
         <UserAvatar
           userId={user.id}
           className={cn(
-            'h-5 w-5',
+            'h-7 w-7 ring-1 ring-transparent transition-all',
             isActivelySpeaking
               ? speakingIntensity === 1
                 ? 'speaking-effect-low'
                 : speakingIntensity === 2
                   ? 'speaking-effect-medium'
                   : 'speaking-effect-high'
-              : ''
+              : 'group-hover:ring-white/10'
           )}
           showUserPopover={false}
           showStatusBadge={false}
         />
 
-        <span className="flex-1 text-muted-foreground truncate text-sm">
-          {user.name}
-        </span>
+        <div className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium text-foreground/90">
+            {user.name}
+          </span>
+          {statusLabel && (
+            <span className="block truncate text-[11px] text-muted-foreground">
+              {statusLabel}
+            </span>
+          )}
+        </div>
 
         {isLive && (
           <Badge className="border-transparent bg-red-500/90 px-1.5 py-0 text-[10px] font-bold tracking-[0.12em] text-white">
