@@ -5,7 +5,8 @@ import {
   clearPendingVoiceReconnectChannelId,
   getPendingVoiceReconnectChannelId,
   getPendingVoiceReconnectRetryCount,
-  incrementPendingVoiceReconnectRetryCount
+  incrementPendingVoiceReconnectRetryCount,
+  setPendingVoiceReconnectChannelId
 } from '@/features/server/reconnect-state';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
@@ -666,6 +667,23 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     clearLocalStreams
   } = useLocalStreams();
 
+  const voiceCleanupRef = useRef<(() => void) | undefined>(undefined);
+  const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
+  const isConnectedRef = useRef(isConnected);
+
+  const onTransportFailure = useCallback(() => {
+    logVoice('Transport failure detected, triggering voice cleanup');
+
+    const channelId = currentVoiceChannelIdRef.current;
+
+    if (isConnectedRef.current && channelId !== undefined) {
+      setPendingVoiceReconnectChannelId(channelId);
+      useServerStore.getState().setCurrentVoiceChannelId(undefined);
+    }
+
+    voiceCleanupRef.current?.();
+  }, []);
+
   const {
     producerTransport,
     consumerTransport,
@@ -682,7 +700,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     removeRemoteUserStream,
     addPendingStream,
     removePendingStream,
-    clearAllPendingStreams
+    clearAllPendingStreams,
+    onTransportFailure
   });
 
   const acceptStream = useCallback(
@@ -1999,6 +2018,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     cleanupTransports
   ]);
 
+  voiceCleanupRef.current = cleanup;
+
   const init = useCallback(
     async (
       incomingRouterRtpCapabilities: RtpCapabilities,
@@ -2074,7 +2095,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
   const setMicMutedRef = useRef(setMicMuted);
   const ownMicMutedRef = useRef(ownVoiceState.micMuted);
-  const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
   const canSpeakRef = useRef(channelCan(ChannelPermission.SPEAK));
 
   useEffect(() => {
@@ -2086,9 +2106,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   }, [ownVoiceState.micMuted]);
 
   useEffect(() => {
+    isConnectedRef.current = isConnected;
     currentVoiceChannelIdRef.current = currentVoiceChannelId;
     canSpeakRef.current = channelCan(ChannelPermission.SPEAK);
-  }, [channelCan, currentVoiceChannelId]);
+  }, [channelCan, currentVoiceChannelId, isConnected]);
 
   const applyPushMicOverride = useCallback(() => {
     if (isPushToMuteHeldRef.current) {

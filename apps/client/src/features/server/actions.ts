@@ -2,7 +2,13 @@ import { Dialog } from '@/components/dialogs/dialogs';
 import { refreshAccessToken, revokeRefreshToken } from '@/helpers/auth';
 import { logDebug } from '@/helpers/browser-logger';
 import { getHostFromServer } from '@/helpers/get-file-url';
-import { cleanup, connectToTRPC, getTRPCClient } from '@/lib/trpc';
+import {
+  cleanup,
+  connectToTRPC,
+  getTRPCClient,
+  reconnectTRPC,
+  setOnWsReconnect
+} from '@/lib/trpc';
 import { type TPublicServerSettings, type TServerInfo } from '@sharkord/shared';
 import { TRPCClientError } from '@trpc/client';
 import { toast } from 'sonner';
@@ -16,6 +22,11 @@ import { type TDisconnectInfo } from './types';
 
 let unsubscribeFromServer: (() => void) | null = null;
 let connectPromise: Promise<void> | null = null;
+// Incremented on each WS reconnect attempt to discard stale async work.
+let wsReconnectGeneration = 0;
+
+const didGenerationChange = (generation: number): boolean =>
+  generation !== wsReconnectGeneration;
 
 export const setConnected = (status: boolean) => {
   useServerStore.getState().setConnected(status);
@@ -131,20 +142,127 @@ export const joinServer = async (
   if (!data.mustChangePassword) {
     unsubscribeFromServer = initSubscriptions();
     setPluginCommands(data.commands);
-    return;
+  } else {
+    setPluginCommands({});
   }
 
-  setPluginCommands({});
+  // Register the WS reconnect handler so that if tRPC silently reconnects
+  // (e.g. server restart, brief network drop), we re-authenticate and
+  // restore subscriptions + voice on the new server-side context.
+  setOnWsReconnect(() => {
+    logDebug('WS reconnected, re-joining server');
+
+    wsReconnectGeneration += 1;
+    const generation = wsReconnectGeneration;
+
+    const attemptSilentRejoin = async (
+      trpcClient?: ReturnType<typeof connectToTRPC>
+    ): Promise<'joined' | 'password-required' | 'cancelled'> => {
+      const trpc = trpcClient ?? getTRPCClient();
+      const { hasPassword, handshakeHash } =
+        await trpc.others.handshake.query();
+
+      if (didGenerationChange(generation)) {
+        return 'cancelled';
+      }
+
+      if (hasPassword) {
+        return 'password-required';
+      }
+
+      await joinServer(handshakeHash, undefined, trpc);
+
+      if (didGenerationChange(generation)) {
+        return 'cancelled';
+      }
+
+      // Clear voice channel only after auth/subscriptions are restored so
+      // the pending voice rejoin runs against a live server session.
+      useServerStore.getState().setCurrentVoiceChannelId(undefined);
+
+      return 'joined';
+    };
+
+    void (async () => {
+      try {
+        const result = await attemptSilentRejoin();
+
+        if (result === 'cancelled') {
+          return;
+        }
+
+        if (result === 'password-required') {
+          // Can't silently reconnect to a password-protected server —
+          // fall through to teardown so the user sees the password prompt
+          // on next connect.
+          cleanup({ ignoreSocketCloseEvent: true });
+        }
+      } catch (error) {
+        if (didGenerationChange(generation)) {
+          return;
+        }
+
+        const isAuthError =
+          error instanceof TRPCClientError &&
+          (!error.data?.code || error.data.code === 'UNAUTHORIZED');
+
+        if (isAuthError) {
+          const refreshed = await refreshAccessToken();
+
+          if (didGenerationChange(generation)) {
+            return;
+          }
+
+          if (refreshed) {
+            logDebug('Token refreshed after WS reconnect, retrying join');
+
+            try {
+              const host = getHostFromServer();
+              const trpc = reconnectTRPC(host);
+              const result = await attemptSilentRejoin(trpc);
+
+              if (result === 'joined' || result === 'cancelled') {
+                return;
+              }
+
+              if (result === 'password-required') {
+                cleanup({ ignoreSocketCloseEvent: true });
+                return;
+              }
+            } catch (retryError) {
+              if (didGenerationChange(generation)) {
+                return;
+              }
+
+              logDebug('Failed to rejoin after token refresh, tearing down', {
+                error: retryError
+              });
+            }
+          }
+        } else {
+          logDebug('Failed to rejoin after WS reconnect, tearing down', {
+            error
+          });
+        }
+
+        cleanup({ ignoreSocketCloseEvent: true });
+      }
+    })();
+  });
 };
 
 export const disconnectFromServer = () => {
+  wsReconnectGeneration += 1;
   clearPendingVoiceReconnectChannelId();
+  setOnWsReconnect(null);
   cleanup({ ignoreSocketCloseEvent: true });
   unsubscribeFromServer?.();
 };
 
 export const logoutFromServer = async () => {
+  wsReconnectGeneration += 1;
   clearPendingVoiceReconnectChannelId();
+  setOnWsReconnect(null);
   await revokeRefreshToken();
   cleanup({ clearAuth: true, ignoreSocketCloseEvent: true });
   unsubscribeFromServer?.();

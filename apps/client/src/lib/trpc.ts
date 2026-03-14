@@ -22,6 +22,7 @@ let wsClient: ReturnType<typeof createWSClient> | null = null;
 let trpc: ReturnType<typeof createTRPCProxyClient<AppRouter>> | null = null;
 let currentHost: string | null = null;
 let teardownTimer: ReturnType<typeof setTimeout> | null = null;
+let onWsReconnect: (() => void) | null = null;
 
 // How long to wait for tRPC to reconnect before tearing down the app state.
 const RETRY_GRACE_PERIOD_MS = 5000;
@@ -100,6 +101,12 @@ const initializeTRPC = (host: string) => {
       if (teardownTimer) {
         clearTimeout(teardownTimer);
         teardownTimer = null;
+
+        // The WS reconnected after a disconnect. The new server-side context
+        // is unauthenticated (authenticated: false in createContext), so we
+        // need to re-run handshake → joinServer to restore auth, subscriptions,
+        // and voice state.
+        onWsReconnect?.();
       }
     },
     connectionParams: async (): Promise<TConnectionParams> => {
@@ -122,6 +129,24 @@ const connectToTRPC = (host: string) => {
   if (trpc && currentHost === host) {
     return trpc;
   }
+
+  return initializeTRPC(host);
+};
+
+const reconnectTRPC = (host: string) => {
+  if (teardownTimer) {
+    clearTimeout(teardownTimer);
+    teardownTimer = null;
+  }
+
+  if (wsClient) {
+    markSocketCloseEventIgnored(wsClient.connection?.ws);
+    wsClient.close();
+  }
+
+  wsClient = null;
+  trpc = null;
+  currentHost = null;
 
   return initializeTRPC(host);
 };
@@ -154,6 +179,7 @@ const cleanup = (
     wsClient.close();
   }
   wsClient = null;
+  onWsReconnect = null;
 
   trpc = null;
   currentHost = null;
@@ -168,4 +194,15 @@ const cleanup = (
   }
 };
 
-export { cleanup, connectToTRPC, getTRPCClient, type AppRouter };
+const setOnWsReconnect = (cb: (() => void) | null) => {
+  onWsReconnect = cb;
+};
+
+export {
+  cleanup,
+  connectToTRPC,
+  getTRPCClient,
+  reconnectTRPC,
+  setOnWsReconnect,
+  type AppRouter
+};

@@ -12,6 +12,11 @@ import {
 } from 'mediasoup-client/types';
 import { useCallback, useRef } from 'react';
 
+// How long to wait for an ICE "disconnected" state to recover before closing
+// the transport. ICE disconnected can be transient (brief packet loss / route
+// change); only "failed" is terminal per the spec.
+const ICE_DISCONNECT_GRACE_MS = 5_000;
+
 type TUseTransportParams = {
   addRemoteUserStream: (
     userId: number,
@@ -34,6 +39,7 @@ type TUseTransportParams = {
   addPendingStream: (remoteId: number, kind: StreamKind) => void;
   removePendingStream: (remoteId: number, kind: StreamKind) => void;
   clearAllPendingStreams: () => void;
+  onTransportFailure: () => void;
 };
 
 const useTransports = ({
@@ -43,10 +49,17 @@ const useTransports = ({
   removeExternalStreamTrack,
   addPendingStream,
   removePendingStream,
-  clearAllPendingStreams
+  clearAllPendingStreams,
+  onTransportFailure
 }: TUseTransportParams) => {
   const producerTransport = useRef<Transport<AppData> | undefined>(undefined);
   const consumerTransport = useRef<Transport<AppData> | undefined>(undefined);
+  const producerDisconnectTimer = useRef<
+    ReturnType<typeof setTimeout> | undefined
+  >(undefined);
+  const consumerDisconnectTimer = useRef<
+    ReturnType<typeof setTimeout> | undefined
+  >(undefined);
   const consumers = useRef<{
     [userId: number]: {
       [kind: string]: Consumer<AppData>;
@@ -54,92 +67,125 @@ const useTransports = ({
   }>({});
   const consumeOperationsInProgress = useRef<Set<string>>(new Set());
 
-  const createProducerTransport = useCallback(async (device: Device) => {
-    logVoice('Creating producer transport', { device });
+  const createProducerTransport = useCallback(
+    async (device: Device) => {
+      logVoice('Creating producer transport', { device });
 
-    const trpc = getTRPCClient();
+      const trpc = getTRPCClient();
 
-    try {
-      const params = await trpc.voice.createProducerTransport.mutate();
+      try {
+        const params = await trpc.voice.createProducerTransport.mutate();
 
-      logVoice('Got producer transport parameters', { params });
+        logVoice('Got producer transport parameters', { params });
 
-      producerTransport.current = device.createSendTransport(params);
+        const transport = device.createSendTransport(params);
+        producerTransport.current = transport;
 
-      producerTransport.current.on(
-        'connect',
-        async ({ dtlsParameters }, callback, errback) => {
-          logVoice('Producer transport connected', { dtlsParameters });
+        transport.on(
+          'connect',
+          async ({ dtlsParameters }, callback, errback) => {
+            logVoice('Producer transport connected', { dtlsParameters });
 
-          try {
-            await trpc.voice.connectProducerTransport.mutate({
-              dtlsParameters
-            });
+            try {
+              await trpc.voice.connectProducerTransport.mutate({
+                dtlsParameters
+              });
 
-            callback();
-          } catch (error) {
-            errback(error as Error);
-            logVoice('Error connecting producer transport', { error });
-          }
-        }
-      );
-
-      producerTransport.current.on('connectionstatechange', (state) => {
-        logVoice('Producer transport connection state changed', { state });
-
-        if (state === 'failed' || state === 'disconnected') {
-          logVoice(`Producer transport ${state}`);
-          producerTransport.current?.close();
-        } else if (state === 'closed') {
-          logVoice('Producer transport closed');
-          producerTransport.current = undefined;
-        }
-      });
-
-      producerTransport.current.on('icecandidateerror', (error) => {
-        logVoice('Producer transport ICE candidate error', { error });
-      });
-
-      producerTransport.current.on(
-        'produce',
-        async ({ rtpParameters, appData }, callback, errback) => {
-          logVoice('Producing new track', { rtpParameters, appData });
-
-          const { kind } = appData as { kind: StreamKind };
-
-          if (!producerTransport.current) return;
-
-          try {
-            const producerId = await trpc.voice.produce.mutate({
-              transportId: producerTransport.current.id,
-              kind,
-              rtpParameters
-            });
-
-            callback({ id: producerId });
-          } catch (error) {
-            if (error instanceof TRPCClientError) {
-              if (error.data.code === 'FORBIDDEN') {
-                logVoice('Permission denied to produce track', { kind });
-                errback(
-                  new Error(
-                    `You don't have permission to ${kind} in this channel`
-                  )
-                );
-
-                return;
-              }
+              callback();
+            } catch (error) {
+              errback(error as Error);
+              logVoice('Error connecting producer transport', { error });
             }
-
-            logVoice('Error producing new track', { error });
-            errback(error as Error);
           }
-        }
-      );
-    } catch (error) {
-      logVoice('Error creating producer transport', { error });
-    }
-  }, []);
+        );
+
+        transport.on('connectionstatechange', (state) => {
+          logVoice('Producer transport connection state changed', { state });
+
+          if (producerDisconnectTimer.current !== undefined) {
+            clearTimeout(producerDisconnectTimer.current);
+            producerDisconnectTimer.current = undefined;
+          }
+
+          if (state === 'failed') {
+            logVoice('Producer transport failed');
+
+            if (producerTransport.current === transport && !transport.closed) {
+              transport.close();
+              onTransportFailure();
+            }
+          } else if (state === 'disconnected') {
+            logVoice(
+              'Producer transport disconnected, waiting for recovery...'
+            );
+            producerDisconnectTimer.current = setTimeout(() => {
+              producerDisconnectTimer.current = undefined;
+
+              if (
+                producerTransport.current === transport &&
+                transport.connectionState === 'disconnected' &&
+                !transport.closed
+              ) {
+                logVoice('Producer transport did not recover, closing');
+                transport.close();
+                onTransportFailure();
+              }
+            }, ICE_DISCONNECT_GRACE_MS);
+          } else if (state === 'closed') {
+            logVoice('Producer transport closed');
+
+            if (producerTransport.current === transport) {
+              producerTransport.current = undefined;
+            }
+          }
+        });
+
+        transport.on('icecandidateerror', (error) => {
+          logVoice('Producer transport ICE candidate error', { error });
+        });
+
+        transport.on(
+          'produce',
+          async ({ rtpParameters, appData }, callback, errback) => {
+            logVoice('Producing new track', { rtpParameters, appData });
+
+            const { kind } = appData as { kind: StreamKind };
+
+            if (!producerTransport.current) return;
+
+            try {
+              const producerId = await trpc.voice.produce.mutate({
+                transportId: producerTransport.current.id,
+                kind,
+                rtpParameters
+              });
+
+              callback({ id: producerId });
+            } catch (error) {
+              if (error instanceof TRPCClientError) {
+                if (error.data.code === 'FORBIDDEN') {
+                  logVoice('Permission denied to produce track', { kind });
+                  errback(
+                    new Error(
+                      `You don't have permission to ${kind} in this channel`
+                    )
+                  );
+
+                  return;
+                }
+              }
+
+              logVoice('Error producing new track', { error });
+              errback(error as Error);
+            }
+          }
+        );
+      } catch (error) {
+        logVoice('Error creating producer transport', { error });
+      }
+    },
+    [onTransportFailure]
+  );
 
   const createConsumerTransport = useCallback(
     async (device: Device) => {
@@ -152,9 +198,10 @@ const useTransports = ({
 
         logVoice('Got consumer transport parameters', { params });
 
-        consumerTransport.current = device.createRecvTransport(params);
+        const transport = device.createRecvTransport(params);
+        consumerTransport.current = transport;
 
-        consumerTransport.current.on(
+        transport.on(
           'connect',
           async ({ dtlsParameters }, callback, errback) => {
             logVoice('Consumer transport connected', { dtlsParameters });
@@ -172,36 +219,73 @@ const useTransports = ({
           }
         );
 
-        consumerTransport.current.on('connectionstatechange', (state) => {
+        const closeConsumerTransport = () => {
+          if (consumerTransport.current !== transport) {
+            return;
+          }
+
+          Object.values(consumers.current).forEach((userConsumers) => {
+            Object.values(userConsumers).forEach((consumer) => {
+              consumer.close();
+            });
+          });
+          consumers.current = {};
+          clearAllPendingStreams();
+
+          if (!transport.closed) {
+            transport.close();
+          }
+
+          if (consumerTransport.current === transport) {
+            consumerTransport.current = undefined;
+          }
+        };
+
+        transport.on('connectionstatechange', (state) => {
           logVoice('Consumer transport connection state changed', { state });
 
-          if (state === 'failed' || state === 'disconnected') {
-            logVoice(`Consumer transport ${state}, attempting cleanup`);
+          if (consumerDisconnectTimer.current !== undefined) {
+            clearTimeout(consumerDisconnectTimer.current);
+            consumerDisconnectTimer.current = undefined;
+          }
 
-            Object.values(consumers.current).forEach((userConsumers) => {
-              Object.values(userConsumers).forEach((consumer) => {
-                consumer.close();
-              });
-            });
-            consumers.current = {};
-            clearAllPendingStreams();
+          if (state === 'failed') {
+            logVoice('Consumer transport failed, cleaning up');
+            closeConsumerTransport();
+            onTransportFailure();
+          } else if (state === 'disconnected') {
+            logVoice(
+              'Consumer transport disconnected, waiting for recovery...'
+            );
+            consumerDisconnectTimer.current = setTimeout(() => {
+              consumerDisconnectTimer.current = undefined;
 
-            consumerTransport.current?.close();
-            consumerTransport.current = undefined;
+              if (
+                consumerTransport.current === transport &&
+                transport.connectionState === 'disconnected'
+              ) {
+                logVoice('Consumer transport did not recover, closing');
+                closeConsumerTransport();
+                onTransportFailure();
+              }
+            }, ICE_DISCONNECT_GRACE_MS);
           } else if (state === 'closed') {
             logVoice('Consumer transport closed');
-            consumerTransport.current = undefined;
+
+            if (consumerTransport.current === transport) {
+              consumerTransport.current = undefined;
+            }
           }
         });
 
-        consumerTransport.current.on('icecandidateerror', (error) => {
+        transport.on('icecandidateerror', (error) => {
           logVoice('Consumer transport ICE candidate error', { error });
         });
       } catch (error) {
         logVoice('Failed to create consumer transport', { error });
       }
     },
-    [clearAllPendingStreams]
+    [clearAllPendingStreams, onTransportFailure]
   );
 
   const consume = useCallback(
@@ -450,6 +534,16 @@ const useTransports = ({
 
   const cleanupTransports = useCallback(() => {
     logVoice('Cleaning up transports');
+
+    if (producerDisconnectTimer.current !== undefined) {
+      clearTimeout(producerDisconnectTimer.current);
+      producerDisconnectTimer.current = undefined;
+    }
+
+    if (consumerDisconnectTimer.current !== undefined) {
+      clearTimeout(consumerDisconnectTimer.current);
+      consumerDisconnectTimer.current = undefined;
+    }
 
     Object.values(consumers.current).forEach((userConsumers) => {
       Object.values(userConsumers).forEach((consumer) => {
