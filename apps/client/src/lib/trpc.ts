@@ -151,6 +151,7 @@ const reconnectTRPC = (host: string) => {
   wsClient = null;
   trpc = null;
   currentHost = null;
+  onWsReconnect = null;
 
   return initializeTRPC(host);
 };
