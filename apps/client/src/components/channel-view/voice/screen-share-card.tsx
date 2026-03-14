@@ -29,6 +29,7 @@ import {
   PopoutWindowControls
 } from './popout-window-controls';
 import { StreamSettingsPopover } from './stream-settings-popover';
+import { VoiceSurface } from './voice-surface';
 
 type tScreenShareControlsProps = {
   isPinned: boolean;
@@ -441,13 +442,12 @@ const ScreenShareCard = memo(
 
     return (
       <>
-        <div
+        <VoiceSurface
           ref={containerRef}
           className={cn(
-            'relative bg-card rounded-lg overflow-hidden group',
+            'relative group',
             'flex items-center justify-center',
             'w-full h-full',
-            'border border-border',
             className
           )}
           onWheel={isPoppedOut ? undefined : handleWheel}
@@ -484,7 +484,7 @@ const ScreenShareCard = memo(
             muted={isOwnUser || isPoppedOut}
             playsInline
             className={cn(
-              'absolute inset-0 w-full h-full object-contain bg-black',
+              'absolute inset-0 h-full w-full bg-[#1b2026] object-cover',
               isPoppedOut && 'opacity-0 pointer-events-none'
             )}
             style={{
@@ -519,7 +519,7 @@ const ScreenShareCard = memo(
               </button>
             </div>
           )}
-        </div>
+        </VoiceSurface>
 
         <PopoutWindow
           isOpen={isPoppedOut}

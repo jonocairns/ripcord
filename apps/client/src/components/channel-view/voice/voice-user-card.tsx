@@ -10,6 +10,7 @@ import { memo, useCallback } from 'react';
 import { CardControls } from './card-controls';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
+import { VoiceSurface } from './voice-surface';
 import { VolumeButton } from './volume-button';
 
 type TVoiceUserCardProps = {
@@ -52,12 +53,11 @@ const VoiceUserCard = memo(
     const isActivelySpeaking = !voiceUser.state.micMuted && isSpeaking;
 
     return (
-      <div
+      <VoiceSurface
         className={cn(
-          'relative bg-card rounded-xl overflow-hidden group',
+          'relative group',
           'flex items-center justify-center',
           'w-full h-full',
-          'border border-border/70 shadow-[0_10px_32px_rgb(0_0_0/0.38)]',
           isActivelySpeaking
             ? speakingIntensity === 1
               ? 'speaking-effect-low'
@@ -131,7 +131,7 @@ const VoiceUserCard = memo(
             )}
           </div>
         </div>
-      </div>
+      </VoiceSurface>
     );
   }
 );

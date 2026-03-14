@@ -2,8 +2,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
 import { openDialog } from '@/features/dialogs/actions';
@@ -185,14 +183,12 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
-                className="h-10 w-full justify-between rounded-md px-2 text-left hover:bg-sidebar-accent"
+                className="h-10 w-full justify-between rounded-md px-2 text-left hover:!bg-transparent hover:!text-current data-[state=open]:!bg-transparent data-[state=open]:!text-current dark:hover:!bg-transparent"
               >
                 {headerContent}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-64">
-              <DropdownMenuLabel>Server</DropdownMenuLabel>
-              <DropdownMenuSeparator />
               {canManageServerSettings && (
                 <DropdownMenuItem
                   onClick={() => openServerScreen(ServerScreen.SERVER_SETTINGS)}
@@ -236,8 +232,10 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
         <Categories />
       </div>
       <DesktopUpdateCallout />
-      <VoiceControl />
-      <UserControl />
+      <div className="border-t border-sidebar-border bg-[#171a1f]/95">
+        <VoiceControl />
+        <UserControl />
+      </div>
     </aside>
   );
 });

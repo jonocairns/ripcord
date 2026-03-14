@@ -102,12 +102,13 @@ const UserPopover = memo(
                 Member since {format(new Date(user.createdAt), 'PP')}
               </p>
 
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-2.5">
                 <Protect permission={Permission.MANAGE_USERS}>
                   <IconButton
                     icon={UserCog}
                     variant="ghost"
-                    size="sm"
+                    size="default"
+                    className="h-9 w-9 rounded-md"
                     title="Moderation View"
                     onClick={() => setModViewOpen(true, user.id)}
                   />

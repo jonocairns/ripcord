@@ -249,6 +249,11 @@ const useVoiceControls = ({
     } catch (error) {
       updateOwnVoiceState({ sharingScreen: false });
 
+      // user cancelled the native screen share picker — not an error
+      if (error instanceof DOMException && error.name === 'NotAllowedError') {
+        return;
+      }
+
       try {
         await trpc.voice.updateState.mutate({ sharingScreen: false });
       } catch {
