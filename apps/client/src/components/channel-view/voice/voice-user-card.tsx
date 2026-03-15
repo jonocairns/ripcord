@@ -10,6 +10,7 @@ import { memo, useCallback } from 'react';
 import { CardControls } from './card-controls';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
+import { VoiceSurface } from './voice-surface';
 import { VolumeButton } from './volume-button';
 
 type TVoiceUserCardProps = {
@@ -52,12 +53,11 @@ const VoiceUserCard = memo(
     const isActivelySpeaking = !voiceUser.state.micMuted && isSpeaking;
 
     return (
-      <div
+      <VoiceSurface
         className={cn(
-          'relative bg-card rounded-xl overflow-hidden group',
+          'relative group',
           'flex items-center justify-center',
           'w-full h-full',
-          'border border-border/70 shadow-[0_10px_32px_rgb(0_0_0/0.38)]',
           isActivelySpeaking
             ? speakingIntensity === 1
               ? 'speaking-effect-low'
@@ -105,16 +105,16 @@ const VoiceUserCard = memo(
           />
         )}
 
-        <div className="absolute bottom-0 left-0 right-0 p-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-white font-medium text-xs truncate">
+        <div className="absolute bottom-0 left-0 right-0 p-3 z-10 opacity-0 transition-opacity group-hover:opacity-100">
+          <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-black/45 px-2.5 py-1.5 shadow-sm backdrop-blur-md">
+            <span className="min-w-0 truncate text-xs font-medium text-white">
               {voiceUser.name}
             </span>
             {(voiceUser.state.micMuted ||
               voiceUser.state.soundMuted ||
               voiceUser.state.webcamEnabled ||
               voiceUser.state.sharingScreen) && (
-              <div className="flex items-center gap-1 ml-auto">
+              <div className="ml-auto flex items-center gap-1">
                 {voiceUser.state.micMuted && (
                   <MicOff className="size-3.5 text-red-500/80" />
                 )}
@@ -131,7 +131,7 @@ const VoiceUserCard = memo(
             )}
           </div>
         </div>
-      </div>
+      </VoiceSurface>
     );
   }
 );

@@ -79,7 +79,7 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
         )
       }
     >
-      <div className="flex items-center gap-2 px-2 py-1 rounded hover:bg-accent/30 text-sm">
+      <div className="flex cursor-pointer items-center gap-3 rounded px-3 py-2 text-sm">
         <UserAvatar
           userId={user.id}
           className={cn(
@@ -96,7 +96,7 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
           showStatusBadge={false}
         />
 
-        <span className="flex-1 text-muted-foreground truncate text-sm">
+        <span className="flex-1 truncate text-sm text-foreground/80">
           {user.name}
         </span>
 

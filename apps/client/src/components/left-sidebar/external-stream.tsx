@@ -16,7 +16,7 @@ const ExternalStream = memo(
     const hasAudio = tracks?.audio;
 
     return (
-      <div className="flex items-center gap-2 px-2 py-1 rounded hover:bg-accent/30 text-sm">
+      <div className="flex items-center gap-3 rounded px-3 py-2 text-sm">
         <Tooltip
           content={
             pluginId ? `External Stream (${pluginId})` : 'External Stream'
@@ -33,7 +33,7 @@ const ExternalStream = memo(
           )}
         </Tooltip>
 
-        <span className="flex-1 text-muted-foreground truncate text-sm">
+        <span className="flex-1 truncate text-sm text-foreground/80">
           {title}
         </span>
 

@@ -1,45 +1,33 @@
-import { useAvailableDevices } from '@/components/devices-provider/hooks/use-available-devices';
-import { useDevices } from '@/components/devices-provider/hooks/use-devices';
 import { Button } from '@/components/ui/button';
-import { Tooltip } from '@/components/ui/tooltip';
 import { useChannelCan } from '@/features/server/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
 import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
 import { cn } from '@/lib/utils';
 import { ChannelPermission } from '@sharkord/shared';
 import {
+  HeadphoneOff,
+  Headphones,
   Mic,
   MicOff,
   Monitor,
   PhoneOff,
   ScreenShareOff,
-  SwitchCamera,
   Video,
   VideoOff
 } from 'lucide-react';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { ControlToggleButton } from './control-toggle-button';
-import { useControlsBarVisibility } from './hooks/use-controls-bar-visibility';
+import { VoiceSurface } from './voice-surface';
 
 type TControlsBarProps = {
   channelId: number;
 };
 
 const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
-  const { toggleMic, toggleWebcam, toggleScreenShare } = useVoice();
+  const { toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =
+    useVoice();
   const ownVoiceState = useOwnVoiceState();
   const channelCan = useChannelCan(channelId);
-  const isVisible = useControlsBarVisibility();
-  const { devices, saveDevices } = useDevices();
-  const { videoDevices } = useAvailableDevices();
-  const selectableVideoDevices = useMemo(
-    () =>
-      videoDevices.filter((device): device is MediaDeviceInfo =>
-        Boolean(device?.deviceId)
-      ),
-    [videoDevices]
-  );
-  const canSwitchCamera = selectableVideoDevices.length > 1;
 
   const permissions = useMemo(
     () => ({
@@ -50,42 +38,15 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
     [channelCan]
   );
 
-  const switchCamera = useCallback(() => {
-    if (!canSwitchCamera) {
-      return;
-    }
-
-    const currentIndex = selectableVideoDevices.findIndex(
-      (device) => device.deviceId === devices.webcamId
-    );
-    const nextIndex =
-      currentIndex < 0 ? 0 : (currentIndex + 1) % selectableVideoDevices.length;
-    const nextDevice = selectableVideoDevices[nextIndex];
-
-    if (!nextDevice) {
-      return;
-    }
-
-    saveDevices({
-      ...devices,
-      webcamId: nextDevice.deviceId
-    });
-  }, [canSwitchCamera, devices, saveDevices, selectableVideoDevices]);
-
   return (
     <div
       className={cn(
-        'absolute bottom-8 left-0 right-0 flex justify-center items-center pointer-events-none z-50',
-        'transition-all duration-300 ease-in-out gap-3',
-        isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
+        'pointer-events-none absolute inset-x-0 bottom-6 z-50 flex justify-center px-4'
       )}
     >
-      <div
-        className={cn(
-          'flex items-center gap-2 pointer-events-auto',
-          'h-14 px-2 rounded-md border shadow-xl',
-          'bg-card border-border/50 backdrop-blur-md'
-        )}
+      <VoiceSurface
+        variant="controls"
+        className="pointer-events-auto flex items-center gap-0.5 px-1.5 py-1.5"
       >
         <ControlToggleButton
           enabled={ownVoiceState.micMuted}
@@ -93,9 +54,21 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
           disabledLabel="Mute"
           enabledIcon={MicOff}
           disabledIcon={Mic}
-          enabledClassName="bg-red-500/20 text-red-500 hover:bg-red-500/30 hover:text-red-500"
+          enabledClassName="border-red-400/20 bg-red-500/14 text-red-200 hover:!border-red-400/20 hover:!bg-red-500/14 hover:!text-red-200"
+          disabledClassName="text-slate-300 hover:!border-white/10 hover:!bg-white/7 hover:!text-white"
           onClick={toggleMic}
           disabled={!permissions.canSpeak}
+        />
+
+        <ControlToggleButton
+          enabled={ownVoiceState.soundMuted}
+          enabledLabel="Undeafen"
+          disabledLabel="Deafen"
+          enabledIcon={HeadphoneOff}
+          disabledIcon={Headphones}
+          enabledClassName="border-red-400/20 bg-red-500/14 text-red-200 hover:!border-red-400/20 hover:!bg-red-500/14 hover:!text-red-200"
+          disabledClassName="text-slate-300 hover:!border-white/10 hover:!bg-white/7 hover:!text-white"
+          onClick={toggleSound}
         />
 
         <ControlToggleButton
@@ -104,29 +77,11 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
           disabledLabel="Start Video"
           enabledIcon={Video}
           disabledIcon={VideoOff}
-          enabledClassName="bg-green-500/20 text-green-500 hover:bg-green-500/30 hover:text-green-500"
+          enabledClassName="border-emerald-400/20 bg-emerald-500/14 text-emerald-200 hover:!border-emerald-400/20 hover:!bg-emerald-500/14 hover:!text-emerald-200"
+          disabledClassName="text-slate-300 hover:!border-white/10 hover:!bg-white/7 hover:!text-white"
           onClick={toggleWebcam}
           disabled={!permissions.canWebcam}
         />
-
-        {canSwitchCamera && (
-          <Tooltip content="Switch Camera">
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn(
-                'rounded-md h-10 w-10 transition-all duration-200',
-                'hover:bg-muted/60',
-                !permissions.canWebcam && 'opacity-60 hover:bg-transparent'
-              )}
-              onClick={switchCamera}
-              disabled={!permissions.canWebcam}
-              aria-label="Switch Camera"
-            >
-              <SwitchCamera size={22} />
-            </Button>
-          </Tooltip>
-        )}
 
         <ControlToggleButton
           enabled={ownVoiceState.sharingScreen}
@@ -134,25 +89,26 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
           disabledLabel="Share Screen"
           enabledIcon={ScreenShareOff}
           disabledIcon={Monitor}
-          enabledClassName="bg-blue-500/20 text-blue-500 hover:bg-blue-500/30 hover:text-blue-500"
+          enabledClassName="border-sky-400/20 bg-sky-500/14 text-sky-200 hover:!border-sky-400/20 hover:!bg-sky-500/14 hover:!text-sky-200"
+          disabledClassName="text-slate-300 hover:!border-white/10 hover:!bg-white/7 hover:!text-white"
           onClick={toggleScreenShare}
           disabled={!permissions.canShareScreen}
         />
-      </div>
 
-      <Tooltip content="Disconnect">
+        <div className="mx-0.5 h-7 w-px bg-white/8" />
+
         <Button
+          variant="ghost"
           size="icon"
           className={cn(
-            'pointer-events-auto h-14 w-18 rounded-md text-white shadow-xl transition-all active:scale-95',
-            'bg-[#ec4245] hover:bg-[#da373c]'
+            'h-10 w-10 rounded-xl border border-red-300/15 bg-[#ef4444] text-white transition-[background-color,border-color,transform] duration-150 hover:!border-red-200/30 hover:!bg-[#dc2626] hover:!text-white active:scale-95'
           )}
           onClick={leaveVoice}
           aria-label="Disconnect"
         >
-          <PhoneOff size={24} fill="currentColor" />
+          <PhoneOff size={20} strokeWidth={2.4} />
         </Button>
-      </Tooltip>
+      </VoiceSurface>
     </div>
   );
 });

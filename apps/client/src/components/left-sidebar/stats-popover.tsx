@@ -1,14 +1,18 @@
 import { useVoice } from '@/features/server/voice/hooks';
 import { filesize } from 'filesize';
-import { memo } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 
 type StatsPopoverProps = {
   children: React.ReactNode;
 };
 
+const CLOSE_DELAY_MS = 120;
+
 const StatsPopover = memo(({ children }: StatsPopoverProps) => {
   const { transportStats } = useVoice();
+  const [open, setOpen] = useState(false);
+  const closeTimeoutRef = useRef<number | undefined>(undefined);
 
   const {
     producer,
@@ -19,10 +23,48 @@ const StatsPopover = memo(({ children }: StatsPopoverProps) => {
     currentBitrateReceived
   } = transportStats;
 
+  const clearCloseTimeout = useCallback(() => {
+    if (closeTimeoutRef.current === undefined) {
+      return;
+    }
+
+    window.clearTimeout(closeTimeoutRef.current);
+    closeTimeoutRef.current = undefined;
+  }, []);
+
+  const handleOpen = useCallback(() => {
+    clearCloseTimeout();
+    setOpen(true);
+  }, [clearCloseTimeout]);
+
+  const handleClose = useCallback(() => {
+    clearCloseTimeout();
+    closeTimeoutRef.current = window.setTimeout(() => {
+      setOpen(false);
+      closeTimeoutRef.current = undefined;
+    }, CLOSE_DELAY_MS);
+  }, [clearCloseTimeout]);
+
+  useEffect(() => {
+    return () => {
+      clearCloseTimeout();
+    };
+  }, [clearCloseTimeout]);
+
   return (
-    <Popover>
-      <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent side="top" align="start" className="p-0">
+    <Popover open={open}>
+      <PopoverTrigger asChild>
+        <div onMouseEnter={handleOpen} onMouseLeave={handleClose}>
+          {children}
+        </div>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        className="p-0"
+        onMouseEnter={handleOpen}
+        onMouseLeave={handleClose}
+      >
         <div className="w-72 p-3 text-xs">
           <h3 className="font-semibold text-sm mb-2 text-foreground">
             Transport Statistics

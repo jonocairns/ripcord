@@ -7,6 +7,7 @@ import { StreamKind } from '@sharkord/shared';
 import { Headphones, Monitor, Router, Video } from 'lucide-react';
 import { memo } from 'react';
 import { CardGradient } from './card-gradient';
+import { VoiceSurface } from './voice-surface';
 
 type TPendingStreamCardProps = {
   kind: StreamKind;
@@ -78,12 +79,11 @@ const PendingStreamCard = memo(
     } = getPendingStreamDetails(kind, displayName);
 
     return (
-      <div
+      <VoiceSurface
         className={cn(
-          'relative bg-card rounded-xl overflow-hidden',
+          'relative',
           'flex items-center justify-center',
           'w-full h-full',
-          'border border-border/70 shadow-[0_10px_32px_rgb(0_0_0/0.38)]',
           className
         )}
       >
@@ -122,7 +122,7 @@ const PendingStreamCard = memo(
             Watch
           </Button>
         </div>
-      </div>
+      </VoiceSurface>
     );
   }
 );

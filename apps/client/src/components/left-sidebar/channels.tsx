@@ -69,7 +69,7 @@ const Voice = memo(({ channel, ...props }: TVoiceProps) => {
         )}
       </ItemWrapper>
       {channel.type === 'VOICE' && (
-        <div className="ml-6 space-y-1 mt-1">
+        <div className="mt-1.5 ml-6 space-y-1.5">
           {users.map((user) => (
             <VoiceUser key={user.id} user={user} />
           ))}

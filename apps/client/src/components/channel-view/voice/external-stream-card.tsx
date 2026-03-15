@@ -35,6 +35,7 @@ import {
   PopoutWindowControls
 } from './popout-window-controls';
 import { StreamSettingsPopover } from './stream-settings-popover';
+import { VoiceSurface } from './voice-surface';
 
 type TExternalStreamControlsProps = {
   isPinned: boolean;
@@ -505,13 +506,12 @@ const ExternalStreamCard = memo(
 
     return (
       <>
-        <div
+        <VoiceSurface
           ref={containerRef}
           className={cn(
-            'relative bg-card rounded-lg overflow-hidden group',
+            'relative group',
             'flex items-center justify-center',
             'w-full h-full',
-            'border border-border',
             className
           )}
           onWheel={hasVideo && !isPoppedOut ? handleWheel : undefined}
@@ -548,7 +548,7 @@ const ExternalStreamCard = memo(
               muted
               playsInline
               className={cn(
-                'absolute inset-0 w-full h-full object-contain bg-black',
+                'absolute inset-0 h-full w-full bg-[#1b2026] object-contain',
                 isPoppedOut && 'opacity-0 pointer-events-none'
               )}
               style={{
@@ -649,7 +649,7 @@ const ExternalStreamCard = memo(
               )}
             </div>
           </div>
-        </div>
+        </VoiceSurface>
 
         <PopoutWindow
           isOpen={isPoppedOut && !!hasVideo}

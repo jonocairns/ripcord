@@ -42,11 +42,12 @@ const ControlToggleButton = memo(
           variant="ghost"
           size="icon"
           className={cn(
-            'rounded-md h-10 w-10 transition-all duration-200',
+            'h-10 w-10 rounded-xl border border-transparent bg-transparent transition-[background-color,border-color,color,transform] duration-150 active:scale-95',
             enabled
               ? enabledClassName
-              : (disabledClassName ?? 'hover:bg-muted/60'),
-            disabled && 'opacity-60 hover:bg-transparent'
+              : (disabledClassName ??
+                  'hover:!bg-muted/60 hover:!text-foreground text-muted-foreground'),
+            disabled && 'opacity-60 hover:!bg-transparent'
           )}
           onClick={onClick}
           disabled={disabled}

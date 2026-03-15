@@ -11,10 +11,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
+import { logoutFromServer } from '@/features/server/actions';
 import { updateUser as updateUserAction } from '@/features/server/users/actions';
 import { useOwnPublicUser } from '@/features/server/users/hooks';
 import { useForm } from '@/hooks/use-form';
 import { getTRPCClient } from '@/lib/trpc';
+import { LogOut } from 'lucide-react';
 import { memo, useCallback, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { AvatarManager } from './avatar-manager';
@@ -96,6 +98,9 @@ const Profile = memo(() => {
     values.bannerColor,
     values.name
   ]);
+  const onLogout = useCallback(() => {
+    void logoutFromServer();
+  }, []);
 
   if (!ownPublicUser) return null;
 
@@ -142,7 +147,11 @@ const Profile = memo(() => {
           </div>
         </section>
       </CardContent>
-      <CardFooter className="items-stretch justify-end gap-2 sm:items-center">
+      <CardFooter className="items-stretch justify-between gap-2 sm:items-center">
+        <Button variant="destructive" onClick={onLogout}>
+          <LogOut className="h-4 w-4" />
+          Log Out
+        </Button>
         <Button onClick={onUpdateUser}>Apply</Button>
       </CardFooter>
     </Card>

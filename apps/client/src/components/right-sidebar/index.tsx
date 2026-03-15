@@ -29,7 +29,7 @@ const User = memo(({ user, isCollapsed = false }: TUserProps) => {
     <UserPopover userId={user.id}>
       <div
         className={cn(
-          'flex select-none items-center gap-3 rounded-md px-2.5 py-1.5 transition-colors hover:bg-accent/65',
+          'flex cursor-pointer select-none items-center gap-3 rounded-md px-2.5 py-1.5 transition-colors hover:bg-accent/65',
           isCollapsed && 'lg:justify-center lg:gap-0 lg:px-1 lg:py-1'
         )}
         title={user.name}

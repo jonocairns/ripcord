@@ -5,6 +5,7 @@ import { CardControls } from './card-controls';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
+import { VoiceSurface } from './voice-surface';
 
 type TExternalVideoControlsProps = {
   isPinned: boolean;
@@ -75,13 +76,12 @@ const ExternalVideoCard = memo(
     if (!hasExternalVideoStream) return null;
 
     return (
-      <div
+      <VoiceSurface
         ref={containerRef}
         className={cn(
-          'relative bg-card rounded-lg overflow-hidden group',
+          'relative group',
           'flex items-center justify-center',
           'w-full h-full',
-          'border border-border',
           className
         )}
         onWheel={handleWheel}
@@ -104,7 +104,7 @@ const ExternalVideoCard = memo(
           autoPlay
           muted
           playsInline
-          className="absolute inset-0 w-full h-full object-contain bg-black"
+          className="absolute inset-0 h-full w-full bg-[#1b2026] object-contain"
           style={{
             transform: `scale(${zoom}) translate(${position.x / zoom}px, ${position.y / zoom}px)`,
             transition: isDragging ? 'none' : 'transform 0.1s ease-out'
@@ -124,7 +124,7 @@ const ExternalVideoCard = memo(
             )}
           </div>
         </div>
-      </div>
+      </VoiceSurface>
     );
   }
 );
