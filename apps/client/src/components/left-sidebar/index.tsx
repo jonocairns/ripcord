@@ -9,7 +9,6 @@ import { openServerScreen } from '@/features/server-screens/actions';
 import { useCategories } from '@/features/server/categories/hooks';
 import { useCan, useInfo, useServerName } from '@/features/server/hooks';
 import { getFileUrl } from '@/helpers/get-file-url';
-import { getInitialsFromName } from '@/helpers/get-initials-from-name';
 import {
   getLocalStorageItem,
   LocalStorageKey,
@@ -30,7 +29,7 @@ import {
 } from 'react';
 import { Dialog } from '../dialogs/dialogs';
 import { ServerScreen } from '../server-screens/screens';
-import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
+import { Avatar, AvatarImage } from '../ui/avatar';
 import { Button } from '../ui/button';
 import { Categories } from './categories';
 import { DesktopUpdateCallout } from './desktop-update-callout';
@@ -131,16 +130,13 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
   const headerContent = (
     <>
       <span className="flex min-w-0 items-center gap-2">
-        <Avatar className="h-6 w-8 rounded-md bg-sidebar-accent/40">
+        {serverInfo?.logo ? <Avatar className="h-6 w-8 rounded-md bg-sidebar-accent/40">
           <AvatarImage
             src={getFileUrl(serverInfo?.logo)}
             key={serverInfo?.logo?.id}
             className="object-contain p-0.5"
           />
-          <AvatarFallback className="rounded-md bg-muted/80 text-[10px] font-semibold text-foreground">
-            {getInitialsFromName(safeServerName)}
-          </AvatarFallback>
-        </Avatar>
+        </Avatar> : null}
         <span className="truncate font-semibold text-foreground">
           {safeServerName}
         </span>
