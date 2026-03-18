@@ -130,13 +130,15 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
   const headerContent = (
     <>
       <span className="flex min-w-0 items-center gap-2">
-        {serverInfo?.logo ? <Avatar className="h-6 w-8 rounded-md bg-sidebar-accent/40">
-          <AvatarImage
-            src={getFileUrl(serverInfo?.logo)}
-            key={serverInfo?.logo?.id}
-            className="object-contain p-0.5"
-          />
-        </Avatar> : null}
+        {serverInfo?.logo ? (
+          <Avatar className="h-6 w-8 rounded-md bg-sidebar-accent/40">
+            <AvatarImage
+              src={getFileUrl(serverInfo?.logo)}
+              key={serverInfo?.logo?.id}
+              className="object-contain p-0.5"
+            />
+          </Avatar>
+        ) : null}
         <span className="truncate font-semibold text-foreground">
           {safeServerName}
         </span>
