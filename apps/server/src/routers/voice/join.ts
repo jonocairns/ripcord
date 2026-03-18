@@ -82,8 +82,41 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 
     const router = runtime.getRouter();
 
+    let producerTransportParams;
+    let consumerTransportParams;
+    let existingProducers;
+
+    try {
+      [producerTransportParams, consumerTransportParams] = await Promise.all([
+        runtime.createProducerTransport(ctx.user.id),
+        runtime.createConsumerTransport(ctx.user.id)
+      ]);
+
+      existingProducers = runtime.getRemoteIds(ctx.user.id);
+    } catch (error) {
+      runtime.removeUser(ctx.user.id);
+      ctx.currentVoiceChannelId = undefined;
+      ctx.setWsVoiceChannelId(undefined);
+      ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+        channelId: input.channelId,
+        userId: ctx.user.id
+      });
+
+      logger.error(
+        'Failed to create transports for %s in voice channel %s, rolled back join',
+        ctx.user.name,
+        channel.name,
+        error
+      );
+
+      throw error;
+    }
+
     return {
-      routerRtpCapabilities: router.rtpCapabilities
+      routerRtpCapabilities: router.rtpCapabilities,
+      producerTransportParams,
+      consumerTransportParams,
+      existingProducers
     };
   });
 
