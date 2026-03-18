@@ -82,8 +82,19 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 
     const router = runtime.getRouter();
 
+    const [producerTransportParams, consumerTransportParams] =
+      await Promise.all([
+        runtime.createProducerTransport(ctx.user.id),
+        runtime.createConsumerTransport(ctx.user.id)
+      ]);
+
+    const existingProducers = runtime.getRemoteIds(ctx.user.id);
+
     return {
-      routerRtpCapabilities: router.rtpCapabilities
+      routerRtpCapabilities: router.rtpCapabilities,
+      producerTransportParams,
+      consumerTransportParams,
+      existingProducers
     };
   });
 

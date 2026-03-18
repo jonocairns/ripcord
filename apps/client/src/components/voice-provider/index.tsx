@@ -35,6 +35,8 @@ import {
   ChannelPermission,
   StreamKind,
   type TExternalStream,
+  type TRemoteProducerIds,
+  type TTransportParams,
   type TVoiceUserState
 } from '@sharkord/shared';
 import { Device } from 'mediasoup-client';
@@ -2030,11 +2032,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
   const init = useCallback(
     async (
       incomingRouterRtpCapabilities: RtpCapabilities,
-      channelId: number
+      channelId: number,
+      prefetched?: {
+        producerTransportParams?: TTransportParams;
+        consumerTransportParams?: TTransportParams;
+        existingProducers?: TRemoteProducerIds;
+      }
     ) => {
       logVoice('Initializing voice provider', {
         incomingRouterRtpCapabilities,
-        channelId
+        channelId,
+        prefetched: !!prefetched
       });
 
       cleanup();
@@ -2043,6 +2051,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       try {
         setLoading(true);
         setConnectionStatus(ConnectionStatus.CONNECTING);
+        playSound(SoundType.OWN_USER_JOINED_VOICE_CHANNEL);
 
         routerRtpCapabilities.current = incomingRouterRtpCapabilities;
 
@@ -2053,15 +2062,18 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         });
         sendRtpCapabilities.current = device.rtpCapabilities;
 
-        await createProducerTransport(device);
-        await createConsumerTransport(device);
-        await consumeExistingProducers(device.rtpCapabilities);
-        await startMicStream();
+        await Promise.all([
+          createProducerTransport(device, prefetched?.producerTransportParams),
+          createConsumerTransport(device, prefetched?.consumerTransportParams)
+        ]);
+        await Promise.all([
+          consumeExistingProducers(device.rtpCapabilities, undefined, prefetched?.existingProducers),
+          startMicStream()
+        ]);
 
         startMonitoring(producerTransport.current, consumerTransport.current);
         setConnectionStatus(ConnectionStatus.CONNECTED);
         setLoading(false);
-        playSound(SoundType.OWN_USER_JOINED_VOICE_CHANNEL);
       } catch (error) {
         logVoice('Error initializing voice provider', { error });
 
@@ -2298,7 +2310,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           return;
         }
 
-        await init(joinResult.routerRtpCapabilities, pendingChannelId);
+        await init(joinResult.routerRtpCapabilities, pendingChannelId, {
+          producerTransportParams: joinResult.producerTransportParams,
+          consumerTransportParams: joinResult.consumerTransportParams,
+          existingProducers: joinResult.existingProducers
+        });
         clearPendingVoiceReconnectChannelId();
       } catch (error) {
         logVoice('Failed to auto-rejoin previous voice channel', { error });

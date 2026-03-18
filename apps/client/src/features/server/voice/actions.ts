@@ -2,7 +2,7 @@ import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
-import { type TExternalStream, type TVoiceUserState } from '@sharkord/shared';
+import { type TExternalStream, type TRemoteProducerIds, type TTransportParams, type TVoiceUserState } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { toast } from 'sonner';
 import {
@@ -191,6 +191,9 @@ export type TJoinVoiceResult =
   | {
       kind: 'joined';
       routerRtpCapabilities: RtpCapabilities;
+      producerTransportParams?: TTransportParams;
+      consumerTransportParams?: TTransportParams;
+      existingProducers?: TRemoteProducerIds;
     }
   | {
       kind: 'already-joined';
@@ -225,7 +228,12 @@ export const joinVoice = async (
   const client = getTRPCClient();
 
   try {
-    const { routerRtpCapabilities } = await client.voice.join.mutate({
+    const {
+      routerRtpCapabilities,
+      producerTransportParams,
+      consumerTransportParams,
+      existingProducers
+    } = await client.voice.join.mutate({
       channelId,
       state: { micMuted, soundMuted }
     });
@@ -234,7 +242,10 @@ export const joinVoice = async (
 
     return {
       kind: 'joined',
-      routerRtpCapabilities
+      routerRtpCapabilities,
+      producerTransportParams,
+      consumerTransportParams,
+      existingProducers
     };
   } catch (error) {
     setCurrentVoiceChannelId(undefined);
