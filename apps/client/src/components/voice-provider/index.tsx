@@ -2033,16 +2033,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
     async (
       incomingRouterRtpCapabilities: RtpCapabilities,
       channelId: number,
-      prefetched?: {
+      opts?: {
         producerTransportParams?: TTransportParams;
         consumerTransportParams?: TTransportParams;
         existingProducers?: TRemoteProducerIds;
+        playJoinSound?: boolean;
       }
     ) => {
       logVoice('Initializing voice provider', {
         incomingRouterRtpCapabilities,
         channelId,
-        prefetched: !!prefetched
+        prefetched: !!opts?.producerTransportParams
       });
 
       cleanup();
@@ -2051,7 +2052,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
       try {
         setLoading(true);
         setConnectionStatus(ConnectionStatus.CONNECTING);
-        playSound(SoundType.OWN_USER_JOINED_VOICE_CHANNEL);
+
+        if (opts?.playJoinSound !== false) {
+          playSound(SoundType.OWN_USER_JOINED_VOICE_CHANNEL);
+        }
 
         routerRtpCapabilities.current = incomingRouterRtpCapabilities;
 
@@ -2063,11 +2067,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         sendRtpCapabilities.current = device.rtpCapabilities;
 
         await Promise.all([
-          createProducerTransport(device, prefetched?.producerTransportParams),
-          createConsumerTransport(device, prefetched?.consumerTransportParams)
+          createProducerTransport(device, opts?.producerTransportParams),
+          createConsumerTransport(device, opts?.consumerTransportParams)
         ]);
         await Promise.all([
-          consumeExistingProducers(device.rtpCapabilities, undefined, prefetched?.existingProducers),
+          consumeExistingProducers(device.rtpCapabilities, undefined, opts?.existingProducers),
           startMicStream()
         ]);
 
@@ -2313,7 +2317,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
         await init(joinResult.routerRtpCapabilities, pendingChannelId, {
           producerTransportParams: joinResult.producerTransportParams,
           consumerTransportParams: joinResult.consumerTransportParams,
-          existingProducers: joinResult.existingProducers
+          existingProducers: joinResult.existingProducers,
+          playJoinSound: false
         });
         clearPendingVoiceReconnectChannelId();
       } catch (error) {
