@@ -1,7 +1,12 @@
 import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
-import { getMediasoupKind, StreamKind, type TRemoteProducerIds, type TTransportParams } from '@sharkord/shared';
+import {
+  getMediasoupKind,
+  StreamKind,
+  type TRemoteProducerIds,
+  type TTransportParams
+} from '@sharkord/shared';
 import { TRPCClientError } from '@trpc/client';
 import {
   type AppData,
@@ -69,12 +74,17 @@ const useTransports = ({
 
   const createProducerTransport = useCallback(
     async (device: Device, prefetchedParams?: TTransportParams) => {
-      logVoice('Creating producer transport', { device, prefetched: !!prefetchedParams });
+      logVoice('Creating producer transport', {
+        device,
+        prefetched: !!prefetchedParams
+      });
 
       const trpc = getTRPCClient();
 
       try {
-        const params = prefetchedParams ?? await trpc.voice.createProducerTransport.mutate();
+        const params =
+          prefetchedParams ??
+          (await trpc.voice.createProducerTransport.mutate());
 
         logVoice('Got producer transport parameters', { params });
 
@@ -189,12 +199,17 @@ const useTransports = ({
 
   const createConsumerTransport = useCallback(
     async (device: Device, prefetchedParams?: TTransportParams) => {
-      logVoice('Creating consumer transport', { device, prefetched: !!prefetchedParams });
+      logVoice('Creating consumer transport', {
+        device,
+        prefetched: !!prefetchedParams
+      });
 
       const trpc = getTRPCClient();
 
       try {
-        const params = prefetchedParams ?? await trpc.voice.createConsumerTransport.mutate();
+        const params =
+          prefetchedParams ??
+          (await trpc.voice.createConsumerTransport.mutate());
 
         logVoice('Got consumer transport parameters', { params });
 
@@ -447,7 +462,10 @@ const useTransports = ({
       },
       prefetchedProducers?: TRemoteProducerIds
     ) => {
-      logVoice('Consuming existing producers', { rtpCapabilities, prefetched: !!prefetchedProducers });
+      logVoice('Consuming existing producers', {
+        rtpCapabilities,
+        prefetched: !!prefetchedProducers
+      });
 
       const trpc = getTRPCClient();
 
@@ -458,7 +476,7 @@ const useTransports = ({
           remoteScreenAudioIds,
           remoteVideoIds,
           remoteExternalStreamIds
-        } = prefetchedProducers ?? await trpc.voice.getProducers.query();
+        } = prefetchedProducers ?? (await trpc.voice.getProducers.query());
 
         logVoice('Got existing producers', {
           remoteAudioIds,

@@ -2,7 +2,12 @@ import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
-import { type TExternalStream, type TRemoteProducerIds, type TTransportParams, type TVoiceUserState } from '@sharkord/shared';
+import {
+  type TExternalStream,
+  type TRemoteProducerIds,
+  type TTransportParams,
+  type TVoiceUserState
+} from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { toast } from 'sonner';
 import {

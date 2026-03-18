@@ -2071,7 +2071,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
           createConsumerTransport(device, opts?.consumerTransportParams)
         ]);
         await Promise.all([
-          consumeExistingProducers(device.rtpCapabilities, undefined, opts?.existingProducers),
+          consumeExistingProducers(
+            device.rtpCapabilities,
+            undefined,
+            opts?.existingProducers
+          ),
           startMicStream()
         ]);
 
