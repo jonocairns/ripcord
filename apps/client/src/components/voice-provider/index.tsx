@@ -485,7 +485,13 @@ export type TVoiceProvider = {
   stopWatchingStream: (remoteId: number, kind: StreamKind) => void;
   init: (
     routerRtpCapabilities: RtpCapabilities,
-    channelId: number
+    channelId: number,
+    opts?: {
+      producerTransportParams?: TTransportParams;
+      consumerTransportParams?: TTransportParams;
+      existingProducers?: TRemoteProducerIds;
+      playJoinSound?: boolean;
+    }
   ) => Promise<void>;
 } & Pick<
   ReturnType<typeof useLocalStreams>,
