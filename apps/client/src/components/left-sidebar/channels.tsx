@@ -202,7 +202,11 @@ const Channel = memo(({ channelId, isSelected }: TChannelProps) => {
       }
 
       try {
-        await init(joinResult.routerRtpCapabilities, channelId);
+        await init(joinResult.routerRtpCapabilities, channelId, {
+          producerTransportParams: joinResult.producerTransportParams,
+          consumerTransportParams: joinResult.consumerTransportParams,
+          existingProducers: joinResult.existingProducers
+        });
       } catch {
         await leaveVoiceSilently();
         setSelectedChannelId(undefined);
