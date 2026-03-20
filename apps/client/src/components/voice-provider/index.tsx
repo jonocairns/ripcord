@@ -125,7 +125,7 @@ const MAX_VOICE_REJOIN_RETRIES = 5;
 const VOICE_REJOIN_RETRY_DELAY_MS = 2_000;
 const AUDIO_OPUS_CODEC_OPTIONS = {
   opusMaxAverageBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS,
-  opusDtx: true,
+  opusDtx: false,
   opusFec: true,
   opusPacketLossPerc: AUDIO_OPUS_PACKET_LOSS_PERC
 } as const;

@@ -402,26 +402,28 @@ const useTransports = ({
 
         consumers.current[remoteId][consumerKind] = newConsumer;
 
-        if (
-          kind === StreamKind.EXTERNAL_VIDEO ||
-          kind === StreamKind.EXTERNAL_AUDIO
-        ) {
-          const receiver = newConsumer.rtpReceiver;
+        const receiver = newConsumer.rtpReceiver;
 
-          if (receiver) {
-            try {
-              // Tell the browser to buffer broadcast content for smoother
-              // playback. Without this, the default jitter buffer is tuned
-              // for interactive calls and drops frames on any network jitter.
-              (
-                receiver as unknown as { playoutDelayHint: number }
-              ).playoutDelayHint = 0.5;
-              (
-                receiver as unknown as { jitterBufferTarget: number }
-              ).jitterBufferTarget = 500;
-            } catch {
-              // Older browsers may not support these properties
-            }
+        if (receiver) {
+          try {
+            const isBroadcast =
+              kind === StreamKind.EXTERNAL_VIDEO ||
+              kind === StreamKind.EXTERNAL_AUDIO;
+
+            // Broadcast content gets a large buffer for smooth playback.
+            // Interactive voice gets a small buffer to absorb network jitter
+            // without adding perceptible latency.
+            const delayHint = isBroadcast ? 0.5 : 0.08;
+            const jitterTarget = isBroadcast ? 500 : 80;
+
+            (
+              receiver as unknown as { playoutDelayHint: number }
+            ).playoutDelayHint = delayHint;
+            (
+              receiver as unknown as { jitterBufferTarget: number }
+            ).jitterBufferTarget = jitterTarget;
+          } catch {
+            // Older browsers may not support these properties
           }
         }
 
