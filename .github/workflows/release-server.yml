@@ -8,11 +8,10 @@ on:
         required: true
         type: choice
         options:
-          - none
           - patch
           - minor
           - major
-        default: "none"
+        default: "patch"
 
 permissions:
   contents: write
@@ -23,9 +22,50 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    outputs:
+      version: ${{ steps.compute_version.outputs.version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version from git tags
+        id: compute_version
+        run: |
+          LATEST_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_VERSION="0.0.0"
+          else
+            LATEST_VERSION="${LATEST_TAG#v}"
+          fi
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
+
+          case "${{ inputs.bump }}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          NEW_TAG="v${NEW_VERSION}"
+
+          # Tag format enforcement
+          if ! echo "$NEW_TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid tag format: ${NEW_TAG} (expected vX.Y.Z)"
+            exit 1
+          fi
+
+          # Ensure tag doesn't already exist
+          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
+            echo "::error::Tag ${NEW_TAG} already exists"
+            exit 1
+          fi
+
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${NEW_TAG} (previous: ${LATEST_TAG:-none})"
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v1
@@ -44,23 +84,17 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile --cache-dir .bun-cache
 
+      # ── Build everything first (rollback safety) ──────────────────────
       - name: Build app
+        env:
+          SHARKORD_VERSION: ${{ steps.compute_version.outputs.version }}
         run: |
           cd apps/server
-          bun run build --bump ${{ inputs.bump }}
-
-      - name: Get new version
-        id: get_version
-        run: echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
+          bun run build
 
       - name: Resolve GHCR owner
         id: ghcr
         run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Identify user
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -80,37 +114,85 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ steps.ghcr.outputs.owner }}/ripcord:latest
-            ghcr.io/${{ steps.ghcr.outputs.owner }}/ripcord:v${{ steps.get_version.outputs.version }}
+            ghcr.io/${{ steps.ghcr.outputs.owner }}/ripcord:v${{ steps.compute_version.outputs.version }}
 
-      - name: Commit and push version bump
-        if: ${{ inputs.bump != 'none' }}
-        run: |
-          git add .
-          git commit -m "chore: bump version to ${{ steps.get_version.outputs.version }}"
-          git push
-
+      # ── Everything built successfully — now tag and release ───────────
       - name: Create Git tag
         run: |
-          git tag -a "v${{ steps.get_version.outputs.version }}" -m "Release v${{ steps.get_version.outputs.version }}"
-          git push origin "v${{ steps.get_version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ steps.compute_version.outputs.version }}" -m "Release v${{ steps.compute_version.outputs.version }}"
+          git push origin "v${{ steps.compute_version.outputs.version }}"
+
+      - name: Generate release notes from commits
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n '2p')
+          NEW_TAG="v${{ steps.compute_version.outputs.version }}"
+
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${PREV_TAG}..HEAD"
+          fi
+
+          # Generate changelog grouped by conventional commit type
+          {
+            echo "## What's Changed"
+            echo ""
+
+            FEATS=$(git log "$RANGE" --pretty=format:"%s" --no-merges | grep -E "^feat(\(.+\))?:" | sed 's/^feat\(([^)]*)\):/- **\1:**/' | sed 's/^feat:/- /' || true)
+            if [ -n "$FEATS" ]; then
+              echo "### Features"
+              echo "$FEATS"
+              echo ""
+            fi
+
+            FIXES=$(git log "$RANGE" --pretty=format:"%s" --no-merges | grep -E "^fix(\(.+\))?:" | sed 's/^fix\(([^)]*)\):/- **\1:**/' | sed 's/^fix:/- /' || true)
+            if [ -n "$FIXES" ]; then
+              echo "### Bug Fixes"
+              echo "$FIXES"
+              echo ""
+            fi
+
+            PERFS=$(git log "$RANGE" --pretty=format:"%s" --no-merges | grep -E "^perf(\(.+\))?:" | sed 's/^perf\(([^)]*)\):/- **\1:**/' | sed 's/^perf:/- /' || true)
+            if [ -n "$PERFS" ]; then
+              echo "### Performance"
+              echo "$PERFS"
+              echo ""
+            fi
+
+            OTHERS=$(git log "$RANGE" --pretty=format:"%s" --no-merges | grep -vE "^(feat|fix|perf|chore|ci|docs|style|test|build)(\(.+\))?:" || true)
+            if [ -n "$OTHERS" ]; then
+              echo "### Other Changes"
+              echo "$OTHERS" | sed 's/^/- /'
+              echo ""
+            fi
+
+            if [ -n "$PREV_TAG" ]; then
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${NEW_TAG}"
+            fi
+          } > /tmp/release-notes.md
+
+          cat /tmp/release-notes.md
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.get_version.outputs.version }}
-          name: v${{ steps.get_version.outputs.version }}
-          draft: true
+          tag_name: v${{ steps.compute_version.outputs.version }}
+          name: v${{ steps.compute_version.outputs.version }}
+          draft: false
           files: |
             apps/server/build/out/sharkord-linux-x64
             apps/server/build/out/sharkord-linux-arm64
             apps/server/build/out/sharkord-windows-x64.exe
             apps/server/build/out/sharkord-macos-arm64
             apps/server/build/out/release.json
-          body: |
-            ## Changes
-            (TODO)
+          body_path: /tmp/release-notes.md
 
-            ## Docker Image
-            ```bash
-            docker pull ghcr.io/${{ steps.ghcr.outputs.owner }}/ripcord:v${{ steps.get_version.outputs.version }}
-            ```
+  # ── Desktop build chains automatically after server release ────────
+  release-desktop:
+    needs: build-and-publish
+    uses: ./.github/workflows/release-desktop-windows.yml
+    with:
+      tag: v${{ needs.build-and-publish.outputs.version }}
+    secrets: inherit

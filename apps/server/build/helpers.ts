@@ -12,9 +12,6 @@ const rootCwd = path.resolve(serverCwd, '..', '..');
 
 const rootPckJson = path.join(rootCwd, 'package.json');
 const serverPckJson = path.join(rootCwd, 'apps', 'server', 'package.json');
-const clientPckJson = path.join(rootCwd, 'apps', 'client', 'package.json');
-const desktopPckJson = path.join(rootCwd, 'apps', 'desktop', 'package.json');
-const sharedPckJson = path.join(rootCwd, 'packages', 'shared', 'package.json');
 
 const unpack = async (tgzPath: string, outDir: string) => {
   const tarProc = Bun.spawn(['tar', '-xzf', tgzPath, '-C', outDir], {
@@ -150,6 +147,10 @@ const downloadMediasoupBinary = async (
 };
 
 const getCurrentVersion = async () => {
+  if (process.env.SHARKORD_VERSION) {
+    return process.env.SHARKORD_VERSION;
+  }
+
   const pkg = JSON.parse(await fs.readFile(rootPckJson, 'utf8'));
 
   return pkg.version;
@@ -161,23 +162,6 @@ const getMediasoupVersion = async () => {
   return serverPkg.dependencies['mediasoup'].replace('^', '');
 };
 
-const patchPackageJsons = async (newVersion: string) => {
-  const packageJsonPaths = [
-    rootPckJson,
-    serverPckJson,
-    clientPckJson,
-    desktopPckJson,
-    sharedPckJson
-  ];
-
-  for (const pckPath of packageJsonPaths) {
-    const pkg = JSON.parse(await fs.readFile(pckPath, 'utf8'));
-
-    pkg.version = newVersion;
-
-    await fs.writeFile(pckPath, JSON.stringify(pkg, null, 2), 'utf8');
-  }
-};
 
 type TTarget = {
   out: string;
@@ -268,7 +252,6 @@ export {
   downloadMediasoupBinary,
   getCurrentVersion,
   getVersionInfo,
-  patchPackageJsons,
   rmIfExists
 };
 export type { TTarget };
