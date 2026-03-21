@@ -26,7 +26,6 @@ type TWorkerInitMessage = {
 	transportMode: TWasmTransportMode;
 	moduleUrl: string;
 	wasmUrl: string;
-	modelUrls: string[];
 	controlPort: MessagePort;
 	inputDataBuffer?: SharedArrayBuffer;
 	inputStateBuffer?: SharedArrayBuffer;
@@ -133,20 +132,12 @@ class Upsample16KhzTo48Khz {
 class DtlnWasmRunner {
 	private readonly module: TDtlnModule;
 	private handle: number | undefined;
-	private modelBytes: Uint8Array[] = [];
 
 	constructor(module: TDtlnModule) {
 		this.module = module;
 	}
 
-	async init(modelBytes: Uint8Array[]): Promise<void> {
-		// The upstream browser artifact embeds the DTLN weights in the wasm binary.
-		// Keep the fetched model bytes so the asset delivery path stays explicit and
-		// the runtime API can stay aligned with a future wasm-bindgen build.
-		this.modelBytes = modelBytes;
-		if (this.modelBytes.length === 0) {
-			throw new Error('DTLN model assets were not loaded');
-		}
+	init(): void {
 		this.handle = this.module.dtln_create();
 	}
 
@@ -515,25 +506,13 @@ const initializeWorker = async (message: TWorkerInitMessage) => {
 		};
 	}
 
-	const [module, ...modelResponses] = await Promise.all([
-		resolveDtlnModule({
-			moduleUrl: message.moduleUrl,
-			wasmUrl: message.wasmUrl,
-		}),
-		...message.modelUrls.map((modelUrl) => fetch(modelUrl)),
-	]);
-	const modelBytes: Uint8Array[] = [];
-
-	for (const response of modelResponses) {
-		if (!response.ok) {
-			throw new Error(`Unable to fetch DTLN model asset (${response.status})`);
-		}
-
-		modelBytes.push(new Uint8Array(await response.arrayBuffer()));
-	}
+	const module = await resolveDtlnModule({
+		moduleUrl: message.moduleUrl,
+		wasmUrl: message.wasmUrl,
+	});
 
 	runner = new DtlnWasmRunner(module);
-	await runner.init(modelBytes);
+	runner.init();
 
 	if (transportMode === 'shared-array-buffer') {
 		sabPollTimerId = self.setInterval(pumpSharedInput, SAB_POLL_INTERVAL_MS);

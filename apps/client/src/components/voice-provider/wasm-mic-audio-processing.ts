@@ -7,12 +7,12 @@ const DIAGNOSTICS_LOG_INTERVAL_MS = 5_000;
 const SHARED_RING_CAPACITY_FRAMES = 24_576;
 const DTLN_MODULE_PATH = 'voice-filter/dtln-emscripten.mjs';
 const DTLN_WASM_PATH = 'voice-filter/dtln_rs.wasm';
-const DTLN_MODEL_PATHS = ['voice-filter/model_quant_1.tflite', 'voice-filter/model_quant_2.tflite'];
 
 type TWasmTransportMode = 'shared-array-buffer' | 'message-port';
 
 type TCreateWasmMicAudioProcessingPipelineInput = {
 	inputTrack: MediaStreamTrack;
+	onError?: (error: Error) => void;
 };
 
 type TWasmMicAudioProcessingPipeline = {
@@ -177,6 +177,7 @@ const createDiagnosticsTracker = (sessionId: string) => {
 
 const createWasmMicAudioProcessingPipeline = async ({
 	inputTrack,
+	onError,
 }: TCreateWasmMicAudioProcessingPipelineInput): Promise<TWasmMicAudioProcessingPipeline> => {
 	const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 
@@ -205,7 +206,6 @@ const createWasmMicAudioProcessingPipeline = async ({
 	const sharedRingBuffers = transportMode === 'shared-array-buffer' ? createSharedRingBuffers() : undefined;
 	const moduleUrl = resolveVoiceFilterAssetUrl(DTLN_MODULE_PATH);
 	const wasmUrl = resolveVoiceFilterAssetUrl(DTLN_WASM_PATH);
-	const modelUrls = DTLN_MODEL_PATHS.map(resolveVoiceFilterAssetUrl);
 
 	let workletNode: AudioWorkletNode | undefined;
 
@@ -259,7 +259,6 @@ const createWasmMicAudioProcessingPipeline = async ({
 				transportMode,
 				moduleUrl,
 				wasmUrl,
-				modelUrls,
 				controlPort: controlChannel.port1,
 				...(sharedRingBuffers ?? {}),
 			},
@@ -278,6 +277,29 @@ const createWasmMicAudioProcessingPipeline = async ({
 		if (readyMessage.framesPerBlock48Khz !== DTLN_BLOCK_SIZE_48_KHZ) {
 			throw new Error('Unexpected browser WASM voice filter block size');
 		}
+
+		// Replace init-phase handlers with post-ready handlers so runtime
+		// errors are surfaced instead of silently swallowed by the settled promise.
+		worker.onmessage = (event: MessageEvent<TWorkerMessage>) => {
+			const message = event.data;
+
+			if (message.type === 'stats') {
+				diagnostics.update(message.stats);
+				return;
+			}
+
+			if (message.type === 'error') {
+				const error = new Error(message.error);
+				console.error('[wasm-denoise] Worker runtime error:', error);
+				onError?.(error);
+			}
+		};
+
+		worker.onerror = (event) => {
+			const error = new Error(event.message || 'Browser WASM voice filter worker crashed');
+			console.error('[wasm-denoise] Worker crashed:', error);
+			onError?.(error);
+		};
 
 		const track = destinationNode.stream.getAudioTracks()[0];
 

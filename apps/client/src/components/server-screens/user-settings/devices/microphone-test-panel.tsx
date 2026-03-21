@@ -197,6 +197,8 @@ const MicrophoneTestPanel = memo(
 		const soundMutedRef = useRef(ownVoiceState.soundMuted);
 		const micMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
 		const soundMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
+		const monitorEnabledRef = useRef(monitorEnabled);
+		const previewProcessedBrowserWasmRef = useRef(previewProcessedBrowserWasm);
 		const resolvedMicProcessingConfig = useMemo(() => {
 			return resolveMicTestProcessingConfig({
 				micQualityMode,
@@ -476,11 +478,15 @@ const MicrophoneTestPanel = memo(
 							dfnAttenuationLimitDb: resolvedMicProcessingConfig.sidecarDfnAttenuationLimitDb,
 							dfnExperimentalAggressiveMode: resolvedMicProcessingConfig.sidecarExperimentalAggressiveMode,
 							dfnNoiseGateFloorDbfs: resolvedMicProcessingConfig.sidecarNoiseGateFloorDbfs,
+							onWasmError: (error) => {
+								setMicTestError(error.message);
+								void stopTest();
+							},
 						});
 
 						if (micAudioPipeline?.backend === 'browser-wasm') {
-							outputStream = previewProcessedBrowserWasm ? micAudioPipeline.stream : rawStream;
-							previewState = previewProcessedBrowserWasm ? 'browser-wasm' : 'browser-wasm-raw-preview';
+							outputStream = previewProcessedBrowserWasmRef.current ? micAudioPipeline.stream : rawStream;
+							previewState = previewProcessedBrowserWasmRef.current ? 'browser-wasm' : 'browser-wasm-raw-preview';
 						} else if (micAudioPipeline?.backend === 'sidecar-native') {
 							outputStream = micAudioPipeline.stream;
 							previewState = 'sidecar-native';
@@ -502,7 +508,7 @@ const MicrophoneTestPanel = memo(
 
 				analyser.fftSize = ANALYSER_FFT_SIZE;
 				analyser.smoothingTimeConstant = ANALYSER_SMOOTHING;
-				monitorGainNode.gain.value = monitorEnabled ? 1 : 0;
+				monitorGainNode.gain.value = monitorEnabledRef.current ? 1 : 0;
 
 				source.connect(analyser);
 				source.connect(monitorGainNode);
@@ -566,13 +572,11 @@ const MicrophoneTestPanel = memo(
 		}, [
 			maybeMuteForTest,
 			microphoneId,
-			monitorEnabled,
 			localAudioStream,
 			currentVoiceChannelId,
 			resolvedMicProcessingConfig,
 			resolveMicAudioConstraints,
 			stopTest,
-			previewProcessedBrowserWasm,
 		]);
 
 		const startRecordingClip = useCallback(async () => {
@@ -701,6 +705,14 @@ const MicrophoneTestPanel = memo(
 		}, [monitorEnabled]);
 
 		useEffect(() => {
+			monitorEnabledRef.current = monitorEnabled;
+		}, [monitorEnabled]);
+
+		useEffect(() => {
+			previewProcessedBrowserWasmRef.current = previewProcessedBrowserWasm;
+		}, [previewProcessedBrowserWasm]);
+
+		useEffect(() => {
 			micMutedRef.current = ownVoiceState.micMuted;
 		}, [ownVoiceState.micMuted]);
 
@@ -745,15 +757,16 @@ const MicrophoneTestPanel = memo(
 			}
 
 			void startTest();
-		}, [resolvedMicProcessingConfig]);
+		}, [resolvedMicProcessingConfig, previewProcessedBrowserWasm]);
 
+		// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally only restart when WASM preview availability changes
 		useEffect(() => {
 			if (!isTestingMicRef.current || !canToggleBrowserWasmPreview) {
 				return;
 			}
 
 			void startTest();
-		}, [canToggleBrowserWasmPreview, startTest]);
+		}, [canToggleBrowserWasmPreview]);
 
 		useEffect(() => {
 			return () => {

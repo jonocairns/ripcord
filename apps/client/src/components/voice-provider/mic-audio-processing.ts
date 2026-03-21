@@ -186,6 +186,7 @@ type TCreateMicAudioProcessingPipelineInput = {
 	dfnExperimentalAggressiveMode: boolean;
 	dfnNoiseGateFloorDbfs?: number;
 	sidecarDeviceId?: string;
+	onWasmError?: (error: Error) => void;
 };
 
 const MIC_CAPTURE_WORKLET_NAME = 'sharkord-mic-capture-processor';
@@ -655,6 +656,7 @@ const createMicAudioProcessingPipeline = async ({
 	dfnAttenuationLimitDb,
 	dfnExperimentalAggressiveMode,
 	dfnNoiseGateFloorDbfs,
+	onWasmError,
 }: TCreateMicAudioProcessingPipelineInput): Promise<TMicAudioProcessingPipeline | undefined> => {
 	if (!enabled && !wasmNoiseSuppressionEnabled) {
 		return undefined;
@@ -714,6 +716,7 @@ const createMicAudioProcessingPipeline = async ({
 		try {
 			return await createWasmMicAudioProcessingPipeline({
 				inputTrack,
+				onError: onWasmError,
 			});
 		} catch (error) {
 			console.warn('[voice-filter] Browser WASM voice filter unavailable, using raw mic', error);

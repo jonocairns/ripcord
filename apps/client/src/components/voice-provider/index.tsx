@@ -1056,6 +1056,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						dfnAttenuationLimitDb: micProcessingConfig.sidecarDfnAttenuationLimitDb,
 						dfnExperimentalAggressiveMode: micProcessingConfig.sidecarExperimentalAggressiveMode,
 						dfnNoiseGateFloorDbfs: micProcessingConfig.sidecarNoiseGateFloorDbfs,
+						onWasmError: (error) => {
+							logVoice('Browser WASM voice filter runtime error', { error });
+						},
 					});
 
 					if (micAudioPipeline) {
@@ -1068,7 +1071,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							suppressionLevel: micProcessingConfig.sidecarSuppressionLevel,
 						});
 
-						if (micProcessingConfig.sidecarEchoCancellation && desktopBridge && activeVoiceFilterSessionId) {
+						if (
+							micProcessingConfig.sidecarEchoCancellation &&
+							desktopBridge &&
+							activeVoiceFilterSessionId &&
+							micAudioPipeline.backend === 'sidecar-native'
+						) {
 							const referencePipeline = await createMicReferenceAudioPipeline({
 								sampleRate: micAudioPipeline.sampleRate,
 								channels: micAudioPipeline.channels,
