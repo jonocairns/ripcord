@@ -8,6 +8,7 @@ import type { TVoiceUser } from '@/features/server/types';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { cn } from '@/lib/utils';
 import { useVoiceRefs } from '../channel-view/voice/hooks/use-voice-refs';
+import { getSpeakingIndicatorStyle } from '../channel-view/voice/speaking-indicator';
 import { UserPopover } from '../user-popover';
 import { useVolumeControl } from '../voice-provider/volume-control-context';
 
@@ -16,7 +17,7 @@ type TVoiceUserProps = {
 };
 
 const VoiceUser = memo(({ user }: TVoiceUserProps) => {
-	const { isSpeaking, speakingIntensity } = useVoiceRefs(user.id);
+	const { audioLevel, isSpeaking } = useVoiceRefs(user.id);
 	const ownUserId = useOwnUserId();
 	const { getUserVolumeKey, getVolume, setVolume, toggleMute } = useVolumeControl();
 	const isOwnUser = user.id === ownUserId;
@@ -34,6 +35,7 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
 	const handleToggleMute = useCallback(() => {
 		toggleMute(volumeKey);
 	}, [toggleMute, volumeKey]);
+	const speakingStyle = getSpeakingIndicatorStyle(audioLevel, isActivelySpeaking);
 
 	return (
 		<UserPopover
@@ -61,21 +63,14 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
 			}
 		>
 			<div className="flex cursor-pointer items-center gap-3 rounded px-3 py-2 text-sm">
-				<UserAvatar
-					userId={user.id}
-					className={cn(
-						'h-5 w-5',
-						isActivelySpeaking
-							? speakingIntensity === 1
-								? 'speaking-effect-low'
-								: speakingIntensity === 2
-									? 'speaking-effect-medium'
-									: 'speaking-effect-high'
-							: '',
-					)}
-					showUserPopover={false}
-					showStatusBadge={false}
-				/>
+				<div className="speaking-avatar-shell" style={speakingStyle}>
+					<UserAvatar
+						userId={user.id}
+						className={cn('relative z-[1] h-5 w-5 speaking-avatar-indicator')}
+						showUserPopover={false}
+						showStatusBadge={false}
+					/>
+				</div>
 
 				<span className="flex-1 truncate text-sm text-foreground/80">{user.name}</span>
 

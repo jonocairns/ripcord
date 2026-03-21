@@ -334,81 +334,127 @@ body {
 }
 
 /* speaking indicators */
-
-/* quiet */
-@keyframes speaking-glow-low {
-	0% {
-		box-shadow:
-			0 0 0 1px rgb(134, 239, 172, 0.4),
-			0 0 10px rgb(134, 239, 172, 0.2);
-	}
-	50% {
-		box-shadow:
-			0 0 0 2px rgb(134, 239, 172, 0.6),
-			0 0 15px rgb(134, 239, 172, 0.3);
-	}
-	100% {
-		box-shadow:
-			0 0 0 1px rgb(134, 239, 172, 0.4),
-			0 0 10px rgb(134, 239, 172, 0.2);
-	}
+.speaking-card-indicator,
+.speaking-card-overlay,
+.speaking-avatar-shell,
+.speaking-avatar-indicator {
+	--speaking-active: 0;
+	--speaking-level: 0;
 }
 
-/* normal */
-@keyframes speaking-glow-medium {
-	0% {
-		box-shadow:
-			0 0 0 2px rgb(34, 197, 94, 0.6),
-			0 0 20px rgb(34, 197, 94, 0.4),
-			0 0 30px rgb(34, 197, 94, 0.2);
-	}
-	50% {
-		box-shadow:
-			0 0 0 4px rgb(34, 197, 94, 0.8),
-			0 0 30px rgb(34, 197, 94, 0.6),
-			0 0 45px rgb(34, 197, 94, 0.3);
-	}
-	100% {
-		box-shadow:
-			0 0 0 2px rgb(34, 197, 94, 0.6),
-			0 0 20px rgb(34, 197, 94, 0.4),
-			0 0 30px rgb(34, 197, 94, 0.2);
-	}
+.speaking-card-indicator {
+	transition:
+		box-shadow 140ms ease-out,
+		border-color 140ms ease-out,
+		transform 140ms ease-out;
+	box-shadow:
+		0 10px 32px rgb(0 0 0 / 0.38),
+		0 0 0 calc(var(--speaking-active) * (1px + var(--speaking-level) * 2px))
+		rgb(167 243 208 / calc(var(--speaking-active) * (0.14 + var(--speaking-level) * 0.24))),
+		0 0 calc(var(--speaking-active) * (14px + var(--speaking-level) * 28px))
+		rgb(34 197 94 / calc(var(--speaking-active) * (0.1 + var(--speaking-level) * 0.2))),
+		0 0 calc(var(--speaking-active) * (24px + var(--speaking-level) * 40px))
+		rgb(45 212 191 / calc(var(--speaking-active) * (0.05 + var(--speaking-level) * 0.12)));
+	border-color: rgb(255 255 255 / calc(0.08 + var(--speaking-active) * (0.04 + var(--speaking-level) * 0.16)));
+	transform: translateY(calc(var(--speaking-active) * -1px))
+		scale(calc(1 + var(--speaking-active) * (0.002 + var(--speaking-level) * 0.004)));
 }
 
-/* loud */
-@keyframes speaking-glow-high {
-	0% {
-		box-shadow:
-			0 0 0 3px rgb(22, 163, 74, 0.8),
-			0 0 25px rgb(22, 163, 74, 0.6),
-			0 0 50px rgb(22, 163, 74, 0.4),
-			0 0 75px rgb(22, 163, 74, 0.2);
-	}
-	50% {
-		box-shadow:
-			0 0 0 6px rgb(22, 163, 74, 1),
-			0 0 40px rgb(22, 163, 74, 0.8),
-			0 0 70px rgb(22, 163, 74, 0.6),
-			0 0 100px rgb(22, 163, 74, 0.3);
-	}
-	100% {
-		box-shadow:
-			0 0 0 3px rgb(22, 163, 74, 0.8),
-			0 0 25px rgb(22, 163, 74, 0.6),
-			0 0 50px rgb(22, 163, 74, 0.4),
-			0 0 75px rgb(22, 163, 74, 0.2);
-	}
+.speaking-card-overlay {
+	border: 1px solid rgb(167 243 208 / calc(var(--speaking-active) * (0.18 + var(--speaking-level) * 0.3)));
+	background:
+		radial-gradient(
+			130% 95% at 50% 100%,
+			rgb(74 222 128 / calc(var(--speaking-active) * (0.04 + var(--speaking-level) * 0.12))) 0%,
+			transparent 58%
+		),
+		linear-gradient(
+			180deg,
+			transparent 0%,
+			rgb(45 212 191 / calc(var(--speaking-active) * (0.03 + var(--speaking-level) * 0.08))) 100%
+		);
+	box-shadow:
+		inset 0 0 0 1px rgb(220 252 231 / calc(var(--speaking-active) * (0.06 + var(--speaking-level) * 0.1))),
+		inset 0 -18px 36px rgb(34 197 94 / calc(var(--speaking-active) * (0.03 + var(--speaking-level) * 0.1)));
+	mix-blend-mode: screen;
+	opacity: calc(var(--speaking-active) * (0.45 + var(--speaking-level) * 0.55));
+	transition:
+		opacity 140ms ease-out,
+		border-color 140ms ease-out,
+		box-shadow 140ms linear;
 }
 
-.speaking-effect-low {
-	animation: speaking-glow-low 2.5s ease-in-out infinite;
+.speaking-avatar-indicator {
+	transition: box-shadow 120ms ease-out;
+	box-shadow:
+		inset 0 0 0 calc(var(--speaking-active) * (1px + var(--speaking-level) * 1px))
+		rgb(220 252 231 / calc(var(--speaking-active) * (0.22 + var(--speaking-level) * 0.34))),
+		0 0 0 calc(var(--speaking-active) * (1.5px + var(--speaking-level) * 1.75px))
+		rgb(167 243 208 / calc(var(--speaking-active) * (0.32 + var(--speaking-level) * 0.46))),
+		0 0 calc(var(--speaking-active) * (12px + var(--speaking-level) * 24px))
+		rgb(34 197 94 / calc(var(--speaking-active) * (0.24 + var(--speaking-level) * 0.36)));
 }
 
-.speaking-effect-medium {
-	animation: speaking-glow-medium 1.2s ease-in-out infinite;
+.speaking-avatar-shell {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	isolation: isolate;
 }
 
-.speaking-effect-high {
-	animation: speaking-glow-high 0.8s ease-in-out infinite;
+.speaking-avatar-shell::before,
+.speaking-avatar-shell::after {
+	content: "";
+	position: absolute;
+	border-radius: 9999px;
+	pointer-events: none;
+	transition:
+		opacity 120ms ease-out,
+		transform 120ms ease-out,
+		filter 120ms ease-out,
+		box-shadow 120ms ease-out,
+		border-color 120ms ease-out;
+}
+
+.speaking-avatar-shell::before {
+	inset: 0;
+	background: radial-gradient(
+		circle at 50% 50%,
+		rgb(167 243 208 / calc(var(--speaking-active) * (0.26 + var(--speaking-level) * 0.36))) 0%,
+		rgb(45 212 191 / calc(var(--speaking-active) * (0.16 + var(--speaking-level) * 0.22))) 54%,
+		transparent 88%
+	);
+	opacity: calc(var(--speaking-active) * (0.58 + var(--speaking-level) * 0.42));
+	transform: scale(calc(1 + var(--speaking-active) * (0.18 + var(--speaking-level) * 0.34)));
+	filter: blur(calc(2.5px + var(--speaking-level) * 3.5px));
+}
+
+.speaking-avatar-shell::after {
+	inset: 0;
+	border: 1px solid rgb(220 252 231 / calc(var(--speaking-active) * (0.4 + var(--speaking-level) * 0.46)));
+	box-shadow:
+		0 0 0 calc(var(--speaking-active) * (1px + var(--speaking-level) * 1px))
+		rgb(167 243 208 / calc(var(--speaking-active) * (0.26 + var(--speaking-level) * 0.34))),
+		0 0 calc(var(--speaking-active) * (15px + var(--speaking-level) * 24px))
+		rgb(45 212 191 / calc(var(--speaking-active) * (0.22 + var(--speaking-level) * 0.28)));
+	opacity: calc(var(--speaking-active) * (0.76 + var(--speaking-level) * 0.24));
+	transform: scale(calc(1 + var(--speaking-active) * (0.1 + var(--speaking-level) * 0.16)));
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.speaking-card-indicator,
+	.speaking-card-overlay,
+	.speaking-avatar-shell,
+	.speaking-avatar-indicator {
+		transition: none;
+		transform: none;
+	}
+
+	.speaking-avatar-shell::before,
+	.speaking-avatar-shell::after {
+		transition: none;
+		transform: none;
+		filter: none;
+	}
 }

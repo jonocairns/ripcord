@@ -1,4 +1,5 @@
 import { UserStatus } from '@sharkord/shared';
+import type { CSSProperties } from 'react';
 import { memo } from 'react';
 import { useUserById } from '@/features/server/users/hooks';
 import { getAvatarColor } from '@/helpers/get-avatar-color';
@@ -16,6 +17,7 @@ type TUserAvatarProps = {
 	showUserPopover?: boolean;
 	showStatusBadge?: boolean;
 	onClick?: () => void;
+	style?: CSSProperties;
 };
 
 const UserAvatar = memo(
@@ -26,6 +28,7 @@ const UserAvatar = memo(
 		showUserPopover = false,
 		showStatusBadge = true,
 		onClick,
+		style,
 	}: TUserAvatarProps) => {
 		const user = useUserById(userId);
 
@@ -33,7 +36,7 @@ const UserAvatar = memo(
 
 		const content = (
 			<div className={cn('relative h-fit w-fit', onClick && 'cursor-pointer')} onClick={onClick}>
-				<Avatar className={cn('h-8 w-8', className)}>
+				<Avatar className={cn('h-8 w-8', className)} style={style}>
 					<AvatarImage src={getFileUrl(user.avatar)} key={user.avatarId} />
 					<AvatarFallback
 						className={cn('text-xs font-semibold leading-none text-white', getAvatarColor(userId), fallbackClassName)}
