@@ -1,5 +1,6 @@
 import { Circle, Mic, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -225,6 +226,45 @@ const MicrophoneTestPanel = memo(
 			resolvedMicProcessingConfig.wasmNoiseSuppressionEnabled &&
 			currentVoiceChannelId === undefined;
 		const showWasmDiagnostics = showDevMicTestControls && isTestingMic && isBrowserWasmPreviewState(testPreviewState);
+		const wasmDiagnosticItems = wasmDiagnostics
+			? [
+					{
+						label: 'Blocks',
+						value: wasmDiagnostics.processedBlocks.toLocaleString(),
+					},
+					{
+						label: 'Average',
+						value: formatDiagnosticDurationMs(wasmDiagnostics.averageProcessTimeMs),
+					},
+					{
+						label: 'Peak',
+						value: formatDiagnosticDurationMs(wasmDiagnostics.maxProcessTimeMs),
+					},
+					{
+						label: 'Input queue',
+						value: formatQueueDepthMs(wasmDiagnostics.inputQueueFrames),
+					},
+					{
+						label: 'Output queue',
+						value: formatQueueDepthMs(wasmDiagnostics.outputQueueFrames),
+					},
+					{
+						label: 'Input drops',
+						value: wasmDiagnostics.inputDrops.toLocaleString(),
+						tone: wasmDiagnostics.inputDrops > 0 ? 'warning' : 'default',
+					},
+					{
+						label: 'Output drops',
+						value: wasmDiagnostics.outputDrops.toLocaleString(),
+						tone: wasmDiagnostics.outputDrops > 0 ? 'warning' : 'default',
+					},
+					{
+						label: 'Underruns',
+						value: wasmDiagnostics.outputUnderruns.toLocaleString(),
+						tone: wasmDiagnostics.outputUnderruns > 0 ? 'warning' : 'default',
+					},
+				]
+			: undefined;
 
 		const setClipUrl = useCallback((nextUrl: string | undefined) => {
 			const previousUrl = recordedClipUrlRef.current;
@@ -779,26 +819,38 @@ const MicrophoneTestPanel = memo(
 		}, []);
 
 		return (
-			<div className="space-y-4 rounded-xl border-l-2 border-l-primary/40 bg-secondary p-5">
-				<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+			<div className="space-y-4 border-t border-border/50 pt-4">
+				<div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
 					<div className="flex items-start gap-3">
-						<div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+						<div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10">
 							<Mic className="h-4 w-4 text-primary" />
 						</div>
 						<div className="space-y-1">
-							<p className="text-sm font-medium">Microphone test</p>
-							<p className="text-xs text-muted-foreground">Preview your microphone input level.</p>
+							<div className="flex flex-wrap items-center gap-2">
+								<p className="text-sm font-semibold">Microphone test</p>
+								{isTestingMic && testPreviewState && (
+									<Badge
+										variant="outline"
+										className="border-primary/30 bg-primary/5 text-[10px] uppercase tracking-[0.14em] text-primary"
+									>
+										{getMicTestPreviewLabel(testPreviewState)}
+									</Badge>
+								)}
+							</div>
+							<p className="text-xs text-muted-foreground">Check the live level and record a short playback sample.</p>
 						</div>
 					</div>
-					<div className="flex items-center gap-3">
-						<div className="flex items-center gap-2">
-							<Label className="cursor-default text-xs text-muted-foreground">Hear yourself</Label>
+
+					<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end sm:gap-4">
+						<div className="flex items-center gap-3">
+							<Label className="cursor-default whitespace-nowrap text-xs text-muted-foreground">Hear yourself</Label>
 							<Switch checked={monitorEnabled} onCheckedChange={setMonitorEnabled} disabled={!isTestingMic} />
 						</div>
 						<Button
 							type="button"
 							variant={isTestingMic ? 'secondary' : 'outline'}
 							size="sm"
+							className="min-w-[104px]"
 							onClick={() => {
 								if (isTestingMic) {
 									void stopTest();
@@ -813,8 +865,31 @@ const MicrophoneTestPanel = memo(
 					</div>
 				</div>
 
+				{isTestingMic && (
+					<div className="space-y-2 border-t border-border/40 pt-3">
+						<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+							<div className="space-y-1">
+								<p className="text-xs font-medium">Input level</p>
+								<p className="text-xs text-muted-foreground">
+									Speak at a normal volume to check your level and cleanup path.
+								</p>
+							</div>
+							<Badge variant="secondary" className="text-[10px] uppercase tracking-[0.14em]">
+								{testPreviewState ? 'Live' : 'Idle'}
+							</Badge>
+						</div>
+						<div className="h-2.5 w-full overflow-hidden rounded-full bg-background/80">
+							<div
+								ref={levelBarRef}
+								className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-sky-400 to-cyan-300 transition-[width]"
+								style={{ width: '0%' }}
+							/>
+						</div>
+					</div>
+				)}
+
 				{canToggleBrowserWasmPreview && (
-					<div className="flex flex-col gap-3 rounded-lg border border-dashed border-primary/30 bg-background/40 p-3 sm:flex-row sm:items-center sm:justify-between">
+					<div className="flex flex-col gap-3 border-t border-border/40 pt-3 sm:flex-row sm:items-center sm:justify-between">
 						<div className="space-y-1">
 							<p className="text-xs font-medium">Browser WASM preview</p>
 							<p className="text-xs text-muted-foreground">
@@ -830,22 +905,8 @@ const MicrophoneTestPanel = memo(
 					</div>
 				)}
 
-				<div className="space-y-1.5">
-					<div className="flex items-center justify-between">
-						<p className="text-xs text-muted-foreground">Input level</p>
-						{isTestingMic && (
-							<span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-								{getMicTestPreviewLabel(testPreviewState)}
-							</span>
-						)}
-					</div>
-					<div className="h-2 w-full overflow-hidden rounded-full bg-background/60">
-						<div ref={levelBarRef} className="h-full rounded-full bg-white" style={{ width: '0%' }} />
-					</div>
-				</div>
-
 				{showWasmDiagnostics && (
-					<div className="space-y-3 rounded-lg border border-primary/20 bg-background/40 p-3">
+					<div className="space-y-3 rounded-xl border border-primary/20 bg-background/40 p-3">
 						<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
 							<div className="space-y-1">
 								<p className="text-xs font-medium">Browser WASM diagnostics</p>
@@ -856,48 +917,28 @@ const MicrophoneTestPanel = memo(
 								</p>
 							</div>
 							{wasmDiagnostics && (
-								<span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+								<Badge variant="secondary" className="text-[10px] uppercase tracking-[0.14em]">
 									{wasmDiagnostics.transportMode === 'shared-array-buffer' ? 'SharedArrayBuffer' : 'MessagePort'}
-								</span>
+								</Badge>
 							)}
 						</div>
 
-						{wasmDiagnostics ? (
-							<div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
-								<div className="space-y-0.5">
-									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Blocks</p>
-									<p className="text-xs font-medium">{wasmDiagnostics.processedBlocks.toLocaleString()}</p>
-								</div>
-								<div className="space-y-0.5">
-									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Average</p>
-									<p className="text-xs font-medium">
-										{formatDiagnosticDurationMs(wasmDiagnostics.averageProcessTimeMs)}
-									</p>
-								</div>
-								<div className="space-y-0.5">
-									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Peak</p>
-									<p className="text-xs font-medium">{formatDiagnosticDurationMs(wasmDiagnostics.maxProcessTimeMs)}</p>
-								</div>
-								<div className="space-y-0.5">
-									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Input queue</p>
-									<p className="text-xs font-medium">{formatQueueDepthMs(wasmDiagnostics.inputQueueFrames)}</p>
-								</div>
-								<div className="space-y-0.5">
-									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Output queue</p>
-									<p className="text-xs font-medium">{formatQueueDepthMs(wasmDiagnostics.outputQueueFrames)}</p>
-								</div>
-								<div className="space-y-0.5">
-									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Input drops</p>
-									<p className="text-xs font-medium">{wasmDiagnostics.inputDrops.toLocaleString()}</p>
-								</div>
-								<div className="space-y-0.5">
-									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Output drops</p>
-									<p className="text-xs font-medium">{wasmDiagnostics.outputDrops.toLocaleString()}</p>
-								</div>
-								<div className="space-y-0.5">
-									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Underruns</p>
-									<p className="text-xs font-medium">{wasmDiagnostics.outputUnderruns.toLocaleString()}</p>
-								</div>
+						{wasmDiagnosticItems ? (
+							<div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+								{wasmDiagnosticItems.map((item) => {
+									return (
+										<div key={item.label} className="rounded-lg border border-border/50 bg-background/75 p-2.5">
+											<p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{item.label}</p>
+											<p
+												className={`mt-1 text-sm font-semibold ${
+													item.tone === 'warning' ? 'text-amber-600 dark:text-amber-300' : 'text-foreground'
+												}`}
+											>
+												{item.value}
+											</p>
+										</div>
+									);
+								})}
 							</div>
 						) : (
 							<p className="text-xs text-muted-foreground">Waiting for browser WASM worker telemetry...</p>
@@ -906,11 +947,11 @@ const MicrophoneTestPanel = memo(
 				)}
 
 				{showDevMicTestControls && (
-					<div className="space-y-2 border-t border-border/40 pt-3">
-						<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+					<div className="space-y-3 border-t border-border/40 pt-3">
+						<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 							<div className="space-y-1">
 								<p className="text-xs font-medium">Short recording</p>
-								<p className="text-xs text-muted-foreground">Record a clip and play it back.</p>
+								<p className="text-xs text-muted-foreground">Record a short clip and play it back immediately.</p>
 							</div>
 							<Button
 								type="button"
@@ -940,7 +981,7 @@ const MicrophoneTestPanel = memo(
 						)}
 
 						{recordedClipUrl && (
-							<div className="mt-4 flex items-center gap-2">
+							<div className="flex items-center gap-2 rounded-lg border border-border/50 bg-background/80 p-2">
 								<audio controls src={recordedClipUrl} className="h-8 flex-1" />
 								<Button
 									type="button"
@@ -954,11 +995,19 @@ const MicrophoneTestPanel = memo(
 							</div>
 						)}
 
-						{recordingError && <p className="text-xs text-destructive">{recordingError}</p>}
+						{recordingError && (
+							<div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2">
+								<p className="text-xs text-destructive">{recordingError}</p>
+							</div>
+						)}
 					</div>
 				)}
 
-				{micTestError && <p className="text-xs text-destructive">{micTestError}</p>}
+				{micTestError && (
+					<div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2">
+						<p className="text-xs text-destructive">{micTestError}</p>
+					</div>
+				)}
 			</div>
 		);
 	},

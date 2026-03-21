@@ -1019,9 +1019,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 
 			const micConstraints = {
-				deviceId: {
-					exact: devices.microphoneId,
-				},
+				...(devices.microphoneId
+					? {
+							deviceId: {
+								exact: devices.microphoneId,
+							},
+						}
+					: {}),
 				autoGainControl: micProcessingConfig.browserAutoGainControl,
 				echoCancellation: micProcessingConfig.browserEchoCancellation,
 				noiseSuppression: micProcessingConfig.browserNoiseSuppression,
@@ -1237,7 +1241,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			const stream = await navigator.mediaDevices.getUserMedia({
 				audio: false,
 				video: {
-					deviceId: { exact: devices?.webcamId },
+					...(devices?.webcamId
+						? {
+								deviceId: {
+									exact: devices.webcamId,
+								},
+							}
+						: {}),
 					frameRate: devices.webcamFramerate,
 					...requestedWebcamResolution,
 				},
