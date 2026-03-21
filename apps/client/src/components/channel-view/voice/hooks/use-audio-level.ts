@@ -17,12 +17,45 @@ const ANALYZER_MAX_DECIBELS = -10;
 const ANALYZER_SMOOTHING_TIME_CONSTANT = 0.85;
 const SPEAKING_THRESHOLD = 8;
 
+// Single shared AudioContext at 48kHz (matching WebRTC Opus) to avoid
+// per-user resampling overhead and Chrome's AudioContext limit (~6).
+let sharedAudioContext: AudioContext | null = null;
+let sharedAudioContextUsers = 0;
+
+const getSharedAudioContext = (): AudioContext | null => {
+  if (sharedAudioContext && sharedAudioContext.state !== 'closed') {
+    sharedAudioContextUsers++;
+    return sharedAudioContext;
+  }
+
+  const AudioContextClass =
+    window.AudioContext ||
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+
+  if (!AudioContextClass) return null;
+
+  sharedAudioContext = new AudioContextClass({ sampleRate: 48_000 });
+  sharedAudioContextUsers = 1;
+  return sharedAudioContext;
+};
+
+const releaseSharedAudioContext = () => {
+  sharedAudioContextUsers--;
+  if (sharedAudioContextUsers <= 0 && sharedAudioContext) {
+    sharedAudioContext.close();
+    sharedAudioContext = null;
+    sharedAudioContextUsers = 0;
+  }
+};
+
 const useAudioLevel = (audioStream: MediaStream | undefined) => {
   const [audioLevel, setAudioLevel] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const audioContextRef = useRef<AudioContext | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const contextAcquiredRef = useRef(false);
   const ownVoiceUser = useOwnVoiceUser();
 
   useEffect(() => {
@@ -33,12 +66,16 @@ const useAudioLevel = (audioStream: MediaStream | undefined) => {
     }
 
     try {
-      const AudioContextClass =
-        window.AudioContext ||
-        (window as typeof window & { webkitAudioContext?: typeof AudioContext })
-          .webkitAudioContext;
+      const audioContext = getSharedAudioContext();
 
-      const audioContext = new AudioContextClass();
+      if (!audioContext) return;
+
+      contextAcquiredRef.current = true;
+
+      if (audioContext.state === 'suspended') {
+        audioContext.resume().catch(() => {});
+      }
+
       const analyser = audioContext.createAnalyser();
       const source = audioContext.createMediaStreamSource(audioStream);
 
@@ -49,7 +86,7 @@ const useAudioLevel = (audioStream: MediaStream | undefined) => {
 
       source.connect(analyser);
 
-      audioContextRef.current = audioContext;
+      sourceRef.current = source;
       analyserRef.current = analyser;
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
@@ -83,10 +120,22 @@ const useAudioLevel = (audioStream: MediaStream | undefined) => {
     return () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
       }
 
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
+      if (sourceRef.current) {
+        sourceRef.current.disconnect();
+        sourceRef.current = null;
+      }
+
+      if (analyserRef.current) {
+        analyserRef.current.disconnect();
+        analyserRef.current = null;
+      }
+
+      if (contextAcquiredRef.current) {
+        releaseSharedAudioContext();
+        contextAcquiredRef.current = false;
       }
 
       setAudioLevel(0);
