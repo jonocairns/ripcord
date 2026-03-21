@@ -40,10 +40,18 @@ const getSharedAudioContext = (): AudioContext | null => {
   return sharedAudioContext;
 };
 
-const releaseSharedAudioContext = () => {
+const releaseSharedAudioContext = (context: AudioContext) => {
+  // Only decrement if this caller's context is still the current shared one.
+  // If the browser externally closed the context, a new one may have been
+  // created — stale callers must not touch the new instance's ref count.
+  if (context !== sharedAudioContext) return;
+
   sharedAudioContextUsers--;
-  if (sharedAudioContextUsers <= 0 && sharedAudioContext) {
-    sharedAudioContext.close();
+  if (sharedAudioContextUsers <= 0) {
+    sharedAudioContext.close().catch(() => {
+      // Close can reject if the context is already closed — safe to ignore
+      // since we're discarding the reference either way.
+    });
     sharedAudioContext = null;
     sharedAudioContextUsers = 0;
   }
@@ -55,7 +63,7 @@ const useAudioLevel = (audioStream: MediaStream | undefined) => {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
-  const contextAcquiredRef = useRef(false);
+  const acquiredContextRef = useRef<AudioContext | null>(null);
   const ownVoiceUser = useOwnVoiceUser();
 
   useEffect(() => {
@@ -65,59 +73,70 @@ const useAudioLevel = (audioStream: MediaStream | undefined) => {
       return;
     }
 
-    try {
-      const audioContext = getSharedAudioContext();
+    const audioContext = getSharedAudioContext();
 
-      if (!audioContext) return;
+    if (!audioContext) return;
 
-      contextAcquiredRef.current = true;
+    acquiredContextRef.current = audioContext;
+    let cancelled = false;
 
-      if (audioContext.state === 'suspended') {
-        audioContext.resume().catch(() => {});
+    const startAnalyser = () => {
+      if (cancelled) return;
+
+      try {
+        const analyser = audioContext.createAnalyser();
+        const source = audioContext.createMediaStreamSource(audioStream);
+
+        analyser.fftSize = ANALYZER_FFT_SIZE;
+        analyser.minDecibels = ANALYZER_MIN_DECIBELS;
+        analyser.maxDecibels = ANALYZER_MAX_DECIBELS;
+        analyser.smoothingTimeConstant = ANALYZER_SMOOTHING_TIME_CONSTANT;
+
+        source.connect(analyser);
+
+        sourceRef.current = source;
+        analyserRef.current = analyser;
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        const checkAudioLevel = () => {
+          if (!analyserRef.current) return;
+
+          analyserRef.current.getByteFrequencyData(dataArray);
+
+          // calculate rms (root mean square) of the frequency data
+          let sum = 0;
+
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i] * dataArray[i];
+          }
+
+          const rms = Math.sqrt(sum / dataArray.length);
+          const normalizedLevel = Math.min(100, (rms / 255) * 100);
+
+          setAudioLevel(normalizedLevel);
+          setIsSpeaking(normalizedLevel > SPEAKING_THRESHOLD);
+
+          animationFrameRef.current = requestAnimationFrame(checkAudioLevel);
+        };
+
+        checkAudioLevel();
+      } catch (error) {
+        console.warn('Audio level detection not supported:', error);
       }
+    };
 
-      const analyser = audioContext.createAnalyser();
-      const source = audioContext.createMediaStreamSource(audioStream);
-
-      analyser.fftSize = ANALYZER_FFT_SIZE;
-      analyser.minDecibels = ANALYZER_MIN_DECIBELS;
-      analyser.maxDecibels = ANALYZER_MAX_DECIBELS;
-      analyser.smoothingTimeConstant = ANALYZER_SMOOTHING_TIME_CONSTANT;
-
-      source.connect(analyser);
-
-      sourceRef.current = source;
-      analyserRef.current = analyser;
-
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-      const checkAudioLevel = () => {
-        if (!analyserRef.current) return;
-
-        analyserRef.current.getByteFrequencyData(dataArray);
-
-        // calculate rms (root mean square) of the frequency data
-        let sum = 0;
-
-        for (let i = 0; i < dataArray.length; i++) {
-          sum += dataArray[i] * dataArray[i];
-        }
-
-        const rms = Math.sqrt(sum / dataArray.length);
-        const normalizedLevel = Math.min(100, (rms / 255) * 100);
-
-        setAudioLevel(normalizedLevel);
-        setIsSpeaking(normalizedLevel > SPEAKING_THRESHOLD);
-
-        animationFrameRef.current = requestAnimationFrame(checkAudioLevel);
-      };
-
-      checkAudioLevel();
-    } catch (error) {
-      console.warn('Audio level detection not supported:', error);
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().then(startAnalyser, () => {
+        console.warn('AudioContext resume failed — audio levels unavailable');
+      });
+    } else {
+      startAnalyser();
     }
 
     return () => {
+      cancelled = true;
+
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
         animationFrameRef.current = null;
@@ -133,9 +152,9 @@ const useAudioLevel = (audioStream: MediaStream | undefined) => {
         analyserRef.current = null;
       }
 
-      if (contextAcquiredRef.current) {
-        releaseSharedAudioContext();
-        contextAcquiredRef.current = false;
+      if (acquiredContextRef.current) {
+        releaseSharedAudioContext(acquiredContextRef.current);
+        acquiredContextRef.current = null;
       }
 
       setAudioLevel(0);
