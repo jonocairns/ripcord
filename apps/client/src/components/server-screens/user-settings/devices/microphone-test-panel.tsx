@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import {
+	createMicAudioProcessingPipeline,
 	createNativeSidecarMicCapturePipeline,
 	resolveSidecarDeviceId,
 	type TMicAudioProcessingPipeline,
@@ -21,6 +22,7 @@ const LEVEL_FLOOR = 0;
 const LEVEL_CEILING = 100;
 const RMS_NORMALIZATION = 0.3;
 const PREFERRED_RECORDING_MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+const WASM_DIAGNOSTIC_SAMPLE_RATE = 48_000;
 
 type TMicrophoneTestPanelProps = {
 	microphoneId: string | undefined;
@@ -28,12 +30,14 @@ type TMicrophoneTestPanelProps = {
 	voiceFilterStrength: VoiceFilterStrength;
 	echoCancellation: boolean;
 	noiseSuppression: boolean;
+	wasmNoiseSuppressionEnabled: boolean;
 	autoGainControl: boolean;
 	hasDesktopBridge: boolean;
 };
 
 type TResolvedMicTestProcessingConfig = {
 	sidecarVoiceProcessingEnabled: boolean;
+	wasmNoiseSuppressionEnabled: boolean;
 	browserAutoGainControl: boolean;
 	browserNoiseSuppression: boolean;
 	browserEchoCancellation: boolean;
@@ -47,12 +51,56 @@ type TResolvedMicTestProcessingConfig = {
 	sidecarNoiseGateFloorDbfs?: number;
 };
 
+type TWasmDenoiseDiagSnapshot = NonNullable<Window['wasmDenoiseDiag']>;
+type TMicTestPreviewState =
+	| 'browser-capture'
+	| 'browser-wasm'
+	| 'browser-wasm-raw-preview'
+	| 'in-call-stream'
+	| 'sidecar-native';
+
+const getMicTestPreviewLabel = (previewState: TMicTestPreviewState | undefined): string => {
+	switch (previewState) {
+		case 'browser-wasm':
+			return 'Browser WASM';
+		case 'browser-wasm-raw-preview':
+			return 'Raw preview';
+		case 'in-call-stream':
+			return 'In-call stream';
+		case 'sidecar-native':
+			return 'Native sidecar';
+		case 'browser-capture':
+		default:
+			return 'Browser capture';
+	}
+};
+
+const isBrowserWasmPreviewState = (
+	previewState: TMicTestPreviewState | undefined,
+): previewState is 'browser-wasm' | 'browser-wasm-raw-preview' => {
+	return previewState === 'browser-wasm' || previewState === 'browser-wasm-raw-preview';
+};
+
+const formatDiagnosticDurationMs = (value: number | null): string => {
+	if (typeof value !== 'number' || !Number.isFinite(value)) {
+		return '—';
+	}
+
+	return `${value.toFixed(1)} ms`;
+};
+
+const formatQueueDepthMs = (frames: number): string => {
+	const durationMs = (frames / WASM_DIAGNOSTIC_SAMPLE_RATE) * 1_000;
+	return `${durationMs.toFixed(1)} ms`;
+};
+
 const resolveMicTestProcessingConfig = ({
 	micQualityMode,
 	hasDesktopBridge,
 	voiceFilterStrength,
 	echoCancellation,
 	noiseSuppression,
+	wasmNoiseSuppressionEnabled,
 	autoGainControl,
 }: {
 	micQualityMode: MicQualityMode;
@@ -60,13 +108,18 @@ const resolveMicTestProcessingConfig = ({
 	voiceFilterStrength: VoiceFilterStrength;
 	echoCancellation: boolean;
 	noiseSuppression: boolean;
+	wasmNoiseSuppressionEnabled: boolean;
 	autoGainControl: boolean;
 }): TResolvedMicTestProcessingConfig => {
 	const defaults = getStrengthDefaults(voiceFilterStrength);
+	const browserWasmNoiseSuppressionEnabled = import.meta.env.DEV && wasmNoiseSuppressionEnabled && noiseSuppression;
 
 	if (micQualityMode === MicQualityMode.EXPERIMENTAL) {
+		const sidecarVoiceProcessingEnabled = hasDesktopBridge;
+
 		return {
-			sidecarVoiceProcessingEnabled: hasDesktopBridge,
+			sidecarVoiceProcessingEnabled,
+			wasmNoiseSuppressionEnabled: !sidecarVoiceProcessingEnabled && browserWasmNoiseSuppressionEnabled,
 			browserAutoGainControl: false,
 			browserNoiseSuppression: false,
 			browserEchoCancellation: false,
@@ -87,8 +140,9 @@ const resolveMicTestProcessingConfig = ({
 	// making the playback sound broken.
 	return {
 		sidecarVoiceProcessingEnabled: false,
+		wasmNoiseSuppressionEnabled: browserWasmNoiseSuppressionEnabled,
 		browserAutoGainControl: autoGainControl,
-		browserNoiseSuppression: noiseSuppression,
+		browserNoiseSuppression: browserWasmNoiseSuppressionEnabled ? false : noiseSuppression,
 		browserEchoCancellation: false,
 		sidecarNoiseSuppression: noiseSuppression,
 		sidecarAutoGainControl: autoGainControl,
@@ -108,6 +162,7 @@ const MicrophoneTestPanel = memo(
 		voiceFilterStrength,
 		echoCancellation,
 		noiseSuppression,
+		wasmNoiseSuppressionEnabled,
 		autoGainControl,
 		hasDesktopBridge,
 	}: TMicrophoneTestPanelProps) => {
@@ -119,8 +174,9 @@ const MicrophoneTestPanel = memo(
 		const levelBarRef = useRef<HTMLDivElement>(null);
 		const [micTestError, setMicTestError] = useState<string | undefined>(undefined);
 		const [isRecordingClip, setIsRecordingClip] = useState(false);
-		const [testUsesSidecar, setTestUsesSidecar] = useState(false);
-		const [testUsesInCallStream, setTestUsesInCallStream] = useState(false);
+		const [testPreviewState, setTestPreviewState] = useState<TMicTestPreviewState | undefined>(undefined);
+		const [previewProcessedBrowserWasm, setPreviewProcessedBrowserWasm] = useState(true);
+		const [wasmDiagnostics, setWasmDiagnostics] = useState<TWasmDenoiseDiagSnapshot | undefined>(undefined);
 		const [recordingError, setRecordingError] = useState<string | undefined>(undefined);
 		const [recordedClipUrl, setRecordedClipUrl] = useState<string | undefined>(undefined);
 		const rawStreamRef = useRef<MediaStream | undefined>(undefined);
@@ -148,11 +204,25 @@ const MicrophoneTestPanel = memo(
 				voiceFilterStrength,
 				echoCancellation,
 				noiseSuppression,
+				wasmNoiseSuppressionEnabled,
 				autoGainControl,
 			});
-		}, [autoGainControl, echoCancellation, hasDesktopBridge, micQualityMode, noiseSuppression, voiceFilterStrength]);
+		}, [
+			autoGainControl,
+			echoCancellation,
+			hasDesktopBridge,
+			micQualityMode,
+			noiseSuppression,
+			voiceFilterStrength,
+			wasmNoiseSuppressionEnabled,
+		]);
 		const canRecordClip = typeof window !== 'undefined' && typeof window.MediaRecorder !== 'undefined';
-		const showDevRecordingControls = import.meta.env.DEV;
+		const showDevMicTestControls = import.meta.env.DEV;
+		const canToggleBrowserWasmPreview =
+			showDevMicTestControls &&
+			resolvedMicProcessingConfig.wasmNoiseSuppressionEnabled &&
+			currentVoiceChannelId === undefined;
+		const showWasmDiagnostics = showDevMicTestControls && isTestingMic && isBrowserWasmPreviewState(testPreviewState);
 
 		const setClipUrl = useCallback((nextUrl: string | undefined) => {
 			const previousUrl = recordedClipUrlRef.current;
@@ -326,8 +396,8 @@ const MicrophoneTestPanel = memo(
 			}
 
 			setIsTestingMic(false);
-			setTestUsesSidecar(false);
-			setTestUsesInCallStream(false);
+			setTestPreviewState(undefined);
+			setWasmDiagnostics(undefined);
 			if (levelBarRef.current) {
 				levelBarRef.current.style.width = '0%';
 			}
@@ -354,11 +424,11 @@ const MicrophoneTestPanel = memo(
 				const inVoiceChannel = currentVoiceChannelId !== undefined;
 				let rawStream: MediaStream | undefined;
 				let outputStream = localAudioStream;
-				let sidecarPipeline: TMicAudioProcessingPipeline | undefined;
-				let usesInCallStream = false;
+				let micAudioPipeline: TMicAudioProcessingPipeline | undefined;
+				let previewState: TMicTestPreviewState = 'browser-capture';
 
 				if (inVoiceChannel && outputStream) {
-					usesInCallStream = true;
+					previewState = 'in-call-stream';
 				} else {
 					if (resolvedMicProcessingConfig.sidecarVoiceProcessingEnabled && !inVoiceChannel) {
 						// Sidecar mode — fail hard so the test reflects the real processing path.
@@ -367,7 +437,7 @@ const MicrophoneTestPanel = memo(
 							throw new Error('Desktop bridge unavailable for sidecar microphone test.');
 						}
 						const sidecarDeviceId = await resolveSidecarDeviceId(microphoneId, desktopBridge);
-						sidecarPipeline = await createNativeSidecarMicCapturePipeline({
+						micAudioPipeline = await createNativeSidecarMicCapturePipeline({
 							suppressionLevel: resolvedMicProcessingConfig.sidecarSuppressionLevel,
 							noiseSuppression: resolvedMicProcessingConfig.sidecarNoiseSuppression,
 							autoGainControl: resolvedMicProcessingConfig.sidecarAutoGainControl,
@@ -379,10 +449,11 @@ const MicrophoneTestPanel = memo(
 							sidecarDeviceId,
 							desktopBridge,
 						});
-						if (!sidecarPipeline) {
+						if (!micAudioPipeline) {
 							throw new Error('Failed to start native sidecar microphone capture.');
 						}
-						outputStream = sidecarPipeline.stream;
+						outputStream = micAudioPipeline.stream;
+						previewState = 'sidecar-native';
 					} else {
 						rawStream = await navigator.mediaDevices.getUserMedia({
 							audio: resolveMicAudioConstraints(),
@@ -393,7 +464,30 @@ const MicrophoneTestPanel = memo(
 							throw new Error('Unable to access microphone track for testing.');
 						}
 
-						outputStream = rawStream;
+						micAudioPipeline = await createMicAudioProcessingPipeline({
+							inputTrack: rawTrack,
+							enabled: false,
+							wasmNoiseSuppressionEnabled: resolvedMicProcessingConfig.wasmNoiseSuppressionEnabled,
+							suppressionLevel: resolvedMicProcessingConfig.sidecarSuppressionLevel,
+							noiseSuppression: resolvedMicProcessingConfig.sidecarNoiseSuppression,
+							autoGainControl: resolvedMicProcessingConfig.sidecarAutoGainControl,
+							echoCancellation: resolvedMicProcessingConfig.sidecarEchoCancellation,
+							dfnMix: resolvedMicProcessingConfig.sidecarDfnMix,
+							dfnAttenuationLimitDb: resolvedMicProcessingConfig.sidecarDfnAttenuationLimitDb,
+							dfnExperimentalAggressiveMode: resolvedMicProcessingConfig.sidecarExperimentalAggressiveMode,
+							dfnNoiseGateFloorDbfs: resolvedMicProcessingConfig.sidecarNoiseGateFloorDbfs,
+						});
+
+						if (micAudioPipeline?.backend === 'browser-wasm') {
+							outputStream = previewProcessedBrowserWasm ? micAudioPipeline.stream : rawStream;
+							previewState = previewProcessedBrowserWasm ? 'browser-wasm' : 'browser-wasm-raw-preview';
+						} else if (micAudioPipeline?.backend === 'sidecar-native') {
+							outputStream = micAudioPipeline.stream;
+							previewState = 'sidecar-native';
+						} else {
+							outputStream = rawStream;
+							previewState = 'browser-capture';
+						}
 					}
 				}
 
@@ -422,7 +516,7 @@ const MicrophoneTestPanel = memo(
 					rawStream?.getTracks().forEach((track) => {
 						track.stop();
 					});
-					await sidecarPipeline?.destroy().catch(() => {
+					await micAudioPipeline?.destroy().catch(() => {
 						// ignore stale cleanup failures
 					});
 					await audioContext.close().catch(() => {
@@ -459,11 +553,10 @@ const MicrophoneTestPanel = memo(
 				audioContextRef.current = audioContext;
 				analyserRef.current = analyser;
 				monitorGainNodeRef.current = monitorGainNode;
-				micAudioPipelineRef.current = sidecarPipeline;
+				micAudioPipelineRef.current = micAudioPipeline;
 
 				setIsTestingMic(true);
-				setTestUsesSidecar(Boolean(sidecarPipeline));
-				setTestUsesInCallStream(usesInCallStream);
+				setTestPreviewState(previewState);
 				setMicTestError(undefined);
 				updateInputLevel();
 			} catch (error) {
@@ -479,6 +572,7 @@ const MicrophoneTestPanel = memo(
 			resolvedMicProcessingConfig,
 			resolveMicAudioConstraints,
 			stopTest,
+			previewProcessedBrowserWasm,
 		]);
 
 		const startRecordingClip = useCallback(async () => {
@@ -620,6 +714,24 @@ const MicrophoneTestPanel = memo(
 			};
 		}, [stopTest]);
 
+		useEffect(() => {
+			if (!showWasmDiagnostics) {
+				setWasmDiagnostics(undefined);
+				return;
+			}
+
+			const syncDiagnostics = () => {
+				setWasmDiagnostics(window.wasmDenoiseDiag ?? undefined);
+			};
+
+			syncDiagnostics();
+			const intervalId = window.setInterval(syncDiagnostics, 250);
+
+			return () => {
+				window.clearInterval(intervalId);
+			};
+		}, [showWasmDiagnostics]);
+
 		// Restart the running test automatically when processing config changes.
 		const isTestingMicRef = useRef(false);
 		useEffect(() => {
@@ -634,6 +746,14 @@ const MicrophoneTestPanel = memo(
 
 			void startTest();
 		}, [resolvedMicProcessingConfig]);
+
+		useEffect(() => {
+			if (!isTestingMicRef.current || !canToggleBrowserWasmPreview) {
+				return;
+			}
+
+			void startTest();
+		}, [canToggleBrowserWasmPreview, startTest]);
 
 		useEffect(() => {
 			return () => {
@@ -680,12 +800,29 @@ const MicrophoneTestPanel = memo(
 					</div>
 				</div>
 
+				{canToggleBrowserWasmPreview && (
+					<div className="flex flex-col gap-3 rounded-lg border border-dashed border-primary/30 bg-background/40 p-3 sm:flex-row sm:items-center sm:justify-between">
+						<div className="space-y-1">
+							<p className="text-xs font-medium">Browser WASM preview</p>
+							<p className="text-xs text-muted-foreground">
+								Toggle between the denoised stream and the raw mic while keeping the WASM worker active.
+							</p>
+						</div>
+						<div className="flex items-center gap-3">
+							<Label className="cursor-default text-xs text-muted-foreground">
+								{previewProcessedBrowserWasm ? 'Processed' : 'Raw'}
+							</Label>
+							<Switch checked={previewProcessedBrowserWasm} onCheckedChange={setPreviewProcessedBrowserWasm} />
+						</div>
+					</div>
+				)}
+
 				<div className="space-y-1.5">
 					<div className="flex items-center justify-between">
 						<p className="text-xs text-muted-foreground">Input level</p>
 						{isTestingMic && (
 							<span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-								{testUsesInCallStream ? 'In-call stream' : testUsesSidecar ? 'Enhanced processing' : 'Browser capture'}
+								{getMicTestPreviewLabel(testPreviewState)}
 							</span>
 						)}
 					</div>
@@ -694,7 +831,68 @@ const MicrophoneTestPanel = memo(
 					</div>
 				</div>
 
-				{showDevRecordingControls && (
+				{showWasmDiagnostics && (
+					<div className="space-y-3 rounded-lg border border-primary/20 bg-background/40 p-3">
+						<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+							<div className="space-y-1">
+								<p className="text-xs font-medium">Browser WASM diagnostics</p>
+								<p className="text-xs text-muted-foreground">
+									{testPreviewState === 'browser-wasm-raw-preview'
+										? 'You are hearing the raw mic while the WASM denoiser keeps running in the background.'
+										: 'You are hearing the browser-side WASM denoised stream.'}
+								</p>
+							</div>
+							{wasmDiagnostics && (
+								<span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+									{wasmDiagnostics.transportMode === 'shared-array-buffer' ? 'SharedArrayBuffer' : 'MessagePort'}
+								</span>
+							)}
+						</div>
+
+						{wasmDiagnostics ? (
+							<div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+								<div className="space-y-0.5">
+									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Blocks</p>
+									<p className="text-xs font-medium">{wasmDiagnostics.processedBlocks.toLocaleString()}</p>
+								</div>
+								<div className="space-y-0.5">
+									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Average</p>
+									<p className="text-xs font-medium">
+										{formatDiagnosticDurationMs(wasmDiagnostics.averageProcessTimeMs)}
+									</p>
+								</div>
+								<div className="space-y-0.5">
+									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Peak</p>
+									<p className="text-xs font-medium">{formatDiagnosticDurationMs(wasmDiagnostics.maxProcessTimeMs)}</p>
+								</div>
+								<div className="space-y-0.5">
+									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Input queue</p>
+									<p className="text-xs font-medium">{formatQueueDepthMs(wasmDiagnostics.inputQueueFrames)}</p>
+								</div>
+								<div className="space-y-0.5">
+									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Output queue</p>
+									<p className="text-xs font-medium">{formatQueueDepthMs(wasmDiagnostics.outputQueueFrames)}</p>
+								</div>
+								<div className="space-y-0.5">
+									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Input drops</p>
+									<p className="text-xs font-medium">{wasmDiagnostics.inputDrops.toLocaleString()}</p>
+								</div>
+								<div className="space-y-0.5">
+									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Output drops</p>
+									<p className="text-xs font-medium">{wasmDiagnostics.outputDrops.toLocaleString()}</p>
+								</div>
+								<div className="space-y-0.5">
+									<p className="text-[10px] uppercase tracking-wide text-muted-foreground">Underruns</p>
+									<p className="text-xs font-medium">{wasmDiagnostics.outputUnderruns.toLocaleString()}</p>
+								</div>
+							</div>
+						) : (
+							<p className="text-xs text-muted-foreground">Waiting for browser WASM worker telemetry...</p>
+						)}
+					</div>
+				)}
+
+				{showDevMicTestControls && (
 					<div className="space-y-2 border-t border-border/40 pt-3">
 						<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
 							<div className="space-y-1">

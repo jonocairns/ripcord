@@ -40,6 +40,7 @@ const Devices = memo(() => {
 	const { inputDevices, videoDevices, loading: availableDevicesLoading } = useAvailableDevices();
 	const { devices, saveDevices, loading: devicesLoading } = useDevices();
 	const { values, onChange, setValues } = useForm(devices);
+	const showWasmNoiseSuppressionSetting = import.meta.env.DEV;
 	const lastLoadedDevicesRef = useRef(devices);
 	const [desktopAppVersion, setDesktopAppVersion] = useState<string>();
 	const [capturingKeybindField, setCapturingKeybindField] = useState<TPushKeybindField | undefined>(undefined);
@@ -253,12 +254,29 @@ const Devices = memo(() => {
 						</div>
 					</div>
 
+					{showWasmNoiseSuppressionSetting && (
+						<div className="space-y-2 rounded-lg border border-dashed border-primary/40 bg-primary/5 p-3">
+							<div className="flex items-center gap-3">
+								<Switch
+									checked={!!values.wasmNoiseSuppressionEnabled}
+									onCheckedChange={(checked) => onChange('wasmNoiseSuppressionEnabled', checked)}
+								/>
+								<Label className="cursor-default">Browser WASM noise suppression (experimental)</Label>
+							</div>
+							<p className="text-xs text-muted-foreground">
+								Uses the in-browser worker/worklet denoiser when browser capture is active. The regular Noise
+								suppression toggle must also stay enabled.
+							</p>
+						</div>
+					)}
+
 					<MicrophoneTestPanel
 						microphoneId={selectedMicrophoneId}
 						micQualityMode={values.micQualityMode}
 						voiceFilterStrength={values.voiceFilterStrength}
 						echoCancellation={!!values.echoCancellation}
 						noiseSuppression={!!values.noiseSuppression}
+						wasmNoiseSuppressionEnabled={!!values.wasmNoiseSuppressionEnabled}
 						autoGainControl={!!values.autoGainControl}
 						hasDesktopBridge={hasDesktopBridge}
 					/>

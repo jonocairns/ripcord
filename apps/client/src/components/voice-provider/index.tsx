@@ -102,6 +102,7 @@ const AUDIO_OPUS_CODEC_OPTIONS = {
 
 type ResolvedMicProcessingConfig = {
 	sidecarVoiceProcessingEnabled: boolean;
+	wasmNoiseSuppressionEnabled: boolean;
 	browserAutoGainControl: boolean;
 	browserNoiseSuppression: boolean;
 	browserEchoCancellation: boolean;
@@ -139,10 +140,15 @@ const resolveMicProcessingConfig = (
 	hasDesktopBridge: boolean,
 ): ResolvedMicProcessingConfig => {
 	const defaults = getStrengthDefaults(devices.voiceFilterStrength);
+	const browserWasmNoiseSuppressionEnabled =
+		import.meta.env.DEV && devices.wasmNoiseSuppressionEnabled && devices.noiseSuppression;
 
 	if (devices.micQualityMode === MicQualityMode.EXPERIMENTAL) {
+		const sidecarVoiceProcessingEnabled = hasDesktopBridge;
+
 		return {
-			sidecarVoiceProcessingEnabled: hasDesktopBridge,
+			sidecarVoiceProcessingEnabled,
+			wasmNoiseSuppressionEnabled: !sidecarVoiceProcessingEnabled && browserWasmNoiseSuppressionEnabled,
 			browserAutoGainControl: false,
 			browserNoiseSuppression: false,
 			browserEchoCancellation: false,
@@ -160,8 +166,9 @@ const resolveMicProcessingConfig = (
 	// Standard (AUTO) and legacy MANUAL — browser-only, no sidecar
 	return {
 		sidecarVoiceProcessingEnabled: false,
+		wasmNoiseSuppressionEnabled: browserWasmNoiseSuppressionEnabled,
 		browserAutoGainControl: devices.autoGainControl,
-		browserNoiseSuppression: devices.noiseSuppression,
+		browserNoiseSuppression: browserWasmNoiseSuppressionEnabled ? false : devices.noiseSuppression,
 		browserEchoCancellation: devices.echoCancellation,
 		sidecarNoiseSuppression: devices.noiseSuppression,
 		sidecarAutoGainControl: devices.autoGainControl,
@@ -180,6 +187,7 @@ const didMicCaptureSettingsChange = (previousDevices: TDeviceSettings, nextDevic
 		previousDevices.micQualityMode !== nextDevices.micQualityMode ||
 		previousDevices.echoCancellation !== nextDevices.echoCancellation ||
 		previousDevices.noiseSuppression !== nextDevices.noiseSuppression ||
+		previousDevices.wasmNoiseSuppressionEnabled !== nextDevices.wasmNoiseSuppressionEnabled ||
 		previousDevices.autoGainControl !== nextDevices.autoGainControl ||
 		previousDevices.voiceFilterStrength !== nextDevices.voiceFilterStrength ||
 		previousDevices.sidecarDfnMix !== nextDevices.sidecarDfnMix ||
@@ -1039,6 +1047,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					const micAudioPipeline = await createMicAudioProcessingPipeline({
 						inputTrack: rawAudioTrack,
 						enabled: micProcessingConfig.sidecarVoiceProcessingEnabled,
+						wasmNoiseSuppressionEnabled: micProcessingConfig.wasmNoiseSuppressionEnabled,
 						suppressionLevel: micProcessingConfig.sidecarSuppressionLevel,
 						noiseSuppression: micProcessingConfig.sidecarNoiseSuppression,
 						autoGainControl: micProcessingConfig.sidecarAutoGainControl,
