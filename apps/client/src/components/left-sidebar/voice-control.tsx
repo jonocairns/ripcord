@@ -1,4 +1,4 @@
-import { AlertTriangle, Loader2, PhoneOff, Wifi, WifiOff } from 'lucide-react';
+import { AlertTriangle, Loader2, LogOut, Wifi, WifiOff } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import { useChannelById, useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
@@ -75,9 +75,9 @@ const VoiceControl = memo(() => {
 						size="icon"
 						className="h-8 w-8 rounded-lg text-red-400 transition-colors hover:!bg-red-500/10 hover:!text-red-300"
 						onClick={leaveVoice}
-						title="Disconnect"
+						title="Leave voice"
 					>
-						<PhoneOff className="h-4 w-4" />
+						<LogOut className="h-4 w-4" />
 					</Button>
 				</div>
 			</div>
