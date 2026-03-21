@@ -14,9 +14,10 @@ const EmojiList = forwardRef<EmojiListRef, EmojiListProps>(({ items, onSelect },
 	const [selectedIndex, setSelectedIndex] = useState(0);
 
 	// reset selected index when items change
+	// biome-ignore lint/correctness/useExhaustiveDependencies: items must trigger reset when suggestion list changes
 	useEffect(() => {
 		setSelectedIndex(0);
-	}, []);
+	}, [items]);
 
 	const selectItem = useCallback(
 		(index: number) => {

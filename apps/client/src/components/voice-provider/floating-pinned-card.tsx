@@ -106,15 +106,17 @@ const FloatingPinnedCard = memo(
 			setSelectedChannelId(currentVoiceChannelId);
 		}, [currentVoiceChannelId]);
 
+		// biome-ignore lint/correctness/useExhaustiveDependencies: reattach stream when channel visibility changes
 		useEffect(() => {
 			if (videoRef.current && floatingCardContent?.videoStream) {
 				videoRef.current.srcObject = floatingCardContent.videoStream;
 			}
-		}, [floatingCardContent?.videoStream]);
+		}, [floatingCardContent?.videoStream, isCurrentVoiceChannelSelected]);
 
+		// biome-ignore lint/correctness/useExhaustiveDependencies: reopen card when pinned content or channel changes
 		useEffect(() => {
 			setOpen(true);
-		}, []);
+		}, [floatingCardContent?.id, isCurrentVoiceChannelSelected]);
 
 		if (!floatingCardContent || isCurrentVoiceChannelSelected || !open) {
 			return null;

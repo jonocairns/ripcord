@@ -13,9 +13,10 @@ export interface CommandListRef {
 const CommandList = forwardRef<CommandListRef, CommandListProps>(({ items, onSelect }, ref) => {
 	const [selectedIndex, setSelectedIndex] = useState(0);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: items must trigger reset when suggestion list changes
 	useEffect(() => {
 		setSelectedIndex(0);
-	}, []);
+	}, [items]);
 
 	const selectItem = useCallback(
 		(index: number) => {

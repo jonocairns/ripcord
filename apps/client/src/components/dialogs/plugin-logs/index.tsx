@@ -118,11 +118,12 @@ const PluginLogsDialog = memo(({ isOpen, close, pluginId }: TPluginLogsDialogPro
 	}, [logs, logLimit]);
 
 	// auto-scroll to bottom
+	// biome-ignore lint/correctness/useExhaustiveDependencies: sortedLogs must trigger scroll when new logs arrive
 	useEffect(() => {
 		if (autoScroll && scrollRef.current) {
 			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
 		}
-	}, [autoScroll]);
+	}, [sortedLogs, autoScroll]);
 
 	const handleScroll = useCallback(() => {
 		if (!scrollRef.current) return;

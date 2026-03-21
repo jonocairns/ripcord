@@ -498,7 +498,7 @@ type TVoiceProviderProps = {
 
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const [loading, setLoading] = useState(false);
-	const [_voiceReconnectRetryToken, setVoiceReconnectRetryToken] = useState(0);
+	const [voiceReconnectRetryToken, setVoiceReconnectRetryToken] = useState(0);
 	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
 	const routerRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const sendRtpCapabilities = useRef<RtpCapabilities | null>(null);
@@ -2009,6 +2009,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		rtpCapabilities: sendRtpCapabilities.current,
 	});
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: voiceReconnectRetryToken is a trigger dep — bumped to force reconnect retry
 	useEffect(() => {
 		if (!isConnected) {
 			return;
@@ -2095,14 +2096,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				window.clearTimeout(retryTimeoutId);
 			}
 		};
-	}, [connectionStatus, currentVoiceChannelId, init, isConnected]);
+	}, [connectionStatus, currentVoiceChannelId, init, isConnected, voiceReconnectRetryToken]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: must be mount-only — cleanup recreates on inner dep changes which would tear down voice
 	useEffect(() => {
 		return () => {
 			logVoice('Voice provider unmounting, cleaning up resources');
 			cleanup();
 		};
-	}, [cleanup]);
+	}, []);
 
 	const contextValue = useMemo<TVoiceProvider>(
 		() => ({

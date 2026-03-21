@@ -21,7 +21,7 @@ const useScrollController = ({
 	fetching,
 	hasMore,
 	loadMore,
-	hasTypingUsers: _hasTypingUsers = false,
+	hasTypingUsers = false,
 }: TUseScrollControllerProps): TUseScrollControllerReturn => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const hasInitialScroll = useRef(false);
@@ -97,6 +97,7 @@ const useScrollController = ({
 	}, [fetching, messages.length, scrollToBottom]);
 
 	// auto-scroll on new messages if user is near bottom
+	// biome-ignore lint/correctness/useExhaustiveDependencies: hasTypingUsers is a trigger dep — typing indicator layout shifts require re-scroll
 	useEffect(() => {
 		const container = containerRef.current;
 		if (!container || !hasInitialScroll.current || messages.length === 0) return;
@@ -107,7 +108,7 @@ const useScrollController = ({
 				scrollToBottom();
 			}, 10);
 		}
-	}, [messages, scrollToBottom]);
+	}, [messages, hasTypingUsers, scrollToBottom]);
 
 	// keep bottom lock on container resize (input/footer height changes)
 	useEffect(() => {

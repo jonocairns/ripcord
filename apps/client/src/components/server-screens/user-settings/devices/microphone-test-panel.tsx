@@ -626,13 +626,14 @@ const MicrophoneTestPanel = memo(
 			isTestingMicRef.current = isTestingMic;
 		}, [isTestingMic]);
 
+		// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally only restart when processing config changes, not all startTest deps
 		useEffect(() => {
 			if (!isTestingMicRef.current) {
 				return;
 			}
 
 			void startTest();
-		}, [startTest]);
+		}, [resolvedMicProcessingConfig]);
 
 		useEffect(() => {
 			return () => {
