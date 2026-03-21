@@ -36,8 +36,7 @@ const Devices = memo(() => {
 	const { inputDevices, videoDevices, loading: availableDevicesLoading } = useAvailableDevices();
 	const { devices, saveDevices, loading: devicesLoading } = useDevices();
 	const { values, onChange, setValues } = useForm(devices);
-	const showWasmNoiseSuppressionSetting = import.meta.env.DEV;
-	const showBrowserWasmNoiseSuppressionToggle = showWasmNoiseSuppressionSetting && !!values.noiseSuppression;
+	const showBrowserWasmNoiseSuppressionToggle = !!values.noiseSuppression;
 	const lastLoadedDevicesRef = useRef(devices);
 	const [desktopAppVersion, setDesktopAppVersion] = useState<string>();
 	const [capturingKeybindField, setCapturingKeybindField] = useState<TPushKeybindField | undefined>(undefined);

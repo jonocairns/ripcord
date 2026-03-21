@@ -53,19 +53,12 @@ type TResolvedMicTestProcessingConfig = {
 };
 
 type TWasmDenoiseDiagSnapshot = NonNullable<Window['wasmDenoiseDiag']>;
-type TMicTestPreviewState =
-	| 'browser-capture'
-	| 'browser-wasm'
-	| 'browser-wasm-raw-preview'
-	| 'in-call-stream'
-	| 'sidecar-native';
+type TMicTestPreviewState = 'browser-capture' | 'browser-wasm' | 'in-call-stream' | 'sidecar-native';
 
 const getMicTestPreviewLabel = (previewState: TMicTestPreviewState | undefined): string => {
 	switch (previewState) {
 		case 'browser-wasm':
 			return 'Browser WASM';
-		case 'browser-wasm-raw-preview':
-			return 'Raw preview';
 		case 'in-call-stream':
 			return 'In-call stream';
 		case 'sidecar-native':
@@ -76,10 +69,8 @@ const getMicTestPreviewLabel = (previewState: TMicTestPreviewState | undefined):
 	}
 };
 
-const isBrowserWasmPreviewState = (
-	previewState: TMicTestPreviewState | undefined,
-): previewState is 'browser-wasm' | 'browser-wasm-raw-preview' => {
-	return previewState === 'browser-wasm' || previewState === 'browser-wasm-raw-preview';
+const isBrowserWasmPreviewState = (previewState: TMicTestPreviewState | undefined): previewState is 'browser-wasm' => {
+	return previewState === 'browser-wasm';
 };
 
 const formatDiagnosticDurationMs = (value: number | null): string => {
@@ -113,7 +104,7 @@ const resolveMicTestProcessingConfig = ({
 	autoGainControl: boolean;
 }): TResolvedMicTestProcessingConfig => {
 	const defaults = getStrengthDefaults(voiceFilterStrength);
-	const browserWasmNoiseSuppressionEnabled = import.meta.env.DEV && wasmNoiseSuppressionEnabled && noiseSuppression;
+	const browserWasmNoiseSuppressionEnabled = wasmNoiseSuppressionEnabled && noiseSuppression;
 
 	if (micQualityMode === MicQualityMode.EXPERIMENTAL) {
 		const sidecarVoiceProcessingEnabled = hasDesktopBridge;
@@ -176,7 +167,6 @@ const MicrophoneTestPanel = memo(
 		const [micTestError, setMicTestError] = useState<string | undefined>(undefined);
 		const [isRecordingClip, setIsRecordingClip] = useState(false);
 		const [testPreviewState, setTestPreviewState] = useState<TMicTestPreviewState | undefined>(undefined);
-		const [previewProcessedBrowserWasm, setPreviewProcessedBrowserWasm] = useState(true);
 		const [wasmDiagnostics, setWasmDiagnostics] = useState<TWasmDenoiseDiagSnapshot | undefined>(undefined);
 		const [recordingError, setRecordingError] = useState<string | undefined>(undefined);
 		const [recordedClipUrl, setRecordedClipUrl] = useState<string | undefined>(undefined);
@@ -199,7 +189,6 @@ const MicrophoneTestPanel = memo(
 		const micMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
 		const soundMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
 		const monitorEnabledRef = useRef(monitorEnabled);
-		const previewProcessedBrowserWasmRef = useRef(previewProcessedBrowserWasm);
 		const resolvedMicProcessingConfig = useMemo(() => {
 			return resolveMicTestProcessingConfig({
 				micQualityMode,
@@ -221,10 +210,6 @@ const MicrophoneTestPanel = memo(
 		]);
 		const canRecordClip = typeof window !== 'undefined' && typeof window.MediaRecorder !== 'undefined';
 		const showDevMicTestControls = import.meta.env.DEV;
-		const canToggleBrowserWasmPreview =
-			showDevMicTestControls &&
-			resolvedMicProcessingConfig.wasmNoiseSuppressionEnabled &&
-			currentVoiceChannelId === undefined;
 		const showWasmDiagnostics = showDevMicTestControls && isTestingMic && isBrowserWasmPreviewState(testPreviewState);
 		const wasmDiagnosticItems = wasmDiagnostics
 			? [
@@ -525,8 +510,8 @@ const MicrophoneTestPanel = memo(
 						});
 
 						if (micAudioPipeline?.backend === 'browser-wasm') {
-							outputStream = previewProcessedBrowserWasmRef.current ? micAudioPipeline.stream : rawStream;
-							previewState = previewProcessedBrowserWasmRef.current ? 'browser-wasm' : 'browser-wasm-raw-preview';
+							outputStream = micAudioPipeline.stream;
+							previewState = 'browser-wasm';
 						} else if (micAudioPipeline?.backend === 'sidecar-native') {
 							outputStream = micAudioPipeline.stream;
 							previewState = 'sidecar-native';
@@ -749,10 +734,6 @@ const MicrophoneTestPanel = memo(
 		}, [monitorEnabled]);
 
 		useEffect(() => {
-			previewProcessedBrowserWasmRef.current = previewProcessedBrowserWasm;
-		}, [previewProcessedBrowserWasm]);
-
-		useEffect(() => {
 			micMutedRef.current = ownVoiceState.micMuted;
 		}, [ownVoiceState.micMuted]);
 
@@ -797,16 +778,7 @@ const MicrophoneTestPanel = memo(
 			}
 
 			void startTest();
-		}, [resolvedMicProcessingConfig, previewProcessedBrowserWasm]);
-
-		// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally only restart when WASM preview availability changes
-		useEffect(() => {
-			if (!isTestingMicRef.current || !canToggleBrowserWasmPreview) {
-				return;
-			}
-
-			void startTest();
-		}, [canToggleBrowserWasmPreview]);
+		}, [resolvedMicProcessingConfig]);
 
 		useEffect(() => {
 			return () => {
@@ -888,33 +860,12 @@ const MicrophoneTestPanel = memo(
 					</div>
 				)}
 
-				{canToggleBrowserWasmPreview && (
-					<div className="flex flex-col gap-3 border-t border-border/40 pt-3 sm:flex-row sm:items-center sm:justify-between">
-						<div className="space-y-1">
-							<p className="text-xs font-medium">Browser WASM preview</p>
-							<p className="text-xs text-muted-foreground">
-								Toggle between the denoised stream and the raw mic while keeping the WASM worker active.
-							</p>
-						</div>
-						<div className="flex items-center gap-3">
-							<Label className="cursor-default text-xs text-muted-foreground">
-								{previewProcessedBrowserWasm ? 'Processed' : 'Raw'}
-							</Label>
-							<Switch checked={previewProcessedBrowserWasm} onCheckedChange={setPreviewProcessedBrowserWasm} />
-						</div>
-					</div>
-				)}
-
 				{showWasmDiagnostics && (
 					<div className="space-y-3 rounded-xl border border-primary/20 bg-background/40 p-3">
 						<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
 							<div className="space-y-1">
 								<p className="text-xs font-medium">Browser WASM diagnostics</p>
-								<p className="text-xs text-muted-foreground">
-									{testPreviewState === 'browser-wasm-raw-preview'
-										? 'You are hearing the raw mic while the WASM denoiser keeps running in the background.'
-										: 'You are hearing the browser-side WASM denoised stream.'}
-								</p>
+								<p className="text-xs text-muted-foreground">You are hearing the browser-side WASM denoised stream.</p>
 							</div>
 							{wasmDiagnostics && (
 								<Badge variant="secondary" className="text-[10px] uppercase tracking-[0.14em]">

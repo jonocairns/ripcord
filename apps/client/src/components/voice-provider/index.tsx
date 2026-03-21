@@ -140,8 +140,7 @@ const resolveMicProcessingConfig = (
 	hasDesktopBridge: boolean,
 ): ResolvedMicProcessingConfig => {
 	const defaults = getStrengthDefaults(devices.voiceFilterStrength);
-	const browserWasmNoiseSuppressionEnabled =
-		import.meta.env.DEV && devices.wasmNoiseSuppressionEnabled && devices.noiseSuppression;
+	const browserWasmNoiseSuppressionEnabled = devices.wasmNoiseSuppressionEnabled && devices.noiseSuppression;
 
 	if (devices.micQualityMode === MicQualityMode.EXPERIMENTAL) {
 		const sidecarVoiceProcessingEnabled = hasDesktopBridge;
