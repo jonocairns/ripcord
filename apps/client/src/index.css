@@ -427,7 +427,7 @@ body {
 	);
 	opacity: calc(var(--speaking-active) * (0.58 + var(--speaking-level) * 0.42));
 	transform: scale(calc(1 + var(--speaking-active) * (0.18 + var(--speaking-level) * 0.34)));
-	filter: blur(calc(2.5px + var(--speaking-level) * 3.5px));
+	filter: blur(calc(var(--speaking-active) * (2.5px + var(--speaking-level) * 3.5px)));
 }
 
 .speaking-avatar-shell::after {
