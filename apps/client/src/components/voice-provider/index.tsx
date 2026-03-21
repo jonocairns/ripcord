@@ -262,7 +262,7 @@ const createMicGainPipeline = async (
 		return undefined;
 	}
 
-	const audioContext = new AudioContextClass();
+	const audioContext = new AudioContextClass({ sampleRate: 48_000 });
 
 	try {
 		if (audioContext.state === 'suspended') {
