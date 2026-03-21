@@ -1,6 +1,6 @@
 {
   "name": "@sharkord/server",
-  "version": "1.4.17",
+  "version": "1.4.18",
   "module": "src/index.ts",
   "type": "module",
   "private": true,
