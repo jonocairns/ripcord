@@ -106,6 +106,7 @@ export type TDeviceSettings = {
 	webcamFramerate: number;
 	echoCancellation: boolean;
 	noiseSuppression: boolean;
+	wasmNoiseSuppressionEnabled: boolean;
 	autoGainControl: boolean;
 	experimentalVoiceFilter: boolean;
 	voiceFilterStrength: VoiceFilterStrength;

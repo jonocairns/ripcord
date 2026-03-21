@@ -2,6 +2,7 @@ import { createContext, memo, useCallback, useEffect, useMemo, useState } from '
 import { getLocalStorageItemAsJSON, LocalStorageKey, setLocalStorageItemAsJSON } from '@/helpers/storage';
 import type { TDeviceSettings } from '@/types';
 import { useAvailableDevices } from './hooks/use-available-devices';
+import { normalizeStoredMediaDeviceId } from './media-device-selection';
 import { DEFAULT_DEVICE_SETTINGS, migrateDeviceSettings } from './migrate-device-settings';
 
 export type TDevicesProvider = {
@@ -23,7 +24,7 @@ type TDevicesProviderProps = {
 const DevicesProvider = memo(({ children }: TDevicesProviderProps) => {
 	const [loading, setLoading] = useState<boolean>(true);
 	const [devices, setDevices] = useState<TDeviceSettings>(DEFAULT_DEVICE_SETTINGS);
-	const { loading: devicesLoading } = useAvailableDevices();
+	const { inputDevices, videoDevices, loading: devicesLoading } = useAvailableDevices();
 
 	const saveDevices = useCallback((newDevices: TDeviceSettings) => {
 		setDevices(newDevices);
@@ -34,11 +35,16 @@ const DevicesProvider = memo(({ children }: TDevicesProviderProps) => {
 		if (devicesLoading) return;
 
 		const savedSettings = getLocalStorageItemAsJSON<TDeviceSettings>(LocalStorageKey.DEVICES_SETTINGS);
+		const normalizedSettings = migrateDeviceSettings(savedSettings);
 
-		setDevices(migrateDeviceSettings(savedSettings));
+		setDevices({
+			...normalizedSettings,
+			microphoneId: normalizeStoredMediaDeviceId(normalizedSettings.microphoneId, inputDevices),
+			webcamId: normalizeStoredMediaDeviceId(normalizedSettings.webcamId, videoDevices),
+		});
 
 		setLoading(false);
-	}, [devicesLoading]);
+	}, [devicesLoading, inputDevices, videoDevices]);
 
 	const contextValue = useMemo<TDevicesProvider>(
 		() => ({

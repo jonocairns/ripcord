@@ -2,8 +2,15 @@ import { Info, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useDevices } from '@/components/devices-provider/hooks/use-devices';
+import {
+	getExactMediaDeviceId,
+	getSelectableMediaDeviceOptions,
+	getSelectedMediaDeviceId,
+	normalizeStoredMediaDeviceId,
+} from '@/components/devices-provider/media-device-selection';
 import { formatPushKeybindLabel, pushKeybindFromKeyState } from '@/components/devices-provider/push-keybind';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -15,23 +22,12 @@ import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useForm } from '@/hooks/use-form';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { ScreenAudioMode } from '@/runtime/types';
-import { type Resolution, VideoCodecPreference } from '@/types';
+import { MicQualityMode, type Resolution, VideoCodecPreference } from '@/types';
 import { useAvailableDevices } from './hooks/use-available-devices';
 import { MicrophoneTestPanel } from './microphone-test-panel';
 import ResolutionFpsControl from './resolution-fps-control';
 
-const DEFAULT_NAME = 'default';
 type TPushKeybindField = 'pushToTalkKeybind' | 'pushToMuteKeybind';
-
-const getDefaultDeviceId = (availableDevices: (MediaDeviceInfo | undefined)[]): string | undefined => {
-	const device = availableDevices.find((candidate): candidate is MediaDeviceInfo => Boolean(candidate));
-
-	if (!device) {
-		return undefined;
-	}
-
-	return device.deviceId || DEFAULT_NAME;
-};
 
 const Devices = memo(() => {
 	const desktopBridge = getDesktopBridge();
@@ -40,22 +36,37 @@ const Devices = memo(() => {
 	const { inputDevices, videoDevices, loading: availableDevicesLoading } = useAvailableDevices();
 	const { devices, saveDevices, loading: devicesLoading } = useDevices();
 	const { values, onChange, setValues } = useForm(devices);
+	const sidecarWillHandleNoiseSuppression = hasDesktopBridge && values.micQualityMode === MicQualityMode.EXPERIMENTAL;
+	const showBrowserWasmNoiseSuppressionToggle = !!values.noiseSuppression && !sidecarWillHandleNoiseSuppression;
 	const lastLoadedDevicesRef = useRef(devices);
 	const [desktopAppVersion, setDesktopAppVersion] = useState<string>();
 	const [capturingKeybindField, setCapturingKeybindField] = useState<TPushKeybindField | undefined>(undefined);
-	const defaultMicrophoneId = getDefaultDeviceId(inputDevices);
-	const defaultWebcamId = getDefaultDeviceId(videoDevices);
-	const selectedMicrophoneId = values.microphoneId || defaultMicrophoneId;
-	const selectedWebcamId = values.webcamId || defaultWebcamId;
+	const normalizedMicrophoneId = normalizeStoredMediaDeviceId(values.microphoneId, inputDevices);
+	const selectedMicrophoneId = getSelectedMediaDeviceId(values.microphoneId, inputDevices);
+	const normalizedWebcamId = normalizeStoredMediaDeviceId(values.webcamId, videoDevices);
+	const selectedWebcamId = getSelectedMediaDeviceId(values.webcamId, videoDevices);
+	const microphoneOptions = getSelectableMediaDeviceOptions(inputDevices, 'Default Microphone');
+	const webcamOptions = getSelectableMediaDeviceOptions(videoDevices, 'Default Webcam');
+
+	const handleNoiseSuppressionChange = useCallback(
+		(checked: boolean) => {
+			onChange('noiseSuppression', checked);
+
+			if (!checked && values.wasmNoiseSuppressionEnabled) {
+				onChange('wasmNoiseSuppressionEnabled', false);
+			}
+		},
+		[onChange, values.wasmNoiseSuppressionEnabled],
+	);
 
 	const saveDeviceSettings = useCallback(() => {
 		saveDevices({
 			...values,
-			microphoneId: selectedMicrophoneId,
-			webcamId: selectedWebcamId,
+			microphoneId: normalizedMicrophoneId,
+			webcamId: normalizedWebcamId,
 		});
 		toast.success('Device settings saved');
-	}, [saveDevices, selectedMicrophoneId, selectedWebcamId, values]);
+	}, [normalizedMicrophoneId, normalizedWebcamId, saveDevices, values]);
 
 	const clearPushKeybind = useCallback(
 		(field: TPushKeybindField) => {
@@ -156,13 +167,13 @@ const Devices = memo(() => {
 
 				return {
 					...devices,
-					microphoneId: devices.microphoneId || defaultMicrophoneId,
-					webcamId: devices.webcamId || defaultWebcamId,
+					microphoneId: normalizeStoredMediaDeviceId(devices.microphoneId, inputDevices),
+					webcamId: normalizeStoredMediaDeviceId(devices.webcamId, videoDevices),
 				};
 			}
 
-			const nextMicrophoneId = currentValues.microphoneId || defaultMicrophoneId;
-			const nextWebcamId = currentValues.webcamId || defaultWebcamId;
+			const nextMicrophoneId = normalizeStoredMediaDeviceId(currentValues.microphoneId, inputDevices);
+			const nextWebcamId = normalizeStoredMediaDeviceId(currentValues.webcamId, videoDevices);
 
 			if (nextMicrophoneId === currentValues.microphoneId && nextWebcamId === currentValues.webcamId) {
 				return currentValues;
@@ -174,7 +185,7 @@ const Devices = memo(() => {
 				webcamId: nextWebcamId,
 			};
 		});
-	}, [defaultMicrophoneId, defaultWebcamId, devices, setValues]);
+	}, [devices, inputDevices, videoDevices, setValues]);
 
 	if (availableDevicesLoading || devicesLoading) {
 		return <LoadingCard className="h-[600px]" />;
@@ -200,17 +211,20 @@ const Devices = memo(() => {
 						</p>
 					</div>
 
-					<div className=" space-y-2">
+					<div className="space-y-2">
 						<Label>Input device</Label>
-						<Select onValueChange={(value) => onChange('microphoneId', value)} value={selectedMicrophoneId}>
+						<Select
+							onValueChange={(value) => onChange('microphoneId', getExactMediaDeviceId(value))}
+							value={selectedMicrophoneId}
+						>
 							<SelectTrigger className="w-full">
 								<SelectValue placeholder="Select the input device" />
 							</SelectTrigger>
 							<SelectContent>
 								<SelectGroup>
-									{inputDevices.map((device) => (
-										<SelectItem key={device?.deviceId} value={device?.deviceId || DEFAULT_NAME}>
-											{device?.label.trim() || 'Default Microphone'}
+									{microphoneOptions.map((device) => (
+										<SelectItem key={device.value} value={device.value}>
+											{device.label}
 										</SelectItem>
 									))}
 								</SelectGroup>
@@ -227,44 +241,88 @@ const Devices = memo(() => {
 						</AlertDescription>
 					</Alert>
 
-					<div className="grid gap-x-8 gap-y-3 md:grid-cols-2 my-4 pl-2">
-						<div className="flex items-center gap-3">
-							<Switch
-								checked={!!values.echoCancellation}
-								onCheckedChange={(checked) => onChange('echoCancellation', checked)}
-							/>
-							<Label className="cursor-default">Echo cancellation</Label>
+					<div className="space-y-3">
+						<div className="space-y-1">
+							<p className="text-sm font-medium">Voice cleanup</p>
+							<p className="text-xs text-muted-foreground">
+								Control the browser-side cleanup applied before your microphone is sent.
+							</p>
 						</div>
 
-						<div className="flex items-center gap-3">
-							<Switch
-								checked={!!values.noiseSuppression}
-								onCheckedChange={(checked) => onChange('noiseSuppression', checked)}
-							/>
-							<Label className="cursor-default">Noise suppression</Label>
-						</div>
+						<div className="grid gap-x-8 gap-y-4 md:grid-cols-2">
+							<div className="self-start">
+								<div className="flex items-start justify-between gap-4">
+									<div className="space-y-1">
+										<Label className="cursor-default">Echo cancellation</Label>
+										<p className="text-xs text-muted-foreground">Reduce speaker playback leaking back into the mic.</p>
+									</div>
+									<Switch
+										checked={!!values.echoCancellation}
+										onCheckedChange={(checked) => onChange('echoCancellation', checked)}
+									/>
+								</div>
+							</div>
 
-						<div className="flex items-center gap-3">
-							<Switch
-								checked={!!values.autoGainControl}
-								onCheckedChange={(checked) => onChange('autoGainControl', checked)}
-							/>
-							<Label className="cursor-default">Automatic gain control</Label>
+							<div className="self-start">
+								<div className="flex items-start justify-between gap-4">
+									<div className="space-y-1">
+										<Label className="cursor-default">Noise suppression</Label>
+										<p className="text-xs text-muted-foreground">Filter steady background noise before encoding.</p>
+									</div>
+									<Switch checked={!!values.noiseSuppression} onCheckedChange={handleNoiseSuppressionChange} />
+								</div>
+							</div>
+
+							{showBrowserWasmNoiseSuppressionToggle && (
+								<div className="self-start md:col-start-2 md:row-start-2">
+									<div className="flex items-start justify-between gap-4">
+										<div className="space-y-1">
+											<div className="flex flex-wrap items-center gap-2">
+												<Label className="cursor-default">Advanced noise suppression</Label>
+												<Badge variant="secondary" className="h-5 px-1.5 text-[10px] uppercase tracking-[0.14em]">
+													Beta
+												</Badge>
+											</div>
+											<p className="text-xs text-muted-foreground">
+												Uses a stronger browser-based noise reduction mode for your microphone.
+											</p>
+										</div>
+										<Switch
+											checked={!!values.wasmNoiseSuppressionEnabled}
+											onCheckedChange={(checked) => onChange('wasmNoiseSuppressionEnabled', checked)}
+										/>
+									</div>
+								</div>
+							)}
+
+							<div className="self-start md:col-start-1 md:row-start-2">
+								<div className="flex items-start justify-between gap-4">
+									<div className="space-y-1">
+										<Label className="cursor-default">Automatic gain control</Label>
+										<p className="text-xs text-muted-foreground">Let the browser manage mic loudness automatically.</p>
+									</div>
+									<Switch
+										checked={!!values.autoGainControl}
+										onCheckedChange={(checked) => onChange('autoGainControl', checked)}
+									/>
+								</div>
+							</div>
 						</div>
 					</div>
 
 					<MicrophoneTestPanel
-						microphoneId={selectedMicrophoneId}
+						microphoneId={normalizedMicrophoneId}
 						micQualityMode={values.micQualityMode}
 						voiceFilterStrength={values.voiceFilterStrength}
 						echoCancellation={!!values.echoCancellation}
 						noiseSuppression={!!values.noiseSuppression}
+						wasmNoiseSuppressionEnabled={!!values.wasmNoiseSuppressionEnabled}
 						autoGainControl={!!values.autoGainControl}
 						hasDesktopBridge={hasDesktopBridge}
 					/>
 
 					{hasDesktopBridge && (
-						<div className=" space-y-3">
+						<div className="space-y-3">
 							<div className="space-y-1">
 								<p className="text-sm font-medium">Push keybinds (Desktop)</p>
 								<p className="text-xs text-muted-foreground">
@@ -343,17 +401,20 @@ const Devices = memo(() => {
 						<p className="text-sm text-muted-foreground">Choose the camera and default video quality settings.</p>
 					</div>
 
-					<div className=" space-y-2">
+					<div className="space-y-2">
 						<Label>Input device</Label>
-						<Select onValueChange={(value) => onChange('webcamId', value)} value={selectedWebcamId}>
+						<Select
+							onValueChange={(value) => onChange('webcamId', getExactMediaDeviceId(value))}
+							value={selectedWebcamId}
+						>
 							<SelectTrigger className="w-full">
 								<SelectValue placeholder="Select the input device" />
 							</SelectTrigger>
 							<SelectContent>
 								<SelectGroup>
-									{videoDevices.map((device) => (
-										<SelectItem key={device?.deviceId} value={device?.deviceId || DEFAULT_NAME}>
-											{device?.label.trim() || 'Default Webcam'}
+									{webcamOptions.map((device) => (
+										<SelectItem key={device.value} value={device.value}>
+											{device.label}
 										</SelectItem>
 									))}
 								</SelectGroup>

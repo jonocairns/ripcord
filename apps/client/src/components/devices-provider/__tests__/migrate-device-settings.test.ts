@@ -12,6 +12,7 @@ describe('migrateDeviceSettings', () => {
 		expect(DEFAULT_DEVICE_SETTINGS.pushToMuteKeybind).toBeUndefined();
 		expect(DEFAULT_DEVICE_SETTINGS.echoCancellation).toBe(true);
 		expect(DEFAULT_DEVICE_SETTINGS.noiseSuppression).toBe(true);
+		expect(DEFAULT_DEVICE_SETTINGS.wasmNoiseSuppressionEnabled).toBe(false);
 		expect(DEFAULT_DEVICE_SETTINGS.voiceFilterStrength).toBe(VoiceFilterStrength.HIGH);
 	});
 
@@ -70,6 +71,14 @@ describe('migrateDeviceSettings', () => {
 		});
 
 		expect(migrated.experimentalVoiceFilter).toBe(true);
+	});
+
+	it('preserves explicit wasmNoiseSuppressionEnabled values', () => {
+		const migrated = migrateDeviceSettings({
+			wasmNoiseSuppressionEnabled: true,
+		});
+
+		expect(migrated.wasmNoiseSuppressionEnabled).toBe(true);
 	});
 
 	it('preserves explicit voiceFilterStrength values', () => {

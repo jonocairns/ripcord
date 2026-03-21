@@ -1,9 +1,11 @@
 import { Circle, Mic, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import {
+	createMicAudioProcessingPipeline,
 	createNativeSidecarMicCapturePipeline,
 	resolveSidecarDeviceId,
 	type TMicAudioProcessingPipeline,
@@ -21,6 +23,7 @@ const LEVEL_FLOOR = 0;
 const LEVEL_CEILING = 100;
 const RMS_NORMALIZATION = 0.3;
 const PREFERRED_RECORDING_MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+const WASM_DIAGNOSTIC_SAMPLE_RATE = 48_000;
 
 type TMicrophoneTestPanelProps = {
 	microphoneId: string | undefined;
@@ -28,12 +31,14 @@ type TMicrophoneTestPanelProps = {
 	voiceFilterStrength: VoiceFilterStrength;
 	echoCancellation: boolean;
 	noiseSuppression: boolean;
+	wasmNoiseSuppressionEnabled: boolean;
 	autoGainControl: boolean;
 	hasDesktopBridge: boolean;
 };
 
 type TResolvedMicTestProcessingConfig = {
 	sidecarVoiceProcessingEnabled: boolean;
+	wasmNoiseSuppressionEnabled: boolean;
 	browserAutoGainControl: boolean;
 	browserNoiseSuppression: boolean;
 	browserEchoCancellation: boolean;
@@ -47,12 +52,47 @@ type TResolvedMicTestProcessingConfig = {
 	sidecarNoiseGateFloorDbfs?: number;
 };
 
+type TWasmDenoiseDiagSnapshot = NonNullable<Window['wasmDenoiseDiag']>;
+type TMicTestPreviewState = 'browser-capture' | 'browser-wasm' | 'in-call-stream' | 'sidecar-native';
+
+const getMicTestPreviewLabel = (previewState: TMicTestPreviewState | undefined): string => {
+	switch (previewState) {
+		case 'browser-wasm':
+			return 'Browser WASM';
+		case 'in-call-stream':
+			return 'In-call stream';
+		case 'sidecar-native':
+			return 'Native sidecar';
+		case 'browser-capture':
+		default:
+			return 'Browser capture';
+	}
+};
+
+const isBrowserWasmPreviewState = (previewState: TMicTestPreviewState | undefined): previewState is 'browser-wasm' => {
+	return previewState === 'browser-wasm';
+};
+
+const formatDiagnosticDurationMs = (value: number | null): string => {
+	if (typeof value !== 'number' || !Number.isFinite(value)) {
+		return '—';
+	}
+
+	return `${value.toFixed(1)} ms`;
+};
+
+const formatQueueDepthMs = (frames: number): string => {
+	const durationMs = (frames / WASM_DIAGNOSTIC_SAMPLE_RATE) * 1_000;
+	return `${durationMs.toFixed(1)} ms`;
+};
+
 const resolveMicTestProcessingConfig = ({
 	micQualityMode,
 	hasDesktopBridge,
 	voiceFilterStrength,
 	echoCancellation,
 	noiseSuppression,
+	wasmNoiseSuppressionEnabled,
 	autoGainControl,
 }: {
 	micQualityMode: MicQualityMode;
@@ -60,13 +100,18 @@ const resolveMicTestProcessingConfig = ({
 	voiceFilterStrength: VoiceFilterStrength;
 	echoCancellation: boolean;
 	noiseSuppression: boolean;
+	wasmNoiseSuppressionEnabled: boolean;
 	autoGainControl: boolean;
 }): TResolvedMicTestProcessingConfig => {
 	const defaults = getStrengthDefaults(voiceFilterStrength);
+	const browserWasmNoiseSuppressionEnabled = wasmNoiseSuppressionEnabled && noiseSuppression;
 
 	if (micQualityMode === MicQualityMode.EXPERIMENTAL) {
+		const sidecarVoiceProcessingEnabled = hasDesktopBridge;
+
 		return {
-			sidecarVoiceProcessingEnabled: hasDesktopBridge,
+			sidecarVoiceProcessingEnabled,
+			wasmNoiseSuppressionEnabled: !sidecarVoiceProcessingEnabled && browserWasmNoiseSuppressionEnabled,
 			browserAutoGainControl: false,
 			browserNoiseSuppression: false,
 			browserEchoCancellation: false,
@@ -87,8 +132,9 @@ const resolveMicTestProcessingConfig = ({
 	// making the playback sound broken.
 	return {
 		sidecarVoiceProcessingEnabled: false,
+		wasmNoiseSuppressionEnabled: browserWasmNoiseSuppressionEnabled,
 		browserAutoGainControl: autoGainControl,
-		browserNoiseSuppression: noiseSuppression,
+		browserNoiseSuppression: browserWasmNoiseSuppressionEnabled ? false : noiseSuppression,
 		browserEchoCancellation: false,
 		sidecarNoiseSuppression: noiseSuppression,
 		sidecarAutoGainControl: autoGainControl,
@@ -108,6 +154,7 @@ const MicrophoneTestPanel = memo(
 		voiceFilterStrength,
 		echoCancellation,
 		noiseSuppression,
+		wasmNoiseSuppressionEnabled,
 		autoGainControl,
 		hasDesktopBridge,
 	}: TMicrophoneTestPanelProps) => {
@@ -119,8 +166,8 @@ const MicrophoneTestPanel = memo(
 		const levelBarRef = useRef<HTMLDivElement>(null);
 		const [micTestError, setMicTestError] = useState<string | undefined>(undefined);
 		const [isRecordingClip, setIsRecordingClip] = useState(false);
-		const [testUsesSidecar, setTestUsesSidecar] = useState(false);
-		const [testUsesInCallStream, setTestUsesInCallStream] = useState(false);
+		const [testPreviewState, setTestPreviewState] = useState<TMicTestPreviewState | undefined>(undefined);
+		const [wasmDiagnostics, setWasmDiagnostics] = useState<TWasmDenoiseDiagSnapshot | undefined>(undefined);
 		const [recordingError, setRecordingError] = useState<string | undefined>(undefined);
 		const [recordedClipUrl, setRecordedClipUrl] = useState<string | undefined>(undefined);
 		const rawStreamRef = useRef<MediaStream | undefined>(undefined);
@@ -141,6 +188,7 @@ const MicrophoneTestPanel = memo(
 		const soundMutedRef = useRef(ownVoiceState.soundMuted);
 		const micMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
 		const soundMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
+		const monitorEnabledRef = useRef(monitorEnabled);
 		const resolvedMicProcessingConfig = useMemo(() => {
 			return resolveMicTestProcessingConfig({
 				micQualityMode,
@@ -148,11 +196,60 @@ const MicrophoneTestPanel = memo(
 				voiceFilterStrength,
 				echoCancellation,
 				noiseSuppression,
+				wasmNoiseSuppressionEnabled,
 				autoGainControl,
 			});
-		}, [autoGainControl, echoCancellation, hasDesktopBridge, micQualityMode, noiseSuppression, voiceFilterStrength]);
+		}, [
+			autoGainControl,
+			echoCancellation,
+			hasDesktopBridge,
+			micQualityMode,
+			noiseSuppression,
+			voiceFilterStrength,
+			wasmNoiseSuppressionEnabled,
+		]);
 		const canRecordClip = typeof window !== 'undefined' && typeof window.MediaRecorder !== 'undefined';
-		const showDevRecordingControls = import.meta.env.DEV;
+		const showDevMicTestControls = import.meta.env.DEV;
+		const showWasmDiagnostics = showDevMicTestControls && isTestingMic && isBrowserWasmPreviewState(testPreviewState);
+		const wasmDiagnosticItems = wasmDiagnostics
+			? [
+					{
+						label: 'Blocks',
+						value: wasmDiagnostics.processedBlocks.toLocaleString(),
+					},
+					{
+						label: 'Average',
+						value: formatDiagnosticDurationMs(wasmDiagnostics.averageProcessTimeMs),
+					},
+					{
+						label: 'Peak',
+						value: formatDiagnosticDurationMs(wasmDiagnostics.maxProcessTimeMs),
+					},
+					{
+						label: 'Input queue',
+						value: formatQueueDepthMs(wasmDiagnostics.inputQueueFrames),
+					},
+					{
+						label: 'Output queue',
+						value: formatQueueDepthMs(wasmDiagnostics.outputQueueFrames),
+					},
+					{
+						label: 'Input drops',
+						value: wasmDiagnostics.inputDrops.toLocaleString(),
+						tone: wasmDiagnostics.inputDrops > 0 ? 'warning' : 'default',
+					},
+					{
+						label: 'Output drops',
+						value: wasmDiagnostics.outputDrops.toLocaleString(),
+						tone: wasmDiagnostics.outputDrops > 0 ? 'warning' : 'default',
+					},
+					{
+						label: 'Underruns',
+						value: wasmDiagnostics.outputUnderruns.toLocaleString(),
+						tone: wasmDiagnostics.outputUnderruns > 0 ? 'warning' : 'default',
+					},
+				]
+			: undefined;
 
 		const setClipUrl = useCallback((nextUrl: string | undefined) => {
 			const previousUrl = recordedClipUrlRef.current;
@@ -326,8 +423,8 @@ const MicrophoneTestPanel = memo(
 			}
 
 			setIsTestingMic(false);
-			setTestUsesSidecar(false);
-			setTestUsesInCallStream(false);
+			setTestPreviewState(undefined);
+			setWasmDiagnostics(undefined);
 			if (levelBarRef.current) {
 				levelBarRef.current.style.width = '0%';
 			}
@@ -341,9 +438,7 @@ const MicrophoneTestPanel = memo(
 			setMicTestError(undefined);
 			await maybeMuteForTest();
 
-			const AudioContextClass =
-				window.AudioContext ||
-				(window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+			const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 
 			if (!AudioContextClass) {
 				setMicTestError('Microphone testing is not supported in this browser.');
@@ -354,11 +449,11 @@ const MicrophoneTestPanel = memo(
 				const inVoiceChannel = currentVoiceChannelId !== undefined;
 				let rawStream: MediaStream | undefined;
 				let outputStream = localAudioStream;
-				let sidecarPipeline: TMicAudioProcessingPipeline | undefined;
-				let usesInCallStream = false;
+				let micAudioPipeline: TMicAudioProcessingPipeline | undefined;
+				let previewState: TMicTestPreviewState = 'browser-capture';
 
 				if (inVoiceChannel && outputStream) {
-					usesInCallStream = true;
+					previewState = 'in-call-stream';
 				} else {
 					if (resolvedMicProcessingConfig.sidecarVoiceProcessingEnabled && !inVoiceChannel) {
 						// Sidecar mode — fail hard so the test reflects the real processing path.
@@ -367,7 +462,7 @@ const MicrophoneTestPanel = memo(
 							throw new Error('Desktop bridge unavailable for sidecar microphone test.');
 						}
 						const sidecarDeviceId = await resolveSidecarDeviceId(microphoneId, desktopBridge);
-						sidecarPipeline = await createNativeSidecarMicCapturePipeline({
+						micAudioPipeline = await createNativeSidecarMicCapturePipeline({
 							suppressionLevel: resolvedMicProcessingConfig.sidecarSuppressionLevel,
 							noiseSuppression: resolvedMicProcessingConfig.sidecarNoiseSuppression,
 							autoGainControl: resolvedMicProcessingConfig.sidecarAutoGainControl,
@@ -379,10 +474,11 @@ const MicrophoneTestPanel = memo(
 							sidecarDeviceId,
 							desktopBridge,
 						});
-						if (!sidecarPipeline) {
+						if (!micAudioPipeline) {
 							throw new Error('Failed to start native sidecar microphone capture.');
 						}
-						outputStream = sidecarPipeline.stream;
+						outputStream = micAudioPipeline.stream;
+						previewState = 'sidecar-native';
 					} else {
 						rawStream = await navigator.mediaDevices.getUserMedia({
 							audio: resolveMicAudioConstraints(),
@@ -393,7 +489,34 @@ const MicrophoneTestPanel = memo(
 							throw new Error('Unable to access microphone track for testing.');
 						}
 
-						outputStream = rawStream;
+						micAudioPipeline = await createMicAudioProcessingPipeline({
+							inputTrack: rawTrack,
+							enabled: false,
+							wasmNoiseSuppressionEnabled: resolvedMicProcessingConfig.wasmNoiseSuppressionEnabled,
+							suppressionLevel: resolvedMicProcessingConfig.sidecarSuppressionLevel,
+							noiseSuppression: resolvedMicProcessingConfig.sidecarNoiseSuppression,
+							autoGainControl: resolvedMicProcessingConfig.sidecarAutoGainControl,
+							echoCancellation: resolvedMicProcessingConfig.sidecarEchoCancellation,
+							dfnMix: resolvedMicProcessingConfig.sidecarDfnMix,
+							dfnAttenuationLimitDb: resolvedMicProcessingConfig.sidecarDfnAttenuationLimitDb,
+							dfnExperimentalAggressiveMode: resolvedMicProcessingConfig.sidecarExperimentalAggressiveMode,
+							dfnNoiseGateFloorDbfs: resolvedMicProcessingConfig.sidecarNoiseGateFloorDbfs,
+							onWasmError: (error) => {
+								setMicTestError(error.message);
+								void stopTest();
+							},
+						});
+
+						if (micAudioPipeline?.backend === 'browser-wasm') {
+							outputStream = micAudioPipeline.stream;
+							previewState = 'browser-wasm';
+						} else if (micAudioPipeline?.backend === 'sidecar-native') {
+							outputStream = micAudioPipeline.stream;
+							previewState = 'sidecar-native';
+						} else {
+							outputStream = rawStream;
+							previewState = 'browser-capture';
+						}
 					}
 				}
 
@@ -408,7 +531,7 @@ const MicrophoneTestPanel = memo(
 
 				analyser.fftSize = ANALYSER_FFT_SIZE;
 				analyser.smoothingTimeConstant = ANALYSER_SMOOTHING;
-				monitorGainNode.gain.value = monitorEnabled ? 1 : 0;
+				monitorGainNode.gain.value = monitorEnabledRef.current ? 1 : 0;
 
 				source.connect(analyser);
 				source.connect(monitorGainNode);
@@ -422,7 +545,7 @@ const MicrophoneTestPanel = memo(
 					rawStream?.getTracks().forEach((track) => {
 						track.stop();
 					});
-					await sidecarPipeline?.destroy().catch(() => {
+					await micAudioPipeline?.destroy().catch(() => {
 						// ignore stale cleanup failures
 					});
 					await audioContext.close().catch(() => {
@@ -459,11 +582,10 @@ const MicrophoneTestPanel = memo(
 				audioContextRef.current = audioContext;
 				analyserRef.current = analyser;
 				monitorGainNodeRef.current = monitorGainNode;
-				micAudioPipelineRef.current = sidecarPipeline;
+				micAudioPipelineRef.current = micAudioPipeline;
 
 				setIsTestingMic(true);
-				setTestUsesSidecar(Boolean(sidecarPipeline));
-				setTestUsesInCallStream(usesInCallStream);
+				setTestPreviewState(previewState);
 				setMicTestError(undefined);
 				updateInputLevel();
 			} catch (error) {
@@ -473,7 +595,6 @@ const MicrophoneTestPanel = memo(
 		}, [
 			maybeMuteForTest,
 			microphoneId,
-			monitorEnabled,
 			localAudioStream,
 			currentVoiceChannelId,
 			resolvedMicProcessingConfig,
@@ -607,6 +728,10 @@ const MicrophoneTestPanel = memo(
 		}, [monitorEnabled]);
 
 		useEffect(() => {
+			monitorEnabledRef.current = monitorEnabled;
+		}, [monitorEnabled]);
+
+		useEffect(() => {
 			micMutedRef.current = ownVoiceState.micMuted;
 		}, [ownVoiceState.micMuted]);
 
@@ -619,6 +744,24 @@ const MicrophoneTestPanel = memo(
 				void stopTest();
 			};
 		}, [stopTest]);
+
+		useEffect(() => {
+			if (!showWasmDiagnostics) {
+				setWasmDiagnostics(undefined);
+				return;
+			}
+
+			const syncDiagnostics = () => {
+				setWasmDiagnostics(window.wasmDenoiseDiag ?? undefined);
+			};
+
+			syncDiagnostics();
+			const intervalId = window.setInterval(syncDiagnostics, 250);
+
+			return () => {
+				window.clearInterval(intervalId);
+			};
+		}, [showWasmDiagnostics]);
 
 		// Restart the running test automatically when processing config changes.
 		const isTestingMicRef = useRef(false);
@@ -646,26 +789,38 @@ const MicrophoneTestPanel = memo(
 		}, []);
 
 		return (
-			<div className="space-y-4 rounded-xl border-l-2 border-l-primary/40 bg-secondary p-5">
-				<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+			<div className="space-y-4 border-t border-border/50 pt-4">
+				<div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
 					<div className="flex items-start gap-3">
-						<div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+						<div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10">
 							<Mic className="h-4 w-4 text-primary" />
 						</div>
 						<div className="space-y-1">
-							<p className="text-sm font-medium">Microphone test</p>
-							<p className="text-xs text-muted-foreground">Preview your microphone input level.</p>
+							<div className="flex flex-wrap items-center gap-2">
+								<p className="text-sm font-semibold">Microphone test</p>
+								{isTestingMic && testPreviewState && (
+									<Badge
+										variant="outline"
+										className="border-primary/30 bg-primary/5 text-[10px] uppercase tracking-[0.14em] text-primary"
+									>
+										{getMicTestPreviewLabel(testPreviewState)}
+									</Badge>
+								)}
+							</div>
+							<p className="text-xs text-muted-foreground">Check the live level and record a short playback sample.</p>
 						</div>
 					</div>
-					<div className="flex items-center gap-3">
-						<div className="flex items-center gap-2">
-							<Label className="cursor-default text-xs text-muted-foreground">Hear yourself</Label>
+
+					<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end sm:gap-4">
+						<div className="flex items-center gap-3">
+							<Label className="cursor-default whitespace-nowrap text-xs text-muted-foreground">Hear yourself</Label>
 							<Switch checked={monitorEnabled} onCheckedChange={setMonitorEnabled} disabled={!isTestingMic} />
 						</div>
 						<Button
 							type="button"
 							variant={isTestingMic ? 'secondary' : 'outline'}
 							size="sm"
+							className="min-w-[104px]"
 							onClick={() => {
 								if (isTestingMic) {
 									void stopTest();
@@ -680,26 +835,72 @@ const MicrophoneTestPanel = memo(
 					</div>
 				</div>
 
-				<div className="space-y-1.5">
-					<div className="flex items-center justify-between">
-						<p className="text-xs text-muted-foreground">Input level</p>
-						{isTestingMic && (
-							<span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-								{testUsesInCallStream ? 'In-call stream' : testUsesSidecar ? 'Enhanced processing' : 'Browser capture'}
-							</span>
-						)}
-					</div>
-					<div className="h-2 w-full overflow-hidden rounded-full bg-background/60">
-						<div ref={levelBarRef} className="h-full rounded-full bg-white" style={{ width: '0%' }} />
-					</div>
-				</div>
-
-				{showDevRecordingControls && (
+				{isTestingMic && (
 					<div className="space-y-2 border-t border-border/40 pt-3">
 						<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
 							<div className="space-y-1">
+								<p className="text-xs font-medium">Input level</p>
+								<p className="text-xs text-muted-foreground">
+									Speak at a normal volume to check your level and cleanup path.
+								</p>
+							</div>
+							<Badge variant="secondary" className="text-[10px] uppercase tracking-[0.14em]">
+								{testPreviewState ? 'Live' : 'Idle'}
+							</Badge>
+						</div>
+						<div className="h-2.5 w-full overflow-hidden rounded-full bg-background/80">
+							<div
+								ref={levelBarRef}
+								className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-sky-400 to-cyan-300 transition-[width]"
+								style={{ width: '0%' }}
+							/>
+						</div>
+					</div>
+				)}
+
+				{showWasmDiagnostics && (
+					<div className="space-y-3 rounded-xl border border-primary/20 bg-background/40 p-3">
+						<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+							<div className="space-y-1">
+								<p className="text-xs font-medium">Browser WASM diagnostics</p>
+								<p className="text-xs text-muted-foreground">You are hearing the browser-side WASM denoised stream.</p>
+							</div>
+							{wasmDiagnostics && (
+								<Badge variant="secondary" className="text-[10px] uppercase tracking-[0.14em]">
+									{wasmDiagnostics.transportMode === 'shared-array-buffer' ? 'SharedArrayBuffer' : 'MessagePort'}
+								</Badge>
+							)}
+						</div>
+
+						{wasmDiagnosticItems ? (
+							<div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+								{wasmDiagnosticItems.map((item) => {
+									return (
+										<div key={item.label} className="rounded-lg border border-border/50 bg-background/75 p-2.5">
+											<p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{item.label}</p>
+											<p
+												className={`mt-1 text-sm font-semibold ${
+													item.tone === 'warning' ? 'text-amber-600 dark:text-amber-300' : 'text-foreground'
+												}`}
+											>
+												{item.value}
+											</p>
+										</div>
+									);
+								})}
+							</div>
+						) : (
+							<p className="text-xs text-muted-foreground">Waiting for browser WASM worker telemetry...</p>
+						)}
+					</div>
+				)}
+
+				{showDevMicTestControls && (
+					<div className="space-y-3 border-t border-border/40 pt-3">
+						<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+							<div className="space-y-1">
 								<p className="text-xs font-medium">Short recording</p>
-								<p className="text-xs text-muted-foreground">Record a clip and play it back.</p>
+								<p className="text-xs text-muted-foreground">Record a short clip and play it back immediately.</p>
 							</div>
 							<Button
 								type="button"
@@ -729,7 +930,7 @@ const MicrophoneTestPanel = memo(
 						)}
 
 						{recordedClipUrl && (
-							<div className="mt-4 flex items-center gap-2">
+							<div className="flex items-center gap-2 rounded-lg border border-border/50 bg-background/80 p-2">
 								<audio controls src={recordedClipUrl} className="h-8 flex-1" />
 								<Button
 									type="button"
@@ -743,11 +944,19 @@ const MicrophoneTestPanel = memo(
 							</div>
 						)}
 
-						{recordingError && <p className="text-xs text-destructive">{recordingError}</p>}
+						{recordingError && (
+							<div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2">
+								<p className="text-xs text-destructive">{recordingError}</p>
+							</div>
+						)}
 					</div>
 				)}
 
-				{micTestError && <p className="text-xs text-destructive">{micTestError}</p>}
+				{micTestError && (
+					<div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2">
+						<p className="text-xs text-destructive">{micTestError}</p>
+					</div>
+				)}
 			</div>
 		);
 	},

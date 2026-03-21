@@ -569,37 +569,38 @@ const ExternalStreamCard = memo(
 						style={{
 							width: '100%',
 							height: '100%',
+							display: 'flex',
+							flexDirection: 'column',
 							position: 'relative',
 							backgroundColor: '#000000',
 							color: '#ffffff',
 						}}
 					>
-						<PopoutWindowControls
-							visible={showPopoutWindowControls}
-							isFullscreen={isPopoutFullscreen}
-							onToggleFullscreen={handleTogglePopoutFullscreen}
+						<div
+							style={{
+								display: 'flex',
+								alignItems: 'center',
+								gap: '8px',
+								padding: '6px 12px',
+								backgroundColor: '#18181b',
+								borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+								flexShrink: 0,
+								minWidth: 0,
+							}}
 						>
-							{hasAudio &&
-								(isPopoutAudioEnabled ? (
-									<PopoutVolumePanel
-										volume={volume}
-										isMuted={isMuted}
-										onMuteToggle={handlePopoutMuteToggle}
-										onVolumeChange={handlePopoutVolumeChange}
-									/>
-								) : (
-									<button
-										type="button"
-										onClick={enablePopoutAudio}
-										title="Enable stream audio"
-										aria-label="Enable stream audio"
-										style={POPOUT_ENABLE_AUDIO_BUTTON_STYLE}
-									>
-										<Volume2 size={16} />
-										Enable Audio
-									</button>
-								))}
-						</PopoutWindowControls>
+							<Router size={14} style={{ flexShrink: 0, color: '#a78bfa' }} />
+							<span
+								style={{
+									fontSize: '13px',
+									fontWeight: 500,
+									whiteSpace: 'nowrap',
+									overflow: 'hidden',
+									textOverflow: 'ellipsis',
+								}}
+							>
+								{stream.title || 'External Stream'}
+							</span>
+						</div>
 
 						<div
 							style={{
@@ -607,11 +608,37 @@ const ExternalStreamCard = memo(
 								display: 'flex',
 								alignItems: 'center',
 								justifyContent: 'center',
-								width: '100%',
-								height: '100%',
+								flex: 1,
+								minHeight: 0,
 								backgroundColor: '#000000',
 							}}
 						>
+							<PopoutWindowControls
+								visible={showPopoutWindowControls}
+								isFullscreen={isPopoutFullscreen}
+								onToggleFullscreen={handleTogglePopoutFullscreen}
+							>
+								{hasAudio &&
+									(isPopoutAudioEnabled ? (
+										<PopoutVolumePanel
+											volume={volume}
+											isMuted={isMuted}
+											onMuteToggle={handlePopoutMuteToggle}
+											onVolumeChange={handlePopoutVolumeChange}
+										/>
+									) : (
+										<button
+											type="button"
+											onClick={enablePopoutAudio}
+											title="Enable stream audio"
+											aria-label="Enable stream audio"
+											style={POPOUT_ENABLE_AUDIO_BUTTON_STYLE}
+										>
+											<Volume2 size={16} />
+											Enable Audio
+										</button>
+									))}
+							</PopoutWindowControls>
 							<video
 								ref={setPopoutVideoElement}
 								autoPlay
@@ -620,7 +647,7 @@ const ExternalStreamCard = memo(
 								style={{
 									width: '100%',
 									height: '100%',
-									objectFit: 'cover',
+									objectFit: 'contain',
 									backgroundColor: '#000000',
 								}}
 							/>

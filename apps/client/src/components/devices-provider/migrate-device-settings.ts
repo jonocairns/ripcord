@@ -18,6 +18,7 @@ const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
 	webcamFramerate: 30,
 	echoCancellation: true,
 	noiseSuppression: true,
+	wasmNoiseSuppressionEnabled: false,
 	autoGainControl: true,
 	experimentalVoiceFilter: false,
 	voiceFilterStrength: VoiceFilterStrength.HIGH,
@@ -85,6 +86,10 @@ const migrateDeviceSettings = (incomingSettings: TLegacyDeviceSettings | undefin
 			typeof incomingSettings.experimentalVoiceFilter === 'boolean'
 				? incomingSettings.experimentalVoiceFilter
 				: DEFAULT_DEVICE_SETTINGS.experimentalVoiceFilter,
+		wasmNoiseSuppressionEnabled:
+			typeof incomingSettings.wasmNoiseSuppressionEnabled === 'boolean'
+				? incomingSettings.wasmNoiseSuppressionEnabled
+				: DEFAULT_DEVICE_SETTINGS.wasmNoiseSuppressionEnabled,
 		voiceFilterStrength: normalizeVoiceFilterStrength(incomingSettings.voiceFilterStrength),
 		sidecarDfnMix,
 		sidecarDfnAttenuationLimitDb,

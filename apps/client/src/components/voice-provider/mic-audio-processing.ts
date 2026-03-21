@@ -10,6 +10,7 @@ import type {
 import type { VoiceFilterStrength } from '@/types';
 import { createDesktopAppAudioPipeline } from './desktop-app-audio';
 import micCaptureWorkletModuleUrl from './mic-capture.worklet.js?url&no-inline';
+import { createWasmMicAudioProcessingPipeline } from './wasm-mic-audio-processing';
 
 // ---------------------------------------------------------------------------
 // NC diagnostics aggregator
@@ -159,7 +160,7 @@ const createNcDiagnosticsAggregator = (sessionId: string) => {
 	return { push };
 };
 
-type TMicAudioProcessingBackend = 'sidecar-native';
+type TMicAudioProcessingBackend = 'sidecar-native' | 'browser-wasm';
 
 type TMicAudioProcessingPipeline = {
 	sessionId: string;
@@ -175,6 +176,7 @@ type TMicAudioProcessingPipeline = {
 type TCreateMicAudioProcessingPipelineInput = {
 	inputTrack: MediaStreamTrack;
 	enabled: boolean;
+	wasmNoiseSuppressionEnabled: boolean;
 	suppressionLevel: VoiceFilterStrength;
 	noiseSuppression: boolean;
 	autoGainControl: boolean;
@@ -184,6 +186,7 @@ type TCreateMicAudioProcessingPipelineInput = {
 	dfnExperimentalAggressiveMode: boolean;
 	dfnNoiseGateFloorDbfs?: number;
 	sidecarDeviceId?: string;
+	onWasmError?: (error: Error) => void;
 };
 
 const MIC_CAPTURE_WORKLET_NAME = 'sharkord-mic-capture-processor';
@@ -644,6 +647,7 @@ const createNativeSidecarMicCapturePipeline = async ({
 const createMicAudioProcessingPipeline = async ({
 	inputTrack,
 	enabled,
+	wasmNoiseSuppressionEnabled,
 	suppressionLevel,
 	noiseSuppression,
 	autoGainControl,
@@ -652,54 +656,83 @@ const createMicAudioProcessingPipeline = async ({
 	dfnAttenuationLimitDb,
 	dfnExperimentalAggressiveMode,
 	dfnNoiseGateFloorDbfs,
+	onWasmError,
 }: TCreateMicAudioProcessingPipelineInput): Promise<TMicAudioProcessingPipeline | undefined> => {
-	if (!enabled) {
+	if (!enabled && !wasmNoiseSuppressionEnabled) {
 		return undefined;
 	}
 
 	const channels = resolveInputChannelCount(inputTrack);
+	let nativeError: unknown;
 
-	try {
-		return await createNativeDesktopMicAudioProcessingPipeline({
-			inputTrack,
-			channels,
-			suppressionLevel,
-			noiseSuppression,
-			autoGainControl,
-			echoCancellation,
-			dfnMix,
-			dfnAttenuationLimitDb,
-			dfnExperimentalAggressiveMode,
-			dfnNoiseGateFloorDbfs,
-		});
-	} catch (error) {
-		if (noiseSuppression) {
-			try {
-				const fallbackPipeline = await createNativeDesktopMicAudioProcessingPipeline({
-					inputTrack,
-					channels,
-					suppressionLevel,
-					noiseSuppression: false,
-					autoGainControl,
-					echoCancellation,
-					dfnMix,
-					dfnAttenuationLimitDb,
-					dfnExperimentalAggressiveMode,
-					dfnNoiseGateFloorDbfs,
-				});
+	if (enabled) {
+		try {
+			const nativePipeline = await createNativeDesktopMicAudioProcessingPipeline({
+				inputTrack,
+				channels,
+				suppressionLevel,
+				noiseSuppression,
+				autoGainControl,
+				echoCancellation,
+				dfnMix,
+				dfnAttenuationLimitDb,
+				dfnExperimentalAggressiveMode,
+				dfnNoiseGateFloorDbfs,
+			});
 
-				if (fallbackPipeline) {
-					console.warn('[voice-filter] Native filter fallback enabled without DeepFilter noise suppression');
-					return fallbackPipeline;
+			if (nativePipeline) {
+				return nativePipeline;
+			}
+		} catch (error) {
+			nativeError = error;
+
+			if (noiseSuppression) {
+				try {
+					const fallbackPipeline = await createNativeDesktopMicAudioProcessingPipeline({
+						inputTrack,
+						channels,
+						suppressionLevel,
+						noiseSuppression: false,
+						autoGainControl,
+						echoCancellation,
+						dfnMix,
+						dfnAttenuationLimitDb,
+						dfnExperimentalAggressiveMode,
+						dfnNoiseGateFloorDbfs,
+					});
+
+					if (fallbackPipeline) {
+						console.warn('[voice-filter] Native filter fallback enabled without DeepFilter noise suppression');
+						return fallbackPipeline;
+					}
+				} catch (fallbackError) {
+					console.warn('[voice-filter] Native filter fallback (passthrough) failed, using raw mic', fallbackError);
 				}
-			} catch (fallbackError) {
-				console.warn('[voice-filter] Native filter fallback (passthrough) failed, using raw mic', fallbackError);
 			}
 		}
+	}
 
-		console.warn('[voice-filter] Native desktop voice filter unavailable, using raw mic', error);
+	if (wasmNoiseSuppressionEnabled) {
+		try {
+			return await createWasmMicAudioProcessingPipeline({
+				inputTrack,
+				onError: onWasmError,
+			});
+		} catch (error) {
+			console.warn('[voice-filter] Browser WASM voice filter unavailable, using raw mic', error);
+		}
+	}
+
+	if (nativeError !== undefined) {
+		console.warn('[voice-filter] Native desktop voice filter unavailable, using raw mic', nativeError);
 		return undefined;
 	}
+
+	if (enabled) {
+		console.warn('[voice-filter] Native desktop voice filter unavailable, using raw mic');
+	}
+
+	return undefined;
 };
 
 // Matches a browser deviceId to a WASAPI device ID by comparing friendly names.

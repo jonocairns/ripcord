@@ -103,6 +103,7 @@ const AUDIO_OPUS_CODEC_OPTIONS = {
 
 type ResolvedMicProcessingConfig = {
 	sidecarVoiceProcessingEnabled: boolean;
+	wasmNoiseSuppressionEnabled: boolean;
 	browserAutoGainControl: boolean;
 	browserNoiseSuppression: boolean;
 	browserEchoCancellation: boolean;
@@ -140,10 +141,14 @@ const resolveMicProcessingConfig = (
 	hasDesktopBridge: boolean,
 ): ResolvedMicProcessingConfig => {
 	const defaults = getStrengthDefaults(devices.voiceFilterStrength);
+	const browserWasmNoiseSuppressionEnabled = devices.wasmNoiseSuppressionEnabled && devices.noiseSuppression;
 
 	if (devices.micQualityMode === MicQualityMode.EXPERIMENTAL) {
+		const sidecarVoiceProcessingEnabled = hasDesktopBridge;
+
 		return {
-			sidecarVoiceProcessingEnabled: hasDesktopBridge,
+			sidecarVoiceProcessingEnabled,
+			wasmNoiseSuppressionEnabled: !sidecarVoiceProcessingEnabled && browserWasmNoiseSuppressionEnabled,
 			browserAutoGainControl: false,
 			browserNoiseSuppression: false,
 			browserEchoCancellation: false,
@@ -161,8 +166,9 @@ const resolveMicProcessingConfig = (
 	// Standard (AUTO) and legacy MANUAL — browser-only, no sidecar
 	return {
 		sidecarVoiceProcessingEnabled: false,
+		wasmNoiseSuppressionEnabled: browserWasmNoiseSuppressionEnabled,
 		browserAutoGainControl: devices.autoGainControl,
-		browserNoiseSuppression: devices.noiseSuppression,
+		browserNoiseSuppression: browserWasmNoiseSuppressionEnabled ? false : devices.noiseSuppression,
 		browserEchoCancellation: devices.echoCancellation,
 		sidecarNoiseSuppression: devices.noiseSuppression,
 		sidecarAutoGainControl: devices.autoGainControl,
@@ -181,6 +187,7 @@ const didMicCaptureSettingsChange = (previousDevices: TDeviceSettings, nextDevic
 		previousDevices.micQualityMode !== nextDevices.micQualityMode ||
 		previousDevices.echoCancellation !== nextDevices.echoCancellation ||
 		previousDevices.noiseSuppression !== nextDevices.noiseSuppression ||
+		previousDevices.wasmNoiseSuppressionEnabled !== nextDevices.wasmNoiseSuppressionEnabled ||
 		previousDevices.autoGainControl !== nextDevices.autoGainControl ||
 		previousDevices.voiceFilterStrength !== nextDevices.voiceFilterStrength ||
 		previousDevices.sidecarDfnMix !== nextDevices.sidecarDfnMix ||
@@ -1029,9 +1036,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 
 			const micConstraints = {
-				deviceId: {
-					exact: devices.microphoneId,
-				},
+				...(devices.microphoneId
+					? {
+							deviceId: {
+								exact: devices.microphoneId,
+							},
+						}
+					: {}),
 				autoGainControl: micProcessingConfig.browserAutoGainControl,
 				echoCancellation: micProcessingConfig.browserEchoCancellation,
 				noiseSuppression: micProcessingConfig.browserNoiseSuppression,
@@ -1057,6 +1068,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					const micAudioPipeline = await createMicAudioProcessingPipeline({
 						inputTrack: rawAudioTrack,
 						enabled: micProcessingConfig.sidecarVoiceProcessingEnabled,
+						wasmNoiseSuppressionEnabled: micProcessingConfig.wasmNoiseSuppressionEnabled,
 						suppressionLevel: micProcessingConfig.sidecarSuppressionLevel,
 						noiseSuppression: micProcessingConfig.sidecarNoiseSuppression,
 						autoGainControl: micProcessingConfig.sidecarAutoGainControl,
@@ -1065,6 +1077,20 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						dfnAttenuationLimitDb: micProcessingConfig.sidecarDfnAttenuationLimitDb,
 						dfnExperimentalAggressiveMode: micProcessingConfig.sidecarExperimentalAggressiveMode,
 						dfnNoiseGateFloorDbfs: micProcessingConfig.sidecarNoiseGateFloorDbfs,
+						onWasmError: (error) => {
+							logVoice('Browser WASM voice filter runtime error', { error });
+
+							// Don't destroy the pipeline here — closing the AudioContext would
+							// end the MediaStreamTrack already handed to the mediasoup producer,
+							// causing complete mic silence for all peers with no recovery.
+							// The worklet naturally falls back to passing through raw mic input
+							// when the worker errors (underrun passthrough), so audio continues
+							// to flow unprocessed. The pipeline is cleaned up normally when the
+							// user leaves the channel or changes mic settings.
+							if (micAudioPipelineRef.current?.backend === 'browser-wasm') {
+								toast.error('Noise suppression encountered an error. Audio will continue without noise reduction.');
+							}
+						},
 					});
 
 					if (micAudioPipeline) {
@@ -1077,7 +1103,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							suppressionLevel: micProcessingConfig.sidecarSuppressionLevel,
 						});
 
-						if (micProcessingConfig.sidecarEchoCancellation && desktopBridge && activeVoiceFilterSessionId) {
+						if (
+							micProcessingConfig.sidecarEchoCancellation &&
+							desktopBridge &&
+							activeVoiceFilterSessionId &&
+							micAudioPipeline.backend === 'sidecar-native'
+						) {
 							const referencePipeline = await createMicReferenceAudioPipeline({
 								sampleRate: micAudioPipeline.sampleRate,
 								channels: micAudioPipeline.channels,
@@ -1238,7 +1269,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			const stream = await navigator.mediaDevices.getUserMedia({
 				audio: false,
 				video: {
-					deviceId: { exact: devices?.webcamId },
+					...(devices?.webcamId
+						? {
+								deviceId: {
+									exact: devices.webcamId,
+								},
+							}
+						: {}),
 					frameRate: devices.webcamFramerate,
 					...requestedWebcamResolution,
 				},
