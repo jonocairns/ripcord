@@ -442,13 +442,45 @@ body {
 	transform: scale(calc(1 + var(--speaking-active) * (0.1 + var(--speaking-level) * 0.16)));
 }
 
+@keyframes sidebar-live-indicator-pulse {
+	0%,
+	100% {
+		opacity: 0.9;
+		transform: scale(1);
+		filter: drop-shadow(0 0 2px var(--sidebar-live-indicator-glow));
+	}
+
+	45% {
+		opacity: 1;
+		transform: scale(1.12);
+		filter: drop-shadow(0 0 9px var(--sidebar-live-indicator-glow));
+	}
+}
+
+.sidebar-live-indicator {
+	transform-origin: center;
+	animation: sidebar-live-indicator-pulse 1.8s ease-in-out infinite;
+}
+
+.sidebar-live-indicator--video {
+	--sidebar-live-indicator-glow: rgb(56 189 248 / 0.62);
+}
+
+.sidebar-live-indicator--screen {
+	--sidebar-live-indicator-glow: rgb(217 70 239 / 0.58);
+	animation-delay: 160ms;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.speaking-card-indicator,
 	.speaking-card-overlay,
 	.speaking-avatar-shell,
-	.speaking-avatar-indicator {
+	.speaking-avatar-indicator,
+	.sidebar-live-indicator {
 		transition: none;
 		transform: none;
+		animation: none;
+		filter: none;
 	}
 
 	.speaking-avatar-shell::before,

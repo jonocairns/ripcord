@@ -1,6 +1,5 @@
 import { HeadphoneOff, MicOff, Monitor, Video, Volume2, VolumeX } from 'lucide-react';
 import { memo, useCallback } from 'react';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { UserAvatar } from '@/components/user-avatar';
@@ -9,6 +8,7 @@ import { useOwnUserId } from '@/features/server/users/hooks';
 import { cn } from '@/lib/utils';
 import { useVoiceRefs } from '../channel-view/voice/hooks/use-voice-refs';
 import { getSpeakingIndicatorStyle } from '../channel-view/voice/speaking-indicator';
+import { Tooltip } from '../ui/tooltip';
 import { UserPopover } from '../user-popover';
 import { useVolumeControl } from '../voice-provider/volume-control-context';
 
@@ -25,7 +25,6 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
 	const volume = getVolume(volumeKey);
 	const isMuted = volume === 0;
 	const isActivelySpeaking = !user.state.micMuted && isSpeaking;
-	const isLive = user.state.webcamEnabled || user.state.sharingScreen;
 	const handleVolumeChange = useCallback(
 		(values: number[]) => {
 			setVolume(volumeKey, values[0] || 0);
@@ -36,6 +35,8 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
 		toggleMute(volumeKey);
 	}, [toggleMute, volumeKey]);
 	const speakingStyle = getSpeakingIndicatorStyle(audioLevel, isActivelySpeaking);
+	const hasStatusIndicators =
+		user.state.micMuted || user.state.soundMuted || user.state.webcamEnabled || user.state.sharingScreen;
 
 	return (
 		<UserPopover
@@ -74,21 +75,38 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
 
 				<span className="flex-1 truncate text-sm text-foreground/80">{user.name}</span>
 
-				{isLive && (
-					<Badge className="border-transparent bg-red-500/90 px-1.5 py-0 text-[10px] font-bold tracking-[0.12em] text-white">
-						LIVE
-					</Badge>
+				{hasStatusIndicators && (
+					<div className="flex items-center gap-2">
+						{user.state.micMuted && (
+							<Tooltip content="Mic muted">
+								<span className="inline-flex">
+									<MicOff className="h-3.5 w-3.5 text-red-400" />
+								</span>
+							</Tooltip>
+						)}
+						{user.state.soundMuted && (
+							<Tooltip content="Deafened">
+								<span className="inline-flex">
+									<HeadphoneOff className="h-3.5 w-3.5 text-red-400" />
+								</span>
+							</Tooltip>
+						)}
+						{user.state.webcamEnabled && (
+							<Tooltip content="Camera on">
+								<span className="inline-flex">
+									<Video className="sidebar-live-indicator sidebar-live-indicator--video h-3.5 w-3.5 text-sky-400" />
+								</span>
+							</Tooltip>
+						)}
+						{user.state.sharingScreen && (
+							<Tooltip content="Sharing screen">
+								<span className="inline-flex">
+									<Monitor className="sidebar-live-indicator sidebar-live-indicator--screen h-3.5 w-3.5 text-fuchsia-400" />
+								</span>
+							</Tooltip>
+						)}
+					</div>
 				)}
-
-				<div className="flex items-center gap-1 opacity-60">
-					{user.state.micMuted && <MicOff className="h-3 w-3 text-red-500" />}
-
-					{user.state.soundMuted && <HeadphoneOff className="h-3 w-3 text-red-500" />}
-
-					{user.state.webcamEnabled && <Video className="h-3 w-3 text-blue-500" />}
-
-					{user.state.sharingScreen && <Monitor className="h-3 w-3 text-purple-500" />}
-				</div>
 			</div>
 		</UserPopover>
 	);
