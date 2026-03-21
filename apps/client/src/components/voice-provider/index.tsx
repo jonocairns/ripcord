@@ -46,6 +46,7 @@ import {
 import { useDevices } from '../devices-provider/hooks/use-devices';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
+import { createAudioContextWithSampleRateFallback } from './audio-context';
 import { useLocalStreams } from './hooks/use-local-streams';
 import { getPendingStreamKey, usePendingStreams } from './hooks/use-pending-streams';
 import { type TExternalStreamsMap, useRemoteStreams } from './hooks/use-remote-streams';
@@ -262,7 +263,24 @@ const createMicGainPipeline = async (
 		return undefined;
 	}
 
-	const audioContext = new AudioContextClass({ sampleRate: 48_000 });
+	const audioContext = createAudioContextWithSampleRateFallback({
+		AudioContextClass,
+		sampleRate: 48_000,
+		onPreferredSampleRateError: (preferredSampleRateError) => {
+			logVoice('Falling back to a browser-default AudioContext for microphone gain processing', {
+				preferredSampleRateError,
+			});
+		},
+		onFallbackError: (fallbackError) => {
+			logVoice('Failed to create an AudioContext for microphone gain processing', {
+				fallbackError,
+			});
+		},
+	});
+
+	if (!audioContext) {
+		return undefined;
+	}
 
 	try {
 		if (audioContext.state === 'suspended') {
