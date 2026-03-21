@@ -1,10 +1,6 @@
+import { memo, useEffect } from 'react';
 import { useIsAppLoading } from '@/features/app/hooks';
-import {
-  useDisconnectInfo,
-  useIsConnected,
-  useMustChangePassword,
-  useServerName
-} from '@/features/server/hooks';
+import { useDisconnectInfo, useIsConnected, useMustChangePassword, useServerName } from '@/features/server/hooks';
 import { isDesktopServerSetupRequired } from '@/runtime/server-config';
 import { Connect } from '@/screens/connect';
 import { DesktopServerSetup } from '@/screens/desktop-server-setup';
@@ -12,45 +8,44 @@ import { Disconnected } from '@/screens/disconnected';
 import { ForcePasswordReset } from '@/screens/force-password-reset';
 import { LoadingApp } from '@/screens/loading-app';
 import { ServerView } from '@/screens/server-view';
-import { memo, useEffect } from 'react';
 
 const Routing = memo(() => {
-  const isConnected = useIsConnected();
-  const isAppLoading = useIsAppLoading();
-  const disconnectInfo = useDisconnectInfo();
-  const mustChangePassword = useMustChangePassword();
-  const serverName = useServerName();
+	const isConnected = useIsConnected();
+	const isAppLoading = useIsAppLoading();
+	const disconnectInfo = useDisconnectInfo();
+	const mustChangePassword = useMustChangePassword();
+	const serverName = useServerName();
 
-  useEffect(() => {
-    if (isConnected && serverName) {
-      document.title = `${serverName} - Ripcord`;
-      return;
-    }
+	useEffect(() => {
+		if (isConnected && serverName) {
+			document.title = `${serverName} - Ripcord`;
+			return;
+		}
 
-    document.title = 'Ripcord';
-  }, [isConnected, serverName]);
+		document.title = 'Ripcord';
+	}, [isConnected, serverName]);
 
-  if (isDesktopServerSetupRequired()) {
-    return <DesktopServerSetup />;
-  }
+	if (isDesktopServerSetupRequired()) {
+		return <DesktopServerSetup />;
+	}
 
-  if (isAppLoading) {
-    return <LoadingApp />;
-  }
+	if (isAppLoading) {
+		return <LoadingApp />;
+	}
 
-  if (!isConnected) {
-    if (disconnectInfo) {
-      return <Disconnected info={disconnectInfo} />;
-    }
+	if (!isConnected) {
+		if (disconnectInfo) {
+			return <Disconnected info={disconnectInfo} />;
+		}
 
-    return <Connect />;
-  }
+		return <Connect />;
+	}
 
-  if (mustChangePassword) {
-    return <ForcePasswordReset />;
-  }
+	if (mustChangePassword) {
+		return <ForcePasswordReset />;
+	}
 
-  return <ServerView />;
+	return <ServerView />;
 });
 
 export { Routing };

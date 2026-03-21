@@ -1,112 +1,99 @@
-import { parseTrpcErrors, type TTrpcErrors } from '@/helpers/parse-trpc-errors';
 import { useCallback, useState } from 'react';
+import { parseTrpcErrors, type TTrpcErrors } from '@/helpers/parse-trpc-errors';
 
 const useForm = <T extends Record<string, unknown>>(initialValues: T) => {
-  const [values, setValues] = useState<T>(initialValues);
-  const [errors, setErrors] = useState<TTrpcErrors>({});
+	const [values, setValues] = useState<T>(initialValues);
+	const [errors, setErrors] = useState<TTrpcErrors>({});
 
-  const registerInput = useCallback(
-    (key: keyof T, type?: string) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const onChange = (e: React.ChangeEvent<any>) => {
-        const newValue = e.target.value;
-        const value = type === 'number' ? +newValue : newValue;
+	const registerInput = useCallback(
+		(key: keyof T, type?: string) => {
+			const onChange = (e: React.ChangeEvent<any>) => {
+				const newValue = e.target.value;
+				const value = type === 'number' ? +newValue : newValue;
 
-        setErrors((prev) => ({ ...prev, [key]: undefined }));
-        setValues((prev) => ({ ...prev, [key]: value as T[keyof T] }));
-      };
+				setErrors((prev) => ({ ...prev, [key]: undefined }));
+				setValues((prev) => ({ ...prev, [key]: value as T[keyof T] }));
+			};
 
-      const value = String(values[key] ?? '');
+			const value = String(values[key] ?? '');
 
-      return {
-        value,
-        onChange,
-        name: key.toString(),
-        type,
-        error: errors[key as string]
-      };
-    },
-    [values, errors]
-  );
+			return {
+				value,
+				onChange,
+				name: key.toString(),
+				type,
+				error: errors[key as string],
+			};
+		},
+		[values, errors],
+	);
 
-  const registerRaw = useCallback(
-    (key: keyof T) => {
-      const onChange = (value: T[keyof T]) => {
-        setErrors((prev) => ({ ...prev, [key]: undefined }));
-        setValues((prev) => ({ ...prev, [key]: value }));
-      };
+	const registerRaw = useCallback(
+		(key: keyof T) => {
+			const onChange = (value: T[keyof T]) => {
+				setErrors((prev) => ({ ...prev, [key]: undefined }));
+				setValues((prev) => ({ ...prev, [key]: value }));
+			};
 
-      const value = values[key] ?? '';
+			const value = values[key] ?? '';
 
-      return {
-        value,
-        onChange,
-        name: key.toString(),
-        error: errors[key as string]
-      };
-    },
-    [values, errors]
-  );
+			return {
+				value,
+				onChange,
+				name: key.toString(),
+				error: errors[key as string],
+			};
+		},
+		[values, errors],
+	);
 
-  const setTrpcErrors = useCallback(
-    (error: unknown) => {
-      setErrors(parseTrpcErrors(error));
-    },
-    [setErrors]
-  );
+	const setTrpcErrors = useCallback((error: unknown) => {
+		setErrors(parseTrpcErrors(error));
+	}, []);
 
-  const onChange = useCallback(
-    <K extends keyof T>(key: K, value: T[K]) => {
-      setValues((prev) => ({ ...prev, [key]: value }));
-      setErrors((prev) => ({ ...prev, [key]: undefined }));
-    },
-    [setValues]
-  );
+	const onChange = useCallback(<K extends keyof T>(key: K, value: T[K]) => {
+		setValues((prev) => ({ ...prev, [key]: value }));
+		setErrors((prev) => ({ ...prev, [key]: undefined }));
+	}, []);
 
-  const registerRawNumber = useCallback(
-    (key: keyof T) => {
-      const onChange = (value: number | undefined) => {
-        setErrors((prev) => ({ ...prev, [key]: undefined }));
-        setValues((prev) => ({ ...prev, [key]: value as T[keyof T] }));
-      };
+	const registerRawNumber = useCallback(
+		(key: keyof T) => {
+			const onChange = (value: number | undefined) => {
+				setErrors((prev) => ({ ...prev, [key]: undefined }));
+				setValues((prev) => ({ ...prev, [key]: value as T[keyof T] }));
+			};
 
-      const value = values[key] as number | undefined;
+			const value = values[key] as number | undefined;
 
-      return {
-        value,
-        onChange,
-        error: errors[key as string]
-      };
-    },
-    [values, errors, setValues, setErrors]
-  );
+			return {
+				value,
+				onChange,
+				error: errors[key as string],
+			};
+		},
+		[values, errors],
+	);
 
-  const setErrorsDirectly = useCallback(
-    (newErrors: TTrpcErrors) => {
-      setErrors(newErrors);
-    },
-    [setErrors]
-  );
+	const setErrorsDirectly = useCallback((newErrors: TTrpcErrors) => {
+		setErrors(newErrors);
+	}, []);
 
-  const setError = useCallback(
-    <K extends keyof T>(key: K | '_general', errorMessage: string) => {
-      setErrors((prev) => ({ ...prev, [key]: errorMessage }));
-    },
-    [setErrors]
-  );
+	const setError = useCallback(<K extends keyof T>(key: K | '_general', errorMessage: string) => {
+		setErrors((prev) => ({ ...prev, [key]: errorMessage }));
+	}, []);
 
-  return {
-    values,
-    errors,
-    setValues,
-    setErrors: setErrorsDirectly,
-    setTrpcErrors,
-    r: registerInput,
-    rr: registerRaw,
-    rrn: registerRawNumber,
-    onChange,
-    setError
-  };
+	return {
+		values,
+		errors,
+		setValues,
+		setErrors: setErrorsDirectly,
+		setTrpcErrors,
+		r: registerInput,
+		rr: registerRaw,
+		rrn: registerRawNumber,
+		onChange,
+		setError,
+	};
 };
 
 export { useForm };

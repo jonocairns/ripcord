@@ -2,188 +2,168 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 type TPopoutWindowProps = {
-  isOpen: boolean;
-  windowName: string;
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-  onBlocked?: () => void;
-  features?: string;
-  targetWindow?: Window | null;
-  preserveOnUnmount?: boolean;
+	isOpen: boolean;
+	windowName: string;
+	title: string;
+	onClose: () => void;
+	children: React.ReactNode;
+	onBlocked?: () => void;
+	features?: string;
+	targetWindow?: Window | null;
+	preserveOnUnmount?: boolean;
 };
 
 const DEFAULT_WINDOW_FEATURES =
-  'popup=yes,width=1280,height=720,resizable=yes,scrollbars=no,menubar=no,toolbar=no,location=no,status=no';
+	'popup=yes,width=1280,height=720,resizable=yes,scrollbars=no,menubar=no,toolbar=no,location=no,status=no';
 
 const ROOT_ID = 'sharkord-popout-root';
 
 const syncPopoutIcons = (targetWindow: Window) => {
-  const sourceIcons = Array.from(
-    window.document.querySelectorAll<HTMLLinkElement>(
-      "link[rel~='icon'], link[rel='apple-touch-icon']"
-    )
-  );
+	const sourceIcons = Array.from(
+		window.document.querySelectorAll<HTMLLinkElement>("link[rel~='icon'], link[rel='apple-touch-icon']"),
+	);
 
-  if (sourceIcons.length === 0) {
-    return;
-  }
+	if (sourceIcons.length === 0) {
+		return;
+	}
 
-  const popoutHead = targetWindow.document.head;
-  const existingIcons = popoutHead.querySelectorAll(
-    "link[rel~='icon'], link[rel='apple-touch-icon']"
-  );
+	const popoutHead = targetWindow.document.head;
+	const existingIcons = popoutHead.querySelectorAll("link[rel~='icon'], link[rel='apple-touch-icon']");
 
-  existingIcons.forEach((icon) => {
-    icon.remove();
-  });
+	existingIcons.forEach((icon) => {
+		icon.remove();
+	});
 
-  sourceIcons.forEach((sourceIcon) => {
-    const clonedIcon = targetWindow.document.createElement('link');
+	sourceIcons.forEach((sourceIcon) => {
+		const clonedIcon = targetWindow.document.createElement('link');
 
-    if (sourceIcon.rel) {
-      clonedIcon.rel = sourceIcon.rel;
-    }
+		if (sourceIcon.rel) {
+			clonedIcon.rel = sourceIcon.rel;
+		}
 
-    if (sourceIcon.type) {
-      clonedIcon.type = sourceIcon.type;
-    }
+		if (sourceIcon.type) {
+			clonedIcon.type = sourceIcon.type;
+		}
 
-    const sizes = sourceIcon.getAttribute('sizes');
-    if (sizes) {
-      clonedIcon.setAttribute('sizes', sizes);
-    }
+		const sizes = sourceIcon.getAttribute('sizes');
+		if (sizes) {
+			clonedIcon.setAttribute('sizes', sizes);
+		}
 
-    clonedIcon.href = sourceIcon.href;
-    popoutHead.appendChild(clonedIcon);
-  });
+		clonedIcon.href = sourceIcon.href;
+		popoutHead.appendChild(clonedIcon);
+	});
 };
 
-const setupPopoutDocument = (
-  targetWindow: Window,
-  title: string
-): HTMLDivElement => {
-  const popoutDocument = targetWindow.document;
-  popoutDocument.title = title;
-  syncPopoutIcons(targetWindow);
+const setupPopoutDocument = (targetWindow: Window, title: string): HTMLDivElement => {
+	const popoutDocument = targetWindow.document;
+	popoutDocument.title = title;
+	syncPopoutIcons(targetWindow);
 
-  let root = popoutDocument.getElementById(ROOT_ID) as HTMLDivElement | null;
+	let root = popoutDocument.getElementById(ROOT_ID) as HTMLDivElement | null;
 
-  if (!root) {
-    popoutDocument.body.style.margin = '0';
-    popoutDocument.body.style.background = '#000000';
-    popoutDocument.body.style.color = '#ffffff';
-    popoutDocument.body.style.fontFamily =
-      'ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif';
-    popoutDocument.body.style.overflow = 'hidden';
+	if (!root) {
+		popoutDocument.body.style.margin = '0';
+		popoutDocument.body.style.background = '#000000';
+		popoutDocument.body.style.color = '#ffffff';
+		popoutDocument.body.style.fontFamily = 'ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif';
+		popoutDocument.body.style.overflow = 'hidden';
 
-    root = popoutDocument.createElement('div');
-    root.id = ROOT_ID;
-    root.style.height = '100vh';
-    root.style.width = '100vw';
+		root = popoutDocument.createElement('div');
+		root.id = ROOT_ID;
+		root.style.height = '100vh';
+		root.style.width = '100vw';
 
-    popoutDocument.body.appendChild(root);
-  }
+		popoutDocument.body.appendChild(root);
+	}
 
-  return root;
+	return root;
 };
 
 const PopoutWindow = memo(
-  ({
-    isOpen,
-    windowName,
-    title,
-    onClose,
-    children,
-    onBlocked,
-    features = DEFAULT_WINDOW_FEATURES,
-    targetWindow,
-    preserveOnUnmount = false
-  }: TPopoutWindowProps) => {
-    const popoutWindowRef = useRef<Window | null>(null);
-    const [container, setContainer] = useState<HTMLDivElement | null>(null);
+	({
+		isOpen,
+		windowName,
+		title,
+		onClose,
+		children,
+		onBlocked,
+		features = DEFAULT_WINDOW_FEATURES,
+		targetWindow,
+		preserveOnUnmount = false,
+	}: TPopoutWindowProps) => {
+		const popoutWindowRef = useRef<Window | null>(null);
+		const [container, setContainer] = useState<HTMLDivElement | null>(null);
 
-    useEffect(() => {
-      if (!isOpen) {
-        return;
-      }
+		useEffect(() => {
+			if (!isOpen) {
+				return;
+			}
 
-      let activeWindow =
-        targetWindow && !targetWindow.closed
-          ? targetWindow
-          : popoutWindowRef.current;
+			let activeWindow = targetWindow && !targetWindow.closed ? targetWindow : popoutWindowRef.current;
 
-      if (!activeWindow || activeWindow.closed) {
-        activeWindow = window.open('', windowName, features);
+			if (!activeWindow || activeWindow.closed) {
+				activeWindow = window.open('', windowName, features);
 
-        if (!activeWindow) {
-          onBlocked?.();
-          onClose();
-          return;
-        }
-      }
+				if (!activeWindow) {
+					onBlocked?.();
+					onClose();
+					return;
+				}
+			}
 
-      popoutWindowRef.current = activeWindow;
+			popoutWindowRef.current = activeWindow;
 
-      const root = setupPopoutDocument(activeWindow, title);
-      setContainer(root);
-      activeWindow.focus();
+			const root = setupPopoutDocument(activeWindow, title);
+			setContainer(root);
+			activeWindow.focus();
 
-      const handleUnload = () => {
-        setContainer(null);
-        popoutWindowRef.current = null;
-        onClose();
-      };
+			const handleUnload = () => {
+				setContainer(null);
+				popoutWindowRef.current = null;
+				onClose();
+			};
 
-      activeWindow.addEventListener('beforeunload', handleUnload);
-      activeWindow.addEventListener('unload', handleUnload);
+			activeWindow.addEventListener('beforeunload', handleUnload);
+			activeWindow.addEventListener('unload', handleUnload);
 
-      return () => {
-        activeWindow?.removeEventListener('beforeunload', handleUnload);
-        activeWindow?.removeEventListener('unload', handleUnload);
-      };
-    }, [features, isOpen, onBlocked, onClose, targetWindow, title, windowName]);
+			return () => {
+				activeWindow?.removeEventListener('beforeunload', handleUnload);
+				activeWindow?.removeEventListener('unload', handleUnload);
+			};
+		}, [features, isOpen, onBlocked, onClose, targetWindow, title, windowName]);
 
-    useEffect(() => {
-      if (
-        !isOpen &&
-        popoutWindowRef.current &&
-        !popoutWindowRef.current.closed &&
-        !preserveOnUnmount
-      ) {
-        popoutWindowRef.current.close();
-      }
+		useEffect(() => {
+			if (!isOpen && popoutWindowRef.current && !popoutWindowRef.current.closed && !preserveOnUnmount) {
+				popoutWindowRef.current.close();
+			}
 
-      if (!isOpen && !preserveOnUnmount) {
-        popoutWindowRef.current = null;
-        setContainer(null);
-      }
-    }, [isOpen, preserveOnUnmount]);
+			if (!isOpen && !preserveOnUnmount) {
+				popoutWindowRef.current = null;
+				setContainer(null);
+			}
+		}, [isOpen, preserveOnUnmount]);
 
-    useEffect(() => {
-      if (popoutWindowRef.current && !popoutWindowRef.current.closed) {
-        popoutWindowRef.current.document.title = title;
-      }
-    }, [title]);
+		useEffect(() => {
+			if (popoutWindowRef.current && !popoutWindowRef.current.closed) {
+				popoutWindowRef.current.document.title = title;
+			}
+		}, [title]);
 
-    useEffect(() => {
-      return () => {
-        if (
-          !preserveOnUnmount &&
-          popoutWindowRef.current &&
-          !popoutWindowRef.current.closed
-        ) {
-          popoutWindowRef.current.close();
-        }
-      };
-    }, [preserveOnUnmount]);
+		useEffect(() => {
+			return () => {
+				if (!preserveOnUnmount && popoutWindowRef.current && !popoutWindowRef.current.closed) {
+					popoutWindowRef.current.close();
+				}
+			};
+		}, [preserveOnUnmount]);
 
-    if (!isOpen || !container) {
-      return null;
-    }
+		if (!isOpen || !container) {
+			return null;
+		}
 
-    return createPortal(children, container);
-  }
+		return createPortal(children, container);
+	},
 );
 
 PopoutWindow.displayName = 'PopoutWindow';

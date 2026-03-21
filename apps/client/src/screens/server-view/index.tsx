@@ -1,122 +1,107 @@
+import { Permission } from '@sharkord/shared';
+import { memo, useCallback, useState } from 'react';
 import { LeftSidebar } from '@/components/left-sidebar';
 import { ModViewSheet } from '@/components/mod-view-sheet';
 import { Protect } from '@/components/protect';
 import { RightSidebar } from '@/components/right-sidebar';
 import { VoiceChatSidebar } from '@/components/voice-chat-sidebar';
 import { VoiceProvider } from '@/components/voice-provider';
-import {
-  getLocalStorageItem,
-  LocalStorageKey,
-  setLocalStorageItem
-} from '@/helpers/storage';
+import { getLocalStorageItem, LocalStorageKey, setLocalStorageItem } from '@/helpers/storage';
 import { useSwipeGestures } from '@/hooks/use-swipe-gestures';
 import { cn } from '@/lib/utils';
-import { Permission } from '@sharkord/shared';
-import { memo, useCallback, useState } from 'react';
 import { ContentWrapper } from './content-wrapper';
 import { PreventBrowser } from './prevent-browser';
 
 const ServerView = memo(() => {
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isMobileUsersOpen, setIsMobileUsersOpen] = useState(false);
-  const [isMembersSidebarCollapsed, setIsMembersSidebarCollapsed] = useState(
-    () =>
-      getLocalStorageItem(LocalStorageKey.RIGHT_SIDEBAR_COLLAPSED) === 'true'
-  );
-  const isVoiceChatSidebarOpen = false;
+	const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+	const [isMobileUsersOpen, setIsMobileUsersOpen] = useState(false);
+	const [isMembersSidebarCollapsed, setIsMembersSidebarCollapsed] = useState(
+		() => getLocalStorageItem(LocalStorageKey.RIGHT_SIDEBAR_COLLAPSED) === 'true',
+	);
+	const isVoiceChatSidebarOpen = false;
 
-  const handleSwipeRight = useCallback(() => {
-    if (isMobileMenuOpen || isMobileUsersOpen) {
-      setIsMobileMenuOpen(false);
-      setIsMobileUsersOpen(false);
-      return;
-    }
+	const handleSwipeRight = useCallback(() => {
+		if (isMobileMenuOpen || isMobileUsersOpen) {
+			setIsMobileMenuOpen(false);
+			setIsMobileUsersOpen(false);
+			return;
+		}
 
-    setIsMobileMenuOpen(true);
-  }, [isMobileMenuOpen, isMobileUsersOpen]);
+		setIsMobileMenuOpen(true);
+	}, [isMobileMenuOpen, isMobileUsersOpen]);
 
-  const handleSwipeLeft = useCallback(() => {
-    if (isMobileMenuOpen || isMobileUsersOpen) {
-      setIsMobileMenuOpen(false);
-      setIsMobileUsersOpen(false);
+	const handleSwipeLeft = useCallback(() => {
+		if (isMobileMenuOpen || isMobileUsersOpen) {
+			setIsMobileMenuOpen(false);
+			setIsMobileUsersOpen(false);
 
-      return;
-    }
+			return;
+		}
 
-    setIsMobileUsersOpen(true);
-  }, [isMobileMenuOpen, isMobileUsersOpen]);
+		setIsMobileUsersOpen(true);
+	}, [isMobileMenuOpen, isMobileUsersOpen]);
 
-  const swipeHandlers = useSwipeGestures({
-    onSwipeRight: handleSwipeRight,
-    onSwipeLeft: handleSwipeLeft
-  });
-  const handleToggleMembersSidebarCollapse = useCallback(() => {
-    setIsMembersSidebarCollapsed((prev) => {
-      const next = !prev;
-      setLocalStorageItem(
-        LocalStorageKey.RIGHT_SIDEBAR_COLLAPSED,
-        String(next)
-      );
-      return next;
-    });
-  }, []);
+	const swipeHandlers = useSwipeGestures({
+		onSwipeRight: handleSwipeRight,
+		onSwipeLeft: handleSwipeLeft,
+	});
+	const handleToggleMembersSidebarCollapse = useCallback(() => {
+		setIsMembersSidebarCollapsed((prev) => {
+			const next = !prev;
+			setLocalStorageItem(LocalStorageKey.RIGHT_SIDEBAR_COLLAPSED, String(next));
+			return next;
+		});
+	}, []);
 
-  return (
-    <VoiceProvider>
-      <div
-        className="flex h-dvh flex-col bg-background text-foreground dark"
-        {...swipeHandlers}
-      >
-        <div className="relative flex min-h-0 flex-1 overflow-hidden">
-          <PreventBrowser />
+	return (
+		<VoiceProvider>
+			<div className="flex h-dvh flex-col bg-background text-foreground dark" {...swipeHandlers}>
+				<div className="relative flex min-h-0 flex-1 overflow-hidden">
+					<PreventBrowser />
 
-          {isMobileMenuOpen && (
-            <div
-              className="md:hidden fixed inset-0 cursor-pointer bg-black/50 z-30"
-              onClick={() => setIsMobileMenuOpen(false)}
-            />
-          )}
+					{isMobileMenuOpen && (
+						<div
+							className="md:hidden fixed inset-0 cursor-pointer bg-black/50 z-30"
+							onClick={() => setIsMobileMenuOpen(false)}
+						/>
+					)}
 
-          {isMobileUsersOpen && (
-            <div
-              className="lg:hidden fixed inset-0 cursor-pointer bg-black/50 z-30"
-              onClick={() => setIsMobileUsersOpen(false)}
-            />
-          )}
+					{isMobileUsersOpen && (
+						<div
+							className="lg:hidden fixed inset-0 cursor-pointer bg-black/50 z-30"
+							onClick={() => setIsMobileUsersOpen(false)}
+						/>
+					)}
 
-          <LeftSidebar
-            className={cn(
-              'md:relative md:flex fixed inset-0 left-0 h-full z-40 md:z-0 transition-transform duration-300 ease-in-out',
-              isMobileMenuOpen
-                ? 'translate-x-0'
-                : '-translate-x-full md:translate-x-0'
-            )}
-          />
+					<LeftSidebar
+						className={cn(
+							'md:relative md:flex fixed inset-0 left-0 h-full z-40 md:z-0 transition-transform duration-300 ease-in-out',
+							isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
+						)}
+					/>
 
-          <ContentWrapper />
+					<ContentWrapper />
 
-          <VoiceChatSidebar isOpen={isVoiceChatSidebarOpen} />
+					<VoiceChatSidebar isOpen={isVoiceChatSidebarOpen} />
 
-          <RightSidebar
-            className={cn(
-              'fixed top-0 bottom-0 right-0 h-full z-40 transition-all duration-500 ease-in-out',
-              'lg:relative lg:z-0',
-              isMobileUsersOpen
-                ? 'translate-x-0 lg:translate-x-0'
-                : 'translate-x-full lg:translate-x-0'
-            )}
-            isOpen
-            isCollapsed={isMembersSidebarCollapsed}
-            onToggleCollapse={handleToggleMembersSidebarCollapse}
-          />
+					<RightSidebar
+						className={cn(
+							'fixed top-0 bottom-0 right-0 h-full z-40 transition-all duration-500 ease-in-out',
+							'lg:relative lg:z-0',
+							isMobileUsersOpen ? 'translate-x-0 lg:translate-x-0' : 'translate-x-full lg:translate-x-0',
+						)}
+						isOpen
+						isCollapsed={isMembersSidebarCollapsed}
+						onToggleCollapse={handleToggleMembersSidebarCollapse}
+					/>
 
-          <Protect permission={Permission.MANAGE_USERS}>
-            <ModViewSheet />
-          </Protect>
-        </div>
-      </div>
-    </VoiceProvider>
-  );
+					<Protect permission={Permission.MANAGE_USERS}>
+						<ModViewSheet />
+					</Protect>
+				</div>
+			</div>
+		</VoiceProvider>
+	);
 });
 
 export { ServerView };

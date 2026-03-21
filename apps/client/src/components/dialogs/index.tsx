@@ -1,6 +1,6 @@
+import { createElement, memo } from 'react';
 import { closeDialogs } from '@/features/dialogs/actions';
 import { useDialogInfo } from '@/features/dialogs/hooks';
-import { createElement, memo } from 'react';
 import { AssignRoleDialog } from './assign-role';
 import ConfirmActionDialog from './confirm-action';
 import { CreateCategoryDialog } from './create-category';
@@ -14,33 +14,32 @@ import { ScreenSharePickerDialog } from './screen-share-picker';
 import { ServerPasswordDialog } from './server-password';
 import { TextInputDialog } from './text-input';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const DialogsMap: any = {
-  [Dialog.CONFIRM_ACTION]: ConfirmActionDialog,
-  [Dialog.CREATE_CHANNEL]: CreateChannelDialog,
-  [Dialog.TEXT_INPUT]: TextInputDialog,
-  [Dialog.SERVER_PASSWORD]: ServerPasswordDialog,
-  [Dialog.ASSIGN_ROLE]: AssignRoleDialog,
-  [Dialog.CREATE_INVITE]: CreateInviteDialog,
-  [Dialog.CREATE_CATEGORY]: CreateCategoryDialog,
-  [Dialog.PLUGIN_LOGS]: PluginLogsDialog,
-  [Dialog.PLUGIN_COMMANDS]: PluginCommandsDialog,
-  [Dialog.PLUGIN_SETTINGS]: PluginSettingsDialog,
-  [Dialog.SCREEN_SHARE_PICKER]: ScreenSharePickerDialog
+	[Dialog.CONFIRM_ACTION]: ConfirmActionDialog,
+	[Dialog.CREATE_CHANNEL]: CreateChannelDialog,
+	[Dialog.TEXT_INPUT]: TextInputDialog,
+	[Dialog.SERVER_PASSWORD]: ServerPasswordDialog,
+	[Dialog.ASSIGN_ROLE]: AssignRoleDialog,
+	[Dialog.CREATE_INVITE]: CreateInviteDialog,
+	[Dialog.CREATE_CATEGORY]: CreateCategoryDialog,
+	[Dialog.PLUGIN_LOGS]: PluginLogsDialog,
+	[Dialog.PLUGIN_COMMANDS]: PluginCommandsDialog,
+	[Dialog.PLUGIN_SETTINGS]: PluginSettingsDialog,
+	[Dialog.SCREEN_SHARE_PICKER]: ScreenSharePickerDialog,
 };
 
 const DialogsProvider = memo(() => {
-  const { isOpen, openDialog, props, closing } = useDialogInfo();
+	const { isOpen, openDialog, props, closing } = useDialogInfo();
 
-  if (!openDialog || !DialogsMap[openDialog]) return null;
+	if (!openDialog || !DialogsMap[openDialog]) return null;
 
-  const realIsOpen = isOpen && !closing;
+	const realIsOpen = isOpen && !closing;
 
-  return createElement(DialogsMap[openDialog], {
-    ...props,
-    isOpen: realIsOpen,
-    close: closeDialogs
-  });
+	return createElement(DialogsMap[openDialog], {
+		...props,
+		isOpen: realIsOpen,
+		close: closeDialogs,
+	});
 });
 
 export { DialogsProvider };
