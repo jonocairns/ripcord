@@ -5,6 +5,7 @@
     "": {
       "name": "sharkord",
       "devDependencies": {
+        "@biomejs/biome": "^2.0.0",
         "knip": "^5.80.0",
       },
     },
@@ -63,7 +64,6 @@
         "zustand": "^5.0.3",
       },
       "devDependencies": {
-        "@biomejs/biome": "^2.0.0",
         "@types/node": "^24.5.2",
         "@types/react": "^19.1.13",
         "@types/react-dom": "^19.1.9",
