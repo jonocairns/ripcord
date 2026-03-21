@@ -1062,13 +1062,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						onWasmError: (error) => {
 							logVoice('Browser WASM voice filter runtime error', { error });
 
-							const pipeline = micAudioPipelineRef.current;
-							if (pipeline?.backend === 'browser-wasm') {
-								micAudioPipelineRef.current = undefined;
-								void pipeline.destroy().catch(() => {
-									// ignore teardown failures
-								});
-								toast.error('Noise suppression encountered an error and has been disabled.');
+							// Don't destroy the pipeline here — closing the AudioContext would
+							// end the MediaStreamTrack already handed to the mediasoup producer,
+							// causing complete mic silence for all peers with no recovery.
+							// The worklet naturally falls back to passing through raw mic input
+							// when the worker errors (underrun passthrough), so audio continues
+							// to flow unprocessed. The pipeline is cleaned up normally when the
+							// user leaves the channel or changes mic settings.
+							if (micAudioPipelineRef.current?.backend === 'browser-wasm') {
+								toast.error('Noise suppression encountered an error. Audio will continue without noise reduction.');
 							}
 						},
 					});

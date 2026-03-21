@@ -236,6 +236,10 @@ const resolveDtlnModule = async ({
 
 	const patchedModuleSource = moduleSourceWithReadyHook.replace(DTLN_STREAMING_INSTANTIATE_MARKER, 'if(false){');
 
+	if (patchedModuleSource === moduleSourceWithReadyHook) {
+		throw new Error('Unable to patch DTLN browser module streaming instantiation');
+	}
+
 	const moduleBlobUrl = URL.createObjectURL(
 		new Blob([patchedModuleSource], {
 			type: 'text/javascript',
