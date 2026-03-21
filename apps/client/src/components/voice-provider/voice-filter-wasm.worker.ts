@@ -528,6 +528,10 @@ const initializeWorker = async (message: TWorkerInitMessage) => {
 	runner = new DtlnWasmRunner(module);
 	runner.init();
 
+	// Discard input that accumulated during WASM initialization to avoid
+	// processing a large backlog in a single synchronous burst.
+	pendingInput16Khz.length = 0;
+
 	if (transportMode === 'shared-array-buffer') {
 		sabPollTimerId = self.setInterval(pumpSharedInput, SAB_POLL_INTERVAL_MS);
 	}

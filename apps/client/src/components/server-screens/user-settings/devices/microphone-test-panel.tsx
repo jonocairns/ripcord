@@ -438,9 +438,7 @@ const MicrophoneTestPanel = memo(
 			setMicTestError(undefined);
 			await maybeMuteForTest();
 
-			const AudioContextClass =
-				window.AudioContext ||
-				(window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+			const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 
 			if (!AudioContextClass) {
 				setMicTestError('Microphone testing is not supported in this browser.');
