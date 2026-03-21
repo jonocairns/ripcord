@@ -3,277 +3,248 @@ export type TDesktopPlatform = 'windows' | 'macos' | 'linux';
 export type TSupportLevel = 'supported' | 'best-effort' | 'unsupported';
 
 export enum ScreenAudioMode {
-  SYSTEM = 'system',
-  APP = 'app',
-  NONE = 'none'
+	SYSTEM = 'system',
+	APP = 'app',
+	NONE = 'none',
 }
 
 export type TDesktopCapabilities = {
-  platform: TDesktopPlatform;
-  systemAudio: TSupportLevel;
-  perAppAudio: TSupportLevel;
-  sidecarAvailable?: boolean;
-  notes: string[];
+	platform: TDesktopPlatform;
+	systemAudio: TSupportLevel;
+	perAppAudio: TSupportLevel;
+	sidecarAvailable?: boolean;
+	notes: string[];
 };
 
 export type TDesktopShareSourceKind = 'screen' | 'window';
 
 export type TDesktopShareSource = {
-  id: string;
-  name: string;
-  kind: TDesktopShareSourceKind;
-  thumbnailDataUrl: string;
-  appIconDataUrl?: string;
+	id: string;
+	name: string;
+	kind: TDesktopShareSourceKind;
+	thumbnailDataUrl: string;
+	appIconDataUrl?: string;
 };
 
 export type TDesktopScreenShareSelection = {
-  sourceId: string;
-  audioMode: ScreenAudioMode;
-  appAudioTargetId?: string;
+	sourceId: string;
+	audioMode: ScreenAudioMode;
+	appAudioTargetId?: string;
 };
 
 export type TResolvedScreenAudioMode = {
-  requestedMode: ScreenAudioMode;
-  effectiveMode: ScreenAudioMode;
-  warning?: string;
+	requestedMode: ScreenAudioMode;
+	effectiveMode: ScreenAudioMode;
+	warning?: string;
 };
 
 export type TDesktopAppAudioTarget = {
-  id: string;
-  label: string;
-  pid: number;
-  processName: string;
+	id: string;
+	label: string;
+	pid: number;
+	processName: string;
 };
 
 export type TDesktopAppAudioTargetsResult = {
-  targets: TDesktopAppAudioTarget[];
-  suggestedTargetId?: string;
-  warning?: string;
+	targets: TDesktopAppAudioTarget[];
+	suggestedTargetId?: string;
+	warning?: string;
 };
 
 export type TStartAppAudioCaptureInput = {
-  sourceId: string;
-  appAudioTargetId?: string;
+	sourceId: string;
+	appAudioTargetId?: string;
 };
 
 export type TAppAudioSession = {
-  sessionId: string;
-  targetId: string;
-  sampleRate: number;
-  channels: number;
-  framesPerBuffer: number;
-  protocolVersion?: number;
-  encoding?: 'f32le_base64';
+	sessionId: string;
+	targetId: string;
+	sampleRate: number;
+	channels: number;
+	framesPerBuffer: number;
+	protocolVersion?: number;
+	encoding?: 'f32le_base64';
 };
 
 export type TAppAudioFrame = {
-  sessionId: string;
-  targetId: string;
-  sequence: number;
-  sampleRate: number;
-  channels: number;
-  frameCount: number;
-  pcmBase64: string;
-  protocolVersion: number;
-  encoding: 'f32le_base64';
-  droppedFrameCount?: number;
+	sessionId: string;
+	targetId: string;
+	sequence: number;
+	sampleRate: number;
+	channels: number;
+	frameCount: number;
+	pcmBase64: string;
+	protocolVersion: number;
+	encoding: 'f32le_base64';
+	droppedFrameCount?: number;
 };
 
 export type TAppAudioPcmFrame = {
-  sessionId: string;
-  targetId: string;
-  sequence: number;
-  sampleRate: number;
-  channels: number;
-  frameCount: number;
-  pcm: Float32Array;
-  protocolVersion: number;
-  droppedFrameCount?: number;
+	sessionId: string;
+	targetId: string;
+	sequence: number;
+	sampleRate: number;
+	channels: number;
+	frameCount: number;
+	pcm: Float32Array;
+	protocolVersion: number;
+	droppedFrameCount?: number;
 };
 
-export type TAppAudioEndReason =
-  | 'capture_stopped'
-  | 'app_exited'
-  | 'capture_error'
-  | 'device_lost'
-  | 'sidecar_exited';
+export type TAppAudioEndReason = 'capture_stopped' | 'app_exited' | 'capture_error' | 'device_lost' | 'sidecar_exited';
 
 export type TAppAudioStatusEvent = {
-  sessionId: string;
-  targetId: string;
-  reason: TAppAudioEndReason;
-  error?: string;
-  protocolVersion?: number;
+	sessionId: string;
+	targetId: string;
+	reason: TAppAudioEndReason;
+	error?: string;
+	protocolVersion?: number;
 };
 
 export type TVoiceFilterStrength = 'low' | 'balanced' | 'high' | 'aggressive';
 export type TVoiceDereverbMode = 'off' | 'tail';
 
 export type TVoiceFilterSession = {
-  sessionId: string;
-  sampleRate: number;
-  channels: number;
-  framesPerBuffer: number;
-  protocolVersion?: number;
-  encoding?: 'f32le_base64';
-  echoCancellationBackend?: 'adaptive_nlms' | 'webrtc_aec3';
-  dereverbMode?: TVoiceDereverbMode;
+	sessionId: string;
+	sampleRate: number;
+	channels: number;
+	framesPerBuffer: number;
+	protocolVersion?: number;
+	encoding?: 'f32le_base64';
+	echoCancellationBackend?: 'adaptive_nlms' | 'webrtc_aec3';
+	dereverbMode?: TVoiceDereverbMode;
 };
 
 export type TVoiceFilterFrameDiag = {
-  /** DeepFilterNet log-SNR estimate for this buffer. Low values (< -3 dB) mean the
-   *  model sees mostly noise — the primary indicator of over-suppression. undefined
-   *  in passthrough mode. */
-  lsnrMean?: number;
-  lsnrMin?: number;
-  lsnrMax?: number;
-  /** Estimated echo return loss enhancement from the sidecar AEC. Higher is better. */
-  aecErleDb?: number;
-  /** Current render-to-capture delay estimate in milliseconds. */
-  aecDelayMs?: number;
-  /** 0..1 confidence that the current frame contains double-talk. */
-  aecDoubleTalkConfidence?: number;
-  /** AGC gain applied. undefined when AGC is disabled. High values (> 3×) indicate
-   *  the mic is very quiet — common with far-field setups. */
-  agcGain?: number;
-  /** Startup ramp wet-mix at the end of the buffer (0 = dry, 1 = fully processed).
-   *  Stays at 1.0 after the ramp completes. */
-  rampWetMix: number;
+	/** DeepFilterNet log-SNR estimate for this buffer. Low values (< -3 dB) mean the
+	 *  model sees mostly noise — the primary indicator of over-suppression. undefined
+	 *  in passthrough mode. */
+	lsnrMean?: number;
+	lsnrMin?: number;
+	lsnrMax?: number;
+	/** Estimated echo return loss enhancement from the sidecar AEC. Higher is better. */
+	aecErleDb?: number;
+	/** Current render-to-capture delay estimate in milliseconds. */
+	aecDelayMs?: number;
+	/** 0..1 confidence that the current frame contains double-talk. */
+	aecDoubleTalkConfidence?: number;
+	/** AGC gain applied. undefined when AGC is disabled. High values (> 3×) indicate
+	 *  the mic is very quiet — common with far-field setups. */
+	agcGain?: number;
+	/** Startup ramp wet-mix at the end of the buffer (0 = dry, 1 = fully processed).
+	 *  Stays at 1.0 after the ramp completes. */
+	rampWetMix: number;
 };
 
 export type TVoiceFilterPcmFrame = {
-  sessionId: string;
-  sequence: number;
-  sampleRate: number;
-  channels: number;
-  frameCount: number;
-  timestampMs?: number;
-  pcm: Float32Array;
-  protocolVersion: number;
-  droppedFrameCount?: number;
-  diag?: TVoiceFilterFrameDiag;
+	sessionId: string;
+	sequence: number;
+	sampleRate: number;
+	channels: number;
+	frameCount: number;
+	timestampMs?: number;
+	pcm: Float32Array;
+	protocolVersion: number;
+	droppedFrameCount?: number;
+	diag?: TVoiceFilterFrameDiag;
 };
 
 export type TVoiceFilterStatusEvent = {
-  sessionId: string;
-  reason: 'capture_stopped' | 'capture_error' | 'sidecar_exited';
-  error?: string;
-  protocolVersion?: number;
+	sessionId: string;
+	reason: 'capture_stopped' | 'capture_error' | 'sidecar_exited';
+	error?: string;
+	protocolVersion?: number;
 };
 
 export type TDesktopUpdateState =
-  | 'disabled'
-  | 'idle'
-  | 'checking'
-  | 'available'
-  | 'not-available'
-  | 'downloading'
-  | 'downloaded'
-  | 'error';
+	| 'disabled'
+	| 'idle'
+	| 'checking'
+	| 'available'
+	| 'not-available'
+	| 'downloading'
+	| 'downloaded'
+	| 'error';
 
 export type TDesktopUpdateStatus = {
-  state: TDesktopUpdateState;
-  currentVersion: string;
-  availableVersion?: string;
-  manualInstallRequired?: boolean;
-  checkedAtIso?: string;
-  percent?: number;
-  bytesPerSecond?: number;
-  transferredBytes?: number;
-  totalBytes?: number;
-  message?: string;
+	state: TDesktopUpdateState;
+	currentVersion: string;
+	availableVersion?: string;
+	manualInstallRequired?: boolean;
+	checkedAtIso?: string;
+	percent?: number;
+	bytesPerSecond?: number;
+	transferredBytes?: number;
+	totalBytes?: number;
+	message?: string;
 };
 
 export type TVoiceFilterDfnTuningInput = {
-  attenuationLimitDb?: number;
-  mix?: number;
-  experimentalAggressiveMode?: boolean;
-  noiseGateFloorDbfs?: number;
+	attenuationLimitDb?: number;
+	mix?: number;
+	experimentalAggressiveMode?: boolean;
+	noiseGateFloorDbfs?: number;
 };
 
 export type TStartVoiceFilterInput = {
-  sampleRate: number;
-  channels: number;
-  suppressionLevel: TVoiceFilterStrength;
-  noiseSuppression: boolean;
-  autoGainControl: boolean;
-  echoCancellation: boolean;
-  dereverbMode?: TVoiceDereverbMode;
+	sampleRate: number;
+	channels: number;
+	suppressionLevel: TVoiceFilterStrength;
+	noiseSuppression: boolean;
+	autoGainControl: boolean;
+	echoCancellation: boolean;
+	dereverbMode?: TVoiceDereverbMode;
 } & TVoiceFilterDfnTuningInput;
 
 export type TMicDevice = { id: string; label: string };
 export type TMicDevicesResult = { devices: TMicDevice[] };
 export type TStartVoiceFilterWithCaptureInput = TStartVoiceFilterInput & {
-  deviceId?: string;
+	deviceId?: string;
 };
 
 export type TPushKeybindKind = 'talk' | 'mute';
 
 export type TDesktopPushKeybindsInput = {
-  pushToTalkKeybind?: string;
-  pushToMuteKeybind?: string;
+	pushToTalkKeybind?: string;
+	pushToMuteKeybind?: string;
 };
 
 export type TDesktopPushKeybindEvent = {
-  kind: TPushKeybindKind;
-  active: boolean;
+	kind: TPushKeybindKind;
+	active: boolean;
 };
 
 export type TGlobalPushKeybindRegistrationResult = {
-  talkRegistered: boolean;
-  muteRegistered: boolean;
-  errors: string[];
+	talkRegistered: boolean;
+	muteRegistered: boolean;
+	errors: string[];
 };
 
 export type TDesktopBridge = {
-  getServerUrl: () => Promise<string>;
-  setServerUrl: (serverUrl: string) => Promise<void>;
-  getCapabilities: () => Promise<TDesktopCapabilities>;
-  pingSidecar: () => Promise<{ available: boolean; reason?: string }>;
-  getUpdateStatus: () => Promise<TDesktopUpdateStatus>;
-  checkForUpdates: () => Promise<TDesktopUpdateStatus>;
-  listShareSources: () => Promise<TDesktopShareSource[]>;
-  listAppAudioTargets: (
-    sourceId?: string
-  ) => Promise<TDesktopAppAudioTargetsResult>;
-  startAppAudioCapture: (
-    input: TStartAppAudioCaptureInput
-  ) => Promise<TAppAudioSession>;
-  stopAppAudioCapture: (sessionId?: string) => Promise<void>;
-  listMicDevices: () => Promise<TMicDevicesResult>;
-  startVoiceFilterSessionWithCapture: (
-    input: TStartVoiceFilterWithCaptureInput
-  ) => Promise<TVoiceFilterSession>;
-  startVoiceFilterSession: (
-    input: TStartVoiceFilterInput
-  ) => Promise<TVoiceFilterSession>;
-  stopVoiceFilterSession: (sessionId?: string) => Promise<void>;
-  ensureVoiceFilterFrameChannel: () => Promise<boolean>;
-  openVoiceFilterFrameEgressChannel: () => Promise<boolean>;
-  setGlobalPushKeybinds: (
-    input: TDesktopPushKeybindsInput
-  ) => Promise<TGlobalPushKeybindRegistrationResult>;
-  pushVoiceFilterPcmFrame: (frame: TVoiceFilterPcmFrame) => void;
-  pushVoiceFilterReferencePcmFrame: (frame: TVoiceFilterPcmFrame) => void;
-  subscribeAppAudioFrames: (
-    cb: (frame: TAppAudioFrame | TAppAudioPcmFrame) => void
-  ) => () => void;
-  subscribeAppAudioStatus: (
-    cb: (statusEvent: TAppAudioStatusEvent) => void
-  ) => () => void;
-  subscribeVoiceFilterFrames: (
-    cb: (frame: TVoiceFilterPcmFrame) => void
-  ) => () => void;
-  subscribeVoiceFilterStatus: (
-    cb: (statusEvent: TVoiceFilterStatusEvent) => void
-  ) => () => void;
-  subscribeGlobalPushKeybindEvents: (
-    cb: (event: TDesktopPushKeybindEvent) => void
-  ) => () => void;
-  subscribeUpdateStatus: (
-    cb: (status: TDesktopUpdateStatus) => void
-  ) => () => void;
-  prepareScreenShare: (
-    selection: TDesktopScreenShareSelection
-  ) => Promise<TResolvedScreenAudioMode>;
+	getServerUrl: () => Promise<string>;
+	setServerUrl: (serverUrl: string) => Promise<void>;
+	getCapabilities: () => Promise<TDesktopCapabilities>;
+	pingSidecar: () => Promise<{ available: boolean; reason?: string }>;
+	getUpdateStatus: () => Promise<TDesktopUpdateStatus>;
+	checkForUpdates: () => Promise<TDesktopUpdateStatus>;
+	listShareSources: () => Promise<TDesktopShareSource[]>;
+	listAppAudioTargets: (sourceId?: string) => Promise<TDesktopAppAudioTargetsResult>;
+	startAppAudioCapture: (input: TStartAppAudioCaptureInput) => Promise<TAppAudioSession>;
+	stopAppAudioCapture: (sessionId?: string) => Promise<void>;
+	listMicDevices: () => Promise<TMicDevicesResult>;
+	startVoiceFilterSessionWithCapture: (input: TStartVoiceFilterWithCaptureInput) => Promise<TVoiceFilterSession>;
+	startVoiceFilterSession: (input: TStartVoiceFilterInput) => Promise<TVoiceFilterSession>;
+	stopVoiceFilterSession: (sessionId?: string) => Promise<void>;
+	ensureVoiceFilterFrameChannel: () => Promise<boolean>;
+	openVoiceFilterFrameEgressChannel: () => Promise<boolean>;
+	setGlobalPushKeybinds: (input: TDesktopPushKeybindsInput) => Promise<TGlobalPushKeybindRegistrationResult>;
+	pushVoiceFilterPcmFrame: (frame: TVoiceFilterPcmFrame) => void;
+	pushVoiceFilterReferencePcmFrame: (frame: TVoiceFilterPcmFrame) => void;
+	subscribeAppAudioFrames: (cb: (frame: TAppAudioFrame | TAppAudioPcmFrame) => void) => () => void;
+	subscribeAppAudioStatus: (cb: (statusEvent: TAppAudioStatusEvent) => void) => () => void;
+	subscribeVoiceFilterFrames: (cb: (frame: TVoiceFilterPcmFrame) => void) => () => void;
+	subscribeVoiceFilterStatus: (cb: (statusEvent: TVoiceFilterStatusEvent) => void) => () => void;
+	subscribeGlobalPushKeybindEvents: (cb: (event: TDesktopPushKeybindEvent) => void) => () => void;
+	subscribeUpdateStatus: (cb: (status: TDesktopUpdateStatus) => void) => () => void;
+	prepareScreenShare: (selection: TDesktopScreenShareSelection) => Promise<TResolvedScreenAudioMode>;
 };

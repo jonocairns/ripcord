@@ -1,5 +1,5 @@
 export type TCommandResponse = {
-  success: boolean;
-  data?: unknown;
-  error?: string;
+	success: boolean;
+	data?: unknown;
+	error?: string;
 };

@@ -2,8 +2,8 @@ import { Toaster } from '@/components/ui/sonner';
 import 'prosemirror-view/style/prosemirror.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { DebugInfo } from './components/debug-info/index.tsx';
 import { StoreDebug } from './components/debug/store-debug.tsx';
+import { DebugInfo } from './components/debug-info/index.tsx';
 import { DevicesProvider } from './components/devices-provider/index.tsx';
 import { DialogsProvider } from './components/dialogs/index.tsx';
 import { Routing } from './components/routing/index.tsx';
@@ -14,29 +14,26 @@ import './index.css';
 import { initializeRuntimeServerConfig } from './runtime/server-config.ts';
 
 const bootstrap = async () => {
-  try {
-    await initializeRuntimeServerConfig();
-  } catch (error) {
-    console.error('Failed to initialize runtime server configuration', error);
-  }
+	try {
+		await initializeRuntimeServerConfig();
+	} catch (error) {
+		console.error('Failed to initialize runtime server configuration', error);
+	}
 
-  createRoot(document.getElementById('root')!).render(
-    <StrictMode>
-      <ThemeProvider
-        defaultTheme="dark"
-        storageKey={LocalStorageKey.VITE_UI_THEME}
-      >
-        <DebugInfo />
-        <Toaster />
-        <StoreDebug />
-        <DevicesProvider>
-          <DialogsProvider />
-          <ServerScreensProvider />
-          <Routing />
-        </DevicesProvider>
-      </ThemeProvider>
-    </StrictMode>
-  );
+	createRoot(document.getElementById('root')!).render(
+		<StrictMode>
+			<ThemeProvider defaultTheme="dark" storageKey={LocalStorageKey.VITE_UI_THEME}>
+				<DebugInfo />
+				<Toaster />
+				<StoreDebug />
+				<DevicesProvider>
+					<DialogsProvider />
+					<ServerScreensProvider />
+					<Routing />
+				</DevicesProvider>
+			</ThemeProvider>
+		</StrictMode>,
+	);
 };
 
 void bootstrap();

@@ -1,85 +1,70 @@
-import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select';
-import { cn } from '@/lib/utils';
 import { memo } from 'react';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { cn } from '@/lib/utils';
 
 type TResolutionFpsControlProps = {
-  resolution: string;
-  framerate: number;
-  onResolutionChange: (resolution: string) => void;
-  onFramerateChange: (framerate: number) => void;
-  disabled?: boolean;
-  className?: string;
+	resolution: string;
+	framerate: number;
+	onResolutionChange: (resolution: string) => void;
+	onFramerateChange: (framerate: number) => void;
+	disabled?: boolean;
+	className?: string;
 };
 
 const ResolutionFpsControl = memo(
-  ({
-    resolution,
-    framerate,
-    onResolutionChange,
-    onFramerateChange,
-    disabled,
-    className
-  }: TResolutionFpsControlProps) => {
-    return (
-      <div className={cn('grid gap-4 md:grid-cols-2', className)}>
-        <div className="space-y-2">
-          <Label>Resolution</Label>
-          <Select
-            value={resolution}
-            onValueChange={onResolutionChange}
-            disabled={disabled}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select the input device" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value="144p">144p</SelectItem>
-                <SelectItem value="240p">240p</SelectItem>
-                <SelectItem value="360p">360p</SelectItem>
-                <SelectItem value="720p">720p</SelectItem>
-                <SelectItem value="1080p">1080p</SelectItem>
-                <SelectItem value="1440p">1440p</SelectItem>
-                <SelectItem value="2160p">2160p</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </div>
+	({
+		resolution,
+		framerate,
+		onResolutionChange,
+		onFramerateChange,
+		disabled,
+		className,
+	}: TResolutionFpsControlProps) => {
+		return (
+			<div className={cn('grid gap-4 md:grid-cols-2', className)}>
+				<div className="space-y-2">
+					<Label>Resolution</Label>
+					<Select value={resolution} onValueChange={onResolutionChange} disabled={disabled}>
+						<SelectTrigger className="w-full">
+							<SelectValue placeholder="Select the input device" />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectGroup>
+								<SelectItem value="144p">144p</SelectItem>
+								<SelectItem value="240p">240p</SelectItem>
+								<SelectItem value="360p">360p</SelectItem>
+								<SelectItem value="720p">720p</SelectItem>
+								<SelectItem value="1080p">1080p</SelectItem>
+								<SelectItem value="1440p">1440p</SelectItem>
+								<SelectItem value="2160p">2160p</SelectItem>
+							</SelectGroup>
+						</SelectContent>
+					</Select>
+				</div>
 
-        <div className="space-y-2">
-          <Label>Framerate</Label>
-          <Select
-            value={framerate.toString()}
-            onValueChange={(value) => onFramerateChange(+value)}
-            disabled={disabled}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select the input device" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value="5">5 fps</SelectItem>
-                <SelectItem value="10">10 fps</SelectItem>
-                <SelectItem value="15">15 fps</SelectItem>
-                <SelectItem value="24">24 fps</SelectItem>
-                <SelectItem value="30">30 fps</SelectItem>
-                <SelectItem value="60">60 fps</SelectItem>
-                <SelectItem value="120">120 fps</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-    );
-  }
+				<div className="space-y-2">
+					<Label>Framerate</Label>
+					<Select value={framerate.toString()} onValueChange={(value) => onFramerateChange(+value)} disabled={disabled}>
+						<SelectTrigger className="w-full">
+							<SelectValue placeholder="Select the input device" />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectGroup>
+								<SelectItem value="5">5 fps</SelectItem>
+								<SelectItem value="10">10 fps</SelectItem>
+								<SelectItem value="15">15 fps</SelectItem>
+								<SelectItem value="24">24 fps</SelectItem>
+								<SelectItem value="30">30 fps</SelectItem>
+								<SelectItem value="60">60 fps</SelectItem>
+								<SelectItem value="120">120 fps</SelectItem>
+							</SelectGroup>
+						</SelectContent>
+					</Select>
+				</div>
+			</div>
+		);
+	},
 );
 
 export default ResolutionFpsControl;

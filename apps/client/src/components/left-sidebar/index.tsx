@@ -1,32 +1,28 @@
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu';
-import { openDialog } from '@/features/dialogs/actions';
-import { openServerScreen } from '@/features/server-screens/actions';
-import { useCategories } from '@/features/server/categories/hooks';
-import { useCan, useInfo, useServerName } from '@/features/server/hooks';
-import { getFileUrl } from '@/helpers/get-file-url';
-import {
-  getLocalStorageItem,
-  LocalStorageKey,
-  setLocalStorageItem
-} from '@/helpers/storage';
-import { cn } from '@/lib/utils';
 import { Permission } from '@sharkord/shared';
 import { ChevronDown, FolderPlus, Hash, Settings } from 'lucide-react';
 import {
-  type CSSProperties,
-  memo,
-  type MouseEvent as ReactMouseEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState
+	type CSSProperties,
+	memo,
+	type MouseEvent as ReactMouseEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
 } from 'react';
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { openDialog } from '@/features/dialogs/actions';
+import { useCategories } from '@/features/server/categories/hooks';
+import { useCan, useInfo, useServerName } from '@/features/server/hooks';
+import { openServerScreen } from '@/features/server-screens/actions';
+import { getFileUrl } from '@/helpers/get-file-url';
+import { getLocalStorageItem, LocalStorageKey, setLocalStorageItem } from '@/helpers/storage';
+import { cn } from '@/lib/utils';
 import { Dialog } from '../dialogs/dialogs';
 import { ServerScreen } from '../server-screens/screens';
 import { Avatar, AvatarImage } from '../ui/avatar';
@@ -37,7 +33,7 @@ import { UserControl } from './user-control';
 import { VoiceControl } from './voice-control';
 
 type TLeftSidebarProps = {
-  className?: string;
+	className?: string;
 };
 
 const MIN_WIDTH = 240;
@@ -45,197 +41,180 @@ const MAX_WIDTH = 420;
 const DEFAULT_WIDTH = 288;
 
 const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
-  const serverName = useServerName();
-  const serverInfo = useInfo();
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [width, setWidth] = useState(() => {
-    const savedWidth = getLocalStorageItem(LocalStorageKey.LEFT_SIDEBAR_WIDTH);
-    const parsedWidth = savedWidth ? Number.parseInt(savedWidth, 10) : NaN;
+	const serverName = useServerName();
+	const serverInfo = useInfo();
+	const [menuOpen, setMenuOpen] = useState(false);
+	const [width, setWidth] = useState(() => {
+		const savedWidth = getLocalStorageItem(LocalStorageKey.LEFT_SIDEBAR_WIDTH);
+		const parsedWidth = savedWidth ? Number.parseInt(savedWidth, 10) : NaN;
 
-    if (Number.isNaN(parsedWidth)) {
-      return DEFAULT_WIDTH;
-    }
+		if (Number.isNaN(parsedWidth)) {
+			return DEFAULT_WIDTH;
+		}
 
-    return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, parsedWidth));
-  });
-  const [isResizing, setIsResizing] = useState(false);
-  const categories = useCategories();
-  const can = useCan();
-  const sidebarRef = useRef<HTMLElement>(null);
-  const widthRef = useRef(width);
-  const safeServerName = serverName ?? 'Server';
-  const firstCategoryId = categories[0]?.id;
-  const serverSettingsPermissions = useMemo(
-    () => [
-      Permission.MANAGE_SETTINGS,
-      Permission.MANAGE_ROLES,
-      Permission.MANAGE_EMOJIS,
-      Permission.MANAGE_STORAGE,
-      Permission.MANAGE_USERS,
-      Permission.MANAGE_INVITES,
-      Permission.MANAGE_UPDATES,
-      Permission.MANAGE_PLUGINS
-    ],
-    []
-  );
-  const canManageServerSettings = can(serverSettingsPermissions);
-  const canManageChannels = can(Permission.MANAGE_CHANNELS);
-  const canManageCategories = can(Permission.MANAGE_CATEGORIES);
-  const hasServerActions =
-    canManageServerSettings || canManageChannels || canManageCategories;
-  const handleResizeStart = useCallback((event: ReactMouseEvent) => {
-    event.preventDefault();
-    setIsResizing(true);
-  }, []);
+		return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, parsedWidth));
+	});
+	const [isResizing, setIsResizing] = useState(false);
+	const categories = useCategories();
+	const can = useCan();
+	const sidebarRef = useRef<HTMLElement>(null);
+	const widthRef = useRef(width);
+	const safeServerName = serverName ?? 'Server';
+	const firstCategoryId = categories[0]?.id;
+	const serverSettingsPermissions = useMemo(
+		() => [
+			Permission.MANAGE_SETTINGS,
+			Permission.MANAGE_ROLES,
+			Permission.MANAGE_EMOJIS,
+			Permission.MANAGE_STORAGE,
+			Permission.MANAGE_USERS,
+			Permission.MANAGE_INVITES,
+			Permission.MANAGE_UPDATES,
+			Permission.MANAGE_PLUGINS,
+		],
+		[],
+	);
+	const canManageServerSettings = can(serverSettingsPermissions);
+	const canManageChannels = can(Permission.MANAGE_CHANNELS);
+	const canManageCategories = can(Permission.MANAGE_CATEGORIES);
+	const hasServerActions = canManageServerSettings || canManageChannels || canManageCategories;
+	const handleResizeStart = useCallback((event: ReactMouseEvent) => {
+		event.preventDefault();
+		setIsResizing(true);
+	}, []);
 
-  useEffect(() => {
-    widthRef.current = width;
-  }, [width]);
+	useEffect(() => {
+		widthRef.current = width;
+	}, [width]);
 
-  useEffect(() => {
-    if (!isResizing) {
-      return;
-    }
+	useEffect(() => {
+		if (!isResizing) {
+			return;
+		}
 
-    const handleMouseMove = (event: MouseEvent) => {
-      if (!sidebarRef.current) {
-        return;
-      }
+		const handleMouseMove = (event: MouseEvent) => {
+			if (!sidebarRef.current) {
+				return;
+			}
 
-      const rect = sidebarRef.current.getBoundingClientRect();
-      const nextWidth = event.clientX - rect.left;
-      const clampedWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, nextWidth));
+			const rect = sidebarRef.current.getBoundingClientRect();
+			const nextWidth = event.clientX - rect.left;
+			const clampedWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, nextWidth));
 
-      widthRef.current = clampedWidth;
-      setWidth(clampedWidth);
-    };
+			widthRef.current = clampedWidth;
+			setWidth(clampedWidth);
+		};
 
-    const handleMouseUp = () => {
-      setLocalStorageItem(
-        LocalStorageKey.LEFT_SIDEBAR_WIDTH,
-        String(widthRef.current)
-      );
-      setIsResizing(false);
-    };
+		const handleMouseUp = () => {
+			setLocalStorageItem(LocalStorageKey.LEFT_SIDEBAR_WIDTH, String(widthRef.current));
+			setIsResizing(false);
+		};
 
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+		document.addEventListener('mousemove', handleMouseMove);
+		document.addEventListener('mouseup', handleMouseUp);
 
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isResizing]);
+		return () => {
+			document.removeEventListener('mousemove', handleMouseMove);
+			document.removeEventListener('mouseup', handleMouseUp);
+		};
+	}, [isResizing]);
 
-  const headerContent = (
-    <>
-      <span className="flex min-w-0 items-center gap-2">
-        {serverInfo?.logo ? (
-          <Avatar className="h-6 w-8 rounded-md bg-sidebar-accent/40">
-            <AvatarImage
-              src={getFileUrl(serverInfo?.logo)}
-              key={serverInfo?.logo?.id}
-              className="object-contain p-0.5"
-            />
-          </Avatar>
-        ) : null}
-        <span className="truncate font-semibold text-foreground">
-          {safeServerName}
-        </span>
-      </span>
-      {hasServerActions && (
-        <ChevronDown
-          className={cn(
-            'h-4 w-4 text-muted-foreground transition-transform',
-            menuOpen && 'rotate-180'
-          )}
-        />
-      )}
-    </>
-  );
+	const headerContent = (
+		<>
+			<span className="flex min-w-0 items-center gap-2">
+				{serverInfo?.logo ? (
+					<Avatar className="h-6 w-8 rounded-md bg-sidebar-accent/40">
+						<AvatarImage
+							src={getFileUrl(serverInfo?.logo)}
+							key={serverInfo?.logo?.id}
+							className="object-contain p-0.5"
+						/>
+					</Avatar>
+				) : null}
+				<span className="truncate font-semibold text-foreground">{safeServerName}</span>
+			</span>
+			{hasServerActions && (
+				<ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', menuOpen && 'rotate-180')} />
+			)}
+		</>
+	);
 
-  return (
-    <aside
-      ref={sidebarRef}
-      className={cn(
-        'relative flex h-full w-[calc(100vw-3rem)] max-w-72 flex-col border-r border-sidebar-border bg-sidebar/95 backdrop-blur-sm md:w-[var(--left-sidebar-width)] md:min-w-[var(--left-sidebar-width)] md:max-w-[var(--left-sidebar-width)]',
-        !isResizing && 'md:transition-[width] md:duration-150',
-        className
-      )}
-      style={
-        {
-          '--left-sidebar-width': `${width}px`
-        } as CSSProperties
-      }
-    >
-      <div
-        className={cn(
-          'absolute top-0 right-0 hidden h-full w-1 cursor-col-resize bg-transparent transition-colors md:block',
-          isResizing ? 'bg-primary/70' : 'hover:bg-primary/40'
-        )}
-        onMouseDown={handleResizeStart}
-      />
-      <div className="flex h-12 w-full items-center border-b border-sidebar-border px-2">
-        {hasServerActions ? (
-          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                className="h-10 w-full justify-between rounded-md px-2 text-left hover:!bg-transparent hover:!text-current data-[state=open]:!bg-transparent data-[state=open]:!text-current dark:hover:!bg-transparent"
-              >
-                {headerContent}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent className="w-64">
-              {canManageServerSettings && (
-                <DropdownMenuItem
-                  onClick={() => openServerScreen(ServerScreen.SERVER_SETTINGS)}
-                >
-                  <Settings className="h-4 w-4" />
-                  Server Settings
-                </DropdownMenuItem>
-              )}
-              {canManageChannels && (
-                <DropdownMenuItem
-                  disabled={!firstCategoryId}
-                  onClick={() => {
-                    if (!firstCategoryId) return;
+	return (
+		<aside
+			ref={sidebarRef}
+			className={cn(
+				'relative flex h-full w-[calc(100vw-3rem)] max-w-72 flex-col border-r border-sidebar-border bg-sidebar/95 backdrop-blur-sm md:w-[var(--left-sidebar-width)] md:min-w-[var(--left-sidebar-width)] md:max-w-[var(--left-sidebar-width)]',
+				!isResizing && 'md:transition-[width] md:duration-150',
+				className,
+			)}
+			style={
+				{
+					'--left-sidebar-width': `${width}px`,
+				} as CSSProperties
+			}
+		>
+			<div
+				className={cn(
+					'absolute top-0 right-0 hidden h-full w-1 cursor-col-resize bg-transparent transition-colors md:block',
+					isResizing ? 'bg-primary/70' : 'hover:bg-primary/40',
+				)}
+				onMouseDown={handleResizeStart}
+			/>
+			<div className="flex h-12 w-full items-center border-b border-sidebar-border px-2">
+				{hasServerActions ? (
+					<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+						<DropdownMenuTrigger asChild>
+							<Button
+								variant="ghost"
+								className="h-10 w-full justify-between rounded-md px-2 text-left hover:!bg-transparent hover:!text-current data-[state=open]:!bg-transparent data-[state=open]:!text-current dark:hover:!bg-transparent"
+							>
+								{headerContent}
+							</Button>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent className="w-64">
+							{canManageServerSettings && (
+								<DropdownMenuItem onClick={() => openServerScreen(ServerScreen.SERVER_SETTINGS)}>
+									<Settings className="h-4 w-4" />
+									Server Settings
+								</DropdownMenuItem>
+							)}
+							{canManageChannels && (
+								<DropdownMenuItem
+									disabled={!firstCategoryId}
+									onClick={() => {
+										if (!firstCategoryId) return;
 
-                    openDialog(Dialog.CREATE_CHANNEL, {
-                      categoryId: firstCategoryId
-                    });
-                  }}
-                >
-                  <Hash className="h-4 w-4" />
-                  Create Channel
-                </DropdownMenuItem>
-              )}
-              {canManageCategories && (
-                <DropdownMenuItem
-                  onClick={() => openDialog(Dialog.CREATE_CATEGORY)}
-                >
-                  <FolderPlus className="h-4 w-4" />
-                  Create Category
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : (
-          <div className="flex h-10 w-full items-center justify-between rounded-md px-2 text-left">
-            {headerContent}
-          </div>
-        )}
-      </div>
-      <div className="flex-1 overflow-y-auto">
-        <Categories />
-      </div>
-      <DesktopUpdateCallout />
-      <div className="border-t border-sidebar-border bg-[#171a1f]/95">
-        <VoiceControl />
-        <UserControl />
-      </div>
-    </aside>
-  );
+										openDialog(Dialog.CREATE_CHANNEL, {
+											categoryId: firstCategoryId,
+										});
+									}}
+								>
+									<Hash className="h-4 w-4" />
+									Create Channel
+								</DropdownMenuItem>
+							)}
+							{canManageCategories && (
+								<DropdownMenuItem onClick={() => openDialog(Dialog.CREATE_CATEGORY)}>
+									<FolderPlus className="h-4 w-4" />
+									Create Category
+								</DropdownMenuItem>
+							)}
+						</DropdownMenuContent>
+					</DropdownMenu>
+				) : (
+					<div className="flex h-10 w-full items-center justify-between rounded-md px-2 text-left">{headerContent}</div>
+				)}
+			</div>
+			<div className="flex-1 overflow-y-auto">
+				<Categories />
+			</div>
+			<DesktopUpdateCallout />
+			<div className="border-t border-sidebar-border bg-[#171a1f]/95">
+				<VoiceControl />
+				<UserControl />
+			</div>
+		</aside>
+	);
 });
 
 export { UserControl } from './user-control';

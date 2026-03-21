@@ -1,11 +1,11 @@
-import { setModViewOpen } from '@/features/app/actions';
-import { useUserRoles } from '@/features/server/hooks';
-import { useUserById } from '@/features/server/users/hooks';
-import { getFileUrl } from '@/helpers/get-file-url';
 import { Permission, UserStatus } from '@sharkord/shared';
 import { format } from 'date-fns';
 import { ShieldCheck, UserCog } from 'lucide-react';
 import { memo } from 'react';
+import { setModViewOpen } from '@/features/app/actions';
+import { useUserRoles } from '@/features/server/hooks';
+import { useUserById } from '@/features/server/users/hooks';
+import { getFileUrl } from '@/helpers/get-file-url';
 import { Protect } from '../protect';
 import { RoleBadge } from '../role-badge';
 import { IconButton } from '../ui/icon-button';
@@ -14,118 +14,99 @@ import { UserAvatar } from '../user-avatar';
 import { UserStatusBadge } from '../user-status';
 
 type TUserPopoverProps = {
-  userId: number;
-  children: React.ReactNode;
-  footer?: React.ReactNode;
-  actions?: React.ReactNode;
+	userId: number;
+	children: React.ReactNode;
+	footer?: React.ReactNode;
+	actions?: React.ReactNode;
 };
 
-const UserPopover = memo(
-  ({ userId, children, footer, actions }: TUserPopoverProps) => {
-    const user = useUserById(userId);
-    const roles = useUserRoles(userId);
+const UserPopover = memo(({ userId, children, footer, actions }: TUserPopoverProps) => {
+	const user = useUserById(userId);
+	const roles = useUserRoles(userId);
 
-    if (!user) return <>{children}</>;
+	if (!user) return <>{children}</>;
 
-    return (
-      <Popover>
-        <PopoverTrigger asChild>{children}</PopoverTrigger>
-        <PopoverContent className="w-80 p-0" align="start" side="right">
-          <div className="relative">
-            {user.banned && (
-              <div className="absolute right-2 top-2 bg-red-500 text-white text-xs px-2 py-1 rounded-md flex items-center gap-1">
-                <ShieldCheck className="h-3 w-3" />
-                Banned
-              </div>
-            )}
-            {user.banner ? (
-              <div
-                className="h-24 w-full rounded-t-md bg-cover bg-center bg-no-repeat"
-                style={{
-                  backgroundImage: `url(${getFileUrl(user.banner)})`
-                }}
-              />
-            ) : (
-              <div
-                className="h-24 w-full rounded-t-md"
-                style={{
-                  background: user.bannerColor || '#5865f2'
-                }}
-              />
-            )}
-            <div className="absolute left-4 top-16">
-              <div className="rounded-full bg-popover p-0.5 shadow-[0_0_0_1px_rgb(255_255_255/0.12),0_8px_20px_rgb(0_0_0/0.35)]">
-                <UserAvatar
-                  userId={user.id}
-                  className="h-16 w-16 border border-border/70"
-                  showStatusBadge={false}
-                />
-              </div>
-            </div>
-          </div>
+	return (
+		<Popover>
+			<PopoverTrigger asChild>{children}</PopoverTrigger>
+			<PopoverContent className="w-80 p-0" align="start" side="right">
+				<div className="relative">
+					{user.banned && (
+						<div className="absolute right-2 top-2 bg-red-500 text-white text-xs px-2 py-1 rounded-md flex items-center gap-1">
+							<ShieldCheck className="h-3 w-3" />
+							Banned
+						</div>
+					)}
+					{user.banner ? (
+						<div
+							className="h-24 w-full rounded-t-md bg-cover bg-center bg-no-repeat"
+							style={{
+								backgroundImage: `url(${getFileUrl(user.banner)})`,
+							}}
+						/>
+					) : (
+						<div
+							className="h-24 w-full rounded-t-md"
+							style={{
+								background: user.bannerColor || '#5865f2',
+							}}
+						/>
+					)}
+					<div className="absolute left-4 top-16">
+						<div className="rounded-full bg-popover p-0.5 shadow-[0_0_0_1px_rgb(255_255_255/0.12),0_8px_20px_rgb(0_0_0/0.35)]">
+							<UserAvatar userId={user.id} className="h-16 w-16 border border-border/70" showStatusBadge={false} />
+						</div>
+					</div>
+				</div>
 
-          <div className="px-4 pt-12 pb-4">
-            <div className="mb-3">
-              <span className="text-lg font-semibold text-foreground truncate mb-1">
-                {user.name}
-              </span>
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-2">
-                  <UserStatusBadge
-                    status={user.status || UserStatus.OFFLINE}
-                    className="h-3 w-3"
-                  />
-                  <span className="text-xs text-muted-foreground capitalize">
-                    {user.status || UserStatus.OFFLINE}
-                  </span>
-                </div>
-              </div>
-            </div>
+				<div className="px-4 pt-12 pb-4">
+					<div className="mb-3">
+						<span className="text-lg font-semibold text-foreground truncate mb-1">{user.name}</span>
+						<div className="flex items-center gap-2">
+							<div className="flex items-center gap-2">
+								<UserStatusBadge status={user.status || UserStatus.OFFLINE} className="h-3 w-3" />
+								<span className="text-xs text-muted-foreground capitalize">{user.status || UserStatus.OFFLINE}</span>
+							</div>
+						</div>
+					</div>
 
-            {roles.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mb-3">
-                {roles.map((role) => (
-                  <RoleBadge key={role.id} role={role} />
-                ))}
-              </div>
-            )}
+					{roles.length > 0 && (
+						<div className="flex flex-wrap gap-1.5 mb-3">
+							{roles.map((role) => (
+								<RoleBadge key={role.id} role={role} />
+							))}
+						</div>
+					)}
 
-            {user.bio && (
-              <div className="mt-3">
-                <p className="text-sm text-foreground leading-relaxed">
-                  {user.bio}
-                </p>
-              </div>
-            )}
-            <div className="flex justify-between items-center mt-4 pt-3 border-t border-border">
-              <p className="text-xs text-muted-foreground">
-                Member since {format(new Date(user.createdAt), 'PP')}
-              </p>
+					{user.bio && (
+						<div className="mt-3">
+							<p className="text-sm text-foreground leading-relaxed">{user.bio}</p>
+						</div>
+					)}
+					<div className="flex justify-between items-center mt-4 pt-3 border-t border-border">
+						<p className="text-xs text-muted-foreground">Member since {format(new Date(user.createdAt), 'PP')}</p>
 
-              <div className="flex items-center gap-2.5">
-                <Protect permission={Permission.MANAGE_USERS}>
-                  <IconButton
-                    icon={UserCog}
-                    variant="ghost"
-                    size="default"
-                    className="h-9 w-9 rounded-md"
-                    title="Moderation View"
-                    onClick={() => setModViewOpen(true, user.id)}
-                  />
-                </Protect>
-                {actions}
-              </div>
-            </div>
+						<div className="flex items-center gap-2.5">
+							<Protect permission={Permission.MANAGE_USERS}>
+								<IconButton
+									icon={UserCog}
+									variant="ghost"
+									size="default"
+									className="h-9 w-9 rounded-md"
+									title="Moderation View"
+									onClick={() => setModViewOpen(true, user.id)}
+								/>
+							</Protect>
+							{actions}
+						</div>
+					</div>
 
-            {footer && (
-              <div className="mt-4 pt-3 border-t border-border">{footer}</div>
-            )}
-          </div>
-        </PopoverContent>
-      </Popover>
-    );
-  }
-);
+					{footer && <div className="mt-4 pt-3 border-t border-border">{footer}</div>}
+				</div>
+			</PopoverContent>
+		</Popover>
+	);
+});
 
 UserPopover.displayName = 'UserPopover';
 
