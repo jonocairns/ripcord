@@ -78,12 +78,18 @@ const useAudioLevel = (audioStream: MediaStream | undefined) => {
 		acquiredContextRef.current = audioContext;
 		let cancelled = false;
 
+		// Clone the stream so the MediaStreamAudioSourceNode and any <audio>
+		// element that plays the original stream use independent tracks.
+		// Sharing the same MediaStream between an HTMLMediaElement and the
+		// Web Audio API causes intermittent static in Chromium/Electron.
+		const clonedStream = audioStream.clone();
+
 		const startAnalyser = () => {
 			if (cancelled) return;
 
 			try {
 				const analyser = audioContext.createAnalyser();
-				const source = audioContext.createMediaStreamSource(audioStream);
+				const source = audioContext.createMediaStreamSource(clonedStream);
 
 				analyser.fftSize = ANALYZER_FFT_SIZE;
 				analyser.minDecibels = ANALYZER_MIN_DECIBELS;
@@ -149,6 +155,8 @@ const useAudioLevel = (audioStream: MediaStream | undefined) => {
 				analyserRef.current.disconnect();
 				analyserRef.current = null;
 			}
+
+			clonedStream.getTracks().forEach((track) => track.stop());
 
 			if (acquiredContextRef.current) {
 				releaseSharedAudioContext(acquiredContextRef.current);
