@@ -22,7 +22,7 @@ import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useForm } from '@/hooks/use-form';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { ScreenAudioMode } from '@/runtime/types';
-import { type Resolution, VideoCodecPreference } from '@/types';
+import { MicQualityMode, type Resolution, VideoCodecPreference } from '@/types';
 import { useAvailableDevices } from './hooks/use-available-devices';
 import { MicrophoneTestPanel } from './microphone-test-panel';
 import ResolutionFpsControl from './resolution-fps-control';
@@ -36,7 +36,8 @@ const Devices = memo(() => {
 	const { inputDevices, videoDevices, loading: availableDevicesLoading } = useAvailableDevices();
 	const { devices, saveDevices, loading: devicesLoading } = useDevices();
 	const { values, onChange, setValues } = useForm(devices);
-	const showBrowserWasmNoiseSuppressionToggle = !!values.noiseSuppression;
+	const sidecarWillHandleNoiseSuppression = hasDesktopBridge && values.micQualityMode === MicQualityMode.EXPERIMENTAL;
+	const showBrowserWasmNoiseSuppressionToggle = !!values.noiseSuppression && !sidecarWillHandleNoiseSuppression;
 	const lastLoadedDevicesRef = useRef(devices);
 	const [desktopAppVersion, setDesktopAppVersion] = useState<string>();
 	const [capturingKeybindField, setCapturingKeybindField] = useState<TPushKeybindField | undefined>(undefined);
