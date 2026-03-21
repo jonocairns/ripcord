@@ -329,7 +329,8 @@ body {
 }
 
 .react-tweet-theme {
-	margin: 0;
+	/* biome-ignore lint/complexity/noImportantStyles: migration */
+	margin: 0 !important;
 }
 
 /* speaking indicators */
