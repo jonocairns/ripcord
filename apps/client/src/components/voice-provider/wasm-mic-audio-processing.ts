@@ -301,6 +301,12 @@ const createWasmMicAudioProcessingPipeline = async ({
 			onError?.(error);
 		};
 
+		workletNode.onprocessorerror = () => {
+			const error = new Error('Browser WASM voice filter worklet processor crashed');
+			console.error('[wasm-denoise] Worklet processor error:', error);
+			onError?.(error);
+		};
+
 		const track = destinationNode.stream.getAudioTracks()[0];
 
 		if (!track) {

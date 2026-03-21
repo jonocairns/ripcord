@@ -1061,6 +1061,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						dfnNoiseGateFloorDbfs: micProcessingConfig.sidecarNoiseGateFloorDbfs,
 						onWasmError: (error) => {
 							logVoice('Browser WASM voice filter runtime error', { error });
+
+							const pipeline = micAudioPipelineRef.current;
+							if (pipeline?.backend === 'browser-wasm') {
+								micAudioPipelineRef.current = undefined;
+								void pipeline.destroy().catch(() => {
+									// ignore teardown failures
+								});
+								toast.error('Noise suppression encountered an error and has been disabled.');
+							}
 						},
 					});
 

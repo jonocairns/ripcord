@@ -98,6 +98,10 @@ class Downsample48KhzTo16Khz {
 
 		return output;
 	}
+
+	reset() {
+		this.carry = [];
+	}
 }
 
 class Upsample16KhzTo48Khz {
@@ -126,6 +130,10 @@ class Upsample16KhzTo48Khz {
 		this.previousSample = previousSample;
 
 		return output;
+	}
+
+	reset() {
+		this.previousSample = undefined;
 	}
 }
 
@@ -473,6 +481,8 @@ const resetState = () => {
 	reportedOutputUnderruns = 0;
 	reportedOutputQueueFrames = 0;
 	pendingInput16Khz.length = 0;
+	downsampler.reset();
+	upsampler.reset();
 };
 
 const initializeWorker = async (message: TWorkerInitMessage) => {
