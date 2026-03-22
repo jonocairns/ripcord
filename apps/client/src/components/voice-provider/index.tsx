@@ -258,8 +258,6 @@ const getAudioOpusConfig = (channelId: number | undefined) => {
 		codecOptions: {
 			opusMaxAverageBitrate: bitrate,
 			opusDtx: dtx,
-			opusFec: false,
-			opusPacketLossPerc: 0,
 		},
 	};
 };
