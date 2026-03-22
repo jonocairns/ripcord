@@ -197,13 +197,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "v${{ steps.compute_version.outputs.version }}" \
-            apps/server/build/out/sharkord-linux-x64 \
-            apps/server/build/out/sharkord-windows-x64.exe \
-            apps/server/build/out/sharkord-macos-arm64 \
-            apps/server/build/out/release.json \
-            --title "v${{ steps.compute_version.outputs.version }}" \
-            --notes-file /tmp/release-notes.md
+          release_tag="v${{ steps.compute_version.outputs.version }}"
+          assets=(
+            apps/server/build/out/sharkord-linux-x64
+            apps/server/build/out/sharkord-windows-x64.exe
+            apps/server/build/out/sharkord-macos-arm64
+            apps/server/build/out/release.json
+          )
+
+          if gh release view "${release_tag}" >/dev/null 2>&1; then
+            gh release edit "${release_tag}" \
+              --title "${release_tag}" \
+              --notes-file /tmp/release-notes.md
+            gh release upload "${release_tag}" "${assets[@]}" --clobber
+          else
+            gh release create "${release_tag}" "${assets[@]}" \
+              --title "${release_tag}" \
+              --notes-file /tmp/release-notes.md
+          fi
 
   # ── Desktop build chains automatically after server release ────────
   release-desktop:
