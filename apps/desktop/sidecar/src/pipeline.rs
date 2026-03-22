@@ -7,7 +7,6 @@ const MIC_CAPTURE_RING_BUFFER_FRAMES: usize = 32;
 #[cfg(windows)]
 const MIC_CAPTURE_WORKER_IDLE_WAIT: Duration = Duration::from_millis(5);
 
-
 #[cfg(windows)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct StageStats {

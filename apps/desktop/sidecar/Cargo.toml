@@ -3,6 +3,22 @@ name = "sharkord-capture-sidecar"
 version = "0.1.0"
 edition = "2021"
 publish = false
+autotests = false
+
+[features]
+default = []
+voice-filter = [
+  "dep:aec3",
+  "dep:clap",
+  "dep:deep_filter",
+  "dep:earshot",
+  "dep:hound",
+  "dep:ndarray",
+  "dep:tract-core",
+  "dep:tract-hir",
+  "dep:tract-onnx",
+  "dep:tract-pulse",
+]
 
 [lib]
 name = "sharkord_capture_sidecar"
@@ -15,22 +31,28 @@ path = "src/main.rs"
 [[bin]]
 name = "voice-filter-file-test"
 path = "src/bin/voice-filter-file-test.rs"
+required-features = ["voice-filter"]
+
+[[test]]
+name = "audio_quality"
+path = "tests/audio_quality.rs"
+required-features = ["voice-filter"]
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
-hound = "3"
-aec3 = "0.1.5"
+clap = { version = "4", features = ["derive"], optional = true }
+hound = { version = "3", optional = true }
+aec3 = { version = "0.1.5", optional = true }
 base64 = "0.22.1"
 bytemuck = "1.20.0"
-earshot = "1.0.0"
-deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet.git", package = "deep_filter", default-features = false, features = ["tract", "logging", "default-model-ll"] }
-ndarray = "0.15.6"
+earshot = { version = "1.0.0", optional = true }
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet.git", package = "deep_filter", default-features = false, features = ["tract", "logging", "default-model-ll"], optional = true }
+ndarray = { version = "0.15.6", optional = true }
 serde = { version = "1.0.214", features = ["derive"] }
 serde_json = "1.0.132"
-tract-core = "=0.21.4"
-tract-hir = "=0.21.4"
-tract-onnx = "=0.21.4"
-tract-pulse = "=0.21.4"
+tract-core = { version = "=0.21.4", optional = true }
+tract-hir = { version = "=0.21.4", optional = true }
+tract-onnx = { version = "=0.21.4", optional = true }
+tract-pulse = { version = "=0.21.4", optional = true }
 uuid = { version = "1.11.0", features = ["v4"] }
 
 [dev-dependencies]

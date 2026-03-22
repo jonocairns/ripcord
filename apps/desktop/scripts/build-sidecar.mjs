@@ -9,6 +9,7 @@ const args = process.argv.slice(2);
 
 const isRelease = args.includes("--release");
 const optional = args.includes("--optional");
+const voiceFilter = args.includes("--voice-filter");
 const profile = isRelease ? "release" : "debug";
 const binaryName =
   process.platform === "win32"
@@ -50,6 +51,10 @@ const runCargoBuild = () => {
 
   if (isRelease) {
     buildArgs.push("--release");
+  }
+
+  if (voiceFilter) {
+    buildArgs.push("--features", "voice-filter");
   }
 
   const result = spawnSync("cargo", buildArgs, {

@@ -39,6 +39,8 @@ Per-app audio isolation depends on the Rust sidecar binary.
 3. Use Windows 10 22H2 or newer (Windows 11 recommended) for the best loopback compatibility.
 4. If startup fails, Ripcord falls back to system audio (or no audio) and displays a warning.
 
+If you are debugging the experimental microphone voice-filter path instead of per-app audio capture, build the full sidecar with `bun run build:sidecar:full`.
+
 ### Fallback matrix (audioMode = Per-app)
 
 1. Sidecar startup fails before sharing:

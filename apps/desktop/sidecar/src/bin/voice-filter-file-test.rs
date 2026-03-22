@@ -7,6 +7,7 @@
 //!
 //! ```sh
 //! cargo run --manifest-path apps/desktop/sidecar/Cargo.toml \
+//!           --features voice-filter \
 //!           --bin voice-filter-file-test -- \
 //!   --input ./sample.wav \
 //!   --output ./sample.filtered.wav \

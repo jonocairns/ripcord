@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DESKTOP_DIR="$ROOT_DIR/apps/desktop"
 CLIENT_DIR="$ROOT_DIR/apps/client"
 RUST_TARGET="x86_64-pc-windows-gnu"
+SIDECAR_FEATURES="${SHARKORD_SIDECAR_FEATURES:-}"
 SIDECAR_BINARY="sharkord-capture-sidecar.exe"
 SIDECAR_SOURCE="$DESKTOP_DIR/sidecar/target/$RUST_TARGET/release/$SIDECAR_BINARY"
 SIDECAR_TARGET_DIR="$DESKTOP_DIR/sidecar/bin/win32"
@@ -78,7 +79,11 @@ echo "Preparing desktop renderer assets..."
 (cd "$DESKTOP_DIR" && bun run prepare:renderer)
 
 echo "Building Windows sidecar ($RUST_TARGET)..."
-(cd "$DESKTOP_DIR" && cargo build --manifest-path sidecar/Cargo.toml --release --target "$RUST_TARGET")
+if [ -n "$SIDECAR_FEATURES" ]; then
+  (cd "$DESKTOP_DIR" && cargo build --manifest-path sidecar/Cargo.toml --release --target "$RUST_TARGET" --features "$SIDECAR_FEATURES")
+else
+  (cd "$DESKTOP_DIR" && cargo build --manifest-path sidecar/Cargo.toml --release --target "$RUST_TARGET")
+fi
 
 if [ ! -f "$SIDECAR_SOURCE" ]; then
   echo "Expected sidecar output not found: $SIDECAR_SOURCE"

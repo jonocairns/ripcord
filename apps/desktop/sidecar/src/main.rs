@@ -2,13 +2,13 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::VecDeque;
 #[cfg(any(windows, test))]
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::io::{self, BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-#[cfg(windows)]
+#[cfg(all(windows, feature = "voice-filter"))]
 use std::sync::OnceLock;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -26,42 +26,50 @@ use std::path::Path;
 use std::ptr;
 #[cfg(windows)]
 use windows::core::GUID;
+#[cfg(all(windows, feature = "voice-filter"))]
+use windows::core::PCWSTR;
 #[cfg(windows)]
-use windows::core::{IUnknown, Interface, PCWSTR, PWSTR};
+use windows::core::{IUnknown, Interface, PWSTR};
 #[cfg(windows)]
 use windows::Win32::Foundation::{
     BOOL, HANDLE, HWND, LPARAM, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
-#[cfg(windows)]
+#[cfg(all(windows, feature = "voice-filter"))]
 use windows::Win32::Media::Audio::{
     eCapture, eConsole, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
 };
 #[cfg(windows)]
 use windows::Win32::Media::Audio::{
-    ActivateAudioInterfaceAsync, AudioClientProperties, IActivateAudioInterfaceAsyncOperation,
-    IActivateAudioInterfaceCompletionHandler, IAudioCaptureClient, IAudioClient, IAudioClient2,
+    ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
+    IActivateAudioInterfaceCompletionHandler, IAudioCaptureClient, IAudioClient,
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_E_INVALID_STREAM_FLAG, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-    AUDCLNT_STREAMOPTIONS_RAW, AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
-    AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-    PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
-    WAVEFORMATEX,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AUDIOCLIENT_ACTIVATION_PARAMS,
+    AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+    VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX,
+};
+#[cfg(all(windows, feature = "voice-filter"))]
+use windows::Win32::Media::Audio::{
+    AudioClientProperties, IAudioClient2, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    AUDCLNT_STREAMOPTIONS_RAW,
 };
 #[cfg(windows)]
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
+#[cfg(all(windows, feature = "voice-filter"))]
+use windows::Win32::System::Threading::CreateEventW;
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
-    CreateEventW, OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_NAME_WIN32,
+    OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
 };
 #[cfg(windows)]
 use windows::Win32::System::Variant::VT_BLOB;
 #[cfg(windows)]
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "voice-filter"))]
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -71,22 +79,30 @@ use windows::Win32::UI::WindowsAndMessaging::{
 #[cfg(windows)]
 use windows_core::implement;
 
+#[cfg(feature = "voice-filter")]
 mod pipeline;
 
 // Re-export all DSP types so pipeline.rs can access them via `use super::*`.
+#[cfg(feature = "voice-filter")]
 pub use sharkord_capture_sidecar::voice_filter_core::*;
 
 const PROTOCOL_VERSION: u32 = 1;
 const PCM_ENCODING: &str = "f32le_base64";
 const APP_AUDIO_BINARY_EGRESS_FRAMING: &str = "length_prefixed_f32le_v1";
+const APP_AUDIO_FRAME_SIZE: usize = 960;
+const APP_AUDIO_SAMPLE_RATE: u32 = 48_000;
+const APP_AUDIO_CHANNELS: usize = 1;
+#[cfg(feature = "voice-filter")]
 const VOICE_FILTER_BINARY_FRAMING: &str = "length_prefixed_f32le_v1";
 #[cfg(windows)]
 const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
+#[cfg(feature = "voice-filter")]
 const MAX_VOICE_FILTER_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
+#[cfg(feature = "voice-filter")]
 const VOICE_FILTER_BINARY_EGRESS_FRAMING: &str = "length_prefixed_f32le_diag_v1";
 
 // Limiter: threshold just below full scale, ~1ms attack, ~100ms release at 48kHz
-#[cfg(windows)]
+#[cfg(all(windows, feature = "voice-filter"))]
 const MIC_CAPTURE_FRAME_SIZE: usize = 480; // 10ms at 48kHz — matches DeepFilterNet hop size
 
 #[cfg(windows)]
@@ -142,7 +158,7 @@ struct MicDevice {
     label: String,
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "voice-filter"))]
 const PKEY_DEVICE_FRIENDLY_NAME: PROPERTYKEY = PROPERTYKEY {
     fmtid: GUID::from_values(
         0xa45c_254e,
@@ -194,6 +210,7 @@ struct SetPushKeybindsParams {
     push_to_mute_keybind: Option<String>,
 }
 
+#[cfg(feature = "voice-filter")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StartVoiceFilterParams {
@@ -208,6 +225,7 @@ struct StartVoiceFilterParams {
     dfn_tuning: VoiceFilterDfnTuningParams,
 }
 
+#[cfg(feature = "voice-filter")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StartVoiceFilterWithCaptureParams {
@@ -223,12 +241,14 @@ struct StartVoiceFilterWithCaptureParams {
     dfn_tuning: VoiceFilterDfnTuningParams,
 }
 
+#[cfg(feature = "voice-filter")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StopVoiceFilterParams {
     session_id: Option<String>,
 }
 
+#[cfg(feature = "voice-filter")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VoiceFilterPushFrameParams {
@@ -243,6 +263,7 @@ struct VoiceFilterPushFrameParams {
     encoding: Option<String>,
 }
 
+#[cfg(feature = "voice-filter")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VoiceFilterPushReferenceFrameParams {
@@ -345,7 +366,6 @@ struct PushKeybindWatcher {
     handle: JoinHandle<()>,
 }
 
-
 #[derive(Debug)]
 struct AppAudioBinaryEgress {
     port: u16,
@@ -369,6 +389,7 @@ struct VoiceFilterBinaryIngress {
     handle: JoinHandle<()>,
 }
 
+#[cfg(feature = "voice-filter")]
 #[derive(Debug)]
 struct VoiceFilterBinaryFrame {
     session_id: String,
@@ -384,11 +405,14 @@ struct VoiceFilterBinaryFrame {
 #[derive(Default)]
 struct SidecarState {
     capture_session: Option<CaptureSession>,
+    #[cfg(feature = "voice-filter")]
     voice_filter_session: Option<VoiceFilterSession>,
     push_keybind_watcher: Option<PushKeybindWatcher>,
+    #[cfg(feature = "voice-filter")]
     mic_capture_stop_flag: Option<Arc<AtomicBool>>,
     // Binary egress stream for processed voice-filter frames. None until the
     // egress TCP server is started and set by main(). Arc clone is cheap.
+    #[cfg(feature = "voice-filter")]
     voice_filter_binary_egress_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 }
 
@@ -468,6 +492,7 @@ impl FrameQueue {
     }
 }
 
+#[cfg(feature = "voice-filter")]
 fn decode_f32le_base64(pcm_base64: &str) -> Result<Vec<f32>, String> {
     let decoded = BASE64
         .decode(pcm_base64)
@@ -493,7 +518,7 @@ fn now_unix_ms() -> u128 {
         .unwrap_or(0)
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "voice-filter"))]
 fn steady_now_ms() -> f64 {
     static START_TIME: OnceLock<(SystemTime, Instant)> = OnceLock::new();
 
@@ -578,7 +603,7 @@ fn enqueue_frame_event(
         "targetId": target_id,
         "sequence": sequence,
         "sampleRate": sample_rate,
-        "channels": TARGET_CHANNELS,
+        "channels": APP_AUDIO_CHANNELS,
         "frameCount": frame_count,
         "pcmBase64": pcm_base64,
         "protocolVersion": PROTOCOL_VERSION,
@@ -707,6 +732,7 @@ fn try_write_app_audio_binary_frame(
 //   [12] aec_erle_db + aec_delay_ms + aec_double_talk_confidence (f32 each, if bit 2)
 //   [4]  pcm_byte_length (u32)
 //   [M]  pcm data (f32le)
+#[cfg(feature = "voice-filter")]
 fn try_write_voice_filter_binary_egress_frame(
     stream_slot: &Arc<Mutex<Option<TcpStream>>>,
     session_id: &str,
@@ -827,6 +853,7 @@ fn try_write_voice_filter_binary_egress_frame(
     }
 }
 
+#[cfg(feature = "voice-filter")]
 fn enqueue_voice_filter_frame_event(
     queue: &Arc<FrameQueue>,
     session_id: &str,
@@ -881,6 +908,7 @@ fn enqueue_voice_filter_frame_event(
     }
 }
 
+#[cfg(feature = "voice-filter")]
 fn enqueue_voice_filter_ended_event(
     queue: &Arc<FrameQueue>,
     session_id: &str,
@@ -1483,10 +1511,10 @@ fn capture_loopback_audio(
         let audio_client = activate_process_loopback_client(target_pid)?;
         let capture_format = WAVEFORMATEX {
             wFormatTag: 0x0003, // WAVE_FORMAT_IEEE_FLOAT
-            nChannels: TARGET_CHANNELS as u16,
-            nSamplesPerSec: TARGET_SAMPLE_RATE,
-            nAvgBytesPerSec: TARGET_SAMPLE_RATE * TARGET_CHANNELS as u32 * 4,
-            nBlockAlign: (TARGET_CHANNELS * 4) as u16,
+            nChannels: APP_AUDIO_CHANNELS as u16,
+            nSamplesPerSec: APP_AUDIO_SAMPLE_RATE,
+            nAvgBytesPerSec: APP_AUDIO_SAMPLE_RATE * APP_AUDIO_CHANNELS as u32 * 4,
+            nBlockAlign: (APP_AUDIO_CHANNELS * 4) as u16,
             wBitsPerSample: 32,
             cbSize: 0,
         };
@@ -1576,9 +1604,9 @@ fn capture_loopback_audio(
                 }
 
                 let chunk = if (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0 {
-                    vec![0.0f32; frame_count as usize * TARGET_CHANNELS]
+                    vec![0.0f32; frame_count as usize * APP_AUDIO_CHANNELS]
                 } else {
-                    let sample_count = frame_count as usize * TARGET_CHANNELS;
+                    let sample_count = frame_count as usize * APP_AUDIO_CHANNELS;
                     unsafe { std::slice::from_raw_parts(data_ptr as *const f32, sample_count) }
                         .to_vec()
                 };
@@ -1587,9 +1615,10 @@ fn capture_loopback_audio(
 
                 let _ = unsafe { capture_client.ReleaseBuffer(frame_count) };
 
-                while pending.len() >= FRAME_SIZE * TARGET_CHANNELS {
-                    let frame_samples: Vec<f32> =
-                        pending.drain(..FRAME_SIZE * TARGET_CHANNELS).collect();
+                while pending.len() >= APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS {
+                    let frame_samples: Vec<f32> = pending
+                        .drain(..APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS)
+                        .collect();
                     let wrote_binary = app_audio_binary_stream
                         .as_ref()
                         .map(|stream_slot| {
@@ -1598,9 +1627,9 @@ fn capture_loopback_audio(
                                 session_id,
                                 target_id,
                                 sequence,
-                                TARGET_SAMPLE_RATE as usize,
-                                TARGET_CHANNELS,
-                                FRAME_SIZE,
+                                APP_AUDIO_SAMPLE_RATE as usize,
+                                APP_AUDIO_CHANNELS,
+                                APP_AUDIO_FRAME_SIZE,
                                 PROTOCOL_VERSION,
                                 0,
                                 &frame_samples,
@@ -1617,8 +1646,8 @@ fn capture_loopback_audio(
                             session_id,
                             target_id,
                             sequence,
-                            TARGET_SAMPLE_RATE as usize,
-                            FRAME_SIZE,
+                            APP_AUDIO_SAMPLE_RATE as usize,
+                            APP_AUDIO_FRAME_SIZE,
                             pcm_base64,
                         );
                     }
@@ -1715,7 +1744,11 @@ fn handle_capabilities_get() -> Result<Value, String> {
     } else {
         "unsupported"
     };
-    let voice_filter = "supported";
+    let voice_filter = if cfg!(feature = "voice-filter") {
+        "supported"
+    } else {
+        "unsupported"
+    };
 
     Ok(json!({
         "platform": platform,
@@ -1784,12 +1817,14 @@ fn stop_push_keybind_watcher(state: &mut SidecarState) {
     let _ = active_watcher.handle.join();
 }
 
+#[cfg(feature = "voice-filter")]
 fn stop_mic_capture(state: &mut SidecarState) {
     if let Some(flag) = state.mic_capture_stop_flag.take() {
         flag.store(true, Ordering::Relaxed);
     }
 }
 
+#[cfg(feature = "voice-filter")]
 fn stop_voice_filter_session(
     state: &mut SidecarState,
     frame_queue: &Arc<FrameQueue>,
@@ -1812,6 +1847,16 @@ fn stop_voice_filter_session(
     }
 
     state.voice_filter_session = Some(active_session);
+}
+
+#[cfg(not(feature = "voice-filter"))]
+fn stop_voice_filter_session(
+    _state: &mut SidecarState,
+    _frame_queue: &Arc<FrameQueue>,
+    _requested_session_id: Option<&str>,
+    _reason: &str,
+    _error: Option<String>,
+) {
 }
 
 fn handle_audio_capture_start(
@@ -1881,9 +1926,9 @@ fn handle_audio_capture_start(
     Ok(json!({
         "sessionId": session_id,
         "targetId": target_id,
-        "sampleRate": TARGET_SAMPLE_RATE,
-        "channels": TARGET_CHANNELS,
-        "framesPerBuffer": FRAME_SIZE,
+        "sampleRate": APP_AUDIO_SAMPLE_RATE,
+        "channels": APP_AUDIO_CHANNELS,
+        "framesPerBuffer": APP_AUDIO_FRAME_SIZE,
         "protocolVersion": PROTOCOL_VERSION,
         "encoding": PCM_ENCODING,
     }))
@@ -1982,7 +2027,7 @@ fn handle_push_keybinds_set(
 /// to a null-terminated UTF-16 string allocated with `CoTaskMem`.
 /// We read the string here (which copies the chars) and let `prop`
 /// be dropped normally so windows-rs calls `PropVariantClear`.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "voice-filter"))]
 unsafe fn read_propvariant_lpwstr(prop: &windows_core::PROPVARIANT) -> Option<String> {
     const VT_LPWSTR: u16 = 31;
     let raw = prop as *const windows_core::PROPVARIANT as *const u8;
@@ -1998,7 +2043,7 @@ unsafe fn read_propvariant_lpwstr(prop: &windows_core::PROPVARIANT) -> Option<St
     windows::core::PCWSTR(pwstr_ptr).to_string().ok()
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "voice-filter"))]
 fn list_mic_devices_windows() -> Vec<MicDevice> {
     use windows::Win32::System::Com::CoTaskMemFree;
 
@@ -2060,6 +2105,7 @@ fn list_mic_devices_windows() -> Vec<MicDevice> {
     devices
 }
 
+#[cfg(feature = "voice-filter")]
 fn handle_mic_devices_list() -> Result<Value, String> {
     #[cfg(windows)]
     {
@@ -2074,6 +2120,13 @@ fn handle_mic_devices_list() -> Result<Value, String> {
     }
 }
 
+#[cfg(not(feature = "voice-filter"))]
+fn handle_mic_devices_list() -> Result<Value, String> {
+    let empty: Vec<MicDevice> = Vec::new();
+    Ok(json!({ "devices": empty }))
+}
+
+#[cfg(feature = "voice-filter")]
 fn handle_voice_filter_start_with_capture(
     state_arc: Arc<Mutex<SidecarState>>,
     frame_queue: Arc<FrameQueue>,
@@ -2180,6 +2233,7 @@ fn handle_voice_filter_start_with_capture(
     Ok(response)
 }
 
+#[cfg(feature = "voice-filter")]
 fn handle_voice_filter_start(
     frame_queue: Arc<FrameQueue>,
     state: &mut SidecarState,
@@ -2249,6 +2303,7 @@ fn handle_voice_filter_start(
     Ok(response)
 }
 
+#[cfg(feature = "voice-filter")]
 fn process_voice_filter_audio_frame(
     state: &mut SidecarState,
     session_id: &str,
@@ -2276,6 +2331,7 @@ fn process_voice_filter_audio_frame(
     )
 }
 
+#[cfg(feature = "voice-filter")]
 fn emit_voice_filter_audio_frame(
     frame_queue: &Arc<FrameQueue>,
     egress_stream: Option<&Arc<Mutex<Option<TcpStream>>>>,
@@ -2318,6 +2374,7 @@ fn emit_voice_filter_audio_frame(
     }
 }
 
+#[cfg(feature = "voice-filter")]
 fn process_voice_filter_samples(
     frame_queue: &Arc<FrameQueue>,
     state: &mut SidecarState,
@@ -2358,6 +2415,7 @@ fn process_voice_filter_samples(
     Ok(())
 }
 
+#[cfg(feature = "voice-filter")]
 fn process_voice_filter_reference_samples(
     state: &mut SidecarState,
     session_id: &str,
@@ -2405,6 +2463,7 @@ fn process_voice_filter_reference_samples(
     Ok(())
 }
 
+#[cfg(feature = "voice-filter")]
 fn handle_voice_filter_push_frame(
     frame_queue: Arc<FrameQueue>,
     state: &mut SidecarState,
@@ -2440,6 +2499,7 @@ fn handle_voice_filter_push_frame(
     }))
 }
 
+#[cfg(feature = "voice-filter")]
 fn handle_voice_filter_push_reference_frame(
     state: &mut SidecarState,
     params: Value,
@@ -2473,6 +2533,7 @@ fn handle_voice_filter_push_reference_frame(
     }))
 }
 
+#[cfg(feature = "voice-filter")]
 fn handle_voice_filter_stop(
     frame_queue: Arc<FrameQueue>,
     state: &mut SidecarState,
@@ -2493,6 +2554,56 @@ fn handle_voice_filter_stop(
         "stopped": true,
         "protocolVersion": PROTOCOL_VERSION,
     }))
+}
+
+#[cfg(not(feature = "voice-filter"))]
+fn voice_filter_disabled_error() -> String {
+    "Voice filter and microphone capture support are disabled in this sidecar build.".to_string()
+}
+
+#[cfg(not(feature = "voice-filter"))]
+fn handle_voice_filter_start_with_capture(
+    _state_arc: Arc<Mutex<SidecarState>>,
+    _frame_queue: Arc<FrameQueue>,
+    _state: &mut SidecarState,
+    _params: Value,
+) -> Result<Value, String> {
+    Err(voice_filter_disabled_error())
+}
+
+#[cfg(not(feature = "voice-filter"))]
+fn handle_voice_filter_start(
+    _frame_queue: Arc<FrameQueue>,
+    _state: &mut SidecarState,
+    _params: Value,
+) -> Result<Value, String> {
+    Err(voice_filter_disabled_error())
+}
+
+#[cfg(not(feature = "voice-filter"))]
+fn handle_voice_filter_push_frame(
+    _frame_queue: Arc<FrameQueue>,
+    _state: &mut SidecarState,
+    _params: Value,
+) -> Result<Value, String> {
+    Err(voice_filter_disabled_error())
+}
+
+#[cfg(not(feature = "voice-filter"))]
+fn handle_voice_filter_push_reference_frame(
+    _state: &mut SidecarState,
+    _params: Value,
+) -> Result<Value, String> {
+    Err(voice_filter_disabled_error())
+}
+
+#[cfg(not(feature = "voice-filter"))]
+fn handle_voice_filter_stop(
+    _frame_queue: Arc<FrameQueue>,
+    _state: &mut SidecarState,
+    _params: Value,
+) -> Result<Value, String> {
+    Err(voice_filter_disabled_error())
 }
 
 fn start_app_audio_binary_egress() -> Result<AppAudioBinaryEgress, String> {
@@ -2556,6 +2667,7 @@ fn handle_audio_capture_binary_egress_info(
     }))
 }
 
+#[cfg(feature = "voice-filter")]
 fn start_voice_filter_binary_egress() -> Result<VoiceFilterBinaryEgress, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .map_err(|error| format!("Failed to bind voice-filter binary egress listener: {error}"))?;
@@ -2608,6 +2720,7 @@ fn start_voice_filter_binary_egress() -> Result<VoiceFilterBinaryEgress, String>
     })
 }
 
+#[cfg(feature = "voice-filter")]
 fn handle_voice_filter_binary_egress_info(
     egress: &VoiceFilterBinaryEgress,
 ) -> Result<Value, String> {
@@ -2618,6 +2731,7 @@ fn handle_voice_filter_binary_egress_info(
     }))
 }
 
+#[cfg(feature = "voice-filter")]
 fn read_exact_with_stop(
     stream: &mut TcpStream,
     buffer: &mut [u8],
@@ -2660,6 +2774,7 @@ fn read_exact_with_stop(
     Ok(true)
 }
 
+#[cfg(feature = "voice-filter")]
 fn parse_voice_filter_binary_frame(payload: &[u8]) -> Result<VoiceFilterBinaryFrame, String> {
     let mut offset = 0usize;
 
@@ -2776,6 +2891,7 @@ fn parse_voice_filter_binary_frame(payload: &[u8]) -> Result<VoiceFilterBinaryFr
     })
 }
 
+#[cfg(feature = "voice-filter")]
 fn handle_voice_filter_binary_stream(
     mut stream: TcpStream,
     frame_queue: Arc<FrameQueue>,
@@ -2852,6 +2968,7 @@ fn handle_voice_filter_binary_stream(
     }
 }
 
+#[cfg(feature = "voice-filter")]
 fn start_voice_filter_binary_ingress(
     frame_queue: Arc<FrameQueue>,
     state: Arc<Mutex<SidecarState>>,
@@ -2901,6 +3018,7 @@ fn start_voice_filter_binary_ingress(
     })
 }
 
+#[cfg(feature = "voice-filter")]
 fn handle_voice_filter_binary_ingress_info(
     binary_ingress: &VoiceFilterBinaryIngress,
 ) -> Result<Value, String> {
@@ -2909,6 +3027,33 @@ fn handle_voice_filter_binary_ingress_info(
         "framing": VOICE_FILTER_BINARY_FRAMING,
         "protocolVersion": PROTOCOL_VERSION,
     }))
+}
+
+#[cfg(not(feature = "voice-filter"))]
+fn start_voice_filter_binary_egress() -> Result<VoiceFilterBinaryEgress, String> {
+    Err(voice_filter_disabled_error())
+}
+
+#[cfg(not(feature = "voice-filter"))]
+fn handle_voice_filter_binary_egress_info(
+    _egress: &VoiceFilterBinaryEgress,
+) -> Result<Value, String> {
+    Err(voice_filter_disabled_error())
+}
+
+#[cfg(not(feature = "voice-filter"))]
+fn start_voice_filter_binary_ingress(
+    _frame_queue: Arc<FrameQueue>,
+    _state: Arc<Mutex<SidecarState>>,
+) -> Result<VoiceFilterBinaryIngress, String> {
+    Err(voice_filter_disabled_error())
+}
+
+#[cfg(not(feature = "voice-filter"))]
+fn handle_voice_filter_binary_ingress_info(
+    _binary_ingress: &VoiceFilterBinaryIngress,
+) -> Result<Value, String> {
+    Err(voice_filter_disabled_error())
 }
 
 fn main() {
@@ -2948,6 +3093,7 @@ fn main() {
 
     // Publish the egress stream into shared state so process_voice_filter_samples
     // can write binary frames without going through the FrameQueue.
+    #[cfg(feature = "voice-filter")]
     if let Some(egress) = voice_filter_binary_egress.as_ref() {
         if let Ok(mut state_lock) = state.lock() {
             state_lock.voice_filter_binary_egress_stream = Some(Arc::clone(&egress.stream));
@@ -3118,9 +3264,52 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
+        dedupe_window_entries_by_pid, parse_target_pid, parse_window_source_id, CaptureEndReason,
+    };
+
+    #[test]
+    fn parses_window_source_id() {
+        assert_eq!(parse_window_source_id("window:1337:0"), Some(1337));
+        assert_eq!(parse_window_source_id("screen:3:0"), None);
+        assert_eq!(parse_window_source_id("window:not-a-number:0"), None);
+    }
+
+    #[test]
+    fn parses_target_pid() {
+        assert_eq!(parse_target_pid("pid:4321"), Some(4321));
+        assert_eq!(parse_target_pid("pid:abc"), None);
+        assert_eq!(parse_target_pid("4321"), None);
+    }
+
+    #[test]
+    fn dedupes_entries_by_pid() {
+        let deduped = dedupe_window_entries_by_pid(vec![
+            (100, "First title".to_string()),
+            (100, "Second title".to_string()),
+            (200, "Other".to_string()),
+        ]);
+
+        assert_eq!(deduped.get(&100).map(String::as_str), Some("First title"));
+        assert_eq!(deduped.get(&200).map(String::as_str), Some("Other"));
+    }
+
+    #[test]
+    fn maps_capture_end_reasons() {
+        assert_eq!(CaptureEndReason::CaptureError.as_str(), "capture_error");
+        #[cfg(windows)]
+        assert_eq!(CaptureEndReason::CaptureStopped.as_str(), "capture_stopped");
+        #[cfg(windows)]
+        assert_eq!(CaptureEndReason::AppExited.as_str(), "app_exited");
+        #[cfg(windows)]
+        assert_eq!(CaptureEndReason::DeviceLost.as_str(), "device_lost");
+    }
+}
+
+#[cfg(all(test, feature = "voice-filter"))]
+mod voice_filter_tests {
+    use super::{
         collect_source_timed_reference_window, collect_timed_reference_window,
-        create_echo_canceller_backend, dedupe_window_entries_by_pid, parse_target_pid,
-        parse_window_source_id, AdaptiveEchoCanceller, CaptureEndReason, TimedEchoReferenceFrame,
+        create_echo_canceller_backend, AdaptiveEchoCanceller, TimedEchoReferenceFrame,
         ECHO_CANCELLATION_BACKEND_WEBRTC,
     };
     use std::collections::VecDeque;
@@ -3169,43 +3358,6 @@ mod tests {
         }
 
         window
-    }
-
-    #[test]
-    fn parses_window_source_id() {
-        assert_eq!(parse_window_source_id("window:1337:0"), Some(1337));
-        assert_eq!(parse_window_source_id("screen:3:0"), None);
-        assert_eq!(parse_window_source_id("window:not-a-number:0"), None);
-    }
-
-    #[test]
-    fn parses_target_pid() {
-        assert_eq!(parse_target_pid("pid:4321"), Some(4321));
-        assert_eq!(parse_target_pid("pid:abc"), None);
-        assert_eq!(parse_target_pid("4321"), None);
-    }
-
-    #[test]
-    fn dedupes_entries_by_pid() {
-        let deduped = dedupe_window_entries_by_pid(vec![
-            (100, "First title".to_string()),
-            (100, "Second title".to_string()),
-            (200, "Other".to_string()),
-        ]);
-
-        assert_eq!(deduped.get(&100).map(String::as_str), Some("First title"));
-        assert_eq!(deduped.get(&200).map(String::as_str), Some("Other"));
-    }
-
-    #[test]
-    fn maps_capture_end_reasons() {
-        assert_eq!(CaptureEndReason::CaptureError.as_str(), "capture_error");
-        #[cfg(windows)]
-        assert_eq!(CaptureEndReason::CaptureStopped.as_str(), "capture_stopped");
-        #[cfg(windows)]
-        assert_eq!(CaptureEndReason::AppExited.as_str(), "app_exited");
-        #[cfg(windows)]
-        assert_eq!(CaptureEndReason::DeviceLost.as_str(), "device_lost");
     }
 
     #[test]
