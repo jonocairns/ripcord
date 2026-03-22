@@ -105,6 +105,60 @@ const verifyTotpToken = (secret: string, token: string): boolean => {
   return delta !== null;
 };
 
+// ---- TOTP Replay Prevention ----
+// Tracks recently consumed (userId, code) pairs to prevent the same code from
+// being accepted twice within its validity window (TOTP_PERIOD * (2*TOTP_WINDOW + 1)).
+
+const REPLAY_WINDOW_MS = TOTP_PERIOD * (2 * TOTP_WINDOW + 1) * 1000; // 90s
+const REPLAY_CLEANUP_INTERVAL_MS = 60_000;
+
+/** Map of "userId:code" → expiry timestamp (ms) */
+const usedTotpCodes = new Map<string, number>();
+
+let replayCleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+const ensureReplayCleanup = () => {
+  if (replayCleanupTimer) return;
+  replayCleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [key, expiry] of usedTotpCodes) {
+      if (now >= expiry) usedTotpCodes.delete(key);
+    }
+    if (usedTotpCodes.size === 0 && replayCleanupTimer) {
+      clearInterval(replayCleanupTimer);
+      replayCleanupTimer = null;
+    }
+  }, REPLAY_CLEANUP_INTERVAL_MS);
+  // Allow the process to exit even if the timer is running
+  replayCleanupTimer.unref();
+};
+
+/**
+ * Validates a TOTP code and marks it as consumed so it cannot be replayed.
+ * Returns true only if the code is valid AND has not been used before within
+ * the validity window.
+ */
+const verifyAndConsumeTotpToken = (
+  userId: number,
+  secret: string,
+  token: string
+): boolean => {
+  const key = `${userId}:${token}`;
+
+  if (usedTotpCodes.has(key)) {
+    return false;
+  }
+
+  if (!verifyTotpToken(secret, token)) {
+    return false;
+  }
+
+  usedTotpCodes.set(key, Date.now() + REPLAY_WINDOW_MS);
+  ensureReplayCleanup();
+
+  return true;
+};
+
 // ---- Recovery Codes ----
 
 const generateRecoveryCodes = async (): Promise<{
@@ -189,6 +243,7 @@ export {
   encryptTotpSecret,
   generateRecoveryCodes,
   generateTotpSetup,
+  verifyAndConsumeTotpToken,
   verifyChallengeToken,
   verifyRecoveryCode,
   verifyTotpToken

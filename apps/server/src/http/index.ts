@@ -136,6 +136,10 @@ const createHttpServer = async (port: number = config.server.port) => {
 
                 return;
               }
+            } else {
+              logger.warn(
+                `${chalk.dim('[Rate Limiter HTTP]')} Missing IP address in request info, skipping rate limiting for /verify-2fa route.`
+              );
             }
 
             return await verify2faRouteHandler(req, res);

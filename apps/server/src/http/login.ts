@@ -8,6 +8,7 @@ import { publishUser } from '../db/publishers';
 import { consumeInvite } from '../db/queries/invites';
 import { getDefaultRole } from '../db/queries/roles';
 import { getSettings } from '../db/queries/server';
+import { getUserTotpData } from '../db/queries/totp';
 import { getUserByIdentity } from '../db/queries/users';
 import { userRoles, users } from '../db/schema';
 import { getWsInfo } from '../helpers/get-ws-info';
@@ -16,7 +17,6 @@ import {
   isArgon2Hash,
   verifyPassword
 } from '../helpers/password';
-import { getUserTotpData } from '../db/queries/totp';
 import { createChallengeToken } from '../helpers/totp';
 import { enqueueActivityLog } from '../queues/activity-log';
 import { invariant } from '../utils/invariant';

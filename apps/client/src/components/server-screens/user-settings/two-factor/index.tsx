@@ -15,7 +15,7 @@ type TSetupData = {
 	recoveryCodes: string[];
 };
 
-type TStep = 'idle' | 'setup' | 'confirm' | 'disable' | 'regenerate';
+type TStep = 'idle' | 'setup-password' | 'setup' | 'confirm' | 'disable' | 'regenerate';
 
 const TwoFactor = memo(() => {
 	const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -24,6 +24,10 @@ const TwoFactor = memo(() => {
 	const [confirmCode, setConfirmCode] = useState('');
 	const [confirmError, setConfirmError] = useState('');
 	const [loading, setLoading] = useState(false);
+
+	// Setup form
+	const [setupPassword, setSetupPassword] = useState('');
+	const [setupPasswordError, setSetupPasswordError] = useState('');
 
 	// Disable form
 	const [disablePassword, setDisablePassword] = useState('');
@@ -51,18 +55,22 @@ const TwoFactor = memo(() => {
 	}, [fetchStatus]);
 
 	const onStartSetup = useCallback(async () => {
+		if (!setupPassword) return;
+
 		setLoading(true);
+		setSetupPasswordError('');
 		try {
 			const trpc = getTRPCClient();
-			const result = await trpc.users.totpGenerateSetup.mutate();
+			const result = await trpc.users.totpGenerateSetup.mutate({ password: setupPassword });
 			setSetupData(result);
 			setStep('setup');
-		} catch {
-			toast.error('Failed to start 2FA setup');
+		} catch (error: any) {
+			const msg = error?.data?.zodError?.fieldErrors?.password?.[0] || error?.message || 'Failed to start 2FA setup';
+			setSetupPasswordError(msg);
 		} finally {
 			setLoading(false);
 		}
-	}, []);
+	}, [setupPassword]);
 
 	const onConfirmSetup = useCallback(async () => {
 		if (!setupData || confirmCode.length !== 6) return;
@@ -158,6 +166,47 @@ const TwoFactor = memo(() => {
 
 	if (enabled === null) return null;
 
+	// Setup flow: password re-authentication
+	if (step === 'setup-password') {
+		return (
+			<Card>
+				<CardHeader>
+					<CardTitle>Set Up Two-Factor Authentication</CardTitle>
+					<CardDescription>Enter your password to continue.</CardDescription>
+				</CardHeader>
+				<CardContent className="space-y-4">
+					<Group label="Password">
+						<Input
+							type="password"
+							value={setupPassword}
+							onChange={(e) => {
+								setSetupPassword(e.target.value);
+								setSetupPasswordError('');
+							}}
+							onEnter={onStartSetup}
+						/>
+					</Group>
+					{setupPasswordError && <p className="text-xs text-destructive">{setupPasswordError}</p>}
+				</CardContent>
+				<CardFooter className="justify-end gap-2">
+					<Button
+						variant="ghost"
+						onClick={() => {
+							setStep('idle');
+							setSetupPassword('');
+							setSetupPasswordError('');
+						}}
+					>
+						Cancel
+					</Button>
+					<Button onClick={onStartSetup} disabled={loading || !setupPassword}>
+						Continue
+					</Button>
+				</CardFooter>
+			</Card>
+		);
+	}
+
 	// Setup flow: show QR code + recovery codes
 	if (step === 'setup' && setupData) {
 		return (
@@ -245,6 +294,7 @@ const TwoFactor = memo(() => {
 							setStep('idle');
 							setSetupData(null);
 							setConfirmCode('');
+							setSetupPassword('');
 						}}
 					>
 						Cancel
@@ -450,7 +500,7 @@ const TwoFactor = memo(() => {
 						</Button>
 					</>
 				) : (
-					<Button onClick={onStartSetup} disabled={loading}>
+					<Button onClick={() => setStep('setup-password')} disabled={loading}>
 						Enable 2FA
 					</Button>
 				)}

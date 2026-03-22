@@ -5,9 +5,9 @@ import { getUserTotpData, updateUserRecoveryCodes } from '../db/queries/totp';
 import { getUserById } from '../db/queries/users';
 import {
   decryptTotpSecret,
+  verifyAndConsumeTotpToken,
   verifyChallengeToken,
-  verifyRecoveryCode,
-  verifyTotpToken
+  verifyRecoveryCode
 } from '../helpers/totp';
 import { enqueueActivityLog } from '../queues/activity-log';
 import { issueAuthTokens } from './auth-tokens';
@@ -54,8 +54,6 @@ const verify2faRouteHandler = async (
     );
   }
 
-  const decryptedSecret = await decryptTotpSecret(totpData.totpSecret);
-
   if (data.isRecoveryCode) {
     const storedCodes: string[] = totpData.totpRecoveryCodes
       ? JSON.parse(totpData.totpRecoveryCodes)
@@ -78,7 +76,12 @@ const verify2faRouteHandler = async (
       details: { remainingCodes: remainingCodes.length }
     });
   } else {
-    const isValid = verifyTotpToken(decryptedSecret, data.code);
+    const decryptedSecret = await decryptTotpSecret(totpData.totpSecret);
+    const isValid = verifyAndConsumeTotpToken(
+      user.id,
+      decryptedSecret,
+      data.code
+    );
 
     if (!isValid) {
       throw new HttpValidationError('code', 'Invalid authentication code');

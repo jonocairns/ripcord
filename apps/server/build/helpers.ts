@@ -1,7 +1,7 @@
 import type { TArtifact } from '@sharkord/shared';
 import {
-  validateReleaseMetadata,
-  type TReleaseMetadata
+  type TReleaseMetadata,
+  validateReleaseMetadata
 } from 'bun-sfe-autoupdater';
 import fs from 'fs/promises';
 import path from 'path';
@@ -157,7 +157,6 @@ const getMediasoupVersion = async () => {
 
   return serverPkg.dependencies['mediasoup'].replace('^', '');
 };
-
 
 type TTarget = {
   out: string;

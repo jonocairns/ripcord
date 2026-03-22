@@ -17,7 +17,7 @@ import {
   encryptTotpSecret,
   generateRecoveryCodes,
   generateTotpSetup,
-  verifyTotpToken
+  verifyAndConsumeTotpToken
 } from '../../helpers/totp';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
@@ -40,28 +40,48 @@ const totpStatusRoute = protectedProcedure.query(async ({ ctx }) => {
   return { enabled };
 });
 
-const totpGenerateSetupRoute = protectedProcedure.mutation(async ({ ctx }) => {
-  const settings = await getSettings();
-  const { secret, qrCodeDataUrl } = await generateTotpSetup(
-    ctx.user.identity,
-    settings.name
-  );
-  const { plainCodes, hashedCodes } = await generateRecoveryCodes();
+const totpGenerateSetupRoute = protectedProcedure
+  .input(
+    z.object({
+      password: z.string().min(1)
+    })
+  )
+  .mutation(async ({ ctx, input }) => {
+    const user = await db
+      .select({ password: users.password })
+      .from(users)
+      .where(eq(users.id, ctx.userId))
+      .get();
 
-  const serverToken = await getServerToken();
-  const setupToken = jwt.sign(
-    { secret, hashedCodes, purpose: 'totp-setup' } satisfies TSetupPayload,
-    serverToken,
-    { expiresIn: SETUP_TOKEN_EXPIRES_IN }
-  );
+    invariant(user, { code: 'NOT_FOUND', message: 'User not found' });
 
-  return {
-    setupToken,
-    qrCodeDataUrl,
-    secret, // base32 secret for manual entry
-    recoveryCodes: plainCodes
-  };
-});
+    const passwordValid = await verifyPassword(input.password, user.password);
+
+    if (!passwordValid) {
+      return ctx.throwValidationError('password', 'Password is incorrect');
+    }
+
+    const settings = await getSettings();
+    const { secret, qrCodeDataUrl } = await generateTotpSetup(
+      ctx.user.identity,
+      settings.name
+    );
+    const { plainCodes, hashedCodes } = await generateRecoveryCodes();
+
+    const serverToken = await getServerToken();
+    const setupToken = jwt.sign(
+      { secret, hashedCodes, purpose: 'totp-setup' } satisfies TSetupPayload,
+      serverToken,
+      { expiresIn: SETUP_TOKEN_EXPIRES_IN }
+    );
+
+    return {
+      setupToken,
+      qrCodeDataUrl,
+      secret, // base32 secret for manual entry
+      recoveryCodes: plainCodes
+    };
+  });
 
 const totpConfirmSetupRoute = protectedProcedure
   .input(
@@ -87,7 +107,11 @@ const totpConfirmSetupRoute = protectedProcedure
       ctx.throwValidationError('setupToken', 'Invalid setup token');
     }
 
-    const isValid = verifyTotpToken(payload.secret, input.code);
+    const isValid = verifyAndConsumeTotpToken(
+      ctx.userId,
+      payload.secret,
+      input.code
+    );
 
     if (!isValid) {
       ctx.throwValidationError(
@@ -146,7 +170,11 @@ const totpDisableRoute = protectedProcedure
     }
 
     const decryptedSecret = await decryptTotpSecret(totpData.totpSecret);
-    const isValid = verifyTotpToken(decryptedSecret, input.code);
+    const isValid = verifyAndConsumeTotpToken(
+      ctx.userId,
+      decryptedSecret,
+      input.code
+    );
 
     if (!isValid) {
       return ctx.throwValidationError('code', 'Invalid authentication code');
@@ -217,7 +245,11 @@ const totpRegenerateRecoveryCodesRoute = protectedProcedure
     }
 
     const decryptedSecret = await decryptTotpSecret(totpData.totpSecret);
-    const isValid = verifyTotpToken(decryptedSecret, input.code);
+    const isValid = verifyAndConsumeTotpToken(
+      ctx.userId,
+      decryptedSecret,
+      input.code
+    );
 
     if (!isValid) {
       return ctx.throwValidationError('code', 'Invalid authentication code');
