@@ -64,7 +64,7 @@ const defaultRouterOptions: RouterOptions<AppData> = {
       channels: 2,
       parameters: {
         useinbandfec: 1,
-        usedtx: 0
+        usedtx: 1
       }
     }
   ]
