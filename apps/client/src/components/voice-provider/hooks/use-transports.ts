@@ -288,6 +288,7 @@ const useTransports = ({
 					kind,
 					remoteId,
 					rtpCapabilities,
+					paused: true,
 				});
 
 				logVoice('Got consumer parameters', {
@@ -343,25 +344,6 @@ const useTransports = ({
 
 				consumers.current[remoteId][consumerKind] = newConsumer;
 
-				const receiver = newConsumer.rtpReceiver;
-
-				if (receiver) {
-					try {
-						const isBroadcast = kind === StreamKind.EXTERNAL_VIDEO || kind === StreamKind.EXTERNAL_AUDIO;
-
-						// Broadcast content gets a large buffer for smooth playback.
-						// Interactive voice gets a small buffer to absorb network jitter
-						// without adding perceptible latency.
-						const delayHint = isBroadcast ? 0.5 : 0.08;
-						const jitterTarget = isBroadcast ? 500 : 80;
-
-						(receiver as unknown as { playoutDelayHint: number }).playoutDelayHint = delayHint;
-						(receiver as unknown as { jitterBufferTarget: number }).jitterBufferTarget = jitterTarget;
-					} catch {
-						// Older browsers may not support these properties
-					}
-				}
-
 				const stream = new MediaStream();
 
 				stream.addTrack(newConsumer.track);
@@ -373,6 +355,21 @@ const useTransports = ({
 				}
 
 				removePendingStream(remoteId, kind);
+
+				try {
+					await trpc.voice.resumeConsumer.mutate({
+						remoteId,
+						kind,
+					});
+				} catch (error) {
+					logVoice('Error resuming remote consumer — closing stale consumer', {
+						error,
+						remoteId,
+						kind,
+					});
+
+					newConsumer.close();
+				}
 			} catch (error) {
 				logVoice('Error consuming remote producer', { error });
 			} finally {

@@ -64,7 +64,7 @@ const defaultRouterOptions: RouterOptions<AppData> = {
       channels: 2,
       parameters: {
         useinbandfec: 1,
-        usedtx: 0
+        usedtx: 1
       }
     }
   ]
@@ -610,6 +610,20 @@ class VoiceRuntime {
     }
 
     consumer.close();
+  };
+
+  public resumeConsumer = async (
+    userId: number,
+    remoteId: number,
+    kind: StreamKind
+  ) => {
+    const consumer = this.consumers[userId]?.[remoteId]?.[kind];
+
+    if (!consumer || consumer.closed) {
+      return;
+    }
+
+    await consumer.resume();
   };
 
   public createExternalStream = (options: {

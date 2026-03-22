@@ -100,6 +100,8 @@ const channels = sqliteTable(
     fileAccessToken: text('file_access_token').notNull().unique(),
     fileAccessTokenUpdatedAt: integer('file_access_token_updated_at').notNull(),
     private: integer('private', { mode: 'boolean' }).notNull().default(false),
+    voiceBitrate: integer('voice_bitrate').default(96000),
+    voiceDtx: integer('voice_dtx', { mode: 'boolean' }).default(false),
     position: integer('position').notNull(),
     categoryId: integer('category_id').references(() => categories.id, {
       onDelete: 'cascade'

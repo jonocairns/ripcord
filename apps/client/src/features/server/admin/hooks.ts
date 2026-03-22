@@ -241,6 +241,17 @@ export const useHasUpdates = () => {
 	return hasUpdates;
 };
 
+const normalizeVoiceBitrate = (value: number | null | undefined) => {
+	switch (value) {
+		case 64_000:
+		case 96_000:
+		case 128_000:
+			return value;
+		default:
+			return undefined;
+	}
+};
+
 export const useAdminChannelGeneral = (channelId: number) => {
 	const [loading, setLoading] = useState(true);
 	const [errors, setErrors] = useState<TTrpcErrors>({});
@@ -265,6 +276,8 @@ export const useAdminChannelGeneral = (channelId: number) => {
 				name: channel?.name ?? '',
 				topic: channel?.topic ?? null,
 				private: channel?.private ?? false,
+				voiceBitrate: normalizeVoiceBitrate(channel?.voiceBitrate),
+				voiceDtx: channel?.voiceDtx ?? undefined,
 			});
 
 			toast.success('Channel updated');
@@ -275,7 +288,7 @@ export const useAdminChannelGeneral = (channelId: number) => {
 	}, [channel, channelId]);
 
 	const onChange = useCallback(
-		(field: keyof TChannel, value: string | null | boolean) => {
+		(field: keyof TChannel, value: string | null | boolean | number) => {
 			if (!channel) return;
 			setChannel((c) => (c ? { ...c, [field]: value } : c));
 			setErrors((e) => ({ ...e, [field]: undefined }));
