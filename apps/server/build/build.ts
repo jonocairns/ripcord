@@ -1,42 +1,12 @@
 import fs from 'fs/promises';
 import path from 'path';
-import semver from 'semver';
-import { parseArgs } from 'util';
 import { zipDirectory } from '../src/helpers/zip';
 import {
   compile,
-  getCurrentVersion,
   getVersionInfo,
-  patchPackageJsons,
   rmIfExists,
   type TTarget
 } from './helpers';
-
-const { values } = parseArgs({
-  args: Bun.argv,
-  options: {
-    bump: {
-      type: 'string',
-      default: 'none'
-    }
-  },
-  strict: true,
-  allowPositionals: true
-});
-
-if (values.bump && values.bump !== 'none') {
-  const newVersion = semver.inc(
-    await getCurrentVersion(),
-    values.bump as semver.ReleaseType
-  );
-
-  if (!newVersion) {
-    console.error('Failed to increment version');
-    process.exit(1);
-  }
-
-  await patchPackageJsons(newVersion);
-}
 
 const clientCwd = path.resolve(process.cwd(), '..', 'client');
 const serverCwd = process.cwd();
@@ -82,10 +52,8 @@ console.log('Compiling server with Bun...');
 
 const targets: TTarget[] = [
   { out: 'sharkord-linux-x64', target: 'bun-linux-x64' },
-  { out: 'sharkord-linux-arm64', target: 'bun-linux-arm64' },
   { out: 'sharkord-windows-x64.exe', target: 'bun-windows-x64' },
   { out: 'sharkord-macos-arm64', target: 'bun-darwin-arm64' }
-  // mediasoup doesn't support macOS x64
 ];
 
 for (const target of targets) {

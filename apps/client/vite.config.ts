@@ -16,6 +16,6 @@ export default defineConfig({
     }
   },
   define: {
-    VITE_APP_VERSION: JSON.stringify(pkg.version)
+    VITE_APP_VERSION: JSON.stringify(process.env.SHARKORD_VERSION || pkg.version)
   }
 });
