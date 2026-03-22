@@ -113,10 +113,6 @@ const downloadMediasoupBinary = async (
       url += `mediasoup-worker-${version}-linux-x64-kernel6.tgz`;
       fileName = 'mediasoup-worker';
       break;
-    case 'bun-linux-arm64':
-      url += `mediasoup-worker-${version}-linux-arm64-kernel6.tgz`;
-      fileName = 'mediasoup-worker';
-      break;
     case 'bun-windows-x64':
       url += `mediasoup-worker-${version}-win32-x64.tgz`;
       fileName = 'mediasoup-worker.exe';
