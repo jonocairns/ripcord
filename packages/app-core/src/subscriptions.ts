@@ -1,18 +1,18 @@
-import {
-	Permission,
-	type TChannel,
-	type TChannelUserPermissionsMap,
-	type TCommandInfo,
-	type TCommandsMapByPlugin,
-	type TExternalStream,
-	type TJoinedEmoji,
-	type TJoinedMessage,
-	type TJoinedPublicUser,
-	type TJoinedRole,
-	type TPublicServerSettings,
-	type TVoiceUserState,
-	UserStatus,
+import type {
+	TChannel,
+	TChannelUserPermissionsMap,
+	TCommandInfo,
+	TCommandsMapByPlugin,
+	TExternalStream,
+	TJoinedEmoji,
+	TJoinedMessage,
+	TJoinedPublicUser,
+	TJoinedRole,
+	TPublicServerSettings,
+	TVoiceUserState,
 } from '@sharkord/shared';
+import { Permission } from '@sharkord/shared/src/statics/permissions';
+import { UserStatus } from '@sharkord/shared/src/types';
 import { getEffects } from './adapters';
 import { channelByIdSelector, channelReadStateByIdSelector, selectedChannelIdSelector } from './channels-selectors';
 import {

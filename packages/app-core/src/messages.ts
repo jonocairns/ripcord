@@ -1,4 +1,5 @@
-import { DEFAULT_MESSAGES_LIMIT, type TJoinedMessage } from '@sharkord/shared';
+import type { TJoinedMessage } from '@sharkord/shared';
+import { DEFAULT_MESSAGES_LIMIT } from '@sharkord/shared/src/statics';
 import { addMessagesToStore } from './message-store';
 import { useServerStore } from './server-store';
 import { getTRPCClient } from './trpc';

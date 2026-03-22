@@ -1,4 +1,4 @@
-import { DisconnectCode } from '@sharkord/shared';
+import { DisconnectCode } from '@sharkord/shared/src/statics';
 
 const shouldRestoreVoiceAfterDisconnect = (code: number): boolean => {
 	return code !== DisconnectCode.KICKED && code !== DisconnectCode.BANNED;

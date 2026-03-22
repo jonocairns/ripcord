@@ -1,4 +1,5 @@
-import { TYPING_MS, type TJoinedMessage } from '@sharkord/shared';
+import type { TJoinedMessage } from '@sharkord/shared';
+import { TYPING_MS } from '@sharkord/shared/src/statics';
 import { getEffects } from './adapters';
 import { selectedChannelIdSelector } from './channels-selectors';
 import { getTRPCClient } from './trpc';

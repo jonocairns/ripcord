@@ -1,4 +1,5 @@
-import { ChannelPermission, type TFile, type TSettings, type TUser } from ".";
+import { ChannelPermission } from './statics/permissions';
+import type { TFile, TSettings, TUser } from './tables';
 
 export enum ChannelType {
   TEXT = "TEXT",

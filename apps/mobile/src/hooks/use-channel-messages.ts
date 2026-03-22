@@ -143,18 +143,14 @@ const buildOptimisticMessage = ({
 });
 
 const EMPTY_MESSAGES: TJoinedMessage[] = [];
+const EMPTY_TYPING_USER_IDS: number[] = [];
 
 const useChannelMessages = (channelId: number) => {
 	const messages = useServerStore((state) => state.messagesMap[channelId] ?? EMPTY_MESSAGES);
 	const channel = useServerStore((state) => state.channels.find((entry) => entry.id === channelId));
 	const ownUserId = useServerStore((state) => state.ownUserId);
-	const typingUsers = useServerStore((state) => {
-		const typingIds = state.typingMap[channelId] ?? [];
-		return typingIds
-			.filter((id) => id !== state.ownUserId)
-			.map((id) => state.users.find((user) => user.id === id)?.name)
-			.filter((value): value is string => Boolean(value));
-	});
+	const typingUserIds = useServerStore((state) => state.typingMap[channelId] ?? EMPTY_TYPING_USER_IDS);
+	const users = useServerStore((state) => state.users);
 
 	const [composerValue, setComposerValue] = useState('');
 	const [editingMessageId, setEditingMessageId] = useState<number>();
@@ -298,6 +294,13 @@ const useChannelMessages = (channelId: number) => {
 			return changed ? next : current;
 		});
 	}, [messages]);
+
+	const typingUsers = useMemo(() => {
+		return typingUserIds
+			.filter((id) => id !== ownUserId)
+			.map((id) => users.find((user) => user.id === id)?.name)
+			.filter((value): value is string => Boolean(value));
+	}, [ownUserId, typingUserIds, users]);
 
 	const displayedMessages = useMemo<TDisplayedMessage[]>(() => {
 		const resolvedMessageIds = new Set(

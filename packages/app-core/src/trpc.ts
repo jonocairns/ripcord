@@ -1,5 +1,6 @@
-import type { AppRouter, TConnectionParams } from '@sharkord/shared';
-import { DisconnectCode } from '@sharkord/shared';
+import type { AppRouter } from '@sharkord/shared/src/trpc';
+import type { TConnectionParams } from '@sharkord/shared/src/types';
+import { DisconnectCode } from '@sharkord/shared/src/statics';
 import { createTRPCProxyClient, createWSClient, wsLink } from '@trpc/client';
 import { getEffects, getServerConfigAdapter, getStorageAdapter } from './adapters';
 import { currentVoiceChannelIdSelector } from './channels-selectors';

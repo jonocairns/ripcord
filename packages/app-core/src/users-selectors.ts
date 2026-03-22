@@ -1,4 +1,5 @@
-import { type TJoinedPublicUser, UserStatus } from '@sharkord/shared';
+import type { TJoinedPublicUser } from '@sharkord/shared';
+import { UserStatus } from '@sharkord/shared/src/types';
 import type { IServerState } from './server-store';
 
 const STATUS_ORDER: Record<string, number> = {

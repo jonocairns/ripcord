@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
-import { ChannelType } from '@sharkord/shared';
+import { ChannelType } from '@sharkord/shared/src/types';
 import { useServerStore } from '@sharkord/app-core';
 import { syncPushRegistration } from '@/lib/notifications';
 

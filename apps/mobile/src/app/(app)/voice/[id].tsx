@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useNavigation } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useServerStore } from '@sharkord/app-core';
@@ -7,17 +7,12 @@ import { getTRPCClient } from '@sharkord/app-core';
 
 export default function VoiceChannelScreen() {
 	const params = useLocalSearchParams<{ id: string }>();
-	const navigation = useNavigation();
 	const channelId = Number(params.id);
 	const channel = useServerStore((state) => state.channels.find((entry) => entry.id === channelId));
 	const currentVoiceChannelId = useServerStore(currentVoiceChannelIdSelector);
 	const ownVoiceState = useServerStore(ownVoiceStateSelector);
 	const voiceChannelState = useServerStore((state) => state.voiceMap[channelId]);
 	const [loading, setLoading] = useState(false);
-
-	useEffect(() => {
-		navigation.setOptions({ title: channel?.name ?? 'Voice' });
-	}, [channel?.name, navigation]);
 
 	useEffect(() => {
 		if (!channelId || currentVoiceChannelId === channelId) {

@@ -1,5 +1,5 @@
 import type { TServerInfo, TTempFile } from '@sharkord/shared';
-import { UploadHeaders } from '@sharkord/shared';
+import { UploadHeaders } from '@sharkord/shared/src/statics/permissions';
 import { getServerConfigAdapter, getStorageAdapter } from './adapters';
 
 type TAuthResponse = {

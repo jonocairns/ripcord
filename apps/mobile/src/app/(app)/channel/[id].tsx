@@ -1,19 +1,15 @@
-import { useLocalSearchParams, useNavigation } from 'expo-router';
-import { useEffect } from 'react';
-import { Pressable, Text, TextInput, useWindowDimensions, View } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+import { useLocalSearchParams } from 'expo-router';
+import { FlatList, Pressable, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useServerStore } from '@sharkord/app-core';
 import { MessageContent } from '@/components/message-content';
 import { useChannelMessages } from '@/hooks/use-channel-messages';
 
 export default function ChannelScreen() {
 	const params = useLocalSearchParams<{ id: string }>();
-	const navigation = useNavigation();
 	const { width } = useWindowDimensions();
 	const channelId = Number(params.id);
 	const {
 		cancelEditing,
-		channel,
 		composerValue,
 		deleteMessage,
 		displayedMessages,
@@ -34,13 +30,9 @@ export default function ChannelScreen() {
 		typingUsers,
 	} = useChannelMessages(channelId);
 
-	useEffect(() => {
-		navigation.setOptions({ title: channel?.name ?? 'Channel' });
-	}, [channel?.name, navigation]);
-
 	return (
 		<View style={{ backgroundColor: '#08121c', flex: 1 }}>
-			<FlashList
+			<FlatList
 				contentContainerStyle={{ padding: 16 }}
 				data={displayedMessages}
 				keyExtractor={(item) => String(item.id)}

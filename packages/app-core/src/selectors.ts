@@ -1,4 +1,4 @@
-import { OWNER_ROLE_ID } from '@sharkord/shared';
+import { OWNER_ROLE_ID } from '@sharkord/shared/src/statics';
 import { currentVoiceChannelIdSelector } from './channels-selectors';
 import { typingMapSelector } from './messages-selectors';
 import { rolesSelector } from './roles-selectors';

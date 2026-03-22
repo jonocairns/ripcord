@@ -1,5 +1,4 @@
 import { Tabs, TabList, TabTrigger, TabSlot, type TabTriggerSlotProps, type TabListProps } from 'expo-router/ui';
-import { SymbolView } from 'expo-symbols';
 import { Pressable, useColorScheme, View, StyleSheet } from 'react-native';
 
 import { ExternalLink } from './external-link';
@@ -40,7 +39,7 @@ export function TabButton({ children, isFocused, ...props }: TabTriggerSlotProps
 
 export function CustomTabList(props: TabListProps) {
 	const scheme = useColorScheme();
-	const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
+	const colors = Colors[scheme ?? 'light'];
 
 	return (
 		<View {...props} style={styles.tabListContainer}>
@@ -54,7 +53,9 @@ export function CustomTabList(props: TabListProps) {
 				<ExternalLink href="https://docs.expo.dev" asChild>
 					<Pressable style={styles.externalPressable}>
 						<ThemedText type="link">Docs</ThemedText>
-						<SymbolView tintColor={colors.text} name={{ ios: 'arrow.up.right.square', web: 'link' }} size={12} />
+						<ThemedText style={{ color: colors.text }} type="smallBold">
+							↗
+						</ThemedText>
 					</Pressable>
 				</ExternalLink>
 			</ThemedView>
