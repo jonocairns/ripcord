@@ -14,6 +14,10 @@ export enum ActivityLogType {
   USER_UPDATED_PASSWORD = "USER_UPDATED_PASSWORD",
   USER_RESET_PASSWORD = "USER_RESET_PASSWORD",
   USER_DELETED = "USER_DELETED",
+  USER_ENABLED_2FA = "USER_ENABLED_2FA",
+  USER_DISABLED_2FA = "USER_DISABLED_2FA",
+  USER_USED_RECOVERY_CODE = "USER_USED_RECOVERY_CODE",
+  USER_REGENERATED_RECOVERY_CODES = "USER_REGENERATED_RECOVERY_CODES",
   // -------------------- ROLES --------------------
   CREATED_ROLE = "CREATED_ROLE",
   DELETED_ROLE = "DELETED_ROLE",
@@ -79,6 +83,12 @@ export type TActivityLogDetailsMap = {
     targetUserId: number;
     deletedBy: number;
   };
+  [ActivityLogType.USER_ENABLED_2FA]: {};
+  [ActivityLogType.USER_DISABLED_2FA]: {};
+  [ActivityLogType.USER_USED_RECOVERY_CODE]: {
+    remainingCodes: number;
+  };
+  [ActivityLogType.USER_REGENERATED_RECOVERY_CODES]: {};
   // -------------------- ROLES --------------------
   [ActivityLogType.CREATED_ROLE]: {
     roleId: number;

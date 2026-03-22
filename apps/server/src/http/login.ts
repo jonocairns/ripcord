@@ -16,6 +16,8 @@ import {
   isArgon2Hash,
   verifyPassword
 } from '../helpers/password';
+import { getUserTotpData } from '../db/queries/totp';
+import { createChallengeToken } from '../helpers/totp';
 import { enqueueActivityLog } from '../queues/activity-log';
 import { invariant } from '../utils/invariant';
 import { issueAuthTokens } from './auth-tokens';
@@ -137,6 +139,19 @@ const loginRouteHandler = async (
       .set({ password: upgradedPassword })
       .where(eq(users.id, existingUser.id))
       .run();
+  }
+
+  // Check if user has 2FA enabled
+  const totpData = await getUserTotpData(existingUser.id);
+
+  if (totpData?.totpSecret) {
+    // 2FA is enabled — return a challenge token instead of auth tokens
+    const challengeToken = await createChallengeToken(existingUser.id);
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ requires2fa: true, challengeToken }));
+
+    return res;
   }
 
   const { token, refreshToken } = await issueAuthTokens(
