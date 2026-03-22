@@ -1,5 +1,4 @@
 import 'react-native-get-random-values';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import {
 	configureAppCore,
@@ -33,7 +32,7 @@ const normalizeServerUrl = (serverUrl: string) => {
 		throw new Error('Server URL is required.');
 	}
 
-	const withProtocol = /^[a-z]+:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+	const withProtocol = /^[a-z]+:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 	const url = new URL(withProtocol);
 
 	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -51,15 +50,15 @@ const getServerUrl = () => currentServerUrl;
 
 const setServerUrl = async (serverUrl: string) => {
 	currentServerUrl = normalizeServerUrl(serverUrl);
-	await AsyncStorage.setItem(SERVER_URL_KEY, currentServerUrl);
+	await SecureStore.setItemAsync(SERVER_URL_KEY, currentServerUrl);
 };
 
 const getStoredIdentity = async () => {
-	return AsyncStorage.getItem(IDENTITY_KEY);
+	return SecureStore.getItemAsync(IDENTITY_KEY);
 };
 
 const setStoredIdentity = async (identity: string) => {
-	await AsyncStorage.setItem(IDENTITY_KEY, identity);
+	await SecureStore.setItemAsync(IDENTITY_KEY, identity);
 };
 
 const getPendingServerPasswordChallenge = () => pendingServerPasswordChallenge;
@@ -106,7 +105,7 @@ configureAppCore({
 });
 
 const bootstrapMobileSession = async () => {
-	currentServerUrl = (await AsyncStorage.getItem(SERVER_URL_KEY)) ?? '';
+	currentServerUrl = (await SecureStore.getItemAsync(SERVER_URL_KEY)) ?? '';
 
 	if (!currentServerUrl) {
 		return { status: 'needs-server' as const };
