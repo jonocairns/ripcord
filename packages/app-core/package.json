@@ -8,7 +8,8 @@
 	"scripts": {
 		"format": "biome format --write ./src",
 		"check-types": "tsc --noEmit",
-		"lint": "biome lint ./src"
+		"lint": "biome lint ./src",
+		"test": "bun test ./src"
 	},
 	"peerDependencies": {
 		"typescript": "^5",
@@ -19,6 +20,7 @@
 		"@trpc/client": "^11.6.0"
 	},
 	"devDependencies": {
+		"@types/bun": "latest",
 		"typescript": "^5",
 		"zustand": "^5.0.3"
 	}

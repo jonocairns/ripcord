@@ -1,9 +1,9 @@
 import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useServerStore } from '@sharkord/app-core';
 import { currentVoiceChannelIdSelector, ownVoiceStateSelector, userByIdSelector } from '@sharkord/app-core';
-import { getTRPCClient } from '@sharkord/app-core';
+import { useMobileVoice } from '@/components/mobile-voice-provider';
 
 export default function VoiceChannelScreen() {
 	const params = useLocalSearchParams<{ id: string }>();
@@ -12,31 +12,17 @@ export default function VoiceChannelScreen() {
 	const currentVoiceChannelId = useServerStore(currentVoiceChannelIdSelector);
 	const ownVoiceState = useServerStore(ownVoiceStateSelector);
 	const voiceChannelState = useServerStore((state) => state.voiceMap[channelId]);
-	const [loading, setLoading] = useState(false);
+	const { connectionStatus, errorMessage, isBusy, joinChannel, leaveChannel, setMicMuted, setSoundMuted } =
+		useMobileVoice();
+	const isActiveChannel = currentVoiceChannelId === channelId;
 
 	useEffect(() => {
-		if (!channelId || currentVoiceChannelId === channelId) {
+		if (!channelId || Number.isNaN(channelId) || currentVoiceChannelId === channelId) {
 			return;
 		}
 
-		void (async () => {
-			setLoading(true);
-
-			try {
-				await getTRPCClient().voice.join.mutate({
-					channelId,
-					state: {
-						micMuted: ownVoiceState.micMuted,
-						soundMuted: ownVoiceState.soundMuted,
-					},
-				});
-
-				useServerStore.getState().setCurrentVoiceChannelId(channelId);
-			} finally {
-				setLoading(false);
-			}
-		})();
-	}, [channelId, currentVoiceChannelId, ownVoiceState.micMuted, ownVoiceState.soundMuted]);
+		void joinChannel(channelId);
+	}, [channelId, currentVoiceChannelId, joinChannel]);
 
 	const voiceUsers = useMemo(() => {
 		const entries = Object.entries(voiceChannelState?.users ?? {});
@@ -52,21 +38,24 @@ export default function VoiceChannelScreen() {
 			<View style={{ gap: 6 }}>
 				<Text style={{ color: '#f4fbff', fontSize: 28, fontWeight: '700' }}>{channel?.name ?? 'Voice'}</Text>
 				<Text style={{ color: '#9dc3d8' }}>
-					{loading ? 'Joining voice…' : 'Mobile voice transport scaffolding is active for presence and state.'}
+					{connectionStatus === 'connecting' || connectionStatus === 'reconnecting'
+						? 'Joining voice…'
+						: connectionStatus === 'connected'
+							? 'Mobile voice audio transport is active.'
+							: 'Voice transport is idle.'}
 				</Text>
+				{errorMessage ? <Text style={{ color: '#ffb7b7' }}>{errorMessage}</Text> : null}
 			</View>
 
 			<View style={{ flexDirection: 'row', gap: 12 }}>
 				<Pressable
-					onPress={() => {
-						void getTRPCClient().voice.updateState.mutate({ micMuted: !ownVoiceState.micMuted });
-						useServerStore.getState().updateOwnVoiceState({ micMuted: !ownVoiceState.micMuted });
-					}}
+					onPress={() => void setMicMuted(!ownVoiceState.micMuted)}
 					style={{
 						alignItems: 'center',
 						backgroundColor: ownVoiceState.micMuted ? '#7d2424' : '#102233',
 						borderRadius: 12,
 						flex: 1,
+						opacity: isBusy ? 0.6 : 1,
 						paddingVertical: 14,
 					}}
 				>
@@ -75,15 +64,13 @@ export default function VoiceChannelScreen() {
 					</Text>
 				</Pressable>
 				<Pressable
-					onPress={() => {
-						void getTRPCClient().voice.updateState.mutate({ soundMuted: !ownVoiceState.soundMuted });
-						useServerStore.getState().updateOwnVoiceState({ soundMuted: !ownVoiceState.soundMuted });
-					}}
+					onPress={() => void setSoundMuted(!ownVoiceState.soundMuted)}
 					style={{
 						alignItems: 'center',
 						backgroundColor: ownVoiceState.soundMuted ? '#7d2424' : '#102233',
 						borderRadius: 12,
 						flex: 1,
+						opacity: isBusy ? 0.6 : 1,
 						paddingVertical: 14,
 					}}
 				>
@@ -95,19 +82,24 @@ export default function VoiceChannelScreen() {
 
 			<Pressable
 				onPress={() => {
-					void (async () => {
-						await getTRPCClient().voice.leave.mutate();
-						useServerStore.getState().setCurrentVoiceChannelId(undefined);
-					})();
+					if (isActiveChannel) {
+						void leaveChannel();
+						return;
+					}
+
+					void joinChannel(channelId);
 				}}
 				style={{
 					alignItems: 'center',
 					backgroundColor: '#0e2b3e',
 					borderRadius: 12,
+					opacity: isBusy ? 0.6 : 1,
 					paddingVertical: 14,
 				}}
 			>
-				<Text style={{ color: '#d7edf9', fontWeight: '700' }}>Leave Channel</Text>
+				<Text style={{ color: '#d7edf9', fontWeight: '700' }}>
+					{isActiveChannel ? 'Leave Channel' : connectionStatus === 'failed' ? 'Retry Join' : 'Join Channel'}
+				</Text>
 			</Pressable>
 
 			<View style={{ gap: 10 }}>
@@ -116,7 +108,7 @@ export default function VoiceChannelScreen() {
 				</Text>
 				{voiceUsers.map(({ state, user }) => (
 					<View
-						key={user?.id ?? Math.random()}
+						key={String(user?.id ?? 'unknown-user')}
 						style={{
 							backgroundColor: '#102233',
 							borderColor: '#1b3d56',

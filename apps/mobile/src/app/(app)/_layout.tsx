@@ -1,4 +1,5 @@
 import { Stack } from 'expo-router';
+import { MobileVoiceProvider } from '@/components/mobile-voice-provider';
 
 const appStackScreenOptions = {
 	contentStyle: { backgroundColor: '#08121c' },
@@ -7,5 +8,9 @@ const appStackScreenOptions = {
 };
 
 export default function AppLayout() {
-	return <Stack screenOptions={appStackScreenOptions} />;
+	return (
+		<MobileVoiceProvider>
+			<Stack screenOptions={appStackScreenOptions} />
+		</MobileVoiceProvider>
+	);
 }
