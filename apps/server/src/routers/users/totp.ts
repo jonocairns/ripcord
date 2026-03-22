@@ -29,11 +29,13 @@ import { protectedProcedure } from '../../utils/trpc';
 
 const SETUP_TOKEN_EXPIRES_IN = '10m';
 
-type TSetupPayload = {
-  secret: string;
-  hashedCodes: string[];
-  purpose: 'totp-setup';
-};
+const zSetupPayload = z.object({
+  secret: z.string(),
+  hashedCodes: z.array(z.string()),
+  purpose: z.literal('totp-setup')
+});
+
+type TSetupPayload = z.infer<typeof zSetupPayload>;
 
 const totpStatusRoute = protectedProcedure.query(async ({ ctx }) => {
   const enabled = await isUserTotpEnabled(ctx.userId);
@@ -95,16 +97,12 @@ const totpConfirmSetupRoute = protectedProcedure
 
     let payload: TSetupPayload;
     try {
-      payload = jwt.verify(input.setupToken, serverToken) as TSetupPayload;
+      payload = zSetupPayload.parse(jwt.verify(input.setupToken, serverToken));
     } catch {
       return ctx.throwValidationError(
         'setupToken',
         'Setup session expired. Please start again.'
       );
-    }
-
-    if (payload.purpose !== 'totp-setup') {
-      ctx.throwValidationError('setupToken', 'Invalid setup token');
     }
 
     const isValid = verifyAndConsumeTotpToken(

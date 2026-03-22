@@ -2,6 +2,7 @@ import { sha256 } from '@sharkord/shared';
 import crypto from 'crypto';
 import { Secret, TOTP } from 'otpauth';
 import QRCode from 'qrcode';
+import { z } from 'zod';
 import { getServerToken } from '../db/queries/server';
 
 const TOTP_PERIOD = 30;
@@ -214,10 +215,12 @@ const createChallengeToken = async (userId: number): Promise<string> => {
   });
 };
 
-type TChallengePayload = {
-  userId: number;
-  purpose: '2fa-challenge';
-};
+const zChallengePayload = z.object({
+  userId: z.number(),
+  purpose: z.literal('2fa-challenge')
+});
+
+type TChallengePayload = z.infer<typeof zChallengePayload>;
 
 const verifyChallengeToken = async (
   token: string
@@ -225,11 +228,9 @@ const verifyChallengeToken = async (
   try {
     const jwt = await import('jsonwebtoken');
     const serverToken = await getServerToken();
-    const decoded = jwt.default.verify(token, serverToken) as TChallengePayload;
-
-    if (decoded.purpose !== '2fa-challenge') {
-      return null;
-    }
+    const decoded = zChallengePayload.parse(
+      jwt.default.verify(token, serverToken)
+    );
 
     return decoded;
   } catch {
