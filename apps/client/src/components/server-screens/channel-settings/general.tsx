@@ -73,10 +73,7 @@ const General = memo(({ channelId }: TGeneralProps) => {
 							label="Discontinuous Transmission (DTX)"
 							description="Stops sending audio packets during silence to reduce bandwidth. May cause minor artifacts on some networks."
 						>
-							<Switch
-								checked={channel.voiceDtx ?? false}
-								onCheckedChange={(value) => onChange('voiceDtx', value)}
-							/>
+							<Switch checked={channel.voiceDtx ?? false} onCheckedChange={(value) => onChange('voiceDtx', value)} />
 						</Group>
 					</>
 				) : null}

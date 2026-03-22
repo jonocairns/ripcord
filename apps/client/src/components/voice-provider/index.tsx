@@ -258,8 +258,6 @@ const getAudioOpusConfig = (channelId: number | undefined) => {
 		codecOptions: {
 			opusMaxAverageBitrate: bitrate,
 			opusDtx: dtx,
-			opusFec: false,
-			opusPacketLossPerc: 0,
 		},
 	};
 };
@@ -1903,11 +1901,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					createConsumerTransport(device, opts?.consumerTransportParams),
 				]);
 				await Promise.all([
-					consumeExistingProducers(
-						device.rtpCapabilities,
-						undefined,
-						opts?.existingProducers,
-					),
+					consumeExistingProducers(device.rtpCapabilities, undefined, opts?.existingProducers),
 					startMicStream(),
 				]);
 
