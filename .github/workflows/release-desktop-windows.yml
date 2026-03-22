@@ -96,9 +96,18 @@ jobs:
           bun run build:main
           bun run prepare:renderer
 
+      - name: Set desktop package version for release build
+        working-directory: apps/desktop
+        shell: pwsh
+        run: |
+          $packageJsonPath = "package.json"
+          $packageJson = Get-Content $packageJsonPath -Raw | ConvertFrom-Json
+          $packageJson.version = "${{ steps.version.outputs.version }}"
+          $packageJson | ConvertTo-Json -Depth 100 | Set-Content $packageJsonPath
+
       - name: Package signed Windows installer and updater metadata
         working-directory: apps/desktop
-        run: bunx electron-builder --win nsis --x64 --publish never -c.extraMetadata.version=${{ steps.version.outputs.version }}
+        run: bunx electron-builder --win nsis --x64 --publish never
 
       - name: Validate updater metadata
         working-directory: apps/desktop
