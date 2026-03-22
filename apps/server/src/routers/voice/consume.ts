@@ -55,7 +55,7 @@ const consumeRoute = protectedProcedure
     const consumer = await userConsumerTransport.consume({
       producerId: producer.id,
       rtpCapabilities: input.rtpCapabilities,
-      paused: false
+      paused: true
     });
 
     runtime.addConsumer(ctx.user.id, input.remoteId, input.kind, consumer);

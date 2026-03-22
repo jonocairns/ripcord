@@ -13,7 +13,16 @@ const updateChannelRoute = protectedProcedure
       channelId: z.number().min(1),
       name: z.string().min(2).max(27).optional(),
       topic: z.string().max(128).nullable().optional(),
-      private: z.boolean().optional()
+      private: z.boolean().optional(),
+      voiceBitrate: z
+        .union([z.literal(64000), z.literal(96000), z.literal(128000)])
+        .optional(),
+      voiceFecPacketLossPerc: z
+        .union([z.literal(5), z.literal(10), z.literal(15)])
+        .optional(),
+      voiceJitterBufferMs: z
+        .union([z.literal(40), z.literal(80), z.literal(120), z.literal(200)])
+        .optional()
     })
   )
   .mutation(async ({ ctx, input }) => {
@@ -24,7 +33,10 @@ const updateChannelRoute = protectedProcedure
       .set({
         name: input.name,
         topic: input.topic,
-        private: input.private
+        private: input.private,
+        voiceBitrate: input.voiceBitrate,
+        voiceFecPacketLossPerc: input.voiceFecPacketLossPerc,
+        voiceJitterBufferMs: input.voiceJitterBufferMs
       })
       .where(eq(channels.id, input.channelId))
       .returning()

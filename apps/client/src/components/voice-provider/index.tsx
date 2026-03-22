@@ -12,6 +12,7 @@ import { createContext, memo, useCallback, useEffect, useMemo, useRef, useState 
 import { toast } from 'sonner';
 import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
+import { channelByIdSelector } from '@/features/server/channels/selectors';
 import { useChannelCan, useIsConnected } from '@/features/server/hooks';
 import {
 	clearPendingVoiceReconnectChannelId,
@@ -46,7 +47,6 @@ import {
 import { useDevices } from '../devices-provider/hooks/use-devices';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
-import { createAudioContextWithSampleRateFallback } from './audio-context';
 import { useLocalStreams } from './hooks/use-local-streams';
 import { getPendingStreamKey, usePendingStreams } from './hooks/use-pending-streams';
 import { type TExternalStreamsMap, useRemoteStreams } from './hooks/use-remote-streams';
@@ -62,6 +62,7 @@ import {
 	type TMicAudioProcessingPipeline,
 } from './mic-audio-processing';
 import { createMicReferenceAudioPipeline, type TMicReferenceAudioPipeline } from './mic-reference-audio';
+import { acquireSharedVoiceAudioContext, releaseSharedVoiceAudioContext } from './shared-audio-context';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
 import { VolumeControlProvider } from './volume-control-provider';
 import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
@@ -90,16 +91,10 @@ const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
 	[VideoCodecPreference.H264]: 'video/H264',
 	[VideoCodecPreference.AV1]: 'video/AV1',
 };
-const AUDIO_OPUS_TARGET_BITRATE_BPS = 128_000;
-const AUDIO_OPUS_PACKET_LOSS_PERC = 15;
+const DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS = 96_000;
+const DEFAULT_AUDIO_OPUS_PACKET_LOSS_PERC = 10;
 const MAX_VOICE_REJOIN_RETRIES = 5;
 const VOICE_REJOIN_RETRY_DELAY_MS = 2_000;
-const AUDIO_OPUS_CODEC_OPTIONS = {
-	opusMaxAverageBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS,
-	opusDtx: false,
-	opusFec: true,
-	opusPacketLossPerc: AUDIO_OPUS_PACKET_LOSS_PERC,
-} as const;
 
 type ResolvedMicProcessingConfig = {
 	sidecarVoiceProcessingEnabled: boolean;
@@ -243,15 +238,31 @@ const getTrackedExternalWatchField = (
 	return kind === StreamKind.EXTERNAL_AUDIO ? 'audio' : 'video';
 };
 
-const getAudioContextClass = () => {
-	return (
-		window.AudioContext ||
-		(
-			window as typeof window & {
-				webkitAudioContext?: typeof AudioContext;
-			}
-		).webkitAudioContext
-	);
+const getAudioOpusConfig = (channelId: number | undefined) => {
+	let bitrate = DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS;
+	let packetLossPerc = DEFAULT_AUDIO_OPUS_PACKET_LOSS_PERC;
+
+	if (channelId !== undefined) {
+		const channel = channelByIdSelector(useServerStore.getState(), channelId);
+
+		if (channel?.voiceBitrate != null) {
+			bitrate = channel.voiceBitrate;
+		}
+
+		if (channel?.voiceFecPacketLossPerc != null) {
+			packetLossPerc = channel.voiceFecPacketLossPerc;
+		}
+	}
+
+	return {
+		maxBitrate: bitrate,
+		codecOptions: {
+			opusMaxAverageBitrate: bitrate,
+			opusDtx: false,
+			opusFec: true,
+			opusPacketLossPerc: packetLossPerc,
+		},
+	};
 };
 
 const createMicGainPipeline = async (
@@ -264,15 +275,7 @@ const createMicGainPipeline = async (
 		return undefined;
 	}
 
-	const AudioContextClass = getAudioContextClass();
-
-	if (!AudioContextClass) {
-		return undefined;
-	}
-
-	const audioContext = createAudioContextWithSampleRateFallback({
-		AudioContextClass,
-		sampleRate: 48_000,
+	const audioContext = acquireSharedVoiceAudioContext({
 		onPreferredSampleRateError: (preferredSampleRateError) => {
 			logVoice('Falling back to a browser-default AudioContext for microphone gain processing', {
 				preferredSampleRateError,
@@ -303,7 +306,7 @@ const createMicGainPipeline = async (
 	const outputTrack = destinationNode.stream.getAudioTracks()[0];
 
 	if (!outputTrack) {
-		await audioContext.close();
+		releaseSharedVoiceAudioContext(audioContext);
 		return undefined;
 	}
 
@@ -343,9 +346,7 @@ const createMicGainPipeline = async (
 				// ignore disconnect failures
 			}
 
-			if (audioContext.state !== 'closed') {
-				await audioContext.close();
-			}
+			releaseSharedVoiceAudioContext(audioContext);
 		},
 	};
 };
@@ -685,7 +686,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				return;
 			}
 
-			void consume(remoteId, kind, currentRtpCapabilities);
+			void consume(remoteId, kind, currentRtpCapabilities, currentVoiceChannelIdRef.current);
 		},
 		[consume, currentChannelExternalStreams],
 	);
@@ -775,7 +776,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				stream.tracks.audio &&
 				pendingStreams.has(`${numericStreamId}-${StreamKind.EXTERNAL_AUDIO}`)
 			) {
-				void consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities);
+				void consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities, currentVoiceChannelId);
 			}
 
 			if (
@@ -783,7 +784,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				stream.tracks.video &&
 				pendingStreams.has(`${numericStreamId}-${StreamKind.EXTERNAL_VIDEO}`)
 			) {
-				void consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities);
+				void consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities, currentVoiceChannelId);
 			}
 		});
 	}, [consume, currentChannelExternalStreams, currentVoiceChannelId, pendingStreams]);
@@ -992,10 +993,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							audioTrack: outboundAudioTrack,
 						});
 
+						const audioConfig = getAudioOpusConfig(currentVoiceChannelIdRef.current);
 						const audioProducer = await producerTransport.current?.produce({
 							track: outboundAudioTrack,
-							encodings: [{ maxBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS }],
-							codecOptions: AUDIO_OPUS_CODEC_OPTIONS,
+							encodings: [{ maxBitrate: audioConfig.maxBitrate }],
+							codecOptions: audioConfig.codecOptions,
 							appData: { kind: StreamKind.AUDIO },
 						});
 						localAudioProducer.current = audioProducer;
@@ -1201,10 +1203,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				logVoice('Obtained audio track', { audioTrack: outboundAudioTrack });
 
+				const audioConfig = getAudioOpusConfig(currentVoiceChannelIdRef.current);
 				const audioProducer = await producerTransport.current?.produce({
 					track: outboundAudioTrack,
-					encodings: [{ maxBitrate: AUDIO_OPUS_TARGET_BITRATE_BPS }],
-					codecOptions: AUDIO_OPUS_CODEC_OPTIONS,
+					encodings: [{ maxBitrate: audioConfig.maxBitrate }],
+					codecOptions: audioConfig.codecOptions,
 					appData: { kind: StreamKind.AUDIO },
 				});
 				localAudioProducer.current = audioProducer;
@@ -1901,7 +1904,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					createConsumerTransport(device, opts?.consumerTransportParams),
 				]);
 				await Promise.all([
-					consumeExistingProducers(device.rtpCapabilities, undefined, opts?.existingProducers),
+					consumeExistingProducers(
+						device.rtpCapabilities,
+						currentVoiceChannelIdRef.current,
+						undefined,
+						opts?.existingProducers,
+					),
 					startMicStream(),
 				]);
 

@@ -61,7 +61,7 @@ const defaultRouterOptions: RouterOptions<AppData> = {
       kind: 'audio',
       mimeType: 'audio/opus',
       clockRate: 48000,
-      channels: 2,
+      channels: 1,
       parameters: {
         useinbandfec: 1,
         usedtx: 0
@@ -610,6 +610,20 @@ class VoiceRuntime {
     }
 
     consumer.close();
+  };
+
+  public resumeConsumer = async (
+    userId: number,
+    remoteId: number,
+    kind: StreamKind
+  ) => {
+    const consumer = this.consumers[userId]?.[remoteId]?.[kind];
+
+    if (!consumer || consumer.closed) {
+      return;
+    }
+
+    await consumer.resume();
   };
 
   public createExternalStream = (options: {

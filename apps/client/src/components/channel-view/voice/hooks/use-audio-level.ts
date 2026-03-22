@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import {
+	acquireSharedVoiceAudioContext,
+	releaseSharedVoiceAudioContext,
+} from '@/components/voice-provider/shared-audio-context';
 import { useOwnVoiceUser } from '@/features/server/hooks';
 
 // speaking intensity level (0 = silent, 1 = quiet, 2 = normal, 3 = loud)
@@ -17,44 +21,6 @@ const ANALYZER_MAX_DECIBELS = -10;
 const ANALYZER_SMOOTHING_TIME_CONSTANT = 0.85;
 const SPEAKING_THRESHOLD = 8;
 
-// Single shared AudioContext at 48kHz (matching WebRTC Opus) to avoid
-// per-user resampling overhead and Chrome's AudioContext limit (~6).
-let sharedAudioContext: AudioContext | null = null;
-let sharedAudioContextUsers = 0;
-
-const getSharedAudioContext = (): AudioContext | null => {
-	if (sharedAudioContext && sharedAudioContext.state !== 'closed') {
-		sharedAudioContextUsers++;
-		return sharedAudioContext;
-	}
-
-	const AudioContextClass =
-		window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-
-	if (!AudioContextClass) return null;
-
-	sharedAudioContext = new AudioContextClass({ sampleRate: 48_000 });
-	sharedAudioContextUsers = 1;
-	return sharedAudioContext;
-};
-
-const releaseSharedAudioContext = (context: AudioContext) => {
-	// Only decrement if this caller's context is still the current shared one.
-	// If the browser externally closed the context, a new one may have been
-	// created — stale callers must not touch the new instance's ref count.
-	if (context !== sharedAudioContext) return;
-
-	sharedAudioContextUsers--;
-	if (sharedAudioContextUsers <= 0) {
-		sharedAudioContext.close().catch(() => {
-			// Close can reject if the context is already closed — safe to ignore
-			// since we're discarding the reference either way.
-		});
-		sharedAudioContext = null;
-		sharedAudioContextUsers = 0;
-	}
-};
-
 const useAudioLevel = (audioStream: MediaStream | undefined) => {
 	const [audioLevel, setAudioLevel] = useState(0);
 	const [isSpeaking, setIsSpeaking] = useState(false);
@@ -71,7 +37,7 @@ const useAudioLevel = (audioStream: MediaStream | undefined) => {
 			return;
 		}
 
-		const audioContext = getSharedAudioContext();
+		const audioContext = acquireSharedVoiceAudioContext();
 
 		if (!audioContext) return;
 
@@ -159,7 +125,7 @@ const useAudioLevel = (audioStream: MediaStream | undefined) => {
 			clonedStream.getTracks().forEach((track) => track.stop());
 
 			if (acquiredContextRef.current) {
-				releaseSharedAudioContext(acquiredContextRef.current);
+				releaseSharedVoiceAudioContext(acquiredContextRef.current);
 				acquiredContextRef.current = null;
 			}
 
