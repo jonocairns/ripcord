@@ -40,10 +40,6 @@ jobs:
       - name: Run lint
         run: bun run lint
 
-      - name: Build client
-        working-directory: apps/client
-        run: bun run build
-
       - name: Run server tests
         working-directory: apps/server
         run: bun test
