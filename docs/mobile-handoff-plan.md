@@ -66,6 +66,7 @@
 ## WSL Notes
 
 - Expo Go + WSL requires Windows port forwarding for Metro and the Sharkord server if the phone connects through the Windows LAN IP.
+- Mobile voice over WSL also needs the mediasoup WebRTC port forwarded, not just Metro and the main HTTP/TRPC server port.
 - The helper script is [scripts/wsl-mobile-proxy.ps1](/home/jonoc/sharkord/scripts/wsl-mobile-proxy.ps1).
 - If WSL restarts and gets a new IP, the proxy rules need to be recreated.
 
@@ -76,15 +77,18 @@
 3. Build an installable Android development client with `nix develop -c bun run --filter mobile build:android:dev`.
 4. Open the EAS build URL when it finishes and install the generated APK on the Android device.
 5. Get the current WSL IPv4 with `hostname -I` and use the `eth0` address, which is usually the first value in the output.
-6. From an elevated Windows PowerShell session in the repo root, recreate the port proxy rules with `.\scripts\wsl-mobile-proxy.ps1 -Action enable -WslIp <WSL_IP>`.
-7. Start the mobile bundler for the dev client with `nix develop -c bun run --filter mobile start:dev-client`.
-8. Start the Sharkord server as usual.
-9. On the phone, open the installed Sharkord Mobile development build and connect to the Metro server from the QR code or the dev-client launcher.
+6. Get the Windows LAN IPv4 that the phone uses to reach the machine.
+7. Start the Sharkord server with `SHARKORD_WEBRTC_ANNOUNCED_ADDRESS=<WINDOWS_LAN_IP>` so mediasoup advertises a phone-reachable address instead of `127.0.0.1`.
+8. From an elevated Windows PowerShell session in the repo root, recreate the port proxy rules with `.\scripts\wsl-mobile-proxy.ps1 -Action enable -WslIp <WSL_IP>`.
+9. Start the mobile bundler for the dev client with `nix develop -c bun run --filter mobile start:dev-client`.
+10. Start the Sharkord server as usual if it is not already running.
+11. On the phone, open the installed Sharkord Mobile development build and connect to the Metro server from the QR code or the dev-client launcher.
 
 ### When To Rebuild
 
 - Rebuild the Android development client after adding or upgrading native mobile dependencies, changing Expo config in [app.json](/home/jonoc/sharkord/apps/mobile/app.json), or changing native plugin configuration.
 - For normal TypeScript and React changes, keep using the existing installed development client and just restart Metro with `nix develop -c bun run --filter mobile start:dev-client`.
+- For WSL voice testing, keep using the same installed dev client, but make sure the server is started with `SHARKORD_WEBRTC_ANNOUNCED_ADDRESS=<WINDOWS_LAN_IP>` and the proxy rules include port `40000`.
 
 ### Current Test Split
 

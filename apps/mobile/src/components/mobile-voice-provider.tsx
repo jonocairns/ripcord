@@ -21,18 +21,48 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	type ComponentType,
 	type PropsWithChildren,
 } from 'react';
+import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
 type TWebRTCMediaStream = {
 	getAudioTracks: () => MediaStreamTrack[];
 	getTracks: () => MediaStreamTrack[];
+	toURL: () => string;
+};
+
+type TMediaStreamConstructor = new (stream?: TWebRTCMediaStream | MediaStreamTrack[]) => TWebRTCMediaStream;
+
+type TRTCViewProps = {
+	mirror?: boolean;
+	objectFit?: 'contain' | 'cover';
+	streamURL: string;
+	style?: StyleProp<ViewStyle>;
+	zOrder?: number;
+};
+
+type TPermissionsModule = {
+	RESULT: {
+		GRANTED: string;
+	};
+	request: (permissionDesc: { name: string }) => Promise<boolean | string>;
+};
+
+type TRTCViewComponent = ComponentType<TRTCViewProps>;
+
+type TRemoteAudioRenderer = {
+	remoteUserId: number;
+	streamURL: string;
 };
 
 type TWebRTCModule = {
+	MediaStream: TMediaStreamConstructor;
+	RTCView: TRTCViewComponent;
 	mediaDevices: {
 		getUserMedia: (constraints: { audio: boolean; video: boolean }) => Promise<TWebRTCMediaStream>;
 	};
+	permissions: TPermissionsModule;
 	registerGlobals: () => void;
 };
 
@@ -160,6 +190,8 @@ function MobileVoiceProvider({ children }: PropsWithChildren) {
 	const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
 	const [reconnectRetryToken, setReconnectRetryToken] = useState(0);
 	const [isBusy, setIsBusy] = useState(false);
+	const [remoteAudioRenderers, setRemoteAudioRenderers] = useState<TRemoteAudioRenderer[]>([]);
+	const [RTCViewComponent, setRTCViewComponent] = useState<TRTCViewComponent | null>(null);
 	const currentVoiceChannelIdRef = useRef<number | undefined>(currentVoiceChannelId);
 	const ownVoiceStateRef = useRef(ownVoiceState);
 	const joiningChannelIdRef = useRef<number | undefined>(undefined);
@@ -171,6 +203,7 @@ function MobileVoiceProvider({ children }: PropsWithChildren) {
 	const audioProducerRef = useRef<Producer<AppData> | undefined>(undefined);
 	const localAudioStreamRef = useRef<TWebRTCMediaStream | undefined>(undefined);
 	const localAudioTrackRef = useRef<MediaStreamTrack | undefined>(undefined);
+	const remoteAudioStreamsRef = useRef<Map<number, TWebRTCMediaStream>>(new Map());
 	const remoteAudioConsumersRef = useRef<Map<number, Consumer<AppData>>>(new Map());
 	const consumeOperationsRef = useRef<Set<number>>(new Set());
 	const subscriptionsRef = useRef<TVoiceSubscriptions>({});
@@ -194,6 +227,10 @@ function MobileVoiceProvider({ children }: PropsWithChildren) {
 		const consumer = remoteAudioConsumersRef.current.get(remoteUserId);
 
 		if (!consumer) {
+			remoteAudioStreamsRef.current.delete(remoteUserId);
+			setRemoteAudioRenderers((currentEntries) =>
+				currentEntries.filter((entry) => entry.remoteUserId !== remoteUserId),
+			);
 			return;
 		}
 
@@ -202,6 +239,8 @@ function MobileVoiceProvider({ children }: PropsWithChildren) {
 		}
 
 		remoteAudioConsumersRef.current.delete(remoteUserId);
+		remoteAudioStreamsRef.current.delete(remoteUserId);
+		setRemoteAudioRenderers((currentEntries) => currentEntries.filter((entry) => entry.remoteUserId !== remoteUserId));
 	}, []);
 
 	const applySoundMutedToConsumers = useCallback((muted: boolean) => {
@@ -231,6 +270,8 @@ function MobileVoiceProvider({ children }: PropsWithChildren) {
 			}
 		});
 		remoteAudioConsumersRef.current.clear();
+		remoteAudioStreamsRef.current.clear();
+		setRemoteAudioRenderers([]);
 
 		if (audioProducerRef.current && !audioProducerRef.current.closed) {
 			audioProducerRef.current.close();
@@ -283,6 +324,7 @@ function MobileVoiceProvider({ children }: PropsWithChildren) {
 
 			try {
 				const trpc = getTRPCClient();
+				const webRTCModule = await ensureWebRTCModule();
 				const { consumerId, consumerRtpParameters, producerId } = await trpc.voice.consume.mutate({
 					kind: StreamKind.AUDIO,
 					remoteId: remoteUserId,
@@ -304,6 +346,16 @@ function MobileVoiceProvider({ children }: PropsWithChildren) {
 				}
 
 				remoteAudioConsumersRef.current.set(remoteUserId, consumer);
+				const stream = new webRTCModule.MediaStream([consumer.track]);
+				remoteAudioStreamsRef.current.set(remoteUserId, stream);
+				setRemoteAudioRenderers((currentEntries) => {
+					const nextEntries = currentEntries.filter((entry) => entry.remoteUserId !== remoteUserId);
+					nextEntries.push({
+						remoteUserId,
+						streamURL: stream.toURL(),
+					});
+					return nextEntries;
+				});
 			} finally {
 				consumeOperationsRef.current.delete(remoteUserId);
 			}
@@ -322,7 +374,14 @@ function MobileVoiceProvider({ children }: PropsWithChildren) {
 			return;
 		}
 
-		const { mediaDevices } = await ensureWebRTCModule();
+		const { mediaDevices, permissions } = await ensureWebRTCModule();
+		const permissionResult = await permissions.request({ name: 'microphone' });
+		const microphoneGranted = permissionResult === true || permissionResult === permissions.RESULT.GRANTED;
+
+		if (!microphoneGranted) {
+			throw new Error('Microphone permission was denied.');
+		}
+
 		const stream = await mediaDevices.getUserMedia({
 			audio: true,
 			video: false,
@@ -461,7 +520,8 @@ function MobileVoiceProvider({ children }: PropsWithChildren) {
 				existingProducers?: TRemoteProducerIds;
 			},
 		) => {
-			await ensureWebRTCModule();
+			const webRTCModule = await ensureWebRTCModule();
+			setRTCViewComponent(() => webRTCModule.RTCView);
 			cleanupVoiceSession();
 
 			const device = new Device();
@@ -755,7 +815,25 @@ function MobileVoiceProvider({ children }: PropsWithChildren) {
 		[connectionStatus, errorMessage, isBusy, joinChannel, leaveChannel, setMicMuted, setSoundMuted],
 	);
 
-	return <MobileVoiceContext.Provider value={value}>{children}</MobileVoiceContext.Provider>;
+	return (
+		<MobileVoiceContext.Provider value={value}>
+			{children}
+			{RTCViewComponent ? (
+				<View pointerEvents="none" style={styles.hiddenAudioRenderContainer}>
+					{remoteAudioRenderers.map(({ remoteUserId, streamURL }) => (
+						<RTCViewComponent
+							key={String(remoteUserId)}
+							mirror={false}
+							objectFit="cover"
+							streamURL={streamURL}
+							style={styles.hiddenAudioRenderer}
+							zOrder={0}
+						/>
+					))}
+				</View>
+			) : null}
+		</MobileVoiceContext.Provider>
+	);
 }
 
 const useMobileVoice = (): TMobileVoiceContextValue => {
@@ -767,5 +845,20 @@ const useMobileVoice = (): TMobileVoiceContextValue => {
 
 	return context;
 };
+
+const styles = StyleSheet.create({
+	hiddenAudioRenderContainer: {
+		height: 1,
+		left: 0,
+		opacity: 0,
+		position: 'absolute',
+		top: 0,
+		width: 1,
+	},
+	hiddenAudioRenderer: {
+		height: 1,
+		width: 1,
+	},
+});
 
 export { MobileVoiceProvider, useMobileVoice };

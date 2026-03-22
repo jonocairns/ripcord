@@ -64,16 +64,30 @@ const loadMediasoup = async () => {
       `WebRtcServer created on port ${port} with announcedAddress ${announcedAddress}`
     );
   } else {
+    const announcedAddress = config.webRtc.announcedAddress || undefined;
+    const listenIp = announcedAddress ? '0.0.0.0' : '127.0.0.1';
+
     webRtcServer = await mediaSoupWorker.createWebRtcServer({
       listenInfos: [
-        { protocol: 'udp', ip: '127.0.0.1', port },
-        { protocol: 'tcp', ip: '127.0.0.1', port }
+        {
+          protocol: 'udp',
+          ip: listenIp,
+          announcedAddress,
+          port,
+          recvBufferSize: 2_097_152,
+          sendBufferSize: 2_097_152
+        },
+        { protocol: 'tcp', ip: listenIp, announcedAddress, port }
       ]
     });
 
-    webRtcServerListenInfo = { ip: '127.0.0.1' };
+    webRtcServerListenInfo = { ip: listenIp, announcedAddress };
 
-    logger.debug(`WebRtcServer created on 127.0.0.1:${port} (dev mode)`);
+    logger.debug(
+      announcedAddress
+        ? `WebRtcServer created on ${listenIp}:${port} with announcedAddress ${announcedAddress} (dev mode)`
+        : `WebRtcServer created on 127.0.0.1:${port} (dev mode)`
+    );
   }
 };
 

@@ -17,6 +17,11 @@ $Rules = @(
     Name = "Sharkord 4991"
     ListenPort = 4991
     ConnectPort = 4991
+  },
+  @{
+    Name = "Sharkord WebRTC 40000"
+    ListenPort = 40000
+    ConnectPort = 40000
   }
 )
 
