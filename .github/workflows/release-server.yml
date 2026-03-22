@@ -207,11 +207,13 @@ jobs:
 
           if gh release view "${release_tag}" >/dev/null 2>&1; then
             gh release edit "${release_tag}" \
+              --draft=false \
               --title "${release_tag}" \
               --notes-file /tmp/release-notes.md
             gh release upload "${release_tag}" "${assets[@]}" --clobber
           else
             gh release create "${release_tag}" "${assets[@]}" \
+              --draft=false \
               --title "${release_tag}" \
               --notes-file /tmp/release-notes.md
           fi
