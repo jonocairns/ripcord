@@ -6,6 +6,8 @@ import { getStorageSettingsRoute } from './get-storage-settings';
 import { getUpdateRoute } from './get-update';
 import { handshakeRoute } from './handshake';
 import { joinServerRoute } from './join';
+import { registerPushDeviceRoute } from './register-push-device';
+import { unregisterPushDeviceRoute } from './unregister-push-device';
 import { updateServerRoute } from './update-server';
 import { updateSettingsRoute } from './update-settings';
 import { useSecretTokenRoute } from './use-secret-token';
@@ -18,6 +20,8 @@ export const othersRouter = t.router({
   getSettings: getSettingsRoute,
   onServerSettingsUpdate: onServerSettingsUpdateRoute,
   useSecretToken: useSecretTokenRoute,
+  registerPushDevice: registerPushDeviceRoute,
+  unregisterPushDevice: unregisterPushDeviceRoute,
   getStorageSettings: getStorageSettingsRoute,
   getUpdate: getUpdateRoute,
   updateServer: updateServerRoute

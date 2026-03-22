@@ -457,6 +457,30 @@ const pluginData = sqliteTable('plugin_data', {
     .default({})
 });
 
+const pushDevices = sqliteTable(
+  'push_devices',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    installationId: text('installation_id').notNull(),
+    expoPushToken: text('expo_push_token').notNull(),
+    platform: text('platform').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at')
+  },
+  (t) => [
+    index('push_devices_user_idx').on(t.userId),
+    index('push_devices_installation_idx').on(t.installationId),
+    index('push_devices_platform_idx').on(t.platform),
+    uniqueIndex('push_devices_user_installation_idx').on(
+      t.userId,
+      t.installationId
+    )
+  ]
+);
+
 export {
   activityLog,
   categories,
@@ -472,6 +496,7 @@ export {
   messageReactions,
   messages,
   pluginData,
+  pushDevices,
   refreshTokens,
   rolePermissions,
   roles,

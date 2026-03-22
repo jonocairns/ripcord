@@ -71,6 +71,13 @@
       "when": 1773047549219,
       "tag": "0009_kind_susan_delgado",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1774149224583,
+      "tag": "0010_superb_ricochet",
+      "breakpoints": true
     }
   ]
 }

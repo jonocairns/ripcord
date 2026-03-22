@@ -127,3 +127,15 @@ export type TChannelUserPermissionsMap = Record<
 >;
 
 export type TReadStateMap = Record<number, number>;
+
+export type TPushDevicePlatform = "android" | "ios" | "unknown";
+
+export type TPushDevice = {
+  createdAt: number;
+  expoPushToken: string;
+  id: number;
+  installationId: string;
+  platform: TPushDevicePlatform;
+  updatedAt: number | null;
+  userId: number;
+};
