@@ -1,7 +1,7 @@
 {
   "name": "@sharkord/desktop",
   "private": true,
-  "version": "1.4.19",
+  "version": "1.4.20",
   "type": "module",
   "trustedDependencies": [
     "electron"
