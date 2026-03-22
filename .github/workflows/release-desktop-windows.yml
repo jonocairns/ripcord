@@ -52,17 +52,19 @@ jobs:
         run: echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository at release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: 1.3.5
+        shell: pwsh
+        run: |
+          iex "& {$(irm https://bun.com/install.ps1)} -Version 1.3.5"
+          "$env:USERPROFILE\.bun\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "$env:USERPROFILE\.bun\bin\bun.exe" --version
 
       - name: Cache Bun dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .bun-cache
           key: ${{ runner.os }}-bun-1.3.5-${{ hashFiles('bun.lock') }}
@@ -94,9 +96,18 @@ jobs:
           bun run build:main
           bun run prepare:renderer
 
+      - name: Set desktop package version for release build
+        working-directory: apps/desktop
+        shell: pwsh
+        run: |
+          $packageJsonPath = "package.json"
+          $packageJson = Get-Content $packageJsonPath -Raw | ConvertFrom-Json
+          $packageJson.version = "${{ steps.version.outputs.version }}"
+          $packageJson | ConvertTo-Json -Depth 100 | Set-Content $packageJsonPath
+
       - name: Package signed Windows installer and updater metadata
         working-directory: apps/desktop
-        run: bunx electron-builder --win nsis --x64 --publish never -c.extraMetadata.version=${{ steps.version.outputs.version }}
+        run: bunx electron-builder --win nsis --x64 --publish never
 
       - name: Validate updater metadata
         working-directory: apps/desktop
@@ -131,10 +142,22 @@ jobs:
           echo "Validated updater metadata installer path: ${installer_path}"
 
       - name: Upload desktop assets to GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          files: |
+        shell: bash
+        run: |
+          shopt -s nullglob
+          assets=(
             apps/desktop/build/out/*.exe
             apps/desktop/build/out/*.blockmap
             apps/desktop/build/out/latest*.yml
+          )
+
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "::error::No desktop release assets found to upload."
+            exit 1
+          fi
+
+          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes ""
+          fi
+
+          gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
