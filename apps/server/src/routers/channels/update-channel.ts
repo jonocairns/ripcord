@@ -17,12 +17,7 @@ const updateChannelRoute = protectedProcedure
       voiceBitrate: z
         .union([z.literal(64000), z.literal(96000), z.literal(128000)])
         .optional(),
-      voiceFecPacketLossPerc: z
-        .union([z.literal(5), z.literal(10), z.literal(15)])
-        .optional(),
-      voiceJitterBufferMs: z
-        .union([z.literal(40), z.literal(80), z.literal(120), z.literal(200)])
-        .optional()
+      voiceDtx: z.boolean().optional()
     })
   )
   .mutation(async ({ ctx, input }) => {
@@ -35,8 +30,7 @@ const updateChannelRoute = protectedProcedure
         topic: input.topic,
         private: input.private,
         voiceBitrate: input.voiceBitrate,
-        voiceFecPacketLossPerc: input.voiceFecPacketLossPerc,
-        voiceJitterBufferMs: input.voiceJitterBufferMs
+        voiceDtx: input.voiceDtx
       })
       .where(eq(channels.id, input.channelId))
       .returning()

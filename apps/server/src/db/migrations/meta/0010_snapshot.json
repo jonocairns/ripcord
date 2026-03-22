@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "318c208c-2138-42f5-bd17-b803017b0887",
+  "id": "6a7bfe4d-cd42-493a-9f4b-b102b92cff18",
   "prevId": "7167026b-4db7-4684-9b6b-c14e02d0eb39",
   "tables": {
     "activity_log": {
@@ -582,21 +582,13 @@
           "autoincrement": false,
           "default": 96000
         },
-        "voice_fec_packet_loss_perc": {
-          "name": "voice_fec_packet_loss_perc",
+        "voice_dtx": {
+          "name": "voice_dtx",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
-          "default": 10
-        },
-        "voice_jitter_buffer_ms": {
-          "name": "voice_jitter_buffer_ms",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false,
-          "default": 80
+          "default": false
         },
         "position": {
           "name": "position",

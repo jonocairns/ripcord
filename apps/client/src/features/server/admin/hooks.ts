@@ -252,29 +252,6 @@ const normalizeVoiceBitrate = (value: number | null | undefined) => {
 	}
 };
 
-const normalizeVoiceFecPacketLossPerc = (value: number | null | undefined) => {
-	switch (value) {
-		case 5:
-		case 10:
-		case 15:
-			return value;
-		default:
-			return undefined;
-	}
-};
-
-const normalizeVoiceJitterBufferMs = (value: number | null | undefined) => {
-	switch (value) {
-		case 40:
-		case 80:
-		case 120:
-		case 200:
-			return value;
-		default:
-			return undefined;
-	}
-};
-
 export const useAdminChannelGeneral = (channelId: number) => {
 	const [loading, setLoading] = useState(true);
 	const [errors, setErrors] = useState<TTrpcErrors>({});
@@ -300,8 +277,7 @@ export const useAdminChannelGeneral = (channelId: number) => {
 				topic: channel?.topic ?? null,
 				private: channel?.private ?? false,
 				voiceBitrate: normalizeVoiceBitrate(channel?.voiceBitrate),
-				voiceFecPacketLossPerc: normalizeVoiceFecPacketLossPerc(channel?.voiceFecPacketLossPerc),
-				voiceJitterBufferMs: normalizeVoiceJitterBufferMs(channel?.voiceJitterBufferMs),
+				voiceDtx: channel?.voiceDtx ?? undefined,
 			});
 
 			toast.success('Channel updated');

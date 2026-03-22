@@ -2,8 +2,6 @@ import { getMediasoupKind, StreamKind, type TRemoteProducerIds, type TTransportP
 import { TRPCClientError } from '@trpc/client';
 import type { AppData, Consumer, Device, RtpCapabilities, Transport } from 'mediasoup-client/types';
 import { useCallback, useRef } from 'react';
-import { channelByIdSelector } from '@/features/server/channels/selectors';
-import { useServerStore } from '@/features/server/slice';
 import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
@@ -263,7 +261,7 @@ const useTransports = ({
 	);
 
 	const consume = useCallback(
-		async (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities, currentVoiceChannelId?: number) => {
+		async (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities) => {
 			if (!consumerTransport.current) {
 				logVoice('Consumer transport not available');
 				return;
@@ -345,30 +343,6 @@ const useTransports = ({
 
 				consumers.current[remoteId][consumerKind] = newConsumer;
 
-				const receiver = newConsumer.rtpReceiver;
-
-				if (receiver) {
-					try {
-						const isBroadcast = kind === StreamKind.EXTERNAL_VIDEO || kind === StreamKind.EXTERNAL_AUDIO;
-						const channel =
-							currentVoiceChannelId !== undefined
-								? channelByIdSelector(useServerStore.getState(), currentVoiceChannelId)
-								: undefined;
-						const jitterMs = channel?.voiceJitterBufferMs ?? 80;
-
-						// Broadcast content gets a large buffer for smooth playback.
-						// Interactive voice gets a small buffer to absorb network jitter
-						// without adding perceptible latency.
-						const delayHint = isBroadcast ? 0.5 : jitterMs / 1000;
-						const jitterTarget = isBroadcast ? 500 : jitterMs;
-
-						(receiver as unknown as { playoutDelayHint: number }).playoutDelayHint = delayHint;
-						(receiver as unknown as { jitterBufferTarget: number }).jitterBufferTarget = jitterTarget;
-					} catch {
-						// Older browsers may not support these properties
-					}
-				}
-
 				const stream = new MediaStream();
 
 				stream.addTrack(newConsumer.track);
@@ -411,7 +385,6 @@ const useTransports = ({
 	const consumeExistingProducers = useCallback(
 		async (
 			rtpCapabilities: RtpCapabilities,
-			currentVoiceChannelId?: number,
 			externalStreamTracks?: {
 				[streamId: number]: { audio?: boolean; video?: boolean };
 			},
@@ -436,7 +409,7 @@ const useTransports = ({
 				});
 
 				remoteAudioIds.forEach((remoteId) => {
-					consume(remoteId, StreamKind.AUDIO, rtpCapabilities, currentVoiceChannelId);
+					consume(remoteId, StreamKind.AUDIO, rtpCapabilities);
 				});
 
 				remoteVideoIds.forEach((remoteId) => {

@@ -14,8 +14,6 @@ type TGeneralProps = {
 };
 
 const DEFAULT_VOICE_BITRATE = 96_000;
-const DEFAULT_VOICE_FEC_PACKET_LOSS_PERC = 10;
-const DEFAULT_VOICE_JITTER_BUFFER_MS = 80;
 
 const General = memo(({ channelId }: TGeneralProps) => {
 	const { channel, loading, onChange, submit, errors } = useAdminChannelGeneral(channelId);
@@ -28,7 +26,7 @@ const General = memo(({ channelId }: TGeneralProps) => {
 				<CardTitle>Channel Information</CardTitle>
 				<CardDescription>Manage your channel's basic information</CardDescription>
 			</CardHeader>
-			<CardContent className="space-y-4">
+			<CardContent className="space-y-6">
 				<Group label="Name">
 					<Input
 						value={channel.name}
@@ -72,42 +70,13 @@ const General = memo(({ channelId }: TGeneralProps) => {
 						</Group>
 
 						<Group
-							label="FEC Packet Loss"
-							description="Higher values add more loss recovery overhead for unstable networks."
+							label="Discontinuous Transmission (DTX)"
+							description="Stops sending audio packets during silence to reduce bandwidth. May cause minor artifacts on some networks."
 						>
-							<Select
-								value={String(channel.voiceFecPacketLossPerc ?? DEFAULT_VOICE_FEC_PACKET_LOSS_PERC)}
-								onValueChange={(value) => onChange('voiceFecPacketLossPerc', Number(value))}
-							>
-								<SelectTrigger className="w-full">
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value="5">5% (Low)</SelectItem>
-									<SelectItem value="10">10% (Moderate)</SelectItem>
-									<SelectItem value="15">15% (High / WiFi)</SelectItem>
-								</SelectContent>
-							</Select>
-						</Group>
-
-						<Group
-							label="Jitter Buffer"
-							description="Sets the target playback buffer for received voice audio in this channel."
-						>
-							<Select
-								value={String(channel.voiceJitterBufferMs ?? DEFAULT_VOICE_JITTER_BUFFER_MS)}
-								onValueChange={(value) => onChange('voiceJitterBufferMs', Number(value))}
-							>
-								<SelectTrigger className="w-full">
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value="40">40ms (Low latency)</SelectItem>
-									<SelectItem value="80">80ms (Balanced)</SelectItem>
-									<SelectItem value="120">120ms (Stable)</SelectItem>
-									<SelectItem value="200">200ms (High latency network)</SelectItem>
-								</SelectContent>
-							</Select>
+							<Switch
+								checked={channel.voiceDtx ?? false}
+								onCheckedChange={(value) => onChange('voiceDtx', value)}
+							/>
 						</Group>
 					</>
 				) : null}

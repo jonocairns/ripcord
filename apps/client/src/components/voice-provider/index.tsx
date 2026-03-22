@@ -92,7 +92,6 @@ const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
 	[VideoCodecPreference.AV1]: 'video/AV1',
 };
 const DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS = 96_000;
-const DEFAULT_AUDIO_OPUS_PACKET_LOSS_PERC = 10;
 const MAX_VOICE_REJOIN_RETRIES = 5;
 const VOICE_REJOIN_RETRY_DELAY_MS = 2_000;
 
@@ -240,7 +239,7 @@ const getTrackedExternalWatchField = (
 
 const getAudioOpusConfig = (channelId: number | undefined) => {
 	let bitrate = DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS;
-	let packetLossPerc = DEFAULT_AUDIO_OPUS_PACKET_LOSS_PERC;
+	let dtx = false;
 
 	if (channelId !== undefined) {
 		const channel = channelByIdSelector(useServerStore.getState(), channelId);
@@ -249,8 +248,8 @@ const getAudioOpusConfig = (channelId: number | undefined) => {
 			bitrate = channel.voiceBitrate;
 		}
 
-		if (channel?.voiceFecPacketLossPerc != null) {
-			packetLossPerc = channel.voiceFecPacketLossPerc;
+		if (channel?.voiceDtx != null) {
+			dtx = channel.voiceDtx;
 		}
 	}
 
@@ -258,9 +257,9 @@ const getAudioOpusConfig = (channelId: number | undefined) => {
 		maxBitrate: bitrate,
 		codecOptions: {
 			opusMaxAverageBitrate: bitrate,
-			opusDtx: false,
-			opusFec: true,
-			opusPacketLossPerc: packetLossPerc,
+			opusDtx: dtx,
+			opusFec: false,
+			opusPacketLossPerc: 0,
 		},
 	};
 };
@@ -686,7 +685,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				return;
 			}
 
-			void consume(remoteId, kind, currentRtpCapabilities, currentVoiceChannelIdRef.current);
+			void consume(remoteId, kind, currentRtpCapabilities);
 		},
 		[consume, currentChannelExternalStreams],
 	);
@@ -776,7 +775,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				stream.tracks.audio &&
 				pendingStreams.has(`${numericStreamId}-${StreamKind.EXTERNAL_AUDIO}`)
 			) {
-				void consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities, currentVoiceChannelId);
+				void consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities);
 			}
 
 			if (
@@ -784,7 +783,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				stream.tracks.video &&
 				pendingStreams.has(`${numericStreamId}-${StreamKind.EXTERNAL_VIDEO}`)
 			) {
-				void consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities, currentVoiceChannelId);
+				void consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities);
 			}
 		});
 	}, [consume, currentChannelExternalStreams, currentVoiceChannelId, pendingStreams]);
@@ -1906,7 +1905,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				await Promise.all([
 					consumeExistingProducers(
 						device.rtpCapabilities,
-						currentVoiceChannelIdRef.current,
 						undefined,
 						opts?.existingProducers,
 					),
