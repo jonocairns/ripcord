@@ -288,6 +288,7 @@ const useTransports = ({
 					kind,
 					remoteId,
 					rtpCapabilities,
+					paused: true,
 				});
 
 				logVoice('Got consumer parameters', {
@@ -361,11 +362,17 @@ const useTransports = ({
 						kind,
 					});
 				} catch (error) {
-					logVoice('Error resuming remote consumer', {
+					logVoice('Error resuming remote consumer — removing stale stream', {
 						error,
 						remoteId,
 						kind,
 					});
+
+					if (kind === StreamKind.EXTERNAL_VIDEO || kind === StreamKind.EXTERNAL_AUDIO) {
+						removeExternalStreamTrack(remoteId, kind);
+					} else {
+						removeRemoteUserStream(remoteId, kind);
+					}
 				}
 			} catch (error) {
 				logVoice('Error consuming remote producer', { error });
