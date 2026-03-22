@@ -1,4 +1,5 @@
-import { ChannelPermission, type TFile, type TSettings, type TUser } from ".";
+import { ChannelPermission } from './statics/permissions';
+import type { TFile, TSettings, TUser } from './tables';
 
 export enum ChannelType {
   TEXT = "TEXT",
@@ -127,3 +128,15 @@ export type TChannelUserPermissionsMap = Record<
 >;
 
 export type TReadStateMap = Record<number, number>;
+
+export type TPushDevicePlatform = "android" | "ios" | "unknown";
+
+export type TPushDevice = {
+  createdAt: number;
+  expoPushToken: string;
+  id: number;
+  installationId: string;
+  platform: TPushDevicePlatform;
+  updatedAt: number | null;
+  userId: number;
+};
