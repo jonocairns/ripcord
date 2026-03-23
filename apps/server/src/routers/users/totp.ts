@@ -30,6 +30,7 @@ import { protectedProcedure } from '../../utils/trpc';
 const SETUP_TOKEN_EXPIRES_IN = '10m';
 
 const zSetupPayload = z.object({
+  userId: z.number(),
   secret: z.string(),
   hashedCodes: z.array(z.string()),
   purpose: z.literal('totp-setup')
@@ -72,7 +73,12 @@ const totpGenerateSetupRoute = protectedProcedure
 
     const serverToken = await getServerToken();
     const setupToken = jwt.sign(
-      { secret, hashedCodes, purpose: 'totp-setup' } satisfies TSetupPayload,
+      {
+        userId: ctx.userId,
+        secret,
+        hashedCodes,
+        purpose: 'totp-setup'
+      } satisfies TSetupPayload,
       serverToken,
       { expiresIn: SETUP_TOKEN_EXPIRES_IN }
     );
@@ -102,6 +108,13 @@ const totpConfirmSetupRoute = protectedProcedure
       return ctx.throwValidationError(
         'setupToken',
         'Setup session expired. Please start again.'
+      );
+    }
+
+    if (payload.userId !== ctx.userId) {
+      return ctx.throwValidationError(
+        'setupToken',
+        'Setup session is invalid. Please start again.'
       );
     }
 

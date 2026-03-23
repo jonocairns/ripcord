@@ -8,7 +8,7 @@ import { publishUser } from '../db/publishers';
 import { consumeInvite } from '../db/queries/invites';
 import { getDefaultRole } from '../db/queries/roles';
 import { getSettings } from '../db/queries/server';
-import { getUserTotpData } from '../db/queries/totp';
+import { isUserTotpEnabled } from '../db/queries/totp';
 import { getUserByIdentity } from '../db/queries/users';
 import { userRoles, users } from '../db/schema';
 import { getWsInfo } from '../helpers/get-ws-info';
@@ -142,9 +142,9 @@ const loginRouteHandler = async (
   }
 
   // Check if user has 2FA enabled
-  const totpData = await getUserTotpData(existingUser.id);
+  const totpEnabled = await isUserTotpEnabled(existingUser.id);
 
-  if (totpData?.totpSecret) {
+  if (totpEnabled) {
     // 2FA is enabled — return a challenge token instead of auth tokens
     const challengeToken = await createChallengeToken(existingUser.id);
 
