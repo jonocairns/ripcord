@@ -13,6 +13,7 @@ export enum ActivityLogType {
   USER_UNBANNED = "USER_UNBANNED",
   USER_UPDATED_PASSWORD = "USER_UPDATED_PASSWORD",
   USER_RESET_PASSWORD = "USER_RESET_PASSWORD",
+  USER_RESET_2FA = "USER_RESET_2FA",
   USER_DELETED = "USER_DELETED",
   USER_ENABLED_2FA = "USER_ENABLED_2FA",
   USER_DISABLED_2FA = "USER_DISABLED_2FA",
@@ -76,6 +77,10 @@ export type TActivityLogDetailsMap = {
   [ActivityLogType.USER_LEFT]: {};
   [ActivityLogType.USER_UPDATED_PASSWORD]: {};
   [ActivityLogType.USER_RESET_PASSWORD]: {
+    targetUserId: number;
+    resetBy: number;
+  };
+  [ActivityLogType.USER_RESET_2FA]: {
     targetUserId: number;
     resetBy: number;
   };

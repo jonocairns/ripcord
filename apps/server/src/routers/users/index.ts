@@ -16,6 +16,7 @@ import { getUsersRoute } from './get-users';
 import { kickRoute } from './kick';
 import { removeRoleRoute } from './remove-role';
 import { resetPasswordRoute } from './reset-password';
+import { resetTotpRoute } from './reset-totp';
 import {
   totpConfirmSetupRoute,
   totpDisableRoute,
@@ -41,6 +42,7 @@ export const usersRouter = t.router({
   ban: banRoute,
   unban: unbanRoute,
   resetPassword: resetPasswordRoute,
+  resetTotp: resetTotpRoute,
   totpStatus: totpStatusRoute,
   totpGenerateSetup: totpGenerateSetupRoute,
   totpConfirmSetup: totpConfirmSetupRoute,
