@@ -29,9 +29,7 @@ use std::time::Instant;
 #[cfg(windows)]
 use windows::core::{IUnknown, Interface, PWSTR};
 #[cfg(windows)]
-use windows::Win32::Foundation::{
-    BOOL, HANDLE, HWND, LPARAM, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
-};
+use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM, WAIT_TIMEOUT};
 #[cfg(windows)]
 use windows::Win32::Media::Audio::{
     ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
@@ -44,9 +42,7 @@ use windows::Win32::Media::Audio::{
     VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX,
 };
 #[cfg(windows)]
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
-};
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_NAME_WIN32,
@@ -72,23 +68,6 @@ const APP_AUDIO_SAMPLE_RATE: u32 = 48_000;
 const APP_AUDIO_CHANNELS: usize = 1;
 #[cfg(windows)]
 const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
-
-#[cfg(windows)]
-struct OwnedHandle(HANDLE);
-
-#[cfg(windows)]
-impl OwnedHandle {
-    fn raw(&self) -> HANDLE {
-        self.0
-    }
-}
-
-#[cfg(windows)]
-impl Drop for OwnedHandle {
-    fn drop(&mut self) {
-        let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
-    }
-}
 
 #[derive(Debug, Deserialize)]
 struct SidecarRequest {
