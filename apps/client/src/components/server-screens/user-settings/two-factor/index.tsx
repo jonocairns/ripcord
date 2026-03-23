@@ -17,6 +17,7 @@ type TSetupData = {
 
 type TStep = 'idle' | 'setup-password' | 'setup' | 'confirm' | 'disable' | 'regenerate';
 type TErrorField = 'password' | 'code';
+const TOTP_CODE_LENGTH = 6;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
 	return typeof value === 'object' && value !== null;
@@ -116,7 +117,7 @@ const TwoFactor = memo(() => {
 	}, [setupPassword]);
 
 	const onConfirmSetup = useCallback(async () => {
-		if (!setupData || confirmCode.length !== 6) return;
+		if (!setupData || confirmCode.length !== TOTP_CODE_LENGTH) return;
 
 		setLoading(true);
 		setConfirmError('');
@@ -140,7 +141,7 @@ const TwoFactor = memo(() => {
 	}, [setupData, confirmCode]);
 
 	const onDisable = useCallback(async () => {
-		if (!disablePassword || !disableCode) return;
+		if (!disablePassword || disableCode.length !== TOTP_CODE_LENGTH) return;
 
 		setLoading(true);
 		setDisableError('');
@@ -168,7 +169,7 @@ const TwoFactor = memo(() => {
 	}, [disablePassword, disableCode]);
 
 	const onRegenerate = useCallback(async () => {
-		if (!regenPassword || regenCode.length !== 6) return;
+		if (!regenPassword || regenCode.length !== TOTP_CODE_LENGTH) return;
 
 		setLoading(true);
 		setRegenError('');
@@ -321,7 +322,7 @@ const TwoFactor = memo(() => {
 								}}
 								onEnter={onConfirmSetup}
 								placeholder="Enter 6-digit code"
-								maxLength={6}
+								maxLength={TOTP_CODE_LENGTH}
 							/>
 							<p className="text-xs text-muted-foreground">
 								Enter a code from your authenticator app to confirm setup.
@@ -342,7 +343,7 @@ const TwoFactor = memo(() => {
 					>
 						Cancel
 					</Button>
-					<Button onClick={onConfirmSetup} disabled={loading || confirmCode.length !== 6}>
+					<Button onClick={onConfirmSetup} disabled={loading || confirmCode.length !== TOTP_CODE_LENGTH}>
 						Enable 2FA
 					</Button>
 				</CardFooter>
@@ -378,7 +379,7 @@ const TwoFactor = memo(() => {
 							}}
 							onEnter={onDisable}
 							placeholder="Enter 6-digit code"
-							maxLength={6}
+							maxLength={TOTP_CODE_LENGTH}
 						/>
 					</Group>
 					{disableError && <p className="text-xs text-destructive">{disableError}</p>}
@@ -395,7 +396,11 @@ const TwoFactor = memo(() => {
 					>
 						Cancel
 					</Button>
-					<Button variant="destructive" onClick={onDisable} disabled={loading || !disablePassword || !disableCode}>
+					<Button
+						variant="destructive"
+						onClick={onDisable}
+						disabled={loading || !disablePassword || disableCode.length !== TOTP_CODE_LENGTH}
+					>
 						Disable 2FA
 					</Button>
 				</CardFooter>
@@ -433,7 +438,7 @@ const TwoFactor = memo(() => {
 									}}
 									onEnter={onRegenerate}
 									placeholder="Enter 6-digit code"
-									maxLength={6}
+									maxLength={TOTP_CODE_LENGTH}
 								/>
 							</Group>
 							{regenError && <p className="text-xs text-destructive">{regenError}</p>}
@@ -488,7 +493,10 @@ const TwoFactor = memo(() => {
 							>
 								Cancel
 							</Button>
-							<Button onClick={onRegenerate} disabled={loading || !regenPassword || regenCode.length !== 6}>
+							<Button
+								onClick={onRegenerate}
+								disabled={loading || !regenPassword || regenCode.length !== TOTP_CODE_LENGTH}
+							>
 								Regenerate
 							</Button>
 						</>

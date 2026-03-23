@@ -151,7 +151,7 @@ const totpDisableRoute = protectedProcedure
   .input(
     z.object({
       password: z.string().min(1),
-      code: z.string().min(1).max(32)
+      code: z.string().length(6)
     })
   )
   .mutation(async ({ ctx, input }) => {
