@@ -116,7 +116,10 @@ export type TJoinedEmoji = TEmoji & {
   user: TPublicUser;
 };
 
-export type TJoinedUser = TUser & {
+export type TJoinedUser = Omit<
+  TUser,
+  'totpSecret' | 'totpRecoveryCodes'
+> & {
   avatar: TFile | null;
   banner: TFile | null;
   roleIds: number[];
