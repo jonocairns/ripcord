@@ -108,65 +108,6 @@ export type TAppAudioStatusEvent = {
   protocolVersion?: number;
 };
 
-export type TVoiceFilterStrength = "low" | "balanced" | "high" | "aggressive";
-export type TVoiceDereverbMode = "off" | "tail";
-
-export type TVoiceFilterSession = {
-  sessionId: string;
-  sampleRate: number;
-  channels: number;
-  framesPerBuffer: number;
-  protocolVersion?: number;
-  encoding?: "f32le_base64";
-  echoCancellationBackend?: "adaptive_nlms" | "webrtc_aec3";
-  dereverbMode?: TVoiceDereverbMode;
-};
-
-export type TVoiceFilterFrameDiag = {
-  lsnrMean?: number;
-  lsnrMin?: number;
-  lsnrMax?: number;
-  aecErleDb?: number;
-  aecDelayMs?: number;
-  aecDoubleTalkConfidence?: number;
-  agcGain?: number;
-  rampWetMix: number;
-};
-
-export type TVoiceFilterFrame = {
-  sessionId: string;
-  sequence: number;
-  sampleRate: number;
-  channels: number;
-  frameCount: number;
-  timestampMs?: number;
-  pcmBase64: string;
-  protocolVersion: number;
-  encoding: "f32le_base64";
-  droppedFrameCount?: number;
-  diag?: TVoiceFilterFrameDiag;
-};
-
-export type TVoiceFilterPcmFrame = {
-  sessionId: string;
-  sequence: number;
-  sampleRate: number;
-  channels: number;
-  frameCount: number;
-  timestampMs?: number;
-  pcm: Float32Array;
-  protocolVersion: number;
-  droppedFrameCount?: number;
-  diag?: TVoiceFilterFrameDiag;
-};
-
-export type TVoiceFilterStatusEvent = {
-  sessionId: string;
-  reason: "capture_stopped" | "capture_error" | "sidecar_exited";
-  error?: string;
-  protocolVersion?: number;
-};
-
 export type TDesktopUpdateState =
   | "disabled"
   | "idle"
@@ -190,23 +131,6 @@ export type TDesktopUpdateStatus = {
   message?: string;
 };
 
-export type TVoiceFilterDfnTuningInput = {
-  attenuationLimitDb?: number;
-  mix?: number;
-  experimentalAggressiveMode?: boolean;
-  noiseGateFloorDbfs?: number;
-};
-
-export type TStartVoiceFilterInput = {
-  sampleRate: number;
-  channels: number;
-  suppressionLevel: TVoiceFilterStrength;
-  noiseSuppression: boolean;
-  autoGainControl: boolean;
-  echoCancellation: boolean;
-  dereverbMode?: TVoiceDereverbMode;
-} & TVoiceFilterDfnTuningInput;
-
 export type TPushKeybindKind = "talk" | "mute";
 
 export type TDesktopPushKeybindsInput = {
@@ -223,10 +147,4 @@ export type TGlobalPushKeybindRegistrationResult = {
   talkRegistered: boolean;
   muteRegistered: boolean;
   errors: string[];
-};
-
-export type TMicDevice = { id: string; label: string };
-export type TMicDevicesResult = { devices: TMicDevice[] };
-export type TStartVoiceFilterWithCaptureInput = TStartVoiceFilterInput & {
-  deviceId?: string;
 };

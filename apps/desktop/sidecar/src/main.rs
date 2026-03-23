@@ -100,12 +100,6 @@ struct SidecarEvent<'a> {
 }
 
 #[derive(Debug, Serialize, Clone)]
-struct MicDevice {
-    id: String,
-    label: String,
-}
-
-#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct AudioTarget {
     id: String,
@@ -1330,7 +1324,6 @@ fn handle_capabilities_get() -> Result<Value, String> {
     Ok(json!({
         "platform": platform,
         "perAppAudio": per_app_audio,
-        "voiceFilter": "unsupported",
         "protocolVersion": PROTOCOL_VERSION,
         "encoding": PCM_ENCODING,
     }))
@@ -1555,36 +1548,6 @@ fn handle_push_keybinds_set(
     }
 }
 
-fn handle_mic_devices_list() -> Result<Value, String> {
-    let empty: Vec<MicDevice> = Vec::new();
-    Ok(json!({ "devices": empty }))
-}
-
-fn voice_filter_disabled_error() -> String {
-    "Voice filter and microphone capture support are no longer built into the Rust sidecar."
-        .to_string()
-}
-
-fn handle_voice_filter_start_with_capture(_params: Value) -> Result<Value, String> {
-    Err(voice_filter_disabled_error())
-}
-
-fn handle_voice_filter_start(_params: Value) -> Result<Value, String> {
-    Err(voice_filter_disabled_error())
-}
-
-fn handle_voice_filter_push_frame(_params: Value) -> Result<Value, String> {
-    Err(voice_filter_disabled_error())
-}
-
-fn handle_voice_filter_push_reference_frame(_params: Value) -> Result<Value, String> {
-    Err(voice_filter_disabled_error())
-}
-
-fn handle_voice_filter_stop(_params: Value) -> Result<Value, String> {
-    Err(voice_filter_disabled_error())
-}
-
 fn start_app_audio_binary_egress() -> Result<AppAudioBinaryEgress, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .map_err(|error| format!("Failed to bind app-audio binary egress listener: {error}"))?;
@@ -1646,14 +1609,6 @@ fn handle_audio_capture_binary_egress_info(
     }))
 }
 
-fn handle_voice_filter_binary_egress_info() -> Result<Value, String> {
-    Err(voice_filter_disabled_error())
-}
-
-fn handle_voice_filter_binary_ingress_info() -> Result<Value, String> {
-    Err(voice_filter_disabled_error())
-}
-
 fn main() {
     eprintln!("[capture-sidecar] starting");
 
@@ -1707,8 +1662,6 @@ fn main() {
                 }
                 None => Err("Binary app-audio egress is unavailable".to_string()),
             },
-            "voice_filter.binary_egress_info" => handle_voice_filter_binary_egress_info(),
-            "voice_filter.binary_ingress_info" => handle_voice_filter_binary_ingress_info(),
             "audio_capture.start" => match state.lock() {
                 Ok(mut state_lock) => handle_audio_capture_start(
                     Arc::clone(&request_stdout),
@@ -1733,16 +1686,6 @@ fn main() {
                 ),
                 Err(_) => Err("Sidecar state lock poisoned".to_string()),
             },
-            "mic_devices.list" => handle_mic_devices_list(),
-            "voice_filter.start_with_capture" => {
-                handle_voice_filter_start_with_capture(request.params)
-            }
-            "voice_filter.start" => handle_voice_filter_start(request.params),
-            "voice_filter.push_frame" => handle_voice_filter_push_frame(request.params),
-            "voice_filter.push_reference_frame" => {
-                handle_voice_filter_push_reference_frame(request.params)
-            }
-            "voice_filter.stop" => handle_voice_filter_stop(request.params),
             _ => Err(format!("Unknown method: {}", request.method)),
         };
 
