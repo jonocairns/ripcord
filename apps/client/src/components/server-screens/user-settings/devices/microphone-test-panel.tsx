@@ -6,16 +6,12 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import {
 	createMicAudioProcessingPipeline,
-	createNativeSidecarMicCapturePipeline,
-	resolveSidecarDeviceId,
 	type TMicAudioProcessingPipeline,
 } from '@/components/voice-provider/mic-audio-processing';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
 import { getTRPCClient } from '@/lib/trpc';
-import { getDesktopBridge } from '@/runtime/desktop-bridge';
-import { getStrengthDefaults, MicQualityMode, type VoiceFilterStrength } from '@/types';
 
 const ANALYSER_FFT_SIZE = 512;
 const ANALYSER_SMOOTHING = 0.8;
@@ -27,33 +23,20 @@ const WASM_DIAGNOSTIC_SAMPLE_RATE = 48_000;
 
 type TMicrophoneTestPanelProps = {
 	microphoneId: string | undefined;
-	micQualityMode: MicQualityMode;
-	voiceFilterStrength: VoiceFilterStrength;
-	echoCancellation: boolean;
 	noiseSuppression: boolean;
 	wasmNoiseSuppressionEnabled: boolean;
 	autoGainControl: boolean;
-	hasDesktopBridge: boolean;
 };
 
 type TResolvedMicTestProcessingConfig = {
-	sidecarVoiceProcessingEnabled: boolean;
 	wasmNoiseSuppressionEnabled: boolean;
 	browserAutoGainControl: boolean;
 	browserNoiseSuppression: boolean;
 	browserEchoCancellation: boolean;
-	sidecarNoiseSuppression: boolean;
-	sidecarAutoGainControl: boolean;
-	sidecarEchoCancellation: boolean;
-	sidecarSuppressionLevel: VoiceFilterStrength;
-	sidecarDfnMix: number;
-	sidecarDfnAttenuationLimitDb?: number;
-	sidecarExperimentalAggressiveMode: boolean;
-	sidecarNoiseGateFloorDbfs?: number;
 };
 
 type TWasmDenoiseDiagSnapshot = NonNullable<Window['wasmDenoiseDiag']>;
-type TMicTestPreviewState = 'browser-capture' | 'browser-wasm' | 'in-call-stream' | 'sidecar-native';
+type TMicTestPreviewState = 'browser-capture' | 'browser-wasm' | 'in-call-stream';
 
 const getMicTestPreviewLabel = (previewState: TMicTestPreviewState | undefined): string => {
 	switch (previewState) {
@@ -61,8 +44,6 @@ const getMicTestPreviewLabel = (previewState: TMicTestPreviewState | undefined):
 			return 'Browser WASM';
 		case 'in-call-stream':
 			return 'In-call stream';
-		case 'sidecar-native':
-			return 'Native sidecar';
 		case 'browser-capture':
 		default:
 			return 'Browser capture';
@@ -87,77 +68,29 @@ const formatQueueDepthMs = (frames: number): string => {
 };
 
 const resolveMicTestProcessingConfig = ({
-	micQualityMode,
-	hasDesktopBridge,
-	voiceFilterStrength,
-	echoCancellation,
 	noiseSuppression,
 	wasmNoiseSuppressionEnabled,
 	autoGainControl,
 }: {
-	micQualityMode: MicQualityMode;
-	hasDesktopBridge: boolean;
-	voiceFilterStrength: VoiceFilterStrength;
-	echoCancellation: boolean;
 	noiseSuppression: boolean;
 	wasmNoiseSuppressionEnabled: boolean;
 	autoGainControl: boolean;
 }): TResolvedMicTestProcessingConfig => {
-	const defaults = getStrengthDefaults(voiceFilterStrength);
 	const browserWasmNoiseSuppressionEnabled = wasmNoiseSuppressionEnabled && noiseSuppression;
 
-	if (micQualityMode === MicQualityMode.EXPERIMENTAL) {
-		const sidecarVoiceProcessingEnabled = hasDesktopBridge;
-
-		return {
-			sidecarVoiceProcessingEnabled,
-			wasmNoiseSuppressionEnabled: !sidecarVoiceProcessingEnabled && browserWasmNoiseSuppressionEnabled,
-			browserAutoGainControl: false,
-			browserNoiseSuppression: false,
-			browserEchoCancellation: false,
-			sidecarNoiseSuppression: noiseSuppression,
-			sidecarAutoGainControl: autoGainControl,
-			sidecarEchoCancellation: echoCancellation,
-			sidecarSuppressionLevel: voiceFilterStrength,
-			sidecarDfnMix: defaults.dfnMix,
-			sidecarDfnAttenuationLimitDb: defaults.dfnAttenuationLimitDb,
-			sidecarExperimentalAggressiveMode: defaults.dfnExperimentalAggressiveMode,
-			sidecarNoiseGateFloorDbfs: defaults.dfnNoiseGateFloorDbfs,
-		};
-	}
-
-	// Standard (AUTO) and legacy MANUAL — browser-only, no sidecar.
 	// Echo cancellation is forced off for the test: the monitor plays your mic
 	// back through speakers, which the browser AEC would treat as echo and cancel,
 	// making the playback sound broken.
 	return {
-		sidecarVoiceProcessingEnabled: false,
 		wasmNoiseSuppressionEnabled: browserWasmNoiseSuppressionEnabled,
 		browserAutoGainControl: autoGainControl,
 		browserNoiseSuppression: browserWasmNoiseSuppressionEnabled ? false : noiseSuppression,
 		browserEchoCancellation: false,
-		sidecarNoiseSuppression: noiseSuppression,
-		sidecarAutoGainControl: autoGainControl,
-		sidecarEchoCancellation: false,
-		sidecarSuppressionLevel: voiceFilterStrength,
-		sidecarDfnMix: defaults.dfnMix,
-		sidecarDfnAttenuationLimitDb: defaults.dfnAttenuationLimitDb,
-		sidecarExperimentalAggressiveMode: defaults.dfnExperimentalAggressiveMode,
-		sidecarNoiseGateFloorDbfs: defaults.dfnNoiseGateFloorDbfs,
 	};
 };
 
 const MicrophoneTestPanel = memo(
-	({
-		microphoneId,
-		micQualityMode,
-		voiceFilterStrength,
-		echoCancellation,
-		noiseSuppression,
-		wasmNoiseSuppressionEnabled,
-		autoGainControl,
-		hasDesktopBridge,
-	}: TMicrophoneTestPanelProps) => {
+	({ microphoneId, noiseSuppression, wasmNoiseSuppressionEnabled, autoGainControl }: TMicrophoneTestPanelProps) => {
 		const currentVoiceChannelId = useCurrentVoiceChannelId();
 		const { localAudioStream } = useVoice();
 		const ownVoiceState = useOwnVoiceState();
@@ -191,23 +124,11 @@ const MicrophoneTestPanel = memo(
 		const monitorEnabledRef = useRef(monitorEnabled);
 		const resolvedMicProcessingConfig = useMemo(() => {
 			return resolveMicTestProcessingConfig({
-				micQualityMode,
-				hasDesktopBridge,
-				voiceFilterStrength,
-				echoCancellation,
 				noiseSuppression,
 				wasmNoiseSuppressionEnabled,
 				autoGainControl,
 			});
-		}, [
-			autoGainControl,
-			echoCancellation,
-			hasDesktopBridge,
-			micQualityMode,
-			noiseSuppression,
-			voiceFilterStrength,
-			wasmNoiseSuppressionEnabled,
-		]);
+		}, [autoGainControl, noiseSuppression, wasmNoiseSuppressionEnabled]);
 		const canRecordClip = typeof window !== 'undefined' && typeof window.MediaRecorder !== 'undefined';
 		const showDevMicTestControls = import.meta.env.DEV;
 		const showWasmDiagnostics = showDevMicTestControls && isTestingMic && isBrowserWasmPreviewState(testPreviewState);
@@ -455,68 +376,30 @@ const MicrophoneTestPanel = memo(
 				if (inVoiceChannel && outputStream) {
 					previewState = 'in-call-stream';
 				} else {
-					if (resolvedMicProcessingConfig.sidecarVoiceProcessingEnabled && !inVoiceChannel) {
-						// Sidecar mode — fail hard so the test reflects the real processing path.
-						const desktopBridge = getDesktopBridge();
-						if (!desktopBridge) {
-							throw new Error('Desktop bridge unavailable for sidecar microphone test.');
-						}
-						const sidecarDeviceId = await resolveSidecarDeviceId(microphoneId, desktopBridge);
-						micAudioPipeline = await createNativeSidecarMicCapturePipeline({
-							suppressionLevel: resolvedMicProcessingConfig.sidecarSuppressionLevel,
-							noiseSuppression: resolvedMicProcessingConfig.sidecarNoiseSuppression,
-							autoGainControl: resolvedMicProcessingConfig.sidecarAutoGainControl,
-							echoCancellation: resolvedMicProcessingConfig.sidecarEchoCancellation,
-							dfnMix: resolvedMicProcessingConfig.sidecarDfnMix,
-							dfnAttenuationLimitDb: resolvedMicProcessingConfig.sidecarDfnAttenuationLimitDb,
-							dfnExperimentalAggressiveMode: resolvedMicProcessingConfig.sidecarExperimentalAggressiveMode,
-							dfnNoiseGateFloorDbfs: resolvedMicProcessingConfig.sidecarNoiseGateFloorDbfs,
-							sidecarDeviceId,
-							desktopBridge,
-						});
-						if (!micAudioPipeline) {
-							throw new Error('Failed to start native sidecar microphone capture.');
-						}
+					rawStream = await navigator.mediaDevices.getUserMedia({
+						audio: resolveMicAudioConstraints(),
+					});
+					const rawTrack = rawStream.getAudioTracks()[0];
+
+					if (!rawTrack) {
+						throw new Error('Unable to access microphone track for testing.');
+					}
+
+					micAudioPipeline = await createMicAudioProcessingPipeline({
+						inputTrack: rawTrack,
+						wasmNoiseSuppressionEnabled: resolvedMicProcessingConfig.wasmNoiseSuppressionEnabled,
+						onWasmError: (error) => {
+							setMicTestError(error.message);
+							void stopTest();
+						},
+					});
+
+					if (micAudioPipeline?.backend === 'browser-wasm') {
 						outputStream = micAudioPipeline.stream;
-						previewState = 'sidecar-native';
+						previewState = 'browser-wasm';
 					} else {
-						rawStream = await navigator.mediaDevices.getUserMedia({
-							audio: resolveMicAudioConstraints(),
-						});
-						const rawTrack = rawStream.getAudioTracks()[0];
-
-						if (!rawTrack) {
-							throw new Error('Unable to access microphone track for testing.');
-						}
-
-						micAudioPipeline = await createMicAudioProcessingPipeline({
-							inputTrack: rawTrack,
-							enabled: false,
-							wasmNoiseSuppressionEnabled: resolvedMicProcessingConfig.wasmNoiseSuppressionEnabled,
-							suppressionLevel: resolvedMicProcessingConfig.sidecarSuppressionLevel,
-							noiseSuppression: resolvedMicProcessingConfig.sidecarNoiseSuppression,
-							autoGainControl: resolvedMicProcessingConfig.sidecarAutoGainControl,
-							echoCancellation: resolvedMicProcessingConfig.sidecarEchoCancellation,
-							dfnMix: resolvedMicProcessingConfig.sidecarDfnMix,
-							dfnAttenuationLimitDb: resolvedMicProcessingConfig.sidecarDfnAttenuationLimitDb,
-							dfnExperimentalAggressiveMode: resolvedMicProcessingConfig.sidecarExperimentalAggressiveMode,
-							dfnNoiseGateFloorDbfs: resolvedMicProcessingConfig.sidecarNoiseGateFloorDbfs,
-							onWasmError: (error) => {
-								setMicTestError(error.message);
-								void stopTest();
-							},
-						});
-
-						if (micAudioPipeline?.backend === 'browser-wasm') {
-							outputStream = micAudioPipeline.stream;
-							previewState = 'browser-wasm';
-						} else if (micAudioPipeline?.backend === 'sidecar-native') {
-							outputStream = micAudioPipeline.stream;
-							previewState = 'sidecar-native';
-						} else {
-							outputStream = rawStream;
-							previewState = 'browser-capture';
-						}
+						outputStream = rawStream;
+						previewState = 'browser-capture';
 					}
 				}
 
@@ -594,7 +477,6 @@ const MicrophoneTestPanel = memo(
 			}
 		}, [
 			maybeMuteForTest,
-			microphoneId,
 			localAudioStream,
 			currentVoiceChannelId,
 			resolvedMicProcessingConfig,
