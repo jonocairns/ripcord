@@ -16,6 +16,49 @@ type TSetupData = {
 };
 
 type TStep = 'idle' | 'setup-password' | 'setup' | 'confirm' | 'disable' | 'regenerate';
+type TErrorField = 'password' | 'code';
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+	return typeof value === 'object' && value !== null;
+};
+
+const getFieldError = (error: unknown, field: TErrorField): string | undefined => {
+	if (!isRecord(error)) {
+		return undefined;
+	}
+
+	const data = error.data;
+
+	if (!isRecord(data)) {
+		return undefined;
+	}
+
+	const zodError = data.zodError;
+
+	if (!isRecord(zodError)) {
+		return undefined;
+	}
+
+	const fieldErrors = zodError.fieldErrors;
+
+	if (!isRecord(fieldErrors)) {
+		return undefined;
+	}
+
+	const fieldError = fieldErrors[field];
+
+	if (!Array.isArray(fieldError)) {
+		return undefined;
+	}
+
+	const firstError = fieldError[0];
+
+	return typeof firstError === 'string' ? firstError : undefined;
+};
+
+const getErrorMessage = (error: unknown): string | undefined => {
+	return error instanceof Error ? error.message : undefined;
+};
 
 const TwoFactor = memo(() => {
 	const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -64,8 +107,8 @@ const TwoFactor = memo(() => {
 			const result = await trpc.users.totpGenerateSetup.mutate({ password: setupPassword });
 			setSetupData(result);
 			setStep('setup');
-		} catch (error: any) {
-			const msg = error?.data?.zodError?.fieldErrors?.password?.[0] || error?.message || 'Failed to start 2FA setup';
+		} catch (error) {
+			const msg = getFieldError(error, 'password') || getErrorMessage(error) || 'Failed to start 2FA setup';
 			setSetupPasswordError(msg);
 		} finally {
 			setLoading(false);
@@ -88,8 +131,8 @@ const TwoFactor = memo(() => {
 			setSetupData(null);
 			setConfirmCode('');
 			toast.success('Two-factor authentication enabled');
-		} catch (error: any) {
-			const msg = error?.data?.zodError?.fieldErrors?.code?.[0] || error?.message || 'Invalid code';
+		} catch (error) {
+			const msg = getFieldError(error, 'code') || getErrorMessage(error) || 'Invalid code';
 			setConfirmError(msg);
 		} finally {
 			setLoading(false);
@@ -112,11 +155,11 @@ const TwoFactor = memo(() => {
 			setDisablePassword('');
 			setDisableCode('');
 			toast.success('Two-factor authentication disabled');
-		} catch (error: any) {
+		} catch (error) {
 			const msg =
-				error?.data?.zodError?.fieldErrors?.password?.[0] ||
-				error?.data?.zodError?.fieldErrors?.code?.[0] ||
-				error?.message ||
+				getFieldError(error, 'password') ||
+				getFieldError(error, 'code') ||
+				getErrorMessage(error) ||
 				'Failed to disable 2FA';
 			setDisableError(msg);
 		} finally {
@@ -137,11 +180,11 @@ const TwoFactor = memo(() => {
 			});
 			setNewRecoveryCodes(result.recoveryCodes);
 			toast.success('Recovery codes regenerated');
-		} catch (error: any) {
+		} catch (error) {
 			const msg =
-				error?.data?.zodError?.fieldErrors?.password?.[0] ||
-				error?.data?.zodError?.fieldErrors?.code?.[0] ||
-				error?.message ||
+				getFieldError(error, 'password') ||
+				getFieldError(error, 'code') ||
+				getErrorMessage(error) ||
 				'Failed to regenerate codes';
 			setRegenError(msg);
 		} finally {
