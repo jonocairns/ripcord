@@ -1,11 +1,15 @@
+#[cfg(any(windows, feature = "voice-filter"))]
 use base64::engine::general_purpose::STANDARD as BASE64;
+#[cfg(any(windows, feature = "voice-filter"))]
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[cfg(any(windows, test))]
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::io::{self, BufRead, Read, Write};
+#[cfg(feature = "voice-filter")]
+use std::io::Read;
+use std::io::{self, BufRead, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(all(windows, feature = "voice-filter"))]
@@ -13,7 +17,9 @@ use std::sync::OnceLock;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(any(windows, feature = "voice-filter"))]
+use std::time::Instant;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[cfg(windows)]
@@ -377,6 +383,7 @@ struct AppAudioBinaryEgress {
 #[derive(Debug)]
 struct VoiceFilterBinaryEgress {
     port: u16,
+    #[cfg(feature = "voice-filter")]
     stream: Arc<Mutex<Option<TcpStream>>>,
     stop_flag: Arc<AtomicBool>,
     handle: JoinHandle<()>,
@@ -422,6 +429,7 @@ struct FrameQueueState {
     closed: bool,
 }
 
+#[cfg_attr(not(any(windows, feature = "voice-filter")), allow(dead_code))]
 struct FrameQueue {
     capacity: usize,
     dropped_count: AtomicU64,
@@ -439,6 +447,7 @@ impl FrameQueue {
         }
     }
 
+    #[cfg_attr(not(any(windows, feature = "voice-filter")), allow(dead_code))]
     fn push_line(&self, line: String) {
         let mut lock = match self.state.lock() {
             Ok(guard) => guard,
@@ -487,6 +496,7 @@ impl FrameQueue {
         }
     }
 
+    #[cfg_attr(not(any(windows, feature = "voice-filter")), allow(dead_code))]
     fn take_dropped_count(&self) -> u64 {
         self.dropped_count.swap(0, Ordering::Relaxed)
     }
