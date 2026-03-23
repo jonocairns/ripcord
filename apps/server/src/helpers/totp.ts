@@ -163,19 +163,6 @@ const verifyAndConsumeTotpToken = (
 // ---- Recovery Codes ----
 
 const RECOVERY_CODE_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
-const RECOVERY_CODE_MAX_UNBIASED = 256 - (256 % RECOVERY_CODE_ALPHABET.length); // 252 for len=36
-
-const generateUnbiasedCode = (length: number): string => {
-  let code = '';
-  while (code.length < length) {
-    const bytes = crypto.randomBytes(128);
-    for (let i = 0; i < bytes.length && code.length < length; i++) {
-      if (bytes[i]! >= RECOVERY_CODE_MAX_UNBIASED) continue;
-      code += RECOVERY_CODE_ALPHABET[bytes[i]! % RECOVERY_CODE_ALPHABET.length];
-    }
-  }
-  return code;
-};
 
 const generateRecoveryCodes = async (): Promise<{
   plainCodes: string[];
@@ -184,7 +171,12 @@ const generateRecoveryCodes = async (): Promise<{
   const plainCodes: string[] = [];
 
   for (let i = 0; i < RECOVERY_CODE_COUNT; i++) {
-    plainCodes.push(generateUnbiasedCode(RECOVERY_CODE_LENGTH));
+    const code = Array.from(
+      { length: RECOVERY_CODE_LENGTH },
+      () =>
+        RECOVERY_CODE_ALPHABET[crypto.randomInt(RECOVERY_CODE_ALPHABET.length)]
+    ).join('');
+    plainCodes.push(code);
   }
 
   const hashedCodes = await Promise.all(plainCodes.map((code) => sha256(code)));
