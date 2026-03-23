@@ -10,13 +10,10 @@
   "scripts": {
     "dev": "bun run build:sidecar:optional && concurrently -k \"cd ../client && bun run dev\" \"bun run dev:main\" \"bun run dev:electron\" \"bun run dev:sidecar\"",
     "dev:sidecar": "cargo watch -w sidecar/src -s \"node ./scripts/build-sidecar.mjs\"",
-    "dev:sidecar:full": "cargo watch -w sidecar/src -s \"node ./scripts/build-sidecar.mjs --voice-filter\"",
     "dev:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --sourcemap --watch --clean",
     "dev:electron": "wait-on tcp:5173 file:dist/main/index.cjs && cross-env ELECTRON_RENDERER_URL=http://localhost:5173 electronmon . --watch sidecar/bin",
     "build:sidecar": "node ./scripts/build-sidecar.mjs --release",
     "build:sidecar:optional": "node ./scripts/build-sidecar.mjs --release --optional",
-    "build:sidecar:full": "node ./scripts/build-sidecar.mjs --release --voice-filter",
-    "build:sidecar:full:optional": "node ./scripts/build-sidecar.mjs --release --optional --voice-filter",
     "build:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --clean",
     "prepare:renderer": "node ./scripts/prepare-renderer-dist.mjs",
     "build": "cd ../client && bun run build && cd ../desktop && bun run prepare:renderer && bun run build:sidecar && bun run build:main && bun run package:preview",
