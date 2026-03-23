@@ -112,7 +112,7 @@ const totpConfirmSetupRoute = protectedProcedure
     );
 
     if (!isValid) {
-      ctx.throwValidationError(
+      return ctx.throwValidationError(
         'code',
         'Invalid code. Make sure your authenticator app is synced and try again.'
       );

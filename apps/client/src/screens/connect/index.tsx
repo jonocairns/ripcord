@@ -14,8 +14,65 @@ import { useForm } from '@/hooks/use-form';
 import { getRuntimeServerConfig, normalizeServerUrl, updateDesktopServerUrl } from '@/runtime/server-config';
 
 type TLoginResponse =
-	| { success: true; token: string; refreshToken: string }
-	| { requires2fa: true; challengeToken: string };
+	| {
+			success: true;
+			token: string;
+			refreshToken: string;
+	  }
+	| {
+			requires2fa: true;
+			challengeToken: string;
+	  };
+
+type TVerify2faResponse = {
+	success: true;
+	token: string;
+	refreshToken: string;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+	return typeof value === 'object' && value !== null;
+};
+
+const parseLoginResponse = (value: unknown): TLoginResponse => {
+	if (!isRecord(value)) {
+		throw new Error('Invalid login response');
+	}
+
+	if (value.success === true && typeof value.token === 'string' && typeof value.refreshToken === 'string') {
+		return {
+			success: true,
+			token: value.token,
+			refreshToken: value.refreshToken,
+		};
+	}
+
+	if (value.requires2fa === true && typeof value.challengeToken === 'string') {
+		return {
+			requires2fa: true,
+			challengeToken: value.challengeToken,
+		};
+	}
+
+	throw new Error('Invalid login response');
+};
+
+const parseVerify2faResponse = (value: unknown): TVerify2faResponse => {
+	if (
+		isRecord(value) &&
+		value.success === true &&
+		typeof value.token === 'string' &&
+		typeof value.refreshToken === 'string'
+	) {
+		return {
+			success: true,
+			token: value.token,
+			refreshToken: value.refreshToken,
+		};
+	}
+
+	throw new Error('Invalid 2FA verification response');
+};
 
 const Connect = memo(() => {
 	const { values, r, setErrors } = useForm<{
@@ -67,7 +124,7 @@ const Connect = memo(() => {
 				return;
 			}
 
-			const data = (await response.json()) as TLoginResponse;
+			const data = parseLoginResponse(await response.json());
 
 			if ('requires2fa' in data) {
 				setTwoFaChallenge(data.challengeToken);
@@ -116,7 +173,7 @@ const Connect = memo(() => {
 				return;
 			}
 
-			const data = (await response.json()) as { success: true; token: string; refreshToken: string };
+			const data = parseVerify2faResponse(await response.json());
 
 			setAuthTokens(data.token, data.refreshToken);
 			setLocalStorageItem(LocalStorageKey.IDENTITY, values.identity);
