@@ -22,6 +22,8 @@ const zBody = z.object({
   isRecoveryCode: z.boolean().optional()
 });
 
+const zRecoveryCodes = z.array(z.string());
+
 const verify2faRouteHandler = async (
   req: http.IncomingMessage,
   res: http.ServerResponse
@@ -45,6 +47,13 @@ const verify2faRouteHandler = async (
     throw new HttpValidationError('challengeToken', 'User not found');
   }
 
+  if (user.banned) {
+    throw new HttpValidationError(
+      'challengeToken',
+      `Identity banned: ${user.banReason || 'No reason provided'}`
+    );
+  }
+
   const totpData = await getUserTotpData(user.id);
 
   if (!totpData?.totpSecret) {
@@ -55,9 +64,20 @@ const verify2faRouteHandler = async (
   }
 
   if (data.isRecoveryCode) {
-    const storedCodes: string[] = totpData.totpRecoveryCodes
-      ? JSON.parse(totpData.totpRecoveryCodes)
-      : [];
+    let storedCodes: string[] = [];
+
+    if (totpData.totpRecoveryCodes) {
+      try {
+        storedCodes = zRecoveryCodes.parse(
+          JSON.parse(totpData.totpRecoveryCodes)
+        );
+      } catch {
+        throw new HttpValidationError(
+          'code',
+          'Recovery codes are unavailable for this account'
+        );
+      }
+    }
 
     const { valid, remainingCodes } = await verifyRecoveryCode(
       data.code,

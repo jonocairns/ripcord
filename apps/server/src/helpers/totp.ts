@@ -247,6 +247,5 @@ export {
   generateTotpSetup,
   verifyAndConsumeTotpToken,
   verifyChallengeToken,
-  verifyRecoveryCode,
-  verifyTotpToken
+  verifyRecoveryCode
 };
