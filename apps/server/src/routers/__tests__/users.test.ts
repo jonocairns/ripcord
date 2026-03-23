@@ -100,6 +100,16 @@ describe('users router', () => {
     ).rejects.toThrow('Only server owners can perform this action');
   });
 
+  test('should throw when user lacks owner role (resetTotp)', async () => {
+    const { caller } = await initTest(2);
+
+    await expect(
+      caller.users.resetTotp({
+        userId: 1
+      })
+    ).rejects.toThrow('Only server owners can perform this action');
+  });
+
   test('should get all users', async () => {
     const { caller } = await initTest();
 
@@ -287,6 +297,99 @@ describe('users router', () => {
         newPassword: 'ownerreset123'
       })
     ).rejects.toThrow('You cannot reset your own password');
+  });
+
+  test('should allow owner to reset another user 2FA', async () => {
+    const { caller } = await initTest();
+
+    await tdb
+      .update(users)
+      .set({
+        totpSecret: 'encrypted-totp-secret',
+        totpRecoveryCodes: JSON.stringify(['hashed-code'])
+      })
+      .where(eq(users.id, 2))
+      .run();
+
+    await caller.users.resetTotp({
+      userId: 2
+    });
+
+    const row = await tdb
+      .select({
+        totpSecret: users.totpSecret,
+        totpRecoveryCodes: users.totpRecoveryCodes
+      })
+      .from(users)
+      .where(eq(users.id, 2))
+      .get();
+
+    expect(row?.totpSecret).toBeNull();
+    expect(row?.totpRecoveryCodes).toBeNull();
+  });
+
+  test('should throw when owner tries to reset own 2FA', async () => {
+    const { caller } = await initTest();
+
+    await expect(
+      caller.users.resetTotp({
+        userId: 1
+      })
+    ).rejects.toThrow('You cannot reset your own two-factor authentication');
+  });
+
+  test('should revoke active refresh tokens when owner resets 2FA', async () => {
+    const { caller } = await initTest();
+    const now = Date.now();
+
+    await tdb
+      .update(users)
+      .set({
+        totpSecret: 'encrypted-totp-secret',
+        totpRecoveryCodes: JSON.stringify(['hashed-code'])
+      })
+      .where(eq(users.id, 2))
+      .run();
+
+    await tdb.insert(refreshTokens).values([
+      {
+        userId: 2,
+        tokenHash: 'target-2fa-token-hash',
+        expiresAt: now + 1000000,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        userId: 1,
+        tokenHash: 'owner-2fa-token-hash',
+        expiresAt: now + 1000000,
+        createdAt: now,
+        updatedAt: now
+      }
+    ]);
+
+    await caller.users.resetTotp({
+      userId: 2
+    });
+
+    const targetToken = await tdb
+      .select({
+        revokedAt: refreshTokens.revokedAt
+      })
+      .from(refreshTokens)
+      .where(eq(refreshTokens.tokenHash, 'target-2fa-token-hash'))
+      .get();
+
+    const ownerToken = await tdb
+      .select({
+        revokedAt: refreshTokens.revokedAt
+      })
+      .from(refreshTokens)
+      .where(eq(refreshTokens.tokenHash, 'owner-2fa-token-hash'))
+      .get();
+
+    expect(targetToken?.revokedAt).toBeDefined();
+    expect(ownerToken?.revokedAt).toBeNull();
   });
 
   test('should revoke active refresh tokens when owner resets password', async () => {

@@ -1,5 +1,5 @@
 import { UserStatus } from '@sharkord/shared';
-import { Gavel, KeyRound, LogOut, Plus, Trash2 } from 'lucide-react';
+import { Gavel, KeyRound, LogOut, Plus, ShieldOff, Trash2 } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -156,6 +156,31 @@ const Header = memo(() => {
 		}
 	}, [user.id]);
 
+	const onResetTotp = useCallback(async () => {
+		const answer = await requestConfirmation({
+			title: 'Reset Two-Factor Authentication',
+			message:
+				'Are you sure you want to clear two-factor authentication and recovery codes for this user? They will need to sign in again and set up 2FA from scratch.',
+			confirmLabel: 'Reset 2FA',
+			variant: 'danger',
+		});
+
+		if (!answer) {
+			return;
+		}
+
+		const trpc = getTRPCClient();
+
+		try {
+			await trpc.users.resetTotp.mutate({
+				userId: user.id,
+			});
+			toast.success('Two-factor authentication reset successfully');
+		} catch (error) {
+			toast.error(getTrpcError(error, 'Failed to reset two-factor authentication'));
+		}
+	}, [user.id]);
+
 	const onDeleteUser = useCallback(async () => {
 		const answer = await requestConfirmation({
 			title: 'Delete User',
@@ -216,6 +241,10 @@ const Header = memo(() => {
 							<Button variant="outline" size="sm" className="w-full justify-start" onClick={onResetPassword}>
 								<KeyRound className="h-4 w-4" />
 								Reset Password
+							</Button>
+							<Button variant="outline" size="sm" className="w-full justify-start" onClick={onResetTotp}>
+								<ShieldOff className="h-4 w-4" />
+								Reset 2FA
 							</Button>
 							<Button variant="destructive" size="sm" className="w-full justify-start" onClick={onDeleteUser}>
 								<Trash2 className="h-4 w-4" />

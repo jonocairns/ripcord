@@ -7,6 +7,7 @@
 - Treat shipped desktop clients as potentially behind the latest server/API version.
 - Default policy: API changes must be backward compatible.
 - Naming pitfall: `useChannelPermissionsById` returns channel-permission data, not user roles. Avoid role-like variable names for its result (for example `ownUserRoles`).
+- Branch pitfall: the default branch is `main`, NOT `development`. The `development` branch is deprecated. Always base new branches and PRs on `main`.
 - Migration pitfall: `nix develop -c bun run --filter @sharkord/server db:gen` can sometimes generate a migration that re-includes older schema changes (for example `refresh_tokens` or prior `ALTER TABLE` steps). Always review the generated SQL and keep only the intended new delta before committing.
 - Reconnect pitfall: pending voice auto-rejoin state is consumed from `VoiceProvider`, so it must be gated on actual server connectivity. If it runs during disconnect cleanup when `currentVoiceChannelId` is reset to `undefined`, the saved channel can be spent against a dead TRPC client and be gone by the time reconnect succeeds.
 - Mediasoup Opus pitfall: keep the server router codec as `audio/opus` with `channels: 2`. Changing it to `channels: 1` looks correct for mono mic audio, but browser/WebRTC capability matching in this app rejects it and `Device.load()` fails with `UnsupportedError: media codec not supported [mimeType:audio/opus]`.

@@ -10,6 +10,7 @@ import { ServerScreenLayout } from '../server-screen-layout';
 import { Devices } from './devices';
 import { Password } from './password';
 import { Profile } from './profile';
+import { TwoFactor } from './two-factor';
 
 type TUserSettingsSection = {
 	keywords: string[];
@@ -35,7 +36,7 @@ const USER_SETTINGS_SECTIONS: TUserSettingsSection[] = [
 	{
 		value: 'password',
 		label: 'Password & Security',
-		keywords: ['password', 'security', 'authentication'],
+		keywords: ['password', 'security', 'authentication', '2fa', 'two-factor'],
 	},
 ];
 
@@ -133,7 +134,12 @@ const UserSettings = memo(({ close, initialSection }: TUserSettingsProps) => {
 				<section className="min-w-0 flex-1 py-6">
 					{selectedSection.value === 'profile' && <Profile />}
 					{selectedSection.value === 'devices' && <Devices />}
-					{selectedSection.value === 'password' && <Password />}
+					{selectedSection.value === 'password' && (
+						<div className="space-y-6">
+							<Password />
+							<TwoFactor />
+						</div>
+					)}
 				</section>
 			</div>
 		</ServerScreenLayout>

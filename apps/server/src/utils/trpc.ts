@@ -21,7 +21,7 @@ export type Context = {
   handshakeHash: string;
   authenticated: boolean;
   pubsub: typeof pubsub;
-  user: TUser;
+  user: Omit<TUser, 'totpSecret' | 'totpRecoveryCodes'>;
   userId: number;
   token: string;
   currentVoiceChannelId: number | undefined;

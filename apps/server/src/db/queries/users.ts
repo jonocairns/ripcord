@@ -9,7 +9,7 @@ import { count, eq, or, sum } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 import jwt from 'jsonwebtoken';
 import { db } from '..';
-import type { TTokenPayload } from '../../types';
+import { zTokenPayload } from '../../types';
 import { files, rolePermissions, userRoles, users } from '../schema';
 import { getServerToken } from './server';
 
@@ -292,7 +292,9 @@ const getUserByToken = async (token: string | undefined) => {
   try {
     if (!token) return undefined;
 
-    const decoded = jwt.verify(token, await getServerToken()) as TTokenPayload;
+    const decoded = zTokenPayload.parse(
+      jwt.verify(token, await getServerToken())
+    );
 
     const user = await getUserById(decoded.userId);
 

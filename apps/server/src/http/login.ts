@@ -8,6 +8,7 @@ import { publishUser } from '../db/publishers';
 import { consumeInvite } from '../db/queries/invites';
 import { getDefaultRole } from '../db/queries/roles';
 import { getSettings } from '../db/queries/server';
+import { isUserTotpEnabled } from '../db/queries/totp';
 import { getUserByIdentity } from '../db/queries/users';
 import { userRoles, users } from '../db/schema';
 import { getWsInfo } from '../helpers/get-ws-info';
@@ -16,6 +17,7 @@ import {
   isArgon2Hash,
   verifyPassword
 } from '../helpers/password';
+import { createChallengeToken } from '../helpers/totp';
 import { enqueueActivityLog } from '../queues/activity-log';
 import { invariant } from '../utils/invariant';
 import { issueAuthTokens } from './auth-tokens';
@@ -137,6 +139,19 @@ const loginRouteHandler = async (
       .set({ password: upgradedPassword })
       .where(eq(users.id, existingUser.id))
       .run();
+  }
+
+  // Check if user has 2FA enabled
+  const totpEnabled = await isUserTotpEnabled(existingUser.id);
+
+  if (totpEnabled) {
+    // 2FA is enabled — return a challenge token instead of auth tokens
+    const challengeToken = await createChallengeToken(existingUser.id);
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ requires2fa: true, challengeToken }));
+
+    return res;
   }
 
   const { token, refreshToken } = await issueAuthTokens(

@@ -16,6 +16,14 @@ import { getUsersRoute } from './get-users';
 import { kickRoute } from './kick';
 import { removeRoleRoute } from './remove-role';
 import { resetPasswordRoute } from './reset-password';
+import { resetTotpRoute } from './reset-totp';
+import {
+  totpConfirmSetupRoute,
+  totpDisableRoute,
+  totpGenerateSetupRoute,
+  totpRegenerateRecoveryCodesRoute,
+  totpStatusRoute
+} from './totp';
 import { unbanRoute } from './unban';
 import { updatePasswordRoute } from './update-password';
 import { updateUserRoute } from './update-user';
@@ -34,6 +42,12 @@ export const usersRouter = t.router({
   ban: banRoute,
   unban: unbanRoute,
   resetPassword: resetPasswordRoute,
+  resetTotp: resetTotpRoute,
+  totpStatus: totpStatusRoute,
+  totpGenerateSetup: totpGenerateSetupRoute,
+  totpConfirmSetup: totpConfirmSetupRoute,
+  totpDisable: totpDisableRoute,
+  totpRegenerateRecoveryCodes: totpRegenerateRecoveryCodesRoute,
   onJoin: onUserJoinRoute,
   onLeave: onUserLeaveRoute,
   onUpdate: onUserUpdateRoute,

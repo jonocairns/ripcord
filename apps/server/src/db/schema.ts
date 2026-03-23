@@ -135,6 +135,8 @@ const users = sqliteTable(
     banReason: text('ban_reason'),
     bannedAt: integer('banned_at'),
     bannerColor: text('banner_color'),
+    totpSecret: text('totp_secret'),
+    totpRecoveryCodes: text('totp_recovery_codes'),
     tokenVersion: integer('token_version').notNull().default(0),
     mustChangePassword: integer('must_change_password', { mode: 'boolean' })
       .notNull()

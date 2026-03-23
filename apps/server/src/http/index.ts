@@ -18,6 +18,7 @@ import { publicRouteHandler } from './public';
 import { refreshRouteHandler } from './refresh';
 import { uploadFileRouteHandler } from './upload';
 import { HttpPayloadTooLargeError, HttpValidationError } from './utils';
+import { verify2faRouteHandler } from './verify-2fa';
 
 // 5 attempts per minute per IP for login route
 const loginRateLimiter = createRateLimiter({
@@ -107,6 +108,41 @@ const createHttpServer = async (port: number = config.server.port) => {
             }
 
             return await loginRouteHandler(req, res);
+          }
+
+          if (req.method === 'POST' && req.url === '/verify-2fa') {
+            if (info?.ip) {
+              const key = getClientRateLimitKey(info.ip);
+              const rateLimit = loginRateLimiter.consume(key);
+
+              if (!rateLimit.allowed) {
+                logger.debug(
+                  `${chalk.dim('[Rate Limiter HTTP]')} /verify-2fa rate limited for key "${key}"`
+                );
+
+                res.setHeader(
+                  'Retry-After',
+                  getRateLimitRetrySeconds(rateLimit.retryAfterMs)
+                );
+
+                res.writeHead(429, { 'Content-Type': 'application/json' });
+
+                res.end(
+                  JSON.stringify({
+                    error:
+                      'Too many verification attempts. Please try again shortly.'
+                  })
+                );
+
+                return;
+              }
+            } else {
+              logger.warn(
+                `${chalk.dim('[Rate Limiter HTTP]')} Missing IP address in request info, skipping rate limiting for /verify-2fa route.`
+              );
+            }
+
+            return await verify2faRouteHandler(req, res);
           }
 
           if (req.method === 'POST' && req.url === '/refresh') {
