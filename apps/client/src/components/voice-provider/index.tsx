@@ -1479,6 +1479,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			cleanup();
 			hasHandledTransportFailureRef.current = false;
 
+			let micPrepPromise: Promise<TPreparedMicPipeline | undefined> | undefined;
+
 			try {
 				setLoading(true);
 				setConnectionStatus(ConnectionStatus.CONNECTING);
@@ -1495,7 +1497,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				// dependency on the mediasoup device or transports and are the slowest
 				// part of startMicStream. Running them concurrently with device.load()
 				// and transport creation saves ~200-300ms on join.
-				const micPrepPromise = prepareMicPipeline().catch(async (error) => {
+				micPrepPromise = prepareMicPipeline().catch(async (error) => {
 					logVoice('Error preparing microphone pipeline', { error });
 					await cleanupMicAudioPipeline();
 					setLocalAudioStream(undefined);
@@ -1533,6 +1535,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				setLoading(false);
 			} catch (error) {
 				logVoice('Error initializing voice provider', { error });
+
+				// Clean up the prestarted mic pipeline — it may have acquired the
+				// microphone and spun up the WASM worker before the failure occurred.
+				await micPrepPromise;
+				await cleanupMicAudioPipeline();
+				setLocalAudioStream(undefined);
 
 				setConnectionStatus(ConnectionStatus.FAILED);
 				setLoading(false);
