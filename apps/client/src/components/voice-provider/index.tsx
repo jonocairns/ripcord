@@ -63,6 +63,11 @@ type AudioVideoRefs = {
 	externalVideoRef: React.RefObject<HTMLVideoElement | null>;
 };
 
+type TPreparedMicPipeline = {
+	outboundStream: MediaStream;
+	outboundAudioTrack: MediaStreamTrack;
+};
+
 export type { AudioVideoRefs };
 
 enum ConnectionStatus {
@@ -700,148 +705,160 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 	}, [localAudioProducer]);
 
+	// Acquire mic stream and build the processing pipeline (WASM denoise + gain).
+	// This has no dependency on the mediasoup device or transports, so it can run
+	// concurrently with device.load() and transport creation during voice join.
+	const prepareMicPipeline = useCallback(async (): Promise<TPreparedMicPipeline> => {
+		await cleanupMicAudioPipeline();
+		const micProcessingConfig = resolveMicProcessingConfig(devices);
+
+		const micConstraints = {
+			...(devices.microphoneId
+				? {
+						deviceId: {
+							exact: devices.microphoneId,
+						},
+					}
+				: {}),
+			autoGainControl: micProcessingConfig.browserAutoGainControl,
+			echoCancellation: micProcessingConfig.browserEchoCancellation,
+			noiseSuppression: micProcessingConfig.browserNoiseSuppression,
+			sampleRate: 48000,
+		};
+
+		const stream = await navigator.mediaDevices.getUserMedia({
+			audio: micConstraints,
+			video: false,
+		});
+
+		logVoice('Microphone stream obtained', { stream });
+
+		rawMicStreamRef.current = stream;
+
+		const rawAudioTrack = stream.getAudioTracks()[0];
+
+		if (!rawAudioTrack) {
+			throw new Error('Failed to obtain audio track from microphone');
+		}
+
+		let outboundStream = stream;
+		let outboundAudioTrack = rawAudioTrack;
+
+		try {
+			const micAudioPipeline = await createMicAudioProcessingPipeline({
+				inputTrack: rawAudioTrack,
+				wasmNoiseSuppressionEnabled: micProcessingConfig.wasmNoiseSuppressionEnabled,
+				onWasmError: (error) => {
+					logVoice('Browser WASM voice filter runtime error', { error });
+
+					// Don't destroy the pipeline here — closing the AudioContext would
+					// end the MediaStreamTrack already handed to the mediasoup producer,
+					// causing complete mic silence for all peers with no recovery.
+					// The worklet naturally falls back to passing through raw mic input
+					// when the worker errors (underrun passthrough), so audio continues
+					// to flow unprocessed. The pipeline is cleaned up normally when the
+					// user leaves the channel or changes mic settings.
+					if (micAudioPipelineRef.current?.backend === 'browser-wasm') {
+						toast.error('Noise suppression encountered an error. Audio will continue without noise reduction.');
+					}
+				},
+			});
+
+			if (micAudioPipeline) {
+				micAudioPipelineRef.current = micAudioPipeline;
+				outboundStream = micAudioPipeline.stream;
+				outboundAudioTrack = micAudioPipeline.track;
+				logVoice('Microphone voice filter enabled', {
+					backend: micAudioPipeline.backend,
+				});
+			} else {
+				micAudioPipelineRef.current = undefined;
+			}
+		} catch (error) {
+			micAudioPipelineRef.current = undefined;
+			logVoice('Failed to initialize microphone voice filter, using raw mic', {
+				error,
+			});
+		}
+
+		const micGainPipeline = await createMicGainPipeline(outboundStream, getStoredVolume(OWN_MIC_VOLUME_KEY));
+
+		if (micGainPipeline) {
+			micGainPipelineRef.current = micGainPipeline;
+			outboundStream = micGainPipeline.stream;
+			outboundAudioTrack = micGainPipeline.track;
+		}
+
+		return { outboundStream, outboundAudioTrack };
+	}, [cleanupMicAudioPipeline, devices]);
+
+	// Attach the prepared mic pipeline to the producer transport. Must be called
+	// after the producer transport is ready.
+	const produceMicTrack = useCallback(
+		async (prepared: TPreparedMicPipeline) => {
+			const { outboundStream, outboundAudioTrack } = prepared;
+
+			setLocalAudioStream(outboundStream);
+			outboundAudioTrack.enabled = !ownVoiceState.micMuted;
+
+			logVoice('Obtained audio track', { audioTrack: outboundAudioTrack });
+
+			const audioConfig = getAudioOpusConfig(currentVoiceChannelIdRef.current);
+			const audioProducer = await producerTransport.current?.produce({
+				track: outboundAudioTrack,
+				encodings: [{ maxBitrate: audioConfig.maxBitrate }],
+				codecOptions: audioConfig.codecOptions,
+				appData: { kind: StreamKind.AUDIO },
+			});
+			localAudioProducer.current = audioProducer;
+
+			logVoice('Microphone audio producer created', {
+				producer: audioProducer,
+			});
+
+			audioProducer?.on('@close', async () => {
+				logVoice('Audio producer closed');
+
+				if (localAudioProducer.current === audioProducer) {
+					localAudioProducer.current = undefined;
+				}
+
+				const trpc = getTRPCClient();
+
+				try {
+					await trpc.voice.closeProducer.mutate({
+						kind: StreamKind.AUDIO,
+					});
+				} catch (error) {
+					logVoice('Error closing audio producer', { error });
+				}
+			});
+
+			outboundAudioTrack.onended = () => {
+				logVoice('Audio track ended, cleaning up microphone');
+
+				void cleanupMicAudioPipeline();
+				audioProducer?.close();
+
+				setLocalAudioStream((currentStream) => {
+					return currentStream === outboundStream ? undefined : currentStream;
+				});
+			};
+		},
+		[producerTransport, setLocalAudioStream, localAudioProducer, ownVoiceState.micMuted, cleanupMicAudioPipeline],
+	);
+
 	const startMicStream = useCallback(async () => {
 		try {
 			logVoice('Starting microphone stream');
-
-			await cleanupMicAudioPipeline();
-			const micProcessingConfig = resolveMicProcessingConfig(devices);
-
-			const micConstraints = {
-				...(devices.microphoneId
-					? {
-							deviceId: {
-								exact: devices.microphoneId,
-							},
-						}
-					: {}),
-				autoGainControl: micProcessingConfig.browserAutoGainControl,
-				echoCancellation: micProcessingConfig.browserEchoCancellation,
-				noiseSuppression: micProcessingConfig.browserNoiseSuppression,
-				sampleRate: 48000,
-			};
-
-			const stream = await navigator.mediaDevices.getUserMedia({
-				audio: micConstraints,
-				video: false,
-			});
-
-			logVoice('Microphone stream obtained', { stream });
-
-			rawMicStreamRef.current = stream;
-
-			const rawAudioTrack = stream.getAudioTracks()[0];
-
-			if (rawAudioTrack) {
-				let outboundStream = stream;
-				let outboundAudioTrack = rawAudioTrack;
-				try {
-					const micAudioPipeline = await createMicAudioProcessingPipeline({
-						inputTrack: rawAudioTrack,
-						wasmNoiseSuppressionEnabled: micProcessingConfig.wasmNoiseSuppressionEnabled,
-						onWasmError: (error) => {
-							logVoice('Browser WASM voice filter runtime error', { error });
-
-							// Don't destroy the pipeline here — closing the AudioContext would
-							// end the MediaStreamTrack already handed to the mediasoup producer,
-							// causing complete mic silence for all peers with no recovery.
-							// The worklet naturally falls back to passing through raw mic input
-							// when the worker errors (underrun passthrough), so audio continues
-							// to flow unprocessed. The pipeline is cleaned up normally when the
-							// user leaves the channel or changes mic settings.
-							if (micAudioPipelineRef.current?.backend === 'browser-wasm') {
-								toast.error('Noise suppression encountered an error. Audio will continue without noise reduction.');
-							}
-						},
-					});
-
-					if (micAudioPipeline) {
-						micAudioPipelineRef.current = micAudioPipeline;
-						outboundStream = micAudioPipeline.stream;
-						outboundAudioTrack = micAudioPipeline.track;
-						logVoice('Microphone voice filter enabled', {
-							backend: micAudioPipeline.backend,
-						});
-					} else {
-						micAudioPipelineRef.current = undefined;
-					}
-				} catch (error) {
-					micAudioPipelineRef.current = undefined;
-					logVoice('Failed to initialize microphone voice filter, using raw mic', {
-						error,
-					});
-				}
-
-				const micGainPipeline = await createMicGainPipeline(outboundStream, getStoredVolume(OWN_MIC_VOLUME_KEY));
-
-				if (micGainPipeline) {
-					micGainPipelineRef.current = micGainPipeline;
-					outboundStream = micGainPipeline.stream;
-					outboundAudioTrack = micGainPipeline.track;
-				}
-
-				setLocalAudioStream(outboundStream);
-				outboundAudioTrack.enabled = !ownVoiceState.micMuted;
-
-				logVoice('Obtained audio track', { audioTrack: outboundAudioTrack });
-
-				const audioConfig = getAudioOpusConfig(currentVoiceChannelIdRef.current);
-				const audioProducer = await producerTransport.current?.produce({
-					track: outboundAudioTrack,
-					encodings: [{ maxBitrate: audioConfig.maxBitrate }],
-					codecOptions: audioConfig.codecOptions,
-					appData: { kind: StreamKind.AUDIO },
-				});
-				localAudioProducer.current = audioProducer;
-
-				logVoice('Microphone audio producer created', {
-					producer: audioProducer,
-				});
-
-				audioProducer?.on('@close', async () => {
-					logVoice('Audio producer closed');
-
-					if (localAudioProducer.current === audioProducer) {
-						localAudioProducer.current = undefined;
-					}
-
-					const trpc = getTRPCClient();
-
-					try {
-						await trpc.voice.closeProducer.mutate({
-							kind: StreamKind.AUDIO,
-						});
-					} catch (error) {
-						logVoice('Error closing audio producer', { error });
-					}
-				});
-
-				outboundAudioTrack.onended = () => {
-					logVoice('Audio track ended, cleaning up microphone');
-
-					void cleanupMicAudioPipeline();
-					audioProducer?.close();
-
-					setLocalAudioStream((currentStream) => {
-						return currentStream === outboundStream ? undefined : currentStream;
-					});
-				};
-			} else {
-				throw new Error('Failed to obtain audio track from microphone');
-			}
+			const prepared = await prepareMicPipeline();
+			await produceMicTrack(prepared);
 		} catch (error) {
 			logVoice('Error starting microphone stream', { error });
 			await cleanupMicAudioPipeline();
 			setLocalAudioStream(undefined);
 		}
-	}, [
-		cleanupMicAudioPipeline,
-		producerTransport,
-		setLocalAudioStream,
-		localAudioProducer,
-		devices,
-		ownVoiceState.micMuted,
-	]);
+	}, [prepareMicPipeline, produceMicTrack, cleanupMicAudioPipeline, setLocalAudioStream]);
 
 	const startWebcamStream = useCallback(async () => {
 		try {
@@ -1462,6 +1479,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			cleanup();
 			hasHandledTransportFailureRef.current = false;
 
+			let micPrepPromise: Promise<TPreparedMicPipeline | undefined> | undefined;
+
 			try {
 				setLoading(true);
 				setConnectionStatus(ConnectionStatus.CONNECTING);
@@ -1474,6 +1493,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				const device = new Device();
 
+				// Start mic acquisition + WASM pipeline immediately — these have no
+				// dependency on the mediasoup device or transports and are the slowest
+				// part of startMicStream. Running them concurrently with device.load()
+				// and transport creation saves ~200-300ms on join.
+				micPrepPromise = prepareMicPipeline().catch(async (error) => {
+					logVoice('Error preparing microphone pipeline', { error });
+					await cleanupMicAudioPipeline();
+					setLocalAudioStream(undefined);
+					return undefined;
+				});
+
 				await device.load({
 					routerRtpCapabilities: incomingRouterRtpCapabilities,
 				});
@@ -1483,16 +1513,34 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					createProducerTransport(device, opts?.producerTransportParams),
 					createConsumerTransport(device, opts?.consumerTransportParams),
 				]);
-				await Promise.all([
+
+				const [, micPrepResult] = await Promise.all([
 					consumeExistingProducers(device.rtpCapabilities, undefined, opts?.existingProducers),
-					startMicStream(),
+					micPrepPromise,
 				]);
+
+				// Mic failures are non-fatal — voice join continues without a mic.
+				if (micPrepResult) {
+					try {
+						await produceMicTrack(micPrepResult);
+					} catch (error) {
+						logVoice('Error attaching microphone to transport', { error });
+						await cleanupMicAudioPipeline();
+						setLocalAudioStream(undefined);
+					}
+				}
 
 				startMonitoring(producerTransport.current, consumerTransport.current);
 				setConnectionStatus(ConnectionStatus.CONNECTED);
 				setLoading(false);
 			} catch (error) {
 				logVoice('Error initializing voice provider', { error });
+
+				// Clean up the prestarted mic pipeline — it may have acquired the
+				// microphone and spun up the WASM worker before the failure occurred.
+				await micPrepPromise;
+				await cleanupMicAudioPipeline();
+				setLocalAudioStream(undefined);
 
 				setConnectionStatus(ConnectionStatus.FAILED);
 				setLoading(false);
@@ -1502,10 +1550,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		},
 		[
 			cleanup,
+			prepareMicPipeline,
+			produceMicTrack,
+			cleanupMicAudioPipeline,
+			setLocalAudioStream,
 			createProducerTransport,
 			createConsumerTransport,
 			consumeExistingProducers,
-			startMicStream,
 			startMonitoring,
 			producerTransport,
 			consumerTransport,
