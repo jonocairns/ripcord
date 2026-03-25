@@ -4,8 +4,8 @@ import {
   OWNER_ROLE_ID,
   Permission,
   ServerEvents,
-  UserStatus,
-  type TConnectionParams
+  type TConnectionParams,
+  UserStatus
 } from '@sharkord/shared';
 import { TRPCError } from '@trpc/server';
 import {
@@ -300,7 +300,13 @@ const createContext = async ({
 
 const createWsServer = async (server: http.Server) => {
   return new Promise<WebSocketServer>((resolve) => {
-    wss = new WebSocketServer({ server });
+    const corsOrigin = config.server.corsOrigin;
+    wss = new WebSocketServer({
+      server,
+      verifyClient: corsOrigin
+        ? ({ origin }: { origin?: string }) => origin === corsOrigin
+        : undefined
+    });
 
     wss.on('connection', (ws) => {
       const trackedWs = ws as TTrackedWebSocket;
