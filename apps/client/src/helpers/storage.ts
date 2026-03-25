@@ -2,8 +2,6 @@ export enum LocalStorageKey {
 	AUTH_TOKEN = 'sharkord-auth-token',
 	REFRESH_TOKEN = 'sharkord-refresh-token',
 	IDENTITY = 'sharkord-identity',
-	USER_PASSWORD = 'sharkord-user-password',
-	SERVER_PASSWORD = 'sharkord-server-password',
 	VITE_UI_THEME = 'vite-ui-theme',
 	DEVICES_SETTINGS = 'sharkord-devices-settings',
 	FLOATING_CARD_POSITION = 'sharkord-floating-card-position',
@@ -19,6 +17,10 @@ export enum LocalStorageKey {
 export enum SessionStorageKey {
 	TOKEN = 'sharkord-token',
 }
+
+// Purge any passwords that were previously stored by older versions.
+localStorage.removeItem('sharkord-user-password');
+localStorage.removeItem('sharkord-server-password');
 
 const getLocalStorageItem = (key: LocalStorageKey): string | null => {
 	return localStorage.getItem(key);
