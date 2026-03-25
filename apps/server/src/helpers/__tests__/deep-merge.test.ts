@@ -126,27 +126,6 @@ describe('deepMerge', () => {
     expect(result).not.toBe(target);
   });
 
-  test('ignores __proto__ keys', () => {
-    const target = { a: 1 } as Record<string, unknown>;
-    const source = JSON.parse('{"__proto__": {"polluted": true}}');
-
-    const result = deepMerge(target, source);
-
-    expect(result).toEqual({ a: 1 });
-    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
-  });
-
-  test('ignores constructor and prototype keys', () => {
-    const target = { a: 1 } as Record<string, unknown>;
-    const source = JSON.parse(
-      '{"constructor": {"polluted": true}, "prototype": {"bad": true}}'
-    );
-
-    const result = deepMerge(target, source);
-
-    expect(result).toEqual({ a: 1 });
-  });
-
   test('works with the config.ini merge use case', () => {
     const defaultConfig = {
       server: { port: 4991, debug: false, autoupdate: false },

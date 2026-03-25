@@ -43,20 +43,9 @@ const createHttpServer = async (port: number = config.server.port) => {
   return new Promise<http.Server>((resolve) => {
     const server = http.createServer(
       async (req: http.IncomingMessage, res: http.ServerResponse) => {
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        res.setHeader('X-Frame-Options', 'DENY');
-
-        const origin = req.headers.origin;
-        const corsOrigin = config.server.corsOrigin;
-        if (origin && (!corsOrigin || corsOrigin === origin)) {
-          res.setHeader('Access-Control-Allow-Origin', origin);
-          res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-          res.setHeader(
-            'Access-Control-Allow-Headers',
-            'Content-Type, Authorization, x-file-name, x-file-type, x-token, Content-Length'
-          );
-          res.setHeader('Vary', 'Origin');
-        }
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', '*');
 
         const info = getWsInfo(undefined, req, {
           trustProxy: config.server.trustProxy
