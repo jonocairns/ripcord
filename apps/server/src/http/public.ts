@@ -104,7 +104,7 @@ const publicRouteHandler = async (
   res.writeHead(200, {
     'Content-Type': dbFile.mimeType,
     'Content-Length': dbFile.size,
-    'Content-Disposition': `${contentDisposition}; filename="${dbFile.originalName.replace(/"/g, '\\"')}"; filename*=UTF-8''${encodeURIComponent(dbFile.originalName)}`,
+    'Content-Disposition': `${contentDisposition}; filename="${dbFile.originalName.replace(/[^\w. -]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(dbFile.originalName)}`,
     'Cache-Control': 'public, max-age=31536000, immutable',
     ETag: etag
   });
