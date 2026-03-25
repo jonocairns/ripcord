@@ -38,8 +38,10 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
     AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AUDIOCLIENT_ACTIVATION_PARAMS,
     AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
-    VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX,
+    AUDIOCLIENT_PROCESS_LOOPBACK_MODE, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
+    PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+    PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+    WAVEFORMATEX,
 };
 #[cfg(windows)]
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
@@ -125,6 +127,7 @@ struct ListTargetsParams {
 struct StartAudioCaptureParams {
     source_id: Option<String>,
     app_audio_target_id: Option<String>,
+    self_exclude_pid: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -985,7 +988,10 @@ impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
 }
 
 #[cfg(windows)]
-fn activate_process_loopback_client(target_pid: u32) -> Result<IAudioClient, String> {
+fn activate_process_loopback_client(
+    pid: u32,
+    mode: AUDIOCLIENT_PROCESS_LOOPBACK_MODE,
+) -> Result<IAudioClient, String> {
     let signal = Arc::new((Mutex::new(false), Condvar::new()));
     let callback: IActivateAudioInterfaceCompletionHandler =
         ActivateAudioInterfaceCallback::new(Arc::clone(&signal)).into();
@@ -994,8 +1000,8 @@ fn activate_process_loopback_client(target_pid: u32) -> Result<IAudioClient, Str
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
         Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
             ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
-                TargetProcessId: target_pid,
-                ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+                TargetProcessId: pid,
+                ProcessLoopbackMode: mode,
             },
         },
     };
@@ -1072,19 +1078,28 @@ fn capture_loopback_audio(
     session_id: &str,
     target_id: &str,
     target_pid: u32,
+    self_exclude_pid: Option<u32>,
     stop_flag: Arc<AtomicBool>,
     frame_queue: Arc<FrameQueue>,
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
-    let process_handle = match open_process_for_liveness(target_pid) {
-        Some(handle) => handle,
-        None => return CaptureOutcome::from_reason(CaptureEndReason::AppExited),
+    let process_handle = if self_exclude_pid.is_none() {
+        match open_process_for_liveness(target_pid) {
+            Some(handle) => Some(handle),
+            None => return CaptureOutcome::from_reason(CaptureEndReason::AppExited),
+        }
+    } else {
+        None
     };
 
     let com_initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
 
     let reason = (|| {
-        let audio_client = activate_process_loopback_client(target_pid)?;
+        let (activation_pid, activation_mode) = match self_exclude_pid {
+            Some(exclude_pid) => (exclude_pid, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE),
+            None => (target_pid, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE),
+        };
+        let audio_client = activate_process_loopback_client(activation_pid, activation_mode)?;
         let capture_format = WAVEFORMATEX {
             wFormatTag: 0x0003, // WAVE_FORMAT_IEEE_FLOAT
             nChannels: APP_AUDIO_CHANNELS as u16,
@@ -1138,9 +1153,11 @@ fn capture_loopback_audio(
             }
 
             if last_liveness_check.elapsed() >= Duration::from_millis(300) {
-                if !process_is_alive(process_handle) {
-                    let _ = unsafe { audio_client.Stop() };
-                    return Ok(CaptureEndReason::AppExited);
+                if let Some(handle) = process_handle {
+                    if !process_is_alive(handle) {
+                        let _ = unsafe { audio_client.Stop() };
+                        return Ok(CaptureEndReason::AppExited);
+                    }
                 }
 
                 last_liveness_check = Instant::now();
@@ -1242,7 +1259,9 @@ fn capture_loopback_audio(
         }
     })();
 
-    let _ = unsafe { windows::Win32::Foundation::CloseHandle(process_handle) };
+    if let Some(handle) = process_handle {
+        let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
+    }
     if com_initialized {
         unsafe { CoUninitialize() };
     }
@@ -1264,6 +1283,7 @@ fn capture_loopback_audio(
     _session_id: &str,
     _target_id: &str,
     _target_pid: u32,
+    _self_exclude_pid: Option<u32>,
     _stop_flag: Arc<AtomicBool>,
     _frame_queue: Arc<FrameQueue>,
     _app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
@@ -1278,6 +1298,7 @@ fn start_capture_thread(
     session_id: String,
     target_id: String,
     target_pid: u32,
+    self_exclude_pid: Option<u32>,
     stop_flag: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
@@ -1285,6 +1306,7 @@ fn start_capture_thread(
             &session_id,
             &target_id,
             target_pid,
+            self_exclude_pid,
             Arc::clone(&stop_flag),
             Arc::clone(&frame_queue),
             app_audio_binary_stream.clone(),
@@ -1403,36 +1425,41 @@ fn handle_audio_capture_start(
 
     stop_capture_session(state, None);
 
-    let source_pid = parsed
-        .source_id
-        .as_deref()
-        .and_then(resolve_source_to_pid)
-        .map(|pid| format!("pid:{pid}"));
+    let self_exclude_pid = parsed.self_exclude_pid;
 
-    let target_id = parsed
-        .app_audio_target_id
-        .or(source_pid)
-        .ok_or_else(|| "No app audio target was provided and source mapping failed".to_string())?;
+    let (target_id, target_pid) = if let Some(exclude_pid) = self_exclude_pid {
+        // System-wide capture: exclude the caller's own process (Ripcord) so its audio
+        // is never present in the loopback stream.  No specific target process is needed.
+        (format!("pid:{exclude_pid}"), exclude_pid)
+    } else {
+        let source_pid = parsed
+            .source_id
+            .as_deref()
+            .and_then(resolve_source_to_pid)
+            .map(|pid| format!("pid:{pid}"));
 
-    let target_pid =
-        parse_target_pid(&target_id).ok_or_else(|| "Invalid app audio target id".to_string())?;
+        let id = parsed
+            .app_audio_target_id
+            .or(source_pid)
+            .ok_or_else(|| "No app audio target was provided and source mapping failed".to_string())?;
 
-    let target_exists = get_audio_targets()
-        .iter()
-        .any(|target| target.id == target_id);
+        let pid = parse_target_pid(&id)
+            .ok_or_else(|| "Invalid app audio target id".to_string())?;
 
-    if !target_exists {
-        return Err(format!(
-            "Target process with pid {target_pid} is not available"
-        ));
-    }
+        let target_exists = get_audio_targets().iter().any(|t| t.id == id);
+        if !target_exists {
+            return Err(format!("Target process with pid {pid} is not available"));
+        }
+
+        (id, pid)
+    };
 
     let session_id = Uuid::new_v4().to_string();
     let target_process_name =
         process_name_from_pid(target_pid).unwrap_or_else(|| "unknown.exe".to_string());
     eprintln!(
-        "[capture-sidecar] start session={} targetId={} targetPid={} targetProcess={}",
-        session_id, target_id, target_pid, target_process_name
+        "[capture-sidecar] start session={} targetId={} targetPid={} targetProcess={} selfExcludePid={:?}",
+        session_id, target_id, target_pid, target_process_name, self_exclude_pid
     );
     let stop_flag = Arc::new(AtomicBool::new(false));
     let handle = start_capture_thread(
@@ -1442,6 +1469,7 @@ fn handle_audio_capture_start(
         session_id.clone(),
         target_id.clone(),
         target_pid,
+        self_exclude_pid,
         Arc::clone(&stop_flag),
     );
 
