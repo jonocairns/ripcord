@@ -19,7 +19,8 @@ const zConfig = z.object({
     port: z.coerce.number().int().positive(),
     debug: z.coerce.boolean(),
     autoupdate: z.coerce.boolean(),
-    trustProxy: z.coerce.boolean()
+    trustProxy: z.coerce.boolean(),
+    corsOrigin: z.string()
   }),
   webRtc: z.object({
     port: z.coerce.number().int().positive(),
@@ -48,7 +49,12 @@ const defaultConfig: TConfig = {
     port: 4991,
     debug: IS_DEVELOPMENT,
     autoupdate: false,
-    trustProxy: false
+    trustProxy: false,
+    // When empty, CORS reflects the request Origin (allows all origins).
+    // Set to a specific origin (e.g. "https://app.example.com") to restrict.
+    // Note: setting this will reject desktop (Electron) clients whose
+    // file:// origin won't match. Leave empty if desktop clients are used.
+    corsOrigin: ''
   },
   webRtc: {
     port: 40000,
@@ -115,6 +121,24 @@ config = applyEnvOverrides(config, {
   'webRtc.port': 'SHARKORD_WEBRTC_PORT',
   'webRtc.announcedAddress': 'SHARKORD_WEBRTC_ANNOUNCED_ADDRESS'
 });
+
+// Applied separately: applyEnvOverrides skips falsy values, but empty string
+// is a valid corsOrigin (means "allow all origins"), so we handle it manually.
+if (process.env.SHARKORD_CORS_ORIGIN !== undefined) {
+  config = {
+    ...config,
+    server: { ...config.server, corsOrigin: process.env.SHARKORD_CORS_ORIGIN }
+  };
+}
+
+// Normalize trailing slashes — browsers send Origin without a trailing slash
+config = {
+  ...config,
+  server: {
+    ...config.server,
+    corsOrigin: config.server.corsOrigin.replace(/\/+$/, '')
+  }
+};
 
 config = Object.freeze(config);
 
