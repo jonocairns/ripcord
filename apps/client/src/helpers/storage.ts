@@ -18,9 +18,12 @@ export enum SessionStorageKey {
 	TOKEN = 'sharkord-token',
 }
 
-// Purge any passwords that were previously stored by older versions.
-localStorage.removeItem('sharkord-user-password');
-localStorage.removeItem('sharkord-server-password');
+// One-time migration: purge passwords stored by older client builds.
+// Safe to remove once all clients have been updated past this version.
+(function purgeStoredPasswords() {
+	localStorage.removeItem('sharkord-user-password');
+	localStorage.removeItem('sharkord-server-password');
+})();
 
 const getLocalStorageItem = (key: LocalStorageKey): string | null => {
 	return localStorage.getItem(key);
