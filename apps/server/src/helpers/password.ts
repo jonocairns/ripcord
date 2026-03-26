@@ -1,4 +1,5 @@
 import { sha256 } from '@sharkord/shared';
+import crypto from 'node:crypto';
 
 const ARGON2_PREFIX = 'argon2$';
 const RAW_ARGON2_PREFIX = '$argon2';
@@ -38,14 +39,17 @@ const verifyPassword = async (
   }
 
   // Legacy fallback for previously stored SHA-256 hashes.
+  // Uses constant-time comparison to prevent timing attacks.
   const legacyHash = await sha256(password);
 
-  if (legacyHash === storedHash) {
+  if (
+    legacyHash.length === storedHash.length &&
+    crypto.timingSafeEqual(Buffer.from(legacyHash), Buffer.from(storedHash))
+  ) {
     return true;
   }
 
-  // Legacy fallback for very early instances that stored plain text passwords.
-  return password === storedHash;
+  return false;
 };
 
 export { hashPassword, isArgon2Hash, verifyPassword };

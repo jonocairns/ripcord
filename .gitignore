@@ -19,7 +19,6 @@ apps/desktop/pnpm-lock.yaml
 apps/desktop/sidecar/target/
 apps/desktop/sidecar/bin/
 audio-tests/.outputs/
-data-test/logs/app.log
-data-test/logs/error.log
+data-test/
 __pycache__/
 .env
