@@ -1154,16 +1154,27 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					}
 				}
 
-				if (desktopBridge && desktopSelection && audioMode === ScreenAudioMode.APP) {
+				const useSidecarAudio =
+					desktopBridge &&
+					desktopSelection &&
+					(audioMode === ScreenAudioMode.APP || audioMode === ScreenAudioMode.SYSTEM);
+
+				if (useSidecarAudio) {
 					try {
-						logVoice('Starting per-app sidecar capture', {
+						const captureInput: { sourceId: string; appAudioTargetId?: string } = {
 							sourceId: desktopSelection.sourceId,
-							appAudioTargetId: desktopSelection.appAudioTargetId,
+						};
+
+						if (audioMode === ScreenAudioMode.APP) {
+							captureInput.appAudioTargetId = desktopSelection.appAudioTargetId;
+						}
+
+						logVoice('Starting sidecar audio capture', {
+							sourceId: captureInput.sourceId,
+							appAudioTargetId: captureInput.appAudioTargetId,
+							mode: audioMode === ScreenAudioMode.SYSTEM ? 'system-exclude' : 'per-app',
 						});
-						const appAudioSession = await desktopBridge.startAppAudioCapture({
-							sourceId: desktopSelection.sourceId,
-							appAudioTargetId: desktopSelection.appAudioTargetId,
-						});
+						const appAudioSession = await desktopBridge.startAppAudioCapture(captureInput);
 						logVoice('Per-app sidecar capture started', {
 							sessionId: appAudioSession.sessionId,
 							targetId: appAudioSession.targetId,
@@ -1266,9 +1277,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					}
 				}
 
-				// Electron main only provides display-capture audio in system mode.
-				// Requesting audio in per-app mode can abort capture startup.
-				const shouldCaptureDisplayAudio = audioMode === ScreenAudioMode.SYSTEM;
+				// When the sidecar handles audio (per-app or system-exclude mode), do not
+				// request loopback audio from getDisplayMedia — it would duplicate capture
+				// and bypass WASAPI process-tree exclusion.
+				const shouldCaptureDisplayAudio = audioMode === ScreenAudioMode.SYSTEM && !useSidecarAudio;
 				const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
 
 				stream = await navigator.mediaDevices.getDisplayMedia({
@@ -1291,7 +1303,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				const videoTrack = stream.getVideoTracks()[0];
 				const audioTrack = stream.getAudioTracks()[0];
 
-				if (audioMode === ScreenAudioMode.APP && audioTrack) {
+				if (useSidecarAudio && audioTrack) {
 					audioTrack.stop();
 					stream.removeTrack(audioTrack);
 					standbyDisplayAudioTrackRef.current = undefined;
@@ -1364,7 +1376,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						setLocalScreenShareAudio(undefined);
 					};
 
-					if (audioMode === ScreenAudioMode.APP && appAudioPipelineRef.current?.track) {
+					if (useSidecarAudio && appAudioPipelineRef.current?.track) {
 						const appAudioTrack = appAudioPipelineRef.current.track;
 						setLocalScreenShareAudio(appAudioPipelineRef.current.stream);
 

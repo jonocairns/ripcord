@@ -206,12 +206,12 @@ const setupDisplayMediaHandler = () => {
             return;
           }
 
-          // In hybrid v1 we keep display media audio only for system mode.
-          const shouldShareAudio = pendingSelection.audioMode === "system";
-
+          // System audio is now captured by the sidecar using WASAPI
+          // EXCLUDE_TARGET_PROCESS_TREE, so we no longer request loopback
+          // audio from Electron's display media handler.
           callback({
             video: source,
-            audio: shouldShareAudio ? "loopback" : undefined,
+            audio: undefined,
           });
         } catch (error) {
           console.error(
