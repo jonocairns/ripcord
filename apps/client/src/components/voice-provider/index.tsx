@@ -1155,14 +1155,28 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					}
 				}
 
-				const useSidecarAudio =
+				// Only route system audio through the sidecar when the platform
+				// supports per-app audio (implies the WASAPI sidecar is available).
+				// On Linux/macOS the sidecar cannot capture loopback audio, so
+				// system mode must fall through to getDisplayMedia.
+				let sidecarSupported = false;
+				if (desktopBridge && audioMode === ScreenAudioMode.SYSTEM) {
+					try {
+						const caps = await desktopBridge.getCapabilities();
+						sidecarSupported = caps.perAppAudio === 'supported';
+					} catch {
+						// If capabilities check fails, don't attempt sidecar for system audio.
+					}
+				}
+
+				let useSidecarAudio =
 					desktopBridge &&
 					desktopSelection &&
-					(audioMode === ScreenAudioMode.APP || audioMode === ScreenAudioMode.SYSTEM);
+					(audioMode === ScreenAudioMode.APP || (audioMode === ScreenAudioMode.SYSTEM && sidecarSupported));
 
 				const sidecarAudioLabel = audioMode === ScreenAudioMode.SYSTEM ? 'System audio' : 'Per-app audio';
 
-				if (useSidecarAudio) {
+				if (useSidecarAudio && desktopBridge && desktopSelection) {
 					try {
 						const captureInput: TStartAppAudioCaptureInput = {
 							sourceId: desktopSelection.sourceId,
@@ -1274,16 +1288,26 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						logVoice('Failed to start sidecar audio capture', {
 							error,
 						});
-						toast.warning(`${sidecarAudioLabel} capture failed. Continuing without shared audio.`);
 						await cleanupDesktopAppAudio();
-						audioMode = ScreenAudioMode.NONE;
+
+						if (audioMode === ScreenAudioMode.SYSTEM) {
+							// Fall back to getDisplayMedia loopback — no process-tree
+							// exclusion, but the user still gets shared audio.
+							logVoice('Falling back to display-media loopback for system audio');
+							toast.warning('Sidecar audio capture failed. Falling back to standard system audio (without echo exclusion).');
+							useSidecarAudio = false;
+						} else {
+							toast.warning(`${sidecarAudioLabel} capture failed. Continuing without shared audio.`);
+							audioMode = ScreenAudioMode.NONE;
+						}
 					}
 				}
 
-				// When the sidecar handles audio (per-app or system-exclude mode), do not
-				// request loopback audio from getDisplayMedia — it would duplicate capture
-				// and bypass WASAPI process-tree exclusion.
-				const shouldCaptureDisplayAudio = audioMode === ScreenAudioMode.SYSTEM && !useSidecarAudio;
+				// Always request loopback audio from getDisplayMedia in system mode
+				// so it is available as a fallback if the sidecar fails.  When the
+				// sidecar successfully captures audio, the loopback track is stopped
+				// and removed before the producer is created.
+				const shouldCaptureDisplayAudio = audioMode === ScreenAudioMode.SYSTEM;
 				const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
 
 				stream = await navigator.mediaDevices.getDisplayMedia({

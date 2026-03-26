@@ -206,12 +206,15 @@ const setupDisplayMediaHandler = () => {
             return;
           }
 
-          // System audio is now captured by the sidecar using WASAPI
-          // EXCLUDE_TARGET_PROCESS_TREE, so we no longer request loopback
-          // audio from Electron's display media handler.
+          // Always provide loopback audio for system mode so that
+          // getDisplayMedia can serve as a fallback when the sidecar is
+          // unavailable or fails.  The client discards this track when the
+          // sidecar successfully handles audio capture.
+          const shouldShareAudio = pendingSelection.audioMode === "system";
+
           callback({
             video: source,
-            audio: undefined,
+            audio: shouldShareAudio ? "loopback" : undefined,
           });
         } catch (error) {
           console.error(
