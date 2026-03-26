@@ -56,6 +56,7 @@ export type TDesktopAppAudioTargetsResult = {
 export type TStartAppAudioCaptureInput = {
   sourceId: string;
   appAudioTargetId?: string;
+  selfExcludePid?: number;
 };
 
 export type TAppAudioSession = {
