@@ -206,7 +206,10 @@ const setupDisplayMediaHandler = () => {
             return;
           }
 
-          // In hybrid v1 we keep display media audio only for system mode.
+          // Always provide loopback audio for system mode so that
+          // getDisplayMedia can serve as a fallback when the sidecar is
+          // unavailable or fails.  The client discards this track when the
+          // sidecar successfully handles audio capture.
           const shouldShareAudio = pendingSelection.audioMode === "system";
 
           callback({

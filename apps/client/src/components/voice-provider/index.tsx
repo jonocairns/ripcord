@@ -35,6 +35,7 @@ import {
 	type TAppAudioSession,
 	type TAppAudioStatusEvent,
 	type TDesktopScreenShareSelection,
+	type TStartAppAudioCaptureInput,
 } from '@/runtime/types';
 import { type TDeviceSettings, VideoCodecPreference } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
@@ -1154,23 +1155,50 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					}
 				}
 
-				if (desktopBridge && desktopSelection && audioMode === ScreenAudioMode.APP) {
+				// Only route system audio through the sidecar when the platform
+				// supports per-app audio (implies the WASAPI sidecar is available).
+				// On Linux/macOS the sidecar cannot capture loopback audio, so
+				// system mode must fall through to getDisplayMedia.
+				let sidecarSupported = false;
+				if (desktopBridge && audioMode === ScreenAudioMode.SYSTEM) {
 					try {
-						logVoice('Starting per-app sidecar capture', {
+						const caps = await desktopBridge.getCapabilities();
+						sidecarSupported = caps.perAppAudio === 'supported';
+					} catch {
+						// If capabilities check fails, don't attempt sidecar for system audio.
+					}
+				}
+
+				let useSidecarAudio =
+					desktopBridge &&
+					desktopSelection &&
+					(audioMode === ScreenAudioMode.APP || (audioMode === ScreenAudioMode.SYSTEM && sidecarSupported));
+
+				const sidecarAudioLabel = audioMode === ScreenAudioMode.SYSTEM ? 'System audio' : 'Per-app audio';
+
+				if (useSidecarAudio && desktopBridge && desktopSelection) {
+					try {
+						const captureInput: TStartAppAudioCaptureInput = {
 							sourceId: desktopSelection.sourceId,
-							appAudioTargetId: desktopSelection.appAudioTargetId,
+						};
+
+						if (audioMode === ScreenAudioMode.APP) {
+							captureInput.appAudioTargetId = desktopSelection.appAudioTargetId;
+						}
+
+						logVoice('Starting sidecar audio capture', {
+							sourceId: captureInput.sourceId,
+							appAudioTargetId: captureInput.appAudioTargetId,
+							mode: audioMode === ScreenAudioMode.SYSTEM ? 'system-exclude' : 'per-app',
 						});
-						const appAudioSession = await desktopBridge.startAppAudioCapture({
-							sourceId: desktopSelection.sourceId,
-							appAudioTargetId: desktopSelection.appAudioTargetId,
-						});
-						logVoice('Per-app sidecar capture started', {
+						const appAudioSession = await desktopBridge.startAppAudioCapture(captureInput);
+						logVoice('Sidecar capture started', {
 							sessionId: appAudioSession.sessionId,
 							targetId: appAudioSession.targetId,
 						});
 						const appAudioPipeline = await createDesktopAppAudioPipeline(appAudioSession, {
 							mode: 'stable',
-							logLabel: 'per-app-audio',
+							logLabel: audioMode === ScreenAudioMode.SYSTEM ? 'system-audio' : 'per-app-audio',
 							insertSilenceOnDroppedFrames: true,
 							emitQueueTelemetry: true,
 							queueTelemetryIntervalMs: 1_000,
@@ -1185,12 +1213,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								return;
 							}
 
-							logVoice('Per-app sidecar produced no audio frames after startup', {
+							logVoice('Sidecar produced no audio frames after startup', {
 								sessionId: appAudioSession.sessionId,
 								targetId: appAudioSession.targetId,
 							});
 							toast.warning(
-								'Per-app audio started but produced no audio frames. Screen video will continue without shared audio.',
+								`${sidecarAudioLabel} started but produced no audio frames. Screen video will continue without shared audio.`,
 							);
 							localScreenShareAudioProducer.current?.close();
 							localScreenShareAudioProducer.current = undefined;
@@ -1206,7 +1234,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						removeAppAudioFrameSubscriptionRef.current = desktopBridge.subscribeAppAudioFrames((frame) => {
 							if (frame.sessionId === appAudioSession.sessionId) {
 								if (!hasReceivedSessionFrame) {
-									logVoice('Received first per-app audio frame', {
+									logVoice('Received first sidecar audio frame', {
 										sessionId: frame.sessionId,
 										targetId: frame.targetId,
 									});
@@ -1225,7 +1253,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						removeAppAudioStatusSubscriptionRef.current?.();
 						removeAppAudioStatusSubscriptionRef.current = desktopBridge.subscribeAppAudioStatus(
 							(statusEvent: TAppAudioStatusEvent) => {
-								logVoice('Received per-app sidecar status event', {
+								logVoice('Received sidecar audio status event', {
 									sessionId: statusEvent.sessionId,
 									targetId: statusEvent.targetId,
 									reason: statusEvent.reason,
@@ -1242,8 +1270,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									}
 									toast.warning(
 										statusEvent.error
-											? `Per-app audio capture ended (${statusEvent.reason}): ${statusEvent.error}`
-											: `Per-app audio capture ended (${statusEvent.reason}). Screen video will continue without shared audio.`,
+											? `${sidecarAudioLabel} capture ended (${statusEvent.reason}): ${statusEvent.error}`
+											: `${sidecarAudioLabel} capture ended (${statusEvent.reason}). Screen video will continue without shared audio.`,
 									);
 									localScreenShareAudioProducer.current?.close();
 									localScreenShareAudioProducer.current = undefined;
@@ -1257,17 +1285,28 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							},
 						);
 					} catch (error) {
-						logVoice('Failed to start per-app sidecar audio capture', {
+						logVoice('Failed to start sidecar audio capture', {
 							error,
 						});
-						toast.warning('Per-app audio capture failed. Continuing without shared audio.');
 						await cleanupDesktopAppAudio();
-						audioMode = ScreenAudioMode.NONE;
+
+						if (audioMode === ScreenAudioMode.SYSTEM) {
+							// Fall back to getDisplayMedia loopback — no process-tree
+							// exclusion, but the user still gets shared audio.
+							logVoice('Falling back to display-media loopback for system audio');
+							toast.warning('Sidecar audio capture failed. Falling back to standard system audio (without echo exclusion).');
+							useSidecarAudio = false;
+						} else {
+							toast.warning(`${sidecarAudioLabel} capture failed. Continuing without shared audio.`);
+							audioMode = ScreenAudioMode.NONE;
+						}
 					}
 				}
 
-				// Electron main only provides display-capture audio in system mode.
-				// Requesting audio in per-app mode can abort capture startup.
+				// Always request loopback audio from getDisplayMedia in system mode
+				// so it is available as a fallback if the sidecar fails.  When the
+				// sidecar successfully captures audio, the loopback track is stopped
+				// and removed before the producer is created.
 				const shouldCaptureDisplayAudio = audioMode === ScreenAudioMode.SYSTEM;
 				const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
 
@@ -1291,7 +1330,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				const videoTrack = stream.getVideoTracks()[0];
 				const audioTrack = stream.getAudioTracks()[0];
 
-				if (audioMode === ScreenAudioMode.APP && audioTrack) {
+				if (useSidecarAudio && audioTrack) {
 					audioTrack.stop();
 					stream.removeTrack(audioTrack);
 					standbyDisplayAudioTrackRef.current = undefined;
@@ -1364,7 +1403,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						setLocalScreenShareAudio(undefined);
 					};
 
-					if (audioMode === ScreenAudioMode.APP && appAudioPipelineRef.current?.track) {
+					if (useSidecarAudio && appAudioPipelineRef.current?.track) {
 						const appAudioTrack = appAudioPipelineRef.current.track;
 						setLocalScreenShareAudio(appAudioPipelineRef.current.stream);
 
