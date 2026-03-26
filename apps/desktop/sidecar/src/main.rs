@@ -1427,10 +1427,18 @@ fn handle_audio_capture_start(
 
     let self_exclude_pid = parsed.self_exclude_pid;
 
-    let (target_id, target_pid) = if let Some(exclude_pid) = self_exclude_pid {
-        // System-wide capture: exclude the caller's own process (Ripcord) so its audio
-        // is never present in the loopback stream.  No specific target process is needed.
-        (format!("pid:{exclude_pid}"), exclude_pid)
+    // Use system-wide exclude mode only when selfExcludePid is provided AND the caller
+    // has not requested a specific app target.  When an explicit target is given, use
+    // the normal per-app include-mode path — Ripcord's audio is never present in another
+    // app's process tree, so exclusion is a no-op there anyway.
+    let use_exclude_mode = self_exclude_pid.is_some()
+        && parsed.app_audio_target_id.is_none()
+        && parsed.source_id.is_none();
+
+    let (target_id, target_pid) = if use_exclude_mode {
+        // Capture all system audio except the excluded process.  Use "loopback" as the
+        // target identifier so downstream consumers see a meaningful label, not Ripcord's PID.
+        ("loopback".to_string(), 0u32)
     } else {
         let source_pid = parsed
             .source_id
@@ -1454,6 +1462,10 @@ fn handle_audio_capture_start(
         (id, pid)
     };
 
+    // In per-app mode selfExcludePid is not forwarded — the include-mode loopback only
+    // captures the target's process tree, so Ripcord's audio is never present there.
+    let effective_exclude_pid = if use_exclude_mode { self_exclude_pid } else { None };
+
     let session_id = Uuid::new_v4().to_string();
     let target_process_name =
         process_name_from_pid(target_pid).unwrap_or_else(|| "unknown.exe".to_string());
@@ -1469,7 +1481,7 @@ fn handle_audio_capture_start(
         session_id.clone(),
         target_id.clone(),
         target_pid,
-        self_exclude_pid,
+        effective_exclude_pid,
         Arc::clone(&stop_flag),
     );
 
