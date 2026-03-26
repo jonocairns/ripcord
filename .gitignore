@@ -14,12 +14,11 @@ apps/desktop/node_modules/
 apps/desktop/*.log
 apps/desktop/.DS_Store
 apps/desktop/*.tsbuildinfo
+pnpm-lock.yaml
+apps/desktop/pnpm-lock.yaml
 apps/desktop/sidecar/target/
 apps/desktop/sidecar/bin/
 audio-tests/.outputs/
-data-test/logs/
-data-test/interface/
-data-test/plugins/
-data-test/uploads/
+data-test/
 __pycache__/
 .env

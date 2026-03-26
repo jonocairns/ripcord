@@ -64,7 +64,7 @@ describe('/login', () => {
     expect(data.errors).toHaveProperty('password', 'Invalid password');
   });
 
-  test('should login with legacy plaintext password and upgrade hash', async () => {
+  test('should reject login with raw plaintext password stored in DB', async () => {
     await tdb
       .update(users)
       .set({ password: 'password123' })
@@ -72,16 +72,11 @@ describe('/login', () => {
 
     const response = await login('testowner', 'password123');
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(400);
 
-    const updatedUser = await tdb
-      .select({ password: users.password })
-      .from(users)
-      .where(eq(users.identity, 'testowner'))
-      .get();
+    const data = (await response.json()) as { errors: Record<string, string> };
 
-    expect(updatedUser).toBeTruthy();
-    expect(updatedUser?.password.startsWith('argon2$')).toBe(true);
+    expect(data.errors).toHaveProperty('password', 'Invalid password');
   });
 
   test('should login with raw argon2 hash and upgrade to prefixed format', async () => {

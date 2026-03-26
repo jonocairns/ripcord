@@ -254,7 +254,10 @@ const registerIpcHandlers = () => {
   ipcMain.handle(
     "desktop:start-app-audio-capture",
     (_event, input: TStartAppAudioCaptureInput) => {
-      return captureSidecarManager.startAppAudioCapture(input);
+      return captureSidecarManager.startAppAudioCapture({
+        ...input,
+        selfExcludePid: process.pid,
+      });
     },
   );
 

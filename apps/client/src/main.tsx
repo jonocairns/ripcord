@@ -9,11 +9,13 @@ import { DialogsProvider } from './components/dialogs/index.tsx';
 import { Routing } from './components/routing/index.tsx';
 import { ServerScreensProvider } from './components/server-screens/index.tsx';
 import { ThemeProvider } from './components/theme-provider/index.tsx';
-import { LocalStorageKey } from './helpers/storage.ts';
+import { LocalStorageKey, migrateStorage } from './helpers/storage.ts';
 import './index.css';
 import { initializeRuntimeServerConfig } from './runtime/server-config.ts';
 
 const bootstrap = async () => {
+	migrateStorage();
+
 	try {
 		await initializeRuntimeServerConfig();
 	} catch (error) {
