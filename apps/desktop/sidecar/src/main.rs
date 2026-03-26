@@ -1431,9 +1431,21 @@ fn handle_audio_capture_start(
     // has not requested a specific app target.  When an explicit target is given, use
     // the normal per-app include-mode path — Ripcord's audio is never present in another
     // app's process tree, so exclusion is a no-op there anyway.
+    //
+    // Note: sourceId is always present in the request (it is a required field), so we
+    // cannot use `source_id.is_none()` as the gate.  Instead we resolve it: a display/
+    // monitor source like "screen:0" will not map to any process PID, so exclude mode
+    // is appropriate; a window source like "window:12345" resolves to a specific app PID
+    // and should stay in per-app include mode.
+    let source_resolves_to_pid = parsed
+        .source_id
+        .as_deref()
+        .and_then(resolve_source_to_pid)
+        .is_some();
+
     let use_exclude_mode = self_exclude_pid.is_some()
         && parsed.app_audio_target_id.is_none()
-        && parsed.source_id.is_none();
+        && !source_resolves_to_pid;
 
     let (target_id, target_pid) = if use_exclude_mode {
         // Capture all system audio except the excluded process.  Use "loopback" as the
