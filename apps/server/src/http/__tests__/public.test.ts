@@ -143,7 +143,7 @@ describe('/public', () => {
       dbFile!.size.toString()
     );
     expect(response.headers.get('Content-Disposition')).toBe(
-      `attachment; filename="${dbFile!.name}"`
+      `attachment; filename="${dbFile!.name}"; filename*=UTF-8''${encodeURIComponent(dbFile!.name)}`
     );
 
     const responseText = await response.text();

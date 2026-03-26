@@ -5,6 +5,10 @@ const deepMerge = <T extends Record<string, unknown>>(
   const result = { ...target };
 
   for (const key in source) {
+    if (!Object.hasOwn(source, key)) continue;
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype')
+      continue;
+
     const sourceValue = source[key];
     const targetValue = target[key];
 
