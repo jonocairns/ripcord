@@ -1482,8 +1482,8 @@ fn handle_audio_capture_start(
     let target_process_name =
         process_name_from_pid(target_pid).unwrap_or_else(|| "unknown.exe".to_string());
     eprintln!(
-        "[capture-sidecar] start session={} targetId={} targetPid={} targetProcess={} selfExcludePid={:?}",
-        session_id, target_id, target_pid, target_process_name, self_exclude_pid
+        "[capture-sidecar] start targetId={} targetPid={} targetProcess={} selfExcludePid={:?}",
+        target_id, target_pid, target_process_name, self_exclude_pid
     );
     let stop_flag = Arc::new(AtomicBool::new(false));
     let handle = start_capture_thread(
