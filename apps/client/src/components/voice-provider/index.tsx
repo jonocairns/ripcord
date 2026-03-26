@@ -35,6 +35,7 @@ import {
 	type TAppAudioSession,
 	type TAppAudioStatusEvent,
 	type TDesktopScreenShareSelection,
+	type TStartAppAudioCaptureInput,
 } from '@/runtime/types';
 import { type TDeviceSettings, VideoCodecPreference } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
@@ -1163,7 +1164,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				if (useSidecarAudio) {
 					try {
-						const captureInput: { sourceId: string; appAudioTargetId?: string } = {
+						const captureInput: TStartAppAudioCaptureInput = {
 							sourceId: desktopSelection.sourceId,
 						};
 
