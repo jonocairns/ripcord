@@ -138,9 +138,9 @@ const createMainWindow = () => {
         action: "allow",
         overrideBrowserWindowOptions: {
           icon,
-          frame: false,
           autoHideMenuBar: true,
           backgroundColor: "#000000",
+          resizable: true,
         },
       };
     }
