@@ -24,9 +24,41 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     const resolved = resolveDesktopCaptureCapabilities({
       baseCapabilities,
       sidecarAvailable: true,
+      sidecarPerAppAudioSupported: true,
     });
 
     assert.equal(resolved.perAppAudio, "supported");
     assert.equal(resolved.sidecarAvailable, true);
+  });
+
+  void it("downgrades linux per-app audio when the sidecar path is unavailable", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: true,
+      sidecarPerAppAudioSupported: false,
+      sidecarReason: "pw-record is not installed",
+    });
+
+    assert.equal(resolved.systemAudio, "best-effort");
+    assert.equal(resolved.perAppAudio, "unsupported");
+    assert.equal(resolved.sidecarAvailable, true);
+    assert.match(resolved.notes.join(" "), /pw-record is not installed/i);
+  });
+
+  void it("keeps linux per-app audio available when the sidecar path is ready", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: true,
+      sidecarPerAppAudioSupported: true,
+    });
+
+    assert.equal(resolved.systemAudio, "best-effort");
+    assert.equal(resolved.perAppAudio, "best-effort");
+    assert.equal(resolved.sidecarAvailable, true);
+    assert.match(resolved.notes.join(" "), /PipeWire/i);
   });
 });

@@ -1,10 +1,16 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-#[cfg(any(windows, test))]
+#[cfg(any(windows, test, target_os = "linux"))]
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::io::{self, BufRead, Write};
+#[cfg(target_os = "linux")]
+use std::collections::HashSet;
+#[cfg(target_os = "linux")]
+use std::fs;
+use std::io::{self, BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
+#[cfg(target_os = "linux")]
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -12,9 +18,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use base64::engine::general_purpose::STANDARD as BASE64;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use base64::Engine;
 #[cfg(windows)]
 use std::ffi::c_void;
@@ -24,7 +30,7 @@ use std::mem::size_of;
 use std::path::Path;
 #[cfg(windows)]
 use std::ptr;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use std::time::Instant;
 #[cfg(windows)]
 use windows::core::{IUnknown, Interface, PWSTR};
@@ -68,7 +74,8 @@ const APP_AUDIO_BINARY_EGRESS_FRAMING: &str = "length_prefixed_f32le_v1";
 const APP_AUDIO_FRAME_SIZE: usize = 960;
 const APP_AUDIO_SAMPLE_RATE: u32 = 48_000;
 const APP_AUDIO_CHANNELS: usize = 1;
-#[cfg(windows)]
+const APP_AUDIO_FRAME_BYTES: usize = APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS * 4;
+#[cfg(any(windows, target_os = "linux"))]
 const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -145,7 +152,6 @@ struct SetPushKeybindsParams {
 
 #[derive(Debug, Clone, Copy)]
 enum CaptureEndReason {
-    #[cfg(windows)]
     CaptureStopped,
     #[cfg(windows)]
     AppExited,
@@ -157,7 +163,6 @@ enum CaptureEndReason {
 impl CaptureEndReason {
     fn as_str(self) -> &'static str {
         match self {
-            #[cfg(windows)]
             Self::CaptureStopped => "capture_stopped",
             #[cfg(windows)]
             Self::AppExited => "app_exited",
@@ -175,7 +180,6 @@ struct CaptureOutcome {
 }
 
 impl CaptureOutcome {
-    #[cfg(windows)]
     fn from_reason(reason: CaptureEndReason) -> Self {
         Self {
             reason,
@@ -196,6 +200,26 @@ struct CaptureSession {
     session_id: String,
     stop_flag: Arc<AtomicBool>,
     handle: JoinHandle<()>,
+}
+
+#[cfg(target_os = "linux")]
+enum LinuxCaptureEvent {
+    Frame {
+        target_id: String,
+        frame_samples: Vec<f32>,
+    },
+    ReadError {
+        target_id: String,
+        error: String,
+    },
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxTargetCapture {
+    stop_flag: Arc<AtomicBool>,
+    process: Child,
+    stdout_thread: JoinHandle<()>,
+    stderr_thread: Option<JoinHandle<()>>,
 }
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
@@ -391,7 +415,7 @@ fn start_frame_writer(stdout: Arc<Mutex<io::Stdout>>, queue: Arc<FrameQueue>) ->
     })
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn enqueue_frame_event(
     queue: &Arc<FrameQueue>,
     session_id: &str,
@@ -427,7 +451,7 @@ fn enqueue_frame_event(
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn try_write_app_audio_binary_frame(
     stream_slot: &Arc<Mutex<Option<TcpStream>>>,
     session_id: &str,
@@ -1346,6 +1370,11 @@ fn parse_target_pid(target_id: &str) -> Option<u32> {
         .and_then(|raw| raw.parse::<u32>().ok())
 }
 
+#[cfg(target_os = "linux")]
+fn parse_linux_target_node_id(target_id: &str) -> Option<&str> {
+    target_id.strip_prefix("node:").filter(|raw| !raw.is_empty())
+}
+
 #[cfg(any(windows, test))]
 fn dedupe_window_entries_by_pid(entries: Vec<(u32, String)>) -> HashMap<u32, String> {
     let mut deduped: HashMap<u32, String> = HashMap::new();
@@ -1446,9 +1475,263 @@ fn process_name_from_pid(pid: u32) -> Option<String> {
     Some(file_name)
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "linux")))]
 fn process_name_from_pid(_pid: u32) -> Option<String> {
     None
+}
+
+#[cfg(target_os = "linux")]
+fn pipewire_command_exists(command: &str) -> bool {
+    Command::new(command)
+        .arg("--help")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn run_pipewire_command(command: &str, arguments: &[&str]) -> Result<Vec<u8>, String> {
+    let output = Command::new(command)
+        .args(arguments)
+        .output()
+        .map_err(|error| format!("failed to launch `{command}`: {error}"))?;
+
+    if !output.status.success() {
+        let stderr_output = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "`{command}` failed: {}",
+            stderr_output.trim()
+        ));
+    }
+
+    Ok(output.stdout)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_value_as_u32(value: &Value) -> Option<u32> {
+    value
+        .as_u64()
+        .and_then(|raw| u32::try_from(raw).ok())
+        .or_else(|| value.as_str().and_then(|raw| raw.parse::<u32>().ok()))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_prop_as_u32(props: &Value, key: &str) -> Option<u32> {
+    props.get(key).and_then(linux_value_as_u32)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_prop_as_str<'a>(props: &'a Value, key: &str) -> Option<&'a str> {
+    props
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(target_os = "linux")]
+fn get_linux_process_tree_pids(root_pid: u32) -> HashSet<u32> {
+    let mut process_tree_pids = HashSet::from([root_pid]);
+
+    loop {
+        let mut added_any = false;
+        let entries = match fs::read_dir("/proc") {
+            Ok(entries) => entries,
+            Err(_) => break,
+        };
+
+        for entry in entries.flatten() {
+            let Some(file_name) = entry.file_name().to_str().map(ToString::to_string) else {
+                continue;
+            };
+            let Ok(pid) = file_name.parse::<u32>() else {
+                continue;
+            };
+
+            let status_path = entry.path().join("status");
+            let Ok(status_text) = fs::read_to_string(status_path) else {
+                continue;
+            };
+            let parent_pid = status_text.lines().find_map(|line| {
+                line.strip_prefix("PPid:")
+                    .map(str::trim)
+                    .and_then(|value| value.parse::<u32>().ok())
+            });
+
+            if parent_pid.is_some_and(|parent_pid| process_tree_pids.contains(&parent_pid))
+                && process_tree_pids.insert(pid)
+            {
+                added_any = true;
+            }
+        }
+
+        if !added_any {
+            break;
+        }
+    }
+
+    process_tree_pids
+}
+
+#[cfg(target_os = "linux")]
+fn stop_linux_target_capture(mut capture: LinuxTargetCapture) {
+    capture.stop_flag.store(true, Ordering::Relaxed);
+    let _ = capture.process.kill();
+    let _ = capture.process.wait();
+    let _ = capture.stdout_thread.join();
+    if let Some(stderr_thread) = capture.stderr_thread.take() {
+        let _ = stderr_thread.join();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn emit_linux_audio_frame(
+    session_id: &str,
+    target_id: &str,
+    sequence: u64,
+    frame_samples: &[f32],
+    frame_queue: &Arc<FrameQueue>,
+    app_audio_binary_stream: &Option<Arc<Mutex<Option<TcpStream>>>>,
+) {
+    let wrote_binary = app_audio_binary_stream
+        .as_ref()
+        .map(|stream_slot| {
+            try_write_app_audio_binary_frame(
+                stream_slot,
+                session_id,
+                target_id,
+                sequence,
+                APP_AUDIO_SAMPLE_RATE as usize,
+                APP_AUDIO_CHANNELS,
+                APP_AUDIO_FRAME_SIZE,
+                PROTOCOL_VERSION,
+                0,
+                frame_samples,
+            )
+        })
+        .unwrap_or(false);
+
+    if !wrote_binary {
+        let frame_bytes = bytemuck::cast_slice(frame_samples);
+        let pcm_base64 = BASE64.encode(frame_bytes);
+
+        enqueue_frame_event(
+            frame_queue,
+            session_id,
+            target_id,
+            sequence,
+            APP_AUDIO_SAMPLE_RATE as usize,
+            APP_AUDIO_FRAME_SIZE,
+            pcm_base64,
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn start_linux_target_capture(
+    target_id: &str,
+    event_sender: std::sync::mpsc::Sender<LinuxCaptureEvent>,
+) -> Result<LinuxTargetCapture, String> {
+    let Some(target_object_id) = parse_linux_target_node_id(target_id) else {
+        return Err("Invalid Linux PipeWire target id.".to_string());
+    };
+
+    let mut child = Command::new("pw-record")
+        .args([
+            "--target",
+            target_object_id,
+            "--rate",
+            "48000",
+            "--channels",
+            "1",
+            "--format",
+            "f32",
+            "--latency",
+            "20ms",
+            "-",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Failed to launch `pw-record` for {target_id}: {error}"))?;
+
+    let Some(stdout_pipe) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("`pw-record` did not expose stdout for {target_id}."));
+    };
+
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_flag_for_thread = Arc::clone(&stop_flag);
+    let target_id_for_stdout = target_id.to_string();
+    let stdout_thread = thread::spawn(move || {
+        let mut stdout_reader = io::BufReader::new(stdout_pipe);
+
+        loop {
+            if stop_flag_for_thread.load(Ordering::Relaxed) {
+                return;
+            }
+
+            let mut frame_bytes = vec![0u8; APP_AUDIO_FRAME_BYTES];
+            match stdout_reader.read_exact(&mut frame_bytes) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return,
+                Err(error) => {
+                    let _ = event_sender.send(LinuxCaptureEvent::ReadError {
+                        target_id: target_id_for_stdout.clone(),
+                        error: format!("Failed reading `pw-record` PCM data: {error}"),
+                    });
+                    return;
+                }
+            }
+
+            let frame_samples = frame_bytes
+                .chunks_exact(4)
+                .map(|sample_bytes| {
+                    f32::from_le_bytes([
+                        sample_bytes[0],
+                        sample_bytes[1],
+                        sample_bytes[2],
+                        sample_bytes[3],
+                    ])
+                })
+                .collect::<Vec<f32>>();
+
+            if event_sender
+                .send(LinuxCaptureEvent::Frame {
+                    target_id: target_id_for_stdout.clone(),
+                    frame_samples,
+                })
+                .is_err()
+            {
+                return;
+            }
+        }
+    });
+
+    let stderr_thread = child.stderr.take().map(|stderr_pipe| {
+        let target_id = target_id.to_string();
+        thread::spawn(move || {
+            let stderr_reader = io::BufReader::new(stderr_pipe);
+            for line in stderr_reader.lines().map_while(Result::ok) {
+                let trimmed_line = line.trim();
+                if trimmed_line.is_empty() {
+                    continue;
+                }
+
+                eprintln!("[capture-sidecar] linux target {}: {}", target_id, trimmed_line);
+            }
+        })
+    });
+
+    Ok(LinuxTargetCapture {
+        stop_flag,
+        process: child,
+        stdout_thread,
+        stderr_thread,
+    })
 }
 
 #[cfg(windows)]
@@ -1508,7 +1791,86 @@ fn get_audio_targets() -> Vec<AudioTarget> {
     targets
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn get_audio_targets() -> Vec<AudioTarget> {
+    let output = match run_pipewire_command("pw-dump", &[]) {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("[capture-sidecar] {error}");
+            return Vec::new();
+        }
+    };
+
+    let objects: Vec<Value> = match serde_json::from_slice(&output) {
+        Ok(objects) => objects,
+        Err(error) => {
+            eprintln!("[capture-sidecar] Failed to parse `pw-dump` JSON: {error}");
+            return Vec::new();
+        }
+    };
+
+    let mut targets = Vec::new();
+
+    for object in objects {
+        let Some(object_type) = object.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        if !object_type.ends_with(":Node") {
+            continue;
+        }
+
+        let Some(props) = object.get("info").and_then(|info| info.get("props")) else {
+            continue;
+        };
+        let Some(media_class) = linux_prop_as_str(props, "media.class") else {
+            continue;
+        };
+        if !media_class.starts_with("Stream/Output/Audio") {
+            continue;
+        }
+
+        let Some(pid) = linux_prop_as_u32(props, "application.process.id")
+            .or_else(|| linux_prop_as_u32(props, "pipewire.sec.pid"))
+        else {
+            continue;
+        };
+        let Some(target_object_id) = linux_prop_as_str(props, "object.serial")
+            .map(ToString::to_string)
+            .or_else(|| object.get("id").and_then(linux_value_as_u32).map(|raw| raw.to_string()))
+        else {
+            continue;
+        };
+
+        let app_name = linux_prop_as_str(props, "application.name")
+            .or_else(|| linux_prop_as_str(props, "node.description"))
+            .or_else(|| linux_prop_as_str(props, "node.nick"))
+            .or_else(|| linux_prop_as_str(props, "node.name"))
+            .unwrap_or("Unknown app");
+        let node_label = linux_prop_as_str(props, "node.description")
+            .or_else(|| linux_prop_as_str(props, "node.nick"))
+            .unwrap_or(app_name);
+        let process_name = linux_prop_as_str(props, "application.process.binary")
+            .unwrap_or(app_name)
+            .to_string();
+        let label = if node_label.eq_ignore_ascii_case(app_name) {
+            format!("{app_name} ({pid})")
+        } else {
+            format!("{node_label} - {app_name} ({pid})")
+        };
+
+        targets.push(AudioTarget {
+            id: format!("node:{target_object_id}"),
+            label,
+            pid,
+            process_name,
+        });
+    }
+
+    targets.sort_by(|left, right| left.label.cmp(&right.label));
+    targets
+}
+
+#[cfg(all(not(windows), not(target_os = "linux")))]
 fn get_audio_targets() -> Vec<AudioTarget> {
     Vec::new()
 }
@@ -1877,7 +2239,346 @@ fn capture_loopback_audio(
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn capture_loopback_audio(
+    session_id: &str,
+    target_id: &str,
+    _target_pid: u32,
+    self_exclude_pid: Option<u32>,
+    stop_flag: Arc<AtomicBool>,
+    frame_queue: Arc<FrameQueue>,
+    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
+) -> CaptureOutcome {
+    if let Some(self_exclude_pid) = self_exclude_pid {
+        let excluded_pids = get_linux_process_tree_pids(self_exclude_pid);
+        let (event_sender, event_receiver) =
+            std::sync::mpsc::channel::<LinuxCaptureEvent>();
+        let mut captures: HashMap<String, LinuxTargetCapture> = HashMap::new();
+        let mut sequence: u64 = 0;
+        let mut last_refresh_at = Instant::now() - Duration::from_secs(1);
+
+        loop {
+            if stop_flag.load(Ordering::Relaxed) {
+                for capture in captures.into_values() {
+                    stop_linux_target_capture(capture);
+                }
+                return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
+            }
+
+            if last_refresh_at.elapsed() >= Duration::from_millis(750) {
+                let next_targets = get_audio_targets()
+                    .into_iter()
+                    .filter(|target| !excluded_pids.contains(&target.pid))
+                    .collect::<Vec<_>>();
+
+                let next_target_ids = next_targets
+                    .iter()
+                    .map(|target| target.id.clone())
+                    .collect::<HashSet<_>>();
+                let stale_target_ids = captures
+                    .keys()
+                    .filter(|target_id| !next_target_ids.contains(*target_id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                for stale_target_id in stale_target_ids {
+                    if let Some(capture) = captures.remove(&stale_target_id) {
+                        stop_linux_target_capture(capture);
+                    }
+                }
+
+                let mut spawn_error: Option<String> = None;
+
+                for next_target in next_targets {
+                    if captures.contains_key(&next_target.id) {
+                        continue;
+                    }
+
+                    match start_linux_target_capture(&next_target.id, event_sender.clone()) {
+                        Ok(capture) => {
+                            captures.insert(next_target.id, capture);
+                        }
+                        Err(error) => {
+                            eprintln!("[capture-sidecar] {error}");
+                            spawn_error = Some(error);
+                        }
+                    }
+                }
+
+                if captures.is_empty() && spawn_error.is_some() {
+                    for capture in captures.into_values() {
+                        stop_linux_target_capture(capture);
+                    }
+                    return CaptureOutcome::capture_error(
+                        spawn_error.unwrap_or_else(|| "Linux system capture failed.".to_string()),
+                    );
+                }
+
+                last_refresh_at = Instant::now();
+            }
+
+            let frame_deadline = Instant::now() + Duration::from_millis(20);
+            let mut mixed_frame = vec![0.0f32; APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS];
+
+            loop {
+                let now = Instant::now();
+                if now >= frame_deadline {
+                    break;
+                }
+
+                match event_receiver.recv_timeout(frame_deadline.saturating_duration_since(now)) {
+                    Ok(LinuxCaptureEvent::Frame {
+                        target_id: _target_id,
+                        frame_samples,
+                    }) => {
+                        for (mixed_sample, incoming_sample) in
+                            mixed_frame.iter_mut().zip(frame_samples.iter())
+                        {
+                            *mixed_sample += *incoming_sample;
+                        }
+                    }
+                    Ok(LinuxCaptureEvent::ReadError { target_id, error }) => {
+                        eprintln!("[capture-sidecar] linux target {}: {}", target_id, error);
+                        if let Some(capture) = captures.remove(&target_id) {
+                            stop_linux_target_capture(capture);
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        for capture in captures.into_values() {
+                            stop_linux_target_capture(capture);
+                        }
+                        return CaptureOutcome::capture_error(
+                            "Linux system capture channel disconnected unexpectedly."
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+
+            let exited_target_ids = captures
+                .iter_mut()
+                .filter_map(|(capture_target_id, capture)| match capture.process.try_wait() {
+                    Ok(Some(_status)) => Some(capture_target_id.clone()),
+                    Ok(None) => None,
+                    Err(error) => {
+                        eprintln!(
+                            "[capture-sidecar] Failed waiting on `pw-record` for {}: {}",
+                            capture_target_id, error
+                        );
+                        Some(capture_target_id.clone())
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            for exited_target_id in exited_target_ids {
+                if let Some(capture) = captures.remove(&exited_target_id) {
+                    stop_linux_target_capture(capture);
+                }
+            }
+
+            emit_linux_audio_frame(
+                session_id,
+                target_id,
+                sequence,
+                &mixed_frame,
+                &frame_queue,
+                &app_audio_binary_stream,
+            );
+            sequence = sequence.saturating_add(1);
+        }
+    }
+
+    let Some(target_object_id) = parse_linux_target_node_id(target_id) else {
+        return CaptureOutcome::capture_error("Invalid Linux PipeWire target id.".to_string());
+    };
+
+    let mut child = match Command::new("pw-record")
+        .args([
+            "--target",
+            target_object_id,
+            "--rate",
+            "48000",
+            "--channels",
+            "1",
+            "--format",
+            "f32",
+            "--latency",
+            "20ms",
+            "-",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return CaptureOutcome::capture_error(format!(
+                "Failed to launch `pw-record`: {error}"
+            ))
+        }
+    };
+
+    let Some(stdout_pipe) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return CaptureOutcome::capture_error("`pw-record` did not expose stdout.".to_string());
+    };
+
+    let stderr_slot = Arc::new(Mutex::new(String::new()));
+    let stderr_slot_for_thread = Arc::clone(&stderr_slot);
+    let stderr_thread = child.stderr.take().map(|stderr_pipe| {
+        thread::spawn(move || {
+            let mut stderr_reader = io::BufReader::new(stderr_pipe);
+            let mut stderr_output = String::new();
+            let _ = stderr_reader.read_to_string(&mut stderr_output);
+            if let Ok(mut stderr_lock) = stderr_slot_for_thread.lock() {
+                *stderr_lock = stderr_output;
+            }
+        })
+    });
+
+    let (frame_sender, frame_receiver) = std::sync::mpsc::channel::<Result<Vec<f32>, String>>();
+    let stdout_thread = thread::spawn(move || {
+        let mut stdout_reader = io::BufReader::new(stdout_pipe);
+
+        loop {
+            let mut frame_bytes = vec![0u8; APP_AUDIO_FRAME_BYTES];
+            match stdout_reader.read_exact(&mut frame_bytes) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(error) => {
+                    let _ = frame_sender.send(Err(format!(
+                        "Failed reading `pw-record` PCM data: {error}"
+                    )));
+                    return;
+                }
+            }
+
+            let frame_samples = frame_bytes
+                .chunks_exact(4)
+                .map(|sample_bytes| {
+                    f32::from_le_bytes([
+                        sample_bytes[0],
+                        sample_bytes[1],
+                        sample_bytes[2],
+                        sample_bytes[3],
+                    ])
+                })
+                .collect::<Vec<f32>>();
+
+            if frame_sender.send(Ok(frame_samples)).is_err() {
+                return;
+            }
+        }
+    });
+
+    let mut sequence: u64 = 0;
+
+    loop {
+        if stop_flag.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_thread.join();
+            if let Some(stderr_thread) = stderr_thread {
+                let _ = stderr_thread.join();
+            }
+            return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
+        }
+
+        match frame_receiver.recv_timeout(Duration::from_millis(50)) {
+            Ok(Ok(frame_samples)) => {
+                emit_linux_audio_frame(
+                    session_id,
+                    target_id,
+                    sequence,
+                    &frame_samples,
+                    &frame_queue,
+                    &app_audio_binary_stream,
+                );
+                sequence = sequence.saturating_add(1);
+            }
+            Ok(Err(error)) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_thread.join();
+                if let Some(stderr_thread) = stderr_thread {
+                    let _ = stderr_thread.join();
+                }
+                return CaptureOutcome::capture_error(error);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => match child.try_wait() {
+                Ok(Some(status)) => {
+                    let _ = stdout_thread.join();
+                    if let Some(stderr_thread) = stderr_thread {
+                        let _ = stderr_thread.join();
+                    }
+
+                    if stop_flag.load(Ordering::Relaxed) {
+                        return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
+                    }
+
+                    let stderr_output = stderr_slot
+                        .lock()
+                        .ok()
+                        .map(|stderr_lock| stderr_lock.trim().to_string())
+                        .filter(|stderr_output| !stderr_output.is_empty());
+                    let error_message = stderr_output.unwrap_or_else(|| {
+                        format!("`pw-record` exited unexpectedly (status={status}).")
+                    });
+
+                    return CaptureOutcome::capture_error(error_message);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_thread.join();
+                    if let Some(stderr_thread) = stderr_thread {
+                        let _ = stderr_thread.join();
+                    }
+                    return CaptureOutcome::capture_error(format!(
+                        "Failed waiting on `pw-record`: {error}"
+                    ));
+                }
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => match child.wait() {
+                Ok(status) => {
+                    let _ = stdout_thread.join();
+                    if let Some(stderr_thread) = stderr_thread {
+                        let _ = stderr_thread.join();
+                    }
+
+                    if stop_flag.load(Ordering::Relaxed) {
+                        return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
+                    }
+
+                    let stderr_output = stderr_slot
+                        .lock()
+                        .ok()
+                        .map(|stderr_lock| stderr_lock.trim().to_string())
+                        .filter(|stderr_output| !stderr_output.is_empty());
+                    let error_message = stderr_output.unwrap_or_else(|| {
+                        format!("`pw-record` exited unexpectedly (status={status}).")
+                    });
+
+                    return CaptureOutcome::capture_error(error_message);
+                }
+                Err(error) => {
+                    let _ = stdout_thread.join();
+                    if let Some(stderr_thread) = stderr_thread {
+                        let _ = stderr_thread.join();
+                    }
+                    return CaptureOutcome::capture_error(format!(
+                        "Failed waiting on `pw-record`: {error}"
+                    ));
+                }
+            },
+        }
+    }
+}
+
+#[cfg(all(not(windows), not(target_os = "linux")))]
 fn capture_loopback_audio(
     _session_id: &str,
     _target_id: &str,
@@ -1887,7 +2588,9 @@ fn capture_loopback_audio(
     _frame_queue: Arc<FrameQueue>,
     _app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
-    CaptureOutcome::capture_error("Per-app audio capture is only available on Windows.".to_string())
+    CaptureOutcome::capture_error(
+        "Per-app audio capture is only available on Windows and Linux.".to_string(),
+    )
 }
 
 fn start_capture_thread(
@@ -1936,18 +2639,36 @@ fn handle_health_ping() -> Result<Value, String> {
 
 fn handle_capabilities_get() -> Result<Value, String> {
     let platform = std::env::consts::OS;
-    let per_app_audio = if cfg!(windows) {
-        "supported"
+    let (per_app_audio, per_app_audio_reason) = if cfg!(windows) {
+        ("supported", None)
+    } else if cfg!(target_os = "linux") {
+        if pipewire_command_exists("pw-dump") && pipewire_command_exists("pw-record") {
+            ("best-effort", None)
+        } else {
+            (
+                "unsupported",
+                Some(
+                    "Linux per-app audio capture requires the PipeWire tools `pw-dump` and `pw-record`."
+                        .to_string(),
+                ),
+            )
+        }
     } else {
-        "unsupported"
+        ("unsupported", None)
     };
 
-    Ok(json!({
+    let mut response = json!({
         "platform": platform,
         "perAppAudio": per_app_audio,
         "protocolVersion": PROTOCOL_VERSION,
         "encoding": PCM_ENCODING,
-    }))
+    });
+
+    if let Some(per_app_audio_reason) = per_app_audio_reason {
+        response["perAppAudioReason"] = json!(per_app_audio_reason);
+    }
+
+    Ok(response)
 }
 
 fn handle_windows_resolve_source(params: Value) -> Result<Value, String> {
@@ -2015,8 +2736,8 @@ fn handle_audio_capture_start(
     state: &mut SidecarState,
     params: Value,
 ) -> Result<Value, String> {
-    if !cfg!(windows) {
-        return Err("Per-app audio capture is only available on Windows.".to_string());
+    if !cfg!(windows) && !cfg!(target_os = "linux") {
+        return Err("Per-app audio capture is only available on Windows and Linux.".to_string());
     }
 
     let parsed: StartAudioCaptureParams =
@@ -2042,15 +2763,25 @@ fn handle_audio_capture_start(
         .and_then(resolve_source_to_pid)
         .is_some();
 
-    let use_exclude_mode = self_exclude_pid.is_some()
+    let use_exclude_mode = (cfg!(windows) || cfg!(target_os = "linux"))
+        && self_exclude_pid.is_some()
         && parsed.app_audio_target_id.is_none()
         && !source_resolves_to_pid;
 
-    let (target_id, target_pid) = if use_exclude_mode {
+    let available_targets = get_audio_targets();
+
+    let (target_id, target_pid, target_process_name) = if use_exclude_mode {
         // Capture all system audio except the excluded process.  Use "loopback" as the
         // target identifier so downstream consumers see a meaningful label, not Ripcord's PID.
-        ("loopback".to_string(), 0u32)
+        ("loopback".to_string(), 0u32, "loopback".to_string())
     } else {
+        if cfg!(target_os = "linux") && parsed.app_audio_target_id.is_none() {
+            return Err(
+                "Linux per-app audio capture requires selecting an application target."
+                    .to_string(),
+            );
+        }
+
         let source_pid = parsed
             .source_id
             .as_deref()
@@ -2062,15 +2793,12 @@ fn handle_audio_capture_start(
             .or(source_pid)
             .ok_or_else(|| "No app audio target was provided and source mapping failed".to_string())?;
 
-        let pid = parse_target_pid(&id)
-            .ok_or_else(|| "Invalid app audio target id".to_string())?;
+        let target = available_targets
+            .into_iter()
+            .find(|target| target.id == id)
+            .ok_or_else(|| format!("Target audio source `{id}` is not available"))?;
 
-        let target_exists = get_audio_targets().iter().any(|t| t.id == id);
-        if !target_exists {
-            return Err(format!("Target process with pid {pid} is not available"));
-        }
-
-        (id, pid)
+        (target.id, target.pid, target.process_name)
     };
 
     // In per-app mode selfExcludePid is not forwarded — the include-mode loopback only
@@ -2078,8 +2806,6 @@ fn handle_audio_capture_start(
     let effective_exclude_pid = if use_exclude_mode { self_exclude_pid } else { None };
 
     let session_id = Uuid::new_v4().to_string();
-    let target_process_name =
-        process_name_from_pid(target_pid).unwrap_or_else(|| "unknown.exe".to_string());
     eprintln!(
         "[capture-sidecar] start targetId={} targetPid={} targetProcess={} selfExcludePid={:?}",
         target_id, target_pid, target_process_name, self_exclude_pid
@@ -2515,7 +3241,6 @@ mod tests {
     #[test]
     fn maps_capture_end_reasons() {
         assert_eq!(CaptureEndReason::CaptureError.as_str(), "capture_error");
-        #[cfg(windows)]
         assert_eq!(CaptureEndReason::CaptureStopped.as_str(), "capture_stopped");
         #[cfg(windows)]
         assert_eq!(CaptureEndReason::AppExited.as_str(), "app_exited");

@@ -97,11 +97,20 @@ const setGlobalPushKeybinds = async (
 const getEffectiveDesktopCapabilities = async () => {
   const baseCapabilities = getDesktopCapabilities();
   const sidecarStatus = await captureSidecarManager.getStatus();
+  const sidecarCapabilities = sidecarStatus.available
+    ? await captureSidecarManager.getCapabilities().catch(() => undefined)
+    : undefined;
+  const sidecarPerAppAudioSupported = sidecarCapabilities
+    ? sidecarCapabilities.perAppAudio !== "unsupported"
+    : baseCapabilities.platform === "windows" && sidecarStatus.available;
+  const sidecarReason =
+    sidecarCapabilities?.perAppAudioReason ?? sidecarStatus.reason;
 
   return resolveDesktopCaptureCapabilities({
     baseCapabilities,
     sidecarAvailable: sidecarStatus.available,
-    sidecarReason: sidecarStatus.reason,
+    sidecarReason,
+    sidecarPerAppAudioSupported,
   });
 };
 

@@ -40,6 +40,11 @@ type TSidecarStatus = {
   reason?: string;
 };
 
+type TSidecarCapabilities = {
+  perAppAudio?: "supported" | "best-effort" | "unsupported";
+  perAppAudioReason?: string;
+};
+
 type TAppAudioBinaryEgressInfo = {
   port: number;
   framing?: string;
@@ -236,6 +241,11 @@ class CaptureSidecarManager {
         reason,
       };
     }
+  }
+
+  async getCapabilities(): Promise<TSidecarCapabilities> {
+    const response = await this.sendRequest("capabilities.get", {});
+    return response as TSidecarCapabilities;
   }
 
   async listAppAudioTargets(
