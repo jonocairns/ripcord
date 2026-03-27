@@ -1203,15 +1203,21 @@ fn parse_push_keybind(keybind: Option<&str>) -> Result<Option<LinuxPushKeybind>,
     }))
 }
 
-// Opens an X11 display as a connectivity check. Returns an error string if X11
-// is unavailable so that handle_push_keybinds_set can surface it to the caller
-// before spawning a thread.
+// Opens an X11 display, resolves each keybind's KeySym to a hardware KeyCode,
+// and closes the display. Returns Err if X11 is unavailable. A resolved KeyCode
+// of 0 means the key has no mapping on the current layout and is returned as
+// None so the caller can surface a useful error instead of a silent no-op.
 #[cfg(target_os = "linux")]
-fn check_x11_available() -> Result<(), String> {
+fn open_x11_and_resolve_keycodes(
+    talk_keybind: Option<&LinuxPushKeybind>,
+    mute_keybind: Option<&LinuxPushKeybind>,
+) -> Result<(Option<u8>, Option<u8>), String> {
     use std::ptr;
 
-    let xlib = xlib::Xlib::open()
-        .map_err(|_| "X11 library (libX11.so) not found. Keybind monitoring requires X11 or XWayland.".to_string())?;
+    let xlib = xlib::Xlib::open().map_err(|_| {
+        "X11 library (libX11.so) not found. Keybind monitoring requires X11 or XWayland."
+            .to_string()
+    })?;
 
     let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
     if display.is_null() {
@@ -1221,15 +1227,31 @@ fn check_x11_available() -> Result<(), String> {
         );
     }
 
+    let resolve = |sym: u64| -> Option<u8> {
+        let kc = unsafe { (xlib.XKeysymToKeycode)(display, sym) };
+        if kc == 0 {
+            eprintln!(
+                "[capture-sidecar] XKeysymToKeycode returned 0 for KeySym {sym:#x} — key not present in current layout"
+            );
+            None
+        } else {
+            Some(kc)
+        }
+    };
+
+    let talk_kc = talk_keybind.and_then(|kb| resolve(kb.key_sym));
+    let mute_kc = mute_keybind.and_then(|kb| resolve(kb.key_sym));
+
     unsafe { (xlib.XCloseDisplay)(display) };
-    Ok(())
+
+    Ok((talk_kc, mute_kc))
 }
 
 #[cfg(target_os = "linux")]
 fn start_push_keybind_watcher(
     frame_queue: Arc<FrameQueue>,
-    talk_keybind: Option<LinuxPushKeybind>,
-    mute_keybind: Option<LinuxPushKeybind>,
+    talk_keybind: Option<(LinuxPushKeybind, u8)>,
+    mute_keybind: Option<(LinuxPushKeybind, u8)>,
 ) -> PushKeybindWatcher {
     use std::ptr;
 
@@ -1251,13 +1273,12 @@ fn start_push_keybind_watcher(
             return;
         }
 
-        // Resolve KeySyms to hardware KeyCodes once before entering the poll loop.
+        // KeyCodes for talk/mute were resolved before the thread was spawned.
+        // Resolve modifier KeyCodes here since they don't need to be checked upfront.
         let resolve = |sym: u64| -> u8 {
             unsafe { (xlib.XKeysymToKeycode)(display, sym) }
         };
 
-        let talk_kc = talk_keybind.as_ref().map(|kb| resolve(kb.key_sym));
-        let mute_kc = mute_keybind.as_ref().map(|kb| resolve(kb.key_sym));
         let shift_l = resolve(0xFFE1); // XK_Shift_L
         let shift_r = resolve(0xFFE2); // XK_Shift_R
         let ctrl_l = resolve(0xFFE3); // XK_Control_L
@@ -1278,8 +1299,8 @@ fn start_push_keybind_watcher(
                 kc != 0 && (keys[kc as usize / 8] & (1 << (kc % 8))) != 0
             };
 
-            let keybind_active = |kb: &LinuxPushKeybind, kc: u8| -> bool {
-                if !kc_down(kc) {
+            let keybind_active = |(kb, kc): &(LinuxPushKeybind, u8)| -> bool {
+                if !kc_down(*kc) {
                     return false;
                 }
                 let ctrl = kc_down(ctrl_l) || kc_down(ctrl_r);
@@ -1289,14 +1310,8 @@ fn start_push_keybind_watcher(
                 ctrl == kb.ctrl && alt == kb.alt && shift == kb.shift && meta == kb.meta
             };
 
-            let next_talk_active = match (talk_keybind.as_ref(), talk_kc) {
-                (Some(kb), Some(kc)) => keybind_active(kb, kc),
-                _ => false,
-            };
-            let next_mute_active = match (mute_keybind.as_ref(), mute_kc) {
-                (Some(kb), Some(kc)) => keybind_active(kb, kc),
-                _ => false,
-            };
+            let next_talk_active = talk_keybind.as_ref().is_some_and(keybind_active);
+            let next_mute_active = mute_keybind.as_ref().is_some_and(keybind_active);
 
             if next_talk_active != talk_active {
                 talk_active = next_talk_active;
@@ -2213,15 +2228,6 @@ fn handle_push_keybinds_set(
     {
         let mut errors: Vec<String> = Vec::new();
 
-        if let Err(e) = check_x11_available() {
-            errors.push(e);
-            return Ok(json!({
-                "talkRegistered": false,
-                "muteRegistered": false,
-                "errors": errors,
-            }));
-        }
-
         let talk_keybind = match parse_push_keybind(parsed.push_to_talk_keybind.as_deref()) {
             Ok(parsed_keybind) => parsed_keybind,
             Err(error) => {
@@ -2243,16 +2249,42 @@ fn handle_push_keybinds_set(
             errors.push("Push-to-mute keybind matches push-to-talk and was ignored.".to_string());
         }
 
+        // Only connect to X11 when at least one keybind is actually being registered.
+        // Clearing keybinds (both None) must succeed without touching X11 so that
+        // Wayland-only machines don't receive a spurious connectivity error.
+        let mut resolved_talk: Option<(LinuxPushKeybind, u8)> = None;
+        let mut resolved_mute: Option<(LinuxPushKeybind, u8)> = None;
+
         if talk_keybind.is_some() || mute_keybind.is_some() {
-            state.push_keybind_watcher = Some(start_push_keybind_watcher(
-                frame_queue,
-                talk_keybind,
-                mute_keybind,
-            ));
+            match open_x11_and_resolve_keycodes(talk_keybind.as_ref(), mute_keybind.as_ref()) {
+                Err(e) => errors.push(e),
+                Ok((talk_kc, mute_kc)) => {
+                    if talk_keybind.is_some() && talk_kc.is_none() {
+                        errors.push(
+                            "Push-to-talk key has no mapping on this keyboard layout.".to_string(),
+                        );
+                    }
+                    if mute_keybind.is_some() && mute_kc.is_none() {
+                        errors.push(
+                            "Push-to-mute key has no mapping on this keyboard layout.".to_string(),
+                        );
+                    }
+                    resolved_talk = talk_keybind.zip(talk_kc);
+                    resolved_mute = mute_keybind.zip(mute_kc);
+
+                    if resolved_talk.is_some() || resolved_mute.is_some() {
+                        state.push_keybind_watcher = Some(start_push_keybind_watcher(
+                            frame_queue,
+                            resolved_talk,
+                            resolved_mute,
+                        ));
+                    }
+                }
+            }
         }
 
-        let talk_registered = talk_keybind.is_some();
-        let mute_registered = mute_keybind.is_some();
+        let talk_registered = resolved_talk.is_some();
+        let mute_registered = resolved_mute.is_some();
 
         return Ok(json!({
             "talkRegistered": talk_registered,
