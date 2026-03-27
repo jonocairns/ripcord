@@ -12,6 +12,7 @@ import type {
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
   TGlobalPushKeybindRegistrationResult,
+  TSupportLevel,
   TStartAppAudioCaptureInput,
 } from "./types";
 
@@ -37,6 +38,13 @@ type TPendingRequest = {
 
 type TSidecarStatus = {
   available: boolean;
+  reason?: string;
+};
+
+type TSidecarCapabilities = {
+  platform?: string;
+  systemAudio?: TSupportLevel;
+  perAppAudio?: TSupportLevel;
   reason?: string;
 };
 
@@ -98,6 +106,12 @@ const isSidecarEvent = (value: unknown): value is TSidecarEvent => {
   }
 
   return "event" in value;
+};
+
+const isSupportLevel = (value: unknown): value is TSupportLevel => {
+  return (
+    value === "supported" || value === "best-effort" || value === "unsupported"
+  );
 };
 
 const toPcmAppAudioFrame = (
@@ -222,7 +236,19 @@ class CaptureSidecarManager {
 
   async getStatus(): Promise<TSidecarStatus> {
     try {
-      await this.ensureSidecarReady();
+      const capabilities = await this.getCapabilities();
+
+      if (
+        capabilities.platform === "macos" &&
+        (capabilities.systemAudio !== "supported" ||
+          capabilities.perAppAudio !== "supported")
+      ) {
+        return {
+          available: false,
+          reason:
+            capabilities.reason || "macOS screen audio capture is unavailable.",
+        };
+      }
 
       return {
         available: true,
@@ -236,6 +262,32 @@ class CaptureSidecarManager {
         reason,
       };
     }
+  }
+
+  async getCapabilities(): Promise<TSidecarCapabilities> {
+    const response = await this.sendRequest("capabilities.get", {});
+    if (!response || typeof response !== "object") {
+      throw new Error("Capture sidecar returned invalid capabilities.");
+    }
+
+    return {
+      platform:
+        "platform" in response && typeof response.platform === "string"
+          ? response.platform
+          : undefined,
+      systemAudio:
+        "systemAudio" in response && isSupportLevel(response.systemAudio)
+          ? response.systemAudio
+          : undefined,
+      perAppAudio:
+        "perAppAudio" in response && isSupportLevel(response.perAppAudio)
+          ? response.perAppAudio
+          : undefined,
+      reason:
+        "reason" in response && typeof response.reason === "string"
+          ? response.reason
+          : undefined,
+    };
   }
 
   async listAppAudioTargets(

@@ -1967,7 +1967,7 @@ fn capture_loopback_audio(
     source_id: Option<&str>,
     target_id: &str,
     target_pid: u32,
-    _self_exclude_pid: Option<u32>,
+    self_exclude_pid: Option<u32>,
     stop_flag: Arc<AtomicBool>,
     frame_queue: Arc<FrameQueue>,
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
@@ -1983,7 +1983,7 @@ fn capture_loopback_audio(
         capture_command.arg("--source-id").arg(source_id);
     }
 
-    if let Some(exclude_pid) = _self_exclude_pid {
+    if let Some(exclude_pid) = self_exclude_pid {
         capture_command
             .arg("--exclude-pid")
             .arg(exclude_pid.to_string());
@@ -2284,24 +2284,50 @@ fn handle_health_ping() -> Result<Value, String> {
 
 fn handle_capabilities_get() -> Result<Value, String> {
     let platform = std::env::consts::OS;
-    let per_app_audio = if cfg!(windows) || cfg!(target_os = "macos") {
+
+    #[cfg(target_os = "macos")]
+    let macos_helper_probe_error = run_macos_helper_command(&["list-targets"]).err();
+
+    #[cfg(not(target_os = "macos"))]
+    let macos_helper_probe_error: Option<String> = None;
+
+    let macos_helper_ready = macos_helper_probe_error.is_none();
+    let per_app_audio = if cfg!(windows) {
         "supported"
+    } else if cfg!(target_os = "macos") {
+        if macos_helper_ready {
+            "supported"
+        } else {
+            "unsupported"
+        }
     } else {
         "unsupported"
     };
-    let system_audio = if cfg!(windows) || cfg!(target_os = "macos") {
+    let system_audio = if cfg!(windows) {
         "supported"
+    } else if cfg!(target_os = "macos") {
+        if macos_helper_ready {
+            "supported"
+        } else {
+            "unsupported"
+        }
     } else {
         "unsupported"
     };
 
-    Ok(json!({
+    let mut response = json!({
         "platform": platform,
         "systemAudio": system_audio,
         "perAppAudio": per_app_audio,
         "protocolVersion": PROTOCOL_VERSION,
         "encoding": PCM_ENCODING,
-    }))
+    });
+
+    if let Some(error) = macos_helper_probe_error {
+        response["reason"] = json!(error);
+    }
+
+    Ok(response)
 }
 
 fn handle_windows_resolve_source(params: Value) -> Result<Value, String> {

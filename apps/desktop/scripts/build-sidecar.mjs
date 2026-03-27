@@ -38,6 +38,12 @@ const macosHelperTargetPath = path.resolve(
   process.platform,
   macosHelperName,
 );
+const macosHelperDeploymentTarget =
+  process.arch === "arm64"
+    ? "arm64-apple-macos13.0"
+    : process.arch === "x64"
+      ? "x86_64-apple-macos13.0"
+      : undefined;
 
 const runCargoBuild = () => {
   const cargoCheck = spawnSync("cargo", ["--version"], {
@@ -116,9 +122,22 @@ const buildMacosHelper = async () => {
 
   await fs.mkdir(path.dirname(macosHelperTargetPath), { recursive: true });
 
+  if (!macosHelperDeploymentTarget) {
+    throw new Error(
+      `Unsupported macOS architecture for helper build: ${process.arch}`,
+    );
+  }
+
   const result = spawnSync(
     "swiftc",
-    ["-O", macosHelperSourcePath, "-o", macosHelperTargetPath],
+    [
+      "-O",
+      "-target",
+      macosHelperDeploymentTarget,
+      macosHelperSourcePath,
+      "-o",
+      macosHelperTargetPath,
+    ],
     {
       cwd: sidecarDir,
       stdio: "inherit",
