@@ -26,6 +26,18 @@ const binaryTargetPath = path.resolve(
   process.platform,
   binaryName,
 );
+const macosHelperName = "sharkord-capture-sidecar-macos-helper";
+const macosHelperSourcePath = path.resolve(
+  sidecarDir,
+  "src",
+  "macos_app_audio_capture.swift",
+);
+const macosHelperTargetPath = path.resolve(
+  sidecarDir,
+  "bin",
+  process.platform,
+  macosHelperName,
+);
 
 const runCargoBuild = () => {
   const cargoCheck = spawnSync("cargo", ["--version"], {
@@ -79,9 +91,59 @@ const copySidecarBinary = async () => {
   }
 };
 
+const buildMacosHelper = async () => {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  const swiftCheck = spawnSync("swiftc", ["--version"], {
+    cwd: sidecarDir,
+    stdio: "pipe",
+  });
+
+  if (swiftCheck.error || swiftCheck.status !== 0) {
+    if (optional) {
+      console.warn(
+        "[desktop] macOS audio helper build skipped: swiftc is not installed.",
+      );
+      return;
+    }
+
+    throw new Error(
+      "swiftc is required to build the macOS audio capture helper.",
+    );
+  }
+
+  await fs.mkdir(path.dirname(macosHelperTargetPath), { recursive: true });
+
+  const result = spawnSync(
+    "swiftc",
+    ["-O", macosHelperSourcePath, "-o", macosHelperTargetPath],
+    {
+      cwd: sidecarDir,
+      stdio: "inherit",
+    },
+  );
+
+  if (result.status !== 0) {
+    if (optional) {
+      console.warn(
+        "[desktop] macOS audio helper build failed in optional mode.",
+      );
+      return;
+    }
+
+    throw new Error("macOS audio helper build failed.");
+  }
+
+  await fs.chmod(macosHelperTargetPath, 0o755);
+  console.info(`[desktop] macOS helper ready at ${macosHelperTargetPath}`);
+};
+
 const built = runCargoBuild();
 
 if (built) {
   await copySidecarBinary();
+  await buildMacosHelper();
   console.info(`[desktop] sidecar ready at ${binaryTargetPath}`);
 }

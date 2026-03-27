@@ -19,8 +19,9 @@ void describe("getDesktopCapabilitiesForPlatform", () => {
     const capabilities = getDesktopCapabilitiesForPlatform("darwin");
 
     assert.equal(capabilities.platform, "macos");
-    assert.equal(capabilities.systemAudio, "unsupported");
-    assert.equal(capabilities.perAppAudio, "unsupported");
+    assert.equal(capabilities.systemAudio, "supported");
+    assert.equal(capabilities.perAppAudio, "supported");
+    assert.match(capabilities.notes.join(" "), /ScreenCaptureKit/i);
   });
 
   void it("maps linux capabilities as best-effort", () => {

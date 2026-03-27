@@ -18,10 +18,12 @@ const getDesktopCapabilitiesForPlatform = (
     case "darwin":
       return {
         platform: "macos",
-        systemAudio: "unsupported",
-        perAppAudio: "unsupported",
+        systemAudio: "supported",
+        perAppAudio: "supported",
         notes: [
-          "macOS blocks system and per-app screen-share audio in this preview.",
+          "macOS system and per-app audio capture use the Rust sidecar and ScreenCaptureKit.",
+          "Grant Screen Recording permission in System Settings if macOS blocks capture startup.",
+          "System mode excludes Ripcord audio when the sidecar capture path is active.",
         ],
       };
     case "linux":

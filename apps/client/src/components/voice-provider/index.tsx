@@ -1155,10 +1155,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					}
 				}
 
-				// Only route system audio through the sidecar when the platform
-				// supports per-app audio (implies the WASAPI sidecar is available).
-				// On Linux/macOS the sidecar cannot capture loopback audio, so
-				// system mode must fall through to getDisplayMedia.
+				// Only route system audio through the sidecar when the desktop
+				// capture stack advertises support for the sidecar-backed path.
+				// Linux still falls through to getDisplayMedia loopback here.
 				let sidecarSupported = false;
 				if (desktopBridge && audioMode === ScreenAudioMode.SYSTEM) {
 					try {
@@ -1294,7 +1293,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							// Fall back to getDisplayMedia loopback — no process-tree
 							// exclusion, but the user still gets shared audio.
 							logVoice('Falling back to display-media loopback for system audio');
-							toast.warning('Sidecar audio capture failed. Falling back to standard system audio (without echo exclusion).');
+							toast.warning(
+								'Sidecar audio capture failed. Falling back to standard system audio (without echo exclusion).',
+							);
 							useSidecarAudio = false;
 						} else {
 							toast.warning(`${sidecarAudioLabel} capture failed. Continuing without shared audio.`);
