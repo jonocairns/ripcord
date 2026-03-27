@@ -7,7 +7,9 @@ use std::collections::VecDeque;
 use std::collections::HashSet;
 #[cfg(target_os = "linux")]
 use std::fs;
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, Write};
+#[cfg(target_os = "linux")]
+use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 #[cfg(target_os = "linux")]
 use std::process::{Child, Command, Stdio};
@@ -1492,6 +1494,16 @@ fn pipewire_command_exists(command: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
+fn pipewire_tools_available() -> bool {
+    pipewire_command_exists("pw-dump") && pipewire_command_exists("pw-record")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn pipewire_tools_available() -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
 fn run_pipewire_command(command: &str, arguments: &[&str]) -> Result<Vec<u8>, String> {
     let output = Command::new(command)
         .args(arguments)
@@ -2642,7 +2654,7 @@ fn handle_capabilities_get() -> Result<Value, String> {
     let (per_app_audio, per_app_audio_reason) = if cfg!(windows) {
         ("supported", None)
     } else if cfg!(target_os = "linux") {
-        if pipewire_command_exists("pw-dump") && pipewire_command_exists("pw-record") {
+        if pipewire_tools_available() {
             ("best-effort", None)
         } else {
             (
