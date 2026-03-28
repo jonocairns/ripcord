@@ -4,8 +4,10 @@ import { toast } from 'sonner';
 import { useDevices } from '@/components/devices-provider/hooks/use-devices';
 import {
 	getExactMediaDeviceId,
+	getNormalizedAvailableDeviceMetadata,
 	getSelectableMediaDeviceOptions,
 	getSelectedMediaDeviceId,
+	getStoredMediaDeviceMetadata,
 	normalizeStoredMediaDeviceId,
 } from '@/components/devices-provider/media-device-selection';
 import { formatPushKeybindLabel, pushKeybindFromKeyState } from '@/components/devices-provider/push-keybind';
@@ -40,10 +42,22 @@ const Devices = memo(() => {
 	const lastLoadedDevicesRef = useRef(devices);
 	const [desktopAppVersion, setDesktopAppVersion] = useState<string>();
 	const [capturingKeybindField, setCapturingKeybindField] = useState<TPushKeybindField | undefined>(undefined);
-	const normalizedMicrophoneId = normalizeStoredMediaDeviceId(values.microphoneId, inputDevices);
-	const selectedMicrophoneId = getSelectedMediaDeviceId(values.microphoneId, inputDevices);
-	const normalizedWebcamId = normalizeStoredMediaDeviceId(values.webcamId, videoDevices);
-	const selectedWebcamId = getSelectedMediaDeviceId(values.webcamId, videoDevices);
+	const normalizedMicrophoneId = normalizeStoredMediaDeviceId(values.microphoneId, inputDevices, {
+		groupId: values.microphoneGroupId,
+		label: values.microphoneLabel,
+	});
+	const selectedMicrophoneId = getSelectedMediaDeviceId(values.microphoneId, inputDevices, {
+		groupId: values.microphoneGroupId,
+		label: values.microphoneLabel,
+	});
+	const normalizedWebcamId = normalizeStoredMediaDeviceId(values.webcamId, videoDevices, {
+		groupId: values.webcamGroupId,
+		label: values.webcamLabel,
+	});
+	const selectedWebcamId = getSelectedMediaDeviceId(values.webcamId, videoDevices, {
+		groupId: values.webcamGroupId,
+		label: values.webcamLabel,
+	});
 	const microphoneOptions = getSelectableMediaDeviceOptions(inputDevices, 'Default Microphone');
 	const webcamOptions = getSelectableMediaDeviceOptions(videoDevices, 'Default Webcam');
 
@@ -59,13 +73,20 @@ const Devices = memo(() => {
 	);
 
 	const saveDeviceSettings = useCallback(() => {
+		const savedMicrophoneMetadata = getStoredMediaDeviceMetadata(normalizedMicrophoneId, inputDevices);
+		const savedWebcamMetadata = getStoredMediaDeviceMetadata(normalizedWebcamId, videoDevices);
+
 		saveDevices({
 			...values,
 			microphoneId: normalizedMicrophoneId,
+			microphoneGroupId: savedMicrophoneMetadata.groupId,
+			microphoneLabel: savedMicrophoneMetadata.label,
 			webcamId: normalizedWebcamId,
+			webcamGroupId: savedWebcamMetadata.groupId,
+			webcamLabel: savedWebcamMetadata.label,
 		});
 		toast.success('Device settings saved');
-	}, [normalizedMicrophoneId, normalizedWebcamId, saveDevices, values]);
+	}, [inputDevices, normalizedMicrophoneId, normalizedWebcamId, saveDevices, values, videoDevices]);
 
 	const clearPushKeybind = useCallback(
 		(field: TPushKeybindField) => {
@@ -166,22 +187,41 @@ const Devices = memo(() => {
 
 				return {
 					...devices,
-					microphoneId: normalizeStoredMediaDeviceId(devices.microphoneId, inputDevices),
-					webcamId: normalizeStoredMediaDeviceId(devices.webcamId, videoDevices),
+					microphoneId: normalizeStoredMediaDeviceId(devices.microphoneId, inputDevices, {
+						groupId: devices.microphoneGroupId,
+						label: devices.microphoneLabel,
+					}),
+					webcamId: normalizeStoredMediaDeviceId(devices.webcamId, videoDevices, {
+						groupId: devices.webcamGroupId,
+						label: devices.webcamLabel,
+					}),
 				};
 			}
 
-			const nextMicrophoneId = normalizeStoredMediaDeviceId(currentValues.microphoneId, inputDevices);
-			const nextWebcamId = normalizeStoredMediaDeviceId(currentValues.webcamId, videoDevices);
+			const nextMicrophoneId = normalizeStoredMediaDeviceId(currentValues.microphoneId, inputDevices, {
+				groupId: currentValues.microphoneGroupId,
+				label: currentValues.microphoneLabel,
+			});
+			const nextWebcamId = normalizeStoredMediaDeviceId(currentValues.webcamId, videoDevices, {
+				groupId: currentValues.webcamGroupId,
+				label: currentValues.webcamLabel,
+			});
 
 			if (nextMicrophoneId === currentValues.microphoneId && nextWebcamId === currentValues.webcamId) {
 				return currentValues;
 			}
 
+			const nextMicrophoneMetadata = getNormalizedAvailableDeviceMetadata(nextMicrophoneId, inputDevices);
+			const nextWebcamMetadata = getNormalizedAvailableDeviceMetadata(nextWebcamId, videoDevices);
+
 			return {
 				...currentValues,
 				microphoneId: nextMicrophoneId,
+				microphoneGroupId: nextMicrophoneMetadata.groupId,
+				microphoneLabel: nextMicrophoneMetadata.label,
 				webcamId: nextWebcamId,
+				webcamGroupId: nextWebcamMetadata.groupId,
+				webcamLabel: nextWebcamMetadata.label,
 			};
 		});
 	}, [devices, inputDevices, videoDevices, setValues]);

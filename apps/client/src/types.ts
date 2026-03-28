@@ -98,10 +98,14 @@ export const getStrengthDefaults = (strength: VoiceFilterStrength): TStrengthDef
 
 export type TDeviceSettings = {
 	microphoneId: string | undefined;
+	microphoneGroupId: string | undefined;
+	microphoneLabel: string | undefined;
 	micQualityMode: MicQualityMode;
 	pushToTalkKeybind: string | undefined;
 	pushToMuteKeybind: string | undefined;
 	webcamId: string | undefined;
+	webcamGroupId: string | undefined;
+	webcamLabel: string | undefined;
 	webcamResolution: Resolution;
 	webcamFramerate: number;
 	echoCancellation: boolean;
