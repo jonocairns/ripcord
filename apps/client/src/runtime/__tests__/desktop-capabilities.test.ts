@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'bun:test';
 import { normalizeDesktopCapabilities } from '../desktop-capabilities';
+import type { TLegacyDesktopCapabilities } from '../desktop-capabilities';
 import type { TDesktopCapabilities } from '../types';
 
 describe('normalizeDesktopCapabilities', () => {
 	it('fills in missing compatibility fields for older linux desktop runtimes', () => {
-		const capabilities = {
+		const capabilities: TLegacyDesktopCapabilities = {
 			platform: 'linux',
 			systemAudio: 'best-effort',
 			perAppAudio: 'best-effort',
@@ -15,7 +16,7 @@ describe('normalizeDesktopCapabilities', () => {
 
 		expect(normalized.globalPushKeybinds).toBe('best-effort');
 		expect(normalized.issues).toEqual([]);
-		expect(normalized.notes).toEqual(capabilities.notes);
+		expect(normalized.notes).toEqual(capabilities.notes!);
 	});
 
 	it('preserves explicit structured capability fields when present', () => {

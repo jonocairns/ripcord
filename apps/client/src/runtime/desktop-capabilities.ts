@@ -19,4 +19,5 @@ const normalizeDesktopCapabilities = (capabilities: TLegacyDesktopCapabilities):
 	};
 };
 
+export type { TLegacyDesktopCapabilities };
 export { normalizeDesktopCapabilities };
