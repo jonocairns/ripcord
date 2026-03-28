@@ -29,6 +29,7 @@ import { desktopUpdater } from "./updater";
 import { classifyWindowOpenUrl } from "./window-open-policy";
 import type {
   TAppAudioPcmFrame,
+  TDesktopCapabilities,
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
   TGlobalPushKeybindRegistrationResult,
@@ -39,6 +40,13 @@ import type {
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
 let mainWindow: BrowserWindow | null = null;
 let appAudioFrameEgressPort: MessagePortMain | undefined;
+let lastDesktopCapabilitiesSnapshot: string | undefined;
+let refreshDesktopCapabilitiesPromise:
+  | Promise<TDesktopCapabilities>
+  | undefined;
+let refreshDesktopCapabilitiesBroadcastPending = false;
+let refreshDesktopCapabilitiesForceBroadcastPending = false;
+let appIsShuttingDown = false;
 
 const disposeAppAudioFrameEgressPort = (
   port: MessagePortMain | undefined = appAudioFrameEgressPort,
@@ -111,6 +119,66 @@ const getEffectiveDesktopCapabilities = async () => {
     sidecarAvailable: sidecarStatus.available,
     sidecarReason,
     sidecarPerAppAudioSupported,
+    sidecarCapabilities,
+  });
+};
+
+const refreshDesktopCapabilities = async (
+  options: { broadcast?: boolean; forceBroadcast?: boolean } = {},
+) => {
+  refreshDesktopCapabilitiesBroadcastPending =
+    refreshDesktopCapabilitiesBroadcastPending || options.broadcast === true;
+  refreshDesktopCapabilitiesForceBroadcastPending =
+    refreshDesktopCapabilitiesForceBroadcastPending ||
+    options.forceBroadcast === true;
+
+  if (refreshDesktopCapabilitiesPromise) {
+    return await refreshDesktopCapabilitiesPromise;
+  }
+
+  refreshDesktopCapabilitiesPromise = (async () => {
+    while (true) {
+      const capabilities = await getEffectiveDesktopCapabilities();
+      const snapshot = JSON.stringify(capabilities);
+      const didChange = snapshot !== lastDesktopCapabilitiesSnapshot;
+      lastDesktopCapabilitiesSnapshot = snapshot;
+
+      const shouldBroadcast = refreshDesktopCapabilitiesBroadcastPending;
+      const shouldForceBroadcast =
+        refreshDesktopCapabilitiesForceBroadcastPending;
+      refreshDesktopCapabilitiesBroadcastPending = false;
+      refreshDesktopCapabilitiesForceBroadcastPending = false;
+
+      if (shouldBroadcast && (shouldForceBroadcast || didChange)) {
+        mainWindow?.webContents.send(
+          "desktop:capabilities-changed",
+          capabilities,
+        );
+      }
+
+      if (
+        !refreshDesktopCapabilitiesBroadcastPending &&
+        !refreshDesktopCapabilitiesForceBroadcastPending
+      ) {
+        return capabilities;
+      }
+    }
+  })().finally(() => {
+    refreshDesktopCapabilitiesPromise = undefined;
+  });
+
+  return await refreshDesktopCapabilitiesPromise;
+};
+
+const requestDesktopCapabilitiesRefresh = (
+  options: { broadcast?: boolean; forceBroadcast?: boolean } = {},
+) => {
+  if (appIsShuttingDown) {
+    return;
+  }
+
+  void refreshDesktopCapabilities(options).catch((error) => {
+    console.warn("[desktop] Failed to refresh desktop capabilities", error);
   });
 };
 
@@ -137,6 +205,11 @@ const createMainWindow = () => {
 
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
+  });
+  mainWindow.on("focus", () => {
+    requestDesktopCapabilitiesRefresh({
+      broadcast: true,
+    });
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -253,7 +326,7 @@ const registerIpcHandlers = () => {
   );
 
   ipcMain.handle("desktop:get-capabilities", () => {
-    return getEffectiveDesktopCapabilities();
+    return refreshDesktopCapabilities();
   });
 
   ipcMain.handle(
@@ -398,6 +471,15 @@ void app
     captureSidecarManager.onPushKeybind((event) => {
       emitPushKeybindEvent(event);
     });
+    captureSidecarManager.onLifecycle((event) => {
+      if (appIsShuttingDown && event.kind === "exit") {
+        return;
+      }
+
+      requestDesktopCapabilitiesRefresh({
+        broadcast: true,
+      });
+    });
 
     desktopUpdater.start((status) => {
       mainWindow?.webContents.send("desktop:update-status", status);
@@ -406,6 +488,10 @@ void app
     registerIpcHandlers();
     setupDisplayMediaHandler();
     createMainWindow();
+    requestDesktopCapabilitiesRefresh({
+      broadcast: true,
+      forceBroadcast: true,
+    });
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -424,6 +510,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  appIsShuttingDown = true;
   disposeAppAudioFrameEgressPort();
 
   desktopUpdater.dispose();

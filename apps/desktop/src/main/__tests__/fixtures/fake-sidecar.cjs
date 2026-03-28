@@ -3,12 +3,51 @@ const readline = require('node:readline');
 let activeSession = null;
 let intervalId = null;
 const crashAfterMs = Number(process.env.FAKE_SIDECAR_CRASH_MS || 0);
+const parseBooleanEnv = (value) => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true') {
+    return true;
+  }
+
+  if (normalized === 'false') {
+    return false;
+  }
+
+  return undefined;
+};
 const capabilityPlatform = process.env.FAKE_SIDECAR_PLATFORM || process.platform;
 const capabilitySystemAudio =
   process.env.FAKE_SIDECAR_SYSTEM_AUDIO || 'supported';
 const capabilityPerAppAudio =
   process.env.FAKE_SIDECAR_PER_APP_AUDIO || 'supported';
 const capabilityReason = process.env.FAKE_SIDECAR_REASON;
+const capabilityPerAppAudioReason = process.env.FAKE_SIDECAR_PER_APP_AUDIO_REASON;
+const capabilitySessionType = process.env.FAKE_SIDECAR_SESSION_TYPE;
+const capabilityPipewireToolsAvailable = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE
+);
+const capabilityAppAudioTargetEnumerationSupported = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED
+);
+const capabilityAppAudioTargetEnumerationReason =
+  process.env.FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_REASON;
+const capabilitySourceAudioTargetInferenceSupported = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_SUPPORTED
+);
+const capabilitySourceAudioTargetInferenceReason =
+  process.env.FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_REASON;
+const capabilityGlobalPushKeybinds =
+  process.env.FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS;
+const capabilityGlobalPushKeybindsReason =
+  process.env.FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS_REASON;
+const capabilityX11DisplayAvailable = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_X11_DISPLAY_AVAILABLE
+);
+const capabilityX11DisplayReason = process.env.FAKE_SIDECAR_X11_DISPLAY_REASON;
 
 const send = (payload) => {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -161,7 +200,22 @@ rl.on('line', (line) => {
       platform: capabilityPlatform,
       systemAudio: capabilitySystemAudio,
       perAppAudio: capabilityPerAppAudio,
-      reason: capabilityReason
+      reason: capabilityReason,
+      perAppAudioReason: capabilityPerAppAudioReason,
+      sessionType: capabilitySessionType,
+      pipewireToolsAvailable: capabilityPipewireToolsAvailable,
+      appAudioTargetEnumerationSupported:
+        capabilityAppAudioTargetEnumerationSupported,
+      appAudioTargetEnumerationReason:
+        capabilityAppAudioTargetEnumerationReason,
+      sourceAudioTargetInferenceSupported:
+        capabilitySourceAudioTargetInferenceSupported,
+      sourceAudioTargetInferenceReason:
+        capabilitySourceAudioTargetInferenceReason,
+      globalPushKeybinds: capabilityGlobalPushKeybinds,
+      globalPushKeybindsReason: capabilityGlobalPushKeybindsReason,
+      x11DisplayAvailable: capabilityX11DisplayAvailable,
+      x11DisplayReason: capabilityX11DisplayReason
     });
     return;
   }

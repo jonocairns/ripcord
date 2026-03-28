@@ -1,3 +1,4 @@
+import type { TSidecarCapabilities } from "./capture-sidecar-manager";
 import type { TDesktopCapabilities } from "./types";
 
 type TResolveCapabilityOptions = {
@@ -5,6 +6,32 @@ type TResolveCapabilityOptions = {
   sidecarAvailable: boolean;
   sidecarReason?: string;
   sidecarPerAppAudioSupported?: boolean;
+  sidecarCapabilities?: TSidecarCapabilities;
+};
+
+const appendNote = (notes: string[], note: string | undefined) => {
+  if (!note) {
+    return;
+  }
+
+  const trimmedNote = note.trim();
+  if (!trimmedNote || notes.includes(trimmedNote)) {
+    return;
+  }
+
+  notes.push(trimmedNote);
+};
+
+const formatSessionTypeLabel = (sessionType: string) => {
+  if (sessionType === "x11") {
+    return "X11";
+  }
+
+  if (sessionType === "wayland") {
+    return "Wayland";
+  }
+
+  return sessionType;
 };
 
 const resolveDesktopCaptureCapabilities = ({
@@ -12,12 +39,30 @@ const resolveDesktopCaptureCapabilities = ({
   sidecarAvailable,
   sidecarReason,
   sidecarPerAppAudioSupported = false,
+  sidecarCapabilities,
 }: TResolveCapabilityOptions): TDesktopCapabilities => {
   const notes = [...baseCapabilities.notes];
 
   if (baseCapabilities.platform === "linux") {
+    if (sidecarCapabilities?.sessionType) {
+      appendNote(
+        notes,
+        `Linux session type: ${formatSessionTypeLabel(sidecarCapabilities.sessionType)}.`,
+      );
+    }
+
+    if (sidecarCapabilities?.pipewireToolsAvailable === false) {
+      appendNote(
+        notes,
+        sidecarCapabilities.appAudioTargetEnumerationReason ??
+          sidecarReason ??
+          "PipeWire tools required for Linux app audio capture are unavailable.",
+      );
+    }
+
     if (!sidecarAvailable || !sidecarPerAppAudioSupported) {
-      notes.push(
+      appendNote(
+        notes,
         sidecarReason
           ? `Per-app audio capture unavailable: ${sidecarReason}`
           : "Per-app audio capture unavailable because the Rust sidecar is not running.",
@@ -31,7 +76,16 @@ const resolveDesktopCaptureCapabilities = ({
       };
     }
 
-    notes.push(
+    if (sidecarCapabilities?.sourceAudioTargetInferenceSupported === false) {
+      appendNote(
+        notes,
+        sidecarCapabilities.sourceAudioTargetInferenceReason ??
+          "Linux does not infer the app audio target from the selected share source; choose a target manually.",
+      );
+    }
+
+    appendNote(
+      notes,
       "Linux sidecar audio uses PipeWire. Per-app capture may require selecting the emitting application manually, and system mode excludes Sharkord audio on a best-effort basis.",
     );
 

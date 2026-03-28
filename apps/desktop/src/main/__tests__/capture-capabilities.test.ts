@@ -39,12 +39,21 @@ void describe("resolveDesktopCaptureCapabilities", () => {
       sidecarAvailable: true,
       sidecarPerAppAudioSupported: false,
       sidecarReason: "pw-record is not installed",
+      sidecarCapabilities: {
+        sessionType: "x11",
+        pipewireToolsAvailable: false,
+        appAudioTargetEnumerationSupported: false,
+        appAudioTargetEnumerationReason: "pw-record is not installed",
+        sourceAudioTargetInferenceSupported: false,
+      },
     });
 
     assert.equal(resolved.systemAudio, "best-effort");
     assert.equal(resolved.perAppAudio, "unsupported");
     assert.equal(resolved.sidecarAvailable, true);
     assert.match(resolved.notes.join(" "), /pw-record is not installed/i);
+    assert.match(resolved.notes.join(" "), /session type: X11/i);
+    assert.doesNotMatch(resolved.notes.join(" "), /choose a target manually/i);
   });
 
   void it("keeps linux per-app audio available when the sidecar path is ready", () => {
@@ -54,12 +63,20 @@ void describe("resolveDesktopCaptureCapabilities", () => {
       baseCapabilities,
       sidecarAvailable: true,
       sidecarPerAppAudioSupported: true,
+      sidecarCapabilities: {
+        sessionType: "wayland",
+        pipewireToolsAvailable: true,
+        appAudioTargetEnumerationSupported: true,
+        sourceAudioTargetInferenceSupported: false,
+      },
     });
 
     assert.equal(resolved.systemAudio, "best-effort");
     assert.equal(resolved.perAppAudio, "best-effort");
     assert.equal(resolved.sidecarAvailable, true);
     assert.match(resolved.notes.join(" "), /PipeWire/i);
+    assert.match(resolved.notes.join(" "), /session type: Wayland/i);
+    assert.match(resolved.notes.join(" "), /choose a target manually/i);
   });
 
   void it("downgrades macOS per-app audio when the sidecar is unavailable", () => {

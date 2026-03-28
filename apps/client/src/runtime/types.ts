@@ -157,6 +157,7 @@ export type TDesktopBridge = {
 	subscribeAppAudioFrames: (cb: (frame: TAppAudioFrame | TAppAudioPcmFrame) => void) => () => void;
 	subscribeAppAudioStatus: (cb: (statusEvent: TAppAudioStatusEvent) => void) => () => void;
 	subscribeGlobalPushKeybindEvents: (cb: (event: TDesktopPushKeybindEvent) => void) => () => void;
+	subscribeCapabilities: (cb: (capabilities: TDesktopCapabilities) => void) => () => void;
 	subscribeUpdateStatus: (cb: (status: TDesktopUpdateStatus) => void) => () => void;
 	prepareScreenShare: (selection: TDesktopScreenShareSelection) => Promise<TResolvedScreenAudioMode>;
 };
