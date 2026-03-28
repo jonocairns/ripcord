@@ -2141,6 +2141,7 @@ fn activate_process_loopback_client(
 #[cfg(windows)]
 fn capture_loopback_audio(
     session_id: &str,
+    _source_id: Option<&str>,
     target_id: &str,
     target_pid: u32,
     self_exclude_pid: Option<u32>,
