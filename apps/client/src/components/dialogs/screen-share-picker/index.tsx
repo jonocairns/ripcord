@@ -63,6 +63,7 @@ const ScreenSharePickerDialog = memo(
 			perAppAudioSupported: liveCapabilities.perAppAudio !== 'unsupported',
 			sourceKind: selectedSource?.kind,
 			suggestedTargetId: appAudioTargetsResult.suggestedTargetId,
+			requiresManualSelection: appAudioTargetsResult.requiresManualSelection,
 		});
 		const shouldResolveAppAudioTargets = isOpen && appAudioTargetBehavior.shouldResolveAppAudioTargets;
 		const requiresManualAppAudioTarget =
@@ -158,12 +159,24 @@ const ScreenSharePickerDialog = memo(
 					}
 
 					setAppAudioTargetsResult(result);
+					const nextTargetBehavior = resolveAppAudioTargetBehavior({
+						audioMode,
+						perAppAudioSupported: liveCapabilities.perAppAudio !== 'unsupported',
+						sourceKind: selectedSource?.kind,
+						suggestedTargetId: result.suggestedTargetId,
+						requiresManualSelection: result.requiresManualSelection,
+					});
+
 					setSelectedAppAudioTargetId((currentTargetId) => {
 						if (currentTargetId && result.targets.some((target) => target.id === currentTargetId)) {
 							return currentTargetId;
 						}
 
-						return result.suggestedTargetId || result.targets[0]?.id;
+						if (nextTargetBehavior.shouldAutoSelectSuggestedTarget) {
+							return result.suggestedTargetId;
+						}
+
+						return undefined;
 					});
 				})
 				.catch(() => {
@@ -186,7 +199,14 @@ const ScreenSharePickerDialog = memo(
 			return () => {
 				cancelled = true;
 			};
-		}, [desktopBridge, selectedSourceId, shouldResolveAppAudioTargets]);
+		}, [
+			audioMode,
+			desktopBridge,
+			liveCapabilities.perAppAudio,
+			selectedSource?.kind,
+			selectedSourceId,
+			shouldResolveAppAudioTargets,
+		]);
 
 		return (
 			<Dialog open={isOpen}>
@@ -244,9 +264,18 @@ const ScreenSharePickerDialog = memo(
 								)}
 
 								{!loadingAppAudioTargets &&
-									!requiresManualAppAudioTarget &&
+									appAudioTargetBehavior.shouldAutoSelectSuggestedTarget &&
 									appAudioTargetsResult.suggestedTargetId && (
 										<p className="text-xs text-muted-foreground">Auto-matched a window owner app for isolated audio.</p>
+									)}
+
+								{!loadingAppAudioTargets &&
+									requiresManualAppAudioTarget &&
+									appAudioTargetsResult.targets.length > 0 &&
+									!selectedAppAudioTargetId && (
+										<p className="text-xs text-muted-foreground">
+											Choose the running application that is producing the audio you want to share.
+										</p>
 									)}
 
 								{!loadingAppAudioTargets && requiresManualAppAudioTarget && (

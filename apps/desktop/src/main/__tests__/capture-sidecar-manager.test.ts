@@ -146,7 +146,12 @@ void describe("CaptureSidecarManager", () => {
       const targets = await manager.listAppAudioTargets("window:1:0");
       assert.equal(targets.targets.length, 1);
       assert.equal(targets.targets[0]?.id, "pid:1234");
-      assert.equal(targets.suggestedTargetId, "pid:1234");
+      assert.equal(targets.suggestedTargetId, undefined);
+      assert.equal(targets.requiresManualSelection, true);
+      assert.match(
+        targets.warning ?? "",
+        /choosing the app that is producing sound/i,
+      );
     } finally {
       await manager.dispose();
     }

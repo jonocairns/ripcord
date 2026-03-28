@@ -2,6 +2,7 @@ import type {
   TDesktopCapabilities,
   TResolvedScreenAudioMode,
   TScreenAudioMode,
+  TScreenShareSelection,
 } from "./types";
 
 const getDesktopCapabilitiesForPlatform = (
@@ -119,8 +120,41 @@ const resolveScreenAudioMode = (
   };
 };
 
+const resolvePreparedScreenAudioMode = (
+  selection: TScreenShareSelection,
+  capabilities: TDesktopCapabilities,
+): TResolvedScreenAudioMode => {
+  const resolved = resolveScreenAudioMode(selection.audioMode, capabilities);
+  const requiresExplicitAppTarget =
+    resolved.effectiveMode === "app" &&
+    !selection.appAudioTargetId &&
+    (capabilities.platform === "linux" ||
+      selection.sourceId.startsWith("screen:"));
+
+  if (!requiresExplicitAppTarget) {
+    return resolved;
+  }
+
+  const fallbackMode =
+    capabilities.systemAudio === "unsupported" ? "none" : "system";
+  const warningPrefix =
+    capabilities.platform === "linux"
+      ? "Per-app audio on Linux requires choosing a running app audio target."
+      : "Per-app audio requires selecting a target app.";
+
+  return {
+    requestedMode: selection.audioMode,
+    effectiveMode: fallbackMode,
+    warning:
+      fallbackMode === "none"
+        ? `${warningPrefix} Continuing without shared audio.`
+        : `${warningPrefix} Falling back to system audio.`,
+  };
+};
+
 export {
   getDesktopCapabilities,
   getDesktopCapabilitiesForPlatform,
+  resolvePreparedScreenAudioMode,
   resolveScreenAudioMode,
 };

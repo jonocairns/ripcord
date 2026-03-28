@@ -250,6 +250,7 @@ const isDesktopAppAudioTargetsResult = (
   return (
     value.targets.every((target) => isDesktopAppAudioTarget(target)) &&
     hasOptionalString(value, "suggestedTargetId") &&
+    hasOptionalBoolean(value, "requiresManualSelection") &&
     hasOptionalString(value, "warning")
   );
 };

@@ -15,7 +15,7 @@ import { resolveDesktopCaptureCapabilities } from "./capture-capabilities";
 import { captureSidecarManager } from "./capture-sidecar-manager";
 import {
   getDesktopCapabilities,
-  resolveScreenAudioMode,
+  resolvePreparedScreenAudioMode,
 } from "./platform-capabilities";
 import { previewRuntimeConfig } from "./preview-runtime-config";
 import {
@@ -399,25 +399,7 @@ const registerIpcHandlers = () => {
     "desktop:prepare-screen-share",
     async (_event: IpcMainInvokeEvent, selection: TScreenShareSelection) => {
       const capabilities = await getEffectiveDesktopCapabilities();
-      let resolved = resolveScreenAudioMode(selection.audioMode, capabilities);
-
-      if (
-        resolved.effectiveMode === "app" &&
-        selection.sourceId.startsWith("screen:") &&
-        !selection.appAudioTargetId
-      ) {
-        const fallbackMode =
-          capabilities.systemAudio === "unsupported" ? "none" : "system";
-
-        resolved = {
-          requestedMode: selection.audioMode,
-          effectiveMode: fallbackMode,
-          warning:
-            fallbackMode === "none"
-              ? "Per-app audio requires selecting a target app. Continuing without shared audio."
-              : "Per-app audio requires selecting a target app. Falling back to system audio.",
-        };
-      }
+      const resolved = resolvePreparedScreenAudioMode(selection, capabilities);
 
       prepareScreenShareSelection({
         sourceId: selection.sourceId,
