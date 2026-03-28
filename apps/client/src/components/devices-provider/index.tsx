@@ -39,8 +39,14 @@ const DevicesProvider = memo(({ children }: TDevicesProviderProps) => {
 
 		setDevices({
 			...normalizedSettings,
-			microphoneId: normalizeStoredMediaDeviceId(normalizedSettings.microphoneId, inputDevices),
-			webcamId: normalizeStoredMediaDeviceId(normalizedSettings.webcamId, videoDevices),
+			microphoneId: normalizeStoredMediaDeviceId(normalizedSettings.microphoneId, inputDevices, {
+				groupId: normalizedSettings.microphoneGroupId,
+				label: normalizedSettings.microphoneLabel,
+			}),
+			webcamId: normalizeStoredMediaDeviceId(normalizedSettings.webcamId, videoDevices, {
+				groupId: normalizedSettings.webcamGroupId,
+				label: normalizedSettings.webcamLabel,
+			}),
 		});
 
 		setLoading(false);

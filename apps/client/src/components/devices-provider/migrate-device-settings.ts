@@ -10,10 +10,14 @@ const DEFAULT_SIDECAR_DFN_MIX = 0.9;
 
 const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
 	microphoneId: undefined,
+	microphoneGroupId: undefined,
+	microphoneLabel: undefined,
 	micQualityMode: MicQualityMode.AUTO,
 	pushToTalkKeybind: undefined,
 	pushToMuteKeybind: undefined,
 	webcamId: undefined,
+	webcamGroupId: undefined,
+	webcamLabel: undefined,
 	webcamResolution: Resolution['720p'],
 	webcamFramerate: 30,
 	echoCancellation: true,
