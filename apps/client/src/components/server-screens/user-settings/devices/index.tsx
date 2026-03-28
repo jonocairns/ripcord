@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { useDevices } from '@/components/devices-provider/hooks/use-devices';
 import {
 	getExactMediaDeviceId,
+	getNormalizedAvailableDeviceMetadata,
 	getSelectableMediaDeviceOptions,
 	getSelectedMediaDeviceId,
 	getStoredMediaDeviceMetadata,
@@ -210,10 +211,17 @@ const Devices = memo(() => {
 				return currentValues;
 			}
 
+			const nextMicrophoneMetadata = getNormalizedAvailableDeviceMetadata(nextMicrophoneId, inputDevices);
+			const nextWebcamMetadata = getNormalizedAvailableDeviceMetadata(nextWebcamId, videoDevices);
+
 			return {
 				...currentValues,
 				microphoneId: nextMicrophoneId,
+				microphoneGroupId: nextMicrophoneMetadata.groupId,
+				microphoneLabel: nextMicrophoneMetadata.label,
 				webcamId: nextWebcamId,
+				webcamGroupId: nextWebcamMetadata.groupId,
+				webcamLabel: nextWebcamMetadata.label,
 			};
 		});
 	}, [devices, inputDevices, videoDevices, setValues]);

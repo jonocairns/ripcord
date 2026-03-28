@@ -49,6 +49,34 @@ describe('media-device-selection', () => {
 		).toBe('mic-next');
 	});
 
+	it('ignores the browser default pseudo-device during groupId remapping', () => {
+		const devices = [
+			createMediaDevice({ deviceId: 'default', groupId: 'group-a', label: 'Default - USB Mic' }),
+			createMediaDevice({ deviceId: 'mic-next', groupId: 'group-a', label: 'USB Mic' }),
+		];
+
+		expect(
+			normalizeStoredMediaDeviceId('mic-old', devices, {
+				groupId: 'group-a',
+				label: 'USB Mic',
+			}),
+		).toBe('mic-next');
+	});
+
+	it('falls through to label matching when groupId results are ambiguous', () => {
+		const devices = [
+			createMediaDevice({ deviceId: 'mic-a', groupId: 'group-a', label: 'USB Mic Left' }),
+			createMediaDevice({ deviceId: 'mic-b', groupId: 'group-a', label: 'USB Mic' }),
+		];
+
+		expect(
+			normalizeStoredMediaDeviceId('mic-old', devices, {
+				groupId: 'group-a',
+				label: 'USB Mic',
+			}),
+		).toBe('mic-b');
+	});
+
 	it('remaps a saved device to the current id using a unique label fallback', () => {
 		const devices = [createMediaDevice({ deviceId: 'mic-next', label: 'USB Mic' })];
 
@@ -72,6 +100,12 @@ describe('media-device-selection', () => {
 				label: 'USB Mic',
 			}),
 		).toBeUndefined();
+	});
+
+	it('returns undefined when no metadata is provided and the saved id is not in the device list', () => {
+		const devices = [createMediaDevice({ deviceId: 'mic-next', groupId: 'group-a', label: 'USB Mic' })];
+
+		expect(normalizeStoredMediaDeviceId('mic-old', devices, undefined)).toBeUndefined();
 	});
 
 	it('captures the current device metadata for later remapping', () => {

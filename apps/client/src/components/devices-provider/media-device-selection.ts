@@ -44,6 +44,13 @@ const getStoredMediaDeviceMetadata = (
 	};
 };
 
+const getNormalizedAvailableDeviceMetadata = (
+	deviceId: string | undefined,
+	availableDevices: (MediaDeviceInfo | undefined)[],
+) => {
+	return getStoredMediaDeviceMetadata(deviceId, availableDevices);
+};
+
 const findMatchingAvailableDevice = (
 	deviceId: string | undefined,
 	availableDevices: (MediaDeviceInfo | undefined)[],
@@ -62,10 +69,12 @@ const findMatchingAvailableDevice = (
 	}
 
 	if (metadata?.groupId) {
-		const groupMatch = availableDevices.find((device) => device?.groupId === metadata.groupId);
+		const groupMatches = availableDevices.filter((device) => {
+			return device?.groupId === metadata.groupId && getExactMediaDeviceId(device?.deviceId) !== undefined;
+		});
 
-		if (groupMatch) {
-			return groupMatch;
+		if (groupMatches.length === 1) {
+			return groupMatches[0];
 		}
 	}
 
@@ -129,6 +138,7 @@ const getSelectableMediaDeviceOptions = (
 export {
 	DEFAULT_MEDIA_DEVICE_ID,
 	getExactMediaDeviceId,
+	getNormalizedAvailableDeviceMetadata,
 	getSelectableMediaDeviceOptions,
 	getSelectedMediaDeviceId,
 	getStoredMediaDeviceMetadata,
