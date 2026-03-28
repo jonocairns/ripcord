@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'bun:test';
 import { normalizeDesktopCapabilities } from '../desktop-capabilities';
-import type { TDesktopCapabilities } from '../types';
 
 describe('normalizeDesktopCapabilities', () => {
 	it('fills in missing compatibility fields for older linux desktop runtimes', () => {
@@ -9,7 +8,7 @@ describe('normalizeDesktopCapabilities', () => {
 			systemAudio: 'best-effort',
 			perAppAudio: 'best-effort',
 			notes: ['Linux audio capture depends on your compositor and PipeWire portal.'],
-		} as TDesktopCapabilities;
+		};
 
 		const normalized = normalizeDesktopCapabilities(capabilities);
 

@@ -1,10 +1,16 @@
-import type { TDesktopCapabilities, TDesktopPlatform, TSupportLevel } from './types';
+import type { TDesktopCapabilities, TDesktopCapabilityIssue, TDesktopPlatform, TSupportLevel } from './types';
+
+type TLegacyDesktopCapabilities = Omit<TDesktopCapabilities, 'globalPushKeybinds' | 'issues' | 'notes'> & {
+	globalPushKeybinds?: TSupportLevel;
+	issues?: TDesktopCapabilityIssue[];
+	notes?: string[];
+};
 
 const getDefaultGlobalPushKeybindSupport = (platform: TDesktopPlatform): TSupportLevel => {
 	return platform === 'linux' ? 'best-effort' : 'supported';
 };
 
-const normalizeDesktopCapabilities = (capabilities: TDesktopCapabilities): TDesktopCapabilities => {
+const normalizeDesktopCapabilities = (capabilities: TLegacyDesktopCapabilities): TDesktopCapabilities => {
 	return {
 		...capabilities,
 		globalPushKeybinds: capabilities.globalPushKeybinds ?? getDefaultGlobalPushKeybindSupport(capabilities.platform),

@@ -430,8 +430,8 @@ const Devices = memo(() => {
 										<AlertTitle>{issue.title}</AlertTitle>
 										<AlertDescription className="text-current/90">
 											<p>{issue.message}</p>
-											{issue.guidance.map((guidance) => (
-												<p key={guidance}>{guidance}</p>
+											{issue.guidance.map((guidance, i) => (
+												<p key={i}>{guidance}</p>
 											))}
 										</AlertDescription>
 									</Alert>
