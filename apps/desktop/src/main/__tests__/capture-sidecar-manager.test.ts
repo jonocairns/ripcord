@@ -146,7 +146,12 @@ void describe("CaptureSidecarManager", () => {
       const targets = await manager.listAppAudioTargets("window:1:0");
       assert.equal(targets.targets.length, 1);
       assert.equal(targets.targets[0]?.id, "pid:1234");
-      assert.equal(targets.suggestedTargetId, "pid:1234");
+      assert.equal(targets.suggestedTargetId, undefined);
+      assert.equal(targets.requiresManualSelection, true);
+      assert.match(
+        targets.warning ?? "",
+        /choosing the app that is producing sound/i,
+      );
     } finally {
       await manager.dispose();
     }
@@ -175,6 +180,32 @@ void describe("CaptureSidecarManager", () => {
 
       assert.equal(status.available, false);
       assert.match(status.reason ?? "", /macOS 13 or newer/i);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  void it("keeps linux manual-selection metadata when a suggested target is also present", async () => {
+    const manager = new CaptureSidecarManager({
+      spawnSidecar: () => {
+        return spawn(process.execPath, [fakeSidecarPath], {
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            FAKE_SIDECAR_PLATFORM: "linux",
+            FAKE_SIDECAR_REQUIRES_MANUAL_SELECTION: "true",
+            FAKE_SIDECAR_SUGGESTED_TARGET_ID: "pid:1234",
+          },
+        });
+      },
+      restartDelayMs: 10,
+    });
+
+    try {
+      const targets = await manager.listAppAudioTargets("window:1:0");
+
+      assert.equal(targets.suggestedTargetId, "pid:1234");
+      assert.equal(targets.requiresManualSelection, true);
     } finally {
       await manager.dispose();
     }

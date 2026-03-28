@@ -50,6 +50,7 @@ export type TDesktopAppAudioTarget = {
 export type TDesktopAppAudioTargetsResult = {
   targets: TDesktopAppAudioTarget[];
   suggestedTargetId?: string;
+  requiresManualSelection?: boolean;
   warning?: string;
 };
 

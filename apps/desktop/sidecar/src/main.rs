@@ -2047,9 +2047,13 @@ fn get_audio_targets() -> Vec<AudioTarget> {
             .unwrap_or(app_name)
             .to_string();
         let label = if node_label.eq_ignore_ascii_case(app_name) {
-            format!("{app_name} ({pid})")
+            if process_name.eq_ignore_ascii_case(app_name) {
+                format!("{app_name} ({pid})")
+            } else {
+                format!("{app_name} [{process_name}] ({pid})")
+            }
         } else {
-            format!("{node_label} - {app_name} ({pid})")
+            format!("{app_name} [{process_name}] - {node_label} ({pid})")
         };
 
         targets.push(AudioTarget {
@@ -3234,18 +3238,55 @@ fn handle_audio_targets_list(params: Value) -> Result<Value, String> {
         serde_json::from_value(params).map_err(|error| format!("invalid params: {error}"))?;
 
     let targets = get_audio_targets();
-
     let suggested_target_id = parsed
         .source_id
         .as_deref()
         .and_then(resolve_source_to_pid)
-        .map(|pid| format!("pid:{pid}"));
+        .map(|pid| format!("pid:{pid}"))
+        .filter(|target_id| targets.iter().any(|target| target.id == target_id.as_str()));
+    #[cfg(target_os = "linux")]
+    let requires_manual_selection = true;
+    #[cfg(not(target_os = "linux"))]
+    let requires_manual_selection = suggested_target_id.is_none();
+    #[cfg(target_os = "linux")]
+    let warning = if targets.is_empty() {
+        Some(
+            "No running app audio targets were found. Start playback in the app you want to share, then choose it here."
+                .to_string(),
+        )
+    } else if parsed
+        .source_id
+        .as_deref()
+        .is_some_and(|source_id| source_id.starts_with("window:"))
+    {
+        Some(
+            "Linux per-app audio does not automatically follow the selected window. Choose the app that is producing sound."
+                .to_string(),
+        )
+    } else {
+        Some(
+            "Linux per-app audio requires choosing the app that is producing sound."
+                .to_string(),
+        )
+    };
+    #[cfg(not(target_os = "linux"))]
+    let warning: Option<String> = None;
 
-    Ok(json!({
+    let mut response = json!({
         "targets": targets,
-        "suggestedTargetId": suggested_target_id,
+        "requiresManualSelection": requires_manual_selection,
         "protocolVersion": PROTOCOL_VERSION,
-    }))
+    });
+
+    if let Some(suggested_target_id) = suggested_target_id {
+        response["suggestedTargetId"] = json!(suggested_target_id);
+    }
+
+    if let Some(warning) = warning {
+        response["warning"] = json!(warning);
+    }
+
+    Ok(response)
 }
 
 fn stop_capture_session(state: &mut SidecarState, requested_session_id: Option<&str>) {

@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   getDesktopCapabilitiesForPlatform,
+  resolvePreparedScreenAudioMode,
   resolveScreenAudioMode,
 } from "../platform-capabilities";
 import type { TDesktopCapabilities } from "../types";
@@ -60,5 +61,54 @@ void describe("resolveScreenAudioMode", () => {
 
     assert.equal(resolved.effectiveMode, "none");
     assert.match(resolved.warning ?? "", /Continuing without shared audio/);
+  });
+});
+
+void describe("resolvePreparedScreenAudioMode", () => {
+  void it("falls back when linux per-app audio is requested without an explicit target", () => {
+    const capabilities: TDesktopCapabilities = {
+      platform: "linux",
+      systemAudio: "best-effort",
+      perAppAudio: "best-effort",
+      notes: [],
+    };
+
+    const resolved = resolvePreparedScreenAudioMode(
+      {
+        sourceId: "window:123",
+        audioMode: "app",
+      },
+      capabilities,
+    );
+
+    assert.equal(resolved.effectiveMode, "system");
+    assert.match(
+      resolved.warning ?? "",
+      /Linux requires choosing a running app audio target/i,
+    );
+  });
+
+  void it("keeps linux per-app audio when an explicit target is selected", () => {
+    const capabilities: TDesktopCapabilities = {
+      platform: "linux",
+      systemAudio: "best-effort",
+      perAppAudio: "best-effort",
+      notes: [],
+    };
+
+    const resolved = resolvePreparedScreenAudioMode(
+      {
+        sourceId: "window:123",
+        audioMode: "app",
+        appAudioTargetId: "node:77",
+      },
+      capabilities,
+    );
+
+    assert.equal(resolved.effectiveMode, "app");
+    assert.equal(
+      resolved.warning,
+      "Per-app audio capture is best-effort on this platform and may fail.",
+    );
   });
 });

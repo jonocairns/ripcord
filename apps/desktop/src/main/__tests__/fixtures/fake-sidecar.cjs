@@ -48,6 +48,11 @@ const capabilityX11DisplayAvailable = parseBooleanEnv(
   process.env.FAKE_SIDECAR_X11_DISPLAY_AVAILABLE
 );
 const capabilityX11DisplayReason = process.env.FAKE_SIDECAR_X11_DISPLAY_REASON;
+const listTargetsRequiresManualSelection = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_REQUIRES_MANUAL_SELECTION
+);
+const listTargetsSuggestedTargetId = process.env.FAKE_SIDECAR_SUGGESTED_TARGET_ID;
+const listTargetsWarning = process.env.FAKE_SIDECAR_TARGETS_WARNING;
 
 const send = (payload) => {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -166,6 +171,15 @@ rl.on('line', (line) => {
   }
 
   if (method === 'audio_targets.list') {
+    const suggestedTargetId =
+      listTargetsSuggestedTargetId !== undefined
+        ? listTargetsSuggestedTargetId
+        : capabilityPlatform === 'linux'
+          ? undefined
+          : params?.sourceId
+            ? 'pid:1234'
+            : undefined;
+
     sendResponse(id, {
       targets: [
         {
@@ -175,7 +189,15 @@ rl.on('line', (line) => {
           processName: 'fake.exe'
         }
       ],
-      suggestedTargetId: params?.sourceId ? 'pid:1234' : undefined
+      suggestedTargetId,
+      requiresManualSelection:
+        listTargetsRequiresManualSelection ??
+        (capabilityPlatform === 'linux' || suggestedTargetId === undefined),
+      warning:
+        listTargetsWarning ??
+        (capabilityPlatform === 'linux'
+          ? 'Linux per-app audio requires choosing the app that is producing sound.'
+          : undefined)
     });
     return;
   }
