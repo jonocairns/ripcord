@@ -185,6 +185,32 @@ void describe("CaptureSidecarManager", () => {
     }
   });
 
+  void it("keeps linux manual-selection metadata when a suggested target is also present", async () => {
+    const manager = new CaptureSidecarManager({
+      spawnSidecar: () => {
+        return spawn(process.execPath, [fakeSidecarPath], {
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            FAKE_SIDECAR_PLATFORM: "linux",
+            FAKE_SIDECAR_REQUIRES_MANUAL_SELECTION: "true",
+            FAKE_SIDECAR_SUGGESTED_TARGET_ID: "pid:1234",
+          },
+        });
+      },
+      restartDelayMs: 10,
+    });
+
+    try {
+      const targets = await manager.listAppAudioTargets("window:1:0");
+
+      assert.equal(targets.suggestedTargetId, "pid:1234");
+      assert.equal(targets.requiresManualSelection, true);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   void it("drops malformed app audio frames for pcm forwarding", async () => {
     const manager = new CaptureSidecarManager({
       resolveBinaryPath: () => undefined,
