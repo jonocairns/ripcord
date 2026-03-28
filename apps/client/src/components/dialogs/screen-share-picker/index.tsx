@@ -38,6 +38,8 @@ const supportLabelMap = {
 
 const ScreenSharePickerDialog = memo(
 	({ isOpen, sources, capabilities, defaultAudioMode, onConfirm, onCancel }: TScreenSharePickerDialogProps) => {
+		const desktopBridge = getDesktopBridge();
+		const [liveCapabilities, setLiveCapabilities] = useState(capabilities);
 		const [selectedSourceId, setSelectedSourceId] = useState(sources[0]?.id);
 		const [audioMode, setAudioMode] = useState(defaultAudioMode);
 		const [appAudioTargetsResult, setAppAudioTargetsResult] = useState<TDesktopAppAudioTargetsResult>({
@@ -58,7 +60,7 @@ const ScreenSharePickerDialog = memo(
 		}, [selectedSourceId, sources]);
 		const appAudioTargetBehavior = resolveAppAudioTargetBehavior({
 			audioMode,
-			perAppAudioSupported: capabilities.perAppAudio !== 'unsupported',
+			perAppAudioSupported: liveCapabilities.perAppAudio !== 'unsupported',
 			sourceKind: selectedSource?.kind,
 			suggestedTargetId: appAudioTargetsResult.suggestedTargetId,
 		});
@@ -100,6 +102,10 @@ const ScreenSharePickerDialog = memo(
 		};
 
 		useEffect(() => {
+			setLiveCapabilities(capabilities);
+		}, [capabilities]);
+
+		useEffect(() => {
 			if (!isOpen) {
 				return;
 			}
@@ -114,6 +120,16 @@ const ScreenSharePickerDialog = memo(
 		}, [isOpen, sources, defaultAudioMode]);
 
 		useEffect(() => {
+			if (!isOpen || !desktopBridge) {
+				return;
+			}
+
+			return desktopBridge.subscribeCapabilities((nextCapabilities) => {
+				setLiveCapabilities(nextCapabilities);
+			});
+		}, [desktopBridge, isOpen]);
+
+		useEffect(() => {
 			if (!shouldResolveAppAudioTargets || !selectedSourceId) {
 				setLoadingAppAudioTargets(false);
 				setAppAudioTargetsResult({
@@ -122,9 +138,6 @@ const ScreenSharePickerDialog = memo(
 				setSelectedAppAudioTargetId(undefined);
 				return;
 			}
-
-			const desktopBridge = getDesktopBridge();
-
 			if (!desktopBridge) {
 				setAppAudioTargetsResult({
 					targets: [],
@@ -173,7 +186,7 @@ const ScreenSharePickerDialog = memo(
 			return () => {
 				cancelled = true;
 			};
-		}, [selectedSourceId, shouldResolveAppAudioTargets]);
+		}, [desktopBridge, selectedSourceId, shouldResolveAppAudioTargets]);
 
 		return (
 			<Dialog open={isOpen}>
@@ -185,14 +198,14 @@ const ScreenSharePickerDialog = memo(
 
 					<div className="space-y-4">
 						<div className="flex flex-wrap gap-2 text-xs">
-							<Badge variant="outline">System Audio: {supportLabelMap[capabilities.systemAudio]}</Badge>
-							<Badge variant="outline">Per-App Audio: {supportLabelMap[capabilities.perAppAudio]}</Badge>
-							<Badge variant="outline">Platform: {capabilities.platform}</Badge>
+							<Badge variant="outline">System Audio: {supportLabelMap[liveCapabilities.systemAudio]}</Badge>
+							<Badge variant="outline">Per-App Audio: {supportLabelMap[liveCapabilities.perAppAudio]}</Badge>
+							<Badge variant="outline">Platform: {liveCapabilities.platform}</Badge>
 						</div>
 
-						{capabilities.notes.length > 0 && (
+						{liveCapabilities.notes.length > 0 && (
 							<div className="text-xs text-muted-foreground space-y-1">
-								{capabilities.notes.map((note) => (
+								{liveCapabilities.notes.map((note) => (
 									<p key={note}>{note}</p>
 								))}
 							</div>

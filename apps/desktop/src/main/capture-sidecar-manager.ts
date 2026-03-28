@@ -42,12 +42,27 @@ type TSidecarStatus = {
   reason?: string;
 };
 
-type TSidecarCapabilities = {
+type TSidecarLifecycleEvent = {
+  kind: "ready" | "exit";
+  reason?: string;
+};
+
+export type TSidecarCapabilities = {
   platform?: string;
   systemAudio?: TSupportLevel;
   perAppAudio?: TSupportLevel;
   reason?: string;
   perAppAudioReason?: string;
+  sessionType?: string;
+  pipewireToolsAvailable?: boolean;
+  appAudioTargetEnumerationSupported?: boolean;
+  appAudioTargetEnumerationReason?: string;
+  sourceAudioTargetInferenceSupported?: boolean;
+  sourceAudioTargetInferenceReason?: string;
+  globalPushKeybinds?: TSupportLevel;
+  globalPushKeybindsReason?: string;
+  x11DisplayAvailable?: boolean;
+  x11DisplayReason?: string;
 };
 
 type TAppAudioBinaryEgressInfo = {
@@ -121,6 +136,14 @@ const hasOptionalPositiveInteger = (
   );
 };
 
+const hasOptionalBoolean = (value: Record<string, unknown>, key: string) => {
+  return (
+    !(key in value) ||
+    value[key] === undefined ||
+    typeof value[key] === "boolean"
+  );
+};
+
 const isSupportLevel = (value: unknown): value is TSupportLevel => {
   return SUPPORT_LEVELS.some((supportLevel) => supportLevel === value);
 };
@@ -186,7 +209,19 @@ const isSidecarCapabilities = (
 
   return (
     hasOptionalString(value, "reason") &&
-    hasOptionalString(value, "perAppAudioReason")
+    hasOptionalString(value, "perAppAudioReason") &&
+    hasOptionalString(value, "sessionType") &&
+    hasOptionalBoolean(value, "pipewireToolsAvailable") &&
+    hasOptionalBoolean(value, "appAudioTargetEnumerationSupported") &&
+    hasOptionalString(value, "appAudioTargetEnumerationReason") &&
+    hasOptionalBoolean(value, "sourceAudioTargetInferenceSupported") &&
+    hasOptionalString(value, "sourceAudioTargetInferenceReason") &&
+    (!("globalPushKeybinds" in value) ||
+      value.globalPushKeybinds === undefined ||
+      isSupportLevel(value.globalPushKeybinds)) &&
+    hasOptionalString(value, "globalPushKeybindsReason") &&
+    hasOptionalBoolean(value, "x11DisplayAvailable") &&
+    hasOptionalString(value, "x11DisplayReason")
   );
 };
 
@@ -493,6 +528,13 @@ class CaptureSidecarManager {
     };
   }
 
+  onLifecycle(listener: (event: TSidecarLifecycleEvent) => void) {
+    this.events.on("lifecycle", listener);
+    return () => {
+      this.events.off("lifecycle", listener);
+    };
+  }
+
   async getStatus(): Promise<TSidecarStatus> {
     try {
       const capabilities = await this.getCapabilities();
@@ -783,6 +825,9 @@ class CaptureSidecarManager {
       this.startSidecarProcess();
       await this.sendRequestInternal("health.ping", {});
       this.lastKnownError = undefined;
+      this.events.emit("lifecycle", {
+        kind: "ready",
+      } satisfies TSidecarLifecycleEvent);
     }
   }
 
@@ -801,6 +846,10 @@ class CaptureSidecarManager {
     this.sidecarProcess = undefined;
     this.lastKnownError = reason;
     this.closeAppAudioBinaryEgressSocket();
+    this.events.emit("lifecycle", {
+      kind: "exit",
+      reason,
+    } satisfies TSidecarLifecycleEvent);
 
     for (const pendingRequest of this.pendingRequests.values()) {
       clearTimeout(pendingRequest.timeout);
@@ -1262,4 +1311,4 @@ class CaptureSidecarManager {
 const captureSidecarManager = new CaptureSidecarManager();
 
 export { CaptureSidecarManager, captureSidecarManager, toPcmAppAudioFrame };
-export type { TCaptureSidecarManagerOptions };
+export type { TCaptureSidecarManagerOptions, TSidecarLifecycleEvent };

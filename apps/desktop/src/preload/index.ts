@@ -4,6 +4,7 @@ import type {
   TAppAudioPcmFrame,
   TAppAudioSession,
   TAppAudioStatusEvent,
+  TDesktopCapabilities,
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
   TDesktopUpdateStatus,
@@ -445,6 +446,19 @@ const desktopBridge = {
 
     return () => {
       ipcRenderer.removeListener("desktop:global-push-keybind", listener);
+    };
+  },
+  subscribeCapabilities: (
+    callback: (capabilities: TDesktopCapabilities) => void,
+  ) => {
+    const listener = (_event: unknown, capabilities: TDesktopCapabilities) => {
+      callback(capabilities);
+    };
+
+    ipcRenderer.on("desktop:capabilities-changed", listener);
+
+    return () => {
+      ipcRenderer.removeListener("desktop:capabilities-changed", listener);
     };
   },
   subscribeUpdateStatus: (callback: (status: TDesktopUpdateStatus) => void) => {

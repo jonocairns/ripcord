@@ -29,6 +29,7 @@ import { desktopUpdater } from "./updater";
 import { classifyWindowOpenUrl } from "./window-open-policy";
 import type {
   TAppAudioPcmFrame,
+  TDesktopCapabilities,
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
   TGlobalPushKeybindRegistrationResult,
@@ -39,6 +40,10 @@ import type {
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
 let mainWindow: BrowserWindow | null = null;
 let appAudioFrameEgressPort: MessagePortMain | undefined;
+let lastDesktopCapabilitiesSnapshot: string | undefined;
+let refreshDesktopCapabilitiesPromise:
+  | Promise<TDesktopCapabilities>
+  | undefined;
 
 const disposeAppAudioFrameEgressPort = (
   port: MessagePortMain | undefined = appAudioFrameEgressPort,
@@ -111,7 +116,36 @@ const getEffectiveDesktopCapabilities = async () => {
     sidecarAvailable: sidecarStatus.available,
     sidecarReason,
     sidecarPerAppAudioSupported,
+    sidecarCapabilities,
   });
+};
+
+const refreshDesktopCapabilities = async (
+  options: { broadcast?: boolean; forceBroadcast?: boolean } = {},
+) => {
+  if (refreshDesktopCapabilitiesPromise) {
+    return await refreshDesktopCapabilitiesPromise;
+  }
+
+  refreshDesktopCapabilitiesPromise = (async () => {
+    const capabilities = await getEffectiveDesktopCapabilities();
+    const snapshot = JSON.stringify(capabilities);
+    const didChange = snapshot !== lastDesktopCapabilitiesSnapshot;
+    lastDesktopCapabilitiesSnapshot = snapshot;
+
+    if (options.broadcast && (options.forceBroadcast || didChange)) {
+      mainWindow?.webContents.send(
+        "desktop:capabilities-changed",
+        capabilities,
+      );
+    }
+
+    return capabilities;
+  })().finally(() => {
+    refreshDesktopCapabilitiesPromise = undefined;
+  });
+
+  return await refreshDesktopCapabilitiesPromise;
 };
 
 const createMainWindow = () => {
@@ -253,7 +287,7 @@ const registerIpcHandlers = () => {
   );
 
   ipcMain.handle("desktop:get-capabilities", () => {
-    return getEffectiveDesktopCapabilities();
+    return refreshDesktopCapabilities();
   });
 
   ipcMain.handle(
@@ -398,6 +432,16 @@ void app
     captureSidecarManager.onPushKeybind((event) => {
       emitPushKeybindEvent(event);
     });
+    captureSidecarManager.onLifecycle(() => {
+      void refreshDesktopCapabilities({
+        broadcast: true,
+      }).catch((error) => {
+        console.warn(
+          "[desktop] Failed to refresh capabilities after sidecar lifecycle change",
+          error,
+        );
+      });
+    });
 
     desktopUpdater.start((status) => {
       mainWindow?.webContents.send("desktop:update-status", status);
@@ -406,6 +450,27 @@ void app
     registerIpcHandlers();
     setupDisplayMediaHandler();
     createMainWindow();
+
+    mainWindow?.on("focus", () => {
+      void refreshDesktopCapabilities({
+        broadcast: true,
+      }).catch((error) => {
+        console.warn(
+          "[desktop] Failed to refresh capabilities on window focus",
+          error,
+        );
+      });
+    });
+
+    void refreshDesktopCapabilities({
+      broadcast: true,
+      forceBroadcast: true,
+    }).catch((error) => {
+      console.warn(
+        "[desktop] Failed to refresh initial desktop capabilities",
+        error,
+      );
+    });
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {

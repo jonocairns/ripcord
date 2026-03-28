@@ -112,6 +112,22 @@ void describe("CaptureSidecarManager", () => {
       spawnSidecar: () => {
         return spawn(process.execPath, [fakeSidecarPath], {
           stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            FAKE_SIDECAR_PLATFORM: "linux",
+            FAKE_SIDECAR_SYSTEM_AUDIO: "best-effort",
+            FAKE_SIDECAR_PER_APP_AUDIO: "best-effort",
+            FAKE_SIDECAR_SESSION_TYPE: "wayland",
+            FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE: "true",
+            FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED: "true",
+            FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_SUPPORTED: "false",
+            FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_REASON:
+              "Choose a target manually.",
+            FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS: "best-effort",
+            FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS_REASON:
+              "Uses XWayland in Wayland sessions.",
+            FAKE_SIDECAR_X11_DISPLAY_AVAILABLE: "true",
+          },
         });
       },
       restartDelayMs: 10,
@@ -119,7 +135,13 @@ void describe("CaptureSidecarManager", () => {
 
     try {
       const capabilities = await manager.getCapabilities();
-      assert.equal(capabilities.perAppAudio, "supported");
+      assert.equal(capabilities.perAppAudio, "best-effort");
+      assert.equal(capabilities.sessionType, "wayland");
+      assert.equal(capabilities.pipewireToolsAvailable, true);
+      assert.equal(capabilities.appAudioTargetEnumerationSupported, true);
+      assert.equal(capabilities.sourceAudioTargetInferenceSupported, false);
+      assert.equal(capabilities.globalPushKeybinds, "best-effort");
+      assert.equal(capabilities.x11DisplayAvailable, true);
 
       const targets = await manager.listAppAudioTargets("window:1:0");
       assert.equal(targets.targets.length, 1);
@@ -221,8 +243,15 @@ void describe("CaptureSidecarManager", () => {
     });
 
     const statusEvents: TAppAudioStatusEvent[] = [];
+    const lifecycleEvents: Array<{
+      kind: string;
+      reason?: string;
+    }> = [];
     const offStatus = manager.onStatus((statusEvent) => {
       statusEvents.push(statusEvent);
+    });
+    const offLifecycle = manager.onLifecycle((event) => {
+      lifecycleEvents.push(event);
     });
 
     try {
@@ -239,8 +268,18 @@ void describe("CaptureSidecarManager", () => {
 
       const recoveredStatus = await manager.getStatus();
       assert.equal(recoveredStatus.available, true);
+      assert.equal(lifecycleEvents[0]?.kind, "ready");
+      assert.equal(
+        lifecycleEvents.some((event) => event.kind === "exit"),
+        true,
+      );
+      assert.equal(
+        lifecycleEvents.filter((event) => event.kind === "ready").length >= 2,
+        true,
+      );
     } finally {
       offStatus();
+      offLifecycle();
       await manager.dispose();
     }
   });

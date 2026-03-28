@@ -2,16 +2,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[cfg(any(windows, test, target_os = "linux"))]
 use std::collections::HashMap;
-use std::collections::VecDeque;
 #[cfg(target_os = "linux")]
 use std::collections::HashSet;
+use std::collections::VecDeque;
 #[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "macos")]
 use std::io::Read;
-use std::io::{self, BufRead, Write};
 #[cfg(target_os = "linux")]
 use std::io::Read;
+use std::io::{self, BufRead, Write};
 use std::net::{TcpListener, TcpStream};
 #[cfg(target_os = "linux")]
 use std::process::{Child, Command, Stdio};
@@ -1324,9 +1324,7 @@ fn start_push_keybind_watcher(
 
         // KeyCodes for talk/mute were resolved before the thread was spawned.
         // Resolve modifier KeyCodes here since they don't need to be checked upfront.
-        let resolve = |sym: u64| -> u8 {
-            unsafe { (xlib.XKeysymToKeycode)(display, sym) }
-        };
+        let resolve = |sym: u64| -> u8 { unsafe { (xlib.XKeysymToKeycode)(display, sym) } };
 
         let shift_l = resolve(0xFFE1); // XK_Shift_L
         let shift_r = resolve(0xFFE2); // XK_Shift_R
@@ -1344,9 +1342,8 @@ fn start_push_keybind_watcher(
             let mut keys = [0i8; 32];
             unsafe { (xlib.XQueryKeymap)(display, keys.as_mut_ptr()) };
 
-            let kc_down = |kc: u8| -> bool {
-                kc != 0 && (keys[kc as usize / 8] & (1 << (kc % 8))) != 0
-            };
+            let kc_down =
+                |kc: u8| -> bool { kc != 0 && (keys[kc as usize / 8] & (1 << (kc % 8))) != 0 };
 
             let keybind_active = |(kb, kc): &(LinuxPushKeybind, u8)| -> bool {
                 if !kc_down(*kc) {
@@ -1397,7 +1394,9 @@ fn parse_target_pid(target_id: &str) -> Option<u32> {
 
 #[cfg(target_os = "linux")]
 fn parse_linux_target_node_id(target_id: &str) -> Option<&str> {
-    target_id.strip_prefix("node:").filter(|raw| !raw.is_empty())
+    target_id
+        .strip_prefix("node:")
+        .filter(|raw| !raw.is_empty())
 }
 
 #[cfg(any(windows, test))]
@@ -1520,13 +1519,104 @@ fn pipewire_command_exists(command: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
+fn missing_pipewire_tools() -> Vec<&'static str> {
+    let mut missing = Vec::new();
+
+    if !pipewire_command_exists("pw-dump") {
+        missing.push("pw-dump");
+    }
+
+    if !pipewire_command_exists("pw-record") {
+        missing.push("pw-record");
+    }
+
+    missing
+}
+
+#[cfg(target_os = "linux")]
 fn pipewire_tools_available() -> bool {
-    pipewire_command_exists("pw-dump") && pipewire_command_exists("pw-record")
+    missing_pipewire_tools().is_empty()
 }
 
 #[cfg(not(target_os = "linux"))]
 fn pipewire_tools_available() -> bool {
     false
+}
+
+#[cfg(target_os = "linux")]
+fn missing_pipewire_tools_reason() -> String {
+    let missing_tools = missing_pipewire_tools();
+    if missing_tools.is_empty() {
+        return "Linux per-app audio capture requires PipeWire tool support.".to_string();
+    }
+
+    format!(
+        "Linux per-app audio capture requires the PipeWire tools `{}`.",
+        missing_tools.join("`, `")
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn missing_pipewire_tools_reason() -> String {
+    String::new()
+}
+
+#[cfg(target_os = "linux")]
+fn detect_linux_session_type() -> String {
+    let session_type = std::env::var("XDG_SESSION_TYPE")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+
+    if let Some(session_type) = session_type {
+        return session_type;
+    }
+
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return "wayland".to_string();
+    }
+
+    if std::env::var_os("DISPLAY").is_some() {
+        return "x11".to_string();
+    }
+
+    "unknown".to_string()
+}
+
+#[cfg(target_os = "linux")]
+fn probe_linux_x11_display() -> (bool, Option<String>) {
+    use std::ptr;
+
+    if std::env::var_os("DISPLAY").is_none() {
+        return (
+            false,
+            Some("No X11 display was detected for the current Linux session.".to_string()),
+        );
+    }
+
+    let xlib = match xlib::Xlib::open() {
+        Ok(xlib) => xlib,
+        Err(_) => {
+            return (
+                false,
+                Some("X11 library (libX11.so) not found. Global push keybind monitoring requires X11 or XWayland.".to_string()),
+            )
+        }
+    };
+
+    let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
+    if display.is_null() {
+        return (
+            false,
+            Some(
+                "Could not connect to the current X11 display. Global push keybind monitoring requires X11 or XWayland."
+                    .to_string(),
+            ),
+        );
+    }
+
+    unsafe { (xlib.XCloseDisplay)(display) };
+    (true, None)
 }
 
 #[cfg(target_os = "linux")]
@@ -1538,10 +1628,7 @@ fn run_pipewire_command(command: &str, arguments: &[&str]) -> Result<Vec<u8>, St
 
     if !output.status.success() {
         let stderr_output = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "`{command}` failed: {}",
-            stderr_output.trim()
-        ));
+        return Err(format!("`{command}` failed: {}", stderr_output.trim()));
     }
 
     Ok(output.stdout)
@@ -1704,7 +1791,9 @@ fn start_linux_target_capture(
     let Some(stdout_pipe) = child.stdout.take() else {
         let _ = child.kill();
         let _ = child.wait();
-        return Err(format!("`pw-record` did not expose stdout for {target_id}."));
+        return Err(format!(
+            "`pw-record` did not expose stdout for {target_id}."
+        ));
     };
 
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -1765,7 +1854,10 @@ fn start_linux_target_capture(
                     continue;
                 }
 
-                eprintln!("[capture-sidecar] linux target {}: {}", target_id, trimmed_line);
+                eprintln!(
+                    "[capture-sidecar] linux target {}: {}",
+                    target_id, trimmed_line
+                );
             }
         })
     });
@@ -1933,7 +2025,12 @@ fn get_audio_targets() -> Vec<AudioTarget> {
         };
         let Some(target_object_id) = linux_prop_as_str(props, "object.serial")
             .map(ToString::to_string)
-            .or_else(|| object.get("id").and_then(linux_value_as_u32).map(|raw| raw.to_string()))
+            .or_else(|| {
+                object
+                    .get("id")
+                    .and_then(linux_value_as_u32)
+                    .map(|raw| raw.to_string())
+            })
         else {
             continue;
         };
@@ -2162,8 +2259,14 @@ fn capture_loopback_audio(
 
     let reason = (|| {
         let (activation_pid, activation_mode) = match self_exclude_pid {
-            Some(exclude_pid) => (exclude_pid, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE),
-            None => (target_pid, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE),
+            Some(exclude_pid) => (
+                exclude_pid,
+                PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+            ),
+            None => (
+                target_pid,
+                PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+            ),
         };
         let audio_client = activate_process_loopback_client(activation_pid, activation_mode)?;
         let capture_format = WAVEFORMATEX {
@@ -2356,8 +2459,7 @@ fn capture_loopback_audio(
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
     if let Some(self_exclude_pid) = self_exclude_pid {
-        let (event_sender, event_receiver) =
-            std::sync::mpsc::channel::<LinuxCaptureEvent>();
+        let (event_sender, event_receiver) = std::sync::mpsc::channel::<LinuxCaptureEvent>();
         let mut captures: HashMap<String, LinuxTargetCapture> = HashMap::new();
         let mut sequence: u64 = 0;
         let mut last_refresh_at = Instant::now() - Duration::from_secs(1);
@@ -2455,8 +2557,7 @@ fn capture_loopback_audio(
                             stop_linux_target_capture(capture);
                         }
                         return CaptureOutcome::capture_error(
-                            "Linux system capture channel disconnected unexpectedly."
-                                .to_string(),
+                            "Linux system capture channel disconnected unexpectedly.".to_string(),
                         );
                     }
                 }
@@ -2464,17 +2565,19 @@ fn capture_loopback_audio(
 
             let exited_target_ids = captures
                 .iter_mut()
-                .filter_map(|(capture_target_id, capture)| match capture.process.try_wait() {
-                    Ok(Some(_status)) => Some(capture_target_id.clone()),
-                    Ok(None) => None,
-                    Err(error) => {
-                        eprintln!(
-                            "[capture-sidecar] Failed waiting on `pw-record` for {}: {}",
-                            capture_target_id, error
-                        );
-                        Some(capture_target_id.clone())
-                    }
-                })
+                .filter_map(
+                    |(capture_target_id, capture)| match capture.process.try_wait() {
+                        Ok(Some(_status)) => Some(capture_target_id.clone()),
+                        Ok(None) => None,
+                        Err(error) => {
+                            eprintln!(
+                                "[capture-sidecar] Failed waiting on `pw-record` for {}: {}",
+                                capture_target_id, error
+                            );
+                            Some(capture_target_id.clone())
+                        }
+                    },
+                )
                 .collect::<Vec<_>>();
 
             for exited_target_id in exited_target_ids {
@@ -2520,9 +2623,7 @@ fn capture_loopback_audio(
     {
         Ok(child) => child,
         Err(error) => {
-            return CaptureOutcome::capture_error(format!(
-                "Failed to launch `pw-record`: {error}"
-            ))
+            return CaptureOutcome::capture_error(format!("Failed to launch `pw-record`: {error}"))
         }
     };
 
@@ -2555,9 +2656,8 @@ fn capture_loopback_audio(
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
                 Err(error) => {
-                    let _ = frame_sender.send(Err(format!(
-                        "Failed reading `pw-record` PCM data: {error}"
-                    )));
+                    let _ = frame_sender
+                        .send(Err(format!("Failed reading `pw-record` PCM data: {error}")));
                     return;
                 }
             }
@@ -2958,8 +3058,7 @@ fn capture_loopback_audio(
     _app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
     CaptureOutcome::capture_error(
-        "Per-app audio capture is only available on Windows, macOS, and Linux."
-            .to_string(),
+        "Per-app audio capture is only available on Windows, macOS, and Linux.".to_string(),
     )
 }
 
@@ -3037,10 +3136,7 @@ fn handle_capabilities_get() -> Result<Value, String> {
             (
                 "best-effort",
                 "unsupported",
-                Some(
-                    "Linux per-app audio capture requires the PipeWire tools `pw-dump` and `pw-record`."
-                        .to_string(),
-                ),
+                Some(missing_pipewire_tools_reason()),
                 None,
             )
         }
@@ -3062,6 +3158,60 @@ fn handle_capabilities_get() -> Result<Value, String> {
 
     if let Some(reason) = reason {
         response["reason"] = json!(reason);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let session_type = detect_linux_session_type();
+        let pipewire_tools_available = pipewire_tools_available();
+        let (x11_display_available, x11_display_reason) = probe_linux_x11_display();
+        let app_audio_target_enumeration_reason = if pipewire_tools_available {
+            None
+        } else {
+            Some(missing_pipewire_tools_reason())
+        };
+        let source_audio_target_inference_reason = Some(
+            "Linux does not infer an app-audio target from the selected share source; choose a target manually."
+                .to_string(),
+        );
+        let (global_push_keybinds, global_push_keybinds_reason) = if x11_display_available {
+            if session_type == "wayland" {
+                (
+                    "best-effort",
+                    Some(
+                        "Global push keybinds use XWayland in Wayland sessions and may not work in every compositor."
+                            .to_string(),
+                    ),
+                )
+            } else {
+                ("supported", None)
+            }
+        } else {
+            ("unsupported", x11_display_reason.clone())
+        };
+
+        response["sessionType"] = json!(session_type);
+        response["pipewireToolsAvailable"] = json!(pipewire_tools_available);
+        response["appAudioTargetEnumerationSupported"] = json!(pipewire_tools_available);
+        response["sourceAudioTargetInferenceSupported"] = json!(false);
+        response["globalPushKeybinds"] = json!(global_push_keybinds);
+        response["x11DisplayAvailable"] = json!(x11_display_available);
+
+        if let Some(reason) = app_audio_target_enumeration_reason {
+            response["appAudioTargetEnumerationReason"] = json!(reason);
+        }
+
+        if let Some(reason) = source_audio_target_inference_reason {
+            response["sourceAudioTargetInferenceReason"] = json!(reason);
+        }
+
+        if let Some(reason) = global_push_keybinds_reason {
+            response["globalPushKeybindsReason"] = json!(reason);
+        }
+
+        if let Some(reason) = x11_display_reason {
+            response["x11DisplayReason"] = json!(reason);
+        }
     }
 
     Ok(response)
@@ -3174,8 +3324,7 @@ fn handle_audio_capture_start(
     } else {
         if cfg!(target_os = "linux") && parsed.app_audio_target_id.is_none() {
             return Err(
-                "Linux per-app audio capture requires selecting an application target."
-                    .to_string(),
+                "Linux per-app audio capture requires selecting an application target.".to_string(),
             );
         }
 
@@ -3185,10 +3334,9 @@ fn handle_audio_capture_start(
             .and_then(resolve_source_to_pid)
             .map(|pid| format!("pid:{pid}"));
 
-        let id = parsed
-            .app_audio_target_id
-            .or(source_pid)
-            .ok_or_else(|| "No app audio target was provided and source mapping failed".to_string())?;
+        let id = parsed.app_audio_target_id.or(source_pid).ok_or_else(|| {
+            "No app audio target was provided and source mapping failed".to_string()
+        })?;
 
         let target = available_targets
             .into_iter()
@@ -3200,7 +3348,11 @@ fn handle_audio_capture_start(
 
     // In per-app mode selfExcludePid is not forwarded — the include-mode loopback only
     // captures the target's process tree, so Ripcord's audio is never present there.
-    let effective_exclude_pid = if use_exclude_mode { self_exclude_pid } else { None };
+    let effective_exclude_pid = if use_exclude_mode {
+        self_exclude_pid
+    } else {
+        None
+    };
 
     let session_id = Uuid::new_v4().to_string();
     eprintln!(
