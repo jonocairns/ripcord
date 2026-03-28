@@ -29,4 +29,19 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     assert.equal(resolved.perAppAudio, "supported");
     assert.equal(resolved.sidecarAvailable, true);
   });
+
+  void it("downgrades macOS per-app audio when the sidecar is unavailable", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("darwin");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: false,
+      sidecarReason: "macOS helper missing",
+    });
+
+    assert.equal(resolved.systemAudio, "unsupported");
+    assert.equal(resolved.perAppAudio, "unsupported");
+    assert.equal(resolved.sidecarAvailable, false);
+    assert.match(resolved.notes.join(" "), /helper missing/i);
+  });
 });
