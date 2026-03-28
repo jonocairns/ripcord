@@ -22,14 +22,27 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useForm } from '@/hooks/use-form';
+import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
-import { ScreenAudioMode } from '@/runtime/types';
+import { ScreenAudioMode, type TDesktopCapabilities } from '@/runtime/types';
 import { type Resolution, VideoCodecPreference } from '@/types';
 import { useAvailableDevices } from './hooks/use-available-devices';
 import { MicrophoneTestPanel } from './microphone-test-panel';
 import ResolutionFpsControl from './resolution-fps-control';
 
 type TPushKeybindField = 'pushToTalkKeybind' | 'pushToMuteKeybind';
+
+const pushKeybindSupportLabelMap = {
+	supported: 'Supported',
+	'best-effort': 'Best effort',
+	unsupported: 'Unavailable',
+} as const;
+
+const pushKeybindIssueAlertClassNameBySeverity = {
+	info: 'border-blue-200/70 bg-blue-500/10 text-blue-100',
+	warning: 'border-amber-300/40 bg-amber-500/10 text-amber-100',
+	error: 'border-destructive/40 bg-destructive/10 text-destructive',
+} as const;
 
 const Devices = memo(() => {
 	const desktopBridge = getDesktopBridge();
@@ -41,6 +54,7 @@ const Devices = memo(() => {
 	const showBrowserWasmNoiseSuppressionToggle = !!values.noiseSuppression;
 	const lastLoadedDevicesRef = useRef(devices);
 	const [desktopAppVersion, setDesktopAppVersion] = useState<string>();
+	const [desktopCapabilities, setDesktopCapabilities] = useState<TDesktopCapabilities | undefined>(undefined);
 	const [capturingKeybindField, setCapturingKeybindField] = useState<TPushKeybindField | undefined>(undefined);
 	const normalizedMicrophoneId = normalizeStoredMediaDeviceId(values.microphoneId, inputDevices, {
 		groupId: values.microphoneGroupId,
@@ -60,6 +74,11 @@ const Devices = memo(() => {
 	});
 	const microphoneOptions = getSelectableMediaDeviceOptions(inputDevices, 'Default Microphone');
 	const webcamOptions = getSelectableMediaDeviceOptions(videoDevices, 'Default Webcam');
+	const globalPushKeybindIssues =
+		desktopCapabilities?.issues.filter((issue) => issue.affects.includes('global-push-keybinds')) ?? [];
+	const globalPushKeybindSupportLabel = desktopCapabilities
+		? pushKeybindSupportLabelMap[desktopCapabilities.globalPushKeybinds]
+		: undefined;
 
 	const handleNoiseSuppressionChange = useCallback(
 		(checked: boolean) => {
@@ -168,6 +187,37 @@ const Devices = memo(() => {
 			.catch(() => {
 				// ignore version lookup failures
 			});
+	}, [desktopBridge]);
+
+	useEffect(() => {
+		if (!desktopBridge) {
+			setDesktopCapabilities(undefined);
+			return;
+		}
+
+		let cancelled = false;
+
+		void desktopBridge
+			.getCapabilities()
+			.then((capabilities) => {
+				if (!cancelled) {
+					setDesktopCapabilities(normalizeDesktopCapabilities(capabilities));
+				}
+			})
+			.catch(() => {
+				if (!cancelled) {
+					setDesktopCapabilities(undefined);
+				}
+			});
+
+		const unsubscribe = desktopBridge.subscribeCapabilities((nextCapabilities) => {
+			setDesktopCapabilities(normalizeDesktopCapabilities(nextCapabilities));
+		});
+
+		return () => {
+			cancelled = true;
+			unsubscribe();
+		};
 	}, [desktopBridge]);
 
 	useEffect(() => {
@@ -358,12 +408,34 @@ const Devices = memo(() => {
 
 					{hasDesktopBridge && (
 						<div className="space-y-3">
-							<div className="space-y-1">
-								<p className="text-sm font-medium">Push keybinds (Desktop)</p>
-								<p className="text-xs text-muted-foreground">
-									Hold the configured key to temporarily unmute (push to talk) or mute (push to mute). <br />
-									Press Escape while capturing to cancel.
-								</p>
+							<div className="space-y-2">
+								<div className="space-y-1">
+									<div className="flex flex-wrap items-center gap-2">
+										<p className="text-sm font-medium">Push keybinds (Desktop)</p>
+										{globalPushKeybindSupportLabel && (
+											<Badge variant="outline">Support: {globalPushKeybindSupportLabel}</Badge>
+										)}
+									</div>
+									<p className="text-xs text-muted-foreground">
+										Hold the configured key to temporarily unmute (push to talk) or mute (push to mute). <br />
+										Press Escape while capturing to cancel.
+									</p>
+								</div>
+
+								{globalPushKeybindIssues.map((issue) => (
+									<Alert
+										key={`${issue.code}:${issue.message}`}
+										className={pushKeybindIssueAlertClassNameBySeverity[issue.severity]}
+									>
+										<AlertTitle>{issue.title}</AlertTitle>
+										<AlertDescription className="text-current/90">
+											<p>{issue.message}</p>
+											{issue.guidance.map((guidance) => (
+												<p key={guidance}>{guidance}</p>
+											))}
+										</AlertDescription>
+									</Alert>
+								))}
 							</div>
 							<div className="space-y-2">
 								<div className="flex items-center gap-3">

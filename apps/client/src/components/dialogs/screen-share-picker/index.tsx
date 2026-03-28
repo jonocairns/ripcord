@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import {
 	ScreenAudioMode,
@@ -46,7 +47,7 @@ const issueAlertClassNameBySeverity = {
 const ScreenSharePickerDialog = memo(
 	({ isOpen, sources, capabilities, defaultAudioMode, onConfirm, onCancel }: TScreenSharePickerDialogProps) => {
 		const desktopBridge = getDesktopBridge();
-		const [liveCapabilities, setLiveCapabilities] = useState(capabilities);
+		const [liveCapabilities, setLiveCapabilities] = useState(() => normalizeDesktopCapabilities(capabilities));
 		const [selectedSourceId, setSelectedSourceId] = useState(sources[0]?.id);
 		const [audioMode, setAudioMode] = useState(defaultAudioMode);
 		const [appAudioTargetsResult, setAppAudioTargetsResult] = useState<TDesktopAppAudioTargetsResult>({
@@ -72,12 +73,11 @@ const ScreenSharePickerDialog = memo(
 			suggestedTargetId: appAudioTargetsResult.suggestedTargetId,
 			requiresManualSelection: appAudioTargetsResult.requiresManualSelection,
 		});
-		const capabilityIssues = Array.isArray(liveCapabilities.issues) ? liveCapabilities.issues : [];
 		const screenShareIssues = useMemo(() => {
-			return capabilityIssues.filter((issue) => {
+			return liveCapabilities.issues.filter((issue) => {
 				return issue.affects.includes('system-audio') || issue.affects.includes('per-app-audio');
 			});
-		}, [capabilityIssues]);
+		}, [liveCapabilities.issues]);
 		const shouldResolveAppAudioTargets = isOpen && appAudioTargetBehavior.shouldResolveAppAudioTargets;
 		const requiresManualAppAudioTarget =
 			shouldResolveAppAudioTargets && appAudioTargetBehavior.requiresManualAppAudioTarget;
@@ -116,7 +116,7 @@ const ScreenSharePickerDialog = memo(
 		};
 
 		useEffect(() => {
-			setLiveCapabilities(capabilities);
+			setLiveCapabilities(normalizeDesktopCapabilities(capabilities));
 		}, [capabilities]);
 
 		useEffect(() => {
@@ -139,7 +139,7 @@ const ScreenSharePickerDialog = memo(
 			}
 
 			return desktopBridge.subscribeCapabilities((nextCapabilities) => {
-				setLiveCapabilities(nextCapabilities);
+				setLiveCapabilities(normalizeDesktopCapabilities(nextCapabilities));
 			});
 		}, [desktopBridge, isOpen]);
 
