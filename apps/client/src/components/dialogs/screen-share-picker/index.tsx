@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -36,6 +37,12 @@ const supportLabelMap = {
 	unsupported: 'Unavailable',
 } as const;
 
+const issueAlertClassNameBySeverity = {
+	info: 'border-blue-200/70 bg-blue-500/10 text-blue-100',
+	warning: 'border-amber-300/40 bg-amber-500/10 text-amber-100',
+	error: 'border-destructive/40 bg-destructive/10 text-destructive',
+} as const;
+
 const ScreenSharePickerDialog = memo(
 	({ isOpen, sources, capabilities, defaultAudioMode, onConfirm, onCancel }: TScreenSharePickerDialogProps) => {
 		const desktopBridge = getDesktopBridge();
@@ -65,6 +72,11 @@ const ScreenSharePickerDialog = memo(
 			suggestedTargetId: appAudioTargetsResult.suggestedTargetId,
 			requiresManualSelection: appAudioTargetsResult.requiresManualSelection,
 		});
+		const screenShareIssues = useMemo(() => {
+			return liveCapabilities.issues.filter((issue) => {
+				return issue.affects.includes('system-audio') || issue.affects.includes('per-app-audio');
+			});
+		}, [liveCapabilities.issues]);
 		const shouldResolveAppAudioTargets = isOpen && appAudioTargetBehavior.shouldResolveAppAudioTargets;
 		const requiresManualAppAudioTarget =
 			shouldResolveAppAudioTargets && appAudioTargetBehavior.requiresManualAppAudioTarget;
@@ -222,6 +234,25 @@ const ScreenSharePickerDialog = memo(
 							<Badge variant="outline">Per-App Audio: {supportLabelMap[liveCapabilities.perAppAudio]}</Badge>
 							<Badge variant="outline">Platform: {liveCapabilities.platform}</Badge>
 						</div>
+
+						{screenShareIssues.length > 0 && (
+							<div className="space-y-2">
+								{screenShareIssues.map((issue) => (
+									<Alert
+										key={`${issue.code}:${issue.message}`}
+										className={issueAlertClassNameBySeverity[issue.severity]}
+									>
+										<AlertTitle>{issue.title}</AlertTitle>
+										<AlertDescription className="text-current/90">
+											<p>{issue.message}</p>
+											{issue.guidance.map((guidance) => (
+												<p key={guidance}>{guidance}</p>
+											))}
+										</AlertDescription>
+									</Alert>
+								))}
+							</div>
+						)}
 
 						{liveCapabilities.notes.length > 0 && (
 							<div className="text-xs text-muted-foreground space-y-1">

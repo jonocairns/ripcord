@@ -15,7 +15,8 @@ void describe("resolveDesktopCaptureCapabilities", () => {
 
     assert.equal(resolved.perAppAudio, "unsupported");
     assert.equal(resolved.sidecarAvailable, false);
-    assert.match(resolved.notes.join(" "), /binary not found/);
+    assert.equal(resolved.issues[0]?.code, "desktop-sidecar-unavailable");
+    assert.match(resolved.issues[0]?.message ?? "", /binary not found/i);
   });
 
   void it("keeps per-app audio enabled when sidecar is available", () => {
@@ -51,9 +52,13 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     assert.equal(resolved.systemAudio, "best-effort");
     assert.equal(resolved.perAppAudio, "unsupported");
     assert.equal(resolved.sidecarAvailable, true);
-    assert.match(resolved.notes.join(" "), /pw-record is not installed/i);
+    assert.equal(resolved.issues[0]?.code, "linux-pipewire-tools-missing");
+    assert.match(
+      resolved.issues[0]?.message ?? "",
+      /pw-record is not installed/i,
+    );
     assert.match(resolved.notes.join(" "), /session type: X11/i);
-    assert.doesNotMatch(resolved.notes.join(" "), /choose a target manually/i);
+    assert.equal(resolved.globalPushKeybinds, "best-effort");
   });
 
   void it("keeps linux per-app audio available when the sidecar path is ready", () => {
@@ -74,9 +79,47 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     assert.equal(resolved.systemAudio, "best-effort");
     assert.equal(resolved.perAppAudio, "best-effort");
     assert.equal(resolved.sidecarAvailable, true);
+    assert.equal(resolved.globalPushKeybinds, "best-effort");
+    assert.equal(
+      resolved.issues.find(
+        (issue) => issue.code === "linux-manual-app-target-selection-required",
+      )?.title,
+      "Manual app selection required",
+    );
     assert.match(resolved.notes.join(" "), /PipeWire/i);
     assert.match(resolved.notes.join(" "), /session type: Wayland/i);
-    assert.match(resolved.notes.join(" "), /choose a target manually/i);
+  });
+
+  void it("surfaces linux global push keybind requirements as structured issues", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: true,
+      sidecarPerAppAudioSupported: true,
+      sidecarCapabilities: {
+        sessionType: "wayland",
+        pipewireToolsAvailable: true,
+        appAudioTargetEnumerationSupported: true,
+        sourceAudioTargetInferenceSupported: false,
+        globalPushKeybinds: "unsupported",
+        globalPushKeybindsReason:
+          "Global push keybinds require an X11 display server connection.",
+        globalPushKeybindsReasonCode: "linux-x11-display-required",
+        x11DisplayAvailable: false,
+        x11DisplayReason:
+          "Global push keybinds require an X11 display server connection.",
+        x11DisplayReasonCode: "linux-x11-display-required",
+      },
+    });
+
+    assert.equal(resolved.globalPushKeybinds, "unsupported");
+    assert.equal(
+      resolved.issues.find(
+        (issue) => issue.code === "linux-x11-display-required",
+      )?.title,
+      "Global push keybinds unavailable",
+    );
   });
 
   void it("downgrades macOS per-app audio when the sidecar is unavailable", () => {
@@ -91,6 +134,7 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     assert.equal(resolved.systemAudio, "unsupported");
     assert.equal(resolved.perAppAudio, "unsupported");
     assert.equal(resolved.sidecarAvailable, false);
-    assert.match(resolved.notes.join(" "), /helper missing/i);
+    assert.equal(resolved.issues[0]?.code, "macos-screen-audio-unavailable");
+    assert.match(resolved.issues[0]?.message ?? "", /helper missing/i);
   });
 });

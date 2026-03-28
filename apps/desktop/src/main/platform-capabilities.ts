@@ -14,6 +14,8 @@ const getDesktopCapabilitiesForPlatform = (
         platform: "windows",
         systemAudio: "supported",
         perAppAudio: "supported",
+        globalPushKeybinds: "supported",
+        issues: [],
         notes: [],
       };
     case "darwin":
@@ -21,6 +23,8 @@ const getDesktopCapabilitiesForPlatform = (
         platform: "macos",
         systemAudio: "supported",
         perAppAudio: "supported",
+        globalPushKeybinds: "supported",
+        issues: [],
         notes: [
           "macOS system and per-app audio capture use the Rust sidecar and ScreenCaptureKit.",
           "Grant Screen Recording permission in System Settings if macOS blocks capture startup.",
@@ -33,6 +37,8 @@ const getDesktopCapabilitiesForPlatform = (
         platform: "linux",
         systemAudio: "best-effort",
         perAppAudio: "best-effort",
+        globalPushKeybinds: "best-effort",
+        issues: [],
         notes: [
           "Linux audio capture depends on your compositor and PipeWire portal.",
         ],
