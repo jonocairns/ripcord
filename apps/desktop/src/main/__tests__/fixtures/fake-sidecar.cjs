@@ -3,6 +3,12 @@ const readline = require('node:readline');
 let activeSession = null;
 let intervalId = null;
 const crashAfterMs = Number(process.env.FAKE_SIDECAR_CRASH_MS || 0);
+const capabilityPlatform = process.env.FAKE_SIDECAR_PLATFORM || process.platform;
+const capabilitySystemAudio =
+  process.env.FAKE_SIDECAR_SYSTEM_AUDIO || 'supported';
+const capabilityPerAppAudio =
+  process.env.FAKE_SIDECAR_PER_APP_AUDIO || 'supported';
+const capabilityReason = process.env.FAKE_SIDECAR_REASON;
 
 const send = (payload) => {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -152,8 +158,10 @@ rl.on('line', (line) => {
 
   if (method === 'capabilities.get') {
     sendResponse(id, {
-      platform: process.platform,
-      perAppAudio: 'supported'
+      platform: capabilityPlatform,
+      systemAudio: capabilitySystemAudio,
+      perAppAudio: capabilityPerAppAudio,
+      reason: capabilityReason
     });
     return;
   }

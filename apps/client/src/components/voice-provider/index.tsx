@@ -1156,15 +1156,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				}
 
 				// Only route system audio through the sidecar when the desktop
-				// capture stack advertises a sidecar-backed path. Linux uses a
-				// best-effort PipeWire mix with Sharkord exclusion, while macOS
-				// still falls through to getDisplayMedia here.
+				// capture stack advertises support for the sidecar-backed path.
+				// Linux uses a best-effort PipeWire mix with self-exclusion, and
+				// macOS uses the ScreenCaptureKit helper-backed sidecar path.
 				let sidecarSupported = false;
 				if (desktopBridge && audioMode === ScreenAudioMode.SYSTEM) {
 					try {
 						const caps = await desktopBridge.getCapabilities();
-						sidecarSupported =
-							caps.sidecarAvailable === true && caps.perAppAudio !== 'unsupported' && caps.platform !== 'macos';
+						sidecarSupported = caps.sidecarAvailable === true && caps.perAppAudio !== 'unsupported';
 					} catch {
 						// If capabilities check fails, don't attempt sidecar for system audio.
 					}

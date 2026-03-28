@@ -43,7 +43,10 @@ type TSidecarStatus = {
 };
 
 type TSidecarCapabilities = {
-  perAppAudio?: "supported" | "best-effort" | "unsupported";
+  platform?: string;
+  systemAudio?: TSupportLevel;
+  perAppAudio?: TSupportLevel;
+  reason?: string;
   perAppAudioReason?: string;
 };
 
@@ -158,6 +161,22 @@ const isSidecarCapabilities = (
   }
 
   if (
+    "platform" in value &&
+    value.platform !== undefined &&
+    typeof value.platform !== "string"
+  ) {
+    return false;
+  }
+
+  if (
+    "systemAudio" in value &&
+    value.systemAudio !== undefined &&
+    !isSupportLevel(value.systemAudio)
+  ) {
+    return false;
+  }
+
+  if (
     "perAppAudio" in value &&
     value.perAppAudio !== undefined &&
     !isSupportLevel(value.perAppAudio)
@@ -165,7 +184,10 @@ const isSidecarCapabilities = (
     return false;
   }
 
-  return hasOptionalString(value, "perAppAudioReason");
+  return (
+    hasOptionalString(value, "reason") &&
+    hasOptionalString(value, "perAppAudioReason")
+  );
 };
 
 const isDesktopAppAudioTarget = (
@@ -473,7 +495,19 @@ class CaptureSidecarManager {
 
   async getStatus(): Promise<TSidecarStatus> {
     try {
-      await this.ensureSidecarReady();
+      const capabilities = await this.getCapabilities();
+
+      if (
+        capabilities.platform === "macos" &&
+        (capabilities.systemAudio !== "supported" ||
+          capabilities.perAppAudio !== "supported")
+      ) {
+        return {
+          available: false,
+          reason:
+            capabilities.reason || "macOS screen audio capture is unavailable.",
+        };
+      }
 
       return {
         available: true,

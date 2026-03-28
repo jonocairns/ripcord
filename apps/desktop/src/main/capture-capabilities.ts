@@ -15,14 +15,6 @@ const resolveDesktopCaptureCapabilities = ({
 }: TResolveCapabilityOptions): TDesktopCapabilities => {
   const notes = [...baseCapabilities.notes];
 
-  if (baseCapabilities.platform === "macos") {
-    return {
-      ...baseCapabilities,
-      sidecarAvailable,
-      notes,
-    };
-  }
-
   if (baseCapabilities.platform === "linux") {
     if (!sidecarAvailable || !sidecarPerAppAudioSupported) {
       notes.push(
@@ -52,13 +44,19 @@ const resolveDesktopCaptureCapabilities = ({
 
   if (!sidecarAvailable || !sidecarPerAppAudioSupported) {
     notes.push(
-      sidecarReason
-        ? `Per-app audio capture unavailable: ${sidecarReason}`
-        : "Per-app audio capture unavailable because the Rust sidecar is not running.",
+      baseCapabilities.platform === "macos"
+        ? `Screen audio capture unavailable: ${sidecarReason ?? "the Rust sidecar is not running."}`
+        : sidecarReason
+          ? `Per-app audio capture unavailable: ${sidecarReason}`
+          : "Per-app audio capture unavailable because the Rust sidecar is not running.",
     );
 
     return {
       ...baseCapabilities,
+      systemAudio:
+        baseCapabilities.platform === "macos"
+          ? "unsupported"
+          : baseCapabilities.systemAudio,
       perAppAudio: "unsupported",
       sidecarAvailable: false,
       notes,

@@ -130,6 +130,34 @@ void describe("CaptureSidecarManager", () => {
     }
   });
 
+  void it("reports unavailable when the macOS helper readiness probe fails", async () => {
+    const manager = new CaptureSidecarManager({
+      spawnSidecar: () => {
+        return spawn(process.execPath, [fakeSidecarPath], {
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            FAKE_SIDECAR_PLATFORM: "macos",
+            FAKE_SIDECAR_SYSTEM_AUDIO: "unsupported",
+            FAKE_SIDECAR_PER_APP_AUDIO: "unsupported",
+            FAKE_SIDECAR_REASON:
+              "ScreenCaptureKit audio capture requires macOS 13 or newer.",
+          },
+        });
+      },
+      restartDelayMs: 10,
+    });
+
+    try {
+      const status = await manager.getStatus();
+
+      assert.equal(status.available, false);
+      assert.match(status.reason ?? "", /macOS 13 or newer/i);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   void it("drops malformed app audio frames for pcm forwarding", async () => {
     const manager = new CaptureSidecarManager({
       resolveBinaryPath: () => undefined,
