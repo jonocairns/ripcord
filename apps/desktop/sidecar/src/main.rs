@@ -1547,7 +1547,7 @@ fn pipewire_tools_available() -> bool {
 fn missing_pipewire_tools_reason() -> String {
     let missing_tools = missing_pipewire_tools();
     if missing_tools.is_empty() {
-        return "Linux per-app audio capture requires PipeWire tool support.".to_string();
+        return String::new();
     }
 
     format!(

@@ -44,6 +44,9 @@ let lastDesktopCapabilitiesSnapshot: string | undefined;
 let refreshDesktopCapabilitiesPromise:
   | Promise<TDesktopCapabilities>
   | undefined;
+let refreshDesktopCapabilitiesBroadcastPending = false;
+let refreshDesktopCapabilitiesForceBroadcastPending = false;
+let appIsShuttingDown = false;
 
 const disposeAppAudioFrameEgressPort = (
   port: MessagePortMain | undefined = appAudioFrameEgressPort,
@@ -123,29 +126,60 @@ const getEffectiveDesktopCapabilities = async () => {
 const refreshDesktopCapabilities = async (
   options: { broadcast?: boolean; forceBroadcast?: boolean } = {},
 ) => {
+  refreshDesktopCapabilitiesBroadcastPending =
+    refreshDesktopCapabilitiesBroadcastPending || options.broadcast === true;
+  refreshDesktopCapabilitiesForceBroadcastPending =
+    refreshDesktopCapabilitiesForceBroadcastPending ||
+    options.forceBroadcast === true;
+
   if (refreshDesktopCapabilitiesPromise) {
     return await refreshDesktopCapabilitiesPromise;
   }
 
   refreshDesktopCapabilitiesPromise = (async () => {
-    const capabilities = await getEffectiveDesktopCapabilities();
-    const snapshot = JSON.stringify(capabilities);
-    const didChange = snapshot !== lastDesktopCapabilitiesSnapshot;
-    lastDesktopCapabilitiesSnapshot = snapshot;
+    while (true) {
+      const capabilities = await getEffectiveDesktopCapabilities();
+      const snapshot = JSON.stringify(capabilities);
+      const didChange = snapshot !== lastDesktopCapabilitiesSnapshot;
+      lastDesktopCapabilitiesSnapshot = snapshot;
 
-    if (options.broadcast && (options.forceBroadcast || didChange)) {
-      mainWindow?.webContents.send(
-        "desktop:capabilities-changed",
-        capabilities,
-      );
+      const shouldBroadcast = refreshDesktopCapabilitiesBroadcastPending;
+      const shouldForceBroadcast =
+        refreshDesktopCapabilitiesForceBroadcastPending;
+      refreshDesktopCapabilitiesBroadcastPending = false;
+      refreshDesktopCapabilitiesForceBroadcastPending = false;
+
+      if (shouldBroadcast && (shouldForceBroadcast || didChange)) {
+        mainWindow?.webContents.send(
+          "desktop:capabilities-changed",
+          capabilities,
+        );
+      }
+
+      if (
+        !refreshDesktopCapabilitiesBroadcastPending &&
+        !refreshDesktopCapabilitiesForceBroadcastPending
+      ) {
+        return capabilities;
+      }
     }
-
-    return capabilities;
   })().finally(() => {
     refreshDesktopCapabilitiesPromise = undefined;
   });
 
   return await refreshDesktopCapabilitiesPromise;
+};
+
+const requestDesktopCapabilitiesRefresh = (
+  options: { broadcast?: boolean; forceBroadcast?: boolean } = {},
+) => {
+  if (appIsShuttingDown) {
+    return;
+  }
+
+  void refreshDesktopCapabilities(options).catch((error) => {
+    console.warn("[desktop] Failed to refresh desktop capabilities", error);
+  });
 };
 
 const createMainWindow = () => {
@@ -171,6 +205,11 @@ const createMainWindow = () => {
 
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
+  });
+  mainWindow.on("focus", () => {
+    requestDesktopCapabilitiesRefresh({
+      broadcast: true,
+    });
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -432,14 +471,13 @@ void app
     captureSidecarManager.onPushKeybind((event) => {
       emitPushKeybindEvent(event);
     });
-    captureSidecarManager.onLifecycle(() => {
-      void refreshDesktopCapabilities({
+    captureSidecarManager.onLifecycle((event) => {
+      if (appIsShuttingDown && event.kind === "exit") {
+        return;
+      }
+
+      requestDesktopCapabilitiesRefresh({
         broadcast: true,
-      }).catch((error) => {
-        console.warn(
-          "[desktop] Failed to refresh capabilities after sidecar lifecycle change",
-          error,
-        );
       });
     });
 
@@ -450,26 +488,9 @@ void app
     registerIpcHandlers();
     setupDisplayMediaHandler();
     createMainWindow();
-
-    mainWindow?.on("focus", () => {
-      void refreshDesktopCapabilities({
-        broadcast: true,
-      }).catch((error) => {
-        console.warn(
-          "[desktop] Failed to refresh capabilities on window focus",
-          error,
-        );
-      });
-    });
-
-    void refreshDesktopCapabilities({
+    requestDesktopCapabilitiesRefresh({
       broadcast: true,
       forceBroadcast: true,
-    }).catch((error) => {
-      console.warn(
-        "[desktop] Failed to refresh initial desktop capabilities",
-        error,
-      );
     });
 
     app.on("activate", () => {
@@ -489,6 +510,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  appIsShuttingDown = true;
   disposeAppAudioFrameEgressPort();
 
   desktopUpdater.dispose();
