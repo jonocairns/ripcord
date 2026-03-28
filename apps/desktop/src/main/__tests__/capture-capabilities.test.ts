@@ -44,6 +44,7 @@ void describe("resolveDesktopCaptureCapabilities", () => {
         pipewireToolsAvailable: false,
         appAudioTargetEnumerationSupported: false,
         appAudioTargetEnumerationReason: "pw-record is not installed",
+        sourceAudioTargetInferenceSupported: false,
       },
     });
 
@@ -52,6 +53,7 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     assert.equal(resolved.sidecarAvailable, true);
     assert.match(resolved.notes.join(" "), /pw-record is not installed/i);
     assert.match(resolved.notes.join(" "), /session type: X11/i);
+    assert.doesNotMatch(resolved.notes.join(" "), /choose a target manually/i);
   });
 
   void it("keeps linux per-app audio available when the sidecar path is ready", () => {

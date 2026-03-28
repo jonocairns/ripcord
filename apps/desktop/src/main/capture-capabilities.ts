@@ -60,14 +60,6 @@ const resolveDesktopCaptureCapabilities = ({
       );
     }
 
-    if (sidecarCapabilities?.sourceAudioTargetInferenceSupported === false) {
-      appendNote(
-        notes,
-        sidecarCapabilities.sourceAudioTargetInferenceReason ??
-          "Linux does not infer the app audio target from the selected share source; choose a target manually.",
-      );
-    }
-
     if (!sidecarAvailable || !sidecarPerAppAudioSupported) {
       appendNote(
         notes,
@@ -82,6 +74,14 @@ const resolveDesktopCaptureCapabilities = ({
         sidecarAvailable,
         notes,
       };
+    }
+
+    if (sidecarCapabilities?.sourceAudioTargetInferenceSupported === false) {
+      appendNote(
+        notes,
+        sidecarCapabilities.sourceAudioTargetInferenceReason ??
+          "Linux does not infer the app audio target from the selected share source; choose a target manually.",
+      );
     }
 
     appendNote(
