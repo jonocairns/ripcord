@@ -58,7 +58,7 @@ const ScreenSharePickerDialog = memo(
 		}, [selectedSourceId, sources]);
 		const appAudioTargetBehavior = resolveAppAudioTargetBehavior({
 			audioMode,
-			perAppAudioSupported: capabilities.perAppAudio === 'supported',
+			perAppAudioSupported: capabilities.perAppAudio !== 'unsupported',
 			sourceKind: selectedSource?.kind,
 			suggestedTargetId: appAudioTargetsResult.suggestedTargetId,
 		});

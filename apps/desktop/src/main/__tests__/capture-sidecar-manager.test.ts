@@ -107,6 +107,29 @@ void describe("CaptureSidecarManager", () => {
     }
   });
 
+  void it("validates sidecar capabilities and target list responses", async () => {
+    const manager = new CaptureSidecarManager({
+      spawnSidecar: () => {
+        return spawn(process.execPath, [fakeSidecarPath], {
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+      },
+      restartDelayMs: 10,
+    });
+
+    try {
+      const capabilities = await manager.getCapabilities();
+      assert.equal(capabilities.perAppAudio, "supported");
+
+      const targets = await manager.listAppAudioTargets("window:1:0");
+      assert.equal(targets.targets.length, 1);
+      assert.equal(targets.targets[0]?.id, "pid:1234");
+      assert.equal(targets.suggestedTargetId, "pid:1234");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   void it("reports unavailable when the macOS helper readiness probe fails", async () => {
     const manager = new CaptureSidecarManager({
       spawnSidecar: () => {

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import path from "node:path";
 import type {
+  TAppAudioEndReason,
   TAppAudioFrame,
   TAppAudioPcmFrame,
   TAppAudioSession,
@@ -12,8 +13,8 @@ import type {
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
   TGlobalPushKeybindRegistrationResult,
-  TSupportLevel,
   TStartAppAudioCaptureInput,
+  TSupportLevel,
 } from "./types";
 
 type TSidecarResponse = {
@@ -46,6 +47,7 @@ type TSidecarCapabilities = {
   systemAudio?: TSupportLevel;
   perAppAudio?: TSupportLevel;
   reason?: string;
+  perAppAudioReason?: string;
 };
 
 type TAppAudioBinaryEgressInfo = {
@@ -76,42 +78,299 @@ type TElectronAppLike = {
   isPackaged?: boolean;
 };
 
+const SUPPORT_LEVELS: TSupportLevel[] = [
+  "supported",
+  "best-effort",
+  "unsupported",
+];
+const PUSH_KEYBIND_KINDS: TDesktopPushKeybindEvent["kind"][] = ["talk", "mute"];
+const APP_AUDIO_END_REASONS: TAppAudioEndReason[] = [
+  "capture_stopped",
+  "app_exited",
+  "capture_error",
+  "device_lost",
+  "sidecar_exited",
+];
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return !!value && typeof value === "object";
+};
+
+const isPositiveInteger = (value: unknown): value is number => {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+};
+
+const isNonNegativeInteger = (value: unknown): value is number => {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+};
+
+const hasOptionalString = (value: Record<string, unknown>, key: string) => {
+  return (
+    !(key in value) ||
+    value[key] === undefined ||
+    typeof value[key] === "string"
+  );
+};
+
+const hasOptionalPositiveInteger = (
+  value: Record<string, unknown>,
+  key: string,
+) => {
+  return (
+    !(key in value) || value[key] === undefined || isPositiveInteger(value[key])
+  );
+};
+
+const isSupportLevel = (value: unknown): value is TSupportLevel => {
+  return SUPPORT_LEVELS.some((supportLevel) => supportLevel === value);
+};
+
+const isPushKeybindKind = (
+  value: unknown,
+): value is TDesktopPushKeybindEvent["kind"] => {
+  return PUSH_KEYBIND_KINDS.some((kind) => kind === value);
+};
+
+const isAppAudioEndReason = (value: unknown): value is TAppAudioEndReason => {
+  return APP_AUDIO_END_REASONS.some((reason) => reason === value);
+};
+
+const isStringArray = (value: unknown): value is string[] => {
+  return (
+    Array.isArray(value) && value.every((entry) => typeof entry === "string")
+  );
+};
+
+const isElectronAppLike = (value: unknown): value is TElectronAppLike => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    !("isPackaged" in value) ||
+    value.isPackaged === undefined ||
+    typeof value.isPackaged === "boolean"
+  );
+};
+
+const isSidecarCapabilities = (
+  value: unknown,
+): value is TSidecarCapabilities => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (
+    "platform" in value &&
+    value.platform !== undefined &&
+    typeof value.platform !== "string"
+  ) {
+    return false;
+  }
+
+  if (
+    "systemAudio" in value &&
+    value.systemAudio !== undefined &&
+    !isSupportLevel(value.systemAudio)
+  ) {
+    return false;
+  }
+
+  if (
+    "perAppAudio" in value &&
+    value.perAppAudio !== undefined &&
+    !isSupportLevel(value.perAppAudio)
+  ) {
+    return false;
+  }
+
+  return (
+    hasOptionalString(value, "reason") &&
+    hasOptionalString(value, "perAppAudioReason")
+  );
+};
+
+const isDesktopAppAudioTarget = (
+  value: unknown,
+): value is TDesktopAppAudioTargetsResult["targets"][number] => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.id === "string" &&
+    typeof value.label === "string" &&
+    isPositiveInteger(value.pid) &&
+    typeof value.processName === "string"
+  );
+};
+
+const isDesktopAppAudioTargetsResult = (
+  value: unknown,
+): value is TDesktopAppAudioTargetsResult => {
+  if (!isRecord(value) || !Array.isArray(value.targets)) {
+    return false;
+  }
+
+  return (
+    value.targets.every((target) => isDesktopAppAudioTarget(target)) &&
+    hasOptionalString(value, "suggestedTargetId") &&
+    hasOptionalString(value, "warning")
+  );
+};
+
+const isAppAudioSession = (value: unknown): value is TAppAudioSession => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.sessionId === "string" &&
+    typeof value.targetId === "string" &&
+    isPositiveInteger(value.sampleRate) &&
+    isPositiveInteger(value.channels) &&
+    isPositiveInteger(value.framesPerBuffer) &&
+    hasOptionalPositiveInteger(value, "protocolVersion") &&
+    (!("encoding" in value) ||
+      value.encoding === undefined ||
+      value.encoding === "f32le_base64")
+  );
+};
+
+const isGlobalPushKeybindRegistrationResult = (
+  value: unknown,
+): value is TGlobalPushKeybindRegistrationResult => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.talkRegistered === "boolean" &&
+    typeof value.muteRegistered === "boolean" &&
+    isStringArray(value.errors)
+  );
+};
+
+const isAppAudioFrame = (value: unknown): value is TAppAudioFrame => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.sessionId === "string" &&
+    typeof value.targetId === "string" &&
+    isNonNegativeInteger(value.sequence) &&
+    isPositiveInteger(value.sampleRate) &&
+    isPositiveInteger(value.channels) &&
+    isPositiveInteger(value.frameCount) &&
+    typeof value.pcmBase64 === "string" &&
+    isPositiveInteger(value.protocolVersion) &&
+    value.encoding === "f32le_base64" &&
+    (!("droppedFrameCount" in value) ||
+      value.droppedFrameCount === undefined ||
+      isNonNegativeInteger(value.droppedFrameCount))
+  );
+};
+
+const isAppAudioStatusEvent = (
+  value: unknown,
+): value is TAppAudioStatusEvent => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.sessionId === "string" &&
+    typeof value.targetId === "string" &&
+    isAppAudioEndReason(value.reason) &&
+    hasOptionalString(value, "error") &&
+    hasOptionalPositiveInteger(value, "protocolVersion")
+  );
+};
+
+const isDesktopPushKeybindEvent = (
+  value: unknown,
+): value is TDesktopPushKeybindEvent => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return isPushKeybindKind(value.kind) && typeof value.active === "boolean";
+};
+
+const isAppAudioBinaryEgressInfo = (
+  value: unknown,
+): value is TAppAudioBinaryEgressInfo => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    isPositiveInteger(value.port) &&
+    hasOptionalString(value, "framing") &&
+    hasOptionalPositiveInteger(value, "protocolVersion")
+  );
+};
+
+const expectSidecarResult = <T>(
+  response: unknown,
+  guard: (value: unknown) => value is T,
+  method: string,
+): T => {
+  if (!guard(response)) {
+    throw new Error(`Invalid response from capture sidecar for \`${method}\`.`);
+  }
+
+  return response;
+};
+
 const resolveElectronApp = (): TElectronAppLike | undefined => {
   try {
     if (!runtimeRequire) {
       return undefined;
     }
 
-    const electronModule = runtimeRequire("electron") as {
-      app?: TElectronAppLike;
-    };
+    const electronModule: unknown = runtimeRequire("electron");
+    if (!isRecord(electronModule)) {
+      return undefined;
+    }
 
-    return electronModule.app;
+    const app = electronModule.app;
+
+    return isElectronAppLike(app) ? app : undefined;
   } catch {
     return undefined;
   }
 };
 
 const isSidecarResponse = (value: unknown): value is TSidecarResponse => {
-  if (!value || typeof value !== "object") {
+  if (!isRecord(value)) {
     return false;
   }
 
-  return "id" in value;
+  if (typeof value.id !== "string" || typeof value.ok !== "boolean") {
+    return false;
+  }
+
+  if ("error" in value && value.error !== undefined) {
+    if (!isRecord(value.error)) {
+      return false;
+    }
+
+    if (
+      "message" in value.error &&
+      value.error.message !== undefined &&
+      typeof value.error.message !== "string"
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 };
 
 const isSidecarEvent = (value: unknown): value is TSidecarEvent => {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  return "event" in value;
-};
-
-const isSupportLevel = (value: unknown): value is TSupportLevel => {
-  return (
-    value === "supported" || value === "best-effort" || value === "unsupported"
-  );
+  return isRecord(value) && typeof value.event === "string";
 };
 
 const toPcmAppAudioFrame = (
@@ -266,28 +525,11 @@ class CaptureSidecarManager {
 
   async getCapabilities(): Promise<TSidecarCapabilities> {
     const response = await this.sendRequest("capabilities.get", {});
-    if (!response || typeof response !== "object") {
-      throw new Error("Capture sidecar returned invalid capabilities.");
-    }
-
-    return {
-      platform:
-        "platform" in response && typeof response.platform === "string"
-          ? response.platform
-          : undefined,
-      systemAudio:
-        "systemAudio" in response && isSupportLevel(response.systemAudio)
-          ? response.systemAudio
-          : undefined,
-      perAppAudio:
-        "perAppAudio" in response && isSupportLevel(response.perAppAudio)
-          ? response.perAppAudio
-          : undefined,
-      reason:
-        "reason" in response && typeof response.reason === "string"
-          ? response.reason
-          : undefined,
-    };
+    return expectSidecarResult(
+      response,
+      isSidecarCapabilities,
+      "capabilities.get",
+    );
   }
 
   async listAppAudioTargets(
@@ -297,7 +539,11 @@ class CaptureSidecarManager {
       sourceId,
     });
 
-    return response as TDesktopAppAudioTargetsResult;
+    return expectSidecarResult(
+      response,
+      isDesktopAppAudioTargetsResult,
+      "audio_targets.list",
+    );
   }
 
   async startAppAudioCapture(
@@ -324,7 +570,11 @@ class CaptureSidecarManager {
     }
 
     const response = await this.sendRequest("audio_capture.start", input);
-    const session = response as TAppAudioSession;
+    const session = expectSidecarResult(
+      response,
+      isAppAudioSession,
+      "audio_capture.start",
+    );
 
     this.activeSessionId = session.sessionId;
     return session;
@@ -358,7 +608,11 @@ class CaptureSidecarManager {
   ): Promise<TGlobalPushKeybindRegistrationResult> {
     const response = await this.sendRequest("push_keybinds.set", input);
 
-    return response as TGlobalPushKeybindRegistrationResult;
+    return expectSidecarResult(
+      response,
+      isGlobalPushKeybindRegistrationResult,
+      "push_keybinds.set",
+    );
   }
 
   async dispose() {
@@ -481,9 +735,7 @@ class CaptureSidecarManager {
       }
     });
 
-    const processEvents = processRef as unknown as NodeJS.EventEmitter;
-
-    processEvents.on(
+    processRef.on(
       "exit",
       (code: number | null, signal: NodeJS.Signals | null) => {
         const reason = `Capture sidecar exited (code=${code ?? "null"}, signal=${signal ?? "null"})`;
@@ -491,7 +743,7 @@ class CaptureSidecarManager {
       },
     );
 
-    processEvents.on("error", (error: Error) => {
+    processRef.on("error", (error: Error) => {
       this.handleSidecarExit(`Capture sidecar error: ${error.message}`);
     });
   }
@@ -566,7 +818,7 @@ class CaptureSidecarManager {
       this.activeSessionId = undefined;
     }
 
-    (["talk", "mute"] as const).forEach((kind) => {
+    PUSH_KEYBIND_KINDS.forEach((kind) => {
       if (!this.pushKeybindActiveState[kind]) {
         return;
       }
@@ -615,7 +867,14 @@ class CaptureSidecarManager {
 
     if (isSidecarEvent(parsedLine)) {
       if (parsedLine.event === "audio_capture.frame") {
-        const frame = parsedLine.params as TAppAudioFrame;
+        if (!isAppAudioFrame(parsedLine.params)) {
+          console.warn(
+            "[desktop] Dropping malformed sidecar audio frame event",
+          );
+          return;
+        }
+
+        const frame = parsedLine.params;
         this.events.emit("frame", frame);
 
         if (this.appAudioBinarySessionIds.has(frame.sessionId)) {
@@ -631,7 +890,14 @@ class CaptureSidecarManager {
       }
 
       if (parsedLine.event === "audio_capture.ended") {
-        const statusEvent = parsedLine.params as TAppAudioStatusEvent;
+        if (!isAppAudioStatusEvent(parsedLine.params)) {
+          console.warn(
+            "[desktop] Dropping malformed sidecar audio status event",
+          );
+          return;
+        }
+
+        const statusEvent = parsedLine.params;
 
         if (statusEvent.sessionId === this.activeSessionId) {
           this.appAudioBinarySessionIds.delete(statusEvent.sessionId);
@@ -643,11 +909,14 @@ class CaptureSidecarManager {
       }
 
       if (parsedLine.event === "push_keybind.state") {
-        const pushEvent = parsedLine.params as TDesktopPushKeybindEvent;
-        if (pushEvent.kind !== "talk" && pushEvent.kind !== "mute") {
+        if (!isDesktopPushKeybindEvent(parsedLine.params)) {
+          console.warn(
+            "[desktop] Dropping malformed sidecar push-keybind event",
+          );
           return;
         }
 
+        const pushEvent = parsedLine.params;
         this.pushKeybindActiveState[pushEvent.kind] = pushEvent.active;
         this.events.emit("push-keybind", pushEvent);
       }
@@ -878,7 +1147,11 @@ class CaptureSidecarManager {
         "audio_capture.binary_egress_info",
         {},
       );
-      const info = response as TAppAudioBinaryEgressInfo;
+      const info = expectSidecarResult(
+        response,
+        isAppAudioBinaryEgressInfo,
+        "audio_capture.binary_egress_info",
+      );
 
       if (
         !Number.isInteger(info.port) ||
