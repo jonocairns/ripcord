@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'bun:test';
 import { normalizeDesktopCapabilities } from '../desktop-capabilities';
+import type { TDesktopCapabilities } from '../types';
 
 describe('normalizeDesktopCapabilities', () => {
 	it('fills in missing compatibility fields for older linux desktop runtimes', () => {
