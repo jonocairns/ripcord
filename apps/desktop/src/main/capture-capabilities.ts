@@ -34,13 +34,16 @@ const appendIssue = (
     return;
   }
 
+  const issueAffects = [...issue.affects].sort();
   const exists = issues.some((existingIssue) => {
+    const existingIssueAffects = [...existingIssue.affects].sort();
+
     return (
       existingIssue.code === issue.code &&
-      existingIssue.message === issue.message &&
-      existingIssue.affects.length === issue.affects.length &&
-      existingIssue.affects.every((feature, index) => {
-        return feature === issue.affects[index];
+      existingIssue.severity === issue.severity &&
+      existingIssueAffects.length === issueAffects.length &&
+      existingIssueAffects.every((feature, index) => {
+        return feature === issueAffects[index];
       })
     );
   });
@@ -62,31 +65,13 @@ const formatSessionTypeLabel = (sessionType: string) => {
   return sessionType;
 };
 
-const createCapabilityIssue = ({
-  code,
-  affects,
-  severity,
-  title,
-  message,
-  guidance,
-}: TDesktopCapabilityIssue): TDesktopCapabilityIssue => {
-  return {
-    code,
-    affects,
-    severity,
-    title,
-    message,
-    guidance,
-  };
-};
-
 const createIssueFromCode = (
   code: string | undefined,
   message: string,
 ): TDesktopCapabilityIssue => {
   switch (code) {
     case "linux-pipewire-tools-missing":
-      return createCapabilityIssue({
+      return {
         code,
         affects: ["per-app-audio"],
         severity: "error",
@@ -96,9 +81,9 @@ const createIssueFromCode = (
           "Install the missing PipeWire tools, then reopen the screen-share picker.",
           "Use system audio or no shared audio until PipeWire is available.",
         ],
-      });
+      };
     case "linux-manual-app-target-selection-required":
-      return createCapabilityIssue({
+      return {
         code,
         affects: ["per-app-audio"],
         severity: "info",
@@ -107,9 +92,9 @@ const createIssueFromCode = (
         guidance: [
           "Choose the running application that is producing sound before starting screen share.",
         ],
-      });
+      };
     case "linux-x11-display-required":
-      return createCapabilityIssue({
+      return {
         code,
         affects: ["global-push-keybinds"],
         severity: "error",
@@ -118,9 +103,9 @@ const createIssueFromCode = (
         guidance: [
           "Use an X11 or XWayland session for global push-to-talk and push-to-mute.",
         ],
-      });
+      };
     case "linux-xwayland-best-effort":
-      return createCapabilityIssue({
+      return {
         code,
         affects: ["global-push-keybinds"],
         severity: "warning",
@@ -129,29 +114,29 @@ const createIssueFromCode = (
         guidance: [
           "Wayland global keybinds currently depend on XWayland support in the active compositor.",
         ],
-      });
+      };
     case "macos-helper-unavailable":
-      return createCapabilityIssue({
+      return {
         code,
         affects: ["system-audio", "per-app-audio"],
         severity: "error",
         title: "macOS capture helper unavailable",
         message,
         guidance: [
-          "Reinstall or rebuild the desktop app so the macOS audio helper is bundled correctly.",
+          "Reinstall or rebuild Sharkord so the macOS audio helper is bundled correctly.",
         ],
-      });
+      };
     case "macos-version-unsupported":
-      return createCapabilityIssue({
+      return {
         code,
         affects: ["system-audio", "per-app-audio"],
         severity: "error",
         title: "macOS version unsupported for screen audio",
         message,
         guidance: ["Use macOS 13 or newer for ScreenCaptureKit audio capture."],
-      });
+      };
     case "macos-screen-recording-permission-required":
-      return createCapabilityIssue({
+      return {
         code,
         affects: ["system-audio", "per-app-audio"],
         severity: "error",
@@ -160,9 +145,9 @@ const createIssueFromCode = (
         guidance: [
           "Grant Sharkord Screen Recording access in System Settings, then try screen sharing again.",
         ],
-      });
+      };
     case "macos-screen-audio-unavailable":
-      return createCapabilityIssue({
+      return {
         code,
         affects: ["system-audio", "per-app-audio"],
         severity: "error",
@@ -170,12 +155,12 @@ const createIssueFromCode = (
         message,
         guidance: [
           "Check Screen Recording permission and try again.",
-          "If the issue persists, reinstall the desktop app to restore the audio helper.",
+          "If the issue persists, reinstall Sharkord to restore the audio helper.",
         ],
-      });
+      };
     case "desktop-sidecar-unavailable":
     default:
-      return createCapabilityIssue({
+      return {
         code: code ?? "desktop-sidecar-unavailable",
         affects: ["system-audio", "per-app-audio"],
         severity: "error",
@@ -183,9 +168,9 @@ const createIssueFromCode = (
         message,
         guidance: [
           "Restart Sharkord and retry screen sharing.",
-          "If the sidecar binary is missing, reinstall the desktop app.",
+          "If the sidecar binary is missing, reinstall Sharkord.",
         ],
-      });
+      };
   }
 };
 
@@ -258,18 +243,30 @@ const resolveDesktopCaptureCapabilities = ({
     );
 
     if (!sidecarAvailable || !sidecarPerAppAudioSupported) {
-      appendIssue(
-        issues,
-        createIssueFromCode(
-          sidecarCapabilities?.perAppAudioReasonCode ??
-            sidecarCapabilities?.appAudioTargetEnumerationReasonCode,
-          sidecarCapabilities?.perAppAudioReason ??
-            sidecarCapabilities?.appAudioTargetEnumerationReason ??
-            (sidecarReason
-              ? `Per-app audio capture unavailable: ${sidecarReason}`
-              : "Per-app audio capture unavailable because the Rust sidecar is not running."),
-        ),
-      );
+      const perAppIssueCode =
+        sidecarCapabilities?.perAppAudioReasonCode ??
+        sidecarCapabilities?.appAudioTargetEnumerationReasonCode;
+      const hasEquivalentPerAppIssue = issues.some((issue) => {
+        return (
+          issue.code === (perAppIssueCode ?? "desktop-sidecar-unavailable") &&
+          issue.severity === "error" &&
+          issue.affects.includes("per-app-audio")
+        );
+      });
+
+      if (!hasEquivalentPerAppIssue) {
+        appendIssue(
+          issues,
+          createIssueFromCode(
+            perAppIssueCode,
+            sidecarCapabilities?.perAppAudioReason ??
+              sidecarCapabilities?.appAudioTargetEnumerationReason ??
+              (sidecarReason
+                ? `Per-app audio capture unavailable: ${sidecarReason}`
+                : "Per-app audio capture unavailable because the Rust sidecar is not running."),
+          ),
+        );
+      }
 
       return {
         ...baseCapabilities,

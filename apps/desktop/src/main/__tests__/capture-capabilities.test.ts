@@ -122,6 +122,35 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     );
   });
 
+  void it("deduplicates linux pipewire issues when multiple reasons map to the same code", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: true,
+      sidecarPerAppAudioSupported: false,
+      sidecarCapabilities: {
+        sessionType: "x11",
+        pipewireToolsAvailable: false,
+        perAppAudioReason:
+          "Per-app capture stays disabled until PipeWire tools are installed.",
+        perAppAudioReasonCode: "linux-pipewire-tools-missing",
+        appAudioTargetEnumerationSupported: false,
+        appAudioTargetEnumerationReason:
+          "pw-record is not installed and app targets cannot be listed.",
+        appAudioTargetEnumerationReasonCode: "linux-pipewire-tools-missing",
+        sourceAudioTargetInferenceSupported: false,
+      },
+    });
+
+    assert.equal(
+      resolved.issues.filter(
+        (issue) => issue.code === "linux-pipewire-tools-missing",
+      ).length,
+      1,
+    );
+  });
+
   void it("downgrades macOS per-app audio when the sidecar is unavailable", () => {
     const baseCapabilities = getDesktopCapabilitiesForPlatform("darwin");
 

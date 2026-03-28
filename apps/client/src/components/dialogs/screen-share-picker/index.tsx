@@ -72,11 +72,12 @@ const ScreenSharePickerDialog = memo(
 			suggestedTargetId: appAudioTargetsResult.suggestedTargetId,
 			requiresManualSelection: appAudioTargetsResult.requiresManualSelection,
 		});
+		const capabilityIssues = Array.isArray(liveCapabilities.issues) ? liveCapabilities.issues : [];
 		const screenShareIssues = useMemo(() => {
-			return liveCapabilities.issues.filter((issue) => {
+			return capabilityIssues.filter((issue) => {
 				return issue.affects.includes('system-audio') || issue.affects.includes('per-app-audio');
 			});
-		}, [liveCapabilities.issues]);
+		}, [capabilityIssues]);
 		const shouldResolveAppAudioTargets = isOpen && appAudioTargetBehavior.shouldResolveAppAudioTargets;
 		const requiresManualAppAudioTarget =
 			shouldResolveAppAudioTargets && appAudioTargetBehavior.requiresManualAppAudioTarget;
