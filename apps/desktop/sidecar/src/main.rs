@@ -1484,8 +1484,11 @@ fn process_name_from_pid(_pid: u32) -> Option<String> {
 
 #[cfg(target_os = "linux")]
 fn pipewire_command_exists(command: &str) -> bool {
-    Command::new(command)
-        .arg("--help")
+    Command::new("sh")
+        .arg("-c")
+        .arg("command -v \"$1\" >/dev/null 2>&1")
+        .arg("sh")
+        .arg(command)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -1595,6 +1598,12 @@ fn stop_linux_target_capture(mut capture: LinuxTargetCapture) {
     let _ = capture.stdout_thread.join();
     if let Some(stderr_thread) = capture.stderr_thread.take() {
         let _ = stderr_thread.join();
+    }
+}
+
+fn clamp_audio_samples(frame_samples: &mut [f32]) {
+    for sample in frame_samples.iter_mut() {
+        *sample = sample.clamp(-1.0, 1.0);
     }
 }
 
@@ -2262,7 +2271,6 @@ fn capture_loopback_audio(
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
     if let Some(self_exclude_pid) = self_exclude_pid {
-        let excluded_pids = get_linux_process_tree_pids(self_exclude_pid);
         let (event_sender, event_receiver) =
             std::sync::mpsc::channel::<LinuxCaptureEvent>();
         let mut captures: HashMap<String, LinuxTargetCapture> = HashMap::new();
@@ -2278,6 +2286,7 @@ fn capture_loopback_audio(
             }
 
             if last_refresh_at.elapsed() >= Duration::from_millis(750) {
+                let excluded_pids = get_linux_process_tree_pids(self_exclude_pid);
                 let next_targets = get_audio_targets()
                     .into_iter()
                     .filter(|target| !excluded_pids.contains(&target.pid))
@@ -2389,6 +2398,7 @@ fn capture_loopback_audio(
                 }
             }
 
+            clamp_audio_samples(&mut mixed_frame);
             emit_linux_audio_frame(
                 session_id,
                 target_id,
@@ -3221,7 +3231,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        dedupe_window_entries_by_pid, parse_target_pid, parse_window_source_id, CaptureEndReason,
+        clamp_audio_samples, dedupe_window_entries_by_pid, parse_target_pid,
+        parse_window_source_id, CaptureEndReason,
     };
 
     #[test]
@@ -3258,5 +3269,13 @@ mod tests {
         assert_eq!(CaptureEndReason::AppExited.as_str(), "app_exited");
         #[cfg(windows)]
         assert_eq!(CaptureEndReason::DeviceLost.as_str(), "device_lost");
+    }
+
+    #[test]
+    fn clamps_audio_samples_to_expected_range() {
+        let mut frame_samples = vec![-1.5, -1.0, 0.25, 1.4];
+        clamp_audio_samples(&mut frame_samples);
+
+        assert_eq!(frame_samples, vec![-1.0, -1.0, 0.25, 1.0]);
     }
 }
