@@ -34,6 +34,7 @@ import {
 	ScreenAudioMode,
 	type TAppAudioSession,
 	type TAppAudioStatusEvent,
+	type TDesktopCapabilities,
 	type TDesktopScreenShareSelection,
 	type TStartAppAudioCaptureInput,
 } from '@/runtime/types';
@@ -202,6 +203,28 @@ const getAudioOpusConfig = (channelId: number | undefined) => {
 			opusDtx: dtx,
 		},
 	};
+};
+
+const getDesktopAudioIssueToastMessage = (
+	capabilities: TDesktopCapabilities | undefined,
+	audioMode: ScreenAudioMode,
+) => {
+	const affectedFeature = audioMode === ScreenAudioMode.SYSTEM ? 'system-audio' : 'per-app-audio';
+	const relevantIssue =
+		capabilities?.issues.find((issue) => {
+			return issue.affects.includes(affectedFeature) && issue.severity === 'error';
+		}) ??
+		capabilities?.issues.find((issue) => {
+			return issue.affects.includes(affectedFeature) && issue.severity === 'warning';
+		});
+
+	if (!relevantIssue) {
+		return undefined;
+	}
+
+	return relevantIssue.guidance[0]
+		? `${relevantIssue.title}: ${relevantIssue.guidance[0]}`
+		: `${relevantIssue.title}: ${relevantIssue.message}`;
 };
 
 const createMicGainPipeline = async (
@@ -1288,6 +1311,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						logVoice('Failed to start sidecar audio capture', {
 							error,
 						});
+						let capabilities: TDesktopCapabilities | undefined;
+						if (desktopBridge) {
+							capabilities = await desktopBridge.getCapabilities().catch(() => undefined);
+						}
+						const issueToastMessage = getDesktopAudioIssueToastMessage(capabilities, audioMode);
 						await cleanupDesktopAppAudio();
 
 						if (audioMode === ScreenAudioMode.SYSTEM) {
@@ -1295,11 +1323,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							// exclusion, but the user still gets shared audio.
 							logVoice('Falling back to display-media loopback for system audio');
 							toast.warning(
-								'Sidecar audio capture failed. Falling back to standard system audio (without echo exclusion).',
+								issueToastMessage
+									? `${issueToastMessage} Falling back to standard system audio (without echo exclusion).`
+									: 'Sidecar audio capture failed. Falling back to standard system audio (without echo exclusion).',
 							);
 							useSidecarAudio = false;
 						} else {
-							toast.warning(`${sidecarAudioLabel} capture failed. Continuing without shared audio.`);
+							toast.warning(
+								issueToastMessage
+									? `${issueToastMessage} Continuing without shared audio.`
+									: `${sidecarAudioLabel} capture failed. Continuing without shared audio.`,
+							);
 							audioMode = ScreenAudioMode.NONE;
 						}
 					}

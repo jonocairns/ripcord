@@ -3112,6 +3112,31 @@ fn handle_health_ping() -> Result<Value, String> {
     }))
 }
 
+#[cfg(target_os = "macos")]
+fn classify_macos_helper_error_code(error: &str) -> &'static str {
+    let normalized_error = error.to_ascii_lowercase();
+
+    if normalized_error.contains("not found at")
+        || normalized_error.contains("failed to launch macos helper")
+    {
+        return "macos-helper-unavailable";
+    }
+
+    if normalized_error.contains("requires macos 13 or newer") {
+        return "macos-version-unsupported";
+    }
+
+    if normalized_error.contains("permission")
+        || normalized_error.contains("not authorized")
+        || normalized_error.contains("not permitted")
+        || normalized_error.contains("shareable display")
+    {
+        return "macos-screen-recording-permission-required";
+    }
+
+    "macos-screen-audio-unavailable"
+}
+
 fn handle_capabilities_get() -> Result<Value, String> {
     let platform = std::env::consts::OS;
     #[cfg(target_os = "macos")]
@@ -3119,6 +3144,11 @@ fn handle_capabilities_get() -> Result<Value, String> {
 
     #[cfg(not(target_os = "macos"))]
     let macos_helper_probe_error: Option<String> = None;
+
+    #[cfg(target_os = "macos")]
+    let macos_helper_probe_error_code = macos_helper_probe_error
+        .as_deref()
+        .map(classify_macos_helper_error_code);
 
     let (system_audio, per_app_audio, per_app_audio_reason, reason) = if cfg!(windows) {
         ("supported", "supported", None, None)
@@ -3164,6 +3194,11 @@ fn handle_capabilities_get() -> Result<Value, String> {
         response["reason"] = json!(reason);
     }
 
+    #[cfg(target_os = "macos")]
+    if let Some(reason_code) = macos_helper_probe_error_code {
+        response["reasonCode"] = json!(reason_code);
+    }
+
     #[cfg(target_os = "linux")]
     {
         let session_type = detect_linux_session_type();
@@ -3203,18 +3238,29 @@ fn handle_capabilities_get() -> Result<Value, String> {
 
         if let Some(reason) = app_audio_target_enumeration_reason {
             response["appAudioTargetEnumerationReason"] = json!(reason);
+            response["appAudioTargetEnumerationReasonCode"] =
+                json!("linux-pipewire-tools-missing");
+            response["perAppAudioReasonCode"] = json!("linux-pipewire-tools-missing");
         }
 
         if let Some(reason) = source_audio_target_inference_reason {
             response["sourceAudioTargetInferenceReason"] = json!(reason);
+            response["sourceAudioTargetInferenceReasonCode"] =
+                json!("linux-manual-app-target-selection-required");
         }
 
         if let Some(reason) = global_push_keybinds_reason {
             response["globalPushKeybindsReason"] = json!(reason);
+            response["globalPushKeybindsReasonCode"] = json!(if x11_display_available {
+                "linux-xwayland-best-effort"
+            } else {
+                "linux-x11-display-required"
+            });
         }
 
         if let Some(reason) = x11_display_reason {
             response["x11DisplayReason"] = json!(reason);
+            response["x11DisplayReasonCode"] = json!("linux-x11-display-required");
         }
     }
 

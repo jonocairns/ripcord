@@ -14,6 +14,8 @@ void describe("getDesktopCapabilitiesForPlatform", () => {
     assert.equal(capabilities.platform, "windows");
     assert.equal(capabilities.systemAudio, "supported");
     assert.equal(capabilities.perAppAudio, "supported");
+    assert.equal(capabilities.globalPushKeybinds, "supported");
+    assert.deepEqual(capabilities.issues, []);
   });
 
   void it("maps macOS capabilities", () => {
@@ -22,6 +24,7 @@ void describe("getDesktopCapabilitiesForPlatform", () => {
     assert.equal(capabilities.platform, "macos");
     assert.equal(capabilities.systemAudio, "supported");
     assert.equal(capabilities.perAppAudio, "supported");
+    assert.equal(capabilities.globalPushKeybinds, "supported");
     assert.match(capabilities.notes.join(" "), /ScreenCaptureKit/i);
   });
 
@@ -31,6 +34,7 @@ void describe("getDesktopCapabilitiesForPlatform", () => {
     assert.equal(capabilities.platform, "linux");
     assert.equal(capabilities.systemAudio, "best-effort");
     assert.equal(capabilities.perAppAudio, "best-effort");
+    assert.equal(capabilities.globalPushKeybinds, "best-effort");
   });
 });
 
@@ -40,6 +44,8 @@ void describe("resolveScreenAudioMode", () => {
       platform: "windows",
       systemAudio: "supported",
       perAppAudio: "unsupported",
+      globalPushKeybinds: "supported",
+      issues: [],
       notes: [],
     };
 
@@ -54,6 +60,8 @@ void describe("resolveScreenAudioMode", () => {
       platform: "macos",
       systemAudio: "unsupported",
       perAppAudio: "unsupported",
+      globalPushKeybinds: "supported",
+      issues: [],
       notes: [],
     };
 
@@ -70,6 +78,8 @@ void describe("resolvePreparedScreenAudioMode", () => {
       platform: "linux",
       systemAudio: "best-effort",
       perAppAudio: "best-effort",
+      globalPushKeybinds: "best-effort",
+      issues: [],
       notes: [],
     };
 
@@ -93,6 +103,8 @@ void describe("resolvePreparedScreenAudioMode", () => {
       platform: "linux",
       systemAudio: "best-effort",
       perAppAudio: "best-effort",
+      globalPushKeybinds: "best-effort",
+      issues: [],
       notes: [],
     };
 

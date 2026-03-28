@@ -123,9 +123,13 @@ void describe("CaptureSidecarManager", () => {
             FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_SUPPORTED: "false",
             FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_REASON:
               "Choose a target manually.",
+            FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_REASON_CODE:
+              "linux-manual-app-target-selection-required",
             FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS: "best-effort",
             FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS_REASON:
               "Uses XWayland in Wayland sessions.",
+            FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS_REASON_CODE:
+              "linux-xwayland-best-effort",
             FAKE_SIDECAR_X11_DISPLAY_AVAILABLE: "true",
           },
         });
@@ -140,7 +144,15 @@ void describe("CaptureSidecarManager", () => {
       assert.equal(capabilities.pipewireToolsAvailable, true);
       assert.equal(capabilities.appAudioTargetEnumerationSupported, true);
       assert.equal(capabilities.sourceAudioTargetInferenceSupported, false);
+      assert.equal(
+        capabilities.sourceAudioTargetInferenceReasonCode,
+        "linux-manual-app-target-selection-required",
+      );
       assert.equal(capabilities.globalPushKeybinds, "best-effort");
+      assert.equal(
+        capabilities.globalPushKeybindsReasonCode,
+        "linux-xwayland-best-effort",
+      );
       assert.equal(capabilities.x11DisplayAvailable, true);
 
       const targets = await manager.listAppAudioTargets("window:1:0");
@@ -169,6 +181,7 @@ void describe("CaptureSidecarManager", () => {
             FAKE_SIDECAR_PER_APP_AUDIO: "unsupported",
             FAKE_SIDECAR_REASON:
               "ScreenCaptureKit audio capture requires macOS 13 or newer.",
+            FAKE_SIDECAR_REASON_CODE: "macos-version-unsupported",
           },
         });
       },

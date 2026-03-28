@@ -2,6 +2,22 @@ export type TDesktopPlatform = "windows" | "macos" | "linux";
 
 export type TSupportLevel = "supported" | "best-effort" | "unsupported";
 
+export type TDesktopCapabilityIssueSeverity = "info" | "warning" | "error";
+
+export type TDesktopCapabilityIssueFeature =
+  | "system-audio"
+  | "per-app-audio"
+  | "global-push-keybinds";
+
+export type TDesktopCapabilityIssue = {
+  code: string;
+  affects: TDesktopCapabilityIssueFeature[];
+  severity: TDesktopCapabilityIssueSeverity;
+  title: string;
+  message: string;
+  guidance: string[];
+};
+
 export type TScreenAudioMode = "system" | "app" | "none";
 
 export type TShareSourceKind = "screen" | "window";
@@ -24,7 +40,9 @@ export type TDesktopCapabilities = {
   platform: TDesktopPlatform;
   systemAudio: TSupportLevel;
   perAppAudio: TSupportLevel;
+  globalPushKeybinds: TSupportLevel;
   sidecarAvailable?: boolean;
+  issues: TDesktopCapabilityIssue[];
   notes: string[];
 };
 

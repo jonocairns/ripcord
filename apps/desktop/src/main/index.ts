@@ -102,12 +102,38 @@ const setGlobalPushKeybinds = async (
   return await captureSidecarManager.setPushKeybinds(input || {});
 };
 
+const resolveSidecarStatusFromCapabilities = (
+  sidecarCapabilities: Awaited<
+    ReturnType<typeof captureSidecarManager.getCapabilities>
+  >,
+) => {
+  if (
+    sidecarCapabilities.platform === "macos" &&
+    (sidecarCapabilities.systemAudio !== "supported" ||
+      sidecarCapabilities.perAppAudio !== "supported")
+  ) {
+    return {
+      available: false,
+      reason:
+        sidecarCapabilities.reason ||
+        "macOS screen audio capture is unavailable.",
+    };
+  }
+
+  return {
+    available: true,
+    reason: sidecarCapabilities.reason,
+  };
+};
+
 const getEffectiveDesktopCapabilities = async () => {
   const baseCapabilities = getDesktopCapabilities();
-  const sidecarStatus = await captureSidecarManager.getStatus();
-  const sidecarCapabilities = sidecarStatus.available
-    ? await captureSidecarManager.getCapabilities().catch(() => undefined)
-    : undefined;
+  const sidecarCapabilities = await captureSidecarManager
+    .getCapabilities()
+    .catch(() => undefined);
+  const sidecarStatus = sidecarCapabilities
+    ? resolveSidecarStatusFromCapabilities(sidecarCapabilities)
+    : await captureSidecarManager.getStatus();
   const sidecarPerAppAudioSupported = sidecarCapabilities
     ? sidecarCapabilities.perAppAudio !== "unsupported"
     : baseCapabilities.platform === "windows" && sidecarStatus.available;

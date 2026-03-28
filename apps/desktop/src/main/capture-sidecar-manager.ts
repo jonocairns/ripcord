@@ -52,17 +52,23 @@ export type TSidecarCapabilities = {
   systemAudio?: TSupportLevel;
   perAppAudio?: TSupportLevel;
   reason?: string;
+  reasonCode?: string;
   perAppAudioReason?: string;
+  perAppAudioReasonCode?: string;
   sessionType?: string;
   pipewireToolsAvailable?: boolean;
   appAudioTargetEnumerationSupported?: boolean;
   appAudioTargetEnumerationReason?: string;
+  appAudioTargetEnumerationReasonCode?: string;
   sourceAudioTargetInferenceSupported?: boolean;
   sourceAudioTargetInferenceReason?: string;
+  sourceAudioTargetInferenceReasonCode?: string;
   globalPushKeybinds?: TSupportLevel;
   globalPushKeybindsReason?: string;
+  globalPushKeybindsReasonCode?: string;
   x11DisplayAvailable?: boolean;
   x11DisplayReason?: string;
+  x11DisplayReasonCode?: string;
 };
 
 type TAppAudioBinaryEgressInfo = {
@@ -209,19 +215,25 @@ const isSidecarCapabilities = (
 
   return (
     hasOptionalString(value, "reason") &&
+    hasOptionalString(value, "reasonCode") &&
     hasOptionalString(value, "perAppAudioReason") &&
+    hasOptionalString(value, "perAppAudioReasonCode") &&
     hasOptionalString(value, "sessionType") &&
     hasOptionalBoolean(value, "pipewireToolsAvailable") &&
     hasOptionalBoolean(value, "appAudioTargetEnumerationSupported") &&
     hasOptionalString(value, "appAudioTargetEnumerationReason") &&
+    hasOptionalString(value, "appAudioTargetEnumerationReasonCode") &&
     hasOptionalBoolean(value, "sourceAudioTargetInferenceSupported") &&
     hasOptionalString(value, "sourceAudioTargetInferenceReason") &&
+    hasOptionalString(value, "sourceAudioTargetInferenceReasonCode") &&
     (!("globalPushKeybinds" in value) ||
       value.globalPushKeybinds === undefined ||
       isSupportLevel(value.globalPushKeybinds)) &&
     hasOptionalString(value, "globalPushKeybindsReason") &&
+    hasOptionalString(value, "globalPushKeybindsReasonCode") &&
     hasOptionalBoolean(value, "x11DisplayAvailable") &&
-    hasOptionalString(value, "x11DisplayReason")
+    hasOptionalString(value, "x11DisplayReason") &&
+    hasOptionalString(value, "x11DisplayReasonCode")
   );
 };
 
