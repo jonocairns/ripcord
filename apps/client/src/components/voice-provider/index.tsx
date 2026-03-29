@@ -28,6 +28,7 @@ import { joinVoice, leaveVoiceSilently } from '@/features/server/voice/actions';
 import { useOwnVoiceState } from '@/features/server/voice/hooks';
 import { logVoice } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
+import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import {
@@ -1149,7 +1150,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			return requestScreenShareSelectionDialog({
 				sources,
-				capabilities,
+				capabilities: normalizeDesktopCapabilities(capabilities),
 				defaultAudioMode: devices.screenAudioMode,
 			});
 		} catch (error) {
@@ -1185,7 +1186,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				let sidecarSupported = false;
 				if (desktopBridge && audioMode === ScreenAudioMode.SYSTEM) {
 					try {
-						const caps = await desktopBridge.getCapabilities();
+						const caps = normalizeDesktopCapabilities(await desktopBridge.getCapabilities());
 						sidecarSupported = caps.sidecarAvailable === true && caps.perAppAudio !== 'unsupported';
 					} catch {
 						// If capabilities check fails, don't attempt sidecar for system audio.
@@ -1313,7 +1314,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						});
 						let capabilities: TDesktopCapabilities | undefined;
 						if (desktopBridge) {
-							capabilities = await desktopBridge.getCapabilities().catch(() => undefined);
+							capabilities = await desktopBridge
+								.getCapabilities()
+								.then((nextCapabilities) => normalizeDesktopCapabilities(nextCapabilities))
+								.catch(() => undefined);
 						}
 						const issueToastMessage = getDesktopAudioIssueToastMessage(capabilities, audioMode);
 						await cleanupDesktopAppAudio();
