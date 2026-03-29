@@ -101,10 +101,10 @@ const ScreenSharePickerDialog = memo(
 			}
 
 			if (liveCapabilities.systemAudio === 'unsupported') {
-				return 'No running app audio targets were found. If you continue, Sharkord will share video without audio.';
+				return 'No running app audio targets were found. If you continue, screen share will continue without audio.';
 			}
 
-			return 'No running app audio targets were found. If you continue, Sharkord will fall back to system audio.';
+			return 'No running app audio targets were found. If you continue, screen share will fall back to system audio.';
 		}, [allowsImplicitFallbackWithoutTarget, liveCapabilities.systemAudio]);
 
 		const sourceLabel = useMemo(() => {

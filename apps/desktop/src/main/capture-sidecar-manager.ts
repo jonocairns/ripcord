@@ -867,11 +867,18 @@ class CaptureSidecarManager {
         "push_keybinds.set",
         this.lastRequestedPushKeybinds,
       );
-      expectSidecarResult(
+      const result = expectSidecarResult(
         response,
         isGlobalPushKeybindRegistrationResult,
         "push_keybinds.set",
       );
+
+      if (!result.talkRegistered || !result.muteRegistered) {
+        console.warn(
+          "[desktop] Push keybind restore after restart was only partially successful",
+          result,
+        );
+      }
     } catch (error) {
       console.warn(
         "[desktop] Failed to restore global push keybinds after sidecar restart",

@@ -1649,6 +1649,11 @@ fn linux_process_cmdline_contains(needle: &str) -> bool {
 
 #[cfg(target_os = "linux")]
 fn probe_linux_desktop_portal() -> (bool, Option<String>) {
+    // This is intentionally a best-effort readiness heuristic, not a hard gate:
+    // some desktop sessions rely on D-Bus socket activation, so the portal
+    // process may not appear in `/proc` until the first request triggers it.
+    // We still surface the missing-portal result as guidance because it catches
+    // the common broken-session case without adding a D-Bus dependency here.
     if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
         return (
             false,
