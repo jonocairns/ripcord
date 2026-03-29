@@ -219,25 +219,18 @@ Difficulty: Medium
 
 ### 5. Expand cross-platform parity tests around the desktop/sidecar boundary
 
-This step is no longer about creating the first tests from scratch. A baseline already exists for capability resolution, audio-mode fallback, sidecar availability, fake-sidecar lifecycle handling, and Linux manual target-selection metadata.
+This step is complete for the current parity contract.
 
-The remaining work is to turn those tests into an explicit parity suite for the contract defined in `#1`.
+Coverage now includes:
 
-Current baseline:
-
-- platform capability defaults are covered for Windows, macOS, and Linux
-- prepared screen-audio fallback is covered for Linux manual target selection
-- sidecar unavailable and macOS helper-unavailable cases are covered
-- Linux capability probe mapping and sidecar restart recovery are covered via the fake sidecar
-
-Remaining gaps:
-
-- assert stable reason-code behavior for OS-specific degradation paths, not just warning text
-- add end-to-end desktop/sidecar boundary tests that combine capability probing, target listing, and capture-start fallback in one flow
-- cover global push keybind registration failures and refresh after capability changes
-- cover reconnect-safe voice state when capture teardown or sidecar restart happens during an active or pending voice session
-- distinguish macOS permission failure, helper readiness failure, and OS-version failure as separate contract cases
-- cover Linux session/backend transitions that change support expectations after launch
+- platform capability defaults for Windows, macOS, and Linux
+- prepared screen-audio fallback behavior, including Linux manual target selection
+- stable reason-code assertions for Linux and macOS degradation paths
+- sidecar unavailable, macOS helper-unavailable, macOS permission, and macOS OS-version contract cases
+- Linux capability probe mapping and session/backend changes after sidecar restart via the fake sidecar
+- end-to-end parity coverage that combines capability probing, target listing, and capture-start fallback in one flow
+- global push keybind registration failures and re-registration after sidecar restart
+- reconnect-safe voice-state regression coverage for active and pending voice sessions during transport failure and reconnect handling
 
 Test strategy:
 
@@ -252,6 +245,10 @@ Relevant files:
 - `apps/desktop/src/main/__tests__/capture-sidecar-manager.test.ts`
 - `apps/desktop/src/main/__tests__/fixtures/fake-sidecar.cjs`
 - `apps/desktop/src/main/index.ts`
+- `apps/client/src/features/server/__tests__/reconnect-policy.test.ts`
+- `apps/client/src/features/server/reconnect-policy.ts`
+- `apps/client/src/lib/trpc.ts`
+- `apps/client/src/components/voice-provider/index.tsx`
 
 Impact: High
 
