@@ -124,11 +124,9 @@ void describe("CaptureSidecarManager", () => {
             FAKE_SIDECAR_SYSTEM_AUDIO: "best-effort",
             FAKE_SIDECAR_PER_APP_AUDIO: "best-effort",
             FAKE_SIDECAR_SESSION_TYPE: "wayland",
-            FAKE_SIDECAR_LINUX_AUDIO_BACKEND: "pipewire-cli-shell",
-            FAKE_SIDECAR_LINUX_AUDIO_BACKEND_USES_SHELL_OUTS: "true",
-            FAKE_SIDECAR_PIPEWIRE_RUNTIME_AVAILABLE: "false",
-            FAKE_SIDECAR_PIPEWIRE_RUNTIME_REASON:
-              "PipeWire runtime libraries were not detected in the current environment, so the planned native Linux audio backend is not ready on this install.",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND: "pulseaudio-native",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND_USES_SHELL_OUTS: "false",
+            FAKE_SIDECAR_PIPEWIRE_RUNTIME_AVAILABLE: "true",
             FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE: "true",
             FAKE_SIDECAR_PORTAL_AVAILABLE: "true",
             FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED: "true",
@@ -153,9 +151,9 @@ void describe("CaptureSidecarManager", () => {
       const capabilities = await manager.getCapabilities();
       assert.equal(capabilities.perAppAudio, "best-effort");
       assert.equal(capabilities.sessionType, "wayland");
-      assert.equal(capabilities.linuxAudioBackend, "pipewire-cli-shell");
-      assert.equal(capabilities.linuxAudioBackendUsesShellOuts, true);
-      assert.equal(capabilities.pipewireRuntimeAvailable, false);
+      assert.equal(capabilities.linuxAudioBackend, "pulseaudio-native");
+      assert.equal(capabilities.linuxAudioBackendUsesShellOuts, false);
+      assert.equal(capabilities.pipewireRuntimeAvailable, true);
       assert.equal(capabilities.pipewireToolsAvailable, true);
       assert.equal(capabilities.portalAvailable, true);
       assert.equal(capabilities.appAudioTargetEnumerationSupported, true);
@@ -196,6 +194,9 @@ void describe("CaptureSidecarManager", () => {
             FAKE_SIDECAR_SYSTEM_AUDIO: "best-effort",
             FAKE_SIDECAR_PER_APP_AUDIO: "best-effort",
             FAKE_SIDECAR_SESSION_TYPE: "wayland",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND: "pulseaudio-native",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND_USES_SHELL_OUTS: "false",
+            FAKE_SIDECAR_PIPEWIRE_RUNTIME_AVAILABLE: "true",
             FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE: "true",
             FAKE_SIDECAR_PORTAL_AVAILABLE: "true",
             FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED: "true",
@@ -364,6 +365,9 @@ void describe("CaptureSidecarManager", () => {
             FAKE_SIDECAR_CRASH_MS: isFirstSpawn ? "80" : "0",
             FAKE_SIDECAR_PLATFORM: "linux",
             FAKE_SIDECAR_SESSION_TYPE: isFirstSpawn ? "x11" : "wayland",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND: "pulseaudio-native",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND_USES_SHELL_OUTS: "false",
+            FAKE_SIDECAR_PIPEWIRE_RUNTIME_AVAILABLE: "true",
             FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE: isFirstSpawn
               ? "false"
               : "true",
@@ -374,10 +378,10 @@ void describe("CaptureSidecarManager", () => {
               ? "false"
               : "true",
             FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_REASON: isFirstSpawn
-              ? "pw-record is not installed"
+              ? "Failed to connect to the Linux audio server."
               : "",
             FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_REASON_CODE: isFirstSpawn
-              ? "linux-pipewire-tools-missing"
+              ? "linux-native-audio-backend-unavailable"
               : "",
             FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_SUPPORTED: isFirstSpawn
               ? "false"

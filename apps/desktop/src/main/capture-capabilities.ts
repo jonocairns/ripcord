@@ -70,10 +70,22 @@ const createIssueFromCode = (
   message: string,
 ): TDesktopCapabilityIssue => {
   switch (code) {
+    case "linux-native-audio-backend-unavailable":
+      return {
+        code,
+        affects: ["system-audio", "per-app-audio"],
+        severity: "error",
+        title: "Linux audio backend unavailable",
+        message,
+        guidance: [
+          "Ensure PipeWire or PulseAudio-compatible audio services are running for the current session, then retry screen sharing.",
+          "Restart Sharkord after fixing the Linux audio server or compatibility layer.",
+        ],
+      };
     case "linux-pipewire-tools-missing":
       return {
         code,
-        affects: ["per-app-audio"],
+        affects: ["system-audio", "per-app-audio"],
         severity: "error",
         title: "PipeWire tools unavailable",
         message,
@@ -205,6 +217,8 @@ const resolveDesktopCaptureCapabilities = ({
 }: TResolveCapabilityOptions): TDesktopCapabilities => {
   const notes = [...baseCapabilities.notes];
   const issues = [...baseCapabilities.issues];
+  const resolvedSystemAudio =
+    sidecarCapabilities?.systemAudio ?? baseCapabilities.systemAudio;
   const globalPushKeybinds = resolveGlobalPushKeybinds(
     baseCapabilities,
     sidecarCapabilities,
@@ -311,6 +325,7 @@ const resolveDesktopCaptureCapabilities = ({
 
       return {
         ...baseCapabilities,
+        systemAudio: resolvedSystemAudio,
         perAppAudio: "unsupported",
         globalPushKeybinds,
         sidecarAvailable,
@@ -321,11 +336,12 @@ const resolveDesktopCaptureCapabilities = ({
 
     appendNote(
       notes,
-      "Linux sidecar audio uses PipeWire. Per-app capture may require selecting the emitting application manually, and system mode excludes Sharkord audio on a best-effort basis.",
+      "Linux sidecar audio uses a native PulseAudio-compatible backend. Per-app capture still requires selecting the emitting application manually, and system audio remains best-effort.",
     );
 
     return {
       ...baseCapabilities,
+      systemAudio: resolvedSystemAudio,
       globalPushKeybinds,
       sidecarAvailable: true,
       issues,

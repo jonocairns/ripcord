@@ -2,26 +2,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[cfg(any(windows, test, target_os = "linux"))]
 use std::collections::HashMap;
-#[cfg(target_os = "linux")]
-use std::collections::HashSet;
 use std::collections::VecDeque;
 #[cfg(target_os = "linux")]
-use std::ffi::CString;
+use std::ffi::{c_char, c_void, CStr, CString};
 #[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "macos")]
 use std::io::Read;
-#[cfg(target_os = "linux")]
-use std::io::Read;
 use std::io::{self, BufRead, Write};
 use std::net::{TcpListener, TcpStream};
-#[cfg(target_os = "linux")]
-use std::process::{Child, Command, Stdio};
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::mpsc::{self, RecvTimeoutError};
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
@@ -40,7 +36,7 @@ use std::mem::size_of;
 use std::path::Path;
 #[cfg(windows)]
 use std::ptr;
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(windows)]
 use std::time::Instant;
 #[cfg(windows)]
 use windows::core::{IUnknown, Interface, PWSTR};
@@ -87,7 +83,6 @@ const APP_AUDIO_CHANNELS: usize = 1;
 #[cfg(target_os = "linux")]
 const APP_AUDIO_FRAME_BYTES: usize = APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS * 4;
 #[cfg(target_os = "linux")]
-const LINUX_AUDIO_BACKEND_PIPEWIRE_CLI_SHELL: &str = "pipewire-cli-shell";
 #[allow(dead_code)]
 const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
 #[cfg(target_os = "macos")]
@@ -232,36 +227,310 @@ struct CaptureSession {
 }
 
 #[cfg(target_os = "linux")]
-enum LinuxCaptureEvent {
-    Frame {
-        target_id: String,
-        frame_samples: Vec<f32>,
-    },
-    ReadError {
-        target_id: String,
-        error: String,
-    },
-}
-
-#[cfg(target_os = "linux")]
-struct LinuxTargetCapture {
-    stop_flag: Arc<AtomicBool>,
-    process: Child,
-    stdout_thread: JoinHandle<()>,
-    stderr_thread: Option<JoinHandle<()>>,
-}
-
-#[cfg(target_os = "linux")]
 struct LinuxAudioBackendProbe {
     backend: &'static str,
     uses_shell_outs: bool,
-    pipewire_runtime_available: bool,
-    pipewire_runtime_reason: Option<String>,
+    runtime_available: bool,
+    runtime_reason: Option<String>,
+    per_app_audio_supported: bool,
+    per_app_audio_reason: Option<String>,
+    per_app_audio_reason_code: Option<&'static str>,
 }
 
 #[cfg(target_os = "linux")]
-const LINUX_PIPEWIRE_RUNTIME_LIBRARY_NAMES: [&str; 2] =
-    ["libpipewire-0.3.so.0", "libpipewire-0.3.so"];
+#[derive(Clone)]
+struct LinuxPulseSinkInfo {
+    index: u32,
+    name: String,
+    description: Option<String>,
+    monitor_source_name: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+struct LinuxPulseTargetInfo {
+    id: String,
+    label: String,
+    pid: u32,
+    process_name: String,
+    sink_index: u32,
+    monitor_source_name: String,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxPulseSinkInputInfo {
+    sink_index: u32,
+    pid: u32,
+    app_name: String,
+    process_name: String,
+    media_name: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxPulseServerInfo {
+    default_sink_name: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxPulseAudioSnapshot {
+    default_sink_name: Option<String>,
+    sinks: Vec<LinuxPulseSinkInfo>,
+    targets: Vec<LinuxPulseTargetInfo>,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxPulseCaptureSource {
+    monitor_source_name: String,
+    target_id: String,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxPulseOperationState<T> {
+    mainloop: *mut PaThreadedMainloop,
+    completed: bool,
+    value: Option<T>,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxPulseSinkListState {
+    mainloop: *mut PaThreadedMainloop,
+    completed: bool,
+    sinks: Vec<LinuxPulseSinkInfo>,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxPulseSinkInputListState {
+    mainloop: *mut PaThreadedMainloop,
+    completed: bool,
+    sink_inputs: Vec<LinuxPulseSinkInputInfo>,
+}
+
+#[cfg(target_os = "linux")]
+type PaContextNotifyCb = unsafe extern "C" fn(*mut PaContext, *mut c_void);
+#[cfg(target_os = "linux")]
+type PaServerInfoCb = unsafe extern "C" fn(*mut PaContext, *const PaServerInfo, *mut c_void);
+#[cfg(target_os = "linux")]
+type PaSinkInfoCb = unsafe extern "C" fn(*mut PaContext, *const PaSinkInfo, i32, *mut c_void);
+#[cfg(target_os = "linux")]
+type PaSinkInputInfoCb =
+    unsafe extern "C" fn(*mut PaContext, *const PaSinkInputInfo, i32, *mut c_void);
+
+#[cfg(target_os = "linux")]
+struct LinuxPulseLib {
+    _pulse_handle: *mut c_void,
+    _pulse_simple_handle: *mut c_void,
+    pa_threaded_mainloop_new: unsafe extern "C" fn() -> *mut PaThreadedMainloop,
+    pa_threaded_mainloop_free: unsafe extern "C" fn(*mut PaThreadedMainloop),
+    pa_threaded_mainloop_start: unsafe extern "C" fn(*mut PaThreadedMainloop) -> i32,
+    pa_threaded_mainloop_stop: unsafe extern "C" fn(*mut PaThreadedMainloop),
+    pa_threaded_mainloop_lock: unsafe extern "C" fn(*mut PaThreadedMainloop),
+    pa_threaded_mainloop_unlock: unsafe extern "C" fn(*mut PaThreadedMainloop),
+    pa_threaded_mainloop_wait: unsafe extern "C" fn(*mut PaThreadedMainloop),
+    pa_threaded_mainloop_signal: unsafe extern "C" fn(*mut PaThreadedMainloop, i32),
+    pa_threaded_mainloop_get_api:
+        unsafe extern "C" fn(*mut PaThreadedMainloop) -> *mut PaMainloopApi,
+    pa_context_new: unsafe extern "C" fn(*mut PaMainloopApi, *const c_char) -> *mut PaContext,
+    pa_context_set_state_callback:
+        unsafe extern "C" fn(*mut PaContext, Option<PaContextNotifyCb>, *mut c_void),
+    pa_context_connect:
+        unsafe extern "C" fn(*mut PaContext, *const c_char, i32, *const PaSpawnApi) -> i32,
+    pa_context_disconnect: unsafe extern "C" fn(*mut PaContext),
+    pa_context_unref: unsafe extern "C" fn(*mut PaContext),
+    pa_context_get_state: unsafe extern "C" fn(*const PaContext) -> i32,
+    pa_context_errno: unsafe extern "C" fn(*const PaContext) -> i32,
+    pa_context_get_server_info: unsafe extern "C" fn(
+        *mut PaContext,
+        Option<PaServerInfoCb>,
+        *mut c_void,
+    ) -> *mut PaOperation,
+    pa_context_get_sink_info_list:
+        unsafe extern "C" fn(*mut PaContext, Option<PaSinkInfoCb>, *mut c_void) -> *mut PaOperation,
+    pa_context_get_sink_input_info_list: unsafe extern "C" fn(
+        *mut PaContext,
+        Option<PaSinkInputInfoCb>,
+        *mut c_void,
+    ) -> *mut PaOperation,
+    pa_operation_get_state: unsafe extern "C" fn(*const PaOperation) -> i32,
+    pa_operation_unref: unsafe extern "C" fn(*mut PaOperation),
+    pa_proplist_gets: unsafe extern "C" fn(*const PaProplist, *const c_char) -> *const c_char,
+    pa_strerror: unsafe extern "C" fn(i32) -> *const c_char,
+    pa_simple_new: unsafe extern "C" fn(
+        *const c_char,
+        *const c_char,
+        i32,
+        *const c_char,
+        *const c_char,
+        *const PaSampleSpec,
+        *const PaChannelMap,
+        *const PaBufferAttr,
+        *mut i32,
+    ) -> *mut PaSimple,
+    pa_simple_free: unsafe extern "C" fn(*mut PaSimple),
+    pa_simple_read: unsafe extern "C" fn(*mut PaSimple, *mut c_void, usize, *mut i32) -> i32,
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl Send for LinuxPulseLib {}
+#[cfg(target_os = "linux")]
+unsafe impl Sync for LinuxPulseLib {}
+
+#[cfg(target_os = "linux")]
+struct LinuxPulseConnection {
+    lib: &'static LinuxPulseLib,
+    mainloop: *mut PaThreadedMainloop,
+    context: *mut PaContext,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct PaThreadedMainloop {
+    _private: [u8; 0],
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct PaMainloopApi {
+    _private: [u8; 0],
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct PaContext {
+    _private: [u8; 0],
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct PaOperation {
+    _private: [u8; 0],
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct PaSpawnApi {
+    _private: [u8; 0],
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct PaProplist {
+    _private: [u8; 0],
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct PaSimple {
+    _private: [u8; 0],
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct PaSampleSpec {
+    format: i32,
+    rate: u32,
+    channels: u8,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct PaChannelMap {
+    channels: u8,
+    map: [i32; 32],
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct PaCVolume {
+    channels: u8,
+    values: [u32; 32],
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct PaBufferAttr {
+    maxlength: u32,
+    tlength: u32,
+    prebuf: u32,
+    minreq: u32,
+    fragsize: u32,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct PaSinkInfo {
+    name: *const c_char,
+    index: u32,
+    description: *const c_char,
+    sample_spec: PaSampleSpec,
+    channel_map: PaChannelMap,
+    owner_module: u32,
+    volume: PaCVolume,
+    mute: i32,
+    monitor_source: u32,
+    monitor_source_name: *const c_char,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct PaSinkInputInfo {
+    index: u32,
+    name: *const c_char,
+    owner_module: u32,
+    client: u32,
+    sink: u32,
+    sample_spec: PaSampleSpec,
+    channel_map: PaChannelMap,
+    volume: PaCVolume,
+    buffer_usec: u64,
+    sink_usec: u64,
+    resample_method: *const c_char,
+    driver: *const c_char,
+    mute: i32,
+    proplist: *mut PaProplist,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct PaServerInfo {
+    user_name: *const c_char,
+    host_name: *const c_char,
+    server_version: *const c_char,
+    server_name: *const c_char,
+    sample_spec: PaSampleSpec,
+    default_sink_name: *const c_char,
+    default_source_name: *const c_char,
+    cookie: u32,
+    channel_map: PaChannelMap,
+}
+
+#[cfg(target_os = "linux")]
+const LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE: &str = "pulseaudio-native";
+#[cfg(target_os = "linux")]
+const LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE: &str = "linux-native-audio-backend-unavailable";
+#[cfg(target_os = "linux")]
+const LINUX_PULSEAUDIO_LIBRARY_NAMES: [&str; 2] = ["libpulse.so.0", "libpulse.so"];
+#[cfg(target_os = "linux")]
+const LINUX_PULSEAUDIO_SIMPLE_LIBRARY_NAMES: [&str; 2] =
+    ["libpulse-simple.so.0", "libpulse-simple.so"];
+#[cfg(target_os = "linux")]
+const LINUX_PULSE_TARGET_PREFIX: &str = "pulse:pid:";
+#[cfg(target_os = "linux")]
+const PA_CONTEXT_READY: i32 = 4;
+#[cfg(target_os = "linux")]
+const PA_CONTEXT_FAILED: i32 = 5;
+#[cfg(target_os = "linux")]
+const PA_CONTEXT_TERMINATED: i32 = 6;
+#[cfg(target_os = "linux")]
+const PA_OPERATION_RUNNING: i32 = 0;
+#[cfg(target_os = "linux")]
+const PA_SAMPLE_FLOAT32LE: i32 = 5;
+#[cfg(target_os = "linux")]
+const PA_STREAM_RECORD: i32 = 2;
+#[cfg(target_os = "linux")]
+const PA_CONTEXT_NOFLAGS: i32 = 0;
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1409,10 +1678,13 @@ fn parse_target_pid(target_id: &str) -> Option<u32> {
 }
 
 #[cfg(target_os = "linux")]
-fn parse_linux_target_node_id(target_id: &str) -> Option<&str> {
-    target_id
-        .strip_prefix("node:")
-        .filter(|raw| !raw.is_empty())
+fn parse_linux_pulse_target_id(target_id: &str) -> Option<(u32, u32)> {
+    let raw = target_id.strip_prefix(LINUX_PULSE_TARGET_PREFIX)?;
+    let (pid, sink_index) = raw.split_once(":sink:")?;
+    let pid = pid.parse::<u32>().ok()?;
+    let sink_index = sink_index.parse::<u32>().ok()?;
+
+    Some((pid, sink_index))
 }
 
 #[cfg(any(windows, test))]
@@ -1521,103 +1793,686 @@ fn process_name_from_pid(_pid: u32) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn pipewire_command_exists(command: &str) -> bool {
-    Command::new("sh")
-        .arg("-c")
-        .arg("command -v \"$1\" >/dev/null 2>&1")
-        .arg("sh")
-        .arg(command)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
+static LINUX_PULSE_LIB: OnceLock<Result<LinuxPulseLib, String>> = OnceLock::new();
 
 #[cfg(target_os = "linux")]
-fn pipewire_runtime_available() -> bool {
-    LINUX_PIPEWIRE_RUNTIME_LIBRARY_NAMES
-        .iter()
-        .copied()
-        .any(pipewire_runtime_library_available)
-}
-
-#[cfg(target_os = "linux")]
-fn pipewire_runtime_library_available(library_name: &str) -> bool {
-    let Ok(library_name) = CString::new(library_name) else {
-        return false;
-    };
-
-    let handle = unsafe { libc::dlopen(library_name.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
-    if handle.is_null() {
-        return false;
+fn linux_cstr_to_string(value: *const c_char) -> Option<String> {
+    if value.is_null() {
+        return None;
     }
 
-    let _ = unsafe { libc::dlclose(handle) };
-    true
+    unsafe { CStr::from_ptr(value) }
+        .to_str()
+        .ok()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_pulse_signal_mainloop(mainloop: *mut PaThreadedMainloop) {
+    if mainloop.is_null() {
+        return;
+    }
+
+    if let Ok(lib) = linux_pulse_lib() {
+        unsafe { (lib.pa_threaded_mainloop_signal)(mainloop, 0) };
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_dlopen_any(library_names: &[&str]) -> Result<*mut c_void, String> {
+    for library_name in library_names {
+        let Ok(library_name) = CString::new(*library_name) else {
+            continue;
+        };
+
+        let handle =
+            unsafe { libc::dlopen(library_name.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
+        if !handle.is_null() {
+            return Ok(handle);
+        }
+    }
+
+    if let Ok(entries) = fs::read_dir("/nix/store") {
+        for entry in entries.flatten() {
+            for library_name in library_names {
+                let candidate_path = entry.path().join("lib").join(library_name);
+                if !candidate_path.is_file() {
+                    continue;
+                }
+
+                let Ok(candidate_path) = CString::new(candidate_path.to_string_lossy().as_ref())
+                else {
+                    continue;
+                };
+
+                let handle = unsafe {
+                    libc::dlopen(candidate_path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL)
+                };
+                if !handle.is_null() {
+                    return Ok(handle);
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "Could not load any of the required Linux audio libraries: {}",
+        library_names.join(", ")
+    ))
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn linux_load_symbol<T: Copy>(handle: *mut c_void, symbol_name: &CStr) -> Result<T, String> {
+    let symbol = libc::dlsym(handle, symbol_name.as_ptr());
+    if symbol.is_null() {
+        return Err(format!(
+            "Missing Linux audio symbol `{}`.",
+            symbol_name.to_string_lossy()
+        ));
+    }
+
+    Ok(std::mem::transmute_copy(&symbol))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_pulse_lib() -> Result<&'static LinuxPulseLib, String> {
+    let result = LINUX_PULSE_LIB.get_or_init(|| {
+        let pulse_handle = linux_dlopen_any(&LINUX_PULSEAUDIO_LIBRARY_NAMES)?;
+        let pulse_simple_handle = linux_dlopen_any(&LINUX_PULSEAUDIO_SIMPLE_LIBRARY_NAMES)?;
+
+        unsafe {
+            let load_symbol = |handle: *mut c_void, symbol_name: &'static [u8]| {
+                linux_load_symbol::<unsafe extern "C" fn()>(
+                    handle,
+                    CStr::from_bytes_with_nul_unchecked(symbol_name),
+                )
+            };
+
+            let lib = LinuxPulseLib {
+                _pulse_handle: pulse_handle,
+                _pulse_simple_handle: pulse_simple_handle,
+                pa_threaded_mainloop_new: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_threaded_mainloop_new\0",
+                )?),
+                pa_threaded_mainloop_free: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_threaded_mainloop_free\0",
+                )?),
+                pa_threaded_mainloop_start: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_threaded_mainloop_start\0",
+                )?),
+                pa_threaded_mainloop_stop: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_threaded_mainloop_stop\0",
+                )?),
+                pa_threaded_mainloop_lock: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_threaded_mainloop_lock\0",
+                )?),
+                pa_threaded_mainloop_unlock: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_threaded_mainloop_unlock\0",
+                )?),
+                pa_threaded_mainloop_wait: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_threaded_mainloop_wait\0",
+                )?),
+                pa_threaded_mainloop_signal: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_threaded_mainloop_signal\0",
+                )?),
+                pa_threaded_mainloop_get_api: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_threaded_mainloop_get_api\0",
+                )?),
+                pa_context_new: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_context_new\0",
+                )?),
+                pa_context_set_state_callback: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_context_set_state_callback\0",
+                )?),
+                pa_context_connect: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_context_connect\0",
+                )?),
+                pa_context_disconnect: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_context_disconnect\0",
+                )?),
+                pa_context_unref: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_context_unref\0",
+                )?),
+                pa_context_get_state: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_context_get_state\0",
+                )?),
+                pa_context_errno: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_context_errno\0",
+                )?),
+                pa_context_get_server_info: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_context_get_server_info\0",
+                )?),
+                pa_context_get_sink_info_list: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_context_get_sink_info_list\0",
+                )?),
+                pa_context_get_sink_input_info_list: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_context_get_sink_input_info_list\0",
+                )?),
+                pa_operation_get_state: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_operation_get_state\0",
+                )?),
+                pa_operation_unref: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_operation_unref\0",
+                )?),
+                pa_proplist_gets: std::mem::transmute(load_symbol(
+                    pulse_handle,
+                    b"pa_proplist_gets\0",
+                )?),
+                pa_strerror: std::mem::transmute(load_symbol(pulse_handle, b"pa_strerror\0")?),
+                pa_simple_new: std::mem::transmute(load_symbol(
+                    pulse_simple_handle,
+                    b"pa_simple_new\0",
+                )?),
+                pa_simple_free: std::mem::transmute(load_symbol(
+                    pulse_simple_handle,
+                    b"pa_simple_free\0",
+                )?),
+                pa_simple_read: std::mem::transmute(load_symbol(
+                    pulse_simple_handle,
+                    b"pa_simple_read\0",
+                )?),
+            };
+
+            Ok(lib)
+        }
+    });
+
+    result.as_ref().map_err(Clone::clone)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_pulse_strerror(lib: &LinuxPulseLib, error_code: i32) -> String {
+    linux_cstr_to_string(unsafe { (lib.pa_strerror)(error_code) })
+        .unwrap_or_else(|| format!("PulseAudio error {error_code}"))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_pulse_proplist_get(
+    lib: &LinuxPulseLib,
+    proplist: *mut PaProplist,
+    key: &str,
+) -> Option<String> {
+    let Ok(key) = CString::new(key) else {
+        return None;
+    };
+
+    linux_cstr_to_string(unsafe { (lib.pa_proplist_gets)(proplist, key.as_ptr()) })
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn linux_pulse_context_state_callback(
+    _context: *mut PaContext,
+    userdata: *mut c_void,
+) {
+    linux_pulse_signal_mainloop(userdata.cast::<PaThreadedMainloop>());
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn linux_pulse_server_info_callback(
+    _context: *mut PaContext,
+    info: *const PaServerInfo,
+    userdata: *mut c_void,
+) {
+    let Some(state) = userdata
+        .cast::<LinuxPulseOperationState<LinuxPulseServerInfo>>()
+        .as_mut()
+    else {
+        return;
+    };
+
+    if !info.is_null() {
+        state.value = Some(LinuxPulseServerInfo {
+            default_sink_name: linux_cstr_to_string((*info).default_sink_name),
+        });
+    }
+
+    state.completed = true;
+    linux_pulse_signal_mainloop(state.mainloop);
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn linux_pulse_sink_info_callback(
+    _context: *mut PaContext,
+    info: *const PaSinkInfo,
+    eol: i32,
+    userdata: *mut c_void,
+) {
+    let Some(state) = userdata.cast::<LinuxPulseSinkListState>().as_mut() else {
+        return;
+    };
+
+    if eol != 0 || info.is_null() {
+        state.completed = true;
+        linux_pulse_signal_mainloop(state.mainloop);
+        return;
+    }
+
+    let sink = &*info;
+    let Some(name) = linux_cstr_to_string(sink.name) else {
+        return;
+    };
+
+    state.sinks.push(LinuxPulseSinkInfo {
+        index: sink.index,
+        name,
+        description: linux_cstr_to_string(sink.description),
+        monitor_source_name: linux_cstr_to_string(sink.monitor_source_name),
+    });
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn linux_pulse_sink_input_info_callback(
+    _context: *mut PaContext,
+    info: *const PaSinkInputInfo,
+    eol: i32,
+    userdata: *mut c_void,
+) {
+    let Some(state) = userdata.cast::<LinuxPulseSinkInputListState>().as_mut() else {
+        return;
+    };
+
+    if eol != 0 || info.is_null() {
+        state.completed = true;
+        linux_pulse_signal_mainloop(state.mainloop);
+        return;
+    }
+
+    let Ok(lib) = linux_pulse_lib() else {
+        state.completed = true;
+        linux_pulse_signal_mainloop(state.mainloop);
+        return;
+    };
+
+    let sink_input = &*info;
+    let Some(pid) = linux_pulse_proplist_get(lib, sink_input.proplist, "application.process.id")
+        .and_then(|value| value.parse::<u32>().ok())
+    else {
+        return;
+    };
+
+    let app_name = linux_pulse_proplist_get(lib, sink_input.proplist, "application.name")
+        .or_else(|| linux_cstr_to_string(sink_input.name))
+        .unwrap_or_else(|| "Unknown app".to_string());
+    let process_name =
+        linux_pulse_proplist_get(lib, sink_input.proplist, "application.process.binary")
+            .unwrap_or_else(|| app_name.clone());
+    let media_name = linux_pulse_proplist_get(lib, sink_input.proplist, "media.name")
+        .or_else(|| linux_cstr_to_string(sink_input.name))
+        .filter(|value| !value.eq_ignore_ascii_case(&app_name));
+
+    state.sink_inputs.push(LinuxPulseSinkInputInfo {
+        sink_index: sink_input.sink,
+        pid,
+        app_name,
+        process_name,
+        media_name,
+    });
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxPulseConnection {
+    fn connect() -> Result<Self, String> {
+        let lib = linux_pulse_lib()?;
+        let mainloop = unsafe { (lib.pa_threaded_mainloop_new)() };
+        if mainloop.is_null() {
+            return Err("Failed to create the Linux audio mainloop.".to_string());
+        }
+
+        let start_result = unsafe { (lib.pa_threaded_mainloop_start)(mainloop) };
+        if start_result < 0 {
+            unsafe { (lib.pa_threaded_mainloop_free)(mainloop) };
+            return Err("Failed to start the Linux audio mainloop.".to_string());
+        }
+
+        unsafe { (lib.pa_threaded_mainloop_lock)(mainloop) };
+
+        let app_name =
+            CString::new("Sharkord Capture Sidecar").map_err(|error| error.to_string())?;
+        let context = unsafe {
+            (lib.pa_context_new)(
+                (lib.pa_threaded_mainloop_get_api)(mainloop),
+                app_name.as_ptr(),
+            )
+        };
+        if context.is_null() {
+            unsafe {
+                (lib.pa_threaded_mainloop_unlock)(mainloop);
+                (lib.pa_threaded_mainloop_stop)(mainloop);
+                (lib.pa_threaded_mainloop_free)(mainloop);
+            }
+            return Err("Failed to create the Linux audio context.".to_string());
+        }
+
+        unsafe {
+            (lib.pa_context_set_state_callback)(
+                context,
+                Some(linux_pulse_context_state_callback),
+                mainloop.cast::<c_void>(),
+            );
+        }
+
+        if unsafe {
+            (lib.pa_context_connect)(
+                context,
+                std::ptr::null(),
+                PA_CONTEXT_NOFLAGS,
+                std::ptr::null(),
+            )
+        } < 0
+        {
+            let error = linux_pulse_strerror(lib, unsafe { (lib.pa_context_errno)(context) });
+            unsafe {
+                (lib.pa_context_unref)(context);
+                (lib.pa_threaded_mainloop_unlock)(mainloop);
+                (lib.pa_threaded_mainloop_stop)(mainloop);
+                (lib.pa_threaded_mainloop_free)(mainloop);
+            }
+            return Err(format!(
+                "Failed to connect to the Linux audio server: {error}"
+            ));
+        }
+
+        let connection = Self {
+            lib,
+            mainloop,
+            context,
+        };
+
+        if let Err(error) = connection.wait_for_ready_locked() {
+            drop(connection);
+            return Err(error);
+        }
+
+        unsafe { (lib.pa_threaded_mainloop_unlock)(mainloop) };
+        Ok(connection)
+    }
+
+    fn wait_for_ready_locked(&self) -> Result<(), String> {
+        loop {
+            let state = unsafe { (self.lib.pa_context_get_state)(self.context) };
+            match state {
+                PA_CONTEXT_READY => return Ok(()),
+                PA_CONTEXT_FAILED | PA_CONTEXT_TERMINATED => {
+                    let error = linux_pulse_strerror(self.lib, unsafe {
+                        (self.lib.pa_context_errno)(self.context)
+                    });
+                    return Err(format!(
+                        "Failed to connect to the Linux audio server: {error}"
+                    ));
+                }
+                _ => unsafe { (self.lib.pa_threaded_mainloop_wait)(self.mainloop) },
+            }
+        }
+    }
+
+    fn wait_for_operation_locked(
+        &self,
+        operation: *mut PaOperation,
+        completed: &mut bool,
+    ) -> Result<(), String> {
+        if operation.is_null() {
+            let error = linux_pulse_strerror(self.lib, unsafe {
+                (self.lib.pa_context_errno)(self.context)
+            });
+            return Err(format!("Linux audio query failed: {error}"));
+        }
+
+        loop {
+            if *completed {
+                break;
+            }
+
+            let context_state = unsafe { (self.lib.pa_context_get_state)(self.context) };
+            if matches!(context_state, PA_CONTEXT_FAILED | PA_CONTEXT_TERMINATED) {
+                let error = linux_pulse_strerror(self.lib, unsafe {
+                    (self.lib.pa_context_errno)(self.context)
+                });
+                unsafe { (self.lib.pa_operation_unref)(operation) };
+                return Err(format!("Linux audio server disconnected: {error}"));
+            }
+
+            let operation_state = unsafe { (self.lib.pa_operation_get_state)(operation) };
+            if operation_state != PA_OPERATION_RUNNING {
+                break;
+            }
+
+            unsafe { (self.lib.pa_threaded_mainloop_wait)(self.mainloop) };
+        }
+
+        unsafe { (self.lib.pa_operation_unref)(operation) };
+        Ok(())
+    }
+
+    fn get_server_info(&self) -> Result<LinuxPulseServerInfo, String> {
+        unsafe { (self.lib.pa_threaded_mainloop_lock)(self.mainloop) };
+
+        let mut state = LinuxPulseOperationState::<LinuxPulseServerInfo> {
+            mainloop: self.mainloop,
+            completed: false,
+            value: None,
+        };
+        let operation = unsafe {
+            (self.lib.pa_context_get_server_info)(
+                self.context,
+                Some(linux_pulse_server_info_callback),
+                (&mut state as *mut LinuxPulseOperationState<LinuxPulseServerInfo>)
+                    .cast::<c_void>(),
+            )
+        };
+
+        let result = self
+            .wait_for_operation_locked(operation, &mut state.completed)
+            .and_then(|_| {
+                state
+                    .value
+                    .ok_or_else(|| "Failed to query the default Linux audio sink.".to_string())
+            });
+
+        unsafe { (self.lib.pa_threaded_mainloop_unlock)(self.mainloop) };
+        result
+    }
+
+    fn list_sinks(&self) -> Result<Vec<LinuxPulseSinkInfo>, String> {
+        unsafe { (self.lib.pa_threaded_mainloop_lock)(self.mainloop) };
+
+        let mut state = LinuxPulseSinkListState {
+            mainloop: self.mainloop,
+            completed: false,
+            sinks: Vec::new(),
+        };
+        let operation = unsafe {
+            (self.lib.pa_context_get_sink_info_list)(
+                self.context,
+                Some(linux_pulse_sink_info_callback),
+                (&mut state as *mut LinuxPulseSinkListState).cast::<c_void>(),
+            )
+        };
+
+        let result = self
+            .wait_for_operation_locked(operation, &mut state.completed)
+            .map(|_| state.sinks);
+
+        unsafe { (self.lib.pa_threaded_mainloop_unlock)(self.mainloop) };
+        result
+    }
+
+    fn list_sink_inputs(&self) -> Result<Vec<LinuxPulseSinkInputInfo>, String> {
+        unsafe { (self.lib.pa_threaded_mainloop_lock)(self.mainloop) };
+
+        let mut state = LinuxPulseSinkInputListState {
+            mainloop: self.mainloop,
+            completed: false,
+            sink_inputs: Vec::new(),
+        };
+        let operation = unsafe {
+            (self.lib.pa_context_get_sink_input_info_list)(
+                self.context,
+                Some(linux_pulse_sink_input_info_callback),
+                (&mut state as *mut LinuxPulseSinkInputListState).cast::<c_void>(),
+            )
+        };
+
+        let result = self
+            .wait_for_operation_locked(operation, &mut state.completed)
+            .map(|_| state.sink_inputs);
+
+        unsafe { (self.lib.pa_threaded_mainloop_unlock)(self.mainloop) };
+        result
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for LinuxPulseConnection {
+    fn drop(&mut self) {
+        unsafe {
+            (self.lib.pa_threaded_mainloop_lock)(self.mainloop);
+            (self.lib.pa_context_disconnect)(self.context);
+            (self.lib.pa_context_unref)(self.context);
+            (self.lib.pa_threaded_mainloop_unlock)(self.mainloop);
+            (self.lib.pa_threaded_mainloop_stop)(self.mainloop);
+            (self.lib.pa_threaded_mainloop_free)(self.mainloop);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_pulse_audio_snapshot() -> Result<LinuxPulseAudioSnapshot, String> {
+    let connection = LinuxPulseConnection::connect()?;
+    let server_info = connection.get_server_info()?;
+    let sinks = connection.list_sinks()?;
+    let sink_inputs = connection.list_sink_inputs()?;
+
+    if sinks.is_empty() {
+        return Err(
+            "No capture-capable Linux audio sinks were found for the current session.".to_string(),
+        );
+    }
+
+    let sinks_by_index = sinks
+        .iter()
+        .map(|sink| (sink.index, sink))
+        .collect::<HashMap<_, _>>();
+    let mut grouped_targets = HashMap::<(u32, u32), LinuxPulseTargetInfo>::new();
+
+    for sink_input in sink_inputs {
+        let Some(sink) = sinks_by_index.get(&sink_input.sink_index) else {
+            continue;
+        };
+        let Some(monitor_source_name) = sink.monitor_source_name.clone() else {
+            continue;
+        };
+
+        let key = (sink_input.pid, sink_input.sink_index);
+        let stream_detail = sink_input.media_name.clone();
+        let sink_detail = sink
+            .description
+            .clone()
+            .or_else(|| Some(sink.name.clone()))
+            .filter(|value| !value.eq_ignore_ascii_case(&sink_input.app_name));
+        let label = match (stream_detail, sink_detail) {
+            (Some(stream_detail), Some(sink_detail)) => format!(
+                "{} [{}] - {} via {} ({})",
+                sink_input.app_name,
+                sink_input.process_name,
+                stream_detail,
+                sink_detail,
+                sink_input.pid
+            ),
+            (Some(stream_detail), None) => format!(
+                "{} [{}] - {} ({})",
+                sink_input.app_name, sink_input.process_name, stream_detail, sink_input.pid
+            ),
+            (None, Some(sink_detail)) => format!(
+                "{} [{}] via {} ({})",
+                sink_input.app_name, sink_input.process_name, sink_detail, sink_input.pid
+            ),
+            (None, None) => format!(
+                "{} [{}] ({})",
+                sink_input.app_name, sink_input.process_name, sink_input.pid
+            ),
+        };
+
+        grouped_targets
+            .entry(key)
+            .or_insert_with(|| LinuxPulseTargetInfo {
+                id: format!(
+                    "{LINUX_PULSE_TARGET_PREFIX}{}:sink:{}",
+                    sink_input.pid, sink_input.sink_index
+                ),
+                label,
+                pid: sink_input.pid,
+                process_name: sink_input.process_name.clone(),
+                sink_index: sink_input.sink_index,
+                monitor_source_name,
+            });
+    }
+
+    let mut targets = grouped_targets.into_values().collect::<Vec<_>>();
+    targets.sort_by(|left, right| left.label.cmp(&right.label));
+
+    Ok(LinuxPulseAudioSnapshot {
+        default_sink_name: server_info.default_sink_name,
+        sinks,
+        targets,
+    })
 }
 
 #[cfg(target_os = "linux")]
 fn probe_linux_audio_backend() -> LinuxAudioBackendProbe {
-    let pipewire_runtime_available = pipewire_runtime_available();
-    let pipewire_runtime_reason = if pipewire_runtime_available {
-        None
-    } else {
-        Some(
-            "PipeWire runtime libraries were not detected in the current environment, so the planned native Linux audio backend is not ready on this install."
-                .to_string(),
-        )
-    };
-
-    LinuxAudioBackendProbe {
-        backend: LINUX_AUDIO_BACKEND_PIPEWIRE_CLI_SHELL,
-        uses_shell_outs: true,
-        pipewire_runtime_available,
-        pipewire_runtime_reason,
+    match linux_pulse_lib() {
+        Ok(_) => match linux_pulse_audio_snapshot() {
+            Ok(_) => LinuxAudioBackendProbe {
+                backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
+                uses_shell_outs: false,
+                runtime_available: true,
+                runtime_reason: None,
+                per_app_audio_supported: true,
+                per_app_audio_reason: None,
+                per_app_audio_reason_code: None,
+            },
+            Err(error) => LinuxAudioBackendProbe {
+                backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
+                uses_shell_outs: false,
+                runtime_available: true,
+                runtime_reason: None,
+                per_app_audio_supported: false,
+                per_app_audio_reason: Some(error),
+                per_app_audio_reason_code: Some(LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE),
+            },
+        },
+        Err(error) => LinuxAudioBackendProbe {
+            backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
+            uses_shell_outs: false,
+            runtime_available: false,
+            runtime_reason: Some(error.clone()),
+            per_app_audio_supported: false,
+            per_app_audio_reason: Some(error),
+            per_app_audio_reason_code: Some(LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE),
+        },
     }
-}
-
-#[cfg(target_os = "linux")]
-fn missing_pipewire_tools() -> Vec<&'static str> {
-    let mut missing = Vec::new();
-
-    if !pipewire_command_exists("pw-dump") {
-        missing.push("pw-dump");
-    }
-
-    if !pipewire_command_exists("pw-record") {
-        missing.push("pw-record");
-    }
-
-    missing
-}
-
-#[cfg(target_os = "linux")]
-fn pipewire_tools_available() -> bool {
-    missing_pipewire_tools().is_empty()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn pipewire_tools_available() -> bool {
-    false
-}
-
-#[cfg(target_os = "linux")]
-fn missing_pipewire_tools_reason() -> String {
-    let missing_tools = missing_pipewire_tools();
-    if missing_tools.is_empty() {
-        return String::new();
-    }
-
-    format!(
-        "Linux per-app audio capture requires the PipeWire tools `{}`.",
-        missing_tools.join("`, `")
-    )
-}
-
-#[cfg(not(target_os = "linux"))]
-fn missing_pipewire_tools_reason() -> String {
-    String::new()
 }
 
 #[cfg(target_os = "linux")]
@@ -1737,95 +2592,64 @@ fn probe_linux_desktop_portal() -> (bool, Option<String>) {
 }
 
 #[cfg(target_os = "linux")]
-fn run_pipewire_command(command: &str, arguments: &[&str]) -> Result<Vec<u8>, String> {
-    let output = Command::new(command)
-        .args(arguments)
-        .output()
-        .map_err(|error| format!("failed to launch `{command}`: {error}"))?;
-
-    if !output.status.success() {
-        let stderr_output = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("`{command}` failed: {}", stderr_output.trim()));
-    }
-
-    Ok(output.stdout)
-}
-
-#[cfg(target_os = "linux")]
-fn linux_value_as_u32(value: &Value) -> Option<u32> {
-    value
-        .as_u64()
-        .and_then(|raw| u32::try_from(raw).ok())
-        .or_else(|| value.as_str().and_then(|raw| raw.parse::<u32>().ok()))
-}
-
-#[cfg(target_os = "linux")]
-fn linux_prop_as_u32(props: &Value, key: &str) -> Option<u32> {
-    props.get(key).and_then(linux_value_as_u32)
-}
-
-#[cfg(target_os = "linux")]
-fn linux_prop_as_str<'a>(props: &'a Value, key: &str) -> Option<&'a str> {
-    props
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-#[cfg(target_os = "linux")]
-fn get_linux_process_tree_pids(root_pid: u32) -> HashSet<u32> {
-    let mut process_tree_pids = HashSet::from([root_pid]);
-
-    loop {
-        let mut added_any = false;
-        let entries = match fs::read_dir("/proc") {
-            Ok(entries) => entries,
-            Err(_) => break,
-        };
-
-        for entry in entries.flatten() {
-            let Some(file_name) = entry.file_name().to_str().map(ToString::to_string) else {
-                continue;
-            };
-            let Ok(pid) = file_name.parse::<u32>() else {
-                continue;
-            };
-
-            let status_path = entry.path().join("status");
-            let Ok(status_text) = fs::read_to_string(status_path) else {
-                continue;
-            };
-            let parent_pid = status_text.lines().find_map(|line| {
-                line.strip_prefix("PPid:")
-                    .map(str::trim)
-                    .and_then(|value| value.parse::<u32>().ok())
-            });
-
-            if parent_pid.is_some_and(|parent_pid| process_tree_pids.contains(&parent_pid))
-                && process_tree_pids.insert(pid)
-            {
-                added_any = true;
-            }
-        }
-
-        if !added_any {
-            break;
+fn linux_default_pulse_capture_source(
+    snapshot: &LinuxPulseAudioSnapshot,
+) -> Result<LinuxPulseCaptureSource, String> {
+    if let Some(default_sink_name) = snapshot.default_sink_name.as_deref() {
+        if let Some(sink) = snapshot
+            .sinks
+            .iter()
+            .find(|sink| sink.name == default_sink_name)
+            .and_then(|sink| {
+                sink.monitor_source_name
+                    .as_deref()
+                    .map(|monitor_source_name| LinuxPulseCaptureSource {
+                        monitor_source_name: monitor_source_name.to_string(),
+                        target_id: "loopback".to_string(),
+                    })
+            })
+        {
+            return Ok(sink);
         }
     }
 
-    process_tree_pids
+    snapshot
+        .sinks
+        .iter()
+        .find_map(|sink| {
+            sink.monitor_source_name
+                .as_deref()
+                .map(|monitor_source_name| LinuxPulseCaptureSource {
+                    monitor_source_name: monitor_source_name.to_string(),
+                    target_id: "loopback".to_string(),
+                })
+        })
+        .ok_or_else(|| {
+            "No Linux audio monitor source is available for system audio capture.".to_string()
+        })
 }
 
 #[cfg(target_os = "linux")]
-fn stop_linux_target_capture(mut capture: LinuxTargetCapture) {
-    capture.stop_flag.store(true, Ordering::Relaxed);
-    let _ = capture.process.kill();
-    let _ = capture.process.wait();
-    let _ = capture.stdout_thread.join();
-    if let Some(stderr_thread) = capture.stderr_thread.take() {
-        let _ = stderr_thread.join();
+fn linux_pulse_capture_source_for_target(
+    target_id: &str,
+) -> Result<LinuxPulseCaptureSource, String> {
+    if target_id == "loopback" {
+        return linux_default_pulse_capture_source(&linux_pulse_audio_snapshot()?);
     }
+
+    let (pid, sink_index) = parse_linux_pulse_target_id(target_id)
+        .ok_or_else(|| "Invalid Linux audio target id.".to_string())?;
+
+    let snapshot = linux_pulse_audio_snapshot()?;
+    snapshot
+        .targets
+        .into_iter()
+        .find(|target| target.pid == pid && target.sink_index == sink_index)
+        .map(|target| LinuxPulseCaptureSource {
+            monitor_source_name: target.monitor_source_name,
+            target_id: target.id,
+        })
+        .ok_or_else(|| format!("Target audio source `{target_id}` is not available"))
 }
 
 fn clamp_audio_samples(frame_samples: &mut [f32]) {
@@ -1875,116 +2699,6 @@ fn emit_linux_audio_frame(
             pcm_base64,
         );
     }
-}
-
-#[cfg(target_os = "linux")]
-fn start_linux_target_capture(
-    target_id: &str,
-    event_sender: std::sync::mpsc::Sender<LinuxCaptureEvent>,
-) -> Result<LinuxTargetCapture, String> {
-    let Some(target_object_id) = parse_linux_target_node_id(target_id) else {
-        return Err("Invalid Linux PipeWire target id.".to_string());
-    };
-
-    let mut child = Command::new("pw-record")
-        .args([
-            "--target",
-            target_object_id,
-            "--rate",
-            "48000",
-            "--channels",
-            "1",
-            "--format",
-            "f32",
-            "--latency",
-            "20ms",
-            "-",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("Failed to launch `pw-record` for {target_id}: {error}"))?;
-
-    let Some(stdout_pipe) = child.stdout.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(format!(
-            "`pw-record` did not expose stdout for {target_id}."
-        ));
-    };
-
-    let stop_flag = Arc::new(AtomicBool::new(false));
-    let stop_flag_for_thread = Arc::clone(&stop_flag);
-    let target_id_for_stdout = target_id.to_string();
-    let stdout_thread = thread::spawn(move || {
-        let mut stdout_reader = io::BufReader::new(stdout_pipe);
-
-        loop {
-            if stop_flag_for_thread.load(Ordering::Relaxed) {
-                return;
-            }
-
-            let mut frame_bytes = vec![0u8; APP_AUDIO_FRAME_BYTES];
-            match stdout_reader.read_exact(&mut frame_bytes) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return,
-                Err(error) => {
-                    let _ = event_sender.send(LinuxCaptureEvent::ReadError {
-                        target_id: target_id_for_stdout.clone(),
-                        error: format!("Failed reading `pw-record` PCM data: {error}"),
-                    });
-                    return;
-                }
-            }
-
-            let frame_samples = frame_bytes
-                .chunks_exact(4)
-                .map(|sample_bytes| {
-                    f32::from_le_bytes([
-                        sample_bytes[0],
-                        sample_bytes[1],
-                        sample_bytes[2],
-                        sample_bytes[3],
-                    ])
-                })
-                .collect::<Vec<f32>>();
-
-            if event_sender
-                .send(LinuxCaptureEvent::Frame {
-                    target_id: target_id_for_stdout.clone(),
-                    frame_samples,
-                })
-                .is_err()
-            {
-                return;
-            }
-        }
-    });
-
-    let stderr_thread = child.stderr.take().map(|stderr_pipe| {
-        let target_id = target_id.to_string();
-        thread::spawn(move || {
-            let stderr_reader = io::BufReader::new(stderr_pipe);
-            for line in stderr_reader.lines().map_while(Result::ok) {
-                let trimmed_line = line.trim();
-                if trimmed_line.is_empty() {
-                    continue;
-                }
-
-                eprintln!(
-                    "[capture-sidecar] linux target {}: {}",
-                    target_id, trimmed_line
-                );
-            }
-        })
-    });
-
-    Ok(LinuxTargetCapture {
-        stop_flag,
-        process: child,
-        stdout_thread,
-        stderr_thread,
-    })
 }
 
 #[cfg(windows)]
@@ -2099,90 +2813,22 @@ fn get_audio_targets() -> Vec<AudioTarget> {
 
 #[cfg(target_os = "linux")]
 fn get_audio_targets() -> Vec<AudioTarget> {
-    let output = match run_pipewire_command("pw-dump", &[]) {
-        Ok(output) => output,
+    match linux_pulse_audio_snapshot() {
+        Ok(snapshot) => snapshot
+            .targets
+            .into_iter()
+            .map(|target| AudioTarget {
+                id: target.id,
+                label: target.label,
+                pid: target.pid,
+                process_name: target.process_name,
+            })
+            .collect(),
         Err(error) => {
             eprintln!("[capture-sidecar] {error}");
-            return Vec::new();
+            Vec::new()
         }
-    };
-
-    let objects: Vec<Value> = match serde_json::from_slice(&output) {
-        Ok(objects) => objects,
-        Err(error) => {
-            eprintln!("[capture-sidecar] Failed to parse `pw-dump` JSON: {error}");
-            return Vec::new();
-        }
-    };
-
-    let mut targets = Vec::new();
-
-    for object in objects {
-        let Some(object_type) = object.get("type").and_then(Value::as_str) else {
-            continue;
-        };
-        if !object_type.ends_with(":Node") {
-            continue;
-        }
-
-        let Some(props) = object.get("info").and_then(|info| info.get("props")) else {
-            continue;
-        };
-        let Some(media_class) = linux_prop_as_str(props, "media.class") else {
-            continue;
-        };
-        if !media_class.starts_with("Stream/Output/Audio") {
-            continue;
-        }
-
-        let Some(pid) = linux_prop_as_u32(props, "application.process.id")
-            .or_else(|| linux_prop_as_u32(props, "pipewire.sec.pid"))
-        else {
-            continue;
-        };
-        let Some(target_object_id) = linux_prop_as_str(props, "object.serial")
-            .map(ToString::to_string)
-            .or_else(|| {
-                object
-                    .get("id")
-                    .and_then(linux_value_as_u32)
-                    .map(|raw| raw.to_string())
-            })
-        else {
-            continue;
-        };
-
-        let app_name = linux_prop_as_str(props, "application.name")
-            .or_else(|| linux_prop_as_str(props, "node.description"))
-            .or_else(|| linux_prop_as_str(props, "node.nick"))
-            .or_else(|| linux_prop_as_str(props, "node.name"))
-            .unwrap_or("Unknown app");
-        let node_label = linux_prop_as_str(props, "node.description")
-            .or_else(|| linux_prop_as_str(props, "node.nick"))
-            .unwrap_or(app_name);
-        let process_name = linux_prop_as_str(props, "application.process.binary")
-            .unwrap_or(app_name)
-            .to_string();
-        let label = if node_label.eq_ignore_ascii_case(app_name) {
-            if process_name.eq_ignore_ascii_case(app_name) {
-                format!("{app_name} ({pid})")
-            } else {
-                format!("{app_name} [{process_name}] ({pid})")
-            }
-        } else {
-            format!("{app_name} [{process_name}] - {node_label} ({pid})")
-        };
-
-        targets.push(AudioTarget {
-            id: format!("node:{target_object_id}"),
-            label,
-            pid,
-            process_name,
-        });
     }
-
-    targets.sort_by(|left, right| left.label.cmp(&right.label));
-    targets
 }
 
 #[cfg(all(not(windows), not(target_os = "macos"), not(target_os = "linux")))]
@@ -2579,330 +3225,105 @@ fn capture_loopback_audio(
     frame_queue: Arc<FrameQueue>,
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
-    if let Some(self_exclude_pid) = self_exclude_pid {
-        let (event_sender, event_receiver) = std::sync::mpsc::channel::<LinuxCaptureEvent>();
-        let mut captures: HashMap<String, LinuxTargetCapture> = HashMap::new();
-        let mut sequence: u64 = 0;
-        let mut last_refresh_at = Instant::now() - Duration::from_secs(1);
+    let _ = self_exclude_pid;
 
-        loop {
-            if stop_flag.load(Ordering::Relaxed) {
-                for capture in captures.into_values() {
-                    stop_linux_target_capture(capture);
-                }
-                return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
-            }
+    let capture_source = match linux_pulse_capture_source_for_target(target_id) {
+        Ok(capture_source) => capture_source,
+        Err(error) => return CaptureOutcome::capture_error(error),
+    };
 
-            if last_refresh_at.elapsed() >= Duration::from_millis(750) {
-                let excluded_pids = get_linux_process_tree_pids(self_exclude_pid);
-                let next_targets = get_audio_targets()
-                    .into_iter()
-                    .filter(|target| !excluded_pids.contains(&target.pid))
-                    .collect::<Vec<_>>();
+    let lib = match linux_pulse_lib() {
+        Ok(lib) => lib,
+        Err(error) => return CaptureOutcome::capture_error(error),
+    };
 
-                let next_target_ids = next_targets
-                    .iter()
-                    .map(|target| target.id.clone())
-                    .collect::<HashSet<_>>();
-                let stale_target_ids = captures
-                    .keys()
-                    .filter(|target_id| !next_target_ids.contains(*target_id))
-                    .cloned()
-                    .collect::<Vec<_>>();
-
-                for stale_target_id in stale_target_ids {
-                    if let Some(capture) = captures.remove(&stale_target_id) {
-                        stop_linux_target_capture(capture);
-                    }
-                }
-
-                let mut spawn_error: Option<String> = None;
-
-                for next_target in next_targets {
-                    if captures.contains_key(&next_target.id) {
-                        continue;
-                    }
-
-                    match start_linux_target_capture(&next_target.id, event_sender.clone()) {
-                        Ok(capture) => {
-                            captures.insert(next_target.id, capture);
-                        }
-                        Err(error) => {
-                            eprintln!("[capture-sidecar] {error}");
-                            spawn_error = Some(error);
-                        }
-                    }
-                }
-
-                if captures.is_empty() && spawn_error.is_some() {
-                    for capture in captures.into_values() {
-                        stop_linux_target_capture(capture);
-                    }
-                    return CaptureOutcome::capture_error(
-                        spawn_error.unwrap_or_else(|| "Linux system capture failed.".to_string()),
-                    );
-                }
-
-                last_refresh_at = Instant::now();
-            }
-
-            let frame_deadline = Instant::now() + Duration::from_millis(20);
-            let mut mixed_frame = vec![0.0f32; APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS];
-
-            loop {
-                let now = Instant::now();
-                if now >= frame_deadline {
-                    break;
-                }
-
-                match event_receiver.recv_timeout(frame_deadline.saturating_duration_since(now)) {
-                    Ok(LinuxCaptureEvent::Frame {
-                        target_id: _target_id,
-                        frame_samples,
-                    }) => {
-                        for (mixed_sample, incoming_sample) in
-                            mixed_frame.iter_mut().zip(frame_samples.iter())
-                        {
-                            *mixed_sample += *incoming_sample;
-                        }
-                    }
-                    Ok(LinuxCaptureEvent::ReadError { target_id, error }) => {
-                        eprintln!("[capture-sidecar] linux target {}: {}", target_id, error);
-                        if let Some(capture) = captures.remove(&target_id) {
-                            stop_linux_target_capture(capture);
-                        }
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        for capture in captures.into_values() {
-                            stop_linux_target_capture(capture);
-                        }
-                        return CaptureOutcome::capture_error(
-                            "Linux system capture channel disconnected unexpectedly.".to_string(),
-                        );
-                    }
-                }
-            }
-
-            let exited_target_ids = captures
-                .iter_mut()
-                .filter_map(
-                    |(capture_target_id, capture)| match capture.process.try_wait() {
-                        Ok(Some(_status)) => Some(capture_target_id.clone()),
-                        Ok(None) => None,
-                        Err(error) => {
-                            eprintln!(
-                                "[capture-sidecar] Failed waiting on `pw-record` for {}: {}",
-                                capture_target_id, error
-                            );
-                            Some(capture_target_id.clone())
-                        }
-                    },
-                )
-                .collect::<Vec<_>>();
-
-            for exited_target_id in exited_target_ids {
-                if let Some(capture) = captures.remove(&exited_target_id) {
-                    stop_linux_target_capture(capture);
-                }
-            }
-
-            clamp_audio_samples(&mut mixed_frame);
-            emit_linux_audio_frame(
-                session_id,
-                target_id,
-                sequence,
-                &mixed_frame,
-                &frame_queue,
-                &app_audio_binary_stream,
-            );
-            sequence = sequence.saturating_add(1);
+    let app_name = CString::new("Sharkord Capture Sidecar")
+        .unwrap_or_else(|_| CString::new("Sharkord").unwrap());
+    let stream_name = CString::new("Sharkord App Audio Capture")
+        .unwrap_or_else(|_| CString::new("Capture").unwrap());
+    let source_name = match CString::new(capture_source.monitor_source_name.clone()) {
+        Ok(source_name) => source_name,
+        Err(error) => {
+            return CaptureOutcome::capture_error(format!(
+                "Invalid Linux monitor source name: {error}"
+            ))
         }
+    };
+
+    let sample_spec = PaSampleSpec {
+        format: PA_SAMPLE_FLOAT32LE,
+        rate: APP_AUDIO_SAMPLE_RATE,
+        channels: APP_AUDIO_CHANNELS as u8,
+    };
+    let mut error_code = 0;
+    let simple = unsafe {
+        (lib.pa_simple_new)(
+            std::ptr::null(),
+            app_name.as_ptr(),
+            PA_STREAM_RECORD,
+            source_name.as_ptr(),
+            stream_name.as_ptr(),
+            &sample_spec,
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut error_code,
+        )
+    };
+
+    if simple.is_null() {
+        return CaptureOutcome::capture_error(format!(
+            "Failed to start Linux audio capture: {}",
+            linux_pulse_strerror(lib, error_code)
+        ));
     }
 
-    let Some(target_object_id) = parse_linux_target_node_id(target_id) else {
-        return CaptureOutcome::capture_error("Invalid Linux PipeWire target id.".to_string());
-    };
-
-    let mut child = match Command::new("pw-record")
-        .args([
-            "--target",
-            target_object_id,
-            "--rate",
-            "48000",
-            "--channels",
-            "1",
-            "--format",
-            "f32",
-            "--latency",
-            "20ms",
-            "-",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(error) => {
-            return CaptureOutcome::capture_error(format!("Failed to launch `pw-record`: {error}"))
-        }
-    };
-
-    let Some(stdout_pipe) = child.stdout.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return CaptureOutcome::capture_error("`pw-record` did not expose stdout.".to_string());
-    };
-
-    let stderr_slot = Arc::new(Mutex::new(String::new()));
-    let stderr_slot_for_thread = Arc::clone(&stderr_slot);
-    let stderr_thread = child.stderr.take().map(|stderr_pipe| {
-        thread::spawn(move || {
-            let mut stderr_reader = io::BufReader::new(stderr_pipe);
-            let mut stderr_output = String::new();
-            let _ = stderr_reader.read_to_string(&mut stderr_output);
-            if let Ok(mut stderr_lock) = stderr_slot_for_thread.lock() {
-                *stderr_lock = stderr_output;
-            }
-        })
-    });
-
-    let (frame_sender, frame_receiver) = std::sync::mpsc::channel::<Result<Vec<f32>, String>>();
-    let stdout_thread = thread::spawn(move || {
-        let mut stdout_reader = io::BufReader::new(stdout_pipe);
-
-        loop {
-            let mut frame_bytes = vec![0u8; APP_AUDIO_FRAME_BYTES];
-            match stdout_reader.read_exact(&mut frame_bytes) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
-                Err(error) => {
-                    let _ = frame_sender
-                        .send(Err(format!("Failed reading `pw-record` PCM data: {error}")));
-                    return;
-                }
-            }
-
-            let frame_samples = frame_bytes
-                .chunks_exact(4)
-                .map(|sample_bytes| {
-                    f32::from_le_bytes([
-                        sample_bytes[0],
-                        sample_bytes[1],
-                        sample_bytes[2],
-                        sample_bytes[3],
-                    ])
-                })
-                .collect::<Vec<f32>>();
-
-            if frame_sender.send(Ok(frame_samples)).is_err() {
-                return;
-            }
-        }
-    });
-
     let mut sequence: u64 = 0;
+    let mut frame_bytes = vec![0u8; APP_AUDIO_FRAME_BYTES];
 
     loop {
         if stop_flag.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = stdout_thread.join();
-            if let Some(stderr_thread) = stderr_thread {
-                let _ = stderr_thread.join();
-            }
+            unsafe { (lib.pa_simple_free)(simple) };
             return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
         }
 
-        match frame_receiver.recv_timeout(Duration::from_millis(50)) {
-            Ok(Ok(frame_samples)) => {
-                emit_linux_audio_frame(
-                    session_id,
-                    target_id,
-                    sequence,
-                    &frame_samples,
-                    &frame_queue,
-                    &app_audio_binary_stream,
-                );
-                sequence = sequence.saturating_add(1);
-            }
-            Ok(Err(error)) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = stdout_thread.join();
-                if let Some(stderr_thread) = stderr_thread {
-                    let _ = stderr_thread.join();
-                }
-                return CaptureOutcome::capture_error(error);
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => match child.try_wait() {
-                Ok(Some(status)) => {
-                    let _ = stdout_thread.join();
-                    if let Some(stderr_thread) = stderr_thread {
-                        let _ = stderr_thread.join();
-                    }
-
-                    if stop_flag.load(Ordering::Relaxed) {
-                        return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
-                    }
-
-                    let stderr_output = stderr_slot
-                        .lock()
-                        .ok()
-                        .map(|stderr_lock| stderr_lock.trim().to_string())
-                        .filter(|stderr_output| !stderr_output.is_empty());
-                    let error_message = stderr_output.unwrap_or_else(|| {
-                        format!("`pw-record` exited unexpectedly (status={status}).")
-                    });
-
-                    return CaptureOutcome::capture_error(error_message);
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = stdout_thread.join();
-                    if let Some(stderr_thread) = stderr_thread {
-                        let _ = stderr_thread.join();
-                    }
-                    return CaptureOutcome::capture_error(format!(
-                        "Failed waiting on `pw-record`: {error}"
-                    ));
-                }
-            },
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => match child.wait() {
-                Ok(status) => {
-                    let _ = stdout_thread.join();
-                    if let Some(stderr_thread) = stderr_thread {
-                        let _ = stderr_thread.join();
-                    }
-
-                    if stop_flag.load(Ordering::Relaxed) {
-                        return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
-                    }
-
-                    let stderr_output = stderr_slot
-                        .lock()
-                        .ok()
-                        .map(|stderr_lock| stderr_lock.trim().to_string())
-                        .filter(|stderr_output| !stderr_output.is_empty());
-                    let error_message = stderr_output.unwrap_or_else(|| {
-                        format!("`pw-record` exited unexpectedly (status={status}).")
-                    });
-
-                    return CaptureOutcome::capture_error(error_message);
-                }
-                Err(error) => {
-                    let _ = stdout_thread.join();
-                    if let Some(stderr_thread) = stderr_thread {
-                        let _ = stderr_thread.join();
-                    }
-                    return CaptureOutcome::capture_error(format!(
-                        "Failed waiting on `pw-record`: {error}"
-                    ));
-                }
-            },
+        if unsafe {
+            (lib.pa_simple_read)(
+                simple,
+                frame_bytes.as_mut_ptr().cast::<c_void>(),
+                frame_bytes.len(),
+                &mut error_code,
+            )
+        } < 0
+        {
+            unsafe { (lib.pa_simple_free)(simple) };
+            return CaptureOutcome::capture_error(format!(
+                "Failed reading Linux audio frames: {}",
+                linux_pulse_strerror(lib, error_code)
+            ));
         }
+
+        let mut frame_samples = frame_bytes
+            .chunks_exact(4)
+            .map(|sample_bytes| {
+                f32::from_le_bytes([
+                    sample_bytes[0],
+                    sample_bytes[1],
+                    sample_bytes[2],
+                    sample_bytes[3],
+                ])
+            })
+            .collect::<Vec<f32>>();
+        clamp_audio_samples(&mut frame_samples);
+
+        emit_linux_audio_frame(
+            session_id,
+            &capture_source.target_id,
+            sequence,
+            &frame_samples,
+            &frame_queue,
+            &app_audio_binary_stream,
+        );
+        sequence = sequence.saturating_add(1);
     }
 }
 
@@ -3258,6 +3679,8 @@ fn handle_capabilities_get() -> Result<Value, String> {
     let platform = std::env::consts::OS;
     #[cfg(target_os = "macos")]
     let macos_helper_probe_error = run_macos_helper_command(&["list-targets"]).err();
+    #[cfg(target_os = "linux")]
+    let linux_audio_backend = probe_linux_audio_backend();
 
     #[cfg(not(target_os = "macos"))]
     let macos_helper_probe_error: Option<String> = None;
@@ -3281,13 +3704,13 @@ fn handle_capabilities_get() -> Result<Value, String> {
             )
         }
     } else if cfg!(target_os = "linux") {
-        if pipewire_tools_available() {
+        if linux_audio_backend.per_app_audio_supported {
             ("best-effort", "best-effort", None, None)
         } else {
             (
-                "best-effort",
                 "unsupported",
-                Some(missing_pipewire_tools_reason()),
+                "unsupported",
+                linux_audio_backend.per_app_audio_reason.clone(),
                 None,
             )
         }
@@ -3318,16 +3741,10 @@ fn handle_capabilities_get() -> Result<Value, String> {
 
     #[cfg(target_os = "linux")]
     {
-        let linux_audio_backend = probe_linux_audio_backend();
         let session_type = detect_linux_session_type();
-        let pipewire_tools_available = pipewire_tools_available();
         let (portal_available, portal_reason) = probe_linux_desktop_portal();
         let (x11_display_available, x11_display_reason) = probe_linux_x11_display();
-        let app_audio_target_enumeration_reason = if pipewire_tools_available {
-            None
-        } else {
-            Some(missing_pipewire_tools_reason())
-        };
+        let app_audio_target_enumeration_supported = linux_audio_backend.per_app_audio_supported;
         let source_audio_target_inference_reason = Some(
             "Linux does not infer an app-audio target from the selected share source; choose a target manually."
                 .to_string(),
@@ -3351,11 +3768,11 @@ fn handle_capabilities_get() -> Result<Value, String> {
         response["sessionType"] = json!(session_type);
         response["linuxAudioBackend"] = json!(linux_audio_backend.backend);
         response["linuxAudioBackendUsesShellOuts"] = json!(linux_audio_backend.uses_shell_outs);
-        response["pipewireRuntimeAvailable"] =
-            json!(linux_audio_backend.pipewire_runtime_available);
-        response["pipewireToolsAvailable"] = json!(pipewire_tools_available);
+        response["pipewireRuntimeAvailable"] = json!(linux_audio_backend.runtime_available);
+        response["pipewireToolsAvailable"] = json!(linux_audio_backend.per_app_audio_supported);
         response["portalAvailable"] = json!(portal_available);
-        response["appAudioTargetEnumerationSupported"] = json!(pipewire_tools_available);
+        response["appAudioTargetEnumerationSupported"] =
+            json!(app_audio_target_enumeration_supported);
         response["sourceAudioTargetInferenceSupported"] = json!(false);
         response["globalPushKeybinds"] = json!(global_push_keybinds);
         response["x11DisplayAvailable"] = json!(x11_display_available);
@@ -3365,14 +3782,16 @@ fn handle_capabilities_get() -> Result<Value, String> {
             response["portalReasonCode"] = json!("linux-desktop-portal-required");
         }
 
-        if let Some(reason) = linux_audio_backend.pipewire_runtime_reason {
+        if let Some(reason) = linux_audio_backend.runtime_reason.clone() {
             response["pipewireRuntimeReason"] = json!(reason);
         }
 
-        if let Some(reason) = app_audio_target_enumeration_reason {
+        if let Some(reason) = linux_audio_backend.per_app_audio_reason.clone() {
             response["appAudioTargetEnumerationReason"] = json!(reason);
-            response["appAudioTargetEnumerationReasonCode"] = json!("linux-pipewire-tools-missing");
-            response["perAppAudioReasonCode"] = json!("linux-pipewire-tools-missing");
+            if let Some(reason_code) = linux_audio_backend.per_app_audio_reason_code {
+                response["appAudioTargetEnumerationReasonCode"] = json!(reason_code);
+                response["perAppAudioReasonCode"] = json!(reason_code);
+            }
         }
 
         if let Some(reason) = source_audio_target_inference_reason {
@@ -3562,8 +3981,8 @@ fn handle_audio_capture_start(
         (target.id, target.pid, target.process_name)
     };
 
-    // In per-app mode selfExcludePid is not forwarded — the include-mode loopback only
-    // captures the target's process tree, so Ripcord's audio is never present there.
+    // The current native Linux backend does not support process-tree exclusion at the
+    // monitor-source level, so `selfExcludePid` is only used to select system mode.
     let effective_exclude_pid = if use_exclude_mode {
         self_exclude_pid
     } else {

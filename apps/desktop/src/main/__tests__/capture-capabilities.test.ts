@@ -32,31 +32,38 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     assert.equal(resolved.sidecarAvailable, true);
   });
 
-  void it("downgrades linux per-app audio when the sidecar path is unavailable", () => {
+  void it("downgrades linux system and per-app audio when the native backend is unavailable", () => {
     const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
 
     const resolved = resolveDesktopCaptureCapabilities({
       baseCapabilities,
       sidecarAvailable: true,
       sidecarPerAppAudioSupported: false,
-      sidecarReason: "pw-record is not installed",
+      sidecarReason: "Failed to connect to the Linux audio server.",
       sidecarCapabilities: {
+        systemAudio: "unsupported",
         sessionType: "x11",
+        linuxAudioBackend: "pulseaudio-native",
+        linuxAudioBackendUsesShellOuts: false,
+        pipewireRuntimeAvailable: true,
         pipewireToolsAvailable: false,
         appAudioTargetEnumerationSupported: false,
-        appAudioTargetEnumerationReason: "pw-record is not installed",
+        appAudioTargetEnumerationReason:
+          "Failed to connect to the Linux audio server.",
+        appAudioTargetEnumerationReasonCode:
+          "linux-native-audio-backend-unavailable",
         sourceAudioTargetInferenceSupported: false,
       },
     });
 
-    assert.equal(resolved.systemAudio, "best-effort");
+    assert.equal(resolved.systemAudio, "unsupported");
     assert.equal(resolved.perAppAudio, "unsupported");
     assert.equal(resolved.sidecarAvailable, true);
-    assert.equal(resolved.issues[0]?.code, "linux-pipewire-tools-missing");
-    assert.match(
-      resolved.issues[0]?.message ?? "",
-      /pw-record is not installed/i,
+    assert.equal(
+      resolved.issues[0]?.code,
+      "linux-native-audio-backend-unavailable",
     );
+    assert.match(resolved.issues[0]?.message ?? "", /linux audio server/i);
     assert.match(resolved.notes.join(" "), /session type: X11/i);
     assert.equal(resolved.globalPushKeybinds, "best-effort");
   });
@@ -70,11 +77,9 @@ void describe("resolveDesktopCaptureCapabilities", () => {
       sidecarPerAppAudioSupported: true,
       sidecarCapabilities: {
         sessionType: "wayland",
-        linuxAudioBackend: "pipewire-cli-shell",
-        linuxAudioBackendUsesShellOuts: true,
-        pipewireRuntimeAvailable: false,
-        pipewireRuntimeReason:
-          "PipeWire runtime libraries were not detected in the current environment, so the planned native Linux audio backend is not ready on this install.",
+        linuxAudioBackend: "pulseaudio-native",
+        linuxAudioBackendUsesShellOuts: false,
+        pipewireRuntimeAvailable: true,
         pipewireToolsAvailable: true,
         appAudioTargetEnumerationSupported: true,
         sourceAudioTargetInferenceSupported: false,
@@ -91,9 +96,8 @@ void describe("resolveDesktopCaptureCapabilities", () => {
       )?.title,
       "Manual app selection required",
     );
-    assert.match(resolved.notes.join(" "), /PipeWire/i);
-    assert.match(resolved.notes.join(" "), /CLI backend/i);
-    assert.match(resolved.notes.join(" "), /native Linux audio backend/i);
+    assert.match(resolved.notes.join(" "), /pulseaudio-native/i);
+    assert.match(resolved.notes.join(" "), /native PulseAudio-compatible/i);
     assert.match(resolved.notes.join(" "), /session type: Wayland/i);
   });
 
@@ -162,7 +166,7 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     );
   });
 
-  void it("deduplicates linux pipewire issues when multiple reasons map to the same code", () => {
+  void it("deduplicates linux backend issues when multiple reasons map to the same code", () => {
     const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
 
     const resolved = resolveDesktopCaptureCapabilities({
@@ -170,22 +174,24 @@ void describe("resolveDesktopCaptureCapabilities", () => {
       sidecarAvailable: true,
       sidecarPerAppAudioSupported: false,
       sidecarCapabilities: {
+        systemAudio: "unsupported",
         sessionType: "x11",
         pipewireToolsAvailable: false,
         perAppAudioReason:
-          "Per-app capture stays disabled until PipeWire tools are installed.",
-        perAppAudioReasonCode: "linux-pipewire-tools-missing",
+          "Per-app capture stays disabled until the native Linux audio backend is ready.",
+        perAppAudioReasonCode: "linux-native-audio-backend-unavailable",
         appAudioTargetEnumerationSupported: false,
         appAudioTargetEnumerationReason:
-          "pw-record is not installed and app targets cannot be listed.",
-        appAudioTargetEnumerationReasonCode: "linux-pipewire-tools-missing",
+          "The native Linux audio backend is unavailable and app targets cannot be listed.",
+        appAudioTargetEnumerationReasonCode:
+          "linux-native-audio-backend-unavailable",
         sourceAudioTargetInferenceSupported: false,
       },
     });
 
     assert.equal(
       resolved.issues.filter(
-        (issue) => issue.code === "linux-pipewire-tools-missing",
+        (issue) => issue.code === "linux-native-audio-backend-unavailable",
       ).length,
       1,
     );
