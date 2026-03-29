@@ -217,25 +217,41 @@ Impact: Medium
 
 Difficulty: Medium
 
-### 5. Add cross-platform integration tests for parity behavior
+### 5. Expand cross-platform parity tests around the desktop/sidecar boundary
 
-Expand desktop tests to validate capability and fallback behavior at the app/sidecar boundary.
+This step is no longer about creating the first tests from scratch. A baseline already exists for capability resolution, audio-mode fallback, sidecar availability, fake-sidecar lifecycle handling, and Linux manual target-selection metadata.
 
-Focus areas:
+The remaining work is to turn those tests into an explicit parity suite for the contract defined in `#1`.
 
-- capability reporting
-- sidecar availability handling
-- per-app audio fallback behavior
-- macOS helper failure handling
-- Linux environment-specific degradation
-- push keybind registration failure modes
-- reconnect-safe voice state after capability changes, sidecar restart, or capture teardown
+Current baseline:
+
+- platform capability defaults are covered for Windows, macOS, and Linux
+- prepared screen-audio fallback is covered for Linux manual target selection
+- sidecar unavailable and macOS helper-unavailable cases are covered
+- Linux capability probe mapping and sidecar restart recovery are covered via the fake sidecar
+
+Remaining gaps:
+
+- assert stable reason-code behavior for OS-specific degradation paths, not just warning text
+- add end-to-end desktop/sidecar boundary tests that combine capability probing, target listing, and capture-start fallback in one flow
+- cover global push keybind registration failures and refresh after capability changes
+- cover reconnect-safe voice state when capture teardown or sidecar restart happens during an active or pending voice session
+- distinguish macOS permission failure, helper readiness failure, and OS-version failure as separate contract cases
+- cover Linux session/backend transitions that change support expectations after launch
+
+Test strategy:
+
+- keep using the fake-sidecar protocol fixture for most parity tests because it exercises the desktop/sidecar contract without requiring native OS runners
+- prefer assertions on capability states, reason codes, and fallback decisions over backend-specific strings that will change again in `#6`
+- treat native sidecar build verification as CI work under `#11`, not as a substitute for protocol-level parity coverage here
 
 Relevant files:
 
-- `apps/desktop/src/main/__tests__/capture-capabilities.test.ts`
 - `apps/desktop/src/main/__tests__/platform-capabilities.test.ts`
+- `apps/desktop/src/main/__tests__/capture-capabilities.test.ts`
 - `apps/desktop/src/main/__tests__/capture-sidecar-manager.test.ts`
+- `apps/desktop/src/main/__tests__/fixtures/fake-sidecar.cjs`
+- `apps/desktop/src/main/index.ts`
 
 Impact: High
 

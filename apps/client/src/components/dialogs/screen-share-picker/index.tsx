@@ -70,12 +70,17 @@ const ScreenSharePickerDialog = memo(
 			audioMode,
 			perAppAudioSupported: liveCapabilities.perAppAudio !== 'unsupported',
 			sourceKind: selectedSource?.kind,
+			availableTargetCount: appAudioTargetsResult.targets.length,
 			suggestedTargetId: appAudioTargetsResult.suggestedTargetId,
 			requiresManualSelection: appAudioTargetsResult.requiresManualSelection,
 		});
 		const screenShareIssues = useMemo(() => {
 			return liveCapabilities.issues.filter((issue) => {
-				return issue.affects.includes('system-audio') || issue.affects.includes('per-app-audio');
+				return (
+					issue.affects.includes('screen-share') ||
+					issue.affects.includes('system-audio') ||
+					issue.affects.includes('per-app-audio')
+				);
 			});
 		}, [liveCapabilities.issues]);
 		const shouldResolveAppAudioTargets = isOpen && appAudioTargetBehavior.shouldResolveAppAudioTargets;
@@ -84,8 +89,23 @@ const ScreenSharePickerDialog = memo(
 		const resolvedAppAudioTargetId = requiresManualAppAudioTarget
 			? selectedAppAudioTargetId
 			: appAudioTargetsResult.suggestedTargetId;
+		const allowsImplicitFallbackWithoutTarget =
+			shouldResolveAppAudioTargets && appAudioTargetBehavior.allowsImplicitFallbackWithoutTarget;
 		const canConfirmShare =
-			hasSources && !!selectedSourceId && (!shouldResolveAppAudioTargets || !!resolvedAppAudioTargetId);
+			hasSources &&
+			!!selectedSourceId &&
+			(!shouldResolveAppAudioTargets || !!resolvedAppAudioTargetId || allowsImplicitFallbackWithoutTarget);
+		const fallbackWithoutTargetMessage = useMemo(() => {
+			if (!allowsImplicitFallbackWithoutTarget) {
+				return undefined;
+			}
+
+			if (liveCapabilities.systemAudio === 'unsupported') {
+				return 'No running app audio targets were found. If you continue, screen share will continue without audio.';
+			}
+
+			return 'No running app audio targets were found. If you continue, screen share will fall back to system audio.';
+		}, [allowsImplicitFallbackWithoutTarget, liveCapabilities.systemAudio]);
 
 		const sourceLabel = useMemo(() => {
 			if (!hasSources) {
@@ -176,6 +196,7 @@ const ScreenSharePickerDialog = memo(
 						audioMode,
 						perAppAudioSupported: liveCapabilities.perAppAudio !== 'unsupported',
 						sourceKind: selectedSource?.kind,
+						availableTargetCount: result.targets.length,
 						suggestedTargetId: result.suggestedTargetId,
 						requiresManualSelection: result.requiresManualSelection,
 					});
@@ -333,7 +354,9 @@ const ScreenSharePickerDialog = memo(
 								{!loadingAppAudioTargets &&
 									requiresManualAppAudioTarget &&
 									appAudioTargetsResult.targets.length === 0 && (
-										<p className="text-xs text-muted-foreground">No running app targets were found.</p>
+										<p className="text-xs text-muted-foreground">
+											{fallbackWithoutTargetMessage ?? 'No running app targets were found.'}
+										</p>
 									)}
 							</div>
 						)}

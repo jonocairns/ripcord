@@ -57,6 +57,9 @@ export type TSidecarCapabilities = {
   perAppAudioReasonCode?: string;
   sessionType?: string;
   pipewireToolsAvailable?: boolean;
+  portalAvailable?: boolean;
+  portalReason?: string;
+  portalReasonCode?: string;
   appAudioTargetEnumerationSupported?: boolean;
   appAudioTargetEnumerationReason?: string;
   appAudioTargetEnumerationReasonCode?: string;
@@ -220,6 +223,9 @@ const isSidecarCapabilities = (
     hasOptionalString(value, "perAppAudioReasonCode") &&
     hasOptionalString(value, "sessionType") &&
     hasOptionalBoolean(value, "pipewireToolsAvailable") &&
+    hasOptionalBoolean(value, "portalAvailable") &&
+    hasOptionalString(value, "portalReason") &&
+    hasOptionalString(value, "portalReasonCode") &&
     hasOptionalBoolean(value, "appAudioTargetEnumerationSupported") &&
     hasOptionalString(value, "appAudioTargetEnumerationReason") &&
     hasOptionalString(value, "appAudioTargetEnumerationReasonCode") &&
@@ -485,6 +491,7 @@ class CaptureSidecarManager {
   private requestId = 0;
   private pendingRequests = new Map<string, TPendingRequest>();
   private activeSessionId: string | undefined;
+  private lastRequestedPushKeybinds: TDesktopPushKeybindsInput | undefined;
   private pushKeybindActiveState: Record<"talk" | "mute", boolean> = {
     talk: false,
     mute: false,
@@ -661,6 +668,11 @@ class CaptureSidecarManager {
   async setPushKeybinds(
     input: TDesktopPushKeybindsInput,
   ): Promise<TGlobalPushKeybindRegistrationResult> {
+    this.lastRequestedPushKeybinds =
+      input.pushToTalkKeybind || input.pushToMuteKeybind
+        ? { ...input }
+        : undefined;
+
     const response = await this.sendRequest("push_keybinds.set", input);
 
     return expectSidecarResult(
@@ -837,10 +849,41 @@ class CaptureSidecarManager {
     if (!this.sidecarProcess || this.sidecarProcess.killed) {
       this.startSidecarProcess();
       await this.sendRequestInternal("health.ping", {});
+      await this.restorePushKeybindsAfterRestart();
       this.lastKnownError = undefined;
       this.events.emit("lifecycle", {
         kind: "ready",
       } satisfies TSidecarLifecycleEvent);
+    }
+  }
+
+  private async restorePushKeybindsAfterRestart() {
+    if (!this.lastRequestedPushKeybinds) {
+      return;
+    }
+
+    try {
+      const response = await this.sendRequestInternal(
+        "push_keybinds.set",
+        this.lastRequestedPushKeybinds,
+      );
+      const result = expectSidecarResult(
+        response,
+        isGlobalPushKeybindRegistrationResult,
+        "push_keybinds.set",
+      );
+
+      if (!result.talkRegistered || !result.muteRegistered) {
+        console.warn(
+          "[desktop] Push keybind restore after restart was only partially successful",
+          result,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        "[desktop] Failed to restore global push keybinds after sidecar restart",
+        error,
+      );
     }
   }
 

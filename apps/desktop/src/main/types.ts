@@ -5,6 +5,7 @@ export type TSupportLevel = "supported" | "best-effort" | "unsupported";
 export type TDesktopCapabilityIssueSeverity = "info" | "warning" | "error";
 
 export type TDesktopCapabilityIssueFeature =
+  | "screen-share"
   | "system-audio"
   | "per-app-audio"
   | "global-push-keybinds";

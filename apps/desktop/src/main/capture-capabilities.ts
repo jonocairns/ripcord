@@ -82,6 +82,18 @@ const createIssueFromCode = (
           "Use system audio or no shared audio until PipeWire is available.",
         ],
       };
+    case "linux-desktop-portal-required":
+      return {
+        code,
+        affects: ["screen-share"],
+        severity: "error",
+        title: "Desktop portal unavailable",
+        message,
+        guidance: [
+          "Start or install xdg-desktop-portal for the current desktop session, then retry screen sharing.",
+          "Wayland screen sharing stays unavailable until the desktop portal service is running.",
+        ],
+      };
     case "linux-manual-app-target-selection-required":
       return {
         code,
@@ -205,6 +217,19 @@ const resolveDesktopCaptureCapabilities = ({
         `Linux session type: ${formatSessionTypeLabel(sidecarCapabilities.sessionType)}.`,
       );
     }
+
+    appendIssue(
+      issues,
+      sidecarCapabilities?.portalAvailable === false &&
+        sidecarCapabilities.sessionType === "wayland"
+        ? createIssueFromCode(
+            sidecarCapabilities.portalReasonCode ??
+              "linux-desktop-portal-required",
+            sidecarCapabilities.portalReason ??
+              "Wayland screen sharing requires an available desktop portal service.",
+          )
+        : undefined,
+    );
 
     appendIssue(
       issues,

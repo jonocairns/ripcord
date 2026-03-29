@@ -19,6 +19,25 @@ const parseBooleanEnv = (value) => {
 
   return undefined;
 };
+const parseStringArrayEnv = (value) => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === 'string')) {
+      return parsed;
+    }
+  } catch {
+    // fall through to comma-separated parsing
+  }
+
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+};
 const capabilityPlatform = process.env.FAKE_SIDECAR_PLATFORM || process.platform;
 const capabilitySystemAudio =
   process.env.FAKE_SIDECAR_SYSTEM_AUDIO || 'supported';
@@ -32,6 +51,11 @@ const capabilitySessionType = process.env.FAKE_SIDECAR_SESSION_TYPE;
 const capabilityPipewireToolsAvailable = parseBooleanEnv(
   process.env.FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE
 );
+const capabilityPortalAvailable = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_PORTAL_AVAILABLE
+);
+const capabilityPortalReason = process.env.FAKE_SIDECAR_PORTAL_REASON;
+const capabilityPortalReasonCode = process.env.FAKE_SIDECAR_PORTAL_REASON_CODE;
 const capabilityAppAudioTargetEnumerationSupported = parseBooleanEnv(
   process.env.FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED
 );
@@ -63,6 +87,20 @@ const listTargetsRequiresManualSelection = parseBooleanEnv(
 );
 const listTargetsSuggestedTargetId = process.env.FAKE_SIDECAR_SUGGESTED_TARGET_ID;
 const listTargetsWarning = process.env.FAKE_SIDECAR_TARGETS_WARNING;
+const pushTalkRegisteredOverride = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_PUSH_TALK_REGISTERED
+);
+const pushMuteRegisteredOverride = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_PUSH_MUTE_REGISTERED
+);
+const pushKeybindErrors =
+  parseStringArrayEnv(process.env.FAKE_SIDECAR_PUSH_KEYBIND_ERRORS) || [];
+const emitTalkActiveOnSet = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_EMIT_PUSH_TALK_ACTIVE_ON_SET
+);
+const emitMuteActiveOnSet = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_EMIT_PUSH_MUTE_ACTIVE_ON_SET
+);
 
 const send = (payload) => {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -227,6 +265,41 @@ rl.on('line', (line) => {
     return;
   }
 
+  if (method === 'push_keybinds.set') {
+    const talkRegistered =
+      pushTalkRegisteredOverride ?? Boolean(params?.pushToTalkKeybind);
+    const muteRegistered =
+      pushMuteRegisteredOverride ?? Boolean(params?.pushToMuteKeybind);
+
+    sendResponse(id, {
+      talkRegistered,
+      muteRegistered,
+      errors: pushKeybindErrors
+    });
+
+    if (talkRegistered && emitTalkActiveOnSet && params?.pushToTalkKeybind) {
+      send({
+        event: 'push_keybind.state',
+        params: {
+          kind: 'talk',
+          active: true
+        }
+      });
+    }
+
+    if (muteRegistered && emitMuteActiveOnSet && params?.pushToMuteKeybind) {
+      send({
+        event: 'push_keybind.state',
+        params: {
+          kind: 'mute',
+          active: true
+        }
+      });
+    }
+
+    return;
+  }
+
   if (method === 'capabilities.get') {
     sendResponse(id, {
       platform: capabilityPlatform,
@@ -238,6 +311,9 @@ rl.on('line', (line) => {
       perAppAudioReasonCode: capabilityPerAppAudioReasonCode,
       sessionType: capabilitySessionType,
       pipewireToolsAvailable: capabilityPipewireToolsAvailable,
+      portalAvailable: capabilityPortalAvailable,
+      portalReason: capabilityPortalReason,
+      portalReasonCode: capabilityPortalReasonCode,
       appAudioTargetEnumerationSupported:
         capabilityAppAudioTargetEnumerationSupported,
       appAudioTargetEnumerationReason:

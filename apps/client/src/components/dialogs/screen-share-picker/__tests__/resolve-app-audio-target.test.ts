@@ -8,6 +8,7 @@ describe('resolveAppAudioTargetBehavior', () => {
 			audioMode: ScreenAudioMode.APP,
 			perAppAudioSupported: true,
 			sourceKind: 'screen',
+			availableTargetCount: 2,
 			suggestedTargetId: undefined,
 			requiresManualSelection: undefined,
 		});
@@ -15,6 +16,7 @@ describe('resolveAppAudioTargetBehavior', () => {
 		expect(result.shouldResolveAppAudioTargets).toBe(true);
 		expect(result.requiresManualAppAudioTarget).toBe(true);
 		expect(result.shouldAutoSelectSuggestedTarget).toBe(false);
+		expect(result.allowsImplicitFallbackWithoutTarget).toBe(false);
 	});
 
 	it('does not require manual target for mapped window shares', () => {
@@ -22,6 +24,7 @@ describe('resolveAppAudioTargetBehavior', () => {
 			audioMode: ScreenAudioMode.APP,
 			perAppAudioSupported: true,
 			sourceKind: 'window',
+			availableTargetCount: 1,
 			suggestedTargetId: 'pid:1234',
 			requiresManualSelection: undefined,
 		});
@@ -29,6 +32,7 @@ describe('resolveAppAudioTargetBehavior', () => {
 		expect(result.shouldResolveAppAudioTargets).toBe(true);
 		expect(result.requiresManualAppAudioTarget).toBe(false);
 		expect(result.shouldAutoSelectSuggestedTarget).toBe(true);
+		expect(result.allowsImplicitFallbackWithoutTarget).toBe(false);
 	});
 
 	it('honors explicit manual-selection requirements from the desktop bridge', () => {
@@ -36,6 +40,7 @@ describe('resolveAppAudioTargetBehavior', () => {
 			audioMode: ScreenAudioMode.APP,
 			perAppAudioSupported: true,
 			sourceKind: 'window',
+			availableTargetCount: 1,
 			suggestedTargetId: 'pid:1234',
 			requiresManualSelection: true,
 		});
@@ -43,6 +48,7 @@ describe('resolveAppAudioTargetBehavior', () => {
 		expect(result.shouldResolveAppAudioTargets).toBe(true);
 		expect(result.requiresManualAppAudioTarget).toBe(true);
 		expect(result.shouldAutoSelectSuggestedTarget).toBe(false);
+		expect(result.allowsImplicitFallbackWithoutTarget).toBe(false);
 	});
 
 	it('skips target resolution when app mode is not selected', () => {
@@ -50,6 +56,7 @@ describe('resolveAppAudioTargetBehavior', () => {
 			audioMode: ScreenAudioMode.SYSTEM,
 			perAppAudioSupported: true,
 			sourceKind: 'window',
+			availableTargetCount: 0,
 			suggestedTargetId: undefined,
 			requiresManualSelection: undefined,
 		});
@@ -57,6 +64,7 @@ describe('resolveAppAudioTargetBehavior', () => {
 		expect(result.shouldResolveAppAudioTargets).toBe(false);
 		expect(result.requiresManualAppAudioTarget).toBe(false);
 		expect(result.shouldAutoSelectSuggestedTarget).toBe(false);
+		expect(result.allowsImplicitFallbackWithoutTarget).toBe(false);
 	});
 
 	it('skips target resolution when per-app audio is unsupported', () => {
@@ -64,6 +72,7 @@ describe('resolveAppAudioTargetBehavior', () => {
 			audioMode: ScreenAudioMode.APP,
 			perAppAudioSupported: false,
 			sourceKind: 'window',
+			availableTargetCount: 0,
 			suggestedTargetId: undefined,
 			requiresManualSelection: undefined,
 		});
@@ -71,5 +80,22 @@ describe('resolveAppAudioTargetBehavior', () => {
 		expect(result.shouldResolveAppAudioTargets).toBe(false);
 		expect(result.requiresManualAppAudioTarget).toBe(false);
 		expect(result.shouldAutoSelectSuggestedTarget).toBe(false);
+		expect(result.allowsImplicitFallbackWithoutTarget).toBe(false);
+	});
+
+	it('allows fallback when per-app audio has no available targets to choose from', () => {
+		const result = resolveAppAudioTargetBehavior({
+			audioMode: ScreenAudioMode.APP,
+			perAppAudioSupported: true,
+			sourceKind: 'window',
+			availableTargetCount: 0,
+			suggestedTargetId: undefined,
+			requiresManualSelection: true,
+		});
+
+		expect(result.shouldResolveAppAudioTargets).toBe(true);
+		expect(result.requiresManualAppAudioTarget).toBe(true);
+		expect(result.shouldAutoSelectSuggestedTarget).toBe(false);
+		expect(result.allowsImplicitFallbackWithoutTarget).toBe(true);
 	});
 });
