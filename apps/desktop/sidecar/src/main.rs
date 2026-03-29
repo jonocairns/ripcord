@@ -2202,6 +2202,7 @@ impl LinuxPulseConnection {
         };
 
         if let Err(error) = connection.wait_for_ready_locked() {
+            unsafe { (lib.pa_threaded_mainloop_unlock)(mainloop) };
             drop(connection);
             return Err(error);
         }
