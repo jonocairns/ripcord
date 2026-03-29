@@ -5,7 +5,7 @@ import { resetApp } from '@/features/app/actions';
 import { resetDialogs } from '@/features/dialogs/actions';
 import { resetServerState, setDisconnectInfo } from '@/features/server/actions';
 import { currentVoiceChannelIdSelector } from '@/features/server/channels/selectors';
-import { resolvePendingVoiceReconnectChannelIdOnDisconnect } from '@/features/server/reconnect-policy';
+import { shouldRestoreVoiceAfterDisconnect } from '@/features/server/disconnect-utils';
 import {
 	getPendingVoiceReconnectChannelId,
 	setPendingVoiceReconnectChannelId,
@@ -56,12 +56,7 @@ const initializeTRPC = (host: string) => {
 
 			if (wasConnected) {
 				setPendingVoiceReconnectChannelId(
-					resolvePendingVoiceReconnectChannelIdOnDisconnect({
-						wasConnected,
-						disconnectCode: cause.code,
-						currentVoiceChannelId,
-						pendingVoiceChannelId,
-					}),
+					shouldRestoreVoiceAfterDisconnect(cause.code) ? (currentVoiceChannelId ?? pendingVoiceChannelId) : undefined,
 				);
 			}
 

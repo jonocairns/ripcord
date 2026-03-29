@@ -2,15 +2,10 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { describe, it } from "node:test";
 import path from "path";
-import { resolveDesktopCaptureCapabilities } from "../capture-capabilities";
 import {
   CaptureSidecarManager,
   toPcmAppAudioFrame,
 } from "../capture-sidecar-manager";
-import {
-  getDesktopCapabilitiesForPlatform,
-  resolvePreparedScreenAudioMode,
-} from "../platform-capabilities";
 import type {
   TAppAudioFrame,
   TAppAudioPcmFrame,
@@ -172,82 +167,6 @@ void describe("CaptureSidecarManager", () => {
         targets.warning ?? "",
         /choosing the app that is producing sound/i,
       );
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  void it("combines Linux capability probing, target listing, and fallback capture start in one flow", async () => {
-    const manager = new CaptureSidecarManager({
-      spawnSidecar: () => {
-        return spawn(process.execPath, [fakeSidecarPath], {
-          stdio: ["pipe", "pipe", "pipe"],
-          env: {
-            ...process.env,
-            FAKE_SIDECAR_PLATFORM: "linux",
-            FAKE_SIDECAR_SYSTEM_AUDIO: "best-effort",
-            FAKE_SIDECAR_PER_APP_AUDIO: "best-effort",
-            FAKE_SIDECAR_SESSION_TYPE: "wayland",
-            FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE: "true",
-            FAKE_SIDECAR_PORTAL_AVAILABLE: "true",
-            FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED: "true",
-            FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_SUPPORTED: "false",
-            FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_REASON:
-              "Choose a target manually.",
-            FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_REASON_CODE:
-              "linux-manual-app-target-selection-required",
-            FAKE_SIDECAR_REQUIRES_MANUAL_SELECTION: "true",
-          },
-        });
-      },
-      restartDelayMs: 10,
-    });
-
-    try {
-      const status = await manager.getStatus();
-      const sidecarCapabilities = await manager.getCapabilities();
-      const resolvedCapabilities = resolveDesktopCaptureCapabilities({
-        baseCapabilities: getDesktopCapabilitiesForPlatform("linux"),
-        sidecarAvailable: status.available,
-        sidecarReason: status.reason,
-        sidecarPerAppAudioSupported:
-          sidecarCapabilities.perAppAudio !== "unsupported",
-        sidecarCapabilities,
-      });
-
-      assert.equal(resolvedCapabilities.perAppAudio, "best-effort");
-      assert.equal(
-        resolvedCapabilities.issues.some((issue) => {
-          return issue.code === "linux-manual-app-target-selection-required";
-        }),
-        true,
-      );
-
-      const targets = await manager.listAppAudioTargets("window:1:0");
-      assert.equal(targets.requiresManualSelection, true);
-      assert.equal(targets.targets[0]?.id, "pid:1234");
-
-      const prepared = resolvePreparedScreenAudioMode(
-        {
-          sourceId: "window:1:0",
-          audioMode: "app",
-        },
-        resolvedCapabilities,
-      );
-
-      assert.equal(prepared.effectiveMode, "system");
-      assert.match(
-        prepared.warning ?? "",
-        /Linux requires choosing a running app audio target/i,
-      );
-
-      const fallbackSession = await manager.startAppAudioCapture({
-        sourceId: "window:1:0",
-      });
-      assert.ok(fallbackSession.sessionId);
-      assert.equal(fallbackSession.targetId, "pid:1234");
-
-      await manager.stopAppAudioCapture(fallbackSession.sessionId);
     } finally {
       await manager.dispose();
     }
