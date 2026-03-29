@@ -485,6 +485,7 @@ class CaptureSidecarManager {
   private requestId = 0;
   private pendingRequests = new Map<string, TPendingRequest>();
   private activeSessionId: string | undefined;
+  private lastRequestedPushKeybinds: TDesktopPushKeybindsInput | undefined;
   private pushKeybindActiveState: Record<"talk" | "mute", boolean> = {
     talk: false,
     mute: false,
@@ -661,6 +662,11 @@ class CaptureSidecarManager {
   async setPushKeybinds(
     input: TDesktopPushKeybindsInput,
   ): Promise<TGlobalPushKeybindRegistrationResult> {
+    this.lastRequestedPushKeybinds =
+      input.pushToTalkKeybind || input.pushToMuteKeybind
+        ? { ...input }
+        : undefined;
+
     const response = await this.sendRequest("push_keybinds.set", input);
 
     return expectSidecarResult(
@@ -837,10 +843,34 @@ class CaptureSidecarManager {
     if (!this.sidecarProcess || this.sidecarProcess.killed) {
       this.startSidecarProcess();
       await this.sendRequestInternal("health.ping", {});
+      await this.restorePushKeybindsAfterRestart();
       this.lastKnownError = undefined;
       this.events.emit("lifecycle", {
         kind: "ready",
       } satisfies TSidecarLifecycleEvent);
+    }
+  }
+
+  private async restorePushKeybindsAfterRestart() {
+    if (!this.lastRequestedPushKeybinds) {
+      return;
+    }
+
+    try {
+      const response = await this.sendRequestInternal(
+        "push_keybinds.set",
+        this.lastRequestedPushKeybinds,
+      );
+      expectSidecarResult(
+        response,
+        isGlobalPushKeybindRegistrationResult,
+        "push_keybinds.set",
+      );
+    } catch (error) {
+      console.warn(
+        "[desktop] Failed to restore global push keybinds after sidecar restart",
+        error,
+      );
     }
   }
 

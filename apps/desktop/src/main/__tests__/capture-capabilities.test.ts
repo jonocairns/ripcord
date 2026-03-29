@@ -166,4 +166,50 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     assert.equal(resolved.issues[0]?.code, "macos-screen-audio-unavailable");
     assert.match(resolved.issues[0]?.message ?? "", /helper missing/i);
   });
+
+  void it("surfaces macOS Screen Recording permission failures as a distinct issue", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("darwin");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: false,
+      sidecarReason: "Grant Screen Recording access in System Settings.",
+      sidecarCapabilities: {
+        reasonCode: "macos-screen-recording-permission-required",
+      },
+    });
+
+    assert.equal(resolved.systemAudio, "unsupported");
+    assert.equal(resolved.perAppAudio, "unsupported");
+    assert.equal(
+      resolved.issues[0]?.code,
+      "macos-screen-recording-permission-required",
+    );
+    assert.equal(
+      resolved.issues[0]?.title,
+      "Screen Recording permission required",
+    );
+  });
+
+  void it("surfaces macOS version support failures as a distinct issue", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("darwin");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: false,
+      sidecarReason:
+        "ScreenCaptureKit audio capture requires macOS 13 or newer.",
+      sidecarCapabilities: {
+        reasonCode: "macos-version-unsupported",
+      },
+    });
+
+    assert.equal(resolved.systemAudio, "unsupported");
+    assert.equal(resolved.perAppAudio, "unsupported");
+    assert.equal(resolved.issues[0]?.code, "macos-version-unsupported");
+    assert.equal(
+      resolved.issues[0]?.title,
+      "macOS version unsupported for screen audio",
+    );
+  });
 });

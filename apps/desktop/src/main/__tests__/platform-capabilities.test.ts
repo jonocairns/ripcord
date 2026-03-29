@@ -73,6 +73,31 @@ void describe("resolveScreenAudioMode", () => {
 });
 
 void describe("resolvePreparedScreenAudioMode", () => {
+  void it("falls back when per-app audio is requested for a full-screen share without an explicit target", () => {
+    const capabilities: TDesktopCapabilities = {
+      platform: "windows",
+      systemAudio: "supported",
+      perAppAudio: "supported",
+      globalPushKeybinds: "supported",
+      issues: [],
+      notes: [],
+    };
+
+    const resolved = resolvePreparedScreenAudioMode(
+      {
+        sourceId: "screen:1",
+        audioMode: "app",
+      },
+      capabilities,
+    );
+
+    assert.equal(resolved.effectiveMode, "system");
+    assert.match(
+      resolved.warning ?? "",
+      /Per-app audio requires selecting a target app/i,
+    );
+  });
+
   void it("falls back when linux per-app audio is requested without an explicit target", () => {
     const capabilities: TDesktopCapabilities = {
       platform: "linux",
@@ -122,5 +147,28 @@ void describe("resolvePreparedScreenAudioMode", () => {
       resolved.warning,
       "Per-app audio capture is best-effort on this platform and may fail.",
     );
+  });
+
+  void it("keeps per-app audio for a full-screen share when an explicit target is selected", () => {
+    const capabilities: TDesktopCapabilities = {
+      platform: "windows",
+      systemAudio: "supported",
+      perAppAudio: "supported",
+      globalPushKeybinds: "supported",
+      issues: [],
+      notes: [],
+    };
+
+    const resolved = resolvePreparedScreenAudioMode(
+      {
+        sourceId: "screen:1",
+        audioMode: "app",
+        appAudioTargetId: "pid:1234",
+      },
+      capabilities,
+    );
+
+    assert.equal(resolved.effectiveMode, "app");
+    assert.equal(resolved.warning, undefined);
   });
 });

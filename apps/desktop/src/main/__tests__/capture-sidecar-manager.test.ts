@@ -10,6 +10,7 @@ import type {
   TAppAudioFrame,
   TAppAudioPcmFrame,
   TAppAudioStatusEvent,
+  TDesktopPushKeybindEvent,
 } from "../types";
 
 const fakeSidecarPath = path.resolve(
@@ -198,6 +199,39 @@ void describe("CaptureSidecarManager", () => {
     }
   });
 
+  void it("returns push keybind registration failures from the sidecar", async () => {
+    const manager = new CaptureSidecarManager({
+      spawnSidecar: () => {
+        return spawn(process.execPath, [fakeSidecarPath], {
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            FAKE_SIDECAR_PUSH_TALK_REGISTERED: "false",
+            FAKE_SIDECAR_PUSH_MUTE_REGISTERED: "true",
+            FAKE_SIDECAR_PUSH_KEYBIND_ERRORS:
+              '["Push-to-talk requires an X11 display server connection."]',
+          },
+        });
+      },
+      restartDelayMs: 10,
+    });
+
+    try {
+      const result = await manager.setPushKeybinds({
+        pushToTalkKeybind: "Ctrl+Shift+T",
+        pushToMuteKeybind: "Ctrl+Shift+M",
+      });
+
+      assert.equal(result.talkRegistered, false);
+      assert.equal(result.muteRegistered, true);
+      assert.deepEqual(result.errors, [
+        "Push-to-talk requires an X11 display server connection.",
+      ]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   void it("keeps linux manual-selection metadata when a suggested target is also present", async () => {
     const manager = new CaptureSidecarManager({
       spawnSidecar: () => {
@@ -220,6 +254,130 @@ void describe("CaptureSidecarManager", () => {
       assert.equal(targets.suggestedTargetId, "pid:1234");
       assert.equal(targets.requiresManualSelection, true);
     } finally {
+      await manager.dispose();
+    }
+  });
+
+  void it("refreshes reported capabilities after the sidecar restarts with a different environment", async () => {
+    let spawnCount = 0;
+
+    const manager = new CaptureSidecarManager({
+      spawnSidecar: () => {
+        spawnCount += 1;
+
+        const isFirstSpawn = spawnCount === 1;
+        return spawn(process.execPath, [fakeSidecarPath], {
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            FAKE_SIDECAR_CRASH_MS: isFirstSpawn ? "80" : "0",
+            FAKE_SIDECAR_PLATFORM: "linux",
+            FAKE_SIDECAR_SESSION_TYPE: isFirstSpawn ? "x11" : "wayland",
+            FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE: isFirstSpawn
+              ? "false"
+              : "true",
+            FAKE_SIDECAR_PER_APP_AUDIO: isFirstSpawn
+              ? "unsupported"
+              : "best-effort",
+            FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED: isFirstSpawn
+              ? "false"
+              : "true",
+            FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_REASON: isFirstSpawn
+              ? "pw-record is not installed"
+              : "",
+            FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_REASON_CODE: isFirstSpawn
+              ? "linux-pipewire-tools-missing"
+              : "",
+            FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_SUPPORTED: isFirstSpawn
+              ? "false"
+              : "true",
+          },
+        });
+      },
+      restartDelayMs: 20,
+    });
+
+    try {
+      const initialCapabilities = await manager.getCapabilities();
+      assert.equal(initialCapabilities.sessionType, "x11");
+      assert.equal(initialCapabilities.perAppAudio, "unsupported");
+      assert.equal(initialCapabilities.pipewireToolsAvailable, false);
+
+      await waitFor(() => spawnCount >= 2, 3_000);
+
+      const refreshedCapabilities = await manager.getCapabilities();
+      assert.equal(refreshedCapabilities.sessionType, "wayland");
+      assert.equal(refreshedCapabilities.perAppAudio, "best-effort");
+      assert.equal(refreshedCapabilities.pipewireToolsAvailable, true);
+      assert.equal(
+        refreshedCapabilities.appAudioTargetEnumerationSupported,
+        true,
+      );
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  void it("restores push keybind registration after the sidecar exits and restarts", async () => {
+    let spawnCount = 0;
+
+    const manager = new CaptureSidecarManager({
+      spawnSidecar: () => {
+        spawnCount += 1;
+
+        const shouldCrash = spawnCount === 1;
+        return spawn(process.execPath, [fakeSidecarPath], {
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            FAKE_SIDECAR_CRASH_MS: shouldCrash ? "80" : "0",
+            FAKE_SIDECAR_EMIT_PUSH_TALK_ACTIVE_ON_SET: "true",
+          },
+        });
+      },
+      restartDelayMs: 20,
+    });
+
+    const pushEvents: TDesktopPushKeybindEvent[] = [];
+    const offPushKeybind = manager.onPushKeybind((event) => {
+      pushEvents.push(event);
+    });
+
+    try {
+      const registration = await manager.setPushKeybinds({
+        pushToTalkKeybind: "Ctrl+Shift+T",
+      });
+      assert.equal(registration.talkRegistered, true);
+
+      await waitFor(() =>
+        pushEvents.some((event) => event.kind === "talk" && event.active),
+      );
+      await waitFor(
+        () =>
+          pushEvents.some((event) => event.kind === "talk" && !event.active),
+        3_000,
+      );
+      await waitFor(() => spawnCount >= 2, 3_000);
+      await waitFor(
+        () =>
+          pushEvents.filter((event) => event.kind === "talk" && event.active)
+            .length >= 2,
+        3_000,
+      );
+
+      assert.equal(pushEvents[0]?.kind, "talk");
+      assert.equal(pushEvents[0]?.active, true);
+      assert.equal(
+        pushEvents.some((event) => event.kind === "talk" && !event.active),
+        true,
+      );
+      assert.equal(
+        pushEvents.filter((event) => event.kind === "talk" && event.active)
+          .length >= 2,
+        true,
+      );
+    } finally {
+      offPushKeybind();
       await manager.dispose();
     }
   });
