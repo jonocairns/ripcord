@@ -218,6 +218,22 @@ const resolveDesktopCaptureCapabilities = ({
       );
     }
 
+    if (sidecarCapabilities?.linuxAudioBackend) {
+      appendNote(
+        notes,
+        sidecarCapabilities.linuxAudioBackendUsesShellOuts
+          ? "Linux app audio currently uses the PipeWire CLI backend, so packaging still depends on the external PipeWire capture tools while the native Rust backend work is in progress."
+          : `Linux app audio backend: ${sidecarCapabilities.linuxAudioBackend}.`,
+      );
+    }
+
+    if (
+      sidecarCapabilities?.pipewireRuntimeAvailable === false &&
+      sidecarCapabilities.pipewireRuntimeReason
+    ) {
+      appendNote(notes, sidecarCapabilities.pipewireRuntimeReason);
+    }
+
     appendIssue(
       issues,
       sidecarCapabilities?.portalAvailable === false &&

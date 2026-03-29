@@ -124,6 +124,11 @@ void describe("CaptureSidecarManager", () => {
             FAKE_SIDECAR_SYSTEM_AUDIO: "best-effort",
             FAKE_SIDECAR_PER_APP_AUDIO: "best-effort",
             FAKE_SIDECAR_SESSION_TYPE: "wayland",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND: "pipewire-cli-shell",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND_USES_SHELL_OUTS: "true",
+            FAKE_SIDECAR_PIPEWIRE_RUNTIME_AVAILABLE: "false",
+            FAKE_SIDECAR_PIPEWIRE_RUNTIME_REASON:
+              "PipeWire runtime libraries were not detected in the current environment, so the planned native Linux audio backend is not ready on this install.",
             FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE: "true",
             FAKE_SIDECAR_PORTAL_AVAILABLE: "true",
             FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED: "true",
@@ -148,6 +153,9 @@ void describe("CaptureSidecarManager", () => {
       const capabilities = await manager.getCapabilities();
       assert.equal(capabilities.perAppAudio, "best-effort");
       assert.equal(capabilities.sessionType, "wayland");
+      assert.equal(capabilities.linuxAudioBackend, "pipewire-cli-shell");
+      assert.equal(capabilities.linuxAudioBackendUsesShellOuts, true);
+      assert.equal(capabilities.pipewireRuntimeAvailable, false);
       assert.equal(capabilities.pipewireToolsAvailable, true);
       assert.equal(capabilities.portalAvailable, true);
       assert.equal(capabilities.appAudioTargetEnumerationSupported, true);

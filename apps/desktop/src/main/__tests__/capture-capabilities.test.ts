@@ -70,6 +70,11 @@ void describe("resolveDesktopCaptureCapabilities", () => {
       sidecarPerAppAudioSupported: true,
       sidecarCapabilities: {
         sessionType: "wayland",
+        linuxAudioBackend: "pipewire-cli-shell",
+        linuxAudioBackendUsesShellOuts: true,
+        pipewireRuntimeAvailable: false,
+        pipewireRuntimeReason:
+          "PipeWire runtime libraries were not detected in the current environment, so the planned native Linux audio backend is not ready on this install.",
         pipewireToolsAvailable: true,
         appAudioTargetEnumerationSupported: true,
         sourceAudioTargetInferenceSupported: false,
@@ -87,6 +92,8 @@ void describe("resolveDesktopCaptureCapabilities", () => {
       "Manual app selection required",
     );
     assert.match(resolved.notes.join(" "), /PipeWire/i);
+    assert.match(resolved.notes.join(" "), /CLI backend/i);
+    assert.match(resolved.notes.join(" "), /native Linux audio backend/i);
     assert.match(resolved.notes.join(" "), /session type: Wayland/i);
   });
 

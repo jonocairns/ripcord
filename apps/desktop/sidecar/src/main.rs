@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 #[cfg(target_os = "linux")]
+use std::ffi::CString;
+#[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "macos")]
 use std::io::Read;
@@ -84,6 +86,8 @@ const APP_AUDIO_SAMPLE_RATE: u32 = 48_000;
 const APP_AUDIO_CHANNELS: usize = 1;
 #[cfg(target_os = "linux")]
 const APP_AUDIO_FRAME_BYTES: usize = APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS * 4;
+#[cfg(target_os = "linux")]
+const LINUX_AUDIO_BACKEND_PIPEWIRE_CLI_SHELL: &str = "pipewire-cli-shell";
 #[allow(dead_code)]
 const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
 #[cfg(target_os = "macos")]
@@ -246,6 +250,18 @@ struct LinuxTargetCapture {
     stdout_thread: JoinHandle<()>,
     stderr_thread: Option<JoinHandle<()>>,
 }
+
+#[cfg(target_os = "linux")]
+struct LinuxAudioBackendProbe {
+    backend: &'static str,
+    uses_shell_outs: bool,
+    pipewire_runtime_available: bool,
+    pipewire_runtime_reason: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+const LINUX_PIPEWIRE_RUNTIME_LIBRARY_NAMES: [&str; 2] =
+    ["libpipewire-0.3.so.0", "libpipewire-0.3.so"];
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1516,6 +1532,49 @@ fn pipewire_command_exists(command: &str) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn pipewire_runtime_available() -> bool {
+    LINUX_PIPEWIRE_RUNTIME_LIBRARY_NAMES
+        .iter()
+        .copied()
+        .any(pipewire_runtime_library_available)
+}
+
+#[cfg(target_os = "linux")]
+fn pipewire_runtime_library_available(library_name: &str) -> bool {
+    let Ok(library_name) = CString::new(library_name) else {
+        return false;
+    };
+
+    let handle = unsafe { libc::dlopen(library_name.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
+    if handle.is_null() {
+        return false;
+    }
+
+    let _ = unsafe { libc::dlclose(handle) };
+    true
+}
+
+#[cfg(target_os = "linux")]
+fn probe_linux_audio_backend() -> LinuxAudioBackendProbe {
+    let pipewire_runtime_available = pipewire_runtime_available();
+    let pipewire_runtime_reason = if pipewire_runtime_available {
+        None
+    } else {
+        Some(
+            "PipeWire runtime libraries were not detected in the current environment, so the planned native Linux audio backend is not ready on this install."
+                .to_string(),
+        )
+    };
+
+    LinuxAudioBackendProbe {
+        backend: LINUX_AUDIO_BACKEND_PIPEWIRE_CLI_SHELL,
+        uses_shell_outs: true,
+        pipewire_runtime_available,
+        pipewire_runtime_reason,
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -3259,6 +3318,7 @@ fn handle_capabilities_get() -> Result<Value, String> {
 
     #[cfg(target_os = "linux")]
     {
+        let linux_audio_backend = probe_linux_audio_backend();
         let session_type = detect_linux_session_type();
         let pipewire_tools_available = pipewire_tools_available();
         let (portal_available, portal_reason) = probe_linux_desktop_portal();
@@ -3289,6 +3349,10 @@ fn handle_capabilities_get() -> Result<Value, String> {
         };
 
         response["sessionType"] = json!(session_type);
+        response["linuxAudioBackend"] = json!(linux_audio_backend.backend);
+        response["linuxAudioBackendUsesShellOuts"] = json!(linux_audio_backend.uses_shell_outs);
+        response["pipewireRuntimeAvailable"] =
+            json!(linux_audio_backend.pipewire_runtime_available);
         response["pipewireToolsAvailable"] = json!(pipewire_tools_available);
         response["portalAvailable"] = json!(portal_available);
         response["appAudioTargetEnumerationSupported"] = json!(pipewire_tools_available);
@@ -3301,10 +3365,13 @@ fn handle_capabilities_get() -> Result<Value, String> {
             response["portalReasonCode"] = json!("linux-desktop-portal-required");
         }
 
+        if let Some(reason) = linux_audio_backend.pipewire_runtime_reason {
+            response["pipewireRuntimeReason"] = json!(reason);
+        }
+
         if let Some(reason) = app_audio_target_enumeration_reason {
             response["appAudioTargetEnumerationReason"] = json!(reason);
-            response["appAudioTargetEnumerationReasonCode"] =
-                json!("linux-pipewire-tools-missing");
+            response["appAudioTargetEnumerationReasonCode"] = json!("linux-pipewire-tools-missing");
             response["perAppAudioReasonCode"] = json!("linux-pipewire-tools-missing");
         }
 
@@ -3375,10 +3442,7 @@ fn handle_audio_targets_list(params: Value) -> Result<Value, String> {
                 .to_string(),
         )
     } else {
-        Some(
-            "Linux per-app audio requires choosing the app that is producing sound."
-                .to_string(),
-        )
+        Some("Linux per-app audio requires choosing the app that is producing sound.".to_string())
     };
     #[cfg(not(target_os = "linux"))]
     let warning: Option<String> = None;
