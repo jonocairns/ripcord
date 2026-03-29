@@ -126,7 +126,7 @@ const FloatingPinnedCard = memo(
 			<div
 				ref={cardRef}
 				onMouseDown={handleMouseDown}
-				className="absolute z-50 cursor-move select-none w-96 aspect-video rounded-lg overflow-hidden border border-border bg-black shadow-lg group"
+				className="absolute z-40 cursor-move select-none w-96 aspect-video rounded-lg overflow-hidden border border-border bg-black shadow-lg group"
 				style={getStyle()}
 			>
 				<CardControls>

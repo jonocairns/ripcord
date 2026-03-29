@@ -38,7 +38,7 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
 	);
 
 	return (
-		<div className={cn('pointer-events-none absolute inset-x-0 bottom-6 z-50 flex justify-center px-4')}>
+		<div className={cn('pointer-events-none absolute inset-x-0 bottom-6 z-40 flex justify-center px-4')}>
 			<VoiceSurface variant="controls" className="pointer-events-auto flex items-center gap-0.5 px-1.5 py-1.5">
 				<ControlToggleButton
 					enabled={ownVoiceState.micMuted}
