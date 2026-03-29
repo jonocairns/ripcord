@@ -120,6 +120,7 @@ void describe("CaptureSidecarManager", () => {
             FAKE_SIDECAR_PER_APP_AUDIO: "best-effort",
             FAKE_SIDECAR_SESSION_TYPE: "wayland",
             FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE: "true",
+            FAKE_SIDECAR_PORTAL_AVAILABLE: "true",
             FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED: "true",
             FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_SUPPORTED: "false",
             FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_REASON:
@@ -143,6 +144,7 @@ void describe("CaptureSidecarManager", () => {
       assert.equal(capabilities.perAppAudio, "best-effort");
       assert.equal(capabilities.sessionType, "wayland");
       assert.equal(capabilities.pipewireToolsAvailable, true);
+      assert.equal(capabilities.portalAvailable, true);
       assert.equal(capabilities.appAudioTargetEnumerationSupported, true);
       assert.equal(capabilities.sourceAudioTargetInferenceSupported, false);
       assert.equal(

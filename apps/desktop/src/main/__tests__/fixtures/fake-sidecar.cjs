@@ -51,6 +51,11 @@ const capabilitySessionType = process.env.FAKE_SIDECAR_SESSION_TYPE;
 const capabilityPipewireToolsAvailable = parseBooleanEnv(
   process.env.FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE
 );
+const capabilityPortalAvailable = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_PORTAL_AVAILABLE
+);
+const capabilityPortalReason = process.env.FAKE_SIDECAR_PORTAL_REASON;
+const capabilityPortalReasonCode = process.env.FAKE_SIDECAR_PORTAL_REASON_CODE;
 const capabilityAppAudioTargetEnumerationSupported = parseBooleanEnv(
   process.env.FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED
 );
@@ -306,6 +311,9 @@ rl.on('line', (line) => {
       perAppAudioReasonCode: capabilityPerAppAudioReasonCode,
       sessionType: capabilitySessionType,
       pipewireToolsAvailable: capabilityPipewireToolsAvailable,
+      portalAvailable: capabilityPortalAvailable,
+      portalReason: capabilityPortalReason,
+      portalReasonCode: capabilityPortalReasonCode,
       appAudioTargetEnumerationSupported:
         capabilityAppAudioTargetEnumerationSupported,
       appAudioTargetEnumerationReason:

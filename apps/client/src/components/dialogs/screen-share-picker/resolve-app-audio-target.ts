@@ -4,6 +4,7 @@ type TResolveAppAudioTargetBehaviorInput = {
 	audioMode: ScreenAudioMode;
 	perAppAudioSupported: boolean;
 	sourceKind: TDesktopShareSourceKind | undefined;
+	availableTargetCount: number;
 	suggestedTargetId: string | undefined;
 	requiresManualSelection: boolean | undefined;
 };
@@ -12,12 +13,14 @@ type TResolveAppAudioTargetBehaviorResult = {
 	shouldResolveAppAudioTargets: boolean;
 	requiresManualAppAudioTarget: boolean;
 	shouldAutoSelectSuggestedTarget: boolean;
+	allowsImplicitFallbackWithoutTarget: boolean;
 };
 
 const resolveAppAudioTargetBehavior = ({
 	audioMode,
 	perAppAudioSupported,
 	sourceKind,
+	availableTargetCount,
 	suggestedTargetId,
 	requiresManualSelection,
 }: TResolveAppAudioTargetBehaviorInput): TResolveAppAudioTargetBehaviorResult => {
@@ -28,11 +31,14 @@ const resolveAppAudioTargetBehavior = ({
 
 	const shouldAutoSelectSuggestedTarget =
 		shouldResolveAppAudioTargets && !requiresManualAppAudioTarget && !!suggestedTargetId;
+	const allowsImplicitFallbackWithoutTarget =
+		shouldResolveAppAudioTargets && requiresManualAppAudioTarget && availableTargetCount === 0;
 
 	return {
 		shouldResolveAppAudioTargets,
 		requiresManualAppAudioTarget,
 		shouldAutoSelectSuggestedTarget,
+		allowsImplicitFallbackWithoutTarget,
 	};
 };
 

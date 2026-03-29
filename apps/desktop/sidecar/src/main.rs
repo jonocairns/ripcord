@@ -1620,6 +1620,59 @@ fn probe_linux_x11_display() -> (bool, Option<String>) {
 }
 
 #[cfg(target_os = "linux")]
+fn linux_process_cmdline_contains(needle: &str) -> bool {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return false;
+    };
+
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .into_string()
+                .ok()
+                .filter(|name| name.chars().all(|char| char.is_ascii_digit()))
+        })
+        .any(|pid| {
+            let cmdline_path = format!("/proc/{pid}/cmdline");
+            let Ok(cmdline) = fs::read(cmdline_path) else {
+                return false;
+            };
+
+            cmdline
+                .split(|byte| *byte == 0)
+                .filter_map(|segment| std::str::from_utf8(segment).ok())
+                .any(|segment| segment.contains(needle))
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn probe_linux_desktop_portal() -> (bool, Option<String>) {
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+        return (
+            false,
+            Some(
+                "No D-Bus session bus was detected. Wayland screen sharing requires xdg-desktop-portal."
+                    .to_string(),
+            ),
+        );
+    }
+
+    if !linux_process_cmdline_contains("xdg-desktop-portal") {
+        return (
+            false,
+            Some(
+                "xdg-desktop-portal is not running for the current desktop session. Wayland screen sharing requires it."
+                    .to_string(),
+            ),
+        );
+    }
+
+    (true, None)
+}
+
+#[cfg(target_os = "linux")]
 fn run_pipewire_command(command: &str, arguments: &[&str]) -> Result<Vec<u8>, String> {
     let output = Command::new(command)
         .args(arguments)
@@ -3203,6 +3256,7 @@ fn handle_capabilities_get() -> Result<Value, String> {
     {
         let session_type = detect_linux_session_type();
         let pipewire_tools_available = pipewire_tools_available();
+        let (portal_available, portal_reason) = probe_linux_desktop_portal();
         let (x11_display_available, x11_display_reason) = probe_linux_x11_display();
         let app_audio_target_enumeration_reason = if pipewire_tools_available {
             None
@@ -3231,10 +3285,16 @@ fn handle_capabilities_get() -> Result<Value, String> {
 
         response["sessionType"] = json!(session_type);
         response["pipewireToolsAvailable"] = json!(pipewire_tools_available);
+        response["portalAvailable"] = json!(portal_available);
         response["appAudioTargetEnumerationSupported"] = json!(pipewire_tools_available);
         response["sourceAudioTargetInferenceSupported"] = json!(false);
         response["globalPushKeybinds"] = json!(global_push_keybinds);
         response["x11DisplayAvailable"] = json!(x11_display_available);
+
+        if let Some(reason) = portal_reason {
+            response["portalReason"] = json!(reason);
+            response["portalReasonCode"] = json!("linux-desktop-portal-required");
+        }
 
         if let Some(reason) = app_audio_target_enumeration_reason {
             response["appAudioTargetEnumerationReason"] = json!(reason);

@@ -57,6 +57,9 @@ export type TSidecarCapabilities = {
   perAppAudioReasonCode?: string;
   sessionType?: string;
   pipewireToolsAvailable?: boolean;
+  portalAvailable?: boolean;
+  portalReason?: string;
+  portalReasonCode?: string;
   appAudioTargetEnumerationSupported?: boolean;
   appAudioTargetEnumerationReason?: string;
   appAudioTargetEnumerationReasonCode?: string;
@@ -220,6 +223,9 @@ const isSidecarCapabilities = (
     hasOptionalString(value, "perAppAudioReasonCode") &&
     hasOptionalString(value, "sessionType") &&
     hasOptionalBoolean(value, "pipewireToolsAvailable") &&
+    hasOptionalBoolean(value, "portalAvailable") &&
+    hasOptionalString(value, "portalReason") &&
+    hasOptionalString(value, "portalReasonCode") &&
     hasOptionalBoolean(value, "appAudioTargetEnumerationSupported") &&
     hasOptionalString(value, "appAudioTargetEnumerationReason") &&
     hasOptionalString(value, "appAudioTargetEnumerationReasonCode") &&

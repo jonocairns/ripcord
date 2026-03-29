@@ -122,6 +122,39 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     );
   });
 
+  void it("surfaces a Linux desktop portal issue for Wayland screen sharing", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: true,
+      sidecarPerAppAudioSupported: true,
+      sidecarCapabilities: {
+        sessionType: "wayland",
+        pipewireToolsAvailable: true,
+        portalAvailable: false,
+        portalReason:
+          "xdg-desktop-portal is not running for the current desktop session. Wayland screen sharing requires it.",
+        portalReasonCode: "linux-desktop-portal-required",
+        appAudioTargetEnumerationSupported: true,
+        sourceAudioTargetInferenceSupported: false,
+      },
+    });
+
+    assert.equal(
+      resolved.issues.find(
+        (issue) => issue.code === "linux-desktop-portal-required",
+      )?.title,
+      "Desktop portal unavailable",
+    );
+    assert.equal(
+      resolved.issues
+        .find((issue) => issue.code === "linux-desktop-portal-required")
+        ?.affects.includes("screen-share"),
+      true,
+    );
+  });
+
   void it("deduplicates linux pipewire issues when multiple reasons map to the same code", () => {
     const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
 
