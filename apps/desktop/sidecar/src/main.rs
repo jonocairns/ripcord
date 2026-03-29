@@ -82,7 +82,6 @@ const APP_AUDIO_SAMPLE_RATE: u32 = 48_000;
 const APP_AUDIO_CHANNELS: usize = 1;
 #[cfg(target_os = "linux")]
 const APP_AUDIO_FRAME_BYTES: usize = APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS * 4;
-#[cfg(target_os = "linux")]
 #[allow(dead_code)]
 const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
 #[cfg(target_os = "macos")]
@@ -3682,6 +3681,14 @@ fn handle_capabilities_get() -> Result<Value, String> {
     let macos_helper_probe_error = run_macos_helper_command(&["list-targets"]).err();
     #[cfg(target_os = "linux")]
     let linux_audio_backend = probe_linux_audio_backend();
+    #[cfg(target_os = "linux")]
+    let (linux_per_app_audio_supported, linux_per_app_audio_reason) = (
+        linux_audio_backend.per_app_audio_supported,
+        linux_audio_backend.per_app_audio_reason.clone(),
+    );
+    #[cfg(not(target_os = "linux"))]
+    let (linux_per_app_audio_supported, linux_per_app_audio_reason): (bool, Option<String>) =
+        (false, None);
 
     #[cfg(not(target_os = "macos"))]
     let macos_helper_probe_error: Option<String> = None;
@@ -3705,13 +3712,13 @@ fn handle_capabilities_get() -> Result<Value, String> {
             )
         }
     } else if cfg!(target_os = "linux") {
-        if linux_audio_backend.per_app_audio_supported {
+        if linux_per_app_audio_supported {
             ("best-effort", "best-effort", None, None)
         } else {
             (
                 "unsupported",
                 "unsupported",
-                linux_audio_backend.per_app_audio_reason.clone(),
+                linux_per_app_audio_reason.clone(),
                 None,
             )
         }
