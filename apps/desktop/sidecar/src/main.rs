@@ -1670,6 +1670,7 @@ fn start_push_keybind_watcher(
     PushKeybindWatcher { stop_flag, handle }
 }
 
+#[cfg(test)]
 fn parse_target_pid(target_id: &str) -> Option<u32> {
     target_id
         .strip_prefix("pid:")
@@ -2652,6 +2653,7 @@ fn linux_pulse_capture_source_for_target(
         .ok_or_else(|| format!("Target audio source `{target_id}` is not available"))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn clamp_audio_samples(frame_samples: &mut [f32]) {
     for sample in frame_samples.iter_mut() {
         *sample = sample.clamp(-1.0, 1.0);
