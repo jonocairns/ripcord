@@ -21,6 +21,7 @@ import {
 	incrementPendingVoiceReconnectRetryCount,
 	setPendingVoiceReconnectChannelId,
 } from '@/features/server/reconnect-state';
+import { resolveTransportFailureVoiceReconnectState } from '@/features/server/reconnect-policy';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
@@ -489,10 +490,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		hasHandledTransportFailureRef.current = true;
 		logVoice('Transport failure detected, triggering voice cleanup');
 
-		const channelId = currentVoiceChannelIdRef.current;
+		const reconnectState = resolveTransportFailureVoiceReconnectState({
+			isConnected: isConnectedRef.current,
+			currentVoiceChannelId: currentVoiceChannelIdRef.current,
+		});
 
-		if (isConnectedRef.current && channelId !== undefined) {
-			setPendingVoiceReconnectChannelId(channelId);
+		if (reconnectState.pendingVoiceReconnectChannelId !== undefined) {
+			setPendingVoiceReconnectChannelId(reconnectState.pendingVoiceReconnectChannelId);
+		}
+
+		if (reconnectState.shouldClearCurrentVoiceChannelId) {
 			useServerStore.getState().setCurrentVoiceChannelId(undefined);
 		}
 
