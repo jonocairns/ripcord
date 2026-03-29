@@ -13,7 +13,6 @@ import {
 import { memo, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { useChannelCan } from '@/features/server/hooks';
-import { useServerScreenInfo } from '@/features/server-screens/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
 import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
 import { cn } from '@/lib/utils';
@@ -28,7 +27,6 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
 	const { toggleMic, toggleSound, toggleWebcam, toggleScreenShare } = useVoice();
 	const ownVoiceState = useOwnVoiceState();
 	const channelCan = useChannelCan(channelId);
-	const { isOpen: isServerScreenOpen } = useServerScreenInfo();
 
 	const permissions = useMemo(
 		() => ({
@@ -39,12 +37,8 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
 		[channelCan],
 	);
 
-	if (isServerScreenOpen) {
-		return null;
-	}
-
 	return (
-		<div className={cn('pointer-events-none absolute inset-x-0 bottom-6 z-50 flex justify-center px-4')}>
+		<div className={cn('pointer-events-none absolute inset-x-0 bottom-6 z-40 flex justify-center px-4')}>
 			<VoiceSurface variant="controls" className="pointer-events-auto flex items-center gap-0.5 px-1.5 py-1.5">
 				<ControlToggleButton
 					enabled={ownVoiceState.micMuted}

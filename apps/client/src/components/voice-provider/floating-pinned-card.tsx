@@ -2,7 +2,6 @@ import { ArrowDownLeft, SendToBack, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { setSelectedChannelId } from '@/features/server/channels/actions';
 import { useCurrentVoiceChannelId, useIsCurrentVoiceChannelSelected } from '@/features/server/channels/hooks';
-import { useServerScreenInfo } from '@/features/server-screens/hooks';
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
 import { usePinnedCard, useVoiceChannelExternalStreamsList } from '@/features/server/voice/hooks';
 import type { TRemoteStreams } from '@/types';
@@ -34,7 +33,6 @@ const FloatingPinnedCard = memo(
 		const ownUserId = useOwnUserId();
 		const currentVoiceChannelId = useCurrentVoiceChannelId();
 		const isCurrentVoiceChannelSelected = useIsCurrentVoiceChannelSelected();
-		const { isOpen: isServerScreenOpen } = useServerScreenInfo();
 		const currentVoiceChannelExternalStreams = useVoiceChannelExternalStreamsList(currentVoiceChannelId ?? -1);
 		const pinnedUser = useUserById(pinnedCard?.userId || -1);
 
@@ -120,7 +118,7 @@ const FloatingPinnedCard = memo(
 			setOpen(true);
 		}, [floatingCardContent?.id, isCurrentVoiceChannelSelected]);
 
-		if (!floatingCardContent || isCurrentVoiceChannelSelected || isServerScreenOpen || !open) {
+		if (!floatingCardContent || isCurrentVoiceChannelSelected || !open) {
 			return null;
 		}
 
@@ -128,7 +126,7 @@ const FloatingPinnedCard = memo(
 			<div
 				ref={cardRef}
 				onMouseDown={handleMouseDown}
-				className="absolute z-50 cursor-move select-none w-96 aspect-video rounded-lg overflow-hidden border border-border bg-black shadow-lg group"
+				className="absolute z-40 cursor-move select-none w-96 aspect-video rounded-lg overflow-hidden border border-border bg-black shadow-lg group"
 				style={getStyle()}
 			>
 				<CardControls>
