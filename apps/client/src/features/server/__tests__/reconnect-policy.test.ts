@@ -21,7 +21,7 @@ describe('resolvePendingVoiceReconnectChannelIdOnDisconnect', () => {
 		expect(
 			resolvePendingVoiceReconnectChannelIdOnDisconnect({
 				wasConnected: true,
-				disconnectCode: 1000,
+				disconnectCode: DisconnectCode.UNEXPECTED,
 				currentVoiceChannelId: undefined,
 				pendingVoiceChannelId: 77,
 			}),
