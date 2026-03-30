@@ -217,6 +217,12 @@ const resolveDesktopCaptureCapabilities = ({
 }: TResolveCapabilityOptions): TDesktopCapabilities => {
   const notes = [...baseCapabilities.notes];
   const issues = [...baseCapabilities.issues];
+  const linuxAudioRuntimeAvailable =
+    sidecarCapabilities?.linuxAudioRuntimeAvailable ??
+    sidecarCapabilities?.pipewireRuntimeAvailable;
+  const linuxAudioRuntimeReason =
+    sidecarCapabilities?.linuxAudioRuntimeReason ??
+    sidecarCapabilities?.pipewireRuntimeReason;
   const resolvedSystemAudio =
     sidecarCapabilities?.systemAudio ?? baseCapabilities.systemAudio;
   const globalPushKeybinds = resolveGlobalPushKeybinds(
@@ -241,11 +247,8 @@ const resolveDesktopCaptureCapabilities = ({
       );
     }
 
-    if (
-      sidecarCapabilities?.pipewireRuntimeAvailable === false &&
-      sidecarCapabilities.pipewireRuntimeReason
-    ) {
-      appendNote(notes, sidecarCapabilities.pipewireRuntimeReason);
+    if (linuxAudioRuntimeAvailable === false && linuxAudioRuntimeReason) {
+      appendNote(notes, linuxAudioRuntimeReason);
     }
 
     appendIssue(

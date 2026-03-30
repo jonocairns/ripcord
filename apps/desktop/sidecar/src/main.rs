@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
@@ -34,10 +34,10 @@ use std::ffi::c_void;
 use std::mem::size_of;
 #[cfg(windows)]
 use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 #[cfg(windows)]
 use std::ptr;
-#[cfg(windows)]
-use std::time::Instant;
 #[cfg(windows)]
 use windows::core::{IUnknown, Interface, PWSTR};
 #[cfg(windows)]
@@ -226,6 +226,7 @@ struct CaptureSession {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone)]
 struct LinuxAudioBackendProbe {
     backend: &'static str,
     uses_shell_outs: bool,
@@ -284,6 +285,12 @@ struct LinuxPulseCaptureSource {
 }
 
 #[cfg(target_os = "linux")]
+struct LinuxAudioBackendProbeCacheEntry {
+    expires_at: Instant,
+    probe: LinuxAudioBackendProbe,
+}
+
+#[cfg(target_os = "linux")]
 struct LinuxPulseOperationState<T> {
     mainloop: *mut PaThreadedMainloop,
     completed: bool,
@@ -324,7 +331,6 @@ struct LinuxPulseLib {
     pa_threaded_mainloop_stop: unsafe extern "C" fn(*mut PaThreadedMainloop),
     pa_threaded_mainloop_lock: unsafe extern "C" fn(*mut PaThreadedMainloop),
     pa_threaded_mainloop_unlock: unsafe extern "C" fn(*mut PaThreadedMainloop),
-    pa_threaded_mainloop_wait: unsafe extern "C" fn(*mut PaThreadedMainloop),
     pa_threaded_mainloop_signal: unsafe extern "C" fn(*mut PaThreadedMainloop, i32),
     pa_threaded_mainloop_get_api:
         unsafe extern "C" fn(*mut PaThreadedMainloop) -> *mut PaMainloopApi,
@@ -515,6 +521,9 @@ const LINUX_PULSEAUDIO_LIBRARY_NAMES: [&str; 2] = ["libpulse.so.0", "libpulse.so
 const LINUX_PULSEAUDIO_SIMPLE_LIBRARY_NAMES: [&str; 2] =
     ["libpulse-simple.so.0", "libpulse-simple.so"];
 #[cfg(target_os = "linux")]
+const LINUX_PULSEAUDIO_FALLBACK_LIBRARY_DIRS: [&str; 2] =
+    ["/nix/var/nix/profiles/default/lib", "/run/current-system/sw/lib"];
+#[cfg(target_os = "linux")]
 const LINUX_PULSE_TARGET_PREFIX: &str = "pulse:pid:";
 #[cfg(target_os = "linux")]
 const PA_CONTEXT_READY: i32 = 4;
@@ -530,6 +539,14 @@ const PA_SAMPLE_FLOAT32LE: i32 = 5;
 const PA_STREAM_RECORD: i32 = 2;
 #[cfg(target_os = "linux")]
 const PA_CONTEXT_NOFLAGS: i32 = 0;
+#[cfg(target_os = "linux")]
+const LINUX_PULSE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(target_os = "linux")]
+const LINUX_PULSE_OPERATION_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(target_os = "linux")]
+const LINUX_PULSE_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+#[cfg(target_os = "linux")]
+const LINUX_AUDIO_BACKEND_PROBE_CACHE_TTL: Duration = Duration::from_secs(2);
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1794,6 +1811,9 @@ fn process_name_from_pid(_pid: u32) -> Option<String> {
 
 #[cfg(target_os = "linux")]
 static LINUX_PULSE_LIB: OnceLock<Result<LinuxPulseLib, String>> = OnceLock::new();
+#[cfg(target_os = "linux")]
+static LINUX_AUDIO_BACKEND_PROBE_CACHE: OnceLock<Mutex<Option<LinuxAudioBackendProbeCacheEntry>>> =
+    OnceLock::new();
 
 #[cfg(target_os = "linux")]
 fn linux_cstr_to_string(value: *const c_char) -> Option<String> {
@@ -1821,6 +1841,54 @@ fn linux_pulse_signal_mainloop(mainloop: *mut PaThreadedMainloop) {
 }
 
 #[cfg(target_os = "linux")]
+fn linux_library_search_paths() -> Vec<PathBuf> {
+    let mut search_paths = Vec::new();
+
+    for env_name in ["LD_LIBRARY_PATH", "NIX_LD_LIBRARY_PATH"] {
+        let Some(value) = std::env::var_os(env_name) else {
+            continue;
+        };
+
+        for path in std::env::split_paths(&value) {
+            if path.as_os_str().is_empty() || search_paths.iter().any(|existing| existing == &path)
+            {
+                continue;
+            }
+
+            search_paths.push(path);
+        }
+    }
+
+    for directory in LINUX_PULSEAUDIO_FALLBACK_LIBRARY_DIRS {
+        let path = PathBuf::from(directory);
+        if search_paths.iter().any(|existing| existing == &path) {
+            continue;
+        }
+
+        search_paths.push(path);
+    }
+
+    search_paths
+}
+
+#[cfg(target_os = "linux")]
+fn linux_dlopen_path(candidate_path: &std::path::Path) -> Option<*mut c_void> {
+    if !candidate_path.is_file() {
+        return None;
+    }
+
+    let candidate_path = CString::new(candidate_path.to_string_lossy().as_ref()).ok()?;
+    let handle =
+        unsafe { libc::dlopen(candidate_path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
+
+    if handle.is_null() {
+        return None;
+    }
+
+    Some(handle)
+}
+
+#[cfg(target_os = "linux")]
 fn linux_dlopen_any(library_names: &[&str]) -> Result<*mut c_void, String> {
     for library_name in library_names {
         let Ok(library_name) = CString::new(*library_name) else {
@@ -1834,23 +1902,24 @@ fn linux_dlopen_any(library_names: &[&str]) -> Result<*mut c_void, String> {
         }
     }
 
+    for search_path in linux_library_search_paths() {
+        if !search_path.is_dir() {
+            continue;
+        }
+
+        for library_name in library_names {
+            let candidate_path = search_path.join(library_name);
+            if let Some(handle) = linux_dlopen_path(&candidate_path) {
+                return Ok(handle);
+            }
+        }
+    }
+
     if let Ok(entries) = fs::read_dir("/nix/store") {
         for entry in entries.flatten() {
             for library_name in library_names {
                 let candidate_path = entry.path().join("lib").join(library_name);
-                if !candidate_path.is_file() {
-                    continue;
-                }
-
-                let Ok(candidate_path) = CString::new(candidate_path.to_string_lossy().as_ref())
-                else {
-                    continue;
-                };
-
-                let handle = unsafe {
-                    libc::dlopen(candidate_path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL)
-                };
-                if !handle.is_null() {
+                if let Some(handle) = linux_dlopen_path(&candidate_path) {
                     return Ok(handle);
                 }
             }
@@ -1916,10 +1985,6 @@ fn linux_pulse_lib() -> Result<&'static LinuxPulseLib, String> {
                 pa_threaded_mainloop_unlock: std::mem::transmute(load_symbol(
                     pulse_handle,
                     b"pa_threaded_mainloop_unlock\0",
-                )?),
-                pa_threaded_mainloop_wait: std::mem::transmute(load_symbol(
-                    pulse_handle,
-                    b"pa_threaded_mainloop_wait\0",
                 )?),
                 pa_threaded_mainloop_signal: std::mem::transmute(load_symbol(
                     pulse_handle,
@@ -2212,6 +2277,8 @@ impl LinuxPulseConnection {
     }
 
     fn wait_for_ready_locked(&self) -> Result<(), String> {
+        let deadline = Instant::now() + LINUX_PULSE_CONNECT_TIMEOUT;
+
         loop {
             let state = unsafe { (self.lib.pa_context_get_state)(self.context) };
             match state {
@@ -2224,7 +2291,18 @@ impl LinuxPulseConnection {
                         "Failed to connect to the Linux audio server: {error}"
                     ));
                 }
-                _ => unsafe { (self.lib.pa_threaded_mainloop_wait)(self.mainloop) },
+                _ => {
+                    if Instant::now() >= deadline {
+                        return Err(
+                            "Timed out while waiting for the Linux audio server to become ready."
+                                .to_string(),
+                        );
+                    }
+
+                    unsafe { (self.lib.pa_threaded_mainloop_unlock)(self.mainloop) };
+                    thread::sleep(LINUX_PULSE_WAIT_POLL_INTERVAL);
+                    unsafe { (self.lib.pa_threaded_mainloop_lock)(self.mainloop) };
+                }
             }
         }
     }
@@ -2240,6 +2318,8 @@ impl LinuxPulseConnection {
             });
             return Err(format!("Linux audio query failed: {error}"));
         }
+
+        let deadline = Instant::now() + LINUX_PULSE_OPERATION_TIMEOUT;
 
         loop {
             if *completed {
@@ -2260,7 +2340,17 @@ impl LinuxPulseConnection {
                 break;
             }
 
-            unsafe { (self.lib.pa_threaded_mainloop_wait)(self.mainloop) };
+            if Instant::now() >= deadline {
+                unsafe { (self.lib.pa_operation_unref)(operation) };
+                return Err(
+                    "Timed out while waiting for the Linux audio server to answer the query."
+                        .to_string(),
+                );
+            }
+
+            unsafe { (self.lib.pa_threaded_mainloop_unlock)(self.mainloop) };
+            thread::sleep(LINUX_PULSE_WAIT_POLL_INTERVAL);
+            unsafe { (self.lib.pa_threaded_mainloop_lock)(self.mainloop) };
         }
 
         unsafe { (self.lib.pa_operation_unref)(operation) };
@@ -2443,7 +2533,18 @@ fn linux_pulse_audio_snapshot() -> Result<LinuxPulseAudioSnapshot, String> {
 
 #[cfg(target_os = "linux")]
 fn probe_linux_audio_backend() -> LinuxAudioBackendProbe {
-    match linux_pulse_lib() {
+    let cache = LINUX_AUDIO_BACKEND_PROBE_CACHE.get_or_init(|| Mutex::new(None));
+    let now = Instant::now();
+
+    if let Ok(cache_guard) = cache.lock() {
+        if let Some(entry) = cache_guard.as_ref() {
+            if now < entry.expires_at {
+                return entry.probe.clone();
+            }
+        }
+    }
+
+    let probe = match linux_pulse_lib() {
         Ok(_) => match linux_pulse_audio_snapshot() {
             Ok(_) => LinuxAudioBackendProbe {
                 backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
@@ -2473,7 +2574,16 @@ fn probe_linux_audio_backend() -> LinuxAudioBackendProbe {
             per_app_audio_reason: Some(error),
             per_app_audio_reason_code: Some(LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE),
         },
+    };
+
+    if let Ok(mut cache_guard) = cache.lock() {
+        *cache_guard = Some(LinuxAudioBackendProbeCacheEntry {
+            expires_at: Instant::now() + LINUX_AUDIO_BACKEND_PROBE_CACHE_TTL,
+            probe: probe.clone(),
+        });
     }
+
+    probe
 }
 
 #[cfg(target_os = "linux")]
@@ -3778,6 +3888,11 @@ fn handle_capabilities_get() -> Result<Value, String> {
         response["sessionType"] = json!(session_type);
         response["linuxAudioBackend"] = json!(linux_audio_backend.backend);
         response["linuxAudioBackendUsesShellOuts"] = json!(linux_audio_backend.uses_shell_outs);
+        response["linuxAudioRuntimeAvailable"] = json!(linux_audio_backend.runtime_available);
+        response["linuxAudioCaptureAvailable"] =
+            json!(linux_audio_backend.per_app_audio_supported);
+        // Keep the PipeWire-era field names as aliases until older desktop clients
+        // no longer depend on the original sidecar contract.
         response["pipewireRuntimeAvailable"] = json!(linux_audio_backend.runtime_available);
         response["pipewireToolsAvailable"] = json!(linux_audio_backend.per_app_audio_supported);
         response["portalAvailable"] = json!(portal_available);
@@ -3793,6 +3908,7 @@ fn handle_capabilities_get() -> Result<Value, String> {
         }
 
         if let Some(reason) = linux_audio_backend.runtime_reason.clone() {
+            response["linuxAudioRuntimeReason"] = json!(reason);
             response["pipewireRuntimeReason"] = json!(reason);
         }
 

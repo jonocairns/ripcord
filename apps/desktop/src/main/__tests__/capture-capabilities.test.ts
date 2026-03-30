@@ -45,8 +45,8 @@ void describe("resolveDesktopCaptureCapabilities", () => {
         sessionType: "x11",
         linuxAudioBackend: "pulseaudio-native",
         linuxAudioBackendUsesShellOuts: false,
-        pipewireRuntimeAvailable: true,
-        pipewireToolsAvailable: false,
+        linuxAudioRuntimeAvailable: true,
+        linuxAudioCaptureAvailable: false,
         appAudioTargetEnumerationSupported: false,
         appAudioTargetEnumerationReason:
           "Failed to connect to the Linux audio server.",
@@ -79,8 +79,8 @@ void describe("resolveDesktopCaptureCapabilities", () => {
         sessionType: "wayland",
         linuxAudioBackend: "pulseaudio-native",
         linuxAudioBackendUsesShellOuts: false,
-        pipewireRuntimeAvailable: true,
-        pipewireToolsAvailable: true,
+        linuxAudioRuntimeAvailable: true,
+        linuxAudioCaptureAvailable: true,
         appAudioTargetEnumerationSupported: true,
         sourceAudioTargetInferenceSupported: false,
       },
@@ -110,7 +110,7 @@ void describe("resolveDesktopCaptureCapabilities", () => {
       sidecarPerAppAudioSupported: true,
       sidecarCapabilities: {
         sessionType: "wayland",
-        pipewireToolsAvailable: true,
+        linuxAudioCaptureAvailable: true,
         appAudioTargetEnumerationSupported: true,
         sourceAudioTargetInferenceSupported: false,
         globalPushKeybinds: "unsupported",
@@ -142,7 +142,7 @@ void describe("resolveDesktopCaptureCapabilities", () => {
       sidecarPerAppAudioSupported: true,
       sidecarCapabilities: {
         sessionType: "wayland",
-        pipewireToolsAvailable: true,
+        linuxAudioCaptureAvailable: true,
         portalAvailable: false,
         portalReason:
           "xdg-desktop-portal is not running for the current desktop session. Wayland screen sharing requires it.",
@@ -176,7 +176,7 @@ void describe("resolveDesktopCaptureCapabilities", () => {
       sidecarCapabilities: {
         systemAudio: "unsupported",
         sessionType: "x11",
-        pipewireToolsAvailable: false,
+        linuxAudioCaptureAvailable: false,
         perAppAudioReason:
           "Per-app capture stays disabled until the native Linux audio backend is ready.",
         perAppAudioReasonCode: "linux-native-audio-backend-unavailable",

@@ -58,6 +58,10 @@ export type TSidecarCapabilities = {
   sessionType?: string;
   linuxAudioBackend?: string;
   linuxAudioBackendUsesShellOuts?: boolean;
+  linuxAudioRuntimeAvailable?: boolean;
+  linuxAudioRuntimeReason?: string;
+  linuxAudioCaptureAvailable?: boolean;
+  // Backward-compatibility aliases for older sidecar builds.
   pipewireRuntimeAvailable?: boolean;
   pipewireRuntimeReason?: string;
   pipewireToolsAvailable?: boolean;
@@ -228,6 +232,9 @@ const isSidecarCapabilities = (
     hasOptionalString(value, "sessionType") &&
     hasOptionalString(value, "linuxAudioBackend") &&
     hasOptionalBoolean(value, "linuxAudioBackendUsesShellOuts") &&
+    hasOptionalBoolean(value, "linuxAudioRuntimeAvailable") &&
+    hasOptionalString(value, "linuxAudioRuntimeReason") &&
+    hasOptionalBoolean(value, "linuxAudioCaptureAvailable") &&
     hasOptionalBoolean(value, "pipewireRuntimeAvailable") &&
     hasOptionalString(value, "pipewireRuntimeReason") &&
     hasOptionalBoolean(value, "pipewireToolsAvailable") &&

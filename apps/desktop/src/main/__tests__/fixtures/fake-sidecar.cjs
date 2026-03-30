@@ -59,13 +59,16 @@ const capabilityLinuxAudioBackend =
 const capabilityLinuxAudioBackendUsesShellOuts = parseBooleanEnv(
   process.env.FAKE_SIDECAR_LINUX_AUDIO_BACKEND_USES_SHELL_OUTS,
 );
-const capabilityPipewireRuntimeAvailable = parseBooleanEnv(
-  process.env.FAKE_SIDECAR_PIPEWIRE_RUNTIME_AVAILABLE,
+const capabilityLinuxAudioRuntimeAvailable = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_LINUX_AUDIO_RUNTIME_AVAILABLE ??
+    process.env.FAKE_SIDECAR_PIPEWIRE_RUNTIME_AVAILABLE,
 );
-const capabilityPipewireRuntimeReason =
+const capabilityLinuxAudioRuntimeReason =
+  process.env.FAKE_SIDECAR_LINUX_AUDIO_RUNTIME_REASON ||
   process.env.FAKE_SIDECAR_PIPEWIRE_RUNTIME_REASON;
-const capabilityPipewireToolsAvailable = parseBooleanEnv(
-  process.env.FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE,
+const capabilityLinuxAudioCaptureAvailable = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_LINUX_AUDIO_CAPTURE_AVAILABLE ??
+    process.env.FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE,
 );
 const capabilityPortalAvailable = parseBooleanEnv(
   process.env.FAKE_SIDECAR_PORTAL_AVAILABLE,
@@ -329,9 +332,12 @@ rl.on("line", (line) => {
       sessionType: capabilitySessionType,
       linuxAudioBackend: capabilityLinuxAudioBackend,
       linuxAudioBackendUsesShellOuts: capabilityLinuxAudioBackendUsesShellOuts,
-      pipewireRuntimeAvailable: capabilityPipewireRuntimeAvailable,
-      pipewireRuntimeReason: capabilityPipewireRuntimeReason,
-      pipewireToolsAvailable: capabilityPipewireToolsAvailable,
+      linuxAudioRuntimeAvailable: capabilityLinuxAudioRuntimeAvailable,
+      linuxAudioRuntimeReason: capabilityLinuxAudioRuntimeReason,
+      linuxAudioCaptureAvailable: capabilityLinuxAudioCaptureAvailable,
+      pipewireRuntimeAvailable: capabilityLinuxAudioRuntimeAvailable,
+      pipewireRuntimeReason: capabilityLinuxAudioRuntimeReason,
+      pipewireToolsAvailable: capabilityLinuxAudioCaptureAvailable,
       portalAvailable: capabilityPortalAvailable,
       portalReason: capabilityPortalReason,
       portalReasonCode: capabilityPortalReasonCode,
