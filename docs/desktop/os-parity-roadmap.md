@@ -12,7 +12,7 @@ This does not assume identical internals across all operating systems. The targe
 - macOS is close on screen audio, but depends on the sidecar helper and ScreenCaptureKit availability.
 - Linux is intentionally weaker today:
   - audio capture is modeled as best-effort
-  - per-app audio depends on external PipeWire tools
+  - per-app audio uses a native PulseAudio-compatible backend, but some desktop messaging still reflects older PipeWire-era assumptions
   - per-app capture requires explicit target selection
   - global push keybinds depend on X11/XWayland
 - Auto-update is currently Windows-only.
@@ -82,7 +82,7 @@ This document uses `best-effort` to match the current `TSupportLevel` vocabulary
 - Per-app audio must be allowed to require explicit target selection.
 - Global push keybinds may degrade based on X11/XWayland or future Wayland support.
 - Unsupported scenarios must be surfaced clearly before capture begins, not only after failure.
-- App-audio target discovery is only best-effort until the shell-out capture backend is replaced.
+- App-audio target discovery remains best-effort because backend/runtime readiness still varies across Linux environments.
 
 ### Fallback Rules
 
@@ -148,7 +148,7 @@ Replace coarse static Linux defaults with runtime probes from the sidecar.
 
 Examples:
 
-- PipeWire availability
+- Linux audio backend availability
 - portal availability
 - compositor/session type
 - X11/XWayland availability
@@ -163,11 +163,11 @@ Probe data must also be refreshable, not one-shot.
 Examples:
 
 - macOS Screen Recording permission granted mid-session
-- Linux PipeWire availability changing after app launch
+- Linux audio backend availability changing after app launch
 - sidecar crash/restart on any platform
 - Linux session/backend changes that affect X11/XWayland-dependent features
 
-Keeping `#2` ahead of the native Linux backend work is still useful, but some of this logic will be revisited after `#6`.
+Keeping `#2` ahead of later Linux cleanup work is still useful, but some of this logic will be revisited during `#6`.
 
 Relevant files:
 
@@ -202,7 +202,7 @@ Permission and environment failures should be explained in a structured, OS-spec
 Examples:
 
 - macOS Screen Recording guidance
-- Linux PipeWire/portal prerequisites
+- Linux audio backend and portal prerequisites
 - Linux X11/XWayland requirements for keybind monitoring
 
 This should come from structured sidecar reason codes where possible, not ad hoc UI strings.
@@ -235,7 +235,7 @@ Coverage now includes:
 Test strategy:
 
 - keep using the fake-sidecar protocol fixture for most parity tests because it exercises the desktop/sidecar contract without requiring native OS runners
-- prefer assertions on capability states, reason codes, and fallback decisions over backend-specific strings that will change again in `#6`
+- prefer assertions on capability states, reason codes, and fallback decisions over backend-specific strings so `#6` cleanup does not churn parity tests
 - treat native sidecar build verification as CI work under `#11`, not as a substitute for protocol-level parity coverage here
 
 Relevant files:
@@ -254,23 +254,27 @@ Impact: High
 
 Difficulty: Medium
 
-### 6. Replace Linux shell-outs with native Rust integrations
+### 6. Finish Linux native-backend cleanup and remove PipeWire-era assumptions
 
-Stop depending on external `pw-dump` and `pw-record` binaries.
+The core Linux audio backend replacement is already done: audio capture and target discovery now use a native Rust PulseAudio-compatible path instead of `pw-dump` / `pw-record`.
 
-Move Linux audio capture and target discovery to a native Rust integration path so packaging and runtime behavior are more predictable.
+The remaining work is cleanup and contract alignment:
 
-This is the biggest technical step toward better parity.
+- remove stale shell-out assumptions from roadmap text, capability mapping, and user-facing guidance
+- keep backward-compatibility aliases only where shipped desktop/sidecar version skew still needs them
+- verify packaging/runtime messaging reflects the native Linux backend rather than the old PipeWire CLI story
 
-In practice this likely needs to happen before large amounts of Linux UX polish or test hardening, otherwise `#3` through `#5` will absorb avoidable rework.
+This is still important for parity, but it is no longer the original backend implementation milestone.
 
 Relevant files:
 
+- `docs/desktop/os-parity-roadmap.md`
+- `apps/desktop/src/main/capture-capabilities.ts`
 - `apps/desktop/sidecar/src/main.rs`
 
-Impact: Very High
+Impact: Medium
 
-Difficulty: High
+Difficulty: Medium
 
 ### 7. Refactor the sidecar into explicit platform backends
 
@@ -420,7 +424,7 @@ Difficulty: High
 
 1. Define the parity contract
 2. Make Linux capability reporting probe-based and refreshable
-6. Replace Linux shell-outs with native Rust integrations
+6. Finish Linux native-backend cleanup and remove PipeWire-era assumptions
 11. Add GitHub Actions parity for desktop PR CI
 3. Make Linux app-audio target selection a first-class flow
 4. Improve desktop permissions and failure UX
@@ -444,7 +448,7 @@ Difficulty: High
 
 ### Milestone 2: Stronger Linux capture backend
 
-- native Linux audio backend replaces shell-outs
+- native Linux audio backend is reflected consistently in capability data, docs, and user-facing messaging
 - more predictable target discovery and capture startup
 
 ### Milestone 3: Better Linux shortcut support
@@ -468,7 +472,7 @@ We should consider this work successful when:
 
 - the desktop app reports capabilities accurately per machine, not just per OS
 - capability data can be refreshed after sidecar restart or environment/permission changes
-- Linux no longer relies on fragile shell-outs for core audio capture
+- Linux backend behavior, capability mapping, and messaging no longer assume fragile shell-outs
 - Linux users get a clear, intentional per-app audio workflow
 - unsupported global keybind scenarios are explicit and non-confusing
 - macOS and Linux packaging/update behavior are documented and intentionally supported

@@ -166,6 +166,27 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     );
   });
 
+  void it("keeps legacy Linux audio tooling failures mapped for older sidecar contracts", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: true,
+      sidecarPerAppAudioSupported: false,
+      sidecarCapabilities: {
+        appAudioTargetEnumerationSupported: false,
+        pipewireToolsAvailable: false,
+      },
+    });
+
+    assert.equal(
+      resolved.issues.find(
+        (issue) => issue.code === "linux-pipewire-tools-missing",
+      )?.title,
+      "Linux audio tooling unavailable",
+    );
+  });
+
   void it("deduplicates linux backend issues when multiple reasons map to the same code", () => {
     const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
 
