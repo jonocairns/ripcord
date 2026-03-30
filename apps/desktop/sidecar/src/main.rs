@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+mod platform;
+
 #[cfg(any(windows, test, target_os = "linux"))]
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -64,8 +66,6 @@ use windows::Win32::System::Threading::{
 };
 #[cfg(windows)]
 use windows::Win32::System::Variant::VT_BLOB;
-#[cfg(windows)]
-use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindow, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW,
@@ -521,8 +521,10 @@ const LINUX_PULSEAUDIO_LIBRARY_NAMES: [&str; 2] = ["libpulse.so.0", "libpulse.so
 const LINUX_PULSEAUDIO_SIMPLE_LIBRARY_NAMES: [&str; 2] =
     ["libpulse-simple.so.0", "libpulse-simple.so"];
 #[cfg(target_os = "linux")]
-const LINUX_PULSEAUDIO_FALLBACK_LIBRARY_DIRS: [&str; 2] =
-    ["/nix/var/nix/profiles/default/lib", "/run/current-system/sw/lib"];
+const LINUX_PULSEAUDIO_FALLBACK_LIBRARY_DIRS: [&str; 2] = [
+    "/nix/var/nix/profiles/default/lib",
+    "/run/current-system/sw/lib",
+];
 #[cfg(target_os = "linux")]
 const LINUX_PULSE_TARGET_PREFIX: &str = "pulse:pid:";
 #[cfg(target_os = "linux")]
@@ -550,7 +552,7 @@ const LINUX_AUDIO_BACKEND_PROBE_CACHE_TTL: Duration = Duration::from_secs(2);
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PushKeybindKind {
+pub(crate) enum PushKeybindKind {
     Talk,
     Mute,
 }
@@ -565,20 +567,16 @@ impl PushKeybindKind {
     }
 }
 
-#[cfg(windows)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct WindowsPushKeybind {
-    key_code: i32,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-    meta: bool,
-}
-
 #[derive(Debug)]
-struct PushKeybindWatcher {
+pub(crate) struct PushKeybindWatcher {
     stop_flag: Arc<AtomicBool>,
     handle: JoinHandle<()>,
+}
+
+impl PushKeybindWatcher {
+    pub(crate) fn new(stop_flag: Arc<AtomicBool>, handle: JoinHandle<()>) -> Self {
+        Self { stop_flag, handle }
+    }
 }
 
 #[derive(Debug)]
@@ -605,7 +603,7 @@ struct FrameQueueState {
     not(any(windows, target_os = "macos", target_os = "linux")),
     allow(dead_code)
 )]
-struct FrameQueue {
+pub(crate) struct FrameQueue {
     capacity: usize,
     dropped_count: AtomicU64,
     state: Mutex<FrameQueueState>,
@@ -869,7 +867,11 @@ fn try_write_app_audio_binary_frame(
 }
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
-fn enqueue_push_keybind_state_event(queue: &Arc<FrameQueue>, kind: PushKeybindKind, active: bool) {
+pub(crate) fn enqueue_push_keybind_state_event(
+    queue: &Arc<FrameQueue>,
+    kind: PushKeybindKind,
+    active: bool,
+) {
     let params = json!({
         "kind": kind.as_str(),
         "active": active,
@@ -881,810 +883,6 @@ fn enqueue_push_keybind_state_event(queue: &Arc<FrameQueue>, kind: PushKeybindKi
     }) {
         queue.push_line(serialized);
     }
-}
-#[cfg(windows)]
-const VK_LSHIFT: i32 = 0xA0;
-#[cfg(windows)]
-const VK_RSHIFT: i32 = 0xA1;
-#[cfg(windows)]
-const VK_LCONTROL: i32 = 0xA2;
-#[cfg(windows)]
-const VK_RCONTROL: i32 = 0xA3;
-#[cfg(windows)]
-const VK_LMENU: i32 = 0xA4;
-#[cfg(windows)]
-const VK_RMENU: i32 = 0xA5;
-#[cfg(windows)]
-const VK_LWIN: i32 = 0x5B;
-#[cfg(windows)]
-const VK_RWIN: i32 = 0x5C;
-
-#[cfg(windows)]
-fn map_key_code_to_virtual_key(key_code: &str) -> Option<i32> {
-    if key_code.starts_with("Key") && key_code.len() == 4 {
-        let key = key_code.chars().nth(3)?;
-        if key.is_ascii_alphabetic() {
-            return Some(key.to_ascii_uppercase() as i32);
-        }
-    }
-
-    if key_code.starts_with("Digit") && key_code.len() == 6 {
-        let key = key_code.chars().nth(5)?;
-        if key.is_ascii_digit() {
-            return Some(key as i32);
-        }
-    }
-
-    if let Some(function_key) = key_code.strip_prefix('F') {
-        if let Ok(function_number) = function_key.parse::<i32>() {
-            if (1..=24).contains(&function_number) {
-                return Some(0x6F + function_number);
-            }
-        }
-    }
-
-    if let Some(numpad_key) = key_code.strip_prefix("Numpad") {
-        if numpad_key.len() == 1 {
-            let key = numpad_key.chars().next()?;
-            if key.is_ascii_digit() {
-                return Some(0x60 + (key as i32 - '0' as i32));
-            }
-        }
-    }
-
-    match key_code {
-        "Space" => Some(0x20),
-        "Enter" => Some(0x0D),
-        "Escape" => Some(0x1B),
-        "Backspace" => Some(0x08),
-        "Tab" => Some(0x09),
-        "CapsLock" => Some(0x14),
-        "NumLock" => Some(0x90),
-        "ScrollLock" => Some(0x91),
-        "ArrowUp" => Some(0x26),
-        "ArrowDown" => Some(0x28),
-        "ArrowLeft" => Some(0x25),
-        "ArrowRight" => Some(0x27),
-        "Delete" => Some(0x2E),
-        "Insert" => Some(0x2D),
-        "Home" => Some(0x24),
-        "End" => Some(0x23),
-        "PageUp" => Some(0x21),
-        "PageDown" => Some(0x22),
-        "Minus" => Some(0xBD),
-        "Equal" => Some(0xBB),
-        "BracketLeft" => Some(0xDB),
-        "BracketRight" => Some(0xDD),
-        "Backslash" => Some(0xDC),
-        "Semicolon" => Some(0xBA),
-        "Quote" => Some(0xDE),
-        "Comma" => Some(0xBC),
-        "Period" => Some(0xBE),
-        "Slash" => Some(0xBF),
-        "Backquote" => Some(0xC0),
-        "NumpadMultiply" => Some(0x6A),
-        "NumpadAdd" => Some(0x6B),
-        "NumpadSubtract" => Some(0x6D),
-        "NumpadDecimal" => Some(0x6E),
-        "NumpadDivide" => Some(0x6F),
-        "NumpadEnter" => Some(0x0D),
-        _ => None,
-    }
-}
-
-#[cfg(windows)]
-fn parse_push_keybind(keybind: Option<&str>) -> Result<Option<WindowsPushKeybind>, String> {
-    let Some(keybind) = keybind else {
-        return Ok(None);
-    };
-
-    if keybind.trim().is_empty() {
-        return Ok(None);
-    }
-
-    let tokens: Vec<&str> = keybind
-        .split('+')
-        .map(|token| token.trim())
-        .filter(|token| !token.is_empty())
-        .collect();
-
-    if tokens.is_empty() {
-        return Ok(None);
-    }
-
-    let mut ctrl = false;
-    let mut alt = false;
-    let mut shift = false;
-    let mut meta = false;
-    let mut key_code_token: Option<&str> = None;
-
-    for token in tokens {
-        match token {
-            "Control" | "Ctrl" => {
-                ctrl = true;
-            }
-            "Alt" => {
-                alt = true;
-            }
-            "Shift" => {
-                shift = true;
-            }
-            "Meta" | "Command" => {
-                meta = true;
-            }
-            _ => {
-                if key_code_token.is_some() {
-                    return Err("Invalid keybind format.".to_string());
-                }
-
-                key_code_token = Some(token);
-            }
-        }
-    }
-
-    let key_code_name = key_code_token.ok_or_else(|| "Missing key code in keybind.".to_string())?;
-    let key_code = map_key_code_to_virtual_key(key_code_name)
-        .ok_or_else(|| "Unsupported key for global keybind monitoring.".to_string())?;
-
-    Ok(Some(WindowsPushKeybind {
-        key_code,
-        ctrl,
-        alt,
-        shift,
-        meta,
-    }))
-}
-
-#[cfg(windows)]
-fn is_virtual_key_down(key_code: i32) -> bool {
-    (unsafe { GetAsyncKeyState(key_code) } as u16 & 0x8000) != 0
-}
-
-#[cfg(windows)]
-fn current_modifiers_match(keybind: &WindowsPushKeybind) -> bool {
-    let ctrl = is_virtual_key_down(VK_LCONTROL) || is_virtual_key_down(VK_RCONTROL);
-    let alt = is_virtual_key_down(VK_LMENU) || is_virtual_key_down(VK_RMENU);
-    let shift = is_virtual_key_down(VK_LSHIFT) || is_virtual_key_down(VK_RSHIFT);
-    let meta = is_virtual_key_down(VK_LWIN) || is_virtual_key_down(VK_RWIN);
-
-    ctrl == keybind.ctrl && alt == keybind.alt && shift == keybind.shift && meta == keybind.meta
-}
-
-#[cfg(windows)]
-fn is_push_keybind_active(keybind: &WindowsPushKeybind) -> bool {
-    is_virtual_key_down(keybind.key_code) && current_modifiers_match(keybind)
-}
-
-#[cfg(windows)]
-fn start_push_keybind_watcher(
-    frame_queue: Arc<FrameQueue>,
-    talk_keybind: Option<WindowsPushKeybind>,
-    mute_keybind: Option<WindowsPushKeybind>,
-) -> PushKeybindWatcher {
-    let stop_flag = Arc::new(AtomicBool::new(false));
-    let thread_stop_flag = Arc::clone(&stop_flag);
-
-    let handle = thread::spawn(move || {
-        let mut talk_active = false;
-        let mut mute_active = false;
-
-        while !thread_stop_flag.load(Ordering::Relaxed) {
-            let next_talk_active = talk_keybind.as_ref().is_some_and(is_push_keybind_active);
-            let next_mute_active = mute_keybind.as_ref().is_some_and(is_push_keybind_active);
-
-            if next_talk_active != talk_active {
-                talk_active = next_talk_active;
-                enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Talk, talk_active);
-            }
-
-            if next_mute_active != mute_active {
-                mute_active = next_mute_active;
-                enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Mute, mute_active);
-            }
-
-            thread::sleep(Duration::from_millis(8));
-        }
-
-        if talk_active {
-            enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Talk, false);
-        }
-
-        if mute_active {
-            enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Mute, false);
-        }
-    });
-
-    PushKeybindWatcher { stop_flag, handle }
-}
-
-// ===== macOS keybind support =====
-
-#[cfg(target_os = "macos")]
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGEventSourceKeyState(stateID: i32, keycode: u16) -> bool;
-}
-
-// kCGEventSourceStateHIDSystemState = 1
-#[cfg(target_os = "macos")]
-const CG_HID_SYSTEM_STATE: i32 = 1;
-
-#[cfg(target_os = "macos")]
-const VK_MAC_SHIFT_LEFT: u16 = 0x38;
-#[cfg(target_os = "macos")]
-const VK_MAC_SHIFT_RIGHT: u16 = 0x3C;
-#[cfg(target_os = "macos")]
-const VK_MAC_CONTROL_LEFT: u16 = 0x3B;
-#[cfg(target_os = "macos")]
-const VK_MAC_CONTROL_RIGHT: u16 = 0x3E;
-#[cfg(target_os = "macos")]
-const VK_MAC_OPTION_LEFT: u16 = 0x3A;
-#[cfg(target_os = "macos")]
-const VK_MAC_OPTION_RIGHT: u16 = 0x3D;
-#[cfg(target_os = "macos")]
-const VK_MAC_COMMAND_LEFT: u16 = 0x37;
-#[cfg(target_os = "macos")]
-const VK_MAC_COMMAND_RIGHT: u16 = 0x36;
-
-#[cfg(target_os = "macos")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct MacosPushKeybind {
-    key_code: u16,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-    meta: bool,
-}
-
-#[cfg(target_os = "macos")]
-fn map_key_code_to_cg_keycode(key_code: &str) -> Option<u16> {
-    // Letters — macOS ANSI key codes follow physical keyboard layout, not ASCII order.
-    if key_code.starts_with("Key") && key_code.len() == 4 {
-        let ch = key_code.chars().nth(3)?;
-        return match ch {
-            'A' => Some(0x00),
-            'S' => Some(0x01),
-            'D' => Some(0x02),
-            'F' => Some(0x03),
-            'H' => Some(0x04),
-            'G' => Some(0x05),
-            'Z' => Some(0x06),
-            'X' => Some(0x07),
-            'C' => Some(0x08),
-            'V' => Some(0x09),
-            'B' => Some(0x0B),
-            'Q' => Some(0x0C),
-            'W' => Some(0x0D),
-            'E' => Some(0x0E),
-            'R' => Some(0x0F),
-            'Y' => Some(0x10),
-            'T' => Some(0x11),
-            'O' => Some(0x1F),
-            'U' => Some(0x20),
-            'I' => Some(0x22),
-            'P' => Some(0x23),
-            'L' => Some(0x25),
-            'J' => Some(0x26),
-            'K' => Some(0x28),
-            'N' => Some(0x2D),
-            'M' => Some(0x2E),
-            _ => None,
-        };
-    }
-
-    // Digits — also non-sequential on macOS.
-    if key_code.starts_with("Digit") && key_code.len() == 6 {
-        let ch = key_code.chars().nth(5)?;
-        return match ch {
-            '1' => Some(0x12),
-            '2' => Some(0x13),
-            '3' => Some(0x14),
-            '4' => Some(0x15),
-            '5' => Some(0x17),
-            '6' => Some(0x16),
-            '7' => Some(0x1A),
-            '8' => Some(0x1C),
-            '9' => Some(0x19),
-            '0' => Some(0x1D),
-            _ => None,
-        };
-    }
-
-    // Function keys — scattered CGKeyCodes.
-    if let Some(num_str) = key_code.strip_prefix('F') {
-        if let Ok(n) = num_str.parse::<u16>() {
-            return match n {
-                1 => Some(0x7A),
-                2 => Some(0x78),
-                3 => Some(0x63),
-                4 => Some(0x76),
-                5 => Some(0x60),
-                6 => Some(0x61),
-                7 => Some(0x62),
-                8 => Some(0x64),
-                9 => Some(0x65),
-                10 => Some(0x6D),
-                11 => Some(0x67),
-                12 => Some(0x6F),
-                13 => Some(0x69),
-                14 => Some(0x6B),
-                15 => Some(0x71),
-                16 => Some(0x6A),
-                17 => Some(0x40),
-                18 => Some(0x4F),
-                19 => Some(0x50),
-                20 => Some(0x5A),
-                _ => None,
-            };
-        }
-    }
-
-    // Numpad digits.
-    if let Some(num_str) = key_code.strip_prefix("Numpad") {
-        if num_str.len() == 1 {
-            let ch = num_str.chars().next()?;
-            return match ch {
-                '0' => Some(0x52),
-                '1' => Some(0x53),
-                '2' => Some(0x54),
-                '3' => Some(0x55),
-                '4' => Some(0x56),
-                '5' => Some(0x57),
-                '6' => Some(0x58),
-                '7' => Some(0x59),
-                '8' => Some(0x5B),
-                '9' => Some(0x5C),
-                _ => None,
-            };
-        }
-    }
-
-    match key_code {
-        "Space" => Some(0x31),
-        "Enter" => Some(0x24),
-        "Escape" => Some(0x35),
-        "Backspace" => Some(0x33),
-        "Tab" => Some(0x30),
-        "CapsLock" => Some(0x39),
-        "ArrowLeft" => Some(0x7B),
-        "ArrowRight" => Some(0x7C),
-        "ArrowDown" => Some(0x7D),
-        "ArrowUp" => Some(0x7E),
-        "Delete" => Some(0x75), // Forward Delete
-        "Home" => Some(0x73),
-        "End" => Some(0x77),
-        "PageUp" => Some(0x74),
-        "PageDown" => Some(0x79),
-        "Minus" => Some(0x1B),
-        "Equal" => Some(0x18),
-        "BracketLeft" => Some(0x21),
-        "BracketRight" => Some(0x1E),
-        "Backslash" => Some(0x2A),
-        "Semicolon" => Some(0x29),
-        "Quote" => Some(0x27),
-        "Comma" => Some(0x2B),
-        "Period" => Some(0x2F),
-        "Slash" => Some(0x2C),
-        "Backquote" => Some(0x32),
-        "NumpadMultiply" => Some(0x43),
-        "NumpadAdd" => Some(0x45),
-        "NumpadSubtract" => Some(0x4E),
-        "NumpadDecimal" => Some(0x41),
-        "NumpadDivide" => Some(0x4B),
-        "NumpadEnter" => Some(0x4C),
-        _ => None,
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn parse_push_keybind(keybind: Option<&str>) -> Result<Option<MacosPushKeybind>, String> {
-    let Some(keybind) = keybind else {
-        return Ok(None);
-    };
-
-    if keybind.trim().is_empty() {
-        return Ok(None);
-    }
-
-    let tokens: Vec<&str> = keybind
-        .split('+')
-        .map(|token| token.trim())
-        .filter(|token| !token.is_empty())
-        .collect();
-
-    if tokens.is_empty() {
-        return Ok(None);
-    }
-
-    let mut ctrl = false;
-    let mut alt = false;
-    let mut shift = false;
-    let mut meta = false;
-    let mut key_code_token: Option<&str> = None;
-
-    for token in tokens {
-        match token {
-            "Control" | "Ctrl" => {
-                ctrl = true;
-            }
-            "Alt" | "Option" => {
-                alt = true;
-            }
-            "Shift" => {
-                shift = true;
-            }
-            "Meta" | "Command" => {
-                meta = true;
-            }
-            _ => {
-                if key_code_token.is_some() {
-                    return Err("Invalid keybind format.".to_string());
-                }
-
-                key_code_token = Some(token);
-            }
-        }
-    }
-
-    let key_code_name = key_code_token.ok_or_else(|| "Missing key code in keybind.".to_string())?;
-    let key_code = map_key_code_to_cg_keycode(key_code_name)
-        .ok_or_else(|| "Unsupported key for global keybind monitoring.".to_string())?;
-
-    Ok(Some(MacosPushKeybind {
-        key_code,
-        ctrl,
-        alt,
-        shift,
-        meta,
-    }))
-}
-
-#[cfg(target_os = "macos")]
-fn is_cg_key_down(keycode: u16) -> bool {
-    unsafe { CGEventSourceKeyState(CG_HID_SYSTEM_STATE, keycode) }
-}
-
-#[cfg(target_os = "macos")]
-fn current_modifiers_match(keybind: &MacosPushKeybind) -> bool {
-    let ctrl = is_cg_key_down(VK_MAC_CONTROL_LEFT) || is_cg_key_down(VK_MAC_CONTROL_RIGHT);
-    let alt = is_cg_key_down(VK_MAC_OPTION_LEFT) || is_cg_key_down(VK_MAC_OPTION_RIGHT);
-    let shift = is_cg_key_down(VK_MAC_SHIFT_LEFT) || is_cg_key_down(VK_MAC_SHIFT_RIGHT);
-    let meta = is_cg_key_down(VK_MAC_COMMAND_LEFT) || is_cg_key_down(VK_MAC_COMMAND_RIGHT);
-
-    ctrl == keybind.ctrl && alt == keybind.alt && shift == keybind.shift && meta == keybind.meta
-}
-
-#[cfg(target_os = "macos")]
-fn is_push_keybind_active(keybind: &MacosPushKeybind) -> bool {
-    is_cg_key_down(keybind.key_code) && current_modifiers_match(keybind)
-}
-
-#[cfg(target_os = "macos")]
-fn start_push_keybind_watcher(
-    frame_queue: Arc<FrameQueue>,
-    talk_keybind: Option<MacosPushKeybind>,
-    mute_keybind: Option<MacosPushKeybind>,
-) -> PushKeybindWatcher {
-    let stop_flag = Arc::new(AtomicBool::new(false));
-    let thread_stop_flag = Arc::clone(&stop_flag);
-
-    let handle = thread::spawn(move || {
-        let mut talk_active = false;
-        let mut mute_active = false;
-
-        while !thread_stop_flag.load(Ordering::Relaxed) {
-            let next_talk_active = talk_keybind.as_ref().is_some_and(is_push_keybind_active);
-            let next_mute_active = mute_keybind.as_ref().is_some_and(is_push_keybind_active);
-
-            if next_talk_active != talk_active {
-                talk_active = next_talk_active;
-                enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Talk, talk_active);
-            }
-
-            if next_mute_active != mute_active {
-                mute_active = next_mute_active;
-                enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Mute, mute_active);
-            }
-
-            thread::sleep(Duration::from_millis(8));
-        }
-
-        if talk_active {
-            enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Talk, false);
-        }
-
-        if mute_active {
-            enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Mute, false);
-        }
-    });
-
-    PushKeybindWatcher { stop_flag, handle }
-}
-
-// ===== Linux keybind support (X11 / XWayland) =====
-
-#[cfg(target_os = "linux")]
-use x11_dl::xlib;
-
-#[cfg(target_os = "linux")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LinuxPushKeybind {
-    key_sym: u64, // X11 KeySym
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-    meta: bool,
-}
-
-// Maps a WebCode-style key name to an X11 KeySym value.
-// Letters and digits map directly to their lowercase ASCII values (X11 convention).
-// Function keys: XK_F1 = 0xFFBE, incrementing by 1 up to F24.
-#[cfg(target_os = "linux")]
-fn map_key_code_to_x11_keysym(key_code: &str) -> Option<u64> {
-    if key_code.starts_with("Key") && key_code.len() == 4 {
-        let ch = key_code.chars().nth(3)?;
-        if ch.is_ascii_alphabetic() {
-            return Some(ch.to_ascii_lowercase() as u64);
-        }
-    }
-
-    if key_code.starts_with("Digit") && key_code.len() == 6 {
-        let ch = key_code.chars().nth(5)?;
-        if ch.is_ascii_digit() {
-            return Some(ch as u64);
-        }
-    }
-
-    if let Some(num_str) = key_code.strip_prefix('F') {
-        if let Ok(n) = num_str.parse::<u64>() {
-            if (1..=24).contains(&n) {
-                return Some(0xFFBD + n); // XK_F1 = 0xFFBE = 0xFFBD + 1
-            }
-        }
-    }
-
-    if let Some(num_str) = key_code.strip_prefix("Numpad") {
-        if num_str.len() == 1 {
-            let ch = num_str.chars().next()?;
-            if ch.is_ascii_digit() {
-                return Some(0xFFB0 + (ch as u64 - '0' as u64)); // XK_KP_0 = 0xFFB0
-            }
-        }
-    }
-
-    match key_code {
-        "Space" => Some(0x0020),
-        "Enter" => Some(0xFF0D),
-        "Escape" => Some(0xFF1B),
-        "Backspace" => Some(0xFF08),
-        "Tab" => Some(0xFF09),
-        "CapsLock" => Some(0xFFE5),
-        "ArrowLeft" => Some(0xFF51),
-        "ArrowRight" => Some(0xFF53),
-        "ArrowUp" => Some(0xFF52),
-        "ArrowDown" => Some(0xFF54),
-        "Delete" => Some(0xFFFF),
-        "Insert" => Some(0xFF63),
-        "Home" => Some(0xFF50),
-        "End" => Some(0xFF57),
-        "PageUp" => Some(0xFF55),
-        "PageDown" => Some(0xFF56),
-        "Minus" => Some(0x002D),
-        "Equal" => Some(0x003D),
-        "BracketLeft" => Some(0x005B),
-        "BracketRight" => Some(0x005D),
-        "Backslash" => Some(0x005C),
-        "Semicolon" => Some(0x003B),
-        "Quote" => Some(0x0027),
-        "Comma" => Some(0x002C),
-        "Period" => Some(0x002E),
-        "Slash" => Some(0x002F),
-        "Backquote" => Some(0x0060),
-        "NumpadMultiply" => Some(0xFFAA),
-        "NumpadAdd" => Some(0xFFAB),
-        "NumpadSubtract" => Some(0xFFAD),
-        "NumpadDecimal" => Some(0xFFAE),
-        "NumpadDivide" => Some(0xFFAF),
-        "NumpadEnter" => Some(0xFF8D),
-        _ => None,
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn parse_push_keybind(keybind: Option<&str>) -> Result<Option<LinuxPushKeybind>, String> {
-    let Some(keybind) = keybind else {
-        return Ok(None);
-    };
-
-    if keybind.trim().is_empty() {
-        return Ok(None);
-    }
-
-    let tokens: Vec<&str> = keybind
-        .split('+')
-        .map(|token| token.trim())
-        .filter(|token| !token.is_empty())
-        .collect();
-
-    if tokens.is_empty() {
-        return Ok(None);
-    }
-
-    let mut ctrl = false;
-    let mut alt = false;
-    let mut shift = false;
-    let mut meta = false;
-    let mut key_code_token: Option<&str> = None;
-
-    for token in tokens {
-        match token {
-            "Control" | "Ctrl" => {
-                ctrl = true;
-            }
-            "Alt" => {
-                alt = true;
-            }
-            "Shift" => {
-                shift = true;
-            }
-            "Meta" | "Super" => {
-                meta = true;
-            }
-            _ => {
-                if key_code_token.is_some() {
-                    return Err("Invalid keybind format.".to_string());
-                }
-
-                key_code_token = Some(token);
-            }
-        }
-    }
-
-    let key_code_name = key_code_token.ok_or_else(|| "Missing key code in keybind.".to_string())?;
-    let key_sym = map_key_code_to_x11_keysym(key_code_name)
-        .ok_or_else(|| "Unsupported key for global keybind monitoring.".to_string())?;
-
-    Ok(Some(LinuxPushKeybind {
-        key_sym,
-        ctrl,
-        alt,
-        shift,
-        meta,
-    }))
-}
-
-// Opens an X11 display, resolves each keybind's KeySym to a hardware KeyCode,
-// and closes the display. Returns Err if X11 is unavailable. A resolved KeyCode
-// of 0 means the key has no mapping on the current layout and is returned as
-// None so the caller can surface a useful error instead of a silent no-op.
-#[cfg(target_os = "linux")]
-fn open_x11_and_resolve_keycodes(
-    talk_keybind: Option<&LinuxPushKeybind>,
-    mute_keybind: Option<&LinuxPushKeybind>,
-) -> Result<(Option<u8>, Option<u8>), String> {
-    use std::ptr;
-
-    let xlib = xlib::Xlib::open().map_err(|_| {
-        "X11 library (libX11.so) not found. Keybind monitoring requires X11 or XWayland."
-            .to_string()
-    })?;
-
-    let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
-    if display.is_null() {
-        return Err(
-            "Could not connect to X11 display. Ensure $DISPLAY is set or XWayland is running."
-                .to_string(),
-        );
-    }
-
-    let resolve = |sym: u64| -> Option<u8> {
-        let kc = unsafe { (xlib.XKeysymToKeycode)(display, sym) };
-        if kc == 0 {
-            eprintln!(
-                "[capture-sidecar] XKeysymToKeycode returned 0 for KeySym {sym:#x} — key not present in current layout"
-            );
-            None
-        } else {
-            Some(kc)
-        }
-    };
-
-    let talk_kc = talk_keybind.and_then(|kb| resolve(kb.key_sym));
-    let mute_kc = mute_keybind.and_then(|kb| resolve(kb.key_sym));
-
-    unsafe { (xlib.XCloseDisplay)(display) };
-
-    Ok((talk_kc, mute_kc))
-}
-
-#[cfg(target_os = "linux")]
-fn start_push_keybind_watcher(
-    frame_queue: Arc<FrameQueue>,
-    talk_keybind: Option<(LinuxPushKeybind, u8)>,
-    mute_keybind: Option<(LinuxPushKeybind, u8)>,
-) -> PushKeybindWatcher {
-    use std::ptr;
-
-    let stop_flag = Arc::new(AtomicBool::new(false));
-    let thread_stop_flag = Arc::clone(&stop_flag);
-
-    let handle = thread::spawn(move || {
-        let xlib = match xlib::Xlib::open() {
-            Ok(lib) => lib,
-            Err(e) => {
-                eprintln!("[capture-sidecar] X11 unavailable in keybind thread: {e}");
-                return;
-            }
-        };
-
-        let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
-        if display.is_null() {
-            eprintln!("[capture-sidecar] could not open X11 display in keybind thread");
-            return;
-        }
-
-        // KeyCodes for talk/mute were resolved before the thread was spawned.
-        // Resolve modifier KeyCodes here since they don't need to be checked upfront.
-        let resolve = |sym: u64| -> u8 { unsafe { (xlib.XKeysymToKeycode)(display, sym) } };
-
-        let shift_l = resolve(0xFFE1); // XK_Shift_L
-        let shift_r = resolve(0xFFE2); // XK_Shift_R
-        let ctrl_l = resolve(0xFFE3); // XK_Control_L
-        let ctrl_r = resolve(0xFFE4); // XK_Control_R
-        let alt_l = resolve(0xFFE9); // XK_Alt_L
-        let alt_r = resolve(0xFFEA); // XK_Alt_R
-        let meta_l = resolve(0xFFEB); // XK_Super_L
-        let meta_r = resolve(0xFFEC); // XK_Super_R
-
-        let mut talk_active = false;
-        let mut mute_active = false;
-
-        while !thread_stop_flag.load(Ordering::Relaxed) {
-            let mut keys = [0i8; 32];
-            unsafe { (xlib.XQueryKeymap)(display, keys.as_mut_ptr()) };
-
-            let kc_down =
-                |kc: u8| -> bool { kc != 0 && (keys[kc as usize / 8] & (1 << (kc % 8))) != 0 };
-
-            let keybind_active = |(kb, kc): &(LinuxPushKeybind, u8)| -> bool {
-                if !kc_down(*kc) {
-                    return false;
-                }
-                let ctrl = kc_down(ctrl_l) || kc_down(ctrl_r);
-                let alt = kc_down(alt_l) || kc_down(alt_r);
-                let shift = kc_down(shift_l) || kc_down(shift_r);
-                let meta = kc_down(meta_l) || kc_down(meta_r);
-                ctrl == kb.ctrl && alt == kb.alt && shift == kb.shift && meta == kb.meta
-            };
-
-            let next_talk_active = talk_keybind.as_ref().is_some_and(keybind_active);
-            let next_mute_active = mute_keybind.as_ref().is_some_and(keybind_active);
-
-            if next_talk_active != talk_active {
-                talk_active = next_talk_active;
-                enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Talk, talk_active);
-            }
-
-            if next_mute_active != mute_active {
-                mute_active = next_mute_active;
-                enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Mute, mute_active);
-            }
-
-            thread::sleep(Duration::from_millis(8));
-        }
-
-        if talk_active {
-            enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Talk, false);
-        }
-
-        if mute_active {
-            enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Mute, false);
-        }
-
-        unsafe { (xlib.XCloseDisplay)(display) };
-    });
-
-    PushKeybindWatcher { stop_flag, handle }
 }
 
 #[cfg(test)]
@@ -2611,6 +1809,7 @@ fn detect_linux_session_type() -> String {
 #[cfg(target_os = "linux")]
 fn probe_linux_x11_display() -> (bool, Option<String>) {
     use std::ptr;
+    use x11_dl::xlib;
 
     if std::env::var_os("DISPLAY").is_none() {
         return (
@@ -3889,8 +3088,7 @@ fn handle_capabilities_get() -> Result<Value, String> {
         response["linuxAudioBackend"] = json!(linux_audio_backend.backend);
         response["linuxAudioBackendUsesShellOuts"] = json!(linux_audio_backend.uses_shell_outs);
         response["linuxAudioRuntimeAvailable"] = json!(linux_audio_backend.runtime_available);
-        response["linuxAudioCaptureAvailable"] =
-            json!(linux_audio_backend.per_app_audio_supported);
+        response["linuxAudioCaptureAvailable"] = json!(linux_audio_backend.per_app_audio_supported);
         // Keep the PipeWire-era field names as aliases until older desktop clients
         // no longer depend on the original sidecar contract.
         response["pipewireRuntimeAvailable"] = json!(linux_audio_backend.runtime_available);
@@ -4172,179 +3370,19 @@ fn handle_push_keybinds_set(
 
     stop_push_keybind_watcher(state);
 
-    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
-    let _ = &frame_queue;
+    let registration = platform::register_push_keybinds(
+        frame_queue,
+        parsed.push_to_talk_keybind.as_deref(),
+        parsed.push_to_mute_keybind.as_deref(),
+    );
 
-    #[cfg(windows)]
-    {
-        let mut errors: Vec<String> = Vec::new();
+    state.push_keybind_watcher = registration.watcher;
 
-        let talk_keybind = match parse_push_keybind(parsed.push_to_talk_keybind.as_deref()) {
-            Ok(parsed_keybind) => parsed_keybind,
-            Err(error) => {
-                errors.push(format!("Push-to-talk keybind is invalid: {error}"));
-                None
-            }
-        };
-
-        let mut mute_keybind = match parse_push_keybind(parsed.push_to_mute_keybind.as_deref()) {
-            Ok(parsed_keybind) => parsed_keybind,
-            Err(error) => {
-                errors.push(format!("Push-to-mute keybind is invalid: {error}"));
-                None
-            }
-        };
-
-        if talk_keybind.is_some() && mute_keybind.is_some() && talk_keybind == mute_keybind {
-            mute_keybind = None;
-            errors.push("Push-to-mute keybind matches push-to-talk and was ignored.".to_string());
-        }
-
-        if talk_keybind.is_some() || mute_keybind.is_some() {
-            state.push_keybind_watcher = Some(start_push_keybind_watcher(
-                frame_queue,
-                talk_keybind,
-                mute_keybind,
-            ));
-        }
-
-        let talk_registered = talk_keybind.is_some();
-        let mute_registered = mute_keybind.is_some();
-
-        return Ok(json!({
-            "talkRegistered": talk_registered,
-            "muteRegistered": mute_registered,
-            "errors": errors,
-        }));
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let mut errors: Vec<String> = Vec::new();
-
-        let talk_keybind = match parse_push_keybind(parsed.push_to_talk_keybind.as_deref()) {
-            Ok(parsed_keybind) => parsed_keybind,
-            Err(error) => {
-                errors.push(format!("Push-to-talk keybind is invalid: {error}"));
-                None
-            }
-        };
-
-        let mut mute_keybind = match parse_push_keybind(parsed.push_to_mute_keybind.as_deref()) {
-            Ok(parsed_keybind) => parsed_keybind,
-            Err(error) => {
-                errors.push(format!("Push-to-mute keybind is invalid: {error}"));
-                None
-            }
-        };
-
-        if talk_keybind.is_some() && mute_keybind.is_some() && talk_keybind == mute_keybind {
-            mute_keybind = None;
-            errors.push("Push-to-mute keybind matches push-to-talk and was ignored.".to_string());
-        }
-
-        if talk_keybind.is_some() || mute_keybind.is_some() {
-            state.push_keybind_watcher = Some(start_push_keybind_watcher(
-                frame_queue,
-                talk_keybind,
-                mute_keybind,
-            ));
-        }
-
-        let talk_registered = talk_keybind.is_some();
-        let mute_registered = mute_keybind.is_some();
-
-        return Ok(json!({
-            "talkRegistered": talk_registered,
-            "muteRegistered": mute_registered,
-            "errors": errors,
-        }));
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let mut errors: Vec<String> = Vec::new();
-
-        let talk_keybind = match parse_push_keybind(parsed.push_to_talk_keybind.as_deref()) {
-            Ok(parsed_keybind) => parsed_keybind,
-            Err(error) => {
-                errors.push(format!("Push-to-talk keybind is invalid: {error}"));
-                None
-            }
-        };
-
-        let mut mute_keybind = match parse_push_keybind(parsed.push_to_mute_keybind.as_deref()) {
-            Ok(parsed_keybind) => parsed_keybind,
-            Err(error) => {
-                errors.push(format!("Push-to-mute keybind is invalid: {error}"));
-                None
-            }
-        };
-
-        if talk_keybind.is_some() && mute_keybind.is_some() && talk_keybind == mute_keybind {
-            mute_keybind = None;
-            errors.push("Push-to-mute keybind matches push-to-talk and was ignored.".to_string());
-        }
-
-        // Only connect to X11 when at least one keybind is actually being registered.
-        // Clearing keybinds (both None) must succeed without touching X11 so that
-        // Wayland-only machines don't receive a spurious connectivity error.
-        let mut resolved_talk: Option<(LinuxPushKeybind, u8)> = None;
-        let mut resolved_mute: Option<(LinuxPushKeybind, u8)> = None;
-
-        if talk_keybind.is_some() || mute_keybind.is_some() {
-            match open_x11_and_resolve_keycodes(talk_keybind.as_ref(), mute_keybind.as_ref()) {
-                Err(e) => errors.push(e),
-                Ok((talk_kc, mute_kc)) => {
-                    if talk_keybind.is_some() && talk_kc.is_none() {
-                        errors.push(
-                            "Push-to-talk key has no mapping on this keyboard layout.".to_string(),
-                        );
-                    }
-                    if mute_keybind.is_some() && mute_kc.is_none() {
-                        errors.push(
-                            "Push-to-mute key has no mapping on this keyboard layout.".to_string(),
-                        );
-                    }
-                    resolved_talk = talk_keybind.zip(talk_kc);
-                    resolved_mute = mute_keybind.zip(mute_kc);
-
-                    if resolved_talk.is_some() || resolved_mute.is_some() {
-                        state.push_keybind_watcher = Some(start_push_keybind_watcher(
-                            frame_queue,
-                            resolved_talk,
-                            resolved_mute,
-                        ));
-                    }
-                }
-            }
-        }
-
-        let talk_registered = resolved_talk.is_some();
-        let mute_registered = resolved_mute.is_some();
-
-        return Ok(json!({
-            "talkRegistered": talk_registered,
-            "muteRegistered": mute_registered,
-            "errors": errors,
-        }));
-    }
-
-    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
-    {
-        let mut errors = Vec::new();
-        if parsed.push_to_talk_keybind.is_some() || parsed.push_to_mute_keybind.is_some() {
-            errors.push(
-                "Global push keybind monitoring is not supported on this platform.".to_string(),
-            );
-        }
-
-        Ok(json!({
-            "talkRegistered": false,
-            "muteRegistered": false,
-            "errors": errors,
-        }))
-    }
+    Ok(json!({
+        "talkRegistered": registration.talk_registered,
+        "muteRegistered": registration.mute_registered,
+        "errors": registration.errors,
+    }))
 }
 
 fn start_app_audio_binary_egress() -> Result<AppAudioBinaryEgress, String> {
