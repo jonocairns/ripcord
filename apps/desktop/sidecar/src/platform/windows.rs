@@ -2,10 +2,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::{ffi::c_void, path::Path};
 
+use windows::core::PWSTR;
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetWindow, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, GWL_EXSTYLE, GW_OWNER, WS_EX_TOOLWINDOW,
+};
 
-use crate::{enqueue_push_keybind_state_event, FrameQueue, PushKeybindKind, PushKeybindWatcher};
+use crate::{
+    enqueue_push_keybind_state_event, AudioTarget, FrameQueue, PushKeybindKind,
+    PushKeybindWatcher,
+};
 
 use super::PushKeybindRegistration;
 
@@ -263,4 +277,152 @@ pub(crate) fn register_push_keybinds(
         errors,
         watcher,
     }
+}
+
+fn window_title(hwnd: HWND) -> Option<String> {
+    let length = unsafe { GetWindowTextLengthW(hwnd) };
+
+    if length <= 0 {
+        return None;
+    }
+
+    let mut buf = vec![0u16; (length + 1) as usize];
+    let read = unsafe { GetWindowTextW(hwnd, &mut buf) };
+
+    if read <= 0 {
+        return None;
+    }
+
+    Some(String::from_utf16_lossy(&buf[..read as usize]))
+}
+
+fn is_user_visible_window(hwnd: HWND) -> bool {
+    if !unsafe { IsWindowVisible(hwnd).as_bool() } {
+        return false;
+    }
+
+    if unsafe { GetWindow(hwnd, GW_OWNER) }
+        .ok()
+        .is_some_and(|owner| !owner.is_invalid())
+    {
+        return false;
+    }
+
+    let ex_style = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) };
+    let tool_window = (ex_style & WS_EX_TOOLWINDOW.0 as i32) != 0;
+
+    !tool_window
+}
+
+fn process_name_from_pid(pid: u32) -> Option<String> {
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            false,
+            pid,
+        )
+    }
+    .ok()?;
+
+    let mut buffer = vec![0u16; 4096];
+    let mut size = buffer.len() as u32;
+
+    let success = unsafe {
+        QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut size,
+        )
+        .is_ok()
+    };
+
+    let _ = unsafe { windows::Win32::Foundation::CloseHandle(process) };
+
+    if !success {
+        return None;
+    }
+
+    let full_path = String::from_utf16_lossy(&buffer[..size as usize]);
+    let file_name = Path::new(&full_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string())
+        .unwrap_or(full_path);
+
+    Some(file_name)
+}
+
+unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    if !is_user_visible_window(hwnd) {
+        return BOOL(1);
+    }
+
+    let title = match window_title(hwnd) {
+        Some(value) if !value.trim().is_empty() => value,
+        _ => return BOOL(1),
+    };
+
+    let mut pid = 0u32;
+    let _thread_id = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+
+    if pid == 0 {
+        return BOOL(1);
+    }
+
+    let entries_ptr = lparam.0 as *mut Vec<(u32, String)>;
+    if !entries_ptr.is_null() {
+        (*entries_ptr).push((pid, title));
+    }
+
+    BOOL(1)
+}
+
+pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {
+    let mut entries: Vec<(u32, String)> = Vec::new();
+
+    let _ = unsafe {
+        EnumWindows(
+            Some(enum_windows_callback),
+            LPARAM((&mut entries as *mut Vec<(u32, String)>) as isize),
+        )
+    };
+
+    let deduped = crate::dedupe_window_entries_by_pid(entries);
+    let mut targets = Vec::new();
+
+    for (pid, title) in deduped {
+        let process_name = process_name_from_pid(pid).unwrap_or_else(|| "unknown.exe".to_string());
+        let label = format!("{} - {} ({})", title.trim(), process_name, pid);
+
+        targets.push(AudioTarget {
+            id: format!("pid:{pid}"),
+            label,
+            pid,
+            process_name,
+        });
+    }
+
+    targets.sort_by(|left, right| left.label.cmp(&right.label));
+    targets
+}
+
+pub(crate) fn resolve_source_to_pid(source_id: &str) -> Option<u32> {
+    let hwnd_value = crate::parse_window_source_id(source_id)?;
+    let hwnd = HWND(hwnd_value as *mut c_void);
+
+    if !unsafe { IsWindow(hwnd).as_bool() } {
+        return None;
+    }
+
+    let mut pid = 0u32;
+    unsafe {
+        let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    }
+
+    if pid == 0 {
+        return None;
+    }
+
+    Some(pid)
 }

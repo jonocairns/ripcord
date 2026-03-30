@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use x11_dl::xlib;
 
-use crate::{enqueue_push_keybind_state_event, FrameQueue, PushKeybindKind, PushKeybindWatcher};
+use crate::{
+    enqueue_push_keybind_state_event, AudioTarget, FrameQueue, PushKeybindKind,
+    PushKeybindWatcher,
+};
 
 use super::PushKeybindRegistration;
 
@@ -343,4 +346,27 @@ pub(crate) fn register_push_keybinds(
         errors,
         watcher,
     }
+}
+
+pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {
+    match crate::linux_pulse_audio_snapshot() {
+        Ok(snapshot) => snapshot
+            .targets
+            .into_iter()
+            .map(|target| AudioTarget {
+                id: target.id,
+                label: target.label,
+                pid: target.pid,
+                process_name: target.process_name,
+            })
+            .collect(),
+        Err(error) => {
+            eprintln!("[capture-sidecar] {error}");
+            Vec::new()
+        }
+    }
+}
+
+pub(crate) fn resolve_source_to_pid(_source_id: &str) -> Option<u32> {
+    None
 }

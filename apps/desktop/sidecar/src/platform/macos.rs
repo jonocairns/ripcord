@@ -3,7 +3,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::{enqueue_push_keybind_state_event, FrameQueue, PushKeybindKind, PushKeybindWatcher};
+use crate::{
+    enqueue_push_keybind_state_event, AudioTarget, AudioTargetListResponse, FrameQueue,
+    PushKeybindKind, PushKeybindWatcher, ResolveSourceResult,
+};
 
 use super::PushKeybindRegistration;
 
@@ -331,4 +334,22 @@ pub(crate) fn register_push_keybinds(
         errors,
         watcher,
     }
+}
+
+pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {
+    match crate::run_macos_helper_command(&["list-targets"]).and_then(|output| {
+        serde_json::from_slice::<AudioTargetListResponse>(&output).map_err(|error| error.to_string())
+    }) {
+        Ok(response) => response.targets,
+        Err(error) => {
+            eprintln!("[capture-sidecar] {error}");
+            Vec::new()
+        }
+    }
+}
+
+pub(crate) fn resolve_source_to_pid(source_id: &str) -> Option<u32> {
+    let output = crate::run_macos_helper_command(&["resolve-source", "--source-id", source_id]).ok()?;
+    let response = serde_json::from_slice::<ResolveSourceResult>(&output).ok()?;
+    response.pid
 }

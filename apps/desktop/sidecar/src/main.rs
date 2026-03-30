@@ -119,7 +119,7 @@ struct SidecarEvent<'a> {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct AudioTarget {
+pub(crate) struct AudioTarget {
     id: String,
     label: String,
     pid: u32,
@@ -141,14 +141,14 @@ struct ListTargetsParams {
 #[cfg(target_os = "macos")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AudioTargetListResponse {
+pub(crate) struct AudioTargetListResponse {
     targets: Vec<AudioTarget>,
 }
 
 #[cfg(target_os = "macos")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ResolveSourceResult {
+pub(crate) struct ResolveSourceResult {
     pid: Option<u32>,
 }
 
@@ -903,7 +903,7 @@ fn parse_linux_pulse_target_id(target_id: &str) -> Option<(u32, u32)> {
 }
 
 #[cfg(any(windows, test))]
-fn dedupe_window_entries_by_pid(entries: Vec<(u32, String)>) -> HashMap<u32, String> {
+pub(crate) fn dedupe_window_entries_by_pid(entries: Vec<(u32, String)>) -> HashMap<u32, String> {
     let mut deduped: HashMap<u32, String> = HashMap::new();
 
     for (pid, title) in entries {
@@ -914,7 +914,7 @@ fn dedupe_window_entries_by_pid(entries: Vec<(u32, String)>) -> HashMap<u32, Str
 }
 
 #[cfg(any(windows, test))]
-fn parse_window_source_id(source_id: &str) -> Option<isize> {
+pub(crate) fn parse_window_source_id(source_id: &str) -> Option<isize> {
     let mut parts = source_id.split(':');
 
     if parts.next()? != "window" {
@@ -923,88 +923,6 @@ fn parse_window_source_id(source_id: &str) -> Option<isize> {
 
     let hwnd_part = parts.next()?;
     hwnd_part.parse::<isize>().ok()
-}
-
-#[cfg(windows)]
-fn window_title(hwnd: HWND) -> Option<String> {
-    let length = unsafe { GetWindowTextLengthW(hwnd) };
-
-    if length <= 0 {
-        return None;
-    }
-
-    let mut buf = vec![0u16; (length + 1) as usize];
-    let read = unsafe { GetWindowTextW(hwnd, &mut buf) };
-
-    if read <= 0 {
-        return None;
-    }
-
-    Some(String::from_utf16_lossy(&buf[..read as usize]))
-}
-
-#[cfg(windows)]
-fn is_user_visible_window(hwnd: HWND) -> bool {
-    if !unsafe { IsWindowVisible(hwnd).as_bool() } {
-        return false;
-    }
-
-    if unsafe { GetWindow(hwnd, GW_OWNER) }
-        .ok()
-        .is_some_and(|owner| !owner.is_invalid())
-    {
-        return false;
-    }
-
-    let ex_style = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) };
-    let tool_window = (ex_style & WS_EX_TOOLWINDOW.0 as i32) != 0;
-
-    !tool_window
-}
-
-#[cfg(windows)]
-fn process_name_from_pid(pid: u32) -> Option<String> {
-    let process = unsafe {
-        OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
-            false,
-            pid,
-        )
-    }
-    .ok()?;
-
-    let mut buffer = vec![0u16; 4096];
-    let mut size = buffer.len() as u32;
-
-    let success = unsafe {
-        QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            PWSTR(buffer.as_mut_ptr()),
-            &mut size,
-        )
-        .is_ok()
-    };
-
-    let _ = unsafe { windows::Win32::Foundation::CloseHandle(process) };
-
-    if !success {
-        return None;
-    }
-
-    let full_path = String::from_utf16_lossy(&buffer[..size as usize]);
-    let file_name = Path::new(&full_path)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_string())
-        .unwrap_or(full_path);
-
-    Some(file_name)
-}
-
-#[cfg(all(not(windows), not(target_os = "linux")))]
-fn process_name_from_pid(_pid: u32) -> Option<String> {
-    None
 }
 
 #[cfg(target_os = "linux")]
@@ -2012,32 +1930,6 @@ fn emit_linux_audio_frame(
     }
 }
 
-#[cfg(windows)]
-unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    if !is_user_visible_window(hwnd) {
-        return BOOL(1);
-    }
-
-    let title = match window_title(hwnd) {
-        Some(value) if !value.trim().is_empty() => value,
-        _ => return BOOL(1),
-    };
-
-    let mut pid = 0u32;
-    let _thread_id = GetWindowThreadProcessId(hwnd, Some(&mut pid));
-
-    if pid == 0 {
-        return BOOL(1);
-    }
-
-    let entries_ptr = lparam.0 as *mut Vec<(u32, String)>;
-    if !entries_ptr.is_null() {
-        (*entries_ptr).push((pid, title));
-    }
-
-    BOOL(1)
-}
-
 #[cfg(target_os = "macos")]
 fn resolve_macos_helper_path() -> Result<std::path::PathBuf, String> {
     let current_exe = std::env::current_exe()
@@ -2058,7 +1950,7 @@ fn resolve_macos_helper_path() -> Result<std::path::PathBuf, String> {
 }
 
 #[cfg(target_os = "macos")]
-fn run_macos_helper_command(arguments: &[&str]) -> Result<Vec<u8>, String> {
+pub(crate) fn run_macos_helper_command(arguments: &[&str]) -> Result<Vec<u8>, String> {
     let helper_path = resolve_macos_helper_path()?;
     let output = Command::new(helper_path)
         .args(arguments)
@@ -2075,109 +1967,6 @@ fn run_macos_helper_command(arguments: &[&str]) -> Result<Vec<u8>, String> {
     }
 
     Ok(output.stdout)
-}
-
-#[cfg(target_os = "macos")]
-fn get_audio_targets() -> Vec<AudioTarget> {
-    match run_macos_helper_command(&["list-targets"]).and_then(|output| {
-        serde_json::from_slice::<AudioTargetListResponse>(&output)
-            .map_err(|error| error.to_string())
-    }) {
-        Ok(response) => response.targets,
-        Err(error) => {
-            eprintln!("[capture-sidecar] {error}");
-            Vec::new()
-        }
-    }
-}
-
-#[cfg(windows)]
-fn get_audio_targets() -> Vec<AudioTarget> {
-    let mut entries: Vec<(u32, String)> = Vec::new();
-
-    let _ = unsafe {
-        EnumWindows(
-            Some(enum_windows_callback),
-            LPARAM((&mut entries as *mut Vec<(u32, String)>) as isize),
-        )
-    };
-
-    let deduped = dedupe_window_entries_by_pid(entries);
-
-    let mut targets = Vec::new();
-
-    for (pid, title) in deduped {
-        let process_name = process_name_from_pid(pid).unwrap_or_else(|| "unknown.exe".to_string());
-        let label = format!("{} - {} ({})", title.trim(), process_name, pid);
-
-        targets.push(AudioTarget {
-            id: format!("pid:{pid}"),
-            label,
-            pid,
-            process_name,
-        });
-    }
-
-    targets.sort_by(|left, right| left.label.cmp(&right.label));
-    targets
-}
-
-#[cfg(target_os = "linux")]
-fn get_audio_targets() -> Vec<AudioTarget> {
-    match linux_pulse_audio_snapshot() {
-        Ok(snapshot) => snapshot
-            .targets
-            .into_iter()
-            .map(|target| AudioTarget {
-                id: target.id,
-                label: target.label,
-                pid: target.pid,
-                process_name: target.process_name,
-            })
-            .collect(),
-        Err(error) => {
-            eprintln!("[capture-sidecar] {error}");
-            Vec::new()
-        }
-    }
-}
-
-#[cfg(all(not(windows), not(target_os = "macos"), not(target_os = "linux")))]
-fn get_audio_targets() -> Vec<AudioTarget> {
-    Vec::new()
-}
-
-#[cfg(windows)]
-fn resolve_source_to_pid(source_id: &str) -> Option<u32> {
-    let hwnd_value = parse_window_source_id(source_id)?;
-    let hwnd = HWND(hwnd_value as *mut c_void);
-
-    if !unsafe { IsWindow(hwnd).as_bool() } {
-        return None;
-    }
-
-    let mut pid = 0u32;
-    unsafe {
-        let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
-    }
-
-    if pid == 0 {
-        return None;
-    }
-
-    Some(pid)
-}
-
-#[cfg(target_os = "macos")]
-fn resolve_source_to_pid(source_id: &str) -> Option<u32> {
-    let output = run_macos_helper_command(&["resolve-source", "--source-id", source_id]).ok()?;
-    let response = serde_json::from_slice::<ResolveSourceResult>(&output).ok()?;
-    response.pid
-}
-
-#[cfg(all(not(windows), not(target_os = "macos")))]
-fn resolve_source_to_pid(_source_id: &str) -> Option<u32> {
-    None
 }
 
 #[cfg(windows)]
@@ -3146,7 +2935,7 @@ fn handle_windows_resolve_source(params: Value) -> Result<Value, String> {
     let parsed: ResolveSourceParams =
         serde_json::from_value(params).map_err(|error| format!("invalid params: {error}"))?;
 
-    let pid = resolve_source_to_pid(&parsed.source_id);
+    let pid = platform::resolve_source_to_pid(&parsed.source_id);
 
     Ok(json!({
         "sourceId": parsed.source_id,
@@ -3158,11 +2947,11 @@ fn handle_audio_targets_list(params: Value) -> Result<Value, String> {
     let parsed: ListTargetsParams =
         serde_json::from_value(params).map_err(|error| format!("invalid params: {error}"))?;
 
-    let targets = get_audio_targets();
+    let targets = platform::list_audio_targets();
     let suggested_target_id = parsed
         .source_id
         .as_deref()
-        .and_then(resolve_source_to_pid)
+        .and_then(platform::resolve_source_to_pid)
         .map(|pid| format!("pid:{pid}"))
         .filter(|target_id| targets.iter().any(|target| target.id == target_id.as_str()));
     #[cfg(target_os = "linux")]
@@ -3267,14 +3056,14 @@ fn handle_audio_capture_start(
     let source_resolves_to_pid = parsed
         .source_id
         .as_deref()
-        .and_then(resolve_source_to_pid)
+        .and_then(platform::resolve_source_to_pid)
         .is_some();
 
     let use_exclude_mode = self_exclude_pid.is_some()
         && parsed.app_audio_target_id.is_none()
         && !source_resolves_to_pid;
 
-    let available_targets = get_audio_targets();
+    let available_targets = platform::list_audio_targets();
 
     let (target_id, target_pid, target_process_name) = if use_exclude_mode {
         // Capture all system audio except the excluded process.  Use "loopback" as the
@@ -3290,7 +3079,7 @@ fn handle_audio_capture_start(
         let source_pid = parsed
             .source_id
             .as_deref()
-            .and_then(resolve_source_to_pid)
+            .and_then(platform::resolve_source_to_pid)
             .map(|pid| format!("pid:{pid}"));
 
         let id = parsed.app_audio_target_id.or(source_pid).ok_or_else(|| {
