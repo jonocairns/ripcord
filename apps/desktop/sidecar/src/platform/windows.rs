@@ -7,6 +7,7 @@ use std::{ffi::c_void, path::Path, ptr, time::Instant};
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use serde_json::{json, Value};
 use windows::core::PWSTR;
 use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM};
 use windows::Win32::Media::Audio::{
@@ -417,6 +418,16 @@ pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {
 
     targets.sort_by(|left, right| left.label.cmp(&right.label));
     targets
+}
+
+pub(crate) fn capabilities() -> Value {
+    json!({
+        "platform": std::env::consts::OS,
+        "systemAudio": "supported",
+        "perAppAudio": "supported",
+        "protocolVersion": crate::PROTOCOL_VERSION,
+        "encoding": crate::PCM_ENCODING,
+    })
 }
 
 pub(crate) fn resolve_source_to_pid(source_id: &str) -> Option<u32> {

@@ -1,13 +1,15 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{
     ffi::{c_void, CString},
+    fs,
     net::TcpStream,
-    sync::Mutex,
+    sync::{Mutex, OnceLock},
 };
 
+use serde_json::{json, Value};
 use x11_dl::xlib;
 
 use crate::{
@@ -17,6 +19,29 @@ use crate::{
 };
 
 use super::PushKeybindRegistration;
+
+#[derive(Clone)]
+struct LinuxAudioBackendProbe {
+    backend: &'static str,
+    uses_shell_outs: bool,
+    runtime_available: bool,
+    runtime_reason: Option<String>,
+    per_app_audio_supported: bool,
+    per_app_audio_reason: Option<String>,
+    per_app_audio_reason_code: Option<&'static str>,
+}
+
+struct LinuxAudioBackendProbeCacheEntry {
+    expires_at: Instant,
+    probe: LinuxAudioBackendProbe,
+}
+
+const LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE: &str = "pulseaudio-native";
+const LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE: &str = "linux-native-audio-backend-unavailable";
+const LINUX_AUDIO_BACKEND_PROBE_CACHE_TTL: Duration = Duration::from_secs(2);
+
+static LINUX_AUDIO_BACKEND_PROBE_CACHE: OnceLock<Mutex<Option<LinuxAudioBackendProbeCacheEntry>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LinuxPushKeybind {
@@ -352,6 +377,274 @@ pub(crate) fn register_push_keybinds(
         errors,
         watcher,
     }
+}
+
+fn probe_audio_backend() -> LinuxAudioBackendProbe {
+    let cache = LINUX_AUDIO_BACKEND_PROBE_CACHE.get_or_init(|| Mutex::new(None));
+    let now = Instant::now();
+
+    if let Ok(cache_guard) = cache.lock() {
+        if let Some(entry) = cache_guard.as_ref() {
+            if now < entry.expires_at {
+                return entry.probe.clone();
+            }
+        }
+    }
+
+    let probe = match crate::linux_pulse_lib() {
+        Ok(_) => match crate::linux_pulse_audio_snapshot() {
+            Ok(_) => LinuxAudioBackendProbe {
+                backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
+                uses_shell_outs: false,
+                runtime_available: true,
+                runtime_reason: None,
+                per_app_audio_supported: true,
+                per_app_audio_reason: None,
+                per_app_audio_reason_code: None,
+            },
+            Err(error) => LinuxAudioBackendProbe {
+                backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
+                uses_shell_outs: false,
+                runtime_available: true,
+                runtime_reason: None,
+                per_app_audio_supported: false,
+                per_app_audio_reason: Some(error),
+                per_app_audio_reason_code: Some(LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE),
+            },
+        },
+        Err(error) => LinuxAudioBackendProbe {
+            backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
+            uses_shell_outs: false,
+            runtime_available: false,
+            runtime_reason: Some(error.clone()),
+            per_app_audio_supported: false,
+            per_app_audio_reason: Some(error),
+            per_app_audio_reason_code: Some(LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE),
+        },
+    };
+
+    if let Ok(mut cache_guard) = cache.lock() {
+        *cache_guard = Some(LinuxAudioBackendProbeCacheEntry {
+            expires_at: Instant::now() + LINUX_AUDIO_BACKEND_PROBE_CACHE_TTL,
+            probe: probe.clone(),
+        });
+    }
+
+    probe
+}
+
+fn detect_session_type() -> String {
+    let session_type = std::env::var("XDG_SESSION_TYPE")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+
+    if let Some(session_type) = session_type {
+        return session_type;
+    }
+
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return "wayland".to_string();
+    }
+
+    if std::env::var_os("DISPLAY").is_some() {
+        return "x11".to_string();
+    }
+
+    "unknown".to_string()
+}
+
+fn probe_x11_display() -> (bool, Option<String>) {
+    use std::ptr;
+
+    if std::env::var_os("DISPLAY").is_none() {
+        return (
+            false,
+            Some("No X11 display was detected for the current Linux session.".to_string()),
+        );
+    }
+
+    let xlib = match xlib::Xlib::open() {
+        Ok(xlib) => xlib,
+        Err(_) => {
+            return (
+                false,
+                Some("X11 library (libX11.so) not found. Global push keybind monitoring requires X11 or XWayland.".to_string()),
+            )
+        }
+    };
+
+    let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
+    if display.is_null() {
+        return (
+            false,
+            Some(
+                "Could not connect to the current X11 display. Global push keybind monitoring requires X11 or XWayland."
+                    .to_string(),
+            ),
+        );
+    }
+
+    unsafe { (xlib.XCloseDisplay)(display) };
+    (true, None)
+}
+
+fn process_cmdline_contains(needle: &str) -> bool {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return false;
+    };
+
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .into_string()
+                .ok()
+                .filter(|name| name.chars().all(|char| char.is_ascii_digit()))
+        })
+        .any(|pid| {
+            let cmdline_path = format!("/proc/{pid}/cmdline");
+            let Ok(cmdline) = fs::read(cmdline_path) else {
+                return false;
+            };
+
+            cmdline
+                .split(|byte| *byte == 0)
+                .filter_map(|segment| std::str::from_utf8(segment).ok())
+                .any(|segment| segment.contains(needle))
+        })
+}
+
+fn probe_desktop_portal() -> (bool, Option<String>) {
+    // This is intentionally a best-effort readiness heuristic, not a hard gate:
+    // some desktop sessions rely on D-Bus socket activation, so the portal
+    // process may not appear in `/proc` until the first request triggers it.
+    // We still surface the missing-portal result as guidance because it catches
+    // the common broken-session case without adding a D-Bus dependency here.
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+        return (
+            false,
+            Some(
+                "No D-Bus session bus was detected. Wayland screen sharing requires xdg-desktop-portal."
+                    .to_string(),
+            ),
+        );
+    }
+
+    if !process_cmdline_contains("xdg-desktop-portal") {
+        return (
+            false,
+            Some(
+                "xdg-desktop-portal is not running for the current desktop session. Wayland screen sharing requires it."
+                    .to_string(),
+            ),
+        );
+    }
+
+    (true, None)
+}
+
+pub(crate) fn capabilities() -> Value {
+    let audio_backend = probe_audio_backend();
+    let session_type = detect_session_type();
+    let (portal_available, portal_reason) = probe_desktop_portal();
+    let (x11_display_available, x11_display_reason) = probe_x11_display();
+    let source_audio_target_inference_reason = Some(
+        "Linux does not infer an app-audio target from the selected share source; choose a target manually."
+            .to_string(),
+    );
+    let (system_audio, per_app_audio, per_app_audio_reason) =
+        if audio_backend.per_app_audio_supported {
+            ("best-effort", "best-effort", None)
+        } else {
+            (
+                "unsupported",
+                "unsupported",
+                audio_backend.per_app_audio_reason.clone(),
+            )
+        };
+    let (global_push_keybinds, global_push_keybinds_reason) = if x11_display_available {
+        if session_type == "wayland" {
+            (
+                "best-effort",
+                Some(
+                    "Global push keybinds use XWayland in Wayland sessions and may not work in every compositor."
+                        .to_string(),
+                ),
+            )
+        } else {
+            ("supported", None)
+        }
+    } else {
+        ("unsupported", x11_display_reason.clone())
+    };
+
+    let mut response = json!({
+        "platform": std::env::consts::OS,
+        "systemAudio": system_audio,
+        "perAppAudio": per_app_audio,
+        "protocolVersion": crate::PROTOCOL_VERSION,
+        "encoding": crate::PCM_ENCODING,
+        "sessionType": session_type,
+        "linuxAudioBackend": audio_backend.backend,
+        "linuxAudioBackendUsesShellOuts": audio_backend.uses_shell_outs,
+        "linuxAudioRuntimeAvailable": audio_backend.runtime_available,
+        "linuxAudioCaptureAvailable": audio_backend.per_app_audio_supported,
+        // Keep the PipeWire-era field names as aliases until older desktop clients
+        // no longer depend on the original sidecar contract.
+        "pipewireRuntimeAvailable": audio_backend.runtime_available,
+        "pipewireToolsAvailable": audio_backend.per_app_audio_supported,
+        "portalAvailable": portal_available,
+        "appAudioTargetEnumerationSupported": audio_backend.per_app_audio_supported,
+        "sourceAudioTargetInferenceSupported": false,
+        "globalPushKeybinds": global_push_keybinds,
+        "x11DisplayAvailable": x11_display_available,
+    });
+
+    if let Some(reason) = per_app_audio_reason {
+        response["perAppAudioReason"] = json!(reason);
+    }
+
+    if let Some(reason) = portal_reason {
+        response["portalReason"] = json!(reason);
+        response["portalReasonCode"] = json!("linux-desktop-portal-required");
+    }
+
+    if let Some(reason) = audio_backend.runtime_reason.clone() {
+        response["linuxAudioRuntimeReason"] = json!(reason);
+        response["pipewireRuntimeReason"] = json!(reason);
+    }
+
+    if let Some(reason) = audio_backend.per_app_audio_reason.clone() {
+        response["appAudioTargetEnumerationReason"] = json!(reason);
+        if let Some(reason_code) = audio_backend.per_app_audio_reason_code {
+            response["appAudioTargetEnumerationReasonCode"] = json!(reason_code);
+            response["perAppAudioReasonCode"] = json!(reason_code);
+        }
+    }
+
+    if let Some(reason) = source_audio_target_inference_reason {
+        response["sourceAudioTargetInferenceReason"] = json!(reason);
+        response["sourceAudioTargetInferenceReasonCode"] =
+            json!("linux-manual-app-target-selection-required");
+    }
+
+    if let Some(reason) = global_push_keybinds_reason {
+        response["globalPushKeybindsReason"] = json!(reason);
+        response["globalPushKeybindsReasonCode"] = json!(if x11_display_available {
+            "linux-xwayland-best-effort"
+        } else {
+            "linux-x11-display-required"
+        });
+    }
+
+    if let Some(reason) = x11_display_reason {
+        response["x11DisplayReason"] = json!(reason);
+        response["x11DisplayReasonCode"] = json!("linux-x11-display-required");
+    }
+
+    response
 }
 
 pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {

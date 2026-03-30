@@ -18,6 +18,7 @@ use crate::{
 };
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use serde_json::{json, Value};
 
 use super::PushKeybindRegistration;
 
@@ -345,6 +346,61 @@ pub(crate) fn register_push_keybinds(
         errors,
         watcher,
     }
+}
+
+fn classify_helper_error_code(error: &str) -> &'static str {
+    let normalized_error = error.to_ascii_lowercase();
+
+    if normalized_error.contains("not found at")
+        || normalized_error.contains("failed to launch macos helper")
+    {
+        return "macos-helper-unavailable";
+    }
+
+    if normalized_error.contains("requires macos 13 or newer") {
+        return "macos-version-unsupported";
+    }
+
+    if normalized_error.contains("permission")
+        || normalized_error.contains("not authorized")
+        || normalized_error.contains("not permitted")
+        || normalized_error.contains("shareable display")
+    {
+        return "macos-screen-recording-permission-required";
+    }
+
+    "macos-screen-audio-unavailable"
+}
+
+pub(crate) fn capabilities() -> Value {
+    let helper_probe_error = crate::run_macos_helper_command(&["list-targets"]).err();
+    let mut response = if helper_probe_error.is_none() {
+        json!({
+            "platform": std::env::consts::OS,
+            "systemAudio": "supported",
+            "perAppAudio": "supported",
+            "protocolVersion": crate::PROTOCOL_VERSION,
+            "encoding": crate::PCM_ENCODING,
+        })
+    } else {
+        json!({
+            "platform": std::env::consts::OS,
+            "systemAudio": "unsupported",
+            "perAppAudio": "unsupported",
+            "reason": helper_probe_error.clone(),
+            "protocolVersion": crate::PROTOCOL_VERSION,
+            "encoding": crate::PCM_ENCODING,
+        })
+    };
+
+    if let Some(reason_code) = helper_probe_error
+        .as_deref()
+        .map(classify_helper_error_code)
+    {
+        response["reasonCode"] = json!(reason_code);
+    }
+
+    response
 }
 
 pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {

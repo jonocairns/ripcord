@@ -227,18 +227,6 @@ struct CaptureSession {
 
 #[cfg(target_os = "linux")]
 #[derive(Clone)]
-struct LinuxAudioBackendProbe {
-    backend: &'static str,
-    uses_shell_outs: bool,
-    runtime_available: bool,
-    runtime_reason: Option<String>,
-    per_app_audio_supported: bool,
-    per_app_audio_reason: Option<String>,
-    per_app_audio_reason_code: Option<&'static str>,
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone)]
 struct LinuxPulseSinkInfo {
     index: u32,
     name: String,
@@ -282,12 +270,6 @@ struct LinuxPulseAudioSnapshot {
 pub(crate) struct LinuxPulseCaptureSource {
     monitor_source_name: String,
     target_id: String,
-}
-
-#[cfg(target_os = "linux")]
-struct LinuxAudioBackendProbeCacheEntry {
-    expires_at: Instant,
-    probe: LinuxAudioBackendProbe,
 }
 
 #[cfg(target_os = "linux")]
@@ -512,10 +494,6 @@ struct PaServerInfo {
 }
 
 #[cfg(target_os = "linux")]
-const LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE: &str = "pulseaudio-native";
-#[cfg(target_os = "linux")]
-const LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE: &str = "linux-native-audio-backend-unavailable";
-#[cfg(target_os = "linux")]
 const LINUX_PULSEAUDIO_LIBRARY_NAMES: [&str; 2] = ["libpulse.so.0", "libpulse.so"];
 #[cfg(target_os = "linux")]
 const LINUX_PULSEAUDIO_SIMPLE_LIBRARY_NAMES: [&str; 2] =
@@ -547,8 +525,6 @@ const LINUX_PULSE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const LINUX_PULSE_OPERATION_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(target_os = "linux")]
 const LINUX_PULSE_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
-#[cfg(target_os = "linux")]
-const LINUX_AUDIO_BACKEND_PROBE_CACHE_TTL: Duration = Duration::from_secs(2);
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -927,9 +903,6 @@ pub(crate) fn parse_window_source_id(source_id: &str) -> Option<isize> {
 
 #[cfg(target_os = "linux")]
 static LINUX_PULSE_LIB: OnceLock<Result<LinuxPulseLib, String>> = OnceLock::new();
-#[cfg(target_os = "linux")]
-static LINUX_AUDIO_BACKEND_PROBE_CACHE: OnceLock<Mutex<Option<LinuxAudioBackendProbeCacheEntry>>> =
-    OnceLock::new();
 
 #[cfg(target_os = "linux")]
 fn linux_cstr_to_string(value: *const c_char) -> Option<String> {
@@ -1648,178 +1621,6 @@ fn linux_pulse_audio_snapshot() -> Result<LinuxPulseAudioSnapshot, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn probe_linux_audio_backend() -> LinuxAudioBackendProbe {
-    let cache = LINUX_AUDIO_BACKEND_PROBE_CACHE.get_or_init(|| Mutex::new(None));
-    let now = Instant::now();
-
-    if let Ok(cache_guard) = cache.lock() {
-        if let Some(entry) = cache_guard.as_ref() {
-            if now < entry.expires_at {
-                return entry.probe.clone();
-            }
-        }
-    }
-
-    let probe = match linux_pulse_lib() {
-        Ok(_) => match linux_pulse_audio_snapshot() {
-            Ok(_) => LinuxAudioBackendProbe {
-                backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
-                uses_shell_outs: false,
-                runtime_available: true,
-                runtime_reason: None,
-                per_app_audio_supported: true,
-                per_app_audio_reason: None,
-                per_app_audio_reason_code: None,
-            },
-            Err(error) => LinuxAudioBackendProbe {
-                backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
-                uses_shell_outs: false,
-                runtime_available: true,
-                runtime_reason: None,
-                per_app_audio_supported: false,
-                per_app_audio_reason: Some(error),
-                per_app_audio_reason_code: Some(LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE),
-            },
-        },
-        Err(error) => LinuxAudioBackendProbe {
-            backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
-            uses_shell_outs: false,
-            runtime_available: false,
-            runtime_reason: Some(error.clone()),
-            per_app_audio_supported: false,
-            per_app_audio_reason: Some(error),
-            per_app_audio_reason_code: Some(LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE),
-        },
-    };
-
-    if let Ok(mut cache_guard) = cache.lock() {
-        *cache_guard = Some(LinuxAudioBackendProbeCacheEntry {
-            expires_at: Instant::now() + LINUX_AUDIO_BACKEND_PROBE_CACHE_TTL,
-            probe: probe.clone(),
-        });
-    }
-
-    probe
-}
-
-#[cfg(target_os = "linux")]
-fn detect_linux_session_type() -> String {
-    let session_type = std::env::var("XDG_SESSION_TYPE")
-        .ok()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty());
-
-    if let Some(session_type) = session_type {
-        return session_type;
-    }
-
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        return "wayland".to_string();
-    }
-
-    if std::env::var_os("DISPLAY").is_some() {
-        return "x11".to_string();
-    }
-
-    "unknown".to_string()
-}
-
-#[cfg(target_os = "linux")]
-fn probe_linux_x11_display() -> (bool, Option<String>) {
-    use std::ptr;
-    use x11_dl::xlib;
-
-    if std::env::var_os("DISPLAY").is_none() {
-        return (
-            false,
-            Some("No X11 display was detected for the current Linux session.".to_string()),
-        );
-    }
-
-    let xlib = match xlib::Xlib::open() {
-        Ok(xlib) => xlib,
-        Err(_) => {
-            return (
-                false,
-                Some("X11 library (libX11.so) not found. Global push keybind monitoring requires X11 or XWayland.".to_string()),
-            )
-        }
-    };
-
-    let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
-    if display.is_null() {
-        return (
-            false,
-            Some(
-                "Could not connect to the current X11 display. Global push keybind monitoring requires X11 or XWayland."
-                    .to_string(),
-            ),
-        );
-    }
-
-    unsafe { (xlib.XCloseDisplay)(display) };
-    (true, None)
-}
-
-#[cfg(target_os = "linux")]
-fn linux_process_cmdline_contains(needle: &str) -> bool {
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return false;
-    };
-
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            entry
-                .file_name()
-                .into_string()
-                .ok()
-                .filter(|name| name.chars().all(|char| char.is_ascii_digit()))
-        })
-        .any(|pid| {
-            let cmdline_path = format!("/proc/{pid}/cmdline");
-            let Ok(cmdline) = fs::read(cmdline_path) else {
-                return false;
-            };
-
-            cmdline
-                .split(|byte| *byte == 0)
-                .filter_map(|segment| std::str::from_utf8(segment).ok())
-                .any(|segment| segment.contains(needle))
-        })
-}
-
-#[cfg(target_os = "linux")]
-fn probe_linux_desktop_portal() -> (bool, Option<String>) {
-    // This is intentionally a best-effort readiness heuristic, not a hard gate:
-    // some desktop sessions rely on D-Bus socket activation, so the portal
-    // process may not appear in `/proc` until the first request triggers it.
-    // We still surface the missing-portal result as guidance because it catches
-    // the common broken-session case without adding a D-Bus dependency here.
-    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
-        return (
-            false,
-            Some(
-                "No D-Bus session bus was detected. Wayland screen sharing requires xdg-desktop-portal."
-                    .to_string(),
-            ),
-        );
-    }
-
-    if !linux_process_cmdline_contains("xdg-desktop-portal") {
-        return (
-            false,
-            Some(
-                "xdg-desktop-portal is not running for the current desktop session. Wayland screen sharing requires it."
-                    .to_string(),
-            ),
-        );
-    }
-
-    (true, None)
-}
-
-#[cfg(target_os = "linux")]
 fn linux_default_pulse_capture_source(
     snapshot: &LinuxPulseAudioSnapshot,
 ) -> Result<LinuxPulseCaptureSource, String> {
@@ -2148,185 +1949,8 @@ fn handle_health_ping() -> Result<Value, String> {
     }))
 }
 
-#[cfg(target_os = "macos")]
-fn classify_macos_helper_error_code(error: &str) -> &'static str {
-    let normalized_error = error.to_ascii_lowercase();
-
-    if normalized_error.contains("not found at")
-        || normalized_error.contains("failed to launch macos helper")
-    {
-        return "macos-helper-unavailable";
-    }
-
-    if normalized_error.contains("requires macos 13 or newer") {
-        return "macos-version-unsupported";
-    }
-
-    if normalized_error.contains("permission")
-        || normalized_error.contains("not authorized")
-        || normalized_error.contains("not permitted")
-        || normalized_error.contains("shareable display")
-    {
-        return "macos-screen-recording-permission-required";
-    }
-
-    "macos-screen-audio-unavailable"
-}
-
 fn handle_capabilities_get() -> Result<Value, String> {
-    let platform = std::env::consts::OS;
-    #[cfg(target_os = "macos")]
-    let macos_helper_probe_error = run_macos_helper_command(&["list-targets"]).err();
-    #[cfg(target_os = "linux")]
-    let linux_audio_backend = probe_linux_audio_backend();
-    #[cfg(target_os = "linux")]
-    let (linux_per_app_audio_supported, linux_per_app_audio_reason) = (
-        linux_audio_backend.per_app_audio_supported,
-        linux_audio_backend.per_app_audio_reason.clone(),
-    );
-    #[cfg(not(target_os = "linux"))]
-    let (linux_per_app_audio_supported, linux_per_app_audio_reason): (bool, Option<String>) =
-        (false, None);
-
-    #[cfg(not(target_os = "macos"))]
-    let macos_helper_probe_error: Option<String> = None;
-
-    #[cfg(target_os = "macos")]
-    let macos_helper_probe_error_code = macos_helper_probe_error
-        .as_deref()
-        .map(classify_macos_helper_error_code);
-
-    let (system_audio, per_app_audio, per_app_audio_reason, reason) = if cfg!(windows) {
-        ("supported", "supported", None, None)
-    } else if cfg!(target_os = "macos") {
-        if macos_helper_probe_error.is_none() {
-            ("supported", "supported", None, None)
-        } else {
-            (
-                "unsupported",
-                "unsupported",
-                None,
-                macos_helper_probe_error.clone(),
-            )
-        }
-    } else if cfg!(target_os = "linux") {
-        if linux_per_app_audio_supported {
-            ("best-effort", "best-effort", None, None)
-        } else {
-            (
-                "unsupported",
-                "unsupported",
-                linux_per_app_audio_reason.clone(),
-                None,
-            )
-        }
-    } else {
-        ("unsupported", "unsupported", None, None)
-    };
-
-    let mut response = json!({
-        "platform": platform,
-        "systemAudio": system_audio,
-        "perAppAudio": per_app_audio,
-        "protocolVersion": PROTOCOL_VERSION,
-        "encoding": PCM_ENCODING,
-    });
-
-    if let Some(per_app_audio_reason) = per_app_audio_reason {
-        response["perAppAudioReason"] = json!(per_app_audio_reason);
-    }
-
-    if let Some(reason) = reason {
-        response["reason"] = json!(reason);
-    }
-
-    #[cfg(target_os = "macos")]
-    if let Some(reason_code) = macos_helper_probe_error_code {
-        response["reasonCode"] = json!(reason_code);
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let session_type = detect_linux_session_type();
-        let (portal_available, portal_reason) = probe_linux_desktop_portal();
-        let (x11_display_available, x11_display_reason) = probe_linux_x11_display();
-        let app_audio_target_enumeration_supported = linux_audio_backend.per_app_audio_supported;
-        let source_audio_target_inference_reason = Some(
-            "Linux does not infer an app-audio target from the selected share source; choose a target manually."
-                .to_string(),
-        );
-        let (global_push_keybinds, global_push_keybinds_reason) = if x11_display_available {
-            if session_type == "wayland" {
-                (
-                    "best-effort",
-                    Some(
-                        "Global push keybinds use XWayland in Wayland sessions and may not work in every compositor."
-                            .to_string(),
-                    ),
-                )
-            } else {
-                ("supported", None)
-            }
-        } else {
-            ("unsupported", x11_display_reason.clone())
-        };
-
-        response["sessionType"] = json!(session_type);
-        response["linuxAudioBackend"] = json!(linux_audio_backend.backend);
-        response["linuxAudioBackendUsesShellOuts"] = json!(linux_audio_backend.uses_shell_outs);
-        response["linuxAudioRuntimeAvailable"] = json!(linux_audio_backend.runtime_available);
-        response["linuxAudioCaptureAvailable"] = json!(linux_audio_backend.per_app_audio_supported);
-        // Keep the PipeWire-era field names as aliases until older desktop clients
-        // no longer depend on the original sidecar contract.
-        response["pipewireRuntimeAvailable"] = json!(linux_audio_backend.runtime_available);
-        response["pipewireToolsAvailable"] = json!(linux_audio_backend.per_app_audio_supported);
-        response["portalAvailable"] = json!(portal_available);
-        response["appAudioTargetEnumerationSupported"] =
-            json!(app_audio_target_enumeration_supported);
-        response["sourceAudioTargetInferenceSupported"] = json!(false);
-        response["globalPushKeybinds"] = json!(global_push_keybinds);
-        response["x11DisplayAvailable"] = json!(x11_display_available);
-
-        if let Some(reason) = portal_reason {
-            response["portalReason"] = json!(reason);
-            response["portalReasonCode"] = json!("linux-desktop-portal-required");
-        }
-
-        if let Some(reason) = linux_audio_backend.runtime_reason.clone() {
-            response["linuxAudioRuntimeReason"] = json!(reason);
-            response["pipewireRuntimeReason"] = json!(reason);
-        }
-
-        if let Some(reason) = linux_audio_backend.per_app_audio_reason.clone() {
-            response["appAudioTargetEnumerationReason"] = json!(reason);
-            if let Some(reason_code) = linux_audio_backend.per_app_audio_reason_code {
-                response["appAudioTargetEnumerationReasonCode"] = json!(reason_code);
-                response["perAppAudioReasonCode"] = json!(reason_code);
-            }
-        }
-
-        if let Some(reason) = source_audio_target_inference_reason {
-            response["sourceAudioTargetInferenceReason"] = json!(reason);
-            response["sourceAudioTargetInferenceReasonCode"] =
-                json!("linux-manual-app-target-selection-required");
-        }
-
-        if let Some(reason) = global_push_keybinds_reason {
-            response["globalPushKeybindsReason"] = json!(reason);
-            response["globalPushKeybindsReasonCode"] = json!(if x11_display_available {
-                "linux-xwayland-best-effort"
-            } else {
-                "linux-x11-display-required"
-            });
-        }
-
-        if let Some(reason) = x11_display_reason {
-            response["x11DisplayReason"] = json!(reason);
-            response["x11DisplayReasonCode"] = json!("linux-x11-display-required");
-        }
-    }
-
-    Ok(response)
+    Ok(platform::capabilities())
 }
 
 fn handle_windows_resolve_source(params: Value) -> Result<Value, String> {

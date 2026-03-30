@@ -2,6 +2,8 @@ use std::net::TcpStream;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+use serde_json::Value;
+
 use crate::{AudioTarget, CaptureOutcome, FrameQueue, PushKeybindWatcher};
 
 pub(crate) struct PushKeybindRegistration {
@@ -103,6 +105,32 @@ pub(crate) fn resolve_source_to_pid(source_id: &str) -> Option<u32> {
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub(crate) fn resolve_source_to_pid(_source_id: &str) -> Option<u32> {
     None
+}
+
+#[cfg(windows)]
+pub(crate) fn capabilities() -> Value {
+    windows::capabilities()
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn capabilities() -> Value {
+    macos::capabilities()
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn capabilities() -> Value {
+    linux::capabilities()
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+pub(crate) fn capabilities() -> Value {
+    serde_json::json!({
+        "platform": std::env::consts::OS,
+        "systemAudio": "unsupported",
+        "perAppAudio": "unsupported",
+        "protocolVersion": crate::PROTOCOL_VERSION,
+        "encoding": crate::PCM_ENCODING,
+    })
 }
 
 #[cfg(windows)]
