@@ -124,7 +124,10 @@ void describe("CaptureSidecarManager", () => {
             FAKE_SIDECAR_SYSTEM_AUDIO: "best-effort",
             FAKE_SIDECAR_PER_APP_AUDIO: "best-effort",
             FAKE_SIDECAR_SESSION_TYPE: "wayland",
-            FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE: "true",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND: "pulseaudio-native",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND_USES_SHELL_OUTS: "false",
+            FAKE_SIDECAR_LINUX_AUDIO_RUNTIME_AVAILABLE: "true",
+            FAKE_SIDECAR_LINUX_AUDIO_CAPTURE_AVAILABLE: "true",
             FAKE_SIDECAR_PORTAL_AVAILABLE: "true",
             FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED: "true",
             FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_SUPPORTED: "false",
@@ -148,7 +151,10 @@ void describe("CaptureSidecarManager", () => {
       const capabilities = await manager.getCapabilities();
       assert.equal(capabilities.perAppAudio, "best-effort");
       assert.equal(capabilities.sessionType, "wayland");
-      assert.equal(capabilities.pipewireToolsAvailable, true);
+      assert.equal(capabilities.linuxAudioBackend, "pulseaudio-native");
+      assert.equal(capabilities.linuxAudioBackendUsesShellOuts, false);
+      assert.equal(capabilities.linuxAudioRuntimeAvailable, true);
+      assert.equal(capabilities.linuxAudioCaptureAvailable, true);
       assert.equal(capabilities.portalAvailable, true);
       assert.equal(capabilities.appAudioTargetEnumerationSupported, true);
       assert.equal(capabilities.sourceAudioTargetInferenceSupported, false);
@@ -188,7 +194,10 @@ void describe("CaptureSidecarManager", () => {
             FAKE_SIDECAR_SYSTEM_AUDIO: "best-effort",
             FAKE_SIDECAR_PER_APP_AUDIO: "best-effort",
             FAKE_SIDECAR_SESSION_TYPE: "wayland",
-            FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE: "true",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND: "pulseaudio-native",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND_USES_SHELL_OUTS: "false",
+            FAKE_SIDECAR_LINUX_AUDIO_RUNTIME_AVAILABLE: "true",
+            FAKE_SIDECAR_LINUX_AUDIO_CAPTURE_AVAILABLE: "true",
             FAKE_SIDECAR_PORTAL_AVAILABLE: "true",
             FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED: "true",
             FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_SUPPORTED: "false",
@@ -356,7 +365,10 @@ void describe("CaptureSidecarManager", () => {
             FAKE_SIDECAR_CRASH_MS: isFirstSpawn ? "80" : "0",
             FAKE_SIDECAR_PLATFORM: "linux",
             FAKE_SIDECAR_SESSION_TYPE: isFirstSpawn ? "x11" : "wayland",
-            FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE: isFirstSpawn
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND: "pulseaudio-native",
+            FAKE_SIDECAR_LINUX_AUDIO_BACKEND_USES_SHELL_OUTS: "false",
+            FAKE_SIDECAR_LINUX_AUDIO_RUNTIME_AVAILABLE: "true",
+            FAKE_SIDECAR_LINUX_AUDIO_CAPTURE_AVAILABLE: isFirstSpawn
               ? "false"
               : "true",
             FAKE_SIDECAR_PER_APP_AUDIO: isFirstSpawn
@@ -366,10 +378,10 @@ void describe("CaptureSidecarManager", () => {
               ? "false"
               : "true",
             FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_REASON: isFirstSpawn
-              ? "pw-record is not installed"
+              ? "Failed to connect to the Linux audio server."
               : "",
             FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_REASON_CODE: isFirstSpawn
-              ? "linux-pipewire-tools-missing"
+              ? "linux-native-audio-backend-unavailable"
               : "",
             FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_SUPPORTED: isFirstSpawn
               ? "false"
@@ -384,14 +396,14 @@ void describe("CaptureSidecarManager", () => {
       const initialCapabilities = await manager.getCapabilities();
       assert.equal(initialCapabilities.sessionType, "x11");
       assert.equal(initialCapabilities.perAppAudio, "unsupported");
-      assert.equal(initialCapabilities.pipewireToolsAvailable, false);
+      assert.equal(initialCapabilities.linuxAudioCaptureAvailable, false);
 
       await waitFor(() => spawnCount >= 2, 3_000);
 
       const refreshedCapabilities = await manager.getCapabilities();
       assert.equal(refreshedCapabilities.sessionType, "wayland");
       assert.equal(refreshedCapabilities.perAppAudio, "best-effort");
-      assert.equal(refreshedCapabilities.pipewireToolsAvailable, true);
+      assert.equal(refreshedCapabilities.linuxAudioCaptureAvailable, true);
       assert.equal(
         refreshedCapabilities.appAudioTargetEnumerationSupported,
         true,

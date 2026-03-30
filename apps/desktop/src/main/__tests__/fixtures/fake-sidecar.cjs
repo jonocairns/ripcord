@@ -1,4 +1,4 @@
-const readline = require('node:readline');
+const readline = require("node:readline");
 
 let activeSession = null;
 let intervalId = null;
@@ -9,11 +9,11 @@ const parseBooleanEnv = (value) => {
   }
 
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'true') {
+  if (normalized === "true") {
     return true;
   }
 
-  if (normalized === 'false') {
+  if (normalized === "false") {
     return false;
   }
 
@@ -26,7 +26,10 @@ const parseStringArrayEnv = (value) => {
 
   try {
     const parsed = JSON.parse(value);
-    if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === 'string')) {
+    if (
+      Array.isArray(parsed) &&
+      parsed.every((entry) => typeof entry === "string")
+    ) {
       return parsed;
     }
   } catch {
@@ -34,37 +37,53 @@ const parseStringArrayEnv = (value) => {
   }
 
   return value
-    .split(',')
+    .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
 };
-const capabilityPlatform = process.env.FAKE_SIDECAR_PLATFORM || process.platform;
+const capabilityPlatform =
+  process.env.FAKE_SIDECAR_PLATFORM || process.platform;
 const capabilitySystemAudio =
-  process.env.FAKE_SIDECAR_SYSTEM_AUDIO || 'supported';
+  process.env.FAKE_SIDECAR_SYSTEM_AUDIO || "supported";
 const capabilityPerAppAudio =
-  process.env.FAKE_SIDECAR_PER_APP_AUDIO || 'supported';
+  process.env.FAKE_SIDECAR_PER_APP_AUDIO || "supported";
 const capabilityReason = process.env.FAKE_SIDECAR_REASON;
 const capabilityReasonCode = process.env.FAKE_SIDECAR_REASON_CODE;
-const capabilityPerAppAudioReason = process.env.FAKE_SIDECAR_PER_APP_AUDIO_REASON;
-const capabilityPerAppAudioReasonCode = process.env.FAKE_SIDECAR_PER_APP_AUDIO_REASON_CODE;
+const capabilityPerAppAudioReason =
+  process.env.FAKE_SIDECAR_PER_APP_AUDIO_REASON;
+const capabilityPerAppAudioReasonCode =
+  process.env.FAKE_SIDECAR_PER_APP_AUDIO_REASON_CODE;
 const capabilitySessionType = process.env.FAKE_SIDECAR_SESSION_TYPE;
-const capabilityPipewireToolsAvailable = parseBooleanEnv(
-  process.env.FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE
+const capabilityLinuxAudioBackend =
+  process.env.FAKE_SIDECAR_LINUX_AUDIO_BACKEND;
+const capabilityLinuxAudioBackendUsesShellOuts = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_LINUX_AUDIO_BACKEND_USES_SHELL_OUTS,
+);
+const capabilityLinuxAudioRuntimeAvailable = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_LINUX_AUDIO_RUNTIME_AVAILABLE ??
+    process.env.FAKE_SIDECAR_PIPEWIRE_RUNTIME_AVAILABLE,
+);
+const capabilityLinuxAudioRuntimeReason =
+  process.env.FAKE_SIDECAR_LINUX_AUDIO_RUNTIME_REASON ||
+  process.env.FAKE_SIDECAR_PIPEWIRE_RUNTIME_REASON;
+const capabilityLinuxAudioCaptureAvailable = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_LINUX_AUDIO_CAPTURE_AVAILABLE ??
+    process.env.FAKE_SIDECAR_PIPEWIRE_TOOLS_AVAILABLE,
 );
 const capabilityPortalAvailable = parseBooleanEnv(
-  process.env.FAKE_SIDECAR_PORTAL_AVAILABLE
+  process.env.FAKE_SIDECAR_PORTAL_AVAILABLE,
 );
 const capabilityPortalReason = process.env.FAKE_SIDECAR_PORTAL_REASON;
 const capabilityPortalReasonCode = process.env.FAKE_SIDECAR_PORTAL_REASON_CODE;
 const capabilityAppAudioTargetEnumerationSupported = parseBooleanEnv(
-  process.env.FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED
+  process.env.FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_SUPPORTED,
 );
 const capabilityAppAudioTargetEnumerationReason =
   process.env.FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_REASON;
 const capabilityAppAudioTargetEnumerationReasonCode =
   process.env.FAKE_SIDECAR_APP_AUDIO_TARGET_ENUMERATION_REASON_CODE;
 const capabilitySourceAudioTargetInferenceSupported = parseBooleanEnv(
-  process.env.FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_SUPPORTED
+  process.env.FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_SUPPORTED,
 );
 const capabilitySourceAudioTargetInferenceReason =
   process.env.FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_REASON;
@@ -77,29 +96,30 @@ const capabilityGlobalPushKeybindsReason =
 const capabilityGlobalPushKeybindsReasonCode =
   process.env.FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS_REASON_CODE;
 const capabilityX11DisplayAvailable = parseBooleanEnv(
-  process.env.FAKE_SIDECAR_X11_DISPLAY_AVAILABLE
+  process.env.FAKE_SIDECAR_X11_DISPLAY_AVAILABLE,
 );
 const capabilityX11DisplayReason = process.env.FAKE_SIDECAR_X11_DISPLAY_REASON;
 const capabilityX11DisplayReasonCode =
   process.env.FAKE_SIDECAR_X11_DISPLAY_REASON_CODE;
 const listTargetsRequiresManualSelection = parseBooleanEnv(
-  process.env.FAKE_SIDECAR_REQUIRES_MANUAL_SELECTION
+  process.env.FAKE_SIDECAR_REQUIRES_MANUAL_SELECTION,
 );
-const listTargetsSuggestedTargetId = process.env.FAKE_SIDECAR_SUGGESTED_TARGET_ID;
+const listTargetsSuggestedTargetId =
+  process.env.FAKE_SIDECAR_SUGGESTED_TARGET_ID;
 const listTargetsWarning = process.env.FAKE_SIDECAR_TARGETS_WARNING;
 const pushTalkRegisteredOverride = parseBooleanEnv(
-  process.env.FAKE_SIDECAR_PUSH_TALK_REGISTERED
+  process.env.FAKE_SIDECAR_PUSH_TALK_REGISTERED,
 );
 const pushMuteRegisteredOverride = parseBooleanEnv(
-  process.env.FAKE_SIDECAR_PUSH_MUTE_REGISTERED
+  process.env.FAKE_SIDECAR_PUSH_MUTE_REGISTERED,
 );
 const pushKeybindErrors =
   parseStringArrayEnv(process.env.FAKE_SIDECAR_PUSH_KEYBIND_ERRORS) || [];
 const emitTalkActiveOnSet = parseBooleanEnv(
-  process.env.FAKE_SIDECAR_EMIT_PUSH_TALK_ACTIVE_ON_SET
+  process.env.FAKE_SIDECAR_EMIT_PUSH_TALK_ACTIVE_ON_SET,
 );
 const emitMuteActiveOnSet = parseBooleanEnv(
-  process.env.FAKE_SIDECAR_EMIT_PUSH_MUTE_ACTIVE_ON_SET
+  process.env.FAKE_SIDECAR_EMIT_PUSH_MUTE_ACTIVE_ON_SET,
 );
 
 const send = (payload) => {
@@ -110,7 +130,7 @@ const sendResponse = (id, result) => {
   send({
     id,
     ok: true,
-    result
+    result,
   });
 };
 
@@ -119,8 +139,8 @@ const sendError = (id, message) => {
     id,
     ok: false,
     error: {
-      message
-    }
+      message,
+    },
   });
 };
 
@@ -135,13 +155,13 @@ const stopSession = () => {
   }
 
   send({
-    event: 'audio_capture.ended',
+    event: "audio_capture.ended",
     params: {
       sessionId: activeSession.sessionId,
       targetId: activeSession.targetId,
-      reason: 'capture_stopped',
-      protocolVersion: 1
-    }
+      reason: "capture_stopped",
+      protocolVersion: 1,
+    },
   });
 
   activeSession = null;
@@ -155,17 +175,17 @@ const startSession = (targetId) => {
   const channels = 2;
   const frameCount = 960;
   const samples = new Float32Array(frameCount * channels);
-  const pcmBase64 = Buffer.from(samples.buffer).toString('base64');
+  const pcmBase64 = Buffer.from(samples.buffer).toString("base64");
   let sequence = 0;
 
   activeSession = {
     sessionId,
-    targetId
+    targetId,
   };
 
   intervalId = setInterval(() => {
     send({
-      event: 'audio_capture.frame',
+      event: "audio_capture.frame",
       params: {
         sessionId,
         targetId,
@@ -175,9 +195,9 @@ const startSession = (targetId) => {
         frameCount,
         pcmBase64,
         protocolVersion: 1,
-        encoding: 'f32le_base64',
-        droppedFrameCount: 0
-      }
+        encoding: "f32le_base64",
+        droppedFrameCount: 0,
+      },
     });
   }, 10);
 
@@ -188,16 +208,16 @@ const startSession = (targetId) => {
     channels,
     framesPerBuffer: frameCount,
     protocolVersion: 1,
-    encoding: 'f32le_base64'
+    encoding: "f32le_base64",
   };
 };
 
 const rl = readline.createInterface({
   input: process.stdin,
-  crlfDelay: Infinity
+  crlfDelay: Infinity,
 });
 
-rl.on('line', (line) => {
+rl.on("line", (line) => {
   if (!line.trim()) {
     return;
   }
@@ -211,61 +231,61 @@ rl.on('line', (line) => {
 
   const { id, method, params = {} } = request;
 
-  if (method === 'health.ping') {
+  if (method === "health.ping") {
     sendResponse(id, {
-      status: 'ok'
+      status: "ok",
     });
     return;
   }
 
-  if (method === 'audio_targets.list') {
+  if (method === "audio_targets.list") {
     const suggestedTargetId =
       listTargetsSuggestedTargetId !== undefined
         ? listTargetsSuggestedTargetId
-        : capabilityPlatform === 'linux'
+        : capabilityPlatform === "linux"
           ? undefined
           : params?.sourceId
-            ? 'pid:1234'
+            ? "pid:1234"
             : undefined;
 
     sendResponse(id, {
       targets: [
         {
-          id: 'pid:1234',
-          label: 'Fake App (1234)',
+          id: "pid:1234",
+          label: "Fake App (1234)",
           pid: 1234,
-          processName: 'fake.exe'
-        }
+          processName: "fake.exe",
+        },
       ],
       suggestedTargetId,
       requiresManualSelection:
         listTargetsRequiresManualSelection ??
-        (capabilityPlatform === 'linux' || suggestedTargetId === undefined),
+        (capabilityPlatform === "linux" || suggestedTargetId === undefined),
       warning:
         listTargetsWarning ??
-        (capabilityPlatform === 'linux'
-          ? 'Linux per-app audio requires choosing the app that is producing sound.'
-          : undefined)
+        (capabilityPlatform === "linux"
+          ? "Linux per-app audio requires choosing the app that is producing sound."
+          : undefined),
     });
     return;
   }
 
-  if (method === 'audio_capture.start') {
-    const targetId = params?.appAudioTargetId || 'pid:1234';
+  if (method === "audio_capture.start") {
+    const targetId = params?.appAudioTargetId || "pid:1234";
     const session = startSession(targetId);
     sendResponse(id, session);
     return;
   }
 
-  if (method === 'audio_capture.stop') {
+  if (method === "audio_capture.stop") {
     stopSession();
     sendResponse(id, {
-      stopped: true
+      stopped: true,
     });
     return;
   }
 
-  if (method === 'push_keybinds.set') {
+  if (method === "push_keybinds.set") {
     const talkRegistered =
       pushTalkRegisteredOverride ?? Boolean(params?.pushToTalkKeybind);
     const muteRegistered =
@@ -274,33 +294,33 @@ rl.on('line', (line) => {
     sendResponse(id, {
       talkRegistered,
       muteRegistered,
-      errors: pushKeybindErrors
+      errors: pushKeybindErrors,
     });
 
     if (talkRegistered && emitTalkActiveOnSet && params?.pushToTalkKeybind) {
       send({
-        event: 'push_keybind.state',
+        event: "push_keybind.state",
         params: {
-          kind: 'talk',
-          active: true
-        }
+          kind: "talk",
+          active: true,
+        },
       });
     }
 
     if (muteRegistered && emitMuteActiveOnSet && params?.pushToMuteKeybind) {
       send({
-        event: 'push_keybind.state',
+        event: "push_keybind.state",
         params: {
-          kind: 'mute',
-          active: true
-        }
+          kind: "mute",
+          active: true,
+        },
       });
     }
 
     return;
   }
 
-  if (method === 'capabilities.get') {
+  if (method === "capabilities.get") {
     sendResponse(id, {
       platform: capabilityPlatform,
       systemAudio: capabilitySystemAudio,
@@ -310,7 +330,14 @@ rl.on('line', (line) => {
       perAppAudioReason: capabilityPerAppAudioReason,
       perAppAudioReasonCode: capabilityPerAppAudioReasonCode,
       sessionType: capabilitySessionType,
-      pipewireToolsAvailable: capabilityPipewireToolsAvailable,
+      linuxAudioBackend: capabilityLinuxAudioBackend,
+      linuxAudioBackendUsesShellOuts: capabilityLinuxAudioBackendUsesShellOuts,
+      linuxAudioRuntimeAvailable: capabilityLinuxAudioRuntimeAvailable,
+      linuxAudioRuntimeReason: capabilityLinuxAudioRuntimeReason,
+      linuxAudioCaptureAvailable: capabilityLinuxAudioCaptureAvailable,
+      pipewireRuntimeAvailable: capabilityLinuxAudioRuntimeAvailable,
+      pipewireRuntimeReason: capabilityLinuxAudioRuntimeReason,
+      pipewireToolsAvailable: capabilityLinuxAudioCaptureAvailable,
       portalAvailable: capabilityPortalAvailable,
       portalReason: capabilityPortalReason,
       portalReasonCode: capabilityPortalReasonCode,
@@ -331,7 +358,7 @@ rl.on('line', (line) => {
       globalPushKeybindsReasonCode: capabilityGlobalPushKeybindsReasonCode,
       x11DisplayAvailable: capabilityX11DisplayAvailable,
       x11DisplayReason: capabilityX11DisplayReason,
-      x11DisplayReasonCode: capabilityX11DisplayReasonCode
+      x11DisplayReasonCode: capabilityX11DisplayReasonCode,
     });
     return;
   }
@@ -339,7 +366,7 @@ rl.on('line', (line) => {
   sendError(id, `Unknown method: ${method}`);
 });
 
-rl.on('close', () => {
+rl.on("close", () => {
   stopSession();
   process.exit(0);
 });
