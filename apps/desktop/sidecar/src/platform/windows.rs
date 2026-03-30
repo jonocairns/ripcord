@@ -1,14 +1,25 @@
+use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use std::{ffi::c_void, path::Path};
+use std::{ffi::c_void, path::Path, ptr, time::Instant};
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use windows::core::PWSTR;
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM};
+use windows::Win32::Media::Audio::{
+    IAudioCaptureClient, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_E_INVALID_STREAM_FLAG,
+    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, PROCESS_LOOPBACK_MODE,
+    PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+    PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, WAVEFORMATEX,
+};
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -17,8 +28,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::{
-    enqueue_push_keybind_state_event, AudioTarget, FrameQueue, PushKeybindKind,
-    PushKeybindWatcher,
+    enqueue_frame_event, enqueue_push_keybind_state_event, AudioTarget, CaptureEndReason,
+    CaptureOutcome, FrameQueue, PushKeybindKind, PushKeybindWatcher, APP_AUDIO_CHANNELS,
+    APP_AUDIO_FRAME_SIZE, APP_AUDIO_SAMPLE_RATE, PROTOCOL_VERSION,
 };
 
 use super::PushKeybindRegistration;
@@ -425,4 +437,221 @@ pub(crate) fn resolve_source_to_pid(source_id: &str) -> Option<u32> {
     }
 
     Some(pid)
+}
+
+fn process_is_alive(process_handle: HANDLE) -> bool {
+    crate::process_is_alive(process_handle)
+}
+
+pub(crate) fn capture_loopback_audio(
+    session_id: &str,
+    _source_id: Option<&str>,
+    target_id: &str,
+    target_pid: u32,
+    self_exclude_pid: Option<u32>,
+    stop_flag: Arc<AtomicBool>,
+    frame_queue: Arc<FrameQueue>,
+    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
+) -> CaptureOutcome {
+    let process_handle = if self_exclude_pid.is_none() {
+        match crate::open_process_for_liveness(target_pid) {
+            Some(handle) => Some(handle),
+            None => return CaptureOutcome::from_reason(CaptureEndReason::AppExited),
+        }
+    } else {
+        None
+    };
+
+    let com_initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
+
+    let reason = (|| {
+        let (activation_pid, activation_mode): (u32, PROCESS_LOOPBACK_MODE) = match self_exclude_pid
+        {
+            Some(exclude_pid) => (
+                exclude_pid,
+                PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+            ),
+            None => (
+                target_pid,
+                PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+            ),
+        };
+        let audio_client =
+            crate::activate_process_loopback_client(activation_pid, activation_mode)?;
+        let capture_format = WAVEFORMATEX {
+            wFormatTag: 0x0003,
+            nChannels: APP_AUDIO_CHANNELS as u16,
+            nSamplesPerSec: APP_AUDIO_SAMPLE_RATE,
+            nAvgBytesPerSec: APP_AUDIO_SAMPLE_RATE * APP_AUDIO_CHANNELS as u32 * 4,
+            nBlockAlign: (APP_AUDIO_CHANNELS * 4) as u16,
+            wBitsPerSample: 32,
+            cbSize: 0,
+        };
+
+        let init_result = unsafe {
+            audio_client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK
+                    | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                    | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                20 * 10_000,
+                0,
+                &capture_format,
+                None,
+            )
+        };
+
+        if let Err(error) = init_result {
+            if error.code() == AUDCLNT_E_INVALID_STREAM_FLAG {
+                return Err(format!(
+                    "Failed to initialize loopback client: {error} (invalid stream flags for process loopback)"
+                ));
+            }
+            return Err(format!("Failed to initialize loopback client: {error}"));
+        }
+
+        let capture_client: IAudioCaptureClient = unsafe {
+            audio_client
+                .GetService()
+                .map_err(|error| format!("Failed to get IAudioCaptureClient: {error}"))?
+        };
+
+        if let Err(error) = unsafe { audio_client.Start() } {
+            return Err(format!("Failed to start audio client: {error}"));
+        }
+
+        let mut pending = Vec::<f32>::new();
+        let mut sequence: u64 = 0;
+        let mut last_liveness_check = Instant::now();
+
+        loop {
+            if stop_flag.load(Ordering::Relaxed) {
+                let _ = unsafe { audio_client.Stop() };
+                return Ok(CaptureEndReason::CaptureStopped);
+            }
+
+            if last_liveness_check.elapsed() >= Duration::from_millis(300) {
+                if let Some(handle) = process_handle {
+                    if !process_is_alive(handle) {
+                        let _ = unsafe { audio_client.Stop() };
+                        return Ok(CaptureEndReason::AppExited);
+                    }
+                }
+
+                last_liveness_check = Instant::now();
+            }
+
+            let mut packet_size = match unsafe { capture_client.GetNextPacketSize() } {
+                Ok(size) => size,
+                Err(_) => {
+                    let _ = unsafe { audio_client.Stop() };
+                    return Ok(CaptureEndReason::DeviceLost);
+                }
+            };
+
+            if packet_size == 0 {
+                thread::sleep(Duration::from_millis(4));
+                continue;
+            }
+
+            while packet_size > 0 {
+                let mut data_ptr: *mut u8 = ptr::null_mut();
+                let mut frame_count = 0u32;
+                let mut flags = 0u32;
+
+                if unsafe {
+                    capture_client.GetBuffer(
+                        &mut data_ptr,
+                        &mut frame_count,
+                        &mut flags,
+                        None,
+                        None,
+                    )
+                }
+                .is_err()
+                {
+                    let _ = unsafe { audio_client.Stop() };
+                    return Ok(CaptureEndReason::CaptureError);
+                }
+
+                let chunk = if (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0 {
+                    vec![0.0f32; frame_count as usize * APP_AUDIO_CHANNELS]
+                } else {
+                    let sample_count = frame_count as usize * APP_AUDIO_CHANNELS;
+                    unsafe { std::slice::from_raw_parts(data_ptr as *const f32, sample_count) }
+                        .to_vec()
+                };
+
+                pending.extend_from_slice(&chunk);
+
+                let _ = unsafe { capture_client.ReleaseBuffer(frame_count) };
+
+                while pending.len() >= APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS {
+                    let frame_samples: Vec<f32> = pending
+                        .drain(..APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS)
+                        .collect();
+                    let wrote_binary = app_audio_binary_stream
+                        .as_ref()
+                        .map(|stream_slot| {
+                            crate::try_write_app_audio_binary_frame(
+                                stream_slot,
+                                session_id,
+                                target_id,
+                                sequence,
+                                APP_AUDIO_SAMPLE_RATE as usize,
+                                APP_AUDIO_CHANNELS,
+                                APP_AUDIO_FRAME_SIZE,
+                                PROTOCOL_VERSION,
+                                0,
+                                &frame_samples,
+                            )
+                        })
+                        .unwrap_or(false);
+
+                    if !wrote_binary {
+                        let frame_bytes = bytemuck::cast_slice(&frame_samples);
+                        let pcm_base64 = BASE64.encode(frame_bytes);
+
+                        enqueue_frame_event(
+                            &frame_queue,
+                            session_id,
+                            target_id,
+                            sequence,
+                            APP_AUDIO_SAMPLE_RATE as usize,
+                            APP_AUDIO_FRAME_SIZE,
+                            pcm_base64,
+                        );
+                    }
+
+                    sequence = sequence.saturating_add(1);
+                }
+
+                packet_size = match unsafe { capture_client.GetNextPacketSize() } {
+                    Ok(size) => size,
+                    Err(_) => {
+                        let _ = unsafe { audio_client.Stop() };
+                        return Ok(CaptureEndReason::DeviceLost);
+                    }
+                };
+            }
+        }
+    })();
+
+    if let Some(handle) = process_handle {
+        let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
+    }
+    if com_initialized {
+        unsafe { CoUninitialize() };
+    }
+
+    match reason {
+        Ok(value) => CaptureOutcome::from_reason(value),
+        Err(error) => {
+            eprintln!(
+                "[capture-sidecar] capture error targetId={} targetPid={}: {}",
+                target_id, target_pid, error
+            );
+            CaptureOutcome::capture_error(error)
+        }
+    }
 }

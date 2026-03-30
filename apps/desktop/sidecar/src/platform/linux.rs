@@ -2,12 +2,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::{
+    ffi::{c_void, CString},
+    net::TcpStream,
+    sync::Mutex,
+};
 
 use x11_dl::xlib;
 
 use crate::{
-    enqueue_push_keybind_state_event, AudioTarget, FrameQueue, PushKeybindKind,
-    PushKeybindWatcher,
+    enqueue_push_keybind_state_event, AudioTarget, CaptureEndReason, CaptureOutcome, FrameQueue,
+    PaSampleSpec, PushKeybindKind, PushKeybindWatcher, APP_AUDIO_CHANNELS, APP_AUDIO_FRAME_BYTES,
+    PA_SAMPLE_FLOAT32LE, PA_STREAM_RECORD,
 };
 
 use super::PushKeybindRegistration;
@@ -369,4 +375,119 @@ pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {
 
 pub(crate) fn resolve_source_to_pid(_source_id: &str) -> Option<u32> {
     None
+}
+
+pub(crate) fn capture_loopback_audio(
+    session_id: &str,
+    _source_id: Option<&str>,
+    _target_id: &str,
+    target_pid: u32,
+    self_exclude_pid: Option<u32>,
+    stop_flag: Arc<AtomicBool>,
+    frame_queue: Arc<FrameQueue>,
+    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
+) -> CaptureOutcome {
+    let _ = self_exclude_pid;
+    let capture_source = match crate::linux_pulse_capture_source_for_target(if target_pid == 0 {
+        "loopback"
+    } else {
+        _target_id
+    }) {
+        Ok(capture_source) => capture_source,
+        Err(error) => return CaptureOutcome::capture_error(error),
+    };
+
+    let lib = match crate::linux_pulse_lib() {
+        Ok(lib) => lib,
+        Err(error) => return CaptureOutcome::capture_error(error),
+    };
+
+    let app_name = CString::new("Sharkord Capture Sidecar")
+        .unwrap_or_else(|_| CString::new("Sharkord").unwrap());
+    let stream_name = CString::new("Sharkord App Audio Capture")
+        .unwrap_or_else(|_| CString::new("Capture").unwrap());
+    let source_name = match CString::new(capture_source.monitor_source_name.clone()) {
+        Ok(source_name) => source_name,
+        Err(error) => {
+            return CaptureOutcome::capture_error(format!(
+                "Invalid Linux monitor source name: {error}"
+            ))
+        }
+    };
+
+    let sample_spec = PaSampleSpec {
+        format: PA_SAMPLE_FLOAT32LE,
+        rate: crate::APP_AUDIO_SAMPLE_RATE,
+        channels: APP_AUDIO_CHANNELS as u8,
+    };
+    let mut error_code = 0;
+    let simple = unsafe {
+        (lib.pa_simple_new)(
+            std::ptr::null(),
+            app_name.as_ptr(),
+            PA_STREAM_RECORD,
+            source_name.as_ptr(),
+            stream_name.as_ptr(),
+            &sample_spec,
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut error_code,
+        )
+    };
+
+    if simple.is_null() {
+        return CaptureOutcome::capture_error(format!(
+            "Failed to start Linux audio capture: {}",
+            crate::linux_pulse_strerror(lib, error_code)
+        ));
+    }
+
+    let mut sequence: u64 = 0;
+    let mut frame_bytes = vec![0u8; APP_AUDIO_FRAME_BYTES];
+
+    loop {
+        if stop_flag.load(Ordering::Relaxed) {
+            unsafe { (lib.pa_simple_free)(simple) };
+            return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
+        }
+
+        if unsafe {
+            (lib.pa_simple_read)(
+                simple,
+                frame_bytes.as_mut_ptr().cast::<c_void>(),
+                frame_bytes.len(),
+                &mut error_code,
+            )
+        } < 0
+        {
+            unsafe { (lib.pa_simple_free)(simple) };
+            return CaptureOutcome::capture_error(format!(
+                "Failed reading Linux audio frames: {}",
+                crate::linux_pulse_strerror(lib, error_code)
+            ));
+        }
+
+        let mut frame_samples = frame_bytes
+            .chunks_exact(4)
+            .map(|sample_bytes| {
+                f32::from_le_bytes([
+                    sample_bytes[0],
+                    sample_bytes[1],
+                    sample_bytes[2],
+                    sample_bytes[3],
+                ])
+            })
+            .collect::<Vec<f32>>();
+        crate::clamp_audio_samples(&mut frame_samples);
+
+        crate::emit_linux_audio_frame(
+            session_id,
+            &capture_source.target_id,
+            sequence,
+            &frame_samples,
+            &frame_queue,
+            &app_audio_binary_stream,
+        );
+        sequence = sequence.saturating_add(1);
+    }
 }

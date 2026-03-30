@@ -1,6 +1,8 @@
-use std::sync::Arc;
+use std::net::TcpStream;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
-use crate::{AudioTarget, FrameQueue, PushKeybindWatcher};
+use crate::{AudioTarget, CaptureOutcome, FrameQueue, PushKeybindWatcher};
 
 pub(crate) struct PushKeybindRegistration {
     pub(crate) talk_registered: bool,
@@ -101,4 +103,89 @@ pub(crate) fn resolve_source_to_pid(source_id: &str) -> Option<u32> {
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub(crate) fn resolve_source_to_pid(_source_id: &str) -> Option<u32> {
     None
+}
+
+#[cfg(windows)]
+pub(crate) fn capture_loopback_audio(
+    session_id: &str,
+    source_id: Option<&str>,
+    target_id: &str,
+    target_pid: u32,
+    self_exclude_pid: Option<u32>,
+    stop_flag: Arc<AtomicBool>,
+    frame_queue: Arc<FrameQueue>,
+    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
+) -> CaptureOutcome {
+    windows::capture_loopback_audio(
+        session_id,
+        source_id,
+        target_id,
+        target_pid,
+        self_exclude_pid,
+        stop_flag,
+        frame_queue,
+        app_audio_binary_stream,
+    )
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn capture_loopback_audio(
+    session_id: &str,
+    source_id: Option<&str>,
+    target_id: &str,
+    target_pid: u32,
+    self_exclude_pid: Option<u32>,
+    stop_flag: Arc<AtomicBool>,
+    frame_queue: Arc<FrameQueue>,
+    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
+) -> CaptureOutcome {
+    macos::capture_loopback_audio(
+        session_id,
+        source_id,
+        target_id,
+        target_pid,
+        self_exclude_pid,
+        stop_flag,
+        frame_queue,
+        app_audio_binary_stream,
+    )
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn capture_loopback_audio(
+    session_id: &str,
+    source_id: Option<&str>,
+    target_id: &str,
+    target_pid: u32,
+    self_exclude_pid: Option<u32>,
+    stop_flag: Arc<AtomicBool>,
+    frame_queue: Arc<FrameQueue>,
+    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
+) -> CaptureOutcome {
+    linux::capture_loopback_audio(
+        session_id,
+        source_id,
+        target_id,
+        target_pid,
+        self_exclude_pid,
+        stop_flag,
+        frame_queue,
+        app_audio_binary_stream,
+    )
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+pub(crate) fn capture_loopback_audio(
+    _session_id: &str,
+    _source_id: Option<&str>,
+    _target_id: &str,
+    _target_pid: u32,
+    _self_exclude_pid: Option<u32>,
+    _stop_flag: Arc<AtomicBool>,
+    _frame_queue: Arc<FrameQueue>,
+    _app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
+) -> CaptureOutcome {
+    CaptureOutcome::capture_error(
+        "Per-app audio capture is only available on Windows, macOS, and Linux.".to_string(),
+    )
 }

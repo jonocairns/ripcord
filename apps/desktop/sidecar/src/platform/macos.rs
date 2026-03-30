@@ -1,12 +1,23 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
+use std::{
+    io::{self, Read},
+    net::TcpStream,
+    process::{Command, Stdio},
+};
 
 use crate::{
-    enqueue_push_keybind_state_event, AudioTarget, AudioTargetListResponse, FrameQueue,
-    PushKeybindKind, PushKeybindWatcher, ResolveSourceResult,
+    enqueue_frame_event, enqueue_push_keybind_state_event, AudioTarget, AudioTargetListResponse,
+    CaptureEndReason, CaptureOutcome, FrameQueue, PushKeybindKind, PushKeybindWatcher,
+    ResolveSourceResult, APP_AUDIO_CHANNELS, APP_AUDIO_SAMPLE_RATE,
+    MAX_APP_AUDIO_BINARY_FRAME_BYTES, PROTOCOL_VERSION,
 };
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 
 use super::PushKeybindRegistration;
 
@@ -338,7 +349,8 @@ pub(crate) fn register_push_keybinds(
 
 pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {
     match crate::run_macos_helper_command(&["list-targets"]).and_then(|output| {
-        serde_json::from_slice::<AudioTargetListResponse>(&output).map_err(|error| error.to_string())
+        serde_json::from_slice::<AudioTargetListResponse>(&output)
+            .map_err(|error| error.to_string())
     }) {
         Ok(response) => response.targets,
         Err(error) => {
@@ -349,7 +361,268 @@ pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {
 }
 
 pub(crate) fn resolve_source_to_pid(source_id: &str) -> Option<u32> {
-    let output = crate::run_macos_helper_command(&["resolve-source", "--source-id", source_id]).ok()?;
+    let output =
+        crate::run_macos_helper_command(&["resolve-source", "--source-id", source_id]).ok()?;
     let response = serde_json::from_slice::<ResolveSourceResult>(&output).ok()?;
     response.pid
+}
+
+pub(crate) fn capture_loopback_audio(
+    session_id: &str,
+    source_id: Option<&str>,
+    target_id: &str,
+    target_pid: u32,
+    self_exclude_pid: Option<u32>,
+    stop_flag: Arc<AtomicBool>,
+    frame_queue: Arc<FrameQueue>,
+    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
+) -> CaptureOutcome {
+    let helper_path = match crate::resolve_macos_helper_path() {
+        Ok(helper_path) => helper_path,
+        Err(error) => return CaptureOutcome::capture_error(error),
+    };
+
+    let mut capture_command = Command::new(helper_path);
+    capture_command.arg("capture");
+    if let Some(source_id) = source_id {
+        capture_command.arg("--source-id").arg(source_id);
+    }
+
+    if let Some(exclude_pid) = self_exclude_pid {
+        capture_command
+            .arg("--exclude-pid")
+            .arg(exclude_pid.to_string());
+    } else {
+        capture_command
+            .arg("--target-pid")
+            .arg(target_pid.to_string());
+    }
+
+    let mut child = match capture_command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return CaptureOutcome::capture_error(format!(
+                "Failed to launch macOS audio helper: {error}"
+            ))
+        }
+    };
+
+    let Some(stdout_pipe) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return CaptureOutcome::capture_error(
+            "macOS audio helper did not expose stdout.".to_string(),
+        );
+    };
+
+    let stderr_slot = Arc::new(Mutex::new(String::new()));
+    let stderr_slot_for_thread = Arc::clone(&stderr_slot);
+    let stderr_thread = child.stderr.take().map(|stderr_pipe| {
+        thread::spawn(move || {
+            let mut stderr_reader = io::BufReader::new(stderr_pipe);
+            let mut stderr_output = String::new();
+            let _ = stderr_reader.read_to_string(&mut stderr_output);
+            if let Ok(mut stderr_lock) = stderr_slot_for_thread.lock() {
+                *stderr_lock = stderr_output;
+            }
+        })
+    });
+
+    let (frame_sender, frame_receiver) = mpsc::channel::<Result<Vec<f32>, String>>();
+    let stdout_thread = thread::spawn(move || {
+        let mut stdout_reader = io::BufReader::new(stdout_pipe);
+
+        loop {
+            let mut packet_length_bytes = [0u8; 4];
+            match stdout_reader.read_exact(&mut packet_length_bytes) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(error) => {
+                    let _ = frame_sender.send(Err(format!(
+                        "Failed reading macOS audio packet header: {error}"
+                    )));
+                    return;
+                }
+            }
+
+            let packet_length = u32::from_le_bytes(packet_length_bytes) as usize;
+            if packet_length == 0
+                || packet_length > MAX_APP_AUDIO_BINARY_FRAME_BYTES
+                || packet_length % std::mem::size_of::<f32>() != 0
+            {
+                let _ = frame_sender.send(Err(
+                    "Received malformed packet from macOS audio helper.".to_string(),
+                ));
+                return;
+            }
+
+            let mut payload = vec![0u8; packet_length];
+            if let Err(error) = stdout_reader.read_exact(&mut payload) {
+                let _ = frame_sender.send(Err(format!(
+                    "Failed reading macOS audio packet payload: {error}"
+                )));
+                return;
+            }
+
+            let mut frame_samples = Vec::with_capacity(packet_length / std::mem::size_of::<f32>());
+            for sample_bytes in payload.chunks_exact(std::mem::size_of::<f32>()) {
+                frame_samples.push(f32::from_le_bytes([
+                    sample_bytes[0],
+                    sample_bytes[1],
+                    sample_bytes[2],
+                    sample_bytes[3],
+                ]));
+            }
+
+            if frame_sender.send(Ok(frame_samples)).is_err() {
+                return;
+            }
+        }
+    });
+
+    let mut sequence: u64 = 0;
+
+    loop {
+        if stop_flag.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_thread.join();
+            if let Some(stderr_thread) = stderr_thread {
+                let _ = stderr_thread.join();
+            }
+            return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
+        }
+
+        match frame_receiver.recv_timeout(Duration::from_millis(50)) {
+            Ok(Ok(frame_samples)) => {
+                let frame_count = frame_samples.len() / APP_AUDIO_CHANNELS;
+                if frame_count == 0 || frame_count * APP_AUDIO_CHANNELS != frame_samples.len() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_thread.join();
+                    if let Some(stderr_thread) = stderr_thread {
+                        let _ = stderr_thread.join();
+                    }
+                    return CaptureOutcome::capture_error(
+                        "Received malformed PCM frame from macOS audio helper.".to_string(),
+                    );
+                }
+
+                let wrote_binary = app_audio_binary_stream
+                    .as_ref()
+                    .map(|stream_slot| {
+                        crate::try_write_app_audio_binary_frame(
+                            stream_slot,
+                            session_id,
+                            target_id,
+                            sequence,
+                            APP_AUDIO_SAMPLE_RATE as usize,
+                            APP_AUDIO_CHANNELS,
+                            frame_count,
+                            PROTOCOL_VERSION,
+                            0,
+                            &frame_samples,
+                        )
+                    })
+                    .unwrap_or(false);
+
+                if !wrote_binary {
+                    let frame_bytes = bytemuck::cast_slice(&frame_samples);
+                    let pcm_base64 = BASE64.encode(frame_bytes);
+
+                    enqueue_frame_event(
+                        &frame_queue,
+                        session_id,
+                        target_id,
+                        sequence,
+                        APP_AUDIO_SAMPLE_RATE as usize,
+                        frame_count,
+                        pcm_base64,
+                    );
+                }
+
+                sequence = sequence.saturating_add(1);
+            }
+            Ok(Err(error)) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_thread.join();
+                if let Some(stderr_thread) = stderr_thread {
+                    let _ = stderr_thread.join();
+                }
+                return CaptureOutcome::capture_error(error);
+            }
+            Err(RecvTimeoutError::Timeout) => match child.try_wait() {
+                Ok(Some(status)) => {
+                    let _ = stdout_thread.join();
+                    if let Some(stderr_thread) = stderr_thread {
+                        let _ = stderr_thread.join();
+                    }
+
+                    if stop_flag.load(Ordering::Relaxed) {
+                        return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
+                    }
+
+                    let stderr_output = stderr_slot
+                        .lock()
+                        .ok()
+                        .map(|stderr_lock| stderr_lock.trim().to_string())
+                        .filter(|stderr_output| !stderr_output.is_empty());
+                    let error_message = stderr_output.unwrap_or_else(|| {
+                        format!("macOS audio helper exited unexpectedly (status={status}).")
+                    });
+
+                    return CaptureOutcome::capture_error(error_message);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_thread.join();
+                    if let Some(stderr_thread) = stderr_thread {
+                        let _ = stderr_thread.join();
+                    }
+                    return CaptureOutcome::capture_error(format!(
+                        "Failed waiting on macOS audio helper: {error}"
+                    ));
+                }
+            },
+            Err(RecvTimeoutError::Disconnected) => match child.wait() {
+                Ok(status) => {
+                    let _ = stdout_thread.join();
+                    if let Some(stderr_thread) = stderr_thread {
+                        let _ = stderr_thread.join();
+                    }
+
+                    if stop_flag.load(Ordering::Relaxed) {
+                        return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
+                    }
+
+                    let stderr_output = stderr_slot
+                        .lock()
+                        .ok()
+                        .map(|stderr_lock| stderr_lock.trim().to_string())
+                        .filter(|stderr_output| !stderr_output.is_empty());
+                    let error_message = stderr_output.unwrap_or_else(|| {
+                        format!("macOS audio helper exited unexpectedly (status={status}).")
+                    });
+
+                    return CaptureOutcome::capture_error(error_message);
+                }
+                Err(error) => {
+                    let _ = stdout_thread.join();
+                    if let Some(stderr_thread) = stderr_thread {
+                        let _ = stderr_thread.join();
+                    }
+                    return CaptureOutcome::capture_error(format!(
+                        "Failed waiting on macOS audio helper: {error}"
+                    ));
+                }
+            },
+        }
+    }
 }

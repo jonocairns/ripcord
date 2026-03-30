@@ -74,18 +74,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
 #[cfg(windows)]
 use windows_core::implement;
 
-const PROTOCOL_VERSION: u32 = 1;
-const PCM_ENCODING: &str = "f32le_base64";
+pub(crate) const PROTOCOL_VERSION: u32 = 1;
+pub(crate) const PCM_ENCODING: &str = "f32le_base64";
 const APP_AUDIO_BINARY_EGRESS_FRAMING: &str = "length_prefixed_f32le_v1";
-const APP_AUDIO_FRAME_SIZE: usize = 960;
-const APP_AUDIO_SAMPLE_RATE: u32 = 48_000;
-const APP_AUDIO_CHANNELS: usize = 1;
+pub(crate) const APP_AUDIO_FRAME_SIZE: usize = 960;
+pub(crate) const APP_AUDIO_SAMPLE_RATE: u32 = 48_000;
+pub(crate) const APP_AUDIO_CHANNELS: usize = 1;
 #[cfg(target_os = "linux")]
-const APP_AUDIO_FRAME_BYTES: usize = APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS * 4;
+pub(crate) const APP_AUDIO_FRAME_BYTES: usize = APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS * 4;
 #[allow(dead_code)]
-const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
 #[cfg(target_os = "macos")]
-const MACOS_HELPER_BINARY_NAME: &str = "sharkord-capture-sidecar-macos-helper";
+pub(crate) const MACOS_HELPER_BINARY_NAME: &str = "sharkord-capture-sidecar-macos-helper";
 
 #[derive(Debug, Deserialize)]
 struct SidecarRequest {
@@ -174,7 +174,7 @@ struct SetPushKeybindsParams {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum CaptureEndReason {
+pub(crate) enum CaptureEndReason {
     CaptureStopped,
     #[cfg(windows)]
     AppExited,
@@ -197,20 +197,20 @@ impl CaptureEndReason {
 }
 
 #[derive(Debug)]
-struct CaptureOutcome {
+pub(crate) struct CaptureOutcome {
     reason: CaptureEndReason,
     error: Option<String>,
 }
 
 impl CaptureOutcome {
-    fn from_reason(reason: CaptureEndReason) -> Self {
+    pub(crate) fn from_reason(reason: CaptureEndReason) -> Self {
         Self {
             reason,
             error: None,
         }
     }
 
-    fn capture_error(error: String) -> Self {
+    pub(crate) fn capture_error(error: String) -> Self {
         Self {
             reason: CaptureEndReason::CaptureError,
             error: Some(error),
@@ -279,7 +279,7 @@ struct LinuxPulseAudioSnapshot {
 }
 
 #[cfg(target_os = "linux")]
-struct LinuxPulseCaptureSource {
+pub(crate) struct LinuxPulseCaptureSource {
     monitor_source_name: String,
     target_id: String,
 }
@@ -431,7 +431,7 @@ struct PaSimple {
 #[cfg(target_os = "linux")]
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct PaSampleSpec {
+pub(crate) struct PaSampleSpec {
     format: i32,
     rate: u32,
     channels: u8,
@@ -536,9 +536,9 @@ const PA_CONTEXT_TERMINATED: i32 = 6;
 #[cfg(target_os = "linux")]
 const PA_OPERATION_RUNNING: i32 = 0;
 #[cfg(target_os = "linux")]
-const PA_SAMPLE_FLOAT32LE: i32 = 5;
+pub(crate) const PA_SAMPLE_FLOAT32LE: i32 = 5;
 #[cfg(target_os = "linux")]
-const PA_STREAM_RECORD: i32 = 2;
+pub(crate) const PA_STREAM_RECORD: i32 = 2;
 #[cfg(target_os = "linux")]
 const PA_CONTEXT_NOFLAGS: i32 = 0;
 #[cfg(target_os = "linux")]
@@ -740,7 +740,7 @@ fn start_frame_writer(stdout: Arc<Mutex<io::Stdout>>, queue: Arc<FrameQueue>) ->
 }
 
 #[cfg(any(windows, target_os = "linux"))]
-fn enqueue_frame_event(
+pub(crate) fn enqueue_frame_event(
     queue: &Arc<FrameQueue>,
     session_id: &str,
     target_id: &str,
@@ -776,7 +776,7 @@ fn enqueue_frame_event(
 }
 
 #[cfg(any(windows, target_os = "linux"))]
-fn try_write_app_audio_binary_frame(
+pub(crate) fn try_write_app_audio_binary_frame(
     stream_slot: &Arc<Mutex<Option<TcpStream>>>,
     session_id: &str,
     target_id: &str,
@@ -1062,7 +1062,7 @@ unsafe fn linux_load_symbol<T: Copy>(handle: *mut c_void, symbol_name: &CStr) ->
 }
 
 #[cfg(target_os = "linux")]
-fn linux_pulse_lib() -> Result<&'static LinuxPulseLib, String> {
+pub(crate) fn linux_pulse_lib() -> Result<&'static LinuxPulseLib, String> {
     let result = LINUX_PULSE_LIB.get_or_init(|| {
         let pulse_handle = linux_dlopen_any(&LINUX_PULSEAUDIO_LIBRARY_NAMES)?;
         let pulse_simple_handle = linux_dlopen_any(&LINUX_PULSEAUDIO_SIMPLE_LIBRARY_NAMES)?;
@@ -1185,7 +1185,7 @@ fn linux_pulse_lib() -> Result<&'static LinuxPulseLib, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_pulse_strerror(lib: &LinuxPulseLib, error_code: i32) -> String {
+pub(crate) fn linux_pulse_strerror(lib: &LinuxPulseLib, error_code: i32) -> String {
     linux_cstr_to_string(unsafe { (lib.pa_strerror)(error_code) })
         .unwrap_or_else(|| format!("PulseAudio error {error_code}"))
 }
@@ -1858,7 +1858,7 @@ fn linux_default_pulse_capture_source(
 }
 
 #[cfg(target_os = "linux")]
-fn linux_pulse_capture_source_for_target(
+pub(crate) fn linux_pulse_capture_source_for_target(
     target_id: &str,
 ) -> Result<LinuxPulseCaptureSource, String> {
     if target_id == "loopback" {
@@ -1888,7 +1888,7 @@ fn clamp_audio_samples(frame_samples: &mut [f32]) {
 }
 
 #[cfg(target_os = "linux")]
-fn emit_linux_audio_frame(
+pub(crate) fn emit_linux_audio_frame(
     session_id: &str,
     target_id: &str,
     sequence: u64,
@@ -1931,7 +1931,7 @@ fn emit_linux_audio_frame(
 }
 
 #[cfg(target_os = "macos")]
-fn resolve_macos_helper_path() -> Result<std::path::PathBuf, String> {
+pub(crate) fn resolve_macos_helper_path() -> Result<std::path::PathBuf, String> {
     let current_exe = std::env::current_exe()
         .map_err(|error| format!("Failed to locate sidecar executable: {error}"))?;
     let executable_dir = current_exe
@@ -1970,12 +1970,12 @@ pub(crate) fn run_macos_helper_command(arguments: &[&str]) -> Result<Vec<u8>, St
 }
 
 #[cfg(windows)]
-fn process_is_alive(process_handle: HANDLE) -> bool {
+pub(crate) fn process_is_alive(process_handle: HANDLE) -> bool {
     unsafe { WaitForSingleObject(process_handle, 0) == WAIT_TIMEOUT }
 }
 
 #[cfg(windows)]
-fn open_process_for_liveness(pid: u32) -> Option<HANDLE> {
+pub(crate) fn open_process_for_liveness(pid: u32) -> Option<HANDLE> {
     unsafe {
         OpenProcess(
             PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
@@ -2017,7 +2017,7 @@ impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
 }
 
 #[cfg(windows)]
-fn activate_process_loopback_client(
+pub(crate) fn activate_process_loopback_client(
     pid: u32,
     mode: PROCESS_LOOPBACK_MODE,
 ) -> Result<IAudioClient, String> {
@@ -2102,608 +2102,6 @@ fn activate_process_loopback_client(
         .map_err(|error| format!("Activated interface is not IAudioClient: {error}"))
 }
 
-#[cfg(windows)]
-fn capture_loopback_audio(
-    session_id: &str,
-    _source_id: Option<&str>,
-    target_id: &str,
-    target_pid: u32,
-    self_exclude_pid: Option<u32>,
-    stop_flag: Arc<AtomicBool>,
-    frame_queue: Arc<FrameQueue>,
-    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
-) -> CaptureOutcome {
-    let process_handle = if self_exclude_pid.is_none() {
-        match open_process_for_liveness(target_pid) {
-            Some(handle) => Some(handle),
-            None => return CaptureOutcome::from_reason(CaptureEndReason::AppExited),
-        }
-    } else {
-        None
-    };
-
-    let com_initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
-
-    let reason = (|| {
-        let (activation_pid, activation_mode) = match self_exclude_pid {
-            Some(exclude_pid) => (
-                exclude_pid,
-                PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
-            ),
-            None => (
-                target_pid,
-                PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
-            ),
-        };
-        let audio_client = activate_process_loopback_client(activation_pid, activation_mode)?;
-        let capture_format = WAVEFORMATEX {
-            wFormatTag: 0x0003, // WAVE_FORMAT_IEEE_FLOAT
-            nChannels: APP_AUDIO_CHANNELS as u16,
-            nSamplesPerSec: APP_AUDIO_SAMPLE_RATE,
-            nAvgBytesPerSec: APP_AUDIO_SAMPLE_RATE * APP_AUDIO_CHANNELS as u32 * 4,
-            nBlockAlign: (APP_AUDIO_CHANNELS * 4) as u16,
-            wBitsPerSample: 32,
-            cbSize: 0,
-        };
-
-        let init_result = unsafe {
-            audio_client.Initialize(
-                AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_LOOPBACK
-                    | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
-                    | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-                20 * 10_000,
-                0,
-                &capture_format,
-                None,
-            )
-        };
-
-        if let Err(error) = init_result {
-            if error.code() == AUDCLNT_E_INVALID_STREAM_FLAG {
-                return Err(format!(
-                    "Failed to initialize loopback client: {error} (invalid stream flags for process loopback)"
-                ));
-            }
-            return Err(format!("Failed to initialize loopback client: {error}"));
-        }
-
-        let capture_client: IAudioCaptureClient = unsafe {
-            audio_client
-                .GetService()
-                .map_err(|error| format!("Failed to get IAudioCaptureClient: {error}"))?
-        };
-
-        if let Err(error) = unsafe { audio_client.Start() } {
-            return Err(format!("Failed to start audio client: {error}"));
-        }
-
-        let mut pending = Vec::<f32>::new();
-        let mut sequence: u64 = 0;
-        let mut last_liveness_check = Instant::now();
-
-        loop {
-            if stop_flag.load(Ordering::Relaxed) {
-                let _ = unsafe { audio_client.Stop() };
-                return Ok(CaptureEndReason::CaptureStopped);
-            }
-
-            if last_liveness_check.elapsed() >= Duration::from_millis(300) {
-                if let Some(handle) = process_handle {
-                    if !process_is_alive(handle) {
-                        let _ = unsafe { audio_client.Stop() };
-                        return Ok(CaptureEndReason::AppExited);
-                    }
-                }
-
-                last_liveness_check = Instant::now();
-            }
-
-            let mut packet_size = match unsafe { capture_client.GetNextPacketSize() } {
-                Ok(size) => size,
-                Err(_) => {
-                    let _ = unsafe { audio_client.Stop() };
-                    return Ok(CaptureEndReason::DeviceLost);
-                }
-            };
-
-            if packet_size == 0 {
-                thread::sleep(Duration::from_millis(4));
-                continue;
-            }
-
-            while packet_size > 0 {
-                let mut data_ptr: *mut u8 = ptr::null_mut();
-                let mut frame_count = 0u32;
-                let mut flags = 0u32;
-
-                if unsafe {
-                    capture_client.GetBuffer(
-                        &mut data_ptr,
-                        &mut frame_count,
-                        &mut flags,
-                        None,
-                        None,
-                    )
-                }
-                .is_err()
-                {
-                    let _ = unsafe { audio_client.Stop() };
-                    return Ok(CaptureEndReason::CaptureError);
-                }
-
-                let chunk = if (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0 {
-                    vec![0.0f32; frame_count as usize * APP_AUDIO_CHANNELS]
-                } else {
-                    let sample_count = frame_count as usize * APP_AUDIO_CHANNELS;
-                    unsafe { std::slice::from_raw_parts(data_ptr as *const f32, sample_count) }
-                        .to_vec()
-                };
-
-                pending.extend_from_slice(&chunk);
-
-                let _ = unsafe { capture_client.ReleaseBuffer(frame_count) };
-
-                while pending.len() >= APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS {
-                    let frame_samples: Vec<f32> = pending
-                        .drain(..APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS)
-                        .collect();
-                    let wrote_binary = app_audio_binary_stream
-                        .as_ref()
-                        .map(|stream_slot| {
-                            try_write_app_audio_binary_frame(
-                                stream_slot,
-                                session_id,
-                                target_id,
-                                sequence,
-                                APP_AUDIO_SAMPLE_RATE as usize,
-                                APP_AUDIO_CHANNELS,
-                                APP_AUDIO_FRAME_SIZE,
-                                PROTOCOL_VERSION,
-                                0,
-                                &frame_samples,
-                            )
-                        })
-                        .unwrap_or(false);
-
-                    if !wrote_binary {
-                        let frame_bytes = bytemuck::cast_slice(&frame_samples);
-                        let pcm_base64 = BASE64.encode(frame_bytes);
-
-                        enqueue_frame_event(
-                            &frame_queue,
-                            session_id,
-                            target_id,
-                            sequence,
-                            APP_AUDIO_SAMPLE_RATE as usize,
-                            APP_AUDIO_FRAME_SIZE,
-                            pcm_base64,
-                        );
-                    }
-
-                    sequence = sequence.saturating_add(1);
-                }
-
-                packet_size = match unsafe { capture_client.GetNextPacketSize() } {
-                    Ok(size) => size,
-                    Err(_) => {
-                        let _ = unsafe { audio_client.Stop() };
-                        return Ok(CaptureEndReason::DeviceLost);
-                    }
-                };
-            }
-        }
-    })();
-
-    if let Some(handle) = process_handle {
-        let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
-    }
-    if com_initialized {
-        unsafe { CoUninitialize() };
-    }
-
-    match reason {
-        Ok(value) => CaptureOutcome::from_reason(value),
-        Err(error) => {
-            eprintln!(
-                "[capture-sidecar] capture error targetId={} targetPid={}: {}",
-                target_id, target_pid, error
-            );
-            CaptureOutcome::capture_error(error)
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn capture_loopback_audio(
-    session_id: &str,
-    _source_id: Option<&str>,
-    target_id: &str,
-    _target_pid: u32,
-    self_exclude_pid: Option<u32>,
-    stop_flag: Arc<AtomicBool>,
-    frame_queue: Arc<FrameQueue>,
-    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
-) -> CaptureOutcome {
-    let _ = self_exclude_pid;
-
-    let capture_source = match linux_pulse_capture_source_for_target(target_id) {
-        Ok(capture_source) => capture_source,
-        Err(error) => return CaptureOutcome::capture_error(error),
-    };
-
-    let lib = match linux_pulse_lib() {
-        Ok(lib) => lib,
-        Err(error) => return CaptureOutcome::capture_error(error),
-    };
-
-    let app_name = CString::new("Sharkord Capture Sidecar")
-        .unwrap_or_else(|_| CString::new("Sharkord").unwrap());
-    let stream_name = CString::new("Sharkord App Audio Capture")
-        .unwrap_or_else(|_| CString::new("Capture").unwrap());
-    let source_name = match CString::new(capture_source.monitor_source_name.clone()) {
-        Ok(source_name) => source_name,
-        Err(error) => {
-            return CaptureOutcome::capture_error(format!(
-                "Invalid Linux monitor source name: {error}"
-            ))
-        }
-    };
-
-    let sample_spec = PaSampleSpec {
-        format: PA_SAMPLE_FLOAT32LE,
-        rate: APP_AUDIO_SAMPLE_RATE,
-        channels: APP_AUDIO_CHANNELS as u8,
-    };
-    let mut error_code = 0;
-    let simple = unsafe {
-        (lib.pa_simple_new)(
-            std::ptr::null(),
-            app_name.as_ptr(),
-            PA_STREAM_RECORD,
-            source_name.as_ptr(),
-            stream_name.as_ptr(),
-            &sample_spec,
-            std::ptr::null(),
-            std::ptr::null(),
-            &mut error_code,
-        )
-    };
-
-    if simple.is_null() {
-        return CaptureOutcome::capture_error(format!(
-            "Failed to start Linux audio capture: {}",
-            linux_pulse_strerror(lib, error_code)
-        ));
-    }
-
-    let mut sequence: u64 = 0;
-    let mut frame_bytes = vec![0u8; APP_AUDIO_FRAME_BYTES];
-
-    loop {
-        if stop_flag.load(Ordering::Relaxed) {
-            unsafe { (lib.pa_simple_free)(simple) };
-            return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
-        }
-
-        if unsafe {
-            (lib.pa_simple_read)(
-                simple,
-                frame_bytes.as_mut_ptr().cast::<c_void>(),
-                frame_bytes.len(),
-                &mut error_code,
-            )
-        } < 0
-        {
-            unsafe { (lib.pa_simple_free)(simple) };
-            return CaptureOutcome::capture_error(format!(
-                "Failed reading Linux audio frames: {}",
-                linux_pulse_strerror(lib, error_code)
-            ));
-        }
-
-        let mut frame_samples = frame_bytes
-            .chunks_exact(4)
-            .map(|sample_bytes| {
-                f32::from_le_bytes([
-                    sample_bytes[0],
-                    sample_bytes[1],
-                    sample_bytes[2],
-                    sample_bytes[3],
-                ])
-            })
-            .collect::<Vec<f32>>();
-        clamp_audio_samples(&mut frame_samples);
-
-        emit_linux_audio_frame(
-            session_id,
-            &capture_source.target_id,
-            sequence,
-            &frame_samples,
-            &frame_queue,
-            &app_audio_binary_stream,
-        );
-        sequence = sequence.saturating_add(1);
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn capture_loopback_audio(
-    session_id: &str,
-    source_id: Option<&str>,
-    target_id: &str,
-    target_pid: u32,
-    self_exclude_pid: Option<u32>,
-    stop_flag: Arc<AtomicBool>,
-    frame_queue: Arc<FrameQueue>,
-    app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
-) -> CaptureOutcome {
-    let helper_path = match resolve_macos_helper_path() {
-        Ok(helper_path) => helper_path,
-        Err(error) => return CaptureOutcome::capture_error(error),
-    };
-
-    let mut capture_command = Command::new(helper_path);
-    capture_command.arg("capture");
-    if let Some(source_id) = source_id {
-        capture_command.arg("--source-id").arg(source_id);
-    }
-
-    if let Some(exclude_pid) = self_exclude_pid {
-        capture_command
-            .arg("--exclude-pid")
-            .arg(exclude_pid.to_string());
-    } else {
-        capture_command
-            .arg("--target-pid")
-            .arg(target_pid.to_string());
-    }
-
-    let mut child = match capture_command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(error) => {
-            return CaptureOutcome::capture_error(format!(
-                "Failed to launch macOS audio helper: {error}"
-            ))
-        }
-    };
-
-    let Some(stdout_pipe) = child.stdout.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return CaptureOutcome::capture_error(
-            "macOS audio helper did not expose stdout.".to_string(),
-        );
-    };
-
-    let stderr_slot = Arc::new(Mutex::new(String::new()));
-    let stderr_slot_for_thread = Arc::clone(&stderr_slot);
-    let stderr_thread = child.stderr.take().map(|stderr_pipe| {
-        thread::spawn(move || {
-            let mut stderr_reader = io::BufReader::new(stderr_pipe);
-            let mut stderr_output = String::new();
-            let _ = stderr_reader.read_to_string(&mut stderr_output);
-            if let Ok(mut stderr_lock) = stderr_slot_for_thread.lock() {
-                *stderr_lock = stderr_output;
-            }
-        })
-    });
-
-    let (frame_sender, frame_receiver) = mpsc::channel::<Result<Vec<f32>, String>>();
-    let stdout_thread = thread::spawn(move || {
-        let mut stdout_reader = io::BufReader::new(stdout_pipe);
-
-        loop {
-            let mut packet_length_bytes = [0u8; 4];
-            match stdout_reader.read_exact(&mut packet_length_bytes) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
-                Err(error) => {
-                    let _ = frame_sender.send(Err(format!(
-                        "Failed reading macOS audio packet header: {error}"
-                    )));
-                    return;
-                }
-            }
-
-            let packet_length = u32::from_le_bytes(packet_length_bytes) as usize;
-            if packet_length == 0
-                || packet_length > MAX_APP_AUDIO_BINARY_FRAME_BYTES
-                || packet_length % std::mem::size_of::<f32>() != 0
-            {
-                let _ = frame_sender.send(Err(
-                    "Received malformed packet from macOS audio helper.".to_string(),
-                ));
-                return;
-            }
-
-            let mut payload = vec![0u8; packet_length];
-            if let Err(error) = stdout_reader.read_exact(&mut payload) {
-                let _ = frame_sender.send(Err(format!(
-                    "Failed reading macOS audio packet payload: {error}"
-                )));
-                return;
-            }
-
-            let mut frame_samples = Vec::with_capacity(packet_length / std::mem::size_of::<f32>());
-            for sample_bytes in payload.chunks_exact(std::mem::size_of::<f32>()) {
-                frame_samples.push(f32::from_le_bytes([
-                    sample_bytes[0],
-                    sample_bytes[1],
-                    sample_bytes[2],
-                    sample_bytes[3],
-                ]));
-            }
-
-            if frame_sender.send(Ok(frame_samples)).is_err() {
-                return;
-            }
-        }
-    });
-
-    let mut sequence: u64 = 0;
-
-    loop {
-        if stop_flag.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = stdout_thread.join();
-            if let Some(stderr_thread) = stderr_thread {
-                let _ = stderr_thread.join();
-            }
-            return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
-        }
-
-        match frame_receiver.recv_timeout(Duration::from_millis(50)) {
-            Ok(Ok(frame_samples)) => {
-                let frame_count = frame_samples.len() / APP_AUDIO_CHANNELS;
-                if frame_count == 0 || frame_count * APP_AUDIO_CHANNELS != frame_samples.len() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = stdout_thread.join();
-                    if let Some(stderr_thread) = stderr_thread {
-                        let _ = stderr_thread.join();
-                    }
-                    return CaptureOutcome::capture_error(
-                        "Received malformed PCM frame from macOS audio helper.".to_string(),
-                    );
-                }
-
-                let wrote_binary = app_audio_binary_stream
-                    .as_ref()
-                    .map(|stream_slot| {
-                        try_write_app_audio_binary_frame(
-                            stream_slot,
-                            session_id,
-                            target_id,
-                            sequence,
-                            APP_AUDIO_SAMPLE_RATE as usize,
-                            APP_AUDIO_CHANNELS,
-                            frame_count,
-                            PROTOCOL_VERSION,
-                            0,
-                            &frame_samples,
-                        )
-                    })
-                    .unwrap_or(false);
-
-                if !wrote_binary {
-                    let frame_bytes = bytemuck::cast_slice(&frame_samples);
-                    let pcm_base64 = BASE64.encode(frame_bytes);
-
-                    enqueue_frame_event(
-                        &frame_queue,
-                        session_id,
-                        target_id,
-                        sequence,
-                        APP_AUDIO_SAMPLE_RATE as usize,
-                        frame_count,
-                        pcm_base64,
-                    );
-                }
-
-                sequence = sequence.saturating_add(1);
-            }
-            Ok(Err(error)) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = stdout_thread.join();
-                if let Some(stderr_thread) = stderr_thread {
-                    let _ = stderr_thread.join();
-                }
-                return CaptureOutcome::capture_error(error);
-            }
-            Err(RecvTimeoutError::Timeout) => match child.try_wait() {
-                Ok(Some(status)) => {
-                    let _ = stdout_thread.join();
-                    if let Some(stderr_thread) = stderr_thread {
-                        let _ = stderr_thread.join();
-                    }
-
-                    if stop_flag.load(Ordering::Relaxed) {
-                        return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
-                    }
-
-                    let stderr_output = stderr_slot
-                        .lock()
-                        .ok()
-                        .map(|stderr_lock| stderr_lock.trim().to_string())
-                        .filter(|stderr_output| !stderr_output.is_empty());
-                    let error_message = stderr_output.unwrap_or_else(|| {
-                        format!("macOS audio helper exited unexpectedly (status={status}).")
-                    });
-
-                    return CaptureOutcome::capture_error(error_message);
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = stdout_thread.join();
-                    if let Some(stderr_thread) = stderr_thread {
-                        let _ = stderr_thread.join();
-                    }
-                    return CaptureOutcome::capture_error(format!(
-                        "Failed waiting on macOS audio helper: {error}"
-                    ));
-                }
-            },
-            Err(RecvTimeoutError::Disconnected) => match child.wait() {
-                Ok(status) => {
-                    let _ = stdout_thread.join();
-                    if let Some(stderr_thread) = stderr_thread {
-                        let _ = stderr_thread.join();
-                    }
-
-                    if stop_flag.load(Ordering::Relaxed) {
-                        return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
-                    }
-
-                    let stderr_output = stderr_slot
-                        .lock()
-                        .ok()
-                        .map(|stderr_lock| stderr_lock.trim().to_string())
-                        .filter(|stderr_output| !stderr_output.is_empty());
-                    let error_message = stderr_output.unwrap_or_else(|| {
-                        format!("macOS audio helper exited unexpectedly (status={status}).")
-                    });
-
-                    return CaptureOutcome::capture_error(error_message);
-                }
-                Err(error) => {
-                    let _ = stdout_thread.join();
-                    if let Some(stderr_thread) = stderr_thread {
-                        let _ = stderr_thread.join();
-                    }
-                    return CaptureOutcome::capture_error(format!(
-                        "Failed waiting on macOS audio helper: {error}"
-                    ));
-                }
-            },
-        }
-    }
-}
-
-#[cfg(all(not(windows), not(target_os = "macos"), not(target_os = "linux")))]
-fn capture_loopback_audio(
-    _session_id: &str,
-    _source_id: Option<&str>,
-    _target_id: &str,
-    _target_pid: u32,
-    _self_exclude_pid: Option<u32>,
-    _stop_flag: Arc<AtomicBool>,
-    _frame_queue: Arc<FrameQueue>,
-    _app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
-) -> CaptureOutcome {
-    CaptureOutcome::capture_error(
-        "Per-app audio capture is only available on Windows, macOS, and Linux.".to_string(),
-    )
-}
-
 fn start_capture_thread(
     stdout: Arc<Mutex<io::Stdout>>,
     frame_queue: Arc<FrameQueue>,
@@ -2716,7 +2114,7 @@ fn start_capture_thread(
     stop_flag: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let outcome = capture_loopback_audio(
+        let outcome = platform::capture_loopback_audio(
             &session_id,
             source_id.as_deref(),
             &target_id,
