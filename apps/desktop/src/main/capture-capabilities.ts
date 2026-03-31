@@ -223,8 +223,13 @@ const resolveDesktopCaptureCapabilities = ({
   const linuxAudioRuntimeReason =
     sidecarCapabilities?.linuxAudioRuntimeReason ??
     sidecarCapabilities?.pipewireRuntimeReason;
+  const linuxAudioCaptureAvailable =
+    sidecarCapabilities?.linuxAudioCaptureAvailable;
   const resolvedSystemAudio =
-    sidecarCapabilities?.systemAudio ?? baseCapabilities.systemAudio;
+    baseCapabilities.platform === "linux" &&
+    linuxAudioCaptureAvailable === false
+      ? "unsupported"
+      : (sidecarCapabilities?.systemAudio ?? baseCapabilities.systemAudio);
   const globalPushKeybinds = resolveGlobalPushKeybinds(
     baseCapabilities,
     sidecarCapabilities,
@@ -269,6 +274,25 @@ const resolveDesktopCaptureCapabilities = ({
 
     appendIssue(
       issues,
+      linuxAudioCaptureAvailable === false
+        ? createIssueFromCode(
+            sidecarCapabilities?.perAppAudioReasonCode ??
+              sidecarCapabilities?.appAudioTargetEnumerationReasonCode ??
+              (legacyLinuxAudioToolsUnavailable
+                ? "linux-pipewire-tools-missing"
+                : "linux-native-audio-backend-unavailable"),
+            sidecarCapabilities?.perAppAudioReason ??
+              sidecarCapabilities?.appAudioTargetEnumerationReason ??
+              sidecarReason ??
+              (legacyLinuxAudioToolsUnavailable
+                ? "Required Linux audio capture tooling is unavailable."
+                : "Linux audio capture is unavailable because the native audio backend is not ready."),
+          )
+        : undefined,
+    );
+
+    appendIssue(
+      issues,
       sidecarCapabilities?.appAudioTargetEnumerationSupported === false
         ? createIssueFromCode(
             sidecarCapabilities.appAudioTargetEnumerationReasonCode ??
@@ -307,10 +331,19 @@ const resolveDesktopCaptureCapabilities = ({
         : undefined,
     );
 
-    if (!sidecarAvailable || !sidecarPerAppAudioSupported) {
+    if (
+      !sidecarAvailable ||
+      !sidecarPerAppAudioSupported ||
+      linuxAudioCaptureAvailable === false
+    ) {
       const perAppIssueCode =
         sidecarCapabilities?.perAppAudioReasonCode ??
-        sidecarCapabilities?.appAudioTargetEnumerationReasonCode;
+        sidecarCapabilities?.appAudioTargetEnumerationReasonCode ??
+        (linuxAudioCaptureAvailable === false
+          ? legacyLinuxAudioToolsUnavailable
+            ? "linux-pipewire-tools-missing"
+            : "linux-native-audio-backend-unavailable"
+          : undefined);
       const hasEquivalentPerAppIssue = issues.some((issue) => {
         return (
           issue.code === (perAppIssueCode ?? "desktop-sidecar-unavailable") &&
