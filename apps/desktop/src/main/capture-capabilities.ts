@@ -87,11 +87,11 @@ const createIssueFromCode = (
         code,
         affects: ["system-audio", "per-app-audio"],
         severity: "error",
-        title: "PipeWire tools unavailable",
+        title: "Linux audio tooling unavailable",
         message,
         guidance: [
-          "Install the missing PipeWire tools, then reopen the screen-share picker.",
-          "Use system audio or no shared audio until PipeWire is available.",
+          "Install the required Linux audio capture tooling, or update Sharkord to a build with the native Linux backend.",
+          "Use system audio or no shared audio until Linux audio capture is available.",
         ],
       };
     case "linux-desktop-portal-required":
@@ -223,14 +223,22 @@ const resolveDesktopCaptureCapabilities = ({
   const linuxAudioRuntimeReason =
     sidecarCapabilities?.linuxAudioRuntimeReason ??
     sidecarCapabilities?.pipewireRuntimeReason;
+  const linuxAudioCaptureAvailable =
+    sidecarCapabilities?.linuxAudioCaptureAvailable;
   const resolvedSystemAudio =
-    sidecarCapabilities?.systemAudio ?? baseCapabilities.systemAudio;
+    baseCapabilities.platform === "linux" &&
+    linuxAudioCaptureAvailable === false
+      ? "unsupported"
+      : (sidecarCapabilities?.systemAudio ?? baseCapabilities.systemAudio);
   const globalPushKeybinds = resolveGlobalPushKeybinds(
     baseCapabilities,
     sidecarCapabilities,
   );
 
   if (baseCapabilities.platform === "linux") {
+    const legacyLinuxAudioToolsUnavailable =
+      sidecarCapabilities?.pipewireToolsAvailable === false;
+
     if (sidecarCapabilities?.sessionType) {
       appendNote(
         notes,
@@ -242,7 +250,7 @@ const resolveDesktopCaptureCapabilities = ({
       appendNote(
         notes,
         sidecarCapabilities.linuxAudioBackendUsesShellOuts
-          ? "Linux app audio currently uses the PipeWire CLI backend, so packaging still depends on the external PipeWire capture tools while the native Rust backend work is in progress."
+          ? "This Linux sidecar build reports a legacy CLI-backed audio backend, so capture startup may still depend on external system tooling."
           : `Linux app audio backend: ${sidecarCapabilities.linuxAudioBackend}.`,
       );
     }
@@ -266,14 +274,37 @@ const resolveDesktopCaptureCapabilities = ({
 
     appendIssue(
       issues,
+      linuxAudioCaptureAvailable === false
+        ? createIssueFromCode(
+            sidecarCapabilities?.perAppAudioReasonCode ??
+              sidecarCapabilities?.appAudioTargetEnumerationReasonCode ??
+              (legacyLinuxAudioToolsUnavailable
+                ? "linux-pipewire-tools-missing"
+                : "linux-native-audio-backend-unavailable"),
+            sidecarCapabilities?.perAppAudioReason ??
+              sidecarCapabilities?.appAudioTargetEnumerationReason ??
+              sidecarReason ??
+              (legacyLinuxAudioToolsUnavailable
+                ? "Required Linux audio capture tooling is unavailable."
+                : "Linux audio capture is unavailable because the native audio backend is not ready."),
+          )
+        : undefined,
+    );
+
+    appendIssue(
+      issues,
       sidecarCapabilities?.appAudioTargetEnumerationSupported === false
         ? createIssueFromCode(
             sidecarCapabilities.appAudioTargetEnumerationReasonCode ??
-              "linux-pipewire-tools-missing",
+              (legacyLinuxAudioToolsUnavailable
+                ? "linux-pipewire-tools-missing"
+                : "linux-native-audio-backend-unavailable"),
             sidecarCapabilities.appAudioTargetEnumerationReason ??
               sidecarCapabilities.perAppAudioReason ??
               sidecarReason ??
-              "PipeWire tools required for Linux app audio capture are unavailable.",
+              (legacyLinuxAudioToolsUnavailable
+                ? "Required Linux audio capture tooling is unavailable."
+                : "Linux app audio target discovery is unavailable because the native audio backend is not ready."),
           )
         : undefined,
     );
@@ -300,10 +331,19 @@ const resolveDesktopCaptureCapabilities = ({
         : undefined,
     );
 
-    if (!sidecarAvailable || !sidecarPerAppAudioSupported) {
+    if (
+      !sidecarAvailable ||
+      !sidecarPerAppAudioSupported ||
+      linuxAudioCaptureAvailable === false
+    ) {
       const perAppIssueCode =
         sidecarCapabilities?.perAppAudioReasonCode ??
-        sidecarCapabilities?.appAudioTargetEnumerationReasonCode;
+        sidecarCapabilities?.appAudioTargetEnumerationReasonCode ??
+        (linuxAudioCaptureAvailable === false
+          ? legacyLinuxAudioToolsUnavailable
+            ? "linux-pipewire-tools-missing"
+            : "linux-native-audio-backend-unavailable"
+          : undefined);
       const hasEquivalentPerAppIssue = issues.some((issue) => {
         return (
           issue.code === (perAppIssueCode ?? "desktop-sidecar-unavailable") &&

@@ -101,6 +101,38 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     assert.match(resolved.notes.join(" "), /session type: Wayland/i);
   });
 
+  void it("downgrades linux audio when capture startup is unavailable despite successful target probing", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: true,
+      sidecarPerAppAudioSupported: true,
+      sidecarReason: "Failed to start Linux audio capture.",
+      sidecarCapabilities: {
+        systemAudio: "best-effort",
+        sessionType: "x11",
+        linuxAudioBackend: "pulseaudio-native",
+        linuxAudioBackendUsesShellOuts: false,
+        linuxAudioRuntimeAvailable: true,
+        linuxAudioCaptureAvailable: false,
+        perAppAudioReason: "Failed to start Linux audio capture.",
+        perAppAudioReasonCode: "linux-native-audio-backend-unavailable",
+        appAudioTargetEnumerationSupported: true,
+        sourceAudioTargetInferenceSupported: false,
+      },
+    });
+
+    assert.equal(resolved.systemAudio, "unsupported");
+    assert.equal(resolved.perAppAudio, "unsupported");
+    assert.equal(
+      resolved.issues.find(
+        (issue) => issue.code === "linux-native-audio-backend-unavailable",
+      )?.message,
+      "Failed to start Linux audio capture.",
+    );
+  });
+
   void it("surfaces linux global push keybind requirements as structured issues", () => {
     const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
 
@@ -163,6 +195,27 @@ void describe("resolveDesktopCaptureCapabilities", () => {
         .find((issue) => issue.code === "linux-desktop-portal-required")
         ?.affects.includes("screen-share"),
       true,
+    );
+  });
+
+  void it("keeps legacy Linux audio tooling failures mapped for older sidecar contracts", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: true,
+      sidecarPerAppAudioSupported: false,
+      sidecarCapabilities: {
+        appAudioTargetEnumerationSupported: false,
+        pipewireToolsAvailable: false,
+      },
+    });
+
+    assert.equal(
+      resolved.issues.find(
+        (issue) => issue.code === "linux-pipewire-tools-missing",
+      )?.title,
+      "Linux audio tooling unavailable",
     );
   });
 
