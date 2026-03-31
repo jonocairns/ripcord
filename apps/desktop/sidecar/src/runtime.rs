@@ -114,7 +114,7 @@ impl FrameQueue {
         }
     }
 
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(not(any(windows, target_os = "macos", target_os = "linux")), allow(dead_code))]
     fn take_dropped_count(&self) -> u64 {
         self.dropped_count.swap(0, Ordering::Relaxed)
     }
@@ -188,7 +188,7 @@ pub(crate) fn start_frame_writer(
     })
 }
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 pub(crate) fn enqueue_frame_event(
     queue: &Arc<FrameQueue>,
     session_id: &str,
@@ -224,7 +224,7 @@ pub(crate) fn enqueue_frame_event(
     }
 }
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 pub(crate) fn try_write_app_audio_binary_frame(
     stream_slot: &Arc<Mutex<Option<TcpStream>>>,
     session_id: &str,
