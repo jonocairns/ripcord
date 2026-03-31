@@ -12,7 +12,7 @@ This does not assume identical internals across all operating systems. The targe
 - macOS is close on screen audio, but depends on the sidecar helper and ScreenCaptureKit availability.
 - Linux is intentionally weaker today:
   - audio capture is modeled as best-effort
-  - per-app audio uses a native PulseAudio-compatible backend, but some desktop messaging still reflects older PipeWire-era assumptions
+  - per-app audio uses a native PulseAudio-compatible backend, with legacy PipeWire-era aliases retained only for desktop/sidecar version-skew compatibility
   - per-app capture requires explicit target selection
   - global push keybinds depend on X11/XWayland
 - Auto-update is currently Windows-only.
@@ -256,15 +256,16 @@ Difficulty: Medium
 
 ### 6. Finish Linux native-backend cleanup and remove PipeWire-era assumptions
 
-The core Linux audio backend replacement is already done: audio capture and target discovery now use a native Rust PulseAudio-compatible path instead of `pw-dump` / `pw-record`.
+This step is complete for the current parity contract.
 
-The remaining work is cleanup and contract alignment:
+What landed:
 
-- remove stale shell-out assumptions from roadmap text, capability mapping, and user-facing guidance
-- keep backward-compatibility aliases only where shipped desktop/sidecar version skew still needs them
-- verify packaging/runtime messaging reflects the native Linux backend rather than the old PipeWire CLI story
+- the Linux audio backend replacement: audio capture and target discovery now use a native Rust PulseAudio-compatible path instead of `pw-dump` / `pw-record`
+- cleanup of stale shell-out assumptions in roadmap text, desktop capability mapping, and user-facing guidance
+- continued backward-compatibility aliases only where shipped desktop/sidecar version skew still needs them
+- desktop capability handling now consumes Linux capture-readiness separately from runtime and target-enumeration readiness
 
-This is still important for parity, but it is no longer the original backend implementation milestone.
+Remaining follow-up is no longer parity cleanup; it belongs under later maintainability work such as `#7` and any future client-version cleanup once the legacy aliases can be removed.
 
 Relevant files:
 
@@ -279,6 +280,14 @@ Difficulty: Medium
 ### 7. Refactor the sidecar into explicit platform backends
 
 Split the sidecar into backend modules with a shared protocol layer.
+
+Work has started on the shared-layer side of this split:
+
+- shared sidecar protocol/types/event framing now live in dedicated Rust modules instead of being declared inline in `main.rs`
+- queueing, event emission, and binary egress runtime helpers now live outside `main.rs`
+- `main.rs` is still the entry point, but it is now narrower and more focused on request dispatch and session orchestration
+
+Remaining work under `#7` is to keep pushing platform-specific backend internals out of `main.rs` until the entry point is mostly protocol orchestration plus backend dispatch.
 
 Suggested shape:
 
@@ -295,6 +304,9 @@ The main motivation is that `main.rs` is already large enough that ongoing parit
 Relevant files:
 
 - `apps/desktop/sidecar/src/main.rs`
+- `apps/desktop/sidecar/src/protocol.rs`
+- `apps/desktop/sidecar/src/runtime.rs`
+- `apps/desktop/sidecar/src/platform/mod.rs`
 
 Impact: Low direct parity, high maintainability
 

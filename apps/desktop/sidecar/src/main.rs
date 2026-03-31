@@ -1,29 +1,29 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 mod platform;
+mod protocol;
+mod runtime;
 
 #[cfg(any(windows, test, target_os = "linux"))]
 use std::collections::HashMap;
-use std::collections::VecDeque;
 #[cfg(target_os = "linux")]
 use std::ffi::{c_char, c_void, CStr, CString};
 #[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "macos")]
 use std::io::Read;
-use std::io::{self, BufRead, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{self, BufRead};
+use std::net::TcpStream;
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::mpsc::{self, RecvTimeoutError};
 #[cfg(target_os = "linux")]
 use std::sync::OnceLock;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
@@ -74,149 +74,25 @@ use windows::Win32::UI::WindowsAndMessaging::{
 #[cfg(windows)]
 use windows_core::implement;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 1;
-pub(crate) const PCM_ENCODING: &str = "f32le_base64";
-const APP_AUDIO_BINARY_EGRESS_FRAMING: &str = "length_prefixed_f32le_v1";
-pub(crate) const APP_AUDIO_FRAME_SIZE: usize = 960;
-pub(crate) const APP_AUDIO_SAMPLE_RATE: u32 = 48_000;
-pub(crate) const APP_AUDIO_CHANNELS: usize = 1;
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+pub(crate) use protocol::PushKeybindKind;
 #[cfg(target_os = "linux")]
-pub(crate) const APP_AUDIO_FRAME_BYTES: usize = APP_AUDIO_FRAME_SIZE * APP_AUDIO_CHANNELS * 4;
-#[allow(dead_code)]
-pub(crate) const MAX_APP_AUDIO_BINARY_FRAME_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) use protocol::APP_AUDIO_FRAME_BYTES;
 #[cfg(target_os = "macos")]
-pub(crate) const MACOS_HELPER_BINARY_NAME: &str = "sharkord-capture-sidecar-macos-helper";
-
-#[derive(Debug, Deserialize)]
-struct SidecarRequest {
-    #[serde(default)]
-    id: Option<String>,
-    method: String,
-    #[serde(default)]
-    params: Value,
-}
-
-#[derive(Debug, Serialize)]
-struct SidecarResponse<'a> {
-    id: &'a str,
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<SidecarError>,
-}
-
-#[derive(Debug, Serialize)]
-struct SidecarError {
-    message: String,
-}
-
-#[derive(Debug, Serialize)]
-struct SidecarEvent<'a> {
-    event: &'a str,
-    params: Value,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AudioTarget {
-    id: String,
-    label: String,
-    pid: u32,
-    process_name: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResolveSourceParams {
-    source_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ListTargetsParams {
-    source_id: Option<String>,
-}
-
+pub(crate) use protocol::MAX_APP_AUDIO_BINARY_FRAME_BYTES;
+pub(crate) use protocol::{
+    AudioTarget, CaptureEndReason, CaptureOutcome, ListTargetsParams, ResolveSourceParams,
+    SetPushKeybindsParams, SidecarRequest, StartAudioCaptureParams, StopAudioCaptureParams,
+    APP_AUDIO_CHANNELS, APP_AUDIO_FRAME_SIZE, APP_AUDIO_SAMPLE_RATE, PCM_ENCODING,
+    PROTOCOL_VERSION,
+};
 #[cfg(target_os = "macos")]
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AudioTargetListResponse {
-    targets: Vec<AudioTarget>,
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ResolveSourceResult {
-    pid: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StartAudioCaptureParams {
-    source_id: Option<String>,
-    app_audio_target_id: Option<String>,
-    self_exclude_pid: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StopAudioCaptureParams {
-    session_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SetPushKeybindsParams {
-    push_to_talk_keybind: Option<String>,
-    push_to_mute_keybind: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum CaptureEndReason {
-    CaptureStopped,
-    #[cfg(windows)]
-    AppExited,
-    CaptureError,
-    #[cfg(windows)]
-    DeviceLost,
-}
-
-impl CaptureEndReason {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::CaptureStopped => "capture_stopped",
-            #[cfg(windows)]
-            Self::AppExited => "app_exited",
-            Self::CaptureError => "capture_error",
-            #[cfg(windows)]
-            Self::DeviceLost => "device_lost",
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct CaptureOutcome {
-    reason: CaptureEndReason,
-    error: Option<String>,
-}
-
-impl CaptureOutcome {
-    pub(crate) fn from_reason(reason: CaptureEndReason) -> Self {
-        Self {
-            reason,
-            error: None,
-        }
-    }
-
-    pub(crate) fn capture_error(error: String) -> Self {
-        Self {
-            reason: CaptureEndReason::CaptureError,
-            error: Some(error),
-        }
-    }
-}
+pub(crate) use protocol::{AudioTargetListResponse, ResolveSourceResult, MACOS_HELPER_BINARY_NAME};
+pub(crate) use runtime::{
+    audio_capture_binary_egress_info, enqueue_frame_event, enqueue_push_keybind_state_event,
+    now_unix_ms, start_app_audio_binary_egress, start_frame_writer,
+    try_write_app_audio_binary_frame, write_event, write_response, FrameQueue, PushKeybindWatcher,
+};
 
 #[derive(Debug)]
 struct CaptureSession {
@@ -526,339 +402,10 @@ const LINUX_PULSE_OPERATION_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(target_os = "linux")]
 const LINUX_PULSE_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PushKeybindKind {
-    Talk,
-    Mute,
-}
-
-#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
-impl PushKeybindKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Talk => "talk",
-            Self::Mute => "mute",
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct PushKeybindWatcher {
-    stop_flag: Arc<AtomicBool>,
-    handle: JoinHandle<()>,
-}
-
-impl PushKeybindWatcher {
-    pub(crate) fn new(stop_flag: Arc<AtomicBool>, handle: JoinHandle<()>) -> Self {
-        Self { stop_flag, handle }
-    }
-}
-
-#[derive(Debug)]
-struct AppAudioBinaryEgress {
-    port: u16,
-    stream: Arc<Mutex<Option<TcpStream>>>,
-    stop_flag: Arc<AtomicBool>,
-    handle: JoinHandle<()>,
-}
-
 #[derive(Default)]
 struct SidecarState {
     capture_session: Option<CaptureSession>,
     push_keybind_watcher: Option<PushKeybindWatcher>,
-}
-
-#[derive(Default)]
-struct FrameQueueState {
-    queue: VecDeque<String>,
-    closed: bool,
-}
-
-#[cfg_attr(
-    not(any(windows, target_os = "macos", target_os = "linux")),
-    allow(dead_code)
-)]
-pub(crate) struct FrameQueue {
-    capacity: usize,
-    dropped_count: AtomicU64,
-    state: Mutex<FrameQueueState>,
-    condvar: Condvar,
-}
-
-impl FrameQueue {
-    fn new(capacity: usize) -> Self {
-        Self {
-            capacity,
-            dropped_count: AtomicU64::new(0),
-            state: Mutex::new(FrameQueueState::default()),
-            condvar: Condvar::new(),
-        }
-    }
-
-    #[cfg_attr(
-        not(any(windows, target_os = "macos", target_os = "linux")),
-        allow(dead_code)
-    )]
-    fn push_line(&self, line: String) {
-        let mut lock = match self.state.lock() {
-            Ok(guard) => guard,
-            Err(_) => return,
-        };
-
-        if lock.closed {
-            return;
-        }
-
-        if lock.queue.len() >= self.capacity {
-            let _ = lock.queue.pop_front();
-            self.dropped_count.fetch_add(1, Ordering::Relaxed);
-        }
-
-        lock.queue.push_back(line);
-        self.condvar.notify_one();
-    }
-
-    fn pop_line(&self) -> Option<String> {
-        let mut lock = match self.state.lock() {
-            Ok(guard) => guard,
-            Err(_) => return None,
-        };
-
-        loop {
-            if let Some(line) = lock.queue.pop_front() {
-                return Some(line);
-            }
-
-            if lock.closed {
-                return None;
-            }
-
-            lock = match self.condvar.wait(lock) {
-                Ok(guard) => guard,
-                Err(_) => return None,
-            };
-        }
-    }
-
-    fn close(&self) {
-        if let Ok(mut lock) = self.state.lock() {
-            lock.closed = true;
-            self.condvar.notify_all();
-        }
-    }
-
-    #[cfg_attr(not(windows), allow(dead_code))]
-    fn take_dropped_count(&self) -> u64 {
-        self.dropped_count.swap(0, Ordering::Relaxed)
-    }
-}
-
-fn now_unix_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0)
-}
-
-fn write_json_line<T: Serialize>(stdout: &Arc<Mutex<io::Stdout>>, payload: &T) {
-    let mut lock = match stdout.lock() {
-        Ok(guard) => guard,
-        Err(_) => return,
-    };
-
-    if let Ok(serialized) = serde_json::to_string(payload) {
-        let _ = writeln!(lock, "{serialized}");
-        let _ = lock.flush();
-    }
-}
-
-fn write_response(stdout: &Arc<Mutex<io::Stdout>>, id: &str, result: Result<Value, String>) {
-    match result {
-        Ok(result_payload) => {
-            let response = SidecarResponse {
-                id,
-                ok: true,
-                result: Some(result_payload),
-                error: None,
-            };
-            write_json_line(stdout, &response);
-        }
-        Err(message) => {
-            let response = SidecarResponse {
-                id,
-                ok: false,
-                result: None,
-                error: Some(SidecarError { message }),
-            };
-            write_json_line(stdout, &response);
-        }
-    }
-}
-
-fn write_event(stdout: &Arc<Mutex<io::Stdout>>, event: &str, params: Value) {
-    let envelope = SidecarEvent { event, params };
-    write_json_line(stdout, &envelope);
-}
-
-fn start_frame_writer(stdout: Arc<Mutex<io::Stdout>>, queue: Arc<FrameQueue>) -> JoinHandle<()> {
-    thread::spawn(move || {
-        while let Some(line) = queue.pop_line() {
-            let mut lock = match stdout.lock() {
-                Ok(guard) => guard,
-                Err(_) => break,
-            };
-
-            let _ = writeln!(lock, "{line}");
-            let _ = lock.flush();
-        }
-    })
-}
-
-#[cfg(any(windows, target_os = "linux"))]
-pub(crate) fn enqueue_frame_event(
-    queue: &Arc<FrameQueue>,
-    session_id: &str,
-    target_id: &str,
-    sequence: u64,
-    sample_rate: usize,
-    frame_count: usize,
-    pcm_base64: String,
-) {
-    let dropped_count = queue.take_dropped_count();
-
-    let mut params = json!({
-        "sessionId": session_id,
-        "targetId": target_id,
-        "sequence": sequence,
-        "sampleRate": sample_rate,
-        "channels": APP_AUDIO_CHANNELS,
-        "frameCount": frame_count,
-        "pcmBase64": pcm_base64,
-        "protocolVersion": PROTOCOL_VERSION,
-        "encoding": PCM_ENCODING,
-    });
-
-    if dropped_count > 0 {
-        params["droppedFrameCount"] = json!(dropped_count);
-    }
-
-    if let Ok(serialized) = serde_json::to_string(&SidecarEvent {
-        event: "audio_capture.frame",
-        params,
-    }) {
-        queue.push_line(serialized);
-    }
-}
-
-#[cfg(any(windows, target_os = "linux"))]
-pub(crate) fn try_write_app_audio_binary_frame(
-    stream_slot: &Arc<Mutex<Option<TcpStream>>>,
-    session_id: &str,
-    target_id: &str,
-    sequence: u64,
-    sample_rate: usize,
-    channels: usize,
-    frame_count: usize,
-    protocol_version: u32,
-    dropped_frame_count: u32,
-    frame_samples: &[f32],
-) -> bool {
-    let session_id_bytes = session_id.as_bytes();
-    let target_id_bytes = target_id.as_bytes();
-
-    if session_id_bytes.is_empty() || session_id_bytes.len() > u16::MAX as usize {
-        return false;
-    }
-    if target_id_bytes.is_empty() || target_id_bytes.len() > u16::MAX as usize {
-        return false;
-    }
-    if sample_rate == 0 || sample_rate > u32::MAX as usize {
-        return false;
-    }
-    if channels == 0 || channels > u16::MAX as usize {
-        return false;
-    }
-    if frame_count == 0 || frame_count > u32::MAX as usize {
-        return false;
-    }
-    if frame_samples.is_empty() || frame_samples.len() % channels != 0 {
-        return false;
-    }
-
-    let pcm_bytes = bytemuck::cast_slice(frame_samples);
-    if pcm_bytes.is_empty() || pcm_bytes.len() > u32::MAX as usize {
-        return false;
-    }
-
-    let payload_len = 2 + // session id length
-        session_id_bytes.len() +
-        2 + // target id length
-        target_id_bytes.len() +
-        8 + // sequence
-        4 + // sample rate
-        2 + // channels
-        4 + // frame count
-        4 + // protocol version
-        4 + // dropped frame count
-        4 + // pcm byte length
-        pcm_bytes.len();
-
-    if payload_len == 0 || payload_len > MAX_APP_AUDIO_BINARY_FRAME_BYTES {
-        return false;
-    }
-
-    let mut packet = Vec::with_capacity(4 + payload_len);
-    packet.extend_from_slice(&(payload_len as u32).to_le_bytes());
-    packet.extend_from_slice(&(session_id_bytes.len() as u16).to_le_bytes());
-    packet.extend_from_slice(session_id_bytes);
-    packet.extend_from_slice(&(target_id_bytes.len() as u16).to_le_bytes());
-    packet.extend_from_slice(target_id_bytes);
-    packet.extend_from_slice(&sequence.to_le_bytes());
-    packet.extend_from_slice(&(sample_rate as u32).to_le_bytes());
-    packet.extend_from_slice(&(channels as u16).to_le_bytes());
-    packet.extend_from_slice(&(frame_count as u32).to_le_bytes());
-    packet.extend_from_slice(&protocol_version.to_le_bytes());
-    packet.extend_from_slice(&dropped_frame_count.to_le_bytes());
-    packet.extend_from_slice(&(pcm_bytes.len() as u32).to_le_bytes());
-    packet.extend_from_slice(pcm_bytes);
-
-    let mut lock = match stream_slot.lock() {
-        Ok(lock) => lock,
-        Err(_) => return false,
-    };
-
-    let Some(stream) = lock.as_mut() else {
-        return false;
-    };
-
-    match stream.write_all(&packet) {
-        Ok(()) => true,
-        Err(error) => {
-            eprintln!("[capture-sidecar] app-audio binary egress write failed: {error}");
-            *lock = None;
-            false
-        }
-    }
-}
-
-#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
-pub(crate) fn enqueue_push_keybind_state_event(
-    queue: &Arc<FrameQueue>,
-    kind: PushKeybindKind,
-    active: bool,
-) {
-    let params = json!({
-        "kind": kind.as_str(),
-        "active": active,
-    });
-
-    if let Ok(serialized) = serde_json::to_string(&SidecarEvent {
-        event: "push_keybind.state",
-        params,
-    }) {
-        queue.push_line(serialized);
-    }
 }
 
 #[cfg(test)]
@@ -2196,67 +1743,6 @@ fn handle_push_keybinds_set(
     }))
 }
 
-fn start_app_audio_binary_egress() -> Result<AppAudioBinaryEgress, String> {
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|error| format!("Failed to bind app-audio binary egress listener: {error}"))?;
-    listener.set_nonblocking(true).map_err(|error| {
-        format!("Failed to configure app-audio binary egress listener: {error}")
-    })?;
-
-    let port = listener
-        .local_addr()
-        .map_err(|error| format!("Failed to read app-audio binary egress listener port: {error}"))?
-        .port();
-
-    let stream = Arc::new(Mutex::new(None::<TcpStream>));
-    let worker_stream = Arc::clone(&stream);
-    let stop_flag = Arc::new(AtomicBool::new(false));
-    let worker_stop_flag = Arc::clone(&stop_flag);
-
-    let handle = thread::spawn(move || {
-        while !worker_stop_flag.load(Ordering::Relaxed) {
-            match listener.accept() {
-                Ok((accepted_stream, _peer)) => {
-                    let _ = accepted_stream.set_nodelay(true);
-                    let _ = accepted_stream.set_write_timeout(Some(Duration::from_millis(15)));
-
-                    if let Ok(mut lock) = worker_stream.lock() {
-                        *lock = Some(accepted_stream);
-                    }
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(25));
-                }
-                Err(error) => {
-                    eprintln!("[capture-sidecar] app-audio binary egress accept error: {error}");
-                    thread::sleep(Duration::from_millis(100));
-                }
-            }
-        }
-
-        if let Ok(mut lock) = worker_stream.lock() {
-            *lock = None;
-        }
-    });
-
-    Ok(AppAudioBinaryEgress {
-        port,
-        stream,
-        stop_flag,
-        handle,
-    })
-}
-
-fn handle_audio_capture_binary_egress_info(
-    app_audio_binary_egress: &AppAudioBinaryEgress,
-) -> Result<Value, String> {
-    Ok(json!({
-        "port": app_audio_binary_egress.port,
-        "framing": APP_AUDIO_BINARY_EGRESS_FRAMING,
-        "protocolVersion": PROTOCOL_VERSION,
-    }))
-}
-
 fn main() {
     eprintln!("[capture-sidecar] starting");
 
@@ -2306,7 +1792,7 @@ fn main() {
             "audio_targets.list" => handle_audio_targets_list(request.params),
             "audio_capture.binary_egress_info" => match app_audio_binary_egress.as_ref() {
                 Some(app_audio_binary_egress) => {
-                    handle_audio_capture_binary_egress_info(app_audio_binary_egress)
+                    Ok(audio_capture_binary_egress_info(app_audio_binary_egress))
                 }
                 None => Err("Binary app-audio egress is unavailable".to_string()),
             },
