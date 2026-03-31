@@ -285,9 +285,10 @@ Work has started on the shared-layer side of this split:
 
 - shared sidecar protocol/types/event framing now live in dedicated Rust modules instead of being declared inline in `main.rs`
 - queueing, event emission, and binary egress runtime helpers now live outside `main.rs`
+- the Linux PulseAudio backend internals now live under `src/platform/linux/pulse.rs` instead of being embedded in `main.rs`
 - `main.rs` is still the entry point, but it is now narrower and more focused on request dispatch and session orchestration
 
-Remaining work under `#7` is to keep pushing platform-specific backend internals out of `main.rs` until the entry point is mostly protocol orchestration plus backend dispatch.
+Remaining work under `#7` is to keep pushing the remaining platform-specific backend internals out of `main.rs` until the entry point is mostly protocol orchestration plus backend dispatch.
 
 Suggested shape:
 
@@ -307,6 +308,7 @@ Relevant files:
 - `apps/desktop/sidecar/src/protocol.rs`
 - `apps/desktop/sidecar/src/runtime.rs`
 - `apps/desktop/sidecar/src/platform/mod.rs`
+- `apps/desktop/sidecar/src/platform/linux/pulse.rs`
 
 Impact: Low direct parity, high maintainability
 

@@ -1,47 +1,21 @@
+mod pulse;
+
+use pulse::LinuxAudioBackendProbe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
-use std::{
-    ffi::{c_void, CString},
-    fs,
-    net::TcpStream,
-    sync::{Mutex, OnceLock},
-};
+use std::time::Duration;
+use std::{fs, net::TcpStream, sync::Mutex};
 
 use serde_json::{json, Value};
 use x11_dl::xlib;
 
 use crate::{
-    enqueue_push_keybind_state_event, AudioTarget, CaptureEndReason, CaptureOutcome, FrameQueue,
-    PaSampleSpec, PushKeybindKind, PushKeybindWatcher, APP_AUDIO_CHANNELS, APP_AUDIO_FRAME_BYTES,
-    PA_SAMPLE_FLOAT32LE, PA_STREAM_RECORD,
+    enqueue_push_keybind_state_event, AudioTarget, CaptureOutcome, FrameQueue, PushKeybindKind,
+    PushKeybindWatcher,
 };
 
 use super::PushKeybindRegistration;
-
-#[derive(Clone)]
-struct LinuxAudioBackendProbe {
-    backend: &'static str,
-    uses_shell_outs: bool,
-    runtime_available: bool,
-    runtime_reason: Option<String>,
-    per_app_audio_supported: bool,
-    per_app_audio_reason: Option<String>,
-    per_app_audio_reason_code: Option<&'static str>,
-}
-
-struct LinuxAudioBackendProbeCacheEntry {
-    expires_at: Instant,
-    probe: LinuxAudioBackendProbe,
-}
-
-const LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE: &str = "pulseaudio-native";
-const LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE: &str = "linux-native-audio-backend-unavailable";
-const LINUX_AUDIO_BACKEND_PROBE_CACHE_TTL: Duration = Duration::from_secs(2);
-
-static LINUX_AUDIO_BACKEND_PROBE_CACHE: OnceLock<Mutex<Option<LinuxAudioBackendProbeCacheEntry>>> =
-    OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LinuxPushKeybind {
@@ -380,57 +354,7 @@ pub(crate) fn register_push_keybinds(
 }
 
 fn probe_audio_backend() -> LinuxAudioBackendProbe {
-    let cache = LINUX_AUDIO_BACKEND_PROBE_CACHE.get_or_init(|| Mutex::new(None));
-    let now = Instant::now();
-
-    if let Ok(cache_guard) = cache.lock() {
-        if let Some(entry) = cache_guard.as_ref() {
-            if now < entry.expires_at {
-                return entry.probe.clone();
-            }
-        }
-    }
-
-    let probe = match crate::linux_pulse_lib() {
-        Ok(_) => match crate::linux_pulse_audio_snapshot() {
-            Ok(_) => LinuxAudioBackendProbe {
-                backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
-                uses_shell_outs: false,
-                runtime_available: true,
-                runtime_reason: None,
-                per_app_audio_supported: true,
-                per_app_audio_reason: None,
-                per_app_audio_reason_code: None,
-            },
-            Err(error) => LinuxAudioBackendProbe {
-                backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
-                uses_shell_outs: false,
-                runtime_available: true,
-                runtime_reason: None,
-                per_app_audio_supported: false,
-                per_app_audio_reason: Some(error),
-                per_app_audio_reason_code: Some(LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE),
-            },
-        },
-        Err(error) => LinuxAudioBackendProbe {
-            backend: LINUX_AUDIO_BACKEND_PULSEAUDIO_NATIVE,
-            uses_shell_outs: false,
-            runtime_available: false,
-            runtime_reason: Some(error.clone()),
-            per_app_audio_supported: false,
-            per_app_audio_reason: Some(error),
-            per_app_audio_reason_code: Some(LINUX_AUDIO_BACKEND_UNAVAILABLE_CODE),
-        },
-    };
-
-    if let Ok(mut cache_guard) = cache.lock() {
-        *cache_guard = Some(LinuxAudioBackendProbeCacheEntry {
-            expires_at: Instant::now() + LINUX_AUDIO_BACKEND_PROBE_CACHE_TTL,
-            probe: probe.clone(),
-        });
-    }
-
-    probe
+    pulse::probe_audio_backend()
 }
 
 fn detect_session_type() -> String {
@@ -648,17 +572,8 @@ pub(crate) fn capabilities() -> Value {
 }
 
 pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {
-    match crate::linux_pulse_audio_snapshot() {
-        Ok(snapshot) => snapshot
-            .targets
-            .into_iter()
-            .map(|target| AudioTarget {
-                id: target.id,
-                label: target.label,
-                pid: target.pid,
-                process_name: target.process_name,
-            })
-            .collect(),
+    match pulse::list_audio_targets() {
+        Ok(targets) => targets,
         Err(error) => {
             eprintln!("[capture-sidecar] {error}");
             Vec::new()
@@ -681,106 +596,12 @@ pub(crate) fn capture_loopback_audio(
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
     let _ = self_exclude_pid;
-    let capture_source = match crate::linux_pulse_capture_source_for_target(if target_pid == 0 {
-        "loopback"
-    } else {
-        _target_id
-    }) {
-        Ok(capture_source) => capture_source,
-        Err(error) => return CaptureOutcome::capture_error(error),
-    };
-
-    let lib = match crate::linux_pulse_lib() {
-        Ok(lib) => lib,
-        Err(error) => return CaptureOutcome::capture_error(error),
-    };
-
-    let app_name = CString::new("Sharkord Capture Sidecar")
-        .unwrap_or_else(|_| CString::new("Sharkord").unwrap());
-    let stream_name = CString::new("Sharkord App Audio Capture")
-        .unwrap_or_else(|_| CString::new("Capture").unwrap());
-    let source_name = match CString::new(capture_source.monitor_source_name.clone()) {
-        Ok(source_name) => source_name,
-        Err(error) => {
-            return CaptureOutcome::capture_error(format!(
-                "Invalid Linux monitor source name: {error}"
-            ))
-        }
-    };
-
-    let sample_spec = PaSampleSpec {
-        format: PA_SAMPLE_FLOAT32LE,
-        rate: crate::APP_AUDIO_SAMPLE_RATE,
-        channels: APP_AUDIO_CHANNELS as u8,
-    };
-    let mut error_code = 0;
-    let simple = unsafe {
-        (lib.pa_simple_new)(
-            std::ptr::null(),
-            app_name.as_ptr(),
-            PA_STREAM_RECORD,
-            source_name.as_ptr(),
-            stream_name.as_ptr(),
-            &sample_spec,
-            std::ptr::null(),
-            std::ptr::null(),
-            &mut error_code,
-        )
-    };
-
-    if simple.is_null() {
-        return CaptureOutcome::capture_error(format!(
-            "Failed to start Linux audio capture: {}",
-            crate::linux_pulse_strerror(lib, error_code)
-        ));
-    }
-
-    let mut sequence: u64 = 0;
-    let mut frame_bytes = vec![0u8; APP_AUDIO_FRAME_BYTES];
-
-    loop {
-        if stop_flag.load(Ordering::Relaxed) {
-            unsafe { (lib.pa_simple_free)(simple) };
-            return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
-        }
-
-        if unsafe {
-            (lib.pa_simple_read)(
-                simple,
-                frame_bytes.as_mut_ptr().cast::<c_void>(),
-                frame_bytes.len(),
-                &mut error_code,
-            )
-        } < 0
-        {
-            unsafe { (lib.pa_simple_free)(simple) };
-            return CaptureOutcome::capture_error(format!(
-                "Failed reading Linux audio frames: {}",
-                crate::linux_pulse_strerror(lib, error_code)
-            ));
-        }
-
-        let mut frame_samples = frame_bytes
-            .chunks_exact(4)
-            .map(|sample_bytes| {
-                f32::from_le_bytes([
-                    sample_bytes[0],
-                    sample_bytes[1],
-                    sample_bytes[2],
-                    sample_bytes[3],
-                ])
-            })
-            .collect::<Vec<f32>>();
-        crate::clamp_audio_samples(&mut frame_samples);
-
-        crate::emit_linux_audio_frame(
-            session_id,
-            &capture_source.target_id,
-            sequence,
-            &frame_samples,
-            &frame_queue,
-            &app_audio_binary_stream,
-        );
-        sequence = sequence.saturating_add(1);
-    }
+    pulse::capture_loopback_audio(
+        session_id,
+        _target_id,
+        target_pid,
+        stop_flag,
+        frame_queue,
+        app_audio_binary_stream,
+    )
 }
