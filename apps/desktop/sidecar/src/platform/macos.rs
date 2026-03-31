@@ -13,7 +13,7 @@ use std::{
 use crate::{
     enqueue_frame_event, enqueue_push_keybind_state_event, AudioTarget, AudioTargetListResponse,
     CaptureEndReason, CaptureOutcome, FrameQueue, PushKeybindKind, PushKeybindWatcher,
-    ResolveSourceResult, APP_AUDIO_CHANNELS, APP_AUDIO_SAMPLE_RATE,
+    ResolveSourceResult, APP_AUDIO_CHANNELS, APP_AUDIO_SAMPLE_RATE, MACOS_HELPER_BINARY_NAME,
     MAX_APP_AUDIO_BINARY_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -372,8 +372,45 @@ fn classify_helper_error_code(error: &str) -> &'static str {
     "macos-screen-audio-unavailable"
 }
 
+fn resolve_macos_helper_path() -> Result<std::path::PathBuf, String> {
+    let current_exe = std::env::current_exe()
+        .map_err(|error| format!("Failed to locate sidecar executable: {error}"))?;
+    let executable_dir = current_exe
+        .parent()
+        .ok_or_else(|| "Failed to resolve sidecar executable directory.".to_string())?;
+    let helper_path = executable_dir.join(MACOS_HELPER_BINARY_NAME);
+
+    if helper_path.is_file() {
+        return Ok(helper_path);
+    }
+
+    Err(format!(
+        "macOS audio helper not found at {}. Rebuild the desktop sidecar.",
+        helper_path.display()
+    ))
+}
+
+fn run_macos_helper_command(arguments: &[&str]) -> Result<Vec<u8>, String> {
+    let helper_path = resolve_macos_helper_path()?;
+    let output = Command::new(helper_path)
+        .args(arguments)
+        .output()
+        .map_err(|error| format!("failed to launch macOS helper: {error}"))?;
+
+    if !output.status.success() {
+        let stderr_output = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "macOS helper {} failed: {}",
+            arguments.first().copied().unwrap_or("command"),
+            stderr_output.trim()
+        ));
+    }
+
+    Ok(output.stdout)
+}
+
 pub(crate) fn capabilities() -> Value {
-    let helper_probe_error = crate::run_macos_helper_command(&["list-targets"]).err();
+    let helper_probe_error = run_macos_helper_command(&["list-targets"]).err();
     let mut response = if helper_probe_error.is_none() {
         json!({
             "platform": std::env::consts::OS,
@@ -404,7 +441,7 @@ pub(crate) fn capabilities() -> Value {
 }
 
 pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {
-    match crate::run_macos_helper_command(&["list-targets"]).and_then(|output| {
+    match run_macos_helper_command(&["list-targets"]).and_then(|output| {
         serde_json::from_slice::<AudioTargetListResponse>(&output)
             .map_err(|error| error.to_string())
     }) {
@@ -417,8 +454,7 @@ pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {
 }
 
 pub(crate) fn resolve_source_to_pid(source_id: &str) -> Option<u32> {
-    let output =
-        crate::run_macos_helper_command(&["resolve-source", "--source-id", source_id]).ok()?;
+    let output = run_macos_helper_command(&["resolve-source", "--source-id", source_id]).ok()?;
     let response = serde_json::from_slice::<ResolveSourceResult>(&output).ok()?;
     response.pid
 }
@@ -433,7 +469,7 @@ pub(crate) fn capture_loopback_audio(
     frame_queue: Arc<FrameQueue>,
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
-    let helper_path = match crate::resolve_macos_helper_path() {
+    let helper_path = match resolve_macos_helper_path() {
         Ok(helper_path) => helper_path,
         Err(error) => return CaptureOutcome::capture_error(error),
     };
@@ -571,7 +607,7 @@ pub(crate) fn capture_loopback_audio(
                 let wrote_binary = app_audio_binary_stream
                     .as_ref()
                     .map(|stream_slot| {
-                        crate::try_write_app_audio_binary_frame(
+                        crate::runtime::try_write_app_audio_binary_frame(
                             stream_slot,
                             session_id,
                             target_id,

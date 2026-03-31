@@ -279,16 +279,18 @@ Difficulty: Medium
 
 ### 7. Refactor the sidecar into explicit platform backends
 
-Split the sidecar into backend modules with a shared protocol layer.
+This step is complete for the current parity contract.
 
-Work has started on the shared-layer side of this split:
+What landed:
 
 - shared sidecar protocol/types/event framing now live in dedicated Rust modules instead of being declared inline in `main.rs`
 - queueing, event emission, and binary egress runtime helpers now live outside `main.rs`
 - the Linux PulseAudio backend internals now live under `src/platform/linux/pulse.rs` instead of being embedded in `main.rs`
-- `main.rs` is still the entry point, but it is now narrower and more focused on request dispatch and session orchestration
+- macOS helper-launching code and Windows process-loopback helper code now live with their platform backends instead of in `main.rs`
+- shared request handling, capture-session lifecycle, and shutdown orchestration now live in a dedicated sidecar app layer
+- `main.rs` is now a thin entry point that wires the sidecar app/runtime together instead of owning backend internals directly
 
-Remaining work under `#7` is to keep pushing the remaining platform-specific backend internals out of `main.rs` until the entry point is mostly protocol orchestration plus backend dispatch.
+Remaining follow-up is normal maintainability work inside the backend modules themselves, not an outstanding parity-roadmap split task.
 
 Suggested shape:
 
@@ -305,6 +307,7 @@ The main motivation is that `main.rs` is already large enough that ongoing parit
 Relevant files:
 
 - `apps/desktop/sidecar/src/main.rs`
+- `apps/desktop/sidecar/src/app.rs`
 - `apps/desktop/sidecar/src/protocol.rs`
 - `apps/desktop/sidecar/src/runtime.rs`
 - `apps/desktop/sidecar/src/platform/mod.rs`
