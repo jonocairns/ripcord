@@ -1,6 +1,7 @@
+use std::mem::size_of;
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::{ffi::c_void, path::Path, ptr, time::Instant};
@@ -8,25 +9,32 @@ use std::{ffi::c_void, path::Path, ptr, time::Instant};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde_json::{json, Value};
-use windows::core::PWSTR;
+use windows::core::{IUnknown, Interface, PWSTR};
 use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM};
 use windows::Win32::Media::Audio::{
-    IAudioCaptureClient, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_E_INVALID_STREAM_FLAG,
-    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, PROCESS_LOOPBACK_MODE,
+    ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
+    IActivateAudioInterfaceCompletionHandler, IAudioCaptureClient, IAudioClient,
+    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_E_INVALID_STREAM_FLAG, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AUDIOCLIENT_ACTIVATION_PARAMS,
+    AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, PROCESS_LOOPBACK_MODE,
     PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
-    PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, WAVEFORMATEX,
+    PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+    WAVEFORMATEX,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SYNCHRONIZE,
+    OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
 };
+use windows::Win32::System::Variant::VT_BLOB;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindow, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW,
     GetWindowThreadProcessId, IsWindow, IsWindowVisible, GWL_EXSTYLE, GW_OWNER, WS_EX_TOOLWINDOW,
 };
+use windows_core::implement;
 
 use crate::{
     enqueue_frame_event, enqueue_push_keybind_state_event, AudioTarget, CaptureEndReason,
@@ -53,6 +61,33 @@ const VK_LMENU: i32 = 0xA4;
 const VK_RMENU: i32 = 0xA5;
 const VK_LWIN: i32 = 0x5B;
 const VK_RWIN: i32 = 0x5C;
+
+#[implement(IActivateAudioInterfaceCompletionHandler)]
+struct ActivateAudioInterfaceCallback {
+    signal: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl ActivateAudioInterfaceCallback {
+    fn new(signal: Arc<(Mutex<bool>, Condvar)>) -> Self {
+        Self { signal }
+    }
+}
+
+impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
+    for ActivateAudioInterfaceCallback_Impl
+{
+    fn ActivateCompleted(
+        &self,
+        _activateoperation: Option<&IActivateAudioInterfaceAsyncOperation>,
+    ) -> windows::core::Result<()> {
+        let (lock, condvar) = &*self.signal;
+        if let Ok(mut done) = lock.lock() {
+            *done = true;
+            condvar.notify_all();
+        }
+        Ok(())
+    }
+}
 
 fn map_key_code_to_virtual_key(key_code: &str) -> Option<i32> {
     if key_code.starts_with("Key") && key_code.len() == 4 {
@@ -401,7 +436,7 @@ pub(crate) fn list_audio_targets() -> Vec<AudioTarget> {
         )
     };
 
-    let deduped = crate::dedupe_window_entries_by_pid(entries);
+    let deduped = dedupe_window_entries_by_pid(entries);
     let mut targets = Vec::new();
 
     for (pid, title) in deduped {
@@ -431,7 +466,7 @@ pub(crate) fn capabilities() -> Value {
 }
 
 pub(crate) fn resolve_source_to_pid(source_id: &str) -> Option<u32> {
-    let hwnd_value = crate::parse_window_source_id(source_id)?;
+    let hwnd_value = parse_window_source_id(source_id)?;
     let hwnd = HWND(hwnd_value as *mut c_void);
 
     if !unsafe { IsWindow(hwnd).as_bool() } {
@@ -451,7 +486,103 @@ pub(crate) fn resolve_source_to_pid(source_id: &str) -> Option<u32> {
 }
 
 fn process_is_alive(process_handle: HANDLE) -> bool {
-    crate::process_is_alive(process_handle)
+    unsafe { WaitForSingleObject(process_handle, 0) == windows::Win32::Foundation::WAIT_TIMEOUT }
+}
+
+fn open_process_for_liveness(pid: u32) -> Option<HANDLE> {
+    unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            false,
+            pid,
+        )
+    }
+    .ok()
+}
+
+fn activate_process_loopback_client(
+    pid: u32,
+    mode: PROCESS_LOOPBACK_MODE,
+) -> Result<IAudioClient, String> {
+    let signal = Arc::new((Mutex::new(false), Condvar::new()));
+    let callback: IActivateAudioInterfaceCompletionHandler =
+        ActivateAudioInterfaceCallback::new(Arc::clone(&signal)).into();
+
+    let mut activation_params = AUDIOCLIENT_ACTIVATION_PARAMS {
+        ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+        Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
+            ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+                TargetProcessId: pid,
+                ProcessLoopbackMode: mode,
+            },
+        },
+    };
+
+    let activation_prop = windows_core::imp::PROPVARIANT {
+        Anonymous: windows_core::imp::PROPVARIANT_0 {
+            Anonymous: windows_core::imp::PROPVARIANT_0_0 {
+                vt: VT_BLOB.0,
+                wReserved1: 0,
+                wReserved2: 0,
+                wReserved3: 0,
+                Anonymous: windows_core::imp::PROPVARIANT_0_0_0 {
+                    blob: windows_core::imp::BLOB {
+                        cbSize: size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
+                        pBlobData: (&mut activation_params as *mut AUDIOCLIENT_ACTIVATION_PARAMS)
+                            .cast::<u8>(),
+                    },
+                },
+            },
+        },
+    };
+    let activation_prop_ptr = (&activation_prop as *const windows_core::imp::PROPVARIANT)
+        .cast::<windows_core::PROPVARIANT>();
+
+    let operation = unsafe {
+        ActivateAudioInterfaceAsync(
+            VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+            &IAudioClient::IID,
+            Some(activation_prop_ptr),
+            &callback,
+        )
+        .map_err(|error| format!("ActivateAudioInterfaceAsync failed: {error}"))?
+    };
+
+    let (lock, condvar) = &*signal;
+    let done_guard = lock
+        .lock()
+        .map_err(|_| "Failed to lock activate callback state".to_string())?;
+    let (done_guard, _wait_result) = condvar
+        .wait_timeout_while(done_guard, Duration::from_secs(5), |done| !*done)
+        .map_err(|_| "Failed waiting for activate callback".to_string())?;
+
+    if !*done_guard {
+        return Err("ActivateAudioInterfaceAsync timed out".to_string());
+    }
+
+    let mut activate_result = Default::default();
+    let mut activated_interface: Option<IUnknown> = None;
+
+    unsafe {
+        operation
+            .GetActivateResult(&mut activate_result, &mut activated_interface)
+            .map_err(|error| format!("GetActivateResult failed: {error}"))?
+    };
+
+    activate_result.ok().map_err(|error| {
+        if error.code().0 == -2147024809 {
+            return format!(
+                "Activation returned failure HRESULT: {error}. Process loopback activation payload was rejected."
+            );
+        }
+
+        format!("Activation returned failure HRESULT: {error}")
+    })?;
+
+    activated_interface
+        .ok_or_else(|| "Activation returned no interface".to_string())?
+        .cast::<IAudioClient>()
+        .map_err(|error| format!("Activated interface is not IAudioClient: {error}"))
 }
 
 pub(crate) fn capture_loopback_audio(
@@ -465,7 +596,7 @@ pub(crate) fn capture_loopback_audio(
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
     let process_handle = if self_exclude_pid.is_none() {
-        match crate::open_process_for_liveness(target_pid) {
+        match open_process_for_liveness(target_pid) {
             Some(handle) => Some(handle),
             None => return CaptureOutcome::from_reason(CaptureEndReason::AppExited),
         }
@@ -487,8 +618,7 @@ pub(crate) fn capture_loopback_audio(
                 PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
             ),
         };
-        let audio_client =
-            crate::activate_process_loopback_client(activation_pid, activation_mode)?;
+        let audio_client = activate_process_loopback_client(activation_pid, activation_mode)?;
         let capture_format = WAVEFORMATEX {
             wFormatTag: 0x0003,
             nChannels: APP_AUDIO_CHANNELS as u16,
@@ -604,7 +734,7 @@ pub(crate) fn capture_loopback_audio(
                     let wrote_binary = app_audio_binary_stream
                         .as_ref()
                         .map(|stream_slot| {
-                            crate::try_write_app_audio_binary_frame(
+                            crate::runtime::try_write_app_audio_binary_frame(
                                 stream_slot,
                                 session_id,
                                 target_id,
@@ -665,4 +795,27 @@ pub(crate) fn capture_loopback_audio(
             CaptureOutcome::capture_error(error)
         }
     }
+}
+
+fn dedupe_window_entries_by_pid(
+    entries: Vec<(u32, String)>,
+) -> std::collections::HashMap<u32, String> {
+    let mut deduped = std::collections::HashMap::<u32, String>::new();
+
+    for (pid, title) in entries {
+        deduped.entry(pid).or_insert(title);
+    }
+
+    deduped
+}
+
+fn parse_window_source_id(source_id: &str) -> Option<isize> {
+    let mut parts = source_id.split(':');
+
+    if parts.next()? != "window" {
+        return None;
+    }
+
+    let hwnd_part = parts.next()?;
+    hwnd_part.parse::<isize>().ok()
 }
