@@ -1133,11 +1133,11 @@ pub(crate) fn capture_loopback_audio(
     frame_queue: Arc<FrameQueue>,
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
-    let _ = self_exclude_pid;
     pulse::capture_loopback_audio(
         session_id,
         _target_id,
         target_pid,
+        self_exclude_pid,
         stop_flag,
         frame_queue,
         app_audio_binary_stream,

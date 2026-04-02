@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
+use libc;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -459,6 +460,17 @@ pub(crate) fn resolve_source_to_pid(source_id: &str) -> Option<u32> {
     response.pid
 }
 
+fn macos_process_is_alive(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if result == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error()
+        .raw_os_error()
+        .map(|errno| errno == libc::EPERM)
+        .unwrap_or(false)
+}
+
 pub(crate) fn capture_loopback_audio(
     session_id: &str,
     source_id: Option<&str>,
@@ -659,6 +671,10 @@ pub(crate) fn capture_loopback_audio(
                         return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
                     }
 
+                    if target_pid != 0 && !macos_process_is_alive(target_pid) {
+                        return CaptureOutcome::from_reason(CaptureEndReason::AppExited);
+                    }
+
                     let stderr_output = stderr_slot
                         .lock()
                         .ok()
@@ -692,6 +708,10 @@ pub(crate) fn capture_loopback_audio(
 
                     if stop_flag.load(Ordering::Relaxed) {
                         return CaptureOutcome::from_reason(CaptureEndReason::CaptureStopped);
+                    }
+
+                    if target_pid != 0 && !macos_process_is_alive(target_pid) {
+                        return CaptureOutcome::from_reason(CaptureEndReason::AppExited);
                     }
 
                     let stderr_output = stderr_slot

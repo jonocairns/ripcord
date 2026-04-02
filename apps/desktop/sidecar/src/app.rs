@@ -519,9 +519,7 @@ mod tests {
     fn maps_capture_end_reasons() {
         assert_eq!(CaptureEndReason::CaptureError.as_str(), "capture_error");
         assert_eq!(CaptureEndReason::CaptureStopped.as_str(), "capture_stopped");
-        #[cfg(windows)]
         assert_eq!(CaptureEndReason::AppExited.as_str(), "app_exited");
-        #[cfg(windows)]
         assert_eq!(CaptureEndReason::DeviceLost.as_str(), "device_lost");
     }
 

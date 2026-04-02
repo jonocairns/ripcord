@@ -281,6 +281,8 @@ const LINUX_PULSEAUDIO_FALLBACK_LIBRARY_DIRS: [&str; 2] = [
     "/run/current-system/sw/lib",
 ];
 const LINUX_PULSE_TARGET_PREFIX: &str = "pulse:pid:";
+const PA_ERR_CONNECTIONTERMINATED: i32 = 11;
+const PA_ERR_KILLED: i32 = 12;
 const PA_CONTEXT_READY: i32 = 4;
 const PA_CONTEXT_FAILED: i32 = 5;
 const PA_CONTEXT_TERMINATED: i32 = 6;
@@ -367,10 +369,16 @@ pub(super) fn capture_loopback_audio(
     session_id: &str,
     target_id: &str,
     target_pid: u32,
+    self_exclude_pid: Option<u32>,
     stop_flag: Arc<AtomicBool>,
     frame_queue: Arc<FrameQueue>,
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
+    if target_pid == 0 && self_exclude_pid.is_some() {
+        eprintln!(
+            "[capture-sidecar] selfExcludePid is not supported on Linux loopback capture; proceeding without exclusion"
+        );
+    }
     let capture_source = match linux_pulse_capture_source_for_target(if target_pid == 0 {
         "loopback"
     } else {
@@ -444,10 +452,18 @@ pub(super) fn capture_loopback_audio(
         } < 0
         {
             unsafe { (lib.pa_simple_free)(simple) };
+            if matches!(error_code, PA_ERR_CONNECTIONTERMINATED | PA_ERR_KILLED) {
+                return CaptureOutcome::from_reason(CaptureEndReason::DeviceLost);
+            }
             return CaptureOutcome::capture_error(format!(
                 "Failed reading Linux audio frames: {}",
                 linux_pulse_strerror(lib, error_code)
             ));
+        }
+
+        if target_pid != 0 && !std::path::Path::new(&format!("/proc/{target_pid}")).exists() {
+            unsafe { (lib.pa_simple_free)(simple) };
+            return CaptureOutcome::from_reason(CaptureEndReason::AppExited);
         }
 
         let mut frame_samples = frame_bytes
