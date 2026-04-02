@@ -12,7 +12,6 @@ type TUserAvatarProps = {
 	className?: string;
 	fallbackClassName?: string;
 	showUserPopover?: boolean;
-	showStatusBadge?: boolean;
 	onClick?: () => void;
 };
 
@@ -22,7 +21,6 @@ const UserAvatar = memo(
 		className,
 		fallbackClassName,
 		showUserPopover = false,
-		showStatusBadge: _showStatusBadge = false,
 		onClick,
 	}: TUserAvatarProps) => {
 		const user = useUserById(userId);

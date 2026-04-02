@@ -88,7 +88,6 @@ const VoiceUserCard = memo(
 						userId={userId}
 						className="h-20 w-20 md:h-24 md:w-24 lg:h-28 lg:w-28"
 						fallbackClassName="text-2xl md:text-3xl lg:text-4xl"
-						showStatusBadge={false}
 					/>
 				)}
 

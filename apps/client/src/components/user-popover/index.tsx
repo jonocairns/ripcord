@@ -53,7 +53,7 @@ const UserPopover = memo(({ userId, children, footer, actions }: TUserPopoverPro
 					)}
 					<div className="absolute left-4 top-16">
 						<div className="rounded-full bg-popover p-0.5 shadow-[0_0_0_1px_rgb(255_255_255/0.12),0_8px_20px_rgb(0_0_0/0.35)]">
-							<UserAvatar userId={user.id} className="h-16 w-16 border border-border/70" showStatusBadge={false} />
+							<UserAvatar userId={user.id} className="h-16 w-16 border border-border/70" />
 						</div>
 					</div>
 				</div>
