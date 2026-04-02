@@ -1,6 +1,5 @@
 import { OWNER_ROLE_ID } from '@sharkord/shared';
 import { currentVoiceChannelIdSelector } from './channels/selectors';
-import { typingMapSelector } from './messages/selectors';
 import { rolesSelector } from './roles/selectors';
 import type { IServerState } from './slice';
 import type { TVoiceUser } from './types';
@@ -52,18 +51,6 @@ export const userRolesSelector = (state: IServerState, userId: number) => {
 
 export const userRolesIdsSelector = (state: IServerState, userId: number) =>
 	userByIdSelector(state, userId)?.roleIds || [];
-
-export const typingUsersByChannelIdSelector = (state: IServerState, channelId: number) => {
-	const typingMap = typingMapSelector(state);
-	const ownUserId = ownUserIdSelector(state);
-	const users = usersSelector(state);
-	const userIds = typingMap[channelId] || [];
-
-	return userIds
-		.filter((id) => id !== ownUserId)
-		.map((id) => users.find((user) => user.id === id))
-		.filter((user): user is NonNullable<typeof user> => !!user);
-};
 
 export const voiceUsersByChannelIdSelector = (state: IServerState, channelId: number) => {
 	const users = usersSelector(state);

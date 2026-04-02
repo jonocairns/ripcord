@@ -1,13 +1,12 @@
-import { ChannelPermission, isEmptyMessage, Permission, TYPING_MS } from '@sharkord/shared';
+import { ChannelPermission, isEmptyMessage, Permission } from '@sharkord/shared';
 import { filesize } from 'filesize';
-import { throttle } from 'lodash-es';
 import { Hash, Pencil, Plus, Send } from 'lucide-react';
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { TiptapInput } from '@/components/tiptap-input';
 import Spinner from '@/components/ui/spinner';
 import { useChannelById } from '@/features/server/channels/hooks';
-import { useCan, useChannelCan, useTypingUsersByChannelId } from '@/features/server/hooks';
+import { useCan, useChannelCan } from '@/features/server/hooks';
 import { useMessages } from '@/features/server/messages/hooks';
 import { useFlatPluginCommands } from '@/features/server/plugins/hooks';
 import { playSound } from '@/features/server/sounds/actions';
@@ -22,7 +21,6 @@ import { FileCard } from './file-card';
 import { MessagesGroup } from './messages-group';
 import { TextSkeleton } from './text-skeleton';
 import { useScrollController } from './use-scroll-controller';
-import { UsersTyping } from './users-typing';
 
 type TChannelProps = {
 	channelId: number;
@@ -34,14 +32,12 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 	const [newMessage, setNewMessage] = useState('');
 	const allPluginCommands = useFlatPluginCommands();
 	const channel = useChannelById(channelId);
-	const typingUsers = useTypingUsersByChannelId(channelId);
 
 	const { containerRef, onScroll } = useScrollController({
 		messages,
 		fetching,
 		hasMore,
 		loadMore,
-		hasTypingUsers: typingUsers.length > 0,
 	});
 
 	// keep this ref just as a safeguard
@@ -69,20 +65,6 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 
 	const canManageChannel = can(Permission.MANAGE_CHANNELS);
 
-	const sendTypingSignal = useMemo(
-		() =>
-			throttle(async () => {
-				const trpc = getTRPCClient();
-
-				try {
-					await trpc.messages.signalTyping.mutate({ channelId });
-				} catch {
-					// ignore
-				}
-			}, TYPING_MS),
-		[channelId],
-	);
-
 	const onSendMessage = useCallback(async () => {
 		if ((isEmptyMessage(newMessage) && !files.length) || !canSendMessages || sendingRef.current) {
 			return;
@@ -90,7 +72,6 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 
 		setSending(true);
 		sendingRef.current = true;
-		sendTypingSignal.cancel();
 
 		const trpc = getTRPCClient();
 
@@ -112,7 +93,7 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 
 		setNewMessage('');
 		clearFiles();
-	}, [newMessage, channelId, files, clearFiles, sendTypingSignal, canSendMessages]);
+	}, [newMessage, channelId, files, clearFiles, canSendMessages]);
 
 	const onRemoveFileClick = useCallback(
 		async (fileId: string) => {
@@ -191,7 +172,7 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 			</div>
 
 			<div className="flex shrink-0 flex-col border-t border-border">
-				{(uploading || files.length > 0 || typingUsers.length > 0) && (
+				{(uploading || files.length > 0) && (
 					<div className="flex flex-col gap-2 px-2 pt-2">
 						{uploading && (
 							<div className="flex items-center gap-2">
@@ -212,7 +193,6 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 								))}
 							</div>
 						)}
-						<UsersTyping channelId={channelId} />
 					</div>
 				)}
 				<div className="flex items-center px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:h-14 md:p-2">
@@ -232,7 +212,6 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 							value={newMessage}
 							onChange={setNewMessage}
 							onSubmit={onSendMessage}
-							onTyping={sendTypingSignal}
 							disabled={uploading || !canSendMessages}
 							readOnly={sending}
 							commands={pluginCommands}

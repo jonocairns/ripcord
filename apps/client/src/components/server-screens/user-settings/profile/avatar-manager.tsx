@@ -66,7 +66,6 @@ const AvatarManager = memo(({ user }: TAvatarManagerProps) => {
 						<UserAvatar
 							userId={user.id}
 							className="h-24 w-24 rounded-full bg-muted transition-opacity group-hover:opacity-30"
-							showStatusBadge={false}
 							showUserPopover={false}
 						/>
 						<div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-full">

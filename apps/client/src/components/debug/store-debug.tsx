@@ -22,7 +22,6 @@ const StoreDebug = () => {
 			publicSettings: state.publicSettings,
 			info: state.info,
 			loadingInfo: state.loadingInfo,
-			typingMap: state.typingMap,
 			voiceMap: state.voiceMap,
 			externalStreamsMap: state.externalStreamsMap,
 			ownVoiceState: state.ownVoiceState,

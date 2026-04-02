@@ -69,7 +69,6 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
 						userId={user.id}
 						className={cn('relative z-[1] h-5 w-5 speaking-avatar-indicator')}
 						showUserPopover={false}
-						showStatusBadge={false}
 					/>
 				</div>
 

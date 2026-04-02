@@ -1,4 +1,4 @@
-import { Permission, UserStatus } from '@sharkord/shared';
+import { Permission } from '@sharkord/shared';
 import { format } from 'date-fns';
 import { ShieldCheck, UserCog } from 'lucide-react';
 import { memo } from 'react';
@@ -11,7 +11,6 @@ import { RoleBadge } from '../role-badge';
 import { IconButton } from '../ui/icon-button';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { UserAvatar } from '../user-avatar';
-import { UserStatusBadge } from '../user-status';
 
 type TUserPopoverProps = {
 	userId: number;
@@ -54,7 +53,7 @@ const UserPopover = memo(({ userId, children, footer, actions }: TUserPopoverPro
 					)}
 					<div className="absolute left-4 top-16">
 						<div className="rounded-full bg-popover p-0.5 shadow-[0_0_0_1px_rgb(255_255_255/0.12),0_8px_20px_rgb(0_0_0/0.35)]">
-							<UserAvatar userId={user.id} className="h-16 w-16 border border-border/70" showStatusBadge={false} />
+							<UserAvatar userId={user.id} className="h-16 w-16 border border-border/70" />
 						</div>
 					</div>
 				</div>
@@ -62,12 +61,6 @@ const UserPopover = memo(({ userId, children, footer, actions }: TUserPopoverPro
 				<div className="px-4 pt-12 pb-4">
 					<div className="mb-3">
 						<span className="text-lg font-semibold text-foreground truncate mb-1">{user.name}</span>
-						<div className="flex items-center gap-2">
-							<div className="flex items-center gap-2">
-								<UserStatusBadge status={user.status || UserStatus.OFFLINE} className="h-3 w-3" />
-								<span className="text-xs text-muted-foreground capitalize">{user.status || UserStatus.OFFLINE}</span>
-							</div>
-						</div>
 					</div>
 
 					{roles.length > 0 && (

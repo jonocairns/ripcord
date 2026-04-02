@@ -1,4 +1,3 @@
-import { UserStatus } from '@sharkord/shared';
 import { PanelRight, PanelRightClose } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import { UserAvatar } from '@/components/user-avatar';
@@ -13,7 +12,6 @@ type TMember = {
 	id: number;
 	name: string;
 	banned: boolean;
-	status?: string | null;
 };
 
 type TUserProps = {
@@ -22,9 +20,6 @@ type TUserProps = {
 };
 
 const User = memo(({ user, isCollapsed = false }: TUserProps) => {
-	const status = String(user.status ?? UserStatus.OFFLINE);
-	const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
-
 	return (
 		<UserPopover userId={user.id}>
 			<div
@@ -49,36 +44,11 @@ const User = memo(({ user, isCollapsed = false }: TUserProps) => {
 					>
 						{user.name}
 					</span>
-					<span className="block truncate text-[11px] text-muted-foreground">{statusLabel}</span>
 				</div>
 			</div>
 		</UserPopover>
 	);
 });
-
-type TUserSection = {
-	id: string;
-	label: string;
-	users: TMember[];
-};
-
-const getMemberSections = (users: TMember[]): TUserSection[] => {
-	const online = users.filter(
-		(user) => !user.banned && String(user.status ?? UserStatus.OFFLINE) === UserStatus.ONLINE,
-	);
-	const idle = users.filter((user) => !user.banned && String(user.status ?? UserStatus.OFFLINE) === UserStatus.IDLE);
-	const offline = users.filter(
-		(user) => !user.banned && String(user.status ?? UserStatus.OFFLINE) === UserStatus.OFFLINE,
-	);
-	const banned = users.filter((user) => user.banned);
-
-	return [
-		{ id: 'online', label: 'Online', users: online },
-		{ id: 'idle', label: 'Idle', users: idle },
-		{ id: 'offline', label: 'Offline', users: offline },
-		{ id: 'banned', label: 'Banned', users: banned },
-	].filter((section) => section.users.length > 0);
-};
 
 type TRightSidebarProps = {
 	className?: string;
@@ -91,9 +61,10 @@ const RightSidebar = memo(({ className, isOpen = true, isCollapsed = false, onTo
 	const users = useUsers();
 
 	const usersToShow = useMemo(() => users.slice(0, MAX_USERS_TO_SHOW) as TMember[], [users]);
+	const visibleUsers = useMemo(() => usersToShow.filter((user) => !user.banned), [usersToShow]);
+	const bannedUsers = useMemo(() => usersToShow.filter((user) => user.banned), [usersToShow]);
 
 	const hasHiddenUsers = users.length > MAX_USERS_TO_SHOW;
-	const sections = useMemo(() => getMemberSections(usersToShow), [usersToShow]);
 
 	return (
 		<aside
@@ -144,18 +115,25 @@ const RightSidebar = memo(({ className, isOpen = true, isCollapsed = false, onTo
 							</div>
 						) : (
 							<div className="space-y-4">
-								{sections.map((section) => (
-									<section key={section.id} className="space-y-1">
+								{visibleUsers.length > 0 && (
+									<div className="space-y-1">
+										{visibleUsers.map((user) => (
+											<User key={user.id} user={user} />
+										))}
+									</div>
+								)}
+								{bannedUsers.length > 0 && (
+									<section className="space-y-1">
 										<div className="px-2 text-[11px] font-semibold tracking-wide text-muted-foreground/80 uppercase">
-											{section.label} ({section.users.length})
+											Banned ({bannedUsers.length})
 										</div>
 										<div className="space-y-1">
-											{section.users.map((user) => (
+											{bannedUsers.map((user) => (
 												<User key={user.id} user={user} />
 											))}
 										</div>
 									</section>
-								))}
+								)}
 							</div>
 						)}
 

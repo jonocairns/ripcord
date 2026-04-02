@@ -1,4 +1,3 @@
-import { UserStatus } from '@sharkord/shared';
 import { LogOut, Settings } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { logoutFromServer } from '@/features/server/actions';
@@ -11,7 +10,6 @@ import { Button } from '../ui/button';
 import { IconButton } from '../ui/icon-button';
 import { UserAvatar } from '../user-avatar';
 import { UserPopover } from '../user-popover';
-import { UserStatusBadge } from '../user-status';
 import { OwnVoiceControls } from './own-voice-controls';
 
 const UserControl = memo(() => {
@@ -26,8 +24,6 @@ const UserControl = memo(() => {
 	}, []);
 
 	if (!ownPublicUser) return null;
-
-	const userStatus = ownPublicUser.status ?? UserStatus.OFFLINE;
 
 	return (
 		<div
@@ -50,18 +46,9 @@ const UserControl = memo(() => {
 				}
 			>
 				<div className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-md px-1 py-0.5">
-					<UserAvatar
-						userId={ownPublicUser.id}
-						className="h-9 w-9 flex-shrink-0"
-						showUserPopover={false}
-						showStatusBadge={false}
-					/>
-					<div className="flex flex-col min-w-0 flex-1">
+					<UserAvatar userId={ownPublicUser.id} className="h-9 w-9 flex-shrink-0" showUserPopover={false} />
+					<div className="min-w-0 flex-1">
 						<span className="text-sm font-medium text-foreground truncate">{ownPublicUser.name}</span>
-						<div className="flex items-center gap-1.5">
-							<UserStatusBadge status={userStatus} className="h-2 w-2 border-0" />
-							<span className="text-xs text-muted-foreground capitalize">{userStatus}</span>
-						</div>
 					</div>
 				</div>
 			</UserPopover>
