@@ -253,7 +253,28 @@ fn bind_shortcuts(
         );
     }
 
-    let _ = next_request_response(&mut response_stream, "bind the requested global shortcuts")?;
+    let (_, results) = next_request_response(&mut response_stream, "bind the requested global shortcuts")?;
+
+    // The portal returns a `shortcuts` dict mapping accepted shortcut IDs to their info.
+    // Log when the response omits any requested ID so partial binding failures surface during
+    // real-world testing on non-standard compositors (standard GNOME/KDE are all-or-nothing).
+    let registered_ids: Vec<String> = results
+        .get("shortcuts")
+        .and_then(|v| <HashMap<String, HashMap<String, OwnedValue>>>::try_from(v.clone()).ok())
+        .map(|map| map.into_keys().collect())
+        .unwrap_or_default();
+
+    if !registered_ids.is_empty() {
+        for binding in shortcut_bindings {
+            if !registered_ids.contains(&binding.id) {
+                eprintln!(
+                    "[global_shortcuts] portal did not confirm shortcut '{}' ({}); it may not fire",
+                    binding.id, binding.description
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -262,6 +283,11 @@ fn portal_proxy<'a>(connection: &'a Connection, path: &'a str, interface: &'a st
         .map_err(|error| format!("Could not create a desktop portal proxy: {error}"))
 }
 
+// Blocks the calling thread until the portal emits a Response signal on `response_stream`.
+// The portal Request object is always closed (with a Response) or replaced by an error on the
+// D-Bus level, so this only hangs indefinitely if the compositor is buggy or the D-Bus session
+// bus has crashed. Callers must ensure the sidecar process is bounded by a higher-level timeout
+// (e.g. the desktop manager's registration deadline) if strict liveness is required.
 fn next_request_response(
     response_stream: &mut zbus::blocking::proxy::SignalIterator<'_>,
     action: &str,

@@ -295,7 +295,6 @@ fn xdg_data_roots() -> Vec<PathBuf> {
         push_unique_path(&mut roots, PathBuf::from("/usr/share"));
     }
 
-    push_unique_path(&mut roots, PathBuf::from("/usr/share"));
     roots
 }
 
@@ -307,8 +306,7 @@ fn detect_current_desktops() -> Vec<String> {
 }
 
 fn portal_config_path(current_desktops: &[String]) -> Option<PathBuf> {
-    let mut search_roots = xdg_config_roots();
-    search_roots.extend(xdg_data_roots());
+    let search_roots = xdg_config_roots();
 
     for root in search_roots {
         let portal_dir = root.join("xdg-desktop-portal");
