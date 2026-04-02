@@ -316,10 +316,15 @@ private final class PacketWriter {
 
 @available(macOS 13.0, *)
 private final class AudioCaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
-    private let targetFormat: AVAudioFormat = AVAudioFormat(
-        standardFormatWithSampleRate: AudioOutputConstants.sampleRate,
-        channels: AudioOutputConstants.channelCount
-    )!
+    private let targetFormat: AVAudioFormat = {
+        guard let fmt = AVAudioFormat(
+            standardFormatWithSampleRate: AudioOutputConstants.sampleRate,
+            channels: AudioOutputConstants.channelCount
+        ) else {
+            preconditionFailure("Hardcoded audio format constants produced an invalid AVAudioFormat")
+        }
+        return fmt
+    }()
     private let packetWriter: PacketWriter
 
     init(packetWriter: PacketWriter) {
