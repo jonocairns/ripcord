@@ -139,6 +139,42 @@ const createIssueFromCode = (
           "Wayland global keybinds currently depend on XWayland support in the active compositor.",
         ],
       };
+    case "linux-wayland-global-shortcuts-portal-available":
+      return {
+        code,
+        affects: ["global-push-keybinds"],
+        severity: "error",
+        title: "Wayland global push keybinds not implemented",
+        message,
+        guidance: [
+          "Use an X11 or XWayland session for global push-to-talk and push-to-mute with the current desktop build.",
+          "A Wayland Global Shortcuts portal was detected, but this Sharkord build does not use that backend yet.",
+        ],
+      };
+    case "linux-wayland-global-shortcuts-portal-required":
+      return {
+        code,
+        affects: ["global-push-keybinds"],
+        severity: "error",
+        title: "Wayland shortcut portal unavailable",
+        message,
+        guidance: [
+          "Start xdg-desktop-portal for the current session, then retry.",
+          "If that is not possible, use an X11 or XWayland session for global push keybinds.",
+        ],
+      };
+    case "linux-wayland-global-shortcuts-unavailable":
+      return {
+        code,
+        affects: ["global-push-keybinds"],
+        severity: "error",
+        title: "Wayland global push keybinds unavailable",
+        message,
+        guidance: [
+          "Use an X11 or XWayland session for global push-to-talk and push-to-mute.",
+          "If your desktop environment adds a Global Shortcuts portal backend later, Sharkord still needs an explicit Wayland integration path.",
+        ],
+      };
     case "macos-helper-unavailable":
       return {
         code,
@@ -330,6 +366,15 @@ const resolveDesktopCaptureCapabilities = ({
           )
         : undefined,
     );
+
+    if (sidecarCapabilities?.linuxGlobalShortcutsPortalBackend) {
+      appendNote(
+        notes,
+        `Wayland Global Shortcuts portal backend: ${sidecarCapabilities.linuxGlobalShortcutsPortalBackend}.`,
+      );
+    } else if (sidecarCapabilities?.linuxGlobalShortcutsPortalReason) {
+      appendNote(notes, sidecarCapabilities.linuxGlobalShortcutsPortalReason);
+    }
 
     if (
       !sidecarAvailable ||

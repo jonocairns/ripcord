@@ -1,6 +1,10 @@
+mod global_shortcuts;
 mod pulse;
 
+use global_shortcuts::register_push_keybinds_via_portal;
 use pulse::LinuxAudioBackendProbe;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -17,14 +21,52 @@ use crate::{
 
 use super::PushKeybindRegistration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LinuxPushKeybind {
-    key_sym: u64,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-    meta: bool,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LinuxPushKeybind {
+    pub(super) key_code: String,
+    pub(super) key_sym: u64,
+    pub(super) ctrl: bool,
+    pub(super) alt: bool,
+    pub(super) shift: bool,
+    pub(super) meta: bool,
 }
+
+#[derive(Debug, Clone)]
+struct PortalBackendDefinition {
+    name: String,
+    interfaces: Vec<String>,
+    use_in: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct LinuxGlobalShortcutsPortalProbe {
+    configured: bool,
+    backend: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct LinuxPushKeybindSupportProbe {
+    backend: LinuxPushKeybindBackend,
+    global_push_keybinds: &'static str,
+    global_push_keybinds_reason: Option<String>,
+    global_push_keybinds_reason_code: Option<&'static str>,
+    x11_display_available: bool,
+    x11_display_reason: Option<String>,
+    portal_backend_configured: bool,
+    portal_backend: Option<String>,
+    portal_backend_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinuxPushKeybindBackend {
+    Portal,
+    X11,
+    Unsupported,
+}
+
+const GLOBAL_SHORTCUTS_PORTAL_INTERFACE: &str =
+    "org.freedesktop.impl.portal.GlobalShortcuts";
 
 fn map_key_code_to_x11_keysym(key_code: &str) -> Option<u64> {
     if key_code.starts_with("Key") && key_code.len() == 4 {
@@ -150,12 +192,338 @@ fn parse_push_keybind(keybind: Option<&str>) -> Result<Option<LinuxPushKeybind>,
         .ok_or_else(|| "Unsupported key for global keybind monitoring.".to_string())?;
 
     Ok(Some(LinuxPushKeybind {
+        key_code: key_code_name.to_string(),
         key_sym,
         ctrl,
         alt,
         shift,
         meta,
     }))
+}
+
+fn parse_list_with_separator(value: &str, separator: char) -> Vec<String> {
+    value
+        .split(separator)
+        .map(|entry| entry.trim().to_ascii_lowercase())
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
+fn parse_ini_section(path: &Path, target_section: &str) -> Option<HashMap<String, String>> {
+    let contents = fs::read_to_string(path).ok()?;
+    let mut current_section = String::new();
+    let mut values = HashMap::new();
+
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+
+        if line.starts_with('[') && line.ends_with(']') {
+            current_section = line[1..line.len() - 1].trim().to_ascii_lowercase();
+            continue;
+        }
+
+        if current_section != target_section {
+            continue;
+        }
+
+        let Some((key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+
+        values.insert(key.trim().to_string(), raw_value.trim().to_string());
+    }
+
+    Some(values)
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing_path| existing_path == &path) {
+        paths.push(path);
+    }
+}
+
+fn default_path_from_home(home_env: Option<String>, suffix: &str) -> Option<PathBuf> {
+    let home = home_env?;
+    let mut path = PathBuf::from(home);
+    path.push(suffix);
+    Some(path)
+}
+
+fn xdg_config_roots() -> Vec<PathBuf> {
+    let home_env = std::env::var("HOME").ok();
+    let mut roots = Vec::new();
+
+    if let Some(config_home) = std::env::var("XDG_CONFIG_HOME").ok() {
+        push_unique_path(&mut roots, PathBuf::from(config_home));
+    } else if let Some(default_config_home) = default_path_from_home(home_env.clone(), ".config") {
+        push_unique_path(&mut roots, default_config_home);
+    }
+
+    if let Some(config_dirs) = std::env::var("XDG_CONFIG_DIRS").ok() {
+        for config_dir in config_dirs.split(':').filter(|entry| !entry.is_empty()) {
+            push_unique_path(&mut roots, PathBuf::from(config_dir));
+        }
+    } else {
+        push_unique_path(&mut roots, PathBuf::from("/etc/xdg"));
+    }
+
+    push_unique_path(&mut roots, PathBuf::from("/etc"));
+    roots
+}
+
+fn xdg_data_roots() -> Vec<PathBuf> {
+    let home_env = std::env::var("HOME").ok();
+    let mut roots = Vec::new();
+
+    if let Some(data_home) = std::env::var("XDG_DATA_HOME").ok() {
+        push_unique_path(&mut roots, PathBuf::from(data_home));
+    } else if let Some(default_data_home) =
+        default_path_from_home(home_env.clone(), ".local/share")
+    {
+        push_unique_path(&mut roots, default_data_home);
+    }
+
+    if let Some(data_dirs) = std::env::var("XDG_DATA_DIRS").ok() {
+        for data_dir in data_dirs.split(':').filter(|entry| !entry.is_empty()) {
+            push_unique_path(&mut roots, PathBuf::from(data_dir));
+        }
+    } else {
+        push_unique_path(&mut roots, PathBuf::from("/usr/local/share"));
+        push_unique_path(&mut roots, PathBuf::from("/usr/share"));
+    }
+
+    roots
+}
+
+fn detect_current_desktops() -> Vec<String> {
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .ok()
+        .map(|value| parse_list_with_separator(&value, ':'))
+        .unwrap_or_default()
+}
+
+fn portal_config_path(current_desktops: &[String]) -> Option<PathBuf> {
+    let search_roots = xdg_config_roots();
+
+    for root in search_roots {
+        let portal_dir = root.join("xdg-desktop-portal");
+
+        for desktop in current_desktops {
+            let desktop_config_path = portal_dir.join(format!("{desktop}-portals.conf"));
+            if desktop_config_path.is_file() {
+                return Some(desktop_config_path);
+            }
+        }
+
+        let generic_config_path = portal_dir.join("portals.conf");
+        if generic_config_path.is_file() {
+            return Some(generic_config_path);
+        }
+    }
+
+    None
+}
+
+fn load_portal_backend_definitions() -> HashMap<String, PortalBackendDefinition> {
+    let mut definitions = HashMap::new();
+
+    for root in xdg_data_roots() {
+        let portal_dir = root.join("xdg-desktop-portal").join("portals");
+        let Ok(entries) = fs::read_dir(portal_dir) else {
+            continue;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("portal") {
+                continue;
+            }
+
+            let Some(portal_name) = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(|stem| stem.to_ascii_lowercase())
+            else {
+                continue;
+            };
+
+            if definitions.contains_key(&portal_name) {
+                continue;
+            }
+
+            let Some(portal_section) = parse_ini_section(&path, "portal") else {
+                continue;
+            };
+
+            let interfaces = portal_section
+                .get("Interfaces")
+                .map(|value| parse_list_with_separator(value, ';'))
+                .unwrap_or_default();
+
+            if interfaces.is_empty() {
+                continue;
+            }
+
+            let use_in = portal_section
+                .get("UseIn")
+                .map(|value| parse_list_with_separator(value, ';'))
+                .unwrap_or_default();
+
+            definitions.insert(
+                portal_name.clone(),
+                PortalBackendDefinition {
+                    name: portal_name,
+                    interfaces,
+                    use_in,
+                },
+            );
+        }
+    }
+
+    definitions
+}
+
+fn backend_supports_interface(
+    backend: &PortalBackendDefinition,
+    interface_name: &str,
+) -> bool {
+    backend.interfaces.iter().any(|interface| interface.eq_ignore_ascii_case(interface_name))
+}
+
+fn backend_matches_desktop(
+    backend: &PortalBackendDefinition,
+    current_desktops: &[String],
+) -> bool {
+    backend.use_in.is_empty()
+        || current_desktops.is_empty()
+        || backend
+            .use_in
+            .iter()
+            .any(|desktop| current_desktops.iter().any(|current| current == desktop))
+}
+
+fn resolve_portal_backend_from_candidates(
+    backend_candidates: &[String],
+    portal_definitions: &HashMap<String, PortalBackendDefinition>,
+    current_desktops: &[String],
+) -> Option<String> {
+    for backend_candidate in backend_candidates {
+        if backend_candidate == "none" {
+            return None;
+        }
+
+        if backend_candidate == "*" {
+            let mut matching_backends: Vec<&PortalBackendDefinition> = portal_definitions
+                .values()
+                .filter(|backend| {
+                    backend_supports_interface(backend, GLOBAL_SHORTCUTS_PORTAL_INTERFACE)
+                        && backend_matches_desktop(backend, current_desktops)
+                })
+                .collect();
+            matching_backends.sort_by(|left, right| left.name.cmp(&right.name));
+            return matching_backends.first().map(|backend| backend.name.clone());
+        }
+
+        if let Some(backend) = portal_definitions.get(backend_candidate) {
+            if backend_supports_interface(backend, GLOBAL_SHORTCUTS_PORTAL_INTERFACE) {
+                return Some(backend.name.clone());
+            }
+        }
+    }
+
+    None
+}
+
+fn probe_wayland_global_shortcuts_portal() -> LinuxGlobalShortcutsPortalProbe {
+    let current_desktops = detect_current_desktops();
+    let portal_definitions = load_portal_backend_definitions();
+
+    if portal_definitions
+        .values()
+        .all(|backend| !backend_supports_interface(backend, GLOBAL_SHORTCUTS_PORTAL_INTERFACE))
+    {
+        return LinuxGlobalShortcutsPortalProbe {
+            configured: false,
+            backend: None,
+            reason: Some(
+                "No installed xdg-desktop-portal backend advertises the Global Shortcuts interface."
+                    .to_string(),
+            ),
+        };
+    }
+
+    if let Some(config_path) = portal_config_path(&current_desktops) {
+        if let Some(preferred_section) = parse_ini_section(&config_path, "preferred") {
+            let configured_backends = preferred_section
+                .get(GLOBAL_SHORTCUTS_PORTAL_INTERFACE)
+                .or_else(|| preferred_section.get("default"))
+                .map(|value| parse_list_with_separator(value, ';'))
+                .unwrap_or_default();
+
+            if configured_backends.iter().any(|backend| backend == "none") {
+                return LinuxGlobalShortcutsPortalProbe {
+                    configured: false,
+                    backend: None,
+                    reason: Some(
+                        "The current portal configuration disables the Global Shortcuts interface."
+                            .to_string(),
+                    ),
+                };
+            }
+
+            if let Some(backend) = resolve_portal_backend_from_candidates(
+                &configured_backends,
+                &portal_definitions,
+                &current_desktops,
+            ) {
+                return LinuxGlobalShortcutsPortalProbe {
+                    configured: true,
+                    backend: Some(backend),
+                    reason: None,
+                };
+            }
+
+            if !configured_backends.is_empty() {
+                return LinuxGlobalShortcutsPortalProbe {
+                    configured: false,
+                    backend: None,
+                    reason: Some(
+                        "The current portal configuration does not select a backend that implements Global Shortcuts."
+                            .to_string(),
+                    ),
+                };
+            }
+        }
+    }
+
+    let mut matching_backends: Vec<&PortalBackendDefinition> = portal_definitions
+        .values()
+        .filter(|backend| {
+            backend_supports_interface(backend, GLOBAL_SHORTCUTS_PORTAL_INTERFACE)
+                && backend_matches_desktop(backend, &current_desktops)
+        })
+        .collect();
+    matching_backends.sort_by(|left, right| left.name.cmp(&right.name));
+
+    if let Some(backend) = matching_backends.first() {
+        return LinuxGlobalShortcutsPortalProbe {
+            configured: true,
+            backend: Some(backend.name.clone()),
+            reason: None,
+        };
+    }
+
+    LinuxGlobalShortcutsPortalProbe {
+        configured: false,
+        backend: None,
+        reason: Some(
+            "No portal backend advertises Global Shortcuts for the current desktop environment."
+                .to_string(),
+        ),
+    }
 }
 
 fn open_x11_and_resolve_keycodes(
@@ -312,35 +680,91 @@ pub(crate) fn register_push_keybinds(
         errors.push("Push-to-mute keybind matches push-to-talk and was ignored.".to_string());
     }
 
+    if talk_keybind.is_none() && mute_keybind.is_none() {
+        return PushKeybindRegistration {
+            talk_registered: false,
+            mute_registered: false,
+            errors,
+            watcher: None,
+        };
+    }
+
+    let session_type = detect_session_type();
+    let (portal_available, portal_reason) = probe_desktop_portal();
+    let push_keybind_support = probe_linux_push_keybind_support(
+        &session_type,
+        portal_available,
+        portal_reason.as_deref(),
+    );
+
+    let mut registration = match push_keybind_support.backend {
+        LinuxPushKeybindBackend::Portal => register_push_keybinds_via_portal(
+            frame_queue,
+            talk_keybind.as_ref(),
+            mute_keybind.as_ref(),
+        ),
+        LinuxPushKeybindBackend::X11 => register_push_keybinds_via_x11(
+            frame_queue,
+            talk_keybind,
+            mute_keybind,
+        ),
+        LinuxPushKeybindBackend::Unsupported => {
+            if let Some(reason) = push_keybind_support.global_push_keybinds_reason {
+                errors.push(reason);
+            }
+
+            PushKeybindRegistration {
+                talk_registered: false,
+                mute_registered: false,
+                errors: Vec::new(),
+                watcher: None,
+            }
+        }
+    };
+
+    errors.append(&mut registration.errors);
+    registration.errors = errors;
+    registration
+}
+
+fn register_push_keybinds_via_x11(
+    frame_queue: Arc<FrameQueue>,
+    talk_keybind: Option<LinuxPushKeybind>,
+    mute_keybind: Option<LinuxPushKeybind>,
+) -> PushKeybindRegistration {
+    let mut errors = Vec::new();
     let mut resolved_talk: Option<(LinuxPushKeybind, u8)> = None;
     let mut resolved_mute: Option<(LinuxPushKeybind, u8)> = None;
     let mut watcher = None;
 
-    if talk_keybind.is_some() || mute_keybind.is_some() {
-        match open_x11_and_resolve_keycodes(talk_keybind.as_ref(), mute_keybind.as_ref()) {
-            Err(error) => errors.push(error),
-            Ok((talk_kc, mute_kc)) => {
-                if talk_keybind.is_some() && talk_kc.is_none() {
-                    errors.push(
-                        "Push-to-talk key has no mapping on this keyboard layout.".to_string(),
-                    );
-                }
-                if mute_keybind.is_some() && mute_kc.is_none() {
-                    errors.push(
-                        "Push-to-mute key has no mapping on this keyboard layout.".to_string(),
-                    );
-                }
+    match open_x11_and_resolve_keycodes(talk_keybind.as_ref(), mute_keybind.as_ref()) {
+        Err(error) => errors.push(error),
+        Ok((talk_kc, mute_kc)) => {
+            if talk_keybind.is_some() && talk_kc.is_none() {
+                errors.push("Push-to-talk key has no mapping on this keyboard layout.".to_string());
+            }
+            if mute_keybind.is_some() && mute_kc.is_none() {
+                errors.push("Push-to-mute key has no mapping on this keyboard layout.".to_string());
+            }
 
-                resolved_talk = talk_keybind.zip(talk_kc);
-                resolved_mute = mute_keybind.zip(mute_kc);
+            resolved_talk = talk_keybind.zip(talk_kc);
+            resolved_mute = mute_keybind.zip(mute_kc);
 
-                if resolved_talk.is_some() || resolved_mute.is_some() {
-                    watcher = Some(start_push_keybind_watcher(
-                        frame_queue,
-                        resolved_talk,
-                        resolved_mute,
-                    ));
-                }
+            if resolved_talk.is_some() || resolved_mute.is_some() {
+                let talk_registered = resolved_talk.is_some();
+                let mute_registered = resolved_mute.is_some();
+                watcher = Some(start_push_keybind_watcher(
+                    frame_queue,
+                    resolved_talk.clone(),
+                    resolved_mute.clone(),
+                ));
+
+                return PushKeybindRegistration {
+                    talk_registered,
+                    mute_registered,
+                    errors,
+                    watcher,
+                };
             }
         }
     }
@@ -413,67 +837,190 @@ fn probe_x11_display() -> (bool, Option<String>) {
     (true, None)
 }
 
-fn process_cmdline_contains(needle: &str) -> bool {
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return false;
+fn probe_linux_push_keybind_support(
+    session_type: &str,
+    portal_available: bool,
+    portal_reason: Option<&str>,
+) -> LinuxPushKeybindSupportProbe {
+    let (x11_display_available, x11_display_reason) = probe_x11_display();
+    let portal_probe = if session_type == "wayland" {
+        Some(probe_wayland_global_shortcuts_portal())
+    } else {
+        None
     };
 
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            entry
-                .file_name()
-                .into_string()
-                .ok()
-                .filter(|name| name.chars().all(|char| char.is_ascii_digit()))
-        })
-        .any(|pid| {
-            let cmdline_path = format!("/proc/{pid}/cmdline");
-            let Ok(cmdline) = fs::read(cmdline_path) else {
-                return false;
-            };
+    if session_type == "wayland"
+        && portal_available
+        && portal_probe.as_ref().is_some_and(|probe| probe.configured)
+    {
+        return LinuxPushKeybindSupportProbe {
+            backend: LinuxPushKeybindBackend::Portal,
+            global_push_keybinds: "supported",
+            global_push_keybinds_reason: None,
+            global_push_keybinds_reason_code: None,
+            x11_display_available,
+            x11_display_reason,
+            portal_backend_configured: true,
+            portal_backend: portal_probe.as_ref().and_then(|probe| probe.backend.clone()),
+            portal_backend_reason: portal_probe.as_ref().and_then(|probe| probe.reason.clone()),
+        };
+    }
 
-            cmdline
-                .split(|byte| *byte == 0)
-                .filter_map(|segment| std::str::from_utf8(segment).ok())
-                .any(|segment| segment.contains(needle))
-        })
+    if x11_display_available {
+        let (reason, reason_code) = if session_type == "wayland" {
+            (
+                Some(
+                    "Global push keybinds use XWayland in Wayland sessions and may not work in every compositor."
+                        .to_string(),
+                ),
+                Some("linux-xwayland-best-effort"),
+            )
+        } else {
+            (None, None)
+        };
+
+        return LinuxPushKeybindSupportProbe {
+            backend: LinuxPushKeybindBackend::X11,
+            global_push_keybinds: if session_type == "wayland" {
+                "best-effort"
+            } else {
+                "supported"
+            },
+            global_push_keybinds_reason: reason,
+            global_push_keybinds_reason_code: reason_code,
+            x11_display_available,
+            x11_display_reason,
+            portal_backend_configured: portal_probe
+                .as_ref()
+                .is_some_and(|probe| probe.configured),
+            portal_backend: portal_probe.as_ref().and_then(|probe| probe.backend.clone()),
+            portal_backend_reason: portal_probe.as_ref().and_then(|probe| probe.reason.clone()),
+        };
+    }
+
+    if session_type != "wayland" {
+        return LinuxPushKeybindSupportProbe {
+            backend: LinuxPushKeybindBackend::Unsupported,
+            global_push_keybinds: "unsupported",
+            global_push_keybinds_reason: x11_display_reason.clone(),
+            global_push_keybinds_reason_code: Some("linux-x11-display-required"),
+            x11_display_available,
+            x11_display_reason,
+            portal_backend_configured: false,
+            portal_backend: None,
+            portal_backend_reason: None,
+        };
+    }
+
+    let portal_probe = portal_probe.unwrap_or(LinuxGlobalShortcutsPortalProbe {
+        configured: false,
+        backend: None,
+        reason: None,
+    });
+
+    let (reason, reason_code) = if portal_probe.configured {
+        let backend_name = portal_probe
+            .backend
+            .as_deref()
+            .unwrap_or("the current desktop");
+
+        if portal_available {
+            (
+                Some(format!(
+                    "This Wayland session advertises the Global Shortcuts portal backend `{backend_name}`, but Sharkord still relies on X11/XWayland polling for global push keybinds."
+                )),
+                Some("linux-wayland-global-shortcuts-portal-available"),
+            )
+        } else {
+            (
+                Some(format!(
+                    "This Wayland session advertises the Global Shortcuts portal backend `{backend_name}`, but xdg-desktop-portal is unavailable for the current session. {}",
+                    portal_reason.unwrap_or("Start the portal service and retry.")
+                )),
+                Some("linux-wayland-global-shortcuts-portal-required"),
+            )
+        }
+    } else {
+        let portal_probe_reason = portal_probe
+            .reason
+            .as_deref()
+            .unwrap_or("No Wayland Global Shortcuts portal backend was detected.");
+        (
+            Some(format!(
+                "This Wayland session has no usable X11/XWayland display, and no Global Shortcuts portal backend was detected. {portal_probe_reason}"
+            )),
+            Some("linux-wayland-global-shortcuts-unavailable"),
+        )
+    };
+
+    LinuxPushKeybindSupportProbe {
+        backend: LinuxPushKeybindBackend::Unsupported,
+        global_push_keybinds: "unsupported",
+        global_push_keybinds_reason: reason,
+        global_push_keybinds_reason_code: reason_code,
+        x11_display_available,
+        x11_display_reason,
+        portal_backend_configured: portal_probe.configured,
+        portal_backend: portal_probe.backend,
+        portal_backend_reason: portal_probe.reason,
+    }
 }
 
 fn probe_desktop_portal() -> (bool, Option<String>) {
-    // This is intentionally a best-effort readiness heuristic, not a hard gate:
-    // some desktop sessions rely on D-Bus socket activation, so the portal
-    // process may not appear in `/proc` until the first request triggers it.
-    // We still surface the missing-portal result as guidance because it catches
-    // the common broken-session case without adding a D-Bus dependency here.
-    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
-        return (
+    let connection = match zbus::blocking::Connection::session() {
+        Ok(connection) => connection,
+        Err(_) => {
+            return (
+                false,
+                Some(
+                    "No D-Bus session bus was detected. Wayland screen sharing requires xdg-desktop-portal."
+                        .to_string(),
+                ),
+            )
+        }
+    };
+    let dbus_proxy = match zbus::blocking::fdo::DBusProxy::new(&connection) {
+        Ok(proxy) => proxy,
+        Err(error) => {
+            return (
+                false,
+                Some(format!(
+                    "The current D-Bus session bus is unavailable for desktop portal checks: {error}"
+                )),
+            )
+        }
+    };
+
+    let portal_service_name =
+        zbus::names::BusName::try_from("org.freedesktop.portal.Desktop").expect("valid bus name");
+
+    match dbus_proxy.name_has_owner(portal_service_name) {
+        Ok(true) => (true, None),
+        Ok(false) => (
             false,
             Some(
-                "No D-Bus session bus was detected. Wayland screen sharing requires xdg-desktop-portal."
+                "org.freedesktop.portal.Desktop is not available on the current session bus. Wayland screen sharing requires xdg-desktop-portal."
                     .to_string(),
             ),
-        );
-    }
-
-    if !process_cmdline_contains("xdg-desktop-portal") {
-        return (
+        ),
+        Err(error) => (
             false,
-            Some(
-                "xdg-desktop-portal is not running for the current desktop session. Wayland screen sharing requires it."
-                    .to_string(),
-            ),
-        );
+            Some(format!(
+                "Could not query desktop portal availability on the current session bus: {error}"
+            )),
+        ),
     }
-
-    (true, None)
 }
 
 pub(crate) fn capabilities() -> Value {
     let audio_backend = probe_audio_backend();
     let session_type = detect_session_type();
     let (portal_available, portal_reason) = probe_desktop_portal();
-    let (x11_display_available, x11_display_reason) = probe_x11_display();
+    let push_keybind_support = probe_linux_push_keybind_support(
+        &session_type,
+        portal_available,
+        portal_reason.as_deref(),
+    );
     let source_audio_target_inference_reason = Some(
         "Linux does not infer an app-audio target from the selected share source; choose a target manually."
             .to_string(),
@@ -488,22 +1035,6 @@ pub(crate) fn capabilities() -> Value {
                 audio_backend.per_app_audio_reason.clone(),
             )
         };
-    let (global_push_keybinds, global_push_keybinds_reason) = if x11_display_available {
-        if session_type == "wayland" {
-            (
-                "best-effort",
-                Some(
-                    "Global push keybinds use XWayland in Wayland sessions and may not work in every compositor."
-                        .to_string(),
-                ),
-            )
-        } else {
-            ("supported", None)
-        }
-    } else {
-        ("unsupported", x11_display_reason.clone())
-    };
-
     let mut response = json!({
         "platform": std::env::consts::OS,
         "systemAudio": system_audio,
@@ -522,8 +1053,9 @@ pub(crate) fn capabilities() -> Value {
         "portalAvailable": portal_available,
         "appAudioTargetEnumerationSupported": audio_backend.per_app_audio_supported,
         "sourceAudioTargetInferenceSupported": false,
-        "globalPushKeybinds": global_push_keybinds,
-        "x11DisplayAvailable": x11_display_available,
+        "globalPushKeybinds": push_keybind_support.global_push_keybinds,
+        "x11DisplayAvailable": push_keybind_support.x11_display_available,
+        "linuxGlobalShortcutsPortalConfigured": push_keybind_support.portal_backend_configured,
     });
 
     if let Some(reason) = per_app_audio_reason {
@@ -554,18 +1086,24 @@ pub(crate) fn capabilities() -> Value {
             json!("linux-manual-app-target-selection-required");
     }
 
-    if let Some(reason) = global_push_keybinds_reason {
+    if let Some(reason) = push_keybind_support.global_push_keybinds_reason {
         response["globalPushKeybindsReason"] = json!(reason);
-        response["globalPushKeybindsReasonCode"] = json!(if x11_display_available {
-            "linux-xwayland-best-effort"
-        } else {
-            "linux-x11-display-required"
-        });
+        if let Some(reason_code) = push_keybind_support.global_push_keybinds_reason_code {
+            response["globalPushKeybindsReasonCode"] = json!(reason_code);
+        }
     }
 
-    if let Some(reason) = x11_display_reason {
+    if let Some(reason) = push_keybind_support.x11_display_reason {
         response["x11DisplayReason"] = json!(reason);
         response["x11DisplayReasonCode"] = json!("linux-x11-display-required");
+    }
+
+    if let Some(portal_backend) = push_keybind_support.portal_backend {
+        response["linuxGlobalShortcutsPortalBackend"] = json!(portal_backend);
+    }
+
+    if let Some(portal_backend_reason) = push_keybind_support.portal_backend_reason {
+        response["linuxGlobalShortcutsPortalReason"] = json!(portal_backend_reason);
     }
 
     response

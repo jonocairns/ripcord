@@ -165,6 +165,42 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     );
   });
 
+  void it("treats a configured Wayland shortcut portal as real support", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: true,
+      sidecarPerAppAudioSupported: true,
+      sidecarCapabilities: {
+        sessionType: "wayland",
+        linuxAudioCaptureAvailable: true,
+        appAudioTargetEnumerationSupported: true,
+        sourceAudioTargetInferenceSupported: false,
+        globalPushKeybinds: "supported",
+        x11DisplayAvailable: false,
+        x11DisplayReason:
+          "No X11 display was detected for the current Linux session.",
+        x11DisplayReasonCode: "linux-x11-display-required",
+        linuxGlobalShortcutsPortalConfigured: true,
+        linuxGlobalShortcutsPortalBackend: "gnome",
+      },
+    });
+
+    assert.equal(resolved.globalPushKeybinds, "supported");
+    assert.equal(
+      resolved.issues.some(
+        (issue) =>
+          issue.code === "linux-wayland-global-shortcuts-portal-available",
+      ),
+      false,
+    );
+    assert.match(
+      resolved.notes.join(" "),
+      /Global Shortcuts portal backend: gnome/i,
+    );
+  });
+
   void it("surfaces a Linux desktop portal issue for Wayland screen sharing", () => {
     const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
 
