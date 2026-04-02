@@ -378,26 +378,31 @@ Difficulty: Medium
 
 ### 10. Add packaging and update parity as a separate workstream
 
-Desktop distribution parity is currently not there.
+This step is complete for the current parity contract.
 
-- Windows has updater support.
-- macOS and Linux need a deliberate packaging and release strategy.
+What landed:
 
-For macOS:
+- macOS packaging target changed from `dir` to `dmg` — the app now produces a standard macOS DMG distributable instead of a bare directory
+- Linux packaging target changed from `dir` to `AppImage` — AppImage is the chosen Linux package format; it is self-contained, requires no system privileges to run, and works across distros
+- `updater.ts` platform gate replaced with explicit per-platform handling: Linux is marked as explicitly unsupported with clear messaging; macOS is marked as not yet available with clear messaging pointing users to the releases page; the previous catch-all `!== win32` is gone
+- macOS desktop release workflow added (`release-desktop-macos.yml`): builds the sidecar and macOS helper, packages a DMG, and uploads it to the GitHub release; signs the DMG when `MAC_CSC_LINK` is configured, produces an unsigned build otherwise
+- Linux desktop release workflow added (`release-desktop-linux.yml`): builds the sidecar, packages an AppImage, and uploads it to the GitHub release
+- Server release workflow now chains macOS and Linux desktop builds in parallel with Windows after each server release
 
-- signed builds
-- notarization
-- update channel support
+Residual follow-up:
 
-For Linux:
-
-- choose supported package formats
-- define install/update expectations explicitly
+- macOS code signing and notarization: requires an Apple Developer certificate and notarization credentials wired into repository secrets; until then, macOS builds are unsigned and will require Gatekeeper bypass on first launch
+- macOS auto-update via `electron-updater`: blocked on signing; the updater is intentionally disabled on macOS until a signed update channel exists
+- Linux auto-update: remains explicitly unsupported; AppImage supports self-update via `AppImageUpdate` but a strategy has not been chosen; revisit if a managed update channel is defined later
+- Linux arm64 build target: not included in initial scope; revisit if arm64 Linux becomes a supported platform
 
 Relevant files:
 
 - `apps/desktop/src/main/updater.ts`
 - `apps/desktop/package.json`
+- `.github/workflows/release-desktop-macos.yml`
+- `.github/workflows/release-desktop-linux.yml`
+- `.github/workflows/release-server.yml`
 
 Impact: Medium
 
