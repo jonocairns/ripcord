@@ -314,10 +314,10 @@ private final class PacketWriter {
 
 @available(macOS 13.0, *)
 private final class AudioCaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
-    private let targetFormat = AVAudioFormat(
+    private let targetFormat: AVAudioFormat = AVAudioFormat(
         standardFormatWithSampleRate: outputSampleRate,
         channels: outputChannelCount
-    )
+    )!
     private let packetWriter: PacketWriter
 
     init(packetWriter: PacketWriter) {
@@ -445,12 +445,12 @@ private final class AudioCaptureOutput: NSObject, SCStreamOutput, SCStreamDelega
         var conversionError: NSError?
         let statusResult = converter.convert(to: convertedBuffer, error: &conversionError) { _, outStatus in
             if didProvideInput {
-                outStatus.pointee = .endOfStream
+                outStatus.pointee = AVAudioConverterInputStatus.endOfStream
                 return nil
             }
 
             didProvideInput = true
-            outStatus.pointee = .haveData
+            outStatus.pointee = AVAudioConverterInputStatus.haveData
             return sourceBuffer
         }
 
