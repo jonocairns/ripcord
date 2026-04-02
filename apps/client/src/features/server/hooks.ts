@@ -16,7 +16,6 @@ import { useServerStore } from './slice';
 import type { TVoiceUser } from './types';
 import { voiceChannelStateSelector } from './voice/selectors';
 
-const EMPTY_TYPING_USERS: number[] = [];
 const EMPTY_VOICE_USERS: TVoiceUser[] = [];
 
 export const useIsConnected = () => useServerStore(connectedSelector);
@@ -116,21 +115,6 @@ export const useUserRoles = (userId: number) => {
 
 		return roles.filter((role) => user.roleIds.includes(role.id));
 	}, [roles, user]);
-};
-
-export const useTypingUsersByChannelId = (channelId: number) => {
-	const typingUsers = useServerStore((state) => state.typingMap[channelId] ?? EMPTY_TYPING_USERS);
-	const ownUserId = useServerStore((state) => state.ownUserId);
-	const users = useServerStore((state) => state.users);
-
-	return useMemo(
-		() =>
-			typingUsers
-				.filter((userId) => userId !== ownUserId)
-				.map((userId) => users.find((user) => user.id === userId))
-				.filter((user): user is NonNullable<typeof user> => !!user),
-		[ownUserId, typingUsers, users],
-	);
 };
 
 export const useVoiceUsersByChannelId = (channelId: number) => {

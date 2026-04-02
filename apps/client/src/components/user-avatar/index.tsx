@@ -1,4 +1,3 @@
-import { UserStatus } from '@sharkord/shared';
 import { memo } from 'react';
 import { useUserById } from '@/features/server/users/hooks';
 import { getAvatarColor } from '@/helpers/get-avatar-color';
@@ -7,7 +6,6 @@ import { getInitialsFromName } from '@/helpers/get-initials-from-name';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { UserPopover } from '../user-popover';
-import { UserStatusBadge } from '../user-status';
 
 type TUserAvatarProps = {
 	userId: number;
@@ -24,7 +22,7 @@ const UserAvatar = memo(
 		className,
 		fallbackClassName,
 		showUserPopover = false,
-		showStatusBadge = true,
+		showStatusBadge: _showStatusBadge = false,
 		onClick,
 	}: TUserAvatarProps) => {
 		const user = useUserById(userId);
@@ -41,9 +39,6 @@ const UserAvatar = memo(
 						{getInitialsFromName(user.name)}
 					</AvatarFallback>
 				</Avatar>
-				{showStatusBadge && (
-					<UserStatusBadge status={user.status || UserStatus.OFFLINE} className="absolute bottom-0 right-0" />
-				)}
 			</div>
 		);
 

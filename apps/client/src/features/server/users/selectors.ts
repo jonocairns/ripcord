@@ -1,12 +1,6 @@
 import { type TJoinedPublicUser, UserStatus } from '@sharkord/shared';
 import type { IServerState } from '../slice';
 
-const STATUS_ORDER: Record<string, number> = {
-	online: 0,
-	idle: 1,
-	offline: 2,
-};
-
 export const ownUserIdSelector = (state: IServerState) => state.ownUserId;
 
 export const sortUsers = (users: TJoinedPublicUser[]) => {
@@ -16,13 +10,6 @@ export const sortUsers = (users: TJoinedPublicUser[]) => {
 
 		if (aBanned !== bBanned) {
 			return aBanned ? 1 : -1;
-		}
-
-		const aStatus = STATUS_ORDER[String(a.status ?? UserStatus.OFFLINE)] ?? 3;
-		const bStatus = STATUS_ORDER[String(b.status ?? UserStatus.OFFLINE)] ?? 3;
-
-		if (aStatus !== bStatus) {
-			return aStatus - bStatus;
 		}
 
 		return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });

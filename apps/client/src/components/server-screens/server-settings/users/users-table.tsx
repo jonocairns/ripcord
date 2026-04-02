@@ -25,11 +25,10 @@ const UsersTable = memo(({ users }: TUsersTableProps) => {
 					<div>Roles</div>
 					<div>Joined At</div>
 					<div>Last Join</div>
-					<div>Status</div>
 					<div>Actions</div>
 				</>
 			}
-			gridCols="grid-cols-[60px_1fr_120px_120px_120px_80px_50px]"
+			gridCols="grid-cols-[60px_1fr_140px_120px_120px_50px]"
 			itemsPerPage={8}
 			searchPlaceholder="Search users by name or identity..."
 			emptyMessage="No users found"

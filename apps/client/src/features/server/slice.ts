@@ -38,9 +38,6 @@ export interface IServerState {
 	publicSettings: TPublicServerSettings | undefined;
 	info: TServerInfo | undefined;
 	loadingInfo: boolean;
-	typingMap: {
-		[channelId: number]: number[];
-	};
 	voiceMap: TVoiceMap;
 	externalStreamsMap: TExternalStreamsMap;
 	ownVoiceState: TVoiceUserState;
@@ -81,9 +78,6 @@ type TServerStore = IServerState & {
 	addMessages: (payload: { channelId: number; messages: TJoinedMessage[]; opts?: { prepend?: boolean } }) => void;
 	updateMessage: (payload: { channelId: number; message: TJoinedMessage }) => void;
 	deleteMessage: (payload: { channelId: number; messageId: number }) => void;
-	clearTypingUsers: (channelId: number) => void;
-	addTypingUser: (payload: { channelId: number; userId: number }) => void;
-	removeTypingUser: (payload: { channelId: number; userId: number }) => void;
 	setUsers: (users: TJoinedPublicUser[]) => void;
 	updateUser: (payload: { userId: number; user: Partial<TJoinedPublicUser> }) => void;
 	addUser: (user: TJoinedPublicUser) => void;
@@ -140,7 +134,6 @@ const initialState: IServerState = {
 	publicSettings: undefined,
 	info: undefined,
 	loadingInfo: false,
-	typingMap: {},
 	voiceMap: {},
 	externalStreamsMap: {},
 	ownVoiceState: {
@@ -290,45 +283,6 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			messagesMap: {
 				...state.messagesMap,
 				[channelId]: messages.filter((message) => message.id !== messageId),
-			},
-		});
-	},
-	clearTypingUsers: (channelId) => {
-		const state = get();
-
-		if (!state.typingMap[channelId]) {
-			return;
-		}
-
-		const nextTypingMap = { ...state.typingMap };
-
-		delete nextTypingMap[channelId];
-
-		set({ typingMap: nextTypingMap });
-	},
-	addTypingUser: ({ channelId, userId }) => {
-		const state = get();
-		const typingUsers = state.typingMap[channelId] ?? [];
-
-		if (typingUsers.includes(userId)) {
-			return;
-		}
-
-		set({
-			typingMap: {
-				...state.typingMap,
-				[channelId]: [...typingUsers, userId],
-			},
-		});
-	},
-	removeTypingUser: ({ channelId, userId }) => {
-		const state = get();
-		const typingUsers = state.typingMap[channelId] ?? [];
-
-		set({
-			typingMap: {
-				...state.typingMap,
-				[channelId]: typingUsers.filter((id) => id !== userId),
 			},
 		});
 	},

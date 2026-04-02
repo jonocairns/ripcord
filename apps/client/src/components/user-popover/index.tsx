@@ -1,4 +1,4 @@
-import { Permission, UserStatus } from '@sharkord/shared';
+import { Permission } from '@sharkord/shared';
 import { format } from 'date-fns';
 import { ShieldCheck, UserCog } from 'lucide-react';
 import { memo } from 'react';
@@ -11,7 +11,6 @@ import { RoleBadge } from '../role-badge';
 import { IconButton } from '../ui/icon-button';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { UserAvatar } from '../user-avatar';
-import { UserStatusBadge } from '../user-status';
 
 type TUserPopoverProps = {
 	userId: number;
@@ -62,12 +61,6 @@ const UserPopover = memo(({ userId, children, footer, actions }: TUserPopoverPro
 				<div className="px-4 pt-12 pb-4">
 					<div className="mb-3">
 						<span className="text-lg font-semibold text-foreground truncate mb-1">{user.name}</span>
-						<div className="flex items-center gap-2">
-							<div className="flex items-center gap-2">
-								<UserStatusBadge status={user.status || UserStatus.OFFLINE} className="h-3 w-3" />
-								<span className="text-xs text-muted-foreground capitalize">{user.status || UserStatus.OFFLINE}</span>
-							</div>
-						</div>
 					</div>
 
 					{roles.length > 0 && (
