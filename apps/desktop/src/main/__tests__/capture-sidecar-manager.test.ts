@@ -141,6 +141,8 @@ void describe("CaptureSidecarManager", () => {
             FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS_REASON_CODE:
               "linux-xwayland-best-effort",
             FAKE_SIDECAR_X11_DISPLAY_AVAILABLE: "true",
+            FAKE_SIDECAR_LINUX_GLOBAL_SHORTCUTS_PORTAL_CONFIGURED: "true",
+            FAKE_SIDECAR_LINUX_GLOBAL_SHORTCUTS_PORTAL_BACKEND: "gnome",
           },
         });
       },
@@ -168,6 +170,8 @@ void describe("CaptureSidecarManager", () => {
         "linux-xwayland-best-effort",
       );
       assert.equal(capabilities.x11DisplayAvailable, true);
+      assert.equal(capabilities.linuxGlobalShortcutsPortalConfigured, true);
+      assert.equal(capabilities.linuxGlobalShortcutsPortalBackend, "gnome");
 
       const targets = await manager.listAppAudioTargets("window:1:0");
       assert.equal(targets.targets.length, 1);

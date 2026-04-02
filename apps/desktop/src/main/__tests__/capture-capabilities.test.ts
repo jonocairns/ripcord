@@ -165,6 +165,46 @@ void describe("resolveDesktopCaptureCapabilities", () => {
     );
   });
 
+  void it("surfaces a distinct issue when Wayland exposes a shortcut portal but the current build still needs X11", () => {
+    const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
+
+    const resolved = resolveDesktopCaptureCapabilities({
+      baseCapabilities,
+      sidecarAvailable: true,
+      sidecarPerAppAudioSupported: true,
+      sidecarCapabilities: {
+        sessionType: "wayland",
+        linuxAudioCaptureAvailable: true,
+        appAudioTargetEnumerationSupported: true,
+        sourceAudioTargetInferenceSupported: false,
+        globalPushKeybinds: "unsupported",
+        globalPushKeybindsReason:
+          "This Wayland session advertises the Global Shortcuts portal backend `gnome`, but Sharkord still relies on X11/XWayland polling for global push keybinds.",
+        globalPushKeybindsReasonCode:
+          "linux-wayland-global-shortcuts-portal-available",
+        x11DisplayAvailable: false,
+        x11DisplayReason:
+          "No X11 display was detected for the current Linux session.",
+        x11DisplayReasonCode: "linux-x11-display-required",
+        linuxGlobalShortcutsPortalConfigured: true,
+        linuxGlobalShortcutsPortalBackend: "gnome",
+      },
+    });
+
+    assert.equal(resolved.globalPushKeybinds, "unsupported");
+    assert.equal(
+      resolved.issues.find(
+        (issue) =>
+          issue.code === "linux-wayland-global-shortcuts-portal-available",
+      )?.title,
+      "Wayland global push keybinds not implemented",
+    );
+    assert.match(
+      resolved.notes.join(" "),
+      /Global Shortcuts portal backend: gnome/i,
+    );
+  });
+
   void it("surfaces a Linux desktop portal issue for Wayland screen sharing", () => {
     const baseCapabilities = getDesktopCapabilitiesForPlatform("linux");
 

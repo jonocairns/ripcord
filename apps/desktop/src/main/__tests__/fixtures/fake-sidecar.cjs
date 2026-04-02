@@ -101,6 +101,13 @@ const capabilityX11DisplayAvailable = parseBooleanEnv(
 const capabilityX11DisplayReason = process.env.FAKE_SIDECAR_X11_DISPLAY_REASON;
 const capabilityX11DisplayReasonCode =
   process.env.FAKE_SIDECAR_X11_DISPLAY_REASON_CODE;
+const capabilityLinuxGlobalShortcutsPortalConfigured = parseBooleanEnv(
+  process.env.FAKE_SIDECAR_LINUX_GLOBAL_SHORTCUTS_PORTAL_CONFIGURED,
+);
+const capabilityLinuxGlobalShortcutsPortalBackend =
+  process.env.FAKE_SIDECAR_LINUX_GLOBAL_SHORTCUTS_PORTAL_BACKEND;
+const capabilityLinuxGlobalShortcutsPortalReason =
+  process.env.FAKE_SIDECAR_LINUX_GLOBAL_SHORTCUTS_PORTAL_REASON;
 const listTargetsRequiresManualSelection = parseBooleanEnv(
   process.env.FAKE_SIDECAR_REQUIRES_MANUAL_SELECTION,
 );
@@ -359,6 +366,12 @@ rl.on("line", (line) => {
       x11DisplayAvailable: capabilityX11DisplayAvailable,
       x11DisplayReason: capabilityX11DisplayReason,
       x11DisplayReasonCode: capabilityX11DisplayReasonCode,
+      linuxGlobalShortcutsPortalConfigured:
+        capabilityLinuxGlobalShortcutsPortalConfigured,
+      linuxGlobalShortcutsPortalBackend:
+        capabilityLinuxGlobalShortcutsPortalBackend,
+      linuxGlobalShortcutsPortalReason:
+        capabilityLinuxGlobalShortcutsPortalReason,
     });
     return;
   }

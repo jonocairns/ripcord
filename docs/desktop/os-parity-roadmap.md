@@ -319,7 +319,22 @@ Difficulty: High
 
 ### 8. Build a real Linux Wayland strategy for global push keybinds
 
-Today Linux keybind monitoring is effectively X11/XWayland-based.
+This step is in progress.
+
+What landed:
+
+- Linux capability probing now distinguishes three Wayland shortcut states instead of flattening everything into generic X11 absence:
+  - XWayland fallback available
+  - Wayland Global Shortcuts portal backend detected but not yet used by Sharkord
+  - explicitly unsupported because neither X11/XWayland nor a usable portal path is available
+- push keybind registration failures now reuse the same environment-specific reasoning as capability reporting, so unsupported Wayland sessions fail explicitly before the X11 poller path is attempted
+- sidecar capability data now reports whether a Wayland Global Shortcuts portal backend is configured and which backend was detected
+
+Remaining work:
+
+- add a true Wayland shortcut-monitoring backend instead of stopping at capability/reporting strategy
+- decide how the desktop UX should map onto the portal model, because the Global Shortcuts portal is action/session-oriented rather than a drop-in raw key-state poller
+- validate compositor-specific behavior once an actual Wayland backend exists
 
 Investigate:
 

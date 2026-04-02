@@ -80,6 +80,9 @@ export type TSidecarCapabilities = {
   x11DisplayAvailable?: boolean;
   x11DisplayReason?: string;
   x11DisplayReasonCode?: string;
+  linuxGlobalShortcutsPortalConfigured?: boolean;
+  linuxGlobalShortcutsPortalBackend?: string;
+  linuxGlobalShortcutsPortalReason?: string;
 };
 
 type TAppAudioBinaryEgressInfo = {
@@ -254,7 +257,10 @@ const isSidecarCapabilities = (
     hasOptionalString(value, "globalPushKeybindsReasonCode") &&
     hasOptionalBoolean(value, "x11DisplayAvailable") &&
     hasOptionalString(value, "x11DisplayReason") &&
-    hasOptionalString(value, "x11DisplayReasonCode")
+    hasOptionalString(value, "x11DisplayReasonCode") &&
+    hasOptionalBoolean(value, "linuxGlobalShortcutsPortalConfigured") &&
+    hasOptionalString(value, "linuxGlobalShortcutsPortalBackend") &&
+    hasOptionalString(value, "linuxGlobalShortcutsPortalReason")
   );
 };
 
