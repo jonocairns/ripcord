@@ -135,11 +135,7 @@ void describe("CaptureSidecarManager", () => {
               "Choose a target manually.",
             FAKE_SIDECAR_SOURCE_AUDIO_TARGET_INFERENCE_REASON_CODE:
               "linux-manual-app-target-selection-required",
-            FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS: "best-effort",
-            FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS_REASON:
-              "Uses XWayland in Wayland sessions.",
-            FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS_REASON_CODE:
-              "linux-xwayland-best-effort",
+            FAKE_SIDECAR_GLOBAL_PUSH_KEYBINDS: "supported",
             FAKE_SIDECAR_X11_DISPLAY_AVAILABLE: "true",
             FAKE_SIDECAR_LINUX_GLOBAL_SHORTCUTS_PORTAL_CONFIGURED: "true",
             FAKE_SIDECAR_LINUX_GLOBAL_SHORTCUTS_PORTAL_BACKEND: "gnome",
@@ -164,11 +160,8 @@ void describe("CaptureSidecarManager", () => {
         capabilities.sourceAudioTargetInferenceReasonCode,
         "linux-manual-app-target-selection-required",
       );
-      assert.equal(capabilities.globalPushKeybinds, "best-effort");
-      assert.equal(
-        capabilities.globalPushKeybindsReasonCode,
-        "linux-xwayland-best-effort",
-      );
+      assert.equal(capabilities.globalPushKeybinds, "supported");
+      assert.equal(capabilities.globalPushKeybindsReasonCode, undefined);
       assert.equal(capabilities.x11DisplayAvailable, true);
       assert.equal(capabilities.linuxGlobalShortcutsPortalConfigured, true);
       assert.equal(capabilities.linuxGlobalShortcutsPortalBackend, "gnome");

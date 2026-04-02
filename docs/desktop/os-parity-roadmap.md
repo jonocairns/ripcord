@@ -319,22 +319,21 @@ Difficulty: High
 
 ### 8. Build a real Linux Wayland strategy for global push keybinds
 
-This step is in progress.
+This step is complete for the current parity scope.
 
 What landed:
 
-- Linux capability probing now distinguishes three Wayland shortcut states instead of flattening everything into generic X11 absence:
-  - XWayland fallback available
-  - Wayland Global Shortcuts portal backend detected but not yet used by Sharkord
-  - explicitly unsupported because neither X11/XWayland nor a usable portal path is available
-- push keybind registration failures now reuse the same environment-specific reasoning as capability reporting, so unsupported Wayland sessions fail explicitly before the X11 poller path is attempted
+- Linux capability probing now distinguishes three Wayland shortcut states instead of flattening everything into generic X11 absence
+- Wayland sessions with a configured and reachable Global Shortcuts portal now use a real portal-backed registration and signal path instead of stopping at capability probing
+- XWayland remains a best-effort fallback when the Wayland portal path is unavailable but an X11 display still exists
+- unsupported Wayland sessions fail explicitly when neither a usable portal path nor X11/XWayland is available
+- push keybind registration now reuses the same environment-specific backend selection as capability reporting, so runtime behavior matches what the desktop app advertises
 - sidecar capability data now reports whether a Wayland Global Shortcuts portal backend is configured and which backend was detected
 
-Remaining work:
+Residual follow-up:
 
-- add a true Wayland shortcut-monitoring backend instead of stopping at capability/reporting strategy
-- decide how the desktop UX should map onto the portal model, because the Global Shortcuts portal is action/session-oriented rather than a drop-in raw key-state poller
-- validate compositor-specific behavior once an actual Wayland backend exists
+- validate compositor-specific behavior across the desktops we intend to support
+- tighten any UX/documentation details that fall out of the portal session/action model in real-world use
 
 Investigate:
 
@@ -346,7 +345,8 @@ The goal is not to fake parity, but to make support predictable.
 
 Relevant files:
 
-- `apps/desktop/sidecar/src/main.rs`
+- `apps/desktop/sidecar/src/platform/linux.rs`
+- `apps/desktop/sidecar/src/platform/linux/global_shortcuts.rs`
 
 Impact: High
 
