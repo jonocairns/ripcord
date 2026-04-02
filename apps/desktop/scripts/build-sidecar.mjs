@@ -132,6 +132,7 @@ const buildMacosHelper = async () => {
     "swiftc",
     [
       "-O",
+      "-parse-as-library",
       "-target",
       macosHelperDeploymentTarget,
       macosHelperSourcePath,

@@ -1,6 +1,6 @@
-import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { app } from "electron";
 import { autoUpdater, type UpdateInfo } from "electron-updater";
 import type { TDesktopUpdateStatus } from "./types";
 
@@ -183,8 +183,17 @@ class DesktopUpdater {
       return;
     }
 
-    if (process.platform !== "win32") {
-      this.markDisabled("Auto-update is currently enabled for Windows only.");
+    if (process.platform === "linux") {
+      this.markDisabled(
+        "Auto-update is not supported on Linux. Download the latest version from the releases page.",
+      );
+      return;
+    }
+
+    if (process.platform === "darwin") {
+      this.markDisabled(
+        "Automatic updates are not yet available on macOS. Download the latest version from the releases page.",
+      );
       return;
     }
 

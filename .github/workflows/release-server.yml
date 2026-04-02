@@ -218,10 +218,24 @@ jobs:
               --notes-file /tmp/release-notes.md
           fi
 
-  # ── Desktop build chains automatically after server release ────────
-  release-desktop:
+  # ── Desktop builds chain automatically after server release ────────
+  release-desktop-windows:
     needs: build-and-publish
     uses: ./.github/workflows/release-desktop-windows.yml
+    with:
+      tag: v${{ needs.build-and-publish.outputs.version }}
+    secrets: inherit
+
+  release-desktop-macos:
+    needs: build-and-publish
+    uses: ./.github/workflows/release-desktop-macos.yml
+    with:
+      tag: v${{ needs.build-and-publish.outputs.version }}
+    secrets: inherit
+
+  release-desktop-linux:
+    needs: build-and-publish
+    uses: ./.github/workflows/release-desktop-linux.yml
     with:
       tag: v${{ needs.build-and-publish.outputs.version }}
     secrets: inherit

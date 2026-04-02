@@ -57,7 +57,7 @@
     ],
     "mac": {
       "target": [
-        "dir"
+        "dmg"
       ],
       "category": "public.app-category.social-networking"
     },
@@ -70,7 +70,7 @@
     },
     "linux": {
       "target": [
-        "dir"
+        "AppImage"
       ],
       "category": "Network",
       "icon": "icons/icon.png"

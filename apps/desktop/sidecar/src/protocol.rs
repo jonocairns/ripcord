@@ -44,7 +44,7 @@ pub(crate) struct SidecarEvent<'a> {
     pub(crate) params: Value,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AudioTarget {
     pub(crate) id: String,
