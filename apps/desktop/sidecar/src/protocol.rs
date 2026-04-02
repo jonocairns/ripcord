@@ -103,10 +103,8 @@ pub(crate) struct SetPushKeybindsParams {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum CaptureEndReason {
     CaptureStopped,
-    #[cfg(windows)]
     AppExited,
     CaptureError,
-    #[cfg(windows)]
     DeviceLost,
 }
 
@@ -114,10 +112,8 @@ impl CaptureEndReason {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::CaptureStopped => "capture_stopped",
-            #[cfg(windows)]
             Self::AppExited => "app_exited",
             Self::CaptureError => "capture_error",
-            #[cfg(windows)]
             Self::DeviceLost => "device_lost",
         }
     }
