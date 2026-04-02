@@ -410,19 +410,13 @@ Difficulty: High
 
 ### 11. Add GitHub Actions parity for desktop PR CI
 
-The roadmap should explicitly include CI for desktop parity, not just runtime features.
+This step is complete for the current parity contract.
 
-Current workflow gaps:
+What landed:
 
-- PR validation builds and tests the desktop sidecar on Windows only.
-- Sidecar binary availability on macOS/Linux is not exercised in PR CI.
-
-Work needed:
-
-- add desktop PR validation jobs for macOS and Linux
-- verify sidecar builds on macOS and Linux in CI
-- add capability-level tests where feasible across the supported OS matrix
-- treat "sidecar builds on all supported desktop OSes" as a milestone 1 requirement
+- `sidecar-macos` job added to the PR workflow: runs `cargo test --locked`, builds the sidecar and macOS Swift helper, then builds the full desktop bundle on `macos-latest`
+- `sidecar-linux` job added to the PR workflow: runs `cargo test --locked`, builds the sidecar, then builds the full desktop bundle on `ubuntu-latest`
+- every PR now validates that the sidecar compiles and its tests pass on all three supported desktop OSes before merge
 
 Relevant files:
 
