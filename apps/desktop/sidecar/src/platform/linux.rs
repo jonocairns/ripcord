@@ -390,7 +390,7 @@ fn backend_supports_interface(
     backend: &PortalBackendDefinition,
     interface_name: &str,
 ) -> bool {
-    backend.interfaces.iter().any(|interface| interface == interface_name)
+    backend.interfaces.iter().any(|interface| interface.eq_ignore_ascii_case(interface_name))
 }
 
 fn backend_matches_desktop(
