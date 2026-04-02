@@ -3,9 +3,11 @@ import CoreMedia
 import Foundation
 import ScreenCaptureKit
 
-private let outputSampleRate: Double = 48_000
-private let outputChannelCount: AVAudioChannelCount = 1
-private let outputFramesPerPacket = 960
+private enum AudioOutputConstants {
+    static let sampleRate: Double = 48_000
+    static let channelCount: AVAudioChannelCount = 1
+    static let framesPerPacket = 960
+}
 
 private struct AudioTarget: Codable {
     let id: String
@@ -189,13 +191,13 @@ private func listTargets() async throws {
             continue
         }
 
-        let applicationName = application.applicationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let applicationName = application.applicationName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !applicationName.isEmpty else {
             continue
         }
 
-        let processName = application.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedProcessName = (processName?.isEmpty == false ? processName : applicationName)
+        let processName = application.bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedProcessName = processName.isEmpty ? applicationName : processName
 
         dedupedTargets[pid] = AudioTarget(
             id: "pid:\(pid)",
@@ -283,9 +285,9 @@ private final class PacketWriter {
     }
 
     private func flushCompletePackets() throws {
-        while pendingSamples.count >= outputFramesPerPacket {
-            let frameSamples = Array(pendingSamples.prefix(outputFramesPerPacket))
-            pendingSamples.removeFirst(outputFramesPerPacket)
+        while pendingSamples.count >= AudioOutputConstants.framesPerPacket {
+            let frameSamples = Array(pendingSamples.prefix(AudioOutputConstants.framesPerPacket))
+            pendingSamples.removeFirst(AudioOutputConstants.framesPerPacket)
             try write(frameSamples: frameSamples)
         }
     }
@@ -315,8 +317,8 @@ private final class PacketWriter {
 @available(macOS 13.0, *)
 private final class AudioCaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     private let targetFormat: AVAudioFormat = AVAudioFormat(
-        standardFormatWithSampleRate: outputSampleRate,
-        channels: outputChannelCount
+        standardFormatWithSampleRate: AudioOutputConstants.sampleRate,
+        channels: AudioOutputConstants.channelCount
     )!
     private let packetWriter: PacketWriter
 
@@ -382,8 +384,8 @@ private final class AudioCaptureOutput: NSObject, SCStreamOutput, SCStreamDelega
             bufferListSizeNeededOut: nil,
             bufferListOut: audioBufferList,
             bufferListSize: bufferListSize,
-            blockBufferStructureAllocator: nil,
-            blockBufferBlockAllocator: nil,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
             flags: UInt32(kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment),
             blockBufferOut: &blockBuffer
         )
@@ -496,8 +498,8 @@ private func startCapture(sourceID: String?, targetPID: Int32?, excludePID: Int3
     let configuration = SCStreamConfiguration()
     configuration.capturesAudio = true
     configuration.excludesCurrentProcessAudio = true
-    configuration.sampleRate = Int(outputSampleRate)
-    configuration.channelCount = Int(outputChannelCount)
+    configuration.sampleRate = Int(AudioOutputConstants.sampleRate)
+    configuration.channelCount = Int(AudioOutputConstants.channelCount)
     configuration.width = display.width
     configuration.height = display.height
     configuration.queueDepth = 3
