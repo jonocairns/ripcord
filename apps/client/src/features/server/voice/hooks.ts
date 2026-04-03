@@ -5,11 +5,7 @@ import {
 	ownVoiceStateSelector,
 	pinnedCardSelector,
 	voiceChannelExternalStreamsSelector,
-	voiceChannelStateSelector,
 } from './selectors';
-
-export const useVoiceChannelState = (channelId: number) =>
-	useServerStore((state) => voiceChannelStateSelector(state, channelId));
 
 export const useVoiceChannelExternalStreams = (channelId: number) =>
 	useServerStore((state) => voiceChannelExternalStreamsSelector(state, channelId));
@@ -25,18 +21,6 @@ export const useVoiceChannelExternalStreamsList = (channelId: number) => {
 			})),
 		[externalStreams],
 	);
-};
-
-export const useVoiceChannelAudioExternalStreams = (channelId: number) => {
-	const streams = useVoiceChannelExternalStreamsList(channelId);
-
-	return useMemo(() => streams.filter((stream) => stream.tracks?.audio === true), [streams]);
-};
-
-export const useVoiceChannelVideoExternalStreams = (channelId: number) => {
-	const streams = useVoiceChannelExternalStreamsList(channelId);
-
-	return useMemo(() => streams.filter((stream) => stream.tracks?.video === true), [streams]);
 };
 
 export const useVoice = () => {

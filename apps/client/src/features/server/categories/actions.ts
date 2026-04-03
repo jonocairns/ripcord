@@ -1,10 +1,6 @@
 import type { TCategory } from '@sharkord/shared';
 import { useServerStore } from '../slice';
 
-export const setCategories = (categories: TCategory[]) => {
-	useServerStore.getState().setCategories(categories);
-};
-
 export const addCategory = (category: TCategory) => {
 	useServerStore.getState().addCategory(category);
 };

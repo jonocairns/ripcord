@@ -26,10 +26,6 @@ const cleanupServerSubscriptions = () => {
 	unsubscribeFromServer = null;
 };
 
-export const setConnected = (status: boolean) => {
-	useServerStore.getState().setConnected(status);
-};
-
 export const resetServerState = () => {
 	useServerStore.getState().resetState();
 };
@@ -44,10 +40,6 @@ export const setConnecting = (status: boolean) => {
 
 export const setMustChangePassword = (status: boolean) => {
 	useServerStore.getState().setMustChangePassword(status);
-};
-
-export const setServerId = (id: string) => {
-	useServerStore.getState().setServerId(id);
 };
 
 export const setPublicServerSettings = (settings: TPublicServerSettings | undefined) => {
@@ -238,14 +230,6 @@ export const joinServer = async (
 			}
 		})();
 	});
-};
-
-export const disconnectFromServer = () => {
-	wsReconnectGeneration += 1;
-	clearPendingVoiceReconnectChannelId();
-	setOnWsReconnect(null);
-	cleanup({ ignoreSocketCloseEvent: true });
-	cleanupServerSubscriptions();
 };
 
 export const logoutFromServer = async () => {

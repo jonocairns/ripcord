@@ -4,7 +4,6 @@ import { useChannelById, useChannelPermissionsById } from './channels/hooks';
 import { channelReadStateByIdSelector } from './channels/selectors';
 import {
 	connectedSelector,
-	connectingSelector,
 	disconnectInfoSelector,
 	infoSelector,
 	mustChangePasswordSelector,
@@ -19,8 +18,6 @@ import { voiceChannelStateSelector } from './voice/selectors';
 const EMPTY_VOICE_USERS: TVoiceUser[] = [];
 
 export const useIsConnected = () => useServerStore(connectedSelector);
-
-export const useIsConnecting = () => useServerStore(connectingSelector);
 
 export const useMustChangePassword = () => useServerStore(mustChangePasswordSelector);
 

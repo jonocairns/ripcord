@@ -63,18 +63,14 @@ const searchEmojis = (emojis: TEmojiItem[], query: string): TEmojiItem[] => {
 const getEmojisByCategory = (categoryId: EmojiCategoryId): TEmojiItem[] => GROUPED_EMOJIS[categoryId] || [];
 
 const GRID_COLS = 8;
-const EMOJI_SIZE = 32; // px
-const ROW_HEIGHT = 36; // px (emoji size + gap)
 
 export {
 	ALL_EMOJIS,
 	EMOJI_CATEGORIES,
-	EMOJI_SIZE,
 	type EmojiCategoryId,
 	GRID_COLS,
 	GROUPED_EMOJIS,
 	getEmojisByCategory,
-	ROW_HEIGHT,
 	searchEmojis,
 	toTEmojiItem,
 };

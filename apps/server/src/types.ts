@@ -6,8 +6,6 @@ export const zTokenPayload = z.object({
   exp: z.number()
 });
 
-export type TTokenPayload = z.infer<typeof zTokenPayload>;
-
 export type TConnectionInfo = {
   ip?: string;
   os?: string;

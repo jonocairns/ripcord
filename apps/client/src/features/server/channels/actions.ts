@@ -2,10 +2,6 @@ import type { TChannel, TChannelUserPermissionsMap } from '@sharkord/shared';
 import { useServerStore } from '../slice';
 import { channelByIdSelector, channelReadStateByIdSelector, selectedChannelIdSelector } from './selectors';
 
-export const setChannels = (channels: TChannel[]) => {
-	useServerStore.getState().setChannels(channels);
-};
-
 export const setSelectedChannelId = (channelId: number | undefined) => {
 	useServerStore.getState().setSelectedChannelId(channelId);
 };

@@ -17,8 +17,6 @@ export const useUsers = () => {
 	return useMemo(() => sortUsers(users), [users]);
 };
 
-export const useOwnUser = () => useServerStore(ownUserSelector);
-
 export const useOwnUserId = () => useServerStore(ownUserIdSelector);
 
 export const useIsOwnUser = (userId: number) => useServerStore((state) => isOwnUserSelector(state, userId));

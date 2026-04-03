@@ -1,8 +1,6 @@
 import type { TJoinedRole } from '@sharkord/shared';
 import { useServerStore } from '../slice';
 
-export const setRoles = (roles: TJoinedRole[]) => useServerStore.getState().setRoles(roles);
-
 export const addRole = (role: TJoinedRole) => useServerStore.getState().addRole(role);
 
 export const updateRole = (roleId: number, role: Partial<TJoinedRole>) =>
