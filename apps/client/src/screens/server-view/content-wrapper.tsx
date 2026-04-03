@@ -6,6 +6,7 @@ import { VoiceChannel } from '@/components/channel-view/voice';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useSelectedChannelId, useSelectedChannelType } from '@/features/server/channels/hooks';
 import { useServerName } from '@/features/server/hooks';
+import { getPublicAssetUrl } from '@/helpers/get-file-url';
 
 const ContentWrapper = memo(() => {
 	const selectedChannelId = useSelectedChannelId();
@@ -22,33 +23,50 @@ const ContentWrapper = memo(() => {
 		}
 	} else {
 		content = (
-			<div className="flex flex-col items-center justify-center h-full gap-6 p-8 text-center md:hidden">
-				<div className="flex flex-col gap-2">
-					<h2 className="text-2xl font-semibold text-foreground">
-						Welcome to <span className="bold">{serverName}</span>.
-					</h2>
-				</div>
-				<Alert variant="destructive" className="max-w-md">
-					<AlertTriangle />
-					<AlertDescription>
-						Ripcord is not optimized for mobile devices yet. The experience will not be ideal.
-					</AlertDescription>
-				</Alert>
-				<div className="flex flex-col gap-3 text-sm text-muted-foreground">
-					<div className="flex items-center gap-2">
-						<span className="text-lg">
-							<ArrowRight />
-						</span>
-						<span>Swipe right to open the channel list</span>
-					</div>
-					<div className="flex items-center gap-2">
-						<span className="text-lg">
-							<ArrowLeft />
-						</span>
-						<span>Swipe left to open the user list</span>
+			<>
+				<div
+					aria-hidden="true"
+					className="pointer-events-none absolute inset-0 hidden items-center justify-center overflow-hidden md:flex"
+				>
+					<div className="relative flex items-center justify-center">
+						<div className="absolute h-80 w-80 rounded-full bg-primary/5 blur-3xl" />
+						<img
+							src={getPublicAssetUrl('logo.webp')}
+							alt=""
+							className="h-56 w-56 select-none object-contain opacity-[0.06] saturate-0 brightness-[1.35]"
+							draggable={false}
+						/>
 					</div>
 				</div>
-			</div>
+
+				<div className="flex h-full flex-col items-center justify-center gap-6 p-8 text-center md:hidden">
+					<div className="flex flex-col gap-2">
+						<h2 className="text-2xl font-semibold text-foreground">
+							Welcome to <span className="bold">{serverName}</span>.
+						</h2>
+					</div>
+					<Alert variant="destructive" className="max-w-md">
+						<AlertTriangle />
+						<AlertDescription>
+							Ripcord is not optimized for mobile devices yet. The experience will not be ideal.
+						</AlertDescription>
+					</Alert>
+					<div className="flex flex-col gap-3 text-sm text-muted-foreground">
+						<div className="flex items-center gap-2">
+							<span className="text-lg">
+								<ArrowRight />
+							</span>
+							<span>Swipe right to open the channel list</span>
+						</div>
+						<div className="flex items-center gap-2">
+							<span className="text-lg">
+								<ArrowLeft />
+							</span>
+							<span>Swipe left to open the user list</span>
+						</div>
+					</div>
+				</div>
+			</>
 		);
 	}
 
