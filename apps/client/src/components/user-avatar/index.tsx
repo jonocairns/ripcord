@@ -16,13 +16,7 @@ type TUserAvatarProps = {
 };
 
 const UserAvatar = memo(
-	({
-		userId,
-		className,
-		fallbackClassName,
-		showUserPopover = false,
-		onClick,
-	}: TUserAvatarProps) => {
+	({ userId, className, fallbackClassName, showUserPopover = false, onClick }: TUserAvatarProps) => {
 		const user = useUserById(userId);
 
 		if (!user) return null;
