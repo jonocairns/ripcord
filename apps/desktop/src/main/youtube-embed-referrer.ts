@@ -32,6 +32,24 @@ const getRequestHeaderValue = (
   return undefined;
 };
 
+const stripRequestHeader = (
+  headers: TRequestHeaders,
+  name: string,
+): TRequestHeaders => {
+  const normalizedName = name.toLowerCase();
+  const nextHeaders: TRequestHeaders = {};
+
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    if (headerName.toLowerCase() === normalizedName) {
+      continue;
+    }
+
+    nextHeaders[headerName] = headerValue;
+  }
+
+  return nextHeaders;
+};
+
 const ensureYoutubeEmbedRefererHeader = (
   headers: TRequestHeaders,
 ): TRequestHeaders => {
@@ -41,8 +59,10 @@ const ensureYoutubeEmbedRefererHeader = (
     return headers;
   }
 
+  const headersWithoutReferer = stripRequestHeader(headers, "referer");
+
   return {
-    ...headers,
+    ...headersWithoutReferer,
     Referer: DESKTOP_YOUTUBE_EMBED_REFERRER,
   };
 };

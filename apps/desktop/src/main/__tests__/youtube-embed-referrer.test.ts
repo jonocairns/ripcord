@@ -32,4 +32,15 @@ void describe("ensureYoutubeEmbedRefererHeader", () => {
 
     assert.equal(headers.Referer, DESKTOP_YOUTUBE_EMBED_REFERRER);
   });
+
+  void it("removes mixed-case blank referer keys before injecting the fallback", () => {
+    const headers = ensureYoutubeEmbedRefererHeader({
+      referer: "   ",
+      Accept: "text/html",
+    });
+
+    assert.equal(headers.Referer, DESKTOP_YOUTUBE_EMBED_REFERRER);
+    assert.equal(headers.referer, undefined);
+    assert.equal(headers.Accept, "text/html");
+  });
 });
