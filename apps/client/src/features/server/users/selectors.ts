@@ -37,4 +37,3 @@ export const toUsernamesMap = (users: TJoinedPublicUser[]) => {
 
 	return map;
 };
-

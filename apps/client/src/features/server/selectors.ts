@@ -14,4 +14,3 @@ export const pluginsEnabledSelector = (state: IServerState) => !!state.publicSet
 
 export const infoSelector = (state: IServerState) => state.info;
 
-

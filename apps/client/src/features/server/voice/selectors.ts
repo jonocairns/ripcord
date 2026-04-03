@@ -8,4 +8,3 @@ export const voiceChannelStateSelector = (state: IServerState, channelId: number
 
 export const voiceChannelExternalStreamsSelector = (state: IServerState, channelId: number) =>
 	state.externalStreamsMap[channelId];
-
