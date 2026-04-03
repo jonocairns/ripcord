@@ -25,7 +25,6 @@ FROM debian:bookworm-slim
 ENV RUNNING_IN_DOCKER=true
 ENV SHARKORD_TRUST_PROXY=true
 
-COPY --from=build /app/apps/server/build/out/sharkord-linux-x64 /usr/local/bin/sharkord
-RUN chmod +x /usr/local/bin/sharkord
+COPY --chmod=755 --from=build /app/apps/server/build/out/sharkord-linux-x64 /usr/local/bin/sharkord
 
 ENTRYPOINT ["/usr/local/bin/sharkord"]
