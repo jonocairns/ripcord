@@ -2,6 +2,8 @@
   "name": "@sharkord/desktop",
   "private": true,
   "version": "1.4.20",
+  "description": "Ripcord Desktop",
+  "author": "Ripcord",
   "type": "module",
   "trustedDependencies": [
     "electron"
@@ -25,6 +27,7 @@
     "test": "bun test"
   },
   "build": {
+    "extends": null,
     "appId": "com.sharkord.desktop",
     "productName": "Ripcord",
     "icon": "icons/icon.png",
