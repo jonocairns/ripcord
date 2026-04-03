@@ -27,6 +27,7 @@ import {
 import { getServerUrl, setServerUrl } from "./settings-store";
 import { desktopUpdater } from "./updater";
 import { classifyWindowOpenUrl } from "./window-open-policy";
+import { installYoutubeEmbedRefererHandler } from "./youtube-embed-referrer";
 import type {
   TAppAudioPcmFrame,
   TDesktopCapabilities,
@@ -339,6 +340,10 @@ const setupDisplayMediaHandler = () => {
   );
 };
 
+const setupYoutubeEmbedRefererHandler = () => {
+  installYoutubeEmbedRefererHandler(session.defaultSession);
+};
+
 const registerIpcHandlers = () => {
   ipcMain.handle("desktop:get-server-url", () => {
     return getServerUrl();
@@ -495,6 +500,7 @@ void app
 
     registerIpcHandlers();
     setupDisplayMediaHandler();
+    setupYoutubeEmbedRefererHandler();
     createMainWindow();
     requestDesktopCapabilitiesRefresh({
       broadcast: true,

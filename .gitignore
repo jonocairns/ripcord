@@ -22,3 +22,4 @@ audio-tests/.outputs/
 data-test/
 __pycache__/
 .env
+.codex
