@@ -12,7 +12,7 @@ limiter.threshold.setValueAtTime(-1, 0);
 limiter.knee.setValueAtTime(0, 0);
 limiter.ratio.setValueAtTime(20, 0);
 limiter.attack.setValueAtTime(0.001, 0);
-limiter.release.setValueAtTime(0.01, 0);
+limiter.release.setValueAtTime(0.05, 0);
 
 masterGain.connect(limiter).connect(audioCtx.destination);
 
@@ -80,72 +80,75 @@ const sfxServerDisconnected = () => {
 	});
 };
 
-// OWN_USER_JOINED_VOICE_CHANNEL — rich chord progression
+// OWN_USER_JOINED_VOICE_CHANNEL — arpeggiated C major (staggered to avoid limiter)
 const sfxOwnUserJoinedVoiceChannel = () => {
-	// First chord (C major feel)
+	// Stagger notes ~35ms apart so they don't sum simultaneously
 	const chord1 = [
-		{ freq: 523, gain: 0.09 }, // C
-		{ freq: 659, gain: 0.07 }, // E
-		{ freq: 784, gain: 0.06 }, // G
+		{ freq: 523, gain: 0.07, delay: 0 },    // C
+		{ freq: 659, gain: 0.06, delay: 0.035 }, // E
+		{ freq: 784, gain: 0.05, delay: 0.07 },  // G
 	];
 
-	chord1.forEach(({ freq, gain: g }) => {
+	chord1.forEach(({ freq, gain: g, delay }) => {
+		const t = now() + delay;
 		const osc = createOsc('sine', freq);
 		const gain = createGain(g);
 
-		gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.25);
+		gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
 
 		osc.connect(gain).connect(masterGain);
-		osc.start();
-		osc.stop(now() + 0.25);
+		osc.start(t);
+		osc.stop(t + 0.25);
 	});
 
-	// Second chord overlapping (add brightness)
+	// Upper octave layer — staggered to follow the arpeggio
 	const chord2 = [
-		{ freq: 1046, gain: 0.04 }, // C (octave up)
-		{ freq: 1318, gain: 0.03 }, // E (octave up)
+		{ freq: 1046, gain: 0.03, delay: 0.1 },  // C (octave up)
+		{ freq: 1318, gain: 0.025, delay: 0.13 }, // E (octave up)
 	];
 
-	chord2.forEach(({ freq, gain: g }) => {
+	chord2.forEach(({ freq, gain: g, delay }) => {
+		const t = now() + delay;
 		const osc = createOsc('triangle', freq);
 		const gain = createGain(g);
 
-		gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.3);
+		gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
 
 		osc.connect(gain).connect(masterGain);
-		osc.start(now() + 0.08);
-		osc.stop(now() + 0.3);
+		osc.start(t);
+		osc.stop(t + 0.22);
 	});
 };
 
-// OWN_USER_LEFT_VOICE_CHANNEL — soft chord fade
+// OWN_USER_LEFT_VOICE_CHANNEL — soft descending arpeggio
 const sfxOwnUserLeftVoiceChannel = () => {
-	// Main chord (minor feel)
+	// Stagger notes descending so they don't sum simultaneously
 	const chord1 = [
-		{ freq: 440, gain: 0.09 }, // A
-		{ freq: 523, gain: 0.07 }, // C
-		{ freq: 659, gain: 0.06 }, // E
+		{ freq: 659, gain: 0.06, delay: 0 },    // E (high → low)
+		{ freq: 523, gain: 0.06, delay: 0.035 }, // C
+		{ freq: 440, gain: 0.05, delay: 0.07 },  // A
 	];
 
-	chord1.forEach(({ freq, gain: g }) => {
+	chord1.forEach(({ freq, gain: g, delay }) => {
+		const t = now() + delay;
 		const osc = createOsc('sine', freq);
 		const gain = createGain(g);
 
-		gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.3);
+		gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
 
 		osc.connect(gain).connect(masterGain);
-		osc.start();
-		osc.stop(now() + 0.3);
+		osc.start(t);
+		osc.stop(t + 0.28);
 	});
 
-	// Subtle harmonic layer
+	// Subtle harmonic layer — follows after the arpeggio starts
 	const osc2 = createOsc('triangle', 880);
-	const gain2 = createGain(0.04);
+	const gain2 = createGain(0.03);
 
-	gain2.gain.exponentialRampToValueAtTime(0.0001, now() + 0.25);
+	gain2.gain.exponentialRampToValueAtTime(0.0001, now() + 0.28);
 
 	osc2.connect(gain2).connect(masterGain);
-	osc2.start(now() + 0.05);
+	osc2.start(now() + 0.09);
 	osc2.stop(now() + 0.3);
 };
 
@@ -233,17 +236,17 @@ const sfxOwnUserStoppedWebcam = () => {
 
 // STARTED_SCREENSHARE — richer activation sequence
 const sfxOwnUserStartedScreenshare = () => {
-	// Main pulse sequence
+	// Main pulse sequence — taper gain as freq rises for a natural feel
 	const pulses = [
-		{ freq: 600, delay: 0 },
-		{ freq: 800, delay: 0.06 },
-		{ freq: 1000, delay: 0.12 },
+		{ freq: 600, gain: 0.08, delay: 0 },
+		{ freq: 800, gain: 0.065, delay: 0.06 },
+		{ freq: 1000, gain: 0.05, delay: 0.12 },
 	];
 
-	pulses.forEach(({ freq, delay }) => {
+	pulses.forEach(({ freq, gain: g, delay }) => {
 		const t = now() + delay;
 		const osc = createOsc('sine', freq);
-		const gain = createGain(0.08);
+		const gain = createGain(g);
 
 		gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
 
