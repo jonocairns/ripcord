@@ -8,8 +8,11 @@
     "apps/server": {
       "entry": [
         "src/**/__tests__/**/*.test.ts",
-        "build/**/*.ts"
+        "src/__tests__/prepare.ts",
+        "src/__tests__/mock-db.ts",
+        "src/__tests__/setup.ts"
       ],
+      "ignoreBinaries": ["tsc"],
       "project": ["src/**/*.ts"],
       "ignore": [
         "src/db/migrations/**",
@@ -18,17 +21,27 @@
       ]
     },
     "apps/client": {
-      "entry": [
-        "src/main.tsx"
-      ],
       "project": ["src/**/*.{ts,tsx}"],
       "ignore": [
         "dist/**",
-        "public/**"
+        "public/**",
+        "src/components/ui/**"
       ]
     },
+    "apps/desktop": {
+      "entry": [
+        "src/main/index.ts",
+        "src/preload/index.ts",
+        "scripts/**/*.mjs",
+        "src/main/__tests__/**"
+      ],
+      "project": ["src/**/*.ts", "scripts/**/*.mjs"]
+    },
     "packages/shared": {
-      "entry": ["src/**/*.ts"],
+      "entry": ["src/**/__tests__/**/*.test.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/plugin-sdk": {
       "project": ["src/**/*.ts"]
     }
   },
@@ -39,5 +52,6 @@
     "**/node_modules/**"
   ],
   "ignoreDependencies": [],
-  "ignoreExportsUsedInFile": true
+  "ignoreExportsUsedInFile": true,
+  "exclude": ["enumMembers"]
 }

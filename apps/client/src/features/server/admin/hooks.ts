@@ -1,5 +1,4 @@
 import {
-	Permission,
 	STORAGE_MAX_FILE_SIZE,
 	STORAGE_MAX_QUOTA_PER_USER,
 	STORAGE_OVERFLOW_ACTION,
@@ -28,8 +27,6 @@ import { requestConfirmation } from '@/features/dialogs/actions';
 import { parseTrpcErrors, type TTrpcErrors } from '@/helpers/parse-trpc-errors';
 import { useForm } from '@/hooks/use-form';
 import { getTRPCClient } from '@/lib/trpc';
-import { useCan } from '../hooks';
-
 // TODO: review this whole file for optimizations and improvements
 
 export const useAdminGeneral = () => {
@@ -214,31 +211,6 @@ export const useAdminPlugins = () => {
 		loading,
 		errors,
 	};
-};
-
-export const useHasUpdates = () => {
-	const can = useCan();
-	const [hasUpdates, setHasUpdates] = useState(false);
-
-	const fetchHasUpdates = useCallback(async () => {
-		if (!can(Permission.MANAGE_UPDATES)) return;
-
-		const trpc = getTRPCClient();
-
-		try {
-			const { hasUpdate } = await trpc.others.getUpdate.query();
-
-			setHasUpdates(hasUpdate);
-		} catch (error) {
-			console.error('Error fetching update status:', error);
-		}
-	}, [can]);
-
-	useEffect(() => {
-		fetchHasUpdates();
-	}, [fetchHasUpdates]);
-
-	return hasUpdates;
 };
 
 const normalizeVoiceBitrate = (value: number | null | undefined) => {

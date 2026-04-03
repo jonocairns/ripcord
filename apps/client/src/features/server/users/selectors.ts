@@ -38,4 +38,3 @@ export const toUsernamesMap = (users: TJoinedPublicUser[]) => {
 	return map;
 };
 
-export const usernamesSelector = (state: IServerState) => toUsernamesMap(state.users);

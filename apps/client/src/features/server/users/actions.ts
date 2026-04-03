@@ -2,10 +2,6 @@ import { type TJoinedPublicUser, UserStatus } from '@sharkord/shared';
 import { useServerStore } from '../slice';
 import { userByIdSelector } from './selectors';
 
-export const setUsers = (users: TJoinedPublicUser[]) => {
-	useServerStore.getState().setUsers(users);
-};
-
 export const addUser = (user: TJoinedPublicUser) => {
 	useServerStore.getState().addUser(user);
 };

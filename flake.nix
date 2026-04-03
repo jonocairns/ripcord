@@ -37,7 +37,6 @@
               with pkgs;
               [
                 nodejs
-                pnpm
                 bun
                 tmux
                 gh

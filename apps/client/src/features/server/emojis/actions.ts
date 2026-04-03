@@ -1,10 +1,6 @@
 import type { TJoinedEmoji } from '@sharkord/shared';
 import { useServerStore } from '../slice';
 
-export const setEmojis = (emojis: TJoinedEmoji[]) => {
-	useServerStore.getState().setEmojis(emojis);
-};
-
 export const addEmoji = (emoji: TJoinedEmoji) => {
 	useServerStore.getState().addEmoji(emoji);
 };

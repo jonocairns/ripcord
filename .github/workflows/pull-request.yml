@@ -41,6 +41,9 @@ jobs:
       - name: Run lint
         run: bun run lint
 
+      - name: Run knip
+        run: bun run knip
+
       - name: Run server tests
         working-directory: apps/server
         run: bun test
