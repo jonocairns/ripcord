@@ -24,8 +24,6 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag }}
       # When MAC_CSC_LINK is set, electron-builder will sign the DMG.
       # When absent, CSC_IDENTITY_AUTO_DISCOVERY=false produces an unsigned build.
-      CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -98,7 +96,13 @@ jobs:
 
       - name: Package macOS DMG
         working-directory: apps/desktop
-        run: bunx electron-builder --mac dmg --publish never
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: |
+          [ -z "$CSC_LINK" ] && unset CSC_LINK
+          [ -z "$CSC_KEY_PASSWORD" ] && unset CSC_KEY_PASSWORD
+          bunx electron-builder --mac dmg --publish never
 
       - name: Upload desktop assets to GitHub release
         run: |
