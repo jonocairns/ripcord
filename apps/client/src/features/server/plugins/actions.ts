@@ -3,4 +3,3 @@ import { useServerStore } from '../slice';
 
 export const setPluginCommands = (commands: TCommandsMapByPlugin) =>
 	useServerStore.getState().setPluginCommands(commands);
-
