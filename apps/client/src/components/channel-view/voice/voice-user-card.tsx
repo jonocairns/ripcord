@@ -6,6 +6,7 @@ import { UserAvatar } from '@/components/user-avatar';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import type { TVoiceUser } from '@/features/server/types';
 import { useOwnUserId } from '@/features/server/users/hooks';
+import { useWindowFocus } from '@/hooks/use-window-focus';
 import { cn } from '@/lib/utils';
 import { CardControls } from './card-controls';
 import { useVoiceRefs } from './hooks/use-voice-refs';
@@ -41,6 +42,8 @@ const VoiceUserCard = memo(
 		const { devices } = useDevices();
 		const ownUserId = useOwnUserId();
 		const isOwnUser = userId === ownUserId;
+		const isWindowFocused = useWindowFocus();
+		const showOwnPreview = !isOwnUser || isWindowFocused;
 
 		const handlePinToggle = useCallback(() => {
 			if (isPinned) {
@@ -71,7 +74,7 @@ const VoiceUserCard = memo(
 					{showPinControls && <PinButton isPinned={isPinned} handlePinToggle={handlePinToggle} />}
 				</CardControls>
 
-				{hasVideoStream && (
+				{hasVideoStream && showOwnPreview && (
 					<video
 						ref={videoRef}
 						autoPlay
@@ -83,7 +86,7 @@ const VoiceUserCard = memo(
 						)}
 					/>
 				)}
-				{!hasVideoStream && (
+				{(!hasVideoStream || !showOwnPreview) && (
 					<UserAvatar
 						userId={userId}
 						className="h-20 w-20 md:h-24 md:w-24 lg:h-28 lg:w-28"

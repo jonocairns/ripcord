@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { IconButton } from '@/components/ui/icon-button';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
+import { useWindowFocus } from '@/hooks/use-window-focus';
 import { cn } from '@/lib/utils';
 import { CardControls } from './card-controls';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
@@ -105,8 +106,10 @@ const ScreenShareCard = memo(
 	}: TScreenShareCardProps) => {
 		const user = useUserById(userId);
 		const ownUserId = useOwnUserId();
+		const isWindowFocused = useWindowFocus();
 		const { getUserScreenVolumeKey, getVolume, setVolume, toggleMute } = useVolumeControl();
 		const isOwnUser = ownUserId === userId;
+		const showOwnPreview = !isOwnUser || isWindowFocused;
 		const volumeKey = getUserScreenVolumeKey(userId);
 		const volume = getVolume(volumeKey);
 		const isMuted = volume === 0;
@@ -424,21 +427,31 @@ const ScreenShareCard = memo(
 						onStopWatching={onStopWatching}
 					/>
 
-					<video
-						ref={screenShareRef}
-						autoPlay
-						muted={isOwnUser || isPoppedOut}
-						playsInline
-						className={cn(
-							'absolute inset-0 h-full w-full bg-[#1b2026] object-contain',
-							isPoppedOut && 'opacity-0 pointer-events-none',
-						)}
-						style={{
-							transform: `scale(${zoom}) translate(${position.x / zoom}px, ${position.y / zoom}px)`,
-							transition: isDragging ? 'none' : 'transform 0.1s ease-out',
-						}}
-						onDoubleClick={isPoppedOut ? undefined : handleToggleFullscreen}
-					/>
+					{showOwnPreview ? (
+						<video
+							ref={screenShareRef}
+							autoPlay
+							muted={isOwnUser || isPoppedOut}
+							playsInline
+							className={cn(
+								'absolute inset-0 h-full w-full bg-[#1b2026] object-contain',
+								isPoppedOut && 'opacity-0 pointer-events-none',
+							)}
+							style={{
+								transform: `scale(${zoom}) translate(${position.x / zoom}px, ${position.y / zoom}px)`,
+								transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+							}}
+							onDoubleClick={isPoppedOut ? undefined : handleToggleFullscreen}
+						/>
+					) : (
+						<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#11161d] p-6 text-center text-white/80">
+							<Monitor className="size-10 text-cyan-300/80" />
+							<div className="space-y-1">
+								<p className="text-sm font-semibold text-white">You&apos;re sharing your screen</p>
+								<p className="text-xs text-white/60">Preview hidden while Sharkord is unfocused</p>
+							</div>
+						</div>
+					)}
 
 					<audio ref={screenShareAudioRef} className="hidden" autoPlay playsInline />
 

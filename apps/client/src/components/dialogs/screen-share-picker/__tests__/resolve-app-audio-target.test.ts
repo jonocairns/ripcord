@@ -1,6 +1,38 @@
 import { describe, expect, it } from 'bun:test';
 import { ScreenAudioMode } from '@/runtime/types';
-import { resolveAppAudioTargetBehavior } from '../resolve-app-audio-target';
+import { getEffectiveScreenShareAudioMode, resolveAppAudioTargetBehavior } from '../resolve-app-audio-target';
+
+describe('getEffectiveScreenShareAudioMode', () => {
+	it('forces per-app audio for window shares when supported', () => {
+		expect(
+			getEffectiveScreenShareAudioMode({
+				requestedAudioMode: ScreenAudioMode.SYSTEM,
+				perAppAudioSupported: true,
+				sourceKind: 'window',
+			}),
+		).toBe(ScreenAudioMode.APP);
+	});
+
+	it('preserves the requested mode when per-app audio is unsupported', () => {
+		expect(
+			getEffectiveScreenShareAudioMode({
+				requestedAudioMode: ScreenAudioMode.SYSTEM,
+				perAppAudioSupported: false,
+				sourceKind: 'window',
+			}),
+		).toBe(ScreenAudioMode.SYSTEM);
+	});
+
+	it('preserves the requested mode for display shares', () => {
+		expect(
+			getEffectiveScreenShareAudioMode({
+				requestedAudioMode: ScreenAudioMode.SYSTEM,
+				perAppAudioSupported: true,
+				sourceKind: 'screen',
+			}),
+		).toBe(ScreenAudioMode.SYSTEM);
+	});
+});
 
 describe('resolveAppAudioTargetBehavior', () => {
 	it('requires manual target for screen shares in app mode', () => {

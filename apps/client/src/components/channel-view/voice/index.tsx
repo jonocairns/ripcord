@@ -1,6 +1,9 @@
 import { StreamKind } from '@sharkord/shared';
-import { memo, useMemo } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import { useVoiceUsersByChannelId } from '@/features/server/hooks';
+import { setSelectedChannelId } from '@/features/server/channels/actions';
+import { useLastTextChannelId } from '@/features/server/channels/hooks';
+import { useOwnUserId } from '@/features/server/users/hooks';
 import { useVoice, useVoiceChannelExternalStreamsList } from '@/features/server/voice/hooks';
 import { getPendingStreamKey } from '../../voice-provider/hooks/use-pending-streams';
 import { ControlsBar } from './controls-bar';
@@ -18,6 +21,8 @@ type TChannelProps = {
 const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 	const voiceUsers = useVoiceUsersByChannelId(channelId);
 	const externalStreams = useVoiceChannelExternalStreamsList(channelId);
+	const lastTextChannelId = useLastTextChannelId();
+	const ownUserId = useOwnUserId();
 	const {
 		acceptStream,
 		stopWatchingStream,
@@ -26,6 +31,40 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 		externalStreams: activeExternalStreams,
 	} = useVoice();
 	const { pinnedCard, pinCard, unpinCard, isPinned } = usePinCardController();
+	const handleExitStage = useCallback(() => {
+		if (pinnedCard?.type === PinnedCardType.USER && pinnedCard.userId !== ownUserId) {
+			stopWatchingStream(pinnedCard.userId, StreamKind.VIDEO);
+		}
+
+		if (pinnedCard?.type === PinnedCardType.SCREEN_SHARE && pinnedCard.userId !== ownUserId) {
+			stopWatchingStream(pinnedCard.userId, StreamKind.SCREEN);
+
+			if (remoteUserStreams[pinnedCard.userId]?.[StreamKind.SCREEN_AUDIO]) {
+				stopWatchingStream(pinnedCard.userId, StreamKind.SCREEN_AUDIO);
+			}
+		}
+
+		if (pinnedCard?.type === PinnedCardType.EXTERNAL_STREAM) {
+			if (activeExternalStreams[pinnedCard.userId]?.videoStream) {
+				stopWatchingStream(pinnedCard.userId, StreamKind.EXTERNAL_VIDEO);
+			}
+
+			if (activeExternalStreams[pinnedCard.userId]?.audioStream) {
+				stopWatchingStream(pinnedCard.userId, StreamKind.EXTERNAL_AUDIO);
+			}
+		}
+
+		unpinCard();
+		setSelectedChannelId(lastTextChannelId);
+	}, [
+		activeExternalStreams,
+		lastTextChannelId,
+		ownUserId,
+		pinnedCard,
+		remoteUserStreams,
+		stopWatchingStream,
+		unpinCard,
+	]);
 
 	const cards = useMemo(() => {
 		const cards: React.ReactNode[] = [];
@@ -204,7 +243,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 			<VoiceGrid pinnedCardId={pinnedCard?.id} className="h-full pb-24">
 				{cards}
 			</VoiceGrid>
-			<ControlsBar channelId={channelId} />
+			<ControlsBar channelId={channelId} onExitStage={pinnedCard ? handleExitStage : undefined} />
 		</div>
 	);
 });

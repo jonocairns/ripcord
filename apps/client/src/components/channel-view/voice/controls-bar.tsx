@@ -9,9 +9,11 @@ import {
 	ScreenShareOff,
 	Video,
 	VideoOff,
+	X,
 } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
+import { Tooltip } from '@/components/ui/tooltip';
 import { useChannelCan } from '@/features/server/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
 import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
@@ -21,9 +23,10 @@ import { VoiceSurface } from './voice-surface';
 
 type TControlsBarProps = {
 	channelId: number;
+	onExitStage?: () => void;
 };
 
-const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
+const ControlsBar = memo(({ channelId, onExitStage }: TControlsBarProps) => {
 	const { toggleMic, toggleSound, toggleWebcam, toggleScreenShare } = useVoice();
 	const ownVoiceState = useOwnVoiceState();
 	const channelCan = useChannelCan(channelId);
@@ -39,7 +42,7 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
 
 	return (
 		<div className={cn('pointer-events-none absolute inset-x-0 bottom-6 z-40 flex justify-center px-4')}>
-			<VoiceSurface variant="controls" className="pointer-events-auto flex items-center gap-0.5 px-1.5 py-1.5">
+			<VoiceSurface variant="controls" className="pointer-events-auto flex items-center gap-1 px-1.5 py-1.5">
 				<ControlToggleButton
 					enabled={ownVoiceState.micMuted}
 					enabledLabel="Unmute"
@@ -87,19 +90,37 @@ const ControlsBar = memo(({ channelId }: TControlsBarProps) => {
 					disabled={!permissions.canShareScreen}
 				/>
 
-				<div className="mx-0.5 h-7 w-px bg-white/8" />
+				<div className="mx-1 h-7 w-px bg-white/8" />
 
-				<Button
-					variant="ghost"
-					size="icon"
-					className={cn(
-						'h-10 w-10 rounded-xl border border-red-300/15 bg-[#ef4444] text-white transition-[background-color,border-color,transform] duration-150 hover:!border-red-200/30 hover:!bg-[#dc2626] hover:!text-white active:scale-95',
-					)}
-					onClick={leaveVoice}
-					aria-label="Disconnect"
-				>
-					<PhoneOff size={20} strokeWidth={2.4} />
-				</Button>
+				<Tooltip content="Leave voice channel">
+					<Button
+						variant="ghost"
+						size="icon"
+						className={cn(
+							'h-10 w-10 rounded-xl border border-red-400/20 bg-transparent text-red-300 transition-[background-color,border-color,color,transform] duration-150 hover:!border-red-300/30 hover:!bg-red-500/10 hover:!text-red-200 active:scale-95',
+						)}
+						onClick={leaveVoice}
+						aria-label="Leave voice channel"
+					>
+						<PhoneOff size={20} strokeWidth={2.4} />
+					</Button>
+				</Tooltip>
+
+				{onExitStage && (
+					<Tooltip content="Exit stage">
+						<Button
+							variant="ghost"
+							size="icon"
+							className={cn(
+								'h-10 w-10 rounded-xl border border-red-300/20 bg-[#ef4444] text-white shadow-[0_0_0_1px_rgb(248_113_113/0.08)] transition-[background-color,border-color,color,transform,box-shadow] duration-150 hover:!border-red-200/30 hover:!bg-[#dc2626] hover:!text-white hover:shadow-[0_0_0_1px_rgb(252_165_165/0.16)] active:scale-95',
+							)}
+							onClick={onExitStage}
+							aria-label="Exit stage"
+						>
+							<X size={18} strokeWidth={2.2} />
+						</Button>
+					</Tooltip>
+				)}
 			</VoiceSurface>
 		</div>
 	);

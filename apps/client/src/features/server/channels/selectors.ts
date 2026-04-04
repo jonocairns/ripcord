@@ -6,6 +6,8 @@ export const channelsSelector = (state: IServerState) => state.channels;
 
 export const selectedChannelIdSelector = (state: IServerState) => state.selectedChannelId;
 
+export const lastTextChannelIdSelector = (state: IServerState) => state.lastTextChannelId;
+
 export const selectedChannelTypeSelector = (state: IServerState) =>
 	state.channels.find((channel) => channel.id === state.selectedChannelId)?.type;
 
