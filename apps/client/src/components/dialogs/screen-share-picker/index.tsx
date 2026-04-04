@@ -126,7 +126,7 @@ const ScreenSharePickerDialog = memo(
 				return;
 			}
 
-			if (shouldResolveAppAudioTargets && !resolvedAppAudioTargetId) {
+			if (shouldResolveAppAudioTargets && !resolvedAppAudioTargetId && !allowsImplicitFallbackWithoutTarget) {
 				return;
 			}
 
