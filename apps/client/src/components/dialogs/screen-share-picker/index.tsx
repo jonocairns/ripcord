@@ -90,6 +90,7 @@ const ScreenSharePickerDialog = memo(
 			});
 		}, [liveCapabilities.issues]);
 		const shouldResolveAppAudioTargets = isOpen && appAudioTargetBehavior.shouldResolveAppAudioTargets;
+		const isResolvingAppAudioTargets = shouldResolveAppAudioTargets && loadingAppAudioTargets;
 		const requiresManualAppAudioTarget =
 			shouldResolveAppAudioTargets && appAudioTargetBehavior.requiresManualAppAudioTarget;
 		const resolvedAppAudioTargetId = requiresManualAppAudioTarget
@@ -100,6 +101,7 @@ const ScreenSharePickerDialog = memo(
 		const canConfirmShare =
 			hasSources &&
 			!!selectedSourceId &&
+			!isResolvingAppAudioTargets &&
 			(!shouldResolveAppAudioTargets || !!resolvedAppAudioTargetId || allowsImplicitFallbackWithoutTarget);
 		const fallbackWithoutTargetMessage = useMemo(() => {
 			if (!allowsImplicitFallbackWithoutTarget) {
@@ -123,6 +125,10 @@ const ScreenSharePickerDialog = memo(
 
 		const onSubmit = () => {
 			if (!selectedSourceId) {
+				return;
+			}
+
+			if (isResolvingAppAudioTargets) {
 				return;
 			}
 
