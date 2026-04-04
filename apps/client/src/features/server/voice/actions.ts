@@ -221,13 +221,14 @@ const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<void> =>
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
 	const selectedChannelId = selectedChannelIdSelector(state);
+	const lastTextChannelId = state.lastTextChannelId;
 
 	if (!currentChannelId) {
 		return;
 	}
 
 	if (selectedChannelId === currentChannelId) {
-		setSelectedChannelId(undefined);
+		setSelectedChannelId(lastTextChannelId);
 	}
 
 	setCurrentVoiceChannelId(undefined);

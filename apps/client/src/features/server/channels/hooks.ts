@@ -6,6 +6,7 @@ import {
 	channelsSelector,
 	currentVoiceChannelIdSelector,
 	isCurrentVoiceChannelSelectedSelector,
+	lastTextChannelIdSelector,
 	selectedChannelIdSelector,
 	selectedChannelTypeSelector,
 } from './selectors';
@@ -22,6 +23,8 @@ export const useChannelsByCategoryId = (categoryId: number) => {
 };
 
 export const useSelectedChannelId = () => useServerStore(selectedChannelIdSelector);
+
+export const useLastTextChannelId = () => useServerStore(lastTextChannelIdSelector);
 
 export const useCurrentVoiceChannelId = () => useServerStore(currentVoiceChannelIdSelector);
 

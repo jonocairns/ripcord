@@ -10,15 +10,18 @@ import { useVoiceRefs } from '../channel-view/voice/hooks/use-voice-refs';
 import { getSpeakingIndicatorStyle } from '../channel-view/voice/speaking-indicator';
 import { Tooltip } from '../ui/tooltip';
 import { UserPopover } from '../user-popover';
+import { useVoiceChannelNavigation } from './use-voice-channel-navigation';
 import { useVolumeControl } from '../voice-provider/volume-control-context';
 
 type TVoiceUserProps = {
+	channelId: number;
 	user: TVoiceUser;
 };
 
-const VoiceUser = memo(({ user }: TVoiceUserProps) => {
+const VoiceUser = memo(({ channelId, user }: TVoiceUserProps) => {
 	const { audioLevel, isSpeaking } = useVoiceRefs(user.id);
 	const ownUserId = useOwnUserId();
+	const { openUserStreamStage } = useVoiceChannelNavigation();
 	const { getUserVolumeKey, getVolume, setVolume, toggleMute } = useVolumeControl();
 	const isOwnUser = user.id === ownUserId;
 	const volumeKey = getUserVolumeKey(user.id);
@@ -34,6 +37,33 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
 	const handleToggleMute = useCallback(() => {
 		toggleMute(volumeKey);
 	}, [toggleMute, volumeKey]);
+	const stopIndicatorEvent = useCallback((event: React.SyntheticEvent) => {
+		event.stopPropagation();
+	}, []);
+	const handleOpenCameraStage = useCallback(
+		(event: React.MouseEvent<HTMLButtonElement>) => {
+			event.preventDefault();
+			event.stopPropagation();
+			void openUserStreamStage({
+				channelId,
+				userId: user.id,
+				stream: 'camera',
+			});
+		},
+		[channelId, openUserStreamStage, user.id],
+	);
+	const handleOpenScreenStage = useCallback(
+		(event: React.MouseEvent<HTMLButtonElement>) => {
+			event.preventDefault();
+			event.stopPropagation();
+			void openUserStreamStage({
+				channelId,
+				userId: user.id,
+				stream: 'screen',
+			});
+		},
+		[channelId, openUserStreamStage, user.id],
+	);
 	const speakingStyle = getSpeakingIndicatorStyle(audioLevel, isActivelySpeaking);
 	const hasStatusIndicators =
 		user.state.micMuted || user.state.soundMuted || user.state.webcamEnabled || user.state.sharingScreen;
@@ -91,17 +121,27 @@ const VoiceUser = memo(({ user }: TVoiceUserProps) => {
 							</Tooltip>
 						)}
 						{user.state.webcamEnabled && (
-							<Tooltip content="Camera on">
-								<span className="inline-flex">
-									<Video className="sidebar-live-indicator sidebar-live-indicator--video h-3.5 w-3.5 text-sky-400" />
-								</span>
+							<Tooltip content="Open camera in stage">
+								<button
+									type="button"
+									className="inline-flex rounded-sm p-0.5 text-sky-400 transition-colors hover:bg-accent/60 hover:text-sky-300"
+									onPointerDown={stopIndicatorEvent}
+									onClick={handleOpenCameraStage}
+								>
+									<Video className="sidebar-live-indicator sidebar-live-indicator--video h-3.5 w-3.5" />
+								</button>
 							</Tooltip>
 						)}
 						{user.state.sharingScreen && (
-							<Tooltip content="Sharing screen">
-								<span className="inline-flex">
-									<Monitor className="sidebar-live-indicator sidebar-live-indicator--screen h-3.5 w-3.5 text-fuchsia-400" />
-								</span>
+							<Tooltip content="Open screen share in stage">
+								<button
+									type="button"
+									className="inline-flex rounded-sm p-0.5 text-fuchsia-400 transition-colors hover:bg-accent/60 hover:text-fuchsia-300"
+									onPointerDown={stopIndicatorEvent}
+									onClick={handleOpenScreenStage}
+								>
+									<Monitor className="sidebar-live-indicator sidebar-live-indicator--screen h-3.5 w-3.5" />
+								</button>
 							</Tooltip>
 						)}
 					</div>

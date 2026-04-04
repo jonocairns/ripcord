@@ -13,13 +13,13 @@ import {
 	useSelectedChannelId,
 } from '@/features/server/channels/hooks';
 import { useCan, useChannelCan, useUnreadMessagesCount, useVoiceUsersByChannelId } from '@/features/server/hooks';
-import { joinVoice, leaveVoiceSilently } from '@/features/server/voice/actions';
-import { useVoice, useVoiceChannelExternalStreamsList } from '@/features/server/voice/hooks';
+import { useVoiceChannelExternalStreamsList } from '@/features/server/voice/hooks';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { ChannelContextMenu } from '../context-menus/channel';
 import { ExternalStream } from './external-stream';
+import { useVoiceChannelNavigation } from './use-voice-channel-navigation';
 import { VoiceUser } from './voice-user';
 
 type TVoiceProps = Omit<TItemWrapperProps, 'children'> & {
@@ -45,7 +45,7 @@ const Voice = memo(({ channel, ...props }: TVoiceProps) => {
 			{channel.type === 'VOICE' && (
 				<div className="mt-1.5 ml-6 space-y-1.5">
 					{users.map((user) => (
-						<VoiceUser key={user.id} user={user} />
+						<VoiceUser key={user.id} channelId={channel.id} user={user} />
 					))}
 					{externalStreams.map((stream) => (
 						<ExternalStream
@@ -127,38 +127,20 @@ const Channel = memo(({ channelId, isSelected }: TChannelProps) => {
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const channelCan = useChannelCan(channelId);
 	const can = useCan();
-	const { init } = useVoice();
+	const { joinChannel } = useVoiceChannelNavigation();
 
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: channelId });
 
 	const onClick = useCallback(async () => {
-		setSelectedChannelId(channelId);
+		if (channel?.type === ChannelType.TEXT) {
+			setSelectedChannelId(channelId);
+			return;
+		}
 
 		if (channel?.type === ChannelType.VOICE && currentVoiceChannelId !== channelId) {
-			const joinResult = await joinVoice(channelId);
-
-			if (joinResult.kind !== 'joined') {
-				// joining voice failed
-				if (joinResult.kind !== 'already-joined') {
-					setSelectedChannelId(undefined);
-				}
-
-				return;
-			}
-
-			try {
-				await init(joinResult.routerRtpCapabilities, channelId, {
-					producerTransportParams: joinResult.producerTransportParams,
-					consumerTransportParams: joinResult.consumerTransportParams,
-					existingProducers: joinResult.existingProducers,
-				});
-			} catch {
-				await leaveVoiceSilently();
-				setSelectedChannelId(undefined);
-				toast.error('Failed to initialize voice connection');
-			}
+			await joinChannel(channelId);
 		}
-	}, [channelId, channel?.type, init, currentVoiceChannelId]);
+	}, [channelId, channel?.type, currentVoiceChannelId, joinChannel]);
 
 	if (!channel) {
 		return null;

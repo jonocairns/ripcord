@@ -16,6 +16,22 @@ type TResolveAppAudioTargetBehaviorResult = {
 	allowsImplicitFallbackWithoutTarget: boolean;
 };
 
+const getEffectiveScreenShareAudioMode = ({
+	requestedAudioMode,
+	perAppAudioSupported,
+	sourceKind,
+}: {
+	requestedAudioMode: ScreenAudioMode;
+	perAppAudioSupported: boolean;
+	sourceKind: TDesktopShareSourceKind | undefined;
+}) => {
+	if (perAppAudioSupported && sourceKind === 'window') {
+		return ScreenAudioMode.APP;
+	}
+
+	return requestedAudioMode;
+};
+
 const resolveAppAudioTargetBehavior = ({
 	audioMode,
 	perAppAudioSupported,
@@ -43,4 +59,4 @@ const resolveAppAudioTargetBehavior = ({
 };
 
 export type { TResolveAppAudioTargetBehaviorInput, TResolveAppAudioTargetBehaviorResult };
-export { resolveAppAudioTargetBehavior };
+export { getEffectiveScreenShareAudioMode, resolveAppAudioTargetBehavior };

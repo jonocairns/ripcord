@@ -5,11 +5,13 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 
 type StatsPopoverProps = {
 	children: React.ReactNode;
+	triggerClassName?: string;
+	triggerRef?: React.Ref<HTMLDivElement>;
 };
 
 const CLOSE_DELAY_MS = 120;
 
-const StatsPopover = memo(({ children }: StatsPopoverProps) => {
+const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopoverProps) => {
 	const { transportStats } = useVoice();
 	const [open, setOpen] = useState(false);
 	const closeTimeoutRef = useRef<number | undefined>(undefined);
@@ -48,7 +50,7 @@ const StatsPopover = memo(({ children }: StatsPopoverProps) => {
 	return (
 		<Popover open={open}>
 			<PopoverTrigger asChild>
-				<div onMouseEnter={handleOpen} onMouseLeave={handleClose}>
+				<div ref={triggerRef} className={triggerClassName} onMouseEnter={handleOpen} onMouseLeave={handleClose}>
 					{children}
 				</div>
 			</PopoverTrigger>

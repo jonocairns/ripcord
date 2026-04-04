@@ -48,12 +48,12 @@ const UserControl = memo(() => {
 				<div className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-md px-1 py-0.5">
 					<UserAvatar userId={ownPublicUser.id} className="h-9 w-9 flex-shrink-0" showUserPopover={false} />
 					<div className="min-w-0 flex-1">
-						<span className="text-sm font-medium text-foreground truncate">{ownPublicUser.name}</span>
+						<p className="truncate text-sm font-medium text-foreground">{ownPublicUser.name}</p>
 					</div>
 				</div>
 			</UserPopover>
 
-			<div className="flex items-center gap-1">
+			<div className="flex shrink-0 items-center gap-1">
 				<OwnVoiceControls />
 				<Button
 					variant="ghost"

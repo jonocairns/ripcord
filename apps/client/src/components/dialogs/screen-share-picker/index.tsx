@@ -22,7 +22,7 @@ import {
 	type TDesktopShareSource,
 } from '@/runtime/types';
 import type { TDialogBaseProps } from '../types';
-import { resolveAppAudioTargetBehavior } from './resolve-app-audio-target';
+import { getEffectiveScreenShareAudioMode, resolveAppAudioTargetBehavior } from './resolve-app-audio-target';
 
 type TScreenSharePickerDialogProps = TDialogBaseProps & {
 	sources: TDesktopShareSource[];
@@ -66,8 +66,14 @@ const ScreenSharePickerDialog = memo(
 
 			return sources.find((source) => source.id === selectedSourceId);
 		}, [selectedSourceId, sources]);
+		const isPerAppAudioForced = selectedSource?.kind === 'window' && liveCapabilities.perAppAudio !== 'unsupported';
+		const effectiveAudioMode = getEffectiveScreenShareAudioMode({
+			requestedAudioMode: audioMode,
+			perAppAudioSupported: liveCapabilities.perAppAudio !== 'unsupported',
+			sourceKind: selectedSource?.kind,
+		});
 		const appAudioTargetBehavior = resolveAppAudioTargetBehavior({
-			audioMode,
+			audioMode: effectiveAudioMode,
 			perAppAudioSupported: liveCapabilities.perAppAudio !== 'unsupported',
 			sourceKind: selectedSource?.kind,
 			availableTargetCount: appAudioTargetsResult.targets.length,
@@ -126,7 +132,7 @@ const ScreenSharePickerDialog = memo(
 
 			onConfirm?.({
 				sourceId: selectedSourceId,
-				audioMode,
+				audioMode: effectiveAudioMode,
 				appAudioTargetId: resolvedAppAudioTargetId,
 			});
 		};
@@ -193,7 +199,7 @@ const ScreenSharePickerDialog = memo(
 
 					setAppAudioTargetsResult(result);
 					const nextTargetBehavior = resolveAppAudioTargetBehavior({
-						audioMode,
+						audioMode: effectiveAudioMode,
 						perAppAudioSupported: liveCapabilities.perAppAudio !== 'unsupported',
 						sourceKind: selectedSource?.kind,
 						availableTargetCount: result.targets.length,
@@ -234,8 +240,8 @@ const ScreenSharePickerDialog = memo(
 				cancelled = true;
 			};
 		}, [
-			audioMode,
 			desktopBridge,
+			effectiveAudioMode,
 			liveCapabilities.perAppAudio,
 			selectedSource?.kind,
 			selectedSourceId,
@@ -290,7 +296,11 @@ const ScreenSharePickerDialog = memo(
 
 						<div>
 							<label className="text-sm font-medium">Audio mode</label>
-							<Select value={audioMode} onValueChange={(value) => setAudioMode(value as ScreenAudioMode)}>
+							<Select
+								value={effectiveAudioMode}
+								onValueChange={(value) => setAudioMode(value as ScreenAudioMode)}
+								disabled={isPerAppAudioForced}
+							>
 								<SelectTrigger className="mt-2 w-56">
 									<SelectValue />
 								</SelectTrigger>
@@ -302,6 +312,11 @@ const ScreenSharePickerDialog = memo(
 									</SelectGroup>
 								</SelectContent>
 							</Select>
+							{isPerAppAudioForced && (
+								<p className="mt-2 text-xs text-muted-foreground">
+									Window shares use per-app audio automatically when supported.
+								</p>
+							)}
 						</div>
 
 						{shouldResolveAppAudioTargets && (

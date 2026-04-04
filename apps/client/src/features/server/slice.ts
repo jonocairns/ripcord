@@ -16,6 +16,7 @@ import type {
 	TVoiceMap,
 	TVoiceUserState,
 } from '@sharkord/shared';
+import { ChannelType } from '@sharkord/shared';
 import { create } from 'zustand';
 import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-card-controller';
 import type { TDisconnectInfo, TMessagesMap } from './types';
@@ -31,6 +32,7 @@ export interface IServerState {
 	emojis: TJoinedEmoji[];
 	ownUserId: number | undefined;
 	selectedChannelId: number | undefined;
+	lastTextChannelId: number | undefined;
 	currentVoiceChannelId: number | undefined;
 	messagesMap: TMessagesMap;
 	users: TJoinedPublicUser[];
@@ -127,6 +129,7 @@ const initialState: IServerState = {
 	channels: [],
 	emojis: [],
 	selectedChannelId: undefined,
+	lastTextChannelId: undefined,
 	currentVoiceChannelId: undefined,
 	messagesMap: {},
 	users: [],
@@ -377,9 +380,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		}
 
 		const state = get();
+		const selectedChannel = state.channels.find((channel) => channel.id === channelId);
 
 		set({
 			selectedChannelId: channelId,
+			lastTextChannelId: selectedChannel?.type === ChannelType.TEXT ? channelId : state.lastTextChannelId,
 			readStatesMap: {
 				...state.readStatesMap,
 				[channelId]: 0,
