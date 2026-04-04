@@ -145,11 +145,12 @@ const sfxOwnUserLeftVoiceChannel = () => {
 	const osc2 = createOsc('triangle', 880);
 	const gain2 = createGain(0.03);
 
-	gain2.gain.exponentialRampToValueAtTime(0.0001, now() + 0.28);
+	const t2 = now() + 0.09;
+	gain2.gain.exponentialRampToValueAtTime(0.0001, t2 + 0.19);
 
 	osc2.connect(gain2).connect(masterGain);
-	osc2.start(now() + 0.09);
-	osc2.stop(now() + 0.3);
+	osc2.start(t2);
+	osc2.stop(t2 + 0.21);
 };
 
 // MUTED_MIC — extremely bland low click
