@@ -1,9 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-const cwd = process.cwd();
-const sidecarDir = path.resolve(cwd, "sidecar");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const sidecarDir = path.resolve(__dirname, "..", "sidecar");
 const manifestPath = path.resolve(sidecarDir, "Cargo.toml");
 const args = process.argv.slice(2);
 
@@ -90,6 +91,8 @@ const runCargoBuild = () => {
 const copySidecarBinary = async () => {
   await fs.access(binarySourcePath);
   await fs.mkdir(path.dirname(binaryTargetPath), { recursive: true });
+  // Unlink before copy to avoid ETXTBSY when the binary is currently running
+  await fs.unlink(binaryTargetPath).catch(() => {});
   await fs.copyFile(binarySourcePath, binaryTargetPath);
 
   if (process.platform !== "win32") {
