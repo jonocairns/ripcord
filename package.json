@@ -17,10 +17,14 @@
     "knip": "knip",
     "knip:production": "knip --production",
     "magic": "bun run format && bun run check-types && bun run lint",
-    "start": "./start.sh"
+    "start": "bun run build:windows:dev && concurrently --kill-others-on-fail -n server,renderer,electron -c green,blue,cyan \"bun run --filter @sharkord/server dev\" \"bun run --filter client dev\" \"bun run --filter @sharkord/desktop launch:windows:dev\"",
+    "start:web": "concurrently -k -n client,server -c blue,green \"bun run --filter client dev\" \"bun run --filter @sharkord/server dev\"",
+    "build:windows": "bun run --filter @sharkord/desktop build:windows",
+    "build:windows:dev": "bun run --filter @sharkord/desktop build:windows:dev"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
+    "concurrently": "^9.2.1",
     "knip": "^5.80.0"
   }
 }

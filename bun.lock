@@ -6,6 +6,7 @@
       "name": "sharkord",
       "devDependencies": {
         "@biomejs/biome": "^2.0.0",
+        "concurrently": "^9.2.1",
         "knip": "^5.80.0",
       },
     },
