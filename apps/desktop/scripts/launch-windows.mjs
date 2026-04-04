@@ -1,21 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { resolveWindowsInstallDir, toWindowsPath } from "./wsl-utils.mjs";
 
-const WINDOWS_INSTALL_DIR_NAME = "sharkord-preview";
 const isDev = process.argv.includes("--dev");
-
-function resolveWindowsInstallDir() {
-  const result = spawnSync("cmd.exe", ["/C", "echo %LOCALAPPDATA%"], {
-    encoding: "utf8",
-    cwd: "/mnt/c/Windows",
-  });
-  if (result.status !== 0) return null;
-  const winPath = result.stdout.trim().split("\n").at(-1).trim();
-  const wslPath = spawnSync("wslpath", ["-u", winPath], { encoding: "utf8" });
-  if (wslPath.status !== 0) return null;
-  return path.join(wslPath.stdout.trim(), WINDOWS_INSTALL_DIR_NAME);
-}
 
 const installDir = resolveWindowsInstallDir();
 if (!installDir) {
@@ -29,12 +17,16 @@ if (!existsSync(exePath)) {
   process.exit(1);
 }
 
-const winExePath = spawnSync("wslpath", ["-w", exePath], {
-  encoding: "utf8",
-}).stdout.trim();
+const winExePath = toWindowsPath(exePath);
+if (!winExePath) {
+  console.error("Failed to convert WSL path to Windows path.");
+  process.exit(1);
+}
 
+// PowerShell escapes single quotes by doubling them.
+const escapedPath = winExePath.replace(/'/g, "''");
 const psCommand = isDev
-  ? `$env:ELECTRON_RENDERER_URL='http://localhost:5173'; Start-Process '${winExePath}'`
-  : `Start-Process '${winExePath}'`;
+  ? `$env:ELECTRON_RENDERER_URL='http://localhost:5173'; Start-Process -FilePath '${escapedPath}'`
+  : `Start-Process -FilePath '${escapedPath}'`;
 
 spawnSync("powershell.exe", ["-Command", psCommand], { stdio: "inherit" });

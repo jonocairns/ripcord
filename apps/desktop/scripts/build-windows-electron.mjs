@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveWindowsInstallDir } from "./wsl-utils.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP_DIR = path.resolve(__dirname, "..");
@@ -29,7 +30,6 @@ const WINDOWS_BUILD_DIR = path.resolve(DESKTOP_DIR, "build/out/win-unpacked");
 const PREVIEW_RUNTIME_CONFIG_FILE = "sharkord-preview-runtime.json";
 const PREVIEW_RUNTIME_USER_DATA_SUFFIX = "Preview";
 const PREVIEW_RUNTIME_APP_USER_MODEL_ID = "com.sharkord.desktop.preview";
-const WINDOWS_INSTALL_DIR_NAME = "sharkord-preview";
 
 function run(cmd, cmdArgs, { cwd = DESKTOP_DIR, label } = {}) {
   console.log(`\n[build] ${label ?? `${cmd} ${cmdArgs.join(" ")}`}`);
@@ -48,19 +48,6 @@ function requireCmd(cmd) {
     console.error(`Missing required command: ${cmd}`);
     process.exit(1);
   }
-}
-
-// Resolves %LOCALAPPDATA% as a WSL path so we can write into it.
-function resolveWindowsInstallDir() {
-  const result = spawnSync("cmd.exe", ["/C", "echo %LOCALAPPDATA%"], {
-    encoding: "utf8",
-    cwd: "/mnt/c/Windows",
-  });
-  if (result.status !== 0) return null;
-  const winPath = result.stdout.trim().split("\n").at(-1).trim();
-  const wslPath = spawnSync("wslpath", ["-u", winPath], { encoding: "utf8" });
-  if (wslPath.status !== 0) return null;
-  return path.join(wslPath.stdout.trim(), WINDOWS_INSTALL_DIR_NAME);
 }
 
 requireCmd("bun");
@@ -143,9 +130,7 @@ await fs.writeFile(
 // without UNC path restrictions. rsync for incremental updates.
 const installDir = resolveWindowsInstallDir();
 if (!installDir) {
-  console.error(
-    "Could not resolve %LOCALAPPDATA% — are you running in WSL?",
-  );
+  console.error("Could not resolve %LOCALAPPDATA% — are you running in WSL?");
   process.exit(1);
 }
 
