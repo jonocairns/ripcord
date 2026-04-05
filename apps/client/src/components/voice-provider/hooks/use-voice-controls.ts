@@ -174,6 +174,7 @@ const useVoiceControls = ({
 		if (!currentVoiceChannelId) return;
 
 		const newState = !ownVoiceState.webcamEnabled;
+		const previousWebcamEnabled = ownVoiceState.webcamEnabled;
 		const trpc = getTRPCClient();
 
 		updateOwnVoiceState({ webcamEnabled: newState });
@@ -193,14 +194,11 @@ const useVoiceControls = ({
 				stopWebcamStream();
 			}
 		} catch (error) {
-			const confirmedVoiceState = getConfirmedOwnVoiceState();
-			const revertedWebcamEnabled = confirmedVoiceState?.webcamEnabled ?? ownVoiceState.webcamEnabled;
-
 			if (newState) {
 				stopWebcamStream();
 			}
 
-			updateOwnVoiceState(confirmedVoiceState ?? { webcamEnabled: revertedWebcamEnabled });
+			updateOwnVoiceState({ webcamEnabled: previousWebcamEnabled });
 
 			toast.error(getTrpcError(error, 'Failed to update webcam state'));
 		}
@@ -210,6 +208,7 @@ const useVoiceControls = ({
 		if (!currentVoiceChannelId) return;
 
 		const newState = !ownVoiceState.sharingScreen;
+		const previousSharingScreen = ownVoiceState.sharingScreen;
 		const trpc = getTRPCClient();
 		let selection: TDesktopScreenShareSelection | null | undefined;
 
@@ -252,14 +251,11 @@ const useVoiceControls = ({
 				stopScreenShareStream();
 			}
 		} catch (error) {
-			const confirmedVoiceState = getConfirmedOwnVoiceState();
-			const revertedSharingScreen = confirmedVoiceState?.sharingScreen ?? ownVoiceState.sharingScreen;
-
 			if (newState) {
 				stopScreenShareStream();
 			}
 
-			updateOwnVoiceState(confirmedVoiceState ?? { sharingScreen: revertedSharingScreen });
+			updateOwnVoiceState({ sharingScreen: previousSharingScreen });
 
 			// user cancelled the native screen share picker — not an error
 			if (error instanceof DOMException && error.name === 'NotAllowedError') {
