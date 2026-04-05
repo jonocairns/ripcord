@@ -1,10 +1,13 @@
-import { useCallback, useRef } from 'react';
+import type { TVoiceUserState } from '@sharkord/shared';
+import { useCallback, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
+import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useOwnVoiceState } from '@/features/server/voice/hooks';
+import { ownConfirmedVoiceStateSelector } from '@/features/server/voice/selectors';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
@@ -25,6 +28,16 @@ type TSetMicMutedOptions = {
 	playSound?: boolean;
 };
 
+const setLocalAudioTrackEnabled = (stream: MediaStream | undefined, micMuted: boolean) => {
+	stream?.getAudioTracks().forEach((track) => {
+		track.enabled = !micMuted;
+	});
+};
+
+const getConfirmedOwnVoiceState = (): TVoiceUserState | undefined => {
+	return ownConfirmedVoiceStateSelector(useServerStore.getState());
+};
+
 const useVoiceControls = ({
 	startMicStream,
 	localAudioStream,
@@ -37,6 +50,12 @@ const useVoiceControls = ({
 	const ownVoiceState = useOwnVoiceState();
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
+
+	useEffect(() => {
+		if (currentVoiceChannelId === undefined || !ownVoiceState.soundMuted) {
+			micMutedBeforeDeafenRef.current = undefined;
+		}
+	}, [currentVoiceChannelId, ownVoiceState.soundMuted]);
 
 	const setMicMuted = useCallback(
 		async (newState: boolean, options?: TSetMicMutedOptions) => {
@@ -59,9 +78,7 @@ const useVoiceControls = ({
 
 			if (!currentVoiceChannelId) return;
 
-			localAudioStream?.getAudioTracks().forEach((track) => {
-				track.enabled = !newState;
-			});
+			setLocalAudioTrackEnabled(localAudioStream, newState);
 
 			try {
 				await trpc.voice.updateState.mutate({
@@ -72,7 +89,11 @@ const useVoiceControls = ({
 					await startMicStream();
 				}
 			} catch (error) {
-				updateOwnVoiceState({ micMuted: !newState });
+				const confirmedVoiceState = getConfirmedOwnVoiceState();
+				const revertedMicMuted = confirmedVoiceState?.micMuted ?? !newState;
+
+				updateOwnVoiceState(confirmedVoiceState ?? { micMuted: revertedMicMuted });
+				setLocalAudioTrackEnabled(localAudioStream, revertedMicMuted);
 				toast.error(getTrpcError(error, 'Failed to update microphone state'));
 			}
 		},
@@ -105,9 +126,7 @@ const useVoiceControls = ({
 			micMuted: nextMicMuted,
 		});
 
-		localAudioStream?.getAudioTracks().forEach((track) => {
-			track.enabled = !nextMicMuted;
-		});
+		setLocalAudioTrackEnabled(localAudioStream, nextMicMuted);
 
 		playSound(newState ? SoundType.OWN_USER_MUTED_SOUND : SoundType.OWN_USER_UNMUTED_SOUND);
 
@@ -123,14 +142,19 @@ const useVoiceControls = ({
 				await startMicStream();
 			}
 		} catch (error) {
-			micMutedBeforeDeafenRef.current = previousMicMutedBeforeDeafen;
-			updateOwnVoiceState({
-				soundMuted: ownVoiceState.soundMuted,
-				micMuted: previousMicMuted,
-			});
-			localAudioStream?.getAudioTracks().forEach((track) => {
-				track.enabled = !previousMicMuted;
-			});
+			const confirmedVoiceState = getConfirmedOwnVoiceState();
+			const revertedSoundMuted = confirmedVoiceState?.soundMuted ?? ownVoiceState.soundMuted;
+			const revertedMicMuted = confirmedVoiceState?.micMuted ?? previousMicMuted;
+
+			micMutedBeforeDeafenRef.current = revertedSoundMuted ? previousMicMutedBeforeDeafen : undefined;
+			updateOwnVoiceState(
+				confirmedVoiceState ??
+					({
+						soundMuted: revertedSoundMuted,
+						micMuted: revertedMicMuted,
+					} satisfies Partial<TVoiceUserState>),
+			);
+			setLocalAudioTrackEnabled(localAudioStream, revertedMicMuted);
 			toast.error(getTrpcError(error, 'Failed to update sound state'));
 		}
 	}, [ownVoiceState.soundMuted, ownVoiceState.micMuted, currentVoiceChannelId, localAudioStream, startMicStream]);

@@ -2,6 +2,16 @@ import type { IServerState } from '../slice';
 
 export const ownVoiceStateSelector = (state: IServerState) => state.ownVoiceState;
 
+export const ownConfirmedVoiceStateSelector = (state: IServerState) => {
+	const { currentVoiceChannelId, ownUserId } = state;
+
+	if (currentVoiceChannelId === undefined || ownUserId === undefined) {
+		return undefined;
+	}
+
+	return state.voiceMap[currentVoiceChannelId]?.users[ownUserId];
+};
+
 export const pinnedCardSelector = (state: IServerState) => state.pinnedCard;
 
 export const voiceChannelStateSelector = (state: IServerState, channelId: number) => state.voiceMap[channelId];

@@ -180,6 +180,18 @@ const removeById = <T extends { id: number }>(items: T[], id: number): T[] => {
 	return items.filter((item) => item.id !== id);
 };
 
+const findVoiceStateForUser = (voiceMap: TVoiceMap, userId: number): TVoiceUserState | undefined => {
+	for (const channelState of Object.values(voiceMap)) {
+		const userState = channelState?.users[userId];
+
+		if (userState) {
+			return userState;
+		}
+	}
+
+	return undefined;
+};
+
 export const useServerStore = create<TServerStore>((set, get) => ({
 	...initialState,
 	resetState: () => {
@@ -213,6 +225,8 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({ disconnectInfo });
 	},
 	setInitialData: (data) => {
+		const ownVoiceState = findVoiceStateForUser(data.voiceMap, data.ownUserId);
+
 		set({
 			connected: true,
 			mustChangePassword: data.mustChangePassword,
@@ -228,6 +242,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			serverId: data.serverId,
 			channelPermissions: data.channelPermissions,
 			readStatesMap: data.readStates,
+			ownVoiceState: ownVoiceState ?? get().ownVoiceState,
 		});
 	},
 	addMessages: ({ channelId, messages, opts }) => {
@@ -462,6 +477,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 	addUserToVoiceChannel: ({ channelId, userId, state: userState }) => {
 		const storeState = get();
 		const channelState = storeState.voiceMap[channelId] ?? { users: {} };
+		const ownVoiceState = storeState.ownUserId === userId ? userState : storeState.ownVoiceState;
 
 		set({
 			voiceMap: {
@@ -474,6 +490,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					},
 				},
 			},
+			ownVoiceState,
 		});
 	},
 	removeUserFromVoiceChannel: ({ channelId, userId }) => {
@@ -507,6 +524,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			return;
 		}
 
+		const nextVoiceState = {
+			...currentVoiceState,
+			...newState,
+		};
+
 		set({
 			voiceMap: {
 				...storeState.voiceMap,
@@ -514,13 +536,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					...channelState,
 					users: {
 						...channelState.users,
-						[userId]: {
-							...currentVoiceState,
-							...newState,
-						},
+						[userId]: nextVoiceState,
 					},
 				},
 			},
+			ownVoiceState: storeState.ownUserId === userId ? nextVoiceState : storeState.ownVoiceState,
 		});
 	},
 	updateOwnVoiceState: (newState) => {
