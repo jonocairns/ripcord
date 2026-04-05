@@ -11,12 +11,7 @@ import {
 } from '@/components/voice-provider/mic-audio-processing';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
-import {
-	getConfirmedOwnVoiceState,
-	useConfirmedOwnVoiceState,
-	useOwnVoiceState,
-	useVoice,
-} from '@/features/server/voice/hooks';
+import { useConfirmedOwnVoiceState, useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
 import { getTRPCClient } from '@/lib/trpc';
 
 const ANALYSER_FFT_SIZE = 512;
@@ -268,19 +263,12 @@ const MicrophoneTestPanel = memo(
 						soundMuted: nextSoundMuted,
 					});
 				} catch {
-					const confirmedVoiceState = getConfirmedOwnVoiceState();
-					const revertedMicMuted = confirmedVoiceState?.micMuted ?? previousMicMuted;
-					const revertedSoundMuted = confirmedVoiceState?.soundMuted ?? previousSoundMuted;
-
-					micMutedRef.current = revertedMicMuted;
-					soundMutedRef.current = revertedSoundMuted;
-					updateOwnVoiceState(
-						confirmedVoiceState ??
-							({
-								micMuted: revertedMicMuted,
-								soundMuted: revertedSoundMuted,
-							} satisfies Partial<TVoiceUserState>),
-					);
+					micMutedRef.current = previousMicMuted;
+					soundMutedRef.current = previousSoundMuted;
+					updateOwnVoiceState({
+						micMuted: previousMicMuted,
+						soundMuted: previousSoundMuted,
+					} satisfies Partial<TVoiceUserState>);
 				}
 			},
 			[currentVoiceChannelId],

@@ -5,7 +5,7 @@ import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
-import { getConfirmedOwnVoiceState, useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
+import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
@@ -79,6 +79,7 @@ const useVoiceControls = ({
 			}
 
 			const shouldPlaySound = options?.playSound ?? true;
+			const previousMicMuted = ownVoiceState.micMuted;
 			const trpc = getTRPCClient();
 
 			updateOwnVoiceState({ micMuted: newState });
@@ -100,11 +101,8 @@ const useVoiceControls = ({
 					await startMicStream();
 				}
 			} catch (error) {
-				const confirmedVoiceState = getConfirmedOwnVoiceState();
-				const revertedMicMuted = confirmedVoiceState?.micMuted ?? !newState;
-
-				updateOwnVoiceState(confirmedVoiceState ?? { micMuted: revertedMicMuted });
-				setLocalAudioTrackEnabled(localAudioStream, revertedMicMuted);
+				updateOwnVoiceState({ micMuted: previousMicMuted });
+				setLocalAudioTrackEnabled(localAudioStream, previousMicMuted);
 				toast.error(getTrpcError(error, 'Failed to update microphone state'));
 			}
 		},
@@ -121,6 +119,7 @@ const useVoiceControls = ({
 		const newState = !ownVoiceState.soundMuted;
 		const trpc = getTRPCClient();
 		const previousMicMuted = ownVoiceState.micMuted;
+		const previousSoundMuted = ownVoiceState.soundMuted;
 		const previousMicMutedBeforeDeafen = micMutedBeforeDeafenRef.current;
 		let nextMicMuted = previousMicMuted;
 
@@ -153,19 +152,12 @@ const useVoiceControls = ({
 				await startMicStream();
 			}
 		} catch (error) {
-			const confirmedVoiceState = getConfirmedOwnVoiceState();
-			const revertedSoundMuted = confirmedVoiceState?.soundMuted ?? ownVoiceState.soundMuted;
-			const revertedMicMuted = confirmedVoiceState?.micMuted ?? previousMicMuted;
-
-			micMutedBeforeDeafenRef.current = revertedSoundMuted ? previousMicMutedBeforeDeafen : undefined;
-			updateOwnVoiceState(
-				confirmedVoiceState ??
-					({
-						soundMuted: revertedSoundMuted,
-						micMuted: revertedMicMuted,
-					} satisfies Partial<TVoiceUserState>),
-			);
-			setLocalAudioTrackEnabled(localAudioStream, revertedMicMuted);
+			micMutedBeforeDeafenRef.current = previousSoundMuted ? previousMicMutedBeforeDeafen : undefined;
+			updateOwnVoiceState({
+				soundMuted: previousSoundMuted,
+				micMuted: previousMicMuted,
+			} satisfies Partial<TVoiceUserState>);
+			setLocalAudioTrackEnabled(localAudioStream, previousMicMuted);
 			toast.error(getTrpcError(error, 'Failed to update sound state'));
 		}
 	}, [ownVoiceState.soundMuted, ownVoiceState.micMuted, currentVoiceChannelId, localAudioStream, startMicStream]);
