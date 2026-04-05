@@ -56,6 +56,22 @@ describe('voice store own state derivation', () => {
 		);
 	});
 
+	it('returns undefined confirmed state and falls back to own defaults when not in voice', () => {
+		const ownVoiceDefaults = createVoiceState({
+			micMuted: true,
+			soundMuted: true,
+		});
+
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: undefined,
+			ownVoiceDefaults,
+		});
+
+		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toBeUndefined();
+		expect(ownVoiceStateSelector(useServerStore.getState())).toEqual(ownVoiceDefaults);
+	});
+
 	it('derives own voice state from the confirmed voice map when the own user is in voice', () => {
 		const joinedVoiceState = createVoiceState({
 			micMuted: true,

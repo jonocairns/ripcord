@@ -501,6 +501,8 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					},
 				},
 			},
+			// Mirror durable own-user preferences from server-confirmed state,
+			// but keep live in-call state derived from voiceMap.
 			ownVoiceDefaults:
 				storeState.ownUserId === userId
 					? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, userState)
@@ -554,6 +556,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					},
 				},
 			},
+			// Server updates remain authoritative for own-user preferences too.
 			ownVoiceDefaults:
 				storeState.ownUserId === userId
 					? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, nextVoiceState)
@@ -583,6 +586,8 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 						},
 					},
 				},
+				// When already in voice, optimistic local toggles patch the live own-user
+				// entry directly and also persist the off-channel defaults.
 				ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
 			});
 			return;
