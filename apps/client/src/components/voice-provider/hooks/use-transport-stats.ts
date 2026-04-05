@@ -286,17 +286,18 @@ const useTransportStats = () => {
 		logVoice('Transport stats reset');
 	}, []);
 
-	const printStats = useCallback(() => {
-		logVoice('Current Transport Stats:', { stats });
-	}, [stats]);
+	const statsRef = useRef(stats);
+	statsRef.current = stats;
 
 	useEffect(() => {
-		window.printVoiceStats = printStats;
+		window.printVoiceStats = () => {
+			logVoice('Current Transport Stats:', { stats: statsRef.current });
+		};
 
 		return () => {
 			delete window.printVoiceStats;
 		};
-	}, [printStats]);
+	}, []);
 
 	useEffect(() => {
 		return () => {

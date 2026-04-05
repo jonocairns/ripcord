@@ -358,19 +358,18 @@ const ExternalStreamCard = memo(
 				return;
 			}
 
-			const popoutStream = new MediaStream([
+			const nextStream = new MediaStream([
 				...externalVideoStream.getVideoTracks(),
 				...(externalAudioStream?.getAudioTracks() ?? []),
 			]);
 
-			popoutVideoElement.srcObject = popoutStream;
-			popoutVideoElement.muted = !externalAudioStream || isMuted || !isPopoutAudioEnabled;
+			popoutVideoElement.srcObject = nextStream;
 
 			void popoutVideoElement.play().catch(() => {
 				// Pop-out playback is user initiated, but browser media policies can
 				// still reject autoplay. Keep the stream attached and fail silently.
 			});
-		}, [externalAudioStream, externalVideoStream, isMuted, isPopoutAudioEnabled, isPoppedOut, popoutVideoElement]);
+		}, [externalAudioStream, externalVideoStream, isPoppedOut, popoutVideoElement]);
 
 		useEffect(() => {
 			if (!popoutVideoElement) {

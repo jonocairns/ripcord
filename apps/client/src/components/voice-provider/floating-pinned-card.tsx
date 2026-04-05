@@ -108,9 +108,14 @@ const FloatingPinnedCard = memo(
 
 		// biome-ignore lint/correctness/useExhaustiveDependencies: reattach stream when channel visibility changes
 		useEffect(() => {
-			if (videoRef.current && floatingCardContent?.videoStream) {
-				videoRef.current.srcObject = floatingCardContent.videoStream;
+			if (!videoRef.current) return;
+
+			if (!floatingCardContent?.videoStream) {
+				if (videoRef.current.srcObject) videoRef.current.srcObject = null;
+				return;
 			}
+
+			videoRef.current.srcObject = floatingCardContent.videoStream;
 		}, [floatingCardContent?.videoStream, isCurrentVoiceChannelSelected]);
 
 		// biome-ignore lint/correctness/useExhaustiveDependencies: reopen card when pinned content or channel changes
