@@ -1450,7 +1450,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							track.stop();
 						});
 						localScreenShareProducer.current?.close();
+						localScreenShareProducer.current = undefined;
 						localScreenShareAudioProducer.current?.close();
+						localScreenShareAudioProducer.current = undefined;
 						standbyDisplayAudioTrackRef.current = undefined;
 						standbyDisplayAudioStreamRef.current = undefined;
 						void cleanupDesktopAppAudio();
@@ -1685,6 +1687,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		void cleanupMicAudioPipeline();
 		stopMonitoring();
 		resetStats();
+		stopAllVoiceActivityMonitoring();
 		clearLocalStreams();
 		clearRemoteUserStreams();
 		clearExternalStreams();
@@ -1695,6 +1698,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	}, [
 		stopMonitoring,
 		resetStats,
+		stopAllVoiceActivityMonitoring,
 		cleanupDesktopAppAudio,
 		cleanupMicAudioPipeline,
 		clearLocalStreams,
@@ -2048,10 +2052,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	useEffect(() => {
 		return () => {
 			logVoice('Voice provider unmounting, cleaning up resources');
-			stopAllVoiceActivityMonitoring();
-			cleanup();
+			voiceCleanupRef.current?.();
 		};
-	}, [cleanup, stopAllVoiceActivityMonitoring]);
+	}, []);
 
 	const contextValue = useMemo<TVoiceProvider>(
 		() => ({

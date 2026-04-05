@@ -82,11 +82,14 @@ const createDesktopAppAudioPipeline = async (
 		latencyHint: 'interactive',
 	});
 
-	await ensureWorkletModule(audioContext);
+	let workletNode: AudioWorkletNode | undefined;
 
-	const outputChannels = Math.max(1, session.channels);
+	try {
+		await ensureWorkletModule(audioContext);
+
+		const outputChannels = Math.max(1, session.channels);
 	const destinationNode = audioContext.createMediaStreamDestination();
-	const workletNode = new AudioWorkletNode(audioContext, WORKLET_NAME, {
+	workletNode = new AudioWorkletNode(audioContext, WORKLET_NAME, {
 		numberOfInputs: 0,
 		numberOfOutputs: 1,
 		outputChannelCount: [outputChannels],
@@ -271,7 +274,7 @@ const createDesktopAppAudioPipeline = async (
 					nextDroppedFrameLogAt = now + LOG_RATE_LIMIT_MS;
 				}
 
-				if (insertSilenceOnDroppedFrames) {
+				if (insertSilenceOnDroppedFrames && workletNode) {
 					const recoverableDroppedFrames = computeRecoverableMissingFrameCount(missingFrameCount);
 					const silenceFrameCount = recoverableDroppedFrames * frame.frameCount;
 					const silence = new Float32Array(silenceFrameCount * outputChannels);
@@ -313,6 +316,8 @@ const createDesktopAppAudioPipeline = async (
 				return;
 			}
 
+			if (!workletNode) return;
+
 			workletNode.port.postMessage(
 				{
 					type: 'pcm',
@@ -323,11 +328,13 @@ const createDesktopAppAudioPipeline = async (
 			lastSequence = frame.sequence;
 		},
 		destroy: async () => {
+			workletNode!.port.onmessage = null;
+
 			try {
-				workletNode.port.postMessage({
+				workletNode!.port.postMessage({
 					type: 'reset',
 				});
-				workletNode.disconnect();
+				workletNode!.disconnect();
 			} catch {
 				// ignore
 			}
@@ -336,6 +343,19 @@ const createDesktopAppAudioPipeline = async (
 			await audioContext.close();
 		},
 	};
+} catch (error) {
+	try {
+		workletNode?.disconnect();
+	} catch {
+		// ignore
+	}
+
+	await audioContext.close().catch(() => {
+		// ignore
+	});
+
+	throw error;
+}
 };
 
 export type { TDesktopAppAudioPipeline, TDesktopAppAudioPipelineMode, TDesktopAppAudioPipelineOptions };

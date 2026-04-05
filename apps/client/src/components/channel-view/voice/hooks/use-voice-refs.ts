@@ -89,13 +89,23 @@ const useVoiceRefs = ({
 	const externalPlaybackVolume = (externalVolume * masterOutputVolume) / 10000;
 
 	useEffect(() => {
-		if (!videoStream || !videoRef.current) return;
+		if (!videoRef.current) return;
+
+		if (!videoStream) {
+			if (videoRef.current.srcObject) videoRef.current.srcObject = null;
+			return;
+		}
 
 		videoRef.current.srcObject = videoStream;
 	}, [videoStream, videoRef]);
 
 	useEffect(() => {
-		if (!audioStream || !audioRef.current) return;
+		if (!audioRef.current) return;
+
+		if (!audioStream) {
+			if (audioRef.current.srcObject) audioRef.current.srcObject = null;
+			return;
+		}
 
 		if (audioRef.current.srcObject !== audioStream) {
 			audioRef.current.srcObject = audioStream;
@@ -105,7 +115,12 @@ const useVoiceRefs = ({
 	}, [audioStream, audioRef, userPlaybackVolume]);
 
 	useEffect(() => {
-		if (!screenShareStream || !screenShareRef.current) return;
+		if (!screenShareRef.current) return;
+
+		if (!screenShareStream) {
+			if (screenShareRef.current.srcObject) screenShareRef.current.srcObject = null;
+			return;
+		}
 
 		if (screenShareRef.current.srcObject !== screenShareStream) {
 			screenShareRef.current.srcObject = screenShareStream;
@@ -151,7 +166,12 @@ const useVoiceRefs = ({
 	}, [attachExternalAudio, externalAudioStream, externalAudioRef, externalPlaybackVolume]);
 
 	useEffect(() => {
-		if (!externalVideoStream || !externalVideoRef.current) return;
+		if (!externalVideoRef.current) return;
+
+		if (!externalVideoStream) {
+			if (externalVideoRef.current.srcObject) externalVideoRef.current.srcObject = null;
+			return;
+		}
 
 		if (externalVideoRef.current.srcObject !== externalVideoStream) {
 			externalVideoRef.current.srcObject = externalVideoStream;

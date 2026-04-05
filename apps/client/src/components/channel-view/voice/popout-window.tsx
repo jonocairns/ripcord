@@ -154,6 +154,7 @@ const PopoutWindow = memo(
 			return () => {
 				if (!preserveOnUnmount && popoutWindowRef.current && !popoutWindowRef.current.closed) {
 					popoutWindowRef.current.close();
+					popoutWindowRef.current = null;
 				}
 			};
 		}, [preserveOnUnmount]);
