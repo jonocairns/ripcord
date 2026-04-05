@@ -114,7 +114,8 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
       ctx.setWsVoiceChannelId(undefined);
       ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
         channelId: input.channelId,
-        userId: ctx.user.id
+        userId: ctx.user.id,
+        reconnecting: isReconnecting
       });
 
       logger.error(
