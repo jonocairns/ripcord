@@ -4,13 +4,25 @@ import { useVolumeControl } from '@/components/voice-provider/volume-control-con
 import { MASTER_OUTPUT_VOLUME_KEY } from '@/components/voice-provider/volume-control-storage';
 import { useIsOwnUser } from '@/features/server/users/hooks';
 import { useVoice } from '@/features/server/voice/hooks';
-import { useAudioLevel } from './use-audio-level';
 
-const useVoiceRefs = (remoteId: number, pluginId?: string, streamKey?: string) => {
+type UseVoiceRefsOptions = {
+	remoteId: number;
+	pluginId?: string;
+	streamKey?: string;
+	attachScreenShareAudio?: boolean;
+	attachExternalAudio?: boolean;
+};
+
+const useVoiceRefs = ({
+	remoteId,
+	pluginId,
+	streamKey,
+	attachScreenShareAudio = true,
+	attachExternalAudio = true,
+}: UseVoiceRefsOptions) => {
 	const {
 		remoteUserStreams,
 		externalStreams,
-		localAudioStream,
 		localVideoStream,
 		localScreenShareStream,
 		ownVoiceState,
@@ -33,12 +45,6 @@ const useVoiceRefs = (remoteId: number, pluginId?: string, streamKey?: string) =
 
 		return remoteUserStreams[remoteId]?.[StreamKind.AUDIO];
 	}, [remoteUserStreams, remoteId, isOwnUser]);
-
-	const audioStreamForLevel = useMemo(() => {
-		if (isOwnUser) return localAudioStream;
-
-		return remoteUserStreams[remoteId]?.[StreamKind.AUDIO];
-	}, [remoteUserStreams, remoteId, isOwnUser, localAudioStream]);
 
 	const screenShareStream = useMemo(() => {
 		if (isOwnUser) return localScreenShareStream;
@@ -67,8 +73,6 @@ const useVoiceRefs = (remoteId: number, pluginId?: string, streamKey?: string) =
 
 		return external?.videoStream;
 	}, [externalStreams, remoteId, isOwnUser]);
-
-	const { audioLevel, isSpeaking, speakingIntensity } = useAudioLevel(audioStreamForLevel);
 
 	const userVolumeKey = getUserVolumeKey(remoteId);
 	const userVolume = getVolume(userVolumeKey);
@@ -113,7 +117,7 @@ const useVoiceRefs = (remoteId: number, pluginId?: string, streamKey?: string) =
 			return;
 		}
 
-		if (!screenShareAudioStream) {
+		if (!attachScreenShareAudio || !screenShareAudioStream) {
 			if (screenShareAudioRef.current.srcObject) {
 				screenShareAudioRef.current.srcObject = null;
 			}
@@ -125,17 +129,26 @@ const useVoiceRefs = (remoteId: number, pluginId?: string, streamKey?: string) =
 		}
 
 		screenShareAudioRef.current.volume = screenSharePlaybackVolume;
-	}, [screenShareAudioStream, screenShareAudioRef, screenSharePlaybackVolume]);
+	}, [attachScreenShareAudio, screenShareAudioStream, screenShareAudioRef, screenSharePlaybackVolume]);
 
 	useEffect(() => {
-		if (!externalAudioStream || !externalAudioRef.current) return;
+		if (!externalAudioRef.current) {
+			return;
+		}
+
+		if (!attachExternalAudio || !externalAudioStream) {
+			if (externalAudioRef.current.srcObject) {
+				externalAudioRef.current.srcObject = null;
+			}
+			return;
+		}
 
 		if (externalAudioRef.current.srcObject !== externalAudioStream) {
 			externalAudioRef.current.srcObject = externalAudioStream;
 		}
 
 		externalAudioRef.current.volume = externalPlaybackVolume;
-	}, [externalAudioStream, externalAudioRef, externalPlaybackVolume]);
+	}, [attachExternalAudio, externalAudioStream, externalAudioRef, externalPlaybackVolume]);
 
 	useEffect(() => {
 		if (!externalVideoStream || !externalVideoRef.current) return;
@@ -168,9 +181,6 @@ const useVoiceRefs = (remoteId: number, pluginId?: string, streamKey?: string) =
 		externalVideoStream,
 		screenShareStream,
 		screenShareAudioStream,
-		audioLevel,
-		isSpeaking,
-		speakingIntensity,
 	};
 };
 

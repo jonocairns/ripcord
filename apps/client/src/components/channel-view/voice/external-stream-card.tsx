@@ -114,14 +114,25 @@ const ExternalStreamCard = memo(
 		showPinControls = true,
 		onStopWatching,
 	}: TExternalStreamCardProps) => {
+		const [isFullscreen, setIsFullscreen] = useState(false);
+		const [isPoppedOut, setIsPoppedOut] = useState(false);
+		const [popoutWindow, setPopoutWindow] = useState<Window | null>(null);
+		const [popoutVideoElement, setPopoutVideoElement] = useState<HTMLVideoElement | null>(null);
+		const [isPopoutFullscreen, setIsPopoutFullscreen] = useState(false);
+		const [isPopoutAudioEnabled, setIsPopoutAudioEnabled] = useState(false);
+		const [showPopoutWindowControls, setShowPopoutWindowControls] = useState(true);
 		const {
 			externalVideoRef,
-			externalAudioRef,
 			hasExternalVideoStream,
 			hasExternalAudioStream,
 			externalVideoStream,
 			externalAudioStream,
-		} = useVoiceRefs(streamId, stream.pluginId, stream.key);
+		} = useVoiceRefs({
+			remoteId: streamId,
+			pluginId: stream.pluginId,
+			streamKey: stream.key,
+			attachExternalAudio: !isPoppedOut,
+		});
 
 		const { getVolume, setVolume, toggleMute, getExternalVolumeKey } = useVolumeControl();
 
@@ -145,14 +156,6 @@ const ExternalStreamCard = memo(
 			() => `external-stream-${stream.pluginId}-${stream.key}`,
 			[stream.pluginId, stream.key],
 		);
-
-		const [isFullscreen, setIsFullscreen] = useState(false);
-		const [isPoppedOut, setIsPoppedOut] = useState(false);
-		const [popoutWindow, setPopoutWindow] = useState<Window | null>(null);
-		const [popoutVideoElement, setPopoutVideoElement] = useState<HTMLVideoElement | null>(null);
-		const [isPopoutFullscreen, setIsPopoutFullscreen] = useState(false);
-		const [isPopoutAudioEnabled, setIsPopoutAudioEnabled] = useState(false);
-		const [showPopoutWindowControls, setShowPopoutWindowControls] = useState(true);
 		const hidePopoutWindowControlsTimeoutRef = useRef<number | null>(null);
 
 		const handlePinToggle = useCallback(() => {
@@ -344,14 +347,6 @@ const ExternalStreamCard = memo(
 				clearPopoutControlsHideTimeout();
 			};
 		}, [clearPopoutControlsHideTimeout]);
-
-		useEffect(() => {
-			if (!externalAudioRef.current) {
-				return;
-			}
-
-			externalAudioRef.current.muted = isPoppedOut;
-		}, [externalAudioRef, isPoppedOut]);
 
 		useEffect(() => {
 			if (!isPoppedOut || !popoutVideoElement) {

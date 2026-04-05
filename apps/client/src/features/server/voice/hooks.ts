@@ -1,5 +1,6 @@
-import { useContext, useMemo } from 'react';
-import { VoiceProviderContext } from '@/components/voice-provider';
+import { useContext, useMemo, useSyncExternalStore } from 'react';
+import { VoiceActivityContext, VoiceProviderContext } from '@/components/voice-provider';
+import { EMPTY_VOICE_ACTIVITY } from '@/components/voice-provider/voice-activity';
 import { useServerStore } from '../slice';
 import {
 	ownConfirmedVoiceStateSelector,
@@ -32,6 +33,20 @@ export const useVoice = () => {
 	}
 
 	return context;
+};
+
+export const useVoiceActivity = (userId: number) => {
+	const context = useContext(VoiceActivityContext);
+
+	if (!context) {
+		throw new Error('useVoiceActivity must be used within a MediasoupProvider component');
+	}
+
+	return useSyncExternalStore(
+		context.subscribe,
+		() => context.getUserActivity(userId),
+		() => EMPTY_VOICE_ACTIVITY,
+	);
 };
 
 export const useConfirmedOwnVoiceState = () => useServerStore(ownConfirmedVoiceStateSelector);

@@ -141,19 +141,5 @@ export const useVoiceUsersByChannelId = (channelId: number) => {
 	}, [users, voiceState]);
 };
 
-export const useOwnVoiceUser = () => {
-	const ownUserId = useServerStore((state) => state.ownUserId);
-	const currentVoiceChannelId = useServerStore((state) => state.currentVoiceChannelId);
-	const voiceUsers = useVoiceUsersByChannelId(currentVoiceChannelId ?? -1);
-
-	return useMemo(() => {
-		if (currentVoiceChannelId === undefined) {
-			return undefined;
-		}
-
-		return voiceUsers.find((voiceUser) => voiceUser.id === ownUserId);
-	}, [currentVoiceChannelId, ownUserId, voiceUsers]);
-};
-
 export const useUnreadMessagesCount = (channelId: number) =>
 	useServerStore((state) => channelReadStateByIdSelector(state, channelId));
