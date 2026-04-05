@@ -84,9 +84,9 @@ const sfxServerDisconnected = () => {
 const sfxOwnUserJoinedVoiceChannel = () => {
 	// Stagger notes ~35ms apart so they don't sum simultaneously
 	const chord1 = [
-		{ freq: 523, gain: 0.07, delay: 0 },    // C
+		{ freq: 523, gain: 0.07, delay: 0 }, // C
 		{ freq: 659, gain: 0.06, delay: 0.035 }, // E
-		{ freq: 784, gain: 0.05, delay: 0.07 },  // G
+		{ freq: 784, gain: 0.05, delay: 0.07 }, // G
 	];
 
 	chord1.forEach(({ freq, gain: g, delay }) => {
@@ -103,7 +103,7 @@ const sfxOwnUserJoinedVoiceChannel = () => {
 
 	// Upper octave layer — staggered to follow the arpeggio
 	const chord2 = [
-		{ freq: 1046, gain: 0.03, delay: 0.1 },  // C (octave up)
+		{ freq: 1046, gain: 0.03, delay: 0.1 }, // C (octave up)
 		{ freq: 1318, gain: 0.025, delay: 0.13 }, // E (octave up)
 	];
 
@@ -124,9 +124,9 @@ const sfxOwnUserJoinedVoiceChannel = () => {
 const sfxOwnUserLeftVoiceChannel = () => {
 	// Stagger notes descending so they don't sum simultaneously
 	const chord1 = [
-		{ freq: 659, gain: 0.06, delay: 0 },    // E (high → low)
+		{ freq: 659, gain: 0.06, delay: 0 }, // E (high → low)
 		{ freq: 523, gain: 0.06, delay: 0.035 }, // C
-		{ freq: 440, gain: 0.05, delay: 0.07 },  // A
+		{ freq: 440, gain: 0.05, delay: 0.07 }, // A
 	];
 
 	chord1.forEach(({ freq, gain: g, delay }) => {

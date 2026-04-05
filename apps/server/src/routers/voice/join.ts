@@ -54,10 +54,22 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
       ctx.user.id
     );
 
-    invariant(!userAlreadyInVoiceChannel, {
-      code: 'BAD_REQUEST',
-      message: 'User already in a voice channel'
-    });
+    if (userAlreadyInVoiceChannel) {
+      userAlreadyInVoiceChannel.removeUser(ctx.user.id);
+      ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+        channelId: userAlreadyInVoiceChannel.id,
+        userId: ctx.user.id
+      });
+      ctx.pubsub.publishFor(ctx.user.id, ServerEvents.VOICE_SESSION_REPLACED, {
+        channelId: userAlreadyInVoiceChannel.id
+      });
+
+      logger.info(
+        '%s evicted from voice channel %s (session replaced by new join)',
+        ctx.user.name,
+        userAlreadyInVoiceChannel.id
+      );
+    }
 
     const runtime = VoiceRuntime.findById(input.channelId);
 

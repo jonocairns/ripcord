@@ -63,6 +63,9 @@ type Events = {
     userId: number;
     state: TVoiceUserState;
   };
+  [ServerEvents.VOICE_SESSION_REPLACED]: {
+    channelId: number;
+  };
 
   [ServerEvents.VOICE_NEW_PRODUCER]: {
     channelId: number;

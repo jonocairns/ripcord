@@ -7,6 +7,7 @@ import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
 import { setCurrentVoiceChannelId, setSelectedChannelId } from '../channels/actions';
 import { currentVoiceChannelIdSelector, selectedChannelIdSelector } from '../channels/selectors';
+import { clearPendingVoiceReconnectChannelId } from '../reconnect-state';
 import { useServerStore } from '../slice';
 import { playSound } from '../sounds/actions';
 import { SoundType } from '../types';
@@ -254,6 +255,35 @@ export const leaveVoice = async (): Promise<void> => {
 
 export const leaveVoiceSilently = async (): Promise<void> => {
 	await leaveVoiceInternal({ playOwnLeaveSound: false });
+};
+
+export const handleVoiceSessionReplaced = (): void => {
+	// Always suppress auto-rejoin — the server intentionally ended this session.
+	// Must run before the early-return guard: if onTransportFailure fires first
+	// (mediasoup "failed" race), it clears currentVoiceChannelId and stores a
+	// pendingVoiceReconnectChannelId that would otherwise trigger an auto-rejoin loop.
+	clearPendingVoiceReconnectChannelId();
+
+	const state = useServerStore.getState();
+	const currentChannelId = currentVoiceChannelIdSelector(state);
+	const selectedChannelId = selectedChannelIdSelector(state);
+	const lastTextChannelId = state.lastTextChannelId;
+
+	// Toast shown unconditionally: this subscription is user-scoped,
+	// so receiving it always means our session was replaced.
+	toast.info('Your voice session was moved to another client');
+
+	if (!currentChannelId) {
+		return;
+	}
+
+	if (selectedChannelId === currentChannelId) {
+		setSelectedChannelId(lastTextChannelId);
+	}
+
+	setCurrentVoiceChannelId(undefined);
+	updateOwnVoiceState({ webcamEnabled: false, sharingScreen: false });
+	setPinnedCard(undefined);
 };
 
 export const setPinnedCard = (pinnedCard: TPinnedCard | undefined): void => {
