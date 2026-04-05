@@ -26,8 +26,7 @@ import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { joinVoice, leaveVoiceSilently, updateOwnVoiceState } from '@/features/server/voice/actions';
-import { useOwnVoiceState } from '@/features/server/voice/hooks';
-import { ownConfirmedVoiceStateSelector } from '@/features/server/voice/selectors';
+import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { logVoice } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
@@ -402,7 +401,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const sendRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const audioVideoRefsMap = useRef<Map<number, AudioVideoRefs>>(new Map());
 	const ownVoiceState = useOwnVoiceState();
-	const ownConfirmedVoiceState = useServerStore(ownConfirmedVoiceStateSelector);
+	const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
 	const confirmedOwnMicMuted = ownConfirmedVoiceState?.micMuted;
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const isConnected = useIsConnected();

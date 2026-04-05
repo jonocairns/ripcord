@@ -10,10 +10,13 @@ import {
 	type TMicAudioProcessingPipeline,
 } from '@/components/voice-provider/mic-audio-processing';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
-import { useServerStore } from '@/features/server/slice';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
-import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
-import { ownConfirmedVoiceStateSelector } from '@/features/server/voice/selectors';
+import {
+	getConfirmedOwnVoiceState,
+	useConfirmedOwnVoiceState,
+	useOwnVoiceState,
+	useVoice,
+} from '@/features/server/voice/hooks';
 import { getTRPCClient } from '@/lib/trpc';
 
 const ANALYSER_FFT_SIZE = 512;
@@ -92,16 +95,12 @@ const resolveMicTestProcessingConfig = ({
 	};
 };
 
-const getConfirmedOwnVoiceState = (): TVoiceUserState | undefined => {
-	return ownConfirmedVoiceStateSelector(useServerStore.getState());
-};
-
 const MicrophoneTestPanel = memo(
 	({ microphoneId, noiseSuppression, wasmNoiseSuppressionEnabled, autoGainControl }: TMicrophoneTestPanelProps) => {
 		const currentVoiceChannelId = useCurrentVoiceChannelId();
 		const { localAudioStream } = useVoice();
 		const ownVoiceState = useOwnVoiceState();
-		const ownConfirmedVoiceState = useServerStore(ownConfirmedVoiceStateSelector);
+		const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
 		const confirmedMicMuted = ownConfirmedVoiceState?.micMuted;
 		const confirmedSoundMuted = ownConfirmedVoiceState?.soundMuted;
 		const [isTestingMic, setIsTestingMic] = useState(false);

@@ -2,12 +2,10 @@ import type { TVoiceUserState } from '@sharkord/shared';
 import { useCallback, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
-import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
-import { useOwnVoiceState } from '@/features/server/voice/hooks';
-import { ownConfirmedVoiceStateSelector } from '@/features/server/voice/selectors';
+import { getConfirmedOwnVoiceState, useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
@@ -34,10 +32,6 @@ const setLocalAudioTrackEnabled = (stream: MediaStream | undefined, micMuted: bo
 	});
 };
 
-const getConfirmedOwnVoiceState = (): TVoiceUserState | undefined => {
-	return ownConfirmedVoiceStateSelector(useServerStore.getState());
-};
-
 const useVoiceControls = ({
 	startMicStream,
 	localAudioStream,
@@ -48,7 +42,7 @@ const useVoiceControls = ({
 	requestScreenShareSelection,
 }: TUseVoiceControlsParams) => {
 	const ownVoiceState = useOwnVoiceState();
-	const ownConfirmedVoiceState = useServerStore(ownConfirmedVoiceStateSelector);
+	const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
 	const confirmedSoundMuted = ownConfirmedVoiceState?.soundMuted;
 	const confirmedMicMuted = ownConfirmedVoiceState?.micMuted;
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
