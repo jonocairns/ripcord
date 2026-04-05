@@ -1,11 +1,7 @@
 import { useContext, useMemo } from 'react';
 import { VoiceProviderContext } from '@/components/voice-provider';
 import { useServerStore } from '../slice';
-import {
-	ownVoiceStateSelector,
-	pinnedCardSelector,
-	voiceChannelExternalStreamsSelector,
-} from './selectors';
+import { ownVoiceStateSelector, pinnedCardSelector, voiceChannelExternalStreamsSelector } from './selectors';
 
 export const useVoiceChannelExternalStreams = (channelId: number) =>
 	useServerStore((state) => voiceChannelExternalStreamsSelector(state, channelId));

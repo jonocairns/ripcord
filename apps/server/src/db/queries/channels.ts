@@ -326,5 +326,5 @@ export {
   getAffectedUserIdsForChannel,
   getAllChannelUserPermissions,
   getChannelsForUser,
-  getChannelsReadStatesForUser,
+  getChannelsReadStatesForUser
 };
