@@ -53,10 +53,12 @@ type Events = {
     channelId: number;
     userId: number;
     state: TVoiceUserState;
+    reconnecting?: boolean;
   };
   [ServerEvents.USER_LEAVE_VOICE]: {
     channelId: number;
     userId: number;
+    reconnecting?: boolean;
   };
   [ServerEvents.USER_VOICE_STATE_UPDATE]: {
     channelId: number;

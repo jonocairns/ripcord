@@ -53,12 +53,14 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
     const userAlreadyInVoiceChannel = VoiceRuntime.findRuntimeByUserId(
       ctx.user.id
     );
+    const isReconnecting = userAlreadyInVoiceChannel?.id === input.channelId;
 
     if (userAlreadyInVoiceChannel) {
       userAlreadyInVoiceChannel.removeUser(ctx.user.id);
       ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
         channelId: userAlreadyInVoiceChannel.id,
-        userId: ctx.user.id
+        userId: ctx.user.id,
+        reconnecting: isReconnecting
       });
       ctx.pubsub.publishFor(ctx.user.id, ServerEvents.VOICE_SESSION_REPLACED, {
         channelId: userAlreadyInVoiceChannel.id
@@ -87,7 +89,8 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
     ctx.pubsub.publish(ServerEvents.USER_JOIN_VOICE, {
       channelId: input.channelId,
       userId: ctx.user.id,
-      state
+      state,
+      reconnecting: isReconnecting
     });
 
     logger.info('%s joined voice channel %s', ctx.user.name, channel.name);
