@@ -44,7 +44,12 @@ const clearPinnedCardById = (cardId: string): void => {
 	useServerStore.getState().setPinnedCard(undefined);
 };
 
-export const addUserToVoiceChannel = (userId: number, channelId: number, voiceState: TVoiceUserState): void => {
+export const addUserToVoiceChannel = (
+	userId: number,
+	channelId: number,
+	voiceState: TVoiceUserState,
+	opts: { reconnecting?: boolean } = {},
+): void => {
 	const state = useServerStore.getState();
 	const ownUserId = ownUserIdSelector(state);
 	const currentChannelId = currentVoiceChannelIdSelector(state);
@@ -55,12 +60,16 @@ export const addUserToVoiceChannel = (userId: number, channelId: number, voiceSt
 		state: voiceState,
 	});
 
-	if (userId !== ownUserId && channelId === currentChannelId) {
+	if (userId !== ownUserId && channelId === currentChannelId && !opts.reconnecting) {
 		playSound(SoundType.REMOTE_USER_JOINED_VOICE_CHANNEL);
 	}
 };
 
-export const removeUserFromVoiceChannel = (userId: number, channelId: number): void => {
+export const removeUserFromVoiceChannel = (
+	userId: number,
+	channelId: number,
+	opts: { reconnecting?: boolean } = {},
+): void => {
 	const state = useServerStore.getState();
 	const ownUserId = ownUserIdSelector(state);
 	const currentChannelId = currentVoiceChannelIdSelector(state);
@@ -70,7 +79,7 @@ export const removeUserFromVoiceChannel = (userId: number, channelId: number): v
 	clearPinnedCardById(`user-${userId}`);
 	clearPinnedCardById(`screen-share-${userId}`);
 
-	if (userId !== ownUserId && channelId === currentChannelId) {
+	if (userId !== ownUserId && channelId === currentChannelId && !opts.reconnecting) {
 		playSound(SoundType.REMOTE_USER_LEFT_VOICE_CHANNEL);
 	}
 };
