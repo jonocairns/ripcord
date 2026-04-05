@@ -166,31 +166,27 @@ const useVoiceControls = ({
 		if (!currentVoiceChannelId) return;
 
 		const newState = !ownVoiceState.webcamEnabled;
-		const previousWebcamEnabled = ownVoiceState.webcamEnabled;
 		const trpc = getTRPCClient();
-
-		updateOwnVoiceState({ webcamEnabled: newState });
-
-		playSound(newState ? SoundType.OWN_USER_STARTED_WEBCAM : SoundType.OWN_USER_STOPPED_WEBCAM);
 
 		try {
 			if (newState) {
 				await startWebcamStream();
+				updateOwnVoiceState({ webcamEnabled: true });
+				playSound(SoundType.OWN_USER_STARTED_WEBCAM);
+			} else {
+				stopWebcamStream();
+				updateOwnVoiceState({ webcamEnabled: false });
+				playSound(SoundType.OWN_USER_STOPPED_WEBCAM);
 			}
 
 			await trpc.voice.updateState.mutate({
 				webcamEnabled: newState,
 			});
-
-			if (!newState) {
-				stopWebcamStream();
-			}
 		} catch (error) {
 			if (newState) {
 				stopWebcamStream();
+				updateOwnVoiceState({ webcamEnabled: false });
 			}
-
-			updateOwnVoiceState({ webcamEnabled: previousWebcamEnabled });
 
 			toast.error(getTrpcError(error, 'Failed to update webcam state'));
 		}
@@ -200,7 +196,6 @@ const useVoiceControls = ({
 		if (!currentVoiceChannelId) return;
 
 		const newState = !ownVoiceState.sharingScreen;
-		const previousSharingScreen = ownVoiceState.sharingScreen;
 		const trpc = getTRPCClient();
 		let selection: TDesktopScreenShareSelection | null | undefined;
 
@@ -234,6 +229,7 @@ const useVoiceControls = ({
 			}
 
 			if (!newState) {
+				stopScreenShareStream();
 				updateOwnVoiceState({ sharingScreen: false });
 				playSound(SoundType.OWN_USER_STOPPED_SCREENSHARE);
 			}
@@ -241,16 +237,11 @@ const useVoiceControls = ({
 			await trpc.voice.updateState.mutate({
 				sharingScreen: newState,
 			});
-
-			if (!newState) {
-				stopScreenShareStream();
-			}
 		} catch (error) {
 			if (newState) {
 				stopScreenShareStream();
+				updateOwnVoiceState({ sharingScreen: false });
 			}
-
-			updateOwnVoiceState({ sharingScreen: previousSharingScreen });
 
 			// user cancelled the native screen share picker — not an error
 			if (error instanceof DOMException && error.name === 'NotAllowedError') {
