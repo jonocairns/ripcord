@@ -10,9 +10,16 @@ type UseVoiceRefsOptions = {
 	pluginId?: string;
 	streamKey?: string;
 	attachScreenShareAudio?: boolean;
+	attachExternalAudio?: boolean;
 };
 
-const useVoiceRefs = ({ remoteId, pluginId, streamKey, attachScreenShareAudio = true }: UseVoiceRefsOptions) => {
+const useVoiceRefs = ({
+	remoteId,
+	pluginId,
+	streamKey,
+	attachScreenShareAudio = true,
+	attachExternalAudio = true,
+}: UseVoiceRefsOptions) => {
 	const {
 		remoteUserStreams,
 		externalStreams,
@@ -125,14 +132,23 @@ const useVoiceRefs = ({ remoteId, pluginId, streamKey, attachScreenShareAudio = 
 	}, [attachScreenShareAudio, screenShareAudioStream, screenShareAudioRef, screenSharePlaybackVolume]);
 
 	useEffect(() => {
-		if (!externalAudioStream || !externalAudioRef.current) return;
+		if (!externalAudioRef.current) {
+			return;
+		}
+
+		if (!attachExternalAudio || !externalAudioStream) {
+			if (externalAudioRef.current.srcObject) {
+				externalAudioRef.current.srcObject = null;
+			}
+			return;
+		}
 
 		if (externalAudioRef.current.srcObject !== externalAudioStream) {
 			externalAudioRef.current.srcObject = externalAudioStream;
 		}
 
 		externalAudioRef.current.volume = externalPlaybackVolume;
-	}, [externalAudioStream, externalAudioRef, externalPlaybackVolume]);
+	}, [attachExternalAudio, externalAudioStream, externalAudioRef, externalPlaybackVolume]);
 
 	useEffect(() => {
 		if (!externalVideoStream || !externalVideoRef.current) return;
