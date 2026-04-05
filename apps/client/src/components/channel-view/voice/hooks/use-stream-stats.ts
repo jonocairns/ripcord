@@ -13,11 +13,13 @@ const useStreamStats = (videoRef: React.RefObject<HTMLVideoElement | null>, vide
 	const [stats, setStats] = useState<StreamStats | null>(null);
 	const prevBytesRef = useRef<number | null>(null);
 	const prevTimestampRef = useRef<number | null>(null);
+	const prevStatsRef = useRef<StreamStats | null>(null);
 
 	useEffect(() => {
 		const poll = async () => {
 			const video = videoRef.current;
 			if (!video || !videoStream) {
+				prevStatsRef.current = null;
 				setStats(null);
 				return;
 			}
@@ -62,7 +64,21 @@ const useStreamStats = (videoRef: React.RefObject<HTMLVideoElement | null>, vide
 				}
 			}
 
-			setStats({ width, height, frameRate, bitrate });
+			const nextStats = { width, height, frameRate, bitrate };
+			const prevStats = prevStatsRef.current;
+
+			if (
+				prevStats &&
+				prevStats.width === nextStats.width &&
+				prevStats.height === nextStats.height &&
+				prevStats.frameRate === nextStats.frameRate &&
+				prevStats.bitrate === nextStats.bitrate
+			) {
+				return;
+			}
+
+			prevStatsRef.current = nextStats;
+			setStats(nextStats);
 		};
 
 		void poll();
@@ -72,6 +88,7 @@ const useStreamStats = (videoRef: React.RefObject<HTMLVideoElement | null>, vide
 			clearInterval(id);
 			prevBytesRef.current = null;
 			prevTimestampRef.current = null;
+			prevStatsRef.current = null;
 		};
 	}, [videoRef, videoStream]);
 

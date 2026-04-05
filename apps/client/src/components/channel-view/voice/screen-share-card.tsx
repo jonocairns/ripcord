@@ -113,6 +113,11 @@ const ScreenShareCard = memo(
 		const volumeKey = getUserScreenVolumeKey(userId);
 		const volume = getVolume(volumeKey);
 		const isMuted = volume === 0;
+		const [isFullscreen, setIsFullscreen] = useState(false);
+		const [isPoppedOut, setIsPoppedOut] = useState(false);
+		const [popoutWindow, setPopoutWindow] = useState<Window | null>(null);
+		const [isPopoutFullscreen, setIsPopoutFullscreen] = useState(false);
+		const [showPopoutWindowControls, setShowPopoutWindowControls] = useState(true);
 		const {
 			screenShareRef,
 			screenShareAudioRef,
@@ -120,7 +125,7 @@ const ScreenShareCard = memo(
 			hasScreenShareAudioStream,
 			screenShareStream,
 			screenShareAudioStream,
-		} = useVoiceRefs(userId);
+		} = useVoiceRefs({ remoteId: userId, attachScreenShareAudio: !isPoppedOut });
 		const [popoutVideoElement, setPopoutVideoElement] = useState<HTMLVideoElement | null>(null);
 		const [popoutAudioElement, setPopoutAudioElement] = useState<HTMLAudioElement | null>(null);
 
@@ -136,11 +141,6 @@ const ScreenShareCard = memo(
 			getCursor,
 			resetZoom,
 		} = useScreenShareZoom();
-		const [isFullscreen, setIsFullscreen] = useState(false);
-		const [isPoppedOut, setIsPoppedOut] = useState(false);
-		const [popoutWindow, setPopoutWindow] = useState<Window | null>(null);
-		const [isPopoutFullscreen, setIsPopoutFullscreen] = useState(false);
-		const [showPopoutWindowControls, setShowPopoutWindowControls] = useState(true);
 		const hidePopoutWindowControlsTimeoutRef = useRef<number | null>(null);
 		const popoutWindowName = useMemo(() => `screen-share-${userId}`, [userId]);
 
@@ -277,14 +277,6 @@ const ScreenShareCard = memo(
 				clearPopoutControlsHideTimeout();
 			};
 		}, [clearPopoutControlsHideTimeout]);
-
-		useEffect(() => {
-			if (!screenShareAudioRef.current) {
-				return;
-			}
-
-			screenShareAudioRef.current.muted = isPoppedOut;
-		}, [isPoppedOut, screenShareAudioRef]);
 
 		useEffect(() => {
 			const popoutVideo = popoutVideoElement;

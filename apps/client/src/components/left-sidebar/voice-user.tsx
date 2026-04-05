@@ -5,8 +5,8 @@ import { Slider } from '@/components/ui/slider';
 import { UserAvatar } from '@/components/user-avatar';
 import type { TVoiceUser } from '@/features/server/types';
 import { useOwnUserId } from '@/features/server/users/hooks';
+import { useVoiceActivity } from '@/features/server/voice/hooks';
 import { cn } from '@/lib/utils';
-import { useVoiceRefs } from '../channel-view/voice/hooks/use-voice-refs';
 import { getSpeakingIndicatorStyle } from '../channel-view/voice/speaking-indicator';
 import { Tooltip } from '../ui/tooltip';
 import { UserPopover } from '../user-popover';
@@ -19,7 +19,7 @@ type TVoiceUserProps = {
 };
 
 const VoiceUser = memo(({ channelId, user }: TVoiceUserProps) => {
-	const { audioLevel, isSpeaking } = useVoiceRefs(user.id);
+	const { audioLevel, isSpeaking } = useVoiceActivity(user.id);
 	const ownUserId = useOwnUserId();
 	const { openUserStreamStage } = useVoiceChannelNavigation();
 	const { getUserVolumeKey, getVolume, setVolume, toggleMute } = useVolumeControl();

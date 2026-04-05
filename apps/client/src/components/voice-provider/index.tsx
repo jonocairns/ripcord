@@ -27,6 +27,7 @@ import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { joinVoice, leaveVoiceSilently, updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
+import { useOwnUserId } from '@/features/server/users/hooks';
 import { logVoice } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
@@ -58,6 +59,7 @@ import { getVideoBitratePolicy } from './video-bitrate-policy';
 import { VolumeControlProvider } from './volume-control-provider';
 import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
 import { getStoredVolume, OWN_MIC_VOLUME_KEY, VOLUME_SETTINGS_UPDATED_EVENT } from './volume-control-storage';
+import { type VoiceActivityStore, createVoiceActivityStore, startVoiceActivityMonitor } from './voice-activity';
 
 type AudioVideoRefs = {
 	videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -173,6 +175,8 @@ type TTrackedExternalWatchState = {
 type TChannelExternalStreams = {
 	[streamId: number]: TExternalStream;
 };
+
+type VoiceActivityMonitorStop = () => void;
 
 const EMPTY_CHANNEL_EXTERNAL_STREAMS: TChannelExternalStreams = {};
 
@@ -397,6 +401,8 @@ const VoiceProviderContext = createContext<TVoiceProvider>({
 	pendingStreams: new Map(),
 });
 
+const VoiceActivityContext = createContext<VoiceActivityStore | null>(null);
+
 type TVoiceProviderProps = {
 	children: React.ReactNode;
 };
@@ -409,6 +415,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const sendRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const audioVideoRefsMap = useRef<Map<number, AudioVideoRefs>>(new Map());
 	const ownVoiceState = useOwnVoiceState();
+	const ownUserId = useOwnUserId();
 	const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
 	const confirmedOwnMicMuted = ownConfirmedVoiceState?.micMuted;
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
@@ -439,6 +446,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const reconnectingVoiceGenerationRef = useRef(0);
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const watchedExternalStreamsRef = useRef<Record<string, TTrackedExternalWatchState>>({});
+	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
+	const voiceActivityStreamsRef = useRef<Map<number, MediaStream>>(new Map());
+	const voiceActivityCleanupRef = useRef<Map<number, VoiceActivityMonitorStop>>(new Map());
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
 		if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -620,6 +630,71 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const { stats: transportStats, startMonitoring, stopMonitoring, resetStats } = useTransportStats();
+
+	const stopVoiceActivityMonitoring = useCallback((userId: number) => {
+		voiceActivityCleanupRef.current.get(userId)?.();
+		voiceActivityCleanupRef.current.delete(userId);
+		voiceActivityStreamsRef.current.delete(userId);
+		voiceActivityStoreRef.current.clearUserActivity(userId);
+	}, []);
+
+	const stopAllVoiceActivityMonitoring = useCallback(() => {
+		voiceActivityCleanupRef.current.forEach((stop) => {
+			stop();
+		});
+		voiceActivityCleanupRef.current.clear();
+		voiceActivityStreamsRef.current.clear();
+		voiceActivityStoreRef.current.clearAll();
+	}, []);
+
+	useEffect(() => {
+		if (ownVoiceState.soundMuted) {
+			stopAllVoiceActivityMonitoring();
+			return;
+		}
+
+		const nextAudioStreams = new Map<number, MediaStream>();
+
+		if (ownUserId !== undefined && localAudioStream) {
+			nextAudioStreams.set(ownUserId, localAudioStream);
+		}
+
+		Object.entries(remoteUserStreams).forEach(([userId, streams]) => {
+			const audioStream = streams[StreamKind.AUDIO];
+
+			if (audioStream) {
+				nextAudioStreams.set(Number(userId), audioStream);
+			}
+		});
+
+		Array.from(voiceActivityStreamsRef.current.keys()).forEach((userId) => {
+			if (!nextAudioStreams.has(userId)) {
+				stopVoiceActivityMonitoring(userId);
+			}
+		});
+
+		nextAudioStreams.forEach((audioStream, userId) => {
+			if (voiceActivityStreamsRef.current.get(userId) === audioStream) {
+				return;
+			}
+
+			stopVoiceActivityMonitoring(userId);
+			voiceActivityStreamsRef.current.set(userId, audioStream);
+
+			const stop = startVoiceActivityMonitor(audioStream, (activity) => {
+				voiceActivityStoreRef.current.setUserActivity(userId, activity);
+			});
+
+			voiceActivityCleanupRef.current.set(userId, stop);
+		});
+	}, [
+		localAudioStream,
+		ownUserId,
+		ownVoiceState.soundMuted,
+		remoteUserStreams,
+		stopAllVoiceActivityMonitoring,
+		stopVoiceActivityMonitoring,
+	]);
 
 	useEffect(() => {
 		if (currentVoiceChannelId === undefined) {
@@ -1970,13 +2045,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		};
 	}, [connectionStatus, currentVoiceChannelId, init, isConnected, voiceReconnectRetryToken]);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: must be mount-only — cleanup recreates on inner dep changes which would tear down voice
 	useEffect(() => {
 		return () => {
 			logVoice('Voice provider unmounting, cleaning up resources');
+			stopAllVoiceActivityMonitoring();
 			cleanup();
 		};
-	}, []);
+	}, [cleanup, stopAllVoiceActivityMonitoring]);
 
 	const contextValue = useMemo<TVoiceProvider>(
 		() => ({
@@ -2033,19 +2108,21 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	return (
 		<VoiceProviderContext.Provider value={contextValue}>
-			<VolumeControlProvider>
-				<div className="relative">
-					<FloatingPinnedCard
-						remoteUserStreams={remoteUserStreams}
-						externalStreams={externalStreams}
-						localScreenShareStream={localScreenShareStream}
-						localVideoStream={localVideoStream}
-					/>
-					{children}
-				</div>
-			</VolumeControlProvider>
+			<VoiceActivityContext.Provider value={voiceActivityStoreRef.current}>
+				<VolumeControlProvider>
+					<div className="relative">
+						<FloatingPinnedCard
+							remoteUserStreams={remoteUserStreams}
+							externalStreams={externalStreams}
+							localScreenShareStream={localScreenShareStream}
+							localVideoStream={localVideoStream}
+						/>
+						{children}
+					</div>
+				</VolumeControlProvider>
+			</VoiceActivityContext.Provider>
 		</VoiceProviderContext.Provider>
 	);
 });
 
-export { VoiceProvider, VoiceProviderContext };
+export { VoiceActivityContext, VoiceProvider, VoiceProviderContext };

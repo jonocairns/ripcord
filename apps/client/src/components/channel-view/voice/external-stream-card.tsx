@@ -121,7 +121,11 @@ const ExternalStreamCard = memo(
 			hasExternalAudioStream,
 			externalVideoStream,
 			externalAudioStream,
-		} = useVoiceRefs(streamId, stream.pluginId, stream.key);
+		} = useVoiceRefs({
+			remoteId: streamId,
+			pluginId: stream.pluginId,
+			streamKey: stream.key,
+		});
 
 		const { getVolume, setVolume, toggleMute, getExternalVolumeKey } = useVolumeControl();
 

@@ -6,6 +6,7 @@ import { UserAvatar } from '@/components/user-avatar';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import type { TVoiceUser } from '@/features/server/types';
 import { useOwnUserId } from '@/features/server/users/hooks';
+import { useVoiceActivity } from '@/features/server/voice/hooks';
 import { useWindowFocus } from '@/hooks/use-window-focus';
 import { cn } from '@/lib/utils';
 import { CardControls } from './card-controls';
@@ -37,7 +38,10 @@ const VoiceUserCard = memo(
 		voiceUser,
 		onStopWatching,
 	}: TVoiceUserCardProps) => {
-		const { audioLevel, videoRef, hasVideoStream, isSpeaking } = useVoiceRefs(userId);
+		const { videoRef, hasVideoStream } = useVoiceRefs({
+			remoteId: userId,
+		});
+		const { audioLevel, isSpeaking } = useVoiceActivity(userId);
 		const { getUserVolumeKey } = useVolumeControl();
 		const { devices } = useDevices();
 		const ownUserId = useOwnUserId();

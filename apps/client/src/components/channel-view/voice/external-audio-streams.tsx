@@ -9,7 +9,11 @@ type TExternalAudioStreamProps = {
 };
 
 const ExternalAudioStream = memo(({ streamId, pluginId, streamKey }: TExternalAudioStreamProps) => {
-	const { externalAudioRef, hasExternalAudioStream } = useVoiceRefs(streamId, pluginId, streamKey);
+	const { externalAudioRef, hasExternalAudioStream } = useVoiceRefs({
+		remoteId: streamId,
+		pluginId,
+		streamKey,
+	});
 
 	return (
 		<>
