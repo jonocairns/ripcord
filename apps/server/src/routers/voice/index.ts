@@ -14,6 +14,7 @@ import {
   onVoiceNewProducerRoute,
   onVoiceProducerClosedRoute,
   onVoiceRemoveExternalStreamRoute,
+  onVoiceSessionReplacedRoute,
   onVoiceStreamWatcherActivityRoute,
   onVoiceUpdateExternalStreamRoute
 } from './events';
@@ -41,6 +42,7 @@ export const voiceRouter = t.router({
   onJoin: onUserJoinVoiceRoute,
   onLeave: onUserLeaveVoiceRoute,
   onUpdateState: onUserUpdateVoiceStateRoute,
+  onSessionReplaced: onVoiceSessionReplacedRoute,
   onNewProducer: onVoiceNewProducerRoute,
   onProducerClosed: onVoiceProducerClosedRoute,
   onStreamWatcherActivity: onVoiceStreamWatcherActivityRoute,

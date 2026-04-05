@@ -256,6 +256,27 @@ export const leaveVoiceSilently = async (): Promise<void> => {
 	await leaveVoiceInternal({ playOwnLeaveSound: false });
 };
 
+export const handleVoiceSessionReplaced = (): void => {
+	const state = useServerStore.getState();
+	const currentChannelId = currentVoiceChannelIdSelector(state);
+	const selectedChannelId = selectedChannelIdSelector(state);
+	const lastTextChannelId = state.lastTextChannelId;
+
+	if (!currentChannelId) {
+		return;
+	}
+
+	if (selectedChannelId === currentChannelId) {
+		setSelectedChannelId(lastTextChannelId);
+	}
+
+	setCurrentVoiceChannelId(undefined);
+	updateOwnVoiceState({ webcamEnabled: false, sharingScreen: false });
+	setPinnedCard(undefined);
+
+	toast.info('Your voice session was moved to another client');
+};
+
 export const setPinnedCard = (pinnedCard: TPinnedCard | undefined): void => {
 	useServerStore.getState().setPinnedCard(pinnedCard);
 };

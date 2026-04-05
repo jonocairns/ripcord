@@ -27,6 +27,15 @@ const onUserUpdateVoiceStateRoute = protectedProcedure.subscription(
   }
 );
 
+const onVoiceSessionReplacedRoute = protectedProcedure.subscription(
+  async ({ ctx }) => {
+    return ctx.pubsub.subscribeFor(
+      ctx.user.id,
+      ServerEvents.VOICE_SESSION_REPLACED
+    );
+  }
+);
+
 // these events are broadcast to ALL users (for external stream UI in the sidebar)
 const onVoiceAddExternalStreamRoute = protectedProcedure.subscription(
   async ({ ctx }) => {
@@ -91,6 +100,7 @@ export {
   onVoiceNewProducerRoute,
   onVoiceProducerClosedRoute,
   onVoiceRemoveExternalStreamRoute,
+  onVoiceSessionReplacedRoute,
   onVoiceStreamWatcherActivityRoute,
   onVoiceUpdateExternalStreamRoute
 };
