@@ -3,6 +3,7 @@
 - PR description: use Markdown structure (e.g. ## Summary, ## Validation) with bullet lists for readability
 - Underscore prefix for unused vars (^_)
 - Avoid TypeScript as casting; prefer explicit types, narrowing, and fragment-driven typing. The only acceptable use of as is in test files for constructing partial mock data (e.g. as unknown as SomeType), and even then only when the full type is impractical to construct.
+- Avoid TypeScript non-null assertions (`!`); prefer conditional guards (`if (!x) return;` or `if (condition && x)`) to handle possibly-undefined values safely.
 - Use nix for running repo commands with bun `nix develop -c bun run magic`
 - Before committing, run `nix develop -c bun run magic` to catch formatting, typecheck, and lint issues together.
 - Treat shipped desktop clients as potentially behind the latest server/API version.

@@ -274,7 +274,7 @@ const createDesktopAppAudioPipeline = async (
 					nextDroppedFrameLogAt = now + LOG_RATE_LIMIT_MS;
 				}
 
-				if (insertSilenceOnDroppedFrames) {
+				if (insertSilenceOnDroppedFrames && workletNode) {
 					const recoverableDroppedFrames = computeRecoverableMissingFrameCount(missingFrameCount);
 					const silenceFrameCount = recoverableDroppedFrames * frame.frameCount;
 					const silence = new Float32Array(silenceFrameCount * outputChannels);
@@ -315,6 +315,8 @@ const createDesktopAppAudioPipeline = async (
 				}
 				return;
 			}
+
+			if (!workletNode) return;
 
 			workletNode.port.postMessage(
 				{
