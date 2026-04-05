@@ -1,9 +1,10 @@
 import { ChannelType, type TChannel } from '@sharkord/shared';
 import { beforeAll, beforeEach, describe, expect, it } from 'bun:test';
-import { PinnedCardType } from '@/components/channel-view/voice/hooks/use-pin-card-controller';
 import { useServerStore } from '../../slice';
 
 let removeUserFromVoiceChannel: typeof import('../actions').removeUserFromVoiceChannel;
+
+type TPinnedCardState = NonNullable<ReturnType<typeof useServerStore.getState>['pinnedCard']>;
 
 const createChannel = (id: number, type: ChannelType): TChannel =>
 	({
@@ -100,9 +101,9 @@ describe('voice actions', () => {
 			},
 			pinnedCard: {
 				id: 'screen-share-42',
-				type: PinnedCardType.SCREEN_SHARE,
+				type: 'screen-share',
 				userId: 42,
-			},
+			} as unknown as TPinnedCardState,
 		});
 
 		removeUserFromVoiceChannel(42, 7);

@@ -48,6 +48,9 @@ const useVoiceControls = ({
 	requestScreenShareSelection,
 }: TUseVoiceControlsParams) => {
 	const ownVoiceState = useOwnVoiceState();
+	const ownConfirmedVoiceState = useServerStore(ownConfirmedVoiceStateSelector);
+	const confirmedSoundMuted = ownConfirmedVoiceState?.soundMuted;
+	const confirmedMicMuted = ownConfirmedVoiceState?.micMuted;
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
 
@@ -56,6 +59,20 @@ const useVoiceControls = ({
 			micMutedBeforeDeafenRef.current = undefined;
 		}
 	}, [currentVoiceChannelId, ownVoiceState.soundMuted]);
+
+	useEffect(() => {
+		if (micMutedBeforeDeafenRef.current === undefined || ownVoiceState.soundMuted !== true) {
+			return;
+		}
+
+		if (confirmedSoundMuted === undefined || confirmedMicMuted === undefined) {
+			return;
+		}
+
+		if (confirmedSoundMuted !== true || confirmedMicMuted !== true) {
+			micMutedBeforeDeafenRef.current = confirmedMicMuted;
+		}
+	}, [confirmedSoundMuted, confirmedMicMuted, ownVoiceState.soundMuted]);
 
 	const setMicMuted = useCallback(
 		async (newState: boolean, options?: TSetMicMutedOptions) => {

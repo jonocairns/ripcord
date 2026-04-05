@@ -101,6 +101,9 @@ const MicrophoneTestPanel = memo(
 		const currentVoiceChannelId = useCurrentVoiceChannelId();
 		const { localAudioStream } = useVoice();
 		const ownVoiceState = useOwnVoiceState();
+		const ownConfirmedVoiceState = useServerStore(ownConfirmedVoiceStateSelector);
+		const confirmedMicMuted = ownConfirmedVoiceState?.micMuted;
+		const confirmedSoundMuted = ownConfirmedVoiceState?.soundMuted;
 		const [isTestingMic, setIsTestingMic] = useState(false);
 		const [monitorEnabled, setMonitorEnabled] = useState(false);
 		const levelBarRef = useRef<HTMLDivElement>(null);
@@ -634,6 +637,25 @@ const MicrophoneTestPanel = memo(
 		useEffect(() => {
 			soundMutedRef.current = ownVoiceState.soundMuted;
 		}, [ownVoiceState.soundMuted]);
+
+		useEffect(() => {
+			if (
+				!isTestingMic ||
+				typeof micMutedBeforeTestRef.current !== 'boolean' ||
+				typeof soundMutedBeforeTestRef.current !== 'boolean'
+			) {
+				return;
+			}
+
+			if (confirmedMicMuted === undefined || confirmedSoundMuted === undefined) {
+				return;
+			}
+
+			if (confirmedMicMuted !== true || confirmedSoundMuted !== true) {
+				micMutedBeforeTestRef.current = confirmedMicMuted;
+				soundMutedBeforeTestRef.current = confirmedSoundMuted;
+			}
+		}, [isTestingMic, confirmedMicMuted, confirmedSoundMuted]);
 
 		useEffect(() => {
 			return () => {

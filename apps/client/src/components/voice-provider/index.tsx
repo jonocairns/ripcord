@@ -27,6 +27,7 @@ import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { joinVoice, leaveVoiceSilently, updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useOwnVoiceState } from '@/features/server/voice/hooks';
+import { ownConfirmedVoiceStateSelector } from '@/features/server/voice/selectors';
 import { logVoice } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
@@ -401,6 +402,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const sendRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const audioVideoRefsMap = useRef<Map<number, AudioVideoRefs>>(new Map());
 	const ownVoiceState = useOwnVoiceState();
+	const ownConfirmedVoiceState = useServerStore(ownConfirmedVoiceStateSelector);
+	const confirmedOwnMicMuted = ownConfirmedVoiceState?.micMuted;
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const isConnected = useIsConnected();
 	const channelCan = useChannelCan(currentVoiceChannelId);
@@ -501,6 +504,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 		if (reconnectState.shouldClearCurrentVoiceChannelId) {
 			useServerStore.getState().setCurrentVoiceChannelId(undefined);
+			useServerStore.getState().updateOwnVoiceState({
+				webcamEnabled: false,
+				sharingScreen: false,
+			});
+			useServerStore.getState().setPinnedCard(undefined);
 		}
 
 		voiceCleanupRef.current?.();
@@ -1688,6 +1696,18 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		currentVoiceChannelIdRef.current = currentVoiceChannelId;
 		canSpeakRef.current = channelCan(ChannelPermission.SPEAK);
 	}, [channelCan, currentVoiceChannelId, isConnected]);
+
+	useEffect(() => {
+		const pushTarget = isPushToMuteHeldRef.current ? true : isPushToTalkHeldRef.current ? false : undefined;
+
+		if (pushTarget === undefined || micMutedBeforePushRef.current === undefined || confirmedOwnMicMuted === undefined) {
+			return;
+		}
+
+		if (confirmedOwnMicMuted !== pushTarget) {
+			micMutedBeforePushRef.current = confirmedOwnMicMuted;
+		}
+	}, [confirmedOwnMicMuted]);
 
 	const applyPushMicOverride = useCallback(() => {
 		if (isPushToMuteHeldRef.current) {
