@@ -24,8 +24,7 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
 
-    /* Shadcn */
-    "baseUrl": ".",
+    /* Path aliases */
     "paths": {
       "@/*": ["./src/*"]
     }

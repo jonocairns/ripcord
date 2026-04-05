@@ -42,7 +42,7 @@ export interface IServerState {
 	loadingInfo: boolean;
 	voiceMap: TVoiceMap;
 	externalStreamsMap: TExternalStreamsMap;
-	ownVoiceState: TVoiceUserState;
+	ownVoiceDefaults: TVoiceUserState;
 	pinnedCard: TPinnedCard | undefined;
 	channelPermissions: TChannelUserPermissionsMap;
 	readStatesMap: {
@@ -139,7 +139,7 @@ const initialState: IServerState = {
 	loadingInfo: false,
 	voiceMap: {},
 	externalStreamsMap: {},
-	ownVoiceState: {
+	ownVoiceDefaults: {
 		micMuted: false,
 		soundMuted: false,
 		webcamEnabled: false,
@@ -180,6 +180,28 @@ const removeById = <T extends { id: number }>(items: T[], id: number): T[] => {
 	return items.filter((item) => item.id !== id);
 };
 
+const findVoiceStateForUser = (voiceMap: TVoiceMap, userId: number): TVoiceUserState | undefined => {
+	for (const channelState of Object.values(voiceMap)) {
+		const userState = channelState?.users[userId];
+
+		if (userState) {
+			return userState;
+		}
+	}
+
+	return undefined;
+};
+
+const mergeOwnVoiceDefaults = (
+	currentOwnVoiceDefaults: TVoiceUserState,
+	voiceState: Partial<TVoiceUserState>,
+): TVoiceUserState => ({
+	micMuted: voiceState.micMuted ?? currentOwnVoiceDefaults.micMuted,
+	soundMuted: voiceState.soundMuted ?? currentOwnVoiceDefaults.soundMuted,
+	webcamEnabled: false,
+	sharingScreen: false,
+});
+
 export const useServerStore = create<TServerStore>((set, get) => ({
 	...initialState,
 	resetState: () => {
@@ -213,6 +235,8 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({ disconnectInfo });
 	},
 	setInitialData: (data) => {
+		const ownVoiceState = findVoiceStateForUser(data.voiceMap, data.ownUserId);
+
 		set({
 			connected: true,
 			mustChangePassword: data.mustChangePassword,
@@ -228,6 +252,9 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			serverId: data.serverId,
 			channelPermissions: data.channelPermissions,
 			readStatesMap: data.readStates,
+			ownVoiceDefaults: ownVoiceState
+				? mergeOwnVoiceDefaults(get().ownVoiceDefaults, ownVoiceState)
+				: get().ownVoiceDefaults,
 		});
 	},
 	addMessages: ({ channelId, messages, opts }) => {
@@ -474,6 +501,12 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					},
 				},
 			},
+			// Mirror durable own-user preferences from server-confirmed state,
+			// but keep live in-call state derived from voiceMap.
+			ownVoiceDefaults:
+				storeState.ownUserId === userId
+					? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, userState)
+					: storeState.ownVoiceDefaults,
 		});
 	},
 	removeUserFromVoiceChannel: ({ channelId, userId }) => {
@@ -507,6 +540,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			return;
 		}
 
+		const nextVoiceState = {
+			...currentVoiceState,
+			...newState,
+		};
+
 		set({
 			voiceMap: {
 				...storeState.voiceMap,
@@ -514,21 +552,49 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					...channelState,
 					users: {
 						...channelState.users,
-						[userId]: {
-							...currentVoiceState,
-							...newState,
-						},
+						[userId]: nextVoiceState,
 					},
 				},
 			},
+			// Server updates remain authoritative for own-user preferences too.
+			ownVoiceDefaults:
+				storeState.ownUserId === userId
+					? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, nextVoiceState)
+					: storeState.ownVoiceDefaults,
 		});
 	},
 	updateOwnVoiceState: (newState) => {
+		const storeState = get();
+		const { currentVoiceChannelId, ownUserId } = storeState;
+		const ownChannelId = currentVoiceChannelId;
+		const currentChannelState = ownChannelId !== undefined ? storeState.voiceMap[ownChannelId] : undefined;
+		const currentOwnVoiceState =
+			currentChannelState && ownUserId !== undefined ? currentChannelState.users[ownUserId] : undefined;
+
+		if (ownChannelId !== undefined && currentChannelState && ownUserId !== undefined && currentOwnVoiceState) {
+			set({
+				voiceMap: {
+					...storeState.voiceMap,
+					[ownChannelId]: {
+						...currentChannelState,
+						users: {
+							...currentChannelState.users,
+							[ownUserId]: {
+								...currentOwnVoiceState,
+								...newState,
+							},
+						},
+					},
+				},
+				// When already in voice, optimistic local toggles patch the live own-user
+				// entry directly and also persist the off-channel defaults.
+				ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
+			});
+			return;
+		}
+
 		set({
-			ownVoiceState: {
-				...get().ownVoiceState,
-				...newState,
-			},
+			ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
 		});
 	},
 	setPinnedCard: (pinnedCard) => {

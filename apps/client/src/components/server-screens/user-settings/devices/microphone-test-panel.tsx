@@ -1,3 +1,4 @@
+import type { TVoiceUserState } from '@sharkord/shared';
 import { Circle, Mic, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
@@ -10,7 +11,7 @@ import {
 } from '@/components/voice-provider/mic-audio-processing';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
-import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
+import { useConfirmedOwnVoiceState, useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
 import { getTRPCClient } from '@/lib/trpc';
 
 const ANALYSER_FFT_SIZE = 512;
@@ -94,6 +95,9 @@ const MicrophoneTestPanel = memo(
 		const currentVoiceChannelId = useCurrentVoiceChannelId();
 		const { localAudioStream } = useVoice();
 		const ownVoiceState = useOwnVoiceState();
+		const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
+		const confirmedMicMuted = ownConfirmedVoiceState?.micMuted;
+		const confirmedSoundMuted = ownConfirmedVoiceState?.soundMuted;
 		const [isTestingMic, setIsTestingMic] = useState(false);
 		const [monitorEnabled, setMonitorEnabled] = useState(false);
 		const levelBarRef = useRef<HTMLDivElement>(null);
@@ -264,7 +268,7 @@ const MicrophoneTestPanel = memo(
 					updateOwnVoiceState({
 						micMuted: previousMicMuted,
 						soundMuted: previousSoundMuted,
-					});
+					} satisfies Partial<TVoiceUserState>);
 				}
 			},
 			[currentVoiceChannelId],
@@ -620,6 +624,25 @@ const MicrophoneTestPanel = memo(
 		useEffect(() => {
 			soundMutedRef.current = ownVoiceState.soundMuted;
 		}, [ownVoiceState.soundMuted]);
+
+		useEffect(() => {
+			if (
+				!isTestingMic ||
+				typeof micMutedBeforeTestRef.current !== 'boolean' ||
+				typeof soundMutedBeforeTestRef.current !== 'boolean'
+			) {
+				return;
+			}
+
+			if (confirmedMicMuted === undefined || confirmedSoundMuted === undefined) {
+				return;
+			}
+
+			if (confirmedMicMuted !== true || confirmedSoundMuted !== true) {
+				micMutedBeforeTestRef.current = confirmedMicMuted;
+				soundMutedBeforeTestRef.current = confirmedSoundMuted;
+			}
+		}, [isTestingMic, confirmedMicMuted, confirmedSoundMuted]);
 
 		useEffect(() => {
 			return () => {
