@@ -212,13 +212,11 @@ const useVoiceControls = ({
 			}
 		}
 
-		updateOwnVoiceState({ sharingScreen: newState });
-
-		playSound(newState ? SoundType.OWN_USER_STARTED_SCREENSHARE : SoundType.OWN_USER_STOPPED_SCREENSHARE);
-
 		try {
 			if (newState) {
 				const video = await startScreenShareStream(selection || undefined);
+				updateOwnVoiceState({ sharingScreen: true });
+				playSound(SoundType.OWN_USER_STARTED_SCREENSHARE);
 
 				// handle native screen share end
 				video.onended = async () => {
@@ -233,6 +231,11 @@ const useVoiceControls = ({
 						// ignore
 					}
 				};
+			}
+
+			if (!newState) {
+				updateOwnVoiceState({ sharingScreen: false });
+				playSound(SoundType.OWN_USER_STOPPED_SCREENSHARE);
 			}
 
 			await trpc.voice.updateState.mutate({
