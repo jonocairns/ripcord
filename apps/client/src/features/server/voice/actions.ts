@@ -18,6 +18,28 @@ type TLeaveVoiceOptions = {
 	playOwnLeaveSound: boolean;
 };
 
+const clearOwnVoiceChannelState = (): void => {
+	const state = useServerStore.getState();
+	const currentChannelId = currentVoiceChannelIdSelector(state);
+	const selectedChannelId = selectedChannelIdSelector(state);
+	const lastTextChannelId = state.lastTextChannelId;
+
+	if (currentChannelId === undefined) {
+		return;
+	}
+
+	if (selectedChannelId === currentChannelId) {
+		setSelectedChannelId(lastTextChannelId);
+	}
+
+	setCurrentVoiceChannelId(undefined);
+	useServerStore.getState().updateOwnVoiceState({
+		webcamEnabled: false,
+		sharingScreen: false,
+	});
+	useServerStore.getState().setPinnedCard(undefined);
+};
+
 const channelHasAvailableStreams = (channelId: number, opts: { excludeUserId?: number } = {}): boolean => {
 	const state = useServerStore.getState();
 	const users = state.voiceMap[channelId]?.users ?? {};
@@ -78,6 +100,11 @@ export const removeUserFromVoiceChannel = (
 
 	clearPinnedCardById(`user-${userId}`);
 	clearPinnedCardById(`screen-share-${userId}`);
+
+	if (userId === ownUserId && channelId === currentChannelId) {
+		clearOwnVoiceChannelState();
+		return;
+	}
 
 	if (userId !== ownUserId && channelId === currentChannelId && !opts.reconnecting) {
 		playSound(SoundType.REMOTE_USER_LEFT_VOICE_CHANNEL);
@@ -230,20 +257,12 @@ export const joinVoice = async (
 const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<void> => {
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
-	const selectedChannelId = selectedChannelIdSelector(state);
-	const lastTextChannelId = state.lastTextChannelId;
 
 	if (!currentChannelId) {
 		return;
 	}
 
-	if (selectedChannelId === currentChannelId) {
-		setSelectedChannelId(lastTextChannelId);
-	}
-
-	setCurrentVoiceChannelId(undefined);
-	updateOwnVoiceState({ webcamEnabled: false, sharingScreen: false });
-	setPinnedCard(undefined);
+	clearOwnVoiceChannelState();
 
 	if (options.playOwnLeaveSound) {
 		playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
@@ -275,8 +294,6 @@ export const handleVoiceSessionReplaced = (): void => {
 
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
-	const selectedChannelId = selectedChannelIdSelector(state);
-	const lastTextChannelId = state.lastTextChannelId;
 
 	// Toast shown unconditionally: this subscription is user-scoped,
 	// so receiving it always means our session was replaced.
@@ -286,13 +303,7 @@ export const handleVoiceSessionReplaced = (): void => {
 		return;
 	}
 
-	if (selectedChannelId === currentChannelId) {
-		setSelectedChannelId(lastTextChannelId);
-	}
-
-	setCurrentVoiceChannelId(undefined);
-	updateOwnVoiceState({ webcamEnabled: false, sharingScreen: false });
-	setPinnedCard(undefined);
+	clearOwnVoiceChannelState();
 };
 
 export const setPinnedCard = (pinnedCard: TPinnedCard | undefined): void => {

@@ -1,3 +1,4 @@
+import type { TVoiceUserState } from '@sharkord/shared';
 import { Circle, Mic, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
@@ -9,8 +10,10 @@ import {
 	type TMicAudioProcessingPipeline,
 } from '@/components/voice-provider/mic-audio-processing';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
+import { useServerStore } from '@/features/server/slice';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
+import { ownConfirmedVoiceStateSelector } from '@/features/server/voice/selectors';
 import { getTRPCClient } from '@/lib/trpc';
 
 const ANALYSER_FFT_SIZE = 512;
@@ -87,6 +90,10 @@ const resolveMicTestProcessingConfig = ({
 		browserNoiseSuppression: browserWasmNoiseSuppressionEnabled ? false : noiseSuppression,
 		browserEchoCancellation: false,
 	};
+};
+
+const getConfirmedOwnVoiceState = (): TVoiceUserState | undefined => {
+	return ownConfirmedVoiceStateSelector(useServerStore.getState());
 };
 
 const MicrophoneTestPanel = memo(
@@ -259,12 +266,19 @@ const MicrophoneTestPanel = memo(
 						soundMuted: nextSoundMuted,
 					});
 				} catch {
-					micMutedRef.current = previousMicMuted;
-					soundMutedRef.current = previousSoundMuted;
-					updateOwnVoiceState({
-						micMuted: previousMicMuted,
-						soundMuted: previousSoundMuted,
-					});
+					const confirmedVoiceState = getConfirmedOwnVoiceState();
+					const revertedMicMuted = confirmedVoiceState?.micMuted ?? previousMicMuted;
+					const revertedSoundMuted = confirmedVoiceState?.soundMuted ?? previousSoundMuted;
+
+					micMutedRef.current = revertedMicMuted;
+					soundMutedRef.current = revertedSoundMuted;
+					updateOwnVoiceState(
+						confirmedVoiceState ??
+							({
+								micMuted: revertedMicMuted,
+								soundMuted: revertedSoundMuted,
+							} satisfies Partial<TVoiceUserState>),
+					);
 				}
 			},
 			[currentVoiceChannelId],

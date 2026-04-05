@@ -25,7 +25,7 @@ import { resolveTransportFailureVoiceReconnectState } from '@/features/server/re
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
-import { joinVoice, leaveVoiceSilently } from '@/features/server/voice/actions';
+import { joinVoice, leaveVoiceSilently, updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useOwnVoiceState } from '@/features/server/voice/hooks';
 import { logVoice } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
@@ -983,6 +983,18 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					setLocalVideoStream((currentStream) => {
 						return currentStream === stream ? undefined : currentStream;
 					});
+
+					updateOwnVoiceState({ webcamEnabled: false });
+
+					void (async () => {
+						try {
+							await getTRPCClient().voice.updateState.mutate({
+								webcamEnabled: false,
+							});
+						} catch (error) {
+							logVoice('Error syncing webcam state after native track end', { error });
+						}
+					})();
 				};
 			} else {
 				throw new Error('Failed to obtain video track from webcam');
