@@ -34,8 +34,6 @@ export const useVoice = () => {
 	return context;
 };
 
-export const getConfirmedOwnVoiceState = () => ownConfirmedVoiceStateSelector(useServerStore.getState());
-
 export const useConfirmedOwnVoiceState = () => useServerStore(ownConfirmedVoiceStateSelector);
 
 export const useOwnVoiceState = () => useServerStore(ownVoiceStateSelector);
