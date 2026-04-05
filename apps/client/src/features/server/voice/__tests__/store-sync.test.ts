@@ -2,7 +2,7 @@ import type { TInitialServerData } from '@/features/server/slice';
 import { beforeEach, describe, expect, it } from 'bun:test';
 import type { TVoiceUserState } from '@sharkord/shared';
 import { useServerStore } from '../../slice';
-import { ownConfirmedVoiceStateSelector } from '../selectors';
+import { ownConfirmedVoiceStateSelector, ownVoiceStateSelector } from '../selectors';
 
 const createVoiceState = (overrides: Partial<TVoiceUserState> = {}): TVoiceUserState => ({
 	micMuted: false,
@@ -12,15 +12,17 @@ const createVoiceState = (overrides: Partial<TVoiceUserState> = {}): TVoiceUserS
 	...overrides,
 });
 
-describe('voice store own state sync', () => {
+describe('voice store own state derivation', () => {
 	beforeEach(() => {
 		useServerStore.getState().resetState();
 	});
 
-	it('hydrates ownVoiceState from initial voice data when the own user is already in voice', () => {
+	it('stores off-channel voice defaults from initial voice data', () => {
 		const initialVoiceState = createVoiceState({
 			micMuted: true,
 			soundMuted: true,
+			webcamEnabled: true,
+			sharingScreen: true,
 		});
 		const data: TInitialServerData = {
 			serverId: 'server-1',
@@ -46,10 +48,15 @@ describe('voice store own state sync', () => {
 
 		useServerStore.getState().setInitialData(data);
 
-		expect(useServerStore.getState().ownVoiceState).toEqual(initialVoiceState);
+		expect(useServerStore.getState().ownVoiceDefaults).toEqual(
+			createVoiceState({
+				micMuted: true,
+				soundMuted: true,
+			}),
+		);
 	});
 
-	it('syncs ownVoiceState when the own user is added to a voice channel', () => {
+	it('derives own voice state from the confirmed voice map when the own user is in voice', () => {
 		const joinedVoiceState = createVoiceState({
 			micMuted: true,
 			webcamEnabled: true,
@@ -57,6 +64,11 @@ describe('voice store own state sync', () => {
 
 		useServerStore.setState({
 			ownUserId: 42,
+			currentVoiceChannelId: 7,
+			ownVoiceDefaults: createVoiceState({
+				micMuted: false,
+				webcamEnabled: false,
+			}),
 		});
 
 		useServerStore.getState().addUserToVoiceChannel({
@@ -65,10 +77,15 @@ describe('voice store own state sync', () => {
 			state: joinedVoiceState,
 		});
 
-		expect(useServerStore.getState().ownVoiceState).toEqual(joinedVoiceState);
+		expect(ownVoiceStateSelector(useServerStore.getState())).toEqual(joinedVoiceState);
+		expect(useServerStore.getState().ownVoiceDefaults).toEqual(
+			createVoiceState({
+				micMuted: true,
+			}),
+		);
 	});
 
-	it('syncs ownVoiceState and confirmed voice state when the own user receives a server update', () => {
+	it('optimistically updates the own-user voice map entry instead of a parallel live field', () => {
 		const initialVoiceState = createVoiceState();
 
 		useServerStore.setState({
@@ -81,7 +98,47 @@ describe('voice store own state sync', () => {
 					},
 				},
 			},
-			ownVoiceState: initialVoiceState,
+			ownVoiceDefaults: initialVoiceState,
+		});
+
+		useServerStore.getState().updateOwnVoiceState({
+			micMuted: true,
+			webcamEnabled: true,
+		});
+
+		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toEqual(
+			createVoiceState({
+				micMuted: true,
+				webcamEnabled: true,
+			}),
+		);
+		expect(ownVoiceStateSelector(useServerStore.getState())).toEqual(
+			createVoiceState({
+				micMuted: true,
+				webcamEnabled: true,
+			}),
+		);
+		expect(useServerStore.getState().ownVoiceDefaults).toEqual(
+			createVoiceState({
+				micMuted: true,
+			}),
+		);
+	});
+
+	it('keeps derived and confirmed own voice state aligned when the server updates the own user', () => {
+		const initialVoiceState = createVoiceState();
+
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: 7,
+			voiceMap: {
+				7: {
+					users: {
+						42: initialVoiceState,
+					},
+				},
+			},
+			ownVoiceDefaults: initialVoiceState,
 		});
 
 		useServerStore.getState().updateVoiceUserState({
@@ -93,13 +150,19 @@ describe('voice store own state sync', () => {
 			},
 		});
 
-		expect(useServerStore.getState().ownVoiceState).toEqual(
+		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toEqual(
 			createVoiceState({
 				micMuted: true,
 				soundMuted: true,
 			}),
 		);
-		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toEqual(
+		expect(ownVoiceStateSelector(useServerStore.getState())).toEqual(
+			createVoiceState({
+				micMuted: true,
+				soundMuted: true,
+			}),
+		);
+		expect(useServerStore.getState().ownVoiceDefaults).toEqual(
 			createVoiceState({
 				micMuted: true,
 				soundMuted: true,

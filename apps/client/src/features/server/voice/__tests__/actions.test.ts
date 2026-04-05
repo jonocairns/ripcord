@@ -1,6 +1,7 @@
 import { ChannelType, type TChannel } from '@sharkord/shared';
 import { beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { useServerStore } from '../../slice';
+import { ownVoiceStateSelector } from '../selectors';
 
 let removeUserFromVoiceChannel: typeof import('../actions').removeUserFromVoiceChannel;
 
@@ -93,7 +94,7 @@ describe('voice actions', () => {
 					},
 				},
 			},
-			ownVoiceState: {
+			ownVoiceDefaults: {
 				micMuted: false,
 				soundMuted: false,
 				webcamEnabled: true,
@@ -113,7 +114,13 @@ describe('voice actions', () => {
 		expect(state.currentVoiceChannelId).toBeUndefined();
 		expect(state.selectedChannelId).toBe(9);
 		expect(state.voiceMap[7]?.users[42]).toBeUndefined();
-		expect(state.ownVoiceState).toEqual({
+		expect(state.ownVoiceDefaults).toEqual({
+			micMuted: false,
+			soundMuted: false,
+			webcamEnabled: false,
+			sharingScreen: false,
+		});
+		expect(ownVoiceStateSelector(state)).toEqual({
 			micMuted: false,
 			soundMuted: false,
 			webcamEnabled: false,

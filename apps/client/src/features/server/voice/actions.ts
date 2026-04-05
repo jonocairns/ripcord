@@ -209,8 +209,8 @@ export const joinVoice = async (
 		silent?: boolean;
 	} = {},
 ): Promise<TJoinVoiceResult> => {
-	const state = useServerStore.getState();
-	const currentChannelId = currentVoiceChannelIdSelector(state);
+	const initialState = useServerStore.getState();
+	const currentChannelId = currentVoiceChannelIdSelector(initialState);
 
 	if (channelId === currentChannelId) {
 		// already in the desired channel
@@ -222,6 +222,7 @@ export const joinVoice = async (
 		await leaveVoiceInternal({ playOwnLeaveSound: false });
 	}
 
+	const state = useServerStore.getState();
 	const { micMuted, soundMuted } = ownVoiceStateSelector(state);
 	const client = getTRPCClient();
 

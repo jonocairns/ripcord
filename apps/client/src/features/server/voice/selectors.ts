@@ -1,7 +1,5 @@
 import type { IServerState } from '../slice';
 
-export const ownVoiceStateSelector = (state: IServerState) => state.ownVoiceState;
-
 export const ownConfirmedVoiceStateSelector = (state: IServerState) => {
 	const { currentVoiceChannelId, ownUserId } = state;
 
@@ -11,6 +9,9 @@ export const ownConfirmedVoiceStateSelector = (state: IServerState) => {
 
 	return state.voiceMap[currentVoiceChannelId]?.users[ownUserId];
 };
+
+export const ownVoiceStateSelector = (state: IServerState) =>
+	ownConfirmedVoiceStateSelector(state) ?? state.ownVoiceDefaults;
 
 export const pinnedCardSelector = (state: IServerState) => state.pinnedCard;
 

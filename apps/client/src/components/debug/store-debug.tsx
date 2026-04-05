@@ -1,5 +1,6 @@
 import { useShallow } from 'zustand/react/shallow';
 import { useServerStore } from '@/features/server/slice';
+import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { logDebug } from '@/helpers/browser-logger';
 
 const StoreDebug = () => {
@@ -24,7 +25,8 @@ const StoreDebug = () => {
 			loadingInfo: state.loadingInfo,
 			voiceMap: state.voiceMap,
 			externalStreamsMap: state.externalStreamsMap,
-			ownVoiceState: state.ownVoiceState,
+			ownVoiceDefaults: state.ownVoiceDefaults,
+			ownVoiceState: ownVoiceStateSelector(state),
 			pinnedCard: state.pinnedCard,
 			channelPermissions: state.channelPermissions,
 			readStatesMap: state.readStatesMap,

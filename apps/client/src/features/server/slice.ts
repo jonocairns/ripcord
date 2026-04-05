@@ -42,7 +42,7 @@ export interface IServerState {
 	loadingInfo: boolean;
 	voiceMap: TVoiceMap;
 	externalStreamsMap: TExternalStreamsMap;
-	ownVoiceState: TVoiceUserState;
+	ownVoiceDefaults: TVoiceUserState;
 	pinnedCard: TPinnedCard | undefined;
 	channelPermissions: TChannelUserPermissionsMap;
 	readStatesMap: {
@@ -139,7 +139,7 @@ const initialState: IServerState = {
 	loadingInfo: false,
 	voiceMap: {},
 	externalStreamsMap: {},
-	ownVoiceState: {
+	ownVoiceDefaults: {
 		micMuted: false,
 		soundMuted: false,
 		webcamEnabled: false,
@@ -192,6 +192,16 @@ const findVoiceStateForUser = (voiceMap: TVoiceMap, userId: number): TVoiceUserS
 	return undefined;
 };
 
+const mergeOwnVoiceDefaults = (
+	currentOwnVoiceDefaults: TVoiceUserState,
+	voiceState: Partial<TVoiceUserState>,
+): TVoiceUserState => ({
+	micMuted: voiceState.micMuted ?? currentOwnVoiceDefaults.micMuted,
+	soundMuted: voiceState.soundMuted ?? currentOwnVoiceDefaults.soundMuted,
+	webcamEnabled: false,
+	sharingScreen: false,
+});
+
 export const useServerStore = create<TServerStore>((set, get) => ({
 	...initialState,
 	resetState: () => {
@@ -242,7 +252,9 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			serverId: data.serverId,
 			channelPermissions: data.channelPermissions,
 			readStatesMap: data.readStates,
-			ownVoiceState: ownVoiceState ?? get().ownVoiceState,
+			ownVoiceDefaults: ownVoiceState
+				? mergeOwnVoiceDefaults(get().ownVoiceDefaults, ownVoiceState)
+				: get().ownVoiceDefaults,
 		});
 	},
 	addMessages: ({ channelId, messages, opts }) => {
@@ -477,7 +489,6 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 	addUserToVoiceChannel: ({ channelId, userId, state: userState }) => {
 		const storeState = get();
 		const channelState = storeState.voiceMap[channelId] ?? { users: {} };
-		const ownVoiceState = storeState.ownUserId === userId ? userState : storeState.ownVoiceState;
 
 		set({
 			voiceMap: {
@@ -490,7 +501,10 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					},
 				},
 			},
-			ownVoiceState,
+			ownVoiceDefaults:
+				storeState.ownUserId === userId
+					? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, userState)
+					: storeState.ownVoiceDefaults,
 		});
 	},
 	removeUserFromVoiceChannel: ({ channelId, userId }) => {
@@ -540,15 +554,42 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					},
 				},
 			},
-			ownVoiceState: storeState.ownUserId === userId ? nextVoiceState : storeState.ownVoiceState,
+			ownVoiceDefaults:
+				storeState.ownUserId === userId
+					? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, nextVoiceState)
+					: storeState.ownVoiceDefaults,
 		});
 	},
 	updateOwnVoiceState: (newState) => {
+		const storeState = get();
+		const { currentVoiceChannelId, ownUserId } = storeState;
+		const ownChannelId = currentVoiceChannelId;
+		const currentChannelState = ownChannelId !== undefined ? storeState.voiceMap[ownChannelId] : undefined;
+		const currentOwnVoiceState =
+			currentChannelState && ownUserId !== undefined ? currentChannelState.users[ownUserId] : undefined;
+
+		if (ownChannelId !== undefined && currentChannelState && ownUserId !== undefined && currentOwnVoiceState) {
+			set({
+				voiceMap: {
+					...storeState.voiceMap,
+					[ownChannelId]: {
+						...currentChannelState,
+						users: {
+							...currentChannelState.users,
+							[ownUserId]: {
+								...currentOwnVoiceState,
+								...newState,
+							},
+						},
+					},
+				},
+				ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
+			});
+			return;
+		}
+
 		set({
-			ownVoiceState: {
-				...get().ownVoiceState,
-				...newState,
-			},
+			ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
 		});
 	},
 	setPinnedCard: (pinnedCard) => {
