@@ -20,7 +20,8 @@ const zConfig = z.object({
     debug: z.coerce.boolean(),
     autoupdate: z.coerce.boolean(),
     trustProxy: z.coerce.boolean(),
-    corsOrigin: z.string()
+    corsOrigin: z.string(),
+    clientErrorReportingSentryDsn: z.string()
   }),
   webRtc: z.object({
     port: z.coerce.number().int().positive(),
@@ -54,7 +55,8 @@ const defaultConfig: TConfig = {
     // Set to a specific origin (e.g. "https://app.example.com") to restrict.
     // Note: setting this will reject desktop (Electron) clients whose
     // file:// origin won't match. Leave empty if desktop clients are used.
-    corsOrigin: ''
+    corsOrigin: '',
+    clientErrorReportingSentryDsn: ''
   },
   webRtc: {
     port: 40000,
@@ -118,6 +120,8 @@ config = applyEnvOverrides(config, {
   'server.debug': 'SHARKORD_DEBUG',
   'server.autoupdate': 'SHARKORD_AUTOUPDATE',
   'server.trustProxy': 'SHARKORD_TRUST_PROXY',
+  'server.clientErrorReportingSentryDsn':
+    'SHARKORD_CLIENT_ERROR_REPORTING_SENTRY_DSN',
   'webRtc.port': 'SHARKORD_WEBRTC_PORT',
   'webRtc.announcedAddress': 'SHARKORD_WEBRTC_ANNOUNCED_ADDRESS'
 });

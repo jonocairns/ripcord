@@ -9,6 +9,7 @@ import { DialogsProvider } from './components/dialogs/index.tsx';
 import { Routing } from './components/routing/index.tsx';
 import { ServerScreensProvider } from './components/server-screens/index.tsx';
 import { ThemeProvider } from './components/theme-provider/index.tsx';
+import { reportError } from './helpers/browser-logger.ts';
 import { LocalStorageKey, migrateStorage } from './helpers/storage.ts';
 import './index.css';
 import { initializeRuntimeServerConfig } from './runtime/server-config.ts';
@@ -19,7 +20,7 @@ const bootstrap = async () => {
 	try {
 		await initializeRuntimeServerConfig();
 	} catch (error) {
-		console.error('Failed to initialize runtime server configuration', error);
+		reportError('Failed to initialize runtime server configuration', error);
 	}
 
 	createRoot(document.getElementById('root')!).render(
