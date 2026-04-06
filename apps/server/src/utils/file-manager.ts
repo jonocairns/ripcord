@@ -356,12 +356,12 @@ class FileManager {
       path.basename(safeOriginalName, rawExtension)
     );
 
-    // Fetch all existing names that share the same base in one query
-    const escapedBase = baseName.replace(/[%_\\]/g, '\\$&');
+    // Fetch all existing names that share the same base in one query.
+    // No escaping needed — the broader match is harmless; Set.has() does exact conflict detection.
     const existing = await db
       .select({ name: files.name })
       .from(files)
-      .where(like(files.name, `${escapedBase}%${extension}`))
+      .where(like(files.name, `${baseName}%${extension}`))
       .all();
 
     if (existing.length === 0) return `${baseName}${extension}`;
