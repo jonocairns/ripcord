@@ -9,6 +9,7 @@ declare global {
 		printVoiceStats?: () => void;
 		DEBUG?: boolean;
 		sharkordDesktop?: TDesktopBridge;
+		webkitAudioContext?: typeof AudioContext;
 	}
 
 	const VITE_APP_VERSION: string;

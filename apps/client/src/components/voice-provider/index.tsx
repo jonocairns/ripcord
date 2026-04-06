@@ -44,7 +44,7 @@ import {
 } from '@/runtime/types';
 import { type TDeviceSettings, VideoCodecPreference } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
-import { createAudioContextWithSampleRateFallback } from './audio-context';
+import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } from './audio-context';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
 import { useLocalStreams } from './hooks/use-local-streams';
@@ -255,13 +255,7 @@ const createMicGainPipeline = async (
 		return undefined;
 	}
 
-	const AudioContextClass =
-		window.AudioContext ||
-		(
-			window as typeof window & {
-				webkitAudioContext?: typeof AudioContext;
-			}
-		).webkitAudioContext;
+	const AudioContextClass = resolveAudioContextClass();
 
 	if (!AudioContextClass) {
 		return undefined;
