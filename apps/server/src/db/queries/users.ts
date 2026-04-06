@@ -79,7 +79,7 @@ const getPublicUsers = async (
       avatar: avatarFiles,
       banner: bannerFiles,
       createdAt: users.createdAt,
-      ...(returnIdentity ? { _identity: users.identity } : {}),
+      _identity: users.identity,
       roleId: userRoles.roleId
     })
     .from(users)
@@ -105,7 +105,7 @@ const getPublicUsers = async (
         avatar: row.avatar,
         banner: row.banner,
         createdAt: row.createdAt,
-        ...(returnIdentity ? { _identity: (row as { _identity?: string })._identity } : {}),
+        ...(returnIdentity ? { _identity: row._identity } : {}),
         roleIds: row.roleId !== null ? [row.roleId] : []
       });
     }

@@ -27,7 +27,8 @@ const lruSet = (key: string, value: TGenericObject): void => {
   if (metadataCache.has(key)) metadataCache.delete(key);
   else if (metadataCache.size >= METADATA_CACHE_MAX) {
     // Evict the least-recently-used (first) entry
-    metadataCache.delete(metadataCache.keys().next().value!);
+    const lruKey = metadataCache.keys().next().value;
+    if (lruKey !== undefined) metadataCache.delete(lruKey);
   }
   metadataCache.set(key, value);
 };
