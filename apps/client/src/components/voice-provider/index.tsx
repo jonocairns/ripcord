@@ -784,13 +784,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	useEffect(() => {
 		const handleVolumeSettingsUpdated = (event: Event) => {
-			const customEvent = event as CustomEvent<TVolumeSettingsUpdatedDetail>;
+			if (!(event instanceof CustomEvent)) return;
+			const detail: TVolumeSettingsUpdatedDetail = event.detail;
 
-			if (customEvent.detail.key !== OWN_MIC_VOLUME_KEY) {
+			if (detail.key !== OWN_MIC_VOLUME_KEY) {
 				return;
 			}
 
-			const nextVolume = clampVolumePercent(customEvent.detail.volume);
+			const nextVolume = clampVolumePercent(detail.volume);
 			const hasMicGainPipeline = micGainPipelineRef.current !== undefined;
 			const nextShouldUseMicGainPipeline = shouldUseMicGainPipeline(nextVolume);
 
@@ -823,7 +824,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				return;
 			}
 
-			applyMicGainVolume(customEvent.detail.volume);
+			applyMicGainVolume(detail.volume);
 		};
 
 		window.addEventListener(VOLUME_SETTINGS_UPDATED_EVENT, handleVolumeSettingsUpdated);
