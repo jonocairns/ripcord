@@ -153,8 +153,10 @@ export const joinServer = async (
 			setPluginCommands({});
 		}
 
-		if (opts?.reconnect) {
+		if (opts?.reconnect && !data.mustChangePassword) {
 			flushReconnectSnapshotEventBuffer();
+		} else if (opts?.reconnect) {
+			clearReconnectSnapshotEventBuffer();
 		}
 	} catch (error) {
 		if (opts?.reconnect) {
@@ -194,7 +196,7 @@ export const joinServer = async (
 			}
 
 			// Clear voice channel only after auth/subscriptions are restored so
-			// the pending voice rejoin runs against a live server session.
+			// VoiceProvider triggers re-join against a live server session.
 			useServerStore.getState().setCurrentVoiceChannelId(undefined);
 
 			return 'joined';
