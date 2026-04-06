@@ -8,12 +8,29 @@ import { db } from '../../db';
 import { messages } from '../../db/schema';
 import { extractUrls } from '../../helpers/urls-extractor';
 
+const METADATA_CACHE_MAX = 500;
+
+// LRU cache: insertion order is preserved in Map; we evict the oldest entry when full.
 const metadataCache = new Map<string, TGenericObject>();
 
-setInterval(
-  () => metadataCache.clear(),
-  1000 * 60 * 60 * 2 // clear cache every 2 hours
-);
+const lruGet = (key: string): TGenericObject | undefined => {
+  const value = metadataCache.get(key);
+  if (value !== undefined) {
+    // Refresh recency by re-inserting
+    metadataCache.delete(key);
+    metadataCache.set(key, value);
+  }
+  return value;
+};
+
+const lruSet = (key: string, value: TGenericObject): void => {
+  if (metadataCache.has(key)) metadataCache.delete(key);
+  else if (metadataCache.size >= METADATA_CACHE_MAX) {
+    // Evict the least-recently-used (first) entry
+    metadataCache.delete(metadataCache.keys().next().value!);
+  }
+  metadataCache.set(key, value);
+};
 
 const isPrivateIP = (ip: string): boolean => {
   try {
@@ -45,7 +62,8 @@ const urlMetadataParser = async (
     if (!urls) return [];
 
     const promises = urls.map(async (url) => {
-      if (metadataCache.has(url)) return metadataCache.get(url);
+      const cached = lruGet(url);
+      if (cached !== undefined) return cached;
 
       if (!URL.canParse(url)) {
         return;
@@ -102,7 +120,7 @@ const urlMetadataParser = async (
 
       if (!metadata) return;
 
-      metadataCache.set(url, metadata);
+      lruSet(url, metadata);
 
       return metadata;
     });

@@ -67,30 +67,15 @@ const useScrollController = ({
 		if (fetching || messages.length === 0) return;
 
 		if (!hasInitialScroll.current) {
-			// try multiple methods to ensure scroll happens after all content is rendered
-			const performScroll = () => {
-				scrollToBottom();
-				hasInitialScroll.current = true;
-				shouldStickToBottom.current = true;
-			};
+			// Immediate attempt, then one RAF for any pending layout work.
+			// Late-loading images/media are handled by the ResizeObserver below.
+			scrollToBottom();
+			hasInitialScroll.current = true;
+			shouldStickToBottom.current = true;
 
-			// 1: immediate attempt
-			performScroll();
-
-			// 2: wait for next frame
 			requestAnimationFrame(() => {
-				performScroll();
+				scrollToBottom();
 			});
-
-			// 3: short timeout for any async content
-			setTimeout(() => {
-				performScroll();
-			}, 50);
-
-			// 4: longer timeout for images and other media
-			setTimeout(() => {
-				performScroll();
-			}, 200);
 		}
 	}, [fetching, messages.length, scrollToBottom]);
 

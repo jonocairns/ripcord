@@ -67,108 +67,51 @@ const getPublicUsers = async (
   const avatarFiles = alias(files, 'avatarFiles');
   const bannerFiles = alias(files, 'bannerFiles');
 
-  if (returnIdentity) {
-    const results = await db
-      .select({
-        id: users.id,
-        name: users.name,
-        bannerColor: users.bannerColor,
-        bio: users.bio,
-        banned: users.banned,
-        avatarId: users.avatarId,
-        bannerId: users.bannerId,
-        avatar: avatarFiles,
-        banner: bannerFiles,
-        createdAt: users.createdAt,
-        _identity: users.identity
-      })
-      .from(users)
-      .leftJoin(avatarFiles, eq(users.avatarId, avatarFiles.id))
-      .leftJoin(bannerFiles, eq(users.bannerId, bannerFiles.id))
-      .all();
+  const rows = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      bannerColor: users.bannerColor,
+      bio: users.bio,
+      banned: users.banned,
+      avatarId: users.avatarId,
+      bannerId: users.bannerId,
+      avatar: avatarFiles,
+      banner: bannerFiles,
+      createdAt: users.createdAt,
+      ...(returnIdentity ? { _identity: users.identity } : {}),
+      roleId: userRoles.roleId
+    })
+    .from(users)
+    .leftJoin(avatarFiles, eq(users.avatarId, avatarFiles.id))
+    .leftJoin(bannerFiles, eq(users.bannerId, bannerFiles.id))
+    .leftJoin(userRoles, eq(users.id, userRoles.userId))
+    .all();
 
-    const rolesByUser = await db
-      .select({
-        userId: userRoles.userId,
-        roleId: userRoles.roleId
-      })
-      .from(userRoles)
-      .all();
-
-    const rolesMap = rolesByUser.reduce(
-      (acc, { userId, roleId }) => {
-        if (!acc[userId]) acc[userId] = [];
-        acc[userId].push(roleId);
-        return acc;
-      },
-      {} as Record<number, number[]>
-    );
-
-    return results.map((result) => ({
-      id: result.id,
-      name: result.name,
-      bannerColor: result.bannerColor,
-      bio: result.bio,
-      banned: result.banned,
-      avatarId: result.avatarId,
-      bannerId: result.bannerId,
-      avatar: result.avatar,
-      banner: result.banner,
-      createdAt: result.createdAt,
-      _identity: result._identity,
-      roleIds: rolesMap[result.id] || []
-    }));
-  } else {
-    const results = await db
-      .select({
-        id: users.id,
-        name: users.name,
-        banned: users.banned,
-        bannerColor: users.bannerColor,
-        bio: users.bio,
-        avatarId: users.avatarId,
-        bannerId: users.bannerId,
-        avatar: avatarFiles,
-        banner: bannerFiles,
-        createdAt: users.createdAt
-      })
-      .from(users)
-      .leftJoin(avatarFiles, eq(users.avatarId, avatarFiles.id))
-      .leftJoin(bannerFiles, eq(users.bannerId, bannerFiles.id))
-      .all();
-
-    // Get role IDs for all users
-    const rolesByUser = await db
-      .select({
-        userId: userRoles.userId,
-        roleId: userRoles.roleId
-      })
-      .from(userRoles)
-      .all();
-
-    const rolesMap = rolesByUser.reduce(
-      (acc, { userId, roleId }) => {
-        if (!acc[userId]) acc[userId] = [];
-        acc[userId].push(roleId);
-        return acc;
-      },
-      {} as Record<number, number[]>
-    );
-
-    return results.map((result) => ({
-      id: result.id,
-      name: result.name,
-      banned: result.banned,
-      bannerColor: result.bannerColor,
-      bio: result.bio,
-      avatarId: result.avatarId,
-      bannerId: result.bannerId,
-      avatar: result.avatar,
-      banner: result.banner,
-      createdAt: result.createdAt,
-      roleIds: rolesMap[result.id] || []
-    }));
+  const usersMap = new Map<number, TJoinedPublicUser>();
+  for (const row of rows) {
+    const existing = usersMap.get(row.id);
+    if (existing) {
+      if (row.roleId !== null) existing.roleIds.push(row.roleId);
+    } else {
+      usersMap.set(row.id, {
+        id: row.id,
+        name: row.name,
+        bannerColor: row.bannerColor,
+        bio: row.bio,
+        banned: row.banned,
+        avatarId: row.avatarId,
+        bannerId: row.bannerId,
+        avatar: row.avatar,
+        banner: row.banner,
+        createdAt: row.createdAt,
+        ...(returnIdentity ? { _identity: (row as { _identity?: string })._identity } : {}),
+        roleIds: row.roleId !== null ? [row.roleId] : []
+      });
+    }
   }
+
+  return Array.from(usersMap.values());
 };
 
 const getStorageUsageByUserId = async (
@@ -311,7 +254,7 @@ const getUsers = async (): Promise<TJoinedUser[]> => {
   const avatarFiles = alias(files, 'avatarFiles');
   const bannerFiles = alias(files, 'bannerFiles');
 
-  const results = await db
+  const rows = await db
     .select({
       id: users.id,
       name: users.name,
@@ -330,52 +273,46 @@ const getUsers = async (): Promise<TJoinedUser[]> => {
       banReason: users.banReason,
       bannedAt: users.bannedAt,
       avatar: avatarFiles,
-      banner: bannerFiles
+      banner: bannerFiles,
+      roleId: userRoles.roleId
     })
     .from(users)
     .leftJoin(avatarFiles, eq(users.avatarId, avatarFiles.id))
     .leftJoin(bannerFiles, eq(users.bannerId, bannerFiles.id))
+    .leftJoin(userRoles, eq(users.id, userRoles.userId))
     .all();
 
-  // Get role IDs for all users
-  const rolesByUser = await db
-    .select({
-      userId: userRoles.userId,
-      roleId: userRoles.roleId
-    })
-    .from(userRoles)
-    .all();
+  const usersMap = new Map<number, TJoinedUser>();
+  for (const row of rows) {
+    const existing = usersMap.get(row.id);
+    if (existing) {
+      if (row.roleId !== null) existing.roleIds.push(row.roleId);
+    } else {
+      usersMap.set(row.id, {
+        id: row.id,
+        name: row.name,
+        bannerColor: row.bannerColor,
+        bio: row.bio,
+        avatarId: row.avatarId,
+        bannerId: row.bannerId,
+        avatar: row.avatar,
+        banner: row.banner,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        identity: row.identity,
+        password: row.password,
+        lastLoginAt: row.lastLoginAt,
+        tokenVersion: row.tokenVersion,
+        mustChangePassword: row.mustChangePassword,
+        banned: row.banned,
+        banReason: row.banReason,
+        bannedAt: row.bannedAt,
+        roleIds: row.roleId !== null ? [row.roleId] : []
+      });
+    }
+  }
 
-  const rolesMap = rolesByUser.reduce(
-    (acc, { userId, roleId }) => {
-      if (!acc[userId]) acc[userId] = [];
-      acc[userId].push(roleId);
-      return acc;
-    },
-    {} as Record<number, number[]>
-  );
-
-  return results.map((result) => ({
-    id: result.id,
-    name: result.name,
-    bannerColor: result.bannerColor,
-    bio: result.bio,
-    avatarId: result.avatarId,
-    bannerId: result.bannerId,
-    avatar: result.avatar,
-    banner: result.banner,
-    createdAt: result.createdAt,
-    updatedAt: result.updatedAt,
-    identity: result.identity,
-    password: result.password,
-    lastLoginAt: result.lastLoginAt,
-    tokenVersion: result.tokenVersion,
-    mustChangePassword: result.mustChangePassword,
-    banned: result.banned,
-    banReason: result.banReason,
-    bannedAt: result.bannedAt,
-    roleIds: rolesMap[result.id] || []
-  }));
+  return Array.from(usersMap.values());
 };
 
 const getUserIdsWithPermission = async (

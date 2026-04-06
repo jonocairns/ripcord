@@ -5,7 +5,7 @@ import {
 } from '@sharkord/shared';
 import { randomUUIDv7 } from 'bun';
 import { createHash } from 'crypto';
-import { eq } from 'drizzle-orm';
+import { like } from 'drizzle-orm';
 import fs from 'fs/promises';
 import path from 'path';
 import { db } from '../db';
@@ -356,26 +356,27 @@ class FileManager {
       path.basename(safeOriginalName, rawExtension)
     );
 
-    let fileName = `${baseName}${extension}`;
+    // Fetch all existing names that share the same base in one query
+    const escapedBase = baseName.replace(/[%_\\]/g, '\\$&');
+    const existing = await db
+      .select({ name: files.name })
+      .from(files)
+      .where(like(files.name, `${escapedBase}%${extension}`))
+      .all();
+
+    if (existing.length === 0) return `${baseName}${extension}`;
+
+    const existingNames = new Set(existing.map((f) => f.name));
+    if (!existingNames.has(`${baseName}${extension}`)) {
+      return `${baseName}${extension}`;
+    }
+
     let counter = 2;
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const existingFile = await db
-        .select()
-        .from(files)
-        .where(eq(files.name, fileName))
-        .get();
-
-      if (!existingFile) {
-        break;
-      }
-
-      fileName = `${baseName}-${counter}${extension}`;
+    while (existingNames.has(`${baseName}-${counter}${extension}`)) {
       counter++;
     }
 
-    return fileName;
+    return `${baseName}-${counter}${extension}`;
   };
 
   public async saveFile(tempFileId: string, userId: number): Promise<TFile> {
