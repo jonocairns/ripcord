@@ -525,6 +525,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				sharingScreen: false,
 			});
 			useServerStore.getState().setPinnedCard(undefined);
+			playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
 			toast.info('Voice connection was lost. Rejoin the voice channel manually.');
 		}
 
