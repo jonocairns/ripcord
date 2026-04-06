@@ -14,12 +14,6 @@ import { requestScreenShareSelection as requestScreenShareSelectionDialog } from
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { channelByIdSelector } from '@/features/server/channels/selectors';
 import { useChannelCan, useIsConnected } from '@/features/server/hooks';
-import {
-	clearPendingVoiceReconnectChannelId,
-	getPendingVoiceReconnectChannelId,
-	setPendingVoiceReconnectChannelId,
-} from '@/features/server/reconnect-state';
-import { resolveTransportFailureVoiceReconnectState } from '@/features/server/reconnect-policy';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
@@ -524,22 +518,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		hasHandledTransportFailureRef.current = true;
 		logVoice('Transport failure detected, triggering voice cleanup');
 
-		const reconnectState = resolveTransportFailureVoiceReconnectState({
-			isConnected: isConnectedRef.current,
-			currentVoiceChannelId: currentVoiceChannelIdRef.current,
-		});
-
-		if (reconnectState.pendingVoiceReconnectChannelId !== undefined) {
-			setPendingVoiceReconnectChannelId(reconnectState.pendingVoiceReconnectChannelId);
-		}
-
-		if (reconnectState.shouldClearCurrentVoiceChannelId) {
+		if (isConnectedRef.current && currentVoiceChannelIdRef.current !== undefined) {
 			useServerStore.getState().setCurrentVoiceChannelId(undefined);
 			useServerStore.getState().updateOwnVoiceState({
 				webcamEnabled: false,
 				sharingScreen: false,
 			});
 			useServerStore.getState().setPinnedCard(undefined);
+			toast.info('Voice connection was lost. Rejoin the voice channel manually.');
 		}
 
 		voiceCleanupRef.current?.();
@@ -2018,29 +2004,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearPendingStreamsForUser,
 		rtpCapabilities: sendRtpCapabilities.current,
 	});
-
-	useEffect(() => {
-		if (!isConnected) {
-			return;
-		}
-
-		if (currentVoiceChannelId !== undefined) {
-			if (connectionStatus === ConnectionStatus.CONNECTED) {
-				clearPendingVoiceReconnectChannelId();
-			}
-
-			return;
-		}
-
-		const pendingChannelId = getPendingVoiceReconnectChannelId();
-
-		if (pendingChannelId === undefined) {
-			return;
-		}
-
-		clearPendingVoiceReconnectChannelId();
-		toast.info('Voice connection was lost. Rejoin the voice channel manually.');
-	}, [connectionStatus, currentVoiceChannelId, isConnected]);
 
 	useEffect(() => {
 		return () => {

@@ -13,7 +13,6 @@ import {
 	flushReconnectSnapshotEventBuffer,
 	startReconnectSnapshotEventBuffer,
 } from './reconnect-event-buffer';
-import { clearPendingVoiceReconnectChannelId } from './reconnect-state';
 import { infoSelector } from './selectors';
 import { useServerStore } from './slice';
 import { initSubscriptions } from './subscriptions';
@@ -272,7 +271,6 @@ export const joinServer = async (
 
 export const logoutFromServer = async () => {
 	wsReconnectGeneration += 1;
-	clearPendingVoiceReconnectChannelId();
 	setOnWsReconnect(null);
 	await revokeRefreshToken();
 	cleanup({ clearAuth: true, ignoreSocketCloseEvent: true });

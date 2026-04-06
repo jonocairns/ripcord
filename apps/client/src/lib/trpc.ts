@@ -4,12 +4,6 @@ import { createTRPCProxyClient, createWSClient, wsLink } from '@trpc/client';
 import { resetApp } from '@/features/app/actions';
 import { resetDialogs } from '@/features/dialogs/actions';
 import { resetServerState, setDisconnectInfo } from '@/features/server/actions';
-import { currentVoiceChannelIdSelector } from '@/features/server/channels/selectors';
-import { resolvePendingVoiceReconnectChannelIdOnDisconnect } from '@/features/server/reconnect-policy';
-import {
-	getPendingVoiceReconnectChannelId,
-	setPendingVoiceReconnectChannelId,
-} from '@/features/server/reconnect-state';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
@@ -51,19 +45,6 @@ const initializeTRPC = (host: string) => {
 
 			const state = useServerStore.getState();
 			const wasConnected = state.connected;
-			const currentVoiceChannelId = currentVoiceChannelIdSelector(state);
-			const pendingVoiceChannelId = getPendingVoiceReconnectChannelId();
-
-			if (wasConnected) {
-				setPendingVoiceReconnectChannelId(
-					resolvePendingVoiceReconnectChannelIdOnDisconnect({
-						wasConnected,
-						disconnectCode: cause.code,
-						currentVoiceChannelId,
-						pendingVoiceChannelId,
-					}),
-				);
-			}
 
 			if (DELIBERATE_DISCONNECT_CODES.has(cause.code)) {
 				// Tear down immediately for intentional server-side disconnects
