@@ -9,6 +9,11 @@ type TClientErrorReportingConfig = {
 	sentryTunnelUrl?: string;
 };
 
+type TConfiguredClientErrorReportingConfig = {
+	sentryDsn: string;
+	sentryTunnelUrl: string;
+};
+
 type TCaptureSentryErrorOptions = {
 	captureSource: string;
 	contextName: string;
@@ -22,6 +27,7 @@ const capturedErrors = new WeakSet<object>();
 let sentryModulePromise: Promise<TSentryBrowserModule | null> | null = null;
 let sentrySyncPromise: Promise<void> | null = null;
 let clientErrorReportingConfig: TClientErrorReportingConfig = {};
+let activeSentryConfig: TConfiguredClientErrorReportingConfig | undefined;
 
 const getRuntimeTag = (): 'desktop' | 'web' => {
 	return getRuntimeServerConfig().source === 'desktop' ? 'desktop' : 'web';
@@ -31,18 +37,31 @@ const getSentryTunnelUrl = (): string => {
 	return `${getRuntimeServerConfig().serverUrl}${CLIENT_ERROR_REPORTING_SENTRY_TUNNEL_PATH}`;
 };
 
+const getConfiguredSentryConfig = (): TConfiguredClientErrorReportingConfig | undefined => {
+	if (!clientErrorReportingConfig.sentryDsn || !clientErrorReportingConfig.sentryTunnelUrl) {
+		return undefined;
+	}
+
+	return {
+		sentryDsn: clientErrorReportingConfig.sentryDsn,
+		sentryTunnelUrl: clientErrorReportingConfig.sentryTunnelUrl,
+	};
+};
+
 const isSentryConfigured = (): boolean => {
-	return Boolean(clientErrorReportingConfig.sentryDsn && clientErrorReportingConfig.sentryTunnelUrl);
+	return Boolean(getConfiguredSentryConfig());
 };
 
 const loadSentryModule = async (): Promise<TSentryBrowserModule | null> => {
+	if (sentryModulePromise) {
+		return sentryModulePromise;
+	}
+
 	if (!clientErrorReportingConfig.sentryDsn) {
 		return null;
 	}
 
-	if (!sentryModulePromise) {
-		sentryModulePromise = import('@sentry/browser').catch(() => null);
-	}
+	sentryModulePromise = import('@sentry/browser').catch(() => null);
 
 	return sentryModulePromise;
 };
@@ -58,16 +77,27 @@ const syncSentryConfiguration = async (): Promise<void> => {
 
 	sentrySyncPromise = (async () => {
 		const Sentry = await loadSentryModule();
+		const configuredSentryConfig = getConfiguredSentryConfig();
 
 		if (!Sentry) {
 			return;
 		}
 
-		if (isSentryConfigured()) {
-			if (!Sentry.isEnabled()) {
+		if (configuredSentryConfig) {
+			const shouldReinitializeSentry =
+				!Sentry.isEnabled() ||
+				!activeSentryConfig ||
+				activeSentryConfig.sentryDsn !== configuredSentryConfig.sentryDsn ||
+				activeSentryConfig.sentryTunnelUrl !== configuredSentryConfig.sentryTunnelUrl;
+
+			if (shouldReinitializeSentry) {
+				if (Sentry.isEnabled()) {
+					await Sentry.close(2000);
+				}
+
 				Sentry.init({
-					dsn: clientErrorReportingConfig.sentryDsn,
-					tunnel: clientErrorReportingConfig.sentryTunnelUrl,
+					dsn: configuredSentryConfig.sentryDsn,
+					tunnel: configuredSentryConfig.sentryTunnelUrl,
 					environment: import.meta.env.MODE,
 					release: VITE_APP_VERSION,
 					sendDefaultPii: false,
@@ -79,6 +109,7 @@ const syncSentryConfiguration = async (): Promise<void> => {
 						},
 					},
 				});
+				activeSentryConfig = configuredSentryConfig;
 			}
 
 			return;
@@ -87,6 +118,8 @@ const syncSentryConfiguration = async (): Promise<void> => {
 		if (Sentry.isEnabled()) {
 			await Sentry.close(2000);
 		}
+
+		activeSentryConfig = undefined;
 	})().finally(() => {
 		sentrySyncPromise = null;
 	});
@@ -193,15 +226,17 @@ const captureSentryError = async ({
 };
 
 const captureConsoleError = async (args: unknown[]) => {
+	const logMessage = extractLogMessage(args);
+
 	await captureSentryError({
 		captureSource: 'console.error',
 		contextName: 'console_error',
 		context: {
 			args: args.map((value) => sanitizeUnknownValue(value)),
-			message: extractLogMessage(args),
+			message: logMessage,
 		},
 		error: args.find((value): value is Error => value instanceof Error),
-		message: extractLogMessage(args),
+		message: logMessage,
 	});
 };
 

@@ -3,6 +3,7 @@ import { config } from '../config';
 import { getErrorMessage } from '../helpers/get-error-message';
 import { logger } from '../logger';
 import { getRawBody } from './helpers';
+import { getEnvelopeHeaderDsn } from './sentry-envelope-header';
 import { getSentryEnvelopeForwardUrl } from './sentry-envelope-url';
 
 const SENTRY_TUNNEL_MAX_BODY_BYTES = 256 * 1024;
@@ -24,6 +25,18 @@ const sentryTunnelRouteHandler = async (
   const body = await getRawBody(req, {
     maxBytes: SENTRY_TUNNEL_MAX_BODY_BYTES
   });
+  const envelopeHeaderDsn = getEnvelopeHeaderDsn(body);
+
+  if (envelopeHeaderDsn && envelopeHeaderDsn !== sentryDsn) {
+    logger.warn('[sentry-tunnel] Rejected envelope with mismatched DSN header');
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        error: 'Envelope DSN does not match server configuration.'
+      })
+    );
+    return;
+  }
 
   let response: Response;
 
