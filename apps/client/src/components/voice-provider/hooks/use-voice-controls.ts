@@ -6,6 +6,8 @@ import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
+import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
+import { useServerStore } from '@/features/server/slice';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
@@ -47,13 +49,8 @@ const useVoiceControls = ({
 	const confirmedMicMuted = ownConfirmedVoiceState?.micMuted;
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
-	const ownVoiceStateRef = useRef(ownVoiceState);
 	const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
 	const localAudioStreamRef = useRef(localAudioStream);
-
-	useEffect(() => {
-		ownVoiceStateRef.current = ownVoiceState;
-	}, [ownVoiceState]);
 
 	useEffect(() => {
 		currentVoiceChannelIdRef.current = currentVoiceChannelId;
@@ -88,13 +85,13 @@ const useVoiceControls = ({
 
 	const setMicMuted = useCallback(
 		async (newState: boolean, options?: TSetMicMutedOptions) => {
-			const latestOwnVoiceState = ownVoiceStateRef.current;
+			// Read mic state directly from the store — updateOwnVoiceState writes
+			// synchronously, but ownVoiceStateRef only updates after React re-renders.
+			// Reading the ref risks a stale guard on rapid press+release cycles.
+			const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
 			const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
 			const latestLocalAudioStream = localAudioStreamRef.current;
 
-			// Push-to-talk / push-to-mute events call this through a ref and can
-			// arrive before React re-renders. Read the latest voice state at call
-			// time so a quick press+release cannot get stuck on a stale mute value.
 			if (newState === latestOwnVoiceState.micMuted) {
 				return;
 			}
@@ -135,7 +132,7 @@ const useVoiceControls = ({
 	);
 
 	const toggleMic = useCallback(async () => {
-		const newState = !ownVoiceStateRef.current.micMuted;
+		const newState = !ownVoiceStateSelector(useServerStore.getState()).micMuted;
 
 		await setMicMuted(newState, { playSound: true });
 	}, [setMicMuted]);
