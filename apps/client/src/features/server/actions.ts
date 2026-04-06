@@ -109,8 +109,23 @@ export const joinServer = async (
 	handshakeHash: string,
 	password?: string,
 	trpcClient?: ReturnType<typeof connectToTRPC>,
+	opts?: { reconnect?: boolean },
 ) => {
 	const trpc = trpcClient ?? getTRPCClient();
+
+	// On reconnect the store still holds the previous session's state, so
+	// permission checks in initSubscriptions are valid. Subscribe before
+	// fetching so that events arriving during the query round-trip are
+	// captured and applied on top of the snapshot rather than missed.
+	//
+	// On initial connect the store is empty, so we must subscribe after
+	// setInitialData (otherwise permission-dependent subscriptions like
+	// plugin commands and user-delete would be skipped).
+	if (opts?.reconnect) {
+		cleanupServerSubscriptions();
+		unsubscribeFromServer = initSubscriptions();
+	}
+
 	const data = await trpc.others.joinServer.query({ handshakeHash, password });
 
 	logDebug('joinServer', data);
@@ -118,12 +133,16 @@ export const joinServer = async (
 	useServerStore.getState().setInitialData(data);
 	setDisconnectInfo(undefined);
 
-	cleanupServerSubscriptions();
-
 	if (!data.mustChangePassword) {
-		unsubscribeFromServer = initSubscriptions();
+		if (!opts?.reconnect) {
+			cleanupServerSubscriptions();
+			unsubscribeFromServer = initSubscriptions();
+		}
 		setPluginCommands(data.commands);
 	} else {
+		// mustChangePassword — no subscriptions needed; tear down any that
+		// were started early for the reconnect path.
+		cleanupServerSubscriptions();
 		setPluginCommands({});
 	}
 
@@ -150,7 +169,7 @@ export const joinServer = async (
 				return 'password-required';
 			}
 
-			await joinServer(handshakeHash, undefined, trpc);
+			await joinServer(handshakeHash, undefined, trpc, { reconnect: true });
 
 			if (didGenerationChange(generation)) {
 				return 'cancelled';
