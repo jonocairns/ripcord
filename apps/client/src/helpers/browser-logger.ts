@@ -42,10 +42,6 @@ const logVoice = (...args: unknown[]) => {
 	rawConsole.log('%c[VOICE-PROVIDER]', 'color: salmon; font-weight: bold;', ...args);
 };
 
-const logError = (...args: unknown[]) => {
-	rawConsole.error(...args);
-};
-
 const reportError = (message: string, error?: unknown, context?: unknown) => {
 	rawConsole.error(message, error, context);
 	void reportErrorToSentry(message, error, context);
@@ -56,7 +52,6 @@ export {
 	getSentryTunnelUrl,
 	initializeClientLogger,
 	logDebug,
-	logError,
 	logVoice,
 	reportError,
 	syncSentryConfiguration,
