@@ -1,7 +1,7 @@
 import http from 'http';
 import { HttpPayloadTooLargeError } from './utils';
 
-type TGetJsonBodyOptions = {
+type TGetBodyOptions = {
   maxBytes?: number;
 };
 
@@ -19,7 +19,7 @@ const getHeaderNumber = (
 
 const getJsonBody = async <T = unknown>(
   req: http.IncomingMessage,
-  options: TGetJsonBodyOptions = {}
+  options: TGetBodyOptions = {}
 ): Promise<T> => {
   const { maxBytes } = options;
   const contentLength = getHeaderNumber(req.headers['content-length']);
@@ -91,4 +91,71 @@ const getJsonBody = async <T = unknown>(
   });
 };
 
-export { getJsonBody };
+const getRawBody = async (
+  req: http.IncomingMessage,
+  options: TGetBodyOptions = {}
+): Promise<Uint8Array> => {
+  const { maxBytes } = options;
+  const contentLength = getHeaderNumber(req.headers['content-length']);
+
+  if (
+    maxBytes !== undefined &&
+    contentLength !== undefined &&
+    contentLength > maxBytes
+  ) {
+    throw new HttpPayloadTooLargeError(maxBytes);
+  }
+
+  return new Promise((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    let bodyLength = 0;
+    let settled = false;
+
+    const cleanup = () => {
+      req.off('data', onData);
+      req.off('end', onEnd);
+      req.off('error', onError);
+    };
+
+    const rejectOnce = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const resolveOnce = (data: Uint8Array) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(data);
+    };
+
+    const onData = (chunk: Buffer | string) => {
+      const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bodyLength += bufferChunk.length;
+
+      if (maxBytes !== undefined && bodyLength > maxBytes) {
+        req.resume();
+        rejectOnce(new HttpPayloadTooLargeError(maxBytes));
+        return;
+      }
+
+      chunks.push(bufferChunk);
+    };
+
+    const onEnd = () => {
+      resolveOnce(Buffer.concat(chunks));
+    };
+
+    const onError = (error: Error) => {
+      rejectOnce(error);
+    };
+
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('error', onError);
+  });
+};
+
+export { getJsonBody, getRawBody };

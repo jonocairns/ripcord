@@ -1,5 +1,6 @@
 import type { TServerInfo } from '@sharkord/shared';
 import http from 'http';
+import { config } from '../config';
 import { getSettings } from '../db/queries/server';
 import { SERVER_VERSION } from '../utils/env';
 
@@ -15,7 +16,13 @@ const infoRouteHandler = async (
     name: settings.name,
     description: settings.description,
     logo: settings.logo,
-    allowNewUsers: settings.allowNewUsers
+    allowNewUsers: settings.allowNewUsers,
+    clientErrorReporting: config.server.clientErrorReportingSentryDsn.trim()
+      ? {
+          provider: 'sentry',
+          dsn: config.server.clientErrorReportingSentryDsn.trim()
+        }
+      : undefined
   };
 
   res.writeHead(200, { 'Content-Type': 'application/json' });

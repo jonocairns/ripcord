@@ -1,0 +1,4 @@
+const CLIENT_ERROR_REPORTING_SENTRY_TUNNEL_PATH =
+  "/error-reporting/sentry-envelope";
+
+export { CLIENT_ERROR_REPORTING_SENTRY_TUNNEL_PATH };

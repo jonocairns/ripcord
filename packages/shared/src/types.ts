@@ -90,6 +90,10 @@ export type TServerInfo = Pick<
   TSettings,
   "serverId" | "name" | "description" | "allowNewUsers"
 > & {
+  clientErrorReporting?: {
+    provider: "sentry";
+    dsn: string;
+  };
   logo: TFile | null;
   version: string;
 };

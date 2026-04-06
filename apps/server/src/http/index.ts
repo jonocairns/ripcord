@@ -1,3 +1,4 @@
+import { CLIENT_ERROR_REPORTING_SENTRY_TUNNEL_PATH } from '@sharkord/shared';
 import chalk from 'chalk';
 import http from 'http';
 import z from 'zod';
@@ -16,6 +17,7 @@ import { loginRouteHandler } from './login';
 import { logoutRouteHandler } from './logout';
 import { publicRouteHandler } from './public';
 import { refreshRouteHandler } from './refresh';
+import { sentryTunnelRouteHandler } from './sentry-tunnel';
 import { uploadFileRouteHandler } from './upload';
 import { HttpPayloadTooLargeError, HttpValidationError } from './utils';
 import { verify2faRouteHandler } from './verify-2fa';
@@ -35,6 +37,12 @@ const refreshRateLimiter = createRateLimiter({
 // 60 attempts per minute per IP for logout route
 const logoutRateLimiter = createRateLimiter({
   maxRequests: 60,
+  windowMs: 60_000
+});
+
+// 120 event batches per minute per IP for the Sentry tunnel.
+const sentryTunnelRateLimiter = createRateLimiter({
+  maxRequests: 120,
   windowMs: 60_000
 });
 
@@ -83,6 +91,42 @@ const createHttpServer = async (port: number = config.server.port) => {
 
           if (req.method === 'POST' && req.url === '/upload') {
             return await uploadFileRouteHandler(req, res);
+          }
+
+          if (
+            req.method === 'POST' &&
+            req.url === CLIENT_ERROR_REPORTING_SENTRY_TUNNEL_PATH
+          ) {
+            if (info?.ip) {
+              const key = getClientRateLimitKey(info.ip);
+              const rateLimit = sentryTunnelRateLimiter.consume(key);
+
+              if (!rateLimit.allowed) {
+                logger.debug(
+                  `${chalk.dim('[Rate Limiter HTTP]')} ${CLIENT_ERROR_REPORTING_SENTRY_TUNNEL_PATH} rate limited for key "${key}"`
+                );
+
+                res.setHeader(
+                  'Retry-After',
+                  getRateLimitRetrySeconds(rateLimit.retryAfterMs)
+                );
+
+                res.writeHead(429, { 'Content-Type': 'application/json' });
+                res.end(
+                  JSON.stringify({
+                    error:
+                      'Too many client error reports. Please try again shortly.'
+                  })
+                );
+                return;
+              }
+            } else {
+              logger.warn(
+                `${chalk.dim('[Rate Limiter HTTP]')} Missing IP address in request info, skipping rate limiting for ${CLIENT_ERROR_REPORTING_SENTRY_TUNNEL_PATH}.`
+              );
+            }
+
+            return await sentryTunnelRouteHandler(req, res);
           }
 
           if (req.method === 'POST' && req.url === '/login') {
