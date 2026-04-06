@@ -17,15 +17,13 @@ import { useChannelCan, useIsConnected } from '@/features/server/hooks';
 import {
 	clearPendingVoiceReconnectChannelId,
 	getPendingVoiceReconnectChannelId,
-	getPendingVoiceReconnectRetryCount,
-	incrementPendingVoiceReconnectRetryCount,
 	setPendingVoiceReconnectChannelId,
 } from '@/features/server/reconnect-state';
 import { resolveTransportFailureVoiceReconnectState } from '@/features/server/reconnect-policy';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
-import { joinVoice, leaveVoiceSilently, updateOwnVoiceState } from '@/features/server/voice/actions';
+import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { logVoice } from '@/helpers/browser-logger';
@@ -90,8 +88,6 @@ const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
 	[VideoCodecPreference.AV1]: 'video/AV1',
 };
 const DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS = 96_000;
-const MAX_VOICE_REJOIN_RETRIES = 5;
-const VOICE_REJOIN_RETRY_DELAY_MS = 2_000;
 const SCREEN_SHARE_SOURCES_CACHE_TTL_MS = 15_000;
 
 type ResolvedMicProcessingConfig = {
@@ -425,7 +421,6 @@ type TVoiceProviderProps = {
 
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const [loading, setLoading] = useState(false);
-	const [voiceReconnectRetryToken, setVoiceReconnectRetryToken] = useState(0);
 	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
 	const [ownVoiceActivityStream, setOwnVoiceActivityStream] = useState<MediaStream | undefined>(undefined);
 	const routerRtpCapabilities = useRef<RtpCapabilities | null>(null);
@@ -459,8 +454,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const isPushToTalkHeldRef = useRef(false);
 	const isPushToMuteHeldRef = useRef(false);
 	const micMutedBeforePushRef = useRef<boolean | undefined>(undefined);
-	const reconnectingVoiceRef = useRef(false);
-	const reconnectingVoiceGenerationRef = useRef(0);
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const watchedExternalStreamsRef = useRef<Record<string, TTrackedExternalWatchState>>({});
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
@@ -2025,7 +2018,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		rtpCapabilities: sendRtpCapabilities.current,
 	});
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: voiceReconnectRetryToken is a trigger dep — bumped to force reconnect retry
 	useEffect(() => {
 		if (!isConnected) {
 			return;
@@ -2039,80 +2031,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
-		if (reconnectingVoiceRef.current) {
-			return;
-		}
-
 		const pendingChannelId = getPendingVoiceReconnectChannelId();
 
 		if (pendingChannelId === undefined) {
 			return;
 		}
 
-		reconnectingVoiceGenerationRef.current += 1;
-		const reconnectGeneration = reconnectingVoiceGenerationRef.current;
-		reconnectingVoiceRef.current = true;
-		let cancelled = false;
-		let retryTimeoutId: number | undefined;
-		const scheduleVoiceReconnectRetry = () => {
-			if (cancelled) {
-				return;
-			}
-
-			if (getPendingVoiceReconnectRetryCount() < MAX_VOICE_REJOIN_RETRIES) {
-				incrementPendingVoiceReconnectRetryCount();
-				retryTimeoutId = window.setTimeout(() => {
-					setVoiceReconnectRetryToken((value) => value + 1);
-				}, VOICE_REJOIN_RETRY_DELAY_MS);
-				return;
-			}
-
-			clearPendingVoiceReconnectChannelId();
-			toast.error('Failed to restore voice connection after multiple attempts');
-		};
-
-		void (async () => {
-			try {
-				const joinResult = await joinVoice(pendingChannelId, {
-					silent: true,
-				});
-
-				if (joinResult.kind === 'non-retriable-failure') {
-					clearPendingVoiceReconnectChannelId();
-					return;
-				}
-
-				if (joinResult.kind !== 'joined') {
-					scheduleVoiceReconnectRetry();
-					return;
-				}
-
-				await init(joinResult.routerRtpCapabilities, pendingChannelId, {
-					producerTransportParams: joinResult.producerTransportParams,
-					consumerTransportParams: joinResult.consumerTransportParams,
-					existingProducers: joinResult.existingProducers,
-					playJoinSound: false,
-				});
-				clearPendingVoiceReconnectChannelId();
-			} catch (error) {
-				logVoice('Failed to auto-rejoin previous voice channel', { error });
-				await leaveVoiceSilently();
-				scheduleVoiceReconnectRetry();
-			} finally {
-				if (reconnectingVoiceGenerationRef.current === reconnectGeneration) {
-					reconnectingVoiceRef.current = false;
-				}
-			}
-		})();
-
-		return () => {
-			cancelled = true;
-
-			if (retryTimeoutId !== undefined) {
-				window.clearTimeout(retryTimeoutId);
-			}
-		};
-	}, [connectionStatus, currentVoiceChannelId, init, isConnected, voiceReconnectRetryToken]);
+		clearPendingVoiceReconnectChannelId();
+		toast.info('Voice connection was lost. Rejoin the voice channel manually.');
+	}, [connectionStatus, currentVoiceChannelId, isConnected]);
 
 	useEffect(() => {
 		return () => {

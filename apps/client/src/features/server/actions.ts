@@ -8,6 +8,11 @@ import { getHostFromServer } from '@/helpers/get-file-url';
 import { cleanup, connectToTRPC, getTRPCClient, reconnectTRPC, setOnWsReconnect } from '@/lib/trpc';
 import { openDialog } from '../dialogs/actions';
 import { setPluginCommands } from './plugins/actions';
+import {
+	clearReconnectSnapshotEventBuffer,
+	flushReconnectSnapshotEventBuffer,
+	startReconnectSnapshotEventBuffer,
+} from './reconnect-event-buffer';
 import { clearPendingVoiceReconnectChannelId } from './reconnect-state';
 import { infoSelector } from './selectors';
 import { useServerStore } from './slice';
@@ -116,34 +121,48 @@ export const joinServer = async (
 	// On reconnect the store still holds the previous session's state, so
 	// permission checks in initSubscriptions are valid. Subscribe before
 	// fetching so that events arriving during the query round-trip are
-	// captured and applied on top of the snapshot rather than missed.
+	// captured. Replay them after setInitialData so the reconnect snapshot
+	// cannot overwrite newer user / voice updates.
 	//
 	// On initial connect the store is empty, so we must subscribe after
 	// setInitialData (otherwise permission-dependent subscriptions like
 	// plugin commands and user-delete would be skipped).
 	if (opts?.reconnect) {
+		startReconnectSnapshotEventBuffer();
 		cleanupServerSubscriptions();
 		unsubscribeFromServer = initSubscriptions();
 	}
 
-	const data = await trpc.others.joinServer.query({ handshakeHash, password });
+	try {
+		const data = await trpc.others.joinServer.query({ handshakeHash, password });
 
-	logDebug('joinServer', data);
+		logDebug('joinServer', data);
 
-	useServerStore.getState().setInitialData(data);
-	setDisconnectInfo(undefined);
+		useServerStore.getState().setInitialData(data);
+		setDisconnectInfo(undefined);
 
-	if (!data.mustChangePassword) {
-		if (!opts?.reconnect) {
+		if (!data.mustChangePassword) {
+			if (!opts?.reconnect) {
+				cleanupServerSubscriptions();
+				unsubscribeFromServer = initSubscriptions();
+			}
+			setPluginCommands(data.commands);
+		} else {
+			// mustChangePassword — no subscriptions needed; tear down any that
+			// were started early for the reconnect path.
 			cleanupServerSubscriptions();
-			unsubscribeFromServer = initSubscriptions();
+			setPluginCommands({});
 		}
-		setPluginCommands(data.commands);
-	} else {
-		// mustChangePassword — no subscriptions needed; tear down any that
-		// were started early for the reconnect path.
-		cleanupServerSubscriptions();
-		setPluginCommands({});
+
+		if (opts?.reconnect) {
+			flushReconnectSnapshotEventBuffer();
+		}
+	} catch (error) {
+		if (opts?.reconnect) {
+			clearReconnectSnapshotEventBuffer();
+		}
+
+		throw error;
 	}
 
 	// Register the WS reconnect handler so that if tRPC silently reconnects
