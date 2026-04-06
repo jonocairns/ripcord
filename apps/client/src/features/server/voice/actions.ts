@@ -227,13 +227,20 @@ export const joinVoice = async (
 	const client = getTRPCClient();
 
 	try {
-		const { routerRtpCapabilities, producerTransportParams, consumerTransportParams, existingProducers } =
+		const { routerRtpCapabilities, producerTransportParams, consumerTransportParams, existingProducers, channelUsers } =
 			await client.voice.join.mutate({
 				channelId,
 				state: { micMuted, soundMuted },
 			});
 
 		setCurrentVoiceChannelId(channelId);
+
+		// Reconcile the voiceMap with the server's authoritative channel state.
+		// setInitialData (called during WS reconnect) takes a snapshot that may be
+		// stale — users who joined between the snapshot and now would be invisible.
+		// Overwriting with the join response's channel list guarantees we have the
+		// correct set of participants the moment we enter the channel.
+		useServerStore.getState().reconcileVoiceChannelUsers({ channelId, users: channelUsers });
 
 		return {
 			kind: 'joined',

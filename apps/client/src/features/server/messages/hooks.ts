@@ -13,6 +13,8 @@ export const useMessagesByChannelId = (channelId: number) =>
 
 export const useMessages = (channelId: number) => {
 	const messages = useMessagesByChannelId(channelId);
+	const messagesRef = useRef(messages);
+	messagesRef.current = messages;
 	const inited = useRef(false);
 	const [fetching, setFetching] = useState(false);
 	const [loading, setLoading] = useState(messages.length === 0);
@@ -33,7 +35,7 @@ export const useMessages = (channelId: number) => {
 				});
 
 				const page = [...rawPage].reverse();
-				const existingIds = new Set(messages.map((m) => m.id));
+				const existingIds = new Set(messagesRef.current.map((m) => m.id));
 				const filtered = page.filter((m) => !existingIds.has(m.id));
 
 				if (cursorToFetch === null) {
@@ -53,7 +55,7 @@ export const useMessages = (channelId: number) => {
 				setLoading(false);
 			}
 		},
-		[channelId, messages],
+		[channelId],
 	);
 
 	const loadMore = useCallback(async () => {
