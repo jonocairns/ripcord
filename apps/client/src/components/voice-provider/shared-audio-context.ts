@@ -1,4 +1,4 @@
-import { createAudioContextWithSampleRateFallback } from './audio-context';
+import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } from './audio-context';
 
 type TAcquireSharedVoiceAudioContextOptions = {
 	onPreferredSampleRateError?: (error: unknown) => void;
@@ -8,24 +8,13 @@ type TAcquireSharedVoiceAudioContextOptions = {
 let sharedVoiceAudioContext: AudioContext | null = null;
 let sharedVoiceAudioContextUsers = 0;
 
-const getAudioContextClass = () => {
-	return (
-		window.AudioContext ||
-		(
-			window as typeof window & {
-				webkitAudioContext?: typeof AudioContext;
-			}
-		).webkitAudioContext
-	);
-};
-
 const acquireSharedVoiceAudioContext = (options: TAcquireSharedVoiceAudioContextOptions = {}) => {
 	if (sharedVoiceAudioContext && sharedVoiceAudioContext.state !== 'closed') {
 		sharedVoiceAudioContextUsers++;
 		return sharedVoiceAudioContext;
 	}
 
-	const AudioContextClass = getAudioContextClass();
+	const AudioContextClass = resolveAudioContextClass();
 
 	if (!AudioContextClass) {
 		return undefined;

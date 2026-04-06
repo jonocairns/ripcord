@@ -108,7 +108,10 @@ type TServerStore = IServerState & {
 	addUserToVoiceChannel: (payload: { channelId: number; userId: number; state: TVoiceUserState }) => void;
 	removeUserFromVoiceChannel: (payload: { channelId: number; userId: number }) => void;
 	updateVoiceUserState: (payload: { channelId: number; userId: number; newState: Partial<TVoiceUserState> }) => void;
-	reconcileVoiceChannelUsers: (payload: { channelId: number; users: Array<{ userId: number; state: TVoiceUserState }> }) => void;
+	reconcileVoiceChannelUsers: (payload: {
+		channelId: number;
+		users: Array<{ userId: number; state: TVoiceUserState }>;
+	}) => void;
 	updateOwnVoiceState: (newState: Partial<TVoiceUserState>) => void;
 	setPinnedCard: (pinnedCard: TPinnedCard | undefined) => void;
 	addExternalStreamToChannel: (payload: { channelId: number; streamId: number; stream: TExternalStream }) => void;

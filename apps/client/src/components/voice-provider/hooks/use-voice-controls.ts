@@ -6,6 +6,8 @@ import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
+import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
+import { useServerStore } from '@/features/server/slice';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
@@ -47,12 +49,25 @@ const useVoiceControls = ({
 	const confirmedMicMuted = ownConfirmedVoiceState?.micMuted;
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
+	const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
+	const localAudioStreamRef = useRef(localAudioStream);
 
 	useEffect(() => {
-		if (currentVoiceChannelId === undefined || !ownVoiceState.soundMuted) {
+		currentVoiceChannelIdRef.current = currentVoiceChannelId;
+	}, [currentVoiceChannelId]);
+
+	useEffect(() => {
+		localAudioStreamRef.current = localAudioStream;
+	}, [localAudioStream]);
+
+	useEffect(() => {
+		// Preserve the pre-deafen mic state across reconnects and voice rejoin.
+		// currentVoiceChannelId is cleared during disconnect / auto-rejoin, and
+		// dropping this ref there would make undeafen restore to "still muted".
+		if (!ownVoiceState.soundMuted) {
 			micMutedBeforeDeafenRef.current = undefined;
 		}
-	}, [currentVoiceChannelId, ownVoiceState.soundMuted]);
+	}, [ownVoiceState.soundMuted]);
 
 	useEffect(() => {
 		if (micMutedBeforeDeafenRef.current === undefined || ownVoiceState.soundMuted !== true) {
@@ -70,16 +85,23 @@ const useVoiceControls = ({
 
 	const setMicMuted = useCallback(
 		async (newState: boolean, options?: TSetMicMutedOptions) => {
-			if (newState === ownVoiceState.micMuted) {
+			// Read mic state directly from the store — updateOwnVoiceState writes
+			// synchronously, but ownVoiceStateRef only updates after React re-renders.
+			// Reading the ref risks a stale guard on rapid press+release cycles.
+			const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
+			const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
+			const latestLocalAudioStream = localAudioStreamRef.current;
+
+			if (newState === latestOwnVoiceState.micMuted) {
 				return;
 			}
 
-			if (ownVoiceState.soundMuted && !newState) {
+			if (latestOwnVoiceState.soundMuted && !newState) {
 				return;
 			}
 
 			const shouldPlaySound = options?.playSound ?? true;
-			const previousMicMuted = ownVoiceState.micMuted;
+			const previousMicMuted = latestOwnVoiceState.micMuted;
 			const trpc = getTRPCClient();
 
 			updateOwnVoiceState({ micMuted: newState });
@@ -88,32 +110,32 @@ const useVoiceControls = ({
 				playSound(newState ? SoundType.OWN_USER_MUTED_MIC : SoundType.OWN_USER_UNMUTED_MIC);
 			}
 
-			if (!currentVoiceChannelId) return;
+			if (!latestCurrentVoiceChannelId) return;
 
-			setLocalAudioTrackEnabled(localAudioStream, newState);
+			setLocalAudioTrackEnabled(latestLocalAudioStream, newState);
 
 			try {
 				await trpc.voice.updateState.mutate({
 					micMuted: newState,
 				});
 
-				if (!localAudioStream && !newState) {
+				if (!localAudioStreamRef.current && !newState) {
 					await startMicStream();
 				}
 			} catch (error) {
 				updateOwnVoiceState({ micMuted: previousMicMuted });
-				setLocalAudioTrackEnabled(localAudioStream, previousMicMuted);
+				setLocalAudioTrackEnabled(localAudioStreamRef.current, previousMicMuted);
 				toast.error(getTrpcError(error, 'Failed to update microphone state'));
 			}
 		},
-		[ownVoiceState.micMuted, ownVoiceState.soundMuted, currentVoiceChannelId, localAudioStream, startMicStream],
+		[startMicStream],
 	);
 
 	const toggleMic = useCallback(async () => {
-		const newState = !ownVoiceState.micMuted;
+		const newState = !ownVoiceStateSelector(useServerStore.getState()).micMuted;
 
 		await setMicMuted(newState, { playSound: true });
-	}, [ownVoiceState.micMuted, setMicMuted]);
+	}, [setMicMuted]);
 
 	const toggleSound = useCallback(async () => {
 		const newState = !ownVoiceState.soundMuted;

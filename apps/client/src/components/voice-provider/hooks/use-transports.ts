@@ -9,7 +9,7 @@ import type { TRemoteUserStreamKinds } from '@/types';
 // How long to wait for an ICE "disconnected" state to recover before closing
 // the transport. ICE disconnected can be transient (brief packet loss / route
 // change); only "failed" is terminal per the spec.
-const ICE_DISCONNECT_GRACE_MS = 15_000;
+const ICE_DISCONNECT_GRACE_MS = 30_000;
 
 type TUseTransportParams = {
 	addRemoteUserStream: (userId: number, stream: MediaStream, kind: TRemoteUserStreamKinds) => void;

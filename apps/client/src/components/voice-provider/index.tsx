@@ -14,18 +14,10 @@ import { requestScreenShareSelection as requestScreenShareSelectionDialog } from
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { channelByIdSelector } from '@/features/server/channels/selectors';
 import { useChannelCan, useIsConnected } from '@/features/server/hooks';
-import {
-	clearPendingVoiceReconnectChannelId,
-	getPendingVoiceReconnectChannelId,
-	getPendingVoiceReconnectRetryCount,
-	incrementPendingVoiceReconnectRetryCount,
-	setPendingVoiceReconnectChannelId,
-} from '@/features/server/reconnect-state';
-import { resolveTransportFailureVoiceReconnectState } from '@/features/server/reconnect-policy';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
-import { joinVoice, leaveVoiceSilently, updateOwnVoiceState } from '@/features/server/voice/actions';
+import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { logVoice } from '@/helpers/browser-logger';
@@ -44,6 +36,7 @@ import {
 } from '@/runtime/types';
 import { type TDeviceSettings, VideoCodecPreference } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
+import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } from './audio-context';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
 import { useLocalStreams } from './hooks/use-local-streams';
@@ -54,7 +47,6 @@ import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
 import { createMicAudioProcessingPipeline, type TMicAudioProcessingPipeline } from './mic-audio-processing';
-import { acquireSharedVoiceAudioContext, releaseSharedVoiceAudioContext } from './shared-audio-context';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
 import { VolumeControlProvider } from './volume-control-provider';
 import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
@@ -90,8 +82,6 @@ const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
 	[VideoCodecPreference.AV1]: 'video/AV1',
 };
 const DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS = 96_000;
-const MAX_VOICE_REJOIN_RETRIES = 5;
-const VOICE_REJOIN_RETRY_DELAY_MS = 2_000;
 const SCREEN_SHARE_SOURCES_CACHE_TTL_MS = 15_000;
 
 type ResolvedMicProcessingConfig = {
@@ -165,6 +155,10 @@ type TMicGainPipeline = {
 
 const clampVolumePercent = (value: number) => {
 	return Math.min(100, Math.max(0, value));
+};
+
+const shouldUseMicGainPipeline = (volume: number) => {
+	return clampVolumePercent(volume) !== 100;
 };
 
 type TTrackedExternalWatchState = {
@@ -251,7 +245,15 @@ const createMicGainPipeline = async (
 		return undefined;
 	}
 
-	const audioContext = acquireSharedVoiceAudioContext({
+	const AudioContextClass = resolveAudioContextClass();
+
+	if (!AudioContextClass) {
+		return undefined;
+	}
+
+	const audioContext = createAudioContextWithSampleRateFallback({
+		AudioContextClass,
+		sampleRate: 48_000,
 		onPreferredSampleRateError: (preferredSampleRateError) => {
 			logVoice('Falling back to a browser-default AudioContext for microphone gain processing', {
 				preferredSampleRateError,
@@ -282,7 +284,9 @@ const createMicGainPipeline = async (
 	const outputTrack = destinationNode.stream.getAudioTracks()[0];
 
 	if (!outputTrack) {
-		releaseSharedVoiceAudioContext(audioContext);
+		await audioContext.close().catch(() => {
+			// ignore close failures
+		});
 		return undefined;
 	}
 
@@ -322,7 +326,9 @@ const createMicGainPipeline = async (
 				// ignore disconnect failures
 			}
 
-			releaseSharedVoiceAudioContext(audioContext);
+			await audioContext.close().catch(() => {
+				// ignore close failures
+			});
 		},
 	};
 };
@@ -409,8 +415,8 @@ type TVoiceProviderProps = {
 
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const [loading, setLoading] = useState(false);
-	const [voiceReconnectRetryToken, setVoiceReconnectRetryToken] = useState(0);
 	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
+	const [ownVoiceActivityStream, setOwnVoiceActivityStream] = useState<MediaStream | undefined>(undefined);
 	const routerRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const sendRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const audioVideoRefsMap = useRef<Map<number, AudioVideoRefs>>(new Map());
@@ -442,13 +448,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const isPushToTalkHeldRef = useRef(false);
 	const isPushToMuteHeldRef = useRef(false);
 	const micMutedBeforePushRef = useRef<boolean | undefined>(undefined);
-	const reconnectingVoiceRef = useRef(false);
-	const reconnectingVoiceGenerationRef = useRef(0);
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const watchedExternalStreamsRef = useRef<Record<string, TTrackedExternalWatchState>>({});
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
 	const voiceActivityStreamsRef = useRef<Map<number, MediaStream>>(new Map());
 	const voiceActivityCleanupRef = useRef<Map<number, VoiceActivityMonitorStop>>(new Map());
+	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
+	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
 		if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -512,22 +518,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		hasHandledTransportFailureRef.current = true;
 		logVoice('Transport failure detected, triggering voice cleanup');
 
-		const reconnectState = resolveTransportFailureVoiceReconnectState({
-			isConnected: isConnectedRef.current,
-			currentVoiceChannelId: currentVoiceChannelIdRef.current,
-		});
-
-		if (reconnectState.pendingVoiceReconnectChannelId !== undefined) {
-			setPendingVoiceReconnectChannelId(reconnectState.pendingVoiceReconnectChannelId);
-		}
-
-		if (reconnectState.shouldClearCurrentVoiceChannelId) {
+		if (isConnectedRef.current && currentVoiceChannelIdRef.current !== undefined) {
 			useServerStore.getState().setCurrentVoiceChannelId(undefined);
 			useServerStore.getState().updateOwnVoiceState({
 				webcamEnabled: false,
 				sharingScreen: false,
 			});
 			useServerStore.getState().setPinnedCard(undefined);
+			playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+			toast.info('Voice connection was lost. Rejoin the voice channel manually.');
 		}
 
 		voiceCleanupRef.current?.();
@@ -655,8 +654,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 		const nextAudioStreams = new Map<number, MediaStream>();
 
-		if (ownUserId !== undefined && localAudioStream) {
-			nextAudioStreams.set(ownUserId, localAudioStream);
+		if (ownUserId !== undefined && ownVoiceActivityStream) {
+			nextAudioStreams.set(ownUserId, ownVoiceActivityStream);
 		}
 
 		Object.entries(remoteUserStreams).forEach(([userId, streams]) => {
@@ -688,8 +687,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			voiceActivityCleanupRef.current.set(userId, stop);
 		});
 	}, [
-		localAudioStream,
 		ownUserId,
+		ownVoiceActivityStream,
 		ownVoiceState.soundMuted,
 		remoteUserStreams,
 		stopAllVoiceActivityMonitoring,
@@ -772,13 +771,47 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	useEffect(() => {
 		const handleVolumeSettingsUpdated = (event: Event) => {
-			const customEvent = event as CustomEvent<TVolumeSettingsUpdatedDetail>;
+			if (!(event instanceof CustomEvent)) return;
+			const detail: TVolumeSettingsUpdatedDetail = event.detail;
 
-			if (customEvent.detail.key !== OWN_MIC_VOLUME_KEY) {
+			if (detail.key !== OWN_MIC_VOLUME_KEY) {
 				return;
 			}
 
-			applyMicGainVolume(customEvent.detail.volume);
+			const nextVolume = clampVolumePercent(detail.volume);
+			const hasMicGainPipeline = micGainPipelineRef.current !== undefined;
+			const nextShouldUseMicGainPipeline = shouldUseMicGainPipeline(nextVolume);
+
+			if (hasMicGainPipeline !== nextShouldUseMicGainPipeline) {
+				if (
+					currentVoiceChannelId !== undefined &&
+					localAudioStream !== undefined &&
+					micVolumeRestartPromiseRef.current === undefined
+				) {
+					// Crossing the neutral-volume threshold adds or removes the
+					// gain graph entirely, so live gain updates are not enough.
+					logVoice('Rebuilding microphone pipeline after mic volume crossed neutral threshold', {
+						nextVolume,
+						hadMicGainPipeline: hasMicGainPipeline,
+						nextShouldUseMicGainPipeline,
+					});
+
+					micVolumeRestartPromiseRef.current = (async () => {
+						try {
+							await startMicStreamRef.current?.();
+						} catch (error) {
+							logVoice('Failed to rebuild microphone pipeline after mic volume change', { error, nextVolume });
+							toast.error('Failed to apply microphone volume');
+						} finally {
+							micVolumeRestartPromiseRef.current = undefined;
+						}
+					})();
+				}
+
+				return;
+			}
+
+			applyMicGainVolume(detail.volume);
 		};
 
 		window.addEventListener(VOLUME_SETTINGS_UPDATED_EVENT, handleVolumeSettingsUpdated);
@@ -786,7 +819,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		return () => {
 			window.removeEventListener(VOLUME_SETTINGS_UPDATED_EVENT, handleVolumeSettingsUpdated);
 		};
-	}, [applyMicGainVolume]);
+	}, [applyMicGainVolume, currentVoiceChannelId, localAudioStream]);
 
 	const cleanupMicAudioPipeline = useCallback(async () => {
 		const currentAudioProducer = localAudioProducer.current;
@@ -810,6 +843,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 		const rawMicStream = rawMicStreamRef.current;
 		rawMicStreamRef.current = undefined;
+		setOwnVoiceActivityStream(undefined);
 
 		rawMicStream?.getTracks().forEach((track) => {
 			track.stop();
@@ -858,6 +892,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		logVoice('Microphone stream obtained', { stream });
 
 		rawMicStreamRef.current = stream;
+		setOwnVoiceActivityStream(stream);
 
 		const rawAudioTrack = stream.getAudioTracks()[0];
 
@@ -905,12 +940,22 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			});
 		}
 
-		const micGainPipeline = await createMicGainPipeline(outboundStream, getStoredVolume(OWN_MIC_VOLUME_KEY));
+		const micVolume = getStoredVolume(OWN_MIC_VOLUME_KEY);
+		// Keep the default 100% path on the original track so users do not pay
+		// for an extra Web Audio graph unless they explicitly change mic volume.
+		const micGainPipeline = shouldUseMicGainPipeline(micVolume)
+			? await createMicGainPipeline(outboundStream, micVolume)
+			: undefined;
 
 		if (micGainPipeline) {
 			micGainPipelineRef.current = micGainPipeline;
 			outboundStream = micGainPipeline.stream;
 			outboundAudioTrack = micGainPipeline.track;
+			logVoice('Microphone gain pipeline enabled', {
+				volume: micVolume,
+			});
+		} else {
+			micGainPipelineRef.current = undefined;
 		}
 
 		return { outboundStream, outboundAudioTrack };
@@ -983,6 +1028,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			setLocalAudioStream(undefined);
 		}
 	}, [prepareMicPipeline, produceMicTrack, cleanupMicAudioPipeline, setLocalAudioStream]);
+	startMicStreamRef.current = startMicStream;
 
 	const startWebcamStream = useCallback(async () => {
 		try {
@@ -1959,95 +2005,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearPendingStreamsForUser,
 		rtpCapabilities: sendRtpCapabilities.current,
 	});
-
-	// biome-ignore lint/correctness/useExhaustiveDependencies: voiceReconnectRetryToken is a trigger dep — bumped to force reconnect retry
-	useEffect(() => {
-		if (!isConnected) {
-			return;
-		}
-
-		if (currentVoiceChannelId !== undefined) {
-			if (connectionStatus === ConnectionStatus.CONNECTED) {
-				clearPendingVoiceReconnectChannelId();
-			}
-
-			return;
-		}
-
-		if (reconnectingVoiceRef.current) {
-			return;
-		}
-
-		const pendingChannelId = getPendingVoiceReconnectChannelId();
-
-		if (pendingChannelId === undefined) {
-			return;
-		}
-
-		reconnectingVoiceGenerationRef.current += 1;
-		const reconnectGeneration = reconnectingVoiceGenerationRef.current;
-		reconnectingVoiceRef.current = true;
-		let cancelled = false;
-		let retryTimeoutId: number | undefined;
-		const scheduleVoiceReconnectRetry = () => {
-			if (cancelled) {
-				return;
-			}
-
-			if (getPendingVoiceReconnectRetryCount() < MAX_VOICE_REJOIN_RETRIES) {
-				incrementPendingVoiceReconnectRetryCount();
-				retryTimeoutId = window.setTimeout(() => {
-					setVoiceReconnectRetryToken((value) => value + 1);
-				}, VOICE_REJOIN_RETRY_DELAY_MS);
-				return;
-			}
-
-			clearPendingVoiceReconnectChannelId();
-			toast.error('Failed to restore voice connection after multiple attempts');
-		};
-
-		void (async () => {
-			try {
-				const joinResult = await joinVoice(pendingChannelId, {
-					silent: true,
-				});
-
-				if (joinResult.kind === 'non-retriable-failure') {
-					clearPendingVoiceReconnectChannelId();
-					return;
-				}
-
-				if (joinResult.kind !== 'joined') {
-					scheduleVoiceReconnectRetry();
-					return;
-				}
-
-				await init(joinResult.routerRtpCapabilities, pendingChannelId, {
-					producerTransportParams: joinResult.producerTransportParams,
-					consumerTransportParams: joinResult.consumerTransportParams,
-					existingProducers: joinResult.existingProducers,
-					playJoinSound: false,
-				});
-				clearPendingVoiceReconnectChannelId();
-			} catch (error) {
-				logVoice('Failed to auto-rejoin previous voice channel', { error });
-				await leaveVoiceSilently();
-				scheduleVoiceReconnectRetry();
-			} finally {
-				if (reconnectingVoiceGenerationRef.current === reconnectGeneration) {
-					reconnectingVoiceRef.current = false;
-				}
-			}
-		})();
-
-		return () => {
-			cancelled = true;
-
-			if (retryTimeoutId !== undefined) {
-				window.clearTimeout(retryTimeoutId);
-			}
-		};
-	}, [connectionStatus, currentVoiceChannelId, init, isConnected, voiceReconnectRetryToken]);
 
 	useEffect(() => {
 		return () => {
