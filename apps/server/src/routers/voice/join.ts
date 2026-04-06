@@ -132,7 +132,8 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
       routerRtpCapabilities: router.rtpCapabilities,
       producerTransportParams,
       consumerTransportParams,
-      existingProducers
+      existingProducers,
+      channelUsers: runtime.getState().users
     };
   });
 

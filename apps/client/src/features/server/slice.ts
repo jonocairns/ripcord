@@ -108,6 +108,7 @@ type TServerStore = IServerState & {
 	addUserToVoiceChannel: (payload: { channelId: number; userId: number; state: TVoiceUserState }) => void;
 	removeUserFromVoiceChannel: (payload: { channelId: number; userId: number }) => void;
 	updateVoiceUserState: (payload: { channelId: number; userId: number; newState: Partial<TVoiceUserState> }) => void;
+	reconcileVoiceChannelUsers: (payload: { channelId: number; users: Array<{ userId: number; state: TVoiceUserState }> }) => void;
 	updateOwnVoiceState: (newState: Partial<TVoiceUserState>) => void;
 	setPinnedCard: (pinnedCard: TPinnedCard | undefined) => void;
 	addExternalStreamToChannel: (payload: { channelId: number; streamId: number; stream: TExternalStream }) => void;
@@ -561,6 +562,31 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 				storeState.ownUserId === userId
 					? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, nextVoiceState)
 					: storeState.ownVoiceDefaults,
+		});
+	},
+	reconcileVoiceChannelUsers: ({ channelId, users }) => {
+		const storeState = get();
+		const { ownUserId } = storeState;
+		const existingChannelState = storeState.voiceMap[channelId];
+
+		// Replace the channel user list with the server's authoritative snapshot.
+		// Preserve the own user's live state since it may carry optimistic updates
+		// that haven't been confirmed by the server yet.
+		const newUsers: Record<number, TVoiceUserState> = {};
+
+		for (const { userId, state } of users) {
+			const existingState = existingChannelState?.users[userId];
+			newUsers[userId] = userId === ownUserId && existingState ? existingState : state;
+		}
+
+		set({
+			voiceMap: {
+				...storeState.voiceMap,
+				[channelId]: {
+					...existingChannelState,
+					users: newUsers,
+				},
+			},
 		});
 	},
 	updateOwnVoiceState: (newState) => {
