@@ -44,6 +44,7 @@ import {
 } from '@/runtime/types';
 import { type TDeviceSettings, VideoCodecPreference } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
+import { createAudioContextWithSampleRateFallback } from './audio-context';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
 import { useLocalStreams } from './hooks/use-local-streams';
@@ -54,7 +55,6 @@ import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
 import { createMicAudioProcessingPipeline, type TMicAudioProcessingPipeline } from './mic-audio-processing';
-import { acquireSharedVoiceAudioContext, releaseSharedVoiceAudioContext } from './shared-audio-context';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
 import { VolumeControlProvider } from './volume-control-provider';
 import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
@@ -167,6 +167,10 @@ const clampVolumePercent = (value: number) => {
 	return Math.min(100, Math.max(0, value));
 };
 
+const shouldUseMicGainPipeline = (volume: number) => {
+	return clampVolumePercent(volume) !== 100;
+};
+
 type TTrackedExternalWatchState = {
 	audio: boolean;
 	video: boolean;
@@ -251,7 +255,21 @@ const createMicGainPipeline = async (
 		return undefined;
 	}
 
-	const audioContext = acquireSharedVoiceAudioContext({
+	const AudioContextClass =
+		window.AudioContext ||
+		(
+			window as typeof window & {
+				webkitAudioContext?: typeof AudioContext;
+			}
+		).webkitAudioContext;
+
+	if (!AudioContextClass) {
+		return undefined;
+	}
+
+	const audioContext = createAudioContextWithSampleRateFallback({
+		AudioContextClass,
+		sampleRate: 48_000,
 		onPreferredSampleRateError: (preferredSampleRateError) => {
 			logVoice('Falling back to a browser-default AudioContext for microphone gain processing', {
 				preferredSampleRateError,
@@ -282,7 +300,9 @@ const createMicGainPipeline = async (
 	const outputTrack = destinationNode.stream.getAudioTracks()[0];
 
 	if (!outputTrack) {
-		releaseSharedVoiceAudioContext(audioContext);
+		await audioContext.close().catch(() => {
+			// ignore close failures
+		});
 		return undefined;
 	}
 
@@ -322,7 +342,9 @@ const createMicGainPipeline = async (
 				// ignore disconnect failures
 			}
 
-			releaseSharedVoiceAudioContext(audioContext);
+			await audioContext.close().catch(() => {
+				// ignore close failures
+			});
 		},
 	};
 };
@@ -411,6 +433,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const [loading, setLoading] = useState(false);
 	const [voiceReconnectRetryToken, setVoiceReconnectRetryToken] = useState(0);
 	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
+	const [ownVoiceActivityStream, setOwnVoiceActivityStream] = useState<MediaStream | undefined>(undefined);
 	const routerRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const sendRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const audioVideoRefsMap = useRef<Map<number, AudioVideoRefs>>(new Map());
@@ -449,6 +472,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
 	const voiceActivityStreamsRef = useRef<Map<number, MediaStream>>(new Map());
 	const voiceActivityCleanupRef = useRef<Map<number, VoiceActivityMonitorStop>>(new Map());
+	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
+	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
 		if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -655,8 +680,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 		const nextAudioStreams = new Map<number, MediaStream>();
 
-		if (ownUserId !== undefined && localAudioStream) {
-			nextAudioStreams.set(ownUserId, localAudioStream);
+		if (ownUserId !== undefined && ownVoiceActivityStream) {
+			nextAudioStreams.set(ownUserId, ownVoiceActivityStream);
 		}
 
 		Object.entries(remoteUserStreams).forEach(([userId, streams]) => {
@@ -688,8 +713,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			voiceActivityCleanupRef.current.set(userId, stop);
 		});
 	}, [
-		localAudioStream,
 		ownUserId,
+		ownVoiceActivityStream,
 		ownVoiceState.soundMuted,
 		remoteUserStreams,
 		stopAllVoiceActivityMonitoring,
@@ -778,6 +803,39 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				return;
 			}
 
+			const nextVolume = clampVolumePercent(customEvent.detail.volume);
+			const hasMicGainPipeline = micGainPipelineRef.current !== undefined;
+			const nextShouldUseMicGainPipeline = shouldUseMicGainPipeline(nextVolume);
+
+			if (hasMicGainPipeline !== nextShouldUseMicGainPipeline) {
+				if (
+					currentVoiceChannelId !== undefined &&
+					localAudioStream !== undefined &&
+					micVolumeRestartPromiseRef.current === undefined
+				) {
+					// Crossing the neutral-volume threshold adds or removes the
+					// gain graph entirely, so live gain updates are not enough.
+					logVoice('Rebuilding microphone pipeline after mic volume crossed neutral threshold', {
+						nextVolume,
+						hadMicGainPipeline: hasMicGainPipeline,
+						nextShouldUseMicGainPipeline,
+					});
+
+					micVolumeRestartPromiseRef.current = (async () => {
+						try {
+							await startMicStreamRef.current?.();
+						} catch (error) {
+							logVoice('Failed to rebuild microphone pipeline after mic volume change', { error, nextVolume });
+							toast.error('Failed to apply microphone volume');
+						} finally {
+							micVolumeRestartPromiseRef.current = undefined;
+						}
+					})();
+				}
+
+				return;
+			}
+
 			applyMicGainVolume(customEvent.detail.volume);
 		};
 
@@ -786,7 +844,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		return () => {
 			window.removeEventListener(VOLUME_SETTINGS_UPDATED_EVENT, handleVolumeSettingsUpdated);
 		};
-	}, [applyMicGainVolume]);
+	}, [applyMicGainVolume, currentVoiceChannelId, localAudioStream]);
 
 	const cleanupMicAudioPipeline = useCallback(async () => {
 		const currentAudioProducer = localAudioProducer.current;
@@ -810,6 +868,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 		const rawMicStream = rawMicStreamRef.current;
 		rawMicStreamRef.current = undefined;
+		setOwnVoiceActivityStream(undefined);
 
 		rawMicStream?.getTracks().forEach((track) => {
 			track.stop();
@@ -858,6 +917,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		logVoice('Microphone stream obtained', { stream });
 
 		rawMicStreamRef.current = stream;
+		setOwnVoiceActivityStream(stream);
 
 		const rawAudioTrack = stream.getAudioTracks()[0];
 
@@ -905,12 +965,22 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			});
 		}
 
-		const micGainPipeline = await createMicGainPipeline(outboundStream, getStoredVolume(OWN_MIC_VOLUME_KEY));
+		const micVolume = getStoredVolume(OWN_MIC_VOLUME_KEY);
+		// Keep the default 100% path on the original track so users do not pay
+		// for an extra Web Audio graph unless they explicitly change mic volume.
+		const micGainPipeline = shouldUseMicGainPipeline(micVolume)
+			? await createMicGainPipeline(outboundStream, micVolume)
+			: undefined;
 
 		if (micGainPipeline) {
 			micGainPipelineRef.current = micGainPipeline;
 			outboundStream = micGainPipeline.stream;
 			outboundAudioTrack = micGainPipeline.track;
+			logVoice('Microphone gain pipeline enabled', {
+				volume: micVolume,
+			});
+		} else {
+			micGainPipelineRef.current = undefined;
 		}
 
 		return { outboundStream, outboundAudioTrack };
@@ -983,6 +1053,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			setLocalAudioStream(undefined);
 		}
 	}, [prepareMicPipeline, produceMicTrack, cleanupMicAudioPipeline, setLocalAudioStream]);
+	startMicStreamRef.current = startMicStream;
 
 	const startWebcamStream = useCallback(async () => {
 		try {
