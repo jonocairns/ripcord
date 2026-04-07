@@ -3,6 +3,7 @@ import {
 	bufferReconnectSnapshotEvent,
 	clearReconnectSnapshotEventBuffer,
 	flushReconnectSnapshotEventBuffer,
+	pauseReconnectSnapshotEventBuffer,
 	startReconnectSnapshotEventBuffer,
 } from '../reconnect-event-buffer';
 
@@ -55,6 +56,52 @@ describe('reconnect event buffer', () => {
 		});
 
 		clearReconnectSnapshotEventBuffer();
+		flushReconnectSnapshotEventBuffer();
+
+		expect(calls).toEqual([]);
+	});
+
+	it('pause stops buffering but retains events for the next start', () => {
+		const calls: string[] = [];
+
+		startReconnectSnapshotEventBuffer();
+		bufferReconnectSnapshotEvent(() => {
+			calls.push('from-failed-attempt');
+		});
+
+		// Simulate a failed reconnect attempt: pause without discarding.
+		pauseReconnectSnapshotEventBuffer();
+
+		// Events arriving while paused are NOT buffered.
+		expect(
+			bufferReconnectSnapshotEvent(() => {
+				calls.push('during-pause');
+			}),
+		).toBe(false);
+
+		// Retry: resume buffering — retained events carry forward.
+		startReconnectSnapshotEventBuffer();
+		bufferReconnectSnapshotEvent(() => {
+			calls.push('from-retry');
+		});
+
+		flushReconnectSnapshotEventBuffer();
+
+		expect(calls).toEqual(['from-failed-attempt', 'from-retry']);
+	});
+
+	it('clear after pause discards retained events', () => {
+		const calls: string[] = [];
+
+		startReconnectSnapshotEventBuffer();
+		bufferReconnectSnapshotEvent(() => {
+			calls.push('stale');
+		});
+
+		pauseReconnectSnapshotEventBuffer();
+		clearReconnectSnapshotEventBuffer();
+
+		startReconnectSnapshotEventBuffer();
 		flushReconnectSnapshotEventBuffer();
 
 		expect(calls).toEqual([]);

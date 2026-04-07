@@ -11,6 +11,7 @@ import { setPluginCommands } from './plugins/actions';
 import {
 	clearReconnectSnapshotEventBuffer,
 	flushReconnectSnapshotEventBuffer,
+	pauseReconnectSnapshotEventBuffer,
 	startReconnectSnapshotEventBuffer,
 } from './reconnect-event-buffer';
 import { infoSelector } from './selectors';
@@ -160,7 +161,10 @@ export const joinServer = async (
 		}
 	} catch (error) {
 		if (opts?.reconnect) {
-			clearReconnectSnapshotEventBuffer();
+			// Pause (not clear) so events buffered during this failed attempt are
+			// preserved for the next retry. The caller is responsible for calling
+			// clearReconnectSnapshotEventBuffer() on final teardown.
+			pauseReconnectSnapshotEventBuffer();
 		}
 
 		throw error;
@@ -214,11 +218,13 @@ export const joinServer = async (
 					// Can't silently reconnect to a password-protected server —
 					// fall through to teardown so the user sees the password prompt
 					// on next connect.
+					clearReconnectSnapshotEventBuffer();
 					cleanup({ ignoreSocketCloseEvent: true });
 					cleanupServerSubscriptions();
 				}
 			} catch (error) {
 				if (didGenerationChange(generation)) {
+					clearReconnectSnapshotEventBuffer();
 					return;
 				}
 
@@ -229,6 +235,7 @@ export const joinServer = async (
 					const refreshed = await refreshAccessToken();
 
 					if (didGenerationChange(generation)) {
+						clearReconnectSnapshotEventBuffer();
 						return;
 					}
 
@@ -245,12 +252,14 @@ export const joinServer = async (
 							}
 
 							if (result === 'password-required') {
+								clearReconnectSnapshotEventBuffer();
 								cleanup({ ignoreSocketCloseEvent: true });
 								cleanupServerSubscriptions();
 								return;
 							}
 						} catch (retryError) {
 							if (didGenerationChange(generation)) {
+								clearReconnectSnapshotEventBuffer();
 								return;
 							}
 
@@ -265,6 +274,7 @@ export const joinServer = async (
 					});
 				}
 
+				clearReconnectSnapshotEventBuffer();
 				cleanup({ ignoreSocketCloseEvent: true });
 			}
 		})();

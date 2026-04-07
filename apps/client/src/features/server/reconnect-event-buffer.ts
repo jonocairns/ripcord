@@ -5,7 +5,11 @@ let bufferedReconnectSnapshotActions: TReconnectBufferedAction[] = [];
 
 const startReconnectSnapshotEventBuffer = (): void => {
 	isBufferingReconnectSnapshotEvents = true;
-	bufferedReconnectSnapshotActions = [];
+	// Intentionally do NOT reset bufferedReconnectSnapshotActions here.
+	// Events retained from a prior pauseReconnectSnapshotEventBuffer() call
+	// (i.e. a failed reconnect attempt) are carried forward so they are
+	// replayed together with events from this attempt after a successful
+	// snapshot fetch.
 };
 
 const bufferReconnectSnapshotEvent = (action: TReconnectBufferedAction): boolean => {
@@ -31,6 +35,13 @@ const flushReconnectSnapshotEventBuffer = (): void => {
 	}
 };
 
+// Stops buffering without discarding the queue. Use this on a failed reconnect
+// attempt so that events accumulated during the attempt are carried forward to
+// the next retry. Call clearReconnectSnapshotEventBuffer() on final teardown.
+const pauseReconnectSnapshotEventBuffer = (): void => {
+	isBufferingReconnectSnapshotEvents = false;
+};
+
 const clearReconnectSnapshotEventBuffer = (): void => {
 	isBufferingReconnectSnapshotEvents = false;
 	bufferedReconnectSnapshotActions = [];
@@ -40,5 +51,6 @@ export {
 	bufferReconnectSnapshotEvent,
 	clearReconnectSnapshotEventBuffer,
 	flushReconnectSnapshotEventBuffer,
+	pauseReconnectSnapshotEventBuffer,
 	startReconnectSnapshotEventBuffer,
 };
