@@ -126,12 +126,12 @@ config = applyEnvOverrides(config, {
 
 // Applied separately: applyEnvOverrides skips falsy values, so an empty-string
 // env var cannot disable a DSN already set in the INI — handle it manually.
-if (process.env.SHARKORD_CLIENT_ERROR_REPORTING_SENTRY_DSN !== undefined) {
+if (process.env.RIPCORD_CLIENT_ERROR_REPORTING_SENTRY_DSN !== undefined) {
   config = {
     ...config,
     server: {
       ...config.server,
-      clientErrorReportingSentryDsn: process.env.SHARKORD_CLIENT_ERROR_REPORTING_SENTRY_DSN
+      clientErrorReportingSentryDsn: process.env.RIPCORD_CLIENT_ERROR_REPORTING_SENTRY_DSN
     }
   };
 }
