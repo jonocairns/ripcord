@@ -20,7 +20,11 @@ const infoRouteHandler = async (
     clientErrorReporting: config.server.clientErrorReportingSentryDsn.trim()
       ? {
           provider: 'sentry',
-          dsn: config.server.clientErrorReportingSentryDsn.trim()
+          dsn: config.server.clientErrorReportingSentryDsn.trim(),
+          ignoreErrors: config.server.clientErrorReportingIgnoreErrors
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
         }
       : undefined
   };

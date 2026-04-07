@@ -21,7 +21,8 @@ const zConfig = z.object({
     autoupdate: z.coerce.boolean(),
     trustProxy: z.coerce.boolean(),
     corsOrigin: z.string(),
-    clientErrorReportingSentryDsn: z.string()
+    clientErrorReportingSentryDsn: z.string(),
+    clientErrorReportingIgnoreErrors: z.string()
   }),
   webRtc: z.object({
     port: z.coerce.number().int().positive(),
@@ -56,7 +57,20 @@ const defaultConfig: TConfig = {
     // Note: setting this will reject desktop (Electron) clients whose
     // file:// origin won't match. Leave empty if desktop clients are used.
     corsOrigin: '',
-    clientErrorReportingSentryDsn: ''
+    clientErrorReportingSentryDsn: '',
+    clientErrorReportingIgnoreErrors: [
+      'ResizeObserver loop limit exceeded',
+      'ResizeObserver loop completed with undelivered notifications',
+      'Non-Error promise rejection captured',
+      'NotAllowedError',
+      'The play() request was interrupted',
+      'ICE',
+      'RTCPeerConnection',
+      'RTCDataChannel',
+      'NetworkError',
+      'Failed to fetch',
+      'Load failed'
+    ].join(',')
   },
   webRtc: {
     port: 40000,

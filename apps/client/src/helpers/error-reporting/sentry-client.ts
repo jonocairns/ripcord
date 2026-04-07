@@ -5,6 +5,7 @@ type TSentryBrowserModule = typeof import('@sentry/browser');
 
 type TClientErrorReportingConfig = {
 	sentryDsn?: string;
+	ignoreErrors?: string[];
 };
 
 type TConfiguredClientErrorReportingConfig = {
@@ -90,23 +91,7 @@ const syncSentryConfiguration = async (): Promise<void> => {
 					release: VITE_APP_VERSION,
 					sendDefaultPii: false,
 					maxBreadcrumbs: 0,
-					ignoreErrors: [
-						// Browser noise
-						'ResizeObserver loop limit exceeded',
-						'ResizeObserver loop completed with undelivered notifications',
-						'Non-Error promise rejection captured',
-						// Media / autoplay policy
-						/^NotAllowedError/,
-						/The play\(\) request was interrupted/,
-						// WebRTC churn
-						/^ICE/,
-						/^RTCPeerConnection/,
-						/^RTCDataChannel/,
-						// Network
-						/^NetworkError/,
-						/Failed to fetch/,
-						/Load failed/,
-					],
+					ignoreErrors: clientErrorReportingConfig.ignoreErrors,
 					beforeSend: (event) => sanitizeSentryEvent(event),
 					initialScope: {
 						tags: {
@@ -135,6 +120,7 @@ const syncSentryConfiguration = async (): Promise<void> => {
 const configureClientErrorReporting = async (config: TClientErrorReportingConfig = {}): Promise<void> => {
 	clientErrorReportingConfig = {
 		sentryDsn: config.sentryDsn?.trim() || undefined,
+		ignoreErrors: config.ignoreErrors,
 	};
 
 	await syncSentryConfiguration();

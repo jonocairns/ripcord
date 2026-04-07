@@ -38,6 +38,7 @@ export const loadApp = async () => {
 
 		await configureClientErrorReporting({
 			sentryDsn: info.clientErrorReporting?.provider === 'sentry' ? info.clientErrorReporting.dsn : undefined,
+			ignoreErrors: info.clientErrorReporting?.ignoreErrors,
 		});
 
 		setInfo(info);

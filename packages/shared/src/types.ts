@@ -91,6 +91,7 @@ export type TServerInfo = Pick<TSettings, 'serverId' | 'name' | 'description' | 
 	clientErrorReporting?: {
 		provider: 'sentry';
 		dsn: string;
+		ignoreErrors?: string[];
 	};
 };
 
