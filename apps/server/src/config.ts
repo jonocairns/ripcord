@@ -22,6 +22,7 @@ const zConfig = z.object({
     trustProxy: z.coerce.boolean(),
     corsOrigin: z.string(),
     clientErrorReportingSentryDsn: z.string(),
+    serverErrorReportingSentryDsn: z.string(),
     clientErrorReportingIgnoreErrors: z.string()
   }),
   webRtc: z.object({
@@ -58,6 +59,7 @@ const defaultConfig: TConfig = {
     // file:// origin won't match. Leave empty if desktop clients are used.
     corsOrigin: '',
     clientErrorReportingSentryDsn: '',
+    serverErrorReportingSentryDsn: '',
     clientErrorReportingIgnoreErrors: [
       // Browser noise
       'ResizeObserver loop limit exceeded',
@@ -156,6 +158,16 @@ if (process.env.RIPCORD_CLIENT_ERROR_REPORTING_SENTRY_DSN !== undefined) {
     server: {
       ...config.server,
       clientErrorReportingSentryDsn: process.env.RIPCORD_CLIENT_ERROR_REPORTING_SENTRY_DSN
+    }
+  };
+}
+
+if (process.env.RIPCORD_SERVER_ERROR_REPORTING_SENTRY_DSN !== undefined) {
+  config = {
+    ...config,
+    server: {
+      ...config.server,
+      serverErrorReportingSentryDsn: process.env.RIPCORD_SERVER_ERROR_REPORTING_SENTRY_DSN
     }
   };
 }

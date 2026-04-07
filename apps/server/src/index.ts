@@ -8,6 +8,9 @@ await loadEmbeds();
 // ----------------------------------------
 import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';
 // ----------------------------------------
+import { initSentry } from './sentry';
+initSentry();
+// ----------------------------------------
 import { ActivityLogType } from '@sharkord/shared';
 import chalk from 'chalk';
 import { config, SERVER_PRIVATE_IP } from './config';

@@ -23,6 +23,7 @@ import { channels } from '../db/schema';
 import { getWsInfo } from '../helpers/get-ws-info';
 import { logger } from '../logger';
 import { enqueueActivityLog } from '../queues/activity-log';
+import { Sentry } from '../sentry';
 import { appRouter } from '../routers';
 import { getUserRoles } from '../routers/users/get-user-roles';
 import { VoiceRuntime } from '../runtimes/voice';
@@ -404,7 +405,12 @@ const createWsServer = async (server: http.Server) => {
     applyWSSHandler({
       wss,
       router: appRouter,
-      createContext
+      createContext,
+      onError: ({ error, path }) => {
+        if (error.code === 'INTERNAL_SERVER_ERROR') {
+          Sentry.captureException(error.cause ?? error, { extra: { path } });
+        }
+      }
     });
 
     resolve(wss);
