@@ -59,14 +59,24 @@ const defaultConfig: TConfig = {
     corsOrigin: '',
     clientErrorReportingSentryDsn: '',
     clientErrorReportingIgnoreErrors: [
+      // Browser noise
       'ResizeObserver loop limit exceeded',
       'ResizeObserver loop completed with undelivered notifications',
       'Non-Error promise rejection captured',
+      // Media / autoplay policy
       'NotAllowedError',
       'The play() request was interrupted',
+      // Device / hardware (user environment, not app bugs)
+      'NotReadableError',
+      'NotFoundError',
+      'OverconstrainedError',
+      // WebRTC churn
       'ICE',
       'RTCPeerConnection',
       'RTCDataChannel',
+      'InvalidStateError',
+      // Fetch / network
+      'AbortError',
       'NetworkError',
       'Failed to fetch',
       'Load failed'
