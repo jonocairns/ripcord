@@ -611,6 +611,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					users: newUsers,
 				},
 			},
+			// If the TTL had already elapsed, clear the stale sentinel so it doesn't
+			// linger in the store until the next setInitialData or confirmation.
+			...(!isOptimisticStatePending && ownOptimisticStateExpiresAt !== undefined
+				? { ownOptimisticStateExpiresAt: undefined }
+				: undefined),
 		});
 	},
 	updateOwnVoiceState: (newState) => {

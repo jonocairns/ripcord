@@ -210,6 +210,8 @@ describe('voice store own state derivation', () => {
 
 		// TTL has lapsed — server's admin-muted state wins.
 		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toEqual(createVoiceState({ micMuted: true }));
+		// Expired sentinel is cleared in the same set call.
+		expect(useServerStore.getState().ownOptimisticStateExpiresAt).toBeUndefined();
 	});
 
 	it('updateVoiceUserState clears ownOptimisticStateExpiresAt for the own user', () => {
