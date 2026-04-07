@@ -90,6 +90,23 @@ const syncSentryConfiguration = async (): Promise<void> => {
 					release: VITE_APP_VERSION,
 					sendDefaultPii: false,
 					maxBreadcrumbs: 0,
+					ignoreErrors: [
+						// Browser noise
+						'ResizeObserver loop limit exceeded',
+						'ResizeObserver loop completed with undelivered notifications',
+						'Non-Error promise rejection captured',
+						// Media / autoplay policy
+						/^NotAllowedError/,
+						/The play\(\) request was interrupted/,
+						// WebRTC churn
+						/^ICE/,
+						/^RTCPeerConnection/,
+						/^RTCDataChannel/,
+						// Network
+						/^NetworkError/,
+						/Failed to fetch/,
+						/Load failed/,
+					],
 					beforeSend: (event) => sanitizeSentryEvent(event),
 					initialScope: {
 						tags: {
