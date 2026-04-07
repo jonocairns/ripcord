@@ -224,6 +224,7 @@ export const joinServer = async (
 				}
 			} catch (error) {
 				if (didGenerationChange(generation)) {
+					clearReconnectSnapshotEventBuffer();
 					return;
 				}
 
@@ -234,6 +235,7 @@ export const joinServer = async (
 					const refreshed = await refreshAccessToken();
 
 					if (didGenerationChange(generation)) {
+						clearReconnectSnapshotEventBuffer();
 						return;
 					}
 
@@ -257,6 +259,7 @@ export const joinServer = async (
 							}
 						} catch (retryError) {
 							if (didGenerationChange(generation)) {
+								clearReconnectSnapshotEventBuffer();
 								return;
 							}
 
