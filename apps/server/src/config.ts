@@ -120,11 +120,21 @@ config = applyEnvOverrides(config, {
   'server.debug': 'SHARKORD_DEBUG',
   'server.autoupdate': 'SHARKORD_AUTOUPDATE',
   'server.trustProxy': 'SHARKORD_TRUST_PROXY',
-  'server.clientErrorReportingSentryDsn':
-    'SHARKORD_CLIENT_ERROR_REPORTING_SENTRY_DSN',
   'webRtc.port': 'SHARKORD_WEBRTC_PORT',
   'webRtc.announcedAddress': 'SHARKORD_WEBRTC_ANNOUNCED_ADDRESS'
 });
+
+// Applied separately: applyEnvOverrides skips falsy values, so an empty-string
+// env var cannot disable a DSN already set in the INI — handle it manually.
+if (process.env.SHARKORD_CLIENT_ERROR_REPORTING_SENTRY_DSN !== undefined) {
+  config = {
+    ...config,
+    server: {
+      ...config.server,
+      clientErrorReportingSentryDsn: process.env.SHARKORD_CLIENT_ERROR_REPORTING_SENTRY_DSN
+    }
+  };
+}
 
 // Applied separately: applyEnvOverrides skips falsy values, but empty string
 // is a valid corsOrigin (means "allow all origins"), so we handle it manually.

@@ -18,8 +18,6 @@ const STRONGLY_SENSITIVE_KEY_TOKENS = new Set([
 	'secret',
 	'password',
 	'passwd',
-	'refresh',
-	'session',
 	'dsn',
 ]);
 

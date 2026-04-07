@@ -127,7 +127,7 @@ const getSentryContext = (value: unknown): Record<string, unknown> | undefined =
 	return sanitizeContextData(value);
 };
 
-const markErrorCaptured = (value: unknown): value is Error => {
+const isErrorAlreadyCaptured = (value: unknown): value is Error => {
 	if (!(value instanceof Error)) {
 		return false;
 	}
@@ -159,7 +159,7 @@ const captureSentryError = async ({
 		return;
 	}
 
-	if (markErrorCaptured(error)) {
+	if (isErrorAlreadyCaptured(error)) {
 		return;
 	}
 
