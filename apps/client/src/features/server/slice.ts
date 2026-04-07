@@ -43,6 +43,7 @@ export interface IServerState {
 	voiceMap: TVoiceMap;
 	externalStreamsMap: TExternalStreamsMap;
 	ownVoiceDefaults: TVoiceUserState;
+	ownOptimisticStateExpiresAt: number | undefined;
 	pinnedCard: TPinnedCard | undefined;
 	channelPermissions: TChannelUserPermissionsMap;
 	readStatesMap: {
@@ -143,6 +144,7 @@ const initialState: IServerState = {
 	loadingInfo: false,
 	voiceMap: {},
 	externalStreamsMap: {},
+	ownOptimisticStateExpiresAt: undefined,
 	ownVoiceDefaults: {
 		micMuted: false,
 		soundMuted: false,
@@ -195,6 +197,12 @@ const findVoiceStateForUser = (voiceMap: TVoiceMap, userId: number): TVoiceUserS
 
 	return undefined;
 };
+
+// Optimistic own-voice updates are authoritative for this many milliseconds.
+// If the server confirms (via updateVoiceUserState) or a new session starts
+// (setInitialData), the expiry is cleared early. Any reconcile that fires after
+// the window closes yields to the server's authoritative state instead.
+const OPTIMISTIC_VOICE_STATE_TTL_MS = 5_000;
 
 const mergeOwnVoiceDefaults = (
 	currentOwnVoiceDefaults: TVoiceUserState,
@@ -259,6 +267,10 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			ownVoiceDefaults: ownVoiceState
 				? mergeOwnVoiceDefaults(get().ownVoiceDefaults, ownVoiceState)
 				: get().ownVoiceDefaults,
+			// A new server session baseline supersedes any pending optimistic state.
+			// Clearing here prevents a stale TTL (e.g. from leave-cleanup) from
+			// shielding the own user from server-authoritative changes on rejoin.
+			ownOptimisticStateExpiresAt: undefined,
 		});
 	},
 	addMessages: ({ channelId, messages, opts }) => {
@@ -549,6 +561,8 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			...newState,
 		};
 
+		const isOwnUser = storeState.ownUserId === userId;
+
 		set({
 			voiceMap: {
 				...storeState.voiceMap,
@@ -561,25 +575,32 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 				},
 			},
 			// Server updates remain authoritative for own-user preferences too.
-			ownVoiceDefaults:
-				storeState.ownUserId === userId
-					? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, nextVoiceState)
-					: storeState.ownVoiceDefaults,
+			ownVoiceDefaults: isOwnUser
+				? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, nextVoiceState)
+				: storeState.ownVoiceDefaults,
+			// Server confirmation clears the optimistic-pending window.
+			...(isOwnUser && { ownOptimisticStateExpiresAt: undefined }),
 		});
 	},
 	reconcileVoiceChannelUsers: ({ channelId, users }) => {
 		const storeState = get();
-		const { ownUserId } = storeState;
+		const { ownUserId, ownOptimisticStateExpiresAt } = storeState;
 		const existingChannelState = storeState.voiceMap[channelId];
 
 		// Replace the channel user list with the server's authoritative snapshot.
-		// Preserve the own user's live state since it may carry optimistic updates
-		// that haven't been confirmed by the server yet.
+		// For the own user, preserve local state only while an optimistic update is
+		// still within its pending window (i.e. the TRPC call hasn't been confirmed
+		// yet). Once the TTL expires — or the server has already confirmed via
+		// updateVoiceUserState / setInitialData — server state wins. This ensures
+		// admin mutes and permission changes applied during a disconnect are not
+		// silently discarded on rejoin.
+		const isOptimisticStatePending =
+			ownOptimisticStateExpiresAt !== undefined && Date.now() < ownOptimisticStateExpiresAt;
 		const newUsers: Record<number, TVoiceUserState> = {};
 
 		for (const { userId, state } of users) {
 			const existingState = existingChannelState?.users[userId];
-			newUsers[userId] = userId === ownUserId && existingState ? existingState : state;
+			newUsers[userId] = userId === ownUserId && existingState && isOptimisticStatePending ? existingState : state;
 		}
 
 		set({
@@ -590,6 +611,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					users: newUsers,
 				},
 			},
+			// If the TTL had already elapsed, clear the stale sentinel so it doesn't
+			// linger in the store until the next setInitialData or confirmation.
+			...(!isOptimisticStatePending && ownOptimisticStateExpiresAt !== undefined
+				? { ownOptimisticStateExpiresAt: undefined }
+				: undefined),
 		});
 	},
 	updateOwnVoiceState: (newState) => {
@@ -599,6 +625,8 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		const currentChannelState = ownChannelId !== undefined ? storeState.voiceMap[ownChannelId] : undefined;
 		const currentOwnVoiceState =
 			currentChannelState && ownUserId !== undefined ? currentChannelState.users[ownUserId] : undefined;
+
+		const nextExpiresAt = Date.now() + OPTIMISTIC_VOICE_STATE_TTL_MS;
 
 		if (ownChannelId !== undefined && currentChannelState && ownUserId !== undefined && currentOwnVoiceState) {
 			set({
@@ -618,12 +646,14 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 				// When already in voice, optimistic local toggles patch the live own-user
 				// entry directly and also persist the off-channel defaults.
 				ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
+				ownOptimisticStateExpiresAt: nextExpiresAt,
 			});
 			return;
 		}
 
 		set({
 			ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
+			ownOptimisticStateExpiresAt: nextExpiresAt,
 		});
 	},
 	setPinnedCard: (pinnedCard) => {

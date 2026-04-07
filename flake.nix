@@ -41,6 +41,7 @@
                 tmux
                 gh
                 rustup
+                ripgrep
               ]
               ++ nixpkgs.lib.optionals pkgs.stdenv.isLinux [
                 mingwCc
