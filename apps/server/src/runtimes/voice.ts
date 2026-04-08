@@ -189,6 +189,9 @@ class VoiceRuntime {
   public destroy = async () => {
     // Closing the router automatically closes all transports, producers, and
     // consumers attached to it — no need to close them individually.
+    // Assumes all users have already been removed (via removeUser) before this
+    // is called; any remaining open producers will emit VOICE_PRODUCER_CLOSED
+    // as a side effect of the cascade.
     await this.router?.close();
 
     voiceRuntimes.delete(this.id);
@@ -481,16 +484,8 @@ class VoiceRuntime {
     if (!producer) return;
 
     producer.close();
-
-    if (type === StreamKind.VIDEO) {
-      delete this.videoProducers[userId];
-    } else if (type === StreamKind.AUDIO) {
-      delete this.audioProducers[userId];
-    } else if (type === StreamKind.SCREEN) {
-      delete this.screenProducers[userId];
-    } else if (type === StreamKind.SCREEN_AUDIO) {
-      delete this.screenAudioProducers[userId];
-    }
+    // Deletion from the map and VOICE_PRODUCER_CLOSED publish are handled
+    // by the producer.observer.on('close') registered in addProducer.
   }
 
   public addConsumer = (
