@@ -95,7 +95,18 @@ const useTransports = ({
 							onTransportFailure();
 						}
 					} else if (state === 'disconnected') {
-						logVoice('Producer transport disconnected, waiting for recovery...');
+						logVoice('Producer transport disconnected, attempting ICE restart...');
+
+						void (async () => {
+							try {
+								const { iceParameters } = await getTRPCClient().voice.restartProducerIce.mutate();
+								await transport.restartIce({ iceParameters });
+								logVoice('ICE restart initiated for producer transport');
+							} catch (error) {
+								logVoice('ICE restart failed for producer transport', { error });
+							}
+						})();
+
 						producerDisconnectTimer.current = setTimeout(() => {
 							producerDisconnectTimer.current = undefined;
 
@@ -127,7 +138,10 @@ const useTransports = ({
 
 					const { kind } = appData as { kind: StreamKind };
 
-					if (!producerTransport.current) return;
+					if (!producerTransport.current) {
+						errback(new Error('Producer transport not available'));
+						return;
+					}
 
 					try {
 						const producerId = await trpc.voice.produce.mutate({
@@ -227,7 +241,18 @@ const useTransports = ({
 							onTransportFailure();
 						}
 					} else if (state === 'disconnected') {
-						logVoice('Consumer transport disconnected, waiting for recovery...');
+						logVoice('Consumer transport disconnected, attempting ICE restart...');
+
+						void (async () => {
+							try {
+								const { iceParameters } = await getTRPCClient().voice.restartConsumerIce.mutate();
+								await transport.restartIce({ iceParameters });
+								logVoice('ICE restart initiated for consumer transport');
+							} catch (error) {
+								logVoice('ICE restart failed for consumer transport', { error });
+							}
+						})();
+
 						consumerDisconnectTimer.current = setTimeout(() => {
 							consumerDisconnectTimer.current = undefined;
 
