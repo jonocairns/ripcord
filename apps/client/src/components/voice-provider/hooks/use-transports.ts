@@ -316,6 +316,7 @@ const useTransports = ({
 					producerId: producerId,
 					kind: getMediasoupKind(consumerKind),
 					rtpParameters: consumerRtpParameters,
+					streamId: consumerRtpParameters.rtcp?.cname,
 				});
 
 				logVoice('Created new consumer', { newConsumer });

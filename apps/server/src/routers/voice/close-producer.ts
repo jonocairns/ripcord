@@ -1,4 +1,4 @@
-import { Permission, ServerEvents, StreamKind } from '@sharkord/shared';
+import { Permission, StreamKind } from '@sharkord/shared';
 import z from 'zod';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { invariant } from '../../utils/invariant';
@@ -33,16 +33,6 @@ const closeProducerRoute = protectedProcedure
     });
 
     runtime.removeProducer(ctx.user.id, input.kind);
-
-    ctx.pubsub.publishForChannel(
-      ctx.currentVoiceChannelId,
-      ServerEvents.VOICE_PRODUCER_CLOSED,
-      {
-        channelId: ctx.currentVoiceChannelId,
-        remoteId: ctx.user.id,
-        kind: input.kind
-      }
-    );
   });
 
 export { closeProducerRoute };
