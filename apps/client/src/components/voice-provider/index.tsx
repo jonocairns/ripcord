@@ -97,20 +97,6 @@ type TScreenSharePickerData = {
 	fetchedAt: number;
 };
 
-// Returns simulcast encodings for webcam video. AV1 uses a single SVC
-// encoding; VP8/H264/auto use three spatial layers (4x, 2x, 1x downscale).
-// scalabilityMode is a valid WebRTC field not yet in TypeScript's DOM types.
-const getWebcamSimulcastEncodings = (maxBps: number, isAV1: boolean): RTCRtpEncodingParameters[] => {
-	if (isAV1) {
-		return [{ scalabilityMode: 'L3T3_KEY', maxBitrate: maxBps } as RTCRtpEncodingParameters];
-	}
-	return [
-		{ rid: 'r0', maxBitrate: Math.round(maxBps / 12), scaleResolutionDownBy: 4 },
-		{ rid: 'r1', maxBitrate: Math.round(maxBps / 3), scaleResolutionDownBy: 2 },
-		{ rid: 'r2', maxBitrate: maxBps },
-	];
-};
-
 const resolvePreferredVideoCodec = (
 	rtpCapabilities: RtpCapabilities | null,
 	preference: VideoCodecPreference,
@@ -1093,10 +1079,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				const videoProducer = await producerTransport.current?.produce({
 					track: videoTrack,
-					encodings: getWebcamSimulcastEncodings(
-						webcamBitratePolicy.maxKbps * 1000,
-						preferredVideoCodec?.mimeType.toLowerCase().includes('av1') ?? false,
-					),
+					encodings: [{ maxBitrate: webcamBitratePolicy.maxKbps * 1000 }],
 					codec: preferredVideoCodec,
 					codecOptions: {
 						videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
