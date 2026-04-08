@@ -100,8 +100,10 @@ const useTransports = ({
 						void (async () => {
 							try {
 								const { iceParameters } = await getTRPCClient().voice.restartProducerIce.mutate();
-								await transport.restartIce({ iceParameters });
-								logVoice('ICE restart initiated for producer transport');
+								if (transport.connectionState !== 'connected' && !transport.closed) {
+									await transport.restartIce({ iceParameters });
+									logVoice('ICE restart initiated for producer transport');
+								}
 							} catch (error) {
 								logVoice('ICE restart failed for producer transport', { error });
 							}
@@ -246,8 +248,10 @@ const useTransports = ({
 						void (async () => {
 							try {
 								const { iceParameters } = await getTRPCClient().voice.restartConsumerIce.mutate();
-								await transport.restartIce({ iceParameters });
-								logVoice('ICE restart initiated for consumer transport');
+								if (transport.connectionState !== 'connected' && !transport.closed) {
+									await transport.restartIce({ iceParameters });
+									logVoice('ICE restart initiated for consumer transport');
+								}
 							} catch (error) {
 								logVoice('ICE restart failed for consumer transport', { error });
 							}
