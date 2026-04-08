@@ -10,9 +10,13 @@ import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';
 // ----------------------------------------
 import { ActivityLogType } from '@sharkord/shared';
 import chalk from 'chalk';
-import { config, SERVER_PRIVATE_IP } from './config';
+import { config, SERVER_PRIVATE_IPS } from './config';
 import { loadCrons } from './crons';
 import { loadDb } from './db';
+import {
+  formatHostForUrl,
+  resolvePreferredAddress
+} from './helpers/ip-addresses';
 import { pluginManager } from './plugins';
 import { enqueueActivityLog } from './queues/activity-log';
 import { initVoiceRuntimes } from './runtimes';
@@ -30,8 +34,13 @@ await initVoiceRuntimes();
 await createServers();
 await loadCrons();
 
-const host = IS_PRODUCTION ? SERVER_PRIVATE_IP : 'localhost';
-const url = `http://${host}:${config.server.port}/`;
+const host = IS_PRODUCTION
+  ? resolvePreferredAddress(
+      SERVER_PRIVATE_IPS,
+      config.webRtc.preferredFamily
+    ) || 'localhost'
+  : 'localhost';
+const url = `http://${formatHostForUrl(host)}:${config.server.port}/`;
 
 const message = [
   chalk.green.bold('SHARKORD') + ' ' + chalk.white.bold(`v${SERVER_VERSION}`),

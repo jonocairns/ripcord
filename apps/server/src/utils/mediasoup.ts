@@ -1,12 +1,18 @@
 import mediasoup from 'mediasoup';
-import { config, SERVER_PUBLIC_IP } from '../config.js';
+import { config, SERVER_PUBLIC_IPS } from '../config.js';
 import { MEDIASOUP_BINARY_PATH } from '../helpers/paths.js';
 import { logger } from '../logger.js';
 import { IS_PRODUCTION } from './env.js';
+import {
+  buildWebRtcListenInfos,
+  getPrimaryWebRtcListenInfo,
+  type TWebRtcListenInfo
+} from './webrtc-listen-info.js';
 
 let mediaSoupWorker: mediasoup.types.Worker<mediasoup.types.AppData>;
 let webRtcServer: mediasoup.types.WebRtcServer<mediasoup.types.AppData>;
 let webRtcServerListenInfo: { ip: string; announcedAddress?: string };
+let webRtcServerListenInfos: TWebRtcListenInfo[] = [];
 
 const getWebRtcPort = () => {
   const envPort = Number.parseInt(process.env.SHARKORD_WEBRTC_PORT || '', 10);
@@ -41,40 +47,43 @@ const loadMediasoup = async () => {
 
   logger.debug('Mediasoup worker loaded');
 
-  if (IS_PRODUCTION) {
-    const announcedAddress = config.webRtc.announcedAddress || SERVER_PUBLIC_IP;
+  const listenInfos = buildWebRtcListenInfos(
+    { ...config.webRtc, port },
+    {
+      isProduction: IS_PRODUCTION,
+      publicIps: SERVER_PUBLIC_IPS
+    }
+  );
 
-    webRtcServer = await mediaSoupWorker.createWebRtcServer({
-      listenInfos: [
-        {
-          protocol: 'udp',
-          ip: '0.0.0.0',
-          announcedAddress,
-          port,
-          recvBufferSize: 2_097_152,
-          sendBufferSize: 2_097_152
-        },
-        { protocol: 'tcp', ip: '0.0.0.0', announcedAddress, port }
-      ]
-    });
-
-    webRtcServerListenInfo = { ip: '0.0.0.0', announcedAddress };
-
-    logger.debug(
-      `WebRtcServer created on port ${port} with announcedAddress ${announcedAddress}`
+  if (listenInfos.length === 0) {
+    throw new Error(
+      'No WebRTC listeners could be created. Configure at least one valid IPv4 or IPv6 WebRTC listener.'
     );
-  } else {
-    webRtcServer = await mediaSoupWorker.createWebRtcServer({
-      listenInfos: [
-        { protocol: 'udp', ip: '127.0.0.1', port },
-        { protocol: 'tcp', ip: '127.0.0.1', port }
-      ]
-    });
-
-    webRtcServerListenInfo = { ip: '127.0.0.1' };
-
-    logger.debug(`WebRtcServer created on 127.0.0.1:${port} (dev mode)`);
   }
+
+  webRtcServer = await mediaSoupWorker.createWebRtcServer({
+    listenInfos
+  });
+
+  webRtcServerListenInfos = listenInfos;
+
+  const primaryListenInfo = getPrimaryWebRtcListenInfo(listenInfos);
+
+  if (!primaryListenInfo) {
+    throw new Error('Primary WebRTC listen info could not be resolved');
+  }
+
+  webRtcServerListenInfo = primaryListenInfo;
+
+  logger.debug(
+    `WebRtcServer created with listenInfos ${JSON.stringify(listenInfos, null, 2)}`
+  );
 };
 
-export { loadMediasoup, mediaSoupWorker, webRtcServer, webRtcServerListenInfo };
+export {
+  loadMediasoup,
+  mediaSoupWorker,
+  webRtcServer,
+  webRtcServerListenInfo,
+  webRtcServerListenInfos
+};

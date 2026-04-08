@@ -21,7 +21,8 @@ import { eventBus } from '../plugins/event-bus';
 import {
   mediaSoupWorker,
   webRtcServer,
-  webRtcServerListenInfo
+  webRtcServerListenInfo,
+  webRtcServerListenInfos
 } from '../utils/mediasoup';
 import { pubsub } from '../utils/pubsub';
 
@@ -856,7 +857,8 @@ class VoiceRuntime {
   public static getListenInfo = () => {
     return {
       ip: webRtcServerListenInfo.ip,
-      announcedAddress: webRtcServerListenInfo.announcedAddress
+      announcedAddress: webRtcServerListenInfo.announcedAddress,
+      listenInfos: webRtcServerListenInfos
     };
   };
 }
