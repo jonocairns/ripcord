@@ -187,54 +187,12 @@ class VoiceRuntime {
   };
 
   public destroy = async () => {
+    // Closing the router automatically closes all transports, producers, and
+    // consumers attached to it — no need to close them individually.
+    // Assumes all users have already been removed (via removeUser) before this
+    // is called; any remaining open producers will emit VOICE_PRODUCER_CLOSED
+    // as a side effect of the cascade.
     await this.router?.close();
-
-    Object.values(this.consumerTransports).forEach((transport) => {
-      transport.close();
-    });
-
-    Object.values(this.producerTransports).forEach((transport) => {
-      transport.close();
-    });
-
-    Object.values(this.videoProducers).forEach((producer) => {
-      producer.close();
-    });
-
-    Object.values(this.screenProducers).forEach((producer) => {
-      producer.close();
-    });
-
-    Object.values(this.screenAudioProducers).forEach((producer) => {
-      producer.close();
-    });
-
-    Object.values(this.audioProducers).forEach((producer) => {
-      producer.close();
-    });
-
-    Object.values(this.externalStreamsInternal).forEach((stream) => {
-      if (
-        stream.producers.videoProducer &&
-        !stream.producers.videoProducer.closed
-      ) {
-        stream.producers.videoProducer.close();
-      }
-      if (
-        stream.producers.audioProducer &&
-        !stream.producers.audioProducer.closed
-      ) {
-        stream.producers.audioProducer.close();
-      }
-    });
-
-    Object.values(this.consumers).forEach((consumers) => {
-      Object.values(consumers).forEach((remoteConsumers) => {
-        Object.values(remoteConsumers).forEach((consumer) => {
-          consumer?.close();
-        });
-      });
-    });
 
     voiceRuntimes.delete(this.id);
 
@@ -285,6 +243,7 @@ class VoiceRuntime {
     this.removeProducer(userId, StreamKind.AUDIO);
     this.removeProducer(userId, StreamKind.VIDEO);
     this.removeProducer(userId, StreamKind.SCREEN);
+    this.removeProducer(userId, StreamKind.SCREEN_AUDIO);
 
     if (this.consumers[userId]) {
       Object.values(this.consumers[userId]).forEach((remoteConsumers) => {
@@ -425,6 +384,7 @@ class VoiceRuntime {
       this.removeProducer(userId, StreamKind.AUDIO);
       this.removeProducer(userId, StreamKind.VIDEO);
       this.removeProducer(userId, StreamKind.SCREEN);
+      this.removeProducer(userId, StreamKind.SCREEN_AUDIO);
     });
 
     transport.on('dtlsstatechange', (state) => {
@@ -492,6 +452,12 @@ class VoiceRuntime {
       } else if (type === StreamKind.SCREEN_AUDIO) {
         delete this.screenAudioProducers[userId];
       }
+
+      pubsub.publishForChannel(this.id, ServerEvents.VOICE_PRODUCER_CLOSED, {
+        channelId: this.id,
+        remoteId: userId,
+        kind: type
+      });
     });
   };
 
@@ -518,16 +484,8 @@ class VoiceRuntime {
     if (!producer) return;
 
     producer.close();
-
-    if (type === StreamKind.VIDEO) {
-      delete this.videoProducers[userId];
-    } else if (type === StreamKind.AUDIO) {
-      delete this.audioProducers[userId];
-    } else if (type === StreamKind.SCREEN) {
-      delete this.screenProducers[userId];
-    } else if (type === StreamKind.SCREEN_AUDIO) {
-      delete this.screenAudioProducers[userId];
-    }
+    // Deletion from the map and VOICE_PRODUCER_CLOSED publish are handled
+    // by the producer.observer.on('close') registered in addProducer.
   }
 
   public addConsumer = (

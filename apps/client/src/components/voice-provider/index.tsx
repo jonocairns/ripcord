@@ -1787,7 +1787,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				routerRtpCapabilities.current = incomingRouterRtpCapabilities;
 
-				const device = new Device();
+				const device = await Device.factory();
 
 				// Start mic acquisition + WASM pipeline immediately — these have no
 				// dependency on the mediasoup device or transports and are the slowest
