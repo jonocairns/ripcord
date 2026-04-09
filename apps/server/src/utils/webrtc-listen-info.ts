@@ -128,8 +128,9 @@ const buildWebRtcListenInfos = (
           isUnspecifiedBindAddress(familyConfig.bindAddress)
         ? defaultBindAddress
         : familyConfig.bindAddress;
-    const resolvedAnnouncedAddress =
-      familyConfig.announcedAddress || options.publicIps[family];
+    const resolvedAnnouncedAddress = options.isProduction
+      ? familyConfig.announcedAddress || options.publicIps[family]
+      : familyConfig.announcedAddress;
     const announcedAddress = resolvedAnnouncedAddress || undefined;
 
     if (
