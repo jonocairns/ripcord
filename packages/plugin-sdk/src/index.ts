@@ -124,6 +124,9 @@ export interface PluginContext {
           announcedAddress?: string;
           family: 'ipv4' | 'ipv6';
           port: number;
+          flags?: {
+            ipv6Only?: boolean;
+          };
         }[];
       };
     };

@@ -110,4 +110,4 @@ const getPublicIps = async (): Promise<TResolvedIpAddresses> => {
   };
 };
 
-export { getPrivateIps, getPublicIp, getPublicIps };
+export { getPrivateIps, getPublicIps };
