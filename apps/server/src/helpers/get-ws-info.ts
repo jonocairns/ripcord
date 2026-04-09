@@ -1,5 +1,6 @@
 import type http from 'http';
 import { UAParser } from 'ua-parser-js';
+import { normalizeIpLiteral } from '../helpers/ip-addresses';
 import type { TConnectionInfo } from '../types';
 
 // TODO: this code is shit and needs to be improved later
@@ -58,19 +59,7 @@ const getWsIp = (
     ip = ip.split(',')[0]?.trim() ?? ip;
   }
 
-  if (ip.startsWith('::ffff:')) {
-    ip = ip.slice(7);
-  }
-
-  if (ip === '::1') {
-    ip = '127.0.0.1';
-  }
-
-  if (ip.startsWith('[') && ip.endsWith(']')) {
-    ip = ip.slice(1, -1);
-  }
-
-  return ip || undefined;
+  return ip ? normalizeIpLiteral(ip) : undefined;
 };
 
 const getWsInfo = (

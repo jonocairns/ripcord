@@ -151,12 +151,30 @@ describe('deepMerge', () => {
     const defaultConfig = {
       server: { port: 4991, debug: false, autoupdate: false },
       http: { maxFiles: 40, maxFileSize: 100 },
-      mediasoup: { webrtcPort: 40000, announcedAddress: '' }
+      webRtc: {
+        port: 40000,
+        preferredFamily: 'ipv4' as const,
+        ipv4: {
+          enabled: true,
+          bindAddress: '0.0.0.0',
+          announcedAddress: ''
+        },
+        ipv6: {
+          enabled: false,
+          bindAddress: '::',
+          announcedAddress: ''
+        }
+      }
     };
 
     const existingConfig: Partial<typeof defaultConfig> = {
       server: { port: 5000, debug: true },
-      mediasoup: { webrtcPort: 50000 }
+      webRtc: {
+        port: 50000,
+        ipv6: {
+          enabled: true
+        }
+      } as Partial<(typeof defaultConfig)['webRtc']>
     } as Partial<typeof defaultConfig>;
 
     const result = deepMerge(defaultConfig, existingConfig);
@@ -164,7 +182,20 @@ describe('deepMerge', () => {
     expect(result).toEqual({
       server: { port: 5000, debug: true, autoupdate: false },
       http: { maxFiles: 40, maxFileSize: 100 },
-      mediasoup: { webrtcPort: 50000, announcedAddress: '' }
+      webRtc: {
+        port: 50000,
+        preferredFamily: 'ipv4',
+        ipv4: {
+          enabled: true,
+          bindAddress: '0.0.0.0',
+          announcedAddress: ''
+        },
+        ipv6: {
+          enabled: true,
+          bindAddress: '::',
+          announcedAddress: ''
+        }
+      }
     });
   });
 });
