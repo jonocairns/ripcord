@@ -618,20 +618,15 @@ const Devices = memo(() => {
 				</section>
 
 				{hasDesktopBridge && <Separator />}
-
-				{hasDesktopBridge && (
-					<section className="space-y-3">
-						<div className="space-y-1">
-							<h3 className="text-base font-semibold">Desktop</h3>
-							<p className="text-sm text-muted-foreground">Desktop app details.</p>
-							<p className="text-xs text-muted-foreground">
-								Desktop app version: <span className="font-mono">{desktopAppVersion || 'Unknown'}</span>
-							</p>
-						</div>
-					</section>
-				)}
 			</CardContent>
-			<CardFooter className="items-stretch justify-end gap-2 sm:items-center">
+			<CardFooter className="items-center justify-between gap-4">
+				{hasDesktopBridge ? (
+					<div className="min-w-0 text-sm text-muted-foreground">
+						Desktop version <span className="font-mono text-foreground">{desktopAppVersion || 'Unknown'}</span>
+					</div>
+				) : (
+					<div />
+				)}
 				<Button onClick={saveDeviceSettings}>Apply</Button>
 			</CardFooter>
 		</Card>

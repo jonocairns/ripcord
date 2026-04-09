@@ -61,7 +61,7 @@ const Password = memo(({ forceMode = false, onSuccess }: TPasswordProps) => {
 	}, [canSubmit, values, setTrpcErrors, forceMode, onSuccess]);
 
 	return (
-		<Card>
+		<Card className="gap-4">
 			<CardHeader>
 				<CardTitle>Password</CardTitle>
 				<CardDescription>
@@ -70,13 +70,14 @@ const Password = memo(({ forceMode = false, onSuccess }: TPasswordProps) => {
 						: 'In this section, you can update your password.'}
 				</CardDescription>
 			</CardHeader>
-			<CardContent className="space-y-4">
+			<CardContent className="space-y-3 pt-0">
 				<Group label="Current Password">
 					<div className="relative">
 						<Input
 							{...r('currentPassword')}
 							type={showCurrentPassword ? 'text' : 'password'}
 							className="pr-10"
+							placeholder="Enter current password"
 							onEnter={canSubmit ? updatePassword : undefined}
 						/>
 						<button
@@ -97,6 +98,7 @@ const Password = memo(({ forceMode = false, onSuccess }: TPasswordProps) => {
 								{...r('newPassword')}
 								type={showNewPassword ? 'text' : 'password'}
 								className="pr-10"
+								placeholder="Enter new password"
 								onEnter={canSubmit ? updatePassword : undefined}
 							/>
 							<button
@@ -108,9 +110,10 @@ const Password = memo(({ forceMode = false, onSuccess }: TPasswordProps) => {
 								{showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
 							</button>
 						</div>
-						<p className="text-xs text-muted-foreground">Must be at least {MIN_PASSWORD_LENGTH} characters.</p>
-						{values.newPassword.length > 0 && !isPasswordLongEnough && (
+						{values.newPassword.length > 0 && !isPasswordLongEnough ? (
 							<p className="text-xs text-destructive">Password must be at least {MIN_PASSWORD_LENGTH} characters.</p>
+						) : (
+							<p className="text-xs text-muted-foreground">Must be at least {MIN_PASSWORD_LENGTH} characters.</p>
 						)}
 					</div>
 				</Group>
@@ -122,6 +125,7 @@ const Password = memo(({ forceMode = false, onSuccess }: TPasswordProps) => {
 								{...r('confirmNewPassword')}
 								type={showConfirmPassword ? 'text' : 'password'}
 								className="pr-10"
+								placeholder="Re-enter new password"
 								onEnter={canSubmit ? updatePassword : undefined}
 							/>
 							<button
@@ -133,13 +137,15 @@ const Password = memo(({ forceMode = false, onSuccess }: TPasswordProps) => {
 								{showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
 							</button>
 						</div>
-						{values.confirmNewPassword.length > 0 && !passwordsMatch && (
+						{values.confirmNewPassword.length > 0 && !passwordsMatch ? (
 							<p className="text-xs text-destructive">Passwords do not match.</p>
+						) : (
+							<p className="text-xs text-muted-foreground">Re-enter your new password to confirm it matches.</p>
 						)}
 					</div>
 				</Group>
 			</CardContent>
-			<CardFooter className="items-stretch justify-end gap-2 sm:items-center">
+			<CardFooter className="justify-start pt-0">
 				<Button onClick={updatePassword} disabled={!canSubmit}>
 					{forceMode ? 'Set New Password' : 'Update Password'}
 				</Button>
