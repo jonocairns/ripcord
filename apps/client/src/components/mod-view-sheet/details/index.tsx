@@ -31,8 +31,7 @@ const Row = memo(({ icon, label, value, details }: TRowProps) => {
 });
 
 const Details = memo(() => {
-	const { user, logins } = useModViewContext();
-	const lastLogin = logins[0]; // TODO: in the future we might show a list of logins, atm we just show info about the last one
+	const { user } = useModViewContext();
 
 	return (
 		<Card>
