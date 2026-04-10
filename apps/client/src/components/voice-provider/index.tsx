@@ -421,6 +421,7 @@ type TVoiceProviderProps = {
 };
 
 const RECOVERY_MAX_ATTEMPTS = 3;
+const RECOVERY_MAX_NONCE_RESTARTS = 5;
 const RECOVERY_TIMEOUT_MS = 12_000;
 const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
 
@@ -2113,6 +2114,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					return false;
 				}
 
+				let nonceRestarts = 0;
+
 				for (let attempt = 0; attempt < RECOVERY_MAX_ATTEMPTS; attempt++) {
 					if (attempt > 0) {
 						await new Promise<void>((resolve) => setTimeout(resolve, RECOVERY_BACKOFF_MS[attempt - 1]));
@@ -2238,8 +2241,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						return true;
 					} catch (error) {
 						if (error instanceof VoiceSessionReconnectChangedError) {
+							nonceRestarts += 1;
+
+							if (nonceRestarts > RECOVERY_MAX_NONCE_RESTARTS) {
+								logVoice('Voice transport recovery abandoned: too many session changes', {
+									nonceRestarts,
+								});
+								setConnectionStatus(ConnectionStatus.FAILED);
+								return false;
+							}
+
 							logVoice('Voice session changed during transport recovery, restarting attempt', {
 								attempt: attempt + 1,
+								nonceRestarts,
 								error,
 							});
 							attempt -= 1;

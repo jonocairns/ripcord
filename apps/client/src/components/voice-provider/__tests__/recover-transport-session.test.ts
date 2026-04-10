@@ -27,6 +27,7 @@ import { describe, expect, it, mock } from 'bun:test';
 // ---------------------------------------------------------------------------
 
 const RECOVERY_MAX_ATTEMPTS = 3;
+const RECOVERY_MAX_NONCE_RESTARTS = 5;
 const RECOVERY_TIMEOUT_MS = 12_000;
 const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
 
@@ -77,6 +78,8 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 	if (!deps.isConnected()) return false;
 	if (deps.currentVoiceChannelId() === undefined) return false;
 	if (!deps.hasRouterRtpCapabilities()) return false;
+
+	let nonceRestarts = 0;
 
 	for (let attempt = 0; attempt < RECOVERY_MAX_ATTEMPTS; attempt++) {
 		if (attempt > 0) {
@@ -131,6 +134,11 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 			return true;
 		} catch (error) {
 			if (error instanceof RecoverySessionChangedError) {
+				nonceRestarts++;
+				if (nonceRestarts > RECOVERY_MAX_NONCE_RESTARTS) {
+					deps.setConnectionStatus('failed');
+					return false;
+				}
 				attempt--;
 				continue;
 			}
@@ -328,6 +336,23 @@ describe('recoverTransportSession orchestration', () => {
 		expect(await runRecovery(deps)).toBe(true);
 		expect(transportCalls).toBe(2);
 		expect((deps.startMonitoring as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+	});
+
+	it('gives up after too many nonce restarts', async () => {
+		let nonce = 0;
+		let loadCalls = 0;
+		const deps = makeDeps({
+			getNonce: () => nonce,
+			loadDevice: mock(async () => {
+				loadCalls++;
+				nonce++; // nonce changes on every attempt
+				return { rtpCapabilities: {} };
+			}),
+		});
+
+		expect(await runRecovery(deps)).toBe(false);
+		expect(loadCalls).toBe(RECOVERY_MAX_NONCE_RESTARTS + 1);
+		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['failed']);
 	});
 
 	it('retries on transient error and succeeds on second attempt', async () => {
