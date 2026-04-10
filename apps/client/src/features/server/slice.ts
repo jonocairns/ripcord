@@ -34,6 +34,7 @@ export interface IServerState {
 	selectedChannelId: number | undefined;
 	lastTextChannelId: number | undefined;
 	currentVoiceChannelId: number | undefined;
+	voiceSessionReconnectNonce: number;
 	messagesMap: TMessagesMap;
 	users: TJoinedPublicUser[];
 	roles: TJoinedRole[];
@@ -96,6 +97,7 @@ type TServerStore = IServerState & {
 	removeChannel: (payload: { channelId: number }) => void;
 	setSelectedChannelId: (channelId: number | undefined) => void;
 	setCurrentVoiceChannelId: (channelId: number | undefined) => void;
+	bumpVoiceSessionReconnectNonce: () => void;
 	setChannelPermissions: (channelPermissions: TChannelUserPermissionsMap) => void;
 	setChannelReadState: (payload: { channelId: number; count: number | undefined }) => void;
 	setEmojis: (emojis: TJoinedEmoji[]) => void;
@@ -136,6 +138,7 @@ const initialState: IServerState = {
 	selectedChannelId: undefined,
 	lastTextChannelId: undefined,
 	currentVoiceChannelId: undefined,
+	voiceSessionReconnectNonce: 0,
 	messagesMap: {},
 	users: [],
 	roles: [],
@@ -436,6 +439,9 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 	},
 	setCurrentVoiceChannelId: (channelId) => {
 		set({ currentVoiceChannelId: channelId });
+	},
+	bumpVoiceSessionReconnectNonce: () => {
+		set((state) => ({ voiceSessionReconnectNonce: state.voiceSessionReconnectNonce + 1 }));
 	},
 	setChannelPermissions: (channelPermissions) => {
 		set({ channelPermissions });

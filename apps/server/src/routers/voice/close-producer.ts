@@ -7,7 +7,8 @@ import { protectedProcedure } from '../../utils/trpc';
 const closeProducerRoute = protectedProcedure
   .input(
     z.object({
-      kind: z.enum(StreamKind)
+      kind: z.enum(StreamKind),
+      producerId: z.string().optional()
     })
   )
   .mutation(async ({ ctx, input }) => {
@@ -27,10 +28,13 @@ const closeProducerRoute = protectedProcedure
 
     const producer = runtime.getProducer(input.kind, ctx.user.id);
 
-    invariant(producer, {
-      code: 'NOT_FOUND',
-      message: `Producer for ${input.kind} not found`
-    });
+    if (!producer) {
+      return;
+    }
+
+    if (input.producerId && producer.id !== input.producerId) {
+      return;
+    }
 
     runtime.removeProducer(ctx.user.id, input.kind);
   });

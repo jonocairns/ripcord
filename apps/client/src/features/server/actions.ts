@@ -118,25 +118,22 @@ export const joinServer = async (
 ) => {
 	const trpc = trpcClient ?? getTRPCClient();
 
-	// On reconnect the store still holds the previous session's state, so
-	// permission checks in initSubscriptions are valid. Subscribe before
-	// fetching so that events arriving during the query round-trip are
-	// captured. Replay them after setInitialData so the reconnect snapshot
-	// cannot overwrite newer user / voice updates.
-	//
-	// On initial connect the store is empty, so we must subscribe after
-	// setInitialData (otherwise permission-dependent subscriptions like
-	// plugin commands and user-delete would be skipped).
-	if (opts?.reconnect) {
-		startReconnectSnapshotEventBuffer();
-		cleanupServerSubscriptions();
-		unsubscribeFromServer = initSubscriptions();
-	}
-
 	try {
 		const data = await trpc.others.joinServer.query({ handshakeHash, password });
 
 		logDebug('joinServer', data);
+
+		// A reconnect restores auth as a side effect of joinServer. Subscribing
+		// before this point creates new subscriptions against an unauthenticated
+		// WS context, which immediately fails and floods the client with
+		// UNAUTHORIZED errors. Start subscriptions only after join succeeds, but
+		// still before applying the snapshot so newer live events can be buffered
+		// and replayed over the potentially stale snapshot payload.
+		if (opts?.reconnect && !data.mustChangePassword) {
+			startReconnectSnapshotEventBuffer();
+			cleanupServerSubscriptions();
+			unsubscribeFromServer = initSubscriptions();
+		}
 
 		useServerStore.getState().setInitialData(data);
 		setDisconnectInfo(undefined);
@@ -148,8 +145,8 @@ export const joinServer = async (
 			}
 			setPluginCommands(data.commands);
 		} else {
-			// mustChangePassword — no subscriptions needed; tear down any that
-			// were started early for the reconnect path.
+			// mustChangePassword — no subscriptions needed on either the initial
+			// connect or reconnect path.
 			cleanupServerSubscriptions();
 			setPluginCommands({});
 		}
@@ -176,6 +173,12 @@ export const joinServer = async (
 	setOnWsReconnect(() => {
 		logDebug('WS reconnected, re-joining server');
 
+		// tRPC automatically replays existing subscriptions when the socket
+		// reconnects, but the new server-side WS context starts unauthenticated.
+		// Tear them down immediately so they do not all fail before joinServer
+		// has a chance to restore the session.
+		cleanupServerSubscriptions();
+
 		wsReconnectGeneration += 1;
 		const generation = wsReconnectGeneration;
 
@@ -199,9 +202,12 @@ export const joinServer = async (
 				return 'cancelled';
 			}
 
-			// Clear voice channel only after auth/subscriptions are restored so
-			// VoiceProvider triggers re-join against a live server session.
-			useServerStore.getState().setCurrentVoiceChannelId(undefined);
+			const state = useServerStore.getState();
+			if (state.currentVoiceChannelId !== undefined) {
+				// Recreate channel-scoped voice subscriptions against the restored
+				// server-side voice session without forcing a drop/rejoin cycle.
+				state.bumpVoiceSessionReconnectNonce();
+			}
 
 			return 'joined';
 		};

@@ -7,8 +7,8 @@ import {
 	type TVoiceUserState,
 } from '@sharkord/shared';
 import { Device } from 'mediasoup-client';
-import type { RtpCapabilities, RtpCodecCapability } from 'mediasoup-client/types';
-import { createContext, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { AppData, Producer, RtpCapabilities, RtpCodecCapability } from 'mediasoup-client/types';
+import { createContext, memo, type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
@@ -19,8 +19,10 @@ import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
+import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { logVoice } from '@/helpers/browser-logger';
+import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import { getTRPCClient } from '@/lib/trpc';
@@ -34,7 +36,7 @@ import {
 	type TDesktopShareSource,
 	type TStartAppAudioCaptureInput,
 } from '@/runtime/types';
-import { type TDeviceSettings, VideoCodecPreference } from '@/types';
+import { type TDeviceSettings, type TRemoteUserStreamKinds, VideoCodecPreference } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
 import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } from './audio-context';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
@@ -65,6 +67,11 @@ type AudioVideoRefs = {
 type TPreparedMicPipeline = {
 	outboundStream: MediaStream;
 	outboundAudioTrack: MediaStreamTrack;
+};
+
+type TWatchedRemoteStreamsSnapshot = {
+	remoteUserStreams: Record<number, TRemoteUserStreamKinds[]>;
+	externalStreams: Record<number, TTrackedExternalWatchState>;
 };
 
 export type { AudioVideoRefs };
@@ -413,10 +420,30 @@ type TVoiceProviderProps = {
 	children: React.ReactNode;
 };
 
+const RECOVERY_MAX_ATTEMPTS = 3;
+const RECOVERY_TIMEOUT_MS = 12_000;
+const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
+
+const withRecoveryTimeout = <T,>(promise: Promise<T>): Promise<T> => {
+	let handle: ReturnType<typeof setTimeout> | undefined;
+	const timeoutPromise = new Promise<never>((_, reject) => {
+		handle = setTimeout(
+			() => reject(new Error('Voice transport recovery timed out')),
+			RECOVERY_TIMEOUT_MS,
+		);
+	});
+	return Promise.race([promise, timeoutPromise]).finally(() => {
+		if (handle !== undefined) {
+			clearTimeout(handle);
+		}
+	});
+};
+
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const [loading, setLoading] = useState(false);
 	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
 	const [ownVoiceActivityStream, setOwnVoiceActivityStream] = useState<MediaStream | undefined>(undefined);
+	const deviceRef = useRef<Device | undefined>(undefined);
 	const routerRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const sendRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const audioVideoRefsMap = useRef<Map<number, AudioVideoRefs>>(new Map());
@@ -425,6 +452,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
 	const confirmedOwnMicMuted = ownConfirmedVoiceState?.micMuted;
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
+	const voiceSessionReconnectNonce = useServerStore((state) => state.voiceSessionReconnectNonce);
 	const isConnected = useIsConnected();
 	const channelCan = useChannelCan(currentVoiceChannelId);
 	const currentChannelExternalStreams = useServerStore<TChannelExternalStreams>((state) => {
@@ -455,6 +483,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const voiceActivityCleanupRef = useRef<Map<number, VoiceActivityMonitorStop>>(new Map());
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
+	const localAudioStreamRef = useRef<MediaStream | undefined>(undefined);
+	const localVideoStreamRef = useRef<MediaStream | undefined>(undefined);
+	const localScreenShareStreamRef = useRef<MediaStream | undefined>(undefined);
+	const localScreenShareAudioStreamRef = useRef<MediaStream | undefined>(undefined);
+	const transportRecoveryPromiseRef = useRef<Promise<boolean> | undefined>(undefined);
+	const recoverTransportSessionRef = useRef<(() => Promise<boolean>) | undefined>(undefined);
+	const cleanupMicAudioPipelineRef = useRef<(() => Promise<void>) | undefined>(undefined);
+	const cleanupDesktopAppAudioRef = useRef<
+		((options?: { stopCapture?: boolean; preserveCurrentAudio?: boolean }) => Promise<void>) | undefined
+	>(undefined);
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
 		if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -483,6 +521,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		externalStreams,
 		remoteUserStreams,
 	} = useRemoteStreams();
+	const remoteUserStreamsRef = useRef(remoteUserStreams);
+	const externalStreamsRef = useRef(externalStreams);
 	const { pendingStreams, addPendingStream, removePendingStream, clearPendingStreamsForUser, clearAllPendingStreams } =
 		usePendingStreams();
 
@@ -502,10 +542,35 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearLocalStreams,
 	} = useLocalStreams();
 
+	useEffect(() => {
+		localAudioStreamRef.current = localAudioStream;
+	}, [localAudioStream]);
+
+	useEffect(() => {
+		localVideoStreamRef.current = localVideoStream;
+	}, [localVideoStream]);
+
+	useEffect(() => {
+		localScreenShareStreamRef.current = localScreenShareStream;
+	}, [localScreenShareStream]);
+
+	useEffect(() => {
+		localScreenShareAudioStreamRef.current = localScreenShareAudioStream;
+	}, [localScreenShareAudioStream]);
+
+	useEffect(() => {
+		remoteUserStreamsRef.current = remoteUserStreams;
+	}, [remoteUserStreams]);
+
+	useEffect(() => {
+		externalStreamsRef.current = externalStreams;
+	}, [externalStreams]);
+
 	const voiceCleanupRef = useRef<(() => void) | undefined>(undefined);
 	const hasHandledTransportFailureRef = useRef(false);
 	const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
 	const isConnectedRef = useRef(isConnected);
+	const voiceSessionReconnectNonceRef = useRef(voiceSessionReconnectNonce);
 	const screenSharePickerDataRef = useRef<TScreenSharePickerData | undefined>(undefined);
 	const screenSharePickerLoadPromiseRef = useRef<Promise<TScreenSharePickerData> | undefined>(undefined);
 
@@ -516,20 +581,30 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 
 		hasHandledTransportFailureRef.current = true;
-		logVoice('Transport failure detected, triggering voice cleanup');
+		logVoice('Transport failure detected');
 
-		if (isConnectedRef.current && currentVoiceChannelIdRef.current !== undefined) {
-			useServerStore.getState().setCurrentVoiceChannelId(undefined);
-			useServerStore.getState().updateOwnVoiceState({
-				webcamEnabled: false,
-				sharingScreen: false,
-			});
-			useServerStore.getState().setPinnedCard(undefined);
-			playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
-			toast.info('Voice connection was lost. Rejoin the voice channel manually.');
-		}
+		void (async () => {
+			const recovered = await recoverTransportSessionRef.current?.();
 
-		voiceCleanupRef.current?.();
+			if (recovered) {
+				hasHandledTransportFailureRef.current = false;
+				return;
+			}
+
+			if (isConnectedRef.current && currentVoiceChannelIdRef.current !== undefined) {
+				useServerStore.getState().setCurrentVoiceChannelId(undefined);
+				useServerStore.getState().updateOwnVoiceState({
+					webcamEnabled: false,
+					sharingScreen: false,
+				});
+				useServerStore.getState().setPinnedCard(undefined);
+				playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+				toast.info('Voice connection was lost. Rejoin the voice channel manually.');
+			}
+
+			hasHandledTransportFailureRef.current = false;
+			voiceCleanupRef.current?.();
+		})();
 	}, []);
 
 	const {
@@ -551,6 +626,85 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearAllPendingStreams,
 		onTransportFailure,
 	});
+
+	const captureWatchedRemoteStreams = useCallback((): TWatchedRemoteStreamsSnapshot => {
+		const watchedRemoteStreams: Record<number, TRemoteUserStreamKinds[]> = {};
+		const watchedExternalStreams: Record<number, TTrackedExternalWatchState> = {};
+
+		Object.entries(remoteUserStreamsRef.current).forEach(([userId, streams]) => {
+			const watchedKinds: TRemoteUserStreamKinds[] = [];
+
+			if (streams[StreamKind.VIDEO]) {
+				watchedKinds.push(StreamKind.VIDEO);
+			}
+
+			if (streams[StreamKind.SCREEN]) {
+				watchedKinds.push(StreamKind.SCREEN);
+			}
+
+			if (streams[StreamKind.SCREEN_AUDIO]) {
+				watchedKinds.push(StreamKind.SCREEN_AUDIO);
+			}
+
+			if (watchedKinds.length > 0) {
+				watchedRemoteStreams[Number(userId)] = watchedKinds;
+			}
+		});
+
+		Object.entries(externalStreamsRef.current).forEach(([streamId, stream]) => {
+			const watchedState = {
+				audio: stream.audioStream !== undefined,
+				video: stream.videoStream !== undefined,
+			};
+
+			if (watchedState.audio || watchedState.video) {
+				watchedExternalStreams[Number(streamId)] = watchedState;
+			}
+		});
+
+		return {
+			remoteUserStreams: watchedRemoteStreams,
+			externalStreams: watchedExternalStreams,
+		};
+	}, []);
+
+	const closeProducerOnServer = useCallback(async (kind: StreamKind, producerId: string) => {
+		try {
+			await getTRPCClient().voice.closeProducer.mutate({
+				kind,
+				producerId,
+			});
+		} catch (error) {
+			logVoice('Error closing producer on server', { error, kind, producerId });
+		}
+	}, []);
+
+	const bindProducerCloseHandler = useCallback(
+		({
+			producer,
+			kind,
+			producerRef,
+			logLabel,
+		}: {
+			producer: Producer<AppData>;
+			kind: StreamKind;
+			producerRef: MutableRefObject<Producer<AppData> | undefined>;
+			logLabel: string;
+		}) => {
+			producer.on('@close', () => {
+				logVoice(`${logLabel} producer closed`, {
+					producerId: producer.id,
+				});
+
+				if (producerRef.current === producer) {
+					producerRef.current = undefined;
+				}
+
+				void closeProducerOnServer(kind, producer.id);
+			});
+		},
+		[closeProducerOnServer],
+	);
 
 	const acceptStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
@@ -769,6 +923,28 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		micGainPipeline.gainNode.gain.setValueAtTime(nextVolume, currentTime);
 	}, []);
 
+	const ensureVoiceDeviceLoaded = useCallback(async () => {
+		if (deviceRef.current) {
+			return deviceRef.current;
+		}
+
+		const currentRouterRtpCapabilities = routerRtpCapabilities.current;
+
+		if (!currentRouterRtpCapabilities) {
+			throw new Error('Router RTP capabilities not available');
+		}
+
+		const device = await Device.factory();
+		await device.load({
+			routerRtpCapabilities: currentRouterRtpCapabilities,
+		});
+
+		deviceRef.current = device;
+		sendRtpCapabilities.current = device.rtpCapabilities;
+
+		return device;
+	}, []);
+
 	useEffect(() => {
 		const handleVolumeSettingsUpdated = (event: Event) => {
 			if (!(event instanceof CustomEvent)) return;
@@ -821,6 +997,263 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		};
 	}, [applyMicGainVolume, currentVoiceChannelId, localAudioStream]);
 
+	const publishMicTrack = useCallback(
+		async (stream: MediaStream, track: MediaStreamTrack) => {
+			setLocalAudioStream(stream);
+			track.enabled = !ownVoiceStateSelector(useServerStore.getState()).micMuted;
+
+			logVoice('Obtained audio track', { audioTrack: track });
+
+			const audioConfig = getAudioOpusConfig(currentVoiceChannelIdRef.current);
+			const audioProducer = await producerTransport.current?.produce({
+				track,
+				encodings: [{ maxBitrate: audioConfig.maxBitrate }],
+				codecOptions: audioConfig.codecOptions,
+				appData: { kind: StreamKind.AUDIO },
+			});
+
+			if (!audioProducer) {
+				throw new Error('Failed to create microphone producer');
+			}
+
+			localAudioProducer.current = audioProducer;
+
+			logVoice('Microphone audio producer created', {
+				producer: audioProducer,
+			});
+
+			bindProducerCloseHandler({
+				producer: audioProducer,
+				kind: StreamKind.AUDIO,
+				producerRef: localAudioProducer,
+				logLabel: 'Audio',
+			});
+
+			track.onended = () => {
+				logVoice('Audio track ended, cleaning up microphone');
+
+				void cleanupMicAudioPipelineRef.current?.();
+				audioProducer.close();
+
+				setLocalAudioStream((currentStream) => {
+					return currentStream === stream ? undefined : currentStream;
+				});
+			};
+		},
+		[bindProducerCloseHandler, localAudioProducer, producerTransport, setLocalAudioStream],
+	);
+
+	const publishWebcamTrack = useCallback(
+		async (stream: MediaStream, track: MediaStreamTrack) => {
+			setLocalVideoStream(stream);
+
+			logVoice('Obtained video track', { videoTrack: track });
+
+			const preferredVideoCodec = resolvePreferredVideoCodec(sendRtpCapabilities.current, devices.videoCodec);
+
+			if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
+				logVoice('Preferred webcam codec unavailable, falling back to auto', {
+					preferredCodec: devices.videoCodec,
+				});
+			}
+
+			const requestedWebcamResolution = getResWidthHeight(devices?.webcamResolution);
+			const webcamTrackSettings = track.getSettings();
+			const webcamBitratePolicy = getVideoBitratePolicy({
+				profile: 'camera',
+				width: webcamTrackSettings.width ?? requestedWebcamResolution.width,
+				height: webcamTrackSettings.height ?? requestedWebcamResolution.height,
+				frameRate: webcamTrackSettings.frameRate ?? devices.webcamFramerate,
+				codecMimeType: preferredVideoCodec?.mimeType,
+			});
+
+			const videoProducer = await producerTransport.current?.produce({
+				track,
+				encodings: [{ maxBitrate: webcamBitratePolicy.maxKbps * 1000 }],
+				codec: preferredVideoCodec,
+				codecOptions: {
+					videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
+				},
+				appData: { kind: StreamKind.VIDEO },
+			});
+
+			if (!videoProducer) {
+				throw new Error('Failed to create webcam producer');
+			}
+
+			localVideoProducer.current = videoProducer;
+
+			logVoice('Webcam video producer created', {
+				producer: videoProducer,
+			});
+
+			bindProducerCloseHandler({
+				producer: videoProducer,
+				kind: StreamKind.VIDEO,
+				producerRef: localVideoProducer,
+				logLabel: 'Video',
+			});
+
+			track.onended = () => {
+				logVoice('Video track ended, cleaning up webcam');
+
+				stream.getVideoTracks().forEach((currentTrack) => {
+					currentTrack.stop();
+				});
+				videoProducer.close();
+
+				setLocalVideoStream((currentStream) => {
+					return currentStream === stream ? undefined : currentStream;
+				});
+
+				updateOwnVoiceState({ webcamEnabled: false });
+
+				void (async () => {
+					try {
+						await getTRPCClient().voice.updateState.mutate({
+							webcamEnabled: false,
+						});
+					} catch (error) {
+						logVoice('Error syncing webcam state after native track end', { error });
+					}
+				})();
+			};
+		},
+		[
+			bindProducerCloseHandler,
+			devices.videoCodec,
+			devices.webcamFramerate,
+			devices.webcamResolution,
+			localVideoProducer,
+			producerTransport,
+			setLocalVideoStream,
+		],
+	);
+
+	const publishScreenShareTrack = useCallback(
+		async (stream: MediaStream, track: MediaStreamTrack) => {
+			setLocalScreenShare(stream);
+
+			logVoice('Obtained video track', { videoTrack: track });
+
+			track.contentHint = 'detail';
+
+			const preferredVideoCodec = resolvePreferredVideoCodec(sendRtpCapabilities.current, devices.videoCodec);
+
+			if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
+				logVoice('Preferred screen share codec unavailable, falling back to auto', {
+					preferredCodec: devices.videoCodec,
+				});
+			}
+
+			const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
+			const screenTrackSettings = track.getSettings();
+			const screenBitratePolicy = getVideoBitratePolicy({
+				profile: 'screen',
+				width: screenTrackSettings.width ?? requestedScreenResolution.width,
+				height: screenTrackSettings.height ?? requestedScreenResolution.height,
+				frameRate: screenTrackSettings.frameRate ?? devices.screenFramerate,
+				codecMimeType: preferredVideoCodec?.mimeType,
+			});
+
+			const screenShareProducer = await producerTransport.current?.produce({
+				track,
+				encodings: [{ maxBitrate: screenBitratePolicy.maxKbps * 1000 }],
+				codecOptions: {
+					videoGoogleStartBitrate: screenBitratePolicy.startKbps,
+				},
+				codec: preferredVideoCodec,
+				appData: { kind: StreamKind.SCREEN },
+			});
+
+			if (!screenShareProducer) {
+				throw new Error('Failed to create screen share producer');
+			}
+
+			localScreenShareProducer.current = screenShareProducer;
+
+			bindProducerCloseHandler({
+				producer: screenShareProducer,
+				kind: StreamKind.SCREEN,
+				producerRef: localScreenShareProducer,
+				logLabel: 'Screen share',
+			});
+
+			track.onended = () => {
+				logVoice('Screen share track ended, cleaning up screen share');
+
+				stream.getTracks().forEach((currentTrack) => {
+					currentTrack.stop();
+				});
+				screenShareProducer.close();
+				localScreenShareAudioProducer.current?.close();
+				localScreenShareAudioProducer.current = undefined;
+				standbyDisplayAudioTrackRef.current = undefined;
+				standbyDisplayAudioStreamRef.current = undefined;
+				void cleanupDesktopAppAudioRef.current?.();
+
+				setLocalScreenShare(undefined);
+				setLocalScreenShareAudio(undefined);
+			};
+		},
+		[
+			bindProducerCloseHandler,
+			devices.screenFramerate,
+			devices.screenResolution,
+			devices.videoCodec,
+			localScreenShareAudioProducer,
+			localScreenShareProducer,
+			producerTransport,
+			setLocalScreenShare,
+			setLocalScreenShareAudio,
+		],
+	);
+
+	const publishScreenShareAudioTrack = useCallback(
+		async (
+			stream: MediaStream,
+			track: MediaStreamTrack,
+			options: {
+				onTrackEnded?: () => void | Promise<void>;
+			} = {},
+		) => {
+			setLocalScreenShareAudio(stream);
+
+			const screenAudioProducer = await producerTransport.current?.produce({
+				track,
+				appData: { kind: StreamKind.SCREEN_AUDIO },
+			});
+
+			if (!screenAudioProducer) {
+				throw new Error('Failed to create screen share audio producer');
+			}
+
+			localScreenShareAudioProducer.current = screenAudioProducer;
+
+			bindProducerCloseHandler({
+				producer: screenAudioProducer,
+				kind: StreamKind.SCREEN_AUDIO,
+				producerRef: localScreenShareAudioProducer,
+				logLabel: 'Screen share audio',
+			});
+
+			track.onended = () => {
+				screenAudioProducer.close();
+
+				if (localScreenShareAudioProducer.current === screenAudioProducer) {
+					localScreenShareAudioProducer.current = undefined;
+				}
+
+				setLocalScreenShareAudio((currentStream) => {
+					return currentStream === stream ? undefined : currentStream;
+				});
+
+				void options.onTrackEnded?.();
+			};
+		},
+		[bindProducerCloseHandler, localScreenShareAudioProducer, producerTransport, setLocalScreenShareAudio],
+	);
+
 	const cleanupMicAudioPipeline = useCallback(async () => {
 		const currentAudioProducer = localAudioProducer.current;
 		localAudioProducer.current = undefined;
@@ -862,6 +1295,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 		}
 	}, [localAudioProducer]);
+	cleanupMicAudioPipelineRef.current = cleanupMicAudioPipeline;
 
 	// Acquire mic stream and build the processing pipeline (WASM denoise + gain).
 	// This has no dependency on the mediasoup device or transports, so it can run
@@ -966,55 +1400,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const produceMicTrack = useCallback(
 		async (prepared: TPreparedMicPipeline) => {
 			const { outboundStream, outboundAudioTrack } = prepared;
-
-			setLocalAudioStream(outboundStream);
-			outboundAudioTrack.enabled = !ownVoiceState.micMuted;
-
-			logVoice('Obtained audio track', { audioTrack: outboundAudioTrack });
-
-			const audioConfig = getAudioOpusConfig(currentVoiceChannelIdRef.current);
-			const audioProducer = await producerTransport.current?.produce({
-				track: outboundAudioTrack,
-				encodings: [{ maxBitrate: audioConfig.maxBitrate }],
-				codecOptions: audioConfig.codecOptions,
-				appData: { kind: StreamKind.AUDIO },
-			});
-			localAudioProducer.current = audioProducer;
-
-			logVoice('Microphone audio producer created', {
-				producer: audioProducer,
-			});
-
-			audioProducer?.on('@close', async () => {
-				logVoice('Audio producer closed');
-
-				if (localAudioProducer.current === audioProducer) {
-					localAudioProducer.current = undefined;
-				}
-
-				const trpc = getTRPCClient();
-
-				try {
-					await trpc.voice.closeProducer.mutate({
-						kind: StreamKind.AUDIO,
-					});
-				} catch (error) {
-					logVoice('Error closing audio producer', { error });
-				}
-			});
-
-			outboundAudioTrack.onended = () => {
-				logVoice('Audio track ended, cleaning up microphone');
-
-				void cleanupMicAudioPipeline();
-				audioProducer?.close();
-
-				setLocalAudioStream((currentStream) => {
-					return currentStream === outboundStream ? undefined : currentStream;
-				});
-			};
+			await publishMicTrack(outboundStream, outboundAudioTrack);
 		},
-		[producerTransport, setLocalAudioStream, localAudioProducer, ownVoiceState.micMuted, cleanupMicAudioPipeline],
+		[publishMicTrack],
 	);
 
 	const startMicStream = useCallback(async () => {
@@ -1053,87 +1441,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			logVoice('Webcam stream obtained', { stream });
 
-			setLocalVideoStream(stream);
-
 			const videoTrack = stream.getVideoTracks()[0];
 
 			if (videoTrack) {
-				logVoice('Obtained video track', { videoTrack });
-
-				const preferredVideoCodec = resolvePreferredVideoCodec(sendRtpCapabilities.current, devices.videoCodec);
-
-				if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
-					logVoice('Preferred webcam codec unavailable, falling back to auto', {
-						preferredCodec: devices.videoCodec,
-					});
-				}
-
-				const webcamTrackSettings = videoTrack.getSettings();
-				const webcamBitratePolicy = getVideoBitratePolicy({
-					profile: 'camera',
-					width: webcamTrackSettings.width ?? requestedWebcamResolution.width,
-					height: webcamTrackSettings.height ?? requestedWebcamResolution.height,
-					frameRate: webcamTrackSettings.frameRate ?? devices.webcamFramerate,
-					codecMimeType: preferredVideoCodec?.mimeType,
-				});
-
-				const videoProducer = await producerTransport.current?.produce({
-					track: videoTrack,
-					encodings: [{ maxBitrate: webcamBitratePolicy.maxKbps * 1000 }],
-					codec: preferredVideoCodec,
-					codecOptions: {
-						videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
-					},
-					appData: { kind: StreamKind.VIDEO },
-				});
-				localVideoProducer.current = videoProducer;
-
-				logVoice('Webcam video producer created', {
-					producer: videoProducer,
-				});
-
-				videoProducer?.on('@close', async () => {
-					logVoice('Video producer closed');
-
-					if (localVideoProducer.current === videoProducer) {
-						localVideoProducer.current = undefined;
-					}
-
-					const trpc = getTRPCClient();
-
-					try {
-						await trpc.voice.closeProducer.mutate({
-							kind: StreamKind.VIDEO,
-						});
-					} catch (error) {
-						logVoice('Error closing video producer', { error });
-					}
-				});
-
-				videoTrack.onended = () => {
-					logVoice('Video track ended, cleaning up webcam');
-
-					stream.getVideoTracks().forEach((track) => {
-						track.stop();
-					});
-					videoProducer?.close();
-
-					setLocalVideoStream((currentStream) => {
-						return currentStream === stream ? undefined : currentStream;
-					});
-
-					updateOwnVoiceState({ webcamEnabled: false });
-
-					void (async () => {
-						try {
-							await getTRPCClient().voice.updateState.mutate({
-								webcamEnabled: false,
-							});
-						} catch (error) {
-							logVoice('Error syncing webcam state after native track end', { error });
-						}
-					})();
-				};
+				await publishWebcamTrack(stream, videoTrack);
 			} else {
 				throw new Error('Failed to obtain video track from webcam');
 			}
@@ -1141,15 +1452,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			logVoice('Error starting webcam stream', { error });
 			throw error;
 		}
-	}, [
-		setLocalVideoStream,
-		localVideoProducer,
-		producerTransport,
-		devices.webcamId,
-		devices.webcamFramerate,
-		devices.webcamResolution,
-		devices.videoCodec,
-	]);
+	}, [devices.webcamFramerate, devices.webcamId, devices.webcamResolution, publishWebcamTrack]);
 
 	const stopWebcamStream = useCallback(() => {
 		logVoice('Stopping webcam stream');
@@ -1256,6 +1559,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		},
 		[setLocalScreenShareAudio],
 	);
+	cleanupDesktopAppAudioRef.current = cleanupDesktopAppAudio;
 
 	const stopScreenShareStream = useCallback(() => {
 		logVoice('Stopping screen share stream');
@@ -1433,9 +1737,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				});
 
 				logVoice('Screen share stream obtained', { stream });
-				// Make the local preview visible as soon as display capture succeeds.
-				// Sidecar audio startup can continue afterwards without blocking video.
-				setLocalScreenShare(stream);
 
 				const videoTrack = stream.getVideoTracks()[0];
 				let audioTrack: MediaStreamTrack | undefined = stream.getAudioTracks()[0];
@@ -1443,69 +1744,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				standbyDisplayAudioStreamRef.current = undefined;
 
 				if (videoTrack) {
-					logVoice('Obtained video track', { videoTrack });
-
-					// Favor text/detail preservation for desktop/screen content.
-					videoTrack.contentHint = 'detail';
-
-					const preferredVideoCodec = resolvePreferredVideoCodec(sendRtpCapabilities.current, devices.videoCodec);
-
-					if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
-						logVoice('Preferred screen share codec unavailable, falling back to auto', {
-							preferredCodec: devices.videoCodec,
-						});
-					}
-
-					const screenTrackSettings = videoTrack.getSettings();
-					const screenBitratePolicy = getVideoBitratePolicy({
-						profile: 'screen',
-						width: screenTrackSettings.width ?? requestedScreenResolution.width,
-						height: screenTrackSettings.height ?? requestedScreenResolution.height,
-						frameRate: screenTrackSettings.frameRate ?? devices.screenFramerate,
-						codecMimeType: preferredVideoCodec?.mimeType,
-					});
-
-					localScreenShareProducer.current = await producerTransport.current?.produce({
-						track: videoTrack,
-						encodings: [{ maxBitrate: screenBitratePolicy.maxKbps * 1000 }],
-						codecOptions: {
-							videoGoogleStartBitrate: screenBitratePolicy.startKbps,
-						},
-						codec: preferredVideoCodec,
-						appData: { kind: StreamKind.SCREEN },
-					});
-
-					localScreenShareProducer.current?.on('@close', async () => {
-						logVoice('Screen share producer closed');
-
-						const trpc = getTRPCClient();
-
-						try {
-							await trpc.voice.closeProducer.mutate({
-								kind: StreamKind.SCREEN,
-							});
-						} catch (error) {
-							logVoice('Error closing screen share producer', { error });
-						}
-					});
-
-					videoTrack.onended = () => {
-						logVoice('Screen share track ended, cleaning up screen share');
-
-						localScreenShareStream?.getTracks().forEach((track) => {
-							track.stop();
-						});
-						localScreenShareProducer.current?.close();
-						localScreenShareProducer.current = undefined;
-						localScreenShareAudioProducer.current?.close();
-						localScreenShareAudioProducer.current = undefined;
-						standbyDisplayAudioTrackRef.current = undefined;
-						standbyDisplayAudioStreamRef.current = undefined;
-						void cleanupDesktopAppAudio();
-
-						setLocalScreenShare(undefined);
-						setLocalScreenShareAudio(undefined);
-					};
+					await publishScreenShareTrack(stream, videoTrack);
 
 					if (useSidecarAudio && desktopBridge && desktopSelection) {
 						try {
@@ -1660,36 +1899,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 					if (useSidecarAudio && appAudioPipelineRef.current?.track) {
 						const appAudioTrack = appAudioPipelineRef.current.track;
-						setLocalScreenShareAudio(appAudioPipelineRef.current.stream);
-
-						localScreenShareAudioProducer.current = await producerTransport.current?.produce({
-							track: appAudioTrack,
-							appData: { kind: StreamKind.SCREEN_AUDIO },
+						await publishScreenShareAudioTrack(appAudioPipelineRef.current.stream, appAudioTrack, {
+							onTrackEnded: () => {
+								return cleanupDesktopAppAudio({
+									stopCapture: false,
+								});
+							},
 						});
-
-						appAudioTrack.onended = () => {
-							localScreenShareAudioProducer.current?.close();
-							localScreenShareAudioProducer.current = undefined;
-							setLocalScreenShareAudio(undefined);
-
-							void cleanupDesktopAppAudio({
-								stopCapture: false,
-							});
-						};
 					} else if (audioTrack) {
 						logVoice('Obtained audio track', { audioTrack });
-						setLocalScreenShareAudio(new MediaStream([audioTrack]));
-
-						localScreenShareAudioProducer.current = await producerTransport.current?.produce({
-							track: audioTrack,
-							appData: { kind: StreamKind.SCREEN_AUDIO },
-						});
-
-						audioTrack.onended = () => {
-							localScreenShareAudioProducer.current?.close();
-							localScreenShareAudioProducer.current = undefined;
-							setLocalScreenShareAudio(undefined);
-						};
+						await publishScreenShareAudioTrack(new MediaStream([audioTrack]), audioTrack);
 					} else {
 						await cleanupDesktopAppAudio();
 						setLocalScreenShareAudio(undefined);
@@ -1713,16 +1932,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		},
 		[
 			cleanupDesktopAppAudio,
-			setLocalScreenShare,
-			localScreenShareProducer,
-			localScreenShareAudioProducer,
-			producerTransport,
-			localScreenShareStream,
-			setLocalScreenShareAudio,
 			devices.screenAudioMode,
-			devices.screenResolution,
 			devices.screenFramerate,
-			devices.videoCodec,
+			devices.screenResolution,
+			localScreenShareAudioProducer,
+			publishScreenShareAudioTrack,
+			publishScreenShareTrack,
+			setLocalScreenShareAudio,
 		],
 	);
 
@@ -1738,6 +1954,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearRemoteUserStreams();
 		clearExternalStreams();
 		cleanupTransports();
+		deviceRef.current = undefined;
+		routerRtpCapabilities.current = null;
 		sendRtpCapabilities.current = null;
 
 		setConnectionStatus(ConnectionStatus.DISCONNECTED);
@@ -1803,6 +2021,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				await device.load({
 					routerRtpCapabilities: incomingRouterRtpCapabilities,
 				});
+				deviceRef.current = device;
 				sendRtpCapabilities.current = device.rtpCapabilities;
 
 				await Promise.all([
@@ -1859,6 +2078,209 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		],
 	);
 
+	const recoverTransportSession = useCallback(async (): Promise<boolean> => {
+		if (transportRecoveryPromiseRef.current) {
+			return transportRecoveryPromiseRef.current;
+		}
+
+		const recoveryPromise = (async () => {
+			try {
+				if (!isConnectedRef.current) {
+					logVoice('Skipping transport recovery because server connection is unavailable');
+					return false;
+				}
+
+				if (currentVoiceChannelIdRef.current === undefined) {
+					logVoice('Skipping transport recovery because the user is no longer in voice');
+					return false;
+				}
+
+				if (!routerRtpCapabilities.current) {
+					logVoice('Skipping transport recovery because router RTP capabilities are unavailable');
+					return false;
+				}
+
+				for (let attempt = 0; attempt < RECOVERY_MAX_ATTEMPTS; attempt++) {
+					if (attempt > 0) {
+						await new Promise<void>((resolve) => setTimeout(resolve, RECOVERY_BACKOFF_MS[attempt - 1]));
+
+						if (!isConnectedRef.current || currentVoiceChannelIdRef.current === undefined) {
+							logVoice('Aborting transport recovery after backoff: connection or channel lost');
+							return false;
+						}
+					}
+
+					const nonceAtStart = voiceSessionReconnectNonceRef.current;
+					const isNonceStale = () => voiceSessionReconnectNonceRef.current !== nonceAtStart;
+
+					try {
+						logVoice('Attempting in-session voice transport recovery', {
+							attempt: attempt + 1,
+							channelId: currentVoiceChannelIdRef.current,
+						});
+
+						const watchedStreamsSnapshot = captureWatchedRemoteStreams();
+
+						setConnectionStatus(ConnectionStatus.CONNECTING);
+						stopMonitoring();
+						resetStats();
+						clearRemoteUserStreams();
+						clearExternalStreams();
+						cleanupTransports();
+
+						const device = await withRecoveryTimeout(ensureVoiceDeviceLoaded());
+
+						if (isNonceStale()) {
+							logVoice('Transport recovery cancelled: WS session replaced during device load');
+							return false;
+						}
+
+						await withRecoveryTimeout(
+							Promise.all([createProducerTransport(device), createConsumerTransport(device)]),
+						);
+
+						if (isNonceStale()) {
+							logVoice('Transport recovery cancelled: WS session replaced during transport creation');
+							return false;
+						}
+
+						const currentRtpCapabilities = device.rtpCapabilities;
+						sendRtpCapabilities.current = currentRtpCapabilities;
+
+						const republishTasks: Promise<void>[] = [];
+
+						const currentAudioStream = localAudioStreamRef.current;
+						const currentAudioTrack = currentAudioStream?.getAudioTracks()[0];
+						if (currentAudioStream && currentAudioTrack && currentAudioTrack.readyState === 'live') {
+							republishTasks.push(publishMicTrack(currentAudioStream, currentAudioTrack));
+						}
+
+						const currentVideoStream = localVideoStreamRef.current;
+						const currentVideoTrack = currentVideoStream?.getVideoTracks()[0];
+						if (currentVideoStream && currentVideoTrack && currentVideoTrack.readyState === 'live') {
+							republishTasks.push(publishWebcamTrack(currentVideoStream, currentVideoTrack));
+						}
+
+						const currentScreenShareStream = localScreenShareStreamRef.current;
+						const currentScreenShareTrack = currentScreenShareStream?.getVideoTracks()[0];
+						if (currentScreenShareStream && currentScreenShareTrack && currentScreenShareTrack.readyState === 'live') {
+							republishTasks.push(publishScreenShareTrack(currentScreenShareStream, currentScreenShareTrack));
+						}
+
+						const currentScreenShareAudioStream = localScreenShareAudioStreamRef.current;
+						const currentScreenShareAudioTrack = currentScreenShareAudioStream?.getAudioTracks()[0];
+						if (
+							currentScreenShareAudioStream &&
+							currentScreenShareAudioTrack &&
+							currentScreenShareAudioTrack.readyState === 'live'
+						) {
+							const shouldCleanupDesktopAudio = appAudioPipelineRef.current?.track === currentScreenShareAudioTrack;
+
+							republishTasks.push(
+								publishScreenShareAudioTrack(currentScreenShareAudioStream, currentScreenShareAudioTrack, {
+									onTrackEnded: shouldCleanupDesktopAudio
+										? () => {
+												return cleanupDesktopAppAudio({
+													stopCapture: false,
+												});
+											}
+										: undefined,
+								}),
+							);
+						}
+
+						await withRecoveryTimeout(
+							Promise.all([consumeExistingProducers(currentRtpCapabilities), ...republishTasks]),
+						);
+
+						if (isNonceStale()) {
+							logVoice('Transport recovery cancelled: WS session replaced during consume/republish');
+							return false;
+						}
+
+						const restoreWatchTasks: Promise<void>[] = [];
+
+						Object.entries(watchedStreamsSnapshot.remoteUserStreams).forEach(([remoteId, kinds]) => {
+							const numericRemoteId = Number(remoteId);
+
+							kinds.forEach((kind) => {
+								restoreWatchTasks.push(consume(numericRemoteId, kind, currentRtpCapabilities));
+							});
+						});
+
+						Object.entries(watchedStreamsSnapshot.externalStreams).forEach(([streamId, watchedState]) => {
+							const numericStreamId = Number(streamId);
+
+							if (watchedState.audio) {
+								restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities));
+							}
+
+							if (watchedState.video) {
+								restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities));
+							}
+						});
+
+						await withRecoveryTimeout(Promise.all(restoreWatchTasks));
+
+						if (isNonceStale()) {
+							logVoice('Transport recovery cancelled: WS session replaced during watch restoration');
+							return false;
+						}
+
+						startMonitoring(producerTransport.current, consumerTransport.current);
+						setConnectionStatus(ConnectionStatus.CONNECTED);
+						logVoice('Voice transport recovery completed successfully');
+
+						return true;
+					} catch (error) {
+						const isLastAttempt = attempt === RECOVERY_MAX_ATTEMPTS - 1;
+
+						if (!isLastAttempt && !isNonRetriableTrpcError(error)) {
+							logVoice('Voice transport recovery attempt failed, retrying', {
+								attempt: attempt + 1,
+								error,
+							});
+							continue;
+						}
+
+						logVoice('Voice transport recovery failed', { error });
+						setConnectionStatus(ConnectionStatus.FAILED);
+						return false;
+					}
+				}
+
+				return false;
+			} finally {
+				transportRecoveryPromiseRef.current = undefined;
+			}
+		})();
+
+		transportRecoveryPromiseRef.current = recoveryPromise;
+		return recoveryPromise;
+	}, [
+		captureWatchedRemoteStreams,
+		clearExternalStreams,
+		clearRemoteUserStreams,
+		cleanupDesktopAppAudio,
+		cleanupTransports,
+		consume,
+		consumeExistingProducers,
+		createConsumerTransport,
+		createProducerTransport,
+		ensureVoiceDeviceLoaded,
+		producerTransport,
+		consumerTransport,
+		publishMicTrack,
+		publishScreenShareAudioTrack,
+		publishScreenShareTrack,
+		publishWebcamTrack,
+		resetStats,
+		startMonitoring,
+		stopMonitoring,
+	]);
+
+	recoverTransportSessionRef.current = recoverTransportSession;
+
 	const { setMicMuted, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } = useVoiceControls({
 		startMicStream,
 		localAudioStream,
@@ -1885,7 +2307,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		isConnectedRef.current = isConnected;
 		currentVoiceChannelIdRef.current = currentVoiceChannelId;
 		canSpeakRef.current = channelCan(ChannelPermission.SPEAK);
-	}, [channelCan, currentVoiceChannelId, isConnected]);
+		voiceSessionReconnectNonceRef.current = voiceSessionReconnectNonce;
+	}, [channelCan, currentVoiceChannelId, isConnected, voiceSessionReconnectNonce]);
 
 	useEffect(() => {
 		const pushTarget = isPushToMuteHeldRef.current ? true : isPushToTalkHeldRef.current ? false : undefined;
@@ -2003,7 +2426,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		removeExternalStream,
 		clearRemoteUserStreamsForUser,
 		clearPendingStreamsForUser,
+		onTransportFailure,
 		rtpCapabilities: sendRtpCapabilities.current,
+		reconnectNonce: voiceSessionReconnectNonce,
 	});
 
 	useEffect(() => {

@@ -16,7 +16,9 @@ type TEvents = {
 	removeExternalStream: (streamId: number) => void;
 	clearRemoteUserStreamsForUser: (userId: number) => void;
 	clearPendingStreamsForUser: (userId: number) => void;
+	onTransportFailure: () => void;
 	rtpCapabilities: RtpCapabilities | null;
+	reconnectNonce: number;
 };
 
 const useVoiceEvents = ({
@@ -28,14 +30,19 @@ const useVoiceEvents = ({
 	removeExternalStream,
 	clearRemoteUserStreamsForUser,
 	clearPendingStreamsForUser,
+	onTransportFailure,
 	rtpCapabilities,
+	reconnectNonce,
 }: TEvents) => {
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const ownUserId = useOwnUserId();
 
 	useEffect(() => {
-		if (!currentVoiceChannelId) {
-			logVoice('Voice events not initialized - missing channelId');
+		// Force a fresh subscription set after WS reconnect even when the voice
+		// channel id itself did not change.
+		void reconnectNonce;
+
+		if (currentVoiceChannelId === undefined) {
 			return;
 		}
 
@@ -161,6 +168,18 @@ const useVoiceEvents = ({
 			},
 		});
 
+		const onVoiceTransportFailedSub = trpc.voice.onTransportFailed.subscribe(undefined, {
+			onData: () => {
+				if (isCleaningUp) return;
+
+				logVoice('Server-side transport failure event received, triggering recovery');
+				onTransportFailure();
+			},
+			onError: (error) => {
+				logVoice('onVoiceTransportFailed subscription error', { error });
+			},
+		});
+
 		return () => {
 			logVoice('Cleaning up voice events');
 
@@ -170,6 +189,7 @@ const useVoiceEvents = ({
 			onVoiceProducerClosedSub.unsubscribe();
 			onVoiceUserLeaveSub.unsubscribe();
 			onVoiceRemoveExternalStreamSub.unsubscribe();
+			onVoiceTransportFailedSub.unsubscribe();
 		};
 	}, [
 		currentVoiceChannelId,
@@ -182,7 +202,9 @@ const useVoiceEvents = ({
 		removeExternalStream,
 		clearRemoteUserStreamsForUser,
 		clearPendingStreamsForUser,
+		onTransportFailure,
 		rtpCapabilities,
+		reconnectNonce,
 	]);
 };
 

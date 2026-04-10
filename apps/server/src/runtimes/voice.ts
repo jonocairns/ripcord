@@ -335,6 +335,8 @@ class VoiceRuntime {
   };
 
   public createConsumerTransport = async (userId: number) => {
+    this.removeConsumerTransport(userId);
+
     const { transport, params } = await this.createTransport();
 
     this.consumerTransports[userId] = transport;
@@ -356,6 +358,9 @@ class VoiceRuntime {
     transport.on('dtlsstatechange', (state) => {
       if (state === 'failed' || state === 'closed') {
         this.removeConsumerTransport(userId);
+        pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
+          userId
+        });
       }
     });
 
@@ -375,6 +380,8 @@ class VoiceRuntime {
   };
 
   public createProducerTransport = async (userId: number) => {
+    this.removeProducerTransport(userId);
+
     const { params, transport } = await this.createTransport();
 
     this.producerTransports[userId] = transport;
@@ -391,6 +398,9 @@ class VoiceRuntime {
     transport.on('dtlsstatechange', (state) => {
       if (state === 'failed' || state === 'closed') {
         this.removeProducerTransport(userId);
+        pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
+          userId
+        });
       }
     });
 

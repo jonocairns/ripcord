@@ -31,6 +31,11 @@ import { pubsub } from './pubsub';
 import type { Context } from './trpc';
 
 let wss: WebSocketServer | undefined;
+const VOICE_DISCONNECT_GRACE_MS = 5_000;
+const pendingVoiceDisconnectTimers = new Map<
+  number,
+  ReturnType<typeof setTimeout>
+>();
 type TTrackedWebSocket = WebSocket & {
   userId?: number;
   token: string;
@@ -66,6 +71,26 @@ const hasOtherOpenUserVoiceConnection = (
       client.readyState === WebSocket.OPEN &&
       client.currentVoiceChannelId === channelId
   );
+};
+
+const hasAnyOpenUserVoiceConnection = (userId: number, channelId: number) => {
+  return getTrackedClients().some(
+    (client) =>
+      client.userId === userId &&
+      client.readyState === WebSocket.OPEN &&
+      client.currentVoiceChannelId === channelId
+  );
+};
+
+const clearPendingVoiceDisconnectTimer = (userId: number) => {
+  const timer = pendingVoiceDisconnectTimers.get(userId);
+
+  if (timer === undefined) {
+    return;
+  }
+
+  clearTimeout(timer);
+  pendingVoiceDisconnectTimers.delete(userId);
 };
 
 const usersIpMap = new Map<number, string>();
@@ -205,6 +230,9 @@ const createContext = async ({
   const setWsVoiceChannelId = (channelId: number | undefined) => {
     if (connectionWs) {
       connectionWs.currentVoiceChannelId = channelId;
+      if (channelId !== undefined) {
+        clearPendingVoiceDisconnectTimer(decodedUser.id);
+      }
       return;
     }
 
@@ -216,6 +244,9 @@ const createContext = async ({
 
     if (ws) {
       ws.currentVoiceChannelId = channelId;
+      if (channelId !== undefined) {
+        clearPendingVoiceDisconnectTimer(decodedUser.id);
+      }
     }
   };
 
@@ -355,12 +386,32 @@ const createWsServer = async (server: http.Server) => {
         }
 
         if (voiceRuntime?.getUser(userId)) {
-          voiceRuntime.removeUser(userId);
+          const channelId = voiceRuntime.id;
+          clearPendingVoiceDisconnectTimer(userId);
 
-          pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
-            channelId: voiceRuntime.id,
-            userId
-          });
+          pendingVoiceDisconnectTimers.set(
+            userId,
+            setTimeout(() => {
+              pendingVoiceDisconnectTimers.delete(userId);
+
+              if (hasAnyOpenUserVoiceConnection(userId, channelId)) {
+                return;
+              }
+
+              const latestVoiceRuntime = VoiceRuntime.findById(channelId);
+
+              if (!latestVoiceRuntime?.getUser(userId)) {
+                return;
+              }
+
+              latestVoiceRuntime.removeUser(userId);
+
+              pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+                channelId,
+                userId
+              });
+            }, VOICE_DISCONNECT_GRACE_MS)
+          );
         }
 
         trackedWs.currentVoiceChannelId = undefined;
