@@ -101,6 +101,10 @@ export const removeUserFromVoiceChannel = (
 	clearPinnedCardById(`screen-share-${userId}`);
 
 	if (userId === ownUserId && channelId === currentChannelId) {
+		if (!opts.reconnecting) {
+			playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+		}
+
 		clearOwnVoiceChannelState();
 		return;
 	}

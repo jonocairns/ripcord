@@ -17,9 +17,11 @@ let trpc: ReturnType<typeof createTRPCProxyClient<AppRouter>> | null = null;
 let currentHost: string | null = null;
 let teardownTimer: ReturnType<typeof setTimeout> | null = null;
 let onWsReconnect: (() => void) | null = null;
+let cachedClientInstanceId: string | null = null;
 
 // How long to wait for tRPC to reconnect before tearing down the app state.
 const RETRY_GRACE_PERIOD_MS = 5000;
+const WS_CLIENT_INSTANCE_ID_STORAGE_KEY = 'ripcord.ws-client-instance-id';
 
 // These codes represent deliberate server-side actions — retrying immediately is
 // pointless (KICKED/BANNED) or premature (SERVER_SHUTDOWN). All other codes
@@ -29,6 +31,43 @@ const DELIBERATE_DISCONNECT_CODES = new Set<number>([
 	DisconnectCode.BANNED,
 	DisconnectCode.SERVER_SHUTDOWN,
 ]);
+
+const createClientInstanceId = () => {
+	const randomUUID = globalThis.crypto?.randomUUID;
+
+	if (typeof randomUUID === 'function') {
+		return randomUUID.call(globalThis.crypto);
+	}
+
+	return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
+const getWsClientInstanceId = () => {
+	if (cachedClientInstanceId) {
+		return cachedClientInstanceId;
+	}
+
+	if (typeof window !== 'undefined') {
+		try {
+			const storedClientInstanceId = window.sessionStorage.getItem(WS_CLIENT_INSTANCE_ID_STORAGE_KEY);
+
+			if (storedClientInstanceId) {
+				cachedClientInstanceId = storedClientInstanceId;
+				return storedClientInstanceId;
+			}
+
+			const nextClientInstanceId = createClientInstanceId();
+			window.sessionStorage.setItem(WS_CLIENT_INSTANCE_ID_STORAGE_KEY, nextClientInstanceId);
+			cachedClientInstanceId = nextClientInstanceId;
+			return nextClientInstanceId;
+		} catch {
+			// Fall back to an in-memory identifier when sessionStorage is unavailable.
+		}
+	}
+
+	cachedClientInstanceId = createClientInstanceId();
+	return cachedClientInstanceId;
+};
 
 const initializeTRPC = (host: string) => {
 	const runtimeServerUrl = getRuntimeServerConfig().serverUrl;
@@ -95,6 +134,7 @@ const initializeTRPC = (host: string) => {
 		connectionParams: async (): Promise<TConnectionParams> => {
 			return {
 				token: getAuthToken() || '',
+				clientInstanceId: getWsClientInstanceId(),
 			};
 		},
 	});

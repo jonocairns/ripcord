@@ -73,6 +73,7 @@ export type TOwnUser = WithOptional<TUser, 'identity'>;
 
 export type TConnectionParams = {
 	token: string;
+	clientInstanceId?: string;
 };
 
 export type TTempFile = {

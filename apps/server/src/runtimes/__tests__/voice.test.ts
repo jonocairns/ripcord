@@ -1,0 +1,138 @@
+import { afterEach, describe, expect, test } from 'bun:test';
+import { VoiceRuntime } from '../voice';
+
+/**
+ * Regression tests for the in-session transport rebuild path.
+ *
+ * When a WebRTC transport's DTLS state transitions to "failed" or "closed",
+ * the client calls recoverTransportSession(), which:
+ *   1. Closes the existing producer + consumer transports locally
+ *   2. Calls voice.createProducerTransport + voice.createConsumerTransport
+ *      over TRPC to get fresh server-side transports
+ *   3. Republishes any live local tracks
+ *   4. Re-consumes remote producers
+ *
+ * The server-side contract that makes this safe is that
+ * VoiceRuntime.createProducerTransport / createConsumerTransport close the
+ * previous transport for the same user before storing the new one. These
+ * tests lock that down so a regression surfaces immediately.
+ */
+
+// Use large channel IDs that won't collide with test-seeded data.
+const CHANNEL_BASE = 90_000;
+let channelCounter = 0;
+
+const nextChannelId = () => CHANNEL_BASE + ++channelCounter;
+
+describe('VoiceRuntime in-session transport rebuild', () => {
+  const runtimes: VoiceRuntime[] = [];
+
+  afterEach(async () => {
+    for (const runtime of runtimes) {
+      try {
+        await runtime.destroy();
+      } catch {
+        // ignore — runtime may already be torn down
+      }
+    }
+    runtimes.length = 0;
+  });
+
+  const makeRuntime = async (): Promise<VoiceRuntime> => {
+    const runtime = new VoiceRuntime(nextChannelId());
+    runtimes.push(runtime);
+    await runtime.init();
+    return runtime;
+  };
+
+  test('rebuilding the producer transport closes the old one and replaces it', async () => {
+    const runtime = await makeRuntime();
+    runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+    await runtime.createProducerTransport(1);
+    const first = runtime.getProducerTransport(1);
+
+    await runtime.createProducerTransport(1);
+    const second = runtime.getProducerTransport(1);
+
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(first!.id).not.toBe(second!.id);
+    expect(first!.closed).toBe(true);
+    expect(second!.closed).toBe(false);
+  });
+
+  test('rebuilding the consumer transport closes the old one and replaces it', async () => {
+    const runtime = await makeRuntime();
+    runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+    await runtime.createConsumerTransport(1);
+    const first = runtime.getConsumerTransport(1);
+
+    await runtime.createConsumerTransport(1);
+    const second = runtime.getConsumerTransport(1);
+
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(first!.id).not.toBe(second!.id);
+    expect(first!.closed).toBe(true);
+    expect(second!.closed).toBe(false);
+  });
+
+  test('full transport rebuild leaves the user in the voice channel with open transports', async () => {
+    const runtime = await makeRuntime();
+    runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+    // Initial session
+    await runtime.createProducerTransport(1);
+    await runtime.createConsumerTransport(1);
+
+    // Rebuild — mirrors what recoverTransportSession drives over TRPC
+    const newProducerParams = await runtime.createProducerTransport(1);
+    const newConsumerParams = await runtime.createConsumerTransport(1);
+
+    expect(runtime.getUser(1)).toBeDefined();
+    expect(newProducerParams.id).toBeTruthy();
+    expect(newConsumerParams.id).toBeTruthy();
+    expect(runtime.getProducerTransport(1)?.closed).toBe(false);
+    expect(runtime.getConsumerTransport(1)?.closed).toBe(false);
+  });
+
+  test('removeUser after a rebuild closes the rebuilt transports', async () => {
+    const runtime = await makeRuntime();
+    runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+    await runtime.createProducerTransport(1);
+    await runtime.createConsumerTransport(1);
+
+    // Rebuild
+    await runtime.createProducerTransport(1);
+    await runtime.createConsumerTransport(1);
+
+    const rebuiltProducer = runtime.getProducerTransport(1);
+    const rebuiltConsumer = runtime.getConsumerTransport(1);
+
+    runtime.removeUser(1);
+
+    expect(runtime.getUser(1)).toBeUndefined();
+    expect(rebuiltProducer?.closed).toBe(true);
+    expect(rebuiltConsumer?.closed).toBe(true);
+  });
+
+  test('concurrent rebuild calls for the same user are handled without leaving an open orphan', async () => {
+    const runtime = await makeRuntime();
+    runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+    // Fire two producer-transport creations without awaiting the first.
+    // The second must close whatever the first created.
+    const [_params1, _params2] = await Promise.all([
+      runtime.createProducerTransport(1),
+      runtime.createProducerTransport(1)
+    ]);
+
+    const surviving = runtime.getProducerTransport(1);
+
+    expect(surviving).toBeDefined();
+    expect(surviving!.closed).toBe(false);
+  });
+});

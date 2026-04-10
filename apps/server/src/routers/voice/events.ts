@@ -92,6 +92,15 @@ const onVoiceStreamWatcherActivityRoute = protectedProcedure.subscription(
   }
 );
 
+const onVoiceTransportFailedRoute = protectedProcedure.subscription(
+  async ({ ctx }) => {
+    return ctx.pubsub.subscribeFor(
+      ctx.user.id,
+      ServerEvents.VOICE_TRANSPORT_FAILED
+    );
+  }
+);
+
 export {
   onUserJoinVoiceRoute,
   onUserLeaveVoiceRoute,
@@ -102,5 +111,6 @@ export {
   onVoiceRemoveExternalStreamRoute,
   onVoiceSessionReplacedRoute,
   onVoiceStreamWatcherActivityRoute,
+  onVoiceTransportFailedRoute,
   onVoiceUpdateExternalStreamRoute
 };

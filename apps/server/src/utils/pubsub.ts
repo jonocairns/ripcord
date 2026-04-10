@@ -93,6 +93,9 @@ type Events = {
     remoteId: number;
     kind: StreamKind;
   };
+  [ServerEvents.VOICE_TRANSPORT_FAILED]: {
+    userId: number;
+  };
   [ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY]: {
     watcherId: number;
     kind: StreamKind.VIDEO | StreamKind.SCREEN;
