@@ -89,11 +89,18 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
     ctx.authenticated = true;
     ctx.setWsUserId(ctx.user.id);
 
-    const existingVoiceRuntime = VoiceRuntime.findRuntimeByUserId(ctx.user.id);
+    const pendingVoiceReconnectChannelId =
+      ctx.getPendingVoiceReconnectChannelId();
 
-    if (existingVoiceRuntime?.getUser(ctx.user.id)) {
-      ctx.currentVoiceChannelId = existingVoiceRuntime.id;
-      ctx.setWsVoiceChannelId(existingVoiceRuntime.id);
+    if (pendingVoiceReconnectChannelId !== undefined) {
+      const pendingVoiceRuntime = VoiceRuntime.findById(
+        pendingVoiceReconnectChannelId
+      );
+
+      if (pendingVoiceRuntime?.getUser(ctx.user.id)) {
+        ctx.currentVoiceChannelId = pendingVoiceRuntime.id;
+        ctx.setWsVoiceChannelId(pendingVoiceRuntime.id);
+      }
     }
 
     if (ctx.user.mustChangePassword) {

@@ -424,13 +424,17 @@ const RECOVERY_MAX_ATTEMPTS = 3;
 const RECOVERY_TIMEOUT_MS = 12_000;
 const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
 
+class VoiceSessionReconnectChangedError extends Error {
+	constructor(stage: string) {
+		super(`Voice session changed during transport recovery (${stage})`);
+		this.name = 'VoiceSessionReconnectChangedError';
+	}
+}
+
 const withRecoveryTimeout = <T,>(promise: Promise<T>): Promise<T> => {
 	let handle: ReturnType<typeof setTimeout> | undefined;
 	const timeoutPromise = new Promise<never>((_, reject) => {
-		handle = setTimeout(
-			() => reject(new Error('Voice transport recovery timed out')),
-			RECOVERY_TIMEOUT_MS,
-		);
+		handle = setTimeout(() => reject(new Error('Voice transport recovery timed out')), RECOVERY_TIMEOUT_MS);
 	});
 	return Promise.race([promise, timeoutPromise]).finally(() => {
 		if (handle !== undefined) {
@@ -2112,6 +2116,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 					const nonceAtStart = voiceSessionReconnectNonceRef.current;
 					const isNonceStale = () => voiceSessionReconnectNonceRef.current !== nonceAtStart;
+					const throwIfNonceStale = (stage: string) => {
+						if (isNonceStale()) {
+							throw new VoiceSessionReconnectChangedError(stage);
+						}
+					};
 
 					try {
 						logVoice('Attempting in-session voice transport recovery', {
@@ -2130,19 +2139,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 						const device = await withRecoveryTimeout(ensureVoiceDeviceLoaded());
 
-						if (isNonceStale()) {
-							logVoice('Transport recovery cancelled: WS session replaced during device load');
-							return false;
-						}
+						throwIfNonceStale('device load');
 
-						await withRecoveryTimeout(
-							Promise.all([createProducerTransport(device), createConsumerTransport(device)]),
-						);
+						await withRecoveryTimeout(Promise.all([createProducerTransport(device), createConsumerTransport(device)]));
 
-						if (isNonceStale()) {
-							logVoice('Transport recovery cancelled: WS session replaced during transport creation');
-							return false;
-						}
+						throwIfNonceStale('transport creation');
 
 						const currentRtpCapabilities = device.rtpCapabilities;
 						sendRtpCapabilities.current = currentRtpCapabilities;
@@ -2193,10 +2194,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							Promise.all([consumeExistingProducers(currentRtpCapabilities), ...republishTasks]),
 						);
 
-						if (isNonceStale()) {
-							logVoice('Transport recovery cancelled: WS session replaced during consume/republish');
-							return false;
-						}
+						throwIfNonceStale('consume/republish');
 
 						const restoreWatchTasks: Promise<void>[] = [];
 
@@ -2222,10 +2220,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 						await withRecoveryTimeout(Promise.all(restoreWatchTasks));
 
-						if (isNonceStale()) {
-							logVoice('Transport recovery cancelled: WS session replaced during watch restoration');
-							return false;
-						}
+						throwIfNonceStale('watch restoration');
 
 						startMonitoring(producerTransport.current, consumerTransport.current);
 						setConnectionStatus(ConnectionStatus.CONNECTED);
@@ -2233,6 +2228,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 						return true;
 					} catch (error) {
+						if (error instanceof VoiceSessionReconnectChangedError) {
+							logVoice('Voice session changed during transport recovery, restarting attempt', {
+								attempt: attempt + 1,
+								error,
+							});
+							attempt -= 1;
+							continue;
+						}
+
 						const isLastAttempt = attempt === RECOVERY_MAX_ATTEMPTS - 1;
 
 						if (!isLastAttempt && !isNonRetriableTrpcError(error)) {

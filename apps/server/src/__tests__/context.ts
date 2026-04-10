@@ -13,7 +13,8 @@ const createMockContextOptions = async (opts?: {
   return {
     info: {
       connectionParams: {
-        token
+        token,
+        clientInstanceId: 'test-client-instance'
       } as TConnectionParams,
       accept: 'application/jsonl',
       type: 'subscription',

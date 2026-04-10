@@ -9,8 +9,8 @@
  *
  * What we verify:
  *   1. Happy path: all steps called in the correct order
- *   2. Nonce cancellation: if the WS session nonce changes mid-flight the
- *      rebuild returns false without touching monitoring/status
+ *   2. Nonce restart: if the WS session nonce changes mid-flight the
+ *      rebuild restarts against the fresh session instead of tearing down
  *   3. Retry: a transient failure on attempt 1 is retried; success on attempt
  *      2 still returns true
  *   4. Non-retriable error: a 4xx-class TRPC error is not retried
@@ -30,10 +30,17 @@ const RECOVERY_MAX_ATTEMPTS = 3;
 const RECOVERY_TIMEOUT_MS = 12_000;
 const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
 
-const withRecoveryTimeout = <T,>(promise: Promise<T>, timeoutMs = RECOVERY_TIMEOUT_MS): Promise<T> => {
+class RecoverySessionChangedError extends Error {
+	constructor(stage: string) {
+		super(`Voice session changed during transport recovery (${stage})`);
+		this.name = 'RecoverySessionChangedError';
+	}
+}
+
+const withRecoveryTimeout = <T>(promise: Promise<T>): Promise<T> => {
 	let handle: ReturnType<typeof setTimeout> | undefined;
 	const timeoutPromise = new Promise<never>((_, reject) => {
-		handle = setTimeout(() => reject(new Error('Voice transport recovery timed out')), timeoutMs);
+		handle = setTimeout(() => reject(new Error('Voice transport recovery timed out')), RECOVERY_TIMEOUT_MS);
 	});
 	return Promise.race([promise, timeoutPromise]).finally(() => {
 		if (handle !== undefined) clearTimeout(handle);
@@ -45,7 +52,10 @@ type TRecoveryDeps = {
 	currentVoiceChannelId: () => number | undefined;
 	hasRouterRtpCapabilities: () => boolean;
 	getNonce: () => number;
-	captureWatchedStreams: () => { remoteUserStreams: Record<string, string[]>; externalStreams: Record<string, { audio: boolean; video: boolean }> };
+	captureWatchedStreams: () => {
+		remoteUserStreams: Record<string, string[]>;
+		externalStreams: Record<string, { audio: boolean; video: boolean }>;
+	};
 	setConnectionStatus: (s: string) => void;
 	stopMonitoring: () => void;
 	resetStats: () => void;
@@ -76,6 +86,11 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 
 		const nonceAtStart = deps.getNonce();
 		const isNonceStale = () => deps.getNonce() !== nonceAtStart;
+		const throwIfNonceStale = (stage: string) => {
+			if (isNonceStale()) {
+				throw new RecoverySessionChangedError(stage);
+			}
+		};
 
 		try {
 			const snapshot = deps.captureWatchedStreams();
@@ -87,20 +102,18 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 			deps.clearExternalStreams();
 			deps.cleanupTransports();
 
-			const device = await withRecoveryTimeout(deps.loadDevice(), RECOVERY_TIMEOUT_MS);
-			if (isNonceStale()) return false;
+			const device = await withRecoveryTimeout(deps.loadDevice());
+			throwIfNonceStale('device load');
 
 			await withRecoveryTimeout(
 				Promise.all([deps.createProducerTransport(device), deps.createConsumerTransport(device)]),
-				RECOVERY_TIMEOUT_MS,
 			);
-			if (isNonceStale()) return false;
+			throwIfNonceStale('transport creation');
 
 			await withRecoveryTimeout(
 				Promise.all([deps.consumeExistingProducers(device.rtpCapabilities), ...deps.republishTracks()]),
-				RECOVERY_TIMEOUT_MS,
 			);
-			if (isNonceStale()) return false;
+			throwIfNonceStale('consume/republish');
 
 			const restoreTasks: Promise<void>[] = [];
 			Object.entries(snapshot.remoteUserStreams).forEach(([id, kinds]) => {
@@ -110,13 +123,18 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 				if (state.audio) restoreTasks.push(deps.consume(id, 'externalAudio', device.rtpCapabilities));
 				if (state.video) restoreTasks.push(deps.consume(id, 'externalVideo', device.rtpCapabilities));
 			});
-			await withRecoveryTimeout(Promise.all(restoreTasks), RECOVERY_TIMEOUT_MS);
-			if (isNonceStale()) return false;
+			await withRecoveryTimeout(Promise.all(restoreTasks));
+			throwIfNonceStale('watch restoration');
 
 			deps.startMonitoring();
 			deps.setConnectionStatus('connected');
 			return true;
 		} catch (error) {
+			if (error instanceof RecoverySessionChangedError) {
+				attempt--;
+				continue;
+			}
+
 			const isLast = attempt === RECOVERY_MAX_ATTEMPTS - 1;
 			if (!isLast && !deps.isNonRetriableTrpcError(error)) continue;
 			deps.setConnectionStatus('failed');
@@ -132,7 +150,7 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 // ---------------------------------------------------------------------------
 
 const makeDeps = (overrides: Partial<TRecoveryDeps> = {}): TRecoveryDeps => {
-	let nonce = 0;
+	const nonce = 0;
 	return {
 		isConnected: () => true,
 		currentVoiceChannelId: () => 7,
@@ -184,16 +202,40 @@ describe('recoverTransportSession orchestration', () => {
 	it('happy path: calls all steps in order and returns true', async () => {
 		const callOrder: string[] = [];
 		const deps = makeDeps({
-			stopMonitoring: mock(() => { callOrder.push('stopMonitoring'); }),
-			resetStats: mock(() => { callOrder.push('resetStats'); }),
-			clearRemoteUserStreams: mock(() => { callOrder.push('clearRemoteUserStreams'); }),
-			clearExternalStreams: mock(() => { callOrder.push('clearExternalStreams'); }),
-			cleanupTransports: mock(() => { callOrder.push('cleanupTransports'); }),
-			loadDevice: mock(() => { callOrder.push('loadDevice'); return Promise.resolve({ rtpCapabilities: {} }); }),
-			createProducerTransport: mock(() => { callOrder.push('createProducerTransport'); return Promise.resolve(); }),
-			createConsumerTransport: mock(() => { callOrder.push('createConsumerTransport'); return Promise.resolve(); }),
-			consumeExistingProducers: mock(() => { callOrder.push('consumeExistingProducers'); return Promise.resolve(); }),
-			startMonitoring: mock(() => { callOrder.push('startMonitoring'); }),
+			stopMonitoring: mock(() => {
+				callOrder.push('stopMonitoring');
+			}),
+			resetStats: mock(() => {
+				callOrder.push('resetStats');
+			}),
+			clearRemoteUserStreams: mock(() => {
+				callOrder.push('clearRemoteUserStreams');
+			}),
+			clearExternalStreams: mock(() => {
+				callOrder.push('clearExternalStreams');
+			}),
+			cleanupTransports: mock(() => {
+				callOrder.push('cleanupTransports');
+			}),
+			loadDevice: mock(() => {
+				callOrder.push('loadDevice');
+				return Promise.resolve({ rtpCapabilities: {} });
+			}),
+			createProducerTransport: mock(() => {
+				callOrder.push('createProducerTransport');
+				return Promise.resolve();
+			}),
+			createConsumerTransport: mock(() => {
+				callOrder.push('createConsumerTransport');
+				return Promise.resolve();
+			}),
+			consumeExistingProducers: mock(() => {
+				callOrder.push('consumeExistingProducers');
+				return Promise.resolve();
+			}),
+			startMonitoring: mock(() => {
+				callOrder.push('startMonitoring');
+			}),
 		});
 
 		expect(await runRecovery(deps)).toBe(true);
@@ -219,7 +261,10 @@ describe('recoverTransportSession orchestration', () => {
 				remoteUserStreams: { '10': ['video', 'audio'], '20': ['screen'] },
 				externalStreams: {},
 			}),
-			consume: mock((id, kind) => { consumed.push([id, kind]); return Promise.resolve(); }),
+			consume: mock((id, kind) => {
+				consumed.push([id, kind]);
+				return Promise.resolve();
+			}),
 		});
 
 		expect(await runRecovery(deps)).toBe(true);
@@ -235,7 +280,10 @@ describe('recoverTransportSession orchestration', () => {
 				remoteUserStreams: {},
 				externalStreams: { '99': { audio: true, video: true }, '100': { audio: true, video: false } },
 			}),
-			consume: mock((id, kind) => { consumed.push([id, kind]); return Promise.resolve(); }),
+			consume: mock((id, kind) => {
+				consumed.push([id, kind]);
+				return Promise.resolve();
+			}),
 		});
 
 		expect(await runRecovery(deps)).toBe(true);
@@ -245,31 +293,41 @@ describe('recoverTransportSession orchestration', () => {
 		expect(consumed).not.toContainEqual(['100', 'externalVideo']);
 	});
 
-	it('cancels and returns false when nonce changes after device load', async () => {
+	it('restarts recovery when the nonce changes after device load', async () => {
 		let nonce = 0;
+		let loadCalls = 0;
 		const deps = makeDeps({
 			getNonce: () => nonce,
 			loadDevice: mock(async () => {
-				nonce++; // WS reconnect fires mid-load
+				loadCalls++;
+				if (loadCalls === 1) {
+					nonce++; // WS reconnect fires mid-load
+				}
 				return { rtpCapabilities: {} };
 			}),
 		});
 
-		expect(await runRecovery(deps)).toBe(false);
-		expect((deps.createProducerTransport as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
-		expect((deps.startMonitoring as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
+		expect(await runRecovery(deps)).toBe(true);
+		expect(loadCalls).toBe(2);
+		expect((deps.startMonitoring as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
 	});
 
-	it('cancels and returns false when nonce changes after transports are created', async () => {
+	it('restarts recovery when the nonce changes after transports are created', async () => {
 		let nonce = 0;
+		let transportCalls = 0;
 		const deps = makeDeps({
 			getNonce: () => nonce,
-			createConsumerTransport: mock(async () => { nonce++; }),
+			createConsumerTransport: mock(async () => {
+				transportCalls++;
+				if (transportCalls === 1) {
+					nonce++;
+				}
+			}),
 		});
 
-		expect(await runRecovery(deps)).toBe(false);
-		expect((deps.consumeExistingProducers as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
-		expect((deps.startMonitoring as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
+		expect(await runRecovery(deps)).toBe(true);
+		expect(transportCalls).toBe(2);
+		expect((deps.startMonitoring as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
 	});
 
 	it('retries on transient error and succeeds on second attempt', async () => {
@@ -295,7 +353,10 @@ describe('recoverTransportSession orchestration', () => {
 		});
 
 		const deps = makeDeps({
-			loadDevice: mock(() => { calls++; return Promise.reject(nonRetriableError); }),
+			loadDevice: mock(() => {
+				calls++;
+				return Promise.reject(nonRetriableError);
+			}),
 			isNonRetriableTrpcError: (err) => {
 				const data = (err as { data?: { code?: string } }).data;
 				return data?.code === 'FORBIDDEN';
@@ -311,7 +372,10 @@ describe('recoverTransportSession orchestration', () => {
 	it('returns false after exhausting all retry attempts', async () => {
 		let calls = 0;
 		const deps = makeDeps({
-			loadDevice: mock(() => { calls++; return Promise.reject(new Error('persistent failure')); }),
+			loadDevice: mock(() => {
+				calls++;
+				return Promise.reject(new Error('persistent failure'));
+			}),
 		});
 
 		expect(await runRecovery(deps)).toBe(false);
@@ -325,8 +389,13 @@ describe('recoverTransportSession orchestration', () => {
 		let calls = 0;
 		const deps = makeDeps({
 			isConnected: () => connected.value,
-			loadDevice: mock(() => { calls++; return Promise.reject(new Error('blip')); }),
-			sleep: mock(async () => { connected.value = false; }),
+			loadDevice: mock(() => {
+				calls++;
+				return Promise.reject(new Error('blip'));
+			}),
+			sleep: mock(async () => {
+				connected.value = false;
+			}),
 		});
 
 		expect(await runRecovery(deps)).toBe(false);

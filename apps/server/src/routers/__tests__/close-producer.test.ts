@@ -8,13 +8,13 @@
  * the freshly-rebuilt producer gets torn down by a delayed message.
  */
 
-import { afterEach, describe, expect, test } from 'bun:test';
 import { StreamKind } from '@sharkord/shared';
+import { afterEach, describe, expect, test } from 'bun:test';
 import type { AppData, Producer } from 'mediasoup/types';
-import { appRouter } from '../../routers';
-import { VoiceRuntime } from '../../runtimes/voice';
 import { createMockContext } from '../../__tests__/context';
 import { getMockedToken } from '../../__tests__/helpers';
+import { appRouter } from '../../routers';
+import { VoiceRuntime } from '../../runtimes/voice';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,13 +40,13 @@ const makeMockProducer = (id: string): Producer<AppData> => {
     observer: {
       on: (_event: string, handler: () => void) => {
         closeHandler = handler;
-      },
+      }
     },
     close: () => {
       if (closed) return;
       closed = true;
       closeHandler?.();
-    },
+    }
   } as unknown as Producer<AppData>;
 };
 
@@ -123,11 +123,13 @@ describe('voice.closeProducer producerId guard', () => {
 
     await caller.voice.closeProducer({
       kind: StreamKind.AUDIO,
-      producerId: 'stale-id',
+      producerId: 'stale-id'
     });
 
     // Producer must still be present — the stale close must not evict it.
-    expect(runtime.getProducer(StreamKind.AUDIO, ctx.user.id)).toBe(mockProducer);
+    expect(runtime.getProducer(StreamKind.AUDIO, ctx.user.id)).toBe(
+      mockProducer
+    );
     expect(mockProducer.closed).toBe(false);
   });
 
@@ -143,7 +145,7 @@ describe('voice.closeProducer producerId guard', () => {
 
     await caller.voice.closeProducer({
       kind: StreamKind.AUDIO,
-      producerId: 'correct-id',
+      producerId: 'correct-id'
     });
 
     expect(runtime.getProducer(StreamKind.AUDIO, ctx.user.id)).toBeUndefined();
