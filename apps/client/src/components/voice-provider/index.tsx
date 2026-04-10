@@ -596,6 +596,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 
 			if (isConnectedRef.current && currentVoiceChannelIdRef.current !== undefined) {
+				// Tell the server to remove us from the voice channel so other
+				// participants don't see a ghost user stuck in the channel.
+				// Fire-and-forget: even if this fails, we still clean up locally.
+				getTRPCClient()
+					.voice.leave.mutate()
+					.catch((error) => {
+						logVoice('Failed to send voice.leave after unrecoverable transport failure', { error });
+					});
+
 				useServerStore.getState().setCurrentVoiceChannelId(undefined);
 				useServerStore.getState().updateOwnVoiceState({
 					webcamEnabled: false,

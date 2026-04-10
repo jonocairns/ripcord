@@ -169,6 +169,7 @@ const useTransports = ({
 				});
 			} catch (error) {
 				logVoice('Error creating producer transport', { error });
+				throw error;
 			}
 		},
 		[onTransportFailure],
@@ -284,6 +285,7 @@ const useTransports = ({
 				});
 			} catch (error) {
 				logVoice('Failed to create consumer transport', { error });
+				throw error;
 			}
 		},
 		[clearAllPendingStreams, onTransportFailure],
@@ -469,6 +471,7 @@ const useTransports = ({
 				});
 			} catch (error) {
 				logVoice('Error consuming existing producers', { error });
+				throw error;
 			}
 		},
 		[addPendingStream, consume],

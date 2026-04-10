@@ -204,9 +204,23 @@ export const joinServer = async (
 
 			const state = useServerStore.getState();
 			if (state.currentVoiceChannelId !== undefined) {
-				// Recreate channel-scoped voice subscriptions against the restored
-				// server-side voice session without forcing a drop/rejoin cycle.
-				state.bumpVoiceSessionReconnectNonce();
+				// Check whether the server still has a voice session for this user.
+				// After a server restart or if the reconnect grace window expired,
+				// the server's voiceMap will no longer contain the user — bumping
+				// the nonce would trigger recovery against a non-existent session.
+				const channelState = state.voiceMap[state.currentVoiceChannelId];
+				const ownUserId = state.ownUserId;
+				const stillInVoice = ownUserId !== undefined && channelState?.users[ownUserId] !== undefined;
+
+				if (stillInVoice) {
+					// Recreate channel-scoped voice subscriptions against the restored
+					// server-side voice session without forcing a drop/rejoin cycle.
+					state.bumpVoiceSessionReconnectNonce();
+				} else {
+					// Server dropped the voice session — clear stale local state so the
+					// user isn't stuck with a phantom voice channel that can't send RPCs.
+					useServerStore.getState().setCurrentVoiceChannelId(undefined);
+				}
 			}
 
 			return 'joined';
