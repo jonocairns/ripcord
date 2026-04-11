@@ -42,6 +42,11 @@ const permissionSections = [
 	},
 ] as const;
 
+// Compile-time exhaustiveness check: any EPermission missing from permissionSections
+// above will surface here as a type error rather than silently disappearing from the UI.
+type _MissingPermissions = Exclude<EPermission, (typeof permissionSections)[number]['permissions'][number]>;
+const _assertPermissionSectionsExhaustive: [_MissingPermissions] extends [never] ? true : _MissingPermissions = true;
+
 type TPermissionProps = {
 	permission: EPermission;
 	enabled: boolean;
