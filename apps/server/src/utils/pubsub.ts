@@ -257,26 +257,39 @@ class PubSub {
 
   public subscribeForChannel<TTopic extends keyof Events>(
     channelId: number,
-    topic: TTopic
+    topic: TTopic,
+    shouldEmit?: (data: Events[TTopic]) => boolean
   ): Observable<Events[TTopic], unknown> {
     return observable((observer) => {
-      const listener = (data: Events[TTopic]) => {
-        observer.next(data);
+      // Stored as a widened callback so heterogeneous topics can share a single
+      // Set; the cast here is the only erasure boundary and is safe because
+      // `publishForChannel` only invokes listeners registered against the same
+      // topic key.
+      const storedListener: (data: Events[keyof Events]) => void = (data) => {
+        const payload = data as Events[TTopic];
+
+        if (shouldEmit && !shouldEmit(payload)) {
+          return;
+        }
+
+        observer.next(payload);
       };
 
-      if (!this.channelListeners.has(channelId)) {
-        this.channelListeners.set(channelId, new Map());
+      let channelTopics = this.channelListeners.get(channelId);
+
+      if (!channelTopics) {
+        channelTopics = new Map();
+        this.channelListeners.set(channelId, channelTopics);
       }
 
-      const channelTopics = this.channelListeners.get(channelId)!;
+      let listeners = channelTopics.get(topic);
 
-      if (!channelTopics.has(topic)) {
-        channelTopics.set(topic, new Set());
+      if (!listeners) {
+        listeners = new Set();
+        channelTopics.set(topic, listeners);
       }
 
-      channelTopics
-        .get(topic)!
-        .add(listener as (data: Events[keyof Events]) => void);
+      listeners.add(storedListener);
 
       const unsubscribable: Unsubscribable = {
         unsubscribe: () => {
@@ -288,7 +301,7 @@ class PubSub {
 
           if (!listeners) return;
 
-          listeners.delete(listener as (data: Events[keyof Events]) => void);
+          listeners.delete(storedListener);
 
           if (listeners.size === 0) {
             channelTopics.delete(topic);
@@ -305,4 +318,6 @@ class PubSub {
   }
 }
 
-export const pubsub = new PubSub();
+const pubsub = new PubSub();
+
+export { PubSub, pubsub };

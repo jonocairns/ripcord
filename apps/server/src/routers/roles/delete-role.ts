@@ -5,9 +5,10 @@ import { db } from '../../db';
 import { fallbackUsersToDefaultRole } from '../../db/mutations/users';
 import { publishRole } from '../../db/publishers';
 import { getRole } from '../../db/queries/roles';
-import { roles } from '../../db/schema';
+import { roles, userRoles } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
+import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
 import { protectedProcedure } from '../../utils/trpc';
 
 const deleteRoleRoute = protectedProcedure
@@ -34,10 +35,20 @@ const deleteRoleRoute = protectedProcedure
       message: 'Cannot delete the default role'
     });
 
+    const affectedUsers = await db
+      .select({ userId: userRoles.userId })
+      .from(userRoles)
+      .where(eq(userRoles.roleId, role.id));
+
     await fallbackUsersToDefaultRole(role.id);
     await db.delete(roles).where(eq(roles.id, role.id));
 
-    publishRole(role.id, 'delete');
+    await Promise.all([
+      publishRole(role.id, 'delete'),
+      revalidateActiveVoiceSessions({
+        userIds: affectedUsers.map((user) => user.userId)
+      })
+    ]);
     enqueueActivityLog({
       type: ActivityLogType.DELETED_ROLE,
       userId: ctx.user.id,

@@ -22,8 +22,8 @@ import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/v
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { logVoice } from '@/helpers/browser-logger';
-import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
+import { getTrpcErrorData, isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
@@ -72,6 +72,13 @@ type TPreparedMicPipeline = {
 type TWatchedRemoteStreamsSnapshot = {
 	remoteUserStreams: Record<number, TRemoteUserStreamKinds[]>;
 	externalStreams: Record<number, TTrackedExternalWatchState>;
+};
+
+type TRecoveryJoinResult = {
+	device: Device;
+	existingProducers?: TRemoteProducerIds;
+	producerTransportParams?: TTransportParams;
+	consumerTransportParams?: TTransportParams;
 };
 
 export type { AudioVideoRefs };
@@ -444,10 +451,13 @@ const withRecoveryTimeout = <T,>(promise: Promise<T>): Promise<T> => {
 	});
 };
 
+const isMissingVoiceSessionError = (error: unknown): boolean => getTrpcErrorData(error)?.code === 'BAD_REQUEST';
+
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const [loading, setLoading] = useState(false);
 	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
 	const [ownVoiceActivityStream, setOwnVoiceActivityStream] = useState<MediaStream | undefined>(undefined);
+	const [voiceEventRtpCapabilities, setVoiceEventRtpCapabilities] = useState<RtpCapabilities | null>(null);
 	const deviceRef = useRef<Device | undefined>(undefined);
 	const routerRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const sendRtpCapabilities = useRef<RtpCapabilities | null>(null);
@@ -869,7 +879,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
-		const currentRtpCapabilities = sendRtpCapabilities.current;
+		const currentRtpCapabilities = voiceEventRtpCapabilities;
 
 		if (!currentRtpCapabilities) {
 			return;
@@ -900,7 +910,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				void consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities);
 			}
 		});
-	}, [consume, currentChannelExternalStreams, currentVoiceChannelId, pendingStreams]);
+	}, [consume, currentChannelExternalStreams, currentVoiceChannelId, pendingStreams, voiceEventRtpCapabilities]);
 
 	useEffect(() => {
 		Object.entries(currentChannelExternalStreams).forEach(([streamId, stream]) => {
@@ -957,6 +967,47 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		sendRtpCapabilities.current = device.rtpCapabilities;
 
 		return device;
+	}, []);
+
+	const rejoinVoiceSession = useCallback(async (channelId: number): Promise<TRecoveryJoinResult> => {
+		const currentOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
+		const {
+			routerRtpCapabilities: nextRouterRtpCapabilities,
+			producerTransportParams,
+			consumerTransportParams,
+			existingProducers,
+			channelUsers,
+		} = await getTRPCClient().voice.join.mutate({
+			channelId,
+			state: {
+				micMuted: currentOwnVoiceState.micMuted,
+				soundMuted: currentOwnVoiceState.soundMuted,
+			},
+		});
+
+		const device = await Device.factory();
+		await device.load({
+			routerRtpCapabilities: nextRouterRtpCapabilities,
+		});
+
+		deviceRef.current = device;
+		routerRtpCapabilities.current = nextRouterRtpCapabilities;
+		sendRtpCapabilities.current = device.rtpCapabilities;
+
+		const store = useServerStore.getState();
+
+		store.setCurrentVoiceChannelId(channelId);
+		store.reconcileVoiceChannelUsers({
+			channelId,
+			users: channelUsers,
+		});
+
+		return {
+			device,
+			existingProducers,
+			producerTransportParams,
+			consumerTransportParams,
+		};
 	}, []);
 
 	useEffect(() => {
@@ -1971,6 +2022,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		deviceRef.current = undefined;
 		routerRtpCapabilities.current = null;
 		sendRtpCapabilities.current = null;
+		setVoiceEventRtpCapabilities(null);
 
 		setConnectionStatus(ConnectionStatus.DISCONNECTED);
 	}, [
@@ -2042,6 +2094,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					createProducerTransport(device, opts?.producerTransportParams),
 					createConsumerTransport(device, opts?.consumerTransportParams),
 				]);
+				setVoiceEventRtpCapabilities(device.rtpCapabilities);
 
 				const [, micPrepResult] = await Promise.all([
 					consumeExistingProducers(device.rtpCapabilities, undefined, opts?.existingProducers),
@@ -2147,18 +2200,50 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						resetStats();
 						clearRemoteUserStreams();
 						clearExternalStreams();
+						setVoiceEventRtpCapabilities(null);
 						cleanupTransports();
 
-						const device = await withRecoveryTimeout(ensureVoiceDeviceLoaded());
+						let device = await withRecoveryTimeout(ensureVoiceDeviceLoaded());
 
 						throwIfNonceStale('device load');
 
-						await withRecoveryTimeout(Promise.all([createProducerTransport(device), createConsumerTransport(device)]));
+						let currentRtpCapabilities = device.rtpCapabilities;
+						let recoveryJoinResult: TRecoveryJoinResult | undefined;
+
+						try {
+							await withRecoveryTimeout(
+								Promise.all([createProducerTransport(device), createConsumerTransport(device)]),
+							);
+						} catch (error) {
+							const recoveryChannelId = currentVoiceChannelIdRef.current;
+
+							if (!isMissingVoiceSessionError(error) || recoveryChannelId === undefined) {
+								throw error;
+							}
+
+							logVoice('Voice session missing during transport recovery, attempting fresh voice join', {
+								channelId: recoveryChannelId,
+								error,
+							});
+
+							recoveryJoinResult = await withRecoveryTimeout(rejoinVoiceSession(recoveryChannelId));
+							throwIfNonceStale('voice rejoin');
+
+							device = recoveryJoinResult.device;
+							currentRtpCapabilities = device.rtpCapabilities;
+
+							await withRecoveryTimeout(
+								Promise.all([
+									createProducerTransport(device, recoveryJoinResult.producerTransportParams),
+									createConsumerTransport(device, recoveryJoinResult.consumerTransportParams),
+								]),
+							);
+						}
 
 						throwIfNonceStale('transport creation');
 
-						const currentRtpCapabilities = device.rtpCapabilities;
 						sendRtpCapabilities.current = currentRtpCapabilities;
+						setVoiceEventRtpCapabilities(currentRtpCapabilities);
 
 						const republishTasks: Promise<void>[] = [];
 
@@ -2203,7 +2288,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						}
 
 						await withRecoveryTimeout(
-							Promise.all([consumeExistingProducers(currentRtpCapabilities), ...republishTasks]),
+							Promise.all([
+								consumeExistingProducers(currentRtpCapabilities, undefined, recoveryJoinResult?.existingProducers),
+								...republishTasks,
+							]),
 						);
 
 						throwIfNonceStale('consume/republish');
@@ -2302,6 +2390,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		publishScreenShareTrack,
 		publishWebcamTrack,
 		resetStats,
+		rejoinVoiceSession,
 		startMonitoring,
 		stopMonitoring,
 	]);
@@ -2454,7 +2543,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearRemoteUserStreamsForUser,
 		clearPendingStreamsForUser,
 		onTransportFailure,
-		rtpCapabilities: sendRtpCapabilities.current,
+		rtpCapabilities: voiceEventRtpCapabilities,
 		reconnectNonce: voiceSessionReconnectNonce,
 	});
 

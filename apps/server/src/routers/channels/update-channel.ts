@@ -5,6 +5,7 @@ import { db } from '../../db';
 import { publishChannel } from '../../db/publishers';
 import { channels } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
+import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
 import { protectedProcedure } from '../../utils/trpc';
 
 const updateChannelRoute = protectedProcedure
@@ -36,7 +37,14 @@ const updateChannelRoute = protectedProcedure
       .returning()
       .get();
 
-    publishChannel(updatedChannel.id, 'update');
+    await publishChannel(updatedChannel.id, 'update');
+
+    if (input.private !== undefined) {
+      await revalidateActiveVoiceSessions({
+        channelIds: [updatedChannel.id]
+      });
+    }
+
     enqueueActivityLog({
       type: ActivityLogType.UPDATED_CHANNEL,
       userId: ctx.user.id,
