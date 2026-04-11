@@ -8,7 +8,7 @@ import {
 } from '@sharkord/shared';
 import { Device } from 'mediasoup-client';
 import type { AppData, Producer, RtpCapabilities, RtpCodecCapability } from 'mediasoup-client/types';
-import { createContext, memo, type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, type MutableRefObject, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
@@ -17,16 +17,16 @@ import { useChannelCan, useIsConnected } from '@/features/server/hooks';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
+import { useOwnUserId } from '@/features/server/users/hooks';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
-import { useOwnUserId } from '@/features/server/users/hooks';
 import { logVoice } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { getTrpcErrorData, isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
-import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
+import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import {
 	ScreenAudioMode,
 	type TAppAudioSession,
@@ -50,10 +50,10 @@ import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
 import { createMicAudioProcessingPipeline, type TMicAudioProcessingPipeline } from './mic-audio-processing';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
+import { createVoiceActivityStore, startVoiceActivityMonitor, type VoiceActivityStore } from './voice-activity';
 import { VolumeControlProvider } from './volume-control-provider';
 import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
 import { getStoredVolume, OWN_MIC_VOLUME_KEY, VOLUME_SETTINGS_UPDATED_EVENT } from './volume-control-storage';
-import { type VoiceActivityStore, createVoiceActivityStore, startVoiceActivityMonitor } from './voice-activity';
 
 type AudioVideoRefs = {
 	videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -1707,35 +1707,38 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	}, [loadDesktopScreenSharePickerData]);
 
 	const requestDesktopScreenShareSelection = useCallback(async (): Promise<TDesktopScreenShareSelection | null> => {
-		try {
-			const cachedData = screenSharePickerDataRef.current;
-			const hasFreshPickerData =
-				cachedData !== undefined && Date.now() - cachedData.fetchedAt < SCREEN_SHARE_SOURCES_CACHE_TTL_MS;
-			const pickerData = hasFreshPickerData
-				? cachedData
-				: await loadDesktopScreenSharePickerData({ forceRefresh: true });
+		const cachedData = screenSharePickerDataRef.current;
+		const hasFreshPickerData =
+			cachedData !== undefined && Date.now() - cachedData.fetchedAt < SCREEN_SHARE_SOURCES_CACHE_TTL_MS;
 
-			if (hasFreshPickerData) {
-				void loadDesktopScreenSharePickerData({ forceRefresh: true }).catch((error) => {
-					logVoice('Failed to refresh desktop screen share picker data', { error });
-				});
-			}
+		if (hasFreshPickerData) {
+			// Kick off a background refresh so the next open is still fresh.
+			void loadDesktopScreenSharePickerData({ forceRefresh: true }).catch((error) => {
+				logVoice('Failed to refresh desktop screen share picker data', { error });
+			});
 
-			if (pickerData.sources.length === 0) {
+			if (cachedData.sources.length === 0) {
 				toast.error('No windows or screens were detected for sharing.');
 				return null;
 			}
 
 			return requestScreenShareSelectionDialog({
-				sources: pickerData.sources,
-				capabilities: pickerData.capabilities,
 				defaultAudioMode: devices.screenAudioMode,
+				initialData: {
+					sources: cachedData.sources,
+					capabilities: cachedData.capabilities,
+				},
 			});
-		} catch (error) {
-			logVoice('Failed to open desktop screen share picker', { error });
-			toast.error('Failed to load shareable sources.');
-			return null;
 		}
+
+		// No fresh cache — open the picker immediately in a loading state while we fetch.
+		return requestScreenShareSelectionDialog({
+			defaultAudioMode: devices.screenAudioMode,
+			loadData: async () => {
+				const data = await loadDesktopScreenSharePickerData({ forceRefresh: true });
+				return { sources: data.sources, capabilities: data.capabilities };
+			},
+		});
 	}, [devices.screenAudioMode, loadDesktopScreenSharePickerData]);
 
 	const startScreenShareStream = useCallback(

@@ -1,4 +1,5 @@
 import type { TGenericObject } from '@sharkord/shared';
+import { toast } from 'sonner';
 import { Dialog } from '@/components/dialogs/dialogs';
 import type {
 	ScreenAudioMode,
@@ -112,28 +113,71 @@ export const resetDialogs = () => {
 	useDialogStore.setState(getInitialDialogState());
 };
 
-export const requestScreenShareSelection = async ({
-	sources,
-	capabilities,
-	defaultAudioMode,
-}: {
+type TScreenSharePickerData = {
 	sources: TDesktopShareSource[];
 	capabilities: TDesktopCapabilities;
+};
+
+export const requestScreenShareSelection = async ({
+	defaultAudioMode,
+	initialData,
+	loadData,
+}: {
 	defaultAudioMode: ScreenAudioMode;
+	initialData?: TScreenSharePickerData;
+	loadData?: () => Promise<TScreenSharePickerData>;
 }): Promise<TDesktopScreenShareSelection | null> => {
 	return new Promise((resolve) => {
+		let settled = false;
+
+		const resolveOnce = (value: TDesktopScreenShareSelection | null) => {
+			if (settled) return;
+			settled = true;
+			closeDialogs();
+			resolve(value);
+		};
+
 		openDialog(Dialog.SCREEN_SHARE_PICKER, {
-			sources,
-			capabilities,
+			sources: initialData?.sources ?? [],
+			capabilities: initialData?.capabilities,
+			isLoading: !initialData,
 			defaultAudioMode,
 			onConfirm: (selection: TDesktopScreenShareSelection) => {
-				closeDialogs();
-				resolve(selection);
+				resolveOnce(selection);
 			},
 			onCancel: () => {
-				closeDialogs();
-				resolve(null);
+				resolveOnce(null);
 			},
 		});
+
+		if (!initialData && loadData) {
+			void loadData()
+				.then((data) => {
+					if (settled) return;
+
+					const state = useDialogStore.getState();
+					if (state.openDialog !== Dialog.SCREEN_SHARE_PICKER || !state.isOpen) return;
+
+					if (data.sources.length === 0) {
+						toast.error('No windows or screens were detected for sharing.');
+						resolveOnce(null);
+						return;
+					}
+
+					useDialogStore.setState({
+						props: {
+							...state.props,
+							sources: data.sources,
+							capabilities: data.capabilities,
+							isLoading: false,
+						},
+					});
+				})
+				.catch(() => {
+					if (settled) return;
+					toast.error('Failed to load shareable sources.');
+					resolveOnce(null);
+				});
+		}
 	});
 };
