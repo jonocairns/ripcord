@@ -130,12 +130,28 @@ const resolvePreparedScreenAudioMode = (
   selection: TScreenShareSelection,
   capabilities: TDesktopCapabilities,
 ): TResolvedScreenAudioMode => {
+  if (
+    selection.audioMode === "app" &&
+    selection.sourceId.startsWith("screen:")
+  ) {
+    const fallbackMode =
+      capabilities.systemAudio === "unsupported" ? "none" : "system";
+
+    return {
+      requestedMode: selection.audioMode,
+      effectiveMode: fallbackMode,
+      warning:
+        fallbackMode === "none"
+          ? "Per-app audio is not available when sharing an entire display. Continuing without shared audio."
+          : "Per-app audio is not available when sharing an entire display. Falling back to system audio.",
+    };
+  }
+
   const resolved = resolveScreenAudioMode(selection.audioMode, capabilities);
   const requiresExplicitAppTarget =
     resolved.effectiveMode === "app" &&
     !selection.appAudioTargetId &&
-    (capabilities.platform === "linux" ||
-      selection.sourceId.startsWith("screen:"));
+    capabilities.platform === "linux";
 
   if (!requiresExplicitAppTarget) {
     return resolved;
@@ -144,9 +160,7 @@ const resolvePreparedScreenAudioMode = (
   const fallbackMode =
     capabilities.systemAudio === "unsupported" ? "none" : "system";
   const warningPrefix =
-    capabilities.platform === "linux"
-      ? "Per-app audio on Linux requires choosing a running app audio target."
-      : "Per-app audio requires selecting a target app.";
+    "Per-app audio on Linux requires choosing a running app audio target.";
 
   return {
     requestedMode: selection.audioMode,

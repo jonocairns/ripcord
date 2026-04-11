@@ -32,7 +32,7 @@ const Roles = memo(() => {
 	}
 
 	return (
-		<div className="grid items-start gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
+		<div className="space-y-4">
 			<RolesList
 				roles={roles}
 				selectedRoleId={selectedRoleId}
@@ -40,20 +40,17 @@ const Roles = memo(() => {
 				refetch={refetch}
 			/>
 			{selectedRole ? (
-				<UpdateRole
-					key={selectedRole.id}
-					selectedRole={selectedRole}
-					setSelectedRoleId={setSelectedRoleId}
-					refetch={refetch}
-				/>
+				<UpdateRole key={selectedRole.id} selectedRole={selectedRole} refetch={refetch} />
 			) : (
-				<Card className="min-h-[560px] border-dashed">
+				<Card className="min-h-[400px] border-dashed">
 					<CardContent className="flex h-full flex-col items-center justify-center gap-3 py-16 text-center">
 						<div className="bg-muted flex h-12 w-12 items-center justify-center rounded-full">
 							<Shield className="text-muted-foreground h-6 w-6" />
 						</div>
 						<p className="text-foreground text-base font-medium">Select a role to edit</p>
-						<p className="max-w-sm text-sm text-muted-foreground">Choose a role from the list, or create a new one.</p>
+						<p className="max-w-sm text-sm text-muted-foreground">
+							Choose a role from the selector above, or create a new one.
+						</p>
 					</CardContent>
 				</Card>
 			)}

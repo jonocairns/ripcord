@@ -73,7 +73,7 @@ void describe("resolveScreenAudioMode", () => {
 });
 
 void describe("resolvePreparedScreenAudioMode", () => {
-  void it("falls back when per-app audio is requested for a full-screen share without an explicit target", () => {
+  void it("falls back when per-app audio is requested for a full-screen share", () => {
     const capabilities: TDesktopCapabilities = {
       platform: "windows",
       systemAudio: "supported",
@@ -94,7 +94,7 @@ void describe("resolvePreparedScreenAudioMode", () => {
     assert.equal(resolved.effectiveMode, "system");
     assert.match(
       resolved.warning ?? "",
-      /Per-app audio requires selecting a target app/i,
+      /Per-app audio is not available when sharing an entire display/i,
     );
   });
 
@@ -149,7 +149,7 @@ void describe("resolvePreparedScreenAudioMode", () => {
     );
   });
 
-  void it("keeps per-app audio for a full-screen share when an explicit target is selected", () => {
+  void it("still falls back for a full-screen share even when an explicit target is selected", () => {
     const capabilities: TDesktopCapabilities = {
       platform: "windows",
       systemAudio: "supported",
@@ -168,7 +168,10 @@ void describe("resolvePreparedScreenAudioMode", () => {
       capabilities,
     );
 
-    assert.equal(resolved.effectiveMode, "app");
-    assert.equal(resolved.warning, undefined);
+    assert.equal(resolved.effectiveMode, "system");
+    assert.match(
+      resolved.warning ?? "",
+      /Per-app audio is not available when sharing an entire display/i,
+    );
   });
 });

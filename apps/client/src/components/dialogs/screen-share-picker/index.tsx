@@ -11,18 +11,23 @@ import {
 	DialogTitle,
 } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
-import {
+import type {
 	ScreenAudioMode,
-	type TDesktopAppAudioTargetsResult,
-	type TDesktopCapabilities,
-	type TDesktopScreenShareSelection,
-	type TDesktopShareSource,
+	TDesktopAppAudioTargetsResult,
+	TDesktopCapabilities,
+	TDesktopScreenShareSelection,
+	TDesktopShareSource,
 } from '@/runtime/types';
 import type { TDialogBaseProps } from '../types';
-import { getEffectiveScreenShareAudioMode, resolveAppAudioTargetBehavior } from './resolve-app-audio-target';
+import {
+	getDefaultScreenShareIncludeAudio,
+	getEffectiveScreenShareAudioMode,
+	resolveAppAudioTargetBehavior,
+} from './resolve-app-audio-target';
 
 type TScreenSharePickerDialogProps = TDialogBaseProps & {
 	sources: TDesktopShareSource[];
@@ -31,12 +36,6 @@ type TScreenSharePickerDialogProps = TDialogBaseProps & {
 	onConfirm?: (selection: TDesktopScreenShareSelection) => void;
 	onCancel?: () => void;
 };
-
-const supportLabelMap = {
-	supported: 'Supported',
-	'best-effort': 'Best effort',
-	unsupported: 'Unavailable',
-} as const;
 
 const issueAlertClassNameBySeverity = {
 	info: 'border-blue-200/70 bg-blue-500/10 text-blue-100',
@@ -49,7 +48,9 @@ const ScreenSharePickerDialog = memo(
 		const desktopBridge = getDesktopBridge();
 		const [liveCapabilities, setLiveCapabilities] = useState(() => normalizeDesktopCapabilities(capabilities));
 		const [selectedSourceId, setSelectedSourceId] = useState(sources[0]?.id);
-		const [audioMode, setAudioMode] = useState(defaultAudioMode);
+		const [includeAudioRequested, setIncludeAudioRequested] = useState(() =>
+			getDefaultScreenShareIncludeAudio(defaultAudioMode),
+		);
 		const [appAudioTargetsResult, setAppAudioTargetsResult] = useState<TDesktopAppAudioTargetsResult>({
 			targets: [],
 		});
@@ -66,15 +67,29 @@ const ScreenSharePickerDialog = memo(
 
 			return sources.find((source) => source.id === selectedSourceId);
 		}, [selectedSourceId, sources]);
-		const isPerAppAudioForced = selectedSource?.kind === 'window' && liveCapabilities.perAppAudio !== 'unsupported';
+		const systemAudioSupported = liveCapabilities.systemAudio !== 'unsupported';
+		const perAppAudioSupported = liveCapabilities.perAppAudio !== 'unsupported';
+		const canIncludeAudio = (() => {
+			if (selectedSource?.kind === 'screen') {
+				return systemAudioSupported;
+			}
+
+			if (selectedSource?.kind === 'window') {
+				return perAppAudioSupported || systemAudioSupported;
+			}
+
+			return false;
+		})();
+		const includeAudio = canIncludeAudio && includeAudioRequested;
 		const effectiveAudioMode = getEffectiveScreenShareAudioMode({
-			requestedAudioMode: audioMode,
-			perAppAudioSupported: liveCapabilities.perAppAudio !== 'unsupported',
+			includeAudio,
+			systemAudioSupported,
+			perAppAudioSupported,
 			sourceKind: selectedSource?.kind,
 		});
 		const appAudioTargetBehavior = resolveAppAudioTargetBehavior({
 			audioMode: effectiveAudioMode,
-			perAppAudioSupported: liveCapabilities.perAppAudio !== 'unsupported',
+			perAppAudioSupported,
 			sourceKind: selectedSource?.kind,
 			availableTargetCount: appAudioTargetsResult.targets.length,
 			suggestedTargetId: appAudioTargetsResult.suggestedTargetId,
@@ -157,7 +172,7 @@ const ScreenSharePickerDialog = memo(
 			}
 
 			setSelectedSourceId(sources[0]?.id);
-			setAudioMode(defaultAudioMode);
+			setIncludeAudioRequested(getDefaultScreenShareIncludeAudio(defaultAudioMode));
 			setSelectedAppAudioTargetId(undefined);
 			setAppAudioTargetsResult({
 				targets: [],
@@ -206,7 +221,7 @@ const ScreenSharePickerDialog = memo(
 					setAppAudioTargetsResult(result);
 					const nextTargetBehavior = resolveAppAudioTargetBehavior({
 						audioMode: effectiveAudioMode,
-						perAppAudioSupported: liveCapabilities.perAppAudio !== 'unsupported',
+						perAppAudioSupported,
 						sourceKind: selectedSource?.kind,
 						availableTargetCount: result.targets.length,
 						suggestedTargetId: result.suggestedTargetId,
@@ -248,7 +263,7 @@ const ScreenSharePickerDialog = memo(
 		}, [
 			desktopBridge,
 			effectiveAudioMode,
-			liveCapabilities.perAppAudio,
+			perAppAudioSupported,
 			selectedSource?.kind,
 			selectedSourceId,
 			shouldResolveAppAudioTargets,
@@ -263,12 +278,6 @@ const ScreenSharePickerDialog = memo(
 					</DialogHeader>
 
 					<div className="space-y-4">
-						<div className="flex flex-wrap gap-2 text-xs">
-							<Badge variant="outline">System Audio: {supportLabelMap[liveCapabilities.systemAudio]}</Badge>
-							<Badge variant="outline">Per-App Audio: {supportLabelMap[liveCapabilities.perAppAudio]}</Badge>
-							<Badge variant="outline">Platform: {liveCapabilities.platform}</Badge>
-						</div>
-
 						{screenShareIssues.length > 0 && (
 							<div className="space-y-2">
 								{screenShareIssues.map((issue) => (
@@ -296,37 +305,88 @@ const ScreenSharePickerDialog = memo(
 							</div>
 						)}
 
-						<p className="text-xs text-muted-foreground">
-							Fullscreen or exclusive apps may only be shareable by selecting a display.
-						</p>
+						<div className="max-h-[420px] overflow-y-auto pr-1 space-y-4">
+							{displaySources.length > 0 && (
+								<div className="space-y-2">
+									<p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Displays</p>
+									<div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+										{displaySources.map((source) => {
+											const isSelected = selectedSourceId === source.id;
 
-						<div>
-							<label className="text-sm font-medium">Audio mode</label>
-							<Select
-								value={effectiveAudioMode}
-								onValueChange={(value) => setAudioMode(value as ScreenAudioMode)}
-								disabled={isPerAppAudioForced}
-							>
-								<SelectTrigger className="mt-2 w-56">
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectGroup>
-										<SelectItem value={ScreenAudioMode.SYSTEM}>System audio</SelectItem>
-										<SelectItem value={ScreenAudioMode.APP}>Per-app audio</SelectItem>
-										<SelectItem value={ScreenAudioMode.NONE}>No shared audio</SelectItem>
-									</SelectGroup>
-								</SelectContent>
-							</Select>
-							{isPerAppAudioForced && (
-								<p className="mt-2 text-xs text-muted-foreground">
-									Window shares use per-app audio automatically when supported.
-								</p>
+											return (
+												<button
+													type="button"
+													key={source.id}
+													onClick={() => setSelectedSourceId(source.id)}
+													className={cn(
+														'overflow-hidden rounded-md border text-left transition-colors',
+														isSelected
+															? 'border-primary ring-2 ring-primary/30'
+															: 'border-border hover:border-primary/40',
+													)}
+												>
+													<img
+														src={source.thumbnailDataUrl}
+														alt={source.name}
+														className="h-36 w-full bg-muted object-cover"
+													/>
+													<div className="space-y-1 p-3">
+														<div className="flex items-center gap-2">
+															<span className="truncate font-medium">{source.name}</span>
+															<Badge variant="secondary" className="text-[10px]">
+																{source.kind}
+															</Badge>
+														</div>
+													</div>
+												</button>
+											);
+										})}
+									</div>
+								</div>
+							)}
+
+							{windowSources.length > 0 && (
+								<div className="space-y-2">
+									<p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Windows</p>
+									<div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+										{windowSources.map((source) => {
+											const isSelected = selectedSourceId === source.id;
+
+											return (
+												<button
+													type="button"
+													key={source.id}
+													onClick={() => setSelectedSourceId(source.id)}
+													className={cn(
+														'overflow-hidden rounded-md border text-left transition-colors',
+														isSelected
+															? 'border-primary ring-2 ring-primary/30'
+															: 'border-border hover:border-primary/40',
+													)}
+												>
+													<img
+														src={source.thumbnailDataUrl}
+														alt={source.name}
+														className="h-36 w-full bg-muted object-cover"
+													/>
+													<div className="space-y-1 p-3">
+														<div className="flex items-center gap-2">
+															<span className="truncate font-medium">{source.name}</span>
+															<Badge variant="secondary" className="text-[10px]">
+																{source.kind}
+															</Badge>
+														</div>
+													</div>
+												</button>
+											);
+										})}
+									</div>
+								</div>
 							)}
 						</div>
 
 						{shouldResolveAppAudioTargets && (
-							<div className="space-y-2">
+							<div className="space-y-2 border-t border-border/60 pt-4">
 								<label className="text-sm font-medium">App audio source</label>
 
 								{loadingAppAudioTargets && (
@@ -381,95 +441,22 @@ const ScreenSharePickerDialog = memo(
 									)}
 							</div>
 						)}
-
-						<div className="max-h-[420px] overflow-y-auto pr-1 space-y-4">
-							{displaySources.length > 0 && (
-								<div className="space-y-2">
-									<p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Displays</p>
-									<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-										{displaySources.map((source) => {
-											const isSelected = selectedSourceId === source.id;
-
-											return (
-												<button
-													type="button"
-													key={source.id}
-													onClick={() => setSelectedSourceId(source.id)}
-													className={cn(
-														'text-left rounded-md border transition-colors overflow-hidden',
-														isSelected
-															? 'border-primary ring-2 ring-primary/30'
-															: 'border-border hover:border-primary/40',
-													)}
-												>
-													<img
-														src={source.thumbnailDataUrl}
-														alt={source.name}
-														className="h-36 w-full object-cover bg-muted"
-													/>
-													<div className="p-3 space-y-1">
-														<div className="flex items-center gap-2">
-															<span className="font-medium truncate">{source.name}</span>
-															<Badge variant="secondary" className="text-[10px]">
-																{source.kind}
-															</Badge>
-														</div>
-													</div>
-												</button>
-											);
-										})}
-									</div>
-								</div>
-							)}
-
-							{windowSources.length > 0 && (
-								<div className="space-y-2">
-									<p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Windows</p>
-									<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-										{windowSources.map((source) => {
-											const isSelected = selectedSourceId === source.id;
-
-											return (
-												<button
-													type="button"
-													key={source.id}
-													onClick={() => setSelectedSourceId(source.id)}
-													className={cn(
-														'text-left rounded-md border transition-colors overflow-hidden',
-														isSelected
-															? 'border-primary ring-2 ring-primary/30'
-															: 'border-border hover:border-primary/40',
-													)}
-												>
-													<img
-														src={source.thumbnailDataUrl}
-														alt={source.name}
-														className="h-36 w-full object-cover bg-muted"
-													/>
-													<div className="p-3 space-y-1">
-														<div className="flex items-center gap-2">
-															<span className="font-medium truncate">{source.name}</span>
-															<Badge variant="secondary" className="text-[10px]">
-																{source.kind}
-															</Badge>
-														</div>
-													</div>
-												</button>
-											);
-										})}
-									</div>
-								</div>
-							)}
-						</div>
 					</div>
 
-					<DialogFooter className="gap-2">
-						<Button variant="outline" onClick={onCancelClick}>
-							Cancel
-						</Button>
-						<Button onClick={onSubmit} disabled={!canConfirmShare}>
-							Share
-						</Button>
+					<DialogFooter className="w-full flex-row items-center gap-4 sm:justify-between">
+						<div className="shrink-0 flex items-center gap-3">
+							<p className="text-sm font-medium">Include audio</p>
+							<Switch checked={includeAudio} onCheckedChange={setIncludeAudioRequested} disabled={!canIncludeAudio} />
+						</div>
+
+						<div className="ml-auto flex items-center gap-2">
+							<Button variant="outline" onClick={onCancelClick}>
+								Cancel
+							</Button>
+							<Button onClick={onSubmit} disabled={!canConfirmShare}>
+								Share
+							</Button>
+						</div>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>

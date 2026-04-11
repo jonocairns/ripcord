@@ -1,5 +1,9 @@
 import { ScreenAudioMode, type TDesktopShareSourceKind } from '@/runtime/types';
 
+const getDefaultScreenShareIncludeAudio = (audioMode: ScreenAudioMode) => {
+	return audioMode !== ScreenAudioMode.NONE;
+};
+
 type TResolveAppAudioTargetBehaviorInput = {
 	audioMode: ScreenAudioMode;
 	perAppAudioSupported: boolean;
@@ -17,19 +21,29 @@ type TResolveAppAudioTargetBehaviorResult = {
 };
 
 const getEffectiveScreenShareAudioMode = ({
-	requestedAudioMode,
+	includeAudio,
+	systemAudioSupported,
 	perAppAudioSupported,
 	sourceKind,
 }: {
-	requestedAudioMode: ScreenAudioMode;
+	includeAudio: boolean;
+	systemAudioSupported: boolean;
 	perAppAudioSupported: boolean;
 	sourceKind: TDesktopShareSourceKind | undefined;
 }) => {
-	if (perAppAudioSupported && sourceKind === 'window') {
+	if (!includeAudio || !sourceKind) {
+		return ScreenAudioMode.NONE;
+	}
+
+	if (sourceKind === 'window' && perAppAudioSupported) {
 		return ScreenAudioMode.APP;
 	}
 
-	return requestedAudioMode;
+	if (systemAudioSupported) {
+		return ScreenAudioMode.SYSTEM;
+	}
+
+	return ScreenAudioMode.NONE;
 };
 
 const resolveAppAudioTargetBehavior = ({
@@ -40,10 +54,10 @@ const resolveAppAudioTargetBehavior = ({
 	suggestedTargetId,
 	requiresManualSelection,
 }: TResolveAppAudioTargetBehaviorInput): TResolveAppAudioTargetBehaviorResult => {
-	const shouldResolveAppAudioTargets = perAppAudioSupported && audioMode === ScreenAudioMode.APP && !!sourceKind;
+	const shouldResolveAppAudioTargets =
+		perAppAudioSupported && audioMode === ScreenAudioMode.APP && sourceKind === 'window';
 
-	const requiresManualAppAudioTarget =
-		shouldResolveAppAudioTargets && (requiresManualSelection ?? (sourceKind === 'screen' || !suggestedTargetId));
+	const requiresManualAppAudioTarget = shouldResolveAppAudioTargets && (requiresManualSelection ?? !suggestedTargetId);
 
 	const shouldAutoSelectSuggestedTarget =
 		shouldResolveAppAudioTargets && !requiresManualAppAudioTarget && !!suggestedTargetId;
@@ -59,4 +73,4 @@ const resolveAppAudioTargetBehavior = ({
 };
 
 export type { TResolveAppAudioTargetBehaviorInput, TResolveAppAudioTargetBehaviorResult };
-export { getEffectiveScreenShareAudioMode, resolveAppAudioTargetBehavior };
+export { getDefaultScreenShareIncludeAudio, getEffectiveScreenShareAudioMode, resolveAppAudioTargetBehavior };
