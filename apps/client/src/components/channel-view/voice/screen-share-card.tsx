@@ -125,7 +125,11 @@ const ScreenShareCard = memo(
 			hasScreenShareAudioStream,
 			screenShareStream,
 			screenShareAudioStream,
-		} = useVoiceRefs({ remoteId: userId, attachScreenShareAudio: !isPoppedOut });
+		} = useVoiceRefs({
+			remoteId: userId,
+			attachScreenShareVideo: !hideOwnPreview,
+			attachScreenShareAudio: !isPoppedOut,
+		});
 		const [popoutVideoElement, setPopoutVideoElement] = useState<HTMLVideoElement | null>(null);
 		const [popoutAudioElement, setPopoutAudioElement] = useState<HTMLAudioElement | null>(null);
 
