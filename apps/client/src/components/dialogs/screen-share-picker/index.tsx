@@ -13,8 +13,8 @@ import {
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
-import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
+import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import type {
 	ScreenAudioMode,
 	TDesktopAppAudioTargetsResult,
@@ -31,7 +31,8 @@ import {
 
 type TScreenSharePickerDialogProps = TDialogBaseProps & {
 	sources: TDesktopShareSource[];
-	capabilities: TDesktopCapabilities;
+	capabilities?: TDesktopCapabilities;
+	isLoading?: boolean;
 	defaultAudioMode: ScreenAudioMode;
 	onConfirm?: (selection: TDesktopScreenShareSelection) => void;
 	onCancel?: () => void;
@@ -43,10 +44,29 @@ const issueAlertClassNameBySeverity = {
 	error: 'border-destructive/40 bg-destructive/10 text-destructive',
 } as const;
 
+const LOADING_PLACEHOLDER_CAPABILITIES: TDesktopCapabilities = {
+	platform: 'windows',
+	systemAudio: 'unsupported',
+	perAppAudio: 'unsupported',
+	globalPushKeybinds: 'unsupported',
+	issues: [],
+	notes: [],
+};
+
 const ScreenSharePickerDialog = memo(
-	({ isOpen, sources, capabilities, defaultAudioMode, onConfirm, onCancel }: TScreenSharePickerDialogProps) => {
+	({
+		isOpen,
+		sources,
+		capabilities,
+		isLoading = false,
+		defaultAudioMode,
+		onConfirm,
+		onCancel,
+	}: TScreenSharePickerDialogProps) => {
 		const desktopBridge = getDesktopBridge();
-		const [liveCapabilities, setLiveCapabilities] = useState(() => normalizeDesktopCapabilities(capabilities));
+		const [liveCapabilities, setLiveCapabilities] = useState(() =>
+			normalizeDesktopCapabilities(capabilities ?? LOADING_PLACEHOLDER_CAPABILITIES),
+		);
 		const [selectedSourceId, setSelectedSourceId] = useState(sources[0]?.id);
 		const [includeAudioRequested, setIncludeAudioRequested] = useState(() =>
 			getDefaultScreenShareIncludeAudio(defaultAudioMode),
@@ -58,6 +78,7 @@ const ScreenSharePickerDialog = memo(
 		const [loadingAppAudioTargets, setLoadingAppAudioTargets] = useState(false);
 
 		const hasSources = sources.length > 0;
+		const showLoadingBody = isLoading && !hasSources;
 		const displaySources = useMemo(() => sources.filter((source) => source.kind === 'screen'), [sources]);
 		const windowSources = useMemo(() => sources.filter((source) => source.kind === 'window'), [sources]);
 		const selectedSource = useMemo(() => {
@@ -114,6 +135,7 @@ const ScreenSharePickerDialog = memo(
 		const allowsImplicitFallbackWithoutTarget =
 			shouldResolveAppAudioTargets && appAudioTargetBehavior.allowsImplicitFallbackWithoutTarget;
 		const canConfirmShare =
+			!showLoadingBody &&
 			hasSources &&
 			!!selectedSourceId &&
 			!isResolvingAppAudioTargets &&
@@ -131,12 +153,16 @@ const ScreenSharePickerDialog = memo(
 		}, [allowsImplicitFallbackWithoutTarget, liveCapabilities.systemAudio]);
 
 		const sourceLabel = useMemo(() => {
+			if (showLoadingBody) {
+				return 'Finding windows and screens you can share...';
+			}
+
 			if (!hasSources) {
 				return 'No shareable sources were found.';
 			}
 
 			return `${sources.length} source${sources.length === 1 ? '' : 's'} available`;
-		}, [hasSources, sources.length]);
+		}, [hasSources, showLoadingBody, sources.length]);
 
 		const onSubmit = () => {
 			if (!selectedSourceId) {
@@ -163,6 +189,7 @@ const ScreenSharePickerDialog = memo(
 		};
 
 		useEffect(() => {
+			if (!capabilities) return;
 			setLiveCapabilities(normalizeDesktopCapabilities(capabilities));
 		}, [capabilities]);
 
@@ -306,7 +333,19 @@ const ScreenSharePickerDialog = memo(
 						)}
 
 						<div className="max-h-[420px] overflow-y-auto pr-1 space-y-4">
-							{displaySources.length > 0 && (
+							{showLoadingBody && (
+								<div className="flex min-h-[240px] items-center justify-center">
+									<div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
+										<div
+											className="size-8 rounded-full border-2 border-muted-foreground/20 border-t-primary animate-spin"
+											aria-hidden
+										/>
+										<p className="text-sm">Loading shareable windows and screens...</p>
+									</div>
+								</div>
+							)}
+
+							{!showLoadingBody && displaySources.length > 0 && (
 								<div className="space-y-2">
 									<p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Displays</p>
 									<div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -345,7 +384,7 @@ const ScreenSharePickerDialog = memo(
 								</div>
 							)}
 
-							{windowSources.length > 0 && (
+							{!showLoadingBody && windowSources.length > 0 && (
 								<div className="space-y-2">
 									<p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Windows</p>
 									<div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -385,7 +424,7 @@ const ScreenSharePickerDialog = memo(
 							)}
 						</div>
 
-						{shouldResolveAppAudioTargets && (
+						{!showLoadingBody && shouldResolveAppAudioTargets && (
 							<div className="space-y-2 border-t border-border/60 pt-4">
 								<label className="text-sm font-medium">App audio source</label>
 
