@@ -257,10 +257,15 @@ class PubSub {
 
   public subscribeForChannel<TTopic extends keyof Events>(
     channelId: number,
-    topic: TTopic
+    topic: TTopic,
+    shouldEmit?: (data: Events[TTopic]) => boolean
   ): Observable<Events[TTopic], unknown> {
     return observable((observer) => {
       const listener = (data: Events[TTopic]) => {
+        if (shouldEmit && !shouldEmit(data)) {
+          return;
+        }
+
         observer.next(data);
       };
 
@@ -305,4 +310,6 @@ class PubSub {
   }
 }
 
-export const pubsub = new PubSub();
+const pubsub = new PubSub();
+
+export { PubSub, pubsub };

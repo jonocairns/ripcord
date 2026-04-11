@@ -6,17 +6,10 @@ import { protectedProcedure } from '../../utils/trpc';
 const restartConsumerIceRoute = protectedProcedure.mutation(async ({ ctx }) => {
   await ctx.needsPermission(Permission.JOIN_VOICE_CHANNELS);
 
-  invariant(ctx.currentVoiceChannelId, {
-    code: 'BAD_REQUEST',
-    message: 'User is not in a voice channel'
-  });
-
-  const runtime = VoiceRuntime.findById(ctx.currentVoiceChannelId);
-
-  invariant(runtime, {
-    code: 'INTERNAL_SERVER_ERROR',
-    message: 'Voice runtime not found for this channel'
-  });
+  const runtime = VoiceRuntime.requireJoinedRuntime(
+    ctx.currentVoiceChannelId,
+    ctx.user.id
+  );
 
   const transport = runtime.getConsumerTransport(ctx.user.id);
 

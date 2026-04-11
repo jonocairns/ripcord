@@ -18,6 +18,7 @@ import type {
 } from 'mediasoup/types';
 import { logger } from '../logger';
 import { eventBus } from '../plugins/event-bus';
+import { invariant } from '../utils/invariant';
 import {
   mediaSoupWorker,
   webRtcServer,
@@ -141,6 +142,34 @@ class VoiceRuntime {
     }
 
     return undefined;
+  };
+
+  public static getAll = (): VoiceRuntime[] => {
+    return Array.from(voiceRuntimes.values());
+  };
+
+  public static requireJoinedRuntime = (
+    channelId: number | undefined,
+    userId: number
+  ): VoiceRuntime => {
+    invariant(channelId, {
+      code: 'BAD_REQUEST',
+      message: 'User is not in a voice channel'
+    });
+
+    const runtime = VoiceRuntime.findById(channelId);
+
+    invariant(runtime, {
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Voice runtime not found for this channel'
+    });
+
+    invariant(runtime.getUser(userId), {
+      code: 'BAD_REQUEST',
+      message: 'User is not in a voice channel'
+    });
+
+    return runtime;
   };
 
   public static getVoiceMap = (): TVoiceMap => {

@@ -64,9 +64,16 @@ type TRecoveryDeps = {
 	clearExternalStreams: () => void;
 	cleanupTransports: () => void;
 	loadDevice: () => Promise<{ rtpCapabilities: object }>;
-	createProducerTransport: (device: object) => Promise<void>;
-	createConsumerTransport: (device: object) => Promise<void>;
-	consumeExistingProducers: (caps: object) => Promise<void>;
+	createProducerTransport: (device: object, params?: object) => Promise<void>;
+	createConsumerTransport: (device: object, params?: object) => Promise<void>;
+	rejoinVoiceSession: (channelId: number) => Promise<{
+		device: { rtpCapabilities: object };
+		existingProducers?: object;
+		producerTransportParams?: object;
+		consumerTransportParams?: object;
+	}>;
+	isMissingVoiceSessionError: (err: unknown) => boolean;
+	consumeExistingProducers: (caps: object, prefetchedProducers?: object) => Promise<void>;
 	republishTracks: () => Promise<void>[];
 	consume: (id: number | string, kind: string, caps: object) => Promise<void>;
 	startMonitoring: () => void;
@@ -105,26 +112,60 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 			deps.clearExternalStreams();
 			deps.cleanupTransports();
 
-			const device = await withRecoveryTimeout(deps.loadDevice());
+			let device = await withRecoveryTimeout(deps.loadDevice());
 			throwIfNonceStale('device load');
 
-			await withRecoveryTimeout(
-				Promise.all([deps.createProducerTransport(device), deps.createConsumerTransport(device)]),
-			);
+			let currentRtpCapabilities = device.rtpCapabilities;
+			let recoveryJoinResult:
+				| {
+						device: { rtpCapabilities: object };
+						existingProducers?: object;
+						producerTransportParams?: object;
+						consumerTransportParams?: object;
+				  }
+				| undefined;
+
+			try {
+				await withRecoveryTimeout(
+					Promise.all([deps.createProducerTransport(device), deps.createConsumerTransport(device)]),
+				);
+			} catch (error) {
+				const recoveryChannelId = deps.currentVoiceChannelId();
+
+				if (!deps.isMissingVoiceSessionError(error) || recoveryChannelId === undefined) {
+					throw error;
+				}
+
+				recoveryJoinResult = await withRecoveryTimeout(deps.rejoinVoiceSession(recoveryChannelId));
+				throwIfNonceStale('voice rejoin');
+
+				device = recoveryJoinResult.device;
+				currentRtpCapabilities = device.rtpCapabilities;
+
+				await withRecoveryTimeout(
+					Promise.all([
+						deps.createProducerTransport(device, recoveryJoinResult.producerTransportParams),
+						deps.createConsumerTransport(device, recoveryJoinResult.consumerTransportParams),
+					]),
+				);
+			}
 			throwIfNonceStale('transport creation');
 
 			await withRecoveryTimeout(
-				Promise.all([deps.consumeExistingProducers(device.rtpCapabilities), ...deps.republishTracks()]),
+				Promise.all([
+					deps.consumeExistingProducers(currentRtpCapabilities, recoveryJoinResult?.existingProducers),
+					...deps.republishTracks(),
+				]),
 			);
 			throwIfNonceStale('consume/republish');
 
 			const restoreTasks: Promise<void>[] = [];
 			Object.entries(snapshot.remoteUserStreams).forEach(([id, kinds]) => {
-				kinds.forEach((kind) => restoreTasks.push(deps.consume(id, kind, device.rtpCapabilities)));
+				kinds.forEach((kind) => restoreTasks.push(deps.consume(id, kind, currentRtpCapabilities)));
 			});
 			Object.entries(snapshot.externalStreams).forEach(([id, state]) => {
-				if (state.audio) restoreTasks.push(deps.consume(id, 'externalAudio', device.rtpCapabilities));
-				if (state.video) restoreTasks.push(deps.consume(id, 'externalVideo', device.rtpCapabilities));
+				if (state.audio) restoreTasks.push(deps.consume(id, 'externalAudio', currentRtpCapabilities));
+				if (state.video) restoreTasks.push(deps.consume(id, 'externalVideo', currentRtpCapabilities));
 			});
 			await withRecoveryTimeout(Promise.all(restoreTasks));
 			throwIfNonceStale('watch restoration');
@@ -174,6 +215,8 @@ const makeDeps = (overrides: Partial<TRecoveryDeps> = {}): TRecoveryDeps => {
 		loadDevice: mock(() => Promise.resolve({ rtpCapabilities: {} })),
 		createProducerTransport: mock(() => Promise.resolve()),
 		createConsumerTransport: mock(() => Promise.resolve()),
+		rejoinVoiceSession: mock(() => Promise.resolve({ device: { rtpCapabilities: {} } })),
+		isMissingVoiceSessionError: () => false,
 		consumeExistingProducers: mock(() => Promise.resolve()),
 		republishTracks: mock(() => []),
 		consume: mock(() => Promise.resolve()),
@@ -368,6 +411,45 @@ describe('recoverTransportSession orchestration', () => {
 		expect(await runRecovery(deps)).toBe(true);
 		expect(calls).toBe(2);
 		expect((deps.sleep as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
+	});
+
+	it('falls back to a fresh voice join when transport recreation loses the server session', async () => {
+		const missingSessionError = Object.assign(new Error('User is not in a voice channel'), {
+			data: { code: 'BAD_REQUEST', httpStatus: 400 },
+		});
+		const rejoinedCapabilities = { codecs: ['opus'] };
+		const prefetchedProducers = { remoteAudioIds: [99] };
+		let producerCalls = 0;
+
+		const deps = makeDeps({
+			createProducerTransport: mock(async () => {
+				producerCalls += 1;
+
+				if (producerCalls === 1) {
+					throw missingSessionError;
+				}
+			}),
+			isMissingVoiceSessionError: (error) => error === missingSessionError,
+			rejoinVoiceSession: mock(async (channelId: number) => {
+				expect(channelId).toBe(7);
+
+				return {
+					device: { rtpCapabilities: rejoinedCapabilities },
+					existingProducers: prefetchedProducers,
+					producerTransportParams: { id: 'new-producer-transport' },
+					consumerTransportParams: { id: 'new-consumer-transport' },
+				};
+			}),
+			consumeExistingProducers: mock(async (caps, existingProducers) => {
+				expect(caps).toBe(rejoinedCapabilities);
+				expect(existingProducers).toBe(prefetchedProducers);
+			}),
+		});
+
+		expect(await runRecovery(deps)).toBe(true);
+		expect(producerCalls).toBe(2);
+		expect((deps.rejoinVoiceSession as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
 		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
 	});
 

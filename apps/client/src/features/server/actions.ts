@@ -204,23 +204,29 @@ export const joinServer = async (
 
 			const state = useServerStore.getState();
 			if (state.currentVoiceChannelId !== undefined) {
-				// Check whether the server still has a voice session for this user.
-				// After a server restart or if the reconnect grace window expired,
-				// the server's voiceMap will no longer contain the user — bumping
-				// the nonce would trigger recovery against a non-existent session.
+				// Keep the local channel sticky across WS reconnects even if the
+				// server-side voice session is gone. A restarted server cannot restore
+				// the mediasoup session from voiceMap, so the VoiceProvider needs the
+				// original channel id to turn the next transport rebuild into a fresh
+				// voice.join instead of forcing a manual rejoin.
 				const channelState = state.voiceMap[state.currentVoiceChannelId];
 				const ownUserId = state.ownUserId;
 				const stillInVoice = ownUserId !== undefined && channelState?.users[ownUserId] !== undefined;
 
 				if (stillInVoice) {
-					// Recreate channel-scoped voice subscriptions against the restored
-					// server-side voice session without forcing a drop/rejoin cycle.
-					state.bumpVoiceSessionReconnectNonce();
+					logDebug('WS reconnect restored voice session', {
+						channelId: state.currentVoiceChannelId,
+					});
 				} else {
-					// Server dropped the voice session — clear stale local state so the
-					// user isn't stuck with a phantom voice channel that can't send RPCs.
-					useServerStore.getState().setCurrentVoiceChannelId(undefined);
+					logDebug('WS reconnect restored server connection without a voice session; recovery will rejoin', {
+						channelId: state.currentVoiceChannelId,
+					});
 				}
+
+				// Recreate channel-scoped voice subscriptions against the latest WS
+				// session. If the server lost the voice session, the provider will
+				// fall back to a fresh voice.join when transport recovery runs.
+				state.bumpVoiceSessionReconnectNonce();
 			}
 
 			return 'joined';

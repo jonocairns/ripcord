@@ -5,6 +5,7 @@ import { db } from '../../db';
 import { publishUser } from '../../db/publishers';
 import { userRoles } from '../../db/schema';
 import { invariant } from '../../utils/invariant';
+import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
 import { protectedProcedure } from '../../utils/trpc';
 
 const removeRoleRoute = protectedProcedure
@@ -42,7 +43,12 @@ const removeRoleRoute = protectedProcedure
         )
       );
 
-    publishUser(input.userId, 'update');
+    await Promise.all([
+      publishUser(input.userId, 'update'),
+      revalidateActiveVoiceSessions({
+        userIds: [input.userId]
+      })
+    ]);
   });
 
 export { removeRoleRoute };

@@ -4,8 +4,9 @@ import { z } from 'zod';
 import { db } from '../../db';
 import { syncRolePermissions } from '../../db/mutations/roles';
 import { publishRole } from '../../db/publishers';
-import { roles } from '../../db/schema';
+import { roles, userRoles } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
+import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
 import { protectedProcedure } from '../../utils/trpc';
 
 const updateRoleRoute = protectedProcedure
@@ -22,6 +23,11 @@ const updateRoleRoute = protectedProcedure
   .mutation(async ({ ctx, input }) => {
     await ctx.needsPermission(Permission.MANAGE_ROLES);
 
+    const affectedUsers = await db
+      .select({ userId: userRoles.userId })
+      .from(userRoles)
+      .where(eq(userRoles.roleId, input.roleId));
+
     const updatedRole = await db
       .update(roles)
       .set({
@@ -36,7 +42,12 @@ const updateRoleRoute = protectedProcedure
       await syncRolePermissions(updatedRole.id, input.permissions);
     }
 
-    publishRole(updatedRole.id, 'update');
+    await Promise.all([
+      publishRole(updatedRole.id, 'update'),
+      revalidateActiveVoiceSessions({
+        userIds: affectedUsers.map((user) => user.userId)
+      })
+    ]);
     enqueueActivityLog({
       type: ActivityLogType.UPDATED_ROLE,
       userId: ctx.user.id,
