@@ -109,7 +109,7 @@ const ScreenShareCard = memo(
 		const isWindowFocused = useWindowFocus();
 		const { getUserScreenVolumeKey, getVolume, setVolume, toggleMute } = useVolumeControl();
 		const isOwnUser = ownUserId === userId;
-		const showOwnPreview = !isOwnUser || isWindowFocused;
+		const hideOwnPreview = isOwnUser && !isWindowFocused;
 		const volumeKey = getUserScreenVolumeKey(userId);
 		const volume = getVolume(volumeKey);
 		const isMuted = volume === 0;
@@ -419,23 +419,23 @@ const ScreenShareCard = memo(
 						onStopWatching={onStopWatching}
 					/>
 
-					{showOwnPreview ? (
-						<video
-							ref={screenShareRef}
-							autoPlay
-							muted={isOwnUser || isPoppedOut}
-							playsInline
-							className={cn(
-								'absolute inset-0 h-full w-full bg-[#1b2026] object-contain',
-								isPoppedOut && 'opacity-0 pointer-events-none',
-							)}
-							style={{
-								transform: `scale(${zoom}) translate(${position.x / zoom}px, ${position.y / zoom}px)`,
-								transition: isDragging ? 'none' : 'transform 0.1s ease-out',
-							}}
-							onDoubleClick={isPoppedOut ? undefined : handleToggleFullscreen}
-						/>
-					) : (
+					<video
+						ref={screenShareRef}
+						autoPlay
+						muted={isOwnUser || isPoppedOut}
+						playsInline
+						className={cn(
+							'absolute inset-0 h-full w-full bg-[#1b2026] object-contain',
+							(isPoppedOut || hideOwnPreview) && 'opacity-0 pointer-events-none',
+						)}
+						style={{
+							transform: `scale(${zoom}) translate(${position.x / zoom}px, ${position.y / zoom}px)`,
+							transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+						}}
+						onDoubleClick={isPoppedOut ? undefined : handleToggleFullscreen}
+					/>
+
+					{hideOwnPreview && (
 						<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#11161d] p-6 text-center text-white/80">
 							<Monitor className="size-10 text-cyan-300/80" />
 							<div className="space-y-1">
