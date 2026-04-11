@@ -80,19 +80,21 @@ const hasChannelPermission = async (
   return channelInfo.permissions[targetPermission] === true;
 };
 
+// Mirrors the permission checks performed by `joinVoiceRoute`:
+// `Permission.JOIN_VOICE_CHANNELS` + `ChannelPermission.JOIN`. SPEAK, WEBCAM,
+// and SHARE_SCREEN are enforced granularly at produce/update-state time, so a
+// user with JOIN but without SPEAK is a legitimate listen-only participant and
+// must not be evicted by the revalidation loop.
 const canUserRemainInVoiceChannel = async (
   userId: number,
   channelId: number
 ): Promise<boolean> => {
-  const [canJoinVoiceChannels, canViewChannel, canJoinChannel, canSpeak] =
-    await Promise.all([
-      hasPermission(userId, Permission.JOIN_VOICE_CHANNELS),
-      hasChannelPermission(userId, channelId, ChannelPermission.VIEW_CHANNEL),
-      hasChannelPermission(userId, channelId, ChannelPermission.JOIN),
-      hasChannelPermission(userId, channelId, ChannelPermission.SPEAK)
-    ]);
+  const [canJoinVoiceChannels, canJoinChannel] = await Promise.all([
+    hasPermission(userId, Permission.JOIN_VOICE_CHANNELS),
+    hasChannelPermission(userId, channelId, ChannelPermission.JOIN)
+  ]);
 
-  return canJoinVoiceChannels && canViewChannel && canJoinChannel && canSpeak;
+  return canJoinVoiceChannels && canJoinChannel;
 };
 
 const revalidateActiveVoiceSessions = async (options?: {

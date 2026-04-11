@@ -120,4 +120,43 @@ describe('voice permission revalidation', () => {
       'User is not in a voice channel'
     );
   });
+
+  test('retains listen-only voice users when SPEAK is revoked but JOIN remains', async () => {
+    const runtime = await ensureVoiceRuntime();
+    const { caller: ownerCaller } = await initTest(1);
+    const { caller: userCaller } = await initTest(2);
+
+    await ownerCaller.channels.updatePermissions({
+      channelId: VOICE_CHANNEL_ID,
+      userId: 2,
+      permissions: [
+        ChannelPermission.VIEW_CHANNEL,
+        ChannelPermission.JOIN,
+        ChannelPermission.SPEAK
+      ]
+    });
+
+    await ownerCaller.channels.update({
+      channelId: VOICE_CHANNEL_ID,
+      private: true
+    });
+
+    await userCaller.voice.join({
+      channelId: VOICE_CHANNEL_ID,
+      state: {
+        micMuted: false,
+        soundMuted: false
+      }
+    });
+
+    expect(runtime.getUser(2)).toBeDefined();
+
+    await ownerCaller.channels.updatePermissions({
+      channelId: VOICE_CHANNEL_ID,
+      userId: 2,
+      permissions: [ChannelPermission.VIEW_CHANNEL, ChannelPermission.JOIN]
+    });
+
+    expect(runtime.getUser(2)).toBeDefined();
+  });
 });
