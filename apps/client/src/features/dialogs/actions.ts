@@ -113,19 +113,15 @@ export const resetDialogs = () => {
 	useDialogStore.setState(getInitialDialogState());
 };
 
-type TScreenSharePickerData = {
-	sources: TDesktopShareSource[];
-	capabilities: TDesktopCapabilities;
-};
-
 export const requestScreenShareSelection = async ({
 	defaultAudioMode,
-	initialData,
 	loadData,
 }: {
 	defaultAudioMode: ScreenAudioMode;
-	initialData?: TScreenSharePickerData;
-	loadData?: () => Promise<TScreenSharePickerData>;
+	loadData: () => Promise<{
+		sources: TDesktopShareSource[];
+		capabilities: TDesktopCapabilities;
+	}>;
 }): Promise<TDesktopScreenShareSelection | null> => {
 	return new Promise((resolve) => {
 		let settled = false;
@@ -138,9 +134,9 @@ export const requestScreenShareSelection = async ({
 		};
 
 		openDialog(Dialog.SCREEN_SHARE_PICKER, {
-			sources: initialData?.sources ?? [],
-			capabilities: initialData?.capabilities,
-			isLoading: !initialData,
+			sources: [],
+			capabilities: undefined,
+			isLoading: true,
 			defaultAudioMode,
 			onConfirm: (selection: TDesktopScreenShareSelection) => {
 				resolveOnce(selection);
@@ -150,34 +146,32 @@ export const requestScreenShareSelection = async ({
 			},
 		});
 
-		if (!initialData && loadData) {
-			void loadData()
-				.then((data) => {
-					if (settled) return;
+		void loadData()
+			.then((data) => {
+				if (settled) return;
 
-					const state = useDialogStore.getState();
-					if (state.openDialog !== Dialog.SCREEN_SHARE_PICKER || !state.isOpen) return;
+				const state = useDialogStore.getState();
+				if (state.openDialog !== Dialog.SCREEN_SHARE_PICKER || !state.isOpen) return;
 
-					if (data.sources.length === 0) {
-						toast.error('No windows or screens were detected for sharing.');
-						resolveOnce(null);
-						return;
-					}
-
-					useDialogStore.setState({
-						props: {
-							...state.props,
-							sources: data.sources,
-							capabilities: data.capabilities,
-							isLoading: false,
-						},
-					});
-				})
-				.catch(() => {
-					if (settled) return;
-					toast.error('Failed to load shareable sources.');
+				if (data.sources.length === 0) {
+					toast.error('No windows or screens were detected for sharing.');
 					resolveOnce(null);
+					return;
+				}
+
+				useDialogStore.setState({
+					props: {
+						...state.props,
+						sources: data.sources,
+						capabilities: data.capabilities,
+						isLoading: false,
+					},
 				});
-		}
+			})
+			.catch(() => {
+				if (settled) return;
+				toast.error('Failed to load shareable sources.');
+				resolveOnce(null);
+			});
 	});
 };

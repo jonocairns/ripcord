@@ -33,7 +33,6 @@ import {
 	type TAppAudioStatusEvent,
 	type TDesktopCapabilities,
 	type TDesktopScreenShareSelection,
-	type TDesktopShareSource,
 	type TStartAppAudioCaptureInput,
 } from '@/runtime/types';
 import { type TDeviceSettings, type TRemoteUserStreamKinds, VideoCodecPreference } from '@/types';
@@ -96,19 +95,12 @@ const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
 	[VideoCodecPreference.AV1]: 'video/AV1',
 };
 const DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS = 96_000;
-const SCREEN_SHARE_SOURCES_CACHE_TTL_MS = 15_000;
 
 type ResolvedMicProcessingConfig = {
 	wasmNoiseSuppressionEnabled: boolean;
 	browserAutoGainControl: boolean;
 	browserNoiseSuppression: boolean;
 	browserEchoCancellation: boolean;
-};
-
-type TScreenSharePickerData = {
-	sources: TDesktopShareSource[];
-	capabilities: TDesktopCapabilities;
-	fetchedAt: number;
 };
 
 const resolvePreferredVideoCodec = (
@@ -586,8 +578,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
 	const isConnectedRef = useRef(isConnected);
 	const voiceSessionReconnectNonceRef = useRef(voiceSessionReconnectNonce);
-	const screenSharePickerDataRef = useRef<TScreenSharePickerData | undefined>(undefined);
-	const screenSharePickerLoadPromiseRef = useRef<Promise<TScreenSharePickerData> | undefined>(undefined);
 
 	const onTransportFailure = useCallback(() => {
 		if (hasHandledTransportFailureRef.current) {
@@ -1656,90 +1646,30 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		localScreenShareAudioProducer,
 	]);
 
-	const loadDesktopScreenSharePickerData = useCallback(
-		async ({ forceRefresh = false }: { forceRefresh?: boolean } = {}): Promise<TScreenSharePickerData> => {
-			const desktopBridge = getDesktopBridge();
-
-			if (!desktopBridge) {
-				throw new Error('Desktop bridge unavailable');
-			}
-
-			const cachedData = screenSharePickerDataRef.current;
-			if (!forceRefresh && cachedData && Date.now() - cachedData.fetchedAt < SCREEN_SHARE_SOURCES_CACHE_TTL_MS) {
-				return cachedData;
-			}
-
-			if (screenSharePickerLoadPromiseRef.current) {
-				return screenSharePickerLoadPromiseRef.current;
-			}
-
-			const loadPromise = Promise.all([desktopBridge.listShareSources(), desktopBridge.getCapabilities()])
-				.then(([sources, capabilities]) => {
-					const nextData = {
-						sources,
-						capabilities: normalizeDesktopCapabilities(capabilities),
-						fetchedAt: Date.now(),
-					} satisfies TScreenSharePickerData;
-
-					screenSharePickerDataRef.current = nextData;
-					return nextData;
-				})
-				.finally(() => {
-					if (screenSharePickerLoadPromiseRef.current === loadPromise) {
-						screenSharePickerLoadPromiseRef.current = undefined;
-					}
-				});
-
-			screenSharePickerLoadPromiseRef.current = loadPromise;
-			return loadPromise;
-		},
-		[],
-	);
-
-	useEffect(() => {
-		if (!getDesktopBridge()) {
-			return;
-		}
-
-		void loadDesktopScreenSharePickerData().catch((error) => {
-			logVoice('Failed to prefetch desktop screen share picker data', { error });
-		});
-	}, [loadDesktopScreenSharePickerData]);
-
 	const requestDesktopScreenShareSelection = useCallback(async (): Promise<TDesktopScreenShareSelection | null> => {
-		const cachedData = screenSharePickerDataRef.current;
-		const hasFreshPickerData =
-			cachedData !== undefined && Date.now() - cachedData.fetchedAt < SCREEN_SHARE_SOURCES_CACHE_TTL_MS;
-
-		if (hasFreshPickerData) {
-			// Kick off a background refresh so the next open is still fresh.
-			void loadDesktopScreenSharePickerData({ forceRefresh: true }).catch((error) => {
-				logVoice('Failed to refresh desktop screen share picker data', { error });
-			});
-
-			if (cachedData.sources.length === 0) {
-				toast.error('No windows or screens were detected for sharing.');
-				return null;
-			}
-
-			return requestScreenShareSelectionDialog({
-				defaultAudioMode: devices.screenAudioMode,
-				initialData: {
-					sources: cachedData.sources,
-					capabilities: cachedData.capabilities,
-				},
-			});
-		}
-
-		// No fresh cache — open the picker immediately in a loading state while we fetch.
+		// The dialog opens immediately in a loading state and is populated once
+		// the desktop bridge returns. See requestScreenShareSelection.
 		return requestScreenShareSelectionDialog({
 			defaultAudioMode: devices.screenAudioMode,
 			loadData: async () => {
-				const data = await loadDesktopScreenSharePickerData({ forceRefresh: true });
-				return { sources: data.sources, capabilities: data.capabilities };
+				const desktopBridge = getDesktopBridge();
+
+				if (!desktopBridge) {
+					throw new Error('Desktop bridge unavailable');
+				}
+
+				const [sources, capabilities] = await Promise.all([
+					desktopBridge.listShareSources(),
+					desktopBridge.getCapabilities(),
+				]);
+
+				return {
+					sources,
+					capabilities: normalizeDesktopCapabilities(capabilities),
+				};
 			},
 		});
-	}, [devices.screenAudioMode, loadDesktopScreenSharePickerData]);
+	}, [devices.screenAudioMode]);
 
 	const startScreenShareStream = useCallback(
 		async (desktopSelection?: TDesktopScreenShareSelection) => {
@@ -1750,7 +1680,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				let audioMode = devices.screenAudioMode;
 				const desktopBridge = getDesktopBridge();
-				const cachedDesktopCapabilities = screenSharePickerDataRef.current?.capabilities;
 
 				if (desktopBridge && desktopSelection) {
 					const resolved = await desktopBridge.prepareScreenShare(desktopSelection);
@@ -1768,8 +1697,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				let sidecarSupported = false;
 				if (desktopBridge && audioMode === ScreenAudioMode.SYSTEM) {
 					try {
-						const caps =
-							cachedDesktopCapabilities ?? normalizeDesktopCapabilities(await desktopBridge.getCapabilities());
+						const caps = normalizeDesktopCapabilities(await desktopBridge.getCapabilities());
 						sidecarSupported = caps.sidecarAvailable === true && caps.perAppAudio !== 'unsupported';
 					} catch {
 						// If capabilities check fails, don't attempt sidecar for system audio.
@@ -1932,12 +1860,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							logVoice('Failed to start sidecar audio capture', {
 								error,
 							});
-							const capabilities =
-								cachedDesktopCapabilities ??
-								(await desktopBridge
-									.getCapabilities()
-									.then((nextCapabilities) => normalizeDesktopCapabilities(nextCapabilities))
-									.catch(() => undefined));
+							const capabilities = await desktopBridge
+								.getCapabilities()
+								.then((nextCapabilities) => normalizeDesktopCapabilities(nextCapabilities))
+								.catch(() => undefined);
 							const issueToastMessage = getDesktopAudioIssueToastMessage(capabilities, audioMode);
 							await cleanupDesktopAppAudio();
 
