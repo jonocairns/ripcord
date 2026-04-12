@@ -457,7 +457,7 @@ const ScreenShareCard = memo(
 						</div>
 					)}
 
-					{isOwnUser && watcherCount > 0 && (
+					{isOwnUser && watcherCount > 0 && isWindowFocused && (
 						<div className="absolute bottom-2 left-2 z-10 flex items-center gap-1.5 rounded-md bg-black/60 px-2 py-1 text-xs text-white/90 backdrop-blur-sm">
 							<Eye className="size-3.5" />
 							<span>{watcherCount}</span>
