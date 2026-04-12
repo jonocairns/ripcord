@@ -1481,7 +1481,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		// Serialize mic pipeline operations so concurrent callers (device change,
 		// unmute, volume threshold) queue rather than race each other.
 		const previousMutex = micPipelineMutexRef.current;
-		let resolve: () => void;
+		let resolve: () => void = () => {};
 		micPipelineMutexRef.current = new Promise<void>((r) => {
 			resolve = r;
 		});
@@ -1496,7 +1496,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			await cleanupMicAudioPipeline();
 			setLocalAudioStream(undefined);
 		} finally {
-			resolve!();
+			resolve();
 		}
 	}, [prepareMicPipeline, produceMicTrack, cleanupMicAudioPipeline, setLocalAudioStream]);
 	startMicStreamRef.current = startMicStream;
