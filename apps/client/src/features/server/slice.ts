@@ -51,6 +51,7 @@ export interface IServerState {
 		[channelId: number]: number | undefined;
 	};
 	pluginCommands: TCommandsMapByPlugin;
+	screenShareWatcherCount: number;
 }
 
 export type TInitialServerData = {
@@ -123,6 +124,9 @@ type TServerStore = IServerState & {
 	setPluginCommands: (pluginCommands: TCommandsMapByPlugin) => void;
 	addPluginCommand: (command: TCommandInfo) => void;
 	removePluginCommand: (payload: { commandName: string }) => void;
+	incrementScreenShareWatcherCount: () => void;
+	decrementScreenShareWatcherCount: () => void;
+	resetScreenShareWatcherCount: () => void;
 };
 
 const initialState: IServerState = {
@@ -158,6 +162,7 @@ const initialState: IServerState = {
 	channelPermissions: {},
 	readStatesMap: {},
 	pluginCommands: {},
+	screenShareWatcherCount: 0,
 };
 
 const updateById = <T extends { id: number }>(items: T[], id: number, value: Partial<T>): T[] | undefined => {
@@ -633,6 +638,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			currentChannelState && ownUserId !== undefined ? currentChannelState.users[ownUserId] : undefined;
 
 		const nextExpiresAt = Date.now() + OPTIMISTIC_VOICE_STATE_TTL_MS;
+		const resetWatcherCount = newState.sharingScreen === false ? { screenShareWatcherCount: 0 } : undefined;
 
 		if (ownChannelId !== undefined && currentChannelState && ownUserId !== undefined && currentOwnVoiceState) {
 			set({
@@ -653,6 +659,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 				// entry directly and also persist the off-channel defaults.
 				ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
 				ownOptimisticStateExpiresAt: nextExpiresAt,
+				...resetWatcherCount,
 			});
 			return;
 		}
@@ -660,6 +667,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({
 			ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
 			ownOptimisticStateExpiresAt: nextExpiresAt,
+			...resetWatcherCount,
 		});
 	},
 	setPinnedCard: (pinnedCard) => {
@@ -746,5 +754,14 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({
 			pluginCommands: nextPluginCommands,
 		});
+	},
+	incrementScreenShareWatcherCount: () => {
+		set({ screenShareWatcherCount: get().screenShareWatcherCount + 1 });
+	},
+	decrementScreenShareWatcherCount: () => {
+		set({ screenShareWatcherCount: Math.max(0, get().screenShareWatcherCount - 1) });
+	},
+	resetScreenShareWatcherCount: () => {
+		set({ screenShareWatcherCount: 0 });
 	},
 }));

@@ -180,8 +180,19 @@ export const updateVoiceUserState = (userId: number, channelId: number, newState
 	}
 };
 
-export const handleStreamWatcherActivity = (activity: { action: 'joined' | 'left' }): void => {
+export const handleStreamWatcherActivity = (activity: {
+	action: 'joined' | 'left';
+	kind: string;
+}): void => {
 	playSound(activity.action === 'joined' ? SoundType.STREAM_WATCHER_JOINED : SoundType.STREAM_WATCHER_LEFT);
+
+	if (activity.kind === 'screen') {
+		if (activity.action === 'joined') {
+			useServerStore.getState().incrementScreenShareWatcherCount();
+		} else {
+			useServerStore.getState().decrementScreenShareWatcherCount();
+		}
+	}
 };
 
 export const updateOwnVoiceState = (newState: Partial<TVoiceUserState>): void => {
