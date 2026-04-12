@@ -504,9 +504,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const transportRecoveryPromiseRef = useRef<Promise<boolean> | undefined>(undefined);
 	const recoverTransportSessionRef = useRef<(() => Promise<boolean>) | undefined>(undefined);
 	const cleanupMicAudioPipelineRef = useRef<(() => Promise<void>) | undefined>(undefined);
-	const cleanupDesktopAppAudioRef = useRef<
-		((options?: { stopCapture?: boolean; preserveCurrentAudio?: boolean }) => Promise<void>) | undefined
-	>(undefined);
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
 		if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -1261,7 +1258,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				localScreenShareAudioProducer.current = undefined;
 				standbyDisplayAudioTrackRef.current = undefined;
 				standbyDisplayAudioStreamRef.current = undefined;
-				void cleanupDesktopAppAudioRef.current?.();
+				trackDesktopAppAudioCleanupRef.current();
 
 				setLocalScreenShare(undefined);
 				setLocalScreenShareAudio(undefined);
@@ -1642,9 +1639,21 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		},
 		[setLocalScreenShareAudio],
 	);
-	cleanupDesktopAppAudioRef.current = cleanupDesktopAppAudio;
-
 	const desktopAppAudioCleanupPromiseRef = useRef<Promise<void> | undefined>(undefined);
+
+	const trackDesktopAppAudioCleanup = useCallback(
+		(options?: { stopCapture?: boolean; preserveCurrentAudio?: boolean }) => {
+			const cleanupPromise = cleanupDesktopAppAudio(options).finally(() => {
+				if (desktopAppAudioCleanupPromiseRef.current === cleanupPromise) {
+					desktopAppAudioCleanupPromiseRef.current = undefined;
+				}
+			});
+			desktopAppAudioCleanupPromiseRef.current = cleanupPromise;
+		},
+		[cleanupDesktopAppAudio],
+	);
+	const trackDesktopAppAudioCleanupRef = useRef(trackDesktopAppAudioCleanup);
+	trackDesktopAppAudioCleanupRef.current = trackDesktopAppAudioCleanup;
 
 	const stopScreenShareStream = useCallback(() => {
 		logVoice('Stopping screen share stream');
@@ -1663,17 +1672,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		standbyDisplayAudioTrackRef.current = undefined;
 		standbyDisplayAudioStreamRef.current = undefined;
 
-		const cleanupPromise = cleanupDesktopAppAudio().finally(() => {
-			if (desktopAppAudioCleanupPromiseRef.current === cleanupPromise) {
-				desktopAppAudioCleanupPromiseRef.current = undefined;
-			}
-		});
-		desktopAppAudioCleanupPromiseRef.current = cleanupPromise;
+		trackDesktopAppAudioCleanup();
 
 		setLocalScreenShare(undefined);
 		setLocalScreenShareAudio(undefined);
 	}, [
-		cleanupDesktopAppAudio,
+		trackDesktopAppAudioCleanup,
 		localScreenShareStream,
 		setLocalScreenShare,
 		setLocalScreenShareAudio,
