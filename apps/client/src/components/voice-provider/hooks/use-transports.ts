@@ -353,10 +353,14 @@ const useTransports = ({
 				logVoice('Created new consumer', { newConsumer });
 
 				const cleanupEvents = ['transportclose', 'trackended', '@close', 'close'];
+				let cleanedUp = false;
 
 				cleanupEvents.forEach((event) => {
 					// @ts-expect-error - YOLO
 					newConsumer?.on(event, () => {
+						if (cleanedUp) return;
+						cleanedUp = true;
+
 						logVoice(`Consumer cleanup event "${event}" triggered`, {
 							remoteId,
 							kind,

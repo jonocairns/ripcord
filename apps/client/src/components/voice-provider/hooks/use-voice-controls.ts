@@ -156,10 +156,16 @@ const useVoiceControls = ({
 	}, [setMicMuted]);
 
 	const toggleSound = useCallback(async () => {
-		const newState = !ownVoiceState.soundMuted;
+		// Read state directly from the store to avoid stale closure values,
+		// matching the approach used by setMicMuted above.
+		const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
+		const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
+		const latestLocalAudioStream = localAudioStreamRef.current;
+
+		const newState = !latestOwnVoiceState.soundMuted;
 		const trpc = getTRPCClient();
-		const previousMicMuted = ownVoiceState.micMuted;
-		const previousSoundMuted = ownVoiceState.soundMuted;
+		const previousMicMuted = latestOwnVoiceState.micMuted;
+		const previousSoundMuted = latestOwnVoiceState.soundMuted;
 		const previousMicMutedBeforeDeafen = micMutedBeforeDeafenRef.current;
 		let nextMicMuted = previousMicMuted;
 
@@ -176,11 +182,11 @@ const useVoiceControls = ({
 			micMuted: nextMicMuted,
 		});
 
-		setLocalAudioTrackEnabled(localAudioStream, nextMicMuted);
+		setLocalAudioTrackEnabled(latestLocalAudioStream, nextMicMuted);
 
 		playSound(newState ? SoundType.OWN_USER_MUTED_SOUND : SoundType.OWN_USER_UNMUTED_SOUND);
 
-		if (!currentVoiceChannelId) return;
+		if (!latestCurrentVoiceChannelId) return;
 
 		try {
 			await trpc.voice.updateState.mutate({
@@ -188,7 +194,7 @@ const useVoiceControls = ({
 				micMuted: nextMicMuted,
 			});
 
-			if (!localAudioStream && !nextMicMuted) {
+			if (!localAudioStreamRef.current && !nextMicMuted) {
 				await startMicStream();
 			}
 		} catch (error) {
@@ -197,10 +203,10 @@ const useVoiceControls = ({
 				soundMuted: previousSoundMuted,
 				micMuted: previousMicMuted,
 			} satisfies Partial<TVoiceUserState>);
-			setLocalAudioTrackEnabled(localAudioStream, previousMicMuted);
+			setLocalAudioTrackEnabled(localAudioStreamRef.current, previousMicMuted);
 			toast.error(getTrpcError(error, 'Failed to update sound state'));
 		}
-	}, [ownVoiceState.soundMuted, ownVoiceState.micMuted, currentVoiceChannelId, localAudioStream, startMicStream]);
+	}, [startMicStream]);
 
 	const toggleWebcam = useCallback(async () => {
 		if (!currentVoiceChannelId) return;
