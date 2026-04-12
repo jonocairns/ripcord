@@ -329,6 +329,11 @@ const useVoiceControls = ({
 				return;
 			}
 
+			// transition was superseded (user already stopped) — suppress the toast
+			if (newState && !transition.isCurrent()) {
+				return;
+			}
+
 			toast.error(getTrpcError(error, 'Failed to update screen share state'));
 		}
 	}, [
