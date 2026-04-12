@@ -68,6 +68,11 @@ type TPreparedMicPipeline = {
 	outboundAudioTrack: MediaStreamTrack;
 };
 
+type TScreenShareStreamHandlers = {
+	onVideoTrackStarted?: () => void;
+	onVideoTrackEnded?: () => void | Promise<void>;
+};
+
 type TWatchedRemoteStreamsSnapshot = {
 	remoteUserStreams: Record<number, TRemoteUserStreamKinds[]>;
 	externalStreams: Record<number, TTrackedExternalWatchState>;
@@ -392,6 +397,7 @@ const VoiceProviderContext = createContext<TVoiceProvider>({
 	acceptStream: () => undefined,
 	stopWatchingStream: () => undefined,
 	init: () => Promise.resolve(),
+	isStartingScreenShare: false,
 	setMicMuted: () => Promise.resolve(),
 	toggleMic: () => Promise.resolve(),
 	toggleSound: () => Promise.resolve(),
@@ -1186,7 +1192,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const publishScreenShareTrack = useCallback(
-		async (stream: MediaStream, track: MediaStreamTrack) => {
+		async (
+			stream: MediaStream,
+			track: MediaStreamTrack,
+			options: {
+				onTrackEnded?: () => void | Promise<void>;
+			} = {},
+		) => {
 			setLocalScreenShare(stream);
 
 			logVoice('Obtained video track', { videoTrack: track });
@@ -1249,6 +1261,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				setLocalScreenShare(undefined);
 				setLocalScreenShareAudio(undefined);
+				void options.onTrackEnded?.();
 			};
 		},
 		[
@@ -1672,7 +1685,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	}, [devices.screenAudioMode]);
 
 	const startScreenShareStream = useCallback(
-		async (desktopSelection?: TDesktopScreenShareSelection) => {
+		async (desktopSelection?: TDesktopScreenShareSelection, handlers: TScreenShareStreamHandlers = {}) => {
 			let stream: MediaStream | undefined;
 
 			try {
@@ -1740,7 +1753,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				standbyDisplayAudioStreamRef.current = undefined;
 
 				if (videoTrack) {
-					await publishScreenShareTrack(stream, videoTrack);
+					await publishScreenShareTrack(stream, videoTrack, {
+						onTrackEnded: handlers.onVideoTrackEnded,
+					});
+					// Surface the active share as soon as the video producer exists.
+					// Optional audio setup can continue after the preview is already live.
+					handlers.onVideoTrackStarted?.();
 
 					if (useSidecarAudio && desktopBridge && desktopSelection) {
 						try {
@@ -2326,15 +2344,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	recoverTransportSessionRef.current = recoverTransportSession;
 
-	const { setMicMuted, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } = useVoiceControls({
-		startMicStream,
-		localAudioStream,
-		startWebcamStream,
-		stopWebcamStream,
-		startScreenShareStream,
-		stopScreenShareStream,
-		requestScreenShareSelection: getDesktopBridge() ? requestDesktopScreenShareSelection : undefined,
-	});
+	const { isStartingScreenShare, setMicMuted, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =
+		useVoiceControls({
+			startMicStream,
+			localAudioStream,
+			startWebcamStream,
+			stopWebcamStream,
+			startScreenShareStream,
+			stopScreenShareStream,
+			requestScreenShareSelection: getDesktopBridge() ? requestDesktopScreenShareSelection : undefined,
+		});
 
 	const setMicMutedRef = useRef(setMicMuted);
 	const ownMicMutedRef = useRef(ownVoiceState.micMuted);
@@ -2494,6 +2513,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			stopWatchingStream,
 			init,
 
+			isStartingScreenShare,
 			setMicMuted,
 			toggleMic,
 			toggleSound,
@@ -2519,6 +2539,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			stopWatchingStream,
 			init,
 
+			isStartingScreenShare,
 			setMicMuted,
 			toggleMic,
 			toggleSound,

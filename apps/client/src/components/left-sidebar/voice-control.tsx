@@ -15,7 +15,7 @@ const VoiceControl = memo(() => {
 	const voiceChannelId = useCurrentVoiceChannelId();
 	const voiceChannel = useChannelById(voiceChannelId ?? -1);
 	const channelCan = useChannelCan(voiceChannelId);
-	const { connectionStatus, ownVoiceState, toggleScreenShare, toggleWebcam } = useVoice();
+	const { connectionStatus, isStartingScreenShare, ownVoiceState, toggleScreenShare, toggleWebcam } = useVoice();
 
 	const connectionInfo = useMemo(() => {
 		switch (connectionStatus) {
@@ -93,13 +93,26 @@ const VoiceControl = memo(() => {
 						size="icon"
 						className={cn(
 							'h-8 w-8 rounded-lg text-muted-foreground transition-colors hover:!bg-white/6 hover:!text-white',
-							ownVoiceState.sharingScreen && 'bg-sky-500/12 text-sky-300 hover:!bg-sky-500/12 hover:!text-sky-300',
+							(ownVoiceState.sharingScreen || isStartingScreenShare) &&
+								'bg-sky-500/12 text-sky-300 shadow-[0_0_0_1px_rgb(56_189_248/0.14)] hover:!bg-sky-500/12 hover:!text-sky-300',
 						)}
 						onClick={toggleScreenShare}
-						title={ownVoiceState.sharingScreen ? 'Stop sharing' : 'Share screen'}
+						title={
+							isStartingScreenShare
+								? 'Starting screen share...'
+								: ownVoiceState.sharingScreen
+									? 'Stop sharing'
+									: 'Share screen'
+						}
 						disabled={!channelCan(ChannelPermission.SHARE_SCREEN)}
 					>
-						{ownVoiceState.sharingScreen ? <ScreenShareOff className="h-4 w-4" /> : <Monitor className="h-4 w-4" />}
+						{isStartingScreenShare ? (
+							<Loader2 className="h-4 w-4 animate-spin text-sky-300" />
+						) : ownVoiceState.sharingScreen ? (
+							<ScreenShareOff className="h-4 w-4" />
+						) : (
+							<Monitor className="h-4 w-4" />
+						)}
 					</Button>
 
 					<Button

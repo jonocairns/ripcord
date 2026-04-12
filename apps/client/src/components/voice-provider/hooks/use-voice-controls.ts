@@ -2,15 +2,17 @@ import type { TVoiceUserState } from '@sharkord/shared';
 import { useCallback, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
+import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
+import { useOwnUserId } from '@/features/server/users/hooks';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
-import { useServerStore } from '@/features/server/slice';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
+import { useScreenShareStage } from './use-screen-share-stage';
 
 type TUseVoiceControlsParams = {
 	startMicStream: () => Promise<void>;
@@ -19,7 +21,13 @@ type TUseVoiceControlsParams = {
 	startWebcamStream: () => Promise<void>;
 	stopWebcamStream: () => void;
 
-	startScreenShareStream: (selection?: TDesktopScreenShareSelection) => Promise<MediaStreamTrack>;
+	startScreenShareStream: (
+		selection?: TDesktopScreenShareSelection,
+		handlers?: {
+			onVideoTrackStarted?: () => void;
+			onVideoTrackEnded?: () => void | Promise<void>;
+		},
+	) => Promise<MediaStreamTrack>;
 	stopScreenShareStream: () => void;
 	requestScreenShareSelection?: () => Promise<TDesktopScreenShareSelection | null>;
 };
@@ -47,10 +55,20 @@ const useVoiceControls = ({
 	const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
 	const confirmedSoundMuted = ownConfirmedVoiceState?.soundMuted;
 	const confirmedMicMuted = ownConfirmedVoiceState?.micMuted;
+	const ownUserId = useOwnUserId();
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
 	const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
 	const localAudioStreamRef = useRef(localAudioStream);
+	const pendingShareMutateRef = useRef<Promise<unknown> | undefined>(undefined);
+
+	const {
+		isStarting: isStartingScreenShare,
+		newTransition: newScreenShareTransition,
+		beginStart: beginScreenShareStart,
+		finishStart: finishScreenShareStart,
+		restore: restoreScreenShareStage,
+	} = useScreenShareStage({ ownUserId, currentVoiceChannelId });
 
 	useEffect(() => {
 		currentVoiceChannelIdRef.current = currentVoiceChannelId;
@@ -216,52 +234,93 @@ const useVoiceControls = ({
 
 	const toggleScreenShare = useCallback(async () => {
 		if (!currentVoiceChannelId) return;
+		if (isStartingScreenShare) return;
 
 		const newState = !ownVoiceState.sharingScreen;
 		const trpc = getTRPCClient();
+		const transition = newScreenShareTransition();
 		let selection: TDesktopScreenShareSelection | null | undefined;
 
 		if (newState && requestScreenShareSelection) {
 			selection = await requestScreenShareSelection();
 
 			if (!selection) {
+				transition.invalidate();
 				return;
 			}
 		}
 
 		try {
 			if (newState) {
-				const video = await startScreenShareStream(selection || undefined);
-				updateOwnVoiceState({ sharingScreen: true });
-				playSound(SoundType.OWN_USER_STARTED_SCREENSHARE);
+				beginScreenShareStart();
 
-				// handle native screen share end
-				video.onended = async () => {
-					stopScreenShareStream();
-					updateOwnVoiceState({ sharingScreen: false });
+				await startScreenShareStream(selection || undefined, {
+					onVideoTrackStarted: () => {
+						if (!transition.isCurrent()) return;
+						finishScreenShareStart();
+						updateOwnVoiceState({ sharingScreen: true });
+						playSound(SoundType.OWN_USER_STARTED_SCREENSHARE);
+					},
+					onVideoTrackEnded: async () => {
+						if (!transition.isCurrent()) {
+							return;
+						}
 
-					try {
-						await trpc.voice.updateState.mutate({
-							sharingScreen: false,
-						});
-					} catch {
-						// ignore
+						transition.invalidate();
+						stopScreenShareStream();
+						restoreScreenShareStage();
+						updateOwnVoiceState({ sharingScreen: false });
+
+						try {
+							await trpc.voice.updateState.mutate({
+								sharingScreen: false,
+							});
+						} catch {
+							// ignore
+						}
+					},
+				});
+
+				if (!transition.isCurrent()) {
+					return;
+				}
+
+				const startMutate = trpc.voice.updateState.mutate({
+					sharingScreen: true,
+				});
+				pendingShareMutateRef.current = startMutate;
+
+				try {
+					await startMutate;
+				} finally {
+					if (pendingShareMutateRef.current === startMutate) {
+						pendingShareMutateRef.current = undefined;
 					}
-				};
+				}
+
+				return;
 			}
 
-			if (!newState) {
-				stopScreenShareStream();
-				updateOwnVoiceState({ sharingScreen: false });
-				playSound(SoundType.OWN_USER_STOPPED_SCREENSHARE);
-			}
+			// Invalidate the transition up-front so a late `track.onended` from the
+			// producer we're about to stop can't re-run this cleanup path.
+			transition.invalidate();
+			stopScreenShareStream();
+			restoreScreenShareStage();
+			updateOwnVoiceState({ sharingScreen: false });
+			playSound(SoundType.OWN_USER_STOPPED_SCREENSHARE);
+
+			// Ensure any in-flight start mutation settles before we send the stop,
+			// so the server never processes them out of order.
+			await pendingShareMutateRef.current?.catch(() => {});
 
 			await trpc.voice.updateState.mutate({
-				sharingScreen: newState,
+				sharingScreen: false,
 			});
 		} catch (error) {
-			if (newState) {
+			if (newState && transition.isCurrent()) {
+				transition.invalidate();
 				stopScreenShareStream();
+				restoreScreenShareStage();
 				updateOwnVoiceState({ sharingScreen: false });
 			}
 
@@ -270,10 +329,20 @@ const useVoiceControls = ({
 				return;
 			}
 
+			// transition was superseded (user already stopped) — suppress the toast
+			if (newState && !transition.isCurrent()) {
+				return;
+			}
+
 			toast.error(getTrpcError(error, 'Failed to update screen share state'));
 		}
 	}, [
+		beginScreenShareStart,
 		ownVoiceState.sharingScreen,
+		finishScreenShareStart,
+		isStartingScreenShare,
+		newScreenShareTransition,
+		restoreScreenShareStage,
 		startScreenShareStream,
 		stopScreenShareStream,
 		currentVoiceChannelId,
@@ -281,6 +350,7 @@ const useVoiceControls = ({
 	]);
 
 	return {
+		isStartingScreenShare,
 		setMicMuted,
 		toggleMic,
 		toggleSound,

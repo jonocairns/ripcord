@@ -300,10 +300,6 @@ export const handleVoiceSessionReplaced = (): void => {
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
 
-	// Toast shown unconditionally: this subscription is user-scoped,
-	// so receiving it always means our session was replaced.
-	toast.info('Your voice session was moved to another client');
-
 	if (!currentChannelId) {
 		return;
 	}
