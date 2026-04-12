@@ -60,7 +60,7 @@ const useVoiceControls = ({
 	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
 	const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
 	const localAudioStreamRef = useRef(localAudioStream);
-	const pendingShareMutateRef = useRef<Promise<unknown> | undefined>();
+	const pendingShareMutateRef = useRef<Promise<unknown> | undefined>(undefined);
 
 	const {
 		isStarting: isStartingScreenShare,
