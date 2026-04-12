@@ -51,7 +51,7 @@ export interface IServerState {
 		[channelId: number]: number | undefined;
 	};
 	pluginCommands: TCommandsMapByPlugin;
-	screenShareWatcherCount: number;
+	screenShareWatchers: Record<number, true>;
 }
 
 export type TInitialServerData = {
@@ -124,9 +124,8 @@ type TServerStore = IServerState & {
 	setPluginCommands: (pluginCommands: TCommandsMapByPlugin) => void;
 	addPluginCommand: (command: TCommandInfo) => void;
 	removePluginCommand: (payload: { commandName: string }) => void;
-	incrementScreenShareWatcherCount: () => void;
-	decrementScreenShareWatcherCount: () => void;
-	resetScreenShareWatcherCount: () => void;
+	addScreenShareWatcher: (watcherId: number) => void;
+	removeScreenShareWatcher: (watcherId: number) => void;
 };
 
 const initialState: IServerState = {
@@ -162,7 +161,7 @@ const initialState: IServerState = {
 	channelPermissions: {},
 	readStatesMap: {},
 	pluginCommands: {},
-	screenShareWatcherCount: 0,
+	screenShareWatchers: {},
 };
 
 const updateById = <T extends { id: number }>(items: T[], id: number, value: Partial<T>): T[] | undefined => {
@@ -279,6 +278,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			// Clearing here prevents a stale TTL (e.g. from leave-cleanup) from
 			// shielding the own user from server-authoritative changes on rejoin.
 			ownOptimisticStateExpiresAt: undefined,
+			screenShareWatchers: {},
 		});
 	},
 	addMessages: ({ channelId, messages, opts }) => {
@@ -591,6 +591,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 				: storeState.ownVoiceDefaults,
 			// Server confirmation clears the optimistic-pending window.
 			...(isOwnUser && { ownOptimisticStateExpiresAt: undefined }),
+			...(isOwnUser && newState.sharingScreen === false ? { screenShareWatchers: {} } : undefined),
 		});
 	},
 	reconcileVoiceChannelUsers: ({ channelId, users }) => {
@@ -638,7 +639,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			currentChannelState && ownUserId !== undefined ? currentChannelState.users[ownUserId] : undefined;
 
 		const nextExpiresAt = Date.now() + OPTIMISTIC_VOICE_STATE_TTL_MS;
-		const resetWatcherCount = newState.sharingScreen === false ? { screenShareWatcherCount: 0 } : undefined;
+		const resetScreenShareWatchers = newState.sharingScreen !== undefined ? { screenShareWatchers: {} } : undefined;
 
 		if (ownChannelId !== undefined && currentChannelState && ownUserId !== undefined && currentOwnVoiceState) {
 			set({
@@ -659,7 +660,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 				// entry directly and also persist the off-channel defaults.
 				ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
 				ownOptimisticStateExpiresAt: nextExpiresAt,
-				...resetWatcherCount,
+				...resetScreenShareWatchers,
 			});
 			return;
 		}
@@ -667,7 +668,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({
 			ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
 			ownOptimisticStateExpiresAt: nextExpiresAt,
-			...resetWatcherCount,
+			...resetScreenShareWatchers,
 		});
 	},
 	setPinnedCard: (pinnedCard) => {
@@ -755,13 +756,31 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			pluginCommands: nextPluginCommands,
 		});
 	},
-	incrementScreenShareWatcherCount: () => {
-		set({ screenShareWatcherCount: get().screenShareWatcherCount + 1 });
+	addScreenShareWatcher: (watcherId) => {
+		const screenShareWatchers = get().screenShareWatchers;
+
+		if (screenShareWatchers[watcherId]) {
+			return;
+		}
+
+		set({
+			screenShareWatchers: {
+				...screenShareWatchers,
+				[watcherId]: true,
+			},
+		});
 	},
-	decrementScreenShareWatcherCount: () => {
-		set({ screenShareWatcherCount: Math.max(0, get().screenShareWatcherCount - 1) });
-	},
-	resetScreenShareWatcherCount: () => {
-		set({ screenShareWatcherCount: 0 });
+	removeScreenShareWatcher: (watcherId) => {
+		const screenShareWatchers = get().screenShareWatchers;
+
+		if (!screenShareWatchers[watcherId]) {
+			return;
+		}
+
+		const nextScreenShareWatchers = { ...screenShareWatchers };
+
+		delete nextScreenShareWatchers[watcherId];
+
+		set({ screenShareWatchers: nextScreenShareWatchers });
 	},
 }));

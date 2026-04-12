@@ -55,4 +55,5 @@ export const useOwnVoiceState = () => useServerStore(ownVoiceStateSelector);
 
 export const usePinnedCard = () => useServerStore(pinnedCardSelector);
 
-export const useScreenShareWatcherCount = () => useServerStore((state) => state.screenShareWatcherCount);
+export const useScreenShareWatcherCount = () =>
+	useServerStore((state) => Object.keys(state.screenShareWatchers).length);
