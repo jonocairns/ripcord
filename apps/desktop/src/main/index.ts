@@ -49,6 +49,18 @@ let refreshDesktopCapabilitiesBroadcastPending = false;
 let refreshDesktopCapabilitiesForceBroadcastPending = false;
 let appIsShuttingDown = false;
 
+const sendToRenderer = (channel: string, ...args: unknown[]): void => {
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    mainWindow.webContents.isDestroyed()
+  ) {
+    return;
+  }
+
+  mainWindow.webContents.send(channel, ...args);
+};
+
 const disposeAppAudioFrameEgressPort = (
   port: MessagePortMain | undefined = appAudioFrameEgressPort,
 ): void => {
@@ -94,7 +106,7 @@ const resolveAppIconPath = (): string | undefined => {
 };
 
 const emitPushKeybindEvent = (event: TDesktopPushKeybindEvent) => {
-  mainWindow?.webContents.send("desktop:global-push-keybind", event);
+  sendToRenderer("desktop:global-push-keybind", event);
 };
 
 const setGlobalPushKeybinds = async (
@@ -177,10 +189,7 @@ const refreshDesktopCapabilities = async (
       refreshDesktopCapabilitiesForceBroadcastPending = false;
 
       if (shouldBroadcast && (shouldForceBroadcast || didChange)) {
-        mainWindow?.webContents.send(
-          "desktop:capabilities-changed",
-          capabilities,
-        );
+        sendToRenderer("desktop:capabilities-changed", capabilities);
       }
 
       if (
@@ -451,7 +460,7 @@ void app
         return;
       }
 
-      mainWindow?.webContents.send("desktop:app-audio-frame", frame);
+      sendToRenderer("desktop:app-audio-frame", frame);
     });
     captureSidecarManager.onPcmFrame((frame: TAppAudioPcmFrame) => {
       const egressPort = appAudioFrameEgressPort;
@@ -479,7 +488,7 @@ void app
       }
     });
     captureSidecarManager.onStatus((event) => {
-      mainWindow?.webContents.send("desktop:app-audio-status", event);
+      sendToRenderer("desktop:app-audio-status", event);
     });
     captureSidecarManager.onPushKeybind((event) => {
       emitPushKeybindEvent(event);
@@ -495,7 +504,7 @@ void app
     });
 
     desktopUpdater.start((status) => {
-      mainWindow?.webContents.send("desktop:update-status", status);
+      sendToRenderer("desktop:update-status", status);
     });
 
     registerIpcHandlers();
