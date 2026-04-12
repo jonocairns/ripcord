@@ -16,6 +16,19 @@ limiter.release.setValueAtTime(0.05, 0);
 
 masterGain.connect(limiter).connect(audioCtx.destination);
 
+// Play a short silent buffer to prime the audio pipeline. Without this,
+// the first real sound after the context starts (or wakes from idle)
+// produces a brief click/static as the rendering thread spins up and the
+// compressor reacts to a sudden signal.
+const warmUpAudioContext = () => {
+	const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+	const src = audioCtx.createBufferSource();
+
+	src.buffer = buf;
+	src.connect(masterGain);
+	src.start();
+};
+
 const now = () => audioCtx.currentTime;
 
 const createOsc = (type: OscillatorType, freq: number) => {
@@ -80,77 +93,67 @@ const sfxServerDisconnected = () => {
 	});
 };
 
-// OWN_USER_JOINED_VOICE_CHANNEL — arpeggiated C major (staggered to avoid limiter)
+// OWN_USER_JOINED_VOICE_CHANNEL — warm rising pop with resonance
 const sfxOwnUserJoinedVoiceChannel = () => {
-	// Stagger notes ~35ms apart so they don't sum simultaneously
-	const chord1 = [
-		{ freq: 523, gain: 0.07, delay: 0 }, // C
-		{ freq: 659, gain: 0.06, delay: 0.035 }, // E
-		{ freq: 784, gain: 0.05, delay: 0.07 }, // G
-	];
+	// Primary tone — quick pitch sweep upward for a "pop" feel
+	const osc1 = createOsc('sine', 400);
+	const gain1 = createGain(0.08);
 
-	chord1.forEach(({ freq, gain: g, delay }) => {
-		const t = now() + delay;
-		const osc = createOsc('sine', freq);
-		const gain = createGain(g);
+	osc1.frequency.exponentialRampToValueAtTime(880, now() + 0.06);
+	gain1.gain.setValueAtTime(0.08 * SOUNDS_VOLUME, now() + 0.01);
+	gain1.gain.exponentialRampToValueAtTime(0.0001, now() + 0.15);
 
-		gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+	osc1.connect(gain1).connect(masterGain);
+	osc1.start();
+	osc1.stop(now() + 0.15);
 
-		osc.connect(gain).connect(masterGain);
-		osc.start(t);
-		osc.stop(t + 0.25);
-	});
+	// Second pop — slightly delayed, higher pitched
+	const osc2 = createOsc('sine', 660);
+	const gain2 = createGain(0.06);
+	const t2 = now() + 0.08;
 
-	// Upper octave layer — staggered to follow the arpeggio
-	const chord2 = [
-		{ freq: 1046, gain: 0.03, delay: 0.1 }, // C (octave up)
-		{ freq: 1318, gain: 0.025, delay: 0.13 }, // E (octave up)
-	];
-
-	chord2.forEach(({ freq, gain: g, delay }) => {
-		const t = now() + delay;
-		const osc = createOsc('triangle', freq);
-		const gain = createGain(g);
-
-		gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
-
-		osc.connect(gain).connect(masterGain);
-		osc.start(t);
-		osc.stop(t + 0.22);
-	});
-};
-
-// OWN_USER_LEFT_VOICE_CHANNEL — soft descending arpeggio
-const sfxOwnUserLeftVoiceChannel = () => {
-	// Stagger notes descending so they don't sum simultaneously
-	const chord1 = [
-		{ freq: 659, gain: 0.06, delay: 0 }, // E (high → low)
-		{ freq: 523, gain: 0.06, delay: 0.035 }, // C
-		{ freq: 440, gain: 0.05, delay: 0.07 }, // A
-	];
-
-	chord1.forEach(({ freq, gain: g, delay }) => {
-		const t = now() + delay;
-		const osc = createOsc('sine', freq);
-		const gain = createGain(g);
-
-		gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
-
-		osc.connect(gain).connect(masterGain);
-		osc.start(t);
-		osc.stop(t + 0.28);
-	});
-
-	// Subtle harmonic layer — follows after the arpeggio starts
-	const osc2 = createOsc('triangle', 880);
-	const gain2 = createGain(0.03);
-
-	const t2 = now() + 0.09;
-	gain2.gain.exponentialRampToValueAtTime(0.0001, t2 + 0.19);
+	osc2.frequency.exponentialRampToValueAtTime(1100, t2 + 0.05);
+	gain2.gain.exponentialRampToValueAtTime(0.0001, t2 + 0.12);
 
 	osc2.connect(gain2).connect(masterGain);
 	osc2.start(t2);
-	osc2.stop(t2 + 0.21);
+	osc2.stop(t2 + 0.12);
+
+	// Soft harmonic shimmer
+	const osc3 = createOsc('triangle', 1320);
+	const gain3 = createGain(0.02);
+	const t3 = now() + 0.1;
+
+	gain3.gain.exponentialRampToValueAtTime(0.0001, t3 + 0.1);
+
+	osc3.connect(gain3).connect(masterGain);
+	osc3.start(t3);
+	osc3.stop(t3 + 0.1);
+};
+
+// OWN_USER_LEFT_VOICE_CHANNEL — gentle descending sweep
+const sfxOwnUserLeftVoiceChannel = () => {
+	// Smooth downward sweep — feels like "stepping away"
+	const osc1 = createOsc('sine', 750);
+	const gain1 = createGain(0.07);
+
+	osc1.frequency.exponentialRampToValueAtTime(330, now() + 0.18);
+	gain1.gain.exponentialRampToValueAtTime(0.0001, now() + 0.2);
+
+	osc1.connect(gain1).connect(masterGain);
+	osc1.start();
+	osc1.stop(now() + 0.2);
+
+	// Soft low undertone for warmth
+	const osc2 = createOsc('triangle', 500);
+	const gain2 = createGain(0.03);
+
+	osc2.frequency.exponentialRampToValueAtTime(250, now() + 0.16);
+	gain2.gain.exponentialRampToValueAtTime(0.0001, now() + 0.18);
+
+	osc2.connect(gain2).connect(masterGain);
+	osc2.start(now() + 0.03);
+	osc2.stop(now() + 0.18);
 };
 
 // MUTED_MIC — extremely bland low click
@@ -290,25 +293,17 @@ const sfxOwnUserStoppedScreenshare = () => {
 	osc2.stop(now() + 0.2);
 };
 
-// REMOTE JOIN — layered uplifting tones
+// REMOTE JOIN — soft ascending blip
 const sfxRemoteUserJoinedVoiceChannel = () => {
-	const tones = [
-		{ freq: 587, gain: 0.06, delay: 0 }, // D
-		{ freq: 740, gain: 0.05, delay: 0.06 }, // F#
-		{ freq: 880, gain: 0.04, delay: 0.12 }, // A
-	];
+	const osc = createOsc('sine', 500);
+	const gain = createGain(0.06);
 
-	tones.forEach(({ freq, gain: g, delay }) => {
-		const t = now() + delay;
-		const osc = createOsc('sine', freq);
-		const gain = createGain(g);
+	osc.frequency.exponentialRampToValueAtTime(800, now() + 0.07);
+	gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.12);
 
-		gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
-
-		osc.connect(gain).connect(masterGain);
-		osc.start(t);
-		osc.stop(t + 0.2);
-	});
+	osc.connect(gain).connect(masterGain);
+	osc.start();
+	osc.stop(now() + 0.12);
 };
 
 // REMOTE STREAM STARTED — compact bright cue
@@ -332,25 +327,17 @@ const sfxRemoteUserStartedStream = () => {
 	});
 };
 
-// REMOTE LEAVE — layered descending tones
+// REMOTE LEAVE — soft descending blip
 const sfxRemoteUserLeftVoiceChannel = () => {
-	const tones = [
-		{ freq: 659, gain: 0.06, delay: 0 }, // E
-		{ freq: 523, gain: 0.05, delay: 0.06 }, // C
-		{ freq: 440, gain: 0.04, delay: 0.12 }, // A
-	];
+	const osc = createOsc('sine', 700);
+	const gain = createGain(0.05);
 
-	tones.forEach(({ freq, gain: g, delay }) => {
-		const t = now() + delay;
-		const osc = createOsc('sine', freq);
-		const gain = createGain(g);
+	osc.frequency.exponentialRampToValueAtTime(400, now() + 0.08);
+	gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.12);
 
-		gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
-
-		osc.connect(gain).connect(masterGain);
-		osc.start(t);
-		osc.stop(t + 0.2);
-	});
+	osc.connect(gain).connect(masterGain);
+	osc.start();
+	osc.stop(now() + 0.12);
 };
 
 // STREAM WATCHER JOINED — light confirmation pulse
@@ -445,6 +432,7 @@ const playSoundEffect = (type: SoundType) => {
 
 export const playSound = (type: SoundType) => {
 	if (audioCtx.state === 'running') {
+		warmUpAudioContext();
 		playSoundEffect(type);
 		return;
 	}
@@ -452,6 +440,7 @@ export const playSound = (type: SoundType) => {
 	void audioCtx
 		.resume()
 		.then(() => {
+			warmUpAudioContext();
 			playSoundEffect(type);
 		})
 		.catch(() => {

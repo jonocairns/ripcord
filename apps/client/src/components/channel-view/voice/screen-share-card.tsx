@@ -1,9 +1,10 @@
-import { ExternalLink, EyeOff, Maximize2, Minimize2, Monitor } from 'lucide-react';
+import { ExternalLink, Eye, EyeOff, Maximize2, Minimize2, Monitor } from 'lucide-react';
 import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { IconButton } from '@/components/ui/icon-button';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
+import { useScreenShareWatcherCount } from '@/features/server/voice/hooks';
 import { useWindowFocus } from '@/hooks/use-window-focus';
 import { cn } from '@/lib/utils';
 import { CardControls } from './card-controls';
@@ -109,6 +110,7 @@ const ScreenShareCard = memo(
 		const isWindowFocused = useWindowFocus();
 		const { getUserScreenVolumeKey, getVolume, setVolume, toggleMute } = useVolumeControl();
 		const isOwnUser = ownUserId === userId;
+		const watcherCount = useScreenShareWatcherCount();
 		const hideOwnPreview = isOwnUser && !isWindowFocused;
 		const volumeKey = getUserScreenVolumeKey(userId);
 		const volume = getVolume(volumeKey);
@@ -446,6 +448,19 @@ const ScreenShareCard = memo(
 								<p className="text-sm font-semibold text-white">You&apos;re sharing your screen</p>
 								<p className="text-xs text-white/60">Preview hidden while Sharkord is unfocused</p>
 							</div>
+							{watcherCount > 0 && (
+								<div className="flex items-center gap-1.5 text-xs text-white/60">
+									<Eye className="size-3.5" />
+									<span>{watcherCount} watching</span>
+								</div>
+							)}
+						</div>
+					)}
+
+					{isOwnUser && watcherCount > 0 && isWindowFocused && (
+						<div className="absolute bottom-2 left-2 z-10 flex items-center gap-1.5 rounded-md bg-black/60 px-2 py-1 text-xs text-white/90 backdrop-blur-sm">
+							<Eye className="size-3.5" />
+							<span>{watcherCount}</span>
 						</div>
 					)}
 

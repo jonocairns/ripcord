@@ -51,6 +51,7 @@ export interface IServerState {
 		[channelId: number]: number | undefined;
 	};
 	pluginCommands: TCommandsMapByPlugin;
+	screenShareWatchers: Record<number, true>;
 }
 
 export type TInitialServerData = {
@@ -123,6 +124,8 @@ type TServerStore = IServerState & {
 	setPluginCommands: (pluginCommands: TCommandsMapByPlugin) => void;
 	addPluginCommand: (command: TCommandInfo) => void;
 	removePluginCommand: (payload: { commandName: string }) => void;
+	addScreenShareWatcher: (watcherId: number) => void;
+	removeScreenShareWatcher: (watcherId: number) => void;
 };
 
 const initialState: IServerState = {
@@ -158,6 +161,7 @@ const initialState: IServerState = {
 	channelPermissions: {},
 	readStatesMap: {},
 	pluginCommands: {},
+	screenShareWatchers: {},
 };
 
 const updateById = <T extends { id: number }>(items: T[], id: number, value: Partial<T>): T[] | undefined => {
@@ -274,6 +278,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			// Clearing here prevents a stale TTL (e.g. from leave-cleanup) from
 			// shielding the own user from server-authoritative changes on rejoin.
 			ownOptimisticStateExpiresAt: undefined,
+			screenShareWatchers: {},
 		});
 	},
 	addMessages: ({ channelId, messages, opts }) => {
@@ -586,6 +591,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 				: storeState.ownVoiceDefaults,
 			// Server confirmation clears the optimistic-pending window.
 			...(isOwnUser && { ownOptimisticStateExpiresAt: undefined }),
+			...(isOwnUser && newState.sharingScreen === false ? { screenShareWatchers: {} } : undefined),
 		});
 	},
 	reconcileVoiceChannelUsers: ({ channelId, users }) => {
@@ -633,6 +639,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			currentChannelState && ownUserId !== undefined ? currentChannelState.users[ownUserId] : undefined;
 
 		const nextExpiresAt = Date.now() + OPTIMISTIC_VOICE_STATE_TTL_MS;
+		const resetScreenShareWatchers = newState.sharingScreen !== undefined ? { screenShareWatchers: {} } : undefined;
 
 		if (ownChannelId !== undefined && currentChannelState && ownUserId !== undefined && currentOwnVoiceState) {
 			set({
@@ -653,6 +660,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 				// entry directly and also persist the off-channel defaults.
 				ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
 				ownOptimisticStateExpiresAt: nextExpiresAt,
+				...resetScreenShareWatchers,
 			});
 			return;
 		}
@@ -660,6 +668,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({
 			ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
 			ownOptimisticStateExpiresAt: nextExpiresAt,
+			...resetScreenShareWatchers,
 		});
 	},
 	setPinnedCard: (pinnedCard) => {
@@ -746,5 +755,32 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({
 			pluginCommands: nextPluginCommands,
 		});
+	},
+	addScreenShareWatcher: (watcherId) => {
+		const screenShareWatchers = get().screenShareWatchers;
+
+		if (screenShareWatchers[watcherId]) {
+			return;
+		}
+
+		set({
+			screenShareWatchers: {
+				...screenShareWatchers,
+				[watcherId]: true,
+			},
+		});
+	},
+	removeScreenShareWatcher: (watcherId) => {
+		const screenShareWatchers = get().screenShareWatchers;
+
+		if (!screenShareWatchers[watcherId]) {
+			return;
+		}
+
+		const nextScreenShareWatchers = { ...screenShareWatchers };
+
+		delete nextScreenShareWatchers[watcherId];
+
+		set({ screenShareWatchers: nextScreenShareWatchers });
 	},
 }));

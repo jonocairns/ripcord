@@ -1,4 +1,10 @@
-import type { TExternalStream, TRemoteProducerIds, TTransportParams, TVoiceUserState } from '@sharkord/shared';
+import {
+	StreamKind,
+	type TExternalStream,
+	type TRemoteProducerIds,
+	type TTransportParams,
+	type TVoiceUserState,
+} from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { toast } from 'sonner';
 import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-card-controller';
@@ -180,8 +186,20 @@ export const updateVoiceUserState = (userId: number, channelId: number, newState
 	}
 };
 
-export const handleStreamWatcherActivity = (activity: { action: 'joined' | 'left' }): void => {
+export const handleStreamWatcherActivity = (activity: {
+	watcherId: number;
+	action: 'joined' | 'left';
+	kind: StreamKind.VIDEO | StreamKind.SCREEN;
+}): void => {
 	playSound(activity.action === 'joined' ? SoundType.STREAM_WATCHER_JOINED : SoundType.STREAM_WATCHER_LEFT);
+
+	if (activity.kind === StreamKind.SCREEN) {
+		if (activity.action === 'joined') {
+			useServerStore.getState().addScreenShareWatcher(activity.watcherId);
+		} else {
+			useServerStore.getState().removeScreenShareWatcher(activity.watcherId);
+		}
+	}
 };
 
 export const updateOwnVoiceState = (newState: Partial<TVoiceUserState>): void => {

@@ -241,6 +241,9 @@ describe('voice store own state derivation', () => {
 	it('setInitialData clears ownOptimisticStateExpiresAt', () => {
 		useServerStore.setState({
 			ownOptimisticStateExpiresAt: Date.now() + 5_000,
+			screenShareWatchers: {
+				10: true,
+			},
 		});
 
 		const data: TInitialServerData = {
@@ -262,6 +265,7 @@ describe('voice store own state derivation', () => {
 		useServerStore.getState().setInitialData(data);
 
 		expect(useServerStore.getState().ownOptimisticStateExpiresAt).toBeUndefined();
+		expect(useServerStore.getState().screenShareWatchers).toEqual({});
 	});
 
 	it('keeps derived and confirmed own voice state aligned when the server updates the own user', () => {
@@ -307,5 +311,48 @@ describe('voice store own state derivation', () => {
 				soundMuted: true,
 			}),
 		);
+	});
+
+	it('clears screen share watchers when the local own share state changes', () => {
+		useServerStore.setState({
+			screenShareWatchers: {
+				10: true,
+				11: true,
+			},
+		});
+
+		useServerStore.getState().updateOwnVoiceState({
+			sharingScreen: true,
+		});
+
+		expect(useServerStore.getState().screenShareWatchers).toEqual({});
+	});
+
+	it('clears screen share watchers when the server turns off the own user screen share', () => {
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: 7,
+			voiceMap: {
+				7: {
+					users: {
+						42: createVoiceState({ sharingScreen: true }),
+					},
+				},
+			},
+			ownVoiceDefaults: createVoiceState(),
+			screenShareWatchers: {
+				10: true,
+			},
+		});
+
+		useServerStore.getState().updateVoiceUserState({
+			channelId: 7,
+			userId: 42,
+			newState: {
+				sharingScreen: false,
+			},
+		});
+
+		expect(useServerStore.getState().screenShareWatchers).toEqual({});
 	});
 });

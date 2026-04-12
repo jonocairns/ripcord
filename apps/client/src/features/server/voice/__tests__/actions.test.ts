@@ -1,10 +1,11 @@
-import { ChannelType, type TChannel } from '@sharkord/shared';
+import { ChannelType, StreamKind, type TChannel } from '@sharkord/shared';
 import { beforeAll, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { SoundType } from '../../types';
 import { useServerStore } from '../../slice';
 import { ownVoiceStateSelector } from '../selectors';
 
 let removeUserFromVoiceChannel: typeof import('../actions').removeUserFromVoiceChannel;
+let handleStreamWatcherActivity: typeof import('../actions').handleStreamWatcherActivity;
 const playSound = mock(() => {});
 
 type TPinnedCardState = NonNullable<ReturnType<typeof useServerStore.getState>['pinnedCard']>;
@@ -74,7 +75,7 @@ describe('voice actions', () => {
 			playSound,
 		}));
 
-		({ removeUserFromVoiceChannel } = await import('../actions'));
+		({ removeUserFromVoiceChannel, handleStreamWatcherActivity } = await import('../actions'));
 	});
 
 	beforeEach(() => {
@@ -161,5 +162,53 @@ describe('voice actions', () => {
 		removeUserFromVoiceChannel(42, 7, { reconnecting: true });
 
 		expect(playSound).not.toHaveBeenCalledWith(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+	});
+
+	it('tracks screen share watchers by watcher id so duplicate events do not drift the badge count', () => {
+		handleStreamWatcherActivity({
+			watcherId: 10,
+			action: 'joined',
+			kind: StreamKind.SCREEN,
+		});
+		handleStreamWatcherActivity({
+			watcherId: 10,
+			action: 'joined',
+			kind: StreamKind.SCREEN,
+		});
+		handleStreamWatcherActivity({
+			watcherId: 11,
+			action: 'joined',
+			kind: StreamKind.SCREEN,
+		});
+
+		expect(useServerStore.getState().screenShareWatchers).toEqual({
+			10: true,
+			11: true,
+		});
+
+		handleStreamWatcherActivity({
+			watcherId: 10,
+			action: 'left',
+			kind: StreamKind.SCREEN,
+		});
+		handleStreamWatcherActivity({
+			watcherId: 10,
+			action: 'left',
+			kind: StreamKind.SCREEN,
+		});
+
+		expect(useServerStore.getState().screenShareWatchers).toEqual({
+			11: true,
+		});
+	});
+
+	it('ignores non-screen watcher activity for the screen share badge state', () => {
+		handleStreamWatcherActivity({
+			watcherId: 10,
+			action: 'joined',
+			kind: StreamKind.VIDEO,
+		});
+
+		expect(useServerStore.getState().screenShareWatchers).toEqual({});
 	});
 });
