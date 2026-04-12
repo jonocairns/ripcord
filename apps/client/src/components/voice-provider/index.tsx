@@ -495,6 +495,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const voiceActivityStreamsRef = useRef<Map<number, MediaStream>>(new Map());
 	const voiceActivityCleanupRef = useRef<Map<number, VoiceActivityMonitorStop>>(new Map());
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
+	const micPipelineMutexRef = useRef<Promise<void>>(Promise.resolve());
 	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
 	const localAudioStreamRef = useRef<MediaStream | undefined>(undefined);
 	const localVideoStreamRef = useRef<MediaStream | undefined>(undefined);
@@ -503,9 +504,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const transportRecoveryPromiseRef = useRef<Promise<boolean> | undefined>(undefined);
 	const recoverTransportSessionRef = useRef<(() => Promise<boolean>) | undefined>(undefined);
 	const cleanupMicAudioPipelineRef = useRef<(() => Promise<void>) | undefined>(undefined);
-	const cleanupDesktopAppAudioRef = useRef<
-		((options?: { stopCapture?: boolean; preserveCurrentAudio?: boolean }) => Promise<void>) | undefined
-	>(undefined);
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
 		if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -597,8 +595,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		void (async () => {
 			const recovered = await recoverTransportSessionRef.current?.();
 
+			// Always reset the flag so that if a newly-created transport fails
+			// after recovery "succeeds", the failure handler can re-enter and
+			// start a fresh recovery cycle instead of silently dying.
+			hasHandledTransportFailureRef.current = false;
+
 			if (recovered) {
-				hasHandledTransportFailureRef.current = false;
 				return;
 			}
 
@@ -622,7 +624,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				toast.info('Voice connection was lost. Rejoin the voice channel manually.');
 			}
 
-			hasHandledTransportFailureRef.current = false;
 			voiceCleanupRef.current?.();
 		})();
 	}, []);
@@ -1257,7 +1258,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				localScreenShareAudioProducer.current = undefined;
 				standbyDisplayAudioTrackRef.current = undefined;
 				standbyDisplayAudioStreamRef.current = undefined;
-				void cleanupDesktopAppAudioRef.current?.();
+				trackDesktopAppAudioCleanupRef.current();
 
 				setLocalScreenShare(undefined);
 				setLocalScreenShareAudio(undefined);
@@ -1474,7 +1475,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const startMicStream = useCallback(async () => {
+		// Serialize mic pipeline operations so concurrent callers (device change,
+		// unmute, volume threshold) queue rather than race each other.
+		const previousMutex = micPipelineMutexRef.current;
+		let resolve: () => void = () => {};
+		micPipelineMutexRef.current = new Promise<void>((r) => {
+			resolve = r;
+		});
+
 		try {
+			await previousMutex;
 			logVoice('Starting microphone stream');
 			const prepared = await prepareMicPipeline();
 			await produceMicTrack(prepared);
@@ -1482,6 +1492,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			logVoice('Error starting microphone stream', { error });
 			await cleanupMicAudioPipeline();
 			setLocalAudioStream(undefined);
+		} finally {
+			resolve();
 		}
 	}, [prepareMicPipeline, produceMicTrack, cleanupMicAudioPipeline, setLocalAudioStream]);
 	startMicStreamRef.current = startMicStream;
@@ -1627,7 +1639,21 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		},
 		[setLocalScreenShareAudio],
 	);
-	cleanupDesktopAppAudioRef.current = cleanupDesktopAppAudio;
+	const desktopAppAudioCleanupPromiseRef = useRef<Promise<void> | undefined>(undefined);
+
+	const trackDesktopAppAudioCleanup = useCallback(
+		(options?: { stopCapture?: boolean; preserveCurrentAudio?: boolean }) => {
+			const cleanupPromise = cleanupDesktopAppAudio(options).finally(() => {
+				if (desktopAppAudioCleanupPromiseRef.current === cleanupPromise) {
+					desktopAppAudioCleanupPromiseRef.current = undefined;
+				}
+			});
+			desktopAppAudioCleanupPromiseRef.current = cleanupPromise;
+		},
+		[cleanupDesktopAppAudio],
+	);
+	const trackDesktopAppAudioCleanupRef = useRef(trackDesktopAppAudioCleanup);
+	trackDesktopAppAudioCleanupRef.current = trackDesktopAppAudioCleanup;
 
 	const stopScreenShareStream = useCallback(() => {
 		logVoice('Stopping screen share stream');
@@ -1646,12 +1672,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		standbyDisplayAudioTrackRef.current = undefined;
 		standbyDisplayAudioStreamRef.current = undefined;
 
-		void cleanupDesktopAppAudio();
+		trackDesktopAppAudioCleanup();
 
 		setLocalScreenShare(undefined);
 		setLocalScreenShareAudio(undefined);
 	}, [
-		cleanupDesktopAppAudio,
+		trackDesktopAppAudioCleanup,
 		localScreenShareStream,
 		setLocalScreenShare,
 		setLocalScreenShareAudio,
@@ -1686,6 +1712,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const startScreenShareStream = useCallback(
 		async (desktopSelection?: TDesktopScreenShareSelection, handlers: TScreenShareStreamHandlers = {}) => {
+			// Wait for any in-flight desktop audio cleanup from a previous screen
+			// share stop so the new sidecar session doesn't conflict with it.
+			await desktopAppAudioCleanupPromiseRef.current;
+
 			let stream: MediaStream | undefined;
 
 			try {
