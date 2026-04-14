@@ -48,6 +48,7 @@ import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
 import { createMicAudioProcessingPipeline, type TMicAudioProcessingPipeline } from './mic-audio-processing';
+import { startReceiverVoiceActivityMonitor } from './receiver-voice-activity';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
 import { createVoiceActivityStore, startVoiceActivityMonitor, type VoiceActivityStore } from './voice-activity';
 import { VolumeControlProvider } from './volume-control-provider';
@@ -493,6 +494,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const watchedExternalStreamsRef = useRef<Record<string, TTrackedExternalWatchState>>({});
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
 	const voiceActivityStreamsRef = useRef<Map<number, MediaStream>>(new Map());
+	const voiceActivityReceiversRef = useRef<Map<number, RTCRtpReceiver>>(new Map());
 	const voiceActivityCleanupRef = useRef<Map<number, VoiceActivityMonitorStop>>(new Map());
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const micPipelineMutexRef = useRef<Promise<void>>(Promise.resolve());
@@ -631,6 +633,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const {
 		producerTransport,
 		consumerTransport,
+		consumers,
 		createProducerTransport,
 		createConsumerTransport,
 		consume,
@@ -809,6 +812,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		voiceActivityCleanupRef.current.get(userId)?.();
 		voiceActivityCleanupRef.current.delete(userId);
 		voiceActivityStreamsRef.current.delete(userId);
+		voiceActivityReceiversRef.current.delete(userId);
 		voiceActivityStoreRef.current.clearUserActivity(userId);
 	}, []);
 
@@ -818,6 +822,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		});
 		voiceActivityCleanupRef.current.clear();
 		voiceActivityStreamsRef.current.clear();
+		voiceActivityReceiversRef.current.clear();
 		voiceActivityStoreRef.current.clearAll();
 	}, []);
 
@@ -827,41 +832,65 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
-		const nextAudioStreams = new Map<number, MediaStream>();
+		const nextOwnStream =
+			ownUserId !== undefined && ownVoiceActivityStream ? { userId: ownUserId, stream: ownVoiceActivityStream } : null;
 
-		if (ownUserId !== undefined && ownVoiceActivityStream) {
-			nextAudioStreams.set(ownUserId, ownVoiceActivityStream);
-		}
+		const nextRemoteReceivers = new Map<number, RTCRtpReceiver>();
 
-		Object.entries(remoteUserStreams).forEach(([userId, streams]) => {
+		Object.entries(remoteUserStreams).forEach(([userIdStr, streams]) => {
+			const userId = Number(userIdStr);
 			const audioStream = streams[StreamKind.AUDIO];
 
-			if (audioStream) {
-				nextAudioStreams.set(Number(userId), audioStream);
+			if (!audioStream) {
+				return;
+			}
+
+			const receiver = consumers.current[userId]?.[StreamKind.AUDIO]?.rtpReceiver;
+
+			if (receiver) {
+				nextRemoteReceivers.set(userId, receiver);
 			}
 		});
 
 		Array.from(voiceActivityStreamsRef.current.keys()).forEach((userId) => {
-			if (!nextAudioStreams.has(userId)) {
+			if (!nextOwnStream || nextOwnStream.userId !== userId) {
 				stopVoiceActivityMonitoring(userId);
 			}
 		});
 
-		nextAudioStreams.forEach((audioStream, userId) => {
-			if (voiceActivityStreamsRef.current.get(userId) === audioStream) {
+		Array.from(voiceActivityReceiversRef.current.keys()).forEach((userId) => {
+			if (!nextRemoteReceivers.has(userId)) {
+				stopVoiceActivityMonitoring(userId);
+			}
+		});
+
+		if (nextOwnStream && voiceActivityStreamsRef.current.get(nextOwnStream.userId) !== nextOwnStream.stream) {
+			stopVoiceActivityMonitoring(nextOwnStream.userId);
+			voiceActivityStreamsRef.current.set(nextOwnStream.userId, nextOwnStream.stream);
+
+			const stop = startVoiceActivityMonitor(nextOwnStream.stream, (activity) => {
+				voiceActivityStoreRef.current.setUserActivity(nextOwnStream.userId, activity);
+			});
+
+			voiceActivityCleanupRef.current.set(nextOwnStream.userId, stop);
+		}
+
+		nextRemoteReceivers.forEach((receiver, userId) => {
+			if (voiceActivityReceiversRef.current.get(userId) === receiver) {
 				return;
 			}
 
 			stopVoiceActivityMonitoring(userId);
-			voiceActivityStreamsRef.current.set(userId, audioStream);
+			voiceActivityReceiversRef.current.set(userId, receiver);
 
-			const stop = startVoiceActivityMonitor(audioStream, (activity) => {
+			const stop = startReceiverVoiceActivityMonitor(receiver, (activity) => {
 				voiceActivityStoreRef.current.setUserActivity(userId, activity);
 			});
 
 			voiceActivityCleanupRef.current.set(userId, stop);
 		});
 	}, [
+		consumers,
 		ownUserId,
 		ownVoiceActivityStream,
 		ownVoiceState.soundMuted,

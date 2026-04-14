@@ -95,7 +95,13 @@ const startVoiceActivityMonitor = (
 	let timeoutId: number | null = null;
 	let sourceNode: MediaStreamAudioSourceNode | null = null;
 	let analyserNode: AnalyserNode | null = null;
-	const clonedStream = audioStream.clone();
+	// Clone the underlying track (not just the MediaStream wrapper) so the
+	// MediaStreamAudioSourceNode feeds off an independent track. With plain
+	// stream.clone(), Chromium still treats tracks as siblings of the same
+	// physical source and can leak state between consumers.
+	const sourceTrack = audioStream.getAudioTracks()[0];
+	const clonedTrack = sourceTrack ? sourceTrack.clone() : undefined;
+	const clonedStream = clonedTrack ? new MediaStream([clonedTrack]) : audioStream.clone();
 	let previousActivity = EMPTY_VOICE_ACTIVITY;
 
 	const startAnalyser = () => {
