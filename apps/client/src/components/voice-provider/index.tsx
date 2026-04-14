@@ -86,6 +86,10 @@ type TRecoveryJoinResult = {
 	consumerTransportParams?: TTransportParams;
 };
 
+type TStatsProvider = {
+	getStats: () => Promise<RTCStatsReport>;
+};
+
 export type { AudioVideoRefs };
 
 enum ConnectionStatus {
@@ -198,6 +202,10 @@ const getTrackedExternalWatchField = (
 	kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO,
 ): keyof TTrackedExternalWatchState => {
 	return kind === StreamKind.EXTERNAL_AUDIO ? 'audio' : 'video';
+};
+
+const hasStatsProvider = (value: unknown): value is TStatsProvider => {
+	return typeof value === 'object' && value !== null && typeof Reflect.get(value, 'getStats') === 'function';
 };
 
 const getAudioOpusConfig = (channelId: number | undefined) => {
@@ -826,6 +834,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		voiceActivityStoreRef.current.clearAll();
 	}, []);
 
+	const getOwnVoiceActivityStatsReport = useCallback(async () => {
+		const currentAudioProducer = localAudioProducer.current;
+
+		if (!hasStatsProvider(currentAudioProducer)) {
+			return undefined;
+		}
+
+		return currentAudioProducer.getStats();
+	}, [localAudioProducer]);
+
 	useEffect(() => {
 		if (ownVoiceState.soundMuted) {
 			stopAllVoiceActivityMonitoring();
@@ -868,9 +886,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			stopVoiceActivityMonitoring(nextOwnStream.userId);
 			voiceActivityStreamsRef.current.set(nextOwnStream.userId, nextOwnStream.stream);
 
-			const stop = startVoiceActivityMonitor(nextOwnStream.stream, (activity) => {
-				voiceActivityStoreRef.current.setUserActivity(nextOwnStream.userId, activity);
-			});
+			const stop = startVoiceActivityMonitor(
+				nextOwnStream.stream,
+				(activity) => {
+					voiceActivityStoreRef.current.setUserActivity(nextOwnStream.userId, activity);
+				},
+				{
+					getPreferredStatsReport: getOwnVoiceActivityStatsReport,
+				},
+			);
 
 			voiceActivityCleanupRef.current.set(nextOwnStream.userId, stop);
 		}
@@ -895,6 +919,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		ownVoiceActivityStream,
 		ownVoiceState.soundMuted,
 		remoteUserStreams,
+		getOwnVoiceActivityStatsReport,
 		stopAllVoiceActivityMonitoring,
 		stopVoiceActivityMonitoring,
 	]);

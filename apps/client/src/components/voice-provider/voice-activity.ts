@@ -1,8 +1,3 @@
-import {
-	acquireSharedVoiceAudioContext,
-	releaseSharedVoiceAudioContext,
-} from '@/components/voice-provider/shared-audio-context';
-
 export type VoiceActivity = {
 	audioLevel: number;
 	isSpeaking: boolean;
@@ -16,10 +11,8 @@ export type VoiceActivityStore = {
 	clearAll: () => void;
 };
 
-const ANALYZER_FFT_SIZE = 512;
-const ANALYZER_MIN_DECIBELS = -90;
-const ANALYZER_MAX_DECIBELS = -10;
-const ANALYZER_SMOOTHING_TIME_CONSTANT = 0.85;
+type GetVoiceActivityStatsReport = () => Promise<RTCStatsReport | undefined>;
+
 const SPEAKING_THRESHOLD = 8;
 const AUDIO_LEVEL_POLL_INTERVAL_MS = 50;
 const AUDIO_LEVEL_PRECISION = 1;
@@ -79,97 +72,127 @@ const createVoiceActivityStore = (): VoiceActivityStore => {
 	};
 };
 
+const hasTrackStats = (
+	track: MediaStreamTrack | undefined,
+): track is MediaStreamTrack & {
+	getStats: () => Promise<RTCStatsReport>;
+} => {
+	return track !== undefined && typeof Reflect.get(track, 'getStats') === 'function';
+};
+
+const resolveVoiceActivityStatsGetter = ({
+	audioStream,
+	getPreferredStatsReport,
+}: {
+	audioStream: MediaStream;
+	getPreferredStatsReport?: GetVoiceActivityStatsReport;
+}): GetVoiceActivityStatsReport | undefined => {
+	const sourceTrack = audioStream.getAudioTracks()[0];
+	const getTrackStatsReport = hasTrackStats(sourceTrack) ? async () => sourceTrack.getStats() : undefined;
+
+	if (!getPreferredStatsReport && !getTrackStatsReport) {
+		return undefined;
+	}
+
+	return async () => {
+		const preferredStatsReport = await getPreferredStatsReport?.();
+
+		if (preferredStatsReport) {
+			return preferredStatsReport;
+		}
+
+		return getTrackStatsReport?.();
+	};
+};
+
+const getAudioLevelFromStatsEntries = (stats: Iterable<RTCStats>): number | undefined => {
+	let audioLevel: number | undefined;
+
+	for (const stat of stats) {
+		if (!('audioLevel' in stat) || typeof stat.audioLevel !== 'number') {
+			continue;
+		}
+
+		if ('kind' in stat && typeof stat.kind === 'string' && stat.kind !== 'audio') {
+			continue;
+		}
+
+		if ('mediaType' in stat && typeof stat.mediaType === 'string' && stat.mediaType !== 'audio') {
+			continue;
+		}
+
+		const normalizedLevel = Math.min(100, Math.max(0, stat.audioLevel * 100));
+		audioLevel = audioLevel === undefined ? normalizedLevel : Math.max(audioLevel, normalizedLevel);
+	}
+
+	return audioLevel;
+};
+
+const toVoiceActivity = (audioLevel: number): VoiceActivity => {
+	const roundedLevel = Math.round(audioLevel / AUDIO_LEVEL_PRECISION) * AUDIO_LEVEL_PRECISION;
+
+	return {
+		audioLevel: roundedLevel,
+		isSpeaking: roundedLevel > SPEAKING_THRESHOLD,
+	};
+};
+
 const startVoiceActivityMonitor = (
 	audioStream: MediaStream,
 	onUpdate: (activity: VoiceActivity) => void,
+	options: {
+		getPreferredStatsReport?: GetVoiceActivityStatsReport;
+	} = {},
 ): (() => void) => {
 	onUpdate(EMPTY_VOICE_ACTIVITY);
 
-	const audioContext = acquireSharedVoiceAudioContext();
+	// Prefer stats-based metering over a Web Audio analyser. Chromium/Electron
+	// can leak speech-correlated static into active playback when a live in-call
+	// track is also attached to a MediaStreamAudioSourceNode.
+	const getStatsReport = resolveVoiceActivityStatsGetter({
+		audioStream,
+		getPreferredStatsReport: options.getPreferredStatsReport,
+	});
 
-	if (!audioContext) {
+	if (!getStatsReport) {
 		return () => undefined;
 	}
 
 	let cancelled = false;
 	let timeoutId: number | null = null;
-	let sourceNode: MediaStreamAudioSourceNode | null = null;
-	let analyserNode: AnalyserNode | null = null;
-	// Clone the underlying track (not just the MediaStream wrapper) so the
-	// MediaStreamAudioSourceNode feeds off an independent track. With plain
-	// stream.clone(), Chromium still treats tracks as siblings of the same
-	// physical source and can leak state between consumers.
-	const sourceTrack = audioStream.getAudioTracks()[0];
-	const clonedTrack = sourceTrack ? sourceTrack.clone() : undefined;
-	const clonedStream = clonedTrack ? new MediaStream([clonedTrack]) : audioStream.clone();
 	let previousActivity = EMPTY_VOICE_ACTIVITY;
 
-	const startAnalyser = () => {
+	const checkAudioLevel = async () => {
 		if (cancelled) {
 			return;
 		}
 
 		try {
-			const analyser = audioContext.createAnalyser();
-			const source = audioContext.createMediaStreamSource(clonedStream);
+			const report = await getStatsReport();
+			const normalizedLevel = report ? (getAudioLevelFromStatsEntries(report.values()) ?? 0) : 0;
+			const nextActivity = toVoiceActivity(normalizedLevel);
 
-			analyser.fftSize = ANALYZER_FFT_SIZE;
-			analyser.minDecibels = ANALYZER_MIN_DECIBELS;
-			analyser.maxDecibels = ANALYZER_MAX_DECIBELS;
-			analyser.smoothingTimeConstant = ANALYZER_SMOOTHING_TIME_CONSTANT;
-
-			source.connect(analyser);
-
-			sourceNode = source;
-			analyserNode = analyser;
-
-			const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-			const checkAudioLevel = () => {
-				if (cancelled || !analyserNode) {
-					return;
-				}
-
-				analyserNode.getByteFrequencyData(dataArray);
-
-				let sum = 0;
-
-				for (let index = 0; index < dataArray.length; index += 1) {
-					sum += dataArray[index] * dataArray[index];
-				}
-
-				const rms = Math.sqrt(sum / dataArray.length);
-				const normalizedLevel = Math.min(100, (rms / 255) * 100);
-				const roundedLevel = Math.round(normalizedLevel / AUDIO_LEVEL_PRECISION) * AUDIO_LEVEL_PRECISION;
-				const nextActivity = {
-					audioLevel: roundedLevel,
-					isSpeaking: roundedLevel > SPEAKING_THRESHOLD,
-				};
-
-				if (
-					nextActivity.audioLevel !== previousActivity.audioLevel ||
-					nextActivity.isSpeaking !== previousActivity.isSpeaking
-				) {
-					previousActivity = nextActivity;
-					onUpdate(nextActivity);
-				}
-
-				timeoutId = window.setTimeout(checkAudioLevel, AUDIO_LEVEL_POLL_INTERVAL_MS);
-			};
-
-			checkAudioLevel();
-		} catch (error) {
-			console.warn('Audio level detection not supported:', error);
+			if (
+				nextActivity.audioLevel !== previousActivity.audioLevel ||
+				nextActivity.isSpeaking !== previousActivity.isSpeaking
+			) {
+				previousActivity = nextActivity;
+				onUpdate(nextActivity);
+			}
+		} catch {
+			// Swallow; report silence for this tick and retry on the next poll.
 		}
+
+		if (cancelled) {
+			return;
+		}
+
+		timeoutId = window.setTimeout(() => {
+			void checkAudioLevel();
+		}, AUDIO_LEVEL_POLL_INTERVAL_MS);
 	};
 
-	if (audioContext.state === 'suspended') {
-		void audioContext.resume().then(startAnalyser, () => {
-			console.warn('AudioContext resume failed — audio levels unavailable');
-		});
-	} else {
-		startAnalyser();
-	}
+	void checkAudioLevel();
 
 	return () => {
 		cancelled = true;
@@ -179,22 +202,14 @@ const startVoiceActivityMonitor = (
 			timeoutId = null;
 		}
 
-		if (sourceNode) {
-			sourceNode.disconnect();
-			sourceNode = null;
-		}
-
-		if (analyserNode) {
-			analyserNode.disconnect();
-			analyserNode = null;
-		}
-
-		clonedStream.getTracks().forEach((track) => {
-			track.stop();
-		});
-		releaseSharedVoiceAudioContext(audioContext);
 		onUpdate(EMPTY_VOICE_ACTIVITY);
 	};
 };
 
-export { createVoiceActivityStore, EMPTY_VOICE_ACTIVITY, startVoiceActivityMonitor };
+export {
+	createVoiceActivityStore,
+	EMPTY_VOICE_ACTIVITY,
+	getAudioLevelFromStatsEntries,
+	resolveVoiceActivityStatsGetter,
+	startVoiceActivityMonitor,
+};
