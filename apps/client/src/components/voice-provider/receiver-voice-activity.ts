@@ -7,6 +7,7 @@ import { EMPTY_VOICE_ACTIVITY } from './voice-activity';
 // same track is also attached to an HTMLAudioElement for playback.
 const SPEAKING_THRESHOLD = 8;
 const AUDIO_LEVEL_POLL_INTERVAL_MS = 50;
+// Bucket size for level updates; increase (e.g. 5) to coalesce micro-changes.
 const AUDIO_LEVEL_PRECISION = 1;
 // A synchronization source entry is only considered recent if its timestamp is
 // within this window; older entries are treated as silence.
@@ -35,7 +36,10 @@ const startReceiverVoiceActivityMonitor = (
 
 		try {
 			const sources = receiver.getSynchronizationSources();
-			const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+			// `RTCRtpContributingSource.timestamp` is epoch-relative
+			// (performance.timeOrigin + performance.now()), so compare against
+			// Date.now() — not performance.now() — or the freshness guard never fires.
+			const now = Date.now();
 
 			for (const source of sources) {
 				if (typeof source.audioLevel !== 'number') {
