@@ -2,7 +2,7 @@
 
 ## Status
 
-- Overall status: PR 1 complete
+- Overall status: PR 2 complete
 - Tracking rule: each PR must be independently revertible
 - Architecture constraint: keep the current single-instance architecture
 
@@ -30,19 +30,19 @@ This aims to improve transient reconnects and server-restart recovery without br
 
 ### PR 2: reconnect coordinator and client recovery state
 
-- [ ] Add a dedicated reconnect coordinator
-- [ ] Make the reconnect coordinator the single owner of `pendingVoiceReconnect`
-- [ ] Make the reconnect coordinator the single owner of `reconnectingSince`
-- [ ] Make the reconnect coordinator the single owner of `voiceReconnectSuppression`
-- [ ] Add one clear path only: `clearVoiceReconnectRecovery(reason)`
-- [ ] Keep global app teardown grace at `5_000`
-- [ ] Persist reconnect intent through normal disconnect cleanup
-- [ ] Store `pendingVoiceReconnect = { channelId, micMuted, soundMuted, peerUserIds, expiresAt }`
-- [ ] Store `reconnectingSince = timestamp`
-- [ ] Store `voiceReconnectSuppression = { channelId, peerUserIds, expiresAt }`
-- [ ] Snapshot `peerUserIds` by value, not by reference
-- [ ] Extract a behavior-preserving restore/bootstrap init path for later reuse
-- [ ] Verify PR 2 is independently revertible
+- [x] Add a dedicated reconnect coordinator
+- [x] Make the reconnect coordinator the single owner of `pendingVoiceReconnect`
+- [x] Make the reconnect coordinator the single owner of `reconnectingSince`
+- [x] Make the reconnect coordinator the single owner of `voiceReconnectSuppression`
+- [x] Add one clear path only: `clearVoiceReconnectRecovery(reason)`
+- [x] Keep global app teardown grace at `5_000`
+- [x] Persist reconnect intent through normal disconnect cleanup
+- [x] Store `pendingVoiceReconnect = { channelId, micMuted, soundMuted, peerUserIds, expiresAt }`
+- [x] Store `reconnectingSince = timestamp`
+- [x] Store `voiceReconnectSuppression = { channelId, peerUserIds, expiresAt }`
+- [x] Snapshot `peerUserIds` by value, not by reference
+- [x] Extract a behavior-preserving restore/bootstrap init path for later reuse
+- [x] Verify PR 2 is independently revertible
 
 ### PR 3: `voice.restoreOrJoin`, retry loop, and quiet recovery
 

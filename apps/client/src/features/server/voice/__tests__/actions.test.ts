@@ -2,6 +2,7 @@ import { ChannelType, StreamKind, type TChannel } from '@sharkord/shared';
 import { beforeAll, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { SoundType } from '../../types';
 import { useServerStore } from '../../slice';
+import { useVoiceReconnectStore } from '../reconnect-coordinator';
 import { ownVoiceStateSelector } from '../selectors';
 
 let removeUserFromVoiceChannel: typeof import('../actions').removeUserFromVoiceChannel;
@@ -80,6 +81,7 @@ describe('voice actions', () => {
 
 	beforeEach(() => {
 		useServerStore.getState().resetState();
+		useVoiceReconnectStore.getState().resetState();
 		playSound.mockClear();
 	});
 
@@ -210,5 +212,63 @@ describe('voice actions', () => {
 		});
 
 		expect(useServerStore.getState().screenShareWatchers).toEqual({});
+	});
+
+	it('snapshots reconnect intent before clearing own voice state when reconnecting', () => {
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: 7,
+			selectedChannelId: 7,
+			lastTextChannelId: 9,
+			channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
+			ownVoiceDefaults: {
+				micMuted: true,
+				soundMuted: false,
+				webcamEnabled: false,
+				sharingScreen: false,
+			},
+			voiceMap: {
+				7: {
+					users: {
+						42: { micMuted: true, soundMuted: false, webcamEnabled: false, sharingScreen: false },
+						10: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false },
+					},
+				},
+			},
+		});
+
+		removeUserFromVoiceChannel(42, 7, { reconnecting: true });
+
+		// Own voice channel should be cleared
+		expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
+
+		// But reconnect intent should be preserved in the coordinator
+		const { pendingVoiceReconnect } = useVoiceReconnectStore.getState();
+		expect(pendingVoiceReconnect).toBeDefined();
+		expect(pendingVoiceReconnect!.channelId).toBe(7);
+		expect(pendingVoiceReconnect!.micMuted).toBe(true);
+		expect(pendingVoiceReconnect!.soundMuted).toBe(false);
+		expect(pendingVoiceReconnect!.peerUserIds).toEqual([10]);
+	});
+
+	it('does not snapshot reconnect intent when leaving without reconnecting', () => {
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: 7,
+			selectedChannelId: 7,
+			lastTextChannelId: 9,
+			channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
+			voiceMap: {
+				7: {
+					users: {
+						42: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false },
+					},
+				},
+			},
+		});
+
+		removeUserFromVoiceChannel(42, 7);
+
+		expect(useVoiceReconnectStore.getState().pendingVoiceReconnect).toBeUndefined();
 	});
 });

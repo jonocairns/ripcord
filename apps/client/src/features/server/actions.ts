@@ -14,6 +14,11 @@ import {
 	pauseReconnectSnapshotEventBuffer,
 	startReconnectSnapshotEventBuffer,
 } from './reconnect-event-buffer';
+import {
+	clearVoiceReconnectRecovery,
+	resolveVoiceRecoveryAction,
+	useVoiceReconnectStore,
+} from './voice/reconnect-coordinator';
 import { infoSelector } from './selectors';
 import { useServerStore } from './slice';
 import { initSubscriptions } from './subscriptions';
@@ -229,6 +234,15 @@ export const joinServer = async (
 				state.bumpVoiceSessionReconnectNonce();
 			}
 
+			const { pendingVoiceReconnect } = useVoiceReconnectStore.getState();
+
+			if (pendingVoiceReconnect) {
+				useVoiceReconnectStore.getState().setReconnectingSince(Date.now());
+			}
+
+			const recoveryAction = resolveVoiceRecoveryAction();
+			logDebug('Voice recovery action resolved', { recoveryAction });
+
 			return 'joined';
 		};
 
@@ -301,6 +315,7 @@ export const joinServer = async (
 				}
 
 				clearReconnectSnapshotEventBuffer();
+				clearVoiceReconnectRecovery('app-teardown');
 				cleanup({ ignoreSocketCloseEvent: true });
 			}
 		})();
@@ -310,6 +325,7 @@ export const joinServer = async (
 export const logoutFromServer = async () => {
 	wsReconnectGeneration += 1;
 	setOnWsReconnect(null);
+	clearVoiceReconnectRecovery('logout');
 	await revokeRefreshToken();
 	cleanup({ clearAuth: true, ignoreSocketCloseEvent: true });
 	cleanupServerSubscriptions();

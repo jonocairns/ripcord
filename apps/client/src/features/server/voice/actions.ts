@@ -17,6 +17,7 @@ import { useServerStore } from '../slice';
 import { playSound } from '../sounds/actions';
 import { SoundType } from '../types';
 import { ownUserIdSelector } from '../users/selectors';
+import { clearVoiceReconnectRecovery, snapshotVoiceReconnectIntent } from './reconnect-coordinator';
 import { ownVoiceStateSelector, pinnedCardSelector } from './selectors';
 
 type TLeaveVoiceOptions = {
@@ -107,7 +108,9 @@ export const removeUserFromVoiceChannel = (
 	clearPinnedCardById(`screen-share-${userId}`);
 
 	if (userId === ownUserId && channelId === currentChannelId) {
-		if (!opts.reconnecting) {
+		if (opts.reconnecting) {
+			snapshotVoiceReconnectIntent({ expiresAt: Date.now() + 65_000 });
+		} else {
 			playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
 		}
 
@@ -291,6 +294,7 @@ const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<void> =>
 		return;
 	}
 
+	clearVoiceReconnectRecovery('user-left-voice');
 	clearOwnVoiceChannelState();
 
 	if (options.playOwnLeaveSound) {
@@ -322,6 +326,7 @@ export const handleVoiceSessionReplaced = (): void => {
 		return;
 	}
 
+	clearVoiceReconnectRecovery('session-replaced');
 	clearOwnVoiceChannelState();
 };
 
