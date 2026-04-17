@@ -245,10 +245,11 @@ describe('voice actions', () => {
 		// But reconnect intent should be preserved in the coordinator
 		const { pendingVoiceReconnect } = useVoiceReconnectStore.getState();
 		expect(pendingVoiceReconnect).toBeDefined();
-		expect(pendingVoiceReconnect!.channelId).toBe(7);
-		expect(pendingVoiceReconnect!.micMuted).toBe(true);
-		expect(pendingVoiceReconnect!.soundMuted).toBe(false);
-		expect(pendingVoiceReconnect!.peerUserIds).toEqual([10]);
+		if (!pendingVoiceReconnect) return;
+		expect(pendingVoiceReconnect.channelId).toBe(7);
+		expect(pendingVoiceReconnect.micMuted).toBe(true);
+		expect(pendingVoiceReconnect.soundMuted).toBe(false);
+		expect(pendingVoiceReconnect.peerUserIds).toEqual([10]);
 	});
 
 	it('does not snapshot reconnect intent when leaving without reconnecting', () => {

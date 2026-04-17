@@ -111,7 +111,7 @@ const clearVoiceReconnectRecovery = (reason: TClearReason): void => {
 const resolveVoiceRecoveryAction = (): TVoiceRecoveryAction => {
 	const { pendingVoiceReconnect } = useVoiceReconnectStore.getState();
 
-	if (!pendingVoiceReconnect) {
+	if (!pendingVoiceReconnect || Date.now() > pendingVoiceReconnect.expiresAt) {
 		return { kind: 'none' };
 	}
 

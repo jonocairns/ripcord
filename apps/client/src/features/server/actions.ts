@@ -240,8 +240,9 @@ export const joinServer = async (
 				useVoiceReconnectStore.getState().setReconnectingSince(Date.now());
 			}
 
-			const recoveryAction = resolveVoiceRecoveryAction();
-			logDebug('Voice recovery action resolved', { recoveryAction });
+			logDebug('Voice recovery action resolved', {
+				recoveryAction: resolveVoiceRecoveryAction(),
+			});
 
 			return 'joined';
 		};

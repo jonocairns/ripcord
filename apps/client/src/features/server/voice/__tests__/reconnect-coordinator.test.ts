@@ -41,11 +41,12 @@ describe('voice reconnect coordinator', () => {
 			const { pendingVoiceReconnect } = useVoiceReconnectStore.getState();
 
 			expect(pendingVoiceReconnect).toBeDefined();
-			expect(pendingVoiceReconnect!.channelId).toBe(5);
-			expect(pendingVoiceReconnect!.micMuted).toBe(true);
-			expect(pendingVoiceReconnect!.soundMuted).toBe(false);
-			expect(pendingVoiceReconnect!.peerUserIds).toEqual([10, 20]);
-			expect(pendingVoiceReconnect!.expiresAt).toBe(expiresAt);
+			if (!pendingVoiceReconnect) return;
+			expect(pendingVoiceReconnect.channelId).toBe(5);
+			expect(pendingVoiceReconnect.micMuted).toBe(true);
+			expect(pendingVoiceReconnect.soundMuted).toBe(false);
+			expect(pendingVoiceReconnect.peerUserIds).toEqual([10, 20]);
+			expect(pendingVoiceReconnect.expiresAt).toBe(expiresAt);
 		});
 
 		it('copies peerUserIds by value so later voiceMap mutations do not affect the snapshot', () => {
@@ -207,6 +208,29 @@ describe('voice reconnect coordinator', () => {
 			});
 
 			expect(resolveVoiceRecoveryAction()).toEqual({ kind: 'session-missing', channelId: 5 });
+		});
+
+		it('returns none when pendingVoiceReconnect has expired', () => {
+			useServerStore.setState({
+				ownUserId: 1,
+				voiceMap: {
+					5: {
+						users: {
+							1: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false },
+						},
+					},
+				},
+			});
+
+			useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+				channelId: 5,
+				micMuted: false,
+				soundMuted: false,
+				peerUserIds: [],
+				expiresAt: Date.now() - 1,
+			});
+
+			expect(resolveVoiceRecoveryAction()).toEqual({ kind: 'none' });
 		});
 	});
 });

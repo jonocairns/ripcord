@@ -7,6 +7,7 @@ import { resetServerState, setDisconnectInfo } from '@/features/server/actions';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
+import { clearVoiceReconnectRecovery } from '@/features/server/voice/reconnect-coordinator';
 import { resetServerScreens } from '@/features/server-screens/actions';
 import { clearAuthToken, getAuthToken } from '@/helpers/storage';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
@@ -87,6 +88,11 @@ const initializeTRPC = (host: string) => {
 
 			if (DELIBERATE_DISCONNECT_CODES.has(cause.code)) {
 				// Tear down immediately for intentional server-side disconnects
+				if (cause.code === DisconnectCode.KICKED) {
+					clearVoiceReconnectRecovery('kicked');
+				} else if (cause.code === DisconnectCode.BANNED) {
+					clearVoiceReconnectRecovery('banned');
+				}
 				cleanup({ skipSocketClose: true });
 				if (wasConnected) {
 					playSound(SoundType.SERVER_DISCONNECTED);
