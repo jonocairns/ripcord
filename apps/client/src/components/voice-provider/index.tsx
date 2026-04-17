@@ -2603,6 +2603,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					);
 
 					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
+						voiceCleanupRef.current?.();
 						return;
 					}
 

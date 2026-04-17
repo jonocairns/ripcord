@@ -83,7 +83,9 @@ describe('voice reconnect coordinator', () => {
 
 			const { pendingVoiceReconnect } = useVoiceReconnectStore.getState();
 
-			expect(pendingVoiceReconnect!.peerUserIds).toEqual([10, 20]);
+			expect(pendingVoiceReconnect).toBeDefined();
+			if (!pendingVoiceReconnect) return;
+			expect(pendingVoiceReconnect.peerUserIds).toEqual([10, 20]);
 		});
 
 		it('no-ops when currentVoiceChannelId is undefined', () => {
