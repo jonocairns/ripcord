@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import { useServerStore } from '../../slice';
 import {
 	clearVoiceReconnectRecovery,
+	getValidPendingVoiceReconnect,
+	isVoiceReconnectPeerSuppressed,
 	resolveVoiceRecoveryAction,
 	snapshotVoiceReconnectIntent,
 	useVoiceReconnectStore,
@@ -231,6 +233,62 @@ describe('voice reconnect coordinator', () => {
 			});
 
 			expect(resolveVoiceRecoveryAction()).toEqual({ kind: 'none' });
+		});
+	});
+
+	describe('getValidPendingVoiceReconnect', () => {
+		it('returns the pending reconnect when it has not expired', () => {
+			useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+				channelId: 5,
+				micMuted: false,
+				soundMuted: false,
+				peerUserIds: [10],
+				expiresAt: Date.now() + 10_000,
+			});
+
+			expect(getValidPendingVoiceReconnect()).toEqual({
+				channelId: 5,
+				micMuted: false,
+				soundMuted: false,
+				peerUserIds: [10],
+				expiresAt: expect.any(Number),
+			});
+		});
+
+		it('returns undefined once the pending reconnect has expired', () => {
+			useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+				channelId: 5,
+				micMuted: false,
+				soundMuted: false,
+				peerUserIds: [],
+				expiresAt: Date.now() - 1,
+			});
+
+			expect(getValidPendingVoiceReconnect()).toBeUndefined();
+		});
+	});
+
+	describe('isVoiceReconnectPeerSuppressed', () => {
+		it('returns true only for peers in the same channel before suppression expiry', () => {
+			useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+				channelId: 7,
+				peerUserIds: [10, 20],
+				expiresAt: Date.now() + 10_000,
+			});
+
+			expect(isVoiceReconnectPeerSuppressed(7, 10)).toBe(true);
+			expect(isVoiceReconnectPeerSuppressed(7, 30)).toBe(false);
+			expect(isVoiceReconnectPeerSuppressed(8, 10)).toBe(false);
+		});
+
+		it('returns false after suppression expiry', () => {
+			useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+				channelId: 7,
+				peerUserIds: [10],
+				expiresAt: Date.now() - 1,
+			});
+
+			expect(isVoiceReconnectPeerSuppressed(7, 10)).toBe(false);
 		});
 	});
 });

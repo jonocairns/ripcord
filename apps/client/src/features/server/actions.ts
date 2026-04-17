@@ -16,6 +16,7 @@ import {
 } from './reconnect-event-buffer';
 import {
 	clearVoiceReconnectRecovery,
+	getValidPendingVoiceReconnect,
 	resolveVoiceRecoveryAction,
 	useVoiceReconnectStore,
 } from './voice/reconnect-coordinator';
@@ -234,9 +235,12 @@ export const joinServer = async (
 				state.bumpVoiceSessionReconnectNonce();
 			}
 
-			const { pendingVoiceReconnect } = useVoiceReconnectStore.getState();
+			const pendingVoiceReconnect = getValidPendingVoiceReconnect();
 
 			if (pendingVoiceReconnect) {
+				logDebug('Voice reconnect recovery scheduled', {
+					channelId: pendingVoiceReconnect.channelId,
+				});
 				useVoiceReconnectStore.getState().setReconnectingSince(Date.now());
 			}
 

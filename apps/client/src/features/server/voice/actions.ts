@@ -17,7 +17,11 @@ import { useServerStore } from '../slice';
 import { playSound } from '../sounds/actions';
 import { SoundType } from '../types';
 import { ownUserIdSelector } from '../users/selectors';
-import { clearVoiceReconnectRecovery, snapshotVoiceReconnectIntent } from './reconnect-coordinator';
+import {
+	clearVoiceReconnectRecovery,
+	isVoiceReconnectPeerSuppressed,
+	snapshotVoiceReconnectIntent,
+} from './reconnect-coordinator';
 import { ownVoiceStateSelector, pinnedCardSelector } from './selectors';
 
 type TLeaveVoiceOptions = {
@@ -88,7 +92,12 @@ export const addUserToVoiceChannel = (
 		state: voiceState,
 	});
 
-	if (userId !== ownUserId && channelId === currentChannelId && !opts.reconnecting) {
+	if (
+		userId !== ownUserId &&
+		channelId === currentChannelId &&
+		!opts.reconnecting &&
+		!isVoiceReconnectPeerSuppressed(channelId, userId)
+	) {
 		playSound(SoundType.REMOTE_USER_JOINED_VOICE_CHANNEL);
 	}
 };
@@ -118,7 +127,12 @@ export const removeUserFromVoiceChannel = (
 		return;
 	}
 
-	if (userId !== ownUserId && channelId === currentChannelId && !opts.reconnecting) {
+	if (
+		userId !== ownUserId &&
+		channelId === currentChannelId &&
+		!opts.reconnecting &&
+		!isVoiceReconnectPeerSuppressed(channelId, userId)
+	) {
 		playSound(SoundType.REMOTE_USER_LEFT_VOICE_CHANNEL);
 	}
 };
@@ -184,7 +198,7 @@ export const updateVoiceUserState = (userId: number, channelId: number, newState
 		clearPinnedCardById(`screen-share-${userId}`);
 	}
 
-	if (shouldPlayStartedStreamSound) {
+	if (shouldPlayStartedStreamSound && !isVoiceReconnectPeerSuppressed(channelId, userId)) {
 		playSound(SoundType.REMOTE_USER_STARTED_STREAM);
 	}
 };

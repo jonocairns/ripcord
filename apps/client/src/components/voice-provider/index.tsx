@@ -20,8 +20,18 @@ import { SoundType } from '@/features/server/types';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
+import {
+	clearVoiceReconnectRecovery,
+	getValidPendingVoiceReconnect,
+	useVoiceReconnectStore,
+} from '@/features/server/voice/reconnect-coordinator';
+import {
+	VoiceReconnectTimeoutError,
+	classifyVoiceReconnectError,
+	getVoiceReconnectRetryDelayMs,
+} from '@/features/server/voice/reconnect-policy';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
-import { logVoice } from '@/helpers/browser-logger';
+import { logDebug, logVoice } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { getTrpcErrorData, isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
@@ -81,6 +91,14 @@ type TWatchedRemoteStreamsSnapshot = {
 
 type TRecoveryJoinResult = {
 	device: Device;
+	existingProducers?: TRemoteProducerIds;
+	producerTransportParams?: TTransportParams;
+	consumerTransportParams?: TTransportParams;
+};
+
+type TVoiceBootstrapResult = {
+	routerRtpCapabilities: RtpCapabilities;
+	channelUsers: Array<{ userId: number; state: TVoiceUserState }>;
 	existingProducers?: TRemoteProducerIds;
 	producerTransportParams?: TTransportParams;
 	consumerTransportParams?: TTransportParams;
@@ -438,6 +456,9 @@ const RECOVERY_MAX_ATTEMPTS = 3;
 const RECOVERY_MAX_NONCE_RESTARTS = 5;
 const RECOVERY_TIMEOUT_MS = 12_000;
 const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
+const VOICE_RECONNECT_TIMEOUT_MS = 12_000;
+const VOICE_RECONNECT_SUPPRESSION_MS = 10_000;
+const VOICE_RECONNECT_WAIT_POLL_MS = 250;
 
 class VoiceSessionReconnectChangedError extends Error {
 	constructor(stage: string) {
@@ -460,6 +481,28 @@ const withRecoveryTimeout = <T,>(promise: Promise<T>): Promise<T> => {
 
 const isMissingVoiceSessionError = (error: unknown): boolean => getTrpcErrorData(error)?.code === 'BAD_REQUEST';
 
+const withVoiceReconnectTimeout = <T,>(promise: Promise<T>): Promise<T> => {
+	let handle: ReturnType<typeof setTimeout> | undefined;
+	const timeoutPromise = new Promise<never>((_, reject) => {
+		handle = setTimeout(() => reject(new VoiceReconnectTimeoutError()), VOICE_RECONNECT_TIMEOUT_MS);
+	});
+	return Promise.race([promise, timeoutPromise]).finally(() => {
+		if (handle !== undefined) {
+			clearTimeout(handle);
+		}
+	});
+};
+
+const createReconnectAttemptId = (): string => {
+	const randomUUID = globalThis.crypto?.randomUUID;
+
+	if (typeof randomUUID === 'function') {
+		return randomUUID.call(globalThis.crypto);
+	}
+
+	return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const [loading, setLoading] = useState(false);
 	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
@@ -475,6 +518,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const confirmedOwnMicMuted = ownConfirmedVoiceState?.micMuted;
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const voiceSessionReconnectNonce = useServerStore((state) => state.voiceSessionReconnectNonce);
+	const reconnectingSince = useVoiceReconnectStore((state) => state.reconnectingSince);
 	const isConnected = useIsConnected();
 	const channelCan = useChannelCan(currentVoiceChannelId);
 	const currentChannelExternalStreams = useServerStore<TChannelExternalStreams>((state) => {
@@ -512,6 +556,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const localScreenShareStreamRef = useRef<MediaStream | undefined>(undefined);
 	const localScreenShareAudioStreamRef = useRef<MediaStream | undefined>(undefined);
 	const transportRecoveryPromiseRef = useRef<Promise<boolean> | undefined>(undefined);
+	const voiceReconnectPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const recoverTransportSessionRef = useRef<(() => Promise<boolean>) | undefined>(undefined);
 	const cleanupMicAudioPipelineRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
@@ -1020,46 +1065,67 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		return device;
 	}, []);
 
-	const rejoinVoiceSession = useCallback(async (channelId: number): Promise<TRecoveryJoinResult> => {
-		const currentOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
-		const {
-			routerRtpCapabilities: nextRouterRtpCapabilities,
-			producerTransportParams,
-			consumerTransportParams,
-			existingProducers,
-			channelUsers,
-		} = await getTRPCClient().voice.join.mutate({
-			channelId,
-			state: {
+	const requestVoiceRestoreOrJoin = useCallback(
+		async (opts: {
+			channelId: number;
+			micMuted: boolean;
+			soundMuted: boolean;
+			reconnectAttemptId: string;
+		}): Promise<TVoiceBootstrapResult> => {
+			return getTRPCClient().voice.restoreOrJoin.mutate({
+				channelId: opts.channelId,
+				state: {
+					micMuted: opts.micMuted,
+					soundMuted: opts.soundMuted,
+				},
+				reconnectAttemptId: opts.reconnectAttemptId,
+			});
+		},
+		[],
+	);
+
+	const rejoinVoiceSession = useCallback(
+		async (channelId: number): Promise<TRecoveryJoinResult> => {
+			const currentOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
+			const {
+				routerRtpCapabilities: nextRouterRtpCapabilities,
+				producerTransportParams,
+				consumerTransportParams,
+				existingProducers,
+				channelUsers,
+			} = await requestVoiceRestoreOrJoin({
+				channelId,
 				micMuted: currentOwnVoiceState.micMuted,
 				soundMuted: currentOwnVoiceState.soundMuted,
-			},
-		});
+				reconnectAttemptId: createReconnectAttemptId(),
+			});
 
-		const device = await Device.factory();
-		await device.load({
-			routerRtpCapabilities: nextRouterRtpCapabilities,
-		});
+			const device = await Device.factory();
+			await device.load({
+				routerRtpCapabilities: nextRouterRtpCapabilities,
+			});
 
-		deviceRef.current = device;
-		routerRtpCapabilities.current = nextRouterRtpCapabilities;
-		sendRtpCapabilities.current = device.rtpCapabilities;
+			deviceRef.current = device;
+			routerRtpCapabilities.current = nextRouterRtpCapabilities;
+			sendRtpCapabilities.current = device.rtpCapabilities;
 
-		const store = useServerStore.getState();
+			const store = useServerStore.getState();
 
-		store.setCurrentVoiceChannelId(channelId);
-		store.reconcileVoiceChannelUsers({
-			channelId,
-			users: channelUsers,
-		});
+			store.setCurrentVoiceChannelId(channelId);
+			store.reconcileVoiceChannelUsers({
+				channelId,
+				users: channelUsers,
+			});
 
-		return {
-			device,
-			existingProducers,
-			producerTransportParams,
-			consumerTransportParams,
-		};
-	}, []);
+			return {
+				device,
+				existingProducers,
+				producerTransportParams,
+				consumerTransportParams,
+			};
+		},
+		[requestVoiceRestoreOrJoin],
+	);
 
 	useEffect(() => {
 		const handleVolumeSettingsUpdated = (event: Event) => {
@@ -2427,6 +2493,191 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	]);
 
 	recoverTransportSessionRef.current = recoverTransportSession;
+
+	const waitForVoiceReconnectOnline = useCallback(async () => {
+		if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+			return;
+		}
+
+		logDebug('Voice reconnect offline pause');
+
+		await new Promise<void>((resolve) => {
+			const handleOnline = () => {
+				window.removeEventListener('online', handleOnline);
+				resolve();
+			};
+
+			window.addEventListener('online', handleOnline, { once: true });
+		});
+
+		logDebug('Voice reconnect offline resume');
+	}, []);
+
+	const waitForVoiceReconnectDelay = useCallback(
+		async (delayMs: number, expiresAt: number): Promise<'ready' | 'expired'> => {
+			let remainingDelayMs = delayMs;
+
+			while (remainingDelayMs > 0) {
+				if (Date.now() > expiresAt) {
+					return 'expired';
+				}
+
+				if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+					await waitForVoiceReconnectOnline();
+					continue;
+				}
+
+				const waitMs = Math.min(remainingDelayMs, VOICE_RECONNECT_WAIT_POLL_MS);
+				await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+				remainingDelayMs -= waitMs;
+			}
+
+			return Date.now() > expiresAt ? 'expired' : 'ready';
+		},
+		[waitForVoiceReconnectOnline],
+	);
+
+	useEffect(() => {
+		if (!isConnected || reconnectingSince === undefined) {
+			return;
+		}
+
+		if (voiceReconnectPromiseRef.current) {
+			return;
+		}
+
+		const recoveryPromise = (async () => {
+			let consecutiveUnknownErrors = 0;
+			let retryAttempt = 0;
+
+			while (true) {
+				const pendingVoiceReconnect = getValidPendingVoiceReconnect();
+
+				if (!pendingVoiceReconnect) {
+					logDebug('Voice reconnect terminal clear reason', {
+						reason: 'reconnect-expired',
+					});
+					clearVoiceReconnectRecovery('reconnect-expired');
+					return;
+				}
+
+				if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
+					return;
+				}
+
+				if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+					await waitForVoiceReconnectOnline();
+					continue;
+				}
+
+				const reconnectAttemptId = createReconnectAttemptId();
+				const attemptNumber = retryAttempt + 1;
+
+				logDebug('Voice reconnect attempt start', {
+					attempt: attemptNumber,
+					channelId: pendingVoiceReconnect.channelId,
+					reconnectAttemptId,
+				});
+
+				try {
+					const bootstrap = await withVoiceReconnectTimeout(
+						requestVoiceRestoreOrJoin({
+							channelId: pendingVoiceReconnect.channelId,
+							micMuted: pendingVoiceReconnect.micMuted,
+							soundMuted: pendingVoiceReconnect.soundMuted,
+							reconnectAttemptId,
+						}),
+					);
+
+					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
+						return;
+					}
+
+					await withVoiceReconnectTimeout(
+						init(bootstrap.routerRtpCapabilities, pendingVoiceReconnect.channelId, {
+							producerTransportParams: bootstrap.producerTransportParams,
+							consumerTransportParams: bootstrap.consumerTransportParams,
+							existingProducers: bootstrap.existingProducers,
+							playJoinSound: false,
+						}),
+					);
+
+					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
+						return;
+					}
+
+					const serverStore = useServerStore.getState();
+
+					serverStore.setCurrentVoiceChannelId(pendingVoiceReconnect.channelId);
+					serverStore.reconcileVoiceChannelUsers({
+						channelId: pendingVoiceReconnect.channelId,
+						users: bootstrap.channelUsers,
+					});
+					serverStore.bumpVoiceSessionReconnectNonce();
+
+					clearVoiceReconnectRecovery('voice-join-succeeded');
+					useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+						channelId: pendingVoiceReconnect.channelId,
+						peerUserIds: [...pendingVoiceReconnect.peerUserIds],
+						expiresAt: Date.now() + VOICE_RECONNECT_SUPPRESSION_MS,
+					});
+
+					return;
+				} catch (error) {
+					const classification = classifyVoiceReconnectError(error, {
+						consecutiveUnknownErrors,
+					});
+
+					logDebug('Voice reconnect retry classification', {
+						attempt: attemptNumber,
+						classification,
+						error,
+					});
+
+					if (classification.kind === 'terminal') {
+						logDebug('Voice reconnect terminal clear reason', {
+							reason: classification.clearReason,
+							detail: classification.reason,
+						});
+						clearVoiceReconnectRecovery(classification.clearReason);
+						return;
+					}
+
+					consecutiveUnknownErrors = classification.countsAsUnknown ? consecutiveUnknownErrors + 1 : 0;
+
+					const retryDelayMs = getVoiceReconnectRetryDelayMs(retryAttempt, Math.random());
+
+					logDebug('Voice reconnect retry delay', {
+						attempt: attemptNumber,
+						delayMs: retryDelayMs,
+					});
+
+					const delayOutcome = await waitForVoiceReconnectDelay(retryDelayMs, pendingVoiceReconnect.expiresAt);
+
+					if (delayOutcome === 'expired') {
+						logDebug('Voice reconnect terminal clear reason', {
+							reason: 'reconnect-expired',
+						});
+						clearVoiceReconnectRecovery('reconnect-expired');
+						return;
+					}
+
+					retryAttempt += 1;
+				}
+			}
+		})().finally(() => {
+			voiceReconnectPromiseRef.current = undefined;
+		});
+
+		voiceReconnectPromiseRef.current = recoveryPromise;
+	}, [
+		init,
+		isConnected,
+		reconnectingSince,
+		requestVoiceRestoreOrJoin,
+		waitForVoiceReconnectDelay,
+		waitForVoiceReconnectOnline,
+	]);
 
 	const { isStartingScreenShare, setMicMuted, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =
 		useVoiceControls({

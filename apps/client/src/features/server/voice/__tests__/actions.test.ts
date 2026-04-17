@@ -7,6 +7,8 @@ import { ownVoiceStateSelector } from '../selectors';
 
 let removeUserFromVoiceChannel: typeof import('../actions').removeUserFromVoiceChannel;
 let handleStreamWatcherActivity: typeof import('../actions').handleStreamWatcherActivity;
+let addUserToVoiceChannel: typeof import('../actions').addUserToVoiceChannel;
+let updateVoiceUserState: typeof import('../actions').updateVoiceUserState;
 const playSound = mock(() => {});
 
 type TPinnedCardState = NonNullable<ReturnType<typeof useServerStore.getState>['pinnedCard']>;
@@ -76,7 +78,8 @@ describe('voice actions', () => {
 			playSound,
 		}));
 
-		({ removeUserFromVoiceChannel, handleStreamWatcherActivity } = await import('../actions'));
+		({ addUserToVoiceChannel, removeUserFromVoiceChannel, handleStreamWatcherActivity, updateVoiceUserState } =
+			await import('../actions'));
 	});
 
 	beforeEach(() => {
@@ -271,5 +274,77 @@ describe('voice actions', () => {
 		removeUserFromVoiceChannel(42, 7);
 
 		expect(useVoiceReconnectStore.getState().pendingVoiceReconnect).toBeUndefined();
+	});
+
+	it('suppresses remote join sounds for peers captured in reconnect suppression', () => {
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: 7,
+		});
+		useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+			channelId: 7,
+			peerUserIds: [10],
+			expiresAt: Date.now() + 10_000,
+		});
+
+		addUserToVoiceChannel(10, 7, {
+			micMuted: false,
+			soundMuted: false,
+			webcamEnabled: false,
+			sharingScreen: false,
+		});
+
+		expect(playSound).not.toHaveBeenCalledWith(SoundType.REMOTE_USER_JOINED_VOICE_CHANNEL);
+	});
+
+	it('still plays remote join sounds for new peers outside reconnect suppression', () => {
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: 7,
+		});
+		useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+			channelId: 7,
+			peerUserIds: [10],
+			expiresAt: Date.now() + 10_000,
+		});
+
+		addUserToVoiceChannel(11, 7, {
+			micMuted: false,
+			soundMuted: false,
+			webcamEnabled: false,
+			sharingScreen: false,
+		});
+
+		expect(playSound).toHaveBeenCalledWith(SoundType.REMOTE_USER_JOINED_VOICE_CHANNEL);
+	});
+
+	it('suppresses started-stream sounds for peers captured in reconnect suppression', () => {
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: 7,
+			voiceMap: {
+				7: {
+					users: {
+						10: {
+							micMuted: false,
+							soundMuted: false,
+							webcamEnabled: false,
+							sharingScreen: false,
+						},
+					},
+				},
+			},
+		});
+		useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+			channelId: 7,
+			peerUserIds: [10],
+			expiresAt: Date.now() + 10_000,
+		});
+
+		updateVoiceUserState(10, 7, {
+			webcamEnabled: true,
+		});
+
+		expect(playSound).not.toHaveBeenCalledWith(SoundType.REMOTE_USER_STARTED_STREAM);
 	});
 });

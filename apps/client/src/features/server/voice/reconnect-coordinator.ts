@@ -22,6 +22,8 @@ type TClearReason =
 	| 'banned'
 	| 'session-replaced'
 	| 'voice-join-succeeded'
+	| 'restore-conflict'
+	| 'restore-terminal-error'
 	| 'reconnect-expired'
 	| 'logout'
 	| 'app-teardown';
@@ -108,10 +110,30 @@ const clearVoiceReconnectRecovery = (reason: TClearReason): void => {
 	useVoiceReconnectStore.getState().clearVoiceReconnectRecovery(reason);
 };
 
-const resolveVoiceRecoveryAction = (): TVoiceRecoveryAction => {
+const getValidPendingVoiceReconnect = (): TPendingVoiceReconnect | undefined => {
 	const { pendingVoiceReconnect } = useVoiceReconnectStore.getState();
 
 	if (!pendingVoiceReconnect || Date.now() > pendingVoiceReconnect.expiresAt) {
+		return undefined;
+	}
+
+	return pendingVoiceReconnect;
+};
+
+const isVoiceReconnectPeerSuppressed = (channelId: number, userId: number): boolean => {
+	const { voiceReconnectSuppression } = useVoiceReconnectStore.getState();
+
+	if (!voiceReconnectSuppression || Date.now() > voiceReconnectSuppression.expiresAt) {
+		return false;
+	}
+
+	return voiceReconnectSuppression.channelId === channelId && voiceReconnectSuppression.peerUserIds.includes(userId);
+};
+
+const resolveVoiceRecoveryAction = (): TVoiceRecoveryAction => {
+	const pendingVoiceReconnect = getValidPendingVoiceReconnect();
+
+	if (!pendingVoiceReconnect) {
 		return { kind: 'none' };
 	}
 
@@ -131,6 +153,8 @@ const resolveVoiceRecoveryAction = (): TVoiceRecoveryAction => {
 
 export {
 	clearVoiceReconnectRecovery,
+	getValidPendingVoiceReconnect,
+	isVoiceReconnectPeerSuppressed,
 	resolveVoiceRecoveryAction,
 	snapshotVoiceReconnectIntent,
 	useVoiceReconnectStore,
