@@ -254,6 +254,7 @@ const scheduleFallbackDisconnect = ({
     'graceScheduled'
   );
 
+  const scheduledAt = Date.now();
   const timer = setTimeout(() => {
     fallbackVoiceDisconnectTimers.delete(timer);
     incrementCounter('graceExpired');
@@ -264,7 +265,7 @@ const scheduleFallbackDisconnect = ({
       {
         userId,
         activeChannelId: channelId,
-        graceAgeMs: fallbackTtlMs,
+        graceAgeMs: Date.now() - scheduledAt,
         ttlRemainingMs: 0,
         wsCloseCode,
         fallback: true
