@@ -1,4 +1,4 @@
-import { imageExtensions, type TJoinedMessage } from '@sharkord/shared';
+import { FileCategory, getFileCategory, type TJoinedMessage } from '@sharkord/shared';
 import parse from 'html-react-parser';
 import { memo, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
@@ -8,7 +8,9 @@ import { getFileUrl } from '@/helpers/get-file-url';
 import { getTRPCClient } from '@/lib/trpc';
 import { FileCard } from '../file-card';
 import { MessageReactions } from '../message-reactions';
+import { AudioOverride } from '../overrides/audio';
 import { ImageOverride } from '../overrides/image';
+import { VideoOverride } from '../overrides/video';
 import { serializer } from './serializer';
 import type { TFoundMedia } from './types';
 
@@ -55,15 +57,29 @@ const MessageRenderer = memo(({ message }: TMessageRendererProps) => {
 	}, []);
 
 	const allMedia = useMemo(() => {
-		const mediaFromFiles: TFoundMedia[] = message.files
-			.filter((file) => imageExtensions.includes(file.extension))
-			.map((file) => ({
-				type: 'image',
-				url: getFileUrl(file),
-			}));
+		const mediaFromFiles: TFoundMedia[] = [];
+
+		for (const file of message.files) {
+			const category = getFileCategory(file.extension);
+
+			if (category === FileCategory.IMAGE) {
+				mediaFromFiles.push({ type: 'image', url: getFileUrl(file) });
+			} else if (category === FileCategory.VIDEO) {
+				mediaFromFiles.push({ type: 'video', url: getFileUrl(file) });
+			} else if (category === FileCategory.AUDIO) {
+				mediaFromFiles.push({ type: 'audio', url: getFileUrl(file) });
+			}
+		}
 
 		return [...foundMedia, ...mediaFromFiles];
 	}, [foundMedia, message.files]);
+
+	const cardFiles = useMemo(() => {
+		return message.files.filter((file) => {
+			const category = getFileCategory(file.extension);
+			return category !== FileCategory.VIDEO && category !== FileCategory.AUDIO;
+		});
+	}, [message.files]);
 
 	return (
 		<div className="flex flex-col gap-1">
@@ -74,14 +90,22 @@ const MessageRenderer = memo(({ message }: TMessageRendererProps) => {
 					return <ImageOverride src={media.url} key={`media-image-${index}`} />;
 				}
 
+				if (media.type === 'video') {
+					return <VideoOverride src={media.url} key={`media-video-${index}`} />;
+				}
+
+				if (media.type === 'audio') {
+					return <AudioOverride src={media.url} key={`media-audio-${index}`} />;
+				}
+
 				return null;
 			})}
 
 			<MessageReactions reactions={message.reactions} messageId={message.id} />
 
-			{message.files.length > 0 && (
+			{cardFiles.length > 0 && (
 				<div className="flex gap-1 flex-wrap">
-					{message.files.map((file) => (
+					{cardFiles.map((file) => (
 						<FileCard
 							key={file.id}
 							name={file.originalName}
