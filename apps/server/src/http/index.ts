@@ -213,7 +213,10 @@ const createHttpServer = async (port: number = config.server.port) => {
             return await logoutRouteHandler(req, res);
           }
 
-          if (req.method === 'GET' && req.url?.startsWith('/public')) {
+          if (
+            (req.method === 'GET' || req.method === 'HEAD') &&
+            req.url?.startsWith('/public')
+          ) {
             return await publicRouteHandler(req, res);
           }
 
