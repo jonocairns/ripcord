@@ -75,7 +75,10 @@ const MessageRenderer = memo(({ message }: TMessageRendererProps) => {
 	}, [foundMedia, message.files]);
 
 	const cardFiles = useMemo(() => {
-		return message.files.filter((file) => getFileCategory(file.extension) !== FileCategory.AUDIO);
+		return message.files.filter((file) => {
+			const category = getFileCategory(file.extension);
+			return category !== FileCategory.VIDEO && category !== FileCategory.AUDIO;
+		});
 	}, [message.files]);
 
 	return (

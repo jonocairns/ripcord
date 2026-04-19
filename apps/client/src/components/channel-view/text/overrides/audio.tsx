@@ -131,7 +131,7 @@ const AudioPlayerChrome = memo(
 									<a
 										href={href}
 										target="_blank"
-										rel="noopener"
+										rel="noopener noreferrer"
 										className="truncate font-medium text-foreground hover:underline"
 										title={name}
 									>
@@ -201,7 +201,7 @@ const AudioPlayerChrome = memo(
 							</DropdownMenuItem>
 							{href && (
 								<DropdownMenuItem asChild>
-									<a href={href} target="_blank" rel="noopener">
+									<a href={href} target="_blank" rel="noopener noreferrer">
 										<ExternalLink className="h-3.5 w-3.5" />
 										<span>Open in new tab</span>
 									</a>
