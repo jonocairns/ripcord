@@ -1,0 +1,46 @@
+name: Release Desktop (Beta)
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".github/**"
+      - "!.github/workflows/release-desktop-beta.yml"
+      - "!.github/workflows/release-desktop-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-beta
+  cancel-in-progress: true
+
+jobs:
+  compute-beta-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      short_sha: ${{ steps.version.outputs.short_sha }}
+    steps:
+      - name: Compute beta version
+        id: version
+        run: |
+          short_sha="${GITHUB_SHA:0:7}"
+          version="0.0.0-beta.${{ github.run_number }}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "Building beta ${version} (sha ${short_sha})"
+
+  release-desktop-windows:
+    needs: compute-beta-version
+    uses: ./.github/workflows/release-desktop-windows.yml
+    with:
+      tag: beta
+      ref: ${{ github.sha }}
+      version: ${{ needs.compute-beta-version.outputs.version }}
+      prerelease: true
+    secrets: inherit
