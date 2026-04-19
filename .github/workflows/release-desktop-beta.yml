@@ -4,12 +4,13 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - ".github/**"
-      - "!.github/workflows/release-desktop-beta.yml"
-      - "!.github/workflows/release-desktop-windows.yml"
+    paths:
+      - "**"
+      - "!**/*.md"
+      - "!docs/**"
+      - "!.github/**"
+      - ".github/workflows/release-desktop-beta.yml"
+      - ".github/workflows/release-desktop-windows.yml"
   workflow_dispatch:
 
 permissions:
