@@ -7,6 +7,7 @@ import type {
   TDesktopCapabilities,
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
+  TDesktopQuitFlushResult,
   TDesktopUpdateStatus,
   TGlobalPushKeybindRegistrationResult,
   TDesktopAppAudioTargetsResult,
@@ -22,6 +23,7 @@ const APP_AUDIO_CHANNEL_STALL_TIMEOUT_MS = 8_000;
 const appAudioFrameSubscribers = new Set<
   (frame: TAppAudioFrame | TAppAudioPcmFrame) => void
 >();
+const beforeQuitSubscribers = new Set<() => void | Promise<void>>();
 const activeAppAudioSessionIds = new Set<string>();
 let appAudioFrameFallbackBound = false;
 let appAudioFramePort: MessagePort | undefined;
@@ -31,6 +33,7 @@ let appAudioFrameReconnectAttempts = 0;
 let appAudioFrameWatchdogTimer: number | undefined;
 let appAudioHasReceivedFrameSinceCaptureStart = false;
 let appAudioLastFrameAt = 0;
+let beforeQuitFlushPromise: Promise<void> | undefined;
 
 const dispatchAppAudioFrame = (frame: TAppAudioFrame | TAppAudioPcmFrame) => {
   appAudioHasReceivedFrameSinceCaptureStart = true;
@@ -360,6 +363,59 @@ const ensureAppAudioFrameChannel = (): Promise<boolean> => {
   return appAudioFramePortPromise;
 };
 
+const notifyMainBeforeQuitFinished = (result: TDesktopQuitFlushResult) => {
+  ipcRenderer.send("desktop:before-quit-finished", result);
+};
+
+const flushBeforeQuitSubscribers = async () => {
+  if (beforeQuitFlushPromise) {
+    return beforeQuitFlushPromise;
+  }
+
+  beforeQuitFlushPromise = (async () => {
+    if (beforeQuitSubscribers.size === 0) {
+      notifyMainBeforeQuitFinished({
+        status: "skipped",
+        reason: "no-renderer-subscriber",
+      });
+      return;
+    }
+
+    const results = await Promise.allSettled(
+      Array.from(beforeQuitSubscribers, (callback) =>
+        Promise.resolve().then(callback),
+      ),
+    );
+
+    const rejectedResult = results.find(
+      (result) => result.status === "rejected",
+    );
+    if (rejectedResult?.status === "rejected") {
+      console.error(
+        "[desktop] before-quit renderer flush failed",
+        rejectedResult.reason,
+      );
+      notifyMainBeforeQuitFinished({
+        status: "skipped",
+        reason: "renderer-handler-failed",
+      });
+      return;
+    }
+
+    notifyMainBeforeQuitFinished({
+      status: "succeeded",
+    });
+  })().finally(() => {
+    beforeQuitFlushPromise = undefined;
+  });
+
+  return beforeQuitFlushPromise;
+};
+
+ipcRenderer.on("desktop:before-quit", () => {
+  void flushBeforeQuitSubscribers();
+});
+
 const desktopBridge = {
   getServerUrl: (): Promise<string> =>
     ipcRenderer.invoke("desktop:get-server-url"),
@@ -472,6 +528,15 @@ const desktopBridge = {
       ipcRenderer.removeListener("desktop:update-status", listener);
     };
   },
+  subscribeBeforeQuit: (callback: () => void | Promise<void>) => {
+    beforeQuitSubscribers.add(callback);
+
+    return () => {
+      beforeQuitSubscribers.delete(callback);
+    };
+  },
+  debugRequestBeforeQuitFlush: (): Promise<TDesktopQuitFlushResult> =>
+    ipcRenderer.invoke("desktop:debug-request-before-quit-flush"),
   prepareScreenShare: (selection: TScreenShareSelection) =>
     ipcRenderer.invoke("desktop:prepare-screen-share", selection),
 };

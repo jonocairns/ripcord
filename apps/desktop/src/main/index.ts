@@ -31,6 +31,7 @@ import { installYoutubeEmbedRefererHandler } from "./youtube-embed-referrer";
 import type {
   TAppAudioPcmFrame,
   TDesktopCapabilities,
+  TDesktopQuitFlushResult,
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
   TGlobalPushKeybindRegistrationResult,
@@ -39,6 +40,8 @@ import type {
 } from "./types";
 
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
+const DESKTOP_QUIT_FLUSH_TIMEOUT_MS = 2_000;
+const DESKTOP_DEBUG_IPC_ENABLED = Boolean(RENDERER_URL);
 let mainWindow: BrowserWindow | null = null;
 let appAudioFrameEgressPort: MessagePortMain | undefined;
 let lastDesktopCapabilitiesSnapshot: string | undefined;
@@ -48,17 +51,27 @@ let refreshDesktopCapabilitiesPromise:
 let refreshDesktopCapabilitiesBroadcastPending = false;
 let refreshDesktopCapabilitiesForceBroadcastPending = false;
 let appIsShuttingDown = false;
+let desktopQuitFlushInterceptInProgress = false;
+let desktopQuitFlushCompleted = false;
+let resolveDesktopQuitFlush:
+  | ((result: TDesktopQuitFlushResult) => void)
+  | undefined;
 
-const sendToRenderer = (channel: string, ...args: unknown[]): void => {
+const sendToRenderer = (channel: string, ...args: unknown[]): boolean => {
   if (
     !mainWindow ||
     mainWindow.isDestroyed() ||
     mainWindow.webContents.isDestroyed()
   ) {
-    return;
+    return false;
   }
 
-  mainWindow.webContents.send(channel, ...args);
+  try {
+    mainWindow.webContents.send(channel, ...args);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 const disposeAppAudioFrameEgressPort = (
@@ -107,6 +120,46 @@ const resolveAppIconPath = (): string | undefined => {
 
 const emitPushKeybindEvent = (event: TDesktopPushKeybindEvent) => {
   sendToRenderer("desktop:global-push-keybind", event);
+};
+
+const disposeDesktopServicesForShutdown = () => {
+  disposeAppAudioFrameEgressPort();
+  desktopUpdater.dispose();
+  void captureSidecarManager.dispose();
+};
+
+const completeDesktopQuitFlush = (result: TDesktopQuitFlushResult) => {
+  if (!resolveDesktopQuitFlush) {
+    return;
+  }
+
+  const resolve = resolveDesktopQuitFlush;
+  resolveDesktopQuitFlush = undefined;
+  resolve(result);
+};
+
+const requestDesktopQuitFlush = async (): Promise<TDesktopQuitFlushResult> => {
+  if (!sendToRenderer("desktop:before-quit")) {
+    return {
+      status: "skipped",
+      reason: "renderer-unavailable",
+    };
+  }
+
+  return await new Promise<TDesktopQuitFlushResult>((resolve) => {
+    const timeout = setTimeout(() => {
+      resolveDesktopQuitFlush = undefined;
+      resolve({
+        status: "skipped",
+        reason: "timeout",
+      });
+    }, DESKTOP_QUIT_FLUSH_TIMEOUT_MS);
+
+    resolveDesktopQuitFlush = (result) => {
+      clearTimeout(timeout);
+      resolve(result);
+    };
+  });
 };
 
 const setGlobalPushKeybinds = async (
@@ -418,6 +471,31 @@ const registerIpcHandlers = () => {
     ]);
   });
 
+  ipcMain.on(
+    "desktop:before-quit-finished",
+    (_event: IpcMainEvent, result: TDesktopQuitFlushResult) => {
+      completeDesktopQuitFlush(result);
+    },
+  );
+
+  ipcMain.handle("desktop:debug-request-before-quit-flush", async () => {
+    if (!DESKTOP_DEBUG_IPC_ENABLED) {
+      return {
+        status: "skipped",
+        reason: "debug-unavailable",
+      };
+    }
+
+    if (appIsShuttingDown || desktopQuitFlushInterceptInProgress) {
+      return {
+        status: "skipped",
+        reason: "quit-in-progress",
+      };
+    }
+
+    return await requestDesktopQuitFlush();
+  });
+
   ipcMain.handle("desktop:ping-sidecar", () => {
     return captureSidecarManager.getStatus();
   });
@@ -532,10 +610,33 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   appIsShuttingDown = true;
-  disposeAppAudioFrameEgressPort();
 
-  desktopUpdater.dispose();
-  void captureSidecarManager.dispose();
+  if (desktopQuitFlushCompleted) {
+    disposeDesktopServicesForShutdown();
+    return;
+  }
+
+  event.preventDefault();
+
+  if (desktopQuitFlushInterceptInProgress) {
+    return;
+  }
+
+  desktopQuitFlushInterceptInProgress = true;
+
+  void (async () => {
+    const result = await requestDesktopQuitFlush();
+
+    if (result.status === "skipped") {
+      console.warn("[desktop] Quit flush skipped", {
+        reason: result.reason,
+      });
+    }
+
+    desktopQuitFlushInterceptInProgress = false;
+    desktopQuitFlushCompleted = true;
+    app.quit();
+  })();
 });

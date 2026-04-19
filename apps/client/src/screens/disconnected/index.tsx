@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { connect, setDisconnectInfo } from '@/features/server/actions';
 import { isReconnectPausedDisconnectCode } from '@/features/server/disconnect-utils';
 import type { TDisconnectInfo } from '@/features/server/types';
+import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import { getAuthToken, getRefreshToken } from '@/helpers/storage';
 import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getRuntimeServerConfig, normalizeServerUrl, updateDesktopServerUrl } from '@/runtime/server-config';
@@ -88,6 +89,10 @@ const Disconnected = memo(({ info }: TDisconnectedProps) => {
 				return;
 			}
 
+			if (!opts.manual && !isVoiceReconnectOnline()) {
+				return;
+			}
+
 			if (reconnectingRef.current) {
 				return;
 			}
@@ -132,11 +137,18 @@ const Disconnected = memo(({ info }: TDisconnectedProps) => {
 
 		void attemptReconnect();
 
+		const handleOnline = () => {
+			void attemptReconnect();
+		};
+
+		window.addEventListener('online', handleOnline);
+
 		const intervalId = window.setInterval(() => {
 			void attemptReconnect();
 		}, RECONNECT_POLL_INTERVAL_MS);
 
 		return () => {
+			window.removeEventListener('online', handleOnline);
 			window.clearInterval(intervalId);
 		};
 	}, [attemptReconnect, disconnectType.autoReconnect, hasSavedAuth]);

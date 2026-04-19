@@ -8,6 +8,7 @@ import {
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { toast } from 'sonner';
 import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-card-controller';
+import { logDebug } from '@/helpers/browser-logger';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
@@ -17,10 +18,19 @@ import { useServerStore } from '../slice';
 import { playSound } from '../sounds/actions';
 import { SoundType } from '../types';
 import { ownUserIdSelector } from '../users/selectors';
+import type { TClearReason } from './reconnect-coordinator';
+import {
+	captureVoiceReconnectIntentForCurrentSession,
+	clearVoiceReconnectRecovery,
+	getValidPendingVoiceReconnect,
+	isVoiceReconnectPeerSuppressed,
+} from './reconnect-coordinator';
 import { ownVoiceStateSelector, pinnedCardSelector } from './selectors';
 
 type TLeaveVoiceOptions = {
 	playOwnLeaveSound: boolean;
+	clearReconnectReason?: TClearReason | false;
+	suppressErrors?: boolean;
 };
 
 const clearOwnVoiceChannelState = (): void => {
@@ -43,6 +53,11 @@ const clearOwnVoiceChannelState = (): void => {
 		sharingScreen: false,
 	});
 	useServerStore.getState().setPinnedCard(undefined);
+};
+
+const clearOwnVoiceSessionAfterReconnectFailure = (reason: TClearReason): void => {
+	clearVoiceReconnectRecovery(reason);
+	clearOwnVoiceChannelState();
 };
 
 const channelHasAvailableStreams = (channelId: number, opts: { excludeUserId?: number } = {}): boolean => {
@@ -87,7 +102,12 @@ export const addUserToVoiceChannel = (
 		state: voiceState,
 	});
 
-	if (userId !== ownUserId && channelId === currentChannelId && !opts.reconnecting) {
+	if (
+		userId !== ownUserId &&
+		channelId === currentChannelId &&
+		!opts.reconnecting &&
+		!isVoiceReconnectPeerSuppressed(channelId, userId)
+	) {
 		playSound(SoundType.REMOTE_USER_JOINED_VOICE_CHANNEL);
 	}
 };
@@ -107,7 +127,9 @@ export const removeUserFromVoiceChannel = (
 	clearPinnedCardById(`screen-share-${userId}`);
 
 	if (userId === ownUserId && channelId === currentChannelId) {
-		if (!opts.reconnecting) {
+		if (opts.reconnecting) {
+			captureVoiceReconnectIntentForCurrentSession();
+		} else {
 			playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
 		}
 
@@ -115,7 +137,12 @@ export const removeUserFromVoiceChannel = (
 		return;
 	}
 
-	if (userId !== ownUserId && channelId === currentChannelId && !opts.reconnecting) {
+	if (
+		userId !== ownUserId &&
+		channelId === currentChannelId &&
+		!opts.reconnecting &&
+		!isVoiceReconnectPeerSuppressed(channelId, userId)
+	) {
 		playSound(SoundType.REMOTE_USER_LEFT_VOICE_CHANNEL);
 	}
 };
@@ -181,7 +208,7 @@ export const updateVoiceUserState = (userId: number, channelId: number, newState
 		clearPinnedCardById(`screen-share-${userId}`);
 	}
 
-	if (shouldPlayStartedStreamSound) {
+	if (shouldPlayStartedStreamSound && !isVoiceReconnectPeerSuppressed(channelId, userId)) {
 		playSound(SoundType.REMOTE_USER_STARTED_STREAM);
 	}
 };
@@ -283,26 +310,39 @@ export const joinVoice = async (
 	}
 };
 
-const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<void> => {
+const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<boolean> => {
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
 
 	if (!currentChannelId) {
-		return;
+		return false;
 	}
 
+	if (options.clearReconnectReason !== false) {
+		clearVoiceReconnectRecovery(options.clearReconnectReason ?? 'user-left-voice');
+	}
 	clearOwnVoiceChannelState();
 
 	if (options.playOwnLeaveSound) {
 		playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
 	}
 
+	return leaveVoiceMutation({
+		suppressErrors: options.suppressErrors,
+	});
+};
+
+const leaveVoiceMutation = async (options: { suppressErrors?: boolean }): Promise<boolean> => {
 	const client = getTRPCClient();
 
 	try {
 		await client.voice.leave.mutate();
+		return true;
 	} catch (error) {
-		toast.error(getTrpcError(error, 'Failed to leave voice channel'));
+		if (!options.suppressErrors) {
+			toast.error(getTrpcError(error, 'Failed to leave voice channel'));
+		}
+		return false;
 	}
 };
 
@@ -314,6 +354,54 @@ export const leaveVoiceSilently = async (): Promise<void> => {
 	await leaveVoiceInternal({ playOwnLeaveSound: false });
 };
 
+export const flushVoiceForDesktopQuit = async (): Promise<'skipped' | 'succeeded'> => {
+	const currentChannelId = currentVoiceChannelIdSelector(useServerStore.getState());
+	const pendingVoiceReconnect = getValidPendingVoiceReconnect();
+	const channelIdToFlush = currentChannelId ?? pendingVoiceReconnect?.channelId;
+
+	clearVoiceReconnectRecovery('desktop-quit');
+
+	if (channelIdToFlush === undefined) {
+		logDebug('Desktop quit flush skipped', {
+			reason: 'not-in-voice',
+		});
+		return 'skipped';
+	}
+
+	try {
+		const didLeave =
+			currentChannelId !== undefined
+				? await leaveVoiceInternal({
+						playOwnLeaveSound: false,
+						clearReconnectReason: false,
+						suppressErrors: true,
+					})
+				: await leaveVoiceMutation({
+						suppressErrors: true,
+					});
+
+		if (!didLeave) {
+			logDebug('Desktop quit flush skipped', {
+				channelId: channelIdToFlush,
+				reason: 'voice-leave-failed',
+			});
+			return 'skipped';
+		}
+
+		logDebug('Desktop quit flush succeeded', {
+			channelId: channelIdToFlush,
+		});
+		return 'succeeded';
+	} catch (error) {
+		logDebug('Desktop quit flush skipped', {
+			channelId: channelIdToFlush,
+			reason: 'voice-leave-failed',
+			error,
+		});
+		return 'skipped';
+	}
+};
+
 export const handleVoiceSessionReplaced = (): void => {
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
@@ -322,9 +410,12 @@ export const handleVoiceSessionReplaced = (): void => {
 		return;
 	}
 
+	clearVoiceReconnectRecovery('session-replaced');
 	clearOwnVoiceChannelState();
 };
 
 export const setPinnedCard = (pinnedCard: TPinnedCard | undefined): void => {
 	useServerStore.getState().setPinnedCard(pinnedCard);
 };
+
+export { clearOwnVoiceSessionAfterReconnectFailure };
