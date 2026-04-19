@@ -149,6 +149,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [ "${RELEASE_PRERELEASE}" = "true" ]; then
+            echo "Prerelease build — skipping updater-metadata validation (beta.yml is not consumed by the stable channel)."
+            exit 0
+          fi
+
           metadata_file="$(ls build/out/latest*.yml 2>/dev/null | head -n1 || true)"
           if [ -z "${metadata_file}" ]; then
             echo "No latest*.yml updater metadata found in apps/desktop/build/out"
@@ -200,6 +205,8 @@ jobs:
               --title "${RELEASE_TAG}" \
               --notes "" \
               ${prerelease_flag}
+          elif [ "${RELEASE_PRERELEASE}" = "true" ]; then
+            gh release edit "${RELEASE_TAG}" --prerelease
           fi
 
           gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
