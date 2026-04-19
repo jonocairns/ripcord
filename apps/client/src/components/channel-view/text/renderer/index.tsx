@@ -63,11 +63,11 @@ const MessageRenderer = memo(({ message }: TMessageRendererProps) => {
 			const category = getFileCategory(file.extension);
 
 			if (category === FileCategory.IMAGE) {
-				mediaFromFiles.push({ type: 'image', url: getFileUrl(file) });
+				mediaFromFiles.push({ type: 'image', url: getFileUrl(file), file });
 			} else if (category === FileCategory.VIDEO) {
-				mediaFromFiles.push({ type: 'video', url: getFileUrl(file) });
+				mediaFromFiles.push({ type: 'video', url: getFileUrl(file), file });
 			} else if (category === FileCategory.AUDIO) {
-				mediaFromFiles.push({ type: 'audio', url: getFileUrl(file) });
+				mediaFromFiles.push({ type: 'audio', url: getFileUrl(file), file });
 			}
 		}
 
@@ -75,10 +75,7 @@ const MessageRenderer = memo(({ message }: TMessageRendererProps) => {
 	}, [foundMedia, message.files]);
 
 	const cardFiles = useMemo(() => {
-		return message.files.filter((file) => {
-			const category = getFileCategory(file.extension);
-			return category !== FileCategory.VIDEO && category !== FileCategory.AUDIO;
-		});
+		return message.files.filter((file) => getFileCategory(file.extension) !== FileCategory.AUDIO);
 	}, [message.files]);
 
 	return (
@@ -95,7 +92,18 @@ const MessageRenderer = memo(({ message }: TMessageRendererProps) => {
 				}
 
 				if (media.type === 'audio') {
-					return <AudioOverride src={media.url} key={`media-audio-${index}`} />;
+					const mediaFile = media.file;
+
+					return (
+						<AudioOverride
+							src={media.url}
+							name={mediaFile?.originalName ?? 'Audio file'}
+							size={mediaFile?.size}
+							href={media.url}
+							onRemove={mediaFile && isOwnMessage ? () => onRemoveFileClick(mediaFile.id) : undefined}
+							key={`media-audio-${index}`}
+						/>
+					);
 				}
 
 				return null;
