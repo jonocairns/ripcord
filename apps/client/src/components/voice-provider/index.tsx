@@ -18,7 +18,7 @@ import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { useOwnUserId } from '@/features/server/users/hooks';
-import { updateOwnVoiceState } from '@/features/server/voice/actions';
+import { clearOwnVoiceSessionAfterReconnectFailure, updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import {
 	clearVoiceReconnectRecovery,
@@ -2520,23 +2520,46 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	recoverTransportSessionRef.current = recoverTransportSession;
 
-	const waitForVoiceReconnectOnline = useCallback(async () => {
+	const waitForVoiceReconnectOnline = useCallback(async (expiresAt: number): Promise<'online' | 'expired'> => {
 		if (isVoiceReconnectOnline()) {
-			return;
+			return 'online';
+		}
+
+		const remainingMs = expiresAt - Date.now();
+
+		if (remainingMs <= 0) {
+			return 'expired';
 		}
 
 		logDebug('Voice reconnect offline pause');
 
-		await new Promise<void>((resolve) => {
-			const handleOnline = () => {
+		const outcome = await new Promise<'online' | 'expired'>((resolve) => {
+			let timeoutId: number | undefined;
+
+			const cleanup = () => {
 				window.removeEventListener('online', handleOnline);
-				resolve();
+				if (timeoutId !== undefined) {
+					window.clearTimeout(timeoutId);
+				}
+			};
+
+			const handleOnline = () => {
+				cleanup();
+				resolve(Date.now() > expiresAt ? 'expired' : 'online');
 			};
 
 			window.addEventListener('online', handleOnline, { once: true });
+			timeoutId = window.setTimeout(() => {
+				cleanup();
+				resolve('expired');
+			}, remainingMs);
 		});
 
-		logDebug('Voice reconnect offline resume');
+		if (outcome === 'online') {
+			logDebug('Voice reconnect offline resume');
+		}
+
+		return outcome;
 	}, []);
 
 	const waitForVoiceReconnectDelay = useCallback(
@@ -2549,7 +2572,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				}
 
 				if (!isVoiceReconnectOnline()) {
-					await waitForVoiceReconnectOnline();
+					const outcome = await waitForVoiceReconnectOnline(expiresAt);
+
+					if (outcome === 'expired') {
+						return 'expired';
+					}
+
 					continue;
 				}
 
@@ -2583,7 +2611,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					logDebug('Voice reconnect terminal clear reason', {
 						reason: 'reconnect-expired',
 					});
-					clearVoiceReconnectRecovery('reconnect-expired');
+					clearOwnVoiceSessionAfterReconnectFailure('reconnect-expired');
+					voiceCleanupRef.current?.();
 					return;
 				}
 
@@ -2592,7 +2621,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				}
 
 				if (!isVoiceReconnectOnline()) {
-					await waitForVoiceReconnectOnline();
+					const onlineOutcome = await waitForVoiceReconnectOnline(pendingVoiceReconnect.expiresAt);
+
+					if (onlineOutcome === 'expired') {
+						logDebug('Voice reconnect terminal clear reason', {
+							reason: 'reconnect-expired',
+						});
+						clearOwnVoiceSessionAfterReconnectFailure('reconnect-expired');
+						voiceCleanupRef.current?.();
+						return;
+					}
+
 					continue;
 				}
 
@@ -2702,7 +2741,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							}
 						}
 
-						clearVoiceReconnectRecovery(classification.clearReason);
+						clearOwnVoiceSessionAfterReconnectFailure(classification.clearReason);
+						voiceCleanupRef.current?.();
 						return;
 					}
 
@@ -2725,7 +2765,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						logDebug('Voice reconnect terminal clear reason', {
 							reason: 'reconnect-expired',
 						});
-						clearVoiceReconnectRecovery('reconnect-expired');
+						clearOwnVoiceSessionAfterReconnectFailure('reconnect-expired');
+						voiceCleanupRef.current?.();
 						return;
 					}
 

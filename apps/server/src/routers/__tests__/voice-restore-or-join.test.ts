@@ -9,6 +9,10 @@ import { appRouter } from '../../routers';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { pubsub } from '../../utils/pubsub';
 import {
+  resetVoiceDisconnectGraceForTests,
+  schedulePendingVoiceDisconnect
+} from '../../utils/voice-disconnect-grace';
+import {
   VOICE_SESSION_OWNED_ELSEWHERE,
   VOICE_SESSION_WRONG_CHANNEL
 } from '../voice/restore-or-join';
@@ -88,6 +92,7 @@ const attachTrackedSession = (
 afterEach(async () => {
   await clearVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID);
   await clearVoiceRuntime(SECONDARY_VOICE_CHANNEL_ID);
+  resetVoiceDisconnectGraceForTests();
 });
 
 describe('voice.restoreOrJoin', () => {
@@ -477,6 +482,78 @@ describe('voice.restoreOrJoin', () => {
       expect(sessionReplacedEvents).toEqual([]);
     } finally {
       replacedSub.unsubscribe();
+    }
+  });
+
+  test('returns CONFLICT when another client instance owns the pending reconnect grace for the channel', async () => {
+    await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+
+    const mockedToken = await getMockedToken(1);
+    const ctxA = await createMockContext({
+      customToken: mockedToken
+    });
+    const ctxB = await createMockContext({
+      customToken: mockedToken
+    });
+    const sessionA = {
+      clientInstanceId: 'session-a',
+      currentVoiceChannelId: undefined as number | undefined
+    };
+    const sessionB = {
+      clientInstanceId: 'session-b',
+      currentVoiceChannelId: undefined as number | undefined
+    };
+    const openSessions = [sessionA];
+
+    attachTrackedSession(ctxA, sessionA, openSessions);
+    attachTrackedSession(ctxB, sessionB, [sessionB]);
+
+    try {
+      const callerA = appRouter.createCaller(ctxA);
+      const callerB = appRouter.createCaller(ctxB);
+      const handshakeA = await callerA.others.handshake();
+      const handshakeB = await callerB.others.handshake();
+
+      await callerA.others.joinServer({
+        handshakeHash: handshakeA.handshakeHash
+      });
+      await callerB.others.joinServer({
+        handshakeHash: handshakeB.handshakeHash
+      });
+
+      await callerA.voice.join({
+        channelId: PRIMARY_VOICE_CHANNEL_ID,
+        state: {
+          micMuted: false,
+          soundMuted: false
+        }
+      });
+
+      openSessions.length = 0;
+
+      schedulePendingVoiceDisconnect({
+        clientInstanceId: sessionA.clientInstanceId,
+        userId: 1,
+        channelId: PRIMARY_VOICE_CHANNEL_ID,
+        finalize: () => {}
+      });
+
+      await expect(
+        callerB.voice.restoreOrJoin({
+          channelId: PRIMARY_VOICE_CHANNEL_ID,
+          state: {
+            micMuted: false,
+            soundMuted: false
+          },
+          reconnectAttemptId: 'attempt-pending-grace-conflict'
+        })
+      ).rejects.toThrow(VOICE_SESSION_OWNED_ELSEWHERE);
+
+      expect(
+        VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)
+      ).toBeDefined();
+    } finally {
+      openSessions.length = 0;
     }
   });
 });

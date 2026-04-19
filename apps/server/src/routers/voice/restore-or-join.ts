@@ -5,6 +5,7 @@ import { config } from '../../config';
 import { logger } from '../../logger';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
+import { getPendingVoiceReconnectChannelIdsOwnedElsewhere } from '../../utils/voice-disconnect-grace';
 import {
   createVoiceJoinBootstrap,
   getVoiceJoinTarget,
@@ -46,10 +47,18 @@ const restoreOrJoinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
           ? []
           : [currentVoiceChannelId];
       });
+    const otherPendingVoiceChannelIds =
+      getPendingVoiceReconnectChannelIdsOwnedElsewhere(
+        ctx.user.id,
+        clientInstanceId
+      );
     const activeChannelId =
-      runtimeWithUser?.id ?? otherActiveVoiceChannelIds[0];
+      runtimeWithUser?.id ??
+      otherActiveVoiceChannelIds[0] ??
+      otherPendingVoiceChannelIds[0];
     const hasOtherSessionInRequestedChannel =
-      otherActiveVoiceChannelIds.includes(input.channelId);
+      otherActiveVoiceChannelIds.includes(input.channelId) ||
+      otherPendingVoiceChannelIds.includes(input.channelId);
 
     logRestoreOrJoinEvent('attempt', {
       reconnectAttemptId: input.reconnectAttemptId,

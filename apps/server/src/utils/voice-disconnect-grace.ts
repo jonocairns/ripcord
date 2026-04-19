@@ -23,6 +23,7 @@ type TVoiceDisconnectEventFields = {
 };
 
 type TPendingVoiceDisconnect = {
+  clientInstanceId?: string;
   userId: number;
   channelId: number;
   timer: ReturnType<typeof setTimeout>;
@@ -172,6 +173,30 @@ const getPendingVoiceReconnectChannelId = (
   return pendingDisconnect.channelId;
 };
 
+const getPendingVoiceReconnectChannelIdsOwnedElsewhere = (
+  userId: number,
+  clientInstanceId?: string
+) => {
+  const channelIds: number[] = [];
+
+  pendingVoiceDisconnects.forEach((pendingDisconnect) => {
+    if (pendingDisconnect.userId !== userId) {
+      return;
+    }
+
+    if (
+      clientInstanceId !== undefined &&
+      pendingDisconnect.clientInstanceId === clientInstanceId
+    ) {
+      return;
+    }
+
+    channelIds.push(pendingDisconnect.channelId);
+  });
+
+  return channelIds;
+};
+
 const scheduleTrackedDisconnect = ({
   clientInstanceId,
   userId,
@@ -210,6 +235,7 @@ const scheduleTrackedDisconnect = ({
   }, ttlMs);
 
   pendingVoiceDisconnects.set(pendingDisconnectKey, {
+    clientInstanceId,
     userId,
     channelId,
     timer,
@@ -353,6 +379,7 @@ export {
   clearPendingVoiceDisconnect,
   FALLBACK_VOICE_DISCONNECT_GRACE_MS,
   getPendingVoiceReconnectChannelId,
+  getPendingVoiceReconnectChannelIdsOwnedElsewhere,
   getVoiceDisconnectGraceCounters,
   resetVoiceDisconnectGraceForTests,
   schedulePendingVoiceDisconnect,

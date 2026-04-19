@@ -9,6 +9,7 @@ let removeUserFromVoiceChannel: typeof import('../actions').removeUserFromVoiceC
 let handleStreamWatcherActivity: typeof import('../actions').handleStreamWatcherActivity;
 let addUserToVoiceChannel: typeof import('../actions').addUserToVoiceChannel;
 let updateVoiceUserState: typeof import('../actions').updateVoiceUserState;
+let clearOwnVoiceSessionAfterReconnectFailure: typeof import('../actions').clearOwnVoiceSessionAfterReconnectFailure;
 let flushVoiceForDesktopQuit: typeof import('../actions').flushVoiceForDesktopQuit;
 const playSound = mock(() => {});
 let leaveShouldFail = false;
@@ -96,6 +97,7 @@ describe('voice actions', () => {
 
 		({
 			addUserToVoiceChannel,
+			clearOwnVoiceSessionAfterReconnectFailure,
 			removeUserFromVoiceChannel,
 			handleStreamWatcherActivity,
 			updateVoiceUserState,
@@ -445,6 +447,64 @@ describe('voice actions', () => {
 
 		expect(result).toBe('succeeded');
 		expect(leaveMutate).toHaveBeenCalledTimes(1);
+		expect(useVoiceReconnectStore.getState()).toMatchObject({
+			pendingVoiceReconnect: undefined,
+			reconnectingSince: undefined,
+			voiceReconnectSuppression: undefined,
+		});
+	});
+
+	it('clears sticky local voice state when reconnect recovery terminates', () => {
+		useServerStore.setState({
+			currentVoiceChannelId: 7,
+			selectedChannelId: 7,
+			lastTextChannelId: 9,
+			channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
+			voiceMap: {
+				7: {
+					users: {
+						42: {
+							micMuted: false,
+							soundMuted: false,
+							webcamEnabled: true,
+							sharingScreen: true,
+						},
+					},
+				},
+			},
+			ownVoiceDefaults: {
+				micMuted: false,
+				soundMuted: false,
+				webcamEnabled: true,
+				sharingScreen: true,
+			},
+		});
+		useVoiceReconnectStore.setState({
+			pendingVoiceReconnect: {
+				channelId: 7,
+				micMuted: false,
+				soundMuted: false,
+				peerUserIds: [10],
+				expiresAt: Date.now() + 10_000,
+			},
+			reconnectingSince: Date.now(),
+			voiceReconnectSuppression: {
+				channelId: 7,
+				peerUserIds: [10],
+				expiresAt: Date.now() + 10_000,
+			},
+		});
+
+		clearOwnVoiceSessionAfterReconnectFailure('restore-terminal-error');
+
+		expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
+		expect(useServerStore.getState().selectedChannelId).toBe(9);
+		expect(ownVoiceStateSelector(useServerStore.getState())).toEqual({
+			micMuted: false,
+			soundMuted: false,
+			webcamEnabled: false,
+			sharingScreen: false,
+		});
 		expect(useVoiceReconnectStore.getState()).toMatchObject({
 			pendingVoiceReconnect: undefined,
 			reconnectingSince: undefined,

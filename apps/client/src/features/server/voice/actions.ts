@@ -55,6 +55,11 @@ const clearOwnVoiceChannelState = (): void => {
 	useServerStore.getState().setPinnedCard(undefined);
 };
 
+const clearOwnVoiceSessionAfterReconnectFailure = (reason: TClearReason): void => {
+	clearVoiceReconnectRecovery(reason);
+	clearOwnVoiceChannelState();
+};
+
 const channelHasAvailableStreams = (channelId: number, opts: { excludeUserId?: number } = {}): boolean => {
 	const state = useServerStore.getState();
 	const users = state.voiceMap[channelId]?.users ?? {};
@@ -412,3 +417,5 @@ export const handleVoiceSessionReplaced = (): void => {
 export const setPinnedCard = (pinnedCard: TPinnedCard | undefined): void => {
 	useServerStore.getState().setPinnedCard(pinnedCard);
 };
+
+export { clearOwnVoiceSessionAfterReconnectFailure };
