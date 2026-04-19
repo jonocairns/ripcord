@@ -3,12 +3,15 @@ import type { RtpCapabilities } from 'mediasoup-client/types';
 import { useEffect } from 'react';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useOwnUserId } from '@/features/server/users/hooks';
+import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordinator';
 import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
+import { shouldSyncExistingProducersAfterVoiceEventSubscriptionStart } from './voice-event-sync-policy';
 
 type TEvents = {
 	consume: (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities) => Promise<void>;
+	syncExistingProducers: (rtpCapabilities: RtpCapabilities) => Promise<void>;
 	addPendingStream: (remoteId: number, kind: StreamKind) => void;
 	removePendingStream: (remoteId: number, kind: StreamKind) => void;
 	removeRemoteUserStream: (userId: number, kind: TRemoteUserStreamKinds) => void;
@@ -23,6 +26,7 @@ type TEvents = {
 
 const useVoiceEvents = ({
 	consume,
+	syncExistingProducers,
 	addPendingStream,
 	removePendingStream,
 	removeRemoteUserStream,
@@ -36,6 +40,7 @@ const useVoiceEvents = ({
 }: TEvents) => {
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const ownUserId = useOwnUserId();
+	const reconnectingSince = useVoiceReconnectStore((state) => state.reconnectingSince);
 
 	useEffect(() => {
 		// Force a fresh subscription set after WS reconnect even when the voice
@@ -180,6 +185,29 @@ const useVoiceEvents = ({
 			},
 		});
 
+		if (rtpCapabilities && shouldSyncExistingProducersAfterVoiceEventSubscriptionStart(reconnectingSince)) {
+			logVoice('Syncing existing producers after voice event subscription start', {
+				channelId: currentVoiceChannelId,
+			});
+
+			void syncExistingProducers(rtpCapabilities).catch((error) => {
+				if (isCleaningUp) {
+					return;
+				}
+
+				logVoice('Failed to sync existing producers after voice event subscription start', {
+					error,
+					channelId: currentVoiceChannelId,
+				});
+			});
+		}
+
+		if (rtpCapabilities && !shouldSyncExistingProducersAfterVoiceEventSubscriptionStart(reconnectingSince)) {
+			logVoice('Skipping producer sync after voice event subscription start during reconnect recovery', {
+				channelId: currentVoiceChannelId,
+			});
+		}
+
 		return () => {
 			logVoice('Cleaning up voice events');
 
@@ -195,6 +223,7 @@ const useVoiceEvents = ({
 		currentVoiceChannelId,
 		ownUserId,
 		consume,
+		syncExistingProducers,
 		addPendingStream,
 		removePendingStream,
 		removeRemoteUserStream,
@@ -204,6 +233,7 @@ const useVoiceEvents = ({
 		clearPendingStreamsForUser,
 		onTransportFailure,
 		rtpCapabilities,
+		reconnectingSince,
 		reconnectNonce,
 	]);
 };

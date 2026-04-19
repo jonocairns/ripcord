@@ -7,10 +7,17 @@ import { resetServerState, setDisconnectInfo } from '@/features/server/actions';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
+import {
+	captureVoiceReconnectIntentForCurrentSession,
+	clearVoiceReconnectRecovery,
+	ensureVoiceReconnectStarted,
+} from '@/features/server/voice/reconnect-coordinator';
+import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import { resetServerScreens } from '@/features/server-screens/actions';
 import { clearAuthToken, getAuthToken } from '@/helpers/storage';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { markSocketCloseEventIgnored, shouldIgnoreSocketCloseEvent } from './websocket-close-ignore';
+import { getWsReconnectOpenAction, shouldResumeDeferredWsReconnect } from './ws-reconnect-gate';
 
 let wsClient: ReturnType<typeof createWSClient> | null = null;
 let trpc: ReturnType<typeof createTRPCProxyClient<AppRouter>> | null = null;
@@ -18,6 +25,7 @@ let currentHost: string | null = null;
 let teardownTimer: ReturnType<typeof setTimeout> | null = null;
 let onWsReconnect: (() => void) | null = null;
 let cachedClientInstanceId: string | null = null;
+let deferredWsReconnectOnlineListener: (() => void) | null = null;
 
 // How long to wait for tRPC to reconnect before tearing down the app state.
 const RETRY_GRACE_PERIOD_MS = 5000;
@@ -69,6 +77,16 @@ const getWsClientInstanceId = () => {
 	return cachedClientInstanceId;
 };
 
+const clearDeferredWsReconnectOnlineListener = () => {
+	if (!deferredWsReconnectOnlineListener || typeof window === 'undefined') {
+		deferredWsReconnectOnlineListener = null;
+		return;
+	}
+
+	window.removeEventListener('online', deferredWsReconnectOnlineListener);
+	deferredWsReconnectOnlineListener = null;
+};
+
 const initializeTRPC = (host: string) => {
 	const runtimeServerUrl = getRuntimeServerConfig().serverUrl;
 	const serverProtocol = runtimeServerUrl ? new URL(runtimeServerUrl).protocol : window.location.protocol;
@@ -82,11 +100,18 @@ const initializeTRPC = (host: string) => {
 				return;
 			}
 
+			clearDeferredWsReconnectOnlineListener();
+
 			const state = useServerStore.getState();
 			const wasConnected = state.connected;
 
 			if (DELIBERATE_DISCONNECT_CODES.has(cause.code)) {
 				// Tear down immediately for intentional server-side disconnects
+				if (cause.code === DisconnectCode.KICKED) {
+					clearVoiceReconnectRecovery('kicked');
+				} else if (cause.code === DisconnectCode.BANNED) {
+					clearVoiceReconnectRecovery('banned');
+				}
 				cleanup({ skipSocketClose: true });
 				if (wasConnected) {
 					playSound(SoundType.SERVER_DISCONNECTED);
@@ -98,6 +123,10 @@ const initializeTRPC = (host: string) => {
 					time: new Date(),
 				});
 				return;
+			}
+
+			if (captureVoiceReconnectIntentForCurrentSession()) {
+				ensureVoiceReconnectStarted();
 			}
 
 			// Give tRPC's internal retry a grace period before tearing down.
@@ -120,8 +149,21 @@ const initializeTRPC = (host: string) => {
 			}, RETRY_GRACE_PERIOD_MS);
 		},
 		onOpen: () => {
-			if (teardownTimer) {
-				clearTimeout(teardownTimer);
+			const resumeReconnect = () => {
+				const pendingTeardownTimer = teardownTimer;
+
+				if (
+					!shouldResumeDeferredWsReconnect({
+						hasTeardownTimer: pendingTeardownTimer !== null,
+						isSocketOpen: wsClient?.connection?.ws?.readyState === WebSocket.OPEN,
+					})
+				) {
+					return;
+				}
+
+				if (pendingTeardownTimer) {
+					clearTimeout(pendingTeardownTimer);
+				}
 				teardownTimer = null;
 
 				// The WS reconnected after a disconnect. The new server-side context
@@ -129,6 +171,35 @@ const initializeTRPC = (host: string) => {
 				// need to re-run handshake → joinServer to restore auth, subscriptions,
 				// and voice state.
 				onWsReconnect?.();
+			};
+
+			switch (
+				getWsReconnectOpenAction({
+					hasTeardownTimer: teardownTimer !== null,
+					isReconnectOnline: isVoiceReconnectOnline(),
+				})
+			) {
+				case 'ignore':
+					return;
+				case 'defer': {
+					clearDeferredWsReconnectOnlineListener();
+
+					if (typeof window === 'undefined') {
+						return;
+					}
+
+					deferredWsReconnectOnlineListener = () => {
+						clearDeferredWsReconnectOnlineListener();
+						resumeReconnect();
+					};
+
+					window.addEventListener('online', deferredWsReconnectOnlineListener, { once: true });
+					return;
+				}
+				case 'resume':
+					clearDeferredWsReconnectOnlineListener();
+					resumeReconnect();
+					return;
 			}
 		},
 		connectionParams: async (): Promise<TConnectionParams> => {
@@ -157,6 +228,8 @@ const connectToTRPC = (host: string) => {
 };
 
 const reconnectTRPC = (host: string) => {
+	clearDeferredWsReconnectOnlineListener();
+
 	if (teardownTimer) {
 		clearTimeout(teardownTimer);
 		teardownTimer = null;
@@ -183,7 +256,21 @@ const getTRPCClient = () => {
 	return trpc;
 };
 
+const debugCloseCurrentWs = (opts: { code?: number; reason?: string } = {}) => {
+	const ws = wsClient?.connection?.ws;
+
+	if (!ws) {
+		return false;
+	}
+
+	ws.close(opts.code ?? 4013, opts.reason ?? 'voice reconnect lab');
+
+	return true;
+};
+
 const cleanup = (opts: { clearAuth?: boolean; ignoreSocketCloseEvent?: boolean; skipSocketClose?: boolean } = {}) => {
+	clearDeferredWsReconnectOnlineListener();
+
 	if (teardownTimer) {
 		clearTimeout(teardownTimer);
 		teardownTimer = null;
@@ -216,4 +303,4 @@ const setOnWsReconnect = (cb: (() => void) | null) => {
 	onWsReconnect = cb;
 };
 
-export { type AppRouter, cleanup, connectToTRPC, getTRPCClient, reconnectTRPC, setOnWsReconnect };
+export { type AppRouter, cleanup, connectToTRPC, debugCloseCurrentWs, getTRPCClient, reconnectTRPC, setOnWsReconnect };

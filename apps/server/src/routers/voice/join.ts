@@ -1,54 +1,22 @@
-import {
-  ChannelPermission,
-  ChannelType,
-  Permission,
-  ServerEvents
-} from '@sharkord/shared';
-import { eq } from 'drizzle-orm';
-import { z } from 'zod';
+import { ServerEvents } from '@sharkord/shared';
 import { config } from '../../config';
-import { db } from '../../db';
-import { channels } from '../../db/schema';
 import { logger } from '../../logger';
 import { VoiceRuntime } from '../../runtimes/voice';
-import { invariant } from '../../utils/invariant';
 import { protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
+import {
+  createVoiceJoinBootstrap,
+  getVoiceJoinTarget,
+  voiceJoinInputSchema
+} from './bootstrap';
 
 const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
   maxRequests: config.rateLimiters.joinVoiceChannel.maxRequests,
   windowMs: config.rateLimiters.joinVoiceChannel.windowMs,
   logLabel: 'joinVoice'
 })
-  .input(
-    z.object({
-      channelId: z.number(),
-      state: z.object({
-        micMuted: z.boolean().default(false),
-        soundMuted: z.boolean().default(false)
-      })
-    })
-  )
+  .input(voiceJoinInputSchema)
   .mutation(async ({ input, ctx }) => {
-    await Promise.all([
-      ctx.needsPermission(Permission.JOIN_VOICE_CHANNELS),
-      ctx.needsChannelPermission(input.channelId, ChannelPermission.JOIN)
-    ]);
-
-    const channel = await db
-      .select()
-      .from(channels)
-      .where(eq(channels.id, input.channelId))
-      .get();
-
-    invariant(channel, {
-      code: 'NOT_FOUND',
-      message: 'Channel not found'
-    });
-
-    invariant(channel.type === ChannelType.VOICE, {
-      code: 'BAD_REQUEST',
-      message: 'Channel is not a voice channel'
-    });
+    const { channel, runtime } = await getVoiceJoinTarget(ctx, input.channelId);
 
     const userAlreadyInVoiceChannel = VoiceRuntime.findRuntimeByUserId(
       ctx.user.id
@@ -73,13 +41,6 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
       );
     }
 
-    const runtime = VoiceRuntime.findById(input.channelId);
-
-    invariant(runtime, {
-      code: 'INTERNAL_SERVER_ERROR',
-      message: 'Voice runtime not found for this channel'
-    });
-
     runtime.addUser(ctx.user.id, input.state);
 
     const state = runtime.getUserState(ctx.user.id);
@@ -95,46 +56,27 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 
     logger.info('%s joined voice channel %s', ctx.user.name, channel.name);
 
-    const router = runtime.getRouter();
+    return createVoiceJoinBootstrap({
+      runtime,
+      userId: ctx.user.id,
+      onError: (error) => {
+        runtime.removeUser(ctx.user.id);
+        ctx.currentVoiceChannelId = undefined;
+        ctx.setWsVoiceChannelId(undefined);
+        ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+          channelId: input.channelId,
+          userId: ctx.user.id,
+          reconnecting: isReconnecting
+        });
 
-    let producerTransportParams;
-    let consumerTransportParams;
-    let existingProducers;
-
-    try {
-      [producerTransportParams, consumerTransportParams] = await Promise.all([
-        runtime.createProducerTransport(ctx.user.id),
-        runtime.createConsumerTransport(ctx.user.id)
-      ]);
-
-      existingProducers = runtime.getRemoteIds(ctx.user.id);
-    } catch (error) {
-      runtime.removeUser(ctx.user.id);
-      ctx.currentVoiceChannelId = undefined;
-      ctx.setWsVoiceChannelId(undefined);
-      ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
-        channelId: input.channelId,
-        userId: ctx.user.id,
-        reconnecting: isReconnecting
-      });
-
-      logger.error(
-        'Failed to create transports for %s in voice channel %s, rolled back join',
-        ctx.user.name,
-        channel.name,
-        error
-      );
-
-      throw error;
-    }
-
-    return {
-      routerRtpCapabilities: router.rtpCapabilities,
-      producerTransportParams,
-      consumerTransportParams,
-      existingProducers,
-      channelUsers: runtime.getState().users
-    };
+        logger.error(
+          'Failed to create transports for %s in voice channel %s, rolled back join',
+          ctx.user.name,
+          channel.name,
+          error
+        );
+      }
+    });
   });
 
 export { joinVoiceRoute };

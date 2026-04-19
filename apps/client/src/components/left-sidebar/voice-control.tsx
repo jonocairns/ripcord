@@ -1,10 +1,15 @@
 import { ChannelPermission } from '@sharkord/shared';
 import { AlertTriangle, Loader2, LogOut, Monitor, ScreenShareOff, Video, VideoOff, Wifi, WifiOff } from 'lucide-react';
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { useChannelById, useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useChannelCan } from '@/features/server/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
 import { useVoice } from '@/features/server/voice/hooks';
+import {
+	getVoiceReconnectIndicatorDelayMs,
+	shouldShowVoiceReconnectIndicator,
+} from '@/features/server/voice/reconnect-indicator';
+import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordinator';
 import { cn } from '@/lib/utils';
 import { ExternalAudioStreams } from '../channel-view/voice/external-audio-streams';
 import { VoiceAudioStreams } from '../channel-view/voice/voice-audio-streams';
@@ -16,6 +21,34 @@ const VoiceControl = memo(() => {
 	const voiceChannel = useChannelById(voiceChannelId ?? -1);
 	const channelCan = useChannelCan(voiceChannelId);
 	const { connectionStatus, isStartingScreenShare, ownVoiceState, toggleScreenShare, toggleWebcam } = useVoice();
+	const reconnectingSince = useVoiceReconnectStore((state) => state.reconnectingSince);
+	const [showReconnectIndicator, setShowReconnectIndicator] = useState(() =>
+		shouldShowVoiceReconnectIndicator(voiceChannelId, reconnectingSince),
+	);
+
+	useEffect(() => {
+		if (voiceChannelId !== undefined || reconnectingSince === undefined) {
+			setShowReconnectIndicator(false);
+			return;
+		}
+
+		const delayMs = getVoiceReconnectIndicatorDelayMs(reconnectingSince);
+
+		if (delayMs === 0) {
+			setShowReconnectIndicator(true);
+			return;
+		}
+
+		setShowReconnectIndicator(false);
+
+		const timeoutId = window.setTimeout(() => {
+			setShowReconnectIndicator(true);
+		}, delayMs);
+
+		return () => {
+			window.clearTimeout(timeoutId);
+		};
+	}, [voiceChannelId, reconnectingSince]);
 
 	const connectionInfo = useMemo(() => {
 		switch (connectionStatus) {
@@ -51,8 +84,24 @@ const VoiceControl = memo(() => {
 		}
 	}, [connectionStatus]);
 
-	if (!voiceChannelId) {
-		return null;
+	if (voiceChannelId === undefined) {
+		if (!showReconnectIndicator) {
+			return null;
+		}
+
+		return (
+			<div className="px-3 py-3 animate-in fade-in duration-200">
+				<div className="flex items-center gap-3 rounded-md border border-amber-400/20 bg-amber-500/10 px-3 py-2.5">
+					<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/12">
+						<Loader2 className="h-4 w-4 animate-spin text-amber-300" />
+					</div>
+					<div className="min-w-0 flex-1">
+						<p className="truncate text-sm font-semibold text-foreground">Reconnecting voice...</p>
+						<p className="truncate text-xs text-amber-200/90">Trying to restore your channel.</p>
+					</div>
+				</div>
+			</div>
+		);
 	}
 
 	return (

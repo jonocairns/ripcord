@@ -30,6 +30,7 @@ const RECOVERY_MAX_ATTEMPTS = 3;
 const RECOVERY_MAX_NONCE_RESTARTS = 5;
 const RECOVERY_TIMEOUT_MS = 12_000;
 const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
+const RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS = 350;
 
 class RecoverySessionChangedError extends Error {
 	constructor(stage: string) {
@@ -74,6 +75,7 @@ type TRecoveryDeps = {
 	}>;
 	isMissingVoiceSessionError: (err: unknown) => boolean;
 	consumeExistingProducers: (caps: object, prefetchedProducers?: object) => Promise<void>;
+	restartMicAfterRejoin: () => Promise<void>;
 	republishTracks: () => Promise<void>[];
 	consume: (id: number | string, kind: string, caps: object) => Promise<void>;
 	startMonitoring: () => void;
@@ -151,13 +153,25 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 			}
 			throwIfNonceStale('transport creation');
 
+			const republishTasks = [...deps.republishTracks()];
+
+			if (recoveryJoinResult) {
+				republishTasks.push(deps.restartMicAfterRejoin());
+			}
+
 			await withRecoveryTimeout(
 				Promise.all([
 					deps.consumeExistingProducers(currentRtpCapabilities, recoveryJoinResult?.existingProducers),
-					...deps.republishTracks(),
+					...republishTasks,
 				]),
 			);
 			throwIfNonceStale('consume/republish');
+
+			if (recoveryJoinResult) {
+				await withRecoveryTimeout(deps.consumeExistingProducers(currentRtpCapabilities));
+				await withRecoveryTimeout(deps.sleep(RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS));
+				await withRecoveryTimeout(deps.consumeExistingProducers(currentRtpCapabilities));
+			}
 
 			const restoreTasks: Promise<void>[] = [];
 			Object.entries(snapshot.remoteUserStreams).forEach(([id, kinds]) => {
@@ -218,6 +232,7 @@ const makeDeps = (overrides: Partial<TRecoveryDeps> = {}): TRecoveryDeps => {
 		rejoinVoiceSession: mock(() => Promise.resolve({ device: { rtpCapabilities: {} } })),
 		isMissingVoiceSessionError: () => false,
 		consumeExistingProducers: mock(() => Promise.resolve()),
+		restartMicAfterRejoin: mock(() => Promise.resolve()),
 		republishTracks: mock(() => []),
 		consume: mock(() => Promise.resolve()),
 		startMonitoring: mock(() => {}),
@@ -420,7 +435,9 @@ describe('recoverTransportSession orchestration', () => {
 		});
 		const rejoinedCapabilities = { codecs: ['opus'] };
 		const prefetchedProducers = { remoteAudioIds: [99] };
+		const postRejoinSnapshots = [{ remoteAudioIds: [99] }, { remoteAudioIds: [99, 100] }];
 		let producerCalls = 0;
+		const consumeCalls: Array<{ caps: object; prefetched?: object }> = [];
 
 		const deps = makeDeps({
 			createProducerTransport: mock(async () => {
@@ -442,14 +459,24 @@ describe('recoverTransportSession orchestration', () => {
 				};
 			}),
 			consumeExistingProducers: mock(async (caps, existingProducers) => {
+				consumeCalls.push({ caps, prefetched: existingProducers });
 				expect(caps).toBe(rejoinedCapabilities);
-				expect(existingProducers).toBe(prefetchedProducers);
+
+				if (consumeCalls.length === 1) {
+					expect(existingProducers).toBe(prefetchedProducers);
+					return;
+				}
+
+				expect(existingProducers).toBeUndefined();
+				expect(postRejoinSnapshots[consumeCalls.length - 2]).toBeDefined();
 			}),
 		});
 
 		expect(await runRecovery(deps)).toBe(true);
 		expect(producerCalls).toBe(2);
 		expect((deps.rejoinVoiceSession as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+		expect((deps.restartMicAfterRejoin as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+		expect(consumeCalls).toHaveLength(3);
 		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
 	});
 

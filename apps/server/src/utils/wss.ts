@@ -29,17 +29,13 @@ import { VoiceRuntime } from '../runtimes/voice';
 import { invariant } from './invariant';
 import { pubsub } from './pubsub';
 import type { Context } from './trpc';
+import {
+  clearPendingVoiceDisconnect,
+  getPendingVoiceReconnectChannelId,
+  schedulePendingVoiceDisconnect
+} from './voice-disconnect-grace';
 
 let wss: WebSocketServer | undefined;
-const VOICE_DISCONNECT_GRACE_MS = 5_000;
-const pendingVoiceDisconnects = new Map<
-  string,
-  {
-    userId: number;
-    channelId: number;
-    timer: ReturnType<typeof setTimeout>;
-  }
->();
 type TTrackedWebSocket = WebSocket & {
   userId?: number;
   token: string;
@@ -85,38 +81,6 @@ const hasAnyOpenUserVoiceConnection = (userId: number, channelId: number) => {
       client.readyState === WebSocket.OPEN &&
       client.currentVoiceChannelId === channelId
   );
-};
-
-const clearPendingVoiceDisconnect = (clientInstanceId?: string) => {
-  if (!clientInstanceId) {
-    return;
-  }
-
-  const pendingDisconnect = pendingVoiceDisconnects.get(clientInstanceId);
-
-  if (!pendingDisconnect) {
-    return;
-  }
-
-  clearTimeout(pendingDisconnect.timer);
-  pendingVoiceDisconnects.delete(clientInstanceId);
-};
-
-const getPendingVoiceReconnectChannelId = (
-  clientInstanceId: string | undefined,
-  userId: number
-) => {
-  if (!clientInstanceId) {
-    return undefined;
-  }
-
-  const pendingDisconnect = pendingVoiceDisconnects.get(clientInstanceId);
-
-  if (!pendingDisconnect || pendingDisconnect.userId !== userId) {
-    return undefined;
-  }
-
-  return pendingDisconnect.channelId;
 };
 
 const usersIpMap = new Map<number, string>();
@@ -266,7 +230,10 @@ const createContext = async ({
     if (connectionWs) {
       connectionWs.currentVoiceChannelId = channelId;
       if (channelId !== undefined) {
-        clearPendingVoiceDisconnect(connectionWs.clientInstanceId);
+        clearPendingVoiceDisconnect(
+          connectionWs.clientInstanceId,
+          decodedUser.id
+        );
       }
       return;
     }
@@ -280,7 +247,7 @@ const createContext = async ({
     if (ws) {
       ws.currentVoiceChannelId = channelId;
       if (channelId !== undefined) {
-        clearPendingVoiceDisconnect(ws.clientInstanceId);
+        clearPendingVoiceDisconnect(ws.clientInstanceId, decodedUser.id);
       }
     }
   };
@@ -396,7 +363,7 @@ const createWsServer = async (server: http.Server) => {
         }
       });
 
-      trackedWs.on('close', async () => {
+      trackedWs.on('close', async (wsCloseCode) => {
         if (!trackedWs.userId) return;
 
         const userId = trackedWs.userId;
@@ -447,22 +414,13 @@ const createWsServer = async (server: http.Server) => {
             });
           };
 
-          clearPendingVoiceDisconnect(clientInstanceId);
-
-          if (clientInstanceId) {
-            const timer = setTimeout(() => {
-              pendingVoiceDisconnects.delete(clientInstanceId);
-              finalizeVoiceDisconnect();
-            }, VOICE_DISCONNECT_GRACE_MS);
-
-            pendingVoiceDisconnects.set(clientInstanceId, {
-              userId,
-              channelId,
-              timer
-            });
-          } else {
-            setTimeout(finalizeVoiceDisconnect, VOICE_DISCONNECT_GRACE_MS);
-          }
+          schedulePendingVoiceDisconnect({
+            clientInstanceId,
+            userId,
+            channelId,
+            wsCloseCode,
+            finalize: finalizeVoiceDisconnect
+          });
         }
 
         trackedWs.currentVoiceChannelId = undefined;
