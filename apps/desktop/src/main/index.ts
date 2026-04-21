@@ -273,6 +273,7 @@ const requestDesktopCapabilitiesRefresh = (
 
 const createMainWindow = () => {
   const icon = resolveAppIconPath();
+  let windowCloseFlushCompleted = false;
 
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -299,6 +300,48 @@ const createMainWindow = () => {
     requestDesktopCapabilitiesRefresh({
       broadcast: true,
     });
+  });
+  mainWindow.on("close", (event) => {
+    const windowToClose = mainWindow;
+
+    if (desktopQuitFlushCompleted || windowCloseFlushCompleted) {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (desktopQuitFlushInterceptInProgress) {
+      return;
+    }
+
+    desktopQuitFlushInterceptInProgress = true;
+
+    void (async () => {
+      const result = await requestDesktopQuitFlush();
+
+      if (result.status === "skipped") {
+        console.warn("[desktop] Window close flush skipped", {
+          reason: result.reason,
+        });
+      }
+
+      desktopQuitFlushInterceptInProgress = false;
+
+      if (process.platform !== "darwin" || appIsShuttingDown) {
+        appIsShuttingDown = true;
+        desktopQuitFlushCompleted = true;
+        app.quit();
+        return;
+      }
+
+      windowCloseFlushCompleted = true;
+      if (windowToClose && !windowToClose.isDestroyed()) {
+        windowToClose.close();
+      }
+    })();
+  });
+  mainWindow.on("closed", () => {
+    mainWindow = null;
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -345,10 +388,6 @@ const createMainWindow = () => {
     "index.html",
   );
   void mainWindow.loadFile(indexPath);
-
-  mainWindow.on("closed", () => {
-    mainWindow = null;
-  });
 };
 
 const setupDisplayMediaHandler = () => {
