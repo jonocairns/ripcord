@@ -59,6 +59,13 @@ import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
 import { createMicAudioProcessingPipeline, type TMicAudioProcessingPipeline } from './mic-audio-processing';
+import {
+	clearHeldPushMicState,
+	resolveHeldPushMicTarget,
+	resolvePushMicState,
+	type TPushMicState,
+	updatePushMicStateForKeyEvent,
+} from './push-mic-state';
 import { startReceiverVoiceActivityMonitor } from './receiver-voice-activity';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
 import { createVoiceActivityStore, startVoiceActivityMonitor, type VoiceActivityStore } from './voice-activity';
@@ -2801,6 +2808,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const setMicMutedRef = useRef(setMicMuted);
 	const ownMicMutedRef = useRef(ownVoiceState.micMuted);
+	const ownSoundMutedRef = useRef(ownVoiceState.soundMuted);
 	const canSpeakRef = useRef(channelCan(ChannelPermission.SPEAK));
 
 	useEffect(() => {
@@ -2809,7 +2817,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	useEffect(() => {
 		ownMicMutedRef.current = ownVoiceState.micMuted;
-	}, [ownVoiceState.micMuted]);
+		ownSoundMutedRef.current = ownVoiceState.soundMuted;
+	}, [ownVoiceState.micMuted, ownVoiceState.soundMuted]);
 
 	useEffect(() => {
 		isConnectedRef.current = isConnected;
@@ -2819,7 +2828,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	}, [channelCan, currentVoiceChannelId, isConnected, voiceSessionReconnectNonce]);
 
 	useEffect(() => {
-		const pushTarget = isPushToMuteHeldRef.current ? true : isPushToTalkHeldRef.current ? false : undefined;
+		const pushTarget = resolveHeldPushMicTarget({
+			isPushToTalkHeld: isPushToTalkHeldRef.current,
+			isPushToMuteHeld: isPushToMuteHeldRef.current,
+			micMutedBeforePush: micMutedBeforePushRef.current,
+		});
 
 		if (pushTarget === undefined || micMutedBeforePushRef.current === undefined || confirmedOwnMicMuted === undefined) {
 			return;
@@ -2830,25 +2843,34 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 	}, [confirmedOwnMicMuted]);
 
+	const getPushMicState = useCallback(
+		(): TPushMicState => ({
+			isPushToTalkHeld: isPushToTalkHeldRef.current,
+			isPushToMuteHeld: isPushToMuteHeldRef.current,
+			micMutedBeforePush: micMutedBeforePushRef.current,
+		}),
+		[],
+	);
+
+	const setPushMicState = useCallback((state: TPushMicState) => {
+		isPushToTalkHeldRef.current = state.isPushToTalkHeld;
+		isPushToMuteHeldRef.current = state.isPushToMuteHeld;
+		micMutedBeforePushRef.current = state.micMutedBeforePush;
+	}, []);
+
 	const applyPushMicOverride = useCallback(() => {
-		if (isPushToMuteHeldRef.current) {
-			void setMicMutedRef.current(true, { playSound: false });
-			return;
-		}
+		const pushMicResolution = resolvePushMicState(getPushMicState(), ownSoundMutedRef.current);
 
-		if (isPushToTalkHeldRef.current) {
-			void setMicMutedRef.current(false, { playSound: false });
-			return;
-		}
-
-		if (typeof micMutedBeforePushRef.current === 'boolean') {
-			void setMicMutedRef.current(micMutedBeforePushRef.current, {
+		if (pushMicResolution.targetMicMuted !== undefined) {
+			void setMicMutedRef.current(pushMicResolution.targetMicMuted, {
 				playSound: false,
 			});
 		}
 
-		micMutedBeforePushRef.current = undefined;
-	}, []);
+		if (pushMicResolution.shouldClearMicMutedBeforePush) {
+			micMutedBeforePushRef.current = undefined;
+		}
+	}, [getPushMicState]);
 
 	useEffect(() => {
 		const desktopBridge = getDesktopBridge();
@@ -2874,56 +2896,31 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 		const removeGlobalKeybindSubscription = desktopBridge.subscribeGlobalPushKeybindEvents((event) => {
 			if (currentVoiceChannelIdRef.current === undefined || !canSpeakRef.current) {
-				if (event.kind === 'talk') {
-					isPushToTalkHeldRef.current = false;
-				}
-
-				if (event.kind === 'mute') {
-					isPushToMuteHeldRef.current = false;
-				}
-
+				setPushMicState(clearHeldPushMicState(getPushMicState()));
 				applyPushMicOverride();
 				return;
 			}
 
-			if (
-				!isPushToTalkHeldRef.current &&
-				!isPushToMuteHeldRef.current &&
-				event.active &&
-				micMutedBeforePushRef.current === undefined
-			) {
-				micMutedBeforePushRef.current = ownMicMutedRef.current;
-			}
-
-			if (event.kind === 'talk') {
-				isPushToTalkHeldRef.current = event.active;
-			}
-
-			if (event.kind === 'mute') {
-				isPushToMuteHeldRef.current = event.active;
-			}
-
+			setPushMicState(updatePushMicStateForKeyEvent(getPushMicState(), event, ownMicMutedRef.current));
 			applyPushMicOverride();
 		});
 
 		return () => {
 			removeGlobalKeybindSubscription();
-			isPushToTalkHeldRef.current = false;
-			isPushToMuteHeldRef.current = false;
+			setPushMicState(clearHeldPushMicState(getPushMicState()));
 			applyPushMicOverride();
 			void desktopBridge.setGlobalPushKeybinds({}).catch((error) => {
 				logVoice('Failed to clear global push keybinds', { error });
 			});
 		};
-	}, [applyPushMicOverride, devices.pushToMuteKeybind, devices.pushToTalkKeybind]);
+	}, [applyPushMicOverride, devices.pushToMuteKeybind, devices.pushToTalkKeybind, getPushMicState, setPushMicState]);
 
 	useEffect(() => {
 		if (currentVoiceChannelId === undefined || !channelCan(ChannelPermission.SPEAK)) {
-			isPushToTalkHeldRef.current = false;
-			isPushToMuteHeldRef.current = false;
+			setPushMicState(clearHeldPushMicState(getPushMicState()));
 			applyPushMicOverride();
 		}
-	}, [applyPushMicOverride, channelCan, currentVoiceChannelId]);
+	}, [applyPushMicOverride, channelCan, currentVoiceChannelId, getPushMicState, setPushMicState]);
 
 	useVoiceEvents({
 		consume,

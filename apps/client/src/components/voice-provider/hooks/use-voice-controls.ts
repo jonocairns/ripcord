@@ -13,6 +13,7 @@ import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
 import { useScreenShareStage } from './use-screen-share-stage';
+import { shouldApplyVoiceStateOperationResult, startVoiceStateOperation } from '../voice-state-operation';
 
 type TUseVoiceControlsParams = {
 	startMicStream: () => Promise<void>;
@@ -60,6 +61,7 @@ const useVoiceControls = ({
 	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
 	const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
 	const localAudioStreamRef = useRef(localAudioStream);
+	const voiceStateOperationSequenceRef = useRef(0);
 	const pendingShareMutateRef = useRef<Promise<unknown> | undefined>(undefined);
 
 	const {
@@ -120,6 +122,9 @@ const useVoiceControls = ({
 
 			const shouldPlaySound = options?.playSound ?? true;
 			const previousMicMuted = latestOwnVoiceState.micMuted;
+			const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
+			voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
+			const { operationToken } = voiceStateOperation;
 			const trpc = getTRPCClient();
 
 			updateOwnVoiceState({ micMuted: newState });
@@ -137,10 +142,18 @@ const useVoiceControls = ({
 					micMuted: newState,
 				});
 
-				if (!localAudioStreamRef.current && !newState) {
+				if (
+					shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current) &&
+					!localAudioStreamRef.current &&
+					!newState
+				) {
 					await startMicStream();
 				}
 			} catch (error) {
+				if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
+					return;
+				}
+
 				updateOwnVoiceState({ micMuted: previousMicMuted });
 				setLocalAudioTrackEnabled(localAudioStreamRef.current, previousMicMuted);
 				toast.error(getTrpcError(error, 'Failed to update microphone state'));
@@ -168,6 +181,9 @@ const useVoiceControls = ({
 		const previousSoundMuted = latestOwnVoiceState.soundMuted;
 		const previousMicMutedBeforeDeafen = micMutedBeforeDeafenRef.current;
 		let nextMicMuted = previousMicMuted;
+		const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
+		voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
+		const { operationToken } = voiceStateOperation;
 
 		if (newState) {
 			micMutedBeforeDeafenRef.current = previousMicMuted;
@@ -194,10 +210,18 @@ const useVoiceControls = ({
 				micMuted: nextMicMuted,
 			});
 
-			if (!localAudioStreamRef.current && !nextMicMuted) {
+			if (
+				shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current) &&
+				!localAudioStreamRef.current &&
+				!nextMicMuted
+			) {
 				await startMicStream();
 			}
 		} catch (error) {
+			if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
+				return;
+			}
+
 			micMutedBeforeDeafenRef.current = previousSoundMuted ? previousMicMutedBeforeDeafen : undefined;
 			updateOwnVoiceState({
 				soundMuted: previousSoundMuted,
