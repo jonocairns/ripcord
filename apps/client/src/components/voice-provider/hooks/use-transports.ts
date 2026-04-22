@@ -5,7 +5,7 @@ import { useCallback, useRef } from 'react';
 import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
-import { getConsumeRetryDelayMs } from './consume-retry-policy';
+import { getConsumeRetryDelayMs, shouldRetryConsume } from './consume-retry-policy';
 
 // How long to wait for an ICE "disconnected" state to recover before closing
 // the transport. ICE disconnected can be transient (brief packet loss / route
@@ -476,6 +476,9 @@ const useTransports = ({
 							kind,
 							failedAttempts: failedAttemptIndex + 1,
 						});
+						if (!shouldRetryConsume(kind)) {
+							removePendingStream(remoteId, kind);
+						}
 						return;
 					}
 
@@ -501,7 +504,7 @@ const useTransports = ({
 				}
 			}
 		},
-		[addPendingStream, consumeOnce],
+		[addPendingStream, consumeOnce, removePendingStream],
 	);
 
 	const consumeExistingProducers = useCallback(
