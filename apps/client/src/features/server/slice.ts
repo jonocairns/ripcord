@@ -221,6 +221,18 @@ const mergeOwnVoiceDefaults = (
 	sharingScreen: false,
 });
 
+const voiceStateUpdateMatchesCurrentState = (
+	currentVoiceState: TVoiceUserState,
+	newState: Partial<TVoiceUserState>,
+) => {
+	return (
+		(newState.micMuted === undefined || newState.micMuted === currentVoiceState.micMuted) &&
+		(newState.soundMuted === undefined || newState.soundMuted === currentVoiceState.soundMuted) &&
+		(newState.webcamEnabled === undefined || newState.webcamEnabled === currentVoiceState.webcamEnabled) &&
+		(newState.sharingScreen === undefined || newState.sharingScreen === currentVoiceState.sharingScreen)
+	);
+};
+
 export const useServerStore = create<TServerStore>((set, get) => ({
 	...initialState,
 	resetState: () => {
@@ -567,12 +579,19 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			return;
 		}
 
-		const nextVoiceState = {
-			...currentVoiceState,
-			...newState,
-		};
-
 		const isOwnUser = storeState.ownUserId === userId;
+		const isOptimisticStatePending =
+			isOwnUser &&
+			storeState.ownOptimisticStateExpiresAt !== undefined &&
+			Date.now() < storeState.ownOptimisticStateExpiresAt;
+		const shouldPreserveOwnOptimisticState =
+			isOptimisticStatePending && !voiceStateUpdateMatchesCurrentState(currentVoiceState, newState);
+		const nextVoiceState = shouldPreserveOwnOptimisticState
+			? currentVoiceState
+			: {
+					...currentVoiceState,
+					...newState,
+				};
 
 		set({
 			voiceMap: {
@@ -589,9 +608,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			ownVoiceDefaults: isOwnUser
 				? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, nextVoiceState)
 				: storeState.ownVoiceDefaults,
-			// Server confirmation clears the optimistic-pending window.
-			...(isOwnUser && { ownOptimisticStateExpiresAt: undefined }),
-			...(isOwnUser && newState.sharingScreen === false ? { screenShareWatchers: {} } : undefined),
+			// Matching server confirmation clears the optimistic-pending window.
+			...(isOwnUser && !shouldPreserveOwnOptimisticState ? { ownOptimisticStateExpiresAt: undefined } : undefined),
+			...(isOwnUser && !shouldPreserveOwnOptimisticState && newState.sharingScreen === false
+				? { screenShareWatchers: {} }
+				: undefined),
 		});
 	},
 	reconcileVoiceChannelUsers: ({ channelId, users }) => {

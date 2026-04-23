@@ -214,14 +214,14 @@ describe('voice store own state derivation', () => {
 		expect(useServerStore.getState().ownOptimisticStateExpiresAt).toBeUndefined();
 	});
 
-	it('updateVoiceUserState clears ownOptimisticStateExpiresAt for the own user', () => {
+	it('updateVoiceUserState clears ownOptimisticStateExpiresAt for a matching own-user confirmation', () => {
 		useServerStore.setState({
 			ownUserId: 42,
 			currentVoiceChannelId: 7,
 			voiceMap: {
 				7: {
 					users: {
-						42: createVoiceState(),
+						42: createVoiceState({ micMuted: true }),
 					},
 				},
 			},
@@ -236,6 +236,33 @@ describe('voice store own state derivation', () => {
 		});
 
 		expect(useServerStore.getState().ownOptimisticStateExpiresAt).toBeUndefined();
+	});
+
+	it('updateVoiceUserState preserves newer own optimistic state over stale server confirmation', () => {
+		const optimisticExpiresAt = Date.now() + 5_000;
+
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: 7,
+			voiceMap: {
+				7: {
+					users: {
+						42: createVoiceState({ micMuted: true }),
+					},
+				},
+			},
+			ownVoiceDefaults: createVoiceState({ micMuted: true }),
+			ownOptimisticStateExpiresAt: optimisticExpiresAt,
+		});
+
+		useServerStore.getState().updateVoiceUserState({
+			channelId: 7,
+			userId: 42,
+			newState: { micMuted: false },
+		});
+
+		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toEqual(createVoiceState({ micMuted: true }));
+		expect(useServerStore.getState().ownOptimisticStateExpiresAt).toBe(optimisticExpiresAt);
 	});
 
 	it('setInitialData clears ownOptimisticStateExpiresAt', () => {
