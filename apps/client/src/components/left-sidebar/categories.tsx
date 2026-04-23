@@ -46,7 +46,7 @@ const Category = memo(({ categoryId }: TCategoryProps) => {
 			}}
 			className="mb-4"
 		>
-			<div className="mb-1 flex w-full items-center px-2 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground/80 uppercase">
+			<div className="mb-1 flex w-full items-center px-2 py-1 text-[11px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
 				<div className="flex w-full items-center gap-1">
 					<IconButton
 						variant="ghost"
