@@ -16,4 +16,4 @@ const shouldShowVoiceReconnectIndicator = (
 	return getVoiceReconnectIndicatorDelayMs(reconnectingSince, now) === 0;
 };
 
-export { VOICE_RECONNECT_INDICATOR_DELAY_MS, getVoiceReconnectIndicatorDelayMs, shouldShowVoiceReconnectIndicator };
+export { getVoiceReconnectIndicatorDelayMs, shouldShowVoiceReconnectIndicator, VOICE_RECONNECT_INDICATOR_DELAY_MS };

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'bun:test';
 import {
 	clearHeldPushMicState,
 	resolvePushMicState,
-	updatePushMicStateForKeyEvent,
 	type TPushMicState,
+	updatePushMicStateForKeyEvent,
 } from '../push-mic-state';
 
 const idlePushMicState = (): TPushMicState => ({

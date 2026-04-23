@@ -1,6 +1,6 @@
-import type { TInitialServerData } from '@/features/server/slice';
 import { beforeEach, describe, expect, it } from 'bun:test';
 import type { TVoiceUserState } from '@sharkord/shared';
+import type { TInitialServerData } from '@/features/server/slice';
 import { useServerStore } from '../../slice';
 import { ownConfirmedVoiceStateSelector, ownVoiceStateSelector } from '../selectors';
 

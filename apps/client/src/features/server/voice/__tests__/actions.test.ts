@@ -1,7 +1,7 @@
-import { ChannelType, StreamKind, type TChannel } from '@sharkord/shared';
 import { beforeAll, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { SoundType } from '../../types';
+import { ChannelType, StreamKind, type TChannel } from '@sharkord/shared';
 import { useServerStore } from '../../slice';
+import { SoundType } from '../../types';
 import { useVoiceReconnectStore } from '../reconnect-coordinator';
 import { ownVoiceStateSelector } from '../selectors';
 

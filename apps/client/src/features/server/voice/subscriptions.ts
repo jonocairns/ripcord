@@ -3,8 +3,8 @@ import { bufferReconnectSnapshotEvent } from '../reconnect-event-buffer';
 import {
 	addExternalStreamToVoiceChannel,
 	addUserToVoiceChannel,
-	handleVoiceSessionReplaced,
 	handleStreamWatcherActivity,
+	handleVoiceSessionReplaced,
 	removeExternalStreamFromVoiceChannel,
 	removeUserFromVoiceChannel,
 	updateExternalStreamInVoiceChannel,

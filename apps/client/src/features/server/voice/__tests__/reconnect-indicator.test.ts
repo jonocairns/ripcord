@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import {
-	VOICE_RECONNECT_INDICATOR_DELAY_MS,
 	getVoiceReconnectIndicatorDelayMs,
 	shouldShowVoiceReconnectIndicator,
+	VOICE_RECONNECT_INDICATOR_DELAY_MS,
 } from '../reconnect-indicator';
 
 describe('voice reconnect indicator', () => {

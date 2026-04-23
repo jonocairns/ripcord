@@ -5,11 +5,11 @@ import { useChannelById, useCurrentVoiceChannelId } from '@/features/server/chan
 import { useChannelCan } from '@/features/server/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
 import { useVoice } from '@/features/server/voice/hooks';
+import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordinator';
 import {
 	getVoiceReconnectIndicatorDelayMs,
 	shouldShowVoiceReconnectIndicator,
 } from '@/features/server/voice/reconnect-indicator';
-import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordinator';
 import { cn } from '@/lib/utils';
 import { ExternalAudioStreams } from '../channel-view/voice/external-audio-streams';
 import { VoiceAudioStreams } from '../channel-view/voice/voice-audio-streams';
