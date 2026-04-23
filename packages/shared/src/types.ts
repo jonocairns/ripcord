@@ -65,9 +65,12 @@ export type WithOptional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>
 
 export enum UserStatus {
 	ONLINE = 'online',
+	AWAY = 'away',
 	IDLE = 'idle',
 	OFFLINE = 'offline',
 }
+
+export type TUserPresenceStatus = 'online' | 'away';
 
 export type TOwnUser = WithOptional<TUser, 'identity'>;
 

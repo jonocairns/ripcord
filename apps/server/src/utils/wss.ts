@@ -5,6 +5,7 @@ import {
   Permission,
   ServerEvents,
   type TConnectionParams,
+  type TUserPresenceStatus,
   UserStatus
 } from '@sharkord/shared';
 import { TRPCError } from '@trpc/server';
@@ -41,6 +42,7 @@ type TTrackedWebSocket = WebSocket & {
   token: string;
   clientInstanceId?: string;
   currentVoiceChannelId?: number;
+  presenceStatus?: TUserPresenceStatus;
 };
 
 const getTrackedClients = () => {
@@ -114,6 +116,10 @@ const createContext = async ({
     code: 'FORBIDDEN',
     message: 'User is banned'
   });
+
+  if (connectionWs) {
+    connectionWs.presenceStatus = decodedUser.presenceStatus;
+  }
 
   const hasPermission = async (targetPermission: Permission | Permission[]) => {
     const user = await getUserById(decodedUser.id);
@@ -206,9 +212,29 @@ const createContext = async ({
   const getStatusById = (userId: number) => {
     if (!wss) return UserStatus.OFFLINE;
 
-    const isConnected = getTrackedClients().some((ws) => ws.userId === userId);
+    const userConnections = getTrackedClients().filter(
+      (ws) => ws.userId === userId && ws.readyState === WebSocket.OPEN
+    );
 
-    return isConnected ? UserStatus.ONLINE : UserStatus.OFFLINE;
+    if (userConnections.length === 0) {
+      return UserStatus.OFFLINE;
+    }
+
+    const isAway = userConnections.some(
+      (ws) => ws.presenceStatus === UserStatus.AWAY
+    );
+
+    return isAway ? UserStatus.AWAY : UserStatus.ONLINE;
+  };
+
+  const setUserPresenceStatus = (status: TUserPresenceStatus) => {
+    if (!wss) return;
+
+    for (const ws of getTrackedClients()) {
+      if (ws.userId === decodedUser.id) {
+        ws.presenceStatus = status;
+      }
+    }
   };
 
   const setWsUserId = (userId: number) => {
@@ -324,6 +350,7 @@ const createContext = async ({
     needsChannelPermission,
     getOwnWs,
     getStatusById,
+    setUserPresenceStatus,
     setWsUserId,
     setWsVoiceChannelId,
     getUserWs,
@@ -350,6 +377,7 @@ const createWsServer = async (server: http.Server) => {
       trackedWs.token = '';
       trackedWs.clientInstanceId = undefined;
       trackedWs.currentVoiceChannelId = undefined;
+      trackedWs.presenceStatus = UserStatus.ONLINE;
 
       trackedWs.once('message', async (message) => {
         try {

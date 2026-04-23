@@ -1,4 +1,4 @@
-import { type TTempFile } from '@sharkord/shared';
+import { type TTempFile, UserStatus } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { initTest, uploadFile } from '../../__tests__/helpers';
@@ -180,6 +180,24 @@ describe('users router', () => {
     expect(updatedUser).toBeDefined();
     expect(updatedUser!.name).toBe('Test User');
     expect(updatedUser!.bannerColor).toBe('#00ff00');
+  });
+
+  test('should update own presence status preference', async () => {
+    const { caller } = await initTest();
+
+    await caller.users.setStatus({
+      status: UserStatus.AWAY
+    });
+
+    const row = await tdb
+      .select({
+        presenceStatus: users.presenceStatus
+      })
+      .from(users)
+      .where(eq(users.id, 1))
+      .get();
+
+    expect(row?.presenceStatus).toBe(UserStatus.AWAY);
   });
 
   test('should update password successfully and rotate active sessions', async () => {

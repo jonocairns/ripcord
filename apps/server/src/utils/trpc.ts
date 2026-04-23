@@ -2,7 +2,8 @@ import {
   ChannelPermission,
   UserStatus,
   type Permission,
-  type TUser
+  type TUser,
+  type TUserPresenceStatus
 } from '@sharkord/shared';
 import { initTRPC, TRPCError } from '@trpc/server';
 import chalk from 'chalk';
@@ -42,6 +43,7 @@ export type Context = {
   ) => Promise<void>;
   getOwnWs: () => WebSocket | undefined;
   getStatusById: (userId: number) => UserStatus;
+  setUserPresenceStatus: (status: TUserPresenceStatus) => void;
   setWsUserId: (userId: number) => void;
   setWsVoiceChannelId: (channelId: number | undefined) => void;
   getUserWs: (userId: number) => WebSocket | undefined;

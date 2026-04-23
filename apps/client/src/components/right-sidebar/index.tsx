@@ -1,3 +1,4 @@
+import { UserStatus } from '@sharkord/shared';
 import { PanelRight, PanelRightClose } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import { UserAvatar } from '@/components/user-avatar';
@@ -8,10 +9,39 @@ import { UserPopover } from '../user-popover';
 
 const MAX_USERS_TO_SHOW = 100;
 
+const isPresentStatus = (status?: UserStatus) =>
+	status === UserStatus.ONLINE || status === UserStatus.AWAY || status === UserStatus.IDLE;
+
+const getStatusLabel = (status?: UserStatus) => {
+	switch (status) {
+		case UserStatus.AWAY:
+			return 'Away';
+		case UserStatus.IDLE:
+			return 'Idle';
+		case UserStatus.ONLINE:
+			return 'Online';
+		default:
+			return 'Offline';
+	}
+};
+
+const getStatusDotClassName = (status?: UserStatus) => {
+	switch (status) {
+		case UserStatus.AWAY:
+		case UserStatus.IDLE:
+			return 'bg-amber-400';
+		case UserStatus.ONLINE:
+			return 'bg-[#3ba55d]';
+		default:
+			return 'bg-muted-foreground/60';
+	}
+};
+
 type TMember = {
 	id: number;
 	name: string;
 	banned: boolean;
+	status?: UserStatus;
 };
 
 type TUserProps = {
@@ -20,6 +50,8 @@ type TUserProps = {
 };
 
 const User = memo(({ user, isCollapsed = false }: TUserProps) => {
+	const isPresent = isPresentStatus(user.status);
+
 	return (
 		<UserPopover userId={user.id}>
 			<div
@@ -27,9 +59,18 @@ const User = memo(({ user, isCollapsed = false }: TUserProps) => {
 					'flex cursor-pointer select-none items-center gap-3 rounded-md px-2.5 py-1.5 transition-colors hover:bg-accent/65',
 					isCollapsed && 'lg:justify-center lg:gap-0 lg:px-1 lg:py-1',
 				)}
-				title={user.name}
+				title={`${user.name} (${getStatusLabel(user.status)})`}
 			>
-				<UserAvatar userId={user.id} className="h-8 w-8" />
+				<div className="relative">
+					<UserAvatar userId={user.id} className={cn('h-8 w-8', !isPresent && 'opacity-60')} />
+					<span
+						aria-hidden
+						className={cn(
+							'absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full border-2 border-card',
+							getStatusDotClassName(user.status),
+						)}
+					/>
+				</div>
 				<div
 					className={cn(
 						'min-w-0 overflow-hidden lg:max-w-[10rem] lg:opacity-100 lg:transition-[max-width,opacity] lg:duration-200 lg:ease-out',
@@ -38,8 +79,9 @@ const User = memo(({ user, isCollapsed = false }: TUserProps) => {
 				>
 					<span
 						className={cn(
-							'block truncate text-sm font-medium text-foreground',
-							user.banned && 'line-through text-muted-foreground',
+							'block truncate text-sm font-medium',
+							isPresent ? 'text-foreground' : 'text-muted-foreground',
+							user.banned && 'line-through',
 						)}
 					>
 						{user.name}
@@ -49,6 +91,24 @@ const User = memo(({ user, isCollapsed = false }: TUserProps) => {
 		</UserPopover>
 	);
 });
+
+type TSectionProps = {
+	title: string;
+	users: TMember[];
+};
+
+const Section = memo(({ title, users }: TSectionProps) => (
+	<section className="space-y-1">
+		<div className="px-2 text-[11px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
+			{title} ({users.length})
+		</div>
+		<div className="space-y-1">
+			{users.map((user) => (
+				<User key={user.id} user={user} />
+			))}
+		</div>
+	</section>
+));
 
 type TRightSidebarProps = {
 	className?: string;
@@ -60,8 +120,15 @@ type TRightSidebarProps = {
 const RightSidebar = memo(({ className, isOpen = true, isCollapsed = false, onToggleCollapse }: TRightSidebarProps) => {
 	const users = useUsers();
 
-	const usersToShow = useMemo(() => users.slice(0, MAX_USERS_TO_SHOW) as TMember[], [users]);
-	const visibleUsers = useMemo(() => usersToShow.filter((user) => !user.banned), [usersToShow]);
+	const usersToShow = useMemo<TMember[]>(() => users.slice(0, MAX_USERS_TO_SHOW), [users]);
+	const onlineUsers = useMemo(
+		() => usersToShow.filter((user) => !user.banned && isPresentStatus(user.status)),
+		[usersToShow],
+	);
+	const offlineUsers = useMemo(
+		() => usersToShow.filter((user) => !user.banned && !isPresentStatus(user.status)),
+		[usersToShow],
+	);
 	const bannedUsers = useMemo(() => usersToShow.filter((user) => user.banned), [usersToShow]);
 
 	const hasHiddenUsers = users.length > MAX_USERS_TO_SHOW;
@@ -115,25 +182,9 @@ const RightSidebar = memo(({ className, isOpen = true, isCollapsed = false, onTo
 							</div>
 						) : (
 							<div className="space-y-4">
-								{visibleUsers.length > 0 && (
-									<div className="space-y-1">
-										{visibleUsers.map((user) => (
-											<User key={user.id} user={user} />
-										))}
-									</div>
-								)}
-								{bannedUsers.length > 0 && (
-									<section className="space-y-1">
-										<div className="px-2 text-[11px] font-semibold tracking-wide text-muted-foreground/80 uppercase">
-											Banned ({bannedUsers.length})
-										</div>
-										<div className="space-y-1">
-											{bannedUsers.map((user) => (
-												<User key={user.id} user={user} />
-											))}
-										</div>
-									</section>
-								)}
+								{onlineUsers.length > 0 && <Section title="Online" users={onlineUsers} />}
+								{offlineUsers.length > 0 && <Section title="Offline" users={offlineUsers} />}
+								{bannedUsers.length > 0 && <Section title="Banned" users={bannedUsers} />}
 							</div>
 						)}
 

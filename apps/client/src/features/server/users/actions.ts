@@ -17,10 +17,11 @@ export const updateUser = (userId: number, user: Partial<TJoinedPublicUser>) => 
 export const handleUserJoin = (user: TJoinedPublicUser) => {
 	const state = useServerStore.getState();
 	const foundUser = userByIdSelector(state, user.id);
+	const status = user.status ?? UserStatus.ONLINE;
 
 	if (foundUser) {
-		updateUser(user.id, { ...user, status: UserStatus.ONLINE });
+		updateUser(user.id, { ...user, status });
 	} else {
-		addUser(user);
+		addUser({ ...user, status });
 	}
 };
