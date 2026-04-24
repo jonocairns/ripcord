@@ -1,3 +1,4 @@
+import { Loader2 } from 'lucide-react';
 import { memo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -17,6 +18,8 @@ type TControlToggleButtonProps = {
 
 	enabledClassName: string;
 	disabledClassName?: string;
+	loading?: boolean;
+	loadingLabel?: string;
 
 	onClick: () => void;
 	disabled?: boolean;
@@ -31,10 +34,13 @@ const ControlToggleButton = memo(
 		disabledIcon: DisabledIcon,
 		enabledClassName,
 		disabledClassName,
+		loading = false,
+		loadingLabel,
 		onClick,
 		disabled,
 	}: TControlToggleButtonProps) => {
-		const label = enabled ? enabledLabel : disabledLabel;
+		const isActive = enabled || loading;
+		const label = loading ? (loadingLabel ?? disabledLabel) : enabled ? enabledLabel : disabledLabel;
 
 		return (
 			<Tooltip content={label}>
@@ -43,7 +49,7 @@ const ControlToggleButton = memo(
 					size="icon"
 					className={cn(
 						'h-10 w-10 rounded-xl border border-transparent bg-transparent transition-[background-color,border-color,color,transform] duration-150 active:scale-95',
-						enabled
+						isActive
 							? enabledClassName
 							: (disabledClassName ?? 'hover:!bg-muted/60 hover:!text-foreground text-muted-foreground'),
 						disabled && 'opacity-60 hover:!bg-transparent',
@@ -52,7 +58,13 @@ const ControlToggleButton = memo(
 					disabled={disabled}
 					aria-label={label}
 				>
-					{enabled ? <EnabledIcon size={22} /> : <DisabledIcon size={22} />}
+					{loading ? (
+						<Loader2 size={22} className="animate-spin" />
+					) : enabled ? (
+						<EnabledIcon size={22} />
+					) : (
+						<DisabledIcon size={22} />
+					)}
 				</Button>
 			</Tooltip>
 		);

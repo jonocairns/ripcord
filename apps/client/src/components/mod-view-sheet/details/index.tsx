@@ -1,5 +1,5 @@
 import { format, formatDistanceToNow } from 'date-fns';
-import { Calendar, ClipboardList, Clock, Gavel, Globe, IdCard, Network } from 'lucide-react';
+import { Calendar, ClipboardList, Clock, Gavel, IdCard } from 'lucide-react';
 import { memo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -31,8 +31,7 @@ const Row = memo(({ icon, label, value, details }: TRowProps) => {
 });
 
 const Details = memo(() => {
-	const { user, logins } = useModViewContext();
-	const lastLogin = logins[0]; // TODO: in the future we might show a list of logins, atm we just show info about the last one
+	const { user } = useModViewContext();
 
 	return (
 		<Card>
@@ -47,18 +46,6 @@ const Details = memo(() => {
 					<Row icon={<IdCard className="h-4 w-4 text-muted-foreground" />} label="User ID" value={user.id} />
 
 					<Row icon={<IdCard className="h-4 w-4 text-muted-foreground" />} label="Identity" value={user.identity} />
-
-					<Row
-						icon={<Network className="h-4 w-4 text-muted-foreground" />}
-						label="IP Address"
-						value={lastLogin?.ip || 'Unknown'}
-					/>
-
-					<Row
-						icon={<Globe className="h-4 w-4 text-muted-foreground" />}
-						label="Location"
-						value={`${lastLogin?.country || 'N/A'} - ${lastLogin?.city || 'N/A'}`}
-					/>
 
 					<Row
 						icon={<Calendar className="h-4 w-4 text-muted-foreground" />}

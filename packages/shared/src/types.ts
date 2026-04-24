@@ -1,4 +1,4 @@
-import { ChannelPermission, type TFile, type TSettings, type TUser } from '.';
+import type { ChannelPermission, TFile, TSettings, TUser } from '.';
 
 export enum ChannelType {
 	TEXT = 'TEXT',
@@ -65,14 +65,18 @@ export type WithOptional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>
 
 export enum UserStatus {
 	ONLINE = 'online',
+	AWAY = 'away',
 	IDLE = 'idle',
 	OFFLINE = 'offline',
 }
+
+export type TUserPresenceStatus = 'online' | 'away';
 
 export type TOwnUser = WithOptional<TUser, 'identity'>;
 
 export type TConnectionParams = {
 	token: string;
+	clientInstanceId?: string;
 };
 
 export type TTempFile = {

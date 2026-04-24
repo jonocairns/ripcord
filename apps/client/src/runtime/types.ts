@@ -140,6 +140,13 @@ export type TDesktopUpdateStatus = {
 	message?: string;
 };
 
+export type TDesktopQuitFlushStatus = 'succeeded' | 'skipped';
+
+export type TDesktopQuitFlushResult = {
+	status: TDesktopQuitFlushStatus;
+	reason?: string;
+};
+
 export type TPushKeybindKind = 'talk' | 'mute';
 
 export type TDesktopPushKeybindsInput = {
@@ -175,5 +182,7 @@ export type TDesktopBridge = {
 	subscribeGlobalPushKeybindEvents: (cb: (event: TDesktopPushKeybindEvent) => void) => () => void;
 	subscribeCapabilities: (cb: (capabilities: TDesktopCapabilities) => void) => () => void;
 	subscribeUpdateStatus: (cb: (status: TDesktopUpdateStatus) => void) => () => void;
+	subscribeBeforeQuit: (cb: () => void | Promise<void>) => () => void;
+	debugRequestBeforeQuitFlush?: () => Promise<TDesktopQuitFlushResult>;
 	prepareScreenShare: (selection: TDesktopScreenShareSelection) => Promise<TResolvedScreenAudioMode>;
 };

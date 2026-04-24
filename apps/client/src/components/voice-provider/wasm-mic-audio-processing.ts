@@ -1,5 +1,5 @@
-import voiceFilterWasmWorkletModuleUrl from './voice-filter-wasm.worklet.js?url&no-inline';
 import VoiceFilterWasmWorker from './voice-filter-wasm.worker.ts?worker';
+import voiceFilterWasmWorkletModuleUrl from './voice-filter-wasm.worklet.js?url&no-inline';
 
 const WORKLET_NAME = 'sharkord-voice-filter-wasm-processor';
 const DTLN_BLOCK_SIZE_48_KHZ = 1_536;

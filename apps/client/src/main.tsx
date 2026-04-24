@@ -2,8 +2,10 @@ import { Toaster } from '@/components/ui/sonner';
 import 'prosemirror-view/style/prosemirror.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { ReconnectLab } from './components/debug/reconnect-lab.tsx';
 import { StoreDebug } from './components/debug/store-debug.tsx';
 import { DebugInfo } from './components/debug-info/index.tsx';
+import { DesktopQuitCoordinator } from './components/desktop-quit-coordinator';
 import { DevicesProvider } from './components/devices-provider/index.tsx';
 import { DialogsProvider } from './components/dialogs/index.tsx';
 import { Routing } from './components/routing/index.tsx';
@@ -29,6 +31,8 @@ const bootstrap = async () => {
 				<DebugInfo />
 				<Toaster />
 				<StoreDebug />
+				<ReconnectLab />
+				<DesktopQuitCoordinator />
 				<DevicesProvider>
 					<DialogsProvider />
 					<ServerScreensProvider />

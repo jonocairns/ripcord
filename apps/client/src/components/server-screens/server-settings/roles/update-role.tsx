@@ -3,6 +3,7 @@ import { Info, Star, Trash2 } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -16,11 +17,10 @@ import { PermissionList } from './permissions-list';
 
 type TUpdateRoleProps = {
 	selectedRole: TJoinedRole;
-	setSelectedRoleId: (id: number | undefined) => void;
 	refetch: () => void;
 };
 
-const UpdateRole = memo(({ selectedRole, setSelectedRoleId, refetch }: TUpdateRoleProps) => {
+const UpdateRole = memo(({ selectedRole, refetch }: TUpdateRoleProps) => {
 	const { setTrpcErrors, r, onChange, values } = useForm({
 		name: selectedRole.name,
 		color: selectedRole.color,
@@ -44,11 +44,10 @@ const UpdateRole = memo(({ selectedRole, setSelectedRoleId, refetch }: TUpdateRo
 			await trpc.roles.delete.mutate({ roleId: selectedRole.id });
 			toast.success('Role deleted');
 			refetch();
-			setSelectedRoleId(undefined);
 		} catch {
 			toast.error('Failed to delete role');
 		}
-	}, [selectedRole.id, refetch, setSelectedRoleId]);
+	}, [selectedRole.id, refetch]);
 
 	const onUpdateRole = useCallback(async () => {
 		const trpc = getTRPCClient();
@@ -89,7 +88,7 @@ const UpdateRole = memo(({ selectedRole, setSelectedRoleId, refetch }: TUpdateRo
 
 	return (
 		<Card className="flex-1 gap-0 py-0">
-			<CardHeader className="border-b py-6">
+			<CardHeader className="py-4">
 				<div className="flex items-center justify-between">
 					<div className="space-y-1">
 						<CardTitle className="flex items-center gap-2 text-lg">
@@ -97,6 +96,10 @@ const UpdateRole = memo(({ selectedRole, setSelectedRoleId, refetch }: TUpdateRo
 							{selectedRole.name}
 						</CardTitle>
 						<CardDescription>Edit role details and permissions.</CardDescription>
+						<div className="flex flex-wrap items-center gap-2 pt-1">
+							{isOwnerRole && <Badge variant="secondary">Owner</Badge>}
+							{selectedRole.isDefault && <Badge variant="secondary">Default</Badge>}
+						</div>
 					</div>
 					<div className="flex items-center gap-1">
 						<Tooltip content="Set as Default Role">
@@ -122,7 +125,7 @@ const UpdateRole = memo(({ selectedRole, setSelectedRoleId, refetch }: TUpdateRo
 					</div>
 				</div>
 			</CardHeader>
-			<CardContent className="flex-1 space-y-6 overflow-y-auto py-6">
+			<CardContent className="flex-1 space-y-6 overflow-y-auto pt-4 pb-6">
 				{selectedRole.isDefault && (
 					<Alert variant="default">
 						<Star />
@@ -164,9 +167,6 @@ const UpdateRole = memo(({ selectedRole, setSelectedRoleId, refetch }: TUpdateRo
 				/>
 			</CardContent>
 			<CardFooter className="justify-end gap-2 py-4">
-				<Button variant="outline" onClick={() => setSelectedRoleId(undefined)}>
-					Close
-				</Button>
 				<Button onClick={onUpdateRole}>Save Role</Button>
 			</CardFooter>
 		</Card>

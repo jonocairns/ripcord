@@ -1,9 +1,10 @@
 import { getTRPCClient } from '@/lib/trpc';
+import { bufferReconnectSnapshotEvent } from '../reconnect-event-buffer';
 import {
 	addExternalStreamToVoiceChannel,
 	addUserToVoiceChannel,
-	handleVoiceSessionReplaced,
 	handleStreamWatcherActivity,
+	handleVoiceSessionReplaced,
 	removeExternalStreamFromVoiceChannel,
 	removeUserFromVoiceChannel,
 	updateExternalStreamInVoiceChannel,
@@ -15,56 +16,104 @@ const subscribeToVoice = () => {
 
 	const onUserJoinVoiceSub = trpc.voice.onJoin.subscribe(undefined, {
 		onData: ({ channelId, userId, state, reconnecting }) => {
-			addUserToVoiceChannel(userId, channelId, state, { reconnecting });
+			const apply = () => {
+				addUserToVoiceChannel(userId, channelId, state, { reconnecting });
+			};
+
+			if (!bufferReconnectSnapshotEvent(apply)) {
+				apply();
+			}
 		},
 		onError: (err) => console.error('onUserJoinVoice subscription error:', err),
 	});
 
 	const onUserLeaveVoiceSub = trpc.voice.onLeave.subscribe(undefined, {
 		onData: ({ channelId, userId, reconnecting }) => {
-			removeUserFromVoiceChannel(userId, channelId, { reconnecting });
+			const apply = () => {
+				removeUserFromVoiceChannel(userId, channelId, { reconnecting });
+			};
+
+			if (!bufferReconnectSnapshotEvent(apply)) {
+				apply();
+			}
 		},
 		onError: (err) => console.error('onUserLeaveVoice subscription error:', err),
 	});
 
 	const onUserUpdateVoiceSub = trpc.voice.onUpdateState.subscribe(undefined, {
 		onData: ({ channelId, userId, state }) => {
-			updateVoiceUserState(userId, channelId, state);
+			const apply = () => {
+				updateVoiceUserState(userId, channelId, state);
+			};
+
+			if (!bufferReconnectSnapshotEvent(apply)) {
+				apply();
+			}
 		},
 		onError: (err) => console.error('onUserUpdateVoice subscription error:', err),
 	});
 
 	const onVoiceAddExternalStreamSub = trpc.voice.onAddExternalStream.subscribe(undefined, {
 		onData: ({ channelId, streamId, stream }) => {
-			addExternalStreamToVoiceChannel(channelId, streamId, stream);
+			const apply = () => {
+				addExternalStreamToVoiceChannel(channelId, streamId, stream);
+			};
+
+			if (!bufferReconnectSnapshotEvent(apply)) {
+				apply();
+			}
 		},
 		onError: (err) => console.error('onVoiceAddExternalStreamSub subscription error:', err),
 	});
 
 	const onVoiceUpdateExternalStreamSub = trpc.voice.onUpdateExternalStream.subscribe(undefined, {
 		onData: ({ channelId, streamId, stream }) => {
-			updateExternalStreamInVoiceChannel(channelId, streamId, stream);
+			const apply = () => {
+				updateExternalStreamInVoiceChannel(channelId, streamId, stream);
+			};
+
+			if (!bufferReconnectSnapshotEvent(apply)) {
+				apply();
+			}
 		},
 		onError: (err) => console.error('onVoiceUpdateExternalStreamSub subscription error:', err),
 	});
 
 	const onVoiceRemoveExternalStreamSub = trpc.voice.onRemoveExternalStream.subscribe(undefined, {
 		onData: ({ channelId, streamId }) => {
-			removeExternalStreamFromVoiceChannel(channelId, streamId);
+			const apply = () => {
+				removeExternalStreamFromVoiceChannel(channelId, streamId);
+			};
+
+			if (!bufferReconnectSnapshotEvent(apply)) {
+				apply();
+			}
 		},
 		onError: (err) => console.error('onVoiceRemoveExternalStreamSub subscription error:', err),
 	});
 
 	const onVoiceStreamWatcherActivitySub = trpc.voice.onStreamWatcherActivity.subscribe(undefined, {
 		onData: (activity) => {
-			handleStreamWatcherActivity(activity);
+			const apply = () => {
+				handleStreamWatcherActivity(activity);
+			};
+
+			if (!bufferReconnectSnapshotEvent(apply)) {
+				apply();
+			}
 		},
 		onError: (err) => console.error('onVoiceStreamWatcherActivitySub subscription error:', err),
 	});
 
 	const onVoiceSessionReplacedSub = trpc.voice.onSessionReplaced.subscribe(undefined, {
 		onData: () => {
-			handleVoiceSessionReplaced();
+			const apply = () => {
+				handleVoiceSessionReplaced();
+			};
+
+			if (!bufferReconnectSnapshotEvent(apply)) {
+				apply();
+			}
 		},
 		onError: (err) => console.error('onVoiceSessionReplaced subscription error:', err),
 	});

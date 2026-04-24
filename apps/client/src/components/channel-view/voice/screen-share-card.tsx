@@ -1,9 +1,10 @@
-import { ExternalLink, EyeOff, Maximize2, Minimize2, Monitor } from 'lucide-react';
+import { ExternalLink, Eye, EyeOff, Maximize2, Minimize2, Monitor } from 'lucide-react';
 import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { IconButton } from '@/components/ui/icon-button';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
+import { useScreenShareWatcherCount } from '@/features/server/voice/hooks';
 import { useWindowFocus } from '@/hooks/use-window-focus';
 import { cn } from '@/lib/utils';
 import { CardControls } from './card-controls';
@@ -109,7 +110,8 @@ const ScreenShareCard = memo(
 		const isWindowFocused = useWindowFocus();
 		const { getUserScreenVolumeKey, getVolume, setVolume, toggleMute } = useVolumeControl();
 		const isOwnUser = ownUserId === userId;
-		const showOwnPreview = !isOwnUser || isWindowFocused;
+		const watcherCount = useScreenShareWatcherCount();
+		const hideOwnPreview = isOwnUser && !isWindowFocused;
 		const volumeKey = getUserScreenVolumeKey(userId);
 		const volume = getVolume(volumeKey);
 		const isMuted = volume === 0;
@@ -125,7 +127,11 @@ const ScreenShareCard = memo(
 			hasScreenShareAudioStream,
 			screenShareStream,
 			screenShareAudioStream,
-		} = useVoiceRefs({ remoteId: userId, attachScreenShareAudio: !isPoppedOut });
+		} = useVoiceRefs({
+			remoteId: userId,
+			attachScreenShareVideo: !hideOwnPreview,
+			attachScreenShareAudio: !isPoppedOut,
+		});
 		const [popoutVideoElement, setPopoutVideoElement] = useState<HTMLVideoElement | null>(null);
 		const [popoutAudioElement, setPopoutAudioElement] = useState<HTMLAudioElement | null>(null);
 
@@ -419,29 +425,42 @@ const ScreenShareCard = memo(
 						onStopWatching={onStopWatching}
 					/>
 
-					{showOwnPreview ? (
-						<video
-							ref={screenShareRef}
-							autoPlay
-							muted={isOwnUser || isPoppedOut}
-							playsInline
-							className={cn(
-								'absolute inset-0 h-full w-full bg-[#1b2026] object-contain',
-								isPoppedOut && 'opacity-0 pointer-events-none',
-							)}
-							style={{
-								transform: `scale(${zoom}) translate(${position.x / zoom}px, ${position.y / zoom}px)`,
-								transition: isDragging ? 'none' : 'transform 0.1s ease-out',
-							}}
-							onDoubleClick={isPoppedOut ? undefined : handleToggleFullscreen}
-						/>
-					) : (
+					<video
+						ref={screenShareRef}
+						autoPlay
+						muted={isOwnUser || isPoppedOut}
+						playsInline
+						className={cn(
+							'absolute inset-0 h-full w-full bg-[#1b2026] object-contain',
+							(isPoppedOut || hideOwnPreview) && 'opacity-0 pointer-events-none',
+						)}
+						style={{
+							transform: `scale(${zoom}) translate(${position.x / zoom}px, ${position.y / zoom}px)`,
+							transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+						}}
+						onDoubleClick={isPoppedOut ? undefined : handleToggleFullscreen}
+					/>
+
+					{hideOwnPreview && (
 						<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#11161d] p-6 text-center text-white/80">
 							<Monitor className="size-10 text-cyan-300/80" />
 							<div className="space-y-1">
 								<p className="text-sm font-semibold text-white">You&apos;re sharing your screen</p>
 								<p className="text-xs text-white/60">Preview hidden while Sharkord is unfocused</p>
 							</div>
+							{watcherCount > 0 && (
+								<div className="flex items-center gap-1.5 text-xs text-white/60">
+									<Eye className="size-3.5" />
+									<span>{watcherCount} watching</span>
+								</div>
+							)}
+						</div>
+					)}
+
+					{isOwnUser && watcherCount > 0 && isWindowFocused && (
+						<div className="absolute bottom-2 left-2 z-10 flex items-center gap-1.5 rounded-md bg-black/60 px-2 py-1 text-xs text-white/90 backdrop-blur-sm">
+							<Eye className="size-3.5" />
+							<span>{watcherCount}</span>
 						</div>
 					)}
 

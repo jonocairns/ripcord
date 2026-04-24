@@ -30,17 +30,14 @@ const Voice = memo(({ channel, ...props }: TVoiceProps) => {
 	const users = useVoiceUsersByChannelId(channel.id);
 	const externalStreams = useVoiceChannelExternalStreamsList(channel.id);
 	const unreadCount = useUnreadMessagesCount(channel.id);
+	const hasUnread = unreadCount > 0;
 
 	return (
 		<>
-			<ItemWrapper {...props}>
+			<ItemWrapper {...props} hasUnread={hasUnread}>
 				<Volume2 className="h-4 w-4" />
 				<span className="flex-1">{channel.name}</span>
-				{unreadCount > 0 && (
-					<div className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-medium text-primary-foreground">
-						{unreadCount > 99 ? '99+' : unreadCount}
-					</div>
-				)}
+				{hasUnread && <span className="ml-auto h-2 w-2 rounded-full bg-primary" aria-hidden />}
 			</ItemWrapper>
 			{channel.type === 'VOICE' && (
 				<div className="mt-1.5 ml-6 space-y-1.5">
@@ -68,16 +65,13 @@ type TTextProps = Omit<TItemWrapperProps, 'children'> & {
 
 const Text = memo(({ channel, ...props }: TTextProps) => {
 	const unreadCount = useUnreadMessagesCount(channel.id);
+	const hasUnread = unreadCount > 0;
 
 	return (
-		<ItemWrapper {...props}>
+		<ItemWrapper {...props} hasUnread={hasUnread}>
 			<Hash className="h-4 w-4" />
 			<span className="flex-1">{channel.name}</span>
-			{unreadCount > 0 && (
-				<div className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-medium text-primary-foreground">
-					{unreadCount > 99 ? '99+' : unreadCount}
-				</div>
-			)}
+			{hasUnread && <span className="ml-auto h-2 w-2 rounded-full bg-primary" aria-hidden />}
 		</ItemWrapper>
 	);
 });
@@ -86,6 +80,7 @@ type TItemWrapperProps = {
 	children: React.ReactNode;
 	className?: string;
 	isSelected: boolean;
+	hasUnread?: boolean;
 	onClick: () => void;
 	dragHandleProps?: React.HTMLAttributes<HTMLDivElement>;
 	style?: React.CSSProperties;
@@ -93,24 +88,32 @@ type TItemWrapperProps = {
 };
 
 const ItemWrapper = memo(
-	({ children, isSelected, onClick, className, dragHandleProps, style, disabled = false }: TItemWrapperProps) => {
+	({
+		children,
+		isSelected,
+		hasUnread = false,
+		onClick,
+		className,
+		dragHandleProps,
+		style,
+		disabled = false,
+	}: TItemWrapperProps) => {
 		return (
 			<div
 				{...dragHandleProps}
 				style={style}
 				className={cn(
-					'relative flex w-full cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1.5 text-sm font-medium text-muted-foreground/95 transition-colors hover:bg-accent/60 hover:text-foreground',
+					'relative flex w-full cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1.5 text-sm font-normal text-muted-foreground/60 transition-colors hover:bg-accent/60 hover:text-foreground',
 					{
-						'bg-accent/85 pl-3 text-foreground': isSelected,
+						'font-medium text-foreground': hasUnread && !isSelected,
+						'bg-accent/40 font-semibold text-foreground': isSelected,
 						'cursor-default opacity-50 hover:bg-transparent hover:text-muted-foreground': disabled,
 					},
 					className,
 				)}
 				onClick={disabled ? undefined : onClick}
 			>
-				{isSelected && (
-					<span className="absolute top-1.5 bottom-1.5 left-0.5 w-1 rounded-full bg-primary/90" aria-hidden />
-				)}
+				{isSelected && <span className="absolute top-1 bottom-1 left-0 w-[3px] rounded-r bg-primary" aria-hidden />}
 				{children}
 			</div>
 		);

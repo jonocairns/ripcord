@@ -1,5 +1,6 @@
 import chalk from 'chalk';
-import { config, SERVER_PRIVATE_IP, SERVER_PUBLIC_IP } from '../config';
+import { config, SERVER_PRIVATE_IPS, SERVER_PUBLIC_IPS } from '../config';
+import { formatResolvedIpAddresses } from '../helpers/ip-addresses';
 import * as serverPaths from '../helpers/paths';
 import * as envVars from './env';
 
@@ -9,8 +10,12 @@ const printDebug = () => {
   const message = [
     chalk.dim('────────────────────────────────────────────────────'),
     `${chalk.blue('Bun version:')} ${chalk.bold(String(Bun.version_with_sha))}`,
-    `${chalk.blue('Local address:')} ${chalk.bold(String(SERVER_PRIVATE_IP))}`,
-    `${chalk.blue('Public address:')} ${chalk.bold(String(SERVER_PUBLIC_IP))}`,
+    `${chalk.blue('Local addresses:')} ${chalk.bold(
+      formatResolvedIpAddresses(SERVER_PRIVATE_IPS)
+    )}`,
+    `${chalk.blue('Public addresses:')} ${chalk.bold(
+      formatResolvedIpAddresses(SERVER_PUBLIC_IPS)
+    )}`,
     `${chalk.blue('Server paths:')} ${chalk.bold(
       String(
         Object.entries(serverPaths)

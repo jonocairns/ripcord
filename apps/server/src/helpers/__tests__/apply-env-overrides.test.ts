@@ -51,12 +51,12 @@ describe('applyEnvOverrides', () => {
   test('overrides a deeply nested value', () => {
     setEnv('TEST_RTC_PORT', '50000');
 
-    const config = { mediasoup: { webrtcPort: 40000 } };
-    const overridesMap = { 'mediasoup.webrtcPort': 'TEST_RTC_PORT' };
+    const config = { webRtc: { port: 40000 } };
+    const overridesMap = { 'webRtc.port': 'TEST_RTC_PORT' };
 
     const result = applyEnvOverrides(config, overridesMap);
 
-    expect(result.mediasoup.webrtcPort).toBe(50000);
+    expect(result.webRtc.port).toBe(50000);
   });
 
   test('uses string value when JSON.parse fails', () => {
@@ -144,18 +144,37 @@ describe('applyEnvOverrides', () => {
     setEnv('SHARKORD_PORT_TEST', '5000');
     setEnv('SHARKORD_DEBUG_TEST', 'false');
     setEnv('SHARKORD_WEBRTC_PORT_TEST', '50000');
+    setEnv('SHARKORD_WEBRTC_PREFERRED_FAMILY_TEST', '\"ipv6\"');
+    setEnv('SHARKORD_WEBRTC_IPV6_ENABLED_TEST', 'true');
+    setEnv('SHARKORD_WEBRTC_IPV6_ANNOUNCED_ADDRESS_TEST', '\"2001:db8::10\"');
 
     const config = {
       server: { port: 4991, debug: true, autoupdate: false },
       http: { maxFiles: 40, maxFileSize: 100 },
-      mediasoup: { webrtcPort: 40000, announcedAddress: '' }
+      webRtc: {
+        port: 40000,
+        preferredFamily: 'ipv4' as 'ipv4' | 'ipv6',
+        ipv4: {
+          enabled: true,
+          bindAddress: '0.0.0.0',
+          announcedAddress: ''
+        },
+        ipv6: {
+          enabled: false,
+          bindAddress: '::',
+          announcedAddress: ''
+        }
+      }
     };
 
     const overridesMap = {
       'server.port': 'SHARKORD_PORT_TEST',
       'server.debug': 'SHARKORD_DEBUG_TEST',
-      'mediasoup.webrtcPort': 'SHARKORD_WEBRTC_PORT_TEST',
-      'mediasoup.announcedAddress': 'SHARKORD_ANNOUNCED_ADDRESS_TEST'
+      'webRtc.port': 'SHARKORD_WEBRTC_PORT_TEST',
+      'webRtc.preferredFamily': 'SHARKORD_WEBRTC_PREFERRED_FAMILY_TEST',
+      'webRtc.ipv6.enabled': 'SHARKORD_WEBRTC_IPV6_ENABLED_TEST',
+      'webRtc.ipv6.announcedAddress':
+        'SHARKORD_WEBRTC_IPV6_ANNOUNCED_ADDRESS_TEST'
     };
 
     const result = applyEnvOverrides(config, overridesMap);
@@ -165,7 +184,9 @@ describe('applyEnvOverrides', () => {
     expect(result.server.autoupdate).toBe(false);
     expect(result.http.maxFiles).toBe(40);
     expect(result.http.maxFileSize).toBe(100);
-    expect(result.mediasoup.webrtcPort).toBe(50000);
-    expect(result.mediasoup.announcedAddress).toBe('');
+    expect(result.webRtc.port).toBe(50000);
+    expect(result.webRtc.preferredFamily).toBe('ipv6');
+    expect(result.webRtc.ipv6.enabled).toBe(true);
+    expect(result.webRtc.ipv6.announcedAddress).toBe('2001:db8::10');
   });
 });

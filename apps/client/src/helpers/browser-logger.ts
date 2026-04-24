@@ -7,7 +7,9 @@ import {
 const OVERRIDE_DEBUG = false;
 
 const logDebug = (...args: unknown[]) => {
-	if (window.DEBUG || OVERRIDE_DEBUG) {
+	const debugEnabled = typeof window !== 'undefined' && window.DEBUG;
+
+	if (debugEnabled || OVERRIDE_DEBUG) {
 		console.log('%c[DEBUG]', 'color: lightblue; font-weight: bold;', ...args);
 	}
 };

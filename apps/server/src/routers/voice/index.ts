@@ -16,17 +16,23 @@ import {
   onVoiceRemoveExternalStreamRoute,
   onVoiceSessionReplacedRoute,
   onVoiceStreamWatcherActivityRoute,
+  onVoiceTransportFailedRoute,
   onVoiceUpdateExternalStreamRoute
 } from './events';
 import { getProducersRoute } from './get-producers';
 import { joinVoiceRoute } from './join';
 import { leaveVoiceRoute } from './leave';
 import { produceRoute } from './produce';
+import { voiceReconnectLabRouter } from './reconnect-lab';
+import { restartConsumerIceRoute } from './restart-consumer-ice';
+import { restartProducerIceRoute } from './restart-producer-ice';
+import { restoreOrJoinVoiceRoute } from './restore-or-join';
 import { resumeConsumerRoute } from './resume-consumer';
 import { updateVoiceStateRoute } from './update-state';
 
 export const voiceRouter = t.router({
   join: joinVoiceRoute,
+  restoreOrJoin: restoreOrJoinVoiceRoute,
   leave: leaveVoiceRoute,
   updateState: updateVoiceStateRoute,
   createProducerTransport: createProducerTransportRoute,
@@ -38,6 +44,8 @@ export const voiceRouter = t.router({
   closeProducer: closeProducerRoute,
   produce: produceRoute,
   consume: consumeRoute,
+  restartProducerIce: restartProducerIceRoute,
+  restartConsumerIce: restartConsumerIceRoute,
   getProducers: getProducersRoute,
   onJoin: onUserJoinVoiceRoute,
   onLeave: onUserLeaveVoiceRoute,
@@ -46,7 +54,9 @@ export const voiceRouter = t.router({
   onNewProducer: onVoiceNewProducerRoute,
   onProducerClosed: onVoiceProducerClosedRoute,
   onStreamWatcherActivity: onVoiceStreamWatcherActivityRoute,
+  onTransportFailed: onVoiceTransportFailedRoute,
   onAddExternalStream: onVoiceAddExternalStreamRoute,
   onUpdateExternalStream: onVoiceUpdateExternalStreamRoute,
-  onRemoveExternalStream: onVoiceRemoveExternalStreamRoute
+  onRemoveExternalStream: onVoiceRemoveExternalStreamRoute,
+  reconnectLab: voiceReconnectLabRouter
 });

@@ -8,11 +8,22 @@ import { getHostFromServer } from '@/helpers/get-file-url';
 import { cleanup, connectToTRPC, getTRPCClient, reconnectTRPC, setOnWsReconnect } from '@/lib/trpc';
 import { openDialog } from '../dialogs/actions';
 import { setPluginCommands } from './plugins/actions';
-import { clearPendingVoiceReconnectChannelId } from './reconnect-state';
+import {
+	clearReconnectSnapshotEventBuffer,
+	flushReconnectSnapshotEventBuffer,
+	pauseReconnectSnapshotEventBuffer,
+	startReconnectSnapshotEventBuffer,
+} from './reconnect-event-buffer';
 import { infoSelector } from './selectors';
 import { useServerStore } from './slice';
 import { initSubscriptions } from './subscriptions';
 import type { TDisconnectInfo } from './types';
+import {
+	clearVoiceReconnectRecovery,
+	ensureVoiceReconnectStarted,
+	getValidPendingVoiceReconnect,
+	resolveVoiceRecoveryAction,
+} from './voice/reconnect-coordinator';
 
 let unsubscribeFromServer: (() => void) | null = null;
 let connectPromise: Promise<void> | null = null;
@@ -113,37 +124,53 @@ export const joinServer = async (
 ) => {
 	const trpc = trpcClient ?? getTRPCClient();
 
-	// On reconnect the store still holds the previous session's state, so
-	// permission checks in initSubscriptions are valid. Subscribe before
-	// fetching so that events arriving during the query round-trip are
-	// captured and applied on top of the snapshot rather than missed.
-	//
-	// On initial connect the store is empty, so we must subscribe after
-	// setInitialData (otherwise permission-dependent subscriptions like
-	// plugin commands and user-delete would be skipped).
-	if (opts?.reconnect) {
-		cleanupServerSubscriptions();
-		unsubscribeFromServer = initSubscriptions();
-	}
+	try {
+		const data = await trpc.others.joinServer.query({ handshakeHash, password });
 
-	const data = await trpc.others.joinServer.query({ handshakeHash, password });
+		logDebug('joinServer', data);
 
-	logDebug('joinServer', data);
-
-	useServerStore.getState().setInitialData(data);
-	setDisconnectInfo(undefined);
-
-	if (!data.mustChangePassword) {
-		if (!opts?.reconnect) {
+		// A reconnect restores auth as a side effect of joinServer. Subscribing
+		// before this point creates new subscriptions against an unauthenticated
+		// WS context, which immediately fails and floods the client with
+		// UNAUTHORIZED errors. Start subscriptions only after join succeeds, but
+		// still before applying the snapshot so newer live events can be buffered
+		// and replayed over the potentially stale snapshot payload.
+		if (opts?.reconnect && !data.mustChangePassword) {
+			startReconnectSnapshotEventBuffer();
 			cleanupServerSubscriptions();
 			unsubscribeFromServer = initSubscriptions();
 		}
-		setPluginCommands(data.commands);
-	} else {
-		// mustChangePassword — no subscriptions needed; tear down any that
-		// were started early for the reconnect path.
-		cleanupServerSubscriptions();
-		setPluginCommands({});
+
+		useServerStore.getState().setInitialData(data);
+		setDisconnectInfo(undefined);
+
+		if (!data.mustChangePassword) {
+			if (!opts?.reconnect) {
+				cleanupServerSubscriptions();
+				unsubscribeFromServer = initSubscriptions();
+			}
+			setPluginCommands(data.commands);
+		} else {
+			// mustChangePassword — no subscriptions needed on either the initial
+			// connect or reconnect path.
+			cleanupServerSubscriptions();
+			setPluginCommands({});
+		}
+
+		if (opts?.reconnect && !data.mustChangePassword) {
+			flushReconnectSnapshotEventBuffer();
+		} else if (opts?.reconnect) {
+			clearReconnectSnapshotEventBuffer();
+		}
+	} catch (error) {
+		if (opts?.reconnect) {
+			// Pause (not clear) so events buffered during this failed attempt are
+			// preserved for the next retry. The caller is responsible for calling
+			// clearReconnectSnapshotEventBuffer() on final teardown.
+			pauseReconnectSnapshotEventBuffer();
+		}
+
+		throw error;
 	}
 
 	// Register the WS reconnect handler so that if tRPC silently reconnects
@@ -151,6 +178,12 @@ export const joinServer = async (
 	// restore subscriptions + voice on the new server-side context.
 	setOnWsReconnect(() => {
 		logDebug('WS reconnected, re-joining server');
+
+		// tRPC automatically replays existing subscriptions when the socket
+		// reconnects, but the new server-side WS context starts unauthenticated.
+		// Tear them down immediately so they do not all fail before joinServer
+		// has a chance to restore the session.
+		cleanupServerSubscriptions();
 
 		wsReconnectGeneration += 1;
 		const generation = wsReconnectGeneration;
@@ -175,9 +208,45 @@ export const joinServer = async (
 				return 'cancelled';
 			}
 
-			// Clear voice channel only after auth/subscriptions are restored so
-			// the pending voice rejoin runs against a live server session.
-			useServerStore.getState().setCurrentVoiceChannelId(undefined);
+			const state = useServerStore.getState();
+			if (state.currentVoiceChannelId !== undefined) {
+				// Keep the local channel sticky across WS reconnects even if the
+				// server-side voice session is gone. A restarted server cannot restore
+				// the mediasoup session from voiceMap, so the VoiceProvider needs the
+				// original channel id to turn the next transport rebuild into a fresh
+				// voice.join instead of forcing a manual rejoin.
+				const channelState = state.voiceMap[state.currentVoiceChannelId];
+				const ownUserId = state.ownUserId;
+				const stillInVoice = ownUserId !== undefined && channelState?.users[ownUserId] !== undefined;
+
+				if (stillInVoice) {
+					logDebug('WS reconnect restored voice session', {
+						channelId: state.currentVoiceChannelId,
+					});
+				} else {
+					logDebug('WS reconnect restored server connection without a voice session; recovery will rejoin', {
+						channelId: state.currentVoiceChannelId,
+					});
+				}
+
+				// Recreate channel-scoped voice subscriptions against the latest WS
+				// session. If the server lost the voice session, the provider will
+				// fall back to a fresh voice.join when transport recovery runs.
+				state.bumpVoiceSessionReconnectNonce();
+			}
+
+			const pendingVoiceReconnect = getValidPendingVoiceReconnect();
+
+			if (pendingVoiceReconnect) {
+				logDebug('Voice reconnect recovery scheduled', {
+					channelId: pendingVoiceReconnect.channelId,
+				});
+				ensureVoiceReconnectStarted();
+			}
+
+			logDebug('Voice recovery action resolved', {
+				recoveryAction: resolveVoiceRecoveryAction(),
+			});
 
 			return 'joined';
 		};
@@ -194,11 +263,13 @@ export const joinServer = async (
 					// Can't silently reconnect to a password-protected server —
 					// fall through to teardown so the user sees the password prompt
 					// on next connect.
+					clearReconnectSnapshotEventBuffer();
 					cleanup({ ignoreSocketCloseEvent: true });
 					cleanupServerSubscriptions();
 				}
 			} catch (error) {
 				if (didGenerationChange(generation)) {
+					clearReconnectSnapshotEventBuffer();
 					return;
 				}
 
@@ -209,6 +280,7 @@ export const joinServer = async (
 					const refreshed = await refreshAccessToken();
 
 					if (didGenerationChange(generation)) {
+						clearReconnectSnapshotEventBuffer();
 						return;
 					}
 
@@ -225,12 +297,14 @@ export const joinServer = async (
 							}
 
 							if (result === 'password-required') {
+								clearReconnectSnapshotEventBuffer();
 								cleanup({ ignoreSocketCloseEvent: true });
 								cleanupServerSubscriptions();
 								return;
 							}
 						} catch (retryError) {
 							if (didGenerationChange(generation)) {
+								clearReconnectSnapshotEventBuffer();
 								return;
 							}
 
@@ -245,6 +319,8 @@ export const joinServer = async (
 					});
 				}
 
+				clearReconnectSnapshotEventBuffer();
+				clearVoiceReconnectRecovery('app-teardown');
 				cleanup({ ignoreSocketCloseEvent: true });
 			}
 		})();
@@ -253,8 +329,8 @@ export const joinServer = async (
 
 export const logoutFromServer = async () => {
 	wsReconnectGeneration += 1;
-	clearPendingVoiceReconnectChannelId();
 	setOnWsReconnect(null);
+	clearVoiceReconnectRecovery('logout');
 	await revokeRefreshToken();
 	cleanup({ clearAuth: true, ignoreSocketCloseEvent: true });
 	cleanupServerSubscriptions();

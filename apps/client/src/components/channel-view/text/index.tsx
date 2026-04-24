@@ -132,24 +132,24 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 			>
 				{isEmpty ? (
 					<div className="flex min-h-full items-end px-3 pb-6">
-						<div className="max-w-2xl space-y-4">
+						<div className="max-w-2xl space-y-5">
 							<div className="bg-muted/70 flex h-20 w-20 items-center justify-center rounded-full border border-border">
 								<Hash className="h-11 w-11 text-foreground" />
 							</div>
 
-							<div className="space-y-2">
-								<h2 className="text-4xl leading-tight font-bold tracking-tight md:text-[2.8rem]">
+							<div className="space-y-3">
+								<h2 className="text-3xl leading-tight font-semibold tracking-tight md:text-[2.35rem]">
 									Welcome to #{channel?.name ?? 'channel'}!
 								</h2>
-								<p className="text-lg text-muted-foreground md:text-xl">
-									This is the start of the #{channel?.name ?? 'channel'} channel.
+								<p className="max-w-xl text-base text-muted-foreground">
+									Welcome to #{channel?.name ?? 'channel'}. Send the first message to get started.
 								</p>
 							</div>
 
 							{canManageChannel && (
 								<Button
 									variant="secondary"
-									className="h-11 px-4 text-base"
+									className="h-10 px-4 text-sm"
 									onClick={() =>
 										openServerScreen(ServerScreen.CHANNEL_SETTINGS, {
 											channelId,

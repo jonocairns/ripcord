@@ -13,6 +13,7 @@ import {
   channelUserPermissions
 } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
+import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
 import { protectedProcedure } from '../../utils/trpc';
 
 const allPermissions = Object.values(ChannelPermission);
@@ -81,9 +82,15 @@ const updatePermissionsRoute = protectedProcedure
       }
     });
 
-    publishChannelPermissions(
-      await getAffectedUserIdsForChannel(input.channelId)
-    );
+    const affectedUserIds = await getAffectedUserIdsForChannel(input.channelId);
+
+    await Promise.all([
+      publishChannelPermissions(affectedUserIds),
+      revalidateActiveVoiceSessions({
+        userIds: affectedUserIds,
+        channelIds: [input.channelId]
+      })
+    ]);
     enqueueActivityLog({
       type: ActivityLogType.UPDATED_CHANNEL_PERMISSIONS,
       userId: ctx.user.id,

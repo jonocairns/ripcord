@@ -5,11 +5,14 @@ import { useCallback, useRef } from 'react';
 import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
+import { getConsumeRetryDelayMs, shouldRetryConsume } from './consume-retry-policy';
 
 // How long to wait for an ICE "disconnected" state to recover before closing
 // the transport. ICE disconnected can be transient (brief packet loss / route
 // change); only "failed" is terminal per the spec.
-const ICE_DISCONNECT_GRACE_MS = 15_000;
+const ICE_DISCONNECT_GRACE_MS = 30_000;
+
+type TConsumeAttemptResult = 'success' | 'failure';
 
 type TUseTransportParams = {
 	addRemoteUserStream: (userId: number, stream: MediaStream, kind: TRemoteUserStreamKinds) => void;
@@ -45,7 +48,9 @@ const useTransports = ({
 			[kind: string]: Consumer<AppData>;
 		};
 	}>({});
-	const consumeOperationsInProgress = useRef<Set<string>>(new Set());
+	const consumeOperationsInProgress = useRef<Map<string, number>>(new Map());
+	const consumeOperationSequence = useRef(0);
+	const consumeSessionGeneration = useRef(0);
 
 	const createProducerTransport = useCallback(
 		async (device: Device, prefetchedParams?: TTransportParams) => {
@@ -95,7 +100,20 @@ const useTransports = ({
 							onTransportFailure();
 						}
 					} else if (state === 'disconnected') {
-						logVoice('Producer transport disconnected, waiting for recovery...');
+						logVoice('Producer transport disconnected, attempting ICE restart...');
+
+						void (async () => {
+							try {
+								const { iceParameters } = await getTRPCClient().voice.restartProducerIce.mutate();
+								if (transport.connectionState !== 'connected' && !transport.closed) {
+									await transport.restartIce({ iceParameters });
+									logVoice('ICE restart initiated for producer transport');
+								}
+							} catch (error) {
+								logVoice('ICE restart failed for producer transport', { error });
+							}
+						})();
+
 						producerDisconnectTimer.current = setTimeout(() => {
 							producerDisconnectTimer.current = undefined;
 
@@ -127,7 +145,10 @@ const useTransports = ({
 
 					const { kind } = appData as { kind: StreamKind };
 
-					if (!producerTransport.current) return;
+					if (!producerTransport.current) {
+						errback(new Error('Producer transport not available'));
+						return;
+					}
 
 					try {
 						const producerId = await trpc.voice.produce.mutate({
@@ -153,6 +174,7 @@ const useTransports = ({
 				});
 			} catch (error) {
 				logVoice('Error creating producer transport', { error });
+				throw error;
 			}
 		},
 		[onTransportFailure],
@@ -174,6 +196,7 @@ const useTransports = ({
 
 				const transport = device.createRecvTransport(params);
 				consumerTransport.current = transport;
+				consumeSessionGeneration.current += 1;
 
 				transport.on('connect', async ({ dtlsParameters }, callback, errback) => {
 					logVoice('Consumer transport connected', { dtlsParameters });
@@ -201,6 +224,8 @@ const useTransports = ({
 						});
 					});
 					consumers.current = {};
+					consumeOperationsInProgress.current.clear();
+					consumeSessionGeneration.current += 1;
 					clearAllPendingStreams();
 
 					if (!transport.closed) {
@@ -227,7 +252,20 @@ const useTransports = ({
 							onTransportFailure();
 						}
 					} else if (state === 'disconnected') {
-						logVoice('Consumer transport disconnected, waiting for recovery...');
+						logVoice('Consumer transport disconnected, attempting ICE restart...');
+
+						void (async () => {
+							try {
+								const { iceParameters } = await getTRPCClient().voice.restartConsumerIce.mutate();
+								if (transport.connectionState !== 'connected' && !transport.closed) {
+									await transport.restartIce({ iceParameters });
+									logVoice('ICE restart initiated for consumer transport');
+								}
+							} catch (error) {
+								logVoice('ICE restart failed for consumer transport', { error });
+							}
+						})();
+
 						consumerDisconnectTimer.current = setTimeout(() => {
 							consumerDisconnectTimer.current = undefined;
 
@@ -246,6 +284,8 @@ const useTransports = ({
 
 						if (consumerTransport.current === transport) {
 							consumerTransport.current = undefined;
+							consumeOperationsInProgress.current.clear();
+							consumeSessionGeneration.current += 1;
 						}
 					}
 				});
@@ -255,29 +295,20 @@ const useTransports = ({
 				});
 			} catch (error) {
 				logVoice('Failed to create consumer transport', { error });
+				throw error;
 			}
 		},
 		[clearAllPendingStreams, onTransportFailure],
 	);
 
-	const consume = useCallback(
-		async (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities) => {
-			if (!consumerTransport.current) {
+	const consumeOnce = useCallback(
+		async (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities): Promise<TConsumeAttemptResult> => {
+			const transport = consumerTransport.current;
+
+			if (!transport || transport.closed) {
 				logVoice('Consumer transport not available');
-				return;
+				return 'failure';
 			}
-
-			const operationKey = `${remoteId}-${kind}`;
-
-			if (consumeOperationsInProgress.current.has(operationKey)) {
-				logVoice('Consume operation already in progress', {
-					remoteId,
-					kind,
-				});
-				return;
-			}
-
-			consumeOperationsInProgress.current.add(operationKey);
 
 			try {
 				logVoice('Consuming remote producer', { remoteId, kind });
@@ -290,6 +321,14 @@ const useTransports = ({
 					rtpCapabilities,
 					paused: true,
 				});
+
+				if (consumerTransport.current !== transport || transport.closed) {
+					logVoice('Consumer transport changed before local consumer creation', {
+						remoteId,
+						kind,
+					});
+					return 'failure';
+				}
 
 				logVoice('Got consumer parameters', {
 					producerId,
@@ -311,20 +350,31 @@ const useTransports = ({
 					delete consumers.current[remoteId][consumerKind];
 				}
 
-				const newConsumer = await consumerTransport.current.consume({
+				const newConsumer = await transport.consume({
 					id: consumerId,
 					producerId: producerId,
 					kind: getMediasoupKind(consumerKind),
 					rtpParameters: consumerRtpParameters,
+					streamId: consumerRtpParameters.rtcp?.cname,
 				});
 
 				logVoice('Created new consumer', { newConsumer });
 
 				const cleanupEvents = ['transportclose', 'trackended', '@close', 'close'];
+				let cleanedUp = false;
 
 				cleanupEvents.forEach((event) => {
 					// @ts-expect-error - YOLO
 					newConsumer?.on(event, () => {
+						if (cleanedUp) return;
+
+						const activeConsumer = consumers.current[remoteId]?.[consumerKind];
+						if (activeConsumer && activeConsumer !== newConsumer) {
+							return;
+						}
+
+						cleanedUp = true;
+
 						logVoice(`Consumer cleanup event "${event}" triggered`, {
 							remoteId,
 							kind,
@@ -354,8 +404,6 @@ const useTransports = ({
 					addRemoteUserStream(remoteId, stream, kind);
 				}
 
-				removePendingStream(remoteId, kind);
-
 				try {
 					await trpc.voice.resumeConsumer.mutate({
 						remoteId,
@@ -369,11 +417,14 @@ const useTransports = ({
 					});
 
 					newConsumer.close();
+					return 'failure';
 				}
+
+				removePendingStream(remoteId, kind);
+				return 'success';
 			} catch (error) {
 				logVoice('Error consuming remote producer', { error });
-			} finally {
-				consumeOperationsInProgress.current.delete(operationKey);
+				return 'failure';
 			}
 		},
 		[
@@ -383,6 +434,77 @@ const useTransports = ({
 			removeExternalStreamTrack,
 			removePendingStream,
 		],
+	);
+
+	const consume = useCallback(
+		async (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities) => {
+			const operationKey = `${remoteId}-${kind}`;
+
+			if (consumeOperationsInProgress.current.has(operationKey)) {
+				logVoice('Consume operation already in progress', {
+					remoteId,
+					kind,
+				});
+				return;
+			}
+
+			consumeOperationSequence.current += 1;
+			const operationToken = consumeOperationSequence.current;
+			const operationGeneration = consumeSessionGeneration.current;
+			let failedAttemptIndex = 0;
+
+			consumeOperationsInProgress.current.set(operationKey, operationToken);
+			addPendingStream(remoteId, kind);
+
+			try {
+				while (consumeSessionGeneration.current === operationGeneration) {
+					const result = await consumeOnce(remoteId, kind, rtpCapabilities);
+
+					if (result === 'success') {
+						return;
+					}
+
+					if (consumeSessionGeneration.current !== operationGeneration) {
+						break;
+					}
+
+					const retryDelayMs = getConsumeRetryDelayMs(kind, failedAttemptIndex);
+
+					if (retryDelayMs === undefined) {
+						logVoice('Remote consume failed without retry', {
+							remoteId,
+							kind,
+							failedAttempts: failedAttemptIndex + 1,
+						});
+						if (!shouldRetryConsume(kind)) {
+							removePendingStream(remoteId, kind);
+						}
+						return;
+					}
+
+					failedAttemptIndex += 1;
+
+					logVoice('Retrying remote consume after failure', {
+						remoteId,
+						kind,
+						nextAttempt: failedAttemptIndex + 1,
+						retryDelayMs,
+					});
+
+					await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
+				}
+
+				logVoice('Aborting remote consume after transport generation changed', {
+					remoteId,
+					kind,
+				});
+			} finally {
+				if (consumeOperationsInProgress.current.get(operationKey) === operationToken) {
+					consumeOperationsInProgress.current.delete(operationKey);
+				}
+			}
+		},
+		[addPendingStream, consumeOnce, removePendingStream],
 	);
 
 	const consumeExistingProducers = useCallback(
@@ -411,9 +533,7 @@ const useTransports = ({
 					remoteExternalStreamIds,
 				});
 
-				remoteAudioIds.forEach((remoteId) => {
-					consume(remoteId, StreamKind.AUDIO, rtpCapabilities);
-				});
+				await Promise.all(remoteAudioIds.map((remoteId) => consume(remoteId, StreamKind.AUDIO, rtpCapabilities)));
 
 				remoteVideoIds.forEach((remoteId) => {
 					addPendingStream(remoteId, StreamKind.VIDEO);
@@ -439,6 +559,7 @@ const useTransports = ({
 				});
 			} catch (error) {
 				logVoice('Error consuming existing producers', { error });
+				throw error;
 			}
 		},
 		[addPendingStream, consume],
@@ -504,6 +625,7 @@ const useTransports = ({
 		consumers.current = {};
 
 		consumeOperationsInProgress.current.clear();
+		consumeSessionGeneration.current += 1;
 		clearAllPendingStreams();
 
 		if (producerTransport.current && !producerTransport.current.closed) {

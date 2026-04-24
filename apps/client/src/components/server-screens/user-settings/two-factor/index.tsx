@@ -528,7 +528,7 @@ const TwoFactor = memo(() => {
 						: 'Add an extra layer of security to your account by requiring a code from an authenticator app when you sign in.'}
 				</CardDescription>
 			</CardHeader>
-			<CardContent>
+			<CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 				<div className="flex items-center gap-3">
 					{enabled ? (
 						<ShieldCheck className="h-5 w-5 text-green-500" />
@@ -539,23 +539,24 @@ const TwoFactor = memo(() => {
 						{enabled ? 'Two-factor authentication is enabled.' : 'Two-factor authentication is not enabled.'}
 					</span>
 				</div>
+
+				<div className="flex flex-wrap items-center gap-2 sm:justify-end">
+					{enabled ? (
+						<>
+							<Button variant="outline" onClick={() => setStep('regenerate')}>
+								Regenerate Recovery Codes
+							</Button>
+							<Button variant="destructive" onClick={() => setStep('disable')}>
+								Disable 2FA
+							</Button>
+						</>
+					) : (
+						<Button onClick={() => setStep('setup-password')} disabled={loading}>
+							Enable 2FA
+						</Button>
+					)}
+				</div>
 			</CardContent>
-			<CardFooter className="justify-end gap-2">
-				{enabled ? (
-					<>
-						<Button variant="outline" onClick={() => setStep('regenerate')}>
-							Regenerate Recovery Codes
-						</Button>
-						<Button variant="destructive" onClick={() => setStep('disable')}>
-							Disable 2FA
-						</Button>
-					</>
-				) : (
-					<Button onClick={() => setStep('setup-password')} disabled={loading}>
-						Enable 2FA
-					</Button>
-				)}
-			</CardFooter>
 		</Card>
 	);
 });

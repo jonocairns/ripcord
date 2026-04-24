@@ -118,6 +118,16 @@ export interface PluginContext {
       getListenInfo(): {
         ip: string;
         announcedAddress: string | undefined;
+        listenInfos: {
+          protocol: 'udp' | 'tcp';
+          ip: string;
+          announcedAddress?: string;
+          family: 'ipv4' | 'ipv6';
+          port: number;
+          flags?: {
+            ipv6Only?: boolean;
+          };
+        }[];
       };
     };
   };

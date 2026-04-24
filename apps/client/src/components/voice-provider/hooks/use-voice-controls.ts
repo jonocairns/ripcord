@@ -2,13 +2,18 @@ import type { TVoiceUserState } from '@sharkord/shared';
 import { useCallback, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
+import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
+import { useOwnUserId } from '@/features/server/users/hooks';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
+import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
+import { shouldApplyVoiceStateOperationResult, startVoiceStateOperation } from '../voice-state-operation';
+import { useScreenShareStage } from './use-screen-share-stage';
 
 type TUseVoiceControlsParams = {
 	startMicStream: () => Promise<void>;
@@ -17,7 +22,13 @@ type TUseVoiceControlsParams = {
 	startWebcamStream: () => Promise<void>;
 	stopWebcamStream: () => void;
 
-	startScreenShareStream: (selection?: TDesktopScreenShareSelection) => Promise<MediaStreamTrack>;
+	startScreenShareStream: (
+		selection?: TDesktopScreenShareSelection,
+		handlers?: {
+			onVideoTrackStarted?: () => void;
+			onVideoTrackEnded?: () => void | Promise<void>;
+		},
+	) => Promise<MediaStreamTrack>;
 	stopScreenShareStream: () => void;
 	requestScreenShareSelection?: () => Promise<TDesktopScreenShareSelection | null>;
 };
@@ -45,14 +56,38 @@ const useVoiceControls = ({
 	const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
 	const confirmedSoundMuted = ownConfirmedVoiceState?.soundMuted;
 	const confirmedMicMuted = ownConfirmedVoiceState?.micMuted;
+	const ownUserId = useOwnUserId();
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
+	const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
+	const localAudioStreamRef = useRef(localAudioStream);
+	const voiceStateOperationSequenceRef = useRef(0);
+	const pendingShareMutateRef = useRef<Promise<unknown> | undefined>(undefined);
+
+	const {
+		isStarting: isStartingScreenShare,
+		newTransition: newScreenShareTransition,
+		beginStart: beginScreenShareStart,
+		finishStart: finishScreenShareStart,
+		restore: restoreScreenShareStage,
+	} = useScreenShareStage({ ownUserId, currentVoiceChannelId });
 
 	useEffect(() => {
-		if (currentVoiceChannelId === undefined || !ownVoiceState.soundMuted) {
+		currentVoiceChannelIdRef.current = currentVoiceChannelId;
+	}, [currentVoiceChannelId]);
+
+	useEffect(() => {
+		localAudioStreamRef.current = localAudioStream;
+	}, [localAudioStream]);
+
+	useEffect(() => {
+		// Preserve the pre-deafen mic state across reconnects and voice rejoin.
+		// currentVoiceChannelId is cleared during disconnect / auto-rejoin, and
+		// dropping this ref there would make undeafen restore to "still muted".
+		if (!ownVoiceState.soundMuted) {
 			micMutedBeforeDeafenRef.current = undefined;
 		}
-	}, [currentVoiceChannelId, ownVoiceState.soundMuted]);
+	}, [ownVoiceState.soundMuted]);
 
 	useEffect(() => {
 		if (micMutedBeforeDeafenRef.current === undefined || ownVoiceState.soundMuted !== true) {
@@ -70,16 +105,26 @@ const useVoiceControls = ({
 
 	const setMicMuted = useCallback(
 		async (newState: boolean, options?: TSetMicMutedOptions) => {
-			if (newState === ownVoiceState.micMuted) {
+			// Read mic state directly from the store — updateOwnVoiceState writes
+			// synchronously, but ownVoiceStateRef only updates after React re-renders.
+			// Reading the ref risks a stale guard on rapid press+release cycles.
+			const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
+			const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
+			const latestLocalAudioStream = localAudioStreamRef.current;
+
+			if (newState === latestOwnVoiceState.micMuted) {
 				return;
 			}
 
-			if (ownVoiceState.soundMuted && !newState) {
+			if (latestOwnVoiceState.soundMuted && !newState) {
 				return;
 			}
 
 			const shouldPlaySound = options?.playSound ?? true;
-			const previousMicMuted = ownVoiceState.micMuted;
+			const previousMicMuted = latestOwnVoiceState.micMuted;
+			const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
+			voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
+			const { operationToken } = voiceStateOperation;
 			const trpc = getTRPCClient();
 
 			updateOwnVoiceState({ micMuted: newState });
@@ -88,40 +133,57 @@ const useVoiceControls = ({
 				playSound(newState ? SoundType.OWN_USER_MUTED_MIC : SoundType.OWN_USER_UNMUTED_MIC);
 			}
 
-			if (!currentVoiceChannelId) return;
+			if (!latestCurrentVoiceChannelId) return;
 
-			setLocalAudioTrackEnabled(localAudioStream, newState);
+			setLocalAudioTrackEnabled(latestLocalAudioStream, newState);
 
 			try {
 				await trpc.voice.updateState.mutate({
 					micMuted: newState,
 				});
 
-				if (!localAudioStream && !newState) {
+				if (
+					shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current) &&
+					!localAudioStreamRef.current &&
+					!newState
+				) {
 					await startMicStream();
 				}
 			} catch (error) {
+				if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
+					return;
+				}
+
 				updateOwnVoiceState({ micMuted: previousMicMuted });
-				setLocalAudioTrackEnabled(localAudioStream, previousMicMuted);
+				setLocalAudioTrackEnabled(localAudioStreamRef.current, previousMicMuted);
 				toast.error(getTrpcError(error, 'Failed to update microphone state'));
 			}
 		},
-		[ownVoiceState.micMuted, ownVoiceState.soundMuted, currentVoiceChannelId, localAudioStream, startMicStream],
+		[startMicStream],
 	);
 
 	const toggleMic = useCallback(async () => {
-		const newState = !ownVoiceState.micMuted;
+		const newState = !ownVoiceStateSelector(useServerStore.getState()).micMuted;
 
 		await setMicMuted(newState, { playSound: true });
-	}, [ownVoiceState.micMuted, setMicMuted]);
+	}, [setMicMuted]);
 
 	const toggleSound = useCallback(async () => {
-		const newState = !ownVoiceState.soundMuted;
+		// Read state directly from the store to avoid stale closure values,
+		// matching the approach used by setMicMuted above.
+		const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
+		const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
+		const latestLocalAudioStream = localAudioStreamRef.current;
+
+		const newState = !latestOwnVoiceState.soundMuted;
 		const trpc = getTRPCClient();
-		const previousMicMuted = ownVoiceState.micMuted;
-		const previousSoundMuted = ownVoiceState.soundMuted;
+		const previousMicMuted = latestOwnVoiceState.micMuted;
+		const previousSoundMuted = latestOwnVoiceState.soundMuted;
 		const previousMicMutedBeforeDeafen = micMutedBeforeDeafenRef.current;
 		let nextMicMuted = previousMicMuted;
+		const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
+		voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
+		const { operationToken } = voiceStateOperation;
 
 		if (newState) {
 			micMutedBeforeDeafenRef.current = previousMicMuted;
@@ -136,11 +198,11 @@ const useVoiceControls = ({
 			micMuted: nextMicMuted,
 		});
 
-		setLocalAudioTrackEnabled(localAudioStream, nextMicMuted);
+		setLocalAudioTrackEnabled(latestLocalAudioStream, nextMicMuted);
 
 		playSound(newState ? SoundType.OWN_USER_MUTED_SOUND : SoundType.OWN_USER_UNMUTED_SOUND);
 
-		if (!currentVoiceChannelId) return;
+		if (!latestCurrentVoiceChannelId) return;
 
 		try {
 			await trpc.voice.updateState.mutate({
@@ -148,19 +210,27 @@ const useVoiceControls = ({
 				micMuted: nextMicMuted,
 			});
 
-			if (!localAudioStream && !nextMicMuted) {
+			if (
+				shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current) &&
+				!localAudioStreamRef.current &&
+				!nextMicMuted
+			) {
 				await startMicStream();
 			}
 		} catch (error) {
+			if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
+				return;
+			}
+
 			micMutedBeforeDeafenRef.current = previousSoundMuted ? previousMicMutedBeforeDeafen : undefined;
 			updateOwnVoiceState({
 				soundMuted: previousSoundMuted,
 				micMuted: previousMicMuted,
 			} satisfies Partial<TVoiceUserState>);
-			setLocalAudioTrackEnabled(localAudioStream, previousMicMuted);
+			setLocalAudioTrackEnabled(localAudioStreamRef.current, previousMicMuted);
 			toast.error(getTrpcError(error, 'Failed to update sound state'));
 		}
-	}, [ownVoiceState.soundMuted, ownVoiceState.micMuted, currentVoiceChannelId, localAudioStream, startMicStream]);
+	}, [startMicStream]);
 
 	const toggleWebcam = useCallback(async () => {
 		if (!currentVoiceChannelId) return;
@@ -194,52 +264,93 @@ const useVoiceControls = ({
 
 	const toggleScreenShare = useCallback(async () => {
 		if (!currentVoiceChannelId) return;
+		if (isStartingScreenShare) return;
 
 		const newState = !ownVoiceState.sharingScreen;
 		const trpc = getTRPCClient();
+		const transition = newScreenShareTransition();
 		let selection: TDesktopScreenShareSelection | null | undefined;
 
 		if (newState && requestScreenShareSelection) {
 			selection = await requestScreenShareSelection();
 
 			if (!selection) {
+				transition.invalidate();
 				return;
 			}
 		}
 
 		try {
 			if (newState) {
-				const video = await startScreenShareStream(selection || undefined);
-				updateOwnVoiceState({ sharingScreen: true });
-				playSound(SoundType.OWN_USER_STARTED_SCREENSHARE);
+				beginScreenShareStart();
 
-				// handle native screen share end
-				video.onended = async () => {
-					stopScreenShareStream();
-					updateOwnVoiceState({ sharingScreen: false });
+				await startScreenShareStream(selection || undefined, {
+					onVideoTrackStarted: () => {
+						if (!transition.isCurrent()) return;
+						finishScreenShareStart();
+						updateOwnVoiceState({ sharingScreen: true });
+						playSound(SoundType.OWN_USER_STARTED_SCREENSHARE);
+					},
+					onVideoTrackEnded: async () => {
+						if (!transition.isCurrent()) {
+							return;
+						}
 
-					try {
-						await trpc.voice.updateState.mutate({
-							sharingScreen: false,
-						});
-					} catch {
-						// ignore
+						transition.invalidate();
+						stopScreenShareStream();
+						restoreScreenShareStage();
+						updateOwnVoiceState({ sharingScreen: false });
+
+						try {
+							await trpc.voice.updateState.mutate({
+								sharingScreen: false,
+							});
+						} catch {
+							// ignore
+						}
+					},
+				});
+
+				if (!transition.isCurrent()) {
+					return;
+				}
+
+				const startMutate = trpc.voice.updateState.mutate({
+					sharingScreen: true,
+				});
+				pendingShareMutateRef.current = startMutate;
+
+				try {
+					await startMutate;
+				} finally {
+					if (pendingShareMutateRef.current === startMutate) {
+						pendingShareMutateRef.current = undefined;
 					}
-				};
+				}
+
+				return;
 			}
 
-			if (!newState) {
-				stopScreenShareStream();
-				updateOwnVoiceState({ sharingScreen: false });
-				playSound(SoundType.OWN_USER_STOPPED_SCREENSHARE);
-			}
+			// Invalidate the transition up-front so a late `track.onended` from the
+			// producer we're about to stop can't re-run this cleanup path.
+			transition.invalidate();
+			stopScreenShareStream();
+			restoreScreenShareStage();
+			updateOwnVoiceState({ sharingScreen: false });
+			playSound(SoundType.OWN_USER_STOPPED_SCREENSHARE);
+
+			// Ensure any in-flight start mutation settles before we send the stop,
+			// so the server never processes them out of order.
+			await pendingShareMutateRef.current?.catch(() => {});
 
 			await trpc.voice.updateState.mutate({
-				sharingScreen: newState,
+				sharingScreen: false,
 			});
 		} catch (error) {
-			if (newState) {
+			if (newState && transition.isCurrent()) {
+				transition.invalidate();
 				stopScreenShareStream();
+				restoreScreenShareStage();
 				updateOwnVoiceState({ sharingScreen: false });
 			}
 
@@ -248,10 +359,20 @@ const useVoiceControls = ({
 				return;
 			}
 
+			// transition was superseded (user already stopped) — suppress the toast
+			if (newState && !transition.isCurrent()) {
+				return;
+			}
+
 			toast.error(getTrpcError(error, 'Failed to update screen share state'));
 		}
 	}, [
+		beginScreenShareStart,
 		ownVoiceState.sharingScreen,
+		finishScreenShareStart,
+		isStartingScreenShare,
+		newScreenShareTransition,
+		restoreScreenShareStage,
 		startScreenShareStream,
 		stopScreenShareStream,
 		currentVoiceChannelId,
@@ -259,6 +380,7 @@ const useVoiceControls = ({
 	]);
 
 	return {
+		isStartingScreenShare,
 		setMicMuted,
 		toggleMic,
 		toggleSound,

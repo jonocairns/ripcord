@@ -1,5 +1,5 @@
-import { UserStatus, type TJoinedPublicUser } from '@sharkord/shared';
 import { describe, expect, it } from 'bun:test';
+import { type TJoinedPublicUser, UserStatus } from '@sharkord/shared';
 import { sortUsers } from '../selectors';
 
 const createUser = ({

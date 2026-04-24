@@ -1,11 +1,21 @@
 import { ServerEvents, type StreamKind } from '@sharkord/shared';
 import { observable } from '@trpc/server/observable';
+import { VoiceRuntime } from '../../runtimes/voice';
 import { protectedProcedure } from '../../utils/trpc';
 
 type TVoiceProducerEvent = {
   channelId: number;
   remoteId: number;
   kind: StreamKind;
+};
+
+const isUserStillJoinedToVoiceChannel = (
+  userId: number,
+  channelId: number
+): boolean => {
+  const runtime = VoiceRuntime.findById(channelId);
+
+  return runtime?.getUser(userId) !== undefined;
 };
 
 // these events are broadcast to ALL users (for UI population in the sidebar)
@@ -59,26 +69,32 @@ const onVoiceRemoveExternalStreamRoute = protectedProcedure.subscription(
 // they relate to actual media streaming, not UI state
 const onVoiceNewProducerRoute = protectedProcedure.subscription(
   async ({ ctx }) => {
-    if (!ctx.currentVoiceChannelId) {
+    const channelId = ctx.currentVoiceChannelId;
+
+    if (!channelId) {
       return observable<TVoiceProducerEvent>(() => () => {});
     }
 
     return ctx.pubsub.subscribeForChannel(
-      ctx.currentVoiceChannelId,
-      ServerEvents.VOICE_NEW_PRODUCER
+      channelId,
+      ServerEvents.VOICE_NEW_PRODUCER,
+      () => isUserStillJoinedToVoiceChannel(ctx.user.id, channelId)
     );
   }
 );
 
 const onVoiceProducerClosedRoute = protectedProcedure.subscription(
   async ({ ctx }) => {
-    if (!ctx.currentVoiceChannelId) {
+    const channelId = ctx.currentVoiceChannelId;
+
+    if (!channelId) {
       return observable<TVoiceProducerEvent>(() => () => {});
     }
 
     return ctx.pubsub.subscribeForChannel(
-      ctx.currentVoiceChannelId,
-      ServerEvents.VOICE_PRODUCER_CLOSED
+      channelId,
+      ServerEvents.VOICE_PRODUCER_CLOSED,
+      () => isUserStillJoinedToVoiceChannel(ctx.user.id, channelId)
     );
   }
 );
@@ -88,6 +104,15 @@ const onVoiceStreamWatcherActivityRoute = protectedProcedure.subscription(
     return ctx.pubsub.subscribeFor(
       ctx.user.id,
       ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY
+    );
+  }
+);
+
+const onVoiceTransportFailedRoute = protectedProcedure.subscription(
+  async ({ ctx }) => {
+    return ctx.pubsub.subscribeFor(
+      ctx.user.id,
+      ServerEvents.VOICE_TRANSPORT_FAILED
     );
   }
 );
@@ -102,5 +127,6 @@ export {
   onVoiceRemoveExternalStreamRoute,
   onVoiceSessionReplacedRoute,
   onVoiceStreamWatcherActivityRoute,
+  onVoiceTransportFailedRoute,
   onVoiceUpdateExternalStreamRoute
 };

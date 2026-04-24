@@ -1,8 +1,8 @@
 import { StreamKind } from '@sharkord/shared';
 import { memo, useCallback, useMemo } from 'react';
-import { useVoiceUsersByChannelId } from '@/features/server/hooks';
 import { setSelectedChannelId } from '@/features/server/channels/actions';
 import { useLastTextChannelId } from '@/features/server/channels/hooks';
+import { useVoiceUsersByChannelId } from '@/features/server/hooks';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { useVoice, useVoiceChannelExternalStreamsList } from '@/features/server/voice/hooks';
 import { getPendingStreamKey } from '../../voice-provider/hooks/use-pending-streams';
@@ -11,6 +11,7 @@ import { ExternalStreamCard } from './external-stream-card';
 import { PinnedCardType, usePinCardController } from './hooks/use-pin-card-controller';
 import { PendingStreamCard } from './pending-stream-card';
 import { ScreenShareCard } from './screen-share-card';
+import { StartingScreenShareCard } from './starting-screen-share-card';
 import { VoiceGrid } from './voice-grid';
 import { VoiceUserCard } from './voice-user-card';
 
@@ -25,6 +26,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 	const ownUserId = useOwnUserId();
 	const {
 		acceptStream,
+		isStartingScreenShare,
 		stopWatchingStream,
 		pendingStreams,
 		remoteUserStreams,
@@ -104,6 +106,10 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 					/>
 				),
 			);
+
+			if (voiceUser.id === ownUserId && isStartingScreenShare && !voiceUser.state.sharingScreen) {
+				cards.push(<StartingScreenShareCard key={`screen-share-${voiceUser.id}`} />);
+			}
 
 			if (voiceUser.state.sharingScreen) {
 				const screenShareCardId = `screen-share-${voiceUser.id}`;
@@ -219,10 +225,12 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 		externalStreams,
 		activeExternalStreams,
 		acceptStream,
+		isStartingScreenShare,
 		stopWatchingStream,
 		pendingStreams,
 		remoteUserStreams,
 		isPinned,
+		ownUserId,
 		pinCard,
 		unpinCard,
 	]);

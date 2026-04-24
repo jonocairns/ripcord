@@ -34,6 +34,7 @@ export interface IServerState {
 	selectedChannelId: number | undefined;
 	lastTextChannelId: number | undefined;
 	currentVoiceChannelId: number | undefined;
+	voiceSessionReconnectNonce: number;
 	messagesMap: TMessagesMap;
 	users: TJoinedPublicUser[];
 	roles: TJoinedRole[];
@@ -43,12 +44,14 @@ export interface IServerState {
 	voiceMap: TVoiceMap;
 	externalStreamsMap: TExternalStreamsMap;
 	ownVoiceDefaults: TVoiceUserState;
+	ownOptimisticStateExpiresAt: number | undefined;
 	pinnedCard: TPinnedCard | undefined;
 	channelPermissions: TChannelUserPermissionsMap;
 	readStatesMap: {
 		[channelId: number]: number | undefined;
 	};
 	pluginCommands: TCommandsMapByPlugin;
+	screenShareWatchers: Record<number, true>;
 }
 
 export type TInitialServerData = {
@@ -95,6 +98,7 @@ type TServerStore = IServerState & {
 	removeChannel: (payload: { channelId: number }) => void;
 	setSelectedChannelId: (channelId: number | undefined) => void;
 	setCurrentVoiceChannelId: (channelId: number | undefined) => void;
+	bumpVoiceSessionReconnectNonce: () => void;
 	setChannelPermissions: (channelPermissions: TChannelUserPermissionsMap) => void;
 	setChannelReadState: (payload: { channelId: number; count: number | undefined }) => void;
 	setEmojis: (emojis: TJoinedEmoji[]) => void;
@@ -120,6 +124,8 @@ type TServerStore = IServerState & {
 	setPluginCommands: (pluginCommands: TCommandsMapByPlugin) => void;
 	addPluginCommand: (command: TCommandInfo) => void;
 	removePluginCommand: (payload: { commandName: string }) => void;
+	addScreenShareWatcher: (watcherId: number) => void;
+	removeScreenShareWatcher: (watcherId: number) => void;
 };
 
 const initialState: IServerState = {
@@ -135,6 +141,7 @@ const initialState: IServerState = {
 	selectedChannelId: undefined,
 	lastTextChannelId: undefined,
 	currentVoiceChannelId: undefined,
+	voiceSessionReconnectNonce: 0,
 	messagesMap: {},
 	users: [],
 	roles: [],
@@ -143,6 +150,7 @@ const initialState: IServerState = {
 	loadingInfo: false,
 	voiceMap: {},
 	externalStreamsMap: {},
+	ownOptimisticStateExpiresAt: undefined,
 	ownVoiceDefaults: {
 		micMuted: false,
 		soundMuted: false,
@@ -153,6 +161,7 @@ const initialState: IServerState = {
 	channelPermissions: {},
 	readStatesMap: {},
 	pluginCommands: {},
+	screenShareWatchers: {},
 };
 
 const updateById = <T extends { id: number }>(items: T[], id: number, value: Partial<T>): T[] | undefined => {
@@ -196,6 +205,12 @@ const findVoiceStateForUser = (voiceMap: TVoiceMap, userId: number): TVoiceUserS
 	return undefined;
 };
 
+// Optimistic own-voice updates are authoritative for this many milliseconds.
+// If the server confirms (via updateVoiceUserState) or a new session starts
+// (setInitialData), the expiry is cleared early. Any reconcile that fires after
+// the window closes yields to the server's authoritative state instead.
+const OPTIMISTIC_VOICE_STATE_TTL_MS = 5_000;
+
 const mergeOwnVoiceDefaults = (
 	currentOwnVoiceDefaults: TVoiceUserState,
 	voiceState: Partial<TVoiceUserState>,
@@ -205,6 +220,18 @@ const mergeOwnVoiceDefaults = (
 	webcamEnabled: false,
 	sharingScreen: false,
 });
+
+const voiceStateUpdateMatchesCurrentState = (
+	currentVoiceState: TVoiceUserState,
+	newState: Partial<TVoiceUserState>,
+) => {
+	return (
+		(newState.micMuted === undefined || newState.micMuted === currentVoiceState.micMuted) &&
+		(newState.soundMuted === undefined || newState.soundMuted === currentVoiceState.soundMuted) &&
+		(newState.webcamEnabled === undefined || newState.webcamEnabled === currentVoiceState.webcamEnabled) &&
+		(newState.sharingScreen === undefined || newState.sharingScreen === currentVoiceState.sharingScreen)
+	);
+};
 
 export const useServerStore = create<TServerStore>((set, get) => ({
 	...initialState,
@@ -259,6 +286,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			ownVoiceDefaults: ownVoiceState
 				? mergeOwnVoiceDefaults(get().ownVoiceDefaults, ownVoiceState)
 				: get().ownVoiceDefaults,
+			// A new server session baseline supersedes any pending optimistic state.
+			// Clearing here prevents a stale TTL (e.g. from leave-cleanup) from
+			// shielding the own user from server-authoritative changes on rejoin.
+			ownOptimisticStateExpiresAt: undefined,
+			screenShareWatchers: {},
 		});
 	},
 	addMessages: ({ channelId, messages, opts }) => {
@@ -425,6 +457,9 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 	setCurrentVoiceChannelId: (channelId) => {
 		set({ currentVoiceChannelId: channelId });
 	},
+	bumpVoiceSessionReconnectNonce: () => {
+		set((state) => ({ voiceSessionReconnectNonce: state.voiceSessionReconnectNonce + 1 }));
+	},
 	setChannelPermissions: (channelPermissions) => {
 		set({ channelPermissions });
 	},
@@ -544,10 +579,19 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			return;
 		}
 
-		const nextVoiceState = {
-			...currentVoiceState,
-			...newState,
-		};
+		const isOwnUser = storeState.ownUserId === userId;
+		const isOptimisticStatePending =
+			isOwnUser &&
+			storeState.ownOptimisticStateExpiresAt !== undefined &&
+			Date.now() < storeState.ownOptimisticStateExpiresAt;
+		const shouldPreserveOwnOptimisticState =
+			isOptimisticStatePending && !voiceStateUpdateMatchesCurrentState(currentVoiceState, newState);
+		const nextVoiceState = shouldPreserveOwnOptimisticState
+			? currentVoiceState
+			: {
+					...currentVoiceState,
+					...newState,
+				};
 
 		set({
 			voiceMap: {
@@ -561,25 +605,35 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 				},
 			},
 			// Server updates remain authoritative for own-user preferences too.
-			ownVoiceDefaults:
-				storeState.ownUserId === userId
-					? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, nextVoiceState)
-					: storeState.ownVoiceDefaults,
+			ownVoiceDefaults: isOwnUser
+				? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, nextVoiceState)
+				: storeState.ownVoiceDefaults,
+			// Matching server confirmation clears the optimistic-pending window.
+			...(isOwnUser && !shouldPreserveOwnOptimisticState ? { ownOptimisticStateExpiresAt: undefined } : undefined),
+			...(isOwnUser && !shouldPreserveOwnOptimisticState && newState.sharingScreen === false
+				? { screenShareWatchers: {} }
+				: undefined),
 		});
 	},
 	reconcileVoiceChannelUsers: ({ channelId, users }) => {
 		const storeState = get();
-		const { ownUserId } = storeState;
+		const { ownUserId, ownOptimisticStateExpiresAt } = storeState;
 		const existingChannelState = storeState.voiceMap[channelId];
 
 		// Replace the channel user list with the server's authoritative snapshot.
-		// Preserve the own user's live state since it may carry optimistic updates
-		// that haven't been confirmed by the server yet.
+		// For the own user, preserve local state only while an optimistic update is
+		// still within its pending window (i.e. the TRPC call hasn't been confirmed
+		// yet). Once the TTL expires — or the server has already confirmed via
+		// updateVoiceUserState / setInitialData — server state wins. This ensures
+		// admin mutes and permission changes applied during a disconnect are not
+		// silently discarded on rejoin.
+		const isOptimisticStatePending =
+			ownOptimisticStateExpiresAt !== undefined && Date.now() < ownOptimisticStateExpiresAt;
 		const newUsers: Record<number, TVoiceUserState> = {};
 
 		for (const { userId, state } of users) {
 			const existingState = existingChannelState?.users[userId];
-			newUsers[userId] = userId === ownUserId && existingState ? existingState : state;
+			newUsers[userId] = userId === ownUserId && existingState && isOptimisticStatePending ? existingState : state;
 		}
 
 		set({
@@ -590,6 +644,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					users: newUsers,
 				},
 			},
+			// If the TTL had already elapsed, clear the stale sentinel so it doesn't
+			// linger in the store until the next setInitialData or confirmation.
+			...(!isOptimisticStatePending && ownOptimisticStateExpiresAt !== undefined
+				? { ownOptimisticStateExpiresAt: undefined }
+				: undefined),
 		});
 	},
 	updateOwnVoiceState: (newState) => {
@@ -599,6 +658,9 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		const currentChannelState = ownChannelId !== undefined ? storeState.voiceMap[ownChannelId] : undefined;
 		const currentOwnVoiceState =
 			currentChannelState && ownUserId !== undefined ? currentChannelState.users[ownUserId] : undefined;
+
+		const nextExpiresAt = Date.now() + OPTIMISTIC_VOICE_STATE_TTL_MS;
+		const resetScreenShareWatchers = newState.sharingScreen !== undefined ? { screenShareWatchers: {} } : undefined;
 
 		if (ownChannelId !== undefined && currentChannelState && ownUserId !== undefined && currentOwnVoiceState) {
 			set({
@@ -618,12 +680,16 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 				// When already in voice, optimistic local toggles patch the live own-user
 				// entry directly and also persist the off-channel defaults.
 				ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
+				ownOptimisticStateExpiresAt: nextExpiresAt,
+				...resetScreenShareWatchers,
 			});
 			return;
 		}
 
 		set({
 			ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
+			ownOptimisticStateExpiresAt: nextExpiresAt,
+			...resetScreenShareWatchers,
 		});
 	},
 	setPinnedCard: (pinnedCard) => {
@@ -710,5 +776,32 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({
 			pluginCommands: nextPluginCommands,
 		});
+	},
+	addScreenShareWatcher: (watcherId) => {
+		const screenShareWatchers = get().screenShareWatchers;
+
+		if (screenShareWatchers[watcherId]) {
+			return;
+		}
+
+		set({
+			screenShareWatchers: {
+				...screenShareWatchers,
+				[watcherId]: true,
+			},
+		});
+	},
+	removeScreenShareWatcher: (watcherId) => {
+		const screenShareWatchers = get().screenShareWatchers;
+
+		if (!screenShareWatchers[watcherId]) {
+			return;
+		}
+
+		const nextScreenShareWatchers = { ...screenShareWatchers };
+
+		delete nextScreenShareWatchers[watcherId];
+
+		set({ screenShareWatchers: nextScreenShareWatchers });
 	},
 }));

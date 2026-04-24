@@ -1,41 +1,81 @@
 import { describe, expect, it } from 'bun:test';
 import { ScreenAudioMode } from '@/runtime/types';
-import { getEffectiveScreenShareAudioMode, resolveAppAudioTargetBehavior } from '../resolve-app-audio-target';
+import {
+	getDefaultScreenShareIncludeAudio,
+	getEffectiveScreenShareAudioMode,
+	resolveAppAudioTargetBehavior,
+} from '../resolve-app-audio-target';
+
+describe('getDefaultScreenShareIncludeAudio', () => {
+	it('defaults to on for shared-audio modes', () => {
+		expect(getDefaultScreenShareIncludeAudio(ScreenAudioMode.SYSTEM)).toBe(true);
+		expect(getDefaultScreenShareIncludeAudio(ScreenAudioMode.APP)).toBe(true);
+	});
+
+	it('defaults to off for no-audio mode', () => {
+		expect(getDefaultScreenShareIncludeAudio(ScreenAudioMode.NONE)).toBe(false);
+	});
+});
 
 describe('getEffectiveScreenShareAudioMode', () => {
-	it('forces per-app audio for window shares when supported', () => {
+	it('uses per-app audio for window shares when supported', () => {
 		expect(
 			getEffectiveScreenShareAudioMode({
-				requestedAudioMode: ScreenAudioMode.SYSTEM,
+				includeAudio: true,
+				systemAudioSupported: true,
 				perAppAudioSupported: true,
 				sourceKind: 'window',
 			}),
 		).toBe(ScreenAudioMode.APP);
 	});
 
-	it('preserves the requested mode when per-app audio is unsupported', () => {
+	it('falls back to system audio for window shares when per-app audio is unsupported', () => {
 		expect(
 			getEffectiveScreenShareAudioMode({
-				requestedAudioMode: ScreenAudioMode.SYSTEM,
+				includeAudio: true,
+				systemAudioSupported: true,
 				perAppAudioSupported: false,
 				sourceKind: 'window',
 			}),
 		).toBe(ScreenAudioMode.SYSTEM);
 	});
 
-	it('preserves the requested mode for display shares', () => {
+	it('uses system audio for display shares when enabled', () => {
 		expect(
 			getEffectiveScreenShareAudioMode({
-				requestedAudioMode: ScreenAudioMode.SYSTEM,
+				includeAudio: true,
+				systemAudioSupported: true,
 				perAppAudioSupported: true,
 				sourceKind: 'screen',
 			}),
 		).toBe(ScreenAudioMode.SYSTEM);
 	});
+
+	it('disables shared audio when the toggle is off', () => {
+		expect(
+			getEffectiveScreenShareAudioMode({
+				includeAudio: false,
+				systemAudioSupported: true,
+				perAppAudioSupported: true,
+				sourceKind: 'window',
+			}),
+		).toBe(ScreenAudioMode.NONE);
+	});
+
+	it('falls back to none when no audio capture path is supported', () => {
+		expect(
+			getEffectiveScreenShareAudioMode({
+				includeAudio: true,
+				systemAudioSupported: false,
+				perAppAudioSupported: false,
+				sourceKind: 'screen',
+			}),
+		).toBe(ScreenAudioMode.NONE);
+	});
 });
 
 describe('resolveAppAudioTargetBehavior', () => {
-	it('requires manual target for screen shares in app mode', () => {
+	it('skips target resolution for screen shares in app mode', () => {
 		const result = resolveAppAudioTargetBehavior({
 			audioMode: ScreenAudioMode.APP,
 			perAppAudioSupported: true,
@@ -45,8 +85,8 @@ describe('resolveAppAudioTargetBehavior', () => {
 			requiresManualSelection: undefined,
 		});
 
-		expect(result.shouldResolveAppAudioTargets).toBe(true);
-		expect(result.requiresManualAppAudioTarget).toBe(true);
+		expect(result.shouldResolveAppAudioTargets).toBe(false);
+		expect(result.requiresManualAppAudioTarget).toBe(false);
 		expect(result.shouldAutoSelectSuggestedTarget).toBe(false);
 		expect(result.allowsImplicitFallbackWithoutTarget).toBe(false);
 	});

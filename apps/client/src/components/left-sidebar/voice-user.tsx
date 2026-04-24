@@ -7,11 +7,10 @@ import type { TVoiceUser } from '@/features/server/types';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { useVoiceActivity } from '@/features/server/voice/hooks';
 import { cn } from '@/lib/utils';
-import { getSpeakingIndicatorStyle } from '../channel-view/voice/speaking-indicator';
 import { Tooltip } from '../ui/tooltip';
 import { UserPopover } from '../user-popover';
-import { useVoiceChannelNavigation } from './use-voice-channel-navigation';
 import { useVolumeControl } from '../voice-provider/volume-control-context';
+import { useVoiceChannelNavigation } from './use-voice-channel-navigation';
 
 type TVoiceUserProps = {
 	channelId: number;
@@ -19,7 +18,7 @@ type TVoiceUserProps = {
 };
 
 const VoiceUser = memo(({ channelId, user }: TVoiceUserProps) => {
-	const { audioLevel, isSpeaking } = useVoiceActivity(user.id);
+	const { isSpeaking } = useVoiceActivity(user.id);
 	const ownUserId = useOwnUserId();
 	const { openUserStreamStage } = useVoiceChannelNavigation();
 	const { getUserVolumeKey, getVolume, setVolume, toggleMute } = useVolumeControl();
@@ -27,7 +26,6 @@ const VoiceUser = memo(({ channelId, user }: TVoiceUserProps) => {
 	const volumeKey = getUserVolumeKey(user.id);
 	const volume = getVolume(volumeKey);
 	const isMuted = volume === 0;
-	const isActivelySpeaking = !user.state.micMuted && isSpeaking;
 	const handleVolumeChange = useCallback(
 		(values: number[]) => {
 			setVolume(volumeKey, values[0] || 0);
@@ -64,7 +62,7 @@ const VoiceUser = memo(({ channelId, user }: TVoiceUserProps) => {
 		},
 		[channelId, openUserStreamStage, user.id],
 	);
-	const speakingStyle = getSpeakingIndicatorStyle(audioLevel, isActivelySpeaking);
+	const isActivelySpeaking = !user.state.micMuted && isSpeaking;
 	const hasStatusIndicators =
 		user.state.micMuted || user.state.soundMuted || user.state.webcamEnabled || user.state.sharingScreen;
 
@@ -94,13 +92,11 @@ const VoiceUser = memo(({ channelId, user }: TVoiceUserProps) => {
 			}
 		>
 			<div className="flex cursor-pointer items-center gap-3 rounded px-3 py-2 text-sm">
-				<div className="speaking-avatar-shell" style={speakingStyle}>
-					<UserAvatar
-						userId={user.id}
-						className={cn('relative z-[1] h-5 w-5 speaking-avatar-indicator')}
-						showUserPopover={false}
-					/>
-				</div>
+				<UserAvatar
+					userId={user.id}
+					className={cn('h-5 w-5 speaking-ring', isActivelySpeaking && 'is-speaking')}
+					showUserPopover={false}
+				/>
 
 				<span className="flex-1 truncate text-sm text-foreground/80">{user.name}</span>
 

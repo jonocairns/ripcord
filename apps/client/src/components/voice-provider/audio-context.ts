@@ -9,6 +9,10 @@ type TCreateAudioContextWithSampleRateFallbackInput<TAudioContextInstance> = {
 	onFallbackError?: (error: unknown) => void;
 };
 
+const resolveAudioContextClass = () => {
+	return window.AudioContext || window.webkitAudioContext;
+};
+
 const createAudioContextWithSampleRateFallback = <TAudioContextInstance>({
 	AudioContextClass,
 	sampleRate,
@@ -29,4 +33,4 @@ const createAudioContextWithSampleRateFallback = <TAudioContextInstance>({
 	}
 };
 
-export { createAudioContextWithSampleRateFallback };
+export { createAudioContextWithSampleRateFallback, resolveAudioContextClass };

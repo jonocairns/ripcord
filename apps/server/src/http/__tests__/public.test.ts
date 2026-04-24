@@ -151,6 +151,114 @@ describe('/public', () => {
     expect(responseText).toBe(file!.content);
   });
 
+  test('should advertise Accept-Ranges on a 200 response', async () => {
+    const file = filesToCreate[0];
+    expect(file).toBeDefined();
+    if (!file?.messageId) return;
+
+    const dbFile = await getFileByMessageId(file.messageId);
+    expect(dbFile).toBeDefined();
+    if (!dbFile) return;
+
+    const response = await fetch(
+      `${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Accept-Ranges')).toBe('bytes');
+  });
+
+  test('should serve a byte range with 206 Partial Content', async () => {
+    const file = filesToCreate[0];
+    expect(file).toBeDefined();
+    if (!file?.messageId) return;
+
+    const dbFile = await getFileByMessageId(file.messageId);
+    expect(dbFile).toBeDefined();
+    if (!dbFile) return;
+
+    const response = await fetch(
+      `${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`,
+      { headers: { Range: 'bytes=0-4' } }
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get('Content-Range')).toBe(
+      `bytes 0-4/${dbFile.size}`
+    );
+    expect(response.headers.get('Content-Length')).toBe('5');
+    expect(response.headers.get('Accept-Ranges')).toBe('bytes');
+
+    const body = await response.text();
+
+    expect(body).toBe(file.content.slice(0, 5));
+  });
+
+  test('should serve a suffix range with 206 Partial Content', async () => {
+    const file = filesToCreate[0];
+    expect(file).toBeDefined();
+    if (!file?.messageId) return;
+
+    const dbFile = await getFileByMessageId(file.messageId);
+    expect(dbFile).toBeDefined();
+    if (!dbFile) return;
+
+    const response = await fetch(
+      `${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`,
+      { headers: { Range: 'bytes=-5' } }
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get('Content-Length')).toBe('5');
+
+    const body = await response.text();
+
+    expect(body).toBe(file.content.slice(-5));
+  });
+
+  test('should respond to HEAD with headers and no body', async () => {
+    const file = filesToCreate[0];
+    expect(file).toBeDefined();
+    if (!file?.messageId) return;
+
+    const dbFile = await getFileByMessageId(file.messageId);
+    expect(dbFile).toBeDefined();
+    if (!dbFile) return;
+
+    const response = await fetch(
+      `${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`,
+      { method: 'HEAD' }
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Length')).toBe(dbFile.size.toString());
+    expect(response.headers.get('Accept-Ranges')).toBe('bytes');
+
+    const body = await response.text();
+
+    expect(body).toBe('');
+  });
+
+  test('should return 416 when range is outside file bounds', async () => {
+    const file = filesToCreate[0];
+    expect(file).toBeDefined();
+    if (!file?.messageId) return;
+
+    const dbFile = await getFileByMessageId(file.messageId);
+    expect(dbFile).toBeDefined();
+    if (!dbFile) return;
+
+    const response = await fetch(
+      `${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`,
+      { headers: { Range: `bytes=${dbFile.size + 10}-${dbFile.size + 20}` } }
+    );
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get('Content-Range')).toBe(
+      `bytes */${dbFile.size}`
+    );
+  });
+
   test('should return 404 when file not found in database', async () => {
     const response = await fetch(`${testsBaseUrl}/public/nonexistent-file.txt`);
 

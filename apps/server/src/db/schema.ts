@@ -1,6 +1,7 @@
 import {
   type TActivityLogDetailsMap,
-  type TMessageMetadata
+  type TMessageMetadata,
+  type TUserPresenceStatus
 } from '@sharkord/shared';
 import {
   index,
@@ -135,6 +136,10 @@ const users = sqliteTable(
     banReason: text('ban_reason'),
     bannedAt: integer('banned_at'),
     bannerColor: text('banner_color'),
+    presenceStatus: text('presence_status')
+      .$type<TUserPresenceStatus>()
+      .notNull()
+      .default('online'),
     totpSecret: text('totp_secret'),
     totpRecoveryCodes: text('totp_recovery_codes'),
     tokenVersion: integer('token_version').notNull().default(0),

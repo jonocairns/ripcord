@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'bun:test';
-import { normalizeDesktopCapabilities } from '../desktop-capabilities';
+import { describe, expect, it } from 'bun:test';
 import type { TLegacyDesktopCapabilities } from '../desktop-capabilities';
+import { normalizeDesktopCapabilities } from '../desktop-capabilities';
 import type { TDesktopCapabilities } from '../types';
 
 describe('normalizeDesktopCapabilities', () => {

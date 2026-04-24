@@ -2,7 +2,6 @@ import {
   ActivityLogType,
   Permission,
   ServerEvents,
-  UserStatus,
   type TPublicServerSettings
 } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
@@ -89,6 +88,20 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
     ctx.authenticated = true;
     ctx.setWsUserId(ctx.user.id);
 
+    const pendingVoiceReconnectChannelId =
+      ctx.getPendingVoiceReconnectChannelId();
+
+    if (pendingVoiceReconnectChannelId !== undefined) {
+      const pendingVoiceRuntime = VoiceRuntime.findById(
+        pendingVoiceReconnectChannelId
+      );
+
+      if (pendingVoiceRuntime?.getUser(ctx.user.id)) {
+        ctx.currentVoiceChannelId = pendingVoiceRuntime.id;
+        ctx.setWsVoiceChannelId(pendingVoiceRuntime.id);
+      }
+    }
+
     if (ctx.user.mustChangePassword) {
       return {
         categories: [],
@@ -158,7 +171,7 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
 
     ctx.pubsub.publish(ServerEvents.USER_JOIN, {
       ...foundPublicUser,
-      status: UserStatus.ONLINE
+      status: ctx.getStatusById(ctx.user.id)
     });
 
     if (connectionInfo?.ip) {

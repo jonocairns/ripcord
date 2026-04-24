@@ -18,10 +18,12 @@ import type {
 } from 'mediasoup/types';
 import { logger } from '../logger';
 import { eventBus } from '../plugins/event-bus';
+import { invariant } from '../utils/invariant';
 import {
   mediaSoupWorker,
   webRtcServer,
-  webRtcServerListenInfo
+  webRtcServerListenInfo,
+  webRtcServerListenInfos
 } from '../utils/mediasoup';
 import { pubsub } from '../utils/pubsub';
 
@@ -142,6 +144,34 @@ class VoiceRuntime {
     return undefined;
   };
 
+  public static getAll = (): VoiceRuntime[] => {
+    return Array.from(voiceRuntimes.values());
+  };
+
+  public static requireJoinedRuntime = (
+    channelId: number | undefined,
+    userId: number
+  ): VoiceRuntime => {
+    invariant(channelId, {
+      code: 'BAD_REQUEST',
+      message: 'User is not in a voice channel'
+    });
+
+    const runtime = VoiceRuntime.findById(channelId);
+
+    invariant(runtime, {
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Voice runtime not found for this channel'
+    });
+
+    invariant(runtime.getUser(userId), {
+      code: 'BAD_REQUEST',
+      message: 'User is not in a voice channel'
+    });
+
+    return runtime;
+  };
+
   public static getVoiceMap = (): TVoiceMap => {
     const map: TVoiceMap = {};
 
@@ -187,54 +217,12 @@ class VoiceRuntime {
   };
 
   public destroy = async () => {
+    // Closing the router automatically closes all transports, producers, and
+    // consumers attached to it — no need to close them individually.
+    // Assumes all users have already been removed (via removeUser) before this
+    // is called; any remaining open producers will emit VOICE_PRODUCER_CLOSED
+    // as a side effect of the cascade.
     await this.router?.close();
-
-    Object.values(this.consumerTransports).forEach((transport) => {
-      transport.close();
-    });
-
-    Object.values(this.producerTransports).forEach((transport) => {
-      transport.close();
-    });
-
-    Object.values(this.videoProducers).forEach((producer) => {
-      producer.close();
-    });
-
-    Object.values(this.screenProducers).forEach((producer) => {
-      producer.close();
-    });
-
-    Object.values(this.screenAudioProducers).forEach((producer) => {
-      producer.close();
-    });
-
-    Object.values(this.audioProducers).forEach((producer) => {
-      producer.close();
-    });
-
-    Object.values(this.externalStreamsInternal).forEach((stream) => {
-      if (
-        stream.producers.videoProducer &&
-        !stream.producers.videoProducer.closed
-      ) {
-        stream.producers.videoProducer.close();
-      }
-      if (
-        stream.producers.audioProducer &&
-        !stream.producers.audioProducer.closed
-      ) {
-        stream.producers.audioProducer.close();
-      }
-    });
-
-    Object.values(this.consumers).forEach((consumers) => {
-      Object.values(consumers).forEach((remoteConsumers) => {
-        Object.values(remoteConsumers).forEach((consumer) => {
-          consumer?.close();
-        });
-      });
-    });
 
     voiceRuntimes.delete(this.id);
 
@@ -285,6 +273,7 @@ class VoiceRuntime {
     this.removeProducer(userId, StreamKind.AUDIO);
     this.removeProducer(userId, StreamKind.VIDEO);
     this.removeProducer(userId, StreamKind.SCREEN);
+    this.removeProducer(userId, StreamKind.SCREEN_AUDIO);
 
     if (this.consumers[userId]) {
       Object.values(this.consumers[userId]).forEach((remoteConsumers) => {
@@ -375,6 +364,8 @@ class VoiceRuntime {
   };
 
   public createConsumerTransport = async (userId: number) => {
+    this.removeConsumerTransport(userId);
+
     const { transport, params } = await this.createTransport();
 
     this.consumerTransports[userId] = transport;
@@ -394,8 +385,11 @@ class VoiceRuntime {
     });
 
     transport.on('dtlsstatechange', (state) => {
-      if (state === 'failed' || state === 'closed') {
+      if (state === 'failed') {
         this.removeConsumerTransport(userId);
+        pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
+          userId
+        });
       }
     });
 
@@ -415,6 +409,8 @@ class VoiceRuntime {
   };
 
   public createProducerTransport = async (userId: number) => {
+    this.removeProducerTransport(userId);
+
     const { params, transport } = await this.createTransport();
 
     this.producerTransports[userId] = transport;
@@ -425,11 +421,15 @@ class VoiceRuntime {
       this.removeProducer(userId, StreamKind.AUDIO);
       this.removeProducer(userId, StreamKind.VIDEO);
       this.removeProducer(userId, StreamKind.SCREEN);
+      this.removeProducer(userId, StreamKind.SCREEN_AUDIO);
     });
 
     transport.on('dtlsstatechange', (state) => {
-      if (state === 'failed' || state === 'closed') {
+      if (state === 'failed') {
         this.removeProducerTransport(userId);
+        pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
+          userId
+        });
       }
     });
 
@@ -492,6 +492,12 @@ class VoiceRuntime {
       } else if (type === StreamKind.SCREEN_AUDIO) {
         delete this.screenAudioProducers[userId];
       }
+
+      pubsub.publishForChannel(this.id, ServerEvents.VOICE_PRODUCER_CLOSED, {
+        channelId: this.id,
+        remoteId: userId,
+        kind: type
+      });
     });
   };
 
@@ -518,16 +524,8 @@ class VoiceRuntime {
     if (!producer) return;
 
     producer.close();
-
-    if (type === StreamKind.VIDEO) {
-      delete this.videoProducers[userId];
-    } else if (type === StreamKind.AUDIO) {
-      delete this.audioProducers[userId];
-    } else if (type === StreamKind.SCREEN) {
-      delete this.screenProducers[userId];
-    } else if (type === StreamKind.SCREEN_AUDIO) {
-      delete this.screenAudioProducers[userId];
-    }
+    // Deletion from the map and VOICE_PRODUCER_CLOSED publish are handled
+    // by the producer.observer.on('close') registered in addProducer.
   }
 
   public addConsumer = (
@@ -898,7 +896,8 @@ class VoiceRuntime {
   public static getListenInfo = () => {
     return {
       ip: webRtcServerListenInfo.ip,
-      announcedAddress: webRtcServerListenInfo.announcedAddress
+      announcedAddress: webRtcServerListenInfo.announcedAddress,
+      listenInfos: webRtcServerListenInfos
     };
   };
 }

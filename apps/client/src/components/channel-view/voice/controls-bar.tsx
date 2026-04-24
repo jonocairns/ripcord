@@ -27,7 +27,7 @@ type TControlsBarProps = {
 };
 
 const ControlsBar = memo(({ channelId, onExitStage }: TControlsBarProps) => {
-	const { toggleMic, toggleSound, toggleWebcam, toggleScreenShare } = useVoice();
+	const { isStartingScreenShare, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } = useVoice();
 	const ownVoiceState = useOwnVoiceState();
 	const channelCan = useChannelCan(channelId);
 
@@ -86,6 +86,8 @@ const ControlsBar = memo(({ channelId, onExitStage }: TControlsBarProps) => {
 					disabledIcon={Monitor}
 					enabledClassName="border-sky-400/20 bg-sky-500/14 text-sky-200 hover:!border-sky-400/20 hover:!bg-sky-500/14 hover:!text-sky-200"
 					disabledClassName="text-slate-300 hover:!border-white/10 hover:!bg-white/7 hover:!text-white"
+					loading={isStartingScreenShare}
+					loadingLabel="Starting Screen Share"
 					onClick={toggleScreenShare}
 					disabled={!permissions.canShareScreen}
 				/>

@@ -5,14 +5,45 @@ import { applyEnvOverrides } from './helpers/apply-env-overrides';
 import { deepMerge } from './helpers/deep-merge';
 import { ensureServerDirs } from './helpers/ensure-server-dirs';
 import { getErrorMessage } from './helpers/get-error-message';
-import { getPrivateIp, getPublicIp } from './helpers/network';
+import { getPrivateIps, getPublicIps } from './helpers/network';
 import { CONFIG_INI_PATH } from './helpers/paths';
 import { IS_DEVELOPMENT } from './utils/env';
 
-const [SERVER_PUBLIC_IP, SERVER_PRIVATE_IP] = await Promise.all([
-  getPublicIp(),
-  getPrivateIp()
+const [SERVER_PUBLIC_IPS, SERVER_PRIVATE_IPS] = await Promise.all([
+  getPublicIps(),
+  getPrivateIps()
 ]);
+
+const zWebRtcFamilyConfig = z.object({
+  enabled: z.coerce.boolean(),
+  bindAddress: z.string(),
+  announcedAddress: z.string()
+});
+
+const zWebRtcConfig = z
+  .object({
+    port: z.coerce.number().int().positive(),
+    preferredFamily: z.enum(['ipv4', 'ipv6']),
+    ipv4: zWebRtcFamilyConfig,
+    ipv6: zWebRtcFamilyConfig,
+    announcedAddress: z.string().optional()
+  })
+  .transform((webRtc) => {
+    const legacyAnnouncedAddress = webRtc.announcedAddress ?? '';
+
+    return {
+      port: webRtc.port,
+      preferredFamily: webRtc.preferredFamily,
+      ipv4: {
+        ...webRtc.ipv4,
+        announcedAddress: webRtc.ipv4.announcedAddress || legacyAnnouncedAddress
+      },
+      ipv6: {
+        ...webRtc.ipv6,
+        announcedAddress: webRtc.ipv6.announcedAddress || legacyAnnouncedAddress
+      }
+    };
+  });
 
 const zConfig = z.object({
   server: z.object({
@@ -25,10 +56,7 @@ const zConfig = z.object({
     serverErrorReportingSentryDsn: z.string(),
     clientErrorReportingIgnoreErrors: z.string()
   }),
-  webRtc: z.object({
-    port: z.coerce.number().int().positive(),
-    announcedAddress: z.string()
-  }),
+  webRtc: zWebRtcConfig,
   rateLimiters: z.object({
     sendAndEditMessage: z.object({
       maxRequests: z.coerce.number().int().positive(),
@@ -86,7 +114,17 @@ const defaultConfig: TConfig = {
   },
   webRtc: {
     port: 40000,
-    announcedAddress: ''
+    preferredFamily: 'ipv4',
+    ipv4: {
+      enabled: true,
+      bindAddress: '0.0.0.0',
+      announcedAddress: ''
+    },
+    ipv6: {
+      enabled: false,
+      bindAddress: '::',
+      announcedAddress: ''
+    }
   },
   rateLimiters: {
     sendAndEditMessage: {
@@ -147,8 +185,35 @@ config = applyEnvOverrides(config, {
   'server.autoupdate': 'SHARKORD_AUTOUPDATE',
   'server.trustProxy': 'SHARKORD_TRUST_PROXY',
   'webRtc.port': 'SHARKORD_WEBRTC_PORT',
-  'webRtc.announcedAddress': 'SHARKORD_WEBRTC_ANNOUNCED_ADDRESS'
+  'webRtc.preferredFamily': 'SHARKORD_WEBRTC_PREFERRED_FAMILY',
+  'webRtc.ipv4.enabled': 'SHARKORD_WEBRTC_IPV4_ENABLED',
+  'webRtc.ipv4.bindAddress': 'SHARKORD_WEBRTC_IPV4_BIND_ADDRESS',
+  'webRtc.ipv4.announcedAddress': 'SHARKORD_WEBRTC_IPV4_ANNOUNCED_ADDRESS',
+  'webRtc.ipv6.enabled': 'SHARKORD_WEBRTC_IPV6_ENABLED',
+  'webRtc.ipv6.bindAddress': 'SHARKORD_WEBRTC_IPV6_BIND_ADDRESS',
+  'webRtc.ipv6.announcedAddress': 'SHARKORD_WEBRTC_IPV6_ANNOUNCED_ADDRESS'
 });
+
+const legacyAnnouncedAddress = process.env.SHARKORD_WEBRTC_ANNOUNCED_ADDRESS;
+
+if (legacyAnnouncedAddress) {
+  config = {
+    ...config,
+    webRtc: {
+      ...config.webRtc,
+      ipv4: {
+        ...config.webRtc.ipv4,
+        announcedAddress:
+          config.webRtc.ipv4.announcedAddress || legacyAnnouncedAddress
+      },
+      ipv6: {
+        ...config.webRtc.ipv6,
+        announcedAddress:
+          config.webRtc.ipv6.announcedAddress || legacyAnnouncedAddress
+      }
+    }
+  };
+}
 
 // Applied separately: applyEnvOverrides skips falsy values, so an empty-string
 // env var cannot disable a DSN already set in the INI — handle it manually.
@@ -192,4 +257,4 @@ config = {
 
 config = Object.freeze(config);
 
-export { config, SERVER_PRIVATE_IP, SERVER_PUBLIC_IP };
+export { config, SERVER_PRIVATE_IPS, SERVER_PUBLIC_IPS };

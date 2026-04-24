@@ -3,12 +3,15 @@ import type { RtpCapabilities } from 'mediasoup-client/types';
 import { useEffect } from 'react';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useOwnUserId } from '@/features/server/users/hooks';
+import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordinator';
 import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
+import { shouldSyncExistingProducersAfterVoiceEventSubscriptionStart } from './voice-event-sync-policy';
 
 type TEvents = {
 	consume: (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities) => Promise<void>;
+	syncExistingProducers: (rtpCapabilities: RtpCapabilities) => Promise<void>;
 	addPendingStream: (remoteId: number, kind: StreamKind) => void;
 	removePendingStream: (remoteId: number, kind: StreamKind) => void;
 	removeRemoteUserStream: (userId: number, kind: TRemoteUserStreamKinds) => void;
@@ -16,11 +19,14 @@ type TEvents = {
 	removeExternalStream: (streamId: number) => void;
 	clearRemoteUserStreamsForUser: (userId: number) => void;
 	clearPendingStreamsForUser: (userId: number) => void;
+	onTransportFailure: () => void;
 	rtpCapabilities: RtpCapabilities | null;
+	reconnectNonce: number;
 };
 
 const useVoiceEvents = ({
 	consume,
+	syncExistingProducers,
 	addPendingStream,
 	removePendingStream,
 	removeRemoteUserStream,
@@ -28,14 +34,20 @@ const useVoiceEvents = ({
 	removeExternalStream,
 	clearRemoteUserStreamsForUser,
 	clearPendingStreamsForUser,
+	onTransportFailure,
 	rtpCapabilities,
+	reconnectNonce,
 }: TEvents) => {
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const ownUserId = useOwnUserId();
+	const reconnectingSince = useVoiceReconnectStore((state) => state.reconnectingSince);
 
 	useEffect(() => {
-		if (!currentVoiceChannelId) {
-			logVoice('Voice events not initialized - missing channelId');
+		// Force a fresh subscription set after WS reconnect even when the voice
+		// channel id itself did not change.
+		void reconnectNonce;
+
+		if (currentVoiceChannelId === undefined) {
 			return;
 		}
 
@@ -161,6 +173,41 @@ const useVoiceEvents = ({
 			},
 		});
 
+		const onVoiceTransportFailedSub = trpc.voice.onTransportFailed.subscribe(undefined, {
+			onData: () => {
+				if (isCleaningUp) return;
+
+				logVoice('Server-side transport failure event received, triggering recovery');
+				onTransportFailure();
+			},
+			onError: (error) => {
+				logVoice('onVoiceTransportFailed subscription error', { error });
+			},
+		});
+
+		if (rtpCapabilities && shouldSyncExistingProducersAfterVoiceEventSubscriptionStart(reconnectingSince)) {
+			logVoice('Syncing existing producers after voice event subscription start', {
+				channelId: currentVoiceChannelId,
+			});
+
+			void syncExistingProducers(rtpCapabilities).catch((error) => {
+				if (isCleaningUp) {
+					return;
+				}
+
+				logVoice('Failed to sync existing producers after voice event subscription start', {
+					error,
+					channelId: currentVoiceChannelId,
+				});
+			});
+		}
+
+		if (rtpCapabilities && !shouldSyncExistingProducersAfterVoiceEventSubscriptionStart(reconnectingSince)) {
+			logVoice('Skipping producer sync after voice event subscription start during reconnect recovery', {
+				channelId: currentVoiceChannelId,
+			});
+		}
+
 		return () => {
 			logVoice('Cleaning up voice events');
 
@@ -170,11 +217,13 @@ const useVoiceEvents = ({
 			onVoiceProducerClosedSub.unsubscribe();
 			onVoiceUserLeaveSub.unsubscribe();
 			onVoiceRemoveExternalStreamSub.unsubscribe();
+			onVoiceTransportFailedSub.unsubscribe();
 		};
 	}, [
 		currentVoiceChannelId,
 		ownUserId,
 		consume,
+		syncExistingProducers,
 		addPendingStream,
 		removePendingStream,
 		removeRemoteUserStream,
@@ -182,7 +231,10 @@ const useVoiceEvents = ({
 		removeExternalStream,
 		clearRemoteUserStreamsForUser,
 		clearPendingStreamsForUser,
+		onTransportFailure,
 		rtpCapabilities,
+		reconnectingSince,
+		reconnectNonce,
 	]);
 };
 

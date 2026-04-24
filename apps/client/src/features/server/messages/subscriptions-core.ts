@@ -70,5 +70,5 @@ const subscribeToMessageEvents = (trpc: TMessagesSubscriptionsClient, handlers: 
 	};
 };
 
-export { subscribeToMessageEvents };
 export type { TMessageSubscriptionHandlers, TMessagesSubscriptionsClient };
+export { subscribeToMessageEvents };
