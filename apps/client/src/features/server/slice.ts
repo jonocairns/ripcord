@@ -242,6 +242,35 @@ const mergeMessages = (existing: TJoinedMessage[], incoming: TJoinedMessage[], p
 	return [...existing, ...sortedIncoming].sort((a, b) => a.createdAt - b.createdAt);
 };
 
+const countProtectedMessagePrefix = (
+	merged: TJoinedMessage[],
+	existing: TJoinedMessage[],
+	incoming: TJoinedMessage[],
+	protectedPrefixCount: number,
+): number => {
+	const protectedIds = new Set<number>();
+
+	for (const message of existing.slice(0, protectedPrefixCount)) {
+		protectedIds.add(message.id);
+	}
+
+	for (const message of incoming) {
+		protectedIds.add(message.id);
+	}
+
+	let count = 0;
+
+	for (const message of merged) {
+		if (!protectedIds.has(message.id)) {
+			break;
+		}
+
+		count += 1;
+	}
+
+	return count;
+};
+
 const setProtectedMessagePrefixCount = (
 	counts: Record<number, number>,
 	channelId: number,
@@ -377,7 +406,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		const prepend = opts?.prepend ?? false;
 		let merged = mergeMessages(existing, filtered, prepend);
 		const nextProtectedPrefixCount = prepend
-			? Math.min(merged.length, protectedPrefixCount + filtered.length)
+			? countProtectedMessagePrefix(merged, existing, filtered, protectedPrefixCount)
 			: protectedPrefixCount;
 
 		if (!prepend && merged.length > MAX_MESSAGES_PER_CHANNEL) {

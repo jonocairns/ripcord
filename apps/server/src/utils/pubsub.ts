@@ -138,9 +138,8 @@ class PubSub {
     // Listener counts grow with concurrent connections * subscribed topics, so
     // any small fixed cap (Node's default is 10; we previously used 50) trips
     // MaxListenersExceededWarning under normal scale even though nothing is
-    // leaking. 0 disables the cap; we manage our own per-user/per-channel
-    // listener maps below if leak tracking is needed.
-    this.ee.setMaxListeners(0);
+    // leaking. Keep a high finite cap so genuinely runaway listeners still warn.
+    this.ee.setMaxListeners(1000);
   }
 
   public publish<TTopic extends keyof Events>(

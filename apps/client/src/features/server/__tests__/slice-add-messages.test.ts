@@ -74,6 +74,24 @@ describe('useServerStore.addMessages', () => {
 		expect(result?.map((m) => m.id)).toEqual([1, 2, 3]);
 	});
 
+	it('only protects the leading loaded-history prefix when a prepend batch interleaves', () => {
+		const store = useServerStore.getState();
+
+		store.addMessages({
+			channelId: 1,
+			messages: [createMessage(2, 200), createMessage(4, 400)],
+		});
+		store.addMessages({
+			channelId: 1,
+			messages: [createMessage(1, 100), createMessage(3, 300)],
+			opts: { prepend: true },
+		});
+
+		const state = useServerStore.getState();
+		expect(state.messagesMap[1]?.map((m) => m.id)).toEqual([1, 2, 3, 4]);
+		expect(state.protectedMessagePrefixCounts[1]).toBe(1);
+	});
+
 	it('skips duplicates by id', () => {
 		const store = useServerStore.getState();
 
