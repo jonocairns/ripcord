@@ -1,5 +1,12 @@
 type TReconnectBufferedAction = () => void;
 
+// Hard cap on the number of buffered events. A flaky connection plus busy
+// subscriptions could otherwise grow the queue without bound across repeated
+// failed reconnect attempts (events are retained on pause). When exceeded, we
+// drop the queue and stop buffering so callers fall back to applying events
+// directly; the snapshot will still land and re-establish baseline state.
+const MAX_BUFFERED_RECONNECT_EVENTS = 5000;
+
 let isBufferingReconnectSnapshotEvents = false;
 let bufferedReconnectSnapshotActions: TReconnectBufferedAction[] = [];
 
@@ -14,6 +21,15 @@ const startReconnectSnapshotEventBuffer = (): void => {
 
 const bufferReconnectSnapshotEvent = (action: TReconnectBufferedAction): boolean => {
 	if (!isBufferingReconnectSnapshotEvents) {
+		return false;
+	}
+
+	if (bufferedReconnectSnapshotActions.length >= MAX_BUFFERED_RECONNECT_EVENTS) {
+		console.warn(
+			`Reconnect snapshot buffer exceeded ${MAX_BUFFERED_RECONNECT_EVENTS} events; dropping queue and disabling buffering`,
+		);
+		isBufferingReconnectSnapshotEvents = false;
+		bufferedReconnectSnapshotActions = [];
 		return false;
 	}
 
