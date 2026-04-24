@@ -1,22 +1,31 @@
 const IP_CACHE_TTL = 1000 * 60 * 60; // 1 hour
 
 class IpInfoCache {
-  private cache: Record<string, unknown>;
-
-  constructor() {
-    this.cache = {};
-  }
+  private cache = new Map<string, unknown>();
+  private timers = new Map<string, NodeJS.Timeout>();
 
   get<T = unknown>(ip: string): T | undefined {
-    return this.cache[ip] as T | undefined;
+    return this.cache.get(ip) as T | undefined;
   }
 
   set(ip: string, data: unknown) {
-    this.cache[ip] = data;
+    this.cache.set(ip, data);
 
-    setTimeout(() => {
-      delete this.cache[ip];
-    }, IP_CACHE_TTL);
+    // Cancel any pending eviction so a new write extends the TTL instead of
+    // letting the earlier timer expire the fresh entry early.
+    const existingTimer = this.timers.get(ip);
+
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    this.timers.set(
+      ip,
+      setTimeout(() => {
+        this.cache.delete(ip);
+        this.timers.delete(ip);
+      }, IP_CACHE_TTL)
+    );
   }
 }
 
