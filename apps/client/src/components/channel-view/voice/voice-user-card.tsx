@@ -12,7 +12,6 @@ import { cn } from '@/lib/utils';
 import { CardControls } from './card-controls';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
-import { getSpeakingIndicatorStyle } from './speaking-indicator';
 import { VoiceSurface } from './voice-surface';
 import { VolumeButton } from './volume-button';
 
@@ -41,7 +40,7 @@ const VoiceUserCard = memo(
 		const { videoRef, hasVideoStream } = useVoiceRefs({
 			remoteId: userId,
 		});
-		const { audioLevel, isSpeaking } = useVoiceActivity(userId);
+		const { isSpeaking } = useVoiceActivity(userId);
 		const { getUserVolumeKey } = useVolumeControl();
 		const { devices } = useDevices();
 		const ownUserId = useOwnUserId();
@@ -58,17 +57,16 @@ const VoiceUserCard = memo(
 		}, [isPinned, onPin, onUnpin]);
 
 		const isActivelySpeaking = !voiceUser.state.micMuted && isSpeaking;
-		const speakingStyle = getSpeakingIndicatorStyle(audioLevel, isActivelySpeaking);
 
 		return (
 			<VoiceSurface
 				className={cn(
-					'relative group speaking-card-indicator',
+					'relative group speaking-ring',
 					'flex items-center justify-center',
 					'w-full h-full',
+					isActivelySpeaking && 'is-speaking',
 					className,
 				)}
-				style={speakingStyle}
 			>
 				<CardControls>
 					{!isOwnUser && hasVideoStream && onStopWatching && (
@@ -97,12 +95,6 @@ const VoiceUserCard = memo(
 						fallbackClassName="text-2xl md:text-3xl lg:text-4xl"
 					/>
 				)}
-
-				<div
-					aria-hidden="true"
-					className="pointer-events-none absolute inset-0 z-[1] rounded-[inherit] speaking-card-overlay"
-					style={speakingStyle}
-				/>
 
 				<div className="absolute bottom-0 left-0 right-0 p-3 z-10 opacity-0 transition-opacity group-hover:opacity-100">
 					<div className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-black/45 px-2.5 py-1.5 shadow-sm backdrop-blur-md">

@@ -110,12 +110,12 @@ const clearAuthToken = (): void => {
 export {
 	clearAuthToken,
 	getAuthToken,
-	migrateStorage,
 	getLocalStorageItem,
 	getLocalStorageItemAsJSON,
 	getRefreshToken,
 	getSessionStorageItem,
 	hydrateSessionToken,
+	migrateStorage,
 	removeLocalStorageItem,
 	removeSessionStorageItem,
 	setAuthToken,

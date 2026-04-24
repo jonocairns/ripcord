@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD `presence_status` text DEFAULT 'online' NOT NULL;

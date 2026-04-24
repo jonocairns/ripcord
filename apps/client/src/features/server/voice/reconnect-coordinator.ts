@@ -182,6 +182,7 @@ const resolveVoiceRecoveryAction = (): TVoiceRecoveryAction => {
 	return { kind: 'session-missing', channelId };
 };
 
+export type { TClearReason, TPendingVoiceReconnect, TVoiceReconnectSuppression, TVoiceRecoveryAction };
 export {
 	captureVoiceReconnectIntentForCurrentSession,
 	clearVoiceReconnectRecovery,
@@ -193,5 +194,3 @@ export {
 	useVoiceReconnectStore,
 	VOICE_RECONNECT_INTENT_TTL_MS,
 };
-
-export type { TClearReason, TPendingVoiceReconnect, TVoiceRecoveryAction, TVoiceReconnectSuppression };

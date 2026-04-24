@@ -2,7 +2,6 @@ import {
   ActivityLogType,
   Permission,
   ServerEvents,
-  UserStatus,
   type TPublicServerSettings
 } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
@@ -172,7 +171,7 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
 
     ctx.pubsub.publish(ServerEvents.USER_JOIN, {
       ...foundPublicUser,
-      status: UserStatus.ONLINE
+      status: ctx.getStatusById(ctx.user.id)
     });
 
     if (connectionInfo?.ip) {

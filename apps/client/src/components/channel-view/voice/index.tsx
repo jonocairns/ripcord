@@ -1,8 +1,8 @@
 import { StreamKind } from '@sharkord/shared';
 import { memo, useCallback, useMemo } from 'react';
-import { useVoiceUsersByChannelId } from '@/features/server/hooks';
 import { setSelectedChannelId } from '@/features/server/channels/actions';
 import { useLastTextChannelId } from '@/features/server/channels/hooks';
+import { useVoiceUsersByChannelId } from '@/features/server/hooks';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { useVoice, useVoiceChannelExternalStreamsList } from '@/features/server/voice/hooks';
 import { getPendingStreamKey } from '../../voice-provider/hooks/use-pending-streams';

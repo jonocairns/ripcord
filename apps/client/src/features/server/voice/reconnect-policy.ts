@@ -199,4 +199,4 @@ const isUnsupportedDeviceError = (message: string): boolean => {
 	);
 };
 
-export { VoiceReconnectTimeoutError, classifyVoiceReconnectError, getVoiceReconnectRetryDelayMs };
+export { classifyVoiceReconnectError, getVoiceReconnectRetryDelayMs, VoiceReconnectTimeoutError };

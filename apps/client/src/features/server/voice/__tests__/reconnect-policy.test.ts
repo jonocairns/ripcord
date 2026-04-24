@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import {
-	VoiceReconnectTimeoutError,
 	classifyVoiceReconnectError,
 	getVoiceReconnectRetryDelayMs,
+	VoiceReconnectTimeoutError,
 } from '../reconnect-policy';
 
 describe('voice reconnect policy', () => {

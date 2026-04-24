@@ -1,5 +1,5 @@
-import type { TJoinedMessage } from '@sharkord/shared';
 import { describe, expect, it, mock } from 'bun:test';
+import type { TJoinedMessage } from '@sharkord/shared';
 import { subscribeToMessageEvents } from '../subscriptions-core';
 
 const createMessage = (overrides: Partial<TJoinedMessage> = {}) =>

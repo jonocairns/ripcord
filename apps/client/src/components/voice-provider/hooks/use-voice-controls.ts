@@ -12,8 +12,8 @@ import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
-import { useScreenShareStage } from './use-screen-share-stage';
 import { shouldApplyVoiceStateOperationResult, startVoiceStateOperation } from '../voice-state-operation';
+import { useScreenShareStage } from './use-screen-share-stage';
 
 type TUseVoiceControlsParams = {
 	startMicStream: () => Promise<void>;

@@ -90,5 +90,5 @@ const resolvePushMicState = (state: TPushMicState, soundMuted: boolean): TPushMi
 	};
 };
 
-export { clearHeldPushMicState, resolveHeldPushMicTarget, resolvePushMicState, updatePushMicStateForKeyEvent };
 export type { TPushMicState };
+export { clearHeldPushMicState, resolveHeldPushMicTarget, resolvePushMicState, updatePushMicStateForKeyEvent };

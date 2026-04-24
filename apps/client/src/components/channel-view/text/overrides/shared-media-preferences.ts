@@ -1,5 +1,5 @@
 import type { MediaPlayerInstance } from '@vidstack/react';
-import { useEffect, useSyncExternalStore, type RefObject } from 'react';
+import { type RefObject, useEffect, useSyncExternalStore } from 'react';
 
 const SHARED_MEDIA_STORAGE_KEY = 'ripcord-media';
 const SHARED_MEDIA_PREFERENCES_UPDATED_EVENT = 'sharkord:shared-media-preferences-updated';

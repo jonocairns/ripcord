@@ -1,5 +1,4 @@
 export type VoiceActivity = {
-	audioLevel: number;
 	isSpeaking: boolean;
 };
 
@@ -15,10 +14,8 @@ type GetVoiceActivityStatsReport = () => Promise<RTCStatsReport | undefined>;
 
 const SPEAKING_THRESHOLD = 8;
 const AUDIO_LEVEL_POLL_INTERVAL_MS = 50;
-const AUDIO_LEVEL_PRECISION = 1;
 
 const EMPTY_VOICE_ACTIVITY: VoiceActivity = {
-	audioLevel: 0,
 	isSpeaking: false,
 };
 
@@ -46,7 +43,7 @@ const createVoiceActivityStore = (): VoiceActivityStore => {
 		setUserActivity: (userId, activity) => {
 			const previous = activities.get(userId);
 
-			if (previous?.audioLevel === activity.audioLevel && previous.isSpeaking === activity.isSpeaking) {
+			if (previous?.isSpeaking === activity.isSpeaking) {
 				return;
 			}
 
@@ -128,14 +125,9 @@ const getAudioLevelFromStatsEntries = (stats: Iterable<RTCStats>): number | unde
 	return audioLevel;
 };
 
-const toVoiceActivity = (audioLevel: number): VoiceActivity => {
-	const roundedLevel = Math.round(audioLevel / AUDIO_LEVEL_PRECISION) * AUDIO_LEVEL_PRECISION;
-
-	return {
-		audioLevel: roundedLevel,
-		isSpeaking: roundedLevel > SPEAKING_THRESHOLD,
-	};
-};
+const toVoiceActivity = (audioLevel: number): VoiceActivity => ({
+	isSpeaking: audioLevel > SPEAKING_THRESHOLD,
+});
 
 const startVoiceActivityMonitor = (
 	audioStream: MediaStream,
@@ -172,10 +164,7 @@ const startVoiceActivityMonitor = (
 			const normalizedLevel = report ? (getAudioLevelFromStatsEntries(report.values()) ?? 0) : 0;
 			const nextActivity = toVoiceActivity(normalizedLevel);
 
-			if (
-				nextActivity.audioLevel !== previousActivity.audioLevel ||
-				nextActivity.isSpeaking !== previousActivity.isSpeaking
-			) {
+			if (nextActivity.isSpeaking !== previousActivity.isSpeaking) {
 				previousActivity = nextActivity;
 				onUpdate(nextActivity);
 			}
