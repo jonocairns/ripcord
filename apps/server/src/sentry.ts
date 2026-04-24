@@ -16,7 +16,7 @@ const initSentry = (): void => {
     dsn,
     environment: IS_PRODUCTION ? 'production' : 'development',
     release: SERVER_VERSION,
-    sendDefaultPii: false,
+    sendDefaultPii: false
   });
 };
 
@@ -29,7 +29,9 @@ const sentryFormat = format((info) => {
   const firstSplatArg = splat[0];
 
   if (firstSplatArg instanceof Error) {
-    Sentry.captureException(firstSplatArg, { extra: { message: String(info.message) } });
+    Sentry.captureException(firstSplatArg, {
+      extra: { message: String(info.message) }
+    });
   } else if (info instanceof Error) {
     Sentry.captureException(info);
   } else {

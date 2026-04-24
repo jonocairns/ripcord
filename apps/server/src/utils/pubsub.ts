@@ -134,7 +134,12 @@ class PubSub {
   constructor() {
     this.ee = new EventEmitter();
 
-    this.ee.setMaxListeners(50);
+    // Each `subscribe()` call attaches one listener per (client, topic).
+    // Listener counts grow with concurrent connections * subscribed topics, so
+    // any small fixed cap (Node's default is 10; we previously used 50) trips
+    // MaxListenersExceededWarning under normal scale even though nothing is
+    // leaking. Keep a high finite cap so genuinely runaway listeners still warn.
+    this.ee.setMaxListeners(1000);
   }
 
   public publish<TTopic extends keyof Events>(

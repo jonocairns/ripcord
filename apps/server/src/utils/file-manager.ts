@@ -84,10 +84,18 @@ const sanitizeOriginalName = (originalName: string): string => {
 };
 
 const md5File = async (path: string): Promise<string> => {
-  const file = await fs.readFile(path);
   const hash = createHash('md5');
+  const reader = Bun.file(path).stream().getReader();
 
-  hash.update(file);
+  try {
+    let chunk = await reader.read();
+    while (!chunk.done) {
+      hash.update(chunk.value);
+      chunk = await reader.read();
+    }
+  } finally {
+    reader.releaseLock();
+  }
 
   return hash.digest('hex');
 };

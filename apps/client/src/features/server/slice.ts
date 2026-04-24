@@ -36,6 +36,7 @@ export interface IServerState {
 	currentVoiceChannelId: number | undefined;
 	voiceSessionReconnectNonce: number;
 	messagesMap: TMessagesMap;
+	protectedMessagePrefixCounts: Record<number, number>;
 	users: TJoinedPublicUser[];
 	roles: TJoinedRole[];
 	publicSettings: TPublicServerSettings | undefined;
@@ -143,6 +144,7 @@ const initialState: IServerState = {
 	currentVoiceChannelId: undefined,
 	voiceSessionReconnectNonce: 0,
 	messagesMap: {},
+	protectedMessagePrefixCounts: {},
 	users: [],
 	roles: [],
 	publicSettings: undefined,
@@ -210,6 +212,103 @@ const findVoiceStateForUser = (voiceMap: TVoiceMap, userId: number): TVoiceUserS
 // (setInitialData), the expiry is cleared early. Any reconcile that fires after
 // the window closes yields to the server's authoritative state instead.
 const OPTIMISTIC_VOICE_STATE_TTL_MS = 5_000;
+
+// Bound the live per-channel message tail so long sessions do not accumulate
+// the full chat history in memory. User-triggered `loadMore` prepends are kept
+// as a protected prefix so later live appends do not immediately evict the
+// older history the user explicitly paged in.
+const MAX_MESSAGES_PER_CHANNEL = 1000;
+
+const mergeMessages = (existing: TJoinedMessage[], incoming: TJoinedMessage[], prepend: boolean): TJoinedMessage[] => {
+	const sortedIncoming = incoming.length > 1 ? [...incoming].sort((a, b) => a.createdAt - b.createdAt) : incoming;
+
+	if (existing.length === 0) {
+		return sortedIncoming;
+	}
+
+	if (prepend) {
+		// Hot path: incoming batch is entirely older than the current head, so
+		// straight concat preserves order without re-sorting the full array.
+		if (sortedIncoming[sortedIncoming.length - 1].createdAt <= existing[0].createdAt) {
+			return [...sortedIncoming, ...existing];
+		}
+	} else if (sortedIncoming[0].createdAt >= existing[existing.length - 1].createdAt) {
+		// Hot path: incoming batch is entirely newer than the current tail.
+		return [...existing, ...sortedIncoming];
+	}
+
+	// Fallback: timestamps interleave (e.g. backfill mid-buffer). Pay the full
+	// sort here only when ordering actually requires it.
+	return [...existing, ...sortedIncoming].sort((a, b) => a.createdAt - b.createdAt);
+};
+
+const countProtectedMessagePrefix = (
+	merged: TJoinedMessage[],
+	existing: TJoinedMessage[],
+	incoming: TJoinedMessage[],
+	protectedPrefixCount: number,
+): number => {
+	const protectedIds = new Set<number>();
+
+	for (const message of existing.slice(0, protectedPrefixCount)) {
+		protectedIds.add(message.id);
+	}
+
+	for (const message of incoming) {
+		protectedIds.add(message.id);
+	}
+
+	let count = 0;
+
+	for (const message of merged) {
+		if (!protectedIds.has(message.id)) {
+			break;
+		}
+
+		count += 1;
+	}
+
+	return count;
+};
+
+const setProtectedMessagePrefixCount = (
+	counts: Record<number, number>,
+	channelId: number,
+	count: number,
+): Record<number, number> => {
+	if (count <= 0) {
+		if (counts[channelId] === undefined) {
+			return counts;
+		}
+
+		const nextCounts = { ...counts };
+		delete nextCounts[channelId];
+		return nextCounts;
+	}
+
+	if (counts[channelId] === count) {
+		return counts;
+	}
+
+	return {
+		...counts,
+		[channelId]: count,
+	};
+};
+
+const capChannelMessages = (messages: TJoinedMessage[], protectedPrefixCount: number): TJoinedMessage[] => {
+	const normalizedProtectedPrefixCount = Math.min(protectedPrefixCount, messages.length);
+	const unprotectedTail = messages.slice(normalizedProtectedPrefixCount);
+
+	if (unprotectedTail.length <= MAX_MESSAGES_PER_CHANNEL) {
+		return messages;
+	}
+
+	return [
+		...messages.slice(0, normalizedProtectedPrefixCount),
+		...unprotectedTail.slice(unprotectedTail.length - MAX_MESSAGES_PER_CHANNEL),
+	];
+};
 
 const mergeOwnVoiceDefaults = (
 	currentOwnVoiceDefaults: TVoiceUserState,
@@ -296,6 +395,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 	addMessages: ({ channelId, messages, opts }) => {
 		const state = get();
 		const existing = state.messagesMap[channelId] ?? [];
+		const protectedPrefixCount = state.protectedMessagePrefixCounts[channelId] ?? 0;
 		const existingIds = new Set(existing.map((message) => message.id));
 		const filtered = messages.filter((message) => !existingIds.has(message.id));
 
@@ -303,13 +403,26 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			return;
 		}
 
-		const merged = opts?.prepend ? [...filtered, ...existing] : [...existing, ...filtered];
+		const prepend = opts?.prepend ?? false;
+		let merged = mergeMessages(existing, filtered, prepend);
+		const nextProtectedPrefixCount = prepend
+			? countProtectedMessagePrefix(merged, existing, filtered, protectedPrefixCount)
+			: protectedPrefixCount;
+
+		if (!prepend && merged.length > MAX_MESSAGES_PER_CHANNEL) {
+			merged = capChannelMessages(merged, nextProtectedPrefixCount);
+		}
 
 		set({
 			messagesMap: {
 				...state.messagesMap,
-				[channelId]: [...merged].sort((a, b) => a.createdAt - b.createdAt),
+				[channelId]: merged,
 			},
+			protectedMessagePrefixCounts: setProtectedMessagePrefixCount(
+				state.protectedMessagePrefixCounts,
+				channelId,
+				nextProtectedPrefixCount,
+			),
 		});
 	},
 	updateMessage: ({ channelId, message }) => {
@@ -345,11 +458,26 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			return;
 		}
 
+		const messageIndex = messages.findIndex((message) => message.id === messageId);
+
+		if (messageIndex === -1) {
+			return;
+		}
+
+		const protectedPrefixCount = state.protectedMessagePrefixCounts[channelId] ?? 0;
+		const nextProtectedPrefixCount =
+			messageIndex < protectedPrefixCount ? protectedPrefixCount - 1 : protectedPrefixCount;
+
 		set({
 			messagesMap: {
 				...state.messagesMap,
 				[channelId]: messages.filter((message) => message.id !== messageId),
 			},
+			protectedMessagePrefixCounts: setProtectedMessagePrefixCount(
+				state.protectedMessagePrefixCounts,
+				channelId,
+				nextProtectedPrefixCount,
+			),
 		});
 	},
 	setUsers: (users) => {

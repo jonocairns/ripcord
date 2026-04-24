@@ -106,4 +106,28 @@ describe('reconnect event buffer', () => {
 
 		expect(calls).toEqual([]);
 	});
+
+	it('drops the queue and disables buffering once the cap is exceeded', () => {
+		startReconnectSnapshotEventBuffer();
+
+		const noop = () => undefined;
+		// Cap is 5000; push that many to fill the buffer.
+		for (let i = 0; i < 5000; i++) {
+			expect(bufferReconnectSnapshotEvent(noop)).toBe(true);
+		}
+
+		// The next event tips us over the cap and short-circuits buffering.
+		expect(bufferReconnectSnapshotEvent(noop)).toBe(false);
+
+		// Buffering is now off; subsequent events also bypass the buffer.
+		expect(bufferReconnectSnapshotEvent(noop)).toBe(false);
+
+		// The queue was dropped, so flush has nothing to replay.
+		const calls: string[] = [];
+		bufferReconnectSnapshotEvent(() => {
+			calls.push('after-drop');
+		});
+		flushReconnectSnapshotEventBuffer();
+		expect(calls).toEqual([]);
+	});
 });
