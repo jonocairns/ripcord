@@ -20,7 +20,13 @@ const level = config.server.debug ? 'debug' : 'info';
 
 const logger = createLogger({
   level,
-  format: combine(colorize(), splat(), errors({ stack: true }), sentryFormat(), logFormat),
+  format: combine(
+    colorize(),
+    splat(),
+    errors({ stack: true }),
+    sentryFormat(),
+    logFormat
+  ),
   transports: [
     new transports.Console(),
     new transports.File({

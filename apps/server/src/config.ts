@@ -222,7 +222,8 @@ if (process.env.RIPCORD_CLIENT_ERROR_REPORTING_SENTRY_DSN !== undefined) {
     ...config,
     server: {
       ...config.server,
-      clientErrorReportingSentryDsn: process.env.RIPCORD_CLIENT_ERROR_REPORTING_SENTRY_DSN
+      clientErrorReportingSentryDsn:
+        process.env.RIPCORD_CLIENT_ERROR_REPORTING_SENTRY_DSN
     }
   };
 }
@@ -232,7 +233,8 @@ if (process.env.RIPCORD_SERVER_ERROR_REPORTING_SENTRY_DSN !== undefined) {
     ...config,
     server: {
       ...config.server,
-      serverErrorReportingSentryDsn: process.env.RIPCORD_SERVER_ERROR_REPORTING_SENTRY_DSN
+      serverErrorReportingSentryDsn:
+        process.env.RIPCORD_SERVER_ERROR_REPORTING_SENTRY_DSN
     }
   };
 }
