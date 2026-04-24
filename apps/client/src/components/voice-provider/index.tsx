@@ -584,6 +584,44 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		return audioVideoRefsMap.current.get(remoteId)!;
 	}, []);
 
+	// Without eviction, every user who passed through any voice channel during
+	// this provider's lifetime kept an entry here. Prune anything that's no
+	// longer present in the current channel's voice users or external streams,
+	// and clear the whole map when leaving voice.
+	const currentVoiceChannelUsers = useServerStore((state) =>
+		currentVoiceChannelId !== undefined ? state.voiceMap[currentVoiceChannelId]?.users : undefined,
+	);
+	const currentVoiceChannelExternalsForEviction = useServerStore((state) =>
+		currentVoiceChannelId !== undefined ? state.externalStreamsMap[currentVoiceChannelId] : undefined,
+	);
+
+	useEffect(() => {
+		if (currentVoiceChannelId === undefined) {
+			audioVideoRefsMap.current.clear();
+			return;
+		}
+
+		const validIds = new Set<number>();
+
+		if (currentVoiceChannelUsers) {
+			for (const id of Object.keys(currentVoiceChannelUsers)) {
+				validIds.add(Number(id));
+			}
+		}
+
+		if (currentVoiceChannelExternalsForEviction) {
+			for (const id of Object.keys(currentVoiceChannelExternalsForEviction)) {
+				validIds.add(Number(id));
+			}
+		}
+
+		for (const remoteId of audioVideoRefsMap.current.keys()) {
+			if (!validIds.has(remoteId)) {
+				audioVideoRefsMap.current.delete(remoteId);
+			}
+		}
+	}, [currentVoiceChannelId, currentVoiceChannelUsers, currentVoiceChannelExternalsForEviction]);
+
 	const {
 		addExternalStreamTrack,
 		removeExternalStreamTrack,
@@ -2125,6 +2163,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearRemoteUserStreams();
 		clearExternalStreams();
 		cleanupTransports();
+		audioVideoRefsMap.current.clear();
 		deviceRef.current = undefined;
 		routerRtpCapabilities.current = null;
 		sendRtpCapabilities.current = null;
