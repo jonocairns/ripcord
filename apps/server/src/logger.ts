@@ -3,6 +3,7 @@ import { createLogger, format, transports } from 'winston';
 import { config } from './config';
 import { ensureDir } from './helpers/fs';
 import { LOGS_PATH } from './helpers/paths';
+import { sentryFormat } from './sentry';
 
 const { combine, colorize, printf, errors, splat } = format;
 
@@ -19,7 +20,7 @@ const level = config.server.debug ? 'debug' : 'info';
 
 const logger = createLogger({
   level,
-  format: combine(colorize(), splat(), errors({ stack: true }), logFormat),
+  format: combine(colorize(), splat(), errors({ stack: true }), sentryFormat(), logFormat),
   transports: [
     new transports.Console(),
     new transports.File({

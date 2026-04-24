@@ -1,5 +1,6 @@
 import type { TServerInfo } from '@sharkord/shared';
 import { toast } from 'sonner';
+import { configureClientErrorReporting } from '@/helpers/browser-logger';
 import { getUrlFromServer } from '@/helpers/get-file-url';
 import { clearAuthToken, getAuthToken, getRefreshToken, hydrateSessionToken } from '@/helpers/storage';
 import { connect, setDisconnectInfo, setInfo } from '../server/actions';
@@ -29,10 +30,16 @@ export const loadApp = async () => {
 		const info = await fetchServerInfo();
 
 		if (!info) {
+			await configureClientErrorReporting();
 			console.error('Failed to load server info during app load');
 			toast.error('Failed to load server info');
 			return;
 		}
+
+		await configureClientErrorReporting({
+			sentryDsn: info.clientErrorReporting?.provider === 'sentry' ? info.clientErrorReporting.dsn : undefined,
+			ignoreErrors: info.clientErrorReporting?.ignoreErrors,
+		});
 
 		setInfo(info);
 

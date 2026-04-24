@@ -1,6 +1,8 @@
-const logVoice = (...args: unknown[]) => {
-	console.log('%c[VOICE-PROVIDER]', 'color: salmon; font-weight: bold;', ...args);
-};
+import {
+	configureClientErrorReporting,
+	reportErrorToSentry,
+	syncSentryConfiguration,
+} from './error-reporting/sentry-client';
 
 const OVERRIDE_DEBUG = false;
 
@@ -12,4 +14,13 @@ const logDebug = (...args: unknown[]) => {
 	}
 };
 
-export { logDebug, logVoice };
+const logVoice = (...args: unknown[]) => {
+	console.log('%c[VOICE-PROVIDER]', 'color: salmon; font-weight: bold;', ...args);
+};
+
+const reportError = (message: string, error?: unknown, context?: unknown) => {
+	console.error(message, error, context);
+	void reportErrorToSentry(message, error, context);
+};
+
+export { configureClientErrorReporting, logDebug, logVoice, reportError, syncSentryConfiguration };

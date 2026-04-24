@@ -51,7 +51,10 @@ const zConfig = z.object({
     debug: z.coerce.boolean(),
     autoupdate: z.coerce.boolean(),
     trustProxy: z.coerce.boolean(),
-    corsOrigin: z.string()
+    corsOrigin: z.string(),
+    clientErrorReportingSentryDsn: z.string(),
+    serverErrorReportingSentryDsn: z.string(),
+    clientErrorReportingIgnoreErrors: z.string()
   }),
   webRtc: zWebRtcConfig,
   rateLimiters: z.object({
@@ -82,7 +85,32 @@ const defaultConfig: TConfig = {
     // Set to a specific origin (e.g. "https://app.example.com") to restrict.
     // Note: setting this will reject desktop (Electron) clients whose
     // file:// origin won't match. Leave empty if desktop clients are used.
-    corsOrigin: ''
+    corsOrigin: '',
+    clientErrorReportingSentryDsn: '',
+    serverErrorReportingSentryDsn: '',
+    clientErrorReportingIgnoreErrors: [
+      // Browser noise
+      'ResizeObserver loop limit exceeded',
+      'ResizeObserver loop completed with undelivered notifications',
+      'Non-Error promise rejection captured',
+      // Media / autoplay policy
+      'NotAllowedError',
+      'The play() request was interrupted',
+      // Device / hardware (user environment, not app bugs)
+      'NotReadableError',
+      'NotFoundError',
+      'OverconstrainedError',
+      // WebRTC churn
+      'ICE',
+      'RTCPeerConnection',
+      'RTCDataChannel',
+      'InvalidStateError',
+      // Fetch / network
+      'AbortError',
+      'NetworkError',
+      'Failed to fetch',
+      'Load failed'
+    ].join(',')
   },
   webRtc: {
     port: 40000,
@@ -183,6 +211,28 @@ if (legacyAnnouncedAddress) {
         announcedAddress:
           config.webRtc.ipv6.announcedAddress || legacyAnnouncedAddress
       }
+    }
+  };
+}
+
+// Applied separately: applyEnvOverrides skips falsy values, so an empty-string
+// env var cannot disable a DSN already set in the INI — handle it manually.
+if (process.env.RIPCORD_CLIENT_ERROR_REPORTING_SENTRY_DSN !== undefined) {
+  config = {
+    ...config,
+    server: {
+      ...config.server,
+      clientErrorReportingSentryDsn: process.env.RIPCORD_CLIENT_ERROR_REPORTING_SENTRY_DSN
+    }
+  };
+}
+
+if (process.env.RIPCORD_SERVER_ERROR_REPORTING_SENTRY_DSN !== undefined) {
+  config = {
+    ...config,
+    server: {
+      ...config.server,
+      serverErrorReportingSentryDsn: process.env.RIPCORD_SERVER_ERROR_REPORTING_SENTRY_DSN
     }
   };
 }
