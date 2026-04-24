@@ -16,19 +16,27 @@ activityLogQueue.addEventListener('error', (event) => {
   logger.error('Activity log queue error', event.detail.error);
 });
 
-type TEnqueueActivityLog<T extends ActivityLogType = ActivityLogType> = {
-  type: T;
-  details?: TActivityLogDetailsMap[T];
+type TEnqueueActivityLogMetadata = {
   userId?: number;
   ip?: string;
 };
 
-const enqueueActivityLog = <T extends ActivityLogType>({
+type TEnqueueActivityLog = {
+  [T in ActivityLogType]: TEnqueueActivityLogMetadata & {
+    type: T;
+    details?: TActivityLogDetailsMap[T];
+  };
+}[ActivityLogType];
+
+const emptyActivityLogDetails: TActivityLogDetailsMap[ActivityLogType.SERVER_STARTED] =
+  {};
+
+const enqueueActivityLog = ({
   type,
-  details = {} as TActivityLogDetailsMap[T],
-  userId = 1,
+  details,
+  userId,
   ip
-}: TEnqueueActivityLog<T>) => {
+}: TEnqueueActivityLog) => {
   const date = Date.now();
 
   activityLogQueue.push(async (callback) => {
@@ -37,8 +45,8 @@ const enqueueActivityLog = <T extends ActivityLogType>({
     await db.insert(activityLog).values({
       userId,
       type: type,
-      details,
-      ip: ip || getUserIp(userId) || null,
+      details: details ?? emptyActivityLogDetails,
+      ip: ip || (userId ? getUserIp(userId) : null),
       createdAt: date
     });
 

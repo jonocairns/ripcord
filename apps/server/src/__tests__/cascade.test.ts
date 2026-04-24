@@ -1,3 +1,4 @@
+import { ActivityLogType } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import {
@@ -110,6 +111,42 @@ describe('database cascades', async () => {
     expect(invitesAfter.length).toBe(0);
     expect(activityLogAfter.length).toBe(0);
     expect(messagesAfter.length).toBe(0);
+  });
+
+  test('system activity logs can omit a user while user activity logs still cascade', async () => {
+    const [user] = await tdb.select().from(users);
+
+    if (!user) {
+      throw new Error('Expected seeded user');
+    }
+
+    await tdb.insert(activityLog).values([
+      {
+        userId: user.id,
+        type: ActivityLogType.USER_LEFT,
+        createdAt: Date.now()
+      },
+      {
+        userId: null,
+        type: ActivityLogType.SERVER_STARTED,
+        createdAt: Date.now()
+      }
+    ]);
+
+    await tdb.delete(users).where(eq(users.id, user.id));
+
+    const userActivityLogsAfter = await tdb
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.type, ActivityLogType.USER_LEFT));
+    const systemActivityLogsAfter = await tdb
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.type, ActivityLogType.SERVER_STARTED));
+
+    expect(userActivityLogsAfter.length).toBe(0);
+    expect(systemActivityLogsAfter.length).toBe(1);
+    expect(systemActivityLogsAfter[0]?.userId).toBeNull();
   });
 
   test('deleting a user cascades to user_roles', async () => {
