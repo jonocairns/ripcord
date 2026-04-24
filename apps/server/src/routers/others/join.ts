@@ -190,7 +190,10 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
     enqueueActivityLog({
       type: ActivityLogType.USER_JOINED,
       userId: ctx.user.id,
-      ip: connectionInfo?.ip
+      ip: connectionInfo?.ip,
+      details: {
+        inviteCode: undefined
+      }
     });
 
     eventBus.emit('user:joined', {

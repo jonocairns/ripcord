@@ -10,15 +10,33 @@ import { protectedProcedure } from '../../utils/trpc';
 const setStatusRoute = protectedProcedure
   .input(
     z.object({
-      status: z.union([z.literal('online'), z.literal('away')])
+      status: z.union([z.literal('online'), z.literal('away')]),
+      auto: z.boolean().optional()
     })
   )
   .mutation(async ({ ctx, input }) => {
-    await db
-      .update(users)
-      .set({ presenceStatus: input.status })
-      .where(eq(users.id, ctx.userId))
-      .run();
+    const isAuto = input.auto === true;
+
+    // `presenceStatus` in the DB reflects the user's last *manual* choice —
+    // auto flips don't persist. So an auto flip must not override a DB value
+    // of 'away', since that means the user explicitly set themselves away.
+    if (isAuto) {
+      const row = await db
+        .select({ presenceStatus: users.presenceStatus })
+        .from(users)
+        .where(eq(users.id, ctx.userId))
+        .get();
+
+      if (row?.presenceStatus === 'away') {
+        return { status: ctx.getStatusById(ctx.userId) };
+      }
+    } else {
+      await db
+        .update(users)
+        .set({ presenceStatus: input.status })
+        .where(eq(users.id, ctx.userId))
+        .run();
+    }
 
     ctx.setUserPresenceStatus(input.status);
 

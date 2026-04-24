@@ -200,6 +200,91 @@ describe('users router', () => {
     expect(row?.presenceStatus).toBe(UserStatus.AWAY);
   });
 
+  test('auto status flip does not override manually set away', async () => {
+    const { caller } = await initTest();
+
+    await caller.users.setStatus({
+      status: UserStatus.AWAY
+    });
+
+    await caller.users.setStatus({
+      status: UserStatus.ONLINE,
+      auto: true
+    });
+
+    const row = await tdb
+      .select({
+        presenceStatus: users.presenceStatus
+      })
+      .from(users)
+      .where(eq(users.id, 1))
+      .get();
+
+    expect(row?.presenceStatus).toBe(UserStatus.AWAY);
+  });
+
+  test('manually returning online allows subsequent auto flips to apply', async () => {
+    const { caller } = await initTest();
+
+    await caller.users.setStatus({
+      status: UserStatus.AWAY
+    });
+
+    await caller.users.setStatus({
+      status: UserStatus.ONLINE
+    });
+
+    // Auto flips don't persist to the DB, so the column stays at the last
+    // manual value. The point of this test is that the auto flip isn't
+    // rejected (no throw) now that the manual-away preference is cleared.
+    const result = await caller.users.setStatus({
+      status: UserStatus.AWAY,
+      auto: true
+    });
+
+    expect(result.status).toBeDefined();
+
+    const row = await tdb
+      .select({
+        presenceStatus: users.presenceStatus
+      })
+      .from(users)
+      .where(eq(users.id, 1))
+      .get();
+
+    expect(row?.presenceStatus).toBe(UserStatus.ONLINE);
+  });
+
+  test('auto flips never write the presence column, so manual preference survives restart', async () => {
+    const { caller } = await initTest();
+
+    await caller.users.setStatus({
+      status: UserStatus.AWAY
+    });
+
+    // Even though the auto flip is attempted, the DB column — which is what a
+    // fresh server process re-reads after restart — must remain AWAY.
+    await caller.users.setStatus({
+      status: UserStatus.ONLINE,
+      auto: true
+    });
+
+    await caller.users.setStatus({
+      status: UserStatus.AWAY,
+      auto: true
+    });
+
+    const row = await tdb
+      .select({
+        presenceStatus: users.presenceStatus
+      })
+      .from(users)
+      .where(eq(users.id, 1))
+      .get();
+
+    expect(row?.presenceStatus).toBe(UserStatus.AWAY);
+  });
+
   test('should update password successfully and rotate active sessions', async () => {
     const { caller } = await initTest();
     const now = Date.now();

@@ -40,7 +40,10 @@ const rotateFileAccessTokenRoute = protectedProcedure
 
     enqueueActivityLog({
       type: ActivityLogType.ROTATE_CHANNEL_FILE_ACCESS_TOKEN,
-      userId: ctx.user.id
+      userId: ctx.user.id,
+      details: {
+        channelId: input.channelId
+      }
     });
   });
 

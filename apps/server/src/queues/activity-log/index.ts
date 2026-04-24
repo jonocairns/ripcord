@@ -16,19 +16,28 @@ activityLogQueue.addEventListener('error', (event) => {
   logger.error('Activity log queue error', event.detail.error);
 });
 
-type TEnqueueActivityLog<T extends ActivityLogType = ActivityLogType> = {
-  type: T;
-  details?: TActivityLogDetailsMap[T];
+type TEnqueueActivityLogMetadata = {
   userId?: number;
   ip?: string;
 };
 
-const enqueueActivityLog = <T extends ActivityLogType>({
+// Event types whose details shape has no required keys may omit `details`;
+// everything else must pass it. This prevents silent `{}` inserts if a details
+// type ever gains required fields.
+type TEnqueueActivityLog = {
+  [T in ActivityLogType]: TEnqueueActivityLogMetadata & {
+    type: T;
+  } & (keyof TActivityLogDetailsMap[T] extends never
+      ? { details?: TActivityLogDetailsMap[T] }
+      : { details: TActivityLogDetailsMap[T] });
+}[ActivityLogType];
+
+const enqueueActivityLog = ({
   type,
-  details = {} as TActivityLogDetailsMap[T],
-  userId = 1,
+  details,
+  userId,
   ip
-}: TEnqueueActivityLog<T>) => {
+}: TEnqueueActivityLog) => {
   const date = Date.now();
 
   activityLogQueue.push(async (callback) => {
@@ -38,7 +47,7 @@ const enqueueActivityLog = <T extends ActivityLogType>({
       userId,
       type: type,
       details,
-      ip: ip || getUserIp(userId) || null,
+      ip: ip || (userId ? getUserIp(userId) : null),
       createdAt: date
     });
 

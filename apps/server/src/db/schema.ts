@@ -361,9 +361,9 @@ const activityLog = sqliteTable(
   'activity_log',
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
-    userId: integer('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+    userId: integer('user_id').references(() => users.id, {
+      onDelete: 'cascade'
+    }),
     type: text('type').notNull(),
     details: text('details', { mode: 'json' }).$type<
       TActivityLogDetailsMap[keyof TActivityLogDetailsMap]
