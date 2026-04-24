@@ -21,15 +21,16 @@ type TEnqueueActivityLogMetadata = {
   ip?: string;
 };
 
+// Event types whose details shape has no required keys may omit `details`;
+// everything else must pass it. This prevents silent `{}` inserts if a details
+// type ever gains required fields.
 type TEnqueueActivityLog = {
   [T in ActivityLogType]: TEnqueueActivityLogMetadata & {
     type: T;
-    details?: TActivityLogDetailsMap[T];
-  };
+  } & (keyof TActivityLogDetailsMap[T] extends never
+      ? { details?: TActivityLogDetailsMap[T] }
+      : { details: TActivityLogDetailsMap[T] });
 }[ActivityLogType];
-
-const emptyActivityLogDetails: TActivityLogDetailsMap[ActivityLogType.SERVER_STARTED] =
-  {};
 
 const enqueueActivityLog = ({
   type,
@@ -45,7 +46,7 @@ const enqueueActivityLog = ({
     await db.insert(activityLog).values({
       userId,
       type: type,
-      details: details ?? emptyActivityLogDetails,
+      details,
       ip: ip || (userId ? getUserIp(userId) : null),
       createdAt: date
     });

@@ -69,7 +69,11 @@ if (patchedIndexHtml !== indexHtml) {
 // Rewrite those to relative "./assets/..." for packaged file:// loading.
 const assetsPath = path.resolve(targetPath, "assets");
 const assetEntries = await fs.readdir(assetsPath, { withFileTypes: true });
-const textAssetPaths = [];
+// Only HTML/CSS get verified for font refs. JS chunks can legitimately contain
+// "/fonts/" as opaque string literals (worklet URL factories, path constants)
+// that aren't actual font <link>/url() references, and we don't rewrite JS for
+// fonts anyway — so verifying them would false-positive.
+const fontCheckPaths = [indexPath];
 
 for (const entry of assetEntries) {
   if (!entry.isFile()) {
@@ -82,7 +86,6 @@ for (const entry of assetEntries) {
   }
 
   const filePath = path.resolve(assetsPath, entry.name);
-  textAssetPaths.push(filePath);
   const contents = await fs.readFile(filePath, "utf8");
   let patchedContents = contents
     .replace(/(["'])\/assets\//g, "$1./assets/")
@@ -93,6 +96,7 @@ for (const entry of assetEntries) {
       /url\(\s*(["']?)\/fonts\//g,
       "url($1../fonts/",
     );
+    fontCheckPaths.push(filePath);
   }
 
   if (patchedContents !== contents) {
@@ -100,4 +104,4 @@ for (const entry of assetEntries) {
   }
 }
 
-await verifyFontReferences([indexPath, ...textAssetPaths]);
+await verifyFontReferences(fontCheckPaths);
