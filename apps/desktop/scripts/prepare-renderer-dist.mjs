@@ -55,7 +55,15 @@ await fs.cp(sourcePath, targetPath, { recursive: true });
 // Packaged Electron loads renderer via file://, so absolute "/..." asset paths
 // in Vite output break. Rewrite them to relative paths for desktop packaging.
 const indexHtml = await fs.readFile(indexPath, "utf8");
-const patchedIndexHtml = indexHtml.replace(
+// Under file:// the preload's crossorigin credentials mode does not match the
+// CSS @font-face fetch, so Chromium discards the preloaded bytes and re-fetches
+// — wasted work plus two console warnings. Fonts are on local disk in the asar,
+// so the preload adds no benefit for the desktop build.
+const withoutFontPreload = indexHtml.replace(
+  /^[ \t]*<link\b[^>]*\brel=["']preload["'][^>]*\bas=["']font["'][^>]*>[ \t]*\r?\n/gim,
+  "",
+);
+const patchedIndexHtml = withoutFontPreload.replace(
   /(src|href)=["']\/([^"']+)["']/g,
   '$1="./$2"',
 );
