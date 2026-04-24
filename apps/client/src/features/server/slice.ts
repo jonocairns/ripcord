@@ -211,6 +211,35 @@ const findVoiceStateForUser = (voiceMap: TVoiceMap, userId: number): TVoiceUserS
 // the window closes yields to the server's authoritative state instead.
 const OPTIMISTIC_VOICE_STATE_TTL_MS = 5_000;
 
+// Bound per-channel message retention so long sessions do not accumulate the
+// full chat history in memory. Only enforced on the append path (live messages
+// and the initial fetch); explicit `loadMore` prepends are bounded by user
+// effort and dropping just-loaded older messages would defeat the scroll.
+const MAX_MESSAGES_PER_CHANNEL = 1000;
+
+const mergeMessages = (existing: TJoinedMessage[], incoming: TJoinedMessage[], prepend: boolean): TJoinedMessage[] => {
+	const sortedIncoming = incoming.length > 1 ? [...incoming].sort((a, b) => a.createdAt - b.createdAt) : incoming;
+
+	if (existing.length === 0) {
+		return sortedIncoming;
+	}
+
+	if (prepend) {
+		// Hot path: incoming batch is entirely older than the current head, so
+		// straight concat preserves order without re-sorting the full array.
+		if (sortedIncoming[sortedIncoming.length - 1].createdAt <= existing[0].createdAt) {
+			return [...sortedIncoming, ...existing];
+		}
+	} else if (sortedIncoming[0].createdAt >= existing[existing.length - 1].createdAt) {
+		// Hot path: incoming batch is entirely newer than the current tail.
+		return [...existing, ...sortedIncoming];
+	}
+
+	// Fallback: timestamps interleave (e.g. backfill mid-buffer). Pay the full
+	// sort here only when ordering actually requires it.
+	return [...existing, ...sortedIncoming].sort((a, b) => a.createdAt - b.createdAt);
+};
+
 const mergeOwnVoiceDefaults = (
 	currentOwnVoiceDefaults: TVoiceUserState,
 	voiceState: Partial<TVoiceUserState>,
@@ -303,12 +332,17 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			return;
 		}
 
-		const merged = opts?.prepend ? [...filtered, ...existing] : [...existing, ...filtered];
+		const prepend = opts?.prepend ?? false;
+		let merged = mergeMessages(existing, filtered, prepend);
+
+		if (!prepend && merged.length > MAX_MESSAGES_PER_CHANNEL) {
+			merged = merged.slice(merged.length - MAX_MESSAGES_PER_CHANNEL);
+		}
 
 		set({
 			messagesMap: {
 				...state.messagesMap,
-				[channelId]: [...merged].sort((a, b) => a.createdAt - b.createdAt),
+				[channelId]: merged,
 			},
 		});
 	},
