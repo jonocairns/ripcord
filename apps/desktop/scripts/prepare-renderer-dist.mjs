@@ -50,7 +50,12 @@ const verifyFontReferences = async (filePaths) => {
 
 await fs.rm(targetPath, { recursive: true, force: true });
 await fs.mkdir(targetPath, { recursive: true });
-await fs.cp(sourcePath, targetPath, { recursive: true });
+// Source maps live next to the JS for the web client (Sentry fetches them over
+// HTTP), but under file:// they cannot be fetched and just bloat the asar.
+await fs.cp(sourcePath, targetPath, {
+  recursive: true,
+  filter: (source) => !source.endsWith(".map"),
+});
 
 // Packaged Electron loads renderer via file://, so absolute "/..." asset paths
 // in Vite output break. Rewrite them to relative paths for desktop packaging.

@@ -30,13 +30,12 @@ export const loadApp = async () => {
 		const info = await fetchServerInfo();
 
 		if (!info) {
-			await configureClientErrorReporting();
 			console.error('Failed to load server info during app load');
 			toast.error('Failed to load server info');
 			return;
 		}
 
-		await configureClientErrorReporting({
+		configureClientErrorReporting({
 			sentryDsn: info.clientErrorReporting?.provider === 'sentry' ? info.clientErrorReporting.dsn : undefined,
 			ignoreErrors: info.clientErrorReporting?.ignoreErrors,
 		});

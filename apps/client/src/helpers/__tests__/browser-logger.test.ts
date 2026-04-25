@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { Event } from '@sentry/browser';
+import type { Event } from '@sentry/react';
 import { sanitizeSentryEvent } from '../error-reporting/sanitize';
 
 describe('sanitizeSentryEvent', () => {

@@ -1,15 +1,10 @@
+import * as Sentry from '@sentry/react';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { sanitizeContextData, sanitizeSentryEvent, sanitizeString } from './sanitize';
-
-type TSentryBrowserModule = typeof import('@sentry/browser');
 
 type TClientErrorReportingConfig = {
 	sentryDsn?: string;
 	ignoreErrors?: string[];
-};
-
-type TConfiguredClientErrorReportingConfig = {
-	sentryDsn: string;
 };
 
 type TCaptureSentryErrorOptions = {
@@ -22,112 +17,80 @@ type TCaptureSentryErrorOptions = {
 
 const capturedErrors = new WeakSet<object>();
 
-let sentryModulePromise: Promise<TSentryBrowserModule | null> | null = null;
-let sentrySyncPromise: Promise<void> | null = null;
-let clientErrorReportingConfig: TClientErrorReportingConfig = {};
-let activeSentryConfig: TConfiguredClientErrorReportingConfig | undefined;
+let initialized = false;
 
 const getRuntimeTag = (): 'desktop' | 'web' => {
 	return getRuntimeServerConfig().source === 'desktop' ? 'desktop' : 'web';
 };
 
-const getConfiguredSentryConfig = (): TConfiguredClientErrorReportingConfig | undefined => {
-	if (!clientErrorReportingConfig.sentryDsn) {
+// Desktop renderer assets load from `file://` inside the Electron asar, so
+// Sentry cannot fetch the source maps from the local path in stack frames.
+// Rewrite each `file:///.../assets/<chunk>.js` frame to the same chunk on the
+// chat server's public URL — Sentry then fetches the JS + .map from there
+// (Pattern A). Works as long as the desktop bundle hash matches the server's
+// (i.e. desktop and server were built from the same client commit); on a
+// version mismatch frames stay as `file://` and Sentry can't symbolicate,
+// which is the same behavior as before this rewrite existed.
+const buildDesktopFrameRewriter = (serverUrl: string) => {
+	const baseUrl = serverUrl.replace(/\/+$/, '');
+	const assetPattern = /\/assets\/([^/?#]+\.js)(?:[?#].*)?$/;
+
+	return (frame: { filename?: string }) => {
+		if (!frame.filename || !frame.filename.startsWith('file://')) {
+			return frame;
+		}
+
+		const match = frame.filename.match(assetPattern);
+
+		if (!match) {
+			return frame;
+		}
+
+		return {
+			...frame,
+			filename: `${baseUrl}/assets/${match[1]}`,
+		};
+	};
+};
+
+const buildIntegrations = () => {
+	const runtimeConfig = getRuntimeServerConfig();
+
+	if (runtimeConfig.source !== 'desktop' || !runtimeConfig.serverUrl) {
 		return undefined;
 	}
 
-	return {
-		sentryDsn: clientErrorReportingConfig.sentryDsn,
-	};
+	return [
+		Sentry.rewriteFramesIntegration({
+			iteratee: buildDesktopFrameRewriter(runtimeConfig.serverUrl),
+		}),
+	];
 };
 
-const isSentryConfigured = (): boolean => {
-	return Boolean(getConfiguredSentryConfig());
-};
+const configureClientErrorReporting = (config: TClientErrorReportingConfig = {}): void => {
+	const dsn = config.sentryDsn?.trim();
 
-const loadSentryModule = async (): Promise<TSentryBrowserModule | null> => {
-	if (sentryModulePromise) {
-		return sentryModulePromise;
+	if (!dsn || initialized) {
+		return;
 	}
 
-	if (!clientErrorReportingConfig.sentryDsn) {
-		return null;
-	}
-
-	sentryModulePromise = import('@sentry/browser').catch(() => null);
-
-	return sentryModulePromise;
-};
-
-const getLoadedSentryModule = async (): Promise<TSentryBrowserModule | null> => {
-	return sentryModulePromise ? await sentryModulePromise : null;
-};
-
-const syncSentryConfiguration = async (): Promise<void> => {
-	if (sentrySyncPromise) {
-		return sentrySyncPromise;
-	}
-
-	sentrySyncPromise = (async () => {
-		const Sentry = await loadSentryModule();
-		const configuredSentryConfig = getConfiguredSentryConfig();
-
-		if (!Sentry) {
-			return;
-		}
-
-		if (configuredSentryConfig) {
-			const shouldReinitializeSentry =
-				!Sentry.isEnabled() || !activeSentryConfig || activeSentryConfig.sentryDsn !== configuredSentryConfig.sentryDsn;
-
-			if (shouldReinitializeSentry) {
-				if (Sentry.isEnabled()) {
-					await Sentry.close(2000);
-				}
-
-				Sentry.init({
-					dsn: configuredSentryConfig.sentryDsn,
-					environment: import.meta.env.MODE,
-					release: VITE_APP_VERSION,
-					sendDefaultPii: false,
-					maxBreadcrumbs: 0,
-					ignoreErrors: clientErrorReportingConfig.ignoreErrors,
-					beforeSend: (event) => sanitizeSentryEvent(event),
-					initialScope: {
-						tags: {
-							runtime: getRuntimeTag(),
-						},
-					},
-				});
-				activeSentryConfig = configuredSentryConfig;
-			}
-
-			return;
-		}
-
-		if (Sentry.isEnabled()) {
-			await Sentry.close(2000);
-		}
-
-		activeSentryConfig = undefined;
-	})().finally(() => {
-		sentrySyncPromise = null;
+	Sentry.init({
+		dsn,
+		environment: import.meta.env.MODE,
+		release: VITE_APP_VERSION,
+		sendDefaultPii: false,
+		maxBreadcrumbs: 0,
+		ignoreErrors: config.ignoreErrors,
+		beforeSend: (event) => sanitizeSentryEvent(event),
+		integrations: buildIntegrations(),
+		initialScope: {
+			tags: {
+				runtime: getRuntimeTag(),
+			},
+		},
 	});
 
-	return sentrySyncPromise;
-};
-
-const configureClientErrorReporting = async (config: TClientErrorReportingConfig = {}): Promise<void> => {
-	clientErrorReportingConfig = {
-		sentryDsn: config.sentryDsn?.trim() || undefined,
-		ignoreErrors: config.ignoreErrors,
-	};
-
-	await syncSentryConfiguration();
-};
-
-const getSentryContext = (value: unknown): Record<string, unknown> | undefined => {
-	return sanitizeContextData(value);
+	initialized = true;
 };
 
 const isErrorAlreadyCaptured = (value: unknown): value is Error => {
@@ -143,22 +106,14 @@ const isErrorAlreadyCaptured = (value: unknown): value is Error => {
 	return false;
 };
 
-const captureSentryError = async ({
+const captureSentryError = ({
 	captureSource,
 	contextName,
 	context,
 	error,
 	message,
-}: TCaptureSentryErrorOptions): Promise<void> => {
-	if (!isSentryConfigured()) {
-		return;
-	}
-
-	await syncSentryConfiguration();
-
-	const Sentry = await getLoadedSentryModule();
-
-	if (!Sentry || !Sentry.isEnabled()) {
+}: TCaptureSentryErrorOptions): void => {
+	if (!Sentry.isEnabled()) {
 		return;
 	}
 
@@ -173,7 +128,7 @@ const captureSentryError = async ({
 			: error instanceof Error
 				? sanitizeString(error.message)
 				: undefined);
-	const sanitizedContext = getSentryContext(context);
+	const sanitizedContext = sanitizeContextData(context);
 
 	Sentry.withScope((scope) => {
 		scope.setTag('capture_source', captureSource);
@@ -192,8 +147,8 @@ const captureSentryError = async ({
 	});
 };
 
-const reportErrorToSentry = async (message: string, error?: unknown, context?: unknown): Promise<void> => {
-	await captureSentryError({
+const reportErrorToSentry = (message: string, error?: unknown, context?: unknown): void => {
+	captureSentryError({
 		captureSource: 'reportError',
 		contextName: 'reported_error',
 		context,
@@ -202,4 +157,4 @@ const reportErrorToSentry = async (message: string, error?: unknown, context?: u
 	});
 };
 
-export { configureClientErrorReporting, reportErrorToSentry, syncSentryConfiguration };
+export { configureClientErrorReporting, getRuntimeTag, reportErrorToSentry };
