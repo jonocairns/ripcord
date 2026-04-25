@@ -23,6 +23,50 @@ const getRuntimeTag = (): 'desktop' | 'web' => {
 	return getRuntimeServerConfig().source === 'desktop' ? 'desktop' : 'web';
 };
 
+// Desktop renderer assets load from `file://` inside the Electron asar, so
+// Sentry cannot fetch the source maps from the local path in stack frames.
+// Rewrite each `file:///.../assets/<chunk>.js` frame to the same chunk on the
+// chat server's public URL — Sentry then fetches the JS + .map from there
+// (Pattern A). Works as long as the desktop bundle hash matches the server's
+// (i.e. desktop and server were built from the same client commit); on a
+// version mismatch frames stay as `file://` and Sentry can't symbolicate,
+// which is the same behavior as before this rewrite existed.
+const buildDesktopFrameRewriter = (serverUrl: string) => {
+	const baseUrl = serverUrl.replace(/\/+$/, '');
+	const assetPattern = /\/assets\/([^/?#]+\.js)(?:[?#].*)?$/;
+
+	return (frame: { filename?: string }) => {
+		if (!frame.filename || !frame.filename.startsWith('file://')) {
+			return frame;
+		}
+
+		const match = frame.filename.match(assetPattern);
+
+		if (!match) {
+			return frame;
+		}
+
+		return {
+			...frame,
+			filename: `${baseUrl}/assets/${match[1]}`,
+		};
+	};
+};
+
+const buildIntegrations = () => {
+	const runtimeConfig = getRuntimeServerConfig();
+
+	if (runtimeConfig.source !== 'desktop' || !runtimeConfig.serverUrl) {
+		return undefined;
+	}
+
+	return [
+		Sentry.rewriteFramesIntegration({
+			iteratee: buildDesktopFrameRewriter(runtimeConfig.serverUrl),
+		}),
+	];
+};
+
 const configureClientErrorReporting = (config: TClientErrorReportingConfig = {}): void => {
 	const dsn = config.sentryDsn?.trim();
 
@@ -38,6 +82,7 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 		maxBreadcrumbs: 0,
 		ignoreErrors: config.ignoreErrors,
 		beforeSend: (event) => sanitizeSentryEvent(event),
+		integrations: buildIntegrations(),
 		initialScope: {
 			tags: {
 				runtime: getRuntimeTag(),
