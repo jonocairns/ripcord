@@ -26,16 +26,28 @@ const sentryFormat = format((info) => {
   }
 
   const splat = (info as Record<symbol, unknown[]>)[SPLAT] ?? [];
-  const firstSplatArg = splat[0];
+  const errorFromSplat = splat.find(
+    (arg): arg is Error => arg instanceof Error
+  );
+  const additionalSplat = splat.filter((arg) => arg !== errorFromSplat);
 
-  if (firstSplatArg instanceof Error) {
-    Sentry.captureException(firstSplatArg, {
-      extra: { message: String(info.message) }
-    });
+  const extra: Record<string, unknown> = {
+    message: String(info.message)
+  };
+
+  if (additionalSplat.length > 0) {
+    extra.splat = additionalSplat;
+  }
+
+  if (errorFromSplat) {
+    Sentry.captureException(errorFromSplat, { extra });
   } else if (info instanceof Error) {
-    Sentry.captureException(info);
+    Sentry.captureException(info, { extra });
   } else {
-    Sentry.captureMessage(String(info.message), 'error');
+    Sentry.captureMessage(String(info.message), {
+      level: 'error',
+      extra
+    });
   }
 
   return info;
