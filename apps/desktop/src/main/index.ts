@@ -6,6 +6,7 @@ import {
   ipcMain,
   MessageChannelMain,
   type MessagePortMain,
+  powerMonitor,
   session,
   shell,
 } from "electron";
@@ -459,6 +460,10 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle("desktop:get-capabilities", () => {
     return refreshDesktopCapabilities();
+  });
+
+  ipcMain.handle("desktop:get-system-idle-seconds", () => {
+    return powerMonitor.getSystemIdleTime();
   });
 
   ipcMain.handle(

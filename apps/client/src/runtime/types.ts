@@ -169,6 +169,7 @@ export type TDesktopBridge = {
 	getServerUrl: () => Promise<string>;
 	setServerUrl: (serverUrl: string) => Promise<void>;
 	getCapabilities: () => Promise<TDesktopCapabilities>;
+	getSystemIdleSeconds: () => Promise<number>;
 	pingSidecar: () => Promise<{ available: boolean; reason?: string }>;
 	getUpdateStatus: () => Promise<TDesktopUpdateStatus>;
 	checkForUpdates: () => Promise<TDesktopUpdateStatus>;
