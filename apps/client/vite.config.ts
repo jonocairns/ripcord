@@ -8,7 +8,8 @@ import pkg from './package.json';
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
-    target: 'esnext'
+    target: 'esnext',
+    sourcemap: true
   },
   resolve: {
     alias: {
