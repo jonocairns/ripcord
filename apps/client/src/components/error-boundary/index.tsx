@@ -1,6 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
-import { reportError } from '@/helpers/browser-logger';
+import { reportReactError } from '@/helpers/browser-logger';
 
 type TErrorBoundaryProps = {
 	children: ReactNode;
@@ -8,6 +8,30 @@ type TErrorBoundaryProps = {
 
 type TErrorBoundaryState = {
 	hasError: boolean;
+};
+
+// Mirrors @sentry/react's linking trick: synthesize an Error whose stack is the
+// componentStack and attach it as `error.cause`. Sentry's grouping algorithm
+// then treats render errors with the right hierarchy. Skip when cause is
+// already set so we don't clobber user-provided causes.
+const linkComponentStackAsCause = (error: Error, componentStack: string) => {
+	if (error.cause !== undefined) {
+		return;
+	}
+
+	const causeError = new Error(error.message);
+	causeError.name = `React ErrorBoundary ${error.name}`;
+	causeError.stack = componentStack;
+
+	try {
+		Object.defineProperty(error, 'cause', {
+			value: causeError,
+			writable: true,
+			configurable: true,
+		});
+	} catch {
+		// Frozen / host objects can refuse property definition; safe to skip.
+	}
 };
 
 class ErrorBoundary extends Component<TErrorBoundaryProps, TErrorBoundaryState> {
@@ -18,9 +42,13 @@ class ErrorBoundary extends Component<TErrorBoundaryProps, TErrorBoundaryState> 
 	}
 
 	componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-		reportError('React render error', error, {
-			componentStack: errorInfo.componentStack ?? undefined,
-		});
+		const componentStack = errorInfo.componentStack ?? undefined;
+
+		if (componentStack) {
+			linkComponentStackAsCause(error, componentStack);
+		}
+
+		reportReactError(error, componentStack);
 	}
 
 	render() {

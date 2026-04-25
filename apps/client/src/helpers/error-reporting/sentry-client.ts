@@ -202,4 +202,32 @@ const reportErrorToSentry = async (message: string, error?: unknown, context?: u
 	});
 };
 
-export { configureClientErrorReporting, reportErrorToSentry, syncSentryConfiguration };
+const reportReactErrorToSentry = async (error: Error, componentStack?: string): Promise<void> => {
+	if (!isSentryConfigured()) {
+		return;
+	}
+
+	await syncSentryConfiguration();
+
+	const Sentry = await getLoadedSentryModule();
+
+	if (!Sentry || !Sentry.isEnabled()) {
+		return;
+	}
+
+	if (isErrorAlreadyCaptured(error)) {
+		return;
+	}
+
+	Sentry.withScope((scope) => {
+		scope.setTag('capture_source', 'react_error_boundary');
+		scope.setTag('runtime', getRuntimeTag());
+
+		Sentry.captureException(error, {
+			mechanism: { handled: true, type: 'react' },
+			captureContext: componentStack ? { contexts: { react: { componentStack } } } : undefined,
+		});
+	});
+};
+
+export { configureClientErrorReporting, reportErrorToSentry, reportReactErrorToSentry, syncSentryConfiguration };
