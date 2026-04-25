@@ -2839,6 +2839,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	}, [applyPushMicOverride, channelCan, currentVoiceChannelId, getPushMicState, setPushMicState]);
 
 	useEffect(() => {
+		// Reference the dep so the effect re-runs on channel change; the body
+		// only cares that the channel changed, not what the new value is.
 		void currentVoiceChannelId;
 		voiceActivityStoreRef.current.clearAll();
 	}, [currentVoiceChannelId]);

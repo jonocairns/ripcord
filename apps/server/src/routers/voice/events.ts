@@ -114,16 +114,8 @@ const onVoiceActivityUpdateRoute = protectedProcedure.subscription(
     }
 
     return observable<TVoiceActivityEvent>((observer) => {
-      const runtime = VoiceRuntime.findById(channelId);
-
-      runtime?.getSpeakingUserIds().forEach((userId) => {
-        observer.next({
-          channelId,
-          userId,
-          isSpeaking: true
-        });
-      });
-
+      // Subscribe before snapshotting so a speaking-state change that happens
+      // between the two steps is delivered, not dropped.
       const subscription = ctx.pubsub
         .subscribeForChannel(
           channelId,
@@ -135,6 +127,16 @@ const onVoiceActivityUpdateRoute = protectedProcedure.subscription(
             observer.next(event);
           }
         });
+
+      const runtime = VoiceRuntime.findById(channelId);
+
+      runtime?.getSpeakingUserIds().forEach((userId) => {
+        observer.next({
+          channelId,
+          userId,
+          isSpeaking: true
+        });
+      });
 
       return () => {
         subscription.unsubscribe();

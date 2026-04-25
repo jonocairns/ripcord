@@ -20,6 +20,7 @@ export const useIdleAwayChecker = () => {
 	const userId = useOwnUserId();
 	const lastActivityRef = useRef<number>(Date.now());
 	const lastSentRef = useRef<TUserPresenceStatus | null>(null);
+	const afkKickArmedRef = useRef(true);
 	const afkKickInFlightRef = useRef(false);
 
 	useEffect(() => {
@@ -71,21 +72,26 @@ export const useIdleAwayChecker = () => {
 
 		const maybeKickFromVoice = async (idleMs: number) => {
 			if (idleMs < AFK_VOICE_THRESHOLD_MS) {
-				afkKickInFlightRef.current = false;
+				// Re-arm for the next idle cycle, but never while a kick is still
+				// in flight — otherwise a slow leaveVoice() racing the next tick
+				// could fire a second concurrent kick.
+				if (!afkKickInFlightRef.current) {
+					afkKickArmedRef.current = true;
+				}
 				return;
 			}
 
-			if (afkKickInFlightRef.current) return;
+			if (!afkKickArmedRef.current || afkKickInFlightRef.current) return;
 
 			const currentChannelId = currentVoiceChannelIdSelector(useServerStore.getState());
 			if (currentChannelId === undefined) return;
 
+			afkKickArmedRef.current = false;
 			afkKickInFlightRef.current = true;
 			try {
 				await leaveVoice();
 			} finally {
-				// Stay latched until the user becomes active again, so we don't
-				// retry every tick if leaveVoice is slow or fails.
+				afkKickInFlightRef.current = false;
 			}
 		};
 
@@ -109,6 +115,7 @@ export const useIdleAwayChecker = () => {
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			window.removeEventListener('focus', markActive);
 			lastSentRef.current = null;
+			afkKickArmedRef.current = true;
 			afkKickInFlightRef.current = false;
 		};
 	}, [userId]);
