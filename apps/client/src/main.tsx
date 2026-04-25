@@ -8,15 +8,17 @@ import { DebugInfo } from './components/debug-info/index.tsx';
 import { DesktopQuitCoordinator } from './components/desktop-quit-coordinator';
 import { DevicesProvider } from './components/devices-provider/index.tsx';
 import { DialogsProvider } from './components/dialogs/index.tsx';
+import { ErrorBoundary } from './components/error-boundary/index.tsx';
 import { Routing } from './components/routing/index.tsx';
 import { ServerScreensProvider } from './components/server-screens/index.tsx';
 import { ThemeProvider } from './components/theme-provider/index.tsx';
-import { reportError } from './helpers/browser-logger.ts';
+import { installGlobalErrorHandlers, reportError } from './helpers/browser-logger.ts';
 import { LocalStorageKey, migrateStorage } from './helpers/storage.ts';
 import './index.css';
 import { initializeRuntimeServerConfig } from './runtime/server-config.ts';
 
 const bootstrap = async () => {
+	installGlobalErrorHandlers();
 	migrateStorage();
 
 	try {
@@ -27,18 +29,20 @@ const bootstrap = async () => {
 
 	createRoot(document.getElementById('root')!).render(
 		<StrictMode>
-			<ThemeProvider defaultTheme="dark" storageKey={LocalStorageKey.VITE_UI_THEME}>
-				<DebugInfo />
-				<Toaster />
-				<StoreDebug />
-				<ReconnectLab />
-				<DesktopQuitCoordinator />
-				<DevicesProvider>
-					<DialogsProvider />
-					<ServerScreensProvider />
-					<Routing />
-				</DevicesProvider>
-			</ThemeProvider>
+			<ErrorBoundary>
+				<ThemeProvider defaultTheme="dark" storageKey={LocalStorageKey.VITE_UI_THEME}>
+					<DebugInfo />
+					<Toaster />
+					<StoreDebug />
+					<ReconnectLab />
+					<DesktopQuitCoordinator />
+					<DevicesProvider>
+						<DialogsProvider />
+						<ServerScreensProvider />
+						<Routing />
+					</DevicesProvider>
+				</ThemeProvider>
+			</ErrorBoundary>
 		</StrictMode>,
 	);
 };
