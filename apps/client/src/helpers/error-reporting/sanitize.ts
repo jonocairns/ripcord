@@ -1,4 +1,4 @@
-import type { ErrorEvent, Event } from '@sentry/browser';
+import type { ErrorEvent, Event } from '@sentry/react';
 
 type TSanitizedContextPrimitive = string | number | boolean | null;
 type TSanitizedContextValue = TSanitizedContextPrimitive | Array<TSanitizedContextPrimitive>;

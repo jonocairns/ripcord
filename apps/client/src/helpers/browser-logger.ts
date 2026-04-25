@@ -1,9 +1,4 @@
-import {
-	configureClientErrorReporting,
-	reportErrorToSentry,
-	reportReactErrorToSentry,
-	syncSentryConfiguration,
-} from './error-reporting/sentry-client';
+import { configureClientErrorReporting, reportErrorToSentry } from './error-reporting/sentry-client';
 
 const OVERRIDE_DEBUG = false;
 
@@ -21,12 +16,7 @@ const logVoice = (...args: unknown[]) => {
 
 const reportError = (message: string, error?: unknown, context?: unknown) => {
 	console.error(message, error, context);
-	void reportErrorToSentry(message, error, context);
+	reportErrorToSentry(message, error, context);
 };
 
-const reportReactError = (error: Error, componentStack?: string) => {
-	console.error('React render error', error);
-	void reportReactErrorToSentry(error, componentStack);
-};
-
-export { configureClientErrorReporting, logDebug, logVoice, reportError, reportReactError, syncSentryConfiguration };
+export { configureClientErrorReporting, logDebug, logVoice, reportError };

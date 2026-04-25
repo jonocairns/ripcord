@@ -1,23 +1,19 @@
 import { describe, expect, mock, test } from 'bun:test';
 
 describe('configureClientErrorReporting', () => {
-	test('reinitializes Sentry when the configured dsn changes', async () => {
+	test('initializes Sentry once when a dsn is provided and skips when empty', async () => {
 		const initMock = mock((_options: unknown) => undefined);
-		const closeMock = mock(async (_timeout: number) => true);
 		let sentryEnabled = false;
 
-		mock.module('@sentry/browser', () => ({
+		mock.module('@sentry/react', () => ({
 			init: (options: unknown) => {
 				sentryEnabled = true;
 				initMock(options);
 			},
 			isEnabled: () => sentryEnabled,
-			close: async (timeout: number) => {
-				sentryEnabled = false;
-				return closeMock(timeout);
-			},
 			withScope: mock(() => undefined),
 			captureException: mock(() => undefined),
+			ErrorBoundary: () => null,
 		}));
 		mock.module('@/runtime/server-config', () => ({
 			getRuntimeServerConfig: () => ({
@@ -30,30 +26,17 @@ describe('configureClientErrorReporting', () => {
 
 		const { configureClientErrorReporting } = await import('../error-reporting/sentry-client');
 
-		await configureClientErrorReporting({
+		configureClientErrorReporting();
+		expect(initMock).toHaveBeenCalledTimes(0);
+
+		configureClientErrorReporting({
 			sentryDsn: 'https://public@example.ingest.sentry.io/123456',
 		});
-
 		expect(initMock).toHaveBeenCalledTimes(1);
-		expect(closeMock).toHaveBeenCalledTimes(0);
 
-		await configureClientErrorReporting({
+		configureClientErrorReporting({
 			sentryDsn: 'https://public@example.ingest.sentry.io/123456',
 		});
-
 		expect(initMock).toHaveBeenCalledTimes(1);
-		expect(closeMock).toHaveBeenCalledTimes(0);
-
-		await configureClientErrorReporting({
-			sentryDsn: 'https://public@example.ingest.sentry.io/999999',
-		});
-
-		expect(closeMock).toHaveBeenCalledTimes(1);
-		expect(initMock).toHaveBeenCalledTimes(2);
-
-		await configureClientErrorReporting();
-
-		expect(closeMock).toHaveBeenCalledTimes(2);
-		expect(initMock).toHaveBeenCalledTimes(2);
 	});
 });

@@ -32,7 +32,7 @@
     "@radix-ui/react-switch": "^1.2.6",
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
-    "@sentry/browser": "^10.20.0",
+    "@sentry/react": "^10.46.0",
     "@sharkord/shared": "workspace:*",
     "@tailwindcss/vite": "^4.1.13",
     "@tiptap/core": "^3.7.2",
