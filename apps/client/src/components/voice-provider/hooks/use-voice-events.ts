@@ -19,6 +19,7 @@ type TEvents = {
 	removeExternalStream: (streamId: number) => void;
 	clearRemoteUserStreamsForUser: (userId: number) => void;
 	clearPendingStreamsForUser: (userId: number) => void;
+	onVoiceActivityUpdate: (activity: { userId: number; isSpeaking: boolean }) => void;
 	onTransportFailure: () => void;
 	rtpCapabilities: RtpCapabilities | null;
 	reconnectNonce: number;
@@ -34,6 +35,7 @@ const useVoiceEvents = ({
 	removeExternalStream,
 	clearRemoteUserStreamsForUser,
 	clearPendingStreamsForUser,
+	onVoiceActivityUpdate,
 	onTransportFailure,
 	rtpCapabilities,
 	reconnectNonce,
@@ -185,6 +187,17 @@ const useVoiceEvents = ({
 			},
 		});
 
+		const onVoiceActivityUpdateSub = trpc.voice.onActivityUpdate.subscribe(undefined, {
+			onData: ({ channelId, userId, isSpeaking }) => {
+				if (currentVoiceChannelId !== channelId || isCleaningUp) return;
+
+				onVoiceActivityUpdate({ userId, isSpeaking });
+			},
+			onError: (error) => {
+				logVoice('onVoiceActivityUpdate subscription error', { error });
+			},
+		});
+
 		if (rtpCapabilities && shouldSyncExistingProducersAfterVoiceEventSubscriptionStart(reconnectingSince)) {
 			logVoice('Syncing existing producers after voice event subscription start', {
 				channelId: currentVoiceChannelId,
@@ -218,6 +231,7 @@ const useVoiceEvents = ({
 			onVoiceUserLeaveSub.unsubscribe();
 			onVoiceRemoveExternalStreamSub.unsubscribe();
 			onVoiceTransportFailedSub.unsubscribe();
+			onVoiceActivityUpdateSub.unsubscribe();
 		};
 	}, [
 		currentVoiceChannelId,
@@ -231,6 +245,7 @@ const useVoiceEvents = ({
 		removeExternalStream,
 		clearRemoteUserStreamsForUser,
 		clearPendingStreamsForUser,
+		onVoiceActivityUpdate,
 		onTransportFailure,
 		rtpCapabilities,
 		reconnectingSince,

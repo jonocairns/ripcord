@@ -93,6 +93,11 @@ type Events = {
     remoteId: number;
     kind: StreamKind;
   };
+  [ServerEvents.VOICE_ACTIVITY_UPDATE]: {
+    channelId: number;
+    userId: number;
+    isSpeaking: boolean;
+  };
   [ServerEvents.VOICE_TRANSPORT_FAILED]: {
     userId: number;
   };

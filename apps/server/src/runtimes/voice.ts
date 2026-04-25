@@ -10,6 +10,8 @@ import {
 } from '@sharkord/shared';
 import type {
   AppData,
+  AudioLevelObserver,
+  AudioLevelObserverVolume,
   Consumer,
   Producer,
   Router,
@@ -29,6 +31,10 @@ import { pubsub } from '../utils/pubsub';
 
 const voiceRuntimes = new Map<number, VoiceRuntime>();
 const INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS = 1_000_000;
+const VOICE_ACTIVITY_OBSERVER_MAX_ENTRIES = 100;
+const VOICE_ACTIVITY_OBSERVER_THRESHOLD_DBOV = -60;
+const VOICE_ACTIVITY_OBSERVER_INTERVAL_MS = 100;
+const VOICE_ACTIVITY_RELEASE_DELAY_MS = 350;
 
 const defaultRouterOptions: RouterOptions<AppData> = {
   mediaCodecs: [
@@ -117,6 +123,14 @@ class VoiceRuntime {
   private screenProducers: TProducerMap = {};
   private screenAudioProducers: TProducerMap = {};
   private consumers: TConsumerMap = {};
+  private audioLevelObserver?: AudioLevelObserver<AppData>;
+  private voiceActivityProducerIdsByUser = new Map<number, string>();
+  private voiceActivityUserIdsByProducer = new Map<string, number>();
+  private speakingUserIds = new Set<number>();
+  private voiceActivityReleaseTimers = new Map<
+    number,
+    ReturnType<typeof setTimeout>
+  >();
 
   private externalCounter = 0;
   private externalStreamsInternal: {
@@ -217,6 +231,8 @@ class VoiceRuntime {
   };
 
   public destroy = async () => {
+    this.clearAllVoiceActivity();
+
     // Closing the router automatically closes all transports, producers, and
     // consumers attached to it — no need to close them individually.
     // Assumes all users have already been removed (via removeUser) before this
@@ -264,6 +280,7 @@ class VoiceRuntime {
     this.state.users = this.state.users.filter((u) => u.userId !== userId);
 
     this.cleanupUserResources(userId);
+    this.setUserSpeaking(userId, false);
   };
 
   private cleanupUserResources = (userId: number) => {
@@ -325,6 +342,10 @@ class VoiceRuntime {
     if (!user) return;
 
     user.state = { ...user.state, ...newState };
+
+    if (newState.micMuted === true) {
+      this.setUserSpeaking(userId, false);
+    }
   };
 
   public getRouter = (): Router<AppData> => {
@@ -339,6 +360,23 @@ class VoiceRuntime {
     const router = await mediaSoupWorker.createRouter(defaultRouterOptions);
 
     this.router = router;
+
+    try {
+      this.audioLevelObserver = await router.createAudioLevelObserver({
+        maxEntries: VOICE_ACTIVITY_OBSERVER_MAX_ENTRIES,
+        threshold: VOICE_ACTIVITY_OBSERVER_THRESHOLD_DBOV,
+        interval: VOICE_ACTIVITY_OBSERVER_INTERVAL_MS
+      });
+
+      this.audioLevelObserver.on('volumes', this.handleVoiceActivityVolumes);
+      this.audioLevelObserver.on('silence', this.handleVoiceActivitySilence);
+      this.audioLevelObserver.on('routerclose', () => {
+        this.audioLevelObserver = undefined;
+        this.clearAllVoiceActivity();
+      });
+    } catch (error) {
+      logger.error('Failed to create voice activity observer:', error);
+    }
   };
 
   public createTransport = async () => {
@@ -470,7 +508,7 @@ class VoiceRuntime {
   public addProducer = (
     userId: number,
     type: StreamKind,
-    producer: Producer
+    producer: Producer<AppData>
   ) => {
     if (type === StreamKind.VIDEO) {
       this.videoProducers[userId] = producer;
@@ -482,11 +520,16 @@ class VoiceRuntime {
       this.screenAudioProducers[userId] = producer;
     }
 
+    if (type === StreamKind.AUDIO) {
+      this.addAudioProducerToVoiceActivityObserver(userId, producer);
+    }
+
     producer.observer.on('close', () => {
       if (type === StreamKind.VIDEO) {
         delete this.videoProducers[userId];
       } else if (type === StreamKind.AUDIO) {
         delete this.audioProducers[userId];
+        this.removeAudioProducerFromVoiceActivityObserver(userId, producer);
       } else if (type === StreamKind.SCREEN) {
         delete this.screenProducers[userId];
       } else if (type === StreamKind.SCREEN_AUDIO) {
@@ -502,7 +545,7 @@ class VoiceRuntime {
   };
 
   public removeProducer(userId: number, type: StreamKind) {
-    let producer: Producer | undefined;
+    let producer: Producer<AppData> | undefined;
 
     switch (type) {
       case StreamKind.VIDEO:
@@ -899,6 +942,150 @@ class VoiceRuntime {
       announcedAddress: webRtcServerListenInfo.announcedAddress,
       listenInfos: webRtcServerListenInfos
     };
+  };
+
+  public getSpeakingUserIds = (): number[] => {
+    return Array.from(this.speakingUserIds);
+  };
+
+  private addAudioProducerToVoiceActivityObserver = (
+    userId: number,
+    producer: Producer<AppData>
+  ) => {
+    const observer = this.audioLevelObserver;
+
+    if (!observer || observer.closed) {
+      return;
+    }
+
+    const previousProducerId = this.voiceActivityProducerIdsByUser.get(userId);
+
+    if (previousProducerId && previousProducerId !== producer.id) {
+      this.voiceActivityUserIdsByProducer.delete(previousProducerId);
+
+      observer
+        .removeProducer({ producerId: previousProducerId })
+        .catch((error) => {
+          logger.debug(
+            'Failed to remove replaced producer from voice activity observer:',
+            error
+          );
+        });
+    }
+
+    this.voiceActivityProducerIdsByUser.set(userId, producer.id);
+    this.voiceActivityUserIdsByProducer.set(producer.id, userId);
+
+    observer.addProducer({ producerId: producer.id }).catch((error) => {
+      if (this.voiceActivityProducerIdsByUser.get(userId) === producer.id) {
+        this.voiceActivityProducerIdsByUser.delete(userId);
+        this.voiceActivityUserIdsByProducer.delete(producer.id);
+      }
+
+      logger.error('Failed to add producer to voice activity observer:', error);
+    });
+  };
+
+  private removeAudioProducerFromVoiceActivityObserver = (
+    userId: number,
+    producer: Producer<AppData>
+  ) => {
+    if (this.voiceActivityProducerIdsByUser.get(userId) === producer.id) {
+      this.voiceActivityProducerIdsByUser.delete(userId);
+    }
+
+    this.voiceActivityUserIdsByProducer.delete(producer.id);
+    this.setUserSpeaking(userId, false);
+  };
+
+  private handleVoiceActivityVolumes = (
+    volumes: AudioLevelObserverVolume[]
+  ) => {
+    const activeUserIds = new Set<number>();
+
+    for (const { producer } of volumes) {
+      const userId = this.voiceActivityUserIdsByProducer.get(producer.id);
+      const user = userId === undefined ? undefined : this.getUser(userId);
+
+      if (userId === undefined || !user || user.state.micMuted) {
+        continue;
+      }
+
+      activeUserIds.add(userId);
+      this.setUserSpeaking(userId, true);
+    }
+
+    for (const userId of this.speakingUserIds) {
+      if (!activeUserIds.has(userId)) {
+        this.scheduleUserSpeakingRelease(userId);
+      }
+    }
+  };
+
+  private handleVoiceActivitySilence = () => {
+    for (const userId of this.speakingUserIds) {
+      this.scheduleUserSpeakingRelease(userId);
+    }
+  };
+
+  private scheduleUserSpeakingRelease = (userId: number) => {
+    if (this.voiceActivityReleaseTimers.has(userId)) {
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      this.voiceActivityReleaseTimers.delete(userId);
+      this.setUserSpeaking(userId, false);
+    }, VOICE_ACTIVITY_RELEASE_DELAY_MS);
+
+    this.voiceActivityReleaseTimers.set(userId, timeout);
+  };
+
+  private setUserSpeaking = (userId: number, isSpeaking: boolean) => {
+    const releaseTimer = this.voiceActivityReleaseTimers.get(userId);
+
+    if (releaseTimer) {
+      clearTimeout(releaseTimer);
+      this.voiceActivityReleaseTimers.delete(userId);
+    }
+
+    if (isSpeaking) {
+      if (this.speakingUserIds.has(userId)) {
+        return;
+      }
+
+      this.speakingUserIds.add(userId);
+    } else {
+      if (!this.speakingUserIds.delete(userId)) {
+        return;
+      }
+    }
+
+    pubsub.publishForChannel(this.id, ServerEvents.VOICE_ACTIVITY_UPDATE, {
+      channelId: this.id,
+      userId,
+      isSpeaking
+    });
+  };
+
+  private clearAllVoiceActivity = () => {
+    for (const timeout of this.voiceActivityReleaseTimers.values()) {
+      clearTimeout(timeout);
+    }
+
+    this.voiceActivityReleaseTimers.clear();
+    this.voiceActivityProducerIdsByUser.clear();
+    this.voiceActivityUserIdsByProducer.clear();
+
+    for (const userId of this.speakingUserIds) {
+      pubsub.publishForChannel(this.id, ServerEvents.VOICE_ACTIVITY_UPDATE, {
+        channelId: this.id,
+        userId,
+        isSpeaking: false
+      });
+    }
+
+    this.speakingUserIds.clear();
   };
 }
 

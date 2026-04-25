@@ -9,6 +9,12 @@ type TVoiceProducerEvent = {
   kind: StreamKind;
 };
 
+type TVoiceActivityEvent = {
+  channelId: number;
+  userId: number;
+  isSpeaking: boolean;
+};
+
 const isUserStillJoinedToVoiceChannel = (
   userId: number,
   channelId: number
@@ -99,6 +105,44 @@ const onVoiceProducerClosedRoute = protectedProcedure.subscription(
   }
 );
 
+const onVoiceActivityUpdateRoute = protectedProcedure.subscription(
+  async ({ ctx }) => {
+    const channelId = ctx.currentVoiceChannelId;
+
+    if (!channelId) {
+      return observable<TVoiceActivityEvent>(() => () => {});
+    }
+
+    return observable<TVoiceActivityEvent>((observer) => {
+      const runtime = VoiceRuntime.findById(channelId);
+
+      runtime?.getSpeakingUserIds().forEach((userId) => {
+        observer.next({
+          channelId,
+          userId,
+          isSpeaking: true
+        });
+      });
+
+      const subscription = ctx.pubsub
+        .subscribeForChannel(
+          channelId,
+          ServerEvents.VOICE_ACTIVITY_UPDATE,
+          () => isUserStillJoinedToVoiceChannel(ctx.user.id, channelId)
+        )
+        .subscribe({
+          next: (event) => {
+            observer.next(event);
+          }
+        });
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    });
+  }
+);
+
 const onVoiceStreamWatcherActivityRoute = protectedProcedure.subscription(
   async ({ ctx }) => {
     return ctx.pubsub.subscribeFor(
@@ -121,6 +165,7 @@ export {
   onUserJoinVoiceRoute,
   onUserLeaveVoiceRoute,
   onUserUpdateVoiceStateRoute,
+  onVoiceActivityUpdateRoute,
   onVoiceAddExternalStreamRoute,
   onVoiceNewProducerRoute,
   onVoiceProducerClosedRoute,
