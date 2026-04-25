@@ -12,13 +12,12 @@ import { ErrorBoundary } from './components/error-boundary/index.tsx';
 import { Routing } from './components/routing/index.tsx';
 import { ServerScreensProvider } from './components/server-screens/index.tsx';
 import { ThemeProvider } from './components/theme-provider/index.tsx';
-import { installGlobalErrorHandlers, reportError } from './helpers/browser-logger.ts';
+import { reportError } from './helpers/browser-logger.ts';
 import { LocalStorageKey, migrateStorage } from './helpers/storage.ts';
 import './index.css';
 import { initializeRuntimeServerConfig } from './runtime/server-config.ts';
 
 const bootstrap = async () => {
-	installGlobalErrorHandlers();
 	migrateStorage();
 
 	try {

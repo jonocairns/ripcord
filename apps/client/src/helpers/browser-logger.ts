@@ -1,4 +1,3 @@
-import { installGlobalErrorHandlers } from './error-reporting/install-global-handlers';
 import {
 	configureClientErrorReporting,
 	reportErrorToSentry,
@@ -24,11 +23,4 @@ const reportError = (message: string, error?: unknown, context?: unknown) => {
 	void reportErrorToSentry(message, error, context);
 };
 
-export {
-	configureClientErrorReporting,
-	installGlobalErrorHandlers,
-	logDebug,
-	logVoice,
-	reportError,
-	syncSentryConfiguration,
-};
+export { configureClientErrorReporting, logDebug, logVoice, reportError, syncSentryConfiguration };
