@@ -422,6 +422,8 @@ const desktopBridge = {
   setServerUrl: (serverUrl: string): Promise<void> =>
     ipcRenderer.invoke("desktop:set-server-url", serverUrl),
   getCapabilities: () => ipcRenderer.invoke("desktop:get-capabilities"),
+  getSystemIdleSeconds: (): Promise<number> =>
+    ipcRenderer.invoke("desktop:get-system-idle-seconds"),
   pingSidecar: () => ipcRenderer.invoke("desktop:ping-sidecar"),
   getUpdateStatus: (): Promise<TDesktopUpdateStatus> =>
     ipcRenderer.invoke("desktop:get-update-status"),

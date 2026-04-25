@@ -1,135 +1,49 @@
 import { describe, expect, it } from 'bun:test';
-import { getAudioLevelFromStatsEntries, resolveVoiceActivityStatsGetter } from '../voice-activity';
+import { createVoiceActivityStore, EMPTY_VOICE_ACTIVITY } from '../voice-activity';
 
-const createRtcStat = (overrides: Record<string, unknown>): RTCStats => {
-	return {
-		id: 'stat-1',
-		timestamp: 1,
-		type: 'codec',
-		...overrides,
-	} as unknown as RTCStats;
-};
+describe('createVoiceActivityStore', () => {
+	it('returns silence for users without activity', () => {
+		const store = createVoiceActivityStore();
 
-const createStatsReport = (stats: RTCStats[]): RTCStatsReport => {
-	return new Map(stats.map((stat) => [stat.id, stat])) as unknown as RTCStatsReport;
-};
-
-describe('getAudioLevelFromStatsEntries', () => {
-	it('returns the highest normalized audio level from audio stats', () => {
-		const stats: RTCStats[] = [
-			createRtcStat({
-				id: 'video-track',
-				type: 'track',
-				kind: 'video',
-				audioLevel: 0.95,
-			}),
-			createRtcStat({
-				id: 'audio-track',
-				type: 'track',
-				kind: 'audio',
-				audioLevel: 0.42,
-			}),
-			createRtcStat({
-				id: 'media-source',
-				type: 'media-source',
-				kind: 'audio',
-				audioLevel: 0.67,
-			}),
-		];
-
-		expect(getAudioLevelFromStatsEntries(stats)).toBe(67);
+		expect(store.getUserActivity(1)).toBe(EMPTY_VOICE_ACTIVITY);
+		expect(store.getUserActivity(1).isSpeaking).toBe(false);
 	});
 
-	it('returns undefined when no audio level stats are present', () => {
-		const stats: RTCStats[] = [
-			createRtcStat({
-				id: 'outbound-rtp',
-				type: 'outbound-rtp',
-				kind: 'audio',
-			}),
-			createRtcStat({
-				id: 'video-media-source',
-				type: 'media-source',
-				kind: 'video',
-				audioLevel: 0.4,
-			}),
-		];
+	it('notifies subscribers when user activity changes', () => {
+		const store = createVoiceActivityStore();
+		let updates = 0;
 
-		expect(getAudioLevelFromStatsEntries(stats)).toBeUndefined();
-	});
-
-	it('clamps audio levels into the expected percentage range', () => {
-		const stats: RTCStats[] = [
-			createRtcStat({
-				id: 'negative-level',
-				type: 'track',
-				kind: 'audio',
-				audioLevel: -0.25,
-			}),
-			createRtcStat({
-				id: 'overflow-level',
-				type: 'track',
-				kind: 'audio',
-				audioLevel: 1.75,
-			}),
-		];
-
-		expect(getAudioLevelFromStatsEntries(stats)).toBe(100);
-	});
-});
-
-describe('resolveVoiceActivityStatsGetter', () => {
-	it('uses the preferred stats getter when local track stats are unavailable', async () => {
-		const fallbackReport = createStatsReport([
-			createRtcStat({
-				id: 'audio-track',
-				type: 'track',
-				kind: 'audio',
-				audioLevel: 0.51,
-			}),
-		]);
-
-		const getStatsReport = resolveVoiceActivityStatsGetter({
-			audioStream: {
-				getAudioTracks: () => [{ id: 'mic-track' }],
-			} as unknown as MediaStream,
-			getPreferredStatsReport: async () => fallbackReport,
+		const unsubscribe = store.subscribe(() => {
+			updates += 1;
 		});
 
-		expect(getStatsReport).toBeDefined();
-		expect(await getStatsReport?.()).toBe(fallbackReport);
+		store.setUserActivity(1, { isSpeaking: true });
+		store.setUserActivity(1, { isSpeaking: true });
+		store.setUserActivity(1, { isSpeaking: false });
+		unsubscribe();
+		store.setUserActivity(1, { isSpeaking: true });
+
+		expect(updates).toBe(2);
+		expect(store.getUserActivity(1).isSpeaking).toBe(true);
 	});
 
-	it('prefers producer stats over local track stats when both are available', async () => {
-		const preferredReport = createStatsReport([
-			createRtcStat({
-				id: 'preferred-audio-track',
-				type: 'track',
-				kind: 'audio',
-				audioLevel: 0.73,
-			}),
-		]);
-		const trackReport = createStatsReport([
-			createRtcStat({
-				id: 'track-audio-track',
-				type: 'track',
-				kind: 'audio',
-				audioLevel: 0.19,
-			}),
-		]);
-		const track = {
-			id: 'mic-track',
-			getStats: async () => trackReport,
-		};
+	it('clears one user or all users', () => {
+		const store = createVoiceActivityStore();
+		let updates = 0;
 
-		const getStatsReport = resolveVoiceActivityStatsGetter({
-			audioStream: {
-				getAudioTracks: () => [track],
-			} as unknown as MediaStream,
-			getPreferredStatsReport: async () => preferredReport,
+		store.subscribe(() => {
+			updates += 1;
 		});
 
-		expect(getStatsReport).toBeDefined();
-		expect(await getStatsReport?.()).toBe(preferredReport);
+		store.setUserActivity(1, { isSpeaking: true });
+		store.setUserActivity(2, { isSpeaking: true });
+		store.clearUserActivity(1);
+		store.clearUserActivity(1);
+		store.clearAll();
+		store.clearAll();
+
+		expect(updates).toBe(4);
+		expect(store.getUserActivity(1).isSpeaking).toBe(false);
+		expect(store.getUserActivity(2).isSpeaking).toBe(false);
 	});
 });

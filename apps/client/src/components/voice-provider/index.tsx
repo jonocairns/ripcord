@@ -17,7 +17,6 @@ import { useChannelCan, useIsConnected } from '@/features/server/hooks';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
-import { useOwnUserId } from '@/features/server/users/hooks';
 import { clearOwnVoiceSessionAfterReconnectFailure, updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import {
@@ -66,9 +65,8 @@ import {
 	type TPushMicState,
 	updatePushMicStateForKeyEvent,
 } from './push-mic-state';
-import { startReceiverVoiceActivityMonitor } from './receiver-voice-activity';
 import { getVideoBitratePolicy } from './video-bitrate-policy';
-import { createVoiceActivityStore, startVoiceActivityMonitor, type VoiceActivityStore } from './voice-activity';
+import { createVoiceActivityStore, type VoiceActivityStore } from './voice-activity';
 import { VolumeControlProvider } from './volume-control-provider';
 import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
 import { getStoredVolume, OWN_MIC_VOLUME_KEY, VOLUME_SETTINGS_UPDATED_EVENT } from './volume-control-storage';
@@ -110,10 +108,6 @@ type TVoiceBootstrapResult = {
 	existingProducers?: TRemoteProducerIds;
 	producerTransportParams?: TTransportParams;
 	consumerTransportParams?: TTransportParams;
-};
-
-type TStatsProvider = {
-	getStats: () => Promise<RTCStatsReport>;
 };
 
 export type { AudioVideoRefs };
@@ -212,8 +206,6 @@ type TChannelExternalStreams = {
 	[streamId: number]: TExternalStream;
 };
 
-type VoiceActivityMonitorStop = () => void;
-
 const EMPTY_CHANNEL_EXTERNAL_STREAMS: TChannelExternalStreams = {};
 
 const isExternalStreamKind = (kind: StreamKind): kind is StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO => {
@@ -228,10 +220,6 @@ const getTrackedExternalWatchField = (
 	kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO,
 ): keyof TTrackedExternalWatchState => {
 	return kind === StreamKind.EXTERNAL_AUDIO ? 'audio' : 'video';
-};
-
-const hasStatsProvider = (value: unknown): value is TStatsProvider => {
-	return typeof value === 'object' && value !== null && typeof Reflect.get(value, 'getStats') === 'function';
 };
 
 const getAudioOpusConfig = (channelId: number | undefined) => {
@@ -515,14 +503,12 @@ const createReconnectAttemptId = (): string => {
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const [loading, setLoading] = useState(false);
 	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
-	const [ownVoiceActivityStream, setOwnVoiceActivityStream] = useState<MediaStream | undefined>(undefined);
 	const [voiceEventRtpCapabilities, setVoiceEventRtpCapabilities] = useState<RtpCapabilities | null>(null);
 	const deviceRef = useRef<Device | undefined>(undefined);
 	const routerRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const sendRtpCapabilities = useRef<RtpCapabilities | null>(null);
 	const audioVideoRefsMap = useRef<Map<number, AudioVideoRefs>>(new Map());
 	const ownVoiceState = useOwnVoiceState();
-	const ownUserId = useOwnUserId();
 	const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
 	const confirmedOwnMicMuted = ownConfirmedVoiceState?.micMuted;
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
@@ -554,9 +540,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const watchedExternalStreamsRef = useRef<Record<string, TTrackedExternalWatchState>>({});
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
-	const voiceActivityStreamsRef = useRef<Map<number, MediaStream>>(new Map());
-	const voiceActivityReceiversRef = useRef<Map<number, RTCRtpReceiver>>(new Map());
-	const voiceActivityCleanupRef = useRef<Map<number, VoiceActivityMonitorStop>>(new Map());
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const micPipelineMutexRef = useRef<Promise<void>>(Promise.resolve());
 	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
@@ -733,7 +716,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const {
 		producerTransport,
 		consumerTransport,
-		consumers,
 		createProducerTransport,
 		createConsumerTransport,
 		consume,
@@ -908,113 +890,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const { stats: transportStats, startMonitoring, stopMonitoring, resetStats } = useTransportStats();
 
-	const stopVoiceActivityMonitoring = useCallback((userId: number) => {
-		voiceActivityCleanupRef.current.get(userId)?.();
-		voiceActivityCleanupRef.current.delete(userId);
-		voiceActivityStreamsRef.current.delete(userId);
-		voiceActivityReceiversRef.current.delete(userId);
-		voiceActivityStoreRef.current.clearUserActivity(userId);
+	const handleVoiceActivityUpdate = useCallback((activity: { userId: number; isSpeaking: boolean }) => {
+		voiceActivityStoreRef.current.setUserActivity(activity.userId, {
+			isSpeaking: activity.isSpeaking,
+		});
 	}, []);
-
-	const stopAllVoiceActivityMonitoring = useCallback(() => {
-		voiceActivityCleanupRef.current.forEach((stop) => {
-			stop();
-		});
-		voiceActivityCleanupRef.current.clear();
-		voiceActivityStreamsRef.current.clear();
-		voiceActivityReceiversRef.current.clear();
-		voiceActivityStoreRef.current.clearAll();
-	}, []);
-
-	const getOwnVoiceActivityStatsReport = useCallback(async () => {
-		const currentAudioProducer = localAudioProducer.current;
-
-		if (!hasStatsProvider(currentAudioProducer)) {
-			return undefined;
-		}
-
-		return currentAudioProducer.getStats();
-	}, [localAudioProducer]);
-
-	useEffect(() => {
-		if (ownVoiceState.soundMuted) {
-			stopAllVoiceActivityMonitoring();
-			return;
-		}
-
-		const nextOwnStream =
-			ownUserId !== undefined && ownVoiceActivityStream ? { userId: ownUserId, stream: ownVoiceActivityStream } : null;
-
-		const nextRemoteReceivers = new Map<number, RTCRtpReceiver>();
-
-		Object.entries(remoteUserStreams).forEach(([userIdStr, streams]) => {
-			const userId = Number(userIdStr);
-			const audioStream = streams[StreamKind.AUDIO];
-
-			if (!audioStream) {
-				return;
-			}
-
-			const receiver = consumers.current[userId]?.[StreamKind.AUDIO]?.rtpReceiver;
-
-			if (receiver) {
-				nextRemoteReceivers.set(userId, receiver);
-			}
-		});
-
-		Array.from(voiceActivityStreamsRef.current.keys()).forEach((userId) => {
-			if (!nextOwnStream || nextOwnStream.userId !== userId) {
-				stopVoiceActivityMonitoring(userId);
-			}
-		});
-
-		Array.from(voiceActivityReceiversRef.current.keys()).forEach((userId) => {
-			if (!nextRemoteReceivers.has(userId)) {
-				stopVoiceActivityMonitoring(userId);
-			}
-		});
-
-		if (nextOwnStream && voiceActivityStreamsRef.current.get(nextOwnStream.userId) !== nextOwnStream.stream) {
-			stopVoiceActivityMonitoring(nextOwnStream.userId);
-			voiceActivityStreamsRef.current.set(nextOwnStream.userId, nextOwnStream.stream);
-
-			const stop = startVoiceActivityMonitor(
-				nextOwnStream.stream,
-				(activity) => {
-					voiceActivityStoreRef.current.setUserActivity(nextOwnStream.userId, activity);
-				},
-				{
-					getPreferredStatsReport: getOwnVoiceActivityStatsReport,
-				},
-			);
-
-			voiceActivityCleanupRef.current.set(nextOwnStream.userId, stop);
-		}
-
-		nextRemoteReceivers.forEach((receiver, userId) => {
-			if (voiceActivityReceiversRef.current.get(userId) === receiver) {
-				return;
-			}
-
-			stopVoiceActivityMonitoring(userId);
-			voiceActivityReceiversRef.current.set(userId, receiver);
-
-			const stop = startReceiverVoiceActivityMonitor(receiver, (activity) => {
-				voiceActivityStoreRef.current.setUserActivity(userId, activity);
-			});
-
-			voiceActivityCleanupRef.current.set(userId, stop);
-		});
-	}, [
-		consumers,
-		ownUserId,
-		ownVoiceActivityStream,
-		ownVoiceState.soundMuted,
-		remoteUserStreams,
-		getOwnVoiceActivityStatsReport,
-		stopAllVoiceActivityMonitoring,
-		stopVoiceActivityMonitoring,
-	]);
 
 	useEffect(() => {
 		if (currentVoiceChannelId === undefined) {
@@ -1512,7 +1392,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 		const rawMicStream = rawMicStreamRef.current;
 		rawMicStreamRef.current = undefined;
-		setOwnVoiceActivityStream(undefined);
 
 		rawMicStream?.getTracks().forEach((track) => {
 			track.stop();
@@ -1562,7 +1441,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		logVoice('Microphone stream obtained', { stream });
 
 		rawMicStreamRef.current = stream;
-		setOwnVoiceActivityStream(stream);
 
 		const rawAudioTrack = stream.getAudioTracks()[0];
 
@@ -2158,7 +2036,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		void cleanupMicAudioPipeline();
 		stopMonitoring();
 		resetStats();
-		stopAllVoiceActivityMonitoring();
+		voiceActivityStoreRef.current.clearAll();
 		clearLocalStreams();
 		clearRemoteUserStreams();
 		clearExternalStreams();
@@ -2173,7 +2051,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	}, [
 		stopMonitoring,
 		resetStats,
-		stopAllVoiceActivityMonitoring,
 		cleanupDesktopAppAudio,
 		cleanupMicAudioPipeline,
 		clearLocalStreams,
@@ -2961,6 +2838,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 	}, [applyPushMicOverride, channelCan, currentVoiceChannelId, getPushMicState, setPushMicState]);
 
+	useEffect(() => {
+		// Reference the dep so the effect re-runs on channel change; the body
+		// only cares that the channel changed, not what the new value is.
+		void currentVoiceChannelId;
+		voiceActivityStoreRef.current.clearAll();
+	}, [currentVoiceChannelId]);
+
 	useVoiceEvents({
 		consume,
 		syncExistingProducers: consumeExistingProducers,
@@ -2971,6 +2855,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		removeExternalStream,
 		clearRemoteUserStreamsForUser,
 		clearPendingStreamsForUser,
+		onVoiceActivityUpdate: handleVoiceActivityUpdate,
 		onTransportFailure,
 		rtpCapabilities: voiceEventRtpCapabilities,
 		reconnectNonce: voiceSessionReconnectNonce,
