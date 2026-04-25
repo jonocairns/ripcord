@@ -11,7 +11,7 @@ import { getTRPCClient } from '@/lib/trpc';
 const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
 // OS idle time does not reset while talking, so keep the AFK voice kick well
 // above the presence threshold to avoid yanking long-conversation participants.
-const AFK_VOICE_THRESHOLD_MS = 30 * 60 * 1000;
+const AFK_VOICE_THRESHOLD_MS = 60 * 60 * 1000;
 const CHECK_INTERVAL_MS = 30 * 1000;
 
 const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'wheel'] as const;
