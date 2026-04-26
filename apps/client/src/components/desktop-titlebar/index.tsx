@@ -28,8 +28,8 @@ const DesktopTitlebar = memo(() => {
 		let cancelled = false;
 
 		const fetchState = async () => {
-			const state = await desktopBridge.getWindowControlsState();
-			if (!cancelled) {
+			const state = await desktopBridge?.getWindowControlsState?.();
+			if (!cancelled && state) {
 				setWindowState(state);
 			}
 		};
@@ -67,7 +67,10 @@ const DesktopTitlebar = memo(() => {
 
 	return (
 		<div className="flex h-8 shrink-0 select-none items-stretch justify-between bg-[rgb(32,34,37)] text-slate-100">
-			<div className="flex min-w-0 flex-1 items-center gap-2.5 px-3.5 [-webkit-app-region:drag]" onDoubleClick={handleToggleMaximize}>
+			<div
+				className="flex min-w-0 flex-1 items-center gap-2.5 px-3.5 [-webkit-app-region:drag]"
+				onDoubleClick={handleToggleMaximize}
+			>
 				<span className="min-w-0 truncate text-[0.6875rem] font-black uppercase tracking-[0.06em] text-[rgb(114,118,125)]">
 					Ripcord
 				</span>
