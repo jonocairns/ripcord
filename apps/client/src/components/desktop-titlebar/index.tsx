@@ -14,14 +14,14 @@ const DesktopTitlebar = memo(() => {
 
 		let cancelled = false;
 
-		void desktopBridge
-			.getWindowControlsState()
-			.then((state) => {
-				if (!cancelled) {
-					setWindowState(state);
-				}
-			})
-			.catch(() => undefined);
+		const fetchState = async () => {
+			const state = await desktopBridge.getWindowControlsState();
+			if (!cancelled) {
+				setWindowState(state);
+			}
+		};
+
+		void fetchState();
 
 		const unsubscribe = desktopBridge.subscribeWindowControlsState?.((state) => {
 			setWindowState(state);
