@@ -44,7 +44,7 @@ import type {
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
 const DESKTOP_QUIT_FLUSH_TIMEOUT_MS = 2_000;
 const DESKTOP_DEBUG_IPC_ENABLED = Boolean(RENDERER_URL);
-const USES_CUSTOM_TITLEBAR = process.platform !== "darwin";
+const USES_CUSTOM_TITLEBAR = process.platform === "win32";
 let mainWindow: BrowserWindow | null = null;
 let appAudioFrameEgressPort: MessagePortMain | undefined;
 let lastDesktopCapabilitiesSnapshot: string | undefined;
