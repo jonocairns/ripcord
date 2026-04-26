@@ -69,7 +69,7 @@ const DesktopTitlebar = memo(() => {
 					aria-label="Minimize window"
 					onClick={handleMinimize}
 				>
-					<Minus className="h-3.5 w-3.5" strokeWidth={1.8} />
+					<Minus className="h-3 w-3" strokeWidth={1.2} />
 				</button>
 				<button
 					type="button"
@@ -78,9 +78,9 @@ const DesktopTitlebar = memo(() => {
 					onClick={handleToggleMaximize}
 				>
 					{windowState.isMaximized ? (
-						<Copy className="h-3.5 w-3.5" strokeWidth={1.8} />
+						<Copy className="h-3 w-3" strokeWidth={1.2} />
 					) : (
-						<Square className="h-3.5 w-3.5" strokeWidth={1.8} />
+						<Square className="h-3 w-3" strokeWidth={1.2} />
 					)}
 				</button>
 				<button
@@ -90,7 +90,7 @@ const DesktopTitlebar = memo(() => {
 					aria-label="Close window"
 					onClick={handleClose}
 				>
-					<X className="h-3.5 w-3.5" strokeWidth={1.8} />
+					<X className="h-3 w-3" strokeWidth={1.2} />
 				</button>
 			</div>
 		</div>
