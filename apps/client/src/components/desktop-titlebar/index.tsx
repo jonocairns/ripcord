@@ -1,11 +1,20 @@
 import { Copy, Minus, Square, X } from 'lucide-react';
-import { memo, useCallback, useEffect, useState } from 'react';
+import { type ComponentProps, memo, useCallback, useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
+
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import type { TDesktopWindowControlsState } from '@/runtime/types';
 
-const buttonClass =
-	'inline-flex h-8 w-[2.875rem] cursor-default items-center justify-center border-0 bg-transparent text-[rgb(114,118,125)] transition-[background-color,color] duration-[140ms] ease-in-out [-webkit-app-region:no-drag] hover:bg-white/[0.07] hover:text-[rgb(220,222,225)] active:bg-white/[0.12]';
+const TitlebarButton = ({ className, ...props }: ComponentProps<'button'>) => (
+	<button
+		type="button"
+		className={cn(
+			'inline-flex h-8 w-[2.875rem] cursor-default items-center justify-center border-0 bg-transparent text-[rgb(114,118,125)] transition-[background-color,color] duration-[140ms] ease-in-out [-webkit-app-region:no-drag] hover:bg-white/[0.07] hover:text-[rgb(220,222,225)] active:bg-white/[0.12]',
+			className,
+		)}
+		{...props}
+	/>
+);
 
 const DesktopTitlebar = memo(() => {
 	const desktopBridge = getDesktopBridge();
@@ -65,12 +74,10 @@ const DesktopTitlebar = memo(() => {
 			</div>
 
 			<div className="flex items-stretch [-webkit-app-region:no-drag]">
-				<button type="button" className={buttonClass} aria-label="Minimize window" onClick={handleMinimize}>
+				<TitlebarButton aria-label="Minimize window" onClick={handleMinimize}>
 					<Minus className="h-3.5 w-3.5" strokeWidth={1.2} />
-				</button>
-				<button
-					type="button"
-					className={buttonClass}
+				</TitlebarButton>
+				<TitlebarButton
 					aria-label={windowState.isMaximized ? 'Restore window' : 'Maximize window'}
 					onClick={handleToggleMaximize}
 				>
@@ -79,15 +86,14 @@ const DesktopTitlebar = memo(() => {
 					) : (
 						<Square className="h-3 w-3" strokeWidth={1.2} />
 					)}
-				</button>
-				<button
-					type="button"
-					className={cn(buttonClass, 'hover:bg-[rgb(237,66,69)] hover:text-white')}
+				</TitlebarButton>
+				<TitlebarButton
+					className="hover:bg-[rgb(237,66,69)] hover:text-white"
 					aria-label="Close window"
 					onClick={handleClose}
 				>
 					<X className="h-4 w-4" strokeWidth={1.5} />
-				</button>
+				</TitlebarButton>
 			</div>
 		</div>
 	);
