@@ -1,7 +1,11 @@
 import { Copy, Minus, Square, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
+import { cn } from '@/lib/utils';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import type { TDesktopWindowControlsState } from '@/runtime/types';
+
+const buttonClass =
+	'inline-flex h-8 w-[2.875rem] cursor-default items-center justify-center border-0 bg-transparent text-[rgb(114,118,125)] transition-[background-color,color] duration-[140ms] ease-in-out [-webkit-app-region:no-drag] hover:bg-white/[0.07] hover:text-[rgb(220,222,225)] active:bg-white/[0.12]';
 
 const DesktopTitlebar = memo(() => {
 	const desktopBridge = getDesktopBridge();
@@ -53,23 +57,20 @@ const DesktopTitlebar = memo(() => {
 	}
 
 	return (
-		<div className="desktop-titlebar">
-			<div className="desktop-titlebar__drag" onDoubleClick={handleToggleMaximize}>
-				<span className="desktop-titlebar__title">Ripcord</span>
+		<div className="flex h-8 shrink-0 select-none items-stretch justify-between bg-[rgb(32,34,37)] text-slate-100">
+			<div className="flex min-w-0 flex-1 items-center gap-2.5 px-3.5 [-webkit-app-region:drag]" onDoubleClick={handleToggleMaximize}>
+				<span className="min-w-0 truncate text-[0.6875rem] font-black uppercase tracking-[0.06em] text-[rgb(114,118,125)]">
+					Ripcord
+				</span>
 			</div>
 
-			<div className="desktop-titlebar__actions">
-				<button
-					type="button"
-					className="desktop-titlebar__button"
-					aria-label="Minimize window"
-					onClick={handleMinimize}
-				>
+			<div className="flex items-stretch [-webkit-app-region:no-drag]">
+				<button type="button" className={buttonClass} aria-label="Minimize window" onClick={handleMinimize}>
 					<Minus className="h-3.5 w-3.5" strokeWidth={1.2} />
 				</button>
 				<button
 					type="button"
-					className="desktop-titlebar__button"
+					className={buttonClass}
 					aria-label={windowState.isMaximized ? 'Restore window' : 'Maximize window'}
 					onClick={handleToggleMaximize}
 				>
@@ -81,8 +82,7 @@ const DesktopTitlebar = memo(() => {
 				</button>
 				<button
 					type="button"
-					className="desktop-titlebar__button"
-					data-close="true"
+					className={cn(buttonClass, 'hover:bg-[rgb(237,66,69)] hover:text-white')}
 					aria-label="Close window"
 					onClick={handleClose}
 				>
