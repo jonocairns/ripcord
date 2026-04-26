@@ -59,7 +59,7 @@ const DesktopTitlebar = memo(() => {
 	return (
 		<div className="desktop-titlebar">
 			<div className="desktop-titlebar__drag" onDoubleClick={handleToggleMaximize}>
-<span className="desktop-titlebar__title">Ripcord</span>
+				<span className="desktop-titlebar__title">Ripcord</span>
 			</div>
 
 			<div className="desktop-titlebar__actions">

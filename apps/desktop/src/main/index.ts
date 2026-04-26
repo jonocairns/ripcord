@@ -514,7 +514,11 @@ const registerIpcHandlers = () => {
         window.maximize();
       }
 
-      return getWindowControlsState();
+      return {
+        platform: resolveDesktopPlatform(),
+        isMaximized: window.isMaximized(),
+        usesCustomTitlebar: USES_CUSTOM_TITLEBAR,
+      };
     },
   );
 
