@@ -90,7 +90,7 @@ const DesktopTitlebar = memo(() => {
 					aria-label="Close window"
 					onClick={handleClose}
 				>
-					<X className="h-3.5 w-3.5" strokeWidth={1.2} />
+					<X className="h-4 w-4" strokeWidth={1.2} />
 				</button>
 			</div>
 		</div>
