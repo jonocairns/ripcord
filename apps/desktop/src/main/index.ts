@@ -35,6 +35,7 @@ import type {
   TDesktopQuitFlushResult,
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
+  TDesktopWindowControlsState,
   TGlobalPushKeybindRegistrationResult,
   TScreenShareSelection,
   TStartAppAudioCaptureInput,
@@ -43,6 +44,7 @@ import type {
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
 const DESKTOP_QUIT_FLUSH_TIMEOUT_MS = 2_000;
 const DESKTOP_DEBUG_IPC_ENABLED = Boolean(RENDERER_URL);
+const USES_CUSTOM_TITLEBAR = process.platform !== "darwin";
 let mainWindow: BrowserWindow | null = null;
 let appAudioFrameEgressPort: MessagePortMain | undefined;
 let lastDesktopCapabilitiesSnapshot: string | undefined;
@@ -121,6 +123,33 @@ const resolveAppIconPath = (): string | undefined => {
 
 const emitPushKeybindEvent = (event: TDesktopPushKeybindEvent) => {
   sendToRenderer("desktop:global-push-keybind", event);
+};
+
+const resolveDesktopPlatform = (): TDesktopWindowControlsState["platform"] => {
+  if (process.platform === "darwin") {
+    return "macos";
+  }
+
+  if (process.platform === "win32") {
+    return "windows";
+  }
+
+  return "linux";
+};
+
+const getWindowControlsState = (): TDesktopWindowControlsState => {
+  return {
+    platform: resolveDesktopPlatform(),
+    isMaximized: mainWindow?.isMaximized() ?? false,
+    usesCustomTitlebar: USES_CUSTOM_TITLEBAR,
+  };
+};
+
+const emitWindowControlsState = () => {
+  sendToRenderer(
+    "desktop:window-controls-state-changed",
+    getWindowControlsState(),
+  );
 };
 
 const disposeDesktopServicesForShutdown = () => {
@@ -281,6 +310,7 @@ const createMainWindow = () => {
     height: 920,
     minWidth: 1120,
     minHeight: 720,
+    frame: !USES_CUSTOM_TITLEBAR,
     autoHideMenuBar: true,
     show: false,
     backgroundColor: "#090d12",
@@ -296,6 +326,12 @@ const createMainWindow = () => {
 
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
+  });
+  mainWindow.on("maximize", () => {
+    emitWindowControlsState();
+  });
+  mainWindow.on("unmaximize", () => {
+    emitWindowControlsState();
   });
   mainWindow.on("focus", () => {
     requestDesktopCapabilitiesRefresh({
@@ -449,6 +485,42 @@ const setupYoutubeEmbedRefererHandler = () => {
 const registerIpcHandlers = () => {
   ipcMain.handle("desktop:get-server-url", () => {
     return getServerUrl();
+  });
+
+  ipcMain.handle("desktop:get-window-controls-state", () => {
+    return getWindowControlsState();
+  });
+
+  ipcMain.handle(
+    "desktop:minimize-window",
+    (event: IpcMainInvokeEvent): void => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      window?.minimize();
+    },
+  );
+
+  ipcMain.handle(
+    "desktop:toggle-maximize-window",
+    (event: IpcMainInvokeEvent): TDesktopWindowControlsState => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+
+      if (!window) {
+        return getWindowControlsState();
+      }
+
+      if (window.isMaximized()) {
+        window.unmaximize();
+      } else {
+        window.maximize();
+      }
+
+      return getWindowControlsState();
+    },
+  );
+
+  ipcMain.handle("desktop:close-window", (event: IpcMainInvokeEvent): void => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    window?.close();
   });
 
   ipcMain.handle(

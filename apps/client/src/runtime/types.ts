@@ -147,6 +147,12 @@ export type TDesktopQuitFlushResult = {
 	reason?: string;
 };
 
+export type TDesktopWindowControlsState = {
+	platform: TDesktopPlatform;
+	isMaximized: boolean;
+	usesCustomTitlebar: boolean;
+};
+
 export type TPushKeybindKind = 'talk' | 'mute';
 
 export type TDesktopPushKeybindsInput = {
@@ -167,6 +173,10 @@ export type TGlobalPushKeybindRegistrationResult = {
 
 export type TDesktopBridge = {
 	getServerUrl: () => Promise<string>;
+	getWindowControlsState?: () => Promise<TDesktopWindowControlsState>;
+	minimizeWindow?: () => Promise<void>;
+	toggleMaximizeWindow?: () => Promise<TDesktopWindowControlsState>;
+	closeWindow?: () => Promise<void>;
 	setServerUrl: (serverUrl: string) => Promise<void>;
 	getCapabilities: () => Promise<TDesktopCapabilities>;
 	getSystemIdleSeconds: () => Promise<number>;
@@ -183,6 +193,7 @@ export type TDesktopBridge = {
 	subscribeGlobalPushKeybindEvents: (cb: (event: TDesktopPushKeybindEvent) => void) => () => void;
 	subscribeCapabilities: (cb: (capabilities: TDesktopCapabilities) => void) => () => void;
 	subscribeUpdateStatus: (cb: (status: TDesktopUpdateStatus) => void) => () => void;
+	subscribeWindowControlsState?: (cb: (state: TDesktopWindowControlsState) => void) => () => void;
 	subscribeBeforeQuit: (cb: () => void | Promise<void>) => () => void;
 	debugRequestBeforeQuitFlush?: () => Promise<TDesktopQuitFlushResult>;
 	prepareScreenShare: (selection: TDesktopScreenShareSelection) => Promise<TResolvedScreenAudioMode>;

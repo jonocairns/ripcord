@@ -9,6 +9,7 @@ import type {
   TDesktopPushKeybindsInput,
   TDesktopQuitFlushResult,
   TDesktopUpdateStatus,
+  TDesktopWindowControlsState,
   TGlobalPushKeybindRegistrationResult,
   TDesktopAppAudioTargetsResult,
   TScreenShareSelection,
@@ -419,6 +420,13 @@ ipcRenderer.on("desktop:before-quit", () => {
 const desktopBridge = {
   getServerUrl: (): Promise<string> =>
     ipcRenderer.invoke("desktop:get-server-url"),
+  getWindowControlsState: (): Promise<TDesktopWindowControlsState> =>
+    ipcRenderer.invoke("desktop:get-window-controls-state"),
+  minimizeWindow: (): Promise<void> =>
+    ipcRenderer.invoke("desktop:minimize-window"),
+  toggleMaximizeWindow: (): Promise<TDesktopWindowControlsState> =>
+    ipcRenderer.invoke("desktop:toggle-maximize-window"),
+  closeWindow: (): Promise<void> => ipcRenderer.invoke("desktop:close-window"),
   setServerUrl: (serverUrl: string): Promise<void> =>
     ipcRenderer.invoke("desktop:set-server-url", serverUrl),
   getCapabilities: () => ipcRenderer.invoke("desktop:get-capabilities"),
@@ -528,6 +536,22 @@ const desktopBridge = {
 
     return () => {
       ipcRenderer.removeListener("desktop:update-status", listener);
+    };
+  },
+  subscribeWindowControlsState: (
+    callback: (state: TDesktopWindowControlsState) => void,
+  ) => {
+    const listener = (_event: unknown, state: TDesktopWindowControlsState) => {
+      callback(state);
+    };
+
+    ipcRenderer.on("desktop:window-controls-state-changed", listener);
+
+    return () => {
+      ipcRenderer.removeListener(
+        "desktop:window-controls-state-changed",
+        listener,
+      );
     };
   },
   subscribeBeforeQuit: (callback: () => void | Promise<void>) => {

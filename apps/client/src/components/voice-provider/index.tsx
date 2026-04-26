@@ -2927,7 +2927,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		<VoiceProviderContext.Provider value={contextValue}>
 			<VoiceActivityContext.Provider value={voiceActivityStoreRef.current}>
 				<VolumeControlProvider>
-					<div className="relative">
+					<div className="relative flex min-h-0 flex-1 flex-col">
 						<FloatingPinnedCard
 							remoteUserStreams={remoteUserStreams}
 							externalStreams={externalStreams}

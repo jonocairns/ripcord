@@ -9,7 +9,7 @@ const LoadingApp = memo(() => {
 	}, []);
 
 	return (
-		<div className="flex flex-col justify-center items-center h-full">
+		<div className="flex min-h-0 flex-1 flex-col items-center justify-center">
 			<img src={getPublicAssetUrl('logo.webp')} alt="" aria-hidden="true" className="logo-loader" />
 		</div>
 	);

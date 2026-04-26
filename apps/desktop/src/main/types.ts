@@ -176,3 +176,9 @@ export type TDesktopQuitFlushResult = {
   status: TDesktopQuitFlushStatus;
   reason?: string;
 };
+
+export type TDesktopWindowControlsState = {
+  platform: TDesktopPlatform;
+  isMaximized: boolean;
+  usesCustomTitlebar: boolean;
+};

@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 const ForcePasswordReset = memo(() => {
 	return (
-		<div className="flex min-h-screen items-center justify-center bg-background px-4">
+		<div className="flex min-h-0 flex-1 items-center justify-center bg-background px-4">
 			<div className="mx-auto w-full max-w-4xl space-y-4">
 				<Card>
 					<CardHeader className="pb-2">
