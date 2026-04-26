@@ -37,15 +37,11 @@ const DesktopTitlebar = memo(() => {
 		void desktopBridge?.minimizeWindow?.();
 	}, [desktopBridge]);
 
-	const handleToggleMaximize = useCallback(() => {
-		const togglePromise = desktopBridge?.toggleMaximizeWindow?.();
-		if (!togglePromise) {
-			return;
-		}
-
-		void togglePromise.then((state) => {
+	const handleToggleMaximize = useCallback(async () => {
+		const state = await desktopBridge?.toggleMaximizeWindow?.();
+		if (state) {
 			setWindowState(state);
-		});
+		}
 	}, [desktopBridge]);
 
 	const handleClose = useCallback(() => {
