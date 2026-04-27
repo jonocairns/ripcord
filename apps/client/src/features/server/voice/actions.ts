@@ -67,6 +67,7 @@ const clearOwnVoiceChannelStateAndCleanupProvider = (): void => {
 const clearOwnVoiceSessionAfterReconnectFailure = (reason: TClearReason): void => {
 	clearVoiceReconnectRecovery(reason);
 	clearOwnVoiceChannelState();
+	runVoiceProviderCleanup();
 };
 
 const channelHasAvailableStreams = (channelId: number, opts: { excludeUserId?: number } = {}): boolean => {

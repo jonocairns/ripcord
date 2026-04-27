@@ -522,6 +522,7 @@ describe('voice actions', () => {
 			reconnectingSince: undefined,
 			voiceReconnectSuppression: undefined,
 		});
+		expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
 	});
 
 	it('suppresses started-stream sounds for peers captured in reconnect suppression', () => {
