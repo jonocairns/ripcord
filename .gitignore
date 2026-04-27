@@ -11,6 +11,8 @@ apps/desktop/dist/
 apps/desktop/build/
 apps/desktop/renderer-dist/
 apps/desktop/node_modules/
+apps/site/dist/
+apps/site/node_modules/
 apps/desktop/*.log
 apps/desktop/.DS_Store
 apps/desktop/*.tsbuildinfo
