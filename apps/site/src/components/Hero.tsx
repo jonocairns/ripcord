@@ -15,7 +15,7 @@ export default function Hero() {
       </div>
       <div className="flex gap-4 flex-wrap justify-center">
         <a
-          href="https://github.com/jonocairns/ripcord"
+          href="#getting-started"
           className="px-6 py-3 rounded-lg bg-white text-gray-950 font-semibold hover:bg-gray-200 transition-colors"
         >
           Get started
