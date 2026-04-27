@@ -220,7 +220,7 @@ const Connect = memo(() => {
 	// 2FA verification step
 	if (twoFaChallenge) {
 		return (
-			<div className="flex flex-col gap-2 justify-center items-center h-full">
+			<div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2">
 				<Card className="w-full max-w-sm">
 					<CardHeader>
 						<CardTitle className="flex flex-col items-center gap-2 text-center">
@@ -284,7 +284,7 @@ const Connect = memo(() => {
 	}
 
 	return (
-		<div className="flex flex-col gap-2 justify-center items-center h-full">
+		<div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2">
 			<Card className="w-full max-w-sm">
 				<CardHeader>
 					<CardTitle className="flex flex-col items-center gap-2 text-center">

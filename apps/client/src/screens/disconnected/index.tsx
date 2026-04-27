@@ -174,7 +174,7 @@ const Disconnected = memo(({ info }: TDisconnectedProps) => {
 	}, [desktopServerUrl]);
 
 	return (
-		<div className="flex items-center justify-center min-h-screen bg-background">
+		<div className="flex min-h-0 flex-1 items-center justify-center bg-background">
 			<div className="text-center space-y-6 max-w-md px-6">
 				<div className="flex justify-center">{disconnectType.icon}</div>
 

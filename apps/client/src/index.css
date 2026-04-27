@@ -176,6 +176,7 @@
 	}
 	body {
 		@apply bg-background text-foreground;
+		margin: 0;
 		font-family: "Inter", -apple-system, system-ui, sans-serif;
 	}
 	button:not(:disabled) {
@@ -202,6 +203,7 @@ body,
 	min-height: 100vh;
 	height: 100%;
 }
+
 
 .voice-stage {
 	background:

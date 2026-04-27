@@ -26,7 +26,7 @@ const DesktopServerSetup = memo(() => {
 	}, [serverUrl]);
 
 	return (
-		<div className="flex items-center justify-center h-full p-4">
+		<div className="flex min-h-0 flex-1 items-center justify-center p-4">
 			<Card className="w-full max-w-md">
 				<CardHeader>
 					<CardTitle>Desktop Setup</CardTitle>

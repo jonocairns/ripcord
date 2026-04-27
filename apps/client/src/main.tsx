@@ -6,6 +6,7 @@ import { ReconnectLab } from './components/debug/reconnect-lab.tsx';
 import { StoreDebug } from './components/debug/store-debug.tsx';
 import { DebugInfo } from './components/debug-info/index.tsx';
 import { DesktopQuitCoordinator } from './components/desktop-quit-coordinator';
+import { DesktopTitlebar } from './components/desktop-titlebar';
 import { DevicesProvider } from './components/devices-provider/index.tsx';
 import { DialogsProvider } from './components/dialogs/index.tsx';
 import { ErrorBoundary } from './components/error-boundary/index.tsx';
@@ -35,11 +36,14 @@ const bootstrap = async () => {
 					<StoreDebug />
 					<ReconnectLab />
 					<DesktopQuitCoordinator />
-					<DevicesProvider>
-						<DialogsProvider />
-						<ServerScreensProvider />
-						<Routing />
-					</DevicesProvider>
+					<div className="flex h-full min-h-0 flex-1 flex-col">
+						<DesktopTitlebar />
+						<DevicesProvider>
+							<DialogsProvider />
+							<ServerScreensProvider />
+							<Routing />
+						</DevicesProvider>
+					</div>
 				</ThemeProvider>
 			</ErrorBoundary>
 		</StrictMode>,
