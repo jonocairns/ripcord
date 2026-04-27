@@ -35,7 +35,7 @@ jobs:
       - name: Fetch latest release version
         id: release
         run: |
-          version=$(curl -sf https://api.github.com/repos/jonocairns/ripcord/releases/latest | jq -r '.tag_name // "latest"')
+          version=$(curl -sf -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github+json" https://api.github.com/repos/jonocairns/ripcord/releases/latest | jq -r '.tag_name // "latest"')
           echo "version=${version#v}" >> "$GITHUB_OUTPUT"
 
       - name: Build site
