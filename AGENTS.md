@@ -1,19 +1,19 @@
-- Commits: conventional format (feat:, fix:, docs:, refactor:)
-- PR titles: plain sentence case summary of the feature or fix (e.g. "Add push-to-talk support on Linux"), not conventional commit format
-- PR description: use Markdown structure (e.g. ## Summary, ## Validation) with bullet lists for readability
-- Underscore prefix for unused vars (^_)
-- Avoid TypeScript as casting; prefer explicit types, narrowing, and fragment-driven typing. The only acceptable use of as is in test files for constructing partial mock data (e.g. as unknown as SomeType), and even then only when the full type is impractical to construct.
-- Avoid TypeScript non-null assertions (`!`); prefer conditional guards (`if (!x) return;` or `if (condition && x)`) to handle possibly-undefined values safely.
-- Use nix for running repo commands with bun `nix develop -c bun run magic`
-- Before committing, run `nix develop -c bun run magic` to catch formatting, typecheck, and lint issues together.
-- Treat shipped desktop clients as potentially behind the latest server/API version.
-- Default policy: API changes must be backward compatible.
-- Naming pitfall: `useChannelPermissionsById` returns channel-permission data, not user roles. Avoid role-like variable names for its result (for example `ownUserRoles`).
-- Branch pitfall: the default branch is `main`, NOT `development`. The `development` branch is deprecated. Always base new branches and PRs on `main`.
+- Use conventional commit prefixes: `feat:`, `fix:`, `docs:`, `refactor:`.
+- Write PR titles as plain sentence case summaries of the feature or fix.
+- Structure PR descriptions with Markdown sections such as `## Summary` and `## Validation`, and use bullets for scanability.
+- Prefix intentionally unused variables with `_`.
+- Use explicit TypeScript types, narrowing, and fragment-driven typing. Reserve `as` for rare test-only partial mocks when constructing the full type is impractical.
+- Handle possibly undefined values with conditional guards and control-flow narrowing.
+- Run repo Bun commands through Nix. Use `nix develop -c bun run magic` for the standard validation pass before committing.
+- Keep shipped desktop clients compatible with newer server/API versions.
+- Keep API changes backward compatible by default.
+- Name `useChannelPermissionsById` results as channel-permission data rather than user roles.
+- Base branches and PRs on `main`.
 - Migration pitfall: `nix develop -c bun run --filter @sharkord/server db:gen` can sometimes generate a migration that re-includes older schema changes (for example `refresh_tokens` or prior `ALTER TABLE` steps). Always review the generated SQL and keep only the intended new delta before committing.
 - Reconnect pitfall: pending voice auto-rejoin state is consumed from `VoiceProvider`, so it must be gated on actual server connectivity. If it runs during disconnect cleanup when `currentVoiceChannelId` is reset to `undefined`, the saved channel can be spent against a dead TRPC client and be gone by the time reconnect succeeds.
+- Voice provider cleanup pitfall: on terminal voice exits (explicit leave, session-replaced, desktop quit), call the registered `VoiceProvider` cleanup so local capture stops immediately. Reconnect-bookkeeping removes must skip cleanup to preserve the active media session during recovery.
 - Voice restart recovery pitfall (apps/client): after a cold server restart, restoring channel membership and rebuilding transports is not enough on its own. The reconnect success path must do a fresh `voice.getProducers` sweep after transports are live so clients catch producers created during the restore gap; otherwise users can appear rejoined but hear silence.
-- Voice receive retry pitfall (apps/client): reconnect/recovery robustness depends on `consumeExistingProducers` actually rebuilding audio consumers. Do not fire-and-forget audio `consume` calls from sweeps; keep audio-like consumers pending until `resumeConsumer` succeeds and use bounded retries so one transient consume/resume failure does not become permanent one-way silence.
+- Voice receive retry pitfall (apps/client): reconnect/recovery robustness depends on `consumeExistingProducers` actually rebuilding audio consumers. Do not fire-and-forget audio `consume` calls from sweeps; keep audio consumers pending until `resumeConsumer` succeeds and use bounded retries so one transient consume/resume failure does not become permanent one-way silence.
 - Voice push-key ordering pitfall (apps/client): push-to-talk/push-to-mute can issue rapid overlapping mic state mutations. Guard local rollback and own-user server confirmations with operation ordering so stale mute/unmute responses cannot overwrite the latest key state or leave UI state out of sync with `MediaStreamTrack.enabled`.
 - Voice optimistic-state pitfall (apps/client): only use optimistic own-voice updates for immediate local toggles that do not cross a permission prompt, picker, or media/device acquisition boundary. For webcam, screenshare, and similar capture flows, flip the UI/state only after capture actually starts; when stopping, stop the local media first before marking the feature off.
 - Screen share startup pitfall (apps/client): the visible `sharingScreen` state should flip as soon as the screen video producer is live. Do not wait for optional sidecar/system-audio startup to finish first, or the local UI will look stalled and delayed start/stop clicks can race the later server state sync.
@@ -33,4 +33,4 @@
 - YouTube embed pitfall (apps/desktop): packaged Electron builds load the renderer from `file://`, which means embedded YouTube iframes can hit `Error 153` unless the desktop session injects a valid `Referer` header for `youtube.com` / `youtube-nocookie.com` requests. Fix this in the Electron request layer, not just the React player component.
 - Electron close pitfall (apps/desktop): clicking the window X can destroy the renderer before `app.before-quit` can request renderer cleanup. If close-time app state must be flushed, intercept `BrowserWindow` `close` while the renderer is alive, run the flush, then continue closing/quitting.
 
-The role of this file is to capture project conventions, style rules, and common mistakes that agents might encounter. If you ever encounter something surprising, alert the developer and add it here to help future agents.
+Capture new durable conventions, invariants, and recurring pitfalls here when they will help future agents make better decisions.

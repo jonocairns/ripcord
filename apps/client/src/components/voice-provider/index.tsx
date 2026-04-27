@@ -24,6 +24,7 @@ import {
 	getValidPendingVoiceReconnect,
 	useVoiceReconnectStore,
 } from '@/features/server/voice/reconnect-coordinator';
+import { setVoiceProviderCleanupHandler } from '@/features/server/voice/provider-cleanup';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import {
 	classifyVoiceReconnectError,
@@ -2060,6 +2061,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	]);
 
 	voiceCleanupRef.current = cleanup;
+
+	useEffect(() => {
+		setVoiceProviderCleanupHandler(cleanup);
+
+		return () => {
+			setVoiceProviderCleanupHandler(undefined);
+		};
+	}, [cleanup]);
 
 	const init = useCallback(
 		async (

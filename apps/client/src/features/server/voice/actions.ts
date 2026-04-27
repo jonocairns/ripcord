@@ -18,6 +18,7 @@ import { useServerStore } from '../slice';
 import { playSound } from '../sounds/actions';
 import { SoundType } from '../types';
 import { ownUserIdSelector } from '../users/selectors';
+import { runVoiceProviderCleanup } from './provider-cleanup';
 import type { TClearReason } from './reconnect-coordinator';
 import {
 	captureVoiceReconnectIntentForCurrentSession,
@@ -33,14 +34,14 @@ type TLeaveVoiceOptions = {
 	suppressErrors?: boolean;
 };
 
-const clearOwnVoiceChannelState = (): void => {
+const clearOwnVoiceChannelState = (): boolean => {
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
 	const selectedChannelId = selectedChannelIdSelector(state);
 	const lastTextChannelId = state.lastTextChannelId;
 
 	if (currentChannelId === undefined) {
-		return;
+		return false;
 	}
 
 	if (selectedChannelId === currentChannelId) {
@@ -53,11 +54,20 @@ const clearOwnVoiceChannelState = (): void => {
 		sharingScreen: false,
 	});
 	useServerStore.getState().setPinnedCard(undefined);
+
+	return true;
+};
+
+const clearOwnVoiceChannelStateAndCleanupProvider = (): void => {
+	if (clearOwnVoiceChannelState()) {
+		runVoiceProviderCleanup();
+	}
 };
 
 const clearOwnVoiceSessionAfterReconnectFailure = (reason: TClearReason): void => {
 	clearVoiceReconnectRecovery(reason);
 	clearOwnVoiceChannelState();
+	runVoiceProviderCleanup();
 };
 
 const channelHasAvailableStreams = (channelId: number, opts: { excludeUserId?: number } = {}): boolean => {
@@ -129,11 +139,11 @@ export const removeUserFromVoiceChannel = (
 	if (userId === ownUserId && channelId === currentChannelId) {
 		if (opts.reconnecting) {
 			captureVoiceReconnectIntentForCurrentSession();
+			clearOwnVoiceChannelState();
 		} else {
 			playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+			clearOwnVoiceChannelStateAndCleanupProvider();
 		}
-
-		clearOwnVoiceChannelState();
 		return;
 	}
 
@@ -321,7 +331,7 @@ const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<boolean>
 	if (options.clearReconnectReason !== false) {
 		clearVoiceReconnectRecovery(options.clearReconnectReason ?? 'user-left-voice');
 	}
-	clearOwnVoiceChannelState();
+	clearOwnVoiceChannelStateAndCleanupProvider();
 
 	if (options.playOwnLeaveSound) {
 		playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
@@ -411,7 +421,7 @@ export const handleVoiceSessionReplaced = (): void => {
 	}
 
 	clearVoiceReconnectRecovery('session-replaced');
-	clearOwnVoiceChannelState();
+	clearOwnVoiceChannelStateAndCleanupProvider();
 };
 
 export const setPinnedCard = (pinnedCard: TPinnedCard | undefined): void => {

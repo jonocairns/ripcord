@@ -11,7 +11,10 @@ let addUserToVoiceChannel: typeof import('../actions').addUserToVoiceChannel;
 let updateVoiceUserState: typeof import('../actions').updateVoiceUserState;
 let clearOwnVoiceSessionAfterReconnectFailure: typeof import('../actions').clearOwnVoiceSessionAfterReconnectFailure;
 let flushVoiceForDesktopQuit: typeof import('../actions').flushVoiceForDesktopQuit;
+let leaveVoice: typeof import('../actions').leaveVoice;
+let handleVoiceSessionReplaced: typeof import('../actions').handleVoiceSessionReplaced;
 const playSound = mock(() => {});
+const runVoiceProviderCleanup = mock(() => {});
 let leaveShouldFail = false;
 const leaveMutate = mock(async () => {
 	if (leaveShouldFail) {
@@ -74,6 +77,16 @@ class MockAudioContext {
 	}
 }
 
+const setJoinedVoiceChannelState = (state: Partial<ReturnType<typeof useServerStore.getState>> = {}): void => {
+	useServerStore.setState({
+		currentVoiceChannelId: 7,
+		selectedChannelId: 7,
+		lastTextChannelId: 9,
+		channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
+		...state,
+	});
+};
+
 describe('voice actions', () => {
 	beforeAll(async () => {
 		Object.assign(globalThis, {
@@ -94,12 +107,17 @@ describe('voice actions', () => {
 				},
 			}),
 		}));
+		mock.module('../provider-cleanup', () => ({
+			runVoiceProviderCleanup,
+		}));
 
 		({
 			addUserToVoiceChannel,
 			clearOwnVoiceSessionAfterReconnectFailure,
 			removeUserFromVoiceChannel,
 			handleStreamWatcherActivity,
+			handleVoiceSessionReplaced,
+			leaveVoice,
 			updateVoiceUserState,
 			flushVoiceForDesktopQuit,
 		} = await import('../actions'));
@@ -109,17 +127,14 @@ describe('voice actions', () => {
 		useServerStore.getState().resetState();
 		useVoiceReconnectStore.getState().resetState();
 		playSound.mockClear();
+		runVoiceProviderCleanup.mockClear();
 		leaveMutate.mockClear();
 		leaveShouldFail = false;
 	});
 
 	it('clears own active voice state when the server removes the current user from voice', () => {
-		useServerStore.setState({
+		setJoinedVoiceChannelState({
 			ownUserId: 42,
-			currentVoiceChannelId: 7,
-			selectedChannelId: 7,
-			lastTextChannelId: 9,
-			channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
 			voiceMap: {
 				7: {
 					users: {
@@ -166,15 +181,12 @@ describe('voice actions', () => {
 		});
 		expect(state.pinnedCard).toBeUndefined();
 		expect(playSound).toHaveBeenCalledWith(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+		expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
 	});
 
 	it('does not play the own leave sound for reconnect bookkeeping', () => {
-		useServerStore.setState({
+		setJoinedVoiceChannelState({
 			ownUserId: 42,
-			currentVoiceChannelId: 7,
-			selectedChannelId: 7,
-			lastTextChannelId: 9,
-			channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
 			voiceMap: {
 				7: {
 					users: {
@@ -192,6 +204,7 @@ describe('voice actions', () => {
 		removeUserFromVoiceChannel(42, 7, { reconnecting: true });
 
 		expect(playSound).not.toHaveBeenCalledWith(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+		expect(runVoiceProviderCleanup).not.toHaveBeenCalled();
 	});
 
 	it('tracks screen share watchers by watcher id so duplicate events do not drift the badge count', () => {
@@ -243,12 +256,8 @@ describe('voice actions', () => {
 	});
 
 	it('snapshots reconnect intent before clearing own voice state when reconnecting', () => {
-		useServerStore.setState({
+		setJoinedVoiceChannelState({
 			ownUserId: 42,
-			currentVoiceChannelId: 7,
-			selectedChannelId: 7,
-			lastTextChannelId: 9,
-			channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
 			ownVoiceDefaults: {
 				micMuted: true,
 				soundMuted: false,
@@ -281,12 +290,8 @@ describe('voice actions', () => {
 	});
 
 	it('does not snapshot reconnect intent when leaving without reconnecting', () => {
-		useServerStore.setState({
+		setJoinedVoiceChannelState({
 			ownUserId: 42,
-			currentVoiceChannelId: 7,
-			selectedChannelId: 7,
-			lastTextChannelId: 9,
-			channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
 			voiceMap: {
 				7: {
 					users: {
@@ -344,11 +349,7 @@ describe('voice actions', () => {
 	});
 
 	it('clears reconnect state and leaves voice quietly during desktop quit flush', async () => {
-		useServerStore.setState({
-			currentVoiceChannelId: 7,
-			selectedChannelId: 7,
-			lastTextChannelId: 9,
-			channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
+		setJoinedVoiceChannelState({
 			voiceMap: {
 				7: {
 					users: {
@@ -402,16 +403,12 @@ describe('voice actions', () => {
 			reconnectingSince: undefined,
 			voiceReconnectSuppression: undefined,
 		});
+		expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
 	});
 
 	it('falls back to skipped desktop quit flush when the leave call fails', async () => {
 		leaveShouldFail = true;
-		useServerStore.setState({
-			currentVoiceChannelId: 7,
-			selectedChannelId: 7,
-			lastTextChannelId: 9,
-			channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
-		});
+		setJoinedVoiceChannelState();
 		useVoiceReconnectStore.setState({
 			pendingVoiceReconnect: {
 				channelId: 7,
@@ -454,12 +451,27 @@ describe('voice actions', () => {
 		});
 	});
 
+	it('tears down local voice resources on an explicit leave', async () => {
+		setJoinedVoiceChannelState();
+
+		await leaveVoice();
+
+		expect(leaveMutate).toHaveBeenCalledTimes(1);
+		expect(playSound).toHaveBeenCalledWith(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+		expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
+	});
+
+	it('tears down local voice resources when a voice session is replaced', () => {
+		setJoinedVoiceChannelState();
+
+		handleVoiceSessionReplaced();
+
+		expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
+		expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
+	});
+
 	it('clears sticky local voice state when reconnect recovery terminates', () => {
-		useServerStore.setState({
-			currentVoiceChannelId: 7,
-			selectedChannelId: 7,
-			lastTextChannelId: 9,
-			channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
+		setJoinedVoiceChannelState({
 			voiceMap: {
 				7: {
 					users: {
@@ -510,6 +522,7 @@ describe('voice actions', () => {
 			reconnectingSince: undefined,
 			voiceReconnectSuppression: undefined,
 		});
+		expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
 	});
 
 	it('suppresses started-stream sounds for peers captured in reconnect suppression', () => {
