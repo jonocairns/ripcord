@@ -1,4 +1,4 @@
-import { Copy, Minus, Square, X } from 'lucide-react';
+import { Minus, Square, X } from 'lucide-react';
 import { type ComponentProps, memo, useCallback, useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -50,11 +50,8 @@ const DesktopTitlebar = memo(() => {
 		void desktopBridge?.minimizeWindow?.();
 	}, [desktopBridge]);
 
-	const handleToggleMaximize = useCallback(async () => {
-		const state = await desktopBridge?.toggleMaximizeWindow?.();
-		if (state) {
-			setWindowState(state);
-		}
+	const handleToggleMaximize = useCallback(() => {
+		void desktopBridge?.toggleMaximizeWindow?.();
 	}, [desktopBridge]);
 
 	const handleClose = useCallback(() => {
@@ -85,7 +82,10 @@ const DesktopTitlebar = memo(() => {
 					onClick={handleToggleMaximize}
 				>
 					{windowState.isMaximized ? (
-						<Copy className="h-3 w-3" strokeWidth={1.2} />
+						<svg viewBox="0 0 12 12" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.2">
+							<rect x="4" y="1" width="7" height="7" />
+							<rect x="1" y="4" width="7" height="7" />
+						</svg>
 					) : (
 						<Square className="h-3 w-3" strokeWidth={1.2} />
 					)}

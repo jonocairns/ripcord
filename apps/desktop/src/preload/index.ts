@@ -4,6 +4,7 @@ import type {
   TAppAudioPcmFrame,
   TAppAudioSession,
   TAppAudioStatusEvent,
+  TDesktopAppAudioTargetsResult,
   TDesktopCapabilities,
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
@@ -11,7 +12,6 @@ import type {
   TDesktopUpdateStatus,
   TDesktopWindowControlsState,
   TGlobalPushKeybindRegistrationResult,
-  TDesktopAppAudioTargetsResult,
   TScreenShareSelection,
   TStartAppAudioCaptureInput,
 } from "../main/types";
@@ -424,7 +424,7 @@ const desktopBridge = {
     ipcRenderer.invoke("desktop:get-window-controls-state"),
   minimizeWindow: (): Promise<void> =>
     ipcRenderer.invoke("desktop:minimize-window"),
-  toggleMaximizeWindow: (): Promise<TDesktopWindowControlsState> =>
+  toggleMaximizeWindow: (): Promise<void> =>
     ipcRenderer.invoke("desktop:toggle-maximize-window"),
   closeWindow: (): Promise<void> => ipcRenderer.invoke("desktop:close-window"),
   setServerUrl: (serverUrl: string): Promise<void> =>

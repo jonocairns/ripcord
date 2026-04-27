@@ -147,6 +147,7 @@ export type TDesktopQuitFlushResult = {
 	reason?: string;
 };
 
+// Mirrors TDesktopWindowControlsState in apps/desktop/src/main/types.ts — must be kept in sync.
 export type TDesktopWindowControlsState = {
 	platform: TDesktopPlatform;
 	isMaximized: boolean;
@@ -175,7 +176,7 @@ export type TDesktopBridge = {
 	getServerUrl: () => Promise<string>;
 	getWindowControlsState?: () => Promise<TDesktopWindowControlsState>;
 	minimizeWindow?: () => Promise<void>;
-	toggleMaximizeWindow?: () => Promise<TDesktopWindowControlsState>;
+	toggleMaximizeWindow?: () => Promise<void>;
 	closeWindow?: () => Promise<void>;
 	setServerUrl: (serverUrl: string) => Promise<void>;
 	getCapabilities: () => Promise<TDesktopCapabilities>;

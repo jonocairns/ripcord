@@ -44,7 +44,8 @@ import type {
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
 const DESKTOP_QUIT_FLUSH_TIMEOUT_MS = 2_000;
 const DESKTOP_DEBUG_IPC_ENABLED = Boolean(RENDERER_URL);
-const USES_CUSTOM_TITLEBAR = process.platform === "win32";
+const USES_CUSTOM_TITLEBAR =
+  process.platform === "win32" || process.platform === "linux";
 let mainWindow: BrowserWindow | null = null;
 let appAudioFrameEgressPort: MessagePortMain | undefined;
 let lastDesktopCapabilitiesSnapshot: string | undefined;
@@ -501,24 +502,14 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle(
     "desktop:toggle-maximize-window",
-    (event: IpcMainInvokeEvent): TDesktopWindowControlsState => {
+    (event: IpcMainInvokeEvent): void => {
       const window = BrowserWindow.fromWebContents(event.sender);
-
-      if (!window) {
-        return getWindowControlsState();
-      }
-
+      if (!window) return;
       if (window.isMaximized()) {
         window.unmaximize();
       } else {
         window.maximize();
       }
-
-      return {
-        platform: resolveDesktopPlatform(),
-        isMaximized: window.isMaximized(),
-        usesCustomTitlebar: USES_CUSTOM_TITLEBAR,
-      };
     },
   );
 
