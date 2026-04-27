@@ -7,7 +7,7 @@ export default function Hero() {
         className="w-32 h-auto opacity-90"
       />
       <div className="flex flex-col gap-4">
-        <h1 className="text-6xl font-extrabold tracking-tight">Ripcord</h1>
+        <h1 className="text-6xl font-extrabold tracking-tight uppercase">Ripcord</h1>
         <p className="text-xl text-gray-400 max-w-xl">
           Voice, text, and screen share — self-hosted on your own hardware.
           No subscriptions. No third parties. Your server, your data.

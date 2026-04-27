@@ -9,14 +9,7 @@ export default function Footer() {
         >
           MIT license
         </a>
-        . Built by{' '}
-        <a
-          href="https://github.com/jonocairns"
-          className="underline hover:text-gray-400 transition-colors"
-        >
-          jonocairns
-        </a>
-        .
+.
       </p>
     </footer>
   );
