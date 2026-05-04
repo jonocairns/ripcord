@@ -10,6 +10,20 @@
 
 ripcord is a self-hosted communication platform that brings the most important Discord-like features to your own infrastructure. Host voice channels, text chat, and file sharing on your terms—no third-party dependencies, complete data ownership, and full control over your group's communication.
 
+## Screenshots
+
+<p align="center">
+  <img src="./docs/messaging.png" alt="ripcord messaging view" width="800" />
+</p>
+
+<p align="center">
+  <img src="./docs/screenshare.png" alt="ripcord screenshare view" width="800" />
+</p>
+
+<p align="center">
+  <img src="./docs/settings.png" alt="ripcord settings view" width="800" />
+</p>
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
