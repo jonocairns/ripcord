@@ -38,11 +38,14 @@ const bootstrap = async () => {
 					<DesktopQuitCoordinator />
 					<div className="flex h-full min-h-0 flex-1 flex-col">
 						<DesktopTitlebar />
-						<DevicesProvider>
-							<DialogsProvider />
-							<ServerScreensProvider />
-							<Routing />
-						</DevicesProvider>
+						<div id="screen-content">
+							<DevicesProvider>
+								<DialogsProvider />
+								<ServerScreensProvider />
+								<Routing />
+							</DevicesProvider>
+							<div id="portal" />
+						</div>
 					</div>
 				</ThemeProvider>
 			</ErrorBoundary>

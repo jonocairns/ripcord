@@ -1,4 +1,4 @@
-import { createElement, type JSX, memo, useCallback, useEffect } from 'react';
+import { createElement, type JSX, memo, useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useModViewOpen } from '@/features/app/hooks';
 import { closeServerScreens } from '@/features/server-screens/actions';
@@ -15,8 +15,6 @@ const ScreensMap = {
 	[ServerScreen.USER_SETTINGS]: UserSettings,
 	[ServerScreen.CATEGORY_SETTINGS]: CategorySettings,
 };
-
-const portalRoot = document.getElementById('portal')!;
 
 type TComponentWrapperProps = {
 	children: React.ReactNode;
@@ -50,6 +48,11 @@ const ComponentWrapper = ({ children }: TComponentWrapperProps) => {
 
 const ServerScreensProvider = memo(() => {
 	const { isOpen, props, openServerScreen } = useServerScreenInfo();
+	const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
+
+	useEffect(() => {
+		setPortalRoot(document.getElementById('portal'));
+	}, []);
 
 	let component: JSX.Element | null = null;
 
@@ -66,13 +69,12 @@ const ServerScreensProvider = memo(() => {
 
 	const realIsOpen = isOpen && !!component;
 
-	if (realIsOpen) {
-		portalRoot.style.display = 'block';
-	} else {
-		portalRoot.style.display = 'none';
-	}
+	useEffect(() => {
+		if (!portalRoot) return;
+		portalRoot.style.display = realIsOpen ? 'block' : 'none';
+	}, [portalRoot, realIsOpen]);
 
-	if (!realIsOpen) return null;
+	if (!realIsOpen || !portalRoot) return null;
 
 	return createPortal(<ComponentWrapper>{component}</ComponentWrapper>, portalRoot);
 });
