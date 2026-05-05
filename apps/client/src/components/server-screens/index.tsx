@@ -1,4 +1,4 @@
-import { createElement, type JSX, memo, useCallback, useEffect, useState } from 'react';
+import { createElement, type JSX, memo, useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useModViewOpen } from '@/features/app/hooks';
 import { closeServerScreens } from '@/features/server-screens/actions';
@@ -69,7 +69,7 @@ const ServerScreensProvider = memo(() => {
 
 	const realIsOpen = isOpen && !!component;
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		if (!portalRoot) return;
 		portalRoot.style.display = realIsOpen ? 'block' : 'none';
 	}, [portalRoot, realIsOpen]);
