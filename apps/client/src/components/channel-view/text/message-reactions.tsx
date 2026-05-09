@@ -49,19 +49,26 @@ const MessageReactions = memo(({ messageId, reactions }: TMessageReactionsProps)
 	);
 
 	const renderEmoji = useCallback((emojiName: string, file: TFile | null): React.ReactNode => {
-		const gitHubEmoji = gitHubEmojis.find((e) => e.name === emojiName);
+		const gitHubEmoji = gitHubEmojis.find(
+			(e) => e.name === emojiName || e.shortcodes.includes(emojiName),
+		);
 
 		if (gitHubEmoji?.emoji) {
 			return <span className="text-sm">{gitHubEmoji.emoji}</span>;
 		}
 
+		const imageUrl = getFileUrl(file) || gitHubEmoji?.fallbackImage;
+
+		if (!imageUrl) {
+			return <span className="text-xs text-muted-foreground">:{emojiName}:</span>;
+		}
+
 		return (
 			<img
-				src={getFileUrl(file)}
+				src={imageUrl}
 				alt={`:${emojiName}:`}
 				className="w-4 h-4 object-contain"
 				onError={(e) => {
-					// Fallback to text if image fails to load
 					const target = e.target as HTMLImageElement;
 
 					target.outerHTML = `<span class="text-xs text-muted-foreground">:${emojiName}:</span>`;
