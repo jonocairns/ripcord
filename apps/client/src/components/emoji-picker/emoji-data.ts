@@ -32,15 +32,27 @@ const processEmojis = () => {
 	}
 
 	for (const emoji of gitHubEmojis) {
-		if (!emoji.emoji || !emoji.group) continue;
+		if (!emoji.emoji) continue;
 		if (emoji.group === 'components' || emoji.group === 'GitHub') continue;
+
+		// tiptap's emoji data ships ~190 entries with an empty `group`. That bucket
+		// mixes basic faces (:smile:, :grin:) with regional-indicator letters used
+		// to compose flags. Tags are populated for the former and empty for the
+		// latter, so use that to keep the indicators out of the picker while
+		// recovering the faces into people & body.
+		let groupKey: string;
+		if (emoji.group && grouped[emoji.group]) {
+			groupKey = emoji.group;
+		} else if (emoji.tags && emoji.tags.length > 0) {
+			groupKey = 'people & body';
+		} else {
+			continue;
+		}
 
 		const converted = toTEmojiItem(emoji);
 
-		if (grouped[emoji.group]) {
-			grouped[emoji.group].push(converted);
-			all.push(converted);
-		}
+		grouped[groupKey].push(converted);
+		all.push(converted);
 	}
 
 	return { grouped, all };
