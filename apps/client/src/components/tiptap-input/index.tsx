@@ -145,11 +145,24 @@ const TiptapInput = memo(
 			}
 		};
 
-		// keep emoji storage in sync with custom emojis from the store
-		// this ensures newly added emojis appear in autocomplete without refreshing the app
+		// keep emoji storage and extension options in sync with custom emojis.
+		// storage drives the autocomplete suggestion popup; options.emojis drives
+		// the `:shortcode:` input rule and the renderHTML lookup. without the
+		// options sync, typing a custom emoji shortcode doesn't convert if the
+		// custom emojis loaded after editor init.
 		useEffect(() => {
-			if (editor?.storage.emoji) {
-				editor.storage.emoji.emojis = [...gitHubEmojis, ...customEmojis];
+			if (!editor) return;
+
+			const merged = [...gitHubEmojis, ...customEmojis];
+
+			if (editor.storage.emoji) {
+				editor.storage.emoji.emojis = merged;
+			}
+
+			const emojiExtension = editor.extensionManager.extensions.find((ext) => ext.name === 'emoji');
+
+			if (emojiExtension) {
+				emojiExtension.options.emojis = merged;
 			}
 		}, [editor, customEmojis]);
 
