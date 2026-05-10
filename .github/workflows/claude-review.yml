@@ -1,0 +1,98 @@
+name: Claude PR Review
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [review_requested]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review"
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  claude:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.requested_team.slug == 'ai-code-reviewers'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+
+      - name: Restore Bun cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Restore tsbuildinfo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/*/.tsbuildinfo
+            packages/*/.tsbuildinfo
+          key: tsbuildinfo-${{ runner.os }}-${{ github.event.pull_request.base.sha || 'main' }}
+          restore-keys: tsbuildinfo-${{ runner.os }}-
+
+      - name: Restore import-graph cache (if available)
+        uses: actions/cache@v4
+        with:
+          path: .pr-review-cache/import-graph.json
+          key: import-graph-${{ github.event.pull_request.base.sha || 'main' }}
+          restore-keys: import-graph-
+
+      - name: Build Claude review assets
+        id: review_assets
+        run: |
+          bun run scripts/pr-review/build-prompt.ts --pr "$PR_NUMBER" > "$RUNNER_TEMP/claude-review-prompt.txt"
+          bun run scripts/pr-review/build-prompt.ts --pr "$PR_NUMBER" --format allowed-tools > "$RUNNER_TEMP/claude-allowed-tools.txt"
+          {
+            echo 'prompt<<EOF'
+            cat "$RUNNER_TEMP/claude-review-prompt.txt"
+            echo EOF
+            echo 'allowed_tools<<EOF'
+            cat "$RUNNER_TEMP/claude-allowed-tools.txt"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude PR review
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          track_progress: false
+          claude_args: |
+            --allowedTools "${{ steps.review_assets.outputs.allowed_tools }}"
+          prompt: ${{ steps.review_assets.outputs.prompt }}

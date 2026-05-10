@@ -1,0 +1,113 @@
+{
+  "typescript": {
+    "rootTsconfig": "tsconfig.json",
+    "workspaceDirs": ["apps", "packages"],
+    "preferredTsconfigNames": ["tsconfig.app.json", "tsconfig.lib.json", "tsconfig.json"],
+    "additionalTsconfigs": ["apps/client/tsconfig.app.json"]
+  },
+  "importGraph": {
+    "outputPath": ".pr-review-cache/import-graph.json"
+  },
+  "migrations": {
+    "directories": ["apps/server/data/drizzle", "apps/server/src/db/migrations"],
+    "fallbackPattern": "\\bmigrations?\\b.*\\.sql$"
+  },
+  "trpc": {
+    "routersIndex": "apps/server/src/routers/index.ts",
+    "serverTsconfig": "apps/server/tsconfig.json",
+    "clientTsconfigs": [
+      "apps/client/tsconfig.app.json",
+      "apps/client/tsconfig.json",
+      "apps/desktop/tsconfig.json",
+      "packages/shared/tsconfig.json"
+    ],
+    "leaves": [
+      "mutate",
+      "query",
+      "mutation",
+      "subscribe",
+      "useQuery",
+      "useMutation",
+      "useSubscription",
+      "useInfiniteQuery"
+    ]
+  },
+  "typecheck": {
+    "defaultCommand": "bun run check-types",
+    "scopedCommandTemplate": "bun run --filter {{SCOPE}} check-types",
+    "timeoutMs": 300000
+  },
+  "review": {
+    "repositoryLabel": "Sharkord (ripcord)",
+    "highRiskAreas": ["auth", "migrations", "data access", "payments/billing", "critical workflows"],
+    "coreSkills": [
+      {
+        "name": "ts-impact",
+        "summary": "runs ts-morph over changed TS files to produce a precise caller list per exported symbol.",
+        "when": "Use before asserting a behavioral change is safe."
+      },
+      {
+        "name": "sentry-review",
+        "summary": "adds production telemetry priors via Sentry MCP.",
+        "when": "Use when Sentry is available and the diff touches production code."
+      }
+    ],
+    "repoSkills": [
+      {
+        "name": "db-migration-safety",
+        "summary": "runs static checks over changed SQL migrations.",
+        "when": "Use whenever the diff touches migration SQL."
+      },
+      {
+        "name": "trpc-edges",
+        "summary": "maps changed server tRPC route handlers to their client call sites.",
+        "when": "Use whenever route-level client reachability matters."
+      },
+      {
+        "name": "auth-review",
+        "summary": "applies a repo-specific auth and permission checklist.",
+        "when": "Use whenever the diff touches auth, permissions, refresh tokens, or websocket auth code."
+      }
+    ],
+    "coreAnalyzers": [
+      {
+        "name": "ts-impact",
+        "command": "bun run scripts/pr-review/pr-impact.ts --pr {{PR_NUMBER}} --format json",
+        "allowedTool": "Bash(bun run scripts/pr-review/pr-impact.ts:*)",
+        "useWhen": "Changed TS/TSX files"
+      }
+    ],
+    "repoAnalyzers": [
+      {
+        "name": "db-migration-safety",
+        "command": "bun run scripts/pr-review/migration-check.ts --pr {{PR_NUMBER}} --format json",
+        "allowedTool": "Bash(bun run scripts/pr-review/migration-check.ts:*)",
+        "useWhen": "Changed SQL migration files"
+      },
+      {
+        "name": "trpc-edges",
+        "command": "bun run scripts/pr-review/trpc-edges.ts --pr {{PR_NUMBER}} --format json",
+        "allowedTool": "Bash(bun run scripts/pr-review/trpc-edges.ts:*)",
+        "useWhen": "Changed server router files when client call-site visibility matters"
+      }
+    ],
+    "coreAllowedTools": [
+      "Read",
+      "mcp__github_inline_comment__create_inline_comment",
+      "Bash(gh pr:*)",
+      "Bash(gh issue:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git diff:*)",
+      "Bash(rg:*)",
+      "mcp__sentry__*"
+    ],
+    "repoAllowedTools": [],
+    "repoInvariants": [
+      "API changes should be backward compatible by default.",
+      "Shipped desktop clients must stay compatible with newer server/API versions."
+    ],
+    "corePromptFragmentDirs": ["scripts/pr-review/prompt-fragments"],
+    "repoPromptFragmentDirs": []
+  }
+}
