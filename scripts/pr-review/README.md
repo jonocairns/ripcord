@@ -76,9 +76,9 @@ That file is the first extraction seam. It holds the repo-specific parts that a
 shared toolkit should not hardcode:
 
 - TypeScript tsconfig discovery preferences
-- migration directories
-- tRPC entrypoints and client tsconfigs
-- typecheck command templates
+- migration directories, dialect, and statement-break markers
+- tRPC entrypoints, route adapter settings, and client tsconfigs
+- typecheck command templates and output parsers
 - prompt metadata such as repo label, invariants, analyzer runtime adapters, and
   Claude `allowedTools` policies
 
@@ -104,6 +104,22 @@ This keeps the underlying review policy mostly capability-based while allowing a
 thin runtime adapter layer to describe how a given repo actually runs analyzers.
 It also makes the future extraction model explicit: ship a shared core, then let
 repos layer on extra skills and analyzers such as `trpc-edges`.
+
+## Adapter seams
+
+The toolkit is moving toward a smaller generic core plus repo-local adapters.
+
+- `typecheck.ts` is config-driven on both command shape and error parsing.
+- `migration-check.ts` keeps generic SQL safety rules in code, while
+  dialect/framework details such as SQLite-only checks and statement-break
+  markers live in config.
+- `trpc-edges.ts` exposes its route-discovery assumptions via config
+  (`routeAdapter`, `routerFactoryNames`) and now reports degraded or unsupported
+  coverage explicitly when a repo falls outside the supported adapter.
+
+That means "less specific" does not mean "less strict." It means the strict
+parts should be declared at the config/adapter layer rather than hidden in the
+core scripts.
 
 ## Scope guard
 

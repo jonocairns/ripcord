@@ -48,7 +48,7 @@ Evidence rule:
 - Every finding must also name the source materials used to reason about it: for example a changed file path/line, `ts-impact` callers, `trpc-edges` route callers, `db-migration-safety` rule output, Sentry issue IDs, or prior review context.
 - Prefer auditable references over vague statements: cite the tool or material by name and the specific supporting detail it provided.
 - "Theoretically possible" is insufficient — the issue must be practically likely.
-- Do not generate findings the skills did not surface, when a skill applies. The skills' rule lists are curated; speculative findings on top of them are noise.
+- Prefer skill-backed findings when a skill applies, but do not suppress a concrete, high-confidence issue merely because no skill surfaced it. Treat missing skill output as lower confidence, not proof of safety.
 - A real finding must have an exact location, a concrete failure mode, a realistic trigger path, and a clear `P0`/`P1`/`P2` severity.
 
 Architectural findings:
