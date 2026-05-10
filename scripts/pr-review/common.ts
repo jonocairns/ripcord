@@ -91,7 +91,7 @@ const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
 	},
 	typecheck: {
 		defaultCommand: "bun run check-types",
-		scopedCommandTemplate: "bun run --filter {scope} check-types",
+		scopedCommandTemplate: "bun run --filter {{SCOPE}} check-types",
 		timeoutMs: 5 * 60 * 1000,
 	},
 	review: {
@@ -147,13 +147,7 @@ export function loadReviewConfig(repoRoot: string): ReviewConfig {
 }
 
 export function renderTemplate(template: string, values: Record<string, string>): string {
-	return template.replaceAll(
-		/{{([A-Z0-9_]+)}}|{([a-zA-Z0-9_]+)}/g,
-		(match, upperKey: string | undefined, mixedKey: string | undefined) => {
-			const key = upperKey ?? mixedKey;
-			return key ? values[key] ?? match : match;
-		},
-	);
+	return template.replaceAll(/{{([A-Z0-9_]+)}}/g, (match, key: string) => values[key] ?? match);
 }
 
 export function uniqueStrings(values: string[]): string[] {

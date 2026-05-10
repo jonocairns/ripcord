@@ -97,7 +97,7 @@ function runTypecheck(
 	config: ReturnType<typeof loadReviewConfig>,
 ): { output: string; exitCode: number; cmd: string } {
 	const cmd = scope
-		? renderTemplate(config.typecheck.scopedCommandTemplate, { SCOPE: scope, scope })
+		? renderTemplate(config.typecheck.scopedCommandTemplate, { SCOPE: scope })
 		: config.typecheck.defaultCommand;
 	const result = spawnSync("bash", ["-lc", cmd], {
 		cwd: repoRoot,

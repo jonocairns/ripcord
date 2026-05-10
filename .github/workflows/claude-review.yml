@@ -1,8 +1,6 @@
 name: Claude PR Review
 
 on:
-  pull_request_review:
-    types: [submitted]
   pull_request:
     types: [review_requested]
   workflow_dispatch:
