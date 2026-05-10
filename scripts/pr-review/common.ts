@@ -42,6 +42,7 @@ export interface ReviewConfig {
 	review: {
 		repositoryLabel: string;
 		highRiskAreas: string[];
+		maxChangedFilesForFullReview: number;
 		coreSkills: PromptSkillConfig[];
 		repoSkills: PromptSkillConfig[];
 		coreAnalyzers: AnalyzerCommandConfig[];
@@ -96,6 +97,7 @@ const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
 	review: {
 		repositoryLabel: "this repository",
 		highRiskAreas: ["critical workflows"],
+		maxChangedFilesForFullReview: 100,
 		coreSkills: [],
 		repoSkills: [],
 		coreAnalyzers: [],

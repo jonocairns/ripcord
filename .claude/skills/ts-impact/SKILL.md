@@ -22,28 +22,28 @@ Skip this skill when:
 
 ## How to invoke
 
-From the repository root, run:
+Use the configured `ts-impact` analyzer command for this repo. The runtime adapter defines the exact command; common invocation shapes are:
 
 ```bash
-bun run scripts/pr-review/pr-impact.ts --pr <PR_NUMBER> --format markdown
+<ts-impact analyzer command> --pr <PR_NUMBER> --format markdown
 ```
 
 Or, if you already have a list of changed files:
 
 ```bash
-bun run scripts/pr-review/pr-impact.ts apps/server/src/foo.ts apps/client/src/bar.tsx
+<ts-impact analyzer command> path/to/server-file.ts path/to/client-file.tsx
 ```
 
 For machine-readable output (recommended when piping into further analysis):
 
 ```bash
-bun run scripts/pr-review/pr-impact.ts --pr <PR_NUMBER> --format json
+<ts-impact analyzer command> --pr <PR_NUMBER> --format json
 ```
 
 The script:
 
 - Filters out test files (`*.test.ts`, `*.spec.ts`), declaration files (`*.d.ts`), `node_modules`, and build output.
-- Detects the nearest `tsconfig.json` for each changed file (per-app, not just the root).
+- Detects the nearest configured TypeScript project file for each changed file (per-app/workspace, not just the root).
 - Emits a JSON or markdown report with per-symbol caller lists, capped at 25 callers each.
 - For each callable export, also reports a **first-arg shape histogram**: out of all references in callee position, how many pass an object literal as their first argument, and how often each property key appears across those calls. This answers "how many callers pass `userId`?" without an ad-hoc grep — useful when judging the safety of removing a default parameter, tightening required keys, or renaming a property.
 
@@ -72,8 +72,8 @@ The output is a deterministic fact, not an opinion. Use it to:
   "generatedAt": "2026-05-09T...",
   "files": [
     {
-      "file": "apps/server/src/foo.ts",
-      "tsconfig": "apps/server/tsconfig.json",
+      "file": "server/file.ts",
+      "tsconfig": "workspace/tsconfig.json",
       "exportedSymbolCount": 3,
       "symbols": [
         {
@@ -96,7 +96,7 @@ The output is a deterministic fact, not an opinion. Use it to:
     "totalSymbols": 12,
     "totalCallers": 87,
     "highImpactSymbols": [
-      { "file": "apps/server/src/foo.ts", "symbol": "createSession", "callers": 14 }
+      { "file": "server/file.ts", "symbol": "createSession", "callers": 14 }
     ]
   }
 }

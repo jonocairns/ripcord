@@ -73,8 +73,11 @@ jobs:
 
       - name: Build Claude review assets
         id: review_assets
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          bun run scripts/pr-review/build-prompt.ts --pr "$PR_NUMBER" > "$RUNNER_TEMP/claude-review-prompt.txt"
+          CHANGED_FILES="$(gh pr view "$PR_NUMBER" --json changedFiles --jq '.changedFiles')"
+          bun run scripts/pr-review/build-prompt.ts --pr "$PR_NUMBER" --changed-files "$CHANGED_FILES" > "$RUNNER_TEMP/claude-review-prompt.txt"
           bun run scripts/pr-review/build-prompt.ts --pr "$PR_NUMBER" --format allowed-tools > "$RUNNER_TEMP/claude-allowed-tools.txt"
           {
             echo 'prompt<<EOF'

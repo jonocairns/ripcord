@@ -1,6 +1,6 @@
 ---
 name: auth-review
-description: Apply a stricter, repo-specific review pass to changes that touch authentication, authorization, permissions, or session handling. Use whenever the diff modifies files under `apps/server/src/http/`, `apps/server/src/routers/channels/*permission*`, `apps/server/src/utils/trpc.ts`, or any file that contains `protectedProcedure`, `publicProcedure`, `hasPermission`, `authenticated`, `authToken`, `refreshToken`, `passwordHash`, or `cookie`. Auth bugs have catastrophic blast radius — this skill enumerates the specific patterns to verify in this codebase.
+description: Apply a stricter, repo-specific review pass to changes that touch authentication, authorization, permissions, or session handling. Use whenever the diff modifies auth-related HTTP handlers, procedure-base helpers, websocket auth/runtime code, permission routers, or any file that contains `protectedProcedure`, `publicProcedure`, `hasPermission`, `authenticated`, `authToken`, `refreshToken`, `passwordHash`, or `cookie`. Auth bugs have catastrophic blast radius — this skill enumerates the specific patterns to verify in this codebase.
 ---
 
 # Auth-touch review
@@ -11,12 +11,10 @@ When the diff touches auth/authorization, this skill defines the specific things
 
 Apply this skill when the PR diff touches any of:
 
-- `apps/server/src/http/auth-tokens.ts`
-- `apps/server/src/http/refresh.ts`
-- `apps/server/src/http/upload.ts` (uses auth tokens for file access)
-- `apps/server/src/utils/trpc.ts` (defines `protectedProcedure`/`publicProcedure`)
-- `apps/server/src/utils/wss.ts` (websocket auth)
-- Any file under `apps/server/src/routers/channels/` matching `*permission*`
+- Auth token issuance, validation, logout, refresh, upload, or other auth-related HTTP handlers
+- Procedure base helpers that define auth requirements for RPC endpoints
+- WebSocket auth / connection-state code
+- Permission routers or helpers, especially channel/server permission logic
 - Any file that newly calls `protectedProcedure`, `publicProcedure`, `hasPermission`, `invariant(ctx.authenticated, ...)`, or sets/reads `cookie`/`authToken`/`refreshToken`/`passwordHash`/`tokenVersion`
 
 If none of the above apply, skip this skill entirely.
@@ -37,7 +35,7 @@ A new endpoint added to the router must use the correct base. Adding a sensitive
 
 1. **Every new query/mutation that reads or modifies user-scoped data uses `protectedProcedure`**, not `publicProcedure`. Verify by reading the procedure definition, not just the file.
 2. **Permission checks (`hasPermission`, `invariant(...)`) are present at the start of the handler**, before any side-effectful work. A handler that does work and *then* checks permission is a bug.
-3. **Permission checks compare against the correct scope** — channel-permission data should be evaluated as channel-permission data, not user roles (per AGENTS.md: `useChannelPermissionsById` results are channel-permission data, not user roles).
+3. **Permission checks compare against the correct scope** — channel-permission data should be evaluated as channel-permission data, not user roles (per AGENTS.md's channel-permission guidance).
 
 ### Token / session handling
 
@@ -48,7 +46,7 @@ A new endpoint added to the router must use the correct base. Adding a sensitive
 
 ### WebSocket auth
 
-8. **WSS connections check `authenticated` before attaching user-scoped state.** A new message handler in `wss.ts` that mutates per-user state must verify the sender owns that state.
+8. **WebSocket connections check `authenticated` before attaching user-scoped state.** A new message handler in the websocket auth/runtime path that mutates per-user state must verify the sender owns that state.
 
 ### File / upload auth
 
@@ -57,7 +55,7 @@ A new endpoint added to the router must use the correct base. Adding a sensitive
 ### Permission API surface
 
 10. **New permission strings added to the database must be present in the application code's permission enum/check** (and vice versa). Mismatch = silent permission failures.
-11. **Removed permissions** in migrations have a corresponding `DELETE FROM channel_role_permissions WHERE permission = '...'` and equivalent for `channel_user_permissions` (per the existing pattern in migration `0009`).
+11. **Removed permissions** in migrations have a corresponding `DELETE FROM channel_role_permissions WHERE permission = '...'` and equivalent for `channel_user_permissions`, following the existing repo pattern for permission cleanup.
 
 ### Trust boundaries
 

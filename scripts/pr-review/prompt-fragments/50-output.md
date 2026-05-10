@@ -3,6 +3,7 @@ Output:
 - Inline comments only when warranted by the rules above.
 - Summary comments may include non-blocking watch-outs or checks to verify; inline comments may not.
 - Summary bullets should cite the main materials used (for example which skills ran, which files were the highest-risk reads, and any Sentry issue IDs if relevant).
+- If the review ran in scoped mode because the PR exceeded the changed-file limit, say so explicitly in the final summary and name the highest-risk areas/files you focused on.
 - Before posting any inline comment, verify:
   1. Is this a real bug or a theoretical edge case? (only post if real)
   2. Have I already commented on this same root cause elsewhere? (only post once per issue)

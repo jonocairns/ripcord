@@ -105,6 +105,24 @@ thin runtime adapter layer to describe how a given repo actually runs analyzers.
 It also makes the future extraction model explicit: ship a shared core, then let
 repos layer on extra skills and analyzers such as `trpc-edges`.
 
+## Scope guard
+
+The toolkit now supports a simple context-protection guard via
+`review.maxChangedFilesForFullReview` in `.pr-review/review.config.json`.
+
+The workflow computes the PR's changed-file count and passes it to
+`build-prompt.ts`. If the PR exceeds that configured limit, the prompt switches
+the reviewer into scoped-review mode:
+
+- run applicable deterministic analyzers,
+- focus file reads and inline comments on the highest-risk areas,
+- avoid pretending to provide full file-by-file coverage,
+- and disclose the scoped review in the final summary comment.
+
+This is intentionally a coarse admission-control check rather than a full
+context-budget planner. It exists to prevent very large PRs from silently
+blowing past the model's useful review context.
+
 ## Context strategy
 
 To approach or beat Greptile-like usefulness, prioritize context primitives that

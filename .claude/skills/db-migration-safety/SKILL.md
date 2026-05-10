@@ -1,34 +1,33 @@
 ---
 name: db-migration-safety
-description: Audit Drizzle/SQLite migration files in a PR for production-unsafe patterns (NOT NULL ADD COLUMN without DEFAULT, table drops, DELETE without WHERE, statements duplicated from earlier migrations, etc). Use whenever the PR adds or modifies a `.sql` file under `apps/server/data/drizzle/` or any `migrations/` directory. Migration bugs are one of the highest-incident-rate classes of bug — run this skill before approving any migration change.
+description: Audit Drizzle/SQLite migration files in a PR for production-unsafe patterns (NOT NULL ADD COLUMN without DEFAULT, table drops, DELETE without WHERE, statements duplicated from earlier migrations, etc). Use whenever the PR adds or modifies a `.sql` file in the configured migration directories or any `migrations/` directory. Migration bugs are one of the highest-incident-rate classes of bug — run this skill before approving any migration change.
 ---
 
 # DB migration safety
 
-This skill runs a static check over migration SQL files in the PR and reports unsafe patterns with severity, line numbers, and suggested fixes.
+This skill runs the configured migration-safety analyzer for the repo and reports unsafe patterns with severity, line numbers, and suggested fixes.
 
 ## When to use
 
 Use this skill whenever the PR contains changes (added or modified) to:
 
-- `apps/server/data/drizzle/*.sql`
-- `apps/server/src/db/migrations/*.sql`
+- SQL files in the configured migration directories
 - Any file matching `**/migrations/*.sql`
 
 Run it BEFORE commenting on the migration. The output is the source of truth for safety concerns — do not invent migration concerns the tool didn't flag, and do not dismiss concerns the tool did flag without explicit reasoning.
 
 ## How to invoke
 
-From the repo root:
+Use the configured `db-migration-safety` analyzer command for this repo. The runtime adapter defines the exact command; invoke it with:
 
 ```bash
-bun run scripts/pr-review/migration-check.ts --pr <PR_NUMBER> --format markdown
+<db-migration-safety analyzer command> --pr <PR_NUMBER> --format markdown
 ```
 
 Or with a direct file list:
 
 ```bash
-bun run scripts/pr-review/migration-check.ts apps/server/data/drizzle/0010_new_thing.sql
+<db-migration-safety analyzer command> path/to/migration.sql
 ```
 
 ## Rules checked
@@ -67,7 +66,7 @@ The `DUPLICATE_OF_OLDER_MIGRATION` rule is repo-specific and codifies a known pi
 {
   "files": [
     {
-      "file": "apps/server/data/drizzle/0010_new_thing.sql",
+      "file": "path/to/migration.sql",
       "statementCount": 4,
       "findings": [
         {

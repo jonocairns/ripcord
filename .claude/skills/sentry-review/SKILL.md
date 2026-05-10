@@ -12,7 +12,7 @@ This skill fuses production telemetry into the review. It does not generate comm
 Apply this skill when ALL of:
 
 - The Sentry MCP tools are available in the session (`mcp__sentry__*`).
-- The PR touches at least one file under `apps/server/src/` or `apps/client/src/` that runs in production (i.e. not tests, fixtures, types, build scripts, docs, or generated code).
+- The PR touches at least one source file that runs in production (for example server or client runtime code, excluding tests, fixtures, types, build scripts, docs, and generated code).
 - The repo has a Sentry project configured (the server uses `@sentry/node`, the client captures render-time and global errors per recent commits).
 
 Skip this skill if:
@@ -24,7 +24,7 @@ Skip this skill if:
 
 1. Authenticate with Sentry via the MCP if not already authenticated.
 2. For each changed production file:
-   - Query Sentry for recent issues mentioning the file path or its module (e.g. `auth-tokens.ts`, `voice-permissions`).
+   - Query Sentry for recent issues mentioning the file path or its stable module/component identifier.
    - Note the issue count, frequency, and last-seen timestamp.
 3. Build a per-file "production prior" mental model:
    - **Hot file**: ≥1 active issue in the last 7 days. Apply *stricter* scrutiny.
@@ -35,7 +35,7 @@ Skip this skill if:
 
 For each finding you would otherwise comment on:
 
-- **Hot file + finding touches the failing code path**: comment with elevated confidence. Cite the Sentry issue ID in the comment so the author can verify. Example: "This change rewrites the catch block in `auth-tokens.ts`. Sentry issue SHRK-1234 (47 events in last 7d) currently throws from this exact path — verify the existing recovery behavior is preserved."
+- **Hot file + finding touches the failing code path**: comment with elevated confidence. Cite the Sentry issue ID in the comment so the author can verify. Example: "This change rewrites a session/token recovery path. Sentry issue SHRK-1234 (47 events in last 7d) currently throws from this exact path — verify the existing recovery behavior is preserved."
 - **Hot file + finding is unrelated to the failing path**: comment normally; do not mention Sentry.
 - **Quiet file**: comment normally with no telemetry context.
 

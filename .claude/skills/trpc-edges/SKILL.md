@@ -1,6 +1,6 @@
 ---
 name: trpc-edges
-description: Map tRPC route handler files (server) to their client call sites by walking the t.router({...}) wiring and matching `<client>.<group>.<route>.{mutate,query,...}` chains across the workspace. Use this whenever a PR modifies a file under `apps/server/src/routers/` — `ts-impact` cannot follow tRPC's type-only proxy edges, so client callers of a changed route would otherwise be invisible to the review.
+description: Map tRPC route handler files (server) to their client call sites by walking the configured `t.router({...})` wiring and matching `<client>.<group>.<route>.{mutate,query,...}` chains across the workspace. Use this whenever a PR modifies a file under the repo's server router tree — `ts-impact` cannot follow tRPC's type-only proxy edges, so client callers of a changed route would otherwise be invisible to the review.
 ---
 
 # tRPC edge resolver
@@ -15,39 +15,39 @@ This skill closes the client/server gap that exists in tRPC reviews. ts-impact r
 
 Use this skill when:
 
-- A PR changes any file in `apps/server/src/routers/**/*.ts` (excluding `index.ts` wiring files).
+- A PR changes any file in the configured server router tree (excluding top-level wiring/index files).
 - You're about to comment on input/output contract changes for a route.
 - You want to know whether a route is reachable from the client at all (dead routes return zero callers).
 
 Skip this skill when:
 
 - The PR only changes server-internal code (no router files).
-- The PR only changes router `index.ts` wiring (the route names themselves are the contract; verify by reading the diff).
+- The PR only changes top-level router entrypoint or wiring files (the route names themselves are the contract; verify by reading the diff).
 
 ## How to invoke
 
-Default mode — scope to PR-changed router files:
+Use the configured `trpc-edges` analyzer command for this repo. The runtime adapter defines the exact command; common invocation shapes are:
 
 ```bash
-bun run scripts/pr-review/trpc-edges.ts --pr <PR_NUMBER> --format markdown
+<trpc-edges analyzer command> --pr <PR_NUMBER> --format markdown
 ```
 
 For a specific route:
 
 ```bash
-bun run scripts/pr-review/trpc-edges.ts --route users.setStatus --format markdown
+<trpc-edges analyzer command> --route users.setStatus --format markdown
 ```
 
 Full enumeration of every route → its callers:
 
 ```bash
-bun run scripts/pr-review/trpc-edges.ts --all --format json
+<trpc-edges analyzer command> --all --format json
 ```
 
 The script:
 
-- Resolves routes by walking imports from `apps/server/src/routers/index.ts`. Sub-routers and handlers must be referenced via named imports — anonymous or re-exported handlers will appear in `unmappedRouteFiles`.
-- Searches for callers using these client-side tsconfigs: `apps/client/tsconfig.app.json`, `apps/client/tsconfig.json`, `apps/desktop/tsconfig.json`, `packages/shared/tsconfig.json`. Add new workspaces by editing `CLIENT_TSCONFIGS` in the script.
+- Resolves routes by walking imports from the configured router entrypoint. Sub-routers and handlers must be referenced via named imports — anonymous or re-exported handlers will appear in `unmappedRouteFiles`.
+- Searches for callers using the configured client-side tsconfigs. Add new workspaces by updating the repo's PR-review config.
 - Recognizes leaf method names: `mutate`, `query`, `mutation`, `subscribe`, `useQuery`, `useMutation`, `useSubscription`, `useInfiniteQuery`.
 
 ## How to use the output
@@ -76,12 +76,12 @@ The script:
   "routes": [
     {
       "trpcPath": "users.setStatus",
-      "file": "apps/server/src/routers/users/set-status.ts",
+      "file": "server/router/path.ts",
       "exportName": "setStatusRoute",
       "callerCount": 2,
       "callers": [
-        { "file": "apps/client/src/hooks/use-idle-away-checker.ts", "line": 52, "method": "mutate" },
-        { "file": "apps/client/src/components/left-sidebar/user-control.tsx", "line": 89, "method": "mutate" }
+        { "file": "client/caller-a.tsx", "line": 52, "method": "mutate" },
+        { "file": "client/caller-b.tsx", "line": 89, "method": "mutate" }
       ]
     }
   ],

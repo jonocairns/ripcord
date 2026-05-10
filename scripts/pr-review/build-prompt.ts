@@ -11,9 +11,15 @@ import {
 
 function parseArgs(argv: string[]): {
 	prNumber: string;
+	changedFilesCount: number | null;
 	format: "text" | "json" | "allowed-tools";
 } {
 	let prNumber = process.env.PR_NUMBER ?? "";
+	const envChangedFiles = process.env.PR_CHANGED_FILES;
+	let changedFilesCount =
+		envChangedFiles && /^\d+$/.test(envChangedFiles)
+			? Number.parseInt(envChangedFiles, 10)
+			: null;
 	let format: "text" | "json" | "allowed-tools" = "text";
 
 	for (let i = 0; i < argv.length; i++) {
@@ -28,12 +34,20 @@ function parseArgs(argv: string[]): {
 				throw new Error("--format must be text|json|allowed-tools");
 			}
 			format = next;
+		} else if (arg === "--changed-files") {
+			const next = argv[++i];
+			if (!next) throw new Error("--changed-files requires a value");
+			const parsed = Number.parseInt(next, 10);
+			if (Number.isNaN(parsed) || parsed < 0) {
+				throw new Error("--changed-files must be a non-negative integer");
+			}
+			changedFilesCount = parsed;
 		}
 	}
 
 	if (!prNumber) throw new Error("PR number is required via --pr or PR_NUMBER");
 
-	return { prNumber, format };
+	return { prNumber, changedFilesCount, format };
 }
 
 function readPromptFragments(repoRoot: string, fragmentDirs: string[]): string[] {
@@ -86,6 +100,41 @@ function renderRepoInvariants(config: ReturnType<typeof loadReviewConfig>): stri
 	return config.review.repoInvariants.map((item) => `- ${item}`).join("\n");
 }
 
+function renderReviewScope(
+	config: ReturnType<typeof loadReviewConfig>,
+	changedFilesCount: number | null,
+): {
+	changedFilesCount: string;
+	fullReviewFileLimit: string;
+	reviewScopeGuidance: string;
+} {
+	const limit = config.review.maxChangedFilesForFullReview;
+	if (changedFilesCount === null) {
+		return {
+			changedFilesCount: "unknown",
+			fullReviewFileLimit: String(limit),
+			reviewScopeGuidance:
+				`The changed-file count was not precomputed. If PR metadata shows more than ${limit} changed files, switch to scoped review: run applicable deterministic analyzers, focus reads and inline comments on the highest-risk files only (${config.review.highRiskAreas.join(", ")}), and say explicitly in the final summary that coverage was scoped due to PR size.`,
+		};
+	}
+
+	if (changedFilesCount > limit) {
+		return {
+			changedFilesCount: String(changedFilesCount),
+			fullReviewFileLimit: String(limit),
+			reviewScopeGuidance:
+				`This PR changes ${changedFilesCount} files, exceeding the full-review limit of ${limit}. Do not attempt full file-by-file coverage. Run applicable deterministic analyzers, then focus reads and inline comments on the highest-risk files only (${config.review.highRiskAreas.join(", ")}). State explicitly in the final summary that coverage was scoped due to PR size.`,
+		};
+	}
+
+	return {
+		changedFilesCount: String(changedFilesCount),
+		fullReviewFileLimit: String(limit),
+		reviewScopeGuidance:
+			`This PR changes ${changedFilesCount} files, which is within the full-review limit of ${limit}. Review normally, but still prioritize the highest-risk areas first (${config.review.highRiskAreas.join(", ")}).`,
+	};
+}
+
 function renderAllowedTools(config: ReturnType<typeof loadReviewConfig>): string {
 	return uniqueStrings([
 		...config.review.coreAllowedTools,
@@ -97,10 +146,11 @@ function renderAllowedTools(config: ReturnType<typeof loadReviewConfig>): string
 }
 
 async function main() {
-	const { prNumber, format } = parseArgs(process.argv.slice(2));
+	const { prNumber, changedFilesCount, format } = parseArgs(process.argv.slice(2));
 	const repoRoot = findRepoRoot(process.cwd());
 	const config = loadReviewConfig(repoRoot);
 	const allowedTools = renderAllowedTools(config);
+	const reviewScope = renderReviewScope(config, changedFilesCount);
 	const fragments = readPromptFragments(repoRoot, [
 		...config.review.corePromptFragmentDirs,
 		...config.review.repoPromptFragmentDirs,
@@ -114,6 +164,9 @@ async function main() {
 		PR_NUMBER: prNumber,
 		REPOSITORY_LABEL: config.review.repositoryLabel,
 		HIGH_RISK_AREAS: config.review.highRiskAreas.join(", "),
+		CHANGED_FILES_COUNT: reviewScope.changedFilesCount,
+		FULL_REVIEW_FILE_LIMIT: reviewScope.fullReviewFileLimit,
+		REVIEW_SCOPE_GUIDANCE: reviewScope.reviewScopeGuidance,
 		SKILLS: renderSkills(config),
 		ANALYZER_COMMANDS: renderAnalyzerCommands(config, prNumber),
 		REPO_INVARIANTS: renderRepoInvariants(config),
