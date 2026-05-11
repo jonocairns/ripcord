@@ -15,10 +15,6 @@ The GitHub workflow in `.github/workflows/claude-review.yml` is label-gated.
   `synchronize` events.
 - `workflow_dispatch` remains available for manual runs once the workflow exists
   on the default branch.
-- When first adding or editing this workflow, Claude Code's GitHub app path can
-  skip on that same PR with a workflow-validation error until the workflow file
-  on the branch matches the version on the default branch. Treat that as a
-  bootstrap limitation and validate the end-to-end review flow on the next PR.
 
 This keeps the trigger self-serve for repos that do not use GitHub teams for
 review routing.
