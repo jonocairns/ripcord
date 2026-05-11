@@ -6,6 +6,19 @@ The goal is not "AI reads a diff and gives opinions." The goal is to give the
 model enough repo-aware evidence that it can review more like a strong teammate
 than a smart outsider.
 
+## CI usage
+
+The GitHub workflow in `.github/workflows/claude-review.yml` is label-gated.
+
+- Add the `ai-review` label to a pull request to run the Claude review job.
+- Once the label is present, later pushes to that PR will rerun the review on
+  `synchronize` events.
+- `workflow_dispatch` remains available for manual runs once the workflow exists
+  on the default branch.
+
+This keeps the trigger self-serve for repos that do not use GitHub teams for
+review routing.
+
 ## Design goals
 
 - High signal, low noise. The reviewer should bias hard toward silence unless it

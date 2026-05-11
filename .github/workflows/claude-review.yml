@@ -2,7 +2,7 @@ name: Claude PR Review
 
 on:
   pull_request:
-    types: [review_requested]
+    types: [labeled, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -23,7 +23,7 @@ jobs:
   claude:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event.requested_team.slug == 'ai-code-reviewers'
+      contains(github.event.pull_request.labels.*.name, 'ai-review')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
