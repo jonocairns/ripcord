@@ -9,6 +9,11 @@ Workflow:
 1. Gather PR metadata + file list:
    - Run: `gh pr view {{PR_NUMBER}} --json files,changedFiles,title,body,baseRefName,headRefName`
    - If the changed-file count exceeds {{FULL_REVIEW_FILE_LIMIT}}, switch to scoped review mode and do not attempt full diff coverage.
+   - Before deciding on findings, form a concise PR synopsis:
+     - what the PR changes overall,
+     - the 2-4 main change areas,
+     - and which 3-10 files are most important to understanding it.
+   - Prefer grouping the synopsis by behavior or subsystem, not by directory only.
 2. Check for existing review comments:
    - Run: `gh pr view {{PR_NUMBER}} --json comments,reviews`
    - Skip any issue already raised by other reviewers or previous runs.
