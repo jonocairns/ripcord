@@ -96,4 +96,31 @@ jobs:
           track_progress: false
           claude_args: |
             --allowedTools "${{ steps.review_assets.outputs.allowed_tools }}"
+            --json-schema '{"type":"object","properties":{"summary_comment":{"type":"string"}},"required":["summary_comment"]}'
           prompt: ${{ steps.review_assets.outputs.prompt }}
+
+      - name: Upsert Claude summary comment
+        if: ${{ always() && steps.claude.outputs.structured_output != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+          REPO: ${{ github.repository }}
+          STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
+        run: |
+          SUMMARY_COMMENT="$(jq -r '.summary_comment' <<<"$STRUCTURED_OUTPUT")"
+          if [ -z "$SUMMARY_COMMENT" ] || [ "$SUMMARY_COMMENT" = "null" ]; then
+            echo "No summary comment returned."
+            exit 0
+          fi
+
+          COMMENT_BODY="<!-- claude-pr-review-summary -->"$'\n'"$SUMMARY_COMMENT"
+          COMMENT_ID="$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate --jq '.[] | select(.body | contains("<!-- claude-pr-review-summary -->")) | .id' | tail -n1)"
+          if [ -z "$COMMENT_ID" ]; then
+            COMMENT_ID="$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("## Summary")) and (.body | contains("## Confidence"))) | .id' | tail -n1)"
+          fi
+
+          if [ -n "$COMMENT_ID" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$COMMENT_ID" -f body="$COMMENT_BODY" >/dev/null
+          else
+            gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="$COMMENT_BODY" >/dev/null
+          fi
