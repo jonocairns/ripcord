@@ -23,3 +23,4 @@ data-test/
 __pycache__/
 .env
 .codex
+.pr-review-cache/

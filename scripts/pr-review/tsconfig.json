@@ -1,0 +1,15 @@
+{
+	"compilerOptions": {
+		"target": "esnext",
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"strict": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"types": ["node"],
+		"resolveJsonModule": true,
+		"allowImportingTsExtensions": false
+	},
+	"include": ["./*.ts"]
+}
