@@ -19,6 +19,10 @@ The GitHub workflow in `.github/workflows/claude-review.yml` is label-gated.
 This keeps the trigger self-serve for repos that do not use GitHub teams for
 review routing.
 
+The review summary comment is workflow-owned: Claude returns the markdown body
+as structured output, and the workflow updates a single persistent PR summary
+comment across reruns instead of posting a new top-level summary each time.
+
 ## Design goals
 
 - High signal, low noise. The reviewer should bias hard toward silence unless it
