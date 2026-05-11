@@ -2,7 +2,7 @@
 import { execSync, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
-import { findRepoRoot, loadReviewConfig, renderTemplate } from './common';
+import { findRepoRoot, loadReviewConfig, renderTemplate, validateTypecheckErrorPatterns } from './common';
 
 interface TscError {
 	file: string;
@@ -153,6 +153,7 @@ async function main() {
 	const { pr, format, scope } = parseArgs(process.argv.slice(2));
 	const repoRoot = findRepoRoot(process.cwd());
 	const config = loadReviewConfig(repoRoot);
+	validateTypecheckErrorPatterns(config);
 
 	let changed: string[] = [];
 	if (pr !== null) {

@@ -84,17 +84,24 @@ function listExistingMigrations(
 	config: ReturnType<typeof loadReviewConfig>,
 ): { path: string; content: string }[] {
 	const out: { path: string; content: string }[] = [];
+	const visit = (dir: string) => {
+		const entries = readdirSync(dir);
+		for (const entry of entries) {
+			const full = resolve(dir, entry);
+			const stat = statSync(full);
+			if (stat.isDirectory()) {
+				visit(full);
+				continue;
+			}
+			if (!stat.isFile() || !entry.endsWith('.sql')) continue;
+			out.push({ path: full, content: readFileSync(full, 'utf8') });
+		}
+	};
 	for (const dir of config.migrations.directories) {
 		const abs = resolve(repoRoot, dir);
 		if (!existsSync(abs)) continue;
 		try {
-			const entries = readdirSync(abs);
-			for (const entry of entries) {
-				if (!entry.endsWith('.sql')) continue;
-				const full = resolve(abs, entry);
-				if (!statSync(full).isFile()) continue;
-				out.push({ path: full, content: readFileSync(full, 'utf8') });
-			}
+			visit(abs);
 		} catch {
 			// skip
 		}

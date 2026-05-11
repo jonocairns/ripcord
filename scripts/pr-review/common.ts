@@ -149,7 +149,7 @@ function mergeConfig<T>(base: T, override: unknown): T {
 	return override as T;
 }
 
-function validateTypecheckErrorPatterns(config: ReviewConfig): void {
+export function validateTypecheckErrorPatterns(config: ReviewConfig): void {
 	const sampleError = 'src/example.ts(12,34): error TS1234: Sample typecheck failure';
 	for (const [index, parser] of config.typecheck.errorPatterns.entries()) {
 		const flags = parser.flags.includes('g') ? parser.flags : `${parser.flags}g`;
@@ -183,9 +183,7 @@ export function loadReviewConfig(repoRoot: string): ReviewConfig {
 	if (!existsSync(configPath)) return DEFAULT_REVIEW_CONFIG;
 
 	const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as JsonObject;
-	const config = mergeConfig(DEFAULT_REVIEW_CONFIG, parsed);
-	validateTypecheckErrorPatterns(config);
-	return config;
+	return mergeConfig(DEFAULT_REVIEW_CONFIG, parsed);
 }
 
 export function renderTemplate(template: string, values: Record<string, string>): string {
