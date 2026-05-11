@@ -25,10 +25,20 @@ Output:
   4. `## Findings`
      - If there are material issues, list them with severity and concrete failure mode.
      - If there are no material issues, say `No material findings.`
-  5. `## Watch-outs`
+  5. `## Comments outside diff`
+     - Include only when non-empty.
+     - Use this for concrete review observations that are worth surfacing but do not justify an inline comment.
+     - Each item must include:
+       - file or subsystem,
+       - short issue title,
+       - severity (`P2` or lower only),
+       - 1-3 sentence explanation of the concern,
+       - and why it stayed out of inline comments.
+     - Do not include theoretical edge cases, style notes, or generic "consider improving" advice.
+  6. `## Watch-outs`
      - Include only when non-empty.
      - Use this for uncertain or non-blocking observations that do not justify inline comments.
-  6. (Optional) `## Test suggestion`
+  7. (Optional) `## Test suggestion`
      - Only include when it meets the strict criteria above.
 - Use a non-interactive command, e.g.:
   `gh pr comment {{PR_NUMBER}} --body "<final summary>"`
