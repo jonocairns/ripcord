@@ -48,17 +48,20 @@ permissions:
   contents: write
 
 jobs:
-  build-and-upload:
+  # ── 1) Build the unpackaged Electron app. No signing secrets here. ──
+  # This is the supply-chain-exposed job: it runs `bun install` and any
+  # trusted-dep postinstall scripts. It must NEVER have access to
+  # WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD.
+  build:
     runs-on: windows-latest
     env:
       RELEASE_TAG: ${{ inputs.tag }}
       RELEASE_REF: ${{ inputs.ref }}
       RELEASE_VERSION: ${{ inputs.version }}
       RELEASE_PRERELEASE: ${{ inputs.prerelease }}
-      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+      version: ${{ steps.resolve.outputs.version }}
     steps:
       - name: Resolve inputs and validate
         id: resolve
@@ -72,16 +75,9 @@ jobs:
           ref="${RELEASE_REF:-${RELEASE_TAG}}"
           version="${RELEASE_VERSION:-${RELEASE_TAG#v}}"
 
-          if [ "${RELEASE_PRERELEASE}" = "true" ]; then
-            echo "Prerelease mode: relaxed tag/signing checks"
-          else
+          if [ "${RELEASE_PRERELEASE}" != "true" ]; then
             if ! echo "${RELEASE_TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
               echo "::error::Invalid tag format: ${RELEASE_TAG} (expected vX.Y.Z)"
-              exit 1
-            fi
-            if [ -z "${CSC_LINK}" ] || [ -z "${CSC_KEY_PASSWORD}" ]; then
-              echo "::error::Windows signing secrets are missing."
-              echo "Set WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD in repository secrets."
               exit 1
             fi
           fi
@@ -90,12 +86,12 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           ref: ${{ steps.resolve.outputs.ref }}
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.3.5"
 
@@ -103,10 +99,12 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-03-27
+        with:
+          toolchain: stable
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: apps/desktop/sidecar -> target
 
@@ -132,16 +130,106 @@ jobs:
           $packageJson.version = "${{ steps.resolve.outputs.version }}"
           $packageJson | ConvertTo-Json -Depth 100 | Set-Content $packageJsonPath
 
-      - name: Package Windows installer (signed if CSC secrets present)
+      - name: Produce unpackaged Electron app (no signing)
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          # `--dir` builds the unpacked app into build/out/win-unpacked/ but
+          # does NOT produce or sign the NSIS installer. Signing happens in
+          # the sign-and-publish job, which has access to WIN_CSC_*.
+          bunx electron-builder --win nsis --x64 --dir --publish never
+
+      - name: Upload unpacked app + version stamp to next job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: win-unpacked-${{ steps.resolve.outputs.version }}
+          path: |
+            apps/desktop/build/out/win-unpacked/**
+            apps/desktop/package.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── 2) Sign + publish. Has signing secrets, no untrusted code. ──
+  # Gated by the `release-desktop-windows` GitHub Environment so the secrets
+  # are only injectable from approved tag refs. Runs `bun install` with
+  # `--ignore-scripts` so a compromised dep cannot exfiltrate the cert.
+  sign-and-publish:
+    needs: build
+    runs-on: windows-latest
+    environment: release-desktop-windows
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_REF: ${{ needs.build.outputs.ref }}
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
+      RELEASE_PRERELEASE: ${{ inputs.prerelease }}
+      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Validate signing secrets
+        shell: bash
+        run: |
+          if [ "${RELEASE_PRERELEASE}" = "true" ]; then
+            echo "Prerelease build — signing secrets are optional."
+            exit 0
+          fi
+          if [ -z "${CSC_LINK}" ] || [ -z "${CSC_KEY_PASSWORD}" ]; then
+            echo "::error::Windows signing secrets are missing."
+            echo "Set WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD in the release-desktop-windows environment."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.5"
+
+      - name: Install dependencies (no postinstall scripts)
+        # --ignore-scripts blocks any compromised dep from running code that
+        # could read CSC_LINK / CSC_KEY_PASSWORD from this job's env.
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Set desktop package version for release build
+        working-directory: apps/desktop
+        shell: pwsh
+        run: |
+          $packageJsonPath = "package.json"
+          $packageJson = Get-Content $packageJsonPath -Raw | ConvertFrom-Json
+          $packageJson.version = "${{ env.RELEASE_VERSION }}"
+          $packageJson | ConvertTo-Json -Depth 100 | Set-Content $packageJsonPath
+
+      - name: Download unpacked app from build job
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: win-unpacked-${{ env.RELEASE_VERSION }}
+          path: apps/desktop/_artifact
+
+      - name: Stage prepackaged app for electron-builder
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          mkdir -p build/out
+          mv _artifact/build/out/win-unpacked build/out/win-unpacked
+          rm -rf _artifact
+
+      - name: Package + sign Windows installer (NSIS)
         working-directory: apps/desktop
         shell: bash
         run: |
           if [ -z "${CSC_LINK}" ] || [ -z "${CSC_KEY_PASSWORD}" ]; then
-            echo "No CSC secrets present — building unsigned installer."
+            echo "No CSC secrets present — building unsigned installer (prerelease only)."
             unset CSC_LINK
             unset CSC_KEY_PASSWORD
           fi
-          bunx electron-builder --win nsis --x64 --publish never
+          # --prepackaged points at the unpacked dir from the build job, so
+          # electron-builder skips re-running the renderer/main build and only
+          # wraps + signs the installer.
+          bunx electron-builder --win nsis --x64 --prepackaged build/out/win-unpacked --publish never
 
       - name: Validate updater metadata
         working-directory: apps/desktop
