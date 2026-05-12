@@ -44,73 +44,81 @@ type TSoundAssetConfig = {
 	volume?: number;
 };
 
+const createSoundAssetUrl = (fileName: string): string => {
+	if (window.location.protocol === 'file:') {
+		return new URL(`./sounds/${fileName}`, window.location.href).toString();
+	}
+
+	return `/sounds/${fileName}`;
+};
+
 const soundAssets: Partial<Record<SoundType, TSoundAssetConfig>> = {
 	[SoundType.MESSAGE_RECEIVED]: {
-		url: '/sounds/message1.mp3',
+		url: createSoundAssetUrl('message1.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.SERVER_DISCONNECTED]: {
-		url: '/sounds/disconnect.mp3',
+		url: createSoundAssetUrl('disconnect.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.OWN_USER_LEFT_VOICE_CHANNEL]: {
-		url: '/sounds/user_leave.mp3',
+		url: createSoundAssetUrl('user_leave.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.OWN_USER_JOINED_VOICE_CHANNEL]: {
-		url: '/sounds/user_join.mp3',
+		url: createSoundAssetUrl('user_join.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.OWN_USER_MUTED_MIC]: {
-		url: '/sounds/mute.mp3',
+		url: createSoundAssetUrl('mute.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.OWN_USER_UNMUTED_MIC]: {
-		url: '/sounds/unmute.mp3',
+		url: createSoundAssetUrl('unmute.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.OWN_USER_MUTED_SOUND]: {
-		url: '/sounds/deafen.mp3',
+		url: createSoundAssetUrl('deafen.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.OWN_USER_UNMUTED_SOUND]: {
-		url: '/sounds/undeafen.mp3',
+		url: createSoundAssetUrl('undeafen.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.OWN_USER_STARTED_WEBCAM]: {
-		url: '/sounds/stream_started.mp3',
+		url: createSoundAssetUrl('stream_started.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.OWN_USER_STOPPED_WEBCAM]: {
-		url: '/sounds/stream_ended.mp3',
+		url: createSoundAssetUrl('stream_ended.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.OWN_USER_STARTED_SCREENSHARE]: {
-		url: '/sounds/stream_started.mp3',
+		url: createSoundAssetUrl('stream_started.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.OWN_USER_STOPPED_SCREENSHARE]: {
-		url: '/sounds/stream_ended.mp3',
+		url: createSoundAssetUrl('stream_ended.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.REMOTE_USER_STARTED_STREAM]: {
-		url: '/sounds/stream_started.mp3',
+		url: createSoundAssetUrl('stream_started.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.STREAM_WATCHER_JOINED]: {
-		url: '/sounds/stream_user_joined.mp3',
+		url: createSoundAssetUrl('stream_user_joined.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.STREAM_WATCHER_LEFT]: {
-		url: '/sounds/stream_user_left.mp3',
+		url: createSoundAssetUrl('stream_user_left.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.REMOTE_USER_JOINED_VOICE_CHANNEL]: {
-		url: '/sounds/user_join.mp3',
+		url: createSoundAssetUrl('user_join.mp3'),
 		volume: 0.2,
 	},
 	[SoundType.REMOTE_USER_LEFT_VOICE_CHANNEL]: {
-		url: '/sounds/user_leave.mp3',
+		url: createSoundAssetUrl('user_leave.mp3'),
 		volume: 0.2,
 	},
 };
