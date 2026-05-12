@@ -3,6 +3,7 @@ import { SoundType } from '../types';
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
 
 const SOUNDS_VOLUME = 4;
+const VOICE_JOIN_LEAVE_VOLUME = 1;
 
 const masterGain = audioCtx.createGain();
 masterGain.gain.setValueAtTime(1, 0);
@@ -46,6 +47,51 @@ const createGain = (value = 1) => {
 	gain.gain.setValueAtTime(value * SOUNDS_VOLUME, now());
 
 	return gain;
+};
+
+const createVoiceCueGain = (value = 1) => createGain(value * VOICE_JOIN_LEAVE_VOLUME);
+const createVoiceCueFilter = () => {
+	const filter = audioCtx.createBiquadFilter();
+
+	filter.type = 'lowpass';
+	filter.frequency.setValueAtTime(950, now());
+	filter.Q.setValueAtTime(0.45, now());
+
+	return filter;
+};
+
+type TSoundCueTone = {
+	type: OscillatorType;
+	freq: number;
+	gain: number;
+	delay: number;
+	duration: number;
+	endFreq?: number;
+};
+
+const playToneSequence = (tones: TSoundCueTone[], createToneGain: (value: number) => GainNode) => {
+	tones.forEach(({ type, freq, gain: toneGain, delay, duration, endFreq }) => {
+		const t = now() + delay;
+		const osc = createOsc(type, freq);
+		const gain = createToneGain(toneGain);
+		const filter = createVoiceCueFilter();
+		const peakGain = gain.gain.value;
+		const attack = Math.min(0.016, duration * 0.28);
+
+		if (endFreq !== undefined) {
+			osc.frequency.exponentialRampToValueAtTime(endFreq, t + duration * 0.85);
+		}
+
+		filter.frequency.setValueAtTime(950, t);
+		filter.frequency.exponentialRampToValueAtTime(720, t + duration);
+		gain.gain.setValueAtTime(0.0001, t);
+		gain.gain.exponentialRampToValueAtTime(peakGain, t + attack);
+		gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+
+		osc.connect(gain).connect(filter).connect(masterGain);
+		osc.start(t);
+		osc.stop(t + duration);
+	});
 };
 
 // MESSAGE_RECEIVED — ultra-minimal single tone
@@ -93,67 +139,28 @@ const sfxServerDisconnected = () => {
 	});
 };
 
-// OWN_USER_JOINED_VOICE_CHANNEL — warm rising pop with resonance
+// OWN_USER_JOINED_VOICE_CHANNEL — short three-note rise
 const sfxOwnUserJoinedVoiceChannel = () => {
-	// Primary tone — quick pitch sweep upward for a "pop" feel
-	const osc1 = createOsc('sine', 400);
-	const gain1 = createGain(0.08);
-
-	osc1.frequency.exponentialRampToValueAtTime(880, now() + 0.06);
-	gain1.gain.setValueAtTime(0.08 * SOUNDS_VOLUME, now() + 0.01);
-	gain1.gain.exponentialRampToValueAtTime(0.0001, now() + 0.15);
-
-	osc1.connect(gain1).connect(masterGain);
-	osc1.start();
-	osc1.stop(now() + 0.15);
-
-	// Second pop — slightly delayed, higher pitched
-	const osc2 = createOsc('sine', 660);
-	const gain2 = createGain(0.06);
-	const t2 = now() + 0.08;
-
-	osc2.frequency.exponentialRampToValueAtTime(1100, t2 + 0.05);
-	gain2.gain.exponentialRampToValueAtTime(0.0001, t2 + 0.12);
-
-	osc2.connect(gain2).connect(masterGain);
-	osc2.start(t2);
-	osc2.stop(t2 + 0.12);
-
-	// Soft harmonic shimmer
-	const osc3 = createOsc('triangle', 1320);
-	const gain3 = createGain(0.02);
-	const t3 = now() + 0.1;
-
-	gain3.gain.exponentialRampToValueAtTime(0.0001, t3 + 0.1);
-
-	osc3.connect(gain3).connect(masterGain);
-	osc3.start(t3);
-	osc3.stop(t3 + 0.1);
+	playToneSequence(
+		[
+			{ type: 'sine', freq: 440, gain: 0.07, delay: 0, duration: 0.08 },
+			{ type: 'sine', freq: 523.25, gain: 0.068, delay: 0.06, duration: 0.085 },
+			{ type: 'sine', freq: 622.25, gain: 0.078, delay: 0.125, duration: 0.125 },
+		],
+		createVoiceCueGain,
+	);
 };
 
-// OWN_USER_LEFT_VOICE_CHANNEL — gentle descending sweep
+// OWN_USER_LEFT_VOICE_CHANNEL — short three-note fall
 const sfxOwnUserLeftVoiceChannel = () => {
-	// Smooth downward sweep — feels like "stepping away"
-	const osc1 = createOsc('sine', 750);
-	const gain1 = createGain(0.07);
-
-	osc1.frequency.exponentialRampToValueAtTime(330, now() + 0.18);
-	gain1.gain.exponentialRampToValueAtTime(0.0001, now() + 0.2);
-
-	osc1.connect(gain1).connect(masterGain);
-	osc1.start();
-	osc1.stop(now() + 0.2);
-
-	// Soft low undertone for warmth
-	const osc2 = createOsc('triangle', 500);
-	const gain2 = createGain(0.03);
-
-	osc2.frequency.exponentialRampToValueAtTime(250, now() + 0.16);
-	gain2.gain.exponentialRampToValueAtTime(0.0001, now() + 0.18);
-
-	osc2.connect(gain2).connect(masterGain);
-	osc2.start(now() + 0.03);
-	osc2.stop(now() + 0.18);
+	playToneSequence(
+		[
+			{ type: 'sine', freq: 622.25, gain: 0.074, delay: 0, duration: 0.105 },
+			{ type: 'sine', freq: 523.25, gain: 0.064, delay: 0.065, duration: 0.085 },
+			{ type: 'sine', freq: 440, gain: 0.062, delay: 0.125, duration: 0.1 },
+		],
+		createVoiceCueGain,
+	);
 };
 
 // MUTED_MIC — extremely bland low click
@@ -293,17 +300,16 @@ const sfxOwnUserStoppedScreenshare = () => {
 	osc2.stop(now() + 0.2);
 };
 
-// REMOTE JOIN — soft ascending blip
+// REMOTE JOIN — compact three-note rise
 const sfxRemoteUserJoinedVoiceChannel = () => {
-	const osc = createOsc('sine', 500);
-	const gain = createGain(0.06);
-
-	osc.frequency.exponentialRampToValueAtTime(800, now() + 0.07);
-	gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.12);
-
-	osc.connect(gain).connect(masterGain);
-	osc.start();
-	osc.stop(now() + 0.12);
+	playToneSequence(
+		[
+			{ type: 'sine', freq: 440, gain: 0.047, delay: 0, duration: 0.07 },
+			{ type: 'sine', freq: 523.25, gain: 0.043, delay: 0.055, duration: 0.075 },
+			{ type: 'sine', freq: 622.25, gain: 0.048, delay: 0.11, duration: 0.1 },
+		],
+		createVoiceCueGain,
+	);
 };
 
 // REMOTE STREAM STARTED — compact bright cue
@@ -327,17 +333,16 @@ const sfxRemoteUserStartedStream = () => {
 	});
 };
 
-// REMOTE LEAVE — soft descending blip
+// REMOTE LEAVE — compact three-note fall
 const sfxRemoteUserLeftVoiceChannel = () => {
-	const osc = createOsc('sine', 700);
-	const gain = createGain(0.05);
-
-	osc.frequency.exponentialRampToValueAtTime(400, now() + 0.08);
-	gain.gain.exponentialRampToValueAtTime(0.0001, now() + 0.12);
-
-	osc.connect(gain).connect(masterGain);
-	osc.start();
-	osc.stop(now() + 0.12);
+	playToneSequence(
+		[
+			{ type: 'sine', freq: 622.25, gain: 0.047, delay: 0, duration: 0.09 },
+			{ type: 'sine', freq: 523.25, gain: 0.04, delay: 0.06, duration: 0.075 },
+			{ type: 'sine', freq: 440, gain: 0.038, delay: 0.11, duration: 0.085 },
+		],
+		createVoiceCueGain,
+	);
 };
 
 // STREAM WATCHER JOINED — light confirmation pulse
