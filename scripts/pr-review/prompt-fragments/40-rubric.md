@@ -33,21 +33,12 @@ Commenting rules (strict):
 - Rare P2 findings are allowed inline only when the production or architectural impact is concrete and high-confidence.
 - Prefer fewer, higher-quality comments. If you find yourself writing more than 3-4, re-check each.
 - If multiple locations share the same root cause, comment ONCE on the root cause.
-- Match this inline comment presentation style:
-  * Start with a severity badge and a short bold title on the first line.
-  * Then explain the realistic failure path and impact in 1-2 short paragraphs.
-  * When the fix is local and exact, include a GitHub suggestion block with the minimal patch.
-  * Do not add extra boilerplate sections, AI-fix prompts, or long policy restatements inside the inline comment body.
 - Each inline comment must include:
   * What: the issue
   * Failure path: how this diff leads to the bug on a realistic path
   * Why: impact (bug/security/perf/reliability)
   * Fix: a specific suggested change
   * Sources: the exact materials used to reach the conclusion
-- Use this exact badge format for the first line:
-  * `P0`: `<a href="#"><img alt="P0" src="https://raw.githubusercontent.com/jonocairns/ripcord/main/.github/assets/pr-review-badges/p0.svg" align="top"></a> **Short issue title**`
-  * `P1`: `<a href="#"><img alt="P1" src="https://raw.githubusercontent.com/jonocairns/ripcord/main/.github/assets/pr-review-badges/p1.svg" align="top"></a> **Short issue title**`
-  * `P2`: `<a href="#"><img alt="P2" src="https://raw.githubusercontent.com/jonocairns/ripcord/main/.github/assets/pr-review-badges/p2.svg" align="top"></a> **Short issue title**`
 - For migration findings, cite the rule name (e.g. `ADD_COLUMN_NOT_NULL_WITHOUT_DEFAULT`) so the author can find it in the skill docs.
 - For auth findings, cite the checklist item number from `auth-review`.
 - Do not comment if you cannot explain why CI/lint/typecheck/tests would not already make the problem obvious.
