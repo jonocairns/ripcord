@@ -42,7 +42,7 @@ jobs:
           bun-version: "1.3.5"
 
       - name: Restore Bun cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.bun/install/cache
@@ -54,7 +54,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Restore tsbuildinfo cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             apps/*/.tsbuildinfo
@@ -63,7 +63,7 @@ jobs:
           restore-keys: tsbuildinfo-${{ runner.os }}-
 
       - name: Restore import-graph cache (if available)
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .pr-review-cache/import-graph.json
           key: import-graph-${{ github.event.pull_request.base.sha || 'main' }}
@@ -88,7 +88,7 @@ jobs:
 
       - name: Run Claude PR review
         id: claude
-        uses: anthropics/claude-code-action@b1139cae6ebe959e68ced65d448a0a0a708e1108 # v1
+        uses: anthropics/claude-code-action@f4fb5c6cdccc1ee7af63692f5d08d56efaa64cc8 # v1
         env:
           GH_TOKEN: ${{ github.token }}
         with:
