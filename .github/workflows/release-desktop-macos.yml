@@ -7,12 +7,42 @@ on:
         description: "Release tag (e.g. v0.0.4)"
         required: true
         type: string
+      ref:
+        description: "Git ref to checkout (defaults to tag)"
+        required: false
+        type: string
+        default: ""
+      version:
+        description: "package.json version to stamp (defaults to tag with leading v stripped)"
+        required: false
+        type: string
+        default: ""
+      prerelease:
+        description: "Mark the GitHub release as a prerelease"
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       tag:
         description: "Release tag (for manual reruns, e.g. v0.0.4)"
         required: true
         type: string
+      ref:
+        description: "Git ref to checkout (defaults to tag)"
+        required: false
+        type: string
+        default: ""
+      version:
+        description: "package.json version to stamp (defaults to tag with leading v stripped)"
+        required: false
+        type: string
+        default: ""
+      prerelease:
+        description: "Mark the GitHub release as a prerelease"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -22,30 +52,39 @@ jobs:
     runs-on: macos-latest
     env:
       RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_REF: ${{ inputs.ref }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_PRERELEASE: ${{ inputs.prerelease }}
     outputs:
-      version: ${{ steps.version.outputs.version }}
+      ref: ${{ steps.resolve.outputs.ref }}
+      version: ${{ steps.resolve.outputs.version }}
 
     steps:
-      - name: Validate inputs
+      - name: Resolve inputs and validate
+        id: resolve
         run: |
           if [ -z "${RELEASE_TAG}" ]; then
             echo "::error::RELEASE_TAG is required."
             exit 1
           fi
 
-          if ! echo "${RELEASE_TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Invalid tag format: ${RELEASE_TAG} (expected vX.Y.Z)"
-            exit 1
+          ref="${RELEASE_REF:-${RELEASE_TAG}}"
+          version="${RELEASE_VERSION:-${RELEASE_TAG#v}}"
+
+          if [ "${RELEASE_PRERELEASE}" != "true" ]; then
+            if ! echo "${RELEASE_TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::Invalid tag format: ${RELEASE_TAG} (expected vX.Y.Z)"
+              exit 1
+            fi
           fi
 
-      - name: Extract version from tag
-        id: version
-        run: echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository at release tag
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ steps.resolve.outputs.ref }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -68,7 +107,7 @@ jobs:
       - name: Build client renderer
         working-directory: apps/client
         env:
-          SHARKORD_VERSION: ${{ steps.version.outputs.version }}
+          SHARKORD_VERSION: ${{ steps.resolve.outputs.version }}
         run: bun run build
 
       - name: Build desktop renderer and main process
@@ -81,7 +120,7 @@ jobs:
       - name: Set desktop package version for release build
         working-directory: apps/desktop
         run: |
-          jq --arg v "${{ steps.version.outputs.version }}" '.version = $v' package.json \
+          jq --arg v "${{ steps.resolve.outputs.version }}" '.version = $v' package.json \
             > package.json.tmp && mv package.json.tmp package.json
 
       - name: Produce unpackaged macOS app (no signing)
@@ -92,7 +131,7 @@ jobs:
       - name: Upload unpackaged macOS app to next job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: mac-unpacked-${{ steps.version.outputs.version }}
+          name: mac-unpacked-${{ steps.resolve.outputs.version }}
           path: apps/desktop/build/out/**
           if-no-files-found: error
           retention-days: 3
@@ -102,6 +141,7 @@ jobs:
     runs-on: macos-latest
     env:
       RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_REF: ${{ needs.build.outputs.ref }}
       RELEASE_VERSION: ${{ needs.build.outputs.version }}
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
@@ -112,7 +152,7 @@ jobs:
       - name: Checkout repository at release tag
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_REF }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
