@@ -28,7 +28,7 @@
     "@types/yazl": "^3.3.0",
     "@typescript-eslint/eslint-plugin": "^8.46.1",
     "drizzle-kit": "^0.31.5",
-    "eslint": "^8.56.0",
+    "eslint": "^10.3.0",
     "eslint-plugin-unused-imports": "^4.1.4",
     "prettier": "^3.5.3",
     "prettier-plugin-organize-imports": "^4.1.0"
