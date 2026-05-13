@@ -56,6 +56,12 @@ review routing.
   not a finding. A comment is warranted only when the diff introduces or expands
   a risky pattern that conflicts with established subsystem boundaries or known
   repo invariants.
+- Inline comments should use this presentation style:
+  - first line is a severity badge (`P0`/`P1`/`P2`) plus a short bold title,
+  - then a concise explanation of the failure path and impact,
+  - then an optional GitHub suggestion block when the fix is local and exact,
+  - and no extra AI-helper boilerplate in the comment body.
+  - badge assets are repo-owned under `.github/assets/pr-review-badges/` and should be referenced via stable raw GitHub URLs, not third-party buckets.
 
 ## Severity rubric
 

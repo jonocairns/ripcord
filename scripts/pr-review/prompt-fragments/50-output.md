@@ -3,6 +3,12 @@ Output:
 - Return the main review summary as the structured output field `summary_comment`.
 - Do not post the main summary comment directly with `gh pr comment` or other GitHub CLI comment commands; the workflow will upsert that single summary comment after the run.
 - Summary comments may include non-blocking watch-outs or checks to verify; inline comments may not.
+- Inline comments should follow this presentation style:
+  1. Severity badge + short bold title on the first line.
+  2. One short paragraph describing the concrete bug/risk and realistic trigger path.
+  3. One short paragraph describing the impact and the fix.
+  4. Optional GitHub suggestion block only when the replacement is local, exact, and safe to apply as written.
+- Do not emit collapsible "Prompt To Fix With AI" sections, generic praise, or long review-policy explanations in inline comments.
 - Summary sections should cite the main materials used (for example which skills ran, which files were the highest-risk reads, and any Sentry issue IDs if relevant).
 - If the review ran in scoped mode because the PR exceeded the changed-file limit, say so explicitly in the final summary and name the highest-risk areas/files you focused on.
 - Before posting any inline comment, verify:
@@ -10,6 +16,7 @@ Output:
   2. Have I already commented on this same root cause elsewhere? (only post once per issue)
   3. Am I certain this is wrong, or am I asking a question? (questions go in summary, not inline)
   4. Can I explain the realistic failure path and severity clearly? (only post if yes)
+  5. If I include a suggestion block, is it the minimal correct patch for this exact line range? (only post if yes)
 - Build the markdown body for `summary_comment` with:
   1. `## Summary`
      - Start with 1 short paragraph explaining what the PR does overall.
