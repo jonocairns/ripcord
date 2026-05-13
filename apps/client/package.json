@@ -55,7 +55,7 @@
     "react": "^19.1.1",
     "react-day-picker": "^9.11.1",
     "react-dom": "^19.1.1",
-    "react-lite-youtube-embed": "^2.5.6",
+    "react-lite-youtube-embed": "^3.5.1",
     "react-tweet": "^3.2.2",
     "react-virtuoso": "^4.18.1",
     "sonner": "^2.0.7",
