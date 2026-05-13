@@ -11,14 +11,14 @@ path = "src/main.rs"
 [dependencies]
 base64 = "0.22.1"
 bytemuck = "1.20.0"
-libc = "0.2.182"
+libc = "0.2.186"
 serde = { version = "1.0.214", features = ["derive"] }
 serde_json = "1.0.132"
-uuid = { version = "1.11.0", features = ["v4"] }
+uuid = { version = "1.23.1", features = ["v4"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11-dl = "2.21"
-zbus = "5.14.0"
+zbus = "5.15.0"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58.0", features = [
