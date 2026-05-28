@@ -56,10 +56,12 @@ describe('refreshAccessToken — rotation race', () => {
 		originalFetch = (globalThis as { fetch?: typeof fetch }).fetch;
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		if (originalFetch) {
 			Reflect.set(globalThis, 'fetch', originalFetch);
 		}
+		const { resetRefreshStateForTests } = await import('../auth');
+		resetRefreshStateForTests();
 	});
 
 	test('a single refresh rotates tokens cleanly', async () => {

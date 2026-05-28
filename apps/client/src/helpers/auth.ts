@@ -61,7 +61,11 @@ const refreshAccessTokenOnce = async (): Promise<boolean> => {
 
 		setAuthTokens(data.token, data.refreshToken);
 		return true;
-	} catch {
+	} catch (error) {
+		// Surface AbortError (timeout) and unexpected network/runtime failures
+		// to the console — without this, a timed-out refresh is indistinguishable
+		// from a 401 in production diagnostics.
+		console.warn('refreshAccessToken failed', error);
 		return false;
 	}
 };
@@ -108,4 +112,8 @@ const revokeRefreshToken = async (): Promise<void> => {
 	}
 };
 
-export { refreshAccessToken, revokeRefreshToken };
+const resetRefreshStateForTests = () => {
+	refreshAccessTokenPromise = undefined;
+};
+
+export { refreshAccessToken, resetRefreshStateForTests, revokeRefreshToken };
