@@ -1,5 +1,5 @@
 import type { TTempFile } from '@sharkord/shared';
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import fs from 'fs/promises';
 import { initTest, login, uploadFile } from '../../__tests__/helpers';
 import { fileManager } from '../../utils/file-manager';
@@ -9,7 +9,7 @@ type TLoginBody = {
 };
 
 describe('files router', () => {
-  let tempFile: TTempFile;
+  let tempFile: TTempFile | undefined;
   let counter = 0;
 
   beforeEach(async () => {
@@ -24,8 +24,28 @@ describe('files router', () => {
     tempFile = (await res.json()) as TTempFile;
   });
 
+  afterEach(async () => {
+    if (!tempFile) return;
+
+    if (fileManager.temporaryFileExists(tempFile.id)) {
+      await fileManager.removeTemporaryFile(tempFile.id);
+      tempFile = undefined;
+      return;
+    }
+
+    try {
+      await fs.unlink(tempFile.path);
+    } catch {
+      // ignore
+    } finally {
+      tempFile = undefined;
+    }
+  });
+
   test('should check temporary file existence', async () => {
     expect(tempFile).toBeDefined();
+    if (!tempFile) return;
+
     expect(tempFile.id).toBeDefined();
 
     const file = await fileManager.getTemporaryFile(tempFile.id);
@@ -41,6 +61,9 @@ describe('files router', () => {
   });
 
   test('should delete a temporary file', async () => {
+    expect(tempFile).toBeDefined();
+    if (!tempFile) return;
+
     const { caller } = await initTest();
 
     expect(await fs.exists(tempFile.path)).toBe(true);
@@ -63,6 +86,9 @@ describe('files router', () => {
   });
 
   test('should throw when deleting other users temporary file', async () => {
+    expect(tempFile).toBeDefined();
+    if (!tempFile) return;
+
     const { caller } = await initTest(2);
 
     await expect(
