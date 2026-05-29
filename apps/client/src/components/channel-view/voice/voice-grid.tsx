@@ -83,7 +83,7 @@ const VoiceGrid = memo(({ children, pinnedCardId, className }: TVoiceGridProps) 
 	if (regularCards.length === 1) {
 		return (
 			<div className={cn('flex h-full items-center justify-center p-4 pb-28 md:pb-32', className)}>
-				<div className="h-full w-full max-h-[82vh] max-w-5xl overflow-hidden rounded-2xl border border-border/70 shadow-2xl">
+				<div className="flex h-full w-full max-h-[82vh] max-w-5xl items-center justify-center overflow-hidden rounded-2xl border border-border/70 shadow-2xl">
 					{regularCards[0]}
 				</div>
 			</div>
