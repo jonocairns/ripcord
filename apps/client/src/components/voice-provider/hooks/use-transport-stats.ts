@@ -11,6 +11,36 @@ export type TransportStats = {
 	rtt: number;
 	jitter: number;
 	timestamp: number;
+	outboundVideo: VideoSenderStats[];
+	inboundVideo: VideoReceiverStats[];
+};
+
+export type VideoSenderStats = {
+	id: string;
+	width: number | null;
+	height: number | null;
+	framesPerSecond: number | null;
+	framesEncoded: number;
+	framesSent: number;
+	framesDropped: number | null;
+	qualityLimitationReason: string | null;
+	nackCount: number;
+	pliCount: number;
+	firCount: number;
+	qpSum: number | null;
+	hugeFramesSent: number;
+};
+
+export type VideoReceiverStats = {
+	id: string;
+	width: number | null;
+	height: number | null;
+	framesPerSecond: number | null;
+	framesDecoded: number;
+	framesReceived: number;
+	framesDropped: number;
+	packetsLost: number;
+	jitter: number;
 };
 
 export type TransportStatsData = {
@@ -63,11 +93,31 @@ const useTransportStats = () => {
 		let packetsLost = 0;
 		let rtt = 0;
 		let jitter = 0;
+		const outboundVideo: VideoSenderStats[] = [];
+		const inboundVideo: VideoReceiverStats[] = [];
 
 		for (const stat of statsReport.values()) {
 			if (stat.type === 'outbound-rtp' && isProducer) {
 				bytesSent += stat.bytesSent || 0;
 				packetsSent += stat.packetsSent || 0;
+
+				if (stat.kind === 'video') {
+					outboundVideo.push({
+						id: stat.id,
+						width: stat.frameWidth ?? null,
+						height: stat.frameHeight ?? null,
+						framesPerSecond: stat.framesPerSecond ?? null,
+						framesEncoded: stat.framesEncoded ?? 0,
+						framesSent: stat.framesSent ?? 0,
+						framesDropped: stat.framesDropped ?? null,
+						qualityLimitationReason: stat.qualityLimitationReason ?? null,
+						nackCount: stat.nackCount ?? 0,
+						pliCount: stat.pliCount ?? 0,
+						firCount: stat.firCount ?? 0,
+						qpSum: stat.qpSum ?? null,
+						hugeFramesSent: stat.hugeFramesSent ?? 0,
+					});
+				}
 			} else if (stat.type === 'remote-inbound-rtp' && isProducer) {
 				packetsLost += stat.packetsLost || 0;
 				jitter += stat.jitter || 0;
@@ -80,6 +130,20 @@ const useTransportStats = () => {
 				packetsReceived += stat.packetsReceived || 0;
 				packetsLost += stat.packetsLost || 0;
 				jitter += stat.jitter || 0;
+
+				if (stat.kind === 'video') {
+					inboundVideo.push({
+						id: stat.id,
+						width: stat.frameWidth ?? null,
+						height: stat.frameHeight ?? null,
+						framesPerSecond: stat.framesPerSecond ?? null,
+						framesDecoded: stat.framesDecoded ?? 0,
+						framesReceived: stat.framesReceived ?? 0,
+						framesDropped: stat.framesDropped ?? 0,
+						packetsLost: stat.packetsLost ?? 0,
+						jitter: stat.jitter ?? 0,
+					});
+				}
 			} else if (stat.type === 'candidate-pair' && stat.state === 'succeeded') {
 				rtt = Math.max(rtt, (stat.currentRoundTripTime || 0) * 1000);
 			}
@@ -94,6 +158,8 @@ const useTransportStats = () => {
 			rtt,
 			jitter,
 			timestamp: Date.now(),
+			outboundVideo,
+			inboundVideo,
 		};
 	}, []);
 
@@ -168,7 +234,7 @@ const useTransportStats = () => {
 				const timeDeltaSent = (producerStats.timestamp - previousProducer.timestamp) / 1000;
 
 				if (timeDeltaSent > 0) {
-					currentBitrateSent = bytesSentDelta / timeDeltaSent;
+					currentBitrateSent = (bytesSentDelta * 8) / timeDeltaSent;
 				}
 			}
 
@@ -176,7 +242,7 @@ const useTransportStats = () => {
 				const timeDeltaReceived = (consumerStats.timestamp - previousConsumer.timestamp) / 1000;
 
 				if (timeDeltaReceived > 0) {
-					currentBitrateReceived = bytesReceivedDelta / timeDeltaReceived;
+					currentBitrateReceived = (bytesReceivedDelta * 8) / timeDeltaReceived;
 				}
 			}
 

@@ -30,7 +30,7 @@ import {
 import { pubsub } from '../utils/pubsub';
 
 const voiceRuntimes = new Map<number, VoiceRuntime>();
-const INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS = 1_000_000;
+const INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS = 6_000_000;
 const VOICE_ACTIVITY_OBSERVER_MAX_ENTRIES = 100;
 const VOICE_ACTIVITY_OBSERVER_THRESHOLD_DBOV = -60;
 const VOICE_ACTIVITY_OBSERVER_INTERVAL_MS = 100;

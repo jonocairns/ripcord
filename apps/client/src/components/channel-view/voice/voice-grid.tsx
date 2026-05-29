@@ -46,7 +46,7 @@ const VoiceGrid = memo(({ children, pinnedCardId, className }: TVoiceGridProps) 
 	if (pinnedCardId && pinnedCard) {
 		return (
 			<div className={cn('flex flex-col h-full', className)}>
-				<div className="flex-1 min-h-0 p-3 md:p-4">{pinnedCard}</div>
+				<div className="flex min-h-0 flex-1 items-center justify-center p-3 md:p-4">{pinnedCard}</div>
 
 				{regularCards.length > 0 && (
 					<div className="pointer-events-none flex-shrink-0 px-3 md:px-4">
@@ -81,10 +81,15 @@ const VoiceGrid = memo(({ children, pinnedCardId, className }: TVoiceGridProps) 
 	const rows = getRowCount(regularCards.length, gridCols);
 
 	if (regularCards.length === 1) {
+		const card = regularCards[0];
+		const shouldFitSingleScreenShare =
+			isValidElement<{ fitStreamAspect?: boolean }>(card) && String(card.key).startsWith('screen-share-');
+		const displayCard = shouldFitSingleScreenShare ? cloneElement(card, { fitStreamAspect: true }) : card;
+
 		return (
 			<div className={cn('flex h-full items-center justify-center p-4 pb-28 md:pb-32', className)}>
-				<div className="h-full w-full max-h-[82vh] max-w-5xl overflow-hidden rounded-2xl border border-border/70 shadow-2xl">
-					{regularCards[0]}
+				<div className="flex h-full w-full max-h-[82vh] max-w-5xl items-center justify-center overflow-hidden rounded-2xl border border-border/70 shadow-2xl">
+					{displayCard}
 				</div>
 			</div>
 		);

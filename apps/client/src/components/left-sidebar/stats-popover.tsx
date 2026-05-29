@@ -11,6 +11,26 @@ type StatsPopoverProps = {
 
 const CLOSE_DELAY_MS = 120;
 
+const formatFps = (framesPerSecond: number | null): string => {
+	return framesPerSecond === null ? 'unknown' : `${Math.round(framesPerSecond)} fps`;
+};
+
+const formatResolution = (width: number | null, height: number | null): string => {
+	return width === null || height === null ? 'unknown' : `${width}x${height}`;
+};
+
+const formatOptionalCount = (value: number | null): string => {
+	return value === null ? 'N/A' : value.toString();
+};
+
+const formatBitrate = (bitsPerSecond: number): string => {
+	if (bitsPerSecond >= 1_000_000) {
+		return `${(bitsPerSecond / 1_000_000).toFixed(2)} Mbps`;
+	}
+
+	return `${Math.round(bitsPerSecond / 1000)} kbps`;
+};
+
 const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopoverProps) => {
 	const { transportStats } = useVoice();
 	const [open, setOpen] = useState(false);
@@ -62,8 +82,7 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 							<h4 className="font-medium text-green-400 mb-1">Outgoing</h4>
 							{producer ? (
 								<div className="space-y-1 text-muted-foreground">
-									<div>Rate: {filesize(currentBitrateSent)}/s</div>
-									<div>Packets: {producer.packetsSent}</div>
+									<div>Rate: {formatBitrate(currentBitrateSent)}</div>
 									<div>RTT: {producer.rtt.toFixed(1)} ms</div>
 								</div>
 							) : (
@@ -75,14 +94,50 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 							<h4 className="font-medium text-blue-400 mb-1">Incoming</h4>
 							{consumer ? (
 								<div className="space-y-1 text-muted-foreground">
-									<div>Rate: {filesize(currentBitrateReceived)}/s</div>
-									<div>Packets: {consumer.packetsReceived}</div>
+									<div>Rate: {formatBitrate(currentBitrateReceived)}</div>
 								</div>
 							) : (
 								<div className="text-muted-foreground">No remote streams</div>
 							)}
 						</div>
 					</div>
+					{producer?.outboundVideo.length ? (
+						<div className="border-t border-border/50 pt-2">
+							<h4 className="font-medium text-green-400 mb-1">Video Send</h4>
+							<div className="space-y-2 text-muted-foreground">
+								{producer.outboundVideo.map((video, index) => (
+									<div key={video.id} className="space-y-0.5">
+										<div className="font-medium text-foreground/80">Stream {index + 1}</div>
+										<div>
+											{formatResolution(video.width, video.height)} · {formatFps(video.framesPerSecond)}
+										</div>
+										<div>Dropped: {formatOptionalCount(video.framesDropped)}</div>
+										<div>Limit: {video.qualityLimitationReason ?? 'none'}</div>
+										<div>
+											NACK/PLI/FIR: {video.nackCount}/{video.pliCount}/{video.firCount}
+										</div>
+									</div>
+								))}
+							</div>
+						</div>
+					) : null}
+					{consumer?.inboundVideo.length ? (
+						<div className="border-t border-border/50 pt-2">
+							<h4 className="font-medium text-blue-400 mb-1">Video Receive</h4>
+							<div className="space-y-2 text-muted-foreground">
+								{consumer.inboundVideo.map((video, index) => (
+									<div key={video.id} className="space-y-0.5">
+										<div className="font-medium text-foreground/80">Stream {index + 1}</div>
+										<div>
+											{formatResolution(video.width, video.height)} · {formatFps(video.framesPerSecond)}
+										</div>
+										<div>Dropped: {video.framesDropped}</div>
+										<div>Packets lost: {video.packetsLost}</div>
+									</div>
+								))}
+							</div>
+						</div>
+					) : null}
 					<div className="border-t border-border/50 pt-2">
 						<h4 className="font-medium text-yellow-400 mb-1">Session Totals</h4>
 						<div className="grid grid-cols-2 gap-2 text-muted-foreground">

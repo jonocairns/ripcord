@@ -9,6 +9,7 @@ import { useWindowFocus } from '@/hooks/use-window-focus';
 import { cn } from '@/lib/utils';
 import { CardControls } from './card-controls';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
+import { useStreamStats } from './hooks/use-stream-stats';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
 import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
@@ -90,6 +91,7 @@ type TScreenShareCardProps = {
 	onUnpin: () => void;
 	className?: string;
 	showPinControls: boolean;
+	fitStreamAspect?: boolean;
 	onStopWatching?: () => void;
 };
 
@@ -103,6 +105,7 @@ const ScreenShareCard = memo(
 		onUnpin,
 		className,
 		showPinControls = true,
+		fitStreamAspect = false,
 		onStopWatching,
 	}: TScreenShareCardProps) => {
 		const user = useUserById(userId);
@@ -132,6 +135,7 @@ const ScreenShareCard = memo(
 			attachScreenShareVideo: !hideOwnPreview,
 			attachScreenShareAudio: !isPoppedOut,
 		});
+		const streamStats = useStreamStats(screenShareRef, screenShareStream);
 		const [popoutVideoElement, setPopoutVideoElement] = useState<HTMLVideoElement | null>(null);
 		const [popoutAudioElement, setPopoutAudioElement] = useState<HTMLAudioElement | null>(null);
 
@@ -394,17 +398,26 @@ const ScreenShareCard = memo(
 
 		if (!user || !hasScreenShareStream) return null;
 
+		const streamAspectRatio = streamStats ? `${streamStats.width} / ${streamStats.height}` : '16 / 9';
+		const shouldFitStreamAspect = isPinned || fitStreamAspect || !showPinControls;
+
 		return (
 			<>
 				<VoiceSurface
 					ref={containerRef}
-					className={cn('relative group', 'flex items-center justify-center', 'w-full h-full', className)}
+					className={cn(
+						'relative group',
+						'flex items-center justify-center',
+						shouldFitStreamAspect ? 'w-full' : 'h-full w-full',
+						className,
+					)}
 					onWheel={isPoppedOut ? undefined : handleWheel}
 					onMouseDown={isPoppedOut ? undefined : handleMouseDown}
 					onMouseMove={isPoppedOut ? undefined : handleMouseMove}
 					onMouseUp={isPoppedOut ? undefined : handleMouseUp}
 					onMouseLeave={isPoppedOut ? undefined : handleMouseUp}
 					style={{
+						...(shouldFitStreamAspect ? { aspectRatio: streamAspectRatio, maxHeight: '100%' } : {}),
 						cursor: isPoppedOut ? 'default' : getCursor(),
 					}}
 				>
@@ -431,7 +444,8 @@ const ScreenShareCard = memo(
 						muted={isOwnUser || isPoppedOut}
 						playsInline
 						className={cn(
-							'absolute inset-0 h-full w-full bg-[#1b2026] object-contain',
+							'absolute inset-0 h-full w-full bg-[#1b2026]',
+							shouldFitStreamAspect ? 'object-contain' : 'object-cover',
 							(isPoppedOut || hideOwnPreview) && 'opacity-0 pointer-events-none',
 						)}
 						style={{

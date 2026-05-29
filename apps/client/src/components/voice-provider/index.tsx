@@ -1174,12 +1174,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				width: webcamTrackSettings.width ?? requestedWebcamResolution.width,
 				height: webcamTrackSettings.height ?? requestedWebcamResolution.height,
 				frameRate: webcamTrackSettings.frameRate ?? devices.webcamFramerate,
-				codecMimeType: preferredVideoCodec?.mimeType,
 			});
 
 			const videoProducer = await producerTransport.current?.produce({
 				track,
-				encodings: [{ maxBitrate: webcamBitratePolicy.maxKbps * 1000 }],
 				codec: preferredVideoCodec,
 				codecOptions: {
 					videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
@@ -1269,12 +1267,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				width: screenTrackSettings.width ?? requestedScreenResolution.width,
 				height: screenTrackSettings.height ?? requestedScreenResolution.height,
 				frameRate: screenTrackSettings.frameRate ?? devices.screenFramerate,
-				codecMimeType: preferredVideoCodec?.mimeType,
 			});
 
 			const screenShareProducer = await producerTransport.current?.produce({
 				track,
-				encodings: [{ maxBitrate: screenBitratePolicy.maxKbps * 1000 }],
 				codecOptions: {
 					videoGoogleStartBitrate: screenBitratePolicy.startKbps,
 				},

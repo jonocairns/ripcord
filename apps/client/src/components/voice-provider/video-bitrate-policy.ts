@@ -5,12 +5,10 @@ type TVideoBitratePolicyInput = {
 	width?: number;
 	height?: number;
 	frameRate?: number;
-	codecMimeType?: string;
 };
 
 type TVideoBitratePolicy = {
 	startKbps: number;
-	maxKbps: number;
 };
 
 type TFpsTier = {
@@ -132,25 +130,12 @@ const resolveFpsTier = (tiers: TFpsTier[], frameRate: number): TFpsTier => {
 	return tiers.find((tier) => frameRate <= tier.maxFrameRate) ?? tiers[tiers.length - 1]!;
 };
 
-const MAX_BITRATE_KBPS: Record<TVideoBitrateProfile, number> = {
-	screen: 30_000,
-	camera: 15_000,
-};
-
-const resolveMaxBitrateKbps = (profile: TVideoBitrateProfile): number => {
-	return MAX_BITRATE_KBPS[profile];
-};
-
 const getVideoBitratePolicy = ({
 	profile,
 	width,
 	height,
 	frameRate,
-	codecMimeType,
 }: TVideoBitratePolicyInput): TVideoBitratePolicy => {
-	// Start bitrate now follows explicit resolution/fps buckets.
-	void codecMimeType;
-
 	const safeWidth = clamp(width ?? 1280, 160, 7680);
 	const safeHeight = clamp(height ?? 720, 120, 4320);
 	const safeFrameRate = clamp(frameRate ?? 30, 5, 120);
@@ -161,7 +146,6 @@ const getVideoBitratePolicy = ({
 
 	return {
 		startKbps: fpsTier.startKbps,
-		maxKbps: resolveMaxBitrateKbps(profile),
 	};
 };
 
