@@ -444,7 +444,8 @@ const ScreenShareCard = memo(
 						muted={isOwnUser || isPoppedOut}
 						playsInline
 						className={cn(
-							'absolute inset-0 h-full w-full bg-[#1b2026] object-contain',
+							'absolute inset-0 h-full w-full bg-[#1b2026]',
+							shouldFitStreamAspect ? 'object-contain' : 'object-cover',
 							(isPoppedOut || hideOwnPreview) && 'opacity-0 pointer-events-none',
 						)}
 						style={{
