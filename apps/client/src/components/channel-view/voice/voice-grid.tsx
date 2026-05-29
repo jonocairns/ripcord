@@ -46,7 +46,7 @@ const VoiceGrid = memo(({ children, pinnedCardId, className }: TVoiceGridProps) 
 	if (pinnedCardId && pinnedCard) {
 		return (
 			<div className={cn('flex flex-col h-full', className)}>
-				<div className="flex-1 min-h-0 p-3 md:p-4">{pinnedCard}</div>
+				<div className="flex min-h-0 flex-1 items-center justify-center p-3 md:p-4">{pinnedCard}</div>
 
 				{regularCards.length > 0 && (
 					<div className="pointer-events-none flex-shrink-0 px-3 md:px-4">
