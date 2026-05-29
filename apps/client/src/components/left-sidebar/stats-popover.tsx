@@ -23,6 +23,14 @@ const formatOptionalCount = (value: number | null): string => {
 	return value === null ? 'N/A' : value.toString();
 };
 
+const formatBitrate = (bitsPerSecond: number): string => {
+	if (bitsPerSecond >= 1_000_000) {
+		return `${(bitsPerSecond / 1_000_000).toFixed(2)} Mbps`;
+	}
+
+	return `${Math.round(bitsPerSecond / 1000)} kbps`;
+};
+
 const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopoverProps) => {
 	const { transportStats } = useVoice();
 	const [open, setOpen] = useState(false);
@@ -74,7 +82,7 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 							<h4 className="font-medium text-green-400 mb-1">Outgoing</h4>
 							{producer ? (
 								<div className="space-y-1 text-muted-foreground">
-									<div>Rate: {filesize(currentBitrateSent)}/s</div>
+									<div>Rate: {formatBitrate(currentBitrateSent)}</div>
 									<div>Packets: {producer.packetsSent}</div>
 									<div>RTT: {producer.rtt.toFixed(1)} ms</div>
 								</div>
@@ -87,7 +95,7 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 							<h4 className="font-medium text-blue-400 mb-1">Incoming</h4>
 							{consumer ? (
 								<div className="space-y-1 text-muted-foreground">
-									<div>Rate: {filesize(currentBitrateReceived)}/s</div>
+									<div>Rate: {formatBitrate(currentBitrateReceived)}</div>
 									<div>Packets: {consumer.packetsReceived}</div>
 								</div>
 							) : (

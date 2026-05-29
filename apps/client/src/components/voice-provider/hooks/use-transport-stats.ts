@@ -234,7 +234,7 @@ const useTransportStats = () => {
 				const timeDeltaSent = (producerStats.timestamp - previousProducer.timestamp) / 1000;
 
 				if (timeDeltaSent > 0) {
-					currentBitrateSent = bytesSentDelta / timeDeltaSent;
+					currentBitrateSent = (bytesSentDelta * 8) / timeDeltaSent;
 				}
 			}
 
@@ -242,7 +242,7 @@ const useTransportStats = () => {
 				const timeDeltaReceived = (consumerStats.timestamp - previousConsumer.timestamp) / 1000;
 
 				if (timeDeltaReceived > 0) {
-					currentBitrateReceived = bytesReceivedDelta / timeDeltaReceived;
+					currentBitrateReceived = (bytesReceivedDelta * 8) / timeDeltaReceived;
 				}
 			}
 
