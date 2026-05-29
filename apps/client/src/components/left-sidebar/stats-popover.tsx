@@ -83,7 +83,6 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 							{producer ? (
 								<div className="space-y-1 text-muted-foreground">
 									<div>Rate: {formatBitrate(currentBitrateSent)}</div>
-									<div>Packets: {producer.packetsSent}</div>
 									<div>RTT: {producer.rtt.toFixed(1)} ms</div>
 								</div>
 							) : (
@@ -96,7 +95,6 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 							{consumer ? (
 								<div className="space-y-1 text-muted-foreground">
 									<div>Rate: {formatBitrate(currentBitrateReceived)}</div>
-									<div>Packets: {consumer.packetsReceived}</div>
 								</div>
 							) : (
 								<div className="text-muted-foreground">No remote streams</div>
@@ -113,9 +111,7 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 										<div>
 											{formatResolution(video.width, video.height)} · {formatFps(video.framesPerSecond)}
 										</div>
-										<div>
-											Frames: {video.framesSent} sent / {formatOptionalCount(video.framesDropped)} dropped
-										</div>
+										<div>Dropped: {formatOptionalCount(video.framesDropped)}</div>
 										<div>Limit: {video.qualityLimitationReason ?? 'none'}</div>
 										<div>
 											NACK/PLI/FIR: {video.nackCount}/{video.pliCount}/{video.firCount}
@@ -135,9 +131,7 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 										<div>
 											{formatResolution(video.width, video.height)} · {formatFps(video.framesPerSecond)}
 										</div>
-										<div>
-											Frames: {video.framesReceived} received / {video.framesDropped} dropped
-										</div>
+										<div>Dropped: {video.framesDropped}</div>
 										<div>Packets lost: {video.packetsLost}</div>
 									</div>
 								))}
