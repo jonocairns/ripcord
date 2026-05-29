@@ -22,7 +22,7 @@ export type VideoSenderStats = {
 	framesPerSecond: number | null;
 	framesEncoded: number;
 	framesSent: number;
-	framesDropped: number;
+	framesDropped: number | null;
 	qualityLimitationReason: string | null;
 	nackCount: number;
 	pliCount: number;
@@ -109,7 +109,7 @@ const useTransportStats = () => {
 						framesPerSecond: stat.framesPerSecond ?? null,
 						framesEncoded: stat.framesEncoded ?? 0,
 						framesSent: stat.framesSent ?? 0,
-						framesDropped: stat.framesDropped ?? 0,
+						framesDropped: stat.framesDropped ?? null,
 						qualityLimitationReason: stat.qualityLimitationReason ?? null,
 						nackCount: stat.nackCount ?? 0,
 						pliCount: stat.pliCount ?? 0,

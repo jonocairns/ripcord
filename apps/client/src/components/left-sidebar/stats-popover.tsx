@@ -19,6 +19,10 @@ const formatResolution = (width: number | null, height: number | null): string =
 	return width === null || height === null ? 'unknown' : `${width}x${height}`;
 };
 
+const formatOptionalCount = (value: number | null): string => {
+	return value === null ? 'N/A' : value.toString();
+};
+
 const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopoverProps) => {
 	const { transportStats } = useVoice();
 	const [open, setOpen] = useState(false);
@@ -102,7 +106,7 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 											{formatResolution(video.width, video.height)} · {formatFps(video.framesPerSecond)}
 										</div>
 										<div>
-											Frames: {video.framesSent} sent / {video.framesDropped} dropped
+											Frames: {video.framesSent} sent / {formatOptionalCount(video.framesDropped)} dropped
 										</div>
 										<div>Limit: {video.qualityLimitationReason ?? 'none'}</div>
 										<div>
