@@ -11,6 +11,14 @@ type StatsPopoverProps = {
 
 const CLOSE_DELAY_MS = 120;
 
+const formatFps = (framesPerSecond: number | null): string => {
+	return framesPerSecond === null ? 'unknown' : `${Math.round(framesPerSecond)} fps`;
+};
+
+const formatResolution = (width: number | null, height: number | null): string => {
+	return width === null || height === null ? 'unknown' : `${width}x${height}`;
+};
+
 const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopoverProps) => {
 	const { transportStats } = useVoice();
 	const [open, setOpen] = useState(false);
@@ -83,6 +91,47 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 							)}
 						</div>
 					</div>
+					{producer?.outboundVideo.length ? (
+						<div className="border-t border-border/50 pt-2">
+							<h4 className="font-medium text-green-400 mb-1">Video Send</h4>
+							<div className="space-y-2 text-muted-foreground">
+								{producer.outboundVideo.map((video, index) => (
+									<div key={video.id} className="space-y-0.5">
+										<div className="font-medium text-foreground/80">Stream {index + 1}</div>
+										<div>
+											{formatResolution(video.width, video.height)} · {formatFps(video.framesPerSecond)}
+										</div>
+										<div>
+											Frames: {video.framesSent} sent / {video.framesDropped} dropped
+										</div>
+										<div>Limit: {video.qualityLimitationReason ?? 'none'}</div>
+										<div>
+											NACK/PLI/FIR: {video.nackCount}/{video.pliCount}/{video.firCount}
+										</div>
+									</div>
+								))}
+							</div>
+						</div>
+					) : null}
+					{consumer?.inboundVideo.length ? (
+						<div className="border-t border-border/50 pt-2">
+							<h4 className="font-medium text-blue-400 mb-1">Video Receive</h4>
+							<div className="space-y-2 text-muted-foreground">
+								{consumer.inboundVideo.map((video, index) => (
+									<div key={video.id} className="space-y-0.5">
+										<div className="font-medium text-foreground/80">Stream {index + 1}</div>
+										<div>
+											{formatResolution(video.width, video.height)} · {formatFps(video.framesPerSecond)}
+										</div>
+										<div>
+											Frames: {video.framesReceived} received / {video.framesDropped} dropped
+										</div>
+										<div>Packets lost: {video.packetsLost}</div>
+									</div>
+								))}
+							</div>
+						</div>
+					) : null}
 					<div className="border-t border-border/50 pt-2">
 						<h4 className="font-medium text-yellow-400 mb-1">Session Totals</h4>
 						<div className="grid grid-cols-2 gap-2 text-muted-foreground">
