@@ -91,6 +91,7 @@ type TScreenShareCardProps = {
 	onUnpin: () => void;
 	className?: string;
 	showPinControls: boolean;
+	fitStreamAspect?: boolean;
 	onStopWatching?: () => void;
 };
 
@@ -104,6 +105,7 @@ const ScreenShareCard = memo(
 		onUnpin,
 		className,
 		showPinControls = true,
+		fitStreamAspect = false,
 		onStopWatching,
 	}: TScreenShareCardProps) => {
 		const user = useUserById(userId);
@@ -397,7 +399,7 @@ const ScreenShareCard = memo(
 		if (!user || !hasScreenShareStream) return null;
 
 		const streamAspectRatio = streamStats ? `${streamStats.width} / ${streamStats.height}` : '16 / 9';
-		const shouldFitStreamAspect = isPinned || !showPinControls;
+		const shouldFitStreamAspect = isPinned || fitStreamAspect || !showPinControls;
 
 		return (
 			<>

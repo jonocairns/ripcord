@@ -81,10 +81,15 @@ const VoiceGrid = memo(({ children, pinnedCardId, className }: TVoiceGridProps) 
 	const rows = getRowCount(regularCards.length, gridCols);
 
 	if (regularCards.length === 1) {
+		const card = regularCards[0];
+		const shouldFitSingleScreenShare =
+			isValidElement<{ fitStreamAspect?: boolean }>(card) && String(card.key).startsWith('screen-share-');
+		const displayCard = shouldFitSingleScreenShare ? cloneElement(card, { fitStreamAspect: true }) : card;
+
 		return (
 			<div className={cn('flex h-full items-center justify-center p-4 pb-28 md:pb-32', className)}>
 				<div className="flex h-full w-full max-h-[82vh] max-w-5xl items-center justify-center overflow-hidden rounded-2xl border border-border/70 shadow-2xl">
-					{regularCards[0]}
+					{displayCard}
 				</div>
 			</div>
 		);
