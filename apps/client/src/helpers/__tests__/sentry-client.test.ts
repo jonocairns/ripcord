@@ -3,6 +3,9 @@ import { describe, expect, mock, test } from 'bun:test';
 describe('configureClientErrorReporting', () => {
 	test('initializes Sentry once when a dsn is provided and skips when empty', async () => {
 		const initMock = mock((_options: unknown) => undefined);
+		const browserTracingIntegrationMock = mock((_options: unknown) => ({
+			name: 'browserTracingIntegration',
+		}));
 		let sentryEnabled = false;
 
 		mock.module('@sentry/react', () => ({
@@ -11,6 +14,8 @@ describe('configureClientErrorReporting', () => {
 				initMock(options);
 			},
 			isEnabled: () => sentryEnabled,
+			browserTracingIntegration: browserTracingIntegrationMock,
+			startSpan: (_options: unknown, callback: () => unknown) => callback(),
 			withScope: mock(() => undefined),
 			captureException: mock(() => undefined),
 			ErrorBoundary: () => null,
@@ -31,8 +36,15 @@ describe('configureClientErrorReporting', () => {
 
 		configureClientErrorReporting({
 			sentryDsn: 'https://public@example.ingest.sentry.io/123456',
+			tracingSampleRate: 0.01,
 		});
 		expect(initMock).toHaveBeenCalledTimes(1);
+		expect(browserTracingIntegrationMock).toHaveBeenCalledTimes(1);
+		expect(initMock.mock.calls[0]?.[0]).toMatchObject({
+			tracesSampleRate: 0.01,
+			tracePropagationTargets: ['https://server.example'],
+			integrations: [{ name: 'browserTracingIntegration' }],
+		});
 
 		configureClientErrorReporting({
 			sentryDsn: 'https://public@example.ingest.sentry.io/123456',

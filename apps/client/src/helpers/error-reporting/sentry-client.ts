@@ -5,6 +5,7 @@ import { sanitizeContextData, sanitizeSentryEvent, sanitizeString } from './sani
 type TClientErrorReportingConfig = {
 	sentryDsn?: string;
 	ignoreErrors?: string[];
+	tracingSampleRate?: number;
 };
 
 type TCaptureSentryErrorOptions = {
@@ -13,6 +14,12 @@ type TCaptureSentryErrorOptions = {
 	context?: unknown;
 	error?: unknown;
 	message?: string;
+};
+
+type TSentrySpanOptions = {
+	name: string;
+	op?: string;
+	attributes?: Record<string, string | number | boolean | undefined>;
 };
 
 const capturedErrors = new WeakSet<object>();
@@ -53,18 +60,41 @@ const buildDesktopFrameRewriter = (serverUrl: string) => {
 	};
 };
 
-const buildIntegrations = () => {
-	const runtimeConfig = getRuntimeServerConfig();
-
-	if (runtimeConfig.source !== 'desktop' || !runtimeConfig.serverUrl) {
+const normalizeSampleRate = (sampleRate: number | undefined): number | undefined => {
+	if (sampleRate === undefined || Number.isNaN(sampleRate)) {
 		return undefined;
 	}
 
-	return [
-		Sentry.rewriteFramesIntegration({
-			iteratee: buildDesktopFrameRewriter(runtimeConfig.serverUrl),
-		}),
-	];
+	return Math.min(1, Math.max(0, sampleRate));
+};
+
+const buildTracePropagationTargets = (): string[] | undefined => {
+	const runtimeConfig = getRuntimeServerConfig();
+
+	if (!runtimeConfig.serverUrl) {
+		return undefined;
+	}
+
+	return [runtimeConfig.serverUrl];
+};
+
+const buildIntegrations = (tracingSampleRate: number | undefined) => {
+	const runtimeConfig = getRuntimeServerConfig();
+	const integrations = [];
+
+	if (tracingSampleRate !== undefined && tracingSampleRate > 0) {
+		integrations.push(Sentry.browserTracingIntegration());
+	}
+
+	if (runtimeConfig.source === 'desktop' && runtimeConfig.serverUrl) {
+		integrations.push(
+			Sentry.rewriteFramesIntegration({
+				iteratee: buildDesktopFrameRewriter(runtimeConfig.serverUrl),
+			}),
+		);
+	}
+
+	return integrations.length > 0 ? integrations : undefined;
 };
 
 const configureClientErrorReporting = (config: TClientErrorReportingConfig = {}): void => {
@@ -74,6 +104,15 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 		return;
 	}
 
+	const tracingSampleRate = normalizeSampleRate(config.tracingSampleRate);
+	const tracingOptions =
+		tracingSampleRate !== undefined && tracingSampleRate > 0
+			? {
+					tracesSampleRate: tracingSampleRate,
+					tracePropagationTargets: buildTracePropagationTargets(),
+				}
+			: {};
+
 	Sentry.init({
 		dsn,
 		environment: import.meta.env.MODE,
@@ -82,7 +121,8 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 		maxBreadcrumbs: 0,
 		ignoreErrors: config.ignoreErrors,
 		beforeSend: (event) => sanitizeSentryEvent(event),
-		integrations: buildIntegrations(),
+		integrations: buildIntegrations(tracingSampleRate),
+		...tracingOptions,
 		initialScope: {
 			tags: {
 				runtime: getRuntimeTag(),
@@ -157,4 +197,19 @@ const reportErrorToSentry = (message: string, error?: unknown, context?: unknown
 	});
 };
 
-export { configureClientErrorReporting, getRuntimeTag, reportErrorToSentry };
+const traceSentrySpan = <T>({ name, op, attributes }: TSentrySpanOptions, callback: () => T): T => {
+	if (!Sentry.isEnabled()) {
+		return callback();
+	}
+
+	return Sentry.startSpan(
+		{
+			name,
+			op,
+			attributes,
+		},
+		() => callback(),
+	);
+};
+
+export { configureClientErrorReporting, getRuntimeTag, reportErrorToSentry, traceSentrySpan };

@@ -53,7 +53,7 @@ const createHttpServer = async (port: number = config.server.port) => {
           res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
           res.setHeader(
             'Access-Control-Allow-Headers',
-            'Content-Type, Authorization, x-file-name, x-file-type, x-token, Content-Length'
+            'Content-Type, Authorization, x-file-name, x-file-type, x-token, Content-Length, sentry-trace, baggage'
           );
           res.setHeader('Vary', 'Origin');
         }

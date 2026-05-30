@@ -2,7 +2,7 @@ import { getMediasoupKind, StreamKind, type TRemoteProducerIds, type TTransportP
 import { TRPCClientError } from '@trpc/client';
 import type { AppData, Consumer, Device, RtpCapabilities, Transport } from 'mediasoup-client/types';
 import { useCallback, useRef } from 'react';
-import { logVoice } from '@/helpers/browser-logger';
+import { logVoice, traceSentrySpan } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
 import { getConsumeRetryDelayMs, shouldRetryConsume } from './consume-retry-policy';
@@ -438,71 +438,83 @@ const useTransports = ({
 
 	const consume = useCallback(
 		async (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities) => {
-			const operationKey = `${remoteId}-${kind}`;
+			return traceSentrySpan(
+				{
+					name: 'voice.consume',
+					op: 'voice.consume',
+					attributes: {
+						'voice.remote_id': remoteId,
+						'voice.stream_kind': kind,
+					},
+				},
+				async () => {
+					const operationKey = `${remoteId}-${kind}`;
 
-			if (consumeOperationsInProgress.current.has(operationKey)) {
-				logVoice('Consume operation already in progress', {
-					remoteId,
-					kind,
-				});
-				return;
-			}
-
-			consumeOperationSequence.current += 1;
-			const operationToken = consumeOperationSequence.current;
-			const operationGeneration = consumeSessionGeneration.current;
-			let failedAttemptIndex = 0;
-
-			consumeOperationsInProgress.current.set(operationKey, operationToken);
-			addPendingStream(remoteId, kind);
-
-			try {
-				while (consumeSessionGeneration.current === operationGeneration) {
-					const result = await consumeOnce(remoteId, kind, rtpCapabilities);
-
-					if (result === 'success') {
-						return;
-					}
-
-					if (consumeSessionGeneration.current !== operationGeneration) {
-						break;
-					}
-
-					const retryDelayMs = getConsumeRetryDelayMs(kind, failedAttemptIndex);
-
-					if (retryDelayMs === undefined) {
-						logVoice('Remote consume failed without retry', {
+					if (consumeOperationsInProgress.current.has(operationKey)) {
+						logVoice('Consume operation already in progress', {
 							remoteId,
 							kind,
-							failedAttempts: failedAttemptIndex + 1,
 						});
-						if (!shouldRetryConsume(kind)) {
-							removePendingStream(remoteId, kind);
-						}
 						return;
 					}
 
-					failedAttemptIndex += 1;
+					consumeOperationSequence.current += 1;
+					const operationToken = consumeOperationSequence.current;
+					const operationGeneration = consumeSessionGeneration.current;
+					let failedAttemptIndex = 0;
 
-					logVoice('Retrying remote consume after failure', {
-						remoteId,
-						kind,
-						nextAttempt: failedAttemptIndex + 1,
-						retryDelayMs,
-					});
+					consumeOperationsInProgress.current.set(operationKey, operationToken);
+					addPendingStream(remoteId, kind);
 
-					await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
-				}
+					try {
+						while (consumeSessionGeneration.current === operationGeneration) {
+							const result = await consumeOnce(remoteId, kind, rtpCapabilities);
 
-				logVoice('Aborting remote consume after transport generation changed', {
-					remoteId,
-					kind,
-				});
-			} finally {
-				if (consumeOperationsInProgress.current.get(operationKey) === operationToken) {
-					consumeOperationsInProgress.current.delete(operationKey);
-				}
-			}
+							if (result === 'success') {
+								return;
+							}
+
+							if (consumeSessionGeneration.current !== operationGeneration) {
+								break;
+							}
+
+							const retryDelayMs = getConsumeRetryDelayMs(kind, failedAttemptIndex);
+
+							if (retryDelayMs === undefined) {
+								logVoice('Remote consume failed without retry', {
+									remoteId,
+									kind,
+									failedAttempts: failedAttemptIndex + 1,
+								});
+								if (!shouldRetryConsume(kind)) {
+									removePendingStream(remoteId, kind);
+								}
+								return;
+							}
+
+							failedAttemptIndex += 1;
+
+							logVoice('Retrying remote consume after failure', {
+								remoteId,
+								kind,
+								nextAttempt: failedAttemptIndex + 1,
+								retryDelayMs,
+							});
+
+							await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
+						}
+
+						logVoice('Aborting remote consume after transport generation changed', {
+							remoteId,
+							kind,
+						});
+					} finally {
+						if (consumeOperationsInProgress.current.get(operationKey) === operationToken) {
+							consumeOperationsInProgress.current.delete(operationKey);
+						}
+					}
+				},
+			);
 		},
 		[addPendingStream, consumeOnce, removePendingStream],
 	);
@@ -515,52 +527,63 @@ const useTransports = ({
 			},
 			prefetchedProducers?: TRemoteProducerIds,
 		) => {
-			logVoice('Consuming existing producers', {
-				rtpCapabilities,
-				prefetched: !!prefetchedProducers,
-			});
+			return traceSentrySpan(
+				{
+					name: 'voice.consume_existing_producers',
+					op: 'voice.consume',
+					attributes: {
+						'voice.prefetched_producers': prefetchedProducers !== undefined,
+					},
+				},
+				async () => {
+					logVoice('Consuming existing producers', {
+						rtpCapabilities,
+						prefetched: !!prefetchedProducers,
+					});
 
-			const trpc = getTRPCClient();
+					const trpc = getTRPCClient();
 
-			try {
-				const { remoteAudioIds, remoteScreenIds, remoteScreenAudioIds, remoteVideoIds, remoteExternalStreamIds } =
-					prefetchedProducers ?? (await trpc.voice.getProducers.query());
+					try {
+						const { remoteAudioIds, remoteScreenIds, remoteScreenAudioIds, remoteVideoIds, remoteExternalStreamIds } =
+							prefetchedProducers ?? (await trpc.voice.getProducers.query());
 
-				logVoice('Got existing producers', {
-					remoteAudioIds,
-					remoteScreenIds,
-					remoteVideoIds,
-					remoteExternalStreamIds,
-				});
+						logVoice('Got existing producers', {
+							remoteAudioIds,
+							remoteScreenIds,
+							remoteVideoIds,
+							remoteExternalStreamIds,
+						});
 
-				await Promise.all(remoteAudioIds.map((remoteId) => consume(remoteId, StreamKind.AUDIO, rtpCapabilities)));
+						await Promise.all(remoteAudioIds.map((remoteId) => consume(remoteId, StreamKind.AUDIO, rtpCapabilities)));
 
-				remoteVideoIds.forEach((remoteId) => {
-					addPendingStream(remoteId, StreamKind.VIDEO);
-				});
+						remoteVideoIds.forEach((remoteId) => {
+							addPendingStream(remoteId, StreamKind.VIDEO);
+						});
 
-				remoteScreenIds.forEach((remoteId) => {
-					addPendingStream(remoteId, StreamKind.SCREEN);
-				});
+						remoteScreenIds.forEach((remoteId) => {
+							addPendingStream(remoteId, StreamKind.SCREEN);
+						});
 
-				remoteScreenAudioIds.forEach((remoteId) => {
-					addPendingStream(remoteId, StreamKind.SCREEN_AUDIO);
-				});
+						remoteScreenAudioIds.forEach((remoteId) => {
+							addPendingStream(remoteId, StreamKind.SCREEN_AUDIO);
+						});
 
-				remoteExternalStreamIds.forEach((streamId: number) => {
-					const tracks = externalStreamTracks?.[streamId];
+						remoteExternalStreamIds.forEach((streamId: number) => {
+							const tracks = externalStreamTracks?.[streamId];
 
-					if (tracks?.audio !== false) {
-						addPendingStream(streamId, StreamKind.EXTERNAL_AUDIO);
+							if (tracks?.audio !== false) {
+								addPendingStream(streamId, StreamKind.EXTERNAL_AUDIO);
+							}
+							if (tracks?.video !== false) {
+								addPendingStream(streamId, StreamKind.EXTERNAL_VIDEO);
+							}
+						});
+					} catch (error) {
+						logVoice('Error consuming existing producers', { error });
+						throw error;
 					}
-					if (tracks?.video !== false) {
-						addPendingStream(streamId, StreamKind.EXTERNAL_VIDEO);
-					}
-				});
-			} catch (error) {
-				logVoice('Error consuming existing producers', { error });
-				throw error;
-			}
+				},
+			);
 		},
 		[addPendingStream, consume],
 	);

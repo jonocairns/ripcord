@@ -32,7 +32,7 @@ import {
 	VoiceReconnectTimeoutError,
 } from '@/features/server/voice/reconnect-policy';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
-import { logDebug, logVoice } from '@/helpers/browser-logger';
+import { logDebug, logVoice, traceSentrySpan } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { getTrpcErrorData, isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
@@ -1000,57 +1000,79 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			soundMuted: boolean;
 			reconnectAttemptId: string;
 		}): Promise<TVoiceBootstrapResult> => {
-			return getTRPCClient().voice.restoreOrJoin.mutate({
-				channelId: opts.channelId,
-				state: {
-					micMuted: opts.micMuted,
-					soundMuted: opts.soundMuted,
+			return traceSentrySpan(
+				{
+					name: 'voice.restore_or_join',
+					op: 'voice.trpc',
+					attributes: {
+						'voice.channel_id': opts.channelId,
+						'voice.reconnect_attempt_id': opts.reconnectAttemptId,
+					},
 				},
-				reconnectAttemptId: opts.reconnectAttemptId,
-			});
+				() =>
+					getTRPCClient().voice.restoreOrJoin.mutate({
+						channelId: opts.channelId,
+						state: {
+							micMuted: opts.micMuted,
+							soundMuted: opts.soundMuted,
+						},
+						reconnectAttemptId: opts.reconnectAttemptId,
+					}),
+			);
 		},
 		[],
 	);
 
 	const rejoinVoiceSession = useCallback(
 		async (channelId: number): Promise<TRecoveryJoinResult> => {
-			const currentOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
-			const {
-				routerRtpCapabilities: nextRouterRtpCapabilities,
-				producerTransportParams,
-				consumerTransportParams,
-				existingProducers,
-				channelUsers,
-			} = await requestVoiceRestoreOrJoin({
-				channelId,
-				micMuted: currentOwnVoiceState.micMuted,
-				soundMuted: currentOwnVoiceState.soundMuted,
-				reconnectAttemptId: createReconnectAttemptId(),
-			});
+			return traceSentrySpan(
+				{
+					name: 'voice.rejoin_session',
+					op: 'voice.recovery',
+					attributes: {
+						'voice.channel_id': channelId,
+					},
+				},
+				async () => {
+					const currentOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
+					const {
+						routerRtpCapabilities: nextRouterRtpCapabilities,
+						producerTransportParams,
+						consumerTransportParams,
+						existingProducers,
+						channelUsers,
+					} = await requestVoiceRestoreOrJoin({
+						channelId,
+						micMuted: currentOwnVoiceState.micMuted,
+						soundMuted: currentOwnVoiceState.soundMuted,
+						reconnectAttemptId: createReconnectAttemptId(),
+					});
 
-			const device = await Device.factory();
-			await device.load({
-				routerRtpCapabilities: nextRouterRtpCapabilities,
-			});
+					const device = await Device.factory();
+					await device.load({
+						routerRtpCapabilities: nextRouterRtpCapabilities,
+					});
 
-			deviceRef.current = device;
-			routerRtpCapabilities.current = nextRouterRtpCapabilities;
-			sendRtpCapabilities.current = device.rtpCapabilities;
+					deviceRef.current = device;
+					routerRtpCapabilities.current = nextRouterRtpCapabilities;
+					sendRtpCapabilities.current = device.rtpCapabilities;
 
-			const store = useServerStore.getState();
+					const store = useServerStore.getState();
 
-			store.setCurrentVoiceChannelId(channelId);
-			store.reconcileVoiceChannelUsers({
-				channelId,
-				users: channelUsers,
-			});
+					store.setCurrentVoiceChannelId(channelId);
+					store.reconcileVoiceChannelUsers({
+						channelId,
+						users: channelUsers,
+					});
 
-			return {
-				device,
-				existingProducers,
-				producerTransportParams,
-				consumerTransportParams,
-			};
+					return {
+						device,
+						existingProducers,
+						producerTransportParams,
+						consumerTransportParams,
+					};
+				},
+			);
 		},
 		[requestVoiceRestoreOrJoin],
 	);
@@ -1754,265 +1776,280 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const startScreenShareStream = useCallback(
 		async (desktopSelection?: TDesktopScreenShareSelection, handlers: TScreenShareStreamHandlers = {}) => {
-			// Wait for any in-flight desktop audio cleanup from a previous screen
-			// share stop so the new sidecar session doesn't conflict with it.
-			await desktopAppAudioCleanupPromiseRef.current;
-
-			let stream: MediaStream | undefined;
-
-			try {
-				logVoice('Starting screen share stream');
-
-				let audioMode = devices.screenAudioMode;
-				const desktopBridge = getDesktopBridge();
-
-				if (desktopBridge && desktopSelection) {
-					const resolved = await desktopBridge.prepareScreenShare(desktopSelection);
-					audioMode = resolved.effectiveMode;
-
-					if (resolved.warning) {
-						toast.warning(resolved.warning);
-					}
-				}
-
-				// Only route system audio through the sidecar when the desktop
-				// capture stack advertises support for the sidecar-backed path.
-				// Linux uses a best-effort PipeWire mix with self-exclusion, and
-				// macOS uses the ScreenCaptureKit helper-backed sidecar path.
-				let sidecarSupported = false;
-				if (desktopBridge && audioMode === ScreenAudioMode.SYSTEM) {
-					try {
-						const caps = normalizeDesktopCapabilities(await desktopBridge.getCapabilities());
-						sidecarSupported = caps.sidecarAvailable === true && caps.perAppAudio !== 'unsupported';
-					} catch {
-						// If capabilities check fails, don't attempt sidecar for system audio.
-					}
-				}
-
-				let useSidecarAudio =
-					desktopBridge &&
-					desktopSelection &&
-					(audioMode === ScreenAudioMode.APP || (audioMode === ScreenAudioMode.SYSTEM && sidecarSupported));
-
-				const sidecarAudioLabel = audioMode === ScreenAudioMode.SYSTEM ? 'System audio' : 'Per-app audio';
-
-				// Always request loopback audio from getDisplayMedia in system mode
-				// so it is available as a fallback if the sidecar fails.  When the
-				// sidecar successfully captures audio, the loopback track is stopped
-				// and removed before the producer is created.
-				const shouldCaptureDisplayAudio = audioMode === ScreenAudioMode.SYSTEM;
-				const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
-
-				stream = await navigator.mediaDevices.getDisplayMedia({
-					video: {
-						...requestedScreenResolution,
-						frameRate: devices?.screenFramerate,
+			return traceSentrySpan(
+				{
+					name: 'voice.screen_share_start',
+					op: 'voice.screen_share',
+					attributes: {
+						'voice.screen_audio_mode': devices.screenAudioMode,
+						'voice.desktop_selection': desktopSelection !== undefined,
 					},
-					audio: shouldCaptureDisplayAudio
-						? {
-								echoCancellation: false,
-								noiseSuppression: false,
-								autoGainControl: false,
+				},
+				async () => {
+					// Wait for any in-flight desktop audio cleanup from a previous screen
+					// share stop so the new sidecar session doesn't conflict with it.
+					await desktopAppAudioCleanupPromiseRef.current;
+
+					let stream: MediaStream | undefined;
+
+					try {
+						logVoice('Starting screen share stream');
+
+						let audioMode = devices.screenAudioMode;
+						const desktopBridge = getDesktopBridge();
+
+						if (desktopBridge && desktopSelection) {
+							const resolved = await desktopBridge.prepareScreenShare(desktopSelection);
+							audioMode = resolved.effectiveMode;
+
+							if (resolved.warning) {
+								toast.warning(resolved.warning);
 							}
-						: false,
-				});
+						}
 
-				logVoice('Screen share stream obtained', { stream });
-
-				const videoTrack = stream.getVideoTracks()[0];
-				let audioTrack: MediaStreamTrack | undefined = stream.getAudioTracks()[0];
-				standbyDisplayAudioTrackRef.current = undefined;
-				standbyDisplayAudioStreamRef.current = undefined;
-
-				if (videoTrack) {
-					await publishScreenShareTrack(stream, videoTrack, {
-						onTrackEnded: handlers.onVideoTrackEnded,
-					});
-					// Surface the active share as soon as the video producer exists.
-					// Optional audio setup can continue after the preview is already live.
-					handlers.onVideoTrackStarted?.();
-
-					if (useSidecarAudio && desktopBridge && desktopSelection) {
-						try {
-							const captureInput: TStartAppAudioCaptureInput = {
-								sourceId: desktopSelection.sourceId,
-							};
-
-							if (audioMode === ScreenAudioMode.APP) {
-								captureInput.appAudioTargetId = desktopSelection.appAudioTargetId;
+						// Only route system audio through the sidecar when the desktop
+						// capture stack advertises support for the sidecar-backed path.
+						// Linux uses a best-effort PipeWire mix with self-exclusion, and
+						// macOS uses the ScreenCaptureKit helper-backed sidecar path.
+						let sidecarSupported = false;
+						if (desktopBridge && audioMode === ScreenAudioMode.SYSTEM) {
+							try {
+								const caps = normalizeDesktopCapabilities(await desktopBridge.getCapabilities());
+								sidecarSupported = caps.sidecarAvailable === true && caps.perAppAudio !== 'unsupported';
+							} catch {
+								// If capabilities check fails, don't attempt sidecar for system audio.
 							}
+						}
 
-							logVoice('Starting sidecar audio capture', {
-								sourceId: captureInput.sourceId,
-								appAudioTargetId: captureInput.appAudioTargetId,
-								mode: audioMode === ScreenAudioMode.SYSTEM ? 'system-exclude' : 'per-app',
+						let useSidecarAudio =
+							desktopBridge &&
+							desktopSelection &&
+							(audioMode === ScreenAudioMode.APP || (audioMode === ScreenAudioMode.SYSTEM && sidecarSupported));
+
+						const sidecarAudioLabel = audioMode === ScreenAudioMode.SYSTEM ? 'System audio' : 'Per-app audio';
+
+						// Always request loopback audio from getDisplayMedia in system mode
+						// so it is available as a fallback if the sidecar fails.  When the
+						// sidecar successfully captures audio, the loopback track is stopped
+						// and removed before the producer is created.
+						const shouldCaptureDisplayAudio = audioMode === ScreenAudioMode.SYSTEM;
+						const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
+
+						stream = await navigator.mediaDevices.getDisplayMedia({
+							video: {
+								...requestedScreenResolution,
+								frameRate: devices?.screenFramerate,
+							},
+							audio: shouldCaptureDisplayAudio
+								? {
+										echoCancellation: false,
+										noiseSuppression: false,
+										autoGainControl: false,
+									}
+								: false,
+						});
+
+						logVoice('Screen share stream obtained', { stream });
+
+						const videoTrack = stream.getVideoTracks()[0];
+						let audioTrack: MediaStreamTrack | undefined = stream.getAudioTracks()[0];
+						standbyDisplayAudioTrackRef.current = undefined;
+						standbyDisplayAudioStreamRef.current = undefined;
+
+						if (videoTrack) {
+							await publishScreenShareTrack(stream, videoTrack, {
+								onTrackEnded: handlers.onVideoTrackEnded,
 							});
-							const appAudioSession = await desktopBridge.startAppAudioCapture(captureInput);
-							logVoice('Sidecar capture started', {
-								sessionId: appAudioSession.sessionId,
-								targetId: appAudioSession.targetId,
-							});
-							const appAudioPipeline = await createDesktopAppAudioPipeline(appAudioSession, {
-								mode: 'stable',
-								logLabel: audioMode === ScreenAudioMode.SYSTEM ? 'system-audio' : 'per-app-audio',
-								insertSilenceOnDroppedFrames: true,
-								emitQueueTelemetry: true,
-								queueTelemetryIntervalMs: 1_000,
-							});
-							let hasReceivedSessionFrame = false;
+							// Surface the active share as soon as the video producer exists.
+							// Optional audio setup can continue after the preview is already live.
+							handlers.onVideoTrackStarted?.();
 
-							appAudioSessionRef.current = appAudioSession;
-							appAudioPipelineRef.current = appAudioPipeline;
+							if (useSidecarAudio && desktopBridge && desktopSelection) {
+								try {
+									const captureInput: TStartAppAudioCaptureInput = {
+										sourceId: desktopSelection.sourceId,
+									};
 
-							const startupTimeout = window.setTimeout(() => {
-								if (hasReceivedSessionFrame || appAudioSessionRef.current?.sessionId !== appAudioSession.sessionId) {
-									return;
-								}
-
-								logVoice('Sidecar produced no audio frames after startup', {
-									sessionId: appAudioSession.sessionId,
-									targetId: appAudioSession.targetId,
-								});
-								toast.warning(
-									`${sidecarAudioLabel} started but produced no audio frames. Screen video will continue without shared audio.`,
-								);
-								localScreenShareAudioProducer.current?.close();
-								localScreenShareAudioProducer.current = undefined;
-								setLocalScreenShareAudio(undefined);
-								void cleanupDesktopAppAudio({
-									stopCapture: true,
-									preserveCurrentAudio: false,
-								});
-							}, 3000);
-							appAudioStartupTimeoutRef.current = startupTimeout;
-
-							removeAppAudioFrameSubscriptionRef.current?.();
-							removeAppAudioFrameSubscriptionRef.current = desktopBridge.subscribeAppAudioFrames((frame) => {
-								if (frame.sessionId === appAudioSession.sessionId) {
-									if (!hasReceivedSessionFrame) {
-										logVoice('Received first sidecar audio frame', {
-											sessionId: frame.sessionId,
-											targetId: frame.targetId,
-										});
+									if (audioMode === ScreenAudioMode.APP) {
+										captureInput.appAudioTargetId = desktopSelection.appAudioTargetId;
 									}
 
-									hasReceivedSessionFrame = true;
-
-									if (appAudioStartupTimeoutRef.current !== undefined) {
-										window.clearTimeout(appAudioStartupTimeoutRef.current);
-										appAudioStartupTimeoutRef.current = undefined;
-									}
-								}
-								appAudioPipelineRef.current?.pushFrame(frame);
-							});
-
-							removeAppAudioStatusSubscriptionRef.current?.();
-							removeAppAudioStatusSubscriptionRef.current = desktopBridge.subscribeAppAudioStatus(
-								(statusEvent: TAppAudioStatusEvent) => {
-									logVoice('Received sidecar audio status event', {
-										sessionId: statusEvent.sessionId,
-										targetId: statusEvent.targetId,
-										reason: statusEvent.reason,
-										error: statusEvent.error,
+									logVoice('Starting sidecar audio capture', {
+										sourceId: captureInput.sourceId,
+										appAudioTargetId: captureInput.appAudioTargetId,
+										mode: audioMode === ScreenAudioMode.SYSTEM ? 'system-exclude' : 'per-app',
 									});
-									if (statusEvent.sessionId !== appAudioSessionRef.current?.sessionId) {
-										return;
-									}
+									const appAudioSession = await desktopBridge.startAppAudioCapture(captureInput);
+									logVoice('Sidecar capture started', {
+										sessionId: appAudioSession.sessionId,
+										targetId: appAudioSession.targetId,
+									});
+									const appAudioPipeline = await createDesktopAppAudioPipeline(appAudioSession, {
+										mode: 'stable',
+										logLabel: audioMode === ScreenAudioMode.SYSTEM ? 'system-audio' : 'per-app-audio',
+										insertSilenceOnDroppedFrames: true,
+										emitQueueTelemetry: true,
+										queueTelemetryIntervalMs: 1_000,
+									});
+									let hasReceivedSessionFrame = false;
 
-									void (async () => {
-										if (appAudioStartupTimeoutRef.current !== undefined) {
-											window.clearTimeout(appAudioStartupTimeoutRef.current);
-											appAudioStartupTimeoutRef.current = undefined;
+									appAudioSessionRef.current = appAudioSession;
+									appAudioPipelineRef.current = appAudioPipeline;
+
+									const startupTimeout = window.setTimeout(() => {
+										if (
+											hasReceivedSessionFrame ||
+											appAudioSessionRef.current?.sessionId !== appAudioSession.sessionId
+										) {
+											return;
 										}
+
+										logVoice('Sidecar produced no audio frames after startup', {
+											sessionId: appAudioSession.sessionId,
+											targetId: appAudioSession.targetId,
+										});
 										toast.warning(
-											statusEvent.error
-												? `${sidecarAudioLabel} capture ended (${statusEvent.reason}): ${statusEvent.error}`
-												: `${sidecarAudioLabel} capture ended (${statusEvent.reason}). Screen video will continue without shared audio.`,
+											`${sidecarAudioLabel} started but produced no audio frames. Screen video will continue without shared audio.`,
 										);
 										localScreenShareAudioProducer.current?.close();
 										localScreenShareAudioProducer.current = undefined;
 										setLocalScreenShareAudio(undefined);
-
-										await cleanupDesktopAppAudio({
-											stopCapture: false,
+										void cleanupDesktopAppAudio({
+											stopCapture: true,
 											preserveCurrentAudio: false,
 										});
-									})();
-								},
-							);
+									}, 3000);
+									appAudioStartupTimeoutRef.current = startupTimeout;
 
-							if (audioTrack) {
-								audioTrack.stop();
-								stream.removeTrack(audioTrack);
-								audioTrack = undefined;
-							}
-						} catch (error) {
-							logVoice('Failed to start sidecar audio capture', {
-								error,
-							});
-							const capabilities = await desktopBridge
-								.getCapabilities()
-								.then((nextCapabilities) => normalizeDesktopCapabilities(nextCapabilities))
-								.catch(() => undefined);
-							const issueToastMessage = getDesktopAudioIssueToastMessage(capabilities, audioMode);
-							await cleanupDesktopAppAudio();
+									removeAppAudioFrameSubscriptionRef.current?.();
+									removeAppAudioFrameSubscriptionRef.current = desktopBridge.subscribeAppAudioFrames((frame) => {
+										if (frame.sessionId === appAudioSession.sessionId) {
+											if (!hasReceivedSessionFrame) {
+												logVoice('Received first sidecar audio frame', {
+													sessionId: frame.sessionId,
+													targetId: frame.targetId,
+												});
+											}
 
-							if (audioMode === ScreenAudioMode.SYSTEM) {
-								logVoice('Falling back to display-media loopback for system audio');
-								toast.warning(
-									issueToastMessage
-										? `${issueToastMessage} Falling back to standard system audio (without echo exclusion).`
-										: 'Sidecar audio capture failed. Falling back to standard system audio (without echo exclusion).',
-								);
-								useSidecarAudio = false;
-							} else {
-								toast.warning(
-									issueToastMessage
-										? `${issueToastMessage} Continuing without shared audio.`
-										: `${sidecarAudioLabel} capture failed. Continuing without shared audio.`,
-								);
+											hasReceivedSessionFrame = true;
 
-								if (audioTrack) {
-									audioTrack.stop();
-									stream.removeTrack(audioTrack);
-									audioTrack = undefined;
+											if (appAudioStartupTimeoutRef.current !== undefined) {
+												window.clearTimeout(appAudioStartupTimeoutRef.current);
+												appAudioStartupTimeoutRef.current = undefined;
+											}
+										}
+										appAudioPipelineRef.current?.pushFrame(frame);
+									});
+
+									removeAppAudioStatusSubscriptionRef.current?.();
+									removeAppAudioStatusSubscriptionRef.current = desktopBridge.subscribeAppAudioStatus(
+										(statusEvent: TAppAudioStatusEvent) => {
+											logVoice('Received sidecar audio status event', {
+												sessionId: statusEvent.sessionId,
+												targetId: statusEvent.targetId,
+												reason: statusEvent.reason,
+												error: statusEvent.error,
+											});
+											if (statusEvent.sessionId !== appAudioSessionRef.current?.sessionId) {
+												return;
+											}
+
+											void (async () => {
+												if (appAudioStartupTimeoutRef.current !== undefined) {
+													window.clearTimeout(appAudioStartupTimeoutRef.current);
+													appAudioStartupTimeoutRef.current = undefined;
+												}
+												toast.warning(
+													statusEvent.error
+														? `${sidecarAudioLabel} capture ended (${statusEvent.reason}): ${statusEvent.error}`
+														: `${sidecarAudioLabel} capture ended (${statusEvent.reason}). Screen video will continue without shared audio.`,
+												);
+												localScreenShareAudioProducer.current?.close();
+												localScreenShareAudioProducer.current = undefined;
+												setLocalScreenShareAudio(undefined);
+
+												await cleanupDesktopAppAudio({
+													stopCapture: false,
+													preserveCurrentAudio: false,
+												});
+											})();
+										},
+									);
+
+									if (audioTrack) {
+										audioTrack.stop();
+										stream.removeTrack(audioTrack);
+										audioTrack = undefined;
+									}
+								} catch (error) {
+									logVoice('Failed to start sidecar audio capture', {
+										error,
+									});
+									const capabilities = await desktopBridge
+										.getCapabilities()
+										.then((nextCapabilities) => normalizeDesktopCapabilities(nextCapabilities))
+										.catch(() => undefined);
+									const issueToastMessage = getDesktopAudioIssueToastMessage(capabilities, audioMode);
+									await cleanupDesktopAppAudio();
+
+									if (audioMode === ScreenAudioMode.SYSTEM) {
+										logVoice('Falling back to display-media loopback for system audio');
+										toast.warning(
+											issueToastMessage
+												? `${issueToastMessage} Falling back to standard system audio (without echo exclusion).`
+												: 'Sidecar audio capture failed. Falling back to standard system audio (without echo exclusion).',
+										);
+										useSidecarAudio = false;
+									} else {
+										toast.warning(
+											issueToastMessage
+												? `${issueToastMessage} Continuing without shared audio.`
+												: `${sidecarAudioLabel} capture failed. Continuing without shared audio.`,
+										);
+
+										if (audioTrack) {
+											audioTrack.stop();
+											stream.removeTrack(audioTrack);
+											audioTrack = undefined;
+										}
+									}
 								}
 							}
-						}
-					}
 
-					if (useSidecarAudio && appAudioPipelineRef.current?.track) {
-						const appAudioTrack = appAudioPipelineRef.current.track;
-						await publishScreenShareAudioTrack(appAudioPipelineRef.current.stream, appAudioTrack, {
-							onTrackEnded: () => {
-								return cleanupDesktopAppAudio({
-									stopCapture: false,
+							if (useSidecarAudio && appAudioPipelineRef.current?.track) {
+								const appAudioTrack = appAudioPipelineRef.current.track;
+								await publishScreenShareAudioTrack(appAudioPipelineRef.current.stream, appAudioTrack, {
+									onTrackEnded: () => {
+										return cleanupDesktopAppAudio({
+											stopCapture: false,
+										});
+									},
 								});
-							},
+							} else if (audioTrack) {
+								logVoice('Obtained audio track', { audioTrack });
+								await publishScreenShareAudioTrack(new MediaStream([audioTrack]), audioTrack);
+							} else {
+								await cleanupDesktopAppAudio();
+								setLocalScreenShareAudio(undefined);
+							}
+
+							return videoTrack;
+						} else {
+							throw new Error('No video track obtained for screen share');
+						}
+					} catch (error) {
+						stream?.getTracks().forEach((track) => {
+							track.stop();
 						});
-					} else if (audioTrack) {
-						logVoice('Obtained audio track', { audioTrack });
-						await publishScreenShareAudioTrack(new MediaStream([audioTrack]), audioTrack);
-					} else {
+						standbyDisplayAudioTrackRef.current = undefined;
+						standbyDisplayAudioStreamRef.current = undefined;
 						await cleanupDesktopAppAudio();
-						setLocalScreenShareAudio(undefined);
+
+						logVoice('Error starting screen share stream', { error });
+						throw error;
 					}
-
-					return videoTrack;
-				} else {
-					throw new Error('No video track obtained for screen share');
-				}
-			} catch (error) {
-				stream?.getTracks().forEach((track) => {
-					track.stop();
-				});
-				standbyDisplayAudioTrackRef.current = undefined;
-				standbyDisplayAudioStreamRef.current = undefined;
-				await cleanupDesktopAppAudio();
-
-				logVoice('Error starting screen share stream', { error });
-				throw error;
-			}
+				},
+			);
 		},
 		[
 			cleanupDesktopAppAudio,
@@ -2077,85 +2114,98 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				playJoinSound?: boolean;
 			},
 		) => {
-			logVoice('Initializing voice provider', {
-				incomingRouterRtpCapabilities,
-				channelId,
-				prefetched: !!opts?.producerTransportParams,
-			});
+			return traceSentrySpan(
+				{
+					name: 'voice.init',
+					op: 'voice.join',
+					attributes: {
+						'voice.channel_id': channelId,
+						'voice.prefetched_transports': opts?.producerTransportParams !== undefined,
+						'voice.has_existing_producers': opts?.existingProducers !== undefined,
+					},
+				},
+				async () => {
+					logVoice('Initializing voice provider', {
+						incomingRouterRtpCapabilities,
+						channelId,
+						prefetched: !!opts?.producerTransportParams,
+					});
 
-			cleanup();
-			hasHandledTransportFailureRef.current = false;
+					cleanup();
+					hasHandledTransportFailureRef.current = false;
 
-			let micPrepPromise: Promise<TPreparedMicPipeline | undefined> | undefined;
+					let micPrepPromise: Promise<TPreparedMicPipeline | undefined> | undefined;
 
-			try {
-				setLoading(true);
-				setConnectionStatus(ConnectionStatus.CONNECTING);
-
-				if (opts?.playJoinSound !== false) {
-					playSound(SoundType.OWN_USER_JOINED_VOICE_CHANNEL);
-				}
-
-				routerRtpCapabilities.current = incomingRouterRtpCapabilities;
-
-				const device = await Device.factory();
-
-				// Start mic acquisition + WASM pipeline immediately — these have no
-				// dependency on the mediasoup device or transports and are the slowest
-				// part of startMicStream. Running them concurrently with device.load()
-				// and transport creation saves ~200-300ms on join.
-				micPrepPromise = prepareMicPipeline().catch(async (error) => {
-					logVoice('Error preparing microphone pipeline', { error });
-					await cleanupMicAudioPipeline();
-					setLocalAudioStream(undefined);
-					return undefined;
-				});
-
-				await device.load({
-					routerRtpCapabilities: incomingRouterRtpCapabilities,
-				});
-				deviceRef.current = device;
-				sendRtpCapabilities.current = device.rtpCapabilities;
-
-				await Promise.all([
-					createProducerTransport(device, opts?.producerTransportParams),
-					createConsumerTransport(device, opts?.consumerTransportParams),
-				]);
-				setVoiceEventRtpCapabilities(device.rtpCapabilities);
-
-				const [, micPrepResult] = await Promise.all([
-					consumeExistingProducers(device.rtpCapabilities, undefined, opts?.existingProducers),
-					micPrepPromise,
-				]);
-
-				// Mic failures are non-fatal — voice join continues without a mic.
-				if (micPrepResult) {
 					try {
-						await produceMicTrack(micPrepResult);
+						setLoading(true);
+						setConnectionStatus(ConnectionStatus.CONNECTING);
+
+						if (opts?.playJoinSound !== false) {
+							playSound(SoundType.OWN_USER_JOINED_VOICE_CHANNEL);
+						}
+
+						routerRtpCapabilities.current = incomingRouterRtpCapabilities;
+
+						const device = await Device.factory();
+
+						// Start mic acquisition + WASM pipeline immediately — these have no
+						// dependency on the mediasoup device or transports and are the slowest
+						// part of startMicStream. Running them concurrently with device.load()
+						// and transport creation saves ~200-300ms on join.
+						micPrepPromise = prepareMicPipeline().catch(async (error) => {
+							logVoice('Error preparing microphone pipeline', { error });
+							await cleanupMicAudioPipeline();
+							setLocalAudioStream(undefined);
+							return undefined;
+						});
+
+						await device.load({
+							routerRtpCapabilities: incomingRouterRtpCapabilities,
+						});
+						deviceRef.current = device;
+						sendRtpCapabilities.current = device.rtpCapabilities;
+
+						await Promise.all([
+							createProducerTransport(device, opts?.producerTransportParams),
+							createConsumerTransport(device, opts?.consumerTransportParams),
+						]);
+						setVoiceEventRtpCapabilities(device.rtpCapabilities);
+
+						const [, micPrepResult] = await Promise.all([
+							consumeExistingProducers(device.rtpCapabilities, undefined, opts?.existingProducers),
+							micPrepPromise,
+						]);
+
+						// Mic failures are non-fatal — voice join continues without a mic.
+						if (micPrepResult) {
+							try {
+								await produceMicTrack(micPrepResult);
+							} catch (error) {
+								logVoice('Error attaching microphone to transport', { error });
+								await cleanupMicAudioPipeline();
+								setLocalAudioStream(undefined);
+							}
+						}
+
+						startMonitoring(producerTransport.current, consumerTransport.current);
+						setConnectionStatus(ConnectionStatus.CONNECTED);
+						setLoading(false);
 					} catch (error) {
-						logVoice('Error attaching microphone to transport', { error });
+						logVoice('Error initializing voice provider', { error });
+
+						// Clean up the prestarted mic pipeline — it may have acquired the
+						// microphone and spun up the WASM worker before the failure occurred.
+						await micPrepPromise;
 						await cleanupMicAudioPipeline();
 						setLocalAudioStream(undefined);
+
+						setConnectionStatus(ConnectionStatus.FAILED);
+						setLoading(false);
+
+						throw error;
 					}
-				}
-
-				startMonitoring(producerTransport.current, consumerTransport.current);
-				setConnectionStatus(ConnectionStatus.CONNECTED);
-				setLoading(false);
-			} catch (error) {
-				logVoice('Error initializing voice provider', { error });
-
-				// Clean up the prestarted mic pipeline — it may have acquired the
-				// microphone and spun up the WASM worker before the failure occurred.
-				await micPrepPromise;
-				await cleanupMicAudioPipeline();
-				setLocalAudioStream(undefined);
-
-				setConnectionStatus(ConnectionStatus.FAILED);
-				setLoading(false);
-
-				throw error;
-			}
+				},
+			);
 		},
 		[
 			cleanup,
@@ -2177,249 +2227,263 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return transportRecoveryPromiseRef.current;
 		}
 
-		const recoveryPromise = (async () => {
-			try {
-				if (!isConnectedRef.current) {
-					logVoice('Skipping transport recovery because server connection is unavailable');
-					return false;
-				}
-
-				if (currentVoiceChannelIdRef.current === undefined) {
-					logVoice('Skipping transport recovery because the user is no longer in voice');
-					return false;
-				}
-
-				if (!routerRtpCapabilities.current) {
-					logVoice('Skipping transport recovery because router RTP capabilities are unavailable');
-					return false;
-				}
-
-				let nonceRestarts = 0;
-
-				for (let attempt = 0; attempt < RECOVERY_MAX_ATTEMPTS; attempt++) {
-					if (attempt > 0) {
-						await new Promise<void>((resolve) => setTimeout(resolve, RECOVERY_BACKOFF_MS[attempt - 1]));
-
-						if (!isConnectedRef.current || currentVoiceChannelIdRef.current === undefined) {
-							logVoice('Aborting transport recovery after backoff: connection or channel lost');
+		const recoveryPromise = traceSentrySpan(
+			{
+				name: 'voice.transport_recovery',
+				op: 'voice.recovery',
+				attributes: {
+					'voice.channel_id': currentVoiceChannelIdRef.current,
+				},
+			},
+			() =>
+				(async () => {
+					try {
+						if (!isConnectedRef.current) {
+							logVoice('Skipping transport recovery because server connection is unavailable');
 							return false;
 						}
-					}
 
-					const nonceAtStart = voiceSessionReconnectNonceRef.current;
-					const isNonceStale = () => voiceSessionReconnectNonceRef.current !== nonceAtStart;
-					const throwIfNonceStale = (stage: string) => {
-						if (isNonceStale()) {
-							throw new VoiceSessionReconnectChangedError(stage);
+						if (currentVoiceChannelIdRef.current === undefined) {
+							logVoice('Skipping transport recovery because the user is no longer in voice');
+							return false;
 						}
-					};
 
-					try {
-						logVoice('Attempting in-session voice transport recovery', {
-							attempt: attempt + 1,
-							channelId: currentVoiceChannelIdRef.current,
-						});
+						if (!routerRtpCapabilities.current) {
+							logVoice('Skipping transport recovery because router RTP capabilities are unavailable');
+							return false;
+						}
 
-						const watchedStreamsSnapshot = captureWatchedRemoteStreams();
+						let nonceRestarts = 0;
 
-						setConnectionStatus(ConnectionStatus.CONNECTING);
-						stopMonitoring();
-						resetStats();
-						clearRemoteUserStreams();
-						clearExternalStreams();
-						setVoiceEventRtpCapabilities(null);
-						cleanupTransports();
+						for (let attempt = 0; attempt < RECOVERY_MAX_ATTEMPTS; attempt++) {
+							if (attempt > 0) {
+								await new Promise<void>((resolve) => setTimeout(resolve, RECOVERY_BACKOFF_MS[attempt - 1]));
 
-						let device = await withRecoveryTimeout(ensureVoiceDeviceLoaded());
-
-						throwIfNonceStale('device load');
-
-						let currentRtpCapabilities = device.rtpCapabilities;
-						let recoveryJoinResult: TRecoveryJoinResult | undefined;
-
-						try {
-							await withRecoveryTimeout(
-								Promise.all([createProducerTransport(device), createConsumerTransport(device)]),
-							);
-						} catch (error) {
-							const recoveryChannelId = currentVoiceChannelIdRef.current;
-
-							if (!isMissingVoiceSessionError(error) || recoveryChannelId === undefined) {
-								throw error;
+								if (!isConnectedRef.current || currentVoiceChannelIdRef.current === undefined) {
+									logVoice('Aborting transport recovery after backoff: connection or channel lost');
+									return false;
+								}
 							}
 
-							logVoice('Voice session missing during transport recovery, attempting fresh voice join', {
-								channelId: recoveryChannelId,
-								error,
-							});
+							const nonceAtStart = voiceSessionReconnectNonceRef.current;
+							const isNonceStale = () => voiceSessionReconnectNonceRef.current !== nonceAtStart;
+							const throwIfNonceStale = (stage: string) => {
+								if (isNonceStale()) {
+									throw new VoiceSessionReconnectChangedError(stage);
+								}
+							};
 
-							recoveryJoinResult = await withRecoveryTimeout(rejoinVoiceSession(recoveryChannelId));
-							throwIfNonceStale('voice rejoin');
-
-							device = recoveryJoinResult.device;
-							currentRtpCapabilities = device.rtpCapabilities;
-
-							await withRecoveryTimeout(
-								Promise.all([
-									createProducerTransport(device, recoveryJoinResult.producerTransportParams),
-									createConsumerTransport(device, recoveryJoinResult.consumerTransportParams),
-								]),
-							);
-						}
-
-						throwIfNonceStale('transport creation');
-
-						sendRtpCapabilities.current = currentRtpCapabilities;
-						setVoiceEventRtpCapabilities(currentRtpCapabilities);
-
-						const republishTasks: Promise<void>[] = [];
-
-						const currentAudioStream = localAudioStreamRef.current;
-						const currentAudioTrack = currentAudioStream?.getAudioTracks()[0];
-						if (recoveryJoinResult && canSpeakRef.current && startMicStreamRef.current) {
-							republishTasks.push(
-								startMicStreamRef.current().catch((error) => {
-									logVoice('Error restarting microphone after voice session rejoin', { error });
-								}),
-							);
-						} else if (currentAudioStream && currentAudioTrack && currentAudioTrack.readyState === 'live') {
-							republishTasks.push(publishMicTrack(currentAudioStream, currentAudioTrack));
-						}
-
-						const currentVideoStream = localVideoStreamRef.current;
-						const currentVideoTrack = currentVideoStream?.getVideoTracks()[0];
-						if (currentVideoStream && currentVideoTrack && currentVideoTrack.readyState === 'live') {
-							republishTasks.push(publishWebcamTrack(currentVideoStream, currentVideoTrack));
-						}
-
-						const currentScreenShareStream = localScreenShareStreamRef.current;
-						const currentScreenShareTrack = currentScreenShareStream?.getVideoTracks()[0];
-						if (currentScreenShareStream && currentScreenShareTrack && currentScreenShareTrack.readyState === 'live') {
-							republishTasks.push(publishScreenShareTrack(currentScreenShareStream, currentScreenShareTrack));
-						}
-
-						const currentScreenShareAudioStream = localScreenShareAudioStreamRef.current;
-						const currentScreenShareAudioTrack = currentScreenShareAudioStream?.getAudioTracks()[0];
-						if (
-							currentScreenShareAudioStream &&
-							currentScreenShareAudioTrack &&
-							currentScreenShareAudioTrack.readyState === 'live'
-						) {
-							const shouldCleanupDesktopAudio = appAudioPipelineRef.current?.track === currentScreenShareAudioTrack;
-
-							republishTasks.push(
-								publishScreenShareAudioTrack(currentScreenShareAudioStream, currentScreenShareAudioTrack, {
-									onTrackEnded: shouldCleanupDesktopAudio
-										? () => {
-												return cleanupDesktopAppAudio({
-													stopCapture: false,
-												});
-											}
-										: undefined,
-								}),
-							);
-						}
-
-						await withRecoveryTimeout(
-							Promise.all([
-								consumeExistingProducers(currentRtpCapabilities, undefined, recoveryJoinResult?.existingProducers),
-								...republishTasks,
-							]),
-						);
-
-						throwIfNonceStale('consume/republish');
-
-						if (recoveryJoinResult) {
-							logVoice('Refreshing existing producers after voice session rejoin');
-							await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
-
-							await withRecoveryTimeout(
-								new Promise<void>((resolve) => {
-									setTimeout(resolve, RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS);
-								}),
-							);
-
-							logVoice('Refreshing existing producers after delayed voice session rejoin sync');
-							await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
-						}
-
-						const restoreWatchTasks: Promise<void>[] = [];
-
-						Object.entries(watchedStreamsSnapshot.remoteUserStreams).forEach(([remoteId, kinds]) => {
-							const numericRemoteId = Number(remoteId);
-
-							kinds.forEach((kind) => {
-								restoreWatchTasks.push(consume(numericRemoteId, kind, currentRtpCapabilities));
-							});
-						});
-
-						Object.entries(watchedStreamsSnapshot.externalStreams).forEach(([streamId, watchedState]) => {
-							const numericStreamId = Number(streamId);
-
-							if (watchedState.audio) {
-								restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities));
-							}
-
-							if (watchedState.video) {
-								restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities));
-							}
-						});
-
-						await withRecoveryTimeout(Promise.all(restoreWatchTasks));
-
-						throwIfNonceStale('watch restoration');
-
-						if (recoveryJoinResult) {
-							useServerStore.getState().bumpVoiceSessionReconnectNonce();
-						}
-
-						startMonitoring(producerTransport.current, consumerTransport.current);
-						setConnectionStatus(ConnectionStatus.CONNECTED);
-						logVoice('Voice transport recovery completed successfully');
-
-						return true;
-					} catch (error) {
-						if (error instanceof VoiceSessionReconnectChangedError) {
-							nonceRestarts += 1;
-
-							if (nonceRestarts > RECOVERY_MAX_NONCE_RESTARTS) {
-								logVoice('Voice transport recovery abandoned: too many session changes', {
-									nonceRestarts,
+							try {
+								logVoice('Attempting in-session voice transport recovery', {
+									attempt: attempt + 1,
+									channelId: currentVoiceChannelIdRef.current,
 								});
+
+								const watchedStreamsSnapshot = captureWatchedRemoteStreams();
+
+								setConnectionStatus(ConnectionStatus.CONNECTING);
+								stopMonitoring();
+								resetStats();
+								clearRemoteUserStreams();
+								clearExternalStreams();
+								setVoiceEventRtpCapabilities(null);
+								cleanupTransports();
+
+								let device = await withRecoveryTimeout(ensureVoiceDeviceLoaded());
+
+								throwIfNonceStale('device load');
+
+								let currentRtpCapabilities = device.rtpCapabilities;
+								let recoveryJoinResult: TRecoveryJoinResult | undefined;
+
+								try {
+									await withRecoveryTimeout(
+										Promise.all([createProducerTransport(device), createConsumerTransport(device)]),
+									);
+								} catch (error) {
+									const recoveryChannelId = currentVoiceChannelIdRef.current;
+
+									if (!isMissingVoiceSessionError(error) || recoveryChannelId === undefined) {
+										throw error;
+									}
+
+									logVoice('Voice session missing during transport recovery, attempting fresh voice join', {
+										channelId: recoveryChannelId,
+										error,
+									});
+
+									recoveryJoinResult = await withRecoveryTimeout(rejoinVoiceSession(recoveryChannelId));
+									throwIfNonceStale('voice rejoin');
+
+									device = recoveryJoinResult.device;
+									currentRtpCapabilities = device.rtpCapabilities;
+
+									await withRecoveryTimeout(
+										Promise.all([
+											createProducerTransport(device, recoveryJoinResult.producerTransportParams),
+											createConsumerTransport(device, recoveryJoinResult.consumerTransportParams),
+										]),
+									);
+								}
+
+								throwIfNonceStale('transport creation');
+
+								sendRtpCapabilities.current = currentRtpCapabilities;
+								setVoiceEventRtpCapabilities(currentRtpCapabilities);
+
+								const republishTasks: Promise<void>[] = [];
+
+								const currentAudioStream = localAudioStreamRef.current;
+								const currentAudioTrack = currentAudioStream?.getAudioTracks()[0];
+								if (recoveryJoinResult && canSpeakRef.current && startMicStreamRef.current) {
+									republishTasks.push(
+										startMicStreamRef.current().catch((error) => {
+											logVoice('Error restarting microphone after voice session rejoin', { error });
+										}),
+									);
+								} else if (currentAudioStream && currentAudioTrack && currentAudioTrack.readyState === 'live') {
+									republishTasks.push(publishMicTrack(currentAudioStream, currentAudioTrack));
+								}
+
+								const currentVideoStream = localVideoStreamRef.current;
+								const currentVideoTrack = currentVideoStream?.getVideoTracks()[0];
+								if (currentVideoStream && currentVideoTrack && currentVideoTrack.readyState === 'live') {
+									republishTasks.push(publishWebcamTrack(currentVideoStream, currentVideoTrack));
+								}
+
+								const currentScreenShareStream = localScreenShareStreamRef.current;
+								const currentScreenShareTrack = currentScreenShareStream?.getVideoTracks()[0];
+								if (
+									currentScreenShareStream &&
+									currentScreenShareTrack &&
+									currentScreenShareTrack.readyState === 'live'
+								) {
+									republishTasks.push(publishScreenShareTrack(currentScreenShareStream, currentScreenShareTrack));
+								}
+
+								const currentScreenShareAudioStream = localScreenShareAudioStreamRef.current;
+								const currentScreenShareAudioTrack = currentScreenShareAudioStream?.getAudioTracks()[0];
+								if (
+									currentScreenShareAudioStream &&
+									currentScreenShareAudioTrack &&
+									currentScreenShareAudioTrack.readyState === 'live'
+								) {
+									const shouldCleanupDesktopAudio = appAudioPipelineRef.current?.track === currentScreenShareAudioTrack;
+
+									republishTasks.push(
+										publishScreenShareAudioTrack(currentScreenShareAudioStream, currentScreenShareAudioTrack, {
+											onTrackEnded: shouldCleanupDesktopAudio
+												? () => {
+														return cleanupDesktopAppAudio({
+															stopCapture: false,
+														});
+													}
+												: undefined,
+										}),
+									);
+								}
+
+								await withRecoveryTimeout(
+									Promise.all([
+										consumeExistingProducers(currentRtpCapabilities, undefined, recoveryJoinResult?.existingProducers),
+										...republishTasks,
+									]),
+								);
+
+								throwIfNonceStale('consume/republish');
+
+								if (recoveryJoinResult) {
+									logVoice('Refreshing existing producers after voice session rejoin');
+									await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
+
+									await withRecoveryTimeout(
+										new Promise<void>((resolve) => {
+											setTimeout(resolve, RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS);
+										}),
+									);
+
+									logVoice('Refreshing existing producers after delayed voice session rejoin sync');
+									await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
+								}
+
+								const restoreWatchTasks: Promise<void>[] = [];
+
+								Object.entries(watchedStreamsSnapshot.remoteUserStreams).forEach(([remoteId, kinds]) => {
+									const numericRemoteId = Number(remoteId);
+
+									kinds.forEach((kind) => {
+										restoreWatchTasks.push(consume(numericRemoteId, kind, currentRtpCapabilities));
+									});
+								});
+
+								Object.entries(watchedStreamsSnapshot.externalStreams).forEach(([streamId, watchedState]) => {
+									const numericStreamId = Number(streamId);
+
+									if (watchedState.audio) {
+										restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities));
+									}
+
+									if (watchedState.video) {
+										restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities));
+									}
+								});
+
+								await withRecoveryTimeout(Promise.all(restoreWatchTasks));
+
+								throwIfNonceStale('watch restoration');
+
+								if (recoveryJoinResult) {
+									useServerStore.getState().bumpVoiceSessionReconnectNonce();
+								}
+
+								startMonitoring(producerTransport.current, consumerTransport.current);
+								setConnectionStatus(ConnectionStatus.CONNECTED);
+								logVoice('Voice transport recovery completed successfully');
+
+								return true;
+							} catch (error) {
+								if (error instanceof VoiceSessionReconnectChangedError) {
+									nonceRestarts += 1;
+
+									if (nonceRestarts > RECOVERY_MAX_NONCE_RESTARTS) {
+										logVoice('Voice transport recovery abandoned: too many session changes', {
+											nonceRestarts,
+										});
+										setConnectionStatus(ConnectionStatus.FAILED);
+										return false;
+									}
+
+									logVoice('Voice session changed during transport recovery, restarting attempt', {
+										attempt: attempt + 1,
+										nonceRestarts,
+										error,
+									});
+									attempt -= 1;
+									continue;
+								}
+
+								const isLastAttempt = attempt === RECOVERY_MAX_ATTEMPTS - 1;
+
+								if (!isLastAttempt && !isNonRetriableTrpcError(error)) {
+									logVoice('Voice transport recovery attempt failed, retrying', {
+										attempt: attempt + 1,
+										error,
+									});
+									continue;
+								}
+
+								logVoice('Voice transport recovery failed', { error });
 								setConnectionStatus(ConnectionStatus.FAILED);
 								return false;
 							}
-
-							logVoice('Voice session changed during transport recovery, restarting attempt', {
-								attempt: attempt + 1,
-								nonceRestarts,
-								error,
-							});
-							attempt -= 1;
-							continue;
 						}
 
-						const isLastAttempt = attempt === RECOVERY_MAX_ATTEMPTS - 1;
-
-						if (!isLastAttempt && !isNonRetriableTrpcError(error)) {
-							logVoice('Voice transport recovery attempt failed, retrying', {
-								attempt: attempt + 1,
-								error,
-							});
-							continue;
-						}
-
-						logVoice('Voice transport recovery failed', { error });
-						setConnectionStatus(ConnectionStatus.FAILED);
 						return false;
+					} finally {
+						transportRecoveryPromiseRef.current = undefined;
 					}
-				}
-
-				return false;
-			} finally {
-				transportRecoveryPromiseRef.current = undefined;
-			}
-		})();
+				})(),
+		);
 
 		transportRecoveryPromiseRef.current = recoveryPromise;
 		return recoveryPromise;
