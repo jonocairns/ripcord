@@ -9,6 +9,10 @@ const infoRouteHandler = async (
   res: http.ServerResponse
 ) => {
   const settings = await getSettings();
+  const clientTracingSampleRate =
+    config.server.clientTracingSampleRate > 0
+      ? config.server.clientTracingSampleRate
+      : undefined;
 
   const info: TServerInfo = {
     serverId: settings.serverId,
@@ -21,6 +25,9 @@ const infoRouteHandler = async (
       ? {
           provider: 'sentry',
           dsn: config.server.clientErrorReportingSentryDsn.trim(),
+          ...(clientTracingSampleRate !== undefined
+            ? { tracingSampleRate: clientTracingSampleRate }
+            : {}),
           ignoreErrors: config.server.clientErrorReportingIgnoreErrors
             .split(',')
             .map((s) => s.trim())

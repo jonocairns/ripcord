@@ -12,11 +12,18 @@ const initSentry = (): void => {
     return;
   }
 
+  const serverTracingSampleRate = config.server.serverTracingSampleRate;
+  const tracingOptions =
+    serverTracingSampleRate > 0
+      ? { tracesSampleRate: serverTracingSampleRate }
+      : {};
+
   Sentry.init({
     dsn,
     environment: IS_PRODUCTION ? 'production' : 'development',
     release: SERVER_VERSION,
-    sendDefaultPii: false
+    sendDefaultPii: false,
+    ...tracingOptions
   });
 };
 

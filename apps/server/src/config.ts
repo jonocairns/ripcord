@@ -54,7 +54,9 @@ const zConfig = z.object({
     corsOrigin: z.string(),
     clientErrorReportingSentryDsn: z.string(),
     serverErrorReportingSentryDsn: z.string(),
-    clientErrorReportingIgnoreErrors: z.string()
+    clientErrorReportingIgnoreErrors: z.string(),
+    clientTracingSampleRate: z.coerce.number().min(0).max(1),
+    serverTracingSampleRate: z.coerce.number().min(0).max(1)
   }),
   webRtc: zWebRtcConfig,
   rateLimiters: z.object({
@@ -88,6 +90,8 @@ const defaultConfig: TConfig = {
     corsOrigin: '',
     clientErrorReportingSentryDsn: '',
     serverErrorReportingSentryDsn: '',
+    clientTracingSampleRate: 0,
+    serverTracingSampleRate: 0,
     clientErrorReportingIgnoreErrors: [
       // Browser noise
       'ResizeObserver loop limit exceeded',
@@ -191,7 +195,9 @@ config = applyEnvOverrides(config, {
   'webRtc.ipv4.announcedAddress': 'SHARKORD_WEBRTC_IPV4_ANNOUNCED_ADDRESS',
   'webRtc.ipv6.enabled': 'SHARKORD_WEBRTC_IPV6_ENABLED',
   'webRtc.ipv6.bindAddress': 'SHARKORD_WEBRTC_IPV6_BIND_ADDRESS',
-  'webRtc.ipv6.announcedAddress': 'SHARKORD_WEBRTC_IPV6_ANNOUNCED_ADDRESS'
+  'webRtc.ipv6.announcedAddress': 'SHARKORD_WEBRTC_IPV6_ANNOUNCED_ADDRESS',
+  'server.clientTracingSampleRate': 'RIPCORD_CLIENT_TRACING_SAMPLE_RATE',
+  'server.serverTracingSampleRate': 'RIPCORD_SERVER_TRACING_SAMPLE_RATE'
 });
 
 const legacyAnnouncedAddress = process.env.SHARKORD_WEBRTC_ANNOUNCED_ADDRESS;
