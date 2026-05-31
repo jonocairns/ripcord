@@ -113,6 +113,15 @@ type TVoiceBootstrapResult = {
 
 export type { AudioVideoRefs };
 
+const createEmptyAudioVideoRefs = (): AudioVideoRefs => ({
+	videoRef: { current: null },
+	audioRef: { current: null },
+	screenShareRef: { current: null },
+	screenShareAudioRef: { current: null },
+	externalAudioRef: { current: null },
+	externalVideoRef: { current: null },
+});
+
 enum ConnectionStatus {
 	DISCONNECTED = 'disconnected',
 	CONNECTING = 'connecting',
@@ -410,14 +419,7 @@ const VoiceProviderContext = createContext<TVoiceProvider>({
 		averageBitrateSent: 0,
 	},
 	audioVideoRefsMap: new Map(),
-	getOrCreateRefs: () => ({
-		videoRef: { current: null },
-		audioRef: { current: null },
-		screenShareRef: { current: null },
-		screenShareAudioRef: { current: null },
-		externalAudioRef: { current: null },
-		externalVideoRef: { current: null },
-	}),
+	getOrCreateRefs: () => createEmptyAudioVideoRefs(),
 	acceptStream: () => undefined,
 	stopWatchingStream: () => undefined,
 	init: () => Promise.resolve(),
@@ -465,10 +467,10 @@ class VoiceSessionReconnectChangedError extends Error {
 	}
 }
 
-const withRecoveryTimeout = <T,>(promise: Promise<T>): Promise<T> => {
+const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, createTimeoutError: () => Error): Promise<T> => {
 	let handle: ReturnType<typeof setTimeout> | undefined;
 	const timeoutPromise = new Promise<never>((_, reject) => {
-		handle = setTimeout(() => reject(new Error('Voice transport recovery timed out')), RECOVERY_TIMEOUT_MS);
+		handle = setTimeout(() => reject(createTimeoutError()), timeoutMs);
 	});
 	return Promise.race([promise, timeoutPromise]).finally(() => {
 		if (handle !== undefined) {
@@ -476,20 +478,14 @@ const withRecoveryTimeout = <T,>(promise: Promise<T>): Promise<T> => {
 		}
 	});
 };
+
+const withRecoveryTimeout = <T,>(promise: Promise<T>): Promise<T> =>
+	withTimeout(promise, RECOVERY_TIMEOUT_MS, () => new Error('Voice transport recovery timed out'));
+
+const withVoiceReconnectTimeout = <T,>(promise: Promise<T>): Promise<T> =>
+	withTimeout(promise, VOICE_RECONNECT_TIMEOUT_MS, () => new VoiceReconnectTimeoutError());
 
 const isMissingVoiceSessionError = (error: unknown): boolean => getTrpcErrorData(error)?.code === 'BAD_REQUEST';
-
-const withVoiceReconnectTimeout = <T,>(promise: Promise<T>): Promise<T> => {
-	let handle: ReturnType<typeof setTimeout> | undefined;
-	const timeoutPromise = new Promise<never>((_, reject) => {
-		handle = setTimeout(() => reject(new VoiceReconnectTimeoutError()), VOICE_RECONNECT_TIMEOUT_MS);
-	});
-	return Promise.race([promise, timeoutPromise]).finally(() => {
-		if (handle !== undefined) {
-			clearTimeout(handle);
-		}
-	});
-};
 
 const createReconnectAttemptId = (): string => {
 	const randomUUID = globalThis.crypto?.randomUUID;
@@ -499,6 +495,17 @@ const createReconnectAttemptId = (): string => {
 	}
 
 	return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
+// Mirrors the latest value of a reactive dependency into a stable ref so callbacks
+// and async flows can read it without taking it as a dependency. Updates after commit,
+// matching a hand-written `useEffect(() => { ref.current = value }, [value])`.
+const useLatestRef = <T,>(value: T): MutableRefObject<T> => {
+	const ref = useRef(value);
+	useEffect(() => {
+		ref.current = value;
+	}, [value]);
+	return ref;
 };
 
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
@@ -544,10 +551,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const micPipelineMutexRef = useRef<Promise<void>>(Promise.resolve());
 	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
-	const localAudioStreamRef = useRef<MediaStream | undefined>(undefined);
-	const localVideoStreamRef = useRef<MediaStream | undefined>(undefined);
-	const localScreenShareStreamRef = useRef<MediaStream | undefined>(undefined);
-	const localScreenShareAudioStreamRef = useRef<MediaStream | undefined>(undefined);
 	const transportRecoveryPromiseRef = useRef<Promise<boolean> | undefined>(undefined);
 	const voiceReconnectPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const recoverTransportSessionRef = useRef<(() => Promise<boolean>) | undefined>(undefined);
@@ -555,14 +558,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
 		if (!audioVideoRefsMap.current.has(remoteId)) {
-			audioVideoRefsMap.current.set(remoteId, {
-				videoRef: { current: null },
-				audioRef: { current: null },
-				screenShareRef: { current: null },
-				screenShareAudioRef: { current: null },
-				externalAudioRef: { current: null },
-				externalVideoRef: { current: null },
-			});
+			audioVideoRefsMap.current.set(remoteId, createEmptyAudioVideoRefs());
 		}
 
 		return audioVideoRefsMap.current.get(remoteId)!;
@@ -618,8 +614,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		externalStreams,
 		remoteUserStreams,
 	} = useRemoteStreams();
-	const remoteUserStreamsRef = useRef(remoteUserStreams);
-	const externalStreamsRef = useRef(externalStreams);
+	const remoteUserStreamsRef = useLatestRef(remoteUserStreams);
+	const externalStreamsRef = useLatestRef(externalStreams);
 	const { pendingStreams, addPendingStream, removePendingStream, clearPendingStreamsForUser, clearAllPendingStreams } =
 		usePendingStreams();
 
@@ -639,35 +635,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearLocalStreams,
 	} = useLocalStreams();
 
-	useEffect(() => {
-		localAudioStreamRef.current = localAudioStream;
-	}, [localAudioStream]);
-
-	useEffect(() => {
-		localVideoStreamRef.current = localVideoStream;
-	}, [localVideoStream]);
-
-	useEffect(() => {
-		localScreenShareStreamRef.current = localScreenShareStream;
-	}, [localScreenShareStream]);
-
-	useEffect(() => {
-		localScreenShareAudioStreamRef.current = localScreenShareAudioStream;
-	}, [localScreenShareAudioStream]);
-
-	useEffect(() => {
-		remoteUserStreamsRef.current = remoteUserStreams;
-	}, [remoteUserStreams]);
-
-	useEffect(() => {
-		externalStreamsRef.current = externalStreams;
-	}, [externalStreams]);
+	const localAudioStreamRef = useLatestRef(localAudioStream);
+	const localVideoStreamRef = useLatestRef(localVideoStream);
+	const localScreenShareStreamRef = useLatestRef(localScreenShareStream);
+	const localScreenShareAudioStreamRef = useLatestRef(localScreenShareAudioStream);
 
 	const voiceCleanupRef = useRef<(() => void) | undefined>(undefined);
 	const hasHandledTransportFailureRef = useRef(false);
-	const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
-	const isConnectedRef = useRef(isConnected);
-	const voiceSessionReconnectNonceRef = useRef(voiceSessionReconnectNonce);
+	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
+	const isConnectedRef = useLatestRef(isConnected);
+	const voiceSessionReconnectNonceRef = useLatestRef(voiceSessionReconnectNonce);
 
 	const onTransportFailure = useCallback(() => {
 		if (hasHandledTransportFailureRef.current) {
@@ -2791,26 +2768,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			requestScreenShareSelection: getDesktopBridge() ? requestDesktopScreenShareSelection : undefined,
 		});
 
-	const setMicMutedRef = useRef(setMicMuted);
-	const ownMicMutedRef = useRef(ownVoiceState.micMuted);
-	const ownSoundMutedRef = useRef(ownVoiceState.soundMuted);
-	const canSpeakRef = useRef(channelCan(ChannelPermission.SPEAK));
-
-	useEffect(() => {
-		setMicMutedRef.current = setMicMuted;
-	}, [setMicMuted]);
-
-	useEffect(() => {
-		ownMicMutedRef.current = ownVoiceState.micMuted;
-		ownSoundMutedRef.current = ownVoiceState.soundMuted;
-	}, [ownVoiceState.micMuted, ownVoiceState.soundMuted]);
-
-	useEffect(() => {
-		isConnectedRef.current = isConnected;
-		currentVoiceChannelIdRef.current = currentVoiceChannelId;
-		canSpeakRef.current = channelCan(ChannelPermission.SPEAK);
-		voiceSessionReconnectNonceRef.current = voiceSessionReconnectNonce;
-	}, [channelCan, currentVoiceChannelId, isConnected, voiceSessionReconnectNonce]);
+	const setMicMutedRef = useLatestRef(setMicMuted);
+	const ownMicMutedRef = useLatestRef(ownVoiceState.micMuted);
+	const ownSoundMutedRef = useLatestRef(ownVoiceState.soundMuted);
+	const canSpeakRef = useLatestRef(channelCan(ChannelPermission.SPEAK));
 
 	useEffect(() => {
 		const pushTarget = resolveHeldPushMicTarget({
