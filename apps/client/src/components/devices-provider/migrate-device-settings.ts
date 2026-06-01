@@ -1,3 +1,4 @@
+import { clampFramerateToResolution } from '@/helpers/resolution-fps-policy';
 import { ScreenAudioMode } from '@/runtime/types';
 import { MicQualityMode, Resolution, type TDeviceSettings, VideoCodecPreference, VoiceFilterStrength } from '@/types';
 import { normalizePushKeybind } from './push-keybind';
@@ -78,9 +79,26 @@ const migrateDeviceSettings = (incomingSettings: TLegacyDeviceSettings | undefin
 			? Math.min(-36, Math.max(-80, incomingSettings.sidecarNoiseGateFloorDbfs))
 			: undefined;
 
+	// Clamp persisted framerates against their resolution so legacy out-of-range
+	// combinations (e.g. an old 4K@120fps) are sanitized on load.
+	const webcamResolution = incomingSettings.webcamResolution ?? DEFAULT_DEVICE_SETTINGS.webcamResolution;
+	const screenResolution = incomingSettings.screenResolution ?? DEFAULT_DEVICE_SETTINGS.screenResolution;
+	const webcamFramerate = clampFramerateToResolution(
+		webcamResolution,
+		incomingSettings.webcamFramerate ?? DEFAULT_DEVICE_SETTINGS.webcamFramerate,
+	);
+	const screenFramerate = clampFramerateToResolution(
+		screenResolution,
+		incomingSettings.screenFramerate ?? DEFAULT_DEVICE_SETTINGS.screenFramerate,
+	);
+
 	return {
 		...DEFAULT_DEVICE_SETTINGS,
 		...incomingSettings,
+		webcamResolution,
+		webcamFramerate,
+		screenResolution,
+		screenFramerate,
 		micQualityMode: MicQualityMode.AUTO,
 		screenAudioMode: screenAudioMode || ScreenAudioMode.SYSTEM,
 		videoCodec: Object.values(VideoCodecPreference).includes(incomingSettings.videoCodec as VideoCodecPreference)

@@ -34,6 +34,7 @@ import {
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { logDebug, logVoice, traceSentrySpan } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
+import { isPowerEfficientWebrtcEncode } from '@/helpers/media-encode-capabilities';
 import { getTrpcErrorData, isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
@@ -160,6 +161,65 @@ const resolvePreferredVideoCodec = (
 	return (rtpCapabilities.codecs ?? []).find((codec) => {
 		return codec.mimeType.toLowerCase() === preferredMimeType;
 	});
+};
+
+const findVideoCodecByMime = (
+	rtpCapabilities: RtpCapabilities | null,
+	mimeType: string,
+): RtpCodecCapability | undefined => {
+	const lowerMimeType = mimeType.toLowerCase();
+
+	return (rtpCapabilities?.codecs ?? []).find((codec) => {
+		return codec.mimeType.toLowerCase() === lowerMimeType;
+	});
+};
+
+type TScreenShareEncodeParams = {
+	width: number;
+	height: number;
+	framerate: number;
+	bitrate: number;
+};
+
+// Resolve the screen share send codec.
+// - AUTO: prefer H264 — it has broad hardware-encoder support and is
+//   universally decodable by viewers (unlike AV1, which Safari/iOS and older
+//   devices can't decode and would be dropped by canConsume). Without this,
+//   mediasoup-client's default pick is the first negotiated codec (VP8),
+//   silently landing software encoding on demanding shares.
+// - Explicit AV1: only honour it when a hardware encoder is available for this
+//   resolution/framerate/bitrate; otherwise fall back to H264 to avoid a
+//   software-encoded slideshow at high resolutions.
+// - Explicit VP8/H264: use as chosen.
+const resolveScreenShareVideoCodec = async (
+	rtpCapabilities: RtpCapabilities | null,
+	preference: VideoCodecPreference,
+	encodeParams: TScreenShareEncodeParams,
+): Promise<RtpCodecCapability | undefined> => {
+	if (preference === VideoCodecPreference.AUTO) {
+		return findVideoCodecByMime(rtpCapabilities, 'video/H264');
+	}
+
+	if (preference === VideoCodecPreference.AV1) {
+		const av1Codec = findVideoCodecByMime(rtpCapabilities, 'video/AV1');
+
+		if (av1Codec) {
+			const hardwareAccelerated = await isPowerEfficientWebrtcEncode({
+				mimeType: 'video/AV1',
+				...encodeParams,
+			});
+
+			if (hardwareAccelerated) {
+				return av1Codec;
+			}
+
+			logVoice('AV1 screen share encode is not hardware-accelerated, falling back to H264', encodeParams);
+		}
+
+		return findVideoCodecByMime(rtpCapabilities, 'video/H264') ?? av1Codec;
+	}
+
+	return resolvePreferredVideoCodec(rtpCapabilities, preference);
 };
 
 const resolveMicProcessingConfig = (devices: TDeviceSettings): ResolvedMicProcessingConfig => {
@@ -1251,22 +1311,30 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			track.contentHint = 'detail';
 
-			const preferredVideoCodec = resolvePreferredVideoCodec(sendRtpCapabilities.current, devices.videoCodec);
+			const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
+			const screenTrackSettings = track.getSettings();
+			const screenWidth = screenTrackSettings.width ?? requestedScreenResolution.width;
+			const screenHeight = screenTrackSettings.height ?? requestedScreenResolution.height;
+			const screenFramerate = screenTrackSettings.frameRate ?? devices.screenFramerate;
+			const screenBitratePolicy = getVideoBitratePolicy({
+				profile: 'screen',
+				width: screenWidth,
+				height: screenHeight,
+				frameRate: screenFramerate,
+			});
+
+			const preferredVideoCodec = await resolveScreenShareVideoCodec(sendRtpCapabilities.current, devices.videoCodec, {
+				width: screenWidth,
+				height: screenHeight,
+				framerate: screenFramerate,
+				bitrate: screenBitratePolicy.startKbps * 1000,
+			});
 
 			if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
 				logVoice('Preferred screen share codec unavailable, falling back to auto', {
 					preferredCodec: devices.videoCodec,
 				});
 			}
-
-			const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
-			const screenTrackSettings = track.getSettings();
-			const screenBitratePolicy = getVideoBitratePolicy({
-				profile: 'screen',
-				width: screenTrackSettings.width ?? requestedScreenResolution.width,
-				height: screenTrackSettings.height ?? requestedScreenResolution.height,
-				frameRate: screenTrackSettings.frameRate ?? devices.screenFramerate,
-			});
 
 			const screenShareProducer = await producerTransport.current?.produce({
 				track,

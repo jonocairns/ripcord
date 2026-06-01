@@ -1,7 +1,9 @@
 import { memo } from 'react';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { clampFramerateToResolution, getAvailableFramerates } from '@/helpers/resolution-fps-policy';
 import { cn } from '@/lib/utils';
+import type { Resolution } from '@/types';
 
 type TResolutionFpsControlProps = {
 	resolution: string;
@@ -21,11 +23,25 @@ const ResolutionFpsControl = memo(
 		disabled,
 		className,
 	}: TResolutionFpsControlProps) => {
+		const availableFramerates = getAvailableFramerates(resolution as Resolution);
+
+		const handleResolutionChange = (value: string) => {
+			onResolutionChange(value);
+
+			// Some framerates are not valid at every resolution (e.g. 120fps at 4K),
+			// so clamp the selection down when switching to a more demanding one.
+			const clamped = clampFramerateToResolution(value as Resolution, framerate);
+
+			if (clamped !== framerate) {
+				onFramerateChange(clamped);
+			}
+		};
+
 		return (
 			<div className={cn('grid gap-4 md:grid-cols-2', className)}>
 				<div className="space-y-2">
 					<Label>Resolution</Label>
-					<Select value={resolution} onValueChange={onResolutionChange} disabled={disabled}>
+					<Select value={resolution} onValueChange={handleResolutionChange} disabled={disabled}>
 						<SelectTrigger className="w-full">
 							<SelectValue placeholder="Select the input device" />
 						</SelectTrigger>
@@ -51,13 +67,11 @@ const ResolutionFpsControl = memo(
 						</SelectTrigger>
 						<SelectContent>
 							<SelectGroup>
-								<SelectItem value="5">5 fps</SelectItem>
-								<SelectItem value="10">10 fps</SelectItem>
-								<SelectItem value="15">15 fps</SelectItem>
-								<SelectItem value="24">24 fps</SelectItem>
-								<SelectItem value="30">30 fps</SelectItem>
-								<SelectItem value="60">60 fps</SelectItem>
-								<SelectItem value="120">120 fps</SelectItem>
+								{availableFramerates.map((fps) => (
+									<SelectItem key={fps} value={fps.toString()}>
+										{fps} fps
+									</SelectItem>
+								))}
 							</SelectGroup>
 						</SelectContent>
 					</Select>
