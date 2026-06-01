@@ -30,7 +30,12 @@
 				"noRedundantAlt": "off"
 			},
 			"correctness": {
-				"useExhaustiveDependencies": "warn",
+				"useExhaustiveDependencies": {
+					"level": "warn",
+					"options": {
+						"hooks": [{ "name": "useLatestRef", "stableResult": true }]
+					}
+				},
 				"useHookAtTopLevel": "error",
 				"noUnusedImports": "error",
 				"noUnusedVariables": "warn"
