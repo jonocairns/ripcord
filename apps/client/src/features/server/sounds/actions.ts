@@ -1,3 +1,4 @@
+import { getPublicAssetUrl } from '@/helpers/get-file-url';
 import { SoundType } from '../types';
 
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -45,11 +46,7 @@ type TSoundAssetConfig = {
 };
 
 const createSoundAssetUrl = (fileName: string): string => {
-	if (window.location.protocol === 'file:') {
-		return new URL(`./sounds/${fileName}`, window.location.href).toString();
-	}
-
-	return `/sounds/${fileName}`;
+	return getPublicAssetUrl(`sounds/${fileName}`, { absolute: true });
 };
 
 const soundAssets: Partial<Record<SoundType, TSoundAssetConfig>> = {
