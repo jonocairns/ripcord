@@ -37,9 +37,4 @@ const clampFramerateToResolution = (resolution: Resolution, framerate: number): 
 	return Math.min(framerate, getMaxFramerateForResolution(resolution));
 };
 
-export {
-	clampFramerateToResolution,
-	FRAMERATE_OPTIONS,
-	getAvailableFramerates,
-	getMaxFramerateForResolution,
-};
+export { clampFramerateToResolution, FRAMERATE_OPTIONS, getAvailableFramerates, getMaxFramerateForResolution };

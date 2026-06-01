@@ -196,8 +196,16 @@ const resolveScreenShareVideoCodec = async (
 	preference: VideoCodecPreference,
 	encodeParams: TScreenShareEncodeParams,
 ): Promise<RtpCodecCapability | undefined> => {
+	const h264Codec = findVideoCodecByMime(rtpCapabilities, 'video/H264');
+
 	if (preference === VideoCodecPreference.AUTO) {
-		return findVideoCodecByMime(rtpCapabilities, 'video/H264');
+		if (!h264Codec) {
+			logVoice('H264 screen share codec unavailable for auto selection, falling back to mediasoup default codec', {
+				...encodeParams,
+			});
+		}
+
+		return h264Codec;
 	}
 
 	if (preference === VideoCodecPreference.AV1) {
@@ -213,10 +221,18 @@ const resolveScreenShareVideoCodec = async (
 				return av1Codec;
 			}
 
-			logVoice('AV1 screen share encode is not hardware-accelerated, falling back to H264', encodeParams);
+			if (h264Codec) {
+				logVoice('AV1 screen share encode is not hardware-accelerated, falling back to H264', encodeParams);
+				return h264Codec;
+			}
+
+			logVoice('AV1 screen share encode is not hardware-accelerated and H264 is unavailable, falling back to auto', {
+				...encodeParams,
+			});
+			return undefined;
 		}
 
-		return findVideoCodecByMime(rtpCapabilities, 'video/H264') ?? av1Codec;
+		return h264Codec;
 	}
 
 	return resolvePreferredVideoCodec(rtpCapabilities, preference);
