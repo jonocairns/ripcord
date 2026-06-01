@@ -83,6 +83,19 @@ describe('get-file-url helpers', () => {
 		);
 	});
 
+	test('omits access token query params for public files', async () => {
+		const { getFileUrl } = await import('../get-file-url');
+
+		const url = getFileUrl(
+			createFile({
+				id: 456,
+				name: 'public file.png',
+			}),
+		);
+
+		expect(url).toBe('https://server.example/public/public%20file.png?v=456');
+	});
+
 	test('uses initialized runtime server config for HTTP origins and websocket hosts', async () => {
 		const { getHostFromServer, getUrlFromServer } = await import('../get-file-url');
 

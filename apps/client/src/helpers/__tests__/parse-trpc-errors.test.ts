@@ -38,6 +38,17 @@ describe('parseTrpcErrors', () => {
 		});
 	});
 
+	test('falls back for plain objects without string or undefined field errors', () => {
+		expect(
+			parseTrpcErrors({
+				code: 42,
+				retriable: false,
+			}),
+		).toEqual({
+			_general: 'Something went wrong, please try again.',
+		});
+	});
+
 	test('falls back cleanly for unexpected error shapes', () => {
 		expect(parseTrpcErrors(null)).toEqual({
 			_general: 'Something went wrong, please try again.',
