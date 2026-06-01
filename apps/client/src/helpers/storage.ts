@@ -33,7 +33,13 @@ const getLocalStorageItemAsJSON = <T>(key: LocalStorageKey, defaultValue: T | un
 	const item = localStorage.getItem(key);
 
 	if (item) {
-		return JSON.parse(item) as T;
+		try {
+			return JSON.parse(item) as T;
+		} catch {
+			// Corrupt/legacy stored value — fall back to the default rather than
+			// letting the parse throw propagate to callers (several read at startup).
+			return defaultValue;
+		}
 	}
 
 	return defaultValue;
