@@ -1,3 +1,4 @@
+import { logDebug } from '@/helpers/browser-logger';
 import VoiceFilterWasmWorker from './voice-filter-wasm.worker.ts?worker';
 import voiceFilterWasmWorkletModuleUrl from './voice-filter-wasm.worklet.js?url&no-inline';
 
@@ -164,7 +165,7 @@ const createDiagnosticsTracker = (sessionId: string) => {
 
 			if (Date.now() - lastLoggedAt >= DIAGNOSTICS_LOG_INTERVAL_MS) {
 				lastLoggedAt = Date.now();
-				console.log('[wasm-denoise-diag]', snapshot);
+				logDebug('[wasm-denoise-diag]', snapshot);
 			}
 		},
 		reset() {
