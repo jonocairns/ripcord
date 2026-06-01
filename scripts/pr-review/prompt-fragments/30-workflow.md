@@ -19,6 +19,9 @@ Workflow:
    - Skip any issue already raised by other reviewers or previous runs.
 3. Decide which skills apply:
    - TS/TSX files in the diff → use `ts-impact`.
+   - Exported TypeScript APIs, public members, or side-effectful behavior in exported symbols changed → use `symbol-diff`.
+   - Signature, exported type, route contract, or cross-workspace API changes → use `typecheck`.
+   - Module moves, shared helper/provider rewiring, package boundary changes, or architecture-sensitive imports → use `import-graph`.
    - SQL migration files in the diff → use `db-migration-safety`.
    - Server router files in the diff where client call-site visibility matters → use `trpc-edges`.
    - Auth/permission paths in the diff → apply the `auth-review` checklist.
@@ -30,3 +33,4 @@ Workflow:
    - Always pass an explicit subdirectory path (e.g. `apps/server/src/`).
    - Use `-m 20` to cap output.
    - Only when verifying impact of a real concern.
+   - For import graph lookups, target `.pr-review-cache/import-graph.json` directly and keep output capped.
