@@ -30,7 +30,7 @@ const getFileUrl = (file: TFile | undefined | null) => {
 
 	const url = getUrlFromServer();
 
-	let baseUrl = `${url}/public/${file.name}`;
+	let baseUrl = `${url}/public/${encodeURIComponent(file.name)}`;
 
 	const params = new URLSearchParams();
 
@@ -43,17 +43,22 @@ const getFileUrl = (file: TFile | undefined | null) => {
 
 	baseUrl += `?${params.toString()}`;
 
-	return encodeURI(baseUrl);
+	return baseUrl;
 };
 
-const getPublicAssetUrl = (assetPath: string) => {
-	const normalizedAssetPath = assetPath.replace(/^\/+/, '');
+type TPublicAssetUrlOptions = {
+	absolute?: boolean;
+};
 
-	if (window.location.protocol === 'file:') {
-		return `./${normalizedAssetPath}`;
+const getPublicAssetUrl = (assetPath: string, options: TPublicAssetUrlOptions = {}) => {
+	const normalizedAssetPath = assetPath.replace(/^\/+/, '');
+	const assetUrl = window.location.protocol === 'file:' ? `./${normalizedAssetPath}` : `/${normalizedAssetPath}`;
+
+	if (options.absolute) {
+		return new URL(assetUrl, window.location.href).toString();
 	}
 
-	return `/${normalizedAssetPath}`;
+	return assetUrl;
 };
 
 export { getFileUrl, getHostFromServer, getPublicAssetUrl, getUrlFromServer };
