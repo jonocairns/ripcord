@@ -3,13 +3,14 @@ import { z } from 'zod';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { rtpCapabilitiesSchema } from './schemas';
 
 const consumeRoute = protectedProcedure
   .input(
     z.object({
       kind: z.enum(StreamKind),
       remoteId: z.number(),
-      rtpCapabilities: z.any(),
+      rtpCapabilities: rtpCapabilitiesSchema,
       paused: z.boolean().optional().default(false)
     })
   )

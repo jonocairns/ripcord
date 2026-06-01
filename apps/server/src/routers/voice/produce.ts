@@ -9,13 +9,14 @@ import { z } from 'zod';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { rtpParametersSchema } from './schemas';
 
 const produceRoute = protectedProcedure
   .input(
     z.object({
       transportId: z.string(),
       kind: z.enum(StreamKind),
-      rtpParameters: z.any()
+      rtpParameters: rtpParametersSchema
     })
   )
   .mutation(async ({ input, ctx }) => {
@@ -42,6 +43,13 @@ const produceRoute = protectedProcedure
     invariant(producerTransport, {
       code: 'NOT_FOUND',
       message: 'Producer transport not found'
+    });
+
+    // Reject produces targeting a stale transport id (e.g. a request issued
+    // against a transport that was replaced during a reconnect race).
+    invariant(producerTransport.id === input.transportId, {
+      code: 'BAD_REQUEST',
+      message: 'Producer transport id mismatch'
     });
 
     const producer = await producerTransport.produce({
