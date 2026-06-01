@@ -38,6 +38,7 @@ const getLocalStorageItemAsJSON = <T>(key: LocalStorageKey, defaultValue: T | un
 		} catch {
 			// Corrupt/legacy stored value — fall back to the default rather than
 			// letting the parse throw propagate to callers (several read at startup).
+			console.warn('[storage] Failed to parse localStorage key:', key, '- falling back to default.');
 			return defaultValue;
 		}
 	}
