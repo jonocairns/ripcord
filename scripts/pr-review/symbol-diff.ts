@@ -270,7 +270,7 @@ function riskTagsFor(callees: string[]): string[] {
 		if (/\b(hasPermission|protectedProcedure|publicProcedure|authenticated|auth|authorize|permission)\b/i.test(callee))
 			tags.add('auth');
 		if (/\b(readFile|writeFile|appendFile|mkdir|rm|unlink|rename)\b|\bfs\./i.test(callee)) tags.add('filesystem');
-		if (/\b(exec|execFile|spawn|spawnSync|shell)\b/i.test(callee)) tags.add('shell');
+		if (/\b(exec|execSync|execFile|execFileSync|spawn|spawnSync|shell)\b/i.test(callee)) tags.add('shell');
 		if (/\b(logger|console)\.(debug|info|warn|error|log)\b/i.test(callee)) tags.add('logging');
 		if (/\b(crypto|bcrypt|hash|sign|verify|encrypt|decrypt)\b/i.test(callee)) tags.add('crypto');
 		if (/\b(setTimeout|setInterval|queueMicrotask|requestAnimationFrame)\b/i.test(callee)) tags.add('async-timing');
