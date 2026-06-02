@@ -37,6 +37,11 @@ const loadMediasoup = async () => {
     `Loading mediasoup worker with config ${JSON.stringify(workerConfig, null, 2)}`
   );
 
+  // Deliberately a single worker. mediasoup workers are single-threaded, so a
+  // worker pool (one per core, channels pinned to a worker — no pipeTransport
+  // needed since consumption is always within a channel) would lift the
+  // one-core media ceiling. That's a scaling change we don't need at current
+  // load; revisit if concurrent voice throughput becomes CPU-bound on one core.
   mediaSoupWorker = await mediasoup.createWorker(workerConfig);
 
   mediaSoupWorker.on('died', (error) => {
