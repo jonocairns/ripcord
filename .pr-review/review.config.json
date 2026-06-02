@@ -61,6 +61,21 @@
 				"name": "sentry-review",
 				"summary": "adds production telemetry priors via Sentry MCP.",
 				"when": "Use when Sentry is available and the diff touches production code."
+			},
+			{
+				"name": "typecheck",
+				"summary": "runs the configured workspace typechecker and filters compiler errors to PR-changed files.",
+				"when": "Use before asserting signature, type, or caller compatibility is safe."
+			},
+			{
+				"name": "import-graph",
+				"summary": "uses the generated TypeScript import graph to inspect direct importers/importees across workspaces.",
+				"when": "Use when module topology, ownership boundaries, or import blast radius matters."
+			},
+			{
+				"name": "symbol-diff",
+				"summary": "compares changed exported TypeScript symbols against the PR base, including signatures, public members, callees, and coarse side-effect risk tags.",
+				"when": "Use when exported TypeScript APIs or behavior changed and the reviewer needs a structured change summary."
 			}
 		],
 		"repoSkills": [
@@ -86,6 +101,24 @@
 				"command": "bun run scripts/pr-review/pr-impact.ts --pr {{PR_NUMBER}} --format json",
 				"allowedTool": "Bash(bun run scripts/pr-review/pr-impact.ts:*)",
 				"useWhen": "Changed TS/TSX files"
+			},
+			{
+				"name": "typecheck",
+				"command": "bun run scripts/pr-review/typecheck.ts --pr {{PR_NUMBER}} --format json",
+				"allowedTool": "Bash(bun run scripts/pr-review/typecheck.ts:*)",
+				"useWhen": "Signature, exported type, route contract, or cross-workspace API changes"
+			},
+			{
+				"name": "import-graph",
+				"command": "bun run scripts/pr-review/build-import-graph.ts",
+				"allowedTool": "Bash(bun run scripts/pr-review/build-import-graph.ts:*)",
+				"useWhen": "Import topology has not been generated for the checked-out tree, or architectural boundary checks need import graph context"
+			},
+			{
+				"name": "symbol-diff",
+				"command": "bun run scripts/pr-review/symbol-diff.ts --pr {{PR_NUMBER}} --format json",
+				"allowedTool": "Bash(bun run scripts/pr-review/symbol-diff.ts:*)",
+				"useWhen": "Changed TS/TSX files where exported symbol signatures, public members, or added/removed callees matter"
 			}
 		],
 		"repoAnalyzers": [

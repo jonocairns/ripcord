@@ -77,14 +77,15 @@ review routing.
 
 - `pr-impact.ts`: resolves exported symbol callers and rough call-shape data so
   the reviewer can reason about blast radius instead of guessing.
+- `symbol-diff.ts`: compares changed exported TypeScript symbols against the PR
+  base, including signatures, public members, and added/removed callees.
 - `trpc-edges.ts`: maps server tRPC route handlers to client call sites, closing
   a gap that normal TS reference analysis cannot see.
 - `migration-check.ts`: codifies known migration failure modes, including a
   repo-specific duplicate-migration pitfall from Drizzle.
 - `typecheck.ts`: optional compiler-grounded validation when the reviewer needs
   to confirm a claimed type break instead of speculating.
-- `build-import-graph.ts`: builds cached import topology for future faster or
-  richer context queries.
+- `build-import-graph.ts`: builds import topology for richer context queries.
 
 ## Configuration seam
 
@@ -179,13 +180,106 @@ to the exact materials that informed the conclusion.
 
 ## Future direction
 
-The highest-value next step is to move important durable repo knowledge out of
-general instructions and into targeted review skills. Likely areas:
+The highest-value next step is to keep separating **tools** from **review
+methods**.
+
+- Tools are deterministic analyzers in `scripts/pr-review/`. They should produce
+  concrete evidence such as changed symbols, caller lists, import edges, compiler
+  errors, migration findings, previous review comments, or config surface
+  changes.
+- Review methods are skills in `.claude/skills/`. They tell the reviewer how to
+  use evidence, when to stay silent, and how to connect facts to realistic
+  failure paths.
+
+The toolkit should avoid adding prompt-only "smart-sounding" skills unless they
+have concrete evidence behind them or a tightly scoped checklist. The model does
+judgment; tools provide auditable facts.
+
+### Implemented evidence tools
+
+- `pr-impact.ts`: exported-symbol caller and call-shape evidence.
+- `symbol-diff.ts`: exported-symbol signature/member/callee deltas and coarse
+  side-effect risk tags.
+- `build-import-graph.ts`: file-level import topology.
+- `typecheck.ts`: compiler-grounded type safety evidence.
+- `migration-check.ts`: SQL migration safety checks.
+- `trpc-edges.ts`: tRPC route-to-client call-site mapping.
+
+### Generic analyzer roadmap
+
+These are broadly useful across repositories and should be implemented as
+deterministic tools before being promoted heavily in the prompt.
+
+- `review-memory`: fetch prior review comments, unresolved threads, previous AI
+  summaries, and author replies. Output already-raised issues, fixed/rejected
+  issues, and open threads so the reviewer does not duplicate comments across
+  pushes.
+- `test-impact`: map changed source files to likely tests using import graph
+  reverse edges, naming conventions, package boundaries, and existing test
+  imports. Output likely relevant tests and whether test files changed.
+- `public-api-diff`: compare exported package/module APIs against the base ref.
+  Output removed exports, narrowed types, required parameter additions, and
+  public class/interface member changes.
+- `dependency-boundary`: check new imports against configured layer/package
+  boundaries. Output concrete offending import edges, not broad architecture
+  opinions.
+- `cycle-detect`: detect new import cycles introduced by the PR.
+- `config-surface-diff`: summarize changed environment variables, feature flags,
+  workflow permissions, package scripts, dependency versions, exposed ports, and
+  build config. These changes often have large effects but are easy to miss.
+- `security-diff-scan`: diff-only scan for secrets, dangerous sinks, token/cookie
+  handling, auth/logging changes, shell execution, path traversal, and SQL/string
+  construction.
+- `error-handling-diff`: detect newly swallowed errors, empty catches, removed
+  awaits, fire-and-forget promises, broad fallback defaults, and removed logging
+  context.
+- `db-schema-diff`: compare ORM/schema changes to migration SQL so the reviewer
+  can catch missing migrations or generated migrations that include unrelated
+  old deltas.
+
+Recommended generic build order:
+
+1. `review-memory`
+2. `test-impact`
+3. `public-api-diff`
+4. `dependency-boundary` and `cycle-detect`
+5. `config-surface-diff`
+6. `error-handling-diff`
+7. `security-diff-scan`
+
+### High-value review methods
+
+These are review lenses that may use one or more tools underneath. Add them as
+skills only when the instructions are concrete enough to reduce noise.
+
+- `behavior-diff`: summarize semantic behavior changes, not just file changes.
+  Example: "session refresh changed from fail-closed to retry-and-reuse-old-token
+  on network failure."
+- `negative-space-review`: identify files or artifacts that probably should have
+  changed but did not, such as tests, clients, docs, migrations, compatibility
+  shims, or call sites.
+- `missing-case-finder`: look for newly introduced states, enum members, null
+  branches, permission modes, or transport states that lack handling.
+- `concurrency-race-review`: inspect stale async responses, overlapping
+  mutations, cleanup ordering, lost retries, stale closures, and operation
+  ordering bugs.
+- `data-lifecycle-review`: follow creation, mutation, persistence, deletion,
+  migration, and cleanup for important domain objects.
+- `change-intent-checker`: compare PR title/body/linked issue intent to the
+  actual diff and flag accidental scope creep.
+- `risk-calibrated-test-advisor`: suggest tests only when there is a concrete
+  behavior risk, naming the existing test location, input, and expected output.
+
+### Repo-specific review skills
+
+Move important durable repo knowledge out of general instructions and into
+targeted review skills. Likely areas:
 
 - voice/reconnect/recovery review,
 - desktop/electron review,
 - API/backward-compat review,
 - React/HMR/effects review,
+- auth/session/token lifecycle review,
 - and other subsystem-specific invariant checklists.
 
 This keeps the reviewer grounded in the real failure modes of this repository

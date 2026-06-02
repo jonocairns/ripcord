@@ -9,7 +9,7 @@ Output:
   3. One short paragraph describing the impact and the fix.
   4. Optional GitHub suggestion block only when the replacement is local, exact, and safe to apply as written.
 - Do not emit collapsible "Prompt To Fix With AI" sections, generic praise, or long review-policy explanations in inline comments.
-- Summary sections should cite the main materials used (for example which skills ran, which files were the highest-risk reads, and any Sentry issue IDs if relevant).
+- Summary sections should cite the main materials used (for example which skills ran, which analyzer results were consulted, which files were the highest-risk reads, and any Sentry issue IDs if relevant).
 - If the review ran in scoped mode because the PR exceeded the changed-file limit, say so explicitly in the final summary and name the highest-risk areas/files you focused on.
 - Before posting any inline comment, verify:
   1. Is this a real bug or a theoretical edge case? (only post if real)

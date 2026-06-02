@@ -18,6 +18,9 @@ What to leave uncommented (strict):
 Comment quality bar:
 - Only comment on issues that will visibly affect users or cause production incidents.
 - Use the `ts-impact` output to suppress weak comments: a function with 0 callers cannot break callers.
+- Use `symbol-diff` output to identify signature/member changes and added/removed callees, but treat risk tags as triage hints rather than findings.
+- Use `typecheck` output to suppress speculative type/caller compatibility comments when the compiler passes, and to escalate actual PR-scoped compiler failures when it fails.
+- Use `import-graph` output only for concrete topology or boundary concerns; an import edge by itself is not a finding.
 - Use the `sentry-review` prior (if available) to escalate scrutiny on hot files only.
 - Ask: "Would this block a PR in a busy team?" If no, skip it.
 - Default target is 0-3 inline comments. More than 4 should be rare and requires re-checking for duplication or noise.
@@ -50,11 +53,11 @@ Commenting rules (strict):
   * `P2`: `<a href="#"><img alt="P2" src="https://raw.githubusercontent.com/jonocairns/ripcord/main/.github/assets/pr-review-badges/p2.svg" align="top"></a> **Short issue title**`
 - For migration findings, cite the rule name (e.g. `ADD_COLUMN_NOT_NULL_WITHOUT_DEFAULT`) so the author can find it in the skill docs.
 - For auth findings, cite the checklist item number from `auth-review`.
-- Do not comment if you cannot explain why CI/lint/typecheck/tests would not already make the problem obvious.
+- Do not comment if you cannot explain why CI/lint/typecheck/tests would not already make the problem obvious, unless `typecheck` reports a PR-scoped failure and the review is surfacing that concrete compiler error.
 
 Evidence rule:
 - Every claim must point to exact code in the diff or file context.
-- Every finding must also name the source materials used to reason about it: for example a changed file path/line, `ts-impact` callers, `trpc-edges` route callers, `db-migration-safety` rule output, Sentry issue IDs, or prior review context.
+- Every finding must also name the source materials used to reason about it: for example a changed file path/line, `symbol-diff` signature/callee deltas, `ts-impact` callers, `typecheck` errors, `import-graph` importers/importees, `trpc-edges` route callers, `db-migration-safety` rule output, Sentry issue IDs, or prior review context.
 - Prefer auditable references over vague statements: cite the tool or material by name and the specific supporting detail it provided.
 - "Theoretically possible" is insufficient — the issue must be practically likely.
 - Prefer skill-backed findings when a skill applies, but do not suppress a concrete, high-confidence issue merely because no skill surfaced it. Treat missing skill output as lower confidence, not proof of safety.
