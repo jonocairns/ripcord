@@ -34,6 +34,9 @@ type TLeaveVoiceOptions = {
 	suppressErrors?: boolean;
 };
 
+let pendingVoiceSwitchFromChannelId: number | undefined;
+let completedVoiceSwitchFromChannelId: number | undefined;
+
 const clearOwnVoiceChannelState = (): boolean => {
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
@@ -135,6 +138,14 @@ export const removeUserFromVoiceChannel = (
 
 	clearPinnedCardById(`user-${userId}`);
 	clearPinnedCardById(`screen-share-${userId}`);
+
+	if (userId === ownUserId && channelId === pendingVoiceSwitchFromChannelId) {
+		pendingVoiceSwitchFromChannelId = undefined;
+		if (channelId === currentChannelId) {
+			clearOwnVoiceChannelStateAndCleanupProvider();
+		}
+		return;
+	}
 
 	if (userId === ownUserId && channelId === currentChannelId) {
 		if (opts.reconnecting) {
@@ -276,8 +287,10 @@ export const joinVoice = async (
 	}
 
 	if (currentChannelId) {
-		// is already in a voice channel, leave it first
-		await leaveVoiceInternal({ playOwnLeaveSound: false });
+		// Keep the previous session locally until voice.join succeeds or the
+		// server publishes the old-channel eviction. This preserves the old
+		// membership if the target join fails before the server switch point.
+		pendingVoiceSwitchFromChannelId = currentChannelId;
 	}
 
 	const state = useServerStore.getState();
@@ -292,6 +305,15 @@ export const joinVoice = async (
 			});
 
 		setCurrentVoiceChannelId(channelId);
+		if (currentChannelId) {
+			completedVoiceSwitchFromChannelId = currentChannelId;
+		}
+
+		// Play the join sound at the moment the user visibly enters the channel,
+		// decoupled from the media pipeline (transport/mic setup in init). The
+		// sound and the visible "you're in the channel" state should not wait for
+		// WebRTC to finish connecting.
+		playSound(SoundType.OWN_USER_JOINED_VOICE_CHANNEL);
 
 		// Reconcile the voiceMap with the server's authoritative channel state.
 		// setInitialData (called during WS reconnect) takes a snapshot that may be
@@ -308,7 +330,16 @@ export const joinVoice = async (
 			existingProducers,
 		};
 	} catch (error) {
-		setCurrentVoiceChannelId(undefined);
+		if (!currentChannelId) {
+			setCurrentVoiceChannelId(undefined);
+		}
+
+		if (pendingVoiceSwitchFromChannelId === currentChannelId) {
+			pendingVoiceSwitchFromChannelId = undefined;
+		}
+		if (completedVoiceSwitchFromChannelId === currentChannelId) {
+			completedVoiceSwitchFromChannelId = undefined;
+		}
 
 		if (!opts.silent) {
 			toast.error(getTrpcError(error, 'Failed to join voice channel'));
@@ -412,7 +443,21 @@ export const flushVoiceForDesktopQuit = async (): Promise<'skipped' | 'succeeded
 	}
 };
 
-export const handleVoiceSessionReplaced = (): void => {
+export const handleVoiceSessionReplaced = (payload?: { channelId: number }): void => {
+	if (
+		payload?.channelId !== undefined &&
+		(payload.channelId === pendingVoiceSwitchFromChannelId || payload.channelId === completedVoiceSwitchFromChannelId)
+	) {
+		const currentChannelId = currentVoiceChannelIdSelector(useServerStore.getState());
+		if (payload.channelId === pendingVoiceSwitchFromChannelId && currentChannelId !== payload.channelId) {
+			pendingVoiceSwitchFromChannelId = undefined;
+		}
+		if (payload.channelId === completedVoiceSwitchFromChannelId) {
+			completedVoiceSwitchFromChannelId = undefined;
+		}
+		return;
+	}
+
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
 

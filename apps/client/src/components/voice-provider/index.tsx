@@ -19,12 +19,12 @@ import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { clearOwnVoiceSessionAfterReconnectFailure, updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
+import { setVoiceProviderCleanupHandler } from '@/features/server/voice/provider-cleanup';
 import {
 	clearVoiceReconnectRecovery,
 	getValidPendingVoiceReconnect,
 	useVoiceReconnectStore,
 } from '@/features/server/voice/reconnect-coordinator';
-import { setVoiceProviderCleanupHandler } from '@/features/server/voice/provider-cleanup';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import {
 	classifyVoiceReconnectError,
@@ -393,7 +393,6 @@ export type TVoiceProvider = {
 			producerTransportParams?: TTransportParams;
 			consumerTransportParams?: TTransportParams;
 			existingProducers?: TRemoteProducerIds;
-			playJoinSound?: boolean;
 		},
 	) => Promise<void>;
 } & Pick<
@@ -2088,7 +2087,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				producerTransportParams?: TTransportParams;
 				consumerTransportParams?: TTransportParams;
 				existingProducers?: TRemoteProducerIds;
-				playJoinSound?: boolean;
 			},
 		) => {
 			return traceSentrySpan(
@@ -2116,10 +2114,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					try {
 						setLoading(true);
 						setConnectionStatus(ConnectionStatus.CONNECTING);
-
-						if (opts?.playJoinSound !== false) {
-							playSound(SoundType.OWN_USER_JOINED_VOICE_CHANNEL);
-						}
 
 						routerRtpCapabilities.current = incomingRouterRtpCapabilities;
 
@@ -2636,7 +2630,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							producerTransportParams: bootstrap.producerTransportParams,
 							consumerTransportParams: bootstrap.consumerTransportParams,
 							existingProducers: bootstrap.existingProducers,
-							playJoinSound: false,
 						}),
 					);
 

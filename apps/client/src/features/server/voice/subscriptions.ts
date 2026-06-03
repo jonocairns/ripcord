@@ -106,9 +106,9 @@ const subscribeToVoice = () => {
 	});
 
 	const onVoiceSessionReplacedSub = trpc.voice.onSessionReplaced.subscribe(undefined, {
-		onData: () => {
+		onData: (payload) => {
 			const apply = () => {
-				handleVoiceSessionReplaced();
+				handleVoiceSessionReplaced(payload);
 			};
 
 			if (!bufferReconnectSnapshotEvent(apply)) {

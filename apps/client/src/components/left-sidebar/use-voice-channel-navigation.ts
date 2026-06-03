@@ -5,6 +5,8 @@ import { PinnedCardType } from '@/components/channel-view/voice/hooks/use-pin-ca
 import { getPendingStreamKey } from '@/components/voice-provider/hooks/use-pending-streams';
 import { setSelectedChannelId } from '@/features/server/channels/actions';
 import { useCurrentVoiceChannelId, useSelectedChannelId } from '@/features/server/channels/hooks';
+import { currentVoiceChannelIdSelector } from '@/features/server/channels/selectors';
+import { useServerStore } from '@/features/server/slice';
 import { joinVoice, leaveVoiceSilently, setPinnedCard } from '@/features/server/voice/actions';
 import { useVoice } from '@/features/server/voice/hooks';
 
@@ -21,6 +23,10 @@ type TEnsureJoinedVoiceChannelResult =
 	| {
 			joined: true;
 			prefetchedProducers?: TRemoteProducerIds;
+			// Resolves once the media pipeline (transports + mic) is ready, or
+			// `false` if media setup failed and the join was rolled back. Undefined
+			// when already in the channel (media is already established).
+			mediaReady?: Promise<boolean>;
 	  };
 
 const useVoiceChannelNavigation = () => {
@@ -44,22 +50,30 @@ const useVoiceChannelNavigation = () => {
 				return { joined: false };
 			}
 
-			try {
-				await init(joinResult.routerRtpCapabilities, channelId, {
-					producerTransportParams: joinResult.producerTransportParams,
-					consumerTransportParams: joinResult.consumerTransportParams,
-					existingProducers: joinResult.existingProducers,
+			// The user is already visibly in the channel at this point: joinVoice
+			// updated the store and played the join sound. Run the media pipeline
+			// (transports + mic) in the background so the join feels instant
+			// instead of blocking on WebRTC setup. Callers that need media (the
+			// stream stage) await `mediaReady`; on failure the join is rolled back.
+			const mediaReady = init(joinResult.routerRtpCapabilities, channelId, {
+				producerTransportParams: joinResult.producerTransportParams,
+				consumerTransportParams: joinResult.consumerTransportParams,
+				existingProducers: joinResult.existingProducers,
+			})
+				.then(() => true)
+				.catch(async () => {
+					if (currentVoiceChannelIdSelector(useServerStore.getState()) === channelId) {
+						await leaveVoiceSilently();
+						toast.error('Failed to initialize voice connection');
+					}
+					return false;
 				});
 
-				return {
-					joined: true,
-					prefetchedProducers: joinResult.existingProducers,
-				};
-			} catch {
-				await leaveVoiceSilently();
-				toast.error('Failed to initialize voice connection');
-				return { joined: false };
-			}
+			return {
+				joined: true,
+				prefetchedProducers: joinResult.existingProducers,
+				mediaReady,
+			};
 		},
 		[currentVoiceChannelId, init],
 	);
@@ -87,6 +101,13 @@ const useVoiceChannelNavigation = () => {
 			const result = await ensureJoinedVoiceChannel(channelId);
 
 			if (!result.joined) {
+				return false;
+			}
+
+			// Accepting a remote stream consumes over the consumer transport, so
+			// the media pipeline must be up. When we just joined, wait for it (and
+			// bail if media setup failed); when already in-channel it is undefined.
+			if (result.mediaReady && !(await result.mediaReady)) {
 				return false;
 			}
 
