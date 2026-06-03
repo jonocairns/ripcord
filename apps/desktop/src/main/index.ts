@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import {
   app,
   BrowserWindow,
@@ -10,15 +11,28 @@ import {
   session,
   shell,
 } from "electron";
-import fs from "node:fs";
 import path from "path";
 import { resolveDesktopCaptureCapabilities } from "./capture-capabilities";
 import { captureSidecarManager } from "./capture-sidecar-manager";
+import {
+  validateListAppAudioTargetsArgs,
+  validatePrepareScreenShareArgs,
+  validateSetGlobalPushKeybindsArgs,
+  validateSetServerUrlArgs,
+  validateStartAppAudioCaptureArgs,
+  validateStopAppAudioCaptureArgs,
+} from "./ipc-validators";
+import { classifyMainFrameNavigationUrl } from "./navigation-policy";
+import { isPermissionAllowed } from "./permission-policy";
 import {
   getDesktopCapabilities,
   resolvePreparedScreenAudioMode,
 } from "./platform-capabilities";
 import { previewRuntimeConfig } from "./preview-runtime-config";
+import {
+  isTrustedRendererUrl,
+  type TRendererTrustOptions,
+} from "./renderer-trust";
 import {
   consumeScreenShareSelection,
   getSourceById,
@@ -26,24 +40,25 @@ import {
   prepareScreenShareSelection,
 } from "./screen-share";
 import { getServerUrl, setServerUrl } from "./settings-store";
-import { desktopUpdater } from "./updater";
-import { classifyWindowOpenUrl } from "./window-open-policy";
-import { installYoutubeEmbedRefererHandler } from "./youtube-embed-referrer";
 import type {
   TAppAudioPcmFrame,
   TDesktopCapabilities,
-  TDesktopQuitFlushResult,
   TDesktopPushKeybindEvent,
   TDesktopPushKeybindsInput,
+  TDesktopQuitFlushResult,
   TDesktopWindowControlsState,
   TGlobalPushKeybindRegistrationResult,
   TScreenShareSelection,
   TStartAppAudioCaptureInput,
 } from "./types";
+import { desktopUpdater } from "./updater";
+import { classifyWindowOpenUrl } from "./window-open-policy";
+import { installYoutubeEmbedRefererHandler } from "./youtube-embed-referrer";
 
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
+const TRUSTED_RENDERER_URL = app.isPackaged ? undefined : RENDERER_URL;
 const DESKTOP_QUIT_FLUSH_TIMEOUT_MS = 2_000;
-const DESKTOP_DEBUG_IPC_ENABLED = Boolean(RENDERER_URL);
+const DESKTOP_DEBUG_IPC_ENABLED = Boolean(TRUSTED_RENDERER_URL);
 const USES_CUSTOM_TITLEBAR =
   process.platform === "win32" || process.platform === "linux";
 let mainWindow: BrowserWindow | null = null;
@@ -302,8 +317,65 @@ const requestDesktopCapabilitiesRefresh = (
   });
 };
 
+const resolveRendererIndexPath = (): string => {
+  return path.join(__dirname, "..", "..", "renderer-dist", "index.html");
+};
+
+const rendererTrustOptions: TRendererTrustOptions = {
+  packagedIndexPath: resolveRendererIndexPath(),
+  rendererUrl: TRUSTED_RENDERER_URL,
+};
+
+const isTrustedIpcSender = (
+  event: IpcMainInvokeEvent | IpcMainEvent,
+): boolean => {
+  const senderUrl = event.senderFrame?.url;
+
+  if (senderUrl && isTrustedRendererUrl(senderUrl, rendererTrustOptions)) {
+    return true;
+  }
+
+  console.warn("[desktop] Rejected IPC message from untrusted sender", {
+    senderUrl,
+  });
+
+  return false;
+};
+
+const assertTrustedIpcSender = (event: IpcMainInvokeEvent): void => {
+  if (!isTrustedIpcSender(event)) {
+    throw new Error("Rejected IPC message from an untrusted sender frame");
+  }
+};
+
+const handleTrusted = <TArgs extends unknown[], TResult>(
+  channel: string,
+  listener: (event: IpcMainInvokeEvent, ...args: TArgs) => TResult,
+  validateArgs?: (args: unknown[]) => TArgs,
+): void => {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedIpcSender(event);
+    const validatedArgs = validateArgs ? validateArgs(args) : (args as TArgs);
+    return listener(event, ...validatedArgs);
+  });
+};
+
+const onTrusted = <TArgs extends unknown[]>(
+  channel: string,
+  listener: (event: IpcMainEvent, ...args: TArgs) => void,
+): void => {
+  ipcMain.on(channel, (event, ...args) => {
+    if (!isTrustedIpcSender(event)) {
+      return;
+    }
+
+    listener(event, ...(args as TArgs));
+  });
+};
+
 const createMainWindow = () => {
   const icon = resolveAppIconPath();
+  const indexPath = resolveRendererIndexPath();
   let windowCloseFlushCompleted = false;
 
   mainWindow = new BrowserWindow({
@@ -404,6 +476,27 @@ const createMainWindow = () => {
     return { action: "deny" };
   });
 
+  mainWindow.webContents.on("will-frame-navigate", (event) => {
+    if (!event.isMainFrame) {
+      return;
+    }
+
+    const policy = classifyMainFrameNavigationUrl(event.url, {
+      packagedIndexPath: indexPath,
+      rendererUrl: TRUSTED_RENDERER_URL,
+    });
+
+    if (policy.action === "allow") {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (policy.openExternal) {
+      void shell.openExternal(event.url);
+    }
+  });
+
   mainWindow.webContents.on("did-create-window", (childWindow, details) => {
     if (!details.url.startsWith("about:blank")) {
       return;
@@ -413,18 +506,11 @@ const createMainWindow = () => {
     childWindow.setMenuBarVisibility(false);
   });
 
-  if (RENDERER_URL) {
-    void mainWindow.loadURL(RENDERER_URL);
+  if (TRUSTED_RENDERER_URL) {
+    void mainWindow.loadURL(TRUSTED_RENDERER_URL);
     return;
   }
 
-  const indexPath = path.join(
-    __dirname,
-    "..",
-    "..",
-    "renderer-dist",
-    "index.html",
-  );
   void mainWindow.loadFile(indexPath);
 };
 
@@ -479,20 +565,60 @@ const setupDisplayMediaHandler = () => {
   );
 };
 
+const isTrustedPermissionRequester = (
+  requestingUrl: string | undefined | null,
+): boolean => {
+  if (!requestingUrl) {
+    return false;
+  }
+
+  return isTrustedRendererUrl(requestingUrl, rendererTrustOptions);
+};
+
+const setupPermissionHandlers = () => {
+  session.defaultSession.setPermissionRequestHandler(
+    (webContents, permission, callback, details) => {
+      const requestingUrl = details?.requestingUrl ?? webContents?.getURL();
+      const allowed = isPermissionAllowed(permission, {
+        isTrustedRequester: isTrustedPermissionRequester(requestingUrl),
+      });
+
+      if (!allowed) {
+        console.warn("[desktop] Denied permission request", {
+          permission,
+          requestingUrl,
+        });
+      }
+
+      callback(allowed);
+    },
+  );
+
+  session.defaultSession.setPermissionCheckHandler(
+    (_webContents, permission, _requestingOrigin, details) => {
+      return isPermissionAllowed(permission, {
+        isTrustedRequester: isTrustedPermissionRequester(
+          details?.requestingUrl,
+        ),
+      });
+    },
+  );
+};
+
 const setupYoutubeEmbedRefererHandler = () => {
   installYoutubeEmbedRefererHandler(session.defaultSession);
 };
 
 const registerIpcHandlers = () => {
-  ipcMain.handle("desktop:get-server-url", () => {
+  handleTrusted("desktop:get-server-url", () => {
     return getServerUrl();
   });
 
-  ipcMain.handle("desktop:get-window-controls-state", () => {
+  handleTrusted("desktop:get-window-controls-state", () => {
     return getWindowControlsState();
   });
 
-  ipcMain.handle(
+  handleTrusted(
     "desktop:minimize-window",
     (event: IpcMainInvokeEvent): void => {
       const window = BrowserWindow.fromWebContents(event.sender);
@@ -500,7 +626,7 @@ const registerIpcHandlers = () => {
     },
   );
 
-  ipcMain.handle(
+  handleTrusted(
     "desktop:toggle-maximize-window",
     (event: IpcMainInvokeEvent): void => {
       const window = BrowserWindow.fromWebContents(event.sender);
@@ -513,34 +639,36 @@ const registerIpcHandlers = () => {
     },
   );
 
-  ipcMain.handle("desktop:close-window", (event: IpcMainInvokeEvent): void => {
+  handleTrusted("desktop:close-window", (event: IpcMainInvokeEvent): void => {
     const window = BrowserWindow.fromWebContents(event.sender);
     window?.close();
   });
 
-  ipcMain.handle(
+  handleTrusted(
     "desktop:set-server-url",
     (_event: IpcMainInvokeEvent, serverUrl: string) => {
       return setServerUrl(serverUrl);
     },
+    validateSetServerUrlArgs,
   );
 
-  ipcMain.handle("desktop:get-capabilities", () => {
+  handleTrusted("desktop:get-capabilities", () => {
     return refreshDesktopCapabilities();
   });
 
-  ipcMain.handle("desktop:get-system-idle-seconds", () => {
+  handleTrusted("desktop:get-system-idle-seconds", () => {
     return powerMonitor.getSystemIdleTime();
   });
 
-  ipcMain.handle(
+  handleTrusted(
     "desktop:list-app-audio-targets",
     (_event, sourceId?: string) => {
       return captureSidecarManager.listAppAudioTargets(sourceId);
     },
+    validateListAppAudioTargetsArgs,
   );
 
-  ipcMain.handle(
+  handleTrusted(
     "desktop:start-app-audio-capture",
     (_event, input: TStartAppAudioCaptureInput) => {
       return captureSidecarManager.startAppAudioCapture({
@@ -548,23 +676,26 @@ const registerIpcHandlers = () => {
         selfExcludePid: process.pid,
       });
     },
+    validateStartAppAudioCaptureArgs,
   );
 
-  ipcMain.handle(
+  handleTrusted(
     "desktop:stop-app-audio-capture",
     (_event, sessionId?: string) => {
       return captureSidecarManager.stopAppAudioCapture(sessionId);
     },
+    validateStopAppAudioCaptureArgs,
   );
 
-  ipcMain.handle(
+  handleTrusted(
     "desktop:set-global-push-keybinds",
     async (_event, input?: TDesktopPushKeybindsInput) => {
       return await setGlobalPushKeybinds(input);
     },
+    validateSetGlobalPushKeybindsArgs,
   );
 
-  ipcMain.on("desktop:open-app-audio-frame-channel", (event: IpcMainEvent) => {
+  onTrusted("desktop:open-app-audio-frame-channel", (event: IpcMainEvent) => {
     const { port1, port2 } = new MessageChannelMain();
     disposeAppAudioFrameEgressPort();
 
@@ -582,14 +713,14 @@ const registerIpcHandlers = () => {
     ]);
   });
 
-  ipcMain.on(
+  onTrusted(
     "desktop:before-quit-finished",
     (_event: IpcMainEvent, result: TDesktopQuitFlushResult) => {
       completeDesktopQuitFlush(result);
     },
   );
 
-  ipcMain.handle("desktop:debug-request-before-quit-flush", async () => {
+  handleTrusted("desktop:debug-request-before-quit-flush", async () => {
     if (!DESKTOP_DEBUG_IPC_ENABLED) {
       return {
         status: "skipped",
@@ -607,24 +738,24 @@ const registerIpcHandlers = () => {
     return await requestDesktopQuitFlush();
   });
 
-  ipcMain.handle("desktop:ping-sidecar", () => {
+  handleTrusted("desktop:ping-sidecar", () => {
     return captureSidecarManager.getStatus();
   });
 
-  ipcMain.handle("desktop:get-update-status", () => {
+  handleTrusted("desktop:get-update-status", () => {
     return desktopUpdater.getStatus();
   });
 
-  ipcMain.handle("desktop:check-for-updates", async () => {
+  handleTrusted("desktop:check-for-updates", async () => {
     await desktopUpdater.checkForUpdates();
     return desktopUpdater.getStatus();
   });
 
-  ipcMain.handle("desktop:list-share-sources", () => {
+  handleTrusted("desktop:list-share-sources", () => {
     return listShareSources();
   });
 
-  ipcMain.handle(
+  handleTrusted(
     "desktop:prepare-screen-share",
     async (_event: IpcMainInvokeEvent, selection: TScreenShareSelection) => {
       const capabilities = await getEffectiveDesktopCapabilities();
@@ -638,6 +769,7 @@ const registerIpcHandlers = () => {
 
       return resolved;
     },
+    validatePrepareScreenShareArgs,
   );
 };
 
@@ -697,6 +829,7 @@ void app
     });
 
     registerIpcHandlers();
+    setupPermissionHandlers();
     setupDisplayMediaHandler();
     setupYoutubeEmbedRefererHandler();
     createMainWindow();
