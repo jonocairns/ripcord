@@ -9,7 +9,18 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
     target: 'esnext',
-    sourcemap: true
+    sourcemap: true,
+    rollupOptions: {
+      onwarn(warning, defaultHandler) {
+        if (
+          warning.plugin === '@tailwindcss/vite:generate:build' &&
+          warning.message.includes('Sourcemap is likely to be incorrect')
+        ) {
+          return;
+        }
+        defaultHandler(warning);
+      }
+    }
   },
   resolve: {
     alias: {
