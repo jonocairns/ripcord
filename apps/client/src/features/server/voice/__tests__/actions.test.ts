@@ -14,6 +14,7 @@ let flushVoiceForDesktopQuit: typeof import('../actions').flushVoiceForDesktopQu
 let leaveVoice: typeof import('../actions').leaveVoice;
 let joinVoice: typeof import('../actions').joinVoice;
 let handleVoiceSessionReplaced: typeof import('../actions').handleVoiceSessionReplaced;
+let resetVoiceSwitchStateForTests: typeof import('../actions').__resetVoiceSwitchStateForTests;
 const playSound = mock(() => {});
 const runVoiceProviderCleanup = mock(() => {});
 let leaveShouldFail = false;
@@ -140,6 +141,7 @@ describe('voice actions', () => {
 			handleVoiceSessionReplaced,
 			joinVoice,
 			leaveVoice,
+			__resetVoiceSwitchStateForTests: resetVoiceSwitchStateForTests,
 			updateVoiceUserState,
 			flushVoiceForDesktopQuit,
 		} = await import('../actions'));
@@ -152,6 +154,7 @@ describe('voice actions', () => {
 		runVoiceProviderCleanup.mockClear();
 		joinMutate.mockClear();
 		leaveMutate.mockClear();
+		resetVoiceSwitchStateForTests();
 		joinShouldFail = false;
 		leaveShouldFail = false;
 		beforeJoinResolve = undefined;
@@ -311,6 +314,35 @@ describe('voice actions', () => {
 
 		expect(result.kind).toBe('joined');
 		expect(useServerStore.getState().currentVoiceChannelId).toBe(8);
+		expect(runVoiceProviderCleanup).not.toHaveBeenCalled();
+	});
+
+	it('ignores late session-replaced events for multiple rapid channel switches', async () => {
+		setJoinedVoiceChannelState({
+			ownUserId: 42,
+			voiceMap: {
+				7: {
+					users: {
+						42: {
+							micMuted: false,
+							soundMuted: false,
+							webcamEnabled: false,
+							sharingScreen: false,
+						},
+					},
+				},
+			},
+		});
+
+		const firstSwitchResult = await joinVoice(8, { silent: true });
+		const secondSwitchResult = await joinVoice(9, { silent: true });
+
+		handleVoiceSessionReplaced({ channelId: 7 });
+		handleVoiceSessionReplaced({ channelId: 8 });
+
+		expect(firstSwitchResult.kind).toBe('joined');
+		expect(secondSwitchResult.kind).toBe('joined');
+		expect(useServerStore.getState().currentVoiceChannelId).toBe(9);
 		expect(runVoiceProviderCleanup).not.toHaveBeenCalled();
 	});
 
