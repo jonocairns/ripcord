@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  validateDesktopQuitFlushResultArgs,
   validateListAppAudioTargetsArgs,
   validatePrepareScreenShareArgs,
   validateSetGlobalPushKeybindsArgs,
@@ -22,6 +23,10 @@ void describe("validateSetServerUrlArgs", () => {
     assert.deepEqual(validateSetServerUrlArgs(["http://localhost:3000"]), [
       "http://localhost:3000",
     ]);
+    assert.deepEqual(
+      validateSetServerUrlArgs(["  https://chat.example.com  "]),
+      ["https://chat.example.com"],
+    );
   });
 
   void it("rejects non-http(s) protocols", () => {
@@ -41,6 +46,37 @@ void describe("validateSetServerUrlArgs", () => {
     assert.throws(
       () => validateSetServerUrlArgs([`https://x/${"a".repeat(2048)}`]),
       /exceeds/,
+    );
+  });
+});
+
+void describe("validateDesktopQuitFlushResultArgs", () => {
+  void it("accepts valid quit flush results", () => {
+    assert.deepEqual(
+      validateDesktopQuitFlushResultArgs([{ status: "succeeded" }]),
+      [{ status: "succeeded", reason: undefined }],
+    );
+    assert.deepEqual(
+      validateDesktopQuitFlushResultArgs([
+        { status: "skipped", reason: "voice-leave-failed" },
+      ]),
+      [{ status: "skipped", reason: "voice-leave-failed" }],
+    );
+  });
+
+  void it("rejects malformed quit flush results", () => {
+    assert.throws(
+      () => validateDesktopQuitFlushResultArgs([{ status: "done" }]),
+      /status must be succeeded or skipped/,
+    );
+    assert.throws(
+      () =>
+        validateDesktopQuitFlushResultArgs([{ status: "skipped", reason: 1 }]),
+      /reason must be a string/,
+    );
+    assert.throws(
+      () => validateDesktopQuitFlushResultArgs([null]),
+      /must be an object/,
     );
   });
 });

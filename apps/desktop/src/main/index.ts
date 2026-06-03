@@ -15,6 +15,7 @@ import path from "path";
 import { resolveDesktopCaptureCapabilities } from "./capture-capabilities";
 import { captureSidecarManager } from "./capture-sidecar-manager";
 import {
+  validateDesktopQuitFlushResultArgs,
   validateListAppAudioTargetsArgs,
   validatePrepareScreenShareArgs,
   validateSetGlobalPushKeybindsArgs,
@@ -363,13 +364,15 @@ const handleTrusted = <TArgs extends unknown[], TResult>(
 const onTrusted = <TArgs extends unknown[]>(
   channel: string,
   listener: (event: IpcMainEvent, ...args: TArgs) => void,
+  validateArgs?: (args: unknown[]) => TArgs,
 ): void => {
   ipcMain.on(channel, (event, ...args) => {
     if (!isTrustedIpcSender(event)) {
       return;
     }
 
-    listener(event, ...(args as TArgs));
+    const validatedArgs = validateArgs ? validateArgs(args) : (args as TArgs);
+    listener(event, ...validatedArgs);
   });
 };
 
@@ -595,10 +598,10 @@ const setupPermissionHandlers = () => {
   );
 
   session.defaultSession.setPermissionCheckHandler(
-    (_webContents, permission, _requestingOrigin, details) => {
+    (_webContents, permission, requestingOrigin, details) => {
       return isPermissionAllowed(permission, {
         isTrustedRequester: isTrustedPermissionRequester(
-          details?.requestingUrl,
+          details?.requestingUrl ?? requestingOrigin,
         ),
       });
     },
@@ -718,6 +721,7 @@ const registerIpcHandlers = () => {
     (_event: IpcMainEvent, result: TDesktopQuitFlushResult) => {
       completeDesktopQuitFlush(result);
     },
+    validateDesktopQuitFlushResultArgs,
   );
 
   handleTrusted("desktop:debug-request-before-quit-flush", async () => {

@@ -1,4 +1,5 @@
 import type {
+  TDesktopQuitFlushResult,
   TDesktopPushKeybindsInput,
   TScreenAudioMode,
   TScreenShareSelection,
@@ -95,6 +96,8 @@ const validateSetServerUrlArgs = (args: unknown[]): [string] => {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return fail("serverUrl must use http or https");
     }
+
+    return [trimmed];
   }
 
   return [serverUrl];
@@ -181,7 +184,30 @@ const validateSetGlobalPushKeybindsArgs = (
   ];
 };
 
+const validateDesktopQuitFlushResultArgs = (
+  args: unknown[],
+): [TDesktopQuitFlushResult] => {
+  const result = assertRecord(args[0], "result");
+  const status = assertString(result.status, "result.status", MAX_ID_LENGTH);
+
+  if (status !== "succeeded" && status !== "skipped") {
+    return fail("result.status must be succeeded or skipped");
+  }
+
+  return [
+    {
+      status,
+      reason: assertOptionalString(
+        result.reason,
+        "result.reason",
+        MAX_ID_LENGTH,
+      ),
+    },
+  ];
+};
+
 export {
+  validateDesktopQuitFlushResultArgs,
   validateListAppAudioTargetsArgs,
   validatePrepareScreenShareArgs,
   validateSetGlobalPushKeybindsArgs,
