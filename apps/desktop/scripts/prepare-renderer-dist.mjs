@@ -73,54 +73,8 @@ const patchedIndexHtml = withoutFontPreload.replace(
   '$1="./$2"',
 );
 
-// Packaged renderer loads over file:// where response headers are unavailable,
-// so the CSP is delivered as a meta tag. The main value here is the strict
-// script-src (no inline/eval'd script); connect-src stays broad because the
-// server URL is user-configurable. wasm-unsafe-eval + blob: cover the voice
-// filter WebAssembly and audio worklet modules; frame-src covers YouTube
-// embeds; style-src unsafe-inline covers the inline <style> and CSS-in-JS.
-//
-// Shipped as Report-Only for now: dev mode loads the renderer from the Vite
-// server (not this file), so an enforcing policy could only break features in
-// a packaged build that dev never exercises. Report-Only logs violations to
-// the console without blocking. Once a packaged build is smoke-tested (voice,
-// screen share, wasm voice filter, YouTube embeds) with no violations, switch
-// CSP_HEADER to "Content-Security-Policy" to enforce.
-const CSP_HEADER = "Content-Security-Policy-Report-Only";
-const cspDirectives = {
-  "default-src": ["'self'"],
-  "script-src": ["'self'", "'wasm-unsafe-eval'", "blob:"],
-  "style-src": ["'self'", "'unsafe-inline'"],
-  "img-src": ["'self'", "data:", "blob:", "https:"],
-  "font-src": ["'self'", "data:"],
-  "media-src": ["'self'", "blob:", "data:", "https:"],
-  "worker-src": ["'self'", "blob:"],
-  "connect-src": ["'self'", "https:", "wss:", "http:", "ws:", "data:", "blob:"],
-  "frame-src": ["https://www.youtube.com", "https://www.youtube-nocookie.com"],
-  "object-src": ["'none'"],
-  "base-uri": ["'self'"],
-  "form-action": ["'self'"],
-};
-const cspContent = Object.entries(cspDirectives)
-  .map(([directive, sources]) => `${directive} ${sources.join(" ")}`)
-  .join("; ");
-const cspMetaTag = `<meta http-equiv="${CSP_HEADER}" content="${cspContent}" />`;
-
-let withCsp = patchedIndexHtml;
-
-if (!/Content-Security-Policy/i.test(patchedIndexHtml)) {
-  if (!/<head(\s[^>]*)?>/i.test(patchedIndexHtml)) {
-    throw new Error("Could not find <head> to inject CSP meta tag");
-  }
-
-  withCsp = patchedIndexHtml.replace(
-    /<head(\s[^>]*)?>/i,
-    (match) => `${match}\n    ${cspMetaTag}`,
-  );
-}
-
-if (withCsp !== indexHtml) {
-  await fs.writeFile(indexPath, withCsp, "utf8");
+if (patchedIndexHtml !== indexHtml) {
+  await fs.writeFile(indexPath, patchedIndexHtml, "utf8");
 }
 
 // Some Vite-generated URLs are embedded inside JS/CSS chunks (including
