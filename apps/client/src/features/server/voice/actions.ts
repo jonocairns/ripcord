@@ -42,6 +42,7 @@ const resetVoiceSwitchState = (): void => {
 	completedVoiceSwitchFromChannelIds.clear();
 };
 
+/** @knipignore Test-only reset for module-scoped voice switch bookkeeping. */
 export const __resetVoiceSwitchStateForTests = (): void => {
 	resetVoiceSwitchState();
 };

@@ -53,5 +53,6 @@
   ],
   "ignoreDependencies": [],
   "ignoreExportsUsedInFile": true,
+  "tags": ["-knipignore"],
   "exclude": ["enumMembers"]
 }
