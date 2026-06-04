@@ -1,7 +1,7 @@
 import { logVoice } from '@/helpers/browser-logger';
 
 let hasPrewarmedWebRtcEngine = false;
-let hasPrewarmedMicrophone = false;
+let hasAttemptedMicrophonePrewarm = false;
 
 // The first RTCPeerConnection on a fresh renderer spins up Chromium's entire
 // WebRTC engine (~900ms cold). mediasoup's device.load() pays this because it
@@ -57,7 +57,7 @@ const getMicrophonePermissionState = async (): Promise<PermissionState | undefin
 // Warm the heavy one-time WebRTC + audio-capture initializations so the first
 // voice join is fast instead of paying ~1s of cold-start. Runs once per page session.
 const prewarmVoiceEngines = (opts: { warmMicrophoneIfGranted?: boolean } = {}): void => {
-	if (hasPrewarmedWebRtcEngine && (!opts.warmMicrophoneIfGranted || hasPrewarmedMicrophone)) {
+	if (hasPrewarmedWebRtcEngine && (!opts.warmMicrophoneIfGranted || hasAttemptedMicrophonePrewarm)) {
 		return;
 	}
 
@@ -70,14 +70,14 @@ const prewarmVoiceEngines = (opts: { warmMicrophoneIfGranted?: boolean } = {}): 
 			tasks.push(warmWebRtcEngine());
 		}
 
-		if (opts.warmMicrophoneIfGranted && !hasPrewarmedMicrophone) {
+		if (opts.warmMicrophoneIfGranted && !hasAttemptedMicrophonePrewarm) {
+			hasAttemptedMicrophonePrewarm = true;
 			tasks.push(
 				(async () => {
 					if ((await getMicrophonePermissionState()) !== 'granted') {
 						return;
 					}
 
-					hasPrewarmedMicrophone = true;
 					await warmMicrophone();
 				})(),
 			);
