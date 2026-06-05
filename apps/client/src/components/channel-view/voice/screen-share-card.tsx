@@ -8,6 +8,7 @@ import { useScreenShareWatcherCount } from '@/features/server/voice/hooks';
 import { useWindowFocus } from '@/hooks/use-window-focus';
 import { cn } from '@/lib/utils';
 import { CardControls } from './card-controls';
+import { useFullscreenIdleControls } from './hooks/use-fullscreen-idle-controls';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { useStreamStats } from './hooks/use-stream-stats';
 import { useVoiceRefs } from './hooks/use-voice-refs';
@@ -31,6 +32,7 @@ type tScreenShareControlsProps = {
 	isFullscreen: boolean;
 	isPoppedOut: boolean;
 	canStopWatching: boolean;
+	controlsVisible?: boolean;
 	onStopWatching?: () => void;
 };
 
@@ -49,10 +51,11 @@ const ScreenShareControls = memo(
 		isFullscreen,
 		isPoppedOut,
 		canStopWatching,
+		controlsVisible,
 		onStopWatching,
 	}: tScreenShareControlsProps) => {
 		return (
-			<CardControls>
+			<CardControls visible={controlsVisible}>
 				{canStopWatching && onStopWatching && (
 					<IconButton variant="ghost" icon={EyeOff} onClick={onStopWatching} title="Stop Watching" size="default" />
 				)}
@@ -153,6 +156,9 @@ const ScreenShareCard = memo(
 		} = useScreenShareZoom();
 		const hidePopoutWindowControlsTimeoutRef = useRef<number | null>(null);
 		const popoutWindowName = useMemo(() => `screen-share-${userId}`, [userId]);
+		const { controlsVisible: fullscreenControlsVisible, trackPointerActivity } = useFullscreenIdleControls({
+			isFullscreen,
+		});
 
 		const handlePinToggle = useCallback(() => {
 			if (isPinned) {
@@ -231,6 +237,11 @@ const ScreenShareCard = memo(
 		const handleMuteToggle = useCallback(() => {
 			toggleMute(volumeKey);
 		}, [toggleMute, volumeKey]);
+
+		const handleInAppMouseMove = useMemo(
+			() => trackPointerActivity(handleMouseMove),
+			[handleMouseMove, trackPointerActivity],
+		);
 
 		const handlePopoutVolumeChange = useCallback(
 			(e: ChangeEvent<HTMLInputElement>) => {
@@ -413,7 +424,7 @@ const ScreenShareCard = memo(
 					)}
 					onWheel={isPoppedOut ? undefined : handleWheel}
 					onMouseDown={isPoppedOut ? undefined : handleMouseDown}
-					onMouseMove={isPoppedOut ? undefined : handleMouseMove}
+					onMouseMove={isPoppedOut ? undefined : handleInAppMouseMove}
 					onMouseUp={isPoppedOut ? undefined : handleMouseUp}
 					onMouseLeave={isPoppedOut ? undefined : handleMouseUp}
 					style={{
@@ -435,6 +446,7 @@ const ScreenShareCard = memo(
 						isFullscreen={isFullscreen}
 						isPoppedOut={isPoppedOut}
 						canStopWatching={!isOwnUser}
+						controlsVisible={fullscreenControlsVisible}
 						onStopWatching={onStopWatching}
 					/>
 
