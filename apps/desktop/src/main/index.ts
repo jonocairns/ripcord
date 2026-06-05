@@ -19,6 +19,7 @@ import {
   resolvePreparedScreenAudioMode,
 } from "./platform-capabilities";
 import { previewRuntimeConfig } from "./preview-runtime-config";
+import { installPackagedRendererCspReportOnlyHandler } from "./renderer-csp";
 import {
   consumeScreenShareSelection,
   getSourceById,
@@ -483,6 +484,18 @@ const setupYoutubeEmbedRefererHandler = () => {
   installYoutubeEmbedRefererHandler(session.defaultSession);
 };
 
+const setupPackagedRendererCspHandler = () => {
+  if (RENDERER_URL) {
+    return;
+  }
+
+  const rendererDistPath = path.join(__dirname, "..", "..", "renderer-dist");
+  installPackagedRendererCspReportOnlyHandler(
+    session.defaultSession,
+    rendererDistPath,
+  );
+};
+
 const registerIpcHandlers = () => {
   ipcMain.handle("desktop:get-server-url", () => {
     return getServerUrl();
@@ -699,6 +712,7 @@ void app
     registerIpcHandlers();
     setupDisplayMediaHandler();
     setupYoutubeEmbedRefererHandler();
+    setupPackagedRendererCspHandler();
     createMainWindow();
     requestDesktopCapabilitiesRefresh({
       broadcast: true,
