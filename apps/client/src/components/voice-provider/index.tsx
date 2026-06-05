@@ -37,7 +37,7 @@ import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { isPowerEfficientWebrtcEncode } from '@/helpers/media-encode-capabilities';
 import { getTrpcErrorData, isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
-import { getDesktopBridge } from '@/runtime/desktop-bridge';
+import { getDesktopBridge, isDesktopRuntime } from '@/runtime/desktop-bridge';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import {
 	ScreenAudioMode,
@@ -60,6 +60,7 @@ import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
 import { createMicAudioProcessingPipeline, type TMicAudioProcessingPipeline } from './mic-audio-processing';
+import { prewarmVoiceEngines } from './prewarm';
 import {
 	clearHeldPushMicState,
 	resolveHeldPushMicTarget,
@@ -2162,6 +2163,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			setVoiceProviderCleanupHandler(undefined);
 		};
 	}, [cleanup]);
+
+	useEffect(() => {
+		// Desktop only: warm the WebRTC engine + audio-capture subsystem once so
+		// the first voice join isn't ~1s of cold-start. The microphone is only
+		// touched when permission is already granted, so startup never triggers a
+		// permission prompt or first-run mic indicator.
+		if (isDesktopRuntime()) {
+			prewarmVoiceEngines({ warmMicrophoneIfGranted: true });
+		}
+	}, []);
 
 	const init = useCallback(
 		async (
