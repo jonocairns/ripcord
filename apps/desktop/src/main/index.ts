@@ -371,8 +371,15 @@ const onTrusted = <TArgs extends unknown[]>(
       return;
     }
 
-    const validatedArgs = validateArgs ? validateArgs(args) : (args as TArgs);
-    listener(event, ...validatedArgs);
+    try {
+      const validatedArgs = validateArgs ? validateArgs(args) : (args as TArgs);
+      listener(event, ...validatedArgs);
+    } catch (error) {
+      console.warn("[desktop] Rejected IPC message with invalid payload", {
+        channel,
+        error,
+      });
+    }
   });
 };
 
