@@ -12,10 +12,29 @@ let updateVoiceUserState: typeof import('../actions').updateVoiceUserState;
 let clearOwnVoiceSessionAfterReconnectFailure: typeof import('../actions').clearOwnVoiceSessionAfterReconnectFailure;
 let flushVoiceForDesktopQuit: typeof import('../actions').flushVoiceForDesktopQuit;
 let leaveVoice: typeof import('../actions').leaveVoice;
+let joinVoice: typeof import('../actions').joinVoice;
 let handleVoiceSessionReplaced: typeof import('../actions').handleVoiceSessionReplaced;
+let resetVoiceSwitchStateForTests: typeof import('../actions').__resetVoiceSwitchStateForTests;
 const playSound = mock(() => {});
 const runVoiceProviderCleanup = mock(() => {});
 let leaveShouldFail = false;
+let joinShouldFail = false;
+let beforeJoinResolve: (() => void) | undefined;
+const joinMutate = mock(async () => {
+	if (joinShouldFail) {
+		throw new Error('join failed');
+	}
+
+	beforeJoinResolve?.();
+
+	return {
+		routerRtpCapabilities: {},
+		producerTransportParams: undefined,
+		consumerTransportParams: undefined,
+		existingProducers: undefined,
+		channelUsers: [],
+	};
+});
 const leaveMutate = mock(async () => {
 	if (leaveShouldFail) {
 		throw new Error('leave failed');
@@ -101,6 +120,9 @@ describe('voice actions', () => {
 		mock.module('@/lib/trpc', () => ({
 			getTRPCClient: () => ({
 				voice: {
+					join: {
+						mutate: joinMutate,
+					},
 					leave: {
 						mutate: leaveMutate,
 					},
@@ -117,7 +139,9 @@ describe('voice actions', () => {
 			removeUserFromVoiceChannel,
 			handleStreamWatcherActivity,
 			handleVoiceSessionReplaced,
+			joinVoice,
 			leaveVoice,
+			__resetVoiceSwitchStateForTests: resetVoiceSwitchStateForTests,
 			updateVoiceUserState,
 			flushVoiceForDesktopQuit,
 		} = await import('../actions'));
@@ -128,8 +152,12 @@ describe('voice actions', () => {
 		useVoiceReconnectStore.getState().resetState();
 		playSound.mockClear();
 		runVoiceProviderCleanup.mockClear();
+		joinMutate.mockClear();
 		leaveMutate.mockClear();
+		resetVoiceSwitchStateForTests();
+		joinShouldFail = false;
 		leaveShouldFail = false;
+		beforeJoinResolve = undefined;
 	});
 
 	it('clears own active voice state when the server removes the current user from voice', () => {
@@ -204,6 +232,117 @@ describe('voice actions', () => {
 		removeUserFromVoiceChannel(42, 7, { reconnecting: true });
 
 		expect(playSound).not.toHaveBeenCalledWith(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+		expect(runVoiceProviderCleanup).not.toHaveBeenCalled();
+	});
+
+	it('keeps the current voice session when switching channels fails before server eviction', async () => {
+		setJoinedVoiceChannelState({
+			ownUserId: 42,
+			voiceMap: {
+				7: {
+					users: {
+						42: {
+							micMuted: false,
+							soundMuted: false,
+							webcamEnabled: false,
+							sharingScreen: false,
+						},
+					},
+				},
+			},
+		});
+		joinShouldFail = true;
+
+		const result = await joinVoice(8, { silent: true });
+
+		expect(result.kind).toBe('retryable-failure');
+		expect(useServerStore.getState().currentVoiceChannelId).toBe(7);
+		expect(useServerStore.getState().voiceMap[7]?.users[42]).toBeDefined();
+		expect(leaveMutate).not.toHaveBeenCalled();
+		expect(runVoiceProviderCleanup).not.toHaveBeenCalled();
+	});
+
+	it('treats old-channel own leave during a voice switch as server eviction bookkeeping', async () => {
+		setJoinedVoiceChannelState({
+			ownUserId: 42,
+			voiceMap: {
+				7: {
+					users: {
+						42: {
+							micMuted: false,
+							soundMuted: false,
+							webcamEnabled: false,
+							sharingScreen: false,
+						},
+					},
+				},
+			},
+		});
+		beforeJoinResolve = () => {
+			removeUserFromVoiceChannel(42, 7);
+		};
+
+		const result = await joinVoice(8, { silent: true });
+
+		expect(result.kind).toBe('joined');
+		expect(useServerStore.getState().currentVoiceChannelId).toBe(8);
+		expect(playSound).not.toHaveBeenCalledWith(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+		expect(playSound).toHaveBeenCalledWith(SoundType.OWN_USER_JOINED_VOICE_CHANNEL);
+		expect(leaveMutate).not.toHaveBeenCalled();
+		expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
+	});
+
+	it('ignores late session-replaced events for the old channel after a successful switch', async () => {
+		setJoinedVoiceChannelState({
+			ownUserId: 42,
+			voiceMap: {
+				7: {
+					users: {
+						42: {
+							micMuted: false,
+							soundMuted: false,
+							webcamEnabled: false,
+							sharingScreen: false,
+						},
+					},
+				},
+			},
+		});
+
+		const result = await joinVoice(8, { silent: true });
+		handleVoiceSessionReplaced({ channelId: 7 });
+
+		expect(result.kind).toBe('joined');
+		expect(useServerStore.getState().currentVoiceChannelId).toBe(8);
+		expect(runVoiceProviderCleanup).not.toHaveBeenCalled();
+	});
+
+	it('ignores late session-replaced events for multiple rapid channel switches', async () => {
+		setJoinedVoiceChannelState({
+			ownUserId: 42,
+			voiceMap: {
+				7: {
+					users: {
+						42: {
+							micMuted: false,
+							soundMuted: false,
+							webcamEnabled: false,
+							sharingScreen: false,
+						},
+					},
+				},
+			},
+		});
+
+		const firstSwitchResult = await joinVoice(8, { silent: true });
+		const secondSwitchResult = await joinVoice(9, { silent: true });
+
+		handleVoiceSessionReplaced({ channelId: 7 });
+		handleVoiceSessionReplaced({ channelId: 8 });
+
+		expect(firstSwitchResult.kind).toBe('joined');
+		expect(secondSwitchResult.kind).toBe('joined');
+		expect(useServerStore.getState().currentVoiceChannelId).toBe(9);
 		expect(runVoiceProviderCleanup).not.toHaveBeenCalled();
 	});
 

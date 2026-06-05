@@ -34,6 +34,19 @@ type TLeaveVoiceOptions = {
 	suppressErrors?: boolean;
 };
 
+const pendingVoiceSwitchFromChannelIds: Set<number> = new Set();
+const completedVoiceSwitchFromChannelIds: Set<number> = new Set();
+
+const resetVoiceSwitchState = (): void => {
+	pendingVoiceSwitchFromChannelIds.clear();
+	completedVoiceSwitchFromChannelIds.clear();
+};
+
+/** @knipignore Test-only reset for module-scoped voice switch bookkeeping. */
+export const __resetVoiceSwitchStateForTests = (): void => {
+	resetVoiceSwitchState();
+};
+
 const clearOwnVoiceChannelState = (): boolean => {
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
@@ -60,6 +73,7 @@ const clearOwnVoiceChannelState = (): boolean => {
 
 const clearOwnVoiceChannelStateAndCleanupProvider = (): void => {
 	if (clearOwnVoiceChannelState()) {
+		resetVoiceSwitchState();
 		runVoiceProviderCleanup();
 	}
 };
@@ -67,6 +81,7 @@ const clearOwnVoiceChannelStateAndCleanupProvider = (): void => {
 const clearOwnVoiceSessionAfterReconnectFailure = (reason: TClearReason): void => {
 	clearVoiceReconnectRecovery(reason);
 	clearOwnVoiceChannelState();
+	resetVoiceSwitchState();
 	runVoiceProviderCleanup();
 };
 
@@ -135,6 +150,14 @@ export const removeUserFromVoiceChannel = (
 
 	clearPinnedCardById(`user-${userId}`);
 	clearPinnedCardById(`screen-share-${userId}`);
+
+	if (userId === ownUserId && pendingVoiceSwitchFromChannelIds.has(channelId)) {
+		pendingVoiceSwitchFromChannelIds.delete(channelId);
+		if (channelId === currentChannelId) {
+			clearOwnVoiceChannelStateAndCleanupProvider();
+		}
+		return;
+	}
 
 	if (userId === ownUserId && channelId === currentChannelId) {
 		if (opts.reconnecting) {
@@ -270,14 +293,19 @@ export const joinVoice = async (
 	const initialState = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(initialState);
 
+	pendingVoiceSwitchFromChannelIds.delete(channelId);
+	completedVoiceSwitchFromChannelIds.delete(channelId);
+
 	if (channelId === currentChannelId) {
 		// already in the desired channel
 		return { kind: 'already-joined' };
 	}
 
 	if (currentChannelId) {
-		// is already in a voice channel, leave it first
-		await leaveVoiceInternal({ playOwnLeaveSound: false });
+		// Keep the previous session locally until voice.join succeeds or the
+		// server publishes the old-channel eviction. This preserves the old
+		// membership if the target join fails before the server switch point.
+		pendingVoiceSwitchFromChannelIds.add(currentChannelId);
 	}
 
 	const state = useServerStore.getState();
@@ -292,6 +320,16 @@ export const joinVoice = async (
 			});
 
 		setCurrentVoiceChannelId(channelId);
+		if (currentChannelId) {
+			pendingVoiceSwitchFromChannelIds.delete(currentChannelId);
+			completedVoiceSwitchFromChannelIds.add(currentChannelId);
+		}
+
+		// Play the join sound at the moment the user visibly enters the channel,
+		// decoupled from the media pipeline (transport/mic setup in init). The
+		// sound and the visible "you're in the channel" state should not wait for
+		// WebRTC to finish connecting.
+		playSound(SoundType.OWN_USER_JOINED_VOICE_CHANNEL);
 
 		// Reconcile the voiceMap with the server's authoritative channel state.
 		// setInitialData (called during WS reconnect) takes a snapshot that may be
@@ -308,7 +346,14 @@ export const joinVoice = async (
 			existingProducers,
 		};
 	} catch (error) {
-		setCurrentVoiceChannelId(undefined);
+		if (!currentChannelId) {
+			setCurrentVoiceChannelId(undefined);
+		}
+
+		if (currentChannelId) {
+			pendingVoiceSwitchFromChannelIds.delete(currentChannelId);
+			completedVoiceSwitchFromChannelIds.delete(currentChannelId);
+		}
 
 		if (!opts.silent) {
 			toast.error(getTrpcError(error, 'Failed to join voice channel'));
@@ -412,7 +457,22 @@ export const flushVoiceForDesktopQuit = async (): Promise<'skipped' | 'succeeded
 	}
 };
 
-export const handleVoiceSessionReplaced = (): void => {
+export const handleVoiceSessionReplaced = (payload?: { channelId: number }): void => {
+	if (
+		payload?.channelId !== undefined &&
+		(pendingVoiceSwitchFromChannelIds.has(payload.channelId) ||
+			completedVoiceSwitchFromChannelIds.has(payload.channelId))
+	) {
+		const currentChannelId = currentVoiceChannelIdSelector(useServerStore.getState());
+		if (pendingVoiceSwitchFromChannelIds.has(payload.channelId) && currentChannelId !== payload.channelId) {
+			pendingVoiceSwitchFromChannelIds.delete(payload.channelId);
+		}
+		if (completedVoiceSwitchFromChannelIds.has(payload.channelId)) {
+			completedVoiceSwitchFromChannelIds.delete(payload.channelId);
+		}
+		return;
+	}
+
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
 
@@ -421,6 +481,7 @@ export const handleVoiceSessionReplaced = (): void => {
 	}
 
 	clearVoiceReconnectRecovery('session-replaced');
+	resetVoiceSwitchState();
 	clearOwnVoiceChannelStateAndCleanupProvider();
 };
 
