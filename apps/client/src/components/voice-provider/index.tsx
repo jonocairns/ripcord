@@ -133,10 +133,15 @@ enum ConnectionStatus {
 
 const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
 	[VideoCodecPreference.VP8]: 'video/VP8',
+	[VideoCodecPreference.VP9]: 'video/VP9',
 	[VideoCodecPreference.H264]: 'video/H264',
 	[VideoCodecPreference.AV1]: 'video/AV1',
 };
 const DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS = 96_000;
+// Desktop/game audio is music-grade, full-band content (not voice), so it gets
+// stereo, high-bitrate opus with FEC on and DTX off — DTX gates "silence" and
+// audibly clips sustained music.
+const SCREEN_SHARE_AUDIO_TARGET_BITRATE_BPS = 256_000;
 
 type ResolvedMicProcessingConfig = {
 	wasmNoiseSuppressionEnabled: boolean;
@@ -191,7 +196,9 @@ type TScreenShareEncodeParams = {
 // - Explicit AV1: only honour it when a hardware encoder is available for this
 //   resolution/framerate/bitrate; otherwise fall back to H264 to avoid a
 //   software-encoded slideshow at high resolutions.
-// - Explicit VP8/H264: use as chosen.
+// - Explicit VP9/VP8/H264: use as chosen. VP9 intentionally skips the
+//   hardware-acceleration guard the AV1 branch applies — it's opt-in and the
+//   caller knowingly accepts the (often software-encoded) CPU trade-off.
 const resolveScreenShareVideoCodec = async (
 	rtpCapabilities: RtpCapabilities | null,
 	preference: VideoCodecPreference,
@@ -237,6 +244,43 @@ const resolveScreenShareVideoCodec = async (
 	}
 
 	return resolvePreferredVideoCodec(rtpCapabilities, preference);
+};
+
+// Screen and webcam captures are both motion content, so their sender
+// `contentHint` is 'motion'. That alone would default degradationPreference to
+// 'maintain-framerate' (drop resolution to hold fps). We override it to
+// 'balanced' so the encoder can trade a little of both under bitrate/CPU
+// pressure instead of collapsing frame rate the way 'detail' +
+// 'maintain-resolution' did on high-motion captures.
+const VIDEO_DEGRADATION_PREFERENCE: RTCDegradationPreference = 'balanced';
+
+const applyVideoDegradationPreference = async (
+	sender: RTCRtpSender | undefined,
+	label: string,
+): Promise<void> => {
+	if (!sender) {
+		logVoice('RTCRtpSender unavailable, skipping degradationPreference override', { label });
+		return;
+	}
+
+	try {
+		// setParameters must be passed the object from the immediately preceding
+		// getParameters — they're coupled by its transactionId. Keep this read /
+		// modify / write atomic: any other setParameters landing on this sender
+		// in between would invalidate the transactionId and reject with
+		// InvalidStateError. A future concurrent path (e.g. simulcast layer
+		// toggling) must serialise against this, not interleave.
+		const params = sender.getParameters();
+
+		if (params.degradationPreference === VIDEO_DEGRADATION_PREFERENCE) {
+			return;
+		}
+
+		params.degradationPreference = VIDEO_DEGRADATION_PREFERENCE;
+		await sender.setParameters(params);
+	} catch (error) {
+		logVoice('Failed to set degradationPreference', { label, error });
+	}
 };
 
 const resolveMicProcessingConfig = (devices: TDeviceSettings): ResolvedMicProcessingConfig => {
@@ -1234,6 +1278,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			logVoice('Obtained video track', { videoTrack: track });
 
+			track.contentHint = 'motion';
+
 			const preferredVideoCodec = resolvePreferredVideoCodec(sendRtpCapabilities.current, devices.videoCodec);
 
 			if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
@@ -1263,6 +1309,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			if (!videoProducer) {
 				throw new Error('Failed to create webcam producer');
 			}
+
+			await applyVideoDegradationPreference(videoProducer.rtpSender, 'webcam');
 
 			localVideoProducer.current = videoProducer;
 
@@ -1325,7 +1373,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			logVoice('Obtained video track', { videoTrack: track });
 
-			track.contentHint = 'detail';
+			track.contentHint = 'motion';
 
 			const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
 			const screenTrackSettings = track.getSettings();
@@ -1364,6 +1412,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			if (!screenShareProducer) {
 				throw new Error('Failed to create screen share producer');
 			}
+
+			await applyVideoDegradationPreference(screenShareProducer.rtpSender, 'screen share');
 
 			localScreenShareProducer.current = screenShareProducer;
 
@@ -1417,6 +1467,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			const screenAudioProducer = await producerTransport.current?.produce({
 				track,
+				codecOptions: {
+					opusStereo: true,
+					opusFec: true,
+					opusDtx: false,
+					opusMaxAverageBitrate: SCREEN_SHARE_AUDIO_TARGET_BITRATE_BPS,
+				},
 				appData: { kind: StreamKind.SCREEN_AUDIO },
 			});
 

@@ -571,6 +571,7 @@ const Devices = memo(() => {
 									<SelectGroup>
 										<SelectItem value={VideoCodecPreference.AUTO}>Auto</SelectItem>
 										<SelectItem value={VideoCodecPreference.VP8}>VP8</SelectItem>
+										<SelectItem value={VideoCodecPreference.VP9}>VP9</SelectItem>
 										<SelectItem value={VideoCodecPreference.H264}>H264</SelectItem>
 										<SelectItem value={VideoCodecPreference.AV1}>AV1 (experimental)</SelectItem>
 									</SelectGroup>
