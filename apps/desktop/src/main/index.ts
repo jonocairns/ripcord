@@ -797,6 +797,29 @@ const registerIpcHandlers = () => {
   );
 };
 
+// Surface whether Chromium is using hardware (NVENC/VAAPI/etc.) video encode.
+// mediaCapabilities.encodingInfo({type:'webrtc'}) in the renderer reports
+// powerEfficient:false for every codec when hardware encode is disabled, which
+// silently pushes screen share onto software encoders. getGPUFeatureStatus is
+// the authoritative source: video_encode === 'enabled' means hardware encode is
+// available.
+const logGpuEncodeDiagnostics = () => {
+  try {
+    console.info("[desktop] GPU feature status", app.getGPUFeatureStatus());
+  } catch (error) {
+    console.warn("[desktop] Failed to read GPU feature status", error);
+  }
+
+  void app
+    .getGPUInfo("basic")
+    .then((info) => {
+      console.info("[desktop] GPU info", info);
+    })
+    .catch((error) => {
+      console.warn("[desktop] Failed to read GPU info", error);
+    });
+};
+
 void app
   .whenReady()
   .then(() => {
@@ -857,6 +880,7 @@ void app
     setupDisplayMediaHandler();
     setupYoutubeEmbedRefererHandler();
     setupPackagedRendererCspHandler();
+    logGpuEncodeDiagnostics();
     createMainWindow();
     requestDesktopCapabilitiesRefresh({
       broadcast: true,

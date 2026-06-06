@@ -19,6 +19,10 @@ const formatResolution = (width: number | null, height: number | null): string =
 	return width === null || height === null ? 'unknown' : `${width}x${height}`;
 };
 
+const formatCodec = (codec: string | null): string => {
+	return codec ?? 'unknown';
+};
+
 const formatOptionalCount = (value: number | null): string => {
 	return value === null ? 'N/A' : value.toString();
 };
@@ -109,7 +113,8 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 									<div key={video.id} className="space-y-0.5">
 										<div className="font-medium text-foreground/80">Stream {index + 1}</div>
 										<div>
-											{formatResolution(video.width, video.height)} · {formatFps(video.framesPerSecond)}
+											{formatCodec(video.codec)} · {formatResolution(video.width, video.height)} ·{' '}
+											{formatFps(video.framesPerSecond)}
 										</div>
 										<div>Dropped: {formatOptionalCount(video.framesDropped)}</div>
 										<div>Limit: {video.qualityLimitationReason ?? 'none'}</div>
@@ -129,7 +134,8 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 									<div key={video.id} className="space-y-0.5">
 										<div className="font-medium text-foreground/80">Stream {index + 1}</div>
 										<div>
-											{formatResolution(video.width, video.height)} · {formatFps(video.framesPerSecond)}
+											{formatCodec(video.codec)} · {formatResolution(video.width, video.height)} ·{' '}
+											{formatFps(video.framesPerSecond)}
 										</div>
 										<div>Dropped: {video.framesDropped}</div>
 										<div>Packets lost: {video.packetsLost}</div>
