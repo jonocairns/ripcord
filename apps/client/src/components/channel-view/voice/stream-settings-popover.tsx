@@ -1,4 +1,4 @@
-import { Settings, Volume2, VolumeX } from 'lucide-react';
+import { Settings, Volume1, VolumeX } from 'lucide-react';
 import { memo } from 'react';
 import { IconButton } from '@/components/ui/icon-button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -27,7 +27,7 @@ const StreamSettingsPopover = memo(
 						<div className="flex items-center gap-2">
 							<IconButton
 								variant="ghost"
-								icon={isMuted ? VolumeX : Volume2}
+								icon={isMuted ? VolumeX : Volume1}
 								onClick={onMuteToggle}
 								title={isMuted ? 'Unmute' : 'Mute'}
 								size="sm"
