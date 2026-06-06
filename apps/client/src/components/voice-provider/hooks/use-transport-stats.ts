@@ -17,6 +17,7 @@ export type TransportStats = {
 
 export type VideoSenderStats = {
 	id: string;
+	codec: string | null;
 	width: number | null;
 	height: number | null;
 	framesPerSecond: number | null;
@@ -33,6 +34,7 @@ export type VideoSenderStats = {
 
 export type VideoReceiverStats = {
 	id: string;
+	codec: string | null;
 	width: number | null;
 	height: number | null;
 	framesPerSecond: number | null;
@@ -56,6 +58,19 @@ export type TransportStatsData = {
 };
 
 const SMOOTHING_WINDOW = 5; // Number of samples for moving average
+
+// 'video/AV1' -> 'AV1'. Surfaces the codec actually negotiated on the wire,
+// which can differ from the user's selection (e.g. AV1 silently falling back to
+// H264 when no hardware encoder is available).
+const shortCodecName = (mimeType: string | undefined): string | null => {
+	if (!mimeType) {
+		return null;
+	}
+
+	const slashIndex = mimeType.indexOf('/');
+
+	return slashIndex === -1 ? mimeType : mimeType.slice(slashIndex + 1);
+};
 
 const useTransportStats = () => {
 	const [stats, setStats] = useState<TransportStatsData>({
@@ -96,6 +111,20 @@ const useTransportStats = () => {
 		const outboundVideo: VideoSenderStats[] = [];
 		const inboundVideo: VideoReceiverStats[] = [];
 
+		// Codec stats are separate entries referenced by codecId on the rtp stats,
+		// and may appear in any order, so resolve them up front.
+		const codecById = new Map<string, string>();
+
+		for (const stat of statsReport.values()) {
+			if (stat.type === 'codec' && typeof stat.mimeType === 'string') {
+				codecById.set(stat.id, stat.mimeType);
+			}
+		}
+
+		const resolveCodec = (codecId: string | undefined): string | null => {
+			return shortCodecName(codecId ? codecById.get(codecId) : undefined);
+		};
+
 		for (const stat of statsReport.values()) {
 			if (stat.type === 'outbound-rtp' && isProducer) {
 				bytesSent += stat.bytesSent || 0;
@@ -104,6 +133,7 @@ const useTransportStats = () => {
 				if (stat.kind === 'video') {
 					outboundVideo.push({
 						id: stat.id,
+						codec: resolveCodec(stat.codecId),
 						width: stat.frameWidth ?? null,
 						height: stat.frameHeight ?? null,
 						framesPerSecond: stat.framesPerSecond ?? null,
@@ -134,6 +164,7 @@ const useTransportStats = () => {
 				if (stat.kind === 'video') {
 					inboundVideo.push({
 						id: stat.id,
+						codec: resolveCodec(stat.codecId),
 						width: stat.frameWidth ?? null,
 						height: stat.frameHeight ?? null,
 						framesPerSecond: stat.framesPerSecond ?? null,
