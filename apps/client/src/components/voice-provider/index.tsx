@@ -196,7 +196,9 @@ type TScreenShareEncodeParams = {
 // - Explicit AV1: only honour it when a hardware encoder is available for this
 //   resolution/framerate/bitrate; otherwise fall back to H264 to avoid a
 //   software-encoded slideshow at high resolutions.
-// - Explicit VP8/H264: use as chosen.
+// - Explicit VP9/VP8/H264: use as chosen. VP9 intentionally skips the
+//   hardware-acceleration guard the AV1 branch applies — it's opt-in and the
+//   caller knowingly accepts the (often software-encoded) CPU trade-off.
 const resolveScreenShareVideoCodec = async (
 	rtpCapabilities: RtpCapabilities | null,
 	preference: VideoCodecPreference,
@@ -262,6 +264,12 @@ const applyVideoDegradationPreference = async (
 	}
 
 	try {
+		// setParameters must be passed the object from the immediately preceding
+		// getParameters — they're coupled by its transactionId. Keep this read /
+		// modify / write atomic: any other setParameters landing on this sender
+		// in between would invalidate the transactionId and reject with
+		// InvalidStateError. A future concurrent path (e.g. simulcast layer
+		// toggling) must serialise against this, not interleave.
 		const params = sender.getParameters();
 
 		if (params.degradationPreference === VIDEO_DEGRADATION_PREFERENCE) {
