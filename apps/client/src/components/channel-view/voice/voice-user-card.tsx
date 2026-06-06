@@ -1,7 +1,6 @@
 import { EyeOff, HeadphoneOff, MicOff, Monitor, Video } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { useDevices } from '@/components/devices-provider/hooks/use-devices';
-import { IconButton } from '@/components/ui/icon-button';
 import { UserAvatar } from '@/components/user-avatar';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import type { TVoiceUser } from '@/features/server/types';
@@ -10,6 +9,7 @@ import { useVoiceActivity } from '@/features/server/voice/hooks';
 import { useWindowFocus } from '@/hooks/use-window-focus';
 import { cn } from '@/lib/utils';
 import { CardControls } from './card-controls';
+import { ControlButton } from './control-button';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
 import { VoiceSurface } from './voice-surface';
@@ -70,7 +70,7 @@ const VoiceUserCard = memo(
 			>
 				<CardControls>
 					{!isOwnUser && hasVideoStream && onStopWatching && (
-						<IconButton variant="ghost" icon={EyeOff} onClick={onStopWatching} title="Stop Watching" size="default" />
+						<ControlButton icon={EyeOff} onClick={onStopWatching} title="Stop Watching" />
 					)}
 					{!isOwnUser && <VolumeButton volumeKey={getUserVolumeKey(userId)} />}
 					{showPinControls && <PinButton isPinned={isPinned} handlePinToggle={handlePinToggle} />}
