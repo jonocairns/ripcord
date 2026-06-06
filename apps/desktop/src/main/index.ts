@@ -803,21 +803,41 @@ const registerIpcHandlers = () => {
 // silently pushes screen share onto software encoders. getGPUFeatureStatus is
 // the authoritative source: video_encode === 'enabled' means hardware encode is
 // available.
-const logGpuEncodeDiagnostics = () => {
+//
+// Electron's main-process stdout is not attached to a console on Windows, so we
+// also write the result to a fixed temp file the user can open directly.
+const GPU_DIAGNOSTICS_FILENAME = "ripcord-gpu-diagnostics.json";
+
+const logGpuEncodeDiagnostics = async () => {
+  let featureStatus: unknown;
   try {
-    console.info("[desktop] GPU feature status", app.getGPUFeatureStatus());
+    featureStatus = app.getGPUFeatureStatus();
   } catch (error) {
-    console.warn("[desktop] Failed to read GPU feature status", error);
+    featureStatus = { error: String(error) };
   }
 
-  void app
-    .getGPUInfo("basic")
-    .then((info) => {
-      console.info("[desktop] GPU info", info);
-    })
-    .catch((error) => {
-      console.warn("[desktop] Failed to read GPU info", error);
-    });
+  let gpuInfo: unknown;
+  try {
+    gpuInfo = await app.getGPUInfo("basic");
+  } catch (error) {
+    gpuInfo = { error: String(error) };
+  }
+
+  const diagnostics = {
+    timestamp: new Date().toISOString(),
+    featureStatus,
+    gpuInfo,
+  };
+
+  console.info("[desktop] GPU encode diagnostics", diagnostics);
+
+  try {
+    const filePath = path.join(app.getPath("temp"), GPU_DIAGNOSTICS_FILENAME);
+    fs.writeFileSync(filePath, JSON.stringify(diagnostics, null, 2));
+    console.info("[desktop] Wrote GPU diagnostics to", filePath);
+  } catch (error) {
+    console.warn("[desktop] Failed to write GPU diagnostics file", error);
+  }
 };
 
 void app
@@ -880,7 +900,7 @@ void app
     setupDisplayMediaHandler();
     setupYoutubeEmbedRefererHandler();
     setupPackagedRendererCspHandler();
-    logGpuEncodeDiagnostics();
+    void logGpuEncodeDiagnostics();
     createMainWindow();
     requestDesktopCapabilitiesRefresh({
       broadcast: true,
