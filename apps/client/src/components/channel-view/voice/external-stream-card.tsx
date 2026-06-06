@@ -3,10 +3,11 @@ import { ExternalLink, EyeOff, Headphones, Maximize2, Minimize2, Router, Video, 
 import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { IconButton } from '@/components/ui/icon-button';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import { cn } from '@/lib/utils';
 import { CardControls } from './card-controls';
+import { ControlButton } from './control-button';
+import { useFullscreenIdleControls } from './hooks/use-fullscreen-idle-controls';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { type StreamStats, useStreamStats } from './hooks/use-stream-stats';
 import { useVoiceRefs } from './hooks/use-voice-refs';
@@ -32,6 +33,7 @@ type TExternalStreamControlsProps = {
 	onMuteToggle: () => void;
 	onStopWatching?: () => void;
 	streamStats?: StreamStats | null;
+	controlsVisible?: boolean;
 };
 
 const ExternalStreamControls = memo(
@@ -51,12 +53,11 @@ const ExternalStreamControls = memo(
 		onMuteToggle,
 		onStopWatching,
 		streamStats,
+		controlsVisible,
 	}: TExternalStreamControlsProps) => {
 		return (
-			<CardControls>
-				{onStopWatching && (
-					<IconButton variant="ghost" icon={EyeOff} onClick={onStopWatching} title="Stop Watching" size="default" />
-				)}
+			<CardControls visible={controlsVisible}>
+				{onStopWatching && <ControlButton icon={EyeOff} onClick={onStopWatching} title="Stop Watching" />}
 				{hasAudio && (
 					<StreamSettingsPopover
 						volume={volume}
@@ -67,21 +68,19 @@ const ExternalStreamControls = memo(
 					/>
 				)}
 				{hasVideo && (
-					<IconButton
-						variant={isPoppedOut ? 'default' : 'ghost'}
+					<ControlButton
+						active={isPoppedOut}
 						icon={ExternalLink}
 						onClick={handleTogglePopout}
 						title={isPoppedOut ? 'Return to In-App' : 'Pop Out Stream'}
-						size="default"
 					/>
 				)}
 				{hasVideo && (
-					<IconButton
-						variant={isFullscreen ? 'default' : 'ghost'}
+					<ControlButton
+						active={isFullscreen}
 						icon={isFullscreen ? Minimize2 : Maximize2}
 						onClick={handleToggleFullscreen}
 						title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-						size="default"
 					/>
 				)}
 				{showPinControls && <PinButton isPinned={isPinned} handlePinToggle={handlePinToggle} />}
@@ -157,6 +156,13 @@ const ExternalStreamCard = memo(
 			[stream.pluginId, stream.key],
 		);
 		const hidePopoutWindowControlsTimeoutRef = useRef<number | null>(null);
+		const { controlsVisible: fullscreenControlsVisible, trackPointerActivity } = useFullscreenIdleControls({
+			isFullscreen,
+		});
+		const handleInAppMouseMove = useMemo(
+			() => trackPointerActivity(handleMouseMove),
+			[handleMouseMove, trackPointerActivity],
+		);
 
 		const handlePinToggle = useCallback(() => {
 			if (isPinned) {
@@ -440,7 +446,7 @@ const ExternalStreamCard = memo(
 					className={cn('relative group', 'flex items-center justify-center', 'w-full h-full', className)}
 					onWheel={hasVideo && !isPoppedOut ? handleWheel : undefined}
 					onMouseDown={hasVideo && !isPoppedOut ? handleMouseDown : undefined}
-					onMouseMove={hasVideo && !isPoppedOut ? handleMouseMove : undefined}
+					onMouseMove={hasVideo && !isPoppedOut ? handleInAppMouseMove : undefined}
 					onMouseUp={hasVideo && !isPoppedOut ? handleMouseUp : undefined}
 					onMouseLeave={hasVideo && !isPoppedOut ? handleMouseUp : undefined}
 					style={{
@@ -463,6 +469,7 @@ const ExternalStreamCard = memo(
 						onMuteToggle={handleMuteToggle}
 						onStopWatching={onStopWatching}
 						streamStats={streamStats}
+						controlsVisible={fullscreenControlsVisible}
 					/>
 
 					{hasVideo ? (

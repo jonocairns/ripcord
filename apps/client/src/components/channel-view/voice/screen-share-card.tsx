@@ -1,13 +1,14 @@
 import { ExternalLink, Eye, EyeOff, Maximize2, Minimize2, Monitor } from 'lucide-react';
 import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { IconButton } from '@/components/ui/icon-button';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
 import { useScreenShareWatcherCount } from '@/features/server/voice/hooks';
 import { useWindowFocus } from '@/hooks/use-window-focus';
 import { cn } from '@/lib/utils';
 import { CardControls } from './card-controls';
+import { ControlButton } from './control-button';
+import { useFullscreenIdleControls } from './hooks/use-fullscreen-idle-controls';
 import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { useStreamStats } from './hooks/use-stream-stats';
 import { useVoiceRefs } from './hooks/use-voice-refs';
@@ -31,6 +32,7 @@ type tScreenShareControlsProps = {
 	isFullscreen: boolean;
 	isPoppedOut: boolean;
 	canStopWatching: boolean;
+	controlsVisible?: boolean;
 	onStopWatching?: () => void;
 };
 
@@ -49,12 +51,13 @@ const ScreenShareControls = memo(
 		isFullscreen,
 		isPoppedOut,
 		canStopWatching,
+		controlsVisible,
 		onStopWatching,
 	}: tScreenShareControlsProps) => {
 		return (
-			<CardControls>
+			<CardControls visible={controlsVisible}>
 				{canStopWatching && onStopWatching && (
-					<IconButton variant="ghost" icon={EyeOff} onClick={onStopWatching} title="Stop Watching" size="default" />
+					<ControlButton icon={EyeOff} onClick={onStopWatching} title="Stop Watching" />
 				)}
 				{showAudioControl && (
 					<StreamSettingsPopover
@@ -64,19 +67,17 @@ const ScreenShareControls = memo(
 						onMuteToggle={onMuteToggle}
 					/>
 				)}
-				<IconButton
-					variant={isPoppedOut ? 'default' : 'ghost'}
+				<ControlButton
+					active={isPoppedOut}
 					icon={ExternalLink}
 					onClick={handleTogglePopout}
 					title={isPoppedOut ? 'Return to In-App' : 'Pop Out Stream'}
-					size="default"
 				/>
-				<IconButton
-					variant={isFullscreen ? 'default' : 'ghost'}
+				<ControlButton
+					active={isFullscreen}
 					icon={isFullscreen ? Minimize2 : Maximize2}
 					onClick={handleToggleFullscreen}
 					title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-					size="default"
 				/>
 				{showPinControls && <PinButton isPinned={isPinned} handlePinToggle={handlePinToggle} />}
 			</CardControls>
@@ -153,6 +154,13 @@ const ScreenShareCard = memo(
 		} = useScreenShareZoom();
 		const hidePopoutWindowControlsTimeoutRef = useRef<number | null>(null);
 		const popoutWindowName = useMemo(() => `screen-share-${userId}`, [userId]);
+		const { controlsVisible: fullscreenControlsVisible, trackPointerActivity } = useFullscreenIdleControls({
+			isFullscreen,
+		});
+		const handleInAppMouseMove = useMemo(
+			() => trackPointerActivity(handleMouseMove),
+			[handleMouseMove, trackPointerActivity],
+		);
 
 		const handlePinToggle = useCallback(() => {
 			if (isPinned) {
@@ -413,7 +421,7 @@ const ScreenShareCard = memo(
 					)}
 					onWheel={isPoppedOut ? undefined : handleWheel}
 					onMouseDown={isPoppedOut ? undefined : handleMouseDown}
-					onMouseMove={isPoppedOut ? undefined : handleMouseMove}
+					onMouseMove={isPoppedOut ? undefined : handleInAppMouseMove}
 					onMouseUp={isPoppedOut ? undefined : handleMouseUp}
 					onMouseLeave={isPoppedOut ? undefined : handleMouseUp}
 					style={{
@@ -435,6 +443,7 @@ const ScreenShareCard = memo(
 						isFullscreen={isFullscreen}
 						isPoppedOut={isPoppedOut}
 						canStopWatching={!isOwnUser}
+						controlsVisible={fullscreenControlsVisible}
 						onStopWatching={onStopWatching}
 					/>
 

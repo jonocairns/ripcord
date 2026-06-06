@@ -1,10 +1,11 @@
-import { Volume2, VolumeX } from 'lucide-react';
+import { Volume1, VolumeX } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { IconButton } from '@/components/ui/icon-button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Slider } from '@/components/ui/slider';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import type { TVolumeKey } from '@/components/voice-provider/volume-control-storage';
+import { ControlButton } from './control-button';
 
 type TVolumeButtonProps = {
 	volumeKey: TVolumeKey;
@@ -29,18 +30,13 @@ const VolumeButton = memo(({ volumeKey }: TVolumeButtonProps) => {
 	return (
 		<Popover>
 			<PopoverTrigger asChild>
-				<IconButton
-					variant={isMuted ? 'destructive' : 'ghost'}
-					icon={isMuted ? VolumeX : Volume2}
-					title={isMuted ? 'Unmute' : 'Volume'}
-					size="default"
-				/>
+				<ControlButton icon={isMuted ? VolumeX : Volume1} title={isMuted ? 'Unmute' : 'Volume'} />
 			</PopoverTrigger>
 			<PopoverContent align="center" side="top" className="w-48 p-3" onClick={(e) => e.stopPropagation()}>
 				<div className="flex items-center gap-2">
 					<IconButton
 						variant="ghost"
-						icon={isMuted ? VolumeX : Volume2}
+						icon={isMuted ? VolumeX : Volume1}
 						onClick={handleToggleMute}
 						title={isMuted ? 'Unmute' : 'Mute'}
 						size="sm"

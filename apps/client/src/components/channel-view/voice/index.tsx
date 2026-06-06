@@ -32,27 +32,55 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 		remoteUserStreams,
 		externalStreams: activeExternalStreams,
 	} = useVoice();
-	const { pinnedCard, pinCard, unpinCard, isPinned } = usePinCardController();
+	const { pinnedCard, pinCard, unpinCard } = usePinCardController();
+	const effectivePinnedCard = useMemo(() => {
+		if (!pinnedCard) {
+			return undefined;
+		}
+
+		if (pinnedCard.type !== PinnedCardType.USER) {
+			return pinnedCard;
+		}
+
+		const voiceUser = voiceUsers.find((user) => user.id === pinnedCard.userId);
+
+		if (!voiceUser) {
+			return undefined;
+		}
+
+		const hasPendingVideo = pendingStreams.has(getPendingStreamKey(voiceUser.id, StreamKind.VIDEO));
+		const hasConsumedVideo = !!remoteUserStreams[voiceUser.id]?.[StreamKind.VIDEO];
+
+		if (voiceUser.state.sharingScreen && !hasConsumedVideo && !hasPendingVideo) {
+			return {
+				...pinnedCard,
+				id: `screen-share-${voiceUser.id}`,
+				type: PinnedCardType.SCREEN_SHARE,
+			};
+		}
+
+		return pinnedCard;
+	}, [pendingStreams, pinnedCard, remoteUserStreams, voiceUsers]);
 	const handleExitStage = useCallback(() => {
-		if (pinnedCard?.type === PinnedCardType.USER && pinnedCard.userId !== ownUserId) {
-			stopWatchingStream(pinnedCard.userId, StreamKind.VIDEO);
+		if (effectivePinnedCard?.type === PinnedCardType.USER && effectivePinnedCard.userId !== ownUserId) {
+			stopWatchingStream(effectivePinnedCard.userId, StreamKind.VIDEO);
 		}
 
-		if (pinnedCard?.type === PinnedCardType.SCREEN_SHARE && pinnedCard.userId !== ownUserId) {
-			stopWatchingStream(pinnedCard.userId, StreamKind.SCREEN);
+		if (effectivePinnedCard?.type === PinnedCardType.SCREEN_SHARE && effectivePinnedCard.userId !== ownUserId) {
+			stopWatchingStream(effectivePinnedCard.userId, StreamKind.SCREEN);
 
-			if (remoteUserStreams[pinnedCard.userId]?.[StreamKind.SCREEN_AUDIO]) {
-				stopWatchingStream(pinnedCard.userId, StreamKind.SCREEN_AUDIO);
+			if (remoteUserStreams[effectivePinnedCard.userId]?.[StreamKind.SCREEN_AUDIO]) {
+				stopWatchingStream(effectivePinnedCard.userId, StreamKind.SCREEN_AUDIO);
 			}
 		}
 
-		if (pinnedCard?.type === PinnedCardType.EXTERNAL_STREAM) {
-			if (activeExternalStreams[pinnedCard.userId]?.videoStream) {
-				stopWatchingStream(pinnedCard.userId, StreamKind.EXTERNAL_VIDEO);
+		if (effectivePinnedCard?.type === PinnedCardType.EXTERNAL_STREAM) {
+			if (activeExternalStreams[effectivePinnedCard.userId]?.videoStream) {
+				stopWatchingStream(effectivePinnedCard.userId, StreamKind.EXTERNAL_VIDEO);
 			}
 
-			if (activeExternalStreams[pinnedCard.userId]?.audioStream) {
-				stopWatchingStream(pinnedCard.userId, StreamKind.EXTERNAL_AUDIO);
+			if (activeExternalStreams[effectivePinnedCard.userId]?.audioStream) {
+				stopWatchingStream(effectivePinnedCard.userId, StreamKind.EXTERNAL_AUDIO);
 			}
 		}
 
@@ -60,9 +88,9 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 		setSelectedChannelId(lastTextChannelId);
 	}, [
 		activeExternalStreams,
+		effectivePinnedCard,
 		lastTextChannelId,
 		ownUserId,
-		pinnedCard,
 		remoteUserStreams,
 		stopWatchingStream,
 		unpinCard,
@@ -76,36 +104,43 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 			const hasPendingVideo = pendingStreams.has(getPendingStreamKey(voiceUser.id, StreamKind.VIDEO));
 			const hasConsumedVideo = !!remoteUserStreams[voiceUser.id]?.[StreamKind.VIDEO];
 
-			cards.push(
-				hasPendingVideo && !hasConsumedVideo ? (
-					<PendingStreamCard
-						key={userCardId}
-						kind={StreamKind.VIDEO}
-						userId={voiceUser.id}
-						onWatch={() => {
-							acceptStream(voiceUser.id, StreamKind.VIDEO);
-						}}
-					/>
-				) : (
-					<VoiceUserCard
-						key={userCardId}
-						userId={voiceUser.id}
-						isPinned={isPinned(userCardId)}
-						onPin={() =>
-							pinCard({
-								id: userCardId,
-								type: PinnedCardType.USER,
-								userId: voiceUser.id,
-							})
-						}
-						onUnpin={unpinCard}
-						voiceUser={voiceUser}
-						onStopWatching={() => {
-							stopWatchingStream(voiceUser.id, StreamKind.VIDEO);
-						}}
-					/>
-				),
-			);
+			// Suppress the avatar fallback tile when the user is screen-sharing without a
+			// camera — their screen-share card stands in for them, so we avoid a dead
+			// avatar tile sitting next to it. Camera-on users still get their own tile.
+			const isAvatarOnlyWhileSharing = voiceUser.state.sharingScreen && !hasConsumedVideo && !hasPendingVideo;
+
+			if (!isAvatarOnlyWhileSharing) {
+				cards.push(
+					hasPendingVideo && !hasConsumedVideo ? (
+						<PendingStreamCard
+							key={userCardId}
+							kind={StreamKind.VIDEO}
+							userId={voiceUser.id}
+							onWatch={() => {
+								acceptStream(voiceUser.id, StreamKind.VIDEO);
+							}}
+						/>
+					) : (
+						<VoiceUserCard
+							key={userCardId}
+							userId={voiceUser.id}
+							isPinned={effectivePinnedCard?.id === userCardId}
+							onPin={() =>
+								pinCard({
+									id: userCardId,
+									type: PinnedCardType.USER,
+									userId: voiceUser.id,
+								})
+							}
+							onUnpin={unpinCard}
+							voiceUser={voiceUser}
+							onStopWatching={() => {
+								stopWatchingStream(voiceUser.id, StreamKind.VIDEO);
+							}}
+						/>
+					),
+				);
+			}
 
 			if (voiceUser.id === ownUserId && isStartingScreenShare && !voiceUser.state.sharingScreen) {
 				cards.push(<StartingScreenShareCard key={`screen-share-${voiceUser.id}`} />);
@@ -138,7 +173,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 						<ScreenShareCard
 							key={screenShareCardId}
 							userId={voiceUser.id}
-							isPinned={isPinned(screenShareCardId)}
+							isPinned={effectivePinnedCard?.id === screenShareCardId}
 							onPin={() =>
 								pinCard({
 									id: screenShareCardId,
@@ -195,7 +230,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 						key={externalStreamCardId}
 						streamId={stream.streamId}
 						stream={stream}
-						isPinned={isPinned(externalStreamCardId)}
+						isPinned={effectivePinnedCard?.id === externalStreamCardId}
 						onPin={() =>
 							pinCard({
 								id: externalStreamCardId,
@@ -229,7 +264,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 		stopWatchingStream,
 		pendingStreams,
 		remoteUserStreams,
-		isPinned,
+		effectivePinnedCard,
 		ownUserId,
 		pinCard,
 		unpinCard,
@@ -248,10 +283,10 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 
 	return (
 		<div className="voice-stage relative flex-1 overflow-hidden">
-			<VoiceGrid pinnedCardId={pinnedCard?.id} className="h-full pb-24">
+			<VoiceGrid pinnedCardId={effectivePinnedCard?.id} className="h-full">
 				{cards}
 			</VoiceGrid>
-			<ControlsBar channelId={channelId} onExitStage={pinnedCard ? handleExitStage : undefined} />
+			<ControlsBar channelId={channelId} onExitStage={effectivePinnedCard ? handleExitStage : undefined} />
 		</div>
 	);
 });

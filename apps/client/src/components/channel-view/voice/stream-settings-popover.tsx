@@ -1,9 +1,9 @@
-import { Settings, Volume2, VolumeX } from 'lucide-react';
+import { Settings, Volume1, VolumeX } from 'lucide-react';
 import { memo } from 'react';
 import { IconButton } from '@/components/ui/icon-button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Slider } from '@/components/ui/slider';
-import { cn } from '@/lib/utils';
+import { ControlButton } from './control-button';
 import type { StreamStats } from './hooks/use-stream-stats';
 
 type TStreamSettingsPopoverProps = {
@@ -11,31 +11,15 @@ type TStreamSettingsPopoverProps = {
 	isMuted: boolean;
 	onVolumeChange: (volume: number) => void;
 	onMuteToggle: () => void;
-	buttonClassName?: string;
-	buttonSize?: 'sm' | 'default' | 'lg' | 'xl' | 'xs';
 	streamStats?: StreamStats | null;
 };
 
 const StreamSettingsPopover = memo(
-	({
-		volume,
-		isMuted,
-		onVolumeChange,
-		onMuteToggle,
-		buttonClassName,
-		buttonSize = 'default',
-		streamStats,
-	}: TStreamSettingsPopoverProps) => {
+	({ volume, isMuted, onVolumeChange, onMuteToggle, streamStats }: TStreamSettingsPopoverProps) => {
 		return (
 			<Popover>
 				<PopoverTrigger asChild>
-					<IconButton
-						variant="ghost"
-						icon={Settings}
-						title="Stream Settings"
-						size={buttonSize}
-						className={cn(buttonClassName)}
-					/>
+					<ControlButton icon={Settings} title="Stream Settings" />
 				</PopoverTrigger>
 				<PopoverContent align="end" side="bottom" className="w-56 p-3" onClick={(e) => e.stopPropagation()}>
 					<div className="space-y-3">
@@ -43,7 +27,7 @@ const StreamSettingsPopover = memo(
 						<div className="flex items-center gap-2">
 							<IconButton
 								variant="ghost"
-								icon={isMuted ? VolumeX : Volume2}
+								icon={isMuted ? VolumeX : Volume1}
 								onClick={onMuteToggle}
 								title={isMuted ? 'Unmute' : 'Mute'}
 								size="sm"
