@@ -58,6 +58,11 @@ const probeWebrtcEncode = async ({
 			},
 		});
 
+		// Note: `smooth` is an instantaneous estimate. A software encoder reported
+		// smooth at probe time can still degrade under sustained load (thermal
+		// throttling, CPU contention) over a long screen share; `powerEfficient`
+		// (hardware) is the more reliable long-term signal, and on desktop the GPU
+		// profile check is preferred over this probe entirely.
 		return {
 			supported: info.supported,
 			capable: info.supported && (info.powerEfficient || info.smooth),

@@ -21,8 +21,11 @@ const codecForProfile = (profile: number): TVideoEncodeCodec => {
   if (profile === 11) return "vp8";
   if (profile >= 12 && profile <= 15) return "vp9";
   if (profile >= 16 && profile <= 18) return "hevc";
+  // DolbyVision is non-contiguous: profiles 19-23 sit before AV1, and
+  // DOLBYVISION_PROFILE8/9 (27-28) sit after it.
   if (profile >= 19 && profile <= 23) return "dolbyvision";
   if (profile >= 24 && profile <= 26) return "av1";
+  if (profile >= 27 && profile <= 28) return "dolbyvision";
   if (profile >= 29 && profile <= 36) return "hevc";
   return "unknown";
 };
@@ -40,7 +43,7 @@ const toFiniteNumber = (value: unknown): number => {
 // renderer's mediaCapabilities.encodingInfo probe (whose powerEfficient flag is
 // unreliable for WebRTC AV1), getGPUInfo('complete') reports the actual
 // hardware-accelerated encode profiles per codec.
-const resolveVideoEncodeCapabilities =
+const computeVideoEncodeCapabilities =
   async (): Promise<TVideoEncodeCapabilities> => {
     let hardwareVideoEncodeEnabled = false;
     try {
@@ -78,5 +81,16 @@ const resolveVideoEncodeCapabilities =
 
     return { hardwareVideoEncodeEnabled, profiles };
   };
+
+// GPU encode profiles are static for the process lifetime and getGPUInfo
+// ('complete') is a slow driver call, so resolve once and memoize the promise
+// (this also dedupes concurrent callers). computeVideoEncodeCapabilities never
+// rejects, so the cached promise always resolves.
+let cachedCapabilitiesPromise: Promise<TVideoEncodeCapabilities> | undefined;
+
+const resolveVideoEncodeCapabilities = (): Promise<TVideoEncodeCapabilities> => {
+  cachedCapabilitiesPromise ??= computeVideoEncodeCapabilities();
+  return cachedCapabilitiesPromise;
+};
 
 export { resolveVideoEncodeCapabilities };
