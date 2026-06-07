@@ -172,8 +172,25 @@ export type TGlobalPushKeybindRegistrationResult = {
 	errors: string[];
 };
 
+export type TVideoEncodeCodec = 'h264' | 'vp8' | 'vp9' | 'hevc' | 'av1' | 'dolbyvision' | 'unknown';
+
+export type TVideoEncodeAcceleratorProfile = {
+	codec: TVideoEncodeCodec;
+	rawProfile: number;
+	maxWidth: number;
+	maxHeight: number;
+};
+
+export type TVideoEncodeCapabilities = {
+	hardwareVideoEncodeEnabled: boolean;
+	profiles: TVideoEncodeAcceleratorProfile[];
+};
+
 export type TDesktopBridge = {
 	getServerUrl: () => Promise<string>;
+	// Optional: only present on desktop builds that expose authoritative GPU
+	// hardware-encode profiles. Renderer code must treat absence as "unknown".
+	getVideoEncodeCapabilities?: () => Promise<TVideoEncodeCapabilities>;
 	getWindowControlsState?: () => Promise<TDesktopWindowControlsState>;
 	minimizeWindow?: () => Promise<void>;
 	toggleMaximizeWindow?: () => Promise<void>;

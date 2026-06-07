@@ -54,6 +54,7 @@ import type {
   TStartAppAudioCaptureInput,
 } from "./types";
 import { desktopUpdater } from "./updater";
+import { resolveVideoEncodeCapabilities } from "./video-encode-capabilities";
 import { classifyWindowOpenUrl } from "./window-open-policy";
 import { installYoutubeEmbedRefererHandler } from "./youtube-embed-referrer";
 
@@ -683,6 +684,10 @@ const registerIpcHandlers = () => {
     return powerMonitor.getSystemIdleTime();
   });
 
+  handleTrusted("desktop:get-video-encode-capabilities", () => {
+    return resolveVideoEncodeCapabilities();
+  });
+
   handleTrusted(
     "desktop:list-app-audio-targets",
     (_event, sourceId?: string) => {
@@ -823,9 +828,17 @@ const logGpuEncodeDiagnostics = async () => {
     gpuInfo = { error: String(error) };
   }
 
+  let encodeCapabilities: unknown;
+  try {
+    encodeCapabilities = await resolveVideoEncodeCapabilities();
+  } catch (error) {
+    encodeCapabilities = { error: String(error) };
+  }
+
   const diagnostics = {
     timestamp: new Date().toISOString(),
     featureStatus,
+    encodeCapabilities,
     gpuInfo,
   };
 
