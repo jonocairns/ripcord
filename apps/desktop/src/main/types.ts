@@ -182,3 +182,26 @@ export type TDesktopWindowControlsState = {
   isMaximized: boolean;
   usesCustomTitlebar: boolean;
 };
+
+export type TVideoEncodeCodec =
+  | "h264"
+  | "vp8"
+  | "vp9"
+  | "hevc"
+  | "av1"
+  | "dolbyvision"
+  | "unknown";
+
+export type TVideoEncodeAcceleratorProfile = {
+  codec: TVideoEncodeCodec;
+  // Raw Chromium media::VideoCodecProfile value, kept so codec-mapping drift
+  // across Electron/Chromium upgrades is observable in diagnostics.
+  rawProfile: number;
+  maxWidth: number;
+  maxHeight: number;
+};
+
+export type TVideoEncodeCapabilities = {
+  hardwareVideoEncodeEnabled: boolean;
+  profiles: TVideoEncodeAcceleratorProfile[];
+};
