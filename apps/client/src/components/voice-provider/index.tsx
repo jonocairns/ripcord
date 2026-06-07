@@ -34,7 +34,7 @@ import {
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { logDebug, logVoice, traceSentrySpan } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
-import { isPowerEfficientWebrtcEncode } from '@/helpers/media-encode-capabilities';
+import { isCapableWebrtcEncode } from '@/helpers/media-encode-capabilities';
 import { getTrpcErrorData, isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge, isDesktopRuntime } from '@/runtime/desktop-bridge';
@@ -220,21 +220,24 @@ const resolveScreenShareVideoCodec = async (
 		const av1Codec = findVideoCodecByMime(rtpCapabilities, 'video/AV1');
 
 		if (av1Codec) {
-			const hardwareAccelerated = await isPowerEfficientWebrtcEncode({
+			const av1Capable = await isCapableWebrtcEncode({
 				mimeType: 'video/AV1',
 				...encodeParams,
 			});
 
-			if (hardwareAccelerated) {
+			if (av1Capable) {
 				return av1Codec;
 			}
 
 			if (h264Codec) {
-				logVoice('AV1 screen share encode is not hardware-accelerated, falling back to H264', encodeParams);
+				logVoice(
+					'AV1 screen share encode is not a capable (hardware/smooth) encoder, falling back to H264',
+					encodeParams,
+				);
 				return h264Codec;
 			}
 
-			logVoice('AV1 screen share encode is not hardware-accelerated and H264 is unavailable, falling back to auto', {
+			logVoice('AV1 screen share encode is not capable and H264 is unavailable, falling back to auto', {
 				...encodeParams,
 			});
 			return undefined;
@@ -254,10 +257,7 @@ const resolveScreenShareVideoCodec = async (
 // 'maintain-resolution' did on high-motion captures.
 const VIDEO_DEGRADATION_PREFERENCE: RTCDegradationPreference = 'balanced';
 
-const applyVideoDegradationPreference = async (
-	sender: RTCRtpSender | undefined,
-	label: string,
-): Promise<void> => {
+const applyVideoDegradationPreference = async (sender: RTCRtpSender | undefined, label: string): Promise<void> => {
 	if (!sender) {
 		logVoice('RTCRtpSender unavailable, skipping degradationPreference override', { label });
 		return;
