@@ -75,14 +75,24 @@ const probeWebrtcEncode = async ({
 // Authoritative on the desktop app: consult the GPU's actual hardware
 // video-encode profiles (getGPUInfo, exposed over the desktop bridge). Unlike
 // the mediaCapabilities `powerEfficient` flag, this reliably reflects per-codec
-// hardware encode support. Returns false when not on desktop, the bridge lacks
-// the method, the query fails, or no hardware profile for this codec covers the
-// resolution — callers then fall back to the WebRTC probe.
-const desktopHasHardwareEncode = async (codec: TVideoEncodeCodec, width: number, height: number): Promise<boolean> => {
+// hardware encode support.
+//
+// Tri-state so callers can treat the GPU as the *authority* on desktop rather
+// than just a promoter of the web probe:
+//   - true  → a hardware encoder for this codec covers the resolution
+//   - false → desktop GPU info is available and there is NO such hardware
+//             encoder (so don't software-encode this codec — fall back)
+//   - null  → no authoritative info (not the desktop app, the bridge lacks the
+//             method, or the query failed) — caller should use the WebRTC probe
+const desktopHasHardwareEncode = async (
+	codec: TVideoEncodeCodec,
+	width: number,
+	height: number,
+): Promise<boolean | null> => {
 	const bridge = getDesktopBridge();
 
 	if (!bridge?.getVideoEncodeCapabilities) {
-		return false;
+		return null;
 	}
 
 	try {
@@ -96,7 +106,7 @@ const desktopHasHardwareEncode = async (codec: TVideoEncodeCodec, width: number,
 			return profile.codec === codec && profile.maxWidth >= width && profile.maxHeight >= height;
 		});
 	} catch {
-		return false;
+		return null;
 	}
 };
 

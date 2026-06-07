@@ -231,19 +231,21 @@ const resolveScreenShareVideoCodec = async (
 		const av1Codec = findVideoCodecByMime(rtpCapabilities, 'video/AV1');
 
 		if (av1Codec) {
-			const av1Probe = await probeWebrtcEncode({
-				mimeType: 'video/AV1',
-				...encodeParams,
-			});
+			// On the desktop app the GPU profile list is authoritative: use AV1 only
+			// when there's a hardware AV1 encoder for this resolution, and otherwise
+			// fall back to H264 rather than letting a software AV1 encoder run — it
+			// can't sustain high-res/fps screen share (frame rate sags with content).
+			// mediaCapabilities' powerEfficient flag is too unreliable, and its
+			// `smooth` flag too optimistic, to make this call when we have real GPU
+			// data. Off desktop (web) we have no such signal, so use the WebRTC probe.
+			const desktopAv1 = await desktopHasHardwareEncode('av1', encodeParams.width, encodeParams.height);
 
-			let av1Capable = av1Probe.capable;
-
-			// mediaCapabilities' powerEfficient flag is unreliable for AV1 and can
-			// flag genuinely hardware-encoded AV1 as not-capable. When the probe says
-			// AV1 is supported but not capable, defer to the desktop GPU's
-			// authoritative hardware-encode profiles before giving up on AV1.
-			if (!av1Capable && av1Probe.supported) {
-				av1Capable = await desktopHasHardwareEncode('av1', encodeParams.width, encodeParams.height);
+			let av1Capable: boolean;
+			if (desktopAv1 !== null) {
+				av1Capable = desktopAv1;
+			} else {
+				const av1Probe = await probeWebrtcEncode({ mimeType: 'video/AV1', ...encodeParams });
+				av1Capable = av1Probe.capable;
 			}
 
 			if (av1Capable) {
