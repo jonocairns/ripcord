@@ -55,6 +55,24 @@ const defaultRouterOptions: RouterOptions<AppData> = {
         'x-google-start-bitrate': 2500
       }
     },
+    // H264 is offered twice: High profile first (preferred) and Constrained
+    // Baseline second (fallback). High profile (CABAC + 8x8 transform) is far
+    // more efficient per bit than Baseline, which directly reduces the chroma
+    // bleed / edge artifacts on detailed screen shares; it is universally
+    // decodable and supported by modern hardware encoders. Clients that only
+    // negotiate Baseline still match the second entry instead of dropping to
+    // VP8. level-asymmetry-allowed lets encoder/decoder pick independent levels.
+    {
+      kind: 'video',
+      mimeType: 'video/H264',
+      clockRate: 90000,
+      parameters: {
+        'packetization-mode': 1,
+        'profile-level-id': '640034',
+        'level-asymmetry-allowed': 1,
+        'x-google-start-bitrate': 2500
+      }
+    },
     {
       kind: 'video',
       mimeType: 'video/H264',
