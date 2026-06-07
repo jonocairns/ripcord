@@ -143,6 +143,17 @@ const DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS = 96_000;
 // audibly clips sustained music.
 const SCREEN_SHARE_AUDIO_TARGET_BITRATE_BPS = 256_000;
 
+// Temporal SVC for video producers: one spatial layer (single encode, single
+// resolution) split into three temporal layers (~T0/T1/T2 frame-rate tiers).
+// This is the cheap kind of layering — reference-structure bookkeeping, not
+// re-encoding — so there's no meaningful streamer CPU cost. It lets the SFU
+// shed a temporal layer per slow viewer (graceful frame-rate drop instead of a
+// frozen/stuttering stream + PLI storms), and reinforces the degradation
+// preference under bitrate pressure. No maxBitrate is set, preserving the
+// "let congestion control settle the rate" policy. Best on VP9/AV1; hardware
+// H264 may fall back to a single layer (L1T1), which is harmless.
+const VIDEO_SCALABILITY_MODE = 'L1T3';
+
 type ResolvedMicProcessingConfig = {
 	wasmNoiseSuppressionEnabled: boolean;
 	browserAutoGainControl: boolean;
@@ -1299,6 +1310,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			const videoProducer = await producerTransport.current?.produce({
 				track,
+				encodings: [{ scalabilityMode: VIDEO_SCALABILITY_MODE }],
 				codec: preferredVideoCodec,
 				codecOptions: {
 					videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
@@ -1402,6 +1414,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			const screenShareProducer = await producerTransport.current?.produce({
 				track,
+				encodings: [{ scalabilityMode: VIDEO_SCALABILITY_MODE }],
 				codecOptions: {
 					videoGoogleStartBitrate: screenBitratePolicy.startKbps,
 				},
