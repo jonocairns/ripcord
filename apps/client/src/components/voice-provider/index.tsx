@@ -1354,13 +1354,26 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			const requestedWebcamResolution = getResWidthHeight(devices?.webcamResolution);
 			const webcamTrackSettings = track.getSettings();
+			const webcamWidth = webcamTrackSettings.width ?? requestedWebcamResolution.width;
+			const webcamHeight = webcamTrackSettings.height ?? requestedWebcamResolution.height;
+			const webcamFramerate = webcamTrackSettings.frameRate ?? devices.webcamFramerate;
 			const webcamBitratePolicy = getVideoBitratePolicy({
 				profile: 'camera',
-				width: webcamTrackSettings.width ?? requestedWebcamResolution.width,
-				height: webcamTrackSettings.height ?? requestedWebcamResolution.height,
-				frameRate: webcamTrackSettings.frameRate ?? devices.webcamFramerate,
+				width: webcamWidth,
+				height: webcamHeight,
+				frameRate: webcamFramerate,
 				codec: getBitrateCodecFromMimeType(preferredVideoCodec),
 			});
+
+			logVoice('Webcam bitrate policy resolved', {
+				width: webcamWidth,
+				height: webcamHeight,
+				frameRate: webcamFramerate,
+				codec: preferredVideoCodec?.mimeType,
+				startKbps: webcamBitratePolicy.startKbps,
+				maxKbps: webcamBitratePolicy.maxKbps,
+			});
+
 			const webcamEncodings = createVideoProducerEncodings(preferredVideoCodec).map((encoding) => ({
 				...encoding,
 				maxBitrate: webcamBitratePolicy.maxKbps * 1000,
