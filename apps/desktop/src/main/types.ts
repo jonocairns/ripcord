@@ -27,14 +27,25 @@ export type TShareSource = {
   id: string;
   name: string;
   kind: TShareSourceKind;
+  previewAvailable: boolean;
   thumbnailDataUrl: string;
   appIconDataUrl?: string;
+};
+
+// Phase-2 of the two-phase picker load: thumbnails are captured separately from
+// the source list (capturing every window's frame is the slow part), then merged
+// into the already-rendered list by id.
+export type TShareSourceThumbnail = {
+  id: string;
+  previewAvailable: boolean;
+  thumbnailDataUrl: string;
 };
 
 export type TScreenShareSelection = {
   sourceId: string;
   audioMode: TScreenAudioMode;
   appAudioTargetId?: string;
+  useSystemPicker?: boolean;
 };
 
 export type TDesktopCapabilities = {
@@ -181,27 +192,4 @@ export type TDesktopWindowControlsState = {
   platform: TDesktopPlatform;
   isMaximized: boolean;
   usesCustomTitlebar: boolean;
-};
-
-export type TVideoEncodeCodec =
-  | "h264"
-  | "vp8"
-  | "vp9"
-  | "hevc"
-  | "av1"
-  | "dolbyvision"
-  | "unknown";
-
-export type TVideoEncodeAcceleratorProfile = {
-  codec: TVideoEncodeCodec;
-  // Raw Chromium media::VideoCodecProfile value, kept so codec-mapping drift
-  // across Electron/Chromium upgrades is observable in diagnostics.
-  rawProfile: number;
-  maxWidth: number;
-  maxHeight: number;
-};
-
-export type TVideoEncodeCapabilities = {
-  hardwareVideoEncodeEnabled: boolean;
-  profiles: TVideoEncodeAcceleratorProfile[];
 };

@@ -37,14 +37,24 @@ export type TDesktopShareSource = {
 	id: string;
 	name: string;
 	kind: TDesktopShareSourceKind;
+	previewAvailable: boolean;
 	thumbnailDataUrl: string;
 	appIconDataUrl?: string;
+};
+
+// Phase-2 thumbnails, merged into TDesktopShareSource by id after the fast list
+// renders. See the screen-share picker's two-phase load.
+export type TDesktopShareSourceThumbnail = {
+	id: string;
+	previewAvailable: boolean;
+	thumbnailDataUrl: string;
 };
 
 export type TDesktopScreenShareSelection = {
 	sourceId: string;
 	audioMode: ScreenAudioMode;
 	appAudioTargetId?: string;
+	useSystemPicker?: boolean;
 };
 
 export type TResolvedScreenAudioMode = {
@@ -172,25 +182,8 @@ export type TGlobalPushKeybindRegistrationResult = {
 	errors: string[];
 };
 
-export type TVideoEncodeCodec = 'h264' | 'vp8' | 'vp9' | 'hevc' | 'av1' | 'dolbyvision' | 'unknown';
-
-export type TVideoEncodeAcceleratorProfile = {
-	codec: TVideoEncodeCodec;
-	rawProfile: number;
-	maxWidth: number;
-	maxHeight: number;
-};
-
-export type TVideoEncodeCapabilities = {
-	hardwareVideoEncodeEnabled: boolean;
-	profiles: TVideoEncodeAcceleratorProfile[];
-};
-
 export type TDesktopBridge = {
 	getServerUrl: () => Promise<string>;
-	// Optional: only present on desktop builds that expose authoritative GPU
-	// hardware-encode profiles. Renderer code must treat absence as "unknown".
-	getVideoEncodeCapabilities?: () => Promise<TVideoEncodeCapabilities>;
 	getWindowControlsState?: () => Promise<TDesktopWindowControlsState>;
 	minimizeWindow?: () => Promise<void>;
 	toggleMaximizeWindow?: () => Promise<void>;
@@ -202,6 +195,8 @@ export type TDesktopBridge = {
 	getUpdateStatus: () => Promise<TDesktopUpdateStatus>;
 	checkForUpdates: () => Promise<TDesktopUpdateStatus>;
 	listShareSources: () => Promise<TDesktopShareSource[]>;
+	listShareSourceThumbnails?: () => Promise<TDesktopShareSourceThumbnail[]>;
+	resetScreenSharePicker?: () => Promise<void>;
 	listAppAudioTargets: (sourceId?: string) => Promise<TDesktopAppAudioTargetsResult>;
 	startAppAudioCapture: (input: TStartAppAudioCaptureInput) => Promise<TAppAudioSession>;
 	stopAppAudioCapture: (sessionId?: string) => Promise<void>;

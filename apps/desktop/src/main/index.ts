@@ -36,9 +36,11 @@ import {
   type TRendererTrustOptions,
 } from "./renderer-trust";
 import {
+  clearPreparedScreenShareSelection,
   consumeScreenShareSelection,
   getSourceById,
   listShareSources,
+  listShareSourceThumbnails,
   prepareScreenShareSelection,
 } from "./screen-share";
 import { getServerUrl, setServerUrl } from "./settings-store";
@@ -54,7 +56,6 @@ import type {
   TStartAppAudioCaptureInput,
 } from "./types";
 import { desktopUpdater } from "./updater";
-import { resolveVideoEncodeCapabilities } from "./video-encode-capabilities";
 import { classifyWindowOpenUrl } from "./window-open-policy";
 import { installYoutubeEmbedRefererHandler } from "./youtube-embed-referrer";
 
@@ -72,6 +73,7 @@ let refreshDesktopCapabilitiesPromise:
   | undefined;
 let refreshDesktopCapabilitiesBroadcastPending = false;
 let refreshDesktopCapabilitiesForceBroadcastPending = false;
+let displayMediaUsesSystemPicker = false;
 let appIsShuttingDown = false;
 let desktopQuitFlushInterceptInProgress = false;
 let desktopQuitFlushCompleted = false;
@@ -526,7 +528,11 @@ const createMainWindow = () => {
   void mainWindow.loadFile(indexPath);
 };
 
-const setupDisplayMediaHandler = () => {
+const setupDisplayMediaHandler = (
+  useSystemPicker = displayMediaUsesSystemPicker,
+) => {
+  displayMediaUsesSystemPicker = useSystemPicker;
+
   session.defaultSession.setDisplayMediaRequestHandler(
     (_request, callback) => {
       void (async () => {
@@ -572,9 +578,17 @@ const setupDisplayMediaHandler = () => {
       })();
     },
     {
-      useSystemPicker: false,
+      useSystemPicker,
     },
   );
+};
+
+const setDisplayMediaUseSystemPicker = (useSystemPicker: boolean) => {
+  if (displayMediaUsesSystemPicker === useSystemPicker) {
+    return;
+  }
+
+  setupDisplayMediaHandler(useSystemPicker);
 };
 
 const isTrustedPermissionRequester = (
@@ -684,10 +698,6 @@ const registerIpcHandlers = () => {
     return powerMonitor.getSystemIdleTime();
   });
 
-  handleTrusted("desktop:get-video-encode-capabilities", () => {
-    return resolveVideoEncodeCapabilities();
-  });
-
   handleTrusted(
     "desktop:list-app-audio-targets",
     (_event, sourceId?: string) => {
@@ -784,12 +794,30 @@ const registerIpcHandlers = () => {
     return listShareSources();
   });
 
+  handleTrusted("desktop:list-share-source-thumbnails", () => {
+    return listShareSourceThumbnails();
+  });
+
+  handleTrusted("desktop:reset-screen-share-picker", () => {
+    // Also drop any armed source grant: when the macOS 15+ native picker handled
+    // the request, the prepared source was never consumed and would stay queued.
+    clearPreparedScreenShareSelection();
+    setDisplayMediaUseSystemPicker(false);
+  });
+
   handleTrusted(
     "desktop:prepare-screen-share",
     async (_event: IpcMainInvokeEvent, selection: TScreenShareSelection) => {
       const capabilities = await getEffectiveDesktopCapabilities();
       const resolved = resolvePreparedScreenAudioMode(selection, capabilities);
 
+      setDisplayMediaUseSystemPicker(selection.useSystemPicker ?? false);
+
+      // Always prepare a source, even when useSystemPicker is requested: the
+      // native system picker is macOS 15+ only, so on Windows/Linux (and older
+      // macOS) Electron ignores the flag and still invokes our display-media
+      // handler, which rejects without a prepared selection. When the native
+      // picker does take over (macOS 15+) the prepared source is simply unused.
       prepareScreenShareSelection({
         sourceId: selection.sourceId,
         audioMode: resolved.effectiveMode,
@@ -802,56 +830,72 @@ const registerIpcHandlers = () => {
   );
 };
 
-// Surface whether Chromium is using hardware (NVENC/VAAPI/etc.) video encode.
-// mediaCapabilities.encodingInfo({type:'webrtc'}) in the renderer reports
-// powerEfficient:false for every codec when hardware encode is disabled, which
-// silently pushes screen share onto software encoders. getGPUFeatureStatus is
-// the authoritative source: video_encode === 'enabled' means hardware encode is
-// available.
+// Chromium command-line switches that steer GPU video encode. These must be set
+// before the GPU process spawns (i.e. before app `ready`), so this runs at module
+// load. The renderer's mediaCapabilities probe reports powerEfficient:false for
+// every codec when hardware encode is unavailable, silently pushing screen share
+// onto software encoders (libaom for AV1) — these switches expose the NVENC
+// hardware paths so capable GPUs encode in hardware.
 //
-// Electron's main-process stdout is not attached to a console on Windows, so we
-// also write the result to a fixed temp file the user can open directly.
-const GPU_DIAGNOSTICS_FILENAME = "ripcord-gpu-diagnostics.json";
+// enable-features rationale:
+//   - AcceleratedVideoEncoder: master switch for hardware video encode.
+//   - D3D12VideoEncodeAccelerator: Windows 11 24H2 (WDDM 3.2) hardware AV1 (and
+//     other) encode path. NVENC AV1 for WebRTC reaches Chromium through D3D12,
+//     not the older Media Foundation MFT path (which only wires up H.264/HEVC).
+//   - WebRtcAV1HWEncode: gates the WebRTC hardware AV1 encoder on top of the
+//     D3D12 path; still experimental and rolled out per-GPU-vendor by Chromium.
+//
+// With these set (and the Vulkan ANGLE flags gone) the Chromium D3D12 encoder
+// runs in hardware: H264 screen share reports encoderImplementation
+// "D3D12VideoEncodeAccelerator", powerEfficient true — even though getGPUInfo
+// still reports supportsDx12=false (that field is unrelated to the video
+// encoder). Whether hardware AV1 specifically engages is decided client-side by
+// the WebRTC powerEfficient probe; until it reports hardware AV1 the codec gate
+// stays on hardware H264.
+//
+// ANGLE stays on its Windows default (D3D11) backend. Forcing the Vulkan ANGLE
+// backend (use-angle=vulkan + Vulkan/DefaultANGLEVulkan/VulkanFromANGLE) on the
+// NVIDIA driver here reported supportsVulkan=false and dropped the whole
+// compositor into software (gpu_compositing=disabled_software, WebGL readback),
+// which also emptied the hardware video-encode profile list and blocked the
+// D3D12 encoder from initializing — i.e. it defeated the purpose of these flags.
+//
+// Note: VaapiOnNvidiaGPUs / VaapiIgnoreDriverChecks are intentionally omitted —
+// VA-API is Linux-only and a no-op on Windows/macOS. Re-add them under a
+// `process.platform === "linux"` guard if Linux NVENC support is needed.
+//
+// HEVC encode flags (PlatformHEVCEncoderSupport / WebRtcAllowH265Send/Receive)
+// are deliberately NOT set: the mediasoup SFU (3.19.x) does not support routing
+// video/H265, so offering it from the client would only produce a codec the
+// router rejects. Revisit if/when the SFU gains H265 support.
+const GPU_COMMAND_LINE_SWITCHES: ReadonlyArray<readonly [string, string]> = [
+  [
+    "enable-features",
+    [
+      "AcceleratedVideoEncoder",
+      "D3D12VideoEncodeAccelerator",
+      "WebRtcAV1HWEncode",
+    ].join(","),
+  ],
+  // Needed on Windows to let the D3D12 video-encode accelerator initialize on
+  // GPUs Chromium blocklisted conservatively. Keep it Windows-only: on Linux it
+  // can re-enable Mesa configs Chromium blocked for stability reasons.
+  ...(process.platform === "win32"
+    ? ([["ignore-gpu-blocklist", ""]] as const)
+    : []),
+];
 
-const logGpuEncodeDiagnostics = async () => {
-  let featureStatus: unknown;
-  try {
-    featureStatus = app.getGPUFeatureStatus();
-  } catch (error) {
-    featureStatus = { error: String(error) };
-  }
-
-  let gpuInfo: unknown;
-  try {
-    gpuInfo = await app.getGPUInfo("basic");
-  } catch (error) {
-    gpuInfo = { error: String(error) };
-  }
-
-  let encodeCapabilities: unknown;
-  try {
-    encodeCapabilities = await resolveVideoEncodeCapabilities();
-  } catch (error) {
-    encodeCapabilities = { error: String(error) };
-  }
-
-  const diagnostics = {
-    timestamp: new Date().toISOString(),
-    featureStatus,
-    encodeCapabilities,
-    gpuInfo,
-  };
-
-  console.info("[desktop] GPU encode diagnostics", diagnostics);
-
-  try {
-    const filePath = path.join(app.getPath("temp"), GPU_DIAGNOSTICS_FILENAME);
-    fs.writeFileSync(filePath, JSON.stringify(diagnostics, null, 2));
-    console.info("[desktop] Wrote GPU diagnostics to", filePath);
-  } catch (error) {
-    console.warn("[desktop] Failed to write GPU diagnostics file", error);
+const configureGpuCommandLineSwitches = () => {
+  for (const [name, value] of GPU_COMMAND_LINE_SWITCHES) {
+    if (value) {
+      app.commandLine.appendSwitch(name, value);
+    } else {
+      app.commandLine.appendSwitch(name);
+    }
   }
 };
+
+configureGpuCommandLineSwitches();
 
 void app
   .whenReady()
@@ -913,7 +957,6 @@ void app
     setupDisplayMediaHandler();
     setupYoutubeEmbedRefererHandler();
     setupPackagedRendererCspHandler();
-    void logGpuEncodeDiagnostics();
     createMainWindow();
     requestDesktopCapabilitiesRefresh({
       broadcast: true,
