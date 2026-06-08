@@ -157,7 +157,6 @@ const VIDEO_SCALABILITY_MODE = 'L1T3';
 type TVideoProducerEncoding = {
 	scalabilityMode?: string;
 	maxBitrate?: number;
-	scaleResolutionDownBy?: number;
 };
 
 const createVideoProducerEncodings = (codec: RtpCodecCapability | undefined): TVideoProducerEncoding[] => {
@@ -1508,7 +1507,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			const screenShareEncodings = createVideoProducerEncodings(preferredVideoCodec).map((encoding) => ({
 				...encoding,
 				maxBitrate: screenBitratePolicy.maxKbps * 1000,
-				scaleResolutionDownBy: 1,
 			}));
 
 			const screenShareProducer = await producerTransport.current?.produce({
