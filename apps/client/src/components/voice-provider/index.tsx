@@ -68,7 +68,7 @@ import {
 	type TPushMicState,
 	updatePushMicStateForKeyEvent,
 } from './push-mic-state';
-import { getVideoBitratePolicy } from './video-bitrate-policy';
+import { getVideoBitratePolicy, type TVideoBitrateCodec } from './video-bitrate-policy';
 import { createVoiceActivityStore, type VoiceActivityStore } from './voice-activity';
 import { VolumeControlProvider } from './volume-control-provider';
 import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
@@ -156,6 +156,7 @@ const VIDEO_SCALABILITY_MODE = 'L1T3';
 
 type TVideoProducerEncoding = {
 	scalabilityMode?: string;
+	maxBitrate?: number;
 };
 
 const createVideoProducerEncodings = (codec: RtpCodecCapability | undefined): TVideoProducerEncoding[] => {
@@ -164,6 +165,20 @@ const createVideoProducerEncodings = (codec: RtpCodecCapability | undefined): TV
 	}
 
 	return [{ scalabilityMode: VIDEO_SCALABILITY_MODE }];
+};
+
+// Map the resolved/effective send codec to a bitrate-policy codec so the
+// max-bitrate ceiling can be scaled per codec. When no codec is resolved (AUTO
+// where mediasoup-client picks a default internally) we fall back to 'auto'.
+const getBitrateCodecFromMimeType = (codec: RtpCodecCapability | undefined): TVideoBitrateCodec => {
+	const mimeType = codec?.mimeType.toLowerCase();
+
+	if (mimeType === 'video/h264') return 'h264';
+	if (mimeType === 'video/vp8') return 'vp8';
+	if (mimeType === 'video/vp9') return 'vp9';
+	if (mimeType === 'video/av1') return 'av1';
+
+	return 'auto';
 };
 
 type ResolvedMicProcessingConfig = {
@@ -1008,7 +1023,33 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[currentChannelExternalStreams, stopWatchingConsumedStream],
 	);
 
-	const { stats: transportStats, startMonitoring, stopMonitoring, resetStats } = useTransportStats();
+	// Surface the configured per-encoding maxBitrate ceiling to the stats panel,
+	// keyed by ssrc so the collector can match it to the right outbound stream.
+	const getConfiguredVideoMaxBitrates = useCallback((): Map<number, number> => {
+		const maxBitrateBySsrc = new Map<number, number>();
+
+		for (const producerRef of [localScreenShareProducer, localVideoProducer]) {
+			const sender = producerRef.current?.rtpSender;
+
+			if (!sender) {
+				continue;
+			}
+
+			for (const encoding of sender.getParameters().encodings ?? []) {
+				// `ssrc` is populated at runtime (Chrome) but absent from the DOM lib type.
+				const { ssrc } = encoding as RTCRtpEncodingParameters & { ssrc?: number };
+
+				if (typeof ssrc === 'number' && typeof encoding.maxBitrate === 'number') {
+					maxBitrateBySsrc.set(ssrc, encoding.maxBitrate);
+				}
+			}
+		}
+
+		return maxBitrateBySsrc;
+	}, [localScreenShareProducer, localVideoProducer]);
+
+	const { stats: transportStats, startMonitoring, stopMonitoring, resetStats } =
+		useTransportStats(getConfiguredVideoMaxBitrates);
 
 	const handleVoiceActivityUpdate = useCallback((activity: { userId: number; isSpeaking: boolean }) => {
 		voiceActivityStoreRef.current.setUserActivity(activity.userId, {
@@ -1312,15 +1353,33 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			const requestedWebcamResolution = getResWidthHeight(devices?.webcamResolution);
 			const webcamTrackSettings = track.getSettings();
+			const webcamWidth = webcamTrackSettings.width ?? requestedWebcamResolution.width;
+			const webcamHeight = webcamTrackSettings.height ?? requestedWebcamResolution.height;
+			const webcamFramerate = webcamTrackSettings.frameRate ?? devices.webcamFramerate;
 			const webcamBitratePolicy = getVideoBitratePolicy({
 				profile: 'camera',
-				width: webcamTrackSettings.width ?? requestedWebcamResolution.width,
-				height: webcamTrackSettings.height ?? requestedWebcamResolution.height,
-				frameRate: webcamTrackSettings.frameRate ?? devices.webcamFramerate,
+				width: webcamWidth,
+				height: webcamHeight,
+				frameRate: webcamFramerate,
+				codec: getBitrateCodecFromMimeType(preferredVideoCodec),
 			});
+
+			logVoice('Webcam bitrate policy resolved', {
+				width: webcamWidth,
+				height: webcamHeight,
+				frameRate: webcamFramerate,
+				codec: preferredVideoCodec?.mimeType,
+				startKbps: webcamBitratePolicy.startKbps,
+				maxKbps: webcamBitratePolicy.maxKbps,
+			});
+
+			const webcamEncodings = createVideoProducerEncodings(preferredVideoCodec).map((encoding) => ({
+				...encoding,
+				maxBitrate: webcamBitratePolicy.maxKbps * 1000,
+			}));
 			const videoProducer = await producerTransport.current?.produce({
 				track,
-				encodings: createVideoProducerEncodings(preferredVideoCodec),
+				encodings: webcamEncodings,
 				codec: preferredVideoCodec,
 				codecOptions: {
 					videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
@@ -1402,7 +1461,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			const screenWidth = screenTrackSettings.width ?? requestedScreenResolution.width;
 			const screenHeight = screenTrackSettings.height ?? requestedScreenResolution.height;
 			const screenFramerate = screenTrackSettings.frameRate ?? devices.screenFramerate;
-			const screenBitratePolicy = getVideoBitratePolicy({
+			// Codec resolution needs a bitrate (for the AV1 hardware probe) but the
+			// final bitrate policy needs the resolved codec (for the per-codec max
+			// ceiling). Break the cycle: probe with a codec-agnostic base policy,
+			// then recompute the policy with the resolved codec.
+			const baseScreenBitratePolicy = getVideoBitratePolicy({
 				profile: 'screen',
 				width: screenWidth,
 				height: screenHeight,
@@ -1413,7 +1476,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				width: screenWidth,
 				height: screenHeight,
 				framerate: screenFramerate,
-				bitrate: screenBitratePolicy.startKbps * 1000,
+				bitrate: baseScreenBitratePolicy.startKbps * 1000,
 			});
 			if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
 				logVoice('Preferred screen share codec unavailable, falling back to auto', {
@@ -1421,9 +1484,34 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				});
 			}
 
+			const screenBitratePolicy = getVideoBitratePolicy({
+				profile: 'screen',
+				width: screenWidth,
+				height: screenHeight,
+				frameRate: screenFramerate,
+				codec: getBitrateCodecFromMimeType(preferredVideoCodec),
+			});
+
+			logVoice('Screen share bitrate policy resolved', {
+				width: screenWidth,
+				height: screenHeight,
+				frameRate: screenFramerate,
+				codec: preferredVideoCodec?.mimeType,
+				startKbps: screenBitratePolicy.startKbps,
+				maxKbps: screenBitratePolicy.maxKbps,
+			});
+
+			// Add a max-bitrate ceiling (bps) so congestion control has headroom to
+			// ramp during high-motion content before it resorts to downscaling. Spread
+			// onto the existing encoding so scalabilityMode/temporal SVC is preserved.
+			const screenShareEncodings = createVideoProducerEncodings(preferredVideoCodec).map((encoding) => ({
+				...encoding,
+				maxBitrate: screenBitratePolicy.maxKbps * 1000,
+			}));
+
 			const screenShareProducer = await producerTransport.current?.produce({
 				track,
-				encodings: createVideoProducerEncodings(preferredVideoCodec),
+				encodings: screenShareEncodings,
 				codecOptions: {
 					videoGoogleStartBitrate: screenBitratePolicy.startKbps,
 				},
