@@ -114,7 +114,7 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 										</div>
 										{(video.encoderImplementation || video.powerEfficientEncoder !== null) && (
 											<div>
-												Encoder: {video.encoderImplementation ?? 'unknown'}
+												Encoder: {video.encoderImplementation || 'unknown'}
 												{video.powerEfficientEncoder !== null && (
 													<span className={video.powerEfficientEncoder ? ' text-green-400' : ' text-amber-400'}>
 														{' '}
