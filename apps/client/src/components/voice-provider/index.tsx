@@ -1024,7 +1024,33 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[currentChannelExternalStreams, stopWatchingConsumedStream],
 	);
 
-	const { stats: transportStats, startMonitoring, stopMonitoring, resetStats } = useTransportStats();
+	// Surface the configured per-encoding maxBitrate ceiling to the stats panel,
+	// keyed by ssrc so the collector can match it to the right outbound stream.
+	const getConfiguredVideoMaxBitrates = useCallback((): Map<number, number> => {
+		const maxBitrateBySsrc = new Map<number, number>();
+
+		for (const producerRef of [localScreenShareProducer, localVideoProducer]) {
+			const sender = producerRef.current?.rtpSender;
+
+			if (!sender) {
+				continue;
+			}
+
+			for (const encoding of sender.getParameters().encodings ?? []) {
+				// `ssrc` is populated at runtime (Chrome) but absent from the DOM lib type.
+				const { ssrc } = encoding as RTCRtpEncodingParameters & { ssrc?: number };
+
+				if (typeof ssrc === 'number' && typeof encoding.maxBitrate === 'number') {
+					maxBitrateBySsrc.set(ssrc, encoding.maxBitrate);
+				}
+			}
+		}
+
+		return maxBitrateBySsrc;
+	}, [localScreenShareProducer, localVideoProducer]);
+
+	const { stats: transportStats, startMonitoring, stopMonitoring, resetStats } =
+		useTransportStats(getConfiguredVideoMaxBitrates);
 
 	const handleVoiceActivityUpdate = useCallback((activity: { userId: number; isSpeaking: boolean }) => {
 		voiceActivityStoreRef.current.setUserActivity(activity.userId, {

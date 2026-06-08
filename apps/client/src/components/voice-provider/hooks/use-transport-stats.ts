@@ -30,6 +30,10 @@ export type VideoSenderStats = {
 	encoderImplementation: string | null;
 	// True when the encode runs on a power-efficient (hardware) encoder.
 	powerEfficientEncoder: boolean | null;
+	// Configured per-encoding `maxBitrate` ceiling (bps), read from the sender's
+	// RtpEncodingParameters and matched to this stream by ssrc. null when no
+	// ceiling is configured or the ssrc couldn't be matched.
+	configuredMaxBitrate: number | null;
 	nackCount: number;
 	pliCount: number;
 	firCount: number;
@@ -77,7 +81,12 @@ const shortCodecName = (mimeType: string | undefined): string | null => {
 	return slashIndex === -1 ? mimeType : mimeType.slice(slashIndex + 1);
 };
 
-const useTransportStats = () => {
+// Maps an outbound video ssrc to its configured `maxBitrate` (bps). The voice
+// provider supplies this from the live producers' sender parameters so the
+// stats panel can show the configured ceiling alongside the actual send rate.
+type ConfiguredMaxBitrateGetter = () => Map<number, number>;
+
+const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter) => {
 	const [stats, setStats] = useState<TransportStatsData>({
 		producer: null,
 		consumer: null,
@@ -89,6 +98,11 @@ const useTransportStats = () => {
 		averageBitrateReceived: 0,
 		isMonitoring: false,
 	});
+
+	// Keep the latest getter in a ref so parseTransportStats (a []-dep callback)
+	// always reads the current producers without re-creating the callback.
+	const configuredMaxBitrateGetterRef = useRef<ConfiguredMaxBitrateGetter | undefined>(getConfiguredMaxBitrates);
+	configuredMaxBitrateGetterRef.current = getConfiguredMaxBitrates;
 
 	const intervalRef = useRef<NodeJS.Timeout | null>(null);
 	const producerTransportRef = useRef<Transport | null>(null);
@@ -130,6 +144,8 @@ const useTransportStats = () => {
 			return shortCodecName(codecId ? codecById.get(codecId) : undefined);
 		};
 
+		const configuredMaxBitrateBySsrc = isProducer ? configuredMaxBitrateGetterRef.current?.() : undefined;
+
 		for (const stat of statsReport.values()) {
 			if (stat.type === 'outbound-rtp' && isProducer) {
 				bytesSent += stat.bytesSent || 0;
@@ -148,6 +164,8 @@ const useTransportStats = () => {
 						qualityLimitationReason: stat.qualityLimitationReason ?? null,
 						encoderImplementation: stat.encoderImplementation ?? null,
 						powerEfficientEncoder: stat.powerEfficientEncoder ?? null,
+						configuredMaxBitrate:
+							typeof stat.ssrc === 'number' ? (configuredMaxBitrateBySsrc?.get(stat.ssrc) ?? null) : null,
 						nackCount: stat.nackCount ?? 0,
 						pliCount: stat.pliCount ?? 0,
 						firCount: stat.firCount ?? 0,

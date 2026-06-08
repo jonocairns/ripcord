@@ -124,6 +124,9 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 											</div>
 										)}
 										{video.framesDropped !== null && <div>Dropped: {video.framesDropped}</div>}
+										{video.configuredMaxBitrate !== null && (
+											<div>Max: {formatBitrate(video.configuredMaxBitrate)}</div>
+										)}
 										<div>Limit: {video.qualityLimitationReason ?? 'none'}</div>
 									</div>
 								))}
