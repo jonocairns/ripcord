@@ -150,9 +150,21 @@ const SCREEN_SHARE_AUDIO_TARGET_BITRATE_BPS = 256_000;
 // shed a temporal layer per slow viewer (graceful frame-rate drop instead of a
 // frozen/stuttering stream + PLI storms), and reinforces the degradation
 // preference under bitrate pressure. No maxBitrate is set, preserving the
-// "let congestion control settle the rate" policy. Best on VP9/AV1; hardware
-// H264 may fall back to a single layer (L1T1), which is harmless.
+// "let congestion control settle the rate" policy. Best on VP9; hardware H264
+// may fall back to a single layer (L1T1), which is harmless.
 const VIDEO_SCALABILITY_MODE = 'L1T3';
+
+type TVideoProducerEncoding = {
+	scalabilityMode?: string;
+};
+
+const createVideoProducerEncodings = (codec: RtpCodecCapability | undefined): TVideoProducerEncoding[] => {
+	if (codec?.mimeType.toLowerCase() === 'video/av1') {
+		return [{}];
+	}
+
+	return [{ scalabilityMode: VIDEO_SCALABILITY_MODE }];
+};
 
 type ResolvedMicProcessingConfig = {
 	wasmNoiseSuppressionEnabled: boolean;
@@ -1308,7 +1320,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			});
 			const videoProducer = await producerTransport.current?.produce({
 				track,
-				encodings: [{ scalabilityMode: VIDEO_SCALABILITY_MODE }],
+				encodings: createVideoProducerEncodings(preferredVideoCodec),
 				codec: preferredVideoCodec,
 				codecOptions: {
 					videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
@@ -1411,7 +1423,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			const screenShareProducer = await producerTransport.current?.produce({
 				track,
-				encodings: [{ scalabilityMode: VIDEO_SCALABILITY_MODE }],
+				encodings: createVideoProducerEncodings(preferredVideoCodec),
 				codecOptions: {
 					videoGoogleStartBitrate: screenBitratePolicy.startKbps,
 				},
