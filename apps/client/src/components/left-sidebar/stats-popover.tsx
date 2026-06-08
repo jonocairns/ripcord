@@ -112,6 +112,17 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 											{formatCodec(video.codec)} · {formatResolution(video.width, video.height)} ·{' '}
 											{formatFps(video.framesPerSecond)}
 										</div>
+										{(video.encoderImplementation || video.powerEfficientEncoder !== null) && (
+											<div>
+												Encoder: {video.encoderImplementation ?? 'unknown'}
+												{video.powerEfficientEncoder !== null && (
+													<span className={video.powerEfficientEncoder ? ' text-green-400' : ' text-amber-400'}>
+														{' '}
+														({video.powerEfficientEncoder ? 'hardware' : 'software'})
+													</span>
+												)}
+											</div>
+										)}
 										{video.framesDropped !== null && <div>Dropped: {video.framesDropped}</div>}
 										<div>Limit: {video.qualityLimitationReason ?? 'none'}</div>
 									</div>

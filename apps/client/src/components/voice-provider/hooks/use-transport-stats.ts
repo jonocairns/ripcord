@@ -25,6 +25,11 @@ export type VideoSenderStats = {
 	framesSent: number;
 	framesDropped: number | null;
 	qualityLimitationReason: string | null;
+	// 'D3D12VideoEncodeAccelerator' / 'NVENC' (hardware) vs 'libaom' / 'SimulcastEncoderAdapter'
+	// (software). null when the browser doesn't report it.
+	encoderImplementation: string | null;
+	// True when the encode runs on a power-efficient (hardware) encoder.
+	powerEfficientEncoder: boolean | null;
 	nackCount: number;
 	pliCount: number;
 	firCount: number;
@@ -141,6 +146,8 @@ const useTransportStats = () => {
 						framesSent: stat.framesSent ?? 0,
 						framesDropped: stat.framesDropped ?? null,
 						qualityLimitationReason: stat.qualityLimitationReason ?? null,
+						encoderImplementation: stat.encoderImplementation ?? null,
+						powerEfficientEncoder: stat.powerEfficientEncoder ?? null,
 						nackCount: stat.nackCount ?? 0,
 						pliCount: stat.pliCount ?? 0,
 						firCount: stat.firCount ?? 0,
