@@ -23,12 +23,10 @@ type TWebrtcEncodeProbe = {
 // Media Capabilities API.
 //
 // `capable` is true when the encode is power-efficient (hardware) OR reported as
-// smooth. The `powerEfficient` flag is unreliable for WebRTC AV1: Chromium
-// frequently reports it false even when a hardware AV1 encoder (e.g. NVENC on
-// 40/50-series, Arc, RX 7000) is present, so gating on it alone bounces capable
-// hardware to H264. `smooth` is the signal that actually matters for real-time
-// (the encoder can sustain the target frame rate), so requiring either keeps the
-// software-slideshow guard while no longer rejecting hardware on a bad flag.
+// smooth. Use this for codecs where a real-time software encoder is acceptable.
+// Callers that must avoid software fallback should check `powerEfficient`
+// directly; on desktop, startup GPU switches enable Chromium's D3D12/WebRTC
+// hardware paths before this probe runs.
 //
 // `supported` is surfaced separately so callers can distinguish "no AV1 encoder
 // at all" from "AV1 exists but the probe is unsure".

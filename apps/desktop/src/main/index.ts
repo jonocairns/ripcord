@@ -877,7 +877,12 @@ const GPU_COMMAND_LINE_SWITCHES: ReadonlyArray<readonly [string, string]> = [
       "WebRtcAV1HWEncode",
     ].join(","),
   ],
-  ["ignore-gpu-blocklist", ""],
+  // Needed on Windows to let the D3D12 video-encode accelerator initialize on
+  // GPUs Chromium blocklisted conservatively. Keep it Windows-only: on Linux it
+  // can re-enable Mesa configs Chromium blocked for stability reasons.
+  ...(process.platform === "win32"
+    ? ([["ignore-gpu-blocklist", ""]] as const)
+    : []),
 ];
 
 const configureGpuCommandLineSwitches = () => {
