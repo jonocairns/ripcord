@@ -1,6 +1,6 @@
 import type {
-  TDesktopQuitFlushResult,
   TDesktopPushKeybindsInput,
+  TDesktopQuitFlushResult,
   TScreenAudioMode,
   TScreenShareSelection,
   TStartAppAudioCaptureInput,
@@ -80,6 +80,21 @@ const assertAudioMode = (value: unknown, field: string): TScreenAudioMode => {
   return value as TScreenAudioMode;
 };
 
+const assertOptionalBoolean = (
+  value: unknown,
+  field: string,
+): boolean | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "boolean") {
+    return fail(`${field} must be a boolean`);
+  }
+
+  return value;
+};
+
 const validateSetServerUrlArgs = (args: unknown[]): [string] => {
   const serverUrl = assertString(args[0], "serverUrl", MAX_SERVER_URL_LENGTH);
   const trimmed = serverUrl.trim();
@@ -141,22 +156,29 @@ const validatePrepareScreenShareArgs = (
   args: unknown[],
 ): [TScreenShareSelection] => {
   const selection = assertRecord(args[0], "selection");
+  const useSystemPicker = assertOptionalBoolean(
+    selection.useSystemPicker,
+    "selection.useSystemPicker",
+  );
+  const validatedSelection: TScreenShareSelection = {
+    sourceId: assertNonEmptyString(
+      selection.sourceId,
+      "selection.sourceId",
+      MAX_ID_LENGTH,
+    ),
+    audioMode: assertAudioMode(selection.audioMode, "selection.audioMode"),
+    appAudioTargetId: assertOptionalString(
+      selection.appAudioTargetId,
+      "selection.appAudioTargetId",
+      MAX_ID_LENGTH,
+    ),
+  };
 
-  return [
-    {
-      sourceId: assertNonEmptyString(
-        selection.sourceId,
-        "selection.sourceId",
-        MAX_ID_LENGTH,
-      ),
-      audioMode: assertAudioMode(selection.audioMode, "selection.audioMode"),
-      appAudioTargetId: assertOptionalString(
-        selection.appAudioTargetId,
-        "selection.appAudioTargetId",
-        MAX_ID_LENGTH,
-      ),
-    },
-  ];
+  if (useSystemPicker !== undefined) {
+    validatedSelection.useSystemPicker = useSystemPicker;
+  }
+
+  return [validatedSelection];
 };
 
 const validateSetGlobalPushKeybindsArgs = (

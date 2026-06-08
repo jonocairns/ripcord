@@ -1,6 +1,3 @@
-import { getDesktopBridge } from '@/runtime/desktop-bridge';
-import type { TVideoEncodeCodec } from '@/runtime/types';
-
 type TEncodeProbeInput = {
 	// RTP codec MIME type, e.g. 'video/AV1', 'video/H264', 'video/VP8'.
 	mimeType: string;
@@ -17,22 +14,24 @@ type TWebrtcEncodeProbe = {
 	// It should be used for real-time: power-efficient (hardware) OR at least
 	// smooth at the target frame rate. See the note on `powerEfficient` below.
 	capable: boolean;
+	// The encode would run on a power-efficient (i.e. hardware) encoder. Surfaced
+	// so callers can require hardware specifically and refuse software fallback.
+	powerEfficient: boolean;
 };
 
 // Probe whether the browser can encode the given video config, via the WebRTC
 // Media Capabilities API.
 //
 // `capable` is true when the encode is power-efficient (hardware) OR reported as
-// smooth. The `powerEfficient` flag is unreliable for WebRTC AV1 — Chromium
+// smooth. The `powerEfficient` flag is unreliable for WebRTC AV1: Chromium
 // frequently reports it false even when a hardware AV1 encoder (e.g. NVENC on
-// 40/50-series, Arc, RX 7000) is present — so gating on it alone bounces capable
+// 40/50-series, Arc, RX 7000) is present, so gating on it alone bounces capable
 // hardware to H264. `smooth` is the signal that actually matters for real-time
 // (the encoder can sustain the target frame rate), so requiring either keeps the
 // software-slideshow guard while no longer rejecting hardware on a bad flag.
 //
 // `supported` is surfaced separately so callers can distinguish "no AV1 encoder
-// at all" from "AV1 exists but the probe is unsure", and only consult the more
-// authoritative desktop GPU signal in the latter case.
+// at all" from "AV1 exists but the probe is unsure".
 const probeWebrtcEncode = async ({
 	mimeType,
 	width,
@@ -43,7 +42,7 @@ const probeWebrtcEncode = async ({
 	const mediaCapabilities = navigator.mediaCapabilities;
 
 	if (!mediaCapabilities?.encodingInfo) {
-		return { supported: false, capable: false };
+		return { supported: false, capable: false, powerEfficient: false };
 	}
 
 	try {
@@ -61,54 +60,16 @@ const probeWebrtcEncode = async ({
 		// Note: `smooth` is an instantaneous estimate. A software encoder reported
 		// smooth at probe time can still degrade under sustained load (thermal
 		// throttling, CPU contention) over a long screen share; `powerEfficient`
-		// (hardware) is the more reliable long-term signal, and on desktop the GPU
-		// profile check is preferred over this probe entirely.
+		// (hardware) is the more reliable long-term signal.
 		return {
 			supported: info.supported,
 			capable: info.supported && (info.powerEfficient || info.smooth),
+			powerEfficient: info.powerEfficient,
 		};
 	} catch {
-		return { supported: false, capable: false };
-	}
-};
-
-// Authoritative on the desktop app: consult the GPU's actual hardware
-// video-encode profiles (getGPUInfo, exposed over the desktop bridge). Unlike
-// the mediaCapabilities `powerEfficient` flag, this reliably reflects per-codec
-// hardware encode support.
-//
-// Tri-state so callers can treat the GPU as the *authority* on desktop rather
-// than just a promoter of the web probe:
-//   - true  → a hardware encoder for this codec covers the resolution
-//   - false → desktop GPU info is available and there is NO such hardware
-//             encoder (so don't software-encode this codec — fall back)
-//   - null  → no authoritative info (not the desktop app, the bridge lacks the
-//             method, or the query failed) — caller should use the WebRTC probe
-const desktopHasHardwareEncode = async (
-	codec: TVideoEncodeCodec,
-	width: number,
-	height: number,
-): Promise<boolean | null> => {
-	const bridge = getDesktopBridge();
-
-	if (!bridge?.getVideoEncodeCapabilities) {
-		return null;
-	}
-
-	try {
-		const capabilities = await bridge.getVideoEncodeCapabilities();
-
-		if (!capabilities.hardwareVideoEncodeEnabled) {
-			return false;
-		}
-
-		return capabilities.profiles.some((profile) => {
-			return profile.codec === codec && profile.maxWidth >= width && profile.maxHeight >= height;
-		});
-	} catch {
-		return null;
+		return { supported: false, capable: false, powerEfficient: false };
 	}
 };
 
 export type { TEncodeProbeInput, TWebrtcEncodeProbe };
-export { desktopHasHardwareEncode, probeWebrtcEncode };
+export { probeWebrtcEncode };

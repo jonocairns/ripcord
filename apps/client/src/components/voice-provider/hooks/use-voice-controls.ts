@@ -37,6 +37,21 @@ type TSetMicMutedOptions = {
 	playSound?: boolean;
 };
 
+const getScreenShareStartErrorMessage = (
+	error: unknown,
+	selection: TDesktopScreenShareSelection | null | undefined,
+): string => {
+	if (
+		selection?.sourceId.startsWith('window:') &&
+		error instanceof DOMException &&
+		(error.name === 'NotReadableError' || error.name === 'AbortError')
+	) {
+		return 'This window could not be captured. Protected, elevated, exclusive-fullscreen, or anti-cheat guarded apps may need display sharing or borderless windowed mode instead.';
+	}
+
+	return getTrpcError(error, 'Failed to update screen share state');
+};
+
 const setLocalAudioTrackEnabled = (stream: MediaStream | undefined, micMuted: boolean) => {
 	stream?.getAudioTracks().forEach((track) => {
 		track.enabled = !micMuted;
@@ -364,7 +379,7 @@ const useVoiceControls = ({
 				return;
 			}
 
-			toast.error(getTrpcError(error, 'Failed to update screen share state'));
+			toast.error(getScreenShareStartErrorMessage(error, selection));
 		}
 	}, [
 		beginScreenShareStart,

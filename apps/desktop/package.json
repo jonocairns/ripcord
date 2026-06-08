@@ -2,6 +2,7 @@
   "name": "@sharkord/desktop",
   "private": true,
   "version": "1.4.20",
+  "productName": "Ripcord",
   "description": "Ripcord Desktop",
   "author": "Ripcord",
   "type": "module",

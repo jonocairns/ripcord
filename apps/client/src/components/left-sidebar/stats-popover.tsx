@@ -23,10 +23,6 @@ const formatCodec = (codec: string | null): string => {
 	return codec ?? 'unknown';
 };
 
-const formatOptionalCount = (value: number | null): string => {
-	return value === null ? 'N/A' : value.toString();
-};
-
 const formatBitrate = (bitsPerSecond: number): string => {
 	if (bitsPerSecond >= 1_000_000) {
 		return `${(bitsPerSecond / 1_000_000).toFixed(2)} Mbps`;
@@ -116,11 +112,8 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 											{formatCodec(video.codec)} · {formatResolution(video.width, video.height)} ·{' '}
 											{formatFps(video.framesPerSecond)}
 										</div>
-										<div>Dropped: {formatOptionalCount(video.framesDropped)}</div>
+										{video.framesDropped !== null && <div>Dropped: {video.framesDropped}</div>}
 										<div>Limit: {video.qualityLimitationReason ?? 'none'}</div>
-										<div>
-											NACK/PLI/FIR: {video.nackCount}/{video.pliCount}/{video.firCount}
-										</div>
 									</div>
 								))}
 							</div>
@@ -137,7 +130,7 @@ const StatsPopover = memo(({ children, triggerClassName, triggerRef }: StatsPopo
 											{formatCodec(video.codec)} · {formatResolution(video.width, video.height)} ·{' '}
 											{formatFps(video.framesPerSecond)}
 										</div>
-										<div>Dropped: {video.framesDropped}</div>
+										{video.framesDropped !== null && <div>Dropped: {video.framesDropped}</div>}
 										<div>Packets lost: {video.packetsLost}</div>
 									</div>
 								))}

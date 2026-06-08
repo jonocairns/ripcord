@@ -1,3 +1,4 @@
+import { Monitor, PanelTop } from 'lucide-react';
 import { memo, useEffect, useMemo, useState } from 'react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -33,6 +34,7 @@ type TScreenSharePickerDialogProps = TDialogBaseProps & {
 	sources: TDesktopShareSource[];
 	capabilities?: TDesktopCapabilities;
 	isLoading?: boolean;
+	isLoadingThumbnails?: boolean;
 	defaultAudioMode: ScreenAudioMode;
 	onConfirm?: (selection: TDesktopScreenShareSelection) => void;
 	onCancel?: () => void;
@@ -53,12 +55,16 @@ const LOADING_PLACEHOLDER_CAPABILITIES: TDesktopCapabilities = {
 	notes: [],
 };
 
+const hasPreviewImage = (source: TDesktopShareSource) =>
+	source.previewAvailable && source.thumbnailDataUrl.trim().length > 0;
+
 const ScreenSharePickerDialog = memo(
 	({
 		isOpen,
 		sources,
 		capabilities,
 		isLoading = false,
+		isLoadingThumbnails = false,
 		defaultAudioMode,
 		onConfirm,
 		onCancel,
@@ -125,6 +131,13 @@ const ScreenSharePickerDialog = memo(
 				);
 			});
 		}, [liveCapabilities.issues]);
+		const selectedSourcePreviewWarning = useMemo(() => {
+			if (!selectedSource || selectedSource.kind !== 'window' || selectedSource.previewAvailable) {
+				return undefined;
+			}
+
+			return `${selectedSource.name} isn't exposing a preview. Sharing may still work — if the video comes through black or fails, choose the full display or switch the app to borderless windowed mode.`;
+		}, [selectedSource]);
 		const shouldResolveAppAudioTargets = isOpen && appAudioTargetBehavior.shouldResolveAppAudioTargets;
 		const isResolvingAppAudioTargets = shouldResolveAppAudioTargets && loadingAppAudioTargets;
 		const requiresManualAppAudioTarget =
@@ -151,6 +164,45 @@ const ScreenSharePickerDialog = memo(
 
 			return 'No running app audio targets were found. If you continue, screen share will fall back to system audio.';
 		}, [allowsImplicitFallbackWithoutTarget, liveCapabilities.systemAudio]);
+
+		const renderSourcePreview = (source: TDesktopShareSource) => {
+			const SourceIcon = source.kind === 'screen' ? Monitor : PanelTop;
+
+			return (
+				<div className="relative h-36 w-full overflow-hidden bg-muted">
+					<div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-muted text-muted-foreground">
+						{source.appIconDataUrl ? (
+							<img
+								src={source.appIconDataUrl}
+								alt=""
+								className="size-8 rounded object-contain opacity-80"
+								onError={(event) => {
+									event.currentTarget.style.display = 'none';
+								}}
+							/>
+						) : (
+							<SourceIcon className="size-8 opacity-70" />
+						)}
+						{!hasPreviewImage(source) && (
+							<span className="max-w-[80%] truncate text-xs">
+								{isLoadingThumbnails ? 'Loading preview…' : 'Preview unavailable'}
+							</span>
+						)}
+					</div>
+
+					{hasPreviewImage(source) && (
+						<img
+							src={source.thumbnailDataUrl}
+							alt=""
+							className="absolute inset-0 h-full w-full object-cover"
+							onError={(event) => {
+								event.currentTarget.style.display = 'none';
+							}}
+						/>
+					)}
+				</div>
+			);
+		};
 
 		const sourceLabel = useMemo(() => {
 			if (showLoadingBody) {
@@ -181,6 +233,8 @@ const ScreenSharePickerDialog = memo(
 				sourceId: selectedSourceId,
 				audioMode: effectiveAudioMode,
 				appAudioTargetId: resolvedAppAudioTargetId,
+				useSystemPicker:
+					selectedSource?.kind === 'window' && selectedSource.previewAvailable === false ? true : undefined,
 			});
 		};
 
@@ -193,19 +247,39 @@ const ScreenSharePickerDialog = memo(
 			setLiveCapabilities(normalizeDesktopCapabilities(capabilities));
 		}, [capabilities]);
 
+		// Reset audio intent / app-audio state on open (and audio-mode change) only.
+		// Deliberately NOT keyed on `sources`: the phase-2 thumbnail merge replaces
+		// the sources array while the dialog is open, and that must not wipe the
+		// user's audio choices.
 		useEffect(() => {
 			if (!isOpen) {
 				return;
 			}
 
-			setSelectedSourceId(sources[0]?.id);
 			setIncludeAudioRequested(getDefaultScreenShareIncludeAudio(defaultAudioMode));
 			setSelectedAppAudioTargetId(undefined);
 			setAppAudioTargetsResult({
 				targets: [],
 			});
 			setLoadingAppAudioTargets(false);
-		}, [isOpen, sources, defaultAudioMode]);
+		}, [isOpen, defaultAudioMode]);
+
+		// Keep the selection valid as sources arrive/update: initialize to the
+		// first source, preserve the current pick across the phase-2 merge if it
+		// still exists, and only fall back when the selected source disappears.
+		useEffect(() => {
+			if (!isOpen) {
+				return;
+			}
+
+			setSelectedSourceId((current) => {
+				if (current && sources.some((source) => source.id === current)) {
+					return current;
+				}
+
+				return sources[0]?.id;
+			});
+		}, [isOpen, sources]);
 
 		useEffect(() => {
 			if (!isOpen || !desktopBridge) {
@@ -324,6 +398,13 @@ const ScreenSharePickerDialog = memo(
 							</div>
 						)}
 
+						{selectedSourcePreviewWarning && (
+							<Alert className="border-amber-300/40 bg-amber-500/10 text-amber-100">
+								<AlertTitle>Window preview unavailable</AlertTitle>
+								<AlertDescription>{selectedSourcePreviewWarning}</AlertDescription>
+							</Alert>
+						)}
+
 						{liveCapabilities.notes.length > 0 && (
 							<div className="text-xs text-muted-foreground space-y-1">
 								{liveCapabilities.notes.map((note) => (
@@ -364,11 +445,7 @@ const ScreenSharePickerDialog = memo(
 															: 'border-border hover:border-primary/40',
 													)}
 												>
-													<img
-														src={source.thumbnailDataUrl}
-														alt={source.name}
-														className="h-36 w-full bg-muted object-cover"
-													/>
+													{renderSourcePreview(source)}
 													<div className="space-y-1 p-3">
 														<div className="flex items-center gap-2">
 															<span className="truncate font-medium">{source.name}</span>
@@ -403,11 +480,7 @@ const ScreenSharePickerDialog = memo(
 															: 'border-border hover:border-primary/40',
 													)}
 												>
-													<img
-														src={source.thumbnailDataUrl}
-														alt={source.name}
-														className="h-36 w-full bg-muted object-cover"
-													/>
+													{renderSourcePreview(source)}
 													<div className="space-y-1 p-3">
 														<div className="flex items-center gap-2">
 															<span className="truncate font-medium">{source.name}</span>

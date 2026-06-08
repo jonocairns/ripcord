@@ -1,8 +1,13 @@
-import { desktopCapturer, type DesktopCapturerSource } from "electron";
+import {
+  type DesktopCapturerSource,
+  desktopCapturer,
+  type NativeImage,
+} from "electron";
 import type {
   TPreparedScreenShare,
-  TShareSource,
   TScreenShareSelection,
+  TShareSource,
+  TShareSourceThumbnail,
 } from "./types";
 
 let preparedScreenShare: TPreparedScreenShare | undefined;
@@ -21,10 +26,30 @@ const consumeScreenShareSelection = () => {
   return currentSelection;
 };
 
-const getDesktopSources = async () => {
+// Drop any armed source grant without consuming it. Needed because the macOS 15+
+// native system picker bypasses the display-media handler, so a source prepared
+// alongside useSystemPicker never gets consumed and would otherwise stay queued.
+const clearPreparedScreenShareSelection = () => {
+  preparedScreenShare = undefined;
+};
+
+// Capturing a thumbnail frame of every window is the slow part of enumeration,
+// so the picker loads in two phases: this fast call skips thumbnails entirely
+// (thumbnailSize 0) and only fetches window icons, which are cheap. The grid
+// renders immediately from icon + title; thumbnails stream in via the separate
+// getThumbnailSources() call below.
+const getListSources = async () => {
   return desktopCapturer.getSources({
     types: ["screen", "window"],
     fetchWindowIcons: true,
+    thumbnailSize: { width: 0, height: 0 },
+  });
+};
+
+const getThumbnailSources = async () => {
+  return desktopCapturer.getSources({
+    types: ["screen", "window"],
+    fetchWindowIcons: false,
     thumbnailSize: {
       width: 360,
       height: 210,
@@ -73,31 +98,65 @@ const compareSources = (
   });
 };
 
-const serializeSource = (source: DesktopCapturerSource): TShareSource => {
+const imageToDataUrl = (image: NativeImage | undefined): string | undefined => {
+  if (!image || image.isEmpty()) {
+    return undefined;
+  }
+
+  return image.toDataURL();
+};
+
+// Phase 1: no thumbnail captured yet, so previewAvailable is optimistically
+// true (the live thumbnail fetch resolves the real value). This keeps the
+// picker from prematurely routing a window to the system-picker fallback before
+// thumbnails have loaded.
+const serializeListSource = (source: DesktopCapturerSource): TShareSource => {
   const normalizedName = source.name.trim();
 
   return {
     id: source.id,
     name: normalizedName || fallbackSourceName(source),
     kind: isScreenSource(source) ? "screen" : "window",
-    thumbnailDataUrl: source.thumbnail.toDataURL(),
-    appIconDataUrl: source.appIcon?.toDataURL(),
+    previewAvailable: true,
+    thumbnailDataUrl: "",
+    appIconDataUrl: imageToDataUrl(source.appIcon),
+  };
+};
+
+const serializeThumbnail = (
+  source: DesktopCapturerSource,
+): TShareSourceThumbnail => {
+  const thumbnailDataUrl = imageToDataUrl(source.thumbnail);
+
+  return {
+    id: source.id,
+    previewAvailable: thumbnailDataUrl !== undefined,
+    thumbnailDataUrl: thumbnailDataUrl ?? "",
   };
 };
 
 const listShareSources = async (): Promise<TShareSource[]> => {
-  const sources = await getDesktopSources();
-  return sources.sort(compareSources).map(serializeSource);
+  const sources = await getListSources();
+  return sources.sort(compareSources).map(serializeListSource);
+};
+
+const listShareSourceThumbnails = async (): Promise<
+  TShareSourceThumbnail[]
+> => {
+  const sources = await getThumbnailSources();
+  return sources.map(serializeThumbnail);
 };
 
 const getSourceById = async (sourceId: string) => {
-  const sources = await getDesktopSources();
+  const sources = await getListSources();
   return sources.find((source) => source.id === sourceId);
 };
 
 export {
+  clearPreparedScreenShareSelection,
   consumeScreenShareSelection,
   getSourceById,
   listShareSources,
+  listShareSourceThumbnails,
   prepareScreenShareSelection,
 };

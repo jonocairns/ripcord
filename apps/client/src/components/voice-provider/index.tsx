@@ -34,7 +34,7 @@ import {
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { logDebug, logVoice, traceSentrySpan } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
-import { desktopHasHardwareEncode, probeWebrtcEncode } from '@/helpers/media-encode-capabilities';
+import { probeWebrtcEncode } from '@/helpers/media-encode-capabilities';
 import { getTrpcErrorData, isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge, isDesktopRuntime } from '@/runtime/desktop-bridge';
@@ -199,7 +199,7 @@ type TScreenShareEncodeParams = {
 };
 
 // Resolve the screen share send codec.
-// - AUTO: prefer H264 — it has broad hardware-encoder support and is
+// - AUTO: prefer H264; it has broad hardware-encoder support and is
 //   universally decodable by viewers (unlike AV1, which Safari/iOS and older
 //   devices can't decode and would be dropped by canConsume). Without this,
 //   mediasoup-client's default pick is the first negotiated codec (VP8),
@@ -208,7 +208,7 @@ type TScreenShareEncodeParams = {
 //   resolution/framerate/bitrate; otherwise fall back to H264 to avoid a
 //   software-encoded slideshow at high resolutions.
 // - Explicit VP9/VP8/H264: use as chosen. VP9 intentionally skips the
-//   hardware-acceleration guard the AV1 branch applies — it's opt-in and the
+//   hardware-acceleration guard the AV1 branch applies; it's opt-in and the
 //   caller knowingly accepts the (often software-encoded) CPU trade-off.
 const resolveScreenShareVideoCodec = async (
 	rtpCapabilities: RtpCapabilities | null,
@@ -231,24 +231,14 @@ const resolveScreenShareVideoCodec = async (
 		const av1Codec = findVideoCodecByMime(rtpCapabilities, 'video/AV1');
 
 		if (av1Codec) {
-			// On the desktop app the GPU profile list is authoritative: use AV1 only
-			// when there's a hardware AV1 encoder for this resolution, and otherwise
-			// fall back to H264 rather than letting a software AV1 encoder run — it
-			// can't sustain high-res/fps screen share (frame rate sags with content).
-			// mediaCapabilities' powerEfficient flag is too unreliable, and its
-			// `smooth` flag too optimistic, to make this call when we have real GPU
-			// data. Off desktop (web) we have no such signal, so use the WebRTC probe.
-			const desktopAv1 = await desktopHasHardwareEncode('av1', encodeParams.width, encodeParams.height);
+			// Use AV1 only with a confirmed *hardware* encoder, otherwise fall back
+			// to H264 rather than running software AV1 (libaom can't sustain
+			// high-res/fps screen share — the frame rate sags with content). The
+			// WebRTC probe must report a power-efficient (hardware) encoder;
+			// software-only (`smooth` but not `powerEfficient`) is rejected.
+			const av1Probe = await probeWebrtcEncode({ mimeType: 'video/AV1', ...encodeParams });
 
-			let av1Capable: boolean;
-			if (desktopAv1 !== null) {
-				av1Capable = desktopAv1;
-			} else {
-				const av1Probe = await probeWebrtcEncode({ mimeType: 'video/AV1', ...encodeParams });
-				av1Capable = av1Probe.capable;
-			}
-
-			if (av1Capable) {
+			if (av1Probe.powerEfficient) {
 				return av1Codec;
 			}
 
@@ -1316,7 +1306,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				height: webcamTrackSettings.height ?? requestedWebcamResolution.height,
 				frameRate: webcamTrackSettings.frameRate ?? devices.webcamFramerate,
 			});
-
 			const videoProducer = await producerTransport.current?.produce({
 				track,
 				encodings: [{ scalabilityMode: VIDEO_SCALABILITY_MODE }],
@@ -1414,7 +1403,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				framerate: screenFramerate,
 				bitrate: screenBitratePolicy.startKbps * 1000,
 			});
-
 			if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
 				logVoice('Preferred screen share codec unavailable, falling back to auto', {
 					preferredCodec: devices.videoCodec,
@@ -1910,6 +1898,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					capabilities: normalizeDesktopCapabilities(capabilities),
 				};
 			},
+			loadThumbnails: async () => {
+				const desktopBridge = getDesktopBridge();
+				return (await desktopBridge?.listShareSourceThumbnails?.()) ?? [];
+			},
 		});
 	}, [devices.screenAudioMode]);
 
@@ -1974,19 +1966,25 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						const shouldCaptureDisplayAudio = audioMode === ScreenAudioMode.SYSTEM;
 						const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
 
-						stream = await navigator.mediaDevices.getDisplayMedia({
-							video: {
-								...requestedScreenResolution,
-								frameRate: devices?.screenFramerate,
-							},
-							audio: shouldCaptureDisplayAudio
-								? {
-										echoCancellation: false,
-										noiseSuppression: false,
-										autoGainControl: false,
-									}
-								: false,
-						});
+						try {
+							stream = await navigator.mediaDevices.getDisplayMedia({
+								video: {
+									...requestedScreenResolution,
+									frameRate: devices?.screenFramerate,
+								},
+								audio: shouldCaptureDisplayAudio
+									? {
+											echoCancellation: false,
+											noiseSuppression: false,
+											autoGainControl: false,
+										}
+									: false,
+							});
+						} finally {
+							if (desktopSelection?.useSystemPicker) {
+								void desktopBridge?.resetScreenSharePicker?.();
+							}
+						}
 
 						logVoice('Screen share stream obtained', { stream });
 
