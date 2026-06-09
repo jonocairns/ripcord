@@ -1,5 +1,13 @@
 import { ScreenAudioMode, type TDesktopShareSourceKind } from '@/runtime/types';
 
+// Sentinel value for the "System audio (all apps)" choice in the display
+// per-app dropdown. It is never sent to the desktop bridge — it just means
+// "don't isolate a specific app", which maps back to system audio.
+const SYSTEM_AUDIO_TARGET_ID = '__system_audio__';
+
+const isSpecificAppAudioTarget = (targetId: string | undefined): targetId is string =>
+	targetId !== undefined && targetId !== SYSTEM_AUDIO_TARGET_ID;
+
 const getDefaultScreenShareIncludeAudio = (audioMode: ScreenAudioMode) => {
 	return audioMode !== ScreenAudioMode.NONE;
 };
@@ -54,6 +62,19 @@ const resolveAppAudioTargetBehavior = ({
 	suggestedTargetId,
 	requiresManualSelection,
 }: TResolveAppAudioTargetBehaviorInput): TResolveAppAudioTargetBehaviorResult => {
+	// Display shares have no window owner to infer audio from, so per-app is an
+	// optional override over system audio: resolve the running-app list whenever
+	// audio is enabled (mode is system by default), and never block confirm on it
+	// — picking nothing simply keeps system audio.
+	if (sourceKind === 'screen') {
+		return {
+			shouldResolveAppAudioTargets: perAppAudioSupported && audioMode !== ScreenAudioMode.NONE,
+			requiresManualAppAudioTarget: false,
+			shouldAutoSelectSuggestedTarget: false,
+			allowsImplicitFallbackWithoutTarget: false,
+		};
+	}
+
 	const shouldResolveAppAudioTargets =
 		perAppAudioSupported && audioMode === ScreenAudioMode.APP && sourceKind === 'window';
 
@@ -73,4 +94,10 @@ const resolveAppAudioTargetBehavior = ({
 };
 
 export type { TResolveAppAudioTargetBehaviorInput, TResolveAppAudioTargetBehaviorResult };
-export { getDefaultScreenShareIncludeAudio, getEffectiveScreenShareAudioMode, resolveAppAudioTargetBehavior };
+export {
+	getDefaultScreenShareIncludeAudio,
+	getEffectiveScreenShareAudioMode,
+	isSpecificAppAudioTarget,
+	resolveAppAudioTargetBehavior,
+	SYSTEM_AUDIO_TARGET_ID,
+};

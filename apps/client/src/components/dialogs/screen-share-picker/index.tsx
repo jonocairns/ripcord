@@ -17,17 +17,19 @@ import { cn } from '@/lib/utils';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import type {
-	ScreenAudioMode,
 	TDesktopAppAudioTargetsResult,
 	TDesktopCapabilities,
 	TDesktopScreenShareSelection,
 	TDesktopShareSource,
 } from '@/runtime/types';
+import { ScreenAudioMode } from '@/runtime/types';
 import type { TDialogBaseProps } from '../types';
 import {
 	getDefaultScreenShareIncludeAudio,
 	getEffectiveScreenShareAudioMode,
+	isSpecificAppAudioTarget,
 	resolveAppAudioTargetBehavior,
+	SYSTEM_AUDIO_TARGET_ID,
 } from './resolve-app-audio-target';
 
 type TScreenSharePickerDialogProps = TDialogBaseProps & {
@@ -108,12 +110,20 @@ const ScreenSharePickerDialog = memo(
 			return false;
 		})();
 		const includeAudio = canIncludeAudio && includeAudioRequested;
+		const isDisplaySource = selectedSource?.kind === 'screen';
 		const effectiveAudioMode = getEffectiveScreenShareAudioMode({
 			includeAudio,
 			systemAudioSupported,
 			perAppAudioSupported,
 			sourceKind: selectedSource?.kind,
 		});
+		// For a display share the app dropdown is an optional override on top of
+		// system audio: when the user picks a specific running app we isolate that
+		// app's audio (per-app process loopback) instead of capturing everything.
+		// Leaving it on "System audio" keeps the default system-audio mode.
+		const displayAppAudioOverrideActive =
+			isDisplaySource && includeAudio && perAppAudioSupported && isSpecificAppAudioTarget(selectedAppAudioTargetId);
+		const submittedAudioMode = displayAppAudioOverrideActive ? ScreenAudioMode.APP : effectiveAudioMode;
 		const appAudioTargetBehavior = resolveAppAudioTargetBehavior({
 			audioMode: effectiveAudioMode,
 			perAppAudioSupported,
@@ -142,17 +152,26 @@ const ScreenSharePickerDialog = memo(
 		const isResolvingAppAudioTargets = shouldResolveAppAudioTargets && loadingAppAudioTargets;
 		const requiresManualAppAudioTarget =
 			shouldResolveAppAudioTargets && appAudioTargetBehavior.requiresManualAppAudioTarget;
-		const resolvedAppAudioTargetId = requiresManualAppAudioTarget
+		const resolvedAppAudioTargetId = displayAppAudioOverrideActive
 			? selectedAppAudioTargetId
-			: appAudioTargetsResult.suggestedTargetId;
+			: requiresManualAppAudioTarget
+				? selectedAppAudioTargetId
+				: appAudioTargetsResult.suggestedTargetId;
 		const allowsImplicitFallbackWithoutTarget =
 			shouldResolveAppAudioTargets && appAudioTargetBehavior.allowsImplicitFallbackWithoutTarget;
+		// Block confirm only when per-app audio is the effective mode but no target
+		// is resolved (and no implicit system fallback applies). System/none modes —
+		// including a display defaulting to system audio — never block.
 		const canConfirmShare =
 			!showLoadingBody &&
 			hasSources &&
 			!!selectedSourceId &&
 			!isResolvingAppAudioTargets &&
-			(!shouldResolveAppAudioTargets || !!resolvedAppAudioTargetId || allowsImplicitFallbackWithoutTarget);
+			!(
+				submittedAudioMode === ScreenAudioMode.APP &&
+				!resolvedAppAudioTargetId &&
+				!allowsImplicitFallbackWithoutTarget
+			);
 		const fallbackWithoutTargetMessage = useMemo(() => {
 			if (!allowsImplicitFallbackWithoutTarget) {
 				return undefined;
@@ -225,13 +244,17 @@ const ScreenSharePickerDialog = memo(
 				return;
 			}
 
-			if (shouldResolveAppAudioTargets && !resolvedAppAudioTargetId && !allowsImplicitFallbackWithoutTarget) {
+			if (
+				submittedAudioMode === ScreenAudioMode.APP &&
+				!resolvedAppAudioTargetId &&
+				!allowsImplicitFallbackWithoutTarget
+			) {
 				return;
 			}
 
 			onConfirm?.({
 				sourceId: selectedSourceId,
-				audioMode: effectiveAudioMode,
+				audioMode: submittedAudioMode,
 				appAudioTargetId: resolvedAppAudioTargetId,
 				useSystemPicker:
 					selectedSource?.kind === 'window' && selectedSource.previewAvailable === false ? true : undefined,
@@ -509,48 +532,83 @@ const ScreenSharePickerDialog = memo(
 									<p className="text-xs text-amber-300">{appAudioTargetsResult.warning}</p>
 								)}
 
-								{!loadingAppAudioTargets &&
-									appAudioTargetBehavior.shouldAutoSelectSuggestedTarget &&
-									appAudioTargetsResult.suggestedTargetId && (
-										<p className="text-xs text-muted-foreground">Auto-matched a window owner app for isolated audio.</p>
-									)}
-
-								{!loadingAppAudioTargets &&
-									requiresManualAppAudioTarget &&
-									appAudioTargetsResult.targets.length > 0 &&
-									!selectedAppAudioTargetId && (
+								{isDisplaySource ? (
+									<>
 										<p className="text-xs text-muted-foreground">
-											Choose the running application that is producing the audio you want to share.
+											Share all system audio, or isolate a single running app's audio.
 										</p>
-									)}
 
-								{!loadingAppAudioTargets && requiresManualAppAudioTarget && (
-									<Select
-										value={selectedAppAudioTargetId}
-										onValueChange={(value) => setSelectedAppAudioTargetId(value)}
-									>
-										<SelectTrigger className="w-[340px]">
-											<SelectValue placeholder="Select app audio target" />
-										</SelectTrigger>
-										<SelectContent>
-											<SelectGroup>
-												{appAudioTargetsResult.targets.map((target) => (
-													<SelectItem key={target.id} value={target.id}>
-														{target.label}
-													</SelectItem>
-												))}
-											</SelectGroup>
-										</SelectContent>
-									</Select>
+										{!loadingAppAudioTargets && (
+											<Select
+												value={selectedAppAudioTargetId ?? SYSTEM_AUDIO_TARGET_ID}
+												onValueChange={(value) =>
+													setSelectedAppAudioTargetId(value === SYSTEM_AUDIO_TARGET_ID ? undefined : value)
+												}
+											>
+												<SelectTrigger className="w-[340px]">
+													<SelectValue placeholder="Select audio source" />
+												</SelectTrigger>
+												<SelectContent>
+													<SelectGroup>
+														<SelectItem value={SYSTEM_AUDIO_TARGET_ID}>System audio (all apps)</SelectItem>
+														{appAudioTargetsResult.targets.map((target) => (
+															<SelectItem key={target.id} value={target.id}>
+																{target.label}
+															</SelectItem>
+														))}
+													</SelectGroup>
+												</SelectContent>
+											</Select>
+										)}
+									</>
+								) : (
+									<>
+										{!loadingAppAudioTargets &&
+											appAudioTargetBehavior.shouldAutoSelectSuggestedTarget &&
+											appAudioTargetsResult.suggestedTargetId && (
+												<p className="text-xs text-muted-foreground">
+													Auto-matched a window owner app for isolated audio.
+												</p>
+											)}
+
+										{!loadingAppAudioTargets &&
+											requiresManualAppAudioTarget &&
+											appAudioTargetsResult.targets.length > 0 &&
+											!selectedAppAudioTargetId && (
+												<p className="text-xs text-muted-foreground">
+													Choose the running application that is producing the audio you want to share.
+												</p>
+											)}
+
+										{!loadingAppAudioTargets && requiresManualAppAudioTarget && (
+											<Select
+												value={selectedAppAudioTargetId}
+												onValueChange={(value) => setSelectedAppAudioTargetId(value)}
+											>
+												<SelectTrigger className="w-[340px]">
+													<SelectValue placeholder="Select app audio target" />
+												</SelectTrigger>
+												<SelectContent>
+													<SelectGroup>
+														{appAudioTargetsResult.targets.map((target) => (
+															<SelectItem key={target.id} value={target.id}>
+																{target.label}
+															</SelectItem>
+														))}
+													</SelectGroup>
+												</SelectContent>
+											</Select>
+										)}
+
+										{!loadingAppAudioTargets &&
+											requiresManualAppAudioTarget &&
+											appAudioTargetsResult.targets.length === 0 && (
+												<p className="text-xs text-muted-foreground">
+													{fallbackWithoutTargetMessage ?? 'No running app targets were found.'}
+												</p>
+											)}
+									</>
 								)}
-
-								{!loadingAppAudioTargets &&
-									requiresManualAppAudioTarget &&
-									appAudioTargetsResult.targets.length === 0 && (
-										<p className="text-xs text-muted-foreground">
-											{fallbackWithoutTargetMessage ?? 'No running app targets were found.'}
-										</p>
-									)}
 							</div>
 						)}
 					</div>
