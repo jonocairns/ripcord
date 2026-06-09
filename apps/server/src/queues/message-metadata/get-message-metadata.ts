@@ -1,9 +1,9 @@
+import dns from 'node:dns';
+import { isIP } from 'node:net';
 import type { TGenericObject, TMessageMetadata } from '@sharkord/shared';
-import dns from 'dns';
 import { eq } from 'drizzle-orm';
 import ipaddr from 'ipaddr.js';
 import { getLinkPreview } from 'link-preview-js';
-import { isIP } from 'net';
 import { db } from '../../db';
 import { messages } from '../../db/schema';
 import { extractUrls } from '../../helpers/urls-extractor';
@@ -14,141 +14,128 @@ const METADATA_CACHE_MAX = 500;
 const metadataCache = new Map<string, TGenericObject>();
 
 const lruGet = (key: string): TGenericObject | undefined => {
-  const value = metadataCache.get(key);
-  if (value !== undefined) {
-    // Refresh recency by re-inserting
-    metadataCache.delete(key);
-    metadataCache.set(key, value);
-  }
-  return value;
+	const value = metadataCache.get(key);
+	if (value !== undefined) {
+		// Refresh recency by re-inserting
+		metadataCache.delete(key);
+		metadataCache.set(key, value);
+	}
+	return value;
 };
 
 const lruSet = (key: string, value: TGenericObject): void => {
-  if (metadataCache.has(key)) metadataCache.delete(key);
-  else if (metadataCache.size >= METADATA_CACHE_MAX) {
-    // Evict the least-recently-used (first) entry
-    const lruKey = metadataCache.keys().next().value;
-    if (lruKey !== undefined) metadataCache.delete(lruKey);
-  }
-  metadataCache.set(key, value);
+	if (metadataCache.has(key)) metadataCache.delete(key);
+	else if (metadataCache.size >= METADATA_CACHE_MAX) {
+		// Evict the least-recently-used (first) entry
+		const lruKey = metadataCache.keys().next().value;
+		if (lruKey !== undefined) metadataCache.delete(lruKey);
+	}
+	metadataCache.set(key, value);
 };
 
 const isPrivateIP = (ip: string): boolean => {
-  try {
-    const addr = ipaddr.parse(ip);
-    const range = addr.range();
+	try {
+		const addr = ipaddr.parse(ip);
+		const range = addr.range();
 
-    const blockedRanges = [
-      'unspecified',
-      'broadcast',
-      'multicast',
-      'linkLocal',
-      'loopback',
-      'private',
-      'uniqueLocal'
-    ];
+		const blockedRanges = ['unspecified', 'broadcast', 'multicast', 'linkLocal', 'loopback', 'private', 'uniqueLocal'];
 
-    return blockedRanges.includes(range);
-  } catch {
-    return true; // if we can't parse it, block it
-  }
+		return blockedRanges.includes(range);
+	} catch {
+		return true; // if we can't parse it, block it
+	}
 };
 
-const urlMetadataParser = async (
-  content: string
-): Promise<TMessageMetadata[]> => {
-  try {
-    const urls = extractUrls(content);
+const urlMetadataParser = async (content: string): Promise<TMessageMetadata[]> => {
+	try {
+		const urls = extractUrls(content);
 
-    if (!urls) return [];
+		if (!urls) return [];
 
-    const promises = urls.map(async (url) => {
-      const cached = lruGet(url);
-      if (cached !== undefined) return cached;
+		const promises = urls.map(async (url) => {
+			const cached = lruGet(url);
+			if (cached !== undefined) return cached;
 
-      if (!URL.canParse(url)) {
-        return;
-      }
+			if (!URL.canParse(url)) {
+				return;
+			}
 
-      const parsed = new URL(url);
+			const parsed = new URL(url);
 
-      // allow only http and https protocols
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        return;
-      }
+			// allow only http and https protocols
+			if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+				return;
+			}
 
-      // it's already an ip address, check if it's private
-      if (isIP(parsed.hostname) && isPrivateIP(parsed.hostname)) {
-        return;
-      }
+			// it's already an ip address, check if it's private
+			if (isIP(parsed.hostname) && isPrivateIP(parsed.hostname)) {
+				return;
+			}
 
-      const metadata = await getLinkPreview(url, {
-        timeout: 5000,
-        followRedirects: 'follow',
-        resolveDNSHost: async (url: string) => {
-          return new Promise((resolve, reject) => {
-            try {
-              const hostname = new URL(url).hostname;
+			const metadata = await getLinkPreview(url, {
+				timeout: 5000,
+				followRedirects: 'follow',
+				resolveDNSHost: async (url: string) => {
+					return new Promise((resolve, reject) => {
+						try {
+							const hostname = new URL(url).hostname;
 
-              dns.lookup(hostname, { all: true }, (err, addresses) => {
-                if (err) {
-                  reject(err);
-                  return;
-                }
+							dns.lookup(hostname, { all: true }, (err, addresses) => {
+								if (err) {
+									reject(err);
+									return;
+								}
 
-                for (const entry of addresses) {
-                  if (isPrivateIP(entry.address)) {
-                    reject(new Error('Cannot resolve private IP addresses'));
-                    return;
-                  }
-                }
+								for (const entry of addresses) {
+									if (isPrivateIP(entry.address)) {
+										reject(new Error('Cannot resolve private IP addresses'));
+										return;
+									}
+								}
 
-                const firstAddress = addresses[0]?.address;
+								const firstAddress = addresses[0]?.address;
 
-                if (!firstAddress) {
-                  reject(new Error('No addresses found'));
-                  return;
-                }
+								if (!firstAddress) {
+									reject(new Error('No addresses found'));
+									return;
+								}
 
-                resolve(firstAddress);
-              });
-            } catch (error) {
-              reject(error);
-            }
-          });
-        }
-      });
+								resolve(firstAddress);
+							});
+						} catch (error) {
+							reject(error);
+						}
+					});
+				},
+			});
 
-      if (!metadata) return;
+			if (!metadata) return;
 
-      lruSet(url, metadata);
+			lruSet(url, metadata);
 
-      return metadata;
-    });
+			return metadata;
+		});
 
-    const metadata = (await Promise.all(promises)) as TMessageMetadata[]; // TODO: fix these types
+		const metadata = (await Promise.all(promises)) as TMessageMetadata[]; // TODO: fix these types
 
-    return metadata ?? [];
-  } catch {
-    // ignore
-  }
+		return metadata ?? [];
+	} catch {
+		// ignore
+	}
 
-  return [];
+	return [];
 };
 
-export const processMessageMetadata = async (
-  content: string,
-  messageId: number
-) => {
-  const metadata = await urlMetadataParser(content);
+export const processMessageMetadata = async (content: string, messageId: number) => {
+	const metadata = await urlMetadataParser(content);
 
-  return db
-    .update(messages)
-    .set({
-      metadata,
-      updatedAt: Date.now()
-    })
-    .where(eq(messages.id, messageId))
-    .returning()
-    .get();
+	return db
+		.update(messages)
+		.set({
+			metadata,
+			updatedAt: Date.now(),
+		})
+		.where(eq(messages.id, messageId))
+		.returning()
+		.get();
 };

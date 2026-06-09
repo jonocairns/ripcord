@@ -10,35 +10,31 @@ import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 
 const deleteEmojiRoute = protectedProcedure
-  .input(
-    z.object({
-      emojiId: z.number()
-    })
-  )
-  .mutation(async ({ input, ctx }) => {
-    await ctx.needsPermission(Permission.MANAGE_EMOJIS);
+	.input(
+		z.object({
+			emojiId: z.number(),
+		}),
+	)
+	.mutation(async ({ input, ctx }) => {
+		await ctx.needsPermission(Permission.MANAGE_EMOJIS);
 
-    const removedEmoji = await db
-      .delete(emojis)
-      .where(eq(emojis.id, input.emojiId))
-      .returning()
-      .get();
+		const removedEmoji = await db.delete(emojis).where(eq(emojis.id, input.emojiId)).returning().get();
 
-    invariant(removedEmoji, {
-      code: 'NOT_FOUND',
-      message: 'Emoji not found'
-    });
+		invariant(removedEmoji, {
+			code: 'NOT_FOUND',
+			message: 'Emoji not found',
+		});
 
-    await removeFile(removedEmoji.fileId);
+		await removeFile(removedEmoji.fileId);
 
-    publishEmoji(removedEmoji.id, 'delete');
-    enqueueActivityLog({
-      type: ActivityLogType.DELETED_EMOJI,
-      userId: ctx.user.id,
-      details: {
-        name: removedEmoji.name
-      }
-    });
-  });
+		publishEmoji(removedEmoji.id, 'delete');
+		enqueueActivityLog({
+			type: ActivityLogType.DELETED_EMOJI,
+			userId: ctx.user.id,
+			details: {
+				name: removedEmoji.name,
+			},
+		});
+	});
 
 export { deleteEmojiRoute };

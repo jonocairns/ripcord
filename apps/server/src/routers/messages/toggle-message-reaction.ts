@@ -10,55 +10,47 @@ import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 
 const toggleMessageReactionRoute = protectedProcedure
-  .input(
-    z.object({
-      messageId: z.number(),
-      emoji: z.string()
-    })
-  )
-  .mutation(async ({ input, ctx }) => {
-    await ctx.needsPermission(Permission.REACT_TO_MESSAGES);
+	.input(
+		z.object({
+			messageId: z.number(),
+			emoji: z.string(),
+		}),
+	)
+	.mutation(async ({ input, ctx }) => {
+		await ctx.needsPermission(Permission.REACT_TO_MESSAGES);
 
-    const message = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.id, input.messageId))
-      .get();
+		const message = await db.select().from(messages).where(eq(messages.id, input.messageId)).get();
 
-    invariant(message, {
-      code: 'NOT_FOUND',
-      message: 'Message not found'
-    });
+		invariant(message, {
+			code: 'NOT_FOUND',
+			message: 'Message not found',
+		});
 
-    const reaction = await getReaction(
-      input.messageId,
-      input.emoji,
-      ctx.user.id
-    );
+		const reaction = await getReaction(input.messageId, input.emoji, ctx.user.id);
 
-    if (!reaction) {
-      const emojiFileId = await getEmojiFileIdByEmojiName(input.emoji);
+		if (!reaction) {
+			const emojiFileId = await getEmojiFileIdByEmojiName(input.emoji);
 
-      await db.insert(messageReactions).values({
-        messageId: input.messageId,
-        emoji: input.emoji,
-        userId: ctx.user.id,
-        fileId: emojiFileId,
-        createdAt: Date.now()
-      });
-    } else {
-      await db
-        .delete(messageReactions)
-        .where(
-          and(
-            eq(messageReactions.messageId, input.messageId),
-            eq(messageReactions.emoji, input.emoji),
-            eq(messageReactions.userId, ctx.user.id)
-          )
-        );
-    }
+			await db.insert(messageReactions).values({
+				messageId: input.messageId,
+				emoji: input.emoji,
+				userId: ctx.user.id,
+				fileId: emojiFileId,
+				createdAt: Date.now(),
+			});
+		} else {
+			await db
+				.delete(messageReactions)
+				.where(
+					and(
+						eq(messageReactions.messageId, input.messageId),
+						eq(messageReactions.emoji, input.emoji),
+						eq(messageReactions.userId, ctx.user.id),
+					),
+				);
+		}
 
-    publishMessage(input.messageId, message.channelId, 'update');
-  });
+		publishMessage(input.messageId, message.channelId, 'update');
+	});
 
 export { toggleMessageReactionRoute };

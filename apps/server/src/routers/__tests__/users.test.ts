@@ -1,5 +1,5 @@
-import { type TTempFile, UserStatus } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
+import { type TTempFile, UserStatus } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { initTest, uploadFile } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
@@ -7,1013 +7,1007 @@ import { refreshTokens, users } from '../../db/schema';
 import { verifyPassword } from '../../helpers/password';
 
 describe('users router', () => {
-  test('should throw when user lacks permissions (getAll)', async () => {
-    const { caller } = await initTest(2);
-
-    await expect(caller.users.getAll()).rejects.toThrow(
-      'Insufficient permissions'
-    );
-  });
-
-  test('should throw when user lacks permissions (getInfo)', async () => {
-    const { caller } = await initTest(2);
-
-    await expect(
-      caller.users.getInfo({
-        userId: 1
-      })
-    ).rejects.toThrow('Insufficient permissions');
-  });
-
-  test('should throw when user lacks permissions (ban)', async () => {
-    const { caller } = await initTest(2);
-
-    await expect(
-      caller.users.ban({
-        userId: 1,
-        reason: 'Test ban'
-      })
-    ).rejects.toThrow('Insufficient permissions');
-  });
-
-  test('should throw when user lacks permissions (unban)', async () => {
-    const { caller } = await initTest(2);
-
-    await expect(
-      caller.users.unban({
-        userId: 1
-      })
-    ).rejects.toThrow('Insufficient permissions');
-  });
-
-  test('should throw when user lacks permissions (kick)', async () => {
-    const { caller } = await initTest(2);
-
-    await expect(
-      caller.users.kick({
-        userId: 1,
-        reason: 'Test kick'
-      })
-    ).rejects.toThrow('Insufficient permissions');
-  });
-
-  test('should throw when user lacks permissions (addRole)', async () => {
-    const { caller } = await initTest(2);
-
-    await expect(
-      caller.users.addRole({
-        userId: 1,
-        roleId: 2
-      })
-    ).rejects.toThrow('Insufficient permissions');
-  });
-
-  test('should throw when user lacks permissions (removeRole)', async () => {
-    const { caller } = await initTest(2);
-
-    await expect(
-      caller.users.removeRole({
-        userId: 1,
-        roleId: 2
-      })
-    ).rejects.toThrow('Insufficient permissions');
-  });
-
-  test('should throw when user lacks owner role (delete)', async () => {
-    const { caller } = await initTest(2);
-
-    await expect(
-      caller.users.delete({
-        userId: 1
-      })
-    ).rejects.toThrow('Only server owners can perform this action');
-  });
-
-  test('should throw when user lacks owner role (resetPassword)', async () => {
-    const { caller } = await initTest(2);
-
-    await expect(
-      caller.users.resetPassword({
-        userId: 1,
-        newPassword: 'newpassword123'
-      })
-    ).rejects.toThrow('Only server owners can perform this action');
-  });
-
-  test('should throw when user lacks owner role (resetTotp)', async () => {
-    const { caller } = await initTest(2);
-
-    await expect(
-      caller.users.resetTotp({
-        userId: 1
-      })
-    ).rejects.toThrow('Only server owners can perform this action');
-  });
-
-  test('should get all users', async () => {
-    const { caller } = await initTest();
-
-    const users = await caller.users.getAll();
-
-    expect(users).toBeDefined();
-    expect(Array.isArray(users)).toBe(true);
-    expect(users.length).toBeGreaterThan(0);
-
-    // verify sensitive fields are cleared
-    users.forEach((user) => {
-      expect(user.password).toBeEmpty();
-      expect(user.identity).toBeEmpty();
-    });
-  });
-
-  test('should get user info', async () => {
-    const { caller } = await initTest();
-
-    const info = await caller.users.getInfo({
-      userId: 2
-    });
-
-    expect(info).toBeDefined();
-    expect(info.user).toBeDefined();
-    expect(info.user.id).toBe(2);
-  });
-
-  test('should throw when getting info for non-existing user', async () => {
-    const { caller } = await initTest();
-
-    await expect(
-      caller.users.getInfo({
-        userId: 999
-      })
-    ).rejects.toThrow('User not found');
-  });
-
-  test('should update own user profile', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.update({
-      name: 'Updated Name',
-      bannerColor: '#ff0000',
-      bio: 'This is my new bio'
-    });
-
-    const users = await caller.users.getAll();
-    const updatedUser = users.find((u) => u.id === 1);
-
-    expect(updatedUser).toBeDefined();
-    expect(updatedUser!.name).toBe('Updated Name');
-    expect(updatedUser!.bannerColor).toBe('#ff0000');
-    expect(updatedUser!.bio).toBe('This is my new bio');
-  });
-
-  test('should update user profile with null bio', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.update({
-      name: 'Test User',
-      bannerColor: '#00ff00'
-    });
-
-    const users = await caller.users.getAll();
-    const updatedUser = users.find((u) => u.id === 1);
-
-    expect(updatedUser).toBeDefined();
-    expect(updatedUser!.name).toBe('Test User');
-    expect(updatedUser!.bannerColor).toBe('#00ff00');
-  });
-
-  test('should update own presence status preference', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.setStatus({
-      status: UserStatus.AWAY
-    });
-
-    const row = await tdb
-      .select({
-        presenceStatus: users.presenceStatus
-      })
-      .from(users)
-      .where(eq(users.id, 1))
-      .get();
-
-    expect(row?.presenceStatus).toBe(UserStatus.AWAY);
-  });
-
-  test('auto status flip does not override manually set away', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.setStatus({
-      status: UserStatus.AWAY
-    });
-
-    await caller.users.setStatus({
-      status: UserStatus.ONLINE,
-      auto: true
-    });
-
-    const row = await tdb
-      .select({
-        presenceStatus: users.presenceStatus
-      })
-      .from(users)
-      .where(eq(users.id, 1))
-      .get();
-
-    expect(row?.presenceStatus).toBe(UserStatus.AWAY);
-  });
-
-  test('manually returning online allows subsequent auto flips to apply', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.setStatus({
-      status: UserStatus.AWAY
-    });
-
-    await caller.users.setStatus({
-      status: UserStatus.ONLINE
-    });
-
-    // Auto flips don't persist to the DB, so the column stays at the last
-    // manual value. The point of this test is that the auto flip isn't
-    // rejected (no throw) now that the manual-away preference is cleared.
-    const result = await caller.users.setStatus({
-      status: UserStatus.AWAY,
-      auto: true
-    });
-
-    expect(result.status).toBeDefined();
-
-    const row = await tdb
-      .select({
-        presenceStatus: users.presenceStatus
-      })
-      .from(users)
-      .where(eq(users.id, 1))
-      .get();
-
-    expect(row?.presenceStatus).toBe(UserStatus.ONLINE);
-  });
-
-  test('auto flips never write the presence column, so manual preference survives restart', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.setStatus({
-      status: UserStatus.AWAY
-    });
-
-    // Even though the auto flip is attempted, the DB column — which is what a
-    // fresh server process re-reads after restart — must remain AWAY.
-    await caller.users.setStatus({
-      status: UserStatus.ONLINE,
-      auto: true
-    });
-
-    await caller.users.setStatus({
-      status: UserStatus.AWAY,
-      auto: true
-    });
-
-    const row = await tdb
-      .select({
-        presenceStatus: users.presenceStatus
-      })
-      .from(users)
-      .where(eq(users.id, 1))
-      .get();
-
-    expect(row?.presenceStatus).toBe(UserStatus.AWAY);
-  });
-
-  test('should update password successfully and rotate active sessions', async () => {
-    const { caller } = await initTest();
-    const now = Date.now();
-
-    const currentPassword = 'password123';
-    const newPassword = 'newpassword456';
-
-    await tdb.insert(refreshTokens).values({
-      userId: 1,
-      tokenHash: 'user-1-refresh-token-hash',
-      expiresAt: now + 1000000,
-      createdAt: now,
-      updatedAt: now
-    });
-
-    const before = await tdb
-      .select({
-        tokenVersion: users.tokenVersion
-      })
-      .from(users)
-      .where(eq(users.id, 1))
-      .get();
-
-    await caller.users.updatePassword({
-      currentPassword,
-      newPassword,
-      confirmNewPassword: newPassword
-    });
-
-    const row = await tdb
-      .select({
-        password: users.password,
-        tokenVersion: users.tokenVersion
-      })
-      .from(users)
-      .where(eq(users.id, 1))
-      .get();
-
-    const tokenRow = await tdb
-      .select({
-        revokedAt: refreshTokens.revokedAt
-      })
-      .from(refreshTokens)
-      .where(eq(refreshTokens.tokenHash, 'user-1-refresh-token-hash'))
-      .get();
-
-    expect(row).toBeDefined();
-
-    // should not be plain text
-    expect(row!.password).not.toBe(newPassword);
-
-    const matches = await verifyPassword(newPassword, row!.password);
-    expect(matches).toBe(true);
-    expect(row!.tokenVersion).toBe((before?.tokenVersion ?? 0) + 1);
-    expect(tokenRow?.revokedAt).toBeDefined();
-  });
-
-  test('should throw when current password is incorrect', async () => {
-    const { caller } = await initTest();
-
-    await expect(
-      caller.users.updatePassword({
-        currentPassword: 'wrongpassword',
-        newPassword: 'newpassword',
-        confirmNewPassword: 'newpassword'
-      })
-    ).rejects.toThrow('Current password is incorrect');
-  });
-
-  test('should throw when new passwords do not match', async () => {
-    const { caller } = await initTest();
-
-    await expect(
-      caller.users.updatePassword({
-        currentPassword: 'password123',
-        newPassword: 'newpassword',
-        confirmNewPassword: 'differentpassword'
-      })
-    ).rejects.toThrow('New password and confirmation do not match');
-  });
-
-  test('should allow owner to reset another user password', async () => {
-    const { caller } = await initTest();
-
-    const newPassword = 'ownerreset123';
-
-    await caller.users.resetPassword({
-      userId: 2,
-      newPassword
-    });
-
-    const row = await tdb
-      .select({
-        password: users.password
-      })
-      .from(users)
-      .where(eq(users.id, 2))
-      .get();
-
-    expect(row).toBeDefined();
-    expect(row!.password).not.toBe(newPassword);
-
-    const matches = await verifyPassword(newPassword, row!.password);
-    expect(matches).toBe(true);
-  });
-
-  test('should throw when owner tries to reset own password', async () => {
-    const { caller } = await initTest();
-
-    await expect(
-      caller.users.resetPassword({
-        userId: 1,
-        newPassword: 'ownerreset123'
-      })
-    ).rejects.toThrow('You cannot reset your own password');
-  });
-
-  test('should allow owner to reset another user 2FA', async () => {
-    const { caller } = await initTest();
-
-    await tdb
-      .update(users)
-      .set({
-        totpSecret: 'encrypted-totp-secret',
-        totpRecoveryCodes: JSON.stringify(['hashed-code'])
-      })
-      .where(eq(users.id, 2))
-      .run();
-
-    await caller.users.resetTotp({
-      userId: 2
-    });
-
-    const row = await tdb
-      .select({
-        totpSecret: users.totpSecret,
-        totpRecoveryCodes: users.totpRecoveryCodes
-      })
-      .from(users)
-      .where(eq(users.id, 2))
-      .get();
-
-    expect(row?.totpSecret).toBeNull();
-    expect(row?.totpRecoveryCodes).toBeNull();
-  });
-
-  test('should throw when owner tries to reset own 2FA', async () => {
-    const { caller } = await initTest();
-
-    await expect(
-      caller.users.resetTotp({
-        userId: 1
-      })
-    ).rejects.toThrow('You cannot reset your own two-factor authentication');
-  });
-
-  test('should revoke active refresh tokens when owner resets 2FA', async () => {
-    const { caller } = await initTest();
-    const now = Date.now();
-
-    await tdb
-      .update(users)
-      .set({
-        totpSecret: 'encrypted-totp-secret',
-        totpRecoveryCodes: JSON.stringify(['hashed-code'])
-      })
-      .where(eq(users.id, 2))
-      .run();
-
-    await tdb.insert(refreshTokens).values([
-      {
-        userId: 2,
-        tokenHash: 'target-2fa-token-hash',
-        expiresAt: now + 1000000,
-        createdAt: now,
-        updatedAt: now
-      },
-      {
-        userId: 1,
-        tokenHash: 'owner-2fa-token-hash',
-        expiresAt: now + 1000000,
-        createdAt: now,
-        updatedAt: now
-      }
-    ]);
-
-    await caller.users.resetTotp({
-      userId: 2
-    });
-
-    const targetToken = await tdb
-      .select({
-        revokedAt: refreshTokens.revokedAt
-      })
-      .from(refreshTokens)
-      .where(eq(refreshTokens.tokenHash, 'target-2fa-token-hash'))
-      .get();
-
-    const ownerToken = await tdb
-      .select({
-        revokedAt: refreshTokens.revokedAt
-      })
-      .from(refreshTokens)
-      .where(eq(refreshTokens.tokenHash, 'owner-2fa-token-hash'))
-      .get();
-
-    expect(targetToken?.revokedAt).toBeDefined();
-    expect(ownerToken?.revokedAt).toBeNull();
-  });
-
-  test('should revoke active refresh tokens when owner resets password', async () => {
-    const { caller } = await initTest();
-    const now = Date.now();
-
-    await tdb.insert(refreshTokens).values([
-      {
-        userId: 2,
-        tokenHash: 'target-token-hash',
-        expiresAt: now + 1000000,
-        createdAt: now,
-        updatedAt: now
-      },
-      {
-        userId: 1,
-        tokenHash: 'owner-token-hash',
-        expiresAt: now + 1000000,
-        createdAt: now,
-        updatedAt: now
-      }
-    ]);
-
-    await caller.users.resetPassword({
-      userId: 2,
-      newPassword: 'ownerreset123'
-    });
-
-    const targetToken = await tdb
-      .select({
-        revokedAt: refreshTokens.revokedAt
-      })
-      .from(refreshTokens)
-      .where(eq(refreshTokens.tokenHash, 'target-token-hash'))
-      .get();
-
-    const ownerToken = await tdb
-      .select({
-        revokedAt: refreshTokens.revokedAt
-      })
-      .from(refreshTokens)
-      .where(eq(refreshTokens.tokenHash, 'owner-token-hash'))
-      .get();
-
-    expect(targetToken?.revokedAt).toBeDefined();
-    expect(ownerToken?.revokedAt).toBeNull();
-  });
-
-  test('should require target user to change password after owner reset', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.resetPassword({
-      userId: 2,
-      newPassword: 'ownerreset123'
-    });
-
-    const row = await tdb
-      .select({
-        mustChangePassword: users.mustChangePassword
-      })
-      .from(users)
-      .where(eq(users.id, 2))
-      .get();
-
-    expect(row?.mustChangePassword).toBe(true);
-  });
-
-  test('should block non-password procedures while password reset is required', async () => {
-    await tdb
-      .update(users)
-      .set({ mustChangePassword: true })
-      .where(eq(users.id, 2))
-      .run();
-
-    const { caller } = await initTest(2);
-
-    await expect(
-      caller.users.update({
-        name: 'Blocked User',
-        bannerColor: '#00ff00'
-      })
-    ).rejects.toThrow('You must change your password before using the server.');
-  });
-
-  test('should clear mustChangePassword and rotate sessions when user updates required password', async () => {
-    const now = Date.now();
-
-    await tdb
-      .update(users)
-      .set({
-        mustChangePassword: true
-      })
-      .where(eq(users.id, 2))
-      .run();
-
-    await tdb.insert(refreshTokens).values({
-      userId: 2,
-      tokenHash: 'forced-reset-token-hash',
-      expiresAt: now + 1000000,
-      createdAt: now,
-      updatedAt: now
-    });
-
-    const before = await tdb
-      .select({
-        tokenVersion: users.tokenVersion
-      })
-      .from(users)
-      .where(eq(users.id, 2))
-      .get();
-
-    const { caller } = await initTest(2);
-
-    await caller.users.updatePassword({
-      currentPassword: 'password123',
-      newPassword: 'newpassword456',
-      confirmNewPassword: 'newpassword456'
-    });
-
-    const after = await tdb
-      .select({
-        mustChangePassword: users.mustChangePassword,
-        tokenVersion: users.tokenVersion
-      })
-      .from(users)
-      .where(eq(users.id, 2))
-      .get();
-
-    const rotatedToken = await tdb
-      .select({
-        revokedAt: refreshTokens.revokedAt
-      })
-      .from(refreshTokens)
-      .where(eq(refreshTokens.tokenHash, 'forced-reset-token-hash'))
-      .get();
-
-    expect(after?.mustChangePassword).toBe(false);
-    expect(after?.tokenVersion).toBe((before?.tokenVersion ?? 0) + 1);
-    expect(rotatedToken?.revokedAt).toBeDefined();
-  });
-
-  test('should allow owner to delete another user', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.delete({
-      userId: 2
-    });
-
-    const row = await tdb
-      .select({
-        id: users.id
-      })
-      .from(users)
-      .where(eq(users.id, 2))
-      .get();
-
-    expect(row).toBeUndefined();
-  });
-
-  test('should throw when owner tries to delete own account', async () => {
-    const { caller } = await initTest();
-
-    await expect(
-      caller.users.delete({
-        userId: 1
-      })
-    ).rejects.toThrow('You cannot delete your own account');
-  });
-
-  test('should change avatar', async () => {
-    const { caller, mockedToken } = await initTest();
-
-    const currentUserInfo = await caller.users.getInfo({ userId: 1 });
-
-    expect(currentUserInfo).toBeDefined();
-    expect(currentUserInfo.user.avatarId).toBeNull();
-
-    const file = new File(['avatar content'], 'avatar.png', {
-      type: 'image/png'
-    });
-
-    const uploadResponse = await uploadFile(file, mockedToken);
-    const uploadData = (await uploadResponse.json()) as TTempFile;
-
-    await caller.users.changeAvatar({
-      fileId: uploadData.id
-    });
-
-    const userInfo = await caller.users.getInfo({ userId: 1 });
-
-    expect(userInfo).toBeDefined();
-    expect(userInfo!.user.avatarId).toBeDefined();
-  });
-
-  test('should remove avatar', async () => {
-    const { caller, mockedToken } = await initTest();
-
-    const currentUserInfo = await caller.users.getInfo({ userId: 1 });
-
-    expect(currentUserInfo).toBeDefined();
-    expect(currentUserInfo.user.avatarId).toBeNull();
-
-    const file = new File(['avatar content'], 'avatar.png', {
-      type: 'image/png'
-    });
-
-    const uploadResponse = await uploadFile(file, mockedToken);
-    const uploadData = (await uploadResponse.json()) as TTempFile;
-
-    await caller.users.changeAvatar({
-      fileId: uploadData.id
-    });
-
-    await caller.users.changeAvatar({});
-
-    const userInfo = await caller.users.getInfo({ userId: 1 });
-
-    expect(userInfo).toBeDefined();
-    expect(userInfo!.user.avatarId).toBeNull();
-  });
-
-  test('should change banner', async () => {
-    const { caller, mockedToken } = await initTest();
-
-    const file = new File(['banner content'], 'banner.png', {
-      type: 'image/png'
-    });
-
-    const uploadResponse = await uploadFile(file, mockedToken);
-    const uploadData = (await uploadResponse.json()) as TTempFile;
-
-    await caller.users.changeBanner({
-      fileId: uploadData.id
-    });
-
-    const userInfo = await caller.users.getInfo({ userId: 1 });
-
-    expect(userInfo).toBeDefined();
-    expect(userInfo!.user.bannerId).toBeDefined();
-  });
-
-  test('should remove banner', async () => {
-    const { caller, mockedToken } = await initTest();
-
-    const file = new File(['banner content'], 'banner.png', {
-      type: 'image/png'
-    });
-
-    const uploadResponse = await uploadFile(file, mockedToken);
-    const uploadData = (await uploadResponse.json()) as TTempFile;
-
-    await caller.users.changeBanner({
-      fileId: uploadData.id
-    });
-
-    await caller.users.changeBanner({});
-
-    const userInfo = await caller.users.getInfo({ userId: 1 });
-
-    expect(userInfo).toBeDefined();
-    expect(userInfo!.user.bannerId).toBeNull();
-  });
-
-  test('should replace existing avatar', async () => {
-    const { caller, mockedToken } = await initTest();
-
-    const file1 = new File(['first avatar'], 'avatar1.png', {
-      type: 'image/png'
-    });
-
-    const uploadResponse1 = await uploadFile(file1, mockedToken);
-    const uploadData1 = (await uploadResponse1.json()) as TTempFile;
-
-    await caller.users.changeAvatar({
-      fileId: uploadData1.id
-    });
-
-    const firstInfo = await caller.users.getInfo({ userId: 1 });
-    const firstAvatarId = firstInfo.user.avatarId;
-
-    const file2 = new File(['second avatar'], 'avatar2.png', {
-      type: 'image/png'
-    });
-
-    const uploadResponse2 = await uploadFile(file2, mockedToken);
-    const uploadData2 = (await uploadResponse2.json()) as TTempFile;
-
-    await caller.users.changeAvatar({
-      fileId: uploadData2.id
-    });
-
-    const secondInfo = await caller.users.getInfo({ userId: 1 });
-
-    expect(secondInfo.user.avatarId).not.toBe(firstAvatarId);
-  });
-
-  test('should add role to user', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.addRole({
-      userId: 2,
-      roleId: 1
-    });
-
-    const info = await caller.users.getInfo({
-      userId: 2
-    });
-
-    expect(info.user.roleIds).toContain(1);
-  });
-
-  test('should throw when adding duplicate role', async () => {
-    const { caller } = await initTest();
-
-    await expect(
-      caller.users.addRole({
-        userId: 2,
-        roleId: 2
-      })
-    ).rejects.toThrow('User already has this role');
-  });
-
-  test('should remove role from user', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.addRole({
-      userId: 2,
-      roleId: 1
-    });
-
-    await caller.users.removeRole({
-      userId: 2,
-      roleId: 1
-    });
-
-    const info = await caller.users.getInfo({
-      userId: 2
-    });
-
-    expect(info.user.roleIds).not.toContain(1);
-  });
-
-  test('should throw when removing non-existent role', async () => {
-    const { caller } = await initTest();
-
-    await expect(
-      caller.users.removeRole({
-        userId: 2,
-        roleId: 3
-      })
-    ).rejects.toThrow('User does not have this role');
-  });
-
-  test('should ban user with reason', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.ban({
-      userId: 2,
-      reason: 'Violated community guidelines'
-    });
-
-    const info = await caller.users.getInfo({
-      userId: 2
-    });
-
-    expect(info.user.banned).toBe(true);
-    expect(info.user.banReason).toBe('Violated community guidelines');
-    expect(info.user.bannedAt).toBeDefined();
-  });
-
-  test('should ban user without reason', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.ban({
-      userId: 2
-    });
-
-    const info = await caller.users.getInfo({
-      userId: 2
-    });
-
-    expect(info.user.banned).toBe(true);
-    expect(info.user.banReason).toBeNull();
-  });
-
-  test('should throw when trying to ban yourself', async () => {
-    const { caller } = await initTest();
-
-    await expect(
-      caller.users.ban({
-        userId: 1
-      })
-    ).rejects.toThrow('You cannot ban yourself');
-  });
-
-  test('should unban user', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.ban({
-      userId: 2,
-      reason: 'Test'
-    });
-
-    await caller.users.unban({
-      userId: 2
-    });
-
-    const info = await caller.users.getInfo({
-      userId: 2
-    });
-
-    expect(info.user.banned).toBe(false);
-    expect(info.user.banReason).toBeNull();
-  });
-
-  test('should throw when kicking non-connected user', async () => {
-    const { caller } = await initTest();
-
-    await expect(
-      caller.users.kick({
-        userId: 999
-      })
-    ).rejects.toThrow('User is not connected');
-  });
-
-  test('should handle multiple role operations', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.addRole({
-      userId: 2,
-      roleId: 1
-    });
-
-    await caller.users.addRole({
-      userId: 2,
-      roleId: 3
-    });
-
-    const info = await caller.users.getInfo({
-      userId: 2
-    });
-
-    expect(info.user.roleIds).toContain(1);
-    expect(info.user.roleIds).toContain(3);
-
-    await caller.users.removeRole({
-      userId: 2,
-      roleId: 1
-    });
-
-    const updatedInfo = await caller.users.getInfo({
-      userId: 2
-    });
-
-    expect(updatedInfo.user.roleIds).not.toContain(1);
-    expect(updatedInfo.user.roleIds).toContain(3);
-  });
-
-  test('should allow valid hex colors (3 and 6 digits)', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.update({
-      name: 'Test',
-      bannerColor: '#abc123'
-    });
-
-    let info = await caller.users.getInfo({ userId: 1 });
-
-    expect(info.user.bannerColor).toBe('#abc123');
-
-    await caller.users.update({
-      name: 'Test',
-      bannerColor: '#f0f'
-    });
-
-    info = await caller.users.getInfo({ userId: 1 });
-
-    expect(info.user.bannerColor).toBe('#f0f');
-  });
-
-  test('should handle bio with special characters', async () => {
-    const { caller } = await initTest();
-
-    const specialBio = 'Hello! 👋 This is my bio with émojis & spëcial çhars';
-
-    await caller.users.update({
-      name: 'Test User',
-      bannerColor: '#000000',
-      bio: specialBio
-    });
-
-    const info = await caller.users.getInfo({ userId: 1 });
-
-    expect(info.user.bio).toBe(specialBio);
-  });
-
-  test('should handle multiple profile updates in sequence', async () => {
-    const { caller } = await initTest();
-
-    await caller.users.update({
-      name: 'Name 1',
-      bannerColor: '#111111',
-      bio: 'Bio 1'
-    });
-
-    await caller.users.update({
-      name: 'Name 2',
-      bannerColor: '#222222',
-      bio: 'Bio 2'
-    });
-
-    await caller.users.update({
-      name: 'Final Name',
-      bannerColor: '#333333',
-      bio: 'Final Bio'
-    });
-
-    const info = await caller.users.getInfo({ userId: 1 });
-
-    expect(info.user.name).toBe('Final Name');
-    expect(info.user.bannerColor).toBe('#333333');
-    expect(info.user.bio).toBe('Final Bio');
-  });
+	test('should throw when user lacks permissions (getAll)', async () => {
+		const { caller } = await initTest(2);
+
+		await expect(caller.users.getAll()).rejects.toThrow('Insufficient permissions');
+	});
+
+	test('should throw when user lacks permissions (getInfo)', async () => {
+		const { caller } = await initTest(2);
+
+		await expect(
+			caller.users.getInfo({
+				userId: 1,
+			}),
+		).rejects.toThrow('Insufficient permissions');
+	});
+
+	test('should throw when user lacks permissions (ban)', async () => {
+		const { caller } = await initTest(2);
+
+		await expect(
+			caller.users.ban({
+				userId: 1,
+				reason: 'Test ban',
+			}),
+		).rejects.toThrow('Insufficient permissions');
+	});
+
+	test('should throw when user lacks permissions (unban)', async () => {
+		const { caller } = await initTest(2);
+
+		await expect(
+			caller.users.unban({
+				userId: 1,
+			}),
+		).rejects.toThrow('Insufficient permissions');
+	});
+
+	test('should throw when user lacks permissions (kick)', async () => {
+		const { caller } = await initTest(2);
+
+		await expect(
+			caller.users.kick({
+				userId: 1,
+				reason: 'Test kick',
+			}),
+		).rejects.toThrow('Insufficient permissions');
+	});
+
+	test('should throw when user lacks permissions (addRole)', async () => {
+		const { caller } = await initTest(2);
+
+		await expect(
+			caller.users.addRole({
+				userId: 1,
+				roleId: 2,
+			}),
+		).rejects.toThrow('Insufficient permissions');
+	});
+
+	test('should throw when user lacks permissions (removeRole)', async () => {
+		const { caller } = await initTest(2);
+
+		await expect(
+			caller.users.removeRole({
+				userId: 1,
+				roleId: 2,
+			}),
+		).rejects.toThrow('Insufficient permissions');
+	});
+
+	test('should throw when user lacks owner role (delete)', async () => {
+		const { caller } = await initTest(2);
+
+		await expect(
+			caller.users.delete({
+				userId: 1,
+			}),
+		).rejects.toThrow('Only server owners can perform this action');
+	});
+
+	test('should throw when user lacks owner role (resetPassword)', async () => {
+		const { caller } = await initTest(2);
+
+		await expect(
+			caller.users.resetPassword({
+				userId: 1,
+				newPassword: 'newpassword123',
+			}),
+		).rejects.toThrow('Only server owners can perform this action');
+	});
+
+	test('should throw when user lacks owner role (resetTotp)', async () => {
+		const { caller } = await initTest(2);
+
+		await expect(
+			caller.users.resetTotp({
+				userId: 1,
+			}),
+		).rejects.toThrow('Only server owners can perform this action');
+	});
+
+	test('should get all users', async () => {
+		const { caller } = await initTest();
+
+		const users = await caller.users.getAll();
+
+		expect(users).toBeDefined();
+		expect(Array.isArray(users)).toBe(true);
+		expect(users.length).toBeGreaterThan(0);
+
+		// verify sensitive fields are cleared
+		users.forEach((user) => {
+			expect(user.password).toBeEmpty();
+			expect(user.identity).toBeEmpty();
+		});
+	});
+
+	test('should get user info', async () => {
+		const { caller } = await initTest();
+
+		const info = await caller.users.getInfo({
+			userId: 2,
+		});
+
+		expect(info).toBeDefined();
+		expect(info.user).toBeDefined();
+		expect(info.user.id).toBe(2);
+	});
+
+	test('should throw when getting info for non-existing user', async () => {
+		const { caller } = await initTest();
+
+		await expect(
+			caller.users.getInfo({
+				userId: 999,
+			}),
+		).rejects.toThrow('User not found');
+	});
+
+	test('should update own user profile', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.update({
+			name: 'Updated Name',
+			bannerColor: '#ff0000',
+			bio: 'This is my new bio',
+		});
+
+		const users = await caller.users.getAll();
+		const updatedUser = users.find((u) => u.id === 1);
+
+		expect(updatedUser).toBeDefined();
+		expect(updatedUser!.name).toBe('Updated Name');
+		expect(updatedUser!.bannerColor).toBe('#ff0000');
+		expect(updatedUser!.bio).toBe('This is my new bio');
+	});
+
+	test('should update user profile with null bio', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.update({
+			name: 'Test User',
+			bannerColor: '#00ff00',
+		});
+
+		const users = await caller.users.getAll();
+		const updatedUser = users.find((u) => u.id === 1);
+
+		expect(updatedUser).toBeDefined();
+		expect(updatedUser!.name).toBe('Test User');
+		expect(updatedUser!.bannerColor).toBe('#00ff00');
+	});
+
+	test('should update own presence status preference', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.setStatus({
+			status: UserStatus.AWAY,
+		});
+
+		const row = await tdb
+			.select({
+				presenceStatus: users.presenceStatus,
+			})
+			.from(users)
+			.where(eq(users.id, 1))
+			.get();
+
+		expect(row?.presenceStatus).toBe(UserStatus.AWAY);
+	});
+
+	test('auto status flip does not override manually set away', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.setStatus({
+			status: UserStatus.AWAY,
+		});
+
+		await caller.users.setStatus({
+			status: UserStatus.ONLINE,
+			auto: true,
+		});
+
+		const row = await tdb
+			.select({
+				presenceStatus: users.presenceStatus,
+			})
+			.from(users)
+			.where(eq(users.id, 1))
+			.get();
+
+		expect(row?.presenceStatus).toBe(UserStatus.AWAY);
+	});
+
+	test('manually returning online allows subsequent auto flips to apply', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.setStatus({
+			status: UserStatus.AWAY,
+		});
+
+		await caller.users.setStatus({
+			status: UserStatus.ONLINE,
+		});
+
+		// Auto flips don't persist to the DB, so the column stays at the last
+		// manual value. The point of this test is that the auto flip isn't
+		// rejected (no throw) now that the manual-away preference is cleared.
+		const result = await caller.users.setStatus({
+			status: UserStatus.AWAY,
+			auto: true,
+		});
+
+		expect(result.status).toBeDefined();
+
+		const row = await tdb
+			.select({
+				presenceStatus: users.presenceStatus,
+			})
+			.from(users)
+			.where(eq(users.id, 1))
+			.get();
+
+		expect(row?.presenceStatus).toBe(UserStatus.ONLINE);
+	});
+
+	test('auto flips never write the presence column, so manual preference survives restart', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.setStatus({
+			status: UserStatus.AWAY,
+		});
+
+		// Even though the auto flip is attempted, the DB column — which is what a
+		// fresh server process re-reads after restart — must remain AWAY.
+		await caller.users.setStatus({
+			status: UserStatus.ONLINE,
+			auto: true,
+		});
+
+		await caller.users.setStatus({
+			status: UserStatus.AWAY,
+			auto: true,
+		});
+
+		const row = await tdb
+			.select({
+				presenceStatus: users.presenceStatus,
+			})
+			.from(users)
+			.where(eq(users.id, 1))
+			.get();
+
+		expect(row?.presenceStatus).toBe(UserStatus.AWAY);
+	});
+
+	test('should update password successfully and rotate active sessions', async () => {
+		const { caller } = await initTest();
+		const now = Date.now();
+
+		const currentPassword = 'password123';
+		const newPassword = 'newpassword456';
+
+		await tdb.insert(refreshTokens).values({
+			userId: 1,
+			tokenHash: 'user-1-refresh-token-hash',
+			expiresAt: now + 1000000,
+			createdAt: now,
+			updatedAt: now,
+		});
+
+		const before = await tdb
+			.select({
+				tokenVersion: users.tokenVersion,
+			})
+			.from(users)
+			.where(eq(users.id, 1))
+			.get();
+
+		await caller.users.updatePassword({
+			currentPassword,
+			newPassword,
+			confirmNewPassword: newPassword,
+		});
+
+		const row = await tdb
+			.select({
+				password: users.password,
+				tokenVersion: users.tokenVersion,
+			})
+			.from(users)
+			.where(eq(users.id, 1))
+			.get();
+
+		const tokenRow = await tdb
+			.select({
+				revokedAt: refreshTokens.revokedAt,
+			})
+			.from(refreshTokens)
+			.where(eq(refreshTokens.tokenHash, 'user-1-refresh-token-hash'))
+			.get();
+
+		expect(row).toBeDefined();
+
+		// should not be plain text
+		expect(row!.password).not.toBe(newPassword);
+
+		const matches = await verifyPassword(newPassword, row!.password);
+		expect(matches).toBe(true);
+		expect(row!.tokenVersion).toBe((before?.tokenVersion ?? 0) + 1);
+		expect(tokenRow?.revokedAt).toBeDefined();
+	});
+
+	test('should throw when current password is incorrect', async () => {
+		const { caller } = await initTest();
+
+		await expect(
+			caller.users.updatePassword({
+				currentPassword: 'wrongpassword',
+				newPassword: 'newpassword',
+				confirmNewPassword: 'newpassword',
+			}),
+		).rejects.toThrow('Current password is incorrect');
+	});
+
+	test('should throw when new passwords do not match', async () => {
+		const { caller } = await initTest();
+
+		await expect(
+			caller.users.updatePassword({
+				currentPassword: 'password123',
+				newPassword: 'newpassword',
+				confirmNewPassword: 'differentpassword',
+			}),
+		).rejects.toThrow('New password and confirmation do not match');
+	});
+
+	test('should allow owner to reset another user password', async () => {
+		const { caller } = await initTest();
+
+		const newPassword = 'ownerreset123';
+
+		await caller.users.resetPassword({
+			userId: 2,
+			newPassword,
+		});
+
+		const row = await tdb
+			.select({
+				password: users.password,
+			})
+			.from(users)
+			.where(eq(users.id, 2))
+			.get();
+
+		expect(row).toBeDefined();
+		expect(row!.password).not.toBe(newPassword);
+
+		const matches = await verifyPassword(newPassword, row!.password);
+		expect(matches).toBe(true);
+	});
+
+	test('should throw when owner tries to reset own password', async () => {
+		const { caller } = await initTest();
+
+		await expect(
+			caller.users.resetPassword({
+				userId: 1,
+				newPassword: 'ownerreset123',
+			}),
+		).rejects.toThrow('You cannot reset your own password');
+	});
+
+	test('should allow owner to reset another user 2FA', async () => {
+		const { caller } = await initTest();
+
+		await tdb
+			.update(users)
+			.set({
+				totpSecret: 'encrypted-totp-secret',
+				totpRecoveryCodes: JSON.stringify(['hashed-code']),
+			})
+			.where(eq(users.id, 2))
+			.run();
+
+		await caller.users.resetTotp({
+			userId: 2,
+		});
+
+		const row = await tdb
+			.select({
+				totpSecret: users.totpSecret,
+				totpRecoveryCodes: users.totpRecoveryCodes,
+			})
+			.from(users)
+			.where(eq(users.id, 2))
+			.get();
+
+		expect(row?.totpSecret).toBeNull();
+		expect(row?.totpRecoveryCodes).toBeNull();
+	});
+
+	test('should throw when owner tries to reset own 2FA', async () => {
+		const { caller } = await initTest();
+
+		await expect(
+			caller.users.resetTotp({
+				userId: 1,
+			}),
+		).rejects.toThrow('You cannot reset your own two-factor authentication');
+	});
+
+	test('should revoke active refresh tokens when owner resets 2FA', async () => {
+		const { caller } = await initTest();
+		const now = Date.now();
+
+		await tdb
+			.update(users)
+			.set({
+				totpSecret: 'encrypted-totp-secret',
+				totpRecoveryCodes: JSON.stringify(['hashed-code']),
+			})
+			.where(eq(users.id, 2))
+			.run();
+
+		await tdb.insert(refreshTokens).values([
+			{
+				userId: 2,
+				tokenHash: 'target-2fa-token-hash',
+				expiresAt: now + 1000000,
+				createdAt: now,
+				updatedAt: now,
+			},
+			{
+				userId: 1,
+				tokenHash: 'owner-2fa-token-hash',
+				expiresAt: now + 1000000,
+				createdAt: now,
+				updatedAt: now,
+			},
+		]);
+
+		await caller.users.resetTotp({
+			userId: 2,
+		});
+
+		const targetToken = await tdb
+			.select({
+				revokedAt: refreshTokens.revokedAt,
+			})
+			.from(refreshTokens)
+			.where(eq(refreshTokens.tokenHash, 'target-2fa-token-hash'))
+			.get();
+
+		const ownerToken = await tdb
+			.select({
+				revokedAt: refreshTokens.revokedAt,
+			})
+			.from(refreshTokens)
+			.where(eq(refreshTokens.tokenHash, 'owner-2fa-token-hash'))
+			.get();
+
+		expect(targetToken?.revokedAt).toBeDefined();
+		expect(ownerToken?.revokedAt).toBeNull();
+	});
+
+	test('should revoke active refresh tokens when owner resets password', async () => {
+		const { caller } = await initTest();
+		const now = Date.now();
+
+		await tdb.insert(refreshTokens).values([
+			{
+				userId: 2,
+				tokenHash: 'target-token-hash',
+				expiresAt: now + 1000000,
+				createdAt: now,
+				updatedAt: now,
+			},
+			{
+				userId: 1,
+				tokenHash: 'owner-token-hash',
+				expiresAt: now + 1000000,
+				createdAt: now,
+				updatedAt: now,
+			},
+		]);
+
+		await caller.users.resetPassword({
+			userId: 2,
+			newPassword: 'ownerreset123',
+		});
+
+		const targetToken = await tdb
+			.select({
+				revokedAt: refreshTokens.revokedAt,
+			})
+			.from(refreshTokens)
+			.where(eq(refreshTokens.tokenHash, 'target-token-hash'))
+			.get();
+
+		const ownerToken = await tdb
+			.select({
+				revokedAt: refreshTokens.revokedAt,
+			})
+			.from(refreshTokens)
+			.where(eq(refreshTokens.tokenHash, 'owner-token-hash'))
+			.get();
+
+		expect(targetToken?.revokedAt).toBeDefined();
+		expect(ownerToken?.revokedAt).toBeNull();
+	});
+
+	test('should require target user to change password after owner reset', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.resetPassword({
+			userId: 2,
+			newPassword: 'ownerreset123',
+		});
+
+		const row = await tdb
+			.select({
+				mustChangePassword: users.mustChangePassword,
+			})
+			.from(users)
+			.where(eq(users.id, 2))
+			.get();
+
+		expect(row?.mustChangePassword).toBe(true);
+	});
+
+	test('should block non-password procedures while password reset is required', async () => {
+		await tdb.update(users).set({ mustChangePassword: true }).where(eq(users.id, 2)).run();
+
+		const { caller } = await initTest(2);
+
+		await expect(
+			caller.users.update({
+				name: 'Blocked User',
+				bannerColor: '#00ff00',
+			}),
+		).rejects.toThrow('You must change your password before using the server.');
+	});
+
+	test('should clear mustChangePassword and rotate sessions when user updates required password', async () => {
+		const now = Date.now();
+
+		await tdb
+			.update(users)
+			.set({
+				mustChangePassword: true,
+			})
+			.where(eq(users.id, 2))
+			.run();
+
+		await tdb.insert(refreshTokens).values({
+			userId: 2,
+			tokenHash: 'forced-reset-token-hash',
+			expiresAt: now + 1000000,
+			createdAt: now,
+			updatedAt: now,
+		});
+
+		const before = await tdb
+			.select({
+				tokenVersion: users.tokenVersion,
+			})
+			.from(users)
+			.where(eq(users.id, 2))
+			.get();
+
+		const { caller } = await initTest(2);
+
+		await caller.users.updatePassword({
+			currentPassword: 'password123',
+			newPassword: 'newpassword456',
+			confirmNewPassword: 'newpassword456',
+		});
+
+		const after = await tdb
+			.select({
+				mustChangePassword: users.mustChangePassword,
+				tokenVersion: users.tokenVersion,
+			})
+			.from(users)
+			.where(eq(users.id, 2))
+			.get();
+
+		const rotatedToken = await tdb
+			.select({
+				revokedAt: refreshTokens.revokedAt,
+			})
+			.from(refreshTokens)
+			.where(eq(refreshTokens.tokenHash, 'forced-reset-token-hash'))
+			.get();
+
+		expect(after?.mustChangePassword).toBe(false);
+		expect(after?.tokenVersion).toBe((before?.tokenVersion ?? 0) + 1);
+		expect(rotatedToken?.revokedAt).toBeDefined();
+	});
+
+	test('should allow owner to delete another user', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.delete({
+			userId: 2,
+		});
+
+		const row = await tdb
+			.select({
+				id: users.id,
+			})
+			.from(users)
+			.where(eq(users.id, 2))
+			.get();
+
+		expect(row).toBeUndefined();
+	});
+
+	test('should throw when owner tries to delete own account', async () => {
+		const { caller } = await initTest();
+
+		await expect(
+			caller.users.delete({
+				userId: 1,
+			}),
+		).rejects.toThrow('You cannot delete your own account');
+	});
+
+	test('should change avatar', async () => {
+		const { caller, mockedToken } = await initTest();
+
+		const currentUserInfo = await caller.users.getInfo({ userId: 1 });
+
+		expect(currentUserInfo).toBeDefined();
+		expect(currentUserInfo.user.avatarId).toBeNull();
+
+		const file = new File(['avatar content'], 'avatar.png', {
+			type: 'image/png',
+		});
+
+		const uploadResponse = await uploadFile(file, mockedToken);
+		const uploadData = (await uploadResponse.json()) as TTempFile;
+
+		await caller.users.changeAvatar({
+			fileId: uploadData.id,
+		});
+
+		const userInfo = await caller.users.getInfo({ userId: 1 });
+
+		expect(userInfo).toBeDefined();
+		expect(userInfo!.user.avatarId).toBeDefined();
+	});
+
+	test('should remove avatar', async () => {
+		const { caller, mockedToken } = await initTest();
+
+		const currentUserInfo = await caller.users.getInfo({ userId: 1 });
+
+		expect(currentUserInfo).toBeDefined();
+		expect(currentUserInfo.user.avatarId).toBeNull();
+
+		const file = new File(['avatar content'], 'avatar.png', {
+			type: 'image/png',
+		});
+
+		const uploadResponse = await uploadFile(file, mockedToken);
+		const uploadData = (await uploadResponse.json()) as TTempFile;
+
+		await caller.users.changeAvatar({
+			fileId: uploadData.id,
+		});
+
+		await caller.users.changeAvatar({});
+
+		const userInfo = await caller.users.getInfo({ userId: 1 });
+
+		expect(userInfo).toBeDefined();
+		expect(userInfo!.user.avatarId).toBeNull();
+	});
+
+	test('should change banner', async () => {
+		const { caller, mockedToken } = await initTest();
+
+		const file = new File(['banner content'], 'banner.png', {
+			type: 'image/png',
+		});
+
+		const uploadResponse = await uploadFile(file, mockedToken);
+		const uploadData = (await uploadResponse.json()) as TTempFile;
+
+		await caller.users.changeBanner({
+			fileId: uploadData.id,
+		});
+
+		const userInfo = await caller.users.getInfo({ userId: 1 });
+
+		expect(userInfo).toBeDefined();
+		expect(userInfo!.user.bannerId).toBeDefined();
+	});
+
+	test('should remove banner', async () => {
+		const { caller, mockedToken } = await initTest();
+
+		const file = new File(['banner content'], 'banner.png', {
+			type: 'image/png',
+		});
+
+		const uploadResponse = await uploadFile(file, mockedToken);
+		const uploadData = (await uploadResponse.json()) as TTempFile;
+
+		await caller.users.changeBanner({
+			fileId: uploadData.id,
+		});
+
+		await caller.users.changeBanner({});
+
+		const userInfo = await caller.users.getInfo({ userId: 1 });
+
+		expect(userInfo).toBeDefined();
+		expect(userInfo!.user.bannerId).toBeNull();
+	});
+
+	test('should replace existing avatar', async () => {
+		const { caller, mockedToken } = await initTest();
+
+		const file1 = new File(['first avatar'], 'avatar1.png', {
+			type: 'image/png',
+		});
+
+		const uploadResponse1 = await uploadFile(file1, mockedToken);
+		const uploadData1 = (await uploadResponse1.json()) as TTempFile;
+
+		await caller.users.changeAvatar({
+			fileId: uploadData1.id,
+		});
+
+		const firstInfo = await caller.users.getInfo({ userId: 1 });
+		const firstAvatarId = firstInfo.user.avatarId;
+
+		const file2 = new File(['second avatar'], 'avatar2.png', {
+			type: 'image/png',
+		});
+
+		const uploadResponse2 = await uploadFile(file2, mockedToken);
+		const uploadData2 = (await uploadResponse2.json()) as TTempFile;
+
+		await caller.users.changeAvatar({
+			fileId: uploadData2.id,
+		});
+
+		const secondInfo = await caller.users.getInfo({ userId: 1 });
+
+		expect(secondInfo.user.avatarId).not.toBe(firstAvatarId);
+	});
+
+	test('should add role to user', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.addRole({
+			userId: 2,
+			roleId: 1,
+		});
+
+		const info = await caller.users.getInfo({
+			userId: 2,
+		});
+
+		expect(info.user.roleIds).toContain(1);
+	});
+
+	test('should throw when adding duplicate role', async () => {
+		const { caller } = await initTest();
+
+		await expect(
+			caller.users.addRole({
+				userId: 2,
+				roleId: 2,
+			}),
+		).rejects.toThrow('User already has this role');
+	});
+
+	test('should remove role from user', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.addRole({
+			userId: 2,
+			roleId: 1,
+		});
+
+		await caller.users.removeRole({
+			userId: 2,
+			roleId: 1,
+		});
+
+		const info = await caller.users.getInfo({
+			userId: 2,
+		});
+
+		expect(info.user.roleIds).not.toContain(1);
+	});
+
+	test('should throw when removing non-existent role', async () => {
+		const { caller } = await initTest();
+
+		await expect(
+			caller.users.removeRole({
+				userId: 2,
+				roleId: 3,
+			}),
+		).rejects.toThrow('User does not have this role');
+	});
+
+	test('should ban user with reason', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.ban({
+			userId: 2,
+			reason: 'Violated community guidelines',
+		});
+
+		const info = await caller.users.getInfo({
+			userId: 2,
+		});
+
+		expect(info.user.banned).toBe(true);
+		expect(info.user.banReason).toBe('Violated community guidelines');
+		expect(info.user.bannedAt).toBeDefined();
+	});
+
+	test('should ban user without reason', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.ban({
+			userId: 2,
+		});
+
+		const info = await caller.users.getInfo({
+			userId: 2,
+		});
+
+		expect(info.user.banned).toBe(true);
+		expect(info.user.banReason).toBeNull();
+	});
+
+	test('should throw when trying to ban yourself', async () => {
+		const { caller } = await initTest();
+
+		await expect(
+			caller.users.ban({
+				userId: 1,
+			}),
+		).rejects.toThrow('You cannot ban yourself');
+	});
+
+	test('should unban user', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.ban({
+			userId: 2,
+			reason: 'Test',
+		});
+
+		await caller.users.unban({
+			userId: 2,
+		});
+
+		const info = await caller.users.getInfo({
+			userId: 2,
+		});
+
+		expect(info.user.banned).toBe(false);
+		expect(info.user.banReason).toBeNull();
+	});
+
+	test('should throw when kicking non-connected user', async () => {
+		const { caller } = await initTest();
+
+		await expect(
+			caller.users.kick({
+				userId: 999,
+			}),
+		).rejects.toThrow('User is not connected');
+	});
+
+	test('should handle multiple role operations', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.addRole({
+			userId: 2,
+			roleId: 1,
+		});
+
+		await caller.users.addRole({
+			userId: 2,
+			roleId: 3,
+		});
+
+		const info = await caller.users.getInfo({
+			userId: 2,
+		});
+
+		expect(info.user.roleIds).toContain(1);
+		expect(info.user.roleIds).toContain(3);
+
+		await caller.users.removeRole({
+			userId: 2,
+			roleId: 1,
+		});
+
+		const updatedInfo = await caller.users.getInfo({
+			userId: 2,
+		});
+
+		expect(updatedInfo.user.roleIds).not.toContain(1);
+		expect(updatedInfo.user.roleIds).toContain(3);
+	});
+
+	test('should allow valid hex colors (3 and 6 digits)', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.update({
+			name: 'Test',
+			bannerColor: '#abc123',
+		});
+
+		let info = await caller.users.getInfo({ userId: 1 });
+
+		expect(info.user.bannerColor).toBe('#abc123');
+
+		await caller.users.update({
+			name: 'Test',
+			bannerColor: '#f0f',
+		});
+
+		info = await caller.users.getInfo({ userId: 1 });
+
+		expect(info.user.bannerColor).toBe('#f0f');
+	});
+
+	test('should handle bio with special characters', async () => {
+		const { caller } = await initTest();
+
+		const specialBio = 'Hello! 👋 This is my bio with émojis & spëcial çhars';
+
+		await caller.users.update({
+			name: 'Test User',
+			bannerColor: '#000000',
+			bio: specialBio,
+		});
+
+		const info = await caller.users.getInfo({ userId: 1 });
+
+		expect(info.user.bio).toBe(specialBio);
+	});
+
+	test('should handle multiple profile updates in sequence', async () => {
+		const { caller } = await initTest();
+
+		await caller.users.update({
+			name: 'Name 1',
+			bannerColor: '#111111',
+			bio: 'Bio 1',
+		});
+
+		await caller.users.update({
+			name: 'Name 2',
+			bannerColor: '#222222',
+			bio: 'Bio 2',
+		});
+
+		await caller.users.update({
+			name: 'Final Name',
+			bannerColor: '#333333',
+			bio: 'Final Bio',
+		});
+
+		const info = await caller.users.getInfo({ userId: 1 });
+
+		expect(info.user.name).toBe('Final Name');
+		expect(info.user.bannerColor).toBe('#333333');
+		expect(info.user.bio).toBe('Final Bio');
+	});
 });

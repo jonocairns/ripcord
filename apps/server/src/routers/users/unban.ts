@@ -8,31 +8,31 @@ import { enqueueActivityLog } from '../../queues/activity-log';
 import { protectedProcedure } from '../../utils/trpc';
 
 const unbanRoute = protectedProcedure
-  .input(
-    z.object({
-      userId: z.number()
-    })
-  )
-  .mutation(async ({ ctx, input }) => {
-    await ctx.needsPermission(Permission.MANAGE_USERS);
+	.input(
+		z.object({
+			userId: z.number(),
+		}),
+	)
+	.mutation(async ({ ctx, input }) => {
+		await ctx.needsPermission(Permission.MANAGE_USERS);
 
-    await db
-      .update(users)
-      .set({
-        banned: false,
-        banReason: null
-      })
-      .where(eq(users.id, input.userId));
+		await db
+			.update(users)
+			.set({
+				banned: false,
+				banReason: null,
+			})
+			.where(eq(users.id, input.userId));
 
-    publishUser(input.userId, 'update');
+		publishUser(input.userId, 'update');
 
-    enqueueActivityLog({
-      type: ActivityLogType.USER_UNBANNED,
-      userId: input.userId,
-      details: {
-        unbannedBy: ctx.userId
-      }
-    });
-  });
+		enqueueActivityLog({
+			type: ActivityLogType.USER_UNBANNED,
+			userId: input.userId,
+			details: {
+				unbannedBy: ctx.userId,
+			},
+		});
+	});
 
 export { unbanRoute };

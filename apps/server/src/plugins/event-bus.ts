@@ -1,122 +1,113 @@
 import type { EventPayloads, ServerEvent } from '@sharkord/plugin-sdk';
 import { logger } from '../logger';
 
-type Handler<E extends ServerEvent> = (
-  payload: EventPayloads[E]
-) => void | Promise<void>;
+type Handler<E extends ServerEvent> = (payload: EventPayloads[E]) => void | Promise<void>;
 
 type AnyHandler = Handler<ServerEvent>;
 
 class EventBus {
-  private listeners = new Map<ServerEvent, Set<AnyHandler>>();
-  private pluginHandlers = new Map<string, Map<ServerEvent, Set<AnyHandler>>>();
+	private listeners = new Map<ServerEvent, Set<AnyHandler>>();
+	private pluginHandlers = new Map<string, Map<ServerEvent, Set<AnyHandler>>>();
 
-  public register = <E extends ServerEvent>(
-    pluginId: string,
-    event: E,
-    handler: Handler<E>
-  ) => {
-    let handlers = this.listeners.get(event);
+	public register = <E extends ServerEvent>(pluginId: string, event: E, handler: Handler<E>) => {
+		let handlers = this.listeners.get(event);
 
-    if (!handlers) {
-      handlers = new Set();
-      this.listeners.set(event, handlers);
-    }
+		if (!handlers) {
+			handlers = new Set();
+			this.listeners.set(event, handlers);
+		}
 
-    handlers.add(handler as AnyHandler);
+		handlers.add(handler as AnyHandler);
 
-    let pluginEvents = this.pluginHandlers.get(pluginId);
+		let pluginEvents = this.pluginHandlers.get(pluginId);
 
-    if (!pluginEvents) {
-      pluginEvents = new Map();
-      this.pluginHandlers.set(pluginId, pluginEvents);
-    }
+		if (!pluginEvents) {
+			pluginEvents = new Map();
+			this.pluginHandlers.set(pluginId, pluginEvents);
+		}
 
-    let pluginEventHandlers = pluginEvents.get(event);
+		let pluginEventHandlers = pluginEvents.get(event);
 
-    if (!pluginEventHandlers) {
-      pluginEventHandlers = new Set();
-      pluginEvents.set(event, pluginEventHandlers);
-    }
+		if (!pluginEventHandlers) {
+			pluginEventHandlers = new Set();
+			pluginEvents.set(event, pluginEventHandlers);
+		}
 
-    pluginEventHandlers.add(handler as AnyHandler);
-  };
+		pluginEventHandlers.add(handler as AnyHandler);
+	};
 
-  public unload = (pluginId: string) => {
-    const pluginEvents = this.pluginHandlers.get(pluginId);
+	public unload = (pluginId: string) => {
+		const pluginEvents = this.pluginHandlers.get(pluginId);
 
-    if (!pluginEvents) {
-      return;
-    }
+		if (!pluginEvents) {
+			return;
+		}
 
-    for (const [event, handlers] of pluginEvents.entries()) {
-      const globalHandlers = this.listeners.get(event);
+		for (const [event, handlers] of pluginEvents.entries()) {
+			const globalHandlers = this.listeners.get(event);
 
-      if (globalHandlers) {
-        for (const handler of handlers) {
-          globalHandlers.delete(handler);
-        }
+			if (globalHandlers) {
+				for (const handler of handlers) {
+					globalHandlers.delete(handler);
+				}
 
-        if (globalHandlers.size === 0) {
-          this.listeners.delete(event);
-        }
-      }
-    }
+				if (globalHandlers.size === 0) {
+					this.listeners.delete(event);
+				}
+			}
+		}
 
-    this.pluginHandlers.delete(pluginId);
-  };
+		this.pluginHandlers.delete(pluginId);
+	};
 
-  public on = <E extends ServerEvent>(event: E, handler: Handler<E>) => {
-    let handlers = this.listeners.get(event);
+	public on = <E extends ServerEvent>(event: E, handler: Handler<E>) => {
+		let handlers = this.listeners.get(event);
 
-    if (!handlers) {
-      handlers = new Set();
+		if (!handlers) {
+			handlers = new Set();
 
-      this.listeners.set(event, handlers);
-    }
+			this.listeners.set(event, handlers);
+		}
 
-    handlers.add(handler as AnyHandler);
-  };
+		handlers.add(handler as AnyHandler);
+	};
 
-  public off = <E extends ServerEvent>(event: E, handler: Handler<E>) => {
-    this.listeners.get(event)?.delete(handler as AnyHandler);
-  };
+	public off = <E extends ServerEvent>(event: E, handler: Handler<E>) => {
+		this.listeners.get(event)?.delete(handler as AnyHandler);
+	};
 
-  public emit = async <E extends ServerEvent>(
-    event: E,
-    payload: EventPayloads[E]
-  ) => {
-    const handlers = this.listeners.get(event) as Set<Handler<E>> | undefined;
+	public emit = async <E extends ServerEvent>(event: E, payload: EventPayloads[E]) => {
+		const handlers = this.listeners.get(event) as Set<Handler<E>> | undefined;
 
-    if (!handlers) return;
+		if (!handlers) return;
 
-    for (const handler of handlers) {
-      try {
-        await handler(payload);
-      } catch (err) {
-        logger.error(`[eventBus] ${event} handler failed`, err);
-      }
-    }
-  };
+		for (const handler of handlers) {
+			try {
+				await handler(payload);
+			} catch (err) {
+				logger.error(`[eventBus] ${event} handler failed`, err);
+			}
+		}
+	};
 
-  public clear = () => {
-    this.listeners.clear();
-    this.pluginHandlers.clear();
-  };
+	public clear = () => {
+		this.listeners.clear();
+		this.pluginHandlers.clear();
+	};
 
-  public getListenersCount = (event: ServerEvent) => {
-    return this.listeners.get(event)?.size ?? 0;
-  };
+	public getListenersCount = (event: ServerEvent) => {
+		return this.listeners.get(event)?.size ?? 0;
+	};
 
-  public getPluginHandlersCount = (pluginId: string, event: ServerEvent) => {
-    return this.pluginHandlers.get(pluginId)?.get(event)?.size ?? 0;
-  };
+	public getPluginHandlersCount = (pluginId: string, event: ServerEvent) => {
+		return this.pluginHandlers.get(pluginId)?.get(event)?.size ?? 0;
+	};
 
-  public hasPlugin = (pluginId: string) => {
-    return this.pluginHandlers.has(pluginId);
-  };
+	public hasPlugin = (pluginId: string) => {
+		return this.pluginHandlers.has(pluginId);
+	};
 }
 
 const eventBus = new EventBus();
 
-export { eventBus, EventBus };
+export { EventBus, eventBus };

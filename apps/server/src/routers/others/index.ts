@@ -11,14 +11,14 @@ import { updateSettingsRoute } from './update-settings';
 import { useSecretTokenRoute } from './use-secret-token';
 
 export const othersRouter = t.router({
-  joinServer: joinServerRoute,
-  handshake: handshakeRoute,
-  updateSettings: updateSettingsRoute,
-  changeLogo: changeLogoRoute,
-  getSettings: getSettingsRoute,
-  onServerSettingsUpdate: onServerSettingsUpdateRoute,
-  useSecretToken: useSecretTokenRoute,
-  getStorageSettings: getStorageSettingsRoute,
-  getUpdate: getUpdateRoute,
-  updateServer: updateServerRoute
+	joinServer: joinServerRoute,
+	handshake: handshakeRoute,
+	updateSettings: updateSettingsRoute,
+	changeLogo: changeLogoRoute,
+	getSettings: getSettingsRoute,
+	onServerSettingsUpdate: onServerSettingsUpdateRoute,
+	useSecretToken: useSecretTokenRoute,
+	getStorageSettings: getStorageSettingsRoute,
+	getUpdate: getUpdateRoute,
+	updateServer: updateServerRoute,
 });

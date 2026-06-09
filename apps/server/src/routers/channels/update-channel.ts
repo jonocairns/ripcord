@@ -9,50 +9,48 @@ import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sess
 import { protectedProcedure } from '../../utils/trpc';
 
 const updateChannelRoute = protectedProcedure
-  .input(
-    z.object({
-      channelId: z.number().min(1),
-      name: z.string().min(2).max(27).optional(),
-      topic: z.string().max(128).nullable().optional(),
-      private: z.boolean().optional(),
-      voiceBitrate: z
-        .union([z.literal(64000), z.literal(96000), z.literal(128000)])
-        .optional(),
-      voiceDtx: z.boolean().optional()
-    })
-  )
-  .mutation(async ({ ctx, input }) => {
-    await ctx.needsPermission(Permission.MANAGE_CHANNELS);
+	.input(
+		z.object({
+			channelId: z.number().min(1),
+			name: z.string().min(2).max(27).optional(),
+			topic: z.string().max(128).nullable().optional(),
+			private: z.boolean().optional(),
+			voiceBitrate: z.union([z.literal(64000), z.literal(96000), z.literal(128000)]).optional(),
+			voiceDtx: z.boolean().optional(),
+		}),
+	)
+	.mutation(async ({ ctx, input }) => {
+		await ctx.needsPermission(Permission.MANAGE_CHANNELS);
 
-    const updatedChannel = await db
-      .update(channels)
-      .set({
-        name: input.name,
-        topic: input.topic,
-        private: input.private,
-        voiceBitrate: input.voiceBitrate,
-        voiceDtx: input.voiceDtx
-      })
-      .where(eq(channels.id, input.channelId))
-      .returning()
-      .get();
+		const updatedChannel = await db
+			.update(channels)
+			.set({
+				name: input.name,
+				topic: input.topic,
+				private: input.private,
+				voiceBitrate: input.voiceBitrate,
+				voiceDtx: input.voiceDtx,
+			})
+			.where(eq(channels.id, input.channelId))
+			.returning()
+			.get();
 
-    await publishChannel(updatedChannel.id, 'update');
+		await publishChannel(updatedChannel.id, 'update');
 
-    if (input.private !== undefined) {
-      await revalidateActiveVoiceSessions({
-        channelIds: [updatedChannel.id]
-      });
-    }
+		if (input.private !== undefined) {
+			await revalidateActiveVoiceSessions({
+				channelIds: [updatedChannel.id],
+			});
+		}
 
-    enqueueActivityLog({
-      type: ActivityLogType.UPDATED_CHANNEL,
-      userId: ctx.user.id,
-      details: {
-        channelId: updatedChannel.id,
-        values: input
-      }
-    });
-  });
+		enqueueActivityLog({
+			type: ActivityLogType.UPDATED_CHANNEL,
+			userId: ctx.user.id,
+			details: {
+				channelId: updatedChannel.id,
+				values: input,
+			},
+		});
+	});
 
 export { updateChannelRoute };

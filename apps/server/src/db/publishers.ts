@@ -1,17 +1,9 @@
-import {
-  ChannelPermission,
-  Permission,
-  ServerEvents,
-  type TChannelUserPermissionsMap
-} from '@sharkord/shared';
+import { ChannelPermission, Permission, ServerEvents, type TChannelUserPermissionsMap } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
-import { db } from '.';
 import { pluginManager } from '../plugins';
 import { pubsub } from '../utils/pubsub';
-import {
-  getAffectedUserIdsForChannel,
-  getAllChannelUserPermissions
-} from './queries/channels';
+import { db } from '.';
+import { getAffectedUserIdsForChannel, getAllChannelUserPermissions } from './queries/channels';
 import { getEmojiById } from './queries/emojis';
 import { getMessage } from './queries/messages';
 import { getRole } from './queries/roles';
@@ -20,215 +12,176 @@ import { getPublicUserById, getUserIdsWithPermission } from './queries/users';
 import { categories, channels } from './schema';
 
 const publishMessage = async (
-  messageId: number | undefined,
-  channelId: number | undefined,
-  type: 'create' | 'update' | 'delete'
+	messageId: number | undefined,
+	channelId: number | undefined,
+	type: 'create' | 'update' | 'delete',
 ) => {
-  if (!messageId || !channelId) return;
+	if (!messageId || !channelId) return;
 
-  if (type === 'delete') {
-    const affectedUserIds = await getAffectedUserIdsForChannel(channelId, {
-      permission: ChannelPermission.VIEW_CHANNEL
-    });
+	if (type === 'delete') {
+		const affectedUserIds = await getAffectedUserIdsForChannel(channelId, {
+			permission: ChannelPermission.VIEW_CHANNEL,
+		});
 
-    pubsub.publishFor(affectedUserIds, ServerEvents.MESSAGE_DELETE, {
-      messageId: messageId,
-      channelId: channelId
-    });
+		pubsub.publishFor(affectedUserIds, ServerEvents.MESSAGE_DELETE, {
+			messageId: messageId,
+			channelId: channelId,
+		});
 
-    return;
-  }
+		return;
+	}
 
-  const message = await getMessage(messageId);
+	const message = await getMessage(messageId);
 
-  if (!message) return;
+	if (!message) return;
 
-  const targetEvent =
-    type === 'create' ? ServerEvents.NEW_MESSAGE : ServerEvents.MESSAGE_UPDATE;
+	const targetEvent = type === 'create' ? ServerEvents.NEW_MESSAGE : ServerEvents.MESSAGE_UPDATE;
 
-  const affectedUserIds = await getAffectedUserIdsForChannel(channelId, {
-    permission: ChannelPermission.VIEW_CHANNEL
-  });
+	const affectedUserIds = await getAffectedUserIdsForChannel(channelId, {
+		permission: ChannelPermission.VIEW_CHANNEL,
+	});
 
-  pubsub.publishFor(affectedUserIds, targetEvent, message);
+	pubsub.publishFor(affectedUserIds, targetEvent, message);
 
-  // only send unread updates to users OTHER than the message author
-  const usersToNotify = affectedUserIds.filter((id) => id !== message.userId);
+	// only send unread updates to users OTHER than the message author
+	const usersToNotify = affectedUserIds.filter((id) => id !== message.userId);
 
-  if (usersToNotify.length > 0) {
-    pubsub.publishFor(usersToNotify, ServerEvents.CHANNEL_READ_STATES_DELTA, {
-      channelId,
-      // this was sending the whole unread count before which was causing performance issues, now it just sends a delta of 1 which the client can use to update the unread count
-      // this isn't perfectly accurate in some cases but it should be good enough for most cases and it significantly reduces the amount of work the db has to
-      delta: 1
-    });
-  }
+	if (usersToNotify.length > 0) {
+		pubsub.publishFor(usersToNotify, ServerEvents.CHANNEL_READ_STATES_DELTA, {
+			channelId,
+			// this was sending the whole unread count before which was causing performance issues, now it just sends a delta of 1 which the client can use to update the unread count
+			// this isn't perfectly accurate in some cases but it should be good enough for most cases and it significantly reduces the amount of work the db has to
+			delta: 1,
+		});
+	}
 };
 
-const publishEmoji = async (
-  emojiId: number | undefined,
-  type: 'create' | 'update' | 'delete'
-) => {
-  if (!emojiId) return;
+const publishEmoji = async (emojiId: number | undefined, type: 'create' | 'update' | 'delete') => {
+	if (!emojiId) return;
 
-  if (type === 'delete') {
-    pubsub.publish(ServerEvents.EMOJI_DELETE, emojiId);
-    return;
-  }
+	if (type === 'delete') {
+		pubsub.publish(ServerEvents.EMOJI_DELETE, emojiId);
+		return;
+	}
 
-  const emoji = await getEmojiById(emojiId);
+	const emoji = await getEmojiById(emojiId);
 
-  if (!emoji) return;
+	if (!emoji) return;
 
-  const targetEvent =
-    type === 'create' ? ServerEvents.EMOJI_CREATE : ServerEvents.EMOJI_UPDATE;
+	const targetEvent = type === 'create' ? ServerEvents.EMOJI_CREATE : ServerEvents.EMOJI_UPDATE;
 
-  pubsub.publish(targetEvent, emoji);
+	pubsub.publish(targetEvent, emoji);
 };
 
-const publishRole = async (
-  roleId: number | undefined,
-  type: 'create' | 'update' | 'delete'
-) => {
-  if (!roleId) return;
+const publishRole = async (roleId: number | undefined, type: 'create' | 'update' | 'delete') => {
+	if (!roleId) return;
 
-  if (type === 'delete') {
-    pubsub.publish(ServerEvents.ROLE_DELETE, roleId);
-    return;
-  }
+	if (type === 'delete') {
+		pubsub.publish(ServerEvents.ROLE_DELETE, roleId);
+		return;
+	}
 
-  const role = await getRole(roleId);
+	const role = await getRole(roleId);
 
-  if (!role) return;
+	if (!role) return;
 
-  const targetEvent =
-    type === 'create' ? ServerEvents.ROLE_CREATE : ServerEvents.ROLE_UPDATE;
+	const targetEvent = type === 'create' ? ServerEvents.ROLE_CREATE : ServerEvents.ROLE_UPDATE;
 
-  pubsub.publish(targetEvent, role);
+	pubsub.publish(targetEvent, role);
 };
 
-const publishUser = async (
-  userId: number | undefined,
-  type: 'create' | 'update' | 'delete'
-) => {
-  if (!userId) return;
+const publishUser = async (userId: number | undefined, type: 'create' | 'update' | 'delete') => {
+	if (!userId) return;
 
-  if (type === 'delete') {
-    const affectedUserIds = await getUserIdsWithPermission(
-      Permission.MANAGE_USERS
-    );
+	if (type === 'delete') {
+		const affectedUserIds = await getUserIdsWithPermission(Permission.MANAGE_USERS);
 
-    pubsub.publishFor(affectedUserIds, ServerEvents.USER_DELETE, userId);
-    return;
-  }
+		pubsub.publishFor(affectedUserIds, ServerEvents.USER_DELETE, userId);
+		return;
+	}
 
-  const user = await getPublicUserById(userId);
+	const user = await getPublicUserById(userId);
 
-  if (!user) return;
+	if (!user) return;
 
-  const targetEvent =
-    type === 'create' ? ServerEvents.USER_CREATE : ServerEvents.USER_UPDATE;
+	const targetEvent = type === 'create' ? ServerEvents.USER_CREATE : ServerEvents.USER_UPDATE;
 
-  pubsub.publish(targetEvent, user);
+	pubsub.publish(targetEvent, user);
 };
 
-const publishChannel = async (
-  channelId: number | undefined,
-  type: 'create' | 'update' | 'delete'
-) => {
-  if (!channelId) return;
+const publishChannel = async (channelId: number | undefined, type: 'create' | 'update' | 'delete') => {
+	if (!channelId) return;
 
-  if (type === 'delete') {
-    pubsub.publish(ServerEvents.CHANNEL_DELETE, channelId);
-    return;
-  }
+	if (type === 'delete') {
+		pubsub.publish(ServerEvents.CHANNEL_DELETE, channelId);
+		return;
+	}
 
-  const channel = await db
-    .select()
-    .from(channels)
-    .where(eq(channels.id, channelId))
-    .get();
+	const channel = await db.select().from(channels).where(eq(channels.id, channelId)).get();
 
-  if (!channel) return;
+	if (!channel) return;
 
-  const targetEvent =
-    type === 'create'
-      ? ServerEvents.CHANNEL_CREATE
-      : ServerEvents.CHANNEL_UPDATE;
+	const targetEvent = type === 'create' ? ServerEvents.CHANNEL_CREATE : ServerEvents.CHANNEL_UPDATE;
 
-  pubsub.publish(targetEvent, channel);
+	pubsub.publish(targetEvent, channel);
 };
 
 const publishSettings = async () => {
-  const settings = await getPublicSettings();
+	const settings = await getPublicSettings();
 
-  pubsub.publish(ServerEvents.SERVER_SETTINGS_UPDATE, settings);
+	pubsub.publish(ServerEvents.SERVER_SETTINGS_UPDATE, settings);
 };
 
-const publishCategory = async (
-  categoryId: number | undefined,
-  type: 'create' | 'update' | 'delete'
-) => {
-  if (!categoryId) return;
+const publishCategory = async (categoryId: number | undefined, type: 'create' | 'update' | 'delete') => {
+	if (!categoryId) return;
 
-  if (type === 'delete') {
-    pubsub.publish(ServerEvents.CATEGORY_DELETE, categoryId);
-    return;
-  }
+	if (type === 'delete') {
+		pubsub.publish(ServerEvents.CATEGORY_DELETE, categoryId);
+		return;
+	}
 
-  const category = await db
-    .select()
-    .from(categories)
-    .where(eq(categories.id, categoryId))
-    .get();
+	const category = await db.select().from(categories).where(eq(categories.id, categoryId)).get();
 
-  if (!category) return;
+	if (!category) return;
 
-  const targetEvent =
-    type === 'create'
-      ? ServerEvents.CATEGORY_CREATE
-      : ServerEvents.CATEGORY_UPDATE;
+	const targetEvent = type === 'create' ? ServerEvents.CATEGORY_CREATE : ServerEvents.CATEGORY_UPDATE;
 
-  pubsub.publish(targetEvent, category);
+	pubsub.publish(targetEvent, category);
 };
 
 const publishChannelPermissions = async (affectedUserIds: number[]) => {
-  const permissionsMap = new Map<number, TChannelUserPermissionsMap>();
-  const promises = affectedUserIds.map(async (userId) => {
-    const updatedPermissions = await getAllChannelUserPermissions(userId);
+	const permissionsMap = new Map<number, TChannelUserPermissionsMap>();
+	const promises = affectedUserIds.map(async (userId) => {
+		const updatedPermissions = await getAllChannelUserPermissions(userId);
 
-    permissionsMap.set(userId, updatedPermissions);
-  });
+		permissionsMap.set(userId, updatedPermissions);
+	});
 
-  await Promise.all(promises);
+	await Promise.all(promises);
 
-  for (const userId of affectedUserIds) {
-    const updatedPermissions = permissionsMap.get(userId);
+	for (const userId of affectedUserIds) {
+		const updatedPermissions = permissionsMap.get(userId);
 
-    if (!updatedPermissions) continue;
+		if (!updatedPermissions) continue;
 
-    pubsub.publishFor(
-      userId,
-      ServerEvents.CHANNEL_PERMISSIONS_UPDATE,
-      updatedPermissions
-    );
-  }
+		pubsub.publishFor(userId, ServerEvents.CHANNEL_PERMISSIONS_UPDATE, updatedPermissions);
+	}
 };
 
 const publishPluginCommands = async () => {
-  const commands = pluginManager.getCommands();
+	const commands = pluginManager.getCommands();
 
-  pubsub.publish(ServerEvents.PLUGIN_COMMANDS_CHANGE, commands);
+	pubsub.publish(ServerEvents.PLUGIN_COMMANDS_CHANGE, commands);
 };
 
 export {
-  publishCategory,
-  publishChannel,
-  publishChannelPermissions,
-  publishEmoji,
-  publishMessage,
-  publishPluginCommands,
-  publishRole,
-  publishSettings,
-  publishUser
+	publishCategory,
+	publishChannel,
+	publishChannelPermissions,
+	publishEmoji,
+	publishMessage,
+	publishPluginCommands,
+	publishRole,
+	publishSettings,
+	publishUser,
 };

@@ -8,27 +8,27 @@ import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 
 const useSecretTokenRoute = protectedProcedure
-  .input(
-    z.object({
-      token: z.string()
-    })
-  )
-  .mutation(async ({ input, ctx }) => {
-    const settings = await getSettings();
-    const hashedToken = await sha256(input.token);
+	.input(
+		z.object({
+			token: z.string(),
+		}),
+	)
+	.mutation(async ({ input, ctx }) => {
+		const settings = await getSettings();
+		const hashedToken = await sha256(input.token);
 
-    invariant(hashedToken === settings.secretToken, {
-      code: 'FORBIDDEN',
-      message: 'Invalid secret token'
-    });
+		invariant(hashedToken === settings.secretToken, {
+			code: 'FORBIDDEN',
+			message: 'Invalid secret token',
+		});
 
-    await db.insert(userRoles).values({
-      userId: ctx.userId,
-      roleId: OWNER_ROLE_ID,
-      createdAt: Date.now()
-    });
+		await db.insert(userRoles).values({
+			userId: ctx.userId,
+			roleId: OWNER_ROLE_ID,
+			createdAt: Date.now(),
+		});
 
-    publishUser(ctx.userId, 'update');
-  });
+		publishUser(ctx.userId, 'update');
+	});
 
 export { useSecretTokenRoute };

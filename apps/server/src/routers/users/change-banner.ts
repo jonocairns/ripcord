@@ -10,50 +10,44 @@ import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 
 const changeBannerRoute = protectedProcedure
-  .input(
-    z.object({
-      fileId: z.string().optional()
-    })
-  )
-  .mutation(async ({ ctx, input }) => {
-    const user = await getUserById(ctx.userId);
+	.input(
+		z.object({
+			fileId: z.string().optional(),
+		}),
+	)
+	.mutation(async ({ ctx, input }) => {
+		const user = await getUserById(ctx.userId);
 
-    invariant(user, {
-      code: 'NOT_FOUND',
-      message: 'User not found'
-    });
+		invariant(user, {
+			code: 'NOT_FOUND',
+			message: 'User not found',
+		});
 
-    if (user.bannerId) {
-      await removeFile(user.bannerId);
+		if (user.bannerId) {
+			await removeFile(user.bannerId);
 
-      await db
-        .update(users)
-        .set({ bannerId: null })
-        .where(eq(users.id, ctx.userId));
-    }
+			await db.update(users).set({ bannerId: null }).where(eq(users.id, ctx.userId));
+		}
 
-    if (input.fileId) {
-      const tempFile = await fileManager.getTemporaryFile(input.fileId);
+		if (input.fileId) {
+			const tempFile = await fileManager.getTemporaryFile(input.fileId);
 
-      invariant(tempFile, {
-        code: 'NOT_FOUND',
-        message: 'Temporary file not found'
-      });
+			invariant(tempFile, {
+				code: 'NOT_FOUND',
+				message: 'Temporary file not found',
+			});
 
-      invariant(tempFile.size <= 20 * 1024 * 1024, {
-        code: 'BAD_REQUEST',
-        message: 'File size exceeds the limit of 20 MB'
-      });
+			invariant(tempFile.size <= 20 * 1024 * 1024, {
+				code: 'BAD_REQUEST',
+				message: 'File size exceeds the limit of 20 MB',
+			});
 
-      const newFile = await fileManager.saveFile(input.fileId, ctx.userId);
+			const newFile = await fileManager.saveFile(input.fileId, ctx.userId);
 
-      await db
-        .update(users)
-        .set({ bannerId: newFile.id })
-        .where(eq(users.id, ctx.userId));
-    }
+			await db.update(users).set({ bannerId: newFile.id }).where(eq(users.id, ctx.userId));
+		}
 
-    publishUser(ctx.userId, 'update');
-  });
+		publishUser(ctx.userId, 'update');
+	});
 
 export { changeBannerRoute };

@@ -1,12 +1,7 @@
-import type { TTempFile } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
+import type { TTempFile } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
-import {
-  getCaller,
-  initTest,
-  login,
-  uploadFile
-} from '../../__tests__/helpers';
+import { getCaller, initTest, login, uploadFile } from '../../__tests__/helpers';
 import { TEST_SECRET_TOKEN } from '../../__tests__/seed';
 import { tdb } from '../../__tests__/setup';
 import { logins, settings, users } from '../../db/schema';
@@ -14,276 +9,255 @@ import { logins, settings, users } from '../../db/schema';
 const JOIN_SERVER_MAX_REQUESTS_PER_MINUTE = 60;
 
 describe('others router', () => {
-  test('should throw when user tries to join with no handshake', async () => {
-    const { caller } = await getCaller(1);
-
-    await expect(
-      caller.others.joinServer({
-        handshakeHash: ''
-      })
-    ).rejects.toThrow('Invalid handshake hash');
-  });
-
-  test('should allow user to join with valid handshake', async () => {
-    const joiningUserId = 1;
-
-    const { caller } = await getCaller(joiningUserId);
-    const { handshakeHash } = await caller.others.handshake();
-
-    const result = await caller.others.joinServer({
-      handshakeHash
-    });
-
-    expect(result).toHaveProperty('categories');
-    expect(result).toHaveProperty('channels');
-    expect(result).toHaveProperty('users');
-    expect(result).toHaveProperty('serverId');
-    expect(result).toHaveProperty('serverName');
-    expect(result).toHaveProperty('ownUserId');
-    expect(result).toHaveProperty('voiceMap');
-    expect(result).toHaveProperty('roles');
-    expect(result).toHaveProperty('emojis');
-    expect(result).toHaveProperty('channelPermissions');
-
-    expect(result.ownUserId).toBe(joiningUserId);
-
-    for (const user of result.users) {
-      expect(user._identity).toBeUndefined();
-    }
-  });
-
-  test('should return restricted payload when password reset is required', async () => {
-    const joiningUserId = 2;
-
-    const before = await tdb
-      .select({ lastLoginAt: users.lastLoginAt })
-      .from(users)
-      .where(eq(users.id, joiningUserId))
-      .get();
-
-    const loginsBefore = await tdb
-      .select({ id: logins.id })
-      .from(logins)
-      .where(eq(logins.userId, joiningUserId))
-      .all();
-
-    await tdb
-      .update(users)
-      .set({ mustChangePassword: true })
-      .where(eq(users.id, joiningUserId))
-      .run();
-
-    const { caller } = await getCaller(joiningUserId);
-    const { handshakeHash } = await caller.others.handshake();
-
-    const result = await caller.others.joinServer({
-      handshakeHash
-    });
-
-    expect(result.mustChangePassword).toBe(true);
-    expect(result.serverId).toBe('');
-    expect(result.serverName).toBe('');
-    expect(result.categories).toEqual([]);
-    expect(result.channels).toEqual([]);
-    expect(result.users).toEqual([]);
-    expect(result.roles).toEqual([]);
-    expect(result.emojis).toEqual([]);
-    expect(result.publicSettings).toBeUndefined();
-    expect(result.channelPermissions).toEqual({});
-    expect(result.readStates).toEqual({});
-    expect(result.commands).toEqual({});
-    expect(result.externalStreamsMap).toEqual({});
-    expect(result.voiceMap).toEqual({});
-
-    const after = await tdb
-      .select({ lastLoginAt: users.lastLoginAt })
-      .from(users)
-      .where(eq(users.id, joiningUserId))
-      .get();
-
-    const loginsAfter = await tdb
-      .select({ id: logins.id })
-      .from(logins)
-      .where(eq(logins.userId, joiningUserId))
-      .all();
-
-    expect(after?.lastLoginAt).toBe(before?.lastLoginAt);
-    expect(loginsAfter.length).toBe(loginsBefore.length);
-  });
-
-  test('should ask for password if server has one set', async () => {
-    const { caller } = await initTest(1);
-    const { hasPassword } = await caller.others.handshake();
-
-    expect(hasPassword).toBe(false);
+	test('should throw when user tries to join with no handshake', async () => {
+		const { caller } = await getCaller(1);
+
+		await expect(
+			caller.others.joinServer({
+				handshakeHash: '',
+			}),
+		).rejects.toThrow('Invalid handshake hash');
+	});
+
+	test('should allow user to join with valid handshake', async () => {
+		const joiningUserId = 1;
+
+		const { caller } = await getCaller(joiningUserId);
+		const { handshakeHash } = await caller.others.handshake();
+
+		const result = await caller.others.joinServer({
+			handshakeHash,
+		});
+
+		expect(result).toHaveProperty('categories');
+		expect(result).toHaveProperty('channels');
+		expect(result).toHaveProperty('users');
+		expect(result).toHaveProperty('serverId');
+		expect(result).toHaveProperty('serverName');
+		expect(result).toHaveProperty('ownUserId');
+		expect(result).toHaveProperty('voiceMap');
+		expect(result).toHaveProperty('roles');
+		expect(result).toHaveProperty('emojis');
+		expect(result).toHaveProperty('channelPermissions');
+
+		expect(result.ownUserId).toBe(joiningUserId);
+
+		for (const user of result.users) {
+			expect(user._identity).toBeUndefined();
+		}
+	});
+
+	test('should return restricted payload when password reset is required', async () => {
+		const joiningUserId = 2;
+
+		const before = await tdb
+			.select({ lastLoginAt: users.lastLoginAt })
+			.from(users)
+			.where(eq(users.id, joiningUserId))
+			.get();
+
+		const loginsBefore = await tdb.select({ id: logins.id }).from(logins).where(eq(logins.userId, joiningUserId)).all();
+
+		await tdb.update(users).set({ mustChangePassword: true }).where(eq(users.id, joiningUserId)).run();
+
+		const { caller } = await getCaller(joiningUserId);
+		const { handshakeHash } = await caller.others.handshake();
+
+		const result = await caller.others.joinServer({
+			handshakeHash,
+		});
+
+		expect(result.mustChangePassword).toBe(true);
+		expect(result.serverId).toBe('');
+		expect(result.serverName).toBe('');
+		expect(result.categories).toEqual([]);
+		expect(result.channels).toEqual([]);
+		expect(result.users).toEqual([]);
+		expect(result.roles).toEqual([]);
+		expect(result.emojis).toEqual([]);
+		expect(result.publicSettings).toBeUndefined();
+		expect(result.channelPermissions).toEqual({});
+		expect(result.readStates).toEqual({});
+		expect(result.commands).toEqual({});
+		expect(result.externalStreamsMap).toEqual({});
+		expect(result.voiceMap).toEqual({});
 
-    await caller.others.updateSettings({
-      password: 'testpassword'
-    });
+		const after = await tdb
+			.select({ lastLoginAt: users.lastLoginAt })
+			.from(users)
+			.where(eq(users.id, joiningUserId))
+			.get();
+
+		const loginsAfter = await tdb.select({ id: logins.id }).from(logins).where(eq(logins.userId, joiningUserId)).all();
+
+		expect(after?.lastLoginAt).toBe(before?.lastLoginAt);
+		expect(loginsAfter.length).toBe(loginsBefore.length);
+	});
+
+	test('should ask for password if server has one set', async () => {
+		const { caller } = await initTest(1);
+		const { hasPassword } = await caller.others.handshake();
 
-    const { hasPassword: hasPasswordAfter } = await caller.others.handshake();
+		expect(hasPassword).toBe(false);
+
+		await caller.others.updateSettings({
+			password: 'testpassword',
+		});
 
-    expect(hasPasswordAfter).toBe(true);
-  });
+		const { hasPassword: hasPasswordAfter } = await caller.others.handshake();
 
-  test('should verify and upgrade server password to hashed format on join', async () => {
-    const { caller } = await initTest(1);
+		expect(hasPasswordAfter).toBe(true);
+	});
 
-    await caller.others.updateSettings({
-      password: 'testpassword'
-    });
+	test('should verify and upgrade server password to hashed format on join', async () => {
+		const { caller } = await initTest(1);
 
-    const { handshakeHash } = await caller.others.handshake();
+		await caller.others.updateSettings({
+			password: 'testpassword',
+		});
 
-    await expect(
-      caller.others.joinServer({
-        handshakeHash
-      })
-    ).rejects.toThrow('Invalid password');
+		const { handshakeHash } = await caller.others.handshake();
 
-    const { handshakeHash: nextHandshakeHash } =
-      await caller.others.handshake();
+		await expect(
+			caller.others.joinServer({
+				handshakeHash,
+			}),
+		).rejects.toThrow('Invalid password');
 
-    await caller.others.joinServer({
-      handshakeHash: nextHandshakeHash,
-      password: 'testpassword'
-    });
+		const { handshakeHash: nextHandshakeHash } = await caller.others.handshake();
 
-    const stored = await tdb
-      .select({ password: settings.password })
-      .from(settings)
-      .limit(1)
-      .get();
+		await caller.others.joinServer({
+			handshakeHash: nextHandshakeHash,
+			password: 'testpassword',
+		});
 
-    expect(stored?.password?.startsWith('argon2$')).toBe(true);
-  });
+		const stored = await tdb.select({ password: settings.password }).from(settings).limit(1).get();
 
-  test('should redact password in settings payloads', async () => {
-    const { caller } = await initTest(1);
+		expect(stored?.password?.startsWith('argon2$')).toBe(true);
+	});
 
-    await caller.others.updateSettings({
-      password: 'testpassword'
-    });
+	test('should redact password in settings payloads', async () => {
+		const { caller } = await initTest(1);
 
-    const settings = await caller.others.getSettings();
+		await caller.others.updateSettings({
+			password: 'testpassword',
+		});
 
-    expect(settings).not.toHaveProperty('password');
-    expect(settings).toHaveProperty('hasPassword', true);
-    expect(settings).not.toHaveProperty('secretToken');
-    expect(settings).not.toHaveProperty('authTokenSecret');
-  });
+		const settings = await caller.others.getSettings();
 
-  test('should keep password when update payload omits password', async () => {
-    const { caller } = await initTest(1);
+		expect(settings).not.toHaveProperty('password');
+		expect(settings).toHaveProperty('hasPassword', true);
+		expect(settings).not.toHaveProperty('secretToken');
+		expect(settings).not.toHaveProperty('authTokenSecret');
+	});
 
-    await caller.others.updateSettings({
-      password: 'testpassword'
-    });
+	test('should keep password when update payload omits password', async () => {
+		const { caller } = await initTest(1);
 
-    await caller.others.updateSettings({
-      description: 'no password change'
-    });
+		await caller.others.updateSettings({
+			password: 'testpassword',
+		});
 
-    const { hasPassword } = await caller.others.handshake();
+		await caller.others.updateSettings({
+			description: 'no password change',
+		});
 
-    expect(hasPassword).toBe(true);
-  });
+		const { hasPassword } = await caller.others.handshake();
 
-  test('should update server settings', async () => {
-    const { caller } = await initTest(1);
+		expect(hasPassword).toBe(true);
+	});
 
-    const newSettings = {
-      name: 'Updated Test Server',
-      description: 'An updated description',
-      allowNewUsers: false,
-      storageUploadEnabled: false
-    };
+	test('should update server settings', async () => {
+		const { caller } = await initTest(1);
 
-    await caller.others.updateSettings(newSettings);
+		const newSettings = {
+			name: 'Updated Test Server',
+			description: 'An updated description',
+			allowNewUsers: false,
+			storageUploadEnabled: false,
+		};
 
-    const settings = await caller.others.getSettings();
+		await caller.others.updateSettings(newSettings);
 
-    expect(settings.name).toBe(newSettings.name);
-    expect(settings.description).toBe(newSettings.description);
-    expect(settings.allowNewUsers).toBe(newSettings.allowNewUsers);
-    expect(settings.storageUploadEnabled).toBe(
-      newSettings.storageUploadEnabled
-    );
-    expect(settings).not.toHaveProperty('password');
-    expect(settings).toHaveProperty('hasPassword', false);
-    expect(settings).not.toHaveProperty('secretToken');
-    expect(settings).not.toHaveProperty('authTokenSecret');
-  });
+		const settings = await caller.others.getSettings();
 
-  test('should throw when using invalid secret token', async () => {
-    const { caller } = await initTest(2);
+		expect(settings.name).toBe(newSettings.name);
+		expect(settings.description).toBe(newSettings.description);
+		expect(settings.allowNewUsers).toBe(newSettings.allowNewUsers);
+		expect(settings.storageUploadEnabled).toBe(newSettings.storageUploadEnabled);
+		expect(settings).not.toHaveProperty('password');
+		expect(settings).toHaveProperty('hasPassword', false);
+		expect(settings).not.toHaveProperty('secretToken');
+		expect(settings).not.toHaveProperty('authTokenSecret');
+	});
 
-    await expect(
-      caller.others.useSecretToken({ token: 'invalid-token' })
-    ).rejects.toThrow('Invalid secret token');
-  });
+	test('should throw when using invalid secret token', async () => {
+		const { caller } = await initTest(2);
 
-  test('should accept valid secret token and assign owner role', async () => {
-    const { caller } = await initTest(2);
+		await expect(caller.others.useSecretToken({ token: 'invalid-token' })).rejects.toThrow('Invalid secret token');
+	});
 
-    await caller.others.useSecretToken({ token: TEST_SECRET_TOKEN });
+	test('should accept valid secret token and assign owner role', async () => {
+		const { caller } = await initTest(2);
 
-    const allUsers = await caller.users.getAll();
-    const updatedUser = allUsers.find((u) => u.id === 2);
+		await caller.others.useSecretToken({ token: TEST_SECRET_TOKEN });
 
-    expect(updatedUser).toBeDefined();
-    expect(updatedUser?.roleIds).toContain(1);
-  });
+		const allUsers = await caller.users.getAll();
+		const updatedUser = allUsers.find((u) => u.id === 2);
 
-  test('should change logo', async () => {
-    const { caller } = await initTest(1);
+		expect(updatedUser).toBeDefined();
+		expect(updatedUser?.roleIds).toContain(1);
+	});
 
-    const response = await login('testowner', 'password123');
-    const { token } = (await response.json()) as { token: string };
+	test('should change logo', async () => {
+		const { caller } = await initTest(1);
 
-    const logoFile = new File(['logo content'], 'logo.png', {
-      type: 'image/png'
-    });
+		const response = await login('testowner', 'password123');
+		const { token } = (await response.json()) as { token: string };
 
-    const uploadResponse = await uploadFile(logoFile, token);
-    const tempFile = (await uploadResponse.json()) as TTempFile;
+		const logoFile = new File(['logo content'], 'logo.png', {
+			type: 'image/png',
+		});
 
-    expect(tempFile).toBeDefined();
-    expect(tempFile.id).toBeDefined();
+		const uploadResponse = await uploadFile(logoFile, token);
+		const tempFile = (await uploadResponse.json()) as TTempFile;
 
-    const settingsBefore = await caller.others.getSettings();
+		expect(tempFile).toBeDefined();
+		expect(tempFile.id).toBeDefined();
 
-    expect(settingsBefore.logo).toBeNull();
+		const settingsBefore = await caller.others.getSettings();
 
-    await caller.others.changeLogo({ fileId: tempFile.id });
+		expect(settingsBefore.logo).toBeNull();
 
-    const settingsAfter = await caller.others.getSettings();
+		await caller.others.changeLogo({ fileId: tempFile.id });
 
-    expect(settingsAfter.logo).toBeDefined();
-    expect(settingsAfter.logo?.originalName).toBe(logoFile.name);
+		const settingsAfter = await caller.others.getSettings();
 
-    await caller.others.changeLogo({});
+		expect(settingsAfter.logo).toBeDefined();
+		expect(settingsAfter.logo?.originalName).toBe(logoFile.name);
 
-    const settingsAfterRemoval = await caller.others.getSettings();
+		await caller.others.changeLogo({});
 
-    expect(settingsAfterRemoval.logo).toBeNull();
-  });
+		const settingsAfterRemoval = await caller.others.getSettings();
 
-  test('should rate limit excessive join attempts', async () => {
-    const { caller } = await getCaller(1);
+		expect(settingsAfterRemoval.logo).toBeNull();
+	});
 
-    for (let i = 0; i < JOIN_SERVER_MAX_REQUESTS_PER_MINUTE; i++) {
-      await expect(
-        caller.others.joinServer({
-          handshakeHash: ''
-        })
-      ).rejects.toThrow('Invalid handshake hash');
-    }
+	test('should rate limit excessive join attempts', async () => {
+		const { caller } = await getCaller(1);
 
-    await expect(
-      caller.others.joinServer({
-        handshakeHash: ''
-      })
-    ).rejects.toThrow('Too many requests. Please try again shortly.');
-  });
+		for (let i = 0; i < JOIN_SERVER_MAX_REQUESTS_PER_MINUTE; i++) {
+			await expect(
+				caller.others.joinServer({
+					handshakeHash: '',
+				}),
+			).rejects.toThrow('Invalid handshake hash');
+		}
+
+		await expect(
+			caller.others.joinServer({
+				handshakeHash: '',
+			}),
+		).rejects.toThrow('Too many requests. Please try again shortly.');
+	});
 });

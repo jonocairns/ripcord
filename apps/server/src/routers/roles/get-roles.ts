@@ -3,11 +3,11 @@ import { getRoles } from '../../db/queries/roles';
 import { protectedProcedure } from '../../utils/trpc';
 
 const getRolesRouter = protectedProcedure.query(async ({ ctx }) => {
-  await ctx.needsPermission(Permission.MANAGE_ROLES);
+	await ctx.needsPermission(Permission.MANAGE_ROLES);
 
-  const roles = await getRoles();
+	const roles = await getRoles();
 
-  return roles;
+	return roles;
 });
 
 export { getRolesRouter };

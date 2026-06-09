@@ -1,104 +1,104 @@
 {
-  "version": "7",
-  "dialect": "sqlite",
-  "entries": [
-    {
-      "idx": 0,
-      "version": "6",
-      "when": 1769619685540,
-      "tag": "0000_rich_jetstream",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1771401600000,
-      "tag": "0001_bright_refresh_tokens",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1772064000000,
-      "tag": "0002_glossy_auth_token_secret",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1772150400000,
-      "tag": "0003_user_token_version",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1772236800000,
-      "tag": "0004_user_must_change_password",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1772780671172,
-      "tag": "0005_cold_chat",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "6",
-      "when": 1772791707162,
-      "tag": "0006_red_radioactive_man",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "6",
-      "when": 1772843085571,
-      "tag": "0007_fluffy_champions",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "6",
-      "when": 1772853323401,
-      "tag": "0008_peaceful_juggernaut",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "6",
-      "when": 1773047549219,
-      "tag": "0009_kind_susan_delgado",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "6",
-      "when": 1774167655495,
-      "tag": "0010_robust_dazzler",
-      "breakpoints": true
-    },
-    {
-      "idx": 11,
-      "version": "6",
-      "when": 1774221527882,
-      "tag": "0011_motionless_morph",
-      "breakpoints": true
-    },
-    {
-      "idx": 12,
-      "version": "6",
-      "when": 1776937022109,
-      "tag": "0012_fuzzy_jetstream",
-      "breakpoints": true
-    },
-    {
-      "idx": 13,
-      "version": "6",
-      "when": 1777071090620,
-      "tag": "0013_zippy_blue_marvel",
-      "breakpoints": true
-    }
-  ]
+	"version": "7",
+	"dialect": "sqlite",
+	"entries": [
+		{
+			"idx": 0,
+			"version": "6",
+			"when": 1769619685540,
+			"tag": "0000_rich_jetstream",
+			"breakpoints": true
+		},
+		{
+			"idx": 1,
+			"version": "7",
+			"when": 1771401600000,
+			"tag": "0001_bright_refresh_tokens",
+			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "7",
+			"when": 1772064000000,
+			"tag": "0002_glossy_auth_token_secret",
+			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "7",
+			"when": 1772150400000,
+			"tag": "0003_user_token_version",
+			"breakpoints": true
+		},
+		{
+			"idx": 4,
+			"version": "7",
+			"when": 1772236800000,
+			"tag": "0004_user_must_change_password",
+			"breakpoints": true
+		},
+		{
+			"idx": 5,
+			"version": "7",
+			"when": 1772780671172,
+			"tag": "0005_cold_chat",
+			"breakpoints": true
+		},
+		{
+			"idx": 6,
+			"version": "6",
+			"when": 1772791707162,
+			"tag": "0006_red_radioactive_man",
+			"breakpoints": true
+		},
+		{
+			"idx": 7,
+			"version": "6",
+			"when": 1772843085571,
+			"tag": "0007_fluffy_champions",
+			"breakpoints": true
+		},
+		{
+			"idx": 8,
+			"version": "6",
+			"when": 1772853323401,
+			"tag": "0008_peaceful_juggernaut",
+			"breakpoints": true
+		},
+		{
+			"idx": 9,
+			"version": "6",
+			"when": 1773047549219,
+			"tag": "0009_kind_susan_delgado",
+			"breakpoints": true
+		},
+		{
+			"idx": 10,
+			"version": "6",
+			"when": 1774167655495,
+			"tag": "0010_robust_dazzler",
+			"breakpoints": true
+		},
+		{
+			"idx": 11,
+			"version": "6",
+			"when": 1774221527882,
+			"tag": "0011_motionless_morph",
+			"breakpoints": true
+		},
+		{
+			"idx": 12,
+			"version": "6",
+			"when": 1776937022109,
+			"tag": "0012_fuzzy_jetstream",
+			"breakpoints": true
+		},
+		{
+			"idx": 13,
+			"version": "6",
+			"when": 1777071090620,
+			"tag": "0013_zippy_blue_marvel",
+			"breakpoints": true
+		}
+	]
 }

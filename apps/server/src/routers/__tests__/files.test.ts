@@ -1,104 +1,99 @@
-import type { TTempFile } from '@sharkord/shared';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import fs from 'fs/promises';
+import fs from 'node:fs/promises';
+import type { TTempFile } from '@sharkord/shared';
 import { initTest, login, uploadFile } from '../../__tests__/helpers';
 import { fileManager } from '../../utils/file-manager';
 
 type TLoginBody = {
-  token: string;
+	token: string;
 };
 
 describe('files router', () => {
-  let tempFile: TTempFile | undefined;
-  let counter = 0;
+	let tempFile: TTempFile | undefined;
+	let counter = 0;
 
-  beforeEach(async () => {
-    const response = await login('testowner', 'password123');
-    const data = (await response.json()) as TLoginBody;
+	beforeEach(async () => {
+		const response = await login('testowner', 'password123');
+		const data = (await response.json()) as TLoginBody;
 
-    const res = await uploadFile(
-      new File(['test'], `file-${counter++}.txt`, { type: 'text/plain' }),
-      data.token
-    );
+		const res = await uploadFile(new File(['test'], `file-${counter++}.txt`, { type: 'text/plain' }), data.token);
 
-    tempFile = (await res.json()) as TTempFile;
-  });
+		tempFile = (await res.json()) as TTempFile;
+	});
 
-  afterEach(async () => {
-    if (!tempFile) return;
+	afterEach(async () => {
+		if (!tempFile) return;
 
-    if (fileManager.temporaryFileExists(tempFile.id)) {
-      await fileManager.removeTemporaryFile(tempFile.id);
-      tempFile = undefined;
-      return;
-    }
+		if (fileManager.temporaryFileExists(tempFile.id)) {
+			await fileManager.removeTemporaryFile(tempFile.id);
+			tempFile = undefined;
+			return;
+		}
 
-    try {
-      await fs.unlink(tempFile.path);
-    } catch {
-      // ignore
-    } finally {
-      tempFile = undefined;
-    }
-  });
+		try {
+			await fs.unlink(tempFile.path);
+		} catch {
+			// ignore
+		} finally {
+			tempFile = undefined;
+		}
+	});
 
-  test('should check temporary file existence', async () => {
-    expect(tempFile).toBeDefined();
-    if (!tempFile) return;
+	test('should check temporary file existence', async () => {
+		expect(tempFile).toBeDefined();
+		if (!tempFile) return;
 
-    expect(tempFile.id).toBeDefined();
+		expect(tempFile.id).toBeDefined();
 
-    const file = await fileManager.getTemporaryFile(tempFile.id);
+		const file = await fileManager.getTemporaryFile(tempFile.id);
 
-    expect(file).toBeDefined();
-    expect(file?.path).toBe(tempFile.path);
-    expect(file?.originalName).toBe(tempFile.originalName);
-    expect(file?.size).toBe(tempFile.size);
+		expect(file).toBeDefined();
+		expect(file?.path).toBe(tempFile.path);
+		expect(file?.originalName).toBe(tempFile.originalName);
+		expect(file?.size).toBe(tempFile.size);
 
-    const stat = await fs.stat(tempFile.path);
+		const stat = await fs.stat(tempFile.path);
 
-    expect(stat.size).toBe(tempFile.size);
-  });
+		expect(stat.size).toBe(tempFile.size);
+	});
 
-  test('should delete a temporary file', async () => {
-    expect(tempFile).toBeDefined();
-    if (!tempFile) return;
+	test('should delete a temporary file', async () => {
+		expect(tempFile).toBeDefined();
+		if (!tempFile) return;
 
-    const { caller } = await initTest();
+		const { caller } = await initTest();
 
-    expect(await fs.exists(tempFile.path)).toBe(true);
+		expect(await fs.exists(tempFile.path)).toBe(true);
 
-    await caller.files.deleteTemporary({
-      fileId: tempFile.id
-    });
+		await caller.files.deleteTemporary({
+			fileId: tempFile.id,
+		});
 
-    expect(await fs.exists(tempFile.path)).toBe(false);
-  });
+		expect(await fs.exists(tempFile.path)).toBe(false);
+	});
 
-  test('should throw when deleting a non-existent temporary file', async () => {
-    const { caller } = await initTest();
+	test('should throw when deleting a non-existent temporary file', async () => {
+		const { caller } = await initTest();
 
-    await expect(
-      caller.files.deleteTemporary({
-        fileId: '<non-existent-file-id>' // non-existent file ID
-      })
-    ).rejects.toThrow('Temporary file not found');
-  });
+		await expect(
+			caller.files.deleteTemporary({
+				fileId: '<non-existent-file-id>', // non-existent file ID
+			}),
+		).rejects.toThrow('Temporary file not found');
+	});
 
-  test('should throw when deleting other users temporary file', async () => {
-    expect(tempFile).toBeDefined();
-    if (!tempFile) return;
+	test('should throw when deleting other users temporary file', async () => {
+		expect(tempFile).toBeDefined();
+		if (!tempFile) return;
 
-    const { caller } = await initTest(2);
+		const { caller } = await initTest(2);
 
-    await expect(
-      caller.files.deleteTemporary({
-        fileId: tempFile.id
-      })
-    ).rejects.toThrow(
-      'You do not have permission to delete this temporary file'
-    );
+		await expect(
+			caller.files.deleteTemporary({
+				fileId: tempFile.id,
+			}),
+		).rejects.toThrow('You do not have permission to delete this temporary file');
 
-    expect(await fs.exists(tempFile.path)).toBe(true);
-  });
+		expect(await fs.exists(tempFile.path)).toBe(true);
+	});
 });

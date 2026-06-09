@@ -12,51 +12,51 @@ import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sess
 import { protectedProcedure } from '../../utils/trpc';
 
 const deleteRoleRoute = protectedProcedure
-  .input(
-    z.object({
-      roleId: z.number()
-    })
-  )
-  .mutation(async ({ input, ctx }) => {
-    await ctx.needsPermission(Permission.MANAGE_ROLES);
+	.input(
+		z.object({
+			roleId: z.number(),
+		}),
+	)
+	.mutation(async ({ input, ctx }) => {
+		await ctx.needsPermission(Permission.MANAGE_ROLES);
 
-    const role = await getRole(input.roleId);
+		const role = await getRole(input.roleId);
 
-    invariant(role, {
-      code: 'NOT_FOUND',
-      message: 'Role not found'
-    });
-    invariant(!role.isPersistent, {
-      code: 'FORBIDDEN',
-      message: 'Cannot delete a persistent role'
-    });
-    invariant(!role.isDefault, {
-      code: 'FORBIDDEN',
-      message: 'Cannot delete the default role'
-    });
+		invariant(role, {
+			code: 'NOT_FOUND',
+			message: 'Role not found',
+		});
+		invariant(!role.isPersistent, {
+			code: 'FORBIDDEN',
+			message: 'Cannot delete a persistent role',
+		});
+		invariant(!role.isDefault, {
+			code: 'FORBIDDEN',
+			message: 'Cannot delete the default role',
+		});
 
-    const affectedUsers = await db
-      .select({ userId: userRoles.userId })
-      .from(userRoles)
-      .where(eq(userRoles.roleId, role.id));
+		const affectedUsers = await db
+			.select({ userId: userRoles.userId })
+			.from(userRoles)
+			.where(eq(userRoles.roleId, role.id));
 
-    await fallbackUsersToDefaultRole(role.id);
-    await db.delete(roles).where(eq(roles.id, role.id));
+		await fallbackUsersToDefaultRole(role.id);
+		await db.delete(roles).where(eq(roles.id, role.id));
 
-    await Promise.all([
-      publishRole(role.id, 'delete'),
-      revalidateActiveVoiceSessions({
-        userIds: affectedUsers.map((user) => user.userId)
-      })
-    ]);
-    enqueueActivityLog({
-      type: ActivityLogType.DELETED_ROLE,
-      userId: ctx.user.id,
-      details: {
-        roleId: role.id,
-        roleName: role.name
-      }
-    });
-  });
+		await Promise.all([
+			publishRole(role.id, 'delete'),
+			revalidateActiveVoiceSessions({
+				userIds: affectedUsers.map((user) => user.userId),
+			}),
+		]);
+		enqueueActivityLog({
+			type: ActivityLogType.DELETED_ROLE,
+			userId: ctx.user.id,
+			details: {
+				roleId: role.id,
+				roleName: role.name,
+			},
+		});
+	});
 
 export { deleteRoleRoute };

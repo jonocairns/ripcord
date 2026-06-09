@@ -1,4 +1,4 @@
-import type http from 'http';
+import type http from 'node:http';
 import { UAParser } from 'ua-parser-js';
 import { normalizeIpLiteral } from '../helpers/ip-addresses';
 import type { TConnectionInfo } from '../types';
@@ -6,88 +6,78 @@ import type { TConnectionInfo } from '../types';
 // TODO: this code is shit and needs to be improved later
 
 type TSocketLike = {
-  _socket?: { remoteAddress?: unknown };
-  socket?: { remoteAddress?: unknown };
+	_socket?: { remoteAddress?: unknown };
+	socket?: { remoteAddress?: unknown };
 };
 
 type TGetWsInfoOptions = {
-  trustProxy?: boolean;
+	trustProxy?: boolean;
 };
 
 const normalizeIpCandidate = (value: unknown): string | undefined => {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value[0];
-  if (value === null || value === undefined) return undefined;
-  return String(value);
+	if (typeof value === 'string') return value;
+	if (Array.isArray(value)) return value[0];
+	if (value === null || value === undefined) return undefined;
+	return String(value);
 };
 
-const getWsIp = (
-  ws: unknown,
-  req: http.IncomingMessage,
-  options?: TGetWsInfoOptions
-): string | undefined => {
-  const parsedWs =
-    ws && typeof ws === 'object' ? (ws as TSocketLike) : undefined;
+const getWsIp = (ws: unknown, req: http.IncomingMessage, options?: TGetWsInfoOptions): string | undefined => {
+	const parsedWs = ws && typeof ws === 'object' ? (ws as TSocketLike) : undefined;
 
-  const headers = req?.headers || {};
-  const trustProxy = options?.trustProxy === true;
+	const headers = req?.headers || {};
+	const trustProxy = options?.trustProxy === true;
 
-  const proxyIp = normalizeIpCandidate(
-    parsedWs?._socket?.remoteAddress ||
-      parsedWs?.socket?.remoteAddress ||
-      req?.socket?.remoteAddress ||
-      req?.connection?.remoteAddress
-  );
+	const proxyIp = normalizeIpCandidate(
+		parsedWs?._socket?.remoteAddress ||
+			parsedWs?.socket?.remoteAddress ||
+			req?.socket?.remoteAddress ||
+			req?.connection?.remoteAddress,
+	);
 
-  let ip = trustProxy
-    ? normalizeIpCandidate(
-        headers['cf-connecting-ip'] ||
-          headers['cf-real-ip'] ||
-          headers['x-real-ip'] ||
-          headers['x-forwarded-for'] ||
-          headers['x-client-ip'] ||
-          headers['x-cluster-client-ip'] ||
-          headers['forwarded-for'] ||
-          headers['forwarded'] ||
-          proxyIp
-      )
-    : proxyIp;
+	let ip = trustProxy
+		? normalizeIpCandidate(
+				headers['cf-connecting-ip'] ||
+					headers['cf-real-ip'] ||
+					headers['x-real-ip'] ||
+					headers['x-forwarded-for'] ||
+					headers['x-client-ip'] ||
+					headers['x-cluster-client-ip'] ||
+					headers['forwarded-for'] ||
+					headers.forwarded ||
+					proxyIp,
+			)
+		: proxyIp;
 
-  if (!ip) return undefined;
+	if (!ip) return undefined;
 
-  if (ip.includes(',')) {
-    ip = ip.split(',')[0]?.trim() ?? ip;
-  }
+	if (ip.includes(',')) {
+		ip = ip.split(',')[0]?.trim() ?? ip;
+	}
 
-  return ip ? normalizeIpLiteral(ip) : undefined;
+	return ip ? normalizeIpLiteral(ip) : undefined;
 };
 
 const getWsInfo = (
-  ws: unknown,
-  req: http.IncomingMessage,
-  options?: TGetWsInfoOptions
+	ws: unknown,
+	req: http.IncomingMessage,
+	options?: TGetWsInfoOptions,
 ): TConnectionInfo | undefined => {
-  const ip = getWsIp(ws, req, options);
-  const userAgent = req?.headers?.['user-agent'];
+	const ip = getWsIp(ws, req, options);
+	const userAgent = req?.headers?.['user-agent'];
 
-  if (!ip && !userAgent) return undefined;
+	if (!ip && !userAgent) return undefined;
 
-  const parser = new UAParser(userAgent || '');
-  const result = parser.getResult();
+	const parser = new UAParser(userAgent || '');
+	const result = parser.getResult();
 
-  return {
-    ip,
-    os: result.os.name
-      ? [result.os.name, result.os.version].filter(Boolean).join(' ')
-      : undefined,
-    device: result.device.type
-      ? [result.device.vendor, result.device.model]
-          .filter(Boolean)
-          .join(' ')
-          .trim()
-      : 'Desktop',
-    userAgent: userAgent || undefined
-  };
+	return {
+		ip,
+		os: result.os.name ? [result.os.name, result.os.version].filter(Boolean).join(' ') : undefined,
+		device: result.device.type
+			? [result.device.vendor, result.device.model].filter(Boolean).join(' ').trim()
+			: 'Desktop',
+		userAgent: userAgent || undefined,
+	};
 };
 
 export { getWsInfo };

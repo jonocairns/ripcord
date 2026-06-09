@@ -1,23 +1,23 @@
 class HttpValidationError extends Error {
-  field: string;
+	field: string;
 
-  constructor(field: string, message: string) {
-    super(message);
-    this.name = 'HttpValidationError';
-    this.field = field;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
+	constructor(field: string, message: string) {
+		super(message);
+		this.name = 'HttpValidationError';
+		this.field = field;
+		Object.setPrototypeOf(this, new.target.prototype);
+	}
 }
 
 class HttpPayloadTooLargeError extends Error {
-  maxBytes: number;
+	maxBytes: number;
 
-  constructor(maxBytes: number) {
-    super('Request body too large');
-    this.name = 'HttpPayloadTooLargeError';
-    this.maxBytes = maxBytes;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
+	constructor(maxBytes: number) {
+		super('Request body too large');
+		this.name = 'HttpPayloadTooLargeError';
+		this.maxBytes = maxBytes;
+		Object.setPrototypeOf(this, new.target.prototype);
+	}
 }
 
 export { HttpPayloadTooLargeError, HttpValidationError };

@@ -1,6 +1,6 @@
+import type http from 'node:http';
 import { sha256 } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
-import http from 'http';
 import z from 'zod';
 import { db } from '../db';
 import { refreshTokens } from '../db/schema';
@@ -9,30 +9,25 @@ import { getJsonBody } from './helpers';
 const AUTH_REQUEST_MAX_BODY_BYTES = 8 * 1024;
 
 const zBody = z.object({
-  refreshToken: z.string().min(1, 'Refresh token is required')
+	refreshToken: z.string().min(1, 'Refresh token is required'),
 });
 
-const logoutRouteHandler = async (
-  req: http.IncomingMessage,
-  res: http.ServerResponse
-) => {
-  const { refreshToken } = zBody.parse(
-    await getJsonBody(req, { maxBytes: AUTH_REQUEST_MAX_BODY_BYTES })
-  );
-  const refreshTokenHash = await sha256(refreshToken);
-  const now = Date.now();
+const logoutRouteHandler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
+	const { refreshToken } = zBody.parse(await getJsonBody(req, { maxBytes: AUTH_REQUEST_MAX_BODY_BYTES }));
+	const refreshTokenHash = await sha256(refreshToken);
+	const now = Date.now();
 
-  await db
-    .update(refreshTokens)
-    .set({
-      revokedAt: now,
-      updatedAt: now
-    })
-    .where(eq(refreshTokens.tokenHash, refreshTokenHash))
-    .run();
+	await db
+		.update(refreshTokens)
+		.set({
+			revokedAt: now,
+			updatedAt: now,
+		})
+		.where(eq(refreshTokens.tokenHash, refreshTokenHash))
+		.run();
 
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ success: true }));
+	res.writeHead(200, { 'Content-Type': 'application/json' });
+	res.end(JSON.stringify({ success: true }));
 };
 
 export { logoutRouteHandler };
