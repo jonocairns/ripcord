@@ -1,833 +1,760 @@
-import fs from "node:fs";
+import fs from 'node:fs';
+import path from 'node:path';
 import {
-  app,
-  BrowserWindow,
-  type IpcMainEvent,
-  type IpcMainInvokeEvent,
-  ipcMain,
-  MessageChannelMain,
-  type MessagePortMain,
-  powerMonitor,
-  session,
-  shell,
-} from "electron";
-import path from "path";
-import { resolveDesktopCaptureCapabilities } from "./capture-capabilities";
-import { captureSidecarManager } from "./capture-sidecar-manager";
+	app,
+	BrowserWindow,
+	type IpcMainEvent,
+	type IpcMainInvokeEvent,
+	ipcMain,
+	MessageChannelMain,
+	type MessagePortMain,
+	powerMonitor,
+	session,
+	shell,
+} from 'electron';
+import { resolveDesktopCaptureCapabilities } from './capture-capabilities';
+import { captureSidecarManager } from './capture-sidecar-manager';
 import {
-  validateDesktopQuitFlushResultArgs,
-  validateListAppAudioTargetsArgs,
-  validatePrepareScreenShareArgs,
-  validateSetGlobalPushKeybindsArgs,
-  validateSetServerUrlArgs,
-  validateStartAppAudioCaptureArgs,
-  validateStopAppAudioCaptureArgs,
-} from "./ipc-validators";
-import { classifyMainFrameNavigationUrl } from "./navigation-policy";
-import { isPermissionAllowed } from "./permission-policy";
+	validateDesktopQuitFlushResultArgs,
+	validateListAppAudioTargetsArgs,
+	validatePrepareScreenShareArgs,
+	validateSetGlobalPushKeybindsArgs,
+	validateSetServerUrlArgs,
+	validateStartAppAudioCaptureArgs,
+	validateStopAppAudioCaptureArgs,
+} from './ipc-validators';
+import { classifyMainFrameNavigationUrl } from './navigation-policy';
+import { isPermissionAllowed } from './permission-policy';
+import { getDesktopCapabilities, resolvePreparedScreenAudioMode } from './platform-capabilities';
+import { previewRuntimeConfig } from './preview-runtime-config';
+import { installPackagedRendererCspReportOnlyHandler } from './renderer-csp';
+import { isTrustedRendererUrl, type TRendererTrustOptions } from './renderer-trust';
 import {
-  getDesktopCapabilities,
-  resolvePreparedScreenAudioMode,
-} from "./platform-capabilities";
-import { previewRuntimeConfig } from "./preview-runtime-config";
-import { installPackagedRendererCspReportOnlyHandler } from "./renderer-csp";
-import {
-  isTrustedRendererUrl,
-  type TRendererTrustOptions,
-} from "./renderer-trust";
-import {
-  clearPreparedScreenShareSelection,
-  consumeScreenShareSelection,
-  getSourceById,
-  listShareSources,
-  listShareSourceThumbnails,
-  prepareScreenShareSelection,
-} from "./screen-share";
-import { getServerUrl, setServerUrl } from "./settings-store";
+	clearPreparedScreenShareSelection,
+	consumeScreenShareSelection,
+	getSourceById,
+	listShareSources,
+	listShareSourceThumbnails,
+	prepareScreenShareSelection,
+} from './screen-share';
+import { getServerUrl, setServerUrl } from './settings-store';
 import type {
-  TAppAudioPcmFrame,
-  TDesktopCapabilities,
-  TDesktopPushKeybindEvent,
-  TDesktopPushKeybindsInput,
-  TDesktopQuitFlushResult,
-  TDesktopWindowControlsState,
-  TGlobalPushKeybindRegistrationResult,
-  TScreenShareSelection,
-  TStartAppAudioCaptureInput,
-} from "./types";
-import { desktopUpdater } from "./updater";
-import { classifyWindowOpenUrl } from "./window-open-policy";
-import { installYoutubeEmbedRefererHandler } from "./youtube-embed-referrer";
+	TAppAudioPcmFrame,
+	TDesktopCapabilities,
+	TDesktopPushKeybindEvent,
+	TDesktopPushKeybindsInput,
+	TDesktopQuitFlushResult,
+	TDesktopWindowControlsState,
+	TGlobalPushKeybindRegistrationResult,
+	TScreenShareSelection,
+	TStartAppAudioCaptureInput,
+} from './types';
+import { desktopUpdater } from './updater';
+import { classifyWindowOpenUrl } from './window-open-policy';
+import { installYoutubeEmbedRefererHandler } from './youtube-embed-referrer';
 
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
 const TRUSTED_RENDERER_URL = app.isPackaged ? undefined : RENDERER_URL;
 const DESKTOP_QUIT_FLUSH_TIMEOUT_MS = 2_000;
 const DESKTOP_DEBUG_IPC_ENABLED = Boolean(TRUSTED_RENDERER_URL);
-const USES_CUSTOM_TITLEBAR =
-  process.platform === "win32" || process.platform === "linux";
+const USES_CUSTOM_TITLEBAR = process.platform === 'win32' || process.platform === 'linux';
 let mainWindow: BrowserWindow | null = null;
 let appAudioFrameEgressPort: MessagePortMain | undefined;
 let lastDesktopCapabilitiesSnapshot: string | undefined;
-let refreshDesktopCapabilitiesPromise:
-  | Promise<TDesktopCapabilities>
-  | undefined;
+let refreshDesktopCapabilitiesPromise: Promise<TDesktopCapabilities> | undefined;
 let refreshDesktopCapabilitiesBroadcastPending = false;
 let refreshDesktopCapabilitiesForceBroadcastPending = false;
 let displayMediaUsesSystemPicker = false;
 let appIsShuttingDown = false;
 let desktopQuitFlushInterceptInProgress = false;
 let desktopQuitFlushCompleted = false;
-let resolveDesktopQuitFlush:
-  | ((result: TDesktopQuitFlushResult) => void)
-  | undefined;
+let resolveDesktopQuitFlush: ((result: TDesktopQuitFlushResult) => void) | undefined;
 
 const sendToRenderer = (channel: string, ...args: unknown[]): boolean => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    mainWindow.webContents.isDestroyed()
-  ) {
-    return false;
-  }
+	if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
+		return false;
+	}
 
-  try {
-    mainWindow.webContents.send(channel, ...args);
-    return true;
-  } catch {
-    return false;
-  }
+	try {
+		mainWindow.webContents.send(channel, ...args);
+		return true;
+	} catch {
+		return false;
+	}
 };
 
-const disposeAppAudioFrameEgressPort = (
-  port: MessagePortMain | undefined = appAudioFrameEgressPort,
-): void => {
-  if (!port) {
-    return;
-  }
+const disposeAppAudioFrameEgressPort = (port: MessagePortMain | undefined = appAudioFrameEgressPort): void => {
+	if (!port) {
+		return;
+	}
 
-  if (appAudioFrameEgressPort === port) {
-    appAudioFrameEgressPort = undefined;
-  }
+	if (appAudioFrameEgressPort === port) {
+		appAudioFrameEgressPort = undefined;
+	}
 
-  try {
-    port.close();
-  } catch {
-    // ignore
-  }
+	try {
+		port.close();
+	} catch {
+		// ignore
+	}
 
-  port.removeAllListeners();
+	port.removeAllListeners();
 };
 
-if (process.platform === "win32") {
-  app.setAppUserModelId(
-    previewRuntimeConfig?.appUserModelId || "com.sharkord.desktop",
-  );
+if (process.platform === 'win32') {
+	app.setAppUserModelId(previewRuntimeConfig?.appUserModelId || 'com.sharkord.desktop');
 }
 
 const resolveAppIconPath = (): string | undefined => {
-  const iconFile = process.platform === "win32" ? "icon.ico" : "icon.png";
-  const iconPath = path.join(
-    __dirname,
-    "..",
-    "..",
-    "assets",
-    "icons",
-    iconFile,
-  );
+	const iconFile = process.platform === 'win32' ? 'icon.ico' : 'icon.png';
+	const iconPath = path.join(__dirname, '..', '..', 'assets', 'icons', iconFile);
 
-  if (!fs.existsSync(iconPath)) {
-    return undefined;
-  }
+	if (!fs.existsSync(iconPath)) {
+		return undefined;
+	}
 
-  return iconPath;
+	return iconPath;
 };
 
 const emitPushKeybindEvent = (event: TDesktopPushKeybindEvent) => {
-  sendToRenderer("desktop:global-push-keybind", event);
+	sendToRenderer('desktop:global-push-keybind', event);
 };
 
-const resolveDesktopPlatform = (): TDesktopWindowControlsState["platform"] => {
-  if (process.platform === "darwin") {
-    return "macos";
-  }
+const resolveDesktopPlatform = (): TDesktopWindowControlsState['platform'] => {
+	if (process.platform === 'darwin') {
+		return 'macos';
+	}
 
-  if (process.platform === "win32") {
-    return "windows";
-  }
+	if (process.platform === 'win32') {
+		return 'windows';
+	}
 
-  return "linux";
+	return 'linux';
 };
 
 const getWindowControlsState = (): TDesktopWindowControlsState => {
-  return {
-    platform: resolveDesktopPlatform(),
-    isMaximized: mainWindow?.isMaximized() ?? false,
-    usesCustomTitlebar: USES_CUSTOM_TITLEBAR,
-  };
+	return {
+		platform: resolveDesktopPlatform(),
+		isMaximized: mainWindow?.isMaximized() ?? false,
+		usesCustomTitlebar: USES_CUSTOM_TITLEBAR,
+	};
 };
 
 const emitWindowControlsState = () => {
-  sendToRenderer(
-    "desktop:window-controls-state-changed",
-    getWindowControlsState(),
-  );
+	sendToRenderer('desktop:window-controls-state-changed', getWindowControlsState());
 };
 
 const disposeDesktopServicesForShutdown = () => {
-  disposeAppAudioFrameEgressPort();
-  desktopUpdater.dispose();
-  void captureSidecarManager.dispose();
+	disposeAppAudioFrameEgressPort();
+	desktopUpdater.dispose();
+	void captureSidecarManager.dispose();
 };
 
 const completeDesktopQuitFlush = (result: TDesktopQuitFlushResult) => {
-  if (!resolveDesktopQuitFlush) {
-    return;
-  }
+	if (!resolveDesktopQuitFlush) {
+		return;
+	}
 
-  const resolve = resolveDesktopQuitFlush;
-  resolveDesktopQuitFlush = undefined;
-  resolve(result);
+	const resolve = resolveDesktopQuitFlush;
+	resolveDesktopQuitFlush = undefined;
+	resolve(result);
 };
 
 const requestDesktopQuitFlush = async (): Promise<TDesktopQuitFlushResult> => {
-  if (!sendToRenderer("desktop:before-quit")) {
-    return {
-      status: "skipped",
-      reason: "renderer-unavailable",
-    };
-  }
+	if (!sendToRenderer('desktop:before-quit')) {
+		return {
+			status: 'skipped',
+			reason: 'renderer-unavailable',
+		};
+	}
 
-  return await new Promise<TDesktopQuitFlushResult>((resolve) => {
-    const timeout = setTimeout(() => {
-      resolveDesktopQuitFlush = undefined;
-      resolve({
-        status: "skipped",
-        reason: "timeout",
-      });
-    }, DESKTOP_QUIT_FLUSH_TIMEOUT_MS);
+	return await new Promise<TDesktopQuitFlushResult>((resolve) => {
+		const timeout = setTimeout(() => {
+			resolveDesktopQuitFlush = undefined;
+			resolve({
+				status: 'skipped',
+				reason: 'timeout',
+			});
+		}, DESKTOP_QUIT_FLUSH_TIMEOUT_MS);
 
-    resolveDesktopQuitFlush = (result) => {
-      clearTimeout(timeout);
-      resolve(result);
-    };
-  });
+		resolveDesktopQuitFlush = (result) => {
+			clearTimeout(timeout);
+			resolve(result);
+		};
+	});
 };
 
 const setGlobalPushKeybinds = async (
-  input?: TDesktopPushKeybindsInput,
+	input?: TDesktopPushKeybindsInput,
 ): Promise<TGlobalPushKeybindRegistrationResult> => {
-  return await captureSidecarManager.setPushKeybinds(input || {});
+	return await captureSidecarManager.setPushKeybinds(input || {});
 };
 
 const resolveSidecarStatusFromCapabilities = (
-  sidecarCapabilities: Awaited<
-    ReturnType<typeof captureSidecarManager.getCapabilities>
-  >,
+	sidecarCapabilities: Awaited<ReturnType<typeof captureSidecarManager.getCapabilities>>,
 ) => {
-  if (
-    sidecarCapabilities.platform === "macos" &&
-    (sidecarCapabilities.systemAudio !== "supported" ||
-      sidecarCapabilities.perAppAudio !== "supported")
-  ) {
-    return {
-      available: false,
-      reason:
-        sidecarCapabilities.reason ||
-        "macOS screen audio capture is unavailable.",
-    };
-  }
+	if (
+		sidecarCapabilities.platform === 'macos' &&
+		(sidecarCapabilities.systemAudio !== 'supported' || sidecarCapabilities.perAppAudio !== 'supported')
+	) {
+		return {
+			available: false,
+			reason: sidecarCapabilities.reason || 'macOS screen audio capture is unavailable.',
+		};
+	}
 
-  return {
-    available: true,
-    reason: sidecarCapabilities.reason,
-  };
+	return {
+		available: true,
+		reason: sidecarCapabilities.reason,
+	};
 };
 
 const getEffectiveDesktopCapabilities = async () => {
-  const baseCapabilities = getDesktopCapabilities();
-  const sidecarCapabilities = await captureSidecarManager
-    .getCapabilities()
-    .catch(() => undefined);
-  const sidecarStatus = sidecarCapabilities
-    ? resolveSidecarStatusFromCapabilities(sidecarCapabilities)
-    : await captureSidecarManager.getStatus();
-  const sidecarPerAppAudioSupported = sidecarCapabilities
-    ? sidecarCapabilities.perAppAudio !== "unsupported"
-    : baseCapabilities.platform === "windows" && sidecarStatus.available;
-  const sidecarReason =
-    sidecarCapabilities?.perAppAudioReason ?? sidecarStatus.reason;
+	const baseCapabilities = getDesktopCapabilities();
+	const sidecarCapabilities = await captureSidecarManager.getCapabilities().catch(() => undefined);
+	const sidecarStatus = sidecarCapabilities
+		? resolveSidecarStatusFromCapabilities(sidecarCapabilities)
+		: await captureSidecarManager.getStatus();
+	const sidecarPerAppAudioSupported = sidecarCapabilities
+		? sidecarCapabilities.perAppAudio !== 'unsupported'
+		: baseCapabilities.platform === 'windows' && sidecarStatus.available;
+	const sidecarReason = sidecarCapabilities?.perAppAudioReason ?? sidecarStatus.reason;
 
-  return resolveDesktopCaptureCapabilities({
-    baseCapabilities,
-    sidecarAvailable: sidecarStatus.available,
-    sidecarReason,
-    sidecarPerAppAudioSupported,
-    sidecarCapabilities,
-  });
+	return resolveDesktopCaptureCapabilities({
+		baseCapabilities,
+		sidecarAvailable: sidecarStatus.available,
+		sidecarReason,
+		sidecarPerAppAudioSupported,
+		sidecarCapabilities,
+	});
 };
 
-const refreshDesktopCapabilities = async (
-  options: { broadcast?: boolean; forceBroadcast?: boolean } = {},
-) => {
-  refreshDesktopCapabilitiesBroadcastPending =
-    refreshDesktopCapabilitiesBroadcastPending || options.broadcast === true;
-  refreshDesktopCapabilitiesForceBroadcastPending =
-    refreshDesktopCapabilitiesForceBroadcastPending ||
-    options.forceBroadcast === true;
+const refreshDesktopCapabilities = async (options: { broadcast?: boolean; forceBroadcast?: boolean } = {}) => {
+	refreshDesktopCapabilitiesBroadcastPending = refreshDesktopCapabilitiesBroadcastPending || options.broadcast === true;
+	refreshDesktopCapabilitiesForceBroadcastPending =
+		refreshDesktopCapabilitiesForceBroadcastPending || options.forceBroadcast === true;
 
-  if (refreshDesktopCapabilitiesPromise) {
-    return await refreshDesktopCapabilitiesPromise;
-  }
+	if (refreshDesktopCapabilitiesPromise) {
+		return await refreshDesktopCapabilitiesPromise;
+	}
 
-  refreshDesktopCapabilitiesPromise = (async () => {
-    while (true) {
-      const capabilities = await getEffectiveDesktopCapabilities();
-      const snapshot = JSON.stringify(capabilities);
-      const didChange = snapshot !== lastDesktopCapabilitiesSnapshot;
-      lastDesktopCapabilitiesSnapshot = snapshot;
+	refreshDesktopCapabilitiesPromise = (async () => {
+		while (true) {
+			const capabilities = await getEffectiveDesktopCapabilities();
+			const snapshot = JSON.stringify(capabilities);
+			const didChange = snapshot !== lastDesktopCapabilitiesSnapshot;
+			lastDesktopCapabilitiesSnapshot = snapshot;
 
-      const shouldBroadcast = refreshDesktopCapabilitiesBroadcastPending;
-      const shouldForceBroadcast =
-        refreshDesktopCapabilitiesForceBroadcastPending;
-      refreshDesktopCapabilitiesBroadcastPending = false;
-      refreshDesktopCapabilitiesForceBroadcastPending = false;
+			const shouldBroadcast = refreshDesktopCapabilitiesBroadcastPending;
+			const shouldForceBroadcast = refreshDesktopCapabilitiesForceBroadcastPending;
+			refreshDesktopCapabilitiesBroadcastPending = false;
+			refreshDesktopCapabilitiesForceBroadcastPending = false;
 
-      if (shouldBroadcast && (shouldForceBroadcast || didChange)) {
-        sendToRenderer("desktop:capabilities-changed", capabilities);
-      }
+			if (shouldBroadcast && (shouldForceBroadcast || didChange)) {
+				sendToRenderer('desktop:capabilities-changed', capabilities);
+			}
 
-      if (
-        !refreshDesktopCapabilitiesBroadcastPending &&
-        !refreshDesktopCapabilitiesForceBroadcastPending
-      ) {
-        return capabilities;
-      }
-    }
-  })().finally(() => {
-    refreshDesktopCapabilitiesPromise = undefined;
-  });
+			if (!refreshDesktopCapabilitiesBroadcastPending && !refreshDesktopCapabilitiesForceBroadcastPending) {
+				return capabilities;
+			}
+		}
+	})().finally(() => {
+		refreshDesktopCapabilitiesPromise = undefined;
+	});
 
-  return await refreshDesktopCapabilitiesPromise;
+	return await refreshDesktopCapabilitiesPromise;
 };
 
-const requestDesktopCapabilitiesRefresh = (
-  options: { broadcast?: boolean; forceBroadcast?: boolean } = {},
-) => {
-  if (appIsShuttingDown) {
-    return;
-  }
+const requestDesktopCapabilitiesRefresh = (options: { broadcast?: boolean; forceBroadcast?: boolean } = {}) => {
+	if (appIsShuttingDown) {
+		return;
+	}
 
-  void refreshDesktopCapabilities(options).catch((error) => {
-    console.warn("[desktop] Failed to refresh desktop capabilities", error);
-  });
+	void refreshDesktopCapabilities(options).catch((error) => {
+		console.warn('[desktop] Failed to refresh desktop capabilities', error);
+	});
 };
 
 const resolveRendererIndexPath = (): string => {
-  return path.join(__dirname, "..", "..", "renderer-dist", "index.html");
+	return path.join(__dirname, '..', '..', 'renderer-dist', 'index.html');
 };
 
 const rendererTrustOptions: TRendererTrustOptions = {
-  packagedIndexPath: resolveRendererIndexPath(),
-  rendererUrl: TRUSTED_RENDERER_URL,
+	packagedIndexPath: resolveRendererIndexPath(),
+	rendererUrl: TRUSTED_RENDERER_URL,
 };
 
-const isTrustedIpcSender = (
-  event: IpcMainInvokeEvent | IpcMainEvent,
-): boolean => {
-  const senderUrl = event.senderFrame?.url;
+const isTrustedIpcSender = (event: IpcMainInvokeEvent | IpcMainEvent): boolean => {
+	const senderUrl = event.senderFrame?.url;
 
-  if (senderUrl && isTrustedRendererUrl(senderUrl, rendererTrustOptions)) {
-    return true;
-  }
+	if (senderUrl && isTrustedRendererUrl(senderUrl, rendererTrustOptions)) {
+		return true;
+	}
 
-  console.warn("[desktop] Rejected IPC message from untrusted sender", {
-    senderUrl,
-  });
+	console.warn('[desktop] Rejected IPC message from untrusted sender', {
+		senderUrl,
+	});
 
-  return false;
+	return false;
 };
 
 const assertTrustedIpcSender = (event: IpcMainInvokeEvent): void => {
-  if (!isTrustedIpcSender(event)) {
-    throw new Error("Rejected IPC message from an untrusted sender frame");
-  }
+	if (!isTrustedIpcSender(event)) {
+		throw new Error('Rejected IPC message from an untrusted sender frame');
+	}
 };
 
 const handleTrusted = <TArgs extends unknown[], TResult>(
-  channel: string,
-  listener: (event: IpcMainInvokeEvent, ...args: TArgs) => TResult,
-  validateArgs?: (args: unknown[]) => TArgs,
+	channel: string,
+	listener: (event: IpcMainInvokeEvent, ...args: TArgs) => TResult,
+	validateArgs?: (args: unknown[]) => TArgs,
 ): void => {
-  ipcMain.handle(channel, (event, ...args) => {
-    assertTrustedIpcSender(event);
-    const validatedArgs = validateArgs ? validateArgs(args) : (args as TArgs);
-    return listener(event, ...validatedArgs);
-  });
+	ipcMain.handle(channel, (event, ...args) => {
+		assertTrustedIpcSender(event);
+		const validatedArgs = validateArgs ? validateArgs(args) : (args as TArgs);
+		return listener(event, ...validatedArgs);
+	});
 };
 
 const onTrusted = <TArgs extends unknown[]>(
-  channel: string,
-  listener: (event: IpcMainEvent, ...args: TArgs) => void,
-  validateArgs?: (args: unknown[]) => TArgs,
+	channel: string,
+	listener: (event: IpcMainEvent, ...args: TArgs) => void,
+	validateArgs?: (args: unknown[]) => TArgs,
 ): void => {
-  ipcMain.on(channel, (event, ...args) => {
-    if (!isTrustedIpcSender(event)) {
-      return;
-    }
+	ipcMain.on(channel, (event, ...args) => {
+		if (!isTrustedIpcSender(event)) {
+			return;
+		}
 
-    try {
-      const validatedArgs = validateArgs ? validateArgs(args) : (args as TArgs);
-      listener(event, ...validatedArgs);
-    } catch (error) {
-      console.warn("[desktop] Rejected IPC message with invalid payload", {
-        channel,
-        error,
-      });
-    }
-  });
+		try {
+			const validatedArgs = validateArgs ? validateArgs(args) : (args as TArgs);
+			listener(event, ...validatedArgs);
+		} catch (error) {
+			console.warn('[desktop] Rejected IPC message with invalid payload', {
+				channel,
+				error,
+			});
+		}
+	});
 };
 
 const createMainWindow = () => {
-  const icon = resolveAppIconPath();
-  const indexPath = resolveRendererIndexPath();
-  let windowCloseFlushCompleted = false;
+	const icon = resolveAppIconPath();
+	const indexPath = resolveRendererIndexPath();
+	let windowCloseFlushCompleted = false;
 
-  mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 920,
-    minWidth: 1120,
-    minHeight: 720,
-    frame: !USES_CUSTOM_TITLEBAR,
-    autoHideMenuBar: true,
-    show: false,
-    backgroundColor: "#090d12",
-    icon,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      preload: path.join(__dirname, "..", "preload", "index.cjs"),
-    },
-  });
-  mainWindow.setMenuBarVisibility(false);
+	mainWindow = new BrowserWindow({
+		width: 1440,
+		height: 920,
+		minWidth: 1120,
+		minHeight: 720,
+		frame: !USES_CUSTOM_TITLEBAR,
+		autoHideMenuBar: true,
+		show: false,
+		backgroundColor: '#090d12',
+		icon,
+		webPreferences: {
+			contextIsolation: true,
+			nodeIntegration: false,
+			sandbox: true,
+			preload: path.join(__dirname, '..', 'preload', 'index.cjs'),
+		},
+	});
+	mainWindow.setMenuBarVisibility(false);
 
-  mainWindow.once("ready-to-show", () => {
-    mainWindow?.show();
-  });
-  mainWindow.on("maximize", () => {
-    emitWindowControlsState();
-  });
-  mainWindow.on("unmaximize", () => {
-    emitWindowControlsState();
-  });
-  mainWindow.on("focus", () => {
-    requestDesktopCapabilitiesRefresh({
-      broadcast: true,
-    });
-  });
-  mainWindow.on("close", (event) => {
-    const windowToClose = mainWindow;
+	mainWindow.once('ready-to-show', () => {
+		mainWindow?.show();
+	});
+	mainWindow.on('maximize', () => {
+		emitWindowControlsState();
+	});
+	mainWindow.on('unmaximize', () => {
+		emitWindowControlsState();
+	});
+	mainWindow.on('focus', () => {
+		requestDesktopCapabilitiesRefresh({
+			broadcast: true,
+		});
+	});
+	mainWindow.on('close', (event) => {
+		const windowToClose = mainWindow;
 
-    if (desktopQuitFlushCompleted || windowCloseFlushCompleted) {
-      return;
-    }
+		if (desktopQuitFlushCompleted || windowCloseFlushCompleted) {
+			return;
+		}
 
-    event.preventDefault();
+		event.preventDefault();
 
-    if (desktopQuitFlushInterceptInProgress) {
-      return;
-    }
+		if (desktopQuitFlushInterceptInProgress) {
+			return;
+		}
 
-    desktopQuitFlushInterceptInProgress = true;
+		desktopQuitFlushInterceptInProgress = true;
 
-    void (async () => {
-      const result = await requestDesktopQuitFlush();
+		void (async () => {
+			const result = await requestDesktopQuitFlush();
 
-      if (result.status === "skipped") {
-        console.warn("[desktop] Window close flush skipped", {
-          reason: result.reason,
-        });
-      }
+			if (result.status === 'skipped') {
+				console.warn('[desktop] Window close flush skipped', {
+					reason: result.reason,
+				});
+			}
 
-      desktopQuitFlushInterceptInProgress = false;
+			desktopQuitFlushInterceptInProgress = false;
 
-      if (process.platform !== "darwin" || appIsShuttingDown) {
-        appIsShuttingDown = true;
-        desktopQuitFlushCompleted = true;
-        app.quit();
-        return;
-      }
+			if (process.platform !== 'darwin' || appIsShuttingDown) {
+				appIsShuttingDown = true;
+				desktopQuitFlushCompleted = true;
+				app.quit();
+				return;
+			}
 
-      windowCloseFlushCompleted = true;
-      if (windowToClose && !windowToClose.isDestroyed()) {
-        windowToClose.close();
-      }
-    })();
-  });
-  mainWindow.on("closed", () => {
-    mainWindow = null;
-  });
+			windowCloseFlushCompleted = true;
+			if (windowToClose && !windowToClose.isDestroyed()) {
+				windowToClose.close();
+			}
+		})();
+	});
+	mainWindow.on('closed', () => {
+		mainWindow = null;
+	});
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    const policy = classifyWindowOpenUrl(url);
+	mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+		const policy = classifyWindowOpenUrl(url);
 
-    if (policy.action === "allow") {
-      return {
-        action: "allow",
-        overrideBrowserWindowOptions: {
-          icon,
-          autoHideMenuBar: true,
-          backgroundColor: "#000000",
-          resizable: true,
-        },
-      };
-    }
+		if (policy.action === 'allow') {
+			return {
+				action: 'allow',
+				overrideBrowserWindowOptions: {
+					icon,
+					autoHideMenuBar: true,
+					backgroundColor: '#000000',
+					resizable: true,
+				},
+			};
+		}
 
-    if (policy.openExternal) {
-      void shell.openExternal(url);
-    }
+		if (policy.openExternal) {
+			void shell.openExternal(url);
+		}
 
-    return { action: "deny" };
-  });
+		return { action: 'deny' };
+	});
 
-  mainWindow.webContents.on("will-frame-navigate", (event) => {
-    if (!event.isMainFrame) {
-      return;
-    }
+	mainWindow.webContents.on('will-frame-navigate', (event) => {
+		if (!event.isMainFrame) {
+			return;
+		}
 
-    const policy = classifyMainFrameNavigationUrl(event.url, {
-      packagedIndexPath: indexPath,
-      rendererUrl: TRUSTED_RENDERER_URL,
-    });
+		const policy = classifyMainFrameNavigationUrl(event.url, {
+			packagedIndexPath: indexPath,
+			rendererUrl: TRUSTED_RENDERER_URL,
+		});
 
-    if (policy.action === "allow") {
-      return;
-    }
+		if (policy.action === 'allow') {
+			return;
+		}
 
-    event.preventDefault();
+		event.preventDefault();
 
-    if (policy.openExternal) {
-      void shell.openExternal(event.url);
-    }
-  });
+		if (policy.openExternal) {
+			void shell.openExternal(event.url);
+		}
+	});
 
-  mainWindow.webContents.on("did-create-window", (childWindow, details) => {
-    if (!details.url.startsWith("about:blank")) {
-      return;
-    }
+	mainWindow.webContents.on('did-create-window', (childWindow, details) => {
+		if (!details.url.startsWith('about:blank')) {
+			return;
+		}
 
-    childWindow.setAutoHideMenuBar(true);
-    childWindow.setMenuBarVisibility(false);
-  });
+		childWindow.setAutoHideMenuBar(true);
+		childWindow.setMenuBarVisibility(false);
+	});
 
-  if (TRUSTED_RENDERER_URL) {
-    void mainWindow.loadURL(TRUSTED_RENDERER_URL);
-    return;
-  }
+	if (TRUSTED_RENDERER_URL) {
+		void mainWindow.loadURL(TRUSTED_RENDERER_URL);
+		return;
+	}
 
-  void mainWindow.loadFile(indexPath);
+	void mainWindow.loadFile(indexPath);
 };
 
-const setupDisplayMediaHandler = (
-  useSystemPicker = displayMediaUsesSystemPicker,
-) => {
-  displayMediaUsesSystemPicker = useSystemPicker;
+const setupDisplayMediaHandler = (useSystemPicker = displayMediaUsesSystemPicker) => {
+	displayMediaUsesSystemPicker = useSystemPicker;
 
-  session.defaultSession.setDisplayMediaRequestHandler(
-    (_request, callback) => {
-      void (async () => {
-        const rejectRequest = () => {
-          callback({
-            video: undefined,
-            audio: undefined,
-          });
-        };
+	session.defaultSession.setDisplayMediaRequestHandler(
+		(_request, callback) => {
+			void (async () => {
+				const rejectRequest = () => {
+					callback({
+						video: undefined,
+						audio: undefined,
+					});
+				};
 
-        try {
-          const pendingSelection = consumeScreenShareSelection();
+				try {
+					const pendingSelection = consumeScreenShareSelection();
 
-          if (!pendingSelection) {
-            rejectRequest();
-            return;
-          }
+					if (!pendingSelection) {
+						rejectRequest();
+						return;
+					}
 
-          const source = await getSourceById(pendingSelection.sourceId);
+					const source = await getSourceById(pendingSelection.sourceId);
 
-          if (!source) {
-            rejectRequest();
-            return;
-          }
+					if (!source) {
+						rejectRequest();
+						return;
+					}
 
-          // Always provide loopback audio for system mode so that
-          // getDisplayMedia can serve as a fallback when the sidecar is
-          // unavailable or fails.  The client discards this track when the
-          // sidecar successfully handles audio capture.
-          const shouldShareAudio = pendingSelection.audioMode === "system";
+					// Always provide loopback audio for system mode so that
+					// getDisplayMedia can serve as a fallback when the sidecar is
+					// unavailable or fails.  The client discards this track when the
+					// sidecar successfully handles audio capture.
+					const shouldShareAudio = pendingSelection.audioMode === 'system';
 
-          callback({
-            video: source,
-            audio: shouldShareAudio ? "loopback" : undefined,
-          });
-        } catch (error) {
-          console.error(
-            "[desktop] Failed to handle display media request",
-            error,
-          );
-          rejectRequest();
-        }
-      })();
-    },
-    {
-      useSystemPicker,
-    },
-  );
+					callback({
+						video: source,
+						audio: shouldShareAudio ? 'loopback' : undefined,
+					});
+				} catch (error) {
+					console.error('[desktop] Failed to handle display media request', error);
+					rejectRequest();
+				}
+			})();
+		},
+		{
+			useSystemPicker,
+		},
+	);
 };
 
 const setDisplayMediaUseSystemPicker = (useSystemPicker: boolean) => {
-  if (displayMediaUsesSystemPicker === useSystemPicker) {
-    return;
-  }
+	if (displayMediaUsesSystemPicker === useSystemPicker) {
+		return;
+	}
 
-  setupDisplayMediaHandler(useSystemPicker);
+	setupDisplayMediaHandler(useSystemPicker);
 };
 
-const isTrustedPermissionRequester = (
-  requestingUrl: string | undefined | null,
-): boolean => {
-  if (!requestingUrl) {
-    return false;
-  }
+const isTrustedPermissionRequester = (requestingUrl: string | undefined | null): boolean => {
+	if (!requestingUrl) {
+		return false;
+	}
 
-  return isTrustedRendererUrl(requestingUrl, rendererTrustOptions);
+	return isTrustedRendererUrl(requestingUrl, rendererTrustOptions);
 };
 
 const setupPermissionHandlers = () => {
-  session.defaultSession.setPermissionRequestHandler(
-    (webContents, permission, callback, details) => {
-      const requestingUrl = details?.requestingUrl ?? webContents?.getURL();
-      const allowed = isPermissionAllowed(permission, {
-        isTrustedRequester: isTrustedPermissionRequester(requestingUrl),
-      });
+	session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+		const requestingUrl = details?.requestingUrl ?? webContents?.getURL();
+		const allowed = isPermissionAllowed(permission, {
+			isTrustedRequester: isTrustedPermissionRequester(requestingUrl),
+		});
 
-      if (!allowed) {
-        console.warn("[desktop] Denied permission request", {
-          permission,
-          requestingUrl,
-        });
-      }
+		if (!allowed) {
+			console.warn('[desktop] Denied permission request', {
+				permission,
+				requestingUrl,
+			});
+		}
 
-      callback(allowed);
-    },
-  );
+		callback(allowed);
+	});
 
-  session.defaultSession.setPermissionCheckHandler(
-    (_webContents, permission, requestingOrigin, details) => {
-      return isPermissionAllowed(permission, {
-        isTrustedRequester: isTrustedPermissionRequester(
-          details?.requestingUrl ?? requestingOrigin,
-        ),
-      });
-    },
-  );
+	session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => {
+		return isPermissionAllowed(permission, {
+			isTrustedRequester: isTrustedPermissionRequester(details?.requestingUrl ?? requestingOrigin),
+		});
+	});
 };
 
 const setupYoutubeEmbedRefererHandler = () => {
-  installYoutubeEmbedRefererHandler(session.defaultSession);
+	installYoutubeEmbedRefererHandler(session.defaultSession);
 };
 
 const setupPackagedRendererCspHandler = () => {
-  if (RENDERER_URL) {
-    return;
-  }
+	if (RENDERER_URL) {
+		return;
+	}
 
-  const rendererDistPath = path.join(__dirname, "..", "..", "renderer-dist");
-  installPackagedRendererCspReportOnlyHandler(
-    session.defaultSession,
-    rendererDistPath,
-  );
+	const rendererDistPath = path.join(__dirname, '..', '..', 'renderer-dist');
+	installPackagedRendererCspReportOnlyHandler(session.defaultSession, rendererDistPath);
 };
 
 const registerIpcHandlers = () => {
-  handleTrusted("desktop:get-server-url", () => {
-    return getServerUrl();
-  });
+	handleTrusted('desktop:get-server-url', () => {
+		return getServerUrl();
+	});
 
-  handleTrusted("desktop:get-window-controls-state", () => {
-    return getWindowControlsState();
-  });
+	handleTrusted('desktop:get-window-controls-state', () => {
+		return getWindowControlsState();
+	});
 
-  handleTrusted(
-    "desktop:minimize-window",
-    (event: IpcMainInvokeEvent): void => {
-      const window = BrowserWindow.fromWebContents(event.sender);
-      window?.minimize();
-    },
-  );
+	handleTrusted('desktop:minimize-window', (event: IpcMainInvokeEvent): void => {
+		const window = BrowserWindow.fromWebContents(event.sender);
+		window?.minimize();
+	});
 
-  handleTrusted(
-    "desktop:toggle-maximize-window",
-    (event: IpcMainInvokeEvent): void => {
-      const window = BrowserWindow.fromWebContents(event.sender);
-      if (!window) return;
-      if (window.isMaximized()) {
-        window.unmaximize();
-      } else {
-        window.maximize();
-      }
-    },
-  );
+	handleTrusted('desktop:toggle-maximize-window', (event: IpcMainInvokeEvent): void => {
+		const window = BrowserWindow.fromWebContents(event.sender);
+		if (!window) return;
+		if (window.isMaximized()) {
+			window.unmaximize();
+		} else {
+			window.maximize();
+		}
+	});
 
-  handleTrusted("desktop:close-window", (event: IpcMainInvokeEvent): void => {
-    const window = BrowserWindow.fromWebContents(event.sender);
-    window?.close();
-  });
+	handleTrusted('desktop:close-window', (event: IpcMainInvokeEvent): void => {
+		const window = BrowserWindow.fromWebContents(event.sender);
+		window?.close();
+	});
 
-  handleTrusted(
-    "desktop:set-server-url",
-    (_event: IpcMainInvokeEvent, serverUrl: string) => {
-      return setServerUrl(serverUrl);
-    },
-    validateSetServerUrlArgs,
-  );
+	handleTrusted(
+		'desktop:set-server-url',
+		(_event: IpcMainInvokeEvent, serverUrl: string) => {
+			return setServerUrl(serverUrl);
+		},
+		validateSetServerUrlArgs,
+	);
 
-  handleTrusted("desktop:get-capabilities", () => {
-    return refreshDesktopCapabilities();
-  });
+	handleTrusted('desktop:get-capabilities', () => {
+		return refreshDesktopCapabilities();
+	});
 
-  handleTrusted("desktop:get-system-idle-seconds", () => {
-    return powerMonitor.getSystemIdleTime();
-  });
+	handleTrusted('desktop:get-system-idle-seconds', () => {
+		return powerMonitor.getSystemIdleTime();
+	});
 
-  handleTrusted(
-    "desktop:list-app-audio-targets",
-    (_event, sourceId?: string) => {
-      return captureSidecarManager.listAppAudioTargets(sourceId);
-    },
-    validateListAppAudioTargetsArgs,
-  );
+	handleTrusted(
+		'desktop:list-app-audio-targets',
+		(_event, sourceId?: string) => {
+			return captureSidecarManager.listAppAudioTargets(sourceId);
+		},
+		validateListAppAudioTargetsArgs,
+	);
 
-  handleTrusted(
-    "desktop:start-app-audio-capture",
-    (_event, input: TStartAppAudioCaptureInput) => {
-      return captureSidecarManager.startAppAudioCapture({
-        ...input,
-        selfExcludePid: process.pid,
-      });
-    },
-    validateStartAppAudioCaptureArgs,
-  );
+	handleTrusted(
+		'desktop:start-app-audio-capture',
+		(_event, input: TStartAppAudioCaptureInput) => {
+			return captureSidecarManager.startAppAudioCapture({
+				...input,
+				selfExcludePid: process.pid,
+			});
+		},
+		validateStartAppAudioCaptureArgs,
+	);
 
-  handleTrusted(
-    "desktop:stop-app-audio-capture",
-    (_event, sessionId?: string) => {
-      return captureSidecarManager.stopAppAudioCapture(sessionId);
-    },
-    validateStopAppAudioCaptureArgs,
-  );
+	handleTrusted(
+		'desktop:stop-app-audio-capture',
+		(_event, sessionId?: string) => {
+			return captureSidecarManager.stopAppAudioCapture(sessionId);
+		},
+		validateStopAppAudioCaptureArgs,
+	);
 
-  handleTrusted(
-    "desktop:set-global-push-keybinds",
-    async (_event, input?: TDesktopPushKeybindsInput) => {
-      return await setGlobalPushKeybinds(input);
-    },
-    validateSetGlobalPushKeybindsArgs,
-  );
+	handleTrusted(
+		'desktop:set-global-push-keybinds',
+		async (_event, input?: TDesktopPushKeybindsInput) => {
+			return await setGlobalPushKeybinds(input);
+		},
+		validateSetGlobalPushKeybindsArgs,
+	);
 
-  onTrusted("desktop:open-app-audio-frame-channel", (event: IpcMainEvent) => {
-    const { port1, port2 } = new MessageChannelMain();
-    disposeAppAudioFrameEgressPort();
+	onTrusted('desktop:open-app-audio-frame-channel', (event: IpcMainEvent) => {
+		const { port1, port2 } = new MessageChannelMain();
+		disposeAppAudioFrameEgressPort();
 
-    appAudioFrameEgressPort = port2;
-    port2.on("close", () => {
-      if (appAudioFrameEgressPort === port2) {
-        appAudioFrameEgressPort = undefined;
-      }
-      port2.removeAllListeners();
-    });
+		appAudioFrameEgressPort = port2;
+		port2.on('close', () => {
+			if (appAudioFrameEgressPort === port2) {
+				appAudioFrameEgressPort = undefined;
+			}
+			port2.removeAllListeners();
+		});
 
-    port2.start();
-    event.sender.postMessage("desktop:app-audio-frame-channel-ready", null, [
-      port1,
-    ]);
-  });
+		port2.start();
+		event.sender.postMessage('desktop:app-audio-frame-channel-ready', null, [port1]);
+	});
 
-  onTrusted(
-    "desktop:before-quit-finished",
-    (_event: IpcMainEvent, result: TDesktopQuitFlushResult) => {
-      completeDesktopQuitFlush(result);
-    },
-    validateDesktopQuitFlushResultArgs,
-  );
+	onTrusted(
+		'desktop:before-quit-finished',
+		(_event: IpcMainEvent, result: TDesktopQuitFlushResult) => {
+			completeDesktopQuitFlush(result);
+		},
+		validateDesktopQuitFlushResultArgs,
+	);
 
-  handleTrusted("desktop:debug-request-before-quit-flush", async () => {
-    if (!DESKTOP_DEBUG_IPC_ENABLED) {
-      return {
-        status: "skipped",
-        reason: "debug-unavailable",
-      };
-    }
+	handleTrusted('desktop:debug-request-before-quit-flush', async () => {
+		if (!DESKTOP_DEBUG_IPC_ENABLED) {
+			return {
+				status: 'skipped',
+				reason: 'debug-unavailable',
+			};
+		}
 
-    if (appIsShuttingDown || desktopQuitFlushInterceptInProgress) {
-      return {
-        status: "skipped",
-        reason: "quit-in-progress",
-      };
-    }
+		if (appIsShuttingDown || desktopQuitFlushInterceptInProgress) {
+			return {
+				status: 'skipped',
+				reason: 'quit-in-progress',
+			};
+		}
 
-    return await requestDesktopQuitFlush();
-  });
+		return await requestDesktopQuitFlush();
+	});
 
-  handleTrusted("desktop:ping-sidecar", () => {
-    return captureSidecarManager.getStatus();
-  });
+	handleTrusted('desktop:ping-sidecar', () => {
+		return captureSidecarManager.getStatus();
+	});
 
-  handleTrusted("desktop:get-update-status", () => {
-    return desktopUpdater.getStatus();
-  });
+	handleTrusted('desktop:get-update-status', () => {
+		return desktopUpdater.getStatus();
+	});
 
-  handleTrusted("desktop:check-for-updates", async () => {
-    await desktopUpdater.checkForUpdates();
-    return desktopUpdater.getStatus();
-  });
+	handleTrusted('desktop:check-for-updates', async () => {
+		await desktopUpdater.checkForUpdates();
+		return desktopUpdater.getStatus();
+	});
 
-  handleTrusted("desktop:list-share-sources", () => {
-    return listShareSources();
-  });
+	handleTrusted('desktop:list-share-sources', () => {
+		return listShareSources();
+	});
 
-  handleTrusted("desktop:list-share-source-thumbnails", () => {
-    return listShareSourceThumbnails();
-  });
+	handleTrusted('desktop:list-share-source-thumbnails', () => {
+		return listShareSourceThumbnails();
+	});
 
-  handleTrusted("desktop:reset-screen-share-picker", () => {
-    // Also drop any armed source grant: when the macOS 15+ native picker handled
-    // the request, the prepared source was never consumed and would stay queued.
-    clearPreparedScreenShareSelection();
-    setDisplayMediaUseSystemPicker(false);
-  });
+	handleTrusted('desktop:reset-screen-share-picker', () => {
+		// Also drop any armed source grant: when the macOS 15+ native picker handled
+		// the request, the prepared source was never consumed and would stay queued.
+		clearPreparedScreenShareSelection();
+		setDisplayMediaUseSystemPicker(false);
+	});
 
-  handleTrusted(
-    "desktop:prepare-screen-share",
-    async (_event: IpcMainInvokeEvent, selection: TScreenShareSelection) => {
-      const capabilities = await getEffectiveDesktopCapabilities();
-      const resolved = resolvePreparedScreenAudioMode(selection, capabilities);
+	handleTrusted(
+		'desktop:prepare-screen-share',
+		async (_event: IpcMainInvokeEvent, selection: TScreenShareSelection) => {
+			const capabilities = await getEffectiveDesktopCapabilities();
+			const resolved = resolvePreparedScreenAudioMode(selection, capabilities);
 
-      setDisplayMediaUseSystemPicker(selection.useSystemPicker ?? false);
+			setDisplayMediaUseSystemPicker(selection.useSystemPicker ?? false);
 
-      // Always prepare a source, even when useSystemPicker is requested: the
-      // native system picker is macOS 15+ only, so on Windows/Linux (and older
-      // macOS) Electron ignores the flag and still invokes our display-media
-      // handler, which rejects without a prepared selection. When the native
-      // picker does take over (macOS 15+) the prepared source is simply unused.
-      prepareScreenShareSelection({
-        sourceId: selection.sourceId,
-        audioMode: resolved.effectiveMode,
-        appAudioTargetId: selection.appAudioTargetId,
-      });
+			// Always prepare a source, even when useSystemPicker is requested: the
+			// native system picker is macOS 15+ only, so on Windows/Linux (and older
+			// macOS) Electron ignores the flag and still invokes our display-media
+			// handler, which rejects without a prepared selection. When the native
+			// picker does take over (macOS 15+) the prepared source is simply unused.
+			prepareScreenShareSelection({
+				sourceId: selection.sourceId,
+				audioMode: resolved.effectiveMode,
+				appAudioTargetId: selection.appAudioTargetId,
+			});
 
-      return resolved;
-    },
-    validatePrepareScreenShareArgs,
-  );
+			return resolved;
+		},
+		validatePrepareScreenShareArgs,
+	);
 };
 
 // Chromium command-line switches that steer GPU video encode. These must be set
@@ -868,152 +795,135 @@ const registerIpcHandlers = () => {
 // are deliberately NOT set: the mediasoup SFU (3.19.x) does not support routing
 // video/H265, so offering it from the client would only produce a codec the
 // router rejects. Revisit if/when the SFU gains H265 support.
-// WGC (Windows Graphics Capture) capturer flags. The legacy BitBlt/GDI window
-// capturer returns black frames for DirectX/GPU-composited windows (most games),
-// so without these a per-window share of a GPU-rendered game shows up black.
-// Routing capture through WGC (Win10 2004+) lets those windows capture correctly.
-// Windows-only: the features are no-ops elsewhere, but keep the list clean since
-// the WGC code path only exists on Windows.
-const ENABLE_FEATURES: ReadonlyArray<string> = [
-  "AcceleratedVideoEncoder",
-  "D3D12VideoEncodeAccelerator",
-  "WebRtcAV1HWEncode",
-  ...(process.platform === "win32"
-    ? ["AllowWgcScreenCapturer", "AllowWgcWindowCapturer"]
-    : []),
-];
-
 const GPU_COMMAND_LINE_SWITCHES: ReadonlyArray<readonly [string, string]> = [
-  ["enable-features", ENABLE_FEATURES.join(",")],
-  // Needed on Windows to let the D3D12 video-encode accelerator initialize on
-  // GPUs Chromium blocklisted conservatively. Keep it Windows-only: on Linux it
-  // can re-enable Mesa configs Chromium blocked for stability reasons.
-  ...(process.platform === "win32"
-    ? ([["ignore-gpu-blocklist", ""]] as const)
-    : []),
+	['enable-features', ['AcceleratedVideoEncoder', 'D3D12VideoEncodeAccelerator', 'WebRtcAV1HWEncode'].join(',')],
+	// Needed on Windows to let the D3D12 video-encode accelerator initialize on
+	// GPUs Chromium blocklisted conservatively. Keep it Windows-only: on Linux it
+	// can re-enable Mesa configs Chromium blocked for stability reasons.
+	...(process.platform === 'win32' ? ([['ignore-gpu-blocklist', '']] as const) : []),
 ];
 
 const configureGpuCommandLineSwitches = () => {
-  for (const [name, value] of GPU_COMMAND_LINE_SWITCHES) {
-    if (value) {
-      app.commandLine.appendSwitch(name, value);
-    } else {
-      app.commandLine.appendSwitch(name);
-    }
-  }
+	for (const [name, value] of GPU_COMMAND_LINE_SWITCHES) {
+		if (value) {
+			app.commandLine.appendSwitch(name, value);
+		} else {
+			app.commandLine.appendSwitch(name);
+		}
+	}
 };
 
 configureGpuCommandLineSwitches();
 
 void app
-  .whenReady()
-  .then(() => {
-    captureSidecarManager.onFrame((frame) => {
-      if (appAudioFrameEgressPort) {
-        return;
-      }
+	.whenReady()
+	.then(() => {
+		captureSidecarManager.onFrame((frame) => {
+			if (appAudioFrameEgressPort) {
+				return;
+			}
 
-      sendToRenderer("desktop:app-audio-frame", frame);
-    });
-    captureSidecarManager.onPcmFrame((frame: TAppAudioPcmFrame) => {
-      const egressPort = appAudioFrameEgressPort;
-      if (!egressPort) {
-        return;
-      }
+			sendToRenderer('desktop:app-audio-frame', frame);
+		});
+		captureSidecarManager.onPcmFrame((frame: TAppAudioPcmFrame) => {
+			const egressPort = appAudioFrameEgressPort;
+			if (!egressPort) {
+				return;
+			}
 
-      const { pcm } = frame;
-      try {
-        egressPort.postMessage({
-          sessionId: frame.sessionId,
-          targetId: frame.targetId,
-          sequence: frame.sequence,
-          sampleRate: frame.sampleRate,
-          channels: frame.channels,
-          frameCount: frame.frameCount,
-          protocolVersion: frame.protocolVersion,
-          droppedFrameCount: frame.droppedFrameCount,
-          pcmBuffer: pcm.buffer,
-          pcmByteOffset: pcm.byteOffset,
-          pcmByteLength: pcm.byteLength,
-        });
-      } catch {
-        disposeAppAudioFrameEgressPort(egressPort);
-      }
-    });
-    captureSidecarManager.onStatus((event) => {
-      sendToRenderer("desktop:app-audio-status", event);
-    });
-    captureSidecarManager.onPushKeybind((event) => {
-      emitPushKeybindEvent(event);
-    });
-    captureSidecarManager.onLifecycle((event) => {
-      if (appIsShuttingDown && event.kind === "exit") {
-        return;
-      }
+			const { pcm } = frame;
+			try {
+				egressPort.postMessage({
+					sessionId: frame.sessionId,
+					targetId: frame.targetId,
+					sequence: frame.sequence,
+					sampleRate: frame.sampleRate,
+					channels: frame.channels,
+					frameCount: frame.frameCount,
+					protocolVersion: frame.protocolVersion,
+					droppedFrameCount: frame.droppedFrameCount,
+					pcmBuffer: pcm.buffer,
+					pcmByteOffset: pcm.byteOffset,
+					pcmByteLength: pcm.byteLength,
+				});
+			} catch {
+				disposeAppAudioFrameEgressPort(egressPort);
+			}
+		});
+		captureSidecarManager.onStatus((event) => {
+			sendToRenderer('desktop:app-audio-status', event);
+		});
+		captureSidecarManager.onPushKeybind((event) => {
+			emitPushKeybindEvent(event);
+		});
+		captureSidecarManager.onLifecycle((event) => {
+			if (appIsShuttingDown && event.kind === 'exit') {
+				return;
+			}
 
-      requestDesktopCapabilitiesRefresh({
-        broadcast: true,
-      });
-    });
+			requestDesktopCapabilitiesRefresh({
+				broadcast: true,
+			});
+		});
 
-    desktopUpdater.start((status) => {
-      sendToRenderer("desktop:update-status", status);
-    });
+		desktopUpdater.start((status) => {
+			sendToRenderer('desktop:update-status', status);
+		});
 
-    registerIpcHandlers();
-    setupPermissionHandlers();
-    setupDisplayMediaHandler();
-    setupYoutubeEmbedRefererHandler();
-    setupPackagedRendererCspHandler();
-    createMainWindow();
-    requestDesktopCapabilitiesRefresh({
-      broadcast: true,
-      forceBroadcast: true,
-    });
+		registerIpcHandlers();
+		setupPermissionHandlers();
+		setupDisplayMediaHandler();
+		setupYoutubeEmbedRefererHandler();
+		setupPackagedRendererCspHandler();
+		createMainWindow();
+		requestDesktopCapabilitiesRefresh({
+			broadcast: true,
+			forceBroadcast: true,
+		});
 
-    app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow();
-      }
-    });
-  })
-  .catch((error) => {
-    console.error("[desktop] Failed to initialize app", error);
-  });
+		app.on('activate', () => {
+			if (BrowserWindow.getAllWindows().length === 0) {
+				createMainWindow();
+			}
+		});
+	})
+	.catch((error) => {
+		console.error('[desktop] Failed to initialize app', error);
+	});
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+app.on('window-all-closed', () => {
+	if (process.platform !== 'darwin') {
+		app.quit();
+	}
 });
 
-app.on("before-quit", (event) => {
-  appIsShuttingDown = true;
+app.on('before-quit', (event) => {
+	appIsShuttingDown = true;
 
-  if (desktopQuitFlushCompleted) {
-    disposeDesktopServicesForShutdown();
-    return;
-  }
+	if (desktopQuitFlushCompleted) {
+		disposeDesktopServicesForShutdown();
+		return;
+	}
 
-  event.preventDefault();
+	event.preventDefault();
 
-  if (desktopQuitFlushInterceptInProgress) {
-    return;
-  }
+	if (desktopQuitFlushInterceptInProgress) {
+		return;
+	}
 
-  desktopQuitFlushInterceptInProgress = true;
+	desktopQuitFlushInterceptInProgress = true;
 
-  void (async () => {
-    const result = await requestDesktopQuitFlush();
+	void (async () => {
+		const result = await requestDesktopQuitFlush();
 
-    if (result.status === "skipped") {
-      console.warn("[desktop] Quit flush skipped", {
-        reason: result.reason,
-      });
-    }
+		if (result.status === 'skipped') {
+			console.warn('[desktop] Quit flush skipped', {
+				reason: result.reason,
+			});
+		}
 
-    desktopQuitFlushInterceptInProgress = false;
-    desktopQuitFlushCompleted = true;
-    app.quit();
-  })();
+		desktopQuitFlushInterceptInProgress = false;
+		desktopQuitFlushCompleted = true;
+		app.quit();
+	})();
 });
