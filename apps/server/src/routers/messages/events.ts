@@ -1,31 +1,20 @@
 import { ServerEvents } from '@sharkord/shared';
 import { protectedProcedure } from '../../utils/trpc';
 
-const onMessageDeleteRoute = protectedProcedure.subscription(
-  async ({ ctx }) => {
-    return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.MESSAGE_DELETE);
-  }
-);
-
-const onMessageUpdateRoute = protectedProcedure.subscription(
-  async ({ ctx }) => {
-    return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.MESSAGE_UPDATE);
-  }
-);
-
-const onMessageRoute = protectedProcedure.subscription(async ({ ctx }) => {
-  return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.NEW_MESSAGE);
+const onMessageDeleteRoute = protectedProcedure.subscription(async ({ ctx }) => {
+	return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.MESSAGE_DELETE);
 });
 
-const onMessageTypingRoute = protectedProcedure.subscription(
-  async ({ ctx }) => {
-    return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.MESSAGE_TYPING);
-  }
-);
+const onMessageUpdateRoute = protectedProcedure.subscription(async ({ ctx }) => {
+	return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.MESSAGE_UPDATE);
+});
 
-export {
-  onMessageDeleteRoute,
-  onMessageRoute,
-  onMessageTypingRoute,
-  onMessageUpdateRoute
-};
+const onMessageRoute = protectedProcedure.subscription(async ({ ctx }) => {
+	return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.NEW_MESSAGE);
+});
+
+const onMessageTypingRoute = protectedProcedure.subscription(async ({ ctx }) => {
+	return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.MESSAGE_TYPING);
+});
+
+export { onMessageDeleteRoute, onMessageRoute, onMessageTypingRoute, onMessageUpdateRoute };

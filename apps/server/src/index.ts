@@ -1,25 +1,28 @@
 // these two imports NEED to be at the very top in this order
 // keep the "---------" because it forces prettier to not mess with the order, I can't turn this off here for some reason, need to check later
 import { ensureServerDirs } from './helpers/ensure-server-dirs';
+
 await ensureServerDirs();
+
 // ----------------------------------------
 import { loadEmbeds } from './utils/embeds';
+
 await loadEmbeds();
-// ----------------------------------------
-import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';
+
 // ----------------------------------------
 import { initSentry } from './sentry';
+// ----------------------------------------
+import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';
+
 initSentry();
+
 // ----------------------------------------
 import { ActivityLogType } from '@sharkord/shared';
 import chalk from 'chalk';
 import { config, SERVER_PRIVATE_IPS } from './config';
 import { loadCrons } from './crons';
 import { loadDb } from './db';
-import {
-  formatHostForUrl,
-  resolvePreferredAddress
-} from './helpers/ip-addresses';
+import { formatHostForUrl, resolvePreferredAddress } from './helpers/ip-addresses';
 import { pluginManager } from './plugins';
 import { enqueueActivityLog } from './queues/activity-log';
 import { initVoiceRuntimes } from './runtimes';
@@ -38,18 +41,15 @@ await createServers();
 await loadCrons();
 
 const host = IS_PRODUCTION
-  ? resolvePreferredAddress(
-      SERVER_PRIVATE_IPS,
-      config.webRtc.preferredFamily
-    ) || 'localhost'
-  : 'localhost';
+	? resolvePreferredAddress(SERVER_PRIVATE_IPS, config.webRtc.preferredFamily) || 'localhost'
+	: 'localhost';
 const url = `http://${formatHostForUrl(host)}:${config.server.port}/`;
 
 const message = [
-  chalk.green.bold('SHARKORD') + ' ' + chalk.white.bold(`v${SERVER_VERSION}`),
-  chalk.dim('────────────────────────────────────────────────────'),
-  `${chalk.yellow('Port:')} ${chalk.bold(String(config.server.port))}`,
-  `${chalk.yellow('Interface:')} ${chalk.underline.cyan(url)}`
+	`${chalk.green.bold('SHARKORD')} ${chalk.white.bold(`v${SERVER_VERSION}`)}`,
+	chalk.dim('────────────────────────────────────────────────────'),
+	`${chalk.yellow('Port:')} ${chalk.bold(String(config.server.port))}`,
+	`${chalk.yellow('Interface:')} ${chalk.underline.cyan(url)}`,
 ].join('\n');
 
 console.log('%s', message);
@@ -57,5 +57,5 @@ console.log('%s', message);
 printDebug();
 
 enqueueActivityLog({
-  type: ActivityLogType.SERVER_STARTED
+	type: ActivityLogType.SERVER_STARTED,
 });

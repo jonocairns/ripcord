@@ -8,32 +8,28 @@ import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 
 const deleteInviteRoute = protectedProcedure
-  .input(
-    z.object({
-      inviteId: z.number()
-    })
-  )
-  .mutation(async ({ input, ctx }) => {
-    await ctx.needsPermission(Permission.MANAGE_INVITES);
+	.input(
+		z.object({
+			inviteId: z.number(),
+		}),
+	)
+	.mutation(async ({ input, ctx }) => {
+		await ctx.needsPermission(Permission.MANAGE_INVITES);
 
-    const removedInvite = await db
-      .delete(invites)
-      .where(eq(invites.id, input.inviteId))
-      .returning()
-      .get();
+		const removedInvite = await db.delete(invites).where(eq(invites.id, input.inviteId)).returning().get();
 
-    invariant(removedInvite, {
-      code: 'NOT_FOUND',
-      message: 'Invite not found'
-    });
+		invariant(removedInvite, {
+			code: 'NOT_FOUND',
+			message: 'Invite not found',
+		});
 
-    enqueueActivityLog({
-      type: ActivityLogType.DELETED_INVITE,
-      userId: ctx.user.id,
-      details: {
-        code: removedInvite.code
-      }
-    });
-  });
+		enqueueActivityLog({
+			type: ActivityLogType.DELETED_INVITE,
+			userId: ctx.user.id,
+			details: {
+				code: removedInvite.code,
+			},
+		});
+	});
 
 export { deleteInviteRoute };

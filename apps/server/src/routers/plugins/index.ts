@@ -9,13 +9,13 @@ import { togglePluginRoute } from './toggle-plugin';
 import { updateSettingRoute } from './update-setting';
 
 export const pluginsRouter = t.router({
-  get: getPluginsRoute,
-  toggle: togglePluginRoute,
-  onLog: onPluginLogRoute,
-  getLogs: getPluginLogsRoute,
-  getCommands: getCommandsRoute,
-  executeCommand: executeCommandRoute,
-  onCommandsChange: onCommandsChangeRoute,
-  getSettings: getSettingsRoute,
-  updateSetting: updateSettingRoute
+	get: getPluginsRoute,
+	toggle: togglePluginRoute,
+	onLog: onPluginLogRoute,
+	getLogs: getPluginLogsRoute,
+	getCommands: getCommandsRoute,
+	executeCommand: executeCommandRoute,
+	onCommandsChange: onCommandsChangeRoute,
+	getSettings: getSettingsRoute,
+	updateSetting: updateSettingRoute,
 });

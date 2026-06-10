@@ -8,41 +8,41 @@ import { enqueueActivityLog } from '../../queues/activity-log';
 import { protectedProcedure } from '../../utils/trpc';
 
 const addCategoryRoute = protectedProcedure
-  .input(
-    z.object({
-      name: z.string().min(1).max(32)
-    })
-  )
-  .mutation(async ({ input, ctx }) => {
-    await ctx.needsPermission(Permission.MANAGE_CATEGORIES);
+	.input(
+		z.object({
+			name: z.string().min(1).max(32),
+		}),
+	)
+	.mutation(async ({ input, ctx }) => {
+		await ctx.needsPermission(Permission.MANAGE_CATEGORIES);
 
-    const [result] = await db
-      .select({ maxPos: sql<number>`COALESCE(MAX(${categories.position}), 0)` })
-      .from(categories);
+		const [result] = await db
+			.select({ maxPos: sql<number>`COALESCE(MAX(${categories.position}), 0)` })
+			.from(categories);
 
-    const targetPosition = (result?.maxPos ?? 0) + 1;
+		const targetPosition = (result?.maxPos ?? 0) + 1;
 
-    const created = await db
-      .insert(categories)
-      .values({
-        name: input.name,
-        position: targetPosition,
-        createdAt: Date.now()
-      })
-      .returning()
-      .get();
+		const created = await db
+			.insert(categories)
+			.values({
+				name: input.name,
+				position: targetPosition,
+				createdAt: Date.now(),
+			})
+			.returning()
+			.get();
 
-    publishCategory(created.id, 'create');
-    enqueueActivityLog({
-      type: ActivityLogType.CREATED_CATEGORY,
-      userId: ctx.user.id,
-      details: {
-        categoryName: input.name,
-        categoryId: created.id
-      }
-    });
+		publishCategory(created.id, 'create');
+		enqueueActivityLog({
+			type: ActivityLogType.CREATED_CATEGORY,
+			userId: ctx.user.id,
+			details: {
+				categoryName: input.name,
+				categoryId: created.id,
+			},
+		});
 
-    return created.id;
-  });
+		return created.id;
+	});
 
 export { addCategoryRoute };

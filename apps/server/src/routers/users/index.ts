@@ -4,13 +4,7 @@ import { banRoute } from './ban';
 import { changeAvatarRoute } from './change-avatar';
 import { changeBannerRoute } from './change-banner';
 import { deleteUserRoute } from './delete-user';
-import {
-  onUserCreateRoute,
-  onUserDeleteRoute,
-  onUserJoinRoute,
-  onUserLeaveRoute,
-  onUserUpdateRoute
-} from './events';
+import { onUserCreateRoute, onUserDeleteRoute, onUserJoinRoute, onUserLeaveRoute, onUserUpdateRoute } from './events';
 import { getUserInfoRoute } from './get-user-info';
 import { getUsersRoute } from './get-users';
 import { kickRoute } from './kick';
@@ -19,40 +13,40 @@ import { resetPasswordRoute } from './reset-password';
 import { resetTotpRoute } from './reset-totp';
 import { setStatusRoute } from './set-status';
 import {
-  totpConfirmSetupRoute,
-  totpDisableRoute,
-  totpGenerateSetupRoute,
-  totpRegenerateRecoveryCodesRoute,
-  totpStatusRoute
+	totpConfirmSetupRoute,
+	totpDisableRoute,
+	totpGenerateSetupRoute,
+	totpRegenerateRecoveryCodesRoute,
+	totpStatusRoute,
 } from './totp';
 import { unbanRoute } from './unban';
 import { updatePasswordRoute } from './update-password';
 import { updateUserRoute } from './update-user';
 
 export const usersRouter = t.router({
-  changeAvatar: changeAvatarRoute,
-  changeBanner: changeBannerRoute,
-  addRole: addRoleRoute,
-  removeRole: removeRoleRoute,
-  update: updateUserRoute,
-  updatePassword: updatePasswordRoute,
-  getInfo: getUserInfoRoute,
-  getAll: getUsersRoute,
-  kick: kickRoute,
-  delete: deleteUserRoute,
-  ban: banRoute,
-  unban: unbanRoute,
-  resetPassword: resetPasswordRoute,
-  resetTotp: resetTotpRoute,
-  setStatus: setStatusRoute,
-  totpStatus: totpStatusRoute,
-  totpGenerateSetup: totpGenerateSetupRoute,
-  totpConfirmSetup: totpConfirmSetupRoute,
-  totpDisable: totpDisableRoute,
-  totpRegenerateRecoveryCodes: totpRegenerateRecoveryCodesRoute,
-  onJoin: onUserJoinRoute,
-  onLeave: onUserLeaveRoute,
-  onUpdate: onUserUpdateRoute,
-  onCreate: onUserCreateRoute,
-  onDelete: onUserDeleteRoute
+	changeAvatar: changeAvatarRoute,
+	changeBanner: changeBannerRoute,
+	addRole: addRoleRoute,
+	removeRole: removeRoleRoute,
+	update: updateUserRoute,
+	updatePassword: updatePasswordRoute,
+	getInfo: getUserInfoRoute,
+	getAll: getUsersRoute,
+	kick: kickRoute,
+	delete: deleteUserRoute,
+	ban: banRoute,
+	unban: unbanRoute,
+	resetPassword: resetPasswordRoute,
+	resetTotp: resetTotpRoute,
+	setStatus: setStatusRoute,
+	totpStatus: totpStatusRoute,
+	totpGenerateSetup: totpGenerateSetupRoute,
+	totpConfirmSetup: totpConfirmSetupRoute,
+	totpDisable: totpDisableRoute,
+	totpRegenerateRecoveryCodes: totpRegenerateRecoveryCodesRoute,
+	onJoin: onUserJoinRoute,
+	onLeave: onUserLeaveRoute,
+	onUpdate: onUserUpdateRoute,
+	onCreate: onUserCreateRoute,
+	onDelete: onUserDeleteRoute,
 });

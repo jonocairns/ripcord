@@ -13,21 +13,21 @@ import { usersRouter } from './users';
 import { voiceRouter } from './voice';
 
 const appRouter = t.router({
-  others: othersRouter,
-  messages: messagesRouter,
-  users: usersRouter,
-  channels: channelsRouter,
-  files: filesRouter,
-  emojis: emojisRouter,
-  roles: rolesRouter,
-  invites: invitesRouter,
-  iptv: iptvRouter,
-  voice: voiceRouter,
-  categories: categoriesRouter,
-  plugins: pluginsRouter
+	others: othersRouter,
+	messages: messagesRouter,
+	users: usersRouter,
+	channels: channelsRouter,
+	files: filesRouter,
+	emojis: emojisRouter,
+	roles: rolesRouter,
+	invites: invitesRouter,
+	iptv: iptvRouter,
+	voice: voiceRouter,
+	categories: categoriesRouter,
+	plugins: pluginsRouter,
 });
 
 type AppRouter = typeof appRouter;
 
-export { appRouter };
 export type { AppRouter };
+export { appRouter };

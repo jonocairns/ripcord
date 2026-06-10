@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { mock } from 'bun:test';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
 import { DRIZZLE_PATH } from '../helpers/paths';
 import { seedDatabase } from './seed';
 
@@ -24,40 +24,40 @@ import { seedDatabase } from './seed';
 let tdb: BunSQLiteDatabase;
 
 const initDb = async () => {
-  const sqlite = new Database(':memory:', { create: true, strict: true });
+	const sqlite = new Database(':memory:', { create: true, strict: true });
 
-  sqlite.run('PRAGMA foreign_keys = ON;');
+	sqlite.run('PRAGMA foreign_keys = ON;');
 
-  tdb = drizzle({ client: sqlite });
+	tdb = drizzle({ client: sqlite });
 
-  await migrate(tdb, { migrationsFolder: DRIZZLE_PATH });
-  await seedDatabase(tdb);
+	await migrate(tdb, { migrationsFolder: DRIZZLE_PATH });
+	await seedDatabase(tdb);
 
-  return tdb;
+	return tdb;
 };
 
 await initDb();
 
 // create a Proxy that forwards all operations to the current tdb
 const dbProxy = new Proxy({} as BunSQLiteDatabase, {
-  get(_target, prop) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (tdb as any)[prop];
-  },
-  set(_target, prop, value) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (tdb as any)[prop] = value;
-    return true;
-  }
+	get(_target, prop) {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		return (tdb as any)[prop];
+	},
+	set(_target, prop, value) {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		(tdb as any)[prop] = value;
+		return true;
+	},
 });
 
 mock.module('../db/index', () => ({
-  db: dbProxy,
-  loadDb: async () => {} // No-op in tests
+	db: dbProxy,
+	loadDb: async () => {}, // No-op in tests
 }));
 
 const setTestDb = (newDb: BunSQLiteDatabase) => {
-  tdb = newDb;
+	tdb = newDb;
 };
 
 const getTestDb = () => tdb;

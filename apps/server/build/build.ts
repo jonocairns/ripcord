@@ -1,5 +1,5 @@
-import fs from 'fs/promises';
-import path from 'path';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { zipDirectory } from '../src/helpers/zip';
 import { compile, getVersionInfo, rmIfExists, type TTarget } from './helpers';
 
@@ -22,16 +22,16 @@ await fs.mkdir(outPath, { recursive: true });
 console.log('Building client with Vite...');
 
 const viteProc = Bun.spawn(['bun', 'run', 'build'], {
-  cwd: clientCwd,
-  stdout: 'inherit',
-  stderr: 'inherit',
-  stdin: 'inherit'
+	cwd: clientCwd,
+	stdout: 'inherit',
+	stderr: 'inherit',
+	stdin: 'inherit',
 });
 await viteProc.exited;
 
 if (viteProc.exitCode !== 0) {
-  console.error('Client build failed');
-  process.exit(viteProc.exitCode);
+	console.error('Client build failed');
+	process.exit(viteProc.exitCode);
 }
 
 console.log('Client build finished, output at:', viteDistPath);
@@ -46,18 +46,18 @@ await zipDirectory(drizzleMigrationsPath, drizzleZipPath);
 console.log('Compiling server with Bun...');
 
 const targets: TTarget[] = [
-  { out: 'sharkord-linux-x64', target: 'bun-linux-x64' },
-  { out: 'sharkord-windows-x64.exe', target: 'bun-windows-x64' },
-  { out: 'sharkord-macos-arm64', target: 'bun-darwin-arm64' }
+	{ out: 'sharkord-linux-x64', target: 'bun-linux-x64' },
+	{ out: 'sharkord-windows-x64.exe', target: 'bun-windows-x64' },
+	{ out: 'sharkord-macos-arm64', target: 'bun-darwin-arm64' },
 ];
 
 for (const target of targets) {
-  console.log(`Building for target: ${target.target}...`);
+	console.log(`Building for target: ${target.target}...`);
 
-  await compile({
-    out: path.join(outPath, target.out),
-    target: target.target
-  });
+	await compile({
+		out: path.join(outPath, target.out),
+		target: target.target,
+	});
 }
 
 const releaseInfo = await getVersionInfo(targets, outPath);

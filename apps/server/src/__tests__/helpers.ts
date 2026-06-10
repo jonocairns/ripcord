@@ -6,91 +6,79 @@ import { TEST_AUTH_TOKEN_SECRET } from './seed';
 import { testsBaseUrl } from './setup';
 
 const getMockedToken = async (userId: number) => {
-  const token = jwt.sign(
-    { userId: userId, tokenVersion: 0 },
-    TEST_AUTH_TOKEN_SECRET,
-    {
-      expiresIn: '86400s'
-    }
-  );
+	const token = jwt.sign({ userId: userId, tokenVersion: 0 }, TEST_AUTH_TOKEN_SECRET, {
+		expiresIn: '86400s',
+	});
 
-  return token;
+	return token;
 };
 
 const getCaller = async (userId: number) => {
-  const mockedToken = await getMockedToken(userId);
+	const mockedToken = await getMockedToken(userId);
 
-  const caller = appRouter.createCaller(
-    await createMockContext({
-      customToken: mockedToken
-    })
-  );
+	const caller = appRouter.createCaller(
+		await createMockContext({
+			customToken: mockedToken,
+		}),
+	);
 
-  return { caller, mockedToken };
+	return { caller, mockedToken };
 };
 
 // this will basically simulate a specific user connecting to the server
 const initTest = async (userId: number = 1) => {
-  const { caller, mockedToken } = await getCaller(userId);
-  const { handshakeHash } = await caller.others.handshake();
+	const { caller, mockedToken } = await getCaller(userId);
+	const { handshakeHash } = await caller.others.handshake();
 
-  const initialData = await caller.others.joinServer({
-    handshakeHash: handshakeHash
-  });
+	const initialData = await caller.others.joinServer({
+		handshakeHash: handshakeHash,
+	});
 
-  return { caller, mockedToken, initialData };
+	return { caller, mockedToken, initialData };
 };
 
 const login = async (identity: string, password: string, invite?: string) =>
-  fetch(`${testsBaseUrl}/login`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      identity,
-      password,
-      invite
-    })
-  });
+	fetch(`${testsBaseUrl}/login`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+		},
+		body: JSON.stringify({
+			identity,
+			password,
+			invite,
+		}),
+	});
 
 const refresh = async (refreshToken: string) =>
-  fetch(`${testsBaseUrl}/refresh`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ refreshToken })
-  });
+	fetch(`${testsBaseUrl}/refresh`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+		},
+		body: JSON.stringify({ refreshToken }),
+	});
 
 const logout = async (refreshToken: string) =>
-  fetch(`${testsBaseUrl}/logout`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ refreshToken })
-  });
+	fetch(`${testsBaseUrl}/logout`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+		},
+		body: JSON.stringify({ refreshToken }),
+	});
 
 const uploadFile = async (file: File, token: string) =>
-  fetch(`${testsBaseUrl}/upload`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      [UploadHeaders.TYPE]: file.type,
-      [UploadHeaders.CONTENT_LENGTH]: file.size.toString(),
-      [UploadHeaders.ORIGINAL_NAME]: file.name,
-      [UploadHeaders.TOKEN]: token
-    },
-    body: file
-  });
+	fetch(`${testsBaseUrl}/upload`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/octet-stream',
+			[UploadHeaders.TYPE]: file.type,
+			[UploadHeaders.CONTENT_LENGTH]: file.size.toString(),
+			[UploadHeaders.ORIGINAL_NAME]: file.name,
+			[UploadHeaders.TOKEN]: token,
+		},
+		body: file,
+	});
 
-export {
-  getCaller,
-  getMockedToken,
-  initTest,
-  login,
-  logout,
-  refresh,
-  uploadFile
-};
+export { getCaller, getMockedToken, initTest, login, logout, refresh, uploadFile };

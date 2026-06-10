@@ -9,42 +9,38 @@ import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 
 const rotateFileAccessTokenRoute = protectedProcedure
-  .input(
-    z.object({
-      channelId: z.number()
-    })
-  )
-  .mutation(async ({ input, ctx }) => {
-    await ctx.needsPermission(Permission.MANAGE_CHANNELS);
+	.input(
+		z.object({
+			channelId: z.number(),
+		}),
+	)
+	.mutation(async ({ input, ctx }) => {
+		await ctx.needsPermission(Permission.MANAGE_CHANNELS);
 
-    const channel = await db
-      .select()
-      .from(channels)
-      .where(eq(channels.id, input.channelId))
-      .get();
+		const channel = await db.select().from(channels).where(eq(channels.id, input.channelId)).get();
 
-    invariant(channel, {
-      code: 'NOT_FOUND',
-      message: 'Channel not found'
-    });
+		invariant(channel, {
+			code: 'NOT_FOUND',
+			message: 'Channel not found',
+		});
 
-    const newToken = randomUUIDv7();
+		const newToken = randomUUIDv7();
 
-    await db
-      .update(channels)
-      .set({
-        fileAccessToken: newToken,
-        fileAccessTokenUpdatedAt: Date.now()
-      })
-      .where(eq(channels.id, input.channelId));
+		await db
+			.update(channels)
+			.set({
+				fileAccessToken: newToken,
+				fileAccessTokenUpdatedAt: Date.now(),
+			})
+			.where(eq(channels.id, input.channelId));
 
-    enqueueActivityLog({
-      type: ActivityLogType.ROTATE_CHANNEL_FILE_ACCESS_TOKEN,
-      userId: ctx.user.id,
-      details: {
-        channelId: input.channelId
-      }
-    });
-  });
+		enqueueActivityLog({
+			type: ActivityLogType.ROTATE_CHANNEL_FILE_ACCESS_TOKEN,
+			userId: ctx.user.id,
+			details: {
+				channelId: input.channelId,
+			},
+		});
+	});
 
 export { rotateFileAccessTokenRoute };

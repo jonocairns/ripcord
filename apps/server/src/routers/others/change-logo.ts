@@ -8,28 +8,28 @@ import { fileManager } from '../../utils/file-manager';
 import { protectedProcedure } from '../../utils/trpc';
 
 const changeLogoRoute = protectedProcedure
-  .input(
-    z.object({
-      fileId: z.string().optional()
-    })
-  )
-  .mutation(async ({ ctx, input }) => {
-    await ctx.needsPermission(Permission.MANAGE_SETTINGS);
+	.input(
+		z.object({
+			fileId: z.string().optional(),
+		}),
+	)
+	.mutation(async ({ ctx, input }) => {
+		await ctx.needsPermission(Permission.MANAGE_SETTINGS);
 
-    const settings = await getSettings();
+		const settings = await getSettings();
 
-    if (settings.logoId) {
-      await removeFile(settings.logoId);
-      await updateSettings({ logoId: null });
-    }
+		if (settings.logoId) {
+			await removeFile(settings.logoId);
+			await updateSettings({ logoId: null });
+		}
 
-    if (input.fileId) {
-      const newFile = await fileManager.saveFile(input.fileId, ctx.userId);
+		if (input.fileId) {
+			const newFile = await fileManager.saveFile(input.fileId, ctx.userId);
 
-      await updateSettings({ logoId: newFile.id });
-    }
+			await updateSettings({ logoId: newFile.id });
+		}
 
-    publishSettings();
-  });
+		publishSettings();
+	});
 
 export { changeLogoRoute };

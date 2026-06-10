@@ -7,39 +7,39 @@ import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 
 const executeCommandRoute = protectedProcedure
-  .input(
-    z.object({
-      pluginId: z.string(),
-      commandName: z.string(),
-      args: z.record(z.string(), z.any()).optional()
-    })
-  )
-  .mutation(async ({ ctx, input }) => {
-    await ctx.needsPermission(Permission.EXECUTE_PLUGIN_COMMANDS);
+	.input(
+		z.object({
+			pluginId: z.string(),
+			commandName: z.string(),
+			args: z.record(z.string(), z.any()).optional(),
+		}),
+	)
+	.mutation(async ({ ctx, input }) => {
+		await ctx.needsPermission(Permission.EXECUTE_PLUGIN_COMMANDS);
 
-    invariant(pluginManager.hasCommand(input.pluginId, input.commandName), {
-      code: 'BAD_REQUEST',
-      message: `Command "${input.commandName}" not found for plugin "${input.pluginId}"`
-    });
+		invariant(pluginManager.hasCommand(input.pluginId, input.commandName), {
+			code: 'BAD_REQUEST',
+			message: `Command "${input.commandName}" not found for plugin "${input.pluginId}"`,
+		});
 
-    enqueueActivityLog({
-      type: ActivityLogType.EXECUTED_PLUGIN_COMMAND,
-      userId: ctx.user.id,
-      details: {
-        pluginId: input.pluginId,
-        commandName: input.commandName,
-        args: input.args ?? {}
-      }
-    });
+		enqueueActivityLog({
+			type: ActivityLogType.EXECUTED_PLUGIN_COMMAND,
+			userId: ctx.user.id,
+			details: {
+				pluginId: input.pluginId,
+				commandName: input.commandName,
+				args: input.args ?? {},
+			},
+		});
 
-    const response = await pluginManager.executeCommand(
-      input.pluginId,
-      input.commandName,
-      getInvokerCtxFromTrpcCtx(ctx),
-      input.args ?? {}
-    );
+		const response = await pluginManager.executeCommand(
+			input.pluginId,
+			input.commandName,
+			getInvokerCtxFromTrpcCtx(ctx),
+			input.args ?? {},
+		);
 
-    return response;
-  });
+		return response;
+	});
 
 export { executeCommandRoute };

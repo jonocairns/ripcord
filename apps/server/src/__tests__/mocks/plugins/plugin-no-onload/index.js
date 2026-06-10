@@ -1,3 +1,3 @@
 export const someOtherFunction = () => {
-  console.log('This is not onLoad');
+	console.log('This is not onLoad');
 };

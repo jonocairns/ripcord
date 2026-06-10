@@ -1,13 +1,13 @@
+import http from 'node:http';
 import chalk from 'chalk';
-import http from 'http';
 import z from 'zod';
 import { config } from '../config';
 import { getWsInfo } from '../helpers/get-ws-info';
 import { logger } from '../logger';
 import {
-  createRateLimiter,
-  getClientRateLimitKey,
-  getRateLimitRetrySeconds
+	createRateLimiter,
+	getClientRateLimitKey,
+	getRateLimitRetrySeconds,
 } from '../utils/rate-limiters/rate-limiter';
 import { healthRouteHandler } from './healthz';
 import { infoRouteHandler } from './info';
@@ -22,262 +22,233 @@ import { verify2faRouteHandler } from './verify-2fa';
 
 // 5 attempts per minute per IP for login route
 const loginRateLimiter = createRateLimiter({
-  maxRequests: config.rateLimiters.joinServer.maxRequests,
-  windowMs: config.rateLimiters.joinServer.windowMs
+	maxRequests: config.rateLimiters.joinServer.maxRequests,
+	windowMs: config.rateLimiters.joinServer.windowMs,
 });
 
 // 60 attempts per minute per IP for refresh route
 const refreshRateLimiter = createRateLimiter({
-  maxRequests: 60,
-  windowMs: 60_000
+	maxRequests: 60,
+	windowMs: 60_000,
 });
 
 // 60 attempts per minute per IP for logout route
 const logoutRateLimiter = createRateLimiter({
-  maxRequests: 60,
-  windowMs: 60_000
+	maxRequests: 60,
+	windowMs: 60_000,
 });
 
 // this http server implementation is temporary and will be moved to bun server later when things are more stable
 const createHttpServer = async (port: number = config.server.port) => {
-  return new Promise<http.Server>((resolve) => {
-    const server = http.createServer(
-      async (req: http.IncomingMessage, res: http.ServerResponse) => {
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        res.setHeader('X-Frame-Options', 'DENY');
+	return new Promise<http.Server>((resolve) => {
+		const server = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {
+			res.setHeader('X-Content-Type-Options', 'nosniff');
+			res.setHeader('X-Frame-Options', 'DENY');
 
-        const origin = req.headers.origin;
-        const corsOrigin = config.server.corsOrigin;
-        if (origin && (!corsOrigin || corsOrigin === origin)) {
-          res.setHeader('Access-Control-Allow-Origin', origin);
-          res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-          res.setHeader(
-            'Access-Control-Allow-Headers',
-            'Content-Type, Authorization, x-file-name, x-file-type, x-token, Content-Length, sentry-trace, baggage'
-          );
-          res.setHeader('Vary', 'Origin');
-        }
+			const origin = req.headers.origin;
+			const corsOrigin = config.server.corsOrigin;
+			if (origin && (!corsOrigin || corsOrigin === origin)) {
+				res.setHeader('Access-Control-Allow-Origin', origin);
+				res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+				res.setHeader(
+					'Access-Control-Allow-Headers',
+					'Content-Type, Authorization, x-file-name, x-file-type, x-token, Content-Length, sentry-trace, baggage',
+				);
+				res.setHeader('Vary', 'Origin');
+			}
 
-        const info = getWsInfo(undefined, req, {
-          trustProxy: config.server.trustProxy
-        });
+			const info = getWsInfo(undefined, req, {
+				trustProxy: config.server.trustProxy,
+			});
 
-        logger.debug(
-          `${chalk.dim('[HTTP]')} ${req.method} ${req.url} - ${info?.ip}`
-        );
+			logger.debug(`${chalk.dim('[HTTP]')} ${req.method} ${req.url} - ${info?.ip}`);
 
-        if (req.method === 'OPTIONS') {
-          res.writeHead(204);
-          res.end();
-          return;
-        }
+			if (req.method === 'OPTIONS') {
+				res.writeHead(204);
+				res.end();
+				return;
+			}
 
-        try {
-          if (req.method === 'GET' && req.url === '/healthz') {
-            return await healthRouteHandler(req, res);
-          }
+			try {
+				if (req.method === 'GET' && req.url === '/healthz') {
+					return await healthRouteHandler(req, res);
+				}
 
-          if (req.method === 'GET' && req.url === '/info') {
-            return await infoRouteHandler(req, res);
-          }
+				if (req.method === 'GET' && req.url === '/info') {
+					return await infoRouteHandler(req, res);
+				}
 
-          if (req.method === 'POST' && req.url === '/upload') {
-            return await uploadFileRouteHandler(req, res);
-          }
+				if (req.method === 'POST' && req.url === '/upload') {
+					return await uploadFileRouteHandler(req, res);
+				}
 
-          if (req.method === 'POST' && req.url === '/login') {
-            if (info?.ip) {
-              // we can only rate limit if we have the client's IP
+				if (req.method === 'POST' && req.url === '/login') {
+					if (info?.ip) {
+						// we can only rate limit if we have the client's IP
 
-              const key = getClientRateLimitKey(info?.ip);
-              const rateLimit = loginRateLimiter.consume(key);
+						const key = getClientRateLimitKey(info?.ip);
+						const rateLimit = loginRateLimiter.consume(key);
 
-              if (!rateLimit.allowed) {
-                logger.debug(
-                  `${chalk.dim('[Rate Limiter HTTP]')} /login rate limited for key "${key}"`
-                );
+						if (!rateLimit.allowed) {
+							logger.debug(`${chalk.dim('[Rate Limiter HTTP]')} /login rate limited for key "${key}"`);
 
-                res.setHeader(
-                  'Retry-After',
-                  getRateLimitRetrySeconds(rateLimit.retryAfterMs)
-                );
+							res.setHeader('Retry-After', getRateLimitRetrySeconds(rateLimit.retryAfterMs));
 
-                res.writeHead(429, { 'Content-Type': 'application/json' });
+							res.writeHead(429, { 'Content-Type': 'application/json' });
 
-                res.end(
-                  JSON.stringify({
-                    error: 'Too many login attempts. Please try again shortly.'
-                  })
-                );
+							res.end(
+								JSON.stringify({
+									error: 'Too many login attempts. Please try again shortly.',
+								}),
+							);
 
-                return;
-              }
-            } else {
-              logger.warn(
-                `${chalk.dim('[Rate Limiter HTTP]')} Missing IP address in request info, skipping rate limiting for /login route.`
-              );
-            }
+							return;
+						}
+					} else {
+						logger.warn(
+							`${chalk.dim('[Rate Limiter HTTP]')} Missing IP address in request info, skipping rate limiting for /login route.`,
+						);
+					}
 
-            return await loginRouteHandler(req, res);
-          }
+					return await loginRouteHandler(req, res);
+				}
 
-          if (req.method === 'POST' && req.url === '/verify-2fa') {
-            if (info?.ip) {
-              const key = getClientRateLimitKey(info.ip);
-              const rateLimit = loginRateLimiter.consume(key);
+				if (req.method === 'POST' && req.url === '/verify-2fa') {
+					if (info?.ip) {
+						const key = getClientRateLimitKey(info.ip);
+						const rateLimit = loginRateLimiter.consume(key);
 
-              if (!rateLimit.allowed) {
-                logger.debug(
-                  `${chalk.dim('[Rate Limiter HTTP]')} /verify-2fa rate limited for key "${key}"`
-                );
+						if (!rateLimit.allowed) {
+							logger.debug(`${chalk.dim('[Rate Limiter HTTP]')} /verify-2fa rate limited for key "${key}"`);
 
-                res.setHeader(
-                  'Retry-After',
-                  getRateLimitRetrySeconds(rateLimit.retryAfterMs)
-                );
+							res.setHeader('Retry-After', getRateLimitRetrySeconds(rateLimit.retryAfterMs));
 
-                res.writeHead(429, { 'Content-Type': 'application/json' });
+							res.writeHead(429, { 'Content-Type': 'application/json' });
 
-                res.end(
-                  JSON.stringify({
-                    error:
-                      'Too many verification attempts. Please try again shortly.'
-                  })
-                );
+							res.end(
+								JSON.stringify({
+									error: 'Too many verification attempts. Please try again shortly.',
+								}),
+							);
 
-                return;
-              }
-            } else {
-              logger.warn(
-                `${chalk.dim('[Rate Limiter HTTP]')} Missing IP address in request info, skipping rate limiting for /verify-2fa route.`
-              );
-            }
+							return;
+						}
+					} else {
+						logger.warn(
+							`${chalk.dim('[Rate Limiter HTTP]')} Missing IP address in request info, skipping rate limiting for /verify-2fa route.`,
+						);
+					}
 
-            return await verify2faRouteHandler(req, res);
-          }
+					return await verify2faRouteHandler(req, res);
+				}
 
-          if (req.method === 'POST' && req.url === '/refresh') {
-            if (info?.ip) {
-              const key = getClientRateLimitKey(info.ip);
-              const rateLimit = refreshRateLimiter.consume(key);
+				if (req.method === 'POST' && req.url === '/refresh') {
+					if (info?.ip) {
+						const key = getClientRateLimitKey(info.ip);
+						const rateLimit = refreshRateLimiter.consume(key);
 
-              if (!rateLimit.allowed) {
-                logger.debug(
-                  `${chalk.dim('[Rate Limiter HTTP]')} /refresh rate limited for key "${key}"`
-                );
+						if (!rateLimit.allowed) {
+							logger.debug(`${chalk.dim('[Rate Limiter HTTP]')} /refresh rate limited for key "${key}"`);
 
-                res.setHeader(
-                  'Retry-After',
-                  getRateLimitRetrySeconds(rateLimit.retryAfterMs)
-                );
+							res.setHeader('Retry-After', getRateLimitRetrySeconds(rateLimit.retryAfterMs));
 
-                res.writeHead(429, { 'Content-Type': 'application/json' });
-                res.end(
-                  JSON.stringify({
-                    error:
-                      'Too many refresh attempts. Please try again shortly.'
-                  })
-                );
-                return;
-              }
-            }
+							res.writeHead(429, { 'Content-Type': 'application/json' });
+							res.end(
+								JSON.stringify({
+									error: 'Too many refresh attempts. Please try again shortly.',
+								}),
+							);
+							return;
+						}
+					}
 
-            return await refreshRouteHandler(req, res);
-          }
+					return await refreshRouteHandler(req, res);
+				}
 
-          if (req.method === 'POST' && req.url === '/logout') {
-            if (info?.ip) {
-              const key = getClientRateLimitKey(info.ip);
-              const rateLimit = logoutRateLimiter.consume(key);
+				if (req.method === 'POST' && req.url === '/logout') {
+					if (info?.ip) {
+						const key = getClientRateLimitKey(info.ip);
+						const rateLimit = logoutRateLimiter.consume(key);
 
-              if (!rateLimit.allowed) {
-                logger.debug(
-                  `${chalk.dim('[Rate Limiter HTTP]')} /logout rate limited for key "${key}"`
-                );
+						if (!rateLimit.allowed) {
+							logger.debug(`${chalk.dim('[Rate Limiter HTTP]')} /logout rate limited for key "${key}"`);
 
-                res.setHeader(
-                  'Retry-After',
-                  getRateLimitRetrySeconds(rateLimit.retryAfterMs)
-                );
+							res.setHeader('Retry-After', getRateLimitRetrySeconds(rateLimit.retryAfterMs));
 
-                res.writeHead(429, { 'Content-Type': 'application/json' });
-                res.end(
-                  JSON.stringify({
-                    error: 'Too many logout attempts. Please try again shortly.'
-                  })
-                );
-                return;
-              }
-            }
+							res.writeHead(429, { 'Content-Type': 'application/json' });
+							res.end(
+								JSON.stringify({
+									error: 'Too many logout attempts. Please try again shortly.',
+								}),
+							);
+							return;
+						}
+					}
 
-            return await logoutRouteHandler(req, res);
-          }
+					return await logoutRouteHandler(req, res);
+				}
 
-          if (
-            (req.method === 'GET' || req.method === 'HEAD') &&
-            req.url?.startsWith('/public')
-          ) {
-            return await publicRouteHandler(req, res);
-          }
+				if ((req.method === 'GET' || req.method === 'HEAD') && req.url?.startsWith('/public')) {
+					return await publicRouteHandler(req, res);
+				}
 
-          if (req.method === 'GET' && req.url?.startsWith('/')) {
-            return await interfaceRouteHandler(req, res);
-          }
-        } catch (error) {
-          const errorsMap: Record<string, string> = {};
+				if (req.method === 'GET' && req.url?.startsWith('/')) {
+					return await interfaceRouteHandler(req, res);
+				}
+			} catch (error) {
+				const errorsMap: Record<string, string> = {};
 
-          if (error instanceof z.ZodError) {
-            for (const issue of error.issues) {
-              const field = issue.path[0];
+				if (error instanceof z.ZodError) {
+					for (const issue of error.issues) {
+						const field = issue.path[0];
 
-              if (typeof field === 'string') {
-                errorsMap[field] = issue.message;
-              }
-            }
+						if (typeof field === 'string') {
+							errorsMap[field] = issue.message;
+						}
+					}
 
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ errors: errorsMap }));
-            return;
-          } else if (error instanceof HttpValidationError) {
-            errorsMap[error.field] = error.message;
+					res.writeHead(400, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ errors: errorsMap }));
+					return;
+				} else if (error instanceof HttpValidationError) {
+					errorsMap[error.field] = error.message;
 
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ errors: errorsMap }));
-            return;
-          } else if (error instanceof HttpPayloadTooLargeError) {
-            res.writeHead(413, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: error.message }));
-            return;
-          } else if (error instanceof SyntaxError) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Invalid JSON payload' }));
-            return;
-          }
+					res.writeHead(400, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ errors: errorsMap }));
+					return;
+				} else if (error instanceof HttpPayloadTooLargeError) {
+					res.writeHead(413, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: error.message }));
+					return;
+				} else if (error instanceof SyntaxError) {
+					res.writeHead(400, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: 'Invalid JSON payload' }));
+					return;
+				}
 
-          logger.error('HTTP route error:', error);
+				logger.error('HTTP route error:', error);
 
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Internal server error' }));
-          return;
-        }
+				res.writeHead(500, { 'Content-Type': 'application/json' });
+				res.end(JSON.stringify({ error: 'Internal server error' }));
+				return;
+			}
 
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Not found' }));
-      }
-    );
+			res.writeHead(404, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ error: 'Not found' }));
+		});
 
-    server.on('listening', () => {
-      logger.debug('HTTP server is listening on port %d', port);
-      resolve(server);
-    });
+		server.on('listening', () => {
+			logger.debug('HTTP server is listening on port %d', port);
+			resolve(server);
+		});
 
-    server.on('close', () => {
-      logger.debug('HTTP server closed');
-      process.exit(0);
-    });
+		server.on('close', () => {
+			logger.debug('HTTP server closed');
+			process.exit(0);
+		});
 
-    server.listen(port);
-  });
+		server.listen(port);
+	});
 };
 
 export { createHttpServer };

@@ -9,45 +9,45 @@ import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 
 const banRoute = protectedProcedure
-  .input(
-    z.object({
-      userId: z.number(),
-      reason: z.string().optional()
-    })
-  )
-  .mutation(async ({ ctx, input }) => {
-    await ctx.needsPermission(Permission.MANAGE_USERS);
+	.input(
+		z.object({
+			userId: z.number(),
+			reason: z.string().optional(),
+		}),
+	)
+	.mutation(async ({ ctx, input }) => {
+		await ctx.needsPermission(Permission.MANAGE_USERS);
 
-    invariant(input.userId !== ctx.user.id, {
-      code: 'BAD_REQUEST',
-      message: 'You cannot ban yourself.'
-    });
+		invariant(input.userId !== ctx.user.id, {
+			code: 'BAD_REQUEST',
+			message: 'You cannot ban yourself.',
+		});
 
-    const userWs = ctx.getUserWs(input.userId);
+		const userWs = ctx.getUserWs(input.userId);
 
-    if (userWs) {
-      userWs.close(DisconnectCode.BANNED, input.reason);
-    }
+		if (userWs) {
+			userWs.close(DisconnectCode.BANNED, input.reason);
+		}
 
-    await db
-      .update(users)
-      .set({
-        banned: true,
-        banReason: input.reason ?? null,
-        bannedAt: Date.now()
-      })
-      .where(eq(users.id, input.userId));
+		await db
+			.update(users)
+			.set({
+				banned: true,
+				banReason: input.reason ?? null,
+				bannedAt: Date.now(),
+			})
+			.where(eq(users.id, input.userId));
 
-    publishUser(input.userId, 'update');
+		publishUser(input.userId, 'update');
 
-    enqueueActivityLog({
-      type: ActivityLogType.USER_BANNED,
-      userId: input.userId,
-      details: {
-        reason: input.reason,
-        bannedBy: ctx.userId
-      }
-    });
-  });
+		enqueueActivityLog({
+			type: ActivityLogType.USER_BANNED,
+			userId: input.userId,
+			details: {
+				reason: input.reason,
+				bannedBy: ctx.userId,
+			},
+		});
+	});
 
 export { banRoute };

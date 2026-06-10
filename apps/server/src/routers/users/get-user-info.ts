@@ -8,28 +8,28 @@ import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 
 const getUserInfoRoute = protectedProcedure
-  .input(
-    z.object({
-      userId: z.number()
-    })
-  )
-  .query(async ({ ctx, input }) => {
-    await ctx.needsPermission(Permission.MANAGE_USERS);
+	.input(
+		z.object({
+			userId: z.number(),
+		}),
+	)
+	.query(async ({ ctx, input }) => {
+		await ctx.needsPermission(Permission.MANAGE_USERS);
 
-    const user = await getUserById(input.userId);
+		const user = await getUserById(input.userId);
 
-    invariant(user, {
-      code: 'NOT_FOUND',
-      message: 'User not found'
-    });
+		invariant(user, {
+			code: 'NOT_FOUND',
+			message: 'User not found',
+		});
 
-    const [logins, files, messages] = await Promise.all([
-      getLastLogins(user.id, 6),
-      getFilesByUserId(user.id),
-      getMessagesByUserId(user.id)
-    ]);
+		const [logins, files, messages] = await Promise.all([
+			getLastLogins(user.id, 6),
+			getFilesByUserId(user.id),
+			getMessagesByUserId(user.id),
+		]);
 
-    return { user, logins, files, messages };
-  });
+		return { user, logins, files, messages };
+	});
 
 export { getUserInfoRoute };

@@ -9,32 +9,27 @@ const ACCESS_TOKEN_EXPIRES_IN = '86400s'; // 1 day
 const REFRESH_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
 const createAccessToken = async (userId: number, tokenVersion: number) =>
-  jwt.sign({ userId, tokenVersion }, await getServerToken(), {
-    expiresIn: ACCESS_TOKEN_EXPIRES_IN
-  });
+	jwt.sign({ userId, tokenVersion }, await getServerToken(), {
+		expiresIn: ACCESS_TOKEN_EXPIRES_IN,
+	});
 
 const createRefreshTokenValue = () => `${randomUUIDv7()}.${randomUUIDv7()}`;
 
 const issueAuthTokens = async (userId: number, tokenVersion: number) => {
-  const token = await createAccessToken(userId, tokenVersion);
-  const refreshToken = createRefreshTokenValue();
-  const refreshTokenHash = await sha256(refreshToken);
-  const now = Date.now();
+	const token = await createAccessToken(userId, tokenVersion);
+	const refreshToken = createRefreshTokenValue();
+	const refreshTokenHash = await sha256(refreshToken);
+	const now = Date.now();
 
-  await db.insert(refreshTokens).values({
-    userId,
-    tokenHash: refreshTokenHash,
-    expiresAt: now + REFRESH_TOKEN_TTL_MS,
-    createdAt: now,
-    updatedAt: now
-  });
+	await db.insert(refreshTokens).values({
+		userId,
+		tokenHash: refreshTokenHash,
+		expiresAt: now + REFRESH_TOKEN_TTL_MS,
+		createdAt: now,
+		updatedAt: now,
+	});
 
-  return { token, refreshToken };
+	return { token, refreshToken };
 };
 
-export {
-  createAccessToken,
-  createRefreshTokenValue,
-  issueAuthTokens,
-  REFRESH_TOKEN_TTL_MS
-};
+export { createAccessToken, createRefreshTokenValue, issueAuthTokens, REFRESH_TOKEN_TTL_MS };

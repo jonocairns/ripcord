@@ -1,559 +1,486 @@
-import { sha256 } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
+import { sha256 } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import jwt from 'jsonwebtoken';
 import { login, logout, refresh } from '../../__tests__/helpers';
-import {
-  TEST_AUTH_TOKEN_SECRET,
-  TEST_SECRET_TOKEN
-} from '../../__tests__/seed';
+import { TEST_AUTH_TOKEN_SECRET, TEST_SECRET_TOKEN } from '../../__tests__/seed';
 import { tdb, testsBaseUrl } from '../../__tests__/setup';
-import {
-  invites,
-  refreshTokens,
-  roles,
-  settings,
-  userRoles,
-  users
-} from '../../db/schema';
+import { invites, refreshTokens, roles, settings, userRoles, users } from '../../db/schema';
 
 type TLoginResponse = {
-  success?: boolean;
-  token: string;
-  refreshToken: string;
-  error?: string;
-  errors: Record<string, string>;
+	success?: boolean;
+	token: string;
+	refreshToken: string;
+	error?: string;
+	errors: Record<string, string>;
 };
 
 describe('/login', () => {
-  test('should successfully login with valid credentials', async () => {
-    const response = await login('testowner', 'password123');
+	test('should successfully login with valid credentials', async () => {
+		const response = await login('testowner', 'password123');
 
-    expect(response.status).toBe(200);
+		expect(response.status).toBe(200);
 
-    const data = (await response.json()) as { success: boolean; token: string };
+		const data = (await response.json()) as { success: boolean; token: string };
 
-    expect(data).toHaveProperty('success', true);
-    expect(data).toHaveProperty('token');
-    expect(data).toHaveProperty('refreshToken');
+		expect(data).toHaveProperty('success', true);
+		expect(data).toHaveProperty('token');
+		expect(data).toHaveProperty('refreshToken');
 
-    const decoded = jwt.verify(data.token, TEST_AUTH_TOKEN_SECRET);
+		const decoded = jwt.verify(data.token, TEST_AUTH_TOKEN_SECRET);
 
-    expect(decoded).toHaveProperty('userId');
-  });
+		expect(decoded).toHaveProperty('userId');
+	});
 
-  test('should not verify JWT with bootstrap secret token hash', async () => {
-    const response = await login('testowner', 'password123');
+	test('should not verify JWT with bootstrap secret token hash', async () => {
+		const response = await login('testowner', 'password123');
 
-    expect(response.status).toBe(200);
+		expect(response.status).toBe(200);
 
-    const data = (await response.json()) as { token: string };
-    const bootstrapSecretHash = await sha256(TEST_SECRET_TOKEN);
+		const data = (await response.json()) as { token: string };
+		const bootstrapSecretHash = await sha256(TEST_SECRET_TOKEN);
 
-    expect(() => jwt.verify(data.token, bootstrapSecretHash)).toThrow();
-  });
+		expect(() => jwt.verify(data.token, bootstrapSecretHash)).toThrow();
+	});
 
-  test('should fail login with invalid password', async () => {
-    const response = await login('testowner', 'wrongpassword');
+	test('should fail login with invalid password', async () => {
+		const response = await login('testowner', 'wrongpassword');
 
-    expect(response.status).toBe(400);
+		expect(response.status).toBe(400);
 
-    const data = (await response.json()) as TLoginResponse;
+		const data = (await response.json()) as TLoginResponse;
 
-    expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('password', 'Invalid password');
-  });
+		expect(data).toHaveProperty('errors');
+		expect(data.errors).toHaveProperty('password', 'Invalid password');
+	});
 
-  test('should reject login with raw plaintext password stored in DB', async () => {
-    await tdb
-      .update(users)
-      .set({ password: 'password123' })
-      .where(eq(users.identity, 'testowner'));
+	test('should reject login with raw plaintext password stored in DB', async () => {
+		await tdb.update(users).set({ password: 'password123' }).where(eq(users.identity, 'testowner'));
 
-    const response = await login('testowner', 'password123');
+		const response = await login('testowner', 'password123');
 
-    expect(response.status).toBe(400);
+		expect(response.status).toBe(400);
 
-    const data = (await response.json()) as { errors: Record<string, string> };
+		const data = (await response.json()) as { errors: Record<string, string> };
 
-    expect(data.errors).toHaveProperty('password', 'Invalid password');
-  });
+		expect(data.errors).toHaveProperty('password', 'Invalid password');
+	});
 
-  test('should login with raw argon2 hash and upgrade to prefixed format', async () => {
-    const rawArgon2Hash = await Bun.password.hash('password123', {
-      algorithm: 'argon2id'
-    });
+	test('should login with raw argon2 hash and upgrade to prefixed format', async () => {
+		const rawArgon2Hash = await Bun.password.hash('password123', {
+			algorithm: 'argon2id',
+		});
 
-    await tdb
-      .update(users)
-      .set({ password: rawArgon2Hash })
-      .where(eq(users.identity, 'testowner'));
+		await tdb.update(users).set({ password: rawArgon2Hash }).where(eq(users.identity, 'testowner'));
 
-    const response = await login('testowner', 'password123');
+		const response = await login('testowner', 'password123');
 
-    expect(response.status).toBe(200);
+		expect(response.status).toBe(200);
 
-    const updatedUser = await tdb
-      .select({ password: users.password })
-      .from(users)
-      .where(eq(users.identity, 'testowner'))
-      .get();
+		const updatedUser = await tdb
+			.select({ password: users.password })
+			.from(users)
+			.where(eq(users.identity, 'testowner'))
+			.get();
 
-    expect(updatedUser).toBeTruthy();
-    expect(updatedUser?.password.startsWith('argon2$')).toBe(true);
-  });
+		expect(updatedUser).toBeTruthy();
+		expect(updatedUser?.password.startsWith('argon2$')).toBe(true);
+	});
 
-  test('should auto-register new user when allowNewUsers is true', async () => {
-    const response = await login('newuser', 'newpassword123');
+	test('should auto-register new user when allowNewUsers is true', async () => {
+		const response = await login('newuser', 'newpassword123');
 
-    expect(response.status).toBe(200);
+		expect(response.status).toBe(200);
 
-    const data = await response.json();
+		const data = await response.json();
 
-    expect(data).toHaveProperty('success', true);
-    expect(data).toHaveProperty('token');
-    expect(data).toHaveProperty('refreshToken');
+		expect(data).toHaveProperty('success', true);
+		expect(data).toHaveProperty('token');
+		expect(data).toHaveProperty('refreshToken');
 
-    const newUser = await tdb
-      .select()
-      .from(users)
-      .where(eq(users.identity, 'newuser'))
-      .get();
+		const newUser = await tdb.select().from(users).where(eq(users.identity, 'newuser')).get();
 
-    expect(newUser).toBeTruthy();
-    expect(newUser?.name).toBe('SharkordUser');
-  });
+		expect(newUser).toBeTruthy();
+		expect(newUser?.name).toBe('SharkordUser');
+	});
 
-  test('should fail when allowNewUsers is false and no invite provided', async () => {
-    await tdb.update(settings).set({ allowNewUsers: false });
+	test('should fail when allowNewUsers is false and no invite provided', async () => {
+		await tdb.update(settings).set({ allowNewUsers: false });
 
-    const response = await login('anothernewuser', 'password123');
+		const response = await login('anothernewuser', 'password123');
 
-    expect(response.status).toBe(400);
+		expect(response.status).toBe(400);
 
-    const data = (await response.json()) as TLoginResponse;
+		const data = (await response.json()) as TLoginResponse;
 
-    expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('identity', 'Invalid invite code');
-  });
+		expect(data).toHaveProperty('errors');
+		expect(data.errors).toHaveProperty('identity', 'Invalid invite code');
+	});
 
-  test('should allow registration with valid invite when allowNewUsers is false', async () => {
-    await tdb.update(settings).set({ allowNewUsers: false });
+	test('should allow registration with valid invite when allowNewUsers is false', async () => {
+		await tdb.update(settings).set({ allowNewUsers: false });
 
-    await tdb.insert(invites).values({
-      code: 'TESTINVITE123',
-      creatorId: 1,
-      maxUses: 5,
-      uses: 0,
-      expiresAt: Date.now() + 86400000, // 1 day
-      createdAt: Date.now()
-    });
+		await tdb.insert(invites).values({
+			code: 'TESTINVITE123',
+			creatorId: 1,
+			maxUses: 5,
+			uses: 0,
+			expiresAt: Date.now() + 86400000, // 1 day
+			createdAt: Date.now(),
+		});
 
-    const response = await login('inviteuser', 'password123', 'TESTINVITE123');
+		const response = await login('inviteuser', 'password123', 'TESTINVITE123');
 
-    expect(response.status).toBe(200);
+		expect(response.status).toBe(200);
 
-    const data = await response.json();
+		const data = await response.json();
 
-    expect(data).toHaveProperty('success', true);
-    expect(data).toHaveProperty('token');
-    expect(data).toHaveProperty('refreshToken');
+		expect(data).toHaveProperty('success', true);
+		expect(data).toHaveProperty('token');
+		expect(data).toHaveProperty('refreshToken');
 
-    const updatedInvite = await tdb
-      .select()
-      .from(invites)
-      .where(eq(invites.code, 'TESTINVITE123'))
-      .get();
+		const updatedInvite = await tdb.select().from(invites).where(eq(invites.code, 'TESTINVITE123')).get();
 
-    expect(updatedInvite?.uses).toBe(1);
-  });
+		expect(updatedInvite?.uses).toBe(1);
+	});
 
-  test('should fail with expired invite', async () => {
-    await tdb.update(settings).set({ allowNewUsers: false });
+	test('should fail with expired invite', async () => {
+		await tdb.update(settings).set({ allowNewUsers: false });
 
-    await tdb.insert(invites).values({
-      code: 'EXPIREDINVITE',
-      creatorId: 1,
-      maxUses: 5,
-      uses: 0,
-      expiresAt: Date.now() - 1000, // expired
-      createdAt: Date.now() - 86400000
-    });
+		await tdb.insert(invites).values({
+			code: 'EXPIREDINVITE',
+			creatorId: 1,
+			maxUses: 5,
+			uses: 0,
+			expiresAt: Date.now() - 1000, // expired
+			createdAt: Date.now() - 86400000,
+		});
 
-    const response = await login(
-      'expiredinviteuser',
-      'password123',
-      'EXPIREDINVITE'
-    );
-
-    expect(response.status).toBe(400);
-
-    const data = (await response.json()) as TLoginResponse;
-
-    expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('identity');
-  });
-
-  test('should fail with maxed out invite', async () => {
-    await tdb.update(settings).set({ allowNewUsers: false });
-
-    // Create a maxed out invite
-    await tdb.insert(invites).values({
-      code: 'MAXEDINVITE',
-      creatorId: 1,
-      maxUses: 2,
-      uses: 2,
-      expiresAt: Date.now() + 86400000,
-      createdAt: Date.now()
-    });
-
-    const response = await login(
-      'maxedinviteuser',
-      'password123',
-      'MAXEDINVITE'
-    );
-
-    expect(response.status).toBe(400);
+		const response = await login('expiredinviteuser', 'password123', 'EXPIREDINVITE');
 
-    const data = (await response.json()) as TLoginResponse;
-
-    expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('identity');
-  });
+		expect(response.status).toBe(400);
 
-  test('should fail with non-existent invite', async () => {
-    await tdb.update(settings).set({ allowNewUsers: false });
+		const data = (await response.json()) as TLoginResponse;
 
-    const response = await login(
-      'fakeinviteuser',
-      'password123',
-      'FAKEINVITECODE'
-    );
+		expect(data).toHaveProperty('errors');
+		expect(data.errors).toHaveProperty('identity');
+	});
 
-    expect(response.status).toBe(400);
+	test('should fail with maxed out invite', async () => {
+		await tdb.update(settings).set({ allowNewUsers: false });
 
-    const data = (await response.json()) as TLoginResponse;
+		// Create a maxed out invite
+		await tdb.insert(invites).values({
+			code: 'MAXEDINVITE',
+			creatorId: 1,
+			maxUses: 2,
+			uses: 2,
+			expiresAt: Date.now() + 86400000,
+			createdAt: Date.now(),
+		});
 
-    expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('identity');
-  });
+		const response = await login('maxedinviteuser', 'password123', 'MAXEDINVITE');
 
-  test('should only allow one concurrent registration with a single-use invite', async () => {
-    await tdb.update(settings).set({ allowNewUsers: false });
+		expect(response.status).toBe(400);
 
-    await tdb.insert(invites).values({
-      code: 'SINGLEUSEINVITE',
-      creatorId: 1,
-      maxUses: 1,
-      uses: 0,
-      expiresAt: Date.now() + 86400000,
-      createdAt: Date.now()
-    });
+		const data = (await response.json()) as TLoginResponse;
 
-    const [firstAttempt, secondAttempt] = await Promise.all([
-      login('singleinviteuser1', 'password123', 'SINGLEUSEINVITE'),
-      login('singleinviteuser2', 'password123', 'SINGLEUSEINVITE')
-    ]);
+		expect(data).toHaveProperty('errors');
+		expect(data.errors).toHaveProperty('identity');
+	});
 
-    const statuses = [firstAttempt.status, secondAttempt.status].sort(
-      (a, b) => a - b
-    );
+	test('should fail with non-existent invite', async () => {
+		await tdb.update(settings).set({ allowNewUsers: false });
 
-    expect(statuses).toEqual([200, 400]);
+		const response = await login('fakeinviteuser', 'password123', 'FAKEINVITECODE');
 
-    const failedResponse =
-      firstAttempt.status === 400 ? firstAttempt : secondAttempt;
-    const failedData = (await failedResponse.json()) as TLoginResponse;
+		expect(response.status).toBe(400);
 
-    expect(failedData).toHaveProperty('errors');
-    expect(failedData.errors).toHaveProperty('identity');
+		const data = (await response.json()) as TLoginResponse;
 
-    const updatedInvite = await tdb
-      .select()
-      .from(invites)
-      .where(eq(invites.code, 'SINGLEUSEINVITE'))
-      .get();
+		expect(data).toHaveProperty('errors');
+		expect(data.errors).toHaveProperty('identity');
+	});
 
-    expect(updatedInvite?.uses).toBe(1);
+	test('should only allow one concurrent registration with a single-use invite', async () => {
+		await tdb.update(settings).set({ allowNewUsers: false });
 
-    const [firstUser, secondUser] = await Promise.all([
-      tdb
-        .select()
-        .from(users)
-        .where(eq(users.identity, 'singleinviteuser1'))
-        .get(),
-      tdb
-        .select()
-        .from(users)
-        .where(eq(users.identity, 'singleinviteuser2'))
-        .get()
-    ]);
+		await tdb.insert(invites).values({
+			code: 'SINGLEUSEINVITE',
+			creatorId: 1,
+			maxUses: 1,
+			uses: 0,
+			expiresAt: Date.now() + 86400000,
+			createdAt: Date.now(),
+		});
 
-    const createdUsers = [firstUser, secondUser].filter(Boolean);
+		const [firstAttempt, secondAttempt] = await Promise.all([
+			login('singleinviteuser1', 'password123', 'SINGLEUSEINVITE'),
+			login('singleinviteuser2', 'password123', 'SINGLEUSEINVITE'),
+		]);
 
-    expect(createdUsers).toHaveLength(1);
-  });
+		const statuses = [firstAttempt.status, secondAttempt.status].sort((a, b) => a - b);
 
-  test('should fail login for banned user', async () => {
-    await tdb
-      .update(users)
-      .set({
-        banned: true,
-        banReason: 'Test ban reason'
-      })
-      .where(eq(users.identity, 'testuser'));
+		expect(statuses).toEqual([200, 400]);
 
-    const response = await login('testuser', 'password123');
+		const failedResponse = firstAttempt.status === 400 ? firstAttempt : secondAttempt;
+		const failedData = (await failedResponse.json()) as TLoginResponse;
 
-    expect(response.status).toBe(400);
+		expect(failedData).toHaveProperty('errors');
+		expect(failedData.errors).toHaveProperty('identity');
 
-    const data = (await response.json()) as TLoginResponse;
+		const updatedInvite = await tdb.select().from(invites).where(eq(invites.code, 'SINGLEUSEINVITE')).get();
 
-    expect(data).toHaveProperty('errors');
-    expect(data.errors).toHaveProperty('identity');
-    expect(data.errors.identity).toContain('banned');
-  });
+		expect(updatedInvite?.uses).toBe(1);
 
-  test('should fail with missing identity', async () => {
-    const response = await login('', 'somepassword');
+		const [firstUser, secondUser] = await Promise.all([
+			tdb.select().from(users).where(eq(users.identity, 'singleinviteuser1')).get(),
+			tdb.select().from(users).where(eq(users.identity, 'singleinviteuser2')).get(),
+		]);
 
-    expect(response.status).toBe(400);
+		const createdUsers = [firstUser, secondUser].filter(Boolean);
 
-    const data = await response.json();
+		expect(createdUsers).toHaveLength(1);
+	});
 
-    expect(data).toHaveProperty('errors');
-  });
+	test('should fail login for banned user', async () => {
+		await tdb
+			.update(users)
+			.set({
+				banned: true,
+				banReason: 'Test ban reason',
+			})
+			.where(eq(users.identity, 'testuser'));
 
-  test('should fail with missing password', async () => {
-    const response = await login('someidentity', '');
+		const response = await login('testuser', 'password123');
 
-    expect(response.status).toBe(400);
+		expect(response.status).toBe(400);
 
-    const data = await response.json();
+		const data = (await response.json()) as TLoginResponse;
 
-    expect(data).toHaveProperty('errors');
-  });
+		expect(data).toHaveProperty('errors');
+		expect(data.errors).toHaveProperty('identity');
+		expect(data.errors.identity).toContain('banned');
+	});
 
-  test('should return valid JWT token with userId claim', async () => {
-    const response = await login('testowner', 'password123');
+	test('should fail with missing identity', async () => {
+		const response = await login('', 'somepassword');
 
-    expect(response.status).toBe(200);
+		expect(response.status).toBe(400);
 
-    const data = (await response.json()) as TLoginResponse;
+		const data = await response.json();
 
-    const decoded = jwt.verify(
-      data.token,
-      TEST_AUTH_TOKEN_SECRET
-    ) as jwt.JwtPayload;
+		expect(data).toHaveProperty('errors');
+	});
 
-    expect(decoded).toHaveProperty('userId');
-    expect(typeof decoded.userId).toBe('number');
-    expect(decoded).toHaveProperty('exp');
-    expect(decoded).toHaveProperty('iat');
-  });
+	test('should fail with missing password', async () => {
+		const response = await login('someidentity', '');
 
-  test('should assign default role to newly registered user', async () => {
-    const response = await login('roleuser', 'password123');
+		expect(response.status).toBe(400);
 
-    expect(response.status).toBe(200);
+		const data = await response.json();
 
-    const newUser = await tdb
-      .select()
-      .from(users)
-      .where(eq(users.identity, 'roleuser'))
-      .get();
+		expect(data).toHaveProperty('errors');
+	});
 
-    expect(newUser).toBeTruthy();
+	test('should return valid JWT token with userId claim', async () => {
+		const response = await login('testowner', 'password123');
 
-    const userRole = await tdb
-      .select()
-      .from(userRoles)
-      .where(eq(userRoles.userId, newUser!.id))
-      .get();
+		expect(response.status).toBe(200);
 
-    expect(userRole).toBeTruthy();
+		const data = (await response.json()) as TLoginResponse;
 
-    const role = await tdb
-      .select()
-      .from(roles)
-      .where(eq(roles.id, userRole!.roleId))
-      .get();
+		const decoded = jwt.verify(data.token, TEST_AUTH_TOKEN_SECRET) as jwt.JwtPayload;
 
-    expect(role?.isDefault).toBe(true);
-  });
+		expect(decoded).toHaveProperty('userId');
+		expect(typeof decoded.userId).toBe('number');
+		expect(decoded).toHaveProperty('exp');
+		expect(decoded).toHaveProperty('iat');
+	});
 
-  test('should rotate refresh token and reject reused token', async () => {
-    const response = await login('testowner', 'password123');
+	test('should assign default role to newly registered user', async () => {
+		const response = await login('roleuser', 'password123');
 
-    expect(response.status).toBe(200);
+		expect(response.status).toBe(200);
 
-    const loginData = (await response.json()) as TLoginResponse;
-    const firstRefreshToken = loginData.refreshToken;
+		const newUser = await tdb.select().from(users).where(eq(users.identity, 'roleuser')).get();
 
-    const refreshResponse = await refresh(firstRefreshToken);
+		expect(newUser).toBeTruthy();
 
-    expect(refreshResponse.status).toBe(200);
+		const userRole = await tdb.select().from(userRoles).where(eq(userRoles.userId, newUser!.id)).get();
 
-    const refreshData = (await refreshResponse.json()) as TLoginResponse;
+		expect(userRole).toBeTruthy();
 
-    expect(refreshData).toHaveProperty('token');
-    expect(refreshData).toHaveProperty('refreshToken');
-    expect(refreshData.refreshToken).not.toBe(firstRefreshToken);
+		const role = await tdb.select().from(roles).where(eq(roles.id, userRole!.roleId)).get();
 
-    const reusedResponse = await refresh(firstRefreshToken);
+		expect(role?.isDefault).toBe(true);
+	});
 
-    expect(reusedResponse.status).toBe(401);
+	test('should rotate refresh token and reject reused token', async () => {
+		const response = await login('testowner', 'password123');
 
-    const latestRefreshResponse = await refresh(refreshData.refreshToken);
+		expect(response.status).toBe(200);
 
-    expect(latestRefreshResponse.status).toBe(200);
+		const loginData = (await response.json()) as TLoginResponse;
+		const firstRefreshToken = loginData.refreshToken;
 
-    const sessions = await tdb.select().from(refreshTokens);
-    const revokedSessions = sessions.filter((session) => !!session.revokedAt);
+		const refreshResponse = await refresh(firstRefreshToken);
 
-    expect(revokedSessions.length).toBeGreaterThan(0);
-  });
+		expect(refreshResponse.status).toBe(200);
 
-  test('should allow only one concurrent refresh for the same token', async () => {
-    const response = await login('testowner', 'password123');
+		const refreshData = (await refreshResponse.json()) as TLoginResponse;
 
-    expect(response.status).toBe(200);
+		expect(refreshData).toHaveProperty('token');
+		expect(refreshData).toHaveProperty('refreshToken');
+		expect(refreshData.refreshToken).not.toBe(firstRefreshToken);
 
-    const loginData = (await response.json()) as TLoginResponse;
-    const originalRefreshToken = loginData.refreshToken;
+		const reusedResponse = await refresh(firstRefreshToken);
 
-    const [firstRefresh, secondRefresh] = await Promise.all([
-      refresh(originalRefreshToken),
-      refresh(originalRefreshToken)
-    ]);
+		expect(reusedResponse.status).toBe(401);
 
-    const statuses = [firstRefresh.status, secondRefresh.status].sort(
-      (a, b) => a - b
-    );
+		const latestRefreshResponse = await refresh(refreshData.refreshToken);
 
-    expect(statuses).toEqual([200, 401]);
+		expect(latestRefreshResponse.status).toBe(200);
 
-    const successfulResponse =
-      firstRefresh.status === 200 ? firstRefresh : secondRefresh;
-    const failedResponse =
-      firstRefresh.status === 401 ? firstRefresh : secondRefresh;
-    const successfulData = (await successfulResponse.json()) as TLoginResponse;
-    const failedData = (await failedResponse.json()) as TLoginResponse;
+		const sessions = await tdb.select().from(refreshTokens);
+		const revokedSessions = sessions.filter((session) => !!session.revokedAt);
 
-    expect(successfulData).toHaveProperty('token');
-    expect(successfulData).toHaveProperty('refreshToken');
-    expect(successfulData.refreshToken).not.toBe(originalRefreshToken);
-    expect(failedData).toHaveProperty('error', 'Invalid refresh token');
+		expect(revokedSessions.length).toBeGreaterThan(0);
+	});
 
-    const followUpRefresh = await refresh(successfulData.refreshToken);
+	test('should allow only one concurrent refresh for the same token', async () => {
+		const response = await login('testowner', 'password123');
 
-    expect(followUpRefresh.status).toBe(200);
+		expect(response.status).toBe(200);
 
-    const sessions = await tdb.select().from(refreshTokens);
-    const activeSessions = sessions.filter((session) => !session.revokedAt);
+		const loginData = (await response.json()) as TLoginResponse;
+		const originalRefreshToken = loginData.refreshToken;
 
-    expect(activeSessions).toHaveLength(1);
-  });
+		const [firstRefresh, secondRefresh] = await Promise.all([
+			refresh(originalRefreshToken),
+			refresh(originalRefreshToken),
+		]);
 
-  test('should return 401 for invalid refresh token', async () => {
-    const response = await refresh('invalid-refresh-token');
+		const statuses = [firstRefresh.status, secondRefresh.status].sort((a, b) => a - b);
 
-    expect(response.status).toBe(401);
+		expect(statuses).toEqual([200, 401]);
 
-    const data = await response.json();
+		const successfulResponse = firstRefresh.status === 200 ? firstRefresh : secondRefresh;
+		const failedResponse = firstRefresh.status === 401 ? firstRefresh : secondRefresh;
+		const successfulData = (await successfulResponse.json()) as TLoginResponse;
+		const failedData = (await failedResponse.json()) as TLoginResponse;
 
-    expect(data).toHaveProperty('error', 'Invalid refresh token');
-  });
+		expect(successfulData).toHaveProperty('token');
+		expect(successfulData).toHaveProperty('refreshToken');
+		expect(successfulData.refreshToken).not.toBe(originalRefreshToken);
+		expect(failedData).toHaveProperty('error', 'Invalid refresh token');
 
-  test('should revoke refresh token on logout', async () => {
-    const response = await login('testowner', 'password123');
+		const followUpRefresh = await refresh(successfulData.refreshToken);
 
-    expect(response.status).toBe(200);
+		expect(followUpRefresh.status).toBe(200);
 
-    const loginData = (await response.json()) as TLoginResponse;
-    const refreshToken = loginData.refreshToken;
+		const sessions = await tdb.select().from(refreshTokens);
+		const activeSessions = sessions.filter((session) => !session.revokedAt);
 
-    const logoutResponse = await logout(refreshToken);
+		expect(activeSessions).toHaveLength(1);
+	});
 
-    expect(logoutResponse.status).toBe(200);
+	test('should return 401 for invalid refresh token', async () => {
+		const response = await refresh('invalid-refresh-token');
 
-    const refreshResponse = await refresh(refreshToken);
+		expect(response.status).toBe(401);
 
-    expect(refreshResponse.status).toBe(401);
-  });
+		const data = await response.json();
 
-  test('should rate limit excessive login attempts', async () => {
-    for (let i = 0; i < 5; i++) {
-      const response = await login('testowner', 'wrongpassword');
+		expect(data).toHaveProperty('error', 'Invalid refresh token');
+	});
 
-      expect(response.status).toBe(400);
-    }
+	test('should revoke refresh token on logout', async () => {
+		const response = await login('testowner', 'password123');
 
-    const limitedResponse = await login('testowner', 'wrongpassword');
+		expect(response.status).toBe(200);
 
-    expect(limitedResponse.status).toBe(429);
-    expect(limitedResponse.headers.get('retry-after')).toBeTruthy();
+		const loginData = (await response.json()) as TLoginResponse;
+		const refreshToken = loginData.refreshToken;
 
-    const data = await limitedResponse.json();
+		const logoutResponse = await logout(refreshToken);
 
-    expect(data).toHaveProperty(
-      'error',
-      'Too many login attempts. Please try again shortly.'
-    );
-  });
+		expect(logoutResponse.status).toBe(200);
 
-  test('should reject oversized login payloads', async () => {
-    const response = await fetch(`${testsBaseUrl}/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        identity: 'a'.repeat(10_000),
-        password: 'password123'
-      })
-    });
+		const refreshResponse = await refresh(refreshToken);
 
-    expect(response.status).toBe(413);
+		expect(refreshResponse.status).toBe(401);
+	});
 
-    const data = await response.json();
+	test('should rate limit excessive login attempts', async () => {
+		for (let i = 0; i < 5; i++) {
+			const response = await login('testowner', 'wrongpassword');
 
-    expect(data).toHaveProperty('error', 'Request body too large');
-  });
+			expect(response.status).toBe(400);
+		}
 
-  test('should reject oversized refresh payloads', async () => {
-    const response = await fetch(`${testsBaseUrl}/refresh`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        refreshToken: 'a'.repeat(10_000)
-      })
-    });
+		const limitedResponse = await login('testowner', 'wrongpassword');
 
-    expect(response.status).toBe(413);
+		expect(limitedResponse.status).toBe(429);
+		expect(limitedResponse.headers.get('retry-after')).toBeTruthy();
 
-    const data = await response.json();
+		const data = await limitedResponse.json();
 
-    expect(data).toHaveProperty('error', 'Request body too large');
-  });
+		expect(data).toHaveProperty('error', 'Too many login attempts. Please try again shortly.');
+	});
 
-  test('should reject oversized logout payloads', async () => {
-    const response = await fetch(`${testsBaseUrl}/logout`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        refreshToken: 'a'.repeat(10_000)
-      })
-    });
+	test('should reject oversized login payloads', async () => {
+		const response = await fetch(`${testsBaseUrl}/login`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				identity: 'a'.repeat(10_000),
+				password: 'password123',
+			}),
+		});
 
-    expect(response.status).toBe(413);
+		expect(response.status).toBe(413);
 
-    const data = await response.json();
+		const data = await response.json();
 
-    expect(data).toHaveProperty('error', 'Request body too large');
-  });
+		expect(data).toHaveProperty('error', 'Request body too large');
+	});
+
+	test('should reject oversized refresh payloads', async () => {
+		const response = await fetch(`${testsBaseUrl}/refresh`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				refreshToken: 'a'.repeat(10_000),
+			}),
+		});
+
+		expect(response.status).toBe(413);
+
+		const data = await response.json();
+
+		expect(data).toHaveProperty('error', 'Request body too large');
+	});
+
+	test('should reject oversized logout payloads', async () => {
+		const response = await fetch(`${testsBaseUrl}/logout`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				refreshToken: 'a'.repeat(10_000),
+			}),
+		});
+
+		expect(response.status).toBe(413);
+
+		const data = await response.json();
+
+		expect(data).toHaveProperty('error', 'Request body too large');
+	});
 });

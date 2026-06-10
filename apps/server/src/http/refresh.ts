@@ -1,117 +1,103 @@
+import type http from 'node:http';
 import { sha256 } from '@sharkord/shared';
 import { and, eq, gt, isNull } from 'drizzle-orm';
-import http from 'http';
 import z from 'zod';
 import { db } from '../db';
 import { refreshTokens, users } from '../db/schema';
-import {
-  REFRESH_TOKEN_TTL_MS,
-  createAccessToken,
-  createRefreshTokenValue
-} from './auth-tokens';
+import { createAccessToken, createRefreshTokenValue, REFRESH_TOKEN_TTL_MS } from './auth-tokens';
 import { getJsonBody } from './helpers';
 
 const AUTH_REQUEST_MAX_BODY_BYTES = 8 * 1024;
 
 const zBody = z.object({
-  refreshToken: z.string().min(1, 'Refresh token is required')
+	refreshToken: z.string().min(1, 'Refresh token is required'),
 });
 
-const refreshRouteHandler = async (
-  req: http.IncomingMessage,
-  res: http.ServerResponse
-) => {
-  const { refreshToken } = zBody.parse(
-    await getJsonBody(req, { maxBytes: AUTH_REQUEST_MAX_BODY_BYTES })
-  );
-  const refreshTokenHash = await sha256(refreshToken);
-  const now = Date.now();
-  const newRefreshToken = createRefreshTokenValue();
-  const newRefreshTokenHash = await sha256(newRefreshToken);
+const refreshRouteHandler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
+	const { refreshToken } = zBody.parse(await getJsonBody(req, { maxBytes: AUTH_REQUEST_MAX_BODY_BYTES }));
+	const refreshTokenHash = await sha256(refreshToken);
+	const now = Date.now();
+	const newRefreshToken = createRefreshTokenValue();
+	const newRefreshTokenHash = await sha256(newRefreshToken);
 
-  const rotationResult = await db.transaction(async (tx) => {
-    const existingSession = await tx
-      .update(refreshTokens)
-      .set({
-        revokedAt: now,
-        updatedAt: now
-      })
-      .where(
-        and(
-          eq(refreshTokens.tokenHash, refreshTokenHash),
-          isNull(refreshTokens.revokedAt),
-          gt(refreshTokens.expiresAt, now)
-        )
-      )
-      .returning({
-        id: refreshTokens.id,
-        userId: refreshTokens.userId
-      })
-      .get();
+	const rotationResult = await db.transaction(async (tx) => {
+		const existingSession = await tx
+			.update(refreshTokens)
+			.set({
+				revokedAt: now,
+				updatedAt: now,
+			})
+			.where(
+				and(
+					eq(refreshTokens.tokenHash, refreshTokenHash),
+					isNull(refreshTokens.revokedAt),
+					gt(refreshTokens.expiresAt, now),
+				),
+			)
+			.returning({
+				id: refreshTokens.id,
+				userId: refreshTokens.userId,
+			})
+			.get();
 
-    if (!existingSession) {
-      return { status: 'invalid' as const };
-    }
+		if (!existingSession) {
+			return { status: 'invalid' as const };
+		}
 
-    const user = await tx
-      .select({
-        id: users.id,
-        banned: users.banned,
-        tokenVersion: users.tokenVersion
-      })
-      .from(users)
-      .where(eq(users.id, existingSession.userId))
-      .get();
+		const user = await tx
+			.select({
+				id: users.id,
+				banned: users.banned,
+				tokenVersion: users.tokenVersion,
+			})
+			.from(users)
+			.where(eq(users.id, existingSession.userId))
+			.get();
 
-    if (!user || user.banned) {
-      return { status: 'unauthorized' as const };
-    }
+		if (!user || user.banned) {
+			return { status: 'unauthorized' as const };
+		}
 
-    await tx.insert(refreshTokens).values({
-      userId: user.id,
-      tokenHash: newRefreshTokenHash,
-      expiresAt: now + REFRESH_TOKEN_TTL_MS,
-      createdAt: now,
-      updatedAt: now
-    });
+		await tx.insert(refreshTokens).values({
+			userId: user.id,
+			tokenHash: newRefreshTokenHash,
+			expiresAt: now + REFRESH_TOKEN_TTL_MS,
+			createdAt: now,
+			updatedAt: now,
+		});
 
-    await tx
-      .update(refreshTokens)
-      .set({
-        replacedByTokenHash: newRefreshTokenHash,
-        updatedAt: now
-      })
-      .where(eq(refreshTokens.id, existingSession.id))
-      .run();
+		await tx
+			.update(refreshTokens)
+			.set({
+				replacedByTokenHash: newRefreshTokenHash,
+				updatedAt: now,
+			})
+			.where(eq(refreshTokens.id, existingSession.id))
+			.run();
 
-    return {
-      status: 'ok' as const,
-      userId: user.id,
-      tokenVersion: user.tokenVersion
-    };
-  });
+		return {
+			status: 'ok' as const,
+			userId: user.id,
+			tokenVersion: user.tokenVersion,
+		};
+	});
 
-  if (rotationResult.status === 'invalid') {
-    res.writeHead(401, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Invalid refresh token' }));
-    return;
-  }
+	if (rotationResult.status === 'invalid') {
+		res.writeHead(401, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify({ error: 'Invalid refresh token' }));
+		return;
+	}
 
-  if (rotationResult.status === 'unauthorized') {
-    res.writeHead(401, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Unauthorized' }));
-    return;
-  }
+	if (rotationResult.status === 'unauthorized') {
+		res.writeHead(401, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify({ error: 'Unauthorized' }));
+		return;
+	}
 
-  const token = await createAccessToken(
-    rotationResult.userId,
-    rotationResult.tokenVersion
-  );
+	const token = await createAccessToken(rotationResult.userId, rotationResult.tokenVersion);
 
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(
-    JSON.stringify({ success: true, token, refreshToken: newRefreshToken })
-  );
+	res.writeHead(200, { 'Content-Type': 'application/json' });
+	res.end(JSON.stringify({ success: true, token, refreshToken: newRefreshToken }));
 };
 
 export { refreshRouteHandler };

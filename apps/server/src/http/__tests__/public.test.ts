@@ -1,9 +1,9 @@
-import { ChannelType, type TFile, type TTempFile } from '@sharkord/shared';
 import { describe, expect, test } from 'bun:test';
-import { eq } from 'drizzle-orm';
-import fs from 'fs/promises';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { beforeEach } from 'node:test';
-import path from 'path';
+import { ChannelType, type TFile, type TTempFile } from '@sharkord/shared';
+import { eq } from 'drizzle-orm';
 import { initTest, login, uploadFile } from '../../__tests__/helpers';
 import { tdb, testsBaseUrl } from '../../__tests__/setup';
 import { loadCrons } from '../../crons';
@@ -13,688 +13,617 @@ import { PUBLIC_PATH } from '../../helpers/paths';
 import { fileManager } from '../../utils/file-manager';
 
 const upload = async (file: File, token: string) => {
-  const uploadResponse = await uploadFile(file, token);
-  const uploadData = (await uploadResponse.json()) as TTempFile;
+	const uploadResponse = await uploadFile(file, token);
+	const uploadData = (await uploadResponse.json()) as TTempFile;
 
-  return uploadData;
+	return uploadData;
 };
 
-const getFileByMessageId = async (
-  messageId: number
-): Promise<TFile | undefined> => {
-  const messageFile = await tdb
-    .select()
-    .from(messageFiles)
-    .where(eq(messageFiles.messageId, messageId))
-    .get();
+const getFileByMessageId = async (messageId: number): Promise<TFile | undefined> => {
+	const messageFile = await tdb.select().from(messageFiles).where(eq(messageFiles.messageId, messageId)).get();
 
-  if (!messageFile) {
-    return undefined;
-  }
+	if (!messageFile) {
+		return undefined;
+	}
 
-  const dbFile = await tdb
-    .select()
-    .from(files)
-    .where(eq(files.id, messageFile.fileId))
-    .get();
+	const dbFile = await tdb.select().from(files).where(eq(files.id, messageFile.fileId)).get();
 
-  return dbFile;
+	return dbFile;
 };
 
 describe('/public', () => {
-  const filesToCreate = [
-    {
-      name: 'test-public.txt',
-      content: 'This is a test file for public endpoint.',
-      messageId: null as number | null,
-      tempFile: null as TTempFile | null
-    },
-    {
-      name: 'another-test.txt',
-      content: 'This is another test file.',
-      messageId: null as number | null,
-      tempFile: null as TTempFile | null
-    },
-    {
-      name: 'orphan.txt',
-      content: 'This is an orphaned file.',
-      messageId: null as number | null,
-      tempFile: null as TTempFile | null
-    }
-  ];
-
-  let token: string;
-
-  beforeEach(async () => {
-    const response = await login('testowner', 'password123');
-    const data = (await response.json()) as { token: string };
-
-    token = data.token;
-
-    for (const fileData of filesToCreate) {
-      fileData.messageId = null;
-      fileData.tempFile = null;
-    }
-
-    for (const fileData of filesToCreate) {
-      const tempFile = await upload(
-        new File([fileData.content], fileData.name, {
-          type: 'text/plain'
-        }),
-        token
-      );
-
-      fileData.tempFile = tempFile;
-    }
-
-    // add first two files to messages to make them non-orphaned
-    for (let i = 0; i < 2; i++) {
-      const { caller } = await initTest();
-
-      const messageId = await caller.messages.send({
-        content: 'Message with file',
-        channelId: 1,
-        files: [filesToCreate[i]!.tempFile!.id]
-      });
-
-      filesToCreate[i]!.messageId = messageId;
-    }
-
-    // third we save manually as orphan
-    await fileManager.saveFile(filesToCreate[2]!.tempFile!.id, 1);
-  });
-
-  test('files were created in public folder', async () => {
-    for (const fileData of filesToCreate) {
-      if (!fileData.messageId) continue;
-
-      const dbFile = await getFileByMessageId(fileData.messageId);
-
-      expect(dbFile).toBeDefined();
-
-      const filePath = path.join(PUBLIC_PATH, dbFile!.name);
-
-      expect(await fs.exists(filePath)).toBe(true);
-
-      const content = await fs.readFile(filePath, 'utf-8');
-
-      expect(content).toBe(fileData.content);
-    }
-  });
-
-  test('should serve a file successfully', async () => {
-    const file = filesToCreate[0];
-
-    expect(file).toBeDefined();
-    expect(file!.messageId).toBeDefined();
-
-    const dbFile = await getFileByMessageId(file!.messageId!);
-
-    expect(dbFile).toBeDefined();
-    expect(dbFile?.name).toBeDefined();
-
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}`
-    );
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get('Content-Type')).toInclude('text/plain');
-    expect(response.headers.get('Content-Length')).toBe(
-      dbFile!.size.toString()
-    );
-    expect(response.headers.get('Content-Disposition')).toBe(
-      `attachment; filename="${dbFile!.name}"; filename*=UTF-8''${encodeURIComponent(dbFile!.name)}`
-    );
+	const filesToCreate = [
+		{
+			name: 'test-public.txt',
+			content: 'This is a test file for public endpoint.',
+			messageId: null as number | null,
+			tempFile: null as TTempFile | null,
+		},
+		{
+			name: 'another-test.txt',
+			content: 'This is another test file.',
+			messageId: null as number | null,
+			tempFile: null as TTempFile | null,
+		},
+		{
+			name: 'orphan.txt',
+			content: 'This is an orphaned file.',
+			messageId: null as number | null,
+			tempFile: null as TTempFile | null,
+		},
+	];
 
-    const responseText = await response.text();
-
-    expect(responseText).toBe(file!.content);
-  });
+	let token: string;
+
+	beforeEach(async () => {
+		const response = await login('testowner', 'password123');
+		const data = (await response.json()) as { token: string };
+
+		token = data.token;
+
+		for (const fileData of filesToCreate) {
+			fileData.messageId = null;
+			fileData.tempFile = null;
+		}
+
+		for (const fileData of filesToCreate) {
+			const tempFile = await upload(
+				new File([fileData.content], fileData.name, {
+					type: 'text/plain',
+				}),
+				token,
+			);
+
+			fileData.tempFile = tempFile;
+		}
 
-  test('should advertise Accept-Ranges on a 200 response', async () => {
-    const file = filesToCreate[0];
-    expect(file).toBeDefined();
-    if (!file?.messageId) return;
-
-    const dbFile = await getFileByMessageId(file.messageId);
-    expect(dbFile).toBeDefined();
-    if (!dbFile) return;
-
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`
-    );
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get('Accept-Ranges')).toBe('bytes');
-  });
+		// add first two files to messages to make them non-orphaned
+		for (let i = 0; i < 2; i++) {
+			const { caller } = await initTest();
 
-  test('should serve a byte range with 206 Partial Content', async () => {
-    const file = filesToCreate[0];
-    expect(file).toBeDefined();
-    if (!file?.messageId) return;
+			const messageId = await caller.messages.send({
+				content: 'Message with file',
+				channelId: 1,
+				files: [filesToCreate[i]!.tempFile!.id],
+			});
+
+			filesToCreate[i]!.messageId = messageId;
+		}
+
+		// third we save manually as orphan
+		await fileManager.saveFile(filesToCreate[2]!.tempFile!.id, 1);
+	});
 
-    const dbFile = await getFileByMessageId(file.messageId);
-    expect(dbFile).toBeDefined();
-    if (!dbFile) return;
+	test('files were created in public folder', async () => {
+		for (const fileData of filesToCreate) {
+			if (!fileData.messageId) continue;
 
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`,
-      { headers: { Range: 'bytes=0-4' } }
-    );
+			const dbFile = await getFileByMessageId(fileData.messageId);
 
-    expect(response.status).toBe(206);
-    expect(response.headers.get('Content-Range')).toBe(
-      `bytes 0-4/${dbFile.size}`
-    );
-    expect(response.headers.get('Content-Length')).toBe('5');
-    expect(response.headers.get('Accept-Ranges')).toBe('bytes');
+			expect(dbFile).toBeDefined();
 
-    const body = await response.text();
+			const filePath = path.join(PUBLIC_PATH, dbFile!.name);
 
-    expect(body).toBe(file.content.slice(0, 5));
-  });
+			expect(await fs.exists(filePath)).toBe(true);
 
-  test('should serve a suffix range with 206 Partial Content', async () => {
-    const file = filesToCreate[0];
-    expect(file).toBeDefined();
-    if (!file?.messageId) return;
+			const content = await fs.readFile(filePath, 'utf-8');
 
-    const dbFile = await getFileByMessageId(file.messageId);
-    expect(dbFile).toBeDefined();
-    if (!dbFile) return;
+			expect(content).toBe(fileData.content);
+		}
+	});
 
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`,
-      { headers: { Range: 'bytes=-5' } }
-    );
+	test('should serve a file successfully', async () => {
+		const file = filesToCreate[0];
 
-    expect(response.status).toBe(206);
-    expect(response.headers.get('Content-Length')).toBe('5');
+		expect(file).toBeDefined();
+		expect(file!.messageId).toBeDefined();
 
-    const body = await response.text();
+		const dbFile = await getFileByMessageId(file!.messageId!);
 
-    expect(body).toBe(file.content.slice(-5));
-  });
-
-  test('should respond to HEAD with headers and no body', async () => {
-    const file = filesToCreate[0];
-    expect(file).toBeDefined();
-    if (!file?.messageId) return;
-
-    const dbFile = await getFileByMessageId(file.messageId);
-    expect(dbFile).toBeDefined();
-    if (!dbFile) return;
-
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`,
-      { method: 'HEAD' }
-    );
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get('Content-Length')).toBe(dbFile.size.toString());
-    expect(response.headers.get('Accept-Ranges')).toBe('bytes');
-
-    const body = await response.text();
-
-    expect(body).toBe('');
-  });
-
-  test('should return 416 when range is outside file bounds', async () => {
-    const file = filesToCreate[0];
-    expect(file).toBeDefined();
-    if (!file?.messageId) return;
-
-    const dbFile = await getFileByMessageId(file.messageId);
-    expect(dbFile).toBeDefined();
-    if (!dbFile) return;
-
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`,
-      { headers: { Range: `bytes=${dbFile.size + 10}-${dbFile.size + 20}` } }
-    );
+		expect(dbFile).toBeDefined();
+		expect(dbFile?.name).toBeDefined();
 
-    expect(response.status).toBe(416);
-    expect(response.headers.get('Content-Range')).toBe(
-      `bytes */${dbFile.size}`
-    );
-  });
+		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}`);
 
-  test('should return 404 when file not found in database', async () => {
-    const response = await fetch(`${testsBaseUrl}/public/nonexistent-file.txt`);
+		expect(response.status).toBe(200);
+		expect(response.headers.get('Content-Type')).toInclude('text/plain');
+		expect(response.headers.get('Content-Length')).toBe(dbFile!.size.toString());
+		expect(response.headers.get('Content-Disposition')).toBe(
+			`attachment; filename="${dbFile!.name}"; filename*=UTF-8''${encodeURIComponent(dbFile!.name)}`,
+		);
 
-    expect(response.status).toBe(404);
+		const responseText = await response.text();
 
-    const data = (await response.json()) as { error: string };
+		expect(responseText).toBe(file!.content);
+	});
 
-    expect(data).toHaveProperty('error', 'File not found');
-  });
+	test('should advertise Accept-Ranges on a 200 response', async () => {
+		const file = filesToCreate[0];
+		expect(file).toBeDefined();
+		if (!file?.messageId) return;
 
-  test('should return 404 when file is orphaned', async () => {
-    const orphanFile = filesToCreate[2];
+		const dbFile = await getFileByMessageId(file.messageId);
+		expect(dbFile).toBeDefined();
+		if (!dbFile) return;
 
-    expect(orphanFile).toBeDefined();
-    expect(orphanFile!.tempFile).toBeDefined();
-    expect(orphanFile!.messageId).toBeNull();
+		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`);
 
-    const dbFile = await tdb
-      .select()
-      .from(files)
-      .where(eq(files.md5, orphanFile!.tempFile!.md5))
-      .get();
+		expect(response.status).toBe(200);
+		expect(response.headers.get('Accept-Ranges')).toBe('bytes');
+	});
 
-    expect(dbFile).toBeDefined();
+	test('should serve a byte range with 206 Partial Content', async () => {
+		const file = filesToCreate[0];
+		expect(file).toBeDefined();
+		if (!file?.messageId) return;
 
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}`
-    );
+		const dbFile = await getFileByMessageId(file.messageId);
+		expect(dbFile).toBeDefined();
+		if (!dbFile) return;
 
-    expect(response.status).toBe(404);
+		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`, {
+			headers: { Range: 'bytes=0-4' },
+		});
 
-    const data = (await response.json()) as { error: string };
+		expect(response.status).toBe(206);
+		expect(response.headers.get('Content-Range')).toBe(`bytes 0-4/${dbFile.size}`);
+		expect(response.headers.get('Content-Length')).toBe('5');
+		expect(response.headers.get('Accept-Ranges')).toBe('bytes');
 
-    expect(data).toHaveProperty('error', 'File not found');
-  });
+		const body = await response.text();
 
-  test('should return 404 when file exists in database but not on disk', async () => {
-    const missingFileName = `test-missing-${Date.now()}.txt`;
+		expect(body).toBe(file.content.slice(0, 5));
+	});
 
-    const [message] = await tdb
-      .insert(messages)
-      .values({
-        userId: 1,
-        channelId: 1,
-        content: 'Message with missing file',
-        createdAt: Date.now()
-      })
-      .returning();
+	test('should serve a suffix range with 206 Partial Content', async () => {
+		const file = filesToCreate[0];
+		expect(file).toBeDefined();
+		if (!file?.messageId) return;
 
-    const [missingFile] = await tdb
-      .insert(files)
-      .values({
-        name: missingFileName,
-        originalName: 'missing.txt',
-        md5: 'missing-md5',
-        userId: 1,
-        size: 100,
-        mimeType: 'text/plain',
-        extension: '.txt',
-        createdAt: Date.now()
-      })
-      .returning();
+		const dbFile = await getFileByMessageId(file.messageId);
+		expect(dbFile).toBeDefined();
+		if (!dbFile) return;
 
-    await tdb.insert(messageFiles).values({
-      messageId: message!.id,
-      fileId: missingFile!.id,
-      createdAt: Date.now()
-    });
+		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`, {
+			headers: { Range: 'bytes=-5' },
+		});
 
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(missingFileName)}`
-    );
+		expect(response.status).toBe(206);
+		expect(response.headers.get('Content-Length')).toBe('5');
 
-    expect(response.status).toBe(404);
+		const body = await response.text();
 
-    const data = (await response.json()) as { error: string };
+		expect(body).toBe(file.content.slice(-5));
+	});
 
-    expect(data).toHaveProperty('error', 'File not found on disk');
-  });
+	test('should respond to HEAD with headers and no body', async () => {
+		const file = filesToCreate[0];
+		expect(file).toBeDefined();
+		if (!file?.messageId) return;
 
-  test('should return 404 when URL is invalid', async () => {
-    const response = await fetch(`${testsBaseUrl}/public/`);
+		const dbFile = await getFileByMessageId(file.messageId);
+		expect(dbFile).toBeDefined();
+		if (!dbFile) return;
 
-    expect(response.status).toBe(404);
-  });
+		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`, { method: 'HEAD' });
 
-  test('should delete file when message is deleted', async () => {
-    const orphanFile = filesToCreate[0];
+		expect(response.status).toBe(200);
+		expect(response.headers.get('Content-Length')).toBe(dbFile.size.toString());
+		expect(response.headers.get('Accept-Ranges')).toBe('bytes');
 
-    const dbFile = await getFileByMessageId(orphanFile!.messageId!);
+		const body = await response.text();
 
-    expect(dbFile).toBeDefined();
+		expect(body).toBe('');
+	});
 
-    // file exists and it's linked to a message
-    expect(await fs.exists(path.join(PUBLIC_PATH, dbFile!.name))).toBe(true);
+	test('should return 416 when range is outside file bounds', async () => {
+		const file = filesToCreate[0];
+		expect(file).toBeDefined();
+		if (!file?.messageId) return;
 
-    const { caller } = await initTest();
+		const dbFile = await getFileByMessageId(file.messageId);
+		expect(dbFile).toBeDefined();
+		if (!dbFile) return;
 
-    await caller.messages.delete({
-      messageId: orphanFile!.messageId!
-    });
+		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}`, {
+			headers: { Range: `bytes=${dbFile.size + 10}-${dbFile.size + 20}` },
+		});
 
-    const afterDbFile = await tdb
-      .select()
-      .from(files)
-      .where(eq(files.id, dbFile!.id))
-      .get();
+		expect(response.status).toBe(416);
+		expect(response.headers.get('Content-Range')).toBe(`bytes */${dbFile.size}`);
+	});
 
-    // file record is deleted
-    expect(afterDbFile).toBeUndefined();
+	test('should return 404 when file not found in database', async () => {
+		const response = await fetch(`${testsBaseUrl}/public/nonexistent-file.txt`);
 
-    // file is deleted from disk
-    expect(await fs.exists(path.join(PUBLIC_PATH, dbFile!.name))).toBe(false);
-  });
+		expect(response.status).toBe(404);
 
-  test('should delete file inside message when channel is deleted', async () => {
-    const orphanFile = filesToCreate[1];
+		const data = (await response.json()) as { error: string };
 
-    const dbFile = await getFileByMessageId(orphanFile!.messageId!);
+		expect(data).toHaveProperty('error', 'File not found');
+	});
 
-    expect(dbFile).toBeDefined();
+	test('should return 404 when file is orphaned', async () => {
+		const orphanFile = filesToCreate[2];
 
-    // file exists and it's linked to a message
-    expect(await fs.exists(path.join(PUBLIC_PATH, dbFile!.name))).toBe(true);
+		expect(orphanFile).toBeDefined();
+		expect(orphanFile!.tempFile).toBeDefined();
+		expect(orphanFile!.messageId).toBeNull();
 
-    const { caller } = await initTest();
+		const dbFile = await tdb.select().from(files).where(eq(files.md5, orphanFile!.tempFile!.md5)).get();
 
-    await caller.channels.delete({
-      channelId: 1
-    });
+		expect(dbFile).toBeDefined();
 
-    // load crons here, it will run the file cleanup cron job
-    await loadCrons();
+		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}`);
 
-    await Bun.sleep(1000); // wait a bit for cron to finish
+		expect(response.status).toBe(404);
 
-    const afterDbFile = await tdb
-      .select()
-      .from(files)
-      .where(eq(files.id, dbFile!.id))
-      .get();
+		const data = (await response.json()) as { error: string };
 
-    // file record is deleted
-    expect(afterDbFile).toBeUndefined();
+		expect(data).toHaveProperty('error', 'File not found');
+	});
 
-    // file is deleted from disk
-    expect(await fs.exists(path.join(PUBLIC_PATH, dbFile!.name))).toBe(false);
-  });
+	test('should return 404 when file exists in database but not on disk', async () => {
+		const missingFileName = `test-missing-${Date.now()}.txt`;
 
-  test('should return 403 when trying to access a private channel file without token', async () => {
-    const { caller } = await initTest();
+		const [message] = await tdb
+			.insert(messages)
+			.values({
+				userId: 1,
+				channelId: 1,
+				content: 'Message with missing file',
+				createdAt: Date.now(),
+			})
+			.returning();
 
-    const channelId = await caller.channels.add({
-      name: 'Private Channel',
-      categoryId: 1,
-      type: ChannelType.TEXT
-    });
+		const [missingFile] = await tdb
+			.insert(files)
+			.values({
+				name: missingFileName,
+				originalName: 'missing.txt',
+				md5: 'missing-md5',
+				userId: 1,
+				size: 100,
+				mimeType: 'text/plain',
+				extension: '.txt',
+				createdAt: Date.now(),
+			})
+			.returning();
 
-    await caller.channels.update({
-      channelId: channelId,
-      private: true
-    });
+		await tdb.insert(messageFiles).values({
+			messageId: message!.id,
+			fileId: missingFile!.id,
+			createdAt: Date.now(),
+		});
 
-    const channel = await tdb
-      .select()
-      .from(channels)
-      .where(eq(channels.id, channelId))
-      .get();
+		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(missingFileName)}`);
 
-    expect(channel).toBeDefined();
-    expect(channel?.private).toBe(true);
+		expect(response.status).toBe(404);
 
-    const tempFile = await upload(
-      new File(['Private file content'], 'private-file.txt', {
-        type: 'text/plain'
-      }),
-      token
-    );
+		const data = (await response.json()) as { error: string };
 
-    const messageId = await caller.messages.send({
-      content: 'Message with private file',
-      channelId,
-      files: [tempFile.id]
-    });
+		expect(data).toHaveProperty('error', 'File not found on disk');
+	});
 
-    const dbFile = await getFileByMessageId(messageId);
+	test('should return 404 when URL is invalid', async () => {
+		const response = await fetch(`${testsBaseUrl}/public/`);
 
-    expect(dbFile).toBeDefined();
+		expect(response.status).toBe(404);
+	});
 
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}`
-    );
+	test('should delete file when message is deleted', async () => {
+		const orphanFile = filesToCreate[0];
 
-    expect(response.status).toBe(403);
+		const dbFile = await getFileByMessageId(orphanFile!.messageId!);
 
-    const data = (await response.json()) as { error: string };
+		expect(dbFile).toBeDefined();
 
-    expect(data).toHaveProperty('error', 'Forbidden');
-  });
+		// file exists and it's linked to a message
+		expect(await fs.exists(path.join(PUBLIC_PATH, dbFile!.name))).toBe(true);
 
-  test('should return 403 when trying to access a private channel file with invalid token', async () => {
-    const { caller } = await initTest();
+		const { caller } = await initTest();
 
-    const channelId = await caller.channels.add({
-      name: 'Private Channel',
-      categoryId: 1,
-      type: ChannelType.TEXT
-    });
+		await caller.messages.delete({
+			messageId: orphanFile!.messageId!,
+		});
 
-    await caller.channels.update({
-      channelId: channelId,
-      private: true
-    });
+		const afterDbFile = await tdb.select().from(files).where(eq(files.id, dbFile!.id)).get();
 
-    const tempFile = await upload(
-      new File(['Private file content'], 'private-file.txt', {
-        type: 'text/plain'
-      }),
-      token
-    );
+		// file record is deleted
+		expect(afterDbFile).toBeUndefined();
 
-    const messageId = await caller.messages.send({
-      content: 'Message with private file',
-      channelId,
-      files: [tempFile.id]
-    });
+		// file is deleted from disk
+		expect(await fs.exists(path.join(PUBLIC_PATH, dbFile!.name))).toBe(false);
+	});
 
-    const dbFile = await getFileByMessageId(messageId);
+	test('should delete file inside message when channel is deleted', async () => {
+		const orphanFile = filesToCreate[1];
 
-    expect(dbFile).toBeDefined();
+		const dbFile = await getFileByMessageId(orphanFile!.messageId!);
 
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}?accessToken=invalid-token-xyz`
-    );
+		expect(dbFile).toBeDefined();
 
-    expect(response.status).toBe(403);
+		// file exists and it's linked to a message
+		expect(await fs.exists(path.join(PUBLIC_PATH, dbFile!.name))).toBe(true);
 
-    const data = (await response.json()) as { error: string };
+		const { caller } = await initTest();
 
-    expect(data).toHaveProperty('error', 'Forbidden');
-  });
+		await caller.channels.delete({
+			channelId: 1,
+		});
 
-  test('should return 200 when accessing a private channel file with valid token', async () => {
-    const { caller } = await initTest();
+		// load crons here, it will run the file cleanup cron job
+		await loadCrons();
 
-    const channelId = await caller.channels.add({
-      name: 'Private Channel',
-      categoryId: 1,
-      type: ChannelType.TEXT
-    });
+		await Bun.sleep(1000); // wait a bit for cron to finish
 
-    await caller.channels.update({
-      channelId: channelId,
-      private: true
-    });
+		const afterDbFile = await tdb.select().from(files).where(eq(files.id, dbFile!.id)).get();
 
-    const channel = await tdb
-      .select()
-      .from(channels)
-      .where(eq(channels.id, channelId))
-      .get();
+		// file record is deleted
+		expect(afterDbFile).toBeUndefined();
 
-    expect(channel).toBeDefined();
-    expect(channel?.private).toBe(true);
-    expect(channel?.fileAccessToken).toBeDefined();
+		// file is deleted from disk
+		expect(await fs.exists(path.join(PUBLIC_PATH, dbFile!.name))).toBe(false);
+	});
 
-    const fileContent = 'Private file content';
-    const tempFile = await upload(
-      new File([fileContent], 'private-file.txt', {
-        type: 'text/plain'
-      }),
-      token
-    );
+	test('should return 403 when trying to access a private channel file without token', async () => {
+		const { caller } = await initTest();
 
-    const messageId = await caller.messages.send({
-      content: 'Message with private file',
-      channelId,
-      files: [tempFile.id]
-    });
+		const channelId = await caller.channels.add({
+			name: 'Private Channel',
+			categoryId: 1,
+			type: ChannelType.TEXT,
+		});
 
-    const dbFile = await getFileByMessageId(messageId);
+		await caller.channels.update({
+			channelId: channelId,
+			private: true,
+		});
 
-    expect(dbFile).toBeDefined();
+		const channel = await tdb.select().from(channels).where(eq(channels.id, channelId)).get();
 
-    const validToken = generateFileToken(dbFile!.id, channel!.fileAccessToken);
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}?accessToken=${validToken}`
-    );
+		expect(channel).toBeDefined();
+		expect(channel?.private).toBe(true);
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get('Content-Type')).toInclude('text/plain');
+		const tempFile = await upload(
+			new File(['Private file content'], 'private-file.txt', {
+				type: 'text/plain',
+			}),
+			token,
+		);
 
-    const responseText = await response.text();
+		const messageId = await caller.messages.send({
+			content: 'Message with private file',
+			channelId,
+			files: [tempFile.id],
+		});
 
-    expect(responseText).toBe(fileContent);
-  });
+		const dbFile = await getFileByMessageId(messageId);
 
-  test('should return 403 when using token from different channel', async () => {
-    const { caller } = await initTest();
+		expect(dbFile).toBeDefined();
 
-    const channelId1 = await caller.channels.add({
-      name: 'Private Chan 1',
-      categoryId: 1,
-      type: ChannelType.TEXT
-    });
+		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}`);
 
-    await caller.channels.update({
-      channelId: channelId1,
-      private: true
-    });
+		expect(response.status).toBe(403);
 
-    const channelId2 = await caller.channels.add({
-      name: 'Private Chan 2',
-      categoryId: 1,
-      type: ChannelType.TEXT
-    });
+		const data = (await response.json()) as { error: string };
 
-    await caller.channels.update({
-      channelId: channelId2,
-      private: true
-    });
+		expect(data).toHaveProperty('error', 'Forbidden');
+	});
 
-    const channel1 = await tdb
-      .select()
-      .from(channels)
-      .where(eq(channels.id, channelId1))
-      .get();
+	test('should return 403 when trying to access a private channel file with invalid token', async () => {
+		const { caller } = await initTest();
 
-    const channel2 = await tdb
-      .select()
-      .from(channels)
-      .where(eq(channels.id, channelId2))
-      .get();
+		const channelId = await caller.channels.add({
+			name: 'Private Channel',
+			categoryId: 1,
+			type: ChannelType.TEXT,
+		});
 
-    expect(channel1).toBeDefined();
-    expect(channel2).toBeDefined();
-    expect(channel1?.fileAccessToken).not.toBe(channel2?.fileAccessToken);
+		await caller.channels.update({
+			channelId: channelId,
+			private: true,
+		});
 
-    const tempFile = await upload(
-      new File(['Private file content'], 'private-file.txt', {
-        type: 'text/plain'
-      }),
-      token
-    );
+		const tempFile = await upload(
+			new File(['Private file content'], 'private-file.txt', {
+				type: 'text/plain',
+			}),
+			token,
+		);
 
-    const messageId = await caller.messages.send({
-      content: 'Message with private file',
-      channelId: channelId1,
-      files: [tempFile.id]
-    });
+		const messageId = await caller.messages.send({
+			content: 'Message with private file',
+			channelId,
+			files: [tempFile.id],
+		});
 
-    const dbFile = await getFileByMessageId(messageId);
+		const dbFile = await getFileByMessageId(messageId);
 
-    expect(dbFile).toBeDefined();
+		expect(dbFile).toBeDefined();
 
-    const wrongChannelToken = generateFileToken(
-      dbFile!.id,
-      channel2!.fileAccessToken
-    );
+		const response = await fetch(
+			`${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}?accessToken=invalid-token-xyz`,
+		);
 
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}?accessToken=${wrongChannelToken}`
-    );
+		expect(response.status).toBe(403);
 
-    expect(response.status).toBe(403);
+		const data = (await response.json()) as { error: string };
 
-    const data = (await response.json()) as { error: string };
+		expect(data).toHaveProperty('error', 'Forbidden');
+	});
 
-    expect(data).toHaveProperty('error', 'Forbidden');
-  });
+	test('should return 200 when accessing a private channel file with valid token', async () => {
+		const { caller } = await initTest();
 
-  test('should allow access to public channel files without token', async () => {
-    const { caller } = await initTest();
+		const channelId = await caller.channels.add({
+			name: 'Private Channel',
+			categoryId: 1,
+			type: ChannelType.TEXT,
+		});
 
-    const channelId = await caller.channels.add({
-      name: 'Public Channel',
-      categoryId: 1,
-      type: ChannelType.TEXT
-    });
+		await caller.channels.update({
+			channelId: channelId,
+			private: true,
+		});
 
-    const channel = await tdb
-      .select()
-      .from(channels)
-      .where(eq(channels.id, channelId))
-      .get();
+		const channel = await tdb.select().from(channels).where(eq(channels.id, channelId)).get();
 
-    expect(channel).toBeDefined();
-    expect(channel?.private).toBe(false);
+		expect(channel).toBeDefined();
+		expect(channel?.private).toBe(true);
+		expect(channel?.fileAccessToken).toBeDefined();
 
-    const fileContent = 'Public file content';
-    const tempFile = await upload(
-      new File([fileContent], 'public-file.txt', {
-        type: 'text/plain'
-      }),
-      token
-    );
+		const fileContent = 'Private file content';
+		const tempFile = await upload(
+			new File([fileContent], 'private-file.txt', {
+				type: 'text/plain',
+			}),
+			token,
+		);
 
-    const messageId = await caller.messages.send({
-      content: 'Message with public file',
-      channelId,
-      files: [tempFile.id]
-    });
+		const messageId = await caller.messages.send({
+			content: 'Message with private file',
+			channelId,
+			files: [tempFile.id],
+		});
 
-    const dbFile = await getFileByMessageId(messageId);
+		const dbFile = await getFileByMessageId(messageId);
 
-    expect(dbFile).toBeDefined();
+		expect(dbFile).toBeDefined();
 
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}`
-    );
+		const validToken = generateFileToken(dbFile!.id, channel!.fileAccessToken);
+		const response = await fetch(
+			`${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}?accessToken=${validToken}`,
+		);
 
-    expect(response.status).toBe(200);
+		expect(response.status).toBe(200);
+		expect(response.headers.get('Content-Type')).toInclude('text/plain');
 
-    const responseText = await response.text();
+		const responseText = await response.text();
 
-    expect(responseText).toBe(fileContent);
-  });
+		expect(responseText).toBe(fileContent);
+	});
 
-  test('should allow access to non-message files without token', async () => {
-    const file = filesToCreate[0];
+	test('should return 403 when using token from different channel', async () => {
+		const { caller } = await initTest();
 
-    expect(file).toBeDefined();
-    expect(file!.messageId).toBeDefined();
+		const channelId1 = await caller.channels.add({
+			name: 'Private Chan 1',
+			categoryId: 1,
+			type: ChannelType.TEXT,
+		});
 
-    const dbFile = await getFileByMessageId(file!.messageId!);
+		await caller.channels.update({
+			channelId: channelId1,
+			private: true,
+		});
 
-    expect(dbFile).toBeDefined();
+		const channelId2 = await caller.channels.add({
+			name: 'Private Chan 2',
+			categoryId: 1,
+			type: ChannelType.TEXT,
+		});
 
-    const response = await fetch(
-      `${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}`
-    );
+		await caller.channels.update({
+			channelId: channelId2,
+			private: true,
+		});
 
-    expect(response.status).toBe(200);
+		const channel1 = await tdb.select().from(channels).where(eq(channels.id, channelId1)).get();
 
-    const responseText = await response.text();
+		const channel2 = await tdb.select().from(channels).where(eq(channels.id, channelId2)).get();
 
-    expect(responseText).toBe(file!.content);
-  });
+		expect(channel1).toBeDefined();
+		expect(channel2).toBeDefined();
+		expect(channel1?.fileAccessToken).not.toBe(channel2?.fileAccessToken);
+
+		const tempFile = await upload(
+			new File(['Private file content'], 'private-file.txt', {
+				type: 'text/plain',
+			}),
+			token,
+		);
+
+		const messageId = await caller.messages.send({
+			content: 'Message with private file',
+			channelId: channelId1,
+			files: [tempFile.id],
+		});
+
+		const dbFile = await getFileByMessageId(messageId);
+
+		expect(dbFile).toBeDefined();
+
+		const wrongChannelToken = generateFileToken(dbFile!.id, channel2!.fileAccessToken);
+
+		const response = await fetch(
+			`${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}?accessToken=${wrongChannelToken}`,
+		);
+
+		expect(response.status).toBe(403);
+
+		const data = (await response.json()) as { error: string };
+
+		expect(data).toHaveProperty('error', 'Forbidden');
+	});
+
+	test('should allow access to public channel files without token', async () => {
+		const { caller } = await initTest();
+
+		const channelId = await caller.channels.add({
+			name: 'Public Channel',
+			categoryId: 1,
+			type: ChannelType.TEXT,
+		});
+
+		const channel = await tdb.select().from(channels).where(eq(channels.id, channelId)).get();
+
+		expect(channel).toBeDefined();
+		expect(channel?.private).toBe(false);
+
+		const fileContent = 'Public file content';
+		const tempFile = await upload(
+			new File([fileContent], 'public-file.txt', {
+				type: 'text/plain',
+			}),
+			token,
+		);
+
+		const messageId = await caller.messages.send({
+			content: 'Message with public file',
+			channelId,
+			files: [tempFile.id],
+		});
+
+		const dbFile = await getFileByMessageId(messageId);
+
+		expect(dbFile).toBeDefined();
+
+		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}`);
+
+		expect(response.status).toBe(200);
+
+		const responseText = await response.text();
+
+		expect(responseText).toBe(fileContent);
+	});
+
+	test('should allow access to non-message files without token', async () => {
+		const file = filesToCreate[0];
+
+		expect(file).toBeDefined();
+		expect(file!.messageId).toBeDefined();
+
+		const dbFile = await getFileByMessageId(file!.messageId!);
+
+		expect(dbFile).toBeDefined();
+
+		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}`);
+
+		expect(response.status).toBe(200);
+
+		const responseText = await response.text();
+
+		expect(responseText).toBe(file!.content);
+	});
 });

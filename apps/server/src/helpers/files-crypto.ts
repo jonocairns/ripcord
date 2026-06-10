@@ -1,32 +1,22 @@
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 import { getServerTokenSync } from '../db/queries/server';
 
-const generateFileToken = (
-  fileId: number,
-  channelAccessToken: string
-): string => {
-  const hmac = crypto.createHmac('sha256', getServerTokenSync());
+const generateFileToken = (fileId: number, channelAccessToken: string): string => {
+	const hmac = crypto.createHmac('sha256', getServerTokenSync());
 
-  hmac.update(`${fileId}:${channelAccessToken}`);
+	hmac.update(`${fileId}:${channelAccessToken}`);
 
-  return hmac.digest('hex');
+	return hmac.digest('hex');
 };
 
-const verifyFileToken = (
-  fileId: number,
-  channelAccessToken: string,
-  providedToken: string
-): boolean => {
-  const expectedToken = generateFileToken(fileId, channelAccessToken);
+const verifyFileToken = (fileId: number, channelAccessToken: string, providedToken: string): boolean => {
+	const expectedToken = generateFileToken(fileId, channelAccessToken);
 
-  if (expectedToken.length !== providedToken.length) {
-    return false;
-  }
+	if (expectedToken.length !== providedToken.length) {
+		return false;
+	}
 
-  return crypto.timingSafeEqual(
-    Buffer.from(expectedToken),
-    Buffer.from(providedToken)
-  );
+	return crypto.timingSafeEqual(Buffer.from(expectedToken), Buffer.from(providedToken));
 };
 
 export { generateFileToken, verifyFileToken };

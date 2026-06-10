@@ -3,18 +3,18 @@ import LinkifyIt from 'linkify-it';
 const linkify = new LinkifyIt();
 
 const extractUrls = (content: string): string[] => {
-  try {
-    const matches = linkify.match(content);
+	try {
+		const matches = linkify.match(content);
 
-    const urls = matches ? matches.map((m) => m.url) : [];
+		const urls = matches ? matches.map((m) => m.url) : [];
 
-    // remove duplicates
-    return Array.from(new Set(urls));
-  } catch {
-    // ignore
-  }
+		// remove duplicates
+		return Array.from(new Set(urls));
+	} catch {
+		// ignore
+	}
 
-  return [];
+	return [];
 };
 
 export { extractUrls };
