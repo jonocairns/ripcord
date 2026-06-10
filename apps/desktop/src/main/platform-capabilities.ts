@@ -130,28 +130,17 @@ const resolvePreparedScreenAudioMode = (
   selection: TScreenShareSelection,
   capabilities: TDesktopCapabilities,
 ): TResolvedScreenAudioMode => {
-  if (
-    selection.audioMode === "app" &&
-    selection.sourceId.startsWith("screen:")
-  ) {
-    const fallbackMode =
-      capabilities.systemAudio === "unsupported" ? "none" : "system";
-
-    return {
-      requestedMode: selection.audioMode,
-      effectiveMode: fallbackMode,
-      warning:
-        fallbackMode === "none"
-          ? "Per-app audio is not available when sharing an entire display. Continuing without shared audio."
-          : "Per-app audio is not available when sharing an entire display. Falling back to system audio.",
-    };
-  }
-
   const resolved = resolveScreenAudioMode(selection.audioMode, capabilities);
+
+  // Per-app audio is process-loopback capture, so it works while sharing a whole
+  // display — but a display has no window owner to infer the target from, so the
+  // user must have explicitly picked one. That mirrors the Linux case, where no
+  // owner inference exists either. Without an explicit target, fall back.
+  const isDisplaySource = selection.sourceId.startsWith("screen:");
   const requiresExplicitAppTarget =
     resolved.effectiveMode === "app" &&
     !selection.appAudioTargetId &&
-    capabilities.platform === "linux";
+    (capabilities.platform === "linux" || isDisplaySource);
 
   if (!requiresExplicitAppTarget) {
     return resolved;
@@ -159,8 +148,9 @@ const resolvePreparedScreenAudioMode = (
 
   const fallbackMode =
     capabilities.systemAudio === "unsupported" ? "none" : "system";
-  const warningPrefix =
-    "Per-app audio on Linux requires choosing a running app audio target.";
+  const warningPrefix = isDisplaySource
+    ? "Per-app audio when sharing a display requires choosing a running app audio target."
+    : "Per-app audio on Linux requires choosing a running app audio target.";
 
   return {
     requestedMode: selection.audioMode,
