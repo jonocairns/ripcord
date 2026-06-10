@@ -304,6 +304,17 @@ const ScreenSharePickerDialog = memo(
 			});
 		}, [isOpen, sources]);
 
+		// Drop the app-audio target when the user picks a different source. Keyed on
+		// `selectedSourceId`, NOT `sources`, so the phase-2 thumbnail merge (which
+		// keeps the selected id stable) doesn't wipe a valid choice.
+		useEffect(() => {
+			if (!selectedSourceId) {
+				return;
+			}
+
+			setSelectedAppAudioTargetId(undefined);
+		}, [selectedSourceId]);
+
 		useEffect(() => {
 			if (!isOpen || !desktopBridge) {
 				return;
@@ -534,9 +545,11 @@ const ScreenSharePickerDialog = memo(
 
 								{isDisplaySource ? (
 									<>
-										<p className="text-xs text-muted-foreground">
-											Share all system audio, or isolate a single running app's audio.
-										</p>
+										{!loadingAppAudioTargets && (
+											<p className="text-xs text-muted-foreground">
+												Share all system audio, or isolate a single running app's audio.
+											</p>
+										)}
 
 										{!loadingAppAudioTargets && (
 											<Select
