@@ -868,15 +868,23 @@ const registerIpcHandlers = () => {
 // are deliberately NOT set: the mediasoup SFU (3.19.x) does not support routing
 // video/H265, so offering it from the client would only produce a codec the
 // router rejects. Revisit if/when the SFU gains H265 support.
+// WGC (Windows Graphics Capture) capturer flags. The legacy BitBlt/GDI window
+// capturer returns black frames for DirectX/GPU-composited windows (most games),
+// so without these a per-window share of a GPU-rendered game shows up black.
+// Routing capture through WGC (Win10 2004+) lets those windows capture correctly.
+// Windows-only: the features are no-ops elsewhere, but keep the list clean since
+// the WGC code path only exists on Windows.
+const ENABLE_FEATURES: ReadonlyArray<string> = [
+  "AcceleratedVideoEncoder",
+  "D3D12VideoEncodeAccelerator",
+  "WebRtcAV1HWEncode",
+  ...(process.platform === "win32"
+    ? ["AllowWgcScreenCapturer", "AllowWgcWindowCapturer"]
+    : []),
+];
+
 const GPU_COMMAND_LINE_SWITCHES: ReadonlyArray<readonly [string, string]> = [
-  [
-    "enable-features",
-    [
-      "AcceleratedVideoEncoder",
-      "D3D12VideoEncodeAccelerator",
-      "WebRtcAV1HWEncode",
-    ].join(","),
-  ],
+  ["enable-features", ENABLE_FEATURES.join(",")],
   // Needed on Windows to let the D3D12 video-encode accelerator initialize on
   // GPUs Chromium blocklisted conservatively. Keep it Windows-only: on Linux it
   // can re-enable Mesa configs Chromium blocked for stability reasons.
