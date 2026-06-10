@@ -1,172 +1,134 @@
-import fs from "fs/promises";
-import path from "path";
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const sidecarDir = path.resolve(__dirname, "..", "sidecar");
-const manifestPath = path.resolve(sidecarDir, "Cargo.toml");
+const sidecarDir = path.resolve(__dirname, '..', 'sidecar');
+const manifestPath = path.resolve(sidecarDir, 'Cargo.toml');
 const args = process.argv.slice(2);
 
-const isRelease = args.includes("--release");
-const optional = args.includes("--optional");
-const profile = isRelease ? "release" : "debug";
-const binaryName =
-  process.platform === "win32"
-    ? "sharkord-capture-sidecar.exe"
-    : "sharkord-capture-sidecar";
-const binarySourcePath = path.resolve(
-  sidecarDir,
-  "target",
-  profile,
-  binaryName,
-);
-const binaryTargetPath = path.resolve(
-  sidecarDir,
-  "bin",
-  process.platform,
-  binaryName,
-);
-const macosHelperName = "sharkord-capture-sidecar-macos-helper";
-const macosHelperSourcePath = path.resolve(
-  sidecarDir,
-  "src",
-  "macos_app_audio_capture.swift",
-);
-const macosHelperTargetPath = path.resolve(
-  sidecarDir,
-  "bin",
-  process.platform,
-  macosHelperName,
-);
+const isRelease = args.includes('--release');
+const optional = args.includes('--optional');
+const profile = isRelease ? 'release' : 'debug';
+const binaryName = process.platform === 'win32' ? 'sharkord-capture-sidecar.exe' : 'sharkord-capture-sidecar';
+const binarySourcePath = path.resolve(sidecarDir, 'target', profile, binaryName);
+const binaryTargetPath = path.resolve(sidecarDir, 'bin', process.platform, binaryName);
+const macosHelperName = 'sharkord-capture-sidecar-macos-helper';
+const macosHelperSourcePath = path.resolve(sidecarDir, 'src', 'macos_app_audio_capture.swift');
+const macosHelperTargetPath = path.resolve(sidecarDir, 'bin', process.platform, macosHelperName);
 const macosHelperDeploymentTarget =
-  process.arch === "arm64"
-    ? "arm64-apple-macos13.0"
-    : process.arch === "x64"
-      ? "x86_64-apple-macos13.0"
-      : undefined;
+	process.arch === 'arm64' ? 'arm64-apple-macos13.0' : process.arch === 'x64' ? 'x86_64-apple-macos13.0' : undefined;
 
 const runCargoBuild = () => {
-  const cargoCheck = spawnSync("cargo", ["--version"], {
-    cwd: sidecarDir,
-    stdio: "pipe",
-  });
+	const cargoCheck = spawnSync('cargo', ['--version'], {
+		cwd: sidecarDir,
+		stdio: 'pipe',
+	});
 
-  if (cargoCheck.error || cargoCheck.status !== 0) {
-    if (optional) {
-      console.warn(
-        "[desktop] Rust sidecar build skipped: cargo is not installed.",
-      );
-      return false;
-    }
+	if (cargoCheck.error || cargoCheck.status !== 0) {
+		if (optional) {
+			console.warn('[desktop] Rust sidecar build skipped: cargo is not installed.');
+			return false;
+		}
 
-    throw new Error(
-      "cargo is required to build the capture sidecar. Install Rust toolchain first.",
-    );
-  }
+		throw new Error('cargo is required to build the capture sidecar. Install Rust toolchain first.');
+	}
 
-  const buildArgs = ["build", "--manifest-path", manifestPath];
+	const buildArgs = ['build', '--manifest-path', manifestPath];
 
-  if (isRelease) {
-    buildArgs.push("--release");
-  }
+	if (isRelease) {
+		buildArgs.push('--release');
+	}
 
-  const result = spawnSync("cargo", buildArgs, {
-    cwd: sidecarDir,
-    stdio: "inherit",
-  });
+	const result = spawnSync('cargo', buildArgs, {
+		cwd: sidecarDir,
+		stdio: 'inherit',
+	});
 
-  if (result.status !== 0) {
-    if (optional) {
-      console.warn("[desktop] Rust sidecar build failed in optional mode.");
-      return false;
-    }
+	if (result.status !== 0) {
+		if (optional) {
+			console.warn('[desktop] Rust sidecar build failed in optional mode.');
+			return false;
+		}
 
-    throw new Error("Rust sidecar build failed.");
-  }
+		throw new Error('Rust sidecar build failed.');
+	}
 
-  return true;
+	return true;
 };
 
 const copySidecarBinary = async () => {
-  await fs.access(binarySourcePath);
-  await fs.mkdir(path.dirname(binaryTargetPath), { recursive: true });
-  // Unlink before copy to avoid ETXTBSY when the binary is currently running
-  await fs.unlink(binaryTargetPath).catch(() => {});
-  await fs.copyFile(binarySourcePath, binaryTargetPath);
+	await fs.access(binarySourcePath);
+	await fs.mkdir(path.dirname(binaryTargetPath), { recursive: true });
+	// Unlink before copy to avoid ETXTBSY when the binary is currently running
+	await fs.unlink(binaryTargetPath).catch(() => {});
+	await fs.copyFile(binarySourcePath, binaryTargetPath);
 
-  if (process.platform !== "win32") {
-    await fs.chmod(binaryTargetPath, 0o755);
-  }
+	if (process.platform !== 'win32') {
+		await fs.chmod(binaryTargetPath, 0o755);
+	}
 };
 
 const buildMacosHelper = async () => {
-  if (process.platform !== "darwin") {
-    return;
-  }
+	if (process.platform !== 'darwin') {
+		return;
+	}
 
-  const swiftCheck = spawnSync("swiftc", ["--version"], {
-    cwd: sidecarDir,
-    stdio: "pipe",
-  });
+	const swiftCheck = spawnSync('swiftc', ['--version'], {
+		cwd: sidecarDir,
+		stdio: 'pipe',
+	});
 
-  if (swiftCheck.error || swiftCheck.status !== 0) {
-    if (optional) {
-      console.warn(
-        "[desktop] macOS audio helper build skipped: swiftc is not installed.",
-      );
-      return;
-    }
+	if (swiftCheck.error || swiftCheck.status !== 0) {
+		if (optional) {
+			console.warn('[desktop] macOS audio helper build skipped: swiftc is not installed.');
+			return;
+		}
 
-    throw new Error(
-      "swiftc is required to build the macOS audio capture helper.",
-    );
-  }
+		throw new Error('swiftc is required to build the macOS audio capture helper.');
+	}
 
-  await fs.mkdir(path.dirname(macosHelperTargetPath), { recursive: true });
+	await fs.mkdir(path.dirname(macosHelperTargetPath), { recursive: true });
 
-  if (!macosHelperDeploymentTarget) {
-    throw new Error(
-      `Unsupported macOS architecture for helper build: ${process.arch}`,
-    );
-  }
+	if (!macosHelperDeploymentTarget) {
+		throw new Error(`Unsupported macOS architecture for helper build: ${process.arch}`);
+	}
 
-  const result = spawnSync(
-    "swiftc",
-    [
-      "-O",
-      "-parse-as-library",
-      "-target",
-      macosHelperDeploymentTarget,
-      macosHelperSourcePath,
-      "-o",
-      macosHelperTargetPath,
-    ],
-    {
-      cwd: sidecarDir,
-      stdio: "inherit",
-    },
-  );
+	const result = spawnSync(
+		'swiftc',
+		[
+			'-O',
+			'-parse-as-library',
+			'-target',
+			macosHelperDeploymentTarget,
+			macosHelperSourcePath,
+			'-o',
+			macosHelperTargetPath,
+		],
+		{
+			cwd: sidecarDir,
+			stdio: 'inherit',
+		},
+	);
 
-  if (result.status !== 0) {
-    if (optional) {
-      console.warn(
-        "[desktop] macOS audio helper build failed in optional mode.",
-      );
-      return;
-    }
+	if (result.status !== 0) {
+		if (optional) {
+			console.warn('[desktop] macOS audio helper build failed in optional mode.');
+			return;
+		}
 
-    throw new Error("macOS audio helper build failed.");
-  }
+		throw new Error('macOS audio helper build failed.');
+	}
 
-  await fs.chmod(macosHelperTargetPath, 0o755);
-  console.info(`[desktop] macOS helper ready at ${macosHelperTargetPath}`);
+	await fs.chmod(macosHelperTargetPath, 0o755);
+	console.info(`[desktop] macOS helper ready at ${macosHelperTargetPath}`);
 };
 
 const built = runCargoBuild();
 
 if (built) {
-  await copySidecarBinary();
-  await buildMacosHelper();
-  console.info(`[desktop] sidecar ready at ${binaryTargetPath}`);
+	await copySidecarBinary();
+	await buildMacosHelper();
+	console.info(`[desktop] sidecar ready at ${binaryTargetPath}`);
 }
