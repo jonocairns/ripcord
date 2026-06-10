@@ -1,177 +1,165 @@
-import { describe, it } from "node:test";
-import assert from "node:assert/strict";
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import {
-  getDesktopCapabilitiesForPlatform,
-  resolvePreparedScreenAudioMode,
-  resolveScreenAudioMode,
-} from "../platform-capabilities";
-import type { TDesktopCapabilities } from "../types";
+	getDesktopCapabilitiesForPlatform,
+	resolvePreparedScreenAudioMode,
+	resolveScreenAudioMode,
+} from '../platform-capabilities';
+import type { TDesktopCapabilities } from '../types';
 
-void describe("getDesktopCapabilitiesForPlatform", () => {
-  void it("maps windows capabilities", () => {
-    const capabilities = getDesktopCapabilitiesForPlatform("win32");
+void describe('getDesktopCapabilitiesForPlatform', () => {
+	void it('maps windows capabilities', () => {
+		const capabilities = getDesktopCapabilitiesForPlatform('win32');
 
-    assert.equal(capabilities.platform, "windows");
-    assert.equal(capabilities.systemAudio, "supported");
-    assert.equal(capabilities.perAppAudio, "supported");
-    assert.equal(capabilities.globalPushKeybinds, "supported");
-    assert.deepEqual(capabilities.issues, []);
-  });
+		assert.equal(capabilities.platform, 'windows');
+		assert.equal(capabilities.systemAudio, 'supported');
+		assert.equal(capabilities.perAppAudio, 'supported');
+		assert.equal(capabilities.globalPushKeybinds, 'supported');
+		assert.deepEqual(capabilities.issues, []);
+	});
 
-  void it("maps macOS capabilities", () => {
-    const capabilities = getDesktopCapabilitiesForPlatform("darwin");
+	void it('maps macOS capabilities', () => {
+		const capabilities = getDesktopCapabilitiesForPlatform('darwin');
 
-    assert.equal(capabilities.platform, "macos");
-    assert.equal(capabilities.systemAudio, "supported");
-    assert.equal(capabilities.perAppAudio, "supported");
-    assert.equal(capabilities.globalPushKeybinds, "supported");
-    assert.match(capabilities.notes.join(" "), /ScreenCaptureKit/i);
-  });
+		assert.equal(capabilities.platform, 'macos');
+		assert.equal(capabilities.systemAudio, 'supported');
+		assert.equal(capabilities.perAppAudio, 'supported');
+		assert.equal(capabilities.globalPushKeybinds, 'supported');
+		assert.match(capabilities.notes.join(' '), /ScreenCaptureKit/i);
+	});
 
-  void it("maps linux capabilities as best-effort", () => {
-    const capabilities = getDesktopCapabilitiesForPlatform("linux");
+	void it('maps linux capabilities as best-effort', () => {
+		const capabilities = getDesktopCapabilitiesForPlatform('linux');
 
-    assert.equal(capabilities.platform, "linux");
-    assert.equal(capabilities.systemAudio, "best-effort");
-    assert.equal(capabilities.perAppAudio, "best-effort");
-    assert.equal(capabilities.globalPushKeybinds, "best-effort");
-  });
+		assert.equal(capabilities.platform, 'linux');
+		assert.equal(capabilities.systemAudio, 'best-effort');
+		assert.equal(capabilities.perAppAudio, 'best-effort');
+		assert.equal(capabilities.globalPushKeybinds, 'best-effort');
+	});
 });
 
-void describe("resolveScreenAudioMode", () => {
-  void it("falls back from per-app to system when per-app unsupported", () => {
-    const capabilities: TDesktopCapabilities = {
-      platform: "windows",
-      systemAudio: "supported",
-      perAppAudio: "unsupported",
-      globalPushKeybinds: "supported",
-      issues: [],
-      notes: [],
-    };
+void describe('resolveScreenAudioMode', () => {
+	void it('falls back from per-app to system when per-app unsupported', () => {
+		const capabilities: TDesktopCapabilities = {
+			platform: 'windows',
+			systemAudio: 'supported',
+			perAppAudio: 'unsupported',
+			globalPushKeybinds: 'supported',
+			issues: [],
+			notes: [],
+		};
 
-    const resolved = resolveScreenAudioMode("app", capabilities);
+		const resolved = resolveScreenAudioMode('app', capabilities);
 
-    assert.equal(resolved.effectiveMode, "system");
-    assert.match(resolved.warning ?? "", /Falling back to system audio/);
-  });
+		assert.equal(resolved.effectiveMode, 'system');
+		assert.match(resolved.warning ?? '', /Falling back to system audio/);
+	});
 
-  void it("falls back to none when audio is unsupported", () => {
-    const capabilities: TDesktopCapabilities = {
-      platform: "macos",
-      systemAudio: "unsupported",
-      perAppAudio: "unsupported",
-      globalPushKeybinds: "supported",
-      issues: [],
-      notes: [],
-    };
+	void it('falls back to none when audio is unsupported', () => {
+		const capabilities: TDesktopCapabilities = {
+			platform: 'macos',
+			systemAudio: 'unsupported',
+			perAppAudio: 'unsupported',
+			globalPushKeybinds: 'supported',
+			issues: [],
+			notes: [],
+		};
 
-    const resolved = resolveScreenAudioMode("system", capabilities);
+		const resolved = resolveScreenAudioMode('system', capabilities);
 
-    assert.equal(resolved.effectiveMode, "none");
-    assert.match(resolved.warning ?? "", /Continuing without shared audio/);
-  });
+		assert.equal(resolved.effectiveMode, 'none');
+		assert.match(resolved.warning ?? '', /Continuing without shared audio/);
+	});
 });
 
-void describe("resolvePreparedScreenAudioMode", () => {
-  void it("falls back when per-app audio is requested for a full-screen share", () => {
-    const capabilities: TDesktopCapabilities = {
-      platform: "windows",
-      systemAudio: "supported",
-      perAppAudio: "supported",
-      globalPushKeybinds: "supported",
-      issues: [],
-      notes: [],
-    };
+void describe('resolvePreparedScreenAudioMode', () => {
+	void it('falls back when per-app audio is requested for a full-screen share', () => {
+		const capabilities: TDesktopCapabilities = {
+			platform: 'windows',
+			systemAudio: 'supported',
+			perAppAudio: 'supported',
+			globalPushKeybinds: 'supported',
+			issues: [],
+			notes: [],
+		};
 
-    const resolved = resolvePreparedScreenAudioMode(
-      {
-        sourceId: "screen:1",
-        audioMode: "app",
-      },
-      capabilities,
-    );
+		const resolved = resolvePreparedScreenAudioMode(
+			{
+				sourceId: 'screen:1',
+				audioMode: 'app',
+			},
+			capabilities,
+		);
 
-    assert.equal(resolved.effectiveMode, "system");
-    assert.match(
-      resolved.warning ?? "",
-      /Per-app audio is not available when sharing an entire display/i,
-    );
-  });
+		assert.equal(resolved.effectiveMode, 'system');
+		assert.match(resolved.warning ?? '', /Per-app audio is not available when sharing an entire display/i);
+	});
 
-  void it("falls back when linux per-app audio is requested without an explicit target", () => {
-    const capabilities: TDesktopCapabilities = {
-      platform: "linux",
-      systemAudio: "best-effort",
-      perAppAudio: "best-effort",
-      globalPushKeybinds: "best-effort",
-      issues: [],
-      notes: [],
-    };
+	void it('falls back when linux per-app audio is requested without an explicit target', () => {
+		const capabilities: TDesktopCapabilities = {
+			platform: 'linux',
+			systemAudio: 'best-effort',
+			perAppAudio: 'best-effort',
+			globalPushKeybinds: 'best-effort',
+			issues: [],
+			notes: [],
+		};
 
-    const resolved = resolvePreparedScreenAudioMode(
-      {
-        sourceId: "window:123",
-        audioMode: "app",
-      },
-      capabilities,
-    );
+		const resolved = resolvePreparedScreenAudioMode(
+			{
+				sourceId: 'window:123',
+				audioMode: 'app',
+			},
+			capabilities,
+		);
 
-    assert.equal(resolved.effectiveMode, "system");
-    assert.match(
-      resolved.warning ?? "",
-      /Linux requires choosing a running app audio target/i,
-    );
-  });
+		assert.equal(resolved.effectiveMode, 'system');
+		assert.match(resolved.warning ?? '', /Linux requires choosing a running app audio target/i);
+	});
 
-  void it("keeps linux per-app audio when an explicit target is selected", () => {
-    const capabilities: TDesktopCapabilities = {
-      platform: "linux",
-      systemAudio: "best-effort",
-      perAppAudio: "best-effort",
-      globalPushKeybinds: "best-effort",
-      issues: [],
-      notes: [],
-    };
+	void it('keeps linux per-app audio when an explicit target is selected', () => {
+		const capabilities: TDesktopCapabilities = {
+			platform: 'linux',
+			systemAudio: 'best-effort',
+			perAppAudio: 'best-effort',
+			globalPushKeybinds: 'best-effort',
+			issues: [],
+			notes: [],
+		};
 
-    const resolved = resolvePreparedScreenAudioMode(
-      {
-        sourceId: "window:123",
-        audioMode: "app",
-        appAudioTargetId: "node:77",
-      },
-      capabilities,
-    );
+		const resolved = resolvePreparedScreenAudioMode(
+			{
+				sourceId: 'window:123',
+				audioMode: 'app',
+				appAudioTargetId: 'node:77',
+			},
+			capabilities,
+		);
 
-    assert.equal(resolved.effectiveMode, "app");
-    assert.equal(
-      resolved.warning,
-      "Per-app audio capture is best-effort on this platform and may fail.",
-    );
-  });
+		assert.equal(resolved.effectiveMode, 'app');
+		assert.equal(resolved.warning, 'Per-app audio capture is best-effort on this platform and may fail.');
+	});
 
-  void it("still falls back for a full-screen share even when an explicit target is selected", () => {
-    const capabilities: TDesktopCapabilities = {
-      platform: "windows",
-      systemAudio: "supported",
-      perAppAudio: "supported",
-      globalPushKeybinds: "supported",
-      issues: [],
-      notes: [],
-    };
+	void it('still falls back for a full-screen share even when an explicit target is selected', () => {
+		const capabilities: TDesktopCapabilities = {
+			platform: 'windows',
+			systemAudio: 'supported',
+			perAppAudio: 'supported',
+			globalPushKeybinds: 'supported',
+			issues: [],
+			notes: [],
+		};
 
-    const resolved = resolvePreparedScreenAudioMode(
-      {
-        sourceId: "screen:1",
-        audioMode: "app",
-        appAudioTargetId: "pid:1234",
-      },
-      capabilities,
-    );
+		const resolved = resolvePreparedScreenAudioMode(
+			{
+				sourceId: 'screen:1',
+				audioMode: 'app',
+				appAudioTargetId: 'pid:1234',
+			},
+			capabilities,
+		);
 
-    assert.equal(resolved.effectiveMode, "system");
-    assert.match(
-      resolved.warning ?? "",
-      /Per-app audio is not available when sharing an entire display/i,
-    );
-  });
+		assert.equal(resolved.effectiveMode, 'system');
+		assert.match(resolved.warning ?? '', /Per-app audio is not available when sharing an entire display/i);
+	});
 });

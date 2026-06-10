@@ -75,9 +75,27 @@ describe('getEffectiveScreenShareAudioMode', () => {
 });
 
 describe('resolveAppAudioTargetBehavior', () => {
-	it('skips target resolution for screen shares in app mode', () => {
+	it('resolves targets for screen shares when audio is enabled so a specific app can be isolated', () => {
 		const result = resolveAppAudioTargetBehavior({
-			audioMode: ScreenAudioMode.APP,
+			audioMode: ScreenAudioMode.SYSTEM,
+			perAppAudioSupported: true,
+			sourceKind: 'screen',
+			availableTargetCount: 2,
+			suggestedTargetId: undefined,
+			requiresManualSelection: undefined,
+		});
+
+		// System audio is always a valid default for a display, so the per-app
+		// pick is optional and never blocks confirm.
+		expect(result.shouldResolveAppAudioTargets).toBe(true);
+		expect(result.requiresManualAppAudioTarget).toBe(false);
+		expect(result.shouldAutoSelectSuggestedTarget).toBe(false);
+		expect(result.allowsImplicitFallbackWithoutTarget).toBe(false);
+	});
+
+	it('skips target resolution for screen shares when audio is disabled', () => {
+		const result = resolveAppAudioTargetBehavior({
+			audioMode: ScreenAudioMode.NONE,
 			perAppAudioSupported: true,
 			sourceKind: 'screen',
 			availableTargetCount: 2,
@@ -86,9 +104,6 @@ describe('resolveAppAudioTargetBehavior', () => {
 		});
 
 		expect(result.shouldResolveAppAudioTargets).toBe(false);
-		expect(result.requiresManualAppAudioTarget).toBe(false);
-		expect(result.shouldAutoSelectSuggestedTarget).toBe(false);
-		expect(result.allowsImplicitFallbackWithoutTarget).toBe(false);
 	});
 
 	it('does not require manual target for mapped window shares', () => {

@@ -25,10 +25,11 @@
     "prepare:renderer": "node ./scripts/prepare-renderer-dist.mjs",
     "build": "cd ../client && bun run build && cd ../desktop && bun run prepare:renderer && bun run build:sidecar && bun run build:main && bun run package:preview",
     "package:preview": "electron-builder --dir",
-    "format": "prettier --write \"src/**/*.ts\" \"scripts/**/*.mjs\"",
+    "format": "biome format --write ./src ./scripts",
     "check-types": "bun run typecheck",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ./src --ext .ts",
+    "lint": "biome lint ./src ./scripts",
+    "lint:fix": "biome lint --fix ./src ./scripts",
     "test": "bun test"
   },
   "build": {
@@ -97,19 +98,14 @@
     "electron-updater": "^6.8.3"
   },
   "devDependencies": {
-    "@eslint/js": "^9.36.0",
     "@types/node": "^24.5.2",
     "concurrently": "^9.2.1",
     "cross-env": "^10.0.0",
     "electron": "42.3.0",
     "electron-builder": "^26.8.1",
     "electronmon": "^2.0.3",
-    "eslint": "^9.36.0",
-    "globals": "^16.4.0",
-    "prettier": "^3.4.2",
     "tsup": "^8.5.0",
     "typescript": "~5.8.3",
-    "typescript-eslint": "^8.44.0",
     "wait-on": "^8.0.5"
   }
 }

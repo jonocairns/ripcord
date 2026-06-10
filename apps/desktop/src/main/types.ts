@@ -1,195 +1,186 @@
-export type TDesktopPlatform = "windows" | "macos" | "linux";
+export type TDesktopPlatform = 'windows' | 'macos' | 'linux';
 
-export type TSupportLevel = "supported" | "best-effort" | "unsupported";
+export type TSupportLevel = 'supported' | 'best-effort' | 'unsupported';
 
-export type TDesktopCapabilityIssueSeverity = "info" | "warning" | "error";
+export type TDesktopCapabilityIssueSeverity = 'info' | 'warning' | 'error';
 
-export type TDesktopCapabilityIssueFeature =
-  | "screen-share"
-  | "system-audio"
-  | "per-app-audio"
-  | "global-push-keybinds";
+export type TDesktopCapabilityIssueFeature = 'screen-share' | 'system-audio' | 'per-app-audio' | 'global-push-keybinds';
 
 export type TDesktopCapabilityIssue = {
-  code: string;
-  affects: TDesktopCapabilityIssueFeature[];
-  severity: TDesktopCapabilityIssueSeverity;
-  title: string;
-  message: string;
-  guidance: string[];
+	code: string;
+	affects: TDesktopCapabilityIssueFeature[];
+	severity: TDesktopCapabilityIssueSeverity;
+	title: string;
+	message: string;
+	guidance: string[];
 };
 
-export type TScreenAudioMode = "system" | "app" | "none";
+export type TScreenAudioMode = 'system' | 'app' | 'none';
 
-export type TShareSourceKind = "screen" | "window";
+export type TShareSourceKind = 'screen' | 'window';
 
 export type TShareSource = {
-  id: string;
-  name: string;
-  kind: TShareSourceKind;
-  previewAvailable: boolean;
-  thumbnailDataUrl: string;
-  appIconDataUrl?: string;
+	id: string;
+	name: string;
+	kind: TShareSourceKind;
+	previewAvailable: boolean;
+	thumbnailDataUrl: string;
+	appIconDataUrl?: string;
 };
 
 // Phase-2 of the two-phase picker load: thumbnails are captured separately from
 // the source list (capturing every window's frame is the slow part), then merged
 // into the already-rendered list by id.
 export type TShareSourceThumbnail = {
-  id: string;
-  previewAvailable: boolean;
-  thumbnailDataUrl: string;
+	id: string;
+	previewAvailable: boolean;
+	thumbnailDataUrl: string;
 };
 
 export type TScreenShareSelection = {
-  sourceId: string;
-  audioMode: TScreenAudioMode;
-  appAudioTargetId?: string;
-  useSystemPicker?: boolean;
+	sourceId: string;
+	audioMode: TScreenAudioMode;
+	appAudioTargetId?: string;
+	useSystemPicker?: boolean;
 };
 
 export type TDesktopCapabilities = {
-  platform: TDesktopPlatform;
-  systemAudio: TSupportLevel;
-  perAppAudio: TSupportLevel;
-  globalPushKeybinds: TSupportLevel;
-  sidecarAvailable?: boolean;
-  issues: TDesktopCapabilityIssue[];
-  notes: string[];
+	platform: TDesktopPlatform;
+	systemAudio: TSupportLevel;
+	perAppAudio: TSupportLevel;
+	globalPushKeybinds: TSupportLevel;
+	sidecarAvailable?: boolean;
+	issues: TDesktopCapabilityIssue[];
+	notes: string[];
 };
 
 export type TPreparedScreenShare = {
-  sourceId: string;
-  audioMode: TScreenAudioMode;
-  appAudioTargetId?: string;
+	sourceId: string;
+	audioMode: TScreenAudioMode;
+	appAudioTargetId?: string;
 };
 
 export type TResolvedScreenAudioMode = {
-  requestedMode: TScreenAudioMode;
-  effectiveMode: TScreenAudioMode;
-  warning?: string;
+	requestedMode: TScreenAudioMode;
+	effectiveMode: TScreenAudioMode;
+	warning?: string;
 };
 
 export type TDesktopAppAudioTarget = {
-  id: string;
-  label: string;
-  pid: number;
-  processName: string;
+	id: string;
+	label: string;
+	pid: number;
+	processName: string;
 };
 
 export type TDesktopAppAudioTargetsResult = {
-  targets: TDesktopAppAudioTarget[];
-  suggestedTargetId?: string;
-  requiresManualSelection?: boolean;
-  warning?: string;
+	targets: TDesktopAppAudioTarget[];
+	suggestedTargetId?: string;
+	requiresManualSelection?: boolean;
+	warning?: string;
 };
 
 export type TStartAppAudioCaptureInput = {
-  sourceId: string;
-  appAudioTargetId?: string;
-  selfExcludePid?: number;
+	sourceId: string;
+	appAudioTargetId?: string;
+	selfExcludePid?: number;
 };
 
 export type TAppAudioSession = {
-  sessionId: string;
-  targetId: string;
-  sampleRate: number;
-  channels: number;
-  framesPerBuffer: number;
-  protocolVersion?: number;
-  encoding?: "f32le_base64";
+	sessionId: string;
+	targetId: string;
+	sampleRate: number;
+	channels: number;
+	framesPerBuffer: number;
+	protocolVersion?: number;
+	encoding?: 'f32le_base64';
 };
 
 export type TAppAudioFrame = {
-  sessionId: string;
-  targetId: string;
-  sequence: number;
-  sampleRate: number;
-  channels: number;
-  frameCount: number;
-  pcmBase64: string;
-  protocolVersion: number;
-  encoding: "f32le_base64";
-  droppedFrameCount?: number;
+	sessionId: string;
+	targetId: string;
+	sequence: number;
+	sampleRate: number;
+	channels: number;
+	frameCount: number;
+	pcmBase64: string;
+	protocolVersion: number;
+	encoding: 'f32le_base64';
+	droppedFrameCount?: number;
 };
 
 export type TAppAudioPcmFrame = {
-  sessionId: string;
-  targetId: string;
-  sequence: number;
-  sampleRate: number;
-  channels: number;
-  frameCount: number;
-  pcm: Float32Array;
-  protocolVersion: number;
-  droppedFrameCount?: number;
+	sessionId: string;
+	targetId: string;
+	sequence: number;
+	sampleRate: number;
+	channels: number;
+	frameCount: number;
+	pcm: Float32Array;
+	protocolVersion: number;
+	droppedFrameCount?: number;
 };
 
-export type TAppAudioEndReason =
-  | "capture_stopped"
-  | "app_exited"
-  | "capture_error"
-  | "device_lost"
-  | "sidecar_exited";
+export type TAppAudioEndReason = 'capture_stopped' | 'app_exited' | 'capture_error' | 'device_lost' | 'sidecar_exited';
 
 export type TAppAudioStatusEvent = {
-  sessionId: string;
-  targetId: string;
-  reason: TAppAudioEndReason;
-  error?: string;
-  protocolVersion?: number;
+	sessionId: string;
+	targetId: string;
+	reason: TAppAudioEndReason;
+	error?: string;
+	protocolVersion?: number;
 };
 
 export type TDesktopUpdateState =
-  | "disabled"
-  | "idle"
-  | "checking"
-  | "available"
-  | "not-available"
-  | "downloading"
-  | "downloaded"
-  | "error";
+	| 'disabled'
+	| 'idle'
+	| 'checking'
+	| 'available'
+	| 'not-available'
+	| 'downloading'
+	| 'downloaded'
+	| 'error';
 
 export type TDesktopUpdateStatus = {
-  state: TDesktopUpdateState;
-  currentVersion: string;
-  availableVersion?: string;
-  manualInstallRequired?: boolean;
-  checkedAtIso?: string;
-  percent?: number;
-  bytesPerSecond?: number;
-  transferredBytes?: number;
-  totalBytes?: number;
-  message?: string;
+	state: TDesktopUpdateState;
+	currentVersion: string;
+	availableVersion?: string;
+	manualInstallRequired?: boolean;
+	checkedAtIso?: string;
+	percent?: number;
+	bytesPerSecond?: number;
+	transferredBytes?: number;
+	totalBytes?: number;
+	message?: string;
 };
 
-export type TPushKeybindKind = "talk" | "mute";
+export type TPushKeybindKind = 'talk' | 'mute';
 
 export type TDesktopPushKeybindsInput = {
-  pushToTalkKeybind?: string;
-  pushToMuteKeybind?: string;
+	pushToTalkKeybind?: string;
+	pushToMuteKeybind?: string;
 };
 
 export type TDesktopPushKeybindEvent = {
-  kind: TPushKeybindKind;
-  active: boolean;
+	kind: TPushKeybindKind;
+	active: boolean;
 };
 
 export type TGlobalPushKeybindRegistrationResult = {
-  talkRegistered: boolean;
-  muteRegistered: boolean;
-  errors: string[];
+	talkRegistered: boolean;
+	muteRegistered: boolean;
+	errors: string[];
 };
 
-export type TDesktopQuitFlushStatus = "succeeded" | "skipped";
+export type TDesktopQuitFlushStatus = 'succeeded' | 'skipped';
 
 export type TDesktopQuitFlushResult = {
-  status: TDesktopQuitFlushStatus;
-  reason?: string;
+	status: TDesktopQuitFlushStatus;
+	reason?: string;
 };
 
 export type TDesktopWindowControlsState = {
-  platform: TDesktopPlatform;
-  isMaximized: boolean;
-  usesCustomTitlebar: boolean;
+	platform: TDesktopPlatform;
+	isMaximized: boolean;
+	usesCustomTitlebar: boolean;
 };
