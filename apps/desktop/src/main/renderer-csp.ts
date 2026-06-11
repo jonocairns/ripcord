@@ -2,7 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { OnHeadersReceivedListenerDetails, Session } from 'electron';
 
-const PACKAGED_RENDERER_CSP_HEADER = 'Content-Security-Policy-Report-Only';
+const PACKAGED_RENDERER_CSP_HEADER = 'Content-Security-Policy';
 const PACKAGED_RENDERER_FILE_URL_PATTERN = 'file://*';
 
 const packagedRendererCspDirectives: Record<string, readonly string[]> = {
