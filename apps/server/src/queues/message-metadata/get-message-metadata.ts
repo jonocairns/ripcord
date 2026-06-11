@@ -46,6 +46,26 @@ const isPrivateIP = (ip: string): boolean => {
 	}
 };
 
+// First-hop guard, reusable per redirect hop: http/https only + literal private-IP block.
+// DNS-based private-IP rejection is handled separately by resolveDNSHost.
+export const isUrlSafeForPreview = (url: string): boolean => {
+	if (!URL.canParse(url)) return false;
+
+	const parsed = new URL(url);
+
+	// allow only http and https protocols
+	if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+		return false;
+	}
+
+	// it's already an ip address, check if it's private
+	if (isIP(parsed.hostname) && isPrivateIP(parsed.hostname)) {
+		return false;
+	}
+
+	return true;
+};
+
 const urlMetadataParser = async (content: string): Promise<TMessageMetadata[]> => {
 	try {
 		const urls = extractUrls(content);
@@ -56,25 +76,17 @@ const urlMetadataParser = async (content: string): Promise<TMessageMetadata[]> =
 			const cached = lruGet(url);
 			if (cached !== undefined) return cached;
 
-			if (!URL.canParse(url)) {
-				return;
-			}
-
-			const parsed = new URL(url);
-
-			// allow only http and https protocols
-			if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-				return;
-			}
-
-			// it's already an ip address, check if it's private
-			if (isIP(parsed.hostname) && isPrivateIP(parsed.hostname)) {
+			if (!isUrlSafeForPreview(url)) {
 				return;
 			}
 
 			const metadata = await getLinkPreview(url, {
 				timeout: 5000,
-				followRedirects: 'follow',
+				// Don't transparently follow redirects: a 3xx Location could point at a
+				// private/internal target (SSRF). Handle them manually so the same
+				// protocol + private-IP guard (and resolveDNSHost) re-runs on each hop.
+				followRedirects: 'manual',
+				handleRedirects: (_baseURL: string, forwardedURL: string) => isUrlSafeForPreview(forwardedURL),
 				resolveDNSHost: async (url: string) => {
 					return new Promise((resolve, reject) => {
 						try {
