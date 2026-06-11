@@ -41,6 +41,41 @@ const refreshRouteHandler = async (req: http.IncomingMessage, res: http.ServerRe
 			.get();
 
 		if (!existingSession) {
+			// The optimistic update matched no live row. Distinguish a genuinely
+			// unknown token (never issued -> just invalid) from replay of a token
+			// that was already rotated/revoked (reuse/theft signal). Only the latter
+			// -- an actual row exists for this hash -- triggers revocation, so a
+			// random/never-issued token can never cause mass revocation.
+			const revokedSession = await tx
+				.select({
+					userId: refreshTokens.userId,
+					replacedByTokenHash: refreshTokens.replacedByTokenHash,
+				})
+				.from(refreshTokens)
+				.where(eq(refreshTokens.tokenHash, refreshTokenHash))
+				.get();
+
+			if (revokedSession) {
+				// Reuse of an already-revoked token: walk the rotation chain via
+				// replacedByTokenHash and revoke every still-live descendant,
+				// killing the stolen token family.
+				let nextHash = revokedSession.replacedByTokenHash;
+				const seen = new Set<string>([refreshTokenHash]);
+
+				while (nextHash && !seen.has(nextHash)) {
+					seen.add(nextHash);
+
+					const descendant = await tx
+						.update(refreshTokens)
+						.set({ revokedAt: now, updatedAt: now })
+						.where(and(eq(refreshTokens.tokenHash, nextHash), isNull(refreshTokens.revokedAt)))
+						.returning({ replacedByTokenHash: refreshTokens.replacedByTokenHash })
+						.get();
+
+					nextHash = descendant?.replacedByTokenHash ?? null;
+				}
+			}
+
 			return { status: 'invalid' as const };
 		}
 
