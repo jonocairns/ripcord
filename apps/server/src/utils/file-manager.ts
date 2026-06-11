@@ -319,7 +319,12 @@ class FileManager {
 		const safeOriginalName = sanitizeOriginalName(originalName);
 		const rawExtension = path.extname(safeOriginalName);
 		const extension = sanitizeExtension(rawExtension);
-		const baseName = sanitizeBaseName(path.basename(safeOriginalName, rawExtension));
+		// Prefix the stored name with an unguessable random token. Files are served by
+		// exact-name lookup with no auth for non-private-channel files (see http/public.ts),
+		// so a human-derived/enumerable name lets an unauthenticated attacker fetch avatars,
+		// banners, emoji and public-channel uploads by guessing the name. The token makes the
+		// stored/served name unguessable; originalName is preserved for the download filename.
+		const baseName = `${randomUUIDv7()}-${sanitizeBaseName(path.basename(safeOriginalName, rawExtension))}`;
 
 		// Fetch all existing names that share the same base in one query.
 		// No escaping needed — the broader match is harmless; Set.has() does exact conflict detection.
