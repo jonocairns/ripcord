@@ -1,4 +1,4 @@
-import { Permission } from '@sharkord/shared';
+import { ChannelPermission, Permission } from '@sharkord/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
@@ -25,6 +25,8 @@ const toggleMessageReactionRoute = protectedProcedure
 			code: 'NOT_FOUND',
 			message: 'Message not found',
 		});
+
+		await ctx.needsChannelPermission(message.channelId, ChannelPermission.VIEW_CHANNEL);
 
 		const reaction = await getReaction(input.messageId, input.emoji, ctx.user.id);
 
