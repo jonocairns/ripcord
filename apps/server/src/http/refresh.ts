@@ -4,7 +4,12 @@ import { and, eq, gt, isNull } from 'drizzle-orm';
 import z from 'zod';
 import { db } from '../db';
 import { refreshTokens, users } from '../db/schema';
-import { createAccessToken, createRefreshTokenValue, REFRESH_TOKEN_TTL_MS } from './auth-tokens';
+import {
+	createAccessToken,
+	createRefreshTokenValue,
+	REFRESH_REUSE_GRACE_MS,
+	REFRESH_TOKEN_TTL_MS,
+} from './auth-tokens';
 import { getJsonBody } from './helpers';
 
 const AUTH_REQUEST_MAX_BODY_BYTES = 8 * 1024;
@@ -41,6 +46,56 @@ const refreshRouteHandler = async (req: http.IncomingMessage, res: http.ServerRe
 			.get();
 
 		if (!existingSession) {
+			// The optimistic update matched no live row. Distinguish a genuinely
+			// unknown token (never issued -> just invalid) from replay of a token
+			// that was already rotated/revoked (reuse/theft signal). Only the latter
+			// -- an actual row exists for this hash -- triggers revocation, so a
+			// random/never-issued token can never cause mass revocation.
+			const revokedSession = await tx
+				.select({
+					userId: refreshTokens.userId,
+					revokedAt: refreshTokens.revokedAt,
+					replacedByTokenHash: refreshTokens.replacedByTokenHash,
+				})
+				.from(refreshTokens)
+				.where(eq(refreshTokens.tokenHash, refreshTokenHash))
+				.get();
+
+			// Only an actual reuse -- a token previously revoked outside the grace
+			// window -- is treated as theft. A token revoked within the grace window
+			// is a benign race (concurrent refresh / retry) and is rejected without
+			// touching the family; an expired-but-never-revoked token has no
+			// revokedAt and is likewise just invalid.
+			const isTheft = revokedSession?.revokedAt != null && now - revokedSession.revokedAt > REFRESH_REUSE_GRACE_MS;
+
+			if (isTheft) {
+				// Walk the rotation chain via replacedByTokenHash and revoke every
+				// still-live descendant, killing the stolen token family. Traversal is
+				// decoupled from revocation: the next link is read with a SELECT before
+				// the UPDATE, so an already-revoked intermediate node never halts the
+				// walk and leaves a live terminal token behind.
+				let nextHash = revokedSession.replacedByTokenHash;
+				const seen = new Set<string>([refreshTokenHash]);
+
+				while (nextHash && !seen.has(nextHash)) {
+					seen.add(nextHash);
+
+					const node = await tx
+						.select({ replacedByTokenHash: refreshTokens.replacedByTokenHash })
+						.from(refreshTokens)
+						.where(eq(refreshTokens.tokenHash, nextHash))
+						.get();
+
+					await tx
+						.update(refreshTokens)
+						.set({ revokedAt: now, updatedAt: now })
+						.where(and(eq(refreshTokens.tokenHash, nextHash), isNull(refreshTokens.revokedAt)))
+						.run();
+
+					nextHash = node?.replacedByTokenHash ?? null;
+				}
+			}
+
 			return { status: 'invalid' as const };
 		}
 

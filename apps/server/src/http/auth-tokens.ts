@@ -7,6 +7,10 @@ import { refreshTokens } from '../db/schema';
 
 const ACCESS_TOKEN_EXPIRES_IN = '86400s'; // 1 day
 const REFRESH_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+// Leeway for benign refresh races (double-submit, network retry, multiple tabs):
+// replaying a token revoked within this window is rejected but does NOT trigger
+// family revocation, so a legitimate race never logs the user out.
+const REFRESH_REUSE_GRACE_MS = 10 * 1000; // 10 seconds
 
 const createAccessToken = async (userId: number, tokenVersion: number) =>
 	jwt.sign({ userId, tokenVersion }, await getServerToken(), {
@@ -32,4 +36,4 @@ const issueAuthTokens = async (userId: number, tokenVersion: number) => {
 	return { token, refreshToken };
 };
 
-export { createAccessToken, createRefreshTokenValue, issueAuthTokens, REFRESH_TOKEN_TTL_MS };
+export { createAccessToken, createRefreshTokenValue, issueAuthTokens, REFRESH_REUSE_GRACE_MS, REFRESH_TOKEN_TTL_MS };
