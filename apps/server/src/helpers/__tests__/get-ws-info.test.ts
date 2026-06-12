@@ -26,10 +26,8 @@ describe('getWsInfo IP extraction', () => {
 		expect(ipOf({ 'x-forwarded-for': '1.2.3.4,,9.9.9.9' })).toBe('9.9.9.9');
 	});
 
-	test('falls back to the raw value when every segment is empty', () => {
-		// ` , ` filters to nothing; the `?? ip` fallback keeps the original string,
-		// which normalizeIpLiteral then trims.
-		expect(ipOf({ 'x-forwarded-for': ' , ' })).toBe(',');
+	test('returns undefined when every forwarded-for segment is empty', () => {
+		expect(ipOf({ 'x-forwarded-for': ' , ' })).toBeUndefined();
 	});
 
 	test('handles a single x-forwarded-for value with no comma', () => {
