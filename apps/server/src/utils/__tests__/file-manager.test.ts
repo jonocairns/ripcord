@@ -9,6 +9,9 @@ import { files, settings } from '../../db/schema';
 import { PUBLIC_PATH, TMP_PATH, UPLOADS_PATH } from '../../helpers/paths';
 import { fileManager } from '../file-manager';
 
+// Stored names are prefixed with an unguessable randomUUIDv7() token (see getUniqueName).
+const UUID_PREFIX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/;
+
 describe('file manager', () => {
 	const tempFilesToCleanup: string[] = [];
 	let testFilePath: string;
@@ -176,7 +179,8 @@ describe('file manager', () => {
 
 		expect(savedFile).toBeDefined();
 		expect(savedFile.id).toBeGreaterThan(0);
-		expect(savedFile.name).toBe(testFileName);
+		expect(savedFile.name).toMatch(UUID_PREFIX);
+		expect(savedFile.name.endsWith(testFileName)).toBe(true);
 		expect(savedFile.originalName).toBe(testFileName);
 		expect(savedFile.extension).toBe('.txt');
 		expect(savedFile.size).toBe(stats.size);
@@ -447,7 +451,8 @@ describe('file manager', () => {
 
 		tempFilesToCleanup.push(path.join(PUBLIC_PATH, savedFile.name));
 
-		expect(savedFile.name).toBe('payload.txt');
+		expect(savedFile.name).toMatch(UUID_PREFIX);
+		expect(savedFile.name.endsWith('payload.txt')).toBe(true);
 		expect(savedFile.originalName).toBe('payload.txt');
 		expect(resolvedSavedPath.startsWith(`${resolvedPublicPath}${path.sep}`)).toBe(true);
 	});
@@ -489,7 +494,7 @@ describe('file manager', () => {
 		expect(path1).not.toBe(path3);
 	});
 
-	test('should append counter when same original name already exists', async () => {
+	test('should give each upload a unique unguessable name even with identical original names', async () => {
 		const fileAPath = path.join(UPLOADS_PATH, `dup-${Date.now()}.txt`);
 
 		await fs.writeFile(fileAPath, 'first');
@@ -524,17 +529,22 @@ describe('file manager', () => {
 
 		tempFilesToCleanup.push(path.join(PUBLIC_PATH, savedB.name));
 
-		expect(savedA.name).toBe('my-file.txt');
-		expect(savedB.name).toBe('my-file-2.txt');
+		expect(savedA.name).toMatch(UUID_PREFIX);
+		expect(savedB.name).toMatch(UUID_PREFIX);
+		expect(savedA.name.endsWith('my-file.txt')).toBe(true);
+		expect(savedB.name.endsWith('my-file.txt')).toBe(true);
+		expect(savedA.name).not.toBe(savedB.name);
+		expect(savedA.originalName).toBe('my-file.txt');
+		expect(savedB.originalName).toBe('my-file.txt');
 
 		const dbA = await tdb.select().from(files).where(eq(files.id, savedA.id)).get();
 
 		const dbB = await tdb.select().from(files).where(eq(files.id, savedB.id)).get();
 
 		expect(dbA).toBeDefined();
-		expect(dbA?.name).toBe('my-file.txt');
+		expect(dbA?.name).toBe(savedA.name);
 		expect(dbB).toBeDefined();
-		expect(dbB?.name).toBe('my-file-2.txt');
+		expect(dbB?.name).toBe(savedB.name);
 	});
 
 	test('temporaryFileExists returns correct boolean', async () => {
