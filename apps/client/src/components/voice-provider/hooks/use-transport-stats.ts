@@ -1,5 +1,5 @@
 import type { Transport } from 'mediasoup-client/types';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { logVoice } from '@/helpers/browser-logger';
 
 export type TransportStats = {
@@ -68,6 +68,54 @@ export type TransportStatsData = {
 
 const SMOOTHING_WINDOW = 5; // Number of samples for moving average
 
+const EMPTY_TRANSPORT_STATS: TransportStatsData = {
+	producer: null,
+	consumer: null,
+	totalBytesReceived: 0,
+	totalBytesSent: 0,
+	currentBitrateSent: 0,
+	currentBitrateReceived: 0,
+	averageBitrateSent: 0,
+	averageBitrateReceived: 0,
+	isMonitoring: false,
+};
+
+// Stats samples land at 1 Hz for the whole voice session. Exposing them through
+// React state in the voice provider re-rendered every context consumer once a
+// second, so the data lives in a subscribe/snapshot store instead and only the
+// components that actually display it (the stats popover) subscribe.
+export type TransportStatsStore = {
+	subscribe: (listener: () => void) => () => void;
+	getSnapshot: () => TransportStatsData;
+};
+
+type TMutableTransportStatsStore = TransportStatsStore & {
+	set: (updater: (previous: TransportStatsData) => TransportStatsData) => void;
+};
+
+const createTransportStatsStore = (): TMutableTransportStatsStore => {
+	let snapshot = EMPTY_TRANSPORT_STATS;
+	const listeners = new Set<() => void>();
+
+	return {
+		subscribe: (listener) => {
+			listeners.add(listener);
+
+			return () => {
+				listeners.delete(listener);
+			};
+		},
+		getSnapshot: () => snapshot,
+		set: (updater) => {
+			snapshot = updater(snapshot);
+
+			listeners.forEach((listener) => {
+				listener();
+			});
+		},
+	};
+};
+
 // 'video/AV1' -> 'AV1'. Surfaces the codec actually negotiated on the wire,
 // which can differ from the user's selection (e.g. AV1 silently falling back to
 // H264 when no hardware encoder is available).
@@ -87,17 +135,13 @@ const shortCodecName = (mimeType: string | undefined): string | null => {
 type ConfiguredMaxBitrateGetter = () => Map<number, number>;
 
 const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter) => {
-	const [stats, setStats] = useState<TransportStatsData>({
-		producer: null,
-		consumer: null,
-		totalBytesReceived: 0,
-		totalBytesSent: 0,
-		currentBitrateSent: 0,
-		currentBitrateReceived: 0,
-		averageBitrateSent: 0,
-		averageBitrateReceived: 0,
-		isMonitoring: false,
-	});
+	const storeRef = useRef<TMutableTransportStatsStore | undefined>(undefined);
+
+	if (!storeRef.current) {
+		storeRef.current = createTransportStatsStore();
+	}
+
+	const store = storeRef.current;
 
 	// Keep the latest getter in a ref so parseTransportStats (a []-dep callback)
 	// always reads the current producers without re-creating the callback.
@@ -226,7 +270,7 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 				intervalRef.current = null;
 			}
 
-			setStats((prev) => ({
+			store.set((prev) => ({
 				...prev,
 				isMonitoring: false,
 			}));
@@ -265,7 +309,7 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 					intervalRef.current = null;
 				}
 
-				setStats((prev) => ({
+				store.set((prev) => ({
 					...prev,
 					isMonitoring: false,
 				}));
@@ -329,7 +373,7 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 					? bitrateReceivedHistoryRef.current.reduce((a, b) => a + b, 0) / bitrateReceivedHistoryRef.current.length
 					: 0;
 
-			setStats((prev) => ({
+			store.set((prev) => ({
 				producer: producerStats,
 				consumer: consumerStats,
 				totalBytesReceived: prev.totalBytesReceived + bytesReceivedDelta,
@@ -348,7 +392,7 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 		} catch (error) {
 			logVoice('Error collecting transport stats', { error });
 		}
-	}, [parseTransportStats]);
+	}, [parseTransportStats, store]);
 
 	const startMonitoring = useCallback(
 		(producerTransport?: Transport | null, consumerTransport?: Transport | null, intervalMs: number = 1000) => {
@@ -376,26 +420,16 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 		producerTransportRef.current = null;
 		consumerTransportRef.current = null;
 
-		setStats((prev) => ({
+		store.set((prev) => ({
 			...prev,
 			isMonitoring: false,
 		}));
 
 		logVoice('Stopped transport stats monitoring');
-	}, []);
+	}, [store]);
 
 	const resetStats = useCallback(() => {
-		setStats({
-			producer: null,
-			consumer: null,
-			totalBytesReceived: 0,
-			totalBytesSent: 0,
-			currentBitrateSent: 0,
-			currentBitrateReceived: 0,
-			averageBitrateSent: 0,
-			averageBitrateReceived: 0,
-			isMonitoring: false,
-		});
+		store.set(() => EMPTY_TRANSPORT_STATS);
 
 		previousStatsRef.current = {
 			producer: null,
@@ -406,20 +440,17 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 		bitrateReceivedHistoryRef.current = [];
 
 		logVoice('Transport stats reset');
-	}, []);
-
-	const statsRef = useRef(stats);
-	statsRef.current = stats;
+	}, [store]);
 
 	useEffect(() => {
 		window.printVoiceStats = () => {
-			logVoice('Current Transport Stats:', { stats: statsRef.current });
+			logVoice('Current Transport Stats:', { stats: store.getSnapshot() });
 		};
 
 		return () => {
 			delete window.printVoiceStats;
 		};
-	}, []);
+	}, [store]);
 
 	useEffect(() => {
 		return () => {
@@ -429,12 +460,15 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 		};
 	}, []);
 
+	// Expose only the read side; the collector keeps the mutable handle.
+	const publicStore: TransportStatsStore = store;
+
 	return {
-		stats,
+		store: publicStore,
 		startMonitoring,
 		stopMonitoring,
 		resetStats,
 	};
 };
 
-export { useTransportStats };
+export { EMPTY_TRANSPORT_STATS, useTransportStats };

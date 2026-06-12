@@ -55,7 +55,8 @@ import { FloatingPinnedCard } from './floating-pinned-card';
 import { useLocalStreams } from './hooks/use-local-streams';
 import { getPendingStreamKey, usePendingStreams } from './hooks/use-pending-streams';
 import { useRemoteStreams } from './hooks/use-remote-streams';
-import { type TransportStatsData, useTransportStats } from './hooks/use-transport-stats';
+import { useScreenShareQualityGuard } from './hooks/use-screen-share-quality-guard';
+import { type TransportStatsStore, useTransportStats } from './hooks/use-transport-stats';
 import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
@@ -69,6 +70,7 @@ import {
 	updatePushMicStateForKeyEvent,
 } from './push-mic-state';
 import { getVideoBitratePolicy, type TVideoBitrateCodec } from './video-bitrate-policy';
+import { VIDEO_DEGRADATION_PREFERENCE } from './video-encoding-constants';
 import { createVoiceActivityStore, type VoiceActivityStore } from './voice-activity';
 import { VolumeControlProvider } from './volume-control-provider';
 import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
@@ -285,14 +287,6 @@ const resolveScreenShareVideoCodec = async (
 
 	return resolvePreferredVideoCodec(rtpCapabilities, preference);
 };
-
-// Screen and webcam captures are both motion content, so their sender
-// `contentHint` is 'motion'. That alone would default degradationPreference to
-// 'maintain-framerate' (drop resolution to hold fps). We override it to
-// 'balanced' so the encoder can trade a little of both under bitrate/CPU
-// pressure instead of collapsing frame rate the way 'detail' +
-// 'maintain-resolution' did on high-motion captures.
-const VIDEO_DEGRADATION_PREFERENCE: RTCDegradationPreference = 'balanced';
 
 const applyVideoDegradationPreference = async (sender: RTCRtpSender | undefined, label: string): Promise<void> => {
 	if (!sender) {
@@ -538,7 +532,6 @@ const createMicGainPipeline = async (
 export type TVoiceProvider = {
 	loading: boolean;
 	connectionStatus: ConnectionStatus;
-	transportStats: TransportStatsData;
 	audioVideoRefsMap: Map<number, AudioVideoRefs>;
 	ownVoiceState: TVoiceUserState;
 	getOrCreateRefs: (remoteId: number) => AudioVideoRefs;
@@ -564,17 +557,6 @@ export type TVoiceProvider = {
 const VoiceProviderContext = createContext<TVoiceProvider>({
 	loading: false,
 	connectionStatus: ConnectionStatus.DISCONNECTED,
-	transportStats: {
-		producer: null,
-		consumer: null,
-		totalBytesReceived: 0,
-		totalBytesSent: 0,
-		isMonitoring: false,
-		currentBitrateReceived: 0,
-		currentBitrateSent: 0,
-		averageBitrateReceived: 0,
-		averageBitrateSent: 0,
-	},
 	audioVideoRefsMap: new Map(),
 	getOrCreateRefs: () => createEmptyAudioVideoRefs(),
 	acceptStream: () => undefined,
@@ -603,6 +585,11 @@ const VoiceProviderContext = createContext<TVoiceProvider>({
 });
 
 const VoiceActivityContext = createContext<VoiceActivityStore | null>(null);
+
+// Transport stats update at 1 Hz for the whole voice session. They live in a
+// dedicated subscribe/snapshot store (separate from VoiceProviderContext) so
+// only the components that display them re-render on each sample.
+const TransportStatsContext = createContext<TransportStatsStore | null>(null);
 
 type TVoiceProviderProps = {
 	children: React.ReactNode;
@@ -699,6 +686,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const micGainPipelineRef = useRef<TMicGainPipeline | undefined>(undefined);
 	const standbyDisplayAudioTrackRef = useRef<MediaStreamTrack | undefined>(undefined);
 	const standbyDisplayAudioStreamRef = useRef<MediaStream | undefined>(undefined);
+	// Last onTrackEnded handler passed to publishScreenShareTrack. Republish
+	// paths (transport recovery, the H264 quality-guard restart) reuse it so the
+	// stop-sync side effects survive a producer restart.
+	const screenShareTrackEndedHandlerRef = useRef<(() => void | Promise<void>) | undefined>(undefined);
+	const isRestartingScreenShareRef = useRef(false);
 	const isPushToTalkHeldRef = useRef(false);
 	const isPushToMuteHeldRef = useRef(false);
 	const micMutedBeforePushRef = useRef<boolean | undefined>(undefined);
@@ -1048,8 +1040,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		return maxBitrateBySsrc;
 	}, [localScreenShareProducer, localVideoProducer]);
 
-	const { stats: transportStats, startMonitoring, stopMonitoring, resetStats } =
-		useTransportStats(getConfiguredVideoMaxBitrates);
+	const {
+		store: transportStatsStore,
+		startMonitoring,
+		stopMonitoring,
+		resetStats,
+	} = useTransportStats(getConfiguredVideoMaxBitrates);
 
 	const handleVoiceActivityUpdate = useCallback((activity: { userId: number; isSpeaking: boolean }) => {
 		voiceActivityStoreRef.current.setUserActivity(activity.userId, {
@@ -1448,9 +1444,18 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			track: MediaStreamTrack,
 			options: {
 				onTrackEnded?: () => void | Promise<void>;
+				// Bypass codec preference resolution and pin this codec (used by the
+				// quality guard to restart on H264 after a software AV1 fallback).
+				forceCodecMimeType?: string;
 			} = {},
 		) => {
 			setLocalScreenShare(stream);
+
+			if (options.onTrackEnded) {
+				screenShareTrackEndedHandlerRef.current = options.onTrackEnded;
+			}
+
+			const onTrackEnded = options.onTrackEnded ?? screenShareTrackEndedHandlerRef.current;
 
 			logVoice('Obtained video track', { videoTrack: track });
 
@@ -1472,12 +1477,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				frameRate: screenFramerate,
 			});
 
-			const preferredVideoCodec = await resolveScreenShareVideoCodec(sendRtpCapabilities.current, devices.videoCodec, {
-				width: screenWidth,
-				height: screenHeight,
-				framerate: screenFramerate,
-				bitrate: baseScreenBitratePolicy.startKbps * 1000,
-			});
+			const preferredVideoCodec = options.forceCodecMimeType
+				? findVideoCodecByMime(sendRtpCapabilities.current, options.forceCodecMimeType)
+				: await resolveScreenShareVideoCodec(sendRtpCapabilities.current, devices.videoCodec, {
+						width: screenWidth,
+						height: screenHeight,
+						framerate: screenFramerate,
+						bitrate: baseScreenBitratePolicy.startKbps * 1000,
+					});
 			if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
 				logVoice('Preferred screen share codec unavailable, falling back to auto', {
 					preferredCodec: devices.videoCodec,
@@ -1516,6 +1523,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					videoGoogleStartBitrate: screenBitratePolicy.startKbps,
 				},
 				codec: preferredVideoCodec,
+				// The quality guard may close and republish this producer while
+				// reusing the same capture track. Keep explicit stream cleanup as
+				// the only path that stops the browser screen-share capture.
+				stopTracks: false,
 				appData: { kind: StreamKind.SCREEN },
 			});
 
@@ -1549,7 +1560,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				setLocalScreenShare(undefined);
 				setLocalScreenShareAudio(undefined);
-				void options.onTrackEnded?.();
+				void onTrackEnded?.();
 			};
 		},
 		[
@@ -1615,6 +1626,79 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		},
 		[bindProducerCloseHandler, localScreenShareAudioProducer, producerTransport, setLocalScreenShareAudio],
 	);
+
+	// Backstop for the AV1 libaom trapdoor: once the runtime encoder falls to
+	// software AV1 it never climbs back, so replace the producer with hardware
+	// H264 while keeping the same capture track. Viewers see the producer close
+	// and the H264 producer announced — a brief interruption instead of a
+	// permanently pinned ~1fps stream.
+	const restartScreenShareWithH264 = useCallback(async () => {
+		if (isRestartingScreenShareRef.current) {
+			return;
+		}
+
+		const producer = localScreenShareProducer.current;
+		const stream = localScreenShareStreamRef.current;
+		const track = stream?.getVideoTracks()[0];
+
+		if (!producer || producer.closed || !stream || !track || track.readyState !== 'live') {
+			return;
+		}
+
+		isRestartingScreenShareRef.current = true;
+
+		try {
+			logVoice('Restarting screen share producer on H264 after software AV1 fallback', {
+				producerId: producer.id,
+			});
+
+			// The @close handler bound in publishScreenShareTrack notifies the server,
+			// which broadcasts VOICE_PRODUCER_CLOSED before the new producer is announced.
+			producer.close();
+
+			if (localScreenShareProducer.current === producer) {
+				localScreenShareProducer.current = undefined;
+			}
+
+			await publishScreenShareTrack(stream, track, {
+				forceCodecMimeType: 'video/H264',
+			});
+		} catch (error) {
+			logVoice('Failed to restart screen share producer on H264, stopping screen share', { error });
+
+			// The AV1 producer is already closed and the republish failed — without
+			// cleanup the share would look active with no producer behind it, and
+			// the guard (seeing no producer) could never recover it. track.stop()
+			// does not fire 'ended' on its own track, so the ended handler must be
+			// invoked manually; it runs stopScreenShareStream and syncs
+			// sharingScreen to the store and server.
+			const onTrackEnded = screenShareTrackEndedHandlerRef.current;
+
+			stream.getTracks().forEach((currentTrack) => {
+				currentTrack.stop();
+			});
+			localScreenShareAudioProducer.current?.close();
+			localScreenShareAudioProducer.current = undefined;
+			setLocalScreenShare(undefined);
+			setLocalScreenShareAudio(undefined);
+			toast.error('Screen sharing stopped: the video encoder could not be restarted.');
+			void onTrackEnded?.();
+		} finally {
+			isRestartingScreenShareRef.current = false;
+		}
+	}, [
+		localScreenShareProducer,
+		localScreenShareAudioProducer,
+		publishScreenShareTrack,
+		setLocalScreenShare,
+		setLocalScreenShareAudio,
+	]);
+
+	useScreenShareQualityGuard({
+		screenShareProducerRef: localScreenShareProducer,
+		active: localScreenShareStream !== undefined,
+		onAv1SoftwareFallback: restartScreenShareWithH264,
+	});
 
 	const cleanupMicAudioPipeline = useCallback(async () => {
 		const currentAudioProducer = localAudioProducer.current;
@@ -1962,6 +2046,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		localScreenShareAudioProducer.current = undefined;
 		standbyDisplayAudioTrackRef.current = undefined;
 		standbyDisplayAudioStreamRef.current = undefined;
+		screenShareTrackEndedHandlerRef.current = undefined;
 
 		trackDesktopAppAudioCleanup();
 
@@ -3166,7 +3251,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		() => ({
 			loading,
 			connectionStatus,
-			transportStats,
 			audioVideoRefsMap: audioVideoRefsMap.current,
 			getOrCreateRefs,
 			acceptStream,
@@ -3193,7 +3277,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[
 			loading,
 			connectionStatus,
-			transportStats,
 			getOrCreateRefs,
 			acceptStream,
 			stopWatchingStream,
@@ -3220,20 +3303,22 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	return (
 		<VoiceProviderContext.Provider value={contextValue}>
 			<VoiceActivityContext.Provider value={voiceActivityStoreRef.current}>
-				<VolumeControlProvider>
-					<div className="relative flex min-h-0 flex-1 flex-col">
-						<FloatingPinnedCard
-							remoteUserStreams={remoteUserStreams}
-							externalStreams={externalStreams}
-							localScreenShareStream={localScreenShareStream}
-							localVideoStream={localVideoStream}
-						/>
-						{children}
-					</div>
-				</VolumeControlProvider>
+				<TransportStatsContext.Provider value={transportStatsStore}>
+					<VolumeControlProvider>
+						<div className="relative flex min-h-0 flex-1 flex-col">
+							<FloatingPinnedCard
+								remoteUserStreams={remoteUserStreams}
+								externalStreams={externalStreams}
+								localScreenShareStream={localScreenShareStream}
+								localVideoStream={localVideoStream}
+							/>
+							{children}
+						</div>
+					</VolumeControlProvider>
+				</TransportStatsContext.Provider>
 			</VoiceActivityContext.Provider>
 		</VoiceProviderContext.Provider>
 	);
 });
 
-export { VoiceActivityContext, VoiceProvider, VoiceProviderContext };
+export { TransportStatsContext, VoiceActivityContext, VoiceProvider, VoiceProviderContext };

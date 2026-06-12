@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { getVideoBitratePolicy } from '../video-bitrate-policy';
+import { getVideoBitratePolicy, SCREEN_START_KBPS_CAP } from '../video-bitrate-policy';
 
 describe('getVideoBitratePolicy', () => {
 	it('uses hardcoded start/max bitrate for common screen combos', () => {
@@ -23,8 +23,9 @@ describe('getVideoBitratePolicy', () => {
 		});
 
 		expect(fullHd30).toEqual({ startKbps: 6000, maxKbps: 12000 });
-		expect(fullHd60).toEqual({ startKbps: 9000, maxKbps: 18000 });
-		expect(qhd30).toEqual({ startKbps: 9000, maxKbps: 18000 });
+		// 1080p60 / 1440p30 table starts are 9000, trimmed by the screen start cap.
+		expect(fullHd60).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 18000 });
+		expect(qhd30).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 18000 });
 	});
 
 	it('uses hardcoded camera buckets by resolution and frame rate', () => {
@@ -59,8 +60,41 @@ describe('getVideoBitratePolicy', () => {
 			frameRate: 240,
 		});
 
-		expect(screenExtreme).toEqual({ startKbps: 30000, maxKbps: 100000 });
+		// Screen start bitrates are capped (see SCREEN_START_KBPS_CAP); the
+		// ceiling still comes from the highest bucket.
+		expect(screenExtreme).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 100000 });
 		expect(cameraExtreme).toEqual({ startKbps: 11000, maxKbps: 24000 });
+	});
+
+	it('caps high screen-tier start bitrates without touching the ceiling', () => {
+		const qhd60 = getVideoBitratePolicy({
+			profile: 'screen',
+			width: 2560,
+			height: 1440,
+			frameRate: 60,
+		});
+		const uhd30 = getVideoBitratePolicy({
+			profile: 'screen',
+			width: 3840,
+			height: 2160,
+			frameRate: 30,
+		});
+
+		// Table values are 14000 start for both tiers; the cap brings them down
+		// while leaving the max ceilings from the table untouched.
+		expect(qhd60).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 28000 });
+		expect(uhd30).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 30000 });
+	});
+
+	it('does not cap camera start bitrates', () => {
+		const cameraHigh = getVideoBitratePolicy({
+			profile: 'camera',
+			width: 3840,
+			height: 2160,
+			frameRate: 120,
+		});
+
+		expect(cameraHigh.startKbps).toBe(11000);
 	});
 
 	it('scales only maxKbps per codec, leaving startKbps untouched', () => {
