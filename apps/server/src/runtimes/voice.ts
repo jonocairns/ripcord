@@ -25,7 +25,19 @@ import { mediaSoupWorker, webRtcServer, webRtcServerListenInfo, webRtcServerList
 import { pubsub } from '../utils/pubsub';
 
 const voiceRuntimes = new Map<number, VoiceRuntime>();
-const INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS = 6_000_000;
+// initialAvailableOutgoingBitrate seeds the transport's send-side bandwidth
+// estimate, so it only has an effect where the server sends media — consumer
+// transports. On producer transports (server receives) it is inert; the value
+// is kept for clarity.
+const PRODUCER_INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS = 6_000_000;
+// Seed the SFU→viewer estimate high enough that a screen share is watchable
+// immediately instead of ramping from 6 Mbps: 10 Mbps covers the start bitrate
+// of every screen tier up to 1080p60/1440p30, and GCC's ~8%/s growth closes
+// the gap to the higher tiers in a few seconds instead of ~10s. A viewer on a
+// weaker downlink eats a short burst before the first transport-CC feedback
+// clamps the estimate — the same self-correcting risk the previous 6 Mbps
+// value carried, slightly larger.
+const CONSUMER_INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS = 10_000_000;
 const VOICE_ACTIVITY_OBSERVER_MAX_ENTRIES = 100;
 const VOICE_ACTIVITY_OBSERVER_THRESHOLD_DBOV = -60;
 const VOICE_ACTIVITY_OBSERVER_INTERVAL_MS = 100;
@@ -384,7 +396,7 @@ class VoiceRuntime {
 		}
 	};
 
-	public createTransport = async () => {
+	public createTransport = async (initialAvailableOutgoingBitrate: number) => {
 		const router = this.getRouter();
 
 		const transport = await router.createWebRtcTransport({
@@ -393,7 +405,7 @@ class VoiceRuntime {
 			enableTcp: true,
 			preferUdp: true,
 			preferTcp: false,
-			initialAvailableOutgoingBitrate: INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS,
+			initialAvailableOutgoingBitrate,
 		});
 
 		const params: TTransportParams = {
@@ -409,7 +421,7 @@ class VoiceRuntime {
 	public createConsumerTransport = async (userId: number) => {
 		this.removeConsumerTransport(userId);
 
-		const { transport, params } = await this.createTransport();
+		const { transport, params } = await this.createTransport(CONSUMER_INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS);
 
 		this.consumerTransports[userId] = transport;
 
@@ -454,7 +466,7 @@ class VoiceRuntime {
 	public createProducerTransport = async (userId: number) => {
 		this.removeProducerTransport(userId);
 
-		const { params, transport } = await this.createTransport();
+		const { params, transport } = await this.createTransport(PRODUCER_INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS);
 
 		this.producerTransports[userId] = transport;
 

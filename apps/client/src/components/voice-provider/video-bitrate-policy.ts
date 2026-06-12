@@ -123,6 +123,20 @@ const BITRATE_TABLE: Record<TVideoBitrateProfile, TResolutionTier[]> = {
 	],
 };
 
+// Cap the screen-share start bitrate. The start rate is applied before any
+// congestion feedback exists, so values above this provide little extra
+// ramp-up benefit (GCC can only grow ~8%/s from wherever it starts) while
+// multiplying the overshoot damage on uplinks smaller than the start rate: a
+// 14 Mbps start on a 5 Mbps uplink is ~3x over capacity for the first seconds
+// — queue buildup, a visible stall, and a delay-estimate crater the share
+// starts in. Capped, the worst case is ~1.6x. Ceilings (maxKbps) are
+// untouched; high tiers still ramp to them, just from a sane starting point.
+// Tiers up to 1080p30 start under the cap already, preserving the deliberate
+// high-start behavior that fixed downscale-under-motion; 1080p60/1440p30 are
+// trimmed from 9000 (a ~1.5s ramp difference) and only the 13000+ tiers
+// change materially.
+const SCREEN_START_KBPS_CAP = 8_000;
+
 // The baseline table is tuned for H.264-ish screen-motion bitrate. Different
 // codecs need different ceilings for equivalent quality: VP8 wants a touch more
 // headroom, while VP9/AV1 hit the same quality at a lower rate. Only the max
@@ -167,12 +181,13 @@ const getVideoBitratePolicy = ({
 
 	const resolutionTier = resolveResolutionTier(BITRATE_TABLE[profile], pixelCount);
 	const fpsTier = resolveFpsTier(resolutionTier.fpsTiers, safeFrameRate);
+	const startKbps = profile === 'screen' ? Math.min(fpsTier.startKbps, SCREEN_START_KBPS_CAP) : fpsTier.startKbps;
 
 	return {
-		startKbps: fpsTier.startKbps,
+		startKbps,
 		maxKbps: applyCodecMaxBitrateMultiplier(fpsTier.maxKbps, codec),
 	};
 };
 
 export type { TVideoBitrateCodec, TVideoBitratePolicy, TVideoBitratePolicyInput, TVideoBitrateProfile };
-export { getVideoBitratePolicy };
+export { getVideoBitratePolicy, SCREEN_START_KBPS_CAP };
