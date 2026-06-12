@@ -1,5 +1,6 @@
 import { useContext, useMemo, useSyncExternalStore } from 'react';
-import { VoiceActivityContext, VoiceProviderContext } from '@/components/voice-provider';
+import { TransportStatsContext, VoiceActivityContext, VoiceProviderContext } from '@/components/voice-provider';
+import { EMPTY_TRANSPORT_STATS } from '@/components/voice-provider/hooks/use-transport-stats';
 import { EMPTY_VOICE_ACTIVITY } from '@/components/voice-provider/voice-activity';
 import { useServerStore } from '../slice';
 import {
@@ -47,6 +48,16 @@ export const useVoiceActivity = (userId: number) => {
 		() => context.getUserActivity(userId),
 		() => EMPTY_VOICE_ACTIVITY,
 	);
+};
+
+export const useVoiceTransportStats = () => {
+	const store = useContext(TransportStatsContext);
+
+	if (!store) {
+		throw new Error('useVoiceTransportStats must be used within a MediasoupProvider component');
+	}
+
+	return useSyncExternalStore(store.subscribe, store.getSnapshot, () => EMPTY_TRANSPORT_STATS);
 };
 
 export const useConfirmedOwnVoiceState = () => useServerStore(ownConfirmedVoiceStateSelector);
