@@ -70,6 +70,7 @@ import {
 	updatePushMicStateForKeyEvent,
 } from './push-mic-state';
 import { getVideoBitratePolicy, type TVideoBitrateCodec } from './video-bitrate-policy';
+import { VIDEO_DEGRADATION_PREFERENCE } from './video-encoding-constants';
 import { createVoiceActivityStore, type VoiceActivityStore } from './voice-activity';
 import { VolumeControlProvider } from './volume-control-provider';
 import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
@@ -286,14 +287,6 @@ const resolveScreenShareVideoCodec = async (
 
 	return resolvePreferredVideoCodec(rtpCapabilities, preference);
 };
-
-// Screen and webcam captures are both motion content, so their sender
-// `contentHint` is 'motion'. That alone would default degradationPreference to
-// 'maintain-framerate' (drop resolution to hold fps). We override it to
-// 'balanced' so the encoder can trade a little of both under bitrate/CPU
-// pressure instead of collapsing frame rate the way 'detail' +
-// 'maintain-resolution' did on high-motion captures.
-const VIDEO_DEGRADATION_PREFERENCE: RTCDegradationPreference = 'balanced';
 
 const applyVideoDegradationPreference = async (sender: RTCRtpSender | undefined, label: string): Promise<void> => {
 	if (!sender) {
@@ -1667,11 +1660,35 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				forceCodecMimeType: 'video/H264',
 			});
 		} catch (error) {
-			logVoice('Failed to restart screen share producer on H264', { error });
+			logVoice('Failed to restart screen share producer on H264, stopping screen share', { error });
+
+			// The AV1 producer is already closed and the republish failed — without
+			// cleanup the share would look active with no producer behind it, and
+			// the guard (seeing no producer) could never recover it. track.stop()
+			// does not fire 'ended' on its own track, so the ended handler must be
+			// invoked manually; it runs stopScreenShareStream and syncs
+			// sharingScreen to the store and server.
+			const onTrackEnded = screenShareTrackEndedHandlerRef.current;
+
+			stream.getTracks().forEach((currentTrack) => {
+				currentTrack.stop();
+			});
+			localScreenShareAudioProducer.current?.close();
+			localScreenShareAudioProducer.current = undefined;
+			setLocalScreenShare(undefined);
+			setLocalScreenShareAudio(undefined);
+			toast.error('Screen sharing stopped: the video encoder could not be restarted.');
+			void onTrackEnded?.();
 		} finally {
 			isRestartingScreenShareRef.current = false;
 		}
-	}, [localScreenShareProducer, publishScreenShareTrack]);
+	}, [
+		localScreenShareProducer,
+		localScreenShareAudioProducer,
+		publishScreenShareTrack,
+		setLocalScreenShare,
+		setLocalScreenShareAudio,
+	]);
 
 	useScreenShareQualityGuard({
 		screenShareProducerRef: localScreenShareProducer,

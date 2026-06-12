@@ -1,6 +1,7 @@
 import type { AppData, Producer } from 'mediasoup-client/types';
 import { type MutableRefObject, useEffect, useRef } from 'react';
 import { logVoice } from '@/helpers/browser-logger';
+import { VIDEO_DEGRADATION_PREFERENCE } from '../video-encoding-constants';
 
 // Runtime quality guard for the local screen-share producer, driven by the
 // sender's outbound-rtp stats. Two protections:
@@ -33,10 +34,6 @@ const FLOOR_CAPTURE_DIVISOR = 2;
 // doesn't thrash setParameters on every degradation cycle.
 const FLOOR_REAPPLY_COOLDOWN_MS = 15_000;
 const QUALITY_LIMITATION_REASONS_FOR_FLOOR = new Set(['bandwidth', 'cpu']);
-
-// Keep in sync with VIDEO_DEGRADATION_PREFERENCE in the voice provider (not
-// imported to avoid a hook -> provider import cycle).
-const RESTORE_DEGRADATION_PREFERENCE: RTCDegradationPreference = 'balanced';
 
 type TScreenShareQualityGuardParams = {
 	screenShareProducerRef: MutableRefObject<Producer<AppData> | undefined>;
@@ -120,7 +117,7 @@ const useScreenShareQualityGuard = ({
 					encoding.scaleResolutionDownBy = 1;
 				}
 
-				params.degradationPreference = RESTORE_DEGRADATION_PREFERENCE;
+				params.degradationPreference = VIDEO_DEGRADATION_PREFERENCE;
 				await sender.setParameters(params);
 
 				floorApplied = false;
@@ -243,7 +240,14 @@ const useScreenShareQualityGuard = ({
 					return;
 				}
 
-				if (outbound.qualityLimitationReason === 'none') {
+				// Release symmetrically with the apply condition: when the limitation
+				// is no longer bandwidth/cpu for enough samples. Requiring exactly
+				// 'none' would pin the floor forever if the browser settles on
+				// 'other' (or stops reporting the field) after congestion clears; a
+				// premature release just re-enters the apply path after its cooldown.
+				const isStillQualityLimited = QUALITY_LIMITATION_REASONS_FOR_FLOOR.has(outbound.qualityLimitationReason ?? '');
+
+				if (!isStillQualityLimited) {
 					recoveredSamples += 1;
 
 					if (recoveredSamples >= FLOOR_SAMPLES_BEFORE_RESTORE) {
