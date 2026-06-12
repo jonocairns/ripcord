@@ -1,4 +1,4 @@
-import { isEmptyMessage, Permission } from '@sharkord/shared';
+import { ChannelPermission, isEmptyMessage, Permission } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { config } from '../../config';
@@ -38,6 +38,8 @@ const editMessageRoute = rateLimitedProcedure(protectedProcedure, {
 			code: 'NOT_FOUND',
 			message: 'Message not found',
 		});
+
+		await ctx.needsChannelPermission(message.channelId, ChannelPermission.SEND_MESSAGES);
 
 		invariant(message.editable, {
 			code: 'FORBIDDEN',
