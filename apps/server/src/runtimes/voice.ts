@@ -510,7 +510,31 @@ class VoiceRuntime {
 		}
 	};
 
+	private getUserProducerByKind = (userId: number, type: StreamKind): Producer<AppData> | undefined => {
+		switch (type) {
+			case StreamKind.VIDEO:
+				return this.videoProducers[userId];
+			case StreamKind.AUDIO:
+				return this.audioProducers[userId];
+			case StreamKind.SCREEN:
+				return this.screenProducers[userId];
+			case StreamKind.SCREEN_AUDIO:
+				return this.screenAudioProducers[userId];
+			default:
+				return undefined;
+		}
+	};
+
 	public addProducer = (userId: number, type: StreamKind, producer: Producer<AppData>) => {
+		// Replacing a same-kind producer must close the old one before the map is
+		// overwritten; otherwise it stays attached to the transport and its
+		// eventual close handler would tear down the replacement's bookkeeping.
+		const existingProducer = this.getUserProducerByKind(userId, type);
+
+		if (existingProducer && existingProducer !== producer && !existingProducer.closed) {
+			existingProducer.close();
+		}
+
 		if (type === StreamKind.VIDEO) {
 			this.videoProducers[userId] = producer;
 		} else if (type === StreamKind.AUDIO) {
@@ -526,14 +550,22 @@ class VoiceRuntime {
 		}
 
 		producer.observer.on('close', () => {
+			// A replaced producer can close after its successor was registered.
+			// Only the active producer may clear the map entry and broadcast
+			// VOICE_PRODUCER_CLOSED — a stale close would otherwise drop a live
+			// stream for every viewer.
 			if (type === StreamKind.VIDEO) {
+				if (this.videoProducers[userId] !== producer) return;
 				delete this.videoProducers[userId];
 			} else if (type === StreamKind.AUDIO) {
+				if (this.audioProducers[userId] !== producer) return;
 				delete this.audioProducers[userId];
 				this.removeAudioProducerFromVoiceActivityObserver(userId, producer);
 			} else if (type === StreamKind.SCREEN) {
+				if (this.screenProducers[userId] !== producer) return;
 				delete this.screenProducers[userId];
 			} else if (type === StreamKind.SCREEN_AUDIO) {
+				if (this.screenAudioProducers[userId] !== producer) return;
 				delete this.screenAudioProducers[userId];
 			}
 
