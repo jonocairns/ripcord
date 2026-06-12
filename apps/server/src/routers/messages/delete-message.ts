@@ -1,4 +1,4 @@
-import { Permission } from '@sharkord/shared';
+import { ChannelPermission, Permission } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
@@ -27,6 +27,8 @@ const deleteMessageRoute = protectedProcedure
 			code: 'NOT_FOUND',
 			message: 'Message not found',
 		});
+
+		await ctx.needsChannelPermission(targetMessage.channelId, ChannelPermission.VIEW_CHANNEL);
 		invariant(targetMessage.userId === ctx.user.id || (await ctx.hasPermission(Permission.MANAGE_MESSAGES)), {
 			code: 'FORBIDDEN',
 			message: 'You do not have permission to delete this message',
