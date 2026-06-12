@@ -129,7 +129,7 @@ describe('/public', () => {
 		expect(response.headers.get('Content-Type')).toInclude('text/plain');
 		expect(response.headers.get('Content-Length')).toBe(dbFile!.size.toString());
 		expect(response.headers.get('Content-Disposition')).toBe(
-			`attachment; filename="${dbFile!.name}"; filename*=UTF-8''${encodeURIComponent(dbFile!.name)}`,
+			`attachment; filename="${dbFile!.originalName.replace(/[^\w. -]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(dbFile!.originalName)}`,
 		);
 
 		const responseText = await response.text();

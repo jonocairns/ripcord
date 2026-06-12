@@ -3,7 +3,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { StorageOverflowAction, type TFile, type TTempFile } from '@sharkord/shared';
 import { randomUUIDv7 } from 'bun';
-import { like } from 'drizzle-orm';
 import { db } from '../db';
 import { removeFile } from '../db/mutations/files';
 import { getExceedingOldFiles, getUsedFileQuota } from '../db/queries/files';
@@ -315,33 +314,20 @@ class FileManager {
 		}
 	};
 
-	private getUniqueName = async (originalName: string): Promise<string> => {
+	private getUniqueName = (originalName: string): string => {
 		const safeOriginalName = sanitizeOriginalName(originalName);
 		const rawExtension = path.extname(safeOriginalName);
 		const extension = sanitizeExtension(rawExtension);
+		// Prefix the stored name with an unguessable random token. Files are served by
+		// exact-name lookup with no auth for non-private-channel files (see http/public.ts),
+		// so a human-derived/enumerable name lets an unauthenticated attacker fetch avatars,
+		// banners, emoji and public-channel uploads by guessing the name. The token makes the
+		// stored/served name unguessable; originalName is preserved for the download filename.
+		// The ~122 bits of entropy in the token also guarantees uniqueness, so no DB
+		// deduplication round-trip is needed.
 		const baseName = sanitizeBaseName(path.basename(safeOriginalName, rawExtension));
 
-		// Fetch all existing names that share the same base in one query.
-		// No escaping needed — the broader match is harmless; Set.has() does exact conflict detection.
-		const existing = await db
-			.select({ name: files.name })
-			.from(files)
-			.where(like(files.name, `${baseName}%${extension}`))
-			.all();
-
-		if (existing.length === 0) return `${baseName}${extension}`;
-
-		const existingNames = new Set(existing.map((f) => f.name));
-		if (!existingNames.has(`${baseName}${extension}`)) {
-			return `${baseName}${extension}`;
-		}
-
-		let counter = 2;
-		while (existingNames.has(`${baseName}-${counter}${extension}`)) {
-			counter++;
-		}
-
-		return `${baseName}-${counter}${extension}`;
+		return `${randomUUIDv7()}-${baseName}${extension}`;
 	};
 
 	public async saveFile(tempFileId: string, userId: number): Promise<TFile> {
@@ -357,7 +343,7 @@ class FileManager {
 
 		await this.handleStorageLimits(tempFile);
 
-		const fileName = await this.getUniqueName(tempFile.originalName);
+		const fileName = this.getUniqueName(tempFile.originalName);
 		const destinationPath = path.join(PUBLIC_PATH, fileName);
 
 		await moveFile(tempFile.path, destinationPath);
