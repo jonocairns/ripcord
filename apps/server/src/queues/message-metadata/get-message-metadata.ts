@@ -58,8 +58,12 @@ export const isUrlSafeForPreview = (url: string): boolean => {
 		return false;
 	}
 
-	// it's already an ip address, check if it's private
-	if (isIP(parsed.hostname) && isPrivateIP(parsed.hostname)) {
+	// it's already an ip address, check if it's private.
+	// URL.hostname keeps the brackets around IPv6 literals ([::1]) but node:net's
+	// isIP() rejects bracketed input, so strip them before the literal-IP check —
+	// otherwise IPv6 loopback/link-local/private literals bypass the guard.
+	const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
+	if (isIP(hostname) && isPrivateIP(hostname)) {
 		return false;
 	}
 
