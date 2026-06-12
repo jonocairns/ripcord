@@ -30,7 +30,7 @@ export const useVoice = () => {
 	const context = useContext(VoiceProviderContext);
 
 	if (!context) {
-		throw new Error('useVoice must be used within a MediasoupProvider component');
+		throw new Error('useVoice must be used within a VoiceProvider component');
 	}
 
 	return context;
@@ -40,7 +40,7 @@ export const useVoiceActivity = (userId: number) => {
 	const context = useContext(VoiceActivityContext);
 
 	if (!context) {
-		throw new Error('useVoiceActivity must be used within a MediasoupProvider component');
+		throw new Error('useVoiceActivity must be used within a VoiceProvider component');
 	}
 
 	return useSyncExternalStore(
@@ -54,7 +54,7 @@ export const useVoiceTransportStats = () => {
 	const store = useContext(TransportStatsContext);
 
 	if (!store) {
-		throw new Error('useVoiceTransportStats must be used within a MediasoupProvider component');
+		throw new Error('useVoiceTransportStats must be used within a VoiceProvider component');
 	}
 
 	return useSyncExternalStore(store.subscribe, store.getSnapshot, () => EMPTY_TRANSPORT_STATS);

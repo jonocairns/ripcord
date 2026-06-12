@@ -506,13 +506,10 @@ class VoiceRuntime {
 	public getProducer = (type: StreamKind, id: number) => {
 		switch (type) {
 			case StreamKind.VIDEO:
-				return this.videoProducers[id];
 			case StreamKind.AUDIO:
-				return this.audioProducers[id];
 			case StreamKind.SCREEN:
-				return this.screenProducers[id];
 			case StreamKind.SCREEN_AUDIO:
-				return this.screenAudioProducers[id];
+				return this.getUserProducerByKind(id, type);
 			case StreamKind.EXTERNAL_VIDEO:
 				return this.externalStreamsInternal[id]?.producers.videoProducer;
 			case StreamKind.EXTERNAL_AUDIO:

@@ -1523,6 +1523,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					videoGoogleStartBitrate: screenBitratePolicy.startKbps,
 				},
 				codec: preferredVideoCodec,
+				// The quality guard may close and republish this producer while
+				// reusing the same capture track. Keep explicit stream cleanup as
+				// the only path that stops the browser screen-share capture.
+				stopTracks: false,
 				appData: { kind: StreamKind.SCREEN },
 			});
 
