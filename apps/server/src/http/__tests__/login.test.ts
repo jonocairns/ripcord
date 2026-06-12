@@ -6,6 +6,7 @@ import { login, logout, refresh } from '../../__tests__/helpers';
 import { TEST_AUTH_TOKEN_SECRET, TEST_SECRET_TOKEN } from '../../__tests__/seed';
 import { tdb, testsBaseUrl } from '../../__tests__/setup';
 import { invites, refreshTokens, roles, settings, userRoles, users } from '../../db/schema';
+import { REFRESH_REUSE_GRACE_MS } from '../auth-tokens';
 
 type TLoginResponse = {
 	success?: boolean;
@@ -383,6 +384,42 @@ describe('/login', () => {
 		const activeSessions = sessions.filter((session) => !session.revokedAt);
 
 		expect(activeSessions).toHaveLength(1);
+	});
+
+	test('should revoke the whole token family when a stolen token is replayed after the grace window', async () => {
+		// Build a rotation chain A -> B -> C so that B is an already-revoked
+		// mid-chain node by the time A is replayed. This exercises the decoupled
+		// traversal: a naive walk that advances off the revoking UPDATE would halt
+		// at B and leave C (the live terminal token) un-revoked.
+		const loginData = (await (await login('testowner', 'password123')).json()) as TLoginResponse;
+		const tokenA = loginData.refreshToken;
+
+		const refreshB = (await (await refresh(tokenA)).json()) as TLoginResponse;
+		const tokenB = refreshB.refreshToken;
+
+		const refreshC = (await (await refresh(tokenB)).json()) as TLoginResponse;
+		const tokenC = refreshC.refreshToken;
+
+		// Push A's revocation outside the grace window so replaying it is treated as
+		// theft rather than a benign concurrent-refresh race.
+		const tokenAHash = await sha256(tokenA);
+		await tdb
+			.update(refreshTokens)
+			.set({ revokedAt: Date.now() - (REFRESH_REUSE_GRACE_MS + 60_000) })
+			.where(eq(refreshTokens.tokenHash, tokenAHash));
+
+		const replayResponse = await refresh(tokenA);
+
+		expect(replayResponse.status).toBe(401);
+
+		// The live terminal token C must now be dead despite B being revoked first.
+		const followUp = await refresh(tokenC);
+
+		expect(followUp.status).toBe(401);
+
+		const activeSessions = (await tdb.select().from(refreshTokens)).filter((session) => !session.revokedAt);
+
+		expect(activeSessions).toHaveLength(0);
 	});
 
 	test('should return 401 for invalid refresh token', async () => {
