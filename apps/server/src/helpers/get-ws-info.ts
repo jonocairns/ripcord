@@ -51,7 +51,14 @@ const getWsIp = (ws: unknown, req: http.IncomingMessage, options?: TGetWsInfoOpt
 	if (!ip) return undefined;
 
 	if (ip.includes(',')) {
-		ip = ip.split(',')[0]?.trim() ?? ip;
+		// With a single trusted reverse proxy, the right-most X-Forwarded-For entry is the
+		// address the proxy actually observed; entries to its left are attacker-supplied and
+		// must not be trusted for attribution or rate limiting.
+		const parts = ip
+			.split(',')
+			.map((part) => part.trim())
+			.filter((part) => part.length > 0);
+		ip = parts[parts.length - 1];
 	}
 
 	return ip ? normalizeIpLiteral(ip) : undefined;
