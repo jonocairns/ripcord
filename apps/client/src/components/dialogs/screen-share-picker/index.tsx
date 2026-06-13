@@ -239,9 +239,8 @@ const ScreenSharePickerDialog = memo(
 		}, [capabilities]);
 
 		// Reset audio intent / app-audio state on open (and audio-mode change) only.
-		// Deliberately NOT keyed on `sources`: the phase-2 thumbnail merge replaces
-		// the sources array while the dialog is open, and that must not wipe the
-		// user's audio choices.
+		// Deliberately NOT keyed on `sources`: if the sources array is ever replaced
+		// while the dialog is open, that must not wipe the user's audio choices.
 		useEffect(() => {
 			if (!isOpen) {
 				return;
@@ -256,8 +255,8 @@ const ScreenSharePickerDialog = memo(
 		}, [isOpen, defaultAudioMode]);
 
 		// Keep the selection valid as sources arrive/update: initialize to the
-		// first source, preserve the current pick across the phase-2 merge if it
-		// still exists, and only fall back when the selected source disappears.
+		// first source, preserve the current pick if it still exists across any
+		// sources change, and only fall back when the selected source disappears.
 		useEffect(() => {
 			if (!isOpen) {
 				return;
@@ -273,8 +272,8 @@ const ScreenSharePickerDialog = memo(
 		}, [isOpen, sources]);
 
 		// Drop the app-audio target when the user picks a different source. Keyed on
-		// `selectedSourceId`, NOT `sources`, so the phase-2 thumbnail merge (which
-		// keeps the selected id stable) doesn't wipe a valid choice.
+		// `selectedSourceId`, NOT `sources`, so a sources-array change that keeps the
+		// selected id stable doesn't wipe a valid choice.
 		useEffect(() => {
 			if (!selectedSourceId) {
 				return;
