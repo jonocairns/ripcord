@@ -113,7 +113,7 @@
         "jsonwebtoken": "^9.0.2",
         "link-preview-js": "^3.1.0",
         "linkify-it": "^5.0.0",
-        "mediasoup": "^3.19.17",
+        "mediasoup": "3.19.17",
         "otpauth": "^9.5.0",
         "qrcode": "^1.5.4",
         "queue": "^7.0.0",
@@ -147,7 +147,7 @@
       "devDependencies": {
         "@sharkord/shared": "workspace:*",
         "@types/bun": "latest",
-        "mediasoup": "^3.19.17",
+        "mediasoup": "3.19.17",
       },
       "peerDependencies": {
         "typescript": "^5",
@@ -159,7 +159,7 @@
       "dependencies": {
         "drizzle-orm": "^0.44.6",
         "js-sha256": "^0.11.1",
-        "mediasoup": "^3.19.17",
+        "mediasoup": "3.19.17",
         "parse5": "^7.3.0",
         "zod": "^4.3.5",
       },
@@ -1398,7 +1398,7 @@
 
     "media-captions": ["media-captions@1.0.4", "", {}, "sha512-cyDNmuZvvO4H27rcBq2Eudxo9IZRDCOX/I7VEyqbxsEiD2Ei7UYUhG/Sc5fvMZjmathgz3fEK7iAKqvpY+Ux1w=="],
 
-    "mediasoup": ["mediasoup@3.20.1", "", { "dependencies": { "debug": "^4.4.3", "flatbuffers": "^25.9.23", "h264-profile-level-id": "^2.3.2", "node-fetch": "^3.3.2", "supports-color": "^10.2.2", "tar": "^7.5.15" } }, "sha512-oF/pr4GBekKjN5nJc91mRaIiyUg2Xe8i/keC9djZs7QeWZaQ7j2HSgi62fW3Re1bAGGIYaku8SumI2XEVziVAg=="],
+    "mediasoup": ["mediasoup@3.19.17", "", { "dependencies": { "debug": "^4.4.3", "flatbuffers": "^25.9.23", "h264-profile-level-id": "^2.3.2", "node-fetch": "^3.3.2", "supports-color": "^10.2.2", "tar": "^7.5.7" } }, "sha512-wnmp/0dd56GBR5LzP+DXnDSAggykl9RncPIoUsZJffW/ggByyTqUjhC78lPGOPta+xmYLR0bKsogGQLi26S+9g=="],
 
     "mediasoup-client": ["mediasoup-client@3.20.0", "", { "dependencies": { "@types/debug": "^4.1.13", "@types/events-alias": "npm:@types/events@^3.0.3", "awaitqueue": "^3.3.0", "debug": "^4.4.3", "events-alias": "npm:events@^3.3.0", "fake-mediastreamtrack": "^2.2.1", "h264-profile-level-id": "^2.3.2", "sdp-transform": "^3.0.0", "supports-color": "^10.2.2" } }, "sha512-FL6RlsGwvmXbXkbMoc1eW2EqW7k8Cw/Mhls3QewQXH+mioWVeVNWjzcDPmTZ3Sw+mua/n0IH5C/ntuVsx+KegA=="],
 
