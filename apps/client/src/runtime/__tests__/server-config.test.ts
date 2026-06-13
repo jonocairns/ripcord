@@ -78,6 +78,7 @@ describe('isPrivateServerHostname', () => {
 		expect(isPrivateServerHostname('[::1]')).toBe(true);
 		expect(isPrivateServerHostname('[fd00::1]')).toBe(true);
 		expect(isPrivateServerHostname('[fe80::1]')).toBe(true);
+		expect(isPrivateServerHostname('[febf::1]')).toBe(true);
 	});
 
 	it('treats public hosts as public', () => {
@@ -86,5 +87,7 @@ describe('isPrivateServerHostname', () => {
 		expect(isPrivateServerHostname('172.32.0.1')).toBe(false);
 		expect(isPrivateServerHostname('8.8.8.8')).toBe(false);
 		expect(isPrivateServerHostname('[2001:db8::10]')).toBe(false);
+		expect(isPrivateServerHostname('[fe8::1]')).toBe(false);
+		expect(isPrivateServerHostname('[fec0::1]')).toBe(false);
 	});
 });

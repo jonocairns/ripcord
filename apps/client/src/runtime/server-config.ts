@@ -35,10 +35,15 @@ const isPrivateIpv6 = (hostname: string): boolean => {
 		unbracketed === '::1' ||
 		unbracketed.startsWith('fc') ||
 		unbracketed.startsWith('fd') ||
-		unbracketed.startsWith('fe80')
+		// Link-local is fe80::/10 (fe80-febf). Anchored on ':' so e.g. fe8::1 (= 0fe8::1, global) doesn't match.
+		/^fe[89ab][0-9a-f]:/.test(unbracketed)
 	);
 };
 
+/**
+ * Expects a `URL.hostname` value: no port, IPv6 without brackets or with them but never with a port.
+ * A raw `host:port` string (e.g. "192.168.1.1:4991") would be misread as an IPv6 address.
+ */
 const isPrivateServerHostname = (hostname: string): boolean => {
 	const lowercased = hostname.toLowerCase();
 
