@@ -128,6 +128,18 @@ const sanitizeExtras = (value: Event['extra']): NonNullable<Event['extra']> | un
 	return sanitizeContextData(value);
 };
 
+const sanitizeBreadcrumbs = (value: Event['breadcrumbs']): Event['breadcrumbs'] => {
+	if (!Array.isArray(value)) {
+		return value;
+	}
+
+	return value.map((breadcrumb) => ({
+		...breadcrumb,
+		message: breadcrumb.message ? sanitizeString(breadcrumb.message) : breadcrumb.message,
+		data: sanitizeContextData(breadcrumb.data),
+	}));
+};
+
 const sanitizeContexts = (value: Event['contexts']): NonNullable<Event['contexts']> | undefined => {
 	if (!isRecord(value)) {
 		return undefined;
@@ -164,7 +176,7 @@ function sanitizeSentryEvent(event: Event): Event {
 					query_string: undefined,
 				}
 			: event.request,
-		breadcrumbs: undefined,
+		breadcrumbs: sanitizeBreadcrumbs(event.breadcrumbs),
 		extra: sanitizeExtras(event.extra),
 		contexts: sanitizeContexts(event.contexts),
 		exception: event.exception?.values

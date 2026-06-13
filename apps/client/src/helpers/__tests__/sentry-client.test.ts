@@ -6,6 +6,9 @@ describe('configureClientErrorReporting', () => {
 		const browserTracingIntegrationMock = mock((_options: unknown) => ({
 			name: 'browserTracingIntegration',
 		}));
+		const captureConsoleIntegrationMock = mock((_options: unknown) => ({
+			name: 'captureConsoleIntegration',
+		}));
 		let sentryEnabled = false;
 
 		mock.module('@sentry/react', () => ({
@@ -15,6 +18,7 @@ describe('configureClientErrorReporting', () => {
 			},
 			isEnabled: () => sentryEnabled,
 			browserTracingIntegration: browserTracingIntegrationMock,
+			captureConsoleIntegration: captureConsoleIntegrationMock,
 			startSpan: (_options: unknown, callback: () => unknown) => callback(),
 			withScope: mock(() => undefined),
 			captureException: mock(() => undefined),
@@ -40,10 +44,12 @@ describe('configureClientErrorReporting', () => {
 		});
 		expect(initMock).toHaveBeenCalledTimes(1);
 		expect(browserTracingIntegrationMock).toHaveBeenCalledTimes(1);
+		expect(captureConsoleIntegrationMock).toHaveBeenCalledTimes(1);
 		expect(initMock.mock.calls[0]?.[0]).toMatchObject({
 			tracesSampleRate: 0.01,
 			tracePropagationTargets: ['https://server.example'],
-			integrations: [{ name: 'browserTracingIntegration' }],
+			maxBreadcrumbs: 50,
+			integrations: [{ name: 'captureConsoleIntegration' }, { name: 'browserTracingIntegration' }],
 		});
 
 		configureClientErrorReporting({
