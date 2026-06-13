@@ -9,9 +9,9 @@ const packagedRendererCspDirectives: Record<string, readonly string[]> = {
 	'default-src': ["'self'"],
 	'script-src': ["'self'", "'wasm-unsafe-eval'", 'blob:'],
 	'style-src': ["'self'", "'unsafe-inline'"],
-	'img-src': ["'self'", 'data:', 'blob:', 'https:'],
+	'img-src': ["'self'", 'data:', 'blob:', 'http:', 'https:'],
 	'font-src': ["'self'", 'data:'],
-	'media-src': ["'self'", 'blob:', 'data:', 'https:'],
+	'media-src': ["'self'", 'blob:', 'data:', 'http:', 'https:'],
 	'worker-src': ["'self'", 'blob:'],
 	'connect-src': ["'self'", 'https:', 'wss:', 'http:', 'ws:', 'data:', 'blob:'],
 	'frame-src': ['https://www.youtube.com', 'https://www.youtube-nocookie.com'],
@@ -60,6 +60,36 @@ const withPackagedRendererCspReportOnly = (headers: TResponseHeaders | undefined
 	};
 };
 
+const getDevRendererCspUrlPattern = (devRendererUrl: string): string => {
+	return `${new URL(devRendererUrl).origin}/*`;
+};
+
+const isDocumentResource = (resourceType: OnHeadersReceivedListenerDetails['resourceType']): boolean => {
+	return resourceType === 'mainFrame' || resourceType === 'subFrame';
+};
+
+// Mirrors the packaged-build CSP onto the Vite dev renderer so local dev
+// surfaces the same violations prod users would hit.
+const installDevRendererCspHandler = (targetSession: Session, devRendererUrl: string): void => {
+	targetSession.webRequest.onHeadersReceived(
+		{
+			urls: [getDevRendererCspUrlPattern(devRendererUrl)],
+		},
+		(details, callback) => {
+			if (!isDocumentResource(details.resourceType)) {
+				callback({
+					responseHeaders: details.responseHeaders,
+				});
+				return;
+			}
+
+			callback({
+				responseHeaders: withPackagedRendererCspReportOnly(details.responseHeaders),
+			});
+		},
+	);
+};
+
 const installPackagedRendererCspReportOnlyHandler = (targetSession: Session, rendererDistPath: string): void => {
 	targetSession.webRequest.onHeadersReceived(
 		{
@@ -81,6 +111,8 @@ const installPackagedRendererCspReportOnlyHandler = (targetSession: Session, ren
 };
 
 export {
+	getDevRendererCspUrlPattern,
+	installDevRendererCspHandler,
 	installPackagedRendererCspReportOnlyHandler,
 	isPackagedRendererFileUrl,
 	PACKAGED_RENDERER_CSP,
