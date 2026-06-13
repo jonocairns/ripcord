@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { createLogger, format, transports } from 'winston';
 import { config } from './config';
+import { bootLog } from './helpers/boot-log';
 import { ensureDir } from './helpers/fs';
 import { LOGS_PATH } from './helpers/paths';
 import { sentryFormat } from './sentry';
@@ -14,10 +15,13 @@ const logFormat = printf(({ level, message, stack }) => {
 const appLog = path.join(LOGS_PATH, 'app.log');
 const errorLog = path.join(LOGS_PATH, 'error.log');
 
+bootLog('logger: ensuring log directory');
 await ensureDir(LOGS_PATH);
+bootLog('logger: log directory ready');
 
 const level = config.server.debug ? 'debug' : 'info';
 
+bootLog('logger: creating transports');
 const logger = createLogger({
 	level,
 	format: combine(colorize(), splat(), errors({ stack: true }), sentryFormat(), logFormat),
@@ -33,5 +37,6 @@ const logger = createLogger({
 		}),
 	],
 });
+bootLog('logger: ready');
 
 export { logger };

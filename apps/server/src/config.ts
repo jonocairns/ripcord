@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { parse, stringify } from 'ini';
 import z from 'zod';
 import { applyEnvOverrides } from './helpers/apply-env-overrides';
+import { bootLog } from './helpers/boot-log';
 import { deepMerge } from './helpers/deep-merge';
 import { ensureServerDirs } from './helpers/ensure-server-dirs';
 import { getErrorMessage } from './helpers/get-error-message';
@@ -9,7 +10,9 @@ import { getPrivateIps, getPublicIps } from './helpers/network';
 import { CONFIG_INI_PATH } from './helpers/paths';
 import { IS_DEVELOPMENT } from './utils/env';
 
+bootLog('config: resolving network addresses (public IP discovery)');
 const [SERVER_PUBLIC_IPS, SERVER_PRIVATE_IPS] = await Promise.all([getPublicIps(), getPrivateIps()]);
+bootLog('config: network addresses resolved');
 
 const zWebRtcFamilyConfig = z.object({
 	enabled: z.coerce.boolean(),
@@ -145,8 +148,11 @@ const defaultConfig: TConfig = {
 
 let config: TConfig = structuredClone(defaultConfig);
 
+bootLog('config: ensuring server directories');
 await ensureServerDirs();
+bootLog('config: server directories ready');
 
+bootLog('config: loading config file');
 const configExists = await fs
 	.access(CONFIG_INI_PATH)
 	.then(() => true)
@@ -179,6 +185,7 @@ if (!configExists) {
 		await fs.writeFile(CONFIG_INI_PATH, stringify(config));
 	}
 }
+bootLog('config: config file loaded');
 
 config = applyEnvOverrides(config, {
 	'server.port': 'SHARKORD_PORT',
@@ -257,5 +264,7 @@ config = {
 };
 
 config = Object.freeze(config);
+
+bootLog('config: ready');
 
 export { config, SERVER_PRIVATE_IPS, SERVER_PUBLIC_IPS };

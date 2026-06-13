@@ -1,6 +1,31 @@
 import { isIP } from 'node:net';
 import os from 'node:os';
+import { bootLog } from './boot-log';
 import type { TIpFamily, TResolvedIpAddresses } from './ip-addresses';
+
+// Public-IP discovery runs on the server boot path (config.ts awaits it at
+// module load, before anything is logged). fetch() has no default timeout, so a
+// blackholed outbound connection - firewall DROP, broken DNS, dead NAT - makes a
+// request hang forever and silently wedges startup with zero logs. Bound every
+// request so a dead endpoint aborts and falls through to the next one (or to the
+// undefined fallback) instead of stalling boot indefinitely.
+const PUBLIC_IP_FETCH_TIMEOUT_MS = 3000;
+
+const getPublicIpEndpointErrorMessage = (error: unknown): string => {
+	if (error instanceof Error) {
+		return error.message;
+	}
+
+	if (typeof error === 'string') {
+		return error;
+	}
+
+	return 'Unknown error';
+};
+
+const logPublicIpEndpointFailure = (url: string, family: TIpFamily, error: unknown): void => {
+	bootLog(`config: public ${family} endpoint failed: ${url}: ${getPublicIpEndpointErrorMessage(error)}`);
+};
 
 const isMatchingFamily = (value: unknown, family: TIpFamily): boolean => {
 	if (family === 'ipv4') {
@@ -18,7 +43,17 @@ const parsePublicIpResponse = (ip: string, family: TIpFamily): string | undefine
 };
 
 const getPrivateIps = async (): Promise<TResolvedIpAddresses> => {
-	const interfaces = os.networkInterfaces();
+	let interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>;
+
+	try {
+		interfaces = os.networkInterfaces();
+	} catch (error) {
+		const message = error instanceof Error ? error.message : 'Unknown error';
+		bootLog(`config: private IP discovery failed: ${message}`);
+
+		return {};
+	}
+
 	const addresses: TResolvedIpAddresses = {};
 
 	for (const family of ['ipv4', 'ipv6'] satisfies TIpFamily[]) {
@@ -38,22 +73,26 @@ const getPrivateIps = async (): Promise<TResolvedIpAddresses> => {
 
 const getPublicIpFromJsonEndpoint = async (url: string, family: TIpFamily): Promise<string | undefined> => {
 	try {
-		const response = await fetch(url);
+		const response = await fetch(url, { signal: AbortSignal.timeout(PUBLIC_IP_FETCH_TIMEOUT_MS) });
 		const data = (await response.json()) as { ip?: string };
 
 		return data.ip ? parsePublicIpResponse(data.ip, family) : undefined;
-	} catch {
+	} catch (error) {
+		logPublicIpEndpointFailure(url, family, error);
+
 		return undefined;
 	}
 };
 
 const getPublicIpFromTextEndpoint = async (url: string, family: TIpFamily): Promise<string | undefined> => {
 	try {
-		const response = await fetch(url);
+		const response = await fetch(url, { signal: AbortSignal.timeout(PUBLIC_IP_FETCH_TIMEOUT_MS) });
 		const ip = await response.text();
 
 		return parsePublicIpResponse(ip, family);
-	} catch {
+	} catch (error) {
+		logPublicIpEndpointFailure(url, family, error);
+
 		return undefined;
 	}
 };
