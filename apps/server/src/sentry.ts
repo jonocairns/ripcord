@@ -19,17 +19,27 @@ const SPLAT = Symbol.for('splat');
 const registerShutdownFlush = (): void => {
 	let flushing = false;
 
-	const flushAndExit = (): void => {
+	const flushAndExit = (signal: NodeJS.Signals): void => {
 		if (flushing) {
 			return;
 		}
 
 		flushing = true;
-		void Sentry.close(2000).finally(() => process.exit(0));
+
+		// Exit with the conventional 128 + signal number (SIGINT → 130,
+		// SIGTERM → 143) so a shell or CI harness inspecting $? sees the process
+		// was terminated by a signal rather than a clean exit.
+		const exitCode = signal === 'SIGINT' ? 130 : 143;
+
+		void Sentry.close(2000)
+			.catch(() => {
+				// Flush failed (network/SDK error) — still exit so shutdown isn't blocked.
+			})
+			.finally(() => process.exit(exitCode));
 	};
 
-	process.once('SIGTERM', flushAndExit);
-	process.once('SIGINT', flushAndExit);
+	process.once('SIGTERM', () => flushAndExit('SIGTERM'));
+	process.once('SIGINT', () => flushAndExit('SIGINT'));
 };
 
 const initSentry = (): void => {
