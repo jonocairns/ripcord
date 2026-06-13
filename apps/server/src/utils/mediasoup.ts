@@ -1,5 +1,6 @@
 import mediasoup from 'mediasoup';
 import { config, SERVER_PUBLIC_IPS } from '../config.js';
+import { bootLog } from '../helpers/boot-log.js';
 import { MEDIASOUP_BINARY_PATH } from '../helpers/paths.js';
 import { logger } from '../logger.js';
 import { IS_PRODUCTION } from './env.js';
@@ -36,7 +37,9 @@ const loadMediasoup = async () => {
 	// needed since consumption is always within a channel) would lift the
 	// one-core media ceiling. That's a scaling change we don't need at current
 	// load; revisit if concurrent voice throughput becomes CPU-bound on one core.
+	bootLog('mediasoup: creating worker');
 	mediaSoupWorker = await mediasoup.createWorker(workerConfig);
+	bootLog('mediasoup: worker created');
 
 	mediaSoupWorker.on('died', (error) => {
 		logger.error('Mediasoup worker died', error);
@@ -46,6 +49,7 @@ const loadMediasoup = async () => {
 
 	logger.debug('Mediasoup worker loaded');
 
+	bootLog('mediasoup: building WebRTC listen infos');
 	const listenInfos = buildWebRtcListenInfos(
 		{ ...config.webRtc, port },
 		{
@@ -58,9 +62,11 @@ const loadMediasoup = async () => {
 		throw new Error('No WebRTC listeners could be created. Configure at least one valid IPv4 or IPv6 WebRTC listener.');
 	}
 
+	bootLog('mediasoup: creating WebRTC server');
 	webRtcServer = await mediaSoupWorker.createWebRtcServer({
 		listenInfos,
 	});
+	bootLog('mediasoup: WebRTC server created');
 
 	webRtcServerListenInfos = listenInfos;
 
