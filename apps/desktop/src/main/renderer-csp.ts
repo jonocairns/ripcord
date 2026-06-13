@@ -53,7 +53,7 @@ const isPackagedRendererFileUrl = (requestUrl: string, rendererDistPath: string)
 	);
 };
 
-const withPackagedRendererCspReportOnly = (headers: TResponseHeaders | undefined): TResponseHeaders => {
+const withPackagedRendererCsp = (headers: TResponseHeaders | undefined): TResponseHeaders => {
 	return {
 		...headers,
 		[PACKAGED_RENDERER_CSP_HEADER]: [PACKAGED_RENDERER_CSP],
@@ -84,13 +84,13 @@ const installDevRendererCspHandler = (targetSession: Session, devRendererUrl: st
 			}
 
 			callback({
-				responseHeaders: withPackagedRendererCspReportOnly(details.responseHeaders),
+				responseHeaders: withPackagedRendererCsp(details.responseHeaders),
 			});
 		},
 	);
 };
 
-const installPackagedRendererCspReportOnlyHandler = (targetSession: Session, rendererDistPath: string): void => {
+const installPackagedRendererCspHandler = (targetSession: Session, rendererDistPath: string): void => {
 	targetSession.webRequest.onHeadersReceived(
 		{
 			urls: [PACKAGED_RENDERER_FILE_URL_PATTERN],
@@ -104,7 +104,7 @@ const installPackagedRendererCspReportOnlyHandler = (targetSession: Session, ren
 			}
 
 			callback({
-				responseHeaders: withPackagedRendererCspReportOnly(details.responseHeaders),
+				responseHeaders: withPackagedRendererCsp(details.responseHeaders),
 			});
 		},
 	);
@@ -113,10 +113,10 @@ const installPackagedRendererCspReportOnlyHandler = (targetSession: Session, ren
 export {
 	getDevRendererCspUrlPattern,
 	installDevRendererCspHandler,
-	installPackagedRendererCspReportOnlyHandler,
+	installPackagedRendererCspHandler,
 	isPackagedRendererFileUrl,
 	PACKAGED_RENDERER_CSP,
 	PACKAGED_RENDERER_CSP_HEADER,
 	PACKAGED_RENDERER_FILE_URL_PATTERN,
-	withPackagedRendererCspReportOnly,
+	withPackagedRendererCsp,
 };

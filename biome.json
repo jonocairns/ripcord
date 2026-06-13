@@ -65,5 +65,24 @@
 				"organizeImports": "on"
 			}
 		}
-	}
+	},
+	"overrides": [
+		{
+			"includes": ["packages/shared/src/**", "apps/client/src/**", "!packages/shared/src/zod.ts"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedImports": {
+							"level": "error",
+							"options": {
+								"paths": {
+									"zod": "Import zod from the shared wrapper (packages/shared/src/zod.ts) instead. It sets `jitless` so the Electron renderer's CSP does not block zod's eval-based JIT probe. Server code is exempt and may import zod directly."
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	]
 }

@@ -7,7 +7,7 @@ import {
 	isPackagedRendererFileUrl,
 	PACKAGED_RENDERER_CSP,
 	PACKAGED_RENDERER_CSP_HEADER,
-	withPackagedRendererCspReportOnly,
+	withPackagedRendererCsp,
 } from '../renderer-csp';
 
 void describe('isPackagedRendererFileUrl', () => {
@@ -40,9 +40,9 @@ void describe('getDevRendererCspUrlPattern', () => {
 	});
 });
 
-void describe('withPackagedRendererCspReportOnly', () => {
-	void it('adds the report-only CSP header without dropping existing headers', () => {
-		const headers = withPackagedRendererCspReportOnly({
+void describe('withPackagedRendererCsp', () => {
+	void it('adds the CSP header without dropping existing headers', () => {
+		const headers = withPackagedRendererCsp({
 			'content-type': ['text/html'],
 		});
 
