@@ -6,6 +6,7 @@ import type {
 	TAppAudioStatusEvent,
 	TDesktopAppAudioTargetsResult,
 	TDesktopCapabilities,
+	TDesktopErrorReportingConfig,
 	TDesktopPushKeybindEvent,
 	TDesktopPushKeybindsInput,
 	TDesktopQuitFlushResult,
@@ -469,6 +470,8 @@ const desktopBridge = {
 			ipcRenderer.removeListener('desktop:capabilities-changed', listener);
 		};
 	},
+	configureErrorReporting: (config: TDesktopErrorReportingConfig): Promise<void> =>
+		ipcRenderer.invoke('desktop:configure-error-reporting', config),
 	subscribeUpdateStatus: (callback: (status: TDesktopUpdateStatus) => void) => {
 		const listener = (_event: unknown, status: TDesktopUpdateStatus) => {
 			callback(status);

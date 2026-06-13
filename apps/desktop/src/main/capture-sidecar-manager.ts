@@ -47,6 +47,16 @@ type TSidecarLifecycleEvent = {
 	reason?: string;
 };
 
+type TSidecarCrashEvent = {
+	reason: string;
+	stderrTail: string;
+};
+
+// How many recent sidecar stderr lines to attach as crash context. The Rust
+// panic message lands here, which is the difference between an actionable crash
+// report and a bare "exited code=X".
+const SIDECAR_STDERR_TAIL_LINES = 25;
+
 export type TSidecarCapabilities = {
 	platform?: string;
 	systemAudio?: TSupportLevel;
@@ -441,6 +451,8 @@ class CaptureSidecarManager {
 		mute: false,
 	};
 	private shuttingDown = false;
+	private sidecarCrashReported = false;
+	private recentStderrLines: string[] = [];
 	private restartTimer: NodeJS.Timeout | undefined;
 	private lastKnownError: string | undefined;
 	private appAudioBinaryEgressSocket: Socket | undefined;
@@ -492,6 +504,13 @@ class CaptureSidecarManager {
 		this.events.on('lifecycle', listener);
 		return () => {
 			this.events.off('lifecycle', listener);
+		};
+	}
+
+	onCrash(listener: (event: TSidecarCrashEvent) => void) {
+		this.events.on('crash', listener);
+		return () => {
+			this.events.off('crash', listener);
 		};
 	}
 
@@ -663,6 +682,10 @@ class CaptureSidecarManager {
 
 				if (line) {
 					console.info('[capture-sidecar]', line);
+					this.recentStderrLines.push(line);
+					if (this.recentStderrLines.length > SIDECAR_STDERR_TAIL_LINES) {
+						this.recentStderrLines.shift();
+					}
 				}
 
 				newlineIndex = this.stderrBuffer.indexOf('\n');
@@ -713,6 +736,7 @@ class CaptureSidecarManager {
 			await this.sendRequestInternal('health.ping', {});
 			await this.restorePushKeybindsAfterRestart();
 			this.lastKnownError = undefined;
+			this.sidecarCrashReported = false;
 			this.events.emit('lifecycle', {
 				kind: 'ready',
 			} satisfies TSidecarLifecycleEvent);
@@ -784,6 +808,17 @@ class CaptureSidecarManager {
 		});
 
 		if (!this.shuttingDown) {
+			// Report the crash once per crash-and-recover cycle; the flag is reset
+			// when the sidecar next becomes ready. This keeps a persistent restart
+			// loop from flooding Sentry with one event per restart attempt.
+			if (!this.sidecarCrashReported) {
+				this.sidecarCrashReported = true;
+				this.events.emit('crash', {
+					reason,
+					stderrTail: this.recentStderrLines.join('\n'),
+				} satisfies TSidecarCrashEvent);
+			}
+
 			this.scheduleRestart();
 		}
 	}

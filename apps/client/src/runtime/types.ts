@@ -182,6 +182,12 @@ export type TGlobalPushKeybindRegistrationResult = {
 	errors: string[];
 };
 
+export type TDesktopErrorReportingConfig = {
+	dsn?: string;
+	ignoreErrors?: string[];
+	tracingSampleRate?: number;
+};
+
 export type TDesktopBridge = {
 	getServerUrl: () => Promise<string>;
 	getWindowControlsState?: () => Promise<TDesktopWindowControlsState>;
@@ -206,6 +212,7 @@ export type TDesktopBridge = {
 	subscribeGlobalPushKeybindEvents: (cb: (event: TDesktopPushKeybindEvent) => void) => () => void;
 	subscribeCapabilities: (cb: (capabilities: TDesktopCapabilities) => void) => () => void;
 	subscribeUpdateStatus: (cb: (status: TDesktopUpdateStatus) => void) => () => void;
+	configureErrorReporting?: (config: TDesktopErrorReportingConfig) => Promise<void>;
 	subscribeWindowControlsState?: (cb: (state: TDesktopWindowControlsState) => void) => () => void;
 	subscribeBeforeQuit: (cb: () => void | Promise<void>) => () => void;
 	debugRequestBeforeQuitFlush?: () => Promise<TDesktopQuitFlushResult>;

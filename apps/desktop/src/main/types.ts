@@ -184,3 +184,25 @@ export type TDesktopWindowControlsState = {
 	isMaximized: boolean;
 	usesCustomTitlebar: boolean;
 };
+
+export type TDesktopErrorReportingConfig = {
+	dsn?: string;
+	ignoreErrors?: string[];
+	tracingSampleRate?: number;
+};
+
+export type TDesktopProcessCrashSource = 'renderer' | 'child-process';
+
+export type TDesktopProcessCrashEvent = {
+	source: TDesktopProcessCrashSource;
+	// For child-process crashes this is Electron's process `type` (e.g. "GPU",
+	// "Utility", "Pepper Plugin"). For renderer crashes it is always "renderer".
+	processType: string;
+	// Electron crash reason: "crashed" | "oom" | "killed" | "abnormal-exit" |
+	// "launch-failed" | "integrity-failure" | "clean-exit".
+	reason: string;
+	exitCode: number;
+	// Present only for utility child processes.
+	serviceName?: string;
+	name?: string;
+};

@@ -507,4 +507,74 @@ void describe('CaptureSidecarManager', () => {
 			await manager.dispose();
 		}
 	});
+
+	void it('emits a crash event when the sidecar exits abnormally', async () => {
+		let spawnCount = 0;
+
+		const manager = new CaptureSidecarManager({
+			spawnSidecar: () => {
+				spawnCount += 1;
+
+				const shouldCrash = spawnCount === 1;
+				return spawn(process.execPath, [fakeSidecarPath], {
+					stdio: ['pipe', 'pipe', 'pipe'],
+					env: {
+						...process.env,
+						FAKE_SIDECAR_CRASH_MS: shouldCrash ? '80' : '0',
+					},
+				});
+			},
+			restartDelayMs: 20,
+		});
+
+		const crashEvents: Array<{ reason: string; stderrTail: string }> = [];
+		const offCrash = manager.onCrash((event) => {
+			crashEvents.push(event);
+		});
+
+		try {
+			await manager.startAppAudioCapture({
+				sourceId: 'window:1:0',
+			});
+
+			await waitFor(() => crashEvents.length > 0);
+			assert.match(crashEvents[0]?.reason ?? '', /code=1/);
+		} finally {
+			offCrash();
+			await manager.dispose();
+		}
+	});
+
+	void it('does not emit a crash event during intentional shutdown', async () => {
+		const manager = new CaptureSidecarManager({
+			spawnSidecar: () => {
+				return spawn(process.execPath, [fakeSidecarPath], {
+					stdio: ['pipe', 'pipe', 'pipe'],
+				});
+			},
+			restartDelayMs: 20,
+		});
+
+		const crashEvents: Array<{ reason: string; stderrTail: string }> = [];
+		const offCrash = manager.onCrash((event) => {
+			crashEvents.push(event);
+		});
+
+		try {
+			const status = await manager.getStatus();
+			assert.equal(status.available, true);
+
+			await manager.dispose();
+
+			// Give the process 'exit' event time to fire after the kill.
+			await new Promise((resolve) => {
+				setTimeout(resolve, 150);
+			});
+
+			assert.equal(crashEvents.length, 0);
+		} finally {
+			offCrash();
+			await manager.dispose();
+		}
+	});
 });
