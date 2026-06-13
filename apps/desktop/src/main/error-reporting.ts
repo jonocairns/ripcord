@@ -113,6 +113,14 @@ const normalizeSampleRate = (sampleRate: number | undefined): number | undefined
 // stays on @sentry/react; this is an independent client reporting to the same
 // DSN, so we pass getSessions: () => [] to keep the SDK's renderer IPC/protocol
 // off our renderer's session.
+//
+// Because this runs after the 'ready' event, we must use IPCMode.Classic. The
+// default IPCMode.Both registers a privileged protocol scheme, and Electron
+// only allows registerSchemesAsPrivileged before 'ready' — so the SDK throws
+// ("Sentry SDK should be initialized before the Electron app 'ready' event is
+// fired") on any post-ready init. Classic mode uses only ipcMain handlers,
+// which are safe to register at any time, and the renderer doesn't use the
+// @sentry/electron bridge anyway.
 const configureMainErrorReporting = (config: TDesktopErrorReportingConfig): void => {
 	const dsn = config.dsn?.trim();
 
@@ -122,23 +130,38 @@ const configureMainErrorReporting = (config: TDesktopErrorReportingConfig): void
 
 	const tracesSampleRate = normalizeSampleRate(config.tracingSampleRate);
 
-	Sentry.init({
-		dsn,
-		release: app.getVersion(),
-		environment: app.isPackaged ? 'production' : 'development',
-		sendDefaultPii: false,
-		ignoreErrors: config.ignoreErrors,
-		getSessions: () => [],
-		beforeSend: sanitizeEvent,
-		...(tracesSampleRate !== undefined && tracesSampleRate > 0 ? { tracesSampleRate } : {}),
-		initialScope: {
-			tags: {
-				runtime: 'desktop-main',
-			},
-		},
-	});
-
+	// Mark the attempt before init runs, not after success: this is an
+	// attempt-once guard, not a success guard. If init throws partway through
+	// (e.g. after registering Classic-mode ipcMain handlers), we must not run it
+	// again — a retry would register duplicate handlers. Retrying buys nothing
+	// anyway: a given DSN that fails will fail the same way, and the !initialized
+	// guard above already commits us to "first DSN wins".
 	initialized = true;
+
+	// Never let error-reporting setup throw back across the IPC boundary. The
+	// handler is invoked fire-and-forget from the renderer, so a rejection here
+	// surfaces as an unhandled rejection and gets reported to Sentry — i.e. the
+	// reporting path reporting on itself. If init fails, log locally and move on.
+	try {
+		Sentry.init({
+			dsn,
+			release: app.getVersion(),
+			environment: app.isPackaged ? 'production' : 'development',
+			sendDefaultPii: false,
+			ignoreErrors: config.ignoreErrors,
+			ipcMode: Sentry.IPCMode.Classic,
+			getSessions: () => [],
+			beforeSend: sanitizeEvent,
+			...(tracesSampleRate !== undefined && tracesSampleRate > 0 ? { tracesSampleRate } : {}),
+			initialScope: {
+				tags: {
+					runtime: 'desktop-main',
+				},
+			},
+		});
+	} catch (error) {
+		console.error('[desktop] Failed to initialize main-process error reporting', error);
+	}
 };
 
 export { configureMainErrorReporting };
