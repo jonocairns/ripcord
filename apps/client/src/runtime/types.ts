@@ -37,17 +37,7 @@ export type TDesktopShareSource = {
 	id: string;
 	name: string;
 	kind: TDesktopShareSourceKind;
-	previewAvailable: boolean;
-	thumbnailDataUrl: string;
 	appIconDataUrl?: string;
-};
-
-// Phase-2 thumbnails, merged into TDesktopShareSource by id after the fast list
-// renders. See the screen-share picker's two-phase load.
-export type TDesktopShareSourceThumbnail = {
-	id: string;
-	previewAvailable: boolean;
-	thumbnailDataUrl: string;
 };
 
 export type TDesktopScreenShareSelection = {
@@ -195,7 +185,6 @@ export type TDesktopBridge = {
 	getUpdateStatus: () => Promise<TDesktopUpdateStatus>;
 	checkForUpdates: () => Promise<TDesktopUpdateStatus>;
 	listShareSources: () => Promise<TDesktopShareSource[]>;
-	listShareSourceThumbnails?: () => Promise<TDesktopShareSourceThumbnail[]>;
 	resetScreenSharePicker?: () => Promise<void>;
 	listAppAudioTargets: (sourceId?: string) => Promise<TDesktopAppAudioTargetsResult>;
 	startAppAudioCapture: (input: TStartAppAudioCaptureInput) => Promise<TAppAudioSession>;

@@ -34,7 +34,6 @@ import {
 	consumeScreenShareSelection,
 	getSourceById,
 	listShareSources,
-	listShareSourceThumbnails,
 	prepareScreenShareSelection,
 } from './screen-share';
 import { getServerUrl, setServerUrl } from './settings-store';
@@ -720,10 +719,6 @@ const registerIpcHandlers = () => {
 
 	handleTrusted('desktop:list-share-sources', () => {
 		return listShareSources();
-	});
-
-	handleTrusted('desktop:list-share-source-thumbnails', () => {
-		return listShareSourceThumbnails();
 	});
 
 	handleTrusted('desktop:reset-screen-share-picker', () => {
