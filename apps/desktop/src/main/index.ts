@@ -30,7 +30,7 @@ import { classifyMainFrameNavigationUrl } from './navigation-policy';
 import { isPermissionAllowed } from './permission-policy';
 import { getDesktopCapabilities, resolvePreparedScreenAudioMode } from './platform-capabilities';
 import { previewRuntimeConfig } from './preview-runtime-config';
-import { installDevRendererCspHandler, installPackagedRendererCspReportOnlyHandler } from './renderer-csp';
+import { installDevRendererCspHandler, installPackagedRendererCspHandler } from './renderer-csp';
 import { isTrustedRendererUrl, type TRendererTrustOptions } from './renderer-trust';
 import {
 	clearPreparedScreenShareSelection,
@@ -613,7 +613,7 @@ const setupPackagedRendererCspHandler = () => {
 	}
 
 	const rendererDistPath = path.join(__dirname, '..', '..', 'renderer-dist');
-	installPackagedRendererCspReportOnlyHandler(session.defaultSession, rendererDistPath);
+	installPackagedRendererCspHandler(session.defaultSession, rendererDistPath);
 };
 
 const registerIpcHandlers = () => {
