@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { configureClientErrorReporting } from '@/helpers/browser-logger';
 import { getUrlFromServer } from '@/helpers/get-file-url';
 import { clearAuthToken, getAuthToken, getRefreshToken, hydrateSessionToken } from '@/helpers/storage';
+import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { connect, setDisconnectInfo, setInfo } from '../server/actions';
 import { useAppStore } from './slice';
 
@@ -35,8 +36,19 @@ export const loadApp = async () => {
 			return;
 		}
 
+		const sentryDsn =
+			info.clientErrorReporting?.provider === 'sentry' ? info.clientErrorReporting.dsn : undefined;
+
 		configureClientErrorReporting({
-			sentryDsn: info.clientErrorReporting?.provider === 'sentry' ? info.clientErrorReporting.dsn : undefined,
+			sentryDsn,
+			ignoreErrors: info.clientErrorReporting?.ignoreErrors,
+			tracingSampleRate: info.clientErrorReporting?.tracingSampleRate,
+		});
+
+		// Forward the same per-server DSN to the Electron main process, which has no
+		// DSN of its own, so main-process JS errors and native crashes report too.
+		void getDesktopBridge()?.configureErrorReporting?.({
+			dsn: sentryDsn,
 			ignoreErrors: info.clientErrorReporting?.ignoreErrors,
 			tracingSampleRate: info.clientErrorReporting?.tracingSampleRate,
 		});

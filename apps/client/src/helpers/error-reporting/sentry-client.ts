@@ -82,6 +82,15 @@ const buildIntegrations = (tracingSampleRate: number | undefined) => {
 	const runtimeConfig = getRuntimeServerConfig();
 	const integrations = [];
 
+	// Route console.error through Sentry. The vast majority of handled errors in
+	// the client are caught and logged with console.error (e.g. the realtime
+	// subscription layer) and would otherwise never reach Sentry — the SDK only
+	// auto-captures uncaught exceptions, unhandled rejections, and the
+	// ErrorBoundary. Captured events still pass through beforeSend (sanitization)
+	// and ignoreErrors; the default dedupeIntegration collapses the duplicate when
+	// a site both console.errors and reportErrorToSentry()s the same error.
+	integrations.push(Sentry.captureConsoleIntegration({ levels: ['error'] }));
+
 	if (tracingSampleRate !== undefined && tracingSampleRate > 0) {
 		integrations.push(Sentry.browserTracingIntegration());
 	}
@@ -118,7 +127,7 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 		environment: import.meta.env.MODE,
 		release: VITE_APP_VERSION,
 		sendDefaultPii: false,
-		maxBreadcrumbs: 0,
+		maxBreadcrumbs: 50,
 		ignoreErrors: config.ignoreErrors,
 		beforeSend: (event) => sanitizeSentryEvent(event),
 		integrations: buildIntegrations(tracingSampleRate),

@@ -1,4 +1,5 @@
 import type {
+	TDesktopErrorReportingConfig,
 	TDesktopPushKeybindsInput,
 	TDesktopQuitFlushResult,
 	TScreenAudioMode,
@@ -9,6 +10,9 @@ import type {
 const MAX_ID_LENGTH = 512;
 const MAX_SERVER_URL_LENGTH = 2048;
 const MAX_KEYBIND_LENGTH = 128;
+const MAX_DSN_LENGTH = 2048;
+const MAX_IGNORE_ERRORS = 200;
+const MAX_IGNORE_ERROR_LENGTH = 512;
 
 const AUDIO_MODES: readonly TScreenAudioMode[] = ['system', 'app', 'none'];
 
@@ -148,6 +152,33 @@ const validateSetGlobalPushKeybindsArgs = (args: unknown[]): [TDesktopPushKeybin
 	];
 };
 
+const validateConfigureErrorReportingArgs = (args: unknown[]): [TDesktopErrorReportingConfig] => {
+	const config = assertRecord(args[0], 'config');
+	const validated: TDesktopErrorReportingConfig = {
+		dsn: assertOptionalString(config.dsn, 'config.dsn', MAX_DSN_LENGTH),
+	};
+
+	if (config.ignoreErrors !== undefined) {
+		if (!Array.isArray(config.ignoreErrors)) {
+			return fail('config.ignoreErrors must be an array');
+		}
+
+		validated.ignoreErrors = config.ignoreErrors
+			.slice(0, MAX_IGNORE_ERRORS)
+			.map((entry, index) => assertString(entry, `config.ignoreErrors[${index}]`, MAX_IGNORE_ERROR_LENGTH));
+	}
+
+	if (config.tracingSampleRate !== undefined) {
+		if (typeof config.tracingSampleRate !== 'number' || Number.isNaN(config.tracingSampleRate)) {
+			return fail('config.tracingSampleRate must be a number');
+		}
+
+		validated.tracingSampleRate = config.tracingSampleRate;
+	}
+
+	return [validated];
+};
+
 const validateDesktopQuitFlushResultArgs = (args: unknown[]): [TDesktopQuitFlushResult] => {
 	const result = assertRecord(args[0], 'result');
 	const status = assertString(result.status, 'result.status', MAX_ID_LENGTH);
@@ -165,6 +196,7 @@ const validateDesktopQuitFlushResultArgs = (args: unknown[]): [TDesktopQuitFlush
 };
 
 export {
+	validateConfigureErrorReportingArgs,
 	validateDesktopQuitFlushResultArgs,
 	validateListAppAudioTargetsArgs,
 	validatePrepareScreenShareArgs,

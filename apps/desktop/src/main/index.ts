@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import * as Sentry from '@sentry/electron/main';
 import {
 	app,
 	BrowserWindow,
@@ -14,7 +15,9 @@ import {
 } from 'electron';
 import { resolveDesktopCaptureCapabilities } from './capture-capabilities';
 import { captureSidecarManager } from './capture-sidecar-manager';
+import { configureMainErrorReporting } from './error-reporting';
 import {
+	validateConfigureErrorReportingArgs,
 	validateDesktopQuitFlushResultArgs,
 	validateListAppAudioTargetsArgs,
 	validatePrepareScreenShareArgs,
@@ -40,6 +43,7 @@ import { getServerUrl, setServerUrl } from './settings-store';
 import type {
 	TAppAudioPcmFrame,
 	TDesktopCapabilities,
+	TDesktopProcessCrashEvent,
 	TDesktopPushKeybindEvent,
 	TDesktopPushKeybindsInput,
 	TDesktopQuitFlushResult,
@@ -81,6 +85,27 @@ const sendToRenderer = (channel: string, ...args: unknown[]): boolean => {
 		return false;
 	}
 };
+
+// Terminal-only crash diagnostics for local debugging (e.g. running the packaged
+// exe with --enable-logging). Sentry reporting of these crashes is handled by the
+// main-process SDK (error-reporting.ts): its childProcessIntegration captures
+// child-process (GPU) crashes and it captures render-process-gone + native
+// minidumps. We keep these handlers purely so a crash is visible in stdout even
+// when no DSN is configured.
+const reportProcessCrash = (event: TDesktopProcessCrashEvent): void => {
+	console.error('[desktop] Process crashed', event);
+};
+
+app.on('child-process-gone', (_event, details) => {
+	reportProcessCrash({
+		source: 'child-process',
+		processType: details.type,
+		reason: details.reason,
+		exitCode: details.exitCode,
+		serviceName: details.serviceName,
+		name: details.name,
+	});
+});
 
 const disposeAppAudioFrameEgressPort = (port: MessagePortMain | undefined = appAudioFrameEgressPort): void => {
 	if (!port) {
@@ -418,6 +443,15 @@ const createMainWindow = () => {
 		mainWindow = null;
 	});
 
+	mainWindow.webContents.on('render-process-gone', (_event, details) => {
+		reportProcessCrash({
+			source: 'renderer',
+			processType: 'renderer',
+			reason: details.reason,
+			exitCode: details.exitCode,
+		});
+	});
+
 	mainWindow.webContents.setWindowOpenHandler(({ url }) => {
 		const policy = classifyWindowOpenUrl(url);
 
@@ -586,6 +620,14 @@ const registerIpcHandlers = () => {
 	handleTrusted('desktop:get-server-url', () => {
 		return getServerUrl();
 	});
+
+	handleTrusted(
+		'desktop:configure-error-reporting',
+		(_event, config) => {
+			configureMainErrorReporting(config);
+		},
+		validateConfigureErrorReportingArgs,
+	);
 
 	handleTrusted('desktop:get-window-controls-state', () => {
 		return getWindowControlsState();
@@ -851,6 +893,15 @@ void app
 		});
 		captureSidecarManager.onPushKeybind((event) => {
 			emitPushKeybindEvent(event);
+		});
+		captureSidecarManager.onCrash((event) => {
+			// The Rust capture sidecar is a spawned native process, not an Electron
+			// child, so the SDK's childProcessIntegration doesn't see it. Report
+			// abnormal exits here, with recent stderr (incl. any panic) as context.
+			Sentry.captureException(new Error(event.reason), {
+				tags: { component: 'capture-sidecar' },
+				...(event.stderrTail ? { extra: { sidecarStderr: event.stderrTail } } : {}),
+			});
 		});
 		captureSidecarManager.onLifecycle((event) => {
 			if (appIsShuttingDown && event.kind === 'exit') {
