@@ -24,3 +24,4 @@ __pycache__/
 .env
 .codex
 .pr-review-cache/
+.repoql/

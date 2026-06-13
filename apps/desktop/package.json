@@ -81,6 +81,7 @@
       "target": [
         "AppImage"
       ],
+      "executableName": "Ripcord",
       "category": "Network",
       "icon": "icons/icon.png"
     },
