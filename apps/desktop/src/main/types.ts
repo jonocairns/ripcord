@@ -23,18 +23,7 @@ export type TShareSource = {
 	id: string;
 	name: string;
 	kind: TShareSourceKind;
-	previewAvailable: boolean;
-	thumbnailDataUrl: string;
 	appIconDataUrl?: string;
-};
-
-// Phase-2 of the two-phase picker load: thumbnails are captured separately from
-// the source list (capturing every window's frame is the slow part), then merged
-// into the already-rendered list by id.
-export type TShareSourceThumbnail = {
-	id: string;
-	previewAvailable: boolean;
-	thumbnailDataUrl: string;
 };
 
 export type TScreenShareSelection = {

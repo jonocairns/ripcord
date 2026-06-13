@@ -396,7 +396,6 @@ const desktopBridge = {
 	getUpdateStatus: (): Promise<TDesktopUpdateStatus> => ipcRenderer.invoke('desktop:get-update-status'),
 	checkForUpdates: (): Promise<TDesktopUpdateStatus> => ipcRenderer.invoke('desktop:check-for-updates'),
 	listShareSources: () => ipcRenderer.invoke('desktop:list-share-sources'),
-	listShareSourceThumbnails: () => ipcRenderer.invoke('desktop:list-share-source-thumbnails'),
 	resetScreenSharePicker: (): Promise<void> => ipcRenderer.invoke('desktop:reset-screen-share-picker'),
 	listAppAudioTargets: (sourceId?: string): Promise<TDesktopAppAudioTargetsResult> =>
 		ipcRenderer.invoke('desktop:list-app-audio-targets', sourceId),

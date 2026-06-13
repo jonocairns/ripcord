@@ -6,7 +6,6 @@ import type {
 	TDesktopCapabilities,
 	TDesktopScreenShareSelection,
 	TDesktopShareSource,
-	TDesktopShareSourceThumbnail,
 } from '@/runtime/types';
 import { getInitialDialogState, useDialogStore } from './slice';
 
@@ -117,16 +116,12 @@ export const resetDialogs = () => {
 export const requestScreenShareSelection = async ({
 	defaultAudioMode,
 	loadData,
-	loadThumbnails,
 }: {
 	defaultAudioMode: ScreenAudioMode;
 	loadData: () => Promise<{
 		sources: TDesktopShareSource[];
 		capabilities: TDesktopCapabilities;
 	}>;
-	// Phase 2: thumbnails captured separately and merged into the rendered list
-	// by id. Absent off-desktop or on bridges without the method.
-	loadThumbnails?: () => Promise<TDesktopShareSourceThumbnail[]>;
 }): Promise<TDesktopScreenShareSelection | null> => {
 	let settled = false;
 	let resolveSelection!: (value: TDesktopScreenShareSelection | null) => void;
@@ -145,7 +140,6 @@ export const requestScreenShareSelection = async ({
 		sources: [],
 		capabilities: undefined,
 		isLoading: true,
-		isLoadingThumbnails: true,
 		defaultAudioMode,
 		onConfirm: (selection: TDesktopScreenShareSelection) => resolveOnce(selection),
 		onCancel: () => resolveOnce(null),
@@ -174,56 +168,6 @@ export const requestScreenShareSelection = async ({
 				isLoading: false,
 			},
 		});
-
-		// Phase 2: stream thumbnails in (off the critical path) and merge them
-		// into the already-rendered list by id. Thumbnails are an enhancement, so
-		// any failure just clears the loading state without disrupting selection.
-		void (async () => {
-			const finishThumbnailLoading = () => {
-				const current = useDialogStore.getState();
-				if (current.openDialog !== Dialog.SCREEN_SHARE_PICKER || !current.isOpen) {
-					return;
-				}
-
-				useDialogStore.setState({ props: { ...current.props, isLoadingThumbnails: false } });
-			};
-
-			if (!loadThumbnails) {
-				finishThumbnailLoading();
-				return;
-			}
-
-			try {
-				const thumbnails = await loadThumbnails();
-				const thumbnailById = new Map(thumbnails.map((thumbnail) => [thumbnail.id, thumbnail]));
-				const current = useDialogStore.getState();
-				if (settled || current.openDialog !== Dialog.SCREEN_SHARE_PICKER || !current.isOpen) {
-					return;
-				}
-
-				const currentSources = (current.props.sources ?? []) as TDesktopShareSource[];
-				const mergedSources = currentSources.map((source) => {
-					const thumbnail = thumbnailById.get(source.id);
-					if (!thumbnail) {
-						// No thumbnail came back for this source (e.g. it closed, or the GPU
-						// couldn't capture it) — now that phase 2 is done, mark it unavailable.
-						return { ...source, previewAvailable: false };
-					}
-
-					return {
-						...source,
-						previewAvailable: thumbnail.previewAvailable,
-						thumbnailDataUrl: thumbnail.thumbnailDataUrl,
-					};
-				});
-
-				useDialogStore.setState({
-					props: { ...current.props, sources: mergedSources, isLoadingThumbnails: false },
-				});
-			} catch {
-				finishThumbnailLoading();
-			}
-		})();
 	} catch {
 		if (!settled) {
 			toast.error('Failed to load shareable sources.');

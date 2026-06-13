@@ -2083,10 +2083,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					capabilities: normalizeDesktopCapabilities(capabilities),
 				};
 			},
-			loadThumbnails: async () => {
-				const desktopBridge = getDesktopBridge();
-				return (await desktopBridge?.listShareSourceThumbnails?.()) ?? [];
-			},
 		});
 	}, [devices.screenAudioMode]);
 

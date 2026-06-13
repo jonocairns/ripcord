@@ -1,5 +1,5 @@
 import { type DesktopCapturerSource, desktopCapturer, type NativeImage } from 'electron';
-import type { TPreparedScreenShare, TScreenShareSelection, TShareSource, TShareSourceThumbnail } from './types';
+import type { TPreparedScreenShare, TScreenShareSelection, TShareSource } from './types';
 
 let preparedScreenShare: TPreparedScreenShare | undefined;
 
@@ -24,27 +24,18 @@ const clearPreparedScreenShareSelection = () => {
 	preparedScreenShare = undefined;
 };
 
-// Capturing a thumbnail frame of every window is the slow part of enumeration,
-// so the picker loads in two phases: this fast call skips thumbnails entirely
-// (thumbnailSize 0) and only fetches window icons, which are cheap. The grid
-// renders immediately from icon + title; thumbnails stream in via the separate
-// getThumbnailSources() call below.
+// Enumeration is deliberately capture-free. Requesting source thumbnails runs
+// every open window through the WGC capturer (enabled for live capture in #204),
+// which can crash the GPU process — and take the whole app down — when a window
+// is mid-swapchain-recreate, e.g. a hardware-decoding player playing a stream
+// that rebuffers/resizes. So this fetches window icons only (cheap, no GPU
+// capture) via thumbnailSize 0; the grid renders from icon + title. Real frames
+// are produced by the live capture once a source is selected.
 const getListSources = async () => {
 	return desktopCapturer.getSources({
 		types: ['screen', 'window'],
 		fetchWindowIcons: true,
 		thumbnailSize: { width: 0, height: 0 },
-	});
-};
-
-const getThumbnailSources = async () => {
-	return desktopCapturer.getSources({
-		types: ['screen', 'window'],
-		fetchWindowIcons: false,
-		thumbnailSize: {
-			width: 360,
-			height: 210,
-		},
 	});
 };
 
@@ -94,10 +85,6 @@ const imageToDataUrl = (image: NativeImage | undefined): string | undefined => {
 	return image.toDataURL();
 };
 
-// Phase 1: no thumbnail captured yet, so previewAvailable is optimistically
-// true (the live thumbnail fetch resolves the real value). This keeps the
-// picker from prematurely routing a window to the system-picker fallback before
-// thumbnails have loaded.
 const serializeListSource = (source: DesktopCapturerSource): TShareSource => {
 	const normalizedName = source.name.trim();
 
@@ -105,30 +92,13 @@ const serializeListSource = (source: DesktopCapturerSource): TShareSource => {
 		id: source.id,
 		name: normalizedName || fallbackSourceName(source),
 		kind: isScreenSource(source) ? 'screen' : 'window',
-		previewAvailable: true,
-		thumbnailDataUrl: '',
 		appIconDataUrl: imageToDataUrl(source.appIcon),
-	};
-};
-
-const serializeThumbnail = (source: DesktopCapturerSource): TShareSourceThumbnail => {
-	const thumbnailDataUrl = imageToDataUrl(source.thumbnail);
-
-	return {
-		id: source.id,
-		previewAvailable: thumbnailDataUrl !== undefined,
-		thumbnailDataUrl: thumbnailDataUrl ?? '',
 	};
 };
 
 const listShareSources = async (): Promise<TShareSource[]> => {
 	const sources = await getListSources();
 	return sources.sort(compareSources).map(serializeListSource);
-};
-
-const listShareSourceThumbnails = async (): Promise<TShareSourceThumbnail[]> => {
-	const sources = await getThumbnailSources();
-	return sources.map(serializeThumbnail);
 };
 
 const getSourceById = async (sourceId: string) => {
@@ -141,6 +111,5 @@ export {
 	consumeScreenShareSelection,
 	getSourceById,
 	listShareSources,
-	listShareSourceThumbnails,
 	prepareScreenShareSelection,
 };
