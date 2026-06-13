@@ -27,7 +27,7 @@ import { classifyMainFrameNavigationUrl } from './navigation-policy';
 import { isPermissionAllowed } from './permission-policy';
 import { getDesktopCapabilities, resolvePreparedScreenAudioMode } from './platform-capabilities';
 import { previewRuntimeConfig } from './preview-runtime-config';
-import { installPackagedRendererCspReportOnlyHandler } from './renderer-csp';
+import { installDevRendererCspHandler, installPackagedRendererCspReportOnlyHandler } from './renderer-csp';
 import { isTrustedRendererUrl, type TRendererTrustOptions } from './renderer-trust';
 import {
 	clearPreparedScreenShareSelection,
@@ -575,6 +575,7 @@ const setupYoutubeEmbedRefererHandler = () => {
 
 const setupPackagedRendererCspHandler = () => {
 	if (RENDERER_URL) {
+		installDevRendererCspHandler(session.defaultSession, RENDERER_URL);
 		return;
 	}
 
