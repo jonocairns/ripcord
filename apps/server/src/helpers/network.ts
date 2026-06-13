@@ -3,14 +3,6 @@ import os from 'node:os';
 import { bootLog } from './boot-log';
 import type { TIpFamily, TResolvedIpAddresses } from './ip-addresses';
 
-// Public-IP discovery runs on the server boot path (config.ts awaits it at
-// module load, before anything is logged). fetch() has no default timeout, so a
-// blackholed outbound connection - firewall DROP, broken DNS, dead NAT - makes a
-// request hang forever and silently wedges startup with zero logs. Bound every
-// request so a dead endpoint aborts and falls through to the next one (or to the
-// undefined fallback) instead of stalling boot indefinitely.
-const PUBLIC_IP_FETCH_TIMEOUT_MS = 3000;
-
 const getPublicIpEndpointErrorMessage = (error: unknown): string => {
 	if (error instanceof Error) {
 		return error.message;
@@ -73,7 +65,7 @@ const getPrivateIps = async (): Promise<TResolvedIpAddresses> => {
 
 const getPublicIpFromJsonEndpoint = async (url: string, family: TIpFamily): Promise<string | undefined> => {
 	try {
-		const response = await fetch(url, { signal: AbortSignal.timeout(PUBLIC_IP_FETCH_TIMEOUT_MS) });
+		const response = await fetch(url);
 		const data = (await response.json()) as { ip?: string };
 
 		return data.ip ? parsePublicIpResponse(data.ip, family) : undefined;
@@ -86,7 +78,7 @@ const getPublicIpFromJsonEndpoint = async (url: string, family: TIpFamily): Prom
 
 const getPublicIpFromTextEndpoint = async (url: string, family: TIpFamily): Promise<string | undefined> => {
 	try {
-		const response = await fetch(url, { signal: AbortSignal.timeout(PUBLIC_IP_FETCH_TIMEOUT_MS) });
+		const response = await fetch(url);
 		const ip = await response.text();
 
 		return parsePublicIpResponse(ip, family);
