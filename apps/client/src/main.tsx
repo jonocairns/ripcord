@@ -1,4 +1,5 @@
 import { Toaster } from '@/components/ui/sonner';
+import * as Sentry from '@sentry/react';
 import 'prosemirror-view/style/prosemirror.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -27,7 +28,17 @@ const bootstrap = async () => {
 		reportError('Failed to initialize runtime server configuration', error);
 	}
 
-	createRoot(document.getElementById('root')!).render(
+	// React 19 routes render-phase errors to these root hooks instead of
+	// window.onerror, so without them they never reach Sentry. onUncaughtError
+	// covers errors that escape every boundary (incl. one thrown in a boundary's
+	// own fallback); onRecoverableError covers errors React auto-recovered from
+	// (e.g. hydration mismatches) that no boundary ever sees. onCaughtError is
+	// intentionally omitted — the <ErrorBoundary> below already reports caught
+	// errors with richer scope tags, and adding it here would double-report.
+	createRoot(document.getElementById('root')!, {
+		onUncaughtError: Sentry.reactErrorHandler(),
+		onRecoverableError: Sentry.reactErrorHandler(),
+	}).render(
 		<StrictMode>
 			<ErrorBoundary>
 				<ThemeProvider defaultTheme="dark" storageKey={LocalStorageKey.VITE_UI_THEME}>

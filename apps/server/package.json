@@ -32,7 +32,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@sentry/node": "^10.46.0",
+    "@sentry/bun": "^10.56.0",
     "@sharkord/plugin-sdk": "workspace:*",
     "@sharkord/shared": "workspace:*",
     "@trpc/server": "^11.6.0",
