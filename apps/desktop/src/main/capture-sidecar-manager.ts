@@ -709,6 +709,7 @@ class CaptureSidecarManager {
 			this.sidecarProcess = processRef;
 			this.stdoutBuffer = '';
 			this.stderrBuffer = '';
+			this.recentStderrLines = [];
 			this.setupProcessListeners(processRef);
 			return;
 		}
@@ -727,6 +728,7 @@ class CaptureSidecarManager {
 		this.sidecarProcess = processRef;
 		this.stdoutBuffer = '';
 		this.stderrBuffer = '';
+		this.recentStderrLines = [];
 		this.setupProcessListeners(processRef);
 	}
 

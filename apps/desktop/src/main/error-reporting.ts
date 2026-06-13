@@ -39,18 +39,37 @@ const sanitizeString = (value: string): string => {
 		.replace(EMAIL_PATTERN, '[redacted-email]');
 };
 
+// Scrub free-text recursively: Sentry's electron integrations attach IPC payload
+// snippets, file-system paths, and process metadata to nested breadcrumb.data and
+// extra objects, any of which can embed the home dir, tokens, or emails.
+const sanitizeData = (value: unknown): unknown => {
+	if (typeof value === 'string') {
+		return sanitizeString(value);
+	}
+
+	if (Array.isArray(value)) {
+		return value.map((entry) => sanitizeData(entry));
+	}
+
+	if (value !== null && typeof value === 'object') {
+		const sanitized: Record<string, unknown> = {};
+
+		for (const [key, entry] of Object.entries(value)) {
+			sanitized[key] = sanitizeData(entry);
+		}
+
+		return sanitized;
+	}
+
+	return value;
+};
+
 const sanitizeExtra = (extra: ErrorEvent['extra']): ErrorEvent['extra'] => {
 	if (!extra) {
 		return extra;
 	}
 
-	const sanitized: Record<string, unknown> = {};
-
-	for (const [key, value] of Object.entries(extra)) {
-		sanitized[key] = typeof value === 'string' ? sanitizeString(value) : value;
-	}
-
-	return sanitized;
+	return sanitizeData(extra) as ErrorEvent['extra'];
 };
 
 // Mirrors the renderer's beforeSend posture (helpers/error-reporting/sanitize.ts):
@@ -65,6 +84,7 @@ const sanitizeEvent = (event: ErrorEvent): ErrorEvent => {
 		breadcrumbs: event.breadcrumbs?.map((breadcrumb) => ({
 			...breadcrumb,
 			message: breadcrumb.message ? sanitizeString(breadcrumb.message) : breadcrumb.message,
+			data: breadcrumb.data ? (sanitizeData(breadcrumb.data) as typeof breadcrumb.data) : breadcrumb.data,
 		})),
 		exception: event.exception?.values
 			? {
