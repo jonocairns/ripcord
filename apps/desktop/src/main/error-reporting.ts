@@ -130,6 +130,14 @@ const configureMainErrorReporting = (config: TDesktopErrorReportingConfig): void
 
 	const tracesSampleRate = normalizeSampleRate(config.tracingSampleRate);
 
+	// Mark the attempt before init runs, not after success: this is an
+	// attempt-once guard, not a success guard. If init throws partway through
+	// (e.g. after registering Classic-mode ipcMain handlers), we must not run it
+	// again — a retry would register duplicate handlers. Retrying buys nothing
+	// anyway: a given DSN that fails will fail the same way, and the !initialized
+	// guard above already commits us to "first DSN wins".
+	initialized = true;
+
 	// Never let error-reporting setup throw back across the IPC boundary. The
 	// handler is invoked fire-and-forget from the renderer, so a rejection here
 	// surfaces as an unhandled rejection and gets reported to Sentry — i.e. the
@@ -151,8 +159,6 @@ const configureMainErrorReporting = (config: TDesktopErrorReportingConfig): void
 				},
 			},
 		});
-
-		initialized = true;
 	} catch (error) {
 		console.error('[desktop] Failed to initialize main-process error reporting', error);
 	}
