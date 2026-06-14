@@ -1472,6 +1472,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				encodings: screenShareEncodings,
 				codecOptions: {
 					videoGoogleStartBitrate: screenBitratePolicy.startKbps,
+					videoGoogleMaxBitrate: screenBitratePolicy.maxKbps,
 				},
 				codec: preferredVideoCodec,
 				// Keep explicit stream cleanup as the only path that stops the
