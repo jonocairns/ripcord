@@ -804,15 +804,7 @@ const registerIpcHandlers = () => {
 //
 // enable-features rationale:
 //   - AcceleratedVideoEncoder: master switch for hardware video encode.
-//   - D3D12VideoEncodeAccelerator: Windows 11 24H2 (WDDM 3.2) hardware AV1 (and
-//     other) encode path. NVENC AV1 for WebRTC reaches Chromium through D3D12,
-//     not the older Media Foundation MFT path (which only wires up H.264/HEVC).
-//
-// WebRtcAV1HWEncode is intentionally NOT set: AV1 screen share has been removed.
-// Hardware AV1 death-spiralled on lossy/translated remote paths (a single layer
-// with nothing for the SFU to shed) and left GPU state wedged after teardown,
-// crashing later GPU apps. Screen share now uses hardware H264 via the D3D12
-// path.
+//   - D3D12VideoEncodeAccelerator: Windows 11 24H2 (WDDM 3.2) hardware encode path.
 //
 // With these set (and the Vulkan ANGLE flags gone) the Chromium D3D12 encoder
 // runs in hardware: H264 screen share reports encoderImplementation
