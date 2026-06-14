@@ -39,7 +39,6 @@ export enum VideoCodecPreference {
 	VP8 = 'vp8',
 	VP9 = 'vp9',
 	H264 = 'h264',
-	AV1 = 'av1',
 }
 
 export enum VoiceFilterStrength {

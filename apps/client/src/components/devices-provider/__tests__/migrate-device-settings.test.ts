@@ -118,9 +118,16 @@ describe('migrateDeviceSettings', () => {
 
 	it('preserves explicit video codec values', () => {
 		const migrated = migrateDeviceSettings({
-			videoCodec: VideoCodecPreference.AV1,
+			videoCodec: VideoCodecPreference.H264,
 		});
-		expect(migrated.videoCodec).toBe(VideoCodecPreference.AV1);
+		expect(migrated.videoCodec).toBe(VideoCodecPreference.H264);
+	});
+
+	it('falls back to auto for unsupported (removed) video codec values', () => {
+		const migrated = migrateDeviceSettings({
+			videoCodec: 'av1' as VideoCodecPreference,
+		});
+		expect(migrated.videoCodec).toBe(VideoCodecPreference.AUTO);
 	});
 
 	it('normalizes push keybinds from legacy aliases', () => {
