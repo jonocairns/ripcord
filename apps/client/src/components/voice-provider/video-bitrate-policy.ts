@@ -106,7 +106,7 @@ const BITRATE_TABLE: Record<TVideoBitrateProfile, TResolutionTier[]> = {
 			maxPixels: 3840 * 2160,
 			fpsTiers: [
 				{ maxFrameRate: 15, startKbps: 3500, maxKbps: 11000 },
-				{ maxFrameRate: 30, startKbps: 7000, maxKbps: 22000 },
+				{ maxFrameRate: 30, startKbps: 7000, maxKbps: 28000 },
 				{ maxFrameRate: 60, startKbps: 9000, maxKbps: 35000 },
 				{ maxFrameRate: 120, startKbps: 16000, maxKbps: 52000 },
 			],
