@@ -370,11 +370,13 @@ const MicrophoneTestPanel = memo(
 				return;
 			}
 
+			let rawStream: MediaStream | undefined;
+			let micAudioPipeline: TMicAudioProcessingPipeline | undefined;
+			let audioContext: AudioContext | undefined;
+
 			try {
 				const inVoiceChannel = currentVoiceChannelId !== undefined;
-				let rawStream: MediaStream | undefined;
 				let outputStream = localAudioStream;
-				let micAudioPipeline: TMicAudioProcessingPipeline | undefined;
 				let previewState: TMicTestPreviewState = 'browser-capture';
 
 				if (inVoiceChannel && outputStream) {
@@ -411,7 +413,7 @@ const MicrophoneTestPanel = memo(
 					throw new Error('Unable to access an audio stream for microphone testing.');
 				}
 
-				const audioContext = new AudioContextClass();
+				audioContext = new AudioContextClass();
 				const source = audioContext.createMediaStreamSource(outputStream);
 				const analyser = audioContext.createAnalyser();
 				const monitorGainNode = audioContext.createGain();
@@ -476,6 +478,15 @@ const MicrophoneTestPanel = memo(
 				setMicTestError(undefined);
 				updateInputLevel();
 			} catch (error) {
+				rawStream?.getTracks().forEach((track) => {
+					track.stop();
+				});
+				await micAudioPipeline?.destroy().catch(() => {
+					// ignore setup cleanup failures
+				});
+				await audioContext?.close().catch(() => {
+					// ignore setup cleanup failures
+				});
 				setMicTestError(error instanceof Error ? error.message : 'Unable to access microphone for testing.');
 				await stopTest();
 			}

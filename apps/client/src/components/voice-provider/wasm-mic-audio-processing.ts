@@ -324,6 +324,7 @@ const createWasmMicAudioProcessingPipeline = async ({
 			backend: 'browser-wasm',
 			destroy: async () => {
 				diagnostics.reset();
+				track.stop();
 
 				try {
 					workletNode?.port.postMessage({

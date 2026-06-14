@@ -462,6 +462,7 @@ const createMicGainPipeline = async (
 		stream: destinationNode.stream,
 		destroy: async () => {
 			inputTrack.removeEventListener('ended', handleInputEnded);
+			outputTrack.stop();
 
 			try {
 				sourceNode.disconnect();
@@ -1289,100 +1290,126 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const publishWebcamTrack = useCallback(
-		async (stream: MediaStream, track: MediaStreamTrack) => {
+		async (
+			stream: MediaStream,
+			track: MediaStreamTrack,
+			options: {
+				stopTracksOnFailure?: boolean;
+			} = {},
+		) => {
 			setLocalVideoStream(stream);
+			const stopTracksOnFailure = options.stopTracksOnFailure ?? true;
+			let videoProducer: Producer<AppData> | undefined;
 
-			logVoice('Obtained video track', { videoTrack: track });
+			try {
+				logVoice('Obtained video track', { videoTrack: track });
 
-			track.contentHint = 'motion';
+				track.contentHint = 'motion';
 
-			const preferredVideoCodec = resolvePreferredVideoCodec(sendRtpCapabilities.current, devices.videoCodec);
+				const preferredVideoCodec = resolvePreferredVideoCodec(sendRtpCapabilities.current, devices.videoCodec);
 
-			if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
-				logVoice('Preferred webcam codec unavailable, falling back to auto', {
-					preferredCodec: devices.videoCodec,
+				if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
+					logVoice('Preferred webcam codec unavailable, falling back to auto', {
+						preferredCodec: devices.videoCodec,
+					});
+				}
+
+				const requestedWebcamResolution = getResWidthHeight(devices?.webcamResolution);
+				const webcamTrackSettings = track.getSettings();
+				const webcamWidth = webcamTrackSettings.width ?? requestedWebcamResolution.width;
+				const webcamHeight = webcamTrackSettings.height ?? requestedWebcamResolution.height;
+				const webcamFramerate = webcamTrackSettings.frameRate ?? devices.webcamFramerate;
+				const webcamBitratePolicy = getVideoBitratePolicy({
+					profile: 'camera',
+					width: webcamWidth,
+					height: webcamHeight,
+					frameRate: webcamFramerate,
+					codec: getBitrateCodecFromMimeType(preferredVideoCodec),
 				});
+
+				logVoice('Webcam bitrate policy resolved', {
+					width: webcamWidth,
+					height: webcamHeight,
+					frameRate: webcamFramerate,
+					codec: preferredVideoCodec?.mimeType,
+					startKbps: webcamBitratePolicy.startKbps,
+					maxKbps: webcamBitratePolicy.maxKbps,
+				});
+
+				const webcamEncodings = createVideoProducerEncodings().map((encoding) => ({
+					...encoding,
+					maxBitrate: webcamBitratePolicy.maxKbps * 1000,
+				}));
+				videoProducer = await producerTransport.current?.produce({
+					track,
+					encodings: webcamEncodings,
+					codec: preferredVideoCodec,
+					codecOptions: {
+						videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
+						videoGoogleMaxBitrate: webcamBitratePolicy.maxKbps,
+					},
+					appData: { kind: StreamKind.VIDEO },
+				});
+
+				if (!videoProducer) {
+					throw new Error('Failed to create webcam producer');
+				}
+
+				const createdVideoProducer = videoProducer;
+				await applyVideoDegradationPreference(createdVideoProducer.rtpSender, 'webcam');
+
+				localVideoProducer.current = createdVideoProducer;
+
+				logVoice('Webcam video producer created', {
+					producer: createdVideoProducer,
+				});
+
+				bindProducerCloseHandler({
+					producer: createdVideoProducer,
+					kind: StreamKind.VIDEO,
+					producerRef: localVideoProducer,
+					logLabel: 'Video',
+				});
+
+				track.onended = () => {
+					logVoice('Video track ended, cleaning up webcam');
+
+					stream.getVideoTracks().forEach((currentTrack) => {
+						currentTrack.stop();
+					});
+					createdVideoProducer.close();
+
+					setLocalVideoStream((currentStream) => {
+						return currentStream === stream ? undefined : currentStream;
+					});
+
+					updateOwnVoiceState({ webcamEnabled: false });
+
+					void (async () => {
+						try {
+							await getTRPCClient().voice.updateState.mutate({
+								webcamEnabled: false,
+							});
+						} catch (error) {
+							logVoice('Error syncing webcam state after native track end', { error });
+						}
+					})();
+				};
+			} catch (error) {
+				videoProducer?.close();
+				if (localVideoProducer.current === videoProducer) {
+					localVideoProducer.current = undefined;
+				}
+				if (stopTracksOnFailure) {
+					stream.getTracks().forEach((currentTrack) => {
+						currentTrack.stop();
+					});
+					setLocalVideoStream((currentStream) => {
+						return currentStream === stream ? undefined : currentStream;
+					});
+				}
+				throw error;
 			}
-
-			const requestedWebcamResolution = getResWidthHeight(devices?.webcamResolution);
-			const webcamTrackSettings = track.getSettings();
-			const webcamWidth = webcamTrackSettings.width ?? requestedWebcamResolution.width;
-			const webcamHeight = webcamTrackSettings.height ?? requestedWebcamResolution.height;
-			const webcamFramerate = webcamTrackSettings.frameRate ?? devices.webcamFramerate;
-			const webcamBitratePolicy = getVideoBitratePolicy({
-				profile: 'camera',
-				width: webcamWidth,
-				height: webcamHeight,
-				frameRate: webcamFramerate,
-				codec: getBitrateCodecFromMimeType(preferredVideoCodec),
-			});
-
-			logVoice('Webcam bitrate policy resolved', {
-				width: webcamWidth,
-				height: webcamHeight,
-				frameRate: webcamFramerate,
-				codec: preferredVideoCodec?.mimeType,
-				startKbps: webcamBitratePolicy.startKbps,
-				maxKbps: webcamBitratePolicy.maxKbps,
-			});
-
-			const webcamEncodings = createVideoProducerEncodings().map((encoding) => ({
-				...encoding,
-				maxBitrate: webcamBitratePolicy.maxKbps * 1000,
-			}));
-			const videoProducer = await producerTransport.current?.produce({
-				track,
-				encodings: webcamEncodings,
-				codec: preferredVideoCodec,
-				codecOptions: {
-					videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
-				},
-				appData: { kind: StreamKind.VIDEO },
-			});
-
-			if (!videoProducer) {
-				throw new Error('Failed to create webcam producer');
-			}
-
-			await applyVideoDegradationPreference(videoProducer.rtpSender, 'webcam');
-
-			localVideoProducer.current = videoProducer;
-
-			logVoice('Webcam video producer created', {
-				producer: videoProducer,
-			});
-
-			bindProducerCloseHandler({
-				producer: videoProducer,
-				kind: StreamKind.VIDEO,
-				producerRef: localVideoProducer,
-				logLabel: 'Video',
-			});
-
-			track.onended = () => {
-				logVoice('Video track ended, cleaning up webcam');
-
-				stream.getVideoTracks().forEach((currentTrack) => {
-					currentTrack.stop();
-				});
-				videoProducer.close();
-
-				setLocalVideoStream((currentStream) => {
-					return currentStream === stream ? undefined : currentStream;
-				});
-
-				updateOwnVoiceState({ webcamEnabled: false });
-
-				void (async () => {
-					try {
-						await getTRPCClient().voice.updateState.mutate({
-							webcamEnabled: false,
-						});
-					} catch (error) {
-						logVoice('Error syncing webcam state after native track end', { error });
-					}
-				})();
-			};
 		},
 		[
 			bindProducerCloseHandler,
@@ -1401,9 +1428,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			track: MediaStreamTrack,
 			options: {
 				onTrackEnded?: () => void | Promise<void>;
+				clearStreamOnFailure?: boolean;
 			} = {},
 		) => {
 			setLocalScreenShare(stream);
+			const clearStreamOnFailure = options.clearStreamOnFailure ?? true;
+			let screenShareProducer: Producer<AppData> | undefined;
 
 			if (options.onTrackEnded) {
 				screenShareTrackEndedHandlerRef.current = options.onTrackEnded;
@@ -1411,108 +1441,122 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			const onTrackEnded = options.onTrackEnded ?? screenShareTrackEndedHandlerRef.current;
 
-			logVoice('Obtained video track', { videoTrack: track });
+			try {
+				logVoice('Obtained video track', { videoTrack: track });
 
-			track.contentHint = 'motion';
+				track.contentHint = 'motion';
 
-			const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
-			const screenTrackSettings = track.getSettings();
-			const screenWidth = screenTrackSettings.width ?? requestedScreenResolution.width;
-			const screenHeight = screenTrackSettings.height ?? requestedScreenResolution.height;
-			const screenFramerate = screenTrackSettings.frameRate ?? devices.screenFramerate;
-			// The bitrate policy's max ceiling is per-codec, so resolve the codec
-			// first using a codec-agnostic base policy, then recompute the policy
-			// with the resolved codec.
-			const baseScreenBitratePolicy = getVideoBitratePolicy({
-				profile: 'screen',
-				width: screenWidth,
-				height: screenHeight,
-				frameRate: screenFramerate,
-			});
-
-			const preferredVideoCodec = resolveScreenShareVideoCodec(sendRtpCapabilities.current, devices.videoCodec, {
-				width: screenWidth,
-				height: screenHeight,
-				framerate: screenFramerate,
-				bitrate: baseScreenBitratePolicy.startKbps * 1000,
-			});
-			if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
-				logVoice('Preferred screen share codec unavailable, falling back to auto', {
-					preferredCodec: devices.videoCodec,
+				const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
+				const screenTrackSettings = track.getSettings();
+				const screenWidth = screenTrackSettings.width ?? requestedScreenResolution.width;
+				const screenHeight = screenTrackSettings.height ?? requestedScreenResolution.height;
+				const screenFramerate = screenTrackSettings.frameRate ?? devices.screenFramerate;
+				// The bitrate policy's max ceiling is per-codec, so resolve the codec
+				// first using a codec-agnostic base policy, then recompute the policy
+				// with the resolved codec.
+				const baseScreenBitratePolicy = getVideoBitratePolicy({
+					profile: 'screen',
+					width: screenWidth,
+					height: screenHeight,
+					frameRate: screenFramerate,
 				});
-			}
 
-			const screenBitratePolicy = getVideoBitratePolicy({
-				profile: 'screen',
-				width: screenWidth,
-				height: screenHeight,
-				frameRate: screenFramerate,
-				codec: getBitrateCodecFromMimeType(preferredVideoCodec),
-			});
-
-			logVoice('Screen share bitrate policy resolved', {
-				width: screenWidth,
-				height: screenHeight,
-				frameRate: screenFramerate,
-				codec: preferredVideoCodec?.mimeType,
-				startKbps: screenBitratePolicy.startKbps,
-				maxKbps: screenBitratePolicy.maxKbps,
-			});
-
-			// Add a max-bitrate ceiling (bps) so congestion control has headroom to
-			// ramp during high-motion content before it resorts to downscaling. Spread
-			// onto the existing encoding so scalabilityMode/temporal SVC is preserved.
-			const screenShareEncodings = createVideoProducerEncodings().map((encoding) => ({
-				...encoding,
-				maxBitrate: screenBitratePolicy.maxKbps * 1000,
-			}));
-
-			const screenShareProducer = await producerTransport.current?.produce({
-				track,
-				encodings: screenShareEncodings,
-				codecOptions: {
-					videoGoogleStartBitrate: screenBitratePolicy.startKbps,
-					videoGoogleMaxBitrate: screenBitratePolicy.maxKbps,
-				},
-				codec: preferredVideoCodec,
-				// Keep explicit stream cleanup as the only path that stops the
-				// browser screen-share capture.
-				stopTracks: false,
-				appData: { kind: StreamKind.SCREEN },
-			});
-
-			if (!screenShareProducer) {
-				throw new Error('Failed to create screen share producer');
-			}
-
-			await applyVideoDegradationPreference(screenShareProducer.rtpSender, 'screen share');
-
-			localScreenShareProducer.current = screenShareProducer;
-
-			bindProducerCloseHandler({
-				producer: screenShareProducer,
-				kind: StreamKind.SCREEN,
-				producerRef: localScreenShareProducer,
-				logLabel: 'Screen share',
-			});
-
-			track.onended = () => {
-				logVoice('Screen share track ended, cleaning up screen share');
-
-				stream.getTracks().forEach((currentTrack) => {
-					currentTrack.stop();
+				const preferredVideoCodec = resolveScreenShareVideoCodec(sendRtpCapabilities.current, devices.videoCodec, {
+					width: screenWidth,
+					height: screenHeight,
+					framerate: screenFramerate,
+					bitrate: baseScreenBitratePolicy.startKbps * 1000,
 				});
-				screenShareProducer.close();
-				localScreenShareAudioProducer.current?.close();
-				localScreenShareAudioProducer.current = undefined;
-				standbyDisplayAudioTrackRef.current = undefined;
-				standbyDisplayAudioStreamRef.current = undefined;
-				trackDesktopAppAudioCleanupRef.current();
+				if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
+					logVoice('Preferred screen share codec unavailable, falling back to auto', {
+						preferredCodec: devices.videoCodec,
+					});
+				}
 
-				setLocalScreenShare(undefined);
-				setLocalScreenShareAudio(undefined);
-				void onTrackEnded?.();
-			};
+				const screenBitratePolicy = getVideoBitratePolicy({
+					profile: 'screen',
+					width: screenWidth,
+					height: screenHeight,
+					frameRate: screenFramerate,
+					codec: getBitrateCodecFromMimeType(preferredVideoCodec),
+				});
+
+				logVoice('Screen share bitrate policy resolved', {
+					width: screenWidth,
+					height: screenHeight,
+					frameRate: screenFramerate,
+					codec: preferredVideoCodec?.mimeType,
+					startKbps: screenBitratePolicy.startKbps,
+					maxKbps: screenBitratePolicy.maxKbps,
+				});
+
+				// Add a max-bitrate ceiling (bps) so congestion control has headroom to
+				// ramp during high-motion content before it resorts to downscaling. Spread
+				// onto the existing encoding so scalabilityMode/temporal SVC is preserved.
+				const screenShareEncodings = createVideoProducerEncodings().map((encoding) => ({
+					...encoding,
+					maxBitrate: screenBitratePolicy.maxKbps * 1000,
+				}));
+
+				screenShareProducer = await producerTransport.current?.produce({
+					track,
+					encodings: screenShareEncodings,
+					codecOptions: {
+						videoGoogleStartBitrate: screenBitratePolicy.startKbps,
+						videoGoogleMaxBitrate: screenBitratePolicy.maxKbps,
+					},
+					codec: preferredVideoCodec,
+					// Keep explicit stream cleanup as the only path that stops the
+					// browser screen-share capture.
+					stopTracks: false,
+					appData: { kind: StreamKind.SCREEN },
+				});
+
+				if (!screenShareProducer) {
+					throw new Error('Failed to create screen share producer');
+				}
+
+				const createdScreenShareProducer = screenShareProducer;
+				await applyVideoDegradationPreference(createdScreenShareProducer.rtpSender, 'screen share');
+
+				localScreenShareProducer.current = createdScreenShareProducer;
+
+				bindProducerCloseHandler({
+					producer: createdScreenShareProducer,
+					kind: StreamKind.SCREEN,
+					producerRef: localScreenShareProducer,
+					logLabel: 'Screen share',
+				});
+
+				track.onended = () => {
+					logVoice('Screen share track ended, cleaning up screen share');
+
+					stream.getTracks().forEach((currentTrack) => {
+						currentTrack.stop();
+					});
+					createdScreenShareProducer.close();
+					localScreenShareAudioProducer.current?.close();
+					localScreenShareAudioProducer.current = undefined;
+					standbyDisplayAudioTrackRef.current = undefined;
+					standbyDisplayAudioStreamRef.current = undefined;
+					trackDesktopAppAudioCleanupRef.current();
+
+					setLocalScreenShare(undefined);
+					setLocalScreenShareAudio(undefined);
+					void onTrackEnded?.();
+				};
+			} catch (error) {
+				screenShareProducer?.close();
+				if (localScreenShareProducer.current === screenShareProducer) {
+					localScreenShareProducer.current = undefined;
+				}
+				if (clearStreamOnFailure) {
+					setLocalScreenShare((currentStream) => {
+						return currentStream === stream ? undefined : currentStream;
+					});
+				}
+				throw error;
+			}
 		},
 		[
 			bindProducerCloseHandler,
@@ -1886,10 +1930,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				}
 			}
 
-			if (appAudioPipelineRef.current) {
-				await appAudioPipelineRef.current.destroy();
-			}
+			const appAudioPipeline = appAudioPipelineRef.current;
 			appAudioPipelineRef.current = undefined;
+
+			if (appAudioPipeline) {
+				await appAudioPipeline.destroy().catch((error) => {
+					logVoice('Failed to clean up desktop app audio pipeline', { error });
+				});
+			}
 
 			if (!preserveCurrentAudio) {
 				setLocalScreenShareAudio(undefined);
@@ -2554,7 +2602,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								const currentVideoStream = localVideoStreamRef.current;
 								const currentVideoTrack = currentVideoStream?.getVideoTracks()[0];
 								if (currentVideoStream && currentVideoTrack && currentVideoTrack.readyState === 'live') {
-									republishTasks.push(publishWebcamTrack(currentVideoStream, currentVideoTrack));
+									republishTasks.push(
+										publishWebcamTrack(currentVideoStream, currentVideoTrack, {
+											stopTracksOnFailure: false,
+										}),
+									);
 								}
 
 								const currentScreenShareStream = localScreenShareStreamRef.current;
@@ -2564,7 +2616,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									currentScreenShareTrack &&
 									currentScreenShareTrack.readyState === 'live'
 								) {
-									republishTasks.push(publishScreenShareTrack(currentScreenShareStream, currentScreenShareTrack));
+									republishTasks.push(
+										publishScreenShareTrack(currentScreenShareStream, currentScreenShareTrack, {
+											clearStreamOnFailure: false,
+										}),
+									);
 								}
 
 								const currentScreenShareAudioStream = localScreenShareAudioStreamRef.current;

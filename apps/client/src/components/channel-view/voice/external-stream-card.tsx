@@ -375,6 +375,12 @@ const ExternalStreamCard = memo(
 				// Pop-out playback is user initiated, but browser media policies can
 				// still reject autoplay. Keep the stream attached and fail silently.
 			});
+
+			return () => {
+				if (popoutVideoElement.srcObject === nextStream) {
+					popoutVideoElement.srcObject = null;
+				}
+			};
 		}, [externalAudioStream, externalVideoStream, isPoppedOut, popoutVideoElement]);
 
 		useEffect(() => {
