@@ -1,31 +1,19 @@
 import type { AppData, Producer } from 'mediasoup-client/types';
-import { type MutableRefObject, useEffect, useRef } from 'react';
+import { type MutableRefObject, useEffect } from 'react';
 import { logVoice } from '@/helpers/browser-logger';
 import { VIDEO_DEGRADATION_PREFERENCE } from '../video-encoding-constants';
 
 // Runtime quality guard for the local screen-share producer, driven by the
-// sender's outbound-rtp stats. Two protections:
+// sender's outbound-rtp stats.
 //
-// 1. AV1 software-fallback watchdog. Hardware AV1 can silently fall back to
-//    software libaom at runtime when congestion pushes the encode resolution
-//    below the hardware encoder's minimum. libaom cannot sustain screen-share
-//    encode: it underproduces, stalls the pacer, feeds the congestion
-//    estimator more bad signal and pins the share at ~1fps with no climb-back.
-//    The upfront powerEfficient probe only guards the *initial* codec choice,
-//    so when AV1 is observed on a non-power-efficient encoder for consecutive
-//    samples the producer is restarted on hardware H264.
-//
-// 2. Resolution floor. Under a loss burst the encoder can crush the share far
-//    below watchable (e.g. 320x180) and GCC's additive ramp takes minutes to
-//    climb back. When the sent resolution stays below the floor while
-//    quality-limited, the sender is pinned to the floor resolution with
-//    'maintain-resolution' so frame rate absorbs the remaining pressure; once
-//    the limitation clears it is restored to 'balanced' at full resolution.
-//    Keeping resolution at the floor also keeps AV1 inside the hardware
-//    encoder's supported range, preventing trapdoor (1) from triggering.
+// Resolution floor: under a loss burst the encoder can crush the share far
+// below watchable (e.g. 320x180) and GCC's additive ramp takes minutes to
+// climb back. When the sent resolution stays below the floor while
+// quality-limited, the sender is pinned to the floor resolution with
+// 'maintain-resolution' so frame rate absorbs the remaining pressure; once
+// the limitation clears it is restored to 'balanced' at full resolution.
 
 const POLL_INTERVAL_MS = 2_000;
-const AV1_SOFTWARE_SAMPLES_BEFORE_FALLBACK = 3;
 const FLOOR_SAMPLES_BEFORE_APPLY = 3;
 const FLOOR_SAMPLES_BEFORE_RESTORE = 5;
 const FLOOR_MIN_HEIGHT_PX = 360;
@@ -39,19 +27,9 @@ type TScreenShareQualityGuardParams = {
 	screenShareProducerRef: MutableRefObject<Producer<AppData> | undefined>;
 	// True while a local screen share is live; the guard only polls then.
 	active: boolean;
-	// Restart the screen-share producer on hardware H264. Invoked at most once
-	// per producer when AV1 is detected running on a software encoder.
-	onAv1SoftwareFallback: () => Promise<void>;
 };
 
-const useScreenShareQualityGuard = ({
-	screenShareProducerRef,
-	active,
-	onAv1SoftwareFallback,
-}: TScreenShareQualityGuardParams) => {
-	const onAv1SoftwareFallbackRef = useRef(onAv1SoftwareFallback);
-	onAv1SoftwareFallbackRef.current = onAv1SoftwareFallback;
-
+const useScreenShareQualityGuard = ({ screenShareProducerRef, active }: TScreenShareQualityGuardParams) => {
 	useEffect(() => {
 		if (!active) {
 			return;
@@ -60,8 +38,6 @@ const useScreenShareQualityGuard = ({
 		let disposed = false;
 		let isTicking = false;
 		let trackedProducerId: string | undefined;
-		let av1SoftwareSamples = 0;
-		let av1FallbackRequested = false;
 		let belowFloorSamples = 0;
 		let recoveredSamples = 0;
 		let floorApplied = false;
@@ -69,8 +45,6 @@ const useScreenShareQualityGuard = ({
 
 		const resetForProducer = (producerId: string) => {
 			trackedProducerId = producerId;
-			av1SoftwareSamples = 0;
-			av1FallbackRequested = false;
 			belowFloorSamples = 0;
 			recoveredSamples = 0;
 			// A new producer starts with fresh encodings, so any previously
@@ -162,48 +136,21 @@ const useScreenShareQualityGuard = ({
 					return;
 				}
 
-				const codecMimeTypeById = new Map<string, string>();
 				let outbound:
 					| {
-							codecId?: string;
 							frameHeight?: number;
 							qualityLimitationReason?: string;
-							encoderImplementation?: string;
-							powerEfficientEncoder?: boolean;
 					  }
 					| undefined;
 
 				for (const stat of statsReport.values()) {
-					if (stat.type === 'codec' && typeof stat.mimeType === 'string') {
-						codecMimeTypeById.set(stat.id, stat.mimeType.toLowerCase());
-					} else if (stat.type === 'outbound-rtp' && stat.kind === 'video') {
+					if (stat.type === 'outbound-rtp' && stat.kind === 'video') {
 						outbound = stat;
 					}
 				}
 
 				if (!outbound) {
 					return;
-				}
-
-				const codecMimeType = outbound.codecId ? codecMimeTypeById.get(outbound.codecId) : undefined;
-				const isAv1 = codecMimeType === 'video/av1';
-				const isSoftwareEncode =
-					outbound.powerEfficientEncoder === false || /libaom/i.test(outbound.encoderImplementation ?? '');
-
-				if (isAv1 && isSoftwareEncode) {
-					av1SoftwareSamples += 1;
-
-					if (!av1FallbackRequested && av1SoftwareSamples >= AV1_SOFTWARE_SAMPLES_BEFORE_FALLBACK) {
-						av1FallbackRequested = true;
-						logVoice('Screen share AV1 fell back to a software encoder, requesting H264 restart', {
-							encoderImplementation: outbound.encoderImplementation,
-							samples: av1SoftwareSamples,
-						});
-						void onAv1SoftwareFallbackRef.current();
-						return;
-					}
-				} else {
-					av1SoftwareSamples = 0;
 				}
 
 				const captureHeight = producer.track?.getSettings().height;

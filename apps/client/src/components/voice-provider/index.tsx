@@ -34,7 +34,6 @@ import {
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { logDebug, logVoice, traceSentrySpan } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
-import { probeWebrtcEncode } from '@/helpers/media-encode-capabilities';
 import { getTrpcErrorData, isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge, isDesktopRuntime } from '@/runtime/desktop-bridge';
@@ -137,7 +136,6 @@ const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
 	[VideoCodecPreference.VP8]: 'video/VP8',
 	[VideoCodecPreference.VP9]: 'video/VP9',
 	[VideoCodecPreference.H264]: 'video/H264',
-	[VideoCodecPreference.AV1]: 'video/AV1',
 };
 const DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS = 96_000;
 // Desktop/game audio is music-grade, full-band content (not voice), so it gets
@@ -161,11 +159,7 @@ type TVideoProducerEncoding = {
 	maxBitrate?: number;
 };
 
-const createVideoProducerEncodings = (codec: RtpCodecCapability | undefined): TVideoProducerEncoding[] => {
-	if (codec?.mimeType.toLowerCase() === 'video/av1') {
-		return [{}];
-	}
-
+const createVideoProducerEncodings = (): TVideoProducerEncoding[] => {
 	return [{ scalabilityMode: VIDEO_SCALABILITY_MODE }];
 };
 
@@ -178,7 +172,6 @@ const getBitrateCodecFromMimeType = (codec: RtpCodecCapability | undefined): TVi
 	if (mimeType === 'video/h264') return 'h264';
 	if (mimeType === 'video/vp8') return 'vp8';
 	if (mimeType === 'video/vp9') return 'vp9';
-	if (mimeType === 'video/av1') return 'av1';
 
 	return 'auto';
 };
@@ -228,22 +221,17 @@ type TScreenShareEncodeParams = {
 };
 
 // Resolve the screen share send codec.
-// - AUTO: prefer H264; it has broad hardware-encoder support and is
-//   universally decodable by viewers (unlike AV1, which Safari/iOS and older
-//   devices can't decode and would be dropped by canConsume). Without this,
-//   mediasoup-client's default pick is the first negotiated codec (VP8),
-//   silently landing software encoding on demanding shares.
-// - Explicit AV1: only honour it when a hardware encoder is available for this
-//   resolution/framerate/bitrate; otherwise fall back to H264 to avoid a
-//   software-encoded slideshow at high resolutions.
-// - Explicit VP9/VP8/H264: use as chosen. VP9 intentionally skips the
-//   hardware-acceleration guard the AV1 branch applies; it's opt-in and the
-//   caller knowingly accepts the (often software-encoded) CPU trade-off.
-const resolveScreenShareVideoCodec = async (
+// - AUTO: prefer H264; it has broad hardware-encoder support and is universally
+//   decodable by viewers. Without this, mediasoup-client's default pick is the
+//   first negotiated codec (VP8), silently landing software encoding on
+//   demanding shares.
+// - Explicit VP9/VP8/H264: use as chosen; the caller knowingly accepts the
+//   (often software-encoded) CPU trade-off for VP9/VP8.
+const resolveScreenShareVideoCodec = (
 	rtpCapabilities: RtpCapabilities | null,
 	preference: VideoCodecPreference,
 	encodeParams: TScreenShareEncodeParams,
-): Promise<RtpCodecCapability | undefined> => {
+): RtpCodecCapability | undefined => {
 	const h264Codec = findVideoCodecByMime(rtpCapabilities, 'video/H264');
 
 	if (preference === VideoCodecPreference.AUTO) {
@@ -251,35 +239,6 @@ const resolveScreenShareVideoCodec = async (
 			logVoice('H264 screen share codec unavailable for auto selection, falling back to mediasoup default codec', {
 				...encodeParams,
 			});
-		}
-
-		return h264Codec;
-	}
-
-	if (preference === VideoCodecPreference.AV1) {
-		const av1Codec = findVideoCodecByMime(rtpCapabilities, 'video/AV1');
-
-		if (av1Codec) {
-			// Use AV1 only with a confirmed *hardware* encoder, otherwise fall back
-			// to H264 rather than running software AV1 (libaom can't sustain
-			// high-res/fps screen share — the frame rate sags with content). The
-			// WebRTC probe must report a power-efficient (hardware) encoder;
-			// software-only (`smooth` but not `powerEfficient`) is rejected.
-			const av1Probe = await probeWebrtcEncode({ mimeType: 'video/AV1', ...encodeParams });
-
-			if (av1Probe.powerEfficient) {
-				return av1Codec;
-			}
-
-			if (h264Codec) {
-				logVoice('AV1 screen share encode is not hardware-capable, falling back to H264', encodeParams);
-				return h264Codec;
-			}
-
-			logVoice('AV1 screen share encode is not hardware-capable and H264 is unavailable, falling back to auto', {
-				...encodeParams,
-			});
-			return undefined;
 		}
 
 		return h264Codec;
@@ -686,11 +645,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const micGainPipelineRef = useRef<TMicGainPipeline | undefined>(undefined);
 	const standbyDisplayAudioTrackRef = useRef<MediaStreamTrack | undefined>(undefined);
 	const standbyDisplayAudioStreamRef = useRef<MediaStream | undefined>(undefined);
-	// Last onTrackEnded handler passed to publishScreenShareTrack. Republish
-	// paths (transport recovery, the H264 quality-guard restart) reuse it so the
-	// stop-sync side effects survive a producer restart.
+	// Last onTrackEnded handler passed to publishScreenShareTrack. Transport
+	// recovery reuses it so stop-sync side effects survive a producer restart.
 	const screenShareTrackEndedHandlerRef = useRef<(() => void | Promise<void>) | undefined>(undefined);
-	const isRestartingScreenShareRef = useRef(false);
 	const isPushToTalkHeldRef = useRef(false);
 	const isPushToMuteHeldRef = useRef(false);
 	const micMutedBeforePushRef = useRef<boolean | undefined>(undefined);
@@ -1369,7 +1326,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				maxKbps: webcamBitratePolicy.maxKbps,
 			});
 
-			const webcamEncodings = createVideoProducerEncodings(preferredVideoCodec).map((encoding) => ({
+			const webcamEncodings = createVideoProducerEncodings().map((encoding) => ({
 				...encoding,
 				maxBitrate: webcamBitratePolicy.maxKbps * 1000,
 			}));
@@ -1444,9 +1401,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			track: MediaStreamTrack,
 			options: {
 				onTrackEnded?: () => void | Promise<void>;
-				// Bypass codec preference resolution and pin this codec (used by the
-				// quality guard to restart on H264 after a software AV1 fallback).
-				forceCodecMimeType?: string;
 			} = {},
 		) => {
 			setLocalScreenShare(stream);
@@ -1466,10 +1420,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			const screenWidth = screenTrackSettings.width ?? requestedScreenResolution.width;
 			const screenHeight = screenTrackSettings.height ?? requestedScreenResolution.height;
 			const screenFramerate = screenTrackSettings.frameRate ?? devices.screenFramerate;
-			// Codec resolution needs a bitrate (for the AV1 hardware probe) but the
-			// final bitrate policy needs the resolved codec (for the per-codec max
-			// ceiling). Break the cycle: probe with a codec-agnostic base policy,
-			// then recompute the policy with the resolved codec.
+			// The bitrate policy's max ceiling is per-codec, so resolve the codec
+			// first using a codec-agnostic base policy, then recompute the policy
+			// with the resolved codec.
 			const baseScreenBitratePolicy = getVideoBitratePolicy({
 				profile: 'screen',
 				width: screenWidth,
@@ -1477,14 +1430,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				frameRate: screenFramerate,
 			});
 
-			const preferredVideoCodec = options.forceCodecMimeType
-				? findVideoCodecByMime(sendRtpCapabilities.current, options.forceCodecMimeType)
-				: await resolveScreenShareVideoCodec(sendRtpCapabilities.current, devices.videoCodec, {
-						width: screenWidth,
-						height: screenHeight,
-						framerate: screenFramerate,
-						bitrate: baseScreenBitratePolicy.startKbps * 1000,
-					});
+			const preferredVideoCodec = resolveScreenShareVideoCodec(sendRtpCapabilities.current, devices.videoCodec, {
+				width: screenWidth,
+				height: screenHeight,
+				framerate: screenFramerate,
+				bitrate: baseScreenBitratePolicy.startKbps * 1000,
+			});
 			if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
 				logVoice('Preferred screen share codec unavailable, falling back to auto', {
 					preferredCodec: devices.videoCodec,
@@ -1511,7 +1462,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			// Add a max-bitrate ceiling (bps) so congestion control has headroom to
 			// ramp during high-motion content before it resorts to downscaling. Spread
 			// onto the existing encoding so scalabilityMode/temporal SVC is preserved.
-			const screenShareEncodings = createVideoProducerEncodings(preferredVideoCodec).map((encoding) => ({
+			const screenShareEncodings = createVideoProducerEncodings().map((encoding) => ({
 				...encoding,
 				maxBitrate: screenBitratePolicy.maxKbps * 1000,
 			}));
@@ -1523,9 +1474,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					videoGoogleStartBitrate: screenBitratePolicy.startKbps,
 				},
 				codec: preferredVideoCodec,
-				// The quality guard may close and republish this producer while
-				// reusing the same capture track. Keep explicit stream cleanup as
-				// the only path that stops the browser screen-share capture.
+				// Keep explicit stream cleanup as the only path that stops the
+				// browser screen-share capture.
 				stopTracks: false,
 				appData: { kind: StreamKind.SCREEN },
 			});
@@ -1627,77 +1577,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[bindProducerCloseHandler, localScreenShareAudioProducer, producerTransport, setLocalScreenShareAudio],
 	);
 
-	// Backstop for the AV1 libaom trapdoor: once the runtime encoder falls to
-	// software AV1 it never climbs back, so replace the producer with hardware
-	// H264 while keeping the same capture track. Viewers see the producer close
-	// and the H264 producer announced — a brief interruption instead of a
-	// permanently pinned ~1fps stream.
-	const restartScreenShareWithH264 = useCallback(async () => {
-		if (isRestartingScreenShareRef.current) {
-			return;
-		}
-
-		const producer = localScreenShareProducer.current;
-		const stream = localScreenShareStreamRef.current;
-		const track = stream?.getVideoTracks()[0];
-
-		if (!producer || producer.closed || !stream || !track || track.readyState !== 'live') {
-			return;
-		}
-
-		isRestartingScreenShareRef.current = true;
-
-		try {
-			logVoice('Restarting screen share producer on H264 after software AV1 fallback', {
-				producerId: producer.id,
-			});
-
-			// The @close handler bound in publishScreenShareTrack notifies the server,
-			// which broadcasts VOICE_PRODUCER_CLOSED before the new producer is announced.
-			producer.close();
-
-			if (localScreenShareProducer.current === producer) {
-				localScreenShareProducer.current = undefined;
-			}
-
-			await publishScreenShareTrack(stream, track, {
-				forceCodecMimeType: 'video/H264',
-			});
-		} catch (error) {
-			logVoice('Failed to restart screen share producer on H264, stopping screen share', { error });
-
-			// The AV1 producer is already closed and the republish failed — without
-			// cleanup the share would look active with no producer behind it, and
-			// the guard (seeing no producer) could never recover it. track.stop()
-			// does not fire 'ended' on its own track, so the ended handler must be
-			// invoked manually; it runs stopScreenShareStream and syncs
-			// sharingScreen to the store and server.
-			const onTrackEnded = screenShareTrackEndedHandlerRef.current;
-
-			stream.getTracks().forEach((currentTrack) => {
-				currentTrack.stop();
-			});
-			localScreenShareAudioProducer.current?.close();
-			localScreenShareAudioProducer.current = undefined;
-			setLocalScreenShare(undefined);
-			setLocalScreenShareAudio(undefined);
-			toast.error('Screen sharing stopped: the video encoder could not be restarted.');
-			void onTrackEnded?.();
-		} finally {
-			isRestartingScreenShareRef.current = false;
-		}
-	}, [
-		localScreenShareProducer,
-		localScreenShareAudioProducer,
-		publishScreenShareTrack,
-		setLocalScreenShare,
-		setLocalScreenShareAudio,
-	]);
-
 	useScreenShareQualityGuard({
 		screenShareProducerRef: localScreenShareProducer,
 		active: localScreenShareStream !== undefined,
-		onAv1SoftwareFallback: restartScreenShareWithH264,
 	});
 
 	const cleanupMicAudioPipeline = useCallback(async () => {

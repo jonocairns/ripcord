@@ -1,6 +1,6 @@
 type TVideoBitrateProfile = 'camera' | 'screen';
 
-type TVideoBitrateCodec = 'auto' | 'h264' | 'vp8' | 'vp9' | 'av1';
+type TVideoBitrateCodec = 'auto' | 'h264' | 'vp8' | 'vp9';
 
 type TVideoBitratePolicyInput = {
 	profile: TVideoBitrateProfile;
@@ -124,22 +124,14 @@ const BITRATE_TABLE: Record<TVideoBitrateProfile, TResolutionTier[]> = {
 };
 
 // Cap the screen-share start bitrate. The start rate is applied before any
-// congestion feedback exists, so values above this provide little extra
-// ramp-up benefit (GCC can only grow ~8%/s from wherever it starts) while
-// multiplying the overshoot damage on uplinks smaller than the start rate: a
-// 14 Mbps start on a 5 Mbps uplink is ~3x over capacity for the first seconds
-// — queue buildup, a visible stall, and a delay-estimate crater the share
-// starts in. Capped, the worst case is ~1.6x. Ceilings (maxKbps) are
-// untouched; high tiers still ramp to them, just from a sane starting point.
-// Tiers up to 1080p30 start under the cap already, preserving the deliberate
-// high-start behavior that fixed downscale-under-motion; 1080p60/1440p30 are
-// trimmed from 9000 (a ~1.5s ramp difference) and only the 13000+ tiers
-// change materially.
-const SCREEN_START_KBPS_CAP = 8_000;
+// congestion feedback exists, so values above this can overload weaker or
+// long-haul paths for the first seconds of a share. Ceilings (maxKbps) are left
+// high so capable links can still ramp up after transport feedback arrives.
+const SCREEN_START_KBPS_CAP = 4_000;
 
 // The baseline table is tuned for H.264-ish screen-motion bitrate. Different
 // codecs need different ceilings for equivalent quality: VP8 wants a touch more
-// headroom, while VP9/AV1 hit the same quality at a lower rate. Only the max
+// headroom, while VP9 hits the same quality at a lower rate. Only the max
 // ceiling is scaled — startKbps is left alone so ramp-up isn't starved during
 // motion (a low start bitrate makes the downscale-during-motion problem worse).
 const CODEC_MAX_BITRATE_MULTIPLIER: Record<TVideoBitrateCodec, number> = {
@@ -147,7 +139,6 @@ const CODEC_MAX_BITRATE_MULTIPLIER: Record<TVideoBitrateCodec, number> = {
 	h264: 1,
 	vp8: 1.15,
 	vp9: 0.9,
-	av1: 0.8,
 };
 
 const applyCodecMaxBitrateMultiplier = (maxKbps: number, codec?: TVideoBitrateCodec) => {

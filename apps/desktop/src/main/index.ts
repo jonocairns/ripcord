@@ -799,24 +799,26 @@ const registerIpcHandlers = () => {
 // before the GPU process spawns (i.e. before app `ready`), so this runs at module
 // load. The renderer's mediaCapabilities probe reports powerEfficient:false for
 // every codec when hardware encode is unavailable, silently pushing screen share
-// onto software encoders (libaom for AV1) — these switches expose the NVENC
-// hardware paths so capable GPUs encode in hardware.
+// onto software encoders — these switches expose the NVENC hardware paths so
+// capable GPUs encode in hardware.
 //
 // enable-features rationale:
 //   - AcceleratedVideoEncoder: master switch for hardware video encode.
 //   - D3D12VideoEncodeAccelerator: Windows 11 24H2 (WDDM 3.2) hardware AV1 (and
 //     other) encode path. NVENC AV1 for WebRTC reaches Chromium through D3D12,
 //     not the older Media Foundation MFT path (which only wires up H.264/HEVC).
-//   - WebRtcAV1HWEncode: gates the WebRTC hardware AV1 encoder on top of the
-//     D3D12 path; still experimental and rolled out per-GPU-vendor by Chromium.
+//
+// WebRtcAV1HWEncode is intentionally NOT set: AV1 screen share has been removed.
+// Hardware AV1 death-spiralled on lossy/translated remote paths (a single layer
+// with nothing for the SFU to shed) and left GPU state wedged after teardown,
+// crashing later GPU apps. Screen share now uses hardware H264 via the D3D12
+// path.
 //
 // With these set (and the Vulkan ANGLE flags gone) the Chromium D3D12 encoder
 // runs in hardware: H264 screen share reports encoderImplementation
 // "D3D12VideoEncodeAccelerator", powerEfficient true — even though getGPUInfo
 // still reports supportsDx12=false (that field is unrelated to the video
-// encoder). Whether hardware AV1 specifically engages is decided client-side by
-// the WebRTC powerEfficient probe; until it reports hardware AV1 the codec gate
-// stays on hardware H264.
+// encoder).
 //
 // ANGLE stays on its Windows default (D3D11) backend. Forcing the Vulkan ANGLE
 // backend (use-angle=vulkan + Vulkan/DefaultANGLEVulkan/VulkanFromANGLE) on the
@@ -834,7 +836,7 @@ const registerIpcHandlers = () => {
 // video/H265, so offering it from the client would only produce a codec the
 // router rejects. Revisit if/when the SFU gains H265 support.
 const GPU_COMMAND_LINE_SWITCHES: ReadonlyArray<readonly [string, string]> = [
-	['enable-features', ['AcceleratedVideoEncoder', 'D3D12VideoEncodeAccelerator', 'WebRtcAV1HWEncode'].join(',')],
+	['enable-features', ['AcceleratedVideoEncoder', 'D3D12VideoEncodeAccelerator'].join(',')],
 	// Needed on Windows to let the D3D12 video-encode accelerator initialize on
 	// GPUs Chromium blocklisted conservatively. Keep it Windows-only: on Linux it
 	// can re-enable Mesa configs Chromium blocked for stability reasons.

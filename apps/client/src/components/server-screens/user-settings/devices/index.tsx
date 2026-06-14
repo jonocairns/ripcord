@@ -573,14 +573,10 @@ const Devices = memo(() => {
 										<SelectItem value={VideoCodecPreference.VP8}>VP8</SelectItem>
 										<SelectItem value={VideoCodecPreference.VP9}>VP9</SelectItem>
 										<SelectItem value={VideoCodecPreference.H264}>H264</SelectItem>
-										<SelectItem value={VideoCodecPreference.AV1}>AV1 (experimental)</SelectItem>
 									</SelectGroup>
 								</SelectContent>
 							</Select>
-							<p className="text-xs text-muted-foreground">
-								Auto is recommended. AV1 may be unavailable on some devices, in which case Ripcord automatically falls
-								back.
-							</p>
+							<p className="text-xs text-muted-foreground">Auto is recommended.</p>
 						</div>
 
 						<div className="space-y-2">

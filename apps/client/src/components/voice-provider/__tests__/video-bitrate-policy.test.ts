@@ -22,8 +22,10 @@ describe('getVideoBitratePolicy', () => {
 			frameRate: 30,
 		});
 
-		expect(fullHd30).toEqual({ startKbps: 6000, maxKbps: 12000 });
-		// 1080p60 / 1440p30 table starts are 9000, trimmed by the screen start cap.
+		// 1080p30 table start is 6000; higher tiers start at 9000+. All are
+		// trimmed by the conservative screen start cap while retaining their max
+		// ceilings for later ramp-up.
+		expect(fullHd30).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 12000 });
 		expect(fullHd60).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 18000 });
 		expect(qhd30).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 18000 });
 	});
@@ -103,18 +105,15 @@ describe('getVideoBitratePolicy', () => {
 		const h264 = getVideoBitratePolicy({ profile: 'screen', width: 1920, height: 1080, frameRate: 30, codec: 'h264' });
 		const vp8 = getVideoBitratePolicy({ profile: 'screen', width: 1920, height: 1080, frameRate: 30, codec: 'vp8' });
 		const vp9 = getVideoBitratePolicy({ profile: 'screen', width: 1920, height: 1080, frameRate: 30, codec: 'vp9' });
-		const av1 = getVideoBitratePolicy({ profile: 'screen', width: 1920, height: 1080, frameRate: 30, codec: 'av1' });
 
 		// startKbps is identical regardless of codec.
 		expect(h264.startKbps).toBe(base.startKbps);
 		expect(vp8.startKbps).toBe(base.startKbps);
 		expect(vp9.startKbps).toBe(base.startKbps);
-		expect(av1.startKbps).toBe(base.startKbps);
 
 		// maxKbps is scaled by the per-codec multiplier (base maxKbps = 12000).
 		expect(h264.maxKbps).toBe(12000);
 		expect(vp8.maxKbps).toBe(13800);
 		expect(vp9.maxKbps).toBe(10800);
-		expect(av1.maxKbps).toBe(9600);
 	});
 });

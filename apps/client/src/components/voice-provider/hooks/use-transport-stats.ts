@@ -116,9 +116,8 @@ const createTransportStatsStore = (): TMutableTransportStatsStore => {
 	};
 };
 
-// 'video/AV1' -> 'AV1'. Surfaces the codec actually negotiated on the wire,
-// which can differ from the user's selection (e.g. AV1 silently falling back to
-// H264 when no hardware encoder is available).
+// 'video/H264' -> 'H264'. Surfaces the codec actually negotiated on the wire,
+// which can differ from the user's selection.
 const shortCodecName = (mimeType: string | undefined): string | null => {
 	if (!mimeType) {
 		return null;
