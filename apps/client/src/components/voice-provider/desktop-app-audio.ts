@@ -6,6 +6,7 @@ import {
 	type TDesktopAppAudioFrame,
 	validateDesktopAppAudioFrame,
 } from './desktop-app-audio-frame-policy';
+import { getDesktopAppAudioQueueConfig, type TDesktopAppAudioPipelineMode } from './desktop-app-audio-queue-policy';
 
 type TDesktopAppAudioPipeline = {
 	sessionId: string;
@@ -14,8 +15,6 @@ type TDesktopAppAudioPipeline = {
 	pushFrame: (frame: TDesktopAppAudioFrame) => void;
 	destroy: () => Promise<void>;
 };
-
-type TDesktopAppAudioPipelineMode = 'low-latency' | 'stable';
 
 type TDesktopAppAudioPipelineOptions = {
 	mode?: TDesktopAppAudioPipelineMode;
@@ -26,11 +25,6 @@ type TDesktopAppAudioPipelineOptions = {
 };
 
 const WORKLET_NAME = 'sharkord-pcm-queue-processor';
-const LOW_LATENCY_TARGET_CHUNKS = 6;
-const LOW_LATENCY_TRIM_START_CHUNKS = 10;
-const LOW_LATENCY_MAX_CHUNKS = 16;
-const STABLE_TARGET_CHUNKS = 12;
-const STABLE_MAX_CHUNKS = 24;
 const LOG_RATE_LIMIT_MS = 2_000;
 const TELEMETRY_LOG_INTERVAL_MS = 10_000;
 
@@ -59,10 +53,7 @@ const createDesktopAppAudioPipeline = async (
 	const insertSilenceOnDroppedFrames = options?.insertSilenceOnDroppedFrames ?? false;
 	const emitQueueTelemetry = options?.emitQueueTelemetry ?? false;
 	const queueTelemetryIntervalMs = Math.max(250, Math.floor(options?.queueTelemetryIntervalMs ?? 1_000));
-	const targetChunks = mode === 'stable' ? STABLE_TARGET_CHUNKS : LOW_LATENCY_TARGET_CHUNKS;
-	const trimStartChunks = mode === 'stable' ? STABLE_MAX_CHUNKS : LOW_LATENCY_TRIM_START_CHUNKS;
-	const maxChunks = mode === 'stable' ? STABLE_MAX_CHUNKS : LOW_LATENCY_MAX_CHUNKS;
-	const trimQueueForLowLatency = mode === 'low-latency';
+	const { targetChunks, trimStartChunks, maxChunks, trimQueueForLowLatency } = getDesktopAppAudioQueueConfig(mode);
 	let nextQueueOverflowLogAt = 0;
 	let suppressedQueueOverflowEvents = 0;
 	let nextQueueTrimLogAt = 0;

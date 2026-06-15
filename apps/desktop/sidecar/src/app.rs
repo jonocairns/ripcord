@@ -19,6 +19,8 @@ use crate::runtime::{
     PushKeybindWatcher,
 };
 
+const JSON_EVENT_QUEUE_CAPACITY: usize = 8;
+
 #[derive(Debug)]
 struct CaptureSession {
     session_id: String,
@@ -108,7 +110,7 @@ fn stop_push_keybind_watcher(state: &mut SidecarState) {
 impl SidecarApp {
     fn new() -> Self {
         let stdout = Arc::new(Mutex::new(io::stdout()));
-        let frame_queue = Arc::new(FrameQueue::new(50));
+        let frame_queue = Arc::new(FrameQueue::new(JSON_EVENT_QUEUE_CAPACITY));
         let frame_writer = start_frame_writer(Arc::clone(&stdout), Arc::clone(&frame_queue));
         let app_audio_binary_egress = match start_app_audio_binary_egress() {
             Ok(app_audio_binary_egress) => {

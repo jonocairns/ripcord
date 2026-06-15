@@ -60,6 +60,18 @@ const useVoiceRefs = ({
 		return remoteUserStreams[remoteId]?.[StreamKind.SCREEN_AUDIO];
 	}, [remoteUserStreams, remoteId, isOwnUser]);
 
+	const screenSharePlaybackStream = useMemo(() => {
+		if (!screenShareStream) return undefined;
+		if (!attachScreenShareAudio || !screenShareAudioStream) return screenShareStream;
+
+		const videoTracks = screenShareStream.getVideoTracks();
+		const audioTracks = screenShareAudioStream.getAudioTracks();
+
+		if (videoTracks.length === 0 || audioTracks.length === 0) return screenShareStream;
+
+		return new MediaStream([...videoTracks, ...audioTracks]);
+	}, [attachScreenShareAudio, screenShareAudioStream, screenShareStream]);
+
 	const externalAudioStream = useMemo(() => {
 		if (isOwnUser) return undefined;
 
@@ -119,18 +131,35 @@ const useVoiceRefs = ({
 	useEffect(() => {
 		if (!screenShareRef.current) return;
 
-		if (!attachScreenShareVideo || !screenShareStream) {
+		if (!attachScreenShareVideo || !screenSharePlaybackStream) {
 			if (screenShareRef.current.srcObject) screenShareRef.current.srcObject = null;
 			return;
 		}
 
-		if (screenShareRef.current.srcObject !== screenShareStream) {
-			screenShareRef.current.srcObject = screenShareStream;
+		if (screenShareRef.current.srcObject !== screenSharePlaybackStream) {
+			screenShareRef.current.srcObject = screenSharePlaybackStream;
 		}
-	}, [attachScreenShareVideo, screenShareStream, screenShareRef]);
+
+		screenShareRef.current.volume = screenSharePlaybackVolume;
+		screenShareRef.current.muted = !attachScreenShareAudio || !screenShareAudioStream || screenSharePlaybackVolume <= 0;
+	}, [
+		attachScreenShareAudio,
+		attachScreenShareVideo,
+		screenShareAudioStream,
+		screenSharePlaybackStream,
+		screenSharePlaybackVolume,
+		screenShareRef,
+	]);
 
 	useEffect(() => {
 		if (!screenShareAudioRef.current) {
+			return;
+		}
+
+		if (attachScreenShareVideo && screenSharePlaybackStream !== screenShareStream) {
+			if (screenShareAudioRef.current.srcObject) {
+				screenShareAudioRef.current.srcObject = null;
+			}
 			return;
 		}
 
@@ -146,7 +175,15 @@ const useVoiceRefs = ({
 		}
 
 		screenShareAudioRef.current.volume = screenSharePlaybackVolume;
-	}, [attachScreenShareAudio, screenShareAudioStream, screenShareAudioRef, screenSharePlaybackVolume]);
+	}, [
+		attachScreenShareAudio,
+		attachScreenShareVideo,
+		screenShareAudioStream,
+		screenShareAudioRef,
+		screenSharePlaybackStream,
+		screenSharePlaybackVolume,
+		screenShareStream,
+	]);
 
 	useEffect(() => {
 		if (!externalAudioRef.current) {
@@ -203,6 +240,7 @@ const useVoiceRefs = ({
 		externalVideoStream,
 		screenShareStream,
 		screenShareAudioStream,
+		screenSharePlaybackStream,
 	};
 };
 

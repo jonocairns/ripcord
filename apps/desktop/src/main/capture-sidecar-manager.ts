@@ -556,7 +556,7 @@ class CaptureSidecarManager {
 
 	async startAppAudioCapture(input: TStartAppAudioCaptureInput): Promise<TAppAudioSession> {
 		if (!this.appAudioBinaryEgressUnsupported && Date.now() >= this.nextAppAudioBinaryEgressRetryAt) {
-			void this.ensureAppAudioBinaryEgress().catch((error) => {
+			await this.ensureAppAudioBinaryEgress().catch((error) => {
 				if (this.isAppAudioBinaryEgressUnsupportedError(error)) {
 					this.appAudioBinaryEgressUnsupported = true;
 					this.nextAppAudioBinaryEgressRetryAt = Number.MAX_SAFE_INTEGER;
