@@ -311,6 +311,12 @@ const ScreenShareCard = memo(
 			if (popoutVideo.srcObject !== screenShareStream) {
 				popoutVideo.srcObject = screenShareStream;
 			}
+
+			return () => {
+				if (popoutVideo.srcObject === screenShareStream) {
+					popoutVideo.srcObject = null;
+				}
+			};
 		}, [isPoppedOut, popoutVideoElement, screenShareStream]);
 
 		useEffect(() => {
@@ -382,6 +388,12 @@ const ScreenShareCard = memo(
 			if (popoutAudio.srcObject !== screenShareAudioStream) {
 				popoutAudio.srcObject = screenShareAudioStream;
 			}
+
+			return () => {
+				if (popoutAudio.srcObject === screenShareAudioStream) {
+					popoutAudio.srcObject = null;
+				}
+			};
 		}, [isPoppedOut, popoutAudioElement, screenShareAudioStream]);
 
 		useEffect(() => {
