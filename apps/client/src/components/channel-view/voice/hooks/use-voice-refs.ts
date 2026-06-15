@@ -180,12 +180,6 @@ const useVoiceRefs = ({
 		}
 	}, [externalVideoStream, externalVideoRef]);
 
-	useEffect(() => {
-		if (!audioRef.current) return;
-
-		audioRef.current.muted = ownVoiceState.soundMuted;
-	}, [ownVoiceState.soundMuted, audioRef]);
-
 	return {
 		videoRef,
 		audioRef,
@@ -193,6 +187,10 @@ const useVoiceRefs = ({
 		screenShareAudioRef,
 		externalAudioRef,
 		externalVideoRef,
+		// Deafen state. Apply declaratively as `muted={soundMuted}` on the audio
+		// element so it is silenced on mount — an effect keyed on soundMuted alone
+		// won't re-run when a freshly-streamed element is created while deafened.
+		soundMuted: ownVoiceState.soundMuted,
 		hasAudioStream: !!audioStream,
 		hasVideoStream: !!videoStream,
 		hasScreenShareStream: !!screenShareStream,
