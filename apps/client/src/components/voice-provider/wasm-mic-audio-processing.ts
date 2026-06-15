@@ -328,12 +328,17 @@ const createWasmMicAudioProcessingPipeline = async ({
 			track,
 			backend: 'browser-wasm',
 			setInputMuted: (muted: boolean) => {
-				// Short ramp avoids a click on the hard gain step.
 				const now = audioContext.currentTime;
-				const target = muted ? 0 : 1;
 				inputGainNode.gain.cancelScheduledValues(now);
 				inputGainNode.gain.setValueAtTime(inputGainNode.gain.value, now);
-				inputGainNode.gain.linearRampToValueAtTime(target, now + 0.015);
+
+				if (muted) {
+					inputGainNode.gain.setValueAtTime(0, now);
+					return;
+				}
+
+				// Short ramp avoids a click when audio resumes.
+				inputGainNode.gain.linearRampToValueAtTime(1, now + 0.015);
 			},
 			destroy: async () => {
 				diagnostics.reset();
@@ -380,6 +385,12 @@ const createWasmMicAudioProcessingPipeline = async ({
 
 		try {
 			sourceNode.disconnect();
+		} catch {
+			// ignore
+		}
+
+		try {
+			inputGainNode.disconnect();
 		} catch {
 			// ignore
 		}
