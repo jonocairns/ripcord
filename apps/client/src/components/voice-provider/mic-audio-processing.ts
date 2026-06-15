@@ -10,6 +10,7 @@ type TMicAudioProcessingPipeline = {
 	stream: MediaStream;
 	track: MediaStreamTrack;
 	backend: TMicAudioProcessingBackend;
+	setInputMuted: (muted: boolean) => void;
 	destroy: () => Promise<void>;
 };
 
