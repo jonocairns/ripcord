@@ -18,6 +18,7 @@ import { useScreenShareStage } from './use-screen-share-stage';
 type TUseVoiceControlsParams = {
 	startMicStream: () => Promise<void>;
 	localAudioStream: MediaStream | undefined;
+	setMicProcessingMuted: (micMuted: boolean) => void;
 
 	startWebcamStream: () => Promise<void>;
 	stopWebcamStream: () => void;
@@ -61,6 +62,7 @@ const setLocalAudioTrackEnabled = (stream: MediaStream | undefined, micMuted: bo
 const useVoiceControls = ({
 	startMicStream,
 	localAudioStream,
+	setMicProcessingMuted,
 	startWebcamStream,
 	stopWebcamStream,
 	startScreenShareStream,
@@ -118,6 +120,14 @@ const useVoiceControls = ({
 		}
 	}, [confirmedSoundMuted, confirmedMicMuted, ownVoiceState.soundMuted]);
 
+	const applyMicMuted = useCallback(
+		(stream: MediaStream | undefined, micMuted: boolean) => {
+			setLocalAudioTrackEnabled(stream, micMuted);
+			setMicProcessingMuted(micMuted);
+		},
+		[setMicProcessingMuted],
+	);
+
 	const setMicMuted = useCallback(
 		async (newState: boolean, options?: TSetMicMutedOptions) => {
 			// Read mic state directly from the store — updateOwnVoiceState writes
@@ -150,7 +160,7 @@ const useVoiceControls = ({
 
 			if (!latestCurrentVoiceChannelId) return;
 
-			setLocalAudioTrackEnabled(latestLocalAudioStream, newState);
+			applyMicMuted(latestLocalAudioStream, newState);
 
 			try {
 				await trpc.voice.updateState.mutate({
@@ -170,11 +180,11 @@ const useVoiceControls = ({
 				}
 
 				updateOwnVoiceState({ micMuted: previousMicMuted });
-				setLocalAudioTrackEnabled(localAudioStreamRef.current, previousMicMuted);
+				applyMicMuted(localAudioStreamRef.current, previousMicMuted);
 				toast.error(getTrpcError(error, 'Failed to update microphone state'));
 			}
 		},
-		[startMicStream],
+		[applyMicMuted, startMicStream],
 	);
 
 	const toggleMic = useCallback(async () => {
@@ -213,7 +223,7 @@ const useVoiceControls = ({
 			micMuted: nextMicMuted,
 		});
 
-		setLocalAudioTrackEnabled(latestLocalAudioStream, nextMicMuted);
+		applyMicMuted(latestLocalAudioStream, nextMicMuted);
 
 		playSound(newState ? SoundType.OWN_USER_MUTED_SOUND : SoundType.OWN_USER_UNMUTED_SOUND);
 
@@ -242,10 +252,10 @@ const useVoiceControls = ({
 				soundMuted: previousSoundMuted,
 				micMuted: previousMicMuted,
 			} satisfies Partial<TVoiceUserState>);
-			setLocalAudioTrackEnabled(localAudioStreamRef.current, previousMicMuted);
+			applyMicMuted(localAudioStreamRef.current, previousMicMuted);
 			toast.error(getTrpcError(error, 'Failed to update sound state'));
 		}
-	}, [startMicStream]);
+	}, [applyMicMuted, startMicStream]);
 
 	const toggleWebcam = useCallback(async () => {
 		if (!currentVoiceChannelId) return;

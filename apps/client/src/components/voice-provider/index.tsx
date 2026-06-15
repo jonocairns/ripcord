@@ -1246,7 +1246,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const publishMicTrack = useCallback(
 		async (stream: MediaStream, track: MediaStreamTrack) => {
 			setLocalAudioStream(stream);
-			track.enabled = !ownVoiceStateSelector(useServerStore.getState()).micMuted;
+			const micMuted = ownVoiceStateSelector(useServerStore.getState()).micMuted;
+			track.enabled = !micMuted;
+			micAudioPipelineRef.current?.setInputMuted(micMuted);
 
 			logVoice('Obtained audio track', { audioTrack: track });
 
@@ -3041,10 +3043,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		waitForVoiceReconnectOnline,
 	]);
 
+	const setMicProcessingMuted = useCallback((micMuted: boolean) => {
+		micAudioPipelineRef.current?.setInputMuted(micMuted);
+	}, []);
+
 	const { isStartingScreenShare, setMicMuted, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =
 		useVoiceControls({
 			startMicStream,
 			localAudioStream,
+			setMicProcessingMuted,
 			startWebcamStream,
 			stopWebcamStream,
 			startScreenShareStream,

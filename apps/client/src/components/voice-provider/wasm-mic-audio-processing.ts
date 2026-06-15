@@ -24,6 +24,9 @@ type TWasmMicAudioProcessingPipeline = {
 	stream: MediaStream;
 	track: MediaStreamTrack;
 	backend: 'browser-wasm';
+	// Mute at the pipeline input, not just the output track: audio captured while
+	// muted stays buffered in the worklet/worker and otherwise leaks out on un-mute.
+	setInputMuted: (muted: boolean) => void;
 	destroy: () => Promise<void>;
 };
 
@@ -201,6 +204,7 @@ const createWasmMicAudioProcessingPipeline = async ({
 	});
 	const sourceStream = new MediaStream([inputTrack]);
 	const sourceNode = audioContext.createMediaStreamSource(sourceStream);
+	const inputGainNode = audioContext.createGain();
 	const destinationNode = audioContext.createMediaStreamDestination();
 	const worker = new VoiceFilterWasmWorker();
 	const controlChannel = new MessageChannel();
@@ -266,7 +270,8 @@ const createWasmMicAudioProcessingPipeline = async ({
 			[controlChannel.port1],
 		);
 
-		sourceNode.connect(workletNode);
+		sourceNode.connect(inputGainNode);
+		inputGainNode.connect(workletNode);
 		workletNode.connect(destinationNode);
 
 		if (audioContext.state !== 'running') {
@@ -322,6 +327,19 @@ const createWasmMicAudioProcessingPipeline = async ({
 			stream: destinationNode.stream,
 			track,
 			backend: 'browser-wasm',
+			setInputMuted: (muted: boolean) => {
+				const now = audioContext.currentTime;
+				inputGainNode.gain.cancelScheduledValues(now);
+				inputGainNode.gain.setValueAtTime(inputGainNode.gain.value, now);
+
+				if (muted) {
+					inputGainNode.gain.setValueAtTime(0, now);
+					return;
+				}
+
+				// Short ramp avoids a click when audio resumes.
+				inputGainNode.gain.linearRampToValueAtTime(1, now + 0.015);
+			},
 			destroy: async () => {
 				diagnostics.reset();
 				track.stop();
@@ -336,6 +354,12 @@ const createWasmMicAudioProcessingPipeline = async ({
 
 				try {
 					sourceNode.disconnect();
+				} catch {
+					// ignore
+				}
+
+				try {
+					inputGainNode.disconnect();
 				} catch {
 					// ignore
 				}
@@ -361,6 +385,12 @@ const createWasmMicAudioProcessingPipeline = async ({
 
 		try {
 			sourceNode.disconnect();
+		} catch {
+			// ignore
+		}
+
+		try {
+			inputGainNode.disconnect();
 		} catch {
 			// ignore
 		}
