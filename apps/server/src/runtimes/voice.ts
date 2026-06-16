@@ -357,6 +357,22 @@ class VoiceRuntime {
 		}
 	};
 
+	private resetStreamUserStateOnProducerClose = (userId: number, flag: 'sharingScreen' | 'webcamEnabled') => {
+		const user = this.getUser(userId);
+
+		if (!user || user.state[flag] === false) {
+			return;
+		}
+
+		this.updateUserState(userId, flag === 'sharingScreen' ? { sharingScreen: false } : { webcamEnabled: false });
+
+		pubsub.publish(ServerEvents.USER_VOICE_STATE_UPDATE, {
+			channelId: this.id,
+			userId,
+			state: this.getUserState(userId),
+		});
+	};
+
 	public getRouter = (): Router<AppData> => {
 		if (!this.router) {
 			throw new Error('Router not initialized yet');
@@ -527,14 +543,7 @@ class VoiceRuntime {
 	};
 
 	public addProducer = (userId: number, type: StreamKind, producer: Producer<AppData>) => {
-		// Replacing a same-kind producer must close the old one before the map is
-		// overwritten; otherwise it stays attached to the transport and its
-		// eventual close handler would tear down the replacement's bookkeeping.
 		const existingProducer = this.getUserProducerByKind(userId, type);
-
-		if (existingProducer && existingProducer !== producer && !existingProducer.closed) {
-			existingProducer.close();
-		}
 
 		if (type === StreamKind.VIDEO) {
 			this.videoProducers[userId] = producer;
@@ -544,6 +553,10 @@ class VoiceRuntime {
 			this.screenProducers[userId] = producer;
 		} else if (type === StreamKind.SCREEN_AUDIO) {
 			this.screenAudioProducers[userId] = producer;
+		}
+
+		if (existingProducer && existingProducer !== producer && !existingProducer.closed) {
+			existingProducer.close();
 		}
 
 		if (type === StreamKind.AUDIO) {
@@ -558,6 +571,7 @@ class VoiceRuntime {
 			if (type === StreamKind.VIDEO) {
 				if (this.videoProducers[userId] !== producer) return;
 				delete this.videoProducers[userId];
+				this.resetStreamUserStateOnProducerClose(userId, 'webcamEnabled');
 			} else if (type === StreamKind.AUDIO) {
 				if (this.audioProducers[userId] !== producer) return;
 				delete this.audioProducers[userId];
@@ -565,6 +579,7 @@ class VoiceRuntime {
 			} else if (type === StreamKind.SCREEN) {
 				if (this.screenProducers[userId] !== producer) return;
 				delete this.screenProducers[userId];
+				this.resetStreamUserStateOnProducerClose(userId, 'sharingScreen');
 			} else if (type === StreamKind.SCREEN_AUDIO) {
 				if (this.screenAudioProducers[userId] !== producer) return;
 				delete this.screenAudioProducers[userId];

@@ -80,6 +80,7 @@ const useVoiceControls = ({
 	const localAudioStreamRef = useRef(localAudioStream);
 	const voiceStateOperationSequenceRef = useRef(0);
 	const pendingShareMutateRef = useRef<Promise<unknown> | undefined>(undefined);
+	const isStartingWebcamRef = useRef(false);
 
 	const {
 		isStarting: isStartingScreenShare,
@@ -258,14 +259,34 @@ const useVoiceControls = ({
 	}, [applyMicMuted, startMicStream]);
 
 	const toggleWebcam = useCallback(async () => {
-		if (!currentVoiceChannelId) return;
+		if (isStartingWebcamRef.current) return;
 
-		const newState = !ownVoiceState.webcamEnabled;
+		const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
+
+		if (!latestCurrentVoiceChannelId) return;
+
+		const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
+		const newState = !latestOwnVoiceState.webcamEnabled;
 		const trpc = getTRPCClient();
+		const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
+		voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
+		const { operationToken } = voiceStateOperation;
 
 		try {
 			if (newState) {
-				await startWebcamStream();
+				isStartingWebcamRef.current = true;
+
+				try {
+					await startWebcamStream();
+				} finally {
+					isStartingWebcamRef.current = false;
+				}
+
+				if (currentVoiceChannelIdRef.current !== latestCurrentVoiceChannelId) {
+					stopWebcamStream();
+					return;
+				}
+
 				updateOwnVoiceState({ webcamEnabled: true });
 				playSound(SoundType.OWN_USER_STARTED_WEBCAM);
 			} else {
@@ -278,6 +299,10 @@ const useVoiceControls = ({
 				webcamEnabled: newState,
 			});
 		} catch (error) {
+			if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
+				return;
+			}
+
 			if (newState) {
 				stopWebcamStream();
 				updateOwnVoiceState({ webcamEnabled: false });
@@ -285,7 +310,7 @@ const useVoiceControls = ({
 
 			toast.error(getTrpcError(error, 'Failed to update webcam state'));
 		}
-	}, [ownVoiceState.webcamEnabled, currentVoiceChannelId, startWebcamStream, stopWebcamStream]);
+	}, [startWebcamStream, stopWebcamStream]);
 
 	const toggleScreenShare = useCallback(async () => {
 		if (!currentVoiceChannelId) return;
