@@ -394,6 +394,35 @@ describe('voice actions', () => {
 		expect(useServerStore.getState().screenShareWatchers).toEqual({});
 	});
 
+	it('clears a pinned remote screen-share card when the server reports that user stopped sharing', () => {
+		// Mirrors the viewer side of an unexpected producer close: the server now
+		// broadcasts sharingScreen:false, and a viewer who had that user's screen
+		// pinned should have the stale pin removed.
+		setJoinedVoiceChannelState({
+			ownUserId: 42,
+			voiceMap: {
+				7: {
+					users: {
+						42: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false },
+						10: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: true },
+					},
+				},
+			},
+			pinnedCard: {
+				id: 'screen-share-10',
+				type: 'screen-share',
+				userId: 10,
+			} as unknown as TPinnedCardState,
+		});
+
+		updateVoiceUserState(10, 7, { sharingScreen: false });
+
+		const state = useServerStore.getState();
+
+		expect(state.voiceMap[7]?.users[10]?.sharingScreen).toBe(false);
+		expect(state.pinnedCard).toBeUndefined();
+	});
+
 	it('snapshots reconnect intent before clearing own voice state when reconnecting', () => {
 		setJoinedVoiceChannelState({
 			ownUserId: 42,

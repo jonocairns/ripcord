@@ -357,6 +357,30 @@ class VoiceRuntime {
 		}
 	};
 
+	// When a screen/webcam producer closes without the owner having sent an
+	// explicit voice.updateState — e.g. producer-transport failure, worker death,
+	// or a capture source ending in a way the client can't observe — the user's
+	// voice state would keep reporting the stream as live. Reset the matching flag
+	// and rebroadcast so existing viewers, and anyone who joins later and
+	// reconciles from this state, see the stream as stopped. Skips when the user
+	// has already left (the leave event covers teardown) or the flag is already
+	// false (the normal stop path already broadcast USER_VOICE_STATE_UPDATE).
+	private resetStreamUserStateOnProducerClose = (userId: number, flag: 'sharingScreen' | 'webcamEnabled') => {
+		const user = this.getUser(userId);
+
+		if (!user || user.state[flag] === false) {
+			return;
+		}
+
+		this.updateUserState(userId, flag === 'sharingScreen' ? { sharingScreen: false } : { webcamEnabled: false });
+
+		pubsub.publish(ServerEvents.USER_VOICE_STATE_UPDATE, {
+			channelId: this.id,
+			userId,
+			state: this.getUserState(userId),
+		});
+	};
+
 	public getRouter = (): Router<AppData> => {
 		if (!this.router) {
 			throw new Error('Router not initialized yet');
@@ -558,6 +582,7 @@ class VoiceRuntime {
 			if (type === StreamKind.VIDEO) {
 				if (this.videoProducers[userId] !== producer) return;
 				delete this.videoProducers[userId];
+				this.resetStreamUserStateOnProducerClose(userId, 'webcamEnabled');
 			} else if (type === StreamKind.AUDIO) {
 				if (this.audioProducers[userId] !== producer) return;
 				delete this.audioProducers[userId];
@@ -565,6 +590,7 @@ class VoiceRuntime {
 			} else if (type === StreamKind.SCREEN) {
 				if (this.screenProducers[userId] !== producer) return;
 				delete this.screenProducers[userId];
+				this.resetStreamUserStateOnProducerClose(userId, 'sharingScreen');
 			} else if (type === StreamKind.SCREEN_AUDIO) {
 				if (this.screenAudioProducers[userId] !== producer) return;
 				delete this.screenAudioProducers[userId];
