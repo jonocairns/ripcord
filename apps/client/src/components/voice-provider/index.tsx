@@ -35,6 +35,7 @@ import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { logDebug, logVoice, traceSentrySpan } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { getTrpcErrorData, isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
+import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge, isDesktopRuntime } from '@/runtime/desktop-bridge';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
@@ -599,17 +600,6 @@ const createReconnectAttemptId = (): string => {
 	}
 
 	return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-};
-
-// Mirrors the latest value of a reactive dependency into a stable ref so callbacks
-// and async flows can read it without taking it as a dependency. Updates after commit,
-// matching a hand-written `useEffect(() => { ref.current = value }, [value])`.
-const useLatestRef = <T,>(value: T): MutableRefObject<T> => {
-	const ref = useRef(value);
-	useEffect(() => {
-		ref.current = value;
-	}, [value]);
-	return ref;
 };
 
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {

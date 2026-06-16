@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { PinnedCardType, type TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-card-controller';
 import { setSelectedChannelId } from '@/features/server/channels/actions';
 import { selectedChannelIdSelector } from '@/features/server/channels/selectors';
 import { useServerStore } from '@/features/server/slice';
 import { setPinnedCard } from '@/features/server/voice/actions';
 import { pinnedCardSelector } from '@/features/server/voice/selectors';
+import { useLatestRef } from '@/hooks/use-latest-ref';
 
 type TScreenShareStageParams = {
 	ownUserId: number | undefined;
@@ -39,11 +40,7 @@ const useScreenShareStage = ({ ownUserId, currentVoiceChannelId }: TScreenShareS
 	const [isStarting, setIsStarting] = useState(false);
 	const transitionIdRef = useRef(0);
 	const restoreStateRef = useRef<TScreenShareRestoreState>({ kind: 'idle' });
-	const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
-
-	useEffect(() => {
-		currentVoiceChannelIdRef.current = currentVoiceChannelId;
-	}, [currentVoiceChannelId]);
+	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
 
 	const newTransition = useCallback((): TScreenShareTransition => {
 		const id = transitionIdRef.current + 1;

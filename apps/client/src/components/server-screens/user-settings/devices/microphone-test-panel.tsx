@@ -12,6 +12,7 @@ import {
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
+import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getTRPCClient } from '@/lib/trpc';
 
 const ANALYSER_FFT_SIZE = 512;
@@ -125,7 +126,7 @@ const MicrophoneTestPanel = memo(
 		const soundMutedRef = useRef(ownVoiceState.soundMuted);
 		const micMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
 		const soundMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
-		const monitorEnabledRef = useRef(monitorEnabled);
+		const monitorEnabledRef = useLatestRef(monitorEnabled);
 		const resolvedMicProcessingConfig = useMemo(() => {
 			return resolveMicTestProcessingConfig({
 				noiseSuppression,
@@ -625,10 +626,6 @@ const MicrophoneTestPanel = memo(
 		}, [monitorEnabled]);
 
 		useEffect(() => {
-			monitorEnabledRef.current = monitorEnabled;
-		}, [monitorEnabled]);
-
-		useEffect(() => {
 			micMutedRef.current = ownVoiceState.micMuted;
 		}, [ownVoiceState.micMuted]);
 
@@ -680,10 +677,7 @@ const MicrophoneTestPanel = memo(
 		}, [showWasmDiagnostics]);
 
 		// Restart the running test automatically when processing config changes.
-		const isTestingMicRef = useRef(false);
-		useEffect(() => {
-			isTestingMicRef.current = isTestingMic;
-		}, [isTestingMic]);
+		const isTestingMicRef = useLatestRef(isTestingMic);
 
 		// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally only restart when processing config changes, not all startTest deps
 		useEffect(() => {

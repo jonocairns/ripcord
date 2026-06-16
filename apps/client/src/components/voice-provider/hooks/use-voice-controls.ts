@@ -10,6 +10,7 @@ import { updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
+import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
 import { shouldApplyVoiceStateOperationResult, startVoiceStateOperation } from '../voice-state-operation';
@@ -76,8 +77,8 @@ const useVoiceControls = ({
 	const ownUserId = useOwnUserId();
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
-	const currentVoiceChannelIdRef = useRef(currentVoiceChannelId);
-	const localAudioStreamRef = useRef(localAudioStream);
+	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
+	const localAudioStreamRef = useLatestRef(localAudioStream);
 	const voiceStateOperationSequenceRef = useRef(0);
 	const pendingShareMutateRef = useRef<Promise<unknown> | undefined>(undefined);
 	const isStartingWebcamRef = useRef(false);
@@ -89,14 +90,6 @@ const useVoiceControls = ({
 		finishStart: finishScreenShareStart,
 		restore: restoreScreenShareStage,
 	} = useScreenShareStage({ ownUserId, currentVoiceChannelId });
-
-	useEffect(() => {
-		currentVoiceChannelIdRef.current = currentVoiceChannelId;
-	}, [currentVoiceChannelId]);
-
-	useEffect(() => {
-		localAudioStreamRef.current = localAudioStream;
-	}, [localAudioStream]);
 
 	useEffect(() => {
 		// Preserve the pre-deafen mic state across reconnects and voice rejoin.
