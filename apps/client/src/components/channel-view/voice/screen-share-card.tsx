@@ -15,6 +15,7 @@ import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
 import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
 import { PopoutVolumePanel, PopoutWindowControls } from './popout-window-controls';
+import { buildCombinedScreenShareStream } from './screen-share-stream';
 import { StreamSettingsPopover } from './stream-settings-popover';
 import { VoiceSurface } from './voice-surface';
 
@@ -136,9 +137,12 @@ const ScreenShareCard = memo(
 			attachScreenShareVideo: !hideOwnPreview,
 			attachScreenShareAudio: !isPoppedOut,
 		});
+		const popoutScreenSharePlaybackStream = useMemo(
+			() => buildCombinedScreenShareStream(screenShareStream, screenShareAudioStream),
+			[screenShareAudioStream, screenShareStream],
+		);
 		const streamStats = useStreamStats(screenShareRef, screenShareStream);
 		const [popoutVideoElement, setPopoutVideoElement] = useState<HTMLVideoElement | null>(null);
-		const [popoutAudioElement, setPopoutAudioElement] = useState<HTMLAudioElement | null>(null);
 
 		const {
 			containerRef,
@@ -303,21 +307,32 @@ const ScreenShareCard = memo(
 				return;
 			}
 
-			if (!isPoppedOut || !screenShareStream) {
+			if (!isPoppedOut || !popoutScreenSharePlaybackStream) {
 				popoutVideo.srcObject = null;
 				return;
 			}
 
-			if (popoutVideo.srcObject !== screenShareStream) {
-				popoutVideo.srcObject = screenShareStream;
+			if (popoutVideo.srcObject !== popoutScreenSharePlaybackStream) {
+				popoutVideo.srcObject = popoutScreenSharePlaybackStream;
 			}
 
+			popoutVideo.volume = volume / 100;
+			popoutVideo.muted = isOwnUser || !hasScreenShareAudioStream || isMuted;
+
 			return () => {
-				if (popoutVideo.srcObject === screenShareStream) {
+				if (popoutVideo.srcObject === popoutScreenSharePlaybackStream) {
 					popoutVideo.srcObject = null;
 				}
 			};
-		}, [isPoppedOut, popoutVideoElement, screenShareStream]);
+		}, [
+			hasScreenShareAudioStream,
+			isMuted,
+			isOwnUser,
+			isPoppedOut,
+			popoutScreenSharePlaybackStream,
+			popoutVideoElement,
+			volume,
+		]);
 
 		useEffect(() => {
 			if (!isPoppedOut || !popoutVideoElement) {
@@ -372,40 +387,6 @@ const ScreenShareCard = memo(
 				popoutWindow.removeEventListener('blur', handlePopoutBlur);
 			};
 		}, [clearPopoutControlsHideTimeout, isPoppedOut, popoutVideoElement, revealPopoutWindowControls]);
-
-		useEffect(() => {
-			const popoutAudio = popoutAudioElement;
-
-			if (!popoutAudio) {
-				return;
-			}
-
-			if (!isPoppedOut || !screenShareAudioStream) {
-				popoutAudio.srcObject = null;
-				return;
-			}
-
-			if (popoutAudio.srcObject !== screenShareAudioStream) {
-				popoutAudio.srcObject = screenShareAudioStream;
-			}
-
-			return () => {
-				if (popoutAudio.srcObject === screenShareAudioStream) {
-					popoutAudio.srcObject = null;
-				}
-			};
-		}, [isPoppedOut, popoutAudioElement, screenShareAudioStream]);
-
-		useEffect(() => {
-			const popoutAudio = popoutAudioElement;
-
-			if (!popoutAudio) {
-				return;
-			}
-
-			popoutAudio.volume = volume / 100;
-			popoutAudio.muted = isMuted;
-		}, [isMuted, popoutAudioElement, volume]);
 
 		useEffect(() => {
 			if (hasScreenShareStream) {
@@ -592,7 +573,6 @@ const ScreenShareCard = memo(
 							<video
 								ref={setPopoutVideoElement}
 								autoPlay
-								muted
 								playsInline
 								style={{
 									width: '100%',
@@ -601,9 +581,6 @@ const ScreenShareCard = memo(
 									backgroundColor: '#000000',
 								}}
 							/>
-							{!isOwnUser && hasScreenShareAudioStream && (
-								<audio ref={setPopoutAudioElement} autoPlay playsInline style={{ display: 'none' }} />
-							)}
 						</div>
 					</div>
 				</PopoutWindow>

@@ -7,11 +7,13 @@ mod runtime;
 pub(crate) use protocol::PushKeybindKind;
 #[cfg(target_os = "linux")]
 pub(crate) use protocol::APP_AUDIO_FRAME_BYTES;
+#[cfg(any(windows, target_os = "linux"))]
+pub(crate) use protocol::APP_AUDIO_FRAME_SIZE;
 #[cfg(target_os = "macos")]
 pub(crate) use protocol::MAX_APP_AUDIO_BINARY_FRAME_BYTES;
 pub(crate) use protocol::{
-    AudioTarget, CaptureEndReason, CaptureOutcome, APP_AUDIO_CHANNELS, APP_AUDIO_FRAME_SIZE,
-    APP_AUDIO_SAMPLE_RATE, PCM_ENCODING, PROTOCOL_VERSION,
+    AudioTarget, CaptureEndReason, CaptureOutcome, APP_AUDIO_CHANNELS, APP_AUDIO_SAMPLE_RATE,
+    PCM_ENCODING, PROTOCOL_VERSION,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use protocol::{AudioTargetListResponse, ResolveSourceResult, MACOS_HELPER_BINARY_NAME};

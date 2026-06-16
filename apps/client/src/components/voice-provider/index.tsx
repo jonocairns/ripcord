@@ -2136,7 +2136,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 										targetId: appAudioSession.targetId,
 									});
 									const appAudioPipeline = await createDesktopAppAudioPipeline(appAudioSession, {
-										mode: 'stable',
+										mode: 'low-latency',
 										logLabel: audioMode === ScreenAudioMode.SYSTEM ? 'system-audio' : 'per-app-audio',
 										insertSilenceOnDroppedFrames: true,
 										emitQueueTelemetry: true,
