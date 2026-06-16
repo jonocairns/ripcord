@@ -551,14 +551,15 @@ class VoiceRuntime {
 	};
 
 	public addProducer = (userId: number, type: StreamKind, producer: Producer<AppData>) => {
-		// Replacing a same-kind producer must close the old one before the map is
-		// overwritten; otherwise it stays attached to the transport and its
-		// eventual close handler would tear down the replacement's bookkeeping.
+		// Register the replacement as the active producer BEFORE closing any
+		// predecessor. mediasoup fires Producer.close()'s observer 'close'
+		// synchronously, so a same-kind replacement (e.g. reconnect re-publish)
+		// would otherwise run the old producer's close handler while the map still
+		// pointed at it: its stale-guard would pass and it would evict the live
+		// replacement, drop its voice-activity bookkeeping, and broadcast a
+		// spurious VOICE_PRODUCER_CLOSED + USER_VOICE_STATE_UPDATE(false). Setting
+		// the map first makes the old handler see the new producer and short-circuit.
 		const existingProducer = this.getUserProducerByKind(userId, type);
-
-		if (existingProducer && existingProducer !== producer && !existingProducer.closed) {
-			existingProducer.close();
-		}
 
 		if (type === StreamKind.VIDEO) {
 			this.videoProducers[userId] = producer;
@@ -570,7 +571,14 @@ class VoiceRuntime {
 			this.screenAudioProducers[userId] = producer;
 		}
 
+		if (existingProducer && existingProducer !== producer && !existingProducer.closed) {
+			existingProducer.close();
+		}
+
 		if (type === StreamKind.AUDIO) {
+			// Safe to run after closing the predecessor: this also removes the
+			// replaced producer from the observer and local bookkeeping, so the
+			// old producer's (now short-circuited) close handler need not.
 			this.addAudioProducerToVoiceActivityObserver(userId, producer);
 		}
 

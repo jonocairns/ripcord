@@ -52,6 +52,39 @@ const makeManualCloseProducer = (id: string) => {
 	};
 };
 
+/**
+ * Producer stub that emits its observer 'close' synchronously from close(),
+ * faithful to mediasoup's Producer.close() (it calls observer.safeEmit('close')
+ * inline). This is the path that runs when addProducer closes a replaced
+ * same-kind producer, so it exercises the real replacement ordering.
+ */
+const makeSyncCloseProducer = (id: string) => {
+	let closeHandler: (() => void) | undefined;
+	let closed = false;
+
+	const producer = {
+		id,
+		get closed() {
+			return closed;
+		},
+		observer: {
+			on: (_event: string, handler: () => void) => {
+				closeHandler = handler;
+			},
+		},
+		close: () => {
+			if (closed) {
+				return;
+			}
+
+			closed = true;
+			closeHandler?.();
+		},
+	} as unknown as Producer<AppData>;
+
+	return { producer };
+};
+
 describe('VoiceRuntime producer replacement', () => {
 	const runtimes: VoiceRuntime[] = [];
 
@@ -204,6 +237,30 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 		// it is stale and must not clear sharingScreen for the live producer.
 		first.fireCloseEvent();
 
+		expect(runtime.getUserState(1).sharingScreen).toBe(true);
+		expect(publishSpy).not.toHaveBeenCalled();
+
+		publishSpy.mockRestore();
+	});
+
+	test('a same-kind replacement does not reset state when the old producer closes synchronously', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		runtime.updateUserState(1, { sharingScreen: true });
+
+		const first = makeSyncCloseProducer('first');
+		runtime.addProducer(1, StreamKind.SCREEN, first.producer);
+
+		const publishSpy = spyOn(pubsub, 'publish');
+
+		// addProducer closes `first` inline; mediasoup fires its observer 'close'
+		// synchronously. The replacement must already be the active producer so the
+		// old handler short-circuits instead of clearing the still-live share.
+		const second = makeSyncCloseProducer('second');
+		runtime.addProducer(1, StreamKind.SCREEN, second.producer);
+
+		expect(first.producer.closed).toBe(true);
+		expect(runtime.getProducer(StreamKind.SCREEN, 1)).toBe(second.producer);
 		expect(runtime.getUserState(1).sharingScreen).toBe(true);
 		expect(publishSpy).not.toHaveBeenCalled();
 
