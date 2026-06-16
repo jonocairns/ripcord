@@ -15,6 +15,7 @@ import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
 import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
 import { PopoutVolumePanel, PopoutWindowControls } from './popout-window-controls';
+import { buildCombinedScreenShareStream } from './screen-share-stream';
 import { StreamSettingsPopover } from './stream-settings-popover';
 import { VoiceSurface } from './voice-surface';
 
@@ -136,17 +137,10 @@ const ScreenShareCard = memo(
 			attachScreenShareVideo: !hideOwnPreview,
 			attachScreenShareAudio: !isPoppedOut,
 		});
-		const popoutScreenSharePlaybackStream = useMemo(() => {
-			if (!screenShareStream) return undefined;
-			if (!screenShareAudioStream) return screenShareStream;
-
-			const videoTracks = screenShareStream.getVideoTracks();
-			const audioTracks = screenShareAudioStream.getAudioTracks();
-
-			if (videoTracks.length === 0 || audioTracks.length === 0) return screenShareStream;
-
-			return new MediaStream([...videoTracks, ...audioTracks]);
-		}, [screenShareAudioStream, screenShareStream]);
+		const popoutScreenSharePlaybackStream = useMemo(
+			() => buildCombinedScreenShareStream(screenShareStream, screenShareAudioStream),
+			[screenShareAudioStream, screenShareStream],
+		);
 		const streamStats = useStreamStats(screenShareRef, screenShareStream);
 		const [popoutVideoElement, setPopoutVideoElement] = useState<HTMLVideoElement | null>(null);
 
@@ -579,7 +573,6 @@ const ScreenShareCard = memo(
 							<video
 								ref={setPopoutVideoElement}
 								autoPlay
-								muted={isOwnUser || !hasScreenShareAudioStream || isMuted}
 								playsInline
 								style={{
 									width: '100%',

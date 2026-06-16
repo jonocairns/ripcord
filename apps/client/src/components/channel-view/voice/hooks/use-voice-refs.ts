@@ -4,6 +4,7 @@ import { useVolumeControl } from '@/components/voice-provider/volume-control-con
 import { MASTER_OUTPUT_VOLUME_KEY } from '@/components/voice-provider/volume-control-storage';
 import { useIsOwnUser } from '@/features/server/users/hooks';
 import { useVoice } from '@/features/server/voice/hooks';
+import { buildCombinedScreenShareStream } from '../screen-share-stream';
 
 type UseVoiceRefsOptions = {
 	remoteId: number;
@@ -60,17 +61,14 @@ const useVoiceRefs = ({
 		return remoteUserStreams[remoteId]?.[StreamKind.SCREEN_AUDIO];
 	}, [remoteUserStreams, remoteId, isOwnUser]);
 
-	const screenSharePlaybackStream = useMemo(() => {
-		if (!screenShareStream) return undefined;
-		if (!attachScreenShareAudio || !screenShareAudioStream) return screenShareStream;
-
-		const videoTracks = screenShareStream.getVideoTracks();
-		const audioTracks = screenShareAudioStream.getAudioTracks();
-
-		if (videoTracks.length === 0 || audioTracks.length === 0) return screenShareStream;
-
-		return new MediaStream([...videoTracks, ...audioTracks]);
-	}, [attachScreenShareAudio, screenShareAudioStream, screenShareStream]);
+	const screenSharePlaybackStream = useMemo(
+		() =>
+			buildCombinedScreenShareStream(
+				screenShareStream,
+				attachScreenShareAudio ? screenShareAudioStream : undefined,
+			),
+		[attachScreenShareAudio, screenShareAudioStream, screenShareStream],
+	);
 
 	const externalAudioStream = useMemo(() => {
 		if (isOwnUser) return undefined;
