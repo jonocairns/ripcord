@@ -52,12 +52,6 @@ const makeManualCloseProducer = (id: string) => {
 	};
 };
 
-/**
- * Producer stub that emits its observer 'close' synchronously from close(),
- * faithful to mediasoup's Producer.close() (it calls observer.safeEmit('close')
- * inline). This is the path that runs when addProducer closes a replaced
- * same-kind producer, so it exercises the real replacement ordering.
- */
 const makeSyncCloseProducer = (id: string) => {
 	let closeHandler: (() => void) | undefined;
 	let closed = false;
@@ -233,8 +227,6 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 
 		const publishSpy = spyOn(pubsub, 'publish');
 
-		// The replaced producer's close lands after the replacement registered —
-		// it is stale and must not clear sharingScreen for the live producer.
 		first.fireCloseEvent();
 
 		expect(runtime.getUserState(1).sharingScreen).toBe(true);
@@ -253,9 +245,6 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 
 		const publishSpy = spyOn(pubsub, 'publish');
 
-		// addProducer closes `first` inline; mediasoup fires its observer 'close'
-		// synchronously. The replacement must already be the active producer so the
-		// old handler short-circuits instead of clearing the still-live share.
 		const second = makeSyncCloseProducer('second');
 		runtime.addProducer(1, StreamKind.SCREEN, second.producer);
 
@@ -277,9 +266,6 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 
 		const publishSpy = spyOn(pubsub, 'publish');
 
-		// removeUser drops the user from state before closing producers; a late
-		// observer close must find no user and skip the broadcast (the leave
-		// event already covers teardown).
 		runtime.removeUser(1);
 		screen.fireCloseEvent();
 

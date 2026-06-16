@@ -259,17 +259,12 @@ const useVoiceControls = ({
 	}, [applyMicMuted, startMicStream]);
 
 	const toggleWebcam = useCallback(async () => {
-		// A start is mid-flight (camera acquisition + publish). Block re-entry so
-		// rapid toggles can't race two startWebcamStream calls over the shared
-		// producer ref — mirrors the isStartingScreenShare guard.
 		if (isStartingWebcamRef.current) return;
 
 		const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
 
 		if (!latestCurrentVoiceChannelId) return;
 
-		// Read webcam state from the store rather than a closure value so a rapid
-		// press cycle doesn't act on a stale flag (matches setMicMuted).
 		const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
 		const newState = !latestOwnVoiceState.webcamEnabled;
 		const trpc = getTRPCClient();
@@ -287,9 +282,6 @@ const useVoiceControls = ({
 					isStartingWebcamRef.current = false;
 				}
 
-				// The user left or switched channels while the camera was spinning
-				// up — undo the capture we just acquired instead of enabling a
-				// webcam for a channel we are no longer in.
 				if (currentVoiceChannelIdRef.current !== latestCurrentVoiceChannelId) {
 					stopWebcamStream();
 					return;
@@ -307,8 +299,6 @@ const useVoiceControls = ({
 				webcamEnabled: newState,
 			});
 		} catch (error) {
-			// A newer toggle superseded this one — let it own the resulting state
-			// instead of rolling back to ours.
 			if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
 				return;
 			}

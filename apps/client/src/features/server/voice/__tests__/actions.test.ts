@@ -395,9 +395,6 @@ describe('voice actions', () => {
 	});
 
 	it('clears a pinned remote screen-share card when the server reports that user stopped sharing', () => {
-		// Mirrors the viewer side of an unexpected producer close: the server now
-		// broadcasts sharingScreen:false, and a viewer who had that user's screen
-		// pinned should have the stale pin removed.
 		setJoinedVoiceChannelState({
 			ownUserId: 42,
 			voiceMap: {

@@ -357,14 +357,6 @@ class VoiceRuntime {
 		}
 	};
 
-	// When a screen/webcam producer closes without the owner having sent an
-	// explicit voice.updateState — e.g. producer-transport failure, worker death,
-	// or a capture source ending in a way the client can't observe — the user's
-	// voice state would keep reporting the stream as live. Reset the matching flag
-	// and rebroadcast so existing viewers, and anyone who joins later and
-	// reconciles from this state, see the stream as stopped. Skips when the user
-	// has already left (the leave event covers teardown) or the flag is already
-	// false (the normal stop path already broadcast USER_VOICE_STATE_UPDATE).
 	private resetStreamUserStateOnProducerClose = (userId: number, flag: 'sharingScreen' | 'webcamEnabled') => {
 		const user = this.getUser(userId);
 
@@ -551,14 +543,6 @@ class VoiceRuntime {
 	};
 
 	public addProducer = (userId: number, type: StreamKind, producer: Producer<AppData>) => {
-		// Register the replacement as the active producer BEFORE closing any
-		// predecessor. mediasoup fires Producer.close()'s observer 'close'
-		// synchronously, so a same-kind replacement (e.g. reconnect re-publish)
-		// would otherwise run the old producer's close handler while the map still
-		// pointed at it: its stale-guard would pass and it would evict the live
-		// replacement, drop its voice-activity bookkeeping, and broadcast a
-		// spurious VOICE_PRODUCER_CLOSED + USER_VOICE_STATE_UPDATE(false). Setting
-		// the map first makes the old handler see the new producer and short-circuit.
 		const existingProducer = this.getUserProducerByKind(userId, type);
 
 		if (type === StreamKind.VIDEO) {
@@ -576,9 +560,6 @@ class VoiceRuntime {
 		}
 
 		if (type === StreamKind.AUDIO) {
-			// Safe to run after closing the predecessor: this also removes the
-			// replaced producer from the observer and local bookkeeping, so the
-			// old producer's (now short-circuited) close handler need not.
 			this.addAudioProducerToVoiceActivityObserver(userId, producer);
 		}
 
