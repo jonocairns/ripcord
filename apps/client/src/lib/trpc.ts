@@ -27,8 +27,41 @@ let onWsReconnect: (() => void) | null = null;
 let cachedClientInstanceId: string | null = null;
 let deferredWsReconnectOnlineListener: (() => void) | null = null;
 
-// How long to wait for tRPC to reconnect before tearing down the app state.
-const RETRY_GRACE_PERIOD_MS = 5000;
+// How long to keep silently reconnecting before tearing the app down to the
+// disconnect screen. Generous (Discord-style: keep trying, don't hard-fail) so a
+// transient blip — a network switch, a brief server restart, a short event-loop
+// stall — recovers in place without ever flashing a disconnect modal. Stays well
+// under the voice reconnect-intent TTL / server voice grace (60s), so voice still
+// restores even if a teardown does happen.
+const RETRY_GRACE_PERIOD_MS = 20_000;
+
+// WebSocket keep-alive (zombie-socket detection). The ping timer resets on any
+// received message, so on an active connection these rarely fire. The pong
+// timeout is deliberately generous (Discord-style forgiveness): it tolerates a
+// multi-second server event-loop stall and absorbs background-tab timer
+// throttling on web, so a live-but-laggy connection is not falsely closed on a
+// single slow heartbeat. Effective silence tolerance before a close is
+// interval + pongTimeout (~35s) — still far faster than the old "never".
+const WS_KEEPALIVE_PING_INTERVAL_MS = 15_000;
+const WS_KEEPALIVE_PONG_TIMEOUT_MS = 20_000;
+
+// Jitter window for the first reconnect attempt. A server-wide event (an
+// event-loop stall tripping keepAlive on every client at once, a restart) closes
+// many sockets simultaneously; without jitter they all reconnect on the same
+// tick and stampede the server with re-handshake + restoreOrJoin. Kept well
+// under RETRY_GRACE_PERIOD_MS so attempt 0 still resolves before app teardown.
+const WS_RECONNECT_INITIAL_JITTER_MS = 1_000;
+
+// Reconnect backoff that mirrors tRPC's default exponential shape (prompt first
+// attempt, then 2^n capped at 30s) but adds jitter so simultaneously-dropped
+// clients decorrelate instead of reconnecting in lockstep.
+const reconnectRetryDelayMs = (attemptIndex: number): number => {
+	const base = attemptIndex === 0 ? 0 : Math.min(1_000 * 2 ** attemptIndex, 30_000);
+	const jitter = attemptIndex === 0 ? Math.random() * WS_RECONNECT_INITIAL_JITTER_MS : Math.random() * base * 0.5;
+
+	return base + jitter;
+};
+
 const WS_CLIENT_INSTANCE_ID_STORAGE_KEY = 'ripcord.ws-client-instance-id';
 
 // These codes represent deliberate server-side actions — retrying immediately is
@@ -94,6 +127,19 @@ const initializeTRPC = (host: string) => {
 
 	wsClient = createWSClient({
 		url: `${protocol}://${host}`,
+		retryDelayMs: reconnectRetryDelayMs,
+		// Application-level liveness probe. A WebSocket can become a "zombie" on a
+		// half-open network drop (sleep/wake, Wi-Fi↔cellular handoff, NAT/VPN
+		// rebind) where neither side ever receives a FIN/RST — the browser then
+		// never fires `onClose`, so the client keeps showing the user in voice with
+		// no audio while the server has already reaped the session. keepAlive sends
+		// a PING and force-closes the socket when no PONG arrives, which routes
+		// through `onClose` below into the normal voice-reconnect machinery.
+		keepAlive: {
+			enabled: true,
+			intervalMs: WS_KEEPALIVE_PING_INTERVAL_MS,
+			pongTimeoutMs: WS_KEEPALIVE_PONG_TIMEOUT_MS,
+		},
 		// @ts-expect-error - the onclose type is not correct in trpc
 		onClose: (cause: CloseEvent) => {
 			if (shouldIgnoreSocketCloseEvent(cause)) {
