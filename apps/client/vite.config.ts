@@ -25,7 +25,7 @@ export default defineConfig({
 						setCommits: false,
 					},
 					sourcemaps: {
-						assets: './dist/**',
+						assets: ['./dist/**/*.js', './dist/**/*.map'],
 					},
 				})
 			: undefined,
