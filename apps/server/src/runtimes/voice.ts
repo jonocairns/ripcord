@@ -23,6 +23,14 @@ import { eventBus } from '../plugins/event-bus';
 import { invariant } from '../utils/invariant';
 import { mediaSoupWorker, webRtcServer, webRtcServerListenInfo, webRtcServerListenInfos } from '../utils/mediasoup';
 import { pubsub } from '../utils/pubsub';
+import {
+	evaluateMediaLiveness,
+	MEDIA_LIVENESS_CHECK_INTERVAL_MS,
+	MEDIA_LIVENESS_JITTER_MS,
+	MEDIA_LIVENESS_TIMEOUT_MS,
+	type TMediaLivenessState,
+} from './media-liveness';
+import { recordMediaLivenessFailure } from './media-liveness-telemetry';
 
 const voiceRuntimes = new Map<number, VoiceRuntime>();
 // initialAvailableOutgoingBitrate seeds the transport's send-side bandwidth
@@ -154,6 +162,9 @@ class VoiceRuntime {
 	private voiceActivityUserIdsByProducer = new Map<string, number>();
 	private speakingUserIds = new Set<number>();
 	private voiceActivityReleaseTimers = new Map<number, ReturnType<typeof setTimeout>>();
+	private mediaLiveness = new Map<number, TMediaLivenessState>();
+	private mediaLivenessTimer?: ReturnType<typeof setInterval>;
+	private mediaLivenessCheckInFlight = false;
 
 	private externalCounter = 0;
 	private externalStreamsInternal: {
@@ -243,12 +254,15 @@ class VoiceRuntime {
 
 		await this.createRouter();
 
+		this.startMediaLivenessMonitor();
+
 		eventBus.emit('voice:runtime_initialized', {
 			channelId: this.id,
 		});
 	};
 
 	public destroy = async () => {
+		this.stopMediaLivenessMonitor();
 		this.clearAllVoiceActivity();
 
 		// Closing the router automatically closes all transports, producers, and
@@ -299,6 +313,8 @@ class VoiceRuntime {
 	};
 
 	private cleanupUserResources = (userId: number) => {
+		this.mediaLiveness.delete(userId);
+
 		this.removeProducerTransport(userId);
 		this.removeConsumerTransport(userId);
 
@@ -1038,6 +1054,126 @@ class VoiceRuntime {
 			userId,
 			isSpeaking,
 		});
+	};
+
+	private startMediaLivenessMonitor = () => {
+		if (this.mediaLivenessTimer) {
+			return;
+		}
+
+		this.mediaLivenessTimer = setInterval(() => {
+			void this.checkMediaLiveness();
+		}, MEDIA_LIVENESS_CHECK_INTERVAL_MS);
+
+		// Never let the heartbeat keep the process alive on its own.
+		this.mediaLivenessTimer.unref?.();
+	};
+
+	private stopMediaLivenessMonitor = () => {
+		if (this.mediaLivenessTimer) {
+			clearInterval(this.mediaLivenessTimer);
+			this.mediaLivenessTimer = undefined;
+		}
+
+		this.mediaLiveness.clear();
+	};
+
+	// True when the user is actively *receiving* media (has >= 1 consumer). We key
+	// the watchdog on consumers, not producers: a consuming client sends periodic
+	// RTCP receiver reports on its recv transport — a guaranteed, DTX-independent
+	// inbound signal — so `bytesReceived` keeps advancing on a live path even when
+	// no one is speaking. A producer-only user can legitimately go silent (muted /
+	// alone) with no guaranteed inbound traffic, which would risk a false positive;
+	// their signaling liveness is covered by the WS keepAlive instead. This also
+	// matches the symptom we care about — "can't hear anyone" means the user has
+	// audio consumers.
+	private userHasActiveConsumer = (userId: number): boolean => {
+		const userConsumers = this.consumers[userId];
+
+		return !!userConsumers && Object.keys(userConsumers).length > 0;
+	};
+
+	private checkMediaLiveness = async () => {
+		// Skip rather than overlap: on a large/busy channel a tick's getStats calls
+		// can outrun the 5s interval, and overlapping runs would race on the
+		// liveness map and pile up worker IPC. One batch in flight at a time.
+		if (this.mediaLivenessCheckInFlight) {
+			return;
+		}
+
+		this.mediaLivenessCheckInFlight = true;
+
+		try {
+			const now = Date.now();
+			const userIds = this.state.users.map((user) => user.userId);
+
+			await Promise.all(
+				userIds.map(async (userId) => {
+					try {
+						const consumerTransport = this.consumerTransports[userId];
+						const consumerConnected =
+							!!consumerTransport && !consumerTransport.closed && consumerTransport.dtlsState === 'connected';
+
+						// Watch only the recv (consumer) transport of a user actively
+						// receiving media: it carries the periodic RTCP receiver reports
+						// that guarantee a DTX-proof inbound signal. We deliberately do NOT
+						// fold in the producer transport — it negotiates ICE independently,
+						// so a producer that flaps would keep changing the transport key and
+						// rebaseline the timer, masking a genuinely dead consumer path.
+						// While the recv transport is still negotiating / gone, or the user
+						// is not consuming, there is no signal to act on.
+						if (!consumerConnected || !this.userHasActiveConsumer(userId)) {
+							this.mediaLiveness.delete(userId);
+							return;
+						}
+
+						const [stats] = await consumerTransport.getStats();
+						const bytesReceived = stats?.bytesReceived ?? 0;
+
+						// The user may have left or been torn down while getStats was inflight.
+						if (!this.getUser(userId)) {
+							this.mediaLiveness.delete(userId);
+							return;
+						}
+
+						// Additive jitter, only consumed when (re)baselining, spreads
+						// simultaneous failures across users so a global media outage does
+						// not stampede recovery.
+						const baselineTimeoutMs = MEDIA_LIVENESS_TIMEOUT_MS + Math.random() * MEDIA_LIVENESS_JITTER_MS;
+						const { next, shouldSignalFailure } = evaluateMediaLiveness(
+							this.mediaLiveness.get(userId),
+							{ transportKey: consumerTransport.id, bytesReceived, now },
+							baselineTimeoutMs,
+						);
+
+						this.mediaLiveness.set(userId, next);
+
+						if (shouldSignalFailure) {
+							// Per-fire detail (with ids) goes to app.log; the aggregated,
+							// rate-limited Sentry summary is emitted by the telemetry module.
+							logger.warn(
+								`[voice] media-liveness timeout for user ${userId} in channel ${this.id}: no bytes received for ${
+									now - next.lastProgressAt
+								}ms, signalling transport failure`,
+							);
+
+							recordMediaLivenessFailure(this.id, userId);
+
+							pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
+								userId,
+							});
+						}
+					} catch (error) {
+						// A transport can close mid-iteration; drop the baseline and let the
+						// next tick re-evaluate from scratch.
+						logger.debug('Media-liveness check failed for user %s: %o', userId, error);
+						this.mediaLiveness.delete(userId);
+					}
+				}),
+			);
+		} finally {
+			this.mediaLivenessCheckInFlight = false;
+		}
 	};
 
 	private clearAllVoiceActivity = () => {

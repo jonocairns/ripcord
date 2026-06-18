@@ -35,6 +35,12 @@ import {
 } from './voice-disconnect-grace';
 
 let wss: WebSocketServer | undefined;
+
+// WebSocket keep-alive (zombie-connection reaping). The adapter resets the ping
+// timer on any received message, so on an active connection these rarely fire.
+const WS_KEEPALIVE_PING_INTERVAL_MS = 30_000;
+const WS_KEEPALIVE_PONG_WAIT_MS = 10_000;
+
 type TTrackedWebSocket = WebSocket & {
 	userId?: number;
 	token: string;
@@ -436,6 +442,18 @@ const createWsServer = async (server: http.Server) => {
 			wss,
 			router: appRouter,
 			createContext,
+			// Heartbeat so the server can reap zombie connections. Without this the
+			// only signal that a client is gone is the OS TCP stack emitting a
+			// `close`, which on a half-open drop (sleep/wake, network handoff,
+			// NAT/VPN rebind) can take minutes or never arrive — leaving the user as
+			// a ghost in their voice channel for everyone else. On pong timeout the
+			// adapter calls `ws.terminate()`, which fires the `'close'` handler above
+			// and runs the normal voice-disconnect grace + cleanup path.
+			keepAlive: {
+				enabled: true,
+				pingMs: WS_KEEPALIVE_PING_INTERVAL_MS,
+				pongWaitMs: WS_KEEPALIVE_PONG_WAIT_MS,
+			},
 			onError: ({ error, path }) => {
 				if (error.code === 'INTERNAL_SERVER_ERROR') {
 					Sentry.captureException(error.cause ?? error, { extra: { path } });
