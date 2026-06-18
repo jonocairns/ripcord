@@ -325,8 +325,16 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 	};
 };
 
+type TWsServer = {
+	wss: WebSocketServer;
+	// tRPC's reconnect broadcast — tells every connected client to reconnect, so a
+	// graceful shutdown can move them off this instance proactively (via the
+	// jittered reconnect backoff) instead of all reacting to the socket drop.
+	broadcastReconnect: () => void;
+};
+
 const createWsServer = async (server: http.Server) => {
-	return new Promise<WebSocketServer>((resolve) => {
+	return new Promise<TWsServer>((resolve) => {
 		const corsOrigin = config.server.corsOrigin;
 		wss = new WebSocketServer({
 			server,
@@ -438,7 +446,7 @@ const createWsServer = async (server: http.Server) => {
 			logger.error('WebSocket server error:', err);
 		});
 
-		applyWSSHandler({
+		const wssHandler = applyWSSHandler({
 			wss,
 			router: appRouter,
 			createContext,
@@ -461,7 +469,7 @@ const createWsServer = async (server: http.Server) => {
 			},
 		});
 
-		resolve(wss);
+		resolve({ wss, broadcastReconnect: wssHandler.broadcastReconnectNotification });
 	});
 };
 

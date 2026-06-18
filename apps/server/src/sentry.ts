@@ -11,35 +11,17 @@ import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';
 
 const SPLAT = Symbol.for('splat');
 
-// Flush buffered events before the process exits on a termination signal
-// (Docker sends SIGTERM on stop, Ctrl-C sends SIGINT). Registering a listener
-// overrides the default "exit immediately" behavior, so we must exit ourselves
-// once the flush settles. Without this, events captured moments before shutdown
-// can be lost.
-const registerShutdownFlush = (): void => {
-	let flushing = false;
-
-	const flushAndExit = (signal: NodeJS.Signals): void => {
-		if (flushing) {
-			return;
-		}
-
-		flushing = true;
-
-		// Exit with the conventional 128 + signal number (SIGINT → 130,
-		// SIGTERM → 143) so a shell or CI harness inspecting $? sees the process
-		// was terminated by a signal rather than a clean exit.
-		const exitCode = signal === 'SIGINT' ? 130 : 143;
-
-		void Sentry.close(2000)
-			.catch(() => {
-				// Flush failed (network/SDK error) — still exit so shutdown isn't blocked.
-			})
-			.finally(() => process.exit(exitCode));
-	};
-
-	process.once('SIGTERM', () => flushAndExit('SIGTERM'));
-	process.once('SIGINT', () => flushAndExit('SIGINT'));
+// Flush buffered events before the process exits. Safe to call when Sentry was
+// never initialised (no DSN) — close() resolves immediately. The graceful-
+// shutdown orchestrator owns the termination signals and sequences this flush
+// just before the final process exit, so events captured moments before
+// shutdown aren't lost.
+const flushSentry = async (): Promise<void> => {
+	try {
+		await Sentry.close(2000);
+	} catch {
+		// Flush failed (network/SDK error) — never block shutdown on telemetry.
+	}
 };
 
 const initSentry = (): void => {
@@ -59,8 +41,6 @@ const initSentry = (): void => {
 		sendDefaultPii: false,
 		...tracingOptions,
 	});
-
-	registerShutdownFlush();
 };
 
 const sentryFormat = format((info) => {
@@ -94,4 +74,4 @@ const sentryFormat = format((info) => {
 	return info;
 });
 
-export { initSentry, Sentry, sentryFormat };
+export { flushSentry, initSentry, Sentry, sentryFormat };

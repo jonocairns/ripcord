@@ -37,9 +37,16 @@ import { enqueueActivityLog } from './queues/activity-log';
 import { initVoiceRuntimes } from './runtimes';
 import { createServers } from './utils/create-servers';
 import { fileManager } from './utils/file-manager';
+import { registerGracefulShutdown } from './utils/graceful-shutdown';
 import { loadMediasoup } from './utils/mediasoup';
 import { printDebug } from './utils/print-debug';
 import './utils/updater';
+
+// Arm termination handling before the boot steps so a SIGTERM/SIGINT during
+// startup still flushes telemetry and exits cleanly. Resources (servers, worker,
+// db) are registered once they exist; a signal received before then skips the
+// (absent) drain steps.
+registerGracefulShutdown();
 
 const getBootErrorMessage = (error: unknown): string => {
 	if (error instanceof Error) {
