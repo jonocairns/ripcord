@@ -54,6 +54,8 @@ const dbProxy = new Proxy({} as BunSQLiteDatabase, {
 mock.module('../db/index', () => ({
 	db: dbProxy,
 	loadDb: async () => {}, // No-op in tests
+	pingDb: () => true, // The mocked in-memory db is always ready
+	closeDb: () => {}, // No-op in tests
 }));
 
 const setTestDb = (newDb: BunSQLiteDatabase) => {
