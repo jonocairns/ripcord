@@ -30,6 +30,7 @@ import {
 	MEDIA_LIVENESS_TIMEOUT_MS,
 	type TMediaLivenessState,
 } from './media-liveness';
+import { recordMediaLivenessFailure } from './media-liveness-telemetry';
 
 const voiceRuntimes = new Map<number, VoiceRuntime>();
 // initialAvailableOutgoingBitrate seeds the transport's send-side bandwidth
@@ -1148,11 +1149,15 @@ class VoiceRuntime {
 						this.mediaLiveness.set(userId, next);
 
 						if (shouldSignalFailure) {
+							// Per-fire detail (with ids) goes to app.log; the aggregated,
+							// rate-limited Sentry summary is emitted by the telemetry module.
 							logger.warn(
 								`[voice] media-liveness timeout for user ${userId} in channel ${this.id}: no bytes received for ${
 									now - next.lastProgressAt
 								}ms, signalling transport failure`,
 							);
+
+							recordMediaLivenessFailure(this.id, userId);
 
 							pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
 								userId,
