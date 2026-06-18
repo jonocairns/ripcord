@@ -83,6 +83,9 @@ jobs:
       - name: Build app
         env:
           SHARKORD_VERSION: ${{ steps.compute_version.outputs.version }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
         run: |
           cd apps/server
           bun run build
