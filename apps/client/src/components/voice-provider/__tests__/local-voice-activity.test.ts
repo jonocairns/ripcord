@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import {
+	type ActivityBroadcastState,
 	getAudioLevelFromStats,
 	resolveActivityBroadcast,
 	startLocalVoiceActivityMonitor,
@@ -119,23 +120,72 @@ describe('startLocalVoiceActivityMonitor', () => {
 });
 
 describe('resolveActivityBroadcast', () => {
+	const emptyState: ActivityBroadcastState = {
+		producerId: undefined,
+		hasAnnouncedSpeaking: false,
+	};
+
 	it('never broadcasts before a measured true has been announced', () => {
 		// A client that can only ever emit undefined (e.g. Firefox) or a baseline
 		// false must not broadcast — it would otherwise claim server authority and
 		// disable the observer for itself.
-		expect(resolveActivityBroadcast(undefined, false)).toEqual({ broadcast: undefined, hasAnnouncedSpeaking: false });
-		expect(resolveActivityBroadcast(false, false)).toEqual({ broadcast: undefined, hasAnnouncedSpeaking: false });
+		const unavailable = resolveActivityBroadcast(undefined, 'producer-1', emptyState);
+
+		expect(unavailable).toEqual({
+			broadcast: undefined,
+			state: { producerId: 'producer-1', hasAnnouncedSpeaking: false },
+		});
+		expect(resolveActivityBroadcast(false, 'producer-1', unavailable.state)).toEqual({
+			broadcast: undefined,
+			state: { producerId: 'producer-1', hasAnnouncedSpeaking: false },
+		});
 	});
 
 	it('broadcasts a measured true and latches it', () => {
-		expect(resolveActivityBroadcast(true, false)).toEqual({ broadcast: true, hasAnnouncedSpeaking: true });
+		expect(resolveActivityBroadcast(true, 'producer-1', emptyState)).toEqual({
+			broadcast: true,
+			state: { producerId: 'producer-1', hasAnnouncedSpeaking: true },
+		});
 	});
 
 	it('broadcasts a false only after a true was announced, then clears the latch', () => {
-		expect(resolveActivityBroadcast(false, true)).toEqual({ broadcast: false, hasAnnouncedSpeaking: false });
+		const speakingState: ActivityBroadcastState = {
+			producerId: 'producer-1',
+			hasAnnouncedSpeaking: true,
+		};
+
+		expect(resolveActivityBroadcast(false, 'producer-1', speakingState)).toEqual({
+			broadcast: false,
+			state: { producerId: 'producer-1', hasAnnouncedSpeaking: false },
+		});
 	});
 
 	it('keeps the latch through an undefined reading so a lost signal is not announced', () => {
-		expect(resolveActivityBroadcast(undefined, true)).toEqual({ broadcast: undefined, hasAnnouncedSpeaking: true });
+		const speakingState: ActivityBroadcastState = {
+			producerId: 'producer-1',
+			hasAnnouncedSpeaking: true,
+		};
+
+		expect(resolveActivityBroadcast(undefined, 'producer-1', speakingState)).toEqual({
+			broadcast: undefined,
+			state: speakingState,
+		});
+	});
+
+	it('does not carry speaking authority to a replacement producer', () => {
+		const oldProducerState: ActivityBroadcastState = {
+			producerId: 'producer-1',
+			hasAnnouncedSpeaking: true,
+		};
+		const replacementBaseline = resolveActivityBroadcast(false, 'producer-2', oldProducerState);
+
+		expect(replacementBaseline).toEqual({
+			broadcast: undefined,
+			state: { producerId: 'producer-2', hasAnnouncedSpeaking: false },
+		});
+		expect(resolveActivityBroadcast(undefined, 'producer-2', replacementBaseline.state)).toEqual({
+			broadcast: undefined,
+			state: { producerId: 'producer-2', hasAnnouncedSpeaking: false },
+		});
 	});
 });

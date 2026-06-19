@@ -10,6 +10,11 @@ type LocalVoiceActivityStatsProvider = {
 
 type LocalVoiceActivityUpdate = boolean | undefined;
 
+type ActivityBroadcastState = {
+	producerId: string | undefined;
+	hasAnnouncedSpeaking: boolean;
+};
+
 const LOCAL_VOICE_ACTIVITY_POLL_INTERVAL_MS = 50;
 const LOCAL_VOICE_ACTIVITY_RELEASE_DELAY_MS = 350;
 // Mirror the server AudioLevelObserver threshold (-60 dBov) so the local
@@ -147,17 +152,32 @@ const startLocalVoiceActivityMonitor = ({
 // local fast-path even works.
 const resolveActivityBroadcast = (
 	isSpeaking: boolean | undefined,
-	hasAnnouncedSpeaking: boolean,
-): { broadcast: boolean | undefined; hasAnnouncedSpeaking: boolean } => {
+	producerId: string | undefined,
+	currentState: ActivityBroadcastState,
+): { broadcast: boolean | undefined; state: ActivityBroadcastState } => {
+	const hasAnnouncedSpeaking =
+		currentState.producerId === producerId && producerId !== undefined && currentState.hasAnnouncedSpeaking;
+	const state = {
+		producerId,
+		hasAnnouncedSpeaking,
+	};
+
 	if (isSpeaking === undefined) {
-		return { broadcast: undefined, hasAnnouncedSpeaking };
+		return { broadcast: undefined, state };
 	}
 
 	if (!isSpeaking && !hasAnnouncedSpeaking) {
-		return { broadcast: undefined, hasAnnouncedSpeaking: false };
+		return { broadcast: undefined, state };
 	}
 
-	return { broadcast: isSpeaking, hasAnnouncedSpeaking: isSpeaking };
+	return {
+		broadcast: isSpeaking,
+		state: {
+			producerId,
+			hasAnnouncedSpeaking: isSpeaking,
+		},
+	};
 };
 
+export type { ActivityBroadcastState };
 export { getAudioLevelFromStats, resolveActivityBroadcast, startLocalVoiceActivityMonitor };

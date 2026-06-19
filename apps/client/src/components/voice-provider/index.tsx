@@ -60,7 +60,11 @@ import { type TransportStatsStore, useTransportStats } from './hooks/use-transpo
 import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
-import { resolveActivityBroadcast, startLocalVoiceActivityMonitor } from './local-voice-activity';
+import {
+	type ActivityBroadcastState,
+	resolveActivityBroadcast,
+	startLocalVoiceActivityMonitor,
+} from './local-voice-activity';
 import { createMicAudioProcessingPipeline, type TMicAudioProcessingPipeline } from './mic-audio-processing';
 import { prewarmVoiceEngines } from './prewarm';
 import {
@@ -1014,10 +1018,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// transition so remote peers light up our ring without waiting on the
 	// server's 250ms audio observer. A monotonic sequence number lets the server
 	// drop reordered fire-and-forget mutations — a late `false` must never
-	// clobber a newer `true`. `hasAnnouncedSpeakingRef` gates broadcasts so a
-	// client that can't meter locally never claims server-side authority.
+	// clobber a newer `true`. The broadcast state is scoped to the active audio
+	// producer so a replacement's initial `false` cannot inherit authority from
+	// its predecessor. A client that can't meter locally therefore never claims
+	// server-side authority.
 	const voiceActivitySeqRef = useRef(0);
-	const hasAnnouncedSpeakingRef = useRef(false);
+	const activityBroadcastStateRef = useRef<ActivityBroadcastState>({
+		producerId: undefined,
+		hasAnnouncedSpeaking: false,
+	});
 
 	const applyOwnLocalActivity = useCallback(
 		(isSpeaking: boolean | undefined) => {
@@ -1027,13 +1036,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			voiceActivityStoreRef.current.setLocalUserActivity(ownUserId, isSpeaking);
 
-			const { broadcast, hasAnnouncedSpeaking } = resolveActivityBroadcast(isSpeaking, hasAnnouncedSpeakingRef.current);
-			hasAnnouncedSpeakingRef.current = hasAnnouncedSpeaking;
-
 			// Bind every report to the current audio producer so the server can
 			// reject stale reports from a replaced producer. No producer means
 			// nothing to bind to (and nothing to be speaking through).
 			const producerId = localAudioProducer.current?.id;
+			const { broadcast, state } = resolveActivityBroadcast(isSpeaking, producerId, activityBroadcastStateRef.current);
+			activityBroadcastStateRef.current = state;
 
 			if (broadcast === undefined || producerId === undefined) {
 				return;
