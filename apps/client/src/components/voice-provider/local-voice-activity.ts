@@ -135,4 +135,29 @@ const startLocalVoiceActivityMonitor = ({
 	};
 };
 
-export { getAudioLevelFromStats, startLocalVoiceActivityMonitor };
+// Decides whether an own-user activity transition should be broadcast to the
+// server, and the next "have we announced speaking" latch value.
+//
+// The invariant: never announce a `false` (or `undefined`) until we've
+// announced a measured `true`. A client that can never produce a real reading
+// — Firefox exposes no getStats audioLevel, so the monitor only ever emits
+// `undefined` — therefore never broadcasts, never claims server-side authority,
+// and stays observer-driven. It also stops us publishing a premature baseline
+// `false` that would disable the server observer for us before we know the
+// local fast-path even works.
+const resolveActivityBroadcast = (
+	isSpeaking: boolean | undefined,
+	hasAnnouncedSpeaking: boolean,
+): { broadcast: boolean | undefined; hasAnnouncedSpeaking: boolean } => {
+	if (isSpeaking === undefined) {
+		return { broadcast: undefined, hasAnnouncedSpeaking };
+	}
+
+	if (!isSpeaking && !hasAnnouncedSpeaking) {
+		return { broadcast: undefined, hasAnnouncedSpeaking: false };
+	}
+
+	return { broadcast: isSpeaking, hasAnnouncedSpeaking: isSpeaking };
+};
+
+export { getAudioLevelFromStats, resolveActivityBroadcast, startLocalVoiceActivityMonitor };

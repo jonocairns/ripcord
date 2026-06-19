@@ -1042,6 +1042,13 @@ class VoiceRuntime {
 			return;
 		}
 
+		// Speaking requires an active mic producer. A `true` that arrives after the
+		// producer closed (e.g. it was in flight when the user muted) must not
+		// resurrect a ring that producer-close cleanup already cleared.
+		if (isSpeaking && !this.audioProducers[userId]) {
+			return;
+		}
+
 		const isFirstReport = !this.clientDrivenSpeakingUserIds.has(userId);
 
 		if (!isFirstReport) {

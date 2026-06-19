@@ -60,7 +60,7 @@ import { type TransportStatsStore, useTransportStats } from './hooks/use-transpo
 import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
-import { startLocalVoiceActivityMonitor } from './local-voice-activity';
+import { resolveActivityBroadcast, startLocalVoiceActivityMonitor } from './local-voice-activity';
 import { createMicAudioProcessingPipeline, type TMicAudioProcessingPipeline } from './mic-audio-processing';
 import { prewarmVoiceEngines } from './prewarm';
 import {
@@ -1014,8 +1014,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// transition so remote peers light up our ring without waiting on the
 	// server's 250ms audio observer. A monotonic sequence number lets the server
 	// drop reordered fire-and-forget mutations — a late `false` must never
-	// clobber a newer `true`.
+	// clobber a newer `true`. `hasAnnouncedSpeakingRef` gates broadcasts so a
+	// client that can't meter locally never claims server-side authority.
 	const voiceActivitySeqRef = useRef(0);
+	const hasAnnouncedSpeakingRef = useRef(false);
 
 	const applyOwnLocalActivity = useCallback(
 		(isSpeaking: boolean | undefined) => {
@@ -1025,17 +1027,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			voiceActivityStoreRef.current.setLocalUserActivity(ownUserId, isSpeaking);
 
-			// `undefined` means we have no local reading (e.g. Firefox doesn't
-			// expose getStats audioLevel). Don't broadcast a state we didn't
-			// measure — the server observer drives our ring for those clients.
-			if (isSpeaking === undefined) {
+			const { broadcast, hasAnnouncedSpeaking } = resolveActivityBroadcast(isSpeaking, hasAnnouncedSpeakingRef.current);
+			hasAnnouncedSpeakingRef.current = hasAnnouncedSpeaking;
+
+			if (broadcast === undefined) {
 				return;
 			}
 
 			const seq = (voiceActivitySeqRef.current += 1);
 
 			void getTRPCClient()
-				.voice.updateActivity.mutate({ isSpeaking, seq })
+				.voice.updateActivity.mutate({ isSpeaking: broadcast, seq })
 				.catch(() => {});
 		},
 		[ownUserId],

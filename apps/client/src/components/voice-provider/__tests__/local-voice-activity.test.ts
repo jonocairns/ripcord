@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { getAudioLevelFromStats, startLocalVoiceActivityMonitor } from '../local-voice-activity';
+import {
+	getAudioLevelFromStats,
+	resolveActivityBroadcast,
+	startLocalVoiceActivityMonitor,
+} from '../local-voice-activity';
 
 const createRtcStat = (overrides: Record<string, unknown>): RTCStats => {
 	return {
@@ -111,5 +115,27 @@ describe('startLocalVoiceActivityMonitor', () => {
 		expect(updates).toEqual([false, undefined]);
 
 		stop();
+	});
+});
+
+describe('resolveActivityBroadcast', () => {
+	it('never broadcasts before a measured true has been announced', () => {
+		// A client that can only ever emit undefined (e.g. Firefox) or a baseline
+		// false must not broadcast — it would otherwise claim server authority and
+		// disable the observer for itself.
+		expect(resolveActivityBroadcast(undefined, false)).toEqual({ broadcast: undefined, hasAnnouncedSpeaking: false });
+		expect(resolveActivityBroadcast(false, false)).toEqual({ broadcast: undefined, hasAnnouncedSpeaking: false });
+	});
+
+	it('broadcasts a measured true and latches it', () => {
+		expect(resolveActivityBroadcast(true, false)).toEqual({ broadcast: true, hasAnnouncedSpeaking: true });
+	});
+
+	it('broadcasts a false only after a true was announced, then clears the latch', () => {
+		expect(resolveActivityBroadcast(false, true)).toEqual({ broadcast: false, hasAnnouncedSpeaking: false });
+	});
+
+	it('keeps the latch through an undefined reading so a lost signal is not announced', () => {
+		expect(resolveActivityBroadcast(undefined, true)).toEqual({ broadcast: undefined, hasAnnouncedSpeaking: true });
 	});
 });
