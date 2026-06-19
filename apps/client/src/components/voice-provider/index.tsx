@@ -60,6 +60,7 @@ import { type TransportStatsStore, useTransportStats } from './hooks/use-transpo
 import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
+import { startLocalVoiceActivityMonitor } from './local-voice-activity';
 import { createMicAudioProcessingPipeline, type TMicAudioProcessingPipeline } from './mic-audio-processing';
 import { prewarmVoiceEngines } from './prewarm';
 import {
@@ -614,6 +615,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
 	const confirmedOwnMicMuted = ownConfirmedVoiceState?.micMuted;
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
+	const ownUserId = useServerStore((state) => state.ownUserId);
 	const voiceSessionReconnectNonce = useServerStore((state) => state.voiceSessionReconnectNonce);
 	const reconnectingSince = useVoiceReconnectStore((state) => state.reconnectingSince);
 	const isConnected = useIsConnected();
@@ -645,6 +647,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const watchedExternalStreamsRef = useRef<Record<string, TTrackedExternalWatchState>>({});
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
+	const localVoiceActivityCleanupRef = useRef<(() => void) | undefined>(undefined);
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const micPipelineMutexRef = useRef<Promise<void>>(Promise.resolve());
 	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
@@ -866,11 +869,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			kind,
 			producerRef,
 			logLabel,
+			onCurrentProducerClose,
 		}: {
 			producer: Producer<AppData>;
 			kind: StreamKind;
 			producerRef: MutableRefObject<Producer<AppData> | undefined>;
 			logLabel: string;
+			onCurrentProducerClose?: () => void;
 		}) => {
 			producer.on('@close', () => {
 				logVoice(`${logLabel} producer closed`, {
@@ -879,6 +884,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				if (producerRef.current === producer) {
 					producerRef.current = undefined;
+					onCurrentProducerClose?.();
 				}
 
 				void closeProducerOnServer(kind, producer.id);
@@ -996,10 +1002,66 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	} = useTransportStats(getConfiguredVideoMaxBitrates);
 
 	const handleVoiceActivityUpdate = useCallback((activity: { userId: number; isSpeaking: boolean }) => {
-		voiceActivityStoreRef.current.setUserActivity(activity.userId, {
+		voiceActivityStoreRef.current.setServerUserActivity(activity.userId, {
 			isSpeaking: activity.isSpeaking,
 		});
 	}, []);
+
+	const stopLocalVoiceActivityMonitoring = useCallback(
+		(isSpeaking: boolean | undefined = undefined) => {
+			localVoiceActivityCleanupRef.current?.();
+			localVoiceActivityCleanupRef.current = undefined;
+
+			if (ownUserId !== undefined) {
+				voiceActivityStoreRef.current.setLocalUserActivity(ownUserId, isSpeaking);
+			}
+		},
+		[ownUserId],
+	);
+
+	const startLocalVoiceActivityMonitoring = useCallback(
+		(producer: Producer<AppData>) => {
+			stopLocalVoiceActivityMonitoring();
+
+			if (!isConnected || ownUserId === undefined || producer.closed) {
+				return;
+			}
+
+			if (ownVoiceStateSelector(useServerStore.getState()).micMuted) {
+				voiceActivityStoreRef.current.setLocalUserActivity(ownUserId, false);
+				return;
+			}
+
+			localVoiceActivityCleanupRef.current = startLocalVoiceActivityMonitor({
+				statsProvider: producer,
+				onUpdate: (isSpeaking) => {
+					if (localAudioProducer.current !== producer) {
+						return;
+					}
+
+					voiceActivityStoreRef.current.setLocalUserActivity(ownUserId, isSpeaking);
+				},
+			});
+		},
+		[isConnected, localAudioProducer, ownUserId, stopLocalVoiceActivityMonitoring],
+	);
+
+	useEffect(() => {
+		const producer = localAudioProducer.current;
+
+		if (!isConnected || ownVoiceState.micMuted || !producer) {
+			stopLocalVoiceActivityMonitoring(!isConnected || ownVoiceState.micMuted ? false : undefined);
+			return;
+		}
+
+		startLocalVoiceActivityMonitoring(producer);
+	}, [
+		isConnected,
+		ownVoiceState.micMuted,
+		startLocalVoiceActivityMonitoring,
+		stopLocalVoiceActivityMonitoring,
+		localAudioProducer,
+	]);
 
 	useEffect(() => {
 		if (currentVoiceChannelId === undefined) {
@@ -1255,6 +1317,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 
 			localAudioProducer.current = audioProducer;
+			startLocalVoiceActivityMonitoring(audioProducer);
 
 			logVoice('Microphone audio producer created', {
 				producer: audioProducer,
@@ -1265,6 +1328,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				kind: StreamKind.AUDIO,
 				producerRef: localAudioProducer,
 				logLabel: 'Audio',
+				onCurrentProducerClose: () => {
+					stopLocalVoiceActivityMonitoring(false);
+				},
 			});
 
 			track.onended = () => {
@@ -1278,7 +1344,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				});
 			};
 		},
-		[bindProducerCloseHandler, localAudioProducer, producerTransport, setLocalAudioStream],
+		[
+			bindProducerCloseHandler,
+			localAudioProducer,
+			producerTransport,
+			setLocalAudioStream,
+			startLocalVoiceActivityMonitoring,
+			stopLocalVoiceActivityMonitoring,
+		],
 	);
 
 	const publishWebcamTrack = useCallback(
@@ -1620,6 +1693,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	});
 
 	const cleanupMicAudioPipeline = useCallback(async () => {
+		stopLocalVoiceActivityMonitoring(false);
+
 		const currentAudioProducer = localAudioProducer.current;
 		localAudioProducer.current = undefined;
 		currentAudioProducer?.close();
@@ -1658,7 +1733,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				});
 			}
 		}
-	}, [localAudioProducer]);
+	}, [localAudioProducer, stopLocalVoiceActivityMonitoring]);
 	cleanupMicAudioPipelineRef.current = cleanupMicAudioPipeline;
 
 	// Acquire mic stream and build the processing pipeline (WASM denoise + gain).

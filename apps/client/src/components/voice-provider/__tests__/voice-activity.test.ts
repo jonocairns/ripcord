@@ -17,11 +17,11 @@ describe('createVoiceActivityStore', () => {
 			updates += 1;
 		});
 
-		store.setUserActivity(1, { isSpeaking: true });
-		store.setUserActivity(1, { isSpeaking: true });
-		store.setUserActivity(1, { isSpeaking: false });
+		store.setServerUserActivity(1, { isSpeaking: true });
+		store.setServerUserActivity(1, { isSpeaking: true });
+		store.setServerUserActivity(1, { isSpeaking: false });
 		unsubscribe();
-		store.setUserActivity(1, { isSpeaking: true });
+		store.setServerUserActivity(1, { isSpeaking: true });
 
 		expect(updates).toBe(2);
 		expect(store.getUserActivity(1).isSpeaking).toBe(true);
@@ -35,8 +35,8 @@ describe('createVoiceActivityStore', () => {
 			updates += 1;
 		});
 
-		store.setUserActivity(1, { isSpeaking: true });
-		store.setUserActivity(2, { isSpeaking: true });
+		store.setServerUserActivity(1, { isSpeaking: true });
+		store.setServerUserActivity(2, { isSpeaking: true });
 		store.clearUserActivity(1);
 		store.clearUserActivity(1);
 		store.clearAll();
@@ -45,5 +45,31 @@ describe('createVoiceActivityStore', () => {
 		expect(updates).toBe(4);
 		expect(store.getUserActivity(1).isSpeaking).toBe(false);
 		expect(store.getUserActivity(2).isSpeaking).toBe(false);
+	});
+
+	it('uses local activity as the own-user override while preserving server fallback', () => {
+		const store = createVoiceActivityStore();
+		let updates = 0;
+
+		store.subscribe(() => {
+			updates += 1;
+		});
+
+		store.setServerUserActivity(1, { isSpeaking: true });
+		store.setLocalUserActivity(1, false);
+		store.setServerUserActivity(1, { isSpeaking: false });
+		store.setServerUserActivity(1, { isSpeaking: true });
+
+		expect(store.getUserActivity(1).isSpeaking).toBe(false);
+
+		store.setLocalUserActivity(1, true);
+		store.setServerUserActivity(1, { isSpeaking: false });
+
+		expect(store.getUserActivity(1).isSpeaking).toBe(true);
+
+		store.setLocalUserActivity(1, undefined);
+
+		expect(store.getUserActivity(1).isSpeaking).toBe(false);
+		expect(updates).toBe(4);
 	});
 });
