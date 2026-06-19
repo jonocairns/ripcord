@@ -68,6 +68,10 @@ const zConfig = z.object({
 			maxRequests: z.coerce.number().int().positive(),
 			windowMs: z.coerce.number().int().positive(),
 		}),
+		voiceActivity: z.object({
+			maxRequests: z.coerce.number().int().positive(),
+			windowMs: z.coerce.number().int().positive(),
+		}),
 		joinServer: z.object({
 			maxRequests: z.coerce.number().int().positive(),
 			windowMs: z.coerce.number().int().positive(),
@@ -137,6 +141,13 @@ const defaultConfig: TConfig = {
 		},
 		joinVoiceChannel: {
 			maxRequests: 60,
+			windowMs: 60_000,
+		},
+		// Speaking transitions are coalesced by the client's release hangover
+		// (~3/s worst case); this bounds a misbehaving client without clipping
+		// legitimate talk/pause bursts.
+		voiceActivity: {
+			maxRequests: 300,
 			windowMs: 60_000,
 		},
 		joinServer: {

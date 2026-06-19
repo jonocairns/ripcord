@@ -29,6 +29,7 @@ import { restartConsumerIceRoute } from './restart-consumer-ice';
 import { restartProducerIceRoute } from './restart-producer-ice';
 import { restoreOrJoinVoiceRoute } from './restore-or-join';
 import { resumeConsumerRoute } from './resume-consumer';
+import { updateVoiceActivityRoute } from './update-activity';
 import { updateVoiceStateRoute } from './update-state';
 
 export const voiceRouter = t.router({
@@ -36,6 +37,7 @@ export const voiceRouter = t.router({
 	restoreOrJoin: restoreOrJoinVoiceRoute,
 	leave: leaveVoiceRoute,
 	updateState: updateVoiceStateRoute,
+	updateActivity: updateVoiceActivityRoute,
 	createProducerTransport: createProducerTransportRoute,
 	connectProducerTransport: connectProducerTransportRoute,
 	createConsumerTransport: createConsumerTransportRoute,
