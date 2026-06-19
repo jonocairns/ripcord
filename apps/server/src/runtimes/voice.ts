@@ -31,6 +31,12 @@ import {
 	type TMediaLivenessState,
 } from './media-liveness';
 import { recordMediaLivenessFailure } from './media-liveness-telemetry';
+import {
+	type ClientVoiceActivityLease,
+	type ClientVoiceActivityOrdering,
+	isClientVoiceActivityLeaseActive,
+	resolveClientVoiceActivity,
+} from './voice-activity-lease';
 
 const voiceRuntimes = new Map<number, VoiceRuntime>();
 // initialAvailableOutgoingBitrate seeds the transport's send-side bandwidth
@@ -162,15 +168,16 @@ class VoiceRuntime {
 	private voiceActivityProducerIdsByUser = new Map<number, string>();
 	private voiceActivityUserIdsByProducer = new Map<string, number>();
 	private speakingUserIds = new Set<number>();
+	private observerSpeakingUserIds = new Set<number>();
 	private voiceActivityReleaseTimers = new Map<number, ReturnType<typeof setTimeout>>();
-	// Users whose own client reports speaking state directly (newer clients). The
-	// server observer is the fallback for everyone else, so older clients that
-	// never call updateActivity keep working. Cleared when the user's audio
-	// producer goes away so a reconnecting session starts fresh.
-	private clientDrivenSpeakingUserIds = new Set<number>();
-	// Last accepted sequence number per client-driven user, used to drop
-	// reordered fire-and-forget activity reports.
-	private voiceActivitySeqByUser = new Map<number, number>();
+	// Per-user lease granted by the latest accepted client activity report. While
+	// a lease is active the server observer defers to the client; when reports
+	// stop the lease expires and the observer resumes as the canonical source, so
+	// a dead/silent client can never strand the ring. Older clients that never
+	// report simply never hold a lease and stay fully observer-driven.
+	private clientVoiceActivityLeases = new Map<number, ClientVoiceActivityLease>();
+	private clientVoiceActivityOrdering = new Map<number, ClientVoiceActivityOrdering>();
+	private clientVoiceActivityLeaseTimers = new Map<number, ReturnType<typeof setTimeout>>();
 	private mediaLiveness = new Map<number, TMediaLivenessState>();
 	private mediaLivenessTimer?: ReturnType<typeof setInterval>;
 	private mediaLivenessCheckInFlight = false;
@@ -379,6 +386,7 @@ class VoiceRuntime {
 		user.state = { ...user.state, ...newState };
 
 		if (newState.micMuted === true) {
+			this.observerSpeakingUserIds.delete(userId);
 			this.setUserSpeaking(userId, false);
 		}
 	};
@@ -995,6 +1003,7 @@ class VoiceRuntime {
 		}
 
 		this.voiceActivityUserIdsByProducer.delete(producer.id);
+		this.observerSpeakingUserIds.delete(userId);
 		// The mic stream is gone: drop client-driven state so a reconnecting
 		// session is observed again until its client re-reports.
 		this.clearClientVoiceActivity(userId);
@@ -1002,71 +1011,139 @@ class VoiceRuntime {
 	};
 
 	private handleVoiceActivityVolumes = (volumes: AudioLevelObserverVolume[]) => {
+		const now = Date.now();
 		const activeUserIds = new Set<number>();
 
 		for (const { producer } of volumes) {
 			const userId = this.voiceActivityUserIdsByProducer.get(producer.id);
 			const user = userId === undefined ? undefined : this.getUser(userId);
 
-			// A client-driven user reports their own speaking state; the observer
-			// must not also drive them or the two sources would fight.
-			if (userId === undefined || !user || user.state.micMuted || this.clientDrivenSpeakingUserIds.has(userId)) {
+			if (userId === undefined || !user || user.state.micMuted) {
 				continue;
 			}
 
 			activeUserIds.add(userId);
-			this.setUserSpeaking(userId, true);
+		}
+
+		this.observerSpeakingUserIds.clear();
+		activeUserIds.forEach((userId) => this.observerSpeakingUserIds.add(userId));
+
+		for (const userId of activeUserIds) {
+			if (!this.hasActiveClientLease(userId, now)) {
+				this.setUserSpeaking(userId, true);
+			}
 		}
 
 		for (const userId of this.speakingUserIds) {
-			if (!activeUserIds.has(userId) && !this.clientDrivenSpeakingUserIds.has(userId)) {
+			if (!activeUserIds.has(userId) && !this.hasActiveClientLease(userId, now)) {
 				this.scheduleUserSpeakingRelease(userId);
 			}
 		}
 	};
 
 	private handleVoiceActivitySilence = () => {
+		const now = Date.now();
+
+		this.observerSpeakingUserIds.clear();
+
 		for (const userId of this.speakingUserIds) {
-			if (!this.clientDrivenSpeakingUserIds.has(userId)) {
+			if (!this.hasActiveClientLease(userId, now)) {
 				this.scheduleUserSpeakingRelease(userId);
 			}
 		}
 	};
 
 	// Applies a speaking flag reported by the user's own client (newer clients).
-	// Detection runs on the client for instant feedback; once a user reports here
-	// they become client-driven and the server observer stops driving them. The
-	// sequence number guards against reordered fire-and-forget reports.
-	public applyClientVoiceActivity = (userId: number, isSpeaking: boolean, seq: number) => {
-		if (!this.getUser(userId)) {
+	// Detection runs on the client for instant feedback; an accepted report grants
+	// a short lease during which the observer defers. The report is bound to the
+	// current audio producer, rejected when muted, and sequence-ordered — see
+	// resolveClientVoiceActivity for the rules.
+	public applyClientVoiceActivity = (userId: number, isSpeaking: boolean, seq: number, producerId: string) => {
+		const user = this.getUser(userId);
+
+		if (!user) {
 			return;
 		}
 
-		// Speaking requires an active mic producer. A `true` that arrives after the
-		// producer closed (e.g. it was in flight when the user muted) must not
-		// resurrect a ring that producer-close cleanup already cleared.
-		if (isSpeaking && !this.audioProducers[userId]) {
+		const decision = resolveClientVoiceActivity(
+			this.clientVoiceActivityOrdering.get(userId),
+			{ producerId, seq, isSpeaking },
+			{
+				currentProducerId: this.audioProducers[userId]?.id,
+				micMuted: user.state.micMuted,
+				now: Date.now(),
+			},
+		);
+
+		if (!decision.accept) {
 			return;
 		}
 
-		const isFirstReport = !this.clientDrivenSpeakingUserIds.has(userId);
+		this.clientVoiceActivityOrdering.set(userId, decision.ordering);
+		this.setClientVoiceActivityLease(userId, decision.lease);
+		this.setUserSpeaking(userId, decision.isSpeaking);
+	};
 
-		if (!isFirstReport) {
-			const lastSeq = this.voiceActivitySeqByUser.get(userId);
+	private hasActiveClientLease = (userId: number, now: number): boolean => {
+		const lease = this.clientVoiceActivityLeases.get(userId);
 
-			if (lastSeq !== undefined && seq <= lastSeq) {
-				return;
+		if (!isClientVoiceActivityLeaseActive(lease, now)) {
+			if (lease !== undefined) {
+				this.clientVoiceActivityLeases.delete(userId);
 			}
+
+			return false;
 		}
 
-		this.clientDrivenSpeakingUserIds.add(userId);
-		this.voiceActivitySeqByUser.set(userId, seq);
+		return true;
+	};
+
+	private setClientVoiceActivityLease = (userId: number, lease: ClientVoiceActivityLease) => {
+		const existingTimer = this.clientVoiceActivityLeaseTimers.get(userId);
+
+		if (existingTimer !== undefined) {
+			clearTimeout(existingTimer);
+		}
+
+		this.clientVoiceActivityLeases.set(userId, lease);
+
+		const timeout = setTimeout(
+			() => {
+				this.clientVoiceActivityLeaseTimers.delete(userId);
+
+				if (this.clientVoiceActivityLeases.get(userId) !== lease) {
+					return;
+				}
+
+				this.clientVoiceActivityLeases.delete(userId);
+				this.applyObserverVoiceActivity(userId);
+			},
+			Math.max(0, lease.expiresAt - Date.now()),
+		);
+
+		timeout.unref?.();
+		this.clientVoiceActivityLeaseTimers.set(userId, timeout);
+	};
+
+	private applyObserverVoiceActivity = (userId: number) => {
+		const user = this.getUser(userId);
+		const hasAudioProducer = this.audioProducers[userId] !== undefined;
+		const isSpeaking =
+			user !== undefined && !user.state.micMuted && hasAudioProducer && this.observerSpeakingUserIds.has(userId);
+
 		this.setUserSpeaking(userId, isSpeaking);
 	};
 
 	private clearClientVoiceActivity = (userId: number) => {
-		this.clientDrivenSpeakingUserIds.delete(userId);
-		this.voiceActivitySeqByUser.delete(userId);
+		const leaseTimer = this.clientVoiceActivityLeaseTimers.get(userId);
+
+		if (leaseTimer !== undefined) {
+			clearTimeout(leaseTimer);
+			this.clientVoiceActivityLeaseTimers.delete(userId);
+		}
+
+		this.clientVoiceActivityLeases.delete(userId);
+		this.clientVoiceActivityOrdering.delete(userId);
 	};
 
 	private scheduleUserSpeakingRelease = (userId: number) => {
@@ -1234,11 +1311,17 @@ class VoiceRuntime {
 			clearTimeout(timeout);
 		}
 
+		for (const timeout of this.clientVoiceActivityLeaseTimers.values()) {
+			clearTimeout(timeout);
+		}
+
 		this.voiceActivityReleaseTimers.clear();
+		this.clientVoiceActivityLeaseTimers.clear();
 		this.voiceActivityProducerIdsByUser.clear();
 		this.voiceActivityUserIdsByProducer.clear();
-		this.clientDrivenSpeakingUserIds.clear();
-		this.voiceActivitySeqByUser.clear();
+		this.observerSpeakingUserIds.clear();
+		this.clientVoiceActivityLeases.clear();
+		this.clientVoiceActivityOrdering.clear();
 
 		for (const userId of this.speakingUserIds) {
 			pubsub.publishForChannel(this.id, ServerEvents.VOICE_ACTIVITY_UPDATE, {

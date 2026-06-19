@@ -1030,17 +1030,22 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			const { broadcast, hasAnnouncedSpeaking } = resolveActivityBroadcast(isSpeaking, hasAnnouncedSpeakingRef.current);
 			hasAnnouncedSpeakingRef.current = hasAnnouncedSpeaking;
 
-			if (broadcast === undefined) {
+			// Bind every report to the current audio producer so the server can
+			// reject stale reports from a replaced producer. No producer means
+			// nothing to bind to (and nothing to be speaking through).
+			const producerId = localAudioProducer.current?.id;
+
+			if (broadcast === undefined || producerId === undefined) {
 				return;
 			}
 
 			const seq = (voiceActivitySeqRef.current += 1);
 
 			void getTRPCClient()
-				.voice.updateActivity.mutate({ isSpeaking: broadcast, seq })
+				.voice.updateActivity.mutate({ isSpeaking: broadcast, seq, producerId })
 				.catch(() => {});
 		},
-		[ownUserId],
+		[localAudioProducer, ownUserId],
 	);
 
 	const stopLocalVoiceActivityMonitoring = useCallback(
