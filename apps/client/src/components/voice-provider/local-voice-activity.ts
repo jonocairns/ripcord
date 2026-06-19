@@ -1,3 +1,9 @@
+// Speaking level is read from WebRTC getStats() rather than a Web Audio
+// AnalyserNode tap on the mic track. AGENTS.md cautions that attaching a live
+// in-call mic track to a MediaStreamAudioSourceNode can leak speech-correlated
+// static into playback on Chromium/Electron. That caution is unconfirmed, but
+// getStats sidesteps the risk entirely at negligible cost; if the AnalyserNode
+// path is ever verified safe it would remove the Firefox audioLevel gap below.
 type LocalVoiceActivityStatsProvider = {
 	getStats: () => Promise<RTCStatsReport>;
 };

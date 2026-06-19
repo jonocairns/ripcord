@@ -163,6 +163,14 @@ class VoiceRuntime {
 	private voiceActivityUserIdsByProducer = new Map<string, number>();
 	private speakingUserIds = new Set<number>();
 	private voiceActivityReleaseTimers = new Map<number, ReturnType<typeof setTimeout>>();
+	// Users whose own client reports speaking state directly (newer clients). The
+	// server observer is the fallback for everyone else, so older clients that
+	// never call updateActivity keep working. Cleared when the user's audio
+	// producer goes away so a reconnecting session starts fresh.
+	private clientDrivenSpeakingUserIds = new Set<number>();
+	// Last accepted sequence number per client-driven user, used to drop
+	// reordered fire-and-forget activity reports.
+	private voiceActivitySeqByUser = new Map<number, number>();
 	private mediaLiveness = new Map<number, TMediaLivenessState>();
 	private mediaLivenessTimer?: ReturnType<typeof setInterval>;
 	private mediaLivenessCheckInFlight = false;
@@ -310,6 +318,7 @@ class VoiceRuntime {
 		this.state.users = this.state.users.filter((u) => u.userId !== userId);
 
 		this.cleanupUserResources(userId);
+		this.clearClientVoiceActivity(userId);
 		this.setUserSpeaking(userId, false);
 	};
 
@@ -986,6 +995,9 @@ class VoiceRuntime {
 		}
 
 		this.voiceActivityUserIdsByProducer.delete(producer.id);
+		// The mic stream is gone: drop client-driven state so a reconnecting
+		// session is observed again until its client re-reports.
+		this.clearClientVoiceActivity(userId);
 		this.setUserSpeaking(userId, false);
 	};
 
@@ -996,7 +1008,9 @@ class VoiceRuntime {
 			const userId = this.voiceActivityUserIdsByProducer.get(producer.id);
 			const user = userId === undefined ? undefined : this.getUser(userId);
 
-			if (userId === undefined || !user || user.state.micMuted) {
+			// A client-driven user reports their own speaking state; the observer
+			// must not also drive them or the two sources would fight.
+			if (userId === undefined || !user || user.state.micMuted || this.clientDrivenSpeakingUserIds.has(userId)) {
 				continue;
 			}
 
@@ -1005,7 +1019,7 @@ class VoiceRuntime {
 		}
 
 		for (const userId of this.speakingUserIds) {
-			if (!activeUserIds.has(userId)) {
+			if (!activeUserIds.has(userId) && !this.clientDrivenSpeakingUserIds.has(userId)) {
 				this.scheduleUserSpeakingRelease(userId);
 			}
 		}
@@ -1013,8 +1027,39 @@ class VoiceRuntime {
 
 	private handleVoiceActivitySilence = () => {
 		for (const userId of this.speakingUserIds) {
-			this.scheduleUserSpeakingRelease(userId);
+			if (!this.clientDrivenSpeakingUserIds.has(userId)) {
+				this.scheduleUserSpeakingRelease(userId);
+			}
 		}
+	};
+
+	// Applies a speaking flag reported by the user's own client (newer clients).
+	// Detection runs on the client for instant feedback; once a user reports here
+	// they become client-driven and the server observer stops driving them. The
+	// sequence number guards against reordered fire-and-forget reports.
+	public applyClientVoiceActivity = (userId: number, isSpeaking: boolean, seq: number) => {
+		if (!this.getUser(userId)) {
+			return;
+		}
+
+		const isFirstReport = !this.clientDrivenSpeakingUserIds.has(userId);
+
+		if (!isFirstReport) {
+			const lastSeq = this.voiceActivitySeqByUser.get(userId);
+
+			if (lastSeq !== undefined && seq <= lastSeq) {
+				return;
+			}
+		}
+
+		this.clientDrivenSpeakingUserIds.add(userId);
+		this.voiceActivitySeqByUser.set(userId, seq);
+		this.setUserSpeaking(userId, isSpeaking);
+	};
+
+	private clearClientVoiceActivity = (userId: number) => {
+		this.clientDrivenSpeakingUserIds.delete(userId);
+		this.voiceActivitySeqByUser.delete(userId);
 	};
 
 	private scheduleUserSpeakingRelease = (userId: number) => {
@@ -1185,6 +1230,8 @@ class VoiceRuntime {
 		this.voiceActivityReleaseTimers.clear();
 		this.voiceActivityProducerIdsByUser.clear();
 		this.voiceActivityUserIdsByProducer.clear();
+		this.clientDrivenSpeakingUserIds.clear();
+		this.voiceActivitySeqByUser.clear();
 
 		for (const userId of this.speakingUserIds) {
 			pubsub.publishForChannel(this.id, ServerEvents.VOICE_ACTIVITY_UPDATE, {

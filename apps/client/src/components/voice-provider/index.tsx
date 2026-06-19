@@ -1002,21 +1002,53 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	} = useTransportStats(getConfiguredVideoMaxBitrates);
 
 	const handleVoiceActivityUpdate = useCallback((activity: { userId: number; isSpeaking: boolean }) => {
+		// Remote users come from the server relay. For our own id this is the
+		// server observer's fallback layer; the dual-source store prefers our
+		// local fast-path over it whenever a local reading is available.
 		voiceActivityStoreRef.current.setServerUserActivity(activity.userId, {
 			isSpeaking: activity.isSpeaking,
 		});
 	}, []);
+
+	// Updates the own ring instantly from the local fast-path and broadcasts the
+	// transition so remote peers light up our ring without waiting on the
+	// server's 250ms audio observer. A monotonic sequence number lets the server
+	// drop reordered fire-and-forget mutations — a late `false` must never
+	// clobber a newer `true`.
+	const voiceActivitySeqRef = useRef(0);
+
+	const applyOwnLocalActivity = useCallback(
+		(isSpeaking: boolean | undefined) => {
+			if (ownUserId === undefined) {
+				return;
+			}
+
+			voiceActivityStoreRef.current.setLocalUserActivity(ownUserId, isSpeaking);
+
+			// `undefined` means we have no local reading (e.g. Firefox doesn't
+			// expose getStats audioLevel). Don't broadcast a state we didn't
+			// measure — the server observer drives our ring for those clients.
+			if (isSpeaking === undefined) {
+				return;
+			}
+
+			const seq = (voiceActivitySeqRef.current += 1);
+
+			void getTRPCClient()
+				.voice.updateActivity.mutate({ isSpeaking, seq })
+				.catch(() => {});
+		},
+		[ownUserId],
+	);
 
 	const stopLocalVoiceActivityMonitoring = useCallback(
 		(isSpeaking: boolean | undefined = undefined) => {
 			localVoiceActivityCleanupRef.current?.();
 			localVoiceActivityCleanupRef.current = undefined;
 
-			if (ownUserId !== undefined) {
-				voiceActivityStoreRef.current.setLocalUserActivity(ownUserId, isSpeaking);
-			}
+			applyOwnLocalActivity(isSpeaking);
 		},
-		[ownUserId],
+		[applyOwnLocalActivity],
 	);
 
 	const startLocalVoiceActivityMonitoring = useCallback(
@@ -1028,7 +1060,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 
 			if (ownVoiceStateSelector(useServerStore.getState()).micMuted) {
-				voiceActivityStoreRef.current.setLocalUserActivity(ownUserId, false);
+				applyOwnLocalActivity(false);
 				return;
 			}
 
@@ -1039,11 +1071,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						return;
 					}
 
-					voiceActivityStoreRef.current.setLocalUserActivity(ownUserId, isSpeaking);
+					applyOwnLocalActivity(isSpeaking);
 				},
 			});
 		},
-		[isConnected, localAudioProducer, ownUserId, stopLocalVoiceActivityMonitoring],
+		[applyOwnLocalActivity, isConnected, localAudioProducer, ownUserId, stopLocalVoiceActivityMonitoring],
 	);
 
 	useEffect(() => {
