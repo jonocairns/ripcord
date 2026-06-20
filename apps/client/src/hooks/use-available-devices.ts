@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 
+// Drivers that expose virtual microphones (e.g. NVIDIA Broadcast / RTX Voice)
+// often start after the app has already enumerated devices on a cold boot. We
+// debounce the burst of `devicechange` events the OS emits while the driver
+// settles, then re-enumerate so the user's preferred device can be re-resolved.
+const DEVICE_CHANGE_DEBOUNCE_MS = 300;
+
 const useAvailableDevices = () => {
 	const [inputDevices, setInputDevices] = useState<(MediaDeviceInfo | undefined)[]>([]);
 	const [playbackDevices, setPlaybackDevices] = useState<(MediaDeviceInfo | undefined)[]>([]);
@@ -24,6 +30,35 @@ const useAvailableDevices = () => {
 
 	useEffect(() => {
 		loadDevices();
+
+		const mediaDevices = navigator.mediaDevices;
+
+		if (!mediaDevices?.addEventListener) {
+			return;
+		}
+
+		let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+		const handleDeviceChange = () => {
+			if (debounceTimer !== undefined) {
+				clearTimeout(debounceTimer);
+			}
+
+			debounceTimer = setTimeout(() => {
+				debounceTimer = undefined;
+				loadDevices();
+			}, DEVICE_CHANGE_DEBOUNCE_MS);
+		};
+
+		mediaDevices.addEventListener('devicechange', handleDeviceChange);
+
+		return () => {
+			if (debounceTimer !== undefined) {
+				clearTimeout(debounceTimer);
+			}
+
+			mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+		};
 	}, [loadDevices]);
 
 	return { inputDevices, playbackDevices, videoDevices, loading };

@@ -1,7 +1,7 @@
 import { createContext, memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { getLocalStorageItemAsJSON, LocalStorageKey, setLocalStorageItemAsJSON } from '@/helpers/storage';
+import { useAvailableDevices } from '@/hooks/use-available-devices';
 import type { TDeviceSettings } from '@/types';
-import { useAvailableDevices } from './hooks/use-available-devices';
 import { normalizeStoredMediaDeviceId } from './media-device-selection';
 import { DEFAULT_DEVICE_SETTINGS, migrateDeviceSettings } from './migrate-device-settings';
 
