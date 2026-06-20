@@ -61,7 +61,7 @@ describe('getAudioLevelFromStats', () => {
 });
 
 describe('startLocalVoiceActivityMonitor', () => {
-	it('reports speech immediately and applies a release delay', async () => {
+	it('waits for quiet startup samples, requires sustained speech, and applies a release delay', async () => {
 		const loudReport = createStatsReport([
 			createRtcStat({
 				kind: 'audio',
@@ -80,7 +80,7 @@ describe('startLocalVoiceActivityMonitor', () => {
 			statsProvider: {
 				getStats: async () => {
 					sampleCount += 1;
-					return sampleCount === 1 ? loudReport : silentReport;
+					return sampleCount <= 3 || sampleCount >= 7 ? silentReport : loudReport;
 				},
 			},
 			onUpdate: (isSpeaking) => {
@@ -90,14 +90,79 @@ describe('startLocalVoiceActivityMonitor', () => {
 			releaseDelayMs: 20,
 		});
 
-		await wait(10);
-		expect(updates).toEqual([false, true]);
+		await wait(20);
+		expect(updates).toEqual([undefined, false]);
+
+		await wait(15);
+		expect(updates).toEqual([undefined, false, true]);
 
 		await wait(30);
-		expect(updates).toEqual([false, true, false]);
+		expect(updates).toEqual([undefined, false, true, false]);
 
 		stop();
-		expect(updates).toEqual([false, true, false, undefined]);
+		expect(updates).toEqual([undefined, false, true, false, undefined]);
+	});
+
+	it('does not report a loud startup transient before the microphone settles', async () => {
+		const loudReport = createStatsReport([
+			createRtcStat({
+				kind: 'audio',
+				audioLevel: 0.4,
+			}),
+		]);
+		const silentReport = createStatsReport([
+			createRtcStat({
+				kind: 'audio',
+				audioLevel: 0,
+			}),
+		]);
+		let sampleCount = 0;
+		const updates: Array<boolean | undefined> = [];
+		const stop = startLocalVoiceActivityMonitor({
+			statsProvider: {
+				getStats: async () => {
+					sampleCount += 1;
+					return sampleCount <= 8 ? loudReport : silentReport;
+				},
+			},
+			onUpdate: (isSpeaking) => {
+				updates.push(isSpeaking);
+			},
+			pollIntervalMs: 2,
+			warmupTimeoutMs: 100,
+		});
+
+		await wait(30);
+		expect(updates).toEqual([undefined, false]);
+
+		stop();
+		expect(updates).toEqual([undefined, false, undefined]);
+	});
+
+	it('allows sustained speech after the bounded warm-up timeout', async () => {
+		const loudReport = createStatsReport([
+			createRtcStat({
+				kind: 'audio',
+				audioLevel: 0.4,
+			}),
+		]);
+		const updates: Array<boolean | undefined> = [];
+		const stop = startLocalVoiceActivityMonitor({
+			statsProvider: {
+				getStats: async () => loudReport,
+			},
+			onUpdate: (isSpeaking) => {
+				updates.push(isSpeaking);
+			},
+			pollIntervalMs: 5,
+			warmupTimeoutMs: 15,
+		});
+
+		await wait(35);
+		expect(updates).toEqual([undefined, true]);
+
+		stop();
+		expect(updates).toEqual([undefined, true, undefined]);
 	});
 
 	it('falls back to server activity when stats do not expose an audio level', async () => {
@@ -113,7 +178,7 @@ describe('startLocalVoiceActivityMonitor', () => {
 		});
 
 		await wait(5);
-		expect(updates).toEqual([false, undefined]);
+		expect(updates).toEqual([undefined]);
 
 		stop();
 	});
