@@ -17,6 +17,9 @@ type ActivityBroadcastState = {
 
 const LOCAL_VOICE_ACTIVITY_POLL_INTERVAL_MS = 50;
 const LOCAL_VOICE_ACTIVITY_RELEASE_DELAY_MS = 350;
+const LOCAL_VOICE_ACTIVITY_WARMUP_QUIET_SAMPLES = 3;
+const LOCAL_VOICE_ACTIVITY_WARMUP_TIMEOUT_MS = 1_500;
+const LOCAL_VOICE_ACTIVITY_ATTACK_SAMPLES = 3;
 // Mirror the server AudioLevelObserver threshold (-60 dBov) so the local
 // fast-path and the server signal agree on what counts as speaking. WebRTC
 // getStats() audioLevel is linear where 1.0 == 0 dBov, so convert dBov to the
@@ -53,16 +56,26 @@ const startLocalVoiceActivityMonitor = ({
 	onUpdate,
 	pollIntervalMs = LOCAL_VOICE_ACTIVITY_POLL_INTERVAL_MS,
 	releaseDelayMs = LOCAL_VOICE_ACTIVITY_RELEASE_DELAY_MS,
+	warmupQuietSamples = LOCAL_VOICE_ACTIVITY_WARMUP_QUIET_SAMPLES,
+	warmupTimeoutMs = LOCAL_VOICE_ACTIVITY_WARMUP_TIMEOUT_MS,
+	attackSamples = LOCAL_VOICE_ACTIVITY_ATTACK_SAMPLES,
 }: {
 	statsProvider: LocalVoiceActivityStatsProvider;
 	onUpdate: (isSpeaking: LocalVoiceActivityUpdate) => void;
 	pollIntervalMs?: number;
 	releaseDelayMs?: number;
+	warmupQuietSamples?: number;
+	warmupTimeoutMs?: number;
+	attackSamples?: number;
 }): (() => void) => {
 	let cancelled = false;
 	let pollTimer: ReturnType<typeof setTimeout> | undefined;
 	let releaseTimer: ReturnType<typeof setTimeout> | undefined;
-	let currentActivity: LocalVoiceActivityUpdate = false;
+	let currentActivity: LocalVoiceActivityUpdate;
+	const warmupStartedAt = Date.now();
+	let quietSampleCount = 0;
+	let loudSampleCount = 0;
+	let hasWarmedUp = false;
 
 	const update = (isSpeaking: LocalVoiceActivityUpdate) => {
 		if (currentActivity === isSpeaking) {
@@ -98,19 +111,45 @@ const startLocalVoiceActivityMonitor = ({
 
 			if (audioLevel === undefined) {
 				clearReleaseTimer();
+				quietSampleCount = 0;
+				loudSampleCount = 0;
 				update(undefined);
-			} else if (audioLevel > LOCAL_VOICE_ACTIVITY_SPEAKING_THRESHOLD) {
-				clearReleaseTimer();
-				update(true);
-			} else if (currentActivity === true) {
-				if (releaseTimer === undefined) {
-					releaseTimer = setTimeout(() => {
-						releaseTimer = undefined;
-						update(false);
-					}, releaseDelayMs);
-				}
 			} else {
-				update(false);
+				const isLoud = audioLevel > LOCAL_VOICE_ACTIVITY_SPEAKING_THRESHOLD;
+
+				if (!hasWarmedUp) {
+					quietSampleCount = isLoud ? 0 : quietSampleCount + 1;
+					hasWarmedUp = quietSampleCount >= warmupQuietSamples || Date.now() - warmupStartedAt >= warmupTimeoutMs;
+
+					if (!hasWarmedUp) {
+						update(undefined);
+					}
+				}
+
+				if (!hasWarmedUp) {
+					loudSampleCount = 0;
+				} else if (isLoud) {
+					loudSampleCount += 1;
+
+					if (loudSampleCount >= attackSamples || currentActivity === true) {
+						loudSampleCount = attackSamples;
+						clearReleaseTimer();
+						update(true);
+					}
+				} else {
+					loudSampleCount = 0;
+
+					if (currentActivity === true) {
+						if (releaseTimer === undefined) {
+							releaseTimer = setTimeout(() => {
+								releaseTimer = undefined;
+								update(false);
+							}, releaseDelayMs);
+						}
+					} else {
+						update(false);
+					}
+				}
 			}
 		} catch {
 			// Keep the last known state and retry. Producer replacement and
@@ -124,7 +163,7 @@ const startLocalVoiceActivityMonitor = ({
 		}
 	};
 
-	onUpdate(false);
+	onUpdate(undefined);
 	void sample();
 
 	return () => {
