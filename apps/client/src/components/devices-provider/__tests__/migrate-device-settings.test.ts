@@ -10,6 +10,7 @@ describe('migrateDeviceSettings', () => {
 		expect(DEFAULT_DEVICE_SETTINGS.micQualityMode).toBe(MicQualityMode.AUTO);
 		expect(DEFAULT_DEVICE_SETTINGS.pushToTalkKeybind).toBeUndefined();
 		expect(DEFAULT_DEVICE_SETTINGS.pushToMuteKeybind).toBeUndefined();
+		expect(DEFAULT_DEVICE_SETTINGS.pushReleaseDelayMs).toBe(20);
 		expect(DEFAULT_DEVICE_SETTINGS.echoCancellation).toBe(true);
 		expect(DEFAULT_DEVICE_SETTINGS.noiseSuppression).toBe(true);
 		expect(DEFAULT_DEVICE_SETTINGS.wasmNoiseSuppressionEnabled).toBe(false);
@@ -154,5 +155,25 @@ describe('migrateDeviceSettings', () => {
 
 		expect(migrated.pushToTalkKeybind).toBe('Control+KeyV');
 		expect(migrated.pushToMuteKeybind).toBeUndefined();
+	});
+
+	it('preserves a valid push release delay', () => {
+		expect(migrateDeviceSettings({ pushReleaseDelayMs: 200 }).pushReleaseDelayMs).toBe(200);
+	});
+
+	it('clamps an out-of-range push release delay', () => {
+		expect(migrateDeviceSettings({ pushReleaseDelayMs: 3000 }).pushReleaseDelayMs).toBe(2000);
+		expect(migrateDeviceSettings({ pushReleaseDelayMs: -5 }).pushReleaseDelayMs).toBe(0);
+	});
+
+	it('rounds a fractional push release delay', () => {
+		expect(migrateDeviceSettings({ pushReleaseDelayMs: 25.7 }).pushReleaseDelayMs).toBe(26);
+	});
+
+	it('falls back to the default for a non-numeric push release delay', () => {
+		expect(
+			migrateDeviceSettings({ pushReleaseDelayMs: 'fast' as unknown as number }).pushReleaseDelayMs,
+		).toBe(20);
+		expect(migrateDeviceSettings({ pushReleaseDelayMs: Number.NaN }).pushReleaseDelayMs).toBe(20);
 	});
 });
