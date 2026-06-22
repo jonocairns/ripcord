@@ -19,6 +19,7 @@ import { Label } from '@/components/ui/label';
 import { LoadingCard } from '@/components/ui/loading-card';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
+import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useAvailableDevices } from '@/hooks/use-available-devices';
@@ -495,6 +496,24 @@ const Devices = memo(() => {
 										</Button>
 									</div>
 								</div>
+
+								{(values.pushToTalkKeybind || values.pushToMuteKeybind) && (
+									<div className="flex items-center gap-3">
+										<Label className="w-24 shrink-0 text-sm">Release delay</Label>
+										<Slider
+											min={0}
+											max={2000}
+											step={10}
+											value={[values.pushReleaseDelayMs]}
+											onValueChange={([value]) => onChange('pushReleaseDelayMs', value ?? 0)}
+											rightSlot={
+												<span className="w-14 text-right font-mono text-xs text-muted-foreground">
+													{values.pushReleaseDelayMs}ms
+												</span>
+											}
+										/>
+									</div>
+								)}
 							</div>
 						</div>
 					)}

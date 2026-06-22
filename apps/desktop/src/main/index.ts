@@ -366,6 +366,7 @@ const createMainWindow = () => {
 	const icon = resolveAppIconPath();
 	const indexPath = resolveRendererIndexPath();
 	let windowCloseFlushCompleted = false;
+	let rendererUnresponsiveSince: number | undefined;
 
 	mainWindow = new BrowserWindow({
 		width: 1440,
@@ -382,6 +383,13 @@ const createMainWindow = () => {
 			nodeIntegration: false,
 			sandbox: true,
 			preload: path.join(__dirname, '..', 'preload', 'index.cjs'),
+			// Chromium throttles (and can freeze) the renderer when the window is
+			// hidden, minimized, or occluded by another fullscreen window. For a
+			// real-time voice/screen-share client that freezes the whole renderer
+			// process — stopping the WS keepalive and WebRTC media — so the server
+			// tears the voice session down (1006 + media-liveness) even though
+			// nothing crashed. Keep the renderer running at full speed always.
+			backgroundThrottling: false,
 		},
 	});
 	mainWindow.setMenuBarVisibility(false);
@@ -449,6 +457,32 @@ const createMainWindow = () => {
 			processType: 'renderer',
 			reason: details.reason,
 			exitCode: details.exitCode,
+		});
+	});
+
+	// A renderer can hang without crashing (so render-process-gone never fires):
+	// a frozen renderer stops pumping the WS keepalive and WebRTC media, so the
+	// server tears the voice session down (1006 + media-liveness) with no crash
+	// and no telemetry. Surface these explicitly so the hang — and its duration —
+	// is visible instead of silent.
+	mainWindow.webContents.on('unresponsive', () => {
+		rendererUnresponsiveSince = Date.now();
+		console.error('[desktop] Renderer unresponsive');
+		Sentry.captureMessage('Renderer unresponsive', {
+			level: 'warning',
+			tags: { component: 'renderer', event: 'unresponsive' },
+		});
+	});
+
+	mainWindow.webContents.on('responsive', () => {
+		const unresponsiveDurationMs =
+			rendererUnresponsiveSince === undefined ? undefined : Date.now() - rendererUnresponsiveSince;
+		rendererUnresponsiveSince = undefined;
+		console.error('[desktop] Renderer responsive again', { unresponsiveDurationMs });
+		Sentry.captureMessage('Renderer responsive again', {
+			level: 'info',
+			tags: { component: 'renderer', event: 'responsive' },
+			...(unresponsiveDurationMs === undefined ? {} : { extra: { unresponsiveDurationMs } }),
 		});
 	});
 

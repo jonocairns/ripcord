@@ -61,6 +61,10 @@ export type TDeviceSettings = {
 	micQualityMode: MicQualityMode;
 	pushToTalkKeybind: string | undefined;
 	pushToMuteKeybind: string | undefined;
+	// How long a push key holds its state past release (ms): push-to-talk keeps the
+	// mic open, push-to-mute keeps it muted, so a quick tap doesn't clip the tail of
+	// speech. Shared by both keys. 0 = instant.
+	pushReleaseDelayMs: number;
 	webcamId: string | undefined;
 	webcamGroupId: string | undefined;
 	webcamLabel: string | undefined;

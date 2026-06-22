@@ -8,6 +8,7 @@ type TLegacyDeviceSettings = Partial<TDeviceSettings> & {
 };
 
 const DEFAULT_SIDECAR_DFN_MIX = 0.9;
+const PUSH_RELEASE_DELAY_MAX_MS = 2_000;
 
 const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
 	microphoneId: undefined,
@@ -16,6 +17,7 @@ const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
 	micQualityMode: MicQualityMode.AUTO,
 	pushToTalkKeybind: undefined,
 	pushToMuteKeybind: undefined,
+	pushReleaseDelayMs: 20,
 	webcamId: undefined,
 	webcamGroupId: undefined,
 	webcamLabel: undefined,
@@ -64,6 +66,10 @@ const migrateDeviceSettings = (incomingSettings: TLegacyDeviceSettings | undefin
 
 	const pushToTalkKeybind = normalizePushKeybind(incomingSettings.pushToTalkKeybind);
 	const pushToMuteKeybind = normalizePushKeybind(incomingSettings.pushToMuteKeybind);
+	const pushReleaseDelayMs =
+		typeof incomingSettings.pushReleaseDelayMs === 'number' && Number.isFinite(incomingSettings.pushReleaseDelayMs)
+			? Math.min(PUSH_RELEASE_DELAY_MAX_MS, Math.max(0, Math.round(incomingSettings.pushReleaseDelayMs)))
+			: DEFAULT_DEVICE_SETTINGS.pushReleaseDelayMs;
 	const sidecarDfnMix =
 		typeof incomingSettings.sidecarDfnMix === 'number' && Number.isFinite(incomingSettings.sidecarDfnMix)
 			? Math.min(1, Math.max(0, incomingSettings.sidecarDfnMix))
@@ -122,6 +128,7 @@ const migrateDeviceSettings = (incomingSettings: TLegacyDeviceSettings | undefin
 		sidecarNoiseGateFloorDbfs,
 		pushToTalkKeybind,
 		pushToMuteKeybind: pushToMuteKeybind && pushToMuteKeybind === pushToTalkKeybind ? undefined : pushToMuteKeybind,
+		pushReleaseDelayMs,
 	};
 };
 

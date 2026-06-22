@@ -1,5 +1,5 @@
-import { Toaster } from '@/components/ui/sonner';
 import * as Sentry from '@sentry/react';
+import { Toaster } from '@/components/ui/sonner';
 import 'prosemirror-view/style/prosemirror.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
