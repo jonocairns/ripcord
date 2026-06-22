@@ -478,7 +478,7 @@ const createMainWindow = () => {
 		const unresponsiveDurationMs =
 			rendererUnresponsiveSince === undefined ? undefined : Date.now() - rendererUnresponsiveSince;
 		rendererUnresponsiveSince = undefined;
-		console.error('[desktop] Renderer responsive again', { unresponsiveDurationMs });
+		console.info('[desktop] Renderer responsive again', { unresponsiveDurationMs });
 		Sentry.captureMessage('Renderer responsive again', {
 			level: 'info',
 			tags: { component: 'renderer', event: 'responsive' },
