@@ -15,7 +15,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "drizzle-orm": "^0.44.6",
+    "drizzle-orm": "^0.45.2",
     "js-sha256": "^0.11.1",
     "mediasoup": "3.19.17",
     "parse5": "^7.3.0",
