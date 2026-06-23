@@ -976,12 +976,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[currentChannelExternalStreams, stopWatchingConsumedStream],
 	);
 
-	// Surface the configured per-encoding maxBitrate ceiling to the stats panel,
-	// keyed by ssrc so the collector can match it to the right outbound stream.
-	const getConfiguredVideoMaxBitrates = useCallback((): Map<number, number> => {
-		const maxBitrateBySsrc = new Map<number, number>();
+	// Surface source labels and configured maxBitrate ceilings to the stats
+	// panel, keyed by SSRC so the collector can identify each primary stream.
+	const getVideoSenderMetadata = useCallback((): Map<
+		number,
+		{ configuredMaxBitrate: number | null; label: string }
+	> => {
+		const metadataBySsrc = new Map<number, { configuredMaxBitrate: number | null; label: string }>();
+		const producers = [
+			{ producerRef: localScreenShareProducer, label: 'Screen share' },
+			{ producerRef: localVideoProducer, label: 'Webcam' },
+		];
 
-		for (const producerRef of [localScreenShareProducer, localVideoProducer]) {
+		for (const { producerRef, label } of producers) {
 			const sender = producerRef.current?.rtpSender;
 
 			if (!sender) {
@@ -992,13 +999,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				// `ssrc` is populated at runtime (Chrome) but absent from the DOM lib type.
 				const { ssrc } = encoding as RTCRtpEncodingParameters & { ssrc?: number };
 
-				if (typeof ssrc === 'number' && typeof encoding.maxBitrate === 'number') {
-					maxBitrateBySsrc.set(ssrc, encoding.maxBitrate);
+				if (typeof ssrc === 'number') {
+					metadataBySsrc.set(ssrc, {
+						configuredMaxBitrate: typeof encoding.maxBitrate === 'number' ? encoding.maxBitrate : null,
+						label,
+					});
 				}
 			}
 		}
 
-		return maxBitrateBySsrc;
+		return metadataBySsrc;
 	}, [localScreenShareProducer, localVideoProducer]);
 
 	const {
@@ -1006,7 +1016,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startMonitoring,
 		stopMonitoring,
 		resetStats,
-	} = useTransportStats(getConfiguredVideoMaxBitrates);
+	} = useTransportStats(getVideoSenderMetadata);
 
 	const handleVoiceActivityUpdate = useCallback((activity: { userId: number; isSpeaking: boolean }) => {
 		// Remote users come from the server relay. For our own id this is the

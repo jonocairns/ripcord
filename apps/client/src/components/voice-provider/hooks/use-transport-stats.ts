@@ -17,6 +17,7 @@ export type TransportStats = {
 
 export type VideoSenderStats = {
 	id: string;
+	label: string | null;
 	codec: string | null;
 	width: number | null;
 	height: number | null;
@@ -128,12 +129,18 @@ const shortCodecName = (mimeType: string | undefined): string | null => {
 	return slashIndex === -1 ? mimeType : mimeType.slice(slashIndex + 1);
 };
 
-// Maps an outbound video ssrc to its configured `maxBitrate` (bps). The voice
-// provider supplies this from the live producers' sender parameters so the
-// stats panel can show the configured ceiling alongside the actual send rate.
-type ConfiguredMaxBitrateGetter = () => Map<number, number>;
+type VideoSenderMetadata = {
+	configuredMaxBitrate: number | null;
+	label: string;
+};
 
-const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter) => {
+type VideoSenderMetadataGetter = () => Map<number, VideoSenderMetadata>;
+
+const isAuxiliaryVideoCodec = (codec: string | null): boolean => {
+	return codec?.toLowerCase() === 'rtx';
+};
+
+const useTransportStats = (getVideoSenderMetadata?: VideoSenderMetadataGetter) => {
 	const storeRef = useRef<TMutableTransportStatsStore | undefined>(undefined);
 
 	if (!storeRef.current) {
@@ -144,8 +151,8 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 
 	// Keep the latest getter in a ref so parseTransportStats (a []-dep callback)
 	// always reads the current producers without re-creating the callback.
-	const configuredMaxBitrateGetterRef = useRef<ConfiguredMaxBitrateGetter | undefined>(getConfiguredMaxBitrates);
-	configuredMaxBitrateGetterRef.current = getConfiguredMaxBitrates;
+	const videoSenderMetadataGetterRef = useRef<VideoSenderMetadataGetter | undefined>(getVideoSenderMetadata);
+	videoSenderMetadataGetterRef.current = getVideoSenderMetadata;
 
 	const intervalRef = useRef<NodeJS.Timeout | null>(null);
 	const producerTransportRef = useRef<Transport | null>(null);
@@ -187,7 +194,7 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 			return shortCodecName(codecId ? codecById.get(codecId) : undefined);
 		};
 
-		const configuredMaxBitrateBySsrc = isProducer ? configuredMaxBitrateGetterRef.current?.() : undefined;
+		const videoSenderMetadataBySsrc = isProducer ? videoSenderMetadataGetterRef.current?.() : undefined;
 
 		for (const stat of statsReport.values()) {
 			if (stat.type === 'outbound-rtp' && isProducer) {
@@ -195,9 +202,18 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 				packetsSent += stat.packetsSent || 0;
 
 				if (stat.kind === 'video') {
+					const codec = resolveCodec(stat.codecId);
+
+					if (isAuxiliaryVideoCodec(codec)) {
+						continue;
+					}
+
+					const metadata = typeof stat.ssrc === 'number' ? videoSenderMetadataBySsrc?.get(stat.ssrc) : undefined;
+
 					outboundVideo.push({
 						id: stat.id,
-						codec: resolveCodec(stat.codecId),
+						label: metadata?.label ?? null,
+						codec,
 						width: stat.frameWidth ?? null,
 						height: stat.frameHeight ?? null,
 						framesPerSecond: stat.framesPerSecond ?? null,
@@ -207,8 +223,7 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 						qualityLimitationReason: stat.qualityLimitationReason ?? null,
 						encoderImplementation: stat.encoderImplementation ?? null,
 						powerEfficientEncoder: stat.powerEfficientEncoder ?? null,
-						configuredMaxBitrate:
-							typeof stat.ssrc === 'number' ? (configuredMaxBitrateBySsrc?.get(stat.ssrc) ?? null) : null,
+						configuredMaxBitrate: metadata?.configuredMaxBitrate ?? null,
 						nackCount: stat.nackCount ?? 0,
 						pliCount: stat.pliCount ?? 0,
 						firCount: stat.firCount ?? 0,
@@ -230,9 +245,15 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 				jitter += stat.jitter || 0;
 
 				if (stat.kind === 'video') {
+					const codec = resolveCodec(stat.codecId);
+
+					if (isAuxiliaryVideoCodec(codec)) {
+						continue;
+					}
+
 					inboundVideo.push({
 						id: stat.id,
-						codec: resolveCodec(stat.codecId),
+						codec,
 						width: stat.frameWidth ?? null,
 						height: stat.frameHeight ?? null,
 						framesPerSecond: stat.framesPerSecond ?? null,
@@ -470,4 +491,4 @@ const useTransportStats = (getConfiguredMaxBitrates?: ConfiguredMaxBitrateGetter
 	};
 };
 
-export { EMPTY_TRANSPORT_STATS, useTransportStats };
+export { EMPTY_TRANSPORT_STATS, isAuxiliaryVideoCodec, useTransportStats };

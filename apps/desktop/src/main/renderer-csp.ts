@@ -26,6 +26,17 @@ const PACKAGED_RENDERER_CSP = Object.entries(packagedRendererCspDirectives)
 	.map(([directive, sources]) => `${directive} ${sources.join(' ')}`)
 	.join('; ');
 
+const devRendererCspDirectives: Record<string, readonly string[]> = {
+	...packagedRendererCspDirectives,
+	// Vite's React refresh preamble is injected as an inline module script.
+	// This exception is scoped to the trusted local development renderer.
+	'script-src': [...packagedRendererCspDirectives['script-src'], "'unsafe-inline'"],
+};
+
+const DEV_RENDERER_CSP = Object.entries(devRendererCspDirectives)
+	.map(([directive, sources]) => `${directive} ${sources.join(' ')}`)
+	.join('; ');
+
 const normalizePath = (filePath: string): string => path.resolve(filePath);
 
 const isPathInsideDirectory = (filePath: string, directoryPath: string): boolean => {
@@ -60,6 +71,13 @@ const withPackagedRendererCsp = (headers: TResponseHeaders | undefined): TRespon
 	};
 };
 
+const withDevRendererCsp = (headers: TResponseHeaders | undefined): TResponseHeaders => {
+	return {
+		...headers,
+		[PACKAGED_RENDERER_CSP_HEADER]: [DEV_RENDERER_CSP],
+	};
+};
+
 const getDevRendererCspUrlPattern = (devRendererUrl: string): string => {
 	return `${new URL(devRendererUrl).origin}/*`;
 };
@@ -84,7 +102,7 @@ const installDevRendererCspHandler = (targetSession: Session, devRendererUrl: st
 			}
 
 			callback({
-				responseHeaders: withPackagedRendererCsp(details.responseHeaders),
+				responseHeaders: withDevRendererCsp(details.responseHeaders),
 			});
 		},
 	);
@@ -111,6 +129,7 @@ const installPackagedRendererCspHandler = (targetSession: Session, rendererDistP
 };
 
 export {
+	DEV_RENDERER_CSP,
 	getDevRendererCspUrlPattern,
 	installDevRendererCspHandler,
 	installPackagedRendererCspHandler,
@@ -118,5 +137,6 @@ export {
 	PACKAGED_RENDERER_CSP,
 	PACKAGED_RENDERER_CSP_HEADER,
 	PACKAGED_RENDERER_FILE_URL_PATTERN,
+	withDevRendererCsp,
 	withPackagedRendererCsp,
 };
