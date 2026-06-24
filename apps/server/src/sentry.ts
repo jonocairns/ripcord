@@ -34,20 +34,30 @@ const sanitizeString = (value: string): string =>
 		.replace(JWT_PATTERN, '[redacted-token]')
 		.replace(EMAIL_PATTERN, '[redacted-email]');
 
-const sanitizeData = (value: unknown): unknown => {
+// `seen` tracks objects already on the current walk so a cyclic request/socket/
+// plugin object in the splat args can't drive infinite recursion. Without it a
+// cycle throws a RangeError inside beforeSend, and Sentry silently drops the
+// very error event we were trying to capture.
+const sanitizeData = (value: unknown, seen: WeakSet<object> = new WeakSet()): unknown => {
 	if (typeof value === 'string') {
 		return sanitizeString(value);
 	}
 
-	if (Array.isArray(value)) {
-		return value.map((entry) => sanitizeData(entry));
-	}
-
 	if (value !== null && typeof value === 'object') {
+		if (seen.has(value)) {
+			return '[circular]';
+		}
+
+		seen.add(value);
+
+		if (Array.isArray(value)) {
+			return value.map((entry) => sanitizeData(entry, seen));
+		}
+
 		const sanitized: Record<string, unknown> = {};
 
 		for (const [key, entry] of Object.entries(value)) {
-			sanitized[key] = sanitizeData(entry);
+			sanitized[key] = sanitizeData(entry, seen);
 		}
 
 		return sanitized;
@@ -60,6 +70,13 @@ const sanitizeServerEvent = (event: ErrorEvent): ErrorEvent => ({
 	...event,
 	message: event.message ? sanitizeString(event.message) : event.message,
 	extra: event.extra ? (sanitizeData(event.extra) as ErrorEvent['extra']) : event.extra,
+	// request/contexts/user/stack-frame vars are normally absent in the compiled
+	// Bun binary (auto-instrumentation doesn't attach, sendDefaultPii is false),
+	// but a direct captureException or a dev run can still populate them — scrub
+	// them too so an Authorization header, JWT, or email can never slip through.
+	request: event.request ? (sanitizeData(event.request) as ErrorEvent['request']) : event.request,
+	contexts: event.contexts ? (sanitizeData(event.contexts) as ErrorEvent['contexts']) : event.contexts,
+	user: event.user ? (sanitizeData(event.user) as ErrorEvent['user']) : event.user,
 	breadcrumbs: event.breadcrumbs?.map((breadcrumb) => ({
 		...breadcrumb,
 		message: breadcrumb.message ? sanitizeString(breadcrumb.message) : breadcrumb.message,
@@ -71,6 +88,15 @@ const sanitizeServerEvent = (event: ErrorEvent): ErrorEvent => ({
 				values: event.exception.values.map((value) => ({
 					...value,
 					value: value.value ? sanitizeString(value.value) : value.value,
+					stacktrace: value.stacktrace
+						? {
+								...value.stacktrace,
+								frames: value.stacktrace.frames?.map((frame) => ({
+									...frame,
+									vars: frame.vars ? (sanitizeData(frame.vars) as typeof frame.vars) : frame.vars,
+								})),
+							}
+						: value.stacktrace,
 				})),
 			}
 		: event.exception,

@@ -165,7 +165,11 @@ function sanitizeSentryEvent(event: Event): Event {
 		...event,
 		message: event.message ? sanitizeString(event.message) : event.message,
 		server_name: undefined,
-		user: undefined,
+		// Preserve only the opaque user id set by setSentryUser — drop every other
+		// user field (ip_address, email, username) the SDK may attach. Returning
+		// `user: undefined` here would strip the id too and silently defeat
+		// affected-user counts and Session Replay user linkage.
+		user: event.user?.id === undefined ? undefined : { id: event.user.id },
 		request: event.request
 			? {
 					...event.request,
