@@ -3,7 +3,7 @@ import { TRPCClientError } from '@trpc/client';
 import { toast } from 'sonner';
 import { Dialog } from '@/components/dialogs/dialogs';
 import { refreshAccessToken, revokeRefreshToken } from '@/helpers/auth';
-import { logDebug } from '@/helpers/browser-logger';
+import { logDebug, setSentryUser } from '@/helpers/browser-logger';
 import { getHostFromServer } from '@/helpers/get-file-url';
 import { cleanup, connectToTRPC, getTRPCClient, reconnectTRPC, setOnWsReconnect } from '@/lib/trpc';
 import { openDialog } from '../dialogs/actions';
@@ -39,6 +39,7 @@ const cleanupServerSubscriptions = () => {
 
 export const resetServerState = () => {
 	useServerStore.getState().resetState();
+	setSentryUser(undefined);
 };
 
 export const setDisconnectInfo = (info: TDisconnectInfo | undefined) => {
@@ -143,6 +144,10 @@ export const joinServer = async (
 
 		useServerStore.getState().setInitialData(data);
 		setDisconnectInfo(undefined);
+
+		// Attach the authenticated user to Sentry so issues report affected-user
+		// counts and Session Replays are tied to a user (opaque id only).
+		setSentryUser(data.ownUserId);
 
 		if (!data.mustChangePassword) {
 			if (!opts?.reconnect) {
@@ -334,6 +339,7 @@ export const logoutFromServer = async () => {
 	await revokeRefreshToken();
 	cleanup({ clearAuth: true, ignoreSocketCloseEvent: true });
 	cleanupServerSubscriptions();
+	setSentryUser(undefined);
 };
 
 window.useToken = async (token: string) => {

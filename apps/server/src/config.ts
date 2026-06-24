@@ -57,6 +57,8 @@ const zConfig = z.object({
 		clientErrorReportingIgnoreErrors: z.string(),
 		clientTracingSampleRate: z.coerce.number().min(0).max(1),
 		serverTracingSampleRate: z.coerce.number().min(0).max(1),
+		clientReplaySessionSampleRate: z.coerce.number().min(0).max(1),
+		clientReplayOnErrorSampleRate: z.coerce.number().min(0).max(1),
 	}),
 	webRtc: zWebRtcConfig,
 	rateLimiters: z.object({
@@ -96,6 +98,12 @@ const defaultConfig: TConfig = {
 		serverErrorReportingSentryDsn: '',
 		clientTracingSampleRate: 0,
 		serverTracingSampleRate: 0,
+		// Session Replay is opt-in (default 0). The recommended setup is on-error
+		// capture only: leave session rate at 0 and set the on-error rate to 1 so a
+		// replay is recorded only in the minute leading up to an error. Text and
+		// media are always masked client-side (it's a chat app), see sentry-client.
+		clientReplaySessionSampleRate: 0,
+		clientReplayOnErrorSampleRate: 0,
 		clientErrorReportingIgnoreErrors: [
 			// Browser noise
 			'ResizeObserver loop limit exceeded',
@@ -213,6 +221,8 @@ config = applyEnvOverrides(config, {
 	'webRtc.ipv6.announcedAddress': 'SHARKORD_WEBRTC_IPV6_ANNOUNCED_ADDRESS',
 	'server.clientTracingSampleRate': 'RIPCORD_CLIENT_TRACING_SAMPLE_RATE',
 	'server.serverTracingSampleRate': 'RIPCORD_SERVER_TRACING_SAMPLE_RATE',
+	'server.clientReplaySessionSampleRate': 'RIPCORD_CLIENT_REPLAY_SESSION_SAMPLE_RATE',
+	'server.clientReplayOnErrorSampleRate': 'RIPCORD_CLIENT_REPLAY_ON_ERROR_SAMPLE_RATE',
 });
 
 const legacyAnnouncedAddress = process.env.SHARKORD_WEBRTC_ANNOUNCED_ADDRESS;

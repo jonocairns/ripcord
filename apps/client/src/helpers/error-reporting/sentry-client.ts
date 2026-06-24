@@ -6,6 +6,8 @@ type TClientErrorReportingConfig = {
 	sentryDsn?: string;
 	ignoreErrors?: string[];
 	tracingSampleRate?: number;
+	replaySessionSampleRate?: number;
+	replayOnErrorSampleRate?: number;
 };
 
 type TCaptureSentryErrorOptions = {
@@ -78,7 +80,11 @@ const buildTracePropagationTargets = (): string[] | undefined => {
 	return [runtimeConfig.serverUrl];
 };
 
-const buildIntegrations = (tracingSampleRate: number | undefined) => {
+const buildIntegrations = (
+	tracingSampleRate: number | undefined,
+	replaySessionSampleRate: number | undefined,
+	replayOnErrorSampleRate: number | undefined,
+) => {
 	const runtimeConfig = getRuntimeServerConfig();
 	const integrations = [];
 
@@ -93,6 +99,18 @@ const buildIntegrations = (tracingSampleRate: number | undefined) => {
 
 	if (tracingSampleRate !== undefined && tracingSampleRate > 0) {
 		integrations.push(Sentry.browserTracingIntegration());
+	}
+
+	// Session Replay. Only attach when a rate is configured so the replay bundle
+	// and recording overhead stay out of deployments that haven't opted in. Text
+	// and media are always masked — this is a chat app, so replays must never
+	// capture message content, usernames, or shared media.
+	const replayEnabled =
+		(replaySessionSampleRate !== undefined && replaySessionSampleRate > 0) ||
+		(replayOnErrorSampleRate !== undefined && replayOnErrorSampleRate > 0);
+
+	if (replayEnabled) {
+		integrations.push(Sentry.replayIntegration({ maskAllText: true, blockAllMedia: true }));
 	}
 
 	if (runtimeConfig.source === 'desktop' && runtimeConfig.serverUrl) {
@@ -122,6 +140,17 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 				}
 			: {};
 
+	const replaySessionSampleRate = normalizeSampleRate(config.replaySessionSampleRate);
+	const replayOnErrorSampleRate = normalizeSampleRate(config.replayOnErrorSampleRate);
+	const replayOptions =
+		(replaySessionSampleRate !== undefined && replaySessionSampleRate > 0) ||
+		(replayOnErrorSampleRate !== undefined && replayOnErrorSampleRate > 0)
+			? {
+					replaysSessionSampleRate: replaySessionSampleRate ?? 0,
+					replaysOnErrorSampleRate: replayOnErrorSampleRate ?? 0,
+				}
+			: {};
+
 	Sentry.init({
 		dsn,
 		environment: import.meta.env.MODE,
@@ -130,8 +159,9 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 		maxBreadcrumbs: 50,
 		ignoreErrors: config.ignoreErrors,
 		beforeSend: (event) => sanitizeSentryEvent(event),
-		integrations: buildIntegrations(tracingSampleRate),
+		integrations: buildIntegrations(tracingSampleRate, replaySessionSampleRate, replayOnErrorSampleRate),
 		...tracingOptions,
+		...replayOptions,
 		initialScope: {
 			tags: {
 				runtime: getRuntimeTag(),
@@ -196,6 +226,18 @@ const captureSentryError = ({
 	});
 };
 
+// Attach (or clear) the authenticated user on the Sentry scope. We send only an
+// opaque numeric id — never username/email — to stay consistent with
+// sendDefaultPii: false and the sanitization posture. This is what makes issues
+// report affected-user counts and ties Session Replays to a specific user.
+const setSentryUser = (userId: number | undefined): void => {
+	if (!Sentry.isEnabled()) {
+		return;
+	}
+
+	Sentry.setUser(userId === undefined ? null : { id: String(userId) });
+};
+
 const reportErrorToSentry = (message: string, error?: unknown, context?: unknown): void => {
 	captureSentryError({
 		captureSource: 'reportError',
@@ -221,4 +263,4 @@ const traceSentrySpan = <T>({ name, op, attributes }: TSentrySpanOptions, callba
 	);
 };
 
-export { configureClientErrorReporting, getRuntimeTag, reportErrorToSentry, traceSentrySpan };
+export { configureClientErrorReporting, getRuntimeTag, reportErrorToSentry, setSentryUser, traceSentrySpan };

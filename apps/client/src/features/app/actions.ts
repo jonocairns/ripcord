@@ -36,13 +36,14 @@ export const loadApp = async () => {
 			return;
 		}
 
-		const sentryDsn =
-			info.clientErrorReporting?.provider === 'sentry' ? info.clientErrorReporting.dsn : undefined;
+		const sentryDsn = info.clientErrorReporting?.provider === 'sentry' ? info.clientErrorReporting.dsn : undefined;
 
 		configureClientErrorReporting({
 			sentryDsn,
 			ignoreErrors: info.clientErrorReporting?.ignoreErrors,
 			tracingSampleRate: info.clientErrorReporting?.tracingSampleRate,
+			replaySessionSampleRate: info.clientErrorReporting?.replaySessionSampleRate,
+			replayOnErrorSampleRate: info.clientErrorReporting?.replayOnErrorSampleRate,
 		});
 
 		// Forward the same per-server DSN to the Electron main process, which has no

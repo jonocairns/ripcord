@@ -1,4 +1,9 @@
-import { configureClientErrorReporting, reportErrorToSentry, traceSentrySpan } from './error-reporting/sentry-client';
+import {
+	configureClientErrorReporting,
+	reportErrorToSentry,
+	setSentryUser,
+	traceSentrySpan,
+} from './error-reporting/sentry-client';
 
 const OVERRIDE_DEBUG = false;
 
@@ -19,4 +24,4 @@ const reportError = (message: string, error?: unknown, context?: unknown) => {
 	reportErrorToSentry(message, error, context);
 };
 
-export { configureClientErrorReporting, logDebug, logVoice, reportError, traceSentrySpan };
+export { configureClientErrorReporting, logDebug, logVoice, reportError, setSentryUser, traceSentrySpan };

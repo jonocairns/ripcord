@@ -46,9 +46,7 @@ export type TGenericObject = {
 	[key: string]: any;
 };
 
-export type TGenericFunction = {
-	(...args: any[]): any;
-};
+export type TGenericFunction = (...args: any[]) => any;
 
 export type TMessageMetadata = {
 	url: string;
@@ -97,6 +95,8 @@ export type TServerInfo = Pick<TSettings, 'serverId' | 'name' | 'description' | 
 		dsn: string;
 		ignoreErrors?: string[];
 		tracingSampleRate?: number;
+		replaySessionSampleRate?: number;
+		replayOnErrorSampleRate?: number;
 	};
 };
 
