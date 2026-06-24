@@ -3,10 +3,12 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import {
+	DEV_RENDERER_CSP,
 	getDevRendererCspUrlPattern,
 	isPackagedRendererFileUrl,
 	PACKAGED_RENDERER_CSP,
 	PACKAGED_RENDERER_CSP_HEADER,
+	withDevRendererCsp,
 	withPackagedRendererCsp,
 } from '../renderer-csp';
 
@@ -48,5 +50,18 @@ void describe('withPackagedRendererCsp', () => {
 
 		assert.deepEqual(headers['content-type'], ['text/html']);
 		assert.deepEqual(headers[PACKAGED_RENDERER_CSP_HEADER], [PACKAGED_RENDERER_CSP]);
+	});
+});
+
+void describe('withDevRendererCsp', () => {
+	void it('allows the inline Vite React refresh preamble', () => {
+		const headers = withDevRendererCsp({
+			'content-type': ['text/html'],
+		});
+
+		assert.deepEqual(headers['content-type'], ['text/html']);
+		assert.deepEqual(headers[PACKAGED_RENDERER_CSP_HEADER], [DEV_RENDERER_CSP]);
+		assert.match(DEV_RENDERER_CSP, /script-src[^;]*'unsafe-inline'/);
+		assert.doesNotMatch(PACKAGED_RENDERER_CSP, /script-src[^;]*'unsafe-inline'/);
 	});
 });

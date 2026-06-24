@@ -70,7 +70,7 @@ const StatsPopoverContent = () => {
 					<div className="space-y-2 text-muted-foreground">
 						{producer.outboundVideo.map((video, index) => (
 							<div key={video.id} className="space-y-0.5">
-								<div className="font-medium text-foreground/80">Stream {index + 1}</div>
+								<div className="font-medium text-foreground/80">{video.label ?? `Video stream ${index + 1}`}</div>
 								<div>
 									{formatCodec(video.codec)} · {formatResolution(video.width, video.height)} ·{' '}
 									{formatFps(video.framesPerSecond)}
@@ -100,7 +100,7 @@ const StatsPopoverContent = () => {
 					<div className="space-y-2 text-muted-foreground">
 						{consumer.inboundVideo.map((video, index) => (
 							<div key={video.id} className="space-y-0.5">
-								<div className="font-medium text-foreground/80">Stream {index + 1}</div>
+								<div className="font-medium text-foreground/80">Video stream {index + 1}</div>
 								<div>
 									{formatCodec(video.codec)} · {formatResolution(video.width, video.height)} ·{' '}
 									{formatFps(video.framesPerSecond)}

@@ -31,7 +31,7 @@ import { isPermissionAllowed } from './permission-policy';
 import { getDesktopCapabilities, resolvePreparedScreenAudioMode } from './platform-capabilities';
 import { previewRuntimeConfig } from './preview-runtime-config';
 import { installDevRendererCspHandler, installPackagedRendererCspHandler } from './renderer-csp';
-import { isTrustedRendererUrl, type TRendererTrustOptions } from './renderer-trust';
+import { isTrustedRendererUrl, resolveTrustedRendererUrl, type TRendererTrustOptions } from './renderer-trust';
 import {
 	clearPreparedScreenShareSelection,
 	consumeScreenShareSelection,
@@ -57,7 +57,11 @@ import { classifyWindowOpenUrl } from './window-open-policy';
 import { installYoutubeEmbedRefererHandler } from './youtube-embed-referrer';
 
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
-const TRUSTED_RENDERER_URL = app.isPackaged ? undefined : RENDERER_URL;
+const TRUSTED_RENDERER_URL = resolveTrustedRendererUrl({
+	isPackaged: app.isPackaged,
+	isPreview: previewRuntimeConfig !== null,
+	rendererUrl: RENDERER_URL,
+});
 const DESKTOP_QUIT_FLUSH_TIMEOUT_MS = 2_000;
 const DESKTOP_DEBUG_IPC_ENABLED = Boolean(TRUSTED_RENDERER_URL);
 const USES_CUSTOM_TITLEBAR = process.platform === 'win32' || process.platform === 'linux';
@@ -640,9 +644,9 @@ const setupYoutubeEmbedRefererHandler = () => {
 	installYoutubeEmbedRefererHandler(session.defaultSession);
 };
 
-const setupPackagedRendererCspHandler = () => {
-	if (RENDERER_URL) {
-		installDevRendererCspHandler(session.defaultSession, RENDERER_URL);
+const setupRendererCspHandler = () => {
+	if (TRUSTED_RENDERER_URL) {
+		installDevRendererCspHandler(session.defaultSession, TRUSTED_RENDERER_URL);
 		return;
 	}
 
@@ -949,7 +953,7 @@ void app
 		setupPermissionHandlers();
 		setupDisplayMediaHandler();
 		setupYoutubeEmbedRefererHandler();
-		setupPackagedRendererCspHandler();
+		setupRendererCspHandler();
 		createMainWindow();
 		requestDesktopCapabilitiesRefresh({
 			broadcast: true,

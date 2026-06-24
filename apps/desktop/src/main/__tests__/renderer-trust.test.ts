@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { isTrustedRendererUrl } from '../renderer-trust';
+import { isTrustedRendererUrl, resolveTrustedRendererUrl } from '../renderer-trust';
 
 const packagedIndexPath = path.resolve('/tmp/ripcord/resources/app.asar/renderer-dist/index.html');
 
@@ -82,5 +82,59 @@ void describe('isTrustedRendererUrl', () => {
 	void it('rejects unsafe and malformed urls', () => {
 		assert.equal(isTrustedRendererUrl('javascript:alert(1)', { packagedIndexPath }), false);
 		assert.equal(isTrustedRendererUrl('not a url', { packagedIndexPath }), false);
+	});
+});
+
+void describe('resolveTrustedRendererUrl', () => {
+	void it('allows local renderer urls for unpackaged development', () => {
+		assert.equal(
+			resolveTrustedRendererUrl({
+				isPackaged: false,
+				isPreview: false,
+				rendererUrl: 'http://localhost:5173',
+			}),
+			'http://localhost:5173',
+		);
+	});
+
+	void it('allows local renderer urls for packaged preview builds', () => {
+		assert.equal(
+			resolveTrustedRendererUrl({
+				isPackaged: true,
+				isPreview: true,
+				rendererUrl: 'http://localhost:5173',
+			}),
+			'http://localhost:5173',
+		);
+	});
+
+	void it('rejects renderer urls for packaged production builds', () => {
+		assert.equal(
+			resolveTrustedRendererUrl({
+				isPackaged: true,
+				isPreview: false,
+				rendererUrl: 'http://localhost:5173',
+			}),
+			undefined,
+		);
+	});
+
+	void it('rejects non-local renderer urls in development and preview builds', () => {
+		assert.equal(
+			resolveTrustedRendererUrl({
+				isPackaged: false,
+				isPreview: false,
+				rendererUrl: 'https://preview.example.com',
+			}),
+			undefined,
+		);
+		assert.equal(
+			resolveTrustedRendererUrl({
+				isPackaged: true,
+				isPreview: true,
+				rendererUrl: 'https://preview.example.com',
+			}),
+			undefined,
+		);
 	});
 });

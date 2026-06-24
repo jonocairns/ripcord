@@ -6,6 +6,12 @@ type TRendererTrustOptions = {
 	rendererUrl?: string;
 };
 
+type TResolveTrustedRendererUrlOptions = {
+	isPackaged: boolean;
+	isPreview: boolean;
+	rendererUrl?: string;
+};
+
 const isExternalBrowserProtocol = (protocol: string): boolean => {
 	return protocol === 'http:' || protocol === 'https:';
 };
@@ -40,6 +46,18 @@ const getTrustedDevOrigin = (rendererUrl?: string): string | undefined => {
 	}
 };
 
+const resolveTrustedRendererUrl = ({
+	isPackaged,
+	isPreview,
+	rendererUrl,
+}: TResolveTrustedRendererUrlOptions): string | undefined => {
+	if (isPackaged && !isPreview) {
+		return undefined;
+	}
+
+	return getTrustedDevOrigin(rendererUrl) ? rendererUrl : undefined;
+};
+
 const isTrustedRendererUrl = (rendererUrl: string, options: TRendererTrustOptions): boolean => {
 	try {
 		const parsedUrl = new URL(rendererUrl);
@@ -62,5 +80,5 @@ const isTrustedRendererUrl = (rendererUrl: string, options: TRendererTrustOption
 	}
 };
 
-export type { TRendererTrustOptions };
-export { isExternalBrowserProtocol, isTrustedRendererUrl };
+export type { TRendererTrustOptions, TResolveTrustedRendererUrlOptions };
+export { isExternalBrowserProtocol, isTrustedRendererUrl, resolveTrustedRendererUrl };
