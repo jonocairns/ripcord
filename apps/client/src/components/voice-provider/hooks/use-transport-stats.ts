@@ -140,6 +140,34 @@ const isAuxiliaryVideoCodec = (codec: string | null): boolean => {
 	return codec?.toLowerCase() === 'rtx';
 };
 
+type VideoMediaSignals = {
+	frameWidth?: number;
+	frameHeight?: number;
+	framesDecoded?: number;
+	framesEncoded?: number;
+	framesReceived?: number;
+	framesSent?: number;
+};
+
+// A real video stream reports frame activity; RTX/FEC retransmission records do not.
+const hasVideoMedia = (stat: VideoMediaSignals): boolean => {
+	return (
+		(stat.frameWidth ?? 0) > 0 ||
+		(stat.frameHeight ?? 0) > 0 ||
+		(stat.framesDecoded ?? 0) > 0 ||
+		(stat.framesEncoded ?? 0) > 0 ||
+		(stat.framesReceived ?? 0) > 0 ||
+		(stat.framesSent ?? 0) > 0
+	);
+};
+
+// `codecId` is optional on RTP stats, so RTX/FEC records can slip past the codec-name
+// check with an unresolved codec and surface as a phantom "unknown" video stream. Treat
+// an unknown-codec record carrying no frame activity as auxiliary and drop it too.
+const isAuxiliaryVideoStat = (codec: string | null, stat: VideoMediaSignals): boolean => {
+	return isAuxiliaryVideoCodec(codec) || (codec === null && !hasVideoMedia(stat));
+};
+
 const useTransportStats = (getVideoSenderMetadata?: VideoSenderMetadataGetter) => {
 	const storeRef = useRef<TMutableTransportStatsStore | undefined>(undefined);
 
@@ -204,7 +232,7 @@ const useTransportStats = (getVideoSenderMetadata?: VideoSenderMetadataGetter) =
 				if (stat.kind === 'video') {
 					const codec = resolveCodec(stat.codecId);
 
-					if (isAuxiliaryVideoCodec(codec)) {
+					if (isAuxiliaryVideoStat(codec, stat)) {
 						continue;
 					}
 
@@ -247,7 +275,7 @@ const useTransportStats = (getVideoSenderMetadata?: VideoSenderMetadataGetter) =
 				if (stat.kind === 'video') {
 					const codec = resolveCodec(stat.codecId);
 
-					if (isAuxiliaryVideoCodec(codec)) {
+					if (isAuxiliaryVideoStat(codec, stat)) {
 						continue;
 					}
 
@@ -491,4 +519,4 @@ const useTransportStats = (getVideoSenderMetadata?: VideoSenderMetadataGetter) =
 	};
 };
 
-export { EMPTY_TRANSPORT_STATS, isAuxiliaryVideoCodec, useTransportStats };
+export { EMPTY_TRANSPORT_STATS, isAuxiliaryVideoCodec, isAuxiliaryVideoStat, useTransportStats };
