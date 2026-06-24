@@ -4,12 +4,103 @@
 // — but is built for the Bun runtime. Note: Sentry auto-instrumentation (and
 // thus tracesSampleRate) does not attach inside a compiled single-file
 // executable; error capture, which is what we rely on, is unaffected.
+
+import type { ErrorEvent } from '@sentry/bun';
 import * as Sentry from '@sentry/bun';
 import { format } from 'winston';
 import { config } from './config';
 import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';
 
 const SPLAT = Symbol.for('splat');
+// Winston's canonical, immutable level. We must read this rather than
+// `info.level`, because `colorize()` runs earlier in the format chain and
+// rewrites `info.level` to an ANSI-wrapped string (e.g. "\x1b[31merror\x1b[39m")
+// that never equals "error" — which would silently skip every Sentry capture.
+const LEVEL = Symbol.for('level');
+
+// Scrub credentials and PII before any event leaves the process. The server now
+// forwards winston error messages and stack traces to Sentry (see sentryFormat),
+// any of which can embed auth tokens (JWTs), Authorization headers, or emails.
+// Unlike the desktop scrubber we deliberately leave URLs intact — request
+// paths/hosts are valuable for server debugging and are not themselves secret;
+// JWT/Bearer scrubbing still removes credentials carried inside a URL.
+const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
+const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
+const BEARER_PATTERN = /Bearer\s+\S+/gi;
+
+const sanitizeString = (value: string): string =>
+	value
+		.replace(BEARER_PATTERN, 'Bearer [redacted]')
+		.replace(JWT_PATTERN, '[redacted-token]')
+		.replace(EMAIL_PATTERN, '[redacted-email]');
+
+// `seen` tracks objects already on the current walk so a cyclic request/socket/
+// plugin object in the splat args can't drive infinite recursion. Without it a
+// cycle throws a RangeError inside beforeSend, and Sentry silently drops the
+// very error event we were trying to capture.
+const sanitizeData = (value: unknown, seen: WeakSet<object> = new WeakSet()): unknown => {
+	if (typeof value === 'string') {
+		return sanitizeString(value);
+	}
+
+	if (value !== null && typeof value === 'object') {
+		if (seen.has(value)) {
+			return '[circular]';
+		}
+
+		seen.add(value);
+
+		if (Array.isArray(value)) {
+			return value.map((entry) => sanitizeData(entry, seen));
+		}
+
+		const sanitized: Record<string, unknown> = {};
+
+		for (const [key, entry] of Object.entries(value)) {
+			sanitized[key] = sanitizeData(entry, seen);
+		}
+
+		return sanitized;
+	}
+
+	return value;
+};
+
+const sanitizeServerEvent = (event: ErrorEvent): ErrorEvent => ({
+	...event,
+	message: event.message ? sanitizeString(event.message) : event.message,
+	extra: event.extra ? (sanitizeData(event.extra) as ErrorEvent['extra']) : event.extra,
+	// request/contexts/user/stack-frame vars are normally absent in the compiled
+	// Bun binary (auto-instrumentation doesn't attach, sendDefaultPii is false),
+	// but a direct captureException or a dev run can still populate them — scrub
+	// them too so an Authorization header, JWT, or email can never slip through.
+	request: event.request ? (sanitizeData(event.request) as ErrorEvent['request']) : event.request,
+	contexts: event.contexts ? (sanitizeData(event.contexts) as ErrorEvent['contexts']) : event.contexts,
+	user: event.user ? (sanitizeData(event.user) as ErrorEvent['user']) : event.user,
+	breadcrumbs: event.breadcrumbs?.map((breadcrumb) => ({
+		...breadcrumb,
+		message: breadcrumb.message ? sanitizeString(breadcrumb.message) : breadcrumb.message,
+		data: breadcrumb.data ? (sanitizeData(breadcrumb.data) as typeof breadcrumb.data) : breadcrumb.data,
+	})),
+	exception: event.exception?.values
+		? {
+				...event.exception,
+				values: event.exception.values.map((value) => ({
+					...value,
+					value: value.value ? sanitizeString(value.value) : value.value,
+					stacktrace: value.stacktrace
+						? {
+								...value.stacktrace,
+								frames: value.stacktrace.frames?.map((frame) => ({
+									...frame,
+									vars: frame.vars ? (sanitizeData(frame.vars) as typeof frame.vars) : frame.vars,
+								})),
+							}
+						: value.stacktrace,
+				})),
+			}
+		: event.exception,
+});
 
 // Flush buffered events before the process exits. Safe to call when Sentry was
 // never initialised (no DSN) — close() resolves immediately. The graceful-
@@ -39,12 +130,13 @@ const initSentry = (): void => {
 		environment: IS_PRODUCTION ? 'production' : 'development',
 		release: SERVER_VERSION,
 		sendDefaultPii: false,
+		beforeSend: sanitizeServerEvent,
 		...tracingOptions,
 	});
 };
 
 const sentryFormat = format((info) => {
-	if (info.level !== 'error') {
+	if ((info as Record<symbol, unknown>)[LEVEL] !== 'error') {
 		return info;
 	}
 

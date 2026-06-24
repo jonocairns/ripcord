@@ -8,6 +8,10 @@ const infoRouteHandler = async (_req: http.IncomingMessage, res: http.ServerResp
 	const settings = await getSettings();
 	const clientTracingSampleRate =
 		config.server.clientTracingSampleRate > 0 ? config.server.clientTracingSampleRate : undefined;
+	const clientReplaySessionSampleRate =
+		config.server.clientReplaySessionSampleRate > 0 ? config.server.clientReplaySessionSampleRate : undefined;
+	const clientReplayOnErrorSampleRate =
+		config.server.clientReplayOnErrorSampleRate > 0 ? config.server.clientReplayOnErrorSampleRate : undefined;
 
 	const info: TServerInfo = {
 		serverId: settings.serverId,
@@ -21,6 +25,12 @@ const infoRouteHandler = async (_req: http.IncomingMessage, res: http.ServerResp
 					provider: 'sentry',
 					dsn: config.server.clientErrorReportingSentryDsn.trim(),
 					...(clientTracingSampleRate !== undefined ? { tracingSampleRate: clientTracingSampleRate } : {}),
+					...(clientReplaySessionSampleRate !== undefined
+						? { replaySessionSampleRate: clientReplaySessionSampleRate }
+						: {}),
+					...(clientReplayOnErrorSampleRate !== undefined
+						? { replayOnErrorSampleRate: clientReplayOnErrorSampleRate }
+						: {}),
 					ignoreErrors: config.server.clientErrorReportingIgnoreErrors
 						.split(',')
 						.map((s) => s.trim())

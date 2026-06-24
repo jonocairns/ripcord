@@ -50,7 +50,7 @@ describe('sanitizeSentryEvent', () => {
 			},
 		} satisfies Event);
 
-		expect(sanitized.user).toBeUndefined();
+		expect(sanitized.user).toEqual({ id: '42' });
 		expect(sanitized.request?.headers).toBeUndefined();
 		expect(sanitized.request?.data).toBeUndefined();
 		expect(sanitized.request?.query_string).toBeUndefined();
