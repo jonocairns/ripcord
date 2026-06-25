@@ -1,4 +1,4 @@
-import { emojiNameSchema, sanitizeEmojiName, toEmojiNameChars } from '@sharkord/shared';
+import { EMOJI_NAME_MAX, emojiNameSchema, sanitizeEmojiName, toEmojiNameChars } from '@sharkord/shared';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -101,7 +101,7 @@ const CreateEmojiDialog = memo(({ isOpen, close, files, refetch }: TCreateEmojiD
 										onChange={(e) => onNameChange(index, e.target.value)}
 										onEnter={onSubmit}
 										error={errors[index]}
-										maxLength={32}
+										maxLength={EMOJI_NAME_MAX}
 										placeholder="emoji_name"
 										autoFocus={index === 0}
 									/>

@@ -1,4 +1,4 @@
-import { emojiNameSchema, type TJoinedEmoji, toEmojiNameChars } from '@sharkord/shared';
+import { EMOJI_NAME_MAX, emojiNameSchema, type TJoinedEmoji, toEmojiNameChars } from '@sharkord/shared';
 import { Pencil, Trash2 } from 'lucide-react';
 import { memo, useCallback, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -126,7 +126,7 @@ const EmojiCard = memo(({ emoji, refetch }: TEmojiCardProps) => {
 						}
 					}}
 					disabled={isSaving}
-					maxLength={32}
+					maxLength={EMOJI_NAME_MAX}
 					aria-label={`Rename ${emoji.name}`}
 					className="w-full rounded-md border border-input bg-background px-2 py-1 text-center font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
 				/>
@@ -134,6 +134,7 @@ const EmojiCard = memo(({ emoji, refetch }: TEmojiCardProps) => {
 				<button
 					type="button"
 					onClick={startEditing}
+					disabled={isSaving}
 					title="Click to rename"
 					className="flex w-full items-center justify-center gap-1 rounded px-1 py-1 font-mono text-xs transition-colors hover:bg-muted/60"
 				>
