@@ -43,7 +43,7 @@ describe('pending stream reconciliation', () => {
 		expect(keys.has(getPendingStreamKey(50, StreamKind.EXTERNAL_VIDEO))).toBe(false);
 	});
 
-	it('removes pending streams with no active producer and refreshes active entries', () => {
+	it('removes pending streams with no active producer and preserves active entry age', () => {
 		const pendingStreams = new Map<string, TPendingStream>([
 			[getPendingStreamKey(1, StreamKind.AUDIO), makePending(1, StreamKind.AUDIO, 100)],
 			[getPendingStreamKey(2, StreamKind.VIDEO), makePending(2, StreamKind.VIDEO, 100)],
@@ -54,15 +54,13 @@ describe('pending stream reconciliation', () => {
 			makeProducers({
 				remoteAudioIds: [1],
 			}),
-			undefined,
-			200,
 		);
 
 		expect(reconciled.has(getPendingStreamKey(2, StreamKind.VIDEO))).toBe(false);
 		expect(reconciled.get(getPendingStreamKey(1, StreamKind.AUDIO))).toEqual({
 			remoteId: 1,
 			kind: StreamKind.AUDIO,
-			createdAt: 200,
+			createdAt: 100,
 		});
 	});
 
@@ -77,8 +75,6 @@ describe('pending stream reconciliation', () => {
 			makeProducers({
 				remoteExternalStreamIds: [50],
 			}),
-			undefined,
-			200,
 		);
 
 		expect(reconciled.has(getPendingStreamKey(50, StreamKind.EXTERNAL_AUDIO))).toBe(true);

@@ -1230,21 +1230,22 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
+		const scheduledVoiceChannelId = currentVoiceChannelId;
 		const repairDelayMs = Math.max(0, oldestPendingCreatedAt + PENDING_STREAM_REPAIR_AGE_MS - Date.now());
 		const repairTimeout = setTimeout(() => {
-			if (currentVoiceChannelIdRef.current === undefined) {
+			if (currentVoiceChannelIdRef.current !== scheduledVoiceChannelId) {
 				return;
 			}
 
 			logVoice('Repairing stale pending voice streams', {
-				channelId: currentVoiceChannelIdRef.current,
+				channelId: scheduledVoiceChannelId,
 				pendingCount: pendingStreams.size,
 			});
 
 			void consumeExistingProducers(voiceEventRtpCapabilities, getExternalStreamTrackPresence()).catch((error) => {
 				logVoice('Failed to repair stale pending voice streams', {
 					error,
-					channelId: currentVoiceChannelIdRef.current,
+					channelId: scheduledVoiceChannelId,
 				});
 			});
 		}, repairDelayMs);

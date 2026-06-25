@@ -61,7 +61,6 @@ export const reconcilePendingStreamMap = (
 	pendingStreams: Map<string, TPendingStream>,
 	producers: TRemoteProducerIds,
 	externalStreamTracks?: TExternalStreamTrackPresence,
-	now: number = Date.now(),
 ): Map<string, TPendingStream> => {
 	if (pendingStreams.size === 0) {
 		return pendingStreams;
@@ -74,12 +73,6 @@ export const reconcilePendingStreamMap = (
 	pendingStreams.forEach((stream, key) => {
 		if (!activeKeys.has(key)) {
 			changed = true;
-			return;
-		}
-
-		if (stream.createdAt !== now) {
-			changed = true;
-			next.set(key, { ...stream, createdAt: now });
 			return;
 		}
 
