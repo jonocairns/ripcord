@@ -8,11 +8,14 @@ import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
 import { shouldSyncExistingProducersAfterVoiceEventSubscriptionStart } from './voice-event-sync-policy';
+import { shouldIgnoreProducerClosedEvent } from './voice-producer-event-identity';
+
+const VOICE_EVENT_PRODUCER_SYNC_DEBOUNCE_MS = 500;
 
 type TEvents = {
-	consume: (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities) => Promise<void>;
+	consume: (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities, producerId?: string) => Promise<void>;
 	syncExistingProducers: (rtpCapabilities: RtpCapabilities) => Promise<void>;
-	addPendingStream: (remoteId: number, kind: StreamKind) => void;
+	addPendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
 	removePendingStream: (remoteId: number, kind: StreamKind) => void;
 	removeRemoteUserStream: (userId: number, kind: TRemoteUserStreamKinds) => void;
 	removeExternalStreamTrack: (streamId: number, kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO) => void;
@@ -21,6 +24,8 @@ type TEvents = {
 	clearPendingStreamsForUser: (userId: number) => void;
 	onVoiceActivityUpdate: (activity: { userId: number; isSpeaking: boolean }) => void;
 	onTransportFailure: () => void;
+	getActiveConsumerProducerId: (remoteId: number, kind: StreamKind) => string | undefined;
+	getPendingStreamProducerId: (remoteId: number, kind: StreamKind) => string | undefined;
 	rtpCapabilities: RtpCapabilities | null;
 	reconnectNonce: number;
 };
@@ -37,6 +42,8 @@ const useVoiceEvents = ({
 	clearPendingStreamsForUser,
 	onVoiceActivityUpdate,
 	onTransportFailure,
+	getActiveConsumerProducerId,
+	getPendingStreamProducerId,
 	rtpCapabilities,
 	reconnectNonce,
 }: TEvents) => {
@@ -56,9 +63,50 @@ const useVoiceEvents = ({
 		const trpc = getTRPCClient();
 
 		let isCleaningUp = false;
+		let producerRepairSyncTimeout: ReturnType<typeof setTimeout> | undefined;
+
+		const scheduleProducerRepairSync = (source: string, error: unknown): void => {
+			logVoice(`${source} subscription error`, { error });
+
+			if (!rtpCapabilities) {
+				logVoice('Skipping producer repair sync after subscription error - missing RTP capabilities', {
+					source,
+				});
+				return;
+			}
+
+			if (producerRepairSyncTimeout !== undefined) {
+				return;
+			}
+
+			producerRepairSyncTimeout = setTimeout(() => {
+				producerRepairSyncTimeout = undefined;
+
+				if (isCleaningUp) {
+					return;
+				}
+
+				logVoice('Repairing producer state after voice event subscription error', {
+					source,
+					channelId: currentVoiceChannelId,
+				});
+
+				void syncExistingProducers(rtpCapabilities).catch((syncError) => {
+					if (isCleaningUp) {
+						return;
+					}
+
+					logVoice('Failed to repair producer state after voice event subscription error', {
+						error: syncError,
+						source,
+						channelId: currentVoiceChannelId,
+					});
+				});
+			}, VOICE_EVENT_PRODUCER_SYNC_DEBOUNCE_MS);
+		};
 
 		const onVoiceNewProducerSub = trpc.voice.onNewProducer.subscribe(undefined, {
-			onData: ({ remoteId, kind, channelId }) => {
+			onData: ({ remoteId, kind, channelId, producerId }) => {
 				if (currentVoiceChannelId !== channelId || isCleaningUp) return;
 
 				if (remoteId === ownUserId) {
@@ -76,6 +124,7 @@ const useVoiceEvents = ({
 					remoteId,
 					kind,
 					channelId,
+					producerId,
 				});
 
 				if (kind === StreamKind.AUDIO) {
@@ -88,25 +137,42 @@ const useVoiceEvents = ({
 						return;
 					}
 
-					void consume(remoteId, kind, rtpCapabilities);
+					void consume(remoteId, kind, rtpCapabilities, producerId);
 					return;
 				}
 
-				addPendingStream(remoteId, kind);
+				addPendingStream(remoteId, kind, producerId);
 			},
 			onError: (error) => {
-				logVoice('onVoiceNewProducer subscription error', { error });
+				scheduleProducerRepairSync('onVoiceNewProducer', error);
 			},
 		});
 
 		const onVoiceProducerClosedSub = trpc.voice.onProducerClosed.subscribe(undefined, {
-			onData: ({ channelId, remoteId, kind }) => {
+			onData: ({ channelId, remoteId, kind, producerId }) => {
 				if (currentVoiceChannelId !== channelId || isCleaningUp) return;
+
+				if (
+					shouldIgnoreProducerClosedEvent({
+						eventProducerId: producerId,
+						activeConsumerProducerId: getActiveConsumerProducerId(remoteId, kind),
+						pendingProducerId: getPendingStreamProducerId(remoteId, kind),
+					})
+				) {
+					logVoice('Ignoring stale producer closed event', {
+						remoteId,
+						kind,
+						channelId,
+						producerId,
+					});
+					return;
+				}
 
 				logVoice('Producer closed event received', {
 					remoteId,
 					kind,
 					channelId,
+					producerId,
 				});
 
 				try {
@@ -127,7 +193,7 @@ const useVoiceEvents = ({
 				}
 			},
 			onError: (error) => {
-				logVoice('onVoiceProducerClosed subscription error', { error });
+				scheduleProducerRepairSync('onVoiceProducerClosed', error);
 			},
 		});
 
@@ -226,6 +292,11 @@ const useVoiceEvents = ({
 
 			isCleaningUp = true;
 
+			if (producerRepairSyncTimeout !== undefined) {
+				clearTimeout(producerRepairSyncTimeout);
+				producerRepairSyncTimeout = undefined;
+			}
+
 			onVoiceNewProducerSub.unsubscribe();
 			onVoiceProducerClosedSub.unsubscribe();
 			onVoiceUserLeaveSub.unsubscribe();
@@ -247,6 +318,8 @@ const useVoiceEvents = ({
 		clearPendingStreamsForUser,
 		onVoiceActivityUpdate,
 		onTransportFailure,
+		getActiveConsumerProducerId,
+		getPendingStreamProducerId,
 		rtpCapabilities,
 		reconnectingSince,
 		reconnectNonce,

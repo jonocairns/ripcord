@@ -623,6 +623,7 @@ class VoiceRuntime {
 				channelId: this.id,
 				remoteId: userId,
 				kind: type,
+				producerId: producer.id,
 			});
 		});
 	};
@@ -884,6 +885,7 @@ class VoiceRuntime {
 						channelId: this.id,
 						remoteId: streamId,
 						kind: StreamKind.EXTERNAL_AUDIO,
+						producerId: options.producers.audio.id,
 					});
 				} else {
 					delete internal.producers.audioProducer;
@@ -903,6 +905,7 @@ class VoiceRuntime {
 						channelId: this.id,
 						remoteId: streamId,
 						kind: StreamKind.EXTERNAL_VIDEO,
+						producerId: options.producers.video.id,
 					});
 				} else {
 					delete internal.producers.videoProducer;

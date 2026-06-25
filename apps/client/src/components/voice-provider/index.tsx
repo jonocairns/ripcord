@@ -54,7 +54,12 @@ import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } fr
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
 import { useLocalStreams } from './hooks/use-local-streams';
-import { getPendingStreamKey, usePendingStreams } from './hooks/use-pending-streams';
+import {
+	getPendingStreamKey,
+	PENDING_STREAM_REPAIR_AGE_MS,
+	type TExternalStreamTrackPresence,
+	usePendingStreams,
+} from './hooks/use-pending-streams';
 import { useRemoteStreams } from './hooks/use-remote-streams';
 import { useScreenShareQualityGuard } from './hooks/use-screen-share-quality-guard';
 import { type TransportStatsStore, useTransportStats } from './hooks/use-transport-stats';
@@ -649,7 +654,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const isPushToTalkHeldRef = useRef(false);
 	const isPushToMuteHeldRef = useRef(false);
 	const micMutedBeforePushRef = useRef<boolean | undefined>(undefined);
-	const pushReleaseTimersRef = useRef<{ talk?: ReturnType<typeof setTimeout>; mute?: ReturnType<typeof setTimeout> }>({});
+	const pushReleaseTimersRef = useRef<{ talk?: ReturnType<typeof setTimeout>; mute?: ReturnType<typeof setTimeout> }>(
+		{},
+	);
 	const pushReleaseDelayMsRef = useLatestRef(devices.pushReleaseDelayMs);
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const watchedExternalStreamsRef = useRef<Record<string, TTrackedExternalWatchState>>({});
@@ -723,8 +730,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	} = useRemoteStreams();
 	const remoteUserStreamsRef = useLatestRef(remoteUserStreams);
 	const externalStreamsRef = useLatestRef(externalStreams);
-	const { pendingStreams, addPendingStream, removePendingStream, clearPendingStreamsForUser, clearAllPendingStreams } =
-		usePendingStreams();
+	const {
+		pendingStreams,
+		addPendingStream,
+		removePendingStream,
+		clearPendingStreamsForUser,
+		clearAllPendingStreams,
+		reconcilePendingStreams,
+	} = usePendingStreams();
+	const pendingStreamsRef = useLatestRef(pendingStreams);
 
 	const {
 		localAudioProducer,
@@ -807,6 +821,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		consumeExistingProducers,
 		stopWatchingStream: stopWatchingConsumedStream,
 		cleanupTransports,
+		getActiveConsumerProducerId,
 	} = useTransports({
 		addExternalStreamTrack,
 		removeExternalStreamTrack,
@@ -815,8 +830,25 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		addPendingStream,
 		removePendingStream,
 		clearAllPendingStreams,
+		reconcilePendingStreams,
 		onTransportFailure,
 	});
+
+	const getExternalStreamTrackPresence = useCallback((): TExternalStreamTrackPresence => {
+		const tracks: TExternalStreamTrackPresence = {};
+
+		Object.entries(currentChannelExternalStreams).forEach(([streamId, stream]) => {
+			tracks[Number(streamId)] = stream.tracks;
+		});
+
+		return tracks;
+	}, [currentChannelExternalStreams]);
+
+	const getPendingStreamProducerId = useCallback(
+		(remoteId: number, kind: StreamKind): string | undefined =>
+			pendingStreamsRef.current.get(getPendingStreamKey(remoteId, kind))?.producerId,
+		[],
+	);
 
 	const captureWatchedRemoteStreams = useCallback((): TWatchedRemoteStreamsSnapshot => {
 		const watchedRemoteStreams: Record<number, TRemoteUserStreamKinds[]> = {};
@@ -1182,6 +1214,51 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 		});
 	}, [addPendingStream, currentChannelExternalStreams, externalStreams, pendingStreams]);
+
+	useEffect(() => {
+		if (currentVoiceChannelId === undefined || !voiceEventRtpCapabilities || pendingStreams.size === 0) {
+			return;
+		}
+
+		let oldestPendingCreatedAt = Number.POSITIVE_INFINITY;
+
+		pendingStreams.forEach((stream) => {
+			oldestPendingCreatedAt = Math.min(oldestPendingCreatedAt, stream.createdAt);
+		});
+
+		if (!Number.isFinite(oldestPendingCreatedAt)) {
+			return;
+		}
+
+		const repairDelayMs = Math.max(0, oldestPendingCreatedAt + PENDING_STREAM_REPAIR_AGE_MS - Date.now());
+		const repairTimeout = setTimeout(() => {
+			if (currentVoiceChannelIdRef.current === undefined) {
+				return;
+			}
+
+			logVoice('Repairing stale pending voice streams', {
+				channelId: currentVoiceChannelIdRef.current,
+				pendingCount: pendingStreams.size,
+			});
+
+			void consumeExistingProducers(voiceEventRtpCapabilities, getExternalStreamTrackPresence()).catch((error) => {
+				logVoice('Failed to repair stale pending voice streams', {
+					error,
+					channelId: currentVoiceChannelIdRef.current,
+				});
+			});
+		}, repairDelayMs);
+
+		return () => {
+			clearTimeout(repairTimeout);
+		};
+	}, [
+		consumeExistingProducers,
+		currentVoiceChannelId,
+		getExternalStreamTrackPresence,
+		pendingStreams,
+		voiceEventRtpCapabilities,
+	]);
 
 	const applyMicGainVolume = useCallback((volume: number) => {
 		const micGainPipeline = micGainPipelineRef.current;
@@ -3329,7 +3406,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			setPushMicState(clearHeldPushMicState(getPushMicState()));
 			applyPushMicOverride();
 		}
-	}, [applyPushMicOverride, channelCan, clearPendingPushRelease, currentVoiceChannelId, getPushMicState, setPushMicState]);
+	}, [
+		applyPushMicOverride,
+		channelCan,
+		clearPendingPushRelease,
+		currentVoiceChannelId,
+		getPushMicState,
+		setPushMicState,
+	]);
 
 	useEffect(() => {
 		// Reference the dep so the effect re-runs on channel change; the body
@@ -3338,9 +3422,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		voiceActivityStoreRef.current.clearAll();
 	}, [currentVoiceChannelId]);
 
+	const syncExistingProducers = useCallback(
+		(rtpCapabilities: RtpCapabilities): Promise<void> =>
+			consumeExistingProducers(rtpCapabilities, getExternalStreamTrackPresence()),
+		[consumeExistingProducers, getExternalStreamTrackPresence],
+	);
+
 	useVoiceEvents({
 		consume,
-		syncExistingProducers: consumeExistingProducers,
+		syncExistingProducers,
 		addPendingStream,
 		removePendingStream,
 		removeRemoteUserStream,
@@ -3350,6 +3440,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearPendingStreamsForUser,
 		onVoiceActivityUpdate: handleVoiceActivityUpdate,
 		onTransportFailure,
+		getActiveConsumerProducerId,
+		getPendingStreamProducerId,
 		rtpCapabilities: voiceEventRtpCapabilities,
 		reconnectNonce: voiceSessionReconnectNonce,
 	});

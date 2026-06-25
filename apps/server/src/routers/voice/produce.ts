@@ -52,6 +52,7 @@ const produceRoute = protectedProcedure
 			channelId,
 			remoteId: ctx.user.id,
 			kind: input.kind,
+			producerId: producer.id,
 		});
 
 		return producer.id;
