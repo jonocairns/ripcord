@@ -2,7 +2,7 @@ import { ActivityLogType, emojiNameSchema, Permission } from '@sharkord/shared';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishEmoji } from '../../db/publishers';
-import { getUniqueEmojiName } from '../../db/queries/emojis';
+import { emojiExists } from '../../db/queries/emojis';
 import { emojis } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { fileManager } from '../../utils/file-manager';
@@ -20,14 +20,25 @@ const addEmojiRoute = protectedProcedure
 	.mutation(async ({ input, ctx }) => {
 		await ctx.needsPermission(Permission.MANAGE_EMOJIS);
 
+		// Pre-flight conflict check before any file saves/inserts so a clash
+		// part-way through the batch doesn't leave emojis partially created.
+		const seen = new Set<string>();
+
+		for (const data of input) {
+			if (seen.has(data.name) || (await emojiExists(data.name))) {
+				ctx.throwValidationError('name', `An emoji named :${data.name}: already exists.`);
+			}
+
+			seen.add(data.name);
+		}
+
 		for (const data of input) {
 			const newFile = await fileManager.saveFile(data.fileId, ctx.userId);
-			const uniqueEmojiName = await getUniqueEmojiName(data.name);
 
 			const emoji = db
 				.insert(emojis)
 				.values({
-					name: uniqueEmojiName,
+					name: data.name,
 					fileId: newFile.id,
 					userId: ctx.userId,
 					createdAt: Date.now(),

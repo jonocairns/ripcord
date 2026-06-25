@@ -107,7 +107,7 @@ describe('emojis router', () => {
 		expect(emojis.find((e) => e.name === 'emoji_two')).toBeDefined();
 	});
 
-	test('should generate unique emoji name if duplicate', async () => {
+	test('should throw when adding emoji with an existing name', async () => {
 		const { caller, mockedToken } = await initTest();
 
 		const file1 = new File(['emoji 1'], 'emoji1.png', { type: 'image/png' });
@@ -126,18 +126,43 @@ describe('emojis router', () => {
 			},
 		]);
 
-		await caller.emojis.add([
-			{
-				fileId: data2.id,
-				name: 'duplicate_name',
-			},
-		]);
+		await expect(
+			caller.emojis.add([
+				{
+					fileId: data2.id,
+					name: 'duplicate_name',
+				},
+			]),
+		).rejects.toThrow('An emoji named :duplicate_name: already exists');
 
 		const emojis = await caller.emojis.getAll();
-		const duplicateEmojis = emojis.filter((e) => e.name.startsWith('duplicate_name'));
+		const duplicateEmojis = emojis.filter((e) => e.name === 'duplicate_name');
 
-		expect(duplicateEmojis.length).toBe(2);
-		expect(duplicateEmojis[0]!.name).not.toBe(duplicateEmojis[1]!.name);
+		expect(duplicateEmojis.length).toBe(1);
+	});
+
+	test('should throw when adding duplicate names within the same batch', async () => {
+		const { caller, mockedToken } = await initTest();
+
+		const file1 = new File(['emoji 1'], 'emoji1.png', { type: 'image/png' });
+		const file2 = new File(['emoji 2'], 'emoji2.png', { type: 'image/png' });
+
+		const upload1 = await uploadFile(file1, mockedToken);
+		const upload2 = await uploadFile(file2, mockedToken);
+
+		const data1 = (await upload1.json()) as TTempFile;
+		const data2 = (await upload2.json()) as TTempFile;
+
+		await expect(
+			caller.emojis.add([
+				{ fileId: data1.id, name: 'same_name' },
+				{ fileId: data2.id, name: 'same_name' },
+			]),
+		).rejects.toThrow('An emoji named :same_name: already exists');
+
+		const emojis = await caller.emojis.getAll();
+
+		expect(emojis.filter((e) => e.name === 'same_name').length).toBe(0);
 	});
 
 	test('should update emoji name', async () => {
