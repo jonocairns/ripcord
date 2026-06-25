@@ -84,4 +84,16 @@ describe('pending stream reconciliation', () => {
 		expect(reconciled.has(getPendingStreamKey(50, StreamKind.EXTERNAL_AUDIO))).toBe(true);
 		expect(reconciled.has(getPendingStreamKey(50, StreamKind.EXTERNAL_VIDEO))).toBe(true);
 	});
+
+	it('keeps external pending tracks when track-level fields are unset', () => {
+		const keys = buildActivePendingStreamKeys(
+			makeProducers({
+				remoteExternalStreamIds: [50],
+			}),
+			{ 50: {} },
+		);
+
+		expect(keys.has(getPendingStreamKey(50, StreamKind.EXTERNAL_AUDIO))).toBe(true);
+		expect(keys.has(getPendingStreamKey(50, StreamKind.EXTERNAL_VIDEO))).toBe(true);
+	});
 });

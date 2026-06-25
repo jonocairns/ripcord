@@ -45,11 +45,11 @@ export const buildActivePendingStreamKeys = (
 	producers.remoteExternalStreamIds.forEach((streamId) => {
 		const tracks = externalStreamTracks?.[streamId];
 
-		if (tracks === undefined || tracks.audio) {
+		if (tracks === undefined || tracks.audio !== false) {
 			activeKeys.add(getPendingStreamKey(streamId, StreamKind.EXTERNAL_AUDIO));
 		}
 
-		if (tracks === undefined || tracks.video) {
+		if (tracks === undefined || tracks.video !== false) {
 			activeKeys.add(getPendingStreamKey(streamId, StreamKind.EXTERNAL_VIDEO));
 		}
 	});
