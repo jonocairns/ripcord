@@ -1,4 +1,4 @@
-import { ActivityLogType, Permission } from '@sharkord/shared';
+import { ActivityLogType, emojiNameSchema, Permission } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
@@ -13,7 +13,7 @@ const updateEmojiRoute = protectedProcedure
 	.input(
 		z.object({
 			emojiId: z.number().min(1),
-			name: z.string().min(1).max(32),
+			name: emojiNameSchema,
 		}),
 	)
 	.mutation(async ({ ctx, input }) => {
@@ -26,10 +26,12 @@ const updateEmojiRoute = protectedProcedure
 			message: 'Emoji not found',
 		});
 
-		const exists = await emojiExists(input.name);
+		if (input.name !== existingEmoji.name) {
+			const exists = await emojiExists(input.name);
 
-		if (exists) {
-			ctx.throwValidationError('name', 'An emoji with this name already exists.');
+			if (exists) {
+				ctx.throwValidationError('name', 'An emoji with this name already exists.');
+			}
 		}
 
 		const updatedEmoji = await db
