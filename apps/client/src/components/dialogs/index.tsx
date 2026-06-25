@@ -5,6 +5,7 @@ import { AssignRoleDialog } from './assign-role';
 import ConfirmActionDialog from './confirm-action';
 import { CreateCategoryDialog } from './create-category';
 import { CreateChannelDialog } from './create-channel';
+import { CreateEmojiDialog } from './create-emoji';
 import { CreateInviteDialog } from './create-invite-dialog';
 import { Dialog } from './dialogs';
 import { PluginCommandsDialog } from './plugin-commands';
@@ -22,6 +23,7 @@ const DialogsMap: any = {
 	[Dialog.ASSIGN_ROLE]: AssignRoleDialog,
 	[Dialog.CREATE_INVITE]: CreateInviteDialog,
 	[Dialog.CREATE_CATEGORY]: CreateCategoryDialog,
+	[Dialog.CREATE_EMOJI]: CreateEmojiDialog,
 	[Dialog.PLUGIN_LOGS]: PluginLogsDialog,
 	[Dialog.PLUGIN_COMMANDS]: PluginCommandsDialog,
 	[Dialog.PLUGIN_SETTINGS]: PluginSettingsDialog,

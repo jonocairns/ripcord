@@ -1,4 +1,4 @@
-import { ActivityLogType, Permission } from '@sharkord/shared';
+import { ActivityLogType, emojiNameSchema, Permission } from '@sharkord/shared';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishEmoji } from '../../db/publishers';
@@ -13,7 +13,7 @@ const addEmojiRoute = protectedProcedure
 		z.array(
 			z.object({
 				fileId: z.string(),
-				name: z.string().min(1).max(32),
+				name: emojiNameSchema,
 			}),
 		),
 	)
