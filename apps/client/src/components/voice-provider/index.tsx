@@ -2852,7 +2852,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 								await withRecoveryTimeout(
 									Promise.all([
-										consumeExistingProducers(currentRtpCapabilities, undefined, recoveryJoinResult?.existingProducers),
+										consumeExistingProducers(
+											currentRtpCapabilities,
+											getExternalStreamTrackPresence(),
+											recoveryJoinResult?.existingProducers,
+										),
 										...republishTasks,
 									]),
 								);
@@ -2861,7 +2865,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 								if (recoveryJoinResult) {
 									logVoice('Refreshing existing producers after voice session rejoin');
-									await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
+									await withRecoveryTimeout(
+										consumeExistingProducers(currentRtpCapabilities, getExternalStreamTrackPresence()),
+									);
 
 									await withRecoveryTimeout(
 										new Promise<void>((resolve) => {
@@ -2870,7 +2876,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									);
 
 									logVoice('Refreshing existing producers after delayed voice session rejoin sync');
-									await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
+									await withRecoveryTimeout(
+										consumeExistingProducers(currentRtpCapabilities, getExternalStreamTrackPresence()),
+									);
 								}
 
 								const restoreWatchTasks: Promise<void>[] = [];
@@ -2962,6 +2970,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		cleanupTransports,
 		consume,
 		consumeExistingProducers,
+		getExternalStreamTrackPresence,
 		createConsumerTransport,
 		createProducerTransport,
 		ensureVoiceDeviceLoaded,
@@ -3147,7 +3156,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 					if (currentRtpCapabilities) {
 						logVoice('Refreshing existing producers after reconnect restore');
-						await withVoiceReconnectTimeout(consumeExistingProducers(currentRtpCapabilities));
+						await withVoiceReconnectTimeout(
+							consumeExistingProducers(currentRtpCapabilities, getExternalStreamTrackPresence()),
+						);
 					} else {
 						logVoice('Skipping producer refresh after reconnect restore - missing RTP capabilities');
 					}
@@ -3241,6 +3252,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		isConnected,
 		reconnectingSince,
 		consumeExistingProducers,
+		getExternalStreamTrackPresence,
 		requestVoiceRestoreOrJoin,
 		waitForVoiceReconnectDelay,
 		waitForVoiceReconnectOnline,
