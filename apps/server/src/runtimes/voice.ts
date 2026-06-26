@@ -933,6 +933,8 @@ class VoiceRuntime {
 	};
 
 	public getRemoteIds = (userId: number): TRemoteProducerIds => {
+		const remoteExternalStreamIds = Object.keys(this.externalStreamsInternal).map((id) => +id);
+
 		return {
 			remoteVideoIds: Object.keys(this.videoProducers)
 				.filter((id) => +id !== userId)
@@ -944,7 +946,10 @@ class VoiceRuntime {
 				.filter((id) => +id !== userId)
 				.map((id) => +id),
 			remoteScreenAudioIds: Object.keys(this.screenAudioProducers).map((id) => +id),
-			remoteExternalStreamIds: Object.keys(this.externalStreamsInternal).map((id) => +id),
+			remoteExternalStreamIds,
+			externalStreamTracks: Object.fromEntries(
+				remoteExternalStreamIds.map((streamId) => [streamId, this.getExternalStreamTracks(streamId)]),
+			),
 		};
 	};
 

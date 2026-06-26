@@ -553,6 +553,11 @@ const useTransports = ({
 						const { remoteAudioIds, remoteScreenIds, remoteScreenAudioIds, remoteVideoIds, remoteExternalStreamIds } =
 							producers;
 
+						// The snapshot carries authoritative per-track presence; prefer it over
+						// the caller-supplied local metadata, which can be stale on recovery and
+						// would otherwise suppress a live external track that was just added.
+						const effectiveExternalStreamTracks = producers.externalStreamTracks ?? externalStreamTracks;
+
 						logVoice('Got existing producers', {
 							remoteAudioIds,
 							remoteScreenIds,
@@ -575,7 +580,7 @@ const useTransports = ({
 						});
 
 						remoteExternalStreamIds.forEach((streamId: number) => {
-							const tracks = externalStreamTracks?.[streamId];
+							const tracks = effectiveExternalStreamTracks?.[streamId];
 
 							if (tracks?.audio !== false) {
 								addPendingStream(streamId, StreamKind.EXTERNAL_AUDIO);
@@ -585,7 +590,7 @@ const useTransports = ({
 							}
 						});
 
-						reconcilePendingStreams(producers, externalStreamTracks);
+						reconcilePendingStreams(producers, effectiveExternalStreamTracks);
 					} catch (error) {
 						logVoice('Error consuming existing producers', { error });
 						throw error;
