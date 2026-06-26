@@ -73,6 +73,7 @@ type Events = {
 		channelId: number;
 		remoteId: number;
 		kind: StreamKind;
+		producerId?: string;
 	};
 	[ServerEvents.VOICE_ADD_EXTERNAL_STREAM]: {
 		channelId: number;
@@ -92,6 +93,7 @@ type Events = {
 		channelId: number;
 		remoteId: number;
 		kind: StreamKind;
+		producerId?: string;
 	};
 	[ServerEvents.VOICE_ACTIVITY_UPDATE]: {
 		channelId: number;

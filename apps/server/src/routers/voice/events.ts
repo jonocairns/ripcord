@@ -7,6 +7,7 @@ type TVoiceProducerEvent = {
 	channelId: number;
 	remoteId: number;
 	kind: StreamKind;
+	producerId?: string;
 };
 
 type TVoiceActivityEvent = {

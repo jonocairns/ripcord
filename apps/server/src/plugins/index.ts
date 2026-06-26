@@ -641,6 +641,7 @@ class PluginManager {
 								channelId: options.channelId,
 								remoteId: streamId,
 								kind: StreamKind.EXTERNAL_AUDIO,
+								producerId: options.producers.audio.id,
 							});
 						}
 
@@ -649,6 +650,7 @@ class PluginManager {
 								channelId: options.channelId,
 								remoteId: streamId,
 								kind: StreamKind.EXTERNAL_VIDEO,
+								producerId: options.producers.video.id,
 							});
 						}
 

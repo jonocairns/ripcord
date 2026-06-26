@@ -27,6 +27,10 @@ export type TRemoteProducerIds = {
 	remoteScreenIds: number[];
 	remoteScreenAudioIds: number[];
 	remoteExternalStreamIds: number[];
+	// Authoritative per-stream external track presence from the snapshot.
+	// Optional for backward compatibility with older servers; when present the
+	// client prefers it over (potentially stale) local channel metadata.
+	externalStreamTracks?: { [streamId: number]: { audio: boolean; video: boolean } };
 };
 
 export type TPublicServerSettings = Pick<
