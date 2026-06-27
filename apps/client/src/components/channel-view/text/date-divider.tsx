@@ -16,7 +16,7 @@ const DateDivider = memo(({ date }: TDateDividerProps) => {
 	const label = useMemo(() => getLabel(date), [date]);
 
 	return (
-		<div className="relative flex select-none items-center justify-center py-2" role="separator" aria-label={label}>
+		<div className="relative flex select-none items-center justify-center py-2">
 			<span aria-hidden className="absolute inset-x-2 h-px bg-border" />
 			<span className="relative bg-background px-2 text-xs font-semibold text-muted-foreground">{label}</span>
 		</div>
