@@ -84,6 +84,19 @@ const TiptapInput = memo(
 
 				if (!editor.isEmpty) {
 					onTyping?.();
+					return;
+				}
+
+				// clearing everything via select-all + delete leaves a non-collapsed
+				// AllSelection over the empty paragraph, which the browser paints as a
+				// stray blue selection bar. collapse it so the empty composer shows a
+				// normal caret. deferred to avoid dispatching during the current update.
+				if (!editor.state.selection.empty) {
+					queueMicrotask(() => {
+						if (!editor.isDestroyed && editor.isEmpty && !editor.state.selection.empty) {
+							editor.commands.setTextSelection(1);
+						}
+					});
 				}
 			},
 			editorProps: {

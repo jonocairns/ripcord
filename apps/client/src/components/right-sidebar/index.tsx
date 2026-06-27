@@ -99,7 +99,7 @@ type TSectionProps = {
 
 const Section = memo(({ title, users }: TSectionProps) => (
 	<section className="space-y-1">
-		<div className="px-2 text-[11px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
+		<div className="px-2 text-[11px] font-semibold tracking-widest text-muted-foreground/60 uppercase">
 			{title} ({users.length})
 		</div>
 		<div className="space-y-1">

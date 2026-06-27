@@ -15,8 +15,10 @@ import { openServerScreen } from '@/features/server-screens/actions';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { useUploadFiles } from '@/hooks/use-upload-files';
 import { getTRPCClient } from '@/lib/trpc';
+import { cn } from '@/lib/utils';
 import { ServerScreen } from '../../server-screens/screens';
 import { Button } from '../../ui/button';
+import { ChannelHeader } from './channel-header';
 import { FileCard } from './file-card';
 import { MessagesGroup } from './messages-group';
 import { TextSkeleton } from './text-skeleton';
@@ -62,6 +64,10 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 	const { files, removeFile, clearFiles, uploading, uploadingSize, openFileDialog, fileInputProps } = useUploadFiles(
 		!canSendMessages,
 	);
+
+	// tiptap emits HTML (an empty editor is "<p></p>"), so a plain string check is
+	// always truthy — use isEmptyMessage. Files alone are also sendable.
+	const hasContent = useMemo(() => !isEmptyMessage(newMessage) || files.length > 0, [newMessage, files.length]);
 
 	const canManageChannel = can(Permission.MANAGE_CHANNELS);
 
@@ -116,8 +122,10 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 
 	return (
 		<>
+			<ChannelHeader channelId={channelId} />
+
 			{fetching && (
-				<div className="absolute top-0 left-0 right-0 h-12 z-10 flex items-center justify-center">
+				<div className="absolute top-12 left-0 right-0 h-12 z-10 flex items-center justify-center">
 					<div className="flex items-center gap-2 bg-background/80 backdrop-blur-sm border border-border rounded-full px-4 py-2 shadow-lg">
 						<Spinner size="xs" />
 						<span className="text-sm text-muted-foreground">Fetching older messages...</span>
@@ -196,7 +204,7 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 					</div>
 				)}
 				<div className="flex items-center px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:h-14 md:p-2">
-					<div className="bg-muted/60 flex h-10 w-full items-center gap-1 rounded-md border border-border px-1">
+					<div className="bg-muted/60 flex h-10 w-full items-center gap-1 rounded-md border border-border px-1 transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40">
 						<input {...fileInputProps} />
 						<Button
 							size="icon"
@@ -219,10 +227,13 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 						/>
 						<Button
 							size="icon"
-							variant="secondary"
-							className="h-8 w-8 shrink-0 rounded-md"
+							variant={hasContent ? 'default' : 'ghost'}
+							className={cn(
+								'h-8 w-8 shrink-0 rounded-md transition-colors [&_svg]:-translate-x-px [&_svg]:translate-y-px',
+								!hasContent && 'text-muted-foreground hover:text-foreground',
+							)}
 							onClick={onSendMessage}
-							disabled={uploading || sending || !newMessage.trim() || !canSendMessages}
+							disabled={uploading || sending || !hasContent || !canSendMessages}
 							title="Send message"
 						>
 							<Send className="h-4 w-4" />
