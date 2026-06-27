@@ -47,11 +47,14 @@ const createDesktopAppAudioPipeline = async (
 	const insertSilenceOnDroppedFrames = options?.insertSilenceOnDroppedFrames ?? false;
 	const emitQueueTelemetry = options?.emitQueueTelemetry ?? false;
 	const queueTelemetryIntervalMs = Math.max(250, Math.floor(options?.queueTelemetryIntervalMs ?? 1_000));
-	const { targetChunks, trimStartChunks, maxChunks, trimQueueForLowLatency } = getDesktopAppAudioQueueConfig(mode);
+	const { targetChunks, trimStartChunks, maxChunks, resyncStartChunks, trimQueueForLowLatency } =
+		getDesktopAppAudioQueueConfig(mode);
 	let nextQueueOverflowLogAt = 0;
 	let suppressedQueueOverflowEvents = 0;
 	let nextQueueTrimLogAt = 0;
 	let suppressedQueueTrimEvents = 0;
+	let nextQueueResyncLogAt = 0;
+	let suppressedQueueResyncEvents = 0;
 	let nextDroppedFrameLogAt = 0;
 	let droppedFrameEventsSinceLastLog = 0;
 	let droppedFramesSinceLastLog = 0;
@@ -104,6 +107,7 @@ const createDesktopAppAudioPipeline = async (
 				targetChunks,
 				trimStartChunks,
 				maxChunks,
+				resyncStartChunks,
 				trimQueueForLowLatency,
 				emitQueueTelemetry,
 				queueTelemetryIntervalMs,
@@ -140,6 +144,20 @@ const createDesktopAppAudioPipeline = async (
 					});
 					suppressedQueueTrimEvents = 0;
 					nextQueueTrimLogAt = now + LOG_RATE_LIMIT_MS;
+				}
+				return;
+			}
+
+			if (data?.type === 'queue-resync') {
+				const now = Date.now();
+				suppressedQueueResyncEvents += 1;
+				if (now >= nextQueueResyncLogAt) {
+					console.warn(`[${logLabel}] PCM queue resynced toward target to correct drift`, {
+						...data,
+						eventsSinceLastLog: suppressedQueueResyncEvents,
+					});
+					suppressedQueueResyncEvents = 0;
+					nextQueueResyncLogAt = now + LOG_RATE_LIMIT_MS;
 				}
 				return;
 			}

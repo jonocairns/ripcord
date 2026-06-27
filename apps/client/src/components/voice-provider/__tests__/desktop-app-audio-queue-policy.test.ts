@@ -16,6 +16,7 @@ describe('desktop app audio queue policy', () => {
 			targetChunks: 3,
 			trimStartChunks: 6,
 			maxChunks: 10,
+			resyncStartChunks: 0,
 			trimQueueForLowLatency: true,
 		});
 	});
@@ -27,6 +28,7 @@ describe('desktop app audio queue policy', () => {
 			targetChunks: 12,
 			trimStartChunks: 24,
 			maxChunks: 24,
+			resyncStartChunks: 20,
 			trimQueueForLowLatency: false,
 		});
 	});
