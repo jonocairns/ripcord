@@ -13,6 +13,11 @@ import {
 	resetConsumeOperationGeneration,
 } from './consume-operation-state';
 import { getConsumeRetryDelayMs, shouldRetryConsume } from './consume-retry-policy';
+import {
+	createExistingProducersSweeper,
+	type TExistingProducersSweeper,
+	type TExistingProducersSweepRequest,
+} from './existing-producers-sweep';
 import type { TExternalStreamTrackPresence } from './use-pending-streams';
 
 // How long to wait for an ICE "disconnected" state to recover before closing
@@ -20,7 +25,19 @@ import type { TExternalStreamTrackPresence } from './use-pending-streams';
 // change); only "failed" is terminal per the spec.
 const ICE_DISCONNECT_GRACE_MS = 30_000;
 
+// getProducers is a trivial read (returns producer id lists, no media
+// negotiation), so a healthy server answers in well under a second. Bound it
+// with a tighter timeout than the generic consume RPC so a stalled sweep fails
+// fast and leaves the rest of the recovery budget for the actual consumes.
+const EXISTING_PRODUCERS_RPC_TIMEOUT_MS = 4_000;
+
 type TConsumeAttemptResult = 'success' | 'failure';
+
+type TServerConsumerCleanupTarget = {
+	remoteId: number;
+	kind: StreamKind;
+	consumerId: string;
+};
 
 type TUseTransportParams = {
 	addRemoteUserStream: (userId: number, stream: MediaStream, kind: TRemoteUserStreamKinds) => void;
@@ -59,6 +76,39 @@ const useTransports = ({
 		};
 	}>({});
 	const consumeOperationState = useRef(createConsumeOperationState());
+	const runConsumeExistingProducersSweepRef = useRef<
+		((request: TExistingProducersSweepRequest) => Promise<void>) | undefined
+	>(undefined);
+	const existingProducersSweeperRef = useRef<TExistingProducersSweeper | undefined>(undefined);
+
+	if (existingProducersSweeperRef.current === undefined) {
+		existingProducersSweeperRef.current = createExistingProducersSweeper(
+			(request) => runConsumeExistingProducersSweepRef.current!(request),
+			(message) => logVoice(message),
+		);
+	}
+
+	const closeServerConsumerAfterFailedConsume = useCallback(
+		async (target: TServerConsumerCleanupTarget, reason: string, error?: unknown) => {
+			try {
+				await getTRPCClient().voice.closeConsumer.mutate({
+					remoteId: target.remoteId,
+					kind: target.kind,
+					consumerId: target.consumerId,
+				});
+			} catch (closeError) {
+				logVoice('Failed to close server consumer after failed consume', {
+					closeError,
+					error,
+					reason,
+					remoteId: target.remoteId,
+					kind: target.kind,
+					consumerId: target.consumerId,
+				});
+			}
+		},
+		[],
+	);
 
 	const createProducerTransport = useCallback(
 		async (device: Device, prefetchedParams?: TTransportParams) => {
@@ -310,6 +360,7 @@ const useTransports = ({
 	const consumeOnce = useCallback(
 		async (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities): Promise<TConsumeAttemptResult> => {
 			const transport = consumerTransport.current;
+			let serverConsumerCleanupTarget: TServerConsumerCleanupTarget | undefined;
 
 			if (!transport || transport.closed) {
 				logVoice('Consumer transport not available');
@@ -329,12 +380,17 @@ const useTransports = ({
 						paused: true,
 					}),
 				);
+				serverConsumerCleanupTarget = { remoteId, kind, consumerId };
 
 				if (consumerTransport.current !== transport || transport.closed) {
 					logVoice('Consumer transport changed before local consumer creation', {
 						remoteId,
 						kind,
 					});
+					await closeServerConsumerAfterFailedConsume(
+						serverConsumerCleanupTarget,
+						'transport changed before local consumer creation',
+					);
 					return 'failure';
 				}
 
@@ -427,13 +483,18 @@ const useTransports = ({
 					});
 
 					newConsumer.close();
+					await closeServerConsumerAfterFailedConsume(serverConsumerCleanupTarget, 'resume consumer failed', error);
 					return 'failure';
 				}
 
+				serverConsumerCleanupTarget = undefined;
 				removePendingStream(remoteId, kind);
 				return 'success';
 			} catch (error) {
 				logVoice('Error consuming remote producer', { error });
+				if (serverConsumerCleanupTarget !== undefined) {
+					await closeServerConsumerAfterFailedConsume(serverConsumerCleanupTarget, 'consume attempt failed', error);
+				}
 				return 'failure';
 			}
 		},
@@ -443,6 +504,7 @@ const useTransports = ({
 			addExternalStreamTrack,
 			removeExternalStreamTrack,
 			removePendingStream,
+			closeServerConsumerAfterFailedConsume,
 		],
 	);
 
@@ -524,14 +586,8 @@ const useTransports = ({
 		[addPendingStream, consumeOnce, removePendingStream],
 	);
 
-	const consumeExistingProducers = useCallback(
-		async (
-			rtpCapabilities: RtpCapabilities,
-			externalStreamTracks?: {
-				[streamId: number]: { audio?: boolean; video?: boolean };
-			},
-			prefetchedProducers?: TRemoteProducerIds,
-		) => {
+	const runConsumeExistingProducersSweep = useCallback(
+		async ({ rtpCapabilities, externalStreamTracks, prefetchedProducers }: TExistingProducersSweepRequest) => {
 			return traceSentrySpan(
 				{
 					name: 'voice.consume_existing_producers',
@@ -549,7 +605,9 @@ const useTransports = ({
 					const trpc = getTRPCClient();
 
 					try {
-						const producers = prefetchedProducers ?? (await trpc.voice.getProducers.query());
+						const producers =
+							prefetchedProducers ??
+							(await withConsumeAttemptTimeout(trpc.voice.getProducers.query(), EXISTING_PRODUCERS_RPC_TIMEOUT_MS));
 						const { remoteAudioIds, remoteScreenIds, remoteScreenAudioIds, remoteVideoIds, remoteExternalStreamIds } =
 							producers;
 
@@ -601,6 +659,22 @@ const useTransports = ({
 		[addPendingStream, consume, reconcilePendingStreams],
 	);
 
+	runConsumeExistingProducersSweepRef.current = runConsumeExistingProducersSweep;
+
+	const consumeExistingProducers = useCallback(
+		(
+			rtpCapabilities: RtpCapabilities,
+			externalStreamTracks?: TExternalStreamTrackPresence,
+			prefetchedProducers?: TRemoteProducerIds,
+		) =>
+			existingProducersSweeperRef.current!.schedule({
+				rtpCapabilities,
+				externalStreamTracks,
+				prefetchedProducers,
+			}),
+		[],
+	);
+
 	const stopWatchingStream = useCallback(
 		async (remoteId: number, kind: StreamKind) => {
 			if (kind === StreamKind.AUDIO) {
@@ -612,6 +686,7 @@ const useTransports = ({
 			}
 
 			const existingConsumer = consumers.current[remoteId]?.[kind];
+			const existingConsumerId = existingConsumer?.id;
 
 			if (existingConsumer && !existingConsumer.closed) {
 				existingConsumer.close();
@@ -622,9 +697,12 @@ const useTransports = ({
 			try {
 				const trpc = getTRPCClient();
 
+				// Target the specific consumer we observed so a stale close racing a
+				// reconnect sweep cannot close a freshly-created replacement consumer.
 				await trpc.voice.closeConsumer.mutate({
 					remoteId,
 					kind,
+					consumerId: existingConsumerId,
 				});
 			} catch (error) {
 				logVoice('Error closing remote consumer', {
@@ -661,6 +739,10 @@ const useTransports = ({
 		consumers.current = {};
 
 		resetConsumeOperationGeneration(consumeOperationState.current);
+		// Drop any in-flight/queued existing-producer sweep so a stalled sweep
+		// (e.g. a hung getProducers during reconnect) cannot poison the
+		// single-flight state for the rebuilt transport generation.
+		existingProducersSweeperRef.current?.reset();
 		clearAllPendingStreams();
 
 		if (producerTransport.current && !producerTransport.current.closed) {

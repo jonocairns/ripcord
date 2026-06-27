@@ -1,4 +1,5 @@
 import type { TAppAudioSession } from '@/runtime/types';
+import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } from './audio-context';
 import desktopAppAudioWorkletModuleUrl from './desktop-app-audio.worklet.js?url&no-inline';
 import {
 	computeRecoverableMissingFrameCount,
@@ -6,7 +7,12 @@ import {
 	type TDesktopAppAudioFrame,
 	validateDesktopAppAudioFrame,
 } from './desktop-app-audio-frame-policy';
-import { getDesktopAppAudioQueueConfig, type TDesktopAppAudioPipelineMode } from './desktop-app-audio-queue-policy';
+import { decodePcmBase64 } from './desktop-app-audio-pcm';
+import {
+	DEFAULT_DESKTOP_APP_AUDIO_PIPELINE_MODE,
+	getDesktopAppAudioQueueConfig,
+	type TDesktopAppAudioPipelineMode,
+} from './desktop-app-audio-queue-policy';
 
 type TDesktopAppAudioPipeline = {
 	sessionId: string;
@@ -28,18 +34,6 @@ const WORKLET_NAME = 'sharkord-pcm-queue-processor';
 const LOG_RATE_LIMIT_MS = 2_000;
 const TELEMETRY_LOG_INTERVAL_MS = 10_000;
 
-const decodePcmBase64 = (pcmBase64: string): Float32Array => {
-	const binaryString = atob(pcmBase64);
-	const byteLength = binaryString.length;
-	const bytes = new Uint8Array(byteLength);
-
-	for (let index = 0; index < byteLength; index += 1) {
-		bytes[index] = binaryString.charCodeAt(index);
-	}
-
-	return new Float32Array(bytes.buffer);
-};
-
 const ensureWorkletModule = async (audioContext: AudioContext) => {
 	await audioContext.audioWorklet.addModule(desktopAppAudioWorkletModuleUrl);
 };
@@ -48,16 +42,19 @@ const createDesktopAppAudioPipeline = async (
 	session: TAppAudioSession,
 	options?: TDesktopAppAudioPipelineOptions,
 ): Promise<TDesktopAppAudioPipeline> => {
-	const mode = options?.mode || 'low-latency';
+	const mode = options?.mode || DEFAULT_DESKTOP_APP_AUDIO_PIPELINE_MODE;
 	const logLabel = options?.logLabel || 'desktop-app-audio';
 	const insertSilenceOnDroppedFrames = options?.insertSilenceOnDroppedFrames ?? false;
 	const emitQueueTelemetry = options?.emitQueueTelemetry ?? false;
 	const queueTelemetryIntervalMs = Math.max(250, Math.floor(options?.queueTelemetryIntervalMs ?? 1_000));
-	const { targetChunks, trimStartChunks, maxChunks, trimQueueForLowLatency } = getDesktopAppAudioQueueConfig(mode);
+	const { targetChunks, trimStartChunks, maxChunks, resyncStartChunks, trimQueueForLowLatency } =
+		getDesktopAppAudioQueueConfig(mode);
 	let nextQueueOverflowLogAt = 0;
 	let suppressedQueueOverflowEvents = 0;
 	let nextQueueTrimLogAt = 0;
 	let suppressedQueueTrimEvents = 0;
+	let nextQueueResyncLogAt = 0;
+	let suppressedQueueResyncEvents = 0;
 	let nextDroppedFrameLogAt = 0;
 	let droppedFrameEventsSinceLastLog = 0;
 	let droppedFramesSinceLastLog = 0;
@@ -68,10 +65,31 @@ const createDesktopAppAudioPipeline = async (
 	let nextQueueTelemetryLogAt = 0;
 	let lastSequence: number | undefined;
 
-	const audioContext = new AudioContext({
+	// Use the shared sample-rate fallback so an unsupported capture rate degrades
+	// to a working context instead of throwing and failing the whole pipeline.
+	const audioContext = createAudioContextWithSampleRateFallback({
+		AudioContextClass: resolveAudioContextClass(),
 		sampleRate: session.sampleRate,
-		latencyHint: 'interactive',
+		onPreferredSampleRateError: (error) => {
+			console.warn(`[${logLabel}] AudioContext rejected sample rate ${session.sampleRate} Hz; falling back`, error);
+		},
+		onFallbackError: (error) => {
+			console.error(`[${logLabel}] Failed to create AudioContext for app audio pipeline`, error);
+		},
 	});
+
+	if (!audioContext) {
+		throw new Error('Failed to create AudioContext for app audio pipeline');
+	}
+
+	// PCM samples are written straight into the worklet's render quantum with no
+	// resampling, so a context running at a different rate than the session would
+	// play back pitch-shifted. Surface it rather than fail silently.
+	if (audioContext.sampleRate !== session.sampleRate) {
+		console.warn(
+			`[${logLabel}] AudioContext running at ${audioContext.sampleRate} Hz but session is ${session.sampleRate} Hz; app audio may be pitch-shifted`,
+		);
+	}
 
 	let workletNode: AudioWorkletNode | undefined;
 
@@ -89,6 +107,7 @@ const createDesktopAppAudioPipeline = async (
 				targetChunks,
 				trimStartChunks,
 				maxChunks,
+				resyncStartChunks,
 				trimQueueForLowLatency,
 				emitQueueTelemetry,
 				queueTelemetryIntervalMs,
@@ -125,6 +144,20 @@ const createDesktopAppAudioPipeline = async (
 					});
 					suppressedQueueTrimEvents = 0;
 					nextQueueTrimLogAt = now + LOG_RATE_LIMIT_MS;
+				}
+				return;
+			}
+
+			if (data?.type === 'queue-resync') {
+				const now = Date.now();
+				suppressedQueueResyncEvents += 1;
+				if (now >= nextQueueResyncLogAt) {
+					console.warn(`[${logLabel}] PCM queue resynced toward target to correct drift`, {
+						...data,
+						eventsSinceLastLog: suppressedQueueResyncEvents,
+					});
+					suppressedQueueResyncEvents = 0;
+					nextQueueResyncLogAt = now + LOG_RATE_LIMIT_MS;
 				}
 				return;
 			}
@@ -290,13 +323,14 @@ const createDesktopAppAudioPipeline = async (
 				const samples = isPcmFrame(frame) ? frame.pcm : decodePcmBase64(frame.pcmBase64);
 
 				const expectedSampleCount = frame.frameCount * frame.channels;
-				if (samples.length !== expectedSampleCount) {
+				if (samples === undefined || samples.length !== expectedSampleCount) {
 					const now = Date.now();
 					malformedFrameDropsSinceLastLog += 1;
 					if (now >= nextMalformedFrameLogAt) {
 						console.warn(`[${logLabel}] Dropping malformed app audio frame payload`, {
 							expectedSampleCount,
-							actualSampleCount: samples.length,
+							actualSampleCount: samples?.length ?? 0,
+							undecodable: samples === undefined,
 							frameCount: frame.frameCount,
 							channels: frame.channels,
 							malformedFrameDropsSinceLastLog,
