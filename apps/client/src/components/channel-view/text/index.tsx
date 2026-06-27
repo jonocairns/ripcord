@@ -1,7 +1,8 @@
 import { ChannelPermission, isEmptyMessage, Permission } from '@sharkord/shared';
+import { isSameDay } from 'date-fns';
 import { filesize } from 'filesize';
 import { Hash, Pencil, Plus, Send } from 'lucide-react';
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, useCallback, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { TiptapInput } from '@/components/tiptap-input';
 import Spinner from '@/components/ui/spinner';
@@ -19,6 +20,7 @@ import { cn } from '@/lib/utils';
 import { ServerScreen } from '../../server-screens/screens';
 import { Button } from '../../ui/button';
 import { ChannelHeader } from './channel-header';
+import { DateDivider } from './date-divider';
 import { FileCard } from './file-card';
 import { MessagesGroup } from './messages-group';
 import { TextSkeleton } from './text-skeleton';
@@ -172,9 +174,19 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 					</div>
 				) : (
 					<div className="space-y-4">
-						{groupedMessages.map((group, index) => (
-							<MessagesGroup key={index} group={group} />
-						))}
+						{groupedMessages.map((group, index) => {
+							const previousGroup = groupedMessages[index - 1];
+							const groupDate = new Date(group[0].createdAt);
+							const showDateDivider =
+								!previousGroup || !isSameDay(groupDate, new Date(previousGroup[0].createdAt));
+
+							return (
+								<Fragment key={index}>
+									{showDateDivider && <DateDivider date={groupDate} />}
+									<MessagesGroup group={group} />
+								</Fragment>
+							);
+						})}
 					</div>
 				)}
 			</div>
