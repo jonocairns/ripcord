@@ -22,6 +22,18 @@ const ICE_DISCONNECT_GRACE_MS = 30_000;
 
 type TConsumeAttemptResult = 'success' | 'failure';
 
+type TServerConsumerCleanupTarget = {
+	remoteId: number;
+	kind: StreamKind;
+	consumerId: string;
+};
+
+type TConsumeExistingProducersSweepRequest = {
+	rtpCapabilities: RtpCapabilities;
+	externalStreamTracks?: TExternalStreamTrackPresence;
+	prefetchedProducers?: TRemoteProducerIds;
+};
+
 type TUseTransportParams = {
 	addRemoteUserStream: (userId: number, stream: MediaStream, kind: TRemoteUserStreamKinds) => void;
 	removeRemoteUserStream: (userId: number, kind: TRemoteUserStreamKinds) => void;
@@ -59,6 +71,32 @@ const useTransports = ({
 		};
 	}>({});
 	const consumeOperationState = useRef(createConsumeOperationState());
+	const consumeExistingProducersInFlight = useRef<Promise<void> | undefined>(undefined);
+	const queuedConsumeExistingProducersSweep = useRef<
+		Omit<TConsumeExistingProducersSweepRequest, 'prefetchedProducers'> | undefined
+	>(undefined);
+
+	const closeServerConsumerAfterFailedConsume = useCallback(
+		async (target: TServerConsumerCleanupTarget, reason: string, error?: unknown) => {
+			try {
+				await getTRPCClient().voice.closeConsumer.mutate({
+					remoteId: target.remoteId,
+					kind: target.kind,
+					consumerId: target.consumerId,
+				});
+			} catch (closeError) {
+				logVoice('Failed to close server consumer after failed consume', {
+					closeError,
+					error,
+					reason,
+					remoteId: target.remoteId,
+					kind: target.kind,
+					consumerId: target.consumerId,
+				});
+			}
+		},
+		[],
+	);
 
 	const createProducerTransport = useCallback(
 		async (device: Device, prefetchedParams?: TTransportParams) => {
@@ -310,6 +348,7 @@ const useTransports = ({
 	const consumeOnce = useCallback(
 		async (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities): Promise<TConsumeAttemptResult> => {
 			const transport = consumerTransport.current;
+			let serverConsumerCleanupTarget: TServerConsumerCleanupTarget | undefined;
 
 			if (!transport || transport.closed) {
 				logVoice('Consumer transport not available');
@@ -329,12 +368,17 @@ const useTransports = ({
 						paused: true,
 					}),
 				);
+				serverConsumerCleanupTarget = { remoteId, kind, consumerId };
 
 				if (consumerTransport.current !== transport || transport.closed) {
 					logVoice('Consumer transport changed before local consumer creation', {
 						remoteId,
 						kind,
 					});
+					await closeServerConsumerAfterFailedConsume(
+						serverConsumerCleanupTarget,
+						'transport changed before local consumer creation',
+					);
 					return 'failure';
 				}
 
@@ -427,13 +471,18 @@ const useTransports = ({
 					});
 
 					newConsumer.close();
+					await closeServerConsumerAfterFailedConsume(serverConsumerCleanupTarget, 'resume consumer failed', error);
 					return 'failure';
 				}
 
+				serverConsumerCleanupTarget = undefined;
 				removePendingStream(remoteId, kind);
 				return 'success';
 			} catch (error) {
 				logVoice('Error consuming remote producer', { error });
+				if (serverConsumerCleanupTarget !== undefined) {
+					await closeServerConsumerAfterFailedConsume(serverConsumerCleanupTarget, 'consume attempt failed', error);
+				}
 				return 'failure';
 			}
 		},
@@ -443,6 +492,7 @@ const useTransports = ({
 			addExternalStreamTrack,
 			removeExternalStreamTrack,
 			removePendingStream,
+			closeServerConsumerAfterFailedConsume,
 		],
 	);
 
@@ -524,14 +574,8 @@ const useTransports = ({
 		[addPendingStream, consumeOnce, removePendingStream],
 	);
 
-	const consumeExistingProducers = useCallback(
-		async (
-			rtpCapabilities: RtpCapabilities,
-			externalStreamTracks?: {
-				[streamId: number]: { audio?: boolean; video?: boolean };
-			},
-			prefetchedProducers?: TRemoteProducerIds,
-		) => {
+	const runConsumeExistingProducersSweep = useCallback(
+		async ({ rtpCapabilities, externalStreamTracks, prefetchedProducers }: TConsumeExistingProducersSweepRequest) => {
 			return traceSentrySpan(
 				{
 					name: 'voice.consume_existing_producers',
@@ -599,6 +643,60 @@ const useTransports = ({
 			);
 		},
 		[addPendingStream, consume, reconcilePendingStreams],
+	);
+
+	const consumeExistingProducers = useCallback(
+		async (
+			rtpCapabilities: RtpCapabilities,
+			externalStreamTracks?: TExternalStreamTrackPresence,
+			prefetchedProducers?: TRemoteProducerIds,
+		) => {
+			const activeSweep = consumeExistingProducersInFlight.current;
+
+			if (activeSweep) {
+				if (prefetchedProducers === undefined) {
+					queuedConsumeExistingProducersSweep.current = { rtpCapabilities, externalStreamTracks };
+					logVoice('Queued existing producer sync behind active sweep');
+				} else {
+					logVoice('Joining active existing producer sync');
+				}
+
+				return activeSweep;
+			}
+
+			const runQueuedSweeps = async () => {
+				let nextSweep: TConsumeExistingProducersSweepRequest | undefined = {
+					rtpCapabilities,
+					externalStreamTracks,
+					prefetchedProducers,
+				};
+
+				while (nextSweep !== undefined) {
+					const currentSweep = nextSweep;
+					nextSweep = undefined;
+
+					await runConsumeExistingProducersSweep(currentSweep);
+
+					const queuedSweep = queuedConsumeExistingProducersSweep.current;
+					queuedConsumeExistingProducersSweep.current = undefined;
+
+					if (queuedSweep !== undefined) {
+						nextSweep = queuedSweep;
+					}
+				}
+			};
+
+			const sweepPromise = runQueuedSweeps().finally(() => {
+				if (consumeExistingProducersInFlight.current === sweepPromise) {
+					consumeExistingProducersInFlight.current = undefined;
+				}
+			});
+
+			consumeExistingProducersInFlight.current = sweepPromise;
+
+			return sweepPromise;
+		},
+		[runConsumeExistingProducersSweep],
 	);
 
 	const stopWatchingStream = useCallback(

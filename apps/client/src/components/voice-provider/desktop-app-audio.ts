@@ -6,7 +6,11 @@ import {
 	type TDesktopAppAudioFrame,
 	validateDesktopAppAudioFrame,
 } from './desktop-app-audio-frame-policy';
-import { getDesktopAppAudioQueueConfig, type TDesktopAppAudioPipelineMode } from './desktop-app-audio-queue-policy';
+import {
+	DEFAULT_DESKTOP_APP_AUDIO_PIPELINE_MODE,
+	getDesktopAppAudioQueueConfig,
+	type TDesktopAppAudioPipelineMode,
+} from './desktop-app-audio-queue-policy';
 
 type TDesktopAppAudioPipeline = {
 	sessionId: string;
@@ -48,7 +52,7 @@ const createDesktopAppAudioPipeline = async (
 	session: TAppAudioSession,
 	options?: TDesktopAppAudioPipelineOptions,
 ): Promise<TDesktopAppAudioPipeline> => {
-	const mode = options?.mode || 'low-latency';
+	const mode = options?.mode || DEFAULT_DESKTOP_APP_AUDIO_PIPELINE_MODE;
 	const logLabel = options?.logLabel || 'desktop-app-audio';
 	const insertSilenceOnDroppedFrames = options?.insertSilenceOnDroppedFrames ?? false;
 	const emitQueueTelemetry = options?.emitQueueTelemetry ?? false;

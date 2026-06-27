@@ -12,6 +12,7 @@ const LOW_LATENCY_TRIM_START_CHUNKS = 6;
 const LOW_LATENCY_MAX_CHUNKS = 10;
 const STABLE_TARGET_CHUNKS = 12;
 const STABLE_MAX_CHUNKS = 24;
+const DEFAULT_DESKTOP_APP_AUDIO_PIPELINE_MODE: TDesktopAppAudioPipelineMode = 'stable';
 
 const getDesktopAppAudioQueueConfig = (mode: TDesktopAppAudioPipelineMode): TDesktopAppAudioQueueConfig => {
 	if (mode === 'stable') {
@@ -32,4 +33,4 @@ const getDesktopAppAudioQueueConfig = (mode: TDesktopAppAudioPipelineMode): TDes
 };
 
 export type { TDesktopAppAudioPipelineMode, TDesktopAppAudioQueueConfig };
-export { getDesktopAppAudioQueueConfig };
+export { DEFAULT_DESKTOP_APP_AUDIO_PIPELINE_MODE, getDesktopAppAudioQueueConfig };

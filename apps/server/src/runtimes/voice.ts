@@ -666,11 +666,11 @@ class VoiceRuntime {
 
 		const existingConsumer = this.consumers[userId][remoteId][kind];
 
+		this.consumers[userId][remoteId][kind] = consumer;
+
 		if (existingConsumer && !existingConsumer.closed) {
 			existingConsumer.close();
 		}
-
-		this.consumers[userId][remoteId][kind] = consumer;
 
 		if (kind === StreamKind.VIDEO || kind === StreamKind.SCREEN) {
 			pubsub.publishFor(remoteId, ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY, {
@@ -711,10 +711,14 @@ class VoiceRuntime {
 		});
 	};
 
-	public removeConsumer = (userId: number, remoteId: number, kind: StreamKind) => {
+	public removeConsumer = (userId: number, remoteId: number, kind: StreamKind, expectedConsumerId?: string) => {
 		const consumer = this.consumers[userId]?.[remoteId]?.[kind];
 
 		if (!consumer) {
+			return;
+		}
+
+		if (expectedConsumerId !== undefined && consumer.id !== expectedConsumerId) {
 			return;
 		}
 

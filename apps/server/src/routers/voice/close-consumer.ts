@@ -8,6 +8,7 @@ const closeConsumerRoute = protectedProcedure
 		z.object({
 			remoteId: z.number(),
 			kind: z.enum(StreamKind),
+			consumerId: z.string().optional(),
 		}),
 	)
 	.mutation(async ({ ctx, input }) => {
@@ -15,7 +16,7 @@ const closeConsumerRoute = protectedProcedure
 
 		const runtime = VoiceRuntime.requireJoinedRuntime(ctx.currentVoiceChannelId, ctx.user.id);
 
-		runtime.removeConsumer(ctx.user.id, input.remoteId, input.kind);
+		runtime.removeConsumer(ctx.user.id, input.remoteId, input.kind, input.consumerId);
 	});
 
 export { closeConsumerRoute };
