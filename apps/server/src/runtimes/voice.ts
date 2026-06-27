@@ -192,6 +192,7 @@ class VoiceRuntime {
 	private screenProducers: TProducerMap = {};
 	private screenAudioProducers: TProducerMap = {};
 	private appAudioIngests: TAppAudioIngestMap = {};
+	private appAudioIngestCreations = new Map<number, Promise<void>>();
 	private consumers: TConsumerMap = {};
 	private audioLevelObserver?: AudioLevelObserver<AppData>;
 	private voiceActivityProducerIdsByUser = new Map<number, string>();
@@ -589,6 +590,29 @@ class VoiceRuntime {
 	// media (the early-media race). Returns the server's SRTP keying material plus
 	// the send target the client must transmit to.
 	public createAppAudioIngest = async (userId: number) => {
+		const previousCreation = this.appAudioIngestCreations.get(userId);
+		const previousSettled = previousCreation?.catch(() => undefined) ?? Promise.resolve();
+		let releaseCreation!: () => void;
+		const currentCreation = new Promise<void>((resolve) => {
+			releaseCreation = resolve;
+		});
+		const queuedCreation = previousSettled.then(() => currentCreation);
+		this.appAudioIngestCreations.set(userId, queuedCreation);
+
+		await previousSettled;
+
+		try {
+			return await this.createAppAudioIngestUnlocked(userId);
+		} finally {
+			releaseCreation();
+
+			if (this.appAudioIngestCreations.get(userId) === queuedCreation) {
+				this.appAudioIngestCreations.delete(userId);
+			}
+		}
+	};
+
+	private createAppAudioIngestUnlocked = async (userId: number) => {
 		this.removeAppAudioIngest(userId);
 
 		const router = this.getRouter();
@@ -1210,7 +1234,9 @@ class VoiceRuntime {
 			remoteScreenIds: Object.keys(this.screenProducers)
 				.filter((id) => +id !== userId)
 				.map((id) => +id),
-			remoteScreenAudioIds: Object.keys(this.screenAudioProducers).map((id) => +id),
+			remoteScreenAudioIds: Object.keys(this.screenAudioProducers)
+				.filter((id) => +id !== userId)
+				.map((id) => +id),
 			remoteExternalStreamIds,
 			externalStreamTracks: Object.fromEntries(
 				remoteExternalStreamIds.map((streamId) => [streamId, this.getExternalStreamTracks(streamId)]),

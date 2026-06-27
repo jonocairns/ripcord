@@ -759,7 +759,7 @@ const registerIpcHandlers = () => {
 
 	handleTrusted(
 		'desktop:start-app-audio-rtp',
-		(_event, target: TAppAudioRtpTarget) => {
+		async (_event, target: TAppAudioRtpTarget) => {
 			// Starting native ingest takes ownership of the egress: tear down any
 			// renderer worklet forwarding and any prior sender first so the two never
 			// run against the single binary egress at once.
@@ -767,7 +767,7 @@ const registerIpcHandlers = () => {
 			stopAppAudioRtpSender();
 
 			const sender = new AppAudioRtpSender(target);
-			sender.start();
+			await sender.start();
 			appAudioRtpSender = sender;
 
 			// The client SRTP key the renderer must relay to the server via

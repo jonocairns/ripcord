@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
 import { createSocket } from 'node:dgram';
-import { Encoder } from '@evan/opus';
 import { ProtectionProfileAes128CmHmacSha1_80, RtpHeader, SrtpSession } from 'werift-rtp';
 import type { TAppAudioRtpTarget } from './types';
 
@@ -53,8 +52,30 @@ export interface TUdpSocketLike {
 }
 
 export type TAppAudioRtpSenderDeps = {
-	createEncoder?: () => TOpusEncoderLike;
+	createEncoder?: () => TOpusEncoderLike | Promise<TOpusEncoderLike>;
 	createSocket?: (ip: string) => TUdpSocketLike;
+};
+
+type TOpusEncoderConstructor = new (options: {
+	channels: number;
+	sample_rate: number;
+	application: 'audio';
+}) => TOpusEncoderLike & {
+	bitrate: number;
+	inband_fec: boolean;
+};
+
+const createDefaultOpusEncoder = async (): Promise<TOpusEncoderLike> => {
+	const opusModule = (await import('@evan/opus')) as { Encoder: TOpusEncoderConstructor };
+	const encoder = new opusModule.Encoder({
+		channels: APP_AUDIO_RTP_CHANNELS,
+		sample_rate: APP_AUDIO_RTP_CLOCK_RATE,
+		application: 'audio',
+	});
+	encoder.bitrate = APP_AUDIO_OPUS_BITRATE_BPS;
+	encoder.inband_fec = true;
+
+	return encoder;
 };
 
 const clampSampleToInt16 = (sample: number): number => {
@@ -152,7 +173,7 @@ export class AppAudioRtpSender {
 	private readonly masterSalt: Buffer;
 	private readonly srtpSession: SrtpSession;
 	private readonly resampler = new PcmResampler();
-	private readonly createEncoder: () => TOpusEncoderLike;
+	private readonly createEncoder: () => TOpusEncoderLike | Promise<TOpusEncoderLike>;
 	private readonly createSocket: (ip: string) => TUdpSocketLike;
 
 	private encoder: TOpusEncoderLike | undefined;
@@ -183,20 +204,7 @@ export class AppAudioRtpSender {
 			},
 		});
 
-		this.createEncoder =
-			deps.createEncoder ??
-			(() => {
-				const encoder = new Encoder({
-					channels: APP_AUDIO_RTP_CHANNELS,
-					sample_rate: APP_AUDIO_RTP_CLOCK_RATE,
-					application: 'audio',
-				});
-				encoder.bitrate = APP_AUDIO_OPUS_BITRATE_BPS;
-				encoder.inband_fec = true;
-
-				return encoder;
-			});
-
+		this.createEncoder = deps.createEncoder ?? createDefaultOpusEncoder;
 		this.createSocket = deps.createSocket ?? ((ip: string) => createSocket(ip.includes(':') ? 'udp6' : 'udp4'));
 	}
 
@@ -206,14 +214,17 @@ export class AppAudioRtpSender {
 		return Buffer.concat([this.masterKey, this.masterSalt]).toString('base64');
 	}
 
-	start(): void {
+	async start(): Promise<void> {
 		if (this.started) {
 			return;
 		}
 
+		const encoder = await this.createEncoder();
+		const socket = this.createSocket(this.target.ip);
+
+		this.encoder = encoder;
+		this.socket = socket;
 		this.started = true;
-		this.encoder = this.createEncoder();
-		this.socket = this.createSocket(this.target.ip);
 	}
 
 	pushPcm(input: TAppAudioPcmInput): void {

@@ -7,6 +7,7 @@ import {
 	validateSetGlobalPushKeybindsArgs,
 	validateSetServerUrlArgs,
 	validateStartAppAudioCaptureArgs,
+	validateStartAppAudioRtpArgs,
 	validateStopAppAudioCaptureArgs,
 } from '../ipc-validators';
 
@@ -90,6 +91,28 @@ void describe('validateStartAppAudioCaptureArgs', () => {
 		assert.throws(() => validateStartAppAudioCaptureArgs([{}]), /must be a string/);
 		assert.throws(() => validateStartAppAudioCaptureArgs(['nope']), /must be an object/);
 		assert.throws(() => validateStartAppAudioCaptureArgs([null]), /must be an object/);
+	});
+});
+
+void describe('validateStartAppAudioRtpArgs', () => {
+	void it('accepts bounded RTP target fields and a 7-bit payload type', () => {
+		assert.deepEqual(validateStartAppAudioRtpArgs([{ ip: '127.0.0.1', port: 50_000, ssrc: 1234, payloadType: 127 }]), [
+			{ ip: '127.0.0.1', port: 50_000, ssrc: 1234, payloadType: 127 },
+		]);
+		assert.deepEqual(validateStartAppAudioRtpArgs([{ ip: '127.0.0.1', port: 50_000, ssrc: 1234 }]), [
+			{ ip: '127.0.0.1', port: 50_000, ssrc: 1234 },
+		]);
+	});
+
+	void it('rejects payload types outside the 7-bit RTP range', () => {
+		assert.throws(
+			() => validateStartAppAudioRtpArgs([{ ip: '127.0.0.1', port: 50_000, ssrc: 1234, payloadType: 128 }]),
+			/integer between 0 and 127/,
+		);
+		assert.throws(
+			() => validateStartAppAudioRtpArgs([{ ip: '127.0.0.1', port: 50_000, ssrc: 1234, payloadType: -1 }]),
+			/integer between 0 and 127/,
+		);
 	});
 });
 

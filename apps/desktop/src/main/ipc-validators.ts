@@ -138,6 +138,14 @@ const assertUint32 = (value: unknown, field: string): number => {
 	return value;
 };
 
+const assertRtpPayloadType = (value: unknown, field: string): number => {
+	if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 127) {
+		return fail(`${field} must be an integer between 0 and 127`);
+	}
+
+	return value;
+};
+
 const validateStartAppAudioRtpArgs = (args: unknown[]): [TAppAudioRtpTarget] => {
 	const target = assertRecord(args[0], 'target');
 
@@ -148,7 +156,7 @@ const validateStartAppAudioRtpArgs = (args: unknown[]): [TAppAudioRtpTarget] => 
 	};
 
 	if (target.payloadType !== undefined) {
-		validated.payloadType = assertUint32(target.payloadType, 'target.payloadType');
+		validated.payloadType = assertRtpPayloadType(target.payloadType, 'target.payloadType');
 	}
 
 	return [validated];

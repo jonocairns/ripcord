@@ -348,4 +348,59 @@ describe('VoiceRuntime app-audio ingest', () => {
 
 		createSpy.mockRestore();
 	});
+
+	test('overlapping ingest creates for a user do not orphan the first transport', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		const callLog: string[] = [];
+		const first = makeMockPlainTransport('t-1', callLog, 48_000);
+		const second = makeMockPlainTransport('t-2', callLog, 48_001);
+		let createCalls = 0;
+		let releaseFirstTransport!: () => void;
+		const firstTransportReady = new Promise<void>((resolve) => {
+			releaseFirstTransport = resolve;
+		});
+
+		const createSpy = spyOn(runtime.getRouter(), 'createPlainTransport').mockImplementation((async () => {
+			createCalls += 1;
+
+			if (createCalls === 1) {
+				await firstTransportReady;
+				return first.transport;
+			}
+
+			return second.transport;
+		}) as never);
+
+		const firstCreate = runtime.createAppAudioIngest(1);
+		await flushMicrotasks();
+		expect(createCalls).toBe(1);
+
+		const secondCreate = runtime.createAppAudioIngest(1);
+		await flushMicrotasks();
+		expect(createCalls).toBe(1);
+
+		releaseFirstTransport();
+		await Promise.all([firstCreate, secondCreate]);
+
+		expect(createCalls).toBe(2);
+		expect(first.transport.closed).toBe(true);
+		expect(second.transport.closed).toBe(false);
+		expect(runtime.getAppAudioIngest(1)?.transport).toBe(second.transport);
+
+		createSpy.mockRestore();
+	});
+
+	test('getRemoteIds excludes the requesting users own screen-audio producer', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		runtime.addUser(2, { micMuted: false, soundMuted: false });
+
+		runtime.addProducer(1, StreamKind.SCREEN_AUDIO, makeMockProducer('own-screen-audio'));
+		runtime.addProducer(2, StreamKind.SCREEN_AUDIO, makeMockProducer('remote-screen-audio'));
+
+		expect(runtime.getRemoteIds(1).remoteScreenAudioIds).toEqual([2]);
+		expect(runtime.getRemoteIds(2).remoteScreenAudioIds).toEqual([1]);
+	});
 });
