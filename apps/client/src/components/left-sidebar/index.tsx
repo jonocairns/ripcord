@@ -143,7 +143,7 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
 		<aside
 			ref={sidebarRef}
 			className={cn(
-				'relative flex min-h-0 self-stretch w-[calc(100vw-3rem)] max-w-72 flex-col border-r border-sidebar-border bg-sidebar/95 backdrop-blur-sm md:w-[var(--left-sidebar-width)] md:min-w-[var(--left-sidebar-width)] md:max-w-[var(--left-sidebar-width)]',
+				'relative flex min-h-0 self-stretch w-[calc(100vw-3rem)] max-w-72 flex-col border-r border-sidebar-border bg-sidebar md:w-[var(--left-sidebar-width)] md:min-w-[var(--left-sidebar-width)] md:max-w-[var(--left-sidebar-width)]',
 				!isResizing && 'md:transition-[width] md:duration-150',
 				className,
 			)}
