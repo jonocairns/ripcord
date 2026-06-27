@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
 	TAppAudioFrame,
 	TAppAudioPcmFrame,
+	TAppAudioRtpTarget,
 	TAppAudioSession,
 	TAppAudioStatusEvent,
 	TDesktopAppAudioTargetsResult,
@@ -15,6 +16,8 @@ import type {
 	TGlobalPushKeybindRegistrationResult,
 	TScreenShareSelection,
 	TStartAppAudioCaptureInput,
+	TStartAppAudioCaptureOptions,
+	TStartAppAudioRtpResult,
 } from '../main/types';
 
 const APP_AUDIO_CHANNEL_INIT_TIMEOUT_MS = 3_000;
@@ -400,9 +403,20 @@ const desktopBridge = {
 	resetScreenSharePicker: (): Promise<void> => ipcRenderer.invoke('desktop:reset-screen-share-picker'),
 	listAppAudioTargets: (sourceId?: string): Promise<TDesktopAppAudioTargetsResult> =>
 		ipcRenderer.invoke('desktop:list-app-audio-targets', sourceId),
-	startAppAudioCapture: (input: TStartAppAudioCaptureInput): Promise<TAppAudioSession> =>
+	startAppAudioCapture: (
+		input: TStartAppAudioCaptureInput,
+		options?: TStartAppAudioCaptureOptions,
+	): Promise<TAppAudioSession> =>
 		ipcRenderer.invoke('desktop:start-app-audio-capture', input).then((session: TAppAudioSession) => {
 			trackAppAudioCaptureStart(session.sessionId);
+
+			// Native RTP ingest consumes the PCM egress in main, so the renderer
+			// worklet frame channel must not be opened — opening it would make two
+			// consumers race the single binary egress.
+			if (options?.openFrameChannel === false) {
+				return session;
+			}
+
 			clearAppAudioFrameReconnectTimer();
 			void ensureAppAudioFrameChannel().then((connected) => {
 				if (!connected) {
@@ -415,6 +429,9 @@ const desktopBridge = {
 		ipcRenderer.invoke('desktop:stop-app-audio-capture', sessionId).finally(() => {
 			trackAppAudioCaptureStop(sessionId);
 		}),
+	startAppAudioRtp: (target: TAppAudioRtpTarget): Promise<TStartAppAudioRtpResult> =>
+		ipcRenderer.invoke('desktop:start-app-audio-rtp', target),
+	stopAppAudioRtp: (): Promise<void> => ipcRenderer.invoke('desktop:stop-app-audio-rtp'),
 	setGlobalPushKeybinds: (input: TDesktopPushKeybindsInput): Promise<TGlobalPushKeybindRegistrationResult> =>
 		ipcRenderer.invoke('desktop:set-global-push-keybinds', input),
 	subscribeAppAudioFrames: (callback: (frame: TAppAudioFrame | TAppAudioPcmFrame) => void) => {

@@ -85,6 +85,25 @@ export type TAppAudioSession = {
 	encoding?: 'f32le_base64';
 };
 
+export type TStartAppAudioCaptureOptions = {
+	// When false, capture starts without opening the renderer worklet frame
+	// channel — used by native RTP ingest, where main consumes the PCM egress.
+	openFrameChannel?: boolean;
+};
+
+// Target the renderer hands to main to start native RTP ingest. The values come
+// from the server's createAppAudioIngest response.
+export type TAppAudioRtpTarget = {
+	ip: string;
+	port: number;
+	ssrc: number;
+	payloadType?: number;
+};
+
+export type TStartAppAudioRtpResult = {
+	srtpKeyBase64: string;
+};
+
 export type TAppAudioFrame = {
 	sessionId: string;
 	targetId: string;

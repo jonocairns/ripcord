@@ -13,6 +13,7 @@ import {
 	session,
 	shell,
 } from 'electron';
+import { AppAudioRtpSender, type TAppAudioRtpTarget } from './app-audio-rtp-sender';
 import { resolveDesktopCaptureCapabilities } from './capture-capabilities';
 import { captureSidecarManager } from './capture-sidecar-manager';
 import { configureMainErrorReporting } from './error-reporting';
@@ -24,6 +25,7 @@ import {
 	validateSetGlobalPushKeybindsArgs,
 	validateSetServerUrlArgs,
 	validateStartAppAudioCaptureArgs,
+	validateStartAppAudioRtpArgs,
 	validateStopAppAudioCaptureArgs,
 } from './ipc-validators';
 import { classifyMainFrameNavigationUrl } from './navigation-policy';
@@ -67,6 +69,10 @@ const DESKTOP_DEBUG_IPC_ENABLED = Boolean(TRUSTED_RENDERER_URL);
 const USES_CUSTOM_TITLEBAR = process.platform === 'win32' || process.platform === 'linux';
 let mainWindow: BrowserWindow | null = null;
 let appAudioFrameEgressPort: MessagePortMain | undefined;
+// When set, native RTP ingest owns the sidecar PCM egress: PCM is encoded and
+// sent here in main and is NOT forwarded to the renderer worklet. The two are
+// mutually exclusive consumers of the single binary egress (single-active sink).
+let appAudioRtpSender: AppAudioRtpSender | undefined;
 let lastDesktopCapabilitiesSnapshot: string | undefined;
 let refreshDesktopCapabilitiesPromise: Promise<TDesktopCapabilities> | undefined;
 let refreshDesktopCapabilitiesBroadcastPending = false;
@@ -129,6 +135,22 @@ const disposeAppAudioFrameEgressPort = (port: MessagePortMain | undefined = appA
 	port.removeAllListeners();
 };
 
+const stopAppAudioRtpSender = (): void => {
+	const sender = appAudioRtpSender;
+
+	if (!sender) {
+		return;
+	}
+
+	appAudioRtpSender = undefined;
+
+	try {
+		sender.stop();
+	} catch (error) {
+		console.warn('[desktop] Failed to stop app-audio RTP sender', error);
+	}
+};
+
 if (process.platform === 'win32') {
 	app.setAppUserModelId(previewRuntimeConfig?.appUserModelId || 'com.sharkord.desktop');
 }
@@ -173,6 +195,7 @@ const emitWindowControlsState = () => {
 };
 
 const disposeDesktopServicesForShutdown = () => {
+	stopAppAudioRtpSender();
 	disposeAppAudioFrameEgressPort();
 	desktopUpdater.dispose();
 	void captureSidecarManager.dispose();
@@ -735,6 +758,30 @@ const registerIpcHandlers = () => {
 	);
 
 	handleTrusted(
+		'desktop:start-app-audio-rtp',
+		(_event, target: TAppAudioRtpTarget) => {
+			// Starting native ingest takes ownership of the egress: tear down any
+			// renderer worklet forwarding and any prior sender first so the two never
+			// run against the single binary egress at once.
+			disposeAppAudioFrameEgressPort();
+			stopAppAudioRtpSender();
+
+			const sender = new AppAudioRtpSender(target);
+			sender.start();
+			appAudioRtpSender = sender;
+
+			// The client SRTP key the renderer must relay to the server via
+			// produceAppAudio so mediasoup can decrypt our RTP.
+			return { srtpKeyBase64: sender.getClientSrtpKeyBase64() };
+		},
+		validateStartAppAudioRtpArgs,
+	);
+
+	handleTrusted('desktop:stop-app-audio-rtp', () => {
+		stopAppAudioRtpSender();
+	});
+
+	handleTrusted(
 		'desktop:set-global-push-keybinds',
 		async (_event, input?: TDesktopPushKeybindsInput) => {
 			return await setGlobalPushKeybinds(input);
@@ -743,6 +790,10 @@ const registerIpcHandlers = () => {
 	);
 
 	onTrusted('desktop:open-app-audio-frame-channel', (event: IpcMainEvent) => {
+		// Opening the worklet egress means the renderer is taking the fallback path;
+		// native RTP ingest must not also be consuming the egress.
+		stopAppAudioRtpSender();
+
 		const { port1, port2 } = new MessageChannelMain();
 		disposeAppAudioFrameEgressPort();
 
@@ -889,13 +940,22 @@ void app
 	.whenReady()
 	.then(() => {
 		captureSidecarManager.onFrame((frame) => {
-			if (appAudioFrameEgressPort) {
+			// Native RTP ingest owns the egress — never also forward to the renderer.
+			if (appAudioRtpSender || appAudioFrameEgressPort) {
 				return;
 			}
 
 			sendToRenderer('desktop:app-audio-frame', frame);
 		});
 		captureSidecarManager.onPcmFrame((frame: TAppAudioPcmFrame) => {
+			// Single-active sink: when native ingest is running, encode+send here and
+			// do not forward PCM to the renderer worklet pipeline.
+			const sender = appAudioRtpSender;
+			if (sender) {
+				sender.pushPcm({ pcm: frame.pcm, sampleRate: frame.sampleRate, channels: frame.channels });
+				return;
+			}
+
 			const egressPort = appAudioFrameEgressPort;
 			if (!egressPort) {
 				return;

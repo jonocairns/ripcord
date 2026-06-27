@@ -13,12 +13,21 @@ import type {
 	AudioLevelObserver,
 	AudioLevelObserverVolume,
 	Consumer,
+	PlainTransport,
 	Producer,
 	Router,
 	RouterOptions,
+	RtpParameters,
+	SrtpParameters,
 	WebRtcTransport,
 } from 'mediasoup/types';
 import { logger } from '../logger';
+import {
+	allocateAppAudioSsrc,
+	APP_AUDIO_FIRST_MEDIA_TIMEOUT_MS,
+	APP_AUDIO_SRTP_CRYPTO_SUITE,
+	buildAppAudioRtpParameters,
+} from './app-audio-ingest';
 import { eventBus } from '../plugins/event-bus';
 import { invariant } from '../utils/invariant';
 import { mediaSoupWorker, webRtcServer, webRtcServerListenInfo, webRtcServerListenInfos } from '../utils/mediasoup';
@@ -145,6 +154,25 @@ type TExternalStreamProducers = {
 	videoProducer?: Producer<AppData>;
 };
 
+// Native desktop app/system audio arrives over a mediasoup PlainTransport
+// (comedia + SRTP) instead of a WebRTC producer transport. The transport is
+// tracked here, separate from producerTransports, and owns the user's
+// SCREEN_AUDIO producer. firstMediaSeen records whether the PlainTransport
+// 'tuple' event has fired (first RTP received); the gate below resolves any
+// pending waiters once media is proven or the transport closes.
+type TAppAudioIngest = {
+	transport: PlainTransport<AppData>;
+	ssrc: number;
+	rtpParameters: RtpParameters;
+	firstMediaSeen: boolean;
+	firstMediaWaiters: Array<(value: boolean) => void>;
+	producer?: Producer<AppData>;
+};
+
+type TAppAudioIngestMap = {
+	[userId: number]: TAppAudioIngest;
+};
+
 type TExternalStreamInternal = {
 	title: string;
 	key: string;
@@ -163,6 +191,7 @@ class VoiceRuntime {
 	private audioProducers: TProducerMap = {};
 	private screenProducers: TProducerMap = {};
 	private screenAudioProducers: TProducerMap = {};
+	private appAudioIngests: TAppAudioIngestMap = {};
 	private consumers: TConsumerMap = {};
 	private audioLevelObserver?: AudioLevelObserver<AppData>;
 	private voiceActivityProducerIdsByUser = new Map<number, string>();
@@ -334,6 +363,11 @@ class VoiceRuntime {
 
 		this.removeProducerTransport(userId);
 		this.removeConsumerTransport(userId);
+
+		// The SCREEN_AUDIO producer lives on the PlainTransport ingest, not on
+		// producerTransports, so it must be torn down here explicitly — closing the
+		// WebRTC producer transport above does not reach it.
+		this.removeAppAudioIngest(userId);
 
 		this.removeProducer(userId, StreamKind.AUDIO);
 		this.removeProducer(userId, StreamKind.VIDEO);
@@ -543,6 +577,237 @@ class VoiceRuntime {
 
 	public getProducerTransport = (userId: number) => {
 		return this.producerTransports[userId];
+	};
+
+	public getAppAudioIngest = (userId: number): TAppAudioIngest | undefined => {
+		return this.appAudioIngests[userId];
+	};
+
+	// Allocates a PlainTransport (comedia + SRTP) for native desktop app/system
+	// audio. The 'tuple' listener is attached here, at creation time, so that an
+	// RTP packet arriving before produceAppAudio is called still counts as first
+	// media (the early-media race). Returns the server's SRTP keying material plus
+	// the send target the client must transmit to.
+	public createAppAudioIngest = async (userId: number) => {
+		this.removeAppAudioIngest(userId);
+
+		const router = this.getRouter();
+		const listenInfo = VoiceRuntime.getListenInfo();
+		const announcedAddress = listenInfo.announcedAddress;
+
+		const transport = await router.createPlainTransport({
+			listenInfo: {
+				protocol: 'udp',
+				ip: listenInfo.ip,
+				announcedAddress,
+			},
+			comedia: true,
+			rtcpMux: true,
+			enableSrtp: true,
+			srtpCryptoSuite: APP_AUDIO_SRTP_CRYPTO_SUITE,
+			appData: { kind: StreamKind.SCREEN_AUDIO, userId },
+		});
+
+		const srtpParameters = transport.srtpParameters;
+
+		invariant(srtpParameters, {
+			code: 'INTERNAL_SERVER_ERROR',
+			message: 'PlainTransport SRTP parameters unavailable',
+		});
+
+		const ssrc = allocateAppAudioSsrc();
+		const rtpParameters = buildAppAudioRtpParameters(ssrc, userId);
+
+		const ingest: TAppAudioIngest = {
+			transport,
+			ssrc,
+			rtpParameters,
+			firstMediaSeen: false,
+			firstMediaWaiters: [],
+		};
+
+		transport.on('tuple', () => {
+			if (ingest.firstMediaSeen) {
+				return;
+			}
+
+			ingest.firstMediaSeen = true;
+			this.flushAppAudioFirstMediaWaiters(ingest, false);
+		});
+
+		transport.observer.on('close', () => {
+			if (this.appAudioIngests[userId] === ingest) {
+				delete this.appAudioIngests[userId];
+			}
+
+			// A transport that closes mid-handshake (leave/disconnect) must release
+			// any pending first-media waiter so produceAppAudio resolves to fallback
+			// instead of hanging until the timeout.
+			this.flushAppAudioFirstMediaWaiters(ingest, true);
+		});
+
+		this.appAudioIngests[userId] = ingest;
+
+		// Never hand the raw bind ip (e.g. 0.0.0.0) to the client; send to the
+		// announced/public address when configured, otherwise the concrete listen ip.
+		const sendAddress = announcedAddress ?? listenInfo.ip;
+
+		return {
+			id: transport.id,
+			ip: sendAddress,
+			port: transport.tuple.localPort,
+			ssrc,
+			srtpParameters,
+			rtpParameters,
+		};
+	};
+
+	// Connects the client's SRTP keys, creates the SCREEN_AUDIO producer, then
+	// publishes it only once first media is observed. A produced-but-silent
+	// transport is never published — it would strand listeners with no fallback.
+	public produceAppAudio = async (
+		userId: number,
+		options: { srtpParameters: SrtpParameters; firstMediaTimeoutMs?: number },
+	): Promise<{ producerId: string } | { fallback: true }> => {
+		const ingest = this.appAudioIngests[userId];
+
+		invariant(ingest, {
+			code: 'NOT_FOUND',
+			message: 'App audio ingest not found',
+		});
+
+		// One producer per ingest: a second produceAppAudio against the same
+		// transport would create a duplicate producer on the same PlainTransport with
+		// the same SSRC. A retrying client must allocate a fresh ingest first.
+		invariant(!ingest.producer, {
+			code: 'BAD_REQUEST',
+			message: 'App audio ingest already producing',
+		});
+
+		const timeoutMs = options.firstMediaTimeoutMs ?? APP_AUDIO_FIRST_MEDIA_TIMEOUT_MS;
+
+		// SRTP keying must be applied before produce(): mediasoup cannot decrypt
+		// incoming RTP until connect() supplies the remote key. In comedia mode this
+		// connect carries SRTP params only — no remote ip/port.
+		await ingest.transport.connect({ srtpParameters: options.srtpParameters });
+
+		const producer = await ingest.transport.produce({
+			kind: 'audio',
+			rtpParameters: ingest.rtpParameters,
+			appData: { kind: StreamKind.SCREEN_AUDIO, userId },
+		});
+
+		ingest.producer = producer;
+
+		const mediaFlowing = await this.awaitAppAudioFirstMedia(ingest, timeoutMs);
+
+		// The ingest can be torn down (leave/disconnect/session-replace) while we
+		// await media; if so, the producer is already closed by the cascade.
+		if (this.appAudioIngests[userId] !== ingest) {
+			if (!producer.closed) {
+				producer.close();
+			}
+
+			return { fallback: true };
+		}
+
+		if (!mediaFlowing) {
+			// No RTP arrived within the window. Tear everything down so the UDP port
+			// is released and the client falls back to the worklet path; never publish
+			// a silent producer.
+			if (!producer.closed) {
+				producer.close();
+			}
+
+			this.removeAppAudioIngest(userId);
+
+			return { fallback: true };
+		}
+
+		this.addProducer(userId, StreamKind.SCREEN_AUDIO, producer);
+
+		// Closing the SCREEN_AUDIO producer (e.g. via closeProducer when the user
+		// stops sharing but stays in voice) must also release the PlainTransport so
+		// the UDP port is not leaked until leave/disconnect.
+		producer.observer.on('close', () => {
+			if (this.appAudioIngests[userId]?.producer === producer) {
+				this.removeAppAudioIngest(userId);
+			}
+		});
+
+		pubsub.publishForChannel(this.id, ServerEvents.VOICE_NEW_PRODUCER, {
+			channelId: this.id,
+			remoteId: userId,
+			kind: StreamKind.SCREEN_AUDIO,
+			producerId: producer.id,
+		});
+
+		return { producerId: producer.id };
+	};
+
+	public removeAppAudioIngest = (userId: number) => {
+		const ingest = this.appAudioIngests[userId];
+
+		if (!ingest) {
+			return;
+		}
+
+		delete this.appAudioIngests[userId];
+
+		// Close the producer first so its addProducer close-observer publishes
+		// VOICE_PRODUCER_CLOSED exactly once, then release the transport/UDP port.
+		if (ingest.producer && !ingest.producer.closed) {
+			ingest.producer.close();
+		}
+
+		if (!ingest.transport.closed) {
+			ingest.transport.close();
+		}
+
+		this.flushAppAudioFirstMediaWaiters(ingest, true);
+	};
+
+	// Resolves true when first media is observed within the timeout, false on
+	// timeout. The 'tuple' / observer-close handlers in createAppAudioIngest flush
+	// any registered waiter; settled guards against a double resolve.
+	private awaitAppAudioFirstMedia = (ingest: TAppAudioIngest, timeoutMs: number): Promise<boolean> => {
+		if (ingest.firstMediaSeen) {
+			return Promise.resolve(true);
+		}
+
+		return new Promise<boolean>((resolve) => {
+			let settled = false;
+
+			const settle = (timedOut: boolean) => {
+				if (settled) {
+					return;
+				}
+
+				settled = true;
+				clearTimeout(timer);
+				resolve(!timedOut && ingest.firstMediaSeen);
+			};
+
+			const timer = setTimeout(() => settle(true), timeoutMs);
+			timer.unref?.();
+
+			ingest.firstMediaWaiters.push(settle);
+
+			// A tuple could have landed between the firstMediaSeen check above and the
+			// waiter being registered.
+			if (ingest.firstMediaSeen) {
+				settle(false);
+			}
+		});
+	};
+
+	private flushAppAudioFirstMediaWaiters = (ingest: TAppAudioIngest, timedOut: boolean) => {
+		const waiters = ingest.firstMediaWaiters;
+		ingest.firstMediaWaiters = [];
+
+		for (const waiter of waiters) {
+			waiter(timedOut);
+		}
 	};
 
 	public getProducer = (type: StreamKind, id: number) => {

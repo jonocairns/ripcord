@@ -43,6 +43,7 @@ import {
 	ScreenAudioMode,
 	type TAppAudioSession,
 	type TAppAudioStatusEvent,
+	type TDesktopBridge,
 	type TDesktopCapabilities,
 	type TDesktopPushKeybindEvent,
 	type TDesktopScreenShareSelection,
@@ -603,6 +604,31 @@ const withVoiceReconnectTimeout = <T,>(promise: Promise<T>): Promise<T> =>
 
 const isMissingVoiceSessionError = (error: unknown): boolean => getTrpcErrorData(error)?.code === 'BAD_REQUEST';
 
+const isAuthDenialError = (error: unknown): boolean => {
+	const code = getTrpcErrorData(error)?.code;
+
+	return code === 'FORBIDDEN' || code === 'UNAUTHORIZED';
+};
+
+// Stage 1 native app-audio RTP ingest is opt-in until validated against a live
+// server and a packaged desktop build (SRTP/comedia interop + @evan/opus
+// packaging). Enable via the build-time flag VITE_VOICE_NATIVE_APP_AUDIO=true, or
+// flip it at runtime in a packaged build with
+// localStorage['voice.nativeAppAudio']='true' (handy for smoke-testing without a
+// rebuild). Defaults off so the proven worklet path stays the default.
+const isNativeAppAudioIngestEnabled = (): boolean => {
+	try {
+		const override = globalThis.localStorage?.getItem('voice.nativeAppAudio');
+
+		if (override === 'true') return true;
+		if (override === 'false') return false;
+	} catch {
+		// localStorage may be unavailable; fall through to the build-time flag.
+	}
+
+	return import.meta.env.VITE_VOICE_NATIVE_APP_AUDIO === 'true';
+};
+
 const createReconnectAttemptId = (): string => {
 	const randomUUID = globalThis.crypto?.randomUUID;
 
@@ -640,6 +666,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const { devices } = useDevices();
 	const appAudioPipelineRef = useRef<TDesktopAppAudioPipeline | undefined>(undefined);
 	const appAudioSessionRef = useRef<TAppAudioSession | undefined>(undefined);
+	// True while native RTP ingest is the active SCREEN_AUDIO path (PCM is encoded
+	// and sent from the desktop main process, not the renderer worklet). Drives
+	// native-specific teardown in cleanupDesktopAppAudio.
+	const nativeAppAudioIngestActiveRef = useRef(false);
 	const removeAppAudioFrameSubscriptionRef = useRef<(() => void) | undefined>(undefined);
 	const removeAppAudioStatusSubscriptionRef = useRef<(() => void) | undefined>(undefined);
 	const appAudioStartupTimeoutRef = useRef<number | ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -2124,6 +2154,26 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			removeAppAudioStatusSubscriptionRef.current?.();
 			removeAppAudioStatusSubscriptionRef.current = undefined;
 
+			// Native RTP ingest teardown: stop the main-process Opus/SRTP sender and
+			// ask the server to close the SCREEN_AUDIO producer (which also releases
+			// its PlainTransport). The worklet pipeline below is never built on this
+			// path, so it is a no-op for native ingest.
+			if (nativeAppAudioIngestActiveRef.current) {
+				nativeAppAudioIngestActiveRef.current = false;
+
+				try {
+					await desktopBridge?.stopAppAudioRtp?.();
+				} catch (error) {
+					logVoice('Failed to stop native app audio RTP sender', { error });
+				}
+
+				try {
+					await getTRPCClient().voice.closeProducer.mutate({ kind: StreamKind.SCREEN_AUDIO });
+				} catch (error) {
+					logVoice('Failed to close native app audio producer on server', { error });
+				}
+			}
+
 			const activeSession = appAudioSessionRef.current;
 			appAudioSessionRef.current = undefined;
 
@@ -2165,6 +2215,119 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 	const trackDesktopAppAudioCleanupRef = useRef(trackDesktopAppAudioCleanup);
 	trackDesktopAppAudioCleanupRef.current = trackDesktopAppAudioCleanup;
+
+	// Attempts native RTP ingest for shared app/system audio: capture PCM in the
+	// sidecar (without the renderer worklet channel), allocate a server
+	// PlainTransport, start the desktop main Opus/SRTP sender, and publish once the
+	// server observes first media. Returns true when the SCREEN_AUDIO producer is
+	// live server-side; returns false (after cleaning up its own attempt) so the
+	// caller falls back to the worklet path. Hard auth failures reject and are
+	// surfaced by the caller rather than silently falling back.
+	const startNativeAppAudioIngest = useCallback(
+		async ({
+			desktopBridge,
+			captureInput,
+		}: {
+			desktopBridge: TDesktopBridge;
+			captureInput: TStartAppAudioCaptureInput;
+		}): Promise<boolean> => {
+			const startAppAudioRtp = desktopBridge.startAppAudioRtp;
+			const stopAppAudioRtp = desktopBridge.stopAppAudioRtp;
+
+			// Capability gate: only newer desktop builds expose the native RTP bridge.
+			if (typeof startAppAudioRtp !== 'function' || typeof stopAppAudioRtp !== 'function') {
+				logVoice('Native app audio ingest unavailable (bridge missing); using worklet path');
+				return false;
+			}
+
+			// Rollout gate: opt-in until validated end-to-end and in a packaged build.
+			if (!isNativeAppAudioIngestEnabled()) {
+				logVoice('Native app audio ingest disabled by flag; using worklet path');
+				return false;
+			}
+
+			let captureStarted = false;
+
+			const teardownNativeAttempt = async () => {
+				try {
+					await stopAppAudioRtp();
+				} catch (error) {
+					logVoice('Failed to stop native app audio RTP sender during teardown', { error });
+				}
+
+				if (captureStarted) {
+					try {
+						await desktopBridge.stopAppAudioCapture(appAudioSessionRef.current?.sessionId);
+					} catch (error) {
+						logVoice('Failed to stop native app audio capture during teardown', { error });
+					}
+				}
+
+				appAudioSessionRef.current = undefined;
+				nativeAppAudioIngestActiveRef.current = false;
+			};
+
+			let fallbackReason: 'no-first-media' | 'error' = 'error';
+
+			try {
+				// Capture without the renderer worklet frame channel: the desktop main
+				// process consumes the PCM egress and feeds the RTP sender directly.
+				const session = await desktopBridge.startAppAudioCapture(captureInput, { openFrameChannel: false });
+				appAudioSessionRef.current = session;
+				captureStarted = true;
+
+				const ingest = await getTRPCClient().voice.createAppAudioIngest.mutate();
+
+				const { srtpKeyBase64 } = await startAppAudioRtp({
+					ip: ingest.ip,
+					port: ingest.port,
+					ssrc: ingest.ssrc,
+					payloadType: ingest.rtpParameters.codecs?.[0]?.payloadType,
+				});
+
+				const result = await getTRPCClient().voice.produceAppAudio.mutate({
+					transportId: ingest.id,
+					srtpParameters: {
+						cryptoSuite: ingest.srtpParameters.cryptoSuite,
+						keyBase64: srtpKeyBase64,
+					},
+				});
+
+				if ('producerId' in result) {
+					nativeAppAudioIngestActiveRef.current = true;
+					logVoice('Native app audio ingest active', { producerId: result.producerId });
+					return true;
+				}
+
+				// Operational fallback: server observed no first media within the gate.
+				fallbackReason = 'no-first-media';
+			} catch (error) {
+				// Authorization denial is hard and must NEVER fall back to the worklet
+				// path — that path also produces SCREEN_AUDIO and would escape the
+				// SHARE_SCREEN gate. Tear down the attempt and rethrow.
+				if (isAuthDenialError(error)) {
+					await teardownNativeAttempt();
+					logVoice('Native app audio ingest denied (auth); not falling back', {
+						code: getTrpcErrorData(error)?.code,
+					});
+					throw error;
+				}
+
+				logVoice('Native app audio ingest attempt errored; falling back to worklet', {
+					error,
+					code: getTrpcErrorData(error)?.code,
+				});
+			}
+
+			// Operational fallback: clean up the native attempt and let the caller use
+			// the worklet path. The single binary egress is left with no native sink.
+			await teardownNativeAttempt();
+			logVoice('Native app audio ingest falling back to worklet path', { reason: fallbackReason });
+
+			return false;
+		},
+		[],
+	);
 
 	const stopScreenShareStream = useCallback(() => {
 		logVoice('Stopping screen share stream');
@@ -2319,15 +2482,36 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							handlers.onVideoTrackStarted?.();
 
 							if (useSidecarAudio && desktopBridge && desktopSelection) {
-								try {
-									const captureInput: TStartAppAudioCaptureInput = {
-										sourceId: desktopSelection.sourceId,
-									};
+								const captureInput: TStartAppAudioCaptureInput = {
+									sourceId: desktopSelection.sourceId,
+								};
 
-									if (audioMode === ScreenAudioMode.APP) {
-										captureInput.appAudioTargetId = desktopSelection.appAudioTargetId;
+								if (audioMode === ScreenAudioMode.APP) {
+									captureInput.appAudioTargetId = desktopSelection.appAudioTargetId;
+								}
+
+								// Prefer native RTP ingest (desktop main encodes Opus + SRTP and
+								// sends to a mediasoup PlainTransport). Falls back to the renderer
+								// worklet path on older desktop/server builds, blocked UDP, or no
+								// first media. Either way the producer surfaces as SCREEN_AUDIO.
+								const nativeIngestStarted = await startNativeAppAudioIngest({
+									desktopBridge,
+									captureInput,
+								});
+
+								if (nativeIngestStarted) {
+									// Native ingest carries SCREEN_AUDIO; drop the display-captured
+									// audio track so we never publish it twice.
+									if (audioTrack) {
+										audioTrack.stop();
+										stream.removeTrack(audioTrack);
+										audioTrack = undefined;
 									}
 
+									return videoTrack;
+								}
+
+								try {
 									logVoice('Starting sidecar audio capture', {
 										sourceId: captureInput.sourceId,
 										appAudioTargetId: captureInput.appAudioTargetId,
@@ -2514,6 +2698,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			publishScreenShareAudioTrack,
 			publishScreenShareTrack,
 			setLocalScreenShareAudio,
+			startNativeAppAudioIngest,
 		],
 	);
 

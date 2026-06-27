@@ -1,4 +1,4 @@
-import type { DtlsParameters, RtpCapabilities, RtpParameters } from 'mediasoup/types';
+import type { DtlsParameters, RtpCapabilities, RtpParameters, SrtpParameters } from 'mediasoup/types';
 import { z } from 'zod';
 
 // mediasoup payloads (rtpParameters, rtpCapabilities, dtlsParameters) are
@@ -25,4 +25,13 @@ const dtlsParametersSchema = z.custom<DtlsParameters>(isPlainObject, {
 	message: 'Invalid dtlsParameters',
 });
 
-export { dtlsParametersSchema, rtpCapabilitiesSchema, rtpParametersSchema };
+// SRTP keying material exchanged for the PlainTransport app-audio ingest. Unlike
+// the opaque mediasoup payloads above this is a tiny, fully-known shape, so it is
+// modelled explicitly. mediasoup performs the authoritative crypto-suite/key
+// validation when connect() is called.
+const srtpParametersSchema = z.object({
+	cryptoSuite: z.enum(['AEAD_AES_256_GCM', 'AEAD_AES_128_GCM', 'AES_CM_128_HMAC_SHA1_80', 'AES_CM_128_HMAC_SHA1_32']),
+	keyBase64: z.string().min(1),
+}) satisfies z.ZodType<SrtpParameters>;
+
+export { dtlsParametersSchema, rtpCapabilitiesSchema, rtpParametersSchema, srtpParametersSchema };
