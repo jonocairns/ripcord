@@ -13,6 +13,11 @@ import {
 	resetConsumeOperationGeneration,
 } from './consume-operation-state';
 import { getConsumeRetryDelayMs, shouldRetryConsume } from './consume-retry-policy';
+import {
+	createExistingProducersSweeper,
+	type TExistingProducersSweeper,
+	type TExistingProducersSweepRequest,
+} from './existing-producers-sweep';
 import type { TExternalStreamTrackPresence } from './use-pending-streams';
 
 // How long to wait for an ICE "disconnected" state to recover before closing
@@ -32,12 +37,6 @@ type TServerConsumerCleanupTarget = {
 	remoteId: number;
 	kind: StreamKind;
 	consumerId: string;
-};
-
-type TConsumeExistingProducersSweepRequest = {
-	rtpCapabilities: RtpCapabilities;
-	externalStreamTracks?: TExternalStreamTrackPresence;
-	prefetchedProducers?: TRemoteProducerIds;
 };
 
 type TUseTransportParams = {
@@ -77,10 +76,17 @@ const useTransports = ({
 		};
 	}>({});
 	const consumeOperationState = useRef(createConsumeOperationState());
-	const consumeExistingProducersInFlight = useRef<Promise<void> | undefined>(undefined);
-	const queuedConsumeExistingProducersSweep = useRef<
-		Omit<TConsumeExistingProducersSweepRequest, 'prefetchedProducers'> | undefined
+	const runConsumeExistingProducersSweepRef = useRef<
+		((request: TExistingProducersSweepRequest) => Promise<void>) | undefined
 	>(undefined);
+	const existingProducersSweeperRef = useRef<TExistingProducersSweeper | undefined>(undefined);
+
+	if (existingProducersSweeperRef.current === undefined) {
+		existingProducersSweeperRef.current = createExistingProducersSweeper(
+			(request) => runConsumeExistingProducersSweepRef.current!(request),
+			(message) => logVoice(message),
+		);
+	}
 
 	const closeServerConsumerAfterFailedConsume = useCallback(
 		async (target: TServerConsumerCleanupTarget, reason: string, error?: unknown) => {
@@ -581,7 +587,7 @@ const useTransports = ({
 	);
 
 	const runConsumeExistingProducersSweep = useCallback(
-		async ({ rtpCapabilities, externalStreamTracks, prefetchedProducers }: TConsumeExistingProducersSweepRequest) => {
+		async ({ rtpCapabilities, externalStreamTracks, prefetchedProducers }: TExistingProducersSweepRequest) => {
 			return traceSentrySpan(
 				{
 					name: 'voice.consume_existing_producers',
@@ -600,8 +606,8 @@ const useTransports = ({
 
 					try {
 						const producers =
-						prefetchedProducers ??
-						(await withConsumeAttemptTimeout(trpc.voice.getProducers.query(), EXISTING_PRODUCERS_RPC_TIMEOUT_MS));
+							prefetchedProducers ??
+							(await withConsumeAttemptTimeout(trpc.voice.getProducers.query(), EXISTING_PRODUCERS_RPC_TIMEOUT_MS));
 						const { remoteAudioIds, remoteScreenIds, remoteScreenAudioIds, remoteVideoIds, remoteExternalStreamIds } =
 							producers;
 
@@ -653,58 +659,20 @@ const useTransports = ({
 		[addPendingStream, consume, reconcilePendingStreams],
 	);
 
+	runConsumeExistingProducersSweepRef.current = runConsumeExistingProducersSweep;
+
 	const consumeExistingProducers = useCallback(
-		async (
+		(
 			rtpCapabilities: RtpCapabilities,
 			externalStreamTracks?: TExternalStreamTrackPresence,
 			prefetchedProducers?: TRemoteProducerIds,
-		) => {
-			const activeSweep = consumeExistingProducersInFlight.current;
-
-			if (activeSweep) {
-				if (prefetchedProducers === undefined) {
-					queuedConsumeExistingProducersSweep.current = { rtpCapabilities, externalStreamTracks };
-					logVoice('Queued existing producer sync behind active sweep');
-				} else {
-					logVoice('Joining active existing producer sync');
-				}
-
-				return activeSweep;
-			}
-
-			const runQueuedSweeps = async () => {
-				let nextSweep: TConsumeExistingProducersSweepRequest | undefined = {
-					rtpCapabilities,
-					externalStreamTracks,
-					prefetchedProducers,
-				};
-
-				while (nextSweep !== undefined) {
-					const currentSweep = nextSweep;
-					nextSweep = undefined;
-
-					await runConsumeExistingProducersSweep(currentSweep);
-
-					const queuedSweep = queuedConsumeExistingProducersSweep.current;
-					queuedConsumeExistingProducersSweep.current = undefined;
-
-					if (queuedSweep !== undefined) {
-						nextSweep = queuedSweep;
-					}
-				}
-			};
-
-			const sweepPromise = runQueuedSweeps().finally(() => {
-				if (consumeExistingProducersInFlight.current === sweepPromise) {
-					consumeExistingProducersInFlight.current = undefined;
-				}
-			});
-
-			consumeExistingProducersInFlight.current = sweepPromise;
-
-			return sweepPromise;
-		},
-		[runConsumeExistingProducersSweep],
+		) =>
+			existingProducersSweeperRef.current!.schedule({
+				rtpCapabilities,
+				externalStreamTracks,
+				prefetchedProducers,
+			}),
+		[],
 	);
 
 	const stopWatchingStream = useCallback(
@@ -769,9 +737,8 @@ const useTransports = ({
 		resetConsumeOperationGeneration(consumeOperationState.current);
 		// Drop any in-flight/queued existing-producer sweep so a stalled sweep
 		// (e.g. a hung getProducers during reconnect) cannot poison the
-		// single-flight ref for the rebuilt transport generation.
-		consumeExistingProducersInFlight.current = undefined;
-		queuedConsumeExistingProducersSweep.current = undefined;
+		// single-flight state for the rebuilt transport generation.
+		existingProducersSweeperRef.current?.reset();
 		clearAllPendingStreams();
 
 		if (producerTransport.current && !producerTransport.current.closed) {
