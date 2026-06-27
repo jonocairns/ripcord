@@ -20,6 +20,12 @@ import type { TExternalStreamTrackPresence } from './use-pending-streams';
 // change); only "failed" is terminal per the spec.
 const ICE_DISCONNECT_GRACE_MS = 30_000;
 
+// getProducers is a trivial read (returns producer id lists, no media
+// negotiation), so a healthy server answers in well under a second. Bound it
+// with a tighter timeout than the generic consume RPC so a stalled sweep fails
+// fast and leaves the rest of the recovery budget for the actual consumes.
+const EXISTING_PRODUCERS_RPC_TIMEOUT_MS = 4_000;
+
 type TConsumeAttemptResult = 'success' | 'failure';
 
 type TServerConsumerCleanupTarget = {
@@ -593,7 +599,9 @@ const useTransports = ({
 					const trpc = getTRPCClient();
 
 					try {
-						const producers = prefetchedProducers ?? (await trpc.voice.getProducers.query());
+						const producers =
+						prefetchedProducers ??
+						(await withConsumeAttemptTimeout(trpc.voice.getProducers.query(), EXISTING_PRODUCERS_RPC_TIMEOUT_MS));
 						const { remoteAudioIds, remoteScreenIds, remoteScreenAudioIds, remoteVideoIds, remoteExternalStreamIds } =
 							producers;
 
@@ -759,6 +767,11 @@ const useTransports = ({
 		consumers.current = {};
 
 		resetConsumeOperationGeneration(consumeOperationState.current);
+		// Drop any in-flight/queued existing-producer sweep so a stalled sweep
+		// (e.g. a hung getProducers during reconnect) cannot poison the
+		// single-flight ref for the rebuilt transport generation.
+		consumeExistingProducersInFlight.current = undefined;
+		queuedConsumeExistingProducersSweep.current = undefined;
 		clearAllPendingStreams();
 
 		if (producerTransport.current && !producerTransport.current.closed) {
