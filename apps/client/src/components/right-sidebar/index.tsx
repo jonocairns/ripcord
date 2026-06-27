@@ -136,7 +136,7 @@ const RightSidebar = memo(({ className, isOpen = true, isCollapsed = false, onTo
 	return (
 		<aside
 			className={cn(
-				'flex min-h-0 self-stretch flex-col border-l border-border/70 bg-card/85 backdrop-blur-sm transition-all duration-500 ease-in-out',
+				'flex min-h-0 self-stretch flex-col border-l border-border/70 bg-sidebar transition-all duration-500 ease-in-out',
 				isOpen && isCollapsed ? 'w-60 lg:w-16' : isOpen ? 'w-60' : 'w-0 border-l-0',
 				className,
 			)}
