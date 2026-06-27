@@ -12,6 +12,7 @@ import { useMessages } from '@/features/server/messages/hooks';
 import { useFlatPluginCommands } from '@/features/server/plugins/hooks';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
+import { useUsers } from '@/features/server/users/hooks';
 import { openServerScreen } from '@/features/server-screens/actions';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { useUploadFiles } from '@/hooks/use-upload-files';
@@ -36,6 +37,7 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 	const [newMessage, setNewMessage] = useState('');
 	const allPluginCommands = useFlatPluginCommands();
 	const channel = useChannelById(channelId);
+	const users = useUsers();
 
 	const { containerRef, onScroll } = useScrollController({
 		messages,
@@ -70,6 +72,12 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 	// tiptap emits HTML (an empty editor is "<p></p>"), so a plain string check is
 	// always truthy — use isEmptyMessage. Files alone are also sendable.
 	const hasContent = useMemo(() => !isEmptyMessage(newMessage) || files.length > 0, [newMessage, files.length]);
+
+	const visibleGroupedMessages = useMemo(() => {
+		const visibleUserIds = new Set(users.map((user) => user.id));
+
+		return groupedMessages.filter((group) => visibleUserIds.has(group[0].userId));
+	}, [groupedMessages, users]);
 
 	const canManageChannel = can(Permission.MANAGE_CHANNELS);
 
@@ -174,11 +182,10 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 					</div>
 				) : (
 					<div className="space-y-4">
-						{groupedMessages.map((group, index) => {
-							const previousGroup = groupedMessages[index - 1];
+						{visibleGroupedMessages.map((group, index) => {
+							const previousGroup = visibleGroupedMessages[index - 1];
 							const groupDate = new Date(group[0].createdAt);
-							const showDateDivider =
-								!previousGroup || !isSameDay(groupDate, new Date(previousGroup[0].createdAt));
+							const showDateDivider = !previousGroup || !isSameDay(groupDate, new Date(previousGroup[0].createdAt));
 
 							return (
 								<Fragment key={index}>
