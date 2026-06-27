@@ -686,6 +686,7 @@ const useTransports = ({
 			}
 
 			const existingConsumer = consumers.current[remoteId]?.[kind];
+			const existingConsumerId = existingConsumer?.id;
 
 			if (existingConsumer && !existingConsumer.closed) {
 				existingConsumer.close();
@@ -696,9 +697,12 @@ const useTransports = ({
 			try {
 				const trpc = getTRPCClient();
 
+				// Target the specific consumer we observed so a stale close racing a
+				// reconnect sweep cannot close a freshly-created replacement consumer.
 				await trpc.voice.closeConsumer.mutate({
 					remoteId,
 					kind,
+					consumerId: existingConsumerId,
 				});
 			} catch (error) {
 				logVoice('Error closing remote consumer', {
