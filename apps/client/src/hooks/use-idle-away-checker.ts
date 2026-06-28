@@ -5,8 +5,8 @@ import { useServerStore } from '@/features/server/slice';
 import { updateUser } from '@/features/server/users/actions';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
-import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { getTRPCClient } from '@/lib/trpc';
+import { getDesktopBridge } from '@/runtime/desktop-bridge';
 
 const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
 // OS idle time does not reset while talking, so keep the AFK voice kick well

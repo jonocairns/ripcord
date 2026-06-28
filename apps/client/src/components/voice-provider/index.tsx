@@ -51,6 +51,7 @@ import {
 import { type TDeviceSettings, type TRemoteUserStreamKinds, VideoCodecPreference } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
 import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } from './audio-context';
+import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from './default-input-device';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
 import { shouldDeferTransportFailureToReconnect } from './hooks/transport-failure-policy';
@@ -81,6 +82,7 @@ import {
 	type TPushMicState,
 	updatePushMicStateForKeyEvent,
 } from './push-mic-state';
+import { resolveRawMicLossAction } from './raw-mic-loss';
 import { getVideoBitratePolicy, type TVideoBitrateCodec } from './video-bitrate-policy';
 import { VIDEO_DEGRADATION_PREFERENCE } from './video-encoding-constants';
 import { createVoiceActivityStore, type VoiceActivityStore } from './voice-activity';
@@ -295,6 +297,20 @@ const resolveMicProcessingConfig = (devices: TDeviceSettings): ResolvedMicProces
 		browserEchoCancellation: devices.echoCancellation,
 	};
 };
+
+// A raw mic `mute` is, per spec, a *temporary* loss followed by `unmute`. We
+// wait out this window before treating it as a real capture loss, so a driver
+// (NVIDIA Broadcast / RTX Voice) reconfiguring the endpoint — which fires
+// mute→unmute as it spins up — does not trigger a needless re-acquire.
+const RAW_MIC_MUTE_SETTLE_MS = 400;
+
+// Debounce the burst of `devicechange` events the OS emits while a driver
+// settles before we re-check whether the system default input moved. The window
+// also gives Chromium's synthetic "default" entry time to repoint to the new
+// physical input before the first retry below.
+const DEFAULT_INPUT_DEVICE_CHANGE_DEBOUNCE_MS = 500;
+const DEFAULT_INPUT_DEVICE_CHANGE_RETRY_INTERVAL_MS = 250;
+const DEFAULT_INPUT_DEVICE_CHANGE_RETRY_WINDOW_MS = 1500;
 
 const didMicCaptureSettingsChange = (previousDevices: TDeviceSettings, nextDevices: TDeviceSettings) => {
 	return (
@@ -1490,7 +1506,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			});
 
 			track.onended = () => {
-				logVoice('Audio track ended, cleaning up microphone');
+				// Device-level loss on the raw track is owned by the recovery
+				// listeners in prepareMicPipeline. In passthrough mode this *is* the
+				// raw track, so don't double-handle — only act when this is a distinct
+				// pipeline output track that ended on its own.
+				if (stream === rawMicStreamRef.current) {
+					return;
+				}
+
+				logVoice('Audio pipeline output track ended, cleaning up microphone');
 
 				void cleanupMicAudioPipelineRef.current?.();
 				audioProducer.close();
@@ -1928,6 +1952,91 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			throw new Error('Failed to obtain audio track from microphone');
 		}
 
+		const rawTrackSettings = rawAudioTrack.getSettings();
+		logVoice('Microphone capture device resolved', {
+			selectedMicrophoneId: devices.microphoneId,
+			trackLabel: rawAudioTrack.label,
+			trackDeviceId: rawTrackSettings.deviceId,
+			trackGroupId: rawTrackSettings.groupId,
+		});
+
+		// Recover from *involuntary* capture loss on the raw device track. When a
+		// driver like NVIDIA Broadcast / RTX Voice takes over (or releases) the
+		// audio endpoint, the OS reconfigures the session behind our track: the
+		// device id is unchanged, often no `devicechange` fires, but the browser
+		// fires `mute` (session preempted) or `ended` (device removed) on the raw
+		// device track. A downstream Web Audio pipeline track keeps emitting
+		// silence, so peers hear nothing until a manual rejoin. These listeners
+		// live on the raw track because the outbound track may be a synthesized
+		// pipeline output that never sees the device-level event — so the raw
+		// track is the single owner of device-loss for both passthrough and
+		// pipelined captures. The ignore/recover/teardown decision is the pure
+		// resolveRawMicLossAction so each branch is unit-tested.
+		let muteSettleTimer: ReturnType<typeof setTimeout> | undefined;
+
+		const evaluateRawMicLoss = (reason: 'mute' | 'ended') => {
+			const action = resolveRawMicLossAction({
+				reason,
+				// Our own restart stops this track during cleanup after clearing the
+				// ref, so this also covers the supersession/recursion case. (Per spec
+				// `stop()` does not fire `ended`, but `mute` settle timers may still
+				// resolve late against a superseded capture.)
+				superseded: rawMicStreamRef.current !== stream,
+				inChannel: currentVoiceChannelIdRef.current !== undefined,
+				micMuted: ownVoiceStateSelector(useServerStore.getState()).micMuted,
+				trackStillMuted: rawAudioTrack.muted,
+			});
+
+			if (action === 'ignore') {
+				return;
+			}
+
+			if (action === 'teardown-for-unmute') {
+				logVoice('Raw mic interrupted while muted, tearing down for next unmute', { reason });
+				void cleanupMicAudioPipelineRef.current?.();
+				setLocalAudioStream((current) => (current === stream ? undefined : current));
+				return;
+			}
+
+			logVoice('Raw mic capture interrupted, re-acquiring', {
+				reason,
+				deviceId: devices.microphoneId,
+			});
+
+			// startMicStream re-runs cleanup + getUserMedia and is mutex-serialized,
+			// so a redundant call is safe.
+			void startMicStreamRef.current?.();
+		};
+
+		const clearMuteSettleTimer = () => {
+			if (muteSettleTimer !== undefined) {
+				clearTimeout(muteSettleTimer);
+				muteSettleTimer = undefined;
+			}
+		};
+
+		rawAudioTrack.addEventListener('mute', () => {
+			// `mute` is temporary by definition — wait for the settle window and only
+			// act if the track is still muted (re-checked inside evaluateRawMicLoss).
+			if (muteSettleTimer !== undefined) {
+				return;
+			}
+
+			muteSettleTimer = setTimeout(() => {
+				muteSettleTimer = undefined;
+				evaluateRawMicLoss('mute');
+			}, RAW_MIC_MUTE_SETTLE_MS);
+		});
+
+		// `unmute` means the source recovered on its own — cancel any pending settle.
+		rawAudioTrack.addEventListener('unmute', clearMuteSettleTimer);
+
+		// `ended` is permanent (and never fired by our own stop()), so act at once.
+		rawAudioTrack.addEventListener('ended', () => {
+			clearMuteSettleTimer();
+			evaluateRawMicLoss('ended');
+		});
+
 		let outboundStream = stream;
 		let outboundAudioTrack = rawAudioTrack;
 
@@ -1987,7 +2096,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 
 		return { outboundStream, outboundAudioTrack };
-	}, [cleanupMicAudioPipeline, devices]);
+	}, [cleanupMicAudioPipeline, devices, setLocalAudioStream]);
 
 	// Attach the prepared mic pipeline to the producer transport. Must be called
 	// after the producer transport is ready.
@@ -2120,6 +2229,123 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startWebcamStream,
 		stopWebcamStream,
 	]);
+
+	// A "Default" mic selection follows the *system* default input, but the
+	// microphoneId-diff restart above can't see that move (its id stays
+	// undefined). When a driver like NVIDIA Broadcast starts, it makes itself the
+	// default mic and fires a `devicechange`, yet our open capture stays pinned to
+	// the previous device — so peers keep hearing the unfiltered input until a
+	// manual rejoin. Re-acquire when the resolved system default no longer matches
+	// the device we're actually capturing. Only relevant for a Default selection;
+	// a specific device is handled by didMicCaptureSettingsChange.
+	useEffect(() => {
+		if (currentVoiceChannelId === undefined || devices.microphoneId !== undefined) {
+			return;
+		}
+
+		const mediaDevices = navigator.mediaDevices;
+
+		if (!mediaDevices?.addEventListener) {
+			return;
+		}
+
+		let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+		let retryTimer: ReturnType<typeof setTimeout> | undefined;
+		let defaultInputCheckGeneration = 0;
+
+		const clearRetryTimer = () => {
+			if (retryTimer !== undefined) {
+				clearTimeout(retryTimer);
+				retryTimer = undefined;
+			}
+		};
+
+		const cancelDefaultInputChecks = () => {
+			defaultInputCheckGeneration += 1;
+			clearRetryTimer();
+		};
+
+		const checkSystemDefaultInput = async (): Promise<'reacquired' | 'pending' | 'stop'> => {
+			const rawTrack = rawMicStreamRef.current?.getAudioTracks()[0];
+
+			if (!rawTrack || rawTrack.readyState !== 'live') {
+				return 'stop';
+			}
+
+			let inputs: { deviceId: string; groupId: string }[];
+
+			try {
+				inputs = (await mediaDevices.enumerateDevices())
+					.filter((device) => device.kind === 'audioinput')
+					.map((device) => ({ deviceId: device.deviceId, groupId: device.groupId }));
+			} catch (error) {
+				logVoice('Failed to inspect default input after device change', { error });
+				return 'pending';
+			}
+
+			const capturedGroupId = rawTrack.getSettings().groupId;
+			const defaultGroupId = resolveDefaultInputGroupId(inputs);
+
+			if (!didDefaultInputDeviceChange({ capturedGroupId, defaultGroupId })) {
+				return 'pending';
+			}
+
+			logVoice('System default input moved under a Default selection, re-acquiring mic', {
+				capturedGroupId,
+				defaultGroupId,
+			});
+
+			// startMicStream re-runs cleanup + getUserMedia and is mutex-serialized.
+			void startMicStreamRef.current?.();
+			return 'reacquired';
+		};
+
+		const startDefaultInputMoveChecks = () => {
+			const generation = (defaultInputCheckGeneration += 1);
+			const retryUntilMs = Date.now() + DEFAULT_INPUT_DEVICE_CHANGE_RETRY_WINDOW_MS;
+
+			const runCheck = async () => {
+				retryTimer = undefined;
+
+				const result = await checkSystemDefaultInput();
+
+				if (generation !== defaultInputCheckGeneration) {
+					return;
+				}
+
+				if (result !== 'pending' || Date.now() >= retryUntilMs) {
+					return;
+				}
+
+				retryTimer = setTimeout(runCheck, DEFAULT_INPUT_DEVICE_CHANGE_RETRY_INTERVAL_MS);
+			};
+
+			void runCheck();
+		};
+
+		const handleDeviceChange = () => {
+			if (debounceTimer !== undefined) {
+				clearTimeout(debounceTimer);
+			}
+			cancelDefaultInputChecks();
+
+			debounceTimer = setTimeout(() => {
+				debounceTimer = undefined;
+				startDefaultInputMoveChecks();
+			}, DEFAULT_INPUT_DEVICE_CHANGE_DEBOUNCE_MS);
+		};
+
+		mediaDevices.addEventListener('devicechange', handleDeviceChange);
+
+		return () => {
+			if (debounceTimer !== undefined) {
+				clearTimeout(debounceTimer);
+			}
+			cancelDefaultInputChecks();
+
+			mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+		};
+	}, [currentVoiceChannelId, devices.microphoneId]);
 
 	const cleanupDesktopAppAudio = useCallback(
 		async ({
