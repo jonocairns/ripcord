@@ -20,14 +20,14 @@ sidecar (native) ──PCM──► Electron main ──IPC──► renderer wo
 
 The renderer worklet (`PcmQueueProcessor` in `apps/client/src/components/voice-provider/desktop-app-audio.worklet.js`) is a hand-rolled jitter buffer. In `low-latency` mode it targets 3 chunks and hard-trims at 6 by discarding queued chunks (`apps/client/src/components/voice-provider/desktop-app-audio-queue-policy.ts`). Because the native capture clock and the Web Audio render clock are independent and nothing resamples between them, the queue drifts to the trim threshold and dumps ~80ms of audio at once — the audible "odd drops" during streaming. The `AudioContext` is also forced to `session.sampleRate` (`apps/client/src/components/voice-provider/desktop-app-audio.ts`), which can stack a second hidden resampler between the worklet and the output device.
 
-This design removes the renderer from the media path entirely. App audio is encoded to Opus and sent as RTP into a mediasoup `PlainTransport`, where it becomes an ordinary producer. The clock-domain crossing moves into the encoder's fixed-cadence pull, where a resampler belongs — the same shape libwebrtc's AudioDeviceModule uses.
+This design removes the renderer from the media path entirely. App audio is encoded to Opus and sent as RTP into a mediasoup `PlainTransport`, where it becomes an ordinary producer. Stage 1 keeps the encoder in Electron main and sends full Opus frames as sidecar PCM arrives; Stage 2 can move this into the native sidecar with fixed-cadence pacing.
 
 **Enables:** glitch-free shared-app audio; a capture path that no longer depends on Web Audio timing under CPU contention from concurrent screen-share encode.
 
 ## Constraints
 
 - The server runs a **single mediasoup worker** and a **per-channel `Router`** (`apps/server/src/utils/mediasoup.ts`, `apps/server/src/runtimes/voice.ts` `getRouter`/`createRouter`). Consumption is always within a channel; there is no `pipeTransport` fan-out.
-- App/system audio is already modelled as **`StreamKind.SCREEN_AUDIO`** (`apps/client/src/components/voice-provider/index.tsx:1795,1806`) and consumers already watch that kind (`index.tsx:868`). Producer identity must be preserved so the consume side is untouched.
+- App/system audio is already modelled as **`StreamKind.SCREEN_AUDIO`** in the voice provider, and consumers already watch that kind. Producer identity must be preserved so the consume side is untouched.
 - The producing client may be behind NAT, and the server may be remote. Plain RTP has no ICE and no DTLS.
 - The sidecar already exposes a **binary PCM egress over a local TCP socket** (`TAppAudioBinaryEgressInfo { port, framing, protocolVersion }`, `apps/desktop/src/main/capture-sidecar-manager.ts`). The "get audio out of the native process over a socket" primitive exists.
 - Web clients and locked-down networks must keep working — the existing worklet→WebRTC path stays as a fallback.
@@ -71,7 +71,7 @@ A new transport type is created on the channel's existing router, alongside the 
 - The transport is tracked per session and torn down in the same lifecycle path that closes WebRTC producers on leave/disconnect (mirror existing producer cleanup in `VoiceRuntime`).
 - The producer is created server-side with fixed Opus `RtpParameters` and `appData: { kind: StreamKind.SCREEN_AUDIO, userId }`. Publishing `VOICE_NEW_PRODUCER` is **gated on first media** (see Media liveness below), not on `produce()` returning — a published producer that never receives RTP would leave listeners with a silent stream and no fallback.
 
-**Permission boundary.** This route becomes the real authorization boundary for app/system audio. The current WebRTC `produce.ts:22-26` branches only on `AUDIO`→`SPEAK`, `VIDEO`→`WEBCAM`, `SCREEN`→`SHARE_SCREEN` — **`SCREEN_AUDIO` falls through ungated** (covered today only by the route-level `JOIN_VOICE_CHANNELS`). The new route gates on **`SHARE_SCREEN`**, since app/system audio only exists alongside an active screen share and `update-state.ts:25` already gates screen-share state on it. `STUB` — confirm `SHARE_SCREEN` is the intended boundary (vs `SHARE_SCREEN` + `SPEAK`), and decide whether to backfill the same gate onto the existing `SCREEN_AUDIO` produce path.
+**Permission boundary.** App/system audio gates on `SHARE_SCREEN`, since it is published as `SCREEN_AUDIO` alongside an active screen share. The native ingest routes require `JOIN_VOICE_CHANNELS` plus `SHARE_SCREEN`, and the legacy WebRTC `produce.ts` path applies the same `SCREEN_AUDIO` → `SHARE_SCREEN` check so a native-path denial cannot be bypassed by falling back to the worklet path.
 
 ### Signaling contract
 
@@ -112,34 +112,36 @@ output:
   | { fallback: true }              // no media before timeout → client uses the worklet path
 ```
 
-The `rtpParameters` are fixed and server-authored (one Opus codec, one payload type, agreed clock rate/channels) so the encoder has an unambiguous target. `STUB` — pin the exact payload type, clock rate (48000), channel count (2), SRTP crypto suite, and the first-media timeout during Stage 1.
+The `rtpParameters` are fixed and server-authored so the encoder has an unambiguous target: Opus payload type `100`, `48_000` Hz, stereo, `AES_CM_128_HMAC_SHA1_80` SRTP, and a `3_000` ms first-media timeout.
 
 ### Desktop main — RTP sender
 
 A new module `apps/desktop/src/main/app-audio-rtp-sender.ts` consumes the existing binary PCM egress and produces SRTP:
 
-1. **Fixed-cadence pull + resample.** Pull PCM at a fixed 10ms (or 20ms) Opus frame cadence; resample the sidecar's stream onto the encoder clock. This is the drift fix — drift is absorbed by continuous resampling at the encoder boundary, never by dropping a buffered chunk.
-2. **Opus encode** at the fixed `rtpParameters` codec settings.
+1. **Arrival-paced resample.** Resample sidecar PCM to 48 kHz stereo as it arrives and buffer until a full 20 ms Opus frame is available. RTP timestamps still advance by a fixed 960 samples per frame, but send cadence follows sidecar PCM arrival in Stage 1.
+2. **Opus encode** at the fixed `rtpParameters` codec settings via `@evan/opus`.
 3. **RTP packetize** (12-byte header, sequence/timestamp/SSRC).
-4. **SRTP protect** using the keys exchanged via signaling.
+4. **SRTP protect** via `werift-rtp` using the keys exchanged via signaling.
 5. **UDP send** to the plain transport `ip:port`. Comedia: just start sending; the server adopts the source address.
 
-`STUB` — select the Node-side Opus encoder and SRTP libraries (native ABI addon is acceptable; the desktop build already ships the sidecar and mediasoup binaries). Validate SRTP interop against mediasoup before wiring the encoder.
+This keeps Stage 1 write-once in Electron main. Fixed-cadence pacing belongs in Stage 2, when encode/RTP moves into the native sidecar.
 
 ### Client — capability gating and fallback
 
 The renderer chooses the ingest path when starting app-audio capture:
 
-- **Native ingest** when: desktop runtime present, sidecar available, and `produceAppAudio` returns `{ producerId }` — i.e. the server observed first RTP within the timeout.
-- **Fallback** when: not desktop/sidecar, or `produceAppAudio` returns `{ fallback: true }` (UDP path to the server blocked, packets never arrived). The existing worklet→`MediaStreamTrack`→WebRTC producer path (`index.tsx` around `:1795`) is retained unchanged.
+- **Native ingest** when: desktop runtime present, the desktop bridge exposes RTP ingest, the user has enabled the desktop setting, and `produceAppAudio` returns `{ producerId }` — i.e. the server observed first RTP within the timeout.
+- **Fallback** when: not desktop/sidecar, the bridge is missing, the setting is disabled, or `produceAppAudio` returns `{ fallback: true }` (UDP path to the server blocked, packets never arrived). The existing worklet→`MediaStreamTrack`→WebRTC producer path is retained unchanged.
+
+Stage 1 defaults native ingest off while live and packaged builds are validated. Enable it in the desktop app under user device settings. `VITE_VOICE_NATIVE_APP_AUDIO=true` and `localStorage['voice.nativeAppAudio']='true'` remain smoke-test overrides; setting that localStorage key to `'false'` forces the worklet path.
 
 Reachability is not assumed — it is **proven by media**. Because plain RTP has no ICE/DTLS connection state, "is the ingest working?" can only be answered by the server seeing real packets, so the fallback decision is driven by the first-media gate, not by transport creation succeeding. Either way the producer surfaces as `SCREEN_AUDIO` via `VOICE_NEW_PRODUCER`, so remote UI and consumption are identical across paths.
 
 ### Cross-Cutting Concerns
 
 - **Security parity.** WebRTC media is DTLS-SRTP. The plain path MUST use SRTP (`enableSrtp`) so app audio is not sent in clear over the network. Keying is two-sided: the server returns its `srtpParameters` from `createAppAudioIngest`, and the client's `srtpParameters` are applied via `plainTransport.connect()` in `produceAppAudio`. Media cannot be decrypted until `connect()` completes.
-- **Media liveness.** Plain RTP has no ICE/DTLS state, so a `produce()` can succeed while no packet ever arrives — a silent, published `SCREEN_AUDIO` producer that never triggers fallback. The server gates `VOICE_NEW_PRODUCER` on the PlainTransport `tuple` event (first received RTP) with a bounded timeout; on timeout it tears down and signals `{ fallback: true }`. The existing `apps/server/src/runtimes/media-liveness-telemetry.ts` is the natural home for ongoing liveness once published. `STUB` — set the first-media timeout and decide whether mid-stream liveness loss also drops back to the worklet path.
-- **NAT / remote servers.** `comedia` handles client-behind-NAT (client sends first). The server must expose a UDP port (or range) for plain RTP and announce the same reachable address used for WebRTC. `STUB` — define the port allocation/range and document the firewall requirement next to existing WebRTC port docs.
+- **Media liveness.** Plain RTP has no ICE/DTLS state, so a `produce()` can succeed while no packet ever arrives — a silent, published `SCREEN_AUDIO` producer that never triggers fallback. The server gates `VOICE_NEW_PRODUCER` on the PlainTransport `tuple` event (first received RTP) with a `3_000` ms timeout; on timeout it tears down and signals `{ fallback: true }`. Mid-stream liveness loss is not handled in Stage 1.
+- **NAT / remote servers.** `comedia` handles client-behind-NAT (client sends first). The server must expose reachable UDP ports for mediasoup PlainTransport and announce the same reachable address used for WebRTC.
 - **No bandwidth estimation.** PlainTransport gives no transport-cc/REMB feedback to the encoder. This is acceptable: Opus app audio is low, near-constant bitrate. BWE only matters for video, which this path never carries.
 - **Lifecycle.** The plain transport and its producer are owned by the voice session and closed by the same teardown that handles WebRTC producers — a disconnect or channel leave must release the UDP port and close the producer.
 - **Producer identity.** The producer is `SCREEN_AUDIO` with `appData.userId`, identical to today, so existing consumer routing, watch logic, and UI need no change.
@@ -148,13 +150,13 @@ Reachability is not assumed — it is **proven by media**. Because plain RTP has
 
 ## Delivery Staging
 
-Staging is explicitly requested: prove the server ingest path with the cheaper encoder first, then push the encoder down to the native layer.
+Staging keeps the server ingest contract stable while the sender implementation can move from Electron main to the native sidecar.
 
-**Stage 1 — Electron-main encoder.** Encode + RTP + SRTP live in Electron main, reading the existing binary PCM egress. Write-once and platform-agnostic, reuses the socket that already exists, and ships the drop fix. This stage proves the riskiest unknown — server PlainTransport ingest with SRTP keying and comedia — independently of any native media code.
+**Stage 1 — Electron-main encoder.** Encode + RTP + SRTP live in Electron main, reading the existing binary PCM egress. It is arrival-paced: frames are encoded and sent when enough resampled PCM has accumulated. This ships the new ingest path behind an opt-in flag while proving server PlainTransport ingest with SRTP keying and comedia.
 
-**Stage 2 — Native sidecar encoder.** Move encode + RTP into the sidecar (shared Rust core; Swift backend via FFI) so media never crosses a process boundary as PCM. This is an optimization of an already-working, already-tested path — full parity with the libwebrtc model.
+**Stage 2 — Native sidecar encoder.** Move encode + RTP into the sidecar (shared Rust core; Swift backend via FFI) so media never crosses a process boundary as PCM, and add native fixed-cadence pacing there.
 
-The earliest validation is cheapest: stand up the server PlainTransport + signaling and drive it with an off-the-shelf RTP source (e.g. ffmpeg/GStreamer) to confirm ingest, SRTP, and the `addProducer` seam before any desktop code is written.
+The server PlainTransport + signaling path can be driven with an off-the-shelf RTP source (e.g. ffmpeg/GStreamer) to confirm ingest, SRTP, and the `addProducer` path independently of the desktop sender.
 
 ---
 
@@ -179,16 +181,16 @@ The earliest validation is cheapest: stand up the server PlainTransport + signal
 
 | Risk | Mitigation |
 |------|------------|
-| SRTP keying / crypto-suite interop with mediasoup | Validate with an ffmpeg/GStreamer SRTP source before encoder work; pin the suite in the signaling contract; verify the `connect({ srtpParameters })` handshake end-to-end |
+| SRTP keying / crypto-suite interop with mediasoup | Validate with an ffmpeg/GStreamer SRTP source; pin the suite in the signaling contract; verify the `connect({ srtpParameters })` handshake end-to-end |
 | Silent producer — `produce()` succeeds but no RTP arrives | First-media gate: publish `VOICE_NEW_PRODUCER` only on the PlainTransport `tuple` event; timeout → teardown + `{ fallback: true }` |
 | UDP path to server blocked (corporate networks) | Surfaces as the first-media timeout above; client falls back to the WebRTC worklet path |
-| New route under-gates app-audio authorization | Route gates on `SHARE_SCREEN`; the legacy `SCREEN_AUDIO` produce path is currently ungated — confirm and align both |
+| App-audio authorization diverges between native and fallback paths | Native ingest routes and the legacy `SCREEN_AUDIO` produce path both gate on `SHARE_SCREEN` |
 | comedia source-address adoption races on reconnect | Recreate transport+producer on reconnect; reuse existing producer-replacement handling |
-| Port exhaustion / firewall for plain RTP | Define a bounded port range; document alongside WebRTC port config |
-| Node real-time encode jitter (Stage 1) | Acceptable for low-bitrate Opus; Stage 2 moves encode native if measured jitter is a problem |
+| Port exhaustion / firewall for plain RTP | Reuse the mediasoup PlainTransport UDP listen configuration and announced address; blocked UDP falls back through the first-media timeout |
+| Arrival-paced Node sender jitter (Stage 1) | Acceptable for opt-in validation; Stage 2 moves encode native with fixed-cadence pacing |
 
 ## Extension Points
 
 - The signaling contract is transport-shaped, not encoder-shaped — Stage 2 swaps the RTP sender's location without changing the server or the consume side.
-- The capability gate is the single switch between native ingest and the worklet fallback.
+- The bridge capability check plus desktop user setting decide whether native ingest is attempted; first-media timeout decides whether an attempted ingest falls back to the worklet path.
 - System audio and per-app audio share the `SCREEN_AUDIO` producer identity and therefore the same ingest path.

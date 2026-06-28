@@ -623,6 +623,26 @@ const Devices = memo(() => {
 						</div>
 					</div>
 
+					{hasDesktopBridge && (
+						<div className="flex items-start justify-between gap-4 rounded-md border border-border/60 p-3">
+							<div className="space-y-1">
+								<div className="flex flex-wrap items-center gap-2">
+									<Label className="cursor-default">Improved screen share audio</Label>
+									<Badge variant="secondary" className="h-5 px-1.5 text-[10px] uppercase tracking-[0.14em]">
+										Experimental
+									</Badge>
+								</div>
+								<p className="text-xs text-muted-foreground">
+									Try the new desktop audio sharing path to reduce dropouts when sharing app or system audio.
+								</p>
+							</div>
+							<Switch
+								checked={!!values.nativeAppAudioIngestEnabled}
+								onCheckedChange={(checked) => onChange('nativeAppAudioIngestEnabled', checked)}
+							/>
+						</div>
+					)}
+
 					<div>
 						<ResolutionFpsControl
 							framerate={values.screenFramerate}

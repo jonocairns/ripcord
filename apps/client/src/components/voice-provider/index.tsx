@@ -621,13 +621,10 @@ const isAuthDenialError = (error: unknown): boolean => {
 	return code === 'FORBIDDEN' || code === 'UNAUTHORIZED';
 };
 
-// Stage 1 native app-audio RTP ingest is opt-in until validated against a live
-// server and a packaged desktop build (SRTP/comedia interop + @evan/opus
-// packaging). Enable via the build-time flag VITE_VOICE_NATIVE_APP_AUDIO=true, or
-// flip it at runtime in a packaged build with
-// localStorage['voice.nativeAppAudio']='true' (handy for smoke-testing without a
-// rebuild). Defaults off so the proven worklet path stays the default.
-const isNativeAppAudioIngestEnabled = (): boolean => {
+// Stage 1 native app-audio RTP ingest defaults off. Desktop users can opt in
+// through device settings; the build/localStorage switches remain for smoke
+// testing packaged builds without changing saved settings.
+const isNativeAppAudioIngestEnabled = (settingsEnabled: boolean): boolean => {
 	try {
 		const override = globalThis.localStorage?.getItem('voice.nativeAppAudio');
 
@@ -637,7 +634,7 @@ const isNativeAppAudioIngestEnabled = (): boolean => {
 		// localStorage may be unavailable; fall through to the build-time flag.
 	}
 
-	return import.meta.env.VITE_VOICE_NATIVE_APP_AUDIO === 'true';
+	return settingsEnabled || import.meta.env.VITE_VOICE_NATIVE_APP_AUDIO === 'true';
 };
 
 const createReconnectAttemptId = (): string => {
@@ -2271,8 +2268,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 
 			// Rollout gate: opt-in until validated end-to-end and in a packaged build.
-			if (!isNativeAppAudioIngestEnabled()) {
-				logVoice('Native app audio ingest disabled by flag; using worklet path');
+			if (!isNativeAppAudioIngestEnabled(devices.nativeAppAudioIngestEnabled)) {
+				logVoice('Native app audio ingest disabled; using worklet path');
 				return false;
 			}
 
@@ -2356,7 +2353,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			return false;
 		},
-		[],
+		[devices.nativeAppAudioIngestEnabled],
 	);
 
 	const startDesktopAppAudioWorklet = useCallback(

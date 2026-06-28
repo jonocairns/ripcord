@@ -6,9 +6,8 @@ tags: [voice, app-audio, plain-transport, srtp, ffmpeg, validation, stage-1]
 # Stage 1 Validation — ffmpeg App-Audio Ingest Fixture
 
 Drives the server ingest path with an off-the-shelf SRTP RTP source so the
-PlainTransport + SRTP + `connect()` + `tuple` gate + `addProducer` seam is proven
-**before** any desktop encoder code exists (design §Delivery Staging: "the
-earliest validation is cheapest").
+PlainTransport + SRTP + `connect()` + `tuple` gate + `addProducer` path can be
+validated independently of the Electron-main sender.
 
 Routes under test (`apps/server/src/routers/voice/`):
 
@@ -92,11 +91,13 @@ Routes under test (`apps/server/src/routers/voice/`):
 
 The Electron-main sender is `apps/desktop/src/main/app-audio-rtp-sender.ts`
 (resample → Opus via `@evan/opus` → RTP+SRTP via `werift-rtp` → UDP). The client
-gate is `startNativeAppAudioIngest` in `apps/client/src/components/voice-provider/index.tsx`,
-which falls back to the worklet path on older builds, blocked UDP, or no first
-media. Unit tests in `apps/desktop/src/main/__tests__/app-audio-rtp-sender.test.ts`
+gate is `startNativeAppAudioIngest` in `apps/client/src/components/voice-provider/index.tsx`.
+It is opt-in from the desktop app's user device settings. `VITE_VOICE_NATIVE_APP_AUDIO=true`
+or `localStorage['voice.nativeAppAudio']='true'` can still force it on for smoke tests. It falls back
+to the worklet path on older builds, blocked UDP, no first media, or the default-off rollout gate.
+Unit tests in `apps/desktop/src/main/__tests__/app-audio-rtp-sender.test.ts`
 prove the RTP/SRTP packet is decryptable with the key handed to the server
-(local SRTP interop), plus resampler cadence.
+(local SRTP interop), plus resampler behavior.
 
 **Still requires a live + packaged validation** (cannot be exercised in CI):
 
