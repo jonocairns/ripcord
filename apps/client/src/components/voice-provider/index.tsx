@@ -305,8 +305,11 @@ const resolveMicProcessingConfig = (devices: TDeviceSettings): ResolvedMicProces
 const RAW_MIC_MUTE_SETTLE_MS = 400;
 
 // Debounce the burst of `devicechange` events the OS emits while a driver
-// settles before we re-check whether the system default input moved.
-const DEFAULT_INPUT_DEVICE_CHANGE_DEBOUNCE_MS = 300;
+// settles before we re-check whether the system default input moved. The window
+// also gives Chromium's synthetic "default" entry time to repoint to the new
+// physical input, so the single post-debounce snapshot doesn't read stale and
+// miss the move (there's no guaranteed follow-up event to self-heal from).
+const DEFAULT_INPUT_DEVICE_CHANGE_DEBOUNCE_MS = 500;
 
 const didMicCaptureSettingsChange = (previousDevices: TDeviceSettings, nextDevices: TDeviceSettings) => {
 	return (
