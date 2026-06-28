@@ -1,11 +1,7 @@
-import { DEFAULT_MEDIA_DEVICE_ID } from '../devices-provider/media-device-selection';
-
 // Browser adapter for "Default" microphone selection. Chromium represents the
 // OS default input as a synthetic device entry; after mic permission is granted,
 // its groupId tracks the physical input currently backing that default.
-type TAudioInputSnapshot = {
-	groupId: string;
-};
+import { DEFAULT_MEDIA_DEVICE_ID } from '../devices-provider/media-device-selection';
 
 type TDefaultInputChangeInput = {
 	// groupId of the device our open capture is actually bound to.
@@ -30,5 +26,5 @@ const didDefaultInputDeviceChange = ({ capturedGroupId, defaultGroupId }: TDefau
 	return defaultGroupId !== capturedGroupId;
 };
 
-export type { TAudioInputSnapshot, TDefaultInputChangeInput };
+export type { TDefaultInputChangeInput };
 export { didDefaultInputDeviceChange, resolveDefaultInputGroupId };
