@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { StreamKind } from '@sharkord/shared';
+import type { AppData, Consumer } from 'mediasoup/types';
 import { VoiceRuntime } from '../voice';
 
 /**
@@ -23,6 +25,35 @@ const CHANNEL_BASE = 90_000;
 let channelCounter = 0;
 
 const nextChannelId = () => CHANNEL_BASE + ++channelCounter;
+
+const makeCloseConsumer = (id: string, fireObserverOnClose = true) => {
+	let closeHandler: (() => void) | undefined;
+	let closed = false;
+
+	const consumer = {
+		id,
+		get closed() {
+			return closed;
+		},
+		observer: {
+			on: (_event: string, handler: () => void) => {
+				closeHandler = handler;
+			},
+		},
+		close: () => {
+			if (closed) {
+				return;
+			}
+
+			closed = true;
+			if (fireObserverOnClose) {
+				closeHandler?.();
+			}
+		},
+	} as unknown as Consumer<AppData>;
+
+	return { consumer };
+};
 
 describe('VoiceRuntime in-session transport rebuild', () => {
 	const runtimes: VoiceRuntime[] = [];
@@ -134,5 +165,25 @@ describe('VoiceRuntime in-session transport rebuild', () => {
 
 		expect(surviving).toBeDefined();
 		expect(surviving!.closed).toBe(false);
+	});
+
+	test('targeted consumer cleanup skips a newer replacement consumer', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		const first = makeCloseConsumer('first-consumer');
+		runtime.addConsumer(1, 2, StreamKind.AUDIO, first.consumer);
+
+		const second = makeCloseConsumer('second-consumer');
+		runtime.addConsumer(1, 2, StreamKind.AUDIO, second.consumer);
+
+		runtime.removeConsumer(1, 2, StreamKind.AUDIO, 'first-consumer');
+
+		expect(first.consumer.closed).toBe(true);
+		expect(second.consumer.closed).toBe(false);
+
+		runtime.removeConsumer(1, 2, StreamKind.AUDIO, 'second-consumer');
+
+		expect(second.consumer.closed).toBe(true);
 	});
 });

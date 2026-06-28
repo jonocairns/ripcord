@@ -8,6 +8,7 @@ class PcmQueueProcessor extends AudioWorkletProcessor {
 			options.processorOptions?.trimStartChunks || this.targetChunks * 2,
 		);
 		this.maxChunks = Math.max(1, options.processorOptions?.maxChunks || 8);
+		this.resyncStartChunks = Math.max(0, options.processorOptions?.resyncStartChunks || 0);
 		this.trimQueueForLowLatency = options.processorOptions?.trimQueueForLowLatency !== false;
 		this.emitQueueTelemetry = options.processorOptions?.emitQueueTelemetry === true;
 		this.telemetryIntervalSeconds = Math.max(0.25, (options.processorOptions?.queueTelemetryIntervalMs || 1000) / 1000);
@@ -17,26 +18,53 @@ class PcmQueueProcessor extends AudioWorkletProcessor {
 		this.chunkFrameOffset = 0;
 		this.overflownChunks = 0;
 		this.trimmedChunks = 0;
+		this.resyncedChunks = 0;
 
 		this.port.onmessage = (event) => {
 			const data = event.data || {};
 			if (data.type === 'pcm' && data.samples) {
-				while (this.queue.length >= this.maxChunks) {
-					this.queue.shift();
-					this.overflownChunks += 1;
+				// Mirror of planPcmQueueAdmission in desktop-app-audio-queue-runtime.ts
+				// (worklets cannot import bundled modules — keep the two in sync).
+				const queueLength = this.queue.length;
+				const dropToTarget = Math.max(0, queueLength - (this.targetChunks - 1));
+				let dropCount = 0;
+				let reason = 'none';
+
+				if (queueLength >= this.maxChunks) {
+					dropCount = Math.max(0, queueLength - (this.maxChunks - 1));
+					reason = 'overflow';
+				} else if (this.trimQueueForLowLatency && queueLength >= this.trimStartChunks) {
+					dropCount = dropToTarget;
+					reason = 'low-latency-trim';
+				} else if (this.resyncStartChunks > 0 && queueLength >= this.resyncStartChunks) {
+					dropCount = dropToTarget;
+					reason = 'resync';
 				}
 
-				if (this.trimQueueForLowLatency && this.queue.length >= this.trimStartChunks) {
-					while (this.queue.length >= this.targetChunks) {
-						this.queue.shift();
-						this.trimmedChunks += 1;
-					}
+				for (let index = 0; index < dropCount; index += 1) {
+					this.queue.shift();
+				}
+
+				if (reason === 'overflow') {
+					this.overflownChunks += dropCount;
+				} else if (reason === 'low-latency-trim') {
+					this.trimmedChunks += dropCount;
+				} else if (reason === 'resync') {
+					this.resyncedChunks += dropCount;
 				}
 
 				if (this.trimmedChunks > 0 && this.trimmedChunks % 10 === 0) {
 					this.port.postMessage({
 						type: 'queue-trim',
 						trimmedChunks: this.trimmedChunks,
+					});
+				}
+
+				if (reason === 'resync') {
+					this.port.postMessage({
+						type: 'queue-resync',
+						resyncedChunks: this.resyncedChunks,
+						droppedChunks: dropCount,
 					});
 				}
 
@@ -57,6 +85,7 @@ class PcmQueueProcessor extends AudioWorkletProcessor {
 				this.chunkFrameOffset = 0;
 				this.overflownChunks = 0;
 				this.trimmedChunks = 0;
+				this.resyncedChunks = 0;
 			}
 		};
 	}
@@ -126,6 +155,7 @@ class PcmQueueProcessor extends AudioWorkletProcessor {
 				trimStartChunks: this.trimStartChunks,
 				maxChunks: this.maxChunks,
 				trimmedChunks: this.trimmedChunks,
+				resyncedChunks: this.resyncedChunks,
 				droppedChunks: this.overflownChunks,
 			});
 			this.lastTelemetryAt = currentTime;

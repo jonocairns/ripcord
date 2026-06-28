@@ -54,6 +54,7 @@ import { useDevices } from '../devices-provider/hooks/use-devices';
 import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } from './audio-context';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
+import { shouldDeferTransportFailureToReconnect } from './hooks/transport-failure-policy';
 import { useLocalStreams } from './hooks/use-local-streams';
 import {
 	getPendingStreamKey,
@@ -809,6 +810,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const voiceSessionReconnectNonceRef = useLatestRef(voiceSessionReconnectNonce);
 
 	const onTransportFailure = useCallback(() => {
+		// A full WS-level reconnect already owns recovery (see the reconnect
+		// effect). A media transport failing during that window is expected and
+		// will be repaired by restore-or-join, so defer instead of starting a
+		// second, racing recovery that would tear down the restored session.
+		if (shouldDeferTransportFailureToReconnect(useVoiceReconnectStore.getState().reconnectingSince)) {
+			logVoice('Ignoring transport failure during WS reconnect recovery; deferring to reconnect orchestration');
+			return;
+		}
+
 		if (hasHandledTransportFailureRef.current) {
 			logVoice('Transport failure already handled, skipping duplicate cleanup');
 			return;
@@ -826,6 +836,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			hasHandledTransportFailureRef.current = false;
 
 			if (recovered) {
+				return;
+			}
+
+			// If a WS reconnect began while this in-session recovery was running,
+			// hand off to it rather than tearing voice down — the reconnect
+			// orchestration will restore or rejoin the session.
+			if (shouldDeferTransportFailureToReconnect(useVoiceReconnectStore.getState().reconnectingSince)) {
+				logVoice('In-session recovery failed but WS reconnect is now active; deferring teardown');
 				return;
 			}
 
@@ -2373,11 +2391,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				appAudioSessionRef.current = appAudioSession;
 
 				const appAudioPipeline = await createDesktopAppAudioPipeline(appAudioSession, {
-					mode: 'low-latency',
+					mode: 'stable',
 					logLabel: audioMode === ScreenAudioMode.SYSTEM ? 'system-audio' : 'per-app-audio',
 					insertSilenceOnDroppedFrames: true,
-					emitQueueTelemetry: true,
-					queueTelemetryIntervalMs: 1_000,
 				});
 				let hasReceivedSessionFrame = false;
 
