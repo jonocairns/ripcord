@@ -63,10 +63,7 @@ const useVoiceRefs = ({
 
 	const screenSharePlaybackStream = useMemo(
 		() =>
-			buildCombinedScreenShareStream(
-				screenShareStream,
-				attachScreenShareAudio ? screenShareAudioStream : undefined,
-			),
+			buildCombinedScreenShareStream(screenShareStream, attachScreenShareAudio ? screenShareAudioStream : undefined),
 		[attachScreenShareAudio, screenShareAudioStream, screenShareStream],
 	);
 

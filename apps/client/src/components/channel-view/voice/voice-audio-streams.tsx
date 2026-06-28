@@ -11,9 +11,7 @@ const VoiceUserAudioStream = memo(({ userId }: TVoiceUserAudioStreamProps) => {
 
 	return (
 		<>
-			{hasAudioStream && (
-				<audio ref={audioRef} muted={soundMuted} className="hidden" autoPlay data-user-id={userId} />
-			)}
+			{hasAudioStream && <audio ref={audioRef} muted={soundMuted} className="hidden" autoPlay data-user-id={userId} />}
 		</>
 	);
 });

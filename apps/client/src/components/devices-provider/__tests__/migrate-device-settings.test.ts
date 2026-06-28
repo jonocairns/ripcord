@@ -171,9 +171,7 @@ describe('migrateDeviceSettings', () => {
 	});
 
 	it('falls back to the default for a non-numeric push release delay', () => {
-		expect(
-			migrateDeviceSettings({ pushReleaseDelayMs: 'fast' as unknown as number }).pushReleaseDelayMs,
-		).toBe(20);
+		expect(migrateDeviceSettings({ pushReleaseDelayMs: 'fast' as unknown as number }).pushReleaseDelayMs).toBe(20);
 		expect(migrateDeviceSettings({ pushReleaseDelayMs: Number.NaN }).pushReleaseDelayMs).toBe(20);
 	});
 });
