@@ -22,16 +22,16 @@ import type {
 	WebRtcTransport,
 } from 'mediasoup/types';
 import { logger } from '../logger';
-import {
-	allocateAppAudioSsrc,
-	APP_AUDIO_FIRST_MEDIA_TIMEOUT_MS,
-	APP_AUDIO_SRTP_CRYPTO_SUITE,
-	buildAppAudioRtpParameters,
-} from './app-audio-ingest';
 import { eventBus } from '../plugins/event-bus';
 import { invariant } from '../utils/invariant';
 import { mediaSoupWorker, webRtcServer, webRtcServerListenInfo, webRtcServerListenInfos } from '../utils/mediasoup';
 import { pubsub } from '../utils/pubsub';
+import {
+	APP_AUDIO_FIRST_MEDIA_TIMEOUT_MS,
+	APP_AUDIO_SRTP_CRYPTO_SUITE,
+	allocateAppAudioSsrc,
+	buildAppAudioRtpParameters,
+} from './app-audio-ingest';
 import {
 	evaluateMediaLiveness,
 	MEDIA_LIVENESS_CHECK_INTERVAL_MS,
@@ -632,12 +632,29 @@ class VoiceRuntime {
 			appData: { kind: StreamKind.SCREEN_AUDIO, userId },
 		});
 
+		if (!this.getUser(userId)) {
+			if (!transport.closed) {
+				transport.close();
+			}
+
+			invariant(false, {
+				code: 'NOT_FOUND',
+				message: 'Voice user left before app audio ingest was ready',
+			});
+		}
+
 		const srtpParameters = transport.srtpParameters;
 
-		invariant(srtpParameters, {
-			code: 'INTERNAL_SERVER_ERROR',
-			message: 'PlainTransport SRTP parameters unavailable',
-		});
+		if (!srtpParameters) {
+			if (!transport.closed) {
+				transport.close();
+			}
+
+			invariant(srtpParameters, {
+				code: 'INTERNAL_SERVER_ERROR',
+				message: 'PlainTransport SRTP parameters unavailable',
+			});
+		}
 
 		const ssrc = allocateAppAudioSsrc();
 		const rtpParameters = buildAppAudioRtpParameters(ssrc, userId);

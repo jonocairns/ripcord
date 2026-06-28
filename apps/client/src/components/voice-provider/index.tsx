@@ -3176,11 +3176,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								}
 
 								if (appAudioPublishIntentRef.current) {
-									republishTasks.push(
-										recoverDesktopAppAudioFromIntent().catch((error) => {
-											logVoice('Error recovering desktop app audio after voice transport recovery', { error });
-										}),
-									);
+									void recoverDesktopAppAudioFromIntent().catch((error) => {
+										logVoice('Error recovering desktop app audio after voice transport recovery', { error });
+									});
 								} else {
 									const currentScreenShareAudioStream = localScreenShareAudioStreamRef.current;
 									const currentScreenShareAudioTrack = currentScreenShareAudioStream?.getAudioTracks()[0];

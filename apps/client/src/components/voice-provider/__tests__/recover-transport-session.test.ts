@@ -162,7 +162,7 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 
 			const optionalAppAudioRecovery = deps.recoverOptionalAppAudio();
 			if (optionalAppAudioRecovery) {
-				republishTasks.push(optionalAppAudioRecovery.catch(() => undefined));
+				void optionalAppAudioRecovery.catch(() => undefined);
 			}
 
 			await withRecoveryTimeout(
@@ -491,6 +491,16 @@ describe('recoverTransportSession orchestration', () => {
 		const optionalError = new Error('sidecar capture failed');
 		const deps = makeDeps({
 			recoverOptionalAppAudio: mock(() => Promise.reject(optionalError)),
+		});
+
+		expect(await runRecovery(deps)).toBe(true);
+		expect((deps.recoverOptionalAppAudio as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
+	});
+
+	it('does not wait for optional desktop app audio recovery when it stays pending', async () => {
+		const deps = makeDeps({
+			recoverOptionalAppAudio: mock(() => new Promise<void>(() => {})),
 		});
 
 		expect(await runRecovery(deps)).toBe(true);

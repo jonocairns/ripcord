@@ -392,6 +392,35 @@ describe('VoiceRuntime app-audio ingest', () => {
 		createSpy.mockRestore();
 	});
 
+	test('removing a user while ingest transport creation is pending closes the new transport', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		const callLog: string[] = [];
+		const pending = makeMockPlainTransport('t-pending', callLog, 48_500);
+		let releaseTransport!: () => void;
+		const transportReady = new Promise<void>((resolve) => {
+			releaseTransport = resolve;
+		});
+
+		const createSpy = spyOn(runtime.getRouter(), 'createPlainTransport').mockImplementation((async () => {
+			await transportReady;
+			return pending.transport;
+		}) as never);
+
+		const createPromise = runtime.createAppAudioIngest(1);
+		await flushMicrotasks();
+
+		runtime.removeUser(1);
+		releaseTransport();
+
+		await expect(createPromise).rejects.toThrow('Voice user left before app audio ingest was ready');
+		expect(pending.transport.closed).toBe(true);
+		expect(runtime.getAppAudioIngest(1)).toBeUndefined();
+
+		createSpy.mockRestore();
+	});
+
 	test('getRemoteIds excludes the requesting users own screen-audio producer', async () => {
 		const runtime = await makeRuntime();
 		runtime.addUser(1, { micMuted: false, soundMuted: false });
