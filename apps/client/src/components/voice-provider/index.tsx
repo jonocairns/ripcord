@@ -307,9 +307,10 @@ const RAW_MIC_MUTE_SETTLE_MS = 400;
 // Debounce the burst of `devicechange` events the OS emits while a driver
 // settles before we re-check whether the system default input moved. The window
 // also gives Chromium's synthetic "default" entry time to repoint to the new
-// physical input, so the single post-debounce snapshot doesn't read stale and
-// miss the move (there's no guaranteed follow-up event to self-heal from).
+// physical input before the first retry below.
 const DEFAULT_INPUT_DEVICE_CHANGE_DEBOUNCE_MS = 500;
+const DEFAULT_INPUT_DEVICE_CHANGE_RETRY_INTERVAL_MS = 250;
+const DEFAULT_INPUT_DEVICE_CHANGE_RETRY_WINDOW_MS = 1500;
 
 const didMicCaptureSettingsChange = (previousDevices: TDeviceSettings, nextDevices: TDeviceSettings) => {
 	return (
@@ -2249,12 +2250,26 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 
 		let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+		let retryTimer: ReturnType<typeof setTimeout> | undefined;
+		let defaultInputCheckGeneration = 0;
 
-		const reacquireIfSystemDefaultMoved = async () => {
+		const clearRetryTimer = () => {
+			if (retryTimer !== undefined) {
+				clearTimeout(retryTimer);
+				retryTimer = undefined;
+			}
+		};
+
+		const cancelDefaultInputChecks = () => {
+			defaultInputCheckGeneration += 1;
+			clearRetryTimer();
+		};
+
+		const checkSystemDefaultInput = async (): Promise<'reacquired' | 'pending' | 'stop'> => {
 			const rawTrack = rawMicStreamRef.current?.getAudioTracks()[0];
 
 			if (!rawTrack || rawTrack.readyState !== 'live') {
-				return;
+				return 'stop';
 			}
 
 			let inputs: { deviceId: string; groupId: string }[];
@@ -2265,14 +2280,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					.map((device) => ({ deviceId: device.deviceId, groupId: device.groupId }));
 			} catch (error) {
 				logVoice('Failed to inspect default input after device change', { error });
-				return;
+				return 'pending';
 			}
 
 			const capturedGroupId = rawTrack.getSettings().groupId;
 			const defaultGroupId = resolveDefaultInputGroupId(inputs);
 
 			if (!didDefaultInputDeviceChange({ capturedGroupId, defaultGroupId })) {
-				return;
+				return 'pending';
 			}
 
 			logVoice('System default input moved under a Default selection, re-acquiring mic', {
@@ -2282,16 +2297,41 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			// startMicStream re-runs cleanup + getUserMedia and is mutex-serialized.
 			void startMicStreamRef.current?.();
+			return 'reacquired';
+		};
+
+		const startDefaultInputMoveChecks = () => {
+			const generation = (defaultInputCheckGeneration += 1);
+			const retryUntilMs = Date.now() + DEFAULT_INPUT_DEVICE_CHANGE_RETRY_WINDOW_MS;
+
+			const runCheck = async () => {
+				retryTimer = undefined;
+
+				const result = await checkSystemDefaultInput();
+
+				if (generation !== defaultInputCheckGeneration) {
+					return;
+				}
+
+				if (result !== 'pending' || Date.now() >= retryUntilMs) {
+					return;
+				}
+
+				retryTimer = setTimeout(runCheck, DEFAULT_INPUT_DEVICE_CHANGE_RETRY_INTERVAL_MS);
+			};
+
+			void runCheck();
 		};
 
 		const handleDeviceChange = () => {
 			if (debounceTimer !== undefined) {
 				clearTimeout(debounceTimer);
 			}
+			cancelDefaultInputChecks();
 
 			debounceTimer = setTimeout(() => {
 				debounceTimer = undefined;
-				void reacquireIfSystemDefaultMoved();
+				startDefaultInputMoveChecks();
 			}, DEFAULT_INPUT_DEVICE_CHANGE_DEBOUNCE_MS);
 		};
 
@@ -2301,6 +2341,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			if (debounceTimer !== undefined) {
 				clearTimeout(debounceTimer);
 			}
+			cancelDefaultInputChecks();
 
 			mediaDevices.removeEventListener('devicechange', handleDeviceChange);
 		};
