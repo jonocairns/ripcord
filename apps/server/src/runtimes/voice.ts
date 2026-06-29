@@ -636,18 +636,25 @@ class VoiceRuntime {
 		const listenInfo = VoiceRuntime.getListenInfo();
 		const announcedAddress = listenInfo.announcedAddress;
 
-		const transport = await router.createPlainTransport({
-			listenInfo: {
-				protocol: 'udp',
-				ip: listenInfo.ip,
-				announcedAddress,
-			},
-			comedia: true,
-			rtcpMux: true,
-			enableSrtp: true,
-			srtpCryptoSuite: APP_AUDIO_SRTP_CRYPTO_SUITE,
-			appData: { kind: StreamKind.SCREEN_AUDIO, userId },
-		});
+		let transport: PlainTransport;
+
+		try {
+			transport = await router.createPlainTransport({
+				listenInfo: {
+					protocol: 'udp',
+					ip: listenInfo.ip,
+					announcedAddress,
+				},
+				comedia: true,
+				rtcpMux: true,
+				enableSrtp: true,
+				srtpCryptoSuite: APP_AUDIO_SRTP_CRYPTO_SUITE,
+				appData: { kind: StreamKind.SCREEN_AUDIO, userId },
+			});
+		} catch (error) {
+			logger.warn('Failed to create app audio PlainTransport for user %s: %o', userId, error);
+			throw error;
+		}
 
 		if (!this.getUser(userId)) {
 			if (!transport.closed) {
@@ -744,16 +751,26 @@ class VoiceRuntime {
 
 		const timeoutMs = options.firstMediaTimeoutMs ?? APP_AUDIO_FIRST_MEDIA_TIMEOUT_MS;
 
-		// SRTP keying must be applied before produce(): mediasoup cannot decrypt
-		// incoming RTP until connect() supplies the remote key. In comedia mode this
-		// connect carries SRTP params only — no remote ip/port.
-		await ingest.transport.connect({ srtpParameters: options.srtpParameters });
+		let producer: Producer;
 
-		const producer = await ingest.transport.produce({
-			kind: 'audio',
-			rtpParameters: ingest.rtpParameters,
-			appData: { kind: StreamKind.SCREEN_AUDIO, userId },
-		});
+		try {
+			// SRTP keying must be applied before produce(): mediasoup cannot decrypt
+			// incoming RTP until connect() supplies the remote key. In comedia mode this
+			// connect carries SRTP params only — no remote ip/port.
+			await ingest.transport.connect({ srtpParameters: options.srtpParameters });
+
+			producer = await ingest.transport.produce({
+				kind: 'audio',
+				rtpParameters: ingest.rtpParameters,
+				appData: { kind: StreamKind.SCREEN_AUDIO, userId },
+			});
+		} catch (error) {
+			// Usually a malformed client SRTP key (connect) or invalid RTP parameters
+			// (produce); both surface to the client but otherwise leave no server trace.
+			// Log with context for field diagnosis before rethrowing.
+			logger.warn('App audio produce failed for user %s: %o', userId, error);
+			throw error;
+		}
 
 		ingest.producer = producer;
 

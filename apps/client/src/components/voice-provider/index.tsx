@@ -2263,20 +2263,20 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}: {
 			desktopBridge: TDesktopBridge;
 			captureInput: TStartAppAudioCaptureInput;
-		}): Promise<boolean> => {
+		}): Promise<'published' | 'abandoned' | 'fallback'> => {
 			const startAppAudioRtp = desktopBridge.startAppAudioRtp;
 			const stopAppAudioRtp = desktopBridge.stopAppAudioRtp;
 
 			// Capability gate: only newer desktop builds expose the native RTP bridge.
 			if (typeof startAppAudioRtp !== 'function' || typeof stopAppAudioRtp !== 'function') {
 				logVoice('Native app audio ingest unavailable (bridge missing); using worklet path');
-				return false;
+				return 'fallback';
 			}
 
 			// Rollout gate: opt-in until validated end-to-end and in a packaged build.
 			if (!isNativeAppAudioIngestEnabled(devices.nativeAppAudioIngestEnabled)) {
 				logVoice('Native app audio ingest disabled; using worklet path');
-				return false;
+				return 'fallback';
 			}
 
 			// Claim this attempt's generation. Shared/global state is only ours to
@@ -2359,9 +2359,25 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				});
 
 				if ('producerId' in result) {
+					// The attempt can be abandoned while produceAppAudio is in flight: the
+					// user stops the share (clearing appAudioPublishIntentRef) or a newer
+					// attempt supersedes this generation. cleanupDesktopAppAudio gates its
+					// native teardown on nativeAppAudioIngestActiveRef, which is still false
+					// until the line below, so committing here would strand a live
+					// SCREEN_AUDIO producer plus a running RTP sender/UDP socket that the
+					// stop-path cleanup already skipped. Tear our own attempt down instead.
+					if (!ownsCurrentAttempt() || !appAudioPublishIntentRef.current) {
+						logVoice('Native app audio ingest abandoned after produce; tearing down', {
+							producerId: result.producerId,
+							superseded: !ownsCurrentAttempt(),
+						});
+						await teardownNativeAttempt();
+						return 'abandoned';
+					}
+
 					nativeAppAudioIngestActiveRef.current = true;
 					logVoice('Native app audio ingest active', { producerId: result.producerId });
-					return true;
+					return 'published';
 				}
 
 				// Operational fallback: server observed no first media within the gate.
@@ -2389,7 +2405,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			await teardownNativeAttempt();
 			logVoice('Native app audio ingest falling back to worklet path', { reason: fallbackReason });
 
-			return false;
+			return 'fallback';
 		},
 		[devices.nativeAppAudioIngestEnabled],
 	);
@@ -2620,12 +2636,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		});
 
 		const captureInput = { ...intent.captureInput };
-		const nativeIngestStarted = await startNativeAppAudioIngest({
+		const nativeIngestResult = await startNativeAppAudioIngest({
 			desktopBridge,
 			captureInput,
 		});
 
-		if (nativeIngestStarted) {
+		if (nativeIngestResult === 'published' || nativeIngestResult === 'abandoned') {
+			// 'published': native owns SCREEN_AUDIO. 'abandoned': the attempt tore
+			// itself down because the intent was cleared/superseded mid-recovery.
+			// Either way do not fall back to the worklet path.
 			setLocalScreenShareAudio(undefined);
 			return;
 		}
@@ -2830,14 +2849,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								// sends to a mediasoup PlainTransport). Falls back to the renderer
 								// worklet path on older desktop/server builds, blocked UDP, or no
 								// first media. Either way the producer surfaces as SCREEN_AUDIO.
-								const nativeIngestStarted = await startNativeAppAudioIngest({
+								const nativeIngestResult = await startNativeAppAudioIngest({
 									desktopBridge,
 									captureInput,
 								});
 
-								if (nativeIngestStarted) {
-									// Native ingest carries SCREEN_AUDIO; drop the display-captured
-									// audio track so we never publish it twice.
+								if (nativeIngestResult === 'published' || nativeIngestResult === 'abandoned') {
+									// 'published': native ingest owns SCREEN_AUDIO. 'abandoned': the
+									// attempt tore itself down because the share is going away (stop or
+									// supersede mid-publish). Either way drop the display-captured audio
+									// track so it is never published, and do not fall back to the worklet
+									// path (which would republish SCREEN_AUDIO for an abandoned share).
 									if (audioTrack) {
 										audioTrack.stop();
 										stream.removeTrack(audioTrack);

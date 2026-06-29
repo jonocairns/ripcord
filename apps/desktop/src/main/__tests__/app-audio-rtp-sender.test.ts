@@ -163,4 +163,53 @@ describe('AppAudioRtpSender', () => {
 		await assert.rejects(sender.start(), /opus unavailable/);
 		assert.equal(socketCreated, false);
 	});
+
+	test('a stop() that races start() closes the freshly opened socket instead of leaking it', async () => {
+		let socketClosed = false;
+		let resolveEncoder!: (encoder: TOpusEncoderLike) => void;
+		const encoderReady = new Promise<TOpusEncoderLike>((resolve) => {
+			resolveEncoder = resolve;
+		});
+
+		const socket: TUdpSocketLike = {
+			send: () => {},
+			close: () => {
+				socketClosed = true;
+			},
+		};
+
+		const sender = new AppAudioRtpSender(
+			{ ip: '127.0.0.1', port: 5_000, ssrc: 1 },
+			{ createEncoder: () => encoderReady, createSocket: () => socket },
+		);
+
+		// start() suspends on the encoder; a newer ingest attempt stops this sender
+		// before it resolves. When start() resumes it must close the socket it just
+		// opened rather than leak it for the process lifetime.
+		const startPromise = sender.start();
+		sender.stop();
+		resolveEncoder(makeFakeEncoder(new Uint8Array([1])));
+		await startPromise;
+
+		assert.equal(socketClosed, true, 'socket opened during start() must be closed when stop() raced it');
+	});
+
+	test('start() after stop() never opens a socket', async () => {
+		let socketCreated = false;
+		const sender = new AppAudioRtpSender(
+			{ ip: '127.0.0.1', port: 5_000, ssrc: 1 },
+			{
+				createEncoder: () => makeFakeEncoder(new Uint8Array([1])),
+				createSocket: () => {
+					socketCreated = true;
+					return makeFakeSocket([]);
+				},
+			},
+		);
+
+		sender.stop();
+		await sender.start();
+
+		assert.equal(socketCreated, false, 'a stopped sender must not open a socket on a later start()');
+	});
 });

@@ -767,8 +767,21 @@ const registerIpcHandlers = () => {
 			stopAppAudioRtpSender();
 
 			const sender = new AppAudioRtpSender(target);
-			await sender.start();
+			// Claim the active slot before awaiting start(): a second
+			// start-app-audio-rtp that interleaves at the await must be able to stop
+			// this sender, otherwise its UDP socket leaks for the process lifetime.
+			// pushPcm is a no-op until start() completes, so early assignment is safe.
 			appAudioRtpSender = sender;
+
+			try {
+				await sender.start();
+			} catch (error) {
+				if (appAudioRtpSender === sender) {
+					appAudioRtpSender = undefined;
+				}
+				sender.stop();
+				throw error;
+			}
 
 			// The client SRTP key the renderer must relay to the server via
 			// produceAppAudio so mediasoup can decrypt our RTP.

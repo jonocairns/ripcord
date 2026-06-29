@@ -215,12 +215,24 @@ export class AppAudioRtpSender {
 	}
 
 	async start(): Promise<void> {
-		if (this.started) {
+		if (this.started || this.stopped) {
 			return;
 		}
 
 		const encoder = await this.createEncoder();
 		const socket = this.createSocket(this.target.ip);
+
+		// stop() may have landed while we awaited the encoder (a newer ingest attempt
+		// superseded this sender). Honor it so we never leave a live UDP socket on a
+		// sender that is no longer the active one.
+		if (this.stopped) {
+			try {
+				socket.close();
+			} catch {
+				// ignore — socket may already be closed
+			}
+			return;
+		}
 
 		this.encoder = encoder;
 		this.socket = socket;
