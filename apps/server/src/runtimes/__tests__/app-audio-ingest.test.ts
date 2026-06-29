@@ -421,6 +421,40 @@ describe('VoiceRuntime app-audio ingest', () => {
 		createSpy.mockRestore();
 	});
 
+	test('a user that leaves and rejoins while ingest creation is pending does not accept the stale transport', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		const callLog: string[] = [];
+		const stale = makeMockPlainTransport('t-stale', callLog, 48_600);
+		let releaseTransport!: () => void;
+		const transportReady = new Promise<void>((resolve) => {
+			releaseTransport = resolve;
+		});
+
+		const createSpy = spyOn(runtime.getRouter(), 'createPlainTransport').mockImplementation((async () => {
+			await transportReady;
+			return stale.transport;
+		}) as never);
+
+		const createPromise = runtime.createAppAudioIngest(1);
+		await flushMicrotasks();
+
+		// Same user disconnects and rejoins (a fresh session/user object) before the
+		// pending transport resolves. A userId-only guard would wrongly accept this
+		// stale transport — whose SRTP params went to the dead session — for the new
+		// session, leaking the UDP port.
+		runtime.removeUser(1);
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		releaseTransport();
+
+		await expect(createPromise).rejects.toThrow('Voice user left before app audio ingest was ready');
+		expect(stale.transport.closed).toBe(true);
+		expect(runtime.getAppAudioIngest(1)).toBeUndefined();
+
+		createSpy.mockRestore();
+	});
+
 	test('abortAppAudioIngest releases a created-but-unproduced ingest transport', async () => {
 		const runtime = await makeRuntime();
 		runtime.addUser(1, { micMuted: false, soundMuted: false });

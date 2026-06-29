@@ -636,6 +636,14 @@ class VoiceRuntime {
 		const listenInfo = VoiceRuntime.getListenInfo();
 		const announcedAddress = listenInfo.announcedAddress;
 
+		// Capture the joined-user identity before the await. getUser() is keyed by
+		// userId only, so if the user disconnects and the same user rejoins (a fresh
+		// user object) while createPlainTransport is pending, a userId-only check
+		// would wrongly accept this stale transport for the new session. addUser()
+		// pushes a new object on rejoin, so reference identity is a reliable session
+		// proxy.
+		const joinedUser = this.getUser(userId);
+
 		let transport: PlainTransport;
 
 		try {
@@ -656,7 +664,7 @@ class VoiceRuntime {
 			throw error;
 		}
 
-		if (!this.getUser(userId)) {
+		if (!joinedUser || this.getUser(userId) !== joinedUser) {
 			if (!transport.closed) {
 				transport.close();
 			}

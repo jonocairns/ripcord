@@ -2589,7 +2589,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[cleanupDesktopAppAudio, localScreenShareAudioProducer, publishScreenShareAudioTrack, setLocalScreenShareAudio],
 	);
 
-	const recoverDesktopAppAudioFromIntent = useCallback(async (): Promise<void> => {
+	const desktopAppAudioRecoveryPromiseRef = useRef<Promise<void> | undefined>(undefined);
+
+	const runDesktopAppAudioRecovery = useCallback(async (): Promise<void> => {
 		const intent = appAudioPublishIntentRef.current;
 
 		if (!intent) {
@@ -2678,6 +2680,32 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startDesktopAppAudioWorklet,
 		startNativeAppAudioIngest,
 	]);
+
+	// Serializes overlapping desktop app-audio recoveries. recoverTransportSession
+	// fires this fire-and-forget on every retry attempt, so a fast-failing retry can
+	// launch a second recovery while the first is still publishing. Run concurrently,
+	// the second's cleanupDesktopAppAudio() would stop the first's just-published RTP
+	// sender and close its producer while the first still reports 'published' (so it
+	// skips worklet fallback). Chaining on any in-flight recovery makes the latest
+	// attempt re-establish on top of the previous one instead of interleaving.
+	const recoverDesktopAppAudioFromIntent = useCallback((): Promise<void> => {
+		const previousRecovery = desktopAppAudioRecoveryPromiseRef.current;
+
+		const recovery = (async () => {
+			if (previousRecovery) {
+				await previousRecovery.catch(() => undefined);
+			}
+
+			await runDesktopAppAudioRecovery();
+		})().finally(() => {
+			if (desktopAppAudioRecoveryPromiseRef.current === recovery) {
+				desktopAppAudioRecoveryPromiseRef.current = undefined;
+			}
+		});
+
+		desktopAppAudioRecoveryPromiseRef.current = recovery;
+		return recovery;
+	}, [runDesktopAppAudioRecovery]);
 
 	const stopScreenShareStream = useCallback(() => {
 		logVoice('Stopping screen share stream');
