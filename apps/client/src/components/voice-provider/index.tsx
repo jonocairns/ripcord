@@ -679,6 +679,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// and sent from the desktop main process, not the renderer worklet). Drives
 	// native-specific teardown in cleanupDesktopAppAudio.
 	const nativeAppAudioIngestActiveRef = useRef(false);
+	// Monotonic token for native ingest attempts. Each startNativeAppAudioIngest
+	// claims the next value; a stale attempt's teardown checks it owns the current
+	// token before touching shared/global state (the singleton RTP sender and the
+	// session/active refs), so an in-flight attempt that settles after a newer one
+	// has started cannot stop the newer sender or wipe its session.
+	const nativeAppAudioIngestGenerationRef = useRef(0);
 	const removeAppAudioFrameSubscriptionRef = useRef<(() => void) | undefined>(undefined);
 	const removeAppAudioStatusSubscriptionRef = useRef<(() => void) | undefined>(undefined);
 	const appAudioStartupTimeoutRef = useRef<number | ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -2273,25 +2279,55 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				return false;
 			}
 
+			// Claim this attempt's generation. Shared/global state is only ours to
+			// tear down while we remain the current attempt.
+			const attemptGeneration = ++nativeAppAudioIngestGenerationRef.current;
+			const ownsCurrentAttempt = () => nativeAppAudioIngestGenerationRef.current === attemptGeneration;
+
 			let captureStarted = false;
+			// Captured from this attempt's own session/ingest rather than read from
+			// shared refs at teardown time, so we never stop a newer attempt's
+			// capture or abort a newer attempt's server ingest.
+			let attemptSessionId: string | undefined;
+			let attemptTransportId: string | undefined;
 
 			const teardownNativeAttempt = async () => {
-				try {
-					await stopAppAudioRtp();
-				} catch (error) {
-					logVoice('Failed to stop native app audio RTP sender during teardown', { error });
+				const ownsGlobalState = ownsCurrentAttempt();
+
+				// The singleton RTP sender and the session/active refs belong to the
+				// newest attempt; only touch them if no newer attempt has superseded us.
+				if (ownsGlobalState) {
+					try {
+						await stopAppAudioRtp();
+					} catch (error) {
+						logVoice('Failed to stop native app audio RTP sender during teardown', { error });
+					}
 				}
 
-				if (captureStarted) {
+				if (captureStarted && attemptSessionId) {
 					try {
-						await desktopBridge.stopAppAudioCapture(appAudioSessionRef.current?.sessionId);
+						await desktopBridge.stopAppAudioCapture(attemptSessionId);
 					} catch (error) {
 						logVoice('Failed to stop native app audio capture during teardown', { error });
 					}
 				}
 
-				appAudioSessionRef.current = undefined;
-				nativeAppAudioIngestActiveRef.current = false;
+				// Release the server-side PlainTransport for an ingest that was created
+				// but never published; scoped by transport id so it is a no-op once a
+				// newer attempt has replaced the ingest. Without this the UDP port leaks
+				// until leave or the next native attempt.
+				if (attemptTransportId) {
+					try {
+						await getTRPCClient().voice.abortAppAudioIngest.mutate({ transportId: attemptTransportId });
+					} catch (error) {
+						logVoice('Failed to abort native app audio ingest during teardown', { error });
+					}
+				}
+
+				if (ownsGlobalState) {
+					appAudioSessionRef.current = undefined;
+					nativeAppAudioIngestActiveRef.current = false;
+				}
 			};
 
 			let fallbackReason: 'no-first-media' | 'error' = 'error';
@@ -2301,9 +2337,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				// process consumes the PCM egress and feeds the RTP sender directly.
 				const session = await desktopBridge.startAppAudioCapture(captureInput, { openFrameChannel: false });
 				appAudioSessionRef.current = session;
+				attemptSessionId = session.sessionId;
 				captureStarted = true;
 
 				const ingest = await getTRPCClient().voice.createAppAudioIngest.mutate();
+				attemptTransportId = ingest.id;
 
 				const { srtpKeyBase64 } = await startAppAudioRtp({
 					ip: ingest.ip,

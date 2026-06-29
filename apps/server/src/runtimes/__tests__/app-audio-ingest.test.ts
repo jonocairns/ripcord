@@ -421,6 +421,46 @@ describe('VoiceRuntime app-audio ingest', () => {
 		createSpy.mockRestore();
 	});
 
+	test('abortAppAudioIngest releases a created-but-unproduced ingest transport', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		const callLog: string[] = [];
+		const mock = makeMockPlainTransport('t-1', callLog, 48_700);
+		const createSpy = spyOn(runtime.getRouter(), 'createPlainTransport').mockResolvedValue(mock.transport);
+
+		const ingest = await runtime.createAppAudioIngest(1);
+
+		// produceAppAudio is never called (e.g. the client's RTP sender failed), so
+		// the transport would otherwise leak until leave or the next create.
+		runtime.abortAppAudioIngest(1, ingest.id);
+
+		expect(mock.transport.closed).toBe(true);
+		expect(runtime.getAppAudioIngest(1)).toBeUndefined();
+
+		createSpy.mockRestore();
+	});
+
+	test('abortAppAudioIngest is a no-op when the transport id does not match the current ingest', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		const callLog: string[] = [];
+		const mock = makeMockPlainTransport('t-current', callLog, 48_800);
+		const createSpy = spyOn(runtime.getRouter(), 'createPlainTransport').mockResolvedValue(mock.transport);
+
+		await runtime.createAppAudioIngest(1);
+
+		// A stale attempt aborting by its own (already-replaced) transport id must
+		// never tear down the newer ingest.
+		runtime.abortAppAudioIngest(1, 't-stale');
+
+		expect(mock.transport.closed).toBe(false);
+		expect(runtime.getAppAudioIngest(1)?.transport).toBe(mock.transport);
+
+		createSpy.mockRestore();
+	});
+
 	test('getRemoteIds excludes the requesting users own screen-audio producer', async () => {
 		const runtime = await makeRuntime();
 		runtime.addUser(1, { micMuted: false, soundMuted: false });

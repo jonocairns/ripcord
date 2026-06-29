@@ -1,4 +1,5 @@
 import { t } from '../../utils/trpc';
+import { abortAppAudioIngestRoute } from './abort-app-audio-ingest';
 import { closeConsumerRoute } from './close-consumer';
 import { closeProducerRoute } from './close-producer';
 import { connectConsumerTransportRoute } from './connect-consumer-transport';
@@ -50,6 +51,7 @@ export const voiceRouter = t.router({
 	produce: produceRoute,
 	createAppAudioIngest: createAppAudioIngestRoute,
 	produceAppAudio: produceAppAudioRoute,
+	abortAppAudioIngest: abortAppAudioIngestRoute,
 	consume: consumeRoute,
 	restartProducerIce: restartProducerIceRoute,
 	restartConsumerIce: restartConsumerIceRoute,

@@ -584,6 +584,23 @@ class VoiceRuntime {
 		return this.appAudioIngests[userId];
 	};
 
+	// Releases a not-yet-published ingest by transport id. The native desktop
+	// ingest attempt calls this when it fails after createAppAudioIngest but
+	// before produceAppAudio publishes — without it the PlainTransport/UDP port
+	// would leak until the user leaves or starts a new native attempt (the next
+	// createAppAudioIngest removes the stale ingest). Scoping by transport id
+	// makes this a no-op once a newer attempt has already replaced the ingest, so
+	// it can never tear down a concurrent attempt's transport.
+	public abortAppAudioIngest = (userId: number, transportId: string) => {
+		const ingest = this.appAudioIngests[userId];
+
+		if (!ingest || ingest.transport.id !== transportId) {
+			return;
+		}
+
+		this.removeAppAudioIngest(userId);
+	};
+
 	// Allocates a PlainTransport (comedia + SRTP) for native desktop app/system
 	// audio. The 'tuple' listener is attached here, at creation time, so that an
 	// RTP packet arriving before produceAppAudio is called still counts as first
