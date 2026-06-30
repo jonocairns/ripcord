@@ -61,7 +61,15 @@ type TMockPlainTransport = {
 	producers: TMockProducer[];
 };
 
-const makeMockPlainTransport = (id: string, callLog: string[], localPort: number): TMockPlainTransport => {
+const makeMockPlainTransport = (
+	id: string,
+	callLog: string[],
+	localPort: number,
+	// Optional gate that connect() awaits before resolving, used to hold a
+	// produceAppAudio call inside the connect/produce window so a concurrent call
+	// can race the same ingest.
+	connectGate?: Promise<void>,
+): TMockPlainTransport => {
 	let closed = false;
 	let tupleHandler: (() => void) | undefined;
 	let closeHandler: (() => void) | undefined;
@@ -88,6 +96,9 @@ const makeMockPlainTransport = (id: string, callLog: string[], localPort: number
 		},
 		connect: async () => {
 			callLog.push(`connect:${id}`);
+			if (connectGate) {
+				await connectGate;
+			}
 		},
 		produce: async () => {
 			callLog.push(`produce:${id}`);
@@ -246,6 +257,43 @@ describe('VoiceRuntime app-audio ingest', () => {
 		await expect(
 			runtime.produceAppAudio(1, { srtpParameters: CLIENT_SRTP, firstMediaTimeoutMs: 1_000 }),
 		).rejects.toThrow('already producing');
+
+		createSpy.mockRestore();
+	});
+
+	test('rejects a concurrent produceAppAudio for the same ingest before the producer is assigned', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		const callLog: string[] = [];
+		let releaseConnect!: () => void;
+		const connectGate = new Promise<void>((resolve) => {
+			releaseConnect = resolve;
+		});
+		const mock = makeMockPlainTransport('t-1', callLog, 43_600, connectGate);
+		const createSpy = spyOn(runtime.getRouter(), 'createPlainTransport').mockResolvedValue(mock.transport);
+
+		await runtime.createAppAudioIngest(1);
+
+		// The first produce reserves the ingest synchronously, then suspends inside
+		// connect() — ingest.producer is not yet assigned at this point.
+		const firstProduce = runtime.produceAppAudio(1, { srtpParameters: CLIENT_SRTP, firstMediaTimeoutMs: 1_000 });
+		await flushMicrotasks();
+
+		// A second produce racing the same ingest must be rejected by the synchronous
+		// `producing` reservation rather than creating a competing producer on the
+		// same PlainTransport/SSRC and overwriting the first producer reference.
+		await expect(
+			runtime.produceAppAudio(1, { srtpParameters: CLIENT_SRTP, firstMediaTimeoutMs: 1_000 }),
+		).rejects.toThrow('already producing');
+
+		releaseConnect();
+		mock.fireTuple();
+		const result = await firstProduce;
+
+		expect(result).toEqual({ producerId: 't-1-producer' });
+		expect(mock.producers).toHaveLength(1);
+		expect(callLog.filter((entry) => entry.startsWith('produce:'))).toEqual(['produce:t-1']);
 
 		createSpy.mockRestore();
 	});

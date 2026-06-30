@@ -166,6 +166,11 @@ type TAppAudioIngest = {
 	rtpParameters: RtpParameters;
 	firstMediaSeen: boolean;
 	firstMediaWaiters: Array<(value: boolean) => void>;
+	// Synchronous reservation held across the connect/produce awaits in
+	// produceAppAudio. `producer` is only assigned once produce() resolves, so it
+	// cannot guard the check-then-act window on its own; this flag is set before
+	// the first await so a concurrent produce for the same ingest is rejected.
+	producing: boolean;
 	producer?: Producer<AppData>;
 };
 
@@ -697,6 +702,7 @@ class VoiceRuntime {
 			rtpParameters,
 			firstMediaSeen: false,
 			firstMediaWaiters: [],
+			producing: false,
 		};
 
 		transport.on('tuple', () => {
@@ -751,11 +757,16 @@ class VoiceRuntime {
 
 		// One producer per ingest: a second produceAppAudio against the same
 		// transport would create a duplicate producer on the same PlainTransport with
-		// the same SSRC. A retrying client must allocate a fresh ingest first.
-		invariant(!ingest.producer, {
+		// the same SSRC. A retrying client must allocate a fresh ingest first. The
+		// `producing` reservation is checked and set synchronously here, before the
+		// connect/produce awaits below assign `ingest.producer`, so two concurrent
+		// calls for the same ingest cannot both pass this guard.
+		invariant(!ingest.producer && !ingest.producing, {
 			code: 'BAD_REQUEST',
 			message: 'App audio ingest already producing',
 		});
+
+		ingest.producing = true;
 
 		const timeoutMs = options.firstMediaTimeoutMs ?? APP_AUDIO_FIRST_MEDIA_TIMEOUT_MS;
 
@@ -775,7 +786,9 @@ class VoiceRuntime {
 		} catch (error) {
 			// Usually a malformed client SRTP key (connect) or invalid RTP parameters
 			// (produce); both surface to the client but otherwise leave no server trace.
-			// Log with context for field diagnosis before rethrowing.
+			// Log with context for field diagnosis before rethrowing. Release the
+			// reservation so a subsequent retry against this same ingest can proceed.
+			ingest.producing = false;
 			logger.warn('App audio produce failed for user %s: %o', userId, error);
 			throw error;
 		}
