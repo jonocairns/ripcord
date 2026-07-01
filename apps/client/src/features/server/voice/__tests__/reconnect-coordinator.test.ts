@@ -6,6 +6,8 @@ import {
 	ensureVoiceReconnectStarted,
 	getValidPendingVoiceReconnect,
 	isVoiceReconnectPeerSuppressed,
+	markVoiceReconnectSessionAuthenticated,
+	markVoiceReconnectSessionUnauthenticated,
 	resolveVoiceRecoveryAction,
 	snapshotVoiceReconnectIntent,
 	useVoiceReconnectStore,
@@ -300,6 +302,27 @@ describe('voice reconnect coordinator', () => {
 			ensureVoiceReconnectStarted(5678);
 
 			expect(useVoiceReconnectStore.getState().reconnectingSince).toBe(1234);
+		});
+	});
+
+	describe('reconnect authentication gate', () => {
+		it('starts unauthenticated and toggles with the WS auth lifecycle', () => {
+			expect(useVoiceReconnectStore.getState().reconnectAuthenticated).toBe(false);
+
+			markVoiceReconnectSessionAuthenticated();
+			expect(useVoiceReconnectStore.getState().reconnectAuthenticated).toBe(true);
+
+			// A subsequent WS drop must re-gate recovery until the next joinServer.
+			markVoiceReconnectSessionUnauthenticated();
+			expect(useVoiceReconnectStore.getState().reconnectAuthenticated).toBe(false);
+		});
+
+		it('resets the auth gate when recovery is cleared', () => {
+			markVoiceReconnectSessionAuthenticated();
+
+			clearVoiceReconnectRecovery('voice-join-succeeded');
+
+			expect(useVoiceReconnectStore.getState().reconnectAuthenticated).toBe(false);
 		});
 	});
 

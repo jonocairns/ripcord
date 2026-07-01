@@ -50,6 +50,7 @@ const useVoiceEvents = ({
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const ownUserId = useOwnUserId();
 	const reconnectingSince = useVoiceReconnectStore((state) => state.reconnectingSince);
+	const reconnectAuthenticated = useVoiceReconnectStore((state) => state.reconnectAuthenticated);
 
 	useEffect(() => {
 		// Force a fresh subscription set after WS reconnect even when the voice
@@ -57,6 +58,19 @@ const useVoiceEvents = ({
 		void reconnectNonce;
 
 		if (currentVoiceChannelId === undefined) {
+			return;
+		}
+
+		// These are protected subscriptions. A reconnected socket starts
+		// unauthenticated (server createContext sets authenticated: false) until
+		// joinServer re-auths it, so subscribing during that gap just rejects every
+		// stream with UNAUTHORIZED and forces a teardown + rebuild. Wait for the
+		// auth gate. In steady state reconnectingSince is undefined, so this never
+		// blocks the normal subscription path.
+		if (reconnectingSince !== undefined && !reconnectAuthenticated) {
+			logVoice('Deferring voice event subscriptions until the reconnected WS re-authenticates', {
+				channelId: currentVoiceChannelId,
+			});
 			return;
 		}
 
@@ -322,6 +336,7 @@ const useVoiceEvents = ({
 		getPendingStreamProducerId,
 		rtpCapabilities,
 		reconnectingSince,
+		reconnectAuthenticated,
 		reconnectNonce,
 	]);
 };

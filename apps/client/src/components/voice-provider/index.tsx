@@ -645,6 +645,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const ownUserId = useServerStore((state) => state.ownUserId);
 	const voiceSessionReconnectNonce = useServerStore((state) => state.voiceSessionReconnectNonce);
 	const reconnectingSince = useVoiceReconnectStore((state) => state.reconnectingSince);
+	const reconnectAuthenticated = useVoiceReconnectStore((state) => state.reconnectAuthenticated);
 	const isConnected = useIsConnected();
 	const channelCan = useChannelCan(currentVoiceChannelId);
 	const currentChannelExternalStreams = useServerStore<TChannelExternalStreams>((state) => {
@@ -3263,6 +3264,74 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		return outcome;
 	}, []);
 
+	// Blocks a restore attempt until the reconnected WS has re-authenticated
+	// (joinServer completed). A socket that dropped again mid-recovery starts
+	// unauthenticated, so firing restoreOrJoin at it just yields UNAUTHORIZED —
+	// this waits for the next joinServer instead. Resolves early if recovery is
+	// cleared or the reconnect window expires.
+	const waitForVoiceReconnectAuthenticated = useCallback(
+		async (expiresAt: number): Promise<'authenticated' | 'expired' | 'cleared'> => {
+			const reconnectState = useVoiceReconnectStore.getState();
+
+			// Recovery was already torn down — signal the caller to bow out quietly
+			// rather than fall through to the "pending missing" expiry path.
+			if (reconnectState.reconnectingSince === undefined) {
+				return 'cleared';
+			}
+
+			if (reconnectState.reconnectAuthenticated) {
+				return 'authenticated';
+			}
+
+			const remainingMs = expiresAt - Date.now();
+
+			if (remainingMs <= 0) {
+				return 'expired';
+			}
+
+			logDebug('Voice reconnect waiting for WS re-authentication');
+
+			return await new Promise<'authenticated' | 'expired' | 'cleared'>((resolve) => {
+				let timeoutId: number | undefined;
+				let settled = false;
+
+				const finish = (result: 'authenticated' | 'expired' | 'cleared') => {
+					if (settled) {
+						return;
+					}
+					settled = true;
+					unsubscribe();
+					if (timeoutId !== undefined) {
+						window.clearTimeout(timeoutId);
+					}
+					resolve(result);
+				};
+
+				const unsubscribe = useVoiceReconnectStore.subscribe((state) => {
+					if (state.reconnectingSince === undefined) {
+						finish('cleared');
+						return;
+					}
+
+					if (state.reconnectAuthenticated) {
+						finish(Date.now() > expiresAt ? 'expired' : 'authenticated');
+					}
+				});
+
+				timeoutId = window.setTimeout(() => finish('expired'), remainingMs);
+
+				// Guard the race where state changed between the initial read and subscribe.
+				const currentState = useVoiceReconnectStore.getState();
+				if (currentState.reconnectingSince === undefined) {
+					finish('cleared');
+				} else if (currentState.reconnectAuthenticated) {
+					finish('authenticated');
+				}
+			});
+		},
+		[],
+	);
+
 	const waitForVoiceReconnectDelay = useCallback(
 		async (delayMs: number, expiresAt: number): Promise<'ready' | 'expired'> => {
 			let remainingDelayMs = delayMs;
@@ -3293,7 +3362,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	useEffect(() => {
-		if (!isConnected || reconnectingSince === undefined) {
+		// reconnectAuthenticated gates the restore: a reconnected socket starts
+		// unauthenticated, so issuing restoreOrJoin before joinServer re-auths it
+		// fails UNAUTHORIZED (terminal). Wait until the re-auth handshake completes.
+		if (!isConnected || reconnectingSince === undefined || !reconnectAuthenticated) {
 			return;
 		}
 
@@ -3306,6 +3378,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			let retryAttempt = 0;
 
 			while (true) {
+				// Cleared recovery always exits quietly. This must precede the
+				// pending-missing check below (which reports/clears as an expiry):
+				// clearing recovery also drops the pending intent, so any wait/continue
+				// path resuming after a clear would otherwise mis-report expiry.
+				if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
+					return;
+				}
+
 				const pendingVoiceReconnect = getValidPendingVoiceReconnect();
 
 				if (!pendingVoiceReconnect) {
@@ -3317,14 +3397,34 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					return;
 				}
 
-				if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
-					return;
-				}
-
 				if (!isVoiceReconnectOnline()) {
 					const onlineOutcome = await waitForVoiceReconnectOnline(pendingVoiceReconnect.expiresAt);
 
 					if (onlineOutcome === 'expired') {
+						logDebug('Voice reconnect terminal clear reason', {
+							reason: 'reconnect-expired',
+						});
+						clearOwnVoiceSessionAfterReconnectFailure('reconnect-expired');
+						voiceCleanupRef.current?.();
+						return;
+					}
+
+					continue;
+				}
+
+				// Never issue restoreOrJoin at an unauthenticated socket. If the WS
+				// dropped again mid-recovery, wait for the next joinServer to re-auth
+				// rather than burning an attempt on a guaranteed UNAUTHORIZED.
+				if (!useVoiceReconnectStore.getState().reconnectAuthenticated) {
+					const authOutcome = await waitForVoiceReconnectAuthenticated(pendingVoiceReconnect.expiresAt);
+
+					// Recovery was cleared out from under us while waiting — bow out
+					// without reporting a spurious expiry.
+					if (authOutcome === 'cleared') {
+						return;
+					}
+
+					if (authOutcome === 'expired') {
 						logDebug('Voice reconnect terminal clear reason', {
 							reason: 'reconnect-expired',
 						});
@@ -3423,9 +3523,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					});
 
 					if (classification.kind === 'terminal') {
-						logDebug('Voice reconnect terminal clear reason', {
+						// Always-on (not logDebug-gated) so the terminal error that ended
+						// recovery is visible in the [VOICE-PROVIDER] logs and Sentry, not
+						// just when window.DEBUG happens to be on.
+						logVoice('Voice reconnect classified terminal, ending recovery', {
 							reason: classification.clearReason,
 							detail: classification.reason,
+							attempt: attemptNumber,
+							error,
 						});
 
 						// restoreOrJoin already bound a server-side session for us this
@@ -3482,10 +3587,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		init,
 		isConnected,
 		reconnectingSince,
+		reconnectAuthenticated,
 		consumeExistingProducers,
 		requestVoiceRestoreOrJoin,
 		waitForVoiceReconnectDelay,
 		waitForVoiceReconnectOnline,
+		waitForVoiceReconnectAuthenticated,
 	]);
 
 	const setMicProcessingMuted = useCallback((micMuted: boolean) => {

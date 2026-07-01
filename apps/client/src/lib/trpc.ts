@@ -11,6 +11,7 @@ import {
 	captureVoiceReconnectIntentForCurrentSession,
 	clearVoiceReconnectRecovery,
 	ensureVoiceReconnectStarted,
+	markVoiceReconnectSessionUnauthenticated,
 } from '@/features/server/voice/reconnect-coordinator';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import { resetServerScreens } from '@/features/server-screens/actions';
@@ -170,6 +171,10 @@ const initializeTRPC = (host: string) => {
 				});
 				return;
 			}
+
+			// The reconnected socket will start unauthenticated; block voice recovery
+			// from issuing restoreOrJoin until joinServer re-authenticates it.
+			markVoiceReconnectSessionUnauthenticated();
 
 			if (captureVoiceReconnectIntentForCurrentSession()) {
 				ensureVoiceReconnectStarted();

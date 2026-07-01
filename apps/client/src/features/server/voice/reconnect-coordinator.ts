@@ -44,12 +44,19 @@ interface IVoiceReconnectState {
 	pendingVoiceReconnect: TPendingVoiceReconnect | undefined;
 	reconnectingSince: number | undefined;
 	voiceReconnectSuppression: TVoiceReconnectSuppression | undefined;
+	// True once joinServer has re-authenticated the *current* WS connection.
+	// A reconnected socket starts unauthenticated (server createContext sets
+	// authenticated: false), so voice recovery must wait for this before issuing
+	// the protected restoreOrJoin — otherwise the buffered mutation flushes onto
+	// the fresh socket ahead of joinServer and fails UNAUTHORIZED (terminal).
+	reconnectAuthenticated: boolean;
 }
 
 type TVoiceReconnectStore = IVoiceReconnectState & {
 	setPendingVoiceReconnect: (intent: TPendingVoiceReconnect) => void;
 	setReconnectingSince: (timestamp: number | undefined) => void;
 	setVoiceReconnectSuppression: (suppression: TVoiceReconnectSuppression | undefined) => void;
+	setReconnectAuthenticated: (value: boolean) => void;
 	clearVoiceReconnectRecovery: (reason: TClearReason) => void;
 	resetState: () => void;
 };
@@ -58,6 +65,7 @@ const initialState: IVoiceReconnectState = {
 	pendingVoiceReconnect: undefined,
 	reconnectingSince: undefined,
 	voiceReconnectSuppression: undefined,
+	reconnectAuthenticated: false,
 };
 
 const useVoiceReconnectStore = create<TVoiceReconnectStore>((set) => ({
@@ -69,6 +77,10 @@ const useVoiceReconnectStore = create<TVoiceReconnectStore>((set) => ({
 
 	setReconnectingSince: (timestamp) => {
 		set({ reconnectingSince: timestamp });
+	},
+
+	setReconnectAuthenticated: (value) => {
+		set({ reconnectAuthenticated: value });
 	},
 
 	setVoiceReconnectSuppression: (suppression) => {
@@ -137,6 +149,18 @@ const ensureVoiceReconnectStarted = (timestamp = Date.now()): void => {
 	reconnectState.setReconnectingSince(timestamp);
 };
 
+// Called when a WS drop is detected: the next socket must re-authenticate before
+// voice recovery may run restoreOrJoin.
+const markVoiceReconnectSessionUnauthenticated = (): void => {
+	useVoiceReconnectStore.getState().setReconnectAuthenticated(false);
+};
+
+// Called once joinServer succeeds on the reconnected socket, unblocking the
+// gated voice recovery.
+const markVoiceReconnectSessionAuthenticated = (): void => {
+	useVoiceReconnectStore.getState().setReconnectAuthenticated(true);
+};
+
 const clearVoiceReconnectRecovery = (reason: TClearReason): void => {
 	useVoiceReconnectStore.getState().clearVoiceReconnectRecovery(reason);
 };
@@ -189,6 +213,8 @@ export {
 	ensureVoiceReconnectStarted,
 	getValidPendingVoiceReconnect,
 	isVoiceReconnectPeerSuppressed,
+	markVoiceReconnectSessionAuthenticated,
+	markVoiceReconnectSessionUnauthenticated,
 	resolveVoiceRecoveryAction,
 	snapshotVoiceReconnectIntent,
 	useVoiceReconnectStore,

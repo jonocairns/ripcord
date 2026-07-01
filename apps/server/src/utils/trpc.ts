@@ -18,6 +18,7 @@ export type Context = {
 	token: string;
 	currentVoiceChannelId: number | undefined;
 	getPendingVoiceReconnectChannelId: () => number | undefined;
+	getClientInstanceId: () => string | undefined;
 	hasPermission: (targetPermission: Permission | Permission[]) => Promise<boolean>;
 	needsPermission: (targetPermission: Permission | Permission[]) => Promise<void>;
 	hasChannelPermission: (channelId: number, targetPermission: ChannelPermission) => Promise<boolean>;
