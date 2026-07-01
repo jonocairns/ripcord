@@ -7,8 +7,8 @@ import {
 
 describe('voice reconnect policy', () => {
 	describe('classifyVoiceReconnectError', () => {
-		it('treats BAD_REQUEST, UNAUTHORIZED, FORBIDDEN, and NOT_FOUND as terminal', () => {
-			for (const code of ['BAD_REQUEST', 'UNAUTHORIZED', 'FORBIDDEN', 'NOT_FOUND'] as const) {
+		it('treats BAD_REQUEST, FORBIDDEN, and NOT_FOUND as terminal', () => {
+			for (const code of ['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND'] as const) {
 				expect(
 					classifyVoiceReconnectError(
 						{
@@ -21,17 +21,28 @@ describe('voice reconnect policy', () => {
 					),
 				).toEqual({
 					kind: 'terminal',
-					reason:
-						code === 'BAD_REQUEST'
-							? 'bad-request'
-							: code === 'UNAUTHORIZED'
-								? 'unauthorized'
-								: code === 'FORBIDDEN'
-									? 'forbidden'
-									: 'not-found',
+					reason: code === 'BAD_REQUEST' ? 'bad-request' : code === 'FORBIDDEN' ? 'forbidden' : 'not-found',
 					clearReason: 'restore-terminal-error',
 				});
 			}
+		});
+
+		it('treats UNAUTHORIZED as retryable — a reconnected socket re-auths via joinServer', () => {
+			expect(
+				classifyVoiceReconnectError(
+					{
+						data: {
+							code: 'UNAUTHORIZED',
+							httpStatus: 401,
+						},
+					},
+					{ consecutiveUnknownErrors: 0 },
+				),
+			).toEqual({
+				kind: 'retry',
+				reason: 'unauthorized',
+				countsAsUnknown: false,
+			});
 		});
 
 		it('treats CONFLICT restore outcomes as terminal', () => {

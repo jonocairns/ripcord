@@ -26,7 +26,12 @@ const restoreOrJoinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 		const { channel, runtime } = await getVoiceJoinTarget(ctx, input.channelId);
 		const runtimeWithUser = VoiceRuntime.findRuntimeByUserId(ctx.user.id);
 		const ownWs = ctx.getOwnWs();
-		const clientInstanceId = getTrackedWsString(ownWs, 'clientInstanceId');
+		// Read the client instance id from the connection params (via ctx) rather
+		// than the tracked WS. During a reconnect the tracked WS field can still be
+		// unpopulated, which used to make restoreOrJoin misread the user's own
+		// pending grace seat as owned by another device and reject the legit
+		// reconnect with a terminal CONFLICT it could never recover from.
+		const clientInstanceId = ctx.getClientInstanceId();
 		const otherActiveVoiceChannelIds = ctx.getUserWss(ctx.user.id).flatMap((ws) => {
 			if (isSameVoiceClientSession(ws, ownWs, clientInstanceId)) {
 				return [];
