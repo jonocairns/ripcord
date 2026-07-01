@@ -1594,6 +1594,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
 						videoGoogleMaxBitrate: webcamBitratePolicy.maxKbps,
 					},
+					stopTracks: false,
 					appData: { kind: StreamKind.VIDEO },
 				});
 
@@ -1829,6 +1830,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			const screenAudioProducer = await producerTransport.current?.produce({
 				track,
+				stopTracks: false,
 				codecOptions: {
 					opusStereo: true,
 					opusFec: true,
@@ -2760,35 +2762,43 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		],
 	);
 
-	const cleanup = useCallback(() => {
-		logVoice('Running voice provider cleanup');
+	const cleanup = useCallback(
+		(opts?: { preserveLocalMedia?: boolean }) => {
+			logVoice('Running voice provider cleanup', { preserveLocalMedia: opts?.preserveLocalMedia ?? false });
 
-		void cleanupDesktopAppAudio();
-		void cleanupMicAudioPipeline();
-		stopMonitoring();
-		resetStats();
-		voiceActivityStoreRef.current.clearAll();
-		clearLocalStreams();
-		clearRemoteUserStreams();
-		clearExternalStreams();
-		cleanupTransports();
-		audioVideoRefsMap.current.clear();
-		deviceRef.current = undefined;
-		routerRtpCapabilities.current = null;
-		sendRtpCapabilities.current = null;
-		setVoiceEventRtpCapabilities(null);
+			// When preserving local media (WS-reconnect restore), leave the desktop
+			// app-audio pipeline running so a live screen-share audio track survives
+			// to be republished; tearing it down would end the track.
+			if (!opts?.preserveLocalMedia) {
+				void cleanupDesktopAppAudio();
+			}
+			void cleanupMicAudioPipeline();
+			stopMonitoring();
+			resetStats();
+			voiceActivityStoreRef.current.clearAll();
+			clearLocalStreams({ keepVideoAndScreen: opts?.preserveLocalMedia });
+			clearRemoteUserStreams();
+			clearExternalStreams();
+			cleanupTransports();
+			audioVideoRefsMap.current.clear();
+			deviceRef.current = undefined;
+			routerRtpCapabilities.current = null;
+			sendRtpCapabilities.current = null;
+			setVoiceEventRtpCapabilities(null);
 
-		setConnectionStatus(ConnectionStatus.DISCONNECTED);
-	}, [
-		stopMonitoring,
-		resetStats,
-		cleanupDesktopAppAudio,
-		cleanupMicAudioPipeline,
-		clearLocalStreams,
-		clearRemoteUserStreams,
-		clearExternalStreams,
-		cleanupTransports,
-	]);
+			setConnectionStatus(ConnectionStatus.DISCONNECTED);
+		},
+		[
+			stopMonitoring,
+			resetStats,
+			cleanupDesktopAppAudio,
+			cleanupMicAudioPipeline,
+			clearLocalStreams,
+			clearRemoteUserStreams,
+			clearExternalStreams,
+			cleanupTransports,
+		],
+	);
 
 	voiceCleanupRef.current = cleanup;
 
@@ -2810,6 +2820,55 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 	}, []);
 
+	// Builds republish tasks for any live local webcam + screen-share (video and
+	// audio) tracks onto the current producer transport. Shared by both recovery
+	// paths, in-session transport recovery and WS-reconnect restore, so a live
+	// screen share survives either. The mic is handled separately by each caller
+	// because its re-acquire/republish semantics differ.
+	const buildLocalMediaRepublishTasks = useCallback((): Promise<void>[] => {
+		const tasks: Promise<void>[] = [];
+
+		const videoStream = localVideoStreamRef.current;
+		const videoTrack = videoStream?.getVideoTracks()[0];
+		if (videoStream && videoTrack && videoTrack.readyState === 'live') {
+			tasks.push(
+				publishWebcamTrack(videoStream, videoTrack, {
+					stopTracksOnFailure: false,
+				}),
+			);
+		}
+
+		const screenShareStream = localScreenShareStreamRef.current;
+		const screenShareTrack = screenShareStream?.getVideoTracks()[0];
+		if (screenShareStream && screenShareTrack && screenShareTrack.readyState === 'live') {
+			tasks.push(
+				publishScreenShareTrack(screenShareStream, screenShareTrack, {
+					clearStreamOnFailure: false,
+				}),
+			);
+		}
+
+		const screenShareAudioStream = localScreenShareAudioStreamRef.current;
+		const screenShareAudioTrack = screenShareAudioStream?.getAudioTracks()[0];
+		if (screenShareAudioStream && screenShareAudioTrack && screenShareAudioTrack.readyState === 'live') {
+			const shouldCleanupDesktopAudio = appAudioPipelineRef.current?.track === screenShareAudioTrack;
+
+			tasks.push(
+				publishScreenShareAudioTrack(screenShareAudioStream, screenShareAudioTrack, {
+					onTrackEnded: shouldCleanupDesktopAudio
+						? () => {
+								return cleanupDesktopAppAudio({
+									stopCapture: false,
+								});
+							}
+						: undefined,
+				}),
+			);
+		}
+
+		return tasks;
+	}, [publishWebcamTrack, publishScreenShareTrack, publishScreenShareAudioTrack, cleanupDesktopAppAudio]);
+
 	const init = useCallback(
 		async (
 			incomingRouterRtpCapabilities: RtpCapabilities,
@@ -2818,6 +2877,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				producerTransportParams?: TTransportParams;
 				consumerTransportParams?: TTransportParams;
 				existingProducers?: TRemoteProducerIds;
+				// Keep live webcam/screen-share capture alive across the teardown and
+				// republish it onto the new transport (WS-reconnect restore). Without
+				// this an in-progress screen share is silently dropped on reconnect.
+				preserveLocalMedia?: boolean;
 			},
 		) => {
 			return traceSentrySpan(
@@ -2828,6 +2891,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						'voice.channel_id': channelId,
 						'voice.prefetched_transports': opts?.producerTransportParams !== undefined,
 						'voice.has_existing_producers': opts?.existingProducers !== undefined,
+						'voice.preserve_local_media': opts?.preserveLocalMedia === true,
 					},
 				},
 				async () => {
@@ -2835,9 +2899,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						incomingRouterRtpCapabilities,
 						channelId,
 						prefetched: !!opts?.producerTransportParams,
+						preserveLocalMedia: opts?.preserveLocalMedia ?? false,
 					});
 
-					cleanup();
+					cleanup({ preserveLocalMedia: opts?.preserveLocalMedia });
 					hasHandledTransportFailureRef.current = false;
 
 					let micPrepPromise: Promise<TPreparedMicPipeline | undefined> | undefined;
@@ -2889,6 +2954,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							}
 						}
 
+						// Republish any preserved webcam/screen-share tracks (WS reconnect).
+						// On a fresh join there are no live local tracks, so this is a no-op.
+						if (opts?.preserveLocalMedia) {
+							const republishTasks = buildLocalMediaRepublishTasks();
+
+							if (republishTasks.length > 0) {
+								logVoice('Republishing preserved local media after reconnect restore', {
+									taskCount: republishTasks.length,
+								});
+								await Promise.all(republishTasks);
+							}
+						}
+
 						startMonitoring(producerTransport.current, consumerTransport.current);
 						setConnectionStatus(ConnectionStatus.CONNECTED);
 						setLoading(false);
@@ -2921,6 +2999,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			startMonitoring,
 			producerTransport,
 			consumerTransport,
+			buildLocalMediaRepublishTasks,
 		],
 	);
 
@@ -3047,51 +3126,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									republishTasks.push(publishMicTrack(currentAudioStream, currentAudioTrack));
 								}
 
-								const currentVideoStream = localVideoStreamRef.current;
-								const currentVideoTrack = currentVideoStream?.getVideoTracks()[0];
-								if (currentVideoStream && currentVideoTrack && currentVideoTrack.readyState === 'live') {
-									republishTasks.push(
-										publishWebcamTrack(currentVideoStream, currentVideoTrack, {
-											stopTracksOnFailure: false,
-										}),
-									);
-								}
-
-								const currentScreenShareStream = localScreenShareStreamRef.current;
-								const currentScreenShareTrack = currentScreenShareStream?.getVideoTracks()[0];
-								if (
-									currentScreenShareStream &&
-									currentScreenShareTrack &&
-									currentScreenShareTrack.readyState === 'live'
-								) {
-									republishTasks.push(
-										publishScreenShareTrack(currentScreenShareStream, currentScreenShareTrack, {
-											clearStreamOnFailure: false,
-										}),
-									);
-								}
-
-								const currentScreenShareAudioStream = localScreenShareAudioStreamRef.current;
-								const currentScreenShareAudioTrack = currentScreenShareAudioStream?.getAudioTracks()[0];
-								if (
-									currentScreenShareAudioStream &&
-									currentScreenShareAudioTrack &&
-									currentScreenShareAudioTrack.readyState === 'live'
-								) {
-									const shouldCleanupDesktopAudio = appAudioPipelineRef.current?.track === currentScreenShareAudioTrack;
-
-									republishTasks.push(
-										publishScreenShareAudioTrack(currentScreenShareAudioStream, currentScreenShareAudioTrack, {
-											onTrackEnded: shouldCleanupDesktopAudio
-												? () => {
-														return cleanupDesktopAppAudio({
-															stopCapture: false,
-														});
-													}
-												: undefined,
-										}),
-									);
-								}
+								republishTasks.push(...buildLocalMediaRepublishTasks());
 
 								await withRecoveryTimeout(
 									Promise.all([
@@ -3201,19 +3236,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		captureWatchedRemoteStreams,
 		clearExternalStreams,
 		clearRemoteUserStreams,
-		cleanupDesktopAppAudio,
 		cleanupTransports,
 		consume,
 		consumeExistingProducers,
+		buildLocalMediaRepublishTasks,
 		createConsumerTransport,
 		createProducerTransport,
 		ensureVoiceDeviceLoaded,
 		producerTransport,
 		consumerTransport,
 		publishMicTrack,
-		publishScreenShareAudioTrack,
-		publishScreenShareTrack,
-		publishWebcamTrack,
 		resetStats,
 		rejoinVoiceSession,
 		startMonitoring,
@@ -3468,6 +3500,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							producerTransportParams: bootstrap.producerTransportParams,
 							consumerTransportParams: bootstrap.consumerTransportParams,
 							existingProducers: bootstrap.existingProducers,
+							// Keep a live screen share / webcam across the reconnect instead
+							// of dropping it; init republishes the preserved tracks.
+							preserveLocalMedia: true,
 						}),
 					);
 
