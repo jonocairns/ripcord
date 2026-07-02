@@ -185,7 +185,7 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 						{visibleGroupedMessages.map((group, index) => {
 							const previousGroup = visibleGroupedMessages[index - 1];
 							const groupDate = new Date(group[0].createdAt);
-							const showDateDivider = !previousGroup || !isSameDay(groupDate, new Date(previousGroup[0].createdAt));
+							const showDateDivider = !!previousGroup && !isSameDay(groupDate, new Date(previousGroup[0].createdAt));
 
 							return (
 								<Fragment key={index}>

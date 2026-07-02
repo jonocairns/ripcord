@@ -131,7 +131,7 @@ const ServerSettings = memo(({ close }: TServerSettingsProps) => {
 
 	return (
 		<ServerScreenLayout close={close} title="Server Settings">
-			<div className="mx-auto flex w-full max-w-7xl gap-6 h-full">
+			<div className="mx-auto flex w-full max-w-7xl gap-6">
 				<aside className="w-full max-w-xs shrink-0 py-6">
 					<div className="space-y-4">
 						<div className="px-2">
