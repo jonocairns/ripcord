@@ -129,6 +129,17 @@ type TVoiceBootstrapResult = {
 	consumerTransportParams?: TTransportParams;
 };
 
+type TRepublishedLocalMediaState = Partial<Pick<TVoiceUserState, 'webcamEnabled' | 'sharingScreen'>>;
+
+type TLocalMediaRepublishPlan = {
+	tasks: Promise<void>[];
+	state: TRepublishedLocalMediaState;
+};
+
+type TInitResult = {
+	republishedLocalMediaState: TRepublishedLocalMediaState;
+};
+
 export type { AudioVideoRefs };
 
 const createEmptyAudioVideoRefs = (): AudioVideoRefs => ({
@@ -533,8 +544,9 @@ export type TVoiceProvider = {
 			producerTransportParams?: TTransportParams;
 			consumerTransportParams?: TTransportParams;
 			existingProducers?: TRemoteProducerIds;
+			preserveLocalMedia?: boolean;
 		},
-	) => Promise<void>;
+	) => Promise<TInitResult>;
 } & Pick<
 	ReturnType<typeof useLocalStreams>,
 	'localAudioStream' | 'localVideoStream' | 'localScreenShareStream' | 'localScreenShareAudioStream'
@@ -550,7 +562,7 @@ const VoiceProviderContext = createContext<TVoiceProvider>({
 	getOrCreateRefs: () => createEmptyAudioVideoRefs(),
 	acceptStream: () => undefined,
 	stopWatchingStream: () => undefined,
-	init: () => Promise.resolve(),
+	init: () => Promise.resolve({ republishedLocalMediaState: {} }),
 	isStartingScreenShare: false,
 	setMicMuted: () => Promise.resolve(),
 	toggleMic: () => Promise.resolve(),
@@ -2825,12 +2837,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// paths, in-session transport recovery and WS-reconnect restore, so a live
 	// screen share survives either. The mic is handled separately by each caller
 	// because its re-acquire/republish semantics differ.
-	const buildLocalMediaRepublishTasks = useCallback((): Promise<void>[] => {
+	const buildLocalMediaRepublishPlan = useCallback((): TLocalMediaRepublishPlan => {
 		const tasks: Promise<void>[] = [];
+		const state: TRepublishedLocalMediaState = {};
 
 		const videoStream = localVideoStreamRef.current;
 		const videoTrack = videoStream?.getVideoTracks()[0];
 		if (videoStream && videoTrack && videoTrack.readyState === 'live') {
+			state.webcamEnabled = true;
 			tasks.push(
 				publishWebcamTrack(videoStream, videoTrack, {
 					stopTracksOnFailure: false,
@@ -2841,6 +2855,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		const screenShareStream = localScreenShareStreamRef.current;
 		const screenShareTrack = screenShareStream?.getVideoTracks()[0];
 		if (screenShareStream && screenShareTrack && screenShareTrack.readyState === 'live') {
+			state.sharingScreen = true;
 			tasks.push(
 				publishScreenShareTrack(screenShareStream, screenShareTrack, {
 					clearStreamOnFailure: false,
@@ -2866,8 +2881,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			);
 		}
 
-		return tasks;
+		return { tasks, state };
 	}, [publishWebcamTrack, publishScreenShareTrack, publishScreenShareAudioTrack, cleanupDesktopAppAudio]);
+
+	const syncRepublishedLocalMediaState = useCallback(async (state: TRepublishedLocalMediaState) => {
+		if (state.webcamEnabled !== true && state.sharingScreen !== true) {
+			return;
+		}
+
+		await getTRPCClient().voice.updateState.mutate(state);
+		updateOwnVoiceState(state);
+	}, []);
 
 	const init = useCallback(
 		async (
@@ -2901,6 +2925,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						prefetched: !!opts?.producerTransportParams,
 						preserveLocalMedia: opts?.preserveLocalMedia ?? false,
 					});
+
+					let republishedLocalMediaState: TRepublishedLocalMediaState = {};
 
 					cleanup({ preserveLocalMedia: opts?.preserveLocalMedia });
 					hasHandledTransportFailureRef.current = false;
@@ -2957,19 +2983,22 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						// Republish any preserved webcam/screen-share tracks (WS reconnect).
 						// On a fresh join there are no live local tracks, so this is a no-op.
 						if (opts?.preserveLocalMedia) {
-							const republishTasks = buildLocalMediaRepublishTasks();
+							const republishPlan = buildLocalMediaRepublishPlan();
 
-							if (republishTasks.length > 0) {
+							if (republishPlan.tasks.length > 0) {
 								logVoice('Republishing preserved local media after reconnect restore', {
-									taskCount: republishTasks.length,
+									taskCount: republishPlan.tasks.length,
 								});
-								await Promise.all(republishTasks);
+								await Promise.all(republishPlan.tasks);
+								republishedLocalMediaState = republishPlan.state;
 							}
 						}
 
 						startMonitoring(producerTransport.current, consumerTransport.current);
 						setConnectionStatus(ConnectionStatus.CONNECTED);
 						setLoading(false);
+
+						return { republishedLocalMediaState };
 					} catch (error) {
 						logVoice('Error initializing voice provider', { error });
 
@@ -2999,7 +3028,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			startMonitoring,
 			producerTransport,
 			consumerTransport,
-			buildLocalMediaRepublishTasks,
+			buildLocalMediaRepublishPlan,
 		],
 	);
 
@@ -3126,7 +3155,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									republishTasks.push(publishMicTrack(currentAudioStream, currentAudioTrack));
 								}
 
-								republishTasks.push(...buildLocalMediaRepublishTasks());
+								const localMediaRepublishPlan = buildLocalMediaRepublishPlan();
+								republishTasks.push(...localMediaRepublishPlan.tasks);
 
 								await withRecoveryTimeout(
 									Promise.all([
@@ -3134,8 +3164,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 										...republishTasks,
 									]),
 								);
-
 								throwIfNonceStale('consume/republish');
+
+								// After the staleness check so a stale recovery cannot push
+								// republished flags into a session the user has since left.
+								await withRecoveryTimeout(syncRepublishedLocalMediaState(localMediaRepublishPlan.state));
 
 								if (recoveryJoinResult) {
 									logVoice('Refreshing existing producers after voice session rejoin');
@@ -3239,7 +3272,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		cleanupTransports,
 		consume,
 		consumeExistingProducers,
-		buildLocalMediaRepublishTasks,
+		buildLocalMediaRepublishPlan,
 		createConsumerTransport,
 		createProducerTransport,
 		ensureVoiceDeviceLoaded,
@@ -3250,6 +3283,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		rejoinVoiceSession,
 		startMonitoring,
 		stopMonitoring,
+		syncRepublishedLocalMediaState,
 	]);
 
 	recoverTransportSessionRef.current = recoverTransportSession;
@@ -3495,7 +3529,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						return;
 					}
 
-					await withVoiceReconnectTimeout(
+					const initResult = await withVoiceReconnectTimeout(
 						init(bootstrap.routerRtpCapabilities, pendingVoiceReconnect.channelId, {
 							producerTransportParams: bootstrap.producerTransportParams,
 							consumerTransportParams: bootstrap.consumerTransportParams,
@@ -3519,6 +3553,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						users: bootstrap.channelUsers,
 					});
 					serverStore.bumpVoiceSessionReconnectNonce();
+					await withVoiceReconnectTimeout(syncRepublishedLocalMediaState(initResult.republishedLocalMediaState));
 
 					const currentRtpCapabilities = deviceRef.current?.rtpCapabilities ?? sendRtpCapabilities.current;
 
@@ -3625,6 +3660,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		reconnectAuthenticated,
 		consumeExistingProducers,
 		requestVoiceRestoreOrJoin,
+		syncRepublishedLocalMediaState,
 		waitForVoiceReconnectDelay,
 		waitForVoiceReconnectOnline,
 		waitForVoiceReconnectAuthenticated,

@@ -32,6 +32,16 @@ const RECOVERY_TIMEOUT_MS = 12_000;
 const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
 const RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS = 350;
 
+type TRepublishedLocalMediaState = {
+	webcamEnabled?: true;
+	sharingScreen?: true;
+};
+
+type TRepublishPlan = {
+	tasks: Promise<void>[];
+	state: TRepublishedLocalMediaState;
+};
+
 class RecoverySessionChangedError extends Error {
 	constructor(stage: string) {
 		super(`Voice session changed during transport recovery (${stage})`);
@@ -76,7 +86,8 @@ type TRecoveryDeps = {
 	isMissingVoiceSessionError: (err: unknown) => boolean;
 	consumeExistingProducers: (caps: object, prefetchedProducers?: object) => Promise<void>;
 	restartMicAfterRejoin: () => Promise<void>;
-	republishTracks: () => Promise<void>[];
+	republishTracks: () => TRepublishPlan;
+	syncRepublishedTrackState: (state: TRepublishedLocalMediaState) => Promise<void>;
 	consume: (id: number | string, kind: string, caps: object) => Promise<void>;
 	startMonitoring: () => void;
 	isNonRetriableTrpcError: (err: unknown) => boolean;
@@ -153,7 +164,8 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 			}
 			throwIfNonceStale('transport creation');
 
-			const republishTasks = [...deps.republishTracks()];
+			const republishPlan = deps.republishTracks();
+			const republishTasks = [...republishPlan.tasks];
 
 			if (recoveryJoinResult) {
 				republishTasks.push(deps.restartMicAfterRejoin());
@@ -166,6 +178,7 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 				]),
 			);
 			throwIfNonceStale('consume/republish');
+			await withRecoveryTimeout(deps.syncRepublishedTrackState(republishPlan.state));
 
 			if (recoveryJoinResult) {
 				await withRecoveryTimeout(deps.consumeExistingProducers(currentRtpCapabilities));
@@ -233,7 +246,8 @@ const makeDeps = (overrides: Partial<TRecoveryDeps> = {}): TRecoveryDeps => {
 		isMissingVoiceSessionError: () => false,
 		consumeExistingProducers: mock(() => Promise.resolve()),
 		restartMicAfterRejoin: mock(() => Promise.resolve()),
-		republishTracks: mock(() => []),
+		republishTracks: mock(() => ({ tasks: [], state: {} })),
+		syncRepublishedTrackState: mock(() => Promise.resolve()),
 		consume: mock(() => Promise.resolve()),
 		startMonitoring: mock(() => {}),
 		isNonRetriableTrpcError: () => false,
@@ -320,6 +334,44 @@ describe('recoverTransportSession orchestration', () => {
 		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
 	});
 
+	it('syncs republished webcam and screen state before reporting recovery success', async () => {
+		const callOrder: string[] = [];
+		const republishedState = {
+			webcamEnabled: true,
+			sharingScreen: true,
+		} satisfies TRepublishedLocalMediaState;
+		const deps = makeDeps({
+			consumeExistingProducers: mock(() => {
+				callOrder.push('consumeExistingProducers');
+				return Promise.resolve();
+			}),
+			republishTracks: mock(() => ({
+				tasks: [
+					Promise.resolve().then(() => {
+						callOrder.push('republishTracks');
+					}),
+				],
+				state: republishedState,
+			})),
+			syncRepublishedTrackState: mock((state) => {
+				callOrder.push('syncRepublishedTrackState');
+				expect(state).toBe(republishedState);
+				return Promise.resolve();
+			}),
+			startMonitoring: mock(() => {
+				callOrder.push('startMonitoring');
+			}),
+		});
+
+		expect(await runRecovery(deps)).toBe(true);
+		expect(callOrder).toEqual([
+			'consumeExistingProducers',
+			'republishTracks',
+			'syncRepublishedTrackState',
+			'startMonitoring',
+		]);
+	});
+
 	it('restores watched remote user streams after rebuild', async () => {
 		const consumed: Array<[number | string, string]> = [];
 		const deps = makeDeps({
@@ -394,6 +446,27 @@ describe('recoverTransportSession orchestration', () => {
 		expect(await runRecovery(deps)).toBe(true);
 		expect(transportCalls).toBe(2);
 		expect((deps.startMonitoring as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+	});
+
+	it('does not sync republished state when the nonce goes stale during consume/republish', async () => {
+		let nonce = 0;
+		let consumeCalls = 0;
+		const deps = makeDeps({
+			getNonce: () => nonce,
+			republishTracks: mock((): TRepublishPlan => ({ tasks: [], state: { sharingScreen: true } })),
+			consumeExistingProducers: mock(async () => {
+				consumeCalls++;
+				if (consumeCalls === 1) {
+					nonce++; // WS reconnect fires mid-republish
+				}
+			}),
+		});
+
+		expect(await runRecovery(deps)).toBe(true);
+		expect(consumeCalls).toBe(2);
+		// Only the fresh attempt may push flags to the server — the stale one
+		// aborts at the staleness check before syncing.
+		expect((deps.syncRepublishedTrackState as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
 	});
 
 	it('gives up after too many nonce restarts', async () => {
