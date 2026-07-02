@@ -81,6 +81,7 @@ export type TDeviceSettings = {
 	sidecarExperimentalAggressiveMode: boolean;
 	sidecarNoiseGateFloorDbfs?: number;
 	screenAudioMode: ScreenAudioMode;
+	nativeAppAudioIngestEnabled: boolean;
 	mirrorOwnVideo: boolean;
 	screenResolution: Resolution;
 	screenFramerate: number;

@@ -87,6 +87,7 @@ type TRecoveryDeps = {
 	consumeExistingProducers: (caps: object, prefetchedProducers?: object) => Promise<void>;
 	restartMicAfterRejoin: () => Promise<void>;
 	republishTracks: () => TRepublishPlan;
+	recoverOptionalAppAudio: () => Promise<void> | undefined;
 	syncRepublishedTrackState: (state: TRepublishedLocalMediaState) => Promise<void>;
 	consume: (id: number | string, kind: string, caps: object) => Promise<void>;
 	startMonitoring: () => void;
@@ -171,6 +172,11 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 				republishTasks.push(deps.restartMicAfterRejoin());
 			}
 
+			const optionalAppAudioRecovery = deps.recoverOptionalAppAudio();
+			if (optionalAppAudioRecovery) {
+				void optionalAppAudioRecovery.catch(() => undefined);
+			}
+
 			await withRecoveryTimeout(
 				Promise.all([
 					deps.consumeExistingProducers(currentRtpCapabilities, recoveryJoinResult?.existingProducers),
@@ -247,6 +253,7 @@ const makeDeps = (overrides: Partial<TRecoveryDeps> = {}): TRecoveryDeps => {
 		consumeExistingProducers: mock(() => Promise.resolve()),
 		restartMicAfterRejoin: mock(() => Promise.resolve()),
 		republishTracks: mock(() => ({ tasks: [], state: {} })),
+		recoverOptionalAppAudio: mock(() => undefined),
 		syncRepublishedTrackState: mock(() => Promise.resolve()),
 		consume: mock(() => Promise.resolve()),
 		startMonitoring: mock(() => {}),
@@ -550,6 +557,27 @@ describe('recoverTransportSession orchestration', () => {
 		expect((deps.rejoinVoiceSession as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
 		expect((deps.restartMicAfterRejoin as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
 		expect(consumeCalls).toHaveLength(3);
+		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
+	});
+
+	it('does not fail core recovery when optional desktop app audio recovery rejects', async () => {
+		const optionalError = new Error('sidecar capture failed');
+		const deps = makeDeps({
+			recoverOptionalAppAudio: mock(() => Promise.reject(optionalError)),
+		});
+
+		expect(await runRecovery(deps)).toBe(true);
+		expect((deps.recoverOptionalAppAudio as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
+	});
+
+	it('does not wait for optional desktop app audio recovery when it stays pending', async () => {
+		const deps = makeDeps({
+			recoverOptionalAppAudio: mock(() => new Promise<void>(() => {})),
+		});
+
+		expect(await runRecovery(deps)).toBe(true);
+		expect((deps.recoverOptionalAppAudio as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
 		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
 	});
 

@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "bun run build:sidecar:optional && concurrently -k \"cd ../client && bun run dev\" \"bun run dev:main\" \"bun run dev:electron\" \"bun run dev:sidecar\"",
     "dev:sidecar": "cd sidecar && cargo watch -w src -s \"node ../scripts/build-sidecar.mjs\"",
-    "dev:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --sourcemap --watch --clean",
+    "dev:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --external @evan/opus --sourcemap --watch --clean",
     "dev:electron": "wait-on tcp:5173 file:dist/main/index.cjs && cross-env ELECTRON_RENDERER_URL=http://localhost:5173 electronmon . --watch sidecar/bin",
     "build:windows": "node ./scripts/build-windows-electron.mjs",
     "build:windows:dev": "node ./scripts/build-windows-electron.mjs --dev",
@@ -21,7 +21,7 @@
     "launch:windows:dev": "wait-on tcp:5173 && node ./scripts/launch-windows.mjs --dev",
     "build:sidecar": "node ./scripts/build-sidecar.mjs --release",
     "build:sidecar:optional": "node ./scripts/build-sidecar.mjs --release --optional",
-    "build:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --clean",
+    "build:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --external @evan/opus --clean",
     "prepare:renderer": "node ./scripts/prepare-renderer-dist.mjs",
     "build": "cd ../client && bun run build && cd ../desktop && bun run prepare:renderer && bun run build:sidecar && bun run build:main && bun run package:preview",
     "package:preview": "electron-builder --dir",
@@ -30,6 +30,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome lint ./src ./scripts",
     "lint:fix": "biome lint --fix ./src ./scripts",
+    "smoke:opus": "node ./scripts/smoke-opus.mjs",
     "test": "bun test"
   },
   "build": {
@@ -49,11 +50,15 @@
       }
     ],
     "asar": true,
+    "asarUnpack": [
+      "node_modules/@evan/opus/**"
+    ],
     "files": [
       "dist/**/*",
       "renderer-dist/**/*",
       "assets/icons/**/*",
-      "package.json"
+      "package.json",
+      "node_modules/@evan/opus/**/*"
     ],
     "extraResources": [
       {
@@ -96,8 +101,10 @@
     }
   },
   "dependencies": {
+    "@evan/opus": "^1.0.3",
     "@sentry/electron": "^7.13.0",
-    "electron-updater": "^6.8.3"
+    "electron-updater": "^6.8.3",
+    "werift-rtp": "^0.8.8"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",

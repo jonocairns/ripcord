@@ -24,6 +24,13 @@ const produceRoute = protectedProcedure
 			await ctx.needsChannelPermission(channelId, ChannelPermission.WEBCAM);
 		} else if (input.kind === StreamKind.SCREEN) {
 			await ctx.needsChannelPermission(channelId, ChannelPermission.SHARE_SCREEN);
+		} else if (input.kind === StreamKind.SCREEN_AUDIO) {
+			// App/system audio is only meaningful alongside an active screen share and
+			// shares the SHARE_SCREEN authorization boundary with the native
+			// PlainTransport ingest path. Without this branch the worklet fallback path
+			// would let a user denied SHARE_SCREEN still publish SCREEN_AUDIO here,
+			// escaping the gate the native ingest route enforces.
+			await ctx.needsChannelPermission(channelId, ChannelPermission.SHARE_SCREEN);
 		}
 
 		const producerTransport = runtime.getProducerTransport(ctx.user.id);

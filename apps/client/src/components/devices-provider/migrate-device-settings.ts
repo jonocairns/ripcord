@@ -34,6 +34,7 @@ const DEFAULT_DEVICE_SETTINGS: TDeviceSettings = {
 	sidecarExperimentalAggressiveMode: false,
 	sidecarNoiseGateFloorDbfs: undefined,
 	screenAudioMode: ScreenAudioMode.SYSTEM,
+	nativeAppAudioIngestEnabled: false,
 	mirrorOwnVideo: false,
 	screenResolution: Resolution['720p'],
 	screenFramerate: 30,
@@ -107,6 +108,10 @@ const migrateDeviceSettings = (incomingSettings: TLegacyDeviceSettings | undefin
 		screenFramerate,
 		micQualityMode: MicQualityMode.AUTO,
 		screenAudioMode: screenAudioMode || ScreenAudioMode.SYSTEM,
+		nativeAppAudioIngestEnabled:
+			typeof incomingSettings.nativeAppAudioIngestEnabled === 'boolean'
+				? incomingSettings.nativeAppAudioIngestEnabled
+				: DEFAULT_DEVICE_SETTINGS.nativeAppAudioIngestEnabled,
 		videoCodec: Object.values(VideoCodecPreference).includes(incomingSettings.videoCodec as VideoCodecPreference)
 			? (incomingSettings.videoCodec as VideoCodecPreference)
 			: VideoCodecPreference.AUTO,

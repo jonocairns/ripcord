@@ -1,4 +1,5 @@
 import type {
+	TAppAudioRtpTarget,
 	TDesktopErrorReportingConfig,
 	TDesktopPushKeybindsInput,
 	TDesktopQuitFlushResult,
@@ -121,6 +122,46 @@ const validateStartAppAudioCaptureArgs = (args: unknown[]): [TStartAppAudioCaptu
 	];
 };
 
+const assertPort = (value: unknown, field: string): number => {
+	if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0 || value > 65_535) {
+		return fail(`${field} must be an integer between 1 and 65535`);
+	}
+
+	return value;
+};
+
+const assertUint32 = (value: unknown, field: string): number => {
+	if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 0xffffffff) {
+		return fail(`${field} must be a 32-bit unsigned integer`);
+	}
+
+	return value;
+};
+
+const assertRtpPayloadType = (value: unknown, field: string): number => {
+	if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 127) {
+		return fail(`${field} must be an integer between 0 and 127`);
+	}
+
+	return value;
+};
+
+const validateStartAppAudioRtpArgs = (args: unknown[]): [TAppAudioRtpTarget] => {
+	const target = assertRecord(args[0], 'target');
+
+	const validated: TAppAudioRtpTarget = {
+		ip: assertNonEmptyString(target.ip, 'target.ip', MAX_ID_LENGTH),
+		port: assertPort(target.port, 'target.port'),
+		ssrc: assertUint32(target.ssrc, 'target.ssrc'),
+	};
+
+	if (target.payloadType !== undefined) {
+		validated.payloadType = assertRtpPayloadType(target.payloadType, 'target.payloadType');
+	}
+
+	return [validated];
+};
+
 const validatePrepareScreenShareArgs = (args: unknown[]): [TScreenShareSelection] => {
 	const selection = assertRecord(args[0], 'selection');
 	const useSystemPicker = assertOptionalBoolean(selection.useSystemPicker, 'selection.useSystemPicker');
@@ -203,5 +244,6 @@ export {
 	validateSetGlobalPushKeybindsArgs,
 	validateSetServerUrlArgs,
 	validateStartAppAudioCaptureArgs,
+	validateStartAppAudioRtpArgs,
 	validateStopAppAudioCaptureArgs,
 };

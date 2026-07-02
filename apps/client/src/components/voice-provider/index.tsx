@@ -43,6 +43,7 @@ import {
 	ScreenAudioMode,
 	type TAppAudioSession,
 	type TAppAudioStatusEvent,
+	type TDesktopBridge,
 	type TDesktopCapabilities,
 	type TDesktopPushKeybindEvent,
 	type TDesktopScreenShareSelection,
@@ -120,6 +121,16 @@ type TRecoveryJoinResult = {
 	producerTransportParams?: TTransportParams;
 	consumerTransportParams?: TTransportParams;
 };
+
+type TAppAudioPublishIntent = {
+	audioMode: ScreenAudioMode.APP | ScreenAudioMode.SYSTEM;
+	captureInput: TStartAppAudioCaptureInput;
+};
+
+type TDesktopAppAudioWorkletStartResult =
+	| { kind: 'published'; displayAudioTrack: undefined }
+	| { kind: 'display-fallback'; displayAudioTrack: MediaStreamTrack }
+	| { kind: 'none'; displayAudioTrack: undefined };
 
 type TVoiceBootstrapResult = {
 	routerRtpCapabilities: RtpCapabilities;
@@ -632,6 +643,28 @@ const withVoiceReconnectTimeout = <T,>(promise: Promise<T>): Promise<T> =>
 
 const isMissingVoiceSessionError = (error: unknown): boolean => getTrpcErrorData(error)?.code === 'BAD_REQUEST';
 
+const isAuthDenialError = (error: unknown): boolean => {
+	const code = getTrpcErrorData(error)?.code;
+
+	return code === 'FORBIDDEN' || code === 'UNAUTHORIZED';
+};
+
+// Stage 1 native app-audio RTP ingest defaults off. Desktop users can opt in
+// through device settings; the build/localStorage switches remain for smoke
+// testing packaged builds without changing saved settings.
+const isNativeAppAudioIngestEnabled = (settingsEnabled: boolean): boolean => {
+	try {
+		const override = globalThis.localStorage?.getItem('voice.nativeAppAudio');
+
+		if (override === 'true') return true;
+		if (override === 'false') return false;
+	} catch {
+		// localStorage may be unavailable; fall through to the build-time flag.
+	}
+
+	return settingsEnabled || import.meta.env.VITE_VOICE_NATIVE_APP_AUDIO === 'true';
+};
+
 const createReconnectAttemptId = (): string => {
 	const randomUUID = globalThis.crypto?.randomUUID;
 
@@ -670,6 +703,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const { devices } = useDevices();
 	const appAudioPipelineRef = useRef<TDesktopAppAudioPipeline | undefined>(undefined);
 	const appAudioSessionRef = useRef<TAppAudioSession | undefined>(undefined);
+	const appAudioPublishIntentRef = useRef<TAppAudioPublishIntent | undefined>(undefined);
+	// True while native RTP ingest is the active SCREEN_AUDIO path (PCM is encoded
+	// and sent from the desktop main process, not the renderer worklet). Drives
+	// native-specific teardown in cleanupDesktopAppAudio.
+	const nativeAppAudioIngestActiveRef = useRef(false);
+	// Monotonic token for native ingest attempts. Each startNativeAppAudioIngest
+	// claims the next value; a stale attempt's teardown checks it owns the current
+	// token before touching shared/global state (the singleton RTP sender and the
+	// session/active refs), so an in-flight attempt that settles after a newer one
+	// has started cannot stop the newer sender or wipe its session.
+	const nativeAppAudioIngestGenerationRef = useRef(0);
 	const removeAppAudioFrameSubscriptionRef = useRef<(() => void) | undefined>(undefined);
 	const removeAppAudioStatusSubscriptionRef = useRef<(() => void) | undefined>(undefined);
 	const appAudioStartupTimeoutRef = useRef<number | ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -1796,6 +1840,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					createdScreenShareProducer.close();
 					localScreenShareAudioProducer.current?.close();
 					localScreenShareAudioProducer.current = undefined;
+					appAudioPublishIntentRef.current = undefined;
 					standbyDisplayAudioTrackRef.current = undefined;
 					standbyDisplayAudioStreamRef.current = undefined;
 					trackDesktopAppAudioCleanupRef.current();
@@ -2383,6 +2428,26 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			removeAppAudioStatusSubscriptionRef.current?.();
 			removeAppAudioStatusSubscriptionRef.current = undefined;
 
+			// Native RTP ingest teardown: stop the main-process Opus/SRTP sender and
+			// ask the server to close the SCREEN_AUDIO producer (which also releases
+			// its PlainTransport). The worklet pipeline below is never built on this
+			// path, so it is a no-op for native ingest.
+			if (nativeAppAudioIngestActiveRef.current) {
+				nativeAppAudioIngestActiveRef.current = false;
+
+				try {
+					await desktopBridge?.stopAppAudioRtp?.();
+				} catch (error) {
+					logVoice('Failed to stop native app audio RTP sender', { error });
+				}
+
+				try {
+					await getTRPCClient().voice.closeProducer.mutate({ kind: StreamKind.SCREEN_AUDIO });
+				} catch (error) {
+					logVoice('Failed to close native app audio producer on server', { error });
+				}
+			}
+
 			const activeSession = appAudioSessionRef.current;
 			appAudioSessionRef.current = undefined;
 
@@ -2425,6 +2490,536 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const trackDesktopAppAudioCleanupRef = useRef(trackDesktopAppAudioCleanup);
 	trackDesktopAppAudioCleanupRef.current = trackDesktopAppAudioCleanup;
 
+	// Attempts native RTP ingest for shared app/system audio: capture PCM in the
+	// sidecar (without the renderer worklet channel), allocate a server
+	// PlainTransport, start the desktop main Opus/SRTP sender, and publish once the
+	// server observes first media. Returns true when the SCREEN_AUDIO producer is
+	// live server-side; returns false (after cleaning up its own attempt) so the
+	// caller falls back to the worklet path. Hard auth failures reject and are
+	// surfaced by the caller rather than silently falling back.
+	const startNativeAppAudioIngest = useCallback(
+		async ({
+			desktopBridge,
+			captureInput,
+			audioMode,
+		}: {
+			desktopBridge: TDesktopBridge;
+			captureInput: TStartAppAudioCaptureInput;
+			audioMode: ScreenAudioMode.APP | ScreenAudioMode.SYSTEM;
+		}): Promise<'published' | 'abandoned' | 'fallback'> => {
+			const startAppAudioRtp = desktopBridge.startAppAudioRtp;
+			const stopAppAudioRtp = desktopBridge.stopAppAudioRtp;
+
+			// Capability gate: only newer desktop builds expose the native RTP bridge.
+			if (typeof startAppAudioRtp !== 'function' || typeof stopAppAudioRtp !== 'function') {
+				logVoice('Native app audio ingest unavailable (bridge missing); using worklet path');
+				return 'fallback';
+			}
+
+			// Rollout gate: opt-in until validated end-to-end and in a packaged build.
+			if (!isNativeAppAudioIngestEnabled(devices.nativeAppAudioIngestEnabled)) {
+				logVoice('Native app audio ingest disabled; using worklet path');
+				return 'fallback';
+			}
+
+			// Claim this attempt's generation. Shared/global state is only ours to
+			// tear down while we remain the current attempt.
+			const attemptGeneration = ++nativeAppAudioIngestGenerationRef.current;
+			const ownsCurrentAttempt = () => nativeAppAudioIngestGenerationRef.current === attemptGeneration;
+			const hasPublishIntent = () => appAudioPublishIntentRef.current !== undefined;
+			const ownsPublishIntent = () => ownsCurrentAttempt() && hasPublishIntent();
+			const nativeAudioLabel = audioMode === ScreenAudioMode.SYSTEM ? 'System audio' : 'Per-app audio';
+
+			let captureStarted = false;
+			// Captured from this attempt's own session/ingest rather than read from
+			// shared refs at teardown time, so we never stop a newer attempt's
+			// capture or abort a newer attempt's server ingest.
+			let attemptSessionId: string | undefined;
+			let attemptTransportId: string | undefined;
+
+			const teardownNativeAttempt = async () => {
+				const ownsGlobalState = ownsCurrentAttempt();
+
+				// The singleton RTP sender and the session/active refs belong to the
+				// newest attempt; only touch them if no newer attempt has superseded us.
+				if (ownsGlobalState) {
+					try {
+						await stopAppAudioRtp();
+					} catch (error) {
+						logVoice('Failed to stop native app audio RTP sender during teardown', { error });
+					}
+				}
+
+				if (captureStarted && attemptSessionId) {
+					try {
+						await desktopBridge.stopAppAudioCapture(attemptSessionId);
+					} catch (error) {
+						logVoice('Failed to stop native app audio capture during teardown', { error });
+					}
+				}
+
+				// Release the server-side PlainTransport for an ingest that was created
+				// but never published; scoped by transport id so it is a no-op once a
+				// newer attempt has replaced the ingest. Without this the UDP port leaks
+				// until leave or the next native attempt.
+				if (attemptTransportId) {
+					try {
+						await getTRPCClient().voice.abortAppAudioIngest.mutate({ transportId: attemptTransportId });
+					} catch (error) {
+						logVoice('Failed to abort native app audio ingest during teardown', { error });
+					}
+				}
+
+				if (ownsGlobalState) {
+					removeAppAudioStatusSubscriptionRef.current?.();
+					removeAppAudioStatusSubscriptionRef.current = undefined;
+					appAudioSessionRef.current = undefined;
+					nativeAppAudioIngestActiveRef.current = false;
+				}
+			};
+
+			let fallbackReason: 'no-first-media' | 'error' = 'error';
+
+			try {
+				// Capture without the renderer worklet frame channel: the desktop main
+				// process consumes the PCM egress and feeds the RTP sender directly.
+				const session = await desktopBridge.startAppAudioCapture(captureInput, { openFrameChannel: false });
+				attemptSessionId = session.sessionId;
+				captureStarted = true;
+				if (!ownsPublishIntent()) {
+					logVoice('Native app audio ingest abandoned after capture; tearing down', {
+						sessionId: session.sessionId,
+						superseded: !ownsCurrentAttempt(),
+					});
+					await teardownNativeAttempt();
+					return 'abandoned';
+				}
+
+				appAudioSessionRef.current = session;
+				removeAppAudioStatusSubscriptionRef.current?.();
+				removeAppAudioStatusSubscriptionRef.current = desktopBridge.subscribeAppAudioStatus(
+					(statusEvent: TAppAudioStatusEvent) => {
+						logVoice('Received native app audio status event', {
+							sessionId: statusEvent.sessionId,
+							targetId: statusEvent.targetId,
+							reason: statusEvent.reason,
+							error: statusEvent.error,
+						});
+						if (
+							statusEvent.sessionId !== session.sessionId ||
+							statusEvent.sessionId !== appAudioSessionRef.current?.sessionId ||
+							!nativeAppAudioIngestActiveRef.current
+						) {
+							return;
+						}
+
+						void (async () => {
+							toast.warning(
+								statusEvent.error
+									? `${nativeAudioLabel} capture ended (${statusEvent.reason}): ${statusEvent.error}`
+									: `${nativeAudioLabel} capture ended (${statusEvent.reason}). Screen video will continue without shared audio.`,
+							);
+							localScreenShareAudioProducer.current?.close();
+							localScreenShareAudioProducer.current = undefined;
+							setLocalScreenShareAudio(undefined);
+
+							await cleanupDesktopAppAudio({
+								stopCapture: false,
+								preserveCurrentAudio: false,
+							});
+						})();
+					},
+				);
+
+				const ingest = await getTRPCClient().voice.createAppAudioIngest.mutate();
+				attemptTransportId = ingest.id;
+				if (!ownsPublishIntent()) {
+					logVoice('Native app audio ingest abandoned after ingest allocation; tearing down', {
+						transportId: ingest.id,
+						superseded: !ownsCurrentAttempt(),
+					});
+					await teardownNativeAttempt();
+					return 'abandoned';
+				}
+
+				const { srtpKeyBase64 } = await startAppAudioRtp({
+					ip: ingest.ip,
+					port: ingest.port,
+					ssrc: ingest.ssrc,
+					payloadType: ingest.rtpParameters.codecs?.[0]?.payloadType,
+				});
+				if (!ownsPublishIntent()) {
+					logVoice('Native app audio ingest abandoned after RTP sender start; tearing down', {
+						transportId: ingest.id,
+						superseded: !ownsCurrentAttempt(),
+					});
+					await teardownNativeAttempt();
+					return 'abandoned';
+				}
+
+				const result = await getTRPCClient().voice.produceAppAudio.mutate({
+					transportId: ingest.id,
+					srtpParameters: {
+						cryptoSuite: ingest.srtpParameters.cryptoSuite,
+						keyBase64: srtpKeyBase64,
+					},
+				});
+
+				if ('producerId' in result) {
+					// The attempt can be abandoned while produceAppAudio is in flight: the
+					// user stops the share (clearing appAudioPublishIntentRef) or a newer
+					// attempt supersedes this generation. cleanupDesktopAppAudio gates its
+					// native teardown on nativeAppAudioIngestActiveRef, which is still false
+					// until the line below, so committing here would strand a live
+					// SCREEN_AUDIO producer plus a running RTP sender/UDP socket that the
+					// stop-path cleanup already skipped. Tear our own attempt down instead.
+					if (!ownsPublishIntent()) {
+						logVoice('Native app audio ingest abandoned after produce; tearing down', {
+							producerId: result.producerId,
+							superseded: !ownsCurrentAttempt(),
+						});
+						await teardownNativeAttempt();
+						return 'abandoned';
+					}
+
+					nativeAppAudioIngestActiveRef.current = true;
+					logVoice('Native app audio ingest active', { producerId: result.producerId });
+					return 'published';
+				}
+
+				// Operational fallback: server observed no first media within the gate.
+				fallbackReason = 'no-first-media';
+			} catch (error) {
+				// Authorization denial is hard and must NEVER fall back to the worklet
+				// path — that path also produces SCREEN_AUDIO and would escape the
+				// SHARE_SCREEN gate. Tear down the attempt and rethrow.
+				if (isAuthDenialError(error)) {
+					await teardownNativeAttempt();
+					logVoice('Native app audio ingest denied (auth); not falling back', {
+						code: getTrpcErrorData(error)?.code,
+					});
+					throw error;
+				}
+
+				logVoice('Native app audio ingest attempt errored; falling back to worklet', {
+					error,
+					code: getTrpcErrorData(error)?.code,
+				});
+			}
+
+			// Operational fallback: clean up the native attempt and let the caller use
+			// the worklet path. The single binary egress is left with no native sink.
+			await teardownNativeAttempt();
+			logVoice('Native app audio ingest falling back to worklet path', { reason: fallbackReason });
+
+			return 'fallback';
+		},
+		[
+			cleanupDesktopAppAudio,
+			devices.nativeAppAudioIngestEnabled,
+			localScreenShareAudioProducer,
+			setLocalScreenShareAudio,
+		],
+	);
+
+	const startDesktopAppAudioWorklet = useCallback(
+		async ({
+			desktopBridge,
+			captureInput,
+			audioMode,
+			displayStream,
+			displayAudioTrack,
+			showWarnings = true,
+		}: {
+			desktopBridge: TDesktopBridge;
+			captureInput: TStartAppAudioCaptureInput;
+			audioMode: ScreenAudioMode.APP | ScreenAudioMode.SYSTEM;
+			displayStream?: MediaStream;
+			displayAudioTrack?: MediaStreamTrack;
+			showWarnings?: boolean;
+		}): Promise<TDesktopAppAudioWorkletStartResult> => {
+			const sidecarAudioLabel = audioMode === ScreenAudioMode.SYSTEM ? 'System audio' : 'Per-app audio';
+
+			try {
+				logVoice('Starting sidecar audio capture', {
+					sourceId: captureInput.sourceId,
+					appAudioTargetId: captureInput.appAudioTargetId,
+					mode: audioMode === ScreenAudioMode.SYSTEM ? 'system-exclude' : 'per-app',
+				});
+				const appAudioSession = await desktopBridge.startAppAudioCapture(captureInput);
+				logVoice('Sidecar capture started', {
+					sessionId: appAudioSession.sessionId,
+					targetId: appAudioSession.targetId,
+				});
+				appAudioSessionRef.current = appAudioSession;
+
+				const appAudioPipeline = await createDesktopAppAudioPipeline(appAudioSession, {
+					mode: 'stable',
+					logLabel: audioMode === ScreenAudioMode.SYSTEM ? 'system-audio' : 'per-app-audio',
+					insertSilenceOnDroppedFrames: true,
+				});
+				let hasReceivedSessionFrame = false;
+
+				appAudioPipelineRef.current = appAudioPipeline;
+
+				const startupTimeout = window.setTimeout(() => {
+					if (hasReceivedSessionFrame || appAudioSessionRef.current?.sessionId !== appAudioSession.sessionId) {
+						return;
+					}
+
+					logVoice('Sidecar produced no audio frames after startup', {
+						sessionId: appAudioSession.sessionId,
+						targetId: appAudioSession.targetId,
+					});
+					if (showWarnings) {
+						toast.warning(
+							`${sidecarAudioLabel} started but produced no audio frames. Screen video will continue without shared audio.`,
+						);
+					}
+					localScreenShareAudioProducer.current?.close();
+					localScreenShareAudioProducer.current = undefined;
+					setLocalScreenShareAudio(undefined);
+					void cleanupDesktopAppAudio({
+						stopCapture: true,
+						preserveCurrentAudio: false,
+					});
+				}, 3000);
+				appAudioStartupTimeoutRef.current = startupTimeout;
+
+				removeAppAudioFrameSubscriptionRef.current?.();
+				removeAppAudioFrameSubscriptionRef.current = desktopBridge.subscribeAppAudioFrames((frame) => {
+					if (frame.sessionId === appAudioSession.sessionId) {
+						if (!hasReceivedSessionFrame) {
+							logVoice('Received first sidecar audio frame', {
+								sessionId: frame.sessionId,
+								targetId: frame.targetId,
+							});
+						}
+
+						hasReceivedSessionFrame = true;
+
+						if (appAudioStartupTimeoutRef.current !== undefined) {
+							window.clearTimeout(appAudioStartupTimeoutRef.current);
+							appAudioStartupTimeoutRef.current = undefined;
+						}
+					}
+					appAudioPipelineRef.current?.pushFrame(frame);
+				});
+
+				removeAppAudioStatusSubscriptionRef.current?.();
+				removeAppAudioStatusSubscriptionRef.current = desktopBridge.subscribeAppAudioStatus(
+					(statusEvent: TAppAudioStatusEvent) => {
+						logVoice('Received sidecar audio status event', {
+							sessionId: statusEvent.sessionId,
+							targetId: statusEvent.targetId,
+							reason: statusEvent.reason,
+							error: statusEvent.error,
+						});
+						if (statusEvent.sessionId !== appAudioSessionRef.current?.sessionId) {
+							return;
+						}
+
+						void (async () => {
+							if (appAudioStartupTimeoutRef.current !== undefined) {
+								window.clearTimeout(appAudioStartupTimeoutRef.current);
+								appAudioStartupTimeoutRef.current = undefined;
+							}
+							if (showWarnings) {
+								toast.warning(
+									statusEvent.error
+										? `${sidecarAudioLabel} capture ended (${statusEvent.reason}): ${statusEvent.error}`
+										: `${sidecarAudioLabel} capture ended (${statusEvent.reason}). Screen video will continue without shared audio.`,
+								);
+							}
+							localScreenShareAudioProducer.current?.close();
+							localScreenShareAudioProducer.current = undefined;
+							setLocalScreenShareAudio(undefined);
+
+							await cleanupDesktopAppAudio({
+								stopCapture: false,
+								preserveCurrentAudio: false,
+							});
+						})();
+					},
+				);
+
+				if (displayAudioTrack) {
+					displayAudioTrack.stop();
+					displayStream?.removeTrack(displayAudioTrack);
+				}
+
+				const appAudioTrack = appAudioPipeline.track;
+				await publishScreenShareAudioTrack(appAudioPipeline.stream, appAudioTrack, {
+					onTrackEnded: () => {
+						return cleanupDesktopAppAudio({
+							stopCapture: false,
+						});
+					},
+				});
+
+				return { kind: 'published', displayAudioTrack: undefined };
+			} catch (error) {
+				logVoice('Failed to start sidecar audio capture', {
+					error,
+				});
+				const capabilities = await desktopBridge
+					.getCapabilities()
+					.then((nextCapabilities) => normalizeDesktopCapabilities(nextCapabilities))
+					.catch(() => undefined);
+				const issueToastMessage = getDesktopAudioIssueToastMessage(capabilities, audioMode);
+				await cleanupDesktopAppAudio();
+
+				if (audioMode === ScreenAudioMode.SYSTEM && displayAudioTrack?.readyState === 'live') {
+					logVoice('Falling back to display-media loopback for system audio');
+					if (showWarnings) {
+						toast.warning(
+							issueToastMessage
+								? `${issueToastMessage} Falling back to standard system audio (without echo exclusion).`
+								: 'Sidecar audio capture failed. Falling back to standard system audio (without echo exclusion).',
+						);
+					}
+
+					return { kind: 'display-fallback', displayAudioTrack };
+				}
+
+				if (showWarnings) {
+					toast.warning(
+						issueToastMessage
+							? `${issueToastMessage} Continuing without shared audio.`
+							: `${sidecarAudioLabel} capture failed. Continuing without shared audio.`,
+					);
+				}
+
+				if (displayAudioTrack) {
+					displayAudioTrack.stop();
+					displayStream?.removeTrack(displayAudioTrack);
+				}
+
+				return { kind: 'none', displayAudioTrack: undefined };
+			}
+		},
+		[cleanupDesktopAppAudio, localScreenShareAudioProducer, publishScreenShareAudioTrack, setLocalScreenShareAudio],
+	);
+
+	const desktopAppAudioRecoveryPromiseRef = useRef<Promise<void> | undefined>(undefined);
+
+	const runDesktopAppAudioRecovery = useCallback(async (): Promise<void> => {
+		const intent = appAudioPublishIntentRef.current;
+
+		if (!intent) {
+			return;
+		}
+
+		const desktopBridge = getDesktopBridge();
+		if (!desktopBridge) {
+			logVoice('Skipping desktop app audio recovery because desktop bridge is unavailable');
+			return;
+		}
+
+		const currentScreenShareStream = localScreenShareStreamRef.current;
+		const currentScreenShareTrack = currentScreenShareStream?.getVideoTracks()[0];
+		if (!currentScreenShareStream || !currentScreenShareTrack || currentScreenShareTrack.readyState !== 'live') {
+			logVoice('Skipping desktop app audio recovery because screen share is no longer live');
+			appAudioPublishIntentRef.current = undefined;
+			return;
+		}
+
+		const currentScreenShareAudioStream = localScreenShareAudioStreamRef.current;
+		const currentScreenShareAudioTrack = currentScreenShareAudioStream?.getAudioTracks()[0];
+		const currentPipelineTrack = appAudioPipelineRef.current?.track;
+		const displayFallbackTrack =
+			currentScreenShareAudioTrack &&
+			currentScreenShareAudioTrack.readyState === 'live' &&
+			currentScreenShareAudioTrack !== currentPipelineTrack
+				? currentScreenShareAudioTrack
+				: undefined;
+
+		logVoice('Recovering desktop app audio from publish intent', {
+			sourceId: intent.captureInput.sourceId,
+			appAudioTargetId: intent.captureInput.appAudioTargetId,
+			mode: intent.audioMode === ScreenAudioMode.SYSTEM ? 'system-exclude' : 'per-app',
+			hasDisplayFallbackTrack: displayFallbackTrack !== undefined,
+		});
+
+		localScreenShareAudioProducer.current?.close();
+		localScreenShareAudioProducer.current = undefined;
+
+		await cleanupDesktopAppAudio({
+			stopCapture: true,
+			preserveCurrentAudio: false,
+		});
+
+		const captureInput = { ...intent.captureInput };
+		const nativeIngestResult = await startNativeAppAudioIngest({
+			desktopBridge,
+			captureInput,
+			audioMode: intent.audioMode,
+		});
+
+		if (nativeIngestResult === 'published' || nativeIngestResult === 'abandoned') {
+			// 'published': native owns SCREEN_AUDIO. 'abandoned': the attempt tore
+			// itself down because the intent was cleared/superseded mid-recovery.
+			// Either way do not fall back to the worklet path.
+			setLocalScreenShareAudio(undefined);
+			return;
+		}
+
+		const workletResult = await startDesktopAppAudioWorklet({
+			desktopBridge,
+			captureInput,
+			audioMode: intent.audioMode,
+			displayStream: currentScreenShareAudioStream,
+			displayAudioTrack: displayFallbackTrack,
+			showWarnings: false,
+		});
+
+		if (workletResult.kind === 'display-fallback') {
+			logVoice('Recovering desktop app audio with display-media loopback fallback');
+			await publishScreenShareAudioTrack(
+				new MediaStream([workletResult.displayAudioTrack]),
+				workletResult.displayAudioTrack,
+			);
+			return;
+		}
+
+		if (workletResult.kind === 'none') {
+			logVoice('Desktop app audio recovery completed without a recoverable audio path');
+		}
+	}, [
+		cleanupDesktopAppAudio,
+		localScreenShareAudioProducer,
+		publishScreenShareAudioTrack,
+		setLocalScreenShareAudio,
+		startDesktopAppAudioWorklet,
+		startNativeAppAudioIngest,
+	]);
+
+	// Serializes overlapping desktop app-audio recoveries. recoverTransportSession
+	// fires this fire-and-forget on every retry attempt, so a fast-failing retry can
+	// launch a second recovery while the first is still publishing. Run concurrently,
+	// the second's cleanupDesktopAppAudio() would stop the first's just-published RTP
+	// sender and close its producer while the first still reports 'published' (so it
+	// skips worklet fallback). Chaining on any in-flight recovery makes the latest
+	// attempt re-establish on top of the previous one instead of interleaving.
+	const recoverDesktopAppAudioFromIntent = useCallback((): Promise<void> => {
+		const previousRecovery = desktopAppAudioRecoveryPromiseRef.current;
+
+		const recovery = (async () => {
+			if (previousRecovery) {
+				await previousRecovery.catch(() => undefined);
+			}
+
+			await runDesktopAppAudioRecovery();
+		})().finally(() => {
+			if (desktopAppAudioRecoveryPromiseRef.current === recovery) {
+				desktopAppAudioRecoveryPromiseRef.current = undefined;
+			}
+		});
+
+		desktopAppAudioRecoveryPromiseRef.current = recovery;
+		return recovery;
+	}, [runDesktopAppAudioRecovery]);
+
 	const stopScreenShareStream = useCallback(() => {
 		logVoice('Stopping screen share stream');
 
@@ -2439,6 +3034,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		localScreenShareProducer.current = undefined;
 		localScreenShareAudioProducer.current?.close();
 		localScreenShareAudioProducer.current = undefined;
+		appAudioPublishIntentRef.current = undefined;
 		standbyDisplayAudioTrackRef.current = undefined;
 		standbyDisplayAudioStreamRef.current = undefined;
 		screenShareTrackEndedHandlerRef.current = undefined;
@@ -2528,12 +3124,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							}
 						}
 
-						let useSidecarAudio =
-							desktopBridge &&
-							desktopSelection &&
-							(audioMode === ScreenAudioMode.APP || (audioMode === ScreenAudioMode.SYSTEM && sidecarSupported));
-
-						const sidecarAudioLabel = audioMode === ScreenAudioMode.SYSTEM ? 'System audio' : 'Per-app audio';
+						const sidecarAudioMode =
+							audioMode === ScreenAudioMode.APP || (audioMode === ScreenAudioMode.SYSTEM && sidecarSupported)
+								? audioMode
+								: undefined;
+						const useSidecarAudio = desktopBridge && desktopSelection && sidecarAudioMode !== undefined;
 
 						// Always request loopback audio from getDisplayMedia in system mode
 						// so it is available as a fallback if the sidecar fails.  When the
@@ -2577,166 +3172,61 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							// Optional audio setup can continue after the preview is already live.
 							handlers.onVideoTrackStarted?.();
 
-							if (useSidecarAudio && desktopBridge && desktopSelection) {
-								try {
-									const captureInput: TStartAppAudioCaptureInput = {
-										sourceId: desktopSelection.sourceId,
-									};
+							if (useSidecarAudio && desktopBridge && desktopSelection && sidecarAudioMode) {
+								const captureInput: TStartAppAudioCaptureInput = {
+									sourceId: desktopSelection.sourceId,
+								};
 
-									if (audioMode === ScreenAudioMode.APP) {
-										captureInput.appAudioTargetId = desktopSelection.appAudioTargetId;
-									}
+								if (sidecarAudioMode === ScreenAudioMode.APP) {
+									captureInput.appAudioTargetId = desktopSelection.appAudioTargetId;
+								}
 
-									logVoice('Starting sidecar audio capture', {
-										sourceId: captureInput.sourceId,
-										appAudioTargetId: captureInput.appAudioTargetId,
-										mode: audioMode === ScreenAudioMode.SYSTEM ? 'system-exclude' : 'per-app',
-									});
-									const appAudioSession = await desktopBridge.startAppAudioCapture(captureInput);
-									logVoice('Sidecar capture started', {
-										sessionId: appAudioSession.sessionId,
-										targetId: appAudioSession.targetId,
-									});
-									const appAudioPipeline = await createDesktopAppAudioPipeline(appAudioSession, {
-										mode: 'stable',
-										logLabel: audioMode === ScreenAudioMode.SYSTEM ? 'system-audio' : 'per-app-audio',
-										insertSilenceOnDroppedFrames: true,
-									});
-									let hasReceivedSessionFrame = false;
+								appAudioPublishIntentRef.current = {
+									audioMode: sidecarAudioMode,
+									captureInput: { ...captureInput },
+								};
 
-									appAudioSessionRef.current = appAudioSession;
-									appAudioPipelineRef.current = appAudioPipeline;
+								// Prefer native RTP ingest (desktop main encodes Opus + SRTP and
+								// sends to a mediasoup PlainTransport). Falls back to the renderer
+								// worklet path on older desktop/server builds, blocked UDP, or no
+								// first media. Either way the producer surfaces as SCREEN_AUDIO.
+								const nativeIngestResult = await startNativeAppAudioIngest({
+									desktopBridge,
+									captureInput,
+									audioMode: sidecarAudioMode,
+								});
 
-									const startupTimeout = window.setTimeout(() => {
-										if (
-											hasReceivedSessionFrame ||
-											appAudioSessionRef.current?.sessionId !== appAudioSession.sessionId
-										) {
-											return;
-										}
-
-										logVoice('Sidecar produced no audio frames after startup', {
-											sessionId: appAudioSession.sessionId,
-											targetId: appAudioSession.targetId,
-										});
-										toast.warning(
-											`${sidecarAudioLabel} started but produced no audio frames. Screen video will continue without shared audio.`,
-										);
-										localScreenShareAudioProducer.current?.close();
-										localScreenShareAudioProducer.current = undefined;
-										setLocalScreenShareAudio(undefined);
-										void cleanupDesktopAppAudio({
-											stopCapture: true,
-											preserveCurrentAudio: false,
-										});
-									}, 3000);
-									appAudioStartupTimeoutRef.current = startupTimeout;
-
-									removeAppAudioFrameSubscriptionRef.current?.();
-									removeAppAudioFrameSubscriptionRef.current = desktopBridge.subscribeAppAudioFrames((frame) => {
-										if (frame.sessionId === appAudioSession.sessionId) {
-											if (!hasReceivedSessionFrame) {
-												logVoice('Received first sidecar audio frame', {
-													sessionId: frame.sessionId,
-													targetId: frame.targetId,
-												});
-											}
-
-											hasReceivedSessionFrame = true;
-
-											if (appAudioStartupTimeoutRef.current !== undefined) {
-												window.clearTimeout(appAudioStartupTimeoutRef.current);
-												appAudioStartupTimeoutRef.current = undefined;
-											}
-										}
-										appAudioPipelineRef.current?.pushFrame(frame);
-									});
-
-									removeAppAudioStatusSubscriptionRef.current?.();
-									removeAppAudioStatusSubscriptionRef.current = desktopBridge.subscribeAppAudioStatus(
-										(statusEvent: TAppAudioStatusEvent) => {
-											logVoice('Received sidecar audio status event', {
-												sessionId: statusEvent.sessionId,
-												targetId: statusEvent.targetId,
-												reason: statusEvent.reason,
-												error: statusEvent.error,
-											});
-											if (statusEvent.sessionId !== appAudioSessionRef.current?.sessionId) {
-												return;
-											}
-
-											void (async () => {
-												if (appAudioStartupTimeoutRef.current !== undefined) {
-													window.clearTimeout(appAudioStartupTimeoutRef.current);
-													appAudioStartupTimeoutRef.current = undefined;
-												}
-												toast.warning(
-													statusEvent.error
-														? `${sidecarAudioLabel} capture ended (${statusEvent.reason}): ${statusEvent.error}`
-														: `${sidecarAudioLabel} capture ended (${statusEvent.reason}). Screen video will continue without shared audio.`,
-												);
-												localScreenShareAudioProducer.current?.close();
-												localScreenShareAudioProducer.current = undefined;
-												setLocalScreenShareAudio(undefined);
-
-												await cleanupDesktopAppAudio({
-													stopCapture: false,
-													preserveCurrentAudio: false,
-												});
-											})();
-										},
-									);
-
+								if (nativeIngestResult === 'published' || nativeIngestResult === 'abandoned') {
+									// 'published': native ingest owns SCREEN_AUDIO. 'abandoned': the
+									// attempt tore itself down because the share is going away (stop or
+									// supersede mid-publish). Either way drop the display-captured audio
+									// track so it is never published, and do not fall back to the worklet
+									// path (which would republish SCREEN_AUDIO for an abandoned share).
 									if (audioTrack) {
 										audioTrack.stop();
 										stream.removeTrack(audioTrack);
 										audioTrack = undefined;
 									}
-								} catch (error) {
-									logVoice('Failed to start sidecar audio capture', {
-										error,
-									});
-									const capabilities = await desktopBridge
-										.getCapabilities()
-										.then((nextCapabilities) => normalizeDesktopCapabilities(nextCapabilities))
-										.catch(() => undefined);
-									const issueToastMessage = getDesktopAudioIssueToastMessage(capabilities, audioMode);
-									await cleanupDesktopAppAudio();
 
-									if (audioMode === ScreenAudioMode.SYSTEM) {
-										logVoice('Falling back to display-media loopback for system audio');
-										toast.warning(
-											issueToastMessage
-												? `${issueToastMessage} Falling back to standard system audio (without echo exclusion).`
-												: 'Sidecar audio capture failed. Falling back to standard system audio (without echo exclusion).',
-										);
-										useSidecarAudio = false;
-									} else {
-										toast.warning(
-											issueToastMessage
-												? `${issueToastMessage} Continuing without shared audio.`
-												: `${sidecarAudioLabel} capture failed. Continuing without shared audio.`,
-										);
+									return videoTrack;
+								}
 
-										if (audioTrack) {
-											audioTrack.stop();
-											stream.removeTrack(audioTrack);
-											audioTrack = undefined;
-										}
-									}
+								const workletResult = await startDesktopAppAudioWorklet({
+									desktopBridge,
+									captureInput,
+									audioMode: sidecarAudioMode,
+									displayStream: stream,
+									displayAudioTrack: audioTrack,
+								});
+
+								audioTrack = workletResult.displayAudioTrack;
+
+								if (workletResult.kind === 'published') {
+									return videoTrack;
 								}
 							}
 
-							if (useSidecarAudio && appAudioPipelineRef.current?.track) {
-								const appAudioTrack = appAudioPipelineRef.current.track;
-								await publishScreenShareAudioTrack(appAudioPipelineRef.current.stream, appAudioTrack, {
-									onTrackEnded: () => {
-										return cleanupDesktopAppAudio({
-											stopCapture: false,
-										});
-									},
-								});
-							} else if (audioTrack) {
+							if (audioTrack) {
 								logVoice('Obtained audio track', { audioTrack });
 								await publishScreenShareAudioTrack(new MediaStream([audioTrack]), audioTrack);
 							} else {
@@ -2752,6 +3242,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						stream?.getTracks().forEach((track) => {
 							track.stop();
 						});
+						appAudioPublishIntentRef.current = undefined;
 						standbyDisplayAudioTrackRef.current = undefined;
 						standbyDisplayAudioStreamRef.current = undefined;
 						await cleanupDesktopAppAudio();
@@ -2767,10 +3258,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			devices.screenAudioMode,
 			devices.screenFramerate,
 			devices.screenResolution,
-			localScreenShareAudioProducer,
 			publishScreenShareAudioTrack,
 			publishScreenShareTrack,
 			setLocalScreenShareAudio,
+			startDesktopAppAudioWorklet,
+			startNativeAppAudioIngest,
 		],
 	);
 
@@ -2865,7 +3357,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 		const screenShareAudioStream = localScreenShareAudioStreamRef.current;
 		const screenShareAudioTrack = screenShareAudioStream?.getAudioTracks()[0];
-		if (screenShareAudioStream && screenShareAudioTrack && screenShareAudioTrack.readyState === 'live') {
+		if (
+			!appAudioPublishIntentRef.current &&
+			screenShareAudioStream &&
+			screenShareAudioTrack &&
+			screenShareAudioTrack.readyState === 'live'
+		) {
 			const shouldCleanupDesktopAudio = appAudioPipelineRef.current?.track === screenShareAudioTrack;
 
 			tasks.push(
@@ -2992,6 +3489,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								await Promise.all(republishPlan.tasks);
 								republishedLocalMediaState = republishPlan.state;
 							}
+
+							if (appAudioPublishIntentRef.current) {
+								void recoverDesktopAppAudioFromIntent().catch((error) => {
+									logVoice('Error recovering desktop app audio after reconnect restore', { error });
+								});
+							}
 						}
 
 						startMonitoring(producerTransport.current, consumerTransport.current);
@@ -3029,6 +3532,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			producerTransport,
 			consumerTransport,
 			buildLocalMediaRepublishPlan,
+			recoverDesktopAppAudioFromIntent,
 		],
 	);
 
@@ -3158,6 +3662,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								const localMediaRepublishPlan = buildLocalMediaRepublishPlan();
 								republishTasks.push(...localMediaRepublishPlan.tasks);
 
+								if (appAudioPublishIntentRef.current) {
+									void recoverDesktopAppAudioFromIntent().catch((error) => {
+										logVoice('Error recovering desktop app audio after voice transport recovery', { error });
+									});
+								}
+
 								await withRecoveryTimeout(
 									Promise.all([
 										consumeExistingProducers(currentRtpCapabilities, undefined, recoveryJoinResult?.existingProducers),
@@ -3279,6 +3789,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		producerTransport,
 		consumerTransport,
 		publishMicTrack,
+		recoverDesktopAppAudioFromIntent,
 		resetStats,
 		rejoinVoiceSession,
 		startMonitoring,

@@ -14,6 +14,7 @@ describe('migrateDeviceSettings', () => {
 		expect(DEFAULT_DEVICE_SETTINGS.echoCancellation).toBe(true);
 		expect(DEFAULT_DEVICE_SETTINGS.noiseSuppression).toBe(true);
 		expect(DEFAULT_DEVICE_SETTINGS.wasmNoiseSuppressionEnabled).toBe(false);
+		expect(DEFAULT_DEVICE_SETTINGS.nativeAppAudioIngestEnabled).toBe(false);
 		expect(DEFAULT_DEVICE_SETTINGS.voiceFilterStrength).toBe(VoiceFilterStrength.HIGH);
 	});
 
@@ -80,6 +81,14 @@ describe('migrateDeviceSettings', () => {
 		});
 
 		expect(migrated.wasmNoiseSuppressionEnabled).toBe(true);
+	});
+
+	it('preserves explicit native app audio ingest opt-in values', () => {
+		const migrated = migrateDeviceSettings({
+			nativeAppAudioIngestEnabled: true,
+		});
+
+		expect(migrated.nativeAppAudioIngestEnabled).toBe(true);
 	});
 
 	it('preserves explicit voiceFilterStrength values', () => {

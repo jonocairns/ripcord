@@ -82,6 +82,23 @@ export type TAppAudioSession = {
 	encoding?: 'f32le_base64';
 };
 
+export type TStartAppAudioCaptureOptions = {
+	// When false, capture starts without opening the renderer worklet frame
+	// channel — used by native RTP ingest, where main consumes the PCM egress.
+	openFrameChannel?: boolean;
+};
+
+export type TAppAudioRtpTarget = {
+	ip: string;
+	port: number;
+	ssrc: number;
+	payloadType?: number;
+};
+
+export type TStartAppAudioRtpResult = {
+	srtpKeyBase64: string;
+};
+
 export type TAppAudioFrame = {
 	sessionId: string;
 	targetId: string;
@@ -193,8 +210,16 @@ export type TDesktopBridge = {
 	listShareSources: () => Promise<TDesktopShareSource[]>;
 	resetScreenSharePicker?: () => Promise<void>;
 	listAppAudioTargets: (sourceId?: string) => Promise<TDesktopAppAudioTargetsResult>;
-	startAppAudioCapture: (input: TStartAppAudioCaptureInput) => Promise<TAppAudioSession>;
+	startAppAudioCapture: (
+		input: TStartAppAudioCaptureInput,
+		options?: TStartAppAudioCaptureOptions,
+	) => Promise<TAppAudioSession>;
 	stopAppAudioCapture: (sessionId?: string) => Promise<void>;
+	// Native RTP ingest (newer desktop builds only — gate on presence). Starts the
+	// main-process Opus/SRTP sender and returns the client SRTP key to relay to the
+	// server via voice.produceAppAudio.
+	startAppAudioRtp?: (target: TAppAudioRtpTarget) => Promise<TStartAppAudioRtpResult>;
+	stopAppAudioRtp?: () => Promise<void>;
 	setGlobalPushKeybinds: (input: TDesktopPushKeybindsInput) => Promise<TGlobalPushKeybindRegistrationResult>;
 	subscribeAppAudioFrames: (cb: (frame: TAppAudioFrame | TAppAudioPcmFrame) => void) => () => void;
 	subscribeAppAudioStatus: (cb: (statusEvent: TAppAudioStatusEvent) => void) => () => void;

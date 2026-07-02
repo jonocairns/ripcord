@@ -1,9 +1,11 @@
 import { t } from '../../utils/trpc';
+import { abortAppAudioIngestRoute } from './abort-app-audio-ingest';
 import { closeConsumerRoute } from './close-consumer';
 import { closeProducerRoute } from './close-producer';
 import { connectConsumerTransportRoute } from './connect-consumer-transport';
 import { connectProducerTransportRoute } from './connect-producer-transport';
 import { consumeRoute } from './consume';
+import { createAppAudioIngestRoute } from './create-app-audio-ingest';
 import { createConsumerTransportRoute } from './create-consumer-transport';
 import { createProducerTransportRoute } from './create-producer-transport';
 import {
@@ -24,6 +26,7 @@ import { getProducersRoute } from './get-producers';
 import { joinVoiceRoute } from './join';
 import { leaveVoiceRoute } from './leave';
 import { produceRoute } from './produce';
+import { produceAppAudioRoute } from './produce-app-audio';
 import { voiceReconnectLabRouter } from './reconnect-lab';
 import { restartConsumerIceRoute } from './restart-consumer-ice';
 import { restartProducerIceRoute } from './restart-producer-ice';
@@ -46,6 +49,9 @@ export const voiceRouter = t.router({
 	resumeConsumer: resumeConsumerRoute,
 	closeProducer: closeProducerRoute,
 	produce: produceRoute,
+	createAppAudioIngest: createAppAudioIngestRoute,
+	produceAppAudio: produceAppAudioRoute,
+	abortAppAudioIngest: abortAppAudioIngestRoute,
 	consume: consumeRoute,
 	restartProducerIce: restartProducerIceRoute,
 	restartConsumerIce: restartConsumerIceRoute,
