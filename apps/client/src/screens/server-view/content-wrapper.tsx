@@ -70,7 +70,7 @@ const ContentWrapper = memo(() => {
 		);
 	}
 
-	return <main className="chat-surface relative z-10 flex min-h-0 min-w-0 flex-1 flex-col">{content}</main>;
+	return <main className="flex flex-1 flex-col bg-background relative min-w-0 min-h-0">{content}</main>;
 });
 
 export { ContentWrapper };
