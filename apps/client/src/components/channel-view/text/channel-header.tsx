@@ -12,7 +12,7 @@ const ChannelHeader = memo(({ channelId }: TChannelHeaderProps) => {
 	if (!channel) return null;
 
 	return (
-		<div className="elevated-bar flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
+		<div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
 			<Hash className="h-5 w-5 shrink-0 text-muted-foreground" />
 			<span className="shrink-0 truncate font-semibold text-foreground">{channel.name}</span>
 			{channel.topic && (
