@@ -171,6 +171,8 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 	const isCurrentClient = (client: TTrackedWebSocket) =>
 		client.token === token && client.clientInstanceId === clientInstanceId;
 
+	const getClientInstanceId = () => connectionWs?.clientInstanceId ?? clientInstanceId;
+
 	const getOwnWs = () => {
 		if (!wss) return undefined;
 		if (connectionWs) return connectionWs;
@@ -230,11 +232,12 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 	};
 
 	const setWsVoiceChannelId = (channelId: number | undefined) => {
+		if (channelId !== undefined) {
+			clearPendingVoiceDisconnect(getClientInstanceId(), decodedUser.id);
+		}
+
 		if (connectionWs) {
 			connectionWs.currentVoiceChannelId = channelId;
-			if (channelId !== undefined) {
-				clearPendingVoiceDisconnect(connectionWs.clientInstanceId, decodedUser.id);
-			}
 			return;
 		}
 
@@ -244,9 +247,6 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 
 		if (ws) {
 			ws.currentVoiceChannelId = channelId;
-			if (channelId !== undefined) {
-				clearPendingVoiceDisconnect(ws.clientInstanceId, decodedUser.id);
-			}
 		}
 	};
 
@@ -306,8 +306,12 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 		userId: decodedUser.id,
 		handshakeHash: '',
 		currentVoiceChannelId: undefined,
-		getPendingVoiceReconnectChannelId: () =>
-			getPendingVoiceReconnectChannelId(connectionWs?.clientInstanceId ?? clientInstanceId, decodedUser.id),
+		getPendingVoiceReconnectChannelId: () => getPendingVoiceReconnectChannelId(getClientInstanceId(), decodedUser.id),
+		// The tracked WS field is populated asynchronously (createContext / first
+		// message), so during a reconnect race getOwnWs()?.clientInstanceId can be
+		// missing. The connection params always carry it, so this is the reliable
+		// source for identifying which client session a request belongs to.
+		getClientInstanceId,
 		hasPermission,
 		needsPermission,
 		hasChannelPermission,

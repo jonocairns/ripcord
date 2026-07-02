@@ -8,7 +8,12 @@ import { channels } from '../../db/schema';
 import { appRouter } from '../../routers';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { pubsub } from '../../utils/pubsub';
-import { resetVoiceDisconnectGraceForTests, schedulePendingVoiceDisconnect } from '../../utils/voice-disconnect-grace';
+import {
+	clearPendingVoiceDisconnect,
+	getPendingVoiceReconnectChannelId,
+	resetVoiceDisconnectGraceForTests,
+	schedulePendingVoiceDisconnect,
+} from '../../utils/voice-disconnect-grace';
 import { VOICE_SESSION_OWNED_ELSEWHERE, VOICE_SESSION_WRONG_CHANNEL } from '../voice/restore-or-join';
 
 const PRIMARY_VOICE_CHANNEL_ID = 2;
@@ -67,12 +72,21 @@ const attachTrackedSession = (
 		clientInstanceId: string;
 		currentVoiceChannelId: number | undefined;
 	}>,
+	opts?: { connectionClientInstanceId?: string },
 ) => {
 	Reflect.set(ctx, 'getOwnWs', () => session);
 	Reflect.set(ctx, 'getUserWss', () => allSessions);
+	// getClientInstanceId reads the connection params, which stay populated even
+	// when the tracked WS field (session.clientInstanceId) has not been set yet —
+	// the handshake race. connectionClientInstanceId lets a test model that skew.
+	const getClientInstanceId = () => opts?.connectionClientInstanceId ?? session.clientInstanceId;
+	Reflect.set(ctx, 'getClientInstanceId', getClientInstanceId);
 	Reflect.set(ctx, 'setWsVoiceChannelId', (channelId: number | undefined) => {
 		session.currentVoiceChannelId = channelId;
 		ctx.currentVoiceChannelId = channelId;
+		if (channelId !== undefined) {
+			clearPendingVoiceDisconnect(getClientInstanceId(), ctx.user.id);
+		}
 	});
 };
 
@@ -519,6 +533,86 @@ describe('voice.restoreOrJoin', () => {
 			).rejects.toThrow(VOICE_SESSION_OWNED_ELSEWHERE);
 
 			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeDefined();
+		} finally {
+			openSessions.length = 0;
+		}
+	});
+
+	test('restores its own pending grace seat when the tracked socket has not populated its clientInstanceId yet', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+
+		const mockedToken = await getMockedToken(1);
+		const ctxA = await createMockContext({
+			customToken: mockedToken,
+		});
+		const ctxB = await createMockContext({
+			customToken: mockedToken,
+		});
+		const sessionA = {
+			clientInstanceId: 'session-a',
+			currentVoiceChannelId: undefined as number | undefined,
+		};
+		// The reconnected socket is the same client instance reconnecting, but its
+		// tracked WS field has not been populated yet (handshake race). The
+		// connection params still carry 'session-a', so restoreOrJoin must resolve
+		// the id via ctx.getClientInstanceId() and recognise the pending grace seat
+		// as its own instead of rejecting the reconnect with a terminal CONFLICT.
+		const sessionB = {
+			clientInstanceId: undefined as unknown as string,
+			currentVoiceChannelId: undefined as number | undefined,
+		};
+		const openSessions = [sessionA];
+
+		attachTrackedSession(ctxA, sessionA, openSessions);
+		attachTrackedSession(ctxB, sessionB, [sessionB], { connectionClientInstanceId: 'session-a' });
+
+		try {
+			const callerA = appRouter.createCaller(ctxA);
+			const callerB = appRouter.createCaller(ctxB);
+			const handshakeA = await callerA.others.handshake();
+			const handshakeB = await callerB.others.handshake();
+
+			await callerA.others.joinServer({
+				handshakeHash: handshakeA.handshakeHash,
+			});
+			await callerB.others.joinServer({
+				handshakeHash: handshakeB.handshakeHash,
+			});
+
+			await callerA.voice.join({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: false,
+					soundMuted: false,
+				},
+			});
+
+			openSessions.length = 0;
+
+			let finalized = false;
+			schedulePendingVoiceDisconnect({
+				clientInstanceId: sessionA.clientInstanceId,
+				userId: 1,
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				finalize: () => {
+					finalized = true;
+				},
+			});
+			expect(getPendingVoiceReconnectChannelId(sessionA.clientInstanceId, 1)).toBe(PRIMARY_VOICE_CHANNEL_ID);
+
+			const result = await callerB.voice.restoreOrJoin({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: false,
+					soundMuted: false,
+				},
+				reconnectAttemptId: 'attempt-pending-grace-restore',
+			});
+
+			expect(result.channelUsers.some((entry) => entry.userId === 1)).toBe(true);
+			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeDefined();
+			expect(getPendingVoiceReconnectChannelId(sessionA.clientInstanceId, 1)).toBeUndefined();
+			expect(finalized).toBe(false);
 		} finally {
 			openSessions.length = 0;
 		}

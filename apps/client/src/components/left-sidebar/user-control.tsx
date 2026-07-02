@@ -107,7 +107,7 @@ const UserControl = memo(() => {
 	return (
 		<div
 			className={cn(
-				'flex items-center justify-between gap-2 px-3 py-3',
+				'flex h-14 items-center justify-between gap-2 px-3',
 				currentVoiceChannelId !== undefined && 'border-t border-white/6',
 			)}
 		>

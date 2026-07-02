@@ -55,7 +55,7 @@ const CategorySettings = memo(({ close, categoryId }: TCategorySettingsProps) =>
 
 	return (
 		<ServerScreenLayout close={close} title="Category Settings">
-			<div className="mx-auto flex h-full w-full max-w-7xl gap-6">
+			<div className="mx-auto flex w-full max-w-7xl gap-6">
 				<aside className="w-full max-w-xs shrink-0 py-6">
 					<div className="space-y-4">
 						<div className="px-2">

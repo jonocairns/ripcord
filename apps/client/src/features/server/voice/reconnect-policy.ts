@@ -15,19 +15,19 @@ class VoiceReconnectTimeoutError extends Error {
 type TVoiceReconnectErrorClassification =
 	| {
 			kind: 'retry';
-			reason: 'network-error' | 'rate-limited' | 'server-error' | 'timeout' | 'ws-1013' | 'unknown-error';
+			reason:
+				| 'network-error'
+				| 'rate-limited'
+				| 'server-error'
+				| 'timeout'
+				| 'ws-1013'
+				| 'unauthorized'
+				| 'unknown-error';
 			countsAsUnknown: boolean;
 	  }
 	| {
 			kind: 'terminal';
-			reason:
-				| 'bad-request'
-				| 'unauthorized'
-				| 'forbidden'
-				| 'not-found'
-				| 'restore-conflict'
-				| 'unsupported-device'
-				| 'unknown-error-cap';
+			reason: 'bad-request' | 'forbidden' | 'not-found' | 'restore-conflict' | 'unsupported-device' | 'unknown-error-cap';
 			clearReason: TClearReason;
 	  };
 
@@ -49,10 +49,16 @@ const classifyVoiceReconnectError = (
 				clearReason: 'restore-terminal-error',
 			};
 		case 'UNAUTHORIZED':
+			// A reconnected socket is unauthenticated until joinServer re-auths it.
+			// If a restore attempt still lands on an unauthenticated socket — e.g. the
+			// WS dropped again mid-recovery and flushed the mutation onto the fresh
+			// socket before its joinServer completed — that is transient, not fatal.
+			// Retry and let the loop's auth gate + backoff pick it up once joinServer
+			// re-authenticates, rather than terminally dropping the user from voice.
 			return {
-				kind: 'terminal',
+				kind: 'retry',
 				reason: 'unauthorized',
-				clearReason: 'restore-terminal-error',
+				countsAsUnknown: false,
 			};
 		case 'FORBIDDEN':
 			return {

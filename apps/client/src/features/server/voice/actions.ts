@@ -8,7 +8,7 @@ import {
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { toast } from 'sonner';
 import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-card-controller';
-import { logDebug } from '@/helpers/browser-logger';
+import { logDebug, logVoice, reportError } from '@/helpers/browser-logger';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient } from '@/lib/trpc';
@@ -79,10 +79,33 @@ const clearOwnVoiceChannelStateAndCleanupProvider = (): void => {
 };
 
 const clearOwnVoiceSessionAfterReconnectFailure = (reason: TClearReason): void => {
+	const wasInVoice = currentVoiceChannelIdSelector(useServerStore.getState()) !== undefined;
+
+	// Always surface why recovery gave up. Previously this only went through
+	// logDebug (window.DEBUG-gated) and Sentry saw nothing, so a silent voice
+	// drop left no trace in the logs the user actually captures.
+	logVoice('Voice reconnect recovery gave up', { reason, wasInVoice });
+	reportError('Voice reconnect recovery gave up', undefined, { reason, wasInVoice });
+
 	clearVoiceReconnectRecovery(reason);
 	clearOwnVoiceChannelState();
 	resetVoiceSwitchState();
 	runVoiceProviderCleanup();
+
+	// Don't let the drop be silent: without this the mic/audio just stopped with
+	// no sound and no UI, so the user had no idea they'd been dropped.
+	if (wasInVoice) {
+		playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+		toast.error(getReconnectFailureToast(reason));
+	}
+};
+
+const getReconnectFailureToast = (reason: TClearReason): string => {
+	if (reason === 'restore-conflict') {
+		return 'Your voice session was taken over by another connection. Rejoin to continue.';
+	}
+
+	return 'Lost the voice connection and could not automatically rejoin. Rejoin to continue.';
 };
 
 const channelHasAvailableStreams = (channelId: number, opts: { excludeUserId?: number } = {}): boolean => {

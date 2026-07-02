@@ -146,7 +146,7 @@ const RightSidebar = memo(({ className, isOpen = true, isCollapsed = false, onTo
 				<>
 					<div
 						className={cn(
-							'flex h-12 items-center justify-between border-b border-border/70 px-3',
+							'elevated-bar flex h-12 items-center justify-between border-b border-border/70 px-3',
 							isCollapsed && 'lg:px-0 lg:justify-center',
 						)}
 					>

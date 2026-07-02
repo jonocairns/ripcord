@@ -160,7 +160,7 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
 				)}
 				onMouseDown={handleResizeStart}
 			/>
-			<div className="flex h-12 w-full items-center border-b border-sidebar-border px-2">
+			<div className="elevated-bar flex h-12 w-full items-center border-b border-sidebar-border px-2">
 				{hasServerActions ? (
 					<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
 						<DropdownMenuTrigger asChild>
@@ -209,7 +209,7 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
 				<Categories />
 			</div>
 			<DesktopUpdateCallout />
-			<div className="border-t border-sidebar-border bg-[#171a1f]/95">
+			<div className="border-t border-sidebar-border bg-[oklch(0.145_0.012_258)]">
 				<VoiceControl />
 				<UserControl />
 			</div>
