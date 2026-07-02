@@ -24,19 +24,13 @@ const ContentWrapper = memo(() => {
 	} else {
 		content = (
 			<>
-				<div
-					aria-hidden="true"
-					className="pointer-events-none absolute inset-0 hidden items-center justify-center overflow-hidden md:flex"
-				>
-					<div className="relative flex items-center justify-center">
-						<div className="absolute h-80 w-80 rounded-full bg-primary/5 blur-3xl" />
-						<img
-							src={getPublicAssetUrl('logo.webp')}
-							alt=""
-							className="h-56 w-56 select-none object-contain opacity-[0.06] saturate-0 brightness-[1.35]"
-							draggable={false}
-						/>
-					</div>
+				<div className="pointer-events-none absolute inset-0 hidden select-none items-center justify-center overflow-hidden md:flex">
+					<img
+						src={getPublicAssetUrl('logo.webp')}
+						alt=""
+						className="h-24 w-24 object-contain opacity-25 saturate-0"
+						draggable={false}
+					/>
 				</div>
 
 				<div className="flex h-full flex-col items-center justify-center gap-6 p-8 text-center md:hidden">
