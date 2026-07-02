@@ -2260,9 +2260,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		async ({
 			desktopBridge,
 			captureInput,
+			audioMode,
 		}: {
 			desktopBridge: TDesktopBridge;
 			captureInput: TStartAppAudioCaptureInput;
+			audioMode: ScreenAudioMode.APP | ScreenAudioMode.SYSTEM;
 		}): Promise<'published' | 'abandoned' | 'fallback'> => {
 			const startAppAudioRtp = desktopBridge.startAppAudioRtp;
 			const stopAppAudioRtp = desktopBridge.stopAppAudioRtp;
@@ -2283,6 +2285,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			// tear down while we remain the current attempt.
 			const attemptGeneration = ++nativeAppAudioIngestGenerationRef.current;
 			const ownsCurrentAttempt = () => nativeAppAudioIngestGenerationRef.current === attemptGeneration;
+			const hasPublishIntent = () => appAudioPublishIntentRef.current !== undefined;
+			const ownsPublishIntent = () => ownsCurrentAttempt() && hasPublishIntent();
+			const nativeAudioLabel = audioMode === ScreenAudioMode.SYSTEM ? 'System audio' : 'Per-app audio';
 
 			let captureStarted = false;
 			// Captured from this attempt's own session/ingest rather than read from
@@ -2325,6 +2330,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				}
 
 				if (ownsGlobalState) {
+					removeAppAudioStatusSubscriptionRef.current?.();
+					removeAppAudioStatusSubscriptionRef.current = undefined;
 					appAudioSessionRef.current = undefined;
 					nativeAppAudioIngestActiveRef.current = false;
 				}
@@ -2336,12 +2343,63 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				// Capture without the renderer worklet frame channel: the desktop main
 				// process consumes the PCM egress and feeds the RTP sender directly.
 				const session = await desktopBridge.startAppAudioCapture(captureInput, { openFrameChannel: false });
-				appAudioSessionRef.current = session;
 				attemptSessionId = session.sessionId;
 				captureStarted = true;
+				if (!ownsPublishIntent()) {
+					logVoice('Native app audio ingest abandoned after capture; tearing down', {
+						sessionId: session.sessionId,
+						superseded: !ownsCurrentAttempt(),
+					});
+					await teardownNativeAttempt();
+					return 'abandoned';
+				}
+
+				appAudioSessionRef.current = session;
+				removeAppAudioStatusSubscriptionRef.current?.();
+				removeAppAudioStatusSubscriptionRef.current = desktopBridge.subscribeAppAudioStatus(
+					(statusEvent: TAppAudioStatusEvent) => {
+						logVoice('Received native app audio status event', {
+							sessionId: statusEvent.sessionId,
+							targetId: statusEvent.targetId,
+							reason: statusEvent.reason,
+							error: statusEvent.error,
+						});
+						if (
+							statusEvent.sessionId !== session.sessionId ||
+							statusEvent.sessionId !== appAudioSessionRef.current?.sessionId ||
+							!nativeAppAudioIngestActiveRef.current
+						) {
+							return;
+						}
+
+						void (async () => {
+							toast.warning(
+								statusEvent.error
+									? `${nativeAudioLabel} capture ended (${statusEvent.reason}): ${statusEvent.error}`
+									: `${nativeAudioLabel} capture ended (${statusEvent.reason}). Screen video will continue without shared audio.`,
+							);
+							localScreenShareAudioProducer.current?.close();
+							localScreenShareAudioProducer.current = undefined;
+							setLocalScreenShareAudio(undefined);
+
+							await cleanupDesktopAppAudio({
+								stopCapture: false,
+								preserveCurrentAudio: false,
+							});
+						})();
+					},
+				);
 
 				const ingest = await getTRPCClient().voice.createAppAudioIngest.mutate();
 				attemptTransportId = ingest.id;
+				if (!ownsPublishIntent()) {
+					logVoice('Native app audio ingest abandoned after ingest allocation; tearing down', {
+						transportId: ingest.id,
+						superseded: !ownsCurrentAttempt(),
+					});
+					await teardownNativeAttempt();
+					return 'abandoned';
+				}
 
 				const { srtpKeyBase64 } = await startAppAudioRtp({
 					ip: ingest.ip,
@@ -2349,6 +2407,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					ssrc: ingest.ssrc,
 					payloadType: ingest.rtpParameters.codecs?.[0]?.payloadType,
 				});
+				if (!ownsPublishIntent()) {
+					logVoice('Native app audio ingest abandoned after RTP sender start; tearing down', {
+						transportId: ingest.id,
+						superseded: !ownsCurrentAttempt(),
+					});
+					await teardownNativeAttempt();
+					return 'abandoned';
+				}
 
 				const result = await getTRPCClient().voice.produceAppAudio.mutate({
 					transportId: ingest.id,
@@ -2366,7 +2432,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					// until the line below, so committing here would strand a live
 					// SCREEN_AUDIO producer plus a running RTP sender/UDP socket that the
 					// stop-path cleanup already skipped. Tear our own attempt down instead.
-					if (!ownsCurrentAttempt() || !appAudioPublishIntentRef.current) {
+					if (!ownsPublishIntent()) {
 						logVoice('Native app audio ingest abandoned after produce; tearing down', {
 							producerId: result.producerId,
 							superseded: !ownsCurrentAttempt(),
@@ -2407,7 +2473,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			return 'fallback';
 		},
-		[devices.nativeAppAudioIngestEnabled],
+		[
+			cleanupDesktopAppAudio,
+			devices.nativeAppAudioIngestEnabled,
+			localScreenShareAudioProducer,
+			setLocalScreenShareAudio,
+		],
 	);
 
 	const startDesktopAppAudioWorklet = useCallback(
@@ -2641,6 +2712,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		const nativeIngestResult = await startNativeAppAudioIngest({
 			desktopBridge,
 			captureInput,
+			audioMode: intent.audioMode,
 		});
 
 		if (nativeIngestResult === 'published' || nativeIngestResult === 'abandoned') {
@@ -2880,6 +2952,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								const nativeIngestResult = await startNativeAppAudioIngest({
 									desktopBridge,
 									captureInput,
+									audioMode: sidecarAudioMode,
 								});
 
 								if (nativeIngestResult === 'published' || nativeIngestResult === 'abandoned') {

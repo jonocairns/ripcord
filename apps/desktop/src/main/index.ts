@@ -485,6 +485,8 @@ const createMainWindow = () => {
 			reason: details.reason,
 			exitCode: details.exitCode,
 		});
+		stopAppAudioRtpSender();
+		disposeAppAudioFrameEgressPort();
 	});
 
 	// A renderer can hang without crashing (so render-process-gone never fires):

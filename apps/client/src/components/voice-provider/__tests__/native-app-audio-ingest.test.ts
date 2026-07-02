@@ -99,6 +99,100 @@ describe('startNativeAppAudioIngest produce/commit', () => {
 	});
 });
 
+type TNativeAttemptDeps = {
+	startCapture: () => Promise<{ sessionId: string }>;
+	setSession: () => void;
+	createIngest: () => Promise<{ id: string }>;
+	startRtp: () => Promise<void>;
+	produce: () => Promise<TProduceResult>;
+	setNativeActive: () => void;
+	teardownNativeAttempt: () => Promise<void>;
+	ownsCurrentAttempt: () => boolean;
+	hasPublishIntent: () => boolean;
+};
+
+// Mirror of the native setup gates before produceAppAudio. Every awaited step
+// must re-check ownership before mutating the next shared resource.
+const runNativeAttemptSetup = async (deps: TNativeAttemptDeps): Promise<'published' | 'abandoned' | 'fallback'> => {
+	const ownsPublishIntent = () => deps.ownsCurrentAttempt() && deps.hasPublishIntent();
+
+	await deps.startCapture();
+	if (!ownsPublishIntent()) {
+		await deps.teardownNativeAttempt();
+		return 'abandoned';
+	}
+
+	deps.setSession();
+	await deps.createIngest();
+	if (!ownsPublishIntent()) {
+		await deps.teardownNativeAttempt();
+		return 'abandoned';
+	}
+
+	await deps.startRtp();
+	if (!ownsPublishIntent()) {
+		await deps.teardownNativeAttempt();
+		return 'abandoned';
+	}
+
+	return runProduceAndCommit(deps);
+};
+
+const makeAttemptDeps = (overrides: Partial<TNativeAttemptDeps> = {}): TNativeAttemptDeps => ({
+	startCapture: mock(() => Promise.resolve({ sessionId: 'session-1' })),
+	setSession: mock(() => {}),
+	createIngest: mock(() => Promise.resolve({ id: 'transport-1' })),
+	startRtp: mock(() => Promise.resolve()),
+	produce: mock(() => Promise.resolve<TProduceResult>({ producerId: 'producer-1' })),
+	setNativeActive: mock(() => {}),
+	teardownNativeAttempt: mock(() => Promise.resolve()),
+	ownsCurrentAttempt: () => true,
+	hasPublishIntent: () => true,
+	...overrides,
+});
+
+describe('startNativeAppAudioIngest setup gates', () => {
+	it('abandons before storing the session when capture resolves after the attempt is superseded', async () => {
+		const deps = makeAttemptDeps({ ownsCurrentAttempt: () => false });
+
+		expect(await runNativeAttemptSetup(deps)).toBe('abandoned');
+		expect((deps.setSession as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
+		expect((deps.createIngest as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
+		expect((deps.teardownNativeAttempt as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+	});
+
+	it('abandons before starting RTP when ingest allocation resolves after intent is cleared', async () => {
+		let intent = true;
+		const deps = makeAttemptDeps({
+			createIngest: mock(() => {
+				intent = false;
+				return Promise.resolve({ id: 'transport-1' });
+			}),
+			hasPublishIntent: () => intent,
+		});
+
+		expect(await runNativeAttemptSetup(deps)).toBe('abandoned');
+		expect((deps.startRtp as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
+		expect((deps.produce as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
+		expect((deps.teardownNativeAttempt as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+	});
+
+	it('abandons before produce when RTP start resolves after a newer attempt takes over', async () => {
+		let ownsAttempt = true;
+		const deps = makeAttemptDeps({
+			startRtp: mock(() => {
+				ownsAttempt = false;
+				return Promise.resolve();
+			}),
+			ownsCurrentAttempt: () => ownsAttempt,
+		});
+
+		expect(await runNativeAttemptSetup(deps)).toBe('abandoned');
+		expect((deps.produce as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
+		expect((deps.teardownNativeAttempt as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+	});
+});
+
 // Mirror of the serialization wrapper that chains overlapping recoveries so a
 // retry-fired recovery never interleaves its cleanup with a sibling's publish.
 const makeSerializedRecovery = () => {
