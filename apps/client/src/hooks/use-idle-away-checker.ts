@@ -1,10 +1,12 @@
 import { type TUserPresenceStatus, UserStatus } from '@sharkord/shared';
 import { useEffect, useRef } from 'react';
+import { toast } from 'sonner';
 import { currentVoiceChannelIdSelector } from '@/features/server/channels/selectors';
 import { useServerStore } from '@/features/server/slice';
 import { updateUser } from '@/features/server/users/actions';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
+import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 
@@ -88,6 +90,8 @@ export const useIdleAwayChecker = () => {
 
 			afkKickArmedRef.current = false;
 			afkKickInFlightRef.current = true;
+			logVoice('AFK auto-leave triggered', { idleMs, channelId: currentChannelId });
+			toast.info('Disconnected from voice after an hour of inactivity.');
 			try {
 				await leaveVoice();
 			} finally {
