@@ -187,6 +187,9 @@ export const removeUserFromVoiceChannel = (
 			captureVoiceReconnectIntentForCurrentSession();
 			clearOwnVoiceChannelState();
 		} else {
+			// A locally initiated leave clears the channel state before the server
+			// echo arrives, so reaching here means the server removed us.
+			logVoice('Removed from voice channel by server', { channelId });
 			playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
 			clearOwnVoiceChannelStateAndCleanupProvider();
 		}
@@ -503,6 +506,7 @@ export const handleVoiceSessionReplaced = (payload?: { channelId: number }): voi
 		return;
 	}
 
+	logVoice('Voice session replaced by another connection', { channelId: currentChannelId });
 	clearVoiceReconnectRecovery('session-replaced');
 	resetVoiceSwitchState();
 	clearOwnVoiceChannelStateAndCleanupProvider();
