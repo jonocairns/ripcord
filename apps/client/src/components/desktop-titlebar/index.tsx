@@ -9,7 +9,7 @@ const TitlebarButton = ({ className, ...props }: ComponentProps<'button'>) => (
 	<button
 		type="button"
 		className={cn(
-			'inline-flex h-8 w-[2.875rem] cursor-default items-center justify-center border-0 bg-transparent text-[rgb(114,118,125)] transition-[background-color,color] duration-[140ms] ease-in-out [-webkit-app-region:no-drag] hover:bg-white/[0.07] hover:text-[rgb(220,222,225)] active:bg-white/[0.12]',
+			'inline-flex h-8 w-[2.875rem] cursor-default items-center justify-center border-0 bg-transparent text-muted-foreground transition-[background-color,color] duration-[140ms] ease-in-out [-webkit-app-region:no-drag] hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.12]',
 			className,
 		)}
 		{...props}
@@ -63,12 +63,12 @@ const DesktopTitlebar = memo(() => {
 	}
 
 	return (
-		<div className="flex h-8 shrink-0 select-none items-stretch justify-between bg-[rgb(32,34,37)] text-slate-100">
+		<div className="flex h-8 shrink-0 select-none items-stretch justify-between bg-titlebar text-sidebar-foreground">
 			<div
 				className="flex min-w-0 flex-1 items-center gap-2.5 px-3.5 [-webkit-app-region:drag]"
 				onDoubleClick={handleToggleMaximize}
 			>
-				<span className="min-w-0 truncate text-[0.6875rem] font-black uppercase tracking-[0.06em] text-[rgb(114,118,125)]">
+				<span className="min-w-0 truncate text-[0.6875rem] font-black uppercase tracking-[0.06em] text-muted-foreground">
 					Ripcord
 				</span>
 			</div>
@@ -91,7 +91,7 @@ const DesktopTitlebar = memo(() => {
 					)}
 				</TitlebarButton>
 				<TitlebarButton
-					className="hover:bg-[rgb(237,66,69)] hover:text-white"
+					className="hover:bg-destructive hover:text-white"
 					aria-label="Close window"
 					onClick={handleClose}
 				>

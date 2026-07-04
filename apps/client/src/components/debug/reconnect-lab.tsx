@@ -232,7 +232,7 @@ const ReconnectLab = () => {
 						{currentVoiceChannelId === undefined ? 'not in voice' : `voice #${currentVoiceChannelId}`}
 					</p>
 					{offlineSimulationActive ? (
-						<p className="text-xs text-amber-300">
+						<p className="text-xs text-warning">
 							Synthetic offline active for about {formatDurationSeconds(offlineSimulationRemainingMs)}s
 						</p>
 					) : null}

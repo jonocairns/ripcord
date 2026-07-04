@@ -38,7 +38,7 @@ const resolveCalloutContent = (status: TDesktopUpdateStatus): TCalloutContent | 
 			description: status.availableVersion
 				? `Version ${status.availableVersion} is available to download.`
 				: 'A new version is available to download.',
-			icon: <Download className="h-4 w-4 text-emerald-500" />,
+			icon: <Download className="h-4 w-4 text-success" />,
 			toneClassName: 'bg-card',
 			pulseTitleClassName: 'animate-pulse',
 		};

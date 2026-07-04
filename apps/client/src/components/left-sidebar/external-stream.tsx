@@ -27,8 +27,8 @@ const ExternalStream = memo(({ title, tracks, pluginId, avatarUrl }: TExternalSt
 			<span className="flex-1 truncate text-sm text-foreground/80">{title}</span>
 
 			<div className="flex items-center gap-1 opacity-60">
-				{hasVideo && <Video className="h-3 w-3 text-blue-500" />}
-				{hasAudio && <Headphones className="h-3 w-3 text-green-500" />}
+				{hasVideo && <Video className="h-3 w-3 text-live-video" />}
+				{hasAudio && <Headphones className="h-3 w-3 text-success" />}
 			</div>
 		</div>
 	);

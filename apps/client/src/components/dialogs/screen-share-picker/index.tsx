@@ -42,8 +42,8 @@ type TScreenSharePickerDialogProps = TDialogBaseProps & {
 };
 
 const issueAlertClassNameBySeverity = {
-	info: 'border-blue-200/70 bg-blue-500/10 text-blue-100',
-	warning: 'border-amber-300/40 bg-amber-500/10 text-amber-100',
+	info: 'border-info/30 bg-info/10 text-info',
+	warning: 'border-warning/40 bg-warning/10 text-warning',
 	error: 'border-destructive/40 bg-destructive/10 text-destructive',
 } as const;
 
@@ -500,7 +500,7 @@ const ScreenSharePickerDialog = memo(
 								)}
 
 								{!loadingAppAudioTargets && appAudioTargetsResult.warning && appAudioTargetsResult.warning.trim() && (
-									<p className="text-xs text-amber-300">{appAudioTargetsResult.warning}</p>
+									<p className="text-xs text-warning">{appAudioTargetsResult.warning}</p>
 								)}
 
 								{isDisplaySource ? (

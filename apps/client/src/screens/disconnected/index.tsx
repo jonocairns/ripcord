@@ -32,7 +32,7 @@ const Disconnected = memo(({ info }: TDisconnectedProps) => {
 
 		if (code === DisconnectCode.KICKED) {
 			return {
-				icon: <AlertCircle className="h-8 w-8 text-yellow-500" />,
+				icon: <AlertCircle className="h-8 w-8 text-warning" />,
 				title: 'You have been kicked',
 				message: info.reason || 'No reason provided.',
 				canReconnect: true,
@@ -42,7 +42,7 @@ const Disconnected = memo(({ info }: TDisconnectedProps) => {
 
 		if (code === DisconnectCode.BANNED) {
 			return {
-				icon: <Gavel className="h-8 w-8 text-red-500" />,
+				icon: <Gavel className="h-8 w-8 text-destructive" />,
 				title: 'You have been banned',
 				message: info.reason || 'No reason provided.',
 				canReconnect: false,
@@ -52,7 +52,7 @@ const Disconnected = memo(({ info }: TDisconnectedProps) => {
 
 		if (code === DisconnectCode.SERVER_SHUTDOWN) {
 			return {
-				icon: <WifiOff className="h-8 w-8 text-gray-500" />,
+				icon: <WifiOff className="h-8 w-8 text-muted-foreground" />,
 				title: 'Server restarting',
 				message: info.reason || 'The server is shutting down or restarting. Reconnect will resume automatically.',
 				canReconnect: true,
@@ -62,7 +62,7 @@ const Disconnected = memo(({ info }: TDisconnectedProps) => {
 
 		if (isReconnectPausedDisconnectCode(code)) {
 			return {
-				icon: <AlertCircle className="h-8 w-8 text-yellow-500" />,
+				icon: <AlertCircle className="h-8 w-8 text-warning" />,
 				title: 'Reconnect paused',
 				message: info.reason || 'Server rejected reconnect attempts.',
 				canReconnect: true,
@@ -71,7 +71,7 @@ const Disconnected = memo(({ info }: TDisconnectedProps) => {
 		}
 
 		return {
-			icon: <WifiOff className="h-8 w-8 text-gray-500" />,
+			icon: <WifiOff className="h-8 w-8 text-muted-foreground" />,
 			title: 'Connection lost',
 			message: 'Lost connection to the server unexpectedly.',
 			canReconnect: true,

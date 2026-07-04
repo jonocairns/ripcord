@@ -531,7 +531,7 @@ const TwoFactor = memo(() => {
 			<CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 				<div className="flex items-center gap-3">
 					{enabled ? (
-						<ShieldCheck className="h-5 w-5 text-green-500" />
+						<ShieldCheck className="h-5 w-5 text-success" />
 					) : (
 						<ShieldOff className="h-5 w-5 text-muted-foreground" />
 					)}

@@ -31,7 +31,7 @@ const UserPopover = memo(({ userId, children, footer, actions }: TUserPopoverPro
 			<PopoverContent className="w-80 p-0" align="start" side="right">
 				<div className="relative">
 					{user.banned && (
-						<div className="absolute right-2 top-2 bg-red-500 text-white text-xs px-2 py-1 rounded-md flex items-center gap-1">
+						<div className="absolute right-2 top-2 bg-destructive/15 text-destructive inset-ring inset-ring-destructive/25 text-xs px-2 py-1 rounded-md flex items-center gap-1">
 							<ShieldCheck className="h-3 w-3" />
 							Banned
 						</div>

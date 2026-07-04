@@ -105,14 +105,14 @@ const VoiceUser = memo(({ channelId, user }: TVoiceUserProps) => {
 						{user.state.micMuted && (
 							<Tooltip content="Mic muted">
 								<span className="inline-flex">
-									<MicOff className="h-3.5 w-3.5 text-red-400" />
+									<MicOff className="h-3.5 w-3.5 text-destructive" />
 								</span>
 							</Tooltip>
 						)}
 						{user.state.soundMuted && (
 							<Tooltip content="Deafened">
 								<span className="inline-flex">
-									<HeadphoneOff className="h-3.5 w-3.5 text-red-400" />
+									<HeadphoneOff className="h-3.5 w-3.5 text-destructive" />
 								</span>
 							</Tooltip>
 						)}
@@ -120,7 +120,7 @@ const VoiceUser = memo(({ channelId, user }: TVoiceUserProps) => {
 							<Tooltip content="Open camera in stage">
 								<button
 									type="button"
-									className="inline-flex rounded-sm p-0.5 text-sky-400 transition-colors hover:bg-accent/60 hover:text-sky-300"
+									className="inline-flex rounded-sm p-0.5 text-live-video transition-colors hover:bg-accent/60 hover:text-live-video"
 									onPointerDown={stopIndicatorEvent}
 									onClick={handleOpenCameraStage}
 								>
@@ -132,7 +132,7 @@ const VoiceUser = memo(({ channelId, user }: TVoiceUserProps) => {
 							<Tooltip content="Open screen share in stage">
 								<button
 									type="button"
-									className="inline-flex rounded-sm p-0.5 text-fuchsia-400 transition-colors hover:bg-accent/60 hover:text-fuchsia-300"
+									className="inline-flex rounded-sm p-0.5 text-live-screen transition-colors hover:bg-accent/60 hover:text-live-screen"
 									onPointerDown={stopIndicatorEvent}
 									onClick={handleOpenScreenStage}
 								>

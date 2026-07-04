@@ -10,7 +10,7 @@ const ForcePasswordReset = memo(() => {
 				<Card>
 					<CardHeader className="pb-2">
 						<CardTitle className="flex items-center gap-2 text-lg">
-							<ShieldAlert className="h-5 w-5 text-yellow-500" />
+							<ShieldAlert className="h-5 w-5 text-warning" />
 							Password Reset Required
 						</CardTitle>
 					</CardHeader>

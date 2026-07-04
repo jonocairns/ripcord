@@ -86,11 +86,22 @@
 	--color-border: var(--border);
 	--color-input: var(--input);
 	--color-ring: var(--ring);
+	--color-success: var(--success);
+	--color-warning: var(--warning);
+	--color-info: var(--info);
+	--color-status-online: var(--status-online);
+	--color-status-idle: var(--status-idle);
+	--color-status-offline: var(--status-offline);
+	--color-live-video: var(--live-video);
+	--color-live-screen: var(--live-screen);
+	--color-voice-surface: var(--voice-surface);
+	--color-voice-surface-raised: var(--voice-surface-raised);
 	--color-chart-1: var(--chart-1);
 	--color-chart-2: var(--chart-2);
 	--color-chart-3: var(--chart-3);
 	--color-chart-4: var(--chart-4);
 	--color-chart-5: var(--chart-5);
+	--color-titlebar: var(--titlebar);
 	--color-sidebar: var(--sidebar);
 	--color-sidebar-foreground: var(--sidebar-foreground);
 	--color-sidebar-primary: var(--sidebar-primary);
@@ -103,71 +114,92 @@
 
 :root {
 	--radius: 0.625rem;
+	/* Voice-stage surfaces are always dark (they float over video), so these don't flip with the theme */
+	--voice-surface: oklch(0.22 0.014 285);
+	--voice-surface-raised: oklch(0.31 0.014 285);
 	--background: oklch(1 0 0);
-	--foreground: oklch(0.145 0 0);
+	--foreground: oklch(0.145 0.005 285);
 	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.145 0 0);
+	--card-foreground: oklch(0.145 0.005 285);
 	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.205 0 0);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.97 0 0);
-	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.97 0 0);
-	--muted-foreground: oklch(0.556 0 0);
-	--accent: oklch(0.97 0 0);
-	--accent-foreground: oklch(0.205 0 0);
+	--popover-foreground: oklch(0.145 0.005 285);
+	--primary: oklch(0.541 0.247 293);
+	--primary-foreground: oklch(0.985 0.004 286);
+	--secondary: oklch(0.97 0.003 286);
+	--secondary-foreground: oklch(0.21 0.006 285);
+	--muted: oklch(0.97 0.003 286);
+	--muted-foreground: oklch(0.552 0.014 285);
+	--accent: oklch(0.965 0.008 293);
+	--accent-foreground: oklch(0.21 0.006 285);
 	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.922 0 0);
-	--input: oklch(0.922 0 0);
-	--ring: oklch(0.708 0 0);
-	--chart-1: oklch(0.646 0.222 41.116);
-	--chart-2: oklch(0.6 0.118 184.704);
-	--chart-3: oklch(0.398 0.07 227.392);
-	--chart-4: oklch(0.828 0.189 84.429);
-	--chart-5: oklch(0.769 0.188 70.08);
-	--sidebar: oklch(0.985 0 0);
-	--sidebar-foreground: oklch(0.145 0 0);
-	--sidebar-primary: oklch(0.205 0 0);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.97 0 0);
-	--sidebar-accent-foreground: oklch(0.205 0 0);
-	--sidebar-border: oklch(0.922 0 0);
-	--sidebar-ring: oklch(0.708 0 0);
+	--success: oklch(0.627 0.17 155);
+	--warning: oklch(0.666 0.157 58.3);
+	--info: oklch(0.588 0.158 241.966);
+	--status-online: oklch(0.627 0.17 155);
+	--status-idle: oklch(0.769 0.164 75);
+	--status-offline: oklch(0.552 0.014 285 / 60%);
+	--live-video: oklch(0.685 0.169 237.323);
+	--live-screen: oklch(0.667 0.253 322.15);
+	--border: oklch(0.92 0.004 286);
+	--input: oklch(0.92 0.004 286);
+	--ring: oklch(0.606 0.219 293 / 50%);
+	--chart-1: oklch(0.541 0.247 293);
+	--chart-2: oklch(0.588 0.158 241.966);
+	--chart-3: oklch(0.627 0.17 155);
+	--chart-4: oklch(0.769 0.188 70.08);
+	--chart-5: oklch(0.645 0.246 16.439);
+	--titlebar: oklch(0.93 0.004 286);
+	--sidebar: oklch(0.985 0.002 286);
+	--sidebar-foreground: oklch(0.145 0.005 285);
+	--sidebar-primary: oklch(0.541 0.247 293);
+	--sidebar-primary-foreground: oklch(0.985 0.004 286);
+	--sidebar-accent: oklch(0.965 0.008 293);
+	--sidebar-accent-foreground: oklch(0.21 0.006 285);
+	--sidebar-border: oklch(0.92 0.004 286);
+	--sidebar-ring: oklch(0.606 0.219 293 / 50%);
 }
 
 .dark {
-	--background: oklch(0.2 0.012 258);
-	--foreground: oklch(0.97 0.004 255);
-	--card: oklch(0.235 0.012 258);
-	--card-foreground: oklch(0.97 0.004 255);
-	--popover: oklch(0.235 0.012 258);
-	--popover-foreground: oklch(0.97 0.004 255);
-	--primary: oklch(0.82 0.012 255);
-	--primary-foreground: oklch(0.22 0.02 258);
-	--secondary: oklch(0.255 0.012 258);
-	--secondary-foreground: oklch(0.97 0.004 255);
-	--muted: oklch(0.246 0.012 258);
-	--muted-foreground: oklch(0.74 0.01 255);
-	--accent: oklch(0.285 0.015 258);
-	--accent-foreground: oklch(0.985 0.004 255);
+	--background: oklch(0.2 0.014 285);
+	--foreground: oklch(0.97 0.005 286);
+	--card: oklch(0.235 0.015 285);
+	--card-foreground: oklch(0.97 0.005 286);
+	--popover: oklch(0.235 0.015 285);
+	--popover-foreground: oklch(0.97 0.005 286);
+	--primary: oklch(0.702 0.183 293.5);
+	--primary-foreground: oklch(0.985 0.004 286);
+	--secondary: oklch(0.255 0.015 285);
+	--secondary-foreground: oklch(0.97 0.005 286);
+	--muted: oklch(0.246 0.015 285);
+	--muted-foreground: oklch(0.74 0.014 286);
+	--accent: oklch(0.29 0.02 289);
+	--accent-foreground: oklch(0.985 0.005 286);
 	--destructive: oklch(0.704 0.191 22.216);
-	--border: oklch(0.56 0.01 258 / 22%);
-	--input: oklch(0.56 0.01 258 / 28%);
-	--ring: oklch(0.72 0.08 236 / 45%);
-	--chart-1: oklch(0.488 0.243 264.376);
-	--chart-2: oklch(0.696 0.17 162.48);
-	--chart-3: oklch(0.769 0.188 70.08);
-	--chart-4: oklch(0.627 0.265 303.9);
+	--success: oklch(0.723 0.155 160);
+	--warning: oklch(0.828 0.171 80);
+	--info: oklch(0.746 0.16 232.661);
+	--status-online: oklch(0.723 0.155 160);
+	--status-idle: oklch(0.828 0.171 80);
+	--status-offline: oklch(0.74 0.014 286 / 60%);
+	--live-video: oklch(0.746 0.16 232.661);
+	--live-screen: oklch(0.74 0.238 322.16);
+	--border: oklch(0.56 0.014 288 / 22%);
+	--input: oklch(0.56 0.014 288 / 28%);
+	--ring: oklch(0.702 0.183 293.5 / 45%);
+	--chart-1: oklch(0.702 0.183 293.5);
+	--chart-2: oklch(0.746 0.16 232.661);
+	--chart-3: oklch(0.723 0.155 160);
+	--chart-4: oklch(0.828 0.171 80);
 	--chart-5: oklch(0.645 0.246 16.439);
-	--sidebar: oklch(0.155 0.012 258);
-	--sidebar-foreground: oklch(0.97 0.004 255);
-	--sidebar-primary: oklch(0.488 0.243 264.376);
-	--sidebar-primary-foreground: oklch(0.97 0.004 255);
-	--sidebar-accent: oklch(0.245 0.013 258);
-	--sidebar-accent-foreground: oklch(0.97 0.004 255);
-	--sidebar-border: oklch(0.52 0.01 258 / 20%);
-	--sidebar-ring: oklch(0.556 0 0);
+	--titlebar: oklch(0.125 0.012 285);
+	--sidebar: oklch(0.165 0.014 285);
+	--sidebar-foreground: oklch(0.97 0.005 286);
+	--sidebar-primary: oklch(0.702 0.183 293.5);
+	--sidebar-primary-foreground: oklch(0.985 0.004 286);
+	--sidebar-accent: oklch(0.245 0.016 285);
+	--sidebar-accent-foreground: oklch(0.97 0.005 286);
+	--sidebar-border: oklch(0.52 0.014 288 / 20%);
+	--sidebar-ring: oklch(0.702 0.183 293.5 / 45%);
 }
 
 @layer base {
@@ -206,9 +238,13 @@ body,
 
 .voice-stage {
 	background:
-		radial-gradient(120% 95% at 50% 0%, rgb(56 189 248 / 0.12) 0%, transparent 58%),
-		radial-gradient(72% 90% at 0% 100%, rgb(16 185 129 / 0.08) 0%, transparent 65%),
-		linear-gradient(180deg, rgb(11 13 20 / 0.95) 0%, rgb(8 10 16 / 1) 100%);
+		radial-gradient(120% 95% at 50% 0%, color-mix(in oklab, var(--primary) 12%, transparent) 0%, transparent 58%),
+		radial-gradient(72% 90% at 0% 100%, color-mix(in oklab, var(--info) 8%, transparent) 0%, transparent 65%),
+		linear-gradient(
+			180deg,
+			color-mix(in oklab, var(--background) 55%, black) 0%,
+			color-mix(in oklab, var(--background) 42%, black) 100%
+		);
 }
 
 .voice-stage::after {
@@ -269,22 +305,18 @@ body,
 	}
 }
 
-/* Define CSS variables for light and dark themes */
+/* Scrollbars — derived from theme tokens so they follow the .dark class, not the OS scheme */
 :root {
 	--scrollbar-width: 12px;
-	--scrollbar-track-color-light: #f1f1f1;
-	--scrollbar-thumb-color-light: #888;
-	--scrollbar-thumb-hover-color-light: #555;
-
-	--scrollbar-track-color-dark: #2e2e2e;
-	--scrollbar-thumb-color-dark: #555;
-	--scrollbar-thumb-hover-color-dark: #888;
+	--scrollbar-track: var(--secondary);
+	--scrollbar-thumb: color-mix(in oklab, var(--muted-foreground) 55%, var(--secondary));
+	--scrollbar-thumb-hover: var(--muted-foreground);
 }
 
-/* Light theme scrollbars */
-body {
+/* Firefox */
+* {
 	scrollbar-width: thin;
-	scrollbar-color: var(--scrollbar-thumb-color-light) var(--scrollbar-track-color-light);
+	scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
 /* Webkit Browsers */
@@ -294,53 +326,18 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-	background: var(--scrollbar-track-color-light);
+	background: var(--scrollbar-track);
 	border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
-	background-color: var(--scrollbar-thumb-color-light);
+	background-color: var(--scrollbar-thumb);
 	border-radius: 10px;
-	border: 2px solid var(--scrollbar-track-color-light);
+	border: 2px solid var(--scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-	background: var(--scrollbar-thumb-hover-color-light);
-}
-
-/* Dark theme support */
-@media (prefers-color-scheme: dark) {
-	body {
-		scrollbar-width: thin;
-		scrollbar-color: var(--scrollbar-thumb-color-dark) var(--scrollbar-track-color-dark);
-	}
-
-	/* Webkit Browsers */
-	::-webkit-scrollbar-track {
-		background: var(--scrollbar-track-color-dark);
-	}
-
-	::-webkit-scrollbar-thumb {
-		background-color: var(--scrollbar-thumb-color-dark);
-		border: 2px solid var(--scrollbar-track-color-dark);
-	}
-
-	::-webkit-scrollbar-thumb:hover {
-		background: var(--scrollbar-thumb-hover-color-dark);
-	}
-}
-
-/* Firefox */
-* {
-	scrollbar-width: thin;
-	scrollbar-color: var(--scrollbar-thumb-color-light) var(--scrollbar-track-color-light);
-}
-
-@media (prefers-color-scheme: dark) {
-	* {
-		scrollbar-width: thin;
-		scrollbar-color: var(--scrollbar-thumb-color-dark) var(--scrollbar-track-color-dark);
-	}
+	background: var(--scrollbar-thumb-hover);
 }
 
 /*
@@ -416,7 +413,7 @@ body {
 }
 
 .speaking-ring.is-speaking {
-	box-shadow: 0 0 0 2px #3ba55d;
+	box-shadow: 0 0 0 2px var(--status-online);
 }
 
 @keyframes sidebar-live-indicator-pulse {
@@ -440,11 +437,11 @@ body {
 }
 
 .sidebar-live-indicator--video {
-	--sidebar-live-indicator-glow: rgb(56 189 248 / 0.62);
+	--sidebar-live-indicator-glow: color-mix(in oklab, var(--live-video) 62%, transparent);
 }
 
 .sidebar-live-indicator--screen {
-	--sidebar-live-indicator-glow: rgb(217 70 239 / 0.58);
+	--sidebar-live-indicator-glow: color-mix(in oklab, var(--live-screen) 58%, transparent);
 	animation-delay: 160ms;
 }
 

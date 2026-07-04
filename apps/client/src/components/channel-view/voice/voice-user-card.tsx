@@ -104,10 +104,10 @@ const VoiceUserCard = memo(
 							voiceUser.state.webcamEnabled ||
 							voiceUser.state.sharingScreen) && (
 							<div className="ml-auto flex items-center gap-1">
-								{voiceUser.state.micMuted && <MicOff className="size-3.5 text-red-500/80" />}
-								{voiceUser.state.soundMuted && <HeadphoneOff className="size-3.5 text-red-500/80" />}
-								{voiceUser.state.webcamEnabled && <Video className="size-3.5 text-sky-400/90" />}
-								{voiceUser.state.sharingScreen && <Monitor className="size-3.5 text-cyan-400/90" />}
+								{voiceUser.state.micMuted && <MicOff className="size-3.5 text-destructive/80" />}
+								{voiceUser.state.soundMuted && <HeadphoneOff className="size-3.5 text-destructive/80" />}
+								{voiceUser.state.webcamEnabled && <Video className="size-3.5 text-live-video/90" />}
+								{voiceUser.state.sharingScreen && <Monitor className="size-3.5 text-live-screen/90" />}
 							</div>
 						)}
 					</div>

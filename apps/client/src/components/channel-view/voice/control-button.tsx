@@ -19,8 +19,8 @@ const ControlButton = forwardRef<HTMLButtonElement, TControlButtonProps>(
 				type={type}
 				data-slot="control-button"
 				className={cn(
-					'inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border border-white/15 bg-zinc-800/90 text-white/90 shadow-md ring-1 ring-black/30 outline-none backdrop-blur-md transition-colors',
-					'hover:bg-zinc-700/90 hover:text-white',
+					'inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border border-white/15 bg-voice-surface-raised/90 text-white/90 shadow-md ring-1 ring-black/30 outline-none backdrop-blur-md transition-colors',
+					'hover:bg-voice-surface-raised hover:text-white',
 					'focus-visible:ring-2 focus-visible:ring-white/60',
 					'disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50',
 					active && 'bg-white/20 text-white ring-white/40',

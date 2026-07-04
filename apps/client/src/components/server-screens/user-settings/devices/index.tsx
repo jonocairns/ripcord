@@ -40,8 +40,8 @@ const pushKeybindSupportLabelMap = {
 } as const;
 
 const pushKeybindIssueAlertClassNameBySeverity = {
-	info: 'border-blue-200/70 bg-blue-500/10 text-blue-100',
-	warning: 'border-amber-300/40 bg-amber-500/10 text-amber-100',
+	info: 'border-info/30 bg-info/10 text-info',
+	warning: 'border-warning/40 bg-warning/10 text-warning',
 	error: 'border-destructive/40 bg-destructive/10 text-destructive',
 } as const;
 
@@ -322,12 +322,12 @@ const Devices = memo(() => {
 						</Select>
 					</div>
 
-					<Alert variant="info" className="border-primary/40 bg-primary/10">
+					<Alert variant="info">
 						<Info />
 						<AlertTitle>NVIDIA Broadcast Recommended</AlertTitle>
-						<AlertDescription className="block text-foreground/90">
-							Using an NVIDIA GPU? Install <strong className="font-semibold text-foreground">NVIDIA Broadcast</strong>{' '}
-							for clearer microphone voice processing.
+						<AlertDescription className="block">
+							Using an NVIDIA GPU? Install <strong className="font-semibold">NVIDIA Broadcast</strong> for clearer
+							microphone voice processing.
 						</AlertDescription>
 					</Alert>
 

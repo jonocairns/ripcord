@@ -446,7 +446,7 @@ const ScreenShareCard = memo(
 						muted={isOwnUser || isPoppedOut}
 						playsInline
 						className={cn(
-							'absolute inset-0 h-full w-full bg-[#1b2026]',
+							'absolute inset-0 h-full w-full bg-voice-surface',
 							shouldFitStreamAspect ? 'object-contain' : 'object-cover',
 							(isPoppedOut || hideOwnPreview) && 'opacity-0 pointer-events-none',
 						)}
@@ -458,8 +458,8 @@ const ScreenShareCard = memo(
 					/>
 
 					{hideOwnPreview && (
-						<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#11161d] p-6 text-center text-white/80">
-							<Monitor className="size-10 text-cyan-300/80" />
+						<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-voice-surface p-6 text-center text-white/80">
+							<Monitor className="size-10 text-live-screen/80" />
 							<div className="space-y-1">
 								<p className="text-sm font-semibold text-white">You&apos;re sharing your screen</p>
 								<p className="text-xs text-white/60">Preview hidden while Sharkord is unfocused</p>
@@ -484,7 +484,7 @@ const ScreenShareCard = memo(
 
 					{isPoppedOut && (
 						<div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/85 text-white p-4 text-center">
-							<Monitor className="size-8 text-purple-400" />
+							<Monitor className="size-8 text-live-screen" />
 							<div className="space-y-1">
 								<p className="text-sm font-semibold">{user.name}'s screen</p>
 								<p className="text-xs text-white/70">Opened in a pop-out window</p>

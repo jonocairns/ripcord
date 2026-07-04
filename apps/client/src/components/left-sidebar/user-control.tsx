@@ -34,7 +34,7 @@ type TStatusOption = {
 const ONLINE_STATUS_OPTION: TStatusOption = {
 	value: UserStatus.ONLINE,
 	label: 'Online',
-	dotClassName: 'bg-[#3ba55d]',
+	dotClassName: 'bg-status-online',
 };
 
 const STATUS_OPTIONS: TStatusOption[] = [
@@ -42,7 +42,7 @@ const STATUS_OPTIONS: TStatusOption[] = [
 	{
 		value: UserStatus.AWAY,
 		label: 'Away',
-		dotClassName: 'bg-amber-400',
+		dotClassName: 'bg-status-idle',
 	},
 ];
 

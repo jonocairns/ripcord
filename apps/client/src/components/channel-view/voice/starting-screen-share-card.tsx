@@ -15,7 +15,7 @@ const StartingScreenShareCard = memo(({ className }: TStartingScreenShareCardPro
 
 			<div className="relative z-10 flex max-w-md flex-col items-center gap-4 px-6 py-8 text-center">
 				<div className="flex size-20 items-center justify-center rounded-full border border-white/10 bg-black/35">
-					<Monitor className="size-8 text-sky-300" />
+					<Monitor className="size-8 text-live-screen" />
 				</div>
 
 				<div className="inline-flex items-center gap-2 rounded-full bg-black/45 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-white/70">

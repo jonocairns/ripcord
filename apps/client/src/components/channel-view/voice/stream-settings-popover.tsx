@@ -31,7 +31,7 @@ const StreamSettingsPopover = memo(
 								onClick={onMuteToggle}
 								title={isMuted ? 'Unmute' : 'Mute'}
 								size="sm"
-								className={isMuted ? 'text-red-400' : ''}
+								className={isMuted ? 'text-destructive' : ''}
 							/>
 							<Slider
 								value={[volume]}

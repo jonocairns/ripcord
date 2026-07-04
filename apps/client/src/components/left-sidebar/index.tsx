@@ -143,7 +143,7 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
 		<aside
 			ref={sidebarRef}
 			className={cn(
-				'relative flex min-h-0 self-stretch w-[calc(100vw-3rem)] max-w-72 flex-col border-r border-sidebar-border bg-sidebar md:w-[var(--left-sidebar-width)] md:min-w-[var(--left-sidebar-width)] md:max-w-[var(--left-sidebar-width)]',
+				'relative flex min-h-0 self-stretch w-[calc(100vw-3rem)] max-w-72 flex-col bg-sidebar md:w-[var(--left-sidebar-width)] md:min-w-[var(--left-sidebar-width)] md:max-w-[var(--left-sidebar-width)]',
 				!isResizing && 'md:transition-[width] md:duration-150',
 				className,
 			)}
@@ -160,7 +160,7 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
 				)}
 				onMouseDown={handleResizeStart}
 			/>
-			<div className="flex h-12 w-full items-center border-b border-sidebar-border px-2">
+			<div className="relative flex h-12 w-full items-center px-2 after:absolute after:inset-x-2 after:bottom-0 after:h-px after:bg-gradient-to-r after:from-transparent after:via-border/60 after:to-transparent">
 				{hasServerActions ? (
 					<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
 						<DropdownMenuTrigger asChild>
@@ -209,7 +209,7 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
 				<Categories />
 			</div>
 			<DesktopUpdateCallout />
-			<div className="border-t border-sidebar-border bg-[#171a1f]/95">
+			<div className="border-t border-sidebar-border bg-sidebar-accent/60">
 				<VoiceControl />
 				<UserControl />
 			</div>
