@@ -19,6 +19,10 @@ import { LocalStorageKey, migrateStorage } from './helpers/storage.ts';
 import './index.css';
 import { initializeRuntimeServerConfig } from './runtime/server-config.ts';
 
+// Dark-only is a release policy, not a component-level styling requirement.
+// Remove this forced theme when the light palette is ready to ship.
+const SHIPPED_THEME = 'dark';
+
 const bootstrap = async () => {
 	migrateStorage();
 
@@ -41,7 +45,7 @@ const bootstrap = async () => {
 	}).render(
 		<StrictMode>
 			<ErrorBoundary>
-				<ThemeProvider defaultTheme="dark" storageKey={LocalStorageKey.VITE_UI_THEME}>
+				<ThemeProvider defaultTheme="dark" forcedTheme={SHIPPED_THEME} storageKey={LocalStorageKey.VITE_UI_THEME}>
 					<DebugInfo />
 					<Toaster />
 					<StoreDebug />

@@ -58,7 +58,7 @@ const ServerView = memo(() => {
 
 	return (
 		<VoiceProvider>
-			<div className="flex min-h-0 flex-1 flex-col bg-background text-foreground dark" {...swipeHandlers}>
+			<div className="flex min-h-0 flex-1 flex-col bg-background text-foreground" {...swipeHandlers}>
 				<div className="relative flex min-h-0 flex-1 overflow-hidden">
 					<PreventBrowser />
 
