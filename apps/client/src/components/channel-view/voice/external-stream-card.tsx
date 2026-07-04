@@ -485,7 +485,7 @@ const ExternalStreamCard = memo(
 							muted
 							playsInline
 							className={cn(
-								'absolute inset-0 h-full w-full bg-[#1b2026] object-contain',
+								'absolute inset-0 h-full w-full bg-voice-surface object-contain',
 								isPoppedOut && 'opacity-0 pointer-events-none',
 							)}
 							style={{
@@ -498,27 +498,25 @@ const ExternalStreamCard = memo(
 						<div className="flex flex-col items-center justify-center gap-4 p-8">
 							<div className="relative">
 								{stream.avatarUrl ? (
-									<Avatar className="w-20 h-20 border-2 border-green-500/50">
+									<Avatar className="w-20 h-20 border-2 border-success/50">
 										<AvatarImage src={stream.avatarUrl} alt={stream.title || 'External Stream'} />
-										<AvatarFallback className="bg-gradient-to-br from-green-500/30 to-emerald-500/30">
-											<Headphones className="size-10 text-green-400" />
+										<AvatarFallback className="bg-gradient-to-br from-success/30 to-success/15">
+											<Headphones className="size-10 text-success" />
 										</AvatarFallback>
 									</Avatar>
 								) : (
-									<div className="w-20 h-20 rounded-full bg-gradient-to-br from-green-500/30 to-emerald-500/30 flex items-center justify-center border-2 border-green-500/50">
-										<Headphones className="size-10 text-green-400" />
+									<div className="w-20 h-20 rounded-full bg-gradient-to-br from-success/30 to-success/15 flex items-center justify-center border-2 border-success/50">
+										<Headphones className="size-10 text-success" />
 									</div>
 								)}
-								{hasAudio && !isMuted && (
-									<div className="absolute inset-0 rounded-full animate-pulse bg-green-500/20" />
-								)}
+								{hasAudio && !isMuted && <div className="absolute inset-0 rounded-full animate-pulse bg-success/20" />}
 							</div>
 						</div>
 					)}
 
 					{isPoppedOut && hasVideo && (
 						<div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/85 text-white p-4 text-center">
-							<Video className="size-8 text-blue-400" />
+							<Video className="size-8 text-live-video" />
 							<div className="space-y-1">
 								<p className="text-sm font-semibold">{stream.title || 'External Stream'}</p>
 								<p className="text-xs text-white/70">Opened in a pop-out window</p>
@@ -542,13 +540,13 @@ const ExternalStreamCard = memo(
 									className="h-5 flex-shrink-0 rounded-full"
 								/>
 							) : (
-								<Router className="size-3.5 text-purple-400 flex-shrink-0" />
+								<Router className="size-3.5 text-primary flex-shrink-0" />
 							)}
 							<span className="text-white font-medium text-xs truncate">{stream.title || 'External Stream'}</span>
 
 							<div className="flex items-center gap-1 ml-auto">
-								{hasVideo && <Video className="size-3 text-blue-400" />}
-								{hasAudio && <Headphones className={cn('size-3', isMuted ? 'text-red-400' : 'text-green-400')} />}
+								{hasVideo && <Video className="size-3 text-live-video" />}
+								{hasAudio && <Headphones className={cn('size-3', isMuted ? 'text-destructive' : 'text-success')} />}
 							</div>
 
 							{stream.pluginId && (

@@ -56,30 +56,30 @@ const VoiceControl = memo(() => {
 				return {
 					icon: <Loader2 className="h-4 w-4 animate-spin" />,
 					text: 'Connecting...',
-					color: 'text-yellow-500',
-					iconBackground: 'bg-yellow-500/10',
+					color: 'text-warning',
+					iconBackground: 'bg-warning/10',
 				};
 			case 'connected':
 				return {
-					icon: <Wifi className="h-4 w-4 text-green-600" />,
+					icon: <Wifi className="h-4 w-4 text-success" />,
 					text: 'Connected',
-					color: 'text-green-600',
-					iconBackground: 'bg-emerald-500/10',
+					color: 'text-success',
+					iconBackground: 'bg-success/10',
 				};
 			case 'failed':
 				return {
-					icon: <AlertTriangle className="h-4 w-4 text-red-500" />,
+					icon: <AlertTriangle className="h-4 w-4 text-destructive" />,
 					text: 'Connection failed',
-					color: 'text-red-500',
-					iconBackground: 'bg-red-500/10',
+					color: 'text-destructive',
+					iconBackground: 'bg-destructive/10',
 				};
 			case 'disconnected':
 			default:
 				return {
-					icon: <WifiOff className="h-4 w-4 text-red-500" />,
+					icon: <WifiOff className="h-4 w-4 text-destructive" />,
 					text: 'Disconnected',
-					color: 'text-red-500',
-					iconBackground: 'bg-red-500/10',
+					color: 'text-destructive',
+					iconBackground: 'bg-destructive/10',
 				};
 		}
 	}, [connectionStatus]);
@@ -91,13 +91,13 @@ const VoiceControl = memo(() => {
 
 		return (
 			<div className="px-3 py-3 animate-in fade-in duration-200">
-				<div className="flex items-center gap-3 rounded-md border border-amber-400/20 bg-amber-500/10 px-3 py-2.5">
-					<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/12">
-						<Loader2 className="h-4 w-4 animate-spin text-amber-300" />
+				<div className="flex items-center gap-3 rounded-md border border-warning/20 bg-warning/10 px-3 py-2.5">
+					<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-warning/12">
+						<Loader2 className="h-4 w-4 animate-spin text-warning" />
 					</div>
 					<div className="min-w-0 flex-1">
 						<p className="truncate text-sm font-semibold text-foreground">Reconnecting voice...</p>
-						<p className="truncate text-xs text-amber-200/90">Trying to restore your channel.</p>
+						<p className="truncate text-xs text-warning/90">Trying to restore your channel.</p>
 					</div>
 				</div>
 			</div>
@@ -128,7 +128,7 @@ const VoiceControl = memo(() => {
 						className={cn(
 							'h-8 w-8 rounded-lg text-muted-foreground transition-colors hover:!bg-white/6 hover:!text-white',
 							ownVoiceState.webcamEnabled &&
-								'bg-emerald-500/12 text-emerald-300 hover:!bg-emerald-500/12 hover:!text-emerald-300',
+								'bg-live-video/14 text-live-video hover:!bg-live-video/14 hover:!text-live-video',
 						)}
 						onClick={toggleWebcam}
 						title={ownVoiceState.webcamEnabled ? 'Stop video' : 'Start video'}
@@ -143,7 +143,7 @@ const VoiceControl = memo(() => {
 						className={cn(
 							'h-8 w-8 rounded-lg text-muted-foreground transition-colors hover:!bg-white/6 hover:!text-white',
 							(ownVoiceState.sharingScreen || isStartingScreenShare) &&
-								'bg-sky-500/12 text-sky-300 shadow-[0_0_0_1px_rgb(56_189_248/0.14)] hover:!bg-sky-500/12 hover:!text-sky-300',
+								'bg-live-screen/14 text-live-screen ring-1 ring-live-screen/15 hover:!bg-live-screen/14 hover:!text-live-screen',
 						)}
 						onClick={toggleScreenShare}
 						title={
@@ -156,7 +156,7 @@ const VoiceControl = memo(() => {
 						disabled={!channelCan(ChannelPermission.SHARE_SCREEN)}
 					>
 						{isStartingScreenShare ? (
-							<Loader2 className="h-4 w-4 animate-spin text-sky-300" />
+							<Loader2 className="h-4 w-4 animate-spin text-live-screen" />
 						) : ownVoiceState.sharingScreen ? (
 							<ScreenShareOff className="h-4 w-4" />
 						) : (
@@ -167,7 +167,7 @@ const VoiceControl = memo(() => {
 					<Button
 						variant="ghost"
 						size="icon"
-						className="h-8 w-8 rounded-lg text-red-400 transition-colors hover:!bg-red-500/10 hover:!text-red-300"
+						className="h-8 w-8 rounded-lg text-destructive transition-colors hover:!bg-destructive/10 hover:!text-destructive"
 						onClick={leaveVoice}
 						title="Leave voice"
 					>

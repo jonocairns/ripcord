@@ -42,7 +42,7 @@ const StatsPopoverContent = () => {
 			<h3 className="font-semibold text-sm mb-2 text-foreground">Transport Statistics</h3>
 			<div className="grid grid-cols-2 gap-4 mb-3">
 				<div>
-					<h4 className="font-medium text-green-400 mb-1">Outgoing</h4>
+					<h4 className="font-medium text-success mb-1">Outgoing</h4>
 					{producer ? (
 						<div className="space-y-1 text-muted-foreground">
 							<div>Rate: {formatBitrate(currentBitrateSent)}</div>
@@ -54,7 +54,7 @@ const StatsPopoverContent = () => {
 				</div>
 
 				<div>
-					<h4 className="font-medium text-blue-400 mb-1">Incoming</h4>
+					<h4 className="font-medium text-info mb-1">Incoming</h4>
 					{consumer ? (
 						<div className="space-y-1 text-muted-foreground">
 							<div>Rate: {formatBitrate(currentBitrateReceived)}</div>
@@ -66,7 +66,7 @@ const StatsPopoverContent = () => {
 			</div>
 			{producer?.outboundVideo.length ? (
 				<div className="border-t border-border/50 pt-2">
-					<h4 className="font-medium text-green-400 mb-1">Video Send</h4>
+					<h4 className="font-medium text-success mb-1">Video Send</h4>
 					<div className="space-y-2 text-muted-foreground">
 						{producer.outboundVideo.map((video, index) => (
 							<div key={video.id} className="space-y-0.5">
@@ -79,7 +79,7 @@ const StatsPopoverContent = () => {
 									<div>
 										Encoder: {video.encoderImplementation || 'unknown'}
 										{video.powerEfficientEncoder !== null && (
-											<span className={video.powerEfficientEncoder ? ' text-green-400' : ' text-amber-400'}>
+											<span className={video.powerEfficientEncoder ? ' text-success' : ' text-warning'}>
 												{' '}
 												({video.powerEfficientEncoder ? 'hardware' : 'software'})
 											</span>
@@ -96,7 +96,7 @@ const StatsPopoverContent = () => {
 			) : null}
 			{consumer?.inboundVideo.length ? (
 				<div className="border-t border-border/50 pt-2">
-					<h4 className="font-medium text-blue-400 mb-1">Video Receive</h4>
+					<h4 className="font-medium text-info mb-1">Video Receive</h4>
 					<div className="space-y-2 text-muted-foreground">
 						{consumer.inboundVideo.map((video, index) => (
 							<div key={video.id} className="space-y-0.5">
@@ -113,7 +113,7 @@ const StatsPopoverContent = () => {
 				</div>
 			) : null}
 			<div className="border-t border-border/50 pt-2">
-				<h4 className="font-medium text-yellow-400 mb-1">Session Totals</h4>
+				<h4 className="font-medium text-warning mb-1">Session Totals</h4>
 				<div className="grid grid-cols-2 gap-2 text-muted-foreground">
 					<div>↑ {filesize(totalBytesSent)}</div>
 					<div>↓ {filesize(totalBytesReceived)}</div>

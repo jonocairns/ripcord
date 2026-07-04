@@ -761,7 +761,7 @@ const MicrophoneTestPanel = memo(
 						<div className="h-2.5 w-full overflow-hidden rounded-full bg-background/80">
 							<div
 								ref={levelBarRef}
-								className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-sky-400 to-cyan-300 transition-[width]"
+								className="h-full rounded-full bg-gradient-to-r from-success via-info to-primary transition-[width]"
 								style={{ width: '0%' }}
 							/>
 						</div>
@@ -790,7 +790,7 @@ const MicrophoneTestPanel = memo(
 											<p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{item.label}</p>
 											<p
 												className={`mt-1 text-sm font-semibold ${
-													item.tone === 'warning' ? 'text-amber-600 dark:text-amber-300' : 'text-foreground'
+													item.tone === 'warning' ? 'text-warning' : 'text-foreground'
 												}`}
 											>
 												{item.value}
@@ -823,7 +823,7 @@ const MicrophoneTestPanel = memo(
 							>
 								{isRecordingClip ? (
 									<>
-										<Circle className="h-3 w-3 animate-pulse fill-red-500 text-red-500" />
+										<Circle className="h-3 w-3 animate-pulse fill-destructive text-destructive" />
 										Stop
 									</>
 								) : (

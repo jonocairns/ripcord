@@ -29,7 +29,7 @@ const VolumeControlButton = memo(({ className, onChange, title, volume }: TVolum
 					size="icon"
 					className={cn(
 						'h-8 w-6 rounded-l-none rounded-r-lg px-0 text-muted-foreground transition-colors hover:!bg-white/6 hover:!text-white',
-						isMuted && 'bg-red-500/12 text-red-300 hover:!bg-red-500/12 hover:!text-red-300',
+						isMuted && 'bg-destructive/12 text-destructive hover:!bg-destructive/12 hover:!text-destructive',
 						className,
 					)}
 					title={title}
@@ -93,7 +93,8 @@ const OwnVoiceControls = memo(() => {
 					size="icon"
 					className={cn(
 						'h-8 w-8 rounded-r-none rounded-l-lg text-muted-foreground transition-colors hover:!bg-white/6 hover:!text-white',
-						ownVoiceState.micMuted && 'bg-red-500/12 text-red-300 hover:!bg-red-500/12 hover:!text-red-300',
+						ownVoiceState.micMuted &&
+							'bg-destructive/12 text-destructive hover:!bg-destructive/12 hover:!text-destructive',
 					)}
 					onClick={toggleMic}
 					title={ownVoiceState.micMuted ? 'Unmute microphone' : 'Mute microphone'}
@@ -111,7 +112,8 @@ const OwnVoiceControls = memo(() => {
 					size="icon"
 					className={cn(
 						'h-8 w-8 rounded-r-none rounded-l-lg text-muted-foreground transition-colors hover:!bg-white/6 hover:!text-white',
-						ownVoiceState.soundMuted && 'bg-red-500/12 text-red-300 hover:!bg-red-500/12 hover:!text-red-300',
+						ownVoiceState.soundMuted &&
+							'bg-destructive/12 text-destructive hover:!bg-destructive/12 hover:!text-destructive',
 					)}
 					onClick={toggleSound}
 					title={ownVoiceState.soundMuted ? 'Undeafen' : 'Deafen'}

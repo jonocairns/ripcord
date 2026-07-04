@@ -63,8 +63,8 @@ const VoiceChatSidebar = memo(({ isOpen }: TVoiceChatSidebarProps) => {
 		<div
 			ref={sidebarRef}
 			className={cn(
-				'hidden lg:flex flex-col bg-card border-l border-border transition-all ease-in-out relative overflow-hidden',
-				isOpen ? 'border-l-1' : 'w-0 border-l-0',
+				'hidden lg:flex flex-col bg-card transition-all ease-in-out relative overflow-hidden',
+				!isOpen && 'w-0',
 				!isResizing && 'duration-500',
 			)}
 			style={{
