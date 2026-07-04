@@ -108,7 +108,8 @@ const VoiceControl = memo(() => {
 		<>
 			<VoiceAudioStreams channelId={voiceChannelId} />
 			<ExternalAudioStreams channelId={voiceChannelId} />
-			<div className="flex items-center justify-between gap-3 px-3 py-3">
+			{/* border-b (not border-t on UserControl) keeps the user row a full 56px box so its top edge lines up with the chat composer's border-t */}
+			<div className="flex items-center justify-between gap-3 border-b border-white/6 px-3 py-3">
 				<StatsPopover triggerClassName="min-w-0 flex-1">
 					<div className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-1 py-0.5">
 						<div className={cn('flex h-8 w-8 items-center justify-center rounded-full', connectionInfo.iconBackground)}>
