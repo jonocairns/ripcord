@@ -101,7 +101,7 @@ const useRecentEmojis = () => {
 
 		return storedEmojis.flatMap((emoji) => {
 			if (emoji.emoji !== undefined) {
-				return emoji;
+				return [emoji];
 			}
 
 			const custom = customByName.get(emoji.name);
@@ -110,7 +110,7 @@ const useRecentEmojis = () => {
 				return [];
 			}
 
-			return { ...emoji, fallbackImage: custom.fallbackImage };
+			return [{ ...emoji, fallbackImage: custom.fallbackImage }];
 		});
 	}, [storedEmojis, customEmojis]);
 
