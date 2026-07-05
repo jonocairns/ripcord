@@ -16,6 +16,9 @@
  *   4. Non-retriable error: a 4xx-class TRPC error is not retried
  *   5. Exhausted retries: three consecutive transient failures return false
  *   6. Flag dedup: a second concurrent call returns the same promise
+ *   7. Mic republish: an in-session recovery restarts mic capture when the
+ *      user was publishing (transport cleanup stops the produced track, so a
+ *      live-track republish alone would silently drop the mic)
  */
 
 import { describe, expect, it, mock } from 'bun:test';
@@ -85,7 +88,11 @@ type TRecoveryDeps = {
 	}>;
 	isMissingVoiceSessionError: (err: unknown) => boolean;
 	consumeExistingProducers: (caps: object, prefetchedProducers?: object) => Promise<void>;
-	restartMicAfterRejoin: () => Promise<void>;
+	canSpeak: () => boolean;
+	hasLocalMicStream: () => boolean;
+	hasLiveLocalMicTrack: () => boolean;
+	republishLiveMicTrack: () => Promise<void>;
+	restartMicCapture: () => Promise<void>;
 	republishTracks: () => TRepublishPlan;
 	recoverOptionalAppAudio: () => Promise<void> | undefined;
 	syncRepublishedTrackState: (state: TRepublishedLocalMediaState) => Promise<void>;
@@ -165,12 +172,22 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 			}
 			throwIfNonceStale('transport creation');
 
-			const republishPlan = deps.republishTracks();
-			const republishTasks = [...republishPlan.tasks];
+			const republishTasks: Promise<void>[] = [];
 
-			if (recoveryJoinResult) {
-				republishTasks.push(deps.restartMicAfterRejoin());
+			if (recoveryJoinResult && deps.canSpeak()) {
+				republishTasks.push(deps.restartMicCapture());
+			} else if (deps.hasLocalMicStream() && deps.hasLiveLocalMicTrack()) {
+				republishTasks.push(deps.republishLiveMicTrack());
+			} else if (deps.hasLocalMicStream() && deps.canSpeak()) {
+				// In-session recovery: cleanupTransports() stopped the produced mic
+				// track (mediasoup stopTracks default), so a stream with a dead track
+				// means the user was publishing when the transport failed — restart
+				// capture instead of dropping the mic.
+				republishTasks.push(deps.restartMicCapture());
 			}
+
+			const republishPlan = deps.republishTracks();
+			republishTasks.push(...republishPlan.tasks);
 
 			const optionalAppAudioRecovery = deps.recoverOptionalAppAudio();
 			if (optionalAppAudioRecovery) {
@@ -251,7 +268,11 @@ const makeDeps = (overrides: Partial<TRecoveryDeps> = {}): TRecoveryDeps => {
 		rejoinVoiceSession: mock(() => Promise.resolve({ device: { rtpCapabilities: {} } })),
 		isMissingVoiceSessionError: () => false,
 		consumeExistingProducers: mock(() => Promise.resolve()),
-		restartMicAfterRejoin: mock(() => Promise.resolve()),
+		canSpeak: () => true,
+		hasLocalMicStream: () => false,
+		hasLiveLocalMicTrack: () => false,
+		republishLiveMicTrack: mock(() => Promise.resolve()),
+		restartMicCapture: mock(() => Promise.resolve()),
 		republishTracks: mock(() => ({ tasks: [], state: {} })),
 		recoverOptionalAppAudio: mock(() => undefined),
 		syncRepublishedTrackState: mock(() => Promise.resolve()),
@@ -555,9 +576,52 @@ describe('recoverTransportSession orchestration', () => {
 		expect(await runRecovery(deps)).toBe(true);
 		expect(producerCalls).toBe(2);
 		expect((deps.rejoinVoiceSession as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
-		expect((deps.restartMicAfterRejoin as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+		expect((deps.restartMicCapture as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
 		expect(consumeCalls).toHaveLength(3);
 		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
+	});
+
+	it('restarts mic capture during in-session recovery when the published mic track was stopped by transport cleanup', async () => {
+		const deps = makeDeps({
+			hasLocalMicStream: () => true,
+			hasLiveLocalMicTrack: () => false,
+		});
+
+		expect(await runRecovery(deps)).toBe(true);
+		expect((deps.restartMicCapture as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+		expect((deps.republishLiveMicTrack as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
+	});
+
+	it('republishes a still-live mic track without a full capture restart', async () => {
+		const deps = makeDeps({
+			hasLocalMicStream: () => true,
+			hasLiveLocalMicTrack: () => true,
+		});
+
+		expect(await runRecovery(deps)).toBe(true);
+		expect((deps.republishLiveMicTrack as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+		expect((deps.restartMicCapture as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
+	});
+
+	it('does not touch the mic during in-session recovery when the user was not publishing', async () => {
+		const deps = makeDeps({
+			hasLocalMicStream: () => false,
+		});
+
+		expect(await runRecovery(deps)).toBe(true);
+		expect((deps.restartMicCapture as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
+		expect((deps.republishLiveMicTrack as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
+	});
+
+	it('does not restart mic capture without speak permission', async () => {
+		const deps = makeDeps({
+			canSpeak: () => false,
+			hasLocalMicStream: () => true,
+			hasLiveLocalMicTrack: () => false,
+		});
+
+		expect(await runRecovery(deps)).toBe(true);
+		expect((deps.restartMicCapture as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
 	});
 
 	it('does not fail core recovery when optional desktop app audio recovery rejects', async () => {

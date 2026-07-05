@@ -3725,6 +3725,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									);
 								} else if (currentAudioStream && currentAudioTrack && currentAudioTrack.readyState === 'live') {
 									republishTasks.push(publishMicTrack(currentAudioStream, currentAudioTrack));
+								} else if (currentAudioStream && canSpeakRef.current && startMicStreamRef.current) {
+									// cleanupTransports() above closed the producer transport, and
+									// mediasoup stops the produced mic track on transport close
+									// (produce() defaults stopTracks: true) — so an in-session
+									// recovery never sees a live track in the branch above. A local
+									// audio stream with a dead track means the user was publishing
+									// mic when the transport failed: restart capture rather than
+									// completing recovery with a silent mic.
+									republishTasks.push(
+										startMicStreamRef.current().catch((error) => {
+											logVoice('Error restarting microphone after voice transport recovery', { error });
+										}),
+									);
 								}
 
 								const localMediaRepublishPlan = buildLocalMediaRepublishPlan();
