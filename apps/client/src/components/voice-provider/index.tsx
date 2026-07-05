@@ -1077,8 +1077,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 
 			void consume(remoteId, kind, currentRtpCapabilities);
+
+			// Paired audio can already be pending when the screen is accepted. The
+			// watched-pending effect only re-drives on a pendingStreams change,
+			// which a failed SCREEN consume never produces — consume directly so
+			// audio pickup does not depend on the video consume succeeding.
+			if (
+				kind === StreamKind.SCREEN &&
+				pendingStreamsRef.current.has(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))
+			) {
+				void consume(remoteId, StreamKind.SCREEN_AUDIO, currentRtpCapabilities);
+			}
 		},
-		[consume, currentChannelExternalStreams],
+		[consume, currentChannelExternalStreams, pendingStreamsRef],
 	);
 
 	const stopWatchingStream = useCallback(
