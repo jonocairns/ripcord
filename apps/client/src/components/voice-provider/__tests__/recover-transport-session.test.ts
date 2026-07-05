@@ -450,7 +450,7 @@ describe('recoverTransportSession orchestration', () => {
 		let loadCalls = 0;
 		const consumed: Array<[number | string, string]> = [];
 		const deps = makeDeps({
-			captureWatchedStreams: mock(() => {
+			captureWatchedStreams: mock((): ReturnType<TRecoveryDeps['captureWatchedStreams']> => {
 				captureCalls++;
 				if (captureCalls > 1) {
 					// Simulates the cleared maps a mid-loop recapture would read.
