@@ -55,6 +55,10 @@ import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } fr
 import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from './default-input-device';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
+import {
+	selectWatchedPendingScreenAudioIds,
+	tracksScreenAudioWatchIntent,
+} from './hooks/screen-audio-watch-intent';
 import { shouldDeferTransportFailureToReconnect } from './hooks/transport-failure-policy';
 import { useLocalStreams } from './hooks/use-local-streams';
 import {
@@ -1037,7 +1041,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const acceptStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
-			if (kind === StreamKind.SCREEN || kind === StreamKind.SCREEN_AUDIO) {
+			if (tracksScreenAudioWatchIntent(kind)) {
 				watchedScreenAudioRef.current.add(remoteId);
 			}
 
@@ -1082,7 +1086,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			// Exiting the screen tile must drop audio intent even while SCREEN_AUDIO
 			// is only pending, or stranded intent would auto-consume audio for a
 			// later share the viewer never accepted.
-			if (kind === StreamKind.SCREEN || kind === StreamKind.SCREEN_AUDIO) {
+			if (tracksScreenAudioWatchIntent(kind)) {
 				watchedScreenAudioRef.current.delete(remoteId);
 			}
 
@@ -1326,12 +1330,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
-		pendingStreams.forEach((stream) => {
-			if (stream.kind !== StreamKind.SCREEN_AUDIO || !watchedScreenAudioRef.current.has(stream.remoteId)) {
-				return;
-			}
-
-			void consume(stream.remoteId, StreamKind.SCREEN_AUDIO, currentRtpCapabilities);
+		selectWatchedPendingScreenAudioIds(pendingStreams, (remoteId) =>
+			watchedScreenAudioRef.current.has(remoteId),
+		).forEach((remoteId) => {
+			void consume(remoteId, StreamKind.SCREEN_AUDIO, currentRtpCapabilities);
 		});
 	}, [consume, currentVoiceChannelId, pendingStreams, voiceEventRtpCapabilities]);
 
