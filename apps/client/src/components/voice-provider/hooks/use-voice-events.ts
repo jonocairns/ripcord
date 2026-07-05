@@ -16,7 +16,7 @@ type TEvents = {
 	consume: (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities, producerId?: string) => Promise<void>;
 	syncExistingProducers: (rtpCapabilities: RtpCapabilities) => Promise<void>;
 	addPendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
-	removePendingStream: (remoteId: number, kind: StreamKind) => void;
+	removePendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
 	removeRemoteUserStream: (userId: number, kind: TRemoteUserStreamKinds) => void;
 	removeExternalStreamTrack: (streamId: number, kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO) => void;
 	removeExternalStream: (streamId: number) => void;
@@ -192,7 +192,7 @@ const useVoiceEvents = ({
 				});
 
 				try {
-					removePendingStream(remoteId, kind);
+					removePendingStream(remoteId, kind, producerId);
 
 					// The screen share itself ended — audio intent must not outlive it,
 					// or it would auto-consume audio for a later share the viewer never
@@ -340,6 +340,7 @@ const useVoiceEvents = ({
 		removeExternalStream,
 		clearRemoteUserStreamsForUser,
 		clearPendingStreamsForUser,
+		clearScreenAudioWatchIntent,
 		onVoiceActivityUpdate,
 		onTransportFailure,
 		getActiveConsumerProducerId,

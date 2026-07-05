@@ -21,16 +21,48 @@ export type TExternalStreamTracks = {
 	video?: boolean;
 };
 
+export type TRemoteProducerRef = {
+	remoteId: number;
+	producerId: string;
+};
+
+export type TExternalProducerRef = {
+	streamId: number;
+	producerId: string;
+};
+
 export type TRemoteProducerIds = {
+	/**
+	 * @deprecated Use remoteVideoProducers instead. Kept for older clients.
+	 */
 	remoteVideoIds: number[];
+	/**
+	 * @deprecated Use remoteAudioProducers instead. Kept for older clients.
+	 */
 	remoteAudioIds: number[];
+	/**
+	 * @deprecated Use remoteScreenProducers instead. Kept for older clients.
+	 */
 	remoteScreenIds: number[];
+	/**
+	 * @deprecated Use remoteScreenAudioProducers instead. Kept for older clients.
+	 */
 	remoteScreenAudioIds: number[];
+	/**
+	 * @deprecated Use remoteExternalAudioProducers / remoteExternalVideoProducers
+	 * and externalStreamTracks instead. Kept for older clients.
+	 */
 	remoteExternalStreamIds: number[];
 	// Authoritative per-stream external track presence from the snapshot.
 	// Optional for backward compatibility with older servers; when present the
 	// client prefers it over (potentially stale) local channel metadata.
 	externalStreamTracks?: { [streamId: number]: { audio: boolean; video: boolean } };
+	remoteVideoProducers?: TRemoteProducerRef[];
+	remoteAudioProducers?: TRemoteProducerRef[];
+	remoteScreenProducers?: TRemoteProducerRef[];
+	remoteScreenAudioProducers?: TRemoteProducerRef[];
+	remoteExternalAudioProducers?: TExternalProducerRef[];
+	remoteExternalVideoProducers?: TExternalProducerRef[];
 };
 
 export type TPublicServerSettings = Pick<

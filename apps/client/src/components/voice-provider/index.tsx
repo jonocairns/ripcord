@@ -55,10 +55,8 @@ import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } fr
 import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from './default-input-device';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
-import {
-	selectWatchedPendingScreenAudioIds,
-	tracksScreenAudioWatchIntent,
-} from './hooks/screen-audio-watch-intent';
+import { useRemoteMediaSubscriptions } from './hooks/remote-media-subscriptions';
+import { selectWatchedPendingScreenAudioIds, tracksScreenAudioWatchIntent } from './hooks/screen-audio-watch-intent';
 import { shouldDeferTransportFailureToReconnect } from './hooks/transport-failure-policy';
 import { useLocalStreams } from './hooks/use-local-streams';
 import {
@@ -66,7 +64,6 @@ import {
 	getPendingStreamKey,
 	PENDING_STREAM_REPAIR_AGE_MS,
 	type TExternalStreamTrackPresence,
-	usePendingStreams,
 } from './hooks/use-pending-streams';
 import { useRemoteStreams } from './hooks/use-remote-streams';
 import { useScreenShareQualityGuard } from './hooks/use-screen-share-quality-guard';
@@ -568,7 +565,7 @@ export type TVoiceProvider = {
 	'localAudioStream' | 'localVideoStream' | 'localScreenShareStream' | 'localScreenShareAudioStream'
 > &
 	Pick<ReturnType<typeof useRemoteStreams>, 'remoteUserStreams' | 'externalStreams'> &
-	Pick<ReturnType<typeof usePendingStreams>, 'pendingStreams'> &
+	Pick<ReturnType<typeof useRemoteMediaSubscriptions>, 'pendingStreams' | 'remoteMediaSubscriptions'> &
 	ReturnType<typeof useVoiceControls>;
 
 const VoiceProviderContext = createContext<TVoiceProvider>({
@@ -599,6 +596,7 @@ const VoiceProviderContext = createContext<TVoiceProvider>({
 	remoteUserStreams: {},
 	externalStreams: {},
 	pendingStreams: new Map(),
+	remoteMediaSubscriptions: new Map(),
 });
 
 const VoiceActivityContext = createContext<VoiceActivityStore | null>(null);
@@ -813,9 +811,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		externalStreams,
 		remoteUserStreams,
 	} = useRemoteStreams();
-	const remoteUserStreamsRef = useLatestRef(remoteUserStreams);
-	const externalStreamsRef = useLatestRef(externalStreams);
 	const {
+		remoteMediaSubscriptions,
 		pendingStreams,
 		addPendingStream,
 		removePendingStream,
@@ -823,7 +820,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearAllPendingStreams,
 		reconcilePendingStreams,
 		refreshPendingStreamAges,
-	} = usePendingStreams();
+		markWatchRequested,
+		markWatchStopped,
+		markConsumeStarted,
+		markConsumeSucceeded,
+		markConsumeFailed,
+		clearExternalStream: clearRemoteMediaExternalStream,
+	} = useRemoteMediaSubscriptions();
+	const remoteMediaSubscriptionsRef = useLatestRef(remoteMediaSubscriptions);
 	const pendingStreamsRef = useLatestRef(pendingStreams);
 
 	const {
@@ -931,9 +935,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		addRemoteUserStream,
 		removeRemoteUserStream,
 		addPendingStream,
-		removePendingStream,
 		clearAllPendingStreams,
 		reconcilePendingStreams,
+		markWatchStopped,
+		markConsumeStarted,
+		markConsumeSucceeded,
+		markConsumeFailed,
 		onTransportFailure,
 	});
 
@@ -957,34 +964,33 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		const watchedRemoteStreams: Record<number, TRemoteUserStreamKinds[]> = {};
 		const watchedExternalStreams: Record<number, TTrackedExternalWatchState> = {};
 
-		Object.entries(remoteUserStreamsRef.current).forEach(([userId, streams]) => {
-			const watchedKinds: TRemoteUserStreamKinds[] = [];
-
-			if (streams[StreamKind.VIDEO]) {
-				watchedKinds.push(StreamKind.VIDEO);
+		remoteMediaSubscriptionsRef.current.forEach((subscription) => {
+			if (!subscription.desired || subscription.kind === StreamKind.AUDIO) {
+				return;
 			}
 
-			if (streams[StreamKind.SCREEN]) {
-				watchedKinds.push(StreamKind.SCREEN);
+			if (
+				subscription.kind === StreamKind.VIDEO ||
+				subscription.kind === StreamKind.SCREEN ||
+				subscription.kind === StreamKind.SCREEN_AUDIO
+			) {
+				const watchedKinds = watchedRemoteStreams[subscription.remoteId] ?? [];
+				watchedKinds.push(subscription.kind);
+				watchedRemoteStreams[subscription.remoteId] = watchedKinds;
+				return;
 			}
 
-			if (streams[StreamKind.SCREEN_AUDIO]) {
-				watchedKinds.push(StreamKind.SCREEN_AUDIO);
-			}
+			if (subscription.kind === StreamKind.EXTERNAL_AUDIO || subscription.kind === StreamKind.EXTERNAL_VIDEO) {
+				const watchedState = watchedExternalStreams[subscription.remoteId] ?? {
+					audio: false,
+					video: false,
+				};
 
-			if (watchedKinds.length > 0) {
-				watchedRemoteStreams[Number(userId)] = watchedKinds;
-			}
-		});
-
-		Object.entries(externalStreamsRef.current).forEach(([streamId, stream]) => {
-			const watchedState = {
-				audio: stream.audioStream !== undefined,
-				video: stream.videoStream !== undefined,
-			};
-
-			if (watchedState.audio || watchedState.video) {
-				watchedExternalStreams[Number(streamId)] = watchedState;
+				watchedExternalStreams[subscription.remoteId] = {
+					...watchedState,
+					audio: watchedState.audio || subscription.kind === StreamKind.EXTERNAL_AUDIO,
+					video: watchedState.video || subscription.kind === StreamKind.EXTERNAL_VIDEO,
+				};
 			}
 		});
 
@@ -1039,8 +1045,18 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		watchedScreenAudioRef.current.delete(remoteId);
 	}, []);
 
+	const removeExternalStreamAndSubscription = useCallback(
+		(streamId: number) => {
+			clearRemoteMediaExternalStream(streamId);
+			removeExternalStream(streamId);
+		},
+		[clearRemoteMediaExternalStream, removeExternalStream],
+	);
+
 	const acceptStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
+			markWatchRequested(remoteId, kind);
+
 			if (tracksScreenAudioWatchIntent(kind)) {
 				watchedScreenAudioRef.current.add(remoteId);
 			}
@@ -1089,7 +1105,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				void consume(remoteId, StreamKind.SCREEN_AUDIO, currentRtpCapabilities);
 			}
 		},
-		[consume, currentChannelExternalStreams, pendingStreamsRef],
+		[consume, currentChannelExternalStreams, markWatchRequested],
 	);
 
 	const stopWatchingStream = useCallback(
@@ -1100,6 +1116,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			if (tracksScreenAudioWatchIntent(kind)) {
 				watchedScreenAudioRef.current.delete(remoteId);
 			}
+
+			markWatchStopped(remoteId, kind);
 
 			if (isExternalStreamKind(kind)) {
 				const stream = currentChannelExternalStreams[remoteId];
@@ -1134,7 +1152,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			void stopWatchingConsumedStream(remoteId, kind);
 		},
-		[currentChannelExternalStreams, stopWatchingConsumedStream],
+		[currentChannelExternalStreams, markWatchStopped, stopWatchingConsumedStream],
 	);
 
 	// Surface source labels and configured maxBitrate ceilings to the stats
@@ -4463,7 +4481,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		removePendingStream,
 		removeRemoteUserStream,
 		removeExternalStreamTrack,
-		removeExternalStream,
+		removeExternalStream: removeExternalStreamAndSubscription,
 		clearRemoteUserStreamsForUser,
 		clearPendingStreamsForUser,
 		clearScreenAudioWatchIntent,
@@ -4508,6 +4526,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			remoteUserStreams,
 			externalStreams,
 			pendingStreams,
+			remoteMediaSubscriptions,
 		}),
 		[
 			loading,
@@ -4532,6 +4551,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			remoteUserStreams,
 			externalStreams,
 			pendingStreams,
+			remoteMediaSubscriptions,
 		],
 	);
 

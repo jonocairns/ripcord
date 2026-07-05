@@ -12,7 +12,7 @@ import {
 	reserveConsumeOperation,
 	resetConsumeOperationGeneration,
 } from './consume-operation-state';
-import { getConsumeRetryDelayMs, shouldRetryConsume } from './consume-retry-policy';
+import { getConsumeRetryDelayMs } from './consume-retry-policy';
 import {
 	createExistingProducersSweeper,
 	type TExistingProducersSweeper,
@@ -49,9 +49,12 @@ type TUseTransportParams = {
 	) => void;
 	removeExternalStreamTrack: (streamId: number, kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO) => void;
 	addPendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
-	removePendingStream: (remoteId: number, kind: StreamKind) => void;
 	clearAllPendingStreams: () => void;
 	reconcilePendingStreams: (producers: TRemoteProducerIds, externalStreamTracks?: TExternalStreamTrackPresence) => void;
+	markWatchStopped: (remoteId: number, kind: StreamKind) => void;
+	markConsumeStarted: (remoteId: number, kind: StreamKind, producerId?: string) => void;
+	markConsumeSucceeded: (remoteId: number, kind: StreamKind, producerId: string, consumerId: string) => void;
+	markConsumeFailed: (remoteId: number, kind: StreamKind, reason?: string) => void;
 	onTransportFailure: () => void;
 };
 
@@ -61,9 +64,12 @@ const useTransports = ({
 	addExternalStreamTrack,
 	removeExternalStreamTrack,
 	addPendingStream,
-	removePendingStream,
 	clearAllPendingStreams,
 	reconcilePendingStreams,
+	markWatchStopped,
+	markConsumeStarted,
+	markConsumeSucceeded,
+	markConsumeFailed,
 	onTransportFailure,
 }: TUseTransportParams) => {
 	const producerTransport = useRef<Transport<AppData> | undefined>(undefined);
@@ -488,7 +494,7 @@ const useTransports = ({
 				}
 
 				serverConsumerCleanupTarget = undefined;
-				removePendingStream(remoteId, kind);
+				markConsumeSucceeded(remoteId, kind, producerId, consumerId);
 				return 'success';
 			} catch (error) {
 				logVoice('Error consuming remote producer', { error });
@@ -503,7 +509,7 @@ const useTransports = ({
 			removeRemoteUserStream,
 			addExternalStreamTrack,
 			removeExternalStreamTrack,
-			removePendingStream,
+			markConsumeSucceeded,
 			closeServerConsumerAfterFailedConsume,
 		],
 	);
@@ -533,7 +539,7 @@ const useTransports = ({
 
 					let failedAttemptIndex = 0;
 
-					addPendingStream(remoteId, kind, expectedProducerId);
+					markConsumeStarted(remoteId, kind, expectedProducerId);
 
 					try {
 						while (consumeOperationState.current.generation === operation.generation) {
@@ -555,9 +561,7 @@ const useTransports = ({
 									kind,
 									failedAttempts: failedAttemptIndex + 1,
 								});
-								if (!shouldRetryConsume(kind)) {
-									removePendingStream(remoteId, kind);
-								}
+								markConsumeFailed(remoteId, kind, 'consume retry exhausted');
 								return;
 							}
 
@@ -583,7 +587,7 @@ const useTransports = ({
 				},
 			);
 		},
-		[addPendingStream, consumeOnce, removePendingStream],
+		[consumeOnce, markConsumeFailed, markConsumeStarted],
 	);
 
 	const runConsumeExistingProducersSweep = useCallback(
@@ -692,7 +696,7 @@ const useTransports = ({
 				existingConsumer.close();
 			}
 
-			addPendingStream(remoteId, kind);
+			markWatchStopped(remoteId, kind);
 
 			try {
 				const trpc = getTRPCClient();
@@ -712,7 +716,7 @@ const useTransports = ({
 				});
 			}
 		},
-		[addPendingStream],
+		[markWatchStopped],
 	);
 
 	const cleanupTransports = useCallback(() => {

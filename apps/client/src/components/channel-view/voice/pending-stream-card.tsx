@@ -9,9 +9,12 @@ import { cn } from '@/lib/utils';
 import { CardGradient } from './card-gradient';
 import { VoiceSurface } from './voice-surface';
 
+type TPendingStreamStatus = 'available' | 'wanted' | 'consuming' | 'retrying' | 'failed';
+
 type TPendingStreamCardProps = {
 	kind: StreamKind;
 	onWatch: () => void;
+	status?: TPendingStreamStatus;
 	userId?: number;
 	streamTitle?: string;
 	streamAvatarUrl?: string;
@@ -62,10 +65,25 @@ const getPendingStreamDetails = (
 };
 
 const PendingStreamCard = memo(
-	({ kind, onWatch, userId, streamTitle, streamAvatarUrl, className }: TPendingStreamCardProps) => {
+	({
+		kind,
+		onWatch,
+		status = 'available',
+		userId,
+		streamTitle,
+		streamAvatarUrl,
+		className,
+	}: TPendingStreamCardProps) => {
 		const user = useUserById(userId ?? 0);
 		const displayName = user?.name || streamTitle || 'This stream';
 		const { label, description, icon: Icon } = getPendingStreamDetails(kind, displayName);
+		const isWaiting = status === 'wanted' || status === 'consuming' || status === 'retrying';
+		const isFailed = status === 'failed';
+		const statusDescription = isFailed
+			? 'Stream unavailable.'
+			: isWaiting
+				? 'Connecting...'
+				: description;
 
 		return (
 			<VoiceSurface className={cn('relative', 'flex items-center justify-center', 'w-full h-full', className)}>
@@ -94,7 +112,7 @@ const PendingStreamCard = memo(
 
 					<div className="space-y-1">
 						<p className="text-lg font-semibold text-white">{displayName}</p>
-						<p className="text-sm text-white/70">{description}</p>
+						<p className="text-sm text-white/70">{statusDescription}</p>
 					</div>
 
 					<Button type="button" size="sm" onClick={onWatch}>
