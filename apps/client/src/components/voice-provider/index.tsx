@@ -3637,6 +3637,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 						let nonceRestarts = 0;
 
+						// Captured once, before any attempt runs: the first attempt clears
+						// the remote stream maps this snapshot is read from, so a capture
+						// inside the loop would be empty on every retry/nonce restart and
+						// a late-succeeding recovery would silently drop watched streams.
+						const watchedStreamsSnapshot = captureWatchedRemoteStreams();
+
 						for (let attempt = 0; attempt < RECOVERY_MAX_ATTEMPTS; attempt++) {
 							if (attempt > 0) {
 								await new Promise<void>((resolve) => setTimeout(resolve, RECOVERY_BACKOFF_MS[attempt - 1]));
@@ -3660,8 +3666,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									attempt: attempt + 1,
 									channelId: currentVoiceChannelIdRef.current,
 								});
-
-								const watchedStreamsSnapshot = captureWatchedRemoteStreams();
 
 								setConnectionStatus(ConnectionStatus.CONNECTING);
 								stopMonitoring();

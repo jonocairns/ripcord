@@ -109,6 +109,11 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 
 	let nonceRestarts = 0;
 
+	// Captured once, before any attempt runs: the first attempt clears the
+	// remote stream maps this snapshot is read from, so a capture inside the
+	// loop would be empty on every retry/nonce restart.
+	const snapshot = deps.captureWatchedStreams();
+
 	for (let attempt = 0; attempt < RECOVERY_MAX_ATTEMPTS; attempt++) {
 		if (attempt > 0) {
 			await deps.sleep(RECOVERY_BACKOFF_MS[attempt - 1] ?? 1_000);
@@ -124,8 +129,6 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 		};
 
 		try {
-			const snapshot = deps.captureWatchedStreams();
-
 			deps.setConnectionStatus('connecting');
 			deps.stopMonitoring();
 			deps.resetStats();
@@ -437,6 +440,44 @@ describe('recoverTransportSession orchestration', () => {
 		expect(consumed).toContainEqual(['99', 'externalVideo']);
 		expect(consumed).toContainEqual(['100', 'externalAudio']);
 		expect(consumed).not.toContainEqual(['100', 'externalVideo']);
+	});
+
+	it('restores watched streams from the pre-recovery snapshot when the first attempt fails after clearing them', async () => {
+		// Attempt 1 clears the remote stream maps, so a per-attempt capture
+		// would see nothing on retry — the snapshot must be taken once, before
+		// any attempt mutates state.
+		let captureCalls = 0;
+		let loadCalls = 0;
+		const consumed: Array<[number | string, string]> = [];
+		const deps = makeDeps({
+			captureWatchedStreams: mock(() => {
+				captureCalls++;
+				if (captureCalls > 1) {
+					// Simulates the cleared maps a mid-loop recapture would read.
+					return { remoteUserStreams: {}, externalStreams: {} };
+				}
+				return {
+					remoteUserStreams: { '10': ['screen', 'screenAudio'] },
+					externalStreams: { '99': { audio: true, video: false } },
+				};
+			}),
+			loadDevice: mock(() => {
+				loadCalls++;
+				if (loadCalls === 1) return Promise.reject(new Error('network blip'));
+				return Promise.resolve({ rtpCapabilities: {} });
+			}),
+			consume: mock((id, kind) => {
+				consumed.push([id, kind]);
+				return Promise.resolve();
+			}),
+		});
+
+		expect(await runRecovery(deps)).toBe(true);
+		expect(loadCalls).toBe(2);
+		expect(captureCalls).toBe(1);
+		expect(consumed).toContainEqual(['10', 'screen']);
+		expect(consumed).toContainEqual(['10', 'screenAudio']);
+		expect(consumed).toContainEqual(['99', 'externalAudio']);
 	});
 
 	it('restarts recovery when the nonce changes after device load', async () => {
