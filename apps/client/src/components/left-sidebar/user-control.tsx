@@ -11,7 +11,6 @@ import {
 	DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { logoutFromServer } from '@/features/server/actions';
-import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { updateUser } from '@/features/server/users/actions';
 import { useOwnPublicUser } from '@/features/server/users/hooks';
 import { openServerScreen } from '@/features/server-screens/actions';
@@ -67,7 +66,6 @@ const getStatusOption = (status: TUserPresenceStatus) =>
 
 const UserControl = memo(() => {
 	const ownPublicUser = useOwnPublicUser();
-	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const [pendingStatus, setPendingStatus] = useState<TUserPresenceStatus | undefined>();
 
 	const handleSettingsClick = useCallback(() => {
@@ -105,12 +103,7 @@ const UserControl = memo(() => {
 	const visibleStatusOption = getStatusOption(visiblePresenceStatus);
 
 	return (
-		<div
-			className={cn(
-				'flex h-14 items-center justify-between gap-2 px-3',
-				currentVoiceChannelId !== undefined && 'border-t border-white/6',
-			)}
-		>
+		<div className="flex h-14 items-center justify-between gap-2 px-3">
 			<UserPopover
 				userId={ownPublicUser.id}
 				actions={
