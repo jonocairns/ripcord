@@ -58,6 +58,7 @@ import { FloatingPinnedCard } from './floating-pinned-card';
 import { shouldDeferTransportFailureToReconnect } from './hooks/transport-failure-policy';
 import { useLocalStreams } from './hooks/use-local-streams';
 import {
+	getOldestRepairEligiblePendingCreatedAt,
 	getPendingStreamKey,
 	PENDING_STREAM_REPAIR_AGE_MS,
 	type TExternalStreamTrackPresence,
@@ -811,6 +812,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearPendingStreamsForUser,
 		clearAllPendingStreams,
 		reconcilePendingStreams,
+		refreshPendingStreamAges,
 	} = usePendingStreams();
 	const pendingStreamsRef = useLatestRef(pendingStreams);
 
@@ -1311,18 +1313,24 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
-		let oldestPendingCreatedAt = Number.POSITIVE_INFINITY;
+		const oldestRepairEligibleCreatedAt = getOldestRepairEligiblePendingCreatedAt(pendingStreams, (streamId, kind) => {
+			const stream = currentChannelExternalStreams[streamId];
 
-		pendingStreams.forEach((stream) => {
-			oldestPendingCreatedAt = Math.min(oldestPendingCreatedAt, stream.createdAt);
+			if (!stream) {
+				return false;
+			}
+
+			const trackedState = watchedExternalStreamsRef.current[getExternalStreamWatchIdentity(stream)];
+
+			return trackedState?.[getTrackedExternalWatchField(kind)] === true;
 		});
 
-		if (!Number.isFinite(oldestPendingCreatedAt)) {
+		if (oldestRepairEligibleCreatedAt === undefined) {
 			return;
 		}
 
 		const scheduledVoiceChannelId = currentVoiceChannelId;
-		const repairDelayMs = Math.max(0, oldestPendingCreatedAt + PENDING_STREAM_REPAIR_AGE_MS - Date.now());
+		const repairDelayMs = Math.max(0, oldestRepairEligibleCreatedAt + PENDING_STREAM_REPAIR_AGE_MS - Date.now());
 		const repairTimeout = setTimeout(() => {
 			if (currentVoiceChannelIdRef.current !== scheduledVoiceChannelId) {
 				return;
@@ -1332,6 +1340,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				channelId: scheduledVoiceChannelId,
 				pendingCount: pendingStreams.size,
 			});
+
+			// Reset every pending entry's age so the next repair pass is at least a
+			// full repair age away, even if this sweep cannot clear an entry.
+			refreshPendingStreamAges();
 
 			void consumeExistingProducers(voiceEventRtpCapabilities, getExternalStreamTrackPresence()).catch((error) => {
 				logVoice('Failed to repair stale pending voice streams', {
@@ -1346,9 +1358,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		};
 	}, [
 		consumeExistingProducers,
+		currentChannelExternalStreams,
 		currentVoiceChannelId,
 		getExternalStreamTrackPresence,
 		pendingStreams,
+		refreshPendingStreamAges,
 		voiceEventRtpCapabilities,
 	]);
 
