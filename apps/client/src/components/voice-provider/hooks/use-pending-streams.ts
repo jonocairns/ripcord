@@ -25,6 +25,41 @@ const isUserPendingStreamKind = (kind: StreamKind) => {
 	);
 };
 
+export type TIsExternalStreamWatched = (
+	streamId: number,
+	kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO,
+) => boolean;
+
+/**
+ * Oldest `createdAt` among pending streams the client auto-consumes and can
+ * therefore repair. VIDEO/SCREEN/SCREEN_AUDIO pendings are watch-on-demand
+ * ("stream available" markers) and stay pending indefinitely by design, so
+ * they must never arm the stale-stream repair timer. External tracks are only
+ * auto-consumed while watched.
+ */
+export const getOldestRepairEligiblePendingCreatedAt = (
+	pendingStreams: Map<string, TPendingStream>,
+	isExternalStreamWatched: TIsExternalStreamWatched,
+): number | undefined => {
+	let oldestCreatedAt: number | undefined;
+
+	pendingStreams.forEach((stream) => {
+		if (stream.kind === StreamKind.EXTERNAL_AUDIO || stream.kind === StreamKind.EXTERNAL_VIDEO) {
+			if (!isExternalStreamWatched(stream.remoteId, stream.kind)) {
+				return;
+			}
+		} else if (stream.kind !== StreamKind.AUDIO) {
+			return;
+		}
+
+		if (oldestCreatedAt === undefined || stream.createdAt < oldestCreatedAt) {
+			oldestCreatedAt = stream.createdAt;
+		}
+	});
+
+	return oldestCreatedAt;
+};
+
 const addActiveKeysForIds = (activeKeys: Set<string>, ids: number[], kind: StreamKind): void => {
 	ids.forEach((remoteId) => {
 		activeKeys.add(getPendingStreamKey(remoteId, kind));
@@ -134,6 +169,26 @@ const usePendingStreams = () => {
 		});
 	}, []);
 
+	// Backoff safety net for the stale-stream repair loop: bumping every entry's
+	// createdAt guarantees the next repair fires no sooner than a full repair
+	// age from now, even if an entry can never be consumed.
+	const refreshPendingStreamAges = useCallback(() => {
+		setPendingStreams((prev) => {
+			if (prev.size === 0) {
+				return prev;
+			}
+
+			const now = Date.now();
+			const next = new Map<string, TPendingStream>();
+
+			prev.forEach((stream, key) => {
+				next.set(key, { ...stream, createdAt: now });
+			});
+
+			return next;
+		});
+	}, []);
+
 	const clearAllPendingStreams = useCallback(() => {
 		setPendingStreams((prev) => {
 			if (prev.size === 0) {
@@ -158,6 +213,7 @@ const usePendingStreams = () => {
 		clearPendingStreamsForUser,
 		clearAllPendingStreams,
 		reconcilePendingStreams,
+		refreshPendingStreamAges,
 	};
 };
 

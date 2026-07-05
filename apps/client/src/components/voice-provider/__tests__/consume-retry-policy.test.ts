@@ -15,10 +15,13 @@ describe('consume retry policy', () => {
 		expect(shouldRetryConsume(StreamKind.EXTERNAL_AUDIO)).toBe(true);
 	});
 
-	it('does not retry video consumer kinds', () => {
+	it('retries external video so its auto-re-added pending entry cannot loop', () => {
+		expect(shouldRetryConsume(StreamKind.EXTERNAL_VIDEO)).toBe(true);
+	});
+
+	it('does not retry watch-on-demand user video kinds', () => {
 		expect(shouldRetryConsume(StreamKind.VIDEO)).toBe(false);
 		expect(shouldRetryConsume(StreamKind.SCREEN)).toBe(false);
-		expect(shouldRetryConsume(StreamKind.EXTERNAL_VIDEO)).toBe(false);
 	});
 
 	it('uses the fast delay list for the initial audio retries', () => {

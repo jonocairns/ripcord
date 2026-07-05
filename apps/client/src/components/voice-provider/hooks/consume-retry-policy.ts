@@ -11,7 +11,16 @@ const CONSUME_RETRY_TAIL_ATTEMPTS = 6;
 const CONSUME_RETRY_MAX_ATTEMPTS = CONSUME_RETRY_DELAYS_MS.length + CONSUME_RETRY_TAIL_ATTEMPTS;
 
 const shouldRetryConsume = (kind: StreamKind) => {
-	return kind === StreamKind.AUDIO || kind === StreamKind.SCREEN_AUDIO || kind === StreamKind.EXTERNAL_AUDIO;
+	// EXTERNAL_VIDEO must retry (keeping its pending entry between attempts):
+	// while the external track is present the provider auto-re-adds a missing
+	// pending entry and auto-consumes it when watched, so dropping the entry on
+	// failure creates a zero-delay add -> consume -> fail -> remove cycle.
+	return (
+		kind === StreamKind.AUDIO ||
+		kind === StreamKind.SCREEN_AUDIO ||
+		kind === StreamKind.EXTERNAL_AUDIO ||
+		kind === StreamKind.EXTERNAL_VIDEO
+	);
 };
 
 const getConsumeRetryDelayMs = (kind: StreamKind, failedAttemptIndex: number) => {
