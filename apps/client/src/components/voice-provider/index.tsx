@@ -55,6 +55,10 @@ import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } fr
 import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from './default-input-device';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
+import {
+	selectWatchedPendingScreenAudioIds,
+	tracksScreenAudioWatchIntent,
+} from './hooks/screen-audio-watch-intent';
 import { shouldDeferTransportFailureToReconnect } from './hooks/transport-failure-policy';
 import { useLocalStreams } from './hooks/use-local-streams';
 import {
@@ -735,6 +739,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const pushReleaseDelayMsRef = useLatestRef(devices.pushReleaseDelayMs);
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const watchedExternalStreamsRef = useRef<Record<string, TTrackedExternalWatchState>>({});
+	// Screen-audio watch intent per sharer. Set when the viewer accepts the
+	// screen (audio may appear later) or its audio; cleared on explicit
+	// stop-watch, sharer leave, and SCREEN producer close. Deliberately survives
+	// SCREEN_AUDIO producer churn, mirroring external watch intent, so a sharer
+	// toggling audio does not silently drop the viewer's opt-in.
+	const watchedScreenAudioRef = useRef<Set<number>>(new Set());
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
 	const localVoiceActivityCleanupRef = useRef<(() => void) | undefined>(undefined);
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
@@ -1025,8 +1035,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[closeProducerOnServer],
 	);
 
+	const clearScreenAudioWatchIntent = useCallback((remoteId: number) => {
+		watchedScreenAudioRef.current.delete(remoteId);
+	}, []);
+
 	const acceptStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
+			if (tracksScreenAudioWatchIntent(kind)) {
+				watchedScreenAudioRef.current.add(remoteId);
+			}
+
 			if (isExternalStreamKind(kind)) {
 				const stream = currentChannelExternalStreams[remoteId];
 
@@ -1059,12 +1077,30 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 
 			void consume(remoteId, kind, currentRtpCapabilities);
+
+			// Paired audio can already be pending when the screen is accepted. The
+			// watched-pending effect only re-drives on a pendingStreams change,
+			// which a failed SCREEN consume never produces — consume directly so
+			// audio pickup does not depend on the video consume succeeding.
+			if (
+				kind === StreamKind.SCREEN &&
+				pendingStreamsRef.current.has(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))
+			) {
+				void consume(remoteId, StreamKind.SCREEN_AUDIO, currentRtpCapabilities);
+			}
 		},
-		[consume, currentChannelExternalStreams],
+		[consume, currentChannelExternalStreams, pendingStreamsRef],
 	);
 
 	const stopWatchingStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
+			// Exiting the screen tile must drop audio intent even while SCREEN_AUDIO
+			// is only pending, or stranded intent would auto-consume audio for a
+			// later share the viewer never accepted.
+			if (tracksScreenAudioWatchIntent(kind)) {
+				watchedScreenAudioRef.current.delete(remoteId);
+			}
+
 			if (isExternalStreamKind(kind)) {
 				const stream = currentChannelExternalStreams[remoteId];
 
@@ -1251,6 +1287,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	useEffect(() => {
 		if (currentVoiceChannelId === undefined) {
 			watchedExternalStreamsRef.current = {};
+			watchedScreenAudioRef.current.clear();
 			return;
 		}
 
@@ -1287,6 +1324,30 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		});
 	}, [consume, currentChannelExternalStreams, currentVoiceChannelId, pendingStreams, voiceEventRtpCapabilities]);
 
+	// Re-drive SCREEN_AUDIO consumption while the viewer still intends to hear
+	// it: screen audio can appear after the viewer accepted the screen, and a
+	// consume that exhausted its retries leaves the pending entry behind with no
+	// manual affordance (the stage hides the pending card once screen video is
+	// consumed). The repair pass refreshes pending ages, so a stranded entry
+	// re-enters here on the repair cadence rather than staying silent forever.
+	useEffect(() => {
+		if (currentVoiceChannelId === undefined) {
+			return;
+		}
+
+		const currentRtpCapabilities = voiceEventRtpCapabilities;
+
+		if (!currentRtpCapabilities) {
+			return;
+		}
+
+		selectWatchedPendingScreenAudioIds(pendingStreams, (remoteId) =>
+			watchedScreenAudioRef.current.has(remoteId),
+		).forEach((remoteId) => {
+			void consume(remoteId, StreamKind.SCREEN_AUDIO, currentRtpCapabilities);
+		});
+	}, [consume, currentVoiceChannelId, pendingStreams, voiceEventRtpCapabilities]);
+
 	useEffect(() => {
 		Object.entries(currentChannelExternalStreams).forEach(([streamId, stream]) => {
 			const numericStreamId = Number(streamId);
@@ -1313,17 +1374,21 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
-		const oldestRepairEligibleCreatedAt = getOldestRepairEligiblePendingCreatedAt(pendingStreams, (streamId, kind) => {
-			const stream = currentChannelExternalStreams[streamId];
+		const oldestRepairEligibleCreatedAt = getOldestRepairEligiblePendingCreatedAt(
+			pendingStreams,
+			(streamId, kind) => {
+				const stream = currentChannelExternalStreams[streamId];
 
-			if (!stream) {
-				return false;
-			}
+				if (!stream) {
+					return false;
+				}
 
-			const trackedState = watchedExternalStreamsRef.current[getExternalStreamWatchIdentity(stream)];
+				const trackedState = watchedExternalStreamsRef.current[getExternalStreamWatchIdentity(stream)];
 
-			return trackedState?.[getTrackedExternalWatchField(kind)] === true;
-		});
+				return trackedState?.[getTrackedExternalWatchField(kind)] === true;
+			},
+			(remoteId) => watchedScreenAudioRef.current.has(remoteId),
+		);
 
 		if (oldestRepairEligibleCreatedAt === undefined) {
 			return;
@@ -3583,6 +3648,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 						let nonceRestarts = 0;
 
+						// Captured once, before any attempt runs: the first attempt clears
+						// the remote stream maps this snapshot is read from, so a capture
+						// inside the loop would be empty on every retry/nonce restart and
+						// a late-succeeding recovery would silently drop watched streams.
+						const watchedStreamsSnapshot = captureWatchedRemoteStreams();
+
 						for (let attempt = 0; attempt < RECOVERY_MAX_ATTEMPTS; attempt++) {
 							if (attempt > 0) {
 								await new Promise<void>((resolve) => setTimeout(resolve, RECOVERY_BACKOFF_MS[attempt - 1]));
@@ -3606,8 +3677,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									attempt: attempt + 1,
 									channelId: currentVoiceChannelIdRef.current,
 								});
-
-								const watchedStreamsSnapshot = captureWatchedRemoteStreams();
 
 								setConnectionStatus(ConnectionStatus.CONNECTING);
 								stopMonitoring();
@@ -3671,6 +3740,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									);
 								} else if (currentAudioStream && currentAudioTrack && currentAudioTrack.readyState === 'live') {
 									republishTasks.push(publishMicTrack(currentAudioStream, currentAudioTrack));
+								} else if (currentAudioStream && canSpeakRef.current && startMicStreamRef.current) {
+									// cleanupTransports() above closed the producer transport, and
+									// mediasoup stops the produced mic track on transport close
+									// (produce() defaults stopTracks: true) — so an in-session
+									// recovery never sees a live track in the branch above. A local
+									// audio stream with a dead track means the user was publishing
+									// mic when the transport failed: restart capture rather than
+									// completing recovery with a silent mic.
+									republishTasks.push(
+										startMicStreamRef.current().catch((error) => {
+											logVoice('Error restarting microphone after voice transport recovery', { error });
+										}),
+									);
 								}
 
 								const localMediaRepublishPlan = buildLocalMediaRepublishPlan();
@@ -4384,6 +4466,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		removeExternalStream,
 		clearRemoteUserStreamsForUser,
 		clearPendingStreamsForUser,
+		clearScreenAudioWatchIntent,
 		onVoiceActivityUpdate: handleVoiceActivityUpdate,
 		onTransportFailure,
 		getActiveConsumerProducerId,
