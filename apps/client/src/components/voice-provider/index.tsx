@@ -735,6 +735,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const pushReleaseDelayMsRef = useLatestRef(devices.pushReleaseDelayMs);
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const watchedExternalStreamsRef = useRef<Record<string, TTrackedExternalWatchState>>({});
+	// Screen-audio watch intent per sharer. Set when the viewer accepts the
+	// screen (audio may appear later) or its audio; cleared on explicit
+	// stop-watch, sharer leave, and SCREEN producer close. Deliberately survives
+	// SCREEN_AUDIO producer churn, mirroring external watch intent, so a sharer
+	// toggling audio does not silently drop the viewer's opt-in.
+	const watchedScreenAudioRef = useRef<Set<number>>(new Set());
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
 	const localVoiceActivityCleanupRef = useRef<(() => void) | undefined>(undefined);
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
@@ -1025,8 +1031,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[closeProducerOnServer],
 	);
 
+	const clearScreenAudioWatchIntent = useCallback((remoteId: number) => {
+		watchedScreenAudioRef.current.delete(remoteId);
+	}, []);
+
 	const acceptStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
+			if (kind === StreamKind.SCREEN || kind === StreamKind.SCREEN_AUDIO) {
+				watchedScreenAudioRef.current.add(remoteId);
+			}
+
 			if (isExternalStreamKind(kind)) {
 				const stream = currentChannelExternalStreams[remoteId];
 
@@ -1065,6 +1079,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const stopWatchingStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
+			// Exiting the screen tile must drop audio intent even while SCREEN_AUDIO
+			// is only pending, or stranded intent would auto-consume audio for a
+			// later share the viewer never accepted.
+			if (kind === StreamKind.SCREEN || kind === StreamKind.SCREEN_AUDIO) {
+				watchedScreenAudioRef.current.delete(remoteId);
+			}
+
 			if (isExternalStreamKind(kind)) {
 				const stream = currentChannelExternalStreams[remoteId];
 
@@ -1251,6 +1272,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	useEffect(() => {
 		if (currentVoiceChannelId === undefined) {
 			watchedExternalStreamsRef.current = {};
+			watchedScreenAudioRef.current.clear();
 			return;
 		}
 
@@ -1287,6 +1309,32 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		});
 	}, [consume, currentChannelExternalStreams, currentVoiceChannelId, pendingStreams, voiceEventRtpCapabilities]);
 
+	// Re-drive SCREEN_AUDIO consumption while the viewer still intends to hear
+	// it: screen audio can appear after the viewer accepted the screen, and a
+	// consume that exhausted its retries leaves the pending entry behind with no
+	// manual affordance (the stage hides the pending card once screen video is
+	// consumed). The repair pass refreshes pending ages, so a stranded entry
+	// re-enters here on the repair cadence rather than staying silent forever.
+	useEffect(() => {
+		if (currentVoiceChannelId === undefined) {
+			return;
+		}
+
+		const currentRtpCapabilities = voiceEventRtpCapabilities;
+
+		if (!currentRtpCapabilities) {
+			return;
+		}
+
+		pendingStreams.forEach((stream) => {
+			if (stream.kind !== StreamKind.SCREEN_AUDIO || !watchedScreenAudioRef.current.has(stream.remoteId)) {
+				return;
+			}
+
+			void consume(stream.remoteId, StreamKind.SCREEN_AUDIO, currentRtpCapabilities);
+		});
+	}, [consume, currentVoiceChannelId, pendingStreams, voiceEventRtpCapabilities]);
+
 	useEffect(() => {
 		Object.entries(currentChannelExternalStreams).forEach(([streamId, stream]) => {
 			const numericStreamId = Number(streamId);
@@ -1313,17 +1361,21 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
-		const oldestRepairEligibleCreatedAt = getOldestRepairEligiblePendingCreatedAt(pendingStreams, (streamId, kind) => {
-			const stream = currentChannelExternalStreams[streamId];
+		const oldestRepairEligibleCreatedAt = getOldestRepairEligiblePendingCreatedAt(
+			pendingStreams,
+			(streamId, kind) => {
+				const stream = currentChannelExternalStreams[streamId];
 
-			if (!stream) {
-				return false;
-			}
+				if (!stream) {
+					return false;
+				}
 
-			const trackedState = watchedExternalStreamsRef.current[getExternalStreamWatchIdentity(stream)];
+				const trackedState = watchedExternalStreamsRef.current[getExternalStreamWatchIdentity(stream)];
 
-			return trackedState?.[getTrackedExternalWatchField(kind)] === true;
-		});
+				return trackedState?.[getTrackedExternalWatchField(kind)] === true;
+			},
+			(remoteId) => watchedScreenAudioRef.current.has(remoteId),
+		);
 
 		if (oldestRepairEligibleCreatedAt === undefined) {
 			return;
@@ -4384,6 +4436,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		removeExternalStream,
 		clearRemoteUserStreamsForUser,
 		clearPendingStreamsForUser,
+		clearScreenAudioWatchIntent,
 		onVoiceActivityUpdate: handleVoiceActivityUpdate,
 		onTransportFailure,
 		getActiveConsumerProducerId,

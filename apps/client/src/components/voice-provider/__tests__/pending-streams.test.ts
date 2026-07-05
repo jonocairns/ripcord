@@ -107,6 +107,7 @@ describe('repair-eligible pending stream age', () => {
 				makePending(2, StreamKind.VIDEO, 100),
 			]),
 			() => true,
+			() => false,
 		);
 
 		expect(oldest).toBeUndefined();
@@ -119,6 +120,7 @@ describe('repair-eligible pending stream age', () => {
 				makePending(3, StreamKind.SCREEN, 100),
 				makePending(4, StreamKind.AUDIO, 200),
 			]),
+			() => false,
 			() => false,
 		);
 
@@ -135,8 +137,37 @@ describe('repair-eligible pending stream age', () => {
 			getOldestRepairEligiblePendingCreatedAt(
 				pendingStreams,
 				(_streamId, kind) => kind === StreamKind.EXTERNAL_AUDIO,
+				() => false,
 			),
 		).toBe(100);
-		expect(getOldestRepairEligiblePendingCreatedAt(pendingStreams, () => false)).toBeUndefined();
+		expect(
+			getOldestRepairEligiblePendingCreatedAt(
+				pendingStreams,
+				() => false,
+				() => false,
+			),
+		).toBeUndefined();
+	});
+
+	it('includes screen-audio pendings only while their screen is watched', () => {
+		const pendingStreams = makePendingMap([
+			makePending(3, StreamKind.SCREEN, 100),
+			makePending(3, StreamKind.SCREEN_AUDIO, 200),
+		]);
+
+		expect(
+			getOldestRepairEligiblePendingCreatedAt(
+				pendingStreams,
+				() => false,
+				(remoteId) => remoteId === 3,
+			),
+		).toBe(200);
+		expect(
+			getOldestRepairEligiblePendingCreatedAt(
+				pendingStreams,
+				() => false,
+				() => false,
+			),
+		).toBeUndefined();
 	});
 });
