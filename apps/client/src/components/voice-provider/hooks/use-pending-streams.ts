@@ -15,6 +15,14 @@ export type TExternalStreamTrackPresence = {
 
 export const getPendingStreamKey = (remoteId: number, kind: StreamKind) => `${remoteId}-${kind}`;
 
+// Snapshot track metadata marks a track absent only when it is explicitly
+// false; missing metadata means "assume present" so a live track is never
+// suppressed by stale or incomplete presence info.
+export const isExternalTrackPresent = (
+	tracks: { audio?: boolean; video?: boolean } | undefined,
+	track: 'audio' | 'video',
+): boolean => tracks?.[track] !== false;
+
 export type TIsExternalStreamWatched = (
 	streamId: number,
 	kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO,
@@ -77,11 +85,11 @@ export const buildActivePendingStreamKeys = (
 	producers.remoteExternalStreamIds.forEach((streamId) => {
 		const tracks = externalStreamTracks?.[streamId];
 
-		if (tracks === undefined || tracks.audio !== false) {
+		if (isExternalTrackPresent(tracks, 'audio')) {
 			activeKeys.add(getPendingStreamKey(streamId, StreamKind.EXTERNAL_AUDIO));
 		}
 
-		if (tracks === undefined || tracks.video !== false) {
+		if (isExternalTrackPresent(tracks, 'video')) {
 			activeKeys.add(getPendingStreamKey(streamId, StreamKind.EXTERNAL_VIDEO));
 		}
 	});

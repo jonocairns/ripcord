@@ -1298,29 +1298,25 @@ class VoiceRuntime {
 	};
 
 	public getRemoteIds = (userId: number): TRemoteProducerIds => {
+		const toRemoteProducerRefs = (producers: TProducerMap) =>
+			Object.entries(producers)
+				.filter(([id]) => +id !== userId)
+				.map(([id, producer]) => ({ remoteId: +id, producerId: producer.id }));
+
 		const remoteExternalStreamIds = Object.keys(this.externalStreamsInternal).map((id) => +id);
-		const remoteAudioProducers = Object.entries(this.audioProducers)
-			.filter(([id]) => +id !== userId)
-			.map(([id, producer]) => ({ remoteId: +id, producerId: producer.id }));
-		const remoteVideoProducers = Object.entries(this.videoProducers)
-			.filter(([id]) => +id !== userId)
-			.map(([id, producer]) => ({ remoteId: +id, producerId: producer.id }));
-		const remoteScreenProducers = Object.entries(this.screenProducers)
-			.filter(([id]) => +id !== userId)
-			.map(([id, producer]) => ({ remoteId: +id, producerId: producer.id }));
-		const remoteScreenAudioProducers = Object.entries(this.screenAudioProducers)
-			.filter(([id]) => +id !== userId)
-			.map(([id, producer]) => ({ remoteId: +id, producerId: producer.id }));
-		const remoteExternalAudioProducers = remoteExternalStreamIds.flatMap((streamId) => {
-			const producer = this.getExternalStreamProducer(streamId, 'audio');
+		const toExternalProducerRefs = (kind: 'audio' | 'video') =>
+			remoteExternalStreamIds.flatMap((streamId) => {
+				const producer = this.getExternalStreamProducer(streamId, kind);
 
-			return producer ? [{ streamId, producerId: producer.id }] : [];
-		});
-		const remoteExternalVideoProducers = remoteExternalStreamIds.flatMap((streamId) => {
-			const producer = this.getExternalStreamProducer(streamId, 'video');
+				return producer ? [{ streamId, producerId: producer.id }] : [];
+			});
 
-			return producer ? [{ streamId, producerId: producer.id }] : [];
-		});
+		const remoteAudioProducers = toRemoteProducerRefs(this.audioProducers);
+		const remoteVideoProducers = toRemoteProducerRefs(this.videoProducers);
+		const remoteScreenProducers = toRemoteProducerRefs(this.screenProducers);
+		const remoteScreenAudioProducers = toRemoteProducerRefs(this.screenAudioProducers);
+		const remoteExternalAudioProducers = toExternalProducerRefs('audio');
+		const remoteExternalVideoProducers = toExternalProducerRefs('video');
 
 		return {
 			remoteVideoIds: remoteVideoProducers.map((producer) => producer.remoteId),

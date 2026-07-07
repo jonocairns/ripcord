@@ -1,6 +1,7 @@
 import { StreamKind } from '@sharkord/shared';
 import { Headphones, Monitor, Router, Video } from 'lucide-react';
 import { memo } from 'react';
+import type { TRemoteMediaStatus } from '@/components/voice-provider/hooks/remote-media-subscriptions';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { UserAvatar } from '@/components/user-avatar';
@@ -9,7 +10,9 @@ import { cn } from '@/lib/utils';
 import { CardGradient } from './card-gradient';
 import { VoiceSurface } from './voice-surface';
 
-type TPendingStreamStatus = 'available' | 'wanted' | 'consuming' | 'retrying' | 'failed';
+// The card vocabulary is the ledger status union minus 'consumed' — a consumed
+// slot renders real media, never a pending card.
+type TPendingStreamStatus = Exclude<TRemoteMediaStatus, 'consumed'>;
 
 type TPendingStreamCardProps = {
 	kind: StreamKind;
@@ -77,7 +80,7 @@ const PendingStreamCard = memo(
 		const user = useUserById(userId ?? 0);
 		const displayName = user?.name || streamTitle || 'This stream';
 		const { label, description, icon: Icon } = getPendingStreamDetails(kind, displayName);
-		const isWaiting = status === 'wanted' || status === 'consuming' || status === 'retrying';
+		const isWaiting = status === 'wanted' || status === 'consuming';
 		const isFailed = status === 'failed';
 		const statusDescription = isFailed
 			? 'Stream unavailable.'
@@ -126,4 +129,4 @@ const PendingStreamCard = memo(
 
 PendingStreamCard.displayName = 'PendingStreamCard';
 
-export { PendingStreamCard };
+export { PendingStreamCard, type TPendingStreamStatus };

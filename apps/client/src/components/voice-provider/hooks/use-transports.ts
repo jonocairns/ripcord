@@ -18,7 +18,7 @@ import {
 	type TExistingProducersSweeper,
 	type TExistingProducersSweepRequest,
 } from './existing-producers-sweep';
-import type { TExternalStreamTrackPresence } from './use-pending-streams';
+import { isExternalTrackPresent, type TExternalStreamTrackPresence } from './use-pending-streams';
 
 // How long to wait for an ICE "disconnected" state to recover before closing
 // the transport. ICE disconnected can be transient (brief packet loss / route
@@ -652,10 +652,10 @@ const useTransports = ({
 						remoteExternalStreamIds.forEach((streamId: number) => {
 							const tracks = effectiveExternalStreamTracks?.[streamId];
 
-							if (tracks?.audio !== false) {
+							if (isExternalTrackPresent(tracks, 'audio')) {
 								addPendingStream(streamId, StreamKind.EXTERNAL_AUDIO);
 							}
-							if (tracks?.video !== false) {
+							if (isExternalTrackPresent(tracks, 'video')) {
 								addPendingStream(streamId, StreamKind.EXTERNAL_VIDEO);
 							}
 						});

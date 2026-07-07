@@ -1,8 +1,13 @@
 import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
 import { useCallback, useMemo, useState } from 'react';
-import { getPendingStreamKey, type TExternalStreamTrackPresence, type TPendingStream } from './use-pending-streams';
+import {
+	getPendingStreamKey,
+	isExternalTrackPresent,
+	type TExternalStreamTrackPresence,
+	type TPendingStream,
+} from './use-pending-streams';
 
-export type TRemoteMediaStatus = 'available' | 'wanted' | 'consuming' | 'consumed' | 'retrying' | 'failed' | 'closing';
+export type TRemoteMediaStatus = 'available' | 'wanted' | 'consuming' | 'consumed' | 'failed';
 
 export type TRemoteMediaSubscription = {
 	key: string;
@@ -13,14 +18,10 @@ export type TRemoteMediaSubscription = {
 	desired: boolean;
 	status: TRemoteMediaStatus;
 	consumerId?: string;
-	consumeGeneration: number;
 	updatedAt: number;
 	pendingSince?: number;
-	retryAttempt: number;
-	nextRetryAt?: number;
 	lastFailureAt?: number;
 	lastFailureReason?: string;
-	lastRepairAt?: number;
 };
 
 export type TRemoteMediaSubscriptions = Map<string, TRemoteMediaSubscription>;
@@ -66,7 +67,7 @@ const getInitialStatus = (producerPresent: boolean, desired: boolean): TRemoteMe
 		return producerPresent ? 'wanted' : 'failed';
 	}
 
-	return producerPresent ? 'available' : 'available';
+	return 'available';
 };
 
 const makeSubscription = (
@@ -85,10 +86,8 @@ const makeSubscription = (
 		producerId,
 		desired,
 		status: getInitialStatus(true, desired),
-		consumeGeneration: 0,
 		updatedAt: now,
 		pendingSince: now,
-		retryAttempt: 0,
 	};
 };
 
@@ -105,13 +104,9 @@ const isMateriallyEqual = (a: TRemoteMediaSubscription, b: TRemoteMediaSubscript
 	a.desired === b.desired &&
 	a.status === b.status &&
 	a.consumerId === b.consumerId &&
-	a.consumeGeneration === b.consumeGeneration &&
 	a.pendingSince === b.pendingSince &&
-	a.retryAttempt === b.retryAttempt &&
-	a.nextRetryAt === b.nextRetryAt &&
 	a.lastFailureAt === b.lastFailureAt &&
-	a.lastFailureReason === b.lastFailureReason &&
-	a.lastRepairAt === b.lastRepairAt;
+	a.lastFailureReason === b.lastFailureReason;
 
 const applySlotUpdate = (
 	subscriptions: TRemoteMediaSubscriptions,
@@ -141,9 +136,7 @@ export const markRemoteProducerPresent = (
 	const base = existing ?? makeSubscription(remoteId, kind, now, producerId);
 	const desired = base.desired || isAutoDesiredKind(kind);
 	const status =
-		base.status === 'consuming' || base.status === 'consumed' || base.status === 'retrying'
-			? base.status
-			: getInitialStatus(true, desired);
+		base.status === 'consuming' || base.status === 'consumed' ? base.status : getInitialStatus(true, desired);
 
 	return applySlotUpdate(
 		subscriptions,
@@ -202,8 +195,6 @@ export const markRemoteWatchStopped = (
 			// Reset the pending age only when desire is actually being revoked so a
 			// repeated stop-watch is a no-op rather than a ledger write.
 			pendingSince: !base.producerPresent ? undefined : base.desired ? now : (base.pendingSince ?? now),
-			retryAttempt: 0,
-			nextRetryAt: undefined,
 			lastFailureReason: undefined,
 		},
 		now,
@@ -237,7 +228,6 @@ export const markRemoteConsumeStarted = (
 			status: 'consuming',
 			producerId: producerId ?? existing.producerId,
 			consumerId: undefined,
-			consumeGeneration: existing.consumeGeneration + 1,
 			pendingSince: existing.pendingSince ?? now,
 			lastFailureReason: undefined,
 			lastFailureAt: undefined,
@@ -268,8 +258,6 @@ export const markRemoteConsumeSucceeded = (
 			status: 'consumed',
 			consumerId,
 			pendingSince: undefined,
-			retryAttempt: 0,
-			nextRetryAt: undefined,
 			lastFailureReason: undefined,
 			lastFailureAt: undefined,
 		},
@@ -468,18 +456,14 @@ const producerSlotsFromSnapshot = (
 	const trackPresence = producers.externalStreamTracks ?? externalStreamTracks;
 	const externalAudioProducers =
 		producers.remoteExternalAudioProducers ??
-		producers.remoteExternalStreamIds.flatMap((streamId) => {
-			const tracks = trackPresence?.[streamId];
-
-			return tracks === undefined || tracks.audio !== false ? [{ streamId, producerId: undefined }] : [];
-		});
+		producers.remoteExternalStreamIds.flatMap((streamId) =>
+			isExternalTrackPresent(trackPresence?.[streamId], 'audio') ? [{ streamId, producerId: undefined }] : [],
+		);
 	const externalVideoProducers =
 		producers.remoteExternalVideoProducers ??
-		producers.remoteExternalStreamIds.flatMap((streamId) => {
-			const tracks = trackPresence?.[streamId];
-
-			return tracks === undefined || tracks.video !== false ? [{ streamId, producerId: undefined }] : [];
-		});
+		producers.remoteExternalStreamIds.flatMap((streamId) =>
+			isExternalTrackPresent(trackPresence?.[streamId], 'video') ? [{ streamId, producerId: undefined }] : [],
+		);
 
 	externalAudioProducers.forEach((producer) =>
 		slots.push({ remoteId: producer.streamId, kind: StreamKind.EXTERNAL_AUDIO, producerId: producer.producerId }),
@@ -524,6 +508,7 @@ export const refreshRemoteMediaPendingAges = (
 		return subscriptions;
 	}
 
+	let changed = false;
 	const next = new Map<string, TRemoteMediaSubscription>();
 
 	subscriptions.forEach((subscription, key) => {
@@ -531,14 +516,15 @@ export const refreshRemoteMediaPendingAges = (
 		// 'available' ones. Repair eligibility is decided by kind and watch state,
 		// not status, so skipping a status would let an entry stuck in an
 		// unexpected state re-arm the repair timer with zero delay.
-		next.set(key, {
-			...subscription,
-			pendingSince: subscription.producerPresent && subscription.status !== 'consumed' ? now : subscription.pendingSince,
-			lastRepairAt: now,
-		});
+		if (subscription.producerPresent && subscription.status !== 'consumed' && subscription.pendingSince !== now) {
+			changed = true;
+			next.set(key, { ...subscription, pendingSince: now, updatedAt: now });
+		} else {
+			next.set(key, subscription);
+		}
 	});
 
-	return next;
+	return changed ? next : subscriptions;
 };
 
 export const remoteMediaSubscriptionsToPendingStreams = (
@@ -547,7 +533,7 @@ export const remoteMediaSubscriptionsToPendingStreams = (
 	const pendingStreams = new Map<string, TPendingStream>();
 
 	subscriptions.forEach((subscription, key) => {
-		if (!subscription.producerPresent || subscription.status === 'consumed' || subscription.status === 'closing') {
+		if (!subscription.producerPresent || subscription.status === 'consumed') {
 			return;
 		}
 

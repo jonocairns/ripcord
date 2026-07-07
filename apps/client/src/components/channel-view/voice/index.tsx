@@ -9,7 +9,7 @@ import { getPendingStreamKey } from '../../voice-provider/hooks/use-pending-stre
 import { ControlsBar } from './controls-bar';
 import { ExternalStreamCard } from './external-stream-card';
 import { PinnedCardType, usePinCardController } from './hooks/use-pin-card-controller';
-import { PendingStreamCard } from './pending-stream-card';
+import { PendingStreamCard, type TPendingStreamStatus } from './pending-stream-card';
 import { ScreenShareCard } from './screen-share-card';
 import { StartingScreenShareCard } from './starting-screen-share-card';
 import { VoiceGrid } from './voice-grid';
@@ -18,8 +18,6 @@ import { VoiceUserCard } from './voice-user-card';
 type TChannelProps = {
 	channelId: number;
 };
-
-const getSubscriptionKey = getPendingStreamKey;
 
 const isVisibleRemoteMediaSlot = (
 	subscription:
@@ -37,13 +35,10 @@ const isVisibleRemoteMediaSlot = (
 	return subscription.status !== 'consumed' && (subscription.producerPresent || subscription.desired);
 };
 
-const getPendingCardStatus = (
-	status: string | undefined,
-): 'available' | 'wanted' | 'consuming' | 'retrying' | 'failed' => {
+const getPendingCardStatus = (status: string | undefined): TPendingStreamStatus => {
 	switch (status) {
 		case 'wanted':
 		case 'consuming':
-		case 'retrying':
 		case 'failed':
 			return status;
 		default:
@@ -80,7 +75,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 			return undefined;
 		}
 
-		const videoSubscription = remoteMediaSubscriptions.get(getSubscriptionKey(voiceUser.id, StreamKind.VIDEO));
+		const videoSubscription = remoteMediaSubscriptions.get(getPendingStreamKey(voiceUser.id, StreamKind.VIDEO));
 		const hasPendingVideo = isVisibleRemoteMediaSlot(videoSubscription);
 		const hasConsumedVideo = !!remoteUserStreams[voiceUser.id]?.[StreamKind.VIDEO];
 
@@ -134,7 +129,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 
 		voiceUsers.forEach((voiceUser) => {
 			const userCardId = `user-${voiceUser.id}`;
-			const videoSubscription = remoteMediaSubscriptions.get(getSubscriptionKey(voiceUser.id, StreamKind.VIDEO));
+			const videoSubscription = remoteMediaSubscriptions.get(getPendingStreamKey(voiceUser.id, StreamKind.VIDEO));
 			const hasPendingVideo = isVisibleRemoteMediaSlot(videoSubscription);
 			const hasConsumedVideo = !!remoteUserStreams[voiceUser.id]?.[StreamKind.VIDEO];
 
@@ -183,9 +178,9 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 
 			if (voiceUser.state.sharingScreen) {
 				const screenShareCardId = `screen-share-${voiceUser.id}`;
-				const screenSubscription = remoteMediaSubscriptions.get(getSubscriptionKey(voiceUser.id, StreamKind.SCREEN));
+				const screenSubscription = remoteMediaSubscriptions.get(getPendingStreamKey(voiceUser.id, StreamKind.SCREEN));
 				const screenAudioSubscription = remoteMediaSubscriptions.get(
-					getSubscriptionKey(voiceUser.id, StreamKind.SCREEN_AUDIO),
+					getPendingStreamKey(voiceUser.id, StreamKind.SCREEN_AUDIO),
 				);
 				const hasPendingScreen = isVisibleRemoteMediaSlot(screenSubscription);
 				const hasPendingScreenAudio = isVisibleRemoteMediaSlot(screenAudioSubscription);
@@ -239,10 +234,10 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 		externalStreams.forEach((stream) => {
 			const externalStreamCardId = `external-stream-${stream.streamId}`;
 			const externalVideoSubscription = remoteMediaSubscriptions.get(
-				getSubscriptionKey(stream.streamId, StreamKind.EXTERNAL_VIDEO),
+				getPendingStreamKey(stream.streamId, StreamKind.EXTERNAL_VIDEO),
 			);
 			const externalAudioSubscription = remoteMediaSubscriptions.get(
-				getSubscriptionKey(stream.streamId, StreamKind.EXTERNAL_AUDIO),
+				getPendingStreamKey(stream.streamId, StreamKind.EXTERNAL_AUDIO),
 			);
 			const hasPendingExternalVideo = isVisibleRemoteMediaSlot(externalVideoSubscription);
 			const hasPendingExternalAudio = isVisibleRemoteMediaSlot(externalAudioSubscription);
