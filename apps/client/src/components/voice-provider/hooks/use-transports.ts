@@ -55,6 +55,7 @@ type TUseTransportParams = {
 	markConsumeStarted: (remoteId: number, kind: StreamKind, producerId?: string) => void;
 	markConsumeSucceeded: (remoteId: number, kind: StreamKind, producerId: string, consumerId: string) => void;
 	markConsumeFailed: (remoteId: number, kind: StreamKind, reason?: string) => void;
+	markConsumerClosed: (remoteId: number, kind: StreamKind, consumerId?: string) => void;
 	onTransportFailure: () => void;
 };
 
@@ -70,6 +71,7 @@ const useTransports = ({
 	markConsumeStarted,
 	markConsumeSucceeded,
 	markConsumeFailed,
+	markConsumerClosed,
 	onTransportFailure,
 }: TUseTransportParams) => {
 	const producerTransport = useRef<Transport<AppData> | undefined>(undefined);
@@ -459,6 +461,11 @@ const useTransports = ({
 						if (consumers.current[remoteId]?.[consumerKind]) {
 							delete consumers.current[remoteId][consumerKind];
 						}
+
+						// Tell the ledger the consumer is gone so a 'consumed' slot cannot
+						// strand: without this, the slot stays consumed with no card, no
+						// derived pending entry, and no repair path.
+						markConsumerClosed(remoteId, kind, newConsumer.id);
 					});
 				});
 
@@ -510,6 +517,7 @@ const useTransports = ({
 			addExternalStreamTrack,
 			removeExternalStreamTrack,
 			markConsumeSucceeded,
+			markConsumerClosed,
 			closeServerConsumerAfterFailedConsume,
 		],
 	);

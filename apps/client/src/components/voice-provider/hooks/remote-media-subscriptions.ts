@@ -324,6 +324,45 @@ export const markRemoteProducerClosed = (
 	return next;
 };
 
+/**
+ * Repairs the stranded-consumed shape: a consumer or its track died without a
+ * matching ledger update (e.g. `trackended`/`transportclose` cleanup in
+ * use-transports). Only a `consumed` slot is touched — `consuming` is owned by
+ * an in-flight consume operation with its own retry and failure handling.
+ * Flipping the slot back to a pending status re-enters it into the derived
+ * pending map, so the stage card and the stale-stream repair pass can see it.
+ */
+export const markRemoteConsumerClosed = (
+	subscriptions: TRemoteMediaSubscriptions,
+	remoteId: number,
+	kind: StreamKind,
+	now: number,
+	consumerId?: string,
+): TRemoteMediaSubscriptions => {
+	const key = getPendingStreamKey(remoteId, kind);
+	const existing = subscriptions.get(key);
+
+	if (!existing || existing.status !== 'consumed') {
+		return subscriptions;
+	}
+
+	if (consumerId !== undefined && existing.consumerId !== undefined && existing.consumerId !== consumerId) {
+		return subscriptions;
+	}
+
+	const next = clone(subscriptions);
+
+	next.set(key, {
+		...existing,
+		status: existing.desired ? (existing.producerPresent ? 'wanted' : 'failed') : 'available',
+		consumerId: undefined,
+		updatedAt: now,
+		pendingSince: existing.producerPresent ? now : undefined,
+	});
+
+	return next;
+};
+
 export const clearRemoteMediaForUser = (
 	subscriptions: TRemoteMediaSubscriptions,
 	remoteId: number,
@@ -452,12 +491,13 @@ export const refreshRemoteMediaPendingAges = (
 	const next = new Map<string, TRemoteMediaSubscription>();
 
 	subscriptions.forEach((subscription, key) => {
+		// Refresh every non-consumed entry with a live producer — including
+		// 'available' ones. Repair eligibility is decided by kind and watch state,
+		// not status, so skipping a status would let an entry stuck in an
+		// unexpected state re-arm the repair timer with zero delay.
 		next.set(key, {
 			...subscription,
-			pendingSince:
-				subscription.producerPresent && subscription.status !== 'consumed' && subscription.status !== 'available'
-					? now
-					: subscription.pendingSince,
+			pendingSince: subscription.producerPresent && subscription.status !== 'consumed' ? now : subscription.pendingSince,
 			lastRepairAt: now,
 		});
 	});
@@ -577,6 +617,12 @@ export const useRemoteMediaSubscriptions = () => {
 		},
 		[update],
 	);
+	const markConsumerClosed = useCallback(
+		(remoteId: number, kind: StreamKind, consumerId?: string) => {
+			update((prev, now) => markRemoteConsumerClosed(prev, remoteId, kind, now, consumerId));
+		},
+		[update],
+	);
 	const clearExternalStream = useCallback(
 		(streamId: number) => {
 			update((prev) => clearRemoteMediaForExternalStream(prev, streamId));
@@ -598,6 +644,7 @@ export const useRemoteMediaSubscriptions = () => {
 		markConsumeStarted,
 		markConsumeSucceeded,
 		markConsumeFailed,
+		markConsumerClosed,
 		clearExternalStream,
 	};
 };

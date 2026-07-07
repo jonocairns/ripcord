@@ -4,11 +4,13 @@ import {
 	markRemoteConsumeFailed,
 	markRemoteConsumeStarted,
 	markRemoteConsumeSucceeded,
+	markRemoteConsumerClosed,
 	markRemoteProducerClosed,
 	markRemoteProducerPresent,
 	markRemoteWatchRequested,
 	markRemoteWatchStopped,
 	reconcileRemoteMediaWithProducerSnapshot,
+	refreshRemoteMediaPendingAges,
 	remoteMediaSubscriptionsToPendingStreams,
 	type TRemoteMediaSubscriptions,
 } from '../hooks/remote-media-subscriptions';
@@ -142,6 +144,72 @@ describe('remote media subscriptions', () => {
 			remoteId: 50,
 			kind: StreamKind.EXTERNAL_AUDIO,
 			producerId: 'external-audio-producer',
+		});
+	});
+
+	it('returns a consumed slot to a repair-eligible pending state when its consumer closes', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer');
+		state = markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer');
+		state = markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'audio-producer', 'consumer-1');
+		state = markRemoteConsumerClosed(state, 1, StreamKind.AUDIO, 200, 'consumer-1');
+
+		const key = getPendingStreamKey(1, StreamKind.AUDIO);
+
+		expect(state.get(key)).toMatchObject({
+			status: 'wanted',
+			desired: true,
+			producerPresent: true,
+			consumerId: undefined,
+			pendingSince: 200,
+		});
+		expect(remoteMediaSubscriptionsToPendingStreams(state).get(key)).toMatchObject({
+			remoteId: 1,
+			kind: StreamKind.AUDIO,
+			createdAt: 200,
+		});
+	});
+
+	it('ignores consumer-close events that do not match the ledger consumer', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer');
+		state = markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer');
+		state = markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'audio-producer', 'consumer-2');
+
+		const afterStaleClose = markRemoteConsumerClosed(state, 1, StreamKind.AUDIO, 200, 'consumer-1');
+
+		expect(afterStaleClose).toBe(state);
+		expect(afterStaleClose.get(getPendingStreamKey(1, StreamKind.AUDIO))).toMatchObject({
+			status: 'consumed',
+			consumerId: 'consumer-2',
+		});
+	});
+
+	it('leaves an in-flight consuming slot alone when a replaced consumer closes', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer');
+		state = markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer');
+
+		const afterClose = markRemoteConsumerClosed(state, 1, StreamKind.AUDIO, 200, 'consumer-1');
+
+		expect(afterClose).toBe(state);
+		expect(afterClose.get(getPendingStreamKey(1, StreamKind.AUDIO))).toMatchObject({
+			status: 'consuming',
+		});
+	});
+
+	it('refreshes pending ages for available entries so repair backoff always widens', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer');
+		state = refreshRemoteMediaPendingAges(state, 500);
+
+		expect(state.get(getPendingStreamKey(2, StreamKind.VIDEO))).toMatchObject({
+			status: 'available',
+			pendingSince: 500,
 		});
 	});
 });

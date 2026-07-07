@@ -825,6 +825,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		markConsumeStarted,
 		markConsumeSucceeded,
 		markConsumeFailed,
+		markConsumerClosed,
 		clearExternalStream: clearRemoteMediaExternalStream,
 	} = useRemoteMediaSubscriptions();
 	const remoteMediaSubscriptionsRef = useLatestRef(remoteMediaSubscriptions);
@@ -941,6 +942,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		markConsumeStarted,
 		markConsumeSucceeded,
 		markConsumeFailed,
+		markConsumerClosed,
 		onTransportFailure,
 	});
 
