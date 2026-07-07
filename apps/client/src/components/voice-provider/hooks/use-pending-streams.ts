@@ -1,5 +1,4 @@
 import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
-import { useCallback, useState } from 'react';
 
 export const PENDING_STREAM_REPAIR_AGE_MS = 15_000;
 
@@ -15,15 +14,6 @@ export type TExternalStreamTrackPresence = {
 };
 
 export const getPendingStreamKey = (remoteId: number, kind: StreamKind) => `${remoteId}-${kind}`;
-
-const isUserPendingStreamKind = (kind: StreamKind) => {
-	return (
-		kind === StreamKind.AUDIO ||
-		kind === StreamKind.VIDEO ||
-		kind === StreamKind.SCREEN ||
-		kind === StreamKind.SCREEN_AUDIO
-	);
-};
 
 export type TIsExternalStreamWatched = (
 	streamId: number,
@@ -123,105 +113,3 @@ export const reconcilePendingStreamMap = (
 
 	return changed ? next : pendingStreams;
 };
-
-const usePendingStreams = () => {
-	const [pendingStreams, setPendingStreams] = useState<Map<string, TPendingStream>>(() => new Map());
-
-	const addPendingStream = useCallback((remoteId: number, kind: StreamKind, producerId?: string) => {
-		setPendingStreams((prev) => {
-			const key = getPendingStreamKey(remoteId, kind);
-			const existing = prev.get(key);
-
-			if (existing !== undefined && (producerId === undefined || existing.producerId === producerId)) {
-				return prev;
-			}
-
-			const next = new Map(prev);
-			next.set(key, { remoteId, kind, createdAt: Date.now(), producerId });
-
-			return next;
-		});
-	}, []);
-
-	const removePendingStream = useCallback((remoteId: number, kind: StreamKind) => {
-		setPendingStreams((prev) => {
-			const key = getPendingStreamKey(remoteId, kind);
-
-			if (!prev.has(key)) {
-				return prev;
-			}
-
-			const next = new Map(prev);
-			next.delete(key);
-
-			return next;
-		});
-	}, []);
-
-	const clearPendingStreamsForUser = useCallback((remoteId: number) => {
-		setPendingStreams((prev) => {
-			let changed = false;
-			const next = new Map(prev);
-
-			next.forEach((stream, key) => {
-				if (stream.remoteId !== remoteId || !isUserPendingStreamKind(stream.kind)) {
-					return;
-				}
-
-				next.delete(key);
-				changed = true;
-			});
-
-			return changed ? next : prev;
-		});
-	}, []);
-
-	// Backoff safety net for the stale-stream repair loop: bumping every entry's
-	// createdAt guarantees the next repair fires no sooner than a full repair
-	// age from now, even if an entry can never be consumed.
-	const refreshPendingStreamAges = useCallback(() => {
-		setPendingStreams((prev) => {
-			if (prev.size === 0) {
-				return prev;
-			}
-
-			const now = Date.now();
-			const next = new Map<string, TPendingStream>();
-
-			prev.forEach((stream, key) => {
-				next.set(key, { ...stream, createdAt: now });
-			});
-
-			return next;
-		});
-	}, []);
-
-	const clearAllPendingStreams = useCallback(() => {
-		setPendingStreams((prev) => {
-			if (prev.size === 0) {
-				return prev;
-			}
-
-			return new Map();
-		});
-	}, []);
-
-	const reconcilePendingStreams = useCallback(
-		(producers: TRemoteProducerIds, externalStreamTracks?: TExternalStreamTrackPresence) => {
-			setPendingStreams((prev) => reconcilePendingStreamMap(prev, producers, externalStreamTracks));
-		},
-		[],
-	);
-
-	return {
-		pendingStreams,
-		addPendingStream,
-		removePendingStream,
-		clearPendingStreamsForUser,
-		clearAllPendingStreams,
-		reconcilePendingStreams,
-		refreshPendingStreamAges,
-	};
-};
-
-export { usePendingStreams };
