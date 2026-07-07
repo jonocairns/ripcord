@@ -94,24 +94,40 @@ const makeSubscription = (
 
 const clone = (subscriptions: TRemoteMediaSubscriptions) => new Map(subscriptions);
 
-const withSlot = (
-	subscriptions: TRemoteMediaSubscriptions,
-	remoteId: number,
-	kind: StreamKind,
-	now: number,
-	producerId?: string,
-) => {
-	const key = getPendingStreamKey(remoteId, kind);
-	const existing = subscriptions.get(key);
+// Reducers only publish a new map when a slot materially changed; otherwise
+// they return the input map untouched, so snapshot reconciliation cannot dirty
+// the ledger (and re-render every voice context consumer) with timestamp-only
+// writes. updatedAt is deliberately excluded — it bumps only alongside a
+// material change.
+const isMateriallyEqual = (a: TRemoteMediaSubscription, b: TRemoteMediaSubscription) =>
+	a.producerPresent === b.producerPresent &&
+	a.producerId === b.producerId &&
+	a.desired === b.desired &&
+	a.status === b.status &&
+	a.consumerId === b.consumerId &&
+	a.consumeGeneration === b.consumeGeneration &&
+	a.pendingSince === b.pendingSince &&
+	a.retryAttempt === b.retryAttempt &&
+	a.nextRetryAt === b.nextRetryAt &&
+	a.lastFailureAt === b.lastFailureAt &&
+	a.lastFailureReason === b.lastFailureReason &&
+	a.lastRepairAt === b.lastRepairAt;
 
-	if (existing) {
-		return existing;
+const applySlotUpdate = (
+	subscriptions: TRemoteMediaSubscriptions,
+	existing: TRemoteMediaSubscription | undefined,
+	updated: TRemoteMediaSubscription,
+	now: number,
+): TRemoteMediaSubscriptions => {
+	if (existing !== undefined && isMateriallyEqual(existing, updated)) {
+		return subscriptions;
 	}
 
-	const subscription = makeSubscription(remoteId, kind, now, producerId);
-	subscriptions.set(key, subscription);
+	const next = clone(subscriptions);
 
-	return subscription;
+	next.set(updated.key, { ...updated, updatedAt: now });
+
+	return next;
 };
 
 export const markRemoteProducerPresent = (
@@ -121,25 +137,27 @@ export const markRemoteProducerPresent = (
 	now: number,
 	producerId?: string,
 ): TRemoteMediaSubscriptions => {
-	const next = clone(subscriptions);
-	const existing = withSlot(next, remoteId, kind, now, producerId);
-	const desired = existing.desired || isAutoDesiredKind(kind);
+	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
+	const base = existing ?? makeSubscription(remoteId, kind, now, producerId);
+	const desired = base.desired || isAutoDesiredKind(kind);
 	const status =
-		existing.status === 'consuming' || existing.status === 'consumed' || existing.status === 'retrying'
-			? existing.status
+		base.status === 'consuming' || base.status === 'consumed' || base.status === 'retrying'
+			? base.status
 			: getInitialStatus(true, desired);
 
-	next.set(existing.key, {
-		...existing,
-		producerPresent: true,
-		producerId: producerId ?? existing.producerId,
-		desired,
-		status,
-		updatedAt: now,
-		pendingSince: status === 'consumed' ? undefined : (existing.pendingSince ?? now),
-	});
-
-	return next;
+	return applySlotUpdate(
+		subscriptions,
+		existing,
+		{
+			...base,
+			producerPresent: true,
+			producerId: producerId ?? base.producerId,
+			desired,
+			status,
+			pendingSince: status === 'consumed' ? undefined : (base.pendingSince ?? now),
+		},
+		now,
+	);
 };
 
 export const markRemoteWatchRequested = (
@@ -148,18 +166,20 @@ export const markRemoteWatchRequested = (
 	kind: StreamKind,
 	now: number,
 ): TRemoteMediaSubscriptions => {
-	const next = clone(subscriptions);
-	const existing = withSlot(next, remoteId, kind, now);
+	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
+	const base = existing ?? makeSubscription(remoteId, kind, now);
 
-	next.set(existing.key, {
-		...existing,
-		desired: true,
-		status: existing.status === 'consumed' ? 'consumed' : existing.producerPresent ? 'wanted' : 'failed',
-		updatedAt: now,
-		pendingSince: existing.status === 'consumed' ? undefined : (existing.pendingSince ?? now),
-	});
-
-	return next;
+	return applySlotUpdate(
+		subscriptions,
+		existing,
+		{
+			...base,
+			desired: true,
+			status: base.status === 'consumed' ? 'consumed' : base.producerPresent ? 'wanted' : 'failed',
+			pendingSince: base.status === 'consumed' ? undefined : (base.pendingSince ?? now),
+		},
+		now,
+	);
 };
 
 export const markRemoteWatchStopped = (
@@ -168,22 +188,26 @@ export const markRemoteWatchStopped = (
 	kind: StreamKind,
 	now: number,
 ): TRemoteMediaSubscriptions => {
-	const next = clone(subscriptions);
-	const existing = withSlot(next, remoteId, kind, now);
+	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
+	const base = existing ?? makeSubscription(remoteId, kind, now);
 
-	next.set(existing.key, {
-		...existing,
-		desired: false,
-		status: existing.producerPresent ? 'available' : 'available',
-		consumerId: undefined,
-		updatedAt: now,
-		pendingSince: existing.producerPresent ? now : undefined,
-		retryAttempt: 0,
-		nextRetryAt: undefined,
-		lastFailureReason: undefined,
-	});
-
-	return next;
+	return applySlotUpdate(
+		subscriptions,
+		existing,
+		{
+			...base,
+			desired: false,
+			status: 'available',
+			consumerId: undefined,
+			// Reset the pending age only when desire is actually being revoked so a
+			// repeated stop-watch is a no-op rather than a ledger write.
+			pendingSince: !base.producerPresent ? undefined : base.desired ? now : (base.pendingSince ?? now),
+			retryAttempt: 0,
+			nextRetryAt: undefined,
+			lastFailureReason: undefined,
+		},
+		now,
+	);
 };
 
 export const markRemoteConsumeStarted = (
@@ -199,26 +223,27 @@ export const markRemoteConsumeStarted = (
 		kind,
 		now,
 	);
-	const key = getPendingStreamKey(remoteId, kind);
-	const existing = next.get(key);
+	const existing = next.get(getPendingStreamKey(remoteId, kind));
 
 	if (!existing) {
 		return next;
 	}
 
-	next.set(key, {
-		...existing,
-		status: 'consuming',
-		producerId: producerId ?? existing.producerId,
-		consumerId: undefined,
-		consumeGeneration: existing.consumeGeneration + 1,
-		updatedAt: now,
-		pendingSince: existing.pendingSince ?? now,
-		lastFailureReason: undefined,
-		lastFailureAt: undefined,
-	});
-
-	return next;
+	return applySlotUpdate(
+		next,
+		existing,
+		{
+			...existing,
+			status: 'consuming',
+			producerId: producerId ?? existing.producerId,
+			consumerId: undefined,
+			consumeGeneration: existing.consumeGeneration + 1,
+			pendingSince: existing.pendingSince ?? now,
+			lastFailureReason: undefined,
+			lastFailureAt: undefined,
+		},
+		now,
+	);
 };
 
 export const markRemoteConsumeSucceeded = (
@@ -229,25 +254,27 @@ export const markRemoteConsumeSucceeded = (
 	producerId: string,
 	consumerId: string,
 ): TRemoteMediaSubscriptions => {
-	const next = clone(subscriptions);
-	const existing = withSlot(next, remoteId, kind, now, producerId);
+	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
+	const base = existing ?? makeSubscription(remoteId, kind, now, producerId);
 
-	next.set(existing.key, {
-		...existing,
-		producerPresent: true,
-		producerId,
-		desired: true,
-		status: 'consumed',
-		consumerId,
-		updatedAt: now,
-		pendingSince: undefined,
-		retryAttempt: 0,
-		nextRetryAt: undefined,
-		lastFailureReason: undefined,
-		lastFailureAt: undefined,
-	});
-
-	return next;
+	return applySlotUpdate(
+		subscriptions,
+		existing,
+		{
+			...base,
+			producerPresent: true,
+			producerId,
+			desired: true,
+			status: 'consumed',
+			consumerId,
+			pendingSince: undefined,
+			retryAttempt: 0,
+			nextRetryAt: undefined,
+			lastFailureReason: undefined,
+			lastFailureAt: undefined,
+		},
+		now,
+	);
 };
 
 export const markRemoteConsumeFailed = (
@@ -257,21 +284,23 @@ export const markRemoteConsumeFailed = (
 	now: number,
 	reason?: string,
 ): TRemoteMediaSubscriptions => {
-	const next = clone(subscriptions);
-	const existing = withSlot(next, remoteId, kind, now);
+	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
+	const base = existing ?? makeSubscription(remoteId, kind, now);
 
-	next.set(existing.key, {
-		...existing,
-		desired: true,
-		status: 'failed',
-		consumerId: undefined,
-		updatedAt: now,
-		pendingSince: existing.pendingSince ?? now,
-		lastFailureAt: now,
-		lastFailureReason: reason,
-	});
-
-	return next;
+	return applySlotUpdate(
+		subscriptions,
+		existing,
+		{
+			...base,
+			desired: true,
+			status: 'failed',
+			consumerId: undefined,
+			pendingSince: base.pendingSince ?? now,
+			lastFailureAt: now,
+			lastFailureReason: reason,
+		},
+		now,
+	);
 };
 
 export const markRemoteProducerClosed = (
@@ -292,32 +321,39 @@ export const markRemoteProducerClosed = (
 		return subscriptions;
 	}
 
-	const next = clone(subscriptions);
 	const desired = shouldKeepDesireOnProducerClose(kind, existing, subscriptions);
-
-	next.set(key, {
-		...existing,
-		producerPresent: false,
-		producerId: undefined,
-		desired,
-		status: desired ? 'failed' : 'available',
-		consumerId: undefined,
-		updatedAt: now,
-		pendingSince: undefined,
-	});
+	let next = applySlotUpdate(
+		subscriptions,
+		existing,
+		{
+			...existing,
+			producerPresent: false,
+			producerId: undefined,
+			desired,
+			status: desired ? 'failed' : 'available',
+			consumerId: undefined,
+			pendingSince: undefined,
+		},
+		now,
+	);
 
 	if (kind === StreamKind.SCREEN) {
-		const audioKey = getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO);
-		const audio = next.get(audioKey);
+		const audio = next.get(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO));
 
-		if (audio) {
-			next.set(audioKey, {
-				...audio,
-				desired: false,
-				status: audio.producerPresent ? 'available' : 'available',
-				updatedAt: now,
-				pendingSince: audio.producerPresent ? now : undefined,
-			});
+		// Only revoke screen-audio desire while it is actually held, so repeated
+		// closes of an already-cleared screen stay no-ops.
+		if (audio?.desired) {
+			next = applySlotUpdate(
+				next,
+				audio,
+				{
+					...audio,
+					desired: false,
+					status: 'available',
+					pendingSince: audio.producerPresent ? now : undefined,
+				},
+				now,
+			);
 		}
 	}
 
@@ -350,17 +386,17 @@ export const markRemoteConsumerClosed = (
 		return subscriptions;
 	}
 
-	const next = clone(subscriptions);
-
-	next.set(key, {
-		...existing,
-		status: existing.desired ? (existing.producerPresent ? 'wanted' : 'failed') : 'available',
-		consumerId: undefined,
-		updatedAt: now,
-		pendingSince: existing.producerPresent ? now : undefined,
-	});
-
-	return next;
+	return applySlotUpdate(
+		subscriptions,
+		existing,
+		{
+			...existing,
+			status: existing.desired ? (existing.producerPresent ? 'wanted' : 'failed') : 'available',
+			consumerId: undefined,
+			pendingSince: existing.producerPresent ? now : undefined,
+		},
+		now,
+	);
 };
 
 export const clearRemoteMediaForUser = (

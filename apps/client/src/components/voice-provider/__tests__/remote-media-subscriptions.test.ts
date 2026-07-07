@@ -201,6 +201,22 @@ describe('remote media subscriptions', () => {
 		});
 	});
 
+	it('returns the same map reference when reconciliation changes nothing material', () => {
+		const producers = makeProducers({
+			remoteAudioProducers: [{ remoteId: 1, producerId: 'audio-producer' }],
+			remoteScreenProducers: [{ remoteId: 3, producerId: 'screen-producer' }],
+		});
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = reconcileRemoteMediaWithProducerSnapshot(state, producers, undefined, 100);
+
+		const reconciledAgain = reconcileRemoteMediaWithProducerSnapshot(state, producers, undefined, 200);
+		const presentAgain = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 300, 'audio-producer');
+
+		expect(reconciledAgain).toBe(state);
+		expect(presentAgain).toBe(state);
+	});
+
 	it('refreshes pending ages for available entries so repair backoff always widens', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
