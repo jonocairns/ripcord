@@ -1,12 +1,13 @@
 # Remote Media Subscription Review Follow-Ups
 
 Captured from review feedback after the initial remote-media subscription ledger
-implementation. Do not treat this file as confirmation that the findings have
-been fixed; it is a parking lot for later follow-up work.
+implementation. All findings below have been addressed on the
+`codex/remote-media-ledger-followups` branch; each entry records how, so the fix
+can be audited against the original concern.
 
-Validation reported with the review:
+Validation reported with the original review:
 
-- Unit tests pass: 7/7.
+- Unit tests pass: 7/7 (now 19/19 in the ledger suites after the fixes below).
 - Full workspace typecheck is clean.
 - Review candidates were checked against the actual code.
 - The overall shape matches `docs/voice/remote-media-subscription-state.md`: the
@@ -15,74 +16,66 @@ Validation reported with the review:
 
 ## High-Priority Correctness
 
-1. A stale `consumed` status can be stranded.
+1. ~~A stale `consumed` status can be stranded.~~ **Fixed.**
 
-   A slot can remain `status: 'consumed'` even after the underlying consumer or
-   media track is gone. In that state, the UI shows no card, the derived pending
-   map has no entry, and repair has no self-heal path.
+   A slot could remain `status: 'consumed'` even after the underlying consumer
+   or media track was gone: `markRemoteProducerPresent` preserves `consumed`, a
+   mismatched producer-close event is ignored by the producer-id guard, and the
+   consumer cleanup path in `use-transports` removed media without updating the
+   ledger. In that state the UI showed no card, the derived pending map had no
+   entry, and repair had no self-heal path.
 
-   Reported race shape:
+   Fix: the consumer cleanup events (`trackended`/`transportclose`/`close`) now
+   call `markRemoteConsumerClosed`, which returns a `consumed` slot to a
+   repair-eligible pending state. The reducer is guarded by consumer id (stale
+   closes are ignored) and only touches `consumed` slots — `consuming` is owned
+   by the in-flight consume operation and its retry policy.
 
-   - `markRemoteProducerPresent` preserves `consumed`.
-   - A mismatched producer-close event is ignored by the producer-id guard.
-   - The consumer cleanup path in `use-transports` removes media without updating
-     the ledger.
-   - The old sweep path could re-add a pending entry, but the new ledger can
-     block that path.
+2. ~~`refreshRemoteMediaPendingAges` may narrow the repair-loop backoff safety
+   net.~~ **Fixed.**
 
-2. `refreshRemoteMediaPendingAges` may narrow the repair-loop backoff safety net.
+   The refresh skipped `status: 'available'` entries, but repair eligibility is
+   decided by kind and watch state rather than status, so an entry stuck in an
+   unexpected `available` state could re-arm the repair timer with zero delay.
+   The refresh now covers every non-consumed entry with a live producer.
 
-   The old pending-stream backoff refreshed every pending entry age to avoid
-   immediate repeated repair attempts. The new implementation skips
-   `status: 'available'` entries, which may allow a zero-delay repair loop if a
-   repair-eligible entry is stuck in an unexpected available state.
-
-   Related concern: reducers currently dirty the ledger during sweeps, so this
-   can also re-render the voice context tree repeatedly.
+   The related re-render concern (reducers dirtying the ledger during sweeps) is
+   covered by item 3.
 
 ## Efficiency
 
-3. `markRemoteProducerPresent` never no-ops.
+3. ~~`markRemoteProducerPresent` never no-ops.~~ **Fixed.**
 
-   It always writes `updatedAt: now`, so every snapshot reconciliation dirties
-   the whole ledger and re-renders voice context consumers even when producer
-   presence did not materially change.
-
-   Follow-up: make reducers return the input map when no material state changes,
-   similar to the old `addPendingStream` / `reconcilePendingStreamMap` behavior.
+   Reducers now compare material fields via `applySlotUpdate` and return the
+   input map untouched when nothing changed; `updatedAt` bumps only alongside a
+   material change. Steady-state snapshot reconciliation returns the same map
+   reference, so voice context consumers do not re-render.
 
 ## Cleanup
 
-4. Dead or write-only ledger state.
+4. ~~Dead or write-only ledger state.~~ **Fixed.** The never-produced `closing`
+   and `retrying` statuses and the write-only `consumeGeneration`,
+   `retryAttempt`, `nextRetryAt`, and `lastRepairAt` fields are removed.
 
-   `closing` and `retrying` statuses are never produced. `consumeGeneration`,
-   `retryAttempt`, and `lastRepairAt` are written but not read.
+5. ~~Duplicate external producer presence logic.~~ **Fixed.** The "present
+   unless explicitly false" rule lives in `isExternalTrackPresent`
+   (use-pending-streams) and is shared by `producerSlotsFromSnapshot`,
+   `buildActivePendingStreamKeys`, and the existing-producers sweep.
 
-5. Duplicate external producer presence logic.
+6. ~~Duplicate user stream kind helper.~~ **Fixed.** The sibling
+   `isUserPendingStreamKind` was deleted along with the dead `usePendingStreams`
+   hook; only `isUserStreamKind` remains.
 
-   `producerSlotsFromSnapshot` re-implements the "present unless explicitly
-   false" rule already encoded in `buildActivePendingStreamKeys`.
+7. ~~Duplicate pending-card status union.~~ **Fixed.** `TPendingStreamStatus`
+   is derived from the ledger's `TRemoteMediaStatus` (minus `consumed`) and
+   shared by `PendingStreamCard` and the stage's `getPendingCardStatus`.
 
-6. Duplicate user stream kind helper.
+8. ~~Repeated server producer projection.~~ **Fixed.** `getRemoteIds` uses
+   `toRemoteProducerRefs`/`toExternalProducerRefs` helpers instead of repeating
+   the entries/filter/map pattern per producer kind.
 
-   `isUserStreamKind` duplicates `isUserPendingStreamKind` in sibling pending
-   stream code.
-
-7. Duplicate pending-card status union.
-
-   `getPendingCardStatus` in `channel-view/voice/index.tsx` redeclares the same
-   status vocabulary used by `PendingStreamCard`.
-
-8. Repeated server producer projection.
-
-   `apps/server/src/runtimes/voice.ts` repeats the same
-   `Object.entries(...).filter(+id !== userId).map(...)` pattern for each remote
-   producer kind.
-
-9. Unnecessary alias.
-
-   `getSubscriptionKey` is a pure alias of `getPendingStreamKey`, creating a
-   second name for the same key format within one module.
+9. ~~Unnecessary alias.~~ **Fixed.** `getSubscriptionKey` is gone; call sites
+   use `getPendingStreamKey` directly.
 
 ## Review Notes Marked Safe
 
