@@ -55,11 +55,7 @@ import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } fr
 import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from './default-input-device';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
-import {
-	remoteMediaSubscriptionsToStreamsToConsume,
-	type TRemoteMediaSubscriptions,
-	useRemoteMediaSubscriptions,
-} from './hooks/remote-media-subscriptions';
+import { type TRemoteMediaSubscriptions, useRemoteMediaSubscriptions } from './hooks/remote-media-subscriptions';
 import { shouldDeferTransportFailureToReconnect } from './hooks/transport-failure-policy';
 import { useLocalStreams } from './hooks/use-local-streams';
 import {
@@ -68,6 +64,7 @@ import {
 	PENDING_STREAM_REPAIR_AGE_MS,
 	type TExternalStreamTrackPresence,
 } from './hooks/use-pending-streams';
+import { useRemoteMediaConsumeRunner } from './hooks/use-remote-media-consume-runner';
 import { useRemoteStreams } from './hooks/use-remote-streams';
 import { useScreenShareQualityGuard } from './hooks/use-screen-share-quality-guard';
 import { type TransportStatsStore, useTransportStats } from './hooks/use-transport-stats';
@@ -1242,26 +1239,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		localAudioProducer,
 	]);
 
-	const streamsToConsume = useMemo(
-		() => remoteMediaSubscriptionsToStreamsToConsume(remoteMediaSubscriptions, getExternalStreamTrackPresence()),
-		[remoteMediaSubscriptions, getExternalStreamTrackPresence],
-	);
-
-	useEffect(() => {
-		if (currentVoiceChannelId === undefined) {
-			return;
-		}
-
-		const currentRtpCapabilities = voiceEventRtpCapabilities;
-
-		if (!currentRtpCapabilities) {
-			return;
-		}
-
-		streamsToConsume.forEach((command) => {
-			void consume(command.remoteId, command.kind, currentRtpCapabilities, command.producerId);
-		});
-	}, [consume, currentVoiceChannelId, streamsToConsume, voiceEventRtpCapabilities]);
+	useRemoteMediaConsumeRunner({
+		currentVoiceChannelId,
+		rtpCapabilities: voiceEventRtpCapabilities,
+		remoteMediaSubscriptions,
+		getExternalStreamTrackPresence,
+		consume,
+	});
 
 	useEffect(() => {
 		Object.entries(currentChannelExternalStreams).forEach(([streamId, stream]) => {

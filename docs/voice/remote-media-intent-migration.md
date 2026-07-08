@@ -26,6 +26,7 @@ feature arc → optional cleanup, each an independently reviewable PR.
 | **3** | Compact failed/retry UI affordances (design "Required UI Affordance") | 2 | ✅ **done** ([PR #268](https://github.com/jonocairns/ripcord/pull/268), unmerged) |
 | **4** | Manual retry + consume generations (reintroduces the removed generation state) | 3 | ✅ **done** (unmerged) |
 | **5** | Ledger-derived consume command runner + `streamsToConsume` (design "Longer-Term Direction") | 4 | ✅ **done** (unmerged) |
+| **6** | Extract consume runner hook + delete dead screen-audio watch-intent helper | 5 | ✅ **done** (unmerged) |
 
 **Split rationale (1 vs 1b):** the screen-audio ref (`watchedScreenAudioRef`, a
 `Set<number>`) and the external-stream ref (`watchedExternalStreamsRef`, then
@@ -204,7 +205,7 @@ without taking on the longer-term command/effect runner:
 
 Verification at landing: reducer suite 26/26; client typecheck PASS.
 
-## Next up — PR 5 command/effect runner
+## PR 5 — command/effect runner (done)
 
 Built PR 5 on top of the PR 4 branch (`codex/remote-media-manual-retry`) as
 `codex/remote-media-consume-runner`. This slice added the first centralized,
@@ -227,9 +228,23 @@ ledger-derived consume command path without changing server/API behavior:
 
 Verification at landing: reducer/selector suite 31/31; client typecheck PASS.
 
+## PR 6 — consume runner cleanup/extraction (done)
+
+Built PR 6 on top of the PR 5 branch (`codex/remote-media-consume-runner`) as
+`codex/remote-media-runner-cleanup`. This slice made no intended behavior
+change:
+
+- Extracted the PR 5 ledger-derived consume effect from `VoiceProvider` into
+  `useRemoteMediaConsumeRunner`.
+- Kept `remoteMediaSubscriptionsToStreamsToConsume` pure and in
+  `remote-media-subscriptions.ts`.
+- Deleted the dead `screen-audio-watch-intent.ts` helper and its obsolete
+  helper-only test. Screen-audio intent remains ledger-owned via
+  `SCREEN_AUDIO.desired`, coupled to the screen slot.
+
 ## Loose ends
 
-- **Command/effect runner is not yet a fully emitted-command reducer.** PR 5
+- **Command/effect runner is not yet a fully emitted-command reducer.** PR 5/6
   centralizes consume decisions in a selector/effect runner while keeping the
   reducer pure and preserving the existing transport API. The larger design
   shape (`event + state -> nextState + commands`, timer commands, close-consumer
@@ -253,9 +268,3 @@ Verification at landing: reducer/selector suite 31/31; client typecheck PASS.
     owner rarely uses, so PR 1b's live path sees little real traffic — the drive
     is low-value relative to reducer coverage + typecheck. PR 1's screen-audio
     path is the one that matters; prioritise verifying that if driving either.
-- **Dead-in-prod helper (deferred out of PR 1b).** `tracksScreenAudioWatchIntent`
-  (in `hooks/screen-audio-watch-intent.ts`) is no longer used by production code —
-  only its own test references it. Deliberately **not** folded into PR 1b to keep
-  that PR scoped to the external-stream ref; removing it means untangling it from
-  sibling tests in `screen-audio-watch-intent.test.ts`. Drop separately.
-  `selectWatchedPendingScreenAudioIds` from the same module is still live.
