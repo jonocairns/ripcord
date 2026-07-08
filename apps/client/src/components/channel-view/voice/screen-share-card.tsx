@@ -1,4 +1,4 @@
-import { ExternalLink, Eye, EyeOff, Maximize2, Minimize2, Monitor } from 'lucide-react';
+import { ExternalLink, Eye, EyeOff, Maximize2, Minimize2, Monitor, RefreshCw, VolumeX } from 'lucide-react';
 import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { TVisibleRemoteMedia } from '@/components/voice-provider/hooks/remote-media-subscriptions';
@@ -96,6 +96,7 @@ type TScreenShareCardProps = {
 	showPinControls: boolean;
 	fitStreamAspect?: boolean;
 	screenAudioSlot?: TVisibleRemoteMedia;
+	onStopScreenAudio?: () => void;
 	onStopWatching?: () => void;
 };
 
@@ -108,11 +109,12 @@ const ScreenShareCard = memo(
 		onPin,
 		onUnpin,
 		className,
-			showPinControls = true,
-			fitStreamAspect = false,
-			screenAudioSlot,
-			onStopWatching,
-		}: TScreenShareCardProps) => {
+		showPinControls = true,
+		fitStreamAspect = false,
+		screenAudioSlot,
+		onStopScreenAudio,
+		onStopWatching,
+	}: TScreenShareCardProps) => {
 		const user = useUserById(userId);
 		const ownUserId = useOwnUserId();
 		const isWindowFocused = useWindowFocus();
@@ -404,6 +406,13 @@ const ScreenShareCard = memo(
 
 		const streamAspectRatio = streamStats ? `${streamStats.width} / ${streamStats.height}` : '16 / 9';
 		const shouldFitStreamAspect = isPinned || fitStreamAspect || !showPinControls;
+		const shouldShowScreenAudioAffordance =
+			!isOwnUser &&
+			screenAudioSlot?.desired === true &&
+			screenAudioSlot.status !== 'live' &&
+			!hasScreenShareAudioStream;
+		const screenAudioLabel =
+			screenAudioSlot?.status === 'failed' ? 'Screen audio unavailable' : 'Screen audio connecting';
 
 		return (
 			<>
@@ -417,12 +426,12 @@ const ScreenShareCard = memo(
 					)}
 					onWheel={isPoppedOut ? undefined : handleWheel}
 					onMouseDown={isPoppedOut ? undefined : handleMouseDown}
-						onMouseMove={isPoppedOut ? undefined : handleInAppMouseMove}
-						onMouseUp={isPoppedOut ? undefined : handleMouseUp}
-						onMouseLeave={isPoppedOut ? undefined : handleMouseUp}
-						data-screen-audio-status={screenAudioSlot?.status}
-						data-screen-audio-desired={screenAudioSlot?.desired ? 'true' : undefined}
-						style={{
+					onMouseMove={isPoppedOut ? undefined : handleInAppMouseMove}
+					onMouseUp={isPoppedOut ? undefined : handleMouseUp}
+					onMouseLeave={isPoppedOut ? undefined : handleMouseUp}
+					data-screen-audio-status={screenAudioSlot?.status}
+					data-screen-audio-desired={screenAudioSlot?.desired ? 'true' : undefined}
+					style={{
 						...(shouldFitStreamAspect ? { aspectRatio: streamAspectRatio, maxHeight: '100%' } : {}),
 						cursor: isPoppedOut ? 'default' : getCursor(),
 					}}
@@ -482,6 +491,32 @@ const ScreenShareCard = memo(
 						<div className="absolute bottom-2 left-2 z-10 flex items-center gap-1.5 rounded-md bg-black/60 px-2 py-1 text-xs text-white/90 backdrop-blur-sm">
 							<Eye className="size-3.5" />
 							<span>{watcherCount}</span>
+						</div>
+					)}
+
+					{shouldShowScreenAudioAffordance && (
+						<div className="absolute right-2 bottom-2 z-10 flex max-w-[min(18rem,calc(100%-1rem))] items-center gap-2 rounded-md border border-border/70 bg-voice-surface-raised/95 px-2 py-1.5 text-primary-foreground shadow-md backdrop-blur-md">
+							<VolumeX
+								className={cn(
+									'size-4 shrink-0',
+									screenAudioSlot.status === 'failed' ? 'text-destructive' : 'text-warning',
+								)}
+							/>
+							<span className="min-w-0 truncate text-xs font-medium">{screenAudioLabel}</span>
+							<ControlButton
+								icon={RefreshCw}
+								disabled
+								title="Retry unavailable"
+								className="h-6 w-6 border-border/70 bg-voice-surface text-primary-foreground shadow-none ring-0"
+							/>
+							{onStopScreenAudio ? (
+								<ControlButton
+									icon={EyeOff}
+									onClick={onStopScreenAudio}
+									title="Stop Screen Audio"
+									className="h-6 w-6 border-border/70 bg-voice-surface text-primary-foreground shadow-none ring-0"
+								/>
+							) : null}
 						</div>
 					)}
 

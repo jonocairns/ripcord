@@ -23,7 +23,7 @@ feature arc → optional cleanup, each an independently reviewable PR.
 | **1** | Ledger owns watch intent — **screen-audio half** | — | ✅ **done** (unmerged) |
 | **1b** | Ledger owns watch intent — **external-stream half** | 1 | ✅ **done** (unmerged) |
 | **2** | `visibleRemoteMedia` selector (keeps desired-but-failed slots renderable) | 1b | ✅ **done** ([PR #267](https://github.com/jonocairns/ripcord/pull/267), unmerged) |
-| 3 | Compact failed/retry UI affordances (design "Required UI Affordance") | 2 | ⬜ |
+| **3** | Compact failed/retry UI affordances (design "Required UI Affordance") | 2 | ✅ **done** (unmerged) |
 | 4 | Manual retry + consume generations (reintroduces the removed generation state) | 3 | ⬜ |
 | 5 | Full command/effect-runner + `streamsToConsume` (design "Longer-Term Direction") | 2 | ⬜ longer-term |
 
@@ -154,31 +154,31 @@ Verification at landing: reducer/selector suite 21/21; client typecheck PASS;
 client lint PASS with only the pre-existing `src/vite-env.d.ts` unused
 `ImportMetaEnv` warning.
 
-## Next up — PR 3 compact failed/retry affordances
+## PR 3 — compact failed/retry affordances (done)
 
-Build PR 3 on top of the PR 2 branch (`codex/visible-remote-media-selector`,
-[PR #267](https://github.com/jonocairns/ripcord/pull/267)). The starting point
-is intentionally small:
+Built PR 3 on top of the PR 2 branch (`codex/visible-remote-media-selector`,
+[PR #267](https://github.com/jonocairns/ripcord/pull/267)). This slice stayed
+UI-only on top of `visibleRemoteMedia`:
 
-- `visibleRemoteMedia` is available from `useVoice()` and is keyed by
-  `remoteId:kind` via `getPendingStreamKey`.
-- Standalone failed/pending camera, screen, and external slots currently render
-  `PendingStreamCard`.
-- Live screen-share cards receive `screenAudioSlot?: TVisibleRemoteMedia` in
-  `apps/client/src/components/channel-view/voice/screen-share-card.tsx`; use
-  that prop for the compact "screen audio unavailable" / retry affordance rather
-  than reading `remoteMediaSubscriptions` again.
-- PR 3 should stay UI-only: add compact failed/retry/stop-watch affordances, but
-  do not add manual retry generations or consume-operation state. That remains
-  PR 4.
+- `PendingStreamCard` now renders distinct pending/retrying/failed/closing
+  copy and keeps a stop-watch button visible for desired non-live slots.
+- Failed/retrying cards show the compact retry affordance, but the retry button
+  is disabled until PR 4 adds a real manual retry command and generation guard.
+- Live `ScreenShareCard` now uses its `screenAudioSlot?: TVisibleRemoteMedia`
+  prop for a compact screen-audio unavailable/connecting control. It does not
+  read raw ledger state and does not create fake media objects.
+- Screen-audio stop on a live screen card is scoped to `SCREEN_AUDIO`; the
+  existing full screen-card stop button still stops the screen and any desired
+  screen audio together.
+- Stage wiring passes existing `acceptStream` / `stopWatchingStream` callbacks
+  into the compact states; no new effect runner, retry generations, or manual
+  retry behavior was added.
 
 ## Loose ends
 
-- **PR 3 UI affordances still owed.** Failed/retry states currently render using
-  the existing `PendingStreamCard`; add the compact retry/failed controls and
-  screen-audio-unavailable treatment on top of `visibleRemoteMedia`.
 - **Manual retry / consume generations still owed for PR 4.** PR 2 reserves the
-  `retrying` status vocabulary but does not add retry generation state.
+  `retrying` status vocabulary and PR 3 shows disabled retry affordances, but
+  neither PR adds retry generation state or a retry command.
 - **Screen producer-close semantics need a product call before changing.**
   Webcam/external desired slots survive producer close, and screen-audio desire
   survives its own producer churn while the screen remains watched. A direct

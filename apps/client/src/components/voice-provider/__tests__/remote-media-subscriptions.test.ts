@@ -244,6 +244,33 @@ describe('remote media subscriptions', () => {
 		});
 	});
 
+	it('keeps failed screen audio visible beside a live screen slot', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
+		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'audio-producer');
+		state = markRemoteConsumeSucceeded(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 'screen-consumer');
+		state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN_AUDIO, 120);
+		state = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN_AUDIO, 130, 'consume failed');
+
+		const visibleRemoteMedia = remoteMediaSubscriptionsToVisibleRemoteMedia(state);
+
+		expect(
+			visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(3, StreamKind.SCREEN)),
+		).toMatchObject({
+			status: 'live',
+			subscriptionStatus: 'consumed',
+		});
+		expect(
+			visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(3, StreamKind.SCREEN_AUDIO)),
+		).toMatchObject({
+			status: 'failed',
+			subscriptionStatus: 'failed',
+			desired: true,
+			producerPresent: true,
+		});
+	});
+
 	it('returns a consumed slot to a repair-eligible pending state when its consumer closes', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
