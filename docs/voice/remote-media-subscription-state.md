@@ -370,16 +370,19 @@ consume attempts are still deduped by the existing consume-operation state.
 
 ## Required UI Affordance
 
-The correctness fix is intent tracking and ledger-owned visual state. A compact
-UI affordance is still required so desired media does not silently disappear
-after failure:
+The correctness fix is intent tracking and ledger-owned visual state. The
+stacked migration has now added the compact visual affordances in PR 3, while
+manual retry behavior remains a separate PR 4 item:
 
-- if screen video is consumed and `SCREEN_AUDIO` is pending, show a compact
-  "screen audio unavailable" / retry control on the screen tile
-- if desired webcam or screen video is retrying/failed, keep the tile visible in
-  a compact retrying/failed state
-- allow manual retry explicitly
-- keep stop-watch available from retrying/failed states
+- if screen video is consumed and `SCREEN_AUDIO` is pending or failed, PR 3
+  shows a compact "screen audio unavailable/connecting" control on the screen
+  tile
+- if desired webcam, screen video, or external media is pending/retrying/failed,
+  PR 3 keeps the tile visible in a compact non-live state
+- PR 3 keeps stop-watch available from desired non-live states
+- PR 3 shows retry controls but leaves them disabled until PR 4 adds a real
+  manual retry command and generation guard
+- PR 4 must allow manual retry explicitly
 
 This covers both cases:
 

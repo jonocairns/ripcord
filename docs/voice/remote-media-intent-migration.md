@@ -23,7 +23,7 @@ feature arc → optional cleanup, each an independently reviewable PR.
 | **1** | Ledger owns watch intent — **screen-audio half** | — | ✅ **done** (unmerged) |
 | **1b** | Ledger owns watch intent — **external-stream half** | 1 | ✅ **done** (unmerged) |
 | **2** | `visibleRemoteMedia` selector (keeps desired-but-failed slots renderable) | 1b | ✅ **done** ([PR #267](https://github.com/jonocairns/ripcord/pull/267), unmerged) |
-| **3** | Compact failed/retry UI affordances (design "Required UI Affordance") | 2 | ✅ **done** (unmerged) |
+| **3** | Compact failed/retry UI affordances (design "Required UI Affordance") | 2 | ✅ **done** ([PR #268](https://github.com/jonocairns/ripcord/pull/268), unmerged) |
 | 4 | Manual retry + consume generations (reintroduces the removed generation state) | 3 | ⬜ |
 | 5 | Full command/effect-runner + `streamsToConsume` (design "Longer-Term Direction") | 2 | ⬜ longer-term |
 
@@ -157,7 +157,9 @@ client lint PASS with only the pre-existing `src/vite-env.d.ts` unused
 ## PR 3 — compact failed/retry affordances (done)
 
 Built PR 3 on top of the PR 2 branch (`codex/visible-remote-media-selector`,
-[PR #267](https://github.com/jonocairns/ripcord/pull/267)). This slice stayed
+[PR #267](https://github.com/jonocairns/ripcord/pull/267)) as
+`codex/remote-media-affordances` /
+[PR #268](https://github.com/jonocairns/ripcord/pull/268). This slice stayed
 UI-only on top of `visibleRemoteMedia`:
 
 - `PendingStreamCard` now renders distinct pending/retrying/failed/closing
@@ -173,6 +175,29 @@ UI-only on top of `visibleRemoteMedia`:
 - Stage wiring passes existing `acceptStream` / `stopWatchingStream` callbacks
   into the compact states; no new effect runner, retry generations, or manual
   retry behavior was added.
+
+Verification at landing: reducer/selector suite 22/22; client typecheck PASS;
+client lint PASS with only the pre-existing `src/vite-env.d.ts` unused
+`ImportMetaEnv` warning.
+
+## Next up — PR 4 manual retry + consume generations
+
+Build PR 4 on top of the PR 3 branch (`codex/remote-media-affordances`,
+[PR #268](https://github.com/jonocairns/ripcord/pull/268)). The goal is to make
+the retry affordances real without taking on the longer-term command/effect
+runner:
+
+- Add the smallest generation/identity guard needed so a manual retry cannot be
+  overwritten by a stale consume failure/success from an older attempt.
+- Add reducer state/events for retrying/manual retry only where current
+  transport code can actually report results back into the ledger.
+- Wire the disabled retry controls from PR 3 to a real manual retry action.
+- Keep live playback sourced only from `remoteUserStreams` / active external
+  stream maps; do not fake `MediaStream`s.
+- Avoid collapsing stream-kind-specific provider effects into a central
+  `streamsToConsume` runner in PR 4. That remains PR 5.
+- Add reducer tests for stale retry results, retry button flow, and the
+  screen-audio-on-live-screen case where practical.
 
 ## Loose ends
 
