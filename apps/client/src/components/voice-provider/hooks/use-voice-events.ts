@@ -22,7 +22,6 @@ type TEvents = {
 	removeExternalStream: (streamId: number) => void;
 	clearRemoteUserStreamsForUser: (userId: number) => void;
 	clearPendingStreamsForUser: (userId: number) => void;
-	clearScreenAudioWatchIntent: (remoteId: number) => void;
 	onVoiceActivityUpdate: (activity: { userId: number; isSpeaking: boolean }) => void;
 	onTransportFailure: () => void;
 	getActiveConsumerProducerId: (remoteId: number, kind: StreamKind) => string | undefined;
@@ -41,7 +40,6 @@ const useVoiceEvents = ({
 	removeExternalStream,
 	clearRemoteUserStreamsForUser,
 	clearPendingStreamsForUser,
-	clearScreenAudioWatchIntent,
 	onVoiceActivityUpdate,
 	onTransportFailure,
 	getActiveConsumerProducerId,
@@ -192,14 +190,10 @@ const useVoiceEvents = ({
 				});
 
 				try {
+					// A SCREEN close revokes SCREEN_AUDIO desire inside the reducer
+					// (markRemoteProducerClosed cascade), so audio intent cannot outlive
+					// the share while SCREEN_AUDIO producer churn alone still keeps it.
 					removePendingStream(remoteId, kind, producerId);
-
-					// The screen share itself ended — audio intent must not outlive it,
-					// or it would auto-consume audio for a later share the viewer never
-					// accepted. SCREEN_AUDIO producer churn alone keeps the intent.
-					if (kind === StreamKind.SCREEN) {
-						clearScreenAudioWatchIntent(remoteId);
-					}
 
 					if (kind === StreamKind.EXTERNAL_VIDEO || kind === StreamKind.EXTERNAL_AUDIO) {
 						removeExternalStreamTrack(remoteId, kind);
@@ -229,7 +223,6 @@ const useVoiceEvents = ({
 				try {
 					clearPendingStreamsForUser(userId);
 					clearRemoteUserStreamsForUser(userId);
-					clearScreenAudioWatchIntent(userId);
 				} catch (error) {
 					logVoice('Error clearing remote streams for user', { error });
 				}
@@ -340,7 +333,6 @@ const useVoiceEvents = ({
 		removeExternalStream,
 		clearRemoteUserStreamsForUser,
 		clearPendingStreamsForUser,
-		clearScreenAudioWatchIntent,
 		onVoiceActivityUpdate,
 		onTransportFailure,
 		getActiveConsumerProducerId,

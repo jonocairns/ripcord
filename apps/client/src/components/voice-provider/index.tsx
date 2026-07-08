@@ -59,7 +59,7 @@ import {
 	type TRemoteMediaSubscriptions,
 	useRemoteMediaSubscriptions,
 } from './hooks/remote-media-subscriptions';
-import { selectWatchedPendingScreenAudioIds, tracksScreenAudioWatchIntent } from './hooks/screen-audio-watch-intent';
+import { selectWatchedPendingScreenAudioIds } from './hooks/screen-audio-watch-intent';
 import { shouldDeferTransportFailureToReconnect } from './hooks/transport-failure-policy';
 import { useLocalStreams } from './hooks/use-local-streams';
 import {
@@ -747,12 +747,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const pushReleaseDelayMsRef = useLatestRef(devices.pushReleaseDelayMs);
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const watchedExternalStreamsRef = useRef<Record<string, TTrackedExternalWatchState>>({});
-	// Screen-audio watch intent per sharer. Set when the viewer accepts the
-	// screen (audio may appear later) or its audio; cleared on explicit
-	// stop-watch, sharer leave, and SCREEN producer close. Deliberately survives
-	// SCREEN_AUDIO producer churn, mirroring external watch intent, so a sharer
-	// toggling audio does not silently drop the viewer's opt-in.
-	const watchedScreenAudioRef = useRef<Set<number>>(new Set());
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
 	const localVoiceActivityCleanupRef = useRef<(() => void) | undefined>(undefined);
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
@@ -1053,10 +1047,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[closeProducerOnServer],
 	);
 
-	const clearScreenAudioWatchIntent = useCallback((remoteId: number) => {
-		watchedScreenAudioRef.current.delete(remoteId);
-	}, []);
-
 	const removeExternalStreamAndSubscription = useCallback(
 		(streamId: number) => {
 			clearRemoteMediaExternalStream(streamId);
@@ -1068,10 +1058,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const acceptStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
 			markWatchRequested(remoteId, kind);
-
-			if (tracksScreenAudioWatchIntent(kind)) {
-				watchedScreenAudioRef.current.add(remoteId);
-			}
 
 			if (isExternalStreamKind(kind)) {
 				const stream = currentChannelExternalStreams[remoteId];
@@ -1122,13 +1108,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const stopWatchingStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
-			// Exiting the screen tile must drop audio intent even while SCREEN_AUDIO
-			// is only pending, or stranded intent would auto-consume audio for a
-			// later share the viewer never accepted.
-			if (tracksScreenAudioWatchIntent(kind)) {
-				watchedScreenAudioRef.current.delete(remoteId);
-			}
-
+			// markWatchStopped(SCREEN) cascades to SCREEN_AUDIO in the reducer, so
+			// exiting the screen tile drops audio intent even while SCREEN_AUDIO is
+			// only pending — no separate ref bookkeeping needed.
 			markWatchStopped(remoteId, kind);
 
 			if (isExternalStreamKind(kind)) {
@@ -1317,7 +1299,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	useEffect(() => {
 		if (currentVoiceChannelId === undefined) {
 			watchedExternalStreamsRef.current = {};
-			watchedScreenAudioRef.current.clear();
 			return;
 		}
 
@@ -4496,7 +4477,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		removeExternalStream: removeExternalStreamAndSubscription,
 		clearRemoteUserStreamsForUser,
 		clearPendingStreamsForUser,
-		clearScreenAudioWatchIntent,
 		onVoiceActivityUpdate: handleVoiceActivityUpdate,
 		onTransportFailure,
 		getActiveConsumerProducerId,
