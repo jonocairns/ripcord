@@ -13,7 +13,6 @@ import { shouldIgnoreProducerClosedEvent } from './voice-producer-event-identity
 const VOICE_EVENT_PRODUCER_SYNC_DEBOUNCE_MS = 500;
 
 type TEvents = {
-	consume: (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities, producerId?: string) => Promise<void>;
 	syncExistingProducers: (rtpCapabilities: RtpCapabilities) => Promise<void>;
 	addPendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
 	removePendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
@@ -31,7 +30,6 @@ type TEvents = {
 };
 
 const useVoiceEvents = ({
-	consume,
 	syncExistingProducers,
 	addPendingStream,
 	removePendingStream,
@@ -140,20 +138,6 @@ const useVoiceEvents = ({
 					channelId,
 					producerId,
 				});
-
-				if (kind === StreamKind.AUDIO) {
-					if (!rtpCapabilities) {
-						logVoice('Skipping audio consume - missing RTP capabilities', {
-							remoteId,
-							kind,
-							channelId,
-						});
-						return;
-					}
-
-					void consume(remoteId, kind, rtpCapabilities, producerId);
-					return;
-				}
 
 				addPendingStream(remoteId, kind, producerId);
 			},
@@ -324,7 +308,6 @@ const useVoiceEvents = ({
 	}, [
 		currentVoiceChannelId,
 		ownUserId,
-		consume,
 		syncExistingProducers,
 		addPendingStream,
 		removePendingStream,

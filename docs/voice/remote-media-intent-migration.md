@@ -25,7 +25,7 @@ feature arc → optional cleanup, each an independently reviewable PR.
 | **2** | `visibleRemoteMedia` selector (keeps desired-but-failed slots renderable) | 1b | ✅ **done** ([PR #267](https://github.com/jonocairns/ripcord/pull/267), unmerged) |
 | **3** | Compact failed/retry UI affordances (design "Required UI Affordance") | 2 | ✅ **done** ([PR #268](https://github.com/jonocairns/ripcord/pull/268), unmerged) |
 | **4** | Manual retry + consume generations (reintroduces the removed generation state) | 3 | ✅ **done** (unmerged) |
-| 5 | Full command/effect-runner + `streamsToConsume` (design "Longer-Term Direction") | 2 | ⬜ longer-term |
+| **5** | Ledger-derived consume command runner + `streamsToConsume` (design "Longer-Term Direction") | 4 | ✅ **done** (unmerged) |
 
 **Split rationale (1 vs 1b):** the screen-audio ref (`watchedScreenAudioRef`, a
 `Set<number>`) and the external-stream ref (`watchedExternalStreamsRef`, then
@@ -206,16 +206,34 @@ Verification at landing: reducer suite 26/26; client typecheck PASS.
 
 ## Next up — PR 5 command/effect runner
 
-The remaining stack item is the longer-term command/effect runner and
-`streamsToConsume` direction from the design note. Do not fold it into PR 4
-follow-ups unless explicitly requested.
+Built PR 5 on top of the PR 4 branch (`codex/remote-media-manual-retry`) as
+`codex/remote-media-consume-runner`. This slice added the first centralized,
+ledger-derived consume command path without changing server/API behavior:
+
+- `remoteMediaSubscriptionsToStreamsToConsume` derives consume commands for
+  producer-present, desired, not-yet-consuming slots in the `wanted` state.
+- The selector gates external stream commands on current track metadata and
+  gates `SCREEN_AUDIO` on the parent screen still being desired and producer-
+  present.
+- `VoiceProvider` now runs one consume effect from that selector and sends
+  results back through the existing generation-aware
+  `markConsumeStarted`/`markConsumeSucceeded`/`markConsumeFailed` transport
+  path.
+- New-producer events and watch-accept actions now feed the ledger first; the
+  runner performs the consume instead of stream-kind-specific direct calls.
+- The old external-stream and watched-pending-screen-audio re-drive effects were
+  removed. Existing repair/reconnect sweeps still reconcile producer snapshots
+  and preserve their current recovery behavior.
+
+Verification at landing: reducer/selector suite 31/31; client typecheck PASS.
 
 ## Loose ends
 
-- **Command/effect runner still owed for PR 5.** PR 4 added manual retry and the
-  smallest consume-generation guard, but consume decisions still live in the
-  existing stream-kind-specific provider effects. The design's central
-  `streamsToConsume` command/effect runner remains intentionally deferred.
+- **Command/effect runner is not yet a fully emitted-command reducer.** PR 5
+  centralizes consume decisions in a selector/effect runner while keeping the
+  reducer pure and preserving the existing transport API. The larger design
+  shape (`event + state -> nextState + commands`, timer commands, close-consumer
+  commands) is still future work if the migration continues.
 - **Screen producer-close semantics need a product call before changing.**
   Webcam/external desired slots survive producer close, and screen-audio desire
   survives its own producer churn while the screen remains watched. A direct

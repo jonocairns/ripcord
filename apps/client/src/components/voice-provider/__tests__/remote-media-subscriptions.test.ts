@@ -12,6 +12,7 @@ import {
 	reconcileRemoteMediaWithProducerSnapshot,
 	refreshRemoteMediaPendingAges,
 	remoteMediaSubscriptionsToPendingStreams,
+	remoteMediaSubscriptionsToStreamsToConsume,
 	remoteMediaSubscriptionsToVisibleRemoteMedia,
 	type TRemoteMediaSubscriptions,
 } from '../hooks/remote-media-subscriptions';
@@ -459,6 +460,96 @@ describe('remote media subscriptions', () => {
 		expect(state.get(getPendingStreamKey(2, StreamKind.VIDEO))).toMatchObject({
 			status: 'available',
 			pendingSince: 500,
+		});
+	});
+
+	describe('streams to consume selector', () => {
+		it('emits desired external tracks with live producers and current track metadata', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = markRemoteProducerPresent(state, 50, StreamKind.EXTERNAL_AUDIO, 100, 'external-audio-producer');
+			state = markRemoteProducerPresent(state, 50, StreamKind.EXTERNAL_VIDEO, 100, 'external-video-producer');
+			state = markRemoteWatchRequested(state, 50, StreamKind.EXTERNAL_AUDIO, 110);
+			state = markRemoteWatchRequested(state, 50, StreamKind.EXTERNAL_VIDEO, 110);
+
+			expect(remoteMediaSubscriptionsToStreamsToConsume(state, { 50: { audio: true, video: true } })).toEqual([
+				{
+					key: getPendingStreamKey(50, StreamKind.EXTERNAL_AUDIO),
+					remoteId: 50,
+					kind: StreamKind.EXTERNAL_AUDIO,
+					producerId: 'external-audio-producer',
+				},
+				{
+					key: getPendingStreamKey(50, StreamKind.EXTERNAL_VIDEO),
+					remoteId: 50,
+					kind: StreamKind.EXTERNAL_VIDEO,
+					producerId: 'external-video-producer',
+				},
+			]);
+		});
+
+		it('does not emit external commands without current track metadata', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = markRemoteProducerPresent(state, 50, StreamKind.EXTERNAL_AUDIO, 100, 'external-audio-producer');
+			state = markRemoteWatchRequested(state, 50, StreamKind.EXTERNAL_AUDIO, 110);
+
+			expect(remoteMediaSubscriptionsToStreamsToConsume(state)).toEqual([]);
+			expect(remoteMediaSubscriptionsToStreamsToConsume(state, { 50: { audio: false } })).toEqual([]);
+		});
+
+		it('emits desired screen audio while the screen video is live', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
+			state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 105, 'screen-producer', 1);
+			state = markRemoteConsumeSucceeded(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 'screen-consumer', 1);
+			state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 120, 'screen-audio-producer');
+
+			expect(remoteMediaSubscriptionsToStreamsToConsume(state)).toContainEqual({
+				key: getPendingStreamKey(3, StreamKind.SCREEN_AUDIO),
+				remoteId: 3,
+				kind: StreamKind.SCREEN_AUDIO,
+				producerId: 'screen-audio-producer',
+			});
+
+			state = markRemoteProducerClosed(state, 3, StreamKind.SCREEN, 120, 'screen-producer');
+
+			expect(remoteMediaSubscriptionsToStreamsToConsume(state)).not.toContainEqual(
+				expect.objectContaining({
+					key: getPendingStreamKey(3, StreamKind.SCREEN_AUDIO),
+				}),
+			);
+		});
+
+		it('does not duplicate in-flight, retrying, failed, or consumed slots', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer');
+			state = markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer', 1);
+			state = markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer');
+			state = markRemoteWatchRequested(state, 2, StreamKind.VIDEO, 110);
+			state = markRemoteConsumeStarted(state, 2, StreamKind.VIDEO, 120, 'video-producer', 2, true);
+			state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
+			state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110);
+			state = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 120, 'consume failed');
+			state = markRemoteProducerPresent(state, 4, StreamKind.AUDIO, 100, 'other-audio-producer');
+			state = markRemoteConsumeSucceeded(state, 4, StreamKind.AUDIO, 110, 'other-audio-producer', 'consumer-4');
+
+			expect(remoteMediaSubscriptionsToStreamsToConsume(state)).toEqual([]);
+		});
+
+		it('does not emit when producer is absent or watch intent has stopped', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer');
+			state = markRemoteWatchRequested(state, 2, StreamKind.VIDEO, 110);
+			state = markRemoteProducerClosed(state, 2, StreamKind.VIDEO, 120, 'video-producer');
+			state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
+			state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110);
+			state = markRemoteWatchStopped(state, 3, StreamKind.SCREEN, 120);
+
+			expect(remoteMediaSubscriptionsToStreamsToConsume(state)).toEqual([]);
 		});
 	});
 

@@ -40,6 +40,13 @@ export type TVisibleRemoteMedia = {
 	producerId?: string;
 };
 
+export type TStreamsToConsumeCommand = {
+	key: string;
+	remoteId: number;
+	kind: StreamKind;
+	producerId?: string;
+};
+
 type TProducerSlot = {
 	remoteId: number;
 	kind: StreamKind;
@@ -53,6 +60,9 @@ const isUserStreamKind = (kind: StreamKind) =>
 	kind === StreamKind.VIDEO ||
 	kind === StreamKind.SCREEN ||
 	kind === StreamKind.SCREEN_AUDIO;
+
+const isExternalStreamKind = (kind: StreamKind) =>
+	kind === StreamKind.EXTERNAL_AUDIO || kind === StreamKind.EXTERNAL_VIDEO;
 
 const shouldKeepDesireOnProducerClose = (
 	kind: StreamKind,
@@ -659,6 +669,68 @@ export const remoteMediaSubscriptionsToVisibleRemoteMedia = (
 	});
 
 	return visibleRemoteMedia;
+};
+
+const canConsumeExternalStream = (
+	subscription: TRemoteMediaSubscription,
+	externalStreamTracks: TExternalStreamTrackPresence | undefined,
+): boolean => {
+	const tracks = externalStreamTracks?.[subscription.remoteId];
+
+	if (tracks === undefined) {
+		return false;
+	}
+
+	if (subscription.kind === StreamKind.EXTERNAL_AUDIO) {
+		return isExternalTrackPresent(tracks, 'audio');
+	}
+
+	if (subscription.kind === StreamKind.EXTERNAL_VIDEO) {
+		return isExternalTrackPresent(tracks, 'video');
+	}
+
+	return true;
+};
+
+const canConsumeScreenAudio = (
+	subscription: TRemoteMediaSubscription,
+	subscriptions: TRemoteMediaSubscriptions,
+): boolean => {
+	if (subscription.kind !== StreamKind.SCREEN_AUDIO) {
+		return true;
+	}
+
+	const screen = subscriptions.get(getPendingStreamKey(subscription.remoteId, StreamKind.SCREEN));
+
+	return screen?.desired === true && screen.producerPresent;
+};
+
+export const remoteMediaSubscriptionsToStreamsToConsume = (
+	subscriptions: TRemoteMediaSubscriptions,
+	externalStreamTracks?: TExternalStreamTrackPresence,
+): TStreamsToConsumeCommand[] => {
+	const streamsToConsume: TStreamsToConsumeCommand[] = [];
+
+	subscriptions.forEach((subscription) => {
+		if (
+			!subscription.producerPresent ||
+			!subscription.desired ||
+			subscription.status !== 'wanted' ||
+			(isExternalStreamKind(subscription.kind) && !canConsumeExternalStream(subscription, externalStreamTracks)) ||
+			!canConsumeScreenAudio(subscription, subscriptions)
+		) {
+			return;
+		}
+
+		streamsToConsume.push({
+			key: subscription.key,
+			remoteId: subscription.remoteId,
+			kind: subscription.kind,
+			producerId: subscription.producerId,
+		});
+	});
+
+	return streamsToConsume;
 };
 
 const hasSubscriptionChanged = (prev: TRemoteMediaSubscriptions, next: TRemoteMediaSubscriptions): boolean => {

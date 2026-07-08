@@ -56,10 +56,10 @@ import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from './defau
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
 import {
+	remoteMediaSubscriptionsToStreamsToConsume,
 	type TRemoteMediaSubscriptions,
 	useRemoteMediaSubscriptions,
 } from './hooks/remote-media-subscriptions';
-import { selectWatchedPendingScreenAudioIds } from './hooks/screen-audio-watch-intent';
 import { shouldDeferTransportFailureToReconnect } from './hooks/transport-failure-policy';
 import { useLocalStreams } from './hooks/use-local-streams';
 import {
@@ -1058,35 +1058,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const acceptStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
-			// markWatchRequested records external watch intent as
-			// EXTERNAL_AUDIO/VIDEO.desired on the ledger; the re-drive and repair
-			// passes read it back from there (isExternalStreamDesiredInLedger).
 			markWatchRequested(remoteId, kind);
-
-			const currentRtpCapabilities = sendRtpCapabilities.current;
-
-			if (!currentRtpCapabilities) {
-				logVoice('Cannot accept pending stream before voice is initialized', {
-					remoteId,
-					kind,
-				});
-				return;
-			}
-
-			void consume(remoteId, kind, currentRtpCapabilities);
-
-			// Paired audio can already be pending when the screen is accepted. The
-			// watched-pending effect only re-drives on a pendingStreams change,
-			// which a failed SCREEN consume never produces — consume directly so
-			// audio pickup does not depend on the video consume succeeding.
-			if (
-				kind === StreamKind.SCREEN &&
-				pendingStreamsRef.current.has(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))
-			) {
-				void consume(remoteId, StreamKind.SCREEN_AUDIO, currentRtpCapabilities);
-			}
 		},
-		[consume, markWatchRequested],
+		[markWatchRequested],
 	);
 
 	const retryRemoteMedia = useCallback(
@@ -1268,54 +1242,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		localAudioProducer,
 	]);
 
-	useEffect(() => {
-		// Channel-leave clears watch intent via clearAllPendingStreams (transport
-		// cleanup empties the ledger), so no separate reset is needed here.
-		if (currentVoiceChannelId === undefined) {
-			return;
-		}
+	const streamsToConsume = useMemo(
+		() => remoteMediaSubscriptionsToStreamsToConsume(remoteMediaSubscriptions, getExternalStreamTrackPresence()),
+		[remoteMediaSubscriptions, getExternalStreamTrackPresence],
+	);
 
-		const currentRtpCapabilities = voiceEventRtpCapabilities;
-
-		if (!currentRtpCapabilities) {
-			return;
-		}
-
-		Object.entries(currentChannelExternalStreams).forEach(([streamId, stream]) => {
-			const numericStreamId = Number(streamId);
-
-			if (
-				stream.tracks.audio &&
-				isExternalStreamDesiredInLedger(
-					remoteMediaSubscriptionsRef.current,
-					numericStreamId,
-					StreamKind.EXTERNAL_AUDIO,
-				) &&
-				pendingStreams.has(`${numericStreamId}-${StreamKind.EXTERNAL_AUDIO}`)
-			) {
-				void consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities);
-			}
-
-			if (
-				stream.tracks.video &&
-				isExternalStreamDesiredInLedger(
-					remoteMediaSubscriptionsRef.current,
-					numericStreamId,
-					StreamKind.EXTERNAL_VIDEO,
-				) &&
-				pendingStreams.has(`${numericStreamId}-${StreamKind.EXTERNAL_VIDEO}`)
-			) {
-				void consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities);
-			}
-		});
-	}, [consume, currentChannelExternalStreams, currentVoiceChannelId, pendingStreams, voiceEventRtpCapabilities]);
-
-	// Re-drive SCREEN_AUDIO consumption while the viewer still intends to hear
-	// it: screen audio can appear after the viewer accepted the screen, and a
-	// consume that exhausted its retries leaves the pending entry behind with no
-	// manual affordance (the stage hides the pending card once screen video is
-	// consumed). The repair pass refreshes pending ages, so a stranded entry
-	// re-enters here on the repair cadence rather than staying silent forever.
 	useEffect(() => {
 		if (currentVoiceChannelId === undefined) {
 			return;
@@ -1327,12 +1258,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
-		selectWatchedPendingScreenAudioIds(pendingStreams, (remoteId) =>
-			isScreenAudioDesiredInLedger(remoteMediaSubscriptionsRef.current, remoteId),
-		).forEach((remoteId) => {
-			void consume(remoteId, StreamKind.SCREEN_AUDIO, currentRtpCapabilities);
+		streamsToConsume.forEach((command) => {
+			void consume(command.remoteId, command.kind, currentRtpCapabilities, command.producerId);
 		});
-	}, [consume, currentVoiceChannelId, pendingStreams, voiceEventRtpCapabilities]);
+	}, [consume, currentVoiceChannelId, streamsToConsume, voiceEventRtpCapabilities]);
 
 	useEffect(() => {
 		Object.entries(currentChannelExternalStreams).forEach(([streamId, stream]) => {
@@ -4439,7 +4368,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	useVoiceEvents({
-		consume,
 		syncExistingProducers,
 		addPendingStream,
 		removePendingStream,
