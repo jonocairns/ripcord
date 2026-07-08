@@ -55,16 +55,12 @@ import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } fr
 import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from './default-input-device';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
-import { type TRemoteMediaSubscriptions, useRemoteMediaSubscriptions } from './hooks/remote-media-subscriptions';
+import { useRemoteMediaSubscriptions } from './hooks/remote-media-subscriptions';
 import { shouldDeferTransportFailureToReconnect } from './hooks/transport-failure-policy';
 import { useLocalStreams } from './hooks/use-local-streams';
-import {
-	getOldestRepairEligiblePendingCreatedAt,
-	getPendingStreamKey,
-	PENDING_STREAM_REPAIR_AGE_MS,
-	type TExternalStreamTrackPresence,
-} from './hooks/use-pending-streams';
+import { getPendingStreamKey, type TExternalStreamTrackPresence } from './hooks/use-pending-streams';
 import { useRemoteMediaConsumeRunner } from './hooks/use-remote-media-consume-runner';
+import { useRemoteMediaRepairRunner } from './hooks/use-remote-media-repair-runner';
 import { useRemoteStreams } from './hooks/use-remote-streams';
 import { useScreenShareQualityGuard } from './hooks/use-screen-share-quality-guard';
 import { type TransportStatsStore, useTransportStats } from './hooks/use-transport-stats';
@@ -381,25 +377,6 @@ type TChannelExternalStreams = {
 };
 
 const EMPTY_CHANNEL_EXTERNAL_STREAMS: TChannelExternalStreams = {};
-
-// Screen-audio watch intent now lives on the ledger (SCREEN_AUDIO.desired,
-// coupled to the screen's desire), so repair reads it here instead of the
-// watchedScreenAudioRef. See remote-media-subscriptions inheritsScreenAudioDesire.
-const isScreenAudioDesiredInLedger = (subscriptions: TRemoteMediaSubscriptions, remoteId: number): boolean => {
-	return subscriptions.get(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))?.desired === true;
-};
-
-// External watch intent now lives on the ledger (EXTERNAL_AUDIO/VIDEO.desired,
-// keyed by streamId), so the re-drive and repair passes read it here instead of
-// the watchedExternalStreamsRef. streamId keying matches the reconnect capture
-// (captureWatchedRemoteStreams), which already derives external intent this way.
-const isExternalStreamDesiredInLedger = (
-	subscriptions: TRemoteMediaSubscriptions,
-	streamId: number,
-	kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO,
-): boolean => {
-	return subscriptions.get(getPendingStreamKey(streamId, kind))?.desired === true;
-};
 
 const getAudioOpusConfig = (channelId: number | undefined) => {
 	let bitrate = DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS;
@@ -1268,63 +1245,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		});
 	}, [addPendingStream, currentChannelExternalStreams, externalStreams, pendingStreams]);
 
-	useEffect(() => {
-		if (currentVoiceChannelId === undefined || !voiceEventRtpCapabilities || pendingStreams.size === 0) {
-			return;
-		}
-
-		const oldestRepairEligibleCreatedAt = getOldestRepairEligiblePendingCreatedAt(
-			pendingStreams,
-			(streamId, kind) => {
-				if (!currentChannelExternalStreams[streamId]) {
-					return false;
-				}
-
-				return isExternalStreamDesiredInLedger(remoteMediaSubscriptionsRef.current, streamId, kind);
-			},
-			(remoteId) => isScreenAudioDesiredInLedger(remoteMediaSubscriptionsRef.current, remoteId),
-		);
-
-		if (oldestRepairEligibleCreatedAt === undefined) {
-			return;
-		}
-
-		const scheduledVoiceChannelId = currentVoiceChannelId;
-		const repairDelayMs = Math.max(0, oldestRepairEligibleCreatedAt + PENDING_STREAM_REPAIR_AGE_MS - Date.now());
-		const repairTimeout = setTimeout(() => {
-			if (currentVoiceChannelIdRef.current !== scheduledVoiceChannelId) {
-				return;
-			}
-
-			logVoice('Repairing stale pending voice streams', {
-				channelId: scheduledVoiceChannelId,
-				pendingCount: pendingStreams.size,
-			});
-
-			// Reset every pending entry's age so the next repair pass is at least a
-			// full repair age away, even if this sweep cannot clear an entry.
-			refreshPendingStreamAges();
-
-			void consumeExistingProducers(voiceEventRtpCapabilities, getExternalStreamTrackPresence()).catch((error) => {
-				logVoice('Failed to repair stale pending voice streams', {
-					error,
-					channelId: scheduledVoiceChannelId,
-				});
-			});
-		}, repairDelayMs);
-
-		return () => {
-			clearTimeout(repairTimeout);
-		};
-	}, [
-		consumeExistingProducers,
-		currentChannelExternalStreams,
+	useRemoteMediaRepairRunner({
 		currentVoiceChannelId,
-		getExternalStreamTrackPresence,
+		rtpCapabilities: voiceEventRtpCapabilities,
+		remoteMediaSubscriptions,
 		pendingStreams,
+		currentChannelExternalStreams,
 		refreshPendingStreamAges,
-		voiceEventRtpCapabilities,
-	]);
+		consumeExistingProducers,
+		getExternalStreamTrackPresence,
+	});
 
 	const applyMicGainVolume = useCallback((volume: number) => {
 		const micGainPipeline = micGainPipelineRef.current;

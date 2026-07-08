@@ -27,6 +27,7 @@ feature arc → optional cleanup, each an independently reviewable PR.
 | **4** | Manual retry + consume generations (reintroduces the removed generation state) | 3 | ✅ **done** (unmerged) |
 | **5** | Ledger-derived consume command runner + `streamsToConsume` (design "Longer-Term Direction") | 4 | ✅ **done** (unmerged) |
 | **6** | Extract consume runner hook + delete dead screen-audio watch-intent helper | 5 | ✅ **done** (unmerged) |
+| **7** | Extract stale-pending repair runner hook (behavior-identical) | 6 | ✅ **done** (unmerged) |
 
 **Split rationale (1 vs 1b):** the screen-audio ref (`watchedScreenAudioRef`, a
 `Set<number>`) and the external-stream ref (`watchedExternalStreamsRef`, then
@@ -241,6 +242,30 @@ change:
 - Deleted the dead `screen-audio-watch-intent.ts` helper and its obsolete
   helper-only test. Screen-audio intent remains ledger-owned via
   `SCREEN_AUDIO.desired`, coupled to the screen slot.
+
+## PR 7 — repair runner extraction (done)
+
+Built PR 7 on top of the PR 6 branch (`codex/remote-media-runner-cleanup`) as
+`codex/remote-media-runner-followup`. This slice made no intended behavior
+change — it is the repair-side mirror of PR 6's consume-runner extraction:
+
+- Extracted the stale-pending repair effect from `VoiceProvider` into
+  `useRemoteMediaRepairRunner`. The pending-age threshold
+  (`PENDING_STREAM_REPAIR_AGE_MS`), ledger desire checks
+  (`getOldestRepairEligiblePendingCreatedAt` gated on
+  `isExternalStreamDesiredInLedger` / `isScreenAudioDesiredInLedger`), the
+  reconnect/channel-stale guard (`currentVoiceChannelIdRef` re-check inside the
+  timeout), the `refreshPendingStreamAges` age reset, and the
+  `consumeExistingProducers` sweep are all preserved verbatim.
+- Moved the two repair-only ledger-desire helpers
+  (`isScreenAudioDesiredInLedger`, `isExternalStreamDesiredInLedger`) into the
+  hook file — they had no other callers in `VoiceProvider`.
+- The reducer stays pure; no command-envelope work started. Screen
+  producer-close semantics are untouched.
+
+Verification at landing: reducer/selector suite 31/31; client typecheck PASS;
+client lint PASS with only the pre-existing `src/vite-env.d.ts` unused
+`ImportMetaEnv` warning.
 
 ## Loose ends
 
