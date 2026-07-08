@@ -55,7 +55,10 @@ import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } fr
 import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from './default-input-device';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
-import { useRemoteMediaSubscriptions } from './hooks/remote-media-subscriptions';
+import {
+	type TRemoteMediaSubscriptions,
+	useRemoteMediaSubscriptions,
+} from './hooks/remote-media-subscriptions';
 import { selectWatchedPendingScreenAudioIds, tracksScreenAudioWatchIntent } from './hooks/screen-audio-watch-intent';
 import { shouldDeferTransportFailureToReconnect } from './hooks/transport-failure-policy';
 import { useLocalStreams } from './hooks/use-local-streams';
@@ -388,6 +391,13 @@ const isExternalStreamKind = (kind: StreamKind): kind is StreamKind.EXTERNAL_AUD
 
 const getExternalStreamWatchIdentity = (stream: Pick<TExternalStream, 'pluginId' | 'key'>) => {
 	return `${stream.pluginId}:${stream.key}`;
+};
+
+// Screen-audio watch intent now lives on the ledger (SCREEN_AUDIO.desired,
+// coupled to the screen's desire), so repair reads it here instead of the
+// watchedScreenAudioRef. See remote-media-subscriptions inheritsScreenAudioDesire.
+const isScreenAudioDesiredInLedger = (subscriptions: TRemoteMediaSubscriptions, remoteId: number): boolean => {
+	return subscriptions.get(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))?.desired === true;
 };
 
 const getTrackedExternalWatchField = (
@@ -1362,7 +1372,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 
 		selectWatchedPendingScreenAudioIds(pendingStreams, (remoteId) =>
-			watchedScreenAudioRef.current.has(remoteId),
+			isScreenAudioDesiredInLedger(remoteMediaSubscriptionsRef.current, remoteId),
 		).forEach((remoteId) => {
 			void consume(remoteId, StreamKind.SCREEN_AUDIO, currentRtpCapabilities);
 		});
@@ -1407,7 +1417,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				return trackedState?.[getTrackedExternalWatchField(kind)] === true;
 			},
-			(remoteId) => watchedScreenAudioRef.current.has(remoteId),
+			(remoteId) => isScreenAudioDesiredInLedger(remoteMediaSubscriptionsRef.current, remoteId),
 		);
 
 		if (oldestRepairEligibleCreatedAt === undefined) {
