@@ -5,6 +5,11 @@ implementation. All findings below have been addressed on the
 `codex/remote-media-ledger-followups` branch; each entry records how, so the fix
 can be audited against the original concern.
 
+> **Continuing work:** the watch-intent migration that follows this review round
+> (moving intent out of `watchedScreenAudioRef` / `watchedExternalStreamsRef` into
+> the ledger) is tracked in
+> [`remote-media-intent-migration.md`](./remote-media-intent-migration.md).
+
 Validation reported with the original review:
 
 - Unit tests pass: 7/7 (now 19/19 in the ledger suites after the fixes below).

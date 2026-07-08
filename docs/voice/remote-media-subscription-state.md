@@ -5,6 +5,13 @@ stale-stream repair loop caused by watch-on-demand pendings`). The
 `SCREEN_AUDIO` intent section describes the narrow follow-up; the central
 subscription model remains the longer-term direction.
 
+**Implementation status:** the ledger now owns behavior, and the intent-migration
+work is being landed as a stacked PR. See
+[`remote-media-intent-migration.md`](./remote-media-intent-migration.md) for
+which slice is done and what is open. Screen-audio watch intent has moved into
+the ledger (PR 1); external-stream intent (`watchedExternalStreamsRef`) is the
+remaining ref holdout.
+
 ## Summary
 
 The voice client currently models several different concepts through
@@ -291,6 +298,12 @@ window, its pending entry remains. But without a separate watch-intent flag, the
 repair path cannot safely include it. Including all `SCREEN_AUDIO` pendings would
 re-arm the original unwatched-screen-share repair loop that PR #263 fixed.
 
+**Resolved for screen audio (PR 1):** `SCREEN_AUDIO` now carries ledger intent —
+`desired` is coupled to the screen's desire in the reducer (see the updated
+Follow-Up section below), so repair can include it without a separate ref. The
+asymmetry now applies only to external streams, which still track intent through
+`watchedExternalStreamsRef` pending PR 1b.
+
 ## Why The Holes Keep Appearing
 
 The code is managing a remote-media subscription state machine, but the state
@@ -318,38 +331,42 @@ ordering dependent:
 
 ## Follow-Up: Screen Audio Intent
 
-`SCREEN_AUDIO` should mirror the external-stream design, but be scoped to the
-screen-share lifecycle.
+**Implemented (PR 1) — in the ledger, not a ref.** This section originally
+proposed a `useRef<Set<number>>` mirroring the external-stream ref. The landed
+design instead makes `SCREEN_AUDIO.desired` a ledger-owned flag **coupled to the
+screen's desire in the pure reducer**, which mirrors the already-existing
+close-side cascade in `markRemoteProducerClosed(SCREEN)` and keeps the coupling
+testable in one place. The behavior below is unchanged; only the mechanism moved.
 
-Suggested model:
+Intent behavior (now enforced by reducer cascades, no ref bookkeeping):
 
-```ts
-const watchedScreenAudioRef = useRef<Set<number>>(new Set());
-```
-
-Intent updates:
-
-- Set intent on `acceptStream(remoteId, StreamKind.SCREEN)`.
-- Set intent on `acceptStream(remoteId, StreamKind.SCREEN_AUDIO)`.
-- Clear intent on `stopWatchingStream(remoteId, StreamKind.SCREEN)`.
-- Clear intent on `stopWatchingStream(remoteId, StreamKind.SCREEN_AUDIO)`.
-- Clear intent on user leave.
-- Clear intent when the screen producer closes or the user stops sharing.
+- Accepting the screen (`markRemoteWatchRequested(SCREEN)`) grants `SCREEN_AUDIO`
+  desire; accepting screen audio directly grants it too.
+- Stopping the screen (`markRemoteWatchStopped(SCREEN)`) revokes it; so does
+  stopping screen audio directly.
+- User leave deletes the `SCREEN_AUDIO` slot (`clearRemoteMediaForUser`); channel
+  leave resets the ledger.
+- The screen producer closing revokes it (`markRemoteProducerClosed(SCREEN)`
+  cascade).
 
 Do not clear intent merely because the `SCREEN_AUDIO` producer closes while the
-screen is still watched. A producer replacement or temporary audio-track loss
-should be able to recover without requiring the viewer to stop and watch again.
+screen is still watched — `shouldKeepDesireOnProducerClose(SCREEN_AUDIO)` keeps
+desire while the screen remains desired and present, so a producer replacement or
+temporary audio-track loss recovers without the viewer re-watching.
 
-Recovery path:
+Two mechanisms carry intent across producer timing, both guarded so
+intent-ahead-of-producer never fabricates a phantom `producerPresent: true` slot:
 
-- Add a provider effect similar to the external-stream effect:
-  `intent set && pending SCREEN_AUDIO && rtpCapabilities -> consume()`.
-- Include only intent-gated `SCREEN_AUDIO` in repair eligibility.
-- Keep relying on the existing consume-operation state to dedupe overlapping
-  consume attempts.
+- `inheritsScreenAudioDesire` derives `SCREEN_AUDIO.desired` from the screen
+  sibling when the audio producer arrives after the screen is already watched.
+- the grant cascade in `markRemoteWatchRequested(SCREEN)` covers the case where
+  the audio producer already exists at accept time.
 
-This gives accepted screen audio the same 15-second repair cadence external
-tracks get, without making every unwatched screen share arm the repair timer.
+Recovery path (unchanged): the provider re-drive effect and repair eligibility
+read `SCREEN_AUDIO.desired` from the ledger (via `isScreenAudioDesiredInLedger`)
+so accepted screen audio gets the same repair cadence external tracks get,
+without making every unwatched screen share arm the repair timer. Overlapping
+consume attempts are still deduped by the existing consume-operation state.
 
 ## Required UI Affordance
 
