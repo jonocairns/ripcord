@@ -62,6 +62,24 @@ const shouldKeepDesireOnProducerClose = (
 	return false;
 };
 
+// Screen-audio desire is subordinate to the screen's: accepting the screen
+// implies wanting its audio, and audio can appear after the screen is already
+// watched. This is the grant-side mirror of shouldKeepDesireOnProducerClose —
+// both sides now share one predicate so screen-audio intent can never drift.
+const inheritsScreenAudioDesire = (
+	subscriptions: TRemoteMediaSubscriptions,
+	remoteId: number,
+	kind: StreamKind,
+): boolean => {
+	if (kind !== StreamKind.SCREEN_AUDIO) {
+		return false;
+	}
+
+	const screen = subscriptions.get(getPendingStreamKey(remoteId, StreamKind.SCREEN));
+
+	return screen?.desired === true && screen.producerPresent === true;
+};
+
 const getInitialStatus = (producerPresent: boolean, desired: boolean): TRemoteMediaStatus => {
 	if (desired) {
 		return producerPresent ? 'wanted' : 'failed';
@@ -134,7 +152,7 @@ export const markRemoteProducerPresent = (
 ): TRemoteMediaSubscriptions => {
 	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
 	const base = existing ?? makeSubscription(remoteId, kind, now, producerId);
-	const desired = base.desired || isAutoDesiredKind(kind);
+	const desired = base.desired || isAutoDesiredKind(kind) || inheritsScreenAudioDesire(subscriptions, remoteId, kind);
 	const status =
 		base.status === 'consuming' || base.status === 'consumed' ? base.status : getInitialStatus(true, desired);
 
@@ -162,7 +180,7 @@ export const markRemoteWatchRequested = (
 	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
 	const base = existing ?? makeSubscription(remoteId, kind, now);
 
-	return applySlotUpdate(
+	let next = applySlotUpdate(
 		subscriptions,
 		existing,
 		{
@@ -173,6 +191,16 @@ export const markRemoteWatchRequested = (
 		},
 		now,
 	);
+
+	// Only cascade when an audio slot already exists (its producer is/was
+	// present). Intent-ahead-of-producer is handled by inheritsScreenAudioDesire
+	// in markRemoteProducerPresent, so this branch never fabricates a phantom
+	// producerPresent=true SCREEN_AUDIO slot.
+	if (kind === StreamKind.SCREEN && subscriptions.has(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))) {
+		next = markRemoteWatchRequested(next, remoteId, StreamKind.SCREEN_AUDIO, now);
+	}
+
+	return next;
 };
 
 export const markRemoteWatchStopped = (
@@ -184,7 +212,7 @@ export const markRemoteWatchStopped = (
 	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
 	const base = existing ?? makeSubscription(remoteId, kind, now);
 
-	return applySlotUpdate(
+	let next = applySlotUpdate(
 		subscriptions,
 		existing,
 		{
@@ -199,6 +227,15 @@ export const markRemoteWatchStopped = (
 		},
 		now,
 	);
+
+	// Revoke screen-audio desire alongside the screen. Guarded by slot existence
+	// for the same reason as the grant cascade — an unconditional recurse would
+	// makeSubscription a phantom producerPresent=true SCREEN_AUDIO slot.
+	if (kind === StreamKind.SCREEN && subscriptions.has(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))) {
+		next = markRemoteWatchStopped(next, remoteId, StreamKind.SCREEN_AUDIO, now);
+	}
+
+	return next;
 };
 
 export const markRemoteConsumeStarted = (

@@ -228,4 +228,78 @@ describe('remote media subscriptions', () => {
 			pendingSince: 500,
 		});
 	});
+
+	describe('screen-audio desire couples to the screen', () => {
+		it('grants screen-audio desire when audio appears after the screen is watched', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p');
+			state = markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110);
+			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 120, 'audio-p');
+
+			expect(state.get(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))).toMatchObject({
+				desired: true,
+				producerPresent: true,
+				status: 'wanted',
+			});
+		});
+
+		it('grants screen-audio desire when the audio producer already exists at accept', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p');
+			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 100, 'audio-p');
+			state = markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110);
+
+			expect(state.get(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))?.desired).toBe(true);
+		});
+
+		it('does not fabricate a pending screen-audio card before its producer exists', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p');
+			state = markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110);
+
+			expect(state.has(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))).toBe(false);
+			expect(
+				remoteMediaSubscriptionsToPendingStreams(state).has(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO)),
+			).toBe(false);
+		});
+
+		it('revokes screen-audio desire when the screen is un-watched', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p');
+			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 100, 'audio-p');
+			state = markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110);
+			expect(state.get(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))?.desired).toBe(true);
+
+			state = markRemoteWatchStopped(state, 5, StreamKind.SCREEN, 120);
+			expect(state.get(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))?.desired).toBe(false);
+		});
+
+		it('does not re-grant screen-audio desire on reconcile once the screen is un-watched', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p');
+			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 100, 'audio-p');
+			state = markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110);
+			state = markRemoteWatchStopped(state, 5, StreamKind.SCREEN, 120);
+
+			state = reconcileRemoteMediaWithProducerSnapshot(
+				state,
+				makeProducers({ remoteScreenIds: [5], remoteScreenAudioIds: [5] }),
+				undefined,
+				130,
+			);
+
+			expect(state.get(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))?.desired).toBe(false);
+		});
+
+		it('drops screen-audio desire when the screen producer closes', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p');
+			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 100, 'audio-p');
+			state = markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110);
+
+			state = markRemoteProducerClosed(state, 5, StreamKind.SCREEN, 120, 'screen-p');
+
+			expect(state.get(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))?.desired).toBe(false);
+		});
+	});
 });
