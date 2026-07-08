@@ -573,7 +573,7 @@ export type TVoiceProvider = {
 	'localAudioStream' | 'localVideoStream' | 'localScreenShareStream' | 'localScreenShareAudioStream'
 > &
 	Pick<ReturnType<typeof useRemoteStreams>, 'remoteUserStreams' | 'externalStreams'> &
-	Pick<ReturnType<typeof useRemoteMediaSubscriptions>, 'pendingStreams' | 'remoteMediaSubscriptions'> &
+	Pick<ReturnType<typeof useRemoteMediaSubscriptions>, 'pendingStreams' | 'remoteMediaSubscriptions' | 'visibleRemoteMedia'> &
 	ReturnType<typeof useVoiceControls>;
 
 const VoiceProviderContext = createContext<TVoiceProvider>({
@@ -605,6 +605,7 @@ const VoiceProviderContext = createContext<TVoiceProvider>({
 	externalStreams: {},
 	pendingStreams: new Map(),
 	remoteMediaSubscriptions: new Map(),
+	visibleRemoteMedia: [],
 });
 
 const VoiceActivityContext = createContext<VoiceActivityStore | null>(null);
@@ -815,6 +816,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const {
 		remoteMediaSubscriptions,
 		pendingStreams,
+		visibleRemoteMedia,
 		addPendingStream,
 		removePendingStream,
 		clearPendingStreamsForUser,
@@ -4466,6 +4468,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			externalStreams,
 			pendingStreams,
 			remoteMediaSubscriptions,
+			visibleRemoteMedia,
 		}),
 		[
 			loading,
@@ -4491,6 +4494,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			externalStreams,
 			pendingStreams,
 			remoteMediaSubscriptions,
+			visibleRemoteMedia,
 		],
 	);
 

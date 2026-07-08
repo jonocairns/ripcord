@@ -12,6 +12,7 @@ import {
 	reconcileRemoteMediaWithProducerSnapshot,
 	refreshRemoteMediaPendingAges,
 	remoteMediaSubscriptionsToPendingStreams,
+	remoteMediaSubscriptionsToVisibleRemoteMedia,
 	type TRemoteMediaSubscriptions,
 } from '../hooks/remote-media-subscriptions';
 import { getPendingStreamKey } from '../hooks/use-pending-streams';
@@ -57,6 +58,62 @@ describe('remote media subscriptions', () => {
 			status: 'failed',
 			lastFailureReason: 'consume failed',
 		});
+	});
+
+	it('keeps a failed desired webcam slot visible after its producer disappears', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = markRemoteProducerPresent(state, 3, StreamKind.VIDEO, 100, 'video-producer');
+		state = markRemoteWatchRequested(state, 3, StreamKind.VIDEO, 110);
+		state = markRemoteConsumeFailed(state, 3, StreamKind.VIDEO, 120, 'consume failed');
+		state = markRemoteProducerClosed(state, 3, StreamKind.VIDEO, 130, 'video-producer');
+
+		const key = getPendingStreamKey(3, StreamKind.VIDEO);
+
+		expect(remoteMediaSubscriptionsToPendingStreams(state).has(key)).toBe(false);
+		expect(remoteMediaSubscriptionsToVisibleRemoteMedia(state)).toContainEqual({
+			key,
+			remoteId: 3,
+			kind: StreamKind.VIDEO,
+			status: 'failed',
+			subscriptionStatus: 'failed',
+			producerPresent: false,
+			desired: true,
+			producerId: undefined,
+		});
+	});
+
+	it('keeps an explicitly desired failed screen slot visible even without media objects', () => {
+		const key = getPendingStreamKey(4, StreamKind.SCREEN);
+		const state: TRemoteMediaSubscriptions = new Map([
+			[
+				key,
+				{
+					key,
+					remoteId: 4,
+					kind: StreamKind.SCREEN,
+					producerPresent: false,
+					desired: true,
+					status: 'failed',
+					updatedAt: 100,
+					lastFailureAt: 100,
+					lastFailureReason: 'consume failed',
+				},
+			],
+		]);
+
+		expect(remoteMediaSubscriptionsToPendingStreams(state).has(key)).toBe(false);
+		expect(remoteMediaSubscriptionsToVisibleRemoteMedia(state)).toContainEqual(
+			expect.objectContaining({
+				key,
+				remoteId: 4,
+				kind: StreamKind.SCREEN,
+				status: 'failed',
+				subscriptionStatus: 'failed',
+				producerPresent: false,
+				desired: true,
+			}),
+		);
 	});
 
 	it('stop-watch turns a desired stream back into an available producer slot', () => {
@@ -115,6 +172,14 @@ describe('remote media subscriptions', () => {
 			producerPresent: false,
 			status: 'failed',
 		});
+		expect(remoteMediaSubscriptionsToVisibleRemoteMedia(state)).toContainEqual(
+			expect.objectContaining({
+				key: getPendingStreamKey(3, StreamKind.SCREEN_AUDIO),
+				status: 'failed',
+				desired: true,
+				producerPresent: false,
+			}),
+		);
 	});
 
 	it('reconciles snapshot producer refs and derives pending streams from ledger state', () => {
@@ -144,6 +209,38 @@ describe('remote media subscriptions', () => {
 			remoteId: 50,
 			kind: StreamKind.EXTERNAL_AUDIO,
 			producerId: 'external-audio-producer',
+		});
+	});
+
+	it('derives visible remote media states from ledger status', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer');
+		state = markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 110, 'audio-producer', 'consumer-1');
+		state = markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer');
+		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
+		state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110);
+		state = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 120, 'consume failed');
+
+		const visibleRemoteMedia = remoteMediaSubscriptionsToVisibleRemoteMedia(state);
+
+		expect(
+			visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(1, StreamKind.AUDIO)),
+		).toMatchObject({
+			status: 'live',
+			subscriptionStatus: 'consumed',
+		});
+		expect(
+			visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(2, StreamKind.VIDEO)),
+		).toMatchObject({
+			status: 'pending',
+			subscriptionStatus: 'available',
+		});
+		expect(
+			visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(3, StreamKind.SCREEN)),
+		).toMatchObject({
+			status: 'failed',
+			subscriptionStatus: 'failed',
 		});
 	});
 

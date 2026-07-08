@@ -1,6 +1,7 @@
 import { ExternalLink, Eye, EyeOff, Maximize2, Minimize2, Monitor } from 'lucide-react';
 import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import type { TVisibleRemoteMedia } from '@/components/voice-provider/hooks/remote-media-subscriptions';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
 import { useScreenShareWatcherCount } from '@/features/server/voice/hooks';
@@ -94,6 +95,7 @@ type TScreenShareCardProps = {
 	className?: string;
 	showPinControls: boolean;
 	fitStreamAspect?: boolean;
+	screenAudioSlot?: TVisibleRemoteMedia;
 	onStopWatching?: () => void;
 };
 
@@ -106,10 +108,11 @@ const ScreenShareCard = memo(
 		onPin,
 		onUnpin,
 		className,
-		showPinControls = true,
-		fitStreamAspect = false,
-		onStopWatching,
-	}: TScreenShareCardProps) => {
+			showPinControls = true,
+			fitStreamAspect = false,
+			screenAudioSlot,
+			onStopWatching,
+		}: TScreenShareCardProps) => {
 		const user = useUserById(userId);
 		const ownUserId = useOwnUserId();
 		const isWindowFocused = useWindowFocus();
@@ -414,10 +417,12 @@ const ScreenShareCard = memo(
 					)}
 					onWheel={isPoppedOut ? undefined : handleWheel}
 					onMouseDown={isPoppedOut ? undefined : handleMouseDown}
-					onMouseMove={isPoppedOut ? undefined : handleInAppMouseMove}
-					onMouseUp={isPoppedOut ? undefined : handleMouseUp}
-					onMouseLeave={isPoppedOut ? undefined : handleMouseUp}
-					style={{
+						onMouseMove={isPoppedOut ? undefined : handleInAppMouseMove}
+						onMouseUp={isPoppedOut ? undefined : handleMouseUp}
+						onMouseLeave={isPoppedOut ? undefined : handleMouseUp}
+						data-screen-audio-status={screenAudioSlot?.status}
+						data-screen-audio-desired={screenAudioSlot?.desired ? 'true' : undefined}
+						style={{
 						...(shouldFitStreamAspect ? { aspectRatio: streamAspectRatio, maxHeight: '100%' } : {}),
 						cursor: isPoppedOut ? 'default' : getCursor(),
 					}}

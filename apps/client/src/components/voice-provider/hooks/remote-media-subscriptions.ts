@@ -9,6 +9,8 @@ import {
 
 export type TRemoteMediaStatus = 'available' | 'wanted' | 'consuming' | 'consumed' | 'failed';
 
+export type TVisibleRemoteMediaStatus = 'live' | 'pending' | 'retrying' | 'failed' | 'closing';
+
 export type TRemoteMediaSubscription = {
 	key: string;
 	remoteId: number;
@@ -25,6 +27,17 @@ export type TRemoteMediaSubscription = {
 };
 
 export type TRemoteMediaSubscriptions = Map<string, TRemoteMediaSubscription>;
+
+export type TVisibleRemoteMedia = {
+	key: string;
+	remoteId: number;
+	kind: StreamKind;
+	status: TVisibleRemoteMediaStatus;
+	subscriptionStatus: TRemoteMediaStatus;
+	producerPresent: boolean;
+	desired: boolean;
+	producerId?: string;
+};
 
 type TProducerSlot = {
 	remoteId: number;
@@ -585,6 +598,44 @@ export const remoteMediaSubscriptionsToPendingStreams = (
 	return pendingStreams;
 };
 
+const toVisibleRemoteMediaStatus = (subscription: TRemoteMediaSubscription): TVisibleRemoteMediaStatus => {
+	switch (subscription.status) {
+		case 'consumed':
+			return 'live';
+		case 'failed':
+			return 'failed';
+		case 'available':
+		case 'wanted':
+		case 'consuming':
+			return 'pending';
+	}
+};
+
+export const remoteMediaSubscriptionsToVisibleRemoteMedia = (
+	subscriptions: TRemoteMediaSubscriptions,
+): TVisibleRemoteMedia[] => {
+	const visibleRemoteMedia: TVisibleRemoteMedia[] = [];
+
+	subscriptions.forEach((subscription) => {
+		if (!subscription.producerPresent && !subscription.desired) {
+			return;
+		}
+
+		visibleRemoteMedia.push({
+			key: subscription.key,
+			remoteId: subscription.remoteId,
+			kind: subscription.kind,
+			status: toVisibleRemoteMediaStatus(subscription),
+			subscriptionStatus: subscription.status,
+			producerPresent: subscription.producerPresent,
+			desired: subscription.desired,
+			producerId: subscription.producerId,
+		});
+	});
+
+	return visibleRemoteMedia;
+};
+
 const hasSubscriptionChanged = (prev: TRemoteMediaSubscriptions, next: TRemoteMediaSubscriptions): boolean => {
 	if (prev === next) {
 		return false;
@@ -614,6 +665,10 @@ export const useRemoteMediaSubscriptions = () => {
 	}, []);
 	const pendingStreams = useMemo(
 		() => remoteMediaSubscriptionsToPendingStreams(remoteMediaSubscriptions),
+		[remoteMediaSubscriptions],
+	);
+	const visibleRemoteMedia = useMemo(
+		() => remoteMediaSubscriptionsToVisibleRemoteMedia(remoteMediaSubscriptions),
 		[remoteMediaSubscriptions],
 	);
 	const addPendingStream = useCallback(
@@ -692,6 +747,7 @@ export const useRemoteMediaSubscriptions = () => {
 	return {
 		remoteMediaSubscriptions,
 		pendingStreams,
+		visibleRemoteMedia,
 		addPendingStream,
 		removePendingStream,
 		clearPendingStreamsForUser,
