@@ -117,7 +117,7 @@ type TScreenShareStreamHandlers = {
 
 type TWatchedRemoteStreamsSnapshot = {
 	remoteUserStreams: Record<number, TRemoteUserStreamKinds[]>;
-	externalStreams: Record<number, TTrackedExternalWatchState>;
+	externalStreams: Record<number, TWatchedExternalStreamKinds>;
 };
 
 type TRecoveryJoinResult = {
@@ -374,7 +374,7 @@ const shouldUseMicGainPipeline = (volume: number) => {
 	return clampVolumePercent(volume) !== 100;
 };
 
-type TTrackedExternalWatchState = {
+type TWatchedExternalStreamKinds = {
 	audio: boolean;
 	video: boolean;
 };
@@ -385,14 +385,6 @@ type TChannelExternalStreams = {
 
 const EMPTY_CHANNEL_EXTERNAL_STREAMS: TChannelExternalStreams = {};
 
-const isExternalStreamKind = (kind: StreamKind): kind is StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO => {
-	return kind === StreamKind.EXTERNAL_AUDIO || kind === StreamKind.EXTERNAL_VIDEO;
-};
-
-const getExternalStreamWatchIdentity = (stream: Pick<TExternalStream, 'pluginId' | 'key'>) => {
-	return `${stream.pluginId}:${stream.key}`;
-};
-
 // Screen-audio watch intent now lives on the ledger (SCREEN_AUDIO.desired,
 // coupled to the screen's desire), so repair reads it here instead of the
 // watchedScreenAudioRef. See remote-media-subscriptions inheritsScreenAudioDesire.
@@ -400,10 +392,16 @@ const isScreenAudioDesiredInLedger = (subscriptions: TRemoteMediaSubscriptions, 
 	return subscriptions.get(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))?.desired === true;
 };
 
-const getTrackedExternalWatchField = (
+// External watch intent now lives on the ledger (EXTERNAL_AUDIO/VIDEO.desired,
+// keyed by streamId), so the re-drive and repair passes read it here instead of
+// the watchedExternalStreamsRef. streamId keying matches the reconnect capture
+// (captureWatchedRemoteStreams), which already derives external intent this way.
+const isExternalStreamDesiredInLedger = (
+	subscriptions: TRemoteMediaSubscriptions,
+	streamId: number,
 	kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO,
-): keyof TTrackedExternalWatchState => {
-	return kind === StreamKind.EXTERNAL_AUDIO ? 'audio' : 'video';
+): boolean => {
+	return subscriptions.get(getPendingStreamKey(streamId, kind))?.desired === true;
 };
 
 const getAudioOpusConfig = (channelId: number | undefined) => {
@@ -746,7 +744,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 	const pushReleaseDelayMsRef = useLatestRef(devices.pushReleaseDelayMs);
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
-	const watchedExternalStreamsRef = useRef<Record<string, TTrackedExternalWatchState>>({});
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
 	const localVoiceActivityCleanupRef = useRef<(() => void) | undefined>(undefined);
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
@@ -968,7 +965,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const captureWatchedRemoteStreams = useCallback((): TWatchedRemoteStreamsSnapshot => {
 		const watchedRemoteStreams: Record<number, TRemoteUserStreamKinds[]> = {};
-		const watchedExternalStreams: Record<number, TTrackedExternalWatchState> = {};
+		const watchedExternalStreams: Record<number, TWatchedExternalStreamKinds> = {};
 
 		remoteMediaSubscriptionsRef.current.forEach((subscription) => {
 			if (!subscription.desired || subscription.kind === StreamKind.AUDIO) {
@@ -1057,28 +1054,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const acceptStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
+			// markWatchRequested records external watch intent as
+			// EXTERNAL_AUDIO/VIDEO.desired on the ledger; the re-drive and repair
+			// passes read it back from there (isExternalStreamDesiredInLedger).
 			markWatchRequested(remoteId, kind);
-
-			if (isExternalStreamKind(kind)) {
-				const stream = currentChannelExternalStreams[remoteId];
-
-				if (stream) {
-					const identity = getExternalStreamWatchIdentity(stream);
-					const field = getTrackedExternalWatchField(kind);
-					const trackedState = watchedExternalStreamsRef.current[identity] ?? {
-						audio: false,
-						video: false,
-					};
-
-					watchedExternalStreamsRef.current = {
-						...watchedExternalStreamsRef.current,
-						[identity]: {
-							...trackedState,
-							[field]: true,
-						},
-					};
-				}
-			}
 
 			const currentRtpCapabilities = sendRtpCapabilities.current;
 
@@ -1103,50 +1082,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				void consume(remoteId, StreamKind.SCREEN_AUDIO, currentRtpCapabilities);
 			}
 		},
-		[consume, currentChannelExternalStreams, markWatchRequested],
+		[consume, markWatchRequested],
 	);
 
 	const stopWatchingStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
-			// markWatchStopped(SCREEN) cascades to SCREEN_AUDIO in the reducer, so
-			// exiting the screen tile drops audio intent even while SCREEN_AUDIO is
-			// only pending — no separate ref bookkeeping needed.
+			// markWatchStopped clears the ledger's desired flag — for SCREEN it also
+			// cascades to SCREEN_AUDIO, and for EXTERNAL_AUDIO/VIDEO it revokes that
+			// stream's intent. No separate ref bookkeeping needed.
 			markWatchStopped(remoteId, kind);
-
-			if (isExternalStreamKind(kind)) {
-				const stream = currentChannelExternalStreams[remoteId];
-
-				if (stream) {
-					const identity = getExternalStreamWatchIdentity(stream);
-					const field = getTrackedExternalWatchField(kind);
-					const trackedState = watchedExternalStreamsRef.current[identity];
-
-					if (trackedState) {
-						const nextTrackedState = {
-							...trackedState,
-							[field]: false,
-						};
-
-						if (!nextTrackedState.audio && !nextTrackedState.video) {
-							const nextTrackedStreams = {
-								...watchedExternalStreamsRef.current,
-							};
-
-							delete nextTrackedStreams[identity];
-							watchedExternalStreamsRef.current = nextTrackedStreams;
-						} else {
-							watchedExternalStreamsRef.current = {
-								...watchedExternalStreamsRef.current,
-								[identity]: nextTrackedState,
-							};
-						}
-					}
-				}
-			}
 
 			void stopWatchingConsumedStream(remoteId, kind);
 		},
-		[currentChannelExternalStreams, markWatchStopped, stopWatchingConsumedStream],
+		[markWatchStopped, stopWatchingConsumedStream],
 	);
 
 	// Surface source labels and configured maxBitrate ceilings to the stats
@@ -1297,8 +1245,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	]);
 
 	useEffect(() => {
+		// Channel-leave clears watch intent via clearAllPendingStreams (transport
+		// cleanup empties the ledger), so no separate reset is needed here.
 		if (currentVoiceChannelId === undefined) {
-			watchedExternalStreamsRef.current = {};
 			return;
 		}
 
@@ -1309,25 +1258,27 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 
 		Object.entries(currentChannelExternalStreams).forEach(([streamId, stream]) => {
-			const trackedState = watchedExternalStreamsRef.current[getExternalStreamWatchIdentity(stream)];
-
-			if (!trackedState) {
-				return;
-			}
-
 			const numericStreamId = Number(streamId);
 
 			if (
-				trackedState.audio &&
 				stream.tracks.audio &&
+				isExternalStreamDesiredInLedger(
+					remoteMediaSubscriptionsRef.current,
+					numericStreamId,
+					StreamKind.EXTERNAL_AUDIO,
+				) &&
 				pendingStreams.has(`${numericStreamId}-${StreamKind.EXTERNAL_AUDIO}`)
 			) {
 				void consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities);
 			}
 
 			if (
-				trackedState.video &&
 				stream.tracks.video &&
+				isExternalStreamDesiredInLedger(
+					remoteMediaSubscriptionsRef.current,
+					numericStreamId,
+					StreamKind.EXTERNAL_VIDEO,
+				) &&
 				pendingStreams.has(`${numericStreamId}-${StreamKind.EXTERNAL_VIDEO}`)
 			) {
 				void consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities);
@@ -1388,15 +1339,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		const oldestRepairEligibleCreatedAt = getOldestRepairEligiblePendingCreatedAt(
 			pendingStreams,
 			(streamId, kind) => {
-				const stream = currentChannelExternalStreams[streamId];
-
-				if (!stream) {
+				if (!currentChannelExternalStreams[streamId]) {
 					return false;
 				}
 
-				const trackedState = watchedExternalStreamsRef.current[getExternalStreamWatchIdentity(stream)];
-
-				return trackedState?.[getTrackedExternalWatchField(kind)] === true;
+				return isExternalStreamDesiredInLedger(remoteMediaSubscriptionsRef.current, streamId, kind);
 			},
 			(remoteId) => isScreenAudioDesiredInLedger(remoteMediaSubscriptionsRef.current, remoteId),
 		);
