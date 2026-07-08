@@ -24,7 +24,7 @@ feature arc → optional cleanup, each an independently reviewable PR.
 | **1b** | Ledger owns watch intent — **external-stream half** | 1 | ✅ **done** (unmerged) |
 | **2** | `visibleRemoteMedia` selector (keeps desired-but-failed slots renderable) | 1b | ✅ **done** ([PR #267](https://github.com/jonocairns/ripcord/pull/267), unmerged) |
 | **3** | Compact failed/retry UI affordances (design "Required UI Affordance") | 2 | ✅ **done** ([PR #268](https://github.com/jonocairns/ripcord/pull/268), unmerged) |
-| 4 | Manual retry + consume generations (reintroduces the removed generation state) | 3 | ⬜ |
+| **4** | Manual retry + consume generations (reintroduces the removed generation state) | 3 | ✅ **done** (unmerged) |
 | 5 | Full command/effect-runner + `streamsToConsume` (design "Longer-Term Direction") | 2 | ⬜ longer-term |
 
 **Split rationale (1 vs 1b):** the screen-audio ref (`watchedScreenAudioRef`, a
@@ -180,30 +180,42 @@ Verification at landing: reducer/selector suite 22/22; client typecheck PASS;
 client lint PASS with only the pre-existing `src/vite-env.d.ts` unused
 `ImportMetaEnv` warning.
 
-## Next up — PR 4 manual retry + consume generations
+## PR 4 — manual retry + consume generations (done)
 
-Build PR 4 on top of the PR 3 branch (`codex/remote-media-affordances`,
-[PR #268](https://github.com/jonocairns/ripcord/pull/268)). The goal is to make
-the retry affordances real without taking on the longer-term command/effect
-runner:
+Built PR 4 on top of the PR 3 branch (`codex/remote-media-affordances`,
+[PR #268](https://github.com/jonocairns/ripcord/pull/268)) as
+`codex/remote-media-manual-retry`. This slice made the retry affordances real
+without taking on the longer-term command/effect runner:
 
-- Add the smallest generation/identity guard needed so a manual retry cannot be
-  overwritten by a stale consume failure/success from an older attempt.
-- Add reducer state/events for retrying/manual retry only where current
-  transport code can actually report results back into the ledger.
-- Wire the disabled retry controls from PR 3 to a real manual retry action.
-- Keep live playback sourced only from `remoteUserStreams` / active external
-  stream maps; do not fake `MediaStream`s.
-- Avoid collapsing stream-kind-specific provider effects into a central
-  `streamsToConsume` runner in PR 4. That remains PR 5.
-- Add reducer tests for stale retry results, retry button flow, and the
-  screen-audio-on-live-screen case where practical.
+- `TRemoteMediaSubscription` now carries an optional `consumeGeneration`, and
+  consume success/failure reducer events ignore stale generations.
+- Manual retry marks the slot as `retrying`, clears the archived failure, and
+  restarts only that slot's transport consume operation.
+- The transport consume loop checks the operation token before attaching local
+  streams and before committing success, so a superseded attempt cannot install
+  playback after a newer retry starts.
+- `PendingStreamCard` and live `ScreenShareCard` retry buttons now call the
+  real provider retry action while live playback remains sourced only from
+  `remoteUserStreams` / active external stream maps.
+- Stream-kind-specific provider effects stayed in place; the central
+  `streamsToConsume` runner remains PR 5.
+- Reducer coverage includes stale consume failure/success, manual retry
+  transition, and screen-audio retry while screen video remains live.
+
+Verification at landing: reducer suite 26/26; client typecheck PASS.
+
+## Next up — PR 5 command/effect runner
+
+The remaining stack item is the longer-term command/effect runner and
+`streamsToConsume` direction from the design note. Do not fold it into PR 4
+follow-ups unless explicitly requested.
 
 ## Loose ends
 
-- **Manual retry / consume generations still owed for PR 4.** PR 2 reserves the
-  `retrying` status vocabulary and PR 3 shows disabled retry affordances, but
-  neither PR adds retry generation state or a retry command.
+- **Command/effect runner still owed for PR 5.** PR 4 added manual retry and the
+  smallest consume-generation guard, but consume decisions still live in the
+  existing stream-kind-specific provider effects. The design's central
+  `streamsToConsume` command/effect runner remains intentionally deferred.
 - **Screen producer-close semantics need a product call before changing.**
   Webcam/external desired slots survive producer close, and screen-audio desire
   survives its own producer churn while the screen remains watched. A direct

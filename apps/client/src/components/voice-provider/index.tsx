@@ -557,6 +557,7 @@ export type TVoiceProvider = {
 	ownVoiceState: TVoiceUserState;
 	getOrCreateRefs: (remoteId: number) => AudioVideoRefs;
 	acceptStream: (remoteId: number, kind: StreamKind) => void;
+	retryRemoteMedia: (remoteId: number, kind: StreamKind) => void;
 	stopWatchingStream: (remoteId: number, kind: StreamKind) => void;
 	init: (
 		routerRtpCapabilities: RtpCapabilities,
@@ -582,6 +583,7 @@ const VoiceProviderContext = createContext<TVoiceProvider>({
 	audioVideoRefsMap: new Map(),
 	getOrCreateRefs: () => createEmptyAudioVideoRefs(),
 	acceptStream: () => undefined,
+	retryRemoteMedia: () => undefined,
 	stopWatchingStream: () => undefined,
 	init: () => Promise.resolve({ republishedLocalMediaState: {} }),
 	isStartingScreenShare: false,
@@ -1085,6 +1087,26 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 		},
 		[consume, markWatchRequested],
+	);
+
+	const retryRemoteMedia = useCallback(
+		(remoteId: number, kind: StreamKind) => {
+			const currentRtpCapabilities = sendRtpCapabilities.current;
+
+			if (!currentRtpCapabilities) {
+				logVoice('Cannot retry remote media before voice is initialized', {
+					remoteId,
+					kind,
+				});
+				return;
+			}
+
+			void consume(remoteId, kind, currentRtpCapabilities, getPendingStreamProducerId(remoteId, kind), {
+				isManualRetry: true,
+				restartExisting: true,
+			});
+		},
+		[consume, getPendingStreamProducerId],
 	);
 
 	const stopWatchingStream = useCallback(
@@ -4448,6 +4470,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			audioVideoRefsMap: audioVideoRefsMap.current,
 			getOrCreateRefs,
 			acceptStream,
+			retryRemoteMedia,
 			stopWatchingStream,
 			init,
 
@@ -4475,6 +4498,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			connectionStatus,
 			getOrCreateRefs,
 			acceptStream,
+			retryRemoteMedia,
 			stopWatchingStream,
 			init,
 

@@ -43,6 +43,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 	const {
 		acceptStream,
 		isStartingScreenShare,
+		retryRemoteMedia,
 		stopWatchingStream,
 		visibleRemoteMedia,
 		remoteUserStreams,
@@ -142,6 +143,9 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 							onWatch={() => {
 								acceptStream(voiceUser.id, StreamKind.VIDEO);
 							}}
+							onRetry={() => {
+								retryRemoteMedia(voiceUser.id, StreamKind.VIDEO);
+							}}
 							onStopWatching={() => {
 								stopWatchingStream(voiceUser.id, StreamKind.VIDEO);
 							}}
@@ -197,6 +201,15 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 									acceptStream(voiceUser.id, StreamKind.SCREEN_AUDIO);
 								}
 							}}
+							onRetry={() => {
+								if (hasPendingScreen) {
+									retryRemoteMedia(voiceUser.id, StreamKind.SCREEN);
+								}
+
+								if (hasPendingScreenAudio) {
+									retryRemoteMedia(voiceUser.id, StreamKind.SCREEN_AUDIO);
+								}
+							}}
 							onStopWatching={() => {
 								if (hasPendingScreen) {
 									stopWatchingStream(voiceUser.id, StreamKind.SCREEN);
@@ -222,6 +235,9 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 							onUnpin={unpinCard}
 							showPinControls
 							screenAudioSlot={screenAudioSlot}
+							onRetryScreenAudio={() => {
+								retryRemoteMedia(voiceUser.id, StreamKind.SCREEN_AUDIO);
+							}}
 							onStopScreenAudio={() => {
 								stopWatchingStream(voiceUser.id, StreamKind.SCREEN_AUDIO);
 							}}
@@ -269,6 +285,15 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 								acceptStream(stream.streamId, StreamKind.EXTERNAL_AUDIO);
 							}
 						}}
+						onRetry={() => {
+							if (hasPendingExternalVideo) {
+								retryRemoteMedia(stream.streamId, StreamKind.EXTERNAL_VIDEO);
+							}
+
+							if (hasPendingExternalAudio) {
+								retryRemoteMedia(stream.streamId, StreamKind.EXTERNAL_AUDIO);
+							}
+						}}
 						onStopWatching={() => {
 							if (hasPendingExternalVideo) {
 								stopWatchingStream(stream.streamId, StreamKind.EXTERNAL_VIDEO);
@@ -314,6 +339,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 		externalStreams,
 		activeExternalStreams,
 		acceptStream,
+		retryRemoteMedia,
 		isStartingScreenShare,
 		stopWatchingStream,
 		remoteUserStreams,

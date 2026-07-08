@@ -7,7 +7,7 @@ import {
 	type TPendingStream,
 } from './use-pending-streams';
 
-export type TRemoteMediaStatus = 'available' | 'wanted' | 'consuming' | 'consumed' | 'failed';
+export type TRemoteMediaStatus = 'available' | 'wanted' | 'consuming' | 'retrying' | 'consumed' | 'failed';
 
 export type TVisibleRemoteMediaStatus = 'live' | 'pending' | 'retrying' | 'failed' | 'closing';
 
@@ -20,6 +20,7 @@ export type TRemoteMediaSubscription = {
 	desired: boolean;
 	status: TRemoteMediaStatus;
 	consumerId?: string;
+	consumeGeneration?: number;
 	updatedAt: number;
 	pendingSince?: number;
 	lastFailureAt?: number;
@@ -135,6 +136,7 @@ const isMateriallyEqual = (a: TRemoteMediaSubscription, b: TRemoteMediaSubscript
 	a.desired === b.desired &&
 	a.status === b.status &&
 	a.consumerId === b.consumerId &&
+	a.consumeGeneration === b.consumeGeneration &&
 	a.pendingSince === b.pendingSince &&
 	a.lastFailureAt === b.lastFailureAt &&
 	a.lastFailureReason === b.lastFailureReason;
@@ -167,7 +169,9 @@ export const markRemoteProducerPresent = (
 	const base = existing ?? makeSubscription(remoteId, kind, now, producerId);
 	const desired = base.desired || isAutoDesiredKind(kind) || inheritsScreenAudioDesire(subscriptions, remoteId, kind);
 	const status =
-		base.status === 'consuming' || base.status === 'consumed' ? base.status : getInitialStatus(true, desired);
+		base.status === 'consuming' || base.status === 'retrying' || base.status === 'consumed'
+			? base.status
+			: getInitialStatus(true, desired);
 
 	return applySlotUpdate(
 		subscriptions,
@@ -233,6 +237,7 @@ export const markRemoteWatchStopped = (
 			desired: false,
 			status: 'available',
 			consumerId: undefined,
+			consumeGeneration: undefined,
 			// Reset the pending age only when desire is actually being revoked so a
 			// repeated stop-watch is a no-op rather than a ledger write.
 			pendingSince: !base.producerPresent ? undefined : base.desired ? now : (base.pendingSince ?? now),
@@ -257,6 +262,8 @@ export const markRemoteConsumeStarted = (
 	kind: StreamKind,
 	now: number,
 	producerId?: string,
+	consumeGeneration?: number,
+	isManualRetry = false,
 ): TRemoteMediaSubscriptions => {
 	const next = markRemoteWatchRequested(
 		markRemoteProducerPresent(subscriptions, remoteId, kind, now, producerId),
@@ -275,9 +282,10 @@ export const markRemoteConsumeStarted = (
 		existing,
 		{
 			...existing,
-			status: 'consuming',
+			status: isManualRetry ? 'retrying' : 'consuming',
 			producerId: producerId ?? existing.producerId,
 			consumerId: undefined,
+			consumeGeneration,
 			pendingSince: existing.pendingSince ?? now,
 			lastFailureReason: undefined,
 			lastFailureAt: undefined,
@@ -293,9 +301,14 @@ export const markRemoteConsumeSucceeded = (
 	now: number,
 	producerId: string,
 	consumerId: string,
+	consumeGeneration?: number,
 ): TRemoteMediaSubscriptions => {
 	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
 	const base = existing ?? makeSubscription(remoteId, kind, now, producerId);
+
+	if (consumeGeneration !== undefined && existing?.consumeGeneration !== consumeGeneration) {
+		return subscriptions;
+	}
 
 	return applySlotUpdate(
 		subscriptions,
@@ -307,6 +320,7 @@ export const markRemoteConsumeSucceeded = (
 			desired: true,
 			status: 'consumed',
 			consumerId,
+			consumeGeneration: undefined,
 			pendingSince: undefined,
 			lastFailureReason: undefined,
 			lastFailureAt: undefined,
@@ -321,9 +335,14 @@ export const markRemoteConsumeFailed = (
 	kind: StreamKind,
 	now: number,
 	reason?: string,
+	consumeGeneration?: number,
 ): TRemoteMediaSubscriptions => {
 	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
 	const base = existing ?? makeSubscription(remoteId, kind, now);
+
+	if (consumeGeneration !== undefined && existing?.consumeGeneration !== consumeGeneration) {
+		return subscriptions;
+	}
 
 	return applySlotUpdate(
 		subscriptions,
@@ -333,6 +352,7 @@ export const markRemoteConsumeFailed = (
 			desired: true,
 			status: 'failed',
 			consumerId: undefined,
+			consumeGeneration: undefined,
 			pendingSince: base.pendingSince ?? now,
 			lastFailureAt: now,
 			lastFailureReason: reason,
@@ -370,6 +390,7 @@ export const markRemoteProducerClosed = (
 			desired,
 			status: desired ? 'failed' : 'available',
 			consumerId: undefined,
+			consumeGeneration: undefined,
 			pendingSince: undefined,
 		},
 		now,
@@ -388,6 +409,7 @@ export const markRemoteProducerClosed = (
 					...audio,
 					desired: false,
 					status: 'available',
+					consumeGeneration: undefined,
 					pendingSince: audio.producerPresent ? now : undefined,
 				},
 				now,
@@ -431,6 +453,7 @@ export const markRemoteConsumerClosed = (
 			...existing,
 			status: existing.desired ? (existing.producerPresent ? 'wanted' : 'failed') : 'available',
 			consumerId: undefined,
+			consumeGeneration: undefined,
 			pendingSince: existing.producerPresent ? now : undefined,
 		},
 		now,
@@ -604,6 +627,8 @@ const toVisibleRemoteMediaStatus = (subscription: TRemoteMediaSubscription): TVi
 			return 'live';
 		case 'failed':
 			return 'failed';
+		case 'retrying':
+			return 'retrying';
 		case 'available':
 		case 'wanted':
 		case 'consuming':
@@ -714,20 +739,24 @@ export const useRemoteMediaSubscriptions = () => {
 		[update],
 	);
 	const markConsumeStarted = useCallback(
-		(remoteId: number, kind: StreamKind, producerId?: string) => {
-			update((prev, now) => markRemoteConsumeStarted(prev, remoteId, kind, now, producerId));
+		(remoteId: number, kind: StreamKind, producerId?: string, consumeGeneration?: number, isManualRetry = false) => {
+			update((prev, now) =>
+				markRemoteConsumeStarted(prev, remoteId, kind, now, producerId, consumeGeneration, isManualRetry),
+			);
 		},
 		[update],
 	);
 	const markConsumeSucceeded = useCallback(
-		(remoteId: number, kind: StreamKind, producerId: string, consumerId: string) => {
-			update((prev, now) => markRemoteConsumeSucceeded(prev, remoteId, kind, now, producerId, consumerId));
+		(remoteId: number, kind: StreamKind, producerId: string, consumerId: string, consumeGeneration?: number) => {
+			update((prev, now) =>
+				markRemoteConsumeSucceeded(prev, remoteId, kind, now, producerId, consumerId, consumeGeneration),
+			);
 		},
 		[update],
 	);
 	const markConsumeFailed = useCallback(
-		(remoteId: number, kind: StreamKind, reason?: string) => {
-			update((prev, now) => markRemoteConsumeFailed(prev, remoteId, kind, now, reason));
+		(remoteId: number, kind: StreamKind, reason?: string, consumeGeneration?: number) => {
+			update((prev, now) => markRemoteConsumeFailed(prev, remoteId, kind, now, reason, consumeGeneration));
 		},
 		[update],
 	);

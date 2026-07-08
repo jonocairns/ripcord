@@ -96,6 +96,7 @@ type TScreenShareCardProps = {
 	showPinControls: boolean;
 	fitStreamAspect?: boolean;
 	screenAudioSlot?: TVisibleRemoteMedia;
+	onRetryScreenAudio?: () => void;
 	onStopScreenAudio?: () => void;
 	onStopWatching?: () => void;
 };
@@ -112,6 +113,7 @@ const ScreenShareCard = memo(
 		showPinControls = true,
 		fitStreamAspect = false,
 		screenAudioSlot,
+		onRetryScreenAudio,
 		onStopScreenAudio,
 		onStopWatching,
 	}: TScreenShareCardProps) => {
@@ -505,8 +507,9 @@ const ScreenShareCard = memo(
 							<span className="min-w-0 truncate text-xs font-medium">{screenAudioLabel}</span>
 							<ControlButton
 								icon={RefreshCw}
-								disabled
-								title="Retry unavailable"
+								onClick={onRetryScreenAudio}
+								disabled={!onRetryScreenAudio}
+								title="Retry Screen Audio"
 								className="h-6 w-6 border-border/70 bg-voice-surface text-primary-foreground shadow-none ring-0"
 							/>
 							{onStopScreenAudio ? (

@@ -15,6 +15,7 @@ type TPendingStreamStatus = Exclude<TVisibleRemoteMediaStatus, 'live'> | 'availa
 type TPendingStreamCardProps = {
 	kind: StreamKind;
 	onWatch: () => void;
+	onRetry?: () => void;
 	onStopWatching?: () => void;
 	status?: TPendingStreamStatus;
 	userId?: number;
@@ -70,6 +71,7 @@ const PendingStreamCard = memo(
 	({
 		kind,
 		onWatch,
+		onRetry,
 		onStopWatching,
 		status = 'available',
 		userId,
@@ -134,7 +136,7 @@ const PendingStreamCard = memo(
 						) : null}
 
 						{shouldShowRetry ? (
-							<Button type="button" size="sm" disabled title="Retry unavailable">
+							<Button type="button" size="sm" onClick={onRetry} disabled={!onRetry}>
 								<RefreshCw className="size-4" />
 								Retry
 							</Button>

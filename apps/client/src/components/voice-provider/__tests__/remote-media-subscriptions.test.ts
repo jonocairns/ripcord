@@ -60,6 +60,92 @@ describe('remote media subscriptions', () => {
 		});
 	});
 
+	it('moves a failed desired slot into retrying with a new consume generation', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
+		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 1);
+		state = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 200, 'consume failed', 1);
+		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 220, 'screen-producer', 2, true);
+
+		const key = getPendingStreamKey(3, StreamKind.SCREEN);
+
+		expect(state.get(key)).toMatchObject({
+			desired: true,
+			producerPresent: true,
+			status: 'retrying',
+			consumeGeneration: 2,
+			lastFailureReason: undefined,
+			lastFailureAt: undefined,
+		});
+		expect(remoteMediaSubscriptionsToVisibleRemoteMedia(state)).toContainEqual(
+			expect.objectContaining({
+				key,
+				status: 'retrying',
+				subscriptionStatus: 'retrying',
+			}),
+		);
+	});
+
+	it('ignores stale consume results from an older retry generation', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
+		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 1);
+		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 120, 'screen-producer', 2, true);
+
+		const afterStaleFailure = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 130, 'stale failure', 1);
+
+		expect(afterStaleFailure).toBe(state);
+		expect(afterStaleFailure.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
+			status: 'retrying',
+			consumeGeneration: 2,
+		});
+
+		const afterStaleSuccess = markRemoteConsumeSucceeded(
+			state,
+			3,
+			StreamKind.SCREEN,
+			140,
+			'screen-producer',
+			'stale-consumer',
+			1,
+		);
+
+		expect(afterStaleSuccess).toBe(state);
+		expect(afterStaleSuccess.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
+			status: 'retrying',
+			consumerId: undefined,
+			consumeGeneration: 2,
+		});
+	});
+
+	it('ignores generated consume success after watch intent is stopped', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
+		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 1);
+		state = markRemoteWatchStopped(state, 3, StreamKind.SCREEN, 120);
+
+		const afterStaleSuccess = markRemoteConsumeSucceeded(
+			state,
+			3,
+			StreamKind.SCREEN,
+			130,
+			'screen-producer',
+			'stale-consumer',
+			1,
+		);
+
+		expect(afterStaleSuccess).toBe(state);
+		expect(afterStaleSuccess.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
+			desired: false,
+			status: 'available',
+			consumerId: undefined,
+			consumeGeneration: undefined,
+		});
+	});
+
 	it('keeps a failed desired webcam slot visible after its producer disappears', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
@@ -267,6 +353,29 @@ describe('remote media subscriptions', () => {
 			status: 'failed',
 			subscriptionStatus: 'failed',
 			desired: true,
+			producerPresent: true,
+		});
+	});
+
+	it('retries failed screen audio while the screen video remains live', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
+		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'audio-producer');
+		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 105, 'screen-producer', 1);
+		state = markRemoteConsumeSucceeded(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 'screen-consumer', 1);
+		state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN_AUDIO, 120);
+		state = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN_AUDIO, 130, 'consume failed');
+		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN_AUDIO, 140, 'audio-producer', 2, true);
+
+		expect(state.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
+			status: 'consumed',
+			consumerId: 'screen-consumer',
+		});
+		expect(state.get(getPendingStreamKey(3, StreamKind.SCREEN_AUDIO))).toMatchObject({
+			desired: true,
+			status: 'retrying',
+			consumeGeneration: 2,
 			producerPresent: true,
 		});
 	});

@@ -9,8 +9,11 @@ import { withConsumeAttemptTimeout } from './consume-attempt-timeout';
 import {
 	createConsumeOperationState,
 	finishConsumeOperation,
+	isCurrentConsumeOperation,
 	reserveConsumeOperation,
 	resetConsumeOperationGeneration,
+	restartConsumeOperation,
+	type TConsumeOperationEntry,
 } from './consume-operation-state';
 import { getConsumeRetryDelayMs } from './consume-retry-policy';
 import {
@@ -33,6 +36,11 @@ const EXISTING_PRODUCERS_RPC_TIMEOUT_MS = 4_000;
 
 type TConsumeAttemptResult = 'success' | 'failure';
 
+type TConsumeOptions = {
+	isManualRetry?: boolean;
+	restartExisting?: boolean;
+};
+
 type TServerConsumerCleanupTarget = {
 	remoteId: number;
 	kind: StreamKind;
@@ -52,9 +60,21 @@ type TUseTransportParams = {
 	clearAllPendingStreams: () => void;
 	reconcilePendingStreams: (producers: TRemoteProducerIds, externalStreamTracks?: TExternalStreamTrackPresence) => void;
 	markWatchStopped: (remoteId: number, kind: StreamKind) => void;
-	markConsumeStarted: (remoteId: number, kind: StreamKind, producerId?: string) => void;
-	markConsumeSucceeded: (remoteId: number, kind: StreamKind, producerId: string, consumerId: string) => void;
-	markConsumeFailed: (remoteId: number, kind: StreamKind, reason?: string) => void;
+	markConsumeStarted: (
+		remoteId: number,
+		kind: StreamKind,
+		producerId?: string,
+		consumeGeneration?: number,
+		isManualRetry?: boolean,
+	) => void;
+	markConsumeSucceeded: (
+		remoteId: number,
+		kind: StreamKind,
+		producerId: string,
+		consumerId: string,
+		consumeGeneration?: number,
+	) => void;
+	markConsumeFailed: (remoteId: number, kind: StreamKind, reason?: string, consumeGeneration?: number) => void;
 	markConsumerClosed: (remoteId: number, kind: StreamKind, consumerId?: string) => void;
 	onTransportFailure: () => void;
 };
@@ -366,7 +386,13 @@ const useTransports = ({
 	);
 
 	const consumeOnce = useCallback(
-		async (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities): Promise<TConsumeAttemptResult> => {
+		async (
+			remoteId: number,
+			kind: StreamKind,
+			rtpCapabilities: RtpCapabilities,
+			operationKey: string,
+			operation: TConsumeOperationEntry,
+		): Promise<TConsumeAttemptResult> => {
 			const transport = consumerTransport.current;
 			let serverConsumerCleanupTarget: TServerConsumerCleanupTarget | undefined;
 
@@ -402,6 +428,18 @@ const useTransports = ({
 					return 'failure';
 				}
 
+				if (!isCurrentConsumeOperation(consumeOperationState.current, operationKey, operation)) {
+					logVoice('Consume operation superseded before local consumer creation', {
+						remoteId,
+						kind,
+					});
+					await closeServerConsumerAfterFailedConsume(
+						serverConsumerCleanupTarget,
+						'consume operation superseded before local consumer creation',
+					);
+					return 'failure';
+				}
+
 				logVoice('Got consumer parameters', {
 					producerId,
 					consumerId,
@@ -429,6 +467,19 @@ const useTransports = ({
 					rtpParameters: consumerRtpParameters,
 					streamId: consumerRtpParameters.rtcp?.cname,
 				});
+
+				if (!isCurrentConsumeOperation(consumeOperationState.current, operationKey, operation)) {
+					logVoice('Consume operation superseded before local stream attach', {
+						remoteId,
+						kind,
+					});
+					newConsumer.close();
+					await closeServerConsumerAfterFailedConsume(
+						serverConsumerCleanupTarget,
+						'consume operation superseded before local stream attach',
+					);
+					return 'failure';
+				}
 
 				logVoice('Created new consumer', { newConsumer });
 
@@ -500,8 +551,21 @@ const useTransports = ({
 					return 'failure';
 				}
 
+				if (!isCurrentConsumeOperation(consumeOperationState.current, operationKey, operation)) {
+					logVoice('Consume operation superseded before success commit', {
+						remoteId,
+						kind,
+					});
+					newConsumer.close();
+					await closeServerConsumerAfterFailedConsume(
+						serverConsumerCleanupTarget,
+						'consume operation superseded before success commit',
+					);
+					return 'failure';
+				}
+
 				serverConsumerCleanupTarget = undefined;
-				markConsumeSucceeded(remoteId, kind, producerId, consumerId);
+				markConsumeSucceeded(remoteId, kind, producerId, consumerId, operation.token);
 				return 'success';
 			} catch (error) {
 				logVoice('Error consuming remote producer', { error });
@@ -523,7 +587,13 @@ const useTransports = ({
 	);
 
 	const consume = useCallback(
-		async (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities, expectedProducerId?: string) => {
+		async (
+			remoteId: number,
+			kind: StreamKind,
+			rtpCapabilities: RtpCapabilities,
+			expectedProducerId?: string,
+			options: TConsumeOptions = {},
+		) => {
 			return traceSentrySpan(
 				{
 					name: 'voice.consume',
@@ -535,7 +605,9 @@ const useTransports = ({
 				},
 				async () => {
 					const operationKey = `${remoteId}-${kind}`;
-					const operation = reserveConsumeOperation(consumeOperationState.current, operationKey);
+					const operation = options.restartExisting
+						? restartConsumeOperation(consumeOperationState.current, operationKey)
+						: reserveConsumeOperation(consumeOperationState.current, operationKey);
 
 					if (operation === undefined) {
 						logVoice('Consume operation already in progress', {
@@ -547,17 +619,17 @@ const useTransports = ({
 
 					let failedAttemptIndex = 0;
 
-					markConsumeStarted(remoteId, kind, expectedProducerId);
+					markConsumeStarted(remoteId, kind, expectedProducerId, operation.token, options.isManualRetry === true);
 
 					try {
-						while (consumeOperationState.current.generation === operation.generation) {
-							const result = await consumeOnce(remoteId, kind, rtpCapabilities);
+						while (isCurrentConsumeOperation(consumeOperationState.current, operationKey, operation)) {
+							const result = await consumeOnce(remoteId, kind, rtpCapabilities, operationKey, operation);
 
 							if (result === 'success') {
 								return;
 							}
 
-							if (consumeOperationState.current.generation !== operation.generation) {
+							if (!isCurrentConsumeOperation(consumeOperationState.current, operationKey, operation)) {
 								break;
 							}
 
@@ -569,7 +641,7 @@ const useTransports = ({
 									kind,
 									failedAttempts: failedAttemptIndex + 1,
 								});
-								markConsumeFailed(remoteId, kind, 'consume retry exhausted');
+								markConsumeFailed(remoteId, kind, 'consume retry exhausted', operation.token);
 								return;
 							}
 
