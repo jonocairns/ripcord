@@ -759,6 +759,37 @@ const useTransports = ({
 		[],
 	);
 
+	const closeConsumer = useCallback(async (remoteId: number, kind: StreamKind, consumerId?: string) => {
+		const existingConsumer = consumers.current[remoteId]?.[kind];
+		const existingConsumerId = existingConsumer?.id;
+		const targetConsumerId = consumerId ?? existingConsumerId;
+
+		if (
+			existingConsumer &&
+			!existingConsumer.closed &&
+			(consumerId === undefined || existingConsumerId === consumerId)
+		) {
+			existingConsumer.close();
+		}
+
+		try {
+			const trpc = getTRPCClient();
+
+			await trpc.voice.closeConsumer.mutate({
+				remoteId,
+				kind,
+				consumerId: targetConsumerId,
+			});
+		} catch (error) {
+			logVoice('Error closing remote consumer', {
+				error,
+				remoteId,
+				kind,
+				consumerId: targetConsumerId,
+			});
+		}
+	}, []);
+
 	const stopWatchingStream = useCallback(
 		async (remoteId: number, kind: StreamKind) => {
 			if (kind === StreamKind.AUDIO) {
@@ -769,32 +800,7 @@ const useTransports = ({
 				return;
 			}
 
-			const existingConsumer = consumers.current[remoteId]?.[kind];
-			const existingConsumerId = existingConsumer?.id;
-
-			if (existingConsumer && !existingConsumer.closed) {
-				existingConsumer.close();
-			}
-
 			markWatchStopped(remoteId, kind);
-
-			try {
-				const trpc = getTRPCClient();
-
-				// Target the specific consumer we observed so a stale close racing a
-				// reconnect sweep cannot close a freshly-created replacement consumer.
-				await trpc.voice.closeConsumer.mutate({
-					remoteId,
-					kind,
-					consumerId: existingConsumerId,
-				});
-			} catch (error) {
-				logVoice('Error closing remote consumer', {
-					error,
-					remoteId,
-					kind,
-				});
-			}
 		},
 		[markWatchStopped],
 	);
@@ -857,6 +863,7 @@ const useTransports = ({
 		createConsumerTransport,
 		consume,
 		consumeExistingProducers,
+		closeConsumer,
 		stopWatchingStream,
 		cleanupTransports,
 		getActiveConsumerProducerId,

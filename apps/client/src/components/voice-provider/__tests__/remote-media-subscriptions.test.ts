@@ -7,10 +7,13 @@ import {
 	markRemoteConsumerClosed,
 	markRemoteProducerClosed,
 	markRemoteProducerPresent,
+	markRemoteRetryRequested,
 	markRemoteWatchRequested,
 	markRemoteWatchStopped,
 	reconcileRemoteMediaWithProducerSnapshot,
 	refreshRemoteMediaPendingAges,
+	remoteMediaState,
+	remoteMediaSubscriptionsToRepairScheduleCommand,
 	remoteMediaSubscriptionsToPendingStreams,
 	remoteMediaSubscriptionsToStreamsToConsume,
 	remoteMediaSubscriptionsToVisibleRemoteMedia,
@@ -31,8 +34,8 @@ describe('remote media subscriptions', () => {
 	it('auto-desires audio but leaves watch-on-demand streams available', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer');
-		state = markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer');
+		state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer'));
+		state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer'));
 
 		expect(state.get(getPendingStreamKey(1, StreamKind.AUDIO))).toMatchObject({
 			desired: true,
@@ -49,9 +52,9 @@ describe('remote media subscriptions', () => {
 	it('preserves failed desired state after consume exhaustion', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
-		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 110, 'screen-producer');
-		state = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 200, 'consume failed');
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 110, 'screen-producer'));
+		state = remoteMediaState(markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 200, 'consume failed'));
 
 		expect(state.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
 			desired: true,
@@ -64,10 +67,10 @@ describe('remote media subscriptions', () => {
 	it('moves a failed desired slot into retrying with a new consume generation', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
-		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 1);
-		state = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 200, 'consume failed', 1);
-		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 220, 'screen-producer', 2, true);
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 1));
+		state = remoteMediaState(markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 200, 'consume failed', 1));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 220, 'screen-producer', 2, true));
 
 		const key = getPendingStreamKey(3, StreamKind.SCREEN);
 
@@ -91,14 +94,14 @@ describe('remote media subscriptions', () => {
 	it('ignores stale consume results from an older retry generation', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
-		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 1);
-		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 120, 'screen-producer', 2, true);
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 1));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 120, 'screen-producer', 2, true));
 
 		const afterStaleFailure = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 130, 'stale failure', 1);
 
-		expect(afterStaleFailure).toBe(state);
-		expect(afterStaleFailure.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
+		expect(afterStaleFailure.state).toBe(state);
+		expect(afterStaleFailure.state.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
 			status: 'retrying',
 			consumeGeneration: 2,
 		});
@@ -113,8 +116,8 @@ describe('remote media subscriptions', () => {
 			1,
 		);
 
-		expect(afterStaleSuccess).toBe(state);
-		expect(afterStaleSuccess.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
+		expect(afterStaleSuccess.state).toBe(state);
+		expect(afterStaleSuccess.state.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
 			status: 'retrying',
 			consumerId: undefined,
 			consumeGeneration: 2,
@@ -124,9 +127,9 @@ describe('remote media subscriptions', () => {
 	it('ignores generated consume success after watch intent is stopped', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
-		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 1);
-		state = markRemoteWatchStopped(state, 3, StreamKind.SCREEN, 120);
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 1));
+		state = remoteMediaState(markRemoteWatchStopped(state, 3, StreamKind.SCREEN, 120));
 
 		const afterStaleSuccess = markRemoteConsumeSucceeded(
 			state,
@@ -138,8 +141,8 @@ describe('remote media subscriptions', () => {
 			1,
 		);
 
-		expect(afterStaleSuccess).toBe(state);
-		expect(afterStaleSuccess.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
+		expect(afterStaleSuccess.state).toBe(state);
+		expect(afterStaleSuccess.state.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
 			desired: false,
 			status: 'available',
 			consumerId: undefined,
@@ -150,10 +153,10 @@ describe('remote media subscriptions', () => {
 	it('keeps a failed desired webcam slot visible after its producer disappears', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 3, StreamKind.VIDEO, 100, 'video-producer');
-		state = markRemoteWatchRequested(state, 3, StreamKind.VIDEO, 110);
-		state = markRemoteConsumeFailed(state, 3, StreamKind.VIDEO, 120, 'consume failed');
-		state = markRemoteProducerClosed(state, 3, StreamKind.VIDEO, 130, 'video-producer');
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.VIDEO, 100, 'video-producer'));
+		state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.VIDEO, 110));
+		state = remoteMediaState(markRemoteConsumeFailed(state, 3, StreamKind.VIDEO, 120, 'consume failed'));
+		state = remoteMediaState(markRemoteProducerClosed(state, 3, StreamKind.VIDEO, 130, 'video-producer'));
 
 		const key = getPendingStreamKey(3, StreamKind.VIDEO);
 
@@ -206,9 +209,9 @@ describe('remote media subscriptions', () => {
 	it('stop-watch turns a desired stream back into an available producer slot', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer');
-		state = markRemoteWatchRequested(state, 2, StreamKind.VIDEO, 110);
-		state = markRemoteWatchStopped(state, 2, StreamKind.VIDEO, 120);
+		state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer'));
+		state = remoteMediaState(markRemoteWatchRequested(state, 2, StreamKind.VIDEO, 110));
+		state = remoteMediaState(markRemoteWatchStopped(state, 2, StreamKind.VIDEO, 120));
 
 		expect(state.get(getPendingStreamKey(2, StreamKind.VIDEO))).toMatchObject({
 			desired: false,
@@ -220,8 +223,8 @@ describe('remote media subscriptions', () => {
 	it('ignores stale producer close events when producer identity has changed', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'new-producer');
-		state = markRemoteProducerClosed(state, 2, StreamKind.VIDEO, 110, 'old-producer');
+		state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'new-producer'));
+		state = remoteMediaState(markRemoteProducerClosed(state, 2, StreamKind.VIDEO, 110, 'old-producer'));
 
 		expect(state.get(getPendingStreamKey(2, StreamKind.VIDEO))).toMatchObject({
 			producerPresent: true,
@@ -232,11 +235,11 @@ describe('remote media subscriptions', () => {
 	it('clears screen-audio desire when the screen producer closes', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'audio-producer');
-		state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110);
-		state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN_AUDIO, 110);
-		state = markRemoteProducerClosed(state, 3, StreamKind.SCREEN, 120, 'screen-producer');
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'audio-producer'));
+		state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110));
+		state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.SCREEN_AUDIO, 110));
+		state = remoteMediaState(markRemoteProducerClosed(state, 3, StreamKind.SCREEN, 120, 'screen-producer'));
 
 		expect(state.get(getPendingStreamKey(3, StreamKind.SCREEN_AUDIO))).toMatchObject({
 			desired: false,
@@ -248,11 +251,11 @@ describe('remote media subscriptions', () => {
 	it('keeps screen-audio desire through audio producer churn while screen remains watched', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'audio-producer');
-		state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110);
-		state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN_AUDIO, 110);
-		state = markRemoteProducerClosed(state, 3, StreamKind.SCREEN_AUDIO, 120, 'audio-producer');
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'audio-producer'));
+		state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110));
+		state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.SCREEN_AUDIO, 110));
+		state = remoteMediaState(markRemoteProducerClosed(state, 3, StreamKind.SCREEN_AUDIO, 120, 'audio-producer'));
 
 		expect(state.get(getPendingStreamKey(3, StreamKind.SCREEN_AUDIO))).toMatchObject({
 			desired: true,
@@ -272,17 +275,21 @@ describe('remote media subscriptions', () => {
 	it('reconciles snapshot producer refs and derives pending streams from ledger state', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = reconcileRemoteMediaWithProducerSnapshot(
-			state,
-			makeProducers({
-				remoteAudioProducers: [{ remoteId: 1, producerId: 'audio-producer' }],
-				remoteScreenProducers: [{ remoteId: 3, producerId: 'screen-producer' }],
-				remoteExternalAudioProducers: [{ streamId: 50, producerId: 'external-audio-producer' }],
-			}),
-			undefined,
-			100,
+		state = remoteMediaState(
+			reconcileRemoteMediaWithProducerSnapshot(
+				state,
+				makeProducers({
+					remoteAudioProducers: [{ remoteId: 1, producerId: 'audio-producer' }],
+					remoteScreenProducers: [{ remoteId: 3, producerId: 'screen-producer' }],
+					remoteExternalAudioProducers: [{ streamId: 50, producerId: 'external-audio-producer' }],
+				}),
+				undefined,
+				100,
+			),
 		);
-		state = markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 110, 'audio-producer', 'consumer-1');
+		state = remoteMediaState(
+			markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 110, 'audio-producer', 'consumer-1'),
+		);
 
 		const pendingStreams = remoteMediaSubscriptionsToPendingStreams(state);
 
@@ -302,30 +309,26 @@ describe('remote media subscriptions', () => {
 	it('derives visible remote media states from ledger status', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer');
-		state = markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 110, 'audio-producer', 'consumer-1');
-		state = markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer');
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
-		state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110);
-		state = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 120, 'consume failed');
+		state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer'));
+		state = remoteMediaState(
+			markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 110, 'audio-producer', 'consumer-1'),
+		);
+		state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer'));
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+		state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110));
+		state = remoteMediaState(markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 120, 'consume failed'));
 
 		const visibleRemoteMedia = remoteMediaSubscriptionsToVisibleRemoteMedia(state);
 
-		expect(
-			visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(1, StreamKind.AUDIO)),
-		).toMatchObject({
+		expect(visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(1, StreamKind.AUDIO))).toMatchObject({
 			status: 'live',
 			subscriptionStatus: 'consumed',
 		});
-		expect(
-			visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(2, StreamKind.VIDEO)),
-		).toMatchObject({
+		expect(visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(2, StreamKind.VIDEO))).toMatchObject({
 			status: 'pending',
 			subscriptionStatus: 'available',
 		});
-		expect(
-			visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(3, StreamKind.SCREEN)),
-		).toMatchObject({
+		expect(visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
 			status: 'failed',
 			subscriptionStatus: 'failed',
 		});
@@ -334,17 +337,17 @@ describe('remote media subscriptions', () => {
 	it('keeps failed screen audio visible beside a live screen slot', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'audio-producer');
-		state = markRemoteConsumeSucceeded(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 'screen-consumer');
-		state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN_AUDIO, 120);
-		state = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN_AUDIO, 130, 'consume failed');
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'audio-producer'));
+		state = remoteMediaState(
+			markRemoteConsumeSucceeded(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 'screen-consumer'),
+		);
+		state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.SCREEN_AUDIO, 120));
+		state = remoteMediaState(markRemoteConsumeFailed(state, 3, StreamKind.SCREEN_AUDIO, 130, 'consume failed'));
 
 		const visibleRemoteMedia = remoteMediaSubscriptionsToVisibleRemoteMedia(state);
 
-		expect(
-			visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(3, StreamKind.SCREEN)),
-		).toMatchObject({
+		expect(visibleRemoteMedia.find((slot) => slot.key === getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
 			status: 'live',
 			subscriptionStatus: 'consumed',
 		});
@@ -361,13 +364,17 @@ describe('remote media subscriptions', () => {
 	it('retries failed screen audio while the screen video remains live', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
-		state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'audio-producer');
-		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 105, 'screen-producer', 1);
-		state = markRemoteConsumeSucceeded(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 'screen-consumer', 1);
-		state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN_AUDIO, 120);
-		state = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN_AUDIO, 130, 'consume failed');
-		state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN_AUDIO, 140, 'audio-producer', 2, true);
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'audio-producer'));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 105, 'screen-producer', 1));
+		state = remoteMediaState(
+			markRemoteConsumeSucceeded(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 'screen-consumer', 1),
+		);
+		state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.SCREEN_AUDIO, 120));
+		state = remoteMediaState(markRemoteConsumeFailed(state, 3, StreamKind.SCREEN_AUDIO, 130, 'consume failed'));
+		state = remoteMediaState(
+			markRemoteConsumeStarted(state, 3, StreamKind.SCREEN_AUDIO, 140, 'audio-producer', 2, true),
+		);
 
 		expect(state.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
 			status: 'consumed',
@@ -384,10 +391,12 @@ describe('remote media subscriptions', () => {
 	it('returns a consumed slot to a repair-eligible pending state when its consumer closes', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer');
-		state = markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer');
-		state = markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'audio-producer', 'consumer-1');
-		state = markRemoteConsumerClosed(state, 1, StreamKind.AUDIO, 200, 'consumer-1');
+		state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer'));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer'));
+		state = remoteMediaState(
+			markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'audio-producer', 'consumer-1'),
+		);
+		state = remoteMediaState(markRemoteConsumerClosed(state, 1, StreamKind.AUDIO, 200, 'consumer-1'));
 
 		const key = getPendingStreamKey(1, StreamKind.AUDIO);
 
@@ -408,14 +417,16 @@ describe('remote media subscriptions', () => {
 	it('ignores consumer-close events that do not match the ledger consumer', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer');
-		state = markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer');
-		state = markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'audio-producer', 'consumer-2');
+		state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer'));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer'));
+		state = remoteMediaState(
+			markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'audio-producer', 'consumer-2'),
+		);
 
 		const afterStaleClose = markRemoteConsumerClosed(state, 1, StreamKind.AUDIO, 200, 'consumer-1');
 
-		expect(afterStaleClose).toBe(state);
-		expect(afterStaleClose.get(getPendingStreamKey(1, StreamKind.AUDIO))).toMatchObject({
+		expect(afterStaleClose.state).toBe(state);
+		expect(afterStaleClose.state.get(getPendingStreamKey(1, StreamKind.AUDIO))).toMatchObject({
 			status: 'consumed',
 			consumerId: 'consumer-2',
 		});
@@ -424,13 +435,13 @@ describe('remote media subscriptions', () => {
 	it('leaves an in-flight consuming slot alone when a replaced consumer closes', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer');
-		state = markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer');
+		state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer'));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer'));
 
 		const afterClose = markRemoteConsumerClosed(state, 1, StreamKind.AUDIO, 200, 'consumer-1');
 
-		expect(afterClose).toBe(state);
-		expect(afterClose.get(getPendingStreamKey(1, StreamKind.AUDIO))).toMatchObject({
+		expect(afterClose.state).toBe(state);
+		expect(afterClose.state.get(getPendingStreamKey(1, StreamKind.AUDIO))).toMatchObject({
 			status: 'consuming',
 		});
 	});
@@ -442,19 +453,19 @@ describe('remote media subscriptions', () => {
 		});
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = reconcileRemoteMediaWithProducerSnapshot(state, producers, undefined, 100);
+		state = remoteMediaState(reconcileRemoteMediaWithProducerSnapshot(state, producers, undefined, 100));
 
 		const reconciledAgain = reconcileRemoteMediaWithProducerSnapshot(state, producers, undefined, 200);
 		const presentAgain = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 300, 'audio-producer');
 
-		expect(reconciledAgain).toBe(state);
-		expect(presentAgain).toBe(state);
+		expect(reconciledAgain.state).toBe(state);
+		expect(presentAgain.state).toBe(state);
 	});
 
 	it('refreshes pending ages for available entries so repair backoff always widens', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 
-		state = markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer');
+		state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer'));
 		state = refreshRemoteMediaPendingAges(state, 500);
 
 		expect(state.get(getPendingStreamKey(2, StreamKind.VIDEO))).toMatchObject({
@@ -463,27 +474,198 @@ describe('remote media subscriptions', () => {
 		});
 	});
 
-	describe('streams to consume selector', () => {
-		it('emits desired external tracks with live producers and current track metadata', () => {
+	describe('command envelope', () => {
+		it('emits a consume command when watch intent meets consume guards', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
 
-			state = markRemoteProducerPresent(state, 50, StreamKind.EXTERNAL_AUDIO, 100, 'external-audio-producer');
-			state = markRemoteProducerPresent(state, 50, StreamKind.EXTERNAL_VIDEO, 100, 'external-video-producer');
-			state = markRemoteWatchRequested(state, 50, StreamKind.EXTERNAL_AUDIO, 110);
-			state = markRemoteWatchRequested(state, 50, StreamKind.EXTERNAL_VIDEO, 110);
+			state = remoteMediaState(
+				markRemoteProducerPresent(state, 50, StreamKind.EXTERNAL_AUDIO, 100, 'external-audio-producer', {
+					externalStreamTracks: { 50: { audio: true } },
+				}),
+			);
+			const result = markRemoteWatchRequested(state, 50, StreamKind.EXTERNAL_AUDIO, 110, {
+				externalStreamTracks: { 50: { audio: true } },
+			});
 
-			expect(remoteMediaSubscriptionsToStreamsToConsume(state, { 50: { audio: true, video: true } })).toEqual([
+			expect(result.commands).toEqual([
 				{
+					type: 'consume',
 					key: getPendingStreamKey(50, StreamKind.EXTERNAL_AUDIO),
 					remoteId: 50,
 					kind: StreamKind.EXTERNAL_AUDIO,
 					producerId: 'external-audio-producer',
+					generation: 1,
+				},
+			]);
+		});
+
+		it('does not emit consume commands for external streams without current track metadata', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(
+				markRemoteProducerPresent(state, 50, StreamKind.EXTERNAL_AUDIO, 100, 'external-audio-producer'),
+			);
+			const result = markRemoteWatchRequested(state, 50, StreamKind.EXTERNAL_AUDIO, 110);
+
+			expect(result.commands).toEqual([]);
+		});
+
+		it('emits a manual-retry consume command with the current producer id', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110));
+			state = remoteMediaState(markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 120, 'consume failed'));
+
+			const result = markRemoteRetryRequested(state, 3, StreamKind.SCREEN, 130);
+
+			expect(result.state.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
+				status: 'retrying',
+				lastFailureReason: undefined,
+			});
+			expect(result.commands).toEqual([
+				{
+					type: 'consume',
+					key: getPendingStreamKey(3, StreamKind.SCREEN),
+					remoteId: 3,
+					kind: StreamKind.SCREEN,
+					producerId: 'screen-producer',
+					generation: 1,
+					isManualRetry: true,
+				},
+			]);
+		});
+
+		it('emits a close-consumer command when watch intent stops a consumed stream', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 2, StreamKind.VIDEO, 105));
+			state = remoteMediaState(markRemoteConsumeStarted(state, 2, StreamKind.VIDEO, 110, 'video-producer', 1));
+			state = remoteMediaState(
+				markRemoteConsumeSucceeded(state, 2, StreamKind.VIDEO, 120, 'video-producer', 'consumer-2', 1),
+			);
+
+			const result = markRemoteWatchStopped(state, 2, StreamKind.VIDEO, 130);
+
+			expect(result.commands).toEqual([
+				{
+					type: 'closeConsumer',
+					key: getPendingStreamKey(2, StreamKind.VIDEO),
+					remoteId: 2,
+					kind: StreamKind.VIDEO,
+					consumerId: 'consumer-2',
+					generation: undefined,
+				},
+			]);
+		});
+
+		it('emits screen-audio commands from screen watch cascades', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+			state = remoteMediaState(
+				markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'screen-audio-producer'),
+			);
+
+			const watchResult = markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110);
+
+			expect(watchResult.commands).toContainEqual(
+				expect.objectContaining({
+					type: 'consume',
+					key: getPendingStreamKey(3, StreamKind.SCREEN_AUDIO),
+					remoteId: 3,
+					kind: StreamKind.SCREEN_AUDIO,
+					producerId: 'screen-audio-producer',
+				}),
+			);
+
+			state = remoteMediaState(
+				markRemoteConsumeStarted(watchResult.state, 3, StreamKind.SCREEN_AUDIO, 120, 'screen-audio-producer', 1),
+			);
+			state = remoteMediaState(
+				markRemoteConsumeSucceeded(
+					state,
+					3,
+					StreamKind.SCREEN_AUDIO,
+					130,
+					'screen-audio-producer',
+					'screen-audio-consumer',
+					1,
+				),
+			);
+
+			const stopResult = markRemoteWatchStopped(state, 3, StreamKind.SCREEN, 140);
+
+			expect(stopResult.commands).toContainEqual({
+				type: 'closeConsumer',
+				key: getPendingStreamKey(3, StreamKind.SCREEN_AUDIO),
+				remoteId: 3,
+				kind: StreamKind.SCREEN_AUDIO,
+				consumerId: 'screen-audio-consumer',
+				generation: undefined,
+			});
+		});
+
+		it('does not emit close commands for stale consumer-close results', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer'));
+			state = remoteMediaState(markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer', 1));
+			state = remoteMediaState(
+				markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'audio-producer', 'consumer-2', 1),
+			);
+
+			const result = markRemoteConsumerClosed(state, 1, StreamKind.AUDIO, 130, 'consumer-1');
+
+			expect(result.state).toBe(state);
+			expect(result.commands).toEqual([]);
+		});
+
+		it('emits repair schedule commands at the expected retry time', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer'));
+			const pendingStreams = remoteMediaSubscriptionsToPendingStreams(state);
+
+			expect(remoteMediaSubscriptionsToRepairScheduleCommand(state, pendingStreams, {})).toEqual({
+				type: 'scheduleRetry',
+				key: 'remote-media-repair',
+				retryAt: 15_100,
+				generation: 100,
+			});
+		});
+	});
+
+	describe('streams to consume selector', () => {
+		it('emits desired external tracks with live producers and current track metadata', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(
+				markRemoteProducerPresent(state, 50, StreamKind.EXTERNAL_AUDIO, 100, 'external-audio-producer'),
+			);
+			state = remoteMediaState(
+				markRemoteProducerPresent(state, 50, StreamKind.EXTERNAL_VIDEO, 100, 'external-video-producer'),
+			);
+			state = remoteMediaState(markRemoteWatchRequested(state, 50, StreamKind.EXTERNAL_AUDIO, 110));
+			state = remoteMediaState(markRemoteWatchRequested(state, 50, StreamKind.EXTERNAL_VIDEO, 110));
+
+			expect(remoteMediaSubscriptionsToStreamsToConsume(state, { 50: { audio: true, video: true } })).toEqual([
+				{
+					type: 'consume',
+					key: getPendingStreamKey(50, StreamKind.EXTERNAL_AUDIO),
+					remoteId: 50,
+					kind: StreamKind.EXTERNAL_AUDIO,
+					producerId: 'external-audio-producer',
+					generation: 1,
 				},
 				{
+					type: 'consume',
 					key: getPendingStreamKey(50, StreamKind.EXTERNAL_VIDEO),
 					remoteId: 50,
 					kind: StreamKind.EXTERNAL_VIDEO,
 					producerId: 'external-video-producer',
+					generation: 1,
 				},
 			]);
 		});
@@ -491,8 +673,10 @@ describe('remote media subscriptions', () => {
 		it('does not emit external commands without current track metadata', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
 
-			state = markRemoteProducerPresent(state, 50, StreamKind.EXTERNAL_AUDIO, 100, 'external-audio-producer');
-			state = markRemoteWatchRequested(state, 50, StreamKind.EXTERNAL_AUDIO, 110);
+			state = remoteMediaState(
+				markRemoteProducerPresent(state, 50, StreamKind.EXTERNAL_AUDIO, 100, 'external-audio-producer'),
+			);
+			state = remoteMediaState(markRemoteWatchRequested(state, 50, StreamKind.EXTERNAL_AUDIO, 110));
 
 			expect(remoteMediaSubscriptionsToStreamsToConsume(state)).toEqual([]);
 			expect(remoteMediaSubscriptionsToStreamsToConsume(state, { 50: { audio: false } })).toEqual([]);
@@ -501,19 +685,25 @@ describe('remote media subscriptions', () => {
 		it('emits desired screen audio while the screen video is live', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
 
-			state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
-			state = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 105, 'screen-producer', 1);
-			state = markRemoteConsumeSucceeded(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 'screen-consumer', 1);
-			state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 120, 'screen-audio-producer');
+			state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+			state = remoteMediaState(markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 105, 'screen-producer', 1));
+			state = remoteMediaState(
+				markRemoteConsumeSucceeded(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 'screen-consumer', 1),
+			);
+			state = remoteMediaState(
+				markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 120, 'screen-audio-producer'),
+			);
 
 			expect(remoteMediaSubscriptionsToStreamsToConsume(state)).toContainEqual({
+				type: 'consume',
 				key: getPendingStreamKey(3, StreamKind.SCREEN_AUDIO),
 				remoteId: 3,
 				kind: StreamKind.SCREEN_AUDIO,
 				producerId: 'screen-audio-producer',
+				generation: 1,
 			});
 
-			state = markRemoteProducerClosed(state, 3, StreamKind.SCREEN, 120, 'screen-producer');
+			state = remoteMediaState(markRemoteProducerClosed(state, 3, StreamKind.SCREEN, 120, 'screen-producer'));
 
 			expect(remoteMediaSubscriptionsToStreamsToConsume(state)).not.toContainEqual(
 				expect.objectContaining({
@@ -525,16 +715,18 @@ describe('remote media subscriptions', () => {
 		it('does not duplicate in-flight, retrying, failed, or consumed slots', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
 
-			state = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer');
-			state = markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer', 1);
-			state = markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer');
-			state = markRemoteWatchRequested(state, 2, StreamKind.VIDEO, 110);
-			state = markRemoteConsumeStarted(state, 2, StreamKind.VIDEO, 120, 'video-producer', 2, true);
-			state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
-			state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110);
-			state = markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 120, 'consume failed');
-			state = markRemoteProducerPresent(state, 4, StreamKind.AUDIO, 100, 'other-audio-producer');
-			state = markRemoteConsumeSucceeded(state, 4, StreamKind.AUDIO, 110, 'other-audio-producer', 'consumer-4');
+			state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer'));
+			state = remoteMediaState(markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'audio-producer', 1));
+			state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 2, StreamKind.VIDEO, 110));
+			state = remoteMediaState(markRemoteConsumeStarted(state, 2, StreamKind.VIDEO, 120, 'video-producer', 2, true));
+			state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110));
+			state = remoteMediaState(markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 120, 'consume failed'));
+			state = remoteMediaState(markRemoteProducerPresent(state, 4, StreamKind.AUDIO, 100, 'other-audio-producer'));
+			state = remoteMediaState(
+				markRemoteConsumeSucceeded(state, 4, StreamKind.AUDIO, 110, 'other-audio-producer', 'consumer-4'),
+			);
 
 			expect(remoteMediaSubscriptionsToStreamsToConsume(state)).toEqual([]);
 		});
@@ -542,12 +734,12 @@ describe('remote media subscriptions', () => {
 		it('does not emit when producer is absent or watch intent has stopped', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
 
-			state = markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer');
-			state = markRemoteWatchRequested(state, 2, StreamKind.VIDEO, 110);
-			state = markRemoteProducerClosed(state, 2, StreamKind.VIDEO, 120, 'video-producer');
-			state = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer');
-			state = markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110);
-			state = markRemoteWatchStopped(state, 3, StreamKind.SCREEN, 120);
+			state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 2, StreamKind.VIDEO, 110));
+			state = remoteMediaState(markRemoteProducerClosed(state, 2, StreamKind.VIDEO, 120, 'video-producer'));
+			state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110));
+			state = remoteMediaState(markRemoteWatchStopped(state, 3, StreamKind.SCREEN, 120));
 
 			expect(remoteMediaSubscriptionsToStreamsToConsume(state)).toEqual([]);
 		});
@@ -556,9 +748,9 @@ describe('remote media subscriptions', () => {
 	describe('screen-audio desire couples to the screen', () => {
 		it('grants screen-audio desire when audio appears after the screen is watched', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
-			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p');
-			state = markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110);
-			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 120, 'audio-p');
+			state = remoteMediaState(markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110));
+			state = remoteMediaState(markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 120, 'audio-p'));
 
 			expect(state.get(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))).toMatchObject({
 				desired: true,
@@ -569,47 +761,49 @@ describe('remote media subscriptions', () => {
 
 		it('grants screen-audio desire when the audio producer already exists at accept', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
-			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p');
-			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 100, 'audio-p');
-			state = markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110);
+			state = remoteMediaState(markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p'));
+			state = remoteMediaState(markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 100, 'audio-p'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110));
 
 			expect(state.get(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))?.desired).toBe(true);
 		});
 
 		it('does not fabricate a pending screen-audio card before its producer exists', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
-			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p');
-			state = markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110);
+			state = remoteMediaState(markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110));
 
 			expect(state.has(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))).toBe(false);
-			expect(
-				remoteMediaSubscriptionsToPendingStreams(state).has(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO)),
-			).toBe(false);
+			expect(remoteMediaSubscriptionsToPendingStreams(state).has(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))).toBe(
+				false,
+			);
 		});
 
 		it('revokes screen-audio desire when the screen is un-watched', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
-			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p');
-			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 100, 'audio-p');
-			state = markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110);
+			state = remoteMediaState(markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p'));
+			state = remoteMediaState(markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 100, 'audio-p'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110));
 			expect(state.get(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))?.desired).toBe(true);
 
-			state = markRemoteWatchStopped(state, 5, StreamKind.SCREEN, 120);
+			state = remoteMediaState(markRemoteWatchStopped(state, 5, StreamKind.SCREEN, 120));
 			expect(state.get(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))?.desired).toBe(false);
 		});
 
 		it('does not re-grant screen-audio desire on reconcile once the screen is un-watched', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
-			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p');
-			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 100, 'audio-p');
-			state = markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110);
-			state = markRemoteWatchStopped(state, 5, StreamKind.SCREEN, 120);
+			state = remoteMediaState(markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p'));
+			state = remoteMediaState(markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 100, 'audio-p'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110));
+			state = remoteMediaState(markRemoteWatchStopped(state, 5, StreamKind.SCREEN, 120));
 
-			state = reconcileRemoteMediaWithProducerSnapshot(
-				state,
-				makeProducers({ remoteScreenIds: [5], remoteScreenAudioIds: [5] }),
-				undefined,
-				130,
+			state = remoteMediaState(
+				reconcileRemoteMediaWithProducerSnapshot(
+					state,
+					makeProducers({ remoteScreenIds: [5], remoteScreenAudioIds: [5] }),
+					undefined,
+					130,
+				),
 			);
 
 			expect(state.get(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))?.desired).toBe(false);
@@ -617,11 +811,11 @@ describe('remote media subscriptions', () => {
 
 		it('drops screen-audio desire when the screen producer closes', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
-			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p');
-			state = markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 100, 'audio-p');
-			state = markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110);
+			state = remoteMediaState(markRemoteProducerPresent(state, 5, StreamKind.SCREEN, 100, 'screen-p'));
+			state = remoteMediaState(markRemoteProducerPresent(state, 5, StreamKind.SCREEN_AUDIO, 100, 'audio-p'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 5, StreamKind.SCREEN, 110));
 
-			state = markRemoteProducerClosed(state, 5, StreamKind.SCREEN, 120, 'screen-p');
+			state = remoteMediaState(markRemoteProducerClosed(state, 5, StreamKind.SCREEN, 120, 'screen-p'));
 
 			expect(state.get(getPendingStreamKey(5, StreamKind.SCREEN_AUDIO))?.desired).toBe(false);
 		});

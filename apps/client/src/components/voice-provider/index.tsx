@@ -548,7 +548,10 @@ export type TVoiceProvider = {
 	'localAudioStream' | 'localVideoStream' | 'localScreenShareStream' | 'localScreenShareAudioStream'
 > &
 	Pick<ReturnType<typeof useRemoteStreams>, 'remoteUserStreams' | 'externalStreams'> &
-	Pick<ReturnType<typeof useRemoteMediaSubscriptions>, 'pendingStreams' | 'remoteMediaSubscriptions' | 'visibleRemoteMedia'> &
+	Pick<
+		ReturnType<typeof useRemoteMediaSubscriptions>,
+		'pendingStreams' | 'remoteMediaSubscriptions' | 'visibleRemoteMedia'
+	> &
 	ReturnType<typeof useVoiceControls>;
 
 const VoiceProviderContext = createContext<TVoiceProvider>({
@@ -791,8 +794,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	} = useRemoteStreams();
 	const {
 		remoteMediaSubscriptions,
+		remoteMediaCommands,
 		pendingStreams,
 		visibleRemoteMedia,
+		clearRemoteMediaCommands,
 		addPendingStream,
 		removePendingStream,
 		clearPendingStreamsForUser,
@@ -801,6 +806,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		refreshPendingStreamAges,
 		markWatchRequested,
 		markWatchStopped,
+		markRetryRequested,
 		markConsumeStarted,
 		markConsumeSucceeded,
 		markConsumeFailed,
@@ -906,7 +912,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		createConsumerTransport,
 		consume,
 		consumeExistingProducers,
-		stopWatchingStream: stopWatchingConsumedStream,
+		closeConsumer,
 		cleanupTransports,
 		getActiveConsumerProducerId,
 	} = useTransports({
@@ -1032,16 +1038,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const acceptStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
-			markWatchRequested(remoteId, kind);
+			markWatchRequested(remoteId, kind, getExternalStreamTrackPresence());
 		},
-		[markWatchRequested],
+		[getExternalStreamTrackPresence, markWatchRequested],
 	);
 
 	const retryRemoteMedia = useCallback(
 		(remoteId: number, kind: StreamKind) => {
-			const currentRtpCapabilities = sendRtpCapabilities.current;
-
-			if (!currentRtpCapabilities) {
+			if (!sendRtpCapabilities.current) {
 				logVoice('Cannot retry remote media before voice is initialized', {
 					remoteId,
 					kind,
@@ -1049,12 +1053,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				return;
 			}
 
-			void consume(remoteId, kind, currentRtpCapabilities, getPendingStreamProducerId(remoteId, kind), {
-				isManualRetry: true,
-				restartExisting: true,
-			});
+			markRetryRequested(remoteId, kind, getExternalStreamTrackPresence());
 		},
-		[consume, getPendingStreamProducerId],
+		[getExternalStreamTrackPresence, markRetryRequested],
 	);
 
 	const stopWatchingStream = useCallback(
@@ -1063,10 +1064,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			// cascades to SCREEN_AUDIO, and for EXTERNAL_AUDIO/VIDEO it revokes that
 			// stream's intent. No separate ref bookkeeping needed.
 			markWatchStopped(remoteId, kind);
-
-			void stopWatchingConsumedStream(remoteId, kind);
 		},
-		[markWatchStopped, stopWatchingConsumedStream],
+		[markWatchStopped],
 	);
 
 	// Surface source labels and configured maxBitrate ceilings to the stats
@@ -1219,9 +1218,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	useRemoteMediaConsumeRunner({
 		currentVoiceChannelId,
 		rtpCapabilities: voiceEventRtpCapabilities,
-		remoteMediaSubscriptions,
-		getExternalStreamTrackPresence,
+		commands: remoteMediaCommands,
+		clearCommands: clearRemoteMediaCommands,
 		consume,
+		closeConsumer,
 	});
 
 	useEffect(() => {
@@ -1236,14 +1236,20 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			);
 
 			if (stream.tracks.audio && !activeExternalStream?.audioStream && !hasPendingExternalAudio) {
-				addPendingStream(numericStreamId, StreamKind.EXTERNAL_AUDIO);
+				addPendingStream(numericStreamId, StreamKind.EXTERNAL_AUDIO, undefined, getExternalStreamTrackPresence());
 			}
 
 			if (stream.tracks.video && !activeExternalStream?.videoStream && !hasPendingExternalVideo) {
-				addPendingStream(numericStreamId, StreamKind.EXTERNAL_VIDEO);
+				addPendingStream(numericStreamId, StreamKind.EXTERNAL_VIDEO, undefined, getExternalStreamTrackPresence());
 			}
 		});
-	}, [addPendingStream, currentChannelExternalStreams, externalStreams, pendingStreams]);
+	}, [
+		addPendingStream,
+		currentChannelExternalStreams,
+		externalStreams,
+		getExternalStreamTrackPresence,
+		pendingStreams,
+	]);
 
 	useRemoteMediaRepairRunner({
 		currentVoiceChannelId,
@@ -4294,6 +4300,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		onTransportFailure,
 		getActiveConsumerProducerId,
 		getPendingStreamProducerId,
+		getExternalStreamTrackPresence,
 		rtpCapabilities: voiceEventRtpCapabilities,
 		reconnectNonce: voiceSessionReconnectNonce,
 	});

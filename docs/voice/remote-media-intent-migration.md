@@ -28,6 +28,7 @@ feature arc → optional cleanup, each an independently reviewable PR.
 | **5** | Ledger-derived consume command runner + `streamsToConsume` (design "Longer-Term Direction") | 4 | ✅ **done** (unmerged) |
 | **6** | Extract consume runner hook + delete dead screen-audio watch-intent helper | 5 | ✅ **done** (unmerged) |
 | **7** | Extract stale-pending repair runner hook (behavior-identical) | 6 | ✅ **done** (unmerged) |
+| **8** | Command envelope for consume, close-consumer, and repair scheduling | 7 | ✅ **done** (unmerged) |
 
 **Split rationale (1 vs 1b):** the screen-audio ref (`watchedScreenAudioRef`, a
 `Set<number>`) and the external-stream ref (`watchedExternalStreamsRef`, then
@@ -267,13 +268,35 @@ Verification at landing: reducer/selector suite 31/31; client typecheck PASS;
 client lint PASS with only the pre-existing `src/vite-env.d.ts` unused
 `ImportMetaEnv` warning.
 
+## PR 8 — command envelope (done)
+
+Built PR 8 on top of the PR 7 branch (`codex/remote-media-runner-followup`) as
+`codex/remote-media-command-envelope`. This is the terminal architecture slice:
+the reducer transitions now return `{ state, commands }`, and the runner drains
+plain command data instead of re-deriving consume work from the whole ledger.
+
+- Added a `TRemoteMediaCommand` envelope with `consume`, `closeConsumer`, and
+  `scheduleRetry` command families.
+- Consume commands are emitted from producer-present, watch-requested,
+  consumer-closed, and snapshot reconciliation transitions, while preserving
+  the external-track and screen-audio-under-screen guards.
+- Stop-watch, producer-close, and consumer-supersede transitions emit
+  `closeConsumer` commands with the observed `consumerId` when available; the
+  transport layer executes the close and reports local cleanup back through
+  `markRemoteConsumerClosed`.
+- The stale-pending repair runner now asks the ledger helper for a
+  `scheduleRetry` command and uses that command's `retryAt` for its timer,
+  preserving the existing repair age, channel-stale guard, age refresh, and
+  `consumeExistingProducers` sweep.
+- Screen producer-close semantics remain unchanged: a `SCREEN` producer close
+  still ends screen desire.
+
+Verification at landing: reducer/command suite 38/38; client check-types PASS;
+client lint PASS with only the pre-existing `src/vite-env.d.ts` unused
+`ImportMetaEnv` warning.
+
 ## Loose ends
 
-- **Command/effect runner is not yet a fully emitted-command reducer.** PR 5/6
-  centralizes consume decisions in a selector/effect runner while keeping the
-  reducer pure and preserving the existing transport API. The larger design
-  shape (`event + state -> nextState + commands`, timer commands, close-consumer
-  commands) is still future work if the migration continues.
 - **Screen producer-close semantics need a product call before changing.**
   Webcam/external desired slots survive producer close, and screen-audio desire
   survives its own producer churn while the screen remains watched. A direct

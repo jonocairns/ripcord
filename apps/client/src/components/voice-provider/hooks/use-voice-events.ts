@@ -7,6 +7,7 @@ import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordi
 import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
+import type { TExternalStreamTrackPresence } from './use-pending-streams';
 import { shouldSyncExistingProducersAfterVoiceEventSubscriptionStart } from './voice-event-sync-policy';
 import { shouldIgnoreProducerClosedEvent } from './voice-producer-event-identity';
 
@@ -14,7 +15,12 @@ const VOICE_EVENT_PRODUCER_SYNC_DEBOUNCE_MS = 500;
 
 type TEvents = {
 	syncExistingProducers: (rtpCapabilities: RtpCapabilities) => Promise<void>;
-	addPendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
+	addPendingStream: (
+		remoteId: number,
+		kind: StreamKind,
+		producerId?: string,
+		externalStreamTracks?: TExternalStreamTrackPresence,
+	) => void;
 	removePendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
 	removeRemoteUserStream: (userId: number, kind: TRemoteUserStreamKinds) => void;
 	removeExternalStreamTrack: (streamId: number, kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO) => void;
@@ -25,6 +31,7 @@ type TEvents = {
 	onTransportFailure: () => void;
 	getActiveConsumerProducerId: (remoteId: number, kind: StreamKind) => string | undefined;
 	getPendingStreamProducerId: (remoteId: number, kind: StreamKind) => string | undefined;
+	getExternalStreamTrackPresence: () => TExternalStreamTrackPresence;
 	rtpCapabilities: RtpCapabilities | null;
 	reconnectNonce: number;
 };
@@ -42,6 +49,7 @@ const useVoiceEvents = ({
 	onTransportFailure,
 	getActiveConsumerProducerId,
 	getPendingStreamProducerId,
+	getExternalStreamTrackPresence,
 	rtpCapabilities,
 	reconnectNonce,
 }: TEvents) => {
@@ -139,7 +147,7 @@ const useVoiceEvents = ({
 					producerId,
 				});
 
-				addPendingStream(remoteId, kind, producerId);
+				addPendingStream(remoteId, kind, producerId, getExternalStreamTrackPresence());
 			},
 			onError: (error) => {
 				scheduleProducerRepairSync('onVoiceNewProducer', error);
@@ -320,6 +328,7 @@ const useVoiceEvents = ({
 		onTransportFailure,
 		getActiveConsumerProducerId,
 		getPendingStreamProducerId,
+		getExternalStreamTrackPresence,
 		rtpCapabilities,
 		reconnectingSince,
 		reconnectAuthenticated,

@@ -2,7 +2,9 @@ import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
 import { useCallback, useMemo, useState } from 'react';
 import {
 	getPendingStreamKey,
+	getOldestRepairEligiblePendingCreatedAt,
 	isExternalTrackPresent,
+	PENDING_STREAM_REPAIR_AGE_MS,
 	type TExternalStreamTrackPresence,
 	type TPendingStream,
 } from './use-pending-streams';
@@ -41,10 +43,40 @@ export type TVisibleRemoteMedia = {
 };
 
 export type TStreamsToConsumeCommand = {
+	type: 'consume';
 	key: string;
 	remoteId: number;
 	kind: StreamKind;
 	producerId?: string;
+	generation: number;
+	isManualRetry?: boolean;
+};
+
+export type TCloseConsumerCommand = {
+	type: 'closeConsumer';
+	key: string;
+	remoteId: number;
+	kind: StreamKind;
+	consumerId?: string;
+	generation?: number;
+};
+
+export type TScheduleRetryCommand = {
+	type: 'scheduleRetry';
+	key: string;
+	retryAt: number;
+	generation?: number;
+};
+
+export type TRemoteMediaCommand = TStreamsToConsumeCommand | TCloseConsumerCommand | TScheduleRetryCommand;
+
+export type TRemoteMediaReducerResult = {
+	state: TRemoteMediaSubscriptions;
+	commands: TRemoteMediaCommand[];
+};
+
+type TRemoteMediaCommandContext = {
+	externalStreamTracks?: TExternalStreamTrackPresence;
 };
 
 type TProducerSlot = {
@@ -135,6 +167,107 @@ const makeSubscription = (
 
 const clone = (subscriptions: TRemoteMediaSubscriptions) => new Map(subscriptions);
 
+export const remoteMediaState = (result: TRemoteMediaReducerResult): TRemoteMediaSubscriptions => result.state;
+
+const emptyResult = (state: TRemoteMediaSubscriptions): TRemoteMediaReducerResult => ({
+	state,
+	commands: [],
+});
+
+const nextConsumeGeneration = (subscription: TRemoteMediaSubscription): number =>
+	(subscription.consumeGeneration ?? 0) + 1;
+
+const canConsumeExternalStream = (
+	subscription: TRemoteMediaSubscription,
+	externalStreamTracks: TExternalStreamTrackPresence | undefined,
+): boolean => {
+	const tracks = externalStreamTracks?.[subscription.remoteId];
+
+	if (tracks === undefined) {
+		return false;
+	}
+
+	if (subscription.kind === StreamKind.EXTERNAL_AUDIO) {
+		return isExternalTrackPresent(tracks, 'audio');
+	}
+
+	if (subscription.kind === StreamKind.EXTERNAL_VIDEO) {
+		return isExternalTrackPresent(tracks, 'video');
+	}
+
+	return true;
+};
+
+const canConsumeScreenAudio = (
+	subscription: TRemoteMediaSubscription,
+	subscriptions: TRemoteMediaSubscriptions,
+): boolean => {
+	if (subscription.kind !== StreamKind.SCREEN_AUDIO) {
+		return true;
+	}
+
+	const screen = subscriptions.get(getPendingStreamKey(subscription.remoteId, StreamKind.SCREEN));
+
+	return screen?.desired === true && screen.producerPresent;
+};
+
+const toConsumeCommand = (
+	subscription: TRemoteMediaSubscription,
+	subscriptions: TRemoteMediaSubscriptions,
+	context?: TRemoteMediaCommandContext,
+	isManualRetry = false,
+): TStreamsToConsumeCommand | undefined => {
+	if (
+		!subscription.producerPresent ||
+		!subscription.desired ||
+		(isManualRetry ? subscription.status !== 'retrying' : subscription.status !== 'wanted') ||
+		(isExternalStreamKind(subscription.kind) &&
+			!canConsumeExternalStream(subscription, context?.externalStreamTracks)) ||
+		!canConsumeScreenAudio(subscription, subscriptions)
+	) {
+		return undefined;
+	}
+
+	return {
+		type: 'consume',
+		key: subscription.key,
+		remoteId: subscription.remoteId,
+		kind: subscription.kind,
+		producerId: subscription.producerId,
+		generation: nextConsumeGeneration(subscription),
+		isManualRetry: isManualRetry || undefined,
+	};
+};
+
+const maybeConsumeCommand = (
+	subscriptions: TRemoteMediaSubscriptions,
+	key: string,
+	context?: TRemoteMediaCommandContext,
+): TStreamsToConsumeCommand[] => {
+	const subscription = subscriptions.get(key);
+	const command = subscription ? toConsumeCommand(subscription, subscriptions, context) : undefined;
+
+	return command ? [command] : [];
+};
+
+const closeConsumerCommandFor = (
+	subscription: TRemoteMediaSubscription,
+	consumerId = subscription.consumerId,
+): TCloseConsumerCommand | undefined => {
+	if (consumerId === undefined) {
+		return undefined;
+	}
+
+	return {
+		type: 'closeConsumer',
+		key: subscription.key,
+		remoteId: subscription.remoteId,
+		kind: subscription.kind,
+		consumerId,
+		generation: subscription.consumeGeneration,
+	};
+};
+
 // Reducers only publish a new map when a slot materially changed; otherwise
 // they return the input map untouched, so snapshot reconciliation cannot dirty
 // the ledger (and re-render every voice context consumer) with timestamp-only
@@ -174,7 +307,8 @@ export const markRemoteProducerPresent = (
 	kind: StreamKind,
 	now: number,
 	producerId?: string,
-): TRemoteMediaSubscriptions => {
+	context?: TRemoteMediaCommandContext,
+): TRemoteMediaReducerResult => {
 	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
 	const base = existing ?? makeSubscription(remoteId, kind, now, producerId);
 	const desired = base.desired || isAutoDesiredKind(kind) || inheritsScreenAudioDesire(subscriptions, remoteId, kind);
@@ -183,7 +317,7 @@ export const markRemoteProducerPresent = (
 			? base.status
 			: getInitialStatus(true, desired);
 
-	return applySlotUpdate(
+	const state = applySlotUpdate(
 		subscriptions,
 		existing,
 		{
@@ -196,6 +330,11 @@ export const markRemoteProducerPresent = (
 		},
 		now,
 	);
+
+	return {
+		state,
+		commands: maybeConsumeCommand(state, base.key, context),
+	};
 };
 
 export const markRemoteWatchRequested = (
@@ -203,7 +342,8 @@ export const markRemoteWatchRequested = (
 	remoteId: number,
 	kind: StreamKind,
 	now: number,
-): TRemoteMediaSubscriptions => {
+	context?: TRemoteMediaCommandContext,
+): TRemoteMediaReducerResult => {
 	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
 	const base = existing ?? makeSubscription(remoteId, kind, now);
 
@@ -218,16 +358,23 @@ export const markRemoteWatchRequested = (
 		},
 		now,
 	);
+	const commands: TRemoteMediaCommand[] = [];
 
 	// Only cascade when an audio slot already exists (its producer is/was
 	// present). Intent-ahead-of-producer is handled by inheritsScreenAudioDesire
 	// in markRemoteProducerPresent, so this branch never fabricates a phantom
 	// producerPresent=true SCREEN_AUDIO slot.
 	if (kind === StreamKind.SCREEN && subscriptions.has(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))) {
-		next = markRemoteWatchRequested(next, remoteId, StreamKind.SCREEN_AUDIO, now);
+		const result = markRemoteWatchRequested(next, remoteId, StreamKind.SCREEN_AUDIO, now, context);
+		next = result.state;
+		commands.push(...result.commands);
 	}
+	commands.push(...maybeConsumeCommand(next, base.key, context));
 
-	return next;
+	return {
+		state: next,
+		commands,
+	};
 };
 
 export const markRemoteWatchStopped = (
@@ -235,9 +382,10 @@ export const markRemoteWatchStopped = (
 	remoteId: number,
 	kind: StreamKind,
 	now: number,
-): TRemoteMediaSubscriptions => {
+): TRemoteMediaReducerResult => {
 	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
 	const base = existing ?? makeSubscription(remoteId, kind, now);
+	const closeCommand = closeConsumerCommandFor(base);
 
 	let next = applySlotUpdate(
 		subscriptions,
@@ -255,15 +403,57 @@ export const markRemoteWatchStopped = (
 		},
 		now,
 	);
+	const commands: TRemoteMediaCommand[] = closeCommand ? [closeCommand] : [];
 
 	// Revoke screen-audio desire alongside the screen. Guarded by slot existence
 	// for the same reason as the grant cascade — an unconditional recurse would
 	// makeSubscription a phantom producerPresent=true SCREEN_AUDIO slot.
 	if (kind === StreamKind.SCREEN && subscriptions.has(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))) {
-		next = markRemoteWatchStopped(next, remoteId, StreamKind.SCREEN_AUDIO, now);
+		const result = markRemoteWatchStopped(next, remoteId, StreamKind.SCREEN_AUDIO, now);
+		next = result.state;
+		commands.push(...result.commands);
 	}
 
-	return next;
+	return {
+		state: next,
+		commands,
+	};
+};
+
+export const markRemoteRetryRequested = (
+	subscriptions: TRemoteMediaSubscriptions,
+	remoteId: number,
+	kind: StreamKind,
+	now: number,
+	context?: TRemoteMediaCommandContext,
+): TRemoteMediaReducerResult => {
+	const key = getPendingStreamKey(remoteId, kind);
+	const existing = subscriptions.get(key);
+
+	if (!existing || !existing.producerPresent || !existing.desired) {
+		return emptyResult(subscriptions);
+	}
+
+	const retrying = applySlotUpdate(
+		subscriptions,
+		existing,
+		{
+			...existing,
+			status: 'retrying',
+			consumerId: undefined,
+			pendingSince: existing.pendingSince ?? now,
+			lastFailureReason: undefined,
+			lastFailureAt: undefined,
+		},
+		now,
+	);
+	const updated = retrying.get(key);
+	const command = updated ? toConsumeCommand(updated, retrying, context, true) : undefined;
+
+	return {
+		state: retrying,
+		commands: command ? [command] : [],
+	};
 };
 
 export const markRemoteConsumeStarted = (
@@ -274,20 +464,21 @@ export const markRemoteConsumeStarted = (
 	producerId?: string,
 	consumeGeneration?: number,
 	isManualRetry = false,
-): TRemoteMediaSubscriptions => {
+): TRemoteMediaReducerResult => {
 	const next = markRemoteWatchRequested(
-		markRemoteProducerPresent(subscriptions, remoteId, kind, now, producerId),
+		markRemoteProducerPresent(subscriptions, remoteId, kind, now, producerId).state,
 		remoteId,
 		kind,
 		now,
-	);
+	).state;
 	const existing = next.get(getPendingStreamKey(remoteId, kind));
 
 	if (!existing) {
-		return next;
+		return emptyResult(next);
 	}
 
-	return applySlotUpdate(
+	const closeCommand = closeConsumerCommandFor(existing);
+	const state = applySlotUpdate(
 		next,
 		existing,
 		{
@@ -302,6 +493,11 @@ export const markRemoteConsumeStarted = (
 		},
 		now,
 	);
+
+	return {
+		state,
+		commands: closeCommand ? [closeCommand] : [],
+	};
 };
 
 export const markRemoteConsumeSucceeded = (
@@ -312,15 +508,19 @@ export const markRemoteConsumeSucceeded = (
 	producerId: string,
 	consumerId: string,
 	consumeGeneration?: number,
-): TRemoteMediaSubscriptions => {
+): TRemoteMediaReducerResult => {
 	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
 	const base = existing ?? makeSubscription(remoteId, kind, now, producerId);
 
 	if (consumeGeneration !== undefined && existing?.consumeGeneration !== consumeGeneration) {
-		return subscriptions;
+		return emptyResult(subscriptions);
 	}
 
-	return applySlotUpdate(
+	const closeCommand =
+		existing?.consumerId !== undefined && existing.consumerId !== consumerId
+			? closeConsumerCommandFor(existing)
+			: undefined;
+	const state = applySlotUpdate(
 		subscriptions,
 		existing,
 		{
@@ -337,6 +537,11 @@ export const markRemoteConsumeSucceeded = (
 		},
 		now,
 	);
+
+	return {
+		state,
+		commands: closeCommand ? [closeCommand] : [],
+	};
 };
 
 export const markRemoteConsumeFailed = (
@@ -346,28 +551,30 @@ export const markRemoteConsumeFailed = (
 	now: number,
 	reason?: string,
 	consumeGeneration?: number,
-): TRemoteMediaSubscriptions => {
+): TRemoteMediaReducerResult => {
 	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
 	const base = existing ?? makeSubscription(remoteId, kind, now);
 
 	if (consumeGeneration !== undefined && existing?.consumeGeneration !== consumeGeneration) {
-		return subscriptions;
+		return emptyResult(subscriptions);
 	}
 
-	return applySlotUpdate(
-		subscriptions,
-		existing,
-		{
-			...base,
-			desired: true,
-			status: 'failed',
-			consumerId: undefined,
-			consumeGeneration: undefined,
-			pendingSince: base.pendingSince ?? now,
-			lastFailureAt: now,
-			lastFailureReason: reason,
-		},
-		now,
+	return emptyResult(
+		applySlotUpdate(
+			subscriptions,
+			existing,
+			{
+				...base,
+				desired: true,
+				status: 'failed',
+				consumerId: undefined,
+				consumeGeneration: undefined,
+				pendingSince: base.pendingSince ?? now,
+				lastFailureAt: now,
+				lastFailureReason: reason,
+			},
+			now,
+		),
 	);
 };
 
@@ -377,18 +584,19 @@ export const markRemoteProducerClosed = (
 	kind: StreamKind,
 	now: number,
 	producerId?: string,
-): TRemoteMediaSubscriptions => {
+): TRemoteMediaReducerResult => {
 	const key = getPendingStreamKey(remoteId, kind);
 	const existing = subscriptions.get(key);
 
 	if (!existing) {
-		return subscriptions;
+		return emptyResult(subscriptions);
 	}
 
 	if (producerId !== undefined && existing.producerId !== undefined && existing.producerId !== producerId) {
-		return subscriptions;
+		return emptyResult(subscriptions);
 	}
 
+	const closeCommand = closeConsumerCommandFor(existing);
 	const desired = shouldKeepDesireOnProducerClose(kind, existing, subscriptions);
 	let next = applySlotUpdate(
 		subscriptions,
@@ -412,6 +620,7 @@ export const markRemoteProducerClosed = (
 		// Only revoke screen-audio desire while it is actually held, so repeated
 		// closes of an already-cleared screen stay no-ops.
 		if (audio?.desired) {
+			const audioCloseCommand = closeConsumerCommandFor(audio);
 			next = applySlotUpdate(
 				next,
 				audio,
@@ -424,10 +633,19 @@ export const markRemoteProducerClosed = (
 				},
 				now,
 			);
+			if (audioCloseCommand) {
+				return {
+					state: next,
+					commands: closeCommand ? [closeCommand, audioCloseCommand] : [audioCloseCommand],
+				};
+			}
 		}
 	}
 
-	return next;
+	return {
+		state: next,
+		commands: closeCommand ? [closeCommand] : [],
+	};
 };
 
 /**
@@ -444,19 +662,20 @@ export const markRemoteConsumerClosed = (
 	kind: StreamKind,
 	now: number,
 	consumerId?: string,
-): TRemoteMediaSubscriptions => {
+	context?: TRemoteMediaCommandContext,
+): TRemoteMediaReducerResult => {
 	const key = getPendingStreamKey(remoteId, kind);
 	const existing = subscriptions.get(key);
 
 	if (!existing || existing.status !== 'consumed') {
-		return subscriptions;
+		return emptyResult(subscriptions);
 	}
 
 	if (consumerId !== undefined && existing.consumerId !== undefined && existing.consumerId !== consumerId) {
-		return subscriptions;
+		return emptyResult(subscriptions);
 	}
 
-	return applySlotUpdate(
+	const state = applySlotUpdate(
 		subscriptions,
 		existing,
 		{
@@ -468,6 +687,11 @@ export const markRemoteConsumerClosed = (
 		},
 		now,
 	);
+
+	return {
+		state,
+		commands: maybeConsumeCommand(state, key, context),
+	};
 };
 
 export const clearRemoteMediaForUser = (
@@ -563,13 +787,17 @@ export const reconcileRemoteMediaWithProducerSnapshot = (
 	producers: TRemoteProducerIds,
 	externalStreamTracks: TExternalStreamTrackPresence | undefined,
 	now: number,
-): TRemoteMediaSubscriptions => {
+): TRemoteMediaReducerResult => {
 	const slots = producerSlotsFromSnapshot(producers, externalStreamTracks);
 	const activeKeys = new Set(slots.map((slot) => getPendingStreamKey(slot.remoteId, slot.kind)));
 	let next = subscriptions;
+	const commands: TRemoteMediaCommand[] = [];
+	const context = { externalStreamTracks };
 
 	slots.forEach((slot) => {
-		next = markRemoteProducerPresent(next, slot.remoteId, slot.kind, now, slot.producerId);
+		const result = markRemoteProducerPresent(next, slot.remoteId, slot.kind, now, slot.producerId, context);
+		next = result.state;
+		commands.push(...result.commands);
 	});
 
 	next.forEach((subscription) => {
@@ -577,10 +805,18 @@ export const reconcileRemoteMediaWithProducerSnapshot = (
 			return;
 		}
 
-		next = markRemoteProducerClosed(next, subscription.remoteId, subscription.kind, now, subscription.producerId);
+		const result = markRemoteProducerClosed(
+			next,
+			subscription.remoteId,
+			subscription.kind,
+			now,
+			subscription.producerId,
+		);
+		next = result.state;
+		commands.push(...result.commands);
 	});
 
-	return next;
+	return { state: next, commands };
 };
 
 export const refreshRemoteMediaPendingAges = (
@@ -671,40 +907,6 @@ export const remoteMediaSubscriptionsToVisibleRemoteMedia = (
 	return visibleRemoteMedia;
 };
 
-const canConsumeExternalStream = (
-	subscription: TRemoteMediaSubscription,
-	externalStreamTracks: TExternalStreamTrackPresence | undefined,
-): boolean => {
-	const tracks = externalStreamTracks?.[subscription.remoteId];
-
-	if (tracks === undefined) {
-		return false;
-	}
-
-	if (subscription.kind === StreamKind.EXTERNAL_AUDIO) {
-		return isExternalTrackPresent(tracks, 'audio');
-	}
-
-	if (subscription.kind === StreamKind.EXTERNAL_VIDEO) {
-		return isExternalTrackPresent(tracks, 'video');
-	}
-
-	return true;
-};
-
-const canConsumeScreenAudio = (
-	subscription: TRemoteMediaSubscription,
-	subscriptions: TRemoteMediaSubscriptions,
-): boolean => {
-	if (subscription.kind !== StreamKind.SCREEN_AUDIO) {
-		return true;
-	}
-
-	const screen = subscriptions.get(getPendingStreamKey(subscription.remoteId, StreamKind.SCREEN));
-
-	return screen?.desired === true && screen.producerPresent;
-};
-
 export const remoteMediaSubscriptionsToStreamsToConsume = (
 	subscriptions: TRemoteMediaSubscriptions,
 	externalStreamTracks?: TExternalStreamTrackPresence,
@@ -723,14 +925,41 @@ export const remoteMediaSubscriptionsToStreamsToConsume = (
 		}
 
 		streamsToConsume.push({
+			type: 'consume',
 			key: subscription.key,
 			remoteId: subscription.remoteId,
 			kind: subscription.kind,
 			producerId: subscription.producerId,
+			generation: nextConsumeGeneration(subscription),
 		});
 	});
 
 	return streamsToConsume;
+};
+
+export const remoteMediaSubscriptionsToRepairScheduleCommand = (
+	subscriptions: TRemoteMediaSubscriptions,
+	pendingStreams: Map<string, TPendingStream>,
+	currentExternalStreams: Record<number, unknown>,
+): TScheduleRetryCommand | undefined => {
+	const oldestRepairEligibleCreatedAt = getOldestRepairEligiblePendingCreatedAt(
+		pendingStreams,
+		(streamId, kind) =>
+			currentExternalStreams[streamId] !== undefined &&
+			subscriptions.get(getPendingStreamKey(streamId, kind))?.desired === true,
+		(remoteId) => subscriptions.get(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))?.desired === true,
+	);
+
+	if (oldestRepairEligibleCreatedAt === undefined) {
+		return undefined;
+	}
+
+	return {
+		type: 'scheduleRetry',
+		key: 'remote-media-repair',
+		retryAt: oldestRepairEligibleCreatedAt + PENDING_STREAM_REPAIR_AGE_MS,
+		generation: oldestRepairEligibleCreatedAt,
+	};
 };
 
 const hasSubscriptionChanged = (prev: TRemoteMediaSubscriptions, next: TRemoteMediaSubscriptions): boolean => {
@@ -753,12 +982,31 @@ const hasSubscriptionChanged = (prev: TRemoteMediaSubscriptions, next: TRemoteMe
 
 export const useRemoteMediaSubscriptions = () => {
 	const [remoteMediaSubscriptions, setRemoteMediaSubscriptions] = useState<TRemoteMediaSubscriptions>(() => new Map());
-	const update = useCallback((nextFor: (prev: TRemoteMediaSubscriptions, now: number) => TRemoteMediaSubscriptions) => {
-		setRemoteMediaSubscriptions((prev) => {
-			const next = nextFor(prev, Date.now());
+	const [remoteMediaCommands, setRemoteMediaCommands] = useState<TRemoteMediaCommand[]>([]);
+	const enqueueCommands = useCallback((commands: TRemoteMediaCommand[]) => {
+		if (commands.length > 0) {
+			setRemoteMediaCommands((prev) => [...prev, ...commands]);
+		}
+	}, []);
+	const update = useCallback(
+		(nextFor: (prev: TRemoteMediaSubscriptions, now: number) => TRemoteMediaReducerResult) => {
+			setRemoteMediaSubscriptions((prev) => {
+				const result = nextFor(prev, Date.now());
+				const next = result.state;
 
-			return hasSubscriptionChanged(prev, next) ? next : prev;
-		});
+				enqueueCommands(result.commands);
+
+				return hasSubscriptionChanged(prev, next) ? next : prev;
+			});
+		},
+		[enqueueCommands],
+	);
+	const clearRemoteMediaCommands = useCallback((commandsToClear: TRemoteMediaCommand[]) => {
+		if (commandsToClear.length === 0) {
+			return;
+		}
+
+		setRemoteMediaCommands((prev) => prev.slice(commandsToClear.length));
 	}, []);
 	const pendingStreams = useMemo(
 		() => remoteMediaSubscriptionsToPendingStreams(remoteMediaSubscriptions),
@@ -769,8 +1017,8 @@ export const useRemoteMediaSubscriptions = () => {
 		[remoteMediaSubscriptions],
 	);
 	const addPendingStream = useCallback(
-		(remoteId: number, kind: StreamKind, producerId?: string) => {
-			update((prev, now) => markRemoteProducerPresent(prev, remoteId, kind, now, producerId));
+		(remoteId: number, kind: StreamKind, producerId?: string, externalStreamTracks?: TExternalStreamTrackPresence) => {
+			update((prev, now) => markRemoteProducerPresent(prev, remoteId, kind, now, producerId, { externalStreamTracks }));
 		},
 		[update],
 	);
@@ -782,12 +1030,13 @@ export const useRemoteMediaSubscriptions = () => {
 	);
 	const clearPendingStreamsForUser = useCallback(
 		(remoteId: number) => {
-			update((prev) => clearRemoteMediaForUser(prev, remoteId));
+			update((prev) => emptyResult(clearRemoteMediaForUser(prev, remoteId)));
 		},
 		[update],
 	);
 	const clearAllPendingStreams = useCallback(() => {
 		setRemoteMediaSubscriptions((prev) => (prev.size === 0 ? prev : new Map()));
+		setRemoteMediaCommands([]);
 	}, []);
 	const reconcilePendingStreams = useCallback(
 		(producers: TRemoteProducerIds, externalStreamTracks?: TExternalStreamTrackPresence) => {
@@ -796,17 +1045,23 @@ export const useRemoteMediaSubscriptions = () => {
 		[update],
 	);
 	const refreshPendingStreamAges = useCallback(() => {
-		update((prev, now) => refreshRemoteMediaPendingAges(prev, now));
+		update((prev, now) => emptyResult(refreshRemoteMediaPendingAges(prev, now)));
 	}, [update]);
 	const markWatchRequested = useCallback(
-		(remoteId: number, kind: StreamKind) => {
-			update((prev, now) => markRemoteWatchRequested(prev, remoteId, kind, now));
+		(remoteId: number, kind: StreamKind, externalStreamTracks?: TExternalStreamTrackPresence) => {
+			update((prev, now) => markRemoteWatchRequested(prev, remoteId, kind, now, { externalStreamTracks }));
 		},
 		[update],
 	);
 	const markWatchStopped = useCallback(
 		(remoteId: number, kind: StreamKind) => {
 			update((prev, now) => markRemoteWatchStopped(prev, remoteId, kind, now));
+		},
+		[update],
+	);
+	const markRetryRequested = useCallback(
+		(remoteId: number, kind: StreamKind, externalStreamTracks?: TExternalStreamTrackPresence) => {
+			update((prev, now) => markRemoteRetryRequested(prev, remoteId, kind, now, { externalStreamTracks }));
 		},
 		[update],
 	);
@@ -840,15 +1095,17 @@ export const useRemoteMediaSubscriptions = () => {
 	);
 	const clearExternalStream = useCallback(
 		(streamId: number) => {
-			update((prev) => clearRemoteMediaForExternalStream(prev, streamId));
+			update((prev) => emptyResult(clearRemoteMediaForExternalStream(prev, streamId)));
 		},
 		[update],
 	);
 
 	return {
 		remoteMediaSubscriptions,
+		remoteMediaCommands,
 		pendingStreams,
 		visibleRemoteMedia,
+		clearRemoteMediaCommands,
 		addPendingStream,
 		removePendingStream,
 		clearPendingStreamsForUser,
@@ -857,6 +1114,7 @@ export const useRemoteMediaSubscriptions = () => {
 		refreshPendingStreamAges,
 		markWatchRequested,
 		markWatchStopped,
+		markRetryRequested,
 		markConsumeStarted,
 		markConsumeSucceeded,
 		markConsumeFailed,

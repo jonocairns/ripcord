@@ -1,32 +1,13 @@
-import { StreamKind, type TExternalStream, type TRemoteProducerIds } from '@sharkord/shared';
+import type { TExternalStream, TRemoteProducerIds } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { useEffect } from 'react';
 import { logVoice } from '@/helpers/browser-logger';
 import { useLatestRef } from '@/hooks/use-latest-ref';
-import type { TRemoteMediaSubscriptions } from './remote-media-subscriptions';
 import {
-	getOldestRepairEligiblePendingCreatedAt,
-	getPendingStreamKey,
-	PENDING_STREAM_REPAIR_AGE_MS,
-	type TExternalStreamTrackPresence,
-	type TPendingStream,
-} from './use-pending-streams';
-
-// Screen-audio watch intent lives on the ledger (SCREEN_AUDIO.desired, coupled
-// to the screen's desire), so repair reads it here instead of the removed
-// watchedScreenAudioRef. See remote-media-subscriptions inheritsScreenAudioDesire.
-const isScreenAudioDesiredInLedger = (subscriptions: TRemoteMediaSubscriptions, remoteId: number): boolean =>
-	subscriptions.get(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))?.desired === true;
-
-// External watch intent lives on the ledger (EXTERNAL_AUDIO/VIDEO.desired, keyed
-// by streamId), so the repair pass reads it here instead of the removed
-// watchedExternalStreamsRef. streamId keying matches the reconnect capture
-// (captureWatchedRemoteStreams), which already derives external intent this way.
-const isExternalStreamDesiredInLedger = (
-	subscriptions: TRemoteMediaSubscriptions,
-	streamId: number,
-	kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO,
-): boolean => subscriptions.get(getPendingStreamKey(streamId, kind))?.desired === true;
+	remoteMediaSubscriptionsToRepairScheduleCommand,
+	type TRemoteMediaSubscriptions,
+} from './remote-media-subscriptions';
+import type { TExternalStreamTrackPresence, TPendingStream } from './use-pending-streams';
 
 type TConsumeExistingProducers = (
 	rtpCapabilities: RtpCapabilities,
@@ -63,24 +44,18 @@ export const useRemoteMediaRepairRunner = ({
 			return;
 		}
 
-		const oldestRepairEligibleCreatedAt = getOldestRepairEligiblePendingCreatedAt(
+		const command = remoteMediaSubscriptionsToRepairScheduleCommand(
+			remoteMediaSubscriptionsRef.current,
 			pendingStreams,
-			(streamId, kind) => {
-				if (!currentChannelExternalStreams[streamId]) {
-					return false;
-				}
-
-				return isExternalStreamDesiredInLedger(remoteMediaSubscriptionsRef.current, streamId, kind);
-			},
-			(remoteId) => isScreenAudioDesiredInLedger(remoteMediaSubscriptionsRef.current, remoteId),
+			currentChannelExternalStreams,
 		);
 
-		if (oldestRepairEligibleCreatedAt === undefined) {
+		if (command === undefined) {
 			return;
 		}
 
 		const scheduledVoiceChannelId = currentVoiceChannelId;
-		const repairDelayMs = Math.max(0, oldestRepairEligibleCreatedAt + PENDING_STREAM_REPAIR_AGE_MS - Date.now());
+		const repairDelayMs = Math.max(0, command.retryAt - Date.now());
 		const repairTimeout = setTimeout(() => {
 			if (currentVoiceChannelIdRef.current !== scheduledVoiceChannelId) {
 				return;
