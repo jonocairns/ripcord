@@ -21,17 +21,18 @@ feature arc → optional cleanup, each an independently reviewable PR.
 | PR | Scope | Depends on | Status |
 | --- | --- | --- | --- |
 | **1** | Ledger owns watch intent — **screen-audio half** | — | ✅ **done** (unmerged) |
-| **1b** | Ledger owns watch intent — **external-stream half** | 1 | ⬜ not started |
+| **1b** | Ledger owns watch intent — **external-stream half** | 1 | ✅ **done** (unmerged) |
 | 2 | `visibleRemoteMedia` selector (keeps desired-but-failed slots renderable) | 1b | ⬜ |
 | 3 | Compact failed/retry UI affordances (design "Required UI Affordance") | 2 | ⬜ |
 | 4 | Manual retry + consume generations (reintroduces the removed generation state) | 3 | ⬜ |
 | 5 | Full command/effect-runner + `streamsToConsume` (design "Longer-Term Direction") | 2 | ⬜ longer-term |
 
 **Split rationale (1 vs 1b):** the screen-audio ref (`watchedScreenAudioRef`, a
-`Set<number>`) and the external-stream ref (`watchedExternalStreamsRef`, keyed by
-stable `pluginId:key` identity) are independent, with independent read-sites. The
-external half also carries a keying judgment call (below), so it gets its own
-focused review rather than riding along with mechanical deletion.
+`Set<number>`) and the external-stream ref (`watchedExternalStreamsRef`, then
+keyed by stable `pluginId:key` identity) were independent, with independent
+read-sites. The external half also carried a keying judgment call (resolved in
+PR 1b below in favour of `streamId` keying), so it got its own focused review
+rather than riding along with mechanical deletion.
 
 **Deliberately not done:** the shadow-model rollout (design steps 3–4) was
 skipped — the ledger went straight to owning behavior. Moot unless the drift
@@ -67,49 +68,68 @@ Verification at landing: reducer suite 18/18; full voice-provider suite 143 pass
 (the 5 `video-bitrate-policy` fails are pre-existing, confirmed on clean tree);
 client typecheck PASS; lint clean on touched files.
 
-## PR 1b — external-stream half (next)
+## PR 1b — external-stream half (done)
 
-Goal: delete `watchedExternalStreamsRef` and its `TTrackedExternalWatchState` /
-`getExternalStreamWatchIdentity` / `getTrackedExternalWatchField` helpers; the
-ledger's `desired` becomes the sole external watch-intent source. Same A/B/C
-shape: close any intent gap in the reducer, repoint the read-sites, delete the
-ref.
+Deleted `watchedExternalStreamsRef` and its `getExternalStreamWatchIdentity` /
+`getTrackedExternalWatchField` / `isExternalStreamKind` helpers; the ledger's
+`desired` (keyed by `streamId`) is now the sole external watch-intent source.
+`TTrackedExternalWatchState` survived — it is the `{audio,video}` shape the
+reconnect snapshot (`captureWatchedRemoteStreams` → restore loop) genuinely
+needs, so it was **renamed** to `TWatchedExternalStreamKinds` to shed the "ref"
+connotation rather than deleted.
 
-**Open decision — remoteId vs identity keying.** The external ref keys intent by
-the stable `pluginId:key` identity because an external stream's numeric
-`streamId` can be reassigned while the logical stream persists. The ledger keys
-by `remoteId:kind`. `captureWatchedRemoteStreams` (reconnect capture) **already**
-derives external intent from `desired` keyed by `remoteId`, so remoteId keying is
-the de-facto model and reconnect already relies on it. Decision to make before
-starting:
+Unlike screen audio, there was **no step-A reducer gap**: external audio and
+video are independent kinds, each accepted/stopped on its own, so
+`acceptStream`/`stopWatchingStream` already recorded intent faithfully via
+`markWatchRequested`/`markWatchStopped`. The PR was pure B+C — repoint the two
+read-sites to `isExternalStreamDesiredInLedger`, then delete the ref and its
+write blocks.
 
-- If `streamId` does not actually churn while a share is live → remoteId keying
-  is fine, delete `getExternalStreamWatchIdentity` outright.
-- If it does → the gap is one reconnect capture already shares; fix it once in
-  the reconcile step by carrying `desired` across a re-key by matching identity,
-  and both repair and reconnect benefit.
-- Lean: assume remoteId keying (match the reconnect precedent); only add identity
-  carry-over if a real `streamId`-churn repro exists. Don't preserve the
-  indirection on spec.
+**Decision taken — remoteId (streamId) keying.** No `streamId`-churn repro
+exists: the bundled plugins load from a runtime path (not in-repo), and the
+identity keying dates to the original IPTV feature (`51f998b9`), not a churn fix.
+`captureWatchedRemoteStreams` already keys external intent by `streamId`, so the
+reconnect path already relies on remoteId keying. The identity indirection was
+**not** preserved on spec. Consequence: if a plugin ever tears down and
+recreates a logical stream under a new `streamId` while a viewer watches, the
+viewer must re-accept — same as the reconnect path already behaves. Revisit only
+if a real churn repro surfaces (add `desired` carry-over across a re-key in the
+reconcile step; both repair and reconnect would benefit).
 
-**Audit method (repeat what worked for screen audio):** enumerate every
-`watchedExternalStreamsRef` write-site and read-site, then check each against the
-ledger mutation that already fires at the same event. For screen audio this found
-6 of 9 sites already faithfully mirrored — the gap was only the SCREEN→SCREEN_AUDIO
-grant coupling. Write-sites: `acceptStream`/`stopWatchingStream` external blocks,
-`removeExternalStreamAndSubscription`, channel-leave reset. Read-sites: the
-external re-drive effect and `getOldestRepairEligiblePendingCreatedAt`'s external
-predicate.
+**Audit result (write-sites all mirrored):** `acceptStream`/`stopWatchingStream`
+→ `markWatchRequested`/`markWatchStopped`. Channel-leave reset → redundant with
+`clearAllPendingStreams` (transport cleanup empties the ledger; both read-sites
+early-return while `currentVoiceChannelId` is undefined). Full-stream removal
+(`onRemoveExternalStream`) → wired to `removeExternalStreamAndSubscription`,
+whose `clearRemoteMediaForExternalStream` **deletes** the streamId's ledger
+entries, so no `desired` strands. Per-track producer close strands
+`{desired:true, producerPresent:false}` under the *same* streamId — which is
+exactly what re-consumes the track when it returns, identical to the old ref
+carry-over.
+
+Verification at landing: reducer + pending-streams 26/26; full voice-provider
+suite 143 pass (the 5 `video-bitrate-policy` fails are pre-existing); client
+typecheck PASS; lint clean on touched file (the lone `vite-env.d.ts` warning is
+pre-existing).
 
 ## Loose ends
 
-- **Runtime `/verify` owed for PR 1.** B/C changed a real path — the two effects
-  now read the ledger. Unit tests don't exercise those effects (they need a live
-  screen-share peer). Watch for reconnect **double-consume**: `captureWatchedRemoteStreams`
-  now sees `SCREEN_AUDIO.desired`, so reconnect and (pre-Step-C) the ref path both
-  re-drove screen audio; consume-operation-state should dedupe, but eyeball it.
-- **Dead-in-prod helper.** `tracksScreenAudioWatchIntent` (in
-  `hooks/screen-audio-watch-intent.ts`) is no longer used by production code —
-  only its own test references it. Left in place because removing it means
-  untangling it from sibling tests; fold into PR 1b cleanup or drop separately.
+- **Runtime `/verify` owed for PR 1 and PR 1b.** Both changed real paths — the
+  re-drive and repair effects now read the ledger for screen-audio (PR 1) and
+  external streams (PR 1b). Unit tests don't exercise those effects (they need a
+  live screen-share peer / IPTV plugin stream). Watch for reconnect
+  **double-consume**: `captureWatchedRemoteStreams` sees `desired` for both
+  kinds, so reconnect and the re-drive effect both re-drive; consume-operation
+  state should dedupe, but eyeball it. For PR 1b, also confirm auto-consume of a
+  watched external stream survives a per-track producer bounce (track drops then
+  returns under the same `streamId`).
+  - **Priority note:** external streams come only from plugins, which the repo
+    owner rarely uses, so PR 1b's live path sees little real traffic — the drive
+    is low-value relative to reducer coverage + typecheck. PR 1's screen-audio
+    path is the one that matters; prioritise verifying that if driving either.
+- **Dead-in-prod helper (deferred out of PR 1b).** `tracksScreenAudioWatchIntent`
+  (in `hooks/screen-audio-watch-intent.ts`) is no longer used by production code —
+  only its own test references it. Deliberately **not** folded into PR 1b to keep
+  that PR scoped to the external-stream ref; removing it means untangling it from
+  sibling tests in `screen-audio-watch-intent.test.ts`. Drop separately.
   `selectWatchedPendingScreenAudioIds` from the same module is still live.
