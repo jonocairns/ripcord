@@ -782,6 +782,25 @@ describe('remote media subscriptions', () => {
 			expect(isConsumeCommandRunnable(state, { ...consumeCommandFor(state, 2, StreamKind.VIDEO) })).toBe(false);
 		});
 
+		it('skips a consume minted for a producer that was since replaced', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer-old'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 2, StreamKind.VIDEO, 110));
+			const command = consumeCommandFor(state, 2, StreamKind.VIDEO);
+			expect(command.producerId).toBe('video-producer-old');
+
+			// The producer is replaced (reconnect/repair) before the queued command
+			// drains. Running the stale command would re-stamp the ledger with the
+			// dead producer id and tear down the live consumer.
+			state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 120, 'video-producer-new'));
+
+			expect(state.get(getPendingStreamKey(2, StreamKind.VIDEO))?.producerId).toBe('video-producer-new');
+			expect(isConsumeCommandRunnable(state, command)).toBe(false);
+			// A command carrying the current producer id still runs.
+			expect(isConsumeCommandRunnable(state, consumeCommandFor(state, 2, StreamKind.VIDEO))).toBe(true);
+		});
+
 		it('only runs a manual-retry consume against a retrying slot', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
 

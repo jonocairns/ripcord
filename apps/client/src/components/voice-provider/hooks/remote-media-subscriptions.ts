@@ -281,6 +281,21 @@ export const isConsumeCommandRunnable = (
 		return false;
 	}
 
+	// Drop a command minted for a now-superseded producer. The server consume
+	// route resolves the producer itself (expectedProducerId is client-only), but
+	// running a stale command still flows its old producerId through
+	// markRemoteConsumeStarted -> markRemoteProducerPresent, whose producer-
+	// replaced branch would re-stamp the ledger with the dead id and tear down the
+	// live consumer before the server's real id lands on success. Mirrors the
+	// "both known and differ" producer-mismatch guard used across the reducers.
+	if (
+		command.producerId !== undefined &&
+		subscription.producerId !== undefined &&
+		command.producerId !== subscription.producerId
+	) {
+		return false;
+	}
+
 	return isSubscriptionConsumeEligible(
 		subscription,
 		subscriptions,
