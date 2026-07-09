@@ -414,6 +414,74 @@ describe('remote media subscriptions', () => {
 		});
 	});
 
+	it('resets a consumed slot and tears down its consumer when the producer is replaced', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'producer-a'));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'producer-a'));
+		state = remoteMediaState(
+			markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'producer-a', 'consumer-a'),
+		);
+
+		const key = getPendingStreamKey(1, StreamKind.AUDIO);
+
+		// A snapshot reporting a replacement producer with no matching close event
+		// must not leave the slot stranded on the dead consumer for producer-a.
+		const replaced = markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 200, 'producer-b');
+
+		expect(replaced.state.get(key)).toMatchObject({
+			status: 'wanted',
+			desired: true,
+			producerPresent: true,
+			producerId: 'producer-b',
+			consumerId: undefined,
+		});
+		expect(replaced.commands).toContainEqual({
+			type: 'closeConsumer',
+			key,
+			remoteId: 1,
+			kind: StreamKind.AUDIO,
+			consumerId: 'consumer-a',
+			generation: undefined,
+		});
+		// The replacement producer re-enters the pending map so it actually gets consumed.
+		expect(remoteMediaSubscriptionsToPendingStreams(replaced.state).get(key)).toMatchObject({
+			producerId: 'producer-b',
+		});
+	});
+
+	it('reconciles a replaced producer through the snapshot path', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'producer-a'));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'producer-a'));
+		state = remoteMediaState(
+			markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'producer-a', 'consumer-a'),
+		);
+
+		const key = getPendingStreamKey(1, StreamKind.AUDIO);
+		const reconciled = reconcileRemoteMediaWithProducerSnapshot(
+			state,
+			makeProducers({ remoteAudioProducers: [{ remoteId: 1, producerId: 'producer-b' }] }),
+			undefined,
+			200,
+		);
+
+		expect(reconciled.state.get(key)).toMatchObject({
+			status: 'wanted',
+			producerId: 'producer-b',
+			consumerId: undefined,
+		});
+		expect(reconciled.commands).toContainEqual({
+			type: 'closeConsumer',
+			key,
+			remoteId: 1,
+			kind: StreamKind.AUDIO,
+			consumerId: 'consumer-a',
+			generation: undefined,
+		});
+	});
+
 	it('ignores consumer-close events that do not match the ledger consumer', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 

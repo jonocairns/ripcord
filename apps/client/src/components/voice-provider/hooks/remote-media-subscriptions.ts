@@ -312,10 +312,18 @@ export const markRemoteProducerPresent = (
 	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
 	const base = existing ?? makeSubscription(remoteId, kind, now, producerId);
 	const desired = base.desired || isAutoDesiredKind(kind) || inheritsScreenAudioDesire(subscriptions, remoteId, kind);
+	// A snapshot reporting a different producerId for the same slot means the
+	// producer was replaced without a matching close event (reconnect/repair).
+	// Preserving consumed/consuming/retrying here would strand the slot on a dead
+	// consumer and hide the new producer from the pending map, so treat the slot
+	// as fresh and tear down the stale consumer.
+	const producerReplaced = producerId !== undefined && base.producerId !== undefined && base.producerId !== producerId;
 	const status =
-		base.status === 'consuming' || base.status === 'retrying' || base.status === 'consumed'
+		!producerReplaced &&
+		(base.status === 'consuming' || base.status === 'retrying' || base.status === 'consumed')
 			? base.status
 			: getInitialStatus(true, desired);
+	const replacedCloseCommand = producerReplaced ? closeConsumerCommandFor(base) : undefined;
 
 	const state = applySlotUpdate(
 		subscriptions,
@@ -324,6 +332,8 @@ export const markRemoteProducerPresent = (
 			...base,
 			producerPresent: true,
 			producerId: producerId ?? base.producerId,
+			consumerId: producerReplaced ? undefined : base.consumerId,
+			consumeGeneration: producerReplaced ? undefined : base.consumeGeneration,
 			desired,
 			status,
 			pendingSince: status === 'consumed' ? undefined : (base.pendingSince ?? now),
@@ -333,7 +343,10 @@ export const markRemoteProducerPresent = (
 
 	return {
 		state,
-		commands: maybeConsumeCommand(state, base.key, context),
+		commands: [
+			...(replacedCloseCommand ? [replacedCloseCommand] : []),
+			...maybeConsumeCommand(state, base.key, context),
+		],
 	};
 };
 
@@ -981,32 +994,42 @@ const hasSubscriptionChanged = (prev: TRemoteMediaSubscriptions, next: TRemoteMe
 };
 
 export const useRemoteMediaSubscriptions = () => {
-	const [remoteMediaSubscriptions, setRemoteMediaSubscriptions] = useState<TRemoteMediaSubscriptions>(() => new Map());
-	const [remoteMediaCommands, setRemoteMediaCommands] = useState<TRemoteMediaCommand[]>([]);
-	const enqueueCommands = useCallback((commands: TRemoteMediaCommand[]) => {
-		if (commands.length > 0) {
-			setRemoteMediaCommands((prev) => [...prev, ...commands]);
-		}
-	}, []);
+	// Subscriptions and the pending command queue share one atomic state so the
+	// reducer runs inside a *pure* functional updater. Enqueuing commands used to
+	// live as a nested setState side effect inside the subscriptions updater,
+	// which StrictMode's intentional double-invoke turned into duplicate
+	// consume/close operations.
+	const [remoteMediaState, setRemoteMediaState] = useState<{
+		subscriptions: TRemoteMediaSubscriptions;
+		commands: TRemoteMediaCommand[];
+	}>(() => ({ subscriptions: new Map(), commands: [] }));
+	const { subscriptions: remoteMediaSubscriptions, commands: remoteMediaCommands } = remoteMediaState;
 	const update = useCallback(
 		(nextFor: (prev: TRemoteMediaSubscriptions, now: number) => TRemoteMediaReducerResult) => {
-			setRemoteMediaSubscriptions((prev) => {
-				const result = nextFor(prev, Date.now());
-				const next = result.state;
+			setRemoteMediaState((prev) => {
+				const result = nextFor(prev.subscriptions, Date.now());
+				const nextSubscriptions = hasSubscriptionChanged(prev.subscriptions, result.state)
+					? result.state
+					: prev.subscriptions;
 
-				enqueueCommands(result.commands);
+				if (nextSubscriptions === prev.subscriptions && result.commands.length === 0) {
+					return prev;
+				}
 
-				return hasSubscriptionChanged(prev, next) ? next : prev;
+				return {
+					subscriptions: nextSubscriptions,
+					commands: result.commands.length > 0 ? [...prev.commands, ...result.commands] : prev.commands,
+				};
 			});
 		},
-		[enqueueCommands],
+		[],
 	);
 	const clearRemoteMediaCommands = useCallback((commandsToClear: TRemoteMediaCommand[]) => {
 		if (commandsToClear.length === 0) {
 			return;
 		}
 
-		setRemoteMediaCommands((prev) => prev.slice(commandsToClear.length));
+		setRemoteMediaState((prev) => ({ ...prev, commands: prev.commands.slice(commandsToClear.length) }));
 	}, []);
 	const pendingStreams = useMemo(
 		() => remoteMediaSubscriptionsToPendingStreams(remoteMediaSubscriptions),
@@ -1035,8 +1058,9 @@ export const useRemoteMediaSubscriptions = () => {
 		[update],
 	);
 	const clearAllPendingStreams = useCallback(() => {
-		setRemoteMediaSubscriptions((prev) => (prev.size === 0 ? prev : new Map()));
-		setRemoteMediaCommands([]);
+		setRemoteMediaState((prev) =>
+			prev.subscriptions.size === 0 && prev.commands.length === 0 ? prev : { subscriptions: new Map(), commands: [] },
+		);
 	}, []);
 	const reconcilePendingStreams = useCallback(
 		(producers: TRemoteProducerIds, externalStreamTracks?: TExternalStreamTrackPresence) => {
