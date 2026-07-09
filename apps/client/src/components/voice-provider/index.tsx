@@ -1219,9 +1219,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		currentVoiceChannelId,
 		rtpCapabilities: voiceEventRtpCapabilities,
 		commands: remoteMediaCommands,
+		remoteMediaSubscriptions,
 		clearCommands: clearRemoteMediaCommands,
 		consume,
 		closeConsumer,
+		getExternalStreamTrackPresence,
 	});
 
 	useEffect(() => {

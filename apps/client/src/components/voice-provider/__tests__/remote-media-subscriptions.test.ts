@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
 import {
+	isConsumeCommandRunnable,
 	markRemoteConsumeFailed,
+	markRemoteConsumerClosed,
 	markRemoteConsumeStarted,
 	markRemoteConsumeSucceeded,
-	markRemoteConsumerClosed,
 	markRemoteProducerClosed,
 	markRemoteProducerPresent,
 	markRemoteRetryRequested,
@@ -13,11 +14,12 @@ import {
 	reconcileRemoteMediaWithProducerSnapshot,
 	refreshRemoteMediaPendingAges,
 	remoteMediaState,
-	remoteMediaSubscriptionsToRepairScheduleCommand,
 	remoteMediaSubscriptionsToPendingStreams,
+	remoteMediaSubscriptionsToRepairScheduleCommand,
 	remoteMediaSubscriptionsToStreamsToConsume,
 	remoteMediaSubscriptionsToVisibleRemoteMedia,
 	type TRemoteMediaSubscriptions,
+	type TStreamsToConsumeCommand,
 } from '../hooks/remote-media-subscriptions';
 import { getPendingStreamKey } from '../hooks/use-pending-streams';
 
@@ -419,9 +421,7 @@ describe('remote media subscriptions', () => {
 
 		state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'producer-a'));
 		state = remoteMediaState(markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'producer-a'));
-		state = remoteMediaState(
-			markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'producer-a', 'consumer-a'),
-		);
+		state = remoteMediaState(markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'producer-a', 'consumer-a'));
 
 		const key = getPendingStreamKey(1, StreamKind.AUDIO);
 
@@ -455,9 +455,7 @@ describe('remote media subscriptions', () => {
 
 		state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'producer-a'));
 		state = remoteMediaState(markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'producer-a'));
-		state = remoteMediaState(
-			markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'producer-a', 'consumer-a'),
-		);
+		state = remoteMediaState(markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'producer-a', 'consumer-a'));
 
 		const key = getPendingStreamKey(1, StreamKind.AUDIO);
 		const reconciled = reconcileRemoteMediaWithProducerSnapshot(
@@ -675,6 +673,40 @@ describe('remote media subscriptions', () => {
 			});
 		});
 
+		it('preserves the screen-audio cascade when a screen consume is started directly', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			// A direct restore consume: the screen + its audio producers are present
+			// but no markWatchRequested ran first (reconnect restore calls consume()
+			// directly), so this call is the only place the screen-audio consume can
+			// be minted.
+			state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+			state = remoteMediaState(
+				markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'screen-audio-producer'),
+			);
+
+			const result = markRemoteConsumeStarted(state, 3, StreamKind.SCREEN, 110, 'screen-producer', 1);
+
+			// The discovered screen-audio consume is preserved...
+			expect(result.commands).toContainEqual(
+				expect.objectContaining({
+					type: 'consume',
+					key: getPendingStreamKey(3, StreamKind.SCREEN_AUDIO),
+					remoteId: 3,
+					kind: StreamKind.SCREEN_AUDIO,
+					producerId: 'screen-audio-producer',
+				}),
+			);
+			// ...while the command for the slot being started here is dropped (its
+			// consume is already in flight via this call).
+			expect(
+				result.commands.some(
+					(command) => command.type === 'consume' && command.key === getPendingStreamKey(3, StreamKind.SCREEN),
+				),
+			).toBe(false);
+			expect(result.state.get(getPendingStreamKey(3, StreamKind.SCREEN))?.status).toBe('consuming');
+		});
+
 		it('does not emit close commands for stale consumer-close results', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
 
@@ -702,6 +734,67 @@ describe('remote media subscriptions', () => {
 				retryAt: 15_100,
 				generation: 100,
 			});
+		});
+	});
+
+	describe('consume command revalidation', () => {
+		const consumeCommandFor = (
+			state: TRemoteMediaSubscriptions,
+			remoteId: number,
+			kind: StreamKind,
+			isManualRetry?: true,
+		): TStreamsToConsumeCommand => ({
+			type: 'consume',
+			key: getPendingStreamKey(remoteId, kind),
+			remoteId,
+			kind,
+			producerId: state.get(getPendingStreamKey(remoteId, kind))?.producerId,
+			generation: 1,
+			isManualRetry,
+		});
+
+		it('runs a consume whose slot is still wanted', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 2, StreamKind.VIDEO, 110));
+
+			expect(isConsumeCommandRunnable(state, consumeCommandFor(state, 2, StreamKind.VIDEO))).toBe(true);
+		});
+
+		it('skips a consume whose watch was stopped before it drained', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 2, StreamKind.VIDEO, 110));
+			const command = consumeCommandFor(state, 2, StreamKind.VIDEO);
+
+			// The user stops watching while the command sits queued (rtpCapabilities
+			// unavailable). Running it later would resurrect the stopped stream.
+			state = remoteMediaState(markRemoteWatchStopped(state, 2, StreamKind.VIDEO, 120));
+
+			expect(isConsumeCommandRunnable(state, command)).toBe(false);
+		});
+
+		it('skips a consume whose slot no longer exists', () => {
+			const state: TRemoteMediaSubscriptions = new Map();
+
+			expect(isConsumeCommandRunnable(state, { ...consumeCommandFor(state, 2, StreamKind.VIDEO) })).toBe(false);
+		});
+
+		it('only runs a manual-retry consume against a retrying slot', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-producer'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110));
+
+			// A manual-retry command against a 'wanted' (not 'retrying') slot is stale.
+			expect(isConsumeCommandRunnable(state, consumeCommandFor(state, 3, StreamKind.SCREEN, true))).toBe(false);
+
+			state = remoteMediaState(markRemoteConsumeFailed(state, 3, StreamKind.SCREEN, 120, 'consume failed'));
+			state = remoteMediaState(markRemoteRetryRequested(state, 3, StreamKind.SCREEN, 130));
+
+			expect(isConsumeCommandRunnable(state, consumeCommandFor(state, 3, StreamKind.SCREEN, true))).toBe(true);
 		});
 	});
 

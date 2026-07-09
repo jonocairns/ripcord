@@ -1,8 +1,8 @@
 import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
 import { useCallback, useMemo, useState } from 'react';
 import {
-	getPendingStreamKey,
 	getOldestRepairEligiblePendingCreatedAt,
+	getPendingStreamKey,
 	isExternalTrackPresent,
 	PENDING_STREAM_REPAIR_AGE_MS,
 	type TExternalStreamTrackPresence,
@@ -211,20 +211,33 @@ const canConsumeScreenAudio = (
 	return screen?.desired === true && screen.producerPresent;
 };
 
+// The single source of truth for "may this slot be consumed right now": the
+// producer is live, the user still wants it, it is in the state this consume was
+// minted for (wanted, or retrying for a manual retry), and any external/screen-
+// audio preconditions hold. Both command minting (toConsumeCommand) and the
+// runner's drain-time revalidation (isConsumeCommandRunnable) go through here so
+// a queued consume can never outlive the intent that produced it.
+const isSubscriptionConsumeEligible = (
+	subscription: TRemoteMediaSubscription,
+	subscriptions: TRemoteMediaSubscriptions,
+	context: TRemoteMediaCommandContext | undefined,
+	isManualRetry: boolean,
+): boolean =>
+	subscription.producerPresent &&
+	subscription.desired &&
+	(isManualRetry ? subscription.status === 'retrying' : subscription.status === 'wanted') &&
+	!(
+		isExternalStreamKind(subscription.kind) && !canConsumeExternalStream(subscription, context?.externalStreamTracks)
+	) &&
+	canConsumeScreenAudio(subscription, subscriptions);
+
 const toConsumeCommand = (
 	subscription: TRemoteMediaSubscription,
 	subscriptions: TRemoteMediaSubscriptions,
 	context?: TRemoteMediaCommandContext,
 	isManualRetry = false,
 ): TStreamsToConsumeCommand | undefined => {
-	if (
-		!subscription.producerPresent ||
-		!subscription.desired ||
-		(isManualRetry ? subscription.status !== 'retrying' : subscription.status !== 'wanted') ||
-		(isExternalStreamKind(subscription.kind) &&
-			!canConsumeExternalStream(subscription, context?.externalStreamTracks)) ||
-		!canConsumeScreenAudio(subscription, subscriptions)
-	) {
+	if (!isSubscriptionConsumeEligible(subscription, subscriptions, context, isManualRetry)) {
 		return undefined;
 	}
 
@@ -248,6 +261,32 @@ const maybeConsumeCommand = (
 	const command = subscription ? toConsumeCommand(subscription, subscriptions, context) : undefined;
 
 	return command ? [command] : [];
+};
+
+// Revalidates a queued consume command against the live ledger just before the
+// runner executes it. A consume can sit in the queue while rtpCapabilities is
+// null (no runner) and outlive its intent — e.g. the user stops watching, which
+// flips the slot to desired:false/status:'available'. Running the stale command
+// would call markRemoteConsumeStarted, re-request the watch, and resurrect media
+// the user explicitly stopped, so the runner drops any command whose slot is no
+// longer consume-eligible.
+export const isConsumeCommandRunnable = (
+	subscriptions: TRemoteMediaSubscriptions,
+	command: TStreamsToConsumeCommand,
+	externalStreamTracks?: TExternalStreamTrackPresence,
+): boolean => {
+	const subscription = subscriptions.get(command.key);
+
+	if (subscription === undefined) {
+		return false;
+	}
+
+	return isSubscriptionConsumeEligible(
+		subscription,
+		subscriptions,
+		{ externalStreamTracks },
+		command.isManualRetry === true,
+	);
 };
 
 const closeConsumerCommandFor = (
@@ -319,8 +358,7 @@ export const markRemoteProducerPresent = (
 	// as fresh and tear down the stale consumer.
 	const producerReplaced = producerId !== undefined && base.producerId !== undefined && base.producerId !== producerId;
 	const status =
-		!producerReplaced &&
-		(base.status === 'consuming' || base.status === 'retrying' || base.status === 'consumed')
+		!producerReplaced && (base.status === 'consuming' || base.status === 'retrying' || base.status === 'consumed')
 			? base.status
 			: getInitialStatus(true, desired);
 	const replacedCloseCommand = producerReplaced ? closeConsumerCommandFor(base) : undefined;
@@ -478,16 +516,26 @@ export const markRemoteConsumeStarted = (
 	consumeGeneration?: number,
 	isManualRetry = false,
 ): TRemoteMediaReducerResult => {
-	const next = markRemoteWatchRequested(
-		markRemoteProducerPresent(subscriptions, remoteId, kind, now, producerId).state,
-		remoteId,
-		kind,
-		now,
-	).state;
-	const existing = next.get(getPendingStreamKey(remoteId, kind));
+	const key = getPendingStreamKey(remoteId, kind);
+	const presentResult = markRemoteProducerPresent(subscriptions, remoteId, kind, now, producerId);
+	const watchResult = markRemoteWatchRequested(presentResult.state, remoteId, kind, now);
+	const next = watchResult.state;
+	// Preserve commands the present/watch cascade emitted for *other* slots — most
+	// importantly, starting a SCREEN consume discovers its SCREEN_AUDIO slot and
+	// enqueues that consume. A direct restore (`consume(remoteId, SCREEN)` on
+	// reconnect) never calls markWatchRequested, so this cascade is the only place
+	// the screen-audio consume is minted; dropping it stranded restored screen
+	// audio until repair. The command for the slot we are starting here is dropped:
+	// its consume is already in flight (this call), and the runner revalidates any
+	// preserved command against the live ledger, so a redundant cross-slot consume
+	// for an already-consuming slot is skipped rather than re-run.
+	const cascadedCommands = [...presentResult.commands, ...watchResult.commands].filter(
+		(command) => command.key !== key,
+	);
+	const existing = next.get(key);
 
 	if (!existing) {
-		return emptyResult(next);
+		return { state: next, commands: cascadedCommands };
 	}
 
 	const closeCommand = closeConsumerCommandFor(existing);
@@ -509,7 +557,7 @@ export const markRemoteConsumeStarted = (
 
 	return {
 		state,
-		commands: closeCommand ? [closeCommand] : [],
+		commands: closeCommand ? [...cascadedCommands, closeCommand] : cascadedCommands,
 	};
 };
 
@@ -1004,26 +1052,23 @@ export const useRemoteMediaSubscriptions = () => {
 		commands: TRemoteMediaCommand[];
 	}>(() => ({ subscriptions: new Map(), commands: [] }));
 	const { subscriptions: remoteMediaSubscriptions, commands: remoteMediaCommands } = remoteMediaState;
-	const update = useCallback(
-		(nextFor: (prev: TRemoteMediaSubscriptions, now: number) => TRemoteMediaReducerResult) => {
-			setRemoteMediaState((prev) => {
-				const result = nextFor(prev.subscriptions, Date.now());
-				const nextSubscriptions = hasSubscriptionChanged(prev.subscriptions, result.state)
-					? result.state
-					: prev.subscriptions;
+	const update = useCallback((nextFor: (prev: TRemoteMediaSubscriptions, now: number) => TRemoteMediaReducerResult) => {
+		setRemoteMediaState((prev) => {
+			const result = nextFor(prev.subscriptions, Date.now());
+			const nextSubscriptions = hasSubscriptionChanged(prev.subscriptions, result.state)
+				? result.state
+				: prev.subscriptions;
 
-				if (nextSubscriptions === prev.subscriptions && result.commands.length === 0) {
-					return prev;
-				}
+			if (nextSubscriptions === prev.subscriptions && result.commands.length === 0) {
+				return prev;
+			}
 
-				return {
-					subscriptions: nextSubscriptions,
-					commands: result.commands.length > 0 ? [...prev.commands, ...result.commands] : prev.commands,
-				};
-			});
-		},
-		[],
-	);
+			return {
+				subscriptions: nextSubscriptions,
+				commands: result.commands.length > 0 ? [...prev.commands, ...result.commands] : prev.commands,
+			};
+		});
+	}, []);
 	const clearRemoteMediaCommands = useCallback((commandsToClear: TRemoteMediaCommand[]) => {
 		if (commandsToClear.length === 0) {
 			return;
