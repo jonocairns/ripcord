@@ -666,6 +666,17 @@ const createReconnectAttemptId = (): string => {
 	return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
 
+const cancelWatchedRestore = (cancelledKeys: Set<string>, remoteId: number, kind: StreamKind) => {
+	cancelledKeys.add(getPendingStreamKey(remoteId, kind));
+
+	if (kind === StreamKind.SCREEN) {
+		cancelledKeys.add(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO));
+	}
+};
+
+const isWatchedRestoreCancelled = (cancelledKeys: Set<string>, remoteId: number, kind: StreamKind): boolean =>
+	cancelledKeys.has(getPendingStreamKey(remoteId, kind));
+
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const [loading, setLoading] = useState(false);
 	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
@@ -733,6 +744,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const voiceReconnectPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const recoverTransportSessionRef = useRef<(() => Promise<boolean>) | undefined>(undefined);
 	const cleanupMicAudioPipelineRef = useRef<(() => Promise<void>) | undefined>(undefined);
+	const cancelledWatchedRestoreKeysRef = useRef<Set<string>>(new Set());
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
 		if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -948,6 +960,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const captureWatchedRemoteStreams = useCallback((): TWatchedRemoteStreamsSnapshot => {
+		cancelledWatchedRestoreKeysRef.current = new Set();
+
 		const watchedRemoteStreams: Record<number, TRemoteUserStreamKinds[]> = {};
 		const watchedExternalStreams: Record<number, TWatchedExternalStreamKinds> = {};
 
@@ -1061,8 +1075,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const stopWatchingStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
 			// markWatchStopped clears the ledger's desired flag — for SCREEN it also
-			// cascades to SCREEN_AUDIO, and for EXTERNAL_AUDIO/VIDEO it revokes that
-			// stream's intent. No separate ref bookkeeping needed.
+			// cascades to SCREEN_AUDIO, and for EXTERNAL_AUDIO/VIDEO it revokes
+			// that stream's intent. Track this separately so a reconnect restore
+			// snapshot captured before the click cannot resurrect the stream.
+			cancelWatchedRestore(cancelledWatchedRestoreKeysRef.current, remoteId, kind);
 			markWatchStopped(remoteId, kind);
 		},
 		[markWatchStopped],
@@ -3629,6 +3645,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									const numericRemoteId = Number(remoteId);
 
 									kinds.forEach((kind) => {
+										if (isWatchedRestoreCancelled(cancelledWatchedRestoreKeysRef.current, numericRemoteId, kind)) {
+											return;
+										}
+
 										restoreWatchTasks.push(consume(numericRemoteId, kind, currentRtpCapabilities));
 									});
 								});
@@ -3637,11 +3657,31 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									const numericStreamId = Number(streamId);
 
 									if (watchedState.audio) {
-										restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities));
+										if (
+											!isWatchedRestoreCancelled(
+												cancelledWatchedRestoreKeysRef.current,
+												numericStreamId,
+												StreamKind.EXTERNAL_AUDIO,
+											)
+										) {
+											restoreWatchTasks.push(
+												consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities),
+											);
+										}
 									}
 
 									if (watchedState.video) {
-										restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities));
+										if (
+											!isWatchedRestoreCancelled(
+												cancelledWatchedRestoreKeysRef.current,
+												numericStreamId,
+												StreamKind.EXTERNAL_VIDEO,
+											)
+										) {
+											restoreWatchTasks.push(
+												consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities),
+											);
+										}
 									}
 								});
 
@@ -4020,6 +4060,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							const numericRemoteId = Number(remoteId);
 
 							kinds.forEach((kind) => {
+								if (isWatchedRestoreCancelled(cancelledWatchedRestoreKeysRef.current, numericRemoteId, kind)) {
+									return;
+								}
+
 								restoreWatchTasks.push(consume(numericRemoteId, kind, currentRtpCapabilities));
 							});
 						});
@@ -4028,11 +4072,27 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							const numericStreamId = Number(streamId);
 
 							if (watchedState.audio) {
-								restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities));
+								if (
+									!isWatchedRestoreCancelled(
+										cancelledWatchedRestoreKeysRef.current,
+										numericStreamId,
+										StreamKind.EXTERNAL_AUDIO,
+									)
+								) {
+									restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities));
+								}
 							}
 
 							if (watchedState.video) {
-								restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities));
+								if (
+									!isWatchedRestoreCancelled(
+										cancelledWatchedRestoreKeysRef.current,
+										numericStreamId,
+										StreamKind.EXTERNAL_VIDEO,
+									)
+								) {
+									restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities));
+								}
 							}
 						});
 

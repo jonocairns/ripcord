@@ -33,6 +33,7 @@ type TReconnectDeps = {
 	init: () => Promise<void>;
 	getRtpCapabilities: () => object | undefined;
 	consumeExistingProducers: (caps: object) => Promise<void>;
+	isWatchedRestoreCancelled: (id: number, kind: string) => boolean;
 	consume: (id: number, kind: string, caps: object) => Promise<void>;
 	clearRecovery: () => void;
 };
@@ -59,6 +60,10 @@ const runReconnectRestore = async (deps: TReconnectDeps): Promise<void> => {
 			const numericRemoteId = Number(remoteId);
 
 			kinds.forEach((kind) => {
+				if (deps.isWatchedRestoreCancelled(numericRemoteId, kind)) {
+					return;
+				}
+
 				restoreWatchTasks.push(deps.consume(numericRemoteId, kind, currentRtpCapabilities));
 			});
 		});
@@ -66,11 +71,11 @@ const runReconnectRestore = async (deps: TReconnectDeps): Promise<void> => {
 		Object.entries(watchedStreamsSnapshot.externalStreams).forEach(([streamId, watchedState]) => {
 			const numericStreamId = Number(streamId);
 
-			if (watchedState.audio) {
+			if (watchedState.audio && !deps.isWatchedRestoreCancelled(numericStreamId, 'externalAudio')) {
 				restoreWatchTasks.push(deps.consume(numericStreamId, 'externalAudio', currentRtpCapabilities));
 			}
 
-			if (watchedState.video) {
+			if (watchedState.video && !deps.isWatchedRestoreCancelled(numericStreamId, 'externalVideo')) {
 				restoreWatchTasks.push(deps.consume(numericStreamId, 'externalVideo', currentRtpCapabilities));
 			}
 		});
@@ -89,6 +94,7 @@ const makeDeps = (overrides: Partial<TReconnectDeps> = {}): TReconnectDeps => ({
 	init: mock(() => Promise.resolve()),
 	getRtpCapabilities: () => ({}),
 	consumeExistingProducers: mock(() => Promise.resolve()),
+	isWatchedRestoreCancelled: () => false,
 	consume: mock(() => Promise.resolve()),
 	clearRecovery: mock(() => {}),
 	...overrides,
@@ -183,6 +189,36 @@ describe('voice WS-reconnect watch restoration', () => {
 		await runReconnectRestore(deps);
 
 		expect(order).toEqual(['consumeExistingProducers', 'consume']);
+	});
+
+	it('does not restore streams stopped after the watch snapshot is captured', async () => {
+		const cancelled = new Set<string>();
+		const consumed: Array<[number, string]> = [];
+		const deps = makeDeps({
+			captureWatchedStreams: () => ({
+				remoteUserStreams: { '10': ['video'], '20': ['screen', 'screenAudio'] },
+				externalStreams: { '99': { audio: true, video: true } },
+			}),
+			consumeExistingProducers: mock(() => {
+				cancelled.add('20:screen');
+				cancelled.add('20:screenAudio');
+				cancelled.add('99:externalAudio');
+				return Promise.resolve();
+			}),
+			isWatchedRestoreCancelled: (id, kind) => cancelled.has(`${id}:${kind}`),
+			consume: mock((id, kind) => {
+				consumed.push([id, kind]);
+				return Promise.resolve();
+			}),
+		});
+
+		await runReconnectRestore(deps);
+
+		expect(consumed).toContainEqual([10, 'video']);
+		expect(consumed).toContainEqual([99, 'externalVideo']);
+		expect(consumed).not.toContainEqual([20, 'screen']);
+		expect(consumed).not.toContainEqual([20, 'screenAudio']);
+		expect(consumed).not.toContainEqual([99, 'externalAudio']);
 	});
 
 	it('does not restore audio through the snapshot path — audio is auto-consumed by consumeExistingProducers', async () => {
