@@ -70,7 +70,12 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 		}
 
 		const videoSlot = visibleRemoteMediaByKey.get(getPendingStreamKey(voiceUser.id, StreamKind.VIDEO));
-		const hasPendingVideo = isPendingVisibleRemoteMediaSlot(videoSlot);
+		// Only treat the camera as pending while the sharer still has it on. When A
+		// deliberately stops the camera the producer closes but the ledger keeps a
+		// desired VIDEO slot in a 'failed' state — gating on webcamEnabled (as SCREEN
+		// already does via sharingScreen) stops that surfacing as a "Stream
+		// unavailable / Retry" card for a stream that intentionally no longer exists.
+		const hasPendingVideo = isPendingVisibleRemoteMediaSlot(videoSlot) && voiceUser.state.webcamEnabled;
 		const hasConsumedVideo = !!remoteUserStreams[voiceUser.id]?.[StreamKind.VIDEO];
 
 		if (voiceUser.state.sharingScreen && !hasConsumedVideo && !hasPendingVideo) {
@@ -124,7 +129,10 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 		voiceUsers.forEach((voiceUser) => {
 			const userCardId = `user-${voiceUser.id}`;
 			const videoSlot = visibleRemoteMediaByKey.get(getPendingStreamKey(voiceUser.id, StreamKind.VIDEO));
-			const hasPendingVideo = isPendingVisibleRemoteMediaSlot(videoSlot);
+			// Gate on webcamEnabled so a deliberately-stopped camera (producer closed,
+			// but the ledger still holds a desired 'failed' VIDEO slot) falls back to
+			// the avatar tile instead of a stale "Stream unavailable / Retry" card.
+			const hasPendingVideo = isPendingVisibleRemoteMediaSlot(videoSlot) && voiceUser.state.webcamEnabled;
 			const hasConsumedVideo = !!remoteUserStreams[voiceUser.id]?.[StreamKind.VIDEO];
 
 			// Suppress the avatar fallback tile when the user is screen-sharing without a
