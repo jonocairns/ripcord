@@ -22,12 +22,12 @@ describe('getVideoBitratePolicy', () => {
 			frameRate: 30,
 		});
 
-		// 1080p30 table start is 6000; higher tiers start at 9000+. All are
-		// trimmed by the conservative screen start cap while retaining their max
-		// ceilings for later ramp-up.
-		expect(fullHd30).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 12000 });
-		expect(fullHd60).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 18000 });
-		expect(qhd30).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 18000 });
+		// 1080p30 table start (2800) is already below the screen start cap, so it
+		// passes through untouched. 1080p60 and 1440p30 start at 4500 and are
+		// trimmed to the cap, while their max ceilings are retained for ramp-up.
+		expect(fullHd30).toEqual({ startKbps: 2800, maxKbps: 8500 });
+		expect(fullHd60).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 14000 });
+		expect(qhd30).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 14000 });
 	});
 
 	it('uses hardcoded camera buckets by resolution and frame rate', () => {
@@ -64,8 +64,8 @@ describe('getVideoBitratePolicy', () => {
 
 		// Screen start bitrates are capped (see SCREEN_START_KBPS_CAP); the
 		// ceiling still comes from the highest bucket.
-		expect(screenExtreme).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 100000 });
-		expect(cameraExtreme).toEqual({ startKbps: 11000, maxKbps: 24000 });
+		expect(screenExtreme).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 52000 });
+		expect(cameraExtreme).toEqual({ startKbps: 7500, maxKbps: 15000 });
 	});
 
 	it('caps high screen-tier start bitrates without touching the ceiling', () => {
@@ -82,10 +82,10 @@ describe('getVideoBitratePolicy', () => {
 			frameRate: 30,
 		});
 
-		// Table values are 14000 start for both tiers; the cap brings them down
-		// while leaving the max ceilings from the table untouched.
-		expect(qhd60).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 28000 });
-		expect(uhd30).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 30000 });
+		// Table start values (7000) exceed the cap for both tiers; the cap brings
+		// them down while leaving the max ceilings from the table untouched.
+		expect(qhd60).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 24000 });
+		expect(uhd30).toEqual({ startKbps: SCREEN_START_KBPS_CAP, maxKbps: 28000 });
 	});
 
 	it('does not cap camera start bitrates', () => {
@@ -96,7 +96,7 @@ describe('getVideoBitratePolicy', () => {
 			frameRate: 120,
 		});
 
-		expect(cameraHigh.startKbps).toBe(11000);
+		expect(cameraHigh.startKbps).toBe(7500);
 	});
 
 	it('scales only maxKbps per codec, leaving startKbps untouched', () => {
@@ -111,9 +111,9 @@ describe('getVideoBitratePolicy', () => {
 		expect(vp8.startKbps).toBe(base.startKbps);
 		expect(vp9.startKbps).toBe(base.startKbps);
 
-		// maxKbps is scaled by the per-codec multiplier (base maxKbps = 12000).
-		expect(h264.maxKbps).toBe(12000);
-		expect(vp8.maxKbps).toBe(13800);
-		expect(vp9.maxKbps).toBe(10800);
+		// maxKbps is scaled by the per-codec multiplier (base maxKbps = 8500).
+		expect(h264.maxKbps).toBe(8500);
+		expect(vp8.maxKbps).toBe(9775);
+		expect(vp9.maxKbps).toBe(7650);
 	});
 });

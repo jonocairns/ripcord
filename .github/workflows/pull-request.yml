@@ -42,6 +42,14 @@ jobs:
         working-directory: apps/server
         run: bun test
 
+      - name: Run client tests
+        working-directory: apps/client
+        run: bun test
+
+      - name: Run desktop tests
+        working-directory: apps/desktop
+        run: bun test
+
   sidecar-windows:
     name: Desktop Build + Sidecar (Windows)
     runs-on: windows-latest
