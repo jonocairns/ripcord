@@ -1246,18 +1246,26 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		Object.entries(currentChannelExternalStreams).forEach(([streamId, stream]) => {
 			const numericStreamId = Number(streamId);
 			const activeExternalStream = externalStreams[numericStreamId];
-			const hasPendingExternalAudio = pendingStreams.has(
-				getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_AUDIO),
-			);
-			const hasPendingExternalVideo = pendingStreams.has(
-				getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_VIDEO),
-			);
+			const externalAudioKey = getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_AUDIO);
+			const externalVideoKey = getPendingStreamKey(numericStreamId, StreamKind.EXTERNAL_VIDEO);
+			const hasPendingExternalAudio = pendingStreams.has(externalAudioKey);
+			const hasPendingExternalVideo = pendingStreams.has(externalVideoKey);
+			const externalAudioSubscription = remoteMediaSubscriptions.get(externalAudioKey);
+			const externalVideoSubscription = remoteMediaSubscriptions.get(externalVideoKey);
 
-			if (stream.tracks.audio && !activeExternalStream?.audioStream && !hasPendingExternalAudio) {
+			if (
+				stream.tracks.audio &&
+				!activeExternalStream?.audioStream &&
+				(!hasPendingExternalAudio || externalAudioSubscription?.desired === true)
+			) {
 				addPendingStream(numericStreamId, StreamKind.EXTERNAL_AUDIO, undefined, getExternalStreamTrackPresence());
 			}
 
-			if (stream.tracks.video && !activeExternalStream?.videoStream && !hasPendingExternalVideo) {
+			if (
+				stream.tracks.video &&
+				!activeExternalStream?.videoStream &&
+				(!hasPendingExternalVideo || externalVideoSubscription?.desired === true)
+			) {
 				addPendingStream(numericStreamId, StreamKind.EXTERNAL_VIDEO, undefined, getExternalStreamTrackPresence());
 			}
 		});
@@ -1267,6 +1275,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		externalStreams,
 		getExternalStreamTrackPresence,
 		pendingStreams,
+		remoteMediaSubscriptions,
 	]);
 
 	useRemoteMediaRepairRunner({

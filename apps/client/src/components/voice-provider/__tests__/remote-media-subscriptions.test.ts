@@ -576,6 +576,38 @@ describe('remote media subscriptions', () => {
 			expect(result.commands).toEqual([]);
 		});
 
+		it('emits a consume command when external track metadata arrives after watch intent', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(
+				markRemoteProducerPresent(state, 50, StreamKind.EXTERNAL_AUDIO, 100, 'external-audio-producer'),
+			);
+
+			const watchResult = markRemoteWatchRequested(state, 50, StreamKind.EXTERNAL_AUDIO, 110);
+			expect(watchResult.commands).toEqual([]);
+			state = remoteMediaState(watchResult);
+
+			const metadataArrivedResult = markRemoteProducerPresent(
+				state,
+				50,
+				StreamKind.EXTERNAL_AUDIO,
+				120,
+				'external-audio-producer',
+				{ externalStreamTracks: { 50: { audio: true } } },
+			);
+
+			expect(metadataArrivedResult.commands).toEqual([
+				{
+					type: 'consume',
+					key: getPendingStreamKey(50, StreamKind.EXTERNAL_AUDIO),
+					remoteId: 50,
+					kind: StreamKind.EXTERNAL_AUDIO,
+					producerId: 'external-audio-producer',
+					generation: 1,
+				},
+			]);
+		});
+
 		it('emits a manual-retry consume command with the current producer id', () => {
 			let state: TRemoteMediaSubscriptions = new Map();
 
