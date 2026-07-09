@@ -51,6 +51,22 @@ const getAudioLevelFromStats = (report: RTCStatsReport): number | undefined => {
 	return audioLevel;
 };
 
+// Timer/clock seam. Production runs on wall-clock time; the state machine's
+// cadence (warm-up gating, poll interval, release delay) must not depend on how
+// fast polls actually fire under load. Tests inject a virtual clock so the
+// sample sequence is deterministic instead of racing real timers.
+type VoiceActivityScheduler = {
+	now: () => number;
+	setTimeout: (handler: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
+	clearTimeout: (handle: ReturnType<typeof setTimeout>) => void;
+};
+
+const defaultVoiceActivityScheduler: VoiceActivityScheduler = {
+	now: () => Date.now(),
+	setTimeout: (handler, delayMs) => setTimeout(handler, delayMs),
+	clearTimeout: (handle) => clearTimeout(handle),
+};
+
 const startLocalVoiceActivityMonitor = ({
 	statsProvider,
 	onUpdate,
@@ -59,6 +75,7 @@ const startLocalVoiceActivityMonitor = ({
 	warmupQuietSamples = LOCAL_VOICE_ACTIVITY_WARMUP_QUIET_SAMPLES,
 	warmupTimeoutMs = LOCAL_VOICE_ACTIVITY_WARMUP_TIMEOUT_MS,
 	attackSamples = LOCAL_VOICE_ACTIVITY_ATTACK_SAMPLES,
+	scheduler = defaultVoiceActivityScheduler,
 }: {
 	statsProvider: LocalVoiceActivityStatsProvider;
 	onUpdate: (isSpeaking: LocalVoiceActivityUpdate) => void;
@@ -67,12 +84,13 @@ const startLocalVoiceActivityMonitor = ({
 	warmupQuietSamples?: number;
 	warmupTimeoutMs?: number;
 	attackSamples?: number;
+	scheduler?: VoiceActivityScheduler;
 }): (() => void) => {
 	let cancelled = false;
 	let pollTimer: ReturnType<typeof setTimeout> | undefined;
 	let releaseTimer: ReturnType<typeof setTimeout> | undefined;
 	let currentActivity: LocalVoiceActivityUpdate;
-	const warmupStartedAt = Date.now();
+	const warmupStartedAt = scheduler.now();
 	let quietSampleCount = 0;
 	let loudSampleCount = 0;
 	let hasWarmedUp = false;
@@ -91,7 +109,7 @@ const startLocalVoiceActivityMonitor = ({
 			return;
 		}
 
-		clearTimeout(releaseTimer);
+		scheduler.clearTimeout(releaseTimer);
 		releaseTimer = undefined;
 	};
 
@@ -119,7 +137,7 @@ const startLocalVoiceActivityMonitor = ({
 
 				if (!hasWarmedUp) {
 					quietSampleCount = isLoud ? 0 : quietSampleCount + 1;
-					hasWarmedUp = quietSampleCount >= warmupQuietSamples || Date.now() - warmupStartedAt >= warmupTimeoutMs;
+					hasWarmedUp = quietSampleCount >= warmupQuietSamples || scheduler.now() - warmupStartedAt >= warmupTimeoutMs;
 
 					if (!hasWarmedUp) {
 						update(undefined);
@@ -141,7 +159,7 @@ const startLocalVoiceActivityMonitor = ({
 
 					if (currentActivity === true) {
 						if (releaseTimer === undefined) {
-							releaseTimer = setTimeout(() => {
+							releaseTimer = scheduler.setTimeout(() => {
 								releaseTimer = undefined;
 								update(false);
 							}, releaseDelayMs);
@@ -157,7 +175,7 @@ const startLocalVoiceActivityMonitor = ({
 		}
 
 		if (!cancelled) {
-			pollTimer = setTimeout(() => {
+			pollTimer = scheduler.setTimeout(() => {
 				void sample();
 			}, pollIntervalMs);
 		}
@@ -170,7 +188,7 @@ const startLocalVoiceActivityMonitor = ({
 		cancelled = true;
 
 		if (pollTimer !== undefined) {
-			clearTimeout(pollTimer);
+			scheduler.clearTimeout(pollTimer);
 			pollTimer = undefined;
 		}
 

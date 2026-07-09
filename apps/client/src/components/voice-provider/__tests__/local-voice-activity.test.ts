@@ -19,10 +19,70 @@ const createStatsReport = (stats: RTCStats[]): RTCStatsReport => {
 	return new Map(stats.map((stat) => [stat.id, stat])) as unknown as RTCStatsReport;
 };
 
-const wait = (durationMs: number): Promise<void> =>
-	new Promise((resolve) => {
-		setTimeout(resolve, durationMs);
-	});
+// Virtual clock for the activity monitor. Real timers made these tests flaky:
+// the monitor advances its state machine on setTimeout/Date.now() and the
+// assertions checked fixed wall-clock offsets, so under CI load the sample count
+// at each checkpoint drifted. Driving a manual scheduler makes the sample
+// sequence deterministic regardless of how fast timers actually fire.
+const createManualScheduler = () => {
+	let currentTime = 0;
+	let nextId = 0;
+	const timers = new Map<number, { time: number; handler: () => void }>();
+
+	const scheduler = {
+		now: () => currentTime,
+		setTimeout: (handler: () => void, delayMs: number) => {
+			nextId += 1;
+			timers.set(nextId, { time: currentTime + delayMs, handler });
+			return nextId as unknown as ReturnType<typeof setTimeout>;
+		},
+		clearTimeout: (handle: ReturnType<typeof setTimeout>) => {
+			timers.delete(handle as unknown as number);
+		},
+	};
+
+	// Let awaited microtasks (statsProvider.getStats) settle so each sample's
+	// continuation schedules its next timer before we look for the next one.
+	const flushMicrotasks = async () => {
+		for (let i = 0; i < 5; i += 1) {
+			await Promise.resolve();
+		}
+	};
+
+	// Advance virtual time to now + ms, firing every timer that comes due in
+	// chronological order and flushing microtasks between fires so the async poll
+	// loop stays deterministic.
+	const advance = async (ms: number) => {
+		const target = currentTime + ms;
+		await flushMicrotasks();
+
+		for (let guard = 0; guard < 100_000; guard += 1) {
+			let dueId: number | undefined;
+			let dueTime = Number.POSITIVE_INFINITY;
+
+			for (const [id, timer] of timers) {
+				if (timer.time <= target && timer.time < dueTime) {
+					dueTime = timer.time;
+					dueId = id;
+				}
+			}
+
+			if (dueId === undefined) {
+				break;
+			}
+
+			const timer = timers.get(dueId)!;
+			timers.delete(dueId);
+			currentTime = timer.time;
+			timer.handler();
+			await flushMicrotasks();
+		}
+
+		currentTime = target;
+	};
+
+	return { scheduler, advance };
+};
 
 describe('getAudioLevelFromStats', () => {
 	it('returns the highest normalized audio level from audio stats', () => {
@@ -76,6 +136,7 @@ describe('startLocalVoiceActivityMonitor', () => {
 		]);
 		let sampleCount = 0;
 		const updates: Array<boolean | undefined> = [];
+		const { scheduler, advance } = createManualScheduler();
 		const stop = startLocalVoiceActivityMonitor({
 			statsProvider: {
 				getStats: async () => {
@@ -88,15 +149,16 @@ describe('startLocalVoiceActivityMonitor', () => {
 			},
 			pollIntervalMs: 5,
 			releaseDelayMs: 20,
+			scheduler,
 		});
 
-		await wait(20);
+		await advance(20);
 		expect(updates).toEqual([undefined, false]);
 
-		await wait(15);
+		await advance(15);
 		expect(updates).toEqual([undefined, false, true]);
 
-		await wait(30);
+		await advance(30);
 		expect(updates).toEqual([undefined, false, true, false]);
 
 		stop();
@@ -118,6 +180,7 @@ describe('startLocalVoiceActivityMonitor', () => {
 		]);
 		let sampleCount = 0;
 		const updates: Array<boolean | undefined> = [];
+		const { scheduler, advance } = createManualScheduler();
 		const stop = startLocalVoiceActivityMonitor({
 			statsProvider: {
 				getStats: async () => {
@@ -130,9 +193,10 @@ describe('startLocalVoiceActivityMonitor', () => {
 			},
 			pollIntervalMs: 2,
 			warmupTimeoutMs: 100,
+			scheduler,
 		});
 
-		await wait(30);
+		await advance(30);
 		expect(updates).toEqual([undefined, false]);
 
 		stop();
@@ -147,6 +211,7 @@ describe('startLocalVoiceActivityMonitor', () => {
 			}),
 		]);
 		const updates: Array<boolean | undefined> = [];
+		const { scheduler, advance } = createManualScheduler();
 		const stop = startLocalVoiceActivityMonitor({
 			statsProvider: {
 				getStats: async () => loudReport,
@@ -156,9 +221,10 @@ describe('startLocalVoiceActivityMonitor', () => {
 			},
 			pollIntervalMs: 5,
 			warmupTimeoutMs: 15,
+			scheduler,
 		});
 
-		await wait(35);
+		await advance(35);
 		expect(updates).toEqual([undefined, true]);
 
 		stop();
@@ -167,6 +233,7 @@ describe('startLocalVoiceActivityMonitor', () => {
 
 	it('falls back to server activity when stats do not expose an audio level', async () => {
 		const updates: Array<boolean | undefined> = [];
+		const { scheduler, advance } = createManualScheduler();
 		const stop = startLocalVoiceActivityMonitor({
 			statsProvider: {
 				getStats: async () => createStatsReport([]),
@@ -175,9 +242,10 @@ describe('startLocalVoiceActivityMonitor', () => {
 				updates.push(isSpeaking);
 			},
 			pollIntervalMs: 50,
+			scheduler,
 		});
 
-		await wait(5);
+		await advance(5);
 		expect(updates).toEqual([undefined]);
 
 		stop();
