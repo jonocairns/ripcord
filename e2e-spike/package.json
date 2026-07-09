@@ -1,0 +1,12 @@
+{
+  "name": "ripcord-e2e-spike",
+  "private": true,
+  "version": "0.0.0",
+  "description": "UNTRACKED WebRTC e2e spike — not part of the bun workspace; do not commit.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.61.1"
+  }
+}
