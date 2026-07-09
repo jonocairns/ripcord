@@ -7,32 +7,36 @@ import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordi
 import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
+import type { TExternalStreamTrackPresence } from './use-pending-streams';
 import { shouldSyncExistingProducersAfterVoiceEventSubscriptionStart } from './voice-event-sync-policy';
 import { shouldIgnoreProducerClosedEvent } from './voice-producer-event-identity';
 
 const VOICE_EVENT_PRODUCER_SYNC_DEBOUNCE_MS = 500;
 
 type TEvents = {
-	consume: (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities, producerId?: string) => Promise<void>;
 	syncExistingProducers: (rtpCapabilities: RtpCapabilities) => Promise<void>;
-	addPendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
-	removePendingStream: (remoteId: number, kind: StreamKind) => void;
+	addPendingStream: (
+		remoteId: number,
+		kind: StreamKind,
+		producerId?: string,
+		externalStreamTracks?: TExternalStreamTrackPresence,
+	) => void;
+	removePendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
 	removeRemoteUserStream: (userId: number, kind: TRemoteUserStreamKinds) => void;
 	removeExternalStreamTrack: (streamId: number, kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO) => void;
 	removeExternalStream: (streamId: number) => void;
 	clearRemoteUserStreamsForUser: (userId: number) => void;
 	clearPendingStreamsForUser: (userId: number) => void;
-	clearScreenAudioWatchIntent: (remoteId: number) => void;
 	onVoiceActivityUpdate: (activity: { userId: number; isSpeaking: boolean }) => void;
 	onTransportFailure: () => void;
 	getActiveConsumerProducerId: (remoteId: number, kind: StreamKind) => string | undefined;
 	getPendingStreamProducerId: (remoteId: number, kind: StreamKind) => string | undefined;
+	getExternalStreamTrackPresence: () => TExternalStreamTrackPresence;
 	rtpCapabilities: RtpCapabilities | null;
 	reconnectNonce: number;
 };
 
 const useVoiceEvents = ({
-	consume,
 	syncExistingProducers,
 	addPendingStream,
 	removePendingStream,
@@ -41,11 +45,11 @@ const useVoiceEvents = ({
 	removeExternalStream,
 	clearRemoteUserStreamsForUser,
 	clearPendingStreamsForUser,
-	clearScreenAudioWatchIntent,
 	onVoiceActivityUpdate,
 	onTransportFailure,
 	getActiveConsumerProducerId,
 	getPendingStreamProducerId,
+	getExternalStreamTrackPresence,
 	rtpCapabilities,
 	reconnectNonce,
 }: TEvents) => {
@@ -143,21 +147,7 @@ const useVoiceEvents = ({
 					producerId,
 				});
 
-				if (kind === StreamKind.AUDIO) {
-					if (!rtpCapabilities) {
-						logVoice('Skipping audio consume - missing RTP capabilities', {
-							remoteId,
-							kind,
-							channelId,
-						});
-						return;
-					}
-
-					void consume(remoteId, kind, rtpCapabilities, producerId);
-					return;
-				}
-
-				addPendingStream(remoteId, kind, producerId);
+				addPendingStream(remoteId, kind, producerId, getExternalStreamTrackPresence());
 			},
 			onError: (error) => {
 				scheduleProducerRepairSync('onVoiceNewProducer', error);
@@ -192,14 +182,10 @@ const useVoiceEvents = ({
 				});
 
 				try {
-					removePendingStream(remoteId, kind);
-
-					// The screen share itself ended — audio intent must not outlive it,
-					// or it would auto-consume audio for a later share the viewer never
-					// accepted. SCREEN_AUDIO producer churn alone keeps the intent.
-					if (kind === StreamKind.SCREEN) {
-						clearScreenAudioWatchIntent(remoteId);
-					}
+					// A SCREEN close revokes SCREEN_AUDIO desire inside the reducer
+					// (markRemoteProducerClosed cascade), so audio intent cannot outlive
+					// the share while SCREEN_AUDIO producer churn alone still keeps it.
+					removePendingStream(remoteId, kind, producerId);
 
 					if (kind === StreamKind.EXTERNAL_VIDEO || kind === StreamKind.EXTERNAL_AUDIO) {
 						removeExternalStreamTrack(remoteId, kind);
@@ -229,7 +215,6 @@ const useVoiceEvents = ({
 				try {
 					clearPendingStreamsForUser(userId);
 					clearRemoteUserStreamsForUser(userId);
-					clearScreenAudioWatchIntent(userId);
 				} catch (error) {
 					logVoice('Error clearing remote streams for user', { error });
 				}
@@ -331,7 +316,6 @@ const useVoiceEvents = ({
 	}, [
 		currentVoiceChannelId,
 		ownUserId,
-		consume,
 		syncExistingProducers,
 		addPendingStream,
 		removePendingStream,
@@ -344,6 +328,7 @@ const useVoiceEvents = ({
 		onTransportFailure,
 		getActiveConsumerProducerId,
 		getPendingStreamProducerId,
+		getExternalStreamTrackPresence,
 		rtpCapabilities,
 		reconnectingSince,
 		reconnectAuthenticated,

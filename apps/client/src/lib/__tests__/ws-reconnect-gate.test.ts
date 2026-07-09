@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { getWsReconnectOpenAction, shouldResumeDeferredWsReconnect } from '../ws-reconnect-gate';
+import {
+	getWsReconnectOpenAction,
+	shouldDeferAppTeardownWhileOffline,
+	shouldResumeDeferredWsReconnect,
+} from '../ws-reconnect-gate';
 
 describe('ws reconnect gate', () => {
 	it('ignores socket opens when there is no pending teardown grace', () => {
@@ -50,5 +54,10 @@ describe('ws reconnect gate', () => {
 				isSocketOpen: true,
 			}),
 		).toBe(false);
+	});
+
+	it('keeps the app teardown pending while offline and lets it fire once online', () => {
+		expect(shouldDeferAppTeardownWhileOffline(false)).toBe(true);
+		expect(shouldDeferAppTeardownWhileOffline(true)).toBe(false);
 	});
 });

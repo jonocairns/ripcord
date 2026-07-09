@@ -96,6 +96,7 @@ type TRecoveryDeps = {
 	republishTracks: () => TRepublishPlan;
 	recoverOptionalAppAudio: () => Promise<void> | undefined;
 	syncRepublishedTrackState: (state: TRepublishedLocalMediaState) => Promise<void>;
+	isWatchedRestoreCancelled: (id: number | string, kind: string) => boolean;
 	consume: (id: number | string, kind: string, caps: object) => Promise<void>;
 	startMonitoring: () => void;
 	isNonRetriableTrpcError: (err: unknown) => boolean;
@@ -214,11 +215,21 @@ const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
 
 			const restoreTasks: Promise<void>[] = [];
 			Object.entries(snapshot.remoteUserStreams).forEach(([id, kinds]) => {
-				kinds.forEach((kind) => restoreTasks.push(deps.consume(id, kind, currentRtpCapabilities)));
+				kinds.forEach((kind) => {
+					if (deps.isWatchedRestoreCancelled(id, kind)) {
+						return;
+					}
+
+					restoreTasks.push(deps.consume(id, kind, currentRtpCapabilities));
+				});
 			});
 			Object.entries(snapshot.externalStreams).forEach(([id, state]) => {
-				if (state.audio) restoreTasks.push(deps.consume(id, 'externalAudio', currentRtpCapabilities));
-				if (state.video) restoreTasks.push(deps.consume(id, 'externalVideo', currentRtpCapabilities));
+				if (state.audio && !deps.isWatchedRestoreCancelled(id, 'externalAudio')) {
+					restoreTasks.push(deps.consume(id, 'externalAudio', currentRtpCapabilities));
+				}
+				if (state.video && !deps.isWatchedRestoreCancelled(id, 'externalVideo')) {
+					restoreTasks.push(deps.consume(id, 'externalVideo', currentRtpCapabilities));
+				}
 			});
 			await withRecoveryTimeout(Promise.all(restoreTasks));
 			throwIfNonceStale('watch restoration');
@@ -279,6 +290,7 @@ const makeDeps = (overrides: Partial<TRecoveryDeps> = {}): TRecoveryDeps => {
 		republishTracks: mock(() => ({ tasks: [], state: {} })),
 		recoverOptionalAppAudio: mock(() => undefined),
 		syncRepublishedTrackState: mock(() => Promise.resolve()),
+		isWatchedRestoreCancelled: () => false,
 		consume: mock(() => Promise.resolve()),
 		startMonitoring: mock(() => {}),
 		isNonRetriableTrpcError: () => false,
@@ -440,6 +452,35 @@ describe('recoverTransportSession orchestration', () => {
 		expect(consumed).toContainEqual(['99', 'externalVideo']);
 		expect(consumed).toContainEqual(['100', 'externalAudio']);
 		expect(consumed).not.toContainEqual(['100', 'externalVideo']);
+	});
+
+	it('does not restore streams stopped after the watch snapshot is captured', async () => {
+		const cancelled = new Set<string>();
+		const consumed: Array<[number | string, string]> = [];
+		const deps = makeDeps({
+			captureWatchedStreams: () => ({
+				remoteUserStreams: { '10': ['video'], '20': ['screen', 'screenAudio'] },
+				externalStreams: { '99': { audio: true, video: true } },
+			}),
+			consumeExistingProducers: mock(() => {
+				cancelled.add('20:screen');
+				cancelled.add('20:screenAudio');
+				cancelled.add('99:externalAudio');
+				return Promise.resolve();
+			}),
+			isWatchedRestoreCancelled: (id, kind) => cancelled.has(`${id}:${kind}`),
+			consume: mock((id, kind) => {
+				consumed.push([id, kind]);
+				return Promise.resolve();
+			}),
+		});
+
+		expect(await runRecovery(deps)).toBe(true);
+		expect(consumed).toContainEqual(['10', 'video']);
+		expect(consumed).toContainEqual(['99', 'externalVideo']);
+		expect(consumed).not.toContainEqual(['20', 'screen']);
+		expect(consumed).not.toContainEqual(['20', 'screenAudio']);
+		expect(consumed).not.toContainEqual(['99', 'externalAudio']);
 	});
 
 	it('restores watched streams from the pre-recovery snapshot when the first attempt fails after clearing them', async () => {

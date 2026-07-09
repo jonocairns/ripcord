@@ -1,6 +1,7 @@
 import { StreamKind } from '@sharkord/shared';
-import { Headphones, Monitor, Router, Video } from 'lucide-react';
+import { EyeOff, Headphones, Monitor, RefreshCw, Router, Video } from 'lucide-react';
 import { memo } from 'react';
+import type { TVisibleRemoteMediaStatus } from '@/components/voice-provider/hooks/remote-media-subscriptions';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { UserAvatar } from '@/components/user-avatar';
@@ -9,9 +10,14 @@ import { cn } from '@/lib/utils';
 import { CardGradient } from './card-gradient';
 import { VoiceSurface } from './voice-surface';
 
+type TPendingStreamStatus = Exclude<TVisibleRemoteMediaStatus, 'live'> | 'available';
+
 type TPendingStreamCardProps = {
 	kind: StreamKind;
 	onWatch: () => void;
+	onRetry?: () => void;
+	onStopWatching?: () => void;
+	status?: TPendingStreamStatus;
 	userId?: number;
 	streamTitle?: string;
 	streamAvatarUrl?: string;
@@ -62,10 +68,34 @@ const getPendingStreamDetails = (
 };
 
 const PendingStreamCard = memo(
-	({ kind, onWatch, userId, streamTitle, streamAvatarUrl, className }: TPendingStreamCardProps) => {
+	({
+		kind,
+		onWatch,
+		onRetry,
+		onStopWatching,
+		status = 'available',
+		userId,
+		streamTitle,
+		streamAvatarUrl,
+		className,
+	}: TPendingStreamCardProps) => {
 		const user = useUserById(userId ?? 0);
 		const displayName = user?.name || streamTitle || 'This stream';
 		const { label, description, icon: Icon } = getPendingStreamDetails(kind, displayName);
+		const isWaiting = status === 'pending' || status === 'retrying';
+		const isFailed = status === 'failed';
+		const isClosing = status === 'closing';
+		const shouldShowStopWatching = onStopWatching && status !== 'available';
+		const shouldShowRetry = status === 'failed' || status === 'retrying';
+		const statusDescription = isFailed
+			? 'Stream unavailable'
+			: status === 'retrying'
+				? 'Retrying connection'
+				: isClosing
+					? 'Stopping stream'
+					: isWaiting
+						? 'Connecting'
+						: description;
 
 		return (
 			<VoiceSurface className={cn('relative', 'flex items-center justify-center', 'w-full h-full', className)}>
@@ -94,12 +124,31 @@ const PendingStreamCard = memo(
 
 					<div className="space-y-1">
 						<p className="text-lg font-semibold text-white">{displayName}</p>
-						<p className="text-sm text-white/70">{description}</p>
+						<p className="text-sm text-white/70">{statusDescription}</p>
 					</div>
 
-					<Button type="button" size="sm" onClick={onWatch}>
-						Watch
-					</Button>
+					<div className="flex flex-wrap items-center justify-center gap-2">
+						{status === 'available' ? (
+							<Button type="button" size="sm" onClick={onWatch}>
+								<Icon className="size-4" />
+								Watch
+							</Button>
+						) : null}
+
+						{shouldShowRetry ? (
+							<Button type="button" size="sm" onClick={onRetry} disabled={!onRetry}>
+								<RefreshCw className="size-4" />
+								Retry
+							</Button>
+						) : null}
+
+						{shouldShowStopWatching ? (
+							<Button type="button" size="sm" variant="secondary" onClick={onStopWatching}>
+								<EyeOff className="size-4" />
+								Stop Watching
+							</Button>
+						) : null}
+					</div>
 				</div>
 			</VoiceSurface>
 		);
@@ -108,4 +157,4 @@ const PendingStreamCard = memo(
 
 PendingStreamCard.displayName = 'PendingStreamCard';
 
-export { PendingStreamCard };
+export { PendingStreamCard, type TPendingStreamStatus };

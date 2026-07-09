@@ -9,16 +9,19 @@ import { withConsumeAttemptTimeout } from './consume-attempt-timeout';
 import {
 	createConsumeOperationState,
 	finishConsumeOperation,
+	isCurrentConsumeOperation,
 	reserveConsumeOperation,
 	resetConsumeOperationGeneration,
+	restartConsumeOperation,
+	type TConsumeOperationEntry,
 } from './consume-operation-state';
-import { getConsumeRetryDelayMs, shouldRetryConsume } from './consume-retry-policy';
+import { getConsumeRetryDelayMs } from './consume-retry-policy';
 import {
 	createExistingProducersSweeper,
 	type TExistingProducersSweeper,
 	type TExistingProducersSweepRequest,
 } from './existing-producers-sweep';
-import type { TExternalStreamTrackPresence } from './use-pending-streams';
+import { isExternalTrackPresent, type TExternalStreamTrackPresence } from './use-pending-streams';
 
 // How long to wait for an ICE "disconnected" state to recover before closing
 // the transport. ICE disconnected can be transient (brief packet loss / route
@@ -32,6 +35,11 @@ const ICE_DISCONNECT_GRACE_MS = 30_000;
 const EXISTING_PRODUCERS_RPC_TIMEOUT_MS = 4_000;
 
 type TConsumeAttemptResult = 'success' | 'failure';
+
+type TConsumeOptions = {
+	isManualRetry?: boolean;
+	restartExisting?: boolean;
+};
 
 type TServerConsumerCleanupTarget = {
 	remoteId: number;
@@ -49,9 +57,25 @@ type TUseTransportParams = {
 	) => void;
 	removeExternalStreamTrack: (streamId: number, kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO) => void;
 	addPendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
-	removePendingStream: (remoteId: number, kind: StreamKind) => void;
 	clearAllPendingStreams: () => void;
 	reconcilePendingStreams: (producers: TRemoteProducerIds, externalStreamTracks?: TExternalStreamTrackPresence) => void;
+	markWatchStopped: (remoteId: number, kind: StreamKind) => void;
+	markConsumeStarted: (
+		remoteId: number,
+		kind: StreamKind,
+		producerId?: string,
+		consumeGeneration?: number,
+		isManualRetry?: boolean,
+	) => void;
+	markConsumeSucceeded: (
+		remoteId: number,
+		kind: StreamKind,
+		producerId: string,
+		consumerId: string,
+		consumeGeneration?: number,
+	) => void;
+	markConsumeFailed: (remoteId: number, kind: StreamKind, reason?: string, consumeGeneration?: number) => void;
+	markConsumerClosed: (remoteId: number, kind: StreamKind, consumerId?: string) => void;
 	onTransportFailure: () => void;
 };
 
@@ -61,9 +85,13 @@ const useTransports = ({
 	addExternalStreamTrack,
 	removeExternalStreamTrack,
 	addPendingStream,
-	removePendingStream,
 	clearAllPendingStreams,
 	reconcilePendingStreams,
+	markWatchStopped,
+	markConsumeStarted,
+	markConsumeSucceeded,
+	markConsumeFailed,
+	markConsumerClosed,
 	onTransportFailure,
 }: TUseTransportParams) => {
 	const producerTransport = useRef<Transport<AppData> | undefined>(undefined);
@@ -358,7 +386,13 @@ const useTransports = ({
 	);
 
 	const consumeOnce = useCallback(
-		async (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities): Promise<TConsumeAttemptResult> => {
+		async (
+			remoteId: number,
+			kind: StreamKind,
+			rtpCapabilities: RtpCapabilities,
+			operationKey: string,
+			operation: TConsumeOperationEntry,
+		): Promise<TConsumeAttemptResult> => {
 			const transport = consumerTransport.current;
 			let serverConsumerCleanupTarget: TServerConsumerCleanupTarget | undefined;
 
@@ -394,6 +428,18 @@ const useTransports = ({
 					return 'failure';
 				}
 
+				if (!isCurrentConsumeOperation(consumeOperationState.current, operationKey, operation)) {
+					logVoice('Consume operation superseded before local consumer creation', {
+						remoteId,
+						kind,
+					});
+					await closeServerConsumerAfterFailedConsume(
+						serverConsumerCleanupTarget,
+						'consume operation superseded before local consumer creation',
+					);
+					return 'failure';
+				}
+
 				logVoice('Got consumer parameters', {
 					producerId,
 					consumerId,
@@ -421,6 +467,19 @@ const useTransports = ({
 					rtpParameters: consumerRtpParameters,
 					streamId: consumerRtpParameters.rtcp?.cname,
 				});
+
+				if (!isCurrentConsumeOperation(consumeOperationState.current, operationKey, operation)) {
+					logVoice('Consume operation superseded before local stream attach', {
+						remoteId,
+						kind,
+					});
+					newConsumer.close();
+					await closeServerConsumerAfterFailedConsume(
+						serverConsumerCleanupTarget,
+						'consume operation superseded before local stream attach',
+					);
+					return 'failure';
+				}
 
 				logVoice('Created new consumer', { newConsumer });
 
@@ -453,6 +512,11 @@ const useTransports = ({
 						if (consumers.current[remoteId]?.[consumerKind]) {
 							delete consumers.current[remoteId][consumerKind];
 						}
+
+						// Tell the ledger the consumer is gone so a 'consumed' slot cannot
+						// strand: without this, the slot stays consumed with no card, no
+						// derived pending entry, and no repair path.
+						markConsumerClosed(remoteId, kind, newConsumer.id);
 					});
 				});
 
@@ -487,8 +551,21 @@ const useTransports = ({
 					return 'failure';
 				}
 
+				if (!isCurrentConsumeOperation(consumeOperationState.current, operationKey, operation)) {
+					logVoice('Consume operation superseded before success commit', {
+						remoteId,
+						kind,
+					});
+					newConsumer.close();
+					await closeServerConsumerAfterFailedConsume(
+						serverConsumerCleanupTarget,
+						'consume operation superseded before success commit',
+					);
+					return 'failure';
+				}
+
 				serverConsumerCleanupTarget = undefined;
-				removePendingStream(remoteId, kind);
+				markConsumeSucceeded(remoteId, kind, producerId, consumerId, operation.token);
 				return 'success';
 			} catch (error) {
 				logVoice('Error consuming remote producer', { error });
@@ -503,13 +580,20 @@ const useTransports = ({
 			removeRemoteUserStream,
 			addExternalStreamTrack,
 			removeExternalStreamTrack,
-			removePendingStream,
+			markConsumeSucceeded,
+			markConsumerClosed,
 			closeServerConsumerAfterFailedConsume,
 		],
 	);
 
 	const consume = useCallback(
-		async (remoteId: number, kind: StreamKind, rtpCapabilities: RtpCapabilities, expectedProducerId?: string) => {
+		async (
+			remoteId: number,
+			kind: StreamKind,
+			rtpCapabilities: RtpCapabilities,
+			expectedProducerId?: string,
+			options: TConsumeOptions = {},
+		) => {
 			return traceSentrySpan(
 				{
 					name: 'voice.consume',
@@ -521,7 +605,9 @@ const useTransports = ({
 				},
 				async () => {
 					const operationKey = `${remoteId}-${kind}`;
-					const operation = reserveConsumeOperation(consumeOperationState.current, operationKey);
+					const operation = options.restartExisting
+						? restartConsumeOperation(consumeOperationState.current, operationKey)
+						: reserveConsumeOperation(consumeOperationState.current, operationKey);
 
 					if (operation === undefined) {
 						logVoice('Consume operation already in progress', {
@@ -533,17 +619,17 @@ const useTransports = ({
 
 					let failedAttemptIndex = 0;
 
-					addPendingStream(remoteId, kind, expectedProducerId);
+					markConsumeStarted(remoteId, kind, expectedProducerId, operation.token, options.isManualRetry === true);
 
 					try {
-						while (consumeOperationState.current.generation === operation.generation) {
-							const result = await consumeOnce(remoteId, kind, rtpCapabilities);
+						while (isCurrentConsumeOperation(consumeOperationState.current, operationKey, operation)) {
+							const result = await consumeOnce(remoteId, kind, rtpCapabilities, operationKey, operation);
 
 							if (result === 'success') {
 								return;
 							}
 
-							if (consumeOperationState.current.generation !== operation.generation) {
+							if (!isCurrentConsumeOperation(consumeOperationState.current, operationKey, operation)) {
 								break;
 							}
 
@@ -555,9 +641,7 @@ const useTransports = ({
 									kind,
 									failedAttempts: failedAttemptIndex + 1,
 								});
-								if (!shouldRetryConsume(kind)) {
-									removePendingStream(remoteId, kind);
-								}
+								markConsumeFailed(remoteId, kind, 'consume retry exhausted', operation.token);
 								return;
 							}
 
@@ -583,7 +667,7 @@ const useTransports = ({
 				},
 			);
 		},
-		[addPendingStream, consumeOnce, removePendingStream],
+		[consumeOnce, markConsumeFailed, markConsumeStarted],
 	);
 
 	const runConsumeExistingProducersSweep = useCallback(
@@ -601,6 +685,18 @@ const useTransports = ({
 						rtpCapabilities,
 						prefetched: !!prefetchedProducers,
 					});
+
+					// Stamp the sweep with the consume generation at entry.
+					// cleanupTransports() bumps this generation (via
+					// resetConsumeOperationGeneration) on teardown/reconnect, so a sweep
+					// whose awaits straddle a cleanup can detect that its producer snapshot
+					// is stale and bail before mutating the rebuilt ledger. Without this a
+					// stale reconcile can mark a live new-session producer absent
+					// (producerPresent: false); that slot then drops out of pendingStreams,
+					// so the repair runner never reschedules it and the bad state sticks —
+					// silent remote audio loss / a stuck failed video card.
+					const sweepGeneration = consumeOperationState.current.generation;
+					const isSweepSuperseded = () => consumeOperationState.current.generation !== sweepGeneration;
 
 					const trpc = getTRPCClient();
 
@@ -623,7 +719,24 @@ const useTransports = ({
 							remoteExternalStreamIds,
 						});
 
+						// A cleanup/reconnect landed while the snapshot was in flight — the
+						// transports and ledger this snapshot describes are gone. Applying it
+						// now would consume against dead transports and poison the rebuilt
+						// ledger, so discard it and let the post-cleanup sweep own the state.
+						if (isSweepSuperseded()) {
+							logVoice('Discarding existing-producer sweep from a superseded transport generation');
+							return;
+						}
+
 						await Promise.all(remoteAudioIds.map((remoteId) => consume(remoteId, StreamKind.AUDIO, rtpCapabilities)));
+
+						// Re-check after the consume await: a cleanup may have landed while
+						// audio was being consumed, and the pending/reconcile tail below writes
+						// straight to the shared ledger with no per-op generation guard.
+						if (isSweepSuperseded()) {
+							logVoice('Discarding existing-producer sweep tail from a superseded transport generation');
+							return;
+						}
 
 						remoteVideoIds.forEach((remoteId) => {
 							addPendingStream(remoteId, StreamKind.VIDEO);
@@ -640,10 +753,10 @@ const useTransports = ({
 						remoteExternalStreamIds.forEach((streamId: number) => {
 							const tracks = effectiveExternalStreamTracks?.[streamId];
 
-							if (tracks?.audio !== false) {
+							if (isExternalTrackPresent(tracks, 'audio')) {
 								addPendingStream(streamId, StreamKind.EXTERNAL_AUDIO);
 							}
-							if (tracks?.video !== false) {
+							if (isExternalTrackPresent(tracks, 'video')) {
 								addPendingStream(streamId, StreamKind.EXTERNAL_VIDEO);
 							}
 						});
@@ -675,6 +788,37 @@ const useTransports = ({
 		[],
 	);
 
+	const closeConsumer = useCallback(async (remoteId: number, kind: StreamKind, consumerId?: string) => {
+		const existingConsumer = consumers.current[remoteId]?.[kind];
+		const existingConsumerId = existingConsumer?.id;
+		const targetConsumerId = consumerId ?? existingConsumerId;
+
+		if (
+			existingConsumer &&
+			!existingConsumer.closed &&
+			(consumerId === undefined || existingConsumerId === consumerId)
+		) {
+			existingConsumer.close();
+		}
+
+		try {
+			const trpc = getTRPCClient();
+
+			await trpc.voice.closeConsumer.mutate({
+				remoteId,
+				kind,
+				consumerId: targetConsumerId,
+			});
+		} catch (error) {
+			logVoice('Error closing remote consumer', {
+				error,
+				remoteId,
+				kind,
+				consumerId: targetConsumerId,
+			});
+		}
+	}, []);
+
 	const stopWatchingStream = useCallback(
 		async (remoteId: number, kind: StreamKind) => {
 			if (kind === StreamKind.AUDIO) {
@@ -685,34 +829,9 @@ const useTransports = ({
 				return;
 			}
 
-			const existingConsumer = consumers.current[remoteId]?.[kind];
-			const existingConsumerId = existingConsumer?.id;
-
-			if (existingConsumer && !existingConsumer.closed) {
-				existingConsumer.close();
-			}
-
-			addPendingStream(remoteId, kind);
-
-			try {
-				const trpc = getTRPCClient();
-
-				// Target the specific consumer we observed so a stale close racing a
-				// reconnect sweep cannot close a freshly-created replacement consumer.
-				await trpc.voice.closeConsumer.mutate({
-					remoteId,
-					kind,
-					consumerId: existingConsumerId,
-				});
-			} catch (error) {
-				logVoice('Error closing remote consumer', {
-					error,
-					remoteId,
-					kind,
-				});
-			}
+			markWatchStopped(remoteId, kind);
 		},
-		[addPendingStream],
+		[markWatchStopped],
 	);
 
 	const cleanupTransports = useCallback(() => {
@@ -773,6 +892,7 @@ const useTransports = ({
 		createConsumerTransport,
 		consume,
 		consumeExistingProducers,
+		closeConsumer,
 		stopWatchingStream,
 		cleanupTransports,
 		getActiveConsumerProducerId,

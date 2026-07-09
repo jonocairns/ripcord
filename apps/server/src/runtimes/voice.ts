@@ -1298,25 +1298,41 @@ class VoiceRuntime {
 	};
 
 	public getRemoteIds = (userId: number): TRemoteProducerIds => {
+		const toRemoteProducerRefs = (producers: TProducerMap) =>
+			Object.entries(producers)
+				.filter(([id]) => +id !== userId)
+				.map(([id, producer]) => ({ remoteId: +id, producerId: producer.id }));
+
 		const remoteExternalStreamIds = Object.keys(this.externalStreamsInternal).map((id) => +id);
+		const toExternalProducerRefs = (kind: 'audio' | 'video') =>
+			remoteExternalStreamIds.flatMap((streamId) => {
+				const producer = this.getExternalStreamProducer(streamId, kind);
+
+				return producer ? [{ streamId, producerId: producer.id }] : [];
+			});
+
+		const remoteAudioProducers = toRemoteProducerRefs(this.audioProducers);
+		const remoteVideoProducers = toRemoteProducerRefs(this.videoProducers);
+		const remoteScreenProducers = toRemoteProducerRefs(this.screenProducers);
+		const remoteScreenAudioProducers = toRemoteProducerRefs(this.screenAudioProducers);
+		const remoteExternalAudioProducers = toExternalProducerRefs('audio');
+		const remoteExternalVideoProducers = toExternalProducerRefs('video');
 
 		return {
-			remoteVideoIds: Object.keys(this.videoProducers)
-				.filter((id) => +id !== userId)
-				.map((id) => +id),
-			remoteAudioIds: Object.keys(this.audioProducers)
-				.filter((id) => +id !== userId)
-				.map((id) => +id),
-			remoteScreenIds: Object.keys(this.screenProducers)
-				.filter((id) => +id !== userId)
-				.map((id) => +id),
-			remoteScreenAudioIds: Object.keys(this.screenAudioProducers)
-				.filter((id) => +id !== userId)
-				.map((id) => +id),
+			remoteVideoIds: remoteVideoProducers.map((producer) => producer.remoteId),
+			remoteAudioIds: remoteAudioProducers.map((producer) => producer.remoteId),
+			remoteScreenIds: remoteScreenProducers.map((producer) => producer.remoteId),
+			remoteScreenAudioIds: remoteScreenAudioProducers.map((producer) => producer.remoteId),
 			remoteExternalStreamIds,
 			externalStreamTracks: Object.fromEntries(
 				remoteExternalStreamIds.map((streamId) => [streamId, this.getExternalStreamTracks(streamId)]),
 			),
+			remoteAudioProducers,
+			remoteVideoProducers,
+			remoteScreenProducers,
+			remoteScreenAudioProducers,
+			remoteExternalAudioProducers,
+			remoteExternalVideoProducers,
 		};
 	};
 

@@ -5,11 +5,12 @@ import { useLastTextChannelId } from '@/features/server/channels/hooks';
 import { useVoiceUsersByChannelId } from '@/features/server/hooks';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { useVoice, useVoiceChannelExternalStreamsList } from '@/features/server/voice/hooks';
+import type { TVisibleRemoteMedia } from '../../voice-provider/hooks/remote-media-subscriptions';
 import { getPendingStreamKey } from '../../voice-provider/hooks/use-pending-streams';
 import { ControlsBar } from './controls-bar';
 import { ExternalStreamCard } from './external-stream-card';
 import { PinnedCardType, usePinCardController } from './hooks/use-pin-card-controller';
-import { PendingStreamCard } from './pending-stream-card';
+import { PendingStreamCard, type TPendingStreamStatus } from './pending-stream-card';
 import { ScreenShareCard } from './screen-share-card';
 import { StartingScreenShareCard } from './starting-screen-share-card';
 import { VoiceGrid } from './voice-grid';
@@ -17,6 +18,21 @@ import { VoiceUserCard } from './voice-user-card';
 
 type TChannelProps = {
 	channelId: number;
+};
+
+const isPendingVisibleRemoteMediaSlot = (slot: TVisibleRemoteMedia | undefined): boolean =>
+	slot !== undefined && slot.status !== 'live';
+
+const getPendingCardStatus = (slot: TVisibleRemoteMedia | undefined): TPendingStreamStatus => {
+	if (!slot) {
+		return 'available';
+	}
+
+	if (!slot.desired) {
+		return 'available';
+	}
+
+	return slot.status === 'live' ? 'available' : slot.status;
 };
 
 const VoiceChannel = memo(({ channelId }: TChannelProps) => {
@@ -27,12 +43,17 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 	const {
 		acceptStream,
 		isStartingScreenShare,
+		retryRemoteMedia,
 		stopWatchingStream,
-		pendingStreams,
+		visibleRemoteMedia,
 		remoteUserStreams,
 		externalStreams: activeExternalStreams,
 	} = useVoice();
 	const { pinnedCard, pinCard, unpinCard } = usePinCardController();
+	const visibleRemoteMediaByKey = useMemo(
+		() => new Map(visibleRemoteMedia.map((slot) => [slot.key, slot])),
+		[visibleRemoteMedia],
+	);
 	const effectivePinnedCard = useMemo(() => {
 		if (!pinnedCard) {
 			return undefined;
@@ -48,7 +69,13 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 			return undefined;
 		}
 
-		const hasPendingVideo = pendingStreams.has(getPendingStreamKey(voiceUser.id, StreamKind.VIDEO));
+		const videoSlot = visibleRemoteMediaByKey.get(getPendingStreamKey(voiceUser.id, StreamKind.VIDEO));
+		// Only treat the camera as pending while the sharer still has it on. When A
+		// deliberately stops the camera the producer closes but the ledger keeps a
+		// desired VIDEO slot in a 'failed' state — gating on webcamEnabled (as SCREEN
+		// already does via sharingScreen) stops that surfacing as a "Stream
+		// unavailable / Retry" card for a stream that intentionally no longer exists.
+		const hasPendingVideo = isPendingVisibleRemoteMediaSlot(videoSlot) && voiceUser.state.webcamEnabled;
 		const hasConsumedVideo = !!remoteUserStreams[voiceUser.id]?.[StreamKind.VIDEO];
 
 		if (voiceUser.state.sharingScreen && !hasConsumedVideo && !hasPendingVideo) {
@@ -60,7 +87,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 		}
 
 		return pinnedCard;
-	}, [pendingStreams, pinnedCard, remoteUserStreams, voiceUsers]);
+	}, [pinnedCard, remoteUserStreams, visibleRemoteMediaByKey, voiceUsers]);
 	const handleExitStage = useCallback(() => {
 		if (effectivePinnedCard?.type === PinnedCardType.USER && effectivePinnedCard.userId !== ownUserId) {
 			stopWatchingStream(effectivePinnedCard.userId, StreamKind.VIDEO);
@@ -101,7 +128,11 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 
 		voiceUsers.forEach((voiceUser) => {
 			const userCardId = `user-${voiceUser.id}`;
-			const hasPendingVideo = pendingStreams.has(getPendingStreamKey(voiceUser.id, StreamKind.VIDEO));
+			const videoSlot = visibleRemoteMediaByKey.get(getPendingStreamKey(voiceUser.id, StreamKind.VIDEO));
+			// Gate on webcamEnabled so a deliberately-stopped camera (producer closed,
+			// but the ledger still holds a desired 'failed' VIDEO slot) falls back to
+			// the avatar tile instead of a stale "Stream unavailable / Retry" card.
+			const hasPendingVideo = isPendingVisibleRemoteMediaSlot(videoSlot) && voiceUser.state.webcamEnabled;
 			const hasConsumedVideo = !!remoteUserStreams[voiceUser.id]?.[StreamKind.VIDEO];
 
 			// Suppress the avatar fallback tile when the user is screen-sharing without a
@@ -115,9 +146,16 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 						<PendingStreamCard
 							key={userCardId}
 							kind={StreamKind.VIDEO}
+							status={getPendingCardStatus(videoSlot)}
 							userId={voiceUser.id}
 							onWatch={() => {
 								acceptStream(voiceUser.id, StreamKind.VIDEO);
+							}}
+							onRetry={() => {
+								retryRemoteMedia(voiceUser.id, StreamKind.VIDEO);
+							}}
+							onStopWatching={() => {
+								stopWatchingStream(voiceUser.id, StreamKind.VIDEO);
 							}}
 						/>
 					) : (
@@ -148,8 +186,10 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 
 			if (voiceUser.state.sharingScreen) {
 				const screenShareCardId = `screen-share-${voiceUser.id}`;
-				const hasPendingScreen = pendingStreams.has(getPendingStreamKey(voiceUser.id, StreamKind.SCREEN));
-				const hasPendingScreenAudio = pendingStreams.has(getPendingStreamKey(voiceUser.id, StreamKind.SCREEN_AUDIO));
+				const screenSlot = visibleRemoteMediaByKey.get(getPendingStreamKey(voiceUser.id, StreamKind.SCREEN));
+				const screenAudioSlot = visibleRemoteMediaByKey.get(getPendingStreamKey(voiceUser.id, StreamKind.SCREEN_AUDIO));
+				const hasPendingScreen = isPendingVisibleRemoteMediaSlot(screenSlot);
+				const hasPendingScreenAudio = isPendingVisibleRemoteMediaSlot(screenAudioSlot);
 				const hasConsumedScreen = !!remoteUserStreams[voiceUser.id]?.[StreamKind.SCREEN];
 				const showPendingScreenCard = hasPendingScreen || (!hasConsumedScreen && hasPendingScreenAudio);
 
@@ -158,6 +198,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 						<PendingStreamCard
 							key={screenShareCardId}
 							kind={StreamKind.SCREEN}
+							status={getPendingCardStatus(screenSlot ?? screenAudioSlot)}
 							userId={voiceUser.id}
 							onWatch={() => {
 								if (hasPendingScreen) {
@@ -166,6 +207,24 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 
 								if (hasPendingScreenAudio) {
 									acceptStream(voiceUser.id, StreamKind.SCREEN_AUDIO);
+								}
+							}}
+							onRetry={() => {
+								if (hasPendingScreen) {
+									retryRemoteMedia(voiceUser.id, StreamKind.SCREEN);
+								}
+
+								if (hasPendingScreenAudio) {
+									retryRemoteMedia(voiceUser.id, StreamKind.SCREEN_AUDIO);
+								}
+							}}
+							onStopWatching={() => {
+								if (hasPendingScreen) {
+									stopWatchingStream(voiceUser.id, StreamKind.SCREEN);
+								}
+
+								if (hasPendingScreenAudio) {
+									stopWatchingStream(voiceUser.id, StreamKind.SCREEN_AUDIO);
 								}
 							}}
 						/>
@@ -183,10 +242,17 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 							}
 							onUnpin={unpinCard}
 							showPinControls
+							screenAudioSlot={screenAudioSlot}
+							onRetryScreenAudio={() => {
+								retryRemoteMedia(voiceUser.id, StreamKind.SCREEN_AUDIO);
+							}}
+							onStopScreenAudio={() => {
+								stopWatchingStream(voiceUser.id, StreamKind.SCREEN_AUDIO);
+							}}
 							onStopWatching={() => {
 								stopWatchingStream(voiceUser.id, StreamKind.SCREEN);
 
-								if (remoteUserStreams[voiceUser.id]?.[StreamKind.SCREEN_AUDIO]) {
+								if (remoteUserStreams[voiceUser.id]?.[StreamKind.SCREEN_AUDIO] || screenAudioSlot?.desired) {
 									stopWatchingStream(voiceUser.id, StreamKind.SCREEN_AUDIO);
 								}
 							}}
@@ -198,12 +264,14 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 
 		externalStreams.forEach((stream) => {
 			const externalStreamCardId = `external-stream-${stream.streamId}`;
-			const hasPendingExternalVideo = pendingStreams.has(
+			const externalVideoSlot = visibleRemoteMediaByKey.get(
 				getPendingStreamKey(stream.streamId, StreamKind.EXTERNAL_VIDEO),
 			);
-			const hasPendingExternalAudio = pendingStreams.has(
+			const externalAudioSlot = visibleRemoteMediaByKey.get(
 				getPendingStreamKey(stream.streamId, StreamKind.EXTERNAL_AUDIO),
 			);
+			const hasPendingExternalVideo = isPendingVisibleRemoteMediaSlot(externalVideoSlot);
+			const hasPendingExternalAudio = isPendingVisibleRemoteMediaSlot(externalAudioSlot);
 			const hasConsumedExternalMedia =
 				!!activeExternalStreams[stream.streamId]?.audioStream || !!activeExternalStreams[stream.streamId]?.videoStream;
 			const showPendingExternalCard = !hasConsumedExternalMedia && (hasPendingExternalVideo || hasPendingExternalAudio);
@@ -213,6 +281,7 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 					<PendingStreamCard
 						key={externalStreamCardId}
 						kind={hasPendingExternalVideo ? StreamKind.EXTERNAL_VIDEO : StreamKind.EXTERNAL_AUDIO}
+						status={getPendingCardStatus(hasPendingExternalVideo ? externalVideoSlot : externalAudioSlot)}
 						streamTitle={stream.title || 'External Stream'}
 						streamAvatarUrl={stream.avatarUrl}
 						onWatch={() => {
@@ -222,6 +291,24 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 
 							if (hasPendingExternalAudio) {
 								acceptStream(stream.streamId, StreamKind.EXTERNAL_AUDIO);
+							}
+						}}
+						onRetry={() => {
+							if (hasPendingExternalVideo) {
+								retryRemoteMedia(stream.streamId, StreamKind.EXTERNAL_VIDEO);
+							}
+
+							if (hasPendingExternalAudio) {
+								retryRemoteMedia(stream.streamId, StreamKind.EXTERNAL_AUDIO);
+							}
+						}}
+						onStopWatching={() => {
+							if (hasPendingExternalVideo) {
+								stopWatchingStream(stream.streamId, StreamKind.EXTERNAL_VIDEO);
+							}
+
+							if (hasPendingExternalAudio) {
+								stopWatchingStream(stream.streamId, StreamKind.EXTERNAL_AUDIO);
 							}
 						}}
 					/>
@@ -260,10 +347,11 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 		externalStreams,
 		activeExternalStreams,
 		acceptStream,
+		retryRemoteMedia,
 		isStartingScreenShare,
 		stopWatchingStream,
-		pendingStreams,
 		remoteUserStreams,
+		visibleRemoteMediaByKey,
 		effectivePinnedCard,
 		ownUserId,
 		pinCard,
