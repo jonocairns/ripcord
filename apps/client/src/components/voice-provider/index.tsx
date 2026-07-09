@@ -3881,6 +3881,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			let consecutiveUnknownErrors = 0;
 			let retryAttempt = 0;
 
+			// Captured once, before any attempt runs: init() clears the subscription
+			// ledger (cleanupTransports -> clearAllPendingStreams) as part of its
+			// teardown, wiping the `desired` watch intent. Snapshotting here preserves
+			// what the user was watching so it can be re-consumed after restore; a
+			// capture inside the loop would be empty on every retry.
+			const watchedStreamsSnapshot = captureWatchedRemoteStreams();
+
 			while (true) {
 				// Cleared recovery always exits quietly. This must precede the
 				// pending-missing check below (which reports/clears as an expiry):
@@ -3998,6 +4005,38 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					if (currentRtpCapabilities) {
 						logVoice('Refreshing existing producers after reconnect restore');
 						await withVoiceReconnectTimeout(consumeExistingProducers(currentRtpCapabilities));
+
+						// consumeExistingProducers only auto-consumes audio; video / screen /
+						// screen-audio / external streams are marked pending and re-consumed
+						// only when the ledger still holds their `desired` intent. init()
+						// wiped that intent above, so restore it explicitly from the snapshot
+						// captured before recovery — mirroring the in-session transport
+						// recovery path — so watched streams resume without a manual re-Watch.
+						const restoreWatchTasks: Promise<unknown>[] = [];
+
+						Object.entries(watchedStreamsSnapshot.remoteUserStreams).forEach(([remoteId, kinds]) => {
+							const numericRemoteId = Number(remoteId);
+
+							kinds.forEach((kind) => {
+								restoreWatchTasks.push(consume(numericRemoteId, kind, currentRtpCapabilities));
+							});
+						});
+
+						Object.entries(watchedStreamsSnapshot.externalStreams).forEach(([streamId, watchedState]) => {
+							const numericStreamId = Number(streamId);
+
+							if (watchedState.audio) {
+								restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities));
+							}
+
+							if (watchedState.video) {
+								restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities));
+							}
+						});
+
+						if (restoreWatchTasks.length > 0) {
+							await withVoiceReconnectTimeout(Promise.all(restoreWatchTasks));
+						}
 					} else {
 						logVoice('Skipping producer refresh after reconnect restore - missing RTP capabilities');
 					}
@@ -4096,6 +4135,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		isConnected,
 		reconnectingSince,
 		reconnectAuthenticated,
+		captureWatchedRemoteStreams,
+		consume,
 		consumeExistingProducers,
 		requestVoiceRestoreOrJoin,
 		syncRepublishedLocalMediaState,
