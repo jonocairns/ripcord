@@ -686,6 +686,18 @@ const useTransports = ({
 						prefetched: !!prefetchedProducers,
 					});
 
+					// Stamp the sweep with the consume generation at entry.
+					// cleanupTransports() bumps this generation (via
+					// resetConsumeOperationGeneration) on teardown/reconnect, so a sweep
+					// whose awaits straddle a cleanup can detect that its producer snapshot
+					// is stale and bail before mutating the rebuilt ledger. Without this a
+					// stale reconcile can mark a live new-session producer absent
+					// (producerPresent: false); that slot then drops out of pendingStreams,
+					// so the repair runner never reschedules it and the bad state sticks —
+					// silent remote audio loss / a stuck failed video card.
+					const sweepGeneration = consumeOperationState.current.generation;
+					const isSweepSuperseded = () => consumeOperationState.current.generation !== sweepGeneration;
+
 					const trpc = getTRPCClient();
 
 					try {
@@ -707,7 +719,24 @@ const useTransports = ({
 							remoteExternalStreamIds,
 						});
 
+						// A cleanup/reconnect landed while the snapshot was in flight — the
+						// transports and ledger this snapshot describes are gone. Applying it
+						// now would consume against dead transports and poison the rebuilt
+						// ledger, so discard it and let the post-cleanup sweep own the state.
+						if (isSweepSuperseded()) {
+							logVoice('Discarding existing-producer sweep from a superseded transport generation');
+							return;
+						}
+
 						await Promise.all(remoteAudioIds.map((remoteId) => consume(remoteId, StreamKind.AUDIO, rtpCapabilities)));
+
+						// Re-check after the consume await: a cleanup may have landed while
+						// audio was being consumed, and the pending/reconcile tail below writes
+						// straight to the shared ledger with no per-op generation guard.
+						if (isSweepSuperseded()) {
+							logVoice('Discarding existing-producer sweep tail from a superseded transport generation');
+							return;
+						}
 
 						remoteVideoIds.forEach((remoteId) => {
 							addPendingStream(remoteId, StreamKind.VIDEO);
