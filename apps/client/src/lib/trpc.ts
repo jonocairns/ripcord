@@ -18,7 +18,11 @@ import { resetServerScreens } from '@/features/server-screens/actions';
 import { clearAuthToken, getAuthToken } from '@/helpers/storage';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { markSocketCloseEventIgnored, shouldIgnoreSocketCloseEvent } from './websocket-close-ignore';
-import { getWsReconnectOpenAction, shouldResumeDeferredWsReconnect } from './ws-reconnect-gate';
+import {
+	getWsReconnectOpenAction,
+	shouldDeferAppTeardownWhileOffline,
+	shouldResumeDeferredWsReconnect,
+} from './ws-reconnect-gate';
 
 let wsClient: ReturnType<typeof createWSClient> | null = null;
 let trpc: ReturnType<typeof createTRPCProxyClient<AppRouter>> | null = null;
@@ -182,10 +186,20 @@ const initializeTRPC = (host: string) => {
 
 			// Give tRPC's internal retry a grace period before tearing down.
 			// If tRPC reconnects (onOpen fires), the teardown is cancelled.
-			if (teardownTimer) {
-				clearTimeout(teardownTimer);
-			}
-			teardownTimer = setTimeout(() => {
+			const runTeardown = () => {
+				// Stay paused while offline instead of giving up: the disconnect screen
+				// is pointless when we already know why we can't reach the server, and
+				// tearing down here would orphan a socket that has already reopened
+				// (skipSocketClose leaves it spamming UNAUTHORIZED) and clear the
+				// deferred-reconnect machinery. Keeping teardownTimer non-null preserves
+				// the "re-join needed on next open" signal so the online path runs a
+				// proper authenticated re-join instead of stranding an unauthenticated
+				// socket.
+				if (shouldDeferAppTeardownWhileOffline(isVoiceReconnectOnline())) {
+					teardownTimer = setTimeout(runTeardown, RETRY_GRACE_PERIOD_MS);
+					return;
+				}
+
 				teardownTimer = null;
 				cleanup({ skipSocketClose: true });
 				if (wasConnected) {
@@ -197,7 +211,12 @@ const initializeTRPC = (host: string) => {
 					wasClean: cause.wasClean,
 					time: new Date(),
 				});
-			}, RETRY_GRACE_PERIOD_MS);
+			};
+
+			if (teardownTimer) {
+				clearTimeout(teardownTimer);
+			}
+			teardownTimer = setTimeout(runTeardown, RETRY_GRACE_PERIOD_MS);
 		},
 		onOpen: () => {
 			const resumeReconnect = () => {
