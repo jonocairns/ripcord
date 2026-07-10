@@ -28,6 +28,7 @@ type TVoiceSessionPhase =
 			nonceRestarts: number;
 			consecutiveUnknownErrors: number;
 			generation: number;
+			activeCommandId?: number;
 			snapshot?: TWatchedRemoteStreamsSnapshot;
 	  }
 	| {
@@ -39,6 +40,7 @@ type TVoiceSessionPhase =
 			retryAttempt: number;
 			consecutiveUnknownErrors: number;
 			generation: number;
+			activeCommandId?: number;
 			snapshot?: TWatchedRemoteStreamsSnapshot;
 			serverSessionEstablished?: boolean;
 	  }
@@ -120,29 +122,29 @@ type TVoiceSessionTriggerEvent =
 	| { type: 'TransportFailed'; channelId: number; nonce: number }
 	| { type: 'SocketAuthenticated' }
 	| { type: 'SocketUnauthenticated' }
-	| { type: 'NonceChanged'; nonce: number }
+	| { type: 'NonceChanged'; commandId: number; generation: number; nonce: number }
 	| { type: 'Terminated'; reason: TClearReason; channelId?: number }
 	| { type: 'ReconnectIntentCaptured'; pending: TPendingVoiceReconnect }
 	| { type: 'ReconnectStarted'; now: number; online: boolean; authenticated: boolean }
 	| { type: 'ReconnectStartCleared' }
 	| { type: 'RecoveryCleared'; reason: TClearReason }
 	| { type: 'ReconnectSuppressionChanged'; suppression: TVoiceReconnectSuppression | undefined }
-	| { type: 'RecoveryStarted'; generation: number; snapshot: TWatchedRemoteStreamsSnapshot }
 	| { type: 'Resumed' };
 
 type TVoiceSessionResultEvent =
-	| { type: 'RebuildSucceeded'; generation: number }
-	| { type: 'RebuildFailed'; generation: number; error: unknown }
-	| { type: 'RestoreSucceeded'; generation: number; serverSessionEstablished?: boolean }
-	| { type: 'RestoreFailed'; generation: number; error: unknown; serverSessionEstablished?: boolean }
-	| { type: 'OnlineReady'; generation: number }
-	| { type: 'OnlineExpired'; generation: number }
-	| { type: 'AuthReady'; generation: number }
-	| { type: 'AuthExpired'; generation: number }
-	| { type: 'AuthCleared'; generation: number }
-	| { type: 'RetryDelayElapsed'; generation: number }
-	| { type: 'RetryDelayExpired'; generation: number }
-	| { type: 'WatchIntentRehydrated'; generation: number; now: number };
+	| { type: 'RecoveryStarted'; commandId: number; generation: number; snapshot: TWatchedRemoteStreamsSnapshot }
+	| { type: 'RebuildSucceeded'; commandId: number; generation: number }
+	| { type: 'RebuildFailed'; commandId: number; generation: number; error: unknown }
+	| { type: 'RestoreSucceeded'; commandId: number; generation: number; serverSessionEstablished?: boolean }
+	| { type: 'RestoreFailed'; commandId: number; generation: number; error: unknown; serverSessionEstablished?: boolean }
+	| { type: 'OnlineReady'; commandId: number; generation: number }
+	| { type: 'OnlineExpired'; commandId: number; generation: number }
+	| { type: 'AuthReady'; commandId: number; generation: number }
+	| { type: 'AuthExpired'; commandId: number; generation: number }
+	| { type: 'AuthCleared'; commandId: number; generation: number }
+	| { type: 'RetryDelayElapsed'; commandId: number; generation: number }
+	| { type: 'RetryDelayExpired'; commandId: number; generation: number }
+	| { type: 'WatchIntentRehydrated'; commandId: number; generation: number; now: number };
 
 type TVoiceSessionEvent = TVoiceSessionTriggerEvent | TVoiceSessionResultEvent;
 
@@ -190,13 +192,23 @@ const addCommandId = (command: TVoiceSessionCommandInput, commandId: number): TV
 	}
 };
 
-const withCommand = (state: TVoiceSessionState, command: TVoiceSessionCommandInput): TVoiceSessionReducerResult => ({
-	state: {
-		...state,
-		nextCommandId: state.nextCommandId + 1,
-	},
-	commands: [addCommandId(command, state.nextCommandId)],
-});
+const withCommand = (state: TVoiceSessionState, command: TVoiceSessionCommandInput): TVoiceSessionReducerResult => {
+	const commandId = state.nextCommandId;
+	const phase = state.phase;
+	const nextPhase =
+		(phase.phase === 'rebuilding' || phase.phase === 'reconnecting') && phase.generation === command.generation
+			? { ...phase, activeCommandId: commandId }
+			: phase;
+
+	return {
+		state: {
+			...state,
+			phase: nextPhase,
+			nextCommandId: commandId + 1,
+		},
+		commands: [addCommandId(command, commandId)],
+	};
+};
 
 const nextGeneration = (state: TVoiceSessionState): [TVoiceSessionState, number] => {
 	const generation = state.nextGeneration;
@@ -246,10 +258,14 @@ const failSession = (
 	return emptyResult(failedState);
 };
 
-const isCurrentGeneration = (state: TVoiceSessionState, generation: number): boolean => {
+const isCurrentCommand = (state: TVoiceSessionState, generation: number, commandId: number): boolean => {
 	const { phase } = state;
 
-	return (phase.phase === 'rebuilding' || phase.phase === 'reconnecting') && phase.generation === generation;
+	return (
+		(phase.phase === 'rebuilding' || phase.phase === 'reconnecting') &&
+		phase.generation === generation &&
+		phase.activeCommandId === commandId
+	);
 };
 
 const scheduleReconnectStep = (state: TVoiceSessionState): TVoiceSessionReducerResult => {
@@ -430,11 +446,11 @@ const reduceResumed = (state: TVoiceSessionState): TVoiceSessionReducerResult =>
 
 const reduceRecoveryStarted = (
 	state: TVoiceSessionState,
-	event: Extract<TVoiceSessionTriggerEvent, { type: 'RecoveryStarted' }>,
+	event: Extract<TVoiceSessionResultEvent, { type: 'RecoveryStarted' }>,
 ): TVoiceSessionReducerResult => {
 	const { phase } = state;
 
-	if (!isCurrentGeneration(state, event.generation)) {
+	if (!isCurrentCommand(state, event.generation, event.commandId)) {
 		return emptyResult(state);
 	}
 
@@ -470,7 +486,7 @@ const reduceRebuildFailed = (
 ): TVoiceSessionReducerResult => {
 	const { phase } = state;
 
-	if (phase.phase !== 'rebuilding' || phase.generation !== event.generation) {
+	if (phase.phase !== 'rebuilding' || !isCurrentCommand(state, event.generation, event.commandId)) {
 		return emptyResult(state);
 	}
 
@@ -518,7 +534,11 @@ const reduceNonceChanged = (
 ): TVoiceSessionReducerResult => {
 	const { phase } = state;
 
-	if (phase.phase !== 'rebuilding' || phase.nonce === event.nonce) {
+	if (
+		phase.phase !== 'rebuilding' ||
+		!isCurrentCommand(state, event.generation, event.commandId) ||
+		phase.nonce === event.nonce
+	) {
 		return emptyResult(state);
 	}
 
@@ -569,7 +589,11 @@ const reduceRestoreFailed = (
 ): TVoiceSessionReducerResult => {
 	const { phase } = state;
 
-	if (phase.phase !== 'reconnecting' || phase.generation !== event.generation) {
+	if (
+		phase.phase !== 'reconnecting' ||
+		phase.step !== 'restoring' ||
+		!isCurrentCommand(state, event.generation, event.commandId)
+	) {
 		return emptyResult(state);
 	}
 
@@ -619,14 +643,32 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			});
 		case 'WsDropped':
 			if (state.phase.phase === 'reconnecting') {
-				return emptyResult({
+				const nextPhase: Extract<TVoiceSessionPhase, { phase: 'reconnecting' }> = {
+					...state.phase,
+					pending: event.pending,
+					authenticated: event.authenticated,
+				};
+				const nextState: TVoiceSessionState = {
 					...state,
 					pendingVoiceReconnect: event.pending,
-					phase: {
-						...state.phase,
-						pending: event.pending,
-					},
-				});
+					reconnectAuthenticated: event.authenticated,
+					phase: nextPhase,
+				};
+
+				if (
+					(state.phase.step === 'restoring' || state.phase.step === 'restoreWatch') &&
+					(!event.online || !event.authenticated)
+				) {
+					return scheduleReconnectStep({
+						...nextState,
+						phase: {
+							...nextPhase,
+							step: event.online ? 'waitingAuth' : 'waitingOnline',
+						},
+					});
+				}
+
+				return emptyResult(nextState);
 			}
 
 			return startReconnecting(state, event);
@@ -678,10 +720,18 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				return emptyResult({ ...state, reconnectAuthenticated: false });
 			}
 
+			if (state.phase.step === 'restoring' || state.phase.step === 'restoreWatch') {
+				return scheduleReconnectStep({
+					...state,
+					reconnectAuthenticated: false,
+					phase: { ...state.phase, authenticated: false, step: 'waitingAuth' },
+				});
+			}
+
 			return emptyResult({
 				...state,
 				reconnectAuthenticated: false,
-				phase: { ...state.phase, authenticated: false, step: 'waitingAuth' },
+				phase: { ...state.phase, authenticated: false },
 			});
 		case 'NonceChanged':
 			return reduceNonceChanged(state, event);
@@ -703,7 +753,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 		case 'Resumed':
 			return reduceResumed(state);
 		case 'RebuildSucceeded':
-			if (state.phase.phase !== 'rebuilding' || state.phase.generation !== event.generation) {
+			if (state.phase.phase !== 'rebuilding' || !isCurrentCommand(state, event.generation, event.commandId)) {
 				return emptyResult(state);
 			}
 
@@ -717,7 +767,12 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 		case 'RebuildFailed':
 			return reduceRebuildFailed(state, event);
 		case 'RestoreSucceeded':
-			if (state.phase.phase !== 'reconnecting' || state.phase.generation !== event.generation) {
+			if (
+				state.phase.phase !== 'reconnecting' ||
+				state.phase.step !== 'restoring' ||
+				!state.phase.authenticated ||
+				!isCurrentCommand(state, event.generation, event.commandId)
+			) {
 				return emptyResult(state);
 			}
 
@@ -732,7 +787,11 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 		case 'RestoreFailed':
 			return reduceRestoreFailed(state, event);
 		case 'OnlineReady':
-			if (state.phase.phase !== 'reconnecting' || state.phase.generation !== event.generation) {
+			if (
+				state.phase.phase !== 'reconnecting' ||
+				state.phase.step !== 'waitingOnline' ||
+				!isCurrentCommand(state, event.generation, event.commandId)
+			) {
 				return emptyResult(state);
 			}
 
@@ -743,7 +802,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 		case 'OnlineExpired':
 		case 'AuthExpired':
 		case 'RetryDelayExpired':
-			if (!isCurrentGeneration(state, event.generation)) {
+			if (!isCurrentCommand(state, event.generation, event.commandId)) {
 				return emptyResult(state);
 			}
 
@@ -754,7 +813,11 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				'clear',
 			);
 		case 'AuthReady':
-			if (state.phase.phase !== 'reconnecting' || state.phase.generation !== event.generation) {
+			if (
+				state.phase.phase !== 'reconnecting' ||
+				state.phase.step !== 'waitingAuth' ||
+				!isCurrentCommand(state, event.generation, event.commandId)
+			) {
 				return emptyResult(state);
 			}
 
@@ -764,13 +827,21 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				phase: { ...state.phase, authenticated: true, step: 'restoring' },
 			});
 		case 'AuthCleared':
-			if (state.phase.phase !== 'reconnecting' || state.phase.generation !== event.generation) {
+			if (
+				state.phase.phase !== 'reconnecting' ||
+				state.phase.step !== 'waitingAuth' ||
+				!isCurrentCommand(state, event.generation, event.commandId)
+			) {
 				return emptyResult(state);
 			}
 
 			return emptyResult({ ...clearReconnectFacadeRecovery(state), phase: { phase: 'idle' } });
 		case 'RetryDelayElapsed':
-			if (state.phase.phase !== 'reconnecting' || state.phase.generation !== event.generation) {
+			if (
+				state.phase.phase !== 'reconnecting' ||
+				state.phase.step !== 'retryDelay' ||
+				!isCurrentCommand(state, event.generation, event.commandId)
+			) {
 				return emptyResult(state);
 			}
 
@@ -779,7 +850,11 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				phase: { ...state.phase, step: state.phase.authenticated ? 'restoring' : 'waitingAuth' },
 			});
 		case 'WatchIntentRehydrated':
-			if (state.phase.phase !== 'reconnecting' || state.phase.generation !== event.generation) {
+			if (
+				state.phase.phase !== 'reconnecting' ||
+				state.phase.step !== 'restoreWatch' ||
+				!isCurrentCommand(state, event.generation, event.commandId)
+			) {
 				return emptyResult(state);
 			}
 

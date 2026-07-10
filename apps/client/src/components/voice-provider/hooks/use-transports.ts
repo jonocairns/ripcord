@@ -139,7 +139,7 @@ const useTransports = ({
 	);
 
 	const createProducerTransport = useCallback(
-		async (device: Device, prefetchedParams?: TTransportParams) => {
+		async (device: Device, prefetchedParams?: TTransportParams, isCurrent?: () => boolean) => {
 			logVoice('Creating producer transport', {
 				device,
 				prefetched: !!prefetchedParams,
@@ -149,6 +149,10 @@ const useTransports = ({
 
 			try {
 				const params = prefetchedParams ?? (await trpc.voice.createProducerTransport.mutate());
+
+				if (isCurrent && !isCurrent()) {
+					throw new Error('Producer transport creation superseded');
+				}
 
 				logVoice('Got producer transport parameters', { params });
 
@@ -267,7 +271,7 @@ const useTransports = ({
 	);
 
 	const createConsumerTransport = useCallback(
-		async (device: Device, prefetchedParams?: TTransportParams) => {
+		async (device: Device, prefetchedParams?: TTransportParams, isCurrent?: () => boolean) => {
 			logVoice('Creating consumer transport', {
 				device,
 				prefetched: !!prefetchedParams,
@@ -277,6 +281,10 @@ const useTransports = ({
 
 			try {
 				const params = prefetchedParams ?? (await trpc.voice.createConsumerTransport.mutate());
+
+				if (isCurrent && !isCurrent()) {
+					throw new Error('Consumer transport creation superseded');
+				}
 
 				logVoice('Got consumer transport parameters', { params });
 

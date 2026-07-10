@@ -49,6 +49,16 @@ const dispatch = (
 	return [result.state, result.commands];
 };
 
+const activeCommandId = (state: TVoiceSessionState): number => {
+	const { phase } = state;
+
+	if ((phase.phase !== 'rebuilding' && phase.phase !== 'reconnecting') || phase.activeCommandId === undefined) {
+		throw new Error('expected active recovery command');
+	}
+
+	return phase.activeCommandId;
+};
+
 const startReconnectWithSnapshot = (): [TVoiceSessionState, number] => {
 	let state = createInitialVoiceSessionState();
 	let commands: TVoiceSessionCommand[];
@@ -70,6 +80,7 @@ const startReconnectWithSnapshot = (): [TVoiceSessionState, number] => {
 
 	[state, commands] = dispatch(state, {
 		type: 'RecoveryStarted',
+		commandId: activeCommandId(state),
 		generation,
 		snapshot: watchedSnapshot(),
 	});
@@ -86,6 +97,7 @@ describe('voice WS-reconnect watch restoration', () => {
 
 		[state, commands] = dispatch(state, {
 			type: 'RestoreSucceeded',
+			commandId: activeCommandId(state),
 			generation,
 			serverSessionEstablished: true,
 		});
@@ -101,7 +113,12 @@ describe('voice WS-reconnect watch restoration', () => {
 
 		const restoredAt = 50_000;
 
-		[state, commands] = dispatch(state, { type: 'WatchIntentRehydrated', generation, now: restoredAt });
+		[state, commands] = dispatch(state, {
+			type: 'WatchIntentRehydrated',
+			commandId: activeCommandId(state),
+			generation,
+			now: restoredAt,
+		});
 
 		expect(state.phase).toEqual({ phase: 'connected', channelId: 5 });
 		expect(state.pendingVoiceReconnect).toBeUndefined();
@@ -225,6 +242,7 @@ describe('voice WS-reconnect watch restoration', () => {
 		const [state, generation] = startReconnectWithSnapshot();
 		const result = reduceVoiceSession(state, {
 			type: 'WatchIntentRehydrated',
+			commandId: activeCommandId(state),
 			generation: generation + 1,
 			now: 50_000,
 		});

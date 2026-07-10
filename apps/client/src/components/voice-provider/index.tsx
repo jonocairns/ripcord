@@ -727,6 +727,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
 	const transportRecoveryPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const queuedTransportRecoveryCommandRef = useRef<TVoiceSessionCommand | undefined>(undefined);
+	const voiceRestorePromiseRef = useRef<Promise<void> | undefined>(undefined);
+	const queuedVoiceRestoreCommandRef = useRef<TVoiceSessionCommand | undefined>(undefined);
 	const cleanupMicAudioPipelineRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
@@ -3279,6 +3281,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				// this an in-progress screen share is silently dropped on reconnect.
 				preserveLocalMedia?: boolean;
 				restoreWatchSnapshot?: TWatchedRemoteStreamsSnapshot;
+				isCurrentRecovery?: () => boolean;
 			},
 		) => {
 			return traceSentrySpan(
@@ -3293,6 +3296,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					},
 				},
 				async () => {
+					const throwIfRecoverySuperseded = (): void => {
+						if (opts?.isCurrentRecovery && !opts.isCurrentRecovery()) {
+							throw new Error('Voice session recovery superseded');
+						}
+					};
+
 					logVoice('Initializing voice provider', {
 						incomingRouterRtpCapabilities,
 						channelId,
@@ -3338,19 +3347,22 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						await device.load({
 							routerRtpCapabilities: incomingRouterRtpCapabilities,
 						});
+						throwIfRecoverySuperseded();
 						deviceRef.current = device;
 						sendRtpCapabilities.current = device.rtpCapabilities;
 
 						await Promise.all([
-							createProducerTransport(device, opts?.producerTransportParams),
-							createConsumerTransport(device, opts?.consumerTransportParams),
+							createProducerTransport(device, opts?.producerTransportParams, opts?.isCurrentRecovery),
+							createConsumerTransport(device, opts?.consumerTransportParams, opts?.isCurrentRecovery),
 						]);
+						throwIfRecoverySuperseded();
 						setVoiceEventRtpCapabilities(device.rtpCapabilities);
 
 						const [, micPrepResult] = await Promise.all([
 							consumeExistingProducers(device.rtpCapabilities, undefined, opts?.existingProducers),
 							micPrepPromise,
 						]);
+						throwIfRecoverySuperseded();
 
 						// Mic failures are non-fatal — voice join continues without a mic.
 						if (micPrepResult) {
@@ -3362,6 +3374,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								setLocalAudioStream(undefined);
 							}
 						}
+						throwIfRecoverySuperseded();
 
 						// Republish any preserved webcam/screen-share tracks (WS reconnect).
 						// On a fresh join there are no live local tracks, so this is a no-op.
@@ -3382,6 +3395,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								});
 							}
 						}
+						throwIfRecoverySuperseded();
 
 						startMonitoring(producerTransport.current, consumerTransport.current);
 						if (dispatchJoinLifecycle) {
@@ -3430,7 +3444,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const isCurrentVoiceSessionCommand = useCallback((command: TVoiceSessionCommand): boolean => {
 		const { phase } = getVoiceSessionState();
 
-		return (phase.phase === 'rebuilding' || phase.phase === 'reconnecting') && phase.generation === command.generation;
+		return (
+			(phase.phase === 'rebuilding' || phase.phase === 'reconnecting') &&
+			phase.generation === command.generation &&
+			phase.activeCommandId === command.commandId
+		);
 	}, []);
 
 	const dispatchIfCurrentVoiceSessionCommand = useCallback(
@@ -3502,11 +3520,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								);
 							}
 
+							if (!isCurrentVoiceSessionCommand(command)) {
+								return;
+							}
+
 							if (!isConnectedRef.current) {
 								logVoice('Skipping transport recovery because server connection is unavailable');
 								dispatchIfCurrentVoiceSessionCommand(command, () => {
 									dispatchVoiceSession({
 										type: 'RebuildFailed',
+										commandId: command.commandId,
 										generation: command.generation,
 										error: new Error('Voice transport recovery skipped: server connection unavailable'),
 									});
@@ -3519,6 +3542,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								dispatchIfCurrentVoiceSessionCommand(command, () => {
 									dispatchVoiceSession({
 										type: 'RebuildFailed',
+										commandId: command.commandId,
 										generation: command.generation,
 										error: new Error('Voice transport recovery skipped: user is no longer in voice'),
 									});
@@ -3531,6 +3555,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								dispatchIfCurrentVoiceSessionCommand(command, () => {
 									dispatchVoiceSession({
 										type: 'RebuildFailed',
+										commandId: command.commandId,
 										generation: command.generation,
 										error: new Error('Voice transport recovery skipped: router RTP capabilities unavailable'),
 									});
@@ -3540,18 +3565,29 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 							const nonceAtStart = command.nonce;
 							const dispatchNonceChangedIfStale = (): boolean => {
+								if (!isCurrentVoiceSessionCommand(command)) {
+									return true;
+								}
+
 								const currentNonce = voiceSessionReconnectNonceRef.current;
 								if (currentNonce === nonceAtStart) {
 									return false;
 								}
 
 								dispatchIfCurrentVoiceSessionCommand(command, () => {
-									dispatchVoiceSession({ type: 'NonceChanged', nonce: currentNonce });
+									dispatchVoiceSession({
+										type: 'NonceChanged',
+										commandId: command.commandId,
+										generation: command.generation,
+										nonce: currentNonce,
+									});
 								});
 								return true;
 							};
 
 							try {
+								if (!isCurrentVoiceSessionCommand(command)) return;
+
 								logVoice('Attempting in-session voice transport recovery', {
 									attempt: command.attempt + 1,
 									channelId: command.channelId,
@@ -3573,7 +3609,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 								try {
 									await withRecoveryTimeout(
-										Promise.all([createProducerTransport(device), createConsumerTransport(device)]),
+										Promise.all([
+											createProducerTransport(device, undefined, () => isCurrentVoiceSessionCommand(command)),
+											createConsumerTransport(device, undefined, () => isCurrentVoiceSessionCommand(command)),
+										]),
 									);
 								} catch (error) {
 									const recoveryChannelId = currentVoiceChannelIdRef.current;
@@ -3595,8 +3634,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 									await withRecoveryTimeout(
 										Promise.all([
-											createProducerTransport(device, recoveryJoinResult.producerTransportParams),
-											createConsumerTransport(device, recoveryJoinResult.consumerTransportParams),
+											createProducerTransport(device, recoveryJoinResult.producerTransportParams, () =>
+												isCurrentVoiceSessionCommand(command),
+											),
+											createConsumerTransport(device, recoveryJoinResult.consumerTransportParams, () =>
+												isCurrentVoiceSessionCommand(command),
+											),
 										]),
 									);
 								}
@@ -3638,16 +3681,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								if (dispatchNonceChangedIfStale()) return;
 
 								await withRecoveryTimeout(syncRepublishedLocalMediaState(localMediaRepublishPlan.state));
+								if (dispatchNonceChangedIfStale()) return;
 
 								if (recoveryJoinResult) {
 									logVoice('Refreshing existing producers after voice session rejoin');
 									await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
+									if (dispatchNonceChangedIfStale()) return;
 
 									await withRecoveryTimeout(
 										new Promise<void>((resolve) => {
 											setTimeout(resolve, RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS);
 										}),
 									);
+									if (dispatchNonceChangedIfStale()) return;
 
 									logVoice('Refreshing existing producers after delayed voice session rejoin sync');
 									await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
@@ -3663,7 +3709,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								logVoice('Voice transport recovery completed successfully');
 
 								dispatchIfCurrentVoiceSessionCommand(command, () => {
-									dispatchVoiceSession({ type: 'RebuildSucceeded', generation: command.generation });
+									dispatchVoiceSession({
+										type: 'RebuildSucceeded',
+										commandId: command.commandId,
+										generation: command.generation,
+									});
 								});
 							} catch (error) {
 								logVoice('Voice transport recovery attempt failed', {
@@ -3671,7 +3721,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									error,
 								});
 								dispatchIfCurrentVoiceSessionCommand(command, () => {
-									dispatchVoiceSession({ type: 'RebuildFailed', generation: command.generation, error });
+									dispatchVoiceSession({
+										type: 'RebuildFailed',
+										commandId: command.commandId,
+										generation: command.generation,
+										error,
+									});
 
 									const phase = getVoiceSessionState().phase;
 									if (phase.phase === 'failed') {
@@ -3880,6 +3935,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			dispatchIfCurrentVoiceSessionCommand(command, () => {
 				dispatchVoiceSession({
 					type: outcome === 'online' ? 'OnlineReady' : 'OnlineExpired',
+					commandId: command.commandId,
 					generation: command.generation,
 				});
 			});
@@ -3898,6 +3954,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			dispatchIfCurrentVoiceSessionCommand(command, () => {
 				dispatchVoiceSession({
 					type: outcome === 'authenticated' ? 'AuthReady' : outcome === 'cleared' ? 'AuthCleared' : 'AuthExpired',
+					commandId: command.commandId,
 					generation: command.generation,
 				});
 			});
@@ -3915,81 +3972,126 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				return;
 			}
 
-			const reconnectAttemptId = createReconnectAttemptId();
-			const attemptNumber = command.attempt + 1;
-			let serverSessionEstablished = false;
+			if (voiceRestorePromiseRef.current) {
+				queuedVoiceRestoreCommandRef.current = command;
+				return;
+			}
 
-			logDebug('Voice reconnect attempt start', {
-				attempt: attemptNumber,
-				channelId: command.pending.channelId,
-				reconnectAttemptId,
-			});
-
-			try {
-				const bootstrap = await withVoiceReconnectTimeout(
-					requestVoiceRestoreOrJoin({
-						channelId: command.pending.channelId,
-						micMuted: command.pending.micMuted,
-						soundMuted: command.pending.soundMuted,
-						reconnectAttemptId,
-					}),
-				);
-
-				serverSessionEstablished = true;
+			const recoveryPromise = (async () => {
+				const activeTransportRecovery = transportRecoveryPromiseRef.current;
+				if (activeTransportRecovery) {
+					await activeTransportRecovery;
+				}
 
 				if (!isCurrentVoiceSessionCommand(command)) {
 					return;
 				}
 
-				const initResult = await withVoiceReconnectTimeout(
-					init(bootstrap.routerRtpCapabilities, command.pending.channelId, {
-						producerTransportParams: bootstrap.producerTransportParams,
-						consumerTransportParams: bootstrap.consumerTransportParams,
-						existingProducers: bootstrap.existingProducers,
-						preserveLocalMedia: true,
-						restoreWatchSnapshot: command.snapshot,
-					}),
-				);
+				const reconnectAttemptId = createReconnectAttemptId();
+				const attemptNumber = command.attempt + 1;
+				let serverSessionEstablished = false;
 
-				if (!isCurrentVoiceSessionCommand(command)) {
-					voiceCleanupRef.current?.();
-					return;
-				}
-
-				const serverStore = useServerStore.getState();
-
-				serverStore.setCurrentVoiceChannelId(command.pending.channelId);
-				serverStore.reconcileVoiceChannelUsers({
+				logDebug('Voice reconnect attempt start', {
+					attempt: attemptNumber,
 					channelId: command.pending.channelId,
-					users: bootstrap.channelUsers,
+					reconnectAttemptId,
 				});
-				serverStore.bumpVoiceSessionReconnectNonce();
-				await withVoiceReconnectTimeout(syncRepublishedLocalMediaState(initResult.republishedLocalMediaState));
 
-				dispatchIfCurrentVoiceSessionCommand(command, () => {
+				try {
+					const bootstrap = await withVoiceReconnectTimeout(
+						requestVoiceRestoreOrJoin({
+							channelId: command.pending.channelId,
+							micMuted: command.pending.micMuted,
+							soundMuted: command.pending.soundMuted,
+							reconnectAttemptId,
+						}),
+					);
+
+					serverSessionEstablished = true;
+
+					if (!isCurrentVoiceSessionCommand(command)) {
+						return;
+					}
+
+					const initResult = await withVoiceReconnectTimeout(
+						init(bootstrap.routerRtpCapabilities, command.pending.channelId, {
+							producerTransportParams: bootstrap.producerTransportParams,
+							consumerTransportParams: bootstrap.consumerTransportParams,
+							existingProducers: bootstrap.existingProducers,
+							preserveLocalMedia: true,
+							restoreWatchSnapshot: command.snapshot,
+							isCurrentRecovery: () => isCurrentVoiceSessionCommand(command),
+						}),
+					);
+
+					if (!isCurrentVoiceSessionCommand(command)) {
+						cleanup({ preserveLocalMedia: true, preserveRemoteMediaIntent: true });
+						return;
+					}
+
+					const serverStore = useServerStore.getState();
+
+					serverStore.setCurrentVoiceChannelId(command.pending.channelId);
+					serverStore.reconcileVoiceChannelUsers({
+						channelId: command.pending.channelId,
+						users: bootstrap.channelUsers,
+					});
+					serverStore.bumpVoiceSessionReconnectNonce();
+					await withVoiceReconnectTimeout(syncRepublishedLocalMediaState(initResult.republishedLocalMediaState));
+
+					if (!isCurrentVoiceSessionCommand(command)) {
+						cleanup({ preserveLocalMedia: true, preserveRemoteMediaIntent: true });
+						return;
+					}
+
 					dispatchVoiceSession({
 						type: 'RestoreSucceeded',
+						commandId: command.commandId,
 						generation: command.generation,
 						serverSessionEstablished,
 					});
-				});
-			} catch (error) {
-				logDebug('Voice reconnect restore attempt failed', {
-					attempt: attemptNumber,
-					error,
-				});
+				} catch (error) {
+					if (!isCurrentVoiceSessionCommand(command)) {
+						cleanup({ preserveLocalMedia: true, preserveRemoteMediaIntent: true });
+						return;
+					}
 
-				dispatchIfCurrentVoiceSessionCommand(command, () => {
-					dispatchVoiceSession({
-						type: 'RestoreFailed',
-						generation: command.generation,
+					logDebug('Voice reconnect restore attempt failed', {
+						attempt: attemptNumber,
 						error,
-						serverSessionEstablished,
 					});
-				});
+
+					dispatchIfCurrentVoiceSessionCommand(command, () => {
+						dispatchVoiceSession({
+							type: 'RestoreFailed',
+							commandId: command.commandId,
+							generation: command.generation,
+							error,
+							serverSessionEstablished,
+						});
+					});
+				}
+			})();
+
+			voiceRestorePromiseRef.current = recoveryPromise;
+
+			try {
+				await recoveryPromise;
+			} finally {
+				if (voiceRestorePromiseRef.current === recoveryPromise) {
+					voiceRestorePromiseRef.current = undefined;
+				}
+
+				const queuedCommand = queuedVoiceRestoreCommandRef.current;
+				queuedVoiceRestoreCommandRef.current = undefined;
+
+				if (queuedCommand) {
+					void runRestoreVoiceSessionCommand(queuedCommand);
+				}
 			}
 		},
 		[
+			cleanup,
 			dispatchIfCurrentVoiceSessionCommand,
 			init,
 			isCurrentVoiceSessionCommand,
@@ -4016,6 +4118,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			dispatchIfCurrentVoiceSessionCommand(command, () => {
 				dispatchVoiceSession({
 					type: outcome === 'ready' ? 'RetryDelayElapsed' : 'RetryDelayExpired',
+					commandId: command.commandId,
 					generation: command.generation,
 				});
 			});
@@ -4034,7 +4137,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 
 			dispatchIfCurrentVoiceSessionCommand(command, () => {
-				dispatchVoiceSession({ type: 'WatchIntentRehydrated', generation: command.generation, now: Date.now() });
+				dispatchVoiceSession({
+					type: 'WatchIntentRehydrated',
+					commandId: command.commandId,
+					generation: command.generation,
+					now: Date.now(),
+				});
 			});
 		},
 		[dispatchIfCurrentVoiceSessionCommand, isCurrentVoiceSessionCommand],
@@ -4065,6 +4173,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			if (command.type === 'CaptureRecoverySnapshot') {
 				dispatchVoiceSession({
 					type: 'RecoveryStarted',
+					commandId: command.commandId,
 					generation: command.generation,
 					snapshot: captureWatchedRemoteStreams(),
 				});

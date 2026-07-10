@@ -38,6 +38,16 @@ const dispatch = (
 	return [result.state, result.commands];
 };
 
+const activeCommandId = (state: TVoiceSessionState): number => {
+	const { phase } = state;
+
+	if ((phase.phase !== 'rebuilding' && phase.phase !== 'reconnecting') || phase.activeCommandId === undefined) {
+		throw new Error('expected active recovery command');
+	}
+
+	return phase.activeCommandId;
+};
+
 const startRebuild = (): [TVoiceSessionState, number, TWatchedRemoteStreamsSnapshot] => {
 	let state = createInitialVoiceSessionState();
 	let commands: TVoiceSessionCommand[];
@@ -57,7 +67,12 @@ const startRebuild = (): [TVoiceSessionState, number, TWatchedRemoteStreamsSnaps
 	}
 
 	const snapshot = watchedSnapshot();
-	[state, commands] = dispatch(state, { type: 'RecoveryStarted', generation, snapshot });
+	[state, commands] = dispatch(state, {
+		type: 'RecoveryStarted',
+		commandId: activeCommandId(state),
+		generation,
+		snapshot,
+	});
 
 	expect(commands).toEqual([
 		expect.objectContaining({
@@ -90,7 +105,11 @@ describe('transport rebuild machine orchestration', () => {
 
 	it('moves to connected and emits desktop app-audio recovery after rebuild success', () => {
 		const [state, generation] = startRebuild();
-		const result = reduceVoiceSession(state, { type: 'RebuildSucceeded', generation });
+		const result = reduceVoiceSession(state, {
+			type: 'RebuildSucceeded',
+			commandId: activeCommandId(state),
+			generation,
+		});
 
 		expect(result.state.phase).toEqual({ phase: 'connected', channelId: 7 });
 		expect(result.commands).toEqual([
@@ -105,6 +124,7 @@ describe('transport rebuild machine orchestration', () => {
 		const [state, generation, snapshot] = startRebuild();
 		const result = reduceVoiceSession(state, {
 			type: 'RebuildFailed',
+			commandId: activeCommandId(state),
 			generation,
 			error: new Error('network blip'),
 		});
@@ -132,6 +152,7 @@ describe('transport rebuild machine orchestration', () => {
 		for (let attempt = 0; attempt < VOICE_SESSION_REBUILD_MAX_ATTEMPTS; attempt += 1) {
 			[state, commands] = dispatch(state, {
 				type: 'RebuildFailed',
+				commandId: activeCommandId(state),
 				generation,
 				error: new Error(`failure ${attempt}`),
 			});
@@ -150,7 +171,12 @@ describe('transport rebuild machine orchestration', () => {
 	it('restarts rebuild commands when the session nonce changes', () => {
 		let [state, generation, snapshot] = startRebuild();
 
-		[state] = dispatch(state, { type: 'NonceChanged', nonce: 2 });
+		[state] = dispatch(state, {
+			type: 'NonceChanged',
+			commandId: activeCommandId(state),
+			generation,
+			nonce: 2,
+		});
 
 		expect(state.phase).toMatchObject({
 			phase: 'rebuilding',
@@ -160,7 +186,12 @@ describe('transport rebuild machine orchestration', () => {
 			snapshot,
 		});
 
-		const result = reduceVoiceSession(state, { type: 'NonceChanged', nonce: 3 });
+		const result = reduceVoiceSession(state, {
+			type: 'NonceChanged',
+			commandId: activeCommandId(state),
+			generation,
+			nonce: 3,
+		});
 		expect(result.commands).toEqual([
 			expect.objectContaining({
 				type: 'RebuildTransports',
@@ -173,11 +204,16 @@ describe('transport rebuild machine orchestration', () => {
 	});
 
 	it('fails terminally with leave cleanup when nonce restarts exceed the cap', () => {
-		let [state] = startRebuild();
+		let [state, generation] = startRebuild();
 		let commands: TVoiceSessionCommand[] = [];
 
 		for (let nonce = 2; nonce <= VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS + 2; nonce += 1) {
-			[state, commands] = dispatch(state, { type: 'NonceChanged', nonce });
+			[state, commands] = dispatch(state, {
+				type: 'NonceChanged',
+				commandId: activeCommandId(state),
+				generation,
+				nonce,
+			});
 		}
 
 		expect(state.phase).toEqual({ phase: 'failed', reason: 'restore-terminal-error', channelId: 7 });
@@ -208,6 +244,7 @@ describe('transport rebuild machine orchestration', () => {
 
 	it('preempts rebuilding when the websocket drops and drops stale rebuild results', () => {
 		const [state, generation] = startRebuild();
+		const rebuildCommandId = activeCommandId(state);
 		const preempted = reduceVoiceSession(state, {
 			type: 'WsDropped',
 			pending: pendingReconnect(),
@@ -222,7 +259,11 @@ describe('transport rebuild machine orchestration', () => {
 			pending: expect.objectContaining({ channelId: 7 }),
 		});
 
-		const staleResult = reduceVoiceSession(preempted.state, { type: 'RebuildSucceeded', generation });
+		const staleResult = reduceVoiceSession(preempted.state, {
+			type: 'RebuildSucceeded',
+			commandId: rebuildCommandId,
+			generation,
+		});
 		expect(staleResult.state).toBe(preempted.state);
 		expect(staleResult.commands).toEqual([]);
 	});

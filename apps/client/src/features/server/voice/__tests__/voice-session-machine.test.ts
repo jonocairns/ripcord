@@ -41,6 +41,16 @@ const dispatch = (
 	return [result.state, result.commands];
 };
 
+const activeCommandId = (state: TVoiceSessionState): number => {
+	const { phase } = state;
+
+	if ((phase.phase !== 'rebuilding' && phase.phase !== 'reconnecting') || phase.activeCommandId === undefined) {
+		throw new Error('expected active recovery command');
+	}
+
+	return phase.activeCommandId;
+};
+
 const startRebuildWithSnapshot = (): [TVoiceSessionState, number] => {
 	let state = createInitialVoiceSessionState();
 	let commands: TVoiceSessionCommand[];
@@ -61,6 +71,7 @@ const startRebuildWithSnapshot = (): [TVoiceSessionState, number] => {
 
 	[state, commands] = dispatch(state, {
 		type: 'RecoveryStarted',
+		commandId: activeCommandId(state),
 		generation,
 		snapshot: snapshot(),
 	});
@@ -90,6 +101,7 @@ const startReconnectWithSnapshot = (authenticated = true): [TVoiceSessionState, 
 
 	[state, commands] = dispatch(state, {
 		type: 'RecoveryStarted',
+		commandId: activeCommandId(state),
 		generation,
 		snapshot: snapshot(),
 	});
@@ -154,7 +166,11 @@ describe('voice session machine', () => {
 
 	it('drops stale result events by generation', () => {
 		const [rebuildingState, generation] = startRebuildWithSnapshot();
-		const result = reduceVoiceSession(rebuildingState, { type: 'RebuildSucceeded', generation: generation + 1 });
+		const result = reduceVoiceSession(rebuildingState, {
+			type: 'RebuildSucceeded',
+			commandId: activeCommandId(rebuildingState),
+			generation: generation + 1,
+		});
 
 		expect(result.state).toBe(rebuildingState);
 		expect(result.commands).toEqual([]);
@@ -164,7 +180,12 @@ describe('voice session machine', () => {
 		let [state, generation] = startRebuildWithSnapshot();
 
 		for (let nonce = 2; nonce <= VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS + 1; nonce += 1) {
-			const result = reduceVoiceSession(state, { type: 'NonceChanged', nonce });
+			const result = reduceVoiceSession(state, {
+				type: 'NonceChanged',
+				commandId: activeCommandId(state),
+				generation,
+				nonce,
+			});
 
 			expect(result.state.phase).toMatchObject({
 				phase: 'rebuilding',
@@ -186,6 +207,8 @@ describe('voice session machine', () => {
 
 		const capped = reduceVoiceSession(state, {
 			type: 'NonceChanged',
+			commandId: activeCommandId(state),
+			generation,
 			nonce: VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS + 2,
 		});
 
@@ -201,6 +224,7 @@ describe('voice session machine', () => {
 		const [state, generation] = startReconnectWithSnapshot(true);
 		const result = reduceVoiceSession(state, {
 			type: 'RestoreFailed',
+			commandId: activeCommandId(state),
 			generation,
 			error: new Error('mystery'),
 		});
@@ -240,12 +264,21 @@ describe('voice session machine', () => {
 			throw new Error('expected reconnect generation');
 		}
 
-		[state, commands] = dispatch(state, { type: 'RecoveryStarted', generation, snapshot: snapshot() });
+		[state, commands] = dispatch(state, {
+			type: 'RecoveryStarted',
+			commandId: activeCommandId(state),
+			generation,
+			snapshot: snapshot(),
+		});
 
 		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'waitingOnline' });
 		expect(commands).toEqual([expect.objectContaining({ type: 'WaitOnline', generation, expiresAt: 10_000 })]);
 
-		const expired = reduceVoiceSession(state, { type: 'OnlineExpired', generation });
+		const expired = reduceVoiceSession(state, {
+			type: 'OnlineExpired',
+			commandId: activeCommandId(state),
+			generation,
+		});
 
 		expect(expired.state.phase).toEqual({ phase: 'failed', reason: 'reconnect-expired', channelId: 5 });
 		expect(expired.commands).toEqual([
@@ -276,7 +309,12 @@ describe('voice session machine', () => {
 			throw new Error('expected reconnect generation');
 		}
 
-		[state] = dispatch(state, { type: 'RecoveryStarted', generation, snapshot: snapshot() });
+		[state] = dispatch(state, {
+			type: 'RecoveryStarted',
+			commandId: activeCommandId(state),
+			generation,
+			snapshot: snapshot(),
+		});
 		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'waitingOnline', authenticated: false });
 
 		[state, commands] = dispatch(state, { type: 'SocketAuthenticated' });
@@ -284,13 +322,17 @@ describe('voice session machine', () => {
 		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'waitingOnline', authenticated: true });
 		expect(commands).toEqual([]);
 
-		[state, commands] = dispatch(state, { type: 'OnlineReady', generation });
+		[state, commands] = dispatch(state, {
+			type: 'OnlineReady',
+			commandId: activeCommandId(state),
+			generation,
+		});
 
 		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'restoring', authenticated: true });
 		expect(commands).toEqual([expect.objectContaining({ type: 'RestoreVoiceSession', generation })]);
 	});
 
-	it('keeps reconnect generation and snapshot on repeated websocket drops', () => {
+	it('invalidates an in-flight restore when the websocket drops again', () => {
 		const [state, generation] = startReconnectWithSnapshot(true);
 		if (state.phase.phase !== 'reconnecting') {
 			throw new Error('expected reconnecting phase');
@@ -298,6 +340,7 @@ describe('voice session machine', () => {
 
 		const previousPhase = state.phase;
 		const previousSnapshot = state.phase.snapshot;
+		const restoreCommandId = activeCommandId(state);
 		const result = reduceVoiceSession(state, {
 			type: 'WsDropped',
 			pending: pending({ expiresAt: 20_000 }),
@@ -306,27 +349,67 @@ describe('voice session machine', () => {
 			authenticated: false,
 		});
 
-		expect(result.commands).toEqual([]);
+		expect(result.commands).toEqual([
+			expect.objectContaining({
+				type: 'WaitOnline',
+				generation,
+			}),
+		]);
 		if (result.state.phase.phase !== 'reconnecting') {
 			throw new Error('expected reconnecting phase after repeated drop');
 		}
 
 		expect(result.state.phase).toMatchObject({
 			phase: 'reconnecting',
-			step: previousPhase.step,
-			authenticated: previousPhase.authenticated,
+			step: 'waitingOnline',
+			authenticated: false,
 			generation,
 			pending: expect.objectContaining({ expiresAt: 20_000 }),
 		});
+		expect(result.state.phase.activeCommandId).not.toBe(restoreCommandId);
 		expect(result.state.phase.snapshot).toBe(previousSnapshot);
 		expect(result.state.phase.retryAttempt).toBe(previousPhase.retryAttempt);
 		expect(result.state.phase.consecutiveUnknownErrors).toBe(previousPhase.consecutiveUnknownErrors);
+
+		const staleRestore = reduceVoiceSession(result.state, {
+			type: 'RestoreSucceeded',
+			commandId: restoreCommandId,
+			generation,
+			serverSessionEstablished: true,
+		});
+		expect(staleRestore.state).toBe(result.state);
+		expect(staleRestore.commands).toEqual([]);
+	});
+
+	it('moves an in-flight restore back behind the auth gate when the socket becomes unauthenticated', () => {
+		const [state, generation] = startReconnectWithSnapshot(true);
+		const restoreCommandId = activeCommandId(state);
+		const result = reduceVoiceSession(state, { type: 'SocketUnauthenticated' });
+
+		expect(result.state.phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'waitingAuth',
+			authenticated: false,
+			generation,
+		});
+		expect(result.commands).toEqual([expect.objectContaining({ type: 'WaitAuth', generation })]);
+		expect(activeCommandId(result.state)).not.toBe(restoreCommandId);
+
+		const staleRestore = reduceVoiceSession(result.state, {
+			type: 'RestoreSucceeded',
+			commandId: restoreCommandId,
+			generation,
+			serverSessionEstablished: true,
+		});
+		expect(staleRestore.state).toBe(result.state);
+		expect(staleRestore.commands).toEqual([]);
 	});
 
 	it('uses the shared classifier for rebuild terminal failures and emits leave cleanup', () => {
 		const [state, generation] = startRebuildWithSnapshot();
 		const result = reduceVoiceSession(state, {
 			type: 'RebuildFailed',
+			commandId: activeCommandId(state),
 			generation,
 			error: {
 				data: {
@@ -346,6 +429,7 @@ describe('voice session machine', () => {
 		const [state, generation] = startReconnectWithSnapshot(true);
 		const result = reduceVoiceSession(state, {
 			type: 'RestoreFailed',
+			commandId: activeCommandId(state),
 			generation,
 			serverSessionEstablished: true,
 			error: {
@@ -378,6 +462,7 @@ describe('voice session machine', () => {
 		const [state, generation] = startReconnectWithSnapshot(true);
 		const result = reduceVoiceSession(state, {
 			type: 'RestoreFailed',
+			commandId: activeCommandId(state),
 			generation,
 			serverSessionEstablished: false,
 			error: {
@@ -405,6 +490,7 @@ describe('voice session machine', () => {
 
 		[state, commands] = dispatch(state, {
 			type: 'RestoreSucceeded',
+			commandId: activeCommandId(state),
 			generation,
 			serverSessionEstablished: true,
 		});
@@ -414,7 +500,12 @@ describe('voice session machine', () => {
 
 		const restoredAt = 50_000;
 
-		[state, commands] = dispatch(state, { type: 'WatchIntentRehydrated', generation, now: restoredAt });
+		[state, commands] = dispatch(state, {
+			type: 'WatchIntentRehydrated',
+			commandId: activeCommandId(state),
+			generation,
+			now: restoredAt,
+		});
 
 		expect(state.phase).toEqual({ phase: 'connected', channelId: 5 });
 		expect(state.pendingVoiceReconnect).toBeUndefined();
@@ -437,7 +528,11 @@ describe('voice session machine', () => {
 		expect(state.phase).toMatchObject({ phase: 'reconnecting', authenticated: true, step: 'waitingAuth' });
 		expect(commands).toEqual([]);
 
-		const authReadyResult = dispatch(state, { type: 'AuthReady', generation });
+		const authReadyResult = dispatch(state, {
+			type: 'AuthReady',
+			commandId: activeCommandId(state),
+			generation,
+		});
 		commands = authReadyResult[1];
 		state = authReadyResult[0];
 
@@ -447,7 +542,11 @@ describe('voice session machine', () => {
 
 	it('clears reconnect facade fields when auth recovery is cleared', () => {
 		const [state, generation] = startReconnectWithSnapshot(false);
-		const result = reduceVoiceSession(state, { type: 'AuthCleared', generation });
+		const result = reduceVoiceSession(state, {
+			type: 'AuthCleared',
+			commandId: activeCommandId(state),
+			generation,
+		});
 
 		expect(result.state.phase).toEqual({ phase: 'idle' });
 		expect(result.state.pendingVoiceReconnect).toBeUndefined();
@@ -473,7 +572,11 @@ describe('voice session machine', () => {
 
 		// A runner still in flight from before the resume reports under the old
 		// generation and must be ignored.
-		const stale = reduceVoiceSession(resumed.state, { type: 'RebuildSucceeded', generation });
+		const stale = reduceVoiceSession(resumed.state, {
+			type: 'RebuildSucceeded',
+			commandId: activeCommandId(state),
+			generation,
+		});
 		expect(stale.state).toBe(resumed.state);
 		expect(stale.commands).toEqual([]);
 	});
@@ -481,7 +584,12 @@ describe('voice session machine', () => {
 	it('resumes an interrupted reconnect retry delay under a new generation', () => {
 		let [state, generation] = startReconnectWithSnapshot(true);
 
-		[state] = dispatch(state, { type: 'RestoreFailed', generation, error: new Error('blip') });
+		[state] = dispatch(state, {
+			type: 'RestoreFailed',
+			commandId: activeCommandId(state),
+			generation,
+			error: new Error('blip'),
+		});
 		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'retryDelay', retryAttempt: 1 });
 
 		const resumed = reduceVoiceSession(state, { type: 'Resumed' });
