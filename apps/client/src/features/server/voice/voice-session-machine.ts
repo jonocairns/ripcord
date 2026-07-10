@@ -45,7 +45,10 @@ type TVoiceSessionPhase =
 
 type TVoiceSessionState = {
 	phase: TVoiceSessionPhase;
+	pendingVoiceReconnect?: TPendingVoiceReconnect;
+	reconnectingSince?: number;
 	suppression?: TVoiceReconnectSuppression;
+	reconnectAuthenticated: boolean;
 	nextGeneration: number;
 	nextCommandId: number;
 };
@@ -108,6 +111,11 @@ type TVoiceSessionTriggerEvent =
 	| { type: 'SocketUnauthenticated' }
 	| { type: 'NonceChanged'; nonce: number }
 	| { type: 'Terminated'; reason: TClearReason; channelId?: number }
+	| { type: 'ReconnectIntentCaptured'; pending: TPendingVoiceReconnect }
+	| { type: 'ReconnectStarted'; now: number; online: boolean; authenticated: boolean }
+	| { type: 'ReconnectStartCleared' }
+	| { type: 'RecoveryCleared'; reason: TClearReason }
+	| { type: 'ReconnectSuppressionChanged'; suppression: TVoiceReconnectSuppression | undefined }
 	| { type: 'RecoveryStarted'; generation: number; snapshot: TWatchedRemoteStreamsSnapshot };
 
 type TVoiceSessionResultEvent =
@@ -133,6 +141,7 @@ type TVoiceSessionReducerResult = {
 
 const createInitialVoiceSessionState = (): TVoiceSessionState => ({
 	phase: { phase: 'idle' },
+	reconnectAuthenticated: false,
 	nextGeneration: 1,
 	nextCommandId: 1,
 });
@@ -183,6 +192,14 @@ const nextGeneration = (state: TVoiceSessionState): [TVoiceSessionState, number]
 	return [{ ...state, nextGeneration: generation + 1 }, generation];
 };
 
+// Resets the facade mirror only; keep phase intact for callers that still need phase data while exiting recovery.
+const clearReconnectFacadeRecovery = (state: TVoiceSessionState): TVoiceSessionState => ({
+	...state,
+	pendingVoiceReconnect: undefined,
+	reconnectingSince: undefined,
+	reconnectAuthenticated: false,
+});
+
 const failSession = (
 	state: TVoiceSessionState,
 	reason: TClearReason,
@@ -191,7 +208,7 @@ const failSession = (
 ): TVoiceSessionReducerResult => {
 	const [baseState, generation] = nextGeneration(state);
 	const failedState: TVoiceSessionState = {
-		...baseState,
+		...clearReconnectFacadeRecovery(baseState),
 		phase: { phase: 'failed', reason, channelId },
 	};
 
@@ -271,6 +288,9 @@ const startReconnecting = (
 	const [baseState, generation] = nextGeneration(state);
 	const nextState: TVoiceSessionState = {
 		...baseState,
+		pendingVoiceReconnect: event.pending,
+		reconnectingSince: event.now,
+		reconnectAuthenticated: event.authenticated,
 		phase: {
 			phase: 'reconnecting',
 			step: !event.online ? 'waitingOnline' : event.authenticated ? 'restoring' : 'waitingAuth',
@@ -284,6 +304,29 @@ const startReconnecting = (
 	};
 
 	return scheduleReconnectStep(nextState);
+};
+
+const startCapturedReconnect = (
+	state: TVoiceSessionState,
+	event: Extract<TVoiceSessionTriggerEvent, { type: 'ReconnectStarted' }>,
+): TVoiceSessionReducerResult => {
+	const pending = state.phase.phase === 'reconnecting' ? state.phase.pending : state.pendingVoiceReconnect;
+
+	if (!pending) {
+		return emptyResult({ ...state, reconnectingSince: event.now, reconnectAuthenticated: event.authenticated });
+	}
+
+	if (state.phase.phase === 'reconnecting') {
+		return emptyResult(state);
+	}
+
+	return startReconnecting(state, {
+		type: 'WsDropped',
+		pending,
+		now: event.now,
+		online: event.online,
+		authenticated: event.authenticated,
+	});
 };
 
 const startRebuilding = (
@@ -494,13 +537,17 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 		case 'JoinRequested':
 			return emptyResult({ ...state, phase: { phase: 'joining', channelId: event.channelId } });
 		case 'JoinSucceeded':
-			return emptyResult({ ...state, phase: { phase: 'connected', channelId: event.channelId } });
+			return emptyResult({
+				...clearReconnectFacadeRecovery(state),
+				phase: { phase: 'connected', channelId: event.channelId },
+			});
 		case 'JoinFailed':
 			return failSession(state, event.reason, event.channelId);
 		case 'WsDropped':
 			if (state.phase.phase === 'reconnecting') {
 				return emptyResult({
 					...state,
+					pendingVoiceReconnect: event.pending,
 					phase: {
 						...state.phase,
 						pending: event.pending,
@@ -509,6 +556,30 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			}
 
 			return startReconnecting(state, event);
+		case 'ReconnectIntentCaptured':
+			if (state.phase.phase === 'reconnecting') {
+				return emptyResult({
+					...state,
+					pendingVoiceReconnect: event.pending,
+					phase: { ...state.phase, pending: event.pending },
+				});
+			}
+
+			return emptyResult({ ...state, pendingVoiceReconnect: event.pending });
+		case 'ReconnectStarted':
+			return startCapturedReconnect(state, event);
+		case 'ReconnectStartCleared':
+			if (state.phase.phase === 'reconnecting') {
+				return emptyResult({
+					...state,
+					phase: { phase: 'idle' },
+					pendingVoiceReconnect: state.phase.pending,
+					reconnectingSince: undefined,
+					reconnectAuthenticated: state.phase.authenticated,
+				});
+			}
+
+			return emptyResult({ ...state, reconnectingSince: undefined });
 		case 'TransportFailed':
 			if (state.phase.phase === 'reconnecting') {
 				return emptyResult(state);
@@ -517,12 +588,13 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			return startRebuilding(state, event);
 		case 'SocketAuthenticated':
 			if (state.phase.phase !== 'reconnecting') {
-				return emptyResult(state);
+				return emptyResult({ ...state, reconnectAuthenticated: true });
 			}
 
 			if (state.phase.snapshot === undefined || state.phase.step !== 'waitingAuth') {
 				return emptyResult({
 					...state,
+					reconnectAuthenticated: true,
 					phase: {
 						...state.phase,
 						authenticated: true,
@@ -532,6 +604,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 
 			return scheduleReconnectStep({
 				...state,
+				reconnectAuthenticated: true,
 				phase: {
 					...state.phase,
 					authenticated: true,
@@ -540,14 +613,29 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			});
 		case 'SocketUnauthenticated':
 			if (state.phase.phase !== 'reconnecting') {
-				return emptyResult(state);
+				return emptyResult({ ...state, reconnectAuthenticated: false });
 			}
 
-			return emptyResult({ ...state, phase: { ...state.phase, authenticated: false, step: 'waitingAuth' } });
+			return emptyResult({
+				...state,
+				reconnectAuthenticated: false,
+				phase: { ...state.phase, authenticated: false, step: 'waitingAuth' },
+			});
 		case 'NonceChanged':
 			return reduceNonceChanged(state, event);
 		case 'Terminated':
 			return failSession(state, event.reason, event.channelId);
+		case 'RecoveryCleared':
+			return emptyResult({
+				...state,
+				phase: { phase: 'idle' },
+				pendingVoiceReconnect: undefined,
+				reconnectingSince: undefined,
+				suppression: undefined,
+				reconnectAuthenticated: false,
+			});
+		case 'ReconnectSuppressionChanged':
+			return emptyResult({ ...state, suppression: event.suppression });
 		case 'RecoveryStarted':
 			return reduceRecoveryStarted(state, event);
 		case 'RebuildSucceeded':
@@ -557,7 +645,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 
 			return withCommand(
 				{
-					...state,
+					...clearReconnectFacadeRecovery(state),
 					phase: { phase: 'connected', channelId: state.phase.channelId },
 				},
 				{ type: 'RecoverDesktopAppAudio', generation: state.phase.generation },
@@ -608,6 +696,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 
 			return scheduleReconnectStep({
 				...state,
+				reconnectAuthenticated: true,
 				phase: { ...state.phase, authenticated: true, step: 'restoring' },
 			});
 		case 'AuthCleared':
@@ -615,7 +704,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				return emptyResult(state);
 			}
 
-			return emptyResult({ ...state, phase: { phase: 'idle' } });
+			return emptyResult({ ...clearReconnectFacadeRecovery(state), phase: { phase: 'idle' } });
 		case 'RetryDelayElapsed':
 			if (state.phase.phase !== 'reconnecting' || state.phase.generation !== event.generation) {
 				return emptyResult(state);
@@ -632,7 +721,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 
 			return withCommand(
 				{
-					...state,
+					...clearReconnectFacadeRecovery(state),
 					phase: { phase: 'connected', channelId: state.phase.pending.channelId },
 					suppression: {
 						channelId: state.phase.pending.channelId,

@@ -534,20 +534,18 @@ describe('voice actions', () => {
 				sharingScreen: true,
 			},
 		});
-		useVoiceReconnectStore.setState({
-			pendingVoiceReconnect: {
-				channelId: 7,
-				micMuted: true,
-				soundMuted: false,
-				peerUserIds: [10],
-				expiresAt: Date.now() + 10_000,
-			},
-			reconnectingSince: Date.now(),
-			voiceReconnectSuppression: {
-				channelId: 7,
-				peerUserIds: [10],
-				expiresAt: Date.now() + 10_000,
-			},
+		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+			channelId: 7,
+			micMuted: true,
+			soundMuted: false,
+			peerUserIds: [10],
+			expiresAt: Date.now() + 10_000,
+		});
+		useVoiceReconnectStore.getState().setReconnectingSince(Date.now());
+		useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+			channelId: 7,
+			peerUserIds: [10],
+			expiresAt: Date.now() + 10_000,
 		});
 
 		const result = await flushVoiceForDesktopQuit();
@@ -574,14 +572,12 @@ describe('voice actions', () => {
 	it('falls back to skipped desktop quit flush when the leave call fails', async () => {
 		leaveShouldFail = true;
 		setJoinedVoiceChannelState();
-		useVoiceReconnectStore.setState({
-			pendingVoiceReconnect: {
-				channelId: 7,
-				micMuted: false,
-				soundMuted: false,
-				peerUserIds: [],
-				expiresAt: Date.now() + 10_000,
-			},
+		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+			channelId: 7,
+			micMuted: false,
+			soundMuted: false,
+			peerUserIds: [],
+			expiresAt: Date.now() + 10_000,
 		});
 
 		const result = await flushVoiceForDesktopQuit();
@@ -594,16 +590,14 @@ describe('voice actions', () => {
 	});
 
 	it('still attempts desktop quit flush when reconnect cleanup already cleared the local voice channel id', async () => {
-		useVoiceReconnectStore.setState({
-			pendingVoiceReconnect: {
-				channelId: 7,
-				micMuted: false,
-				soundMuted: false,
-				peerUserIds: [],
-				expiresAt: Date.now() + 10_000,
-			},
-			reconnectingSince: Date.now(),
+		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+			channelId: 7,
+			micMuted: false,
+			soundMuted: false,
+			peerUserIds: [],
+			expiresAt: Date.now() + 10_000,
 		});
+		useVoiceReconnectStore.getState().setReconnectingSince(Date.now());
 
 		const result = await flushVoiceForDesktopQuit();
 
@@ -656,20 +650,18 @@ describe('voice actions', () => {
 				sharingScreen: true,
 			},
 		});
-		useVoiceReconnectStore.setState({
-			pendingVoiceReconnect: {
-				channelId: 7,
-				micMuted: false,
-				soundMuted: false,
-				peerUserIds: [10],
-				expiresAt: Date.now() + 10_000,
-			},
-			reconnectingSince: Date.now(),
-			voiceReconnectSuppression: {
-				channelId: 7,
-				peerUserIds: [10],
-				expiresAt: Date.now() + 10_000,
-			},
+		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+			channelId: 7,
+			micMuted: false,
+			soundMuted: false,
+			peerUserIds: [10],
+			expiresAt: Date.now() + 10_000,
+		});
+		useVoiceReconnectStore.getState().setReconnectingSince(Date.now());
+		useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+			channelId: 7,
+			peerUserIds: [10],
+			expiresAt: Date.now() + 10_000,
 		});
 
 		clearOwnVoiceSessionAfterReconnectFailure('restore-terminal-error');

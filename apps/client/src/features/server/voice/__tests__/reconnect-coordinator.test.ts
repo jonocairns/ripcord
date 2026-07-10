@@ -54,6 +54,7 @@ describe('voice reconnect coordinator', () => {
 			expect(pendingVoiceReconnect.soundMuted).toBe(false);
 			expect(pendingVoiceReconnect.peerUserIds).toEqual([10, 20]);
 			expect(pendingVoiceReconnect.expiresAt).toBe(expiresAt);
+			expect(useVoiceReconnectStore.getState().reconnectingSince).toBeUndefined();
 		});
 
 		it('copies peerUserIds by value so later voiceMap mutations do not affect the snapshot', () => {

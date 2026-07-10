@@ -349,6 +349,9 @@ describe('voice session machine', () => {
 		});
 
 		expect(result.state.phase).toEqual({ phase: 'failed', reason: 'restore-conflict', channelId: 5 });
+		expect(result.state.pendingVoiceReconnect).toBeUndefined();
+		expect(result.state.reconnectingSince).toBeUndefined();
+		expect(result.state.reconnectAuthenticated).toBe(false);
 		expect(result.commands).toEqual([
 			expect.objectContaining({ type: 'LeaveVoiceSession', generation: generation + 1 }),
 		]);
@@ -370,6 +373,9 @@ describe('voice session machine', () => {
 		[state, commands] = dispatch(state, { type: 'WatchIntentRehydrated', generation });
 
 		expect(state.phase).toEqual({ phase: 'connected', channelId: 5 });
+		expect(state.pendingVoiceReconnect).toBeUndefined();
+		expect(state.reconnectingSince).toBeUndefined();
+		expect(state.reconnectAuthenticated).toBe(false);
 		expect(state.suppression).toEqual({
 			channelId: 5,
 			peerUserIds: [10, 20],
@@ -386,5 +392,16 @@ describe('voice session machine', () => {
 
 		expect(state.phase).toMatchObject({ phase: 'reconnecting', authenticated: true, step: 'restoring' });
 		expect(commands).toEqual([expect.objectContaining({ type: 'RestoreVoiceSession', generation })]);
+	});
+
+	it('clears reconnect facade fields when auth recovery is cleared', () => {
+		const [state, generation] = startReconnectWithSnapshot(false);
+		const result = reduceVoiceSession(state, { type: 'AuthCleared', generation });
+
+		expect(result.state.phase).toEqual({ phase: 'idle' });
+		expect(result.state.pendingVoiceReconnect).toBeUndefined();
+		expect(result.state.reconnectingSince).toBeUndefined();
+		expect(result.state.reconnectAuthenticated).toBe(false);
+		expect(result.commands).toEqual([]);
 	});
 });
