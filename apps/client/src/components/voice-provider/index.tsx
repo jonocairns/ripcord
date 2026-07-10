@@ -3722,46 +3722,43 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		],
 	);
 
-	const waitForVoiceReconnectOnline = useCallback(async (expiresAt: number): Promise<'online' | 'expired'> => {
+	// Every WS drop re-captures the reconnect intent with a fresh expiresAt (see
+	// captureVoiceReconnectIntentForCurrentSession), so an in-flight wait must
+	// honour the machine's CURRENT deadline rather than the one frozen into the
+	// command when it was emitted. Otherwise an offline window longer than one
+	// intent TTL expires recovery even though repeated drops kept the intent
+	// fresh — the legacy loop re-read the pending intent at every decision point
+	// and recovered from >60s offline; this getter preserves that behaviour.
+	const liveReconnectDeadline = useCallback((command: { generation: number; expiresAt: number }): number => {
+		const { phase } = getVoiceSessionState();
+
+		return phase.phase === 'reconnecting' && phase.generation === command.generation
+			? phase.pending.expiresAt
+			: command.expiresAt;
+	}, []);
+
+	const waitForVoiceReconnectOnline = useCallback(async (getExpiresAt: () => number): Promise<'online' | 'expired'> => {
 		if (isVoiceReconnectOnline()) {
 			return 'online';
 		}
 
-		const remainingMs = expiresAt - Date.now();
-
-		if (remainingMs <= 0) {
+		if (Date.now() > getExpiresAt()) {
 			return 'expired';
 		}
 
 		logDebug('Voice reconnect offline pause');
 
-		const outcome = await new Promise<'online' | 'expired'>((resolve) => {
-			let timeoutId: number | undefined;
+		while (!isVoiceReconnectOnline()) {
+			if (Date.now() > getExpiresAt()) {
+				return 'expired';
+			}
 
-			const cleanup = () => {
-				window.removeEventListener('online', handleOnline);
-				if (timeoutId !== undefined) {
-					window.clearTimeout(timeoutId);
-				}
-			};
-
-			const handleOnline = () => {
-				cleanup();
-				resolve(Date.now() > expiresAt ? 'expired' : 'online');
-			};
-
-			window.addEventListener('online', handleOnline, { once: true });
-			timeoutId = window.setTimeout(() => {
-				cleanup();
-				resolve('expired');
-			}, remainingMs);
-		});
-
-		if (outcome === 'online') {
-			logDebug('Voice reconnect offline resume');
+			await new Promise<void>((resolve) => setTimeout(resolve, VOICE_RECONNECT_WAIT_POLL_MS));
 		}
 
-		return outcome;
+		logDebug('Voice reconnect offline resume');
+
+		return 'online';
 	}, []);
 
 	// Blocks a restore attempt until the reconnected WS has re-authenticated
@@ -3770,7 +3767,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// this waits for the next joinServer instead. Resolves early if recovery is
 	// cleared or the reconnect window expires.
 	const waitForVoiceReconnectAuthenticated = useCallback(
-		async (expiresAt: number): Promise<'authenticated' | 'expired' | 'cleared'> => {
+		async (getExpiresAt: () => number): Promise<'authenticated' | 'expired' | 'cleared'> => {
 			const reconnectState = useVoiceReconnectStore.getState();
 
 			// Recovery was already torn down — signal the caller to bow out quietly
@@ -3783,9 +3780,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				return 'authenticated';
 			}
 
-			const remainingMs = expiresAt - Date.now();
-
-			if (remainingMs <= 0) {
+			if (Date.now() > getExpiresAt()) {
 				return 'expired';
 			}
 
@@ -3807,6 +3802,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					resolve(result);
 				};
 
+				// The deadline slides as repeated WS drops refresh the pending intent,
+				// so on expiry re-read it and re-arm instead of finishing outright.
+				const armExpiryTimer = () => {
+					const remainingMs = getExpiresAt() - Date.now();
+
+					if (remainingMs <= 0) {
+						finish('expired');
+						return;
+					}
+
+					timeoutId = window.setTimeout(armExpiryTimer, remainingMs);
+				};
+
 				const unsubscribe = useVoiceReconnectStore.subscribe((state) => {
 					if (state.reconnectingSince === undefined) {
 						finish('cleared');
@@ -3814,11 +3822,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					}
 
 					if (state.reconnectAuthenticated) {
-						finish(Date.now() > expiresAt ? 'expired' : 'authenticated');
+						finish(Date.now() > getExpiresAt() ? 'expired' : 'authenticated');
 					}
 				});
 
-				timeoutId = window.setTimeout(() => finish('expired'), remainingMs);
+				armExpiryTimer();
 
 				// Guard the race where state changed between the initial read and subscribe.
 				const currentState = useVoiceReconnectStore.getState();
@@ -3833,16 +3841,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const waitForVoiceReconnectDelay = useCallback(
-		async (delayMs: number, expiresAt: number): Promise<'ready' | 'expired'> => {
+		async (delayMs: number, getExpiresAt: () => number): Promise<'ready' | 'expired'> => {
 			let remainingDelayMs = delayMs;
 
 			while (remainingDelayMs > 0) {
-				if (Date.now() > expiresAt) {
+				if (Date.now() > getExpiresAt()) {
 					return 'expired';
 				}
 
 				if (!isVoiceReconnectOnline()) {
-					const outcome = await waitForVoiceReconnectOnline(expiresAt);
+					const outcome = await waitForVoiceReconnectOnline(getExpiresAt);
 
 					if (outcome === 'expired') {
 						return 'expired';
@@ -3856,7 +3864,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				remainingDelayMs -= waitMs;
 			}
 
-			return Date.now() > expiresAt ? 'expired' : 'ready';
+			return Date.now() > getExpiresAt() ? 'expired' : 'ready';
 		},
 		[waitForVoiceReconnectOnline],
 	);
@@ -3867,7 +3875,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				return;
 			}
 
-			const outcome = await waitForVoiceReconnectOnline(command.expiresAt);
+			const outcome = await waitForVoiceReconnectOnline(() => liveReconnectDeadline(command));
 
 			dispatchIfCurrentVoiceSessionCommand(command, () => {
 				dispatchVoiceSession({
@@ -3876,7 +3884,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				});
 			});
 		},
-		[dispatchIfCurrentVoiceSessionCommand, waitForVoiceReconnectOnline],
+		[dispatchIfCurrentVoiceSessionCommand, liveReconnectDeadline, waitForVoiceReconnectOnline],
 	);
 
 	const runWaitAuthCommand = useCallback(
@@ -3885,7 +3893,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				return;
 			}
 
-			const outcome = await waitForVoiceReconnectAuthenticated(command.expiresAt);
+			const outcome = await waitForVoiceReconnectAuthenticated(() => liveReconnectDeadline(command));
 
 			dispatchIfCurrentVoiceSessionCommand(command, () => {
 				dispatchVoiceSession({
@@ -3894,7 +3902,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				});
 			});
 		},
-		[dispatchIfCurrentVoiceSessionCommand, waitForVoiceReconnectAuthenticated],
+		[dispatchIfCurrentVoiceSessionCommand, liveReconnectDeadline, waitForVoiceReconnectAuthenticated],
 	);
 
 	const runRestoreVoiceSessionCommand = useCallback(
@@ -4003,7 +4011,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				delayMs,
 			});
 
-			const outcome = await waitForVoiceReconnectDelay(delayMs, command.expiresAt);
+			const outcome = await waitForVoiceReconnectDelay(delayMs, () => liveReconnectDeadline(command));
 
 			dispatchIfCurrentVoiceSessionCommand(command, () => {
 				dispatchVoiceSession({
@@ -4012,7 +4020,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				});
 			});
 		},
-		[dispatchIfCurrentVoiceSessionCommand, waitForVoiceReconnectDelay],
+		[dispatchIfCurrentVoiceSessionCommand, liveReconnectDeadline, waitForVoiceReconnectDelay],
 	);
 
 	const runRestoreWatchIntentCommand = useCallback(

@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 import { logDebug } from '@/helpers/browser-logger';
 import { useServerStore } from '../slice';
-import { dispatchVoiceSession, getVoiceSessionState, resetVoiceSessionState } from './voice-session-store';
+import {
+	dispatchVoiceSession,
+	getVoiceSessionState,
+	resetVoiceSessionState,
+	subscribeVoiceSession,
+} from './voice-session-store';
 
 type TPendingVoiceReconnect = {
 	channelId: number;
@@ -171,6 +176,20 @@ const useVoiceReconnectStore = create<TVoiceReconnectStore>((set) => ({
 		set({ ...initialState });
 	},
 }));
+
+// Keep the zustand projection in lockstep with every machine transition. This
+// runs as a session-store listener registered at module eval, which strictly
+// precedes the VoiceProvider's command-runner subscription (a mount effect) —
+// so command runners that read the projection (waitForVoiceReconnectAuthenticated
+// and friends) always observe post-dispatch state. Without this, a command
+// emitted synchronously inside a dispatch (e.g. WaitAuth right after
+// ReconnectStarted) reads the pre-dispatch projection, sees reconnectingSince
+// undefined, and aborts recovery as 'cleared'. It also covers machine
+// transitions triggered from the provider (e.g. WatchIntentRehydrated), which
+// don't go through the coordinator setters at all.
+subscribeVoiceSession(() => {
+	syncVoiceReconnectProjection();
+});
 
 const snapshotVoiceReconnectIntent = (opts: { expiresAt: number }): void => {
 	const serverState = useServerStore.getState();
