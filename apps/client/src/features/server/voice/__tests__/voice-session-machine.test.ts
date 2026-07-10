@@ -359,7 +359,7 @@ describe('voice session machine', () => {
 		]);
 	});
 
-	it('emits ledger restore and desktop app-audio commands after reconnect success', () => {
+	it('emits ledger restore and completes reconnect without duplicate desktop app-audio recovery', () => {
 		let [state, generation] = startReconnectWithSnapshot(true);
 		let commands: TVoiceSessionCommand[];
 
@@ -383,13 +383,20 @@ describe('voice session machine', () => {
 			peerUserIds: [10, 20],
 			expiresAt: 10_000,
 		});
-		expect(commands).toEqual([expect.objectContaining({ type: 'RecoverDesktopAppAudio', generation })]);
+		expect(commands).toEqual([]);
 	});
 
 	it('waits for auth before restore when reconnect starts unauthenticated', () => {
 		let [state, generation] = startReconnectWithSnapshot(false);
+		let commands: TVoiceSessionCommand[];
+
+		[state, commands] = dispatch(state, { type: 'SocketAuthenticated' });
+
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', authenticated: true, step: 'waitingAuth' });
+		expect(commands).toEqual([]);
+
 		const authReadyResult = dispatch(state, { type: 'AuthReady', generation });
-		const commands = authReadyResult[1];
+		commands = authReadyResult[1];
 		state = authReadyResult[0];
 
 		expect(state.phase).toMatchObject({ phase: 'reconnecting', authenticated: true, step: 'restoring' });

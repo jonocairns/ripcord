@@ -57,7 +57,7 @@ type TUseTransportParams = {
 	) => void;
 	removeExternalStreamTrack: (streamId: number, kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO) => void;
 	addPendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
-	clearAllPendingStreams: () => void;
+	clearAllPendingStreams: (opts?: { preserveIntent?: boolean }) => void;
 	reconcilePendingStreams: (producers: TRemoteProducerIds, externalStreamTracks?: TExternalStreamTrackPresence) => void;
 	markWatchStopped: (remoteId: number, kind: StreamKind) => void;
 	markConsumeStarted: (
@@ -834,50 +834,53 @@ const useTransports = ({
 		[markWatchStopped],
 	);
 
-	const cleanupTransports = useCallback(() => {
-		logVoice('Cleaning up transports');
+	const cleanupTransports = useCallback(
+		(opts?: { preserveRemoteMediaIntent?: boolean }) => {
+			logVoice('Cleaning up transports');
 
-		if (producerDisconnectTimer.current !== undefined) {
-			clearTimeout(producerDisconnectTimer.current);
-			producerDisconnectTimer.current = undefined;
-		}
+			if (producerDisconnectTimer.current !== undefined) {
+				clearTimeout(producerDisconnectTimer.current);
+				producerDisconnectTimer.current = undefined;
+			}
 
-		if (consumerDisconnectTimer.current !== undefined) {
-			clearTimeout(consumerDisconnectTimer.current);
-			consumerDisconnectTimer.current = undefined;
-		}
+			if (consumerDisconnectTimer.current !== undefined) {
+				clearTimeout(consumerDisconnectTimer.current);
+				consumerDisconnectTimer.current = undefined;
+			}
 
-		Object.values(consumers.current).forEach((userConsumers) => {
-			Object.values(userConsumers).forEach((consumer) => {
-				if (!consumer.closed) {
-					consumer.close();
-				}
+			Object.values(consumers.current).forEach((userConsumers) => {
+				Object.values(userConsumers).forEach((consumer) => {
+					if (!consumer.closed) {
+						consumer.close();
+					}
+				});
 			});
-		});
 
-		consumers.current = {};
+			consumers.current = {};
 
-		resetConsumeOperationGeneration(consumeOperationState.current);
-		// Drop any in-flight/queued existing-producer sweep so a stalled sweep
-		// (e.g. a hung getProducers during reconnect) cannot poison the
-		// single-flight state for the rebuilt transport generation.
-		existingProducersSweeperRef.current?.reset();
-		clearAllPendingStreams();
+			resetConsumeOperationGeneration(consumeOperationState.current);
+			// Drop any in-flight/queued existing-producer sweep so a stalled sweep
+			// (e.g. a hung getProducers during reconnect) cannot poison the
+			// single-flight state for the rebuilt transport generation.
+			existingProducersSweeperRef.current?.reset();
+			clearAllPendingStreams({ preserveIntent: opts?.preserveRemoteMediaIntent === true });
 
-		if (producerTransport.current && !producerTransport.current.closed) {
-			producerTransport.current.close();
-		}
+			if (producerTransport.current && !producerTransport.current.closed) {
+				producerTransport.current.close();
+			}
 
-		producerTransport.current = undefined;
+			producerTransport.current = undefined;
 
-		if (consumerTransport.current && !consumerTransport.current.closed) {
-			consumerTransport.current.close();
-		}
+			if (consumerTransport.current && !consumerTransport.current.closed) {
+				consumerTransport.current.close();
+			}
 
-		consumerTransport.current = undefined;
+			consumerTransport.current = undefined;
 
-		logVoice('Transports cleanup complete');
-	}, [clearAllPendingStreams]);
+			logVoice('Transports cleanup complete');
+		},
+		[clearAllPendingStreams],
+	);
 
 	const getActiveConsumerProducerId = useCallback(
 		(remoteId: number, kind: StreamKind): string | undefined => consumers.current[remoteId]?.[kind]?.producerId,

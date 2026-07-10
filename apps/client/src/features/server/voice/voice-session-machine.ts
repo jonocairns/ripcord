@@ -591,24 +591,12 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				return emptyResult({ ...state, reconnectAuthenticated: true });
 			}
 
-			if (state.phase.snapshot === undefined || state.phase.step !== 'waitingAuth') {
-				return emptyResult({
-					...state,
-					reconnectAuthenticated: true,
-					phase: {
-						...state.phase,
-						authenticated: true,
-					},
-				});
-			}
-
-			return scheduleReconnectStep({
+			return emptyResult({
 				...state,
 				reconnectAuthenticated: true,
 				phase: {
 					...state.phase,
 					authenticated: true,
-					step: 'restoring',
 				},
 			});
 		case 'SocketUnauthenticated':
@@ -719,18 +707,15 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				return emptyResult(state);
 			}
 
-			return withCommand(
-				{
-					...clearReconnectFacadeRecovery(state),
-					phase: { phase: 'connected', channelId: state.phase.pending.channelId },
-					suppression: {
-						channelId: state.phase.pending.channelId,
-						peerUserIds: [...state.phase.pending.peerUserIds],
-						expiresAt: state.phase.pending.expiresAt,
-					},
+			return emptyResult({
+				...clearReconnectFacadeRecovery(state),
+				phase: { phase: 'connected', channelId: state.phase.pending.channelId },
+				suppression: {
+					channelId: state.phase.pending.channelId,
+					peerUserIds: [...state.phase.pending.peerUserIds],
+					expiresAt: state.phase.pending.expiresAt,
 				},
-				{ type: 'RecoverDesktopAppAudio', generation: state.phase.generation },
-			);
+			});
 	}
 };
 

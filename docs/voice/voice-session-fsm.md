@@ -255,14 +255,12 @@ command runner does the consuming. Consequences:
   slot — restore commands are minted from ledger state, so the veto is just
   normal ledger flow. No second intent store kept by accident.
 
-**Open sub-question (resolve in the restore slice, not now):** the window between
-`cleanup` emptying the ledger and rehydration. A `markWatchStopped` landing there
-hits nothing, and rehydration could then resurrect the intent. Two candidate
-fixes — (a) rehydrate `desired` intent *immediately* after cleanup (slots go
-`desired:true, producerPresent:false` and reconcile as producers reappear), which
-closes the window and makes stop-watch normal; or (b) apply cancellation to the
-machine-held `snapshot` before it is used for rehydration. (a) is preferred
-because it keeps a single intent owner; decide against a real repro.
+**Restore-slice resolution:** recovery cleanup preserves remote-media intent in
+the ledger, then rehydrates snapshot intent immediately as
+`desired:true, producerPresent:false` for missing slots. Later producer
+reconciliation mints the consume commands. A stop-watch during recovery therefore
+lands on a live ledger slot (`desired:false`), and retry cleanup preserves that
+stopped intent instead of resurrecting it from the old snapshot.
 
 ## Execution plan
 

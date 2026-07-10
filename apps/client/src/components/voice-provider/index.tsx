@@ -20,17 +20,9 @@ import { SoundType } from '@/features/server/types';
 import { clearOwnVoiceSessionAfterReconnectFailure, updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { setVoiceProviderCleanupHandler } from '@/features/server/voice/provider-cleanup';
-import {
-	clearVoiceReconnectRecovery,
-	getValidPendingVoiceReconnect,
-	useVoiceReconnectStore,
-} from '@/features/server/voice/reconnect-coordinator';
+import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordinator';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
-import {
-	classifyVoiceReconnectError,
-	getVoiceReconnectRetryDelayMs,
-	VoiceReconnectTimeoutError,
-} from '@/features/server/voice/reconnect-policy';
+import { getVoiceReconnectRetryDelayMs, VoiceReconnectTimeoutError } from '@/features/server/voice/reconnect-policy';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import type { TVoiceSessionCommand } from '@/features/server/voice/voice-session-machine';
 import {
@@ -55,7 +47,7 @@ import {
 	type TDesktopScreenShareSelection,
 	type TStartAppAudioCaptureInput,
 } from '@/runtime/types';
-import { type TDeviceSettings, type TRemoteUserStreamKinds, VideoCodecPreference } from '@/types';
+import { type TDeviceSettings, VideoCodecPreference } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
 import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } from './audio-context';
 import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from './default-input-device';
@@ -114,7 +106,7 @@ type TScreenShareStreamHandlers = {
 };
 
 type TWatchedRemoteStreamsSnapshot = {
-	remoteUserStreams: Record<number, TRemoteUserStreamKinds[]>;
+	remoteUserStreams: Record<number, StreamKind[]>;
 	externalStreams: Record<number, TWatchedExternalStreamKinds>;
 };
 
@@ -607,7 +599,6 @@ const RECOVERY_TIMEOUT_MS = 12_000;
 const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
 const RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS = 350;
 const VOICE_RECONNECT_TIMEOUT_MS = 12_000;
-const VOICE_RECONNECT_SUPPRESSION_MS = 10_000;
 const VOICE_RECONNECT_WAIT_POLL_MS = 250;
 
 const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, createTimeoutError: () => Error): Promise<T> => {
@@ -662,17 +653,6 @@ const createReconnectAttemptId = (): string => {
 	return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
 
-const cancelWatchedRestore = (cancelledKeys: Set<string>, remoteId: number, kind: StreamKind) => {
-	cancelledKeys.add(getPendingStreamKey(remoteId, kind));
-
-	if (kind === StreamKind.SCREEN) {
-		cancelledKeys.add(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO));
-	}
-};
-
-const isWatchedRestoreCancelled = (cancelledKeys: Set<string>, remoteId: number, kind: StreamKind): boolean =>
-	cancelledKeys.has(getPendingStreamKey(remoteId, kind));
-
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const [loading, setLoading] = useState(false);
 	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
@@ -687,8 +667,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const ownUserId = useServerStore((state) => state.ownUserId);
 	const voiceSessionReconnectNonce = useServerStore((state) => state.voiceSessionReconnectNonce);
-	const reconnectingSince = useVoiceReconnectStore((state) => state.reconnectingSince);
-	const reconnectAuthenticated = useVoiceReconnectStore((state) => state.reconnectAuthenticated);
 	const isConnected = useIsConnected();
 	const channelCan = useChannelCan(currentVoiceChannelId);
 	const currentChannelExternalStreams = useServerStore<TChannelExternalStreams>((state) => {
@@ -738,9 +716,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
 	const transportRecoveryPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const queuedTransportRecoveryCommandRef = useRef<TVoiceSessionCommand | undefined>(undefined);
-	const voiceReconnectPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const cleanupMicAudioPipelineRef = useRef<(() => Promise<void>) | undefined>(undefined);
-	const cancelledWatchedRestoreKeysRef = useRef<Set<string>>(new Set());
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
 		if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -815,6 +791,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		markWatchRequested,
 		markWatchStopped,
 		markRetryRequested,
+		rehydrateWatchIntentOnly,
 		markConsumeStarted,
 		markConsumeSucceeded,
 		markConsumeFailed,
@@ -920,9 +897,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const captureWatchedRemoteStreams = useCallback((): TWatchedRemoteStreamsSnapshot => {
-		cancelledWatchedRestoreKeysRef.current = new Set();
-
-		const watchedRemoteStreams: Record<number, TRemoteUserStreamKinds[]> = {};
+		const watchedRemoteStreams: Record<number, StreamKind[]> = {};
 		const watchedExternalStreams: Record<number, TWatchedExternalStreamKinds> = {};
 
 		remoteMediaSubscriptionsRef.current.forEach((subscription) => {
@@ -1034,11 +1009,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const stopWatchingStream = useCallback(
 		(remoteId: number, kind: StreamKind) => {
-			// markWatchStopped clears the ledger's desired flag — for SCREEN it also
-			// cascades to SCREEN_AUDIO, and for EXTERNAL_AUDIO/VIDEO it revokes
-			// that stream's intent. Track this separately so a reconnect restore
-			// snapshot captured before the click cannot resurrect the stream.
-			cancelWatchedRestore(cancelledWatchedRestoreKeysRef.current, remoteId, kind);
 			markWatchStopped(remoteId, kind);
 		},
 		[markWatchStopped],
@@ -3164,7 +3134,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const cleanup = useCallback(
-		(opts?: { preserveLocalMedia?: boolean }) => {
+		(opts?: { preserveLocalMedia?: boolean; preserveRemoteMediaIntent?: boolean }) => {
 			logVoice('Running voice provider cleanup', { preserveLocalMedia: opts?.preserveLocalMedia ?? false });
 
 			// When preserving local media (WS-reconnect restore), leave the desktop
@@ -3180,7 +3150,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			clearLocalStreams({ keepVideoAndScreen: opts?.preserveLocalMedia });
 			clearRemoteUserStreams();
 			clearExternalStreams();
-			cleanupTransports();
+			cleanupTransports({ preserveRemoteMediaIntent: opts?.preserveRemoteMediaIntent === true });
 			audioVideoRefsMap.current.clear();
 			deviceRef.current = undefined;
 			routerRtpCapabilities.current = null;
@@ -3299,6 +3269,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				// republish it onto the new transport (WS-reconnect restore). Without
 				// this an in-progress screen share is silently dropped on reconnect.
 				preserveLocalMedia?: boolean;
+				restoreWatchSnapshot?: TWatchedRemoteStreamsSnapshot;
 			},
 		) => {
 			return traceSentrySpan(
@@ -3322,7 +3293,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 					let republishedLocalMediaState: TRepublishedLocalMediaState = {};
 
-					cleanup({ preserveLocalMedia: opts?.preserveLocalMedia });
+					cleanup({
+						preserveLocalMedia: opts?.preserveLocalMedia,
+						preserveRemoteMediaIntent: opts?.restoreWatchSnapshot !== undefined,
+					});
+					if (opts?.restoreWatchSnapshot !== undefined) {
+						rehydrateWatchIntentOnly(opts.restoreWatchSnapshot);
+					}
 					hasHandledTransportFailureRef.current = false;
 
 					let micPrepPromise: Promise<TPreparedMicPipeline | undefined> | undefined;
@@ -3430,6 +3407,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			consumerTransport,
 			buildLocalMediaRepublishPlan,
 			recoverDesktopAppAudioFromIntent,
+			rehydrateWatchIntentOnly,
 		],
 	);
 
@@ -3567,7 +3545,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								clearRemoteUserStreams();
 								clearExternalStreams();
 								setVoiceEventRtpCapabilities(null);
-								cleanupTransports();
+								cleanupTransports({ preserveRemoteMediaIntent: true });
+								rehydrateWatchIntentOnly(command.snapshot);
 
 								let device = await withRecoveryTimeout(ensureVoiceDeviceLoaded());
 								if (dispatchNonceChangedIfStale()) return;
@@ -3657,47 +3636,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
 								}
 
-								const restoreWatchTasks: Promise<void>[] = [];
-
-								Object.entries(command.snapshot.remoteUserStreams).forEach(([remoteId, kinds]) => {
-									const numericRemoteId = Number(remoteId);
-
-									kinds.forEach((kind) => {
-										if (isWatchedRestoreCancelled(cancelledWatchedRestoreKeysRef.current, numericRemoteId, kind)) {
-											return;
-										}
-
-										restoreWatchTasks.push(consume(numericRemoteId, kind, currentRtpCapabilities));
-									});
-								});
-
-								Object.entries(command.snapshot.externalStreams).forEach(([streamId, watchedState]) => {
-									const numericStreamId = Number(streamId);
-
-									if (
-										watchedState.audio &&
-										!isWatchedRestoreCancelled(
-											cancelledWatchedRestoreKeysRef.current,
-											numericStreamId,
-											StreamKind.EXTERNAL_AUDIO,
-										)
-									) {
-										restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities));
-									}
-
-									if (
-										watchedState.video &&
-										!isWatchedRestoreCancelled(
-											cancelledWatchedRestoreKeysRef.current,
-											numericStreamId,
-											StreamKind.EXTERNAL_VIDEO,
-										)
-									) {
-										restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities));
-									}
-								});
-
-								await withRecoveryTimeout(Promise.all(restoreWatchTasks));
 								if (dispatchNonceChangedIfStale()) return;
 
 								if (recoveryJoinResult) {
@@ -3749,7 +3687,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			clearExternalStreams,
 			clearRemoteUserStreams,
 			cleanupTransports,
-			consume,
 			consumeExistingProducers,
 			dispatchIfCurrentVoiceSessionCommand,
 			buildLocalMediaRepublishPlan,
@@ -3760,6 +3697,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			producerTransport,
 			consumerTransport,
 			publishMicTrack,
+			rehydrateWatchIntentOnly,
 			resetStats,
 			rejoinVoiceSession,
 			startMonitoring,
@@ -3767,48 +3705,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			syncRepublishedLocalMediaState,
 		],
 	);
-
-	const runVoiceSessionCommand = useCallback(
-		(command: TVoiceSessionCommand): void => {
-			if (command.type === 'CaptureRecoverySnapshot' && command.recovery === 'rebuilding') {
-				dispatchVoiceSession({
-					type: 'RecoveryStarted',
-					generation: command.generation,
-					snapshot: captureWatchedRemoteStreams(),
-				});
-				return;
-			}
-
-			if (command.type === 'RebuildTransports') {
-				void runRebuildTransportCommand(command);
-				return;
-			}
-
-			if (command.type === 'RecoverDesktopAppAudio') {
-				void recoverDesktopAppAudioFromIntent().catch((error) => {
-					logVoice('Error recovering desktop app audio after voice transport recovery', { error });
-				});
-				hasHandledTransportFailureRef.current = false;
-				return;
-			}
-
-			if (command.type === 'LeaveVoiceSession') {
-				leaveAfterFailedTransportRecovery(command);
-			}
-		},
-		[
-			captureWatchedRemoteStreams,
-			leaveAfterFailedTransportRecovery,
-			recoverDesktopAppAudioFromIntent,
-			runRebuildTransportCommand,
-		],
-	);
-
-	useEffect(() => {
-		return subscribeVoiceSession((_state, commands) => {
-			commands.forEach(runVoiceSessionCommand);
-		});
-	}, [runVoiceSessionCommand]);
 
 	const waitForVoiceReconnectOnline = useCallback(async (expiresAt: number): Promise<'online' | 'expired'> => {
 		if (isVoiceReconnectOnline()) {
@@ -3949,305 +3845,263 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[waitForVoiceReconnectOnline],
 	);
 
-	useEffect(() => {
-		// reconnectAuthenticated gates the restore: a reconnected socket starts
-		// unauthenticated, so issuing restoreOrJoin before joinServer re-auths it
-		// fails UNAUTHORIZED (terminal). Wait until the re-auth handshake completes.
-		if (!isConnected || reconnectingSince === undefined || !reconnectAuthenticated) {
-			return;
-		}
+	const runWaitOnlineCommand = useCallback(
+		async (command: TVoiceSessionCommand): Promise<void> => {
+			if (command.type !== 'WaitOnline') {
+				return;
+			}
 
-		if (voiceReconnectPromiseRef.current) {
-			return;
-		}
+			const outcome = await waitForVoiceReconnectOnline(command.expiresAt);
 
-		const recoveryPromise = (async () => {
-			let consecutiveUnknownErrors = 0;
-			let retryAttempt = 0;
+			dispatchIfCurrentVoiceSessionCommand(command, () => {
+				dispatchVoiceSession({
+					type: outcome === 'online' ? 'OnlineReady' : 'OnlineExpired',
+					generation: command.generation,
+				});
+			});
+		},
+		[dispatchIfCurrentVoiceSessionCommand, waitForVoiceReconnectOnline],
+	);
 
-			// Captured once, before any attempt runs: init() clears the subscription
-			// ledger (cleanupTransports -> clearAllPendingStreams) as part of its
-			// teardown, wiping the `desired` watch intent. Snapshotting here preserves
-			// what the user was watching so it can be re-consumed after restore; a
-			// capture inside the loop would be empty on every retry.
-			const watchedStreamsSnapshot = captureWatchedRemoteStreams();
+	const runWaitAuthCommand = useCallback(
+		async (command: TVoiceSessionCommand): Promise<void> => {
+			if (command.type !== 'WaitAuth') {
+				return;
+			}
 
-			while (true) {
-				// Cleared recovery always exits quietly. This must precede the
-				// pending-missing check below (which reports/clears as an expiry):
-				// clearing recovery also drops the pending intent, so any wait/continue
-				// path resuming after a clear would otherwise mis-report expiry.
-				if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
+			const outcome = await waitForVoiceReconnectAuthenticated(command.expiresAt);
+
+			dispatchIfCurrentVoiceSessionCommand(command, () => {
+				dispatchVoiceSession({
+					type: outcome === 'authenticated' ? 'AuthReady' : outcome === 'cleared' ? 'AuthCleared' : 'AuthExpired',
+					generation: command.generation,
+				});
+			});
+		},
+		[dispatchIfCurrentVoiceSessionCommand, waitForVoiceReconnectAuthenticated],
+	);
+
+	const runRestoreVoiceSessionCommand = useCallback(
+		async (command: TVoiceSessionCommand): Promise<void> => {
+			if (command.type !== 'RestoreVoiceSession') {
+				return;
+			}
+
+			if (!isCurrentVoiceSessionCommand(command)) {
+				return;
+			}
+
+			const reconnectAttemptId = createReconnectAttemptId();
+			const attemptNumber = command.attempt + 1;
+			let serverSessionEstablished = false;
+
+			logDebug('Voice reconnect attempt start', {
+				attempt: attemptNumber,
+				channelId: command.pending.channelId,
+				reconnectAttemptId,
+			});
+
+			try {
+				const bootstrap = await withVoiceReconnectTimeout(
+					requestVoiceRestoreOrJoin({
+						channelId: command.pending.channelId,
+						micMuted: command.pending.micMuted,
+						soundMuted: command.pending.soundMuted,
+						reconnectAttemptId,
+					}),
+				);
+
+				serverSessionEstablished = true;
+
+				if (!isCurrentVoiceSessionCommand(command)) {
 					return;
 				}
 
-				const pendingVoiceReconnect = getValidPendingVoiceReconnect();
+				const initResult = await withVoiceReconnectTimeout(
+					init(bootstrap.routerRtpCapabilities, command.pending.channelId, {
+						producerTransportParams: bootstrap.producerTransportParams,
+						consumerTransportParams: bootstrap.consumerTransportParams,
+						existingProducers: bootstrap.existingProducers,
+						preserveLocalMedia: true,
+						restoreWatchSnapshot: command.snapshot,
+					}),
+				);
 
-				if (!pendingVoiceReconnect) {
-					logDebug('Voice reconnect terminal clear reason', {
-						reason: 'reconnect-expired',
-					});
-					clearOwnVoiceSessionAfterReconnectFailure('reconnect-expired');
+				if (!isCurrentVoiceSessionCommand(command)) {
 					voiceCleanupRef.current?.();
 					return;
 				}
 
-				if (!isVoiceReconnectOnline()) {
-					const onlineOutcome = await waitForVoiceReconnectOnline(pendingVoiceReconnect.expiresAt);
+				const serverStore = useServerStore.getState();
 
-					if (onlineOutcome === 'expired') {
-						logDebug('Voice reconnect terminal clear reason', {
-							reason: 'reconnect-expired',
-						});
-						clearOwnVoiceSessionAfterReconnectFailure('reconnect-expired');
-						voiceCleanupRef.current?.();
-						return;
-					}
+				serverStore.setCurrentVoiceChannelId(command.pending.channelId);
+				serverStore.reconcileVoiceChannelUsers({
+					channelId: command.pending.channelId,
+					users: bootstrap.channelUsers,
+				});
+				serverStore.bumpVoiceSessionReconnectNonce();
+				await withVoiceReconnectTimeout(syncRepublishedLocalMediaState(initResult.republishedLocalMediaState));
 
-					continue;
-				}
-
-				// Never issue restoreOrJoin at an unauthenticated socket. If the WS
-				// dropped again mid-recovery, wait for the next joinServer to re-auth
-				// rather than burning an attempt on a guaranteed UNAUTHORIZED.
-				if (!useVoiceReconnectStore.getState().reconnectAuthenticated) {
-					const authOutcome = await waitForVoiceReconnectAuthenticated(pendingVoiceReconnect.expiresAt);
-
-					// Recovery was cleared out from under us while waiting — bow out
-					// without reporting a spurious expiry.
-					if (authOutcome === 'cleared') {
-						return;
-					}
-
-					if (authOutcome === 'expired') {
-						logDebug('Voice reconnect terminal clear reason', {
-							reason: 'reconnect-expired',
-						});
-						clearOwnVoiceSessionAfterReconnectFailure('reconnect-expired');
-						voiceCleanupRef.current?.();
-						return;
-					}
-
-					continue;
-				}
-
-				const reconnectAttemptId = createReconnectAttemptId();
-				const attemptNumber = retryAttempt + 1;
-
-				logDebug('Voice reconnect attempt start', {
+				dispatchIfCurrentVoiceSessionCommand(command, () => {
+					dispatchVoiceSession({
+						type: 'RestoreSucceeded',
+						generation: command.generation,
+						serverSessionEstablished,
+					});
+				});
+			} catch (error) {
+				logDebug('Voice reconnect restore attempt failed', {
 					attempt: attemptNumber,
-					channelId: pendingVoiceReconnect.channelId,
-					reconnectAttemptId,
+					error,
 				});
 
-				let serverSessionEstablished = false;
-
-				try {
-					const bootstrap = await withVoiceReconnectTimeout(
-						requestVoiceRestoreOrJoin({
-							channelId: pendingVoiceReconnect.channelId,
-							micMuted: pendingVoiceReconnect.micMuted,
-							soundMuted: pendingVoiceReconnect.soundMuted,
-							reconnectAttemptId,
-						}),
-					);
-
-					serverSessionEstablished = true;
-
-					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
-						return;
-					}
-
-					const initResult = await withVoiceReconnectTimeout(
-						init(bootstrap.routerRtpCapabilities, pendingVoiceReconnect.channelId, {
-							producerTransportParams: bootstrap.producerTransportParams,
-							consumerTransportParams: bootstrap.consumerTransportParams,
-							existingProducers: bootstrap.existingProducers,
-							// Keep a live screen share / webcam across the reconnect instead
-							// of dropping it; init republishes the preserved tracks.
-							preserveLocalMedia: true,
-						}),
-					);
-
-					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
-						voiceCleanupRef.current?.();
-						return;
-					}
-
-					const serverStore = useServerStore.getState();
-
-					serverStore.setCurrentVoiceChannelId(pendingVoiceReconnect.channelId);
-					serverStore.reconcileVoiceChannelUsers({
-						channelId: pendingVoiceReconnect.channelId,
-						users: bootstrap.channelUsers,
-					});
-					serverStore.bumpVoiceSessionReconnectNonce();
-					await withVoiceReconnectTimeout(syncRepublishedLocalMediaState(initResult.republishedLocalMediaState));
-
-					const currentRtpCapabilities = deviceRef.current?.rtpCapabilities ?? sendRtpCapabilities.current;
-
-					if (currentRtpCapabilities) {
-						logVoice('Refreshing existing producers after reconnect restore');
-						await withVoiceReconnectTimeout(consumeExistingProducers(currentRtpCapabilities));
-
-						// consumeExistingProducers only auto-consumes audio; video / screen /
-						// screen-audio / external streams are marked pending and re-consumed
-						// only when the ledger still holds their `desired` intent. init()
-						// wiped that intent above, so restore it explicitly from the snapshot
-						// captured before recovery — mirroring the in-session transport
-						// recovery path — so watched streams resume without a manual re-Watch.
-						const restoreWatchTasks: Promise<unknown>[] = [];
-
-						Object.entries(watchedStreamsSnapshot.remoteUserStreams).forEach(([remoteId, kinds]) => {
-							const numericRemoteId = Number(remoteId);
-
-							kinds.forEach((kind) => {
-								if (isWatchedRestoreCancelled(cancelledWatchedRestoreKeysRef.current, numericRemoteId, kind)) {
-									return;
-								}
-
-								restoreWatchTasks.push(consume(numericRemoteId, kind, currentRtpCapabilities));
-							});
-						});
-
-						Object.entries(watchedStreamsSnapshot.externalStreams).forEach(([streamId, watchedState]) => {
-							const numericStreamId = Number(streamId);
-
-							if (watchedState.audio) {
-								if (
-									!isWatchedRestoreCancelled(
-										cancelledWatchedRestoreKeysRef.current,
-										numericStreamId,
-										StreamKind.EXTERNAL_AUDIO,
-									)
-								) {
-									restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities));
-								}
-							}
-
-							if (watchedState.video) {
-								if (
-									!isWatchedRestoreCancelled(
-										cancelledWatchedRestoreKeysRef.current,
-										numericStreamId,
-										StreamKind.EXTERNAL_VIDEO,
-									)
-								) {
-									restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities));
-								}
-							}
-						});
-
-						if (restoreWatchTasks.length > 0) {
-							await withVoiceReconnectTimeout(Promise.all(restoreWatchTasks));
-						}
-					} else {
-						logVoice('Skipping producer refresh after reconnect restore - missing RTP capabilities');
-					}
-
-					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
-						voiceCleanupRef.current?.();
-						return;
-					}
-
-					clearVoiceReconnectRecovery('voice-join-succeeded');
-					useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
-						channelId: pendingVoiceReconnect.channelId,
-						peerUserIds: [...pendingVoiceReconnect.peerUserIds],
-						expiresAt: Date.now() + VOICE_RECONNECT_SUPPRESSION_MS,
-					});
-
-					return;
-				} catch (error) {
-					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
-						return;
-					}
-
-					const classification = classifyVoiceReconnectError(error, {
-						consecutiveUnknownErrors,
-					});
-
-					logDebug('Voice reconnect retry classification', {
-						attempt: attemptNumber,
-						classification,
+				dispatchIfCurrentVoiceSessionCommand(command, () => {
+					dispatchVoiceSession({
+						type: 'RestoreFailed',
+						generation: command.generation,
 						error,
+						serverSessionEstablished,
 					});
-
-					if (classification.kind === 'terminal') {
-						// Always-on (not logDebug-gated) so the terminal error that ended
-						// recovery is visible in the [VOICE-PROVIDER] logs and Sentry, not
-						// just when window.DEBUG happens to be on.
-						logVoice('Voice reconnect classified terminal, ending recovery', {
-							reason: classification.clearReason,
-							detail: classification.reason,
-							attempt: attemptNumber,
-							error,
-						});
-
-						// restoreOrJoin already bound a server-side session for us this
-						// iteration; without an explicit leave the runtime would keep us
-						// resident in the channel even though the client is giving up.
-						if (serverSessionEstablished) {
-							try {
-								await getTRPCClient().voice.leave.mutate();
-							} catch (leaveError) {
-								logDebug('Voice reconnect terminal leave failed', {
-									error: leaveError,
-								});
-							}
-						}
-
-						clearOwnVoiceSessionAfterReconnectFailure(classification.clearReason);
-						voiceCleanupRef.current?.();
-						return;
-					}
-
-					consecutiveUnknownErrors = classification.countsAsUnknown ? consecutiveUnknownErrors + 1 : 0;
-
-					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
-						return;
-					}
-
-					const retryDelayMs = getVoiceReconnectRetryDelayMs(retryAttempt, Math.random());
-
-					logDebug('Voice reconnect retry delay', {
-						attempt: attemptNumber,
-						delayMs: retryDelayMs,
-					});
-
-					const delayOutcome = await waitForVoiceReconnectDelay(retryDelayMs, pendingVoiceReconnect.expiresAt);
-
-					if (delayOutcome === 'expired') {
-						logDebug('Voice reconnect terminal clear reason', {
-							reason: 'reconnect-expired',
-						});
-						clearOwnVoiceSessionAfterReconnectFailure('reconnect-expired');
-						voiceCleanupRef.current?.();
-						return;
-					}
-
-					retryAttempt += 1;
-				}
+				});
 			}
-		})().finally(() => {
-			voiceReconnectPromiseRef.current = undefined;
-		});
+		},
+		[
+			dispatchIfCurrentVoiceSessionCommand,
+			init,
+			isCurrentVoiceSessionCommand,
+			requestVoiceRestoreOrJoin,
+			syncRepublishedLocalMediaState,
+		],
+	);
 
-		voiceReconnectPromiseRef.current = recoveryPromise;
-	}, [
-		init,
-		isConnected,
-		reconnectingSince,
-		reconnectAuthenticated,
-		captureWatchedRemoteStreams,
-		consume,
-		consumeExistingProducers,
-		requestVoiceRestoreOrJoin,
-		syncRepublishedLocalMediaState,
-		waitForVoiceReconnectDelay,
-		waitForVoiceReconnectOnline,
-		waitForVoiceReconnectAuthenticated,
-	]);
+	const runRetryDelayCommand = useCallback(
+		async (command: TVoiceSessionCommand): Promise<void> => {
+			if (command.type !== 'RetryDelay') {
+				return;
+			}
+
+			const delayMs = getVoiceReconnectRetryDelayMs(command.attempt, Math.random());
+
+			logDebug('Voice reconnect retry delay', {
+				attempt: command.attempt + 1,
+				delayMs,
+			});
+
+			const outcome = await waitForVoiceReconnectDelay(delayMs, command.expiresAt);
+
+			dispatchIfCurrentVoiceSessionCommand(command, () => {
+				dispatchVoiceSession({
+					type: outcome === 'ready' ? 'RetryDelayElapsed' : 'RetryDelayExpired',
+					generation: command.generation,
+				});
+			});
+		},
+		[dispatchIfCurrentVoiceSessionCommand, waitForVoiceReconnectDelay],
+	);
+
+	const runRestoreWatchIntentCommand = useCallback(
+		(command: TVoiceSessionCommand): void => {
+			if (command.type !== 'RestoreWatchIntent') {
+				return;
+			}
+
+			if (!isCurrentVoiceSessionCommand(command)) {
+				return;
+			}
+
+			dispatchIfCurrentVoiceSessionCommand(command, () => {
+				dispatchVoiceSession({ type: 'WatchIntentRehydrated', generation: command.generation });
+			});
+		},
+		[dispatchIfCurrentVoiceSessionCommand, isCurrentVoiceSessionCommand],
+	);
+
+	const clearFailedVoiceSession = useCallback((command: TVoiceSessionCommand): void => {
+		if (command.type !== 'ClearFailedSession') {
+			return;
+		}
+
+		clearOwnVoiceSessionAfterReconnectFailure(command.reason);
+		voiceCleanupRef.current?.();
+	}, []);
+
+	const runVoiceSessionCommand = useCallback(
+		(command: TVoiceSessionCommand): void => {
+			if (command.type === 'CaptureRecoverySnapshot') {
+				dispatchVoiceSession({
+					type: 'RecoveryStarted',
+					generation: command.generation,
+					snapshot: captureWatchedRemoteStreams(),
+				});
+				return;
+			}
+
+			if (command.type === 'RebuildTransports') {
+				void runRebuildTransportCommand(command);
+				return;
+			}
+
+			if (command.type === 'WaitOnline') {
+				void runWaitOnlineCommand(command);
+				return;
+			}
+
+			if (command.type === 'WaitAuth') {
+				void runWaitAuthCommand(command);
+				return;
+			}
+
+			if (command.type === 'RestoreVoiceSession') {
+				void runRestoreVoiceSessionCommand(command);
+				return;
+			}
+
+			if (command.type === 'RetryDelay') {
+				void runRetryDelayCommand(command);
+				return;
+			}
+
+			if (command.type === 'RestoreWatchIntent') {
+				runRestoreWatchIntentCommand(command);
+				return;
+			}
+
+			if (command.type === 'RecoverDesktopAppAudio') {
+				void recoverDesktopAppAudioFromIntent().catch((error) => {
+					logVoice('Error recovering desktop app audio after voice recovery', { error });
+				});
+				hasHandledTransportFailureRef.current = false;
+				return;
+			}
+
+			if (command.type === 'LeaveVoiceSession') {
+				leaveAfterFailedTransportRecovery(command);
+				return;
+			}
+
+			if (command.type === 'ClearFailedSession') {
+				clearFailedVoiceSession(command);
+			}
+		},
+		[
+			captureWatchedRemoteStreams,
+			clearFailedVoiceSession,
+			leaveAfterFailedTransportRecovery,
+			recoverDesktopAppAudioFromIntent,
+			runRebuildTransportCommand,
+			runRestoreVoiceSessionCommand,
+			runRestoreWatchIntentCommand,
+			runRetryDelayCommand,
+			runWaitAuthCommand,
+			runWaitOnlineCommand,
+		],
+	);
+
+	useEffect(() => {
+		return subscribeVoiceSession((_state, commands) => {
+			commands.forEach(runVoiceSessionCommand);
+		});
+	}, [runVoiceSessionCommand]);
 
 	const setMicProcessingMuted = useCallback((micMuted: boolean) => {
 		micAudioPipelineRef.current?.setInputMuted(micMuted);
