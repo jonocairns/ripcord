@@ -7,6 +7,7 @@ import {
 	type TVoiceSessionCommand,
 	type TVoiceSessionState,
 	type TWatchedRemoteStreamsSnapshot,
+	VOICE_RECONNECT_SUPPRESSION_MS,
 } from '@/features/server/voice/voice-session-machine';
 import {
 	clearRemoteMediaProducerStateForTransportCleanup,
@@ -98,7 +99,9 @@ describe('voice WS-reconnect watch restoration', () => {
 			}),
 		]);
 
-		[state, commands] = dispatch(state, { type: 'WatchIntentRehydrated', generation });
+		const restoredAt = 50_000;
+
+		[state, commands] = dispatch(state, { type: 'WatchIntentRehydrated', generation, now: restoredAt });
 
 		expect(state.phase).toEqual({ phase: 'connected', channelId: 5 });
 		expect(state.pendingVoiceReconnect).toBeUndefined();
@@ -106,7 +109,7 @@ describe('voice WS-reconnect watch restoration', () => {
 		expect(state.suppression).toEqual({
 			channelId: 5,
 			peerUserIds: [10, 20],
-			expiresAt: 10_000,
+			expiresAt: restoredAt + VOICE_RECONNECT_SUPPRESSION_MS,
 		});
 		expect(commands).toEqual([]);
 	});
@@ -223,6 +226,7 @@ describe('voice WS-reconnect watch restoration', () => {
 		const result = reduceVoiceSession(state, {
 			type: 'WatchIntentRehydrated',
 			generation: generation + 1,
+			now: 50_000,
 		});
 
 		expect(result.state).toBe(state);

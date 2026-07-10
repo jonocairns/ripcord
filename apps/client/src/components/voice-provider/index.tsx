@@ -3455,13 +3455,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
-		if (isConnectedRef.current && currentVoiceChannelIdRef.current !== undefined) {
+		if (isConnectedRef.current && command.channelId !== undefined) {
 			getTRPCClient()
 				.voice.leave.mutate()
 				.catch((error) => {
 					logVoice('Failed to send voice.leave after unrecoverable transport failure', { error });
 				});
+		}
 
+		if (currentVoiceChannelIdRef.current !== undefined) {
 			useServerStore.getState().setCurrentVoiceChannelId(undefined);
 			useServerStore.getState().updateOwnVoiceState({
 				webcamEnabled: false,
@@ -4032,7 +4034,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 
 			dispatchIfCurrentVoiceSessionCommand(command, () => {
-				dispatchVoiceSession({ type: 'WatchIntentRehydrated', generation: command.generation });
+				dispatchVoiceSession({ type: 'WatchIntentRehydrated', generation: command.generation, now: Date.now() });
 			});
 		},
 		[dispatchIfCurrentVoiceSessionCommand, isCurrentVoiceSessionCommand],

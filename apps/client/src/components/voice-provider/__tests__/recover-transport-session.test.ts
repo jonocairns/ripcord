@@ -142,6 +142,7 @@ describe('transport rebuild machine orchestration', () => {
 			expect.objectContaining({
 				type: 'LeaveVoiceSession',
 				generation: generation + 1,
+				channelId: 7,
 			}),
 		]);
 	});

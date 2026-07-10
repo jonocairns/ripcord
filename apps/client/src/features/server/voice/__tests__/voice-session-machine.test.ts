@@ -8,6 +8,7 @@ import {
 	type TVoiceSessionCommand,
 	type TVoiceSessionState,
 	type TWatchedRemoteStreamsSnapshot,
+	VOICE_RECONNECT_SUPPRESSION_MS,
 	VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS,
 	voiceSessionResultState,
 } from '../voice-session-machine';
@@ -332,7 +333,7 @@ describe('voice session machine', () => {
 
 		expect(result.state.phase).toEqual({ phase: 'failed', reason: 'restore-conflict', channelId: 5 });
 		expect(result.commands).toEqual([
-			expect.objectContaining({ type: 'LeaveVoiceSession', generation: generation + 1 }),
+			expect.objectContaining({ type: 'LeaveVoiceSession', generation: generation + 1, channelId: 5 }),
 		]);
 	});
 
@@ -355,7 +356,7 @@ describe('voice session machine', () => {
 		expect(result.state.reconnectingSince).toBeUndefined();
 		expect(result.state.reconnectAuthenticated).toBe(false);
 		expect(result.commands).toEqual([
-			expect.objectContaining({ type: 'LeaveVoiceSession', generation: generation + 1 }),
+			expect.objectContaining({ type: 'LeaveVoiceSession', generation: generation + 1, channelId: 5 }),
 		]);
 	});
 
@@ -372,7 +373,9 @@ describe('voice session machine', () => {
 		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'restoreWatch' });
 		expect(commands).toEqual([expect.objectContaining({ type: 'RestoreWatchIntent', generation })]);
 
-		[state, commands] = dispatch(state, { type: 'WatchIntentRehydrated', generation });
+		const restoredAt = 50_000;
+
+		[state, commands] = dispatch(state, { type: 'WatchIntentRehydrated', generation, now: restoredAt });
 
 		expect(state.phase).toEqual({ phase: 'connected', channelId: 5 });
 		expect(state.pendingVoiceReconnect).toBeUndefined();
@@ -381,7 +384,7 @@ describe('voice session machine', () => {
 		expect(state.suppression).toEqual({
 			channelId: 5,
 			peerUserIds: [10, 20],
-			expiresAt: 10_000,
+			expiresAt: restoredAt + VOICE_RECONNECT_SUPPRESSION_MS,
 		});
 		expect(commands).toEqual([]);
 	});

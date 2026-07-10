@@ -4,6 +4,7 @@ import { classifyVoiceReconnectError } from './reconnect-policy';
 
 const VOICE_SESSION_REBUILD_MAX_ATTEMPTS = 3;
 const VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS = 5;
+const VOICE_RECONNECT_SUPPRESSION_MS = 10_000;
 
 type TWatchedExternalStreamsSnapshot = {
 	audio: boolean;
@@ -92,7 +93,7 @@ type TVoiceSessionCommand =
 			snapshot: TWatchedRemoteStreamsSnapshot;
 	  }
 	| { type: 'RecoverDesktopAppAudio'; commandId: number; generation: number }
-	| { type: 'LeaveVoiceSession'; commandId: number; generation: number }
+	| { type: 'LeaveVoiceSession'; commandId: number; generation: number; channelId?: number }
 	| { type: 'ClearFailedSession'; commandId: number; generation: number; reason: TClearReason; channelId?: number };
 
 type TVoiceSessionCommandInput = TVoiceSessionCommand extends infer Command
@@ -130,7 +131,7 @@ type TVoiceSessionResultEvent =
 	| { type: 'AuthCleared'; generation: number }
 	| { type: 'RetryDelayElapsed'; generation: number }
 	| { type: 'RetryDelayExpired'; generation: number }
-	| { type: 'WatchIntentRehydrated'; generation: number };
+	| { type: 'WatchIntentRehydrated'; generation: number; now: number };
 
 type TVoiceSessionEvent = TVoiceSessionTriggerEvent | TVoiceSessionResultEvent;
 
@@ -213,7 +214,7 @@ const failSession = (
 	};
 
 	if (command === 'leave-and-clear') {
-		return withCommand(failedState, { type: 'LeaveVoiceSession', generation });
+		return withCommand(failedState, { type: 'LeaveVoiceSession', generation, channelId });
 	}
 
 	if (command === 'clear') {
@@ -716,7 +717,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				suppression: {
 					channelId: state.phase.pending.channelId,
 					peerUserIds: [...state.phase.pending.peerUserIds],
-					expiresAt: state.phase.pending.expiresAt,
+					expiresAt: event.now + VOICE_RECONNECT_SUPPRESSION_MS,
 				},
 			});
 	}
@@ -753,5 +754,6 @@ export {
 	selectVoiceSessionConnectionStatus,
 	VOICE_SESSION_REBUILD_MAX_ATTEMPTS,
 	VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS,
+	VOICE_RECONNECT_SUPPRESSION_MS,
 	voiceSessionResultState,
 };
