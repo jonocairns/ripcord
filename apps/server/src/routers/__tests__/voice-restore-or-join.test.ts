@@ -213,6 +213,87 @@ describe('voice.restoreOrJoin', () => {
 		}
 	});
 
+	test('applies the restoring client state to an existing seat and notifies peers only on change', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+
+		const stateEvents: Array<{
+			channelId: number;
+			userId: number;
+			micMuted: boolean;
+			soundMuted: boolean;
+		}> = [];
+		const stateSub = pubsub.subscribe(ServerEvents.USER_VOICE_STATE_UPDATE).subscribe({
+			next: (event) => {
+				stateEvents.push({
+					channelId: event.channelId,
+					userId: event.userId,
+					micMuted: event.state.micMuted,
+					soundMuted: event.state.soundMuted,
+				});
+			},
+		});
+
+		try {
+			const { caller } = await initTest(1);
+
+			await caller.voice.join({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: false,
+					soundMuted: false,
+				},
+			});
+
+			// The seat predates this restore (surviving seat, or one adopted from a
+			// superseded attempt). A mute toggled since must land on the seat, be
+			// returned in the bootstrap, and reach peers — nothing reconciles it
+			// after restore otherwise.
+			const result = await caller.voice.restoreOrJoin({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: true,
+					soundMuted: false,
+				},
+				reconnectAttemptId: 'attempt-1',
+			});
+
+			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUserState(1)).toMatchObject({
+				micMuted: true,
+				soundMuted: false,
+			});
+			expect(result.channelUsers).toContainEqual(
+				expect.objectContaining({
+					userId: 1,
+					state: expect.objectContaining({ micMuted: true, soundMuted: false }),
+				}),
+			);
+			expect(stateEvents).toEqual([
+				{
+					channelId: PRIMARY_VOICE_CHANNEL_ID,
+					userId: 1,
+					micMuted: true,
+					soundMuted: false,
+				},
+			]);
+
+			stateEvents.length = 0;
+
+			// Restoring with unchanged state must not spam peers with updates.
+			await caller.voice.restoreOrJoin({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: true,
+					soundMuted: false,
+				},
+				reconnectAttemptId: 'attempt-2',
+			});
+
+			expect(stateEvents).toEqual([]);
+		} finally {
+			stateSub.unsubscribe();
+		}
+	});
+
 	test('forced reconnect-lab restore failures are one-shot', async () => {
 		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 

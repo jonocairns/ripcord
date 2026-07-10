@@ -155,6 +155,27 @@ const restoreOrJoinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 			if (runtimeWithUser?.id === input.channelId) {
 				assertCurrent();
 				const provisionalSeatClaim = runtime.adoptProvisionalRestoreSeat(ctx.user.id);
+
+				// The seat's mute/deafen state predates this request — it carries the
+				// superseded attempt's values (adopted provisional seat) or the
+				// pre-disconnect values (surviving seat). Nothing reconciles it after
+				// restore (the client only re-syncs webcam/screen state), so apply the
+				// restoring client's state before bootstrapping and tell peers when it
+				// actually changed.
+				const previousSeatState = runtime.getUserState(ctx.user.id);
+				runtime.updateUserState(ctx.user.id, input.state);
+
+				if (
+					previousSeatState.micMuted !== input.state.micMuted ||
+					previousSeatState.soundMuted !== input.state.soundMuted
+				) {
+					ctx.pubsub.publish(ServerEvents.USER_VOICE_STATE_UPDATE, {
+						channelId: input.channelId,
+						userId: ctx.user.id,
+						state: runtime.getUserState(ctx.user.id),
+					});
+				}
+
 				ctx.currentVoiceChannelId = input.channelId;
 				ctx.setWsVoiceChannelId(input.channelId);
 
