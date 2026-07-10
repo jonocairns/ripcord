@@ -1,0 +1,390 @@
+import { describe, expect, it } from 'bun:test';
+import { StreamKind } from '@sharkord/shared';
+import type { TPendingVoiceReconnect } from '../reconnect-coordinator';
+import {
+	createInitialVoiceSessionState,
+	reduceVoiceSession,
+	selectVoiceSessionConnectionStatus,
+	type TVoiceSessionCommand,
+	type TVoiceSessionState,
+	type TWatchedRemoteStreamsSnapshot,
+	VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS,
+	voiceSessionResultState,
+} from '../voice-session-machine';
+
+const pending = (overrides: Partial<TPendingVoiceReconnect> = {}): TPendingVoiceReconnect => ({
+	channelId: 5,
+	micMuted: false,
+	soundMuted: false,
+	peerUserIds: [10, 20],
+	expiresAt: 10_000,
+	...overrides,
+});
+
+const snapshot = (): TWatchedRemoteStreamsSnapshot => ({
+	remoteUserStreams: {
+		10: [StreamKind.VIDEO],
+		20: [StreamKind.SCREEN, StreamKind.SCREEN_AUDIO],
+	},
+	externalStreams: {
+		99: { audio: true, video: false },
+	},
+});
+
+const dispatch = (
+	state: TVoiceSessionState,
+	event: Parameters<typeof reduceVoiceSession>[1],
+): [TVoiceSessionState, TVoiceSessionCommand[]] => {
+	const result = reduceVoiceSession(state, event);
+
+	return [result.state, result.commands];
+};
+
+const startRebuildWithSnapshot = (): [TVoiceSessionState, number] => {
+	let state = createInitialVoiceSessionState();
+	let commands: TVoiceSessionCommand[];
+
+	[state, commands] = dispatch(state, { type: 'TransportFailed', channelId: 5, nonce: 1 });
+	expect(commands).toEqual([
+		expect.objectContaining({
+			type: 'CaptureRecoverySnapshot',
+			recovery: 'rebuilding',
+		}),
+	]);
+
+	const generation = commands[0]?.generation;
+	expect(typeof generation).toBe('number');
+	if (generation === undefined) {
+		throw new Error('expected rebuild generation');
+	}
+
+	[state, commands] = dispatch(state, {
+		type: 'RecoveryStarted',
+		generation,
+		snapshot: snapshot(),
+	});
+	expect(commands).toEqual([expect.objectContaining({ type: 'RebuildTransports', generation })]);
+
+	return [state, generation];
+};
+
+const startReconnectWithSnapshot = (authenticated = true): [TVoiceSessionState, number] => {
+	let state = createInitialVoiceSessionState();
+	let commands: TVoiceSessionCommand[];
+
+	[state, commands] = dispatch(state, {
+		type: 'WsDropped',
+		pending: pending(),
+		now: 100,
+		online: true,
+		authenticated,
+	});
+	expect(commands[0]).toEqual(expect.objectContaining({ type: 'CaptureRecoverySnapshot' }));
+
+	const generation = commands[0]?.generation;
+	expect(typeof generation).toBe('number');
+	if (generation === undefined) {
+		throw new Error('expected reconnect generation');
+	}
+
+	[state, commands] = dispatch(state, {
+		type: 'RecoveryStarted',
+		generation,
+		snapshot: snapshot(),
+	});
+
+	if (authenticated) {
+		expect(commands[0]).toEqual(expect.objectContaining({ type: 'RestoreVoiceSession' }));
+	} else {
+		expect(commands[0]).toEqual(expect.objectContaining({ type: 'WaitAuth' }));
+	}
+
+	return [state, generation];
+};
+
+describe('voice session machine', () => {
+	it('projects connection status from phase', () => {
+		let state = createInitialVoiceSessionState();
+
+		expect(selectVoiceSessionConnectionStatus(state)).toBe('disconnected');
+
+		state = voiceSessionResultState(reduceVoiceSession(state, { type: 'JoinRequested', channelId: 5 }));
+		expect(selectVoiceSessionConnectionStatus(state)).toBe('connecting');
+
+		state = voiceSessionResultState(reduceVoiceSession(state, { type: 'JoinSucceeded', channelId: 5 }));
+		expect(selectVoiceSessionConnectionStatus(state)).toBe('connected');
+
+		state = voiceSessionResultState(reduceVoiceSession(state, { type: 'Terminated', reason: 'kicked', channelId: 5 }));
+		expect(selectVoiceSessionConnectionStatus(state)).toBe('failed');
+	});
+
+	it('defers transport failure while ws reconnect owns recovery', () => {
+		const [reconnectingState] = startReconnectWithSnapshot(false);
+		const result = reduceVoiceSession(reconnectingState, { type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+		expect(result.state).toBe(reconnectingState);
+		expect(result.commands).toEqual([]);
+	});
+
+	it('preempts in-session rebuild when the websocket drops', () => {
+		const [rebuildingState, rebuildGeneration] = startRebuildWithSnapshot();
+		const result = reduceVoiceSession(rebuildingState, {
+			type: 'WsDropped',
+			pending: pending({ channelId: 5 }),
+			now: 200,
+			online: true,
+			authenticated: false,
+		});
+
+		expect(result.state.phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'waitingAuth',
+			pending: expect.objectContaining({ channelId: 5 }),
+		});
+		expect(result.state.phase).not.toMatchObject({ phase: 'rebuilding' });
+		expect(result.commands[0]).toEqual(
+			expect.objectContaining({
+				type: 'CaptureRecoverySnapshot',
+				recovery: 'reconnecting',
+			}),
+		);
+		expect(result.commands[0]?.generation).not.toBe(rebuildGeneration);
+	});
+
+	it('drops stale result events by generation', () => {
+		const [rebuildingState, generation] = startRebuildWithSnapshot();
+		const result = reduceVoiceSession(rebuildingState, { type: 'RebuildSucceeded', generation: generation + 1 });
+
+		expect(result.state).toBe(rebuildingState);
+		expect(result.commands).toEqual([]);
+	});
+
+	it('restarts rebuild attempts on nonce changes until the cap is exceeded', () => {
+		let [state, generation] = startRebuildWithSnapshot();
+
+		for (let nonce = 2; nonce <= VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS + 1; nonce += 1) {
+			const result = reduceVoiceSession(state, { type: 'NonceChanged', nonce });
+
+			expect(result.state.phase).toMatchObject({
+				phase: 'rebuilding',
+				nonce,
+				nonceRestarts: nonce - 1,
+				attempt: 0,
+			});
+			expect(result.commands[0]).toEqual(
+				expect.objectContaining({
+					type: 'RebuildTransports',
+					generation,
+					nonce,
+					attempt: 0,
+				}),
+			);
+
+			state = result.state;
+		}
+
+		const capped = reduceVoiceSession(state, {
+			type: 'NonceChanged',
+			nonce: VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS + 2,
+		});
+
+		expect(capped.state.phase).toEqual({ phase: 'failed', reason: 'restore-terminal-error', channelId: 5 });
+		expect(capped.commands).toEqual([]);
+	});
+
+	it('retries reconnect failures and tracks unknown error count in reducer state', () => {
+		const [state, generation] = startReconnectWithSnapshot(true);
+		const result = reduceVoiceSession(state, {
+			type: 'RestoreFailed',
+			generation,
+			error: new Error('mystery'),
+		});
+
+		expect(result.state.phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'retryDelay',
+			retryAttempt: 1,
+			consecutiveUnknownErrors: 1,
+		});
+		expect(result.commands[0]).toEqual(
+			expect.objectContaining({
+				type: 'RetryDelay',
+				generation,
+				attempt: 0,
+				expiresAt: 10_000,
+			}),
+		);
+	});
+
+	it('enters waitingOnline when reconnect starts offline', () => {
+		let state = createInitialVoiceSessionState();
+		let commands: TVoiceSessionCommand[];
+
+		[state, commands] = dispatch(state, {
+			type: 'WsDropped',
+			pending: pending(),
+			now: 100,
+			online: false,
+			authenticated: false,
+		});
+		expect(commands[0]).toEqual(expect.objectContaining({ type: 'CaptureRecoverySnapshot' }));
+
+		const generation = commands[0]?.generation;
+		expect(typeof generation).toBe('number');
+		if (generation === undefined) {
+			throw new Error('expected reconnect generation');
+		}
+
+		[state, commands] = dispatch(state, { type: 'RecoveryStarted', generation, snapshot: snapshot() });
+
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'waitingOnline' });
+		expect(commands).toEqual([expect.objectContaining({ type: 'WaitOnline', generation, expiresAt: 10_000 })]);
+
+		const expired = reduceVoiceSession(state, { type: 'OnlineExpired', generation });
+
+		expect(expired.state.phase).toEqual({ phase: 'failed', reason: 'reconnect-expired', channelId: 5 });
+		expect(expired.commands).toEqual([
+			expect.objectContaining({
+				type: 'ClearFailedSession',
+				reason: 'reconnect-expired',
+				channelId: 5,
+			}),
+		]);
+	});
+
+	it('does not skip the online gate when authentication arrives while waitingOnline', () => {
+		let state = createInitialVoiceSessionState();
+		let commands: TVoiceSessionCommand[];
+
+		[state, commands] = dispatch(state, {
+			type: 'WsDropped',
+			pending: pending(),
+			now: 100,
+			online: false,
+			authenticated: false,
+		});
+
+		const generation = commands[0]?.generation;
+		expect(typeof generation).toBe('number');
+		if (generation === undefined) {
+			throw new Error('expected reconnect generation');
+		}
+
+		[state] = dispatch(state, { type: 'RecoveryStarted', generation, snapshot: snapshot() });
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'waitingOnline', authenticated: false });
+
+		[state, commands] = dispatch(state, { type: 'SocketAuthenticated' });
+
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'waitingOnline', authenticated: true });
+		expect(commands).toEqual([]);
+
+		[state, commands] = dispatch(state, { type: 'OnlineReady', generation });
+
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'restoring', authenticated: true });
+		expect(commands).toEqual([expect.objectContaining({ type: 'RestoreVoiceSession', generation })]);
+	});
+
+	it('keeps reconnect generation and snapshot on repeated websocket drops', () => {
+		const [state, generation] = startReconnectWithSnapshot(true);
+		if (state.phase.phase !== 'reconnecting') {
+			throw new Error('expected reconnecting phase');
+		}
+
+		const previousPhase = state.phase;
+		const previousSnapshot = state.phase.snapshot;
+		const result = reduceVoiceSession(state, {
+			type: 'WsDropped',
+			pending: pending({ expiresAt: 20_000 }),
+			now: 200,
+			online: false,
+			authenticated: false,
+		});
+
+		expect(result.commands).toEqual([]);
+		if (result.state.phase.phase !== 'reconnecting') {
+			throw new Error('expected reconnecting phase after repeated drop');
+		}
+
+		expect(result.state.phase).toMatchObject({
+			phase: 'reconnecting',
+			step: previousPhase.step,
+			authenticated: previousPhase.authenticated,
+			generation,
+			pending: expect.objectContaining({ expiresAt: 20_000 }),
+		});
+		expect(result.state.phase.snapshot).toBe(previousSnapshot);
+		expect(result.state.phase.retryAttempt).toBe(previousPhase.retryAttempt);
+		expect(result.state.phase.consecutiveUnknownErrors).toBe(previousPhase.consecutiveUnknownErrors);
+	});
+
+	it('uses the shared classifier for rebuild terminal failures', () => {
+		const [state, generation] = startRebuildWithSnapshot();
+		const result = reduceVoiceSession(state, {
+			type: 'RebuildFailed',
+			generation,
+			error: {
+				data: {
+					code: 'CONFLICT',
+					httpStatus: 409,
+				},
+			},
+		});
+
+		expect(result.state.phase).toEqual({ phase: 'failed', reason: 'restore-conflict', channelId: 5 });
+		expect(result.commands).toEqual([]);
+	});
+
+	it('turns classifier terminal reconnect failures into failed state and cleanup commands', () => {
+		const [state, generation] = startReconnectWithSnapshot(true);
+		const result = reduceVoiceSession(state, {
+			type: 'RestoreFailed',
+			generation,
+			serverSessionEstablished: true,
+			error: {
+				data: {
+					code: 'CONFLICT',
+					httpStatus: 409,
+				},
+			},
+		});
+
+		expect(result.state.phase).toEqual({ phase: 'failed', reason: 'restore-conflict', channelId: 5 });
+		expect(result.commands).toEqual([
+			expect.objectContaining({ type: 'LeaveVoiceSession', generation: generation + 1 }),
+		]);
+	});
+
+	it('emits ledger restore and desktop app-audio commands after reconnect success', () => {
+		let [state, generation] = startReconnectWithSnapshot(true);
+		let commands: TVoiceSessionCommand[];
+
+		[state, commands] = dispatch(state, {
+			type: 'RestoreSucceeded',
+			generation,
+			serverSessionEstablished: true,
+		});
+
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'restoreWatch' });
+		expect(commands).toEqual([expect.objectContaining({ type: 'RestoreWatchIntent', generation })]);
+
+		[state, commands] = dispatch(state, { type: 'WatchIntentRehydrated', generation });
+
+		expect(state.phase).toEqual({ phase: 'connected', channelId: 5 });
+		expect(state.suppression).toEqual({
+			channelId: 5,
+			peerUserIds: [10, 20],
+			expiresAt: 10_000,
+		});
+		expect(commands).toEqual([expect.objectContaining({ type: 'RecoverDesktopAppAudio', generation })]);
+	});
+
+	it('waits for auth before restore when reconnect starts unauthenticated', () => {
+		let [state, generation] = startReconnectWithSnapshot(false);
+		const authReadyResult = dispatch(state, { type: 'AuthReady', generation });
+		const commands = authReadyResult[1];
+		state = authReadyResult[0];
+
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', authenticated: true, step: 'restoring' });
+		expect(commands).toEqual([expect.objectContaining({ type: 'RestoreVoiceSession', generation })]);
+	});
+});
