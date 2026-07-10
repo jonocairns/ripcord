@@ -1,5 +1,6 @@
 import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
 import { useCallback, useMemo, useState } from 'react';
+import type { TWatchedRemoteStreamsSnapshot } from '@/features/server/voice/voice-session-machine';
 import {
 	getOldestRepairEligiblePendingCreatedAt,
 	getPendingStreamKey,
@@ -75,10 +76,7 @@ export type TRemoteMediaReducerResult = {
 	commands: TRemoteMediaCommand[];
 };
 
-export type TWatchedRemoteStreamsSnapshot = {
-	remoteUserStreams: Record<number, StreamKind[]>;
-	externalStreams: Record<number, { audio: boolean; video: boolean }>;
-};
+export type { TWatchedRemoteStreamsSnapshot };
 
 type TRemoteMediaCommandContext = {
 	externalStreamTracks?: TExternalStreamTrackPresence;

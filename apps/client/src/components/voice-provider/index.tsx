@@ -38,6 +38,8 @@ import {
 	selectVoiceSessionConnectionStatus,
 	type TVoiceSessionCommand,
 	type TVoiceSessionConnectionStatus,
+	type TWatchedExternalStreamsSnapshot,
+	type TWatchedRemoteStreamsSnapshot,
 } from '@/features/server/voice/voice-session-machine';
 import {
 	dispatchVoiceSession,
@@ -117,11 +119,6 @@ type TPreparedMicPipeline = {
 type TScreenShareStreamHandlers = {
 	onVideoTrackStarted?: () => void;
 	onVideoTrackEnded?: () => void | Promise<void>;
-};
-
-type TWatchedRemoteStreamsSnapshot = {
-	remoteUserStreams: Record<number, StreamKind[]>;
-	externalStreams: Record<number, TWatchedExternalStreamKinds>;
 };
 
 type TRecoveryJoinResult = {
@@ -377,11 +374,6 @@ const clampVolumePercent = (value: number) => {
 
 const shouldUseMicGainPipeline = (volume: number) => {
 	return clampVolumePercent(volume) !== 100;
-};
-
-type TWatchedExternalStreamKinds = {
-	audio: boolean;
-	video: boolean;
 };
 
 type TChannelExternalStreams = {
@@ -917,7 +909,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const captureWatchedRemoteStreams = useCallback((): TWatchedRemoteStreamsSnapshot => {
 		const watchedRemoteStreams: Record<number, StreamKind[]> = {};
-		const watchedExternalStreams: Record<number, TWatchedExternalStreamKinds> = {};
+		const watchedExternalStreams: Record<number, TWatchedExternalStreamsSnapshot> = {};
 
 		remoteMediaSubscriptionsRef.current.forEach((subscription) => {
 			if (!subscription.desired || subscription.kind === StreamKind.AUDIO) {
@@ -3408,7 +3400,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						setLocalAudioStream(undefined);
 
 						if (dispatchJoinLifecycle) {
-							dispatchVoiceSession({ type: 'JoinFailed', reason: 'restore-terminal-error', channelId });
+							dispatchVoiceSession({ type: 'JoinFailed', reason: 'join-failed', channelId });
 						}
 						setLoading(false);
 
@@ -4045,6 +4037,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
+		// restoreOrJoin already bound a server-side session this cycle; without an
+		// explicit leave the runtime would keep us resident in the channel even
+		// though the client is giving up.
+		if (command.leaveServerSession) {
+			getTRPCClient()
+				.voice.leave.mutate()
+				.catch((error) => {
+					logDebug('Voice reconnect terminal leave failed', { error });
+				});
+		}
+
 		clearOwnVoiceSessionAfterReconnectFailure(command.reason);
 		voiceCleanupRef.current?.();
 	}, []);
@@ -4126,6 +4129,21 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			commands.forEach(runVoiceSessionCommand);
 		});
 	}, [runVoiceSessionCommand]);
+
+	// Commands only reach live subscribers, so a provider remount mid-recovery
+	// (the machine state is module-level and survives it) would otherwise strand
+	// the machine waiting on a command whose runner unmounted. Resumed re-issues
+	// the current step under a new generation, invalidating any runner still in
+	// flight from the previous instance. Mount-only by design: within one mount
+	// no command is ever lost, so re-dispatching on dep changes would only risk
+	// duplicating in-flight work.
+	useEffect(() => {
+		const { phase } = getVoiceSessionState();
+
+		if (phase.phase === 'rebuilding' || phase.phase === 'reconnecting') {
+			dispatchVoiceSession({ type: 'Resumed' });
+		}
+	}, []);
 
 	const setMicProcessingMuted = useCallback((micMuted: boolean) => {
 		micAudioPipelineRef.current?.setInputMuted(micMuted);

@@ -172,14 +172,21 @@ describe('transport rebuild machine orchestration', () => {
 		]);
 	});
 
-	it('fails terminally when nonce restarts exceed the cap', () => {
+	it('fails terminally with leave cleanup when nonce restarts exceed the cap', () => {
 		let [state] = startRebuild();
+		let commands: TVoiceSessionCommand[] = [];
 
 		for (let nonce = 2; nonce <= VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS + 2; nonce += 1) {
-			state = reduceVoiceSession(state, { type: 'NonceChanged', nonce }).state;
+			[state, commands] = dispatch(state, { type: 'NonceChanged', nonce });
 		}
 
 		expect(state.phase).toEqual({ phase: 'failed', reason: 'restore-terminal-error', channelId: 7 });
+		expect(commands).toEqual([
+			expect.objectContaining({
+				type: 'LeaveVoiceSession',
+				channelId: 7,
+			}),
+		]);
 	});
 
 	it('ignores transport failure while websocket reconnect owns recovery', () => {

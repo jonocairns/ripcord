@@ -1,8 +1,9 @@
 # Voice Session FSM — Design Record
 
-**Status:** Design agreed, not yet implemented. Durable record of *what we're
-building and why*; supersede or delete once the machine lands and this is folded
-into the code's own docs.
+**Status:** Implemented — the machine (`voice-session-machine.ts` +
+`voice-session-store.ts`) is wired into `VoiceProvider` and both recovery paths
+run through it. Kept as the durable record of *what we built and why*; fold into
+the code's own docs and delete when convenient.
 
 **Companion:** [`remote-media-subscription-state.md`](./remote-media-subscription-state.md)
 is the durable design for the #274 remote-media ledger. This machine **drives**

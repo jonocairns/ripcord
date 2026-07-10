@@ -29,6 +29,7 @@ type TClearReason =
 	| 'banned'
 	| 'session-replaced'
 	| 'voice-join-succeeded'
+	| 'join-failed'
 	| 'restore-conflict'
 	| 'restore-terminal-error'
 	| 'reconnect-expired'

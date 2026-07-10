@@ -190,7 +190,11 @@ describe('voice session machine', () => {
 		});
 
 		expect(capped.state.phase).toEqual({ phase: 'failed', reason: 'restore-terminal-error', channelId: 5 });
-		expect(capped.commands).toEqual([]);
+		// The abandoned rebuild left transports torn down, so the cap must emit the
+		// same leave/teardown command as an exhausted-attempts failure.
+		expect(capped.commands).toEqual([
+			expect.objectContaining({ type: 'LeaveVoiceSession', generation: generation + 1, channelId: 5 }),
+		]);
 	});
 
 	it('retries reconnect failures and tracks unknown error count in reducer state', () => {
@@ -249,6 +253,7 @@ describe('voice session machine', () => {
 				type: 'ClearFailedSession',
 				reason: 'reconnect-expired',
 				channelId: 5,
+				leaveServerSession: false,
 			}),
 		]);
 	});
@@ -355,8 +360,42 @@ describe('voice session machine', () => {
 		expect(result.state.pendingVoiceReconnect).toBeUndefined();
 		expect(result.state.reconnectingSince).toBeUndefined();
 		expect(result.state.reconnectAuthenticated).toBe(false);
+		// The give-up path must run the full reconnect clear (Sentry report, reason
+		// toast, clearVoiceReconnectRecovery) AND leave the server session that
+		// restoreOrJoin already bound this cycle.
 		expect(result.commands).toEqual([
-			expect.objectContaining({ type: 'LeaveVoiceSession', generation: generation + 1, channelId: 5 }),
+			expect.objectContaining({
+				type: 'ClearFailedSession',
+				generation: generation + 1,
+				reason: 'restore-conflict',
+				channelId: 5,
+				leaveServerSession: true,
+			}),
+		]);
+	});
+
+	it('clears without a server leave when the terminal reconnect failure never established a session', () => {
+		const [state, generation] = startReconnectWithSnapshot(true);
+		const result = reduceVoiceSession(state, {
+			type: 'RestoreFailed',
+			generation,
+			serverSessionEstablished: false,
+			error: {
+				data: {
+					code: 'CONFLICT',
+					httpStatus: 409,
+				},
+			},
+		});
+
+		expect(result.state.phase).toEqual({ phase: 'failed', reason: 'restore-conflict', channelId: 5 });
+		expect(result.commands).toEqual([
+			expect.objectContaining({
+				type: 'ClearFailedSession',
+				reason: 'restore-conflict',
+				channelId: 5,
+				leaveServerSession: false,
+			}),
 		]);
 	});
 
@@ -414,6 +453,59 @@ describe('voice session machine', () => {
 		expect(result.state.pendingVoiceReconnect).toBeUndefined();
 		expect(result.state.reconnectingSince).toBeUndefined();
 		expect(result.state.reconnectAuthenticated).toBe(false);
+		expect(result.commands).toEqual([]);
+	});
+
+	it('resumes an interrupted rebuild under a new generation and drops the old instance results', () => {
+		const [state, generation] = startRebuildWithSnapshot();
+		const resumed = reduceVoiceSession(state, { type: 'Resumed' });
+
+		expect(resumed.state.phase).toMatchObject({ phase: 'rebuilding', generation: generation + 1 });
+		expect(resumed.commands).toEqual([
+			expect.objectContaining({
+				type: 'RebuildTransports',
+				generation: generation + 1,
+				channelId: 5,
+				attempt: 0,
+				snapshot: snapshot(),
+			}),
+		]);
+
+		// A runner still in flight from before the resume reports under the old
+		// generation and must be ignored.
+		const stale = reduceVoiceSession(resumed.state, { type: 'RebuildSucceeded', generation });
+		expect(stale.state).toBe(resumed.state);
+		expect(stale.commands).toEqual([]);
+	});
+
+	it('resumes an interrupted reconnect retry delay under a new generation', () => {
+		let [state, generation] = startReconnectWithSnapshot(true);
+
+		[state] = dispatch(state, { type: 'RestoreFailed', generation, error: new Error('blip') });
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'retryDelay', retryAttempt: 1 });
+
+		const resumed = reduceVoiceSession(state, { type: 'Resumed' });
+
+		expect(resumed.state.phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'retryDelay',
+			generation: generation + 1,
+		});
+		expect(resumed.commands).toEqual([
+			expect.objectContaining({
+				type: 'RetryDelay',
+				generation: generation + 1,
+				attempt: 0,
+				expiresAt: 10_000,
+			}),
+		]);
+	});
+
+	it('ignores resume outside recovery phases', () => {
+		const state = createInitialVoiceSessionState();
+		const result = reduceVoiceSession(state, { type: 'Resumed' });
+
+		expect(result.state).toBe(state);
 		expect(result.commands).toEqual([]);
 	});
 });

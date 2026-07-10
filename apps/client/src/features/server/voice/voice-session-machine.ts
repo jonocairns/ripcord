@@ -94,7 +94,17 @@ type TVoiceSessionCommand =
 	  }
 	| { type: 'RecoverDesktopAppAudio'; commandId: number; generation: number }
 	| { type: 'LeaveVoiceSession'; commandId: number; generation: number; channelId?: number }
-	| { type: 'ClearFailedSession'; commandId: number; generation: number; reason: TClearReason; channelId?: number };
+	| {
+			type: 'ClearFailedSession';
+			commandId: number;
+			generation: number;
+			reason: TClearReason;
+			channelId?: number;
+			// True when the failed recovery already bound a server-side session
+			// (restoreOrJoin succeeded this cycle); the runner must send voice.leave
+			// so the server does not keep the user resident in the channel.
+			leaveServerSession: boolean;
+	  };
 
 type TVoiceSessionCommandInput = TVoiceSessionCommand extends infer Command
 	? Command extends TVoiceSessionCommand
@@ -117,7 +127,8 @@ type TVoiceSessionTriggerEvent =
 	| { type: 'ReconnectStartCleared' }
 	| { type: 'RecoveryCleared'; reason: TClearReason }
 	| { type: 'ReconnectSuppressionChanged'; suppression: TVoiceReconnectSuppression | undefined }
-	| { type: 'RecoveryStarted'; generation: number; snapshot: TWatchedRemoteStreamsSnapshot };
+	| { type: 'RecoveryStarted'; generation: number; snapshot: TWatchedRemoteStreamsSnapshot }
+	| { type: 'Resumed' };
 
 type TVoiceSessionResultEvent =
 	| { type: 'RebuildSucceeded'; generation: number }
@@ -201,11 +212,16 @@ const clearReconnectFacadeRecovery = (state: TVoiceSessionState): TVoiceSessionS
 	reconnectAuthenticated: false,
 });
 
+// 'leave' — in-session rebuild gave up: send voice.leave and tear down locally.
+// 'clear' — reconnect gave up without a server session: run the reconnect
+//   give-up path (Sentry report, reason toast, clearVoiceReconnectRecovery).
+// 'leave-and-clear' — reconnect gave up after restoreOrJoin already bound a
+//   server session: same as 'clear' plus an explicit voice.leave.
 const failSession = (
 	state: TVoiceSessionState,
 	reason: TClearReason,
 	channelId?: number,
-	command?: 'clear' | 'leave-and-clear',
+	command?: 'leave' | 'clear' | 'leave-and-clear',
 ): TVoiceSessionReducerResult => {
 	const [baseState, generation] = nextGeneration(state);
 	const failedState: TVoiceSessionState = {
@@ -213,12 +229,18 @@ const failSession = (
 		phase: { phase: 'failed', reason, channelId },
 	};
 
-	if (command === 'leave-and-clear') {
+	if (command === 'leave') {
 		return withCommand(failedState, { type: 'LeaveVoiceSession', generation, channelId });
 	}
 
-	if (command === 'clear') {
-		return withCommand(failedState, { type: 'ClearFailedSession', generation, reason, channelId });
+	if (command === 'clear' || command === 'leave-and-clear') {
+		return withCommand(failedState, {
+			type: 'ClearFailedSession',
+			generation,
+			reason,
+			channelId,
+			leaveServerSession: command === 'leave-and-clear',
+		});
 	}
 
 	return emptyResult(failedState);
@@ -279,6 +301,17 @@ const scheduleReconnectStep = (state: TVoiceSessionState): TVoiceSessionReducerR
 		});
 	}
 
+	if (phase.step === 'retryDelay') {
+		// retryAttempt was already incremented when the step was entered; the
+		// delay command is keyed to the attempt that just failed.
+		return withCommand(state, {
+			type: 'RetryDelay',
+			generation: phase.generation,
+			attempt: Math.max(0, phase.retryAttempt - 1),
+			expiresAt: phase.pending.expiresAt,
+		});
+	}
+
 	return emptyResult(state);
 };
 
@@ -314,6 +347,11 @@ const startCapturedReconnect = (
 	const pending = state.phase.phase === 'reconnecting' ? state.phase.pending : state.pendingVoiceReconnect;
 
 	if (!pending) {
+		// Records the start on the facade mirror without entering 'reconnecting'.
+		// A later ReconnectIntentCaptured will NOT start recovery, and
+		// ensureVoiceReconnectStarted early-returns once reconnectingSince is set —
+		// so callers must capture intent BEFORE starting the reconnect (as
+		// lib/trpc.ts and features/server/actions.ts do) or recovery never runs.
 		return emptyResult({ ...state, reconnectingSince: event.now, reconnectAuthenticated: event.authenticated });
 	}
 
@@ -353,6 +391,41 @@ const startRebuilding = (
 		recovery: 'rebuilding',
 		generation,
 	});
+};
+
+// Commands are delivered only to subscribers that are alive at dispatch time,
+// so a command runner (the VoiceProvider) that remounts mid-recovery would
+// otherwise leave the machine stranded waiting on a command nobody executes.
+// Resuming re-issues the current step under a fresh generation, which also
+// invalidates any still-running command from the previous runner instance.
+const reduceResumed = (state: TVoiceSessionState): TVoiceSessionReducerResult => {
+	const { phase } = state;
+
+	if (phase.phase === 'rebuilding') {
+		const [baseState, generation] = nextGeneration(state);
+		const nextState: TVoiceSessionState = { ...baseState, phase: { ...phase, generation } };
+
+		if (phase.snapshot === undefined) {
+			return withCommand(nextState, { type: 'CaptureRecoverySnapshot', recovery: 'rebuilding', generation });
+		}
+
+		return withCommand(nextState, {
+			type: 'RebuildTransports',
+			generation,
+			channelId: phase.channelId,
+			nonce: phase.nonce,
+			attempt: phase.attempt,
+			snapshot: phase.snapshot,
+		});
+	}
+
+	if (phase.phase === 'reconnecting') {
+		const [baseState, generation] = nextGeneration(state);
+
+		return scheduleReconnectStep({ ...baseState, phase: { ...phase, generation } });
+	}
+
+	return emptyResult(state);
 };
 
 const reduceRecoveryStarted = (
@@ -406,11 +479,11 @@ const reduceRebuildFailed = (
 	});
 
 	if (classification.kind === 'terminal') {
-		return failSession(state, classification.clearReason, phase.channelId, 'leave-and-clear');
+		return failSession(state, classification.clearReason, phase.channelId, 'leave');
 	}
 
 	if (phase.attempt + 1 >= VOICE_SESSION_REBUILD_MAX_ATTEMPTS) {
-		return failSession(state, 'restore-terminal-error', phase.channelId, 'leave-and-clear');
+		return failSession(state, 'restore-terminal-error', phase.channelId, 'leave');
 	}
 
 	if (phase.snapshot === undefined) {
@@ -450,7 +523,10 @@ const reduceNonceChanged = (
 	}
 
 	if (phase.nonceRestarts + 1 > VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS) {
-		return failSession(state, 'restore-terminal-error', phase.channelId);
+		// The rebuild is abandoned with transports already torn down, so this must
+		// emit the same leave/teardown as an exhausted-attempts failure — without
+		// it the server keeps a ghost participant and the user gets no signal.
+		return failSession(state, 'restore-terminal-error', phase.channelId, 'leave');
 	}
 
 	if (phase.snapshot === undefined) {
@@ -514,7 +590,8 @@ const reduceRestoreFailed = (
 	}
 
 	const consecutiveUnknownErrors = classification.countsAsUnknown ? phase.consecutiveUnknownErrors + 1 : 0;
-	const nextState: TVoiceSessionState = {
+
+	return scheduleReconnectStep({
 		...state,
 		phase: {
 			...phase,
@@ -523,13 +600,6 @@ const reduceRestoreFailed = (
 			consecutiveUnknownErrors,
 			serverSessionEstablished: event.serverSessionEstablished,
 		},
-	};
-
-	return withCommand(nextState, {
-		type: 'RetryDelay',
-		generation: phase.generation,
-		attempt: phase.retryAttempt,
-		expiresAt: phase.pending.expiresAt,
 	});
 };
 
@@ -630,6 +700,8 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			return emptyResult({ ...state, suppression: event.suppression });
 		case 'RecoveryStarted':
 			return reduceRecoveryStarted(state, event);
+		case 'Resumed':
+			return reduceResumed(state);
 		case 'RebuildSucceeded':
 			if (state.phase.phase !== 'rebuilding' || state.phase.generation !== event.generation) {
 				return emptyResult(state);
@@ -752,8 +824,8 @@ export {
 	createInitialVoiceSessionState,
 	reduceVoiceSession,
 	selectVoiceSessionConnectionStatus,
+	VOICE_RECONNECT_SUPPRESSION_MS,
 	VOICE_SESSION_REBUILD_MAX_ATTEMPTS,
 	VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS,
-	VOICE_RECONNECT_SUPPRESSION_MS,
 	voiceSessionResultState,
 };
