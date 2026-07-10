@@ -542,7 +542,10 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				phase: { phase: 'connected', channelId: event.channelId },
 			});
 		case 'JoinFailed':
-			return failSession(state, event.reason, event.channelId);
+			return emptyResult({
+				...clearReconnectFacadeRecovery(state),
+				phase: { phase: 'failed', reason: event.reason, channelId: event.channelId },
+			});
 		case 'WsDropped':
 			if (state.phase.phase === 'reconnecting') {
 				return emptyResult({

@@ -8,7 +8,17 @@ import {
 } from '@sharkord/shared';
 import { Device } from 'mediasoup-client';
 import type { AppData, Producer, RtpCapabilities, RtpCodecCapability } from 'mediasoup-client/types';
-import { createContext, type MutableRefObject, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+	createContext,
+	type MutableRefObject,
+	memo,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from 'react';
 import { toast } from 'sonner';
 import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
@@ -24,7 +34,11 @@ import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordi
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import { getVoiceReconnectRetryDelayMs, VoiceReconnectTimeoutError } from '@/features/server/voice/reconnect-policy';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
-import type { TVoiceSessionCommand } from '@/features/server/voice/voice-session-machine';
+import {
+	selectVoiceSessionConnectionStatus,
+	type TVoiceSessionCommand,
+	type TVoiceSessionConnectionStatus,
+} from '@/features/server/voice/voice-session-machine';
 import {
 	dispatchVoiceSession,
 	getVoiceSessionState,
@@ -157,12 +171,13 @@ const createEmptyAudioVideoRefs = (): AudioVideoRefs => ({
 	externalVideoRef: { current: null },
 });
 
-enum ConnectionStatus {
-	DISCONNECTED = 'disconnected',
-	CONNECTING = 'connecting',
-	CONNECTED = 'connected',
-	FAILED = 'failed',
-}
+type TConnectionStatus = TVoiceSessionConnectionStatus;
+
+const getVoiceSessionConnectionStatusSnapshot = (): TConnectionStatus =>
+	selectVoiceSessionConnectionStatus(getVoiceSessionState());
+
+const subscribeVoiceSessionConnectionStatus = (onStoreChange: () => void): (() => void) =>
+	subscribeVoiceSession(onStoreChange);
 
 const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
 	[VideoCodecPreference.VP8]: 'video/VP8',
@@ -523,7 +538,7 @@ const createMicGainPipeline = async (
 
 export type TVoiceProvider = {
 	loading: boolean;
-	connectionStatus: ConnectionStatus;
+	connectionStatus: TConnectionStatus;
 	audioVideoRefsMap: Map<number, AudioVideoRefs>;
 	ownVoiceState: TVoiceUserState;
 	getOrCreateRefs: (remoteId: number) => AudioVideoRefs;
@@ -553,7 +568,7 @@ export type TVoiceProvider = {
 
 const VoiceProviderContext = createContext<TVoiceProvider>({
 	loading: false,
-	connectionStatus: ConnectionStatus.DISCONNECTED,
+	connectionStatus: 'disconnected',
 	audioVideoRefsMap: new Map(),
 	getOrCreateRefs: () => createEmptyAudioVideoRefs(),
 	acceptStream: () => undefined,
@@ -655,7 +670,11 @@ const createReconnectAttemptId = (): string => {
 
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const [loading, setLoading] = useState(false);
-	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
+	const connectionStatus = useSyncExternalStore(
+		subscribeVoiceSessionConnectionStatus,
+		getVoiceSessionConnectionStatusSnapshot,
+		getVoiceSessionConnectionStatusSnapshot,
+	);
 	const [voiceEventRtpCapabilities, setVoiceEventRtpCapabilities] = useState<RtpCapabilities | null>(null);
 	const deviceRef = useRef<Device | undefined>(undefined);
 	const routerRtpCapabilities = useRef<RtpCapabilities | null>(null);
@@ -2861,7 +2880,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startNativeAppAudioIngest,
 	]);
 
-	// Serializes overlapping desktop app-audio recoveries. recoverTransportSession
+	// Serializes overlapping desktop app-audio recoveries. Voice session recovery
 	// fires this fire-and-forget on every retry attempt, so a fast-failing retry can
 	// launch a second recovery while the first is still publishing. Run concurrently,
 	// the second's cleanupDesktopAppAudio() would stop the first's just-published RTP
@@ -3156,8 +3175,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			routerRtpCapabilities.current = null;
 			sendRtpCapabilities.current = null;
 			setVoiceEventRtpCapabilities(null);
-
-			setConnectionStatus(ConnectionStatus.DISCONNECTED);
 		},
 		[
 			stopMonitoring,
@@ -3303,10 +3320,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					hasHandledTransportFailureRef.current = false;
 
 					let micPrepPromise: Promise<TPreparedMicPipeline | undefined> | undefined;
+					const dispatchJoinLifecycle = opts?.preserveLocalMedia !== true && opts?.restoreWatchSnapshot === undefined;
 
 					try {
 						setLoading(true);
-						setConnectionStatus(ConnectionStatus.CONNECTING);
+						if (dispatchJoinLifecycle) {
+							dispatchVoiceSession({ type: 'JoinRequested', channelId });
+						}
 
 						routerRtpCapabilities.current = incomingRouterRtpCapabilities;
 
@@ -3372,7 +3392,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						}
 
 						startMonitoring(producerTransport.current, consumerTransport.current);
-						setConnectionStatus(ConnectionStatus.CONNECTED);
+						if (dispatchJoinLifecycle) {
+							dispatchVoiceSession({ type: 'JoinSucceeded', channelId });
+						}
 						setLoading(false);
 
 						return { republishedLocalMediaState };
@@ -3385,7 +3407,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						await cleanupMicAudioPipeline();
 						setLocalAudioStream(undefined);
 
-						setConnectionStatus(ConnectionStatus.FAILED);
+						if (dispatchJoinLifecycle) {
+							dispatchVoiceSession({ type: 'JoinFailed', reason: 'restore-terminal-error', channelId });
+						}
 						setLoading(false);
 
 						throw error;
@@ -3539,7 +3563,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									channelId: command.channelId,
 								});
 
-								setConnectionStatus(ConnectionStatus.CONNECTING);
 								stopMonitoring();
 								resetStats();
 								clearRemoteUserStreams();
@@ -3643,7 +3666,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								}
 
 								startMonitoring(producerTransport.current, consumerTransport.current);
-								setConnectionStatus(ConnectionStatus.CONNECTED);
 								logVoice('Voice transport recovery completed successfully');
 
 								dispatchIfCurrentVoiceSessionCommand(command, () => {

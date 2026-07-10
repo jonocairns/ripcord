@@ -13,8 +13,8 @@ that ledger; it does not refold it.
 The reconnect / transport-recovery orchestration lives as **two large imperative
 async loops inside the 4,500-line `VoiceProvider`**, plus a defer handler:
 
-- **In-session transport rebuild** — `recoverTransportSession`
-  (`apps/client/src/components/voice-provider/index.tsx`, ~3476–3784). Triggered
+- **In-session transport rebuild** — formerly the inline transport recovery loop
+  in `apps/client/src/components/voice-provider/index.tsx`. Triggered
   by ICE/DTLS transport failure; keeps the server session (rejoins only if
   missing); guards staleness with `voiceSessionReconnectNonce`.
 - **WS-level reconnect** — the effect at ~3927–4225. Triggered by a socket drop;
@@ -25,7 +25,7 @@ async loops inside the 4,500-line `VoiceProvider`**, plus a defer handler:
   a double teardown.
 
 Policies are already extracted and pure (`reconnect-policy.ts`,
-`reconnect-coordinator.ts`, `transport-failure-policy.ts`). **The orchestration
+`reconnect-coordinator.ts`). **The orchestration
 control-flow is not.** Both paths are only covered by *structural mirror* tests
 (`recover-transport-session.test.ts`, `voice-reconnect-restore.test.ts`) that
 **hand-copy the control flow into the test file** — they import nothing real, so
@@ -108,8 +108,8 @@ double-teardown race *structurally unrepresentable*.
 
 **Both preemption races are first-class transitions**, not just the one:
 
-- `TransportFailed` while `phase === 'reconnecting'` → **ignored** (folds
-  `shouldDeferTransportFailureToReconnect`).
+- `TransportFailed` while `phase === 'reconnecting'` → **ignored** (folds the
+  old transport-failure defer helper).
 - `WsDropped` while `phase === 'rebuilding'` → **`rebuilding → reconnecting`
   preemption** (replaces the `index.tsx:888` handoff). The reducer transition is
   clean, but the runner's in-flight rebuild is still awaiting, so this **requires
@@ -125,8 +125,8 @@ phase-entry and hands it to the machine as an event payload
 still captured exactly once, before `init` / `cleanupTransports` wipes the ledger.
 
 - **Defer = a pure reducer guard.** A `TransportFailed` event while
-  `phase === 'reconnecting'` is ignored (no transition). This folds
-  `shouldDeferTransportFailureToReconnect` into the reducer as a one-line,
+  `phase === 'reconnecting'` is ignored (no transition). This folds the old
+  transport-failure defer helper into the reducer as a one-line,
   trivially-testable transition.
 - **Nonce-restart** stays inside `rebuilding`: a `NonceChanged` event restarts the
   attempt (capped), as an explicit transition.
@@ -157,7 +157,7 @@ So:
 
 **Desktop app-audio recovery is a runner-side command, not a machine phase.**
 `runDesktopAppAudioRecovery` (`index.tsx` ~2843), which rides along inside
-`recoverTransportSession` today, becomes a fire-and-forget `RecoverDesktopAppAudio`
+the transport rebuild path, becomes a fire-and-forget `RecoverDesktopAppAudio`
 command emitted on the recovery tail. It is native-only and self-healing, so it
 stays out of the phase model — the machine emits the command; the runner runs it
 without awaiting a result back into a transition.
@@ -290,7 +290,7 @@ intermediate production window to protect. Ordering is therefore **store-first**
    Mechanical, green, no behavior change. (Per-call-site migration to raw
    `dispatch` is optional and later — the facade is a reviewability boundary, not
    throwaway architecture.)
-2. **Cut over `rebuilding`.** Replace the inline `recoverTransportSession` loop
+2. **Cut over `rebuilding`.** Replace the inline transport recovery loop
    with dispatch → machine → runner, including the `WsDropped`-preemption
    cancellation token. The runner command handlers return/dispatch only result
    events (`RebuildSucceeded` / `RebuildFailed { error }` etc.); the reducer
@@ -311,11 +311,33 @@ intermediate production window to protect. Ordering is therefore **store-first**
 4. **Delete dead state / mirror remnants;** `ConnectionStatus` fully derived.
    Add/enable the narrow lint restriction that prevents the session runner from
    importing legacy facade mutators or raw state mutation APIs. Delete the
-   now-orphaned transport-failure policy helper/test and stale
-   `recoverTransportSession` comments once both recovery paths are machine-run.
+   now-orphaned transport-failure policy helper/test and stale transport
+   recovery comments once both recovery paths are machine-run.
    If the rebuild runner remains embedded in `VoiceProvider`, either extract a
    narrow runner-adapter seam for command-in → result-event-out tests or record
    why reducer-level coverage is the accepted substitute.
+
+   **Slice 4 seam decision:** the runner remains embedded in `VoiceProvider` for
+   now because it still needs React-scoped transport, media, and desktop-audio
+   dependencies that would make an extracted adapter mostly parameter plumbing.
+   The accepted seam is reducer-level command/result coverage plus a focused
+   boundary test that prevents the embedded runner from importing legacy
+   reconnect mutators or raw machine reset APIs. Extract a separate
+   `useVoiceSessionRunner` only when the effect surface is narrow enough for
+   command-in → result-event-out tests to cover behavior without mocking most of
+   `VoiceProvider`.
+
+   **Follow-ups intentionally left out of Slice 4:**
+
+   - Consider a reducer-owned completion event for terminal transport rebuild
+     cleanup, such as `LeaveAfterFailureCompleted`, if we want the stronger
+     invariant that clearing `currentVoiceChannelId` also returns the session
+     machine from `failed` to `idle`. Do not add an ad hoc runner dispatch for
+     this; keep phase cleanup as a reducer transition with a machine test.
+   - Consider moving retry delay calculation into the reducer command payload
+     (`RetryDelay { delayMs }`) if we want the runner to become fully mechanical.
+     The current runner still makes no retry-vs-terminal decision; it only
+     computes timing from the reducer-supplied attempt.
 
 Each *commit* is individually green and reviewable (bisect works), but no commit
 needs to be independently shippable.

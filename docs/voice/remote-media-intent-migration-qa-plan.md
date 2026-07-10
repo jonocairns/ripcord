@@ -85,13 +85,13 @@ Verified by confirming the real WS-reconnect effect (`index.tsx:3876-4042`)
 matches the tested control-flow mirror in `voice-reconnect-restore.test.ts`
 (snapshot-before-init → restoreOrJoin → init(preserveLocalMedia) →
 consumeExistingProducers → restore watched user + external streams, in that
-order), plus `transport-failure-policy.test.ts` for the defer guard. A live WS
-drop across two real clients was not staged — the effect can't render headless
-and the orchestration is deterministic + mirrored.
+order), plus `voice-session-machine.test.ts` for the reducer-owned defer guard.
+A live WS drop across two real clients was not staged — the effect can't render
+headless and the orchestration is deterministic + mirrored.
 
 - [X] **5.1 WS reconnect while watching** — snapshot captured once before `init()` wipes the ledger, then each watched user stream (video/screen/screenAudio) is re-consumed after `consumeExistingProducers`. Real code verified against the mirror; test locks the shape. *(Regressed and fixed in this PR — commit `adec5dd7`.)*
 - [X] **5.2 External-stream reconnect** — external audio/video restored per-track from the snapshot (`watchedState.audio`/`.video`), streamId-keyed. Covered by the mirror test "re-consumes watched external streams, honouring per-track presence".
-- [X] **5.3 Reconnect during transport failure** — `shouldDeferTransportFailureToReconnect(reconnectingSince)` makes the in-session handler defer to WS reconnect (checked at `index.tsx:851` before recovery and `879` after in-session recovery fails); `voiceReconnectPromiseRef` blocks concurrent WS runs and nonce checks abort stale in-session recovery. No double recovery. Predicate tested.
+- [X] **5.3 Reconnect during transport failure** — the voice session reducer ignores `TransportFailed` while `phase === 'reconnecting'`, so the in-session handler defers to WS reconnect. Command generations and nonce checks abort stale in-session recovery. No double recovery. Reducer transition tested.
 - [X] **5.4 Screen-audio intent across reconnect** — `screenAudio` is just a kind in the user-streams snapshot, so it restores via the same 5.1 path with no dedicated ref. Covered by the mirror test's `'20': ['screen', 'screenAudio']` case.
 
 ## 6. Presence churn & teardown
@@ -138,5 +138,5 @@ up — the PR is comfortable to merge.**
 producer-replacement / repair-backoff shapes and the §6 teardown cascades; the
 WS-reconnect watch-restore path (§5) is locked by `voice-reconnect-restore.test.ts`
 against a faithful mirror of the real effect, and the §5.3 defer guard by
-`transport-failure-policy.test.ts`. The remaining live-only checks are §7.1
+`voice-session-machine.test.ts`. The remaining live-only checks are §7.1
 (Network), §8.1 (Profiler, optional), and §9.1 (desktop).
