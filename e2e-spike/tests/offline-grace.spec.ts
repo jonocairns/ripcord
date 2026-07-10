@@ -1,5 +1,13 @@
 import { expect, test } from '@playwright/test';
-import { installPcHook, joinVoice, leaveVoice, login, startCamera, waitForStats } from '../helpers/app';
+import {
+	installPcHook,
+	joinVoice,
+	leaveVoice,
+	login,
+	startCamera,
+	suppressViteHmrReload,
+	waitForStats,
+} from '../helpers/app';
 
 // Grace BOUNDARY: go offline for longer than the 60s reconnect grace. Past the
 // window the session can no longer be silently restored, so the client must land
@@ -10,6 +18,9 @@ import { installPcHook, joinVoice, leaveVoice, login, startCamera, waitForStats 
 test('offline beyond the 60s grace recovers to a coherent state', async ({ page, context }) => {
 	test.setTimeout(150_000);
 	await installPcHook(context);
+	// Vite's dev client reloads the page after offline windows — suppress so we
+	// observe the app's own recovery, not a dev-harness artifact.
+	await suppressViteHmrReload(page);
 	await login(page, 'sharkord', 'sharkord');
 	await joinVoice(page, 'Work Mode');
 	try {

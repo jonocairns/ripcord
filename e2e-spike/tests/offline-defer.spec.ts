@@ -1,5 +1,14 @@
 import { expect, test } from '@playwright/test';
-import { installPcHook, joinVoice, leaveVoice, login, pcStats, startCamera, waitForStats } from '../helpers/app';
+import {
+	installPcHook,
+	joinVoice,
+	leaveVoice,
+	login,
+	pcStats,
+	startCamera,
+	suppressViteHmrReload,
+	waitForStats,
+} from '../helpers/app';
 
 // Real browser offline (navigator.onLine=false + socket death) — distinct from
 // ReconnectLab's synthetic offline. Exercises ws-reconnect-gate.ts
@@ -9,6 +18,9 @@ import { installPcHook, joinVoice, leaveVoice, login, pcStats, startCamera, wait
 test('voice teardown is deferred while offline, then recovers online', async ({ page, context }) => {
 	test.setTimeout(90_000);
 	await installPcHook(context);
+	// Vite's dev client reloads the page after offline windows — suppress so we
+	// observe the app's own recovery, not a dev-harness artifact.
+	await suppressViteHmrReload(page);
 	await login(page, 'sharkord', 'sharkord');
 	await joinVoice(page, 'Work Mode');
 	try {

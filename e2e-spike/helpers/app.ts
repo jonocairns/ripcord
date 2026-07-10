@@ -49,6 +49,19 @@ export async function installPcHook(context: BrowserContext) {
 	await context.addInitScript(PC_HOOK);
 }
 
+// Vite's dev client reloads the page when its HMR websocket drops and the dev
+// server becomes reachable again — e.g. after context.setOffline() windows.
+// That reload wipes all client state mid-test and races the app's own voice
+// recovery. Intercept the HMR socket (vite retries quietly when it never
+// connects) so offline tests observe the app's real recovery, not a dev-server
+// artifact. Production builds have no vite client, so nothing real is lost.
+export async function suppressViteHmrReload(page: Page) {
+	await page.routeWebSocket(/:5173\//, () => {
+		// Never connect server-side: vite logs a connect failure and keeps
+		// retrying without ever entering its "connection lost → reload" path.
+	});
+}
+
 export function pcStats(page: Page): Promise<PcStats> {
 	return page.evaluate(() => (window as unknown as { __pcStats: () => Promise<PcStats> }).__pcStats());
 }
