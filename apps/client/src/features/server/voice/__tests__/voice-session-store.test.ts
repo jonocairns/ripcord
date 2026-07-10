@@ -2,14 +2,14 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import {
 	dispatchVoiceSession,
 	getVoiceSessionState,
-	resetVoiceSessionStoreForTest,
+	resetVoiceSessionState,
 	selectVoiceSessionState,
 	subscribeVoiceSession,
 } from '../voice-session-store';
 
 describe('voice session store', () => {
 	beforeEach(() => {
-		resetVoiceSessionStoreForTest();
+		resetVoiceSessionState();
 	});
 
 	it('dispatches through the reducer and exposes selector reads', () => {
@@ -39,5 +39,18 @@ describe('voice session store', () => {
 				commandTypes: ['CaptureRecoverySnapshot'],
 			},
 		]);
+	});
+
+	it('preserves subscribers when state is reset', () => {
+		const observedPhases: string[] = [];
+		const unsubscribe = subscribeVoiceSession((state) => {
+			observedPhases.push(state.phase.phase);
+		});
+
+		resetVoiceSessionState();
+		dispatchVoiceSession({ type: 'JoinRequested', channelId: 5 });
+		unsubscribe();
+
+		expect(observedPhases).toEqual(['joining']);
 	});
 });

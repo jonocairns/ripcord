@@ -40,17 +40,11 @@ const resetVoiceSessionState = (): void => {
 	voiceSessionState = createInitialVoiceSessionState();
 };
 
-const resetVoiceSessionStoreForTest = (): void => {
-	resetVoiceSessionState();
-	listeners.clear();
-};
-
 export type { TVoiceSessionListener, TVoiceSessionSelector };
 export {
 	dispatchVoiceSession,
 	getVoiceSessionState,
 	resetVoiceSessionState,
-	resetVoiceSessionStoreForTest,
 	selectVoiceSessionState,
 	subscribeVoiceSession,
 };
