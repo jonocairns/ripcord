@@ -186,6 +186,13 @@ type TExternalStreamInternal = {
 	producers: TExternalStreamProducers;
 };
 
+class VoiceRestoreAttemptSupersededError extends Error {
+	constructor() {
+		super('Voice restore attempt superseded');
+		this.name = 'VoiceRestoreAttemptSupersededError';
+	}
+}
+
 class VoiceRuntime {
 	public readonly id: number;
 	private state: TChannelState = { users: [], externalStreams: {} };
@@ -500,14 +507,23 @@ class VoiceRuntime {
 		return { transport, params };
 	};
 
-	public createConsumerTransport = async (userId: number) => {
-		this.removeConsumerTransport(userId);
-
+	public createConsumerTransport = async (userId: number, isCurrent: () => boolean = () => true) => {
 		const { transport, params } = await this.createTransport(CONSUMER_INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS);
+
+		if (!isCurrent()) {
+			transport.close();
+			throw new VoiceRestoreAttemptSupersededError();
+		}
+
+		this.removeConsumerTransport(userId);
 
 		this.consumerTransports[userId] = transport;
 
 		transport.observer.on('close', () => {
+			if (this.consumerTransports[userId] !== transport) {
+				return;
+			}
+
 			delete this.consumerTransports[userId];
 
 			if (this.consumers[userId]) {
@@ -545,14 +561,23 @@ class VoiceRuntime {
 		return this.consumerTransports[userId];
 	};
 
-	public createProducerTransport = async (userId: number) => {
-		this.removeProducerTransport(userId);
-
+	public createProducerTransport = async (userId: number, isCurrent: () => boolean = () => true) => {
 		const { params, transport } = await this.createTransport(PRODUCER_INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS);
+
+		if (!isCurrent()) {
+			transport.close();
+			throw new VoiceRestoreAttemptSupersededError();
+		}
+
+		this.removeProducerTransport(userId);
 
 		this.producerTransports[userId] = transport;
 
 		transport.observer.on('close', () => {
+			if (this.producerTransports[userId] !== transport) {
+				return;
+			}
+
 			delete this.producerTransports[userId];
 
 			this.removeProducer(userId, StreamKind.AUDIO);
@@ -1726,4 +1751,4 @@ class VoiceRuntime {
 	};
 }
 
-export { VoiceRuntime };
+export { VoiceRestoreAttemptSupersededError, VoiceRuntime };

@@ -55,6 +55,23 @@ describe('embedded voice session runner boundary', () => {
 		expect(
 			voiceSessionStoreImports.filter((importName) => bannedVoiceSessionStoreImports.includes(importName)),
 		).toEqual([]);
-		expect(reconnectPolicyImports.filter((importName) => bannedReconnectPolicyImports.includes(importName))).toEqual([]);
+		expect(reconnectPolicyImports.filter((importName) => bannedReconnectPolicyImports.includes(importName))).toEqual(
+			[],
+		);
+	});
+
+	it('rehydrates the provider-local ledger when RestoreWatchIntent is resumed after remount', async () => {
+		const providerSource = await Bun.file(
+			new URL('../../../../components/voice-provider/index.tsx', import.meta.url),
+		).text();
+		const restoreWatchRunner = providerSource.slice(
+			providerSource.indexOf('const runRestoreWatchIntentCommand'),
+			providerSource.indexOf('const clearFailedVoiceSession'),
+		);
+
+		expect(restoreWatchRunner).toContain('rehydrateWatchIntentOnly(command.snapshot)');
+		expect(restoreWatchRunner.indexOf('rehydrateWatchIntentOnly(command.snapshot)')).toBeLessThan(
+			restoreWatchRunner.indexOf("type: 'WatchIntentRehydrated'"),
+		);
 	});
 });

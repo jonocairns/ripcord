@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { channels } from '../../db/schema';
-import { VoiceRuntime } from '../../runtimes/voice';
+import { VoiceRestoreAttemptSupersededError, VoiceRuntime } from '../../runtimes/voice';
 import { invariant } from '../../utils/invariant';
 import type { Context } from '../../utils/trpc';
 
@@ -49,8 +49,9 @@ const createVoiceJoinBootstrap = async (opts: {
 	runtime: VoiceRuntime;
 	userId: number;
 	onError?: (error: unknown) => void | Promise<void>;
+	isCurrent?: () => boolean;
 }) => {
-	const { runtime, userId, onError } = opts;
+	const { runtime, userId, onError, isCurrent } = opts;
 	const router = runtime.getRouter();
 
 	let producerTransportParams;
@@ -59,13 +60,15 @@ const createVoiceJoinBootstrap = async (opts: {
 
 	try {
 		[producerTransportParams, consumerTransportParams] = await Promise.all([
-			runtime.createProducerTransport(userId),
-			runtime.createConsumerTransport(userId),
+			runtime.createProducerTransport(userId, isCurrent),
+			runtime.createConsumerTransport(userId, isCurrent),
 		]);
 
 		existingProducers = runtime.getRemoteIds(userId);
 	} catch (error) {
-		await onError?.(error);
+		if (!(error instanceof VoiceRestoreAttemptSupersededError)) {
+			await onError?.(error);
+		}
 		throw error;
 	}
 

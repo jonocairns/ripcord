@@ -253,6 +253,71 @@ describe('voice.restoreOrJoin', () => {
 		expect(result.channelUsers.some((user) => user.userId === 1)).toBe(true);
 	});
 
+	test('fences a delayed restore attempt when a newer attempt starts for the same client', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+
+		const { caller } = await initTest(1);
+
+		await caller.voice.join({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+		});
+
+		await caller.voice.reconnectLab.setNextRestoreBehavior({ delayMs: 100 });
+
+		const delayedRestore = caller.voice.restoreOrJoin({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+			reconnectAttemptId: 'attempt-delayed',
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const currentRestore = await caller.voice.restoreOrJoin({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+			reconnectAttemptId: 'attempt-current',
+		});
+
+		expect(currentRestore.channelUsers.some((user) => user.userId === 1)).toBe(true);
+		await expect(delayedRestore).rejects.toThrow('Voice restore attempt superseded');
+		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getProducerTransport(1)).toBeDefined();
+		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getConsumerTransport(1)).toBeDefined();
+	});
+
+	test('does not commit transports created by a superseded restore attempt', async () => {
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		let staleAttemptCurrent = true;
+		const staleProducer = runtime
+			.createProducerTransport(1, () => staleAttemptCurrent)
+			.catch((error: unknown) => error);
+		const staleConsumer = runtime
+			.createConsumerTransport(1, () => staleAttemptCurrent)
+			.catch((error: unknown) => error);
+		staleAttemptCurrent = false;
+
+		const [producerParams, consumerParams] = await Promise.all([
+			runtime.createProducerTransport(1),
+			runtime.createConsumerTransport(1),
+		]);
+
+		expect(await staleProducer).toEqual(expect.objectContaining({ message: 'Voice restore attempt superseded' }));
+		expect(await staleConsumer).toEqual(expect.objectContaining({ message: 'Voice restore attempt superseded' }));
+		expect(runtime.getProducerTransport(1)?.id).toBe(producerParams.id);
+		expect(runtime.getConsumerTransport(1)?.id).toBe(consumerParams.id);
+	});
+
 	test('forgetOwnVoiceSession drops the server-side voice session and broadcasts a reconnecting leave', async () => {
 		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 

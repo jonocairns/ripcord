@@ -118,6 +118,14 @@ double-teardown race *structurally unrepresentable*.
   transports/consumers into the now-`reconnecting` session. Same guard class as
   the existing nonce — make it explicit rather than implicit.
 
+Runner cancellation also crosses the RPC boundary. A reconnect timeout aborts the
+client request, and `restoreOrJoin` fences concurrent attempts by client instance;
+server transport creation checks that fence before replacing the active transport.
+This prevents a request that finishes after its client-side timeout from replacing
+the transports created by a newer attempt. Because a timed-out mutation may have
+committed before cancellation arrived, server-session ownership is sticky for the
+whole reconnect generation and every later terminal/expiry path leaves it.
+
 **Snapshot capture stays out of the reducer.** `snapshot` lives *in* the phase
 object, but the reducer never captures it — `captureWatchedRemoteStreams()` is an
 impure read of the ledger / stream maps. Instead the **runner** captures it at

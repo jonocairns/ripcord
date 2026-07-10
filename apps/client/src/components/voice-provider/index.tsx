@@ -608,10 +608,18 @@ const RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS = 350;
 const VOICE_RECONNECT_TIMEOUT_MS = 12_000;
 const VOICE_RECONNECT_WAIT_POLL_MS = 250;
 
-const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, createTimeoutError: () => Error): Promise<T> => {
+const withTimeout = <T,>(
+	promise: Promise<T>,
+	timeoutMs: number,
+	createTimeoutError: () => Error,
+	onTimeout?: () => void,
+): Promise<T> => {
 	let handle: ReturnType<typeof setTimeout> | undefined;
 	const timeoutPromise = new Promise<never>((_, reject) => {
-		handle = setTimeout(() => reject(createTimeoutError()), timeoutMs);
+		handle = setTimeout(() => {
+			onTimeout?.();
+			reject(createTimeoutError());
+		}, timeoutMs);
 	});
 	return Promise.race([promise, timeoutPromise]).finally(() => {
 		if (handle !== undefined) {
@@ -623,8 +631,8 @@ const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, createTimeoutEr
 const withRecoveryTimeout = <T,>(promise: Promise<T>): Promise<T> =>
 	withTimeout(promise, RECOVERY_TIMEOUT_MS, () => new Error('Voice transport recovery timed out'));
 
-const withVoiceReconnectTimeout = <T,>(promise: Promise<T>): Promise<T> =>
-	withTimeout(promise, VOICE_RECONNECT_TIMEOUT_MS, () => new VoiceReconnectTimeoutError());
+const withVoiceReconnectTimeout = <T,>(promise: Promise<T>, onTimeout?: () => void): Promise<T> =>
+	withTimeout(promise, VOICE_RECONNECT_TIMEOUT_MS, () => new VoiceReconnectTimeoutError(), onTimeout);
 
 const isMissingVoiceSessionError = (error: unknown): boolean => getTrpcErrorData(error)?.code === 'BAD_REQUEST';
 
@@ -1274,6 +1282,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			micMuted: boolean;
 			soundMuted: boolean;
 			reconnectAttemptId: string;
+			signal?: AbortSignal;
 		}): Promise<TVoiceBootstrapResult> => {
 			return traceSentrySpan(
 				{
@@ -1285,14 +1294,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					},
 				},
 				() =>
-					getTRPCClient().voice.restoreOrJoin.mutate({
-						channelId: opts.channelId,
-						state: {
-							micMuted: opts.micMuted,
-							soundMuted: opts.soundMuted,
+					getTRPCClient().voice.restoreOrJoin.mutate(
+						{
+							channelId: opts.channelId,
+							state: {
+								micMuted: opts.micMuted,
+								soundMuted: opts.soundMuted,
+							},
+							reconnectAttemptId: opts.reconnectAttemptId,
 						},
-						reconnectAttemptId: opts.reconnectAttemptId,
-					}),
+						{ signal: opts.signal },
+					),
 			);
 		},
 		[],
@@ -3990,6 +4002,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				const reconnectAttemptId = createReconnectAttemptId();
 				const attemptNumber = command.attempt + 1;
 				let serverSessionEstablished = false;
+				let restoreRequestCompleted = false;
+				let unsettledOperation: Promise<unknown> | undefined;
+				let attemptActive = true;
+				const abortController = new AbortController();
+				const cancelAttempt = (): void => {
+					attemptActive = false;
+					abortController.abort();
+				};
+				const unsubscribeFromAttempt = subscribeVoiceSession(() => {
+					if (!isCurrentVoiceSessionCommand(command)) {
+						cancelAttempt();
+					}
+				});
 
 				logDebug('Voice reconnect attempt start', {
 					attempt: attemptNumber,
@@ -3998,14 +4023,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				});
 
 				try {
-					const bootstrap = await withVoiceReconnectTimeout(
-						requestVoiceRestoreOrJoin({
-							channelId: command.pending.channelId,
-							micMuted: command.pending.micMuted,
-							soundMuted: command.pending.soundMuted,
-							reconnectAttemptId,
-						}),
-					);
+					const restoreRequest = requestVoiceRestoreOrJoin({
+						channelId: command.pending.channelId,
+						micMuted: command.pending.micMuted,
+						soundMuted: command.pending.soundMuted,
+						reconnectAttemptId,
+						signal: abortController.signal,
+					});
+					unsettledOperation = restoreRequest;
+					const bootstrap = await withVoiceReconnectTimeout(restoreRequest, cancelAttempt);
+					restoreRequestCompleted = true;
+					unsettledOperation = undefined;
 
 					serverSessionEstablished = true;
 
@@ -4013,16 +4041,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						return;
 					}
 
-					const initResult = await withVoiceReconnectTimeout(
-						init(bootstrap.routerRtpCapabilities, command.pending.channelId, {
-							producerTransportParams: bootstrap.producerTransportParams,
-							consumerTransportParams: bootstrap.consumerTransportParams,
-							existingProducers: bootstrap.existingProducers,
-							preserveLocalMedia: true,
-							restoreWatchSnapshot: command.snapshot,
-							isCurrentRecovery: () => isCurrentVoiceSessionCommand(command),
-						}),
-					);
+					const initRequest = init(bootstrap.routerRtpCapabilities, command.pending.channelId, {
+						producerTransportParams: bootstrap.producerTransportParams,
+						consumerTransportParams: bootstrap.consumerTransportParams,
+						existingProducers: bootstrap.existingProducers,
+						preserveLocalMedia: true,
+						restoreWatchSnapshot: command.snapshot,
+						isCurrentRecovery: () => attemptActive && isCurrentVoiceSessionCommand(command),
+					});
+					unsettledOperation = initRequest;
+					const initResult = await withVoiceReconnectTimeout(initRequest, cancelAttempt);
+					unsettledOperation = undefined;
 
 					if (!isCurrentVoiceSessionCommand(command)) {
 						cleanup({ preserveLocalMedia: true, preserveRemoteMediaIntent: true });
@@ -4067,9 +4096,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							commandId: command.commandId,
 							generation: command.generation,
 							error,
-							serverSessionEstablished,
+							// A timed-out restore mutation may have committed on the server
+							// before its response was aborted. Treat ownership as established
+							// conservatively so every later terminal path sends voice.leave.
+							serverSessionEstablished:
+								serverSessionEstablished || (!restoreRequestCompleted && error instanceof VoiceReconnectTimeoutError),
 						});
 					});
+				} finally {
+					unsubscribeFromAttempt();
+					await unsettledOperation?.catch(() => undefined);
 				}
 			})();
 
@@ -4136,6 +4172,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				return;
 			}
 
+			// The provider-local ledger is recreated on remount. init() normally
+			// rehydrates before producer reconciliation, but a remount after restore
+			// succeeded resumes directly at this command and therefore has no init()
+			// pass to rebuild the ledger. Reapplying is safe because the ledger helper
+			// never overwrites an existing slot, preserving stop intent from this mount.
+			rehydrateWatchIntentOnly(command.snapshot);
+
 			dispatchIfCurrentVoiceSessionCommand(command, () => {
 				dispatchVoiceSession({
 					type: 'WatchIntentRehydrated',
@@ -4145,7 +4188,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				});
 			});
 		},
-		[dispatchIfCurrentVoiceSessionCommand, isCurrentVoiceSessionCommand],
+		[dispatchIfCurrentVoiceSessionCommand, isCurrentVoiceSessionCommand, rehydrateWatchIntentOnly],
 	);
 
 	const clearFailedVoiceSession = useCallback((command: TVoiceSessionCommand): void => {

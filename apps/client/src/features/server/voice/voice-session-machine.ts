@@ -600,16 +600,17 @@ const reduceRestoreFailed = (
 	const classification = classifyVoiceReconnectError(event.error, {
 		consecutiveUnknownErrors: phase.consecutiveUnknownErrors,
 	});
+	const serverSessionEstablished = phase.serverSessionEstablished === true || event.serverSessionEstablished === true;
 
 	if (classification.kind === 'terminal') {
 		return failSession(
 			{
 				...state,
-				phase: { ...phase, serverSessionEstablished: event.serverSessionEstablished },
+				phase: { ...phase, serverSessionEstablished },
 			},
 			classification.clearReason,
 			phase.pending.channelId,
-			event.serverSessionEstablished === true ? 'leave-and-clear' : 'clear',
+			serverSessionEstablished ? 'leave-and-clear' : 'clear',
 		);
 	}
 
@@ -622,7 +623,7 @@ const reduceRestoreFailed = (
 			step: 'retryDelay',
 			retryAttempt: phase.retryAttempt + 1,
 			consecutiveUnknownErrors,
-			serverSessionEstablished: event.serverSessionEstablished,
+			serverSessionEstablished,
 		},
 	});
 };
@@ -801,17 +802,20 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			});
 		case 'OnlineExpired':
 		case 'AuthExpired':
-		case 'RetryDelayExpired':
+		case 'RetryDelayExpired': {
 			if (!isCurrentCommand(state, event.generation, event.commandId)) {
 				return emptyResult(state);
 			}
 
+			const reconnectPhase = state.phase.phase === 'reconnecting' ? state.phase : undefined;
+
 			return failSession(
 				state,
 				'reconnect-expired',
-				state.phase.phase === 'reconnecting' ? state.phase.pending.channelId : undefined,
-				'clear',
+				reconnectPhase?.pending.channelId,
+				reconnectPhase?.serverSessionEstablished === true ? 'leave-and-clear' : 'clear',
 			);
+		}
 		case 'AuthReady':
 			if (
 				state.phase.phase !== 'reconnecting' ||

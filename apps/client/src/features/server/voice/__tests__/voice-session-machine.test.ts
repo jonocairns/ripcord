@@ -484,6 +484,87 @@ describe('voice session machine', () => {
 		]);
 	});
 
+	it('keeps server-session ownership sticky when a later retry fails before restoring', () => {
+		let [state, generation] = startReconnectWithSnapshot(true);
+		let commands: TVoiceSessionCommand[];
+
+		[state, commands] = dispatch(state, {
+			type: 'RestoreFailed',
+			commandId: activeCommandId(state),
+			generation,
+			serverSessionEstablished: true,
+			error: {
+				data: {
+					code: 'INTERNAL_SERVER_ERROR',
+					httpStatus: 500,
+				},
+			},
+		});
+
+		expect(state.phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'retryDelay',
+			serverSessionEstablished: true,
+		});
+		expect(commands).toEqual([expect.objectContaining({ type: 'RetryDelay' })]);
+
+		[state, commands] = dispatch(state, {
+			type: 'RetryDelayElapsed',
+			commandId: activeCommandId(state),
+			generation,
+		});
+		expect(commands).toEqual([expect.objectContaining({ type: 'RestoreVoiceSession' })]);
+
+		[state, commands] = dispatch(state, {
+			type: 'RestoreFailed',
+			commandId: activeCommandId(state),
+			generation,
+			serverSessionEstablished: false,
+			error: {
+				data: {
+					code: 'CONFLICT',
+					httpStatus: 409,
+				},
+			},
+		});
+
+		expect(state.phase).toEqual({ phase: 'failed', reason: 'restore-conflict', channelId: 5 });
+		expect(commands).toEqual([
+			expect.objectContaining({
+				type: 'ClearFailedSession',
+				leaveServerSession: true,
+			}),
+		]);
+	});
+
+	it('leaves a previously established server session when the retry window expires', () => {
+		let [state, generation] = startReconnectWithSnapshot(true);
+		let commands: TVoiceSessionCommand[];
+
+		[state, commands] = dispatch(state, {
+			type: 'RestoreFailed',
+			commandId: activeCommandId(state),
+			generation,
+			serverSessionEstablished: true,
+			error: new Error('network connection lost'),
+		});
+		expect(commands).toEqual([expect.objectContaining({ type: 'RetryDelay' })]);
+
+		[state, commands] = dispatch(state, {
+			type: 'RetryDelayExpired',
+			commandId: activeCommandId(state),
+			generation,
+		});
+
+		expect(state.phase).toEqual({ phase: 'failed', reason: 'reconnect-expired', channelId: 5 });
+		expect(commands).toEqual([
+			expect.objectContaining({
+				type: 'ClearFailedSession',
+				leaveServerSession: true,
+			}),
+		]);
+	});
+
 	it('emits ledger restore and completes reconnect without duplicate desktop app-audio recovery', () => {
 		let [state, generation] = startReconnectWithSnapshot(true);
 		let commands: TVoiceSessionCommand[];
