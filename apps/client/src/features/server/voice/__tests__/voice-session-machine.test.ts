@@ -317,7 +317,7 @@ describe('voice session machine', () => {
 		expect(result.state.phase.consecutiveUnknownErrors).toBe(previousPhase.consecutiveUnknownErrors);
 	});
 
-	it('uses the shared classifier for rebuild terminal failures', () => {
+	it('uses the shared classifier for rebuild terminal failures and emits leave cleanup', () => {
 		const [state, generation] = startRebuildWithSnapshot();
 		const result = reduceVoiceSession(state, {
 			type: 'RebuildFailed',
@@ -331,7 +331,9 @@ describe('voice session machine', () => {
 		});
 
 		expect(result.state.phase).toEqual({ phase: 'failed', reason: 'restore-conflict', channelId: 5 });
-		expect(result.commands).toEqual([]);
+		expect(result.commands).toEqual([
+			expect.objectContaining({ type: 'LeaveVoiceSession', generation: generation + 1 }),
+		]);
 	});
 
 	it('turns classifier terminal reconnect failures into failed state and cleanup commands', () => {

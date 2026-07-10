@@ -1,786 +1,221 @@
-/**
- * Unit tests for the in-session transport rebuild orchestration.
- *
- * VoiceProvider.recoverTransportSession is a useCallback deep inside a React
- * component that can't be rendered without a full browser environment. Instead
- * we test the pure orchestration logic by recreating its control-flow as a
- * standalone function driven by injected mocks — the same pattern used by
- * audio-context.test.ts and video-bitrate-policy.test.ts in this directory.
- *
- * What we verify:
- *   1. Happy path: all steps called in the correct order
- *   2. Nonce restart: if the WS session nonce changes mid-flight the
- *      rebuild restarts against the fresh session instead of tearing down
- *   3. Retry: a transient failure on attempt 1 is retried; success on attempt
- *      2 still returns true
- *   4. Non-retriable error: a 4xx-class TRPC error is not retried
- *   5. Exhausted retries: three consecutive transient failures return false
- *   6. Flag dedup: a second concurrent call returns the same promise
- *   7. Mic republish: an in-session recovery restarts mic capture when the
- *      user was publishing (transport cleanup stops the produced track, so a
- *      live-track republish alone would silently drop the mic)
- */
+import { describe, expect, it } from 'bun:test';
+import { StreamKind } from '@sharkord/shared';
+import type { TPendingVoiceReconnect } from '@/features/server/voice/reconnect-coordinator';
+import {
+	createInitialVoiceSessionState,
+	reduceVoiceSession,
+	type TVoiceSessionCommand,
+	type TVoiceSessionState,
+	type TWatchedRemoteStreamsSnapshot,
+	VOICE_SESSION_REBUILD_MAX_ATTEMPTS,
+	VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS,
+} from '@/features/server/voice/voice-session-machine';
 
-import { describe, expect, it, mock } from 'bun:test';
+const watchedSnapshot = (): TWatchedRemoteStreamsSnapshot => ({
+	remoteUserStreams: {
+		10: [StreamKind.VIDEO],
+		20: [StreamKind.SCREEN, StreamKind.SCREEN_AUDIO],
+	},
+	externalStreams: {
+		99: { audio: true, video: true },
+	},
+});
 
-// ---------------------------------------------------------------------------
-// Minimal reproduction of the recovery orchestration logic extracted from
-// recoverTransportSession. Kept structurally identical so a refactor that
-// changes the real function will break these tests and surface the divergence.
-// ---------------------------------------------------------------------------
+const pendingReconnect = (): TPendingVoiceReconnect => ({
+	channelId: 7,
+	micMuted: false,
+	soundMuted: false,
+	peerUserIds: [10],
+	expiresAt: 10_000,
+});
 
-const RECOVERY_MAX_ATTEMPTS = 3;
-const RECOVERY_MAX_NONCE_RESTARTS = 5;
-const RECOVERY_TIMEOUT_MS = 12_000;
-const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
-const RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS = 350;
+const dispatch = (
+	state: TVoiceSessionState,
+	event: Parameters<typeof reduceVoiceSession>[1],
+): [TVoiceSessionState, TVoiceSessionCommand[]] => {
+	const result = reduceVoiceSession(state, event);
 
-type TRepublishedLocalMediaState = {
-	webcamEnabled?: true;
-	sharingScreen?: true;
+	return [result.state, result.commands];
 };
 
-type TRepublishPlan = {
-	tasks: Promise<void>[];
-	state: TRepublishedLocalMediaState;
-};
+const startRebuild = (): [TVoiceSessionState, number, TWatchedRemoteStreamsSnapshot] => {
+	let state = createInitialVoiceSessionState();
+	let commands: TVoiceSessionCommand[];
 
-class RecoverySessionChangedError extends Error {
-	constructor(stage: string) {
-		super(`Voice session changed during transport recovery (${stage})`);
-		this.name = 'RecoverySessionChangedError';
-	}
-}
+	[state, commands] = dispatch(state, { type: 'TransportFailed', channelId: 7, nonce: 1 });
 
-const withRecoveryTimeout = <T>(promise: Promise<T>): Promise<T> => {
-	let handle: ReturnType<typeof setTimeout> | undefined;
-	const timeoutPromise = new Promise<never>((_, reject) => {
-		handle = setTimeout(() => reject(new Error('Voice transport recovery timed out')), RECOVERY_TIMEOUT_MS);
-	});
-	return Promise.race([promise, timeoutPromise]).finally(() => {
-		if (handle !== undefined) clearTimeout(handle);
-	});
-};
+	expect(commands).toEqual([
+		expect.objectContaining({
+			type: 'CaptureRecoverySnapshot',
+			recovery: 'rebuilding',
+		}),
+	]);
 
-type TRecoveryDeps = {
-	isConnected: () => boolean;
-	currentVoiceChannelId: () => number | undefined;
-	hasRouterRtpCapabilities: () => boolean;
-	getNonce: () => number;
-	captureWatchedStreams: () => {
-		remoteUserStreams: Record<string, string[]>;
-		externalStreams: Record<string, { audio: boolean; video: boolean }>;
-	};
-	setConnectionStatus: (s: string) => void;
-	stopMonitoring: () => void;
-	resetStats: () => void;
-	clearRemoteUserStreams: () => void;
-	clearExternalStreams: () => void;
-	cleanupTransports: () => void;
-	loadDevice: () => Promise<{ rtpCapabilities: object }>;
-	createProducerTransport: (device: object, params?: object) => Promise<void>;
-	createConsumerTransport: (device: object, params?: object) => Promise<void>;
-	rejoinVoiceSession: (channelId: number) => Promise<{
-		device: { rtpCapabilities: object };
-		existingProducers?: object;
-		producerTransportParams?: object;
-		consumerTransportParams?: object;
-	}>;
-	isMissingVoiceSessionError: (err: unknown) => boolean;
-	consumeExistingProducers: (caps: object, prefetchedProducers?: object) => Promise<void>;
-	canSpeak: () => boolean;
-	hasLocalMicStream: () => boolean;
-	hasLiveLocalMicTrack: () => boolean;
-	republishLiveMicTrack: () => Promise<void>;
-	restartMicCapture: () => Promise<void>;
-	republishTracks: () => TRepublishPlan;
-	recoverOptionalAppAudio: () => Promise<void> | undefined;
-	syncRepublishedTrackState: (state: TRepublishedLocalMediaState) => Promise<void>;
-	isWatchedRestoreCancelled: (id: number | string, kind: string) => boolean;
-	consume: (id: number | string, kind: string, caps: object) => Promise<void>;
-	startMonitoring: () => void;
-	isNonRetriableTrpcError: (err: unknown) => boolean;
-	sleep: (ms: number) => Promise<void>;
-};
-
-const runRecovery = async (deps: TRecoveryDeps): Promise<boolean> => {
-	if (!deps.isConnected()) return false;
-	if (deps.currentVoiceChannelId() === undefined) return false;
-	if (!deps.hasRouterRtpCapabilities()) return false;
-
-	let nonceRestarts = 0;
-
-	// Captured once, before any attempt runs: the first attempt clears the
-	// remote stream maps this snapshot is read from, so a capture inside the
-	// loop would be empty on every retry/nonce restart.
-	const snapshot = deps.captureWatchedStreams();
-
-	for (let attempt = 0; attempt < RECOVERY_MAX_ATTEMPTS; attempt++) {
-		if (attempt > 0) {
-			await deps.sleep(RECOVERY_BACKOFF_MS[attempt - 1] ?? 1_000);
-			if (!deps.isConnected() || deps.currentVoiceChannelId() === undefined) return false;
-		}
-
-		const nonceAtStart = deps.getNonce();
-		const isNonceStale = () => deps.getNonce() !== nonceAtStart;
-		const throwIfNonceStale = (stage: string) => {
-			if (isNonceStale()) {
-				throw new RecoverySessionChangedError(stage);
-			}
-		};
-
-		try {
-			deps.setConnectionStatus('connecting');
-			deps.stopMonitoring();
-			deps.resetStats();
-			deps.clearRemoteUserStreams();
-			deps.clearExternalStreams();
-			deps.cleanupTransports();
-
-			let device = await withRecoveryTimeout(deps.loadDevice());
-			throwIfNonceStale('device load');
-
-			let currentRtpCapabilities = device.rtpCapabilities;
-			let recoveryJoinResult:
-				| {
-						device: { rtpCapabilities: object };
-						existingProducers?: object;
-						producerTransportParams?: object;
-						consumerTransportParams?: object;
-				  }
-				| undefined;
-
-			try {
-				await withRecoveryTimeout(
-					Promise.all([deps.createProducerTransport(device), deps.createConsumerTransport(device)]),
-				);
-			} catch (error) {
-				const recoveryChannelId = deps.currentVoiceChannelId();
-
-				if (!deps.isMissingVoiceSessionError(error) || recoveryChannelId === undefined) {
-					throw error;
-				}
-
-				recoveryJoinResult = await withRecoveryTimeout(deps.rejoinVoiceSession(recoveryChannelId));
-				throwIfNonceStale('voice rejoin');
-
-				device = recoveryJoinResult.device;
-				currentRtpCapabilities = device.rtpCapabilities;
-
-				await withRecoveryTimeout(
-					Promise.all([
-						deps.createProducerTransport(device, recoveryJoinResult.producerTransportParams),
-						deps.createConsumerTransport(device, recoveryJoinResult.consumerTransportParams),
-					]),
-				);
-			}
-			throwIfNonceStale('transport creation');
-
-			const republishTasks: Promise<void>[] = [];
-
-			if (recoveryJoinResult && deps.canSpeak()) {
-				republishTasks.push(deps.restartMicCapture());
-			} else if (deps.hasLocalMicStream() && deps.hasLiveLocalMicTrack()) {
-				republishTasks.push(deps.republishLiveMicTrack());
-			} else if (deps.hasLocalMicStream() && deps.canSpeak()) {
-				// In-session recovery: cleanupTransports() stopped the produced mic
-				// track (mediasoup stopTracks default), so a stream with a dead track
-				// means the user was publishing when the transport failed — restart
-				// capture instead of dropping the mic.
-				republishTasks.push(deps.restartMicCapture());
-			}
-
-			const republishPlan = deps.republishTracks();
-			republishTasks.push(...republishPlan.tasks);
-
-			const optionalAppAudioRecovery = deps.recoverOptionalAppAudio();
-			if (optionalAppAudioRecovery) {
-				void optionalAppAudioRecovery.catch(() => undefined);
-			}
-
-			await withRecoveryTimeout(
-				Promise.all([
-					deps.consumeExistingProducers(currentRtpCapabilities, recoveryJoinResult?.existingProducers),
-					...republishTasks,
-				]),
-			);
-			throwIfNonceStale('consume/republish');
-			await withRecoveryTimeout(deps.syncRepublishedTrackState(republishPlan.state));
-
-			if (recoveryJoinResult) {
-				await withRecoveryTimeout(deps.consumeExistingProducers(currentRtpCapabilities));
-				await withRecoveryTimeout(deps.sleep(RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS));
-				await withRecoveryTimeout(deps.consumeExistingProducers(currentRtpCapabilities));
-			}
-
-			const restoreTasks: Promise<void>[] = [];
-			Object.entries(snapshot.remoteUserStreams).forEach(([id, kinds]) => {
-				kinds.forEach((kind) => {
-					if (deps.isWatchedRestoreCancelled(id, kind)) {
-						return;
-					}
-
-					restoreTasks.push(deps.consume(id, kind, currentRtpCapabilities));
-				});
-			});
-			Object.entries(snapshot.externalStreams).forEach(([id, state]) => {
-				if (state.audio && !deps.isWatchedRestoreCancelled(id, 'externalAudio')) {
-					restoreTasks.push(deps.consume(id, 'externalAudio', currentRtpCapabilities));
-				}
-				if (state.video && !deps.isWatchedRestoreCancelled(id, 'externalVideo')) {
-					restoreTasks.push(deps.consume(id, 'externalVideo', currentRtpCapabilities));
-				}
-			});
-			await withRecoveryTimeout(Promise.all(restoreTasks));
-			throwIfNonceStale('watch restoration');
-
-			deps.startMonitoring();
-			deps.setConnectionStatus('connected');
-			return true;
-		} catch (error) {
-			if (error instanceof RecoverySessionChangedError) {
-				nonceRestarts++;
-				if (nonceRestarts > RECOVERY_MAX_NONCE_RESTARTS) {
-					deps.setConnectionStatus('failed');
-					return false;
-				}
-				attempt--;
-				continue;
-			}
-
-			const isLast = attempt === RECOVERY_MAX_ATTEMPTS - 1;
-			if (!isLast && !deps.isNonRetriableTrpcError(error)) continue;
-			deps.setConnectionStatus('failed');
-			return false;
-		}
+	const generation = commands[0]?.generation;
+	if (generation === undefined) {
+		throw new Error('expected rebuild generation');
 	}
 
-	return false;
+	const snapshot = watchedSnapshot();
+	[state, commands] = dispatch(state, { type: 'RecoveryStarted', generation, snapshot });
+
+	expect(commands).toEqual([
+		expect.objectContaining({
+			type: 'RebuildTransports',
+			channelId: 7,
+			nonce: 1,
+			attempt: 0,
+			generation,
+			snapshot,
+		}),
+	]);
+
+	return [state, generation, snapshot];
 };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+describe('transport rebuild machine orchestration', () => {
+	it('captures watched streams once before issuing the first rebuild command', () => {
+		const [state, generation, snapshot] = startRebuild();
 
-const makeDeps = (overrides: Partial<TRecoveryDeps> = {}): TRecoveryDeps => {
-	const nonce = 0;
-	return {
-		isConnected: () => true,
-		currentVoiceChannelId: () => 7,
-		hasRouterRtpCapabilities: () => true,
-		getNonce: () => nonce,
-		captureWatchedStreams: () => ({ remoteUserStreams: {}, externalStreams: {} }),
-		setConnectionStatus: mock(() => {}),
-		stopMonitoring: mock(() => {}),
-		resetStats: mock(() => {}),
-		clearRemoteUserStreams: mock(() => {}),
-		clearExternalStreams: mock(() => {}),
-		cleanupTransports: mock(() => {}),
-		loadDevice: mock(() => Promise.resolve({ rtpCapabilities: {} })),
-		createProducerTransport: mock(() => Promise.resolve()),
-		createConsumerTransport: mock(() => Promise.resolve()),
-		rejoinVoiceSession: mock(() => Promise.resolve({ device: { rtpCapabilities: {} } })),
-		isMissingVoiceSessionError: () => false,
-		consumeExistingProducers: mock(() => Promise.resolve()),
-		canSpeak: () => true,
-		hasLocalMicStream: () => false,
-		hasLiveLocalMicTrack: () => false,
-		republishLiveMicTrack: mock(() => Promise.resolve()),
-		restartMicCapture: mock(() => Promise.resolve()),
-		republishTracks: mock(() => ({ tasks: [], state: {} })),
-		recoverOptionalAppAudio: mock(() => undefined),
-		syncRepublishedTrackState: mock(() => Promise.resolve()),
-		isWatchedRestoreCancelled: () => false,
-		consume: mock(() => Promise.resolve()),
-		startMonitoring: mock(() => {}),
-		isNonRetriableTrpcError: () => false,
-		sleep: mock(() => Promise.resolve()),
-		...overrides,
-	};
-};
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe('recoverTransportSession orchestration', () => {
-	it('returns false immediately when not connected', async () => {
-		const deps = makeDeps({ isConnected: () => false });
-		expect(await runRecovery(deps)).toBe(false);
-		expect((deps.loadDevice as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
-	});
-
-	it('returns false immediately when not in a voice channel', async () => {
-		const deps = makeDeps({ currentVoiceChannelId: () => undefined });
-		expect(await runRecovery(deps)).toBe(false);
-		expect((deps.loadDevice as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
-	});
-
-	it('returns false immediately when router RTP capabilities are missing', async () => {
-		const deps = makeDeps({ hasRouterRtpCapabilities: () => false });
-		expect(await runRecovery(deps)).toBe(false);
-		expect((deps.loadDevice as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
-	});
-
-	it('happy path: calls all steps in order and returns true', async () => {
-		const callOrder: string[] = [];
-		const deps = makeDeps({
-			stopMonitoring: mock(() => {
-				callOrder.push('stopMonitoring');
-			}),
-			resetStats: mock(() => {
-				callOrder.push('resetStats');
-			}),
-			clearRemoteUserStreams: mock(() => {
-				callOrder.push('clearRemoteUserStreams');
-			}),
-			clearExternalStreams: mock(() => {
-				callOrder.push('clearExternalStreams');
-			}),
-			cleanupTransports: mock(() => {
-				callOrder.push('cleanupTransports');
-			}),
-			loadDevice: mock(() => {
-				callOrder.push('loadDevice');
-				return Promise.resolve({ rtpCapabilities: {} });
-			}),
-			createProducerTransport: mock(() => {
-				callOrder.push('createProducerTransport');
-				return Promise.resolve();
-			}),
-			createConsumerTransport: mock(() => {
-				callOrder.push('createConsumerTransport');
-				return Promise.resolve();
-			}),
-			consumeExistingProducers: mock(() => {
-				callOrder.push('consumeExistingProducers');
-				return Promise.resolve();
-			}),
-			startMonitoring: mock(() => {
-				callOrder.push('startMonitoring');
-			}),
+		expect(state.phase).toMatchObject({
+			phase: 'rebuilding',
+			channelId: 7,
+			nonce: 1,
+			attempt: 0,
+			nonceRestarts: 0,
+			generation,
+			snapshot,
 		});
-
-		expect(await runRecovery(deps)).toBe(true);
-		expect(callOrder).toEqual([
-			'stopMonitoring',
-			'resetStats',
-			'clearRemoteUserStreams',
-			'clearExternalStreams',
-			'cleanupTransports',
-			'loadDevice',
-			'createProducerTransport',
-			'createConsumerTransport',
-			'consumeExistingProducers',
-			'startMonitoring',
-		]);
-		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
 	});
 
-	it('syncs republished webcam and screen state before reporting recovery success', async () => {
-		const callOrder: string[] = [];
-		const republishedState = {
-			webcamEnabled: true,
-			sharingScreen: true,
-		} satisfies TRepublishedLocalMediaState;
-		const deps = makeDeps({
-			consumeExistingProducers: mock(() => {
-				callOrder.push('consumeExistingProducers');
-				return Promise.resolve();
-			}),
-			republishTracks: mock(() => ({
-				tasks: [
-					Promise.resolve().then(() => {
-						callOrder.push('republishTracks');
-					}),
-				],
-				state: republishedState,
-			})),
-			syncRepublishedTrackState: mock((state) => {
-				callOrder.push('syncRepublishedTrackState');
-				expect(state).toBe(republishedState);
-				return Promise.resolve();
-			}),
-			startMonitoring: mock(() => {
-				callOrder.push('startMonitoring');
-			}),
-		});
+	it('moves to connected and emits desktop app-audio recovery after rebuild success', () => {
+		const [state, generation] = startRebuild();
+		const result = reduceVoiceSession(state, { type: 'RebuildSucceeded', generation });
 
-		expect(await runRecovery(deps)).toBe(true);
-		expect(callOrder).toEqual([
-			'consumeExistingProducers',
-			'republishTracks',
-			'syncRepublishedTrackState',
-			'startMonitoring',
+		expect(result.state.phase).toEqual({ phase: 'connected', channelId: 7 });
+		expect(result.commands).toEqual([
+			expect.objectContaining({
+				type: 'RecoverDesktopAppAudio',
+				generation,
+			}),
 		]);
 	});
 
-	it('restores watched remote user streams after rebuild', async () => {
-		const consumed: Array<[number | string, string]> = [];
-		const deps = makeDeps({
-			captureWatchedStreams: () => ({
-				remoteUserStreams: { '10': ['video', 'audio'], '20': ['screen'] },
-				externalStreams: {},
-			}),
-			consume: mock((id, kind) => {
-				consumed.push([id, kind]);
-				return Promise.resolve();
-			}),
+	it('retries transient rebuild failures from reducer-owned attempt state', () => {
+		const [state, generation, snapshot] = startRebuild();
+		const result = reduceVoiceSession(state, {
+			type: 'RebuildFailed',
+			generation,
+			error: new Error('network blip'),
 		});
 
-		expect(await runRecovery(deps)).toBe(true);
-		expect(consumed).toContainEqual(['10', 'video']);
-		expect(consumed).toContainEqual(['10', 'audio']);
-		expect(consumed).toContainEqual(['20', 'screen']);
+		expect(result.state.phase).toMatchObject({
+			phase: 'rebuilding',
+			attempt: 1,
+		});
+		expect(result.commands).toEqual([
+			expect.objectContaining({
+				type: 'RebuildTransports',
+				generation,
+				channelId: 7,
+				nonce: 1,
+				attempt: 1,
+				snapshot,
+			}),
+		]);
 	});
 
-	it('restores watched external streams after rebuild', async () => {
-		const consumed: Array<[number | string, string]> = [];
-		const deps = makeDeps({
-			captureWatchedStreams: () => ({
-				remoteUserStreams: {},
-				externalStreams: { '99': { audio: true, video: true }, '100': { audio: true, video: false } },
-			}),
-			consume: mock((id, kind) => {
-				consumed.push([id, kind]);
-				return Promise.resolve();
-			}),
-		});
+	it('fails terminally with leave cleanup after rebuild attempts are exhausted', () => {
+		let [state, generation] = startRebuild();
+		let commands: TVoiceSessionCommand[] = [];
 
-		expect(await runRecovery(deps)).toBe(true);
-		expect(consumed).toContainEqual(['99', 'externalAudio']);
-		expect(consumed).toContainEqual(['99', 'externalVideo']);
-		expect(consumed).toContainEqual(['100', 'externalAudio']);
-		expect(consumed).not.toContainEqual(['100', 'externalVideo']);
+		for (let attempt = 0; attempt < VOICE_SESSION_REBUILD_MAX_ATTEMPTS; attempt += 1) {
+			[state, commands] = dispatch(state, {
+				type: 'RebuildFailed',
+				generation,
+				error: new Error(`failure ${attempt}`),
+			});
+		}
+
+		expect(state.phase).toEqual({ phase: 'failed', reason: 'restore-terminal-error', channelId: 7 });
+		expect(commands).toEqual([
+			expect.objectContaining({
+				type: 'LeaveVoiceSession',
+				generation: generation + 1,
+			}),
+		]);
 	});
 
-	it('does not restore streams stopped after the watch snapshot is captured', async () => {
-		const cancelled = new Set<string>();
-		const consumed: Array<[number | string, string]> = [];
-		const deps = makeDeps({
-			captureWatchedStreams: () => ({
-				remoteUserStreams: { '10': ['video'], '20': ['screen', 'screenAudio'] },
-				externalStreams: { '99': { audio: true, video: true } },
-			}),
-			consumeExistingProducers: mock(() => {
-				cancelled.add('20:screen');
-				cancelled.add('20:screenAudio');
-				cancelled.add('99:externalAudio');
-				return Promise.resolve();
-			}),
-			isWatchedRestoreCancelled: (id, kind) => cancelled.has(`${id}:${kind}`),
-			consume: mock((id, kind) => {
-				consumed.push([id, kind]);
-				return Promise.resolve();
-			}),
+	it('restarts rebuild commands when the session nonce changes', () => {
+		let [state, generation, snapshot] = startRebuild();
+
+		[state] = dispatch(state, { type: 'NonceChanged', nonce: 2 });
+
+		expect(state.phase).toMatchObject({
+			phase: 'rebuilding',
+			nonce: 2,
+			attempt: 0,
+			nonceRestarts: 1,
+			snapshot,
 		});
 
-		expect(await runRecovery(deps)).toBe(true);
-		expect(consumed).toContainEqual(['10', 'video']);
-		expect(consumed).toContainEqual(['99', 'externalVideo']);
-		expect(consumed).not.toContainEqual(['20', 'screen']);
-		expect(consumed).not.toContainEqual(['20', 'screenAudio']);
-		expect(consumed).not.toContainEqual(['99', 'externalAudio']);
+		const result = reduceVoiceSession(state, { type: 'NonceChanged', nonce: 3 });
+		expect(result.commands).toEqual([
+			expect.objectContaining({
+				type: 'RebuildTransports',
+				generation,
+				nonce: 3,
+				attempt: 0,
+				snapshot,
+			}),
+		]);
 	});
 
-	it('restores watched streams from the pre-recovery snapshot when the first attempt fails after clearing them', async () => {
-		// Attempt 1 clears the remote stream maps, so a per-attempt capture
-		// would see nothing on retry — the snapshot must be taken once, before
-		// any attempt mutates state.
-		let captureCalls = 0;
-		let loadCalls = 0;
-		const consumed: Array<[number | string, string]> = [];
-		const deps = makeDeps({
-			captureWatchedStreams: mock((): ReturnType<TRecoveryDeps['captureWatchedStreams']> => {
-				captureCalls++;
-				if (captureCalls > 1) {
-					// Simulates the cleared maps a mid-loop recapture would read.
-					return { remoteUserStreams: {}, externalStreams: {} };
-				}
-				return {
-					remoteUserStreams: { '10': ['screen', 'screenAudio'] },
-					externalStreams: { '99': { audio: true, video: false } },
-				};
-			}),
-			loadDevice: mock(() => {
-				loadCalls++;
-				if (loadCalls === 1) return Promise.reject(new Error('network blip'));
-				return Promise.resolve({ rtpCapabilities: {} });
-			}),
-			consume: mock((id, kind) => {
-				consumed.push([id, kind]);
-				return Promise.resolve();
-			}),
-		});
+	it('fails terminally when nonce restarts exceed the cap', () => {
+		let [state] = startRebuild();
 
-		expect(await runRecovery(deps)).toBe(true);
-		expect(loadCalls).toBe(2);
-		expect(captureCalls).toBe(1);
-		expect(consumed).toContainEqual(['10', 'screen']);
-		expect(consumed).toContainEqual(['10', 'screenAudio']);
-		expect(consumed).toContainEqual(['99', 'externalAudio']);
+		for (let nonce = 2; nonce <= VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS + 2; nonce += 1) {
+			state = reduceVoiceSession(state, { type: 'NonceChanged', nonce }).state;
+		}
+
+		expect(state.phase).toEqual({ phase: 'failed', reason: 'restore-terminal-error', channelId: 7 });
 	});
 
-	it('restarts recovery when the nonce changes after device load', async () => {
-		let nonce = 0;
-		let loadCalls = 0;
-		const deps = makeDeps({
-			getNonce: () => nonce,
-			loadDevice: mock(async () => {
-				loadCalls++;
-				if (loadCalls === 1) {
-					nonce++; // WS reconnect fires mid-load
-				}
-				return { rtpCapabilities: {} };
-			}),
+	it('ignores transport failure while websocket reconnect owns recovery', () => {
+		const [state, commands] = dispatch(createInitialVoiceSessionState(), {
+			type: 'WsDropped',
+			pending: pendingReconnect(),
+			now: 100,
+			online: true,
+			authenticated: false,
 		});
 
-		expect(await runRecovery(deps)).toBe(true);
-		expect(loadCalls).toBe(2);
-		expect((deps.startMonitoring as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+		expect(commands[0]).toEqual(expect.objectContaining({ type: 'CaptureRecoverySnapshot' }));
+		const reconnectingState = state;
+		const result = reduceVoiceSession(state, { type: 'TransportFailed', channelId: 7, nonce: 1 });
+
+		expect(result.state).toBe(reconnectingState);
+		expect(result.commands).toEqual([]);
 	});
 
-	it('restarts recovery when the nonce changes after transports are created', async () => {
-		let nonce = 0;
-		let transportCalls = 0;
-		const deps = makeDeps({
-			getNonce: () => nonce,
-			createConsumerTransport: mock(async () => {
-				transportCalls++;
-				if (transportCalls === 1) {
-					nonce++;
-				}
-			}),
+	it('preempts rebuilding when the websocket drops and drops stale rebuild results', () => {
+		const [state, generation] = startRebuild();
+		const preempted = reduceVoiceSession(state, {
+			type: 'WsDropped',
+			pending: pendingReconnect(),
+			now: 100,
+			online: true,
+			authenticated: false,
 		});
 
-		expect(await runRecovery(deps)).toBe(true);
-		expect(transportCalls).toBe(2);
-		expect((deps.startMonitoring as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
-	});
-
-	it('does not sync republished state when the nonce goes stale during consume/republish', async () => {
-		let nonce = 0;
-		let consumeCalls = 0;
-		const deps = makeDeps({
-			getNonce: () => nonce,
-			republishTracks: mock((): TRepublishPlan => ({ tasks: [], state: { sharingScreen: true } })),
-			consumeExistingProducers: mock(async () => {
-				consumeCalls++;
-				if (consumeCalls === 1) {
-					nonce++; // WS reconnect fires mid-republish
-				}
-			}),
+		expect(preempted.state.phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'waitingAuth',
+			pending: expect.objectContaining({ channelId: 7 }),
 		});
 
-		expect(await runRecovery(deps)).toBe(true);
-		expect(consumeCalls).toBe(2);
-		// Only the fresh attempt may push flags to the server — the stale one
-		// aborts at the staleness check before syncing.
-		expect((deps.syncRepublishedTrackState as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
-	});
-
-	it('gives up after too many nonce restarts', async () => {
-		let nonce = 0;
-		let loadCalls = 0;
-		const deps = makeDeps({
-			getNonce: () => nonce,
-			loadDevice: mock(async () => {
-				loadCalls++;
-				nonce++; // nonce changes on every attempt
-				return { rtpCapabilities: {} };
-			}),
-		});
-
-		expect(await runRecovery(deps)).toBe(false);
-		expect(loadCalls).toBe(RECOVERY_MAX_NONCE_RESTARTS + 1);
-		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['failed']);
-	});
-
-	it('retries on transient error and succeeds on second attempt', async () => {
-		let calls = 0;
-		const deps = makeDeps({
-			loadDevice: mock(() => {
-				calls++;
-				if (calls === 1) return Promise.reject(new Error('network blip'));
-				return Promise.resolve({ rtpCapabilities: {} });
-			}),
-		});
-
-		expect(await runRecovery(deps)).toBe(true);
-		expect(calls).toBe(2);
-		expect((deps.sleep as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
-		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
-	});
-
-	it('falls back to a fresh voice join when transport recreation loses the server session', async () => {
-		const missingSessionError = Object.assign(new Error('User is not in a voice channel'), {
-			data: { code: 'BAD_REQUEST', httpStatus: 400 },
-		});
-		const rejoinedCapabilities = { codecs: ['opus'] };
-		const prefetchedProducers = { remoteAudioIds: [99] };
-		const postRejoinSnapshots = [{ remoteAudioIds: [99] }, { remoteAudioIds: [99, 100] }];
-		let producerCalls = 0;
-		const consumeCalls: Array<{ caps: object; prefetched?: object }> = [];
-
-		const deps = makeDeps({
-			createProducerTransport: mock(async () => {
-				producerCalls += 1;
-
-				if (producerCalls === 1) {
-					throw missingSessionError;
-				}
-			}),
-			isMissingVoiceSessionError: (error) => error === missingSessionError,
-			rejoinVoiceSession: mock(async (channelId: number) => {
-				expect(channelId).toBe(7);
-
-				return {
-					device: { rtpCapabilities: rejoinedCapabilities },
-					existingProducers: prefetchedProducers,
-					producerTransportParams: { id: 'new-producer-transport' },
-					consumerTransportParams: { id: 'new-consumer-transport' },
-				};
-			}),
-			consumeExistingProducers: mock(async (caps, existingProducers) => {
-				consumeCalls.push({ caps, prefetched: existingProducers });
-				expect(caps).toBe(rejoinedCapabilities);
-
-				if (consumeCalls.length === 1) {
-					expect(existingProducers).toBe(prefetchedProducers);
-					return;
-				}
-
-				expect(existingProducers).toBeUndefined();
-				expect(postRejoinSnapshots[consumeCalls.length - 2]).toBeDefined();
-			}),
-		});
-
-		expect(await runRecovery(deps)).toBe(true);
-		expect(producerCalls).toBe(2);
-		expect((deps.rejoinVoiceSession as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
-		expect((deps.restartMicCapture as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
-		expect(consumeCalls).toHaveLength(3);
-		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
-	});
-
-	it('restarts mic capture during in-session recovery when the published mic track was stopped by transport cleanup', async () => {
-		const deps = makeDeps({
-			hasLocalMicStream: () => true,
-			hasLiveLocalMicTrack: () => false,
-		});
-
-		expect(await runRecovery(deps)).toBe(true);
-		expect((deps.restartMicCapture as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
-		expect((deps.republishLiveMicTrack as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
-	});
-
-	it('republishes a still-live mic track without a full capture restart', async () => {
-		const deps = makeDeps({
-			hasLocalMicStream: () => true,
-			hasLiveLocalMicTrack: () => true,
-		});
-
-		expect(await runRecovery(deps)).toBe(true);
-		expect((deps.republishLiveMicTrack as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
-		expect((deps.restartMicCapture as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
-	});
-
-	it('does not touch the mic during in-session recovery when the user was not publishing', async () => {
-		const deps = makeDeps({
-			hasLocalMicStream: () => false,
-		});
-
-		expect(await runRecovery(deps)).toBe(true);
-		expect((deps.restartMicCapture as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
-		expect((deps.republishLiveMicTrack as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
-	});
-
-	it('does not restart mic capture without speak permission', async () => {
-		const deps = makeDeps({
-			canSpeak: () => false,
-			hasLocalMicStream: () => true,
-			hasLiveLocalMicTrack: () => false,
-		});
-
-		expect(await runRecovery(deps)).toBe(true);
-		expect((deps.restartMicCapture as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
-	});
-
-	it('does not fail core recovery when optional desktop app audio recovery rejects', async () => {
-		const optionalError = new Error('sidecar capture failed');
-		const deps = makeDeps({
-			recoverOptionalAppAudio: mock(() => Promise.reject(optionalError)),
-		});
-
-		expect(await runRecovery(deps)).toBe(true);
-		expect((deps.recoverOptionalAppAudio as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
-		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
-	});
-
-	it('does not wait for optional desktop app audio recovery when it stays pending', async () => {
-		const deps = makeDeps({
-			recoverOptionalAppAudio: mock(() => new Promise<void>(() => {})),
-		});
-
-		expect(await runRecovery(deps)).toBe(true);
-		expect((deps.recoverOptionalAppAudio as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
-		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['connected']);
-	});
-
-	it('does not retry on a non-retriable TRPC error', async () => {
-		let calls = 0;
-		const nonRetriableError = Object.assign(new Error('Insufficient permissions'), {
-			data: { code: 'FORBIDDEN', httpStatus: 403 },
-		});
-
-		const deps = makeDeps({
-			loadDevice: mock(() => {
-				calls++;
-				return Promise.reject(nonRetriableError);
-			}),
-			isNonRetriableTrpcError: (err) => {
-				const data = (err as { data?: { code?: string } }).data;
-				return data?.code === 'FORBIDDEN';
-			},
-		});
-
-		expect(await runRecovery(deps)).toBe(false);
-		expect(calls).toBe(1);
-		expect((deps.sleep as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
-		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['failed']);
-	});
-
-	it('returns false after exhausting all retry attempts', async () => {
-		let calls = 0;
-		const deps = makeDeps({
-			loadDevice: mock(() => {
-				calls++;
-				return Promise.reject(new Error('persistent failure'));
-			}),
-		});
-
-		expect(await runRecovery(deps)).toBe(false);
-		expect(calls).toBe(RECOVERY_MAX_ATTEMPTS);
-		expect((deps.sleep as ReturnType<typeof mock>).mock.calls).toHaveLength(RECOVERY_MAX_ATTEMPTS - 1);
-		expect((deps.setConnectionStatus as ReturnType<typeof mock>).mock.calls.at(-1)).toEqual(['failed']);
-	});
-
-	it('aborts after backoff if the connection drops between attempts', async () => {
-		const connected = { value: true };
-		let calls = 0;
-		const deps = makeDeps({
-			isConnected: () => connected.value,
-			loadDevice: mock(() => {
-				calls++;
-				return Promise.reject(new Error('blip'));
-			}),
-			sleep: mock(async () => {
-				connected.value = false;
-			}),
-		});
-
-		expect(await runRecovery(deps)).toBe(false);
-		expect(calls).toBe(1); // only one attempt — second is skipped after sleep
-		expect((deps.startMonitoring as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
+		const staleResult = reduceVoiceSession(preempted.state, { type: 'RebuildSucceeded', generation });
+		expect(staleResult.state).toBe(preempted.state);
+		expect(staleResult.commands).toEqual([]);
 	});
 });

@@ -405,11 +405,11 @@ const reduceRebuildFailed = (
 	});
 
 	if (classification.kind === 'terminal') {
-		return failSession(state, classification.clearReason, phase.channelId);
+		return failSession(state, classification.clearReason, phase.channelId, 'leave-and-clear');
 	}
 
 	if (phase.attempt + 1 >= VOICE_SESSION_REBUILD_MAX_ATTEMPTS) {
-		return failSession(state, 'restore-terminal-error', phase.channelId);
+		return failSession(state, 'restore-terminal-error', phase.channelId, 'leave-and-clear');
 	}
 
 	if (phase.snapshot === undefined) {
