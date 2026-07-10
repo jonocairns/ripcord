@@ -4,6 +4,7 @@ import type { TPendingVoiceReconnect } from '@/features/server/voice/reconnect-c
 import {
 	createInitialVoiceSessionState,
 	reduceVoiceSession,
+	shouldFlushBufferedVoiceSessionCommand,
 	type TVoiceSessionCommand,
 	type TVoiceSessionState,
 	type TWatchedRemoteStreamsSnapshot,
@@ -111,7 +112,7 @@ describe('transport rebuild machine orchestration', () => {
 			generation,
 		});
 
-		expect(result.state.phase).toEqual({ phase: 'connected', channelId: 7 });
+		expect(result.state.phase).toEqual({ phase: 'connected', channelId: 7, generation: expect.any(Number) });
 		expect(result.commands).toEqual([
 			expect.objectContaining({
 				type: 'RecoverDesktopAppAudio',
@@ -158,7 +159,12 @@ describe('transport rebuild machine orchestration', () => {
 			});
 		}
 
-		expect(state.phase).toEqual({ phase: 'failed', reason: 'restore-terminal-error', channelId: 7 });
+		expect(state.phase).toEqual({
+			phase: 'failed',
+			reason: 'restore-terminal-error',
+			channelId: 7,
+			generation: expect.any(Number),
+		});
 		expect(commands).toEqual([
 			expect.objectContaining({
 				type: 'LeaveVoiceSession',
@@ -216,7 +222,12 @@ describe('transport rebuild machine orchestration', () => {
 			});
 		}
 
-		expect(state.phase).toEqual({ phase: 'failed', reason: 'restore-terminal-error', channelId: 7 });
+		expect(state.phase).toEqual({
+			phase: 'failed',
+			reason: 'restore-terminal-error',
+			channelId: 7,
+			generation: expect.any(Number),
+		});
 		expect(commands).toEqual([
 			expect.objectContaining({
 				type: 'LeaveVoiceSession',
@@ -266,5 +277,130 @@ describe('transport rebuild machine orchestration', () => {
 		});
 		expect(staleResult.state).toBe(preempted.state);
 		expect(staleResult.commands).toEqual([]);
+	});
+});
+
+describe('shouldFlushBufferedVoiceSessionCommand', () => {
+	const stateWithPhase = (phase: TVoiceSessionState['phase']): TVoiceSessionState => ({
+		...createInitialVoiceSessionState(),
+		phase,
+	});
+
+	it('flushes terminal commands only for the failed incarnation that emitted them', () => {
+		const leaveCommand: TVoiceSessionCommand = {
+			type: 'LeaveVoiceSession',
+			commandId: 9,
+			generation: 3,
+			channelId: 7,
+		};
+
+		expect(
+			shouldFlushBufferedVoiceSessionCommand(
+				stateWithPhase({ phase: 'failed', reason: 'restore-terminal-error', channelId: 7, generation: 3 }),
+				leaveCommand,
+			),
+		).toBe(true);
+		// A later failure — even of the same channel — is a new incarnation.
+		expect(
+			shouldFlushBufferedVoiceSessionCommand(
+				stateWithPhase({ phase: 'failed', reason: 'restore-terminal-error', channelId: 7, generation: 4 }),
+				leaveCommand,
+			),
+		).toBe(false);
+		// A failed phase without a generation (direct JoinFailed) owes nothing.
+		expect(
+			shouldFlushBufferedVoiceSessionCommand(
+				stateWithPhase({ phase: 'failed', reason: 'restore-terminal-error', channelId: 7 }),
+				leaveCommand,
+			),
+		).toBe(false);
+		expect(shouldFlushBufferedVoiceSessionCommand(stateWithPhase({ phase: 'idle' }), leaveCommand)).toBe(false);
+		expect(
+			shouldFlushBufferedVoiceSessionCommand(
+				stateWithPhase({ phase: 'connected', channelId: 7, generation: 3 }),
+				leaveCommand,
+			),
+		).toBe(false);
+	});
+
+	it('flushes ClearFailedSession only for its own failed incarnation', () => {
+		const clearCommand: TVoiceSessionCommand = {
+			type: 'ClearFailedSession',
+			commandId: 9,
+			generation: 3,
+			reason: 'restore-terminal-error',
+			channelId: 7,
+			leaveServerSession: true,
+		};
+
+		expect(
+			shouldFlushBufferedVoiceSessionCommand(
+				stateWithPhase({ phase: 'failed', reason: 'restore-terminal-error', channelId: 7, generation: 3 }),
+				clearCommand,
+			),
+		).toBe(true);
+		expect(
+			shouldFlushBufferedVoiceSessionCommand(
+				stateWithPhase({ phase: 'failed', reason: 'restore-terminal-error', channelId: 7, generation: 5 }),
+				clearCommand,
+			),
+		).toBe(false);
+		expect(shouldFlushBufferedVoiceSessionCommand(stateWithPhase({ phase: 'idle' }), clearCommand)).toBe(false);
+	});
+
+	it('flushes RecoverDesktopAppAudio only for the connected incarnation that owed it', () => {
+		const recoverCommand: TVoiceSessionCommand = {
+			type: 'RecoverDesktopAppAudio',
+			commandId: 9,
+			generation: 3,
+		};
+
+		expect(
+			shouldFlushBufferedVoiceSessionCommand(
+				stateWithPhase({ phase: 'connected', channelId: 7, generation: 3 }),
+				recoverCommand,
+			),
+		).toBe(true);
+		expect(
+			shouldFlushBufferedVoiceSessionCommand(
+				stateWithPhase({ phase: 'connected', channelId: 7, generation: 4 }),
+				recoverCommand,
+			),
+		).toBe(false);
+		// A plain join's connected phase carries no generation — a buffered
+		// recovery from an earlier session must not publish stale intent into it.
+		expect(
+			shouldFlushBufferedVoiceSessionCommand(stateWithPhase({ phase: 'connected', channelId: 7 }), recoverCommand),
+		).toBe(false);
+		expect(shouldFlushBufferedVoiceSessionCommand(stateWithPhase({ phase: 'idle' }), recoverCommand)).toBe(false);
+	});
+
+	it('never flushes recovery-step commands — Resumed re-issues them', () => {
+		const rebuildCommand: TVoiceSessionCommand = {
+			type: 'RebuildTransports',
+			commandId: 2,
+			generation: 1,
+			channelId: 7,
+			nonce: 1,
+			attempt: 0,
+			snapshot: watchedSnapshot(),
+		};
+
+		expect(
+			shouldFlushBufferedVoiceSessionCommand(
+				stateWithPhase({
+					phase: 'rebuilding',
+					channelId: 7,
+					nonce: 1,
+					attempt: 0,
+					nonceRestarts: 0,
+					consecutiveUnknownErrors: 0,
+					generation: 1,
+					activeCommandId: 2,
+					snapshot: watchedSnapshot(),
+				}),
+				rebuildCommand,
+			),
+		).toBe(false);
 	});
 });

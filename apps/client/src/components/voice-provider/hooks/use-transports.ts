@@ -7,6 +7,7 @@ import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
 import { withConsumeAttemptTimeout } from './consume-attempt-timeout';
 import {
+	cancelConsumeOperation,
 	createConsumeOperationState,
 	finishConsumeOperation,
 	isCurrentConsumeOperation,
@@ -33,6 +34,8 @@ const ICE_DISCONNECT_GRACE_MS = 30_000;
 // with a tighter timeout than the generic consume RPC so a stalled sweep fails
 // fast and leaves the rest of the recovery budget for the actual consumes.
 const EXISTING_PRODUCERS_RPC_TIMEOUT_MS = 4_000;
+
+const getConsumeOperationKey = (remoteId: number, kind: StreamKind): string => `${remoteId}-${kind}`;
 
 type TConsumeAttemptResult = 'success' | 'failure';
 
@@ -612,7 +615,7 @@ const useTransports = ({
 					},
 				},
 				async () => {
-					const operationKey = `${remoteId}-${kind}`;
+					const operationKey = getConsumeOperationKey(remoteId, kind);
 					const operation = options.restartExisting
 						? restartConsumeOperation(consumeOperationState.current, operationKey)
 						: reserveConsumeOperation(consumeOperationState.current, operationKey);
@@ -835,6 +838,22 @@ const useTransports = ({
 					kind,
 				});
 				return;
+			}
+
+			// Invalidate any in-flight consume for this slot before the ledger write.
+			// The ledger only rejects the stale success (it has no consumer to close
+			// yet), so without this the running consumeOnce would still attach and
+			// resume a live consumer that nothing owns. Cancelling flips its
+			// isCurrentConsumeOperation guards, which close both local and server
+			// consumers. Screen audio rides along with the screen, mirroring the
+			// markRemoteWatchStopped cascade.
+			cancelConsumeOperation(consumeOperationState.current, getConsumeOperationKey(remoteId, kind));
+
+			if (kind === StreamKind.SCREEN) {
+				cancelConsumeOperation(
+					consumeOperationState.current,
+					getConsumeOperationKey(remoteId, StreamKind.SCREEN_AUDIO),
+				);
 			}
 
 			markWatchStopped(remoteId, kind);

@@ -212,7 +212,12 @@ describe('voice session machine', () => {
 			nonce: VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS + 2,
 		});
 
-		expect(capped.state.phase).toEqual({ phase: 'failed', reason: 'restore-terminal-error', channelId: 5 });
+		expect(capped.state.phase).toEqual({
+			phase: 'failed',
+			reason: 'restore-terminal-error',
+			channelId: 5,
+			generation: expect.any(Number),
+		});
 		// The abandoned rebuild left transports torn down, so the cap must emit the
 		// same leave/teardown command as an exhausted-attempts failure.
 		expect(capped.commands).toEqual([
@@ -280,7 +285,12 @@ describe('voice session machine', () => {
 			generation,
 		});
 
-		expect(expired.state.phase).toEqual({ phase: 'failed', reason: 'reconnect-expired', channelId: 5 });
+		expect(expired.state.phase).toEqual({
+			phase: 'failed',
+			reason: 'reconnect-expired',
+			channelId: 5,
+			generation: expect.any(Number),
+		});
 		expect(expired.commands).toEqual([
 			expect.objectContaining({
 				type: 'ClearFailedSession',
@@ -419,7 +429,12 @@ describe('voice session machine', () => {
 			},
 		});
 
-		expect(result.state.phase).toEqual({ phase: 'failed', reason: 'restore-conflict', channelId: 5 });
+		expect(result.state.phase).toEqual({
+			phase: 'failed',
+			reason: 'restore-conflict',
+			channelId: 5,
+			generation: expect.any(Number),
+		});
 		expect(result.commands).toEqual([
 			expect.objectContaining({ type: 'LeaveVoiceSession', generation: generation + 1, channelId: 5 }),
 		]);
@@ -440,7 +455,12 @@ describe('voice session machine', () => {
 			},
 		});
 
-		expect(result.state.phase).toEqual({ phase: 'failed', reason: 'restore-conflict', channelId: 5 });
+		expect(result.state.phase).toEqual({
+			phase: 'failed',
+			reason: 'restore-conflict',
+			channelId: 5,
+			generation: expect.any(Number),
+		});
 		expect(result.state.pendingVoiceReconnect).toBeUndefined();
 		expect(result.state.reconnectingSince).toBeUndefined();
 		expect(result.state.reconnectAuthenticated).toBe(false);
@@ -473,7 +493,12 @@ describe('voice session machine', () => {
 			},
 		});
 
-		expect(result.state.phase).toEqual({ phase: 'failed', reason: 'restore-conflict', channelId: 5 });
+		expect(result.state.phase).toEqual({
+			phase: 'failed',
+			reason: 'restore-conflict',
+			channelId: 5,
+			generation: expect.any(Number),
+		});
 		expect(result.commands).toEqual([
 			expect.objectContaining({
 				type: 'ClearFailedSession',
@@ -528,7 +553,12 @@ describe('voice session machine', () => {
 			},
 		});
 
-		expect(state.phase).toEqual({ phase: 'failed', reason: 'restore-conflict', channelId: 5 });
+		expect(state.phase).toEqual({
+			phase: 'failed',
+			reason: 'restore-conflict',
+			channelId: 5,
+			generation: expect.any(Number),
+		});
 		expect(commands).toEqual([
 			expect.objectContaining({
 				type: 'ClearFailedSession',
@@ -556,7 +586,12 @@ describe('voice session machine', () => {
 			generation,
 		});
 
-		expect(state.phase).toEqual({ phase: 'failed', reason: 'reconnect-expired', channelId: 5 });
+		expect(state.phase).toEqual({
+			phase: 'failed',
+			reason: 'reconnect-expired',
+			channelId: 5,
+			generation: expect.any(Number),
+		});
 		expect(commands).toEqual([
 			expect.objectContaining({
 				type: 'ClearFailedSession',

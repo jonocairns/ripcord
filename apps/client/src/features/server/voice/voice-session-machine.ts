@@ -16,10 +16,15 @@ type TWatchedRemoteStreamsSnapshot = {
 	externalStreams: Record<number, TWatchedExternalStreamsSnapshot>;
 };
 
+// `generation` on connected/failed identifies the session incarnation whose
+// finalization commands are still owed (set when a recovery transition emits
+// them, absent on plain joins). Buffered-command flushing matches on it so a
+// final command from one incarnation can never fire against a later session —
+// even a rejoin of the same channel, which gets a fresh generation.
 type TVoiceSessionPhase =
 	| { phase: 'idle' }
 	| { phase: 'joining'; channelId: number }
-	| { phase: 'connected'; channelId: number }
+	| { phase: 'connected'; channelId: number; generation?: number }
 	| {
 			phase: 'rebuilding';
 			channelId: number;
@@ -44,7 +49,7 @@ type TVoiceSessionPhase =
 			snapshot?: TWatchedRemoteStreamsSnapshot;
 			serverSessionEstablished?: boolean;
 	  }
-	| { phase: 'failed'; reason: TClearReason; channelId?: number };
+	| { phase: 'failed'; reason: TClearReason; channelId?: number; generation?: number };
 
 type TVoiceSessionState = {
 	phase: TVoiceSessionPhase;
@@ -238,7 +243,7 @@ const failSession = (
 	const [baseState, generation] = nextGeneration(state);
 	const failedState: TVoiceSessionState = {
 		...clearReconnectFacadeRecovery(baseState),
-		phase: { phase: 'failed', reason, channelId },
+		phase: { phase: 'failed', reason, channelId, generation },
 	};
 
 	if (command === 'leave') {
@@ -266,6 +271,31 @@ const isCurrentCommand = (state: TVoiceSessionState, generation: number, command
 		phase.generation === generation &&
 		phase.activeCommandId === commandId
 	);
+};
+
+// Decides whether a command buffered while no runner was alive may still be
+// flushed to the next runner. Only finalization commands survive, and only
+// while the machine still stands behind the exact session incarnation that
+// emitted them: the phase must match AND the phase's generation must equal the
+// command's. Phase alone is not enough — a LeaveVoiceSession buffered before a
+// RecoveryCleared (logout/teardown) must not fire an unscoped voice.leave
+// against a later session, and even a rejoin of the same channel is a new
+// generation. Recovery-step commands are never flushed: Resumed re-issues the
+// active step for rebuilding/reconnecting phases, and a flushed duplicate
+// would race the re-issued runner's side effects (double transport rebuild,
+// double restore RPC).
+const shouldFlushBufferedVoiceSessionCommand = (state: TVoiceSessionState, command: TVoiceSessionCommand): boolean => {
+	const { phase } = state;
+
+	switch (command.type) {
+		case 'RecoverDesktopAppAudio':
+			return phase.phase === 'connected' && phase.generation !== undefined && phase.generation === command.generation;
+		case 'LeaveVoiceSession':
+		case 'ClearFailedSession':
+			return phase.phase === 'failed' && phase.generation !== undefined && phase.generation === command.generation;
+		default:
+			return false;
+	}
 };
 
 const scheduleReconnectStep = (state: TVoiceSessionState): TVoiceSessionReducerResult => {
@@ -761,7 +791,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			return withCommand(
 				{
 					...clearReconnectFacadeRecovery(state),
-					phase: { phase: 'connected', channelId: state.phase.channelId },
+					phase: { phase: 'connected', channelId: state.phase.channelId, generation: state.phase.generation },
 				},
 				{ type: 'RecoverDesktopAppAudio', generation: state.phase.generation },
 			);
@@ -903,6 +933,7 @@ export {
 	createInitialVoiceSessionState,
 	reduceVoiceSession,
 	selectVoiceSessionConnectionStatus,
+	shouldFlushBufferedVoiceSessionCommand,
 	VOICE_RECONNECT_SUPPRESSION_MS,
 	VOICE_SESSION_REBUILD_MAX_ATTEMPTS,
 	VOICE_SESSION_REBUILD_MAX_NONCE_RESTARTS,

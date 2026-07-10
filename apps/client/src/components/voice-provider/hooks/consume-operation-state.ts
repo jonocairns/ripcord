@@ -68,6 +68,14 @@ export const isCurrentConsumeOperation = (
 	return currentOperation?.token === operation.token && currentOperation.generation === operation.generation;
 };
 
+// Invalidate any in-flight operation for the slot without reserving a new one.
+// The running consume sees isCurrentConsumeOperation() flip false at its next
+// guard and rolls back the local/server consumers it created — reserve/restart
+// alone cannot do this for a revoked intent because nothing replaces the entry.
+export const cancelConsumeOperation = (state: TConsumeOperationState, operationKey: string): void => {
+	state.operations.delete(operationKey);
+};
+
 export const finishConsumeOperation = (
 	state: TConsumeOperationState,
 	operationKey: string,

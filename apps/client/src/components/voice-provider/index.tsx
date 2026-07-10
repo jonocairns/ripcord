@@ -32,7 +32,11 @@ import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/v
 import { setVoiceProviderCleanupHandler } from '@/features/server/voice/provider-cleanup';
 import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordinator';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
-import { getVoiceReconnectRetryDelayMs, VoiceReconnectTimeoutError } from '@/features/server/voice/reconnect-policy';
+import {
+	drainCancelledVoiceReconnectOperation,
+	getVoiceReconnectRetryDelayMs,
+	VoiceReconnectTimeoutError,
+} from '@/features/server/voice/reconnect-policy';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import {
 	selectVoiceSessionConnectionStatus,
@@ -44,6 +48,7 @@ import {
 import {
 	dispatchVoiceSession,
 	getVoiceSessionState,
+	registerVoiceSessionCommandRunner,
 	subscribeVoiceSession,
 } from '@/features/server/voice/voice-session-store';
 import { logDebug, logVoice, reportError, traceSentrySpan } from '@/helpers/browser-logger';
@@ -69,6 +74,12 @@ import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } fr
 import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from './default-input-device';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
+import {
+	claimMicPipelineOwnership,
+	createMicPipelineOwnership,
+	MicPipelineSupersededError,
+	revokeMicPipelineOwnership,
+} from './hooks/mic-pipeline-ownership';
 import { useRemoteMediaSubscriptions } from './hooks/remote-media-subscriptions';
 import { useLocalStreams } from './hooks/use-local-streams';
 import { getPendingStreamKey, type TExternalStreamTrackPresence } from './hooks/use-pending-streams';
@@ -114,6 +125,10 @@ type AudioVideoRefs = {
 type TPreparedMicPipeline = {
 	outboundStream: MediaStream;
 	outboundAudioTrack: MediaStreamTrack;
+	// True while this build's pipeline is still the one installed in the shared
+	// refs. Callers must check it before tearing the shared pipeline down on a
+	// failure — a stale build cleaning up would destroy its successor's mic.
+	ownsMicPipeline: () => boolean;
 };
 
 type TScreenShareStreamHandlers = {
@@ -732,6 +747,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const localVoiceActivityCleanupRef = useRef<(() => void) | undefined>(undefined);
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const micPipelineMutexRef = useRef<Promise<void>>(Promise.resolve());
+	const micPipelineOwnershipRef = useRef(createMicPipelineOwnership());
 	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
 	const transportRecoveryPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const queuedTransportRecoveryCommandRef = useRef<TVoiceSessionCommand | undefined>(undefined);
@@ -1825,14 +1841,27 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	});
 
 	const cleanupMicAudioPipeline = useCallback(async () => {
+		// Revoke before touching the refs so any overlapping build detects the
+		// handover at its next ownership check instead of installing over us.
+		revokeMicPipelineOwnership(micPipelineOwnershipRef.current);
 		stopLocalVoiceActivityMonitoring(false);
 
+		// Snapshot and clear every shared ref synchronously, before any await.
+		// Overlapping cleanups are possible (a detached reconnect attempt's
+		// teardown racing a successor's); a cleanup that read the refs on the far
+		// side of an awaited destroy() could capture — and destroy — resources a
+		// successor installed meanwhile. After this block only the captured
+		// resources are touched.
 		const currentAudioProducer = localAudioProducer.current;
 		localAudioProducer.current = undefined;
-		currentAudioProducer?.close();
-
 		const micGainPipeline = micGainPipelineRef.current;
 		micGainPipelineRef.current = undefined;
+		const rawMicStream = rawMicStreamRef.current;
+		rawMicStreamRef.current = undefined;
+		const pipeline = micAudioPipelineRef.current;
+		micAudioPipelineRef.current = undefined;
+
+		currentAudioProducer?.close();
 
 		if (micGainPipeline) {
 			micGainPipeline.track.onended = null;
@@ -1846,15 +1875,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 		}
 
-		const rawMicStream = rawMicStreamRef.current;
-		rawMicStreamRef.current = undefined;
-
 		rawMicStream?.getTracks().forEach((track) => {
 			track.stop();
 		});
-
-		const pipeline = micAudioPipelineRef.current;
-		micAudioPipelineRef.current = undefined;
 
 		if (pipeline) {
 			try {
@@ -1872,7 +1895,23 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// This has no dependency on the mediasoup device or transports, so it can run
 	// concurrently with device.load() and transport creation during voice join.
 	const prepareMicPipeline = useCallback(async (): Promise<TPreparedMicPipeline> => {
-		await cleanupMicAudioPipeline();
+		// Claim the shared refs for this build synchronously with starting the
+		// cleanup — in the same tick, before any await. Claiming after awaiting
+		// the cleanup would let cleanup COMPLETION order decide ownership: an
+		// older build blocked on a slow destroy would claim after a newer build
+		// and steal the refs back. Build start order must win. This is safe
+		// because cleanup snapshots and clears every shared ref synchronously
+		// before its first await; the pending remainder only destroys captured
+		// resources.
+		const cleanupPromise = cleanupMicAudioPipeline();
+		const ownsMicPipeline = claimMicPipelineOwnership(micPipelineOwnershipRef.current);
+
+		await cleanupPromise;
+
+		if (!ownsMicPipeline()) {
+			throw new MicPipelineSupersededError();
+		}
+
 		const micProcessingConfig = resolveMicProcessingConfig(devices);
 
 		const micConstraints = {
@@ -1889,165 +1928,228 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			sampleRate: 48000,
 		};
 
-		const stream = await navigator.mediaDevices.getUserMedia({
-			audio: micConstraints,
-			video: false,
-		});
-
-		logVoice('Microphone stream obtained', { stream });
-
-		rawMicStreamRef.current = stream;
-
-		const rawAudioTrack = stream.getAudioTracks()[0];
-
-		if (!rawAudioTrack) {
-			throw new Error('Failed to obtain audio track from microphone');
-		}
-
-		const rawTrackSettings = rawAudioTrack.getSettings();
-		logVoice('Microphone capture device resolved', {
-			selectedMicrophoneId: devices.microphoneId,
-			trackLabel: rawAudioTrack.label,
-			trackDeviceId: rawTrackSettings.deviceId,
-			trackGroupId: rawTrackSettings.groupId,
-		});
-
-		// Recover from *involuntary* capture loss on the raw device track. When a
-		// driver like NVIDIA Broadcast / RTX Voice takes over (or releases) the
-		// audio endpoint, the OS reconfigures the session behind our track: the
-		// device id is unchanged, often no `devicechange` fires, but the browser
-		// fires `mute` (session preempted) or `ended` (device removed) on the raw
-		// device track. A downstream Web Audio pipeline track keeps emitting
-		// silence, so peers hear nothing until a manual rejoin. These listeners
-		// live on the raw track because the outbound track may be a synthesized
-		// pipeline output that never sees the device-level event — so the raw
-		// track is the single owner of device-loss for both passthrough and
-		// pipelined captures. The ignore/recover/teardown decision is the pure
-		// resolveRawMicLossAction so each branch is unit-tested.
-		let muteSettleTimer: ReturnType<typeof setTimeout> | undefined;
-
-		const evaluateRawMicLoss = (reason: 'mute' | 'ended') => {
-			const action = resolveRawMicLossAction({
-				reason,
-				// Our own restart stops this track during cleanup after clearing the
-				// ref, so this also covers the supersession/recursion case. (Per spec
-				// `stop()` does not fire `ended`, but `mute` settle timers may still
-				// resolve late against a superseded capture.)
-				superseded: rawMicStreamRef.current !== stream,
-				inChannel: currentVoiceChannelIdRef.current !== undefined,
-				micMuted: ownVoiceStateSelector(useServerStore.getState()).micMuted,
-				trackStillMuted: rawAudioTrack.muted,
-			});
-
-			if (action === 'ignore') {
-				return;
-			}
-
-			if (action === 'teardown-for-unmute') {
-				logVoice('Raw mic interrupted while muted, tearing down for next unmute', { reason });
-				void cleanupMicAudioPipelineRef.current?.();
-				setLocalAudioStream((current) => (current === stream ? undefined : current));
-				return;
-			}
-
-			logVoice('Raw mic capture interrupted, re-acquiring', {
-				reason,
-				deviceId: devices.microphoneId,
-			});
-
-			// startMicStream re-runs cleanup + getUserMedia and is mutex-serialized,
-			// so a redundant call is safe.
-			void startMicStreamRef.current?.();
-		};
-
-		const clearMuteSettleTimer = () => {
-			if (muteSettleTimer !== undefined) {
-				clearTimeout(muteSettleTimer);
-				muteSettleTimer = undefined;
-			}
-		};
-
-		rawAudioTrack.addEventListener('mute', () => {
-			// `mute` is temporary by definition — wait for the settle window and only
-			// act if the track is still muted (re-checked inside evaluateRawMicLoss).
-			if (muteSettleTimer !== undefined) {
-				return;
-			}
-
-			muteSettleTimer = setTimeout(() => {
-				muteSettleTimer = undefined;
-				evaluateRawMicLoss('mute');
-			}, RAW_MIC_MUTE_SETTLE_MS);
-		});
-
-		// `unmute` means the source recovered on its own — cancel any pending settle.
-		rawAudioTrack.addEventListener('unmute', clearMuteSettleTimer);
-
-		// `ended` is permanent (and never fired by our own stop()), so act at once.
-		rawAudioTrack.addEventListener('ended', () => {
-			clearMuteSettleTimer();
-			evaluateRawMicLoss('ended');
-		});
-
-		let outboundStream = stream;
-		let outboundAudioTrack = rawAudioTrack;
+		let stream: MediaStream | undefined;
 
 		try {
-			const micAudioPipeline = await createMicAudioProcessingPipeline({
-				inputTrack: rawAudioTrack,
-				wasmNoiseSuppressionEnabled: micProcessingConfig.wasmNoiseSuppressionEnabled,
-				onWasmError: (error) => {
-					logVoice('Browser WASM voice filter runtime error', { error });
-
-					// Don't destroy the pipeline here — closing the AudioContext would
-					// end the MediaStreamTrack already handed to the mediasoup producer,
-					// causing complete mic silence for all peers with no recovery.
-					// The worklet naturally falls back to passing through raw mic input
-					// when the worker errors (underrun passthrough), so audio continues
-					// to flow unprocessed. The pipeline is cleaned up normally when the
-					// user leaves the channel or changes mic settings.
-					if (micAudioPipelineRef.current?.backend === 'browser-wasm') {
-						toast.error('Noise suppression encountered an error. Audio will continue without noise reduction.');
-					}
-				},
+			stream = await navigator.mediaDevices.getUserMedia({
+				audio: micConstraints,
+				video: false,
 			});
 
-			if (micAudioPipeline) {
-				micAudioPipelineRef.current = micAudioPipeline;
-				outboundStream = micAudioPipeline.stream;
-				outboundAudioTrack = micAudioPipeline.track;
-				logVoice('Microphone voice filter enabled', {
-					backend: micAudioPipeline.backend,
+			if (!ownsMicPipeline()) {
+				throw new MicPipelineSupersededError();
+			}
+
+			logVoice('Microphone stream obtained', { stream });
+
+			rawMicStreamRef.current = stream;
+
+			const rawAudioTrack = stream.getAudioTracks()[0];
+
+			if (!rawAudioTrack) {
+				throw new Error('Failed to obtain audio track from microphone');
+			}
+
+			const rawTrackSettings = rawAudioTrack.getSettings();
+			logVoice('Microphone capture device resolved', {
+				selectedMicrophoneId: devices.microphoneId,
+				trackLabel: rawAudioTrack.label,
+				trackDeviceId: rawTrackSettings.deviceId,
+				trackGroupId: rawTrackSettings.groupId,
+			});
+
+			// Recover from *involuntary* capture loss on the raw device track. When a
+			// driver like NVIDIA Broadcast / RTX Voice takes over (or releases) the
+			// audio endpoint, the OS reconfigures the session behind our track: the
+			// device id is unchanged, often no `devicechange` fires, but the browser
+			// fires `mute` (session preempted) or `ended` (device removed) on the raw
+			// device track. A downstream Web Audio pipeline track keeps emitting
+			// silence, so peers hear nothing until a manual rejoin. These listeners
+			// live on the raw track because the outbound track may be a synthesized
+			// pipeline output that never sees the device-level event — so the raw
+			// track is the single owner of device-loss for both passthrough and
+			// pipelined captures. The ignore/recover/teardown decision is the pure
+			// resolveRawMicLossAction so each branch is unit-tested.
+			let muteSettleTimer: ReturnType<typeof setTimeout> | undefined;
+
+			const evaluateRawMicLoss = (reason: 'mute' | 'ended') => {
+				const action = resolveRawMicLossAction({
+					reason,
+					// Our own restart stops this track during cleanup after clearing the
+					// ref, so this also covers the supersession/recursion case. (Per spec
+					// `stop()` does not fire `ended`, but `mute` settle timers may still
+					// resolve late against a superseded capture.)
+					superseded: rawMicStreamRef.current !== stream,
+					inChannel: currentVoiceChannelIdRef.current !== undefined,
+					micMuted: ownVoiceStateSelector(useServerStore.getState()).micMuted,
+					trackStillMuted: rawAudioTrack.muted,
+				});
+
+				if (action === 'ignore') {
+					return;
+				}
+
+				if (action === 'teardown-for-unmute') {
+					logVoice('Raw mic interrupted while muted, tearing down for next unmute', { reason });
+					void cleanupMicAudioPipelineRef.current?.();
+					setLocalAudioStream((current) => (current === stream ? undefined : current));
+					return;
+				}
+
+				logVoice('Raw mic capture interrupted, re-acquiring', {
+					reason,
+					deviceId: devices.microphoneId,
+				});
+
+				// startMicStream re-runs cleanup + getUserMedia and is mutex-serialized,
+				// so a redundant call is safe.
+				void startMicStreamRef.current?.();
+			};
+
+			const clearMuteSettleTimer = () => {
+				if (muteSettleTimer !== undefined) {
+					clearTimeout(muteSettleTimer);
+					muteSettleTimer = undefined;
+				}
+			};
+
+			rawAudioTrack.addEventListener('mute', () => {
+				// `mute` is temporary by definition — wait for the settle window and only
+				// act if the track is still muted (re-checked inside evaluateRawMicLoss).
+				if (muteSettleTimer !== undefined) {
+					return;
+				}
+
+				muteSettleTimer = setTimeout(() => {
+					muteSettleTimer = undefined;
+					evaluateRawMicLoss('mute');
+				}, RAW_MIC_MUTE_SETTLE_MS);
+			});
+
+			// `unmute` means the source recovered on its own — cancel any pending settle.
+			rawAudioTrack.addEventListener('unmute', clearMuteSettleTimer);
+
+			// `ended` is permanent (and never fired by our own stop()), so act at once.
+			rawAudioTrack.addEventListener('ended', () => {
+				clearMuteSettleTimer();
+				evaluateRawMicLoss('ended');
+			});
+
+			let outboundStream = stream;
+			let outboundAudioTrack = rawAudioTrack;
+
+			try {
+				const micAudioPipeline = await createMicAudioProcessingPipeline({
+					inputTrack: rawAudioTrack,
+					wasmNoiseSuppressionEnabled: micProcessingConfig.wasmNoiseSuppressionEnabled,
+					onWasmError: (error) => {
+						logVoice('Browser WASM voice filter runtime error', { error });
+
+						// Don't destroy the pipeline here — closing the AudioContext would
+						// end the MediaStreamTrack already handed to the mediasoup producer,
+						// causing complete mic silence for all peers with no recovery.
+						// The worklet naturally falls back to passing through raw mic input
+						// when the worker errors (underrun passthrough), so audio continues
+						// to flow unprocessed. The pipeline is cleaned up normally when the
+						// user leaves the channel or changes mic settings.
+						if (micAudioPipelineRef.current?.backend === 'browser-wasm') {
+							toast.error('Noise suppression encountered an error. Audio will continue without noise reduction.');
+						}
+					},
+				});
+
+				// Unconditional ownership check after the await, before ANY shared-ref
+				// write — the else branch below writes micAudioPipelineRef too, so a
+				// stale build returning undefined would otherwise clear the
+				// successor's installed pipeline.
+				if (!ownsMicPipeline()) {
+					if (micAudioPipeline) {
+						try {
+							await micAudioPipeline.destroy();
+						} catch (destroyError) {
+							logVoice('Failed to dispose superseded microphone voice filter', { error: destroyError });
+						}
+					}
+					throw new MicPipelineSupersededError();
+				}
+
+				if (micAudioPipeline) {
+					micAudioPipelineRef.current = micAudioPipeline;
+					outboundStream = micAudioPipeline.stream;
+					outboundAudioTrack = micAudioPipeline.track;
+					logVoice('Microphone voice filter enabled', {
+						backend: micAudioPipeline.backend,
+					});
+				} else {
+					micAudioPipelineRef.current = undefined;
+				}
+			} catch (error) {
+				if (error instanceof MicPipelineSupersededError) {
+					throw error;
+				}
+
+				// A normal rejection can also land after supersession; a non-owner
+				// must not clear the successor's ref, so translate to superseded.
+				if (!ownsMicPipeline()) {
+					throw new MicPipelineSupersededError();
+				}
+
+				micAudioPipelineRef.current = undefined;
+				logVoice('Failed to initialize microphone voice filter, using raw mic', {
+					error,
+				});
+			}
+
+			const micVolume = getStoredVolume(OWN_MIC_VOLUME_KEY);
+			// Keep the default 100% path on the original track so users do not pay
+			// for an extra Web Audio graph unless they explicitly change mic volume.
+			const micGainPipeline = shouldUseMicGainPipeline(micVolume)
+				? await createMicGainPipeline(outboundStream, micVolume)
+				: undefined;
+
+			// Unconditional for the same reason as above: the else branch writes
+			// micGainPipelineRef even when no gain pipeline was created.
+			if (!ownsMicPipeline()) {
+				if (micGainPipeline) {
+					try {
+						await micGainPipeline.destroy();
+					} catch (destroyError) {
+						logVoice('Failed to dispose superseded microphone gain pipeline', { error: destroyError });
+					}
+				}
+				throw new MicPipelineSupersededError();
+			}
+
+			if (micGainPipeline) {
+				micGainPipelineRef.current = micGainPipeline;
+				outboundStream = micGainPipeline.stream;
+				outboundAudioTrack = micGainPipeline.track;
+				logVoice('Microphone gain pipeline enabled', {
+					volume: micVolume,
 				});
 			} else {
-				micAudioPipelineRef.current = undefined;
+				micGainPipelineRef.current = undefined;
 			}
+
+			return { outboundStream, outboundAudioTrack, ownsMicPipeline };
 		} catch (error) {
-			micAudioPipelineRef.current = undefined;
-			logVoice('Failed to initialize microphone voice filter, using raw mic', {
-				error,
-			});
+			if (error instanceof MicPipelineSupersededError || !ownsMicPipeline()) {
+				// A newer build owns the shared refs — dispose only what this build
+				// created and never installed. Tracks it installed before losing
+				// ownership were already stopped by the successor's cleanup;
+				// track.stop() is idempotent.
+				stream?.getTracks().forEach((track) => {
+					track.stop();
+				});
+			} else {
+				// Genuine failure while still owning the refs: release the partial
+				// installs so the microphone is not left acquired.
+				await cleanupMicAudioPipeline();
+				setLocalAudioStream(undefined);
+			}
+
+			throw error;
 		}
-
-		const micVolume = getStoredVolume(OWN_MIC_VOLUME_KEY);
-		// Keep the default 100% path on the original track so users do not pay
-		// for an extra Web Audio graph unless they explicitly change mic volume.
-		const micGainPipeline = shouldUseMicGainPipeline(micVolume)
-			? await createMicGainPipeline(outboundStream, micVolume)
-			: undefined;
-
-		if (micGainPipeline) {
-			micGainPipelineRef.current = micGainPipeline;
-			outboundStream = micGainPipeline.stream;
-			outboundAudioTrack = micGainPipeline.track;
-			logVoice('Microphone gain pipeline enabled', {
-				volume: micVolume,
-			});
-		} else {
-			micGainPipelineRef.current = undefined;
-		}
-
-		return { outboundStream, outboundAudioTrack };
 	}, [cleanupMicAudioPipeline, devices, setLocalAudioStream]);
 
 	// Attach the prepared mic pipeline to the producer transport. Must be called
@@ -2069,15 +2171,24 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			resolve = r;
 		});
 
+		let prepared: TPreparedMicPipeline | undefined;
+
 		try {
 			await previousMutex;
 			logVoice('Starting microphone stream');
-			const prepared = await prepareMicPipeline();
+			prepared = await prepareMicPipeline();
 			await produceMicTrack(prepared);
 		} catch (error) {
 			logVoice('Error starting microphone stream', { error });
-			await cleanupMicAudioPipeline();
-			setLocalAudioStream(undefined);
+
+			// A failed prepare cleans up after itself (prepared stays undefined);
+			// after a successful prepare, tear down only while this build still
+			// owns the shared refs so a superseded start cannot destroy the
+			// pipeline a newer build installed.
+			if (prepared?.ownsMicPipeline()) {
+				await cleanupMicAudioPipeline();
+				setLocalAudioStream(undefined);
+			}
 		} finally {
 			resolve();
 		}
@@ -3349,10 +3460,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						// dependency on the mediasoup device or transports and are the slowest
 						// part of startMicStream. Running them concurrently with device.load()
 						// and transport creation saves ~200-300ms on join.
-						micPrepPromise = prepareMicPipeline().catch(async (error) => {
+						micPrepPromise = prepareMicPipeline().catch((error) => {
+							// prepareMicPipeline cleans up after its own failures, and a
+							// superseded build must not touch the successor's pipeline —
+							// so no shared teardown here.
 							logVoice('Error preparing microphone pipeline', { error });
-							await cleanupMicAudioPipeline();
-							setLocalAudioStream(undefined);
 							return undefined;
 						});
 
@@ -3382,8 +3494,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								await produceMicTrack(micPrepResult);
 							} catch (error) {
 								logVoice('Error attaching microphone to transport', { error });
-								await cleanupMicAudioPipeline();
-								setLocalAudioStream(undefined);
+
+								// Tear down only while this build's pipeline is still the
+								// installed one — a detached attempt failing late must not
+								// destroy the successor's mic.
+								if (micPrepResult.ownsMicPipeline()) {
+									await cleanupMicAudioPipeline();
+									setLocalAudioStream(undefined);
+								}
 							}
 						}
 						throwIfRecoverySuperseded();
@@ -3419,16 +3537,27 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					} catch (error) {
 						logVoice('Error initializing voice provider', { error });
 
-						// Clean up the prestarted mic pipeline — it may have acquired the
-						// microphone and spun up the WASM worker before the failure occurred.
-						await micPrepPromise;
-						await cleanupMicAudioPipeline();
-						setLocalAudioStream(undefined);
+						const preparedMic = await micPrepPromise;
 
-						if (dispatchJoinLifecycle) {
-							dispatchVoiceSession({ type: 'JoinFailed', reason: 'join-failed', channelId });
+						// Tear the mic pipeline down only while this init's build still
+						// owns the shared refs. A detached recovery attempt (the reconnect
+						// runner drains a cancelled attempt for a bounded window, then
+						// detaches it) may settle this catch after its successor installed
+						// a new pipeline — destroying it here would kill the live mic.
+						// When the prep itself failed, it already cleaned up after itself.
+						if (preparedMic?.ownsMicPipeline()) {
+							await cleanupMicAudioPipeline();
+							setLocalAudioStream(undefined);
 						}
-						setLoading(false);
+
+						// UI/lifecycle state belongs to the current attempt; a superseded
+						// recovery attempt must not stomp its successor's loading state.
+						if (opts?.isCurrentRecovery === undefined || opts.isCurrentRecovery()) {
+							if (dispatchJoinLifecycle) {
+								dispatchVoiceSession({ type: 'JoinFailed', reason: 'join-failed', channelId });
+							}
+							setLoading(false);
+						}
 
 						throw error;
 					}
@@ -4105,7 +4234,20 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					});
 				} finally {
 					unsubscribeFromAttempt();
-					await unsettledOperation?.catch(() => undefined);
+
+					// Bounded: a hung restore/init promise must not hold
+					// voiceRestorePromiseRef forever — that would park the queued retry
+					// with no expiry timer armed, leaving the UI reconnecting past the
+					// TTL. A detached operation keeps its attempt guards and cannot
+					// mutate shared session state after supersession.
+					const drainOutcome = await drainCancelledVoiceReconnectOperation(unsettledOperation);
+
+					if (drainOutcome === 'detached') {
+						logDebug('Voice reconnect detached a hung cancelled operation', {
+							attempt: attemptNumber,
+							channelId: command.pending.channelId,
+						});
+					}
 				}
 			})();
 
@@ -4284,19 +4426,25 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		],
 	);
 
+	// Registering (rather than subscribing as a listener) also flushes any
+	// commands dispatched while no runner was alive — a result event from the
+	// previous provider instance's still-running async work can land in the
+	// remount gap, and final commands (RecoverDesktopAppAudio, LeaveVoiceSession,
+	// ClearFailedSession) leave the phases Resumed replays, so a buffer is the
+	// only path that preserves them.
 	useEffect(() => {
-		return subscribeVoiceSession((_state, commands) => {
+		return registerVoiceSessionCommandRunner((commands) => {
 			commands.forEach(runVoiceSessionCommand);
 		});
 	}, [runVoiceSessionCommand]);
 
-	// Commands only reach live subscribers, so a provider remount mid-recovery
-	// (the machine state is module-level and survives it) would otherwise strand
-	// the machine waiting on a command whose runner unmounted. Resumed re-issues
-	// the current step under a new generation, invalidating any runner still in
-	// flight from the previous instance. Mount-only by design: within one mount
-	// no command is ever lost, so re-dispatching on dep changes would only risk
-	// duplicating in-flight work.
+	// A provider remount mid-recovery (the machine state is module-level and
+	// survives it) would otherwise strand the machine waiting on a command whose
+	// runner unmounted. Resumed re-issues the current step under a new
+	// generation, invalidating any runner still in flight from the previous
+	// instance. Mount-only by design: within one mount no command is ever lost,
+	// so re-dispatching on dep changes would only risk duplicating in-flight
+	// work.
 	useEffect(() => {
 		const { phase } = getVoiceSessionState();
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
 	classifyVoiceReconnectError,
+	drainCancelledVoiceReconnectOperation,
 	getVoiceReconnectRetryDelayMs,
 	VoiceReconnectTimeoutError,
 } from '../reconnect-policy';
@@ -193,6 +194,28 @@ describe('voice reconnect policy', () => {
 		it('applies plus-or-minus twenty percent jitter', () => {
 			expect(getVoiceReconnectRetryDelayMs(0, 0)).toBe(800);
 			expect(getVoiceReconnectRetryDelayMs(0, 1)).toBe(1_200);
+		});
+	});
+
+	describe('drainCancelledVoiceReconnectOperation', () => {
+		it('returns settled immediately when there is no unsettled operation', async () => {
+			expect(await drainCancelledVoiceReconnectOperation(undefined, 1)).toBe('settled');
+		});
+
+		it('returns settled when the operation resolves within the drain window', async () => {
+			expect(await drainCancelledVoiceReconnectOperation(Promise.resolve('ok'), 1_000)).toBe('settled');
+		});
+
+		it('swallows a rejecting operation instead of throwing', async () => {
+			expect(await drainCancelledVoiceReconnectOperation(Promise.reject(new Error('boom')), 1_000)).toBe('settled');
+		});
+
+		it('detaches a permanently pending operation so retries are not blocked', async () => {
+			// The exact condition the reconnect timeout exists for: an init step that
+			// never settles. The drain must give up and release the restore slot.
+			const neverSettles = new Promise<never>(() => {});
+
+			expect(await drainCancelledVoiceReconnectOperation(neverSettles, 10)).toBe('detached');
 		});
 	});
 });
