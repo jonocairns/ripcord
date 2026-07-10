@@ -467,8 +467,18 @@ const reduceResumed = (state: TVoiceSessionState): TVoiceSessionReducerResult =>
 
 	if (phase.phase === 'reconnecting') {
 		const [baseState, generation] = nextGeneration(state);
+		const resumedPhase: Extract<TVoiceSessionPhase, { phase: 'reconnecting' }> = {
+			...phase,
+			// RestoreSucceeded means the old provider initialized its own local
+			// transports. A provider unmount tears those transports down, so resuming
+			// from restoreWatch would only rehydrate intent and falsely mark the new
+			// provider connected with no transports. Re-run restore/init first; the
+			// retained snapshot then drives restoreWatch again on success.
+			step: phase.step === 'restoreWatch' ? 'restoring' : phase.step,
+			generation,
+		};
 
-		return scheduleReconnectStep({ ...baseState, phase: { ...phase, generation } });
+		return scheduleReconnectStep({ ...baseState, phase: resumedPhase });
 	}
 
 	return emptyResult(state);

@@ -318,6 +318,83 @@ describe('voice.restoreOrJoin', () => {
 		expect(runtime.getConsumerTransport(1)?.id).toBe(consumerParams.id);
 	});
 
+	test('rolls back an aborted provisional restore seat when no successor adopted it', async () => {
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const claim = runtime.beginProvisionalRestoreSeat(1);
+
+		expect(runtime.rollbackProvisionalRestoreSeat(1, claim)).toBe(true);
+		expect(runtime.getUser(1)).toBeUndefined();
+		expect(runtime.getProducerTransport(1)).toBeUndefined();
+		expect(runtime.getConsumerTransport(1)).toBeUndefined();
+	});
+
+	test('does not let a superseded fresh restore roll back the seat adopted by its successor', async () => {
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const originalCreateProducerTransport = runtime.createProducerTransport;
+		let producerCallCount = 0;
+		let releaseFirstProducer: () => void = () => {};
+		let markFirstProducerEntered: () => void = () => {};
+		const firstProducerEntered = new Promise<void>((resolve) => {
+			markFirstProducerEntered = resolve;
+		});
+		const firstProducerGate = new Promise<void>((resolve) => {
+			releaseFirstProducer = resolve;
+		});
+
+		runtime.createProducerTransport = async (userId, isCurrent) => {
+			producerCallCount += 1;
+
+			if (producerCallCount === 1) {
+				markFirstProducerEntered();
+				await firstProducerGate;
+			}
+
+			return originalCreateProducerTransport(userId, isCurrent);
+		};
+
+		const joinEvents: number[] = [];
+		const leaveEvents: number[] = [];
+		const joinSub = pubsub.subscribe(ServerEvents.USER_JOIN_VOICE).subscribe({
+			next: (event) => joinEvents.push(event.channelId),
+		});
+		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+			next: (event) => leaveEvents.push(event.channelId),
+		});
+
+		try {
+			const { caller } = await initTest(1);
+			const staleRestore = caller.voice.restoreOrJoin({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: { micMuted: false, soundMuted: false },
+				reconnectAttemptId: 'attempt-fresh-stale',
+			});
+
+			await firstProducerEntered;
+
+			const currentRestore = await caller.voice.restoreOrJoin({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: { micMuted: false, soundMuted: false },
+				reconnectAttemptId: 'attempt-fresh-current',
+			});
+
+			releaseFirstProducer();
+
+			expect(currentRestore.channelUsers.some((user) => user.userId === 1)).toBe(true);
+			await expect(staleRestore).rejects.toThrow('Voice restore attempt superseded');
+			expect(runtime.getUser(1)).toBeDefined();
+			expect(runtime.getProducerTransport(1)).toBeDefined();
+			expect(runtime.getConsumerTransport(1)).toBeDefined();
+			expect(joinEvents).toEqual([PRIMARY_VOICE_CHANNEL_ID]);
+			expect(leaveEvents).toEqual([]);
+		} finally {
+			releaseFirstProducer();
+			runtime.createProducerTransport = originalCreateProducerTransport;
+			joinSub.unsubscribe();
+			leaveSub.unsubscribe();
+		}
+	});
+
 	test('forgetOwnVoiceSession drops the server-side voice session and broadcasts a reconnecting leave', async () => {
 		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 

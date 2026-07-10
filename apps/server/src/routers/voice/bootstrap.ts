@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { channels } from '../../db/schema';
-import { VoiceRestoreAttemptSupersededError, VoiceRuntime } from '../../runtimes/voice';
+import { VoiceRuntime } from '../../runtimes/voice';
 import { invariant } from '../../utils/invariant';
 import type { Context } from '../../utils/trpc';
 
@@ -66,9 +66,7 @@ const createVoiceJoinBootstrap = async (opts: {
 
 		existingProducers = runtime.getRemoteIds(userId);
 	} catch (error) {
-		if (!(error instanceof VoiceRestoreAttemptSupersededError)) {
-			await onError?.(error);
-		}
+		await onError?.(error);
 		throw error;
 	}
 

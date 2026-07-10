@@ -725,6 +725,34 @@ describe('voice session machine', () => {
 		]);
 	});
 
+	it('re-runs restore before restoring watch intent when remounting after restore success', () => {
+		let [state, generation] = startReconnectWithSnapshot(true);
+
+		[state] = dispatch(state, {
+			type: 'RestoreSucceeded',
+			commandId: activeCommandId(state),
+			generation,
+			serverSessionEstablished: true,
+		});
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'restoreWatch' });
+
+		const resumed = reduceVoiceSession(state, { type: 'Resumed' });
+
+		expect(resumed.state.phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'restoring',
+			generation: generation + 1,
+			serverSessionEstablished: true,
+		});
+		expect(resumed.commands).toEqual([
+			expect.objectContaining({
+				type: 'RestoreVoiceSession',
+				generation: generation + 1,
+				snapshot: snapshot(),
+			}),
+		]);
+	});
+
 	it('ignores resume outside recovery phases', () => {
 		const state = createInitialVoiceSessionState();
 		const result = reduceVoiceSession(state, { type: 'Resumed' });

@@ -154,30 +154,49 @@ const restoreOrJoinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 
 			if (runtimeWithUser?.id === input.channelId) {
 				assertCurrent();
+				const provisionalSeatClaim = runtime.adoptProvisionalRestoreSeat(ctx.user.id);
 				ctx.currentVoiceChannelId = input.channelId;
 				ctx.setWsVoiceChannelId(input.channelId);
 
-				const bootstrap = await createVoiceJoinBootstrap({
-					runtime,
-					userId: ctx.user.id,
-					isCurrent,
-				});
-				assertCurrent();
+				try {
+					const bootstrap = await createVoiceJoinBootstrap({
+						runtime,
+						userId: ctx.user.id,
+						isCurrent,
+					});
+					assertCurrent();
+					if (provisionalSeatClaim) {
+						runtime.commitProvisionalRestoreSeat(ctx.user.id, provisionalSeatClaim);
+					}
 
-				logRestoreOrJoinEvent('outcome', {
-					reconnectAttemptId: input.reconnectAttemptId,
-					userId: ctx.user.id,
-					clientInstanceId,
-					requestedChannelId: input.channelId,
-					activeChannelId: input.channelId,
-					outcome: 'restored',
-				});
+					logRestoreOrJoinEvent('outcome', {
+						reconnectAttemptId: input.reconnectAttemptId,
+						userId: ctx.user.id,
+						clientInstanceId,
+						requestedChannelId: input.channelId,
+						activeChannelId: input.channelId,
+						outcome: 'restored',
+					});
 
-				return bootstrap;
+					return bootstrap;
+				} catch (error) {
+					if (provisionalSeatClaim && runtime.rollbackProvisionalRestoreSeat(ctx.user.id, provisionalSeatClaim)) {
+						ctx.currentVoiceChannelId = undefined;
+						ctx.setWsVoiceChannelId(undefined);
+						ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+							channelId: input.channelId,
+							userId: ctx.user.id,
+							reconnecting: true,
+						});
+					}
+
+					throw error;
+				}
 			}
 
 			assertCurrent();
 			runtime.addUser(ctx.user.id, input.state);
+			const provisionalSeatClaim = runtime.beginProvisionalRestoreSeat(ctx.user.id);
 
 			const state = runtime.getUserState(ctx.user.id);
 
@@ -192,12 +211,18 @@ const restoreOrJoinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 
 			logger.info('%s restoreOrJoin joined voice channel %s', ctx.user.name, channel.name);
 
-			const bootstrap = await createVoiceJoinBootstrap({
-				runtime,
-				userId: ctx.user.id,
-				isCurrent,
-				onError: (error) => {
-					runtime.removeUser(ctx.user.id);
+			let bootstrap: Awaited<ReturnType<typeof createVoiceJoinBootstrap>>;
+
+			try {
+				bootstrap = await createVoiceJoinBootstrap({
+					runtime,
+					userId: ctx.user.id,
+					isCurrent,
+				});
+				assertCurrent();
+				runtime.commitProvisionalRestoreSeat(ctx.user.id, provisionalSeatClaim);
+			} catch (error) {
+				if (runtime.rollbackProvisionalRestoreSeat(ctx.user.id, provisionalSeatClaim)) {
 					ctx.currentVoiceChannelId = undefined;
 					ctx.setWsVoiceChannelId(undefined);
 					ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
@@ -212,9 +237,10 @@ const restoreOrJoinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 						channel.name,
 						error,
 					);
-				},
-			});
-			assertCurrent();
+				}
+
+				throw error;
+			}
 
 			logRestoreOrJoinEvent('outcome', {
 				reconnectAttemptId: input.reconnectAttemptId,

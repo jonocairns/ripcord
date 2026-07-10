@@ -223,6 +223,11 @@ class VoiceRuntime {
 	private mediaLiveness = new Map<number, TMediaLivenessState>();
 	private mediaLivenessTimer?: ReturnType<typeof setInterval>;
 	private mediaLivenessCheckInFlight = false;
+	// A fresh restoreOrJoin publishes a provisional seat before its transport
+	// bootstrap finishes. Claims make rollback attempt-scoped: a superseded
+	// attempt cannot remove a seat adopted by its successor, while an aborted
+	// attempt with no successor can still clean up the seat it owns.
+	private provisionalRestoreSeatClaims = new Map<number, symbol>();
 
 	private externalCounter = 0;
 	private externalStreamsInternal: {
@@ -363,7 +368,41 @@ class VoiceRuntime {
 		});
 	};
 
+	public beginProvisionalRestoreSeat = (userId: number): symbol => {
+		const claim = Symbol('voice-provisional-restore-seat');
+		this.provisionalRestoreSeatClaims.set(userId, claim);
+		return claim;
+	};
+
+	public adoptProvisionalRestoreSeat = (userId: number): symbol | undefined => {
+		if (!this.provisionalRestoreSeatClaims.has(userId)) {
+			return undefined;
+		}
+
+		return this.beginProvisionalRestoreSeat(userId);
+	};
+
+	public commitProvisionalRestoreSeat = (userId: number, claim: symbol): boolean => {
+		if (this.provisionalRestoreSeatClaims.get(userId) !== claim) {
+			return false;
+		}
+
+		this.provisionalRestoreSeatClaims.delete(userId);
+		return true;
+	};
+
+	public rollbackProvisionalRestoreSeat = (userId: number, claim: symbol): boolean => {
+		if (this.provisionalRestoreSeatClaims.get(userId) !== claim) {
+			return false;
+		}
+
+		this.provisionalRestoreSeatClaims.delete(userId);
+		this.removeUser(userId);
+		return true;
+	};
+
 	public removeUser = (userId: number) => {
+		this.provisionalRestoreSeatClaims.delete(userId);
 		this.state.users = this.state.users.filter((u) => u.userId !== userId);
 
 		this.cleanupUserResources(userId);
