@@ -108,19 +108,22 @@ const defaultConfig: TConfig = {
 			// Browser noise
 			'ResizeObserver loop limit exceeded',
 			'ResizeObserver loop completed with undelivered notifications',
-			'Non-Error promise rejection captured',
 			// Media / autoplay policy
 			'NotAllowedError',
 			'The play() request was interrupted',
 			// Device / hardware (user environment, not app bugs)
 			'NotReadableError',
-			'NotFoundError',
 			'OverconstrainedError',
-			// WebRTC churn
-			'ICE',
+			// WebRTC churn. ignoreErrors does substring (.includes) matching, so
+			// keep these specific: a bare 'ICE' also swallows unrelated all-caps
+			// messages (DEVICE_ERROR, INVOICE, NOTICE), and broad DOMException
+			// names like InvalidStateError / NotFoundError mask real app bugs
+			// that surface with the same name outside WebRTC/device contexts.
+			'ICE restart',
+			'ICE candidate error',
+			'ICE connection',
 			'RTCPeerConnection',
 			'RTCDataChannel',
-			'InvalidStateError',
 			// Fetch / network
 			'AbortError',
 			'NetworkError',

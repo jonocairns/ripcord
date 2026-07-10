@@ -32,7 +32,7 @@ import {
 	VoiceReconnectTimeoutError,
 } from '@/features/server/voice/reconnect-policy';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
-import { logDebug, logVoice, traceSentrySpan } from '@/helpers/browser-logger';
+import { logDebug, logVoice, reportError, traceSentrySpan } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { getTrpcErrorData, isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { useLatestRef } from '@/hooks/use-latest-ref';
@@ -3738,7 +3738,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									continue;
 								}
 
-								logVoice('Voice transport recovery failed', { error });
+								// Terminal: attempts exhausted (or a non-retriable error) and
+								// voice is now dead — promote to a Sentry issue, not just a
+								// breadcrumb. Mirrors the 'Voice reconnect recovery gave up'
+								// backstop in features/server/voice/actions.ts.
+								reportError('Voice transport recovery failed', error, {
+									attempt: attempt + 1,
+									nonceRestarts,
+									channelId: currentVoiceChannelIdRef.current,
+								});
 								setConnectionStatus(ConnectionStatus.FAILED);
 								return false;
 							}

@@ -1,37 +1,46 @@
-- Use conventional commit prefixes: `feat:`, `fix:`, `docs:`, `refactor:`.
-- Write PR titles as plain sentence case summaries of the feature or fix.
-- Structure PR descriptions with Markdown sections such as `## Summary` and `## Validation`, and use bullets for scanability.
-- Prefix intentionally unused variables with `_`.
-- Use explicit TypeScript types, narrowing, and fragment-driven typing. Reserve `as` for rare test-only partial mocks when constructing the full type is impractical.
-- Handle possibly undefined values with conditional guards and control-flow narrowing.
-- Run repo Bun commands through Nix. Use `nix develop -c bun run magic` for the standard validation pass before committing.
-- Keep shipped desktop clients compatible with newer server/API versions.
-- Keep API changes backward compatible by default.
-- Name `useChannelPermissionsById` results as channel-permission data rather than user roles.
 - Base branches and PRs on `main`.
-- Migration pitfall: `nix develop -c bun run --filter @sharkord/server db:gen` can sometimes generate a migration that re-includes older schema changes (for example `refresh_tokens` or prior `ALTER TABLE` steps). Always review the generated SQL and keep only the intended new delta before committing.
-- Reconnect pitfall: pending voice auto-rejoin state is consumed from `VoiceProvider`, so it must be gated on actual server connectivity. If it runs during disconnect cleanup when `currentVoiceChannelId` is reset to `undefined`, the saved channel can be spent against a dead TRPC client and be gone by the time reconnect succeeds.
-- Voice provider cleanup pitfall: on terminal voice exits (explicit leave, session-replaced, desktop quit), call the registered `VoiceProvider` cleanup so local capture stops immediately. Reconnect-bookkeeping removes must skip cleanup to preserve the active media session during recovery.
-- Voice restart recovery pitfall (apps/client): after a cold server restart, restoring channel membership and rebuilding transports is not enough on its own. The reconnect success path must do a fresh `voice.getProducers` sweep after transports are live so clients catch producers created during the restore gap; otherwise users can appear rejoined but hear silence.
-- Voice receive retry pitfall (apps/client): reconnect/recovery robustness depends on `consumeExistingProducers` actually rebuilding audio consumers. Do not fire-and-forget audio `consume` calls from sweeps; keep audio consumers pending until `resumeConsumer` succeeds and use bounded retries so one transient consume/resume failure does not become permanent one-way silence.
-- Voice push-key ordering pitfall (apps/client): push-to-talk/push-to-mute can issue rapid overlapping mic state mutations. Guard local rollback and own-user server confirmations with operation ordering so stale mute/unmute responses cannot overwrite the latest key state or leave UI state out of sync with `MediaStreamTrack.enabled`.
-- Voice optimistic-state pitfall (apps/client): only use optimistic own-voice updates for immediate local toggles that do not cross a permission prompt, picker, or media/device acquisition boundary. For webcam, screenshare, and similar capture flows, flip the UI/state only after capture actually starts; when stopping, stop the local media first before marking the feature off.
-- Screen share startup pitfall (apps/client): the visible `sharingScreen` state should flip as soon as the screen video producer is live. Do not wait for optional sidecar/system-audio startup to finish first, or the local UI will look stalled and delayed start/stop clicks can race the later server state sync.
-- Mediasoup Opus pitfall: keep the server router codec as `audio/opus` with `channels: 2`. Changing it to `channels: 1` looks correct for mono mic audio, but browser/WebRTC capability matching in this app rejects it and `Device.load()` fails with `UnsupportedError: media codec not supported [mimeType:audio/opus]`.
-- Voice activity pitfall (apps/client): do not attach live in-call mic or remote WebRTC tracks to a `MediaStreamAudioSourceNode` just to meter speaking state. Chromium/Electron can leak speech-correlated static into playback; prefer `MediaStreamTrack.getStats()` for the local mic and `RTCRtpReceiver.getSynchronizationSources()` for remote users.
-- Voice activity authority pitfall: mediasoup `AudioLevelObserver` silence notifications are edge-triggered, so a client-activity authority lease cannot expire only when another observer event arrives. Actively expire the lease, retain and apply the latest observer-derived state on expiry, keep sequence ordering beyond the lease lifetime, and bind reports to the current audio producer.
-- Test pitfall: server `bun test` commands that initialize the test DB expect the working directory to be `apps/server`; running them from the repo root can fail to find `drizzle/meta/_journal.json`.
-- Client test pitfall (apps/client): importing `features/server/messages/subscriptions.ts` in Bun tests also pulls in `features/server/messages/actions.ts`, which imports `sounds/actions.ts` and touches `window.AudioContext` at module load. For pure message-subscription tests, target a side-effect-free helper (for example `subscriptions-core.ts`) or mock the sound module instead of importing the runtime subscription entrypoint directly.
-- Mobile path pitfall: plans or notes may reference `apps/mobile/...`, but this checkout may not include an `apps/mobile` tree at all. Verify the mobile app exists in the current repo before planning edits there.
-- React refresh pitfall (apps/client): Biome does not enforce the react-refresh `only-export-components` rule. Each file should export at most one React component alongside non-component exports. Mixing multiple components in a single file or co-exporting components with hooks/constants can break Vite HMR (hot module replacement) — the whole module will full-reload instead of hot-swapping. When a file needs to export both a component and helpers (e.g. context + hook), that is acceptable, but avoid exporting multiple unrelated components from one file.
-- React effects pitfall (apps/client): Biome does not have an equivalent to the `react-you-might-not-need-an-effect` ESLint plugin. Avoid using `useEffect` for derived state or computations that can be done during render. Specifically: (1) don't use `useEffect` + `setState` to transform or combine existing props/state — compute it inline or with `useMemo`; (2) don't use `useEffect` to reset state when a prop changes — use a `key` on the component instead; (3) don't use `useEffect` to synchronise two pieces of state — lift the state or derive one from the other.
-- Server screens layering pitfall (apps/client): `ServerScreensProvider` renders into the global `#portal`, so its z-index must stay above normal in-app chrome and voice overlays, but below generic dialog/popover layers (`z-50`) used inside settings. Prefer keeping in-app voice chrome like pinned cards, controls bars, and resize handles below the server-screen portal by default rather than adding per-component `isServerScreenOpen` guards.
-- Rust sidecar pitfall (apps/desktop/sidecar): the shipped Rust sidecar only supports per-app audio capture and push keybinds. If microphone / voice-filter support is ever needed again, recover it from git history in a separate branch instead of reintroducing dormant optional deps, bins, or CI hooks into the default build.
-- Sidecar backend split pitfall (apps/desktop/sidecar): roadmap item `#7` is not starting from zero. `src/platform/{windows,macos,linux}.rs` and `src/platform/mod.rs` already exist, but `src/main.rs` still carried shared protocol/runtime code and some platform internals. Treat `#7` as finishing the split, not inventing the first backend modules.
-- Linux desktop audio pitfall (apps/desktop): keep Linux `systemAudio`, `perAppAudio`, and target-enumeration capability states aligned with the same backend readiness. Earlier shell-out logic could report system audio as available even when the recorder path itself was unavailable, which made capability probes lie about what capture could actually start.
-- Roadmap drift pitfall (desktop Linux audio): `docs/desktop/os-parity-roadmap.md` no longer exists. The current sidecar already uses a native PulseAudio-compatible FFI backend and reports `linuxAudioBackendUsesShellOuts: false`. Before planning Linux audio work, verify current capability handling in the desktop codebase rather than referencing any roadmap doc.
-- Wayland shortcut pitfall (apps/desktop/sidecar): the XDG Global Shortcuts portal is not a drop-in replacement for the current X11/XWayland key-state poller. It is session/action-oriented and user-approved, so treat Linux roadmap item `#8` as a product/backend integration task, not just a transport swap.
-- YouTube embed pitfall (apps/desktop): packaged Electron builds load the renderer from `file://`, which means embedded YouTube iframes can hit `Error 153` unless the desktop session injects a valid `Referer` header for `youtube.com` / `youtube-nocookie.com` requests. Fix this in the Electron request layer, not just the React player component.
-- Electron close pitfall (apps/desktop): clicking the window X can destroy the renderer before `app.before-quit` can request renderer cleanup. If close-time app state must be flushed, intercept `BrowserWindow` `close` while the renderer is alive, run the flush, then continue closing/quitting.
+- Commits use conventional prefixes: `feat:`, `fix:`, `docs:`, `refactor:`.
+- PR titles should be plain sentence case summaries of the feature or fix.
+- PR descriptions should use Markdown sections such as `## Summary` and `## Validation`, with bullets for scanability.
 
-Capture new durable conventions, invariants, and recurring pitfalls here when they will help future agents make better decisions.
+- Run repo Bun commands through Nix. Use `nix develop -c bun run magic` for the standard validation pass before committing.
+- Do not assume local package manager tools are available outside the Nix shell.
+- Review generated files before committing them. Database migrations must contain only the intended new schema delta, not regenerated historical changes.
+- Run package-specific test commands from the directory expected by that package.
+- Unit tests should cover app-specific behavior, regressions, branching state transitions, data transformation, validation, and side-effect boundaries. Avoid tests that only prove framework behavior or simple setters/callback plumbing.
+- For tests that touch browser, audio, desktop, or network APIs at module load, prefer extracting side-effect-free helpers or mocking the side effect explicitly.
+
+- Prefix intentionally unused variables with `_`.
+- Prefer explicit types, control-flow narrowing, and fragment-driven typing over TypeScript `as` casts.
+- Acceptable `as` usage: `as const` for literal inference, or rare test-only partial mocks when constructing the full type is impractical.
+- Handle possibly undefined values with guards and narrowing instead of assuming presence.
+- Name values after the data they actually contain. For example, channel permission data should not be named as if it were user role data.
+
+- Keep React modules friendly to Vite HMR. Avoid exporting multiple unrelated React components from one file, especially alongside hooks or constants.
+- Avoid `useEffect` for derived state or render-time computations. Prefer inline computation, `useMemo`, keyed components, lifted state, or derived values.
+- Keep portal and overlay layering centralized. Prefer stable z-index rules over component-specific visibility guards.
+- Verify UI state changes that depend on permissions, device pickers, or media acquisition after the underlying operation actually succeeds.
+- For local stop flows, stop the local resource first, then mark the UI state inactive.
+
+- Keep API changes backward compatible by default.
+- Keep shipped desktop clients compatible with newer server/API versions.
+- Treat capability flags as runtime contracts. They should reflect what the current backend can actually start or use, not what the platform might theoretically support.
+- Before planning work against a path, doc, roadmap, or app package, verify it exists in the current checkout and reflects the current architecture.
+
+- Gate reconnect and recovery flows on confirmed server connectivity. Do not consume one-shot recovery state while disconnected or during cleanup.
+- Distinguish terminal exits from recovery bookkeeping. Terminal exits should stop local capture immediately; reconnect bookkeeping should preserve active media sessions when recovery is expected.
+- After reconnects or server restarts, rebuild local transports/subscriptions and resync existing remote producers or streams.
+- Track media consume/resume operations until they succeed or exhaust bounded retries. Avoid fire-and-forget recovery paths.
+- Order overlapping local media mutations, such as mute, push-to-talk, webcam, and screenshare changes, so stale confirmations cannot overwrite the latest local intent.
+- Preserve browser/WebRTC capability matching when changing media codecs or router settings.
+- Avoid attaching live call tracks to Web Audio nodes solely for activity metering. Prefer WebRTC/browser stats APIs.
+- Treat server-derived media activity as event-driven and potentially stale. Use explicit expiry, sequence ordering, and producer identity checks when merging it with client-reported activity.
+
+- Keep the shipped sidecar focused on supported production capabilities. Do not reintroduce dormant dependencies, binaries, or CI hooks without a current product path.
+- Inspect the existing platform backend structure before changing desktop capture, shortcuts, or OS integration.
+- Keep Linux, macOS, and Windows capability reporting aligned with the backend path that actually performs the operation.
+- Treat OS integration APIs as product/backend integrations, not drop-in transport swaps. Account for user approval, session semantics, packaging, and runtime availability.
+- Fix packaged Electron behavior at the Electron/session layer when the issue comes from `file://` origins, request headers, window lifecycle, or renderer teardown.
+- For close-time or quit-time cleanup that must reach the renderer, intercept the window lifecycle while the renderer is still alive, flush required state, then continue closing.
+
+The role of this file is to describe repo standards, common mistakes, and recurring confusion points that future agents are likely to encounter. Keep entries durable, current, and decision-oriented. Prefer reusable rules over one-off bug narratives, stale roadmap notes, or narrow file-specific history unless the detail captures a pattern that is likely to recur.
