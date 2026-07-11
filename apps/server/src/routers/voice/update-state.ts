@@ -10,6 +10,9 @@ const updateVoiceStateRoute = protectedProcedure
 			soundMuted: z.boolean().optional(),
 			webcamEnabled: z.boolean().optional(),
 			sharingScreen: z.boolean().optional(),
+			// Client-monotonic ordering token. The permission checks below are
+			// async, so two rapid updates can apply out of order without it.
+			seq: z.number().int().nonnegative().optional(),
 		}),
 	)
 	.mutation(async ({ input, ctx }) => {
@@ -17,7 +20,8 @@ const updateVoiceStateRoute = protectedProcedure
 		const runtime = VoiceRuntime.requireJoinedRuntime(ctx.currentVoiceChannelId, ctx.user.id);
 		const channelId = runtime.id;
 
-		const validatedInput = { ...input };
+		const { seq, ...stateInput } = input;
+		const validatedInput = { ...stateInput };
 
 		const [canSpeak, canUseWebcam, canShareScreen] = await Promise.all([
 			ctx.hasChannelPermission(channelId, ChannelPermission.SPEAK),
@@ -37,9 +41,11 @@ const updateVoiceStateRoute = protectedProcedure
 			delete validatedInput.sharingScreen;
 		}
 
-		runtime.updateUserState(ctx.user.id, {
-			...validatedInput,
-		});
+		const applied = runtime.applyClientVoiceStateUpdate(ctx.user.id, validatedInput, seq);
+
+		if (!applied) {
+			return;
+		}
 
 		const newState = runtime.getUserState(ctx.user.id);
 

@@ -6,12 +6,11 @@ import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { useOwnUserId } from '@/features/server/users/hooks';
-import { updateOwnVoiceState } from '@/features/server/voice/actions';
+import { sendOwnVoiceStateUpdate, updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { useLatestRef } from '@/hooks/use-latest-ref';
-import { getTRPCClient } from '@/lib/trpc';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
 import { shouldApplyVoiceStateOperationResult, startVoiceStateOperation } from '../voice-state-operation';
 import { useScreenShareStage } from './use-screen-share-stage';
@@ -144,7 +143,6 @@ const useVoiceControls = ({
 			const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
 			voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
 			const { operationToken } = voiceStateOperation;
-			const trpc = getTRPCClient();
 
 			updateOwnVoiceState({ micMuted: newState });
 
@@ -157,7 +155,7 @@ const useVoiceControls = ({
 			applyMicMuted(latestLocalAudioStream, newState);
 
 			try {
-				await trpc.voice.updateState.mutate({
+				await sendOwnVoiceStateUpdate({
 					micMuted: newState,
 				});
 
@@ -195,7 +193,6 @@ const useVoiceControls = ({
 		const latestLocalAudioStream = localAudioStreamRef.current;
 
 		const newState = !latestOwnVoiceState.soundMuted;
-		const trpc = getTRPCClient();
 		const previousMicMuted = latestOwnVoiceState.micMuted;
 		const previousSoundMuted = latestOwnVoiceState.soundMuted;
 		const previousMicMutedBeforeDeafen = micMutedBeforeDeafenRef.current;
@@ -224,7 +221,7 @@ const useVoiceControls = ({
 		if (!latestCurrentVoiceChannelId) return;
 
 		try {
-			await trpc.voice.updateState.mutate({
+			await sendOwnVoiceStateUpdate({
 				soundMuted: newState,
 				micMuted: nextMicMuted,
 			});
@@ -260,7 +257,6 @@ const useVoiceControls = ({
 
 		const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
 		const newState = !latestOwnVoiceState.webcamEnabled;
-		const trpc = getTRPCClient();
 		const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
 		voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
 		const { operationToken } = voiceStateOperation;
@@ -288,7 +284,7 @@ const useVoiceControls = ({
 				playSound(SoundType.OWN_USER_STOPPED_WEBCAM);
 			}
 
-			await trpc.voice.updateState.mutate({
+			await sendOwnVoiceStateUpdate({
 				webcamEnabled: newState,
 			});
 		} catch (error) {
@@ -310,7 +306,6 @@ const useVoiceControls = ({
 		if (isStartingScreenShare) return;
 
 		const newState = !ownVoiceState.sharingScreen;
-		const trpc = getTRPCClient();
 		const transition = newScreenShareTransition();
 		let selection: TDesktopScreenShareSelection | null | undefined;
 
@@ -345,7 +340,7 @@ const useVoiceControls = ({
 						updateOwnVoiceState({ sharingScreen: false });
 
 						try {
-							await trpc.voice.updateState.mutate({
+							await sendOwnVoiceStateUpdate({
 								sharingScreen: false,
 							});
 						} catch {
@@ -358,7 +353,7 @@ const useVoiceControls = ({
 					return;
 				}
 
-				const startMutate = trpc.voice.updateState.mutate({
+				const startMutate = sendOwnVoiceStateUpdate({
 					sharingScreen: true,
 				});
 				pendingShareMutateRef.current = startMutate;
@@ -386,7 +381,7 @@ const useVoiceControls = ({
 			// so the server never processes them out of order.
 			await pendingShareMutateRef.current?.catch(() => {});
 
-			await trpc.voice.updateState.mutate({
+			await sendOwnVoiceStateUpdate({
 				sharingScreen: false,
 			});
 		} catch (error) {

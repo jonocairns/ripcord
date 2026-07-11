@@ -226,6 +226,7 @@ class VoiceRuntime {
 	private clientVoiceActivityLeases = new Map<number, ClientVoiceActivityLease>();
 	private clientVoiceActivityOrdering = new Map<number, ClientVoiceActivityOrdering>();
 	private clientVoiceActivityLeaseTimers = new Map<number, ReturnType<typeof setTimeout>>();
+	private clientVoiceStateSeqs = new Map<number, number>();
 	private mediaLiveness = new Map<number, TMediaLivenessState>();
 	private mediaLivenessTimer?: ReturnType<typeof setInterval>;
 	private mediaLivenessCheckInFlight = false;
@@ -445,6 +446,7 @@ class VoiceRuntime {
 
 		this.cleanupUserResources(userId);
 		this.clearClientVoiceActivity(userId);
+		this.clientVoiceStateSeqs.delete(userId);
 		this.setUserSpeaking(userId, false);
 	};
 
@@ -500,6 +502,34 @@ class VoiceRuntime {
 				delete this.consumers[consumerId];
 			}
 		});
+	};
+
+	// Applies a voice-state update reported by the user's own client. Route
+	// handlers await permission checks before applying, so two rapid updates can
+	// finish those awaits out of order; the client-provided seq lets the runtime
+	// drop the stale write instead of letting it overwrite the newer intent.
+	// Updates without a seq (older clients) apply unconditionally.
+	public applyClientVoiceStateUpdate = (
+		userId: number,
+		newState: Partial<TChannelState['users'][0]['state']>,
+		seq?: number,
+	): boolean => {
+		if (!this.getUser(userId)) {
+			return false;
+		}
+
+		if (seq !== undefined) {
+			const lastAppliedSeq = this.clientVoiceStateSeqs.get(userId);
+
+			if (lastAppliedSeq !== undefined && seq <= lastAppliedSeq) {
+				return false;
+			}
+
+			this.clientVoiceStateSeqs.set(userId, seq);
+		}
+
+		this.updateUserState(userId, newState);
+		return true;
 	};
 
 	public updateUserState = (userId: number, newState: Partial<TChannelState['users'][0]['state']>) => {
@@ -1816,6 +1846,7 @@ class VoiceRuntime {
 		this.observerSpeakingUserIds.clear();
 		this.clientVoiceActivityLeases.clear();
 		this.clientVoiceActivityOrdering.clear();
+		this.clientVoiceStateSeqs.clear();
 
 		for (const userId of this.speakingUserIds) {
 			pubsub.publishForChannel(this.id, ServerEvents.VOICE_ACTIVITY_UPDATE, {

@@ -30,6 +30,7 @@ import { SoundType } from '@/features/server/types';
 import {
 	clearOwnVoiceSessionAfterReconnectFailure,
 	leaveVoiceSessionAfterRecoveryFailure,
+	sendOwnVoiceStateUpdate,
 	updateOwnVoiceState,
 } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
@@ -1628,7 +1629,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 					void (async () => {
 						try {
-							await getTRPCClient().voice.updateState.mutate({
+							await sendOwnVoiceStateUpdate({
 								webcamEnabled: false,
 							});
 						} catch (error) {
@@ -3461,7 +3462,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				throw new VoiceSessionExecutionSupersededError();
 			}
 
-			await getTRPCClient().voice.updateState.mutate(state, { signal: options.signal });
+			await sendOwnVoiceStateUpdate(state, { signal: options.signal });
 			if (options.isCurrent && !options.isCurrent()) {
 				throw new VoiceSessionExecutionSupersededError();
 			}

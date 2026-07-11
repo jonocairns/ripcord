@@ -186,4 +186,43 @@ describe('VoiceRuntime in-session transport rebuild', () => {
 
 		expect(second.consumer.closed).toBe(true);
 	});
+
+	test('drops a client voice-state update whose seq is older than the last applied one', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		expect(runtime.applyClientVoiceStateUpdate(1, { micMuted: true }, 2)).toBe(true);
+		expect(runtime.applyClientVoiceStateUpdate(1, { micMuted: false }, 1)).toBe(false);
+
+		expect(runtime.getUserState(1)?.micMuted).toBe(true);
+	});
+
+	test('applies un-sequenced client voice-state updates unconditionally', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		expect(runtime.applyClientVoiceStateUpdate(1, { micMuted: true }, 3)).toBe(true);
+		expect(runtime.applyClientVoiceStateUpdate(1, { micMuted: false })).toBe(true);
+
+		expect(runtime.getUserState(1)?.micMuted).toBe(false);
+	});
+
+	test('resets client voice-state seq tracking when the user leaves the channel', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		expect(runtime.applyClientVoiceStateUpdate(1, { micMuted: true }, 5)).toBe(true);
+
+		runtime.removeUser(1);
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		expect(runtime.applyClientVoiceStateUpdate(1, { micMuted: true }, 1)).toBe(true);
+		expect(runtime.getUserState(1)?.micMuted).toBe(true);
+	});
+
+	test('rejects client voice-state updates for users not in the channel', async () => {
+		const runtime = await makeRuntime();
+
+		expect(runtime.applyClientVoiceStateUpdate(1, { micMuted: true }, 1)).toBe(false);
+	});
 });

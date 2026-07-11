@@ -11,6 +11,7 @@ let addUserToVoiceChannel: typeof import('../actions').addUserToVoiceChannel;
 let updateVoiceUserState: typeof import('../actions').updateVoiceUserState;
 let clearOwnVoiceSessionAfterReconnectFailure: typeof import('../actions').clearOwnVoiceSessionAfterReconnectFailure;
 let leaveVoiceSessionAfterRecoveryFailure: typeof import('../actions').leaveVoiceSessionAfterRecoveryFailure;
+let sendOwnVoiceStateUpdate: typeof import('../actions').sendOwnVoiceStateUpdate;
 let flushVoiceForDesktopQuit: typeof import('../actions').flushVoiceForDesktopQuit;
 let leaveVoice: typeof import('../actions').leaveVoice;
 let joinVoice: typeof import('../actions').joinVoice;
@@ -62,6 +63,10 @@ const leaveMutate = mock(async () => {
 	if (leaveShouldFail) {
 		throw new Error('leave failed');
 	}
+});
+let waitBeforeUpdateStateResolve: Promise<void> | undefined;
+const updateStateMutate = mock(async (_input?: unknown) => {
+	await waitBeforeUpdateStateResolve;
 });
 
 type TPinnedCardState = NonNullable<ReturnType<typeof useServerStore.getState>['pinnedCard']>;
@@ -149,6 +154,9 @@ describe('voice actions', () => {
 					leave: {
 						mutate: leaveMutate,
 					},
+					updateState: {
+						mutate: updateStateMutate,
+					},
 				},
 			}),
 		}));
@@ -160,6 +168,7 @@ describe('voice actions', () => {
 			addUserToVoiceChannel,
 			clearOwnVoiceSessionAfterReconnectFailure,
 			leaveVoiceSessionAfterRecoveryFailure,
+			sendOwnVoiceStateUpdate,
 			removeUserFromVoiceChannel,
 			handleStreamWatcherActivity,
 			handleVoiceSessionReplaced,
@@ -178,6 +187,8 @@ describe('voice actions', () => {
 		runVoiceProviderCleanup.mockClear();
 		joinMutate.mockClear();
 		leaveMutate.mockClear();
+		updateStateMutate.mockClear();
+		waitBeforeUpdateStateResolve = undefined;
 		resetVoiceSwitchStateForTests();
 		joinShouldFail = false;
 		leaveShouldFail = false;
@@ -443,6 +454,28 @@ describe('voice actions', () => {
 
 		expect(leaveMutate).toHaveBeenCalledTimes(1);
 		expect((await joinResult).kind).toBe('retryable-failure');
+	});
+
+	it('serializes own voice-state updates and stamps a monotonically increasing seq', async () => {
+		let resolveFirstUpdate: (() => void) | undefined;
+		waitBeforeUpdateStateResolve = new Promise<void>((resolve) => {
+			resolveFirstUpdate = resolve;
+		});
+
+		const firstUpdate = sendOwnVoiceStateUpdate({ micMuted: true });
+		const secondUpdate = sendOwnVoiceStateUpdate({ micMuted: false });
+		await Promise.resolve();
+
+		// The second update must wait for the first to settle.
+		expect(updateStateMutate).toHaveBeenCalledTimes(1);
+
+		resolveFirstUpdate?.();
+		await firstUpdate;
+		await secondUpdate;
+
+		expect(updateStateMutate).toHaveBeenCalledTimes(2);
+		expect(updateStateMutate.mock.calls[0]?.[0]).toEqual({ micMuted: true, seq: 1 });
+		expect(updateStateMutate.mock.calls[1]?.[0]).toEqual({ micMuted: false, seq: 2 });
 	});
 
 	it('tracks screen share watchers by watcher id so duplicate events do not drift the badge count', () => {

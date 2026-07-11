@@ -50,6 +50,32 @@ const enqueueVoiceSessionMutation = <Result>(mutation: () => Promise<Result>): P
 	return result;
 };
 
+type TOwnVoiceStateUpdate = Partial<
+	Pick<TVoiceUserState, 'micMuted' | 'soundMuted' | 'webcamEnabled' | 'sharingScreen'>
+>;
+
+let ownVoiceStateUpdateQueue: Promise<void> = Promise.resolve();
+let ownVoiceStateUpdateSeq = 0;
+
+// voice.updateState applies last-write-wins on the server after async
+// permission checks, so two rapid updates can land out of order. Stamping a
+// monotonic seq lets the server drop the stale write, and chaining the sends
+// keeps ordering even against servers that predate the seq field.
+export const sendOwnVoiceStateUpdate = (
+	state: TOwnVoiceStateUpdate,
+	options: { signal?: AbortSignal } = {},
+): Promise<void> => {
+	const seq = (ownVoiceStateUpdateSeq += 1);
+	const result = ownVoiceStateUpdateQueue.then(() =>
+		getTRPCClient().voice.updateState.mutate({ ...state, seq }, { signal: options.signal }),
+	);
+	ownVoiceStateUpdateQueue = result.then(
+		() => undefined,
+		() => undefined,
+	);
+	return result;
+};
+
 const resetVoiceSwitchState = (): void => {
 	pendingVoiceSwitchFromChannelIds.clear();
 	completedVoiceSwitchFromChannelIds.clear();
@@ -61,6 +87,8 @@ export const __resetVoiceSwitchStateForTests = (): void => {
 	pendingJoinAbortControllers.clear();
 	voiceSessionMutationQueue = Promise.resolve();
 	joinVoiceGeneration = 0;
+	ownVoiceStateUpdateQueue = Promise.resolve();
+	ownVoiceStateUpdateSeq = 0;
 };
 
 const clearOwnVoiceChannelState = (): boolean => {
