@@ -20,9 +20,29 @@ const playSound = mock(() => {});
 const runVoiceProviderCleanup = mock(() => {});
 let leaveShouldFail = false;
 let joinShouldFail = false;
+let joinHangsUntilAborted = false;
 let beforeJoinResolve: (() => void) | undefined;
 let waitBeforeLeaveResolve: Promise<void> | undefined;
-const joinMutate = mock(async () => {
+const joinMutate = mock(async (_input?: unknown, opts?: { signal?: AbortSignal }) => {
+	if (joinHangsUntilAborted) {
+		await new Promise<never>((_resolve, reject) => {
+			const signal = opts?.signal;
+
+			if (!signal) {
+				return;
+			}
+
+			if (signal.aborted) {
+				reject(new Error('join aborted'));
+				return;
+			}
+
+			signal.addEventListener('abort', () => {
+				reject(new Error('join aborted'));
+			});
+		});
+	}
+
 	if (joinShouldFail) {
 		throw new Error('join failed');
 	}
@@ -161,6 +181,7 @@ describe('voice actions', () => {
 		resetVoiceSwitchStateForTests();
 		joinShouldFail = false;
 		leaveShouldFail = false;
+		joinHangsUntilAborted = false;
 		beforeJoinResolve = undefined;
 		waitBeforeLeaveResolve = undefined;
 	});
@@ -406,6 +427,22 @@ describe('voice actions', () => {
 		expect(useVoiceReconnectStore.getState().reconnectingSince).toBeUndefined();
 		expect(useVoiceReconnectStore.getState().pendingVoiceReconnect).toBeUndefined();
 		expect((await joinResult).kind).toBe('joined');
+	});
+
+	it('aborts an in-flight join so a leave is not stuck behind it', async () => {
+		setJoinedVoiceChannelState({ ownUserId: 42 });
+		joinHangsUntilAborted = true;
+
+		const joinResult = joinVoice(8, { silent: true });
+		await Promise.resolve();
+		expect(joinMutate).toHaveBeenCalledTimes(1);
+
+		// Without the abort this would deadlock: the hung join never resolves
+		// and the queued leave never runs.
+		await leaveVoice();
+
+		expect(leaveMutate).toHaveBeenCalledTimes(1);
+		expect((await joinResult).kind).toBe('retryable-failure');
 	});
 
 	it('tracks screen share watchers by watcher id so duplicate events do not drift the badge count', () => {

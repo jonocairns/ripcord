@@ -356,7 +356,7 @@ describe('voice reconnect coordinator', () => {
 		it('resets the auth gate when recovery is cleared', () => {
 			markVoiceReconnectSessionAuthenticated();
 
-			clearVoiceReconnectRecovery('voice-join-succeeded');
+			clearVoiceReconnectRecovery('user-started-voice-join');
 
 			expect(useVoiceReconnectStore.getState().reconnectAuthenticated).toBe(false);
 		});
