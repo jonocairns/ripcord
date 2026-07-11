@@ -350,6 +350,10 @@ const joinVoiceInternal = async (
 				state: { micMuted, soundMuted },
 			});
 		if (generation !== joinVoiceGeneration) {
+			// The server still committed this join even though a newer local join
+			// superseded it. Preserve the intermediate channel so the replacement
+			// event emitted by the newer join cannot clear that newer session.
+			completedVoiceSwitchFromChannelIds.add(channelId);
 			return { kind: 'retryable-failure' };
 		}
 

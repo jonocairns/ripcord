@@ -346,18 +346,21 @@ describe('voice actions', () => {
 		expect(runVoiceProviderCleanup).not.toHaveBeenCalled();
 	});
 
-	it('serializes concurrent joins and only commits the latest requested channel', async () => {
+	it('serializes concurrent joins and ignores replacement events for superseded successful joins', async () => {
 		setJoinedVoiceChannelState({ ownUserId: 42 });
 
 		const firstSwitch = joinVoice(8, { silent: true });
 		const secondSwitch = joinVoice(9, { silent: true });
 		const [firstResult, secondResult] = await Promise.all([firstSwitch, secondSwitch]);
+		handleVoiceSessionReplaced({ channelId: 7 });
+		handleVoiceSessionReplaced({ channelId: 8 });
 
 		expect(firstResult.kind).toBe('retryable-failure');
 		expect(secondResult.kind).toBe('joined');
 		expect(joinMutate).toHaveBeenCalledTimes(2);
 		expect(useServerStore.getState().currentVoiceChannelId).toBe(9);
 		expect(playSound).toHaveBeenCalledTimes(1);
+		expect(runVoiceProviderCleanup).not.toHaveBeenCalled();
 	});
 
 	it('tracks screen share watchers by watcher id so duplicate events do not drift the badge count', () => {
