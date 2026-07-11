@@ -98,6 +98,7 @@ const voiceReconnectLabRouter = t.router({
 			reconnecting: true,
 		});
 		ctx.currentVoiceChannelId = undefined;
+		ctx.currentVoiceSessionIncarnation = undefined;
 		ctx.setWsVoiceChannelId(undefined);
 
 		return {

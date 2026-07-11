@@ -203,6 +203,7 @@ const restoreOrJoinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 					// this only after bootstrap commits; otherwise a failed restore of a
 					// surviving seat cancels its only cleanup path and leaves a ghost user.
 					ctx.currentVoiceChannelId = channel.id;
+					ctx.currentVoiceSessionIncarnation = runtime.getVoiceSessionIncarnation(ctx.user.id);
 					ctx.setWsVoiceChannelId(channel.id);
 				} catch (error) {
 					if (seat.claim && runtime.rollbackProvisionalRestoreSeat(ctx.user.id, seat.claim)) {

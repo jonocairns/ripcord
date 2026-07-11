@@ -78,6 +78,7 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
 
 			if (pendingVoiceRuntime?.getUser(ctx.user.id)) {
 				ctx.currentVoiceChannelId = pendingVoiceRuntime.id;
+				ctx.currentVoiceSessionIncarnation = pendingVoiceRuntime.getVoiceSessionIncarnation(ctx.user.id);
 				ctx.setWsVoiceChannelId(pendingVoiceRuntime.id);
 			}
 		}

@@ -306,6 +306,7 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 		userId: decodedUser.id,
 		handshakeHash: '',
 		currentVoiceChannelId: undefined,
+		currentVoiceSessionIncarnation: undefined,
 		getPendingVoiceReconnectChannelId: () => getPendingVoiceReconnectChannelId(getClientInstanceId(), decodedUser.id),
 		// The tracked WS field is populated asynchronously (createContext / first
 		// message), so during a reconnect race getOwnWs()?.clientInstanceId can be

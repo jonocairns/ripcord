@@ -17,6 +17,11 @@ export type Context = {
 	userId: number;
 	token: string;
 	currentVoiceChannelId: number | undefined;
+	// Incarnation token of the voice seat this connection established (see
+	// VoiceRuntime.addUser). Never leaves the server: leave and join-rollback
+	// compare it against the seat's current token so a stale operation cannot
+	// remove a replacement session.
+	currentVoiceSessionIncarnation: symbol | undefined;
 	getPendingVoiceReconnectChannelId: () => number | undefined;
 	getClientInstanceId: () => string | undefined;
 	hasPermission: (targetPermission: Permission | Permission[]) => Promise<boolean>;

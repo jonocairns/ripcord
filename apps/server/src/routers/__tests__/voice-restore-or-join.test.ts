@@ -905,3 +905,119 @@ describe('voice.restoreOrJoin', () => {
 		}
 	});
 });
+
+describe('voice session incarnation ownership', () => {
+	test('a delayed leave from a replaced session does not remove the replacement', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+
+		const mockedToken = await getMockedToken(1);
+		const ctxA = await createMockContext({
+			customToken: mockedToken,
+		});
+		const ctxB = await createMockContext({
+			customToken: mockedToken,
+		});
+		const sessionA = {
+			clientInstanceId: 'incarnation-a',
+			currentVoiceChannelId: undefined as number | undefined,
+		};
+		const sessionB = {
+			clientInstanceId: 'incarnation-b',
+			currentVoiceChannelId: undefined as number | undefined,
+		};
+		const trackedSessions = [sessionA, sessionB];
+
+		attachTrackedSession(ctxA, sessionA, trackedSessions);
+		attachTrackedSession(ctxB, sessionB, trackedSessions);
+
+		const leaveEvents: number[] = [];
+		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+			next: (event) => {
+				leaveEvents.push(event.channelId);
+			},
+		});
+
+		try {
+			const callerA = appRouter.createCaller(ctxA);
+			const callerB = appRouter.createCaller(ctxB);
+			const handshakeA = await callerA.others.handshake();
+			const handshakeB = await callerB.others.handshake();
+
+			await callerA.others.joinServer({
+				handshakeHash: handshakeA.handshakeHash,
+			});
+			await callerB.others.joinServer({
+				handshakeHash: handshakeB.handshakeHash,
+			});
+
+			await callerA.voice.join({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: false,
+					soundMuted: false,
+				},
+			});
+
+			// B's join replaces A's session in the same channel: one eviction leave.
+			await callerB.voice.join({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: true,
+					soundMuted: false,
+				},
+			});
+			expect(leaveEvents).toEqual([PRIMARY_VOICE_CHANNEL_ID]);
+
+			// A's delayed leave still references its replaced session, so it must
+			// not remove B's seat and must not publish another leave.
+			await callerA.voice.leave();
+
+			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeDefined();
+			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUserState(1)?.micMuted).toBe(true);
+			expect(leaveEvents).toEqual([PRIMARY_VOICE_CHANNEL_ID]);
+			expect(ctxA.currentVoiceChannelId).toBeUndefined();
+			expect(ctxB.currentVoiceChannelId).toBe(PRIMARY_VOICE_CHANNEL_ID);
+
+			// The owning session's leave still works.
+			await callerB.voice.leave();
+
+			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeUndefined();
+			expect(leaveEvents).toEqual([PRIMARY_VOICE_CHANNEL_ID, PRIMARY_VOICE_CHANNEL_ID]);
+			expect(ctxB.currentVoiceChannelId).toBeUndefined();
+		} finally {
+			leaveSub.unsubscribe();
+		}
+	});
+
+	test('a leave whose seat is already gone is a graceful no-op', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+
+		const { caller } = await initTest(1);
+
+		await caller.voice.join({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+		});
+
+		// Simulate the seat disappearing out from under this connection (e.g. a
+		// disconnect-grace expiry on another socket).
+		VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.removeUser(1);
+
+		const leaveEvents: number[] = [];
+		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+			next: (event) => {
+				leaveEvents.push(event.channelId);
+			},
+		});
+
+		try {
+			await expect(caller.voice.leave()).resolves.toBeUndefined();
+			expect(leaveEvents).toEqual([]);
+		} finally {
+			leaveSub.unsubscribe();
+		}
+	});
+});

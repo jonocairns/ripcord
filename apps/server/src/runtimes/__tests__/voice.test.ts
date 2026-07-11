@@ -225,4 +225,25 @@ describe('VoiceRuntime in-session transport rebuild', () => {
 
 		expect(runtime.applyClientVoiceStateUpdate(1, { micMuted: true }, 1)).toBe(false);
 	});
+
+	test('assigns a fresh session incarnation per seat and clears it on removal', async () => {
+		const runtime = await makeRuntime();
+
+		expect(runtime.getVoiceSessionIncarnation(1)).toBeUndefined();
+
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const firstIncarnation = runtime.getVoiceSessionIncarnation(1);
+		expect(firstIncarnation).toBeDefined();
+
+		// addUser on an existing seat is a no-op and must not rotate the token.
+		runtime.addUser(1, { micMuted: true, soundMuted: true });
+		expect(runtime.getVoiceSessionIncarnation(1)).toBe(firstIncarnation!);
+
+		runtime.removeUser(1);
+		expect(runtime.getVoiceSessionIncarnation(1)).toBeUndefined();
+
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		expect(runtime.getVoiceSessionIncarnation(1)).toBeDefined();
+		expect(runtime.getVoiceSessionIncarnation(1)).not.toBe(firstIncarnation!);
+	});
 });

@@ -227,6 +227,7 @@ class VoiceRuntime {
 	private clientVoiceActivityOrdering = new Map<number, ClientVoiceActivityOrdering>();
 	private clientVoiceActivityLeaseTimers = new Map<number, ReturnType<typeof setTimeout>>();
 	private clientVoiceStateSeqs = new Map<number, number>();
+	private voiceSessionIncarnations = new Map<number, symbol>();
 	private mediaLiveness = new Map<number, TMediaLivenessState>();
 	private mediaLivenessTimer?: ReturnType<typeof setInterval>;
 	private mediaLivenessCheckInFlight = false;
@@ -366,6 +367,12 @@ class VoiceRuntime {
 	public addUser = (userId: number, state: Pick<TVoiceUserState, 'micMuted' | 'soundMuted'>) => {
 		if (this.getUser(userId)) return;
 
+		// Every seat carries an unforgeable incarnation token. Routes capture it
+		// when they establish a session and check it before destructive actions
+		// (leave, join rollback), so an operation issued against one incarnation
+		// can never remove the seat of its successor.
+		this.voiceSessionIncarnations.set(userId, Symbol('voice-session-incarnation'));
+
 		this.state.users.push({
 			userId,
 			state: {
@@ -373,6 +380,10 @@ class VoiceRuntime {
 				...state,
 			},
 		});
+	};
+
+	public getVoiceSessionIncarnation = (userId: number): symbol | undefined => {
+		return this.voiceSessionIncarnations.get(userId);
 	};
 
 	public beginProvisionalRestoreSeat = (userId: number): symbol => {
@@ -447,6 +458,7 @@ class VoiceRuntime {
 		this.cleanupUserResources(userId);
 		this.clearClientVoiceActivity(userId);
 		this.clientVoiceStateSeqs.delete(userId);
+		this.voiceSessionIncarnations.delete(userId);
 		this.setUserSpeaking(userId, false);
 	};
 
@@ -1847,6 +1859,7 @@ class VoiceRuntime {
 		this.clientVoiceActivityLeases.clear();
 		this.clientVoiceActivityOrdering.clear();
 		this.clientVoiceStateSeqs.clear();
+		this.voiceSessionIncarnations.clear();
 
 		for (const userId of this.speakingUserIds) {
 			pubsub.publishForChannel(this.id, ServerEvents.VOICE_ACTIVITY_UPDATE, {
