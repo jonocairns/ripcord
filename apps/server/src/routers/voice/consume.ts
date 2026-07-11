@@ -12,6 +12,7 @@ const consumeRoute = protectedProcedure
 			remoteId: z.number(),
 			rtpCapabilities: rtpCapabilitiesSchema,
 			paused: z.boolean().optional().default(false),
+			transportId: z.string().optional(),
 		}),
 	)
 	.mutation(async ({ input, ctx }) => {
@@ -32,6 +33,10 @@ const consumeRoute = protectedProcedure
 			code: 'NOT_FOUND',
 			message: 'Consumer transport not found',
 		});
+		invariant(input.transportId === undefined || userConsumerTransport.id === input.transportId, {
+			code: 'BAD_REQUEST',
+			message: 'Consumer transport id mismatch',
+		});
 
 		const router = runtime.getRouter();
 		const routerCanConsume = router.canConsume({
@@ -49,6 +54,13 @@ const consumeRoute = protectedProcedure
 			rtpCapabilities: input.rtpCapabilities,
 			paused: input.paused,
 		});
+		if (runtime.getConsumerTransport(ctx.user.id) !== userConsumerTransport) {
+			consumer.close();
+			invariant(false, {
+				code: 'BAD_REQUEST',
+				message: 'Consumer transport replaced during consume',
+			});
+		}
 
 		runtime.addConsumer(ctx.user.id, input.remoteId, input.kind, consumer);
 

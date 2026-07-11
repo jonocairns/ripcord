@@ -1,5 +1,15 @@
 import type { TExternalStream } from '@sharkord/shared';
-import { ExternalLink, EyeOff, Headphones, Maximize2, Minimize2, Router, Video, Volume2 } from 'lucide-react';
+import {
+	ExternalLink,
+	EyeOff,
+	Headphones,
+	Maximize2,
+	Minimize2,
+	RefreshCw,
+	Router,
+	Video,
+	Volume2,
+} from 'lucide-react';
 import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -32,6 +42,8 @@ type TExternalStreamControlsProps = {
 	onVolumeChange: (volume: number) => void;
 	onMuteToggle: () => void;
 	onStopWatching?: () => void;
+	onRetryVideo?: () => void;
+	onRetryAudio?: () => void;
 	streamStats?: StreamStats | null;
 	controlsVisible?: boolean;
 };
@@ -52,12 +64,16 @@ const ExternalStreamControls = memo(
 		onVolumeChange,
 		onMuteToggle,
 		onStopWatching,
+		onRetryVideo,
+		onRetryAudio,
 		streamStats,
 		controlsVisible,
 	}: TExternalStreamControlsProps) => {
 		return (
 			<CardControls visible={controlsVisible}>
 				{onStopWatching && <ControlButton icon={EyeOff} onClick={onStopWatching} title="Stop Watching" />}
+				{onRetryVideo && <ControlButton icon={RefreshCw} onClick={onRetryVideo} title="Retry Video" />}
+				{onRetryAudio && <ControlButton icon={RefreshCw} onClick={onRetryAudio} title="Retry Audio" />}
 				{hasAudio && (
 					<StreamSettingsPopover
 						volume={volume}
@@ -98,6 +114,8 @@ type TExternalStreamCardProps = {
 	className?: string;
 	showPinControls: boolean;
 	onStopWatching?: () => void;
+	onRetryVideo?: () => void;
+	onRetryAudio?: () => void;
 };
 
 const POPOUT_CONTROLS_IDLE_HIDE_MS = 2500;
@@ -112,6 +130,8 @@ const ExternalStreamCard = memo(
 		className,
 		showPinControls = true,
 		onStopWatching,
+		onRetryVideo,
+		onRetryAudio,
 	}: TExternalStreamCardProps) => {
 		const [isFullscreen, setIsFullscreen] = useState(false);
 		const [isPoppedOut, setIsPoppedOut] = useState(false);
@@ -474,6 +494,8 @@ const ExternalStreamCard = memo(
 						onVolumeChange={handleVolumeChange}
 						onMuteToggle={handleMuteToggle}
 						onStopWatching={onStopWatching}
+						onRetryVideo={onRetryVideo}
+						onRetryAudio={onRetryAudio}
 						streamStats={streamStats}
 						controlsVisible={fullscreenControlsVisible}
 					/>

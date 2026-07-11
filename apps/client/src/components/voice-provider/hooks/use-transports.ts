@@ -166,9 +166,16 @@ const useTransports = ({
 					logVoice('Producer transport connected', { dtlsParameters });
 
 					try {
+						if (producerTransport.current !== transport || transport.closed) {
+							throw new Error('Producer transport connect superseded');
+						}
 						await trpc.voice.connectProducerTransport.mutate({
 							dtlsParameters,
+							transportId: transport.id,
 						});
+						if (producerTransport.current !== transport || transport.closed) {
+							throw new Error('Producer transport connect superseded');
+						}
 
 						callback();
 					} catch (error) {
@@ -197,8 +204,14 @@ const useTransports = ({
 
 						void (async () => {
 							try {
-								const { iceParameters } = await getTRPCClient().voice.restartProducerIce.mutate();
-								if (transport.connectionState !== 'connected' && !transport.closed) {
+								const { iceParameters } = await getTRPCClient().voice.restartProducerIce.mutate({
+									transportId: transport.id,
+								});
+								if (
+									producerTransport.current === transport &&
+									transport.connectionState !== 'connected' &&
+									!transport.closed
+								) {
 									await transport.restartIce({ iceParameters });
 									logVoice('ICE restart initiated for producer transport');
 								}
@@ -238,18 +251,21 @@ const useTransports = ({
 
 					const { kind } = appData as { kind: StreamKind };
 
-					if (!producerTransport.current) {
+					if (producerTransport.current !== transport || transport.closed) {
 						errback(new Error('Producer transport not available'));
 						return;
 					}
 
 					try {
 						const producerId = await trpc.voice.produce.mutate({
-							transportId: producerTransport.current.id,
+							transportId: transport.id,
 							kind,
 							rtpParameters,
 						});
 
+						if (producerTransport.current !== transport || transport.closed) {
+							throw new Error('Producer transport produce superseded');
+						}
 						callback({ id: producerId });
 					} catch (error) {
 						if (error instanceof TRPCClientError) {
@@ -299,9 +315,16 @@ const useTransports = ({
 					logVoice('Consumer transport connected', { dtlsParameters });
 
 					try {
+						if (consumerTransport.current !== transport || transport.closed) {
+							throw new Error('Consumer transport connect superseded');
+						}
 						await trpc.voice.connectConsumerTransport.mutate({
 							dtlsParameters,
+							transportId: transport.id,
 						});
+						if (consumerTransport.current !== transport || transport.closed) {
+							throw new Error('Consumer transport connect superseded');
+						}
 
 						callback();
 					} catch (error) {
@@ -352,8 +375,14 @@ const useTransports = ({
 
 						void (async () => {
 							try {
-								const { iceParameters } = await getTRPCClient().voice.restartConsumerIce.mutate();
-								if (transport.connectionState !== 'connected' && !transport.closed) {
+								const { iceParameters } = await getTRPCClient().voice.restartConsumerIce.mutate({
+									transportId: transport.id,
+								});
+								if (
+									consumerTransport.current === transport &&
+									transport.connectionState !== 'connected' &&
+									!transport.closed
+								) {
 									await transport.restartIce({ iceParameters });
 									logVoice('ICE restart initiated for consumer transport');
 								}
@@ -423,6 +452,7 @@ const useTransports = ({
 						remoteId,
 						rtpCapabilities,
 						paused: true,
+						transportId: transport.id,
 					}),
 				);
 				serverConsumerCleanupTarget = { remoteId, kind, consumerId };
@@ -548,6 +578,7 @@ const useTransports = ({
 						trpc.voice.resumeConsumer.mutate({
 							remoteId,
 							kind,
+							consumerId,
 						}),
 					);
 				} catch (error) {

@@ -186,6 +186,12 @@ type TExternalStreamInternal = {
 	producers: TExternalStreamProducers;
 };
 
+type TVoiceRestoreSeatClaim = {
+	claim?: symbol;
+	added: boolean;
+	previousState?: TVoiceUserState;
+};
+
 class VoiceRestoreAttemptSupersededError extends Error {
 	constructor() {
 		super('Voice restore attempt superseded');
@@ -372,6 +378,38 @@ class VoiceRuntime {
 		const claim = Symbol('voice-provisional-restore-seat');
 		this.provisionalRestoreSeatClaims.set(userId, claim);
 		return claim;
+	};
+
+	// Atomically resolves the seat shape for a restore attempt. A superseded
+	// provisional attempt can finish rollback between any two awaits in the
+	// router, so checking findRuntimeByUserId() and adopting its claim later is a
+	// TOCTOU race. This method contains no await: either the existing provisional
+	// claim is handed to the caller before its predecessor can roll it back, or a
+	// missing seat is recreated and claimed in the same turn.
+	public acquireRestoreSeat = (
+		userId: number,
+		state: Pick<TVoiceUserState, 'micMuted' | 'soundMuted'>,
+		inheritedClaim?: symbol,
+	): TVoiceRestoreSeatClaim => {
+		const existing = this.getUser(userId);
+
+		if (!existing) {
+			this.addUser(userId, state);
+
+			return {
+				added: true,
+				claim: this.beginProvisionalRestoreSeat(userId),
+			};
+		}
+
+		const previousState = { ...existing.state };
+		const claim =
+			inheritedClaim && this.provisionalRestoreSeatClaims.get(userId) === inheritedClaim
+				? inheritedClaim
+				: this.adoptProvisionalRestoreSeat(userId);
+		this.updateUserState(userId, state);
+
+		return { added: false, claim, previousState };
 	};
 
 	public adoptProvisionalRestoreSeat = (userId: number): symbol | undefined => {
@@ -1150,14 +1188,15 @@ class VoiceRuntime {
 		consumer.close();
 	};
 
-	public resumeConsumer = async (userId: number, remoteId: number, kind: StreamKind) => {
+	public resumeConsumer = async (userId: number, remoteId: number, kind: StreamKind, expectedConsumerId?: string) => {
 		const consumer = this.consumers[userId]?.[remoteId]?.[kind];
 
-		if (!consumer || consumer.closed) {
-			return;
+		if (!consumer || consumer.closed || (expectedConsumerId !== undefined && consumer.id !== expectedConsumerId)) {
+			return false;
 		}
 
 		await consumer.resume();
+		return true;
 	};
 
 	public createExternalStream = (options: {

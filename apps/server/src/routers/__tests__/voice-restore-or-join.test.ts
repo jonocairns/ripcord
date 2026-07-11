@@ -445,11 +445,13 @@ describe('voice.restoreOrJoin', () => {
 
 		try {
 			const { caller } = await initTest(1);
-			const staleRestore = caller.voice.restoreOrJoin({
-				channelId: PRIMARY_VOICE_CHANNEL_ID,
-				state: { micMuted: false, soundMuted: false },
-				reconnectAttemptId: 'attempt-fresh-stale',
-			});
+			const staleRestore = caller.voice
+				.restoreOrJoin({
+					channelId: PRIMARY_VOICE_CHANNEL_ID,
+					state: { micMuted: false, soundMuted: false },
+					reconnectAttemptId: 'attempt-fresh-stale',
+				})
+				.catch((error: unknown) => error);
 
 			await firstProducerEntered;
 
@@ -462,7 +464,7 @@ describe('voice.restoreOrJoin', () => {
 			releaseFirstProducer();
 
 			expect(currentRestore.channelUsers.some((user) => user.userId === 1)).toBe(true);
-			await expect(staleRestore).rejects.toThrow('Voice restore attempt superseded');
+			expect(await staleRestore).toEqual(expect.objectContaining({ message: 'Voice restore attempt superseded' }));
 			expect(runtime.getUser(1)).toBeDefined();
 			expect(runtime.getProducerTransport(1)).toBeDefined();
 			expect(runtime.getConsumerTransport(1)).toBeDefined();
@@ -762,7 +764,16 @@ describe('voice.restoreOrJoin', () => {
 	});
 
 	test('restores its own pending grace seat when the tracked socket has not populated its clientInstanceId yet', async () => {
-		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const originalCreateProducerTransport = runtime.createProducerTransport;
+		let releaseProducerTransport: () => void = () => {};
+		let markProducerTransportEntered: () => void = () => {};
+		const producerTransportEntered = new Promise<void>((resolve) => {
+			markProducerTransportEntered = resolve;
+		});
+		const producerTransportGate = new Promise<void>((resolve) => {
+			releaseProducerTransport = resolve;
+		});
 
 		const mockedToken = await getMockedToken(1);
 		const ctxA = await createMockContext({
@@ -822,8 +833,13 @@ describe('voice.restoreOrJoin', () => {
 				},
 			});
 			expect(getPendingVoiceReconnectChannelId(sessionA.clientInstanceId, 1)).toBe(PRIMARY_VOICE_CHANNEL_ID);
+			runtime.createProducerTransport = async (userId, isCurrent) => {
+				markProducerTransportEntered();
+				await producerTransportGate;
+				return originalCreateProducerTransport(userId, isCurrent);
+			};
 
-			const result = await callerB.voice.restoreOrJoin({
+			const restore = callerB.voice.restoreOrJoin({
 				channelId: PRIMARY_VOICE_CHANNEL_ID,
 				state: {
 					micMuted: false,
@@ -831,12 +847,23 @@ describe('voice.restoreOrJoin', () => {
 				},
 				reconnectAttemptId: 'attempt-pending-grace-restore',
 			});
+			await producerTransportEntered;
+
+			// Transport bootstrap has started, but the replacement socket must not
+			// clear the only disconnect cleanup path until bootstrap commits.
+			expect(sessionB.currentVoiceChannelId).toBeUndefined();
+			expect(getPendingVoiceReconnectChannelId(sessionA.clientInstanceId, 1)).toBe(PRIMARY_VOICE_CHANNEL_ID);
+
+			releaseProducerTransport();
+			const result = await restore;
 
 			expect(result.channelUsers.some((entry) => entry.userId === 1)).toBe(true);
 			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeDefined();
 			expect(getPendingVoiceReconnectChannelId(sessionA.clientInstanceId, 1)).toBeUndefined();
 			expect(finalized).toBe(false);
 		} finally {
+			releaseProducerTransport();
+			runtime.createProducerTransport = originalCreateProducerTransport;
 			openSessions.length = 0;
 		}
 	});

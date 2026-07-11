@@ -275,6 +275,8 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 			const hasConsumedExternalMedia =
 				!!activeExternalStreams[stream.streamId]?.audioStream || !!activeExternalStreams[stream.streamId]?.videoStream;
 			const showPendingExternalCard = !hasConsumedExternalMedia && (hasPendingExternalVideo || hasPendingExternalAudio);
+			const failedExternalVideo = externalVideoSlot?.desired === true && externalVideoSlot.status === 'failed';
+			const failedExternalAudio = externalAudioSlot?.desired === true && externalAudioSlot.status === 'failed';
 
 			cards.push(
 				showPendingExternalCard ? (
@@ -327,12 +329,18 @@ const VoiceChannel = memo(({ channelId }: TChannelProps) => {
 						}
 						onUnpin={unpinCard}
 						showPinControls
+						onRetryVideo={
+							failedExternalVideo ? () => retryRemoteMedia(stream.streamId, StreamKind.EXTERNAL_VIDEO) : undefined
+						}
+						onRetryAudio={
+							failedExternalAudio ? () => retryRemoteMedia(stream.streamId, StreamKind.EXTERNAL_AUDIO) : undefined
+						}
 						onStopWatching={() => {
-							if (activeExternalStreams[stream.streamId]?.videoStream) {
+							if (activeExternalStreams[stream.streamId]?.videoStream || externalVideoSlot?.desired) {
 								stopWatchingStream(stream.streamId, StreamKind.EXTERNAL_VIDEO);
 							}
 
-							if (activeExternalStreams[stream.streamId]?.audioStream) {
+							if (activeExternalStreams[stream.streamId]?.audioStream || externalAudioSlot?.desired) {
 								stopWatchingStream(stream.streamId, StreamKind.EXTERNAL_AUDIO);
 							}
 						}}

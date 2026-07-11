@@ -9,6 +9,7 @@ const connectProducerTransportRoute = protectedProcedure
 	.input(
 		z.object({
 			dtlsParameters: dtlsParametersSchema,
+			transportId: z.string().optional(),
 		}),
 	)
 	.mutation(async ({ input, ctx }) => {
@@ -21,6 +22,10 @@ const connectProducerTransportRoute = protectedProcedure
 		invariant(producerTransport, {
 			code: 'NOT_FOUND',
 			message: 'Producer transport not found',
+		});
+		invariant(input.transportId === undefined || producerTransport.id === input.transportId, {
+			code: 'BAD_REQUEST',
+			message: 'Producer transport id mismatch',
 		});
 
 		await producerTransport.connect({ dtlsParameters: input.dtlsParameters });

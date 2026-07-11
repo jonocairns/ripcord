@@ -36,6 +36,8 @@ type TLeaveVoiceOptions = {
 
 const pendingVoiceSwitchFromChannelIds: Set<number> = new Set();
 const completedVoiceSwitchFromChannelIds: Set<number> = new Set();
+let joinVoiceQueue: Promise<void> = Promise.resolve();
+let joinVoiceGeneration = 0;
 
 const resetVoiceSwitchState = (): void => {
 	pendingVoiceSwitchFromChannelIds.clear();
@@ -45,6 +47,8 @@ const resetVoiceSwitchState = (): void => {
 /** @knipignore Test-only reset for module-scoped voice switch bookkeeping. */
 export const __resetVoiceSwitchStateForTests = (): void => {
 	resetVoiceSwitchState();
+	joinVoiceQueue = Promise.resolve();
+	joinVoiceGeneration = 0;
 };
 
 const clearOwnVoiceChannelState = (): boolean => {
@@ -310,8 +314,9 @@ export type TJoinVoiceResult =
 			kind: 'non-retriable-failure';
 	  };
 
-export const joinVoice = async (
+const joinVoiceInternal = async (
 	channelId: number,
+	generation: number,
 	opts: {
 		silent?: boolean;
 	} = {},
@@ -344,6 +349,9 @@ export const joinVoice = async (
 				channelId,
 				state: { micMuted, soundMuted },
 			});
+		if (generation !== joinVoiceGeneration) {
+			return { kind: 'retryable-failure' };
+		}
 
 		setCurrentVoiceChannelId(channelId);
 		if (currentChannelId) {
@@ -389,6 +397,21 @@ export const joinVoice = async (
 			kind: isNonRetriableTrpcError(error) ? 'non-retriable-failure' : 'retryable-failure',
 		};
 	}
+};
+
+export const joinVoice = (
+	channelId: number,
+	opts: {
+		silent?: boolean;
+	} = {},
+): Promise<TJoinVoiceResult> => {
+	const generation = (joinVoiceGeneration += 1);
+	const result = joinVoiceQueue.then(() => joinVoiceInternal(channelId, generation, opts));
+	joinVoiceQueue = result.then(
+		() => undefined,
+		() => undefined,
+	);
+	return result;
 };
 
 const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<boolean> => {

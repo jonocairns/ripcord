@@ -9,6 +9,7 @@ const connectConsumerTransportRoute = protectedProcedure
 	.input(
 		z.object({
 			dtlsParameters: dtlsParametersSchema,
+			transportId: z.string().optional(),
 		}),
 	)
 	.mutation(async ({ input, ctx }) => {
@@ -21,6 +22,10 @@ const connectConsumerTransportRoute = protectedProcedure
 		invariant(consumerTransport, {
 			code: 'NOT_FOUND',
 			message: 'Consumer transport not found',
+		});
+		invariant(input.transportId === undefined || consumerTransport.id === input.transportId, {
+			code: 'BAD_REQUEST',
+			message: 'Consumer transport id mismatch',
 		});
 
 		await consumerTransport.connect({ dtlsParameters: input.dtlsParameters });
