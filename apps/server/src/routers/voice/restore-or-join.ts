@@ -238,8 +238,12 @@ const restoreOrJoinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 			// If this attempt failed before acquireRestoreSeat took responsibility for
 			// the inherited lease, it still owns cleanup. After commit or a later
 			// adoption this is intentionally a no-op.
-			if (inheritedSeatClaim) {
-				inheritedSeatRuntime?.rollbackProvisionalRestoreSeat(ctx.user.id, inheritedSeatClaim);
+			if (inheritedSeatClaim && inheritedSeatRuntime?.rollbackProvisionalRestoreSeat(ctx.user.id, inheritedSeatClaim)) {
+				ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+					channelId: input.channelId,
+					userId: ctx.user.id,
+					reconnecting: true,
+				});
 			}
 
 			throw error;

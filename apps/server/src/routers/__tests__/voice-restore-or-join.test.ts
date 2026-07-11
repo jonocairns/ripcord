@@ -410,6 +410,43 @@ describe('voice.restoreOrJoin', () => {
 		expect(runtime.getConsumerTransport(1)).toBeUndefined();
 	});
 
+	test('publishes leave when an inherited provisional seat is rolled back before bootstrap', async () => {
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const { caller } = await initTest(1);
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		runtime.beginProvisionalRestoreSeat(1);
+
+		const leaveEvents: Array<{ channelId: number; userId: number; reconnecting?: boolean }> = [];
+		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+			next: (event) => leaveEvents.push(event),
+		});
+
+		try {
+			await caller.voice.reconnectLab.setNextRestoreBehavior({
+				failMessage: 'VOICE_RECONNECT_LAB_FORCED_FAILURE',
+			});
+
+			await expect(
+				caller.voice.restoreOrJoin({
+					channelId: PRIMARY_VOICE_CHANNEL_ID,
+					state: { micMuted: false, soundMuted: false },
+					reconnectAttemptId: 'attempt-inherited-pre-bootstrap-failure',
+				}),
+			).rejects.toThrow('VOICE_RECONNECT_LAB_FORCED_FAILURE');
+
+			expect(runtime.getUser(1)).toBeUndefined();
+			expect(leaveEvents).toEqual([
+				{
+					channelId: PRIMARY_VOICE_CHANNEL_ID,
+					userId: 1,
+					reconnecting: true,
+				},
+			]);
+		} finally {
+			leaveSub.unsubscribe();
+		}
+	});
+
 	test('does not let a superseded fresh restore roll back the seat adopted by its successor', async () => {
 		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 		const originalCreateProducerTransport = runtime.createProducerTransport;
