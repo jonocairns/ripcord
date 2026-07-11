@@ -915,6 +915,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		closeConsumer,
 		cleanupTransports,
 		getActiveConsumerProducerId,
+		stopWatchingStream,
 	} = useTransports({
 		addExternalStreamTrack,
 		removeExternalStreamTrack,
@@ -1056,13 +1057,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			markRetryRequested(remoteId, kind, getExternalStreamTrackPresence());
 		},
 		[getExternalStreamTrackPresence, markRetryRequested],
-	);
-
-	const stopWatchingStream = useCallback(
-		(remoteId: number, kind: StreamKind) => {
-			markWatchStopped(remoteId, kind);
-		},
-		[markWatchStopped],
 	);
 
 	// Surface source labels and configured maxBitrate ceilings to the stats

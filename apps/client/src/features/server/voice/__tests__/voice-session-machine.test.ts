@@ -139,6 +139,35 @@ describe('voice session machine', () => {
 		expect(result.commands).toEqual([]);
 	});
 
+	it('ignores late join lifecycle events while ws reconnect owns recovery', () => {
+		// A manual join's init dispatched JoinRequested, then the socket dropped
+		// before the init settled: recovery now owns the session.
+		let state = createInitialVoiceSessionState();
+		[state] = dispatch(state, { type: 'JoinRequested', channelId: 5 });
+		[state] = dispatch(state, {
+			type: 'WsDropped',
+			pending: pending(),
+			now: 100,
+			online: true,
+			authenticated: true,
+		});
+		expect(state.phase.phase).toBe('reconnecting');
+
+		// The pre-drop init settling late must not overwrite the reconnect phase
+		// or clear the pending recovery.
+		const failed = reduceVoiceSession(state, { type: 'JoinFailed', reason: 'join-failed', channelId: 5 });
+		expect(failed.state).toBe(state);
+		expect(failed.commands).toEqual([]);
+
+		const succeeded = reduceVoiceSession(state, { type: 'JoinSucceeded', channelId: 5 });
+		expect(succeeded.state).toBe(state);
+		expect(succeeded.commands).toEqual([]);
+
+		const rerequested = reduceVoiceSession(state, { type: 'JoinRequested', channelId: 5 });
+		expect(rerequested.state).toBe(state);
+		expect(rerequested.commands).toEqual([]);
+	});
+
 	it('preempts in-session rebuild when the websocket drops', () => {
 		const [rebuildingState, rebuildGeneration] = startRebuildWithSnapshot();
 		const result = reduceVoiceSession(rebuildingState, {

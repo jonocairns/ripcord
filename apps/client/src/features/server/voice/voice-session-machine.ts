@@ -670,14 +670,31 @@ const reduceRestoreFailed = (
 
 const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent): TVoiceSessionReducerResult => {
 	switch (event.type) {
+		// Once recovery owns the session, join lifecycle events are stale echoes
+		// of an init that started before the drop. Letting them through would
+		// overwrite the reconnecting phase — JoinSucceeded/JoinFailed even clear
+		// the pending recovery — stranding the user instead of restoring. The
+		// restore path rebuilds transports from scratch, so dropping them is safe.
 		case 'JoinRequested':
+			if (state.phase.phase === 'reconnecting') {
+				return emptyResult(state);
+			}
+
 			return emptyResult({ ...state, phase: { phase: 'joining', channelId: event.channelId } });
 		case 'JoinSucceeded':
+			if (state.phase.phase === 'reconnecting') {
+				return emptyResult(state);
+			}
+
 			return emptyResult({
 				...clearReconnectFacadeRecovery(state),
 				phase: { phase: 'connected', channelId: event.channelId },
 			});
 		case 'JoinFailed':
+			if (state.phase.phase === 'reconnecting') {
+				return emptyResult(state);
+			}
+
 			return emptyResult({
 				...clearReconnectFacadeRecovery(state),
 				phase: { phase: 'failed', reason: event.reason, channelId: event.channelId },
