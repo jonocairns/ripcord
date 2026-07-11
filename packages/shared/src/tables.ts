@@ -1,33 +1,33 @@
-import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
-import {
-  settings,
-  roles,
-  categories,
-  channels,
-  files,
-  users,
-  logins,
-  messages,
-  messageFiles,
-  rolePermissions,
-  emojis,
-  messageReactions,
-  invites,
-  activityLog,
-  userRoles,
-  channelRolePermissions,
-  channelUserPermissions,
-  channelReadStates,
-} from "../../../apps/server/src/db/schema";
-import type { UserStatus } from "./types";
-import type { Permission } from "./statics";
+import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
+import type {
+	activityLog,
+	categories,
+	channelReadStates,
+	channelRolePermissions,
+	channels,
+	channelUserPermissions,
+	emojis,
+	files,
+	invites,
+	logins,
+	messageFiles,
+	messageReactions,
+	messages,
+	rolePermissions,
+	roles,
+	settings,
+	userRoles,
+	users,
+} from '../../../apps/server/src/db/schema';
+import type { Permission } from './statics';
+import type { UserStatus } from './types';
 
 export type TSettings = InferSelectModel<typeof settings>;
 export type TRole = InferSelectModel<typeof roles>;
 export type TCategory = InferSelectModel<typeof categories>;
 export type TChannel = InferSelectModel<typeof channels>;
 export type TFile = InferSelectModel<typeof files> & {
-  _accessToken?: string;
+	_accessToken?: string;
 };
 export type TUser = InferSelectModel<typeof users>;
 export type TLogin = InferSelectModel<typeof logins>;
@@ -39,12 +39,8 @@ export type TMessageReaction = InferSelectModel<typeof messageReactions>;
 export type TInvite = InferSelectModel<typeof invites>;
 export type TActivityLog = InferSelectModel<typeof activityLog>;
 export type TUserRole = InferSelectModel<typeof userRoles>;
-export type TChannelRolePermission = InferSelectModel<
-  typeof channelRolePermissions
->;
-export type TChannelUserPermission = InferSelectModel<
-  typeof channelUserPermissions
->;
+export type TChannelRolePermission = InferSelectModel<typeof channelRolePermissions>;
+export type TChannelUserPermission = InferSelectModel<typeof channelUserPermissions>;
 export type TChannelReadState = InferSelectModel<typeof channelReadStates>;
 
 export type TISettings = InferInsertModel<typeof settings>;
@@ -62,79 +58,63 @@ export type TIMessageReaction = InferInsertModel<typeof messageReactions>;
 export type TIInvite = InferInsertModel<typeof invites>;
 export type TIActivityLog = InferInsertModel<typeof activityLog>;
 export type TIUserRole = InferInsertModel<typeof userRoles>;
-export type TIChannelRolePermission = InferInsertModel<
-  typeof channelRolePermissions
->;
-export type TIChannelUserPermission = InferInsertModel<
-  typeof channelUserPermissions
->;
+export type TIChannelRolePermission = InferInsertModel<typeof channelRolePermissions>;
+export type TIChannelUserPermission = InferInsertModel<typeof channelUserPermissions>;
 export type TIChannelReadState = InferInsertModel<typeof channelReadStates>;
 
 export type TStorageSettings = Pick<
-  TSettings,
-  | "storageUploadEnabled"
-  | "storageQuota"
-  | "storageUploadMaxFileSize"
-  | "storageSpaceQuotaByUser"
-  | "storageOverflowAction"
+	TSettings,
+	| 'storageUploadEnabled'
+	| 'storageQuota'
+	| 'storageUploadMaxFileSize'
+	| 'storageSpaceQuotaByUser'
+	| 'storageOverflowAction'
 >;
 
 // joined types
 
 type TPublicUser = Pick<
-  TJoinedUser,
-  | "id"
-  | "name"
-  | "bannerColor"
-  | "bio"
-  | "avatar"
-  | "avatarId"
-  | "banner"
-  | "bannerId"
-  | "banned"
-  | "createdAt"
+	TJoinedUser,
+	'id' | 'name' | 'bannerColor' | 'bio' | 'avatar' | 'avatarId' | 'banner' | 'bannerId' | 'banned' | 'createdAt'
 > & {
-  status?: UserStatus;
-  _identity?: string;
+	status?: UserStatus;
+	_identity?: string;
 };
 
 export type TJoinedRole = TRole & {
-  permissions: Permission[];
+	permissions: Permission[];
 };
 
 export type TJoinedMessageReaction = TMessageReaction & {
-  file: TFile | null;
+	file: TFile | null;
 };
 
 export type TJoinedMessage = TMessage & {
-  files: TFile[];
-  reactions: TJoinedMessageReaction[];
+	files: TFile[];
+	reactions: TJoinedMessageReaction[];
 };
 
 export type TJoinedEmoji = TEmoji & {
-  file: TFile;
-  user: TPublicUser;
+	file: TFile;
+	user: TPublicUser;
 };
 
-export type TJoinedUser = Omit<
-  TUser,
-  'totpSecret' | 'totpRecoveryCodes'
-> & {
-  avatar: TFile | null;
-  banner: TFile | null;
-  roleIds: number[];
+export type TJoinedUser = Omit<TUser, 'totpSecret' | 'totpRecoveryCodes'> & {
+	avatar: TFile | null;
+	banner: TFile | null;
+	roleIds: number[];
 };
 
 export type TJoinedPublicUser = TPublicUser & {
-  avatar: TFile | null;
-  banner: TFile | null;
-  roleIds: number[];
+	avatar: TFile | null;
+	banner: TFile | null;
+	roleIds: number[];
 };
 
 export type TJoinedSettings = TSettings & {
-  logo: TFile | null;
+	logo: TFile | null;
 };
 
 export type TJoinedInvite = TInvite & {
-  creator: TJoinedPublicUser;
+	creator: TJoinedPublicUser;
 };

@@ -3,7 +3,10 @@
 - PR titles should be plain sentence case summaries of the feature or fix.
 - PR descriptions should use Markdown sections such as `## Summary` and `## Validation`, with bullets for scanability.
 
-- Run repo Bun commands through Nix. Use `nix develop -c bun run magic` for the standard validation pass before committing.
+- Run repo Bun commands through Nix. Before committing, run `nix develop -c bunx biome check --write <changed paths>` on files intentionally modified by the current task. This matches the editor's formatting, safe lint fixes, and import organization; review the resulting diff.
+- After formatting, use non-mutating checks that match CI: `nix develop -c bun run check-types`, `nix develop -c bun run lint`, relevant package tests, and `nix develop -c bun run knip` when the change can affect imports or exports.
+- Do not use the root `magic` script as a validation command because it formats the entire repository with `--write`, including unrelated files changed elsewhere on the branch.
+- Lint warnings are CI failures. Fix warnings caused by the current task, and do not introduce new warnings.
 - Do not assume local package manager tools are available outside the Nix shell.
 - Review generated files before committing them. Database migrations must contain only the intended new schema delta, not regenerated historical changes.
 - Run package-specific test commands from the directory expected by that package.
