@@ -27,7 +27,11 @@ import { useChannelCan, useIsConnected } from '@/features/server/hooks';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
-import { clearOwnVoiceSessionAfterReconnectFailure, updateOwnVoiceState } from '@/features/server/voice/actions';
+import {
+	clearOwnVoiceSessionAfterReconnectFailure,
+	leaveVoiceSessionAfterRecoveryFailure,
+	updateOwnVoiceState,
+} from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { setVoiceProviderCleanupHandler } from '@/features/server/voice/provider-cleanup';
 import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordinator';
@@ -3690,11 +3694,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 
 		if (isConnectedRef.current && command.channelId !== undefined) {
-			getTRPCClient()
-				.voice.leave.mutate()
-				.catch((error) => {
-					logVoice('Failed to send voice.leave after unrecoverable transport failure', { error });
-				});
+			void leaveVoiceSessionAfterRecoveryFailure().then((didLeave) => {
+				if (!didLeave) {
+					logVoice('Failed to send voice.leave after unrecoverable transport failure');
+				}
+			});
 		}
 
 		if (currentVoiceChannelIdRef.current !== undefined) {
@@ -4462,11 +4466,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		// explicit leave the runtime would keep us resident in the channel even
 		// though the client is giving up.
 		if (command.leaveServerSession) {
-			getTRPCClient()
-				.voice.leave.mutate()
-				.catch((error) => {
-					logDebug('Voice reconnect terminal leave failed', { error });
-				});
+			void leaveVoiceSessionAfterRecoveryFailure().then((didLeave) => {
+				if (!didLeave) {
+					logDebug('Voice reconnect terminal leave failed');
+				}
+			});
 		}
 
 		clearOwnVoiceSessionAfterReconnectFailure(command.reason);

@@ -33,6 +33,7 @@ type TClearReason =
 	| 'kicked'
 	| 'banned'
 	| 'session-replaced'
+	| 'user-started-voice-join'
 	| 'voice-join-succeeded'
 	| 'join-failed'
 	| 'restore-conflict'
@@ -270,6 +271,8 @@ const clearVoiceReconnectRecovery = (reason: TClearReason): void => {
 	useVoiceReconnectStore.getState().clearVoiceReconnectRecovery(reason);
 };
 
+const isVoiceReconnectRecoveryActive = (): boolean => getVoiceSessionState().phase.phase === 'reconnecting';
+
 const getValidPendingVoiceReconnect = (): TPendingVoiceReconnect | undefined => {
 	const pendingVoiceReconnect = getMachinePendingVoiceReconnect();
 
@@ -318,6 +321,7 @@ export {
 	ensureVoiceReconnectStarted,
 	getValidPendingVoiceReconnect,
 	isVoiceReconnectPeerSuppressed,
+	isVoiceReconnectRecoveryActive,
 	markVoiceReconnectSessionAuthenticated,
 	markVoiceReconnectSessionUnauthenticated,
 	resolveVoiceRecoveryAction,

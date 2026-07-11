@@ -10,6 +10,7 @@ let handleStreamWatcherActivity: typeof import('../actions').handleStreamWatcher
 let addUserToVoiceChannel: typeof import('../actions').addUserToVoiceChannel;
 let updateVoiceUserState: typeof import('../actions').updateVoiceUserState;
 let clearOwnVoiceSessionAfterReconnectFailure: typeof import('../actions').clearOwnVoiceSessionAfterReconnectFailure;
+let leaveVoiceSessionAfterRecoveryFailure: typeof import('../actions').leaveVoiceSessionAfterRecoveryFailure;
 let flushVoiceForDesktopQuit: typeof import('../actions').flushVoiceForDesktopQuit;
 let leaveVoice: typeof import('../actions').leaveVoice;
 let joinVoice: typeof import('../actions').joinVoice;
@@ -20,6 +21,7 @@ const runVoiceProviderCleanup = mock(() => {});
 let leaveShouldFail = false;
 let joinShouldFail = false;
 let beforeJoinResolve: (() => void) | undefined;
+let waitBeforeLeaveResolve: Promise<void> | undefined;
 const joinMutate = mock(async () => {
 	if (joinShouldFail) {
 		throw new Error('join failed');
@@ -36,6 +38,7 @@ const joinMutate = mock(async () => {
 	};
 });
 const leaveMutate = mock(async () => {
+	await waitBeforeLeaveResolve;
 	if (leaveShouldFail) {
 		throw new Error('leave failed');
 	}
@@ -136,6 +139,7 @@ describe('voice actions', () => {
 		({
 			addUserToVoiceChannel,
 			clearOwnVoiceSessionAfterReconnectFailure,
+			leaveVoiceSessionAfterRecoveryFailure,
 			removeUserFromVoiceChannel,
 			handleStreamWatcherActivity,
 			handleVoiceSessionReplaced,
@@ -158,6 +162,7 @@ describe('voice actions', () => {
 		joinShouldFail = false;
 		leaveShouldFail = false;
 		beforeJoinResolve = undefined;
+		waitBeforeLeaveResolve = undefined;
 	});
 
 	it('clears own active voice state when the server removes the current user from voice', () => {
@@ -361,6 +366,46 @@ describe('voice actions', () => {
 		expect(useServerStore.getState().currentVoiceChannelId).toBe(9);
 		expect(playSound).toHaveBeenCalledTimes(1);
 		expect(runVoiceProviderCleanup).not.toHaveBeenCalled();
+	});
+
+	it('does not let a rejoin overtake a terminal reconnect leave', async () => {
+		setJoinedVoiceChannelState({ ownUserId: 42 });
+		let resolveLeave: (() => void) | undefined;
+		waitBeforeLeaveResolve = new Promise<void>((resolve) => {
+			resolveLeave = resolve;
+		});
+
+		const leaveResult = leaveVoiceSessionAfterRecoveryFailure();
+		clearOwnVoiceSessionAfterReconnectFailure('restore-terminal-error');
+		await Promise.resolve();
+		const joinResult = joinVoice(7, { silent: true });
+		await Promise.resolve();
+
+		expect(leaveMutate).toHaveBeenCalledTimes(1);
+		expect(joinMutate).not.toHaveBeenCalled();
+
+		resolveLeave?.();
+
+		expect(await leaveResult).toBe(true);
+		expect((await joinResult).kind).toBe('joined');
+		expect(joinMutate).toHaveBeenCalledTimes(1);
+	});
+
+	it('cancels reconnect recovery before starting a manual join', async () => {
+		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+			channelId: 7,
+			micMuted: false,
+			soundMuted: false,
+			peerUserIds: [],
+			expiresAt: Date.now() + 10_000,
+		});
+		useVoiceReconnectStore.getState().setReconnectingSince(Date.now());
+
+		const joinResult = joinVoice(7, { silent: true });
+
+		expect(useVoiceReconnectStore.getState().reconnectingSince).toBeUndefined();
+		expect(useVoiceReconnectStore.getState().pendingVoiceReconnect).toBeUndefined();
+		expect((await joinResult).kind).toBe('joined');
 	});
 
 	it('tracks screen share watchers by watcher id so duplicate events do not drift the badge count', () => {

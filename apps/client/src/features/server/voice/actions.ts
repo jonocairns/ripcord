@@ -25,6 +25,7 @@ import {
 	clearVoiceReconnectRecovery,
 	getValidPendingVoiceReconnect,
 	isVoiceReconnectPeerSuppressed,
+	isVoiceReconnectRecoveryActive,
 } from './reconnect-coordinator';
 import { ownVoiceStateSelector, pinnedCardSelector } from './selectors';
 
@@ -36,8 +37,17 @@ type TLeaveVoiceOptions = {
 
 const pendingVoiceSwitchFromChannelIds: Set<number> = new Set();
 const completedVoiceSwitchFromChannelIds: Set<number> = new Set();
-let joinVoiceQueue: Promise<void> = Promise.resolve();
+let voiceSessionMutationQueue: Promise<void> = Promise.resolve();
 let joinVoiceGeneration = 0;
+
+const enqueueVoiceSessionMutation = <Result>(mutation: () => Promise<Result>): Promise<Result> => {
+	const result = voiceSessionMutationQueue.then(mutation);
+	voiceSessionMutationQueue = result.then(
+		() => undefined,
+		() => undefined,
+	);
+	return result;
+};
 
 const resetVoiceSwitchState = (): void => {
 	pendingVoiceSwitchFromChannelIds.clear();
@@ -47,7 +57,7 @@ const resetVoiceSwitchState = (): void => {
 /** @knipignore Test-only reset for module-scoped voice switch bookkeeping. */
 export const __resetVoiceSwitchStateForTests = (): void => {
 	resetVoiceSwitchState();
-	joinVoiceQueue = Promise.resolve();
+	voiceSessionMutationQueue = Promise.resolve();
 	joinVoiceGeneration = 0;
 };
 
@@ -409,13 +419,15 @@ export const joinVoice = (
 		silent?: boolean;
 	} = {},
 ): Promise<TJoinVoiceResult> => {
+	// A manual join replaces reconnect intent. Invalidate the recovery command
+	// before enqueuing the join so an in-flight restore is aborted and cannot
+	// later enqueue a terminal leave behind the user's new session.
+	if (isVoiceReconnectRecoveryActive()) {
+		clearVoiceReconnectRecovery('user-started-voice-join');
+	}
+
 	const generation = (joinVoiceGeneration += 1);
-	const result = joinVoiceQueue.then(() => joinVoiceInternal(channelId, generation, opts));
-	joinVoiceQueue = result.then(
-		() => undefined,
-		() => undefined,
-	);
-	return result;
+	return enqueueVoiceSessionMutation(() => joinVoiceInternal(channelId, generation, opts));
 };
 
 const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<boolean> => {
@@ -440,19 +452,25 @@ const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<boolean>
 	});
 };
 
-const leaveVoiceMutation = async (options: { suppressErrors?: boolean }): Promise<boolean> => {
-	const client = getTRPCClient();
+const leaveVoiceMutation = (options: { suppressErrors?: boolean }): Promise<boolean> =>
+	enqueueVoiceSessionMutation(async () => {
+		const client = getTRPCClient();
 
-	try {
-		await client.voice.leave.mutate();
-		return true;
-	} catch (error) {
-		if (!options.suppressErrors) {
-			toast.error(getTrpcError(error, 'Failed to leave voice channel'));
+		try {
+			await client.voice.leave.mutate();
+			return true;
+		} catch (error) {
+			if (!options.suppressErrors) {
+				toast.error(getTrpcError(error, 'Failed to leave voice channel'));
+			}
+			return false;
 		}
-		return false;
-	}
-};
+	});
+
+const leaveVoiceSessionAfterRecoveryFailure = (): Promise<boolean> =>
+	leaveVoiceMutation({
+		suppressErrors: true,
+	});
 
 export const leaveVoice = async (): Promise<void> => {
 	await leaveVoiceInternal({ playOwnLeaveSound: true });
@@ -543,4 +561,4 @@ export const setPinnedCard = (pinnedCard: TPinnedCard | undefined): void => {
 	useServerStore.getState().setPinnedCard(pinnedCard);
 };
 
-export { clearOwnVoiceSessionAfterReconnectFailure };
+export { clearOwnVoiceSessionAfterReconnectFailure, leaveVoiceSessionAfterRecoveryFailure };
