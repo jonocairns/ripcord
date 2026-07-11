@@ -2375,7 +2375,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		const checkSystemDefaultInput = async (): Promise<'reacquired' | 'pending' | 'stop'> => {
 			const rawTrack = rawMicStreamRef.current?.getAudioTracks()[0];
 
-			if (!rawTrack || rawTrack.readyState !== 'live') {
+			if (rawTrack?.readyState !== 'live') {
 				return 'stop';
 			}
 

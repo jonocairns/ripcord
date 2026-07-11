@@ -531,7 +531,7 @@ export const markRemoteRetryRequested = (
 	const key = getPendingStreamKey(remoteId, kind);
 	const existing = subscriptions.get(key);
 
-	if (!existing || !existing.producerPresent || !existing.desired) {
+	if (!existing?.producerPresent || !existing.desired) {
 		return emptyResult(subscriptions);
 	}
 
@@ -778,7 +778,7 @@ export const markRemoteConsumerClosed = (
 	const key = getPendingStreamKey(remoteId, kind);
 	const existing = subscriptions.get(key);
 
-	if (!existing || existing.status !== 'consumed') {
+	if (existing?.status !== 'consumed') {
 		return emptyResult(subscriptions);
 	}
 
