@@ -1,5 +1,5 @@
 import type { TVoiceSessionCommand, TWatchedRemoteStreamsSnapshot } from './voice-session-machine';
-import { dispatchVoiceSession, isVoiceSessionCommandCurrent, subscribeVoiceSession } from './voice-session-store';
+import { dispatchVoiceSession, isVoiceSessionCommandCurrent, subscribeVoiceSessionState } from './voice-session-store';
 
 // The voice session command executor owns the asynchronous lifecycle of
 // machine-emitted commands: per-command AbortControllers, stale-command
@@ -103,7 +103,7 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 	// Store listeners run before command delivery, so a superseding command's
 	// dispatch aborts the operation it replaced before the new command's effect
 	// starts — the executor never runs two effects for one recovery step.
-	const unsubscribeFromStore = subscribeVoiceSession(() => {
+	const unsubscribeFromStore = subscribeVoiceSessionState(() => {
 		abortSupersededOperations();
 	});
 

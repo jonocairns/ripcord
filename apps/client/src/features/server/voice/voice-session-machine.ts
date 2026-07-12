@@ -934,6 +934,25 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 	}
 };
 
+// Direct machine selectors. While reconnecting, the phase owns the live
+// values; the top-level fields are the facade mirror kept for the other
+// phases. Executor waits and React rendering read state through these so
+// Zustand projection synchronization order can never affect correctness.
+// Selectors return references out of the immutable state, so
+// useSyncExternalStore-style Object.is comparisons stay stable between
+// dispatches.
+const selectPendingVoiceReconnect = (state: TVoiceSessionState): TPendingVoiceReconnect | undefined =>
+	state.phase.phase === 'reconnecting' ? state.phase.pending : state.pendingVoiceReconnect;
+
+const selectReconnectingSince = (state: TVoiceSessionState): number | undefined =>
+	state.phase.phase === 'reconnecting' ? state.phase.reconnectingSince : state.reconnectingSince;
+
+const selectReconnectAuthenticated = (state: TVoiceSessionState): boolean =>
+	state.phase.phase === 'reconnecting' ? state.phase.authenticated : state.reconnectAuthenticated;
+
+const selectVoiceReconnectSuppression = (state: TVoiceSessionState): TVoiceReconnectSuppression | undefined =>
+	state.suppression;
+
 const selectVoiceSessionConnectionStatus = (state: TVoiceSessionState): TVoiceSessionConnectionStatus => {
 	switch (state.phase.phase) {
 		case 'idle':
@@ -963,6 +982,10 @@ export {
 	createInitialVoiceSessionState,
 	isCurrentVoiceSessionCommand,
 	reduceVoiceSession,
+	selectPendingVoiceReconnect,
+	selectReconnectAuthenticated,
+	selectReconnectingSince,
+	selectVoiceReconnectSuppression,
 	selectVoiceSessionConnectionStatus,
 	shouldFlushBufferedVoiceSessionCommand,
 	VOICE_RECONNECT_SUPPRESSION_MS,

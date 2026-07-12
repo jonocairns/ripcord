@@ -13,7 +13,13 @@ import {
 	useVoiceReconnectStore,
 	VOICE_RECONNECT_INTENT_TTL_MS,
 } from '../reconnect-coordinator';
-import { subscribeVoiceSession } from '../voice-session-store';
+import {
+	selectPendingVoiceReconnect,
+	selectReconnectAuthenticated,
+	selectReconnectingSince,
+	selectVoiceReconnectSuppression,
+} from '../voice-session-machine';
+import { selectVoiceSessionState, subscribeVoiceSession } from '../voice-session-store';
 
 describe('voice reconnect coordinator', () => {
 	beforeEach(() => {
@@ -359,6 +365,33 @@ describe('voice reconnect coordinator', () => {
 			clearVoiceReconnectRecovery('user-started-voice-join');
 
 			expect(useVoiceReconnectStore.getState().reconnectAuthenticated).toBe(false);
+		});
+	});
+
+	describe('zustand projection', () => {
+		it('mirrors the direct machine selectors after coordinator actions', () => {
+			// The zustand store is a UI projection of the machine; the direct
+			// selectors are the source of truth for execution code. After any
+			// coordinator action the two must agree.
+			useServerStore.setState({
+				ownUserId: 1,
+				currentVoiceChannelId: 5,
+				voiceMap: {
+					5: { users: { 1: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false } } },
+				},
+			});
+			captureVoiceReconnectIntentForCurrentSession();
+			ensureVoiceReconnectStarted(1234);
+			markVoiceReconnectSessionAuthenticated();
+
+			const projection = useVoiceReconnectStore.getState();
+
+			expect(projection.pendingVoiceReconnect).toEqual(selectVoiceSessionState(selectPendingVoiceReconnect));
+			expect(projection.reconnectingSince).toBe(selectVoiceSessionState(selectReconnectingSince));
+			expect(projection.reconnectAuthenticated).toBe(selectVoiceSessionState(selectReconnectAuthenticated));
+			expect(projection.voiceReconnectSuppression).toEqual(selectVoiceSessionState(selectVoiceReconnectSuppression));
+			expect(projection.reconnectingSince).toBe(1234);
+			expect(projection.reconnectAuthenticated).toBe(true);
 		});
 	});
 

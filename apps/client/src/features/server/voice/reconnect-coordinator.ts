@@ -2,9 +2,16 @@ import { create } from 'zustand';
 import { logDebug } from '@/helpers/browser-logger';
 import { useServerStore } from '../slice';
 import {
+	selectPendingVoiceReconnect,
+	selectReconnectAuthenticated,
+	selectReconnectingSince,
+	selectVoiceReconnectSuppression,
+} from './voice-session-machine';
+import {
 	dispatchVoiceSession,
 	getVoiceSessionState,
 	resetVoiceSessionState,
+	selectVoiceSessionState,
 	subscribeVoiceSession,
 } from './voice-session-store';
 
@@ -76,23 +83,13 @@ const initialState: IVoiceReconnectState = {
 };
 
 const voiceReconnectStateFromMachine = (): IVoiceReconnectState => {
-	const { pendingVoiceReconnect, phase, reconnectAuthenticated, reconnectingSince, suppression } =
-		getVoiceSessionState();
-
-	if (phase.phase !== 'reconnecting') {
-		return {
-			pendingVoiceReconnect,
-			reconnectingSince,
-			voiceReconnectSuppression: suppression,
-			reconnectAuthenticated,
-		};
-	}
+	const state = getVoiceSessionState();
 
 	return {
-		pendingVoiceReconnect: phase.pending,
-		reconnectingSince: phase.reconnectingSince,
-		voiceReconnectSuppression: suppression,
-		reconnectAuthenticated: phase.authenticated,
+		pendingVoiceReconnect: selectPendingVoiceReconnect(state),
+		reconnectingSince: selectReconnectingSince(state),
+		voiceReconnectSuppression: selectVoiceReconnectSuppression(state),
+		reconnectAuthenticated: selectReconnectAuthenticated(state),
 	};
 };
 
@@ -102,26 +99,15 @@ const syncVoiceReconnectProjection = (): void => {
 	});
 };
 
-const getMachinePendingVoiceReconnect = (): TPendingVoiceReconnect | undefined => {
-	const { pendingVoiceReconnect, phase } = getVoiceSessionState();
+const getMachinePendingVoiceReconnect = (): TPendingVoiceReconnect | undefined =>
+	selectVoiceSessionState(selectPendingVoiceReconnect);
 
-	return phase.phase === 'reconnecting' ? phase.pending : pendingVoiceReconnect;
-};
+const getMachineReconnectingSince = (): number | undefined => selectVoiceSessionState(selectReconnectingSince);
 
-const getMachineReconnectingSince = (): number | undefined => {
-	const { phase, reconnectingSince } = getVoiceSessionState();
-
-	return phase.phase === 'reconnecting' ? phase.reconnectingSince : reconnectingSince;
-};
-
-const getMachineReconnectAuthenticated = (): boolean => {
-	const { phase, reconnectAuthenticated } = getVoiceSessionState();
-
-	return phase.phase === 'reconnecting' ? phase.authenticated : reconnectAuthenticated;
-};
+const getMachineReconnectAuthenticated = (): boolean => selectVoiceSessionState(selectReconnectAuthenticated);
 
 const getMachineVoiceReconnectSuppression = (): TVoiceReconnectSuppression | undefined =>
-	getVoiceSessionState().suppression;
+	selectVoiceSessionState(selectVoiceReconnectSuppression);
 
 const isBrowserOnline = (): boolean => {
 	if (typeof navigator === 'undefined' || typeof navigator.onLine !== 'boolean') {
@@ -131,6 +117,11 @@ const isBrowserOnline = (): boolean => {
 	return navigator.onLine;
 };
 
+// UI projection of the voice session machine, kept for compatibility with
+// existing zustand consumers. It is NOT an execution dependency: executor and
+// runner code must read the session store directly (useVoiceSessionSelector,
+// the direct select* machine selectors, or the getMachine* wrappers above).
+// C7 of the execution extraction plan retires it.
 const useVoiceReconnectStore = create<TVoiceReconnectStore>((set) => ({
 	...initialState,
 

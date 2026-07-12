@@ -9,11 +9,17 @@ import {
 } from './voice-session-machine';
 
 type TVoiceSessionListener = (state: TVoiceSessionState, commands: TVoiceSessionCommand[]) => void;
+type TVoiceSessionStateListener = (state: TVoiceSessionState) => void;
 type TVoiceSessionCommandRunner = (commands: TVoiceSessionCommand[]) => void;
 type TVoiceSessionSelector<T> = (state: TVoiceSessionState) => T;
 
 let voiceSessionState = createInitialVoiceSessionState();
 const listeners = new Set<TVoiceSessionListener>();
+// State-only observation (useVoiceSessionSelector, executor supersession
+// sweeps): the callback never sees commands, so observers cannot grow into
+// accidental command runners. Long-lived like `listeners` — they survive
+// resetVoiceSessionState.
+const stateListeners = new Set<TVoiceSessionStateListener>();
 
 // Commands are side effects that MUST eventually execute — RecoverDesktopAppAudio
 // after a rebuild, LeaveVoiceSession/ClearFailedSession on terminal failure.
@@ -30,9 +36,14 @@ const dispatchVoiceSession = (event: TVoiceSessionEvent): TVoiceSessionCommand[]
 
 	voiceSessionState = result.state;
 
-	// Listeners first: the reconnect-coordinator listener syncs the zustand
-	// projection, and command runners read that projection — running commands
-	// before it would hand them pre-dispatch state.
+	// All listeners run before command delivery so a runner can never observe
+	// pre-dispatch state: state-only listeners are the direct machine
+	// observation primitive, and the legacy full listeners include the
+	// reconnect-coordinator's zustand projection sync (a UI mirror only —
+	// command correctness must come from direct store reads, not projections).
+	stateListeners.forEach((listener) => {
+		listener(voiceSessionState);
+	});
 	listeners.forEach((listener) => {
 		listener(voiceSessionState, result.commands);
 	});
@@ -92,12 +103,20 @@ const subscribeVoiceSession = (listener: TVoiceSessionListener): (() => void) =>
 	};
 };
 
+const subscribeVoiceSessionState = (listener: TVoiceSessionStateListener): (() => void) => {
+	stateListeners.add(listener);
+
+	return () => {
+		stateListeners.delete(listener);
+	};
+};
+
 const resetVoiceSessionState = (): void => {
 	voiceSessionState = createInitialVoiceSessionState();
 	bufferedCommands = [];
 };
 
-export type { TVoiceSessionCommandRunner, TVoiceSessionListener, TVoiceSessionSelector };
+export type { TVoiceSessionCommandRunner, TVoiceSessionListener, TVoiceSessionSelector, TVoiceSessionStateListener };
 export {
 	dispatchVoiceSession,
 	getVoiceSessionState,
@@ -106,4 +125,5 @@ export {
 	resetVoiceSessionState,
 	selectVoiceSessionState,
 	subscribeVoiceSession,
+	subscribeVoiceSessionState,
 };
