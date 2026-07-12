@@ -230,10 +230,13 @@ const clearReconnectFacadeRecovery = (state: TVoiceSessionState): TVoiceSessionS
 });
 
 // 'leave' — in-session rebuild gave up: send voice.leave and tear down locally.
-// 'clear' — reconnect gave up without a server session: run the reconnect
-//   give-up path (Sentry report, reason toast, clearVoiceReconnectRecovery).
-// 'leave-and-clear' — reconnect gave up after restoreOrJoin already bound a
-//   server session: same as 'clear' plus an explicit voice.leave.
+// 'clear' — run the reconnect give-up path (Sentry report, reason toast,
+//   clearVoiceReconnectRecovery) without touching the server.
+// 'leave-and-clear' — 'clear' plus an explicit voice.leave. Terminal reconnect
+//   give-ups always use this: even when restoreOrJoin never succeeded,
+//   joinServer may have adopted the pre-drop seat onto this connection, and
+//   the server-side incarnation guard no-ops the leave when the seat belongs
+//   to a newer session.
 const failSession = (
 	state: TVoiceSessionState,
 	reason: TClearReason,
@@ -643,6 +646,10 @@ const reduceRestoreFailed = (
 	const serverSessionEstablished = phase.serverSessionEstablished === true || event.serverSessionEstablished === true;
 
 	if (classification.kind === 'terminal') {
+		// Always attempt the leave, even when no restore succeeded this cycle:
+		// joinServer adopts the pre-drop seat onto the reconnected socket, so the
+		// server can still hold a seat bound to this connection. The server-side
+		// incarnation guard makes the leave a no-op when the seat isn't ours.
 		return failSession(
 			{
 				...state,
@@ -650,7 +657,7 @@ const reduceRestoreFailed = (
 			},
 			classification.clearReason,
 			phase.pending.channelId,
-			serverSessionEstablished ? 'leave-and-clear' : 'clear',
+			'leave-and-clear',
 		);
 	}
 
@@ -866,12 +873,11 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 
 			const reconnectPhase = state.phase.phase === 'reconnecting' ? state.phase : undefined;
 
-			return failSession(
-				state,
-				'reconnect-expired',
-				reconnectPhase?.pending.channelId,
-				reconnectPhase?.serverSessionEstablished === true ? 'leave-and-clear' : 'clear',
-			);
+			// 'leave-and-clear' even without an established restore: a residual seat
+			// may still be bound to this connection (see reduceRestoreFailed). The
+			// runner skips the leave while the socket is down, and the server's
+			// disconnect grace reaps the seat in that case instead.
+			return failSession(state, 'reconnect-expired', reconnectPhase?.pending.channelId, 'leave-and-clear');
 		}
 		case 'AuthReady':
 			if (

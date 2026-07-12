@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import {
 	clearPendingVoiceDisconnect,
 	getPendingVoiceReconnectChannelId,
+	getPendingVoiceReconnectSeatIncarnation,
 	getVoiceDisconnectGraceCounters,
 	resetVoiceDisconnectGraceForTests,
 	schedulePendingVoiceDisconnect,
@@ -17,6 +18,27 @@ afterEach(() => {
 });
 
 describe('voice disconnect grace', () => {
+	test('stores the seat incarnation for the matching entry and drops it on cancel', () => {
+		const seatIncarnation = Symbol('seat');
+
+		schedulePendingVoiceDisconnect({
+			clientInstanceId: 'client-a',
+			userId: 7,
+			channelId: 2,
+			seatIncarnation,
+			finalize: () => {},
+			ttlMs: 1_000,
+		});
+
+		expect(getPendingVoiceReconnectSeatIncarnation('client-a', 7)).toBe(seatIncarnation);
+		expect(getPendingVoiceReconnectSeatIncarnation('client-b', 7)).toBeUndefined();
+		expect(getPendingVoiceReconnectSeatIncarnation(undefined, 7)).toBeUndefined();
+
+		clearPendingVoiceDisconnect('client-a', 7);
+
+		expect(getPendingVoiceReconnectSeatIncarnation('client-a', 7)).toBeUndefined();
+	});
+
 	test('cancels only the matching clientInstanceId grace entry', async () => {
 		const finalized: string[] = [];
 

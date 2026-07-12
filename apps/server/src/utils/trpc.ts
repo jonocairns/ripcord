@@ -23,6 +23,7 @@ export type Context = {
 	// remove a replacement session.
 	currentVoiceSessionIncarnation: symbol | undefined;
 	getPendingVoiceReconnectChannelId: () => number | undefined;
+	getPendingVoiceReconnectSeatIncarnation: () => symbol | undefined;
 	getClientInstanceId: () => string | undefined;
 	hasPermission: (targetPermission: Permission | Permission[]) => Promise<boolean>;
 	needsPermission: (targetPermission: Permission | Permission[]) => Promise<void>;

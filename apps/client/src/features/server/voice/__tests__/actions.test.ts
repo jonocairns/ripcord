@@ -129,6 +129,8 @@ const setJoinedVoiceChannelState = (state: Partial<ReturnType<typeof useServerSt
 		currentVoiceChannelId: 7,
 		selectedChannelId: 7,
 		lastTextChannelId: 9,
+		// The recovery-failure leave only fires on a live socket.
+		connected: true,
 		channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
 		...state,
 	});
@@ -146,6 +148,7 @@ describe('voice actions', () => {
 			playSound,
 		}));
 		mock.module('@/lib/trpc', () => ({
+			getWsClientInstanceId: () => 'own-client-instance',
 			getTRPCClient: () => ({
 				voice: {
 					join: {
@@ -421,6 +424,13 @@ describe('voice actions', () => {
 		expect(await leaveResult).toBe(true);
 		expect((await joinResult).kind).toBe('joined');
 		expect(joinMutate).toHaveBeenCalledTimes(1);
+	});
+
+	it('skips the recovery-failure leave while the socket is disconnected', async () => {
+		setJoinedVoiceChannelState({ ownUserId: 42, connected: false });
+
+		expect(await leaveVoiceSessionAfterRecoveryFailure()).toBe(false);
+		expect(leaveMutate).not.toHaveBeenCalled();
 	});
 
 	it('cancels reconnect recovery before starting a manual join', async () => {
@@ -759,6 +769,60 @@ describe('voice actions', () => {
 
 		expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
 		expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
+	});
+
+	it('ignores a replacement event caused by this client instance even while in voice', () => {
+		// The dangerous ordering: the replacer's own join response has already
+		// applied (currentVoiceChannelId set) when its fan-out copy of the
+		// replacement event arrives. Without the instance check it would tear
+		// down the session it just created.
+		setJoinedVoiceChannelState({ ownUserId: 42 });
+
+		handleVoiceSessionReplaced({ channelId: 7, replacedByClientInstanceId: 'own-client-instance' });
+
+		expect(useServerStore.getState().currentVoiceChannelId).toBe(7);
+		expect(runVoiceProviderCleanup).not.toHaveBeenCalled();
+	});
+
+	it('still processes a replacement caused by another client instance', () => {
+		setJoinedVoiceChannelState({ ownUserId: 42 });
+
+		handleVoiceSessionReplaced({ channelId: 7, replacedByClientInstanceId: 'other-client-instance' });
+
+		expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
+		expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
+	});
+
+	it('clears the captured reconnect intent when the replaced event lands after the own-leave event', () => {
+		// The server's own-leave (reconnecting: true) arrives first: it clears the
+		// channel state and captures reconnect intent for the replaced channel.
+		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+			channelId: 7,
+			micMuted: false,
+			soundMuted: false,
+			peerUserIds: [],
+			expiresAt: Date.now() + 10_000,
+		});
+
+		handleVoiceSessionReplaced({ channelId: 7 });
+
+		// The stale intent must not survive — a later WS drop would otherwise try
+		// to restore into a channel another connection now owns.
+		expect(useVoiceReconnectStore.getState().pendingVoiceReconnect).toBeUndefined();
+	});
+
+	it('ignores a replaced event when this connection held neither the session nor its reconnect intent', () => {
+		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+			channelId: 8,
+			micMuted: false,
+			soundMuted: false,
+			peerUserIds: [],
+			expiresAt: Date.now() + 10_000,
+		});
+
+		handleVoiceSessionReplaced({ channelId: 7 });
+
+		expect(useVoiceReconnectStore.getState().pendingVoiceReconnect?.channelId).toBe(8);
 	});
 
 	it('clears sticky local voice state when reconnect recovery terminates', () => {

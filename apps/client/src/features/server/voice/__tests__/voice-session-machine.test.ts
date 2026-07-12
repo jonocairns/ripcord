@@ -325,7 +325,10 @@ describe('voice session machine', () => {
 				type: 'ClearFailedSession',
 				reason: 'reconnect-expired',
 				channelId: 5,
-				leaveServerSession: false,
+				// Even without an established restore the pre-drop seat may have been
+				// adopted onto the reconnected socket, so expiry still requests the
+				// (incarnation-guarded) server leave.
+				leaveServerSession: true,
 			}),
 		]);
 	});
@@ -507,7 +510,7 @@ describe('voice session machine', () => {
 		]);
 	});
 
-	it('clears without a server leave when the terminal reconnect failure never established a session', () => {
+	it('requests the guarded server leave even when the terminal reconnect failure never established a session', () => {
 		const [state, generation] = startReconnectWithSnapshot(true);
 		const result = reduceVoiceSession(state, {
 			type: 'RestoreFailed',
@@ -528,12 +531,16 @@ describe('voice session machine', () => {
 			channelId: 5,
 			generation: expect.any(Number),
 		});
+		// joinServer may have adopted the pre-drop seat onto the reconnected
+		// socket, so the give-up must still send the incarnation-guarded leave —
+		// otherwise the seat stays resident and blocks later restores with
+		// spurious VOICE_SESSION_OWNED_ELSEWHERE conflicts.
 		expect(result.commands).toEqual([
 			expect.objectContaining({
 				type: 'ClearFailedSession',
 				reason: 'restore-conflict',
 				channelId: 5,
-				leaveServerSession: false,
+				leaveServerSession: true,
 			}),
 		]);
 	});

@@ -11,7 +11,7 @@ import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-
 import { logDebug, logVoice, reportError } from '@/helpers/browser-logger';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
-import { getTRPCClient } from '@/lib/trpc';
+import { getTRPCClient, getWsClientInstanceId } from '@/lib/trpc';
 import { setCurrentVoiceChannelId, setSelectedChannelId } from '../channels/actions';
 import { currentVoiceChannelIdSelector, selectedChannelIdSelector } from '../channels/selectors';
 import { useServerStore } from '../slice';
@@ -524,10 +524,18 @@ const leaveVoiceMutation = (options: { suppressErrors?: boolean }): Promise<bool
 	});
 };
 
-const leaveVoiceSessionAfterRecoveryFailure = (): Promise<boolean> =>
-	leaveVoiceMutation({
+const leaveVoiceSessionAfterRecoveryFailure = (): Promise<boolean> => {
+	// A leave queued on a dead socket would flush whenever the WS reconnects
+	// and race whatever session the user establishes by then. When the give-up
+	// happens offline the server's disconnect grace reaps the seat instead.
+	if (!useServerStore.getState().connected) {
+		return Promise.resolve(false);
+	}
+
+	return leaveVoiceMutation({
 		suppressErrors: true,
 	});
+};
 
 export const leaveVoice = async (): Promise<void> => {
 	await leaveVoiceInternal({ playOwnLeaveSound: true });
@@ -585,7 +593,21 @@ export const flushVoiceForDesktopQuit = async (): Promise<'skipped' | 'succeeded
 	}
 };
 
-export const handleVoiceSessionReplaced = (payload?: { channelId: number }): void => {
+export const handleVoiceSessionReplaced = (payload?: {
+	channelId: number;
+	replacedByClientInstanceId?: string;
+}): void => {
+	// The event fans out to every connection of the user, including the one
+	// whose join caused the replacement. Today the replacer is protected only
+	// by frame ordering (the event lands before its join response applies);
+	// this makes ignoring it deterministic.
+	if (
+		payload?.replacedByClientInstanceId !== undefined &&
+		payload.replacedByClientInstanceId === getWsClientInstanceId()
+	) {
+		return;
+	}
+
 	if (
 		payload?.channelId !== undefined &&
 		(pendingVoiceSwitchFromChannelIds.has(payload.channelId) ||
@@ -603,15 +625,27 @@ export const handleVoiceSessionReplaced = (payload?: { channelId: number }): voi
 
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
+	// The replacement's own-leave event (reconnecting: true) usually arrives
+	// first, clearing the channel state and capturing reconnect intent for the
+	// replaced channel. That intent is what proves this connection held the
+	// session that was just taken over — and it must be cleared, or a later WS
+	// drop would try to restore into a channel another connection now owns.
+	const pendingReconnectChannelId = getValidPendingVoiceReconnect()?.channelId;
+	const heldReplacedSession =
+		currentChannelId !== undefined ||
+		(payload?.channelId !== undefined && pendingReconnectChannelId === payload.channelId);
 
-	if (!currentChannelId) {
+	if (!heldReplacedSession) {
 		return;
 	}
 
-	logVoice('Voice session replaced by another connection', { channelId: currentChannelId });
+	logVoice('Voice session replaced by another connection', { channelId: currentChannelId ?? payload?.channelId });
 	clearVoiceReconnectRecovery('session-replaced');
 	resetVoiceSwitchState();
 	clearOwnVoiceChannelStateAndCleanupProvider();
+	// Without this the replaced connection drops out of voice with no
+	// explanation — the join sound plays on the new connection, not here.
+	toast.info('Voice moved to another window or device.');
 };
 
 export const setPinnedCard = (pinnedCard: TPinnedCard | undefined): void => {

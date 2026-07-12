@@ -67,6 +67,10 @@ type Events = {
 	};
 	[ServerEvents.VOICE_SESSION_REPLACED]: {
 		channelId: number;
+		// Client instance whose join caused the replacement. The event fans out
+		// to every connection of the user, including the replacer — this lets the
+		// replacer ignore it without relying on WS frame ordering.
+		replacedByClientInstanceId?: string;
 	};
 
 	[ServerEvents.VOICE_NEW_PRODUCER]: {

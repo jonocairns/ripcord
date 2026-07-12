@@ -31,6 +31,7 @@ import type { Context } from './trpc';
 import {
 	clearPendingVoiceDisconnect,
 	getPendingVoiceReconnectChannelId,
+	getPendingVoiceReconnectSeatIncarnation,
 	schedulePendingVoiceDisconnect,
 } from './voice-disconnect-grace';
 
@@ -308,6 +309,8 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 		currentVoiceChannelId: undefined,
 		currentVoiceSessionIncarnation: undefined,
 		getPendingVoiceReconnectChannelId: () => getPendingVoiceReconnectChannelId(getClientInstanceId(), decodedUser.id),
+		getPendingVoiceReconnectSeatIncarnation: () =>
+			getPendingVoiceReconnectSeatIncarnation(getClientInstanceId(), decodedUser.id),
 		// The tracked WS field is populated asynchronously (createContext / first
 		// message), so during a reconnect race getOwnWs()?.clientInstanceId can be
 		// missing. The connection params always carry it, so this is the reliable
@@ -411,6 +414,7 @@ const createWsServer = async (server: http.Server) => {
 						clientInstanceId,
 						userId,
 						channelId,
+						seatIncarnation: voiceRuntime.getVoiceSessionIncarnation(userId),
 						wsCloseCode,
 						finalize: finalizeVoiceDisconnect,
 					});

@@ -26,6 +26,7 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 			});
 			ctx.pubsub.publishFor(ctx.user.id, ServerEvents.VOICE_SESSION_REPLACED, {
 				channelId: userAlreadyInVoiceChannel.id,
+				replacedByClientInstanceId: ctx.getClientInstanceId(),
 			});
 
 			logger.info(

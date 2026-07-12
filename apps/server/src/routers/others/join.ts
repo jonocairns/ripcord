@@ -75,8 +75,16 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
 
 		if (pendingVoiceReconnectChannelId !== undefined) {
 			const pendingVoiceRuntime = VoiceRuntime.findById(pendingVoiceReconnectChannelId);
+			// Adopt the seat only while it is still the one this client instance
+			// held at disconnect time. The seat lookup is keyed by user id, so
+			// without the incarnation comparison a reconnect after a takeover would
+			// bind this connection to the successor's seat — and any leave it later
+			// issues (give-up, desktop quit flush) would evict the successor.
+			const seatUnchangedSinceDisconnect =
+				pendingVoiceRuntime?.getUser(ctx.user.id) !== undefined &&
+				pendingVoiceRuntime.getVoiceSessionIncarnation(ctx.user.id) === ctx.getPendingVoiceReconnectSeatIncarnation();
 
-			if (pendingVoiceRuntime?.getUser(ctx.user.id)) {
+			if (seatUnchangedSinceDisconnect && pendingVoiceRuntime) {
 				ctx.currentVoiceChannelId = pendingVoiceRuntime.id;
 				ctx.currentVoiceSessionIncarnation = pendingVoiceRuntime.getVoiceSessionIncarnation(ctx.user.id);
 				ctx.setWsVoiceChannelId(pendingVoiceRuntime.id);
