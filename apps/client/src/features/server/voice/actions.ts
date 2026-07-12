@@ -512,7 +512,7 @@ const leaveVoiceMutation = (options: { suppressErrors?: boolean }): Promise<bool
 		abortController.abort();
 	}
 
-	return enqueueVoiceSessionMutation(async () => {
+	const result = (async () => {
 		const client = getTRPCClient();
 
 		try {
@@ -524,7 +524,12 @@ const leaveVoiceMutation = (options: { suppressErrors?: boolean }): Promise<bool
 			}
 			return false;
 		}
-	});
+	})();
+	voiceSessionMutationQueue = result.then(
+		() => undefined,
+		() => undefined,
+	);
+	return result;
 };
 
 const leaveVoiceSessionAfterRecoveryFailure = (): Promise<boolean> => {

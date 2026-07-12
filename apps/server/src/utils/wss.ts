@@ -47,6 +47,7 @@ type TTrackedWebSocket = WebSocket & {
 	token: string;
 	clientInstanceId?: string;
 	currentVoiceChannelId?: number;
+	latestVoiceSessionMutationSeq?: number;
 	presenceStatus?: TUserPresenceStatus;
 };
 
@@ -94,7 +95,7 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 	}
 
 	const decodedUser = await getUserByToken(token);
-	let latestVoiceSessionMutationSeq: number | undefined;
+	let fallbackVoiceSessionMutationSeq: number | undefined;
 
 	invariant(decodedUser, {
 		code: 'UNAUTHORIZED',
@@ -305,16 +306,25 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 			return true;
 		}
 
+		const latestVoiceSessionMutationSeq =
+			connectionWs?.latestVoiceSessionMutationSeq ?? fallbackVoiceSessionMutationSeq;
 		if (latestVoiceSessionMutationSeq !== undefined && mutationSeq < latestVoiceSessionMutationSeq) {
 			return false;
 		}
 
-		latestVoiceSessionMutationSeq = mutationSeq;
+		if (connectionWs) {
+			connectionWs.latestVoiceSessionMutationSeq = mutationSeq;
+		} else {
+			fallbackVoiceSessionMutationSeq = mutationSeq;
+		}
 		return true;
 	};
 
-	const isCurrentVoiceSessionMutation = (mutationSeq: number | undefined): boolean =>
-		mutationSeq === undefined || latestVoiceSessionMutationSeq === mutationSeq;
+	const isCurrentVoiceSessionMutation = (mutationSeq: number | undefined): boolean => {
+		const latestVoiceSessionMutationSeq =
+			connectionWs?.latestVoiceSessionMutationSeq ?? fallbackVoiceSessionMutationSeq;
+		return mutationSeq === undefined || latestVoiceSessionMutationSeq === mutationSeq;
+	};
 
 	return {
 		pubsub,
