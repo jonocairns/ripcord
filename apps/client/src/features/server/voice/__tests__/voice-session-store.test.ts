@@ -369,9 +369,9 @@ describe('voice session store', () => {
 		resetVoiceSessionState();
 
 		// An identical post-reset sequence must mint strictly newer identities:
-		// listeners (and pending executor operations) survive reset without
-		// notification, so a repeated generation/commandId pair would make a
-		// stale operation read as current again.
+		// listeners (and pending executor operations) survive reset, so a repeated
+		// generation/commandId pair could make a late operation read as current
+		// again even when no executor listener is available to abort it.
 		const [secondSnapshot] = dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
 
 		if (secondSnapshot?.type !== 'CaptureRecoverySnapshot') {
@@ -384,7 +384,7 @@ describe('voice session store', () => {
 		expect(isVoiceSessionCommandCurrent(secondSnapshot)).toBe(true);
 	});
 
-	it('keeps state-only listeners across reset while dropping buffered commands', () => {
+	it('notifies state-only listeners on reset while dropping buffered commands', () => {
 		const observedPhases: string[] = [];
 		const unsubscribe = subscribeVoiceSessionState((state) => {
 			observedPhases.push(state.phase.phase);
@@ -395,7 +395,7 @@ describe('voice session store', () => {
 		dispatchVoiceSession({ type: 'JoinRequested', channelId: 6 });
 		unsubscribe();
 
-		expect(observedPhases).toEqual(['rebuilding', 'joining']);
+		expect(observedPhases).toEqual(['rebuilding', 'idle', 'joining']);
 
 		const executed: string[] = [];
 		const unregister = registerVoiceSessionCommandRunner((commands) => {
