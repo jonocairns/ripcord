@@ -1,6 +1,8 @@
 # Voice Session Execution Extraction and Transactional Restore Plan
 
-**Status:** Planned.
+**Status:** In progress. C0 and C1 landed in PR #278; the remaining slices are
+planned. Completed slices carry a **Landed** note recording what was built and
+what later slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -138,8 +140,8 @@ session store. It does not read the Zustand reconnect projection.
 
 | Slice | PR | Workstream | Depends on | Outcome |
 | --- | --- | --- | --- | --- |
-| C0 | client 1 | Client | current PR #277 state | Executable contract and deterministic test harness |
-| C1 | client 1 | Client | C0 | Direct machine observation; no projection dependency |
+| C0 | client 1 (#278) | Client | current PR #277 state | Executable contract and deterministic test harness |
+| C1 | client 1 (#278) | Client | C0 | Direct machine observation; no projection dependency |
 | C2 | client 2 | Client | C1 | Executor foundation and simple/final commands |
 | C3 | client 2 | Client | C2 | Online, auth, and retry-delay commands extracted |
 | C4 | client 3 | Client | C3 | WS restore command extracted |
@@ -173,7 +175,7 @@ back to one slice per PR — the slice boundaries already support that.
 
 | PR | Slices | Suggested title |
 | --- | --- | --- |
-| client 1 | C0 + C1 | Add voice session executor boundary and store selectors |
+| client 1 (#278) | C0 + C1 | Add voice session executor boundary and store selectors |
 | client 2 | C2 + C3 | Execute voice session final and wait commands outside provider |
 | client 3 | C4 | Extract voice restore command execution |
 | client 4 | C5 | Extract voice transport rebuild execution |
@@ -229,6 +231,37 @@ behavior is unchanged.
 
 **Suggested commit:** `refactor: add voice session command executor boundary`
 
+**Landed** (PR #278) as specified, with the proposed contract names. Notes for
+later slices:
+
+- The machine exports the pure currency predicate
+  `isCurrentVoiceSessionCommand(state, command)`; the store binds it as
+  `isVoiceSessionCommandCurrent(command)`. The provider still carries its own
+  duplicate until C6.
+- The executor distinguishes recovery-step commands (currency-tracked:
+  stale-rejection and `context.isCurrent` read live machine currency) from
+  final commands (`RecoverDesktopAppAudio`, `LeaveVoiceSession`,
+  `ClearFailedSession`), which the machine never marks current. Final validity
+  belongs to the store's buffered-flush filter and C2's generation checks;
+  their `isCurrent` reflects only abort/disposal, and they are never
+  stale-rejected.
+- Supersession cancellation rides the store subscription: listeners run before
+  command delivery, so the superseded operation's signal aborts before the
+  superseding command's effect starts.
+- `WaitOnline`/`WaitAuth`/`RetryDelay` are explicit no-ops in the executor
+  until C3 implements them — safe only while the executor stays unwired.
+- Final-operation ports receive no command context (matching the contract), so
+  a cancelled final is not observable by its port, and the C0 executor
+  swallows final-port rejections after bookkeeping cleanup. C2 must decide
+  whether leave/clear need a context or an error-reporting port to satisfy its
+  "failures are reported" test.
+- No fake scheduler was needed: deferred promises plus the real machine/store
+  were sufficient. Revisit when C3 introduces delay/online polling.
+- Harness note: once the executor is the registered command runner, a trigger
+  event runs the snapshot round trip synchronously (`CaptureRecoverySnapshot`
+  → `RecoveryStarted` → next command). Tests must capture live commands from
+  port invocations; manually replaying a result event afterwards is stale.
+
 ### C1 — Direct machine observation and selector hook
 
 **Objective:** Make the session store sufficient for executor waits and React
@@ -263,6 +296,26 @@ rendering so Zustand synchronization order cannot affect correctness.
 change executor/store test results.
 
 **Suggested commit:** `refactor: expose direct voice session store selectors`
+
+**Landed** (PR #278) as specified. Notes for later slices:
+
+- The direct selectors are pure functions in `voice-session-machine.ts`
+  (`selectPendingVoiceReconnect`, `selectReconnectingSince`,
+  `selectReconnectAuthenticated`, `selectVoiceReconnectSuppression`); the
+  coordinator's `getMachine*` wrappers and its projection sync delegate to
+  them, so the phase-versus-mirror fallback logic exists once.
+- `subscribeVoiceSessionState` notifies state-only listeners before the legacy
+  full listeners, and both run before command delivery; state listeners
+  survive `resetVoiceSessionState` while the command outbox clears.
+- `useVoiceSessionSelector` lives in `voice-session-hooks.ts` and requires
+  selectors that return stable references for unchanged state (the machine
+  selectors do). `voice-control.tsx` reads `reconnectingSince` through it as
+  the first consumer; C7 migrates the remaining `useVoiceReconnectStore`
+  consumers (`use-voice-events.ts` and the provider's imperative reads).
+- The executor's supersession sweep subscribes through the state-only API.
+- The exit criterion holds structurally: the store/executor test files never
+  import `reconnect-coordinator`, so its module-eval projection listener does
+  not exist in those runs.
 
 ### C2 — Executor foundation and final/simple commands
 
