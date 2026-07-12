@@ -308,10 +308,10 @@ change executor/store test results.
   full listeners, and both run before command delivery; state listeners
   survive `resetVoiceSessionState` while the command outbox clears.
 - `resetVoiceSessionState` preserves the monotonic generation/command counters
-  (PR #278 review finding): reset retains listeners without notifying them, so
-  a pending executor operation survives it — if a post-reset session could
-  mint the same generation/commandId pair, that operation's late completion
-  would read as current and advance the new session.
+  (PR #278 review finding). Reset notifies retained state-only listeners, so the
+  executor aborts pending recovery-step operations immediately; the monotonic
+  identities additionally prevent any other long-lived operation that misses
+  reset from matching and advancing a later session.
 - `useVoiceSessionSelector` lives in `voice-session-hooks.ts` and requires
   selectors that return stable references for unchanged state (the machine
   selectors do). `voice-control.tsx` reads `reconnectingSince` through it as
