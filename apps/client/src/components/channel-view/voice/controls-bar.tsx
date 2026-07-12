@@ -63,7 +63,7 @@ const ControlsBar = memo(({ channelId, onExitStage }: TControlsBarProps) => {
 					disabledIcon={Headphones}
 					enabledClassName="border-destructive/20 bg-destructive/14 text-destructive hover:!border-destructive/20 hover:!bg-destructive/14 hover:!text-destructive"
 					disabledClassName="text-white/75 hover:!border-white/10 hover:!bg-white/7 hover:!text-white"
-					onClick={toggleSound}
+					onClick={() => void toggleSound()}
 				/>
 
 				<ControlToggleButton

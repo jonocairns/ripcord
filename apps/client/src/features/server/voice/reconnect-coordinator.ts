@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import { logDebug } from '@/helpers/browser-logger';
 import { useServerStore } from '../slice';
+import {
+	dispatchVoiceSession,
+	getVoiceSessionState,
+	resetVoiceSessionState,
+	subscribeVoiceSession,
+} from './voice-session-store';
 
 type TPendingVoiceReconnect = {
 	channelId: number;
@@ -27,7 +33,8 @@ type TClearReason =
 	| 'kicked'
 	| 'banned'
 	| 'session-replaced'
-	| 'voice-join-succeeded'
+	| 'user-started-voice-join'
+	| 'join-failed'
 	| 'restore-conflict'
 	| 'restore-terminal-error'
 	| 'reconnect-expired'
@@ -68,34 +75,121 @@ const initialState: IVoiceReconnectState = {
 	reconnectAuthenticated: false,
 };
 
+const voiceReconnectStateFromMachine = (): IVoiceReconnectState => {
+	const { pendingVoiceReconnect, phase, reconnectAuthenticated, reconnectingSince, suppression } =
+		getVoiceSessionState();
+
+	if (phase.phase !== 'reconnecting') {
+		return {
+			pendingVoiceReconnect,
+			reconnectingSince,
+			voiceReconnectSuppression: suppression,
+			reconnectAuthenticated,
+		};
+	}
+
+	return {
+		pendingVoiceReconnect: phase.pending,
+		reconnectingSince: phase.reconnectingSince,
+		voiceReconnectSuppression: suppression,
+		reconnectAuthenticated: phase.authenticated,
+	};
+};
+
+const syncVoiceReconnectProjection = (): void => {
+	useVoiceReconnectStore.setState({
+		...voiceReconnectStateFromMachine(),
+	});
+};
+
+const getMachinePendingVoiceReconnect = (): TPendingVoiceReconnect | undefined => {
+	const { pendingVoiceReconnect, phase } = getVoiceSessionState();
+
+	return phase.phase === 'reconnecting' ? phase.pending : pendingVoiceReconnect;
+};
+
+const getMachineReconnectingSince = (): number | undefined => {
+	const { phase, reconnectingSince } = getVoiceSessionState();
+
+	return phase.phase === 'reconnecting' ? phase.reconnectingSince : reconnectingSince;
+};
+
+const getMachineReconnectAuthenticated = (): boolean => {
+	const { phase, reconnectAuthenticated } = getVoiceSessionState();
+
+	return phase.phase === 'reconnecting' ? phase.authenticated : reconnectAuthenticated;
+};
+
+const getMachineVoiceReconnectSuppression = (): TVoiceReconnectSuppression | undefined =>
+	getVoiceSessionState().suppression;
+
+const isBrowserOnline = (): boolean => {
+	if (typeof navigator === 'undefined' || typeof navigator.onLine !== 'boolean') {
+		return true;
+	}
+
+	return navigator.onLine;
+};
+
 const useVoiceReconnectStore = create<TVoiceReconnectStore>((set) => ({
 	...initialState,
 
 	setPendingVoiceReconnect: (intent) => {
-		set({ pendingVoiceReconnect: intent });
+		dispatchVoiceSession({ type: 'ReconnectIntentCaptured', pending: intent });
+		syncVoiceReconnectProjection();
 	},
 
 	setReconnectingSince: (timestamp) => {
-		set({ reconnectingSince: timestamp });
+		if (timestamp !== undefined) {
+			dispatchVoiceSession({
+				type: 'ReconnectStarted',
+				now: timestamp,
+				online: isBrowserOnline(),
+				authenticated: getMachineReconnectAuthenticated(),
+			});
+			syncVoiceReconnectProjection();
+			return;
+		}
+
+		dispatchVoiceSession({ type: 'ReconnectStartCleared' });
+		syncVoiceReconnectProjection();
 	},
 
 	setReconnectAuthenticated: (value) => {
-		set({ reconnectAuthenticated: value });
+		dispatchVoiceSession({ type: value ? 'SocketAuthenticated' : 'SocketUnauthenticated' });
+		syncVoiceReconnectProjection();
 	},
 
 	setVoiceReconnectSuppression: (suppression) => {
-		set({ voiceReconnectSuppression: suppression });
+		dispatchVoiceSession({ type: 'ReconnectSuppressionChanged', suppression });
+		syncVoiceReconnectProjection();
 	},
 
 	clearVoiceReconnectRecovery: (reason) => {
 		logDebug('clearVoiceReconnectRecovery', { reason });
+		dispatchVoiceSession({ type: 'RecoveryCleared', reason });
 		set({ ...initialState });
 	},
 
 	resetState: () => {
+		resetVoiceSessionState();
 		set({ ...initialState });
 	},
 }));
+
+// Keep the zustand projection in lockstep with every machine transition. This
+// runs as a session-store listener registered at module eval, which strictly
+// precedes the VoiceProvider's command-runner subscription (a mount effect) —
+// so command runners that read the projection (waitForVoiceReconnectAuthenticated
+// and friends) always observe post-dispatch state. Without this, a command
+// emitted synchronously inside a dispatch (e.g. WaitAuth right after
+// ReconnectStarted) reads the pre-dispatch projection, sees reconnectingSince
+// undefined, and aborts recovery as 'cleared'. It also covers machine
+// transitions triggered from the provider (e.g. WatchIntentRehydrated), which
+// don't go through the coordinator setters at all.
+subscribeVoiceSession(() => {
+	syncVoiceReconnectProjection();
+});
 
 const snapshotVoiceReconnectIntent = (opts: { expiresAt: number }): void => {
 	const serverState = useServerStore.getState();
@@ -110,13 +204,16 @@ const snapshotVoiceReconnectIntent = (opts: { expiresAt: number }): void => {
 		.map(Number)
 		.filter((id) => id !== ownUserId);
 
-	useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+	const pendingVoiceReconnect: TPendingVoiceReconnect = {
 		channelId: currentVoiceChannelId,
 		micMuted: ownVoiceDefaults.micMuted,
 		soundMuted: ownVoiceDefaults.soundMuted,
 		peerUserIds: [...peerUserIds],
 		expiresAt: opts.expiresAt,
-	});
+	};
+
+	dispatchVoiceSession({ type: 'ReconnectIntentCaptured', pending: pendingVoiceReconnect });
+	syncVoiceReconnectProjection();
 
 	logDebug('Voice reconnect intent snapshotted', {
 		channelId: currentVoiceChannelId,
@@ -140,33 +237,43 @@ const captureVoiceReconnectIntentForCurrentSession = (): boolean => {
 };
 
 const ensureVoiceReconnectStarted = (timestamp = Date.now()): void => {
-	const reconnectState = useVoiceReconnectStore.getState();
+	const reconnectingSince = getMachineReconnectingSince();
 
-	if (reconnectState.reconnectingSince !== undefined) {
+	if (reconnectingSince !== undefined) {
 		return;
 	}
 
-	reconnectState.setReconnectingSince(timestamp);
+	dispatchVoiceSession({
+		type: 'ReconnectStarted',
+		now: timestamp,
+		online: isBrowserOnline(),
+		authenticated: getMachineReconnectAuthenticated(),
+	});
+	syncVoiceReconnectProjection();
 };
 
 // Called when a WS drop is detected: the next socket must re-authenticate before
 // voice recovery may run restoreOrJoin.
 const markVoiceReconnectSessionUnauthenticated = (): void => {
-	useVoiceReconnectStore.getState().setReconnectAuthenticated(false);
+	dispatchVoiceSession({ type: 'SocketUnauthenticated' });
+	syncVoiceReconnectProjection();
 };
 
 // Called once joinServer succeeds on the reconnected socket, unblocking the
 // gated voice recovery.
 const markVoiceReconnectSessionAuthenticated = (): void => {
-	useVoiceReconnectStore.getState().setReconnectAuthenticated(true);
+	dispatchVoiceSession({ type: 'SocketAuthenticated' });
+	syncVoiceReconnectProjection();
 };
 
 const clearVoiceReconnectRecovery = (reason: TClearReason): void => {
 	useVoiceReconnectStore.getState().clearVoiceReconnectRecovery(reason);
 };
 
+const isVoiceReconnectRecoveryActive = (): boolean => getVoiceSessionState().phase.phase === 'reconnecting';
+
 const getValidPendingVoiceReconnect = (): TPendingVoiceReconnect | undefined => {
-	const { pendingVoiceReconnect } = useVoiceReconnectStore.getState();
+	const pendingVoiceReconnect = getMachinePendingVoiceReconnect();
 
 	if (!pendingVoiceReconnect || Date.now() > pendingVoiceReconnect.expiresAt) {
 		return undefined;
@@ -176,7 +283,7 @@ const getValidPendingVoiceReconnect = (): TPendingVoiceReconnect | undefined => 
 };
 
 const isVoiceReconnectPeerSuppressed = (channelId: number, userId: number): boolean => {
-	const { voiceReconnectSuppression } = useVoiceReconnectStore.getState();
+	const voiceReconnectSuppression = getMachineVoiceReconnectSuppression();
 
 	if (!voiceReconnectSuppression || Date.now() > voiceReconnectSuppression.expiresAt) {
 		return false;
@@ -213,6 +320,7 @@ export {
 	ensureVoiceReconnectStarted,
 	getValidPendingVoiceReconnect,
 	isVoiceReconnectPeerSuppressed,
+	isVoiceReconnectRecoveryActive,
 	markVoiceReconnectSessionAuthenticated,
 	markVoiceReconnectSessionUnauthenticated,
 	resolveVoiceRecoveryAction,

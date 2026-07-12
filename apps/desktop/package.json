@@ -1,120 +1,120 @@
 {
-  "name": "@sharkord/desktop",
-  "private": true,
-  "version": "1.4.20",
-  "productName": "Ripcord",
-  "description": "Ripcord Desktop",
-  "author": "Ripcord",
-  "type": "module",
-  "trustedDependencies": [
-    "electron"
-  ],
-  "main": "dist/main/index.cjs",
-  "scripts": {
-    "dev": "bun run build:sidecar:optional && concurrently -k \"cd ../client && bun run dev\" \"bun run dev:main\" \"bun run dev:electron\" \"bun run dev:sidecar\"",
-    "dev:sidecar": "cd sidecar && cargo watch -w src -s \"node ../scripts/build-sidecar.mjs\"",
-    "dev:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --external @evan/opus --sourcemap --watch --clean",
-    "dev:electron": "wait-on tcp:5173 file:dist/main/index.cjs && cross-env ELECTRON_RENDERER_URL=http://localhost:5173 electronmon . --watch sidecar/bin",
-    "build:windows": "node ./scripts/build-windows-electron.mjs",
-    "build:windows:dev": "node ./scripts/build-windows-electron.mjs --dev",
-    "launch:windows": "node ./scripts/launch-windows.mjs",
-    "launch:windows:dev": "wait-on tcp:5173 && node ./scripts/launch-windows.mjs --dev",
-    "build:sidecar": "node ./scripts/build-sidecar.mjs --release",
-    "build:sidecar:optional": "node ./scripts/build-sidecar.mjs --release --optional",
-    "build:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --external @evan/opus --clean",
-    "prepare:renderer": "node ./scripts/prepare-renderer-dist.mjs",
-    "build": "cd ../client && bun run build && cd ../desktop && bun run prepare:renderer && bun run build:sidecar && bun run build:main && bun run package:preview",
-    "package:preview": "electron-builder --dir",
-    "format": "biome format --write ./src ./scripts",
-    "check-types": "bun run typecheck",
-    "typecheck": "tsc --noEmit",
-    "lint": "biome lint ./src ./scripts",
-    "lint:fix": "biome lint --fix ./src ./scripts",
-    "smoke:opus": "node ./scripts/smoke-opus.mjs",
-    "test": "bun test"
-  },
-  "build": {
-    "extends": null,
-    "appId": "com.sharkord.desktop",
-    "productName": "Ripcord",
-    "icon": "icons/icon.png",
-    "directories": {
-      "output": "build/out",
-      "buildResources": "assets"
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "jonocairns",
-        "repo": "ripcord"
-      }
-    ],
-    "asar": true,
-    "asarUnpack": [
-      "node_modules/@evan/opus/**"
-    ],
-    "files": [
-      "dist/**/*",
-      "renderer-dist/**/*",
-      "assets/icons/**/*",
-      "package.json",
-      "node_modules/@evan/opus/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "sidecar/bin",
-        "to": "sidecar/bin",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
-    "mac": {
-      "target": [
-        "dmg"
-      ],
-      "category": "public.app-category.social-networking"
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ],
-      "executableName": "Ripcord",
-      "icon": "icons/icon.ico"
-    },
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "executableName": "Ripcord",
-      "category": "Network",
-      "icon": "icons/icon.png"
-    },
-    "nsis": {
-      "artifactName": "Ripcord.Desktop.Setup.${version}.${ext}",
-      "installerIcon": "icons/icon.ico",
-      "uninstallerIcon": "icons/icon.ico",
-      "installerHeaderIcon": "icons/icon.ico"
-    },
-    "portable": {
-      "artifactName": "Ripcord.exe"
-    }
-  },
-  "dependencies": {
-    "@evan/opus": "^1.0.3",
-    "@sentry/electron": "^7.13.0",
-    "electron-updater": "^6.8.3",
-    "werift-rtp": "^0.8.8"
-  },
-  "devDependencies": {
-    "@types/node": "^24.5.2",
-    "concurrently": "^9.2.1",
-    "cross-env": "^10.0.0",
-    "electron": "42.3.0",
-    "electron-builder": "^26.8.1",
-    "electronmon": "^2.0.3",
-    "tsup": "^8.5.0",
-    "typescript": "~5.8.3",
-    "wait-on": "^8.0.5"
-  }
+	"name": "@sharkord/desktop",
+	"private": true,
+	"version": "1.4.20",
+	"productName": "Ripcord",
+	"description": "Ripcord Desktop",
+	"author": "Ripcord",
+	"type": "module",
+	"trustedDependencies": [
+		"electron"
+	],
+	"main": "dist/main/index.cjs",
+	"scripts": {
+		"dev": "bun run build:sidecar:optional && concurrently -k \"cd ../client && bun run dev\" \"bun run dev:main\" \"bun run dev:electron\" \"bun run dev:sidecar\"",
+		"dev:sidecar": "cd sidecar && cargo watch -w src -s \"node ../scripts/build-sidecar.mjs\"",
+		"dev:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --external @evan/opus --sourcemap --watch --clean",
+		"dev:electron": "wait-on tcp:5173 file:dist/main/index.cjs && cross-env ELECTRON_RENDERER_URL=http://localhost:5173 electronmon . --watch sidecar/bin",
+		"build:windows": "node ./scripts/build-windows-electron.mjs",
+		"build:windows:dev": "node ./scripts/build-windows-electron.mjs --dev",
+		"launch:windows": "node ./scripts/launch-windows.mjs",
+		"launch:windows:dev": "wait-on tcp:5173 && node ./scripts/launch-windows.mjs --dev",
+		"build:sidecar": "node ./scripts/build-sidecar.mjs --release",
+		"build:sidecar:optional": "node ./scripts/build-sidecar.mjs --release --optional",
+		"build:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --external @evan/opus --clean",
+		"prepare:renderer": "node ./scripts/prepare-renderer-dist.mjs",
+		"build": "cd ../client && bun run build && cd ../desktop && bun run prepare:renderer && bun run build:sidecar && bun run build:main && bun run package:preview",
+		"package:preview": "electron-builder --dir",
+		"format": "biome format --write ./src ./scripts",
+		"check-types": "bun run typecheck",
+		"typecheck": "tsc --noEmit",
+		"lint": "biome lint --error-on-warnings ./src ./scripts",
+		"lint:fix": "biome lint --fix ./src ./scripts",
+		"smoke:opus": "node ./scripts/smoke-opus.mjs",
+		"test": "bun test"
+	},
+	"build": {
+		"extends": null,
+		"appId": "com.sharkord.desktop",
+		"productName": "Ripcord",
+		"icon": "icons/icon.png",
+		"directories": {
+			"output": "build/out",
+			"buildResources": "assets"
+		},
+		"publish": [
+			{
+				"provider": "github",
+				"owner": "jonocairns",
+				"repo": "ripcord"
+			}
+		],
+		"asar": true,
+		"asarUnpack": [
+			"node_modules/@evan/opus/**"
+		],
+		"files": [
+			"dist/**/*",
+			"renderer-dist/**/*",
+			"assets/icons/**/*",
+			"package.json",
+			"node_modules/@evan/opus/**/*"
+		],
+		"extraResources": [
+			{
+				"from": "sidecar/bin",
+				"to": "sidecar/bin",
+				"filter": [
+					"**/*"
+				]
+			}
+		],
+		"mac": {
+			"target": [
+				"dmg"
+			],
+			"category": "public.app-category.social-networking"
+		},
+		"win": {
+			"target": [
+				"nsis"
+			],
+			"executableName": "Ripcord",
+			"icon": "icons/icon.ico"
+		},
+		"linux": {
+			"target": [
+				"AppImage"
+			],
+			"executableName": "Ripcord",
+			"category": "Network",
+			"icon": "icons/icon.png"
+		},
+		"nsis": {
+			"artifactName": "Ripcord.Desktop.Setup.${version}.${ext}",
+			"installerIcon": "icons/icon.ico",
+			"uninstallerIcon": "icons/icon.ico",
+			"installerHeaderIcon": "icons/icon.ico"
+		},
+		"portable": {
+			"artifactName": "Ripcord.exe"
+		}
+	},
+	"dependencies": {
+		"@evan/opus": "^1.0.3",
+		"@sentry/electron": "^7.13.0",
+		"electron-updater": "^6.8.3",
+		"werift-rtp": "^0.8.8"
+	},
+	"devDependencies": {
+		"@types/node": "^24.5.2",
+		"concurrently": "^9.2.1",
+		"cross-env": "^10.0.0",
+		"electron": "42.3.0",
+		"electron-builder": "^26.8.1",
+		"electronmon": "^2.0.3",
+		"tsup": "^8.5.0",
+		"typescript": "~5.8.3",
+		"wait-on": "^8.0.5"
+	}
 }

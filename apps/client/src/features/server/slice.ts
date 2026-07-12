@@ -841,7 +841,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		const storeState = get();
 		const channelStreams = storeState.externalStreamsMap[channelId];
 
-		if (!channelStreams || !channelStreams[streamId]) {
+		if (!channelStreams?.[streamId]) {
 			return;
 		}
 

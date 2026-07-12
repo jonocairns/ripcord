@@ -213,6 +213,87 @@ describe('voice.restoreOrJoin', () => {
 		}
 	});
 
+	test('applies the restoring client state to an existing seat and notifies peers only on change', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+
+		const stateEvents: Array<{
+			channelId: number;
+			userId: number;
+			micMuted: boolean;
+			soundMuted: boolean;
+		}> = [];
+		const stateSub = pubsub.subscribe(ServerEvents.USER_VOICE_STATE_UPDATE).subscribe({
+			next: (event) => {
+				stateEvents.push({
+					channelId: event.channelId,
+					userId: event.userId,
+					micMuted: event.state.micMuted,
+					soundMuted: event.state.soundMuted,
+				});
+			},
+		});
+
+		try {
+			const { caller } = await initTest(1);
+
+			await caller.voice.join({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: false,
+					soundMuted: false,
+				},
+			});
+
+			// The seat predates this restore (surviving seat, or one adopted from a
+			// superseded attempt). A mute toggled since must land on the seat, be
+			// returned in the bootstrap, and reach peers — nothing reconciles it
+			// after restore otherwise.
+			const result = await caller.voice.restoreOrJoin({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: true,
+					soundMuted: false,
+				},
+				reconnectAttemptId: 'attempt-1',
+			});
+
+			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUserState(1)).toMatchObject({
+				micMuted: true,
+				soundMuted: false,
+			});
+			expect(result.channelUsers).toContainEqual(
+				expect.objectContaining({
+					userId: 1,
+					state: expect.objectContaining({ micMuted: true, soundMuted: false }),
+				}),
+			);
+			expect(stateEvents).toEqual([
+				{
+					channelId: PRIMARY_VOICE_CHANNEL_ID,
+					userId: 1,
+					micMuted: true,
+					soundMuted: false,
+				},
+			]);
+
+			stateEvents.length = 0;
+
+			// Restoring with unchanged state must not spam peers with updates.
+			await caller.voice.restoreOrJoin({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: true,
+					soundMuted: false,
+				},
+				reconnectAttemptId: 'attempt-2',
+			});
+
+			expect(stateEvents).toEqual([]);
+		} finally {
+			stateSub.unsubscribe();
+		}
+	});
+
 	test('forced reconnect-lab restore failures are one-shot', async () => {
 		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 
@@ -251,6 +332,230 @@ describe('voice.restoreOrJoin', () => {
 		});
 
 		expect(result.channelUsers.some((user) => user.userId === 1)).toBe(true);
+	});
+
+	test('fences a delayed restore attempt when a newer attempt starts for the same client', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+
+		const { caller } = await initTest(1);
+
+		await caller.voice.join({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+		});
+
+		await caller.voice.reconnectLab.setNextRestoreBehavior({ delayMs: 100 });
+
+		const delayedRestore = caller.voice.restoreOrJoin({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+			reconnectAttemptId: 'attempt-delayed',
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const currentRestore = await caller.voice.restoreOrJoin({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+			reconnectAttemptId: 'attempt-current',
+		});
+
+		expect(currentRestore.channelUsers.some((user) => user.userId === 1)).toBe(true);
+		await expect(delayedRestore).rejects.toThrow('Voice restore attempt superseded');
+		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getProducerTransport(1)).toBeDefined();
+		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getConsumerTransport(1)).toBeDefined();
+	});
+
+	test('rejects a delayed restore after a manual join moved the user to another channel', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		await ensureVoiceRuntime(SECONDARY_VOICE_CHANNEL_ID, 'Voice 2');
+
+		const { caller } = await initTest(1);
+
+		await caller.voice.join({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+		});
+
+		await caller.voice.reconnectLab.setNextRestoreBehavior({ delayMs: 100 });
+
+		const delayedRestore = caller.voice.restoreOrJoin({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+			reconnectAttemptId: 'attempt-delayed-vs-manual-join',
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		// The user switches channels while the restore sits in the delay window.
+		await caller.voice.join({
+			channelId: SECONDARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+		});
+
+		// Without the post-await recheck the delayed restore re-seated the user
+		// in the channel they just left, creating a phantom double membership.
+		await expect(delayedRestore).rejects.toThrow(VOICE_SESSION_WRONG_CHANNEL);
+		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeUndefined();
+		expect(VoiceRuntime.findById(SECONDARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeDefined();
+	});
+
+	test('does not commit transports created by a superseded restore attempt', async () => {
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		let staleAttemptCurrent = true;
+		const staleProducer = runtime
+			.createProducerTransport(1, () => staleAttemptCurrent)
+			.catch((error: unknown) => error);
+		const staleConsumer = runtime
+			.createConsumerTransport(1, () => staleAttemptCurrent)
+			.catch((error: unknown) => error);
+		staleAttemptCurrent = false;
+
+		const [producerParams, consumerParams] = await Promise.all([
+			runtime.createProducerTransport(1),
+			runtime.createConsumerTransport(1),
+		]);
+
+		expect(await staleProducer).toEqual(expect.objectContaining({ message: 'Voice restore attempt superseded' }));
+		expect(await staleConsumer).toEqual(expect.objectContaining({ message: 'Voice restore attempt superseded' }));
+		expect(runtime.getProducerTransport(1)?.id).toBe(producerParams.id);
+		expect(runtime.getConsumerTransport(1)?.id).toBe(consumerParams.id);
+	});
+
+	test('rolls back an aborted provisional restore seat when no successor adopted it', async () => {
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const claim = runtime.beginProvisionalRestoreSeat(1);
+
+		expect(runtime.rollbackProvisionalRestoreSeat(1, claim)).toBe(true);
+		expect(runtime.getUser(1)).toBeUndefined();
+		expect(runtime.getProducerTransport(1)).toBeUndefined();
+		expect(runtime.getConsumerTransport(1)).toBeUndefined();
+	});
+
+	test('publishes leave when an inherited provisional seat is rolled back before bootstrap', async () => {
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const { caller } = await initTest(1);
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		runtime.beginProvisionalRestoreSeat(1);
+
+		const leaveEvents: Array<{ channelId: number; userId: number; reconnecting?: boolean }> = [];
+		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+			next: (event) => leaveEvents.push(event),
+		});
+
+		try {
+			await caller.voice.reconnectLab.setNextRestoreBehavior({
+				failMessage: 'VOICE_RECONNECT_LAB_FORCED_FAILURE',
+			});
+
+			await expect(
+				caller.voice.restoreOrJoin({
+					channelId: PRIMARY_VOICE_CHANNEL_ID,
+					state: { micMuted: false, soundMuted: false },
+					reconnectAttemptId: 'attempt-inherited-pre-bootstrap-failure',
+				}),
+			).rejects.toThrow('VOICE_RECONNECT_LAB_FORCED_FAILURE');
+
+			expect(runtime.getUser(1)).toBeUndefined();
+			expect(leaveEvents).toEqual([
+				{
+					channelId: PRIMARY_VOICE_CHANNEL_ID,
+					userId: 1,
+					reconnecting: true,
+				},
+			]);
+		} finally {
+			leaveSub.unsubscribe();
+		}
+	});
+
+	test('does not let a superseded fresh restore roll back the seat adopted by its successor', async () => {
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const originalCreateProducerTransport = runtime.createProducerTransport;
+		let producerCallCount = 0;
+		let releaseFirstProducer: () => void = () => {};
+		let markFirstProducerEntered: () => void = () => {};
+		const firstProducerEntered = new Promise<void>((resolve) => {
+			markFirstProducerEntered = resolve;
+		});
+		const firstProducerGate = new Promise<void>((resolve) => {
+			releaseFirstProducer = resolve;
+		});
+
+		runtime.createProducerTransport = async (userId, isCurrent) => {
+			producerCallCount += 1;
+
+			if (producerCallCount === 1) {
+				markFirstProducerEntered();
+				await firstProducerGate;
+			}
+
+			return originalCreateProducerTransport(userId, isCurrent);
+		};
+
+		const joinEvents: number[] = [];
+		const leaveEvents: number[] = [];
+		const joinSub = pubsub.subscribe(ServerEvents.USER_JOIN_VOICE).subscribe({
+			next: (event) => joinEvents.push(event.channelId),
+		});
+		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+			next: (event) => leaveEvents.push(event.channelId),
+		});
+
+		try {
+			const { caller } = await initTest(1);
+			const staleRestore = caller.voice
+				.restoreOrJoin({
+					channelId: PRIMARY_VOICE_CHANNEL_ID,
+					state: { micMuted: false, soundMuted: false },
+					reconnectAttemptId: 'attempt-fresh-stale',
+				})
+				.catch((error: unknown) => error);
+
+			await firstProducerEntered;
+
+			const currentRestore = await caller.voice.restoreOrJoin({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: { micMuted: false, soundMuted: false },
+				reconnectAttemptId: 'attempt-fresh-current',
+			});
+
+			releaseFirstProducer();
+
+			expect(currentRestore.channelUsers.some((user) => user.userId === 1)).toBe(true);
+			expect(await staleRestore).toEqual(expect.objectContaining({ message: 'Voice restore attempt superseded' }));
+			expect(runtime.getUser(1)).toBeDefined();
+			expect(runtime.getProducerTransport(1)).toBeDefined();
+			expect(runtime.getConsumerTransport(1)).toBeDefined();
+			expect(joinEvents).toEqual([PRIMARY_VOICE_CHANNEL_ID]);
+			expect(leaveEvents).toEqual([]);
+		} finally {
+			releaseFirstProducer();
+			runtime.createProducerTransport = originalCreateProducerTransport;
+			joinSub.unsubscribe();
+			leaveSub.unsubscribe();
+		}
 	});
 
 	test('forgetOwnVoiceSession drops the server-side voice session and broadcasts a reconnecting leave', async () => {
@@ -539,7 +844,16 @@ describe('voice.restoreOrJoin', () => {
 	});
 
 	test('restores its own pending grace seat when the tracked socket has not populated its clientInstanceId yet', async () => {
-		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const originalCreateProducerTransport = runtime.createProducerTransport;
+		let releaseProducerTransport: () => void = () => {};
+		let markProducerTransportEntered: () => void = () => {};
+		const producerTransportEntered = new Promise<void>((resolve) => {
+			markProducerTransportEntered = resolve;
+		});
+		const producerTransportGate = new Promise<void>((resolve) => {
+			releaseProducerTransport = resolve;
+		});
 
 		const mockedToken = await getMockedToken(1);
 		const ctxA = await createMockContext({
@@ -599,8 +913,13 @@ describe('voice.restoreOrJoin', () => {
 				},
 			});
 			expect(getPendingVoiceReconnectChannelId(sessionA.clientInstanceId, 1)).toBe(PRIMARY_VOICE_CHANNEL_ID);
+			runtime.createProducerTransport = async (userId, isCurrent) => {
+				markProducerTransportEntered();
+				await producerTransportGate;
+				return originalCreateProducerTransport(userId, isCurrent);
+			};
 
-			const result = await callerB.voice.restoreOrJoin({
+			const restore = callerB.voice.restoreOrJoin({
 				channelId: PRIMARY_VOICE_CHANNEL_ID,
 				state: {
 					micMuted: false,
@@ -608,13 +927,212 @@ describe('voice.restoreOrJoin', () => {
 				},
 				reconnectAttemptId: 'attempt-pending-grace-restore',
 			});
+			await producerTransportEntered;
+
+			// Transport bootstrap has started, but the replacement socket must not
+			// clear the only disconnect cleanup path until bootstrap commits.
+			expect(sessionB.currentVoiceChannelId).toBeUndefined();
+			expect(getPendingVoiceReconnectChannelId(sessionA.clientInstanceId, 1)).toBe(PRIMARY_VOICE_CHANNEL_ID);
+
+			releaseProducerTransport();
+			const result = await restore;
 
 			expect(result.channelUsers.some((entry) => entry.userId === 1)).toBe(true);
 			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeDefined();
 			expect(getPendingVoiceReconnectChannelId(sessionA.clientInstanceId, 1)).toBeUndefined();
 			expect(finalized).toBe(false);
 		} finally {
+			releaseProducerTransport();
+			runtime.createProducerTransport = originalCreateProducerTransport;
 			openSessions.length = 0;
+		}
+	});
+});
+
+describe('voice session incarnation ownership', () => {
+	test('a newer leave mutation prevents a delayed join from committing', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		await ensureVoiceRuntime(SECONDARY_VOICE_CHANNEL_ID, 'Other voice');
+
+		const ctx = await createMockContext({
+			customToken: await getMockedToken(1),
+		});
+		const caller = appRouter.createCaller(ctx);
+		const { handshakeHash } = await caller.others.handshake();
+		await caller.others.joinServer({ handshakeHash });
+
+		await caller.voice.join({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+			mutationSeq: 0,
+		});
+
+		let markDelayedJoinStarted: (() => void) | undefined;
+		const delayedJoinStarted = new Promise<void>((resolve) => {
+			markDelayedJoinStarted = resolve;
+		});
+		let releaseDelayedJoin: (() => void) | undefined;
+		const waitBeforeJoinTargetResolve = new Promise<void>((resolve) => {
+			releaseDelayedJoin = resolve;
+		});
+		const originalNeedsChannelPermission = ctx.needsChannelPermission;
+		Reflect.set(
+			ctx,
+			'needsChannelPermission',
+			async (...args: Parameters<typeof originalNeedsChannelPermission>): Promise<void> => {
+				await originalNeedsChannelPermission(...args);
+				if (args[0] === SECONDARY_VOICE_CHANNEL_ID) {
+					markDelayedJoinStarted?.();
+					await waitBeforeJoinTargetResolve;
+				}
+			},
+		);
+
+		const delayedJoin = caller.voice
+			.join({
+				channelId: SECONDARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: false,
+					soundMuted: false,
+				},
+				mutationSeq: 1,
+			})
+			.then(
+				() => ({ kind: 'resolved' as const }),
+				(error: unknown) => ({ kind: 'rejected' as const, error }),
+			);
+
+		await delayedJoinStarted;
+		await caller.voice.leave({ mutationSeq: 2 });
+		releaseDelayedJoin?.();
+
+		const delayedJoinOutcome = await delayedJoin;
+		expect(delayedJoinOutcome.kind).toBe('rejected');
+		if (delayedJoinOutcome.kind === 'resolved') {
+			throw new Error('Expected the delayed join to be superseded');
+		}
+		expect(delayedJoinOutcome.error).toMatchObject({
+			code: 'CONFLICT',
+		});
+		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeUndefined();
+		expect(VoiceRuntime.findById(SECONDARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeUndefined();
+		expect(ctx.currentVoiceChannelId).toBeUndefined();
+	});
+
+	test('a delayed leave from a replaced session does not remove the replacement', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+
+		const mockedToken = await getMockedToken(1);
+		const ctxA = await createMockContext({
+			customToken: mockedToken,
+		});
+		const ctxB = await createMockContext({
+			customToken: mockedToken,
+		});
+		const sessionA = {
+			clientInstanceId: 'incarnation-a',
+			currentVoiceChannelId: undefined as number | undefined,
+		};
+		const sessionB = {
+			clientInstanceId: 'incarnation-b',
+			currentVoiceChannelId: undefined as number | undefined,
+		};
+		const trackedSessions = [sessionA, sessionB];
+
+		attachTrackedSession(ctxA, sessionA, trackedSessions);
+		attachTrackedSession(ctxB, sessionB, trackedSessions);
+
+		const leaveEvents: number[] = [];
+		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+			next: (event) => {
+				leaveEvents.push(event.channelId);
+			},
+		});
+
+		try {
+			const callerA = appRouter.createCaller(ctxA);
+			const callerB = appRouter.createCaller(ctxB);
+			const handshakeA = await callerA.others.handshake();
+			const handshakeB = await callerB.others.handshake();
+
+			await callerA.others.joinServer({
+				handshakeHash: handshakeA.handshakeHash,
+			});
+			await callerB.others.joinServer({
+				handshakeHash: handshakeB.handshakeHash,
+			});
+
+			await callerA.voice.join({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: false,
+					soundMuted: false,
+				},
+			});
+
+			// B's join replaces A's session in the same channel: one eviction leave.
+			await callerB.voice.join({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: true,
+					soundMuted: false,
+				},
+			});
+			expect(leaveEvents).toEqual([PRIMARY_VOICE_CHANNEL_ID]);
+
+			// A's delayed leave still references its replaced session, so it must
+			// not remove B's seat and must not publish another leave.
+			await callerA.voice.leave();
+
+			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeDefined();
+			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUserState(1)?.micMuted).toBe(true);
+			expect(leaveEvents).toEqual([PRIMARY_VOICE_CHANNEL_ID]);
+			expect(ctxA.currentVoiceChannelId).toBeUndefined();
+			expect(ctxB.currentVoiceChannelId).toBe(PRIMARY_VOICE_CHANNEL_ID);
+
+			// The owning session's leave still works.
+			await callerB.voice.leave();
+
+			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeUndefined();
+			expect(leaveEvents).toEqual([PRIMARY_VOICE_CHANNEL_ID, PRIMARY_VOICE_CHANNEL_ID]);
+			expect(ctxB.currentVoiceChannelId).toBeUndefined();
+		} finally {
+			leaveSub.unsubscribe();
+		}
+	});
+
+	test('a leave whose seat is already gone is a graceful no-op', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+
+		const { caller } = await initTest(1);
+
+		await caller.voice.join({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+		});
+
+		// Simulate the seat disappearing out from under this connection (e.g. a
+		// disconnect-grace expiry on another socket).
+		VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.removeUser(1);
+
+		const leaveEvents: number[] = [];
+		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+			next: (event) => {
+				leaveEvents.push(event.channelId);
+			},
+		});
+
+		try {
+			await expect(caller.voice.leave()).resolves.toBeUndefined();
+			expect(leaveEvents).toEqual([]);
+		} finally {
+			leaveSub.unsubscribe();
 		}
 	});
 });

@@ -155,6 +155,46 @@ const classifyVoiceReconnectError = (
 	};
 };
 
+// How long a cancelled reconnect attempt may hold the single-flight restore
+// slot while its in-flight promise settles. The restore RPC aborts with the
+// attempt's AbortController so it settles almost immediately, but the
+// media/transport init pipeline has awaits with no abort wiring (server RPCs,
+// device/media acquisition) that can hang past the reconnect timeout. Draining
+// unbounded would park the queued retry forever with no expiry timer armed.
+const VOICE_RECONNECT_CANCELLED_DRAIN_MS = 2_000;
+
+// Wait briefly for a cancelled attempt's unsettled operation so its rollback
+// lands before the next attempt starts, then detach it. Detaching is safe:
+// the stale operation re-checks its attempt guards (attemptActive /
+// isCurrentVoiceSessionCommand / isCurrentRecovery) after every await, so it
+// cannot mutate shared session state once superseded — it can only clean
+// itself up if it eventually settles.
+const drainCancelledVoiceReconnectOperation = async (
+	operation: Promise<unknown> | undefined,
+	drainMs: number = VOICE_RECONNECT_CANCELLED_DRAIN_MS,
+): Promise<'settled' | 'detached'> => {
+	if (operation === undefined) {
+		return 'settled';
+	}
+
+	let handle: ReturnType<typeof setTimeout> | undefined;
+	const settled = operation.then(
+		() => 'settled' as const,
+		() => 'settled' as const,
+	);
+	const detached = new Promise<'detached'>((resolve) => {
+		handle = setTimeout(() => resolve('detached'), drainMs);
+	});
+
+	try {
+		return await Promise.race([settled, detached]);
+	} finally {
+		if (handle !== undefined) {
+			clearTimeout(handle);
+		}
+	}
+};
+
 const getVoiceReconnectRetryDelayMs = (attempt: number, randomValue: number): number => {
 	const baseDelay =
 		VOICE_RECONNECT_BACKOFF_MS[Math.min(attempt, VOICE_RECONNECT_BACKOFF_MS.length - 1)] ??
@@ -205,4 +245,9 @@ const isUnsupportedDeviceError = (message: string): boolean => {
 	);
 };
 
-export { classifyVoiceReconnectError, getVoiceReconnectRetryDelayMs, VoiceReconnectTimeoutError };
+export {
+	classifyVoiceReconnectError,
+	drainCancelledVoiceReconnectOperation,
+	getVoiceReconnectRetryDelayMs,
+	VoiceReconnectTimeoutError,
+};

@@ -13,6 +13,7 @@ import {
 	useVoiceReconnectStore,
 	VOICE_RECONNECT_INTENT_TTL_MS,
 } from '../reconnect-coordinator';
+import { subscribeVoiceSession } from '../voice-session-store';
 
 describe('voice reconnect coordinator', () => {
 	beforeEach(() => {
@@ -54,6 +55,7 @@ describe('voice reconnect coordinator', () => {
 			expect(pendingVoiceReconnect.soundMuted).toBe(false);
 			expect(pendingVoiceReconnect.peerUserIds).toEqual([10, 20]);
 			expect(pendingVoiceReconnect.expiresAt).toBe(expiresAt);
+			expect(useVoiceReconnectStore.getState().reconnectingSince).toBeUndefined();
 		});
 
 		it('copies peerUserIds by value so later voiceMap mutations do not affect the snapshot', () => {
@@ -303,6 +305,40 @@ describe('voice reconnect coordinator', () => {
 
 			expect(useVoiceReconnectStore.getState().reconnectingSince).toBe(1234);
 		});
+
+		it('syncs the zustand projection before command listeners run', () => {
+			// The machine's commands run synchronously inside the dispatch, and their
+			// runners consult the zustand projection (waitForVoiceReconnectAuthenticated
+			// reads reconnectingSince to distinguish 'cleared'). If the projection only
+			// synced after the dispatch returned, the WaitAuth command emitted by
+			// ReconnectStarted would observe the pre-dispatch state and abort recovery.
+			useServerStore.setState({
+				ownUserId: 1,
+				currentVoiceChannelId: 5,
+				voiceMap: {
+					5: { users: { 1: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false } } },
+				},
+			});
+			captureVoiceReconnectIntentForCurrentSession();
+
+			const observed: Array<number | undefined> = [];
+			const unsubscribe = subscribeVoiceSession((_state, commands) => {
+				if (commands.length > 0) {
+					observed.push(useVoiceReconnectStore.getState().reconnectingSince);
+				}
+			});
+
+			try {
+				ensureVoiceReconnectStarted(1234);
+			} finally {
+				unsubscribe();
+			}
+
+			expect(observed.length).toBeGreaterThan(0);
+			for (const reconnectingSince of observed) {
+				expect(reconnectingSince).toBe(1234);
+			}
+		});
 	});
 
 	describe('reconnect authentication gate', () => {
@@ -320,7 +356,7 @@ describe('voice reconnect coordinator', () => {
 		it('resets the auth gate when recovery is cleared', () => {
 			markVoiceReconnectSessionAuthenticated();
 
-			clearVoiceReconnectRecovery('voice-join-succeeded');
+			clearVoiceReconnectRecovery('user-started-voice-join');
 
 			expect(useVoiceReconnectStore.getState().reconnectAuthenticated).toBe(false);
 		});

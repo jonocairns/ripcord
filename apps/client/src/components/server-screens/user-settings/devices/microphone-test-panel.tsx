@@ -10,10 +10,9 @@ import {
 	type TMicAudioProcessingPipeline,
 } from '@/components/voice-provider/mic-audio-processing';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
-import { updateOwnVoiceState } from '@/features/server/voice/actions';
+import { sendOwnVoiceStateUpdate, updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
 import { useLatestRef } from '@/hooks/use-latest-ref';
-import { getTRPCClient } from '@/lib/trpc';
 
 const ANALYSER_FFT_SIZE = 512;
 const ANALYSER_SMOOTHING = 0.8;
@@ -259,7 +258,7 @@ const MicrophoneTestPanel = memo(
 				}
 
 				try {
-					await getTRPCClient().voice.updateState.mutate({
+					await sendOwnVoiceStateUpdate({
 						micMuted: nextMicMuted,
 						soundMuted: nextSoundMuted,
 					});

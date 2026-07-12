@@ -115,7 +115,7 @@ const OwnVoiceControls = memo(() => {
 						ownVoiceState.soundMuted &&
 							'bg-destructive/12 text-destructive hover:!bg-destructive/12 hover:!text-destructive',
 					)}
-					onClick={toggleSound}
+					onClick={() => void toggleSound()}
 					title={ownVoiceState.soundMuted ? 'Undeafen' : 'Deafen'}
 				>
 					{ownVoiceState.soundMuted ? <HeadphoneOff className="h-4 w-4" /> : <Headphones className="h-4 w-4" />}

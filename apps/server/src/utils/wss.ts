@@ -31,6 +31,7 @@ import type { Context } from './trpc';
 import {
 	clearPendingVoiceDisconnect,
 	getPendingVoiceReconnectChannelId,
+	getPendingVoiceReconnectSeatIncarnation,
 	schedulePendingVoiceDisconnect,
 } from './voice-disconnect-grace';
 
@@ -46,6 +47,7 @@ type TTrackedWebSocket = WebSocket & {
 	token: string;
 	clientInstanceId?: string;
 	currentVoiceChannelId?: number;
+	latestVoiceSessionMutationSeq?: number;
 	presenceStatus?: TUserPresenceStatus;
 };
 
@@ -93,6 +95,7 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 	}
 
 	const decodedUser = await getUserByToken(token);
+	let fallbackVoiceSessionMutationSeq: number | undefined;
 
 	invariant(decodedUser, {
 		code: 'UNAUTHORIZED',
@@ -298,6 +301,31 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 		usersIpMap.set(userId, ip);
 	};
 
+	const registerVoiceSessionMutation = (mutationSeq: number | undefined): boolean => {
+		if (mutationSeq === undefined) {
+			return true;
+		}
+
+		const latestVoiceSessionMutationSeq =
+			connectionWs?.latestVoiceSessionMutationSeq ?? fallbackVoiceSessionMutationSeq;
+		if (latestVoiceSessionMutationSeq !== undefined && mutationSeq < latestVoiceSessionMutationSeq) {
+			return false;
+		}
+
+		if (connectionWs) {
+			connectionWs.latestVoiceSessionMutationSeq = mutationSeq;
+		} else {
+			fallbackVoiceSessionMutationSeq = mutationSeq;
+		}
+		return true;
+	};
+
+	const isCurrentVoiceSessionMutation = (mutationSeq: number | undefined): boolean => {
+		const latestVoiceSessionMutationSeq =
+			connectionWs?.latestVoiceSessionMutationSeq ?? fallbackVoiceSessionMutationSeq;
+		return mutationSeq === undefined || latestVoiceSessionMutationSeq === mutationSeq;
+	};
+
 	return {
 		pubsub,
 		token,
@@ -306,7 +334,12 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 		userId: decodedUser.id,
 		handshakeHash: '',
 		currentVoiceChannelId: undefined,
+		currentVoiceSessionIncarnation: undefined,
+		registerVoiceSessionMutation,
+		isCurrentVoiceSessionMutation,
 		getPendingVoiceReconnectChannelId: () => getPendingVoiceReconnectChannelId(getClientInstanceId(), decodedUser.id),
+		getPendingVoiceReconnectSeatIncarnation: () =>
+			getPendingVoiceReconnectSeatIncarnation(getClientInstanceId(), decodedUser.id),
 		// The tracked WS field is populated asynchronously (createContext / first
 		// message), so during a reconnect race getOwnWs()?.clientInstanceId can be
 		// missing. The connection params always carry it, so this is the reliable
@@ -387,6 +420,7 @@ const createWsServer = async (server: http.Server) => {
 				if (voiceRuntime?.getUser(userId)) {
 					const channelId = voiceRuntime.id;
 					const clientInstanceId = trackedWs.clientInstanceId;
+					const seatIncarnation = voiceRuntime.getVoiceSessionIncarnation(userId);
 					const finalizeVoiceDisconnect = () => {
 						if (hasAnyOpenUserVoiceConnection(userId, channelId)) {
 							return;
@@ -394,11 +428,9 @@ const createWsServer = async (server: http.Server) => {
 
 						const latestVoiceRuntime = VoiceRuntime.findById(channelId);
 
-						if (!latestVoiceRuntime?.getUser(userId)) {
+						if (!latestVoiceRuntime?.removeUserIfSessionMatches(userId, seatIncarnation)) {
 							return;
 						}
-
-						latestVoiceRuntime.removeUser(userId);
 
 						pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
 							channelId,
@@ -410,6 +442,7 @@ const createWsServer = async (server: http.Server) => {
 						clientInstanceId,
 						userId,
 						channelId,
+						seatIncarnation,
 						wsCloseCode,
 						finalize: finalizeVoiceDisconnect,
 					});

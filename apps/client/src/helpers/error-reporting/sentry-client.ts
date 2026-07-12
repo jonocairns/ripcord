@@ -45,7 +45,7 @@ const buildDesktopFrameRewriter = (serverUrl: string) => {
 	const assetPattern = /\/assets\/([^/?#]+\.js)(?:[?#].*)?$/;
 
 	return (frame: { filename?: string }) => {
-		if (!frame.filename || !frame.filename.startsWith('file://')) {
+		if (!frame.filename?.startsWith('file://')) {
 			return frame;
 		}
 

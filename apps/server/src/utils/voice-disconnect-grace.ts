@@ -22,6 +22,10 @@ type TPendingVoiceDisconnect = {
 	clientInstanceId?: string;
 	userId: number;
 	channelId: number;
+	// Incarnation token of the seat at disconnect time. Reconnect adoption
+	// compares it against the runtime's current token so a connection never
+	// adopts a seat that a newer session replaced while it was away.
+	seatIncarnation?: symbol;
 	timer: ReturnType<typeof setTimeout>;
 	scheduledAt: number;
 	expiresAt: number;
@@ -32,6 +36,7 @@ type TSchedulePendingVoiceDisconnectOptions = {
 	clientInstanceId?: string;
 	userId: number;
 	channelId: number;
+	seatIncarnation?: symbol;
 	wsCloseCode?: number;
 	finalize: () => void;
 	ttlMs?: number;
@@ -41,6 +46,7 @@ type TScheduleTrackedDisconnectOptions = {
 	clientInstanceId: string;
 	userId: number;
 	channelId: number;
+	seatIncarnation?: symbol;
 	wsCloseCode?: number;
 	finalize: () => void;
 	ttlMs: number;
@@ -155,6 +161,14 @@ const getPendingVoiceReconnectChannelId = (clientInstanceId: string | undefined,
 	return pendingDisconnect.channelId;
 };
 
+const getPendingVoiceReconnectSeatIncarnation = (clientInstanceId: string | undefined, userId: number) => {
+	if (!clientInstanceId) {
+		return undefined;
+	}
+
+	return pendingVoiceDisconnects.get(getPendingVoiceDisconnectKey(userId, clientInstanceId))?.seatIncarnation;
+};
+
 const getPendingVoiceReconnectChannelIdsOwnedElsewhere = (userId: number, clientInstanceId?: string) => {
 	const channelIds: number[] = [];
 
@@ -177,6 +191,7 @@ const scheduleTrackedDisconnect = ({
 	clientInstanceId,
 	userId,
 	channelId,
+	seatIncarnation,
 	wsCloseCode,
 	finalize,
 	ttlMs,
@@ -211,6 +226,7 @@ const scheduleTrackedDisconnect = ({
 		clientInstanceId,
 		userId,
 		channelId,
+		seatIncarnation,
 		timer,
 		scheduledAt,
 		expiresAt,
@@ -302,6 +318,7 @@ const schedulePendingVoiceDisconnect = ({
 	clientInstanceId,
 	userId,
 	channelId,
+	seatIncarnation,
 	wsCloseCode,
 	finalize,
 	ttlMs = VOICE_DISCONNECT_GRACE_MS,
@@ -322,6 +339,7 @@ const schedulePendingVoiceDisconnect = ({
 		clientInstanceId,
 		userId,
 		channelId,
+		seatIncarnation,
 		wsCloseCode,
 		finalize,
 		ttlMs,
@@ -353,6 +371,7 @@ export {
 	FALLBACK_VOICE_DISCONNECT_GRACE_MS,
 	getPendingVoiceReconnectChannelId,
 	getPendingVoiceReconnectChannelIdsOwnedElsewhere,
+	getPendingVoiceReconnectSeatIncarnation,
 	getVoiceDisconnectGraceCounters,
 	resetVoiceDisconnectGraceForTests,
 	schedulePendingVoiceDisconnect,

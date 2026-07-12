@@ -52,6 +52,13 @@ const produceRoute = protectedProcedure
 			rtpParameters: input.rtpParameters,
 			appData: { kind: input.kind, userId: ctx.user.id },
 		});
+		if (runtime.getProducerTransport(ctx.user.id) !== producerTransport) {
+			producer.close();
+			invariant(false, {
+				code: 'BAD_REQUEST',
+				message: 'Producer transport replaced during produce',
+			});
+		}
 
 		runtime.addProducer(ctx.user.id, input.kind, producer);
 

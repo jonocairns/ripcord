@@ -15,6 +15,7 @@ const voiceJoinStateSchema = z.object({
 const voiceJoinInputSchema = z.object({
 	channelId: z.number(),
 	state: voiceJoinStateSchema,
+	mutationSeq: z.number().int().nonnegative().optional(),
 });
 
 const getVoiceJoinTarget = async (ctx: Context, channelId: number) => {
@@ -49,8 +50,9 @@ const createVoiceJoinBootstrap = async (opts: {
 	runtime: VoiceRuntime;
 	userId: number;
 	onError?: (error: unknown) => void | Promise<void>;
+	isCurrent?: () => boolean;
 }) => {
-	const { runtime, userId, onError } = opts;
+	const { runtime, userId, onError, isCurrent } = opts;
 	const router = runtime.getRouter();
 
 	let producerTransportParams;
@@ -59,8 +61,8 @@ const createVoiceJoinBootstrap = async (opts: {
 
 	try {
 		[producerTransportParams, consumerTransportParams] = await Promise.all([
-			runtime.createProducerTransport(userId),
-			runtime.createConsumerTransport(userId),
+			runtime.createProducerTransport(userId, isCurrent),
+			runtime.createConsumerTransport(userId, isCurrent),
 		]);
 
 		existingProducers = runtime.getRemoteIds(userId);

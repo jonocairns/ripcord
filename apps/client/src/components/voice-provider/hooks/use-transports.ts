@@ -7,6 +7,7 @@ import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
 import { withConsumeAttemptTimeout } from './consume-attempt-timeout';
 import {
+	cancelConsumeOperation,
 	createConsumeOperationState,
 	finishConsumeOperation,
 	isCurrentConsumeOperation,
@@ -34,6 +35,8 @@ const ICE_DISCONNECT_GRACE_MS = 30_000;
 // fast and leaves the rest of the recovery budget for the actual consumes.
 const EXISTING_PRODUCERS_RPC_TIMEOUT_MS = 4_000;
 
+const getConsumeOperationKey = (remoteId: number, kind: StreamKind): string => `${remoteId}-${kind}`;
+
 type TConsumeAttemptResult = 'success' | 'failure';
 
 type TConsumeOptions = {
@@ -57,7 +60,7 @@ type TUseTransportParams = {
 	) => void;
 	removeExternalStreamTrack: (streamId: number, kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO) => void;
 	addPendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
-	clearAllPendingStreams: () => void;
+	clearAllPendingStreams: (opts?: { preserveIntent?: boolean }) => void;
 	reconcilePendingStreams: (producers: TRemoteProducerIds, externalStreamTracks?: TExternalStreamTrackPresence) => void;
 	markWatchStopped: (remoteId: number, kind: StreamKind) => void;
 	markConsumeStarted: (
@@ -139,7 +142,7 @@ const useTransports = ({
 	);
 
 	const createProducerTransport = useCallback(
-		async (device: Device, prefetchedParams?: TTransportParams) => {
+		async (device: Device, prefetchedParams?: TTransportParams, isCurrent?: () => boolean) => {
 			logVoice('Creating producer transport', {
 				device,
 				prefetched: !!prefetchedParams,
@@ -150,6 +153,10 @@ const useTransports = ({
 			try {
 				const params = prefetchedParams ?? (await trpc.voice.createProducerTransport.mutate());
 
+				if (isCurrent && !isCurrent()) {
+					throw new Error('Producer transport creation superseded');
+				}
+
 				logVoice('Got producer transport parameters', { params });
 
 				const transport = device.createSendTransport(params);
@@ -159,9 +166,16 @@ const useTransports = ({
 					logVoice('Producer transport connected', { dtlsParameters });
 
 					try {
+						if (producerTransport.current !== transport || transport.closed) {
+							throw new Error('Producer transport connect superseded');
+						}
 						await trpc.voice.connectProducerTransport.mutate({
 							dtlsParameters,
+							transportId: transport.id,
 						});
+						if (producerTransport.current !== transport || transport.closed) {
+							throw new Error('Producer transport connect superseded');
+						}
 
 						callback();
 					} catch (error) {
@@ -190,8 +204,14 @@ const useTransports = ({
 
 						void (async () => {
 							try {
-								const { iceParameters } = await getTRPCClient().voice.restartProducerIce.mutate();
-								if (transport.connectionState !== 'connected' && !transport.closed) {
+								const { iceParameters } = await getTRPCClient().voice.restartProducerIce.mutate({
+									transportId: transport.id,
+								});
+								if (
+									producerTransport.current === transport &&
+									transport.connectionState !== 'connected' &&
+									!transport.closed
+								) {
 									await transport.restartIce({ iceParameters });
 									logVoice('ICE restart initiated for producer transport');
 								}
@@ -231,18 +251,21 @@ const useTransports = ({
 
 					const { kind } = appData as { kind: StreamKind };
 
-					if (!producerTransport.current) {
+					if (producerTransport.current !== transport || transport.closed) {
 						errback(new Error('Producer transport not available'));
 						return;
 					}
 
 					try {
 						const producerId = await trpc.voice.produce.mutate({
-							transportId: producerTransport.current.id,
+							transportId: transport.id,
 							kind,
 							rtpParameters,
 						});
 
+						if (producerTransport.current !== transport || transport.closed) {
+							throw new Error('Producer transport produce superseded');
+						}
 						callback({ id: producerId });
 					} catch (error) {
 						if (error instanceof TRPCClientError) {
@@ -267,7 +290,7 @@ const useTransports = ({
 	);
 
 	const createConsumerTransport = useCallback(
-		async (device: Device, prefetchedParams?: TTransportParams) => {
+		async (device: Device, prefetchedParams?: TTransportParams, isCurrent?: () => boolean) => {
 			logVoice('Creating consumer transport', {
 				device,
 				prefetched: !!prefetchedParams,
@@ -277,6 +300,10 @@ const useTransports = ({
 
 			try {
 				const params = prefetchedParams ?? (await trpc.voice.createConsumerTransport.mutate());
+
+				if (isCurrent && !isCurrent()) {
+					throw new Error('Consumer transport creation superseded');
+				}
 
 				logVoice('Got consumer transport parameters', { params });
 
@@ -288,9 +315,16 @@ const useTransports = ({
 					logVoice('Consumer transport connected', { dtlsParameters });
 
 					try {
+						if (consumerTransport.current !== transport || transport.closed) {
+							throw new Error('Consumer transport connect superseded');
+						}
 						await trpc.voice.connectConsumerTransport.mutate({
 							dtlsParameters,
+							transportId: transport.id,
 						});
+						if (consumerTransport.current !== transport || transport.closed) {
+							throw new Error('Consumer transport connect superseded');
+						}
 
 						callback();
 					} catch (error) {
@@ -341,8 +375,14 @@ const useTransports = ({
 
 						void (async () => {
 							try {
-								const { iceParameters } = await getTRPCClient().voice.restartConsumerIce.mutate();
-								if (transport.connectionState !== 'connected' && !transport.closed) {
+								const { iceParameters } = await getTRPCClient().voice.restartConsumerIce.mutate({
+									transportId: transport.id,
+								});
+								if (
+									consumerTransport.current === transport &&
+									transport.connectionState !== 'connected' &&
+									!transport.closed
+								) {
 									await transport.restartIce({ iceParameters });
 									logVoice('ICE restart initiated for consumer transport');
 								}
@@ -412,6 +452,7 @@ const useTransports = ({
 						remoteId,
 						rtpCapabilities,
 						paused: true,
+						transportId: transport.id,
 					}),
 				);
 				serverConsumerCleanupTarget = { remoteId, kind, consumerId };
@@ -537,6 +578,7 @@ const useTransports = ({
 						trpc.voice.resumeConsumer.mutate({
 							remoteId,
 							kind,
+							consumerId,
 						}),
 					);
 				} catch (error) {
@@ -604,7 +646,7 @@ const useTransports = ({
 					},
 				},
 				async () => {
-					const operationKey = `${remoteId}-${kind}`;
+					const operationKey = getConsumeOperationKey(remoteId, kind);
 					const operation = options.restartExisting
 						? restartConsumeOperation(consumeOperationState.current, operationKey)
 						: reserveConsumeOperation(consumeOperationState.current, operationKey);
@@ -829,55 +871,74 @@ const useTransports = ({
 				return;
 			}
 
+			// Invalidate any in-flight consume for this slot before the ledger write.
+			// The ledger only rejects the stale success (it has no consumer to close
+			// yet), so without this the running consumeOnce would still attach and
+			// resume a live consumer that nothing owns. Cancelling flips its
+			// isCurrentConsumeOperation guards, which close both local and server
+			// consumers. Screen audio rides along with the screen, mirroring the
+			// markRemoteWatchStopped cascade.
+			cancelConsumeOperation(consumeOperationState.current, getConsumeOperationKey(remoteId, kind));
+
+			if (kind === StreamKind.SCREEN) {
+				cancelConsumeOperation(
+					consumeOperationState.current,
+					getConsumeOperationKey(remoteId, StreamKind.SCREEN_AUDIO),
+				);
+			}
+
 			markWatchStopped(remoteId, kind);
 		},
 		[markWatchStopped],
 	);
 
-	const cleanupTransports = useCallback(() => {
-		logVoice('Cleaning up transports');
+	const cleanupTransports = useCallback(
+		(opts?: { preserveRemoteMediaIntent?: boolean }) => {
+			logVoice('Cleaning up transports');
 
-		if (producerDisconnectTimer.current !== undefined) {
-			clearTimeout(producerDisconnectTimer.current);
-			producerDisconnectTimer.current = undefined;
-		}
+			if (producerDisconnectTimer.current !== undefined) {
+				clearTimeout(producerDisconnectTimer.current);
+				producerDisconnectTimer.current = undefined;
+			}
 
-		if (consumerDisconnectTimer.current !== undefined) {
-			clearTimeout(consumerDisconnectTimer.current);
-			consumerDisconnectTimer.current = undefined;
-		}
+			if (consumerDisconnectTimer.current !== undefined) {
+				clearTimeout(consumerDisconnectTimer.current);
+				consumerDisconnectTimer.current = undefined;
+			}
 
-		Object.values(consumers.current).forEach((userConsumers) => {
-			Object.values(userConsumers).forEach((consumer) => {
-				if (!consumer.closed) {
-					consumer.close();
-				}
+			Object.values(consumers.current).forEach((userConsumers) => {
+				Object.values(userConsumers).forEach((consumer) => {
+					if (!consumer.closed) {
+						consumer.close();
+					}
+				});
 			});
-		});
 
-		consumers.current = {};
+			consumers.current = {};
 
-		resetConsumeOperationGeneration(consumeOperationState.current);
-		// Drop any in-flight/queued existing-producer sweep so a stalled sweep
-		// (e.g. a hung getProducers during reconnect) cannot poison the
-		// single-flight state for the rebuilt transport generation.
-		existingProducersSweeperRef.current?.reset();
-		clearAllPendingStreams();
+			resetConsumeOperationGeneration(consumeOperationState.current);
+			// Drop any in-flight/queued existing-producer sweep so a stalled sweep
+			// (e.g. a hung getProducers during reconnect) cannot poison the
+			// single-flight state for the rebuilt transport generation.
+			existingProducersSweeperRef.current?.reset();
+			clearAllPendingStreams({ preserveIntent: opts?.preserveRemoteMediaIntent === true });
 
-		if (producerTransport.current && !producerTransport.current.closed) {
-			producerTransport.current.close();
-		}
+			if (producerTransport.current && !producerTransport.current.closed) {
+				producerTransport.current.close();
+			}
 
-		producerTransport.current = undefined;
+			producerTransport.current = undefined;
 
-		if (consumerTransport.current && !consumerTransport.current.closed) {
-			consumerTransport.current.close();
-		}
+			if (consumerTransport.current && !consumerTransport.current.closed) {
+				consumerTransport.current.close();
+			}
 
-		consumerTransport.current = undefined;
+			consumerTransport.current = undefined;
 
-		logVoice('Transports cleanup complete');
-	}, [clearAllPendingStreams]);
+			logVoice('Transports cleanup complete');
+		},
+		[clearAllPendingStreams],
+	);
 
 	const getActiveConsumerProducerId = useCallback(
 		(remoteId: number, kind: StreamKind): string | undefined => consumers.current[remoteId]?.[kind]?.producerId,

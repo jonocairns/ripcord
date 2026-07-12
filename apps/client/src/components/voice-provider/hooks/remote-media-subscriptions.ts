@@ -1,5 +1,6 @@
 import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
 import { useCallback, useMemo, useState } from 'react';
+import type { TWatchedRemoteStreamsSnapshot } from '@/features/server/voice/voice-session-machine';
 import {
 	getOldestRepairEligiblePendingCreatedAt,
 	getPendingStreamKey,
@@ -74,6 +75,8 @@ export type TRemoteMediaReducerResult = {
 	state: TRemoteMediaSubscriptions;
 	commands: TRemoteMediaCommand[];
 };
+
+export type { TWatchedRemoteStreamsSnapshot };
 
 type TRemoteMediaCommandContext = {
 	externalStreamTracks?: TExternalStreamTrackPresence;
@@ -443,6 +446,38 @@ export const markRemoteWatchRequested = (
 	};
 };
 
+const rehydrateRemoteWatchIntentSlot = (
+	subscriptions: TRemoteMediaSubscriptions,
+	remoteId: number,
+	kind: StreamKind,
+	now: number,
+): TRemoteMediaSubscriptions => {
+	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
+
+	if (existing !== undefined) {
+		return subscriptions;
+	}
+
+	const base = makeSubscription(remoteId, kind, now);
+
+	return applySlotUpdate(
+		subscriptions,
+		undefined,
+		{
+			...base,
+			producerPresent: false,
+			producerId: undefined,
+			desired: true,
+			status: 'failed',
+			consumerId: undefined,
+			consumeGeneration: undefined,
+			pendingSince: undefined,
+			lastFailureReason: undefined,
+		},
+		now,
+	);
+};
+
 export const markRemoteWatchStopped = (
 	subscriptions: TRemoteMediaSubscriptions,
 	remoteId: number,
@@ -496,7 +531,7 @@ export const markRemoteRetryRequested = (
 	const key = getPendingStreamKey(remoteId, kind);
 	const existing = subscriptions.get(key);
 
-	if (!existing || !existing.producerPresent || !existing.desired) {
+	if (!existing?.producerPresent || !existing.desired) {
 		return emptyResult(subscriptions);
 	}
 
@@ -743,7 +778,7 @@ export const markRemoteConsumerClosed = (
 	const key = getPendingStreamKey(remoteId, kind);
 	const existing = subscriptions.get(key);
 
-	if (!existing || existing.status !== 'consumed') {
+	if (existing?.status !== 'consumed') {
 		return emptyResult(subscriptions);
 	}
 
@@ -805,6 +840,36 @@ export const clearRemoteMediaForExternalStream = (
 	});
 
 	return changed ? next : subscriptions;
+};
+
+export const clearRemoteMediaProducerStateForTransportCleanup = (
+	subscriptions: TRemoteMediaSubscriptions,
+	now: number,
+): TRemoteMediaSubscriptions => {
+	if (subscriptions.size === 0) {
+		return subscriptions;
+	}
+
+	let next = subscriptions;
+
+	subscriptions.forEach((subscription) => {
+		next = applySlotUpdate(
+			next,
+			subscription,
+			{
+				...subscription,
+				producerPresent: false,
+				producerId: undefined,
+				status: subscription.desired ? 'failed' : 'available',
+				consumerId: undefined,
+				consumeGeneration: undefined,
+				pendingSince: undefined,
+			},
+			now,
+		);
+	});
+
+	return next;
 };
 
 const producerSlotsFromSnapshot = (
@@ -893,6 +958,36 @@ export const reconcileRemoteMediaWithProducerSnapshot = (
 	});
 
 	return { state: next, commands };
+};
+
+export const rehydrateRemoteMediaWatchIntentOnly = (
+	subscriptions: TRemoteMediaSubscriptions,
+	snapshot: TWatchedRemoteStreamsSnapshot,
+	now: number,
+): TRemoteMediaReducerResult => {
+	let next = subscriptions;
+
+	Object.entries(snapshot.remoteUserStreams).forEach(([remoteId, kinds]) => {
+		const numericRemoteId = Number(remoteId);
+
+		kinds.forEach((kind) => {
+			next = rehydrateRemoteWatchIntentSlot(next, numericRemoteId, kind, now);
+		});
+	});
+
+	Object.entries(snapshot.externalStreams).forEach(([streamId, watchedState]) => {
+		const numericStreamId = Number(streamId);
+
+		if (watchedState.audio) {
+			next = rehydrateRemoteWatchIntentSlot(next, numericStreamId, StreamKind.EXTERNAL_AUDIO, now);
+		}
+
+		if (watchedState.video) {
+			next = rehydrateRemoteWatchIntentSlot(next, numericStreamId, StreamKind.EXTERNAL_VIDEO, now);
+		}
+	});
+
+	return emptyResult(next);
 };
 
 export const refreshRemoteMediaPendingAges = (
@@ -1117,10 +1212,25 @@ export const useRemoteMediaSubscriptions = () => {
 		},
 		[update],
 	);
-	const clearAllPendingStreams = useCallback(() => {
-		setRemoteMediaState((prev) =>
-			prev.subscriptions.size === 0 && prev.commands.length === 0 ? prev : { subscriptions: new Map(), commands: [] },
-		);
+	const clearAllPendingStreams = useCallback((opts?: { preserveIntent?: boolean }) => {
+		setRemoteMediaState((prev) => {
+			if (!opts?.preserveIntent) {
+				return prev.subscriptions.size === 0 && prev.commands.length === 0
+					? prev
+					: { subscriptions: new Map(), commands: [] };
+			}
+
+			const nextSubscriptions = clearRemoteMediaProducerStateForTransportCleanup(prev.subscriptions, Date.now());
+
+			if (nextSubscriptions === prev.subscriptions && prev.commands.length === 0) {
+				return prev;
+			}
+
+			return {
+				subscriptions: nextSubscriptions,
+				commands: [],
+			};
+		});
 	}, []);
 	const reconcilePendingStreams = useCallback(
 		(producers: TRemoteProducerIds, externalStreamTracks?: TExternalStreamTrackPresence) => {
@@ -1146,6 +1256,12 @@ export const useRemoteMediaSubscriptions = () => {
 	const markRetryRequested = useCallback(
 		(remoteId: number, kind: StreamKind, externalStreamTracks?: TExternalStreamTrackPresence) => {
 			update((prev, now) => markRemoteRetryRequested(prev, remoteId, kind, now, { externalStreamTracks }));
+		},
+		[update],
+	);
+	const rehydrateWatchIntentOnly = useCallback(
+		(snapshot: TWatchedRemoteStreamsSnapshot) => {
+			update((prev, now) => rehydrateRemoteMediaWatchIntentOnly(prev, snapshot, now));
 		},
 		[update],
 	);
@@ -1199,6 +1315,7 @@ export const useRemoteMediaSubscriptions = () => {
 		markWatchRequested,
 		markWatchStopped,
 		markRetryRequested,
+		rehydrateWatchIntentOnly,
 		markConsumeStarted,
 		markConsumeSucceeded,
 		markConsumeFailed,

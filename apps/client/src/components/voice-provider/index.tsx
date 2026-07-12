@@ -8,7 +8,17 @@ import {
 } from '@sharkord/shared';
 import { Device } from 'mediasoup-client';
 import type { AppData, Producer, RtpCapabilities, RtpCodecCapability } from 'mediasoup-client/types';
-import { createContext, type MutableRefObject, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+	createContext,
+	type MutableRefObject,
+	memo,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from 'react';
 import { toast } from 'sonner';
 import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
@@ -17,24 +27,38 @@ import { useChannelCan, useIsConnected } from '@/features/server/hooks';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
-import { clearOwnVoiceSessionAfterReconnectFailure, updateOwnVoiceState } from '@/features/server/voice/actions';
+import {
+	clearOwnVoiceSessionAfterReconnectFailure,
+	leaveVoiceSessionAfterRecoveryFailure,
+	sendOwnVoiceStateUpdate,
+	updateOwnVoiceState,
+} from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { setVoiceProviderCleanupHandler } from '@/features/server/voice/provider-cleanup';
-import {
-	clearVoiceReconnectRecovery,
-	getValidPendingVoiceReconnect,
-	useVoiceReconnectStore,
-} from '@/features/server/voice/reconnect-coordinator';
+import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordinator';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import {
-	classifyVoiceReconnectError,
+	drainCancelledVoiceReconnectOperation,
 	getVoiceReconnectRetryDelayMs,
 	VoiceReconnectTimeoutError,
 } from '@/features/server/voice/reconnect-policy';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
+import {
+	selectVoiceSessionConnectionStatus,
+	type TVoiceSessionCommand,
+	type TVoiceSessionConnectionStatus,
+	type TWatchedExternalStreamsSnapshot,
+	type TWatchedRemoteStreamsSnapshot,
+} from '@/features/server/voice/voice-session-machine';
+import {
+	dispatchVoiceSession,
+	getVoiceSessionState,
+	registerVoiceSessionCommandRunner,
+	subscribeVoiceSession,
+} from '@/features/server/voice/voice-session-store';
 import { logDebug, logVoice, reportError, traceSentrySpan } from '@/helpers/browser-logger';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
-import { getTrpcErrorData, isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
+import { getTrpcErrorData } from '@/helpers/trpc-error-data';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getTRPCClient } from '@/lib/trpc';
 import { getDesktopBridge, isDesktopRuntime } from '@/runtime/desktop-bridge';
@@ -49,14 +73,25 @@ import {
 	type TDesktopScreenShareSelection,
 	type TStartAppAudioCaptureInput,
 } from '@/runtime/types';
-import { type TDeviceSettings, type TRemoteUserStreamKinds, VideoCodecPreference } from '@/types';
+import { type TDeviceSettings, VideoCodecPreference } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
 import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } from './audio-context';
 import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from './default-input-device';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import { FloatingPinnedCard } from './floating-pinned-card';
+import {
+	claimMicPipelineOwnership,
+	createMicPipelineOwnership,
+	MicPipelineSupersededError,
+	revokeMicPipelineOwnership,
+} from './hooks/mic-pipeline-ownership';
 import { useRemoteMediaSubscriptions } from './hooks/remote-media-subscriptions';
-import { shouldDeferTransportFailureToReconnect } from './hooks/transport-failure-policy';
+import {
+	claimVoiceSessionExecution,
+	createVoiceSessionExecutionOwnership,
+	invalidateVoiceSessionExecution,
+	VoiceSessionExecutionSupersededError,
+} from './hooks/session-execution-ownership';
 import { useLocalStreams } from './hooks/use-local-streams';
 import { getPendingStreamKey, type TExternalStreamTrackPresence } from './hooks/use-pending-streams';
 import { useRemoteMediaConsumeRunner } from './hooks/use-remote-media-consume-runner';
@@ -101,6 +136,10 @@ type AudioVideoRefs = {
 type TPreparedMicPipeline = {
 	outboundStream: MediaStream;
 	outboundAudioTrack: MediaStreamTrack;
+	// True while this build's pipeline is still the one installed in the shared
+	// refs. Callers must check it before tearing the shared pipeline down on a
+	// failure — a stale build cleaning up would destroy its successor's mic.
+	ownsMicPipeline: () => boolean;
 };
 
 type TScreenShareStreamHandlers = {
@@ -108,13 +147,10 @@ type TScreenShareStreamHandlers = {
 	onVideoTrackEnded?: () => void | Promise<void>;
 };
 
-type TWatchedRemoteStreamsSnapshot = {
-	remoteUserStreams: Record<number, TRemoteUserStreamKinds[]>;
-	externalStreams: Record<number, TWatchedExternalStreamKinds>;
-};
-
 type TRecoveryJoinResult = {
 	device: Device;
+	routerRtpCapabilities: RtpCapabilities;
+	channelUsers: Array<{ userId: number; state: TVoiceUserState }>;
 	existingProducers?: TRemoteProducerIds;
 	producerTransportParams?: TTransportParams;
 	consumerTransportParams?: TTransportParams;
@@ -160,12 +196,13 @@ const createEmptyAudioVideoRefs = (): AudioVideoRefs => ({
 	externalVideoRef: { current: null },
 });
 
-enum ConnectionStatus {
-	DISCONNECTED = 'disconnected',
-	CONNECTING = 'connecting',
-	CONNECTED = 'connected',
-	FAILED = 'failed',
-}
+type TConnectionStatus = TVoiceSessionConnectionStatus;
+
+const getVoiceSessionConnectionStatusSnapshot = (): TConnectionStatus =>
+	selectVoiceSessionConnectionStatus(getVoiceSessionState());
+
+const subscribeVoiceSessionConnectionStatus = (onStoreChange: () => void): (() => void) =>
+	subscribeVoiceSession(onStoreChange);
 
 const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
 	[VideoCodecPreference.VP8]: 'video/VP8',
@@ -367,11 +404,6 @@ const shouldUseMicGainPipeline = (volume: number) => {
 	return clampVolumePercent(volume) !== 100;
 };
 
-type TWatchedExternalStreamKinds = {
-	audio: boolean;
-	video: boolean;
-};
-
 type TChannelExternalStreams = {
 	[streamId: number]: TExternalStream;
 };
@@ -526,7 +558,7 @@ const createMicGainPipeline = async (
 
 export type TVoiceProvider = {
 	loading: boolean;
-	connectionStatus: ConnectionStatus;
+	connectionStatus: TConnectionStatus;
 	audioVideoRefsMap: Map<number, AudioVideoRefs>;
 	ownVoiceState: TVoiceUserState;
 	getOrCreateRefs: (remoteId: number) => AudioVideoRefs;
@@ -556,7 +588,7 @@ export type TVoiceProvider = {
 
 const VoiceProviderContext = createContext<TVoiceProvider>({
 	loading: false,
-	connectionStatus: ConnectionStatus.DISCONNECTED,
+	connectionStatus: 'disconnected',
 	audioVideoRefsMap: new Map(),
 	getOrCreateRefs: () => createEmptyAudioVideoRefs(),
 	acceptStream: () => undefined,
@@ -598,26 +630,24 @@ type TVoiceProviderProps = {
 	children: React.ReactNode;
 };
 
-const RECOVERY_MAX_ATTEMPTS = 3;
-const RECOVERY_MAX_NONCE_RESTARTS = 5;
 const RECOVERY_TIMEOUT_MS = 12_000;
 const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
 const RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS = 350;
 const VOICE_RECONNECT_TIMEOUT_MS = 12_000;
-const VOICE_RECONNECT_SUPPRESSION_MS = 10_000;
 const VOICE_RECONNECT_WAIT_POLL_MS = 250;
 
-class VoiceSessionReconnectChangedError extends Error {
-	constructor(stage: string) {
-		super(`Voice session changed during transport recovery (${stage})`);
-		this.name = 'VoiceSessionReconnectChangedError';
-	}
-}
-
-const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, createTimeoutError: () => Error): Promise<T> => {
+const withTimeout = <T,>(
+	promise: Promise<T>,
+	timeoutMs: number,
+	createTimeoutError: () => Error,
+	onTimeout?: () => void,
+): Promise<T> => {
 	let handle: ReturnType<typeof setTimeout> | undefined;
 	const timeoutPromise = new Promise<never>((_, reject) => {
-		handle = setTimeout(() => reject(createTimeoutError()), timeoutMs);
+		handle = setTimeout(() => {
+			onTimeout?.();
+			reject(createTimeoutError());
+		}, timeoutMs);
 	});
 	return Promise.race([promise, timeoutPromise]).finally(() => {
 		if (handle !== undefined) {
@@ -626,11 +656,11 @@ const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, createTimeoutEr
 	});
 };
 
-const withRecoveryTimeout = <T,>(promise: Promise<T>): Promise<T> =>
-	withTimeout(promise, RECOVERY_TIMEOUT_MS, () => new Error('Voice transport recovery timed out'));
+const withRecoveryTimeout = <T,>(promise: Promise<T>, onTimeout?: () => void): Promise<T> =>
+	withTimeout(promise, RECOVERY_TIMEOUT_MS, () => new Error('Voice transport recovery timed out'), onTimeout);
 
-const withVoiceReconnectTimeout = <T,>(promise: Promise<T>): Promise<T> =>
-	withTimeout(promise, VOICE_RECONNECT_TIMEOUT_MS, () => new VoiceReconnectTimeoutError());
+const withVoiceReconnectTimeout = <T,>(promise: Promise<T>, onTimeout?: () => void): Promise<T> =>
+	withTimeout(promise, VOICE_RECONNECT_TIMEOUT_MS, () => new VoiceReconnectTimeoutError(), onTimeout);
 
 const isMissingVoiceSessionError = (error: unknown): boolean => getTrpcErrorData(error)?.code === 'BAD_REQUEST';
 
@@ -666,20 +696,13 @@ const createReconnectAttemptId = (): string => {
 	return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
 
-const cancelWatchedRestore = (cancelledKeys: Set<string>, remoteId: number, kind: StreamKind) => {
-	cancelledKeys.add(getPendingStreamKey(remoteId, kind));
-
-	if (kind === StreamKind.SCREEN) {
-		cancelledKeys.add(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO));
-	}
-};
-
-const isWatchedRestoreCancelled = (cancelledKeys: Set<string>, remoteId: number, kind: StreamKind): boolean =>
-	cancelledKeys.has(getPendingStreamKey(remoteId, kind));
-
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const [loading, setLoading] = useState(false);
-	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
+	const connectionStatus = useSyncExternalStore(
+		subscribeVoiceSessionConnectionStatus,
+		getVoiceSessionConnectionStatusSnapshot,
+		getVoiceSessionConnectionStatusSnapshot,
+	);
 	const [voiceEventRtpCapabilities, setVoiceEventRtpCapabilities] = useState<RtpCapabilities | null>(null);
 	const deviceRef = useRef<Device | undefined>(undefined);
 	const routerRtpCapabilities = useRef<RtpCapabilities | null>(null);
@@ -691,8 +714,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const ownUserId = useServerStore((state) => state.ownUserId);
 	const voiceSessionReconnectNonce = useServerStore((state) => state.voiceSessionReconnectNonce);
-	const reconnectingSince = useVoiceReconnectStore((state) => state.reconnectingSince);
-	const reconnectAuthenticated = useVoiceReconnectStore((state) => state.reconnectAuthenticated);
 	const isConnected = useIsConnected();
 	const channelCan = useChannelCan(currentVoiceChannelId);
 	const currentChannelExternalStreams = useServerStore<TChannelExternalStreams>((state) => {
@@ -739,12 +760,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const localVoiceActivityCleanupRef = useRef<(() => void) | undefined>(undefined);
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
 	const micPipelineMutexRef = useRef<Promise<void>>(Promise.resolve());
+	const micPipelineOwnershipRef = useRef(createMicPipelineOwnership());
+	const sessionExecutionOwnershipRef = useRef(createVoiceSessionExecutionOwnership());
 	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
-	const transportRecoveryPromiseRef = useRef<Promise<boolean> | undefined>(undefined);
-	const voiceReconnectPromiseRef = useRef<Promise<void> | undefined>(undefined);
-	const recoverTransportSessionRef = useRef<(() => Promise<boolean>) | undefined>(undefined);
+	const transportRecoveryPromiseRef = useRef<Promise<void> | undefined>(undefined);
+	const queuedTransportRecoveryCommandRef = useRef<TVoiceSessionCommand | undefined>(undefined);
+	const voiceRestorePromiseRef = useRef<Promise<void> | undefined>(undefined);
+	const queuedVoiceRestoreCommandRef = useRef<TVoiceSessionCommand | undefined>(undefined);
 	const cleanupMicAudioPipelineRef = useRef<(() => Promise<void>) | undefined>(undefined);
-	const cancelledWatchedRestoreKeysRef = useRef<Set<string>>(new Set());
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
 		if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -819,6 +842,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		markWatchRequested,
 		markWatchStopped,
 		markRetryRequested,
+		rehydrateWatchIntentOnly,
 		markConsumeStarted,
 		markConsumeSucceeded,
 		markConsumeFailed,
@@ -856,15 +880,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const voiceSessionReconnectNonceRef = useLatestRef(voiceSessionReconnectNonce);
 
 	const onTransportFailure = useCallback(() => {
-		// A full WS-level reconnect already owns recovery (see the reconnect
-		// effect). A media transport failing during that window is expected and
-		// will be repaired by restore-or-join, so defer instead of starting a
-		// second, racing recovery that would tear down the restored session.
-		if (shouldDeferTransportFailureToReconnect(useVoiceReconnectStore.getState().reconnectingSince)) {
-			logVoice('Ignoring transport failure during WS reconnect recovery; deferring to reconnect orchestration');
-			return;
-		}
-
 		if (hasHandledTransportFailureRef.current) {
 			logVoice('Transport failure already handled, skipping duplicate cleanup');
 			return;
@@ -873,48 +888,21 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		hasHandledTransportFailureRef.current = true;
 		logVoice('Transport failure detected');
 
-		void (async () => {
-			const recovered = await recoverTransportSessionRef.current?.();
-
-			// Always reset the flag so that if a newly-created transport fails
-			// after recovery "succeeds", the failure handler can re-enter and
-			// start a fresh recovery cycle instead of silently dying.
+		const channelId = currentVoiceChannelIdRef.current;
+		if (!isConnectedRef.current || channelId === undefined) {
 			hasHandledTransportFailureRef.current = false;
+			return;
+		}
 
-			if (recovered) {
-				return;
-			}
+		const commands = dispatchVoiceSession({
+			type: 'TransportFailed',
+			channelId,
+			nonce: voiceSessionReconnectNonceRef.current,
+		});
 
-			// If a WS reconnect began while this in-session recovery was running,
-			// hand off to it rather than tearing voice down — the reconnect
-			// orchestration will restore or rejoin the session.
-			if (shouldDeferTransportFailureToReconnect(useVoiceReconnectStore.getState().reconnectingSince)) {
-				logVoice('In-session recovery failed but WS reconnect is now active; deferring teardown');
-				return;
-			}
-
-			if (isConnectedRef.current && currentVoiceChannelIdRef.current !== undefined) {
-				// Tell the server to remove us from the voice channel so other
-				// participants don't see a ghost user stuck in the channel.
-				// Fire-and-forget: even if this fails, we still clean up locally.
-				getTRPCClient()
-					.voice.leave.mutate()
-					.catch((error) => {
-						logVoice('Failed to send voice.leave after unrecoverable transport failure', { error });
-					});
-
-				useServerStore.getState().setCurrentVoiceChannelId(undefined);
-				useServerStore.getState().updateOwnVoiceState({
-					webcamEnabled: false,
-					sharingScreen: false,
-				});
-				useServerStore.getState().setPinnedCard(undefined);
-				playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
-				toast.info('Voice connection was lost. Rejoin the voice channel manually.');
-			}
-
-			voiceCleanupRef.current?.();
-		})();
+		if (commands.length === 0 && getVoiceSessionState().phase.phase !== 'rebuilding') {
+			hasHandledTransportFailureRef.current = false;
+		}
 	}, []);
 
 	const {
@@ -927,6 +915,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		closeConsumer,
 		cleanupTransports,
 		getActiveConsumerProducerId,
+		stopWatchingStream,
 	} = useTransports({
 		addExternalStreamTrack,
 		removeExternalStreamTrack,
@@ -960,10 +949,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const captureWatchedRemoteStreams = useCallback((): TWatchedRemoteStreamsSnapshot => {
-		cancelledWatchedRestoreKeysRef.current = new Set();
-
-		const watchedRemoteStreams: Record<number, TRemoteUserStreamKinds[]> = {};
-		const watchedExternalStreams: Record<number, TWatchedExternalStreamKinds> = {};
+		const watchedRemoteStreams: Record<number, StreamKind[]> = {};
+		const watchedExternalStreams: Record<number, TWatchedExternalStreamsSnapshot> = {};
 
 		remoteMediaSubscriptionsRef.current.forEach((subscription) => {
 			if (!subscription.desired || subscription.kind === StreamKind.AUDIO) {
@@ -1070,18 +1057,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			markRetryRequested(remoteId, kind, getExternalStreamTrackPresence());
 		},
 		[getExternalStreamTrackPresence, markRetryRequested],
-	);
-
-	const stopWatchingStream = useCallback(
-		(remoteId: number, kind: StreamKind) => {
-			// markWatchStopped clears the ledger's desired flag — for SCREEN it also
-			// cascades to SCREEN_AUDIO, and for EXTERNAL_AUDIO/VIDEO it revokes
-			// that stream's intent. Track this separately so a reconnect restore
-			// snapshot captured before the click cannot resurrect the stream.
-			cancelWatchedRestore(cancelledWatchedRestoreKeysRef.current, remoteId, kind);
-			markWatchStopped(remoteId, kind);
-		},
-		[markWatchStopped],
 	);
 
 	// Surface source labels and configured maxBitrate ceilings to the stats
@@ -1303,7 +1278,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		micGainPipeline.gainNode.gain.setValueAtTime(nextVolume, currentTime);
 	}, []);
 
-	const ensureVoiceDeviceLoaded = useCallback(async () => {
+	const ensureVoiceDeviceLoaded = useCallback(async (isCurrent: () => boolean = () => true) => {
 		if (deviceRef.current) {
 			return deviceRef.current;
 		}
@@ -1318,6 +1293,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		await device.load({
 			routerRtpCapabilities: currentRouterRtpCapabilities,
 		});
+		if (!isCurrent()) {
+			throw new VoiceSessionExecutionSupersededError();
+		}
 
 		deviceRef.current = device;
 		sendRtpCapabilities.current = device.rtpCapabilities;
@@ -1331,6 +1309,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			micMuted: boolean;
 			soundMuted: boolean;
 			reconnectAttemptId: string;
+			signal?: AbortSignal;
 		}): Promise<TVoiceBootstrapResult> => {
 			return traceSentrySpan(
 				{
@@ -1342,21 +1321,27 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					},
 				},
 				() =>
-					getTRPCClient().voice.restoreOrJoin.mutate({
-						channelId: opts.channelId,
-						state: {
-							micMuted: opts.micMuted,
-							soundMuted: opts.soundMuted,
+					getTRPCClient().voice.restoreOrJoin.mutate(
+						{
+							channelId: opts.channelId,
+							state: {
+								micMuted: opts.micMuted,
+								soundMuted: opts.soundMuted,
+							},
+							reconnectAttemptId: opts.reconnectAttemptId,
 						},
-						reconnectAttemptId: opts.reconnectAttemptId,
-					}),
+						{ signal: opts.signal },
+					),
 			);
 		},
 		[],
 	);
 
 	const rejoinVoiceSession = useCallback(
-		async (channelId: number): Promise<TRecoveryJoinResult> => {
+		async (
+			channelId: number,
+			options: { isCurrent?: () => boolean; signal?: AbortSignal } = {},
+		): Promise<TRecoveryJoinResult> => {
 			return traceSentrySpan(
 				{
 					name: 'voice.rejoin_session',
@@ -1378,27 +1363,21 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						micMuted: currentOwnVoiceState.micMuted,
 						soundMuted: currentOwnVoiceState.soundMuted,
 						reconnectAttemptId: createReconnectAttemptId(),
+						signal: options.signal,
 					});
 
 					const device = await Device.factory();
 					await device.load({
 						routerRtpCapabilities: nextRouterRtpCapabilities,
 					});
-
-					deviceRef.current = device;
-					routerRtpCapabilities.current = nextRouterRtpCapabilities;
-					sendRtpCapabilities.current = device.rtpCapabilities;
-
-					const store = useServerStore.getState();
-
-					store.setCurrentVoiceChannelId(channelId);
-					store.reconcileVoiceChannelUsers({
-						channelId,
-						users: channelUsers,
-					});
+					if (options.isCurrent && !options.isCurrent()) {
+						throw new VoiceSessionExecutionSupersededError();
+					}
 
 					return {
 						device,
+						routerRtpCapabilities: nextRouterRtpCapabilities,
+						channelUsers,
 						existingProducers,
 						producerTransportParams,
 						consumerTransportParams,
@@ -1462,7 +1441,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	}, [applyMicGainVolume, currentVoiceChannelId, localAudioStream]);
 
 	const publishMicTrack = useCallback(
-		async (stream: MediaStream, track: MediaStreamTrack) => {
+		async (stream: MediaStream, track: MediaStreamTrack, options: { isCurrent?: () => boolean } = {}) => {
+			const transport = producerTransport.current;
+			if (!transport || transport.closed || (options.isCurrent && !options.isCurrent())) {
+				throw new VoiceSessionExecutionSupersededError();
+			}
 			setLocalAudioStream(stream);
 			const micMuted = ownVoiceStateSelector(useServerStore.getState()).micMuted;
 			track.enabled = !micMuted;
@@ -1471,15 +1454,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			logVoice('Obtained audio track', { audioTrack: track });
 
 			const audioConfig = getAudioOpusConfig(currentVoiceChannelIdRef.current);
-			const audioProducer = await producerTransport.current?.produce({
+			const audioProducer = await transport.produce({
 				track,
 				encodings: [{ maxBitrate: audioConfig.maxBitrate }],
 				codecOptions: audioConfig.codecOptions,
 				appData: { kind: StreamKind.AUDIO },
 			});
 
-			if (!audioProducer) {
-				throw new Error('Failed to create microphone producer');
+			if (producerTransport.current !== transport || transport.closed || (options.isCurrent && !options.isCurrent())) {
+				audioProducer.close();
+				throw new VoiceSessionExecutionSupersededError();
 			}
 
 			localAudioProducer.current = audioProducer;
@@ -1534,8 +1518,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			track: MediaStreamTrack,
 			options: {
 				stopTracksOnFailure?: boolean;
+				isCurrent?: () => boolean;
 			} = {},
 		) => {
+			const transport = producerTransport.current;
+			if (!transport || transport.closed || (options.isCurrent && !options.isCurrent())) {
+				throw new VoiceSessionExecutionSupersededError();
+			}
 			setLocalVideoStream(stream);
 			const stopTracksOnFailure = options.stopTracksOnFailure ?? true;
 			let videoProducer: Producer<AppData> | undefined;
@@ -1579,7 +1568,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					...encoding,
 					maxBitrate: webcamBitratePolicy.maxKbps * 1000,
 				}));
-				videoProducer = await producerTransport.current?.produce({
+				videoProducer = await transport.produce({
 					track,
 					encodings: webcamEncodings,
 					codec: preferredVideoCodec,
@@ -1597,6 +1586,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				const createdVideoProducer = videoProducer;
 				await applyVideoDegradationPreference(createdVideoProducer.rtpSender, 'webcam');
+				if (
+					producerTransport.current !== transport ||
+					transport.closed ||
+					(options.isCurrent && !options.isCurrent())
+				) {
+					throw new VoiceSessionExecutionSupersededError();
+				}
 
 				localVideoProducer.current = createdVideoProducer;
 
@@ -1627,7 +1623,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 					void (async () => {
 						try {
-							await getTRPCClient().voice.updateState.mutate({
+							await sendOwnVoiceStateUpdate({
 								webcamEnabled: false,
 							});
 						} catch (error) {
@@ -1669,8 +1665,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			options: {
 				onTrackEnded?: () => void | Promise<void>;
 				clearStreamOnFailure?: boolean;
+				isCurrent?: () => boolean;
 			} = {},
 		) => {
+			const transport = producerTransport.current;
+			if (!transport || transport.closed || (options.isCurrent && !options.isCurrent())) {
+				throw new VoiceSessionExecutionSupersededError();
+			}
 			setLocalScreenShare(stream);
 			const clearStreamOnFailure = options.clearStreamOnFailure ?? true;
 			let screenShareProducer: Producer<AppData> | undefined;
@@ -1738,7 +1739,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					maxBitrate: screenBitratePolicy.maxKbps * 1000,
 				}));
 
-				screenShareProducer = await producerTransport.current?.produce({
+				screenShareProducer = await transport.produce({
 					track,
 					encodings: screenShareEncodings,
 					codecOptions: {
@@ -1758,6 +1759,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				const createdScreenShareProducer = screenShareProducer;
 				await applyVideoDegradationPreference(createdScreenShareProducer.rtpSender, 'screen share');
+				if (
+					producerTransport.current !== transport ||
+					transport.closed ||
+					(options.isCurrent && !options.isCurrent())
+				) {
+					throw new VoiceSessionExecutionSupersededError();
+				}
 
 				localScreenShareProducer.current = createdScreenShareProducer;
 
@@ -1818,11 +1826,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			track: MediaStreamTrack,
 			options: {
 				onTrackEnded?: () => void | Promise<void>;
+				isCurrent?: () => boolean;
 			} = {},
 		) => {
+			const transport = producerTransport.current;
+			if (!transport || transport.closed || (options.isCurrent && !options.isCurrent())) {
+				throw new VoiceSessionExecutionSupersededError();
+			}
 			setLocalScreenShareAudio(stream);
 
-			const screenAudioProducer = await producerTransport.current?.produce({
+			const screenAudioProducer = await transport.produce({
 				track,
 				stopTracks: false,
 				codecOptions: {
@@ -1834,8 +1847,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				appData: { kind: StreamKind.SCREEN_AUDIO },
 			});
 
-			if (!screenAudioProducer) {
-				throw new Error('Failed to create screen share audio producer');
+			if (producerTransport.current !== transport || transport.closed || (options.isCurrent && !options.isCurrent())) {
+				screenAudioProducer.close();
+				throw new VoiceSessionExecutionSupersededError();
 			}
 
 			localScreenShareAudioProducer.current = screenAudioProducer;
@@ -1870,14 +1884,27 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	});
 
 	const cleanupMicAudioPipeline = useCallback(async () => {
+		// Revoke before touching the refs so any overlapping build detects the
+		// handover at its next ownership check instead of installing over us.
+		revokeMicPipelineOwnership(micPipelineOwnershipRef.current);
 		stopLocalVoiceActivityMonitoring(false);
 
+		// Snapshot and clear every shared ref synchronously, before any await.
+		// Overlapping cleanups are possible (a detached reconnect attempt's
+		// teardown racing a successor's); a cleanup that read the refs on the far
+		// side of an awaited destroy() could capture — and destroy — resources a
+		// successor installed meanwhile. After this block only the captured
+		// resources are touched.
 		const currentAudioProducer = localAudioProducer.current;
 		localAudioProducer.current = undefined;
-		currentAudioProducer?.close();
-
 		const micGainPipeline = micGainPipelineRef.current;
 		micGainPipelineRef.current = undefined;
+		const rawMicStream = rawMicStreamRef.current;
+		rawMicStreamRef.current = undefined;
+		const pipeline = micAudioPipelineRef.current;
+		micAudioPipelineRef.current = undefined;
+
+		currentAudioProducer?.close();
 
 		if (micGainPipeline) {
 			micGainPipeline.track.onended = null;
@@ -1891,15 +1918,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 		}
 
-		const rawMicStream = rawMicStreamRef.current;
-		rawMicStreamRef.current = undefined;
-
 		rawMicStream?.getTracks().forEach((track) => {
 			track.stop();
 		});
-
-		const pipeline = micAudioPipelineRef.current;
-		micAudioPipelineRef.current = undefined;
 
 		if (pipeline) {
 			try {
@@ -1917,7 +1938,23 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// This has no dependency on the mediasoup device or transports, so it can run
 	// concurrently with device.load() and transport creation during voice join.
 	const prepareMicPipeline = useCallback(async (): Promise<TPreparedMicPipeline> => {
-		await cleanupMicAudioPipeline();
+		// Claim the shared refs for this build synchronously with starting the
+		// cleanup — in the same tick, before any await. Claiming after awaiting
+		// the cleanup would let cleanup COMPLETION order decide ownership: an
+		// older build blocked on a slow destroy would claim after a newer build
+		// and steal the refs back. Build start order must win. This is safe
+		// because cleanup snapshots and clears every shared ref synchronously
+		// before its first await; the pending remainder only destroys captured
+		// resources.
+		const cleanupPromise = cleanupMicAudioPipeline();
+		const ownsMicPipeline = claimMicPipelineOwnership(micPipelineOwnershipRef.current);
+
+		await cleanupPromise;
+
+		if (!ownsMicPipeline()) {
+			throw new MicPipelineSupersededError();
+		}
+
 		const micProcessingConfig = resolveMicProcessingConfig(devices);
 
 		const micConstraints = {
@@ -1934,165 +1971,228 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			sampleRate: 48000,
 		};
 
-		const stream = await navigator.mediaDevices.getUserMedia({
-			audio: micConstraints,
-			video: false,
-		});
-
-		logVoice('Microphone stream obtained', { stream });
-
-		rawMicStreamRef.current = stream;
-
-		const rawAudioTrack = stream.getAudioTracks()[0];
-
-		if (!rawAudioTrack) {
-			throw new Error('Failed to obtain audio track from microphone');
-		}
-
-		const rawTrackSettings = rawAudioTrack.getSettings();
-		logVoice('Microphone capture device resolved', {
-			selectedMicrophoneId: devices.microphoneId,
-			trackLabel: rawAudioTrack.label,
-			trackDeviceId: rawTrackSettings.deviceId,
-			trackGroupId: rawTrackSettings.groupId,
-		});
-
-		// Recover from *involuntary* capture loss on the raw device track. When a
-		// driver like NVIDIA Broadcast / RTX Voice takes over (or releases) the
-		// audio endpoint, the OS reconfigures the session behind our track: the
-		// device id is unchanged, often no `devicechange` fires, but the browser
-		// fires `mute` (session preempted) or `ended` (device removed) on the raw
-		// device track. A downstream Web Audio pipeline track keeps emitting
-		// silence, so peers hear nothing until a manual rejoin. These listeners
-		// live on the raw track because the outbound track may be a synthesized
-		// pipeline output that never sees the device-level event — so the raw
-		// track is the single owner of device-loss for both passthrough and
-		// pipelined captures. The ignore/recover/teardown decision is the pure
-		// resolveRawMicLossAction so each branch is unit-tested.
-		let muteSettleTimer: ReturnType<typeof setTimeout> | undefined;
-
-		const evaluateRawMicLoss = (reason: 'mute' | 'ended') => {
-			const action = resolveRawMicLossAction({
-				reason,
-				// Our own restart stops this track during cleanup after clearing the
-				// ref, so this also covers the supersession/recursion case. (Per spec
-				// `stop()` does not fire `ended`, but `mute` settle timers may still
-				// resolve late against a superseded capture.)
-				superseded: rawMicStreamRef.current !== stream,
-				inChannel: currentVoiceChannelIdRef.current !== undefined,
-				micMuted: ownVoiceStateSelector(useServerStore.getState()).micMuted,
-				trackStillMuted: rawAudioTrack.muted,
-			});
-
-			if (action === 'ignore') {
-				return;
-			}
-
-			if (action === 'teardown-for-unmute') {
-				logVoice('Raw mic interrupted while muted, tearing down for next unmute', { reason });
-				void cleanupMicAudioPipelineRef.current?.();
-				setLocalAudioStream((current) => (current === stream ? undefined : current));
-				return;
-			}
-
-			logVoice('Raw mic capture interrupted, re-acquiring', {
-				reason,
-				deviceId: devices.microphoneId,
-			});
-
-			// startMicStream re-runs cleanup + getUserMedia and is mutex-serialized,
-			// so a redundant call is safe.
-			void startMicStreamRef.current?.();
-		};
-
-		const clearMuteSettleTimer = () => {
-			if (muteSettleTimer !== undefined) {
-				clearTimeout(muteSettleTimer);
-				muteSettleTimer = undefined;
-			}
-		};
-
-		rawAudioTrack.addEventListener('mute', () => {
-			// `mute` is temporary by definition — wait for the settle window and only
-			// act if the track is still muted (re-checked inside evaluateRawMicLoss).
-			if (muteSettleTimer !== undefined) {
-				return;
-			}
-
-			muteSettleTimer = setTimeout(() => {
-				muteSettleTimer = undefined;
-				evaluateRawMicLoss('mute');
-			}, RAW_MIC_MUTE_SETTLE_MS);
-		});
-
-		// `unmute` means the source recovered on its own — cancel any pending settle.
-		rawAudioTrack.addEventListener('unmute', clearMuteSettleTimer);
-
-		// `ended` is permanent (and never fired by our own stop()), so act at once.
-		rawAudioTrack.addEventListener('ended', () => {
-			clearMuteSettleTimer();
-			evaluateRawMicLoss('ended');
-		});
-
-		let outboundStream = stream;
-		let outboundAudioTrack = rawAudioTrack;
+		let stream: MediaStream | undefined;
 
 		try {
-			const micAudioPipeline = await createMicAudioProcessingPipeline({
-				inputTrack: rawAudioTrack,
-				wasmNoiseSuppressionEnabled: micProcessingConfig.wasmNoiseSuppressionEnabled,
-				onWasmError: (error) => {
-					logVoice('Browser WASM voice filter runtime error', { error });
-
-					// Don't destroy the pipeline here — closing the AudioContext would
-					// end the MediaStreamTrack already handed to the mediasoup producer,
-					// causing complete mic silence for all peers with no recovery.
-					// The worklet naturally falls back to passing through raw mic input
-					// when the worker errors (underrun passthrough), so audio continues
-					// to flow unprocessed. The pipeline is cleaned up normally when the
-					// user leaves the channel or changes mic settings.
-					if (micAudioPipelineRef.current?.backend === 'browser-wasm') {
-						toast.error('Noise suppression encountered an error. Audio will continue without noise reduction.');
-					}
-				},
+			stream = await navigator.mediaDevices.getUserMedia({
+				audio: micConstraints,
+				video: false,
 			});
 
-			if (micAudioPipeline) {
-				micAudioPipelineRef.current = micAudioPipeline;
-				outboundStream = micAudioPipeline.stream;
-				outboundAudioTrack = micAudioPipeline.track;
-				logVoice('Microphone voice filter enabled', {
-					backend: micAudioPipeline.backend,
+			if (!ownsMicPipeline()) {
+				throw new MicPipelineSupersededError();
+			}
+
+			logVoice('Microphone stream obtained', { stream });
+
+			rawMicStreamRef.current = stream;
+
+			const rawAudioTrack = stream.getAudioTracks()[0];
+
+			if (!rawAudioTrack) {
+				throw new Error('Failed to obtain audio track from microphone');
+			}
+
+			const rawTrackSettings = rawAudioTrack.getSettings();
+			logVoice('Microphone capture device resolved', {
+				selectedMicrophoneId: devices.microphoneId,
+				trackLabel: rawAudioTrack.label,
+				trackDeviceId: rawTrackSettings.deviceId,
+				trackGroupId: rawTrackSettings.groupId,
+			});
+
+			// Recover from *involuntary* capture loss on the raw device track. When a
+			// driver like NVIDIA Broadcast / RTX Voice takes over (or releases) the
+			// audio endpoint, the OS reconfigures the session behind our track: the
+			// device id is unchanged, often no `devicechange` fires, but the browser
+			// fires `mute` (session preempted) or `ended` (device removed) on the raw
+			// device track. A downstream Web Audio pipeline track keeps emitting
+			// silence, so peers hear nothing until a manual rejoin. These listeners
+			// live on the raw track because the outbound track may be a synthesized
+			// pipeline output that never sees the device-level event — so the raw
+			// track is the single owner of device-loss for both passthrough and
+			// pipelined captures. The ignore/recover/teardown decision is the pure
+			// resolveRawMicLossAction so each branch is unit-tested.
+			let muteSettleTimer: ReturnType<typeof setTimeout> | undefined;
+
+			const evaluateRawMicLoss = (reason: 'mute' | 'ended') => {
+				const action = resolveRawMicLossAction({
+					reason,
+					// Our own restart stops this track during cleanup after clearing the
+					// ref, so this also covers the supersession/recursion case. (Per spec
+					// `stop()` does not fire `ended`, but `mute` settle timers may still
+					// resolve late against a superseded capture.)
+					superseded: rawMicStreamRef.current !== stream,
+					inChannel: currentVoiceChannelIdRef.current !== undefined,
+					micMuted: ownVoiceStateSelector(useServerStore.getState()).micMuted,
+					trackStillMuted: rawAudioTrack.muted,
+				});
+
+				if (action === 'ignore') {
+					return;
+				}
+
+				if (action === 'teardown-for-unmute') {
+					logVoice('Raw mic interrupted while muted, tearing down for next unmute', { reason });
+					void cleanupMicAudioPipelineRef.current?.();
+					setLocalAudioStream((current) => (current === stream ? undefined : current));
+					return;
+				}
+
+				logVoice('Raw mic capture interrupted, re-acquiring', {
+					reason,
+					deviceId: devices.microphoneId,
+				});
+
+				// startMicStream re-runs cleanup + getUserMedia and is mutex-serialized,
+				// so a redundant call is safe.
+				void startMicStreamRef.current?.();
+			};
+
+			const clearMuteSettleTimer = () => {
+				if (muteSettleTimer !== undefined) {
+					clearTimeout(muteSettleTimer);
+					muteSettleTimer = undefined;
+				}
+			};
+
+			rawAudioTrack.addEventListener('mute', () => {
+				// `mute` is temporary by definition — wait for the settle window and only
+				// act if the track is still muted (re-checked inside evaluateRawMicLoss).
+				if (muteSettleTimer !== undefined) {
+					return;
+				}
+
+				muteSettleTimer = setTimeout(() => {
+					muteSettleTimer = undefined;
+					evaluateRawMicLoss('mute');
+				}, RAW_MIC_MUTE_SETTLE_MS);
+			});
+
+			// `unmute` means the source recovered on its own — cancel any pending settle.
+			rawAudioTrack.addEventListener('unmute', clearMuteSettleTimer);
+
+			// `ended` is permanent (and never fired by our own stop()), so act at once.
+			rawAudioTrack.addEventListener('ended', () => {
+				clearMuteSettleTimer();
+				evaluateRawMicLoss('ended');
+			});
+
+			let outboundStream = stream;
+			let outboundAudioTrack = rawAudioTrack;
+
+			try {
+				const micAudioPipeline = await createMicAudioProcessingPipeline({
+					inputTrack: rawAudioTrack,
+					wasmNoiseSuppressionEnabled: micProcessingConfig.wasmNoiseSuppressionEnabled,
+					onWasmError: (error) => {
+						logVoice('Browser WASM voice filter runtime error', { error });
+
+						// Don't destroy the pipeline here — closing the AudioContext would
+						// end the MediaStreamTrack already handed to the mediasoup producer,
+						// causing complete mic silence for all peers with no recovery.
+						// The worklet naturally falls back to passing through raw mic input
+						// when the worker errors (underrun passthrough), so audio continues
+						// to flow unprocessed. The pipeline is cleaned up normally when the
+						// user leaves the channel or changes mic settings.
+						if (micAudioPipelineRef.current?.backend === 'browser-wasm') {
+							toast.error('Noise suppression encountered an error. Audio will continue without noise reduction.');
+						}
+					},
+				});
+
+				// Unconditional ownership check after the await, before ANY shared-ref
+				// write — the else branch below writes micAudioPipelineRef too, so a
+				// stale build returning undefined would otherwise clear the
+				// successor's installed pipeline.
+				if (!ownsMicPipeline()) {
+					if (micAudioPipeline) {
+						try {
+							await micAudioPipeline.destroy();
+						} catch (destroyError) {
+							logVoice('Failed to dispose superseded microphone voice filter', { error: destroyError });
+						}
+					}
+					throw new MicPipelineSupersededError();
+				}
+
+				if (micAudioPipeline) {
+					micAudioPipelineRef.current = micAudioPipeline;
+					outboundStream = micAudioPipeline.stream;
+					outboundAudioTrack = micAudioPipeline.track;
+					logVoice('Microphone voice filter enabled', {
+						backend: micAudioPipeline.backend,
+					});
+				} else {
+					micAudioPipelineRef.current = undefined;
+				}
+			} catch (error) {
+				if (error instanceof MicPipelineSupersededError) {
+					throw error;
+				}
+
+				// A normal rejection can also land after supersession; a non-owner
+				// must not clear the successor's ref, so translate to superseded.
+				if (!ownsMicPipeline()) {
+					throw new MicPipelineSupersededError();
+				}
+
+				micAudioPipelineRef.current = undefined;
+				logVoice('Failed to initialize microphone voice filter, using raw mic', {
+					error,
+				});
+			}
+
+			const micVolume = getStoredVolume(OWN_MIC_VOLUME_KEY);
+			// Keep the default 100% path on the original track so users do not pay
+			// for an extra Web Audio graph unless they explicitly change mic volume.
+			const micGainPipeline = shouldUseMicGainPipeline(micVolume)
+				? await createMicGainPipeline(outboundStream, micVolume)
+				: undefined;
+
+			// Unconditional for the same reason as above: the else branch writes
+			// micGainPipelineRef even when no gain pipeline was created.
+			if (!ownsMicPipeline()) {
+				if (micGainPipeline) {
+					try {
+						await micGainPipeline.destroy();
+					} catch (destroyError) {
+						logVoice('Failed to dispose superseded microphone gain pipeline', { error: destroyError });
+					}
+				}
+				throw new MicPipelineSupersededError();
+			}
+
+			if (micGainPipeline) {
+				micGainPipelineRef.current = micGainPipeline;
+				outboundStream = micGainPipeline.stream;
+				outboundAudioTrack = micGainPipeline.track;
+				logVoice('Microphone gain pipeline enabled', {
+					volume: micVolume,
 				});
 			} else {
-				micAudioPipelineRef.current = undefined;
+				micGainPipelineRef.current = undefined;
 			}
+
+			return { outboundStream, outboundAudioTrack, ownsMicPipeline };
 		} catch (error) {
-			micAudioPipelineRef.current = undefined;
-			logVoice('Failed to initialize microphone voice filter, using raw mic', {
-				error,
-			});
+			if (error instanceof MicPipelineSupersededError || !ownsMicPipeline()) {
+				// A newer build owns the shared refs — dispose only what this build
+				// created and never installed. Tracks it installed before losing
+				// ownership were already stopped by the successor's cleanup;
+				// track.stop() is idempotent.
+				stream?.getTracks().forEach((track) => {
+					track.stop();
+				});
+			} else {
+				// Genuine failure while still owning the refs: release the partial
+				// installs so the microphone is not left acquired.
+				await cleanupMicAudioPipeline();
+				setLocalAudioStream(undefined);
+			}
+
+			throw error;
 		}
-
-		const micVolume = getStoredVolume(OWN_MIC_VOLUME_KEY);
-		// Keep the default 100% path on the original track so users do not pay
-		// for an extra Web Audio graph unless they explicitly change mic volume.
-		const micGainPipeline = shouldUseMicGainPipeline(micVolume)
-			? await createMicGainPipeline(outboundStream, micVolume)
-			: undefined;
-
-		if (micGainPipeline) {
-			micGainPipelineRef.current = micGainPipeline;
-			outboundStream = micGainPipeline.stream;
-			outboundAudioTrack = micGainPipeline.track;
-			logVoice('Microphone gain pipeline enabled', {
-				volume: micVolume,
-			});
-		} else {
-			micGainPipelineRef.current = undefined;
-		}
-
-		return { outboundStream, outboundAudioTrack };
 	}, [cleanupMicAudioPipeline, devices, setLocalAudioStream]);
 
 	// Attach the prepared mic pipeline to the producer transport. Must be called
@@ -2114,15 +2214,24 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			resolve = r;
 		});
 
+		let prepared: TPreparedMicPipeline | undefined;
+
 		try {
 			await previousMutex;
 			logVoice('Starting microphone stream');
-			const prepared = await prepareMicPipeline();
+			prepared = await prepareMicPipeline();
 			await produceMicTrack(prepared);
 		} catch (error) {
 			logVoice('Error starting microphone stream', { error });
-			await cleanupMicAudioPipeline();
-			setLocalAudioStream(undefined);
+
+			// A failed prepare cleans up after itself (prepared stays undefined);
+			// after a successful prepare, tear down only while this build still
+			// owns the shared refs so a superseded start cannot destroy the
+			// pipeline a newer build installed.
+			if (prepared?.ownsMicPipeline()) {
+				await cleanupMicAudioPipeline();
+				setLocalAudioStream(undefined);
+			}
 		} finally {
 			resolve();
 		}
@@ -2265,7 +2374,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		const checkSystemDefaultInput = async (): Promise<'reacquired' | 'pending' | 'stop'> => {
 			const rawTrack = rawMicStreamRef.current?.getAudioTracks()[0];
 
-			if (!rawTrack || rawTrack.readyState !== 'live') {
+			if (rawTrack?.readyState !== 'live') {
 				return 'stop';
 			}
 
@@ -2353,25 +2462,35 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			preserveCurrentAudio?: boolean;
 		} = {}) => {
 			const desktopBridge = getDesktopBridge();
+			// Detach everything this cleanup owns before its first await. A newer
+			// capture can then install replacement resources without an older cleanup
+			// reading or clearing them after it resumes.
 			const startupTimeout = appAudioStartupTimeoutRef.current;
+			appAudioStartupTimeoutRef.current = undefined;
+			const removeFrameSubscription = removeAppAudioFrameSubscriptionRef.current;
+			removeAppAudioFrameSubscriptionRef.current = undefined;
+			const removeStatusSubscription = removeAppAudioStatusSubscriptionRef.current;
+			removeAppAudioStatusSubscriptionRef.current = undefined;
+			const nativeIngestWasActive = nativeAppAudioIngestActiveRef.current;
+			nativeAppAudioIngestActiveRef.current = false;
+			const activeSession = appAudioSessionRef.current;
+			appAudioSessionRef.current = undefined;
+			const appAudioPipeline = appAudioPipelineRef.current;
+			appAudioPipelineRef.current = undefined;
+			const ownedAudioStream = localScreenShareAudioStreamRef.current;
+
 			if (startupTimeout !== undefined) {
 				window.clearTimeout(startupTimeout);
-				appAudioStartupTimeoutRef.current = undefined;
 			}
 
-			removeAppAudioFrameSubscriptionRef.current?.();
-			removeAppAudioFrameSubscriptionRef.current = undefined;
-
-			removeAppAudioStatusSubscriptionRef.current?.();
-			removeAppAudioStatusSubscriptionRef.current = undefined;
+			removeFrameSubscription?.();
+			removeStatusSubscription?.();
 
 			// Native RTP ingest teardown: stop the main-process Opus/SRTP sender and
 			// ask the server to close the SCREEN_AUDIO producer (which also releases
 			// its PlainTransport). The worklet pipeline below is never built on this
 			// path, so it is a no-op for native ingest.
-			if (nativeAppAudioIngestActiveRef.current) {
-				nativeAppAudioIngestActiveRef.current = false;
-
+			if (nativeIngestWasActive) {
 				try {
 					await desktopBridge?.stopAppAudioRtp?.();
 				} catch (error) {
@@ -2385,9 +2504,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				}
 			}
 
-			const activeSession = appAudioSessionRef.current;
-			appAudioSessionRef.current = undefined;
-
 			if (stopCapture && desktopBridge && activeSession?.sessionId) {
 				try {
 					await desktopBridge.stopAppAudioCapture(activeSession.sessionId);
@@ -2396,9 +2512,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				}
 			}
 
-			const appAudioPipeline = appAudioPipelineRef.current;
-			appAudioPipelineRef.current = undefined;
-
 			if (appAudioPipeline) {
 				await appAudioPipeline.destroy().catch((error) => {
 					logVoice('Failed to clean up desktop app audio pipeline', { error });
@@ -2406,7 +2519,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 
 			if (!preserveCurrentAudio) {
-				setLocalScreenShareAudio(undefined);
+				setLocalScreenShareAudio((currentStream) => {
+					return currentStream === ownedAudioStream ? undefined : currentStream;
+				});
 			}
 		},
 		[setLocalScreenShareAudio],
@@ -2415,11 +2530,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const trackDesktopAppAudioCleanup = useCallback(
 		(options?: { stopCapture?: boolean; preserveCurrentAudio?: boolean }) => {
-			const cleanupPromise = cleanupDesktopAppAudio(options).finally(() => {
-				if (desktopAppAudioCleanupPromiseRef.current === cleanupPromise) {
-					desktopAppAudioCleanupPromiseRef.current = undefined;
-				}
-			});
+			const previousCleanup = desktopAppAudioCleanupPromiseRef.current;
+			const cleanupPromise = (previousCleanup ?? Promise.resolve())
+				.catch(() => undefined)
+				.then(() => cleanupDesktopAppAudio(options))
+				.finally(() => {
+					if (desktopAppAudioCleanupPromiseRef.current === cleanupPromise) {
+						desktopAppAudioCleanupPromiseRef.current = undefined;
+					}
+				});
 			desktopAppAudioCleanupPromiseRef.current = cleanupPromise;
 		},
 		[cleanupDesktopAppAudio],
@@ -2931,7 +3050,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startNativeAppAudioIngest,
 	]);
 
-	// Serializes overlapping desktop app-audio recoveries. recoverTransportSession
+	// Serializes overlapping desktop app-audio recoveries. Voice session recovery
 	// fires this fire-and-forget on every retry attempt, so a fast-failing retry can
 	// launch a second recovery while the first is still publishing. Run concurrently,
 	// the second's cleanupDesktopAppAudio() would stop the first's just-published RTP
@@ -3204,14 +3323,21 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const cleanup = useCallback(
-		(opts?: { preserveLocalMedia?: boolean }) => {
+		(opts?: {
+			preserveLocalMedia?: boolean;
+			preserveRemoteMediaIntent?: boolean;
+			preserveSessionExecution?: boolean;
+		}) => {
 			logVoice('Running voice provider cleanup', { preserveLocalMedia: opts?.preserveLocalMedia ?? false });
+			if (!opts?.preserveSessionExecution) {
+				invalidateVoiceSessionExecution(sessionExecutionOwnershipRef.current);
+			}
 
 			// When preserving local media (WS-reconnect restore), leave the desktop
 			// app-audio pipeline running so a live screen-share audio track survives
 			// to be republished; tearing it down would end the track.
 			if (!opts?.preserveLocalMedia) {
-				void cleanupDesktopAppAudio();
+				trackDesktopAppAudioCleanupRef.current();
 			}
 			void cleanupMicAudioPipeline();
 			stopMonitoring();
@@ -3220,19 +3346,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			clearLocalStreams({ keepVideoAndScreen: opts?.preserveLocalMedia });
 			clearRemoteUserStreams();
 			clearExternalStreams();
-			cleanupTransports();
+			cleanupTransports({ preserveRemoteMediaIntent: opts?.preserveRemoteMediaIntent === true });
 			audioVideoRefsMap.current.clear();
 			deviceRef.current = undefined;
 			routerRtpCapabilities.current = null;
 			sendRtpCapabilities.current = null;
 			setVoiceEventRtpCapabilities(null);
-
-			setConnectionStatus(ConnectionStatus.DISCONNECTED);
 		},
 		[
 			stopMonitoring,
 			resetStats,
-			cleanupDesktopAppAudio,
 			cleanupMicAudioPipeline,
 			clearLocalStreams,
 			clearRemoteUserStreams,
@@ -3266,66 +3389,81 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// paths, in-session transport recovery and WS-reconnect restore, so a live
 	// screen share survives either. The mic is handled separately by each caller
 	// because its re-acquire/republish semantics differ.
-	const buildLocalMediaRepublishPlan = useCallback((): TLocalMediaRepublishPlan => {
-		const tasks: Promise<void>[] = [];
-		const state: TRepublishedLocalMediaState = {};
+	const buildLocalMediaRepublishPlan = useCallback(
+		(isCurrent?: () => boolean): TLocalMediaRepublishPlan => {
+			const tasks: Promise<void>[] = [];
+			const state: TRepublishedLocalMediaState = {};
 
-		const videoStream = localVideoStreamRef.current;
-		const videoTrack = videoStream?.getVideoTracks()[0];
-		if (videoStream && videoTrack && videoTrack.readyState === 'live') {
-			state.webcamEnabled = true;
-			tasks.push(
-				publishWebcamTrack(videoStream, videoTrack, {
-					stopTracksOnFailure: false,
-				}),
-			);
-		}
+			const videoStream = localVideoStreamRef.current;
+			const videoTrack = videoStream?.getVideoTracks()[0];
+			if (videoStream && videoTrack && videoTrack.readyState === 'live') {
+				state.webcamEnabled = true;
+				tasks.push(
+					publishWebcamTrack(videoStream, videoTrack, {
+						stopTracksOnFailure: false,
+						isCurrent,
+					}),
+				);
+			}
 
-		const screenShareStream = localScreenShareStreamRef.current;
-		const screenShareTrack = screenShareStream?.getVideoTracks()[0];
-		if (screenShareStream && screenShareTrack && screenShareTrack.readyState === 'live') {
-			state.sharingScreen = true;
-			tasks.push(
-				publishScreenShareTrack(screenShareStream, screenShareTrack, {
-					clearStreamOnFailure: false,
-				}),
-			);
-		}
+			const screenShareStream = localScreenShareStreamRef.current;
+			const screenShareTrack = screenShareStream?.getVideoTracks()[0];
+			if (screenShareStream && screenShareTrack && screenShareTrack.readyState === 'live') {
+				state.sharingScreen = true;
+				tasks.push(
+					publishScreenShareTrack(screenShareStream, screenShareTrack, {
+						clearStreamOnFailure: false,
+						isCurrent,
+					}),
+				);
+			}
 
-		const screenShareAudioStream = localScreenShareAudioStreamRef.current;
-		const screenShareAudioTrack = screenShareAudioStream?.getAudioTracks()[0];
-		if (
-			!appAudioPublishIntentRef.current &&
-			screenShareAudioStream &&
-			screenShareAudioTrack &&
-			screenShareAudioTrack.readyState === 'live'
-		) {
-			const shouldCleanupDesktopAudio = appAudioPipelineRef.current?.track === screenShareAudioTrack;
+			const screenShareAudioStream = localScreenShareAudioStreamRef.current;
+			const screenShareAudioTrack = screenShareAudioStream?.getAudioTracks()[0];
+			if (
+				!appAudioPublishIntentRef.current &&
+				screenShareAudioStream &&
+				screenShareAudioTrack &&
+				screenShareAudioTrack.readyState === 'live'
+			) {
+				const shouldCleanupDesktopAudio = appAudioPipelineRef.current?.track === screenShareAudioTrack;
 
-			tasks.push(
-				publishScreenShareAudioTrack(screenShareAudioStream, screenShareAudioTrack, {
-					onTrackEnded: shouldCleanupDesktopAudio
-						? () => {
-								return cleanupDesktopAppAudio({
-									stopCapture: false,
-								});
-							}
-						: undefined,
-				}),
-			);
-		}
+				tasks.push(
+					publishScreenShareAudioTrack(screenShareAudioStream, screenShareAudioTrack, {
+						isCurrent,
+						onTrackEnded: shouldCleanupDesktopAudio
+							? () => {
+									return cleanupDesktopAppAudio({
+										stopCapture: false,
+									});
+								}
+							: undefined,
+					}),
+				);
+			}
 
-		return { tasks, state };
-	}, [publishWebcamTrack, publishScreenShareTrack, publishScreenShareAudioTrack, cleanupDesktopAppAudio]);
+			return { tasks, state };
+		},
+		[publishWebcamTrack, publishScreenShareTrack, publishScreenShareAudioTrack, cleanupDesktopAppAudio],
+	);
 
-	const syncRepublishedLocalMediaState = useCallback(async (state: TRepublishedLocalMediaState) => {
-		if (state.webcamEnabled !== true && state.sharingScreen !== true) {
-			return;
-		}
+	const syncRepublishedLocalMediaState = useCallback(
+		async (state: TRepublishedLocalMediaState, options: { isCurrent?: () => boolean; signal?: AbortSignal } = {}) => {
+			if (state.webcamEnabled !== true && state.sharingScreen !== true) {
+				return;
+			}
+			if (options.isCurrent && !options.isCurrent()) {
+				throw new VoiceSessionExecutionSupersededError();
+			}
 
-		await getTRPCClient().voice.updateState.mutate(state);
-		updateOwnVoiceState(state);
-	}, []);
+			await sendOwnVoiceStateUpdate(state, { signal: options.signal });
+			if (options.isCurrent && !options.isCurrent()) {
+				throw new VoiceSessionExecutionSupersededError();
+			}
+			updateOwnVoiceState(state);
+		},
+		[],
+	);
 
 	const init = useCallback(
 		async (
@@ -3339,8 +3477,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				// republish it onto the new transport (WS-reconnect restore). Without
 				// this an in-progress screen share is silently dropped on reconnect.
 				preserveLocalMedia?: boolean;
+				restoreWatchSnapshot?: TWatchedRemoteStreamsSnapshot;
+				isCurrentRecovery?: () => boolean;
 			},
 		) => {
+			const ownsSessionExecution = claimVoiceSessionExecution(sessionExecutionOwnershipRef.current);
+			const isCurrent = (): boolean =>
+				ownsSessionExecution() && (opts?.isCurrentRecovery === undefined || opts.isCurrentRecovery());
+
 			return traceSentrySpan(
 				{
 					name: 'voice.init',
@@ -3353,6 +3497,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					},
 				},
 				async () => {
+					const throwIfRecoverySuperseded = (): void => {
+						if (!isCurrent()) {
+							throw new VoiceSessionExecutionSupersededError();
+						}
+					};
+
 					logVoice('Initializing voice provider', {
 						incomingRouterRtpCapabilities,
 						channelId,
@@ -3362,15 +3512,27 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 					let republishedLocalMediaState: TRepublishedLocalMediaState = {};
 
-					cleanup({ preserveLocalMedia: opts?.preserveLocalMedia });
+					cleanup({
+						preserveLocalMedia: opts?.preserveLocalMedia,
+						preserveRemoteMediaIntent: opts?.restoreWatchSnapshot !== undefined,
+						preserveSessionExecution: true,
+					});
+					throwIfRecoverySuperseded();
+					if (opts?.restoreWatchSnapshot !== undefined) {
+						rehydrateWatchIntentOnly(opts.restoreWatchSnapshot);
+					}
 					hasHandledTransportFailureRef.current = false;
 
 					let micPrepPromise: Promise<TPreparedMicPipeline | undefined> | undefined;
+					const dispatchJoinLifecycle = opts?.preserveLocalMedia !== true && opts?.restoreWatchSnapshot === undefined;
 
 					try {
 						setLoading(true);
-						setConnectionStatus(ConnectionStatus.CONNECTING);
+						if (dispatchJoinLifecycle) {
+							dispatchVoiceSession({ type: 'JoinRequested', channelId });
+						}
 
+						throwIfRecoverySuperseded();
 						routerRtpCapabilities.current = incomingRouterRtpCapabilities;
 
 						const device = await Device.factory();
@@ -3379,29 +3541,33 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						// dependency on the mediasoup device or transports and are the slowest
 						// part of startMicStream. Running them concurrently with device.load()
 						// and transport creation saves ~200-300ms on join.
-						micPrepPromise = prepareMicPipeline().catch(async (error) => {
+						micPrepPromise = prepareMicPipeline().catch((error) => {
+							// prepareMicPipeline cleans up after its own failures, and a
+							// superseded build must not touch the successor's pipeline —
+							// so no shared teardown here.
 							logVoice('Error preparing microphone pipeline', { error });
-							await cleanupMicAudioPipeline();
-							setLocalAudioStream(undefined);
 							return undefined;
 						});
 
 						await device.load({
 							routerRtpCapabilities: incomingRouterRtpCapabilities,
 						});
+						throwIfRecoverySuperseded();
 						deviceRef.current = device;
 						sendRtpCapabilities.current = device.rtpCapabilities;
 
 						await Promise.all([
-							createProducerTransport(device, opts?.producerTransportParams),
-							createConsumerTransport(device, opts?.consumerTransportParams),
+							createProducerTransport(device, opts?.producerTransportParams, isCurrent),
+							createConsumerTransport(device, opts?.consumerTransportParams, isCurrent),
 						]);
+						throwIfRecoverySuperseded();
 						setVoiceEventRtpCapabilities(device.rtpCapabilities);
 
 						const [, micPrepResult] = await Promise.all([
 							consumeExistingProducers(device.rtpCapabilities, undefined, opts?.existingProducers),
 							micPrepPromise,
 						]);
+						throwIfRecoverySuperseded();
 
 						// Mic failures are non-fatal — voice join continues without a mic.
 						if (micPrepResult) {
@@ -3409,15 +3575,22 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								await produceMicTrack(micPrepResult);
 							} catch (error) {
 								logVoice('Error attaching microphone to transport', { error });
-								await cleanupMicAudioPipeline();
-								setLocalAudioStream(undefined);
+
+								// Tear down only while this build's pipeline is still the
+								// installed one — a detached attempt failing late must not
+								// destroy the successor's mic.
+								if (micPrepResult.ownsMicPipeline()) {
+									await cleanupMicAudioPipeline();
+									setLocalAudioStream(undefined);
+								}
 							}
 						}
+						throwIfRecoverySuperseded();
 
 						// Republish any preserved webcam/screen-share tracks (WS reconnect).
 						// On a fresh join there are no live local tracks, so this is a no-op.
 						if (opts?.preserveLocalMedia) {
-							const republishPlan = buildLocalMediaRepublishPlan();
+							const republishPlan = buildLocalMediaRepublishPlan(isCurrent);
 
 							if (republishPlan.tasks.length > 0) {
 								logVoice('Republishing preserved local media after reconnect restore', {
@@ -3433,23 +3606,40 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								});
 							}
 						}
+						throwIfRecoverySuperseded();
 
+						throwIfRecoverySuperseded();
 						startMonitoring(producerTransport.current, consumerTransport.current);
-						setConnectionStatus(ConnectionStatus.CONNECTED);
+						if (dispatchJoinLifecycle) {
+							dispatchVoiceSession({ type: 'JoinSucceeded', channelId });
+						}
 						setLoading(false);
 
 						return { republishedLocalMediaState };
 					} catch (error) {
 						logVoice('Error initializing voice provider', { error });
 
-						// Clean up the prestarted mic pipeline — it may have acquired the
-						// microphone and spun up the WASM worker before the failure occurred.
-						await micPrepPromise;
-						await cleanupMicAudioPipeline();
-						setLocalAudioStream(undefined);
+						const preparedMic = await micPrepPromise;
 
-						setConnectionStatus(ConnectionStatus.FAILED);
-						setLoading(false);
+						// Tear the mic pipeline down only while this init's build still
+						// owns the shared refs. A detached recovery attempt (the reconnect
+						// runner drains a cancelled attempt for a bounded window, then
+						// detaches it) may settle this catch after its successor installed
+						// a new pipeline — destroying it here would kill the live mic.
+						// When the prep itself failed, it already cleaned up after itself.
+						if (preparedMic?.ownsMicPipeline()) {
+							await cleanupMicAudioPipeline();
+							setLocalAudioStream(undefined);
+						}
+
+						// UI/lifecycle state belongs to the current attempt; a superseded
+						// recovery attempt must not stomp its successor's loading state.
+						if (isCurrent()) {
+							if (dispatchJoinLifecycle) {
+								dispatchVoiceSession({ type: 'JoinFailed', reason: 'join-failed', channelId });
+							}
+							setLoading(false);
+						}
 
 						throw error;
 					}
@@ -3470,90 +3660,197 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			consumerTransport,
 			buildLocalMediaRepublishPlan,
 			recoverDesktopAppAudioFromIntent,
+			rehydrateWatchIntentOnly,
 		],
 	);
 
-	const recoverTransportSession = useCallback(async (): Promise<boolean> => {
-		if (transportRecoveryPromiseRef.current) {
-			return transportRecoveryPromiseRef.current;
+	const isCurrentVoiceSessionCommand = useCallback((command: TVoiceSessionCommand): boolean => {
+		const { phase } = getVoiceSessionState();
+
+		return (
+			(phase.phase === 'rebuilding' || phase.phase === 'reconnecting') &&
+			phase.generation === command.generation &&
+			phase.activeCommandId === command.commandId
+		);
+	}, []);
+
+	const dispatchIfCurrentVoiceSessionCommand = useCallback(
+		(command: TVoiceSessionCommand, dispatch: () => void): void => {
+			if (isCurrentVoiceSessionCommand(command)) {
+				dispatch();
+			}
+		},
+		[isCurrentVoiceSessionCommand],
+	);
+
+	const leaveAfterFailedTransportRecovery = useCallback((command: TVoiceSessionCommand): void => {
+		if (command.type !== 'LeaveVoiceSession') {
+			return;
 		}
 
-		const recoveryPromise = traceSentrySpan(
-			{
-				name: 'voice.transport_recovery',
-				op: 'voice.recovery',
-				attributes: {
-					'voice.channel_id': currentVoiceChannelIdRef.current,
+		if (isConnectedRef.current && command.channelId !== undefined) {
+			void leaveVoiceSessionAfterRecoveryFailure().then((didLeave) => {
+				if (!didLeave) {
+					logVoice('Failed to send voice.leave after unrecoverable transport failure');
+				}
+			});
+		}
+
+		if (currentVoiceChannelIdRef.current !== undefined) {
+			useServerStore.getState().setCurrentVoiceChannelId(undefined);
+			useServerStore.getState().updateOwnVoiceState({
+				webcamEnabled: false,
+				sharingScreen: false,
+			});
+			useServerStore.getState().setPinnedCard(undefined);
+			playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+			toast.info('Voice connection was lost. Rejoin the voice channel manually.');
+		}
+
+		voiceCleanupRef.current?.();
+		hasHandledTransportFailureRef.current = false;
+	}, []);
+
+	const runRebuildTransportCommand = useCallback(
+		async (command: TVoiceSessionCommand): Promise<void> => {
+			if (command.type !== 'RebuildTransports') {
+				return;
+			}
+
+			if (!isCurrentVoiceSessionCommand(command)) {
+				return;
+			}
+
+			if (transportRecoveryPromiseRef.current) {
+				queuedTransportRecoveryCommandRef.current = command;
+				return;
+			}
+
+			const recoveryPromise = traceSentrySpan(
+				{
+					name: 'voice.transport_recovery',
+					op: 'voice.recovery',
+					attributes: {
+						'voice.channel_id': command.channelId,
+					},
 				},
-			},
-			() =>
-				(async () => {
-					try {
-						if (!isConnectedRef.current) {
-							logVoice('Skipping transport recovery because server connection is unavailable');
-							return false;
-						}
-
-						if (currentVoiceChannelIdRef.current === undefined) {
-							logVoice('Skipping transport recovery because the user is no longer in voice');
-							return false;
-						}
-
-						if (!routerRtpCapabilities.current) {
-							logVoice('Skipping transport recovery because router RTP capabilities are unavailable');
-							return false;
-						}
-
-						let nonceRestarts = 0;
-
-						// Captured once, before any attempt runs: the first attempt clears
-						// the remote stream maps this snapshot is read from, so a capture
-						// inside the loop would be empty on every retry/nonce restart and
-						// a late-succeeding recovery would silently drop watched streams.
-						const watchedStreamsSnapshot = captureWatchedRemoteStreams();
-
-						for (let attempt = 0; attempt < RECOVERY_MAX_ATTEMPTS; attempt++) {
-							if (attempt > 0) {
-								await new Promise<void>((resolve) => setTimeout(resolve, RECOVERY_BACKOFF_MS[attempt - 1]));
-
-								if (!isConnectedRef.current || currentVoiceChannelIdRef.current === undefined) {
-									logVoice('Aborting transport recovery after backoff: connection or channel lost');
-									return false;
-								}
+				() =>
+					(async () => {
+						const ownsSessionExecution = claimVoiceSessionExecution(sessionExecutionOwnershipRef.current);
+						let attemptActive = true;
+						const abortController = new AbortController();
+						const isCurrentAttempt = (): boolean =>
+							ownsSessionExecution() && attemptActive && isCurrentVoiceSessionCommand(command);
+						const cancelAttempt = (): void => {
+							attemptActive = false;
+							abortController.abort();
+						};
+						const unsubscribeFromAttempt = subscribeVoiceSession(() => {
+							if (!isCurrentVoiceSessionCommand(command)) {
+								cancelAttempt();
+							}
+						});
+						try {
+							if (command.attempt > 0) {
+								await new Promise<void>((resolve) =>
+									setTimeout(resolve, RECOVERY_BACKOFF_MS[command.attempt - 1] ?? RECOVERY_BACKOFF_MS.at(-1) ?? 1_000),
+								);
 							}
 
-							const nonceAtStart = voiceSessionReconnectNonceRef.current;
-							const isNonceStale = () => voiceSessionReconnectNonceRef.current !== nonceAtStart;
-							const throwIfNonceStale = (stage: string) => {
-								if (isNonceStale()) {
-									throw new VoiceSessionReconnectChangedError(stage);
+							if (!isCurrentVoiceSessionCommand(command)) {
+								return;
+							}
+
+							if (!isConnectedRef.current) {
+								logVoice('Skipping transport recovery because server connection is unavailable');
+								dispatchIfCurrentVoiceSessionCommand(command, () => {
+									dispatchVoiceSession({
+										type: 'RebuildFailed',
+										commandId: command.commandId,
+										generation: command.generation,
+										error: new Error('Voice transport recovery skipped: server connection unavailable'),
+									});
+								});
+								return;
+							}
+
+							if (currentVoiceChannelIdRef.current === undefined) {
+								logVoice('Skipping transport recovery because the user is no longer in voice');
+								dispatchIfCurrentVoiceSessionCommand(command, () => {
+									dispatchVoiceSession({
+										type: 'RebuildFailed',
+										commandId: command.commandId,
+										generation: command.generation,
+										error: new Error('Voice transport recovery skipped: user is no longer in voice'),
+									});
+								});
+								return;
+							}
+
+							if (!routerRtpCapabilities.current) {
+								logVoice('Skipping transport recovery because router RTP capabilities are unavailable');
+								dispatchIfCurrentVoiceSessionCommand(command, () => {
+									dispatchVoiceSession({
+										type: 'RebuildFailed',
+										commandId: command.commandId,
+										generation: command.generation,
+										error: new Error('Voice transport recovery skipped: router RTP capabilities unavailable'),
+									});
+								});
+								return;
+							}
+
+							const nonceAtStart = command.nonce;
+							const dispatchNonceChangedIfStale = (): boolean => {
+								if (!isCurrentAttempt()) {
+									return true;
 								}
+
+								const currentNonce = voiceSessionReconnectNonceRef.current;
+								if (currentNonce === nonceAtStart) {
+									return false;
+								}
+
+								dispatchIfCurrentVoiceSessionCommand(command, () => {
+									dispatchVoiceSession({
+										type: 'NonceChanged',
+										commandId: command.commandId,
+										generation: command.generation,
+										nonce: currentNonce,
+									});
+								});
+								return true;
 							};
 
 							try {
+								if (!isCurrentVoiceSessionCommand(command)) return;
+
 								logVoice('Attempting in-session voice transport recovery', {
-									attempt: attempt + 1,
-									channelId: currentVoiceChannelIdRef.current,
+									attempt: command.attempt + 1,
+									channelId: command.channelId,
 								});
 
-								setConnectionStatus(ConnectionStatus.CONNECTING);
 								stopMonitoring();
 								resetStats();
 								clearRemoteUserStreams();
 								clearExternalStreams();
 								setVoiceEventRtpCapabilities(null);
-								cleanupTransports();
+								cleanupTransports({ preserveRemoteMediaIntent: true });
+								rehydrateWatchIntentOnly(command.snapshot);
 
-								let device = await withRecoveryTimeout(ensureVoiceDeviceLoaded());
-
-								throwIfNonceStale('device load');
+								let device = await withRecoveryTimeout(ensureVoiceDeviceLoaded(isCurrentAttempt), cancelAttempt);
+								if (dispatchNonceChangedIfStale()) return;
 
 								let currentRtpCapabilities = device.rtpCapabilities;
 								let recoveryJoinResult: TRecoveryJoinResult | undefined;
 
 								try {
 									await withRecoveryTimeout(
-										Promise.all([createProducerTransport(device), createConsumerTransport(device)]),
+										Promise.all([
+											createProducerTransport(device, undefined, isCurrentAttempt),
+											createConsumerTransport(device, undefined, isCurrentAttempt),
+										]),
+										cancelAttempt,
 									);
 								} catch (error) {
 									const recoveryChannelId = currentVoiceChannelIdRef.current;
@@ -3567,21 +3864,37 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 										error,
 									});
 
-									recoveryJoinResult = await withRecoveryTimeout(rejoinVoiceSession(recoveryChannelId));
-									throwIfNonceStale('voice rejoin');
+									recoveryJoinResult = await withRecoveryTimeout(
+										rejoinVoiceSession(recoveryChannelId, {
+											isCurrent: isCurrentAttempt,
+											signal: abortController.signal,
+										}),
+										cancelAttempt,
+									);
+									if (dispatchNonceChangedIfStale()) return;
 
 									device = recoveryJoinResult.device;
 									currentRtpCapabilities = device.rtpCapabilities;
+									deviceRef.current = device;
+									routerRtpCapabilities.current = recoveryJoinResult.routerRtpCapabilities;
+									sendRtpCapabilities.current = device.rtpCapabilities;
+									const store = useServerStore.getState();
+									store.setCurrentVoiceChannelId(recoveryChannelId);
+									store.reconcileVoiceChannelUsers({
+										channelId: recoveryChannelId,
+										users: recoveryJoinResult.channelUsers,
+									});
 
 									await withRecoveryTimeout(
 										Promise.all([
-											createProducerTransport(device, recoveryJoinResult.producerTransportParams),
-											createConsumerTransport(device, recoveryJoinResult.consumerTransportParams),
+											createProducerTransport(device, recoveryJoinResult.producerTransportParams, isCurrentAttempt),
+											createConsumerTransport(device, recoveryJoinResult.consumerTransportParams, isCurrentAttempt),
 										]),
+										cancelAttempt,
 									);
 								}
 
-								throwIfNonceStale('transport creation');
+								if (dispatchNonceChangedIfStale()) return;
 
 								sendRtpCapabilities.current = currentRtpCapabilities;
 								setVoiceEventRtpCapabilities(currentRtpCapabilities);
@@ -3597,15 +3910,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 										}),
 									);
 								} else if (currentAudioStream && currentAudioTrack && currentAudioTrack.readyState === 'live') {
-									republishTasks.push(publishMicTrack(currentAudioStream, currentAudioTrack));
+									republishTasks.push(
+										publishMicTrack(currentAudioStream, currentAudioTrack, { isCurrent: isCurrentAttempt }),
+									);
 								} else if (currentAudioStream && canSpeakRef.current && startMicStreamRef.current) {
-									// cleanupTransports() above closed the producer transport, and
-									// mediasoup stops the produced mic track on transport close
-									// (produce() defaults stopTracks: true) — so an in-session
-									// recovery never sees a live track in the branch above. A local
-									// audio stream with a dead track means the user was publishing
-									// mic when the transport failed: restart capture rather than
-									// completing recovery with a silent mic.
 									republishTasks.push(
 										startMicStreamRef.current().catch((error) => {
 											logVoice('Error restarting microphone after voice transport recovery', { error });
@@ -3613,218 +3921,157 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									);
 								}
 
-								const localMediaRepublishPlan = buildLocalMediaRepublishPlan();
+								const localMediaRepublishPlan = buildLocalMediaRepublishPlan(isCurrentAttempt);
 								republishTasks.push(...localMediaRepublishPlan.tasks);
-
-								if (appAudioPublishIntentRef.current) {
-									void recoverDesktopAppAudioFromIntent().catch((error) => {
-										logVoice('Error recovering desktop app audio after voice transport recovery', { error });
-									});
-								}
 
 								await withRecoveryTimeout(
 									Promise.all([
 										consumeExistingProducers(currentRtpCapabilities, undefined, recoveryJoinResult?.existingProducers),
 										...republishTasks,
 									]),
+									cancelAttempt,
 								);
-								throwIfNonceStale('consume/republish');
+								if (dispatchNonceChangedIfStale()) return;
 
-								// After the staleness check so a stale recovery cannot push
-								// republished flags into a session the user has since left.
-								await withRecoveryTimeout(syncRepublishedLocalMediaState(localMediaRepublishPlan.state));
+								await withRecoveryTimeout(
+									syncRepublishedLocalMediaState(localMediaRepublishPlan.state, { isCurrent: isCurrentAttempt }),
+									cancelAttempt,
+								);
+								if (dispatchNonceChangedIfStale()) return;
 
 								if (recoveryJoinResult) {
 									logVoice('Refreshing existing producers after voice session rejoin');
 									await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
+									if (dispatchNonceChangedIfStale()) return;
 
 									await withRecoveryTimeout(
 										new Promise<void>((resolve) => {
 											setTimeout(resolve, RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS);
 										}),
 									);
+									if (dispatchNonceChangedIfStale()) return;
 
 									logVoice('Refreshing existing producers after delayed voice session rejoin sync');
 									await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
 								}
 
-								const restoreWatchTasks: Promise<void>[] = [];
-
-								Object.entries(watchedStreamsSnapshot.remoteUserStreams).forEach(([remoteId, kinds]) => {
-									const numericRemoteId = Number(remoteId);
-
-									kinds.forEach((kind) => {
-										if (isWatchedRestoreCancelled(cancelledWatchedRestoreKeysRef.current, numericRemoteId, kind)) {
-											return;
-										}
-
-										restoreWatchTasks.push(consume(numericRemoteId, kind, currentRtpCapabilities));
-									});
-								});
-
-								Object.entries(watchedStreamsSnapshot.externalStreams).forEach(([streamId, watchedState]) => {
-									const numericStreamId = Number(streamId);
-
-									if (watchedState.audio) {
-										if (
-											!isWatchedRestoreCancelled(
-												cancelledWatchedRestoreKeysRef.current,
-												numericStreamId,
-												StreamKind.EXTERNAL_AUDIO,
-											)
-										) {
-											restoreWatchTasks.push(
-												consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities),
-											);
-										}
-									}
-
-									if (watchedState.video) {
-										if (
-											!isWatchedRestoreCancelled(
-												cancelledWatchedRestoreKeysRef.current,
-												numericStreamId,
-												StreamKind.EXTERNAL_VIDEO,
-											)
-										) {
-											restoreWatchTasks.push(
-												consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities),
-											);
-										}
-									}
-								});
-
-								await withRecoveryTimeout(Promise.all(restoreWatchTasks));
-
-								throwIfNonceStale('watch restoration');
+								if (dispatchNonceChangedIfStale()) return;
 
 								if (recoveryJoinResult) {
 									useServerStore.getState().bumpVoiceSessionReconnectNonce();
 								}
 
 								startMonitoring(producerTransport.current, consumerTransport.current);
-								setConnectionStatus(ConnectionStatus.CONNECTED);
 								logVoice('Voice transport recovery completed successfully');
 
-								return true;
-							} catch (error) {
-								if (error instanceof VoiceSessionReconnectChangedError) {
-									nonceRestarts += 1;
-
-									if (nonceRestarts > RECOVERY_MAX_NONCE_RESTARTS) {
-										logVoice('Voice transport recovery abandoned: too many session changes', {
-											nonceRestarts,
-										});
-										setConnectionStatus(ConnectionStatus.FAILED);
-										return false;
-									}
-
-									logVoice('Voice session changed during transport recovery, restarting attempt', {
-										attempt: attempt + 1,
-										nonceRestarts,
-										error,
+								dispatchIfCurrentVoiceSessionCommand(command, () => {
+									dispatchVoiceSession({
+										type: 'RebuildSucceeded',
+										commandId: command.commandId,
+										generation: command.generation,
 									});
-									attempt -= 1;
-									continue;
-								}
-
-								const isLastAttempt = attempt === RECOVERY_MAX_ATTEMPTS - 1;
-
-								if (!isLastAttempt && !isNonRetriableTrpcError(error)) {
-									logVoice('Voice transport recovery attempt failed, retrying', {
-										attempt: attempt + 1,
-										error,
-									});
-									continue;
-								}
-
-								// Terminal: attempts exhausted (or a non-retriable error) and
-								// voice is now dead — promote to a Sentry issue, not just a
-								// breadcrumb. Mirrors the 'Voice reconnect recovery gave up'
-								// backstop in features/server/voice/actions.ts.
-								reportError('Voice transport recovery failed', error, {
-									attempt: attempt + 1,
-									nonceRestarts,
-									channelId: currentVoiceChannelIdRef.current,
 								});
-								setConnectionStatus(ConnectionStatus.FAILED);
-								return false;
+							} catch (error) {
+								logVoice('Voice transport recovery attempt failed', {
+									attempt: command.attempt + 1,
+									error,
+								});
+								dispatchIfCurrentVoiceSessionCommand(command, () => {
+									dispatchVoiceSession({
+										type: 'RebuildFailed',
+										commandId: command.commandId,
+										generation: command.generation,
+										error,
+									});
+
+									const phase = getVoiceSessionState().phase;
+									if (phase.phase === 'failed') {
+										reportError('Voice transport recovery failed', error, {
+											attempt: command.attempt + 1,
+											channelId: command.channelId,
+										});
+									}
+								});
+							}
+						} finally {
+							cancelAttempt();
+							unsubscribeFromAttempt();
+							transportRecoveryPromiseRef.current = undefined;
+							const queuedCommand = queuedTransportRecoveryCommandRef.current;
+							queuedTransportRecoveryCommandRef.current = undefined;
+
+							if (queuedCommand) {
+								void runRebuildTransportCommand(queuedCommand);
+							} else if (getVoiceSessionState().phase.phase !== 'rebuilding') {
+								hasHandledTransportFailureRef.current = false;
 							}
 						}
+					})(),
+			);
 
-						return false;
-					} finally {
-						transportRecoveryPromiseRef.current = undefined;
-					}
-				})(),
-		);
+			transportRecoveryPromiseRef.current = recoveryPromise;
+			await recoveryPromise;
+		},
+		[
+			clearExternalStreams,
+			clearRemoteUserStreams,
+			cleanupTransports,
+			consumeExistingProducers,
+			dispatchIfCurrentVoiceSessionCommand,
+			buildLocalMediaRepublishPlan,
+			createConsumerTransport,
+			createProducerTransport,
+			ensureVoiceDeviceLoaded,
+			isCurrentVoiceSessionCommand,
+			producerTransport,
+			consumerTransport,
+			publishMicTrack,
+			rehydrateWatchIntentOnly,
+			resetStats,
+			rejoinVoiceSession,
+			startMonitoring,
+			stopMonitoring,
+			syncRepublishedLocalMediaState,
+		],
+	);
 
-		transportRecoveryPromiseRef.current = recoveryPromise;
-		return recoveryPromise;
-	}, [
-		captureWatchedRemoteStreams,
-		clearExternalStreams,
-		clearRemoteUserStreams,
-		cleanupTransports,
-		consume,
-		consumeExistingProducers,
-		buildLocalMediaRepublishPlan,
-		createConsumerTransport,
-		createProducerTransport,
-		ensureVoiceDeviceLoaded,
-		producerTransport,
-		consumerTransport,
-		publishMicTrack,
-		recoverDesktopAppAudioFromIntent,
-		resetStats,
-		rejoinVoiceSession,
-		startMonitoring,
-		stopMonitoring,
-		syncRepublishedLocalMediaState,
-	]);
+	// Every WS drop re-captures the reconnect intent with a fresh expiresAt (see
+	// captureVoiceReconnectIntentForCurrentSession), so an in-flight wait must
+	// honour the machine's CURRENT deadline rather than the one frozen into the
+	// command when it was emitted. Otherwise an offline window longer than one
+	// intent TTL expires recovery even though repeated drops kept the intent
+	// fresh — the legacy loop re-read the pending intent at every decision point
+	// and recovered from >60s offline; this getter preserves that behaviour.
+	const liveReconnectDeadline = useCallback((command: { generation: number; expiresAt: number }): number => {
+		const { phase } = getVoiceSessionState();
 
-	recoverTransportSessionRef.current = recoverTransportSession;
+		return phase.phase === 'reconnecting' && phase.generation === command.generation
+			? phase.pending.expiresAt
+			: command.expiresAt;
+	}, []);
 
-	const waitForVoiceReconnectOnline = useCallback(async (expiresAt: number): Promise<'online' | 'expired'> => {
+	const waitForVoiceReconnectOnline = useCallback(async (getExpiresAt: () => number): Promise<'online' | 'expired'> => {
 		if (isVoiceReconnectOnline()) {
 			return 'online';
 		}
 
-		const remainingMs = expiresAt - Date.now();
-
-		if (remainingMs <= 0) {
+		if (Date.now() > getExpiresAt()) {
 			return 'expired';
 		}
 
 		logDebug('Voice reconnect offline pause');
 
-		const outcome = await new Promise<'online' | 'expired'>((resolve) => {
-			let timeoutId: number | undefined;
+		while (!isVoiceReconnectOnline()) {
+			if (Date.now() > getExpiresAt()) {
+				return 'expired';
+			}
 
-			const cleanup = () => {
-				window.removeEventListener('online', handleOnline);
-				if (timeoutId !== undefined) {
-					window.clearTimeout(timeoutId);
-				}
-			};
-
-			const handleOnline = () => {
-				cleanup();
-				resolve(Date.now() > expiresAt ? 'expired' : 'online');
-			};
-
-			window.addEventListener('online', handleOnline, { once: true });
-			timeoutId = window.setTimeout(() => {
-				cleanup();
-				resolve('expired');
-			}, remainingMs);
-		});
-
-		if (outcome === 'online') {
-			logDebug('Voice reconnect offline resume');
+			await new Promise<void>((resolve) => setTimeout(resolve, VOICE_RECONNECT_WAIT_POLL_MS));
 		}
 
-		return outcome;
+		logDebug('Voice reconnect offline resume');
+
+		return 'online';
 	}, []);
 
 	// Blocks a restore attempt until the reconnected WS has re-authenticated
@@ -3833,7 +4080,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// this waits for the next joinServer instead. Resolves early if recovery is
 	// cleared or the reconnect window expires.
 	const waitForVoiceReconnectAuthenticated = useCallback(
-		async (expiresAt: number): Promise<'authenticated' | 'expired' | 'cleared'> => {
+		async (getExpiresAt: () => number): Promise<'authenticated' | 'expired' | 'cleared'> => {
 			const reconnectState = useVoiceReconnectStore.getState();
 
 			// Recovery was already torn down — signal the caller to bow out quietly
@@ -3846,9 +4093,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				return 'authenticated';
 			}
 
-			const remainingMs = expiresAt - Date.now();
-
-			if (remainingMs <= 0) {
+			if (Date.now() > getExpiresAt()) {
 				return 'expired';
 			}
 
@@ -3870,6 +4115,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					resolve(result);
 				};
 
+				// The deadline slides as repeated WS drops refresh the pending intent,
+				// so on expiry re-read it and re-arm instead of finishing outright.
+				const armExpiryTimer = () => {
+					const remainingMs = getExpiresAt() - Date.now();
+
+					if (remainingMs <= 0) {
+						finish('expired');
+						return;
+					}
+
+					timeoutId = window.setTimeout(armExpiryTimer, remainingMs);
+				};
+
 				const unsubscribe = useVoiceReconnectStore.subscribe((state) => {
 					if (state.reconnectingSince === undefined) {
 						finish('cleared');
@@ -3877,11 +4135,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					}
 
 					if (state.reconnectAuthenticated) {
-						finish(Date.now() > expiresAt ? 'expired' : 'authenticated');
+						finish(Date.now() > getExpiresAt() ? 'expired' : 'authenticated');
 					}
 				});
 
-				timeoutId = window.setTimeout(() => finish('expired'), remainingMs);
+				armExpiryTimer();
 
 				// Guard the race where state changed between the initial read and subscribe.
 				const currentState = useVoiceReconnectStore.getState();
@@ -3896,16 +4154,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const waitForVoiceReconnectDelay = useCallback(
-		async (delayMs: number, expiresAt: number): Promise<'ready' | 'expired'> => {
+		async (delayMs: number, getExpiresAt: () => number): Promise<'ready' | 'expired'> => {
 			let remainingDelayMs = delayMs;
 
 			while (remainingDelayMs > 0) {
-				if (Date.now() > expiresAt) {
+				if (Date.now() > getExpiresAt()) {
 					return 'expired';
 				}
 
 				if (!isVoiceReconnectOnline()) {
-					const outcome = await waitForVoiceReconnectOnline(expiresAt);
+					const outcome = await waitForVoiceReconnectOnline(getExpiresAt);
 
 					if (outcome === 'expired') {
 						return 'expired';
@@ -3919,310 +4177,400 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				remainingDelayMs -= waitMs;
 			}
 
-			return Date.now() > expiresAt ? 'expired' : 'ready';
+			return Date.now() > getExpiresAt() ? 'expired' : 'ready';
 		},
 		[waitForVoiceReconnectOnline],
 	);
 
-	useEffect(() => {
-		// reconnectAuthenticated gates the restore: a reconnected socket starts
-		// unauthenticated, so issuing restoreOrJoin before joinServer re-auths it
-		// fails UNAUTHORIZED (terminal). Wait until the re-auth handshake completes.
-		if (!isConnected || reconnectingSince === undefined || !reconnectAuthenticated) {
-			return;
-		}
+	const runWaitOnlineCommand = useCallback(
+		async (command: TVoiceSessionCommand): Promise<void> => {
+			if (command.type !== 'WaitOnline') {
+				return;
+			}
 
-		if (voiceReconnectPromiseRef.current) {
-			return;
-		}
+			const outcome = await waitForVoiceReconnectOnline(() => liveReconnectDeadline(command));
 
-		const recoveryPromise = (async () => {
-			let consecutiveUnknownErrors = 0;
-			let retryAttempt = 0;
+			dispatchIfCurrentVoiceSessionCommand(command, () => {
+				dispatchVoiceSession({
+					type: outcome === 'online' ? 'OnlineReady' : 'OnlineExpired',
+					commandId: command.commandId,
+					generation: command.generation,
+				});
+			});
+		},
+		[dispatchIfCurrentVoiceSessionCommand, liveReconnectDeadline, waitForVoiceReconnectOnline],
+	);
 
-			// Captured once, before any attempt runs: init() clears the subscription
-			// ledger (cleanupTransports -> clearAllPendingStreams) as part of its
-			// teardown, wiping the `desired` watch intent. Snapshotting here preserves
-			// what the user was watching so it can be re-consumed after restore; a
-			// capture inside the loop would be empty on every retry.
-			const watchedStreamsSnapshot = captureWatchedRemoteStreams();
+	const runWaitAuthCommand = useCallback(
+		async (command: TVoiceSessionCommand): Promise<void> => {
+			if (command.type !== 'WaitAuth') {
+				return;
+			}
 
-			while (true) {
-				// Cleared recovery always exits quietly. This must precede the
-				// pending-missing check below (which reports/clears as an expiry):
-				// clearing recovery also drops the pending intent, so any wait/continue
-				// path resuming after a clear would otherwise mis-report expiry.
-				if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
+			const outcome = await waitForVoiceReconnectAuthenticated(() => liveReconnectDeadline(command));
+
+			dispatchIfCurrentVoiceSessionCommand(command, () => {
+				dispatchVoiceSession({
+					type: outcome === 'authenticated' ? 'AuthReady' : outcome === 'cleared' ? 'AuthCleared' : 'AuthExpired',
+					commandId: command.commandId,
+					generation: command.generation,
+				});
+			});
+		},
+		[dispatchIfCurrentVoiceSessionCommand, liveReconnectDeadline, waitForVoiceReconnectAuthenticated],
+	);
+
+	const runRestoreVoiceSessionCommand = useCallback(
+		async (command: TVoiceSessionCommand): Promise<void> => {
+			if (command.type !== 'RestoreVoiceSession') {
+				return;
+			}
+
+			if (!isCurrentVoiceSessionCommand(command)) {
+				return;
+			}
+
+			if (voiceRestorePromiseRef.current) {
+				queuedVoiceRestoreCommandRef.current = command;
+				return;
+			}
+
+			const recoveryPromise = (async () => {
+				const activeTransportRecovery = transportRecoveryPromiseRef.current;
+				if (activeTransportRecovery) {
+					await activeTransportRecovery;
+				}
+
+				if (!isCurrentVoiceSessionCommand(command)) {
 					return;
-				}
-
-				const pendingVoiceReconnect = getValidPendingVoiceReconnect();
-
-				if (!pendingVoiceReconnect) {
-					logDebug('Voice reconnect terminal clear reason', {
-						reason: 'reconnect-expired',
-					});
-					clearOwnVoiceSessionAfterReconnectFailure('reconnect-expired');
-					voiceCleanupRef.current?.();
-					return;
-				}
-
-				if (!isVoiceReconnectOnline()) {
-					const onlineOutcome = await waitForVoiceReconnectOnline(pendingVoiceReconnect.expiresAt);
-
-					if (onlineOutcome === 'expired') {
-						logDebug('Voice reconnect terminal clear reason', {
-							reason: 'reconnect-expired',
-						});
-						clearOwnVoiceSessionAfterReconnectFailure('reconnect-expired');
-						voiceCleanupRef.current?.();
-						return;
-					}
-
-					continue;
-				}
-
-				// Never issue restoreOrJoin at an unauthenticated socket. If the WS
-				// dropped again mid-recovery, wait for the next joinServer to re-auth
-				// rather than burning an attempt on a guaranteed UNAUTHORIZED.
-				if (!useVoiceReconnectStore.getState().reconnectAuthenticated) {
-					const authOutcome = await waitForVoiceReconnectAuthenticated(pendingVoiceReconnect.expiresAt);
-
-					// Recovery was cleared out from under us while waiting — bow out
-					// without reporting a spurious expiry.
-					if (authOutcome === 'cleared') {
-						return;
-					}
-
-					if (authOutcome === 'expired') {
-						logDebug('Voice reconnect terminal clear reason', {
-							reason: 'reconnect-expired',
-						});
-						clearOwnVoiceSessionAfterReconnectFailure('reconnect-expired');
-						voiceCleanupRef.current?.();
-						return;
-					}
-
-					continue;
 				}
 
 				const reconnectAttemptId = createReconnectAttemptId();
-				const attemptNumber = retryAttempt + 1;
+				const attemptNumber = command.attempt + 1;
+				let serverSessionEstablished = false;
+				let restoreRequestCompleted = false;
+				let unsettledOperation: Promise<unknown> | undefined;
+				let attemptActive = true;
+				const abortController = new AbortController();
+				const cancelAttempt = (): void => {
+					attemptActive = false;
+					abortController.abort();
+				};
+				const unsubscribeFromAttempt = subscribeVoiceSession(() => {
+					if (!isCurrentVoiceSessionCommand(command)) {
+						cancelAttempt();
+					}
+				});
 
 				logDebug('Voice reconnect attempt start', {
 					attempt: attemptNumber,
-					channelId: pendingVoiceReconnect.channelId,
+					channelId: command.pending.channelId,
 					reconnectAttemptId,
 				});
 
-				let serverSessionEstablished = false;
-
 				try {
-					const bootstrap = await withVoiceReconnectTimeout(
-						requestVoiceRestoreOrJoin({
-							channelId: pendingVoiceReconnect.channelId,
-							micMuted: pendingVoiceReconnect.micMuted,
-							soundMuted: pendingVoiceReconnect.soundMuted,
-							reconnectAttemptId,
-						}),
-					);
+					const restoreRequest = requestVoiceRestoreOrJoin({
+						channelId: command.pending.channelId,
+						micMuted: command.pending.micMuted,
+						soundMuted: command.pending.soundMuted,
+						reconnectAttemptId,
+						signal: abortController.signal,
+					});
+					unsettledOperation = restoreRequest;
+					const bootstrap = await withVoiceReconnectTimeout(restoreRequest, cancelAttempt);
+					restoreRequestCompleted = true;
+					unsettledOperation = undefined;
 
 					serverSessionEstablished = true;
 
-					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
+					if (!isCurrentVoiceSessionCommand(command)) {
 						return;
 					}
 
-					const initResult = await withVoiceReconnectTimeout(
-						init(bootstrap.routerRtpCapabilities, pendingVoiceReconnect.channelId, {
-							producerTransportParams: bootstrap.producerTransportParams,
-							consumerTransportParams: bootstrap.consumerTransportParams,
-							existingProducers: bootstrap.existingProducers,
-							// Keep a live screen share / webcam across the reconnect instead
-							// of dropping it; init republishes the preserved tracks.
-							preserveLocalMedia: true,
-						}),
-					);
+					const initRequest = init(bootstrap.routerRtpCapabilities, command.pending.channelId, {
+						producerTransportParams: bootstrap.producerTransportParams,
+						consumerTransportParams: bootstrap.consumerTransportParams,
+						existingProducers: bootstrap.existingProducers,
+						preserveLocalMedia: true,
+						restoreWatchSnapshot: command.snapshot,
+						isCurrentRecovery: () => attemptActive && isCurrentVoiceSessionCommand(command),
+					});
+					unsettledOperation = initRequest;
+					const initResult = await withVoiceReconnectTimeout(initRequest, cancelAttempt);
+					unsettledOperation = undefined;
 
-					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
-						voiceCleanupRef.current?.();
+					if (!isCurrentVoiceSessionCommand(command)) {
 						return;
 					}
 
 					const serverStore = useServerStore.getState();
 
-					serverStore.setCurrentVoiceChannelId(pendingVoiceReconnect.channelId);
+					serverStore.setCurrentVoiceChannelId(command.pending.channelId);
 					serverStore.reconcileVoiceChannelUsers({
-						channelId: pendingVoiceReconnect.channelId,
+						channelId: command.pending.channelId,
 						users: bootstrap.channelUsers,
 					});
 					serverStore.bumpVoiceSessionReconnectNonce();
-					await withVoiceReconnectTimeout(syncRepublishedLocalMediaState(initResult.republishedLocalMediaState));
+					await withVoiceReconnectTimeout(
+						syncRepublishedLocalMediaState(initResult.republishedLocalMediaState, {
+							isCurrent: () => attemptActive && isCurrentVoiceSessionCommand(command),
+							signal: abortController.signal,
+						}),
+						cancelAttempt,
+					);
 
-					const currentRtpCapabilities = deviceRef.current?.rtpCapabilities ?? sendRtpCapabilities.current;
-
-					if (currentRtpCapabilities) {
-						logVoice('Refreshing existing producers after reconnect restore');
-						await withVoiceReconnectTimeout(consumeExistingProducers(currentRtpCapabilities));
-
-						// consumeExistingProducers only auto-consumes audio; video / screen /
-						// screen-audio / external streams are marked pending and re-consumed
-						// only when the ledger still holds their `desired` intent. init()
-						// wiped that intent above, so restore it explicitly from the snapshot
-						// captured before recovery — mirroring the in-session transport
-						// recovery path — so watched streams resume without a manual re-Watch.
-						const restoreWatchTasks: Promise<unknown>[] = [];
-
-						Object.entries(watchedStreamsSnapshot.remoteUserStreams).forEach(([remoteId, kinds]) => {
-							const numericRemoteId = Number(remoteId);
-
-							kinds.forEach((kind) => {
-								if (isWatchedRestoreCancelled(cancelledWatchedRestoreKeysRef.current, numericRemoteId, kind)) {
-									return;
-								}
-
-								restoreWatchTasks.push(consume(numericRemoteId, kind, currentRtpCapabilities));
-							});
-						});
-
-						Object.entries(watchedStreamsSnapshot.externalStreams).forEach(([streamId, watchedState]) => {
-							const numericStreamId = Number(streamId);
-
-							if (watchedState.audio) {
-								if (
-									!isWatchedRestoreCancelled(
-										cancelledWatchedRestoreKeysRef.current,
-										numericStreamId,
-										StreamKind.EXTERNAL_AUDIO,
-									)
-								) {
-									restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_AUDIO, currentRtpCapabilities));
-								}
-							}
-
-							if (watchedState.video) {
-								if (
-									!isWatchedRestoreCancelled(
-										cancelledWatchedRestoreKeysRef.current,
-										numericStreamId,
-										StreamKind.EXTERNAL_VIDEO,
-									)
-								) {
-									restoreWatchTasks.push(consume(numericStreamId, StreamKind.EXTERNAL_VIDEO, currentRtpCapabilities));
-								}
-							}
-						});
-
-						if (restoreWatchTasks.length > 0) {
-							await withVoiceReconnectTimeout(Promise.all(restoreWatchTasks));
-						}
-					} else {
-						logVoice('Skipping producer refresh after reconnect restore - missing RTP capabilities');
-					}
-
-					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
-						voiceCleanupRef.current?.();
+					if (!isCurrentVoiceSessionCommand(command)) {
 						return;
 					}
 
-					clearVoiceReconnectRecovery('voice-join-succeeded');
-					useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
-						channelId: pendingVoiceReconnect.channelId,
-						peerUserIds: [...pendingVoiceReconnect.peerUserIds],
-						expiresAt: Date.now() + VOICE_RECONNECT_SUPPRESSION_MS,
+					dispatchVoiceSession({
+						type: 'RestoreSucceeded',
+						commandId: command.commandId,
+						generation: command.generation,
+						serverSessionEstablished,
 					});
-
-					return;
 				} catch (error) {
-					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
+					if (!isCurrentVoiceSessionCommand(command)) {
 						return;
 					}
 
-					const classification = classifyVoiceReconnectError(error, {
-						consecutiveUnknownErrors,
-					});
-
-					logDebug('Voice reconnect retry classification', {
+					logDebug('Voice reconnect restore attempt failed', {
 						attempt: attemptNumber,
-						classification,
 						error,
 					});
 
-					if (classification.kind === 'terminal') {
-						// Always-on (not logDebug-gated) so the terminal error that ended
-						// recovery is visible in the [VOICE-PROVIDER] logs and Sentry, not
-						// just when window.DEBUG happens to be on.
-						logVoice('Voice reconnect classified terminal, ending recovery', {
-							reason: classification.clearReason,
-							detail: classification.reason,
-							attempt: attemptNumber,
+					dispatchIfCurrentVoiceSessionCommand(command, () => {
+						dispatchVoiceSession({
+							type: 'RestoreFailed',
+							commandId: command.commandId,
+							generation: command.generation,
 							error,
+							// A timed-out restore mutation may have committed on the server
+							// before its response was aborted. Treat ownership as established
+							// conservatively so every later terminal path sends voice.leave.
+							serverSessionEstablished:
+								serverSessionEstablished || (!restoreRequestCompleted && error instanceof VoiceReconnectTimeoutError),
 						});
-
-						// restoreOrJoin already bound a server-side session for us this
-						// iteration; without an explicit leave the runtime would keep us
-						// resident in the channel even though the client is giving up.
-						if (serverSessionEstablished) {
-							try {
-								await getTRPCClient().voice.leave.mutate();
-							} catch (leaveError) {
-								logDebug('Voice reconnect terminal leave failed', {
-									error: leaveError,
-								});
-							}
-						}
-
-						clearOwnVoiceSessionAfterReconnectFailure(classification.clearReason);
-						voiceCleanupRef.current?.();
-						return;
-					}
-
-					consecutiveUnknownErrors = classification.countsAsUnknown ? consecutiveUnknownErrors + 1 : 0;
-
-					if (useVoiceReconnectStore.getState().reconnectingSince === undefined) {
-						return;
-					}
-
-					const retryDelayMs = getVoiceReconnectRetryDelayMs(retryAttempt, Math.random());
-
-					logDebug('Voice reconnect retry delay', {
-						attempt: attemptNumber,
-						delayMs: retryDelayMs,
 					});
+				} finally {
+					unsubscribeFromAttempt();
 
-					const delayOutcome = await waitForVoiceReconnectDelay(retryDelayMs, pendingVoiceReconnect.expiresAt);
+					// Bounded: a hung restore/init promise must not hold
+					// voiceRestorePromiseRef forever — that would park the queued retry
+					// with no expiry timer armed, leaving the UI reconnecting past the
+					// TTL. A detached operation keeps its attempt guards and cannot
+					// mutate shared session state after supersession.
+					const drainOutcome = await drainCancelledVoiceReconnectOperation(unsettledOperation);
 
-					if (delayOutcome === 'expired') {
-						logDebug('Voice reconnect terminal clear reason', {
-							reason: 'reconnect-expired',
+					if (drainOutcome === 'detached') {
+						logDebug('Voice reconnect detached a hung cancelled operation', {
+							attempt: attemptNumber,
+							channelId: command.pending.channelId,
 						});
-						clearOwnVoiceSessionAfterReconnectFailure('reconnect-expired');
-						voiceCleanupRef.current?.();
-						return;
 					}
+				}
+			})();
 
-					retryAttempt += 1;
+			voiceRestorePromiseRef.current = recoveryPromise;
+
+			try {
+				await recoveryPromise;
+			} finally {
+				if (voiceRestorePromiseRef.current === recoveryPromise) {
+					voiceRestorePromiseRef.current = undefined;
+				}
+
+				const queuedCommand = queuedVoiceRestoreCommandRef.current;
+				queuedVoiceRestoreCommandRef.current = undefined;
+
+				if (queuedCommand) {
+					void runRestoreVoiceSessionCommand(queuedCommand);
 				}
 			}
-		})().finally(() => {
-			voiceReconnectPromiseRef.current = undefined;
-		});
+		},
+		[
+			dispatchIfCurrentVoiceSessionCommand,
+			init,
+			isCurrentVoiceSessionCommand,
+			requestVoiceRestoreOrJoin,
+			syncRepublishedLocalMediaState,
+		],
+	);
 
-		voiceReconnectPromiseRef.current = recoveryPromise;
-	}, [
-		init,
-		isConnected,
-		reconnectingSince,
-		reconnectAuthenticated,
-		captureWatchedRemoteStreams,
-		consume,
-		consumeExistingProducers,
-		requestVoiceRestoreOrJoin,
-		syncRepublishedLocalMediaState,
-		waitForVoiceReconnectDelay,
-		waitForVoiceReconnectOnline,
-		waitForVoiceReconnectAuthenticated,
-	]);
+	const runRetryDelayCommand = useCallback(
+		async (command: TVoiceSessionCommand): Promise<void> => {
+			if (command.type !== 'RetryDelay') {
+				return;
+			}
+
+			const delayMs = getVoiceReconnectRetryDelayMs(command.attempt, Math.random());
+
+			logDebug('Voice reconnect retry delay', {
+				attempt: command.attempt + 1,
+				delayMs,
+			});
+
+			const outcome = await waitForVoiceReconnectDelay(delayMs, () => liveReconnectDeadline(command));
+
+			dispatchIfCurrentVoiceSessionCommand(command, () => {
+				dispatchVoiceSession({
+					type: outcome === 'ready' ? 'RetryDelayElapsed' : 'RetryDelayExpired',
+					commandId: command.commandId,
+					generation: command.generation,
+				});
+			});
+		},
+		[dispatchIfCurrentVoiceSessionCommand, liveReconnectDeadline, waitForVoiceReconnectDelay],
+	);
+
+	const runRestoreWatchIntentCommand = useCallback(
+		(command: TVoiceSessionCommand): void => {
+			if (command.type !== 'RestoreWatchIntent') {
+				return;
+			}
+
+			if (!isCurrentVoiceSessionCommand(command)) {
+				return;
+			}
+
+			// The provider-local ledger is recreated on remount. init() normally
+			// rehydrates before producer reconciliation, but a remount after restore
+			// succeeded resumes directly at this command and therefore has no init()
+			// pass to rebuild the ledger. Reapplying is safe because the ledger helper
+			// never overwrites an existing slot, preserving stop intent from this mount.
+			rehydrateWatchIntentOnly(command.snapshot);
+
+			dispatchIfCurrentVoiceSessionCommand(command, () => {
+				dispatchVoiceSession({
+					type: 'WatchIntentRehydrated',
+					commandId: command.commandId,
+					generation: command.generation,
+					now: Date.now(),
+				});
+			});
+		},
+		[dispatchIfCurrentVoiceSessionCommand, isCurrentVoiceSessionCommand, rehydrateWatchIntentOnly],
+	);
+
+	const clearFailedVoiceSession = useCallback((command: TVoiceSessionCommand): void => {
+		if (command.type !== 'ClearFailedSession') {
+			return;
+		}
+
+		// restoreOrJoin already bound a server-side session this cycle; without an
+		// explicit leave the runtime would keep us resident in the channel even
+		// though the client is giving up.
+		if (command.leaveServerSession) {
+			void leaveVoiceSessionAfterRecoveryFailure().then((didLeave) => {
+				if (!didLeave) {
+					logDebug('Voice reconnect terminal leave failed');
+				}
+			});
+		}
+
+		clearOwnVoiceSessionAfterReconnectFailure(command.reason);
+		voiceCleanupRef.current?.();
+	}, []);
+
+	const runVoiceSessionCommand = useCallback(
+		(command: TVoiceSessionCommand): void => {
+			if (command.type === 'CaptureRecoverySnapshot') {
+				dispatchVoiceSession({
+					type: 'RecoveryStarted',
+					commandId: command.commandId,
+					generation: command.generation,
+					snapshot: captureWatchedRemoteStreams(),
+				});
+				return;
+			}
+
+			if (command.type === 'RebuildTransports') {
+				void runRebuildTransportCommand(command);
+				return;
+			}
+
+			if (command.type === 'WaitOnline') {
+				void runWaitOnlineCommand(command);
+				return;
+			}
+
+			if (command.type === 'WaitAuth') {
+				void runWaitAuthCommand(command);
+				return;
+			}
+
+			if (command.type === 'RestoreVoiceSession') {
+				void runRestoreVoiceSessionCommand(command);
+				return;
+			}
+
+			if (command.type === 'RetryDelay') {
+				void runRetryDelayCommand(command);
+				return;
+			}
+
+			if (command.type === 'RestoreWatchIntent') {
+				runRestoreWatchIntentCommand(command);
+				return;
+			}
+
+			if (command.type === 'RecoverDesktopAppAudio') {
+				void recoverDesktopAppAudioFromIntent().catch((error) => {
+					logVoice('Error recovering desktop app audio after voice recovery', { error });
+				});
+				hasHandledTransportFailureRef.current = false;
+				return;
+			}
+
+			if (command.type === 'LeaveVoiceSession') {
+				leaveAfterFailedTransportRecovery(command);
+				return;
+			}
+
+			if (command.type === 'ClearFailedSession') {
+				clearFailedVoiceSession(command);
+			}
+		},
+		[
+			captureWatchedRemoteStreams,
+			clearFailedVoiceSession,
+			leaveAfterFailedTransportRecovery,
+			recoverDesktopAppAudioFromIntent,
+			runRebuildTransportCommand,
+			runRestoreVoiceSessionCommand,
+			runRestoreWatchIntentCommand,
+			runRetryDelayCommand,
+			runWaitAuthCommand,
+			runWaitOnlineCommand,
+		],
+	);
+
+	// Registering (rather than subscribing as a listener) also flushes any
+	// commands dispatched while no runner was alive — a result event from the
+	// previous provider instance's still-running async work can land in the
+	// remount gap, and final commands (RecoverDesktopAppAudio, LeaveVoiceSession,
+	// ClearFailedSession) leave the phases Resumed replays, so a buffer is the
+	// only path that preserves them.
+	useEffect(() => {
+		return registerVoiceSessionCommandRunner((commands) => {
+			commands.forEach(runVoiceSessionCommand);
+		});
+	}, [runVoiceSessionCommand]);
+
+	// A provider remount mid-recovery (the machine state is module-level and
+	// survives it) would otherwise strand the machine waiting on a command whose
+	// runner unmounted. Resumed re-issues the current step under a new
+	// generation, invalidating any runner still in flight from the previous
+	// instance. Mount-only by design: within one mount no command is ever lost,
+	// so re-dispatching on dep changes would only risk duplicating in-flight
+	// work.
+	useEffect(() => {
+		const { phase } = getVoiceSessionState();
+
+		if (phase.phase === 'rebuilding' || phase.phase === 'reconnecting') {
+			dispatchVoiceSession({ type: 'Resumed' });
+		}
+	}, []);
 
 	const setMicProcessingMuted = useCallback((micMuted: boolean) => {
 		micAudioPipelineRef.current?.setInputMuted(micMuted);

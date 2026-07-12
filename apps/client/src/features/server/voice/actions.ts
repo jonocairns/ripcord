@@ -11,7 +11,7 @@ import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-
 import { logDebug, logVoice, reportError } from '@/helpers/browser-logger';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
-import { getTRPCClient } from '@/lib/trpc';
+import { getTRPCClient, getWsClientInstanceId } from '@/lib/trpc';
 import { setCurrentVoiceChannelId, setSelectedChannelId } from '../channels/actions';
 import { currentVoiceChannelIdSelector, selectedChannelIdSelector } from '../channels/selectors';
 import { useServerStore } from '../slice';
@@ -25,6 +25,7 @@ import {
 	clearVoiceReconnectRecovery,
 	getValidPendingVoiceReconnect,
 	isVoiceReconnectPeerSuppressed,
+	isVoiceReconnectRecoveryActive,
 } from './reconnect-coordinator';
 import { ownVoiceStateSelector, pinnedCardSelector } from './selectors';
 
@@ -36,6 +37,45 @@ type TLeaveVoiceOptions = {
 
 const pendingVoiceSwitchFromChannelIds: Set<number> = new Set();
 const completedVoiceSwitchFromChannelIds: Set<number> = new Set();
+const pendingJoinAbortControllers: Set<AbortController> = new Set();
+let voiceSessionMutationQueue: Promise<void> = Promise.resolve();
+let joinVoiceGeneration = 0;
+let voiceSessionMutationSeq = 0;
+
+const enqueueVoiceSessionMutation = <Result>(mutation: () => Promise<Result>): Promise<Result> => {
+	const result = voiceSessionMutationQueue.then(mutation);
+	voiceSessionMutationQueue = result.then(
+		() => undefined,
+		() => undefined,
+	);
+	return result;
+};
+
+type TOwnVoiceStateUpdate = Partial<
+	Pick<TVoiceUserState, 'micMuted' | 'soundMuted' | 'webcamEnabled' | 'sharingScreen'>
+>;
+
+let ownVoiceStateUpdateQueue: Promise<void> = Promise.resolve();
+let ownVoiceStateUpdateSeq = 0;
+
+// voice.updateState applies last-write-wins on the server after async
+// permission checks, so two rapid updates can land out of order. Stamping a
+// monotonic seq lets the server drop the stale write, and chaining the sends
+// keeps ordering even against servers that predate the seq field.
+export const sendOwnVoiceStateUpdate = (
+	state: TOwnVoiceStateUpdate,
+	options: { signal?: AbortSignal } = {},
+): Promise<void> => {
+	const seq = (ownVoiceStateUpdateSeq += 1);
+	const result = ownVoiceStateUpdateQueue.then(() =>
+		getTRPCClient().voice.updateState.mutate({ ...state, seq }, { signal: options.signal }),
+	);
+	ownVoiceStateUpdateQueue = result.then(
+		() => undefined,
+		() => undefined,
+	);
+	return result;
+};
 
 const resetVoiceSwitchState = (): void => {
 	pendingVoiceSwitchFromChannelIds.clear();
@@ -45,6 +85,12 @@ const resetVoiceSwitchState = (): void => {
 /** @knipignore Test-only reset for module-scoped voice switch bookkeeping. */
 export const __resetVoiceSwitchStateForTests = (): void => {
 	resetVoiceSwitchState();
+	pendingJoinAbortControllers.clear();
+	voiceSessionMutationQueue = Promise.resolve();
+	joinVoiceGeneration = 0;
+	voiceSessionMutationSeq = 0;
+	ownVoiceStateUpdateQueue = Promise.resolve();
+	ownVoiceStateUpdateSeq = 0;
 };
 
 const clearOwnVoiceChannelState = (): boolean => {
@@ -310,8 +356,11 @@ export type TJoinVoiceResult =
 			kind: 'non-retriable-failure';
 	  };
 
-export const joinVoice = async (
+const joinVoiceInternal = async (
 	channelId: number,
+	generation: number,
+	mutationSeq: number,
+	signal: AbortSignal,
 	opts: {
 		silent?: boolean;
 	} = {},
@@ -340,10 +389,21 @@ export const joinVoice = async (
 
 	try {
 		const { routerRtpCapabilities, producerTransportParams, consumerTransportParams, existingProducers, channelUsers } =
-			await client.voice.join.mutate({
-				channelId,
-				state: { micMuted, soundMuted },
-			});
+			await client.voice.join.mutate(
+				{
+					channelId,
+					state: { micMuted, soundMuted },
+					mutationSeq,
+				},
+				{ signal },
+			);
+		if (generation !== joinVoiceGeneration) {
+			// The server still committed this join even though a newer local join
+			// superseded it. Preserve the intermediate channel so the replacement
+			// event emitted by the newer join cannot clear that newer session.
+			completedVoiceSwitchFromChannelIds.add(channelId);
+			return { kind: 'retryable-failure' };
+		}
 
 		setCurrentVoiceChannelId(channelId);
 		if (currentChannelId) {
@@ -381,7 +441,7 @@ export const joinVoice = async (
 			completedVoiceSwitchFromChannelIds.delete(currentChannelId);
 		}
 
-		if (!opts.silent) {
+		if (!opts.silent && !signal.aborted) {
 			toast.error(getTrpcError(error, 'Failed to join voice channel'));
 		}
 
@@ -389,6 +449,35 @@ export const joinVoice = async (
 			kind: isNonRetriableTrpcError(error) ? 'non-retriable-failure' : 'retryable-failure',
 		};
 	}
+};
+
+export const joinVoice = (
+	channelId: number,
+	opts: {
+		silent?: boolean;
+	} = {},
+): Promise<TJoinVoiceResult> => {
+	// A manual join replaces reconnect intent. Invalidate the recovery command
+	// before enqueuing the join so an in-flight restore is aborted and cannot
+	// later enqueue a terminal leave behind the user's new session.
+	if (isVoiceReconnectRecoveryActive()) {
+		clearVoiceReconnectRecovery('user-started-voice-join');
+	}
+
+	const generation = (joinVoiceGeneration += 1);
+	const mutationSeq = (voiceSessionMutationSeq += 1);
+	const abortController = new AbortController();
+	pendingJoinAbortControllers.add(abortController);
+
+	const result = enqueueVoiceSessionMutation(() =>
+		joinVoiceInternal(channelId, generation, mutationSeq, abortController.signal, opts),
+	);
+	const releaseAbortController = (): void => {
+		pendingJoinAbortControllers.delete(abortController);
+	};
+	void result.then(releaseAbortController, releaseAbortController);
+
+	return result;
 };
 
 const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<boolean> => {
@@ -413,18 +502,47 @@ const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<boolean>
 	});
 };
 
-const leaveVoiceMutation = async (options: { suppressErrors?: boolean }): Promise<boolean> => {
-	const client = getTRPCClient();
-
-	try {
-		await client.voice.leave.mutate();
-		return true;
-	} catch (error) {
-		if (!options.suppressErrors) {
-			toast.error(getTrpcError(error, 'Failed to leave voice channel'));
-		}
-		return false;
+const leaveVoiceMutation = (options: { suppressErrors?: boolean }): Promise<boolean> => {
+	// The newer server-visible sequence prevents an already-sent join from
+	// committing after this leave, so aborting its client wait is safe and lets
+	// the leave reach the server without waiting for a superseded request.
+	joinVoiceGeneration += 1;
+	const mutationSeq = (voiceSessionMutationSeq += 1);
+	for (const abortController of pendingJoinAbortControllers) {
+		abortController.abort();
 	}
+
+	const result = (async () => {
+		const client = getTRPCClient();
+
+		try {
+			await client.voice.leave.mutate({ mutationSeq });
+			return true;
+		} catch (error) {
+			if (!options.suppressErrors) {
+				toast.error(getTrpcError(error, 'Failed to leave voice channel'));
+			}
+			return false;
+		}
+	})();
+	voiceSessionMutationQueue = result.then(
+		() => undefined,
+		() => undefined,
+	);
+	return result;
+};
+
+const leaveVoiceSessionAfterRecoveryFailure = (): Promise<boolean> => {
+	// A leave queued on a dead socket would flush whenever the WS reconnects
+	// and race whatever session the user establishes by then. When the give-up
+	// happens offline the server's disconnect grace reaps the seat instead.
+	if (!useServerStore.getState().connected) {
+		return Promise.resolve(false);
+	}
+
+	return leaveVoiceMutation({
+		suppressErrors: true,
+	});
 };
 
 export const leaveVoice = async (): Promise<void> => {
@@ -483,7 +601,21 @@ export const flushVoiceForDesktopQuit = async (): Promise<'skipped' | 'succeeded
 	}
 };
 
-export const handleVoiceSessionReplaced = (payload?: { channelId: number }): void => {
+export const handleVoiceSessionReplaced = (payload?: {
+	channelId: number;
+	replacedByClientInstanceId?: string;
+}): void => {
+	// The event fans out to every connection of the user, including the one
+	// whose join caused the replacement. Today the replacer is protected only
+	// by frame ordering (the event lands before its join response applies);
+	// this makes ignoring it deterministic.
+	if (
+		payload?.replacedByClientInstanceId !== undefined &&
+		payload.replacedByClientInstanceId === getWsClientInstanceId()
+	) {
+		return;
+	}
+
 	if (
 		payload?.channelId !== undefined &&
 		(pendingVoiceSwitchFromChannelIds.has(payload.channelId) ||
@@ -501,19 +633,31 @@ export const handleVoiceSessionReplaced = (payload?: { channelId: number }): voi
 
 	const state = useServerStore.getState();
 	const currentChannelId = currentVoiceChannelIdSelector(state);
+	// The replacement's own-leave event (reconnecting: true) usually arrives
+	// first, clearing the channel state and capturing reconnect intent for the
+	// replaced channel. That intent is what proves this connection held the
+	// session that was just taken over — and it must be cleared, or a later WS
+	// drop would try to restore into a channel another connection now owns.
+	const pendingReconnectChannelId = getValidPendingVoiceReconnect()?.channelId;
+	const heldReplacedSession =
+		currentChannelId !== undefined ||
+		(payload?.channelId !== undefined && pendingReconnectChannelId === payload.channelId);
 
-	if (!currentChannelId) {
+	if (!heldReplacedSession) {
 		return;
 	}
 
-	logVoice('Voice session replaced by another connection', { channelId: currentChannelId });
+	logVoice('Voice session replaced by another connection', { channelId: currentChannelId ?? payload?.channelId });
 	clearVoiceReconnectRecovery('session-replaced');
 	resetVoiceSwitchState();
 	clearOwnVoiceChannelStateAndCleanupProvider();
+	// Without this the replaced connection drops out of voice with no
+	// explanation — the join sound plays on the new connection, not here.
+	toast.info('Voice moved to another window or device.');
 };
 
 export const setPinnedCard = (pinnedCard: TPinnedCard | undefined): void => {
 	useServerStore.getState().setPinnedCard(pinnedCard);
 };
 
-export { clearOwnVoiceSessionAfterReconnectFailure };
+export { clearOwnVoiceSessionAfterReconnectFailure, leaveVoiceSessionAfterRecoveryFailure };

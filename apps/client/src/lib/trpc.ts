@@ -373,4 +373,13 @@ const setOnWsReconnect = (cb: (() => void) | null) => {
 	onWsReconnect = cb;
 };
 
-export { type AppRouter, cleanup, connectToTRPC, debugCloseCurrentWs, getTRPCClient, reconnectTRPC, setOnWsReconnect };
+export {
+	type AppRouter,
+	cleanup,
+	connectToTRPC,
+	debugCloseCurrentWs,
+	getTRPCClient,
+	getWsClientInstanceId,
+	reconnectTRPC,
+	setOnWsReconnect,
+};
