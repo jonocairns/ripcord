@@ -375,6 +375,49 @@ describe('voice.restoreOrJoin', () => {
 		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getConsumerTransport(1)).toBeDefined();
 	});
 
+	test('rejects a delayed restore after a manual join moved the user to another channel', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		await ensureVoiceRuntime(SECONDARY_VOICE_CHANNEL_ID, 'Voice 2');
+
+		const { caller } = await initTest(1);
+
+		await caller.voice.join({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+		});
+
+		await caller.voice.reconnectLab.setNextRestoreBehavior({ delayMs: 100 });
+
+		const delayedRestore = caller.voice.restoreOrJoin({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+			reconnectAttemptId: 'attempt-delayed-vs-manual-join',
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		// The user switches channels while the restore sits in the delay window.
+		await caller.voice.join({
+			channelId: SECONDARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+		});
+
+		// Without the post-await recheck the delayed restore re-seated the user
+		// in the channel they just left, creating a phantom double membership.
+		await expect(delayedRestore).rejects.toThrow(VOICE_SESSION_WRONG_CHANNEL);
+		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeUndefined();
+		expect(VoiceRuntime.findById(SECONDARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeDefined();
+	});
+
 	test('does not commit transports created by a superseded restore attempt', async () => {
 		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 		runtime.addUser(1, { micMuted: false, soundMuted: false });

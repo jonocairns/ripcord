@@ -161,6 +161,29 @@ const restoreOrJoinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 				}
 
 				assertCurrent();
+
+				// The conflict checks above ran before the lab delay and the awaits in
+				// getVoiceJoinTarget. A manual voice.join can move this user to another
+				// channel inside that window; re-seating them here would leave a ghost
+				// seat in the channel they just left and rebind this connection to it.
+				const runtimeWithUserAfterAwaits = VoiceRuntime.findRuntimeByUserId(ctx.user.id);
+
+				if (runtimeWithUserAfterAwaits && runtimeWithUserAfterAwaits.id !== input.channelId) {
+					logRestoreOrJoinEvent('conflict', {
+						reconnectAttemptId: input.reconnectAttemptId,
+						userId: ctx.user.id,
+						clientInstanceId,
+						requestedChannelId: input.channelId,
+						activeChannelId: runtimeWithUserAfterAwaits.id,
+						reason: VOICE_SESSION_WRONG_CHANNEL,
+					});
+
+					throw new TRPCError({
+						code: 'CONFLICT',
+						message: VOICE_SESSION_WRONG_CHANNEL,
+					});
+				}
+
 				const seat = runtime.acquireRestoreSeat(ctx.user.id, input.state, inheritedSeatClaim);
 				const state = runtime.getUserState(ctx.user.id);
 
@@ -202,9 +225,16 @@ const restoreOrJoinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 					// Binding the new websocket clears the old disconnect-grace timer. Do
 					// this only after bootstrap commits; otherwise a failed restore of a
 					// surviving seat cancels its only cleanup path and leaves a ghost user.
-					ctx.currentVoiceChannelId = channel.id;
-					ctx.currentVoiceSessionIncarnation = runtime.getVoiceSessionIncarnation(ctx.user.id);
-					ctx.setWsVoiceChannelId(channel.id);
+					// A concurrent manual join can also move the seat away while the
+					// bootstrap was in flight — binding then would point this connection
+					// at a channel it no longer occupies, so require a live incarnation.
+					const restoredSeatIncarnation = runtime.getVoiceSessionIncarnation(ctx.user.id);
+
+					if (restoredSeatIncarnation !== undefined) {
+						ctx.currentVoiceChannelId = channel.id;
+						ctx.currentVoiceSessionIncarnation = restoredSeatIncarnation;
+						ctx.setWsVoiceChannelId(channel.id);
+					}
 				} catch (error) {
 					if (seat.claim && runtime.rollbackProvisionalRestoreSeat(ctx.user.id, seat.claim)) {
 						ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
