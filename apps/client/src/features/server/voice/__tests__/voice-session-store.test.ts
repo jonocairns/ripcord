@@ -359,6 +359,31 @@ describe('voice session store', () => {
 		expect(observed).toEqual({ since: 1234, authenticated: false });
 	});
 
+	it('keeps command identity monotonic across reset so a stale identity can never recur', () => {
+		const [firstSnapshot] = dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+		if (firstSnapshot?.type !== 'CaptureRecoverySnapshot') {
+			throw new Error('expected CaptureRecoverySnapshot command');
+		}
+
+		resetVoiceSessionState();
+
+		// An identical post-reset sequence must mint strictly newer identities:
+		// listeners (and pending executor operations) survive reset without
+		// notification, so a repeated generation/commandId pair would make a
+		// stale operation read as current again.
+		const [secondSnapshot] = dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+		if (secondSnapshot?.type !== 'CaptureRecoverySnapshot') {
+			throw new Error('expected CaptureRecoverySnapshot command');
+		}
+
+		expect(secondSnapshot.generation).toBeGreaterThan(firstSnapshot.generation);
+		expect(secondSnapshot.commandId).toBeGreaterThan(firstSnapshot.commandId);
+		expect(isVoiceSessionCommandCurrent(firstSnapshot)).toBe(false);
+		expect(isVoiceSessionCommandCurrent(secondSnapshot)).toBe(true);
+	});
+
 	it('keeps state-only listeners across reset while dropping buffered commands', () => {
 		const observedPhases: string[] = [];
 		const unsubscribe = subscribeVoiceSessionState((state) => {

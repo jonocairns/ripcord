@@ -112,7 +112,14 @@ const subscribeVoiceSessionState = (listener: TVoiceSessionStateListener): (() =
 };
 
 const resetVoiceSessionState = (): void => {
-	voiceSessionState = createInitialVoiceSessionState();
+	// Keep the identity counters monotonic across reset: listeners (and their
+	// pending executor operations) survive reset without being notified, so a
+	// post-reset session must never mint a generation/commandId pair that a
+	// still-pending pre-reset operation already holds — a late completion would
+	// read as current and advance the new session.
+	const { nextCommandId, nextGeneration } = voiceSessionState;
+
+	voiceSessionState = { ...createInitialVoiceSessionState(), nextCommandId, nextGeneration };
 	bufferedCommands = [];
 };
 

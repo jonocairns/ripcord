@@ -437,6 +437,76 @@ describe('voice session command executor', () => {
 		});
 	});
 
+	it('cannot resurrect a pre-reset operation into a post-reset session', async () => {
+		const startedRebuilds: Array<Extract<TVoiceSessionCommand, { type: 'RebuildTransports' }>> = [];
+		const rebuildDeferreds: Array<TDeferred<void>> = [];
+		const abortedCommandIds: number[] = [];
+		const executor = createExecutor(
+			createFakePorts({
+				rebuildTransports: (command, context) => {
+					const deferred = createDeferred();
+
+					startedRebuilds.push(command);
+					rebuildDeferreds.push(deferred);
+					context.signal.addEventListener('abort', () => {
+						abortedCommandIds.push(command.commandId);
+					});
+
+					return deferred.promise;
+				},
+			}),
+		);
+		const unregister = registerVoiceSessionCommandRunner((commands) => {
+			executor.execute(commands);
+		});
+
+		try {
+			dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+			const preResetRebuild = startedRebuilds[0];
+
+			if (preResetRebuild === undefined) {
+				throw new Error('expected a pre-reset RebuildTransports attempt');
+			}
+
+			// Reset does not notify listeners, so the pending operation survives
+			// with its command identity intact.
+			resetVoiceSessionState();
+			dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+			const postResetRebuild = startedRebuilds[1];
+
+			if (postResetRebuild === undefined) {
+				throw new Error('expected a post-reset RebuildTransports attempt');
+			}
+
+			// Monotonic counters guarantee the new session cannot reuse the old
+			// identity, so the first post-reset dispatch sweeps the stale operation.
+			expect(postResetRebuild.generation).toBeGreaterThan(preResetRebuild.generation);
+			expect(postResetRebuild.commandId).toBeGreaterThan(preResetRebuild.commandId);
+			expect(abortedCommandIds).toEqual([preResetRebuild.commandId]);
+
+			// The pre-reset attempt completing late must not advance the new session.
+			const stateBeforeLateResult = getVoiceSessionState();
+			let dispatchCount = 0;
+			const unsubscribe = subscribeVoiceSession(() => {
+				dispatchCount += 1;
+			});
+
+			try {
+				rebuildDeferreds[0]?.resolve();
+				await flushMicrotasks();
+
+				expect(dispatchCount).toBe(0);
+				expect(getVoiceSessionState()).toBe(stateBeforeLateResult);
+			} finally {
+				unsubscribe();
+			}
+		} finally {
+			unregister();
+		}
+	});
+
 	it('dispatches RebuildFailed with the raw error only while the command is current', async () => {
 		const rebuildCommand = startRebuild();
 		const failure = new Error('transport rebuild exploded');
