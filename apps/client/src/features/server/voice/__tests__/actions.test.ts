@@ -21,29 +21,11 @@ const playSound = mock(() => {});
 const runVoiceProviderCleanup = mock(() => {});
 let leaveShouldFail = false;
 let joinShouldFail = false;
-let joinHangsUntilAborted = false;
 let beforeJoinResolve: (() => void) | undefined;
+let waitBeforeJoinResolve: Promise<void> | undefined;
 let waitBeforeLeaveResolve: Promise<void> | undefined;
-const joinMutate = mock(async (_input?: unknown, opts?: { signal?: AbortSignal }) => {
-	if (joinHangsUntilAborted) {
-		await new Promise<never>((_resolve, reject) => {
-			const signal = opts?.signal;
-
-			if (!signal) {
-				return;
-			}
-
-			if (signal.aborted) {
-				reject(new Error('join aborted'));
-				return;
-			}
-
-			signal.addEventListener('abort', () => {
-				reject(new Error('join aborted'));
-			});
-		});
-	}
-
+const joinMutate = mock(async () => {
+	await waitBeforeJoinResolve;
 	if (joinShouldFail) {
 		throw new Error('join failed');
 	}
@@ -195,8 +177,8 @@ describe('voice actions', () => {
 		resetVoiceSwitchStateForTests();
 		joinShouldFail = false;
 		leaveShouldFail = false;
-		joinHangsUntilAborted = false;
 		beforeJoinResolve = undefined;
+		waitBeforeJoinResolve = undefined;
 		waitBeforeLeaveResolve = undefined;
 	});
 
@@ -450,20 +432,27 @@ describe('voice actions', () => {
 		expect((await joinResult).kind).toBe('joined');
 	});
 
-	it('aborts an in-flight join so a leave is not stuck behind it', async () => {
+	it('waits for an in-flight join to settle on the server before leaving', async () => {
 		setJoinedVoiceChannelState({ ownUserId: 42 });
-		joinHangsUntilAborted = true;
+		let resolveJoin: (() => void) | undefined;
+		waitBeforeJoinResolve = new Promise<void>((resolve) => {
+			resolveJoin = resolve;
+		});
 
 		const joinResult = joinVoice(8, { silent: true });
 		await Promise.resolve();
 		expect(joinMutate).toHaveBeenCalledTimes(1);
 
-		// Without the abort this would deadlock: the hung join never resolves
-		// and the queued leave never runs.
-		await leaveVoice();
+		const leaveResult = leaveVoice();
+		await Promise.resolve();
+		expect(leaveMutate).not.toHaveBeenCalled();
+
+		resolveJoin?.();
+		await leaveResult;
 
 		expect(leaveMutate).toHaveBeenCalledTimes(1);
 		expect((await joinResult).kind).toBe('retryable-failure');
+		expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
 	});
 
 	it('serializes own voice-state updates and stamps a monotonically increasing seq', async () => {

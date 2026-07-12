@@ -246,4 +246,22 @@ describe('VoiceRuntime in-session transport rebuild', () => {
 		expect(runtime.getVoiceSessionIncarnation(1)).toBeDefined();
 		expect(runtime.getVoiceSessionIncarnation(1)).not.toBe(firstIncarnation!);
 	});
+
+	test('does not remove a successor seat for a stale session incarnation', async () => {
+		const runtime = await makeRuntime();
+
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const disconnectedIncarnation = runtime.getVoiceSessionIncarnation(1);
+
+		runtime.removeUser(1);
+		runtime.addUser(1, { micMuted: true, soundMuted: false });
+		const successorIncarnation = runtime.getVoiceSessionIncarnation(1);
+
+		expect(runtime.removeUserIfSessionMatches(1, disconnectedIncarnation)).toBe(false);
+		expect(runtime.getVoiceSessionIncarnation(1)).toBe(successorIncarnation);
+		expect(runtime.getUser(1)).toBeDefined();
+
+		expect(runtime.removeUserIfSessionMatches(1, successorIncarnation)).toBe(true);
+		expect(runtime.getUser(1)).toBeUndefined();
+	});
 });

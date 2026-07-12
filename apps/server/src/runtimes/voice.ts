@@ -386,6 +386,15 @@ class VoiceRuntime {
 		return this.voiceSessionIncarnations.get(userId);
 	};
 
+	public removeUserIfSessionMatches = (userId: number, sessionIncarnation: symbol | undefined): boolean => {
+		if (sessionIncarnation === undefined || this.getVoiceSessionIncarnation(userId) !== sessionIncarnation) {
+			return false;
+		}
+
+		this.removeUser(userId);
+		return true;
+	};
+
 	public beginProvisionalRestoreSeat = (userId: number): symbol => {
 		const claim = Symbol('voice-provisional-restore-seat');
 		this.provisionalRestoreSeatClaims.set(userId, claim);

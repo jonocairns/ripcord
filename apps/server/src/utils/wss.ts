@@ -391,6 +391,7 @@ const createWsServer = async (server: http.Server) => {
 				if (voiceRuntime?.getUser(userId)) {
 					const channelId = voiceRuntime.id;
 					const clientInstanceId = trackedWs.clientInstanceId;
+					const seatIncarnation = voiceRuntime.getVoiceSessionIncarnation(userId);
 					const finalizeVoiceDisconnect = () => {
 						if (hasAnyOpenUserVoiceConnection(userId, channelId)) {
 							return;
@@ -398,11 +399,9 @@ const createWsServer = async (server: http.Server) => {
 
 						const latestVoiceRuntime = VoiceRuntime.findById(channelId);
 
-						if (!latestVoiceRuntime?.getUser(userId)) {
+						if (!latestVoiceRuntime?.removeUserIfSessionMatches(userId, seatIncarnation)) {
 							return;
 						}
-
-						latestVoiceRuntime.removeUser(userId);
 
 						pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
 							channelId,
@@ -414,7 +413,7 @@ const createWsServer = async (server: http.Server) => {
 						clientInstanceId,
 						userId,
 						channelId,
-						seatIncarnation: voiceRuntime.getVoiceSessionIncarnation(userId),
+						seatIncarnation,
 						wsCloseCode,
 						finalize: finalizeVoiceDisconnect,
 					});
