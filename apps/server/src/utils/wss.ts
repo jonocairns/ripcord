@@ -94,6 +94,7 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 	}
 
 	const decodedUser = await getUserByToken(token);
+	let latestVoiceSessionMutationSeq: number | undefined;
 
 	invariant(decodedUser, {
 		code: 'UNAUTHORIZED',
@@ -299,6 +300,22 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 		usersIpMap.set(userId, ip);
 	};
 
+	const registerVoiceSessionMutation = (mutationSeq: number | undefined): boolean => {
+		if (mutationSeq === undefined) {
+			return true;
+		}
+
+		if (latestVoiceSessionMutationSeq !== undefined && mutationSeq < latestVoiceSessionMutationSeq) {
+			return false;
+		}
+
+		latestVoiceSessionMutationSeq = mutationSeq;
+		return true;
+	};
+
+	const isCurrentVoiceSessionMutation = (mutationSeq: number | undefined): boolean =>
+		mutationSeq === undefined || latestVoiceSessionMutationSeq === mutationSeq;
+
 	return {
 		pubsub,
 		token,
@@ -308,6 +325,8 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 		handshakeHash: '',
 		currentVoiceChannelId: undefined,
 		currentVoiceSessionIncarnation: undefined,
+		registerVoiceSessionMutation,
+		isCurrentVoiceSessionMutation,
 		getPendingVoiceReconnectChannelId: () => getPendingVoiceReconnectChannelId(getClientInstanceId(), decodedUser.id),
 		getPendingVoiceReconnectSeatIncarnation: () =>
 			getPendingVoiceReconnectSeatIncarnation(getClientInstanceId(), decodedUser.id),

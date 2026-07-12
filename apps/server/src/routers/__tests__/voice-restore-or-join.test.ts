@@ -950,6 +950,78 @@ describe('voice.restoreOrJoin', () => {
 });
 
 describe('voice session incarnation ownership', () => {
+	test('a newer leave mutation prevents a delayed join from committing', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		await ensureVoiceRuntime(SECONDARY_VOICE_CHANNEL_ID, 'Other voice');
+
+		const ctx = await createMockContext({
+			customToken: await getMockedToken(1),
+		});
+		const caller = appRouter.createCaller(ctx);
+		const { handshakeHash } = await caller.others.handshake();
+		await caller.others.joinServer({ handshakeHash });
+
+		await caller.voice.join({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: {
+				micMuted: false,
+				soundMuted: false,
+			},
+			mutationSeq: 0,
+		});
+
+		let markDelayedJoinStarted: (() => void) | undefined;
+		const delayedJoinStarted = new Promise<void>((resolve) => {
+			markDelayedJoinStarted = resolve;
+		});
+		let releaseDelayedJoin: (() => void) | undefined;
+		const waitBeforeJoinTargetResolve = new Promise<void>((resolve) => {
+			releaseDelayedJoin = resolve;
+		});
+		const originalNeedsChannelPermission = ctx.needsChannelPermission;
+		Reflect.set(
+			ctx,
+			'needsChannelPermission',
+			async (...args: Parameters<typeof originalNeedsChannelPermission>): Promise<void> => {
+				await originalNeedsChannelPermission(...args);
+				if (args[0] === SECONDARY_VOICE_CHANNEL_ID) {
+					markDelayedJoinStarted?.();
+					await waitBeforeJoinTargetResolve;
+				}
+			},
+		);
+
+		const delayedJoin = caller.voice
+			.join({
+				channelId: SECONDARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: false,
+					soundMuted: false,
+				},
+				mutationSeq: 1,
+			})
+			.then(
+				() => ({ kind: 'resolved' as const }),
+				(error: unknown) => ({ kind: 'rejected' as const, error }),
+			);
+
+		await delayedJoinStarted;
+		await caller.voice.leave({ mutationSeq: 2 });
+		releaseDelayedJoin?.();
+
+		const delayedJoinOutcome = await delayedJoin;
+		expect(delayedJoinOutcome.kind).toBe('rejected');
+		if (delayedJoinOutcome.kind === 'resolved') {
+			throw new Error('Expected the delayed join to be superseded');
+		}
+		expect(delayedJoinOutcome.error).toMatchObject({
+			code: 'CONFLICT',
+		});
+		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeUndefined();
+		expect(VoiceRuntime.findById(SECONDARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeUndefined();
+		expect(ctx.currentVoiceChannelId).toBeUndefined();
+	});
+
 	test('a delayed leave from a replaced session does not remove the replacement', async () => {
 		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 

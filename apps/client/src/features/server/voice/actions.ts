@@ -37,8 +37,10 @@ type TLeaveVoiceOptions = {
 
 const pendingVoiceSwitchFromChannelIds: Set<number> = new Set();
 const completedVoiceSwitchFromChannelIds: Set<number> = new Set();
+const pendingJoinAbortControllers: Set<AbortController> = new Set();
 let voiceSessionMutationQueue: Promise<void> = Promise.resolve();
 let joinVoiceGeneration = 0;
+let voiceSessionMutationSeq = 0;
 
 const enqueueVoiceSessionMutation = <Result>(mutation: () => Promise<Result>): Promise<Result> => {
 	const result = voiceSessionMutationQueue.then(mutation);
@@ -83,8 +85,10 @@ const resetVoiceSwitchState = (): void => {
 /** @knipignore Test-only reset for module-scoped voice switch bookkeeping. */
 export const __resetVoiceSwitchStateForTests = (): void => {
 	resetVoiceSwitchState();
+	pendingJoinAbortControllers.clear();
 	voiceSessionMutationQueue = Promise.resolve();
 	joinVoiceGeneration = 0;
+	voiceSessionMutationSeq = 0;
 	ownVoiceStateUpdateQueue = Promise.resolve();
 	ownVoiceStateUpdateSeq = 0;
 };
@@ -355,6 +359,8 @@ export type TJoinVoiceResult =
 const joinVoiceInternal = async (
 	channelId: number,
 	generation: number,
+	mutationSeq: number,
+	signal: AbortSignal,
 	opts: {
 		silent?: boolean;
 	} = {},
@@ -383,10 +389,14 @@ const joinVoiceInternal = async (
 
 	try {
 		const { routerRtpCapabilities, producerTransportParams, consumerTransportParams, existingProducers, channelUsers } =
-			await client.voice.join.mutate({
-				channelId,
-				state: { micMuted, soundMuted },
-			});
+			await client.voice.join.mutate(
+				{
+					channelId,
+					state: { micMuted, soundMuted },
+					mutationSeq,
+				},
+				{ signal },
+			);
 		if (generation !== joinVoiceGeneration) {
 			// The server still committed this join even though a newer local join
 			// superseded it. Preserve the intermediate channel so the replacement
@@ -431,7 +441,7 @@ const joinVoiceInternal = async (
 			completedVoiceSwitchFromChannelIds.delete(currentChannelId);
 		}
 
-		if (!opts.silent) {
+		if (!opts.silent && !signal.aborted) {
 			toast.error(getTrpcError(error, 'Failed to join voice channel'));
 		}
 
@@ -455,7 +465,19 @@ export const joinVoice = (
 	}
 
 	const generation = (joinVoiceGeneration += 1);
-	return enqueueVoiceSessionMutation(() => joinVoiceInternal(channelId, generation, opts));
+	const mutationSeq = (voiceSessionMutationSeq += 1);
+	const abortController = new AbortController();
+	pendingJoinAbortControllers.add(abortController);
+
+	const result = enqueueVoiceSessionMutation(() =>
+		joinVoiceInternal(channelId, generation, mutationSeq, abortController.signal, opts),
+	);
+	const releaseAbortController = (): void => {
+		pendingJoinAbortControllers.delete(abortController);
+	};
+	void result.then(releaseAbortController, releaseAbortController);
+
+	return result;
 };
 
 const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<boolean> => {
@@ -481,16 +503,20 @@ const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<boolean>
 };
 
 const leaveVoiceMutation = (options: { suppressErrors?: boolean }): Promise<boolean> => {
-	// A leave supersedes every outstanding join locally, but it must wait for
-	// their server responses before sending. Aborting only ends the client wait;
-	// an already-sent join can still commit afterward and recreate the seat.
+	// The newer server-visible sequence prevents an already-sent join from
+	// committing after this leave, so aborting its client wait is safe and lets
+	// the leave reach the server without waiting for a superseded request.
 	joinVoiceGeneration += 1;
+	const mutationSeq = (voiceSessionMutationSeq += 1);
+	for (const abortController of pendingJoinAbortControllers) {
+		abortController.abort();
+	}
 
 	return enqueueVoiceSessionMutation(async () => {
 		const client = getTRPCClient();
 
 		try {
-			await client.voice.leave.mutate();
+			await client.voice.leave.mutate({ mutationSeq });
 			return true;
 		} catch (error) {
 			if (!options.suppressErrors) {

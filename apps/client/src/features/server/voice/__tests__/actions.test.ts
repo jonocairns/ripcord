@@ -21,11 +21,29 @@ const playSound = mock(() => {});
 const runVoiceProviderCleanup = mock(() => {});
 let leaveShouldFail = false;
 let joinShouldFail = false;
+let joinHangsUntilAborted = false;
 let beforeJoinResolve: (() => void) | undefined;
-let waitBeforeJoinResolve: Promise<void> | undefined;
 let waitBeforeLeaveResolve: Promise<void> | undefined;
-const joinMutate = mock(async () => {
-	await waitBeforeJoinResolve;
+const joinMutate = mock(async (_input?: unknown, opts?: { signal?: AbortSignal }) => {
+	if (joinHangsUntilAborted) {
+		await new Promise<never>((_resolve, reject) => {
+			const signal = opts?.signal;
+
+			if (!signal) {
+				return;
+			}
+
+			if (signal.aborted) {
+				reject(new Error('join aborted'));
+				return;
+			}
+
+			signal.addEventListener('abort', () => {
+				reject(new Error('join aborted'));
+			});
+		});
+	}
+
 	if (joinShouldFail) {
 		throw new Error('join failed');
 	}
@@ -40,7 +58,7 @@ const joinMutate = mock(async () => {
 		channelUsers: [],
 	};
 });
-const leaveMutate = mock(async () => {
+const leaveMutate = mock(async (_input?: unknown) => {
 	await waitBeforeLeaveResolve;
 	if (leaveShouldFail) {
 		throw new Error('leave failed');
@@ -177,8 +195,8 @@ describe('voice actions', () => {
 		resetVoiceSwitchStateForTests();
 		joinShouldFail = false;
 		leaveShouldFail = false;
+		joinHangsUntilAborted = false;
 		beforeJoinResolve = undefined;
-		waitBeforeJoinResolve = undefined;
 		waitBeforeLeaveResolve = undefined;
 	});
 
@@ -432,27 +450,21 @@ describe('voice actions', () => {
 		expect((await joinResult).kind).toBe('joined');
 	});
 
-	it('waits for an in-flight join to settle on the server before leaving', async () => {
+	it('aborts an in-flight join and sends a newer leave mutation immediately', async () => {
 		setJoinedVoiceChannelState({ ownUserId: 42 });
-		let resolveJoin: (() => void) | undefined;
-		waitBeforeJoinResolve = new Promise<void>((resolve) => {
-			resolveJoin = resolve;
-		});
+		joinHangsUntilAborted = true;
 
 		const joinResult = joinVoice(8, { silent: true });
 		await Promise.resolve();
 		expect(joinMutate).toHaveBeenCalledTimes(1);
 
-		const leaveResult = leaveVoice();
-		await Promise.resolve();
-		expect(leaveMutate).not.toHaveBeenCalled();
-
-		resolveJoin?.();
-		await leaveResult;
+		await leaveVoice();
 
 		expect(leaveMutate).toHaveBeenCalledTimes(1);
 		expect((await joinResult).kind).toBe('retryable-failure');
 		expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
+		expect(joinMutate.mock.calls[0]?.[0]).toMatchObject({ mutationSeq: 1 });
+		expect(leaveMutate.mock.calls[0]?.[0]).toEqual({ mutationSeq: 2 });
 	});
 
 	it('serializes own voice-state updates and stamps a monotonically increasing seq', async () => {

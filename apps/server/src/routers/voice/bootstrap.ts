@@ -15,6 +15,7 @@ const voiceJoinStateSchema = z.object({
 const voiceJoinInputSchema = z.object({
 	channelId: z.number(),
 	state: voiceJoinStateSchema,
+	mutationSeq: z.number().int().nonnegative().optional(),
 });
 
 const getVoiceJoinTarget = async (ctx: Context, channelId: number) => {

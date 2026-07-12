@@ -22,6 +22,8 @@ export type Context = {
 	// compare it against the seat's current token so a stale operation cannot
 	// remove a replacement session.
 	currentVoiceSessionIncarnation: symbol | undefined;
+	registerVoiceSessionMutation: (mutationSeq: number | undefined) => boolean;
+	isCurrentVoiceSessionMutation: (mutationSeq: number | undefined) => boolean;
 	getPendingVoiceReconnectChannelId: () => number | undefined;
 	getPendingVoiceReconnectSeatIncarnation: () => symbol | undefined;
 	getClientInstanceId: () => string | undefined;

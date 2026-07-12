@@ -2,6 +2,7 @@ import { ServerEvents } from '@sharkord/shared';
 import { config } from '../../config';
 import { logger } from '../../logger';
 import { VoiceRuntime } from '../../runtimes/voice';
+import { invariant } from '../../utils/invariant';
 import { protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
 import { createVoiceJoinBootstrap, getVoiceJoinTarget, voiceJoinInputSchema } from './bootstrap';
 
@@ -12,7 +13,21 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 })
 	.input(voiceJoinInputSchema)
 	.mutation(async ({ input, ctx }) => {
+		const isCurrentMutation = (): boolean => ctx.isCurrentVoiceSessionMutation(input.mutationSeq);
+		const assertCurrentMutation = (): void => {
+			invariant(isCurrentMutation(), {
+				code: 'CONFLICT',
+				message: 'Voice join superseded by a newer voice mutation',
+			});
+		};
+
+		invariant(ctx.registerVoiceSessionMutation(input.mutationSeq), {
+			code: 'CONFLICT',
+			message: 'Voice join superseded by a newer voice mutation',
+		});
+		assertCurrentMutation();
 		const { channel, runtime } = await getVoiceJoinTarget(ctx, input.channelId);
+		assertCurrentMutation();
 
 		const userAlreadyInVoiceChannel = VoiceRuntime.findRuntimeByUserId(ctx.user.id);
 		const isReconnecting = userAlreadyInVoiceChannel?.id === input.channelId;
@@ -56,6 +71,7 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 		return createVoiceJoinBootstrap({
 			runtime,
 			userId: ctx.user.id,
+			isCurrent: isCurrentMutation,
 			onError: (error) => {
 				// Only clear this connection's bookkeeping if it still describes the
 				// session this join created — a newer join on the same connection may
