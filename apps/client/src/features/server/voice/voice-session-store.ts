@@ -1,5 +1,6 @@
 import {
 	createInitialVoiceSessionState,
+	isCurrentVoiceSessionCommand,
 	reduceVoiceSession,
 	shouldFlushBufferedVoiceSessionCommand,
 	type TVoiceSessionCommand,
@@ -76,6 +77,13 @@ const getVoiceSessionState = (): TVoiceSessionState => voiceSessionState;
 
 const selectVoiceSessionState = <T>(selector: TVoiceSessionSelector<T>): T => selector(voiceSessionState);
 
+// Live command currency: true only while the machine still stands behind this
+// exact recovery-step command (phase generation + activeCommandId). Final
+// commands (RecoverDesktopAppAudio, LeaveVoiceSession, ClearFailedSession) are
+// emitted while leaving a recovery phase, so this is always false for them.
+const isVoiceSessionCommandCurrent = (command: { commandId: number; generation: number }): boolean =>
+	isCurrentVoiceSessionCommand(voiceSessionState, command);
+
 const subscribeVoiceSession = (listener: TVoiceSessionListener): (() => void) => {
 	listeners.add(listener);
 
@@ -93,6 +101,7 @@ export type { TVoiceSessionCommandRunner, TVoiceSessionListener, TVoiceSessionSe
 export {
 	dispatchVoiceSession,
 	getVoiceSessionState,
+	isVoiceSessionCommandCurrent,
 	registerVoiceSessionCommandRunner,
 	resetVoiceSessionState,
 	selectVoiceSessionState,

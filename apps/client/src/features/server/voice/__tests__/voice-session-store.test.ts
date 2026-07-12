@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import {
 	dispatchVoiceSession,
 	getVoiceSessionState,
+	isVoiceSessionCommandCurrent,
 	registerVoiceSessionCommandRunner,
 	resetVoiceSessionState,
 	selectVoiceSessionState,
@@ -169,6 +170,71 @@ describe('voice session store', () => {
 
 		unregister();
 		expect(executed).toEqual([]);
+	});
+
+	it('tracks live command currency for recovery-step commands', () => {
+		const [snapshotCommand] = dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+		if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
+			throw new Error('expected CaptureRecoverySnapshot command');
+		}
+
+		expect(isVoiceSessionCommandCurrent(snapshotCommand)).toBe(true);
+
+		const [rebuildCommand] = dispatchVoiceSession({
+			type: 'RecoveryStarted',
+			commandId: snapshotCommand.commandId,
+			generation: snapshotCommand.generation,
+			snapshot: { remoteUserStreams: {}, externalStreams: {} },
+		});
+
+		if (rebuildCommand?.type !== 'RebuildTransports') {
+			throw new Error('expected RebuildTransports command');
+		}
+
+		// The machine moved its active command on: the snapshot command is stale,
+		// the rebuild command is current.
+		expect(isVoiceSessionCommandCurrent(snapshotCommand)).toBe(false);
+		expect(isVoiceSessionCommandCurrent(rebuildCommand)).toBe(true);
+
+		// Leaving the recovery phase invalidates the rebuild command too.
+		dispatchVoiceSession({ type: 'Terminated', reason: 'kicked', channelId: 5 });
+
+		expect(isVoiceSessionCommandCurrent(rebuildCommand)).toBe(false);
+	});
+
+	it('never reports final commands as current', () => {
+		const [snapshotCommand] = dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+		if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
+			throw new Error('expected CaptureRecoverySnapshot command');
+		}
+
+		const [rebuildCommand] = dispatchVoiceSession({
+			type: 'RecoveryStarted',
+			commandId: snapshotCommand.commandId,
+			generation: snapshotCommand.generation,
+			snapshot: { remoteUserStreams: {}, externalStreams: {} },
+		});
+
+		if (rebuildCommand?.type !== 'RebuildTransports') {
+			throw new Error('expected RebuildTransports command');
+		}
+
+		const [finalCommand] = dispatchVoiceSession({
+			type: 'RebuildSucceeded',
+			commandId: rebuildCommand.commandId,
+			generation: rebuildCommand.generation,
+		});
+
+		if (finalCommand?.type !== 'RecoverDesktopAppAudio') {
+			throw new Error('expected RecoverDesktopAppAudio command');
+		}
+
+		// Currency is a recovery-step concept (phase.activeCommandId): final
+		// commands are emitted while leaving the recovery phase, so they are never
+		// current even though their generation matches the connected phase.
+		expect(isVoiceSessionCommandCurrent(finalCommand)).toBe(false);
 	});
 
 	it('notifies state listeners before running commands so projections are in sync', () => {
