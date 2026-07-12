@@ -1,6 +1,8 @@
 # Voice Session Execution Extraction and Transactional Restore Plan
 
-**Status:** Planned.
+**Status:** In progress. C0 and C1 landed in PR #278; the remaining slices are
+planned. Completed slices carry a **Landed** note recording what was built and
+what later slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -33,10 +35,14 @@ The finished architecture has four explicit layers:
 4. **Resource controllers** — own mediasoup transports/consumers, microphone
    resources, desktop audio, and cleanup mechanics.
 
-On the server, make `restoreOrJoin` transactional: a request owns uncommitted
+On the server, make restore/join transactional: a request owns uncommitted
 transport resources; `VoiceRuntime` owns them only after one synchronous commit
-boundary. There must be no state where `runtime.addUser()` has committed but a
-cancelled bootstrap has no defined cleanup owner.
+boundary. The provisional-seat claim mechanism (`acquireRestoreSeat` /
+`commitProvisionalRestoreSeat` / `rollbackProvisionalRestoreSeat`) already gives
+a cancelled bootstrap a defined cleanup owner, but membership still commits and
+`USER_JOIN_VOICE` still publishes before any fallible transport preparation has
+run. The goal is to eliminate that provisional seat entirely: no membership,
+context, or presence side effect exists until the commit point.
 
 ## Non-goals
 
@@ -132,30 +138,59 @@ session store. It does not read the Zustand reconnect projection.
 
 ## Slice map
 
-| Slice | Workstream | Depends on | Outcome |
-| --- | --- | --- | --- |
-| C0 | Client | current PR #277 state | Executable contract and deterministic test harness |
-| C1 | Client | C0 | Direct machine observation; no projection dependency |
-| C2 | Client | C1 | Executor foundation and simple/final commands |
-| C3 | Client | C2 | Online, auth, and retry-delay commands extracted |
-| C4 | Client | C3 | WS restore command extracted |
-| C5 | Client | C2 | Transport rebuild command extracted |
-| C6 | Client | C4 + C5 | React adapter cutover; embedded runner removed |
-| C7 | Client | C6 | Mutable Zustand projection retired or UI-only |
-| C8 | Client | C6 | Remote consume resource controller extracted |
-| C9 | Client | C6 | Microphone pipeline resource controller extracted |
-| S0 | Server | current PR #277 state | Restore service seam and explicit ownership contract |
-| S1 | Server | S0 | Prepared transport-pair primitive, unwired |
-| S2 | Server | S1 | Fresh restore/join uses prepare-then-commit |
-| S3 | Server | S2 | Existing-session restore swaps transport pairs atomically |
-| S4 | Server | S3 | Legacy mutation path removed; cancellation matrix complete |
-| V0 | Both | client and server workstreams | E2E, observability, docs, and rollout gate |
+| Slice | PR | Workstream | Depends on | Outcome |
+| --- | --- | --- | --- | --- |
+| C0 | client 1 (#278) | Client | current PR #277 state | Executable contract and deterministic test harness |
+| C1 | client 1 (#278) | Client | C0 | Direct machine observation; no projection dependency |
+| C2 | client 2 | Client | C1 | Executor foundation and simple/final commands |
+| C3 | client 2 | Client | C2 | Online, auth, and retry-delay commands extracted |
+| C4 | client 3 | Client | C3 | WS restore command extracted |
+| C5 | client 4 | Client | C2 | Transport rebuild command extracted |
+| C6 | client 5 | Client | C4 + C5 | React adapter cutover; embedded runner removed |
+| C7 | client 6 | Client | C6 | Mutable Zustand projection retired or UI-only |
+| C8 | client 7 | Client | C6 | Remote consume resource controller extracted |
+| C9 | client 8 | Client | C6 | Microphone pipeline resource controller extracted |
+| S0 | server 1 | Server | current PR #277 state | Restore service seam and explicit ownership contract |
+| S1 | server 1 | Server | S0 | Prepared transport-pair primitive, unwired |
+| S2 | server 2 | Server | S1 | Fresh restore/join uses prepare-then-commit |
+| S3 | server 3 | Server | S2 | Existing-session restore swaps transport pairs atomically |
+| S4 | server 4 | Server | S3 | Legacy mutation path removed (including `join.ts`); cancellation matrix complete |
+| V0 | gate | Both | client and server workstreams | E2E, observability, docs, and rollout gate |
 
 The client and server workstreams may proceed independently. Within the client
 workstream, C4 and C5 may be developed in parallel after C2/C3 where their
 shared executor primitives are stable. C8 and C9 are follow-on resource seams;
 they are required to finish the testability goal, but are not prerequisites for
 removing the recovery runner from `VoiceProvider`.
+
+## PR map
+
+Slices are commit boundaries; PRs batch adjacent slices where both are
+behavior-preserving and additive, so review effort concentrates on the risky
+changes. Each slice still lands as its own green commit (using its suggested
+commit message) inside its PR. Slices that change production transaction
+behavior or carry the trickiest cancellation semantics (C4, C5, C6, S2, S3) get
+a PR to themselves. If a batched PR grows past comfortable review size, split it
+back to one slice per PR — the slice boundaries already support that.
+
+| PR | Slices | Suggested title |
+| --- | --- | --- |
+| client 1 (#278) | C0 + C1 | Add voice session executor boundary and store selectors |
+| client 2 | C2 + C3 | Execute voice session final and wait commands outside provider |
+| client 3 | C4 | Extract voice restore command execution |
+| client 4 | C5 | Extract voice transport rebuild execution |
+| client 5 | C6 | Cut voice provider over to command executor |
+| client 6 | C7 | Remove voice reconnect state projection |
+| client 7 (follow-on) | C8 | Extract remote media consume controller |
+| client 8 (follow-on) | C9 | Extract microphone pipeline controller |
+| server 1 | S0 + S1 | Add voice restore service seam and prepared transport pairs |
+| server 2 | S2 | Commit fresh voice restores transactionally |
+| server 3 | S3 | Replace restored voice transports atomically |
+| server 4 | S4 | Remove legacy voice restore rollback path |
+
+V0 is not a PR: its observability and E2E items land incrementally with
+client 5 and server 2–4, and its rollout checklist gates marking this plan
+implemented.
 
 ## Client slices
 
@@ -196,6 +231,37 @@ behavior is unchanged.
 
 **Suggested commit:** `refactor: add voice session command executor boundary`
 
+**Landed** (PR #278) as specified, with the proposed contract names. Notes for
+later slices:
+
+- The machine exports the pure currency predicate
+  `isCurrentVoiceSessionCommand(state, command)`; the store binds it as
+  `isVoiceSessionCommandCurrent(command)`. The provider still carries its own
+  duplicate until C6.
+- The executor distinguishes recovery-step commands (currency-tracked:
+  stale-rejection and `context.isCurrent` read live machine currency) from
+  final commands (`RecoverDesktopAppAudio`, `LeaveVoiceSession`,
+  `ClearFailedSession`), which the machine never marks current. Final validity
+  belongs to the store's buffered-flush filter and C2's generation checks;
+  their `isCurrent` reflects only abort/disposal, and they are never
+  stale-rejected.
+- Supersession cancellation rides the store subscription: listeners run before
+  command delivery, so the superseded operation's signal aborts before the
+  superseding command's effect starts.
+- `WaitOnline`/`WaitAuth`/`RetryDelay` are explicit no-ops in the executor
+  until C3 implements them — safe only while the executor stays unwired.
+- Final-operation ports receive no command context (matching the contract), so
+  a cancelled final is not observable by its port, and the C0 executor
+  swallows final-port rejections after bookkeeping cleanup. C2 must decide
+  whether leave/clear need a context or an error-reporting port to satisfy its
+  "failures are reported" test.
+- No fake scheduler was needed: deferred promises plus the real machine/store
+  were sufficient. Revisit when C3 introduces delay/online polling.
+- Harness note: once the executor is the registered command runner, a trigger
+  event runs the snapshot round trip synchronously (`CaptureRecoverySnapshot`
+  → `RecoveryStarted` → next command). Tests must capture live commands from
+  port invocations; manually replaying a result event afterwards is stale.
+
 ### C1 — Direct machine observation and selector hook
 
 **Objective:** Make the session store sufficient for executor waits and React
@@ -230,6 +296,31 @@ rendering so Zustand synchronization order cannot affect correctness.
 change executor/store test results.
 
 **Suggested commit:** `refactor: expose direct voice session store selectors`
+
+**Landed** (PR #278) as specified. Notes for later slices:
+
+- The direct selectors are pure functions in `voice-session-machine.ts`
+  (`selectPendingVoiceReconnect`, `selectReconnectingSince`,
+  `selectReconnectAuthenticated`, `selectVoiceReconnectSuppression`); the
+  coordinator's `getMachine*` wrappers and its projection sync delegate to
+  them, so the phase-versus-mirror fallback logic exists once.
+- `subscribeVoiceSessionState` notifies state-only listeners before the legacy
+  full listeners, and both run before command delivery; state listeners
+  survive `resetVoiceSessionState` while the command outbox clears.
+- `resetVoiceSessionState` preserves the monotonic generation/command counters
+  (PR #278 review finding): reset retains listeners without notifying them, so
+  a pending executor operation survives it — if a post-reset session could
+  mint the same generation/commandId pair, that operation's late completion
+  would read as current and advance the new session.
+- `useVoiceSessionSelector` lives in `voice-session-hooks.ts` and requires
+  selectors that return stable references for unchanged state (the machine
+  selectors do). `voice-control.tsx` reads `reconnectingSince` through it as
+  the first consumer; C7 migrates the remaining `useVoiceReconnectStore`
+  consumers (`use-voice-events.ts` and the provider's imperative reads).
+- The executor's supersession sweep subscribes through the state-only API.
+- The exit criterion holds structurally: the store/executor test files never
+  import `reconnect-coordinator`, so its module-eval projection listener does
+  not exist in those runs.
 
 ### C2 — Executor foundation and final/simple commands
 
@@ -476,6 +567,21 @@ ordering; the real controller is tested with deferred dependencies.
 
 ## Server ownership decision
 
+**Current state (post PR #277):** the restore path already bounds the
+pre-transport window with provisional-seat claims. `acquireRestoreSeat` adds the
+user and mints a claim symbol; rollback is claim-gated so a superseded attempt
+cannot remove a successor's seat. This defines the cleanup owner but does not
+remove the window — other clients observe a join (and, on failure, a leave) for
+a user who never had transports, and membership mutates before fallible
+preparation. The slices below replace the provisional seat with
+prepare-then-commit; they do not add a missing rollback.
+
+`joinVoiceRoute` (`apps/server/src/routers/voice/join.ts`, the user-initiated
+join) shares the same add-user-then-bootstrap pattern and additionally binds
+context/WS *before* bootstrap, relying on an incarnation-gated `onError`
+rollback. It is in scope: S1–S3 build and prove the primitive on the restore
+path, and S4 converts `joinVoiceRoute` when the legacy mutation path is removed.
+
 The server contract must be explicit:
 
 - **Before commit:** the restore attempt owns prepared transports. Cancellation,
@@ -509,7 +615,8 @@ behavior.
   bootstrap orchestration behind injected/runtime dependencies.
 - Represent cancellation and supersession separately in the internal result or
   error type, even if behavior remains unchanged in this slice.
-- Document the existing add-user-before-bootstrap window as temporary.
+- Document the existing provisional-seat window (add user and publish join
+  before bootstrap, claim-gated rollback) as temporary.
 
 **Tests:**
 
@@ -630,6 +737,11 @@ gap.
 
 - Remove the old add-user-then-bootstrap rollback path and any superseded-error
   exception that existed only to preserve its provisional seat.
+- Convert `joinVoiceRoute` (`apps/server/src/routers/voice/join.ts`) to the same
+  prepare-then-commit primitive. It shares the add-user-then-bootstrap pattern
+  and additionally binds context/WS before bootstrap; after conversion, delete
+  its incarnation-gated `onError` rollback along with the rest of the legacy
+  path.
 - Remove wrapper APIs that allow independent transport replacement if no
   production route needs them; otherwise retain them only for explicitly
   non-transactional operations.
@@ -647,6 +759,7 @@ gap.
 - Abort after commit/response race: committed seat remains server-owned and is
   removable through leave/grace.
 - Server/runtime destruction disposes uncommitted prepared pairs.
+- The abort/supersede points above also run against `joinVoiceRoute`.
 
 **Exit criteria:** The exact `runtime.addUser` cancellation-point test is either
 impossible by construction or passes under the documented post-commit owner.
@@ -658,10 +771,20 @@ impossible by construction or passes under the documented post-commit owner.
 **Objective:** Prove the extracted layers behave together and leave useful
 production diagnostics.
 
+V0 is a gate, not a standalone work item. The observability items below land
+with the PRs that create the relevant seams (executor spans with client 5,
+transport-pair and restore-outcome logs with server 2–4), and the E2E scenarios
+are run as part of the client 5 and server 4 exit criteria. This section is the
+consolidated checklist for declaring the plan implemented.
+
 **Automated validation:**
 
 - Package-specific client and server suites from their expected directories.
-- `nix develop -c bun run magic`.
+- `nix develop -c bunx biome check --write <changed paths>` on intentionally
+  changed files, then the non-mutating CI checks: `nix develop -c bun run
+  check-types`, `nix develop -c bun run lint`, and `nix develop -c bun run knip`
+  when imports or exports changed. Do not use the root `magic` script for
+  validation; it rewrites the entire repository.
 - Fake-clock executor suite.
 - Resource-controller deferred-operation suites.
 - Server cancellation/transaction matrix.

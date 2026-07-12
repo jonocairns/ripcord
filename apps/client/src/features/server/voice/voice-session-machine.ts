@@ -266,13 +266,18 @@ const failSession = (
 	return emptyResult(failedState);
 };
 
-const isCurrentCommand = (state: TVoiceSessionState, generation: number, commandId: number): boolean => {
+// Exported so the store can expose live command currency and runners never
+// duplicate the phase/generation/activeCommandId predicate.
+const isCurrentVoiceSessionCommand = (
+	state: TVoiceSessionState,
+	command: { commandId: number; generation: number },
+): boolean => {
 	const { phase } = state;
 
 	return (
 		(phase.phase === 'rebuilding' || phase.phase === 'reconnecting') &&
-		phase.generation === generation &&
-		phase.activeCommandId === commandId
+		phase.generation === command.generation &&
+		phase.activeCommandId === command.commandId
 	);
 };
 
@@ -493,7 +498,7 @@ const reduceRecoveryStarted = (
 ): TVoiceSessionReducerResult => {
 	const { phase } = state;
 
-	if (!isCurrentCommand(state, event.generation, event.commandId)) {
+	if (!isCurrentVoiceSessionCommand(state, event)) {
 		return emptyResult(state);
 	}
 
@@ -529,7 +534,7 @@ const reduceRebuildFailed = (
 ): TVoiceSessionReducerResult => {
 	const { phase } = state;
 
-	if (phase.phase !== 'rebuilding' || !isCurrentCommand(state, event.generation, event.commandId)) {
+	if (phase.phase !== 'rebuilding' || !isCurrentVoiceSessionCommand(state, event)) {
 		return emptyResult(state);
 	}
 
@@ -577,11 +582,7 @@ const reduceNonceChanged = (
 ): TVoiceSessionReducerResult => {
 	const { phase } = state;
 
-	if (
-		phase.phase !== 'rebuilding' ||
-		!isCurrentCommand(state, event.generation, event.commandId) ||
-		phase.nonce === event.nonce
-	) {
+	if (phase.phase !== 'rebuilding' || !isCurrentVoiceSessionCommand(state, event) || phase.nonce === event.nonce) {
 		return emptyResult(state);
 	}
 
@@ -632,11 +633,7 @@ const reduceRestoreFailed = (
 ): TVoiceSessionReducerResult => {
 	const { phase } = state;
 
-	if (
-		phase.phase !== 'reconnecting' ||
-		phase.step !== 'restoring' ||
-		!isCurrentCommand(state, event.generation, event.commandId)
-	) {
+	if (phase.phase !== 'reconnecting' || phase.step !== 'restoring' || !isCurrentVoiceSessionCommand(state, event)) {
 		return emptyResult(state);
 	}
 
@@ -818,7 +815,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 		case 'Resumed':
 			return reduceResumed(state);
 		case 'RebuildSucceeded':
-			if (state.phase.phase !== 'rebuilding' || !isCurrentCommand(state, event.generation, event.commandId)) {
+			if (state.phase.phase !== 'rebuilding' || !isCurrentVoiceSessionCommand(state, event)) {
 				return emptyResult(state);
 			}
 
@@ -836,7 +833,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				state.phase.phase !== 'reconnecting' ||
 				state.phase.step !== 'restoring' ||
 				!state.phase.authenticated ||
-				!isCurrentCommand(state, event.generation, event.commandId)
+				!isCurrentVoiceSessionCommand(state, event)
 			) {
 				return emptyResult(state);
 			}
@@ -855,7 +852,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			if (
 				state.phase.phase !== 'reconnecting' ||
 				state.phase.step !== 'waitingOnline' ||
-				!isCurrentCommand(state, event.generation, event.commandId)
+				!isCurrentVoiceSessionCommand(state, event)
 			) {
 				return emptyResult(state);
 			}
@@ -867,7 +864,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 		case 'OnlineExpired':
 		case 'AuthExpired':
 		case 'RetryDelayExpired': {
-			if (!isCurrentCommand(state, event.generation, event.commandId)) {
+			if (!isCurrentVoiceSessionCommand(state, event)) {
 				return emptyResult(state);
 			}
 
@@ -883,7 +880,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			if (
 				state.phase.phase !== 'reconnecting' ||
 				state.phase.step !== 'waitingAuth' ||
-				!isCurrentCommand(state, event.generation, event.commandId)
+				!isCurrentVoiceSessionCommand(state, event)
 			) {
 				return emptyResult(state);
 			}
@@ -897,7 +894,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			if (
 				state.phase.phase !== 'reconnecting' ||
 				state.phase.step !== 'waitingAuth' ||
-				!isCurrentCommand(state, event.generation, event.commandId)
+				!isCurrentVoiceSessionCommand(state, event)
 			) {
 				return emptyResult(state);
 			}
@@ -907,7 +904,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			if (
 				state.phase.phase !== 'reconnecting' ||
 				state.phase.step !== 'retryDelay' ||
-				!isCurrentCommand(state, event.generation, event.commandId)
+				!isCurrentVoiceSessionCommand(state, event)
 			) {
 				return emptyResult(state);
 			}
@@ -920,7 +917,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			if (
 				state.phase.phase !== 'reconnecting' ||
 				state.phase.step !== 'restoreWatch' ||
-				!isCurrentCommand(state, event.generation, event.commandId)
+				!isCurrentVoiceSessionCommand(state, event)
 			) {
 				return emptyResult(state);
 			}
@@ -936,6 +933,25 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			});
 	}
 };
+
+// Direct machine selectors. While reconnecting, the phase owns the live
+// values; the top-level fields are the facade mirror kept for the other
+// phases. Executor waits and React rendering read state through these so
+// Zustand projection synchronization order can never affect correctness.
+// Selectors return references out of the immutable state, so
+// useSyncExternalStore-style Object.is comparisons stay stable between
+// dispatches.
+const selectPendingVoiceReconnect = (state: TVoiceSessionState): TPendingVoiceReconnect | undefined =>
+	state.phase.phase === 'reconnecting' ? state.phase.pending : state.pendingVoiceReconnect;
+
+const selectReconnectingSince = (state: TVoiceSessionState): number | undefined =>
+	state.phase.phase === 'reconnecting' ? state.phase.reconnectingSince : state.reconnectingSince;
+
+const selectReconnectAuthenticated = (state: TVoiceSessionState): boolean =>
+	state.phase.phase === 'reconnecting' ? state.phase.authenticated : state.reconnectAuthenticated;
+
+const selectVoiceReconnectSuppression = (state: TVoiceSessionState): TVoiceReconnectSuppression | undefined =>
+	state.suppression;
 
 const selectVoiceSessionConnectionStatus = (state: TVoiceSessionState): TVoiceSessionConnectionStatus => {
 	switch (state.phase.phase) {
@@ -964,7 +980,12 @@ export type {
 };
 export {
 	createInitialVoiceSessionState,
+	isCurrentVoiceSessionCommand,
 	reduceVoiceSession,
+	selectPendingVoiceReconnect,
+	selectReconnectAuthenticated,
+	selectReconnectingSince,
+	selectVoiceReconnectSuppression,
 	selectVoiceSessionConnectionStatus,
 	shouldFlushBufferedVoiceSessionCommand,
 	VOICE_RECONNECT_SUPPRESSION_MS,

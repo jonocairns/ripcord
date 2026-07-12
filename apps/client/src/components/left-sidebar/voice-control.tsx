@@ -5,11 +5,12 @@ import { useChannelById, useCurrentVoiceChannelId } from '@/features/server/chan
 import { useChannelCan } from '@/features/server/hooks';
 import { leaveVoice } from '@/features/server/voice/actions';
 import { useVoice } from '@/features/server/voice/hooks';
-import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordinator';
 import {
 	getVoiceReconnectIndicatorDelayMs,
 	shouldShowVoiceReconnectIndicator,
 } from '@/features/server/voice/reconnect-indicator';
+import { useVoiceSessionSelector } from '@/features/server/voice/voice-session-hooks';
+import { selectReconnectingSince } from '@/features/server/voice/voice-session-machine';
 import { cn } from '@/lib/utils';
 import { ExternalAudioStreams } from '../channel-view/voice/external-audio-streams';
 import { VoiceAudioStreams } from '../channel-view/voice/voice-audio-streams';
@@ -21,7 +22,7 @@ const VoiceControl = memo(() => {
 	const voiceChannel = useChannelById(voiceChannelId ?? -1);
 	const channelCan = useChannelCan(voiceChannelId);
 	const { connectionStatus, isStartingScreenShare, ownVoiceState, toggleScreenShare, toggleWebcam } = useVoice();
-	const reconnectingSince = useVoiceReconnectStore((state) => state.reconnectingSince);
+	const reconnectingSince = useVoiceSessionSelector(selectReconnectingSince);
 	const [showReconnectIndicator, setShowReconnectIndicator] = useState(() =>
 		shouldShowVoiceReconnectIndicator(voiceChannelId, reconnectingSince),
 	);

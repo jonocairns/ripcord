@@ -1,12 +1,28 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import {
+	selectPendingVoiceReconnect,
+	selectReconnectAuthenticated,
+	selectReconnectingSince,
+	selectVoiceReconnectSuppression,
+} from '../voice-session-machine';
+import {
 	dispatchVoiceSession,
 	getVoiceSessionState,
+	isVoiceSessionCommandCurrent,
 	registerVoiceSessionCommandRunner,
 	resetVoiceSessionState,
 	selectVoiceSessionState,
 	subscribeVoiceSession,
+	subscribeVoiceSessionState,
 } from '../voice-session-store';
+
+const pendingReconnect = {
+	channelId: 5,
+	micMuted: true,
+	soundMuted: false,
+	peerUserIds: [10],
+	expiresAt: 60_000,
+};
 
 // Drives the machine through a full transport rebuild with no runner
 // registered, leaving the final RecoverDesktopAppAudio command in the buffer.
@@ -171,6 +187,71 @@ describe('voice session store', () => {
 		expect(executed).toEqual([]);
 	});
 
+	it('tracks live command currency for recovery-step commands', () => {
+		const [snapshotCommand] = dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+		if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
+			throw new Error('expected CaptureRecoverySnapshot command');
+		}
+
+		expect(isVoiceSessionCommandCurrent(snapshotCommand)).toBe(true);
+
+		const [rebuildCommand] = dispatchVoiceSession({
+			type: 'RecoveryStarted',
+			commandId: snapshotCommand.commandId,
+			generation: snapshotCommand.generation,
+			snapshot: { remoteUserStreams: {}, externalStreams: {} },
+		});
+
+		if (rebuildCommand?.type !== 'RebuildTransports') {
+			throw new Error('expected RebuildTransports command');
+		}
+
+		// The machine moved its active command on: the snapshot command is stale,
+		// the rebuild command is current.
+		expect(isVoiceSessionCommandCurrent(snapshotCommand)).toBe(false);
+		expect(isVoiceSessionCommandCurrent(rebuildCommand)).toBe(true);
+
+		// Leaving the recovery phase invalidates the rebuild command too.
+		dispatchVoiceSession({ type: 'Terminated', reason: 'kicked', channelId: 5 });
+
+		expect(isVoiceSessionCommandCurrent(rebuildCommand)).toBe(false);
+	});
+
+	it('never reports final commands as current', () => {
+		const [snapshotCommand] = dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+		if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
+			throw new Error('expected CaptureRecoverySnapshot command');
+		}
+
+		const [rebuildCommand] = dispatchVoiceSession({
+			type: 'RecoveryStarted',
+			commandId: snapshotCommand.commandId,
+			generation: snapshotCommand.generation,
+			snapshot: { remoteUserStreams: {}, externalStreams: {} },
+		});
+
+		if (rebuildCommand?.type !== 'RebuildTransports') {
+			throw new Error('expected RebuildTransports command');
+		}
+
+		const [finalCommand] = dispatchVoiceSession({
+			type: 'RebuildSucceeded',
+			commandId: rebuildCommand.commandId,
+			generation: rebuildCommand.generation,
+		});
+
+		if (finalCommand?.type !== 'RecoverDesktopAppAudio') {
+			throw new Error('expected RecoverDesktopAppAudio command');
+		}
+
+		// Currency is a recovery-step concept (phase.activeCommandId): final
+		// commands are emitted while leaving the recovery phase, so they are never
+		// current even though their generation matches the connected phase.
+		expect(isVoiceSessionCommandCurrent(finalCommand)).toBe(false);
+	});
+
 	it('notifies state listeners before running commands so projections are in sync', () => {
 		const order: string[] = [];
 		const unsubscribe = subscribeVoiceSession(() => {
@@ -185,5 +266,143 @@ describe('voice session store', () => {
 		unregister();
 
 		expect(order).toEqual(['listener', 'runner']);
+	});
+
+	it('updates direct selectors from dispatch with no projection or listener involved', () => {
+		// This file never imports the reconnect-coordinator, so its module-eval
+		// zustand projection listener does not exist here: the selectors below
+		// must be correct from the dispatch alone.
+		dispatchVoiceSession({
+			type: 'WsDropped',
+			pending: pendingReconnect,
+			now: 111,
+			online: true,
+			authenticated: false,
+		});
+
+		expect(selectVoiceSessionState(selectPendingVoiceReconnect)).toEqual(pendingReconnect);
+		expect(selectVoiceSessionState(selectReconnectingSince)).toBe(111);
+		expect(selectVoiceSessionState(selectReconnectAuthenticated)).toBe(false);
+
+		dispatchVoiceSession({ type: 'SocketAuthenticated' });
+
+		expect(selectVoiceSessionState(selectReconnectAuthenticated)).toBe(true);
+
+		const suppression = { channelId: 5, peerUserIds: [10], expiresAt: 20_000 };
+
+		dispatchVoiceSession({ type: 'ReconnectSuppressionChanged', suppression });
+
+		expect(selectVoiceSessionState(selectVoiceReconnectSuppression)).toEqual(suppression);
+	});
+
+	it('falls back to the facade mirror fields when not reconnecting', () => {
+		dispatchVoiceSession({ type: 'ReconnectIntentCaptured', pending: pendingReconnect });
+
+		expect(getVoiceSessionState().phase.phase).toBe('idle');
+		expect(selectVoiceSessionState(selectPendingVoiceReconnect)).toEqual(pendingReconnect);
+		expect(selectVoiceSessionState(selectReconnectingSince)).toBeUndefined();
+		expect(selectVoiceSessionState(selectReconnectAuthenticated)).toBe(false);
+	});
+
+	it('notifies state-only listeners before command delivery without exposing commands', () => {
+		const order: string[] = [];
+		const unsubscribe = subscribeVoiceSessionState((state) => {
+			order.push(`state:${state.phase.phase}`);
+		});
+		const unregister = registerVoiceSessionCommandRunner(() => {
+			order.push('runner');
+		});
+
+		dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+		unsubscribe();
+		unregister();
+
+		expect(order).toEqual(['state:rebuilding', 'runner']);
+	});
+
+	it('lets a command runner observe post-dispatch state through direct selectors', () => {
+		// The WaitAuth command is emitted synchronously by the WsDropped dispatch.
+		// A runner that reads the direct selectors when it receives the command
+		// must see the post-dispatch reconnect (the projection-race equivalent:
+		// observing pre-dispatch state here aborted recovery as 'cleared').
+		let observed: { since: number | undefined; authenticated: boolean } | undefined;
+		const unregister = registerVoiceSessionCommandRunner((commands) => {
+			if (commands[0]?.type === 'WaitAuth') {
+				observed = {
+					since: selectVoiceSessionState(selectReconnectingSince),
+					authenticated: selectVoiceSessionState(selectReconnectAuthenticated),
+				};
+			}
+		});
+
+		dispatchVoiceSession({ type: 'ReconnectIntentCaptured', pending: pendingReconnect });
+
+		const [snapshotCommand] = dispatchVoiceSession({
+			type: 'ReconnectStarted',
+			now: 1234,
+			online: true,
+			authenticated: false,
+		});
+
+		if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
+			throw new Error('expected CaptureRecoverySnapshot command');
+		}
+
+		dispatchVoiceSession({
+			type: 'RecoveryStarted',
+			commandId: snapshotCommand.commandId,
+			generation: snapshotCommand.generation,
+			snapshot: { remoteUserStreams: {}, externalStreams: {} },
+		});
+		unregister();
+
+		expect(observed).toEqual({ since: 1234, authenticated: false });
+	});
+
+	it('keeps command identity monotonic across reset so a stale identity can never recur', () => {
+		const [firstSnapshot] = dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+		if (firstSnapshot?.type !== 'CaptureRecoverySnapshot') {
+			throw new Error('expected CaptureRecoverySnapshot command');
+		}
+
+		resetVoiceSessionState();
+
+		// An identical post-reset sequence must mint strictly newer identities:
+		// listeners (and pending executor operations) survive reset, so a repeated
+		// generation/commandId pair could make a late operation read as current
+		// again even when no executor listener is available to abort it.
+		const [secondSnapshot] = dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+		if (secondSnapshot?.type !== 'CaptureRecoverySnapshot') {
+			throw new Error('expected CaptureRecoverySnapshot command');
+		}
+
+		expect(secondSnapshot.generation).toBeGreaterThan(firstSnapshot.generation);
+		expect(secondSnapshot.commandId).toBeGreaterThan(firstSnapshot.commandId);
+		expect(isVoiceSessionCommandCurrent(firstSnapshot)).toBe(false);
+		expect(isVoiceSessionCommandCurrent(secondSnapshot)).toBe(true);
+	});
+
+	it('notifies state-only listeners on reset while dropping buffered commands', () => {
+		const observedPhases: string[] = [];
+		const unsubscribe = subscribeVoiceSessionState((state) => {
+			observedPhases.push(state.phase.phase);
+		});
+
+		dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+		resetVoiceSessionState();
+		dispatchVoiceSession({ type: 'JoinRequested', channelId: 6 });
+		unsubscribe();
+
+		expect(observedPhases).toEqual(['rebuilding', 'idle', 'joining']);
+
+		const executed: string[] = [];
+		const unregister = registerVoiceSessionCommandRunner((commands) => {
+			executed.push(...commands.map((command) => command.type));
+		});
+
+		unregister();
+		expect(executed).toEqual([]);
 	});
 });
