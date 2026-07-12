@@ -179,74 +179,87 @@ const useVoiceControls = ({
 		[applyMicMuted, startMicStream],
 	);
 
-	const toggleMic = useCallback(async () => {
-		const newState = !ownVoiceStateSelector(useServerStore.getState()).micMuted;
+	const toggleSound = useCallback(
+		async (options?: { forceUnmute?: boolean }) => {
+			// Read state directly from the store to avoid stale closure values,
+			// matching the approach used by setMicMuted above.
+			const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
+			const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
+			const latestLocalAudioStream = localAudioStreamRef.current;
 
-		await setMicMuted(newState, { playSound: true });
-	}, [setMicMuted]);
+			const newState = !latestOwnVoiceState.soundMuted;
+			const previousMicMuted = latestOwnVoiceState.micMuted;
+			const previousSoundMuted = latestOwnVoiceState.soundMuted;
+			const previousMicMutedBeforeDeafen = micMutedBeforeDeafenRef.current;
+			let nextMicMuted = previousMicMuted;
+			const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
+			voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
+			const { operationToken } = voiceStateOperation;
 
-	const toggleSound = useCallback(async () => {
-		// Read state directly from the store to avoid stale closure values,
-		// matching the approach used by setMicMuted above.
-		const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
-		const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
-		const latestLocalAudioStream = localAudioStreamRef.current;
+			if (newState) {
+				micMutedBeforeDeafenRef.current = previousMicMuted;
+				nextMicMuted = true;
+			} else if (options?.forceUnmute === true) {
+				nextMicMuted = false;
+				micMutedBeforeDeafenRef.current = undefined;
+			} else if (micMutedBeforeDeafenRef.current !== undefined) {
+				nextMicMuted = micMutedBeforeDeafenRef.current;
+				micMutedBeforeDeafenRef.current = undefined;
+			}
 
-		const newState = !latestOwnVoiceState.soundMuted;
-		const previousMicMuted = latestOwnVoiceState.micMuted;
-		const previousSoundMuted = latestOwnVoiceState.soundMuted;
-		const previousMicMutedBeforeDeafen = micMutedBeforeDeafenRef.current;
-		let nextMicMuted = previousMicMuted;
-		const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
-		voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
-		const { operationToken } = voiceStateOperation;
-
-		if (newState) {
-			micMutedBeforeDeafenRef.current = previousMicMuted;
-			nextMicMuted = true;
-		} else if (micMutedBeforeDeafenRef.current !== undefined) {
-			nextMicMuted = micMutedBeforeDeafenRef.current;
-			micMutedBeforeDeafenRef.current = undefined;
-		}
-
-		updateOwnVoiceState({
-			soundMuted: newState,
-			micMuted: nextMicMuted,
-		});
-
-		applyMicMuted(latestLocalAudioStream, nextMicMuted);
-
-		playSound(newState ? SoundType.OWN_USER_MUTED_SOUND : SoundType.OWN_USER_UNMUTED_SOUND);
-
-		if (!latestCurrentVoiceChannelId) return;
-
-		try {
-			await sendOwnVoiceStateUpdate({
+			updateOwnVoiceState({
 				soundMuted: newState,
 				micMuted: nextMicMuted,
 			});
 
-			if (
-				shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current) &&
-				!localAudioStreamRef.current &&
-				!nextMicMuted
-			) {
-				await startMicStream();
-			}
-		} catch (error) {
-			if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
-				return;
-			}
+			applyMicMuted(latestLocalAudioStream, nextMicMuted);
 
-			micMutedBeforeDeafenRef.current = previousSoundMuted ? previousMicMutedBeforeDeafen : undefined;
-			updateOwnVoiceState({
-				soundMuted: previousSoundMuted,
-				micMuted: previousMicMuted,
-			} satisfies Partial<TVoiceUserState>);
-			applyMicMuted(localAudioStreamRef.current, previousMicMuted);
-			toast.error(getTrpcError(error, 'Failed to update sound state'));
+			playSound(newState ? SoundType.OWN_USER_MUTED_SOUND : SoundType.OWN_USER_UNMUTED_SOUND);
+
+			if (!latestCurrentVoiceChannelId) return;
+
+			try {
+				await sendOwnVoiceStateUpdate({
+					soundMuted: newState,
+					micMuted: nextMicMuted,
+				});
+
+				if (
+					shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current) &&
+					!localAudioStreamRef.current &&
+					!nextMicMuted
+				) {
+					await startMicStream();
+				}
+			} catch (error) {
+				if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
+					return;
+				}
+
+				micMutedBeforeDeafenRef.current = previousSoundMuted ? previousMicMutedBeforeDeafen : undefined;
+				updateOwnVoiceState({
+					soundMuted: previousSoundMuted,
+					micMuted: previousMicMuted,
+				} satisfies Partial<TVoiceUserState>);
+				applyMicMuted(localAudioStreamRef.current, previousMicMuted);
+				toast.error(getTrpcError(error, 'Failed to update sound state'));
+			}
+		},
+		[applyMicMuted, startMicStream],
+	);
+
+	const toggleMic = useCallback(async () => {
+		const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
+
+		// Unmuting while deafened lifts the deafen and the mute together instead
+		// of being silently swallowed by setMicMuted's deafen guard.
+		if (latestOwnVoiceState.soundMuted && latestOwnVoiceState.micMuted) {
+			await toggleSound({ forceUnmute: true });
+			return;
 		}
-	}, [applyMicMuted, startMicStream]);
+
+		await setMicMuted(!latestOwnVoiceState.micMuted, { playSound: true });
+	}, [setMicMuted, toggleSound]);
 
 	const toggleWebcam = useCallback(async () => {
 		if (isStartingWebcamRef.current) return;
