@@ -43,6 +43,7 @@ import {
 	VoiceReconnectTimeoutError,
 } from '@/features/server/voice/reconnect-policy';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
+import { createVoiceSessionCommandExecutor } from '@/features/server/voice/voice-session-command-executor';
 import {
 	selectVoiceSessionConnectionStatus,
 	type TVoiceSessionCommand,
@@ -635,6 +636,42 @@ const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
 const RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS = 350;
 const VOICE_RECONNECT_TIMEOUT_MS = 12_000;
 const VOICE_RECONNECT_WAIT_POLL_MS = 250;
+
+const getVoiceSessionCommandOwner = (command: TVoiceSessionCommand): 'executor' | 'legacy' => {
+	switch (command.type) {
+		case 'CaptureRecoverySnapshot':
+		case 'RestoreWatchIntent':
+		case 'RecoverDesktopAppAudio':
+		case 'LeaveVoiceSession':
+		case 'ClearFailedSession':
+			return 'executor';
+		case 'RebuildTransports':
+		case 'WaitOnline':
+		case 'WaitAuth':
+		case 'RestoreVoiceSession':
+		case 'RetryDelay':
+			return 'legacy';
+	}
+};
+
+const delayVoiceSessionCommand = (milliseconds: number, signal: AbortSignal): Promise<void> =>
+	new Promise((resolve, reject) => {
+		if (signal.aborted) {
+			reject(signal.reason);
+			return;
+		}
+
+		const timeoutId = window.setTimeout(() => {
+			signal.removeEventListener('abort', handleAbort);
+			resolve();
+		}, milliseconds);
+		const handleAbort = (): void => {
+			window.clearTimeout(timeoutId);
+			reject(signal.reason);
+		};
+
+		signal.addEventListener('abort', handleAbort, { once: true });
+	});
 
 const withTimeout = <T,>(
 	promise: Promise<T>,
@@ -3683,18 +3720,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[isCurrentVoiceSessionCommand],
 	);
 
-	const leaveAfterFailedTransportRecovery = useCallback((command: TVoiceSessionCommand): void => {
-		if (command.type !== 'LeaveVoiceSession') {
-			return;
-		}
-
-		if (isConnectedRef.current && command.channelId !== undefined) {
-			void leaveVoiceSessionAfterRecoveryFailure().then((didLeave) => {
-				if (!didLeave) {
-					logVoice('Failed to send voice.leave after unrecoverable transport failure');
-				}
-			});
-		}
+	const leaveAfterFailedTransportRecovery = useCallback(async (channelId?: number): Promise<void> => {
+		const leaveRequest =
+			isConnectedRef.current && channelId !== undefined
+				? leaveVoiceSessionAfterRecoveryFailure().then((didLeave) => {
+						if (!didLeave) {
+							logVoice('Failed to send voice.leave after unrecoverable transport failure');
+						}
+					})
+				: undefined;
 
 		if (currentVoiceChannelIdRef.current !== undefined) {
 			useServerStore.getState().setCurrentVoiceChannelId(undefined);
@@ -3709,6 +3743,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 		voiceCleanupRef.current?.();
 		hasHandledTransportFailureRef.current = false;
+
+		await leaveRequest;
 	}, []);
 
 	const runRebuildTransportCommand = useCallback(
@@ -4423,67 +4459,29 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[dispatchIfCurrentVoiceSessionCommand, liveReconnectDeadline, waitForVoiceReconnectDelay],
 	);
 
-	const runRestoreWatchIntentCommand = useCallback(
-		(command: TVoiceSessionCommand): void => {
-			if (command.type !== 'RestoreWatchIntent') {
-				return;
-			}
+	const clearFailedVoiceSession = useCallback(
+		async (command: Extract<TVoiceSessionCommand, { type: 'ClearFailedSession' }>): Promise<void> => {
+			// restoreOrJoin already bound a server-side session this cycle; without an
+			// explicit leave the runtime would keep us resident in the channel even
+			// though the client is giving up.
+			const leaveRequest = command.leaveServerSession
+				? leaveVoiceSessionAfterRecoveryFailure().then((didLeave) => {
+						if (!didLeave) {
+							logDebug('Voice reconnect terminal leave failed');
+						}
+					})
+				: undefined;
 
-			if (!isCurrentVoiceSessionCommand(command)) {
-				return;
-			}
+			clearOwnVoiceSessionAfterReconnectFailure(command.reason);
+			voiceCleanupRef.current?.();
 
-			// The provider-local ledger is recreated on remount. init() normally
-			// rehydrates before producer reconciliation, but a remount after restore
-			// succeeded resumes directly at this command and therefore has no init()
-			// pass to rebuild the ledger. Reapplying is safe because the ledger helper
-			// never overwrites an existing slot, preserving stop intent from this mount.
-			rehydrateWatchIntentOnly(command.snapshot);
-
-			dispatchIfCurrentVoiceSessionCommand(command, () => {
-				dispatchVoiceSession({
-					type: 'WatchIntentRehydrated',
-					commandId: command.commandId,
-					generation: command.generation,
-					now: Date.now(),
-				});
-			});
+			await leaveRequest;
 		},
-		[dispatchIfCurrentVoiceSessionCommand, isCurrentVoiceSessionCommand, rehydrateWatchIntentOnly],
+		[],
 	);
 
-	const clearFailedVoiceSession = useCallback((command: TVoiceSessionCommand): void => {
-		if (command.type !== 'ClearFailedSession') {
-			return;
-		}
-
-		// restoreOrJoin already bound a server-side session this cycle; without an
-		// explicit leave the runtime would keep us resident in the channel even
-		// though the client is giving up.
-		if (command.leaveServerSession) {
-			void leaveVoiceSessionAfterRecoveryFailure().then((didLeave) => {
-				if (!didLeave) {
-					logDebug('Voice reconnect terminal leave failed');
-				}
-			});
-		}
-
-		clearOwnVoiceSessionAfterReconnectFailure(command.reason);
-		voiceCleanupRef.current?.();
-	}, []);
-
-	const runVoiceSessionCommand = useCallback(
+	const runLegacyVoiceSessionCommand = useCallback(
 		(command: TVoiceSessionCommand): void => {
-			if (command.type === 'CaptureRecoverySnapshot') {
-				dispatchVoiceSession({
-					type: 'RecoveryStarted',
-					commandId: command.commandId,
-					generation: command.generation,
-					snapshot: captureWatchedRemoteStreams(),
-				});
-				return;
-			}
-
 			if (command.type === 'RebuildTransports') {
 				void runRebuildTransportCommand(command);
 				return;
@@ -4508,42 +4506,21 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				void runRetryDelayCommand(command);
 				return;
 			}
-
-			if (command.type === 'RestoreWatchIntent') {
-				runRestoreWatchIntentCommand(command);
-				return;
-			}
-
-			if (command.type === 'RecoverDesktopAppAudio') {
-				void recoverDesktopAppAudioFromIntent().catch((error) => {
-					logVoice('Error recovering desktop app audio after voice recovery', { error });
-				});
-				hasHandledTransportFailureRef.current = false;
-				return;
-			}
-
-			if (command.type === 'LeaveVoiceSession') {
-				leaveAfterFailedTransportRecovery(command);
-				return;
-			}
-
-			if (command.type === 'ClearFailedSession') {
-				clearFailedVoiceSession(command);
-			}
 		},
 		[
-			captureWatchedRemoteStreams,
-			clearFailedVoiceSession,
-			leaveAfterFailedTransportRecovery,
-			recoverDesktopAppAudioFromIntent,
 			runRebuildTransportCommand,
 			runRestoreVoiceSessionCommand,
-			runRestoreWatchIntentCommand,
 			runRetryDelayCommand,
 			runWaitAuthCommand,
 			runWaitOnlineCommand,
 		],
 	);
+	const captureWatchedRemoteStreamsRef = useLatestRef(captureWatchedRemoteStreams);
+	const rehydrateWatchIntentOnlyRef = useLatestRef(rehydrateWatchIntentOnly);
+	const recoverDesktopAppAudioFromIntentRef = useLatestRef(recoverDesktopAppAudioFromIntent);
+	const leaveAfterFailedTransportRecoveryRef = useLatestRef(leaveAfterFailedTransportRecovery);
+	const clearFailedVoiceSessionRef = useLatestRef(clearFailedVoiceSession);
+	const runLegacyVoiceSessionCommandRef = useLatestRef(runLegacyVoiceSessionCommand);
 
 	// Registering (rather than subscribing as a listener) also flushes any
 	// commands dispatched while no runner was alive — a result event from the
@@ -4552,10 +4529,50 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// ClearFailedSession) leave the phases Resumed replays, so a buffer is the
 	// only path that preserves them.
 	useEffect(() => {
-		return registerVoiceSessionCommandRunner((commands) => {
-			commands.forEach(runVoiceSessionCommand);
+		const executor = createVoiceSessionCommandExecutor({
+			now: Date.now,
+			random: Math.random,
+			delay: delayVoiceSessionCommand,
+			isOnline: isVoiceReconnectOnline,
+			captureRecoverySnapshot: () => captureWatchedRemoteStreamsRef.current(),
+			rebuildTransports: () => Promise.reject(new Error('RebuildTransports is still owned by the legacy runner')),
+			restoreVoiceSession: () => Promise.reject(new Error('RestoreVoiceSession is still owned by the legacy runner')),
+			restoreWatchIntent: (snapshot) => rehydrateWatchIntentOnlyRef.current(snapshot),
+			recoverDesktopAppAudio: async () => {
+				const recovery = recoverDesktopAppAudioFromIntentRef.current();
+				hasHandledTransportFailureRef.current = false;
+				await recovery;
+			},
+			leaveVoiceSession: (channelId) => leaveAfterFailedTransportRecoveryRef.current(channelId),
+			clearFailedSession: (command) => clearFailedVoiceSessionRef.current(command),
+			reportCommandError: (command, error) => {
+				logVoice('Voice session command failed', {
+					commandType: command.type,
+					commandId: command.commandId,
+					generation: command.generation,
+					error,
+				});
+			},
 		});
-	}, [runVoiceSessionCommand]);
+		const unregister = registerVoiceSessionCommandRunner((commands) => {
+			const executorCommands: TVoiceSessionCommand[] = [];
+
+			for (const command of commands) {
+				if (getVoiceSessionCommandOwner(command) === 'executor') {
+					executorCommands.push(command);
+				} else {
+					runLegacyVoiceSessionCommandRef.current(command);
+				}
+			}
+
+			executor.execute(executorCommands);
+		});
+
+		return () => {
+			unregister();
+			executor.dispose();
+		};
+	}, []);
 
 	// A provider remount mid-recovery (the machine state is module-level and
 	// survives it) would otherwise strand the machine waiting on a command whose

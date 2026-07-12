@@ -1,5 +1,10 @@
 import type { TVoiceSessionCommand, TWatchedRemoteStreamsSnapshot } from './voice-session-machine';
-import { dispatchVoiceSession, isVoiceSessionCommandCurrent, subscribeVoiceSessionState } from './voice-session-store';
+import {
+	dispatchVoiceSession,
+	isFinalVoiceSessionCommandCurrent,
+	isVoiceSessionCommandCurrent,
+	subscribeVoiceSessionState,
+} from './voice-session-store';
 
 // The voice session command executor owns the asynchronous lifecycle of
 // machine-emitted commands: per-command AbortControllers, stale-command
@@ -51,6 +56,7 @@ type TVoiceSessionExecutorPorts = {
 	recoverDesktopAppAudio: () => Promise<void>;
 	leaveVoiceSession: (channelId?: number) => Promise<void>;
 	clearFailedSession: (command: TClearFailedSessionCommand) => Promise<void>;
+	reportCommandError: (command: TVoiceSessionCommand, error: unknown) => void;
 };
 
 type TVoiceSessionCommandExecutor = {
@@ -80,6 +86,13 @@ const isRecoveryStepCommand = (command: TVoiceSessionCommand): boolean => {
 			return false;
 	}
 };
+
+const isFinalCommand = (
+	command: TVoiceSessionCommand,
+): command is Extract<
+	TVoiceSessionCommand,
+	{ type: 'RecoverDesktopAppAudio' | 'LeaveVoiceSession' | 'ClearFailedSession' }
+> => !isRecoveryStepCommand(command);
 
 type TActiveVoiceSessionOperation = {
 	command: TVoiceSessionCommand;
@@ -222,6 +235,9 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 		if (isRecoveryStepCommand(command) && !isVoiceSessionCommandCurrent(command)) {
 			return;
 		}
+		if (isFinalCommand(command) && !isFinalVoiceSessionCommandCurrent(command)) {
+			return;
+		}
 
 		// Normally the store-listener sweep already ran inside the superseding
 		// dispatch; this covers execute() being invoked outside a dispatch.
@@ -237,10 +253,10 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 			: (): boolean => !controller.signal.aborted;
 
 		void runCommandEffect(command, { signal: controller.signal, isCurrent })
-			.catch(() => {
+			.catch((error: unknown) => {
 				// Port rejections without a machine-defined failure event (final
 				// commands, snapshot capture) must not strand executor bookkeeping.
-				// C2 adds error reporting when these handlers take production traffic.
+				ports.reportCommandError(command, error);
 			})
 			.finally(() => {
 				if (activeOperations.get(command.commandId) === operation) {

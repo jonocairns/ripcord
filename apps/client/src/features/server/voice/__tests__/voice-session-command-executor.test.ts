@@ -65,6 +65,7 @@ const createFakePorts = (overrides: Partial<TVoiceSessionExecutorPorts> = {}): T
 	recoverDesktopAppAudio: () => Promise.resolve(),
 	leaveVoiceSession: () => Promise.resolve(),
 	clearFailedSession: () => Promise.resolve(),
+	reportCommandError: () => {},
 	...overrides,
 });
 
@@ -317,37 +318,26 @@ describe('voice session command executor', () => {
 
 	it('dispose aborts all active command signals and stops executing new commands', async () => {
 		const abortedCommandIds: number[] = [];
-		let leaveCalls = 0;
+		let rebuildCalls = 0;
 		const executor = createExecutor(
 			createFakePorts({
 				rebuildTransports: (command, context) => {
+					rebuildCalls += 1;
 					context.signal.addEventListener('abort', () => {
 						abortedCommandIds.push(command.commandId);
 					});
 
 					return createDeferred<void>().promise;
 				},
-				leaveVoiceSession: () => {
-					leaveCalls += 1;
-					return createDeferred<void>().promise;
-				},
 			}),
 		);
 
 		const rebuildCommand = startRebuild();
-		// Final commands never carry machine currency, so one stays active
-		// alongside the recovery step without the store sweep cancelling it.
-		const leaveCommand: TVoiceSessionCommand = {
-			type: 'LeaveVoiceSession',
-			commandId: 99,
-			generation: rebuildCommand.generation,
-			channelId: 5,
-		};
 
-		executor.execute([rebuildCommand, leaveCommand]);
+		executor.execute([rebuildCommand]);
 		await flushMicrotasks();
 
-		expect(leaveCalls).toBe(1);
+		expect(rebuildCalls).toBe(1);
 		expect(abortedCommandIds).toEqual([]);
 
 		executor.dispose();
@@ -355,15 +345,13 @@ describe('voice session command executor', () => {
 		expect(abortedCommandIds).toEqual([rebuildCommand.commandId]);
 
 		// Disposed executors ignore further commands entirely.
-		executor.execute([
-			{ type: 'LeaveVoiceSession', commandId: 100, generation: rebuildCommand.generation, channelId: 5 },
-		]);
+		executor.execute([rebuildCommand]);
 		await flushMicrotasks();
 
-		expect(leaveCalls).toBe(1);
+		expect(rebuildCalls).toBe(1);
 	});
 
-	it('runs final commands without machine currency and completes restore with the machine-defined result', async () => {
+	it('runs a current final command and completes restore with the machine-defined result', async () => {
 		let recoveredDesktopAudio = 0;
 		const executor = createExecutor(
 			createFakePorts({
@@ -374,9 +362,18 @@ describe('voice session command executor', () => {
 			}),
 		);
 
-		// Hand-crafted final command: currency is always false for finals, so the
-		// executor must not stale-reject it.
-		executor.execute([{ type: 'RecoverDesktopAppAudio', commandId: 42, generation: 7 }]);
+		const rebuildCommand = startRebuild();
+		const [recoverCommand] = dispatchVoiceSession({
+			type: 'RebuildSucceeded',
+			commandId: rebuildCommand.commandId,
+			generation: rebuildCommand.generation,
+		});
+
+		if (recoverCommand?.type !== 'RecoverDesktopAppAudio') {
+			throw new Error('expected RecoverDesktopAppAudio command');
+		}
+
+		executor.execute([recoverCommand]);
 		await flushMicrotasks();
 
 		expect(recoveredDesktopAudio).toBe(1);
@@ -397,6 +394,198 @@ describe('voice session command executor', () => {
 		if (phase.phase !== 'reconnecting') return;
 		expect(phase.step).toBe('restoreWatch');
 		expect(phase.serverSessionEstablished).toBe(true);
+	});
+
+	it('does not execute a final command after its generation is invalidated', async () => {
+		const rebuildCommand = startRebuild();
+		const [recoverCommand] = dispatchVoiceSession({
+			type: 'RebuildSucceeded',
+			commandId: rebuildCommand.commandId,
+			generation: rebuildCommand.generation,
+		});
+
+		if (recoverCommand?.type !== 'RecoverDesktopAppAudio') {
+			throw new Error('expected RecoverDesktopAppAudio command');
+		}
+
+		dispatchVoiceSession({ type: 'JoinRequested', channelId: 9 });
+
+		let recoveryCalls = 0;
+		const executor = createExecutor(
+			createFakePorts({
+				recoverDesktopAppAudio: () => {
+					recoveryCalls += 1;
+					return Promise.resolve();
+				},
+			}),
+		);
+
+		executor.execute([recoverCommand]);
+		await flushMicrotasks();
+
+		expect(recoveryCalls).toBe(0);
+	});
+
+	it('flushes a buffered final command through the executor exactly once', async () => {
+		const rebuildCommand = startRebuild();
+		const [recoverCommand] = dispatchVoiceSession({
+			type: 'RebuildSucceeded',
+			commandId: rebuildCommand.commandId,
+			generation: rebuildCommand.generation,
+		});
+
+		if (recoverCommand?.type !== 'RecoverDesktopAppAudio') {
+			throw new Error('expected RecoverDesktopAppAudio command');
+		}
+
+		let recoveryCalls = 0;
+		const executor = createExecutor(
+			createFakePorts({
+				recoverDesktopAppAudio: () => {
+					recoveryCalls += 1;
+					return Promise.resolve();
+				},
+			}),
+		);
+		const unregister = registerVoiceSessionCommandRunner(executor.execute);
+
+		await flushMicrotasks();
+		unregister();
+
+		const unregisterNext = registerVoiceSessionCommandRunner(executor.execute);
+		await flushMicrotasks();
+		unregisterNext();
+
+		expect(recoveryCalls).toBe(1);
+	});
+
+	it('reports final command failures and releases their bookkeeping', async () => {
+		const rebuildCommand = startRebuild();
+		const [recoverCommand] = dispatchVoiceSession({
+			type: 'RebuildSucceeded',
+			commandId: rebuildCommand.commandId,
+			generation: rebuildCommand.generation,
+		});
+
+		if (recoverCommand?.type !== 'RecoverDesktopAppAudio') {
+			throw new Error('expected RecoverDesktopAppAudio command');
+		}
+
+		const failure = new Error('desktop audio recovery failed');
+		const reportedFailures: Array<{ command: TVoiceSessionCommand; error: unknown }> = [];
+		let recoveryCalls = 0;
+		const executor = createExecutor(
+			createFakePorts({
+				recoverDesktopAppAudio: () => {
+					recoveryCalls += 1;
+					return recoveryCalls === 1 ? Promise.reject(failure) : Promise.resolve();
+				},
+				reportCommandError: (command, error) => {
+					reportedFailures.push({ command, error });
+				},
+			}),
+		);
+
+		executor.execute([recoverCommand]);
+		await flushMicrotasks();
+		executor.execute([recoverCommand]);
+		await flushMicrotasks();
+
+		expect(recoveryCalls).toBe(2);
+		expect(reportedFailures).toEqual([{ command: recoverCommand, error: failure }]);
+	});
+
+	it('uses the failed session channel for leave and reports a rejected leave port', async () => {
+		const rebuildCommand = startRebuild();
+		const [leaveCommand] = dispatchVoiceSession({
+			type: 'RebuildFailed',
+			commandId: rebuildCommand.commandId,
+			generation: rebuildCommand.generation,
+			error: new Error('UnsupportedError: media codec not supported'),
+		});
+
+		if (leaveCommand?.type !== 'LeaveVoiceSession') {
+			throw new Error('expected LeaveVoiceSession command');
+		}
+
+		const failure = new Error('leave failed');
+		const channelIds: Array<number | undefined> = [];
+		const reportedFailures: Array<{ command: TVoiceSessionCommand; error: unknown }> = [];
+		const executor = createExecutor(
+			createFakePorts({
+				leaveVoiceSession: (channelId) => {
+					channelIds.push(channelId);
+					return Promise.reject(failure);
+				},
+				reportCommandError: (command, error) => {
+					reportedFailures.push({ command, error });
+				},
+			}),
+		);
+
+		executor.execute([leaveCommand]);
+		await flushMicrotasks();
+
+		expect(channelIds).toEqual([5]);
+		expect(reportedFailures).toEqual([{ command: leaveCommand, error: failure }]);
+	});
+
+	it('reports a rejected clear port without stranding executor bookkeeping', async () => {
+		const [snapshotCommand] = dispatchVoiceSession({
+			type: 'WsDropped',
+			pending: pendingReconnect,
+			now: 0,
+			online: false,
+			authenticated: false,
+		});
+
+		if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
+			throw new Error('expected CaptureRecoverySnapshot command');
+		}
+
+		const [waitCommand] = dispatchVoiceSession({
+			type: 'RecoveryStarted',
+			commandId: snapshotCommand.commandId,
+			generation: snapshotCommand.generation,
+			snapshot: emptySnapshot,
+		});
+
+		if (waitCommand?.type !== 'WaitOnline') {
+			throw new Error('expected WaitOnline command');
+		}
+
+		const [clearCommand] = dispatchVoiceSession({
+			type: 'OnlineExpired',
+			commandId: waitCommand.commandId,
+			generation: waitCommand.generation,
+		});
+
+		if (clearCommand?.type !== 'ClearFailedSession') {
+			throw new Error('expected ClearFailedSession command');
+		}
+
+		const failure = new Error('clear failed');
+		const reportedFailures: Array<{ command: TVoiceSessionCommand; error: unknown }> = [];
+		let clearCalls = 0;
+		const executor = createExecutor(
+			createFakePorts({
+				clearFailedSession: () => {
+					clearCalls += 1;
+					return clearCalls === 1 ? Promise.reject(failure) : Promise.resolve();
+				},
+				reportCommandError: (command, error) => {
+					reportedFailures.push({ command, error });
+				},
+			}),
+		);
+
+		executor.execute([clearCommand]);
+		await flushMicrotasks();
+		executor.execute([clearCommand]);
+		await flushMicrotasks();
+
+		expect(clearCalls).toBe(2);
+		expect(reportedFailures).toEqual([{ command: clearCommand, error: failure }]);
 	});
 
 	it('uses the injected clock for WatchIntentRehydrated instead of Date.now', async () => {
