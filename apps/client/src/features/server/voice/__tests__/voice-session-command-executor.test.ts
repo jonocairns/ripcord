@@ -126,6 +126,8 @@ const createFakePorts = (overrides: Partial<TVoiceSessionExecutorPorts> = {}): T
 	leaveVoiceSession: () => Promise.resolve(),
 	clearFailedSession: () => Promise.resolve(),
 	reportCommandError: () => {},
+	reportRebuildDetached: () => {},
+	reportRebuildTerminalFailure: () => {},
 	reportRestoreDetached: () => {},
 	...overrides,
 });
@@ -336,30 +338,62 @@ describe('voice session command executor', () => {
 		expect(rebuildCalls).toBe(0);
 	});
 
-	it('routes restore exclusively to the executor and leaves rebuild on the legacy runner', () => {
-		const rebuildCommand = startRebuild();
+	it('routes every command exclusively to the executor', () => {
+		const commands: TVoiceSessionCommand[] = [
+			{ type: 'CaptureRecoverySnapshot', commandId: 1, generation: 1, recovery: 'rebuilding' },
+			{
+				type: 'RebuildTransports',
+				commandId: 2,
+				generation: 1,
+				channelId: 5,
+				nonce: 1,
+				attempt: 0,
+				snapshot: emptySnapshot,
+			},
+			{ type: 'WaitOnline', commandId: 3, generation: 1, expiresAt: 60_000 },
+			{ type: 'WaitAuth', commandId: 4, generation: 1, expiresAt: 60_000 },
+			{
+				type: 'RestoreVoiceSession',
+				commandId: 5,
+				generation: 1,
+				pending: pendingReconnect,
+				attempt: 0,
+				snapshot: emptySnapshot,
+			},
+			{ type: 'RetryDelay', commandId: 6, generation: 1, attempt: 0, expiresAt: 60_000 },
+			{ type: 'RestoreWatchIntent', commandId: 7, generation: 1, snapshot: emptySnapshot },
+			{ type: 'RecoverDesktopAppAudio', commandId: 8, generation: 1 },
+			{ type: 'LeaveVoiceSession', commandId: 9, generation: 1, channelId: 5 },
+			{
+				type: 'ClearFailedSession',
+				commandId: 10,
+				generation: 1,
+				reason: 'restore-terminal-error',
+				channelId: 5,
+				leaveServerSession: true,
+			},
+		];
 
-		expect(isVoiceSessionExecutorCommand(rebuildCommand)).toBe(false);
-		resetVoiceSessionState();
-
-		const restoreCommand = startRestore();
-
-		expect(isVoiceSessionExecutorCommand(restoreCommand)).toBe(true);
+		expect(commands.every(isVoiceSessionExecutorCommand)).toBe(true);
 	});
 
-	it('aborts a superseded command before the superseding command starts its effect', () => {
+	it('aborts a superseded rebuild before its queued replacement starts', async () => {
 		const order: string[] = [];
+		const rebuildDeferreds: Array<TDeferred<void>> = [];
 		const startedRebuilds: Array<Extract<TVoiceSessionCommand, { type: 'RebuildTransports' }>> = [];
 		const executor = createExecutor(
 			createFakePorts({
 				rebuildTransports: (command, context) => {
+					const deferred = createDeferred<void>();
+
 					order.push(`start:${command.commandId}`);
 					startedRebuilds.push(command);
+					rebuildDeferreds.push(deferred);
 					context.signal.addEventListener('abort', () => {
 						order.push(`abort:${command.commandId}`);
 					});
 
-					return createDeferred<void>().promise;
+					return deferred.promise;
 				},
 			}),
 		);
@@ -392,6 +426,11 @@ describe('voice session command executor', () => {
 				throw new Error('expected superseding RebuildTransports command');
 			}
 
+			expect(order).toEqual([`start:${firstRebuild.commandId}`, `abort:${firstRebuild.commandId}`]);
+
+			rebuildDeferreds[0]?.resolve();
+			await flushMicrotasks();
+
 			expect(order).toEqual([
 				`start:${firstRebuild.commandId}`,
 				`abort:${firstRebuild.commandId}`,
@@ -403,10 +442,13 @@ describe('voice session command executor', () => {
 	});
 
 	it('ignores a late result from an aborted command', async () => {
+		const scheduler = createFakeScheduler();
 		const rebuildDeferreds: Array<TDeferred<void>> = [];
 		const startedRebuilds: Array<Extract<TVoiceSessionCommand, { type: 'RebuildTransports' }>> = [];
 		const executor = createExecutor(
 			createFakePorts({
+				now: scheduler.now,
+				delay: scheduler.delay,
 				rebuildTransports: (command) => {
 					const deferred = createDeferred();
 
@@ -440,6 +482,8 @@ describe('voice session command executor', () => {
 				generation: firstRebuild.generation,
 				nonce: 2,
 			});
+			await flushMicrotasks();
+			await scheduler.advanceBy(2_000);
 
 			const secondRebuild = startedRebuilds[1];
 
@@ -453,6 +497,8 @@ describe('voice session command executor', () => {
 				generation: secondRebuild.generation,
 				nonce: 3,
 			});
+			await flushMicrotasks();
+			await scheduler.advanceBy(2_000);
 
 			expect(startedRebuilds).toHaveLength(3);
 
@@ -475,6 +521,200 @@ describe('voice session command executor', () => {
 			} finally {
 				unsubscribe();
 			}
+		} finally {
+			unregister();
+		}
+	});
+
+	it('serializes duplicate transport failures behind one active rebuild', async () => {
+		const rebuildDeferreds: Array<TDeferred<void>> = [];
+		const startedCommandIds: number[] = [];
+		const executor = createExecutor(
+			createFakePorts({
+				rebuildTransports: (command, context) => {
+					const deferred = createDeferred<void>();
+
+					startedCommandIds.push(command.commandId);
+					rebuildDeferreds.push(deferred);
+					expect(context.signal.aborted).toBe(false);
+					return deferred.promise;
+				},
+			}),
+		);
+		const unregister = registerVoiceSessionCommandRunner((commands) => {
+			executor.execute(commands);
+		});
+
+		try {
+			dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+			dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+			expect(startedCommandIds).toHaveLength(1);
+
+			rebuildDeferreds[0]?.resolve();
+			await flushMicrotasks();
+
+			expect(startedCommandIds).toHaveLength(2);
+		} finally {
+			unregister();
+		}
+	});
+
+	it('preempts a rebuild on websocket reconnect and drops its stale completion', async () => {
+		const scheduler = createFakeScheduler();
+		const rebuildDeferred = createDeferred<void>();
+		let rebuildSignal: AbortSignal | undefined;
+		let detachedCount = 0;
+		const executor = createExecutor(
+			createFakePorts({
+				now: scheduler.now,
+				delay: scheduler.delay,
+				rebuildTransports: (_command, context) => {
+					rebuildSignal = context.signal;
+					return rebuildDeferred.promise;
+				},
+				reportRebuildDetached: () => {
+					detachedCount += 1;
+				},
+			}),
+		);
+		const unregister = registerVoiceSessionCommandRunner((commands) => {
+			executor.execute(commands);
+		});
+
+		try {
+			dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+			dispatchVoiceSession({
+				type: 'WsDropped',
+				pending: pendingReconnect,
+				now: 100,
+				online: true,
+				authenticated: false,
+			});
+
+			expect(rebuildSignal?.aborted).toBe(true);
+			await flushMicrotasks();
+			await scheduler.advanceBy(2_000);
+			expect(detachedCount).toBe(1);
+
+			const stateBeforeLateCompletion = getVoiceSessionState();
+			rebuildDeferred.resolve();
+			await flushMicrotasks();
+
+			expect(getVoiceSessionState()).toBe(stateBeforeLateCompletion);
+			expect(getVoiceSessionState().phase.phase).toBe('reconnecting');
+		} finally {
+			unregister();
+		}
+	});
+
+	it('hands nonce changes to the reducer and starts only the replacement rebuild', async () => {
+		const startedNonces: number[] = [];
+		const replacementDeferred = createDeferred<void>();
+		const restartResults: boolean[] = [];
+		const executor = createExecutor(
+			createFakePorts({
+				rebuildTransports: (command, context) => {
+					startedNonces.push(command.nonce);
+					if (command.nonce === 1) {
+						restartResults.push(context.restartIfNonceChanged(2));
+						return Promise.resolve();
+					}
+
+					return replacementDeferred.promise;
+				},
+			}),
+		);
+		const unregister = registerVoiceSessionCommandRunner((commands) => {
+			executor.execute(commands);
+		});
+
+		try {
+			dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+			await flushMicrotasks();
+
+			expect(restartResults).toEqual([true]);
+			expect(startedNonces).toEqual([1, 2]);
+			expect(getVoiceSessionState().phase).toMatchObject({
+				phase: 'rebuilding',
+				nonce: 2,
+				attempt: 0,
+				nonceRestarts: 1,
+			});
+		} finally {
+			unregister();
+		}
+	});
+
+	it('uses the injected scheduler for deterministic rebuild backoff', async () => {
+		const scheduler = createFakeScheduler();
+		const startedAttempts: number[] = [];
+		const retryDeferred = createDeferred<void>();
+		const executor = createExecutor(
+			createFakePorts({
+				now: scheduler.now,
+				delay: scheduler.delay,
+				rebuildTransports: (command) => {
+					startedAttempts.push(command.attempt);
+					return command.attempt === 0 ? Promise.reject(new Error('network failure')) : retryDeferred.promise;
+				},
+			}),
+		);
+		const unregister = registerVoiceSessionCommandRunner((commands) => {
+			executor.execute(commands);
+		});
+
+		try {
+			dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+			await flushMicrotasks();
+
+			expect(startedAttempts).toEqual([0]);
+			await scheduler.advanceBy(999);
+			expect(startedAttempts).toEqual([0]);
+			await scheduler.advanceBy(1);
+			expect(startedAttempts).toEqual([0, 1]);
+		} finally {
+			unregister();
+		}
+	});
+
+	it('emits terminal rebuild cleanup and reporting once after attempt exhaustion', async () => {
+		const scheduler = createFakeScheduler();
+		const startedAttempts: number[] = [];
+		let leaveCount = 0;
+		let terminalReportCount = 0;
+		const executor = createExecutor(
+			createFakePorts({
+				now: scheduler.now,
+				delay: scheduler.delay,
+				rebuildTransports: (command) => {
+					startedAttempts.push(command.attempt);
+					return Promise.reject(new Error(`rebuild failure ${command.attempt}`));
+				},
+				leaveVoiceSession: () => {
+					leaveCount += 1;
+					return Promise.resolve();
+				},
+				reportRebuildTerminalFailure: () => {
+					terminalReportCount += 1;
+				},
+			}),
+		);
+		const unregister = registerVoiceSessionCommandRunner((commands) => {
+			executor.execute(commands);
+		});
+
+		try {
+			dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+			await flushMicrotasks();
+			await scheduler.advanceBy(1_000);
+			await flushMicrotasks();
+			await scheduler.advanceBy(2_000);
+
+			expect(startedAttempts).toEqual([0, 1, 2]);
+			expect(getVoiceSessionState().phase.phase).toBe('failed');
+			expect(leaveCount).toBe(1);
+			expect(terminalReportCount).toBe(1);
 		} finally {
 			unregister();
 		}
@@ -513,6 +753,58 @@ describe('voice session command executor', () => {
 		await flushMicrotasks();
 
 		expect(rebuildCalls).toBe(1);
+	});
+
+	it('replays a disposed rebuild on remount without accepting the old completion', async () => {
+		const oldRebuild = createDeferred<void>();
+		const newRebuild = createDeferred<void>();
+		let oldSignal: AbortSignal | undefined;
+		let recoveredDesktopAudio = 0;
+		const oldExecutor = createExecutor(
+			createFakePorts({
+				rebuildTransports: (_command, context) => {
+					oldSignal = context.signal;
+					return oldRebuild.promise;
+				},
+			}),
+		);
+		const unregisterOld = registerVoiceSessionCommandRunner((commands) => {
+			oldExecutor.execute(commands);
+		});
+
+		dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+		unregisterOld();
+		oldExecutor.dispose();
+		expect(oldSignal?.aborted).toBe(true);
+
+		const newExecutor = createExecutor(
+			createFakePorts({
+				rebuildTransports: () => newRebuild.promise,
+				recoverDesktopAppAudio: () => {
+					recoveredDesktopAudio += 1;
+					return Promise.resolve();
+				},
+			}),
+		);
+		const unregisterNew = registerVoiceSessionCommandRunner((commands) => {
+			newExecutor.execute(commands);
+		});
+
+		try {
+			dispatchVoiceSession({ type: 'Resumed' });
+			const stateBeforeOldCompletion = getVoiceSessionState();
+
+			oldRebuild.resolve();
+			await flushMicrotasks();
+			expect(getVoiceSessionState()).toBe(stateBeforeOldCompletion);
+
+			newRebuild.resolve();
+			await flushMicrotasks();
+			expect(getVoiceSessionState().phase.phase).toBe('connected');
+			expect(recoveredDesktopAudio).toBe(1);
+		} finally {
+			unregisterNew();
+		}
 	});
 
 	it('runs a current final command and completes restore with the machine-defined result', async () => {
@@ -1255,11 +1547,14 @@ describe('voice session command executor', () => {
 	});
 
 	it('cannot resurrect a pre-reset operation into a post-reset session', async () => {
+		const scheduler = createFakeScheduler();
 		const startedRebuilds: Array<Extract<TVoiceSessionCommand, { type: 'RebuildTransports' }>> = [];
 		const rebuildDeferreds: Array<TDeferred<void>> = [];
 		const abortedCommandIds: number[] = [];
 		const executor = createExecutor(
 			createFakePorts({
+				now: scheduler.now,
+				delay: scheduler.delay,
 				rebuildTransports: (command, context) => {
 					const deferred = createDeferred();
 
@@ -1291,6 +1586,8 @@ describe('voice session command executor', () => {
 			resetVoiceSessionState();
 			expect(abortedCommandIds).toEqual([preResetRebuild.commandId]);
 			dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+			await flushMicrotasks();
+			await scheduler.advanceBy(2_000);
 
 			const postResetRebuild = startedRebuilds[1];
 
