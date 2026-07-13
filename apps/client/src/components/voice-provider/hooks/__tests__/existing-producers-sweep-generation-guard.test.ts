@@ -54,6 +54,7 @@ const createConsumeController = () =>
 		isLocalConsumerClosed: () => false,
 		observeLocalConsumerClosed: () => undefined,
 		attachLocalConsumer: () => () => undefined,
+		isProducerCurrent: () => true,
 		onConsumeStarted: () => undefined,
 		onConsumeSucceeded: () => undefined,
 		onConsumeFailed: () => undefined,

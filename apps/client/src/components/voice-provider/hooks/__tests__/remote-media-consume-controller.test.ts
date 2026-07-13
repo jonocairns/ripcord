@@ -138,6 +138,7 @@ const createHarness = () => {
 	const succeeded: { producerId: string; consumerId: string; operationToken: number }[] = [];
 	const failedTokens: number[] = [];
 	const consumerClosedIds: string[] = [];
+	const currentProducers = new Map<string, string>();
 	let localCreationError: unknown;
 
 	const controller = createRemoteMediaConsumeController<
@@ -181,6 +182,7 @@ const createHarness = () => {
 				detachedConsumerIds.push(consumer.id);
 			};
 		},
+		isProducerCurrent: (remoteId, kind, producerId) => currentProducers.get(`${remoteId}-${kind}`) === producerId,
 		onConsumeStarted: (_consumeRequest, operationToken) => {
 			startedTokens.push(operationToken);
 		},
@@ -195,6 +197,10 @@ const createHarness = () => {
 		},
 	});
 
+	const setCurrentProducer = (remoteId: number, kind: StreamKind, producerId: string): void => {
+		currentProducers.set(`${remoteId}-${kind}`, producerId);
+	};
+
 	return {
 		controller,
 		scheduler,
@@ -208,6 +214,7 @@ const createHarness = () => {
 		succeeded,
 		failedTokens,
 		consumerClosedIds,
+		setCurrentProducer,
 		setLocalCreationError: (error: unknown) => {
 			localCreationError = error;
 		},
@@ -221,9 +228,48 @@ const installTransport = (harness: ReturnType<typeof createHarness>, id = 'trans
 };
 
 describe('remote media consume controller', () => {
+	it('closes a server allocation that arrives after stop watching while consume is pending', async () => {
+		const harness = createHarness();
+		installTransport(harness);
+		harness.setCurrentProducer(7, StreamKind.VIDEO, 'producer-old');
+
+		const consume = harness.controller.consume(request(7, StreamKind.VIDEO, 'producer-old'));
+		harness.controller.cancel(7, StreamKind.VIDEO);
+		await consume;
+
+		harness.consumeDeferreds[0].resolve(allocation('producer-old', 'consumer-old'));
+		await flush();
+
+		expect(harness.closeCalls).toEqual([{ remoteId: 7, kind: StreamKind.VIDEO, consumerId: 'consumer-old' }]);
+		expect(harness.attachedConsumerIds).toEqual([]);
+		expect(harness.succeeded).toEqual([]);
+	});
+
+	it('closes a server allocation that arrives after the consume RPC times out', async () => {
+		const harness = createHarness();
+		installTransport(harness);
+		harness.setCurrentProducer(7, StreamKind.VIDEO, 'producer-timeout');
+
+		const consume = harness.controller.consume(request(7, StreamKind.VIDEO, 'producer-timeout'));
+		harness.scheduler.resolveDelay(10_000);
+		await consume;
+
+		harness.consumeDeferreds[0].resolve(allocation('producer-timeout', 'consumer-after-timeout'));
+		await flush();
+
+		expect(harness.closeCalls).toContainEqual({
+			remoteId: 7,
+			kind: StreamKind.VIDEO,
+			consumerId: 'consumer-after-timeout',
+		});
+		expect(harness.attachedConsumerIds).toEqual([]);
+		expect(harness.failedTokens).toEqual([1]);
+	});
+
 	it('closes local and server resources when stopped after attachment but before resume', async () => {
 		const harness = createHarness();
 		installTransport(harness);
+		harness.setCurrentProducer(8, StreamKind.VIDEO, 'producer-8');
 
 		const consume = harness.controller.consume(request(8, StreamKind.VIDEO, 'producer-8'));
 		harness.consumeDeferreds[0].resolve(allocation('producer-8', 'consumer-8'));
@@ -247,17 +293,29 @@ describe('remote media consume controller', () => {
 	it('cascades screen cancellation to an in-flight screen-audio consume', async () => {
 		const harness = createHarness();
 		installTransport(harness);
+		harness.setCurrentProducer(9, StreamKind.SCREEN_AUDIO, 'screen-audio-producer');
 
 		const consume = harness.controller.consume(request(9, StreamKind.SCREEN_AUDIO, 'screen-audio-producer'));
 		harness.controller.cancel(9, StreamKind.SCREEN);
 		await consume;
 
+		harness.consumeDeferreds[0].resolve(
+			allocation('screen-audio-producer', 'screen-audio-consumer', StreamKind.SCREEN_AUDIO),
+		);
+		await flush();
+
+		expect(harness.closeCalls).toContainEqual({
+			remoteId: 9,
+			kind: StreamKind.SCREEN_AUDIO,
+			consumerId: 'screen-audio-consumer',
+		});
 		expect(harness.attachedConsumerIds).toEqual([]);
 	});
 
 	it('starts a fresh re-watch without letting the cancelled completion clear it', async () => {
 		const harness = createHarness();
 		installTransport(harness);
+		harness.setCurrentProducer(10, StreamKind.VIDEO, 'producer-10');
 
 		const staleConsume = harness.controller.consume(request(10, StreamKind.VIDEO, 'producer-10'));
 		harness.controller.cancel(10, StreamKind.VIDEO);
@@ -268,15 +326,24 @@ describe('remote media consume controller', () => {
 		harness.resumeDeferreds[0].resolve();
 		await freshConsume;
 
+		harness.consumeDeferreds[0].resolve(allocation('producer-10', 'consumer-stale'));
 		await staleConsume;
+		await flush();
 
 		expect(harness.succeeded).toEqual([{ producerId: 'producer-10', consumerId: 'consumer-fresh', operationToken: 2 }]);
+		expect(harness.closeCalls).toContainEqual({
+			remoteId: 10,
+			kind: StreamKind.VIDEO,
+			consumerId: 'consumer-stale',
+		});
 		expect(harness.controller.getActiveConsumerProducerId(10, StreamKind.VIDEO)).toBe('producer-10');
 	});
 
 	it('invalidates every old operation when the consumer transport is replaced', async () => {
 		const harness = createHarness();
 		installTransport(harness, 'transport-old');
+		harness.setCurrentProducer(11, StreamKind.VIDEO, 'producer-11');
+		harness.setCurrentProducer(11, StreamKind.SCREEN_AUDIO, 'screen-audio-producer-11');
 
 		const staleVideoConsume = harness.controller.consume(request(11, StreamKind.VIDEO, 'producer-11'));
 		const staleAudioConsume = harness.controller.consume(
@@ -294,11 +361,50 @@ describe('remote media consume controller', () => {
 		await flush();
 
 		expect(harness.attachedConsumerIds).toEqual([]);
+		expect(harness.closeCalls).toContainEqual({
+			remoteId: 11,
+			kind: StreamKind.VIDEO,
+			consumerId: 'consumer-old-transport',
+		});
+		expect(harness.closeCalls).toContainEqual({
+			remoteId: 11,
+			kind: StreamKind.SCREEN_AUDIO,
+			consumerId: 'screen-audio-consumer-old-transport',
+		});
+	});
+
+	it('supersedes an in-flight operation when a known producer is replaced', async () => {
+		const harness = createHarness();
+		installTransport(harness);
+		harness.setCurrentProducer(12, StreamKind.VIDEO, 'producer-old');
+
+		const staleConsume = harness.controller.consume(request(12, StreamKind.VIDEO, 'producer-old'));
+		harness.setCurrentProducer(12, StreamKind.VIDEO, 'producer-new');
+		const freshConsume = harness.controller.consume(request(12, StreamKind.VIDEO, 'producer-new'));
+
+		harness.consumeDeferreds[0].resolve(allocation('producer-old', 'consumer-old'));
+		await staleConsume;
+		await flush();
+		expect(harness.attachedConsumerIds).toEqual([]);
+
+		harness.consumeDeferreds[1].resolve(allocation('producer-new', 'consumer-new'));
+		await flush();
+		harness.resumeDeferreds[0].resolve();
+		await freshConsume;
+
+		expect(harness.attachedConsumerIds).toEqual(['consumer-new']);
+		expect(harness.succeeded).toEqual([{ producerId: 'producer-new', consumerId: 'consumer-new', operationToken: 2 }]);
+		expect(harness.closeCalls).toContainEqual({
+			remoteId: 12,
+			kind: StreamKind.VIDEO,
+			consumerId: 'consumer-old',
+		});
 	});
 
 	it('closes the server allocation when local creation fails', async () => {
 		const harness = createHarness();
 		installTransport(harness);
+		harness.setCurrentProducer(13, StreamKind.VIDEO, 'producer-13');
 		harness.setLocalCreationError(new Error('local creation failed'));
 
 		const consume = harness.controller.consume(request(13, StreamKind.VIDEO, 'producer-13'));
@@ -316,6 +422,7 @@ describe('remote media consume controller', () => {
 	it('closes local and server resources when resume fails', async () => {
 		const harness = createHarness();
 		installTransport(harness);
+		harness.setCurrentProducer(14, StreamKind.VIDEO, 'producer-14');
 
 		const consume = harness.controller.consume(request(14, StreamKind.VIDEO, 'producer-14'));
 		harness.consumeDeferreds[0].resolve(allocation('producer-14', 'consumer-14'));
@@ -336,6 +443,7 @@ describe('remote media consume controller', () => {
 	it('cannot commit success after the installed local consumer closes', async () => {
 		const harness = createHarness();
 		installTransport(harness);
+		harness.setCurrentProducer(14, StreamKind.VIDEO, 'producer-closed-locally');
 
 		const consume = harness.controller.consume(request(14, StreamKind.VIDEO, 'producer-closed-locally'));
 		harness.consumeDeferreds[0].resolve(allocation('producer-closed-locally', 'consumer-closed-locally'));
@@ -356,6 +464,7 @@ describe('remote media consume controller', () => {
 	it('targets an older consumer close without closing the active replacement locally', async () => {
 		const harness = createHarness();
 		installTransport(harness);
+		harness.setCurrentProducer(14, StreamKind.VIDEO, 'producer-active');
 
 		const consume = harness.controller.consume(request(14, StreamKind.VIDEO, 'producer-active'));
 		harness.consumeDeferreds[0].resolve(allocation('producer-active', 'consumer-active'));
@@ -377,6 +486,7 @@ describe('remote media consume controller', () => {
 	it('closes a committed server consumer when stop cancellation removes local state first', async () => {
 		const harness = createHarness();
 		installTransport(harness);
+		harness.setCurrentProducer(14, StreamKind.VIDEO, 'producer-stop');
 
 		const consume = harness.controller.consume(request(14, StreamKind.VIDEO, 'producer-stop'));
 		harness.consumeDeferreds[0].resolve(allocation('producer-stop', 'consumer-stop'));
@@ -399,6 +509,7 @@ describe('remote media consume controller', () => {
 	it('uses deterministic retry delays and cancels retry work immediately', async () => {
 		const harness = createHarness();
 		installTransport(harness);
+		harness.setCurrentProducer(15, StreamKind.AUDIO, 'producer-15');
 
 		const consume = harness.controller.consume(request(15, StreamKind.AUDIO, 'producer-15'));
 		harness.consumeDeferreds[0].reject(new Error('consume failed'));
@@ -419,6 +530,7 @@ describe('remote media consume controller', () => {
 	it('times out resume with injected time and closes the allocation', async () => {
 		const harness = createHarness();
 		installTransport(harness);
+		harness.setCurrentProducer(16, StreamKind.VIDEO, 'producer-16');
 
 		const consume = harness.controller.consume(request(16, StreamKind.VIDEO, 'producer-16'));
 		harness.consumeDeferreds[0].resolve(allocation('producer-16', 'consumer-16'));

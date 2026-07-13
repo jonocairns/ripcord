@@ -62,6 +62,7 @@ type TUseTransportParams = {
 	) => void;
 	markConsumeFailed: (remoteId: number, kind: StreamKind, reason?: string, consumeGeneration?: number) => void;
 	markConsumerClosed: (remoteId: number, kind: StreamKind, consumerId?: string) => void;
+	isProducerCurrent: (remoteId: number, kind: StreamKind, producerId: string) => boolean;
 	onTransportFailure: () => void;
 };
 
@@ -78,6 +79,7 @@ const useTransports = ({
 	markConsumeSucceeded,
 	markConsumeFailed,
 	markConsumerClosed,
+	isProducerCurrent,
 	onTransportFailure,
 }: TUseTransportParams) => {
 	const producerTransport = useRef<Transport<AppData> | undefined>(undefined);
@@ -164,6 +166,7 @@ const useTransports = ({
 				addRemoteUserStream(remoteId, stream, kind);
 				return () => removeRemoteUserStream(remoteId, kind);
 			},
+			isProducerCurrent,
 			onConsumeStarted: (request, operationToken) => {
 				markConsumeStarted(
 					request.remoteId,

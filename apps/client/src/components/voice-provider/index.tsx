@@ -858,6 +858,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	} = useRemoteMediaSubscriptions();
 	const remoteMediaSubscriptionsRef = useLatestRef(remoteMediaSubscriptions);
 	const pendingStreamsRef = useLatestRef(pendingStreams);
+	const isRemoteMediaProducerCurrent = useCallback((remoteId: number, kind: StreamKind, producerId: string) => {
+		const subscription = remoteMediaSubscriptionsRef.current.get(getPendingStreamKey(remoteId, kind));
+
+		return (
+			subscription?.producerPresent === true &&
+			(subscription.producerId === undefined || subscription.producerId === producerId)
+		);
+	}, []);
 
 	const {
 		localAudioProducer,
@@ -936,6 +944,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		markConsumeSucceeded,
 		markConsumeFailed,
 		markConsumerClosed,
+		isProducerCurrent: isRemoteMediaProducerCurrent,
 		onTransportFailure,
 	});
 

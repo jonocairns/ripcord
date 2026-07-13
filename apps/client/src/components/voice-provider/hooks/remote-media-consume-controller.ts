@@ -50,6 +50,7 @@ type TRemoteMediaConsumeControllerPorts<
 		request: Pick<TRemoteMediaConsumeRequest<TRtpCapabilities>, 'remoteId' | 'kind'>,
 		consumer: TLocalConsumer,
 	) => () => void;
+	isProducerCurrent: (remoteId: number, kind: StreamKind, producerId: string) => boolean;
 	onConsumeStarted: (request: TRemoteMediaConsumeRequest<TRtpCapabilities>, operationToken: number) => void;
 	onConsumeSucceeded: (
 		request: TRemoteMediaConsumeRequest<TRtpCapabilities>,
@@ -119,13 +120,31 @@ const createRemoteMediaConsumeController = <
 	let disposed = false;
 	const operations = new Map<string, TConsumeOperation<TTransport, TRtpCapabilities>>();
 	const activeConsumers = new Map<string, TActiveConsumer<TLocalConsumer>>();
+	const cleanupTasks = new Set<Promise<void>>();
 	const rpcTimeoutMs = ports.rpcTimeoutMs ?? CONSUME_ATTEMPT_RPC_TIMEOUT_MS;
 
 	const log = (message: string, context?: Record<string, unknown>): void => {
 		ports.log?.(message, context);
 	};
 
-	const waitForBoundary = <T>(operation: Promise<T>, signal: AbortSignal): Promise<T> =>
+	const trackCleanupTask = (task: Promise<void>): void => {
+		cleanupTasks.add(task);
+		void task.then(
+			() => {
+				cleanupTasks.delete(task);
+			},
+			(error: unknown) => {
+				cleanupTasks.delete(task);
+				log('Late remote consumer cleanup failed', { error });
+			},
+		);
+	};
+
+	const waitForBoundary = <T>(
+		operation: Promise<T>,
+		signal: AbortSignal,
+		onLateSuccess?: (value: T) => Promise<void>,
+	): Promise<T> =>
 		new Promise<T>((resolve, reject) => {
 			let settled = false;
 			const timeoutAbortController = new AbortController();
@@ -150,7 +169,12 @@ const createRemoteMediaConsumeController = <
 
 			operation.then(
 				(value) => {
-					if (settled) return;
+					if (settled) {
+						if (onLateSuccess) {
+							trackCleanupTask(onLateSuccess(value));
+						}
+						return;
+					}
 
 					settled = true;
 					cleanup();
@@ -243,6 +267,21 @@ const createRemoteMediaConsumeController = <
 		currentTransport === operation.transport &&
 		!ports.isTransportClosed(operation.transport);
 
+	const isProducerCurrent = (
+		operation: TConsumeOperation<TTransport, TRtpCapabilities>,
+		producerId: string,
+	): boolean => {
+		if (operation.request.expectedProducerId !== undefined && operation.request.expectedProducerId !== producerId) {
+			return false;
+		}
+
+		return ports.isProducerCurrent(operation.request.remoteId, operation.request.kind, producerId);
+	};
+
+	const isExpectedProducerCurrent = (operation: TConsumeOperation<TTransport, TRtpCapabilities>): boolean =>
+		operation.request.expectedProducerId === undefined ||
+		ports.isProducerCurrent(operation.request.remoteId, operation.request.kind, operation.request.expectedProducerId);
+
 	const cancelOperation = (operation: TConsumeOperation<TTransport, TRtpCapabilities>): void => {
 		if (operations.get(operation.key) === operation) {
 			operations.delete(operation.key);
@@ -273,13 +312,22 @@ const createRemoteMediaConsumeController = <
 		};
 
 		try {
-			if (!isOperationCurrent(operation)) return 'cancelled';
+			if (!isOperationCurrent(operation) || !isExpectedProducerCurrent(operation)) return 'cancelled';
 
 			const consumePromise = ports.consumeOnServer(request, ports.getTransportId(operation.transport));
-			allocation = await waitForBoundary(consumePromise, operation.abortController.signal);
+			allocation = await waitForBoundary(consumePromise, operation.abortController.signal, async (lateAllocation) => {
+				await closeServerConsumer(
+					{ remoteId: request.remoteId, kind: request.kind, consumerId: lateAllocation.consumerId },
+					'late consume allocation',
+				);
+			});
 			allocationOwned = true;
 
-			if (allocation.consumerKind !== request.kind || !isOperationCurrent(operation)) {
+			if (
+				allocation.consumerKind !== request.kind ||
+				!isOperationCurrent(operation) ||
+				!isProducerCurrent(operation, allocation.producerId)
+			) {
 				await cleanupServerAllocation('consume allocation superseded before local creation');
 				return 'cancelled';
 			}
@@ -290,9 +338,17 @@ const createRemoteMediaConsumeController = <
 			}
 
 			const localConsumerPromise = ports.createLocalConsumer(operation.transport, allocation);
-			localConsumer = await waitForBoundary(localConsumerPromise, operation.abortController.signal);
+			localConsumer = await waitForBoundary(
+				localConsumerPromise,
+				operation.abortController.signal,
+				async (lateLocalConsumer) => {
+					if (!ports.isLocalConsumerClosed(lateLocalConsumer)) {
+						ports.closeLocalConsumer(lateLocalConsumer);
+					}
+				},
+			);
 
-			if (!isOperationCurrent(operation)) {
+			if (!isOperationCurrent(operation) || !isProducerCurrent(operation, allocation.producerId)) {
 				if (!ports.isLocalConsumerClosed(localConsumer)) {
 					ports.closeLocalConsumer(localConsumer);
 				}
@@ -327,7 +383,7 @@ const createRemoteMediaConsumeController = <
 				operation.abortController.signal,
 			);
 
-			if (!isOperationCurrent(operation)) {
+			if (!isOperationCurrent(operation) || !isProducerCurrent(operation, allocation.producerId)) {
 				cleanupActiveConsumer(activeRecord, { closeLocal: true, notifyLedger: true });
 				await cleanupServerAllocation('consume superseded before success commit');
 				return 'cancelled';
@@ -354,7 +410,11 @@ const createRemoteMediaConsumeController = <
 
 			await cleanupServerAllocation('consume attempt failed');
 
-			if (error instanceof VoiceRemoteMediaConsumeCancelledError || !isOperationCurrent(operation)) {
+			if (
+				error instanceof VoiceRemoteMediaConsumeCancelledError ||
+				!isOperationCurrent(operation) ||
+				!isExpectedProducerCurrent(operation)
+			) {
 				return 'cancelled';
 			}
 
@@ -378,7 +438,11 @@ const createRemoteMediaConsumeController = <
 
 		const key = getConsumeOperationKey(request.remoteId, request.kind);
 		const existingOperation = operations.get(key);
-		if (existingOperation && !request.restartExisting) {
+		const producerChanged =
+			request.expectedProducerId !== undefined &&
+			request.expectedProducerId !== existingOperation?.request.expectedProducerId;
+
+		if (existingOperation && !request.restartExisting && !producerChanged) {
 			log('Consume operation already in progress', { remoteId: request.remoteId, kind: request.kind });
 			return;
 		}
@@ -458,7 +522,9 @@ const createRemoteMediaConsumeController = <
 		const activeConsumer = activeConsumers.get(key);
 		if (activeConsumer) {
 			cleanupActiveConsumer(activeConsumer, { closeLocal: true, notifyLedger: true });
-			void closeServerConsumer({ remoteId, kind, consumerId: activeConsumer.consumerId }, 'cancel active consumer');
+			trackCleanupTask(
+				closeServerConsumer({ remoteId, kind, consumerId: activeConsumer.consumerId }, 'cancel active consumer'),
+			);
 		}
 	};
 
