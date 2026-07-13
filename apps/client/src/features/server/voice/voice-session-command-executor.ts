@@ -1,5 +1,18 @@
-import type { TVoiceSessionCommand, TWatchedRemoteStreamsSnapshot } from './voice-session-machine';
-import { dispatchVoiceSession, isVoiceSessionCommandCurrent, subscribeVoiceSessionState } from './voice-session-store';
+import { getVoiceReconnectRetryDelayMs } from './reconnect-policy';
+import {
+	selectReconnectAuthenticated,
+	selectReconnectingSince,
+	type TVoiceSessionCommand,
+	type TVoiceSessionState,
+	type TWatchedRemoteStreamsSnapshot,
+} from './voice-session-machine';
+import {
+	dispatchVoiceSession,
+	isFinalVoiceSessionCommandCurrent,
+	isVoiceSessionCommandCurrent,
+	selectVoiceSessionState,
+	subscribeVoiceSessionState,
+} from './voice-session-store';
 
 // The voice session command executor owns the asynchronous lifecycle of
 // machine-emitted commands: per-command AbortControllers, stale-command
@@ -9,10 +22,10 @@ import { dispatchVoiceSession, isVoiceSessionCommandCurrent, subscribeVoiceSessi
 // and every concrete recovery operation arrive through injected ports, so the
 // whole lifecycle is testable without real timers or media stacks.
 //
-// This module is NOT registered as the production command runner yet. The
-// embedded VoiceProvider runner still owns command execution; slices C2–C6 of
-// docs/voice/voice-session-execution-extraction-plan.md move commands here and
-// cut the provider over.
+// VoiceProvider registers this executor for snapshot, wait, watch-intent, and
+// final commands. Its temporary legacy delegate still owns transport rebuild
+// and voice restore execution until slices C4–C6 complete the cutover described
+// in docs/voice/voice-session-execution-extraction-plan.md.
 
 type TRebuildTransportsCommand = Extract<TVoiceSessionCommand, { type: 'RebuildTransports' }>;
 type TRestoreVoiceSessionCommand = Extract<TVoiceSessionCommand, { type: 'RestoreVoiceSession' }>;
@@ -51,6 +64,7 @@ type TVoiceSessionExecutorPorts = {
 	recoverDesktopAppAudio: () => Promise<void>;
 	leaveVoiceSession: (channelId?: number) => Promise<void>;
 	clearFailedSession: (command: TClearFailedSessionCommand) => Promise<void>;
+	reportCommandError: (command: TVoiceSessionCommand, error: unknown) => void;
 };
 
 type TVoiceSessionCommandExecutor = {
@@ -81,10 +95,19 @@ const isRecoveryStepCommand = (command: TVoiceSessionCommand): boolean => {
 	}
 };
 
+const isFinalCommand = (
+	command: TVoiceSessionCommand,
+): command is Extract<
+	TVoiceSessionCommand,
+	{ type: 'RecoverDesktopAppAudio' | 'LeaveVoiceSession' | 'ClearFailedSession' }
+> => !isRecoveryStepCommand(command);
+
 type TActiveVoiceSessionOperation = {
 	command: TVoiceSessionCommand;
 	controller: AbortController;
 };
+
+const VOICE_RECONNECT_WAIT_POLL_MS = 250;
 
 const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): TVoiceSessionCommandExecutor => {
 	// Keyed by commandId, which the machine mints monotonically.
@@ -106,6 +129,169 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 	const unsubscribeFromStore = subscribeVoiceSessionState(() => {
 		abortSupersededOperations();
 	});
+
+	const getLiveReconnectDeadline = (command: { generation: number; expiresAt: number }): number =>
+		selectVoiceSessionState((state) => {
+			const { phase } = state;
+
+			return phase.phase === 'reconnecting' && phase.generation === command.generation
+				? phase.pending.expiresAt
+				: command.expiresAt;
+		});
+
+	const waitForDelay = async (milliseconds: number, signal: AbortSignal): Promise<'elapsed' | 'cancelled'> => {
+		try {
+			await ports.delay(milliseconds, signal);
+			return 'elapsed';
+		} catch (error) {
+			if (signal.aborted) {
+				return 'cancelled';
+			}
+
+			throw error;
+		}
+	};
+
+	const waitForOnline = async (
+		command: Extract<TVoiceSessionCommand, { type: 'WaitOnline' | 'RetryDelay' }>,
+		context: TVoiceSessionCommandContext,
+	): Promise<'online' | 'expired' | 'cancelled'> => {
+		while (context.isCurrent()) {
+			if (ports.isOnline()) {
+				return 'online';
+			}
+
+			const remainingMs = getLiveReconnectDeadline(command) - ports.now();
+			if (remainingMs < 0) {
+				return 'expired';
+			}
+
+			// Preserve the legacy strict expiry boundary: equality still gets one
+			// opportunity to observe connectivity before the window expires.
+			const outcome = await waitForDelay(Math.min(remainingMs + 1, VOICE_RECONNECT_WAIT_POLL_MS), context.signal);
+			if (outcome === 'cancelled') {
+				return 'cancelled';
+			}
+		}
+
+		return 'cancelled';
+	};
+
+	const waitForStateChangeOrDeadline = async (
+		milliseconds: number,
+		signal: AbortSignal,
+		stateBeforeSubscribe: TVoiceSessionState,
+	): Promise<'stateChanged' | 'deadline' | 'cancelled'> => {
+		const controller = new AbortController();
+		const abortChild = (): void => {
+			controller.abort(signal.reason);
+		};
+
+		signal.addEventListener('abort', abortChild, { once: true });
+		if (signal.aborted) {
+			abortChild();
+		}
+
+		let unsubscribe = (): void => {};
+		const stateChanged = new Promise<'stateChanged' | 'cancelled'>((resolve) => {
+			unsubscribe = subscribeVoiceSessionState(() => {
+				resolve('stateChanged');
+			});
+			// Guard a state update that lands after the caller's initial read but
+			// before subscription. Store state is immutable, so reference identity is
+			// a sufficient version check.
+			if (selectVoiceSessionState((state) => state) !== stateBeforeSubscribe) {
+				resolve('stateChanged');
+			}
+			controller.signal.addEventListener(
+				'abort',
+				() => {
+					resolve('cancelled');
+				},
+				{ once: true },
+			);
+		});
+		const deadline = waitForDelay(milliseconds, controller.signal).then((outcome) =>
+			outcome === 'elapsed' ? ('deadline' as const) : ('cancelled' as const),
+		);
+
+		try {
+			return await Promise.race([stateChanged, deadline]);
+		} finally {
+			unsubscribe();
+			controller.abort();
+			signal.removeEventListener('abort', abortChild);
+		}
+	};
+
+	const waitForAuthenticated = async (
+		command: Extract<TVoiceSessionCommand, { type: 'WaitAuth' }>,
+		context: TVoiceSessionCommandContext,
+	): Promise<'authenticated' | 'expired' | 'cleared' | 'cancelled'> => {
+		while (context.isCurrent()) {
+			const stateBeforeSubscribe = selectVoiceSessionState((state) => state);
+			const reconnectingSince = selectReconnectingSince(stateBeforeSubscribe);
+			if (reconnectingSince === undefined) {
+				return 'cleared';
+			}
+
+			const authenticated = selectReconnectAuthenticated(stateBeforeSubscribe);
+			if (authenticated) {
+				// The legacy fast path accepted an already-authenticated socket before
+				// consulting expiry; keep that behavior during this mechanical move.
+				return 'authenticated';
+			}
+
+			const remainingMs = getLiveReconnectDeadline(command) - ports.now();
+			if (remainingMs <= 0) {
+				return 'expired';
+			}
+
+			const outcome = await waitForStateChangeOrDeadline(remainingMs, context.signal, stateBeforeSubscribe);
+			if (outcome === 'cancelled') {
+				return 'cancelled';
+			}
+		}
+
+		return 'cancelled';
+	};
+
+	const waitForRetryDelay = async (
+		command: Extract<TVoiceSessionCommand, { type: 'RetryDelay' }>,
+		context: TVoiceSessionCommandContext,
+	): Promise<'ready' | 'expired' | 'cancelled'> => {
+		let remainingDelayMs = getVoiceReconnectRetryDelayMs(command.attempt, ports.random());
+
+		while (remainingDelayMs > 0 && context.isCurrent()) {
+			const remainingSessionMs = getLiveReconnectDeadline(command) - ports.now();
+			if (remainingSessionMs < 0) {
+				return 'expired';
+			}
+
+			if (!ports.isOnline()) {
+				const onlineOutcome = await waitForOnline(command, context);
+				if (onlineOutcome !== 'online') {
+					return onlineOutcome;
+				}
+
+				continue;
+			}
+
+			const waitMs = Math.min(remainingDelayMs, VOICE_RECONNECT_WAIT_POLL_MS);
+			const outcome = await waitForDelay(waitMs, context.signal);
+			if (outcome === 'cancelled') {
+				return 'cancelled';
+			}
+
+			remainingDelayMs -= waitMs;
+		}
+
+		if (!context.isCurrent()) {
+			return 'cancelled';
+		}
+
+		return ports.now() > getLiveReconnectDeadline(command) ? 'expired' : 'ready';
+	};
 
 	// Result events are dispatched only while the command is still current;
 	// a late settlement from an aborted operation is dropped here (the reducer
@@ -183,13 +369,45 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 
 				return;
 			}
-			case 'WaitOnline':
-			case 'WaitAuth':
-			case 'RetryDelay':
-				// C3 implements these from the delay/isOnline/random ports and direct
-				// store subscriptions. The executor is not the production runner yet,
-				// so nothing is stranded by leaving them unexecuted here.
+			case 'WaitOnline': {
+				const outcome = await waitForOnline(command, context);
+
+				if (outcome !== 'cancelled' && context.isCurrent()) {
+					dispatchVoiceSession({
+						type: outcome === 'online' ? 'OnlineReady' : 'OnlineExpired',
+						commandId: command.commandId,
+						generation: command.generation,
+					});
+				}
+
 				return;
+			}
+			case 'WaitAuth': {
+				const outcome = await waitForAuthenticated(command, context);
+
+				if (outcome !== 'cancelled' && context.isCurrent()) {
+					dispatchVoiceSession({
+						type: outcome === 'authenticated' ? 'AuthReady' : outcome === 'cleared' ? 'AuthCleared' : 'AuthExpired',
+						commandId: command.commandId,
+						generation: command.generation,
+					});
+				}
+
+				return;
+			}
+			case 'RetryDelay': {
+				const outcome = await waitForRetryDelay(command, context);
+
+				if (outcome !== 'cancelled' && context.isCurrent()) {
+					dispatchVoiceSession({
+						type: outcome === 'ready' ? 'RetryDelayElapsed' : 'RetryDelayExpired',
+						commandId: command.commandId,
+						generation: command.generation,
+					});
+				}
+
+				return;
+			}
 			case 'RestoreWatchIntent': {
 				ports.restoreWatchIntent(command.snapshot);
 
@@ -222,6 +440,9 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 		if (isRecoveryStepCommand(command) && !isVoiceSessionCommandCurrent(command)) {
 			return;
 		}
+		if (isFinalCommand(command) && !isFinalVoiceSessionCommandCurrent(command)) {
+			return;
+		}
 
 		// Normally the store-listener sweep already ran inside the superseding
 		// dispatch; this covers execute() being invoked outside a dispatch.
@@ -237,10 +458,10 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 			: (): boolean => !controller.signal.aborted;
 
 		void runCommandEffect(command, { signal: controller.signal, isCurrent })
-			.catch(() => {
+			.catch((error: unknown) => {
 				// Port rejections without a machine-defined failure event (final
 				// commands, snapshot capture) must not strand executor bookkeeping.
-				// C2 adds error reporting when these handlers take production traffic.
+				ports.reportCommandError(command, error);
 			})
 			.finally(() => {
 				if (activeOperations.get(command.commandId) === operation) {

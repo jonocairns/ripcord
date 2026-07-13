@@ -95,6 +95,9 @@ const selectVoiceSessionState = <T>(selector: TVoiceSessionSelector<T>): T => se
 const isVoiceSessionCommandCurrent = (command: { commandId: number; generation: number }): boolean =>
 	isCurrentVoiceSessionCommand(voiceSessionState, command);
 
+const isFinalVoiceSessionCommandCurrent = (command: TVoiceSessionCommand): boolean =>
+	shouldFlushBufferedVoiceSessionCommand(voiceSessionState, command);
+
 const subscribeVoiceSession = (listener: TVoiceSessionListener): (() => void) => {
 	listeners.add(listener);
 
@@ -131,6 +134,7 @@ export type { TVoiceSessionCommandRunner, TVoiceSessionListener, TVoiceSessionSe
 export {
 	dispatchVoiceSession,
 	getVoiceSessionState,
+	isFinalVoiceSessionCommandCurrent,
 	isVoiceSessionCommandCurrent,
 	registerVoiceSessionCommandRunner,
 	resetVoiceSessionState,

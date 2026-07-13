@@ -35,14 +35,13 @@ import {
 } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
 import { setVoiceProviderCleanupHandler } from '@/features/server/voice/provider-cleanup';
-import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordinator';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import {
 	drainCancelledVoiceReconnectOperation,
-	getVoiceReconnectRetryDelayMs,
 	VoiceReconnectTimeoutError,
 } from '@/features/server/voice/reconnect-policy';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
+import { createVoiceSessionCommandExecutor } from '@/features/server/voice/voice-session-command-executor';
 import {
 	selectVoiceSessionConnectionStatus,
 	type TVoiceSessionCommand,
@@ -634,7 +633,42 @@ const RECOVERY_TIMEOUT_MS = 12_000;
 const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
 const RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS = 350;
 const VOICE_RECONNECT_TIMEOUT_MS = 12_000;
-const VOICE_RECONNECT_WAIT_POLL_MS = 250;
+
+const getVoiceSessionCommandOwner = (command: TVoiceSessionCommand): 'executor' | 'legacy' => {
+	switch (command.type) {
+		case 'CaptureRecoverySnapshot':
+		case 'WaitOnline':
+		case 'WaitAuth':
+		case 'RetryDelay':
+		case 'RestoreWatchIntent':
+		case 'RecoverDesktopAppAudio':
+		case 'LeaveVoiceSession':
+		case 'ClearFailedSession':
+			return 'executor';
+		case 'RebuildTransports':
+		case 'RestoreVoiceSession':
+			return 'legacy';
+	}
+};
+
+const delayVoiceSessionCommand = (milliseconds: number, signal: AbortSignal): Promise<void> =>
+	new Promise((resolve, reject) => {
+		if (signal.aborted) {
+			reject(signal.reason);
+			return;
+		}
+
+		const timeoutId = window.setTimeout(() => {
+			signal.removeEventListener('abort', handleAbort);
+			resolve();
+		}, milliseconds);
+		const handleAbort = (): void => {
+			window.clearTimeout(timeoutId);
+			reject(signal.reason);
+		};
+
+		signal.addEventListener('abort', handleAbort, { once: true });
+	});
 
 const withTimeout = <T,>(
 	promise: Promise<T>,
@@ -3683,33 +3717,41 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[isCurrentVoiceSessionCommand],
 	);
 
-	const leaveAfterFailedTransportRecovery = useCallback((command: TVoiceSessionCommand): void => {
-		if (command.type !== 'LeaveVoiceSession') {
+	const requestRecoveryFailureLeave = useCallback(async (): Promise<void> => {
+		// Offline terminal cleanup deliberately leaves the server seat to
+		// disconnect grace; only a failed request on a live socket is reportable.
+		if (!useServerStore.getState().connected) {
 			return;
 		}
 
-		if (isConnectedRef.current && command.channelId !== undefined) {
-			void leaveVoiceSessionAfterRecoveryFailure().then((didLeave) => {
-				if (!didLeave) {
-					logVoice('Failed to send voice.leave after unrecoverable transport failure');
-				}
-			});
+		const didLeave = await leaveVoiceSessionAfterRecoveryFailure();
+		if (!didLeave && useServerStore.getState().connected) {
+			throw new Error('Failed to send voice.leave after voice recovery failure');
 		}
-
-		if (currentVoiceChannelIdRef.current !== undefined) {
-			useServerStore.getState().setCurrentVoiceChannelId(undefined);
-			useServerStore.getState().updateOwnVoiceState({
-				webcamEnabled: false,
-				sharingScreen: false,
-			});
-			useServerStore.getState().setPinnedCard(undefined);
-			playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
-			toast.info('Voice connection was lost. Rejoin the voice channel manually.');
-		}
-
-		voiceCleanupRef.current?.();
-		hasHandledTransportFailureRef.current = false;
 	}, []);
+
+	const leaveAfterFailedTransportRecovery = useCallback(
+		async (channelId?: number): Promise<void> => {
+			const leaveRequest = channelId === undefined ? undefined : requestRecoveryFailureLeave();
+
+			if (currentVoiceChannelIdRef.current !== undefined) {
+				useServerStore.getState().setCurrentVoiceChannelId(undefined);
+				useServerStore.getState().updateOwnVoiceState({
+					webcamEnabled: false,
+					sharingScreen: false,
+				});
+				useServerStore.getState().setPinnedCard(undefined);
+				playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+				toast.info('Voice connection was lost. Rejoin the voice channel manually.');
+			}
+
+			voiceCleanupRef.current?.();
+			hasHandledTransportFailureRef.current = false;
+
+			await leaveRequest;
+		},
+		[requestRecoveryFailureLeave],
+	);
 
 	const runRebuildTransportCommand = useCallback(
 		async (command: TVoiceSessionCommand): Promise<void> => {
@@ -4035,191 +4077,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		],
 	);
 
-	// Every WS drop re-captures the reconnect intent with a fresh expiresAt (see
-	// captureVoiceReconnectIntentForCurrentSession), so an in-flight wait must
-	// honour the machine's CURRENT deadline rather than the one frozen into the
-	// command when it was emitted. Otherwise an offline window longer than one
-	// intent TTL expires recovery even though repeated drops kept the intent
-	// fresh — the legacy loop re-read the pending intent at every decision point
-	// and recovered from >60s offline; this getter preserves that behaviour.
-	const liveReconnectDeadline = useCallback((command: { generation: number; expiresAt: number }): number => {
-		const { phase } = getVoiceSessionState();
-
-		return phase.phase === 'reconnecting' && phase.generation === command.generation
-			? phase.pending.expiresAt
-			: command.expiresAt;
-	}, []);
-
-	const waitForVoiceReconnectOnline = useCallback(async (getExpiresAt: () => number): Promise<'online' | 'expired'> => {
-		if (isVoiceReconnectOnline()) {
-			return 'online';
-		}
-
-		if (Date.now() > getExpiresAt()) {
-			return 'expired';
-		}
-
-		logDebug('Voice reconnect offline pause');
-
-		while (!isVoiceReconnectOnline()) {
-			if (Date.now() > getExpiresAt()) {
-				return 'expired';
-			}
-
-			await new Promise<void>((resolve) => setTimeout(resolve, VOICE_RECONNECT_WAIT_POLL_MS));
-		}
-
-		logDebug('Voice reconnect offline resume');
-
-		return 'online';
-	}, []);
-
-	// Blocks a restore attempt until the reconnected WS has re-authenticated
-	// (joinServer completed). A socket that dropped again mid-recovery starts
-	// unauthenticated, so firing restoreOrJoin at it just yields UNAUTHORIZED —
-	// this waits for the next joinServer instead. Resolves early if recovery is
-	// cleared or the reconnect window expires.
-	const waitForVoiceReconnectAuthenticated = useCallback(
-		async (getExpiresAt: () => number): Promise<'authenticated' | 'expired' | 'cleared'> => {
-			const reconnectState = useVoiceReconnectStore.getState();
-
-			// Recovery was already torn down — signal the caller to bow out quietly
-			// rather than fall through to the "pending missing" expiry path.
-			if (reconnectState.reconnectingSince === undefined) {
-				return 'cleared';
-			}
-
-			if (reconnectState.reconnectAuthenticated) {
-				return 'authenticated';
-			}
-
-			if (Date.now() > getExpiresAt()) {
-				return 'expired';
-			}
-
-			logDebug('Voice reconnect waiting for WS re-authentication');
-
-			return await new Promise<'authenticated' | 'expired' | 'cleared'>((resolve) => {
-				let timeoutId: number | undefined;
-				let settled = false;
-
-				const finish = (result: 'authenticated' | 'expired' | 'cleared') => {
-					if (settled) {
-						return;
-					}
-					settled = true;
-					unsubscribe();
-					if (timeoutId !== undefined) {
-						window.clearTimeout(timeoutId);
-					}
-					resolve(result);
-				};
-
-				// The deadline slides as repeated WS drops refresh the pending intent,
-				// so on expiry re-read it and re-arm instead of finishing outright.
-				const armExpiryTimer = () => {
-					const remainingMs = getExpiresAt() - Date.now();
-
-					if (remainingMs <= 0) {
-						finish('expired');
-						return;
-					}
-
-					timeoutId = window.setTimeout(armExpiryTimer, remainingMs);
-				};
-
-				const unsubscribe = useVoiceReconnectStore.subscribe((state) => {
-					if (state.reconnectingSince === undefined) {
-						finish('cleared');
-						return;
-					}
-
-					if (state.reconnectAuthenticated) {
-						finish(Date.now() > getExpiresAt() ? 'expired' : 'authenticated');
-					}
-				});
-
-				armExpiryTimer();
-
-				// Guard the race where state changed between the initial read and subscribe.
-				const currentState = useVoiceReconnectStore.getState();
-				if (currentState.reconnectingSince === undefined) {
-					finish('cleared');
-				} else if (currentState.reconnectAuthenticated) {
-					finish('authenticated');
-				}
-			});
-		},
-		[],
-	);
-
-	const waitForVoiceReconnectDelay = useCallback(
-		async (delayMs: number, getExpiresAt: () => number): Promise<'ready' | 'expired'> => {
-			let remainingDelayMs = delayMs;
-
-			while (remainingDelayMs > 0) {
-				if (Date.now() > getExpiresAt()) {
-					return 'expired';
-				}
-
-				if (!isVoiceReconnectOnline()) {
-					const outcome = await waitForVoiceReconnectOnline(getExpiresAt);
-
-					if (outcome === 'expired') {
-						return 'expired';
-					}
-
-					continue;
-				}
-
-				const waitMs = Math.min(remainingDelayMs, VOICE_RECONNECT_WAIT_POLL_MS);
-				await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
-				remainingDelayMs -= waitMs;
-			}
-
-			return Date.now() > getExpiresAt() ? 'expired' : 'ready';
-		},
-		[waitForVoiceReconnectOnline],
-	);
-
-	const runWaitOnlineCommand = useCallback(
-		async (command: TVoiceSessionCommand): Promise<void> => {
-			if (command.type !== 'WaitOnline') {
-				return;
-			}
-
-			const outcome = await waitForVoiceReconnectOnline(() => liveReconnectDeadline(command));
-
-			dispatchIfCurrentVoiceSessionCommand(command, () => {
-				dispatchVoiceSession({
-					type: outcome === 'online' ? 'OnlineReady' : 'OnlineExpired',
-					commandId: command.commandId,
-					generation: command.generation,
-				});
-			});
-		},
-		[dispatchIfCurrentVoiceSessionCommand, liveReconnectDeadline, waitForVoiceReconnectOnline],
-	);
-
-	const runWaitAuthCommand = useCallback(
-		async (command: TVoiceSessionCommand): Promise<void> => {
-			if (command.type !== 'WaitAuth') {
-				return;
-			}
-
-			const outcome = await waitForVoiceReconnectAuthenticated(() => liveReconnectDeadline(command));
-
-			dispatchIfCurrentVoiceSessionCommand(command, () => {
-				dispatchVoiceSession({
-					type: outcome === 'authenticated' ? 'AuthReady' : outcome === 'cleared' ? 'AuthCleared' : 'AuthExpired',
-					commandId: command.commandId,
-					generation: command.generation,
-				});
-			});
-		},
-		[dispatchIfCurrentVoiceSessionCommand, liveReconnectDeadline, waitForVoiceReconnectAuthenticated],
-	);
-
 	const runRestoreVoiceSessionCommand = useCallback(
 		async (command: TVoiceSessionCommand): Promise<void> => {
 			if (command.type !== 'RestoreVoiceSession') {
@@ -4397,105 +4254,25 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		],
 	);
 
-	const runRetryDelayCommand = useCallback(
-		async (command: TVoiceSessionCommand): Promise<void> => {
-			if (command.type !== 'RetryDelay') {
-				return;
-			}
+	const clearFailedVoiceSession = useCallback(
+		async (command: Extract<TVoiceSessionCommand, { type: 'ClearFailedSession' }>): Promise<void> => {
+			// restoreOrJoin already bound a server-side session this cycle; without an
+			// explicit leave the runtime would keep us resident in the channel even
+			// though the client is giving up.
+			const leaveRequest = command.leaveServerSession ? requestRecoveryFailureLeave() : undefined;
 
-			const delayMs = getVoiceReconnectRetryDelayMs(command.attempt, Math.random());
+			clearOwnVoiceSessionAfterReconnectFailure(command.reason);
+			voiceCleanupRef.current?.();
 
-			logDebug('Voice reconnect retry delay', {
-				attempt: command.attempt + 1,
-				delayMs,
-			});
-
-			const outcome = await waitForVoiceReconnectDelay(delayMs, () => liveReconnectDeadline(command));
-
-			dispatchIfCurrentVoiceSessionCommand(command, () => {
-				dispatchVoiceSession({
-					type: outcome === 'ready' ? 'RetryDelayElapsed' : 'RetryDelayExpired',
-					commandId: command.commandId,
-					generation: command.generation,
-				});
-			});
+			await leaveRequest;
 		},
-		[dispatchIfCurrentVoiceSessionCommand, liveReconnectDeadline, waitForVoiceReconnectDelay],
+		[requestRecoveryFailureLeave],
 	);
 
-	const runRestoreWatchIntentCommand = useCallback(
+	const runLegacyVoiceSessionCommand = useCallback(
 		(command: TVoiceSessionCommand): void => {
-			if (command.type !== 'RestoreWatchIntent') {
-				return;
-			}
-
-			if (!isCurrentVoiceSessionCommand(command)) {
-				return;
-			}
-
-			// The provider-local ledger is recreated on remount. init() normally
-			// rehydrates before producer reconciliation, but a remount after restore
-			// succeeded resumes directly at this command and therefore has no init()
-			// pass to rebuild the ledger. Reapplying is safe because the ledger helper
-			// never overwrites an existing slot, preserving stop intent from this mount.
-			rehydrateWatchIntentOnly(command.snapshot);
-
-			dispatchIfCurrentVoiceSessionCommand(command, () => {
-				dispatchVoiceSession({
-					type: 'WatchIntentRehydrated',
-					commandId: command.commandId,
-					generation: command.generation,
-					now: Date.now(),
-				});
-			});
-		},
-		[dispatchIfCurrentVoiceSessionCommand, isCurrentVoiceSessionCommand, rehydrateWatchIntentOnly],
-	);
-
-	const clearFailedVoiceSession = useCallback((command: TVoiceSessionCommand): void => {
-		if (command.type !== 'ClearFailedSession') {
-			return;
-		}
-
-		// restoreOrJoin already bound a server-side session this cycle; without an
-		// explicit leave the runtime would keep us resident in the channel even
-		// though the client is giving up.
-		if (command.leaveServerSession) {
-			void leaveVoiceSessionAfterRecoveryFailure().then((didLeave) => {
-				if (!didLeave) {
-					logDebug('Voice reconnect terminal leave failed');
-				}
-			});
-		}
-
-		clearOwnVoiceSessionAfterReconnectFailure(command.reason);
-		voiceCleanupRef.current?.();
-	}, []);
-
-	const runVoiceSessionCommand = useCallback(
-		(command: TVoiceSessionCommand): void => {
-			if (command.type === 'CaptureRecoverySnapshot') {
-				dispatchVoiceSession({
-					type: 'RecoveryStarted',
-					commandId: command.commandId,
-					generation: command.generation,
-					snapshot: captureWatchedRemoteStreams(),
-				});
-				return;
-			}
-
 			if (command.type === 'RebuildTransports') {
 				void runRebuildTransportCommand(command);
-				return;
-			}
-
-			if (command.type === 'WaitOnline') {
-				void runWaitOnlineCommand(command);
-				return;
-			}
-
-			if (command.type === 'WaitAuth') {
-				void runWaitAuthCommand(command);
 				return;
 			}
 
@@ -4503,47 +4280,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				void runRestoreVoiceSessionCommand(command);
 				return;
 			}
-
-			if (command.type === 'RetryDelay') {
-				void runRetryDelayCommand(command);
-				return;
-			}
-
-			if (command.type === 'RestoreWatchIntent') {
-				runRestoreWatchIntentCommand(command);
-				return;
-			}
-
-			if (command.type === 'RecoverDesktopAppAudio') {
-				void recoverDesktopAppAudioFromIntent().catch((error) => {
-					logVoice('Error recovering desktop app audio after voice recovery', { error });
-				});
-				hasHandledTransportFailureRef.current = false;
-				return;
-			}
-
-			if (command.type === 'LeaveVoiceSession') {
-				leaveAfterFailedTransportRecovery(command);
-				return;
-			}
-
-			if (command.type === 'ClearFailedSession') {
-				clearFailedVoiceSession(command);
-			}
 		},
-		[
-			captureWatchedRemoteStreams,
-			clearFailedVoiceSession,
-			leaveAfterFailedTransportRecovery,
-			recoverDesktopAppAudioFromIntent,
-			runRebuildTransportCommand,
-			runRestoreVoiceSessionCommand,
-			runRestoreWatchIntentCommand,
-			runRetryDelayCommand,
-			runWaitAuthCommand,
-			runWaitOnlineCommand,
-		],
+		[runRebuildTransportCommand, runRestoreVoiceSessionCommand],
 	);
+	const captureWatchedRemoteStreamsRef = useLatestRef(captureWatchedRemoteStreams);
+	const rehydrateWatchIntentOnlyRef = useLatestRef(rehydrateWatchIntentOnly);
+	const recoverDesktopAppAudioFromIntentRef = useLatestRef(recoverDesktopAppAudioFromIntent);
+	const leaveAfterFailedTransportRecoveryRef = useLatestRef(leaveAfterFailedTransportRecovery);
+	const clearFailedVoiceSessionRef = useLatestRef(clearFailedVoiceSession);
+	const runLegacyVoiceSessionCommandRef = useLatestRef(runLegacyVoiceSessionCommand);
 
 	// Registering (rather than subscribing as a listener) also flushes any
 	// commands dispatched while no runner was alive — a result event from the
@@ -4552,10 +4297,51 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// ClearFailedSession) leave the phases Resumed replays, so a buffer is the
 	// only path that preserves them.
 	useEffect(() => {
-		return registerVoiceSessionCommandRunner((commands) => {
-			commands.forEach(runVoiceSessionCommand);
+		const executor = createVoiceSessionCommandExecutor({
+			now: Date.now,
+			random: Math.random,
+			delay: delayVoiceSessionCommand,
+			isOnline: isVoiceReconnectOnline,
+			captureRecoverySnapshot: () => captureWatchedRemoteStreamsRef.current(),
+			rebuildTransports: () => Promise.reject(new Error('RebuildTransports is still owned by the legacy runner')),
+			restoreVoiceSession: () => Promise.reject(new Error('RestoreVoiceSession is still owned by the legacy runner')),
+			restoreWatchIntent: (snapshot) => rehydrateWatchIntentOnlyRef.current(snapshot),
+			recoverDesktopAppAudio: async () => {
+				const recovery = recoverDesktopAppAudioFromIntentRef.current();
+				// A completed rebuild must release the failure latch so a later,
+				// independent transport failure can start a new recovery cycle.
+				hasHandledTransportFailureRef.current = false;
+				await recovery;
+			},
+			leaveVoiceSession: (channelId) => leaveAfterFailedTransportRecoveryRef.current(channelId),
+			clearFailedSession: (command) => clearFailedVoiceSessionRef.current(command),
+			reportCommandError: (command, error) => {
+				reportError('Voice session command failed', error, {
+					commandType: command.type,
+					commandId: command.commandId,
+					generation: command.generation,
+				});
+			},
 		});
-	}, [runVoiceSessionCommand]);
+		const unregister = registerVoiceSessionCommandRunner((commands) => {
+			const executorCommands: TVoiceSessionCommand[] = [];
+
+			for (const command of commands) {
+				if (getVoiceSessionCommandOwner(command) === 'executor') {
+					executorCommands.push(command);
+				} else {
+					runLegacyVoiceSessionCommandRef.current(command);
+				}
+			}
+
+			executor.execute(executorCommands);
+		});
+
+		return () => {
+			unregister();
+			executor.dispose();
+		};
+	}, []);
 
 	// A provider remount mid-recovery (the machine state is module-level and
 	// survives it) would otherwise strand the machine waiting on a command whose
