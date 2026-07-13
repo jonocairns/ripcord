@@ -1,9 +1,9 @@
 # Voice Session Execution Extraction and Transactional Restore Plan
 
 **Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
-landed in PR #280, and C5 landed in PR #281. C6 is implemented in draft PR #282
-and pending merge; the remaining slices are planned. Completed slices carry a
-**Landed** note recording what was built and what later slices should inherit.
+landed in PR #280, C5 landed in PR #281, and C6 landed in PR #282. The remaining
+slices are planned. Completed slices carry a **Landed** note recording what was
+built and what later slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -567,7 +567,7 @@ not the command orchestrator.
 observability gate. C6 keeps the adapter cutover behavior-preserving and does
 not expand the executor port contract for generic tracing.
 
-**Implemented in PR #282 (pending merge).** Notes for later slices:
+**Landed** (PR #282). Notes for later slices:
 
 - `useVoiceSessionExecutor` owns one mount-scoped executor, direct store runner
   registration, mount-time `Resumed` replay, and idempotent unregister/disposal.
