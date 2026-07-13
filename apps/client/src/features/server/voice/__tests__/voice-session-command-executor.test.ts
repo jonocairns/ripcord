@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import {
 	createVoiceSessionCommandExecutor,
+	isVoiceSessionExecutorCommand,
 	type TVoiceSessionCommandExecutor,
 	type TVoiceSessionExecutorPorts,
 } from '../voice-session-command-executor';
@@ -125,6 +126,7 @@ const createFakePorts = (overrides: Partial<TVoiceSessionExecutorPorts> = {}): T
 	leaveVoiceSession: () => Promise.resolve(),
 	clearFailedSession: () => Promise.resolve(),
 	reportCommandError: () => {},
+	reportRestoreDetached: () => {},
 	...overrides,
 });
 
@@ -332,6 +334,17 @@ describe('voice session command executor', () => {
 		executor.execute([rebuildCommand]);
 
 		expect(rebuildCalls).toBe(0);
+	});
+
+	it('routes restore exclusively to the executor and leaves rebuild on the legacy runner', () => {
+		const rebuildCommand = startRebuild();
+
+		expect(isVoiceSessionExecutorCommand(rebuildCommand)).toBe(false);
+		resetVoiceSessionState();
+
+		const restoreCommand = startRestore();
+
+		expect(isVoiceSessionExecutorCommand(restoreCommand)).toBe(true);
 	});
 
 	it('aborts a superseded command before the superseding command starts its effect', () => {
@@ -545,6 +558,286 @@ describe('voice session command executor', () => {
 		if (phase.phase !== 'reconnecting') return;
 		expect(phase.step).toBe('restoreWatch');
 		expect(phase.serverSessionEstablished).toBe(true);
+	});
+
+	it('times out a pending restore request and conservatively retains possible server ownership', async () => {
+		const scheduler = createFakeScheduler();
+		const restoreRequest = createDeferred<{ serverSessionEstablished: boolean }>();
+		let requestSignal: AbortSignal | undefined;
+		const restoreCommand = startRestore();
+		const executor = createExecutor(
+			createFakePorts({
+				now: scheduler.now,
+				delay: scheduler.delay,
+				restoreVoiceSession: (_command, context) => {
+					requestSignal = context.signal;
+					return context.withTimeout(restoreRequest.promise);
+				},
+			}),
+		);
+
+		executor.execute([restoreCommand]);
+		await scheduler.advanceBy(12_000);
+
+		expect(requestSignal?.aborted).toBe(true);
+		const { phase } = getVoiceSessionState();
+		expect(phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'retryDelay',
+			serverSessionEstablished: true,
+		});
+	});
+
+	it('does not report restore failure when disposal aborts a pending restore', async () => {
+		const scheduler = createFakeScheduler();
+		const restoreRequest = createDeferred<{ serverSessionEstablished: boolean }>();
+		let requestSignal: AbortSignal | undefined;
+		const restoreCommand = startRestore();
+		const executor = createExecutor(
+			createFakePorts({
+				now: scheduler.now,
+				delay: scheduler.delay,
+				restoreVoiceSession: (_command, context) => {
+					requestSignal = context.signal;
+					return context.withTimeout(restoreRequest.promise);
+				},
+			}),
+		);
+
+		executor.execute([restoreCommand]);
+		await flushMicrotasks();
+		const stateBeforeDisposal = getVoiceSessionState();
+
+		executor.dispose();
+		await flushMicrotasks();
+
+		expect(requestSignal?.aborted).toBe(true);
+		expect(getVoiceSessionState()).toBe(stateBeforeDisposal);
+		expect(getVoiceSessionState().phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'restoring',
+			activeCommandId: restoreCommand.commandId,
+		});
+	});
+
+	it('retains server ownership when initialization fails after restore succeeds', async () => {
+		const failure = new Error('media initialization failed');
+		const restoreCommand = startRestore();
+		const executor = createExecutor(
+			createFakePorts({
+				restoreVoiceSession: async (_command, context) => {
+					await context.withTimeout(Promise.resolve());
+					context.markServerSessionEstablished();
+					throw failure;
+				},
+			}),
+		);
+
+		executor.execute([restoreCommand]);
+		await flushMicrotasks();
+
+		const { phase } = getVoiceSessionState();
+		expect(phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'retryDelay',
+			serverSessionEstablished: true,
+		});
+	});
+
+	it('retains server ownership when initialization times out after restore succeeds', async () => {
+		const scheduler = createFakeScheduler();
+		const initialization = createDeferred<void>();
+		const restoreCommand = startRestore();
+		const executor = createExecutor(
+			createFakePorts({
+				now: scheduler.now,
+				delay: scheduler.delay,
+				restoreVoiceSession: async (_command, context) => {
+					await context.withTimeout(Promise.resolve());
+					context.markServerSessionEstablished();
+					await context.withTimeout(initialization.promise);
+					return { serverSessionEstablished: true };
+				},
+			}),
+		);
+
+		executor.execute([restoreCommand]);
+		await flushMicrotasks();
+		await scheduler.advanceBy(12_000);
+
+		const { phase } = getVoiceSessionState();
+		expect(phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'retryDelay',
+			serverSessionEstablished: true,
+		});
+	});
+
+	it('detaches a permanently pending cancelled restore and releases the queued retry', async () => {
+		const scheduler = createFakeScheduler();
+		const restoreRequests: Array<TDeferred<{ serverSessionEstablished: boolean }>> = [];
+		const startedCommands: Array<Extract<TVoiceSessionCommand, { type: 'RestoreVoiceSession' }>> = [];
+		const detachedCommandIds: number[] = [];
+		const executor = createExecutor(
+			createFakePorts({
+				now: scheduler.now,
+				delay: scheduler.delay,
+				random: () => 0.5,
+				restoreVoiceSession: (command, context) => {
+					const request = createDeferred<{ serverSessionEstablished: boolean }>();
+					startedCommands.push(command);
+					restoreRequests.push(request);
+					return context.withTimeout(request.promise);
+				},
+				reportRestoreDetached: (command) => {
+					detachedCommandIds.push(command.commandId);
+				},
+			}),
+		);
+		const unregister = registerVoiceSessionCommandRunner(executor.execute);
+
+		try {
+			dispatchVoiceSession({
+				type: 'WsDropped',
+				pending: pendingReconnect,
+				now: 0,
+				online: true,
+				authenticated: true,
+			});
+			await scheduler.advanceBy(12_000);
+
+			for (let elapsed = 0; elapsed < 1_000; elapsed += 250) {
+				await scheduler.advanceBy(250);
+			}
+
+			expect(startedCommands).toHaveLength(1);
+			expect(restoreRequests).toHaveLength(1);
+			await scheduler.advanceBy(1_000);
+
+			expect(detachedCommandIds).toEqual([startedCommands[0]?.commandId]);
+			expect(startedCommands).toHaveLength(2);
+		} finally {
+			unregister();
+		}
+	});
+
+	it('aborts a superseded restore before starting its replacement and ignores late completion', async () => {
+		const scheduler = createFakeScheduler();
+		const restoreRequests: Array<TDeferred<{ serverSessionEstablished: boolean }>> = [];
+		const startedCommands: Array<Extract<TVoiceSessionCommand, { type: 'RestoreVoiceSession' }>> = [];
+		const requestSignals: AbortSignal[] = [];
+		const executor = createExecutor(
+			createFakePorts({
+				now: scheduler.now,
+				delay: scheduler.delay,
+				restoreVoiceSession: (command, context) => {
+					const request = createDeferred<{ serverSessionEstablished: boolean }>();
+					startedCommands.push(command);
+					requestSignals.push(context.signal);
+					restoreRequests.push(request);
+					return context.withTimeout(request.promise);
+				},
+			}),
+		);
+		const unregister = registerVoiceSessionCommandRunner(executor.execute);
+
+		try {
+			dispatchVoiceSession({
+				type: 'WsDropped',
+				pending: pendingReconnect,
+				now: 0,
+				online: true,
+				authenticated: true,
+			});
+			const [replacementCommand] = dispatchVoiceSession({ type: 'Resumed' });
+
+			if (replacementCommand?.type !== 'RestoreVoiceSession') {
+				throw new Error('expected replacement RestoreVoiceSession command');
+			}
+
+			expect(requestSignals[0]?.aborted).toBe(true);
+			expect(startedCommands).toHaveLength(1);
+
+			restoreRequests[0]?.resolve({ serverSessionEstablished: true });
+			await flushMicrotasks();
+
+			expect(startedCommands).toHaveLength(2);
+			expect(startedCommands[1]?.commandId).toBe(replacementCommand.commandId);
+			expect(getVoiceSessionState().phase).toMatchObject({
+				phase: 'reconnecting',
+				step: 'restoring',
+				activeCommandId: replacementCommand.commandId,
+			});
+		} finally {
+			unregister();
+		}
+	});
+
+	it('buffers terminal restore cleanup across executor disposal and provider remount', async () => {
+		const terminalFailure = new Error('UnsupportedError: media codec not supported');
+		const firstExecutor = createExecutor(
+			createFakePorts({
+				restoreVoiceSession: () => Promise.reject(terminalFailure),
+			}),
+		);
+		const unregisterFirst = registerVoiceSessionCommandRunner(firstExecutor.execute);
+		let disposedDuringFailure = false;
+		const unsubscribe = subscribeVoiceSession((state) => {
+			if (state.phase.phase === 'failed' && !disposedDuringFailure) {
+				disposedDuringFailure = true;
+				unregisterFirst();
+				firstExecutor.dispose();
+			}
+		});
+
+		try {
+			dispatchVoiceSession({
+				type: 'WsDropped',
+				pending: pendingReconnect,
+				now: 0,
+				online: true,
+				authenticated: true,
+			});
+			await flushMicrotasks();
+
+			let cleanupCalls = 0;
+			const nextExecutor = createExecutor(
+				createFakePorts({
+					clearFailedSession: () => {
+						cleanupCalls += 1;
+						return Promise.resolve();
+					},
+				}),
+			);
+			const unregisterNext = registerVoiceSessionCommandRunner(nextExecutor.execute);
+			await flushMicrotasks();
+			unregisterNext();
+
+			expect(disposedDuringFailure).toBe(true);
+			expect(cleanupCalls).toBe(1);
+		} finally {
+			unsubscribe();
+			unregisterFirst();
+		}
+	});
+
+	it('passes raw restore errors to the reducer for retry-versus-terminal classification', async () => {
+		const retryableFailure = new Error('network connection lost');
+		const restoreCommand = startRestore();
+		const executor = createExecutor(
+			createFakePorts({
+				restoreVoiceSession: () => Promise.reject(retryableFailure),
+			}),
+		);
+
+		executor.execute([restoreCommand]);
+		await flushMicrotasks();
+
+		expect(getVoiceSessionState().phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'retryDelay',
+			consecutiveUnknownErrors: 0,
+		});
 	});
 
 	it('does not execute a final command after its generation is invalidated', async () => {

@@ -1,8 +1,8 @@
 # Voice Session Execution Extraction and Transactional Restore Plan
 
-**Status:** In progress. C0 and C1 landed in PR #278; the remaining slices are
-planned. Completed slices carry a **Landed** note recording what was built and
-what later slices should inherit.
+**Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, and
+C4 landed in PR #280. The remaining slices are planned. Completed slices carry
+a **Landed** note recording what was built and what later slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -109,6 +109,11 @@ type TVoiceSessionCommandContext = {
 	isCurrent: () => boolean;
 };
 
+type TVoiceSessionRestoreContext = TVoiceSessionCommandContext & {
+	withTimeout: <T>(operation: Promise<T>) => Promise<T>;
+	markServerSessionEstablished: () => void;
+};
+
 type TVoiceSessionExecutorPorts = {
 	now: () => number;
 	random: () => number;
@@ -119,7 +124,7 @@ type TVoiceSessionExecutorPorts = {
 	rebuildTransports: (command: TRebuildTransportsCommand, context: TVoiceSessionCommandContext) => Promise<void>;
 	restoreVoiceSession: (
 		command: TRestoreVoiceSessionCommand,
-		context: TVoiceSessionCommandContext,
+		context: TVoiceSessionRestoreContext,
 	) => Promise<{ serverSessionEstablished: boolean }>;
 	restoreWatchIntent: (snapshot: TWatchedRemoteStreamsSnapshot) => void;
 	recoverDesktopAppAudio: () => Promise<void>;
@@ -142,9 +147,9 @@ session store. It does not read the Zustand reconnect projection.
 | --- | --- | --- | --- | --- |
 | C0 | client 1 (#278) | Client | current PR #277 state | Executable contract and deterministic test harness |
 | C1 | client 1 (#278) | Client | C0 | Direct machine observation; no projection dependency |
-| C2 | client 2 | Client | C1 | Executor foundation and simple/final commands |
-| C3 | client 2 | Client | C2 | Online, auth, and retry-delay commands extracted |
-| C4 | client 3 | Client | C3 | WS restore command extracted |
+| C2 | client 2 (#279) | Client | C1 | Executor foundation and simple/final commands |
+| C3 | client 2 (#279) | Client | C2 | Online, auth, and retry-delay commands extracted |
+| C4 | client 3 (#280) | Client | C3 | WS restore command extracted |
 | C5 | client 4 | Client | C2 | Transport rebuild command extracted |
 | C6 | client 5 | Client | C4 + C5 | React adapter cutover; embedded runner removed |
 | C7 | client 6 | Client | C6 | Mutable Zustand projection retired or UI-only |
@@ -176,8 +181,8 @@ back to one slice per PR — the slice boundaries already support that.
 | PR | Slices | Suggested title |
 | --- | --- | --- |
 | client 1 (#278) | C0 + C1 | Add voice session executor boundary and store selectors |
-| client 2 | C2 + C3 | Execute voice session final and wait commands outside provider |
-| client 3 | C4 | Extract voice restore command execution |
+| client 2 (#279) | C2 + C3 | Execute voice session final and wait commands outside provider |
+| client 3 (#280) | C4 | Extract voice restore command execution |
 | client 4 | C5 | Extract voice transport rebuild execution |
 | client 5 | C6 | Cut voice provider over to command executor |
 | client 6 | C7 | Remove voice reconnect state projection |
@@ -358,6 +363,18 @@ change executor/store test results.
 
 **Suggested commit:** `refactor: execute voice session final commands outside provider`
 
+**Landed** (PR #279) as specified. Notes for later slices:
+
+- `VoiceProvider` registers one composite command runner. The executor owns the
+  simple and final commands while an exhaustive temporary delegate retains only
+  the complex commands not yet extracted.
+- Final commands are validated against their session generation and buffered by
+  the store across provider remount gaps. Recovery-step commands remain
+  currency-checked against the live machine state.
+- Restore-watch intent is applied before `WatchIntentRehydrated` is dispatched.
+  Leave uses the command's channel context, and final-command port failures are
+  reported without stranding executor bookkeeping.
+
 ### C3 — WaitOnline, WaitAuth, and RetryDelay
 
 **Objective:** Move all time and connectivity orchestration into deterministic
@@ -387,6 +404,17 @@ executor code.
 or browser dependency.
 
 **Suggested commit:** `refactor: extract voice reconnect wait execution`
+
+**Landed** (PR #279) as specified. Notes for later slices:
+
+- Online polling, authentication observation, and retry jitter use injected
+  time, randomness, delay, and connectivity ports plus direct session-store
+  selectors; the executor does not read the Zustand reconnect projection.
+- Reconnect deadlines are read live so repeated WS drops extend the active
+  window. Legacy expiry semantics remain strict: expiry is `now > expiresAt`,
+  not equality.
+- Auth waits close their store subscription and all waits cancel their pending
+  injected delay when superseded, cleared, or disposed.
 
 ### C4 — WS restore execution
 
@@ -418,6 +446,29 @@ and result reporting out of `VoiceProvider`.
 implementation, not restore scheduling or command bookkeeping.
 
 **Suggested commit:** `refactor: extract voice restore command execution`
+
+**Landed** (PR #280). Notes for C5/C6:
+
+- The executor owns the active restore slot, the queued current restore
+  command, per-boundary 12-second timeouts, request cancellation, and the
+  two-second bounded drain. All timing uses the injected delay port.
+- `TVoiceSessionRestoreContext.withTimeout` exposes executor-owned timeout and
+  drain tracking to the concrete port.
+  `markServerSessionEstablished` makes server ownership sticky immediately
+  after `restoreOrJoin` responds, without wrapping or classifying later errors.
+- A timeout conservatively dispatches possible server ownership even before a
+  response. Ownership remains true when media initialization or local-state
+  synchronization fails after a successful response.
+- `VoiceProvider` retains only the concrete restore/media adapter. It checks
+  command currency after each awaited RPC/media boundary and before shared
+  writes. Until C5, the adapter also waits for the legacy transport-rebuild
+  promise before starting restore work.
+- `isVoiceSessionExecutorCommand` is the exhaustive temporary routing boundary:
+  `RestoreVoiceSession` belongs only to the executor and `RebuildTransports`
+  belongs only to the legacy runner.
+- Disposal aborts the old restore without dispatching `RestoreFailed`, leaving
+  the current step available for the next provider's `Resumed` replay. Genuine
+  executor timeouts still dispatch raw `RestoreFailed` events.
 
 ### C5 — Transport rebuild execution
 
