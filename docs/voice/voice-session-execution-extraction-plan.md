@@ -1,9 +1,10 @@
 # Voice Session Execution Extraction and Transactional Restore Plan
 
 **Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
-landed in PR #280, C5 landed in PR #281, C6 landed in PR #282, and C7 landed in
-PR #283. The remaining slices are planned. Completed slices carry a **Landed**
-note recording what was built and what later slices should inherit.
+landed in PR #280, C5 landed in PR #281, C6 landed in PR #282, C7 landed in PR
+#283, and C8 landed in PR #284. The remaining slices are planned. Completed
+slices carry a **Landed** note recording what was built and what later slices
+should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -636,6 +637,8 @@ the Zustand reconnect store no longer exists.
 
 ### C8 — Remote consume resource controller
 
+**Landed** (PR #284). Notes for C9:
+
 **Objective:** Test the real queued/in-flight consume lifecycle that reducer-only
 tests cannot cover.
 
@@ -717,6 +720,41 @@ and teardown behind one testable owner.
 ordering; the real controller is tested with deferred dependencies.
 
 **Suggested commit:** `refactor: extract microphone pipeline controller`
+
+**Implementation decision:** Construct one controller for each mounted
+`VoiceProvider`. The controller owns the epoch and the raw stream, processing
+pipeline, gain pipeline, prepared output, local publication, mediasoup producer,
+raw-loss listeners/timer, and producer-scoped activity monitor. React retains
+device and settings inputs, voice-state intent ordering, session/transport
+currency adapters, UI stream publication, and the restart mutex. Ordinary
+restarts therefore remain queued in React, while join-time preparation can call
+the same controller directly and overlap transport/device setup or a superseded
+attempt.
+
+Prepared results are opaque identity handles rather than copies of mutable
+controller state. Publishing either a prepared handle or the controller's
+current prepared output acquires an identity-bearing producer-transport lease,
+then revalidates controller ownership, transport identity, and optional
+voice-session currency after the awaited producer allocation. Local stream
+removal, producer close callbacks, output-track end callbacks, and activity
+updates are identity scoped so stale work cannot clear a successor.
+
+Keep the extraction mechanically reviewable and isolate the correctness changes
+exposed by controller-level tests in a separate `fix:` commit in the same C9 PR.
+Those fixes are limited to the existing C9 guarantees:
+
+- fence late publish success and failure against microphone ownership,
+  producer-transport replacement, and voice-session execution currency;
+- ignore stale output-track callbacks;
+- synchronously stop captured raw and outbound tracks before removing their
+  React publication, then await gain and processing graph destruction.
+
+The last ordering releases physical capture before UI state is marked inactive,
+while retaining synchronous snapshot/clear and identity-scoped removal. During
+an in-session transport rebuild, an absent `localAudioStream` continues to mean
+there is nothing to republish; reacquisition remains limited to full session
+rejoin or to a present local stream whose track is missing or ended. This is a
+verified merged behavior, not a reconnect-policy change in C9.
 
 ## Server ownership decision
 
