@@ -10,7 +10,8 @@ import {
 	markVoiceReconnectSessionUnauthenticated,
 	resolveVoiceRecoveryAction,
 	snapshotVoiceReconnectIntent,
-	useVoiceReconnectStore,
+	type TPendingVoiceReconnect,
+	type TVoiceReconnectSuppression,
 	VOICE_RECONNECT_INTENT_TTL_MS,
 } from '../reconnect-coordinator';
 import {
@@ -19,12 +20,24 @@ import {
 	selectReconnectingSince,
 	selectVoiceReconnectSuppression,
 } from '../voice-session-machine';
-import { selectVoiceSessionState, subscribeVoiceSession } from '../voice-session-store';
+import {
+	dispatchVoiceSession,
+	registerVoiceSessionCommandRunner,
+	resetVoiceSessionState,
+	selectVoiceSessionState,
+} from '../voice-session-store';
+
+const getPendingVoiceReconnect = (): TPendingVoiceReconnect | undefined =>
+	selectVoiceSessionState(selectPendingVoiceReconnect);
+const getReconnectingSince = (): number | undefined => selectVoiceSessionState(selectReconnectingSince);
+const getReconnectAuthenticated = (): boolean => selectVoiceSessionState(selectReconnectAuthenticated);
+const getVoiceReconnectSuppression = (): TVoiceReconnectSuppression | undefined =>
+	selectVoiceSessionState(selectVoiceReconnectSuppression);
 
 describe('voice reconnect coordinator', () => {
 	beforeEach(() => {
 		useServerStore.getState().resetState();
-		useVoiceReconnectStore.getState().resetState();
+		resetVoiceSessionState();
 	});
 
 	describe('snapshotVoiceReconnectIntent', () => {
@@ -52,7 +65,7 @@ describe('voice reconnect coordinator', () => {
 			const expiresAt = Date.now() + VOICE_RECONNECT_INTENT_TTL_MS;
 			snapshotVoiceReconnectIntent({ expiresAt });
 
-			const { pendingVoiceReconnect } = useVoiceReconnectStore.getState();
+			const pendingVoiceReconnect = getPendingVoiceReconnect();
 
 			expect(pendingVoiceReconnect).toBeDefined();
 			if (!pendingVoiceReconnect) return;
@@ -61,7 +74,7 @@ describe('voice reconnect coordinator', () => {
 			expect(pendingVoiceReconnect.soundMuted).toBe(false);
 			expect(pendingVoiceReconnect.peerUserIds).toEqual([10, 20]);
 			expect(pendingVoiceReconnect.expiresAt).toBe(expiresAt);
-			expect(useVoiceReconnectStore.getState().reconnectingSince).toBeUndefined();
+			expect(getReconnectingSince()).toBeUndefined();
 		});
 
 		it('copies peerUserIds by value so later voiceMap mutations do not affect the snapshot', () => {
@@ -94,7 +107,7 @@ describe('voice reconnect coordinator', () => {
 				state: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false },
 			});
 
-			const { pendingVoiceReconnect } = useVoiceReconnectStore.getState();
+			const pendingVoiceReconnect = getPendingVoiceReconnect();
 
 			expect(pendingVoiceReconnect).toBeDefined();
 			if (!pendingVoiceReconnect) return;
@@ -109,7 +122,7 @@ describe('voice reconnect coordinator', () => {
 
 			snapshotVoiceReconnectIntent({ expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS });
 
-			expect(useVoiceReconnectStore.getState().pendingVoiceReconnect).toBeUndefined();
+			expect(getPendingVoiceReconnect()).toBeUndefined();
 		});
 
 		it('no-ops when ownUserId is undefined', () => {
@@ -120,7 +133,7 @@ describe('voice reconnect coordinator', () => {
 
 			snapshotVoiceReconnectIntent({ expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS });
 
-			expect(useVoiceReconnectStore.getState().pendingVoiceReconnect).toBeUndefined();
+			expect(getPendingVoiceReconnect()).toBeUndefined();
 		});
 	});
 
@@ -147,7 +160,7 @@ describe('voice reconnect coordinator', () => {
 			const beforeCapture = Date.now();
 			expect(captureVoiceReconnectIntentForCurrentSession()).toBe(true);
 
-			const pendingVoiceReconnect = useVoiceReconnectStore.getState().pendingVoiceReconnect;
+			const pendingVoiceReconnect = getPendingVoiceReconnect();
 
 			expect(pendingVoiceReconnect).toBeDefined();
 			if (!pendingVoiceReconnect) return;
@@ -164,42 +177,46 @@ describe('voice reconnect coordinator', () => {
 			});
 
 			expect(captureVoiceReconnectIntentForCurrentSession()).toBe(false);
-			expect(useVoiceReconnectStore.getState().pendingVoiceReconnect).toBeUndefined();
+			expect(getPendingVoiceReconnect()).toBeUndefined();
 		});
 	});
 
 	describe('clearVoiceReconnectRecovery', () => {
-		it('atomically clears all three state fields', () => {
-			useVoiceReconnectStore.getState().setPendingVoiceReconnect({
-				channelId: 5,
-				micMuted: false,
-				soundMuted: false,
-				peerUserIds: [10],
-				expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS,
+		it('atomically clears reconnect state', () => {
+			dispatchVoiceSession({
+				type: 'ReconnectIntentCaptured',
+				pending: {
+					channelId: 5,
+					micMuted: false,
+					soundMuted: false,
+					peerUserIds: [10],
+					expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS,
+				},
 			});
-			useVoiceReconnectStore.getState().setReconnectingSince(Date.now());
-			useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
-				channelId: 5,
-				peerUserIds: [10],
-				expiresAt: Date.now() + 10_000,
+			ensureVoiceReconnectStarted();
+			dispatchVoiceSession({
+				type: 'ReconnectSuppressionChanged',
+				suppression: {
+					channelId: 5,
+					peerUserIds: [10],
+					expiresAt: Date.now() + 10_000,
+				},
 			});
 
 			clearVoiceReconnectRecovery('user-left-voice');
 
-			const state = useVoiceReconnectStore.getState();
-			expect(state.pendingVoiceReconnect).toBeUndefined();
-			expect(state.reconnectingSince).toBeUndefined();
-			expect(state.voiceReconnectSuppression).toBeUndefined();
+			expect(getPendingVoiceReconnect()).toBeUndefined();
+			expect(getReconnectingSince()).toBeUndefined();
+			expect(getVoiceReconnectSuppression()).toBeUndefined();
 		});
 
 		it('is idempotent', () => {
 			clearVoiceReconnectRecovery('app-teardown');
 			clearVoiceReconnectRecovery('app-teardown');
 
-			const state = useVoiceReconnectStore.getState();
-			expect(state.pendingVoiceReconnect).toBeUndefined();
-			expect(state.reconnectingSince).toBeUndefined();
-			expect(state.voiceReconnectSuppression).toBeUndefined();
+			expect(getPendingVoiceReconnect()).toBeUndefined();
+			expect(getReconnectingSince()).toBeUndefined();
+			expect(getVoiceReconnectSuppression()).toBeUndefined();
 		});
 	});
 
@@ -220,12 +237,15 @@ describe('voice reconnect coordinator', () => {
 				},
 			});
 
-			useVoiceReconnectStore.getState().setPendingVoiceReconnect({
-				channelId: 5,
-				micMuted: false,
-				soundMuted: false,
-				peerUserIds: [],
-				expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS,
+			dispatchVoiceSession({
+				type: 'ReconnectIntentCaptured',
+				pending: {
+					channelId: 5,
+					micMuted: false,
+					soundMuted: false,
+					peerUserIds: [],
+					expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS,
+				},
 			});
 
 			expect(resolveVoiceRecoveryAction()).toEqual({ kind: 'session-present', channelId: 5 });
@@ -243,12 +263,15 @@ describe('voice reconnect coordinator', () => {
 				},
 			});
 
-			useVoiceReconnectStore.getState().setPendingVoiceReconnect({
-				channelId: 5,
-				micMuted: false,
-				soundMuted: false,
-				peerUserIds: [10],
-				expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS,
+			dispatchVoiceSession({
+				type: 'ReconnectIntentCaptured',
+				pending: {
+					channelId: 5,
+					micMuted: false,
+					soundMuted: false,
+					peerUserIds: [10],
+					expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS,
+				},
 			});
 
 			expect(resolveVoiceRecoveryAction()).toEqual({ kind: 'session-missing', channelId: 5 });
@@ -260,12 +283,15 @@ describe('voice reconnect coordinator', () => {
 				voiceMap: {},
 			});
 
-			useVoiceReconnectStore.getState().setPendingVoiceReconnect({
-				channelId: 5,
-				micMuted: false,
-				soundMuted: false,
-				peerUserIds: [],
-				expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS,
+			dispatchVoiceSession({
+				type: 'ReconnectIntentCaptured',
+				pending: {
+					channelId: 5,
+					micMuted: false,
+					soundMuted: false,
+					peerUserIds: [],
+					expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS,
+				},
 			});
 
 			expect(resolveVoiceRecoveryAction()).toEqual({ kind: 'session-missing', channelId: 5 });
@@ -283,12 +309,15 @@ describe('voice reconnect coordinator', () => {
 				},
 			});
 
-			useVoiceReconnectStore.getState().setPendingVoiceReconnect({
-				channelId: 5,
-				micMuted: false,
-				soundMuted: false,
-				peerUserIds: [],
-				expiresAt: Date.now() - 1,
+			dispatchVoiceSession({
+				type: 'ReconnectIntentCaptured',
+				pending: {
+					channelId: 5,
+					micMuted: false,
+					soundMuted: false,
+					peerUserIds: [],
+					expiresAt: Date.now() - 1,
+				},
 			});
 
 			expect(resolveVoiceRecoveryAction()).toEqual({ kind: 'none' });
@@ -301,23 +330,18 @@ describe('voice reconnect coordinator', () => {
 
 			ensureVoiceReconnectStarted(startedAt);
 
-			expect(useVoiceReconnectStore.getState().reconnectingSince).toBe(startedAt);
+			expect(getReconnectingSince()).toBe(startedAt);
 		});
 
 		it('preserves the original reconnect timestamp when called again', () => {
-			useVoiceReconnectStore.getState().setReconnectingSince(1234);
+			ensureVoiceReconnectStarted(1234);
 
 			ensureVoiceReconnectStarted(5678);
 
-			expect(useVoiceReconnectStore.getState().reconnectingSince).toBe(1234);
+			expect(getReconnectingSince()).toBe(1234);
 		});
 
-		it('syncs the zustand projection before command listeners run', () => {
-			// The machine's commands run synchronously inside the dispatch, and their
-			// runners consult the zustand projection (waitForVoiceReconnectAuthenticated
-			// reads reconnectingSince to distinguish 'cleared'). If the projection only
-			// synced after the dispatch returned, the WaitAuth command emitted by
-			// ReconnectStarted would observe the pre-dispatch state and abort recovery.
+		it('lets a synchronous command runner observe current machine state', () => {
 			useServerStore.setState({
 				ownUserId: 1,
 				currentVoiceChannelId: 5,
@@ -328,16 +352,16 @@ describe('voice reconnect coordinator', () => {
 			captureVoiceReconnectIntentForCurrentSession();
 
 			const observed: Array<number | undefined> = [];
-			const unsubscribe = subscribeVoiceSession((_state, commands) => {
+			const unregister = registerVoiceSessionCommandRunner((commands) => {
 				if (commands.length > 0) {
-					observed.push(useVoiceReconnectStore.getState().reconnectingSince);
+					observed.push(getReconnectingSince());
 				}
 			});
 
 			try {
 				ensureVoiceReconnectStarted(1234);
 			} finally {
-				unsubscribe();
+				unregister();
 			}
 
 			expect(observed.length).toBeGreaterThan(0);
@@ -349,14 +373,14 @@ describe('voice reconnect coordinator', () => {
 
 	describe('reconnect authentication gate', () => {
 		it('starts unauthenticated and toggles with the WS auth lifecycle', () => {
-			expect(useVoiceReconnectStore.getState().reconnectAuthenticated).toBe(false);
+			expect(getReconnectAuthenticated()).toBe(false);
 
 			markVoiceReconnectSessionAuthenticated();
-			expect(useVoiceReconnectStore.getState().reconnectAuthenticated).toBe(true);
+			expect(getReconnectAuthenticated()).toBe(true);
 
 			// A subsequent WS drop must re-gate recovery until the next joinServer.
 			markVoiceReconnectSessionUnauthenticated();
-			expect(useVoiceReconnectStore.getState().reconnectAuthenticated).toBe(false);
+			expect(getReconnectAuthenticated()).toBe(false);
 		});
 
 		it('resets the auth gate when recovery is cleared', () => {
@@ -364,15 +388,12 @@ describe('voice reconnect coordinator', () => {
 
 			clearVoiceReconnectRecovery('user-started-voice-join');
 
-			expect(useVoiceReconnectStore.getState().reconnectAuthenticated).toBe(false);
+			expect(getReconnectAuthenticated()).toBe(false);
 		});
 	});
 
-	describe('zustand projection', () => {
-		it('mirrors the direct machine selectors after coordinator actions', () => {
-			// The zustand store is a UI projection of the machine; the direct
-			// selectors are the source of truth for execution code. After any
-			// coordinator action the two must agree.
+	describe('direct machine selectors', () => {
+		it('reflect coordinator actions without a projection', () => {
 			useServerStore.setState({
 				ownUserId: 1,
 				currentVoiceChannelId: 5,
@@ -384,25 +405,24 @@ describe('voice reconnect coordinator', () => {
 			ensureVoiceReconnectStarted(1234);
 			markVoiceReconnectSessionAuthenticated();
 
-			const projection = useVoiceReconnectStore.getState();
-
-			expect(projection.pendingVoiceReconnect).toEqual(selectVoiceSessionState(selectPendingVoiceReconnect));
-			expect(projection.reconnectingSince).toBe(selectVoiceSessionState(selectReconnectingSince));
-			expect(projection.reconnectAuthenticated).toBe(selectVoiceSessionState(selectReconnectAuthenticated));
-			expect(projection.voiceReconnectSuppression).toEqual(selectVoiceSessionState(selectVoiceReconnectSuppression));
-			expect(projection.reconnectingSince).toBe(1234);
-			expect(projection.reconnectAuthenticated).toBe(true);
+			expect(getPendingVoiceReconnect()).toBeDefined();
+			expect(getReconnectingSince()).toBe(1234);
+			expect(getReconnectAuthenticated()).toBe(true);
+			expect(getVoiceReconnectSuppression()).toBeUndefined();
 		});
 	});
 
 	describe('getValidPendingVoiceReconnect', () => {
 		it('returns the pending reconnect when it has not expired', () => {
-			useVoiceReconnectStore.getState().setPendingVoiceReconnect({
-				channelId: 5,
-				micMuted: false,
-				soundMuted: false,
-				peerUserIds: [10],
-				expiresAt: Date.now() + 10_000,
+			dispatchVoiceSession({
+				type: 'ReconnectIntentCaptured',
+				pending: {
+					channelId: 5,
+					micMuted: false,
+					soundMuted: false,
+					peerUserIds: [10],
+					expiresAt: Date.now() + 10_000,
+				},
 			});
 
 			expect(getValidPendingVoiceReconnect()).toEqual({
@@ -415,12 +435,15 @@ describe('voice reconnect coordinator', () => {
 		});
 
 		it('returns undefined once the pending reconnect has expired', () => {
-			useVoiceReconnectStore.getState().setPendingVoiceReconnect({
-				channelId: 5,
-				micMuted: false,
-				soundMuted: false,
-				peerUserIds: [],
-				expiresAt: Date.now() - 1,
+			dispatchVoiceSession({
+				type: 'ReconnectIntentCaptured',
+				pending: {
+					channelId: 5,
+					micMuted: false,
+					soundMuted: false,
+					peerUserIds: [],
+					expiresAt: Date.now() - 1,
+				},
 			});
 
 			expect(getValidPendingVoiceReconnect()).toBeUndefined();
@@ -429,10 +452,13 @@ describe('voice reconnect coordinator', () => {
 
 	describe('isVoiceReconnectPeerSuppressed', () => {
 		it('returns true only for peers in the same channel before suppression expiry', () => {
-			useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
-				channelId: 7,
-				peerUserIds: [10, 20],
-				expiresAt: Date.now() + 10_000,
+			dispatchVoiceSession({
+				type: 'ReconnectSuppressionChanged',
+				suppression: {
+					channelId: 7,
+					peerUserIds: [10, 20],
+					expiresAt: Date.now() + 10_000,
+				},
 			});
 
 			expect(isVoiceReconnectPeerSuppressed(7, 10)).toBe(true);
@@ -441,10 +467,13 @@ describe('voice reconnect coordinator', () => {
 		});
 
 		it('returns false after suppression expiry', () => {
-			useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
-				channelId: 7,
-				peerUserIds: [10],
-				expiresAt: Date.now() - 1,
+			dispatchVoiceSession({
+				type: 'ReconnectSuppressionChanged',
+				suppression: {
+					channelId: 7,
+					peerUserIds: [10],
+					expiresAt: Date.now() - 1,
+				},
 			});
 
 			expect(isVoiceReconnectPeerSuppressed(7, 10)).toBe(false);

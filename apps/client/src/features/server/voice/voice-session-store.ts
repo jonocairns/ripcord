@@ -37,10 +37,9 @@ const dispatchVoiceSession = (event: TVoiceSessionEvent): TVoiceSessionCommand[]
 	voiceSessionState = result.state;
 
 	// All listeners run before command delivery so a runner can never observe
-	// pre-dispatch state: state-only listeners are the direct machine
-	// observation primitive, and the legacy full listeners include the
-	// reconnect-coordinator's zustand projection sync (a UI mirror only —
-	// command correctness must come from direct store reads, not projections).
+	// pre-dispatch state. State-only listeners are the direct machine
+	// observation primitive, while full listeners observe both state and the
+	// commands produced by the transition.
 	stateListeners.forEach((listener) => {
 		listener(voiceSessionState);
 	});

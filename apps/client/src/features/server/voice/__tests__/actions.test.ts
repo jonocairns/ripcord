@@ -2,8 +2,14 @@ import { beforeAll, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { ChannelType, StreamKind, type TChannel } from '@sharkord/shared';
 import { useServerStore } from '../../slice';
 import { SoundType } from '../../types';
-import { useVoiceReconnectStore } from '../reconnect-coordinator';
+import type { TPendingVoiceReconnect, TVoiceReconnectSuppression } from '../reconnect-coordinator';
 import { ownVoiceStateSelector } from '../selectors';
+import {
+	selectPendingVoiceReconnect,
+	selectReconnectingSince,
+	selectVoiceReconnectSuppression,
+} from '../voice-session-machine';
+import { dispatchVoiceSession, resetVoiceSessionState, selectVoiceSessionState } from '../voice-session-store';
 
 let removeUserFromVoiceChannel: typeof import('../actions').removeUserFromVoiceChannel;
 let handleStreamWatcherActivity: typeof import('../actions').handleStreamWatcherActivity;
@@ -128,6 +134,24 @@ const setJoinedVoiceChannelState = (state: Partial<ReturnType<typeof useServerSt
 	});
 };
 
+const setPendingVoiceReconnect = (pending: TPendingVoiceReconnect): void => {
+	dispatchVoiceSession({ type: 'ReconnectIntentCaptured', pending });
+};
+
+const startVoiceReconnect = (now: number): void => {
+	dispatchVoiceSession({ type: 'ReconnectStarted', now, online: true, authenticated: false });
+};
+
+const setVoiceReconnectSuppression = (suppression: TVoiceReconnectSuppression): void => {
+	dispatchVoiceSession({ type: 'ReconnectSuppressionChanged', suppression });
+};
+
+const getPendingVoiceReconnect = (): TPendingVoiceReconnect | undefined =>
+	selectVoiceSessionState(selectPendingVoiceReconnect);
+const getReconnectingSince = (): number | undefined => selectVoiceSessionState(selectReconnectingSince);
+const getVoiceReconnectSuppression = (): TVoiceReconnectSuppression | undefined =>
+	selectVoiceSessionState(selectVoiceReconnectSuppression);
+
 describe('voice actions', () => {
 	beforeAll(async () => {
 		Object.assign(globalThis, {
@@ -177,7 +201,7 @@ describe('voice actions', () => {
 
 	beforeEach(() => {
 		useServerStore.getState().resetState();
-		useVoiceReconnectStore.getState().resetState();
+		resetVoiceSessionState();
 		playSound.mockClear();
 		runVoiceProviderCleanup.mockClear();
 		joinMutate.mockClear();
@@ -427,19 +451,19 @@ describe('voice actions', () => {
 	});
 
 	it('cancels reconnect recovery before starting a manual join', async () => {
-		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+		setPendingVoiceReconnect({
 			channelId: 7,
 			micMuted: false,
 			soundMuted: false,
 			peerUserIds: [],
 			expiresAt: Date.now() + 10_000,
 		});
-		useVoiceReconnectStore.getState().setReconnectingSince(Date.now());
+		startVoiceReconnect(Date.now());
 
 		const joinResult = joinVoice(7, { silent: true });
 
-		expect(useVoiceReconnectStore.getState().reconnectingSince).toBeUndefined();
-		expect(useVoiceReconnectStore.getState().pendingVoiceReconnect).toBeUndefined();
+		expect(getReconnectingSince()).toBeUndefined();
+		expect(getPendingVoiceReconnect()).toBeUndefined();
 		expect((await joinResult).kind).toBe('joined');
 	});
 
@@ -586,8 +610,8 @@ describe('voice actions', () => {
 		// Own voice channel should be cleared
 		expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
 
-		// But reconnect intent should be preserved in the coordinator
-		const { pendingVoiceReconnect } = useVoiceReconnectStore.getState();
+		// But reconnect intent should be preserved in the session machine.
+		const pendingVoiceReconnect = getPendingVoiceReconnect();
 		expect(pendingVoiceReconnect).toBeDefined();
 		if (!pendingVoiceReconnect) return;
 		expect(pendingVoiceReconnect.channelId).toBe(7);
@@ -610,7 +634,7 @@ describe('voice actions', () => {
 
 		removeUserFromVoiceChannel(42, 7);
 
-		expect(useVoiceReconnectStore.getState().pendingVoiceReconnect).toBeUndefined();
+		expect(getPendingVoiceReconnect()).toBeUndefined();
 	});
 
 	it('suppresses remote join sounds for peers captured in reconnect suppression', () => {
@@ -618,7 +642,7 @@ describe('voice actions', () => {
 			ownUserId: 42,
 			currentVoiceChannelId: 7,
 		});
-		useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+		setVoiceReconnectSuppression({
 			channelId: 7,
 			peerUserIds: [10],
 			expiresAt: Date.now() + 10_000,
@@ -639,7 +663,7 @@ describe('voice actions', () => {
 			ownUserId: 42,
 			currentVoiceChannelId: 7,
 		});
-		useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+		setVoiceReconnectSuppression({
 			channelId: 7,
 			peerUserIds: [10],
 			expiresAt: Date.now() + 10_000,
@@ -676,15 +700,15 @@ describe('voice actions', () => {
 				sharingScreen: true,
 			},
 		});
-		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+		setPendingVoiceReconnect({
 			channelId: 7,
 			micMuted: true,
 			soundMuted: false,
 			peerUserIds: [10],
 			expiresAt: Date.now() + 10_000,
 		});
-		useVoiceReconnectStore.getState().setReconnectingSince(Date.now());
-		useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+		startVoiceReconnect(Date.now());
+		setVoiceReconnectSuppression({
 			channelId: 7,
 			peerUserIds: [10],
 			expiresAt: Date.now() + 10_000,
@@ -703,18 +727,16 @@ describe('voice actions', () => {
 			webcamEnabled: false,
 			sharingScreen: false,
 		});
-		expect(useVoiceReconnectStore.getState()).toMatchObject({
-			pendingVoiceReconnect: undefined,
-			reconnectingSince: undefined,
-			voiceReconnectSuppression: undefined,
-		});
+		expect(getPendingVoiceReconnect()).toBeUndefined();
+		expect(getReconnectingSince()).toBeUndefined();
+		expect(getVoiceReconnectSuppression()).toBeUndefined();
 		expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
 	});
 
 	it('falls back to skipped desktop quit flush when the leave call fails', async () => {
 		leaveShouldFail = true;
 		setJoinedVoiceChannelState();
-		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+		setPendingVoiceReconnect({
 			channelId: 7,
 			micMuted: false,
 			soundMuted: false,
@@ -727,29 +749,27 @@ describe('voice actions', () => {
 		expect(result).toBe('skipped');
 		expect(leaveMutate).toHaveBeenCalledTimes(1);
 		expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
-		expect(useVoiceReconnectStore.getState().pendingVoiceReconnect).toBeUndefined();
+		expect(getPendingVoiceReconnect()).toBeUndefined();
 		expect(playSound).not.toHaveBeenCalledWith(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
 	});
 
 	it('still attempts desktop quit flush when reconnect cleanup already cleared the local voice channel id', async () => {
-		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+		setPendingVoiceReconnect({
 			channelId: 7,
 			micMuted: false,
 			soundMuted: false,
 			peerUserIds: [],
 			expiresAt: Date.now() + 10_000,
 		});
-		useVoiceReconnectStore.getState().setReconnectingSince(Date.now());
+		startVoiceReconnect(Date.now());
 
 		const result = await flushVoiceForDesktopQuit();
 
 		expect(result).toBe('succeeded');
 		expect(leaveMutate).toHaveBeenCalledTimes(1);
-		expect(useVoiceReconnectStore.getState()).toMatchObject({
-			pendingVoiceReconnect: undefined,
-			reconnectingSince: undefined,
-			voiceReconnectSuppression: undefined,
-		});
+		expect(getPendingVoiceReconnect()).toBeUndefined();
+		expect(getReconnectingSince()).toBeUndefined();
+		expect(getVoiceReconnectSuppression()).toBeUndefined();
 	});
 
 	it('tears down local voice resources on an explicit leave', async () => {
@@ -796,7 +816,7 @@ describe('voice actions', () => {
 	it('clears the captured reconnect intent when the replaced event lands after the own-leave event', () => {
 		// The server's own-leave (reconnecting: true) arrives first: it clears the
 		// channel state and captures reconnect intent for the replaced channel.
-		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+		setPendingVoiceReconnect({
 			channelId: 7,
 			micMuted: false,
 			soundMuted: false,
@@ -808,11 +828,11 @@ describe('voice actions', () => {
 
 		// The stale intent must not survive — a later WS drop would otherwise try
 		// to restore into a channel another connection now owns.
-		expect(useVoiceReconnectStore.getState().pendingVoiceReconnect).toBeUndefined();
+		expect(getPendingVoiceReconnect()).toBeUndefined();
 	});
 
 	it('ignores a replaced event when this connection held neither the session nor its reconnect intent', () => {
-		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+		setPendingVoiceReconnect({
 			channelId: 8,
 			micMuted: false,
 			soundMuted: false,
@@ -822,7 +842,7 @@ describe('voice actions', () => {
 
 		handleVoiceSessionReplaced({ channelId: 7 });
 
-		expect(useVoiceReconnectStore.getState().pendingVoiceReconnect?.channelId).toBe(8);
+		expect(getPendingVoiceReconnect()?.channelId).toBe(8);
 	});
 
 	it('clears sticky local voice state when reconnect recovery terminates', () => {
@@ -846,15 +866,15 @@ describe('voice actions', () => {
 				sharingScreen: true,
 			},
 		});
-		useVoiceReconnectStore.getState().setPendingVoiceReconnect({
+		setPendingVoiceReconnect({
 			channelId: 7,
 			micMuted: false,
 			soundMuted: false,
 			peerUserIds: [10],
 			expiresAt: Date.now() + 10_000,
 		});
-		useVoiceReconnectStore.getState().setReconnectingSince(Date.now());
-		useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+		startVoiceReconnect(Date.now());
+		setVoiceReconnectSuppression({
 			channelId: 7,
 			peerUserIds: [10],
 			expiresAt: Date.now() + 10_000,
@@ -870,11 +890,9 @@ describe('voice actions', () => {
 			webcamEnabled: false,
 			sharingScreen: false,
 		});
-		expect(useVoiceReconnectStore.getState()).toMatchObject({
-			pendingVoiceReconnect: undefined,
-			reconnectingSince: undefined,
-			voiceReconnectSuppression: undefined,
-		});
+		expect(getPendingVoiceReconnect()).toBeUndefined();
+		expect(getReconnectingSince()).toBeUndefined();
+		expect(getVoiceReconnectSuppression()).toBeUndefined();
 		expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
 	});
 
@@ -895,7 +913,7 @@ describe('voice actions', () => {
 				},
 			},
 		});
-		useVoiceReconnectStore.getState().setVoiceReconnectSuppression({
+		setVoiceReconnectSuppression({
 			channelId: 7,
 			peerUserIds: [10],
 			expiresAt: Date.now() + 10_000,

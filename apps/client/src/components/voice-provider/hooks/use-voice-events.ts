@@ -3,12 +3,16 @@ import type { RtpCapabilities } from 'mediasoup-client/types';
 import { useEffect } from 'react';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useOwnUserId } from '@/features/server/users/hooks';
-import { useVoiceReconnectStore } from '@/features/server/voice/reconnect-coordinator';
+import { useVoiceSessionSelector } from '@/features/server/voice/voice-session-hooks';
+import { selectReconnectAuthenticated, selectReconnectingSince } from '@/features/server/voice/voice-session-machine';
 import { logVoice } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
 import type { TExternalStreamTrackPresence } from './use-pending-streams';
-import { shouldSyncExistingProducersAfterVoiceEventSubscriptionStart } from './voice-event-sync-policy';
+import {
+	shouldStartProtectedVoiceEventSubscriptions,
+	shouldSyncExistingProducersAfterVoiceEventSubscriptionStart,
+} from './voice-event-sync-policy';
 import { shouldIgnoreProducerClosedEvent } from './voice-producer-event-identity';
 
 const VOICE_EVENT_PRODUCER_SYNC_DEBOUNCE_MS = 500;
@@ -55,8 +59,8 @@ const useVoiceEvents = ({
 }: TEvents) => {
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const ownUserId = useOwnUserId();
-	const reconnectingSince = useVoiceReconnectStore((state) => state.reconnectingSince);
-	const reconnectAuthenticated = useVoiceReconnectStore((state) => state.reconnectAuthenticated);
+	const reconnectingSince = useVoiceSessionSelector(selectReconnectingSince);
+	const reconnectAuthenticated = useVoiceSessionSelector(selectReconnectAuthenticated);
 
 	useEffect(() => {
 		// Force a fresh subscription set after WS reconnect even when the voice
@@ -73,7 +77,7 @@ const useVoiceEvents = ({
 		// stream with UNAUTHORIZED and forces a teardown + rebuild. Wait for the
 		// auth gate. In steady state reconnectingSince is undefined, so this never
 		// blocks the normal subscription path.
-		if (reconnectingSince !== undefined && !reconnectAuthenticated) {
+		if (!shouldStartProtectedVoiceEventSubscriptions(reconnectingSince, reconnectAuthenticated)) {
 			logVoice('Deferring voice event subscriptions until the reconnected WS re-authenticates', {
 				channelId: currentVoiceChannelId,
 			});

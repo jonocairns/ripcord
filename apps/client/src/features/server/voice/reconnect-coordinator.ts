@@ -1,4 +1,3 @@
-import { create } from 'zustand';
 import { logDebug } from '@/helpers/browser-logger';
 import { useServerStore } from '../slice';
 import {
@@ -7,13 +6,7 @@ import {
 	selectReconnectingSince,
 	selectVoiceReconnectSuppression,
 } from './voice-session-machine';
-import {
-	dispatchVoiceSession,
-	getVoiceSessionState,
-	resetVoiceSessionState,
-	selectVoiceSessionState,
-	subscribeVoiceSession,
-} from './voice-session-store';
+import { dispatchVoiceSession, selectVoiceSessionState } from './voice-session-store';
 
 type TPendingVoiceReconnect = {
 	channelId: number;
@@ -54,51 +47,6 @@ type TVoiceRecoveryAction =
 	| { kind: 'session-present'; channelId: number }
 	| { kind: 'session-missing'; channelId: number };
 
-interface IVoiceReconnectState {
-	pendingVoiceReconnect: TPendingVoiceReconnect | undefined;
-	reconnectingSince: number | undefined;
-	voiceReconnectSuppression: TVoiceReconnectSuppression | undefined;
-	// True once joinServer has re-authenticated the *current* WS connection.
-	// A reconnected socket starts unauthenticated (server createContext sets
-	// authenticated: false), so voice recovery must wait for this before issuing
-	// the protected restoreOrJoin — otherwise the buffered mutation flushes onto
-	// the fresh socket ahead of joinServer and fails UNAUTHORIZED (terminal).
-	reconnectAuthenticated: boolean;
-}
-
-type TVoiceReconnectStore = IVoiceReconnectState & {
-	setPendingVoiceReconnect: (intent: TPendingVoiceReconnect) => void;
-	setReconnectingSince: (timestamp: number | undefined) => void;
-	setVoiceReconnectSuppression: (suppression: TVoiceReconnectSuppression | undefined) => void;
-	setReconnectAuthenticated: (value: boolean) => void;
-	clearVoiceReconnectRecovery: (reason: TClearReason) => void;
-	resetState: () => void;
-};
-
-const initialState: IVoiceReconnectState = {
-	pendingVoiceReconnect: undefined,
-	reconnectingSince: undefined,
-	voiceReconnectSuppression: undefined,
-	reconnectAuthenticated: false,
-};
-
-const voiceReconnectStateFromMachine = (): IVoiceReconnectState => {
-	const state = getVoiceSessionState();
-
-	return {
-		pendingVoiceReconnect: selectPendingVoiceReconnect(state),
-		reconnectingSince: selectReconnectingSince(state),
-		voiceReconnectSuppression: selectVoiceReconnectSuppression(state),
-		reconnectAuthenticated: selectReconnectAuthenticated(state),
-	};
-};
-
-const syncVoiceReconnectProjection = (): void => {
-	useVoiceReconnectStore.setState({
-		...voiceReconnectStateFromMachine(),
-	});
-};
-
 const getMachinePendingVoiceReconnect = (): TPendingVoiceReconnect | undefined =>
 	selectVoiceSessionState(selectPendingVoiceReconnect);
 
@@ -116,71 +64,6 @@ const isBrowserOnline = (): boolean => {
 
 	return navigator.onLine;
 };
-
-// UI projection of the voice session machine, kept for compatibility with
-// existing zustand consumers. It is NOT an execution dependency: executor and
-// runner code must read the session store directly (useVoiceSessionSelector,
-// the direct select* machine selectors, or the getMachine* wrappers above).
-// C7 of the execution extraction plan retires it.
-const useVoiceReconnectStore = create<TVoiceReconnectStore>((set) => ({
-	...initialState,
-
-	setPendingVoiceReconnect: (intent) => {
-		dispatchVoiceSession({ type: 'ReconnectIntentCaptured', pending: intent });
-		syncVoiceReconnectProjection();
-	},
-
-	setReconnectingSince: (timestamp) => {
-		if (timestamp !== undefined) {
-			dispatchVoiceSession({
-				type: 'ReconnectStarted',
-				now: timestamp,
-				online: isBrowserOnline(),
-				authenticated: getMachineReconnectAuthenticated(),
-			});
-			syncVoiceReconnectProjection();
-			return;
-		}
-
-		dispatchVoiceSession({ type: 'ReconnectStartCleared' });
-		syncVoiceReconnectProjection();
-	},
-
-	setReconnectAuthenticated: (value) => {
-		dispatchVoiceSession({ type: value ? 'SocketAuthenticated' : 'SocketUnauthenticated' });
-		syncVoiceReconnectProjection();
-	},
-
-	setVoiceReconnectSuppression: (suppression) => {
-		dispatchVoiceSession({ type: 'ReconnectSuppressionChanged', suppression });
-		syncVoiceReconnectProjection();
-	},
-
-	clearVoiceReconnectRecovery: (reason) => {
-		logDebug('clearVoiceReconnectRecovery', { reason });
-		dispatchVoiceSession({ type: 'RecoveryCleared', reason });
-		set({ ...initialState });
-	},
-
-	resetState: () => {
-		resetVoiceSessionState();
-		set({ ...initialState });
-	},
-}));
-
-// Keep the zustand projection in lockstep with every machine transition. This
-// runs as a session-store listener registered at module eval, which strictly
-// precedes the VoiceProvider's command-runner subscription (a mount effect) —
-// so command runners that read the projection (waitForVoiceReconnectAuthenticated
-// and friends) always observe post-dispatch state. Without this, a command
-// emitted synchronously inside a dispatch (e.g. WaitAuth right after
-// ReconnectStarted) reads the pre-dispatch projection, sees reconnectingSince
-// undefined, and aborts recovery as 'cleared'. It also covers machine
-// transitions triggered from the provider (e.g. WatchIntentRehydrated), which
-// don't go through the coordinator setters at all.
-subscribeVoiceSession(() => {
-	syncVoiceReconnectProjection();
-});
 
 const snapshotVoiceReconnectIntent = (opts: { expiresAt: number }): void => {
 	const serverState = useServerStore.getState();
@@ -204,7 +87,6 @@ const snapshotVoiceReconnectIntent = (opts: { expiresAt: number }): void => {
 	};
 
 	dispatchVoiceSession({ type: 'ReconnectIntentCaptured', pending: pendingVoiceReconnect });
-	syncVoiceReconnectProjection();
 
 	logDebug('Voice reconnect intent snapshotted', {
 		channelId: currentVoiceChannelId,
@@ -240,28 +122,27 @@ const ensureVoiceReconnectStarted = (timestamp = Date.now()): void => {
 		online: isBrowserOnline(),
 		authenticated: getMachineReconnectAuthenticated(),
 	});
-	syncVoiceReconnectProjection();
 };
 
 // Called when a WS drop is detected: the next socket must re-authenticate before
 // voice recovery may run restoreOrJoin.
 const markVoiceReconnectSessionUnauthenticated = (): void => {
 	dispatchVoiceSession({ type: 'SocketUnauthenticated' });
-	syncVoiceReconnectProjection();
 };
 
 // Called once joinServer succeeds on the reconnected socket, unblocking the
 // gated voice recovery.
 const markVoiceReconnectSessionAuthenticated = (): void => {
 	dispatchVoiceSession({ type: 'SocketAuthenticated' });
-	syncVoiceReconnectProjection();
 };
 
 const clearVoiceReconnectRecovery = (reason: TClearReason): void => {
-	useVoiceReconnectStore.getState().clearVoiceReconnectRecovery(reason);
+	logDebug('clearVoiceReconnectRecovery', { reason });
+	dispatchVoiceSession({ type: 'RecoveryCleared', reason });
 };
 
-const isVoiceReconnectRecoveryActive = (): boolean => getVoiceSessionState().phase.phase === 'reconnecting';
+const isVoiceReconnectRecoveryActive = (): boolean =>
+	selectVoiceSessionState((state) => state.phase.phase === 'reconnecting');
 
 const getValidPendingVoiceReconnect = (): TPendingVoiceReconnect | undefined => {
 	const pendingVoiceReconnect = getMachinePendingVoiceReconnect();
@@ -316,6 +197,5 @@ export {
 	markVoiceReconnectSessionUnauthenticated,
 	resolveVoiceRecoveryAction,
 	snapshotVoiceReconnectIntent,
-	useVoiceReconnectStore,
 	VOICE_RECONNECT_INTENT_TTL_MS,
 };
