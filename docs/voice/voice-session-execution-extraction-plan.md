@@ -656,10 +656,33 @@ tests cannot cover.
 - Transport generation replacement aborts all old consumes.
 - Producer replacement cannot attach the superseded producer.
 
-**Exit criteria:** The original Stop-Watching P1 is covered at operation level,
-not only through `consume-operation-state` and ledger reducer tests.
+**Exit criteria:** The original Stop-Watching P1 is covered through the real
+resource controller at operation level, not only through ledger reducer tests.
 
 **Suggested commit:** `refactor: extract remote media consume controller`
+
+**Implementation decision:** Keep the extraction mechanically reviewable, then
+isolate the correctness changes exposed by the real controller tests in a
+separate `fix:` commit in the same C8 PR. The controller owns one current
+operation per remote-media slot plus any superseded attempts that still owe
+late-result cleanup; ledger commands remain React-owned and manual retry or a
+known producer replacement starts its successor immediately rather than waiting
+for the stale attempt to drain. Transport replacement synchronously invalidates
+all old operations and local consumers before installing the new transport.
+
+The isolated fixes are limited to the guarantees already required by C8:
+
+- observe a consume RPC after cancellation or timeout so a late server
+  allocation is still closed by consumer identity;
+- fence producer identity before local attachment and let a command for a known
+  replacement producer supersede the older in-flight operation.
+
+Retry and boundary timing use an injected abortable delay. Consume RPCs, local
+consumer creation, resume, and targeted server cleanup are bounded, and late
+local creation is closed without attachment. Explicit close stays separate from
+operation cancellation because a close command may target a predecessor after
+its successor has started; consumer identity, not the ledger close-command
+generation, is authoritative for that cleanup.
 
 ### C9 — Microphone pipeline resource controller
 

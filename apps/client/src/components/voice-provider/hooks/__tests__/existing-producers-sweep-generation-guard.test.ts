@@ -5,13 +5,14 @@
  * a React component that can't be rendered without a full browser environment,
  * so — following recover-transport-session.test.ts in this tree — we reproduce
  * only its guarded control-flow here. Everything that matters for the assertion
- * is the REAL module: the ledger reducers and the consume-operation generation.
+ * is the REAL module: the ledger reducers and the consume controller's
+ * transport generation.
  * Keep this skeleton structurally identical to the real sweep so a change to the
  * guard surfaces here.
  *
- * The race: a sweep fetches a producer snapshot, then cleanupTransports() (via
- * resetConsumeOperationGeneration) tears down and rebuilds the session while the
- * snapshot is in flight. If the now-stale snapshot is applied to the rebuilt
+ * The race: a sweep fetches a producer snapshot, then cleanupTransports() bumps
+ * the consume controller's transport generation and rebuilds the session while
+ * the snapshot is in flight. If the now-stale snapshot is applied to the rebuilt
  * ledger, reconcile marks legitimate new-session producers absent
  * (producerPresent: false). Such a slot drops out of pendingStreams, so the
  * repair runner never reschedules it and the bad state sticks.
@@ -19,11 +20,8 @@
 
 import { describe, expect, it } from 'bun:test';
 import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
-import {
-	createConsumeOperationState,
-	resetConsumeOperationGeneration,
-	type TConsumeOperationState,
-} from '../consume-operation-state';
+import type { RtpCapabilities } from 'mediasoup-client/types';
+import { createRemoteMediaConsumeController } from '../remote-media-consume-controller';
 import {
 	markRemoteProducerPresent,
 	markRemoteWatchRequested,
@@ -41,6 +39,27 @@ const emptySnapshot = (): TRemoteProducerIds => ({
 	remoteExternalStreamIds: [],
 });
 
+const createConsumeController = () =>
+	createRemoteMediaConsumeController<{ closed: boolean; id: string }, object, RtpCapabilities, object>({
+		delay: async () => undefined,
+		getTransportId: (transport) => transport.id,
+		isTransportClosed: (transport) => transport.closed,
+		consumeOnServer: async () => {
+			throw new Error('consume is not used by this generation-guard test');
+		},
+		resumeServerConsumer: async () => undefined,
+		closeServerConsumer: async () => undefined,
+		createLocalConsumer: async () => ({}),
+		closeLocalConsumer: () => undefined,
+		isLocalConsumerClosed: () => false,
+		observeLocalConsumerClosed: () => undefined,
+		attachLocalConsumer: () => () => undefined,
+		onConsumeStarted: () => undefined,
+		onConsumeSucceeded: () => undefined,
+		onConsumeFailed: () => undefined,
+		onConsumerClosed: () => undefined,
+	});
+
 // A rebuilt-session ledger already holding one live, watched remote camera.
 const rebuiltLedgerWithLiveVideo = (remoteId: number): TRemoteMediaSubscriptions => {
 	let ledger: TRemoteMediaSubscriptions = new Map();
@@ -53,13 +72,13 @@ const rebuiltLedgerWithLiveVideo = (remoteId: number): TRemoteMediaSubscriptions
 // entry and bail after each async boundary if a cleanup bumped it before the
 // ledger-mutating tail runs.
 const runGuardedSweep = async (
-	consumeState: TConsumeOperationState,
+	consumeController: ReturnType<typeof createConsumeController>,
 	getProducers: () => Promise<TRemoteProducerIds>,
 	ledgerRef: { current: TRemoteMediaSubscriptions },
 	now: number,
 ): Promise<'applied' | 'discarded'> => {
-	const sweepGeneration = consumeState.generation;
-	const isSuperseded = () => consumeState.generation !== sweepGeneration;
+	const sweepGeneration = consumeController.getTransportGeneration();
+	const isSuperseded = () => consumeController.getTransportGeneration() !== sweepGeneration;
 
 	const producers = await getProducers();
 	if (isSuperseded()) {
@@ -78,7 +97,7 @@ const runGuardedSweep = async (
 
 describe('existing producers sweep generation guard', () => {
 	it('discards a snapshot whose generation was bumped by cleanup mid-flight', async () => {
-		const consumeState = createConsumeOperationState();
+		const consumeController = createConsumeController();
 		const ledgerRef = { current: rebuiltLedgerWithLiveVideo(5) };
 		const videoKey = getPendingStreamKey(5, StreamKind.VIDEO);
 
@@ -87,10 +106,10 @@ describe('existing producers sweep generation guard', () => {
 			resolveSnapshot = resolve;
 		});
 
-		const sweep = runGuardedSweep(consumeState, () => snapshotPromise, ledgerRef, 2);
+		const sweep = runGuardedSweep(consumeController, () => snapshotPromise, ledgerRef, 2);
 
 		// cleanupTransports() lands while the snapshot is in flight.
-		resetConsumeOperationGeneration(consumeState);
+		consumeController.invalidateTransport();
 
 		// The stale snapshot describes the old session and omits user 5.
 		resolveSnapshot(emptySnapshot());
@@ -101,12 +120,12 @@ describe('existing producers sweep generation guard', () => {
 	});
 
 	it('demonstrates the damage the guard prevents when the generation is unchanged', async () => {
-		const consumeState = createConsumeOperationState();
+		const consumeController = createConsumeController();
 		const ledgerRef = { current: rebuiltLedgerWithLiveVideo(5) };
 		const videoKey = getPendingStreamKey(5, StreamKind.VIDEO);
 
 		// No cleanup interleaves: the stale snapshot is applied as-is.
-		expect(await runGuardedSweep(consumeState, async () => emptySnapshot(), ledgerRef, 2)).toBe('applied');
+		expect(await runGuardedSweep(consumeController, async () => emptySnapshot(), ledgerRef, 2)).toBe('applied');
 
 		const slot = ledgerRef.current.get(videoKey);
 		// The live camera is wrongly marked absent and stuck 'failed'...
