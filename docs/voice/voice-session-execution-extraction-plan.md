@@ -2,7 +2,7 @@
 
 **Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
 landed in PR #280, C5 landed in PR #281, C6 landed in PR #282, and C7 landed in
-client 6. The remaining slices are planned. Completed slices carry a **Landed**
+PR #283. The remaining slices are planned. Completed slices carry a **Landed**
 note recording what was built and what later slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
@@ -153,7 +153,7 @@ session store. It does not read the Zustand reconnect projection.
 | C4 | client 3 (#280) | Client | C3 | WS restore command extracted |
 | C5 | client 4 (#281) | Client | C2 | Transport rebuild command extracted |
 | C6 | client 5 (#282) | Client | C4 + C5 | React adapter cutover; embedded runner removed |
-| C7 | client 6 | Client | C6 | Mutable Zustand projection retired or UI-only |
+| C7 | client 6 (#283) | Client | C6 | Mutable Zustand projection retired or UI-only |
 | C8 | client 7 | Client | C6 | Remote consume resource controller extracted |
 | C9 | client 8 | Client | C6 | Microphone pipeline resource controller extracted |
 | S0 | server 1 | Server | current PR #277 state | Restore service seam and explicit ownership contract |
@@ -186,7 +186,7 @@ back to one slice per PR — the slice boundaries already support that.
 | client 3 (#280) | C4 | Extract voice restore command execution |
 | client 4 (#281) | C5 | Extract voice transport rebuild execution |
 | client 5 (#282) | C6 | Cut voice provider over to command executor |
-| client 6 | C7 | Remove voice reconnect state projection |
+| client 6 (#283) | C7 | Remove voice reconnect state projection |
 | client 7 (follow-on) | C8 | Extract remote media consume controller |
 | client 8 (follow-on) | C9 | Extract microphone pipeline controller |
 | server 1 | S0 + S1 | Add voice restore service seam and prepared transport pairs |
@@ -614,7 +614,7 @@ the Zustand reconnect store no longer exists.
 
 **Suggested commit:** `refactor: remove voice reconnect state projection`
 
-**Landed** (client 6). Notes for later slices:
+**Landed** (PR #283). Notes for later slices:
 
 - `useVoiceEvents` reads reconnect timestamp and authentication through
   `useVoiceSessionSelector` and the direct machine selectors. Protected voice
