@@ -1,4 +1,4 @@
-import { getVoiceReconnectRetryDelayMs } from './reconnect-policy';
+import { getVoiceReconnectRetryDelayMs, VoiceReconnectTimeoutError } from './reconnect-policy';
 import {
 	selectReconnectAuthenticated,
 	selectReconnectingSince,
@@ -22,14 +22,15 @@ import {
 // and every concrete recovery operation arrive through injected ports, so the
 // whole lifecycle is testable without real timers or media stacks.
 //
-// VoiceProvider registers this executor for snapshot, wait, watch-intent, and
-// final commands. Its temporary legacy delegate still owns transport rebuild
-// and voice restore execution until slices C4–C6 complete the cutover described
+// VoiceProvider registers this executor for snapshot, wait, restore,
+// watch-intent, and final commands. Its temporary legacy delegate still owns
+// transport rebuild execution until slices C5–C6 complete the cutover described
 // in docs/voice/voice-session-execution-extraction-plan.md.
 
 type TRebuildTransportsCommand = Extract<TVoiceSessionCommand, { type: 'RebuildTransports' }>;
 type TRestoreVoiceSessionCommand = Extract<TVoiceSessionCommand, { type: 'RestoreVoiceSession' }>;
 type TClearFailedSessionCommand = Extract<TVoiceSessionCommand, { type: 'ClearFailedSession' }>;
+type TLegacyVoiceSessionCommand = TRebuildTransportsCommand;
 
 type TVoiceSessionCommandContext = {
 	// Aborted when the command is superseded, the machine leaves the command's
@@ -41,6 +42,17 @@ type TVoiceSessionCommandContext = {
 	// final commands (which the machine never marks current) it only reflects
 	// abort/disposal.
 	isCurrent: () => boolean;
+};
+
+type TVoiceSessionRestoreContext = TVoiceSessionCommandContext & {
+	// Restore ports wrap each RPC/media boundary so timeout and cancellation
+	// orchestration remain executor-owned. The executor tracks the underlying
+	// operation separately, allowing it to drain briefly and then detach a hung
+	// cancelled boundary without blocking a queued retry forever.
+	withTimeout: <T>(operation: Promise<T>) => Promise<T>;
+	// Called immediately after restoreOrJoin returns. Ownership is sticky for the
+	// rest of the command, including later initialization failures.
+	markServerSessionEstablished: () => void;
 };
 
 type TVoiceSessionExecutorPorts = {
@@ -58,13 +70,14 @@ type TVoiceSessionExecutorPorts = {
 	rebuildTransports: (command: TRebuildTransportsCommand, context: TVoiceSessionCommandContext) => Promise<void>;
 	restoreVoiceSession: (
 		command: TRestoreVoiceSessionCommand,
-		context: TVoiceSessionCommandContext,
+		context: TVoiceSessionRestoreContext,
 	) => Promise<{ serverSessionEstablished: boolean }>;
 	restoreWatchIntent: (snapshot: TWatchedRemoteStreamsSnapshot) => void;
 	recoverDesktopAppAudio: () => Promise<void>;
 	leaveVoiceSession: (channelId?: number) => Promise<void>;
 	clearFailedSession: (command: TClearFailedSessionCommand) => Promise<void>;
 	reportCommandError: (command: TVoiceSessionCommand, error: unknown) => void;
+	reportRestoreDetached: (command: TRestoreVoiceSessionCommand) => void;
 };
 
 type TVoiceSessionCommandExecutor = {
@@ -95,6 +108,25 @@ const isRecoveryStepCommand = (command: TVoiceSessionCommand): boolean => {
 	}
 };
 
+const isVoiceSessionExecutorCommand = (
+	command: TVoiceSessionCommand,
+): command is Exclude<TVoiceSessionCommand, TLegacyVoiceSessionCommand> => {
+	switch (command.type) {
+		case 'CaptureRecoverySnapshot':
+		case 'WaitOnline':
+		case 'WaitAuth':
+		case 'RestoreVoiceSession':
+		case 'RetryDelay':
+		case 'RestoreWatchIntent':
+		case 'RecoverDesktopAppAudio':
+		case 'LeaveVoiceSession':
+		case 'ClearFailedSession':
+			return true;
+		case 'RebuildTransports':
+			return false;
+	}
+};
+
 const isFinalCommand = (
 	command: TVoiceSessionCommand,
 ): command is Extract<
@@ -107,11 +139,22 @@ type TActiveVoiceSessionOperation = {
 	controller: AbortController;
 };
 
+type TActiveRestoreOperation = {
+	command: TRestoreVoiceSessionCommand;
+	controller: AbortController;
+	serverSessionEstablished: boolean;
+	unsettledOperation?: Promise<unknown>;
+};
+
 const VOICE_RECONNECT_WAIT_POLL_MS = 250;
+const VOICE_RECONNECT_TIMEOUT_MS = 12_000;
+const VOICE_RECONNECT_CANCELLED_DRAIN_MS = 2_000;
 
 const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): TVoiceSessionCommandExecutor => {
 	// Keyed by commandId, which the machine mints monotonically.
 	const activeOperations = new Map<number, TActiveVoiceSessionOperation>();
+	let activeRestoreOperation: TActiveRestoreOperation | undefined;
+	let queuedRestoreCommand: TRestoreVoiceSessionCommand | undefined;
 	let disposed = false;
 
 	const abortSupersededOperations = (): void => {
@@ -120,6 +163,10 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 				activeOperations.delete(commandId);
 				operation.controller.abort();
 			}
+		}
+
+		if (activeRestoreOperation !== undefined && !isVoiceSessionCommandCurrent(activeRestoreOperation.command)) {
+			activeRestoreOperation.controller.abort();
 		}
 	};
 
@@ -293,6 +340,157 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 		return ports.now() > getLiveReconnectDeadline(command) ? 'expired' : 'ready';
 	};
 
+	const drainCancelledRestoreOperation = async (
+		operation: Promise<unknown> | undefined,
+	): Promise<'settled' | 'detached'> => {
+		if (operation === undefined) {
+			return 'settled';
+		}
+
+		const drainController = new AbortController();
+		const settled = operation.then(
+			() => 'settled' as const,
+			() => 'settled' as const,
+		);
+		const drainElapsed = waitForDelay(VOICE_RECONNECT_CANCELLED_DRAIN_MS, drainController.signal).then((outcome) =>
+			outcome === 'elapsed' ? ('detached' as const) : ('settled' as const),
+		);
+
+		try {
+			return await Promise.race([settled, drainElapsed]);
+		} finally {
+			drainController.abort();
+		}
+	};
+
+	const withRestoreTimeout = async <T>(active: TActiveRestoreOperation, operation: Promise<T>): Promise<T> => {
+		active.unsettledOperation = operation;
+		const timeoutController = new AbortController();
+		let removeAbortListener = (): void => {};
+		const cancelled = new Promise<never>((_, reject) => {
+			const handleAbort = (): void => {
+				reject(active.controller.signal.reason);
+			};
+
+			removeAbortListener = () => {
+				active.controller.signal.removeEventListener('abort', handleAbort);
+			};
+			active.controller.signal.addEventListener('abort', handleAbort, { once: true });
+			if (active.controller.signal.aborted) {
+				handleAbort();
+			}
+		});
+		const timeout = waitForDelay(VOICE_RECONNECT_TIMEOUT_MS, timeoutController.signal).then((outcome) => {
+			if (outcome === 'cancelled') {
+				return new Promise<never>(() => {});
+			}
+
+			throw new VoiceReconnectTimeoutError();
+		});
+
+		try {
+			return await Promise.race([operation, timeout, cancelled]);
+		} catch (error) {
+			if (error instanceof VoiceReconnectTimeoutError) {
+				active.controller.abort(error);
+			}
+
+			throw error;
+		} finally {
+			timeoutController.abort();
+			removeAbortListener();
+			void operation.then(
+				() => {
+					if (active.unsettledOperation === operation) {
+						active.unsettledOperation = undefined;
+					}
+				},
+				() => {
+					if (active.unsettledOperation === operation) {
+						active.unsettledOperation = undefined;
+					}
+				},
+			);
+		}
+	};
+
+	const runRestoreCommand = async (active: TActiveRestoreOperation): Promise<void> => {
+		const { command, controller } = active;
+		const context: TVoiceSessionRestoreContext = {
+			signal: controller.signal,
+			isCurrent: () => !controller.signal.aborted && isVoiceSessionCommandCurrent(command),
+			withTimeout: <T>(operation: Promise<T>): Promise<T> => withRestoreTimeout(active, operation),
+			markServerSessionEstablished: () => {
+				active.serverSessionEstablished = true;
+			},
+		};
+
+		try {
+			const result = await ports.restoreVoiceSession(command, context);
+			active.serverSessionEstablished = active.serverSessionEstablished || result.serverSessionEstablished;
+
+			if (context.isCurrent()) {
+				dispatchVoiceSession({
+					type: 'RestoreSucceeded',
+					commandId: command.commandId,
+					generation: command.generation,
+					serverSessionEstablished: active.serverSessionEstablished,
+				});
+			}
+		} catch (error) {
+			if (isVoiceSessionCommandCurrent(command)) {
+				dispatchVoiceSession({
+					type: 'RestoreFailed',
+					commandId: command.commandId,
+					generation: command.generation,
+					error,
+					// The server may have committed a mutation whose response lost the
+					// race with the client timeout. Retain known ownership after a
+					// response, and conservatively assume it for any restore timeout.
+					serverSessionEstablished: active.serverSessionEstablished || error instanceof VoiceReconnectTimeoutError,
+				});
+			}
+		} finally {
+			const drainOutcome = await drainCancelledRestoreOperation(active.unsettledOperation);
+			if (drainOutcome === 'detached') {
+				ports.reportRestoreDetached(command);
+			}
+
+			if (activeRestoreOperation === active) {
+				activeRestoreOperation = undefined;
+			}
+
+			const queuedCommand = queuedRestoreCommand;
+			queuedRestoreCommand = undefined;
+			if (!disposed && queuedCommand !== undefined) {
+				startRestoreCommand(queuedCommand);
+			}
+		}
+	};
+
+	const startRestoreCommand = (command: TRestoreVoiceSessionCommand): void => {
+		if (disposed || !isVoiceSessionCommandCurrent(command)) {
+			return;
+		}
+
+		if (activeRestoreOperation !== undefined) {
+			activeRestoreOperation.controller.abort();
+			queuedRestoreCommand = command;
+			return;
+		}
+
+		const active: TActiveRestoreOperation = {
+			command,
+			controller: new AbortController(),
+			serverSessionEstablished: false,
+		};
+
+		activeRestoreOperation = active;
+		void runRestoreCommand(active).catch((error: unknown) => {
+			ports.reportCommandError(command, error);
+		});
+	};
+
 	// Result events are dispatched only while the command is still current;
 	// a late settlement from an aborted operation is dropped here (the reducer
 	// would also ignore it, but the executor must not depend on that).
@@ -341,34 +539,8 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 
 				return;
 			}
-			case 'RestoreVoiceSession': {
-				// Errors stay raw: retry-versus-terminal classification belongs to the
-				// reducer. C4 additionally moves single-flight, timeout, sticky
-				// serverSessionEstablished, and bounded cancellation drain here.
-				try {
-					const result = await ports.restoreVoiceSession(command, context);
-
-					if (context.isCurrent()) {
-						dispatchVoiceSession({
-							type: 'RestoreSucceeded',
-							commandId: command.commandId,
-							generation: command.generation,
-							serverSessionEstablished: result.serverSessionEstablished,
-						});
-					}
-				} catch (error) {
-					if (context.isCurrent()) {
-						dispatchVoiceSession({
-							type: 'RestoreFailed',
-							commandId: command.commandId,
-							generation: command.generation,
-							error,
-						});
-					}
-				}
-
+			case 'RestoreVoiceSession':
 				return;
-			}
 			case 'WaitOnline': {
 				const outcome = await waitForOnline(command, context);
 
@@ -447,6 +619,10 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 		// Normally the store-listener sweep already ran inside the superseding
 		// dispatch; this covers execute() being invoked outside a dispatch.
 		abortSupersededOperations();
+		if (command.type === 'RestoreVoiceSession') {
+			startRestoreCommand(command);
+			return;
+		}
 
 		const controller = new AbortController();
 		const operation: TActiveVoiceSessionOperation = { command, controller };
@@ -487,6 +663,8 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 
 			disposed = true;
 			unsubscribeFromStore();
+			queuedRestoreCommand = undefined;
+			activeRestoreOperation?.controller.abort();
 
 			for (const operation of activeOperations.values()) {
 				operation.controller.abort();
@@ -497,5 +675,11 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 	};
 };
 
-export type { TVoiceSessionCommandContext, TVoiceSessionCommandExecutor, TVoiceSessionExecutorPorts };
-export { createVoiceSessionCommandExecutor };
+export type {
+	TLegacyVoiceSessionCommand,
+	TVoiceSessionCommandContext,
+	TVoiceSessionCommandExecutor,
+	TVoiceSessionExecutorPorts,
+	TVoiceSessionRestoreContext,
+};
+export { createVoiceSessionCommandExecutor, isVoiceSessionExecutorCommand };
