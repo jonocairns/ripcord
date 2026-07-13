@@ -41,6 +41,7 @@ import {
 	createVoiceSessionCommandExecutor,
 	isVoiceSessionExecutorCommand,
 	type TLegacyVoiceSessionCommand,
+	type TVoiceSessionRebuildContext,
 	type TVoiceSessionRestoreContext,
 } from '@/features/server/voice/voice-session-command-executor';
 import {
@@ -631,7 +632,6 @@ type TVoiceProviderProps = {
 };
 
 const RECOVERY_TIMEOUT_MS = 12_000;
-const RECOVERY_BACKOFF_MS = [1_000, 2_000] as const;
 const RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS = 350;
 
 const delayVoiceSessionCommand = (milliseconds: number, signal: AbortSignal): Promise<void> =>
@@ -777,8 +777,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const micPipelineOwnershipRef = useRef(createMicPipelineOwnership());
 	const sessionExecutionOwnershipRef = useRef(createVoiceSessionExecutionOwnership());
 	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
-	const transportRecoveryPromiseRef = useRef<Promise<void> | undefined>(undefined);
-	const queuedTransportRecoveryCommandRef = useRef<TVoiceSessionCommand | undefined>(undefined);
 	const cleanupMicAudioPipelineRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
@@ -3676,25 +3674,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		],
 	);
 
-	const isCurrentVoiceSessionCommand = useCallback((command: TVoiceSessionCommand): boolean => {
-		const { phase } = getVoiceSessionState();
-
-		return (
-			(phase.phase === 'rebuilding' || phase.phase === 'reconnecting') &&
-			phase.generation === command.generation &&
-			phase.activeCommandId === command.commandId
-		);
-	}, []);
-
-	const dispatchIfCurrentVoiceSessionCommand = useCallback(
-		(command: TVoiceSessionCommand, dispatch: () => void): void => {
-			if (isCurrentVoiceSessionCommand(command)) {
-				dispatch();
-			}
-		},
-		[isCurrentVoiceSessionCommand],
-	);
-
 	const requestRecoveryFailureLeave = useCallback(async (): Promise<void> => {
 		// Offline terminal cleanup deliberately leaves the server seat to
 		// disconnect grace; only a failed request on a live socket is reportable.
@@ -3731,22 +3710,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[requestRecoveryFailureLeave],
 	);
 
-	const runRebuildTransportCommand = useCallback(
-		async (command: TVoiceSessionCommand): Promise<void> => {
-			if (command.type !== 'RebuildTransports') {
-				return;
-			}
+	const rebuildTransports = useCallback(
+		async (
+			command: Extract<TVoiceSessionCommand, { type: 'RebuildTransports' }>,
+			context: TVoiceSessionRebuildContext,
+		): Promise<void> => {
+			const ownsSessionExecution = claimVoiceSessionExecution(sessionExecutionOwnershipRef.current);
+			const isCurrentAttempt = (): boolean => ownsSessionExecution() && context.isCurrent();
+			const restartIfNonceChanged = (): boolean => context.restartIfNonceChanged(voiceSessionReconnectNonceRef.current);
 
-			if (!isCurrentVoiceSessionCommand(command)) {
-				return;
-			}
-
-			if (transportRecoveryPromiseRef.current) {
-				queuedTransportRecoveryCommandRef.current = command;
-				return;
-			}
-
-			const recoveryPromise = traceSentrySpan(
+			return traceSentrySpan(
 				{
 					name: 'voice.transport_recovery',
 					op: 'voice.recovery',
@@ -3754,295 +3727,179 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						'voice.channel_id': command.channelId,
 					},
 				},
-				() =>
-					(async () => {
-						const ownsSessionExecution = claimVoiceSessionExecution(sessionExecutionOwnershipRef.current);
-						let attemptActive = true;
-						const abortController = new AbortController();
-						const isCurrentAttempt = (): boolean =>
-							ownsSessionExecution() && attemptActive && isCurrentVoiceSessionCommand(command);
-						const cancelAttempt = (): void => {
-							attemptActive = false;
-							abortController.abort();
-						};
-						const unsubscribeFromAttempt = subscribeVoiceSession(() => {
-							if (!isCurrentVoiceSessionCommand(command)) {
-								cancelAttempt();
-							}
-						});
-						try {
-							if (command.attempt > 0) {
-								await new Promise<void>((resolve) =>
-									setTimeout(resolve, RECOVERY_BACKOFF_MS[command.attempt - 1] ?? RECOVERY_BACKOFF_MS.at(-1) ?? 1_000),
-								);
-							}
-
-							if (!isCurrentVoiceSessionCommand(command)) {
-								return;
-							}
-
-							if (!isConnectedRef.current) {
-								logVoice('Skipping transport recovery because server connection is unavailable');
-								dispatchIfCurrentVoiceSessionCommand(command, () => {
-									dispatchVoiceSession({
-										type: 'RebuildFailed',
-										commandId: command.commandId,
-										generation: command.generation,
-										error: new Error('Voice transport recovery skipped: server connection unavailable'),
-									});
-								});
-								return;
-							}
-
-							if (currentVoiceChannelIdRef.current === undefined) {
-								logVoice('Skipping transport recovery because the user is no longer in voice');
-								dispatchIfCurrentVoiceSessionCommand(command, () => {
-									dispatchVoiceSession({
-										type: 'RebuildFailed',
-										commandId: command.commandId,
-										generation: command.generation,
-										error: new Error('Voice transport recovery skipped: user is no longer in voice'),
-									});
-								});
-								return;
-							}
-
-							if (!routerRtpCapabilities.current) {
-								logVoice('Skipping transport recovery because router RTP capabilities are unavailable');
-								dispatchIfCurrentVoiceSessionCommand(command, () => {
-									dispatchVoiceSession({
-										type: 'RebuildFailed',
-										commandId: command.commandId,
-										generation: command.generation,
-										error: new Error('Voice transport recovery skipped: router RTP capabilities unavailable'),
-									});
-								});
-								return;
-							}
-
-							const nonceAtStart = command.nonce;
-							const dispatchNonceChangedIfStale = (): boolean => {
-								if (!isCurrentAttempt()) {
-									return true;
-								}
-
-								const currentNonce = voiceSessionReconnectNonceRef.current;
-								if (currentNonce === nonceAtStart) {
-									return false;
-								}
-
-								dispatchIfCurrentVoiceSessionCommand(command, () => {
-									dispatchVoiceSession({
-										type: 'NonceChanged',
-										commandId: command.commandId,
-										generation: command.generation,
-										nonce: currentNonce,
-									});
-								});
-								return true;
-							};
-
-							try {
-								if (!isCurrentVoiceSessionCommand(command)) return;
-
-								logVoice('Attempting in-session voice transport recovery', {
-									attempt: command.attempt + 1,
-									channelId: command.channelId,
-								});
-
-								stopMonitoring();
-								resetStats();
-								clearRemoteUserStreams();
-								clearExternalStreams();
-								setVoiceEventRtpCapabilities(null);
-								cleanupTransports({ preserveRemoteMediaIntent: true });
-								rehydrateWatchIntentOnly(command.snapshot);
-
-								let device = await withRecoveryTimeout(ensureVoiceDeviceLoaded(isCurrentAttempt), cancelAttempt);
-								if (dispatchNonceChangedIfStale()) return;
-
-								let currentRtpCapabilities = device.rtpCapabilities;
-								let recoveryJoinResult: TRecoveryJoinResult | undefined;
-
-								try {
-									await withRecoveryTimeout(
-										Promise.all([
-											createProducerTransport(device, undefined, isCurrentAttempt),
-											createConsumerTransport(device, undefined, isCurrentAttempt),
-										]),
-										cancelAttempt,
-									);
-								} catch (error) {
-									const recoveryChannelId = currentVoiceChannelIdRef.current;
-
-									if (!isMissingVoiceSessionError(error) || recoveryChannelId === undefined) {
-										throw error;
-									}
-
-									logVoice('Voice session missing during transport recovery, attempting fresh voice join', {
-										channelId: recoveryChannelId,
-										error,
-									});
-
-									recoveryJoinResult = await withRecoveryTimeout(
-										rejoinVoiceSession(recoveryChannelId, {
-											isCurrent: isCurrentAttempt,
-											signal: abortController.signal,
-										}),
-										cancelAttempt,
-									);
-									if (dispatchNonceChangedIfStale()) return;
-
-									device = recoveryJoinResult.device;
-									currentRtpCapabilities = device.rtpCapabilities;
-									deviceRef.current = device;
-									routerRtpCapabilities.current = recoveryJoinResult.routerRtpCapabilities;
-									sendRtpCapabilities.current = device.rtpCapabilities;
-									const store = useServerStore.getState();
-									store.setCurrentVoiceChannelId(recoveryChannelId);
-									store.reconcileVoiceChannelUsers({
-										channelId: recoveryChannelId,
-										users: recoveryJoinResult.channelUsers,
-									});
-
-									await withRecoveryTimeout(
-										Promise.all([
-											createProducerTransport(device, recoveryJoinResult.producerTransportParams, isCurrentAttempt),
-											createConsumerTransport(device, recoveryJoinResult.consumerTransportParams, isCurrentAttempt),
-										]),
-										cancelAttempt,
-									);
-								}
-
-								if (dispatchNonceChangedIfStale()) return;
-
-								sendRtpCapabilities.current = currentRtpCapabilities;
-								setVoiceEventRtpCapabilities(currentRtpCapabilities);
-
-								const republishTasks: Promise<void>[] = [];
-
-								const currentAudioStream = localAudioStreamRef.current;
-								const currentAudioTrack = currentAudioStream?.getAudioTracks()[0];
-								if (recoveryJoinResult && canSpeakRef.current && startMicStreamRef.current) {
-									republishTasks.push(
-										startMicStreamRef.current().catch((error) => {
-											logVoice('Error restarting microphone after voice session rejoin', { error });
-										}),
-									);
-								} else if (currentAudioStream && currentAudioTrack && currentAudioTrack.readyState === 'live') {
-									republishTasks.push(
-										publishMicTrack(currentAudioStream, currentAudioTrack, { isCurrent: isCurrentAttempt }),
-									);
-								} else if (currentAudioStream && canSpeakRef.current && startMicStreamRef.current) {
-									republishTasks.push(
-										startMicStreamRef.current().catch((error) => {
-											logVoice('Error restarting microphone after voice transport recovery', { error });
-										}),
-									);
-								}
-
-								const localMediaRepublishPlan = buildLocalMediaRepublishPlan(isCurrentAttempt);
-								republishTasks.push(...localMediaRepublishPlan.tasks);
-
-								await withRecoveryTimeout(
-									Promise.all([
-										consumeExistingProducers(currentRtpCapabilities, undefined, recoveryJoinResult?.existingProducers),
-										...republishTasks,
-									]),
-									cancelAttempt,
-								);
-								if (dispatchNonceChangedIfStale()) return;
-
-								await withRecoveryTimeout(
-									syncRepublishedLocalMediaState(localMediaRepublishPlan.state, { isCurrent: isCurrentAttempt }),
-									cancelAttempt,
-								);
-								if (dispatchNonceChangedIfStale()) return;
-
-								if (recoveryJoinResult) {
-									logVoice('Refreshing existing producers after voice session rejoin');
-									await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
-									if (dispatchNonceChangedIfStale()) return;
-
-									await withRecoveryTimeout(
-										new Promise<void>((resolve) => {
-											setTimeout(resolve, RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS);
-										}),
-									);
-									if (dispatchNonceChangedIfStale()) return;
-
-									logVoice('Refreshing existing producers after delayed voice session rejoin sync');
-									await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
-								}
-
-								if (dispatchNonceChangedIfStale()) return;
-
-								if (recoveryJoinResult) {
-									useServerStore.getState().bumpVoiceSessionReconnectNonce();
-								}
-
-								startMonitoring(producerTransport.current, consumerTransport.current);
-								logVoice('Voice transport recovery completed successfully');
-
-								dispatchIfCurrentVoiceSessionCommand(command, () => {
-									dispatchVoiceSession({
-										type: 'RebuildSucceeded',
-										commandId: command.commandId,
-										generation: command.generation,
-									});
-								});
-							} catch (error) {
-								logVoice('Voice transport recovery attempt failed', {
-									attempt: command.attempt + 1,
-									error,
-								});
-								dispatchIfCurrentVoiceSessionCommand(command, () => {
-									dispatchVoiceSession({
-										type: 'RebuildFailed',
-										commandId: command.commandId,
-										generation: command.generation,
-										error,
-									});
-
-									const phase = getVoiceSessionState().phase;
-									if (phase.phase === 'failed') {
-										reportError('Voice transport recovery failed', error, {
-											attempt: command.attempt + 1,
-											channelId: command.channelId,
-										});
-									}
-								});
-							}
-						} finally {
-							cancelAttempt();
-							unsubscribeFromAttempt();
-							transportRecoveryPromiseRef.current = undefined;
-							const queuedCommand = queuedTransportRecoveryCommandRef.current;
-							queuedTransportRecoveryCommandRef.current = undefined;
-
-							if (queuedCommand) {
-								void runRebuildTransportCommand(queuedCommand);
-							} else if (getVoiceSessionState().phase.phase !== 'rebuilding') {
-								hasHandledTransportFailureRef.current = false;
-							}
+				async () => {
+					try {
+						if (!isCurrentAttempt()) {
+							throw new VoiceSessionExecutionSupersededError();
 						}
-					})(),
-			);
 
-			transportRecoveryPromiseRef.current = recoveryPromise;
-			await recoveryPromise;
+						if (!isConnectedRef.current) {
+							throw new Error('Voice transport recovery skipped: server connection unavailable');
+						}
+
+						if (currentVoiceChannelIdRef.current === undefined) {
+							throw new Error('Voice transport recovery skipped: user is no longer in voice');
+						}
+
+						if (!routerRtpCapabilities.current) {
+							throw new Error('Voice transport recovery skipped: router RTP capabilities unavailable');
+						}
+
+						logVoice('Attempting in-session voice transport recovery', {
+							attempt: command.attempt + 1,
+							channelId: command.channelId,
+						});
+
+						stopMonitoring();
+						resetStats();
+						clearRemoteUserStreams();
+						clearExternalStreams();
+						setVoiceEventRtpCapabilities(null);
+						cleanupTransports({ preserveRemoteMediaIntent: true });
+						rehydrateWatchIntentOnly(command.snapshot);
+
+						let device = await withRecoveryTimeout(ensureVoiceDeviceLoaded(isCurrentAttempt));
+						if (restartIfNonceChanged()) return;
+
+						let currentRtpCapabilities = device.rtpCapabilities;
+						let recoveryJoinResult: TRecoveryJoinResult | undefined;
+
+						try {
+							await withRecoveryTimeout(
+								Promise.all([
+									createProducerTransport(device, undefined, isCurrentAttempt),
+									createConsumerTransport(device, undefined, isCurrentAttempt),
+								]),
+							);
+						} catch (error) {
+							const recoveryChannelId = currentVoiceChannelIdRef.current;
+
+							if (!isMissingVoiceSessionError(error) || recoveryChannelId === undefined) {
+								throw error;
+							}
+
+							logVoice('Voice session missing during transport recovery, attempting fresh voice join', {
+								channelId: recoveryChannelId,
+								error,
+							});
+
+							recoveryJoinResult = await withRecoveryTimeout(
+								rejoinVoiceSession(recoveryChannelId, {
+									isCurrent: isCurrentAttempt,
+									signal: context.signal,
+								}),
+							);
+							if (restartIfNonceChanged()) return;
+
+							device = recoveryJoinResult.device;
+							currentRtpCapabilities = device.rtpCapabilities;
+							deviceRef.current = device;
+							routerRtpCapabilities.current = recoveryJoinResult.routerRtpCapabilities;
+							sendRtpCapabilities.current = device.rtpCapabilities;
+							const store = useServerStore.getState();
+							store.setCurrentVoiceChannelId(recoveryChannelId);
+							store.reconcileVoiceChannelUsers({
+								channelId: recoveryChannelId,
+								users: recoveryJoinResult.channelUsers,
+							});
+
+							await withRecoveryTimeout(
+								Promise.all([
+									createProducerTransport(device, recoveryJoinResult.producerTransportParams, isCurrentAttempt),
+									createConsumerTransport(device, recoveryJoinResult.consumerTransportParams, isCurrentAttempt),
+								]),
+							);
+						}
+
+						if (restartIfNonceChanged()) return;
+
+						sendRtpCapabilities.current = currentRtpCapabilities;
+						setVoiceEventRtpCapabilities(currentRtpCapabilities);
+
+						const republishTasks: Promise<void>[] = [];
+
+						const currentAudioStream = localAudioStreamRef.current;
+						const currentAudioTrack = currentAudioStream?.getAudioTracks()[0];
+						if (recoveryJoinResult && canSpeakRef.current && startMicStreamRef.current) {
+							republishTasks.push(
+								startMicStreamRef.current().catch((error) => {
+									logVoice('Error restarting microphone after voice session rejoin', { error });
+								}),
+							);
+						} else if (currentAudioStream && currentAudioTrack && currentAudioTrack.readyState === 'live') {
+							republishTasks.push(
+								publishMicTrack(currentAudioStream, currentAudioTrack, { isCurrent: isCurrentAttempt }),
+							);
+						} else if (currentAudioStream && canSpeakRef.current && startMicStreamRef.current) {
+							republishTasks.push(
+								startMicStreamRef.current().catch((error) => {
+									logVoice('Error restarting microphone after voice transport recovery', { error });
+								}),
+							);
+						}
+
+						const localMediaRepublishPlan = buildLocalMediaRepublishPlan(isCurrentAttempt);
+						republishTasks.push(...localMediaRepublishPlan.tasks);
+
+						await withRecoveryTimeout(
+							Promise.all([
+								consumeExistingProducers(currentRtpCapabilities, undefined, recoveryJoinResult?.existingProducers),
+								...republishTasks,
+							]),
+						);
+						if (restartIfNonceChanged()) return;
+
+						await withRecoveryTimeout(
+							syncRepublishedLocalMediaState(localMediaRepublishPlan.state, {
+								isCurrent: isCurrentAttempt,
+								signal: context.signal,
+							}),
+						);
+						if (restartIfNonceChanged()) return;
+
+						if (recoveryJoinResult) {
+							logVoice('Refreshing existing producers after voice session rejoin');
+							await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
+							if (restartIfNonceChanged()) return;
+
+							await withRecoveryTimeout(
+								new Promise<void>((resolve) => {
+									setTimeout(resolve, RECOVERY_POST_REJOIN_PRODUCER_REFRESH_DELAY_MS);
+								}),
+							);
+							if (restartIfNonceChanged()) return;
+
+							logVoice('Refreshing existing producers after delayed voice session rejoin sync');
+							await withRecoveryTimeout(consumeExistingProducers(currentRtpCapabilities));
+						}
+
+						if (restartIfNonceChanged()) return;
+
+						if (recoveryJoinResult) {
+							useServerStore.getState().bumpVoiceSessionReconnectNonce();
+						}
+
+						startMonitoring(producerTransport.current, consumerTransport.current);
+						logVoice('Voice transport recovery completed successfully');
+					} catch (error) {
+						logVoice('Voice transport recovery attempt failed', {
+							attempt: command.attempt + 1,
+							error,
+						});
+						throw error;
+					}
+				},
+			);
 		},
 		[
 			clearExternalStreams,
 			clearRemoteUserStreams,
 			cleanupTransports,
 			consumeExistingProducers,
-			dispatchIfCurrentVoiceSessionCommand,
 			buildLocalMediaRepublishPlan,
 			createConsumerTransport,
 			createProducerTransport,
 			ensureVoiceDeviceLoaded,
-			isCurrentVoiceSessionCommand,
 			producerTransport,
 			consumerTransport,
 			publishMicTrack,
@@ -4060,14 +3917,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			command: Extract<TVoiceSessionCommand, { type: 'RestoreVoiceSession' }>,
 			context: TVoiceSessionRestoreContext,
 		): Promise<{ serverSessionEstablished: boolean }> => {
-			const activeTransportRecovery = transportRecoveryPromiseRef.current;
-			if (activeTransportRecovery) {
-				await context.withTimeout(activeTransportRecovery);
-				if (!context.isCurrent()) {
-					throw new VoiceSessionExecutionSupersededError();
-				}
-			}
-
 			const reconnectAttemptId = createReconnectAttemptId();
 			const attemptNumber = command.attempt + 1;
 
@@ -4157,17 +4006,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[requestRecoveryFailureLeave],
 	);
 
-	const runLegacyVoiceSessionCommand = useCallback(
-		(command: TLegacyVoiceSessionCommand): void => {
-			void runRebuildTransportCommand(command);
-		},
-		[runRebuildTransportCommand],
-	);
+	const runLegacyVoiceSessionCommand = useCallback((_command: TLegacyVoiceSessionCommand): void => {
+		// C5 moved the final legacy command to the executor. Keep the composite
+		// adapter shape until C6 removes the embedded runner wiring.
+	}, []);
 	const captureWatchedRemoteStreamsRef = useLatestRef(captureWatchedRemoteStreams);
 	const rehydrateWatchIntentOnlyRef = useLatestRef(rehydrateWatchIntentOnly);
 	const recoverDesktopAppAudioFromIntentRef = useLatestRef(recoverDesktopAppAudioFromIntent);
 	const leaveAfterFailedTransportRecoveryRef = useLatestRef(leaveAfterFailedTransportRecovery);
 	const clearFailedVoiceSessionRef = useLatestRef(clearFailedVoiceSession);
+	const rebuildTransportsRef = useLatestRef(rebuildTransports);
 	const restoreVoiceSessionRef = useLatestRef(restoreVoiceSession);
 	const runLegacyVoiceSessionCommandRef = useLatestRef(runLegacyVoiceSessionCommand);
 
@@ -4184,7 +4032,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			delay: delayVoiceSessionCommand,
 			isOnline: isVoiceReconnectOnline,
 			captureRecoverySnapshot: () => captureWatchedRemoteStreamsRef.current(),
-			rebuildTransports: () => Promise.reject(new Error('RebuildTransports is still owned by the legacy runner')),
+			rebuildTransports: (command, context) => rebuildTransportsRef.current(command, context),
 			restoreVoiceSession: (command, context) => restoreVoiceSessionRef.current(command, context),
 			restoreWatchIntent: (snapshot) => rehydrateWatchIntentOnlyRef.current(snapshot),
 			recoverDesktopAppAudio: async () => {
@@ -4201,6 +4049,18 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					commandType: command.type,
 					commandId: command.commandId,
 					generation: command.generation,
+				});
+			},
+			reportRebuildDetached: (command) => {
+				logDebug('Voice transport rebuild detached a hung cancelled operation', {
+					attempt: command.attempt + 1,
+					channelId: command.channelId,
+				});
+			},
+			reportRebuildTerminalFailure: (command, error) => {
+				reportError('Voice transport recovery failed', error, {
+					attempt: command.attempt + 1,
+					channelId: command.channelId,
 				});
 			},
 			reportRestoreDetached: (command) => {
