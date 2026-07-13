@@ -1,62 +1,42 @@
 import { describe, expect, it } from 'bun:test';
 
-const bannedReconnectFacadeImports = [
-	'clearVoiceReconnectRecovery',
-	'ensureVoiceReconnectStarted',
-	'markVoiceReconnectSessionAuthenticated',
-	'markVoiceReconnectSessionUnauthenticated',
-	'snapshotVoiceReconnectIntent',
-	'captureVoiceReconnectIntentForCurrentSession',
-];
-
-const bannedVoiceSessionStoreImports = ['resetVoiceSessionState', 'resetVoiceSessionStoreForTest'];
-const bannedReconnectPolicyImports = ['classifyVoiceReconnectError'];
-
-const extractNamedImports = (source: string, modulePath: string): string[] => {
-	const importPattern = new RegExp(`import\\s*\\{([^}]+)\\}\\s*from\\s*['"]${modulePath}['"]`, 'g');
-	const imports: string[] = [];
+const extractModuleImports = (source: string): string[] => {
+	const moduleImports: string[] = [];
+	const importPattern = /import[\s\S]*?from\s*['"]([^'"]+)['"]/gu;
 
 	for (const match of source.matchAll(importPattern)) {
-		const importList = match[1];
-		if (importList === undefined) {
-			continue;
+		const modulePath = match[1];
+		if (modulePath !== undefined) {
+			moduleImports.push(modulePath);
 		}
-
-		imports.push(
-			...importList
-				.split(',')
-				.map((importName) =>
-					importName
-						.trim()
-						.split(/\s+as\s+/u)[0]
-						?.replace(/^type\s+/u, '')
-						.trim(),
-				)
-				.filter((importName): importName is string => importName !== undefined && importName.length > 0),
-		);
 	}
 
-	return imports;
+	return moduleImports;
 };
 
-describe('embedded voice session runner boundary', () => {
-	it('does not import legacy reconnect mutators, raw machine reset APIs, or policy classifiers', async () => {
+describe('voice session runner layering', () => {
+	it('keeps executor construction and registration in the React adapter', async () => {
 		const providerSource = await Bun.file(
 			new URL('../../../../components/voice-provider/index.tsx', import.meta.url),
 		).text();
+		const adapterSource = await Bun.file(
+			new URL('../../../../components/voice-provider/hooks/use-voice-session-executor.ts', import.meta.url),
+		).text();
 
-		const reconnectFacadeImports = extractNamedImports(providerSource, '@/features/server/voice/reconnect-coordinator');
-		const reconnectPolicyImports = extractNamedImports(providerSource, '@/features/server/voice/reconnect-policy');
-		const voiceSessionStoreImports = extractNamedImports(providerSource, '@/features/server/voice/voice-session-store');
+		expect(providerSource).toContain('useVoiceSessionExecutor({');
+		expect(providerSource).not.toContain('createVoiceSessionCommandExecutor');
+		expect(providerSource).not.toContain('registerVoiceSessionCommandRunner');
+		expect(providerSource).not.toContain('isVoiceSessionExecutorCommand');
+		expect(providerSource).not.toContain('TLegacyVoiceSessionCommand');
+		expect(adapterSource).toContain('createVoiceSessionCommandExecutor');
+		expect(adapterSource).toContain('registerVoiceSessionCommandRunner(executor.execute)');
+		expect(adapterSource).not.toContain('LegacyVoiceSessionCommand');
+	});
 
-		expect(reconnectFacadeImports.filter((importName) => bannedReconnectFacadeImports.includes(importName))).toEqual(
-			[],
-		);
-		expect(
-			voiceSessionStoreImports.filter((importName) => bannedVoiceSessionStoreImports.includes(importName)),
-		).toEqual([]);
-		expect(reconnectPolicyImports.filter((importName) => bannedReconnectPolicyImports.includes(importName))).toEqual(
-			[],
-		);
+	it('keeps the framework-free executor inside its allowed import layer', async () => {
+		const executorSource = await Bun.file(new URL('../voice-session-command-executor.ts', import.meta.url)).text();
+		const moduleImports = extractModuleImports(executorSource);
+
+		expect(moduleImports).toEqual(['./reconnect-policy', './voice-session-machine', './voice-session-store']);
 	});
 });

@@ -37,12 +37,9 @@ import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/v
 import { setVoiceProviderCleanupHandler } from '@/features/server/voice/provider-cleanup';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
-import {
-	createVoiceSessionCommandExecutor,
-	isVoiceSessionExecutorCommand,
-	type TLegacyVoiceSessionCommand,
-	type TVoiceSessionRebuildContext,
-	type TVoiceSessionRestoreContext,
+import type {
+	TVoiceSessionRebuildContext,
+	TVoiceSessionRestoreContext,
 } from '@/features/server/voice/voice-session-command-executor';
 import {
 	selectVoiceSessionConnectionStatus,
@@ -54,7 +51,6 @@ import {
 import {
 	dispatchVoiceSession,
 	getVoiceSessionState,
-	registerVoiceSessionCommandRunner,
 	subscribeVoiceSession,
 } from '@/features/server/voice/voice-session-store';
 import { logDebug, logVoice, reportError, traceSentrySpan } from '@/helpers/browser-logger';
@@ -103,6 +99,7 @@ import { type TransportStatsStore, useTransportStats } from './hooks/use-transpo
 import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
+import { useVoiceSessionExecutor } from './hooks/use-voice-session-executor';
 import {
 	type ActivityBroadcastState,
 	resolveActivityBroadcast,
@@ -4006,104 +4003,50 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[requestRecoveryFailureLeave],
 	);
 
-	const runLegacyVoiceSessionCommand = useCallback((_command: TLegacyVoiceSessionCommand): void => {
-		// C5 moved the final legacy command to the executor. Keep the composite
-		// adapter shape until C6 removes the embedded runner wiring.
-	}, []);
-	const captureWatchedRemoteStreamsRef = useLatestRef(captureWatchedRemoteStreams);
-	const rehydrateWatchIntentOnlyRef = useLatestRef(rehydrateWatchIntentOnly);
-	const recoverDesktopAppAudioFromIntentRef = useLatestRef(recoverDesktopAppAudioFromIntent);
-	const leaveAfterFailedTransportRecoveryRef = useLatestRef(leaveAfterFailedTransportRecovery);
-	const clearFailedVoiceSessionRef = useLatestRef(clearFailedVoiceSession);
-	const rebuildTransportsRef = useLatestRef(rebuildTransports);
-	const restoreVoiceSessionRef = useLatestRef(restoreVoiceSession);
-	const runLegacyVoiceSessionCommandRef = useLatestRef(runLegacyVoiceSessionCommand);
-
-	// Registering (rather than subscribing as a listener) also flushes any
-	// commands dispatched while no runner was alive — a result event from the
-	// previous provider instance's still-running async work can land in the
-	// remount gap, and final commands (RecoverDesktopAppAudio, LeaveVoiceSession,
-	// ClearFailedSession) leave the phases Resumed replays, so a buffer is the
-	// only path that preserves them.
-	useEffect(() => {
-		const executor = createVoiceSessionCommandExecutor({
-			now: Date.now,
-			random: Math.random,
-			delay: delayVoiceSessionCommand,
-			isOnline: isVoiceReconnectOnline,
-			captureRecoverySnapshot: () => captureWatchedRemoteStreamsRef.current(),
-			rebuildTransports: (command, context) => rebuildTransportsRef.current(command, context),
-			restoreVoiceSession: (command, context) => restoreVoiceSessionRef.current(command, context),
-			restoreWatchIntent: (snapshot) => rehydrateWatchIntentOnlyRef.current(snapshot),
-			recoverDesktopAppAudio: async () => {
-				const recovery = recoverDesktopAppAudioFromIntentRef.current();
-				// A completed rebuild must release the failure latch so a later,
-				// independent transport failure can start a new recovery cycle.
-				hasHandledTransportFailureRef.current = false;
-				await recovery;
-			},
-			leaveVoiceSession: (channelId) => leaveAfterFailedTransportRecoveryRef.current(channelId),
-			clearFailedSession: (command) => clearFailedVoiceSessionRef.current(command),
-			reportCommandError: (command, error) => {
-				reportError('Voice session command failed', error, {
-					commandType: command.type,
-					commandId: command.commandId,
-					generation: command.generation,
-				});
-			},
-			reportRebuildDetached: (command) => {
-				logDebug('Voice transport rebuild detached a hung cancelled operation', {
-					attempt: command.attempt + 1,
-					channelId: command.channelId,
-				});
-			},
-			reportRebuildTerminalFailure: (command, error) => {
-				reportError('Voice transport recovery failed', error, {
-					attempt: command.attempt + 1,
-					channelId: command.channelId,
-				});
-			},
-			reportRestoreDetached: (command) => {
-				logDebug('Voice reconnect detached a hung cancelled operation', {
-					attempt: command.attempt + 1,
-					channelId: command.pending.channelId,
-				});
-			},
-		});
-		const unregister = registerVoiceSessionCommandRunner((commands) => {
-			const executorCommands: TVoiceSessionCommand[] = [];
-
-			for (const command of commands) {
-				if (isVoiceSessionExecutorCommand(command)) {
-					executorCommands.push(command);
-				} else {
-					runLegacyVoiceSessionCommandRef.current(command);
-				}
-			}
-
-			executor.execute(executorCommands);
-		});
-
-		return () => {
-			unregister();
-			executor.dispose();
-		};
-	}, []);
-
-	// A provider remount mid-recovery (the machine state is module-level and
-	// survives it) would otherwise strand the machine waiting on a command whose
-	// runner unmounted. Resumed re-issues the current step under a new
-	// generation, invalidating any runner still in flight from the previous
-	// instance. Mount-only by design: within one mount no command is ever lost,
-	// so re-dispatching on dep changes would only risk duplicating in-flight
-	// work.
-	useEffect(() => {
-		const { phase } = getVoiceSessionState();
-
-		if (phase.phase === 'rebuilding' || phase.phase === 'reconnecting') {
-			dispatchVoiceSession({ type: 'Resumed' });
-		}
-	}, []);
+	useVoiceSessionExecutor({
+		now: Date.now,
+		random: Math.random,
+		delay: delayVoiceSessionCommand,
+		isOnline: isVoiceReconnectOnline,
+		captureRecoverySnapshot: captureWatchedRemoteStreams,
+		rebuildTransports,
+		restoreVoiceSession,
+		restoreWatchIntent: rehydrateWatchIntentOnly,
+		recoverDesktopAppAudio: async () => {
+			const recovery = recoverDesktopAppAudioFromIntent();
+			// A completed rebuild must release the failure latch so a later,
+			// independent transport failure can start a new recovery cycle.
+			hasHandledTransportFailureRef.current = false;
+			await recovery;
+		},
+		leaveVoiceSession: leaveAfterFailedTransportRecovery,
+		clearFailedSession: clearFailedVoiceSession,
+		reportCommandError: (command, error) => {
+			reportError('Voice session command failed', error, {
+				commandType: command.type,
+				commandId: command.commandId,
+				generation: command.generation,
+			});
+		},
+		reportRebuildDetached: (command) => {
+			logDebug('Voice transport rebuild detached a hung cancelled operation', {
+				attempt: command.attempt + 1,
+				channelId: command.channelId,
+			});
+		},
+		reportRebuildTerminalFailure: (command, error) => {
+			reportError('Voice transport recovery failed', error, {
+				attempt: command.attempt + 1,
+				channelId: command.channelId,
+			});
+		},
+		reportRestoreDetached: (command) => {
+			logDebug('Voice reconnect detached a hung cancelled operation', {
+				attempt: command.attempt + 1,
+				channelId: command.pending.channelId,
+			});
+		},
+	});
 
 	const setMicProcessingMuted = useCallback((micMuted: boolean) => {
 		micAudioPipelineRef.current?.setInputMuted(micMuted);
