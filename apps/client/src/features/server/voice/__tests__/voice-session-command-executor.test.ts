@@ -588,6 +588,38 @@ describe('voice session command executor', () => {
 		});
 	});
 
+	it('does not report restore failure when disposal aborts a pending restore', async () => {
+		const scheduler = createFakeScheduler();
+		const restoreRequest = createDeferred<{ serverSessionEstablished: boolean }>();
+		let requestSignal: AbortSignal | undefined;
+		const restoreCommand = startRestore();
+		const executor = createExecutor(
+			createFakePorts({
+				now: scheduler.now,
+				delay: scheduler.delay,
+				restoreVoiceSession: (_command, context) => {
+					requestSignal = context.signal;
+					return context.withTimeout(restoreRequest.promise);
+				},
+			}),
+		);
+
+		executor.execute([restoreCommand]);
+		await flushMicrotasks();
+		const stateBeforeDisposal = getVoiceSessionState();
+
+		executor.dispose();
+		await flushMicrotasks();
+
+		expect(requestSignal?.aborted).toBe(true);
+		expect(getVoiceSessionState()).toBe(stateBeforeDisposal);
+		expect(getVoiceSessionState().phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'restoring',
+			activeCommandId: restoreCommand.commandId,
+		});
+	});
+
 	it('retains server ownership when initialization fails after restore succeeds', async () => {
 		const failure = new Error('media initialization failed');
 		const restoreCommand = startRestore();

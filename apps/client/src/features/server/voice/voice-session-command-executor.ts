@@ -438,7 +438,7 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 				});
 			}
 		} catch (error) {
-			if (isVoiceSessionCommandCurrent(command)) {
+			if (!disposed && isVoiceSessionCommandCurrent(command)) {
 				dispatchVoiceSession({
 					type: 'RestoreFailed',
 					commandId: command.commandId,
