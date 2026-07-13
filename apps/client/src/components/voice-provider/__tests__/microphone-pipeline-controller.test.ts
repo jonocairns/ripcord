@@ -536,6 +536,21 @@ describe('microphone pipeline controller publication', () => {
 		expect(firstMonitor.cleanupCalls).toBe(1);
 	});
 
+	it('starts activity monitoring when user identity becomes available', async () => {
+		const harness = createHarness();
+		harness.setActivityMode('unavailable');
+		const prepared = await prepare(harness);
+		await harness.controller.publish({ source: prepared });
+
+		expect(harness.activityMonitors).toHaveLength(0);
+
+		harness.setActivityMode('monitor');
+		harness.controller.syncActivity();
+
+		expect(harness.activityMonitors).toHaveLength(1);
+		expect(harness.activityMonitors[0]?.producer).toBe(harness.producers[0]);
+	});
+
 	it('closes only a stale publish success and keeps the successor installed', async () => {
 		const harness = createHarness();
 		const stalePublish = createDeferred<TFakeProducer>();

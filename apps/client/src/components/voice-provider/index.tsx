@@ -1451,9 +1451,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		// These render values trigger re-evaluation; the controller reads their
 		// latest ref/store values through its injected activity-mode adapter.
 		void isConnected;
+		void ownUserId;
 		void ownVoiceState.micMuted;
 		microphoneController.syncActivity();
-	}, [isConnected, microphoneController, ownVoiceState.micMuted]);
+	}, [isConnected, microphoneController, ownUserId, ownVoiceState.micMuted]);
 
 	useEffect(() => {
 		const handleVolumeSettingsUpdated = (event: Event) => {
