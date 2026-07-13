@@ -49,10 +49,11 @@ type TUseTransportParams = {
 	markConsumeStarted: (
 		remoteId: number,
 		kind: StreamKind,
-		producerId?: string,
-		consumeGeneration?: number,
-		isManualRetry?: boolean,
-	) => void;
+		producerId: string | undefined,
+		consumeGeneration: number,
+		isManualRetry: boolean,
+		signal: AbortSignal,
+	) => Promise<boolean>;
 	markConsumeSucceeded: (
 		remoteId: number,
 		kind: StreamKind,
@@ -167,15 +168,15 @@ const useTransports = ({
 				return () => removeRemoteUserStream(remoteId, kind);
 			},
 			isProducerCurrent,
-			onConsumeStarted: (request, operationToken) => {
+			onConsumeStarted: (request, operationToken, signal) =>
 				markConsumeStarted(
 					request.remoteId,
 					request.kind,
 					request.expectedProducerId,
 					operationToken,
 					request.isManualRetry === true,
-				);
-			},
+					signal,
+				),
 			onConsumeSucceeded: (request, result) => {
 				markConsumeSucceeded(
 					request.remoteId,

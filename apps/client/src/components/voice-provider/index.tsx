@@ -82,6 +82,10 @@ import {
 	MicPipelineSupersededError,
 	revokeMicPipelineOwnership,
 } from './hooks/mic-pipeline-ownership';
+import {
+	createRemoteMediaConsumeStartPublication,
+	type TRemoteMediaConsumeStartPublication,
+} from './hooks/remote-media-consume-start-publication';
 import { useRemoteMediaSubscriptions } from './hooks/remote-media-subscriptions';
 import {
 	claimVoiceSessionExecution,
@@ -858,6 +862,33 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	} = useRemoteMediaSubscriptions();
 	const remoteMediaSubscriptionsRef = useLatestRef(remoteMediaSubscriptions);
 	const pendingStreamsRef = useLatestRef(pendingStreams);
+	const consumeStartPublicationRef = useRef<TRemoteMediaConsumeStartPublication | undefined>(undefined);
+	if (!consumeStartPublicationRef.current) {
+		consumeStartPublicationRef.current = createRemoteMediaConsumeStartPublication();
+	}
+	const consumeStartPublication = consumeStartPublicationRef.current;
+	useEffect(() => {
+		consumeStartPublication.reconcile(remoteMediaSubscriptions);
+	}, [consumeStartPublication, remoteMediaSubscriptions]);
+	const publishRemoteMediaConsumeStarted = useCallback(
+		(
+			remoteId: number,
+			kind: StreamKind,
+			producerId: string | undefined,
+			consumeGeneration: number,
+			isManualRetry: boolean,
+			signal: AbortSignal,
+		): Promise<boolean> => {
+			const publication = consumeStartPublication.wait(
+				{ remoteId, kind, expectedProducerId: producerId },
+				consumeGeneration,
+				signal,
+			);
+			markConsumeStarted(remoteId, kind, producerId, consumeGeneration, isManualRetry);
+			return publication;
+		},
+		[consumeStartPublication, markConsumeStarted],
+	);
 	const isRemoteMediaProducerCurrent = useCallback((remoteId: number, kind: StreamKind, producerId: string) => {
 		const subscription = remoteMediaSubscriptionsRef.current.get(getPendingStreamKey(remoteId, kind));
 
@@ -940,7 +971,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearAllPendingStreams,
 		reconcilePendingStreams,
 		markWatchStopped,
-		markConsumeStarted,
+		markConsumeStarted: publishRemoteMediaConsumeStarted,
 		markConsumeSucceeded,
 		markConsumeFailed,
 		markConsumerClosed,

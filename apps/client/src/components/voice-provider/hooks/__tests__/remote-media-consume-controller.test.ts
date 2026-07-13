@@ -139,6 +139,8 @@ const createHarness = () => {
 	const failedTokens: number[] = [];
 	const consumerClosedIds: string[] = [];
 	const currentProducers = new Map<string, string>();
+	const consumeStartDeferreds: TDeferred<boolean>[] = [];
+	let deferConsumeStart = false;
 	let localCreationError: unknown;
 
 	const controller = createRemoteMediaConsumeController<
@@ -185,6 +187,11 @@ const createHarness = () => {
 		isProducerCurrent: (remoteId, kind, producerId) => currentProducers.get(`${remoteId}-${kind}`) === producerId,
 		onConsumeStarted: (_consumeRequest, operationToken) => {
 			startedTokens.push(operationToken);
+			if (!deferConsumeStart) return true;
+
+			const deferred = createDeferred<boolean>();
+			consumeStartDeferreds.push(deferred);
+			return deferred.promise;
 		},
 		onConsumeSucceeded: (_consumeRequest, result) => {
 			succeeded.push(result);
@@ -214,7 +221,11 @@ const createHarness = () => {
 		succeeded,
 		failedTokens,
 		consumerClosedIds,
+		consumeStartDeferreds,
 		setCurrentProducer,
+		setDeferConsumeStart: (defer: boolean) => {
+			deferConsumeStart = defer;
+		},
 		setLocalCreationError: (error: unknown) => {
 			localCreationError = error;
 		},
@@ -228,6 +239,29 @@ const installTransport = (harness: ReturnType<typeof createHarness>, id = 'trans
 };
 
 describe('remote media consume controller', () => {
+	it('waits for consume-start publication before crossing the server RPC boundary', async () => {
+		const harness = createHarness();
+		installTransport(harness);
+		harness.setCurrentProducer(6, StreamKind.AUDIO, 'producer-6');
+		harness.setDeferConsumeStart(true);
+
+		const consume = harness.controller.consume(request(6, StreamKind.AUDIO, 'producer-6'));
+
+		expect(harness.startedTokens).toEqual([1]);
+		expect(harness.consumeDeferreds).toHaveLength(0);
+
+		harness.consumeStartDeferreds[0].resolve(true);
+		await flush();
+		expect(harness.consumeDeferreds).toHaveLength(1);
+
+		harness.consumeDeferreds[0].resolve(allocation('producer-6', 'consumer-6', StreamKind.AUDIO));
+		await flush();
+		harness.resumeDeferreds[0].resolve();
+		await consume;
+
+		expect(harness.succeeded).toEqual([{ producerId: 'producer-6', consumerId: 'consumer-6', operationToken: 1 }]);
+	});
+
 	it('closes a server allocation that arrives after stop watching while consume is pending', async () => {
 		const harness = createHarness();
 		installTransport(harness);

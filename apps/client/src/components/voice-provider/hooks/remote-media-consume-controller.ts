@@ -51,7 +51,11 @@ type TRemoteMediaConsumeControllerPorts<
 		consumer: TLocalConsumer,
 	) => () => void;
 	isProducerCurrent: (remoteId: number, kind: StreamKind, producerId: string) => boolean;
-	onConsumeStarted: (request: TRemoteMediaConsumeRequest<TRtpCapabilities>, operationToken: number) => void;
+	onConsumeStarted: (
+		request: TRemoteMediaConsumeRequest<TRtpCapabilities>,
+		operationToken: number,
+		signal: AbortSignal,
+	) => boolean | Promise<boolean>;
 	onConsumeSucceeded: (
 		request: TRemoteMediaConsumeRequest<TRtpCapabilities>,
 		result: { producerId: string; consumerId: string; operationToken: number },
@@ -461,11 +465,36 @@ const createRemoteMediaConsumeController = <
 			abortController: new AbortController(),
 		};
 		operations.set(key, operation);
-		ports.onConsumeStarted(request, operation.token);
 
 		let failedAttemptIndex = 0;
 
 		try {
+			let consumeStartPublished: boolean;
+			try {
+				const publication = ports.onConsumeStarted(request, operation.token, operation.abortController.signal);
+				consumeStartPublished =
+					typeof publication === 'boolean'
+						? publication
+						: await waitForBoundary(publication, operation.abortController.signal);
+			} catch (error) {
+				if (error instanceof VoiceRemoteMediaConsumeCancelledError || !isOperationCurrent(operation)) {
+					return;
+				}
+
+				log('Remote consume start publication failed', {
+					error,
+					remoteId: request.remoteId,
+					kind: request.kind,
+				});
+				ports.onConsumeFailed(request, {
+					reason: 'consume start publication failed',
+					operationToken: operation.token,
+				});
+				return;
+			}
+
+			if (!consumeStartPublished || !isOperationCurrent(operation)) return;
+
 			while (isOperationCurrent(operation)) {
 				const result = await runAttempt(operation);
 

@@ -684,6 +684,12 @@ operation cancellation because a close command may target a predecessor after
 its successor has started; consumer identity, not the ledger close-command
 generation, is authoritative for that cleanup.
 
+The React adapter acknowledges that the consume-start generation has committed
+to the ledger before the controller crosses the server consume boundary. This
+keeps direct existing-producer audio consumes from mistaking React's publication
+window for a missing producer while still letting a batched stop, producer
+close/replacement, or transport cancellation reject the start.
+
 ### C9 — Microphone pipeline resource controller
 
 **Objective:** Put microphone ownership, preparation, installation, publishing,
