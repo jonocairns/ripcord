@@ -22,10 +22,10 @@ import {
 // and every concrete recovery operation arrive through injected ports, so the
 // whole lifecycle is testable without real timers or media stacks.
 //
-// This module is NOT registered as the production command runner yet. The
-// embedded VoiceProvider runner still owns command execution; slices C2–C6 of
-// docs/voice/voice-session-execution-extraction-plan.md move commands here and
-// cut the provider over.
+// VoiceProvider registers this executor for snapshot, wait, watch-intent, and
+// final commands. Its temporary legacy delegate still owns transport rebuild
+// and voice restore execution until slices C4–C6 complete the cutover described
+// in docs/voice/voice-session-execution-extraction-plan.md.
 
 type TRebuildTransportsCommand = Extract<TVoiceSessionCommand, { type: 'RebuildTransports' }>;
 type TRestoreVoiceSessionCommand = Extract<TVoiceSessionCommand, { type: 'RestoreVoiceSession' }>;
@@ -162,11 +162,13 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 			}
 
 			const remainingMs = getLiveReconnectDeadline(command) - ports.now();
-			if (remainingMs <= 0) {
+			if (remainingMs < 0) {
 				return 'expired';
 			}
 
-			const outcome = await waitForDelay(Math.min(remainingMs, VOICE_RECONNECT_WAIT_POLL_MS), context.signal);
+			// Preserve the legacy strict expiry boundary: equality still gets one
+			// opportunity to observe connectivity before the window expires.
+			const outcome = await waitForDelay(Math.min(remainingMs + 1, VOICE_RECONNECT_WAIT_POLL_MS), context.signal);
 			if (outcome === 'cancelled') {
 				return 'cancelled';
 			}
@@ -235,7 +237,9 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 
 			const authenticated = selectReconnectAuthenticated(stateBeforeSubscribe);
 			if (authenticated) {
-				return ports.now() >= getLiveReconnectDeadline(command) ? 'expired' : 'authenticated';
+				// The legacy fast path accepted an already-authenticated socket before
+				// consulting expiry; keep that behavior during this mechanical move.
+				return 'authenticated';
 			}
 
 			const remainingMs = getLiveReconnectDeadline(command) - ports.now();
@@ -260,7 +264,7 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 
 		while (remainingDelayMs > 0 && context.isCurrent()) {
 			const remainingSessionMs = getLiveReconnectDeadline(command) - ports.now();
-			if (remainingSessionMs <= 0) {
+			if (remainingSessionMs < 0) {
 				return 'expired';
 			}
 
@@ -273,7 +277,7 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 				continue;
 			}
 
-			const waitMs = Math.min(remainingDelayMs, remainingSessionMs, VOICE_RECONNECT_WAIT_POLL_MS);
+			const waitMs = Math.min(remainingDelayMs, VOICE_RECONNECT_WAIT_POLL_MS);
 			const outcome = await waitForDelay(waitMs, context.signal);
 			if (outcome === 'cancelled') {
 				return 'cancelled';
@@ -286,7 +290,7 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 			return 'cancelled';
 		}
 
-		return ports.now() >= getLiveReconnectDeadline(command) ? 'expired' : 'ready';
+		return ports.now() > getLiveReconnectDeadline(command) ? 'expired' : 'ready';
 	};
 
 	// Result events are dispatched only while the command is still current;

@@ -877,7 +877,7 @@ describe('voice session command executor', () => {
 		expect(getVoiceSessionState().phase).toMatchObject({ phase: 'reconnecting', step: 'restoring' });
 	});
 
-	it('expires an offline retry delay at the live session deadline', async () => {
+	it('expires an offline retry delay only after the live session deadline', async () => {
 		const scheduler = createFakeScheduler();
 		const retryCommand = startRetryDelay({ ...pendingReconnect, expiresAt: 500 });
 		const executor = createExecutor(
@@ -892,7 +892,30 @@ describe('voice session command executor', () => {
 		executor.execute([retryCommand]);
 		await scheduler.advanceBy(500);
 
+		expect(getVoiceSessionState().phase).toMatchObject({ phase: 'reconnecting', step: 'retryDelay' });
+		expect(scheduler.pendingCount()).toBe(1);
+
+		await scheduler.advanceBy(1);
+
 		expect(getVoiceSessionState().phase).toMatchObject({ phase: 'failed', reason: 'reconnect-expired' });
+		expect(scheduler.pendingCount()).toBe(0);
+	});
+
+	it('accepts an already-authenticated socket at the reconnect deadline', async () => {
+		const scheduler = createFakeScheduler(pendingReconnect.expiresAt);
+		const waitCommand = startAuthWait();
+		dispatchVoiceSession({ type: 'SocketAuthenticated' });
+		const executor = createExecutor(
+			createFakePorts({
+				now: scheduler.now,
+				delay: scheduler.delay,
+			}),
+		);
+
+		executor.execute([waitCommand]);
+		await flushMicrotasks();
+
+		expect(getVoiceSessionState().phase).toMatchObject({ phase: 'reconnecting', step: 'restoring' });
 		expect(scheduler.pendingCount()).toBe(0);
 	});
 
@@ -910,10 +933,13 @@ describe('voice session command executor', () => {
 		}
 
 		const rehydratedSnapshots: TWatchedRemoteStreamsSnapshot[] = [];
+		const phasesDuringRestore: string[] = [];
 		const executor = createExecutor(
 			createFakePorts({
 				now: () => 123,
 				restoreWatchIntent: (snapshot) => {
+					const { phase } = getVoiceSessionState();
+					phasesDuringRestore.push(phase.phase === 'reconnecting' ? phase.step : phase.phase);
 					rehydratedSnapshots.push(snapshot);
 				},
 			}),
@@ -923,6 +949,7 @@ describe('voice session command executor', () => {
 		await flushMicrotasks();
 
 		expect(rehydratedSnapshots).toEqual([emptySnapshot]);
+		expect(phasesDuringRestore).toEqual(['restoreWatch']);
 
 		const state = getVoiceSessionState();
 

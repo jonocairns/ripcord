@@ -3717,32 +3717,41 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[isCurrentVoiceSessionCommand],
 	);
 
-	const leaveAfterFailedTransportRecovery = useCallback(async (channelId?: number): Promise<void> => {
-		const leaveRequest =
-			isConnectedRef.current && channelId !== undefined
-				? leaveVoiceSessionAfterRecoveryFailure().then((didLeave) => {
-						if (!didLeave) {
-							logVoice('Failed to send voice.leave after unrecoverable transport failure');
-						}
-					})
-				: undefined;
-
-		if (currentVoiceChannelIdRef.current !== undefined) {
-			useServerStore.getState().setCurrentVoiceChannelId(undefined);
-			useServerStore.getState().updateOwnVoiceState({
-				webcamEnabled: false,
-				sharingScreen: false,
-			});
-			useServerStore.getState().setPinnedCard(undefined);
-			playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
-			toast.info('Voice connection was lost. Rejoin the voice channel manually.');
+	const requestRecoveryFailureLeave = useCallback(async (): Promise<void> => {
+		// Offline terminal cleanup deliberately leaves the server seat to
+		// disconnect grace; only a failed request on a live socket is reportable.
+		if (!useServerStore.getState().connected) {
+			return;
 		}
 
-		voiceCleanupRef.current?.();
-		hasHandledTransportFailureRef.current = false;
-
-		await leaveRequest;
+		const didLeave = await leaveVoiceSessionAfterRecoveryFailure();
+		if (!didLeave && useServerStore.getState().connected) {
+			throw new Error('Failed to send voice.leave after voice recovery failure');
+		}
 	}, []);
+
+	const leaveAfterFailedTransportRecovery = useCallback(
+		async (channelId?: number): Promise<void> => {
+			const leaveRequest = channelId === undefined ? undefined : requestRecoveryFailureLeave();
+
+			if (currentVoiceChannelIdRef.current !== undefined) {
+				useServerStore.getState().setCurrentVoiceChannelId(undefined);
+				useServerStore.getState().updateOwnVoiceState({
+					webcamEnabled: false,
+					sharingScreen: false,
+				});
+				useServerStore.getState().setPinnedCard(undefined);
+				playSound(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
+				toast.info('Voice connection was lost. Rejoin the voice channel manually.');
+			}
+
+			voiceCleanupRef.current?.();
+			hasHandledTransportFailureRef.current = false;
+
+			await leaveRequest;
+		},
+		[requestRecoveryFailureLeave],
+	);
 
 	const runRebuildTransportCommand = useCallback(
 		async (command: TVoiceSessionCommand): Promise<void> => {
@@ -4250,20 +4259,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			// restoreOrJoin already bound a server-side session this cycle; without an
 			// explicit leave the runtime would keep us resident in the channel even
 			// though the client is giving up.
-			const leaveRequest = command.leaveServerSession
-				? leaveVoiceSessionAfterRecoveryFailure().then((didLeave) => {
-						if (!didLeave) {
-							logDebug('Voice reconnect terminal leave failed');
-						}
-					})
-				: undefined;
+			const leaveRequest = command.leaveServerSession ? requestRecoveryFailureLeave() : undefined;
 
 			clearOwnVoiceSessionAfterReconnectFailure(command.reason);
 			voiceCleanupRef.current?.();
 
 			await leaveRequest;
 		},
-		[],
+		[requestRecoveryFailureLeave],
 	);
 
 	const runLegacyVoiceSessionCommand = useCallback(
@@ -4305,17 +4308,18 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			restoreWatchIntent: (snapshot) => rehydrateWatchIntentOnlyRef.current(snapshot),
 			recoverDesktopAppAudio: async () => {
 				const recovery = recoverDesktopAppAudioFromIntentRef.current();
+				// A completed rebuild must release the failure latch so a later,
+				// independent transport failure can start a new recovery cycle.
 				hasHandledTransportFailureRef.current = false;
 				await recovery;
 			},
 			leaveVoiceSession: (channelId) => leaveAfterFailedTransportRecoveryRef.current(channelId),
 			clearFailedSession: (command) => clearFailedVoiceSessionRef.current(command),
 			reportCommandError: (command, error) => {
-				logVoice('Voice session command failed', {
+				reportError('Voice session command failed', error, {
 					commandType: command.type,
 					commandId: command.commandId,
 					generation: command.generation,
-					error,
 				});
 			},
 		});
