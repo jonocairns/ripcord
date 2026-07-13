@@ -739,10 +739,22 @@ voice-session currency after the awaited producer allocation. Local stream
 removal, producer close callbacks, output-track end callbacks, and activity
 updates are identity scoped so stale work cannot clear a successor.
 
-During an in-session transport rebuild, an absent `localAudioStream` continues
-to mean there is nothing to republish; reacquisition remains limited to full
-session rejoin or to a present local stream whose track is missing or ended.
-This is a verified merged behavior, not a reconnect-policy change in C9.
+Keep the extraction mechanically reviewable and isolate the correctness changes
+exposed by controller-level tests in a separate `fix:` commit in the same C9 PR.
+Those fixes are limited to the existing C9 guarantees:
+
+- fence late publish success and failure against microphone ownership,
+  producer-transport replacement, and voice-session execution currency;
+- ignore stale output-track callbacks;
+- synchronously stop captured raw and outbound tracks before removing their
+  React publication, then await gain and processing graph destruction.
+
+The last ordering releases physical capture before UI state is marked inactive,
+while retaining synchronous snapshot/clear and identity-scoped removal. During
+an in-session transport rebuild, an absent `localAudioStream` continues to mean
+there is nothing to republish; reacquisition remains limited to full session
+rejoin or to a present local stream whose track is missing or ended. This is a
+verified merged behavior, not a reconnect-policy change in C9.
 
 ## Server ownership decision
 

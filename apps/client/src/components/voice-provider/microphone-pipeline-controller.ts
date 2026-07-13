@@ -213,6 +213,13 @@ const createMicrophonePipelineController = <
 			closeOwnedProducer(producer);
 		}
 
+		// Stop physical capture and the final outbound track before marking the
+		// identity-scoped React publication inactive. Graph destruction can then
+		// finish asynchronously without leaving the browser mic indicator active.
+		capturedPreparedPipeline?.outboundAudioTrack.stop();
+		capturedRawStream?.getTracks().forEach((track) => {
+			track.stop();
+		});
 		capturedLocalPublication?.remove();
 
 		if (capturedGainPipeline) {
@@ -222,10 +229,6 @@ const createMicrophonePipelineController = <
 				log('Failed to clean up microphone gain pipeline', { error });
 			}
 		}
-
-		capturedRawStream?.getTracks().forEach((track) => {
-			track.stop();
-		});
 
 		if (capturedProcessingPipeline) {
 			try {
@@ -463,19 +466,34 @@ const createMicrophonePipelineController = <
 		processingPipeline?.setInputMuted(micMuted);
 		log('Obtained audio track', { audioTrack: prepared.outboundAudioTrack });
 
-		const producer = await publicationLease.publish(prepared.outboundAudioTrack);
+		let producer: TProducer;
+		try {
+			producer = await publicationLease.publish(prepared.outboundAudioTrack);
+		} catch (error) {
+			if (!owns(prepared) || !publicationLease.isCurrent() || !isCurrent()) {
+				throw new MicPipelineSupersededError();
+			}
 
-		if (!publicationLease.isCurrent() || !isCurrent()) {
-			ports.closeProducer(producer);
-			throw new MicPipelineSupersededError();
+			throw error;
 		}
 
 		observeProducer(producer);
+
+		if (!owns(prepared) || !publicationLease.isCurrent() || !isCurrent()) {
+			closeOwnedProducer(producer);
+			throw new MicPipelineSupersededError();
+		}
+
 		localProducer = producer;
 		syncActivity();
 		log('Microphone audio producer created', { producer });
 
+		const publishedProducer = producer;
 		prepared.outboundAudioTrack.onended = () => {
+			if (!owns(prepared) || localProducer !== publishedProducer) {
+				return;
+			}
+
 			// The raw track's device-loss listeners own passthrough capture loss.
 			if (prepared.outboundStream === rawMicStream) {
 				return;

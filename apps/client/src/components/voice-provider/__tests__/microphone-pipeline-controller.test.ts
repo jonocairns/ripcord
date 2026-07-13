@@ -536,6 +536,56 @@ describe('microphone pipeline controller publication', () => {
 		expect(firstMonitor.cleanupCalls).toBe(1);
 	});
 
+	it('closes only a stale publish success and keeps the successor installed', async () => {
+		const harness = createHarness();
+		const stalePublish = createDeferred<TFakeProducer>();
+		const staleProducer = createProducer('stale-producer');
+		const successorProducer = createProducer('successor-producer');
+		let publishCall = 0;
+		harness.setPublishProducer(() => {
+			publishCall += 1;
+			return publishCall === 1 ? stalePublish.promise : Promise.resolve(successorProducer);
+		});
+
+		const stalePrepared = await prepare(harness);
+		const stalePublication = harness.controller.publish({ source: stalePrepared });
+		await flushMicrotasks();
+		const successorPrepared = await prepare(harness);
+		await harness.controller.publish({ source: successorPrepared });
+		stalePublish.resolve(staleProducer);
+
+		await expect(stalePublication).rejects.toBeInstanceOf(MicPipelineSupersededError);
+		expect(staleProducer.closeCalls).toBe(1);
+		expect(successorProducer.closeCalls).toBe(0);
+		expect(harness.serverClosedProducerIds).toContain('stale-producer');
+
+		await harness.controller.cleanup();
+		expect(successorProducer.closeCalls).toBe(1);
+	});
+
+	it('does not let a stale publish failure clean up the successor', async () => {
+		const harness = createHarness();
+		const stalePublish = createDeferred<TFakeProducer>();
+		const successorProducer = createProducer('successor-producer');
+		let publishCall = 0;
+		harness.setPublishProducer(() => {
+			publishCall += 1;
+			return publishCall === 1 ? stalePublish.promise : Promise.resolve(successorProducer);
+		});
+
+		const stalePrepared = await prepare(harness);
+		const stalePublication = harness.controller.publish({ source: stalePrepared });
+		await flushMicrotasks();
+		const successorPrepared = await prepare(harness);
+		await harness.controller.publish({ source: successorPrepared });
+		stalePublish.reject(new Error('old transport failed'));
+
+		await expect(stalePublication).rejects.toBeInstanceOf(MicPipelineSupersededError);
+		expect(harness.controller.owns(successorPrepared)).toBe(true);
+		expect(successorProducer.closed).toBe(false);
+		expect(successorPrepared.outboundAudioTrack.readyState).toBe('live');
+	});
+
 	it('fences a late producer when the transport or session is replaced', async () => {
 		for (const invalidation of ['transport', 'session'] as const) {
 			const harness = createHarness();
@@ -561,6 +611,29 @@ describe('microphone pipeline controller publication', () => {
 			expect(producer.closeCalls).toBe(1);
 		}
 	});
+
+	it('ignores an ended callback from a superseded output track', async () => {
+		const harness = createHarness();
+		const firstProcessing = createProcessingPipeline('first-processing');
+		const successorProcessing = createProcessingPipeline('successor-processing');
+		let processingCall = 0;
+		harness.setCreateProcessingPipeline(async () => {
+			processingCall += 1;
+			return processingCall === 1 ? firstProcessing : successorProcessing;
+		});
+
+		const firstPrepared = await prepare(harness);
+		await harness.controller.publish({ source: firstPrepared });
+		const staleEndedHandler = firstPrepared.outboundAudioTrack.onended;
+		const successor = await prepare(harness);
+		await harness.controller.publish({ source: successor });
+		staleEndedHandler?.call(firstPrepared.outboundAudioTrack, new Event('ended'));
+		await flushMicrotasks();
+
+		expect(harness.controller.owns(successor)).toBe(true);
+		expect(successorProcessing.destroyCalls).toBe(0);
+		expect(successor.outboundAudioTrack.readyState).toBe('live');
+	});
 });
 
 describe('microphone pipeline controller cleanup and raw loss', () => {
@@ -582,7 +655,10 @@ describe('microphone pipeline controller cleanup and raw loss', () => {
 
 		expect(producer?.closed).toBe(true);
 		expect(harness.activityMonitors[0]?.cleanupCalls).toBe(1);
+		expect(gain.track.stopCalls).toBe(1);
 		expect(harness.removedLocalStreams).toEqual([prepared.outboundStream]);
+		expect(order.indexOf('stop:gain')).toBeLessThan(order.indexOf('destroy:gain'));
+		expect(order.indexOf('stop:raw')).toBeLessThan(order.indexOf('destroy:gain'));
 
 		gainDestroy.resolve();
 		await flushMicrotasks();

@@ -3282,7 +3282,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						// Mic failures are non-fatal — voice join continues without a mic.
 						if (micPrepResult) {
 							try {
-								await produceMicTrack(micPrepResult);
+								await produceMicTrack(micPrepResult, isCurrent);
 							} catch (error) {
 								logVoice('Error attaching microphone to transport', { error });
 
