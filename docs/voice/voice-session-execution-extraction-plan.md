@@ -1,8 +1,9 @@
 # Voice Session Execution Extraction and Transactional Restore Plan
 
-**Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, and
-C4 landed in PR #280. The remaining slices are planned. Completed slices carry
-a **Landed** note recording what was built and what later slices should inherit.
+**Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
+landed in PR #280, and C5 landed in PR #281. The remaining slices are planned.
+Completed slices carry a **Landed** note recording what was built and what later
+slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -150,7 +151,7 @@ session store. It does not read the Zustand reconnect projection.
 | C2 | client 2 (#279) | Client | C1 | Executor foundation and simple/final commands |
 | C3 | client 2 (#279) | Client | C2 | Online, auth, and retry-delay commands extracted |
 | C4 | client 3 (#280) | Client | C3 | WS restore command extracted |
-| C5 | client 4 | Client | C2 | Transport rebuild command extracted |
+| C5 | client 4 (#281) | Client | C2 | Transport rebuild command extracted |
 | C6 | client 5 | Client | C4 + C5 | React adapter cutover; embedded runner removed |
 | C7 | client 6 | Client | C6 | Mutable Zustand projection retired or UI-only |
 | C8 | client 7 | Client | C6 | Remote consume resource controller extracted |
@@ -183,7 +184,7 @@ back to one slice per PR — the slice boundaries already support that.
 | client 1 (#278) | C0 + C1 | Add voice session executor boundary and store selectors |
 | client 2 (#279) | C2 + C3 | Execute voice session final and wait commands outside provider |
 | client 3 (#280) | C4 | Extract voice restore command execution |
-| client 4 | C5 | Extract voice transport rebuild execution |
+| client 4 (#281) | C5 | Extract voice transport rebuild execution |
 | client 5 | C6 | Cut voice provider over to command executor |
 | client 6 | C7 | Remove voice reconnect state projection |
 | client 7 (follow-on) | C8 | Extract remote media consume controller |
@@ -461,11 +462,12 @@ implementation, not restore scheduling or command bookkeeping.
   synchronization fails after a successful response.
 - `VoiceProvider` retains only the concrete restore/media adapter. It checks
   command currency after each awaited RPC/media boundary and before shared
-  writes. Until C5, the adapter also waits for the legacy transport-rebuild
-  promise before starting restore work.
-- `isVoiceSessionExecutorCommand` is the exhaustive temporary routing boundary:
-  `RestoreVoiceSession` belongs only to the executor and `RebuildTransports`
-  belongs only to the legacy runner.
+  writes. C5 removed its wait for the legacy transport-rebuild promise; a WS
+  reconnect now preempts rebuild work through executor-owned currency and
+  cancellation.
+- `isVoiceSessionExecutorCommand` remains the exhaustive temporary routing
+  boundary. After C5 every command belongs to the executor, while the empty
+  composite legacy adapter stays in place for the C6 cutover.
 - Disposal aborts the old restore without dispatching `RestoreFailed`, leaving
   the current step available for the next provider's `Resumed` replay. Genuine
   executor timeouts still dispatch raw `RestoreFailed` events.
@@ -496,6 +498,34 @@ and result reporting out of `VoiceProvider`.
 `VoiceProvider`; the provider retains only a concrete rebuild operation port.
 
 **Suggested commit:** `refactor: extract voice transport rebuild execution`
+
+**Landed** (PR #281). Notes for C6:
+
+- The executor owns the active rebuild slot, the latest queued current rebuild,
+  fixed one- and two-second retry backoff, supersession cancellation, a
+  two-second bounded drain, and raw result-event dispatch. Backoff and draining
+  both use the injected delay port.
+- `TVoiceSessionRebuildContext.restartIfNonceChanged` keeps the live provider
+  nonce read in the concrete port while making the executor currency-check and
+  dispatch `NonceChanged`. The reducer still resets attempts, caps nonce
+  restarts, classifies failures, caps attempts, and emits terminal cleanup.
+- `VoiceProvider` retains only the concrete transport/media rebuild operation.
+  It preserves local-resource-first teardown, remote watch intent, session
+  execution ownership, and currency checks after awaited media/RPC boundaries
+  and before shared writes.
+- A WS reconnect aborts a stale rebuild before reconnect commands are delivered.
+  Restore no longer waits for a provider-owned rebuild promise, and a detached
+  rebuild cannot dispatch stale success or failure.
+- Rebuild terminal-error reporting observes the reducer's resulting failed
+  phase after dispatch; it does not classify errors or choose policy in the
+  executor.
+- All commands now route exclusively through the executor and
+  `TLegacyVoiceSessionCommand` is `never`. The composite provider registration,
+  ref-backed ports, mount-time executor construction, and empty legacy adapter
+  intentionally remain for C6 to remove together.
+- Disposal aborts rebuild work without dispatching a failure. `Resumed` replays
+  the current recovery step under a new generation on remount, while the store
+  continues to buffer generation-valid final commands across runner gaps.
 
 ### C6 — React adapter cutover and embedded-runner deletion
 
