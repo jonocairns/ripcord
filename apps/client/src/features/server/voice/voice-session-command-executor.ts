@@ -22,14 +22,12 @@ import {
 // and every concrete recovery operation arrive through injected ports, so the
 // whole lifecycle is testable without real timers or media stacks.
 //
-// VoiceProvider registers this executor for every command. The temporary
-// composite runner remains until C6 removes the embedded adapter wiring, but
-// its legacy side no longer owns a command after C5.
+// The VoiceProvider React adapter registers this executor directly for every
+// command and supplies live concrete capabilities through ref-backed ports.
 
 type TRebuildTransportsCommand = Extract<TVoiceSessionCommand, { type: 'RebuildTransports' }>;
 type TRestoreVoiceSessionCommand = Extract<TVoiceSessionCommand, { type: 'RestoreVoiceSession' }>;
 type TClearFailedSessionCommand = Extract<TVoiceSessionCommand, { type: 'ClearFailedSession' }>;
-type TLegacyVoiceSessionCommand = never;
 
 type TVoiceSessionCommandContext = {
 	// Aborted when the command is superseded, the machine leaves the command's
@@ -114,24 +112,6 @@ const isRecoveryStepCommand = (command: TVoiceSessionCommand): boolean => {
 		case 'LeaveVoiceSession':
 		case 'ClearFailedSession':
 			return false;
-	}
-};
-
-const isVoiceSessionExecutorCommand = (
-	command: TVoiceSessionCommand,
-): command is Exclude<TVoiceSessionCommand, TLegacyVoiceSessionCommand> => {
-	switch (command.type) {
-		case 'CaptureRecoverySnapshot':
-		case 'RebuildTransports':
-		case 'WaitOnline':
-		case 'WaitAuth':
-		case 'RestoreVoiceSession':
-		case 'RetryDelay':
-		case 'RestoreWatchIntent':
-		case 'RecoverDesktopAppAudio':
-		case 'LeaveVoiceSession':
-		case 'ClearFailedSession':
-			return true;
 	}
 };
 
@@ -821,11 +801,10 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 };
 
 export type {
-	TLegacyVoiceSessionCommand,
 	TVoiceSessionCommandContext,
 	TVoiceSessionCommandExecutor,
 	TVoiceSessionExecutorPorts,
 	TVoiceSessionRebuildContext,
 	TVoiceSessionRestoreContext,
 };
-export { createVoiceSessionCommandExecutor, isVoiceSessionExecutorCommand };
+export { createVoiceSessionCommandExecutor };

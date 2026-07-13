@@ -563,6 +563,10 @@ not the command orchestrator.
 
 **Suggested commit:** `refactor: cut voice provider over to command executor`
 
+**Scope note:** Executor-wide structured command spans remain deferred to the V0
+observability gate. C6 keeps the adapter cutover behavior-preserving and does
+not expand the executor port contract for generic tracing.
+
 ### C7 — Retire the mutable reconnect projection
 
 **Objective:** Remove the module-initialization ordering that previously caused
@@ -852,11 +856,12 @@ impossible by construction or passes under the documented post-commit owner.
 **Objective:** Prove the extracted layers behave together and leave useful
 production diagnostics.
 
-V0 is a gate, not a standalone work item. The observability items below land
-with the PRs that create the relevant seams (executor spans with client 5,
-transport-pair and restore-outcome logs with server 2–4), and the E2E scenarios
-are run as part of the client 5 and server 4 exit criteria. This section is the
-consolidated checklist for declaring the plan implemented.
+V0 is a gate, not a standalone work item. The transport-pair and restore-outcome
+logs land with server 2–4; executor-wide structured command spans remain
+deferred to this gate rather than expanding the behavior-preserving client 5
+adapter cutover. The E2E scenarios are run as part of the client 5 and server 4
+exit criteria. This section is the consolidated checklist for declaring the
+plan implemented.
 
 **Automated validation:**
 

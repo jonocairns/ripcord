@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import {
 	createVoiceSessionCommandExecutor,
-	isVoiceSessionExecutorCommand,
 	type TVoiceSessionCommandExecutor,
 	type TVoiceSessionExecutorPorts,
 } from '../voice-session-command-executor';
@@ -336,45 +335,6 @@ describe('voice session command executor', () => {
 		executor.execute([rebuildCommand]);
 
 		expect(rebuildCalls).toBe(0);
-	});
-
-	it('routes every command exclusively to the executor', () => {
-		const commands: TVoiceSessionCommand[] = [
-			{ type: 'CaptureRecoverySnapshot', commandId: 1, generation: 1, recovery: 'rebuilding' },
-			{
-				type: 'RebuildTransports',
-				commandId: 2,
-				generation: 1,
-				channelId: 5,
-				nonce: 1,
-				attempt: 0,
-				snapshot: emptySnapshot,
-			},
-			{ type: 'WaitOnline', commandId: 3, generation: 1, expiresAt: 60_000 },
-			{ type: 'WaitAuth', commandId: 4, generation: 1, expiresAt: 60_000 },
-			{
-				type: 'RestoreVoiceSession',
-				commandId: 5,
-				generation: 1,
-				pending: pendingReconnect,
-				attempt: 0,
-				snapshot: emptySnapshot,
-			},
-			{ type: 'RetryDelay', commandId: 6, generation: 1, attempt: 0, expiresAt: 60_000 },
-			{ type: 'RestoreWatchIntent', commandId: 7, generation: 1, snapshot: emptySnapshot },
-			{ type: 'RecoverDesktopAppAudio', commandId: 8, generation: 1 },
-			{ type: 'LeaveVoiceSession', commandId: 9, generation: 1, channelId: 5 },
-			{
-				type: 'ClearFailedSession',
-				commandId: 10,
-				generation: 1,
-				reason: 'restore-terminal-error',
-				channelId: 5,
-				leaveServerSession: true,
-			},
-		];
-
-		expect(commands.every(isVoiceSessionExecutorCommand)).toBe(true);
 	});
 
 	it('aborts a superseded rebuild before its queued replacement starts', async () => {
