@@ -1,9 +1,9 @@
 # Voice Session Execution Extraction and Transactional Restore Plan
 
 **Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
-landed in PR #280, and C5 landed in PR #281. The remaining slices are planned.
-Completed slices carry a **Landed** note recording what was built and what later
-slices should inherit.
+landed in PR #280, and C5 landed in PR #281. C6 is implemented in draft PR #282
+and pending merge; the remaining slices are planned. Completed slices carry a
+**Landed** note recording what was built and what later slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -152,7 +152,7 @@ session store. It does not read the Zustand reconnect projection.
 | C3 | client 2 (#279) | Client | C2 | Online, auth, and retry-delay commands extracted |
 | C4 | client 3 (#280) | Client | C3 | WS restore command extracted |
 | C5 | client 4 (#281) | Client | C2 | Transport rebuild command extracted |
-| C6 | client 5 | Client | C4 + C5 | React adapter cutover; embedded runner removed |
+| C6 | client 5 (#282) | Client | C4 + C5 | React adapter cutover; embedded runner removed |
 | C7 | client 6 | Client | C6 | Mutable Zustand projection retired or UI-only |
 | C8 | client 7 | Client | C6 | Remote consume resource controller extracted |
 | C9 | client 8 | Client | C6 | Microphone pipeline resource controller extracted |
@@ -185,7 +185,7 @@ back to one slice per PR — the slice boundaries already support that.
 | client 2 (#279) | C2 + C3 | Execute voice session final and wait commands outside provider |
 | client 3 (#280) | C4 | Extract voice restore command execution |
 | client 4 (#281) | C5 | Extract voice transport rebuild execution |
-| client 5 | C6 | Cut voice provider over to command executor |
+| client 5 (#282) | C6 | Cut voice provider over to command executor |
 | client 6 | C7 | Remove voice reconnect state projection |
 | client 7 (follow-on) | C8 | Extract remote media consume controller |
 | client 8 (follow-on) | C9 | Extract microphone pipeline controller |
@@ -566,6 +566,25 @@ not the command orchestrator.
 **Scope note:** Executor-wide structured command spans remain deferred to the V0
 observability gate. C6 keeps the adapter cutover behavior-preserving and does
 not expand the executor port contract for generic tracing.
+
+**Implemented in PR #282 (pending merge).** Notes for later slices:
+
+- `useVoiceSessionExecutor` owns one mount-scoped executor, direct store runner
+  registration, mount-time `Resumed` replay, and idempotent unregister/disposal.
+- One ref-backed port set keeps the executor and runner stable across provider
+  dependency changes while invoking the latest concrete callbacks.
+- `VoiceProvider` retains the concrete restore, rebuild, transport, media, and
+  final-cleanup mechanics; C6 removes only its embedded executor/composite
+  lifecycle wiring.
+- The empty legacy delegate, `TLegacyVoiceSessionCommand`, and
+  `isVoiceSessionExecutorCommand` temporary routing boundary are removed. Every
+  command now has one direct execution path through the executor.
+- Adapter tests exercise the real adapter, executor, machine, and store for
+  rebuild/restore remount replay, disposal fencing, fresh ref-backed ports, and
+  generation-valid final-command buffering. The runner boundary test now
+  enforces import/layering constraints only.
+- Final-command replay remains store-owned. Recovery-step commands remain
+  unbuffered and are reissued under a new generation by mount-time `Resumed`.
 
 ### C7 — Retire the mutable reconnect projection
 
