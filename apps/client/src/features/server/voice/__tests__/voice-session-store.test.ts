@@ -252,7 +252,7 @@ describe('voice session store', () => {
 		expect(isVoiceSessionCommandCurrent(finalCommand)).toBe(false);
 	});
 
-	it('notifies state listeners before running commands so projections are in sync', () => {
+	it('notifies full listeners before delivering commands', () => {
 		const order: string[] = [];
 		const unsubscribe = subscribeVoiceSession(() => {
 			order.push('listener');
@@ -269,9 +269,8 @@ describe('voice session store', () => {
 	});
 
 	it('updates direct selectors from dispatch with no projection or listener involved', () => {
-		// This file never imports the reconnect-coordinator, so its module-eval
-		// zustand projection listener does not exist here: the selectors below
-		// must be correct from the dispatch alone.
+		// Direct selectors must be correct from the dispatch alone, without any
+		// secondary store or synchronization listener.
 		dispatchVoiceSession({
 			type: 'WsDropped',
 			pending: pendingReconnect,
@@ -323,8 +322,8 @@ describe('voice session store', () => {
 	it('lets a command runner observe post-dispatch state through direct selectors', () => {
 		// The WaitAuth command is emitted synchronously by the WsDropped dispatch.
 		// A runner that reads the direct selectors when it receives the command
-		// must see the post-dispatch reconnect (the projection-race equivalent:
-		// observing pre-dispatch state here aborted recovery as 'cleared').
+		// must see the post-dispatch reconnect. Observing pre-dispatch state here
+		// would abort recovery as 'cleared'.
 		let observed: { since: number | undefined; authenticated: boolean } | undefined;
 		const unregister = registerVoiceSessionCommandRunner((commands) => {
 			if (commands[0]?.type === 'WaitAuth') {

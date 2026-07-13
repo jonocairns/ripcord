@@ -1,9 +1,9 @@
 # Voice Session Execution Extraction and Transactional Restore Plan
 
 **Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
-landed in PR #280, C5 landed in PR #281, and C6 landed in PR #282. The remaining
-slices are planned. Completed slices carry a **Landed** note recording what was
-built and what later slices should inherit.
+landed in PR #280, C5 landed in PR #281, C6 landed in PR #282, and C7 landed in
+client 6. The remaining slices are planned. Completed slices carry a **Landed**
+note recording what was built and what later slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -613,6 +613,26 @@ the reconnect projection race.
 the Zustand reconnect store no longer exists.
 
 **Suggested commit:** `refactor: remove voice reconnect state projection`
+
+**Landed** (client 6). Notes for later slices:
+
+- `useVoiceEvents` reads reconnect timestamp and authentication through
+  `useVoiceSessionSelector` and the direct machine selectors. Protected voice
+  subscriptions remain deferred until the reconnected socket authenticates,
+  and eager existing-producer sync remains limited to steady state.
+- The mutable Zustand reconnect store, its setters, projection synchronization,
+  and the module-evaluation session-store listener are removed. Coordinator
+  actions dispatch machine events directly, and imperative queries use direct
+  session-store selectors.
+- The machine's top-level reconnect fields remain as facade state outside the
+  reconnecting phase; C7 does not redesign the FSM or relocate its compatibility
+  state.
+- Coordinator and voice-action tests now reset through
+  `resetVoiceSessionState`, arrange state with coordinator actions or explicit
+  machine events, and assert direct selectors. The reset contract retains
+  monotonic identities, long-lived listeners, and command-outbox clearing.
+- Store, executor, adapter, buffering, and remount behavior no longer depends on
+  importing `reconnect-coordinator` or registering a projection listener first.
 
 ### C8 — Remote consume resource controller
 
