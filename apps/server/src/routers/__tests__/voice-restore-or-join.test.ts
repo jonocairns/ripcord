@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { ChannelType, ServerEvents } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { createMockContext } from '../../__tests__/context';
@@ -105,6 +105,40 @@ afterEach(async () => {
 });
 
 describe('voice.restoreOrJoin', () => {
+	test('keeps join and restore bootstrap on the independent transport wrappers', async () => {
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const preparePairSpy = spyOn(runtime, 'prepareTransportPair');
+		const createProducerSpy = spyOn(runtime, 'createProducerTransport');
+		const createConsumerSpy = spyOn(runtime, 'createConsumerTransport');
+		const { caller } = await initTest(1);
+
+		try {
+			await caller.voice.join({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: false,
+					soundMuted: false,
+				},
+			});
+			await caller.voice.restoreOrJoin({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: false,
+					soundMuted: false,
+				},
+				reconnectAttemptId: 'legacy-bootstrap',
+			});
+
+			expect(preparePairSpy).not.toHaveBeenCalled();
+			expect(createProducerSpy).toHaveBeenCalledTimes(2);
+			expect(createConsumerSpy).toHaveBeenCalledTimes(2);
+		} finally {
+			preparePairSpy.mockRestore();
+			createProducerSpy.mockRestore();
+			createConsumerSpy.mockRestore();
+		}
+	});
+
 	test('keeps cancellation and supersession compatible with the existing public error', () => {
 		expect(toRestoreOrJoinPublicError(new VoiceRestoreAttemptCancelledError())).toBeInstanceOf(
 			VoiceRestoreAttemptSupersededError,
