@@ -105,7 +105,7 @@ afterEach(async () => {
 });
 
 describe('voice.restoreOrJoin', () => {
-	test('uses a prepared pair only for fresh restore while legacy join, restore, and rebuild routes stay independent', async () => {
+	test('uses prepared pairs for fresh and existing restores while join and rebuild routes stay independent', async () => {
 		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 		const preparePairSpy = spyOn(runtime, 'prepareTransportPair');
 		const createProducerSpy = spyOn(runtime, 'createProducerTransport');
@@ -139,9 +139,9 @@ describe('voice.restoreOrJoin', () => {
 			await caller.voice.createProducerTransport();
 			await caller.voice.createConsumerTransport();
 
-			expect(preparePairSpy).toHaveBeenCalledTimes(1);
-			expect(createProducerSpy).toHaveBeenCalledTimes(3);
-			expect(createConsumerSpy).toHaveBeenCalledTimes(3);
+			expect(preparePairSpy).toHaveBeenCalledTimes(2);
+			expect(createProducerSpy).toHaveBeenCalledTimes(2);
+			expect(createConsumerSpy).toHaveBeenCalledTimes(2);
 		} finally {
 			preparePairSpy.mockRestore();
 			createProducerSpy.mockRestore();
@@ -248,7 +248,7 @@ describe('voice.restoreOrJoin', () => {
 	});
 
 	test('returns bootstrap without join, leave, or session-replaced side effects for the same session', async () => {
-		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 
 		const joinEvents: number[] = [];
 		const leaveEvents: number[] = [];
@@ -279,6 +279,9 @@ describe('voice.restoreOrJoin', () => {
 					soundMuted: false,
 				},
 			});
+			const oldProducerTransport = runtime.getProducerTransport(1);
+			const oldConsumerTransport = runtime.getConsumerTransport(1);
+			const sessionIncarnation = runtime.getVoiceSessionIncarnation(1);
 
 			joinEvents.length = 0;
 			leaveEvents.length = 0;
@@ -292,8 +295,18 @@ describe('voice.restoreOrJoin', () => {
 				},
 				reconnectAttemptId: 'attempt-1',
 			});
+			const replacementProducerTransport = runtime.getProducerTransport(1);
+			const replacementConsumerTransport = runtime.getConsumerTransport(1);
+			if (!replacementProducerTransport || !replacementConsumerTransport) {
+				throw new Error('Expected restore to install both replacement transports');
+			}
 
 			expect(result.channelUsers.some((user) => user.userId === 1)).toBe(true);
+			expect(result.producerTransportParams.id).toBe(replacementProducerTransport.id);
+			expect(result.consumerTransportParams.id).toBe(replacementConsumerTransport.id);
+			expect(oldProducerTransport?.closed).toBe(true);
+			expect(oldConsumerTransport?.closed).toBe(true);
+			expect(runtime.getVoiceSessionIncarnation(1)).toBe(sessionIncarnation);
 			expect(joinEvents).toEqual([]);
 			expect(leaveEvents).toEqual([]);
 			expect(sessionReplacedEvents).toEqual([]);

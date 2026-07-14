@@ -173,7 +173,7 @@ const useTransportAllocations = (runtime: VoiceRuntime, allocations: Array<Promi
 
 const resolvedAllocation = (transport: TControlledTransport) => Promise.resolve(transport);
 
-const createFreshRestoreHarness = (runtime: VoiceRuntime) => {
+const createRestoreHarness = (runtime: VoiceRuntime) => {
 	const events: TVoiceRestorePresenceEvent[] = [];
 	const bindings: Array<{ channelId: number; sessionIncarnation: symbol }> = [];
 	const connectionIdentity = {};
@@ -183,10 +183,7 @@ const createFreshRestoreHarness = (runtime: VoiceRuntime) => {
 		getPendingVoiceChannelIdsOwnedElsewhere: () => [],
 		consumeReconnectLabBehavior: () => undefined,
 		delay: async () => {},
-		createBootstrap: async () => {
-			throw new Error('Existing-session bootstrap was not expected');
-		},
-		prepareFreshBootstrap: async ({ userId }) => {
+		prepareBootstrap: async ({ userId }) => {
 			const pair = await runtime.prepareTransportPair(userId);
 
 			return {
@@ -197,7 +194,6 @@ const createFreshRestoreHarness = (runtime: VoiceRuntime) => {
 				}),
 			};
 		},
-		isBootstrapCurrencyError: () => false,
 		logRestoreEvent: () => {},
 		logJoined: () => {},
 		logBootstrapRollback: () => {},
@@ -547,6 +543,205 @@ describe('VoiceRuntime prepared transport pairs', () => {
 		expect(() => pair.commit()).toThrow('Voice transport pair is disposed');
 	});
 
+	test('existing restore producer failure preserves both active transports and established resources', async () => {
+		const runtime = makeRuntime();
+		const activeProducer = makeControlledTransport('active-producer');
+		const activeConsumer = makeControlledTransport('active-consumer');
+		const replacementProducer = createDeferred<TControlledTransport>();
+		const replacementConsumer = createDeferred<TControlledTransport>();
+		const lateConsumer = makeControlledTransport('late-replacement-consumer');
+		useTransportAllocations(runtime, [
+			resolvedAllocation(activeProducer),
+			resolvedAllocation(activeConsumer),
+			replacementProducer.promise,
+			replacementConsumer.promise,
+		]);
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const activePair = await runtime.prepareTransportPair(1);
+		activePair.commit();
+		const producer = makeCloseResource<Producer<AppData>>('active-audio');
+		const consumer = makeCloseResource<Consumer<AppData>>('active-consumer-resource');
+		runtime.addProducer(1, StreamKind.AUDIO, producer.resource);
+		runtime.addConsumer(1, 2, StreamKind.AUDIO, consumer.resource);
+		const harness = createRestoreHarness(runtime);
+		const failure = new Error('replacement producer failed');
+		const restore = harness.restore('existing-producer-failure');
+
+		replacementProducer.reject(failure);
+		await expect(restore).rejects.toBe(failure);
+		replacementConsumer.resolve(lateConsumer);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(runtime.getProducerTransport(1)).toBe(activeProducer.transport);
+		expect(runtime.getConsumerTransport(1)).toBe(activeConsumer.transport);
+		expect(activeProducer.closeCalls).toBe(0);
+		expect(activeConsumer.closeCalls).toBe(0);
+		expect(producer.closeCalls).toBe(0);
+		expect(consumer.closeCalls).toBe(0);
+		expect(lateConsumer.closeCalls).toBe(1);
+		expect(runtime.getUser(1)).toBeDefined();
+		expect(harness.bindings).toEqual([]);
+		expect(harness.events.map((event) => event.type)).toEqual(['state-update']);
+	});
+
+	test('existing restore consumer failure preserves both active transports and established resources', async () => {
+		const runtime = makeRuntime();
+		const activeProducer = makeControlledTransport('active-producer');
+		const activeConsumer = makeControlledTransport('active-consumer');
+		const replacementProducer = createDeferred<TControlledTransport>();
+		const replacementConsumer = createDeferred<TControlledTransport>();
+		const readyProducer = makeControlledTransport('ready-replacement-producer');
+		useTransportAllocations(runtime, [
+			resolvedAllocation(activeProducer),
+			resolvedAllocation(activeConsumer),
+			replacementProducer.promise,
+			replacementConsumer.promise,
+		]);
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const activePair = await runtime.prepareTransportPair(1);
+		activePair.commit();
+		const producer = makeCloseResource<Producer<AppData>>('active-audio');
+		const consumer = makeCloseResource<Consumer<AppData>>('active-consumer-resource');
+		runtime.addProducer(1, StreamKind.AUDIO, producer.resource);
+		runtime.addConsumer(1, 2, StreamKind.AUDIO, consumer.resource);
+		const harness = createRestoreHarness(runtime);
+		const failure = new Error('replacement consumer failed');
+		const restore = harness.restore('existing-consumer-failure');
+
+		replacementProducer.resolve(readyProducer);
+		await Promise.resolve();
+		replacementConsumer.reject(failure);
+		await expect(restore).rejects.toBe(failure);
+
+		expect(runtime.getProducerTransport(1)).toBe(activeProducer.transport);
+		expect(runtime.getConsumerTransport(1)).toBe(activeConsumer.transport);
+		expect(activeProducer.closeCalls).toBe(0);
+		expect(activeConsumer.closeCalls).toBe(0);
+		expect(producer.closeCalls).toBe(0);
+		expect(consumer.closeCalls).toBe(0);
+		expect(readyProducer.closeCalls).toBe(1);
+		expect(runtime.getUser(1)).toBeDefined();
+		expect(harness.bindings).toEqual([]);
+		expect(harness.events.map((event) => event.type)).toEqual(['state-update']);
+	});
+
+	test('aborting an existing restore during allocation disposes replacements and preserves the active pair', async () => {
+		const runtime = makeRuntime();
+		const activeProducer = makeControlledTransport('active-producer');
+		const activeConsumer = makeControlledTransport('active-consumer');
+		const replacementProducer = createDeferred<TControlledTransport>();
+		const replacementConsumer = createDeferred<TControlledTransport>();
+		const lateProducer = makeControlledTransport('late-replacement-producer');
+		const readyConsumer = makeControlledTransport('ready-replacement-consumer');
+		useTransportAllocations(runtime, [
+			resolvedAllocation(activeProducer),
+			resolvedAllocation(activeConsumer),
+			replacementProducer.promise,
+			replacementConsumer.promise,
+		]);
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const activePair = await runtime.prepareTransportPair(1);
+		activePair.commit();
+		const harness = createRestoreHarness(runtime);
+		const abortController = new AbortController();
+		const restore = harness.restore('existing-abort-allocation', abortController.signal);
+
+		replacementConsumer.resolve(readyConsumer);
+		await Promise.resolve();
+		abortController.abort();
+		replacementProducer.resolve(lateProducer);
+
+		await expect(restore).rejects.toBeInstanceOf(VoiceRestoreAttemptCancelledError);
+		expect(runtime.getProducerTransport(1)).toBe(activeProducer.transport);
+		expect(runtime.getConsumerTransport(1)).toBe(activeConsumer.transport);
+		expect(activeProducer.closeCalls).toBe(0);
+		expect(activeConsumer.closeCalls).toBe(0);
+		expect(lateProducer.closeCalls).toBe(1);
+		expect(readyConsumer.closeCalls).toBe(1);
+		expect(runtime.getUser(1)).toBeDefined();
+		expect(harness.bindings).toEqual([]);
+	});
+
+	test('aborting an existing restore while the consumer allocation is pending preserves the active pair', async () => {
+		const runtime = makeRuntime();
+		const activeProducer = makeControlledTransport('active-producer');
+		const activeConsumer = makeControlledTransport('active-consumer');
+		const replacementProducer = createDeferred<TControlledTransport>();
+		const replacementConsumer = createDeferred<TControlledTransport>();
+		const readyProducer = makeControlledTransport('ready-replacement-producer');
+		const lateConsumer = makeControlledTransport('late-replacement-consumer');
+		useTransportAllocations(runtime, [
+			resolvedAllocation(activeProducer),
+			resolvedAllocation(activeConsumer),
+			replacementProducer.promise,
+			replacementConsumer.promise,
+		]);
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const activePair = await runtime.prepareTransportPair(1);
+		activePair.commit();
+		const harness = createRestoreHarness(runtime);
+		const abortController = new AbortController();
+		const restore = harness.restore('existing-abort-consumer', abortController.signal);
+
+		replacementProducer.resolve(readyProducer);
+		await Promise.resolve();
+		abortController.abort();
+		replacementConsumer.resolve(lateConsumer);
+
+		await expect(restore).rejects.toBeInstanceOf(VoiceRestoreAttemptCancelledError);
+		expect(runtime.getProducerTransport(1)).toBe(activeProducer.transport);
+		expect(runtime.getConsumerTransport(1)).toBe(activeConsumer.transport);
+		expect(activeProducer.closeCalls).toBe(0);
+		expect(activeConsumer.closeCalls).toBe(0);
+		expect(readyProducer.closeCalls).toBe(1);
+		expect(lateConsumer.closeCalls).toBe(1);
+		expect(runtime.getUser(1)).toBeDefined();
+		expect(harness.bindings).toEqual([]);
+	});
+
+	test('a late overlapping existing restore cannot replace the newest committed pair', async () => {
+		const runtime = makeRuntime();
+		const activeProducer = makeControlledTransport('active-producer');
+		const activeConsumer = makeControlledTransport('active-consumer');
+		const staleProducerAllocation = createDeferred<TControlledTransport>();
+		const staleConsumerAllocation = createDeferred<TControlledTransport>();
+		const staleProducer = makeControlledTransport('stale-producer');
+		const staleConsumer = makeControlledTransport('stale-consumer');
+		const currentProducer = makeControlledTransport('current-producer');
+		const currentConsumer = makeControlledTransport('current-consumer');
+		useTransportAllocations(runtime, [
+			resolvedAllocation(activeProducer),
+			resolvedAllocation(activeConsumer),
+			staleProducerAllocation.promise,
+			staleConsumerAllocation.promise,
+			resolvedAllocation(currentProducer),
+			resolvedAllocation(currentConsumer),
+		]);
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const activePair = await runtime.prepareTransportPair(1);
+		activePair.commit();
+		const harness = createRestoreHarness(runtime);
+		const staleRestore = harness.restore('stale-existing');
+		await Promise.resolve();
+
+		await expect(harness.restore('current-existing')).resolves.toEqual({ channelUsers: [1] });
+		staleProducerAllocation.resolve(staleProducer);
+		staleConsumerAllocation.resolve(staleConsumer);
+
+		await expect(staleRestore).rejects.toBeInstanceOf(VoiceRestoreAttemptSupersededServiceError);
+		expect(runtime.getProducerTransport(1)).toBe(currentProducer.transport);
+		expect(runtime.getConsumerTransport(1)).toBe(currentConsumer.transport);
+		expect(activeProducer.closeCalls).toBe(1);
+		expect(activeConsumer.closeCalls).toBe(1);
+		expect(staleProducer.closeCalls).toBe(1);
+		expect(staleConsumer.closeCalls).toBe(1);
+		expect(currentProducer.closeCalls).toBe(0);
+		expect(currentConsumer.closeCalls).toBe(0);
+		expect(runtime.getUser(1)).toBeDefined();
+		expect(harness.bindings).toHaveLength(1);
+	});
+
 	test('abort while producer preparation is pending disposes both sides without fresh-session side effects', async () => {
 		const runtime = makeRuntime();
 		const producerAllocation = createDeferred<TControlledTransport>();
@@ -554,7 +749,7 @@ describe('VoiceRuntime prepared transport pairs', () => {
 		const producer = makeControlledTransport('late-producer');
 		const consumer = makeControlledTransport('ready-consumer');
 		useTransportAllocations(runtime, [producerAllocation.promise, consumerAllocation.promise]);
-		const harness = createFreshRestoreHarness(runtime);
+		const harness = createRestoreHarness(runtime);
 		const abortController = new AbortController();
 		const restore = harness.restore('abort-producer', abortController.signal);
 
@@ -579,7 +774,7 @@ describe('VoiceRuntime prepared transport pairs', () => {
 		const consumerAllocation = createDeferred<TControlledTransport>();
 		const consumer = makeControlledTransport('late-consumer');
 		useTransportAllocations(runtime, [producerAllocation.promise, consumerAllocation.promise]);
-		const harness = createFreshRestoreHarness(runtime);
+		const harness = createRestoreHarness(runtime);
 		const failure = new Error('Producer allocation failed');
 		const restore = harness.restore('allocation-failure');
 
@@ -604,7 +799,7 @@ describe('VoiceRuntime prepared transport pairs', () => {
 		const producer = makeControlledTransport('ready-producer');
 		const consumer = makeControlledTransport('late-consumer');
 		useTransportAllocations(runtime, [producerAllocation.promise, consumerAllocation.promise]);
-		const harness = createFreshRestoreHarness(runtime);
+		const harness = createRestoreHarness(runtime);
 		const abortController = new AbortController();
 		const restore = harness.restore('abort-consumer', abortController.signal);
 
@@ -637,7 +832,7 @@ describe('VoiceRuntime prepared transport pairs', () => {
 			resolvedAllocation(currentProducer),
 			resolvedAllocation(currentConsumer),
 		]);
-		const harness = createFreshRestoreHarness(runtime);
+		const harness = createRestoreHarness(runtime);
 		const staleRestore = harness.restore('stale');
 		await Promise.resolve();
 		const currentRestore = harness.restore('current');

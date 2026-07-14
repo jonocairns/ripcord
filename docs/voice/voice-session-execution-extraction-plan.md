@@ -994,9 +994,21 @@ pair.
 - Successful restore swaps both and closes the old pair afterward.
 - Two overlapping attempts leave the newest pair installed.
 
-**Exit criteria:** No route path can install half of a transport pair.
+**Exit criteria:** No `restoreOrJoin` path can install half of a transport pair.
 
 **Suggested commit:** `fix: replace restored voice transports atomically`
+
+**Implementation decision:** Generalize the S2 prepared-bootstrap port for both
+fresh and existing restores. Existing restores keep the established
+requested-state reconciliation and state-update publication before transport
+preparation; S3 makes only replacement-pair ownership, the provisional-claim
+transition, and context/WebSocket rebinding transactional. Immediately before
+commit, the service synchronously validates attempt currency, the captured
+session incarnation, and any provisional claim. One non-awaiting block then
+commits the pair, commits the claim, and binds the existing incarnation. Every
+pre-commit exit disposes the private pair, while post-commit abort or response
+failure leaves the runtime-owned pair and seat intact. Removing the remaining
+provisional membership/presence behavior stays deferred to S4.
 
 ### S4 — Remove legacy mutation path and complete cancellation matrix
 

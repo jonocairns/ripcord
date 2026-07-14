@@ -80,7 +80,7 @@ const createVoiceJoinBootstrap = async (opts: {
 	};
 };
 
-const prepareFreshVoiceJoinBootstrap = async (opts: { runtime: VoiceRuntime; userId: number }) => {
+const prepareVoiceJoinBootstrap = async (opts: { runtime: VoiceRuntime; userId: number }) => {
 	const { runtime, userId } = opts;
 	const router = runtime.getRouter();
 	const pair = await runtime.prepareTransportPair(userId);
@@ -98,4 +98,4 @@ const prepareFreshVoiceJoinBootstrap = async (opts: { runtime: VoiceRuntime; use
 	};
 };
 
-export { createVoiceJoinBootstrap, getVoiceJoinTarget, prepareFreshVoiceJoinBootstrap, voiceJoinInputSchema };
+export { createVoiceJoinBootstrap, getVoiceJoinTarget, prepareVoiceJoinBootstrap, voiceJoinInputSchema };

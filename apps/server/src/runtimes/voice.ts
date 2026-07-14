@@ -476,6 +476,10 @@ class VoiceRuntime {
 		return true;
 	};
 
+	public ownsProvisionalRestoreSeatClaim = (userId: number, claim: symbol): boolean => {
+		return this.provisionalRestoreSeatClaims.get(userId) === claim;
+	};
+
 	public rollbackProvisionalRestoreSeat = (userId: number, claim: symbol): boolean => {
 		if (this.provisionalRestoreSeatClaims.get(userId) !== claim) {
 			return false;

@@ -137,6 +137,10 @@ class FakeVoiceRestoreRuntime implements TVoiceRestoreRuntime {
 		return this.sessionIncarnations.get(userId);
 	}
 
+	public ownsProvisionalRestoreSeatClaim(userId: number, claim: symbol) {
+		return this.provisionalClaims.get(userId) === claim;
+	}
+
 	public rollbackProvisionalRestoreSeat(userId: number, claim: symbol) {
 		this.order.push('seat:rollback-attempt');
 
@@ -151,15 +155,12 @@ class FakeVoiceRestoreRuntime implements TVoiceRestoreRuntime {
 	}
 }
 
-class FakeBootstrapCurrencyError extends Error {}
-
 type TBootstrapResult = {
 	attempt: number;
 	channelUsers: number[];
 };
 
 type TServiceDependencies = TVoiceRestoreOrJoinServiceDependencies<FakeVoiceRestoreRuntime, TBootstrapResult>;
-type TBootstrapOptions = Parameters<TServiceDependencies['createBootstrap']>[0];
 
 type THarness = ReturnType<typeof createHarness>;
 
@@ -168,7 +169,7 @@ const createHarness = () => {
 	const events: TVoiceRestorePresenceEvent[] = [];
 	const bindings: Array<{ channelId: number; sessionIncarnation: symbol }> = [];
 	const pendingQueries: Array<{ userId: number; clientInstanceId?: string }> = [];
-	const freshBootstrapStats = {
+	const preparedBootstrapStats = {
 		commits: 0,
 		disposals: 0,
 		responses: 0,
@@ -179,8 +180,7 @@ const createHarness = () => {
 		[PRIMARY_CHANNEL_ID, primaryRuntime],
 		[SECONDARY_CHANNEL_ID, secondaryRuntime],
 	]);
-	let bootstrapAttempt = 0;
-	let freshBootstrapAttempt = 0;
+	let preparedBootstrapAttempt = 0;
 	let labBehavior: TVoiceReconnectLabRestoreBehavior | undefined;
 	let pendingChannelIds: number[] = [];
 	let ownConnection: TVoiceRestoreConnection | undefined = {
@@ -193,14 +193,11 @@ const createHarness = () => {
 			channelId: number,
 		) => Promise<{ channel: { id: number; name: string }; runtime: FakeVoiceRestoreRuntime }>;
 		delay: (milliseconds: number) => Promise<void>;
-		createProducer: (options: TBootstrapOptions, attempt: number) => Promise<void>;
-		createConsumer: (options: TBootstrapOptions, attempt: number) => Promise<void>;
-		beforeBootstrapReturn: (options: TBootstrapOptions, attempt: number) => Promise<void>;
 		prepareProducer: (attempt: number) => Promise<void>;
 		prepareConsumer: (attempt: number) => Promise<void>;
-		beforeFreshPreparationReturn: (attempt: number) => Promise<void>;
-		onFreshCommit: (attempt: number) => void;
-		onFreshResponse: (attempt: number) => void;
+		beforePreparationReturn: (attempt: number) => Promise<void>;
+		onCommit: (attempt: number) => void;
+		onResponse: (attempt: number) => void;
 	} = {
 		resolveTarget: async (channelId) => {
 			order.push('target:resolve');
@@ -213,34 +210,17 @@ const createHarness = () => {
 			return { channel: { id: channelId, name: `Voice ${channelId}` }, runtime };
 		},
 		delay: async () => {},
-		createProducer: async (options, attempt) => {
-			order.push(`bootstrap:${attempt}:producer`);
-
-			if (!options.isCurrent()) {
-				throw new FakeBootstrapCurrencyError();
-			}
-		},
-		createConsumer: async (options, attempt) => {
-			order.push(`bootstrap:${attempt}:consumer`);
-
-			if (!options.isCurrent()) {
-				throw new FakeBootstrapCurrencyError();
-			}
-		},
-		beforeBootstrapReturn: async (_options, attempt) => {
-			order.push(`bootstrap:${attempt}:snapshot`);
-		},
 		prepareProducer: async (attempt) => {
-			order.push(`fresh:${attempt}:producer`);
+			order.push(`prepared:${attempt}:producer`);
 		},
 		prepareConsumer: async (attempt) => {
-			order.push(`fresh:${attempt}:consumer`);
+			order.push(`prepared:${attempt}:consumer`);
 		},
-		beforeFreshPreparationReturn: async (attempt) => {
-			order.push(`fresh:${attempt}:prepared`);
+		beforePreparationReturn: async (attempt) => {
+			order.push(`prepared:${attempt}:ready`);
 		},
-		onFreshCommit: () => {},
-		onFreshResponse: () => {},
+		onCommit: () => {},
+		onResponse: () => {},
 	};
 
 	const dependencies: TServiceDependencies = {
@@ -256,25 +236,13 @@ const createHarness = () => {
 			return behavior;
 		},
 		delay: (milliseconds) => controls.delay(milliseconds),
-		createBootstrap: async (options) => {
-			bootstrapAttempt += 1;
-			const attempt = bootstrapAttempt;
-			order.push(`bootstrap:${attempt}:start`);
-			await Promise.all([controls.createProducer(options, attempt), controls.createConsumer(options, attempt)]);
-			await controls.beforeBootstrapReturn(options, attempt);
-
-			return {
-				attempt,
-				channelUsers: options.runtime.hasUser(options.userId) ? [options.userId] : [],
-			};
-		},
-		prepareFreshBootstrap: async (options) => {
-			freshBootstrapAttempt += 1;
-			const attempt = freshBootstrapAttempt;
+		prepareBootstrap: async (options) => {
+			preparedBootstrapAttempt += 1;
+			const attempt = preparedBootstrapAttempt;
 			let state: 'prepared' | 'committed' | 'disposed' = 'prepared';
-			order.push(`fresh:${attempt}:start`);
+			order.push(`prepared:${attempt}:start`);
 			await Promise.all([controls.prepareProducer(attempt), controls.prepareConsumer(attempt)]);
-			await controls.beforeFreshPreparationReturn(attempt);
+			await controls.beforePreparationReturn(attempt);
 
 			return {
 				commit: () => {
@@ -287,9 +255,9 @@ const createHarness = () => {
 					}
 
 					state = 'committed';
-					freshBootstrapStats.commits += 1;
-					order.push(`fresh:${attempt}:commit`);
-					controls.onFreshCommit(attempt);
+					preparedBootstrapStats.commits += 1;
+					order.push(`prepared:${attempt}:commit`);
+					controls.onCommit(attempt);
 				},
 				dispose: () => {
 					if (state !== 'prepared') {
@@ -297,13 +265,13 @@ const createHarness = () => {
 					}
 
 					state = 'disposed';
-					freshBootstrapStats.disposals += 1;
-					order.push(`fresh:${attempt}:dispose`);
+					preparedBootstrapStats.disposals += 1;
+					order.push(`prepared:${attempt}:dispose`);
 				},
 				buildCommittedResponse: () => {
-					freshBootstrapStats.responses += 1;
-					order.push(`fresh:${attempt}:response`);
-					controls.onFreshResponse(attempt);
+					preparedBootstrapStats.responses += 1;
+					order.push(`prepared:${attempt}:response`);
+					controls.onResponse(attempt);
 					return {
 						attempt,
 						channelUsers: options.runtime.hasUser(options.userId) ? [options.userId] : [],
@@ -311,7 +279,6 @@ const createHarness = () => {
 				},
 			};
 		},
-		isBootstrapCurrencyError: (error) => error instanceof FakeBootstrapCurrencyError,
 		logRestoreEvent: (event) => order.push(`log:${event}`),
 		logJoined: () => order.push('log:joined'),
 		logBootstrapRollback: () => order.push('log:rollback'),
@@ -357,7 +324,7 @@ const createHarness = () => {
 		events,
 		bindings,
 		pendingQueries,
-		freshBootstrapStats,
+		preparedBootstrapStats,
 		primaryRuntime,
 		secondaryRuntime,
 		setLabBehavior: (behavior: TVoiceReconnectLabRestoreBehavior | undefined) => {
@@ -394,21 +361,21 @@ describe('voice restore-or-join service', () => {
 		expect(result).toEqual({ attempt: 1, channelUsers: [1] });
 		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
 		expect(harness.primaryRuntime.successfulCommits).toBe(0);
-		expect(harness.freshBootstrapStats).toEqual({ commits: 1, disposals: 0, responses: 1 });
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 1, disposals: 0, responses: 1 });
 		expect(harness.bindings).toHaveLength(1);
 		expect(harness.events.map((event) => event.type)).toEqual(['join']);
 		expect(harness.order).toEqual([
 			'target:resolve',
 			'log:attempt',
-			'fresh:1:start',
-			'fresh:1:producer',
-			'fresh:1:consumer',
-			'fresh:1:prepared',
-			'fresh:1:commit',
+			'prepared:1:start',
+			'prepared:1:producer',
+			'prepared:1:consumer',
+			'prepared:1:ready',
+			'prepared:1:commit',
 			'context:bind',
 			'presence:join',
 			'log:joined',
-			'fresh:1:response',
+			'prepared:1:response',
 			'log:outcome',
 		]);
 	});
@@ -433,6 +400,209 @@ describe('voice restore-or-join service', () => {
 		expect(harness.events).toEqual([]);
 	});
 
+	test('prepares privately before atomically committing an existing-session pair and binding', async () => {
+		const harness = createHarness();
+		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
+		const sessionIncarnation = harness.primaryRuntime.getVoiceSessionIncarnation(1);
+		if (sessionIncarnation === undefined) {
+			throw new Error('Expected the existing seat to have an incarnation');
+		}
+		harness.controls.beforePreparationReturn = async (attempt) => {
+			expect(attempt).toBe(1);
+			expect(harness.primaryRuntime.getVoiceSessionIncarnation(1)).toBe(sessionIncarnation);
+			expect(harness.primaryRuntime.getUserState(1)).toMatchObject({ micMuted: true, soundMuted: false });
+			expect(harness.preparedBootstrapStats.commits).toBe(0);
+			expect(harness.bindings).toEqual([]);
+			harness.order.push(`prepared:${attempt}:ready`);
+		};
+
+		const result = await harness.service.restoreOrJoin(
+			harness.request({ state: { micMuted: true, soundMuted: false } }),
+		);
+
+		expect(result).toEqual({ attempt: 1, channelUsers: [1] });
+		expect(harness.primaryRuntime.getVoiceSessionIncarnation(1)).toBe(sessionIncarnation);
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 1, disposals: 0, responses: 1 });
+		expect(harness.bindings).toEqual([{ channelId: PRIMARY_CHANNEL_ID, sessionIncarnation }]);
+		expect(harness.events.map((event) => event.type)).toEqual(['state-update']);
+		expect(harness.order).toEqual([
+			'target:resolve',
+			'log:attempt',
+			'seat:acquire',
+			'presence:state-update',
+			'prepared:1:start',
+			'prepared:1:producer',
+			'prepared:1:consumer',
+			'prepared:1:ready',
+			'prepared:1:commit',
+			'context:bind',
+			'prepared:1:response',
+			'log:outcome',
+		]);
+	});
+
+	test('disposes an existing-session pair and preserves the seat when aborted before commit', async () => {
+		const harness = createHarness();
+		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
+		const sessionIncarnation = harness.primaryRuntime.getVoiceSessionIncarnation(1);
+		const preparationEntered = createDeferred();
+		const preparationRelease = createDeferred();
+		harness.controls.beforePreparationReturn = async () => {
+			preparationEntered.resolve();
+			await preparationRelease.promise;
+		};
+		const abortController = new AbortController();
+		const restore = harness.service.restoreOrJoin(
+			harness.request({
+				state: { micMuted: true, soundMuted: false },
+				signal: abortController.signal,
+			}),
+		);
+
+		await preparationEntered.promise;
+		abortController.abort();
+		preparationRelease.resolve();
+
+		await expectRejectedWith(restore, VoiceRestoreAttemptCancelledError);
+		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
+		expect(harness.primaryRuntime.getVoiceSessionIncarnation(1)).toBe(sessionIncarnation);
+		expect(harness.primaryRuntime.getUserState(1)).toMatchObject({ micMuted: true, soundMuted: false });
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 0, disposals: 1, responses: 0 });
+		expect(harness.bindings).toEqual([]);
+		expect(harness.events.map((event) => event.type)).toEqual(['state-update']);
+	});
+
+	test('lets only the newest overlapping existing-session preparation commit', async () => {
+		const harness = createHarness();
+		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
+		const stalePreparationEntered = createDeferred();
+		const stalePreparationRelease = createDeferred();
+		harness.controls.beforePreparationReturn = async (attempt) => {
+			if (attempt === 1) {
+				stalePreparationEntered.resolve();
+				await stalePreparationRelease.promise;
+			}
+		};
+		const staleRestore = harness.service.restoreOrJoin(harness.request({ reconnectAttemptId: 'stale-existing' }));
+		await stalePreparationEntered.promise;
+
+		const currentRestore = await harness.service.restoreOrJoin(
+			harness.request({ reconnectAttemptId: 'current-existing' }),
+		);
+		stalePreparationRelease.resolve();
+
+		expect(currentRestore).toEqual({ attempt: 2, channelUsers: [1] });
+		await expectRejectedWith(staleRestore, VoiceRestoreAttemptSupersededServiceError);
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 1, disposals: 1, responses: 1 });
+		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
+		expect(harness.bindings).toHaveLength(1);
+		expect(harness.events).toEqual([]);
+	});
+
+	test('preserves inherited provisional ownership across overlapping existing restores', async () => {
+		const harness = createHarness();
+		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
+		harness.primaryRuntime.beginProvisionalRestoreSeat(1);
+		const stalePreparationEntered = createDeferred();
+		const stalePreparationRelease = createDeferred();
+		harness.controls.beforePreparationReturn = async (attempt) => {
+			if (attempt === 1) {
+				stalePreparationEntered.resolve();
+				await stalePreparationRelease.promise;
+			}
+		};
+		const staleRestore = harness.service.restoreOrJoin(harness.request({ reconnectAttemptId: 'stale-claim' }));
+		await stalePreparationEntered.promise;
+
+		await harness.service.restoreOrJoin(harness.request({ reconnectAttemptId: 'current-claim' }));
+		stalePreparationRelease.resolve();
+
+		await expectRejectedWith(staleRestore, VoiceRestoreAttemptSupersededServiceError);
+		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
+		expect(harness.primaryRuntime.successfulCommits).toBe(1);
+		expect(harness.primaryRuntime.successfulRollbacks).toBe(0);
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 1, disposals: 1, responses: 1 });
+		expect(harness.bindings).toHaveLength(1);
+		expect(harness.events).toEqual([]);
+	});
+
+	test('rejects a prepared existing restore after its provisional claim is replaced', async () => {
+		const harness = createHarness();
+		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
+		harness.primaryRuntime.beginProvisionalRestoreSeat(1);
+		const preparationEntered = createDeferred();
+		const preparationRelease = createDeferred();
+		harness.controls.beforePreparationReturn = async () => {
+			preparationEntered.resolve();
+			await preparationRelease.promise;
+		};
+		const restore = harness.service.restoreOrJoin(harness.request());
+		await preparationEntered.promise;
+
+		harness.primaryRuntime.beginProvisionalRestoreSeat(1);
+		preparationRelease.resolve();
+
+		await expectRejectedWith(restore, VoiceRestoreAttemptSupersededServiceError);
+		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 0, disposals: 1, responses: 0 });
+		expect(harness.bindings).toEqual([]);
+	});
+
+	test('does not dispose or roll back an existing pair when commit triggers abort', async () => {
+		const harness = createHarness();
+		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
+		const abortController = new AbortController();
+		harness.controls.onCommit = () => abortController.abort();
+
+		await expect(harness.service.restoreOrJoin(harness.request({ signal: abortController.signal }))).resolves.toEqual({
+			attempt: 1,
+			channelUsers: [1],
+		});
+		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 1, disposals: 0, responses: 1 });
+		expect(harness.bindings).toHaveLength(1);
+		expect(harness.events).toEqual([]);
+	});
+
+	test('keeps a committed existing pair when response construction fails', async () => {
+		const harness = createHarness();
+		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
+		const failure = new Error('Existing response construction failed');
+		harness.controls.onResponse = () => {
+			throw failure;
+		};
+
+		await expect(harness.service.restoreOrJoin(harness.request())).rejects.toBe(failure);
+		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 1, disposals: 0, responses: 1 });
+		expect(harness.bindings).toHaveLength(1);
+		expect(harness.events).toEqual([]);
+	});
+
+	test('disposes an existing pair when the seat incarnation changes before commit', async () => {
+		const harness = createHarness();
+		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
+		const originalIncarnation = harness.primaryRuntime.getVoiceSessionIncarnation(1);
+		const preparationEntered = createDeferred();
+		const preparationRelease = createDeferred();
+		harness.controls.beforePreparationReturn = async () => {
+			preparationEntered.resolve();
+			await preparationRelease.promise;
+		};
+		const restore = harness.service.restoreOrJoin(harness.request());
+		await preparationEntered.promise;
+
+		harness.primaryRuntime.removeUser(1);
+		harness.primaryRuntime.addUser(1, { micMuted: true, soundMuted: true });
+		preparationRelease.resolve();
+
+		await expectRejectedWith(restore, VoiceRestoreAttemptSupersededServiceError);
+		expect(harness.primaryRuntime.getVoiceSessionIncarnation(1)).not.toBe(originalIncarnation);
+		expect(harness.primaryRuntime.getUserState(1)).toMatchObject({ micMuted: true, soundMuted: true });
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 0, disposals: 1, responses: 0 });
+		expect(harness.bindings).toEqual([]);
+	});
+
 	test('rejects another client that owns the requested channel without acquiring or mutating its seat', async () => {
 		const harness = createHarness();
 		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
@@ -445,7 +615,7 @@ describe('voice restore-or-join service', () => {
 		});
 		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
 		expect(harness.order).not.toContain('seat:acquire');
-		expect(harness.order).not.toContain('bootstrap:1:start');
+		expect(harness.order).not.toContain('prepared:1:start');
 	});
 
 	test('rejects an active session in another channel without mutating either runtime', async () => {
@@ -509,7 +679,7 @@ describe('voice restore-or-join service', () => {
 		expect(harness.primaryRuntime.successfulRollbacks).toBe(0);
 		expect(harness.events).toEqual([]);
 		expect(harness.bindings).toEqual([]);
-		expect(harness.freshBootstrapStats).toEqual({ commits: 0, disposals: 0, responses: 0 });
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 0, disposals: 0, responses: 0 });
 		expect(harness.order).not.toContain('log:rollback');
 	});
 
@@ -535,14 +705,14 @@ describe('voice restore-or-join service', () => {
 	test('treats an abort triggered by commit as post-commit ownership', async () => {
 		const harness = createHarness();
 		const abortController = new AbortController();
-		harness.controls.onFreshCommit = () => abortController.abort();
+		harness.controls.onCommit = () => abortController.abort();
 
 		await expect(harness.service.restoreOrJoin(harness.request({ signal: abortController.signal }))).resolves.toEqual({
 			attempt: 1,
 			channelUsers: [1],
 		});
 		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
-		expect(harness.freshBootstrapStats).toEqual({ commits: 1, disposals: 0, responses: 1 });
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 1, disposals: 0, responses: 1 });
 		expect(harness.bindings).toHaveLength(1);
 		expect(harness.events.map((event) => event.type)).toEqual(['join']);
 	});
@@ -555,7 +725,7 @@ describe('voice restore-or-join service', () => {
 		};
 
 		await expect(harness.service.restoreOrJoin(harness.request())).rejects.toBe(failure);
-		expect(harness.freshBootstrapStats).toEqual({ commits: 0, disposals: 0, responses: 0 });
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 0, disposals: 0, responses: 0 });
 		expect(harness.primaryRuntime.hasUser(1)).toBe(false);
 		expect(harness.bindings).toEqual([]);
 		expect(harness.events).toEqual([]);
@@ -566,7 +736,7 @@ describe('voice restore-or-join service', () => {
 		harness.setLabBehavior({ failMessage: 'forced failure' });
 
 		await expect(harness.service.restoreOrJoin(harness.request())).rejects.toThrow('forced failure');
-		expect(harness.freshBootstrapStats).toEqual({ commits: 0, disposals: 0, responses: 0 });
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 0, disposals: 0, responses: 0 });
 		expect(harness.primaryRuntime.hasUser(1)).toBe(false);
 		expect(harness.bindings).toEqual([]);
 		expect(harness.events).toEqual([]);
@@ -576,7 +746,7 @@ describe('voice restore-or-join service', () => {
 		const harness = createHarness();
 		const preparationEntered = createDeferred();
 		const preparationRelease = createDeferred();
-		harness.controls.beforeFreshPreparationReturn = async () => {
+		harness.controls.beforePreparationReturn = async () => {
 			preparationEntered.resolve();
 			await preparationRelease.promise;
 		};
@@ -587,7 +757,7 @@ describe('voice restore-or-join service', () => {
 
 		await expectRejectedWith(restore, VoiceRestoreAttemptSupersededServiceError);
 		expect(harness.primaryRuntime.getUserState(1)).toMatchObject({ micMuted: false, soundMuted: true });
-		expect(harness.freshBootstrapStats).toEqual({ commits: 0, disposals: 1, responses: 0 });
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 0, disposals: 1, responses: 0 });
 		expect(harness.bindings).toEqual([]);
 		expect(harness.events).toEqual([]);
 	});
@@ -596,7 +766,7 @@ describe('voice restore-or-join service', () => {
 		const harness = createHarness();
 		const preparationEntered = createDeferred();
 		const preparationRelease = createDeferred();
-		harness.controls.beforeFreshPreparationReturn = async () => {
+		harness.controls.beforePreparationReturn = async () => {
 			preparationEntered.resolve();
 			await preparationRelease.promise;
 		};
@@ -610,7 +780,7 @@ describe('voice restore-or-join service', () => {
 
 		await expect(restore).rejects.toMatchObject({ reason: VOICE_SESSION_OWNED_ELSEWHERE });
 		expect(harness.primaryRuntime.getUserState(1)).toMatchObject({ micMuted: false, soundMuted: true });
-		expect(harness.freshBootstrapStats).toEqual({ commits: 0, disposals: 1, responses: 0 });
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 0, disposals: 1, responses: 0 });
 		expect(harness.bindings).toEqual([]);
 		expect(harness.events).toEqual([]);
 	});
@@ -618,13 +788,13 @@ describe('voice restore-or-join service', () => {
 	test('keeps a committed fresh session when response construction fails', async () => {
 		const harness = createHarness();
 		const failure = new Error('Response construction failed');
-		harness.controls.onFreshResponse = () => {
+		harness.controls.onResponse = () => {
 			throw failure;
 		};
 
 		await expect(harness.service.restoreOrJoin(harness.request())).rejects.toBe(failure);
 		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
-		expect(harness.freshBootstrapStats).toEqual({ commits: 1, disposals: 0, responses: 1 });
+		expect(harness.preparedBootstrapStats).toEqual({ commits: 1, disposals: 0, responses: 1 });
 		expect(harness.bindings).toHaveLength(1);
 		expect(harness.events.map((event) => event.type)).toEqual(['join']);
 	});
@@ -721,7 +891,7 @@ const supersessionBarriers: TSupersessionBarrier[] = [
 		install: (harness) => {
 			const entered = createDeferred();
 			const release = createDeferred();
-			harness.controls.beforeFreshPreparationReturn = async (attempt) => {
+			harness.controls.beforePreparationReturn = async (attempt) => {
 				if (attempt === 1) {
 					entered.resolve();
 					await release.promise;
@@ -753,9 +923,9 @@ describe('voice restore attempt supersession', () => {
 			expect(harness.primaryRuntime.hasUser(1)).toBe(true);
 			expect(harness.primaryRuntime.successfulCommits).toBe(0);
 			expect(harness.primaryRuntime.successfulRollbacks).toBe(0);
-			expect(harness.freshBootstrapStats.commits).toBe(1);
-			expect(harness.freshBootstrapStats.disposals).toBe(barrier.expectedPreparedDisposals);
-			expect(harness.freshBootstrapStats.responses).toBe(1);
+			expect(harness.preparedBootstrapStats.commits).toBe(1);
+			expect(harness.preparedBootstrapStats.disposals).toBe(barrier.expectedPreparedDisposals);
+			expect(harness.preparedBootstrapStats.responses).toBe(1);
 			expect(harness.bindings).toHaveLength(1);
 			expect(harness.events.map((event) => event.type)).toEqual(['join']);
 		});
@@ -839,7 +1009,7 @@ describe('voice restore attempt supersession', () => {
 		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
 		expect(harness.primaryRuntime.successfulCommits).toBe(0);
 		expect(harness.primaryRuntime.successfulRollbacks).toBe(0);
-		expect(harness.freshBootstrapStats.commits).toBe(1);
+		expect(harness.preparedBootstrapStats.commits).toBe(1);
 		expect(harness.events.map((event) => event.type)).toEqual(['join']);
 		expect(harness.bindings).toHaveLength(1);
 	});
@@ -890,13 +1060,13 @@ describe('voice restore attempt cancellation', () => {
 			control.release();
 
 			await expectRejectedWith(restore, VoiceRestoreAttemptCancelledError);
-			expect(harness.freshBootstrapStats.commits).toBe(0);
+			expect(harness.preparedBootstrapStats.commits).toBe(0);
 			expect(harness.bindings).toEqual([]);
 			expect(harness.primaryRuntime.hasUser(1)).toBe(false);
 			expect(harness.primaryRuntime.successfulRollbacks).toBe(0);
 			expect(harness.events).toEqual([]);
-			expect(harness.freshBootstrapStats.disposals).toBe(barrier.expectedPreparedDisposals);
-			expect(harness.freshBootstrapStats.responses).toBe(0);
+			expect(harness.preparedBootstrapStats.disposals).toBe(barrier.expectedPreparedDisposals);
+			expect(harness.preparedBootstrapStats.responses).toBe(0);
 		});
 	}
 });
