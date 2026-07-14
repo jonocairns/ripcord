@@ -1,10 +1,29 @@
 import { ServerEvents } from '@sharkord/shared';
+import { TRPCError } from '@trpc/server';
 import { config } from '../../config';
 import { logger } from '../../logger';
 import { VoiceRuntime } from '../../runtimes/voice';
-import { invariant } from '../../utils/invariant';
-import { protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
-import { createVoiceJoinBootstrap, getVoiceJoinTarget, voiceJoinInputSchema } from './bootstrap';
+import { type Context, protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
+import { getVoiceJoinTarget, prepareVoiceJoinBootstrap, voiceJoinInputSchema } from './bootstrap';
+import { createVoiceJoinService, type TVoiceJoinPresenceEvent, VoiceJoinSupersededError } from './join-service';
+import {
+	VoiceSessionAttemptCancelledError,
+	VoiceSessionAttemptSupersededError,
+	voiceSessionAttemptRegistry,
+} from './session-attempt-registry';
+
+const joinVoiceService = createVoiceJoinService({
+	findRuntimeByChannelId: VoiceRuntime.findById,
+	findRuntimeByUserId: VoiceRuntime.findRuntimeByUserId,
+	prepareBootstrap: prepareVoiceJoinBootstrap,
+	attemptRegistry: voiceSessionAttemptRegistry,
+	logJoined: (userName, channelName) => {
+		logger.info('%s joined voice channel %s', userName, channelName);
+	},
+	logReplaced: (userName, channelId) => {
+		logger.info('%s evicted from voice channel %s (session replaced by new join)', userName, channelId);
+	},
+});
 
 const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 	maxRequests: config.rateLimiters.joinVoiceChannel.maxRequests,
@@ -12,104 +31,85 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 	logLabel: 'joinVoice',
 })
 	.input(voiceJoinInputSchema)
-	.mutation(async ({ input, ctx }) => {
-		const isCurrentMutation = (): boolean => ctx.isCurrentVoiceSessionMutation(input.mutationSeq);
-		const assertCurrentMutation = (): void => {
-			invariant(isCurrentMutation(), {
-				code: 'CONFLICT',
-				message: 'Voice join superseded by a newer voice mutation',
+	.mutation(async ({ input, ctx, signal }) => {
+		try {
+			return await joinVoiceService.join({
+				channelId: input.channelId,
+				state: input.state,
+				mutationSeq: input.mutationSeq,
+				user: ctx.user,
+				signal,
+				context: createVoiceJoinRequestContext(ctx),
 			});
-		};
+		} catch (error) {
+			if (
+				error instanceof VoiceJoinSupersededError ||
+				error instanceof VoiceSessionAttemptCancelledError ||
+				error instanceof VoiceSessionAttemptSupersededError
+			) {
+				throw new TRPCError({
+					code: 'CONFLICT',
+					message: 'Voice join superseded by a newer voice mutation',
+				});
+			}
 
-		invariant(ctx.registerVoiceSessionMutation(input.mutationSeq), {
-			code: 'CONFLICT',
-			message: 'Voice join superseded by a newer voice mutation',
-		});
-		assertCurrentMutation();
-		const { channel, runtime } = await getVoiceJoinTarget(ctx, input.channelId);
-		assertCurrentMutation();
+			throw error;
+		}
+	});
 
-		const userAlreadyInVoiceChannel = VoiceRuntime.findRuntimeByUserId(ctx.user.id);
-		const isReconnecting = userAlreadyInVoiceChannel?.id === input.channelId;
-
-		if (userAlreadyInVoiceChannel) {
-			userAlreadyInVoiceChannel.removeUser(ctx.user.id);
-			ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
-				channelId: userAlreadyInVoiceChannel.id,
-				userId: ctx.user.id,
-				reconnecting: isReconnecting,
-			});
-			ctx.pubsub.publishFor(ctx.user.id, ServerEvents.VOICE_SESSION_REPLACED, {
-				channelId: userAlreadyInVoiceChannel.id,
-				replacedByClientInstanceId: ctx.getClientInstanceId(),
-			});
-
-			logger.info(
-				'%s evicted from voice channel %s (session replaced by new join)',
-				ctx.user.name,
-				userAlreadyInVoiceChannel.id,
-			);
+const createVoiceJoinRequestContext = (ctx: Context) => ({
+	resolveTarget: (channelId: number) => getVoiceJoinTarget(ctx, channelId),
+	getClientInstanceId: ctx.getClientInstanceId,
+	getConnectionIdentity: () => ctx.getOwnWs(),
+	registerMutation: ctx.registerVoiceSessionMutation,
+	isMutationCurrent: ctx.isCurrentVoiceSessionMutation,
+	getBinding: () => ({
+		channelId: ctx.currentVoiceChannelId,
+		sessionIncarnation: ctx.currentVoiceSessionIncarnation,
+	}),
+	bindVoiceSession: (channelId: number, sessionIncarnation: symbol) => {
+		ctx.currentVoiceChannelId = channelId;
+		ctx.currentVoiceSessionIncarnation = sessionIncarnation;
+		ctx.setWsVoiceChannelId(channelId);
+	},
+	clearBindingIfMatches: (binding: { channelId?: number; sessionIncarnation?: symbol }) => {
+		if (
+			ctx.currentVoiceChannelId !== binding.channelId ||
+			ctx.currentVoiceSessionIncarnation !== binding.sessionIncarnation
+		) {
+			return;
 		}
 
-		runtime.addUser(ctx.user.id, input.state);
+		ctx.currentVoiceChannelId = undefined;
+		ctx.currentVoiceSessionIncarnation = undefined;
+		ctx.setWsVoiceChannelId(undefined);
+	},
+	publishPresence: (event: TVoiceJoinPresenceEvent) => publishVoiceJoinPresence(ctx, event),
+});
 
-		const sessionIncarnation = runtime.getVoiceSessionIncarnation(ctx.user.id);
-		const state = runtime.getUserState(ctx.user.id);
-
-		ctx.currentVoiceChannelId = channel.id;
-		ctx.currentVoiceSessionIncarnation = sessionIncarnation;
-		ctx.setWsVoiceChannelId(channel.id);
-		ctx.pubsub.publish(ServerEvents.USER_JOIN_VOICE, {
-			channelId: input.channelId,
-			userId: ctx.user.id,
-			state,
-			reconnecting: isReconnecting,
-		});
-
-		logger.info('%s joined voice channel %s', ctx.user.name, channel.name);
-
-		return createVoiceJoinBootstrap({
-			runtime,
-			userId: ctx.user.id,
-			isCurrent: isCurrentMutation,
-			onError: (error) => {
-				// Only clear this connection's bookkeeping if it still describes the
-				// session this join created — a newer join on the same connection may
-				// have already replaced it.
-				if (ctx.currentVoiceSessionIncarnation === sessionIncarnation) {
-					ctx.currentVoiceChannelId = undefined;
-					ctx.currentVoiceSessionIncarnation = undefined;
-					ctx.setWsVoiceChannelId(undefined);
-				}
-
-				// A concurrent join or restore may have replaced the seat while the
-				// transports were being built. Rolling back by user id would remove
-				// the successor's live session; the successor already published the
-				// eviction of this one.
-				if (runtime.getVoiceSessionIncarnation(ctx.user.id) !== sessionIncarnation) {
-					logger.warn(
-						'Skipped voice join rollback for %s in channel %s: seat superseded by a newer session',
-						ctx.user.name,
-						channel.name,
-					);
-					return;
-				}
-
-				runtime.removeUser(ctx.user.id);
-				ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
-					channelId: input.channelId,
-					userId: ctx.user.id,
-					reconnecting: isReconnecting,
-				});
-
-				logger.error(
-					'Failed to create transports for %s in voice channel %s, rolled back join',
-					ctx.user.name,
-					channel.name,
-					error,
-				);
-			},
-		});
-	});
+const publishVoiceJoinPresence = (ctx: Context, event: TVoiceJoinPresenceEvent) => {
+	switch (event.type) {
+		case 'leave':
+			ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+				channelId: event.channelId,
+				userId: event.userId,
+				reconnecting: event.reconnecting,
+			});
+			return;
+		case 'session-replaced':
+			ctx.pubsub.publishFor(event.userId, ServerEvents.VOICE_SESSION_REPLACED, {
+				channelId: event.channelId,
+				replacedByClientInstanceId: event.replacedByClientInstanceId,
+			});
+			return;
+		case 'join':
+			ctx.pubsub.publish(ServerEvents.USER_JOIN_VOICE, {
+				channelId: event.channelId,
+				userId: event.userId,
+				state: event.state,
+				reconnecting: event.reconnecting,
+			});
+	}
+};
 
 export { joinVoiceRoute };

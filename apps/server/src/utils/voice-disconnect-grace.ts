@@ -6,6 +6,15 @@ const FALLBACK_VOICE_DISCONNECT_GRACE_MS = 5_000;
 type TVoiceDisconnectCounterKey = 'graceScheduled' | 'graceCancelled' | 'graceExpired' | 'missingClientInstanceId';
 type TVoiceDisconnectLogLevel = 'info' | 'warn';
 
+type TVoiceDisconnectGraceTimer = {
+	cancel: () => void;
+};
+
+type TVoiceDisconnectGraceScheduler = {
+	now: () => number;
+	schedule: (callback: () => void, delayMs: number) => TVoiceDisconnectGraceTimer;
+};
+
 type TVoiceDisconnectEventFields = {
 	reconnectAttemptId?: string;
 	userId: number;
@@ -26,7 +35,7 @@ type TPendingVoiceDisconnect = {
 	// compares it against the runtime's current token so a connection never
 	// adopts a seat that a newer session replaced while it was away.
 	seatIncarnation?: symbol;
-	timer: ReturnType<typeof setTimeout>;
+	timer: TVoiceDisconnectGraceTimer;
 	scheduledAt: number;
 	expiresAt: number;
 	wsCloseCode?: number;
@@ -59,8 +68,17 @@ type TScheduleFallbackDisconnectOptions = {
 	fallbackTtlMs: number;
 };
 
+const defaultVoiceDisconnectGraceScheduler: TVoiceDisconnectGraceScheduler = {
+	now: Date.now,
+	schedule: (callback, delayMs) => {
+		const timer = setTimeout(callback, delayMs);
+		return { cancel: () => clearTimeout(timer) };
+	},
+};
+
+let voiceDisconnectGraceScheduler = defaultVoiceDisconnectGraceScheduler;
 const pendingVoiceDisconnects = new Map<string, TPendingVoiceDisconnect>();
-const fallbackVoiceDisconnectTimers = new Set<ReturnType<typeof setTimeout>>();
+const fallbackVoiceDisconnectTimers = new Set<TVoiceDisconnectGraceTimer>();
 const voiceDisconnectCounterKeys: TVoiceDisconnectCounterKey[] = [
 	'graceScheduled',
 	'graceCancelled',
@@ -123,12 +141,12 @@ const clearPendingVoiceDisconnect = (clientInstanceId?: string, userId?: number)
 		return false;
 	}
 
-	clearTimeout(pendingDisconnect.timer);
+	pendingDisconnect.timer.cancel();
 	pendingVoiceDisconnects.delete(pendingDisconnectKey);
 
 	incrementCounter('graceCancelled');
 
-	const now = Date.now();
+	const now = voiceDisconnectGraceScheduler.now();
 
 	logVoiceDisconnectEvent(
 		'info',
@@ -198,10 +216,10 @@ const scheduleTrackedDisconnect = ({
 }: TScheduleTrackedDisconnectOptions) => {
 	clearPendingVoiceDisconnect(clientInstanceId, userId);
 
-	const scheduledAt = Date.now();
+	const scheduledAt = voiceDisconnectGraceScheduler.now();
 	const expiresAt = scheduledAt + ttlMs;
 	const pendingDisconnectKey = getPendingVoiceDisconnectKey(userId, clientInstanceId);
-	const timer = setTimeout(() => {
+	const timer = voiceDisconnectGraceScheduler.schedule(() => {
 		pendingVoiceDisconnects.delete(pendingDisconnectKey);
 		incrementCounter('graceExpired');
 
@@ -212,7 +230,7 @@ const scheduleTrackedDisconnect = ({
 				userId,
 				clientInstanceId,
 				activeChannelId: channelId,
-				graceAgeMs: Date.now() - scheduledAt,
+				graceAgeMs: voiceDisconnectGraceScheduler.now() - scheduledAt,
 				ttlRemainingMs: 0,
 				wsCloseCode,
 			},
@@ -289,8 +307,8 @@ const scheduleFallbackDisconnect = ({
 		'graceScheduled',
 	);
 
-	const scheduledAt = Date.now();
-	const timer = setTimeout(() => {
+	const scheduledAt = voiceDisconnectGraceScheduler.now();
+	const timer = voiceDisconnectGraceScheduler.schedule(() => {
 		fallbackVoiceDisconnectTimers.delete(timer);
 		incrementCounter('graceExpired');
 
@@ -300,7 +318,7 @@ const scheduleFallbackDisconnect = ({
 			{
 				userId,
 				activeChannelId: channelId,
-				graceAgeMs: Date.now() - scheduledAt,
+				graceAgeMs: voiceDisconnectGraceScheduler.now() - scheduledAt,
 				ttlRemainingMs: 0,
 				wsCloseCode,
 				fallback: true,
@@ -352,12 +370,12 @@ const getVoiceDisconnectGraceCounters = () => ({
 
 const resetVoiceDisconnectGraceForTests = () => {
 	pendingVoiceDisconnects.forEach((pendingDisconnect) => {
-		clearTimeout(pendingDisconnect.timer);
+		pendingDisconnect.timer.cancel();
 	});
 
 	pendingVoiceDisconnects.clear();
 	fallbackVoiceDisconnectTimers.forEach((timer) => {
-		clearTimeout(timer);
+		timer.cancel();
 	});
 	fallbackVoiceDisconnectTimers.clear();
 
@@ -366,6 +384,11 @@ const resetVoiceDisconnectGraceForTests = () => {
 	});
 };
 
+const setVoiceDisconnectGraceSchedulerForTests = (scheduler?: TVoiceDisconnectGraceScheduler) => {
+	voiceDisconnectGraceScheduler = scheduler ?? defaultVoiceDisconnectGraceScheduler;
+};
+
+export type { TVoiceDisconnectGraceScheduler, TVoiceDisconnectGraceTimer };
 export {
 	clearPendingVoiceDisconnect,
 	FALLBACK_VOICE_DISCONNECT_GRACE_MS,
@@ -375,5 +398,6 @@ export {
 	getVoiceDisconnectGraceCounters,
 	resetVoiceDisconnectGraceForTests,
 	schedulePendingVoiceDisconnect,
+	setVoiceDisconnectGraceSchedulerForTests,
 	VOICE_DISCONNECT_GRACE_MS,
 };

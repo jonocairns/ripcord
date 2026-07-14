@@ -27,6 +27,15 @@ import {
 const PRIMARY_VOICE_CHANNEL_ID = 2;
 const SECONDARY_VOICE_CHANNEL_ID = 3;
 
+const createDeferred = () => {
+	let resolvePromise: () => void = () => {};
+	const promise = new Promise<void>((resolve) => {
+		resolvePromise = resolve;
+	});
+
+	return { promise, resolve: resolvePromise };
+};
+
 const ensureVoiceRuntime = async (channelId: number, channelName: string): Promise<VoiceRuntime> => {
 	const existingRuntime = VoiceRuntime.findById(channelId);
 
@@ -105,7 +114,7 @@ afterEach(async () => {
 });
 
 describe('voice.restoreOrJoin', () => {
-	test('uses prepared pairs for fresh and existing restores while join and rebuild routes stay independent', async () => {
+	test('uses prepared pairs for join and restore while rebuild routes stay independently compatible', async () => {
 		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 		const preparePairSpy = spyOn(runtime, 'prepareTransportPair');
 		const createProducerSpy = spyOn(runtime, 'createProducerTransport');
@@ -139,9 +148,9 @@ describe('voice.restoreOrJoin', () => {
 			await caller.voice.createProducerTransport();
 			await caller.voice.createConsumerTransport();
 
-			expect(preparePairSpy).toHaveBeenCalledTimes(2);
-			expect(createProducerSpy).toHaveBeenCalledTimes(2);
-			expect(createConsumerSpy).toHaveBeenCalledTimes(2);
+			expect(preparePairSpy).toHaveBeenCalledTimes(3);
+			expect(createProducerSpy).toHaveBeenCalledTimes(1);
+			expect(createConsumerSpy).toHaveBeenCalledTimes(1);
 		} finally {
 			preparePairSpy.mockRestore();
 			createProducerSpy.mockRestore();
@@ -460,54 +469,6 @@ describe('voice.restoreOrJoin', () => {
 		expect(await staleConsumer).toEqual(expect.objectContaining({ message: 'Voice restore attempt superseded' }));
 		expect(runtime.getProducerTransport(1)?.id).toBe(producerParams.id);
 		expect(runtime.getConsumerTransport(1)?.id).toBe(consumerParams.id);
-	});
-
-	test('rolls back a matching provisional restore seat when no successor adopted it', async () => {
-		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
-		runtime.addUser(1, { micMuted: false, soundMuted: false });
-		const claim = runtime.beginProvisionalRestoreSeat(1);
-
-		expect(runtime.rollbackProvisionalRestoreSeat(1, claim)).toBe(true);
-		expect(runtime.getUser(1)).toBeUndefined();
-		expect(runtime.getProducerTransport(1)).toBeUndefined();
-		expect(runtime.getConsumerTransport(1)).toBeUndefined();
-	});
-
-	test('publishes leave when an inherited provisional seat is rolled back before bootstrap', async () => {
-		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
-		const { caller } = await initTest(1);
-		runtime.addUser(1, { micMuted: false, soundMuted: false });
-		runtime.beginProvisionalRestoreSeat(1);
-
-		const leaveEvents: Array<{ channelId: number; userId: number; reconnecting?: boolean }> = [];
-		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
-			next: (event) => leaveEvents.push(event),
-		});
-
-		try {
-			await caller.voice.reconnectLab.setNextRestoreBehavior({
-				failMessage: 'VOICE_RECONNECT_LAB_FORCED_FAILURE',
-			});
-
-			await expect(
-				caller.voice.restoreOrJoin({
-					channelId: PRIMARY_VOICE_CHANNEL_ID,
-					state: { micMuted: false, soundMuted: false },
-					reconnectAttemptId: 'attempt-inherited-pre-bootstrap-failure',
-				}),
-			).rejects.toThrow('VOICE_RECONNECT_LAB_FORCED_FAILURE');
-
-			expect(runtime.getUser(1)).toBeUndefined();
-			expect(leaveEvents).toEqual([
-				{
-					channelId: PRIMARY_VOICE_CHANNEL_ID,
-					userId: 1,
-					reconnecting: true,
-				},
-			]);
-		} finally {
-			leaveSub.unsubscribe();
-		}
 	});
 
 	test('forgetOwnVoiceSession drops the server-side voice session and broadcasts a reconnecting leave', async () => {
@@ -877,6 +838,140 @@ describe('voice.restoreOrJoin', () => {
 });
 
 describe('voice session incarnation ownership', () => {
+	test('join preparation failure preserves the established session and publishes nothing', async () => {
+		const primaryRuntime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const secondaryRuntime = await ensureVoiceRuntime(SECONDARY_VOICE_CHANNEL_ID, 'Other voice');
+		const ctx = await createMockContext({ customToken: await getMockedToken(1) });
+		const caller = appRouter.createCaller(ctx);
+		const { handshakeHash } = await caller.others.handshake();
+		await caller.others.joinServer({ handshakeHash });
+		await caller.voice.join({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: { micMuted: false, soundMuted: false },
+			mutationSeq: 0,
+		});
+		const establishedIdentity = primaryRuntime.getVoiceSessionIdentity(1);
+		const failure = new Error('target allocation failed');
+		const preparePairSpy = spyOn(secondaryRuntime, 'prepareTransportPair').mockRejectedValue(failure);
+		const events: string[] = [];
+		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+			next: () => events.push('leave'),
+		});
+		const replacedSub = pubsub.subscribeFor(1, ServerEvents.VOICE_SESSION_REPLACED).subscribe({
+			next: () => events.push('session-replaced'),
+		});
+		const joinSub = pubsub.subscribe(ServerEvents.USER_JOIN_VOICE).subscribe({
+			next: () => events.push('join'),
+		});
+
+		try {
+			await expect(
+				caller.voice.join({
+					channelId: SECONDARY_VOICE_CHANNEL_ID,
+					state: { micMuted: true, soundMuted: false },
+					mutationSeq: 1,
+				}),
+			).rejects.toThrow(failure.message);
+			expect(primaryRuntime.getVoiceSessionIdentity(1)).toEqual(establishedIdentity);
+			expect(secondaryRuntime.getUser(1)).toBeUndefined();
+			expect(ctx.currentVoiceChannelId).toBe(PRIMARY_VOICE_CHANNEL_ID);
+			expect(events).toEqual([]);
+		} finally {
+			preparePairSpy.mockRestore();
+			leaveSub.unsubscribe();
+			replacedSub.unsubscribe();
+			joinSub.unsubscribe();
+		}
+	});
+
+	test('two overlapping joins commit only the newest target', async () => {
+		const primaryRuntime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const secondaryRuntime = await ensureVoiceRuntime(SECONDARY_VOICE_CHANNEL_ID, 'Other voice');
+		const ctx = await createMockContext({ customToken: await getMockedToken(1) });
+		const caller = appRouter.createCaller(ctx);
+		const { handshakeHash } = await caller.others.handshake();
+		await caller.others.joinServer({ handshakeHash });
+		const entered = createDeferred();
+		const release = createDeferred();
+		const originalNeedsChannelPermission = ctx.needsChannelPermission;
+		Reflect.set(
+			ctx,
+			'needsChannelPermission',
+			async (...args: Parameters<typeof originalNeedsChannelPermission>): Promise<void> => {
+				await originalNeedsChannelPermission(...args);
+				if (args[0] === PRIMARY_VOICE_CHANNEL_ID) {
+					entered.resolve();
+					await release.promise;
+				}
+			},
+		);
+
+		const staleJoin = caller.voice
+			.join({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: { micMuted: false, soundMuted: false },
+				mutationSeq: 1,
+			})
+			.catch((error: unknown) => error);
+		await entered.promise;
+		await caller.voice.join({
+			channelId: SECONDARY_VOICE_CHANNEL_ID,
+			state: { micMuted: true, soundMuted: false },
+			mutationSeq: 2,
+		});
+		release.resolve();
+
+		expect(await staleJoin).toMatchObject({ code: 'CONFLICT' });
+		expect(primaryRuntime.getUser(1)).toBeUndefined();
+		expect(secondaryRuntime.getUserState(1).micMuted).toBe(true);
+		expect(ctx.currentVoiceChannelId).toBe(SECONDARY_VOICE_CHANNEL_ID);
+	});
+
+	test('a delayed standalone rebuild cannot install over a replacement join', async () => {
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const ctx = await createMockContext({ customToken: await getMockedToken(1) });
+		const caller = appRouter.createCaller(ctx);
+		const { handshakeHash } = await caller.others.handshake();
+		await caller.others.joinServer({ handshakeHash });
+		await caller.voice.join({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: { micMuted: false, soundMuted: false },
+			mutationSeq: 0,
+		});
+		const entered = createDeferred();
+		const release = createDeferred();
+		const originalCreateTransport = runtime.createTransport;
+		let allocationCount = 0;
+		const createTransportSpy = spyOn(runtime, 'createTransport').mockImplementation(async (bitrate) => {
+			allocationCount += 1;
+			const allocation = await originalCreateTransport(bitrate);
+			if (allocationCount === 1) {
+				entered.resolve();
+				await release.promise;
+			}
+			return allocation;
+		});
+
+		try {
+			const staleRebuild = caller.voice.createProducerTransport().catch((error: unknown) => error);
+			await entered.promise;
+			await caller.voice.join({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: { micMuted: true, soundMuted: false },
+				mutationSeq: 1,
+			});
+			const committedProducer = runtime.getProducerTransport(1);
+			release.resolve();
+
+			expect(await staleRebuild).toMatchObject({ message: 'Voice restore attempt superseded' });
+			expect(runtime.getProducerTransport(1)).toBe(committedProducer);
+			expect(runtime.getUserState(1).micMuted).toBe(true);
+		} finally {
+			release.resolve();
+			createTransportSpy.mockRestore();
+		}
+	});
+
 	test('a newer leave mutation prevents a delayed join from committing', async () => {
 		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 		await ensureVoiceRuntime(SECONDARY_VOICE_CHANNEL_ID, 'Other voice');

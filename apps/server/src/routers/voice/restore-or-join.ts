@@ -19,6 +19,7 @@ import {
 	VoiceRestoreAttemptSupersededServiceError,
 	VoiceRestoreConflictError,
 } from './restore-or-join-service';
+import { voiceSessionAttemptRegistry } from './session-attempt-registry';
 
 const restoreOrJoinService = createVoiceRestoreOrJoinService({
 	findRuntimeByChannelId: VoiceRuntime.findById,
@@ -27,17 +28,10 @@ const restoreOrJoinService = createVoiceRestoreOrJoinService({
 	consumeReconnectLabBehavior: consumeVoiceReconnectLabNextRestoreBehavior,
 	delay: wait,
 	prepareBootstrap: prepareVoiceJoinBootstrap,
+	attemptRegistry: voiceSessionAttemptRegistry,
 	logRestoreEvent: logRestoreOrJoinEvent,
 	logJoined: (userName, channelName) => {
 		logger.info('%s restoreOrJoin joined voice channel %s', userName, channelName);
-	},
-	logBootstrapRollback: (userName, channelName, error) => {
-		logger.error(
-			'Failed to create transports for %s in voice channel %s, rolled back restoreOrJoin',
-			userName,
-			channelName,
-			error,
-		);
 	},
 });
 
@@ -131,13 +125,6 @@ const publishVoiceRestorePresence = (ctx: Context, event: TVoiceRestorePresenceE
 				channelId: event.channelId,
 				userId: event.userId,
 				state: event.state,
-				reconnecting: event.reconnecting,
-			});
-			return;
-		case 'leave':
-			ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
-				channelId: event.channelId,
-				userId: event.userId,
 				reconnecting: event.reconnecting,
 			});
 			return;

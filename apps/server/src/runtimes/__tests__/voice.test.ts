@@ -273,6 +273,24 @@ describe('VoiceRuntime in-session transport rebuild', () => {
 		expect(runtime.getVoiceSessionIncarnation(1)).not.toBe(firstIncarnation!);
 	});
 
+	test('rotates session mutation identity when active transports are replaced or close', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const initialIdentity = runtime.getVoiceSessionIdentity(1);
+
+		await runtime.createProducerTransport(1);
+		const producerIdentity = runtime.getVoiceSessionIdentity(1);
+		expect(producerIdentity?.incarnation).toBe(initialIdentity?.incarnation);
+		expect(producerIdentity?.mutationToken).not.toBe(initialIdentity?.mutationToken);
+
+		await runtime.createConsumerTransport(1);
+		const consumerIdentity = runtime.getVoiceSessionIdentity(1);
+		expect(consumerIdentity?.mutationToken).not.toBe(producerIdentity?.mutationToken);
+
+		runtime.getConsumerTransport(1)?.close();
+		expect(runtime.getVoiceSessionIdentity(1)?.mutationToken).not.toBe(consumerIdentity?.mutationToken);
+	});
+
 	test('does not remove a successor seat for a stale session incarnation', async () => {
 		const runtime = await makeRuntime();
 

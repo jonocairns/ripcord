@@ -46,46 +46,13 @@ const getVoiceJoinTarget = async (ctx: Context, channelId: number) => {
 	return { channel, runtime };
 };
 
-const createVoiceJoinBootstrap = async (opts: {
-	runtime: VoiceRuntime;
-	userId: number;
-	onError?: (error: unknown) => void | Promise<void>;
-	isCurrent?: () => boolean;
-}) => {
-	const { runtime, userId, onError, isCurrent } = opts;
-	const router = runtime.getRouter();
-
-	let producerTransportParams;
-	let consumerTransportParams;
-	let existingProducers;
-
-	try {
-		[producerTransportParams, consumerTransportParams] = await Promise.all([
-			runtime.createProducerTransport(userId, isCurrent),
-			runtime.createConsumerTransport(userId, isCurrent),
-		]);
-
-		existingProducers = runtime.getRemoteIds(userId);
-	} catch (error) {
-		await onError?.(error);
-		throw error;
-	}
-
-	return {
-		routerRtpCapabilities: router.rtpCapabilities,
-		producerTransportParams,
-		consumerTransportParams,
-		existingProducers,
-		channelUsers: runtime.getState().users,
-	};
-};
-
 const prepareVoiceJoinBootstrap = async (opts: { runtime: VoiceRuntime; userId: number }) => {
 	const { runtime, userId } = opts;
 	const router = runtime.getRouter();
 	const pair = await runtime.prepareTransportPair(userId);
 
 	return {
+		assertCommittable: pair.assertCommittable,
 		commit: pair.commit,
 		dispose: pair.dispose,
 		buildCommittedResponse: () => ({
@@ -98,4 +65,4 @@ const prepareVoiceJoinBootstrap = async (opts: { runtime: VoiceRuntime; userId: 
 	};
 };
 
-export { createVoiceJoinBootstrap, getVoiceJoinTarget, prepareVoiceJoinBootstrap, voiceJoinInputSchema };
+export { getVoiceJoinTarget, prepareVoiceJoinBootstrap, voiceJoinInputSchema };

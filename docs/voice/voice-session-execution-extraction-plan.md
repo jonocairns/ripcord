@@ -3,9 +3,10 @@
 **Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
 landed in PR #280, C5 landed in PR #281, C6 landed in PR #282, C7 landed in PR
 #283, C8 landed in PR #284, C9 landed in PR #285, S0 landed in PR #286, S1
-landed in PR #287, and S2 landed in PR #289. S3–S4 remain planned. Completed
-slices carry a **Landed** note recording what was built and what later slices
-should inherit.
+landed in PR #287, S2 landed in PR #289, and S3 landed in PR #290. S4 is
+implemented on the local `refactor/remove-legacy-voice-restore-rollback-path`
+branch and is pending its standalone PR. Completed slices carry a **Landed** note
+recording what was built and what later slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -40,12 +41,14 @@ The finished architecture has four explicit layers:
 
 On the server, make restore/join transactional: a request owns uncommitted
 transport resources; `VoiceRuntime` owns them only after one synchronous commit
-boundary. The provisional-seat claim mechanism (`acquireRestoreSeat` /
-`commitProvisionalRestoreSeat` / `rollbackProvisionalRestoreSeat`) already gives
-a cancelled bootstrap a defined cleanup owner, but membership still commits and
-`USER_JOIN_VOICE` still publishes before any fallible transport preparation has
-run. The goal is to eliminate that provisional seat entirely: no membership,
-context, or presence side effect exists until the commit point.
+boundary. S2 and S3 completed that transition for fresh and existing-session
+`restoreOrJoin` transport allocation. S4 removes the now-dormant provisional-seat
+compatibility mechanism (`acquireRestoreSeat` /
+`commitProvisionalRestoreSeat` / `rollbackProvisionalRestoreSeat`) and converts
+the user-initiated join path so no new membership, context, or presence side
+effect exists until its transport pair is ready to commit. Existing-session
+requested mute/sound reconciliation remains the one documented pre-preparation
+state exception.
 
 ## Non-goals
 
@@ -194,7 +197,7 @@ back to one slice per PR — the slice boundaries already support that.
 | server 1 (#286) | S0 | Extract voice restore orchestration service |
 | server 2 (#287) | S1 | Add prepared voice transport pairs |
 | server 3 (#289) | S2 | Commit fresh voice restores transactionally |
-| server 4 | S3 | Replace restored voice transports atomically |
+| server 4 (#290) | S3 | Replace restored voice transports atomically |
 | server 5 | S4 | Remove legacy voice restore rollback path |
 
 V0 is not a PR: its observability and E2E items land incrementally with
@@ -762,14 +765,20 @@ verified merged behavior, not a reconnect-policy change in C9.
 
 ## Server ownership decision
 
-**Current state (post PR #277):** the restore path already bounds the
-pre-transport window with provisional-seat claims. `acquireRestoreSeat` adds the
-user and mints a claim symbol; rollback is claim-gated so a superseded attempt
-cannot remove a successor's seat. This defines the cleanup owner but does not
-remove the window — other clients observe a join (and, on failure, a leave) for
-a user who never had transports, and membership mutates before fallible
-preparation. The slices below replace the provisional seat with
-prepare-then-commit; they do not add a missing rollback.
+**Current state (post PR #290):** fresh and existing-session `restoreOrJoin`
+requests prepare transport pairs privately and install both sides only after
+their final request and session-identity checks. Fresh restore commits
+membership, binding, and presence in the same non-awaiting block. Existing
+restore preserves its established membership and reconciles requested
+mute/sound state before preparation, then atomically replaces the pair and
+rebinds the captured incarnation.
+
+The provisional-seat API remains only as temporary compatibility around the
+existing-session service branch. No normal production path creates a claim:
+fresh restore no longer calls `acquireRestoreSeat`, while the existing branch
+reaches it only after finding the seat and has no await before acquisition. S4
+can therefore remove the claim map and all acquire/adopt/commit/rollback
+operations without replacing them with another rollback owner.
 
 `joinVoiceRoute` (`apps/server/src/routers/voice/join.ts`, the user-initiated
 join) shares the same add-user-then-bootstrap pattern and additionally binds
@@ -838,10 +847,12 @@ uses narrow target, connection, grace, lab, bootstrap, presence, context-binding
 and logging ports; it does not import tRPC, database, WebSocket, or mediasoup
 implementations.
 
-**Landed** in PR #286 as merge commit `1dcaf04a`. The production adapter remains
-on `createVoiceJoinBootstrap`, which installs producer and consumer transports
-independently. Cancellation and supersession are distinct inside the service but
-continue to map to the existing public restore error.
+**Landed** in PR #286 as merge commit `1dcaf04a`. At the S0 boundary, the
+production adapter remained on `createVoiceJoinBootstrap`, which installed
+producer and consumer transports independently. Cancellation and supersession
+were distinct inside the service but continued to map to the existing public
+restore error. S2 and S3 subsequently replaced that bootstrap only for
+`restoreOrJoin`.
 
 ### S1 — Prepared transport-pair primitive
 
@@ -1010,6 +1021,15 @@ pre-commit exit disposes the private pair, while post-commit abort or response
 failure leaves the runtime-owned pair and seat intact. Removing the remaining
 provisional membership/presence behavior stays deferred to S4.
 
+**Landed** in PR #290 as merge commit `69bece38`. Existing-session restores now
+prepare privately and replace both active transports only after final attempt,
+incarnation, and provisional-claim validation. Pair commit, claim commit, and
+context/WebSocket binding are one synchronous block. Requested-state timing is
+unchanged; pre-commit exits dispose only replacements, while post-commit abort or
+response failure retains runtime ownership. `joinVoiceRoute` and standalone
+transport rebuild routes deliberately remain on the independent wrappers for
+S4.
+
 ### S4 — Remove legacy mutation path and complete cancellation matrix
 
 **Objective:** Leave one ownership model and close the original server coverage
@@ -1017,19 +1037,79 @@ gap.
 
 **Work:**
 
-- Remove the old add-user-then-bootstrap rollback path and any superseded-error
-  exception that existed only to preserve its provisional seat.
+- Remove `provisionalRestoreSeatClaims` and every provisional-seat
+  acquire/adopt/commit/rollback API, service port, branch, compensating leave,
+  and synthetic claim test. Retain cancellation/supersession errors that remain
+  request-currency or shipped-client contracts.
+- Keep existing-session `restoreOrJoin` on the S3 transaction. Replace seat
+  acquisition with a narrow synchronous state-reconciliation operation that
+  returns the previous state, reconciled state, and captured session identity.
+  Preserve state-update publication before preparation, then validate request
+  currency, runtime identity, incarnation, and both active transport identities
+  immediately before pair commit and context binding.
 - Convert `joinVoiceRoute` (`apps/server/src/routers/voice/join.ts`) to the same
-  prepare-then-commit primitive. It shares the add-user-then-bootstrap pattern
-  and additionally binds context/WS before bootstrap; after conversion, delete
-  its incarnation-gated `onError` rollback along with the rest of the legacy
-  path.
-- Remove wrapper APIs that allow independent transport replacement if no
-  production route needs them; otherwise retain them only for explicitly
-  non-transactional operations.
+  prepare-then-commit primitive behind a framework-free orchestration service.
+  After conversion, delete its incarnation-gated bootstrap `onError` rollback
+  and the independent bootstrap helper.
+- Compose join currency from request abort, latest-attempt ownership, current
+  `mutationSeq`, the captured connection binding, target-runtime identity, and
+  the captured seat/incarnation/transport identities. Join, leave, restore, and
+  standalone rebuild completions must invalidate any older operation whose
+  captured identity they replace.
+- Retain the standalone producer/consumer creation routes and their runtime
+  wrappers. The current client uses them concurrently for in-session rebuilds,
+  and shipped clients require them. Keep them explicitly non-transactional as a
+  pair, but bind each allocation to the captured session incarnation and active
+  side-specific transport so stale work closes itself instead of replacing a
+  successor.
+- Keep connect and ICE-restart `transportId` inputs optional for shipped-client
+  compatibility while preserving strict identity checks whenever an id is
+  supplied. An atomic in-session rebuild API requires a staged server/client
+  migration and is deferred beyond S4.
 - Document post-commit ownership by explicit leave/disconnect grace.
-- Ensure logs distinguish prepared, disposed, committed, superseded, and aborted
-  outcomes without including sensitive connection data.
+- Keep structured prepared/disposed/committed outcome spans in V0. S4 adds no
+  connection-identifying logs as a substitute for its deterministic ownership
+  tests.
+
+**Join commit ordering:** All target and permission awaits, both allocations,
+and deterministic test barriers finish before the final checks. Until then the
+request owns the prepared pair and the old seat, membership, transports,
+incarnation, bindings, reconnect grace, and presence remain unchanged.
+Immediately after the last checks, one synchronous non-awaiting block:
+
+1. removes the captured old seat by incarnation, when present;
+2. commits the prepared pair to the target runtime;
+3. adds the new membership/requested state and captures its fresh incarnation;
+4. binds context and tracked WebSocket ownership, which clears only the matching
+   reconnect grace; and
+5. publishes old leave, `VOICE_SESSION_REPLACED`, and new join in that external
+   order.
+
+Ownership-critical runtime state is installed before external publication, so
+observers cannot receive a join for an uncommitted session. Fresh joins publish
+only join with `reconnecting: false`; same-channel replacements publish
+leave/replaced/join with reconnecting leave/join semantics; cross-channel
+replacements publish the same event order without reconnecting semantics.
+
+For same-runtime replacement, the pair stays private while old-user cleanup
+runs. Synchronous old callbacks can act only on the old active maps. Pair commit
+then installs both successors, and existing identity guards make delayed old
+transport, producer, and consumer callbacks no-ops against the new resources.
+
+The prepared handle gains an explicit committable preflight, or an equivalent
+runtime assertion, immediately before the block. With no await between preflight
+and commit, expected cancellation/resource failures remain pre-commit. If an
+invariant violation still fails after old-seat eviction, fail closed rather than
+resurrecting closed resources: dispose anything still request-owned, clear only
+the captured binding, and publish the old leave when removal occurred. Once pair
+commit succeeds, runtime ownership is irreversible; abort, publication failure,
+or response construction failure does not dispose the pair, restore the old
+seat, or publish compensating presence.
+
+`prepareVoiceJoinBootstrap` remains the shared prepared response adapter for
+join and restore. `createVoiceJoinBootstrap` becomes unused and is removed.
+`VoiceRuntime.createProducerTransport` and `createConsumerTransport` remain for
+the backward-compatible rebuild routes.
 
 **Cancellation matrix tests:**
 
@@ -1037,11 +1117,61 @@ gap.
 - Abort while producer preparation is pending.
 - Abort while consumer preparation is pending.
 - Abort after both prepare but before commit.
+- Abort immediately before the final commit checks.
 - Supersede at each of the same points.
 - Abort after commit/response race: committed seat remains server-owned and is
   removable through leave/grace.
 - Server/runtime destruction disposes uncommitted prepared pairs.
-- The abort/supersede points above also run against `joinVoiceRoute`.
+- The full abort/supersession matrix runs against the real framework-free join
+  service. Adapter integration proves target-await supersession, overlapping
+  joins, preparation failure, leave fencing, and delayed rebuild fencing without
+  duplicating every service barrier through tRPC.
+- Fresh preparation failure leaves the old session, target membership, context,
+  tracked WebSocket, grace, and presence unchanged.
+- Same-channel and cross-channel replacements commit exactly once with a fresh
+  incarnation and leave/replaced/join ordering.
+- Two overlapping joins leave only the newest current seat and pair active.
+- Join/leave/restore/rebuild overlaps cannot evict, install over, bind, or
+  publish from a stale operation.
+- Synchronous and delayed old close callbacks cannot remove committed
+  successors.
+- Disconnect-grace adoption, cancellation, and expiry remain incarnation-gated
+  and are tested with an injected scheduler or fake time, not wall-clock sleeps.
+
+The framework-free restore and join harnesses use deferred target, producer,
+consumer, fully-prepared, and pre-final-check barriers. Synchronous commit and
+response hooks cover abort-on-commit and response failure. There is no barrier
+between the final currency/identity checks and the commit block.
+
+**Implemented on the local S4 branch, pending PR:** The provisional claim map,
+runtime methods, restore-service ports, adapters, rollback publication, and
+synthetic claim tests are gone. Existing restores now use
+`reconcileVoiceRestoreState` plus a captured `{ incarnation, mutationToken }`;
+the mutation token rotates on active transport installation, replacement, and
+closure so restore, join, and standalone rebuild completions invalidate stale
+prepared work without changing the seat incarnation.
+
+Join and restore share a first-cause attempt registry keyed by user/client
+ownership, and an accepted leave explicitly supersedes the matching attempt.
+`joinVoiceRoute` delegates to the framework-free join service and uses the
+ordering above. Old-pair close errors after installation are contained and
+logged while the remaining captured resources close, so a synchronous callback
+cannot turn transferred ownership back into request ownership. The independent
+producer/consumer routes remain because `use-transports.ts` still calls both for
+in-session recovery; each allocation is fenced by captured context incarnation
+and its side-specific active transport. Connect and ICE-restart compatibility is
+unchanged.
+
+The disconnect-grace utility now accepts a test scheduler. Cancellation,
+fallback expiry, and stale-incarnation expiry tests advance it synchronously;
+the existing join-server adoption tests continue to prove that only an
+unchanged incarnation is rebound. No FSM-reference edit is required: its
+server-fence and sticky post-commit ownership statements match the completed S4
+contract. V0 observability and integrated rollout remain deferred.
+
+Local validation after formatting: root type checking, lint, and knip pass; 143
+focused voice/permission/incarnation/grace tests pass; and all 677 server tests
+pass.
 
 **Exit criteria:** The exact `runtime.addUser` cancellation-point test is either
 impossible by construction or passes under the documented post-commit owner.
