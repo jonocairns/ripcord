@@ -21,10 +21,11 @@ type TVoiceRestoreRuntime = {
 	commitProvisionalRestoreSeat: (userId: number, claim: symbol) => boolean;
 	getUserState: (userId: number) => TVoiceUserState;
 	getVoiceSessionIncarnation: (userId: number) => symbol | undefined;
+	ownsProvisionalRestoreSeatClaim: (userId: number, claim: symbol) => boolean;
 	rollbackProvisionalRestoreSeat: (userId: number, claim: symbol) => boolean;
 };
 
-type TPreparedFreshVoiceBootstrap<TBootstrap> = {
+type TPreparedVoiceBootstrap<TBootstrap> = {
 	commit: () => void;
 	dispose: () => void | Promise<void>;
 	buildCommittedResponse: () => TBootstrap;
@@ -98,12 +99,7 @@ type TVoiceRestoreOrJoinServiceDependencies<TRuntime extends TVoiceRestoreRuntim
 	getPendingVoiceChannelIdsOwnedElsewhere: (userId: number, clientInstanceId?: string) => number[];
 	consumeReconnectLabBehavior: (userId: number) => TVoiceReconnectLabRestoreBehavior | undefined;
 	delay: (milliseconds: number) => Promise<void>;
-	createBootstrap: (options: { runtime: TRuntime; userId: number; isCurrent: () => boolean }) => Promise<TBootstrap>;
-	prepareFreshBootstrap: (options: {
-		runtime: TRuntime;
-		userId: number;
-	}) => Promise<TPreparedFreshVoiceBootstrap<TBootstrap>>;
-	isBootstrapCurrencyError: (error: unknown) => boolean;
+	prepareBootstrap: (options: { runtime: TRuntime; userId: number }) => Promise<TPreparedVoiceBootstrap<TBootstrap>>;
 	logRestoreEvent: (event: TVoiceRestoreLogEvent, fields: Record<string, unknown>) => void;
 	logJoined: (userName: string, channelName: string) => void;
 	logBootstrapRollback: (userName: string, channelName: string, error: unknown) => void;
@@ -150,9 +146,7 @@ type TVoiceRestoreAttempt = {
 };
 
 type TVoiceRestoreAttemptContext = {
-	isCurrent: () => boolean;
 	assertCurrent: () => void;
-	getInterruptionError: () => VoiceRestoreAttemptCancelledError | VoiceRestoreAttemptSupersededServiceError | undefined;
 };
 
 const createVoiceRestoreOrJoinService = <TRuntime extends TVoiceRestoreRuntime, TBootstrap>(
@@ -218,7 +212,6 @@ const createVoiceRestoreOrJoinService = <TRuntime extends TVoiceRestoreRuntime, 
 		};
 
 		const context: TVoiceRestoreAttemptContext = {
-			isCurrent: () => getStatus() === 'current',
 			assertCurrent: () => {
 				const interruptionError = getInterruptionError();
 
@@ -226,7 +219,6 @@ const createVoiceRestoreOrJoinService = <TRuntime extends TVoiceRestoreRuntime, 
 					throw interruptionError;
 				}
 			},
-			getInterruptionError,
 		};
 
 		try {
@@ -335,11 +327,11 @@ const createVoiceRestoreOrJoinService = <TRuntime extends TVoiceRestoreRuntime, 
 				}
 
 				if (!runtimeWithUserAfterAwaits) {
-					let preparedBootstrap: TPreparedFreshVoiceBootstrap<TBootstrap> | undefined;
+					let preparedBootstrap: TPreparedVoiceBootstrap<TBootstrap> | undefined;
 					let ownershipTransferred = false;
 
 					try {
-						preparedBootstrap = await dependencies.prepareFreshBootstrap({
+						preparedBootstrap = await dependencies.prepareBootstrap({
 							runtime,
 							userId: user.id,
 						});
@@ -427,55 +419,92 @@ const createVoiceRestoreOrJoinService = <TRuntime extends TVoiceRestoreRuntime, 
 
 				const seat = runtime.acquireRestoreSeat(user.id, state, inheritedSeatClaim);
 				const currentState = runtime.getUserState(user.id);
-
-				if (seat.added) {
-					context.publishPresence({
-						type: 'join',
-						channelId,
-						userId: user.id,
-						state: currentState,
-						reconnecting: true,
-					});
-					dependencies.logJoined(user.name, channel.name);
-				} else if (
-					seat.previousState &&
-					(seat.previousState.micMuted !== state.micMuted || seat.previousState.soundMuted !== state.soundMuted)
-				) {
-					context.publishPresence({
-						type: 'state-update',
-						channelId,
-						userId: user.id,
-						state: currentState,
-					});
-				}
-
-				let bootstrap: TBootstrap;
+				const restoredSeatIncarnation = runtime.getVoiceSessionIncarnation(user.id);
+				let preparedBootstrap: TPreparedVoiceBootstrap<TBootstrap> | undefined;
+				let ownershipTransferred = false;
 
 				try {
-					bootstrap = await dependencies.createBootstrap({
+					if (restoredSeatIncarnation === undefined) {
+						throw new Error('Existing voice restore did not retain a session incarnation');
+					}
+
+					if (seat.added) {
+						context.publishPresence({
+							type: 'join',
+							channelId,
+							userId: user.id,
+							state: currentState,
+							reconnecting: true,
+						});
+						dependencies.logJoined(user.name, channel.name);
+					} else if (
+						seat.previousState &&
+						(seat.previousState.micMuted !== state.micMuted || seat.previousState.soundMuted !== state.soundMuted)
+					) {
+						context.publishPresence({
+							type: 'state-update',
+							channelId,
+							userId: user.id,
+							state: currentState,
+						});
+					}
+
+					preparedBootstrap = await dependencies.prepareBootstrap({
 						runtime,
 						userId: user.id,
-						isCurrent: attempt.isCurrent,
 					});
 					attempt.assertCurrent();
 
-					if (seat.claim) {
-						runtime.commitProvisionalRestoreSeat(user.id, seat.claim);
+					const runtimeWithUserBeforeCommit = dependencies.findRuntimeByUserId(user.id);
+
+					if (
+						runtimeWithUserBeforeCommit !== runtime ||
+						runtime.getVoiceSessionIncarnation(user.id) !== restoredSeatIncarnation
+					) {
+						if (runtimeWithUserBeforeCommit && runtimeWithUserBeforeCommit.id !== channelId) {
+							logConflict(
+								dependencies,
+								request,
+								clientInstanceId,
+								runtimeWithUserBeforeCommit.id,
+								VOICE_SESSION_WRONG_CHANNEL,
+							);
+							throw new VoiceRestoreConflictError(VOICE_SESSION_WRONG_CHANNEL);
+						}
+
+						throw new VoiceRestoreAttemptSupersededServiceError();
 					}
 
-					const restoredSeatIncarnation = runtime.getVoiceSessionIncarnation(user.id);
-
-					// Binding also clears disconnect grace in the production adapter. Keep it
-					// after successful current bootstrap, and never bind a vanished seat.
-					if (restoredSeatIncarnation !== undefined) {
-						context.bindVoiceSession(channel.id, restoredSeatIncarnation);
+					if (seat.claim && !runtime.ownsProvisionalRestoreSeatClaim(user.id, seat.claim)) {
+						throw new VoiceRestoreAttemptSupersededServiceError();
 					}
+
+					// There is deliberately no await from the final attempt, seat, and claim
+					// checks through pair installation, claim transition, and binding.
+					preparedBootstrap.commit();
+					ownershipTransferred = true;
+
+					if (seat.claim && !runtime.commitProvisionalRestoreSeat(user.id, seat.claim)) {
+						throw new Error('Existing voice restore lost its provisional seat claim during commit');
+					}
+
+					// Binding also clears disconnect grace in the production adapter.
+					context.bindVoiceSession(channel.id, restoredSeatIncarnation);
+
+					const bootstrap = preparedBootstrap.buildCommittedResponse();
+
+					dependencies.logRestoreEvent('outcome', {
+						reconnectAttemptId,
+						userId: user.id,
+						clientInstanceId,
+						requestedChannelId: channelId,
+						activeChannelId: channelId,
+						outcome: seat.added ? 'joined' : 'restored',
+					});
+
+					return bootstrap;
 				} catch (error) {
-					const interruptionError = dependencies.isBootstrapCurrencyError(error)
-						? attempt.getInterruptionError()
-						: undefined;
-
-					if (seat.claim && runtime.rollbackProvisionalRestoreSeat(user.id, seat.claim)) {
+					if (!ownershipTransferred && seat.claim && runtime.rollbackProvisionalRestoreSeat(user.id, seat.claim)) {
 						context.publishPresence({
 							type: 'leave',
 							channelId,
@@ -485,19 +514,12 @@ const createVoiceRestoreOrJoinService = <TRuntime extends TVoiceRestoreRuntime, 
 						dependencies.logBootstrapRollback(user.name, channel.name, error);
 					}
 
-					throw interruptionError ?? error;
+					throw error;
+				} finally {
+					if (preparedBootstrap && !ownershipTransferred) {
+						await preparedBootstrap.dispose();
+					}
 				}
-
-				dependencies.logRestoreEvent('outcome', {
-					reconnectAttemptId,
-					userId: user.id,
-					clientInstanceId,
-					requestedChannelId: channelId,
-					activeChannelId: channelId,
-					outcome: seat.added ? 'joined' : 'restored',
-				});
-
-				return bootstrap;
 			});
 		} catch (error) {
 			// Before acquireRestoreSeat takes responsibility, the synchronously
