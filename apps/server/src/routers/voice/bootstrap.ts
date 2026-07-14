@@ -80,4 +80,22 @@ const createVoiceJoinBootstrap = async (opts: {
 	};
 };
 
-export { createVoiceJoinBootstrap, getVoiceJoinTarget, voiceJoinInputSchema };
+const prepareFreshVoiceJoinBootstrap = async (opts: { runtime: VoiceRuntime; userId: number }) => {
+	const { runtime, userId } = opts;
+	const router = runtime.getRouter();
+	const pair = await runtime.prepareTransportPair(userId);
+
+	return {
+		commit: pair.commit,
+		dispose: pair.dispose,
+		buildCommittedResponse: () => ({
+			routerRtpCapabilities: router.rtpCapabilities,
+			producerTransportParams: pair.producerParams,
+			consumerTransportParams: pair.consumerParams,
+			existingProducers: runtime.getRemoteIds(userId),
+			channelUsers: runtime.getState().users,
+		}),
+	};
+};
+
+export { createVoiceJoinBootstrap, getVoiceJoinTarget, prepareFreshVoiceJoinBootstrap, voiceJoinInputSchema };

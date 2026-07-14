@@ -6,7 +6,12 @@ import { logger } from '../../logger';
 import { VoiceRestoreAttemptSupersededError, VoiceRuntime } from '../../runtimes/voice';
 import { type Context, protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
 import { getPendingVoiceReconnectChannelIdsOwnedElsewhere } from '../../utils/voice-disconnect-grace';
-import { createVoiceJoinBootstrap, getVoiceJoinTarget, voiceJoinInputSchema } from './bootstrap';
+import {
+	createVoiceJoinBootstrap,
+	getVoiceJoinTarget,
+	prepareFreshVoiceJoinBootstrap,
+	voiceJoinInputSchema,
+} from './bootstrap';
 import { consumeVoiceReconnectLabNextRestoreBehavior } from './reconnect-lab-state';
 import {
 	createVoiceRestoreOrJoinService,
@@ -27,6 +32,7 @@ const restoreOrJoinService = createVoiceRestoreOrJoinService({
 	consumeReconnectLabBehavior: consumeVoiceReconnectLabNextRestoreBehavior,
 	delay: wait,
 	createBootstrap: createVoiceJoinBootstrap,
+	prepareFreshBootstrap: prepareFreshVoiceJoinBootstrap,
 	isBootstrapCurrencyError: (error) => error instanceof VoiceRestoreAttemptSupersededError,
 	logRestoreEvent: logRestoreOrJoinEvent,
 	logJoined: (userName, channelName) => {

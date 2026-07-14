@@ -252,10 +252,10 @@ class VoiceRuntime {
 	private mediaLiveness = new Map<number, TMediaLivenessState>();
 	private mediaLivenessTimer?: ReturnType<typeof setInterval>;
 	private mediaLivenessCheckInFlight = false;
-	// A fresh restoreOrJoin publishes a provisional seat before its transport
-	// bootstrap finishes. Claims make rollback attempt-scoped: a superseded
-	// attempt cannot remove a seat adopted by its successor, while an aborted
-	// attempt with no successor can still clean up the seat it owns.
+	// Retained while existing-session and overlapping legacy restore paths still
+	// support provisional seats. Claims make rollback attempt-scoped: a
+	// superseded attempt cannot remove a seat adopted by its successor, while an
+	// aborted attempt with no successor can still clean up the seat it owns.
 	private provisionalRestoreSeatClaims = new Map<number, symbol>();
 	private preparedTransportPairDisposals = new Set<() => void>();
 

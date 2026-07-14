@@ -2,9 +2,10 @@
 
 **Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
 landed in PR #280, C5 landed in PR #281, C6 landed in PR #282, C7 landed in PR
-#283, C8 landed in PR #284, C9 landed in PR #285, S0 landed in PR #286, and S1
-landed in PR #287. S2–S4 remain planned. Completed slices carry a **Landed** note
-recording what was built and what later slices should inherit.
+#283, C8 landed in PR #284, C9 landed in PR #285, S0 landed in PR #286, S1
+landed in PR #287, and S2 landed in PR #289. S3–S4 remain planned. Completed
+slices carry a **Landed** note recording what was built and what later slices
+should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -159,7 +160,7 @@ session store. It does not read the Zustand reconnect projection.
 | C9 | client 8 (#285) | Client | C6 | Microphone pipeline resource controller extracted |
 | S0 | server 1 (#286) | Server | main after PR #285 | Restore service seam and explicit ownership contract |
 | S1 | server 2 (#287) | Server | S0 | Prepared transport-pair primitive, unwired |
-| S2 | server 3 | Server | S1 | Fresh restore/join uses prepare-then-commit |
+| S2 | server 3 (#289) | Server | S1 | Fresh restore/join uses prepare-then-commit |
 | S3 | server 4 | Server | S2 | Existing-session restore swaps transport pairs atomically |
 | S4 | server 5 | Server | S3 | Legacy mutation path removed (including `join.ts`); cancellation matrix complete |
 | V0 | gate | Both | client and server workstreams | E2E, observability, docs, and rollout gate |
@@ -192,7 +193,7 @@ back to one slice per PR — the slice boundaries already support that.
 | client 8 (#285) | C9 | Extract microphone pipeline controller |
 | server 1 (#286) | S0 | Extract voice restore orchestration service |
 | server 2 (#287) | S1 | Add prepared voice transport pairs |
-| server 3 | S2 | Commit fresh voice restores transactionally |
+| server 3 (#289) | S2 | Commit fresh voice restores transactionally |
 | server 4 | S3 | Replace restored voice transports atomically |
 | server 5 | S4 | Remove legacy voice restore rollback path |
 
@@ -945,6 +946,31 @@ window for a missing session.
 callback that calls `runtime.removeUser()` after cancellation.
 
 **Suggested commit:** `fix: commit fresh voice restores transactionally`
+
+**Landed** in PR #289. The missing-session branch now prepares a fresh bootstrap
+through the S1 transport-pair handle without adding a user or publishing
+presence. After preparation, the service asserts restore-attempt currency and
+synchronously rechecks that no manual join or other client established a seat;
+only then does one non-awaiting block commit the pair, add the user and requested
+state, capture the new session incarnation, bind context/WebSocket ownership,
+and publish the reconnecting join. The response reads existing producers and
+`channelUsers` from committed runtime state.
+
+The attempt owns the prepared bootstrap until `commit()` returns. Every
+pre-commit failure, cancellation, supersession, or late seat conflict disposes
+that handle; after commit, runtime ownership is irreversible and response or
+post-commit abort failures do not run provisional rollback or publish a
+compensating leave. Existing-session restores, `joinVoiceRoute`, and standalone
+transport rebuild routes intentionally retain the legacy independent wrappers
+for S3/S4.
+
+Deterministic service barriers cover cancellation and supersession before
+preparation, during either transport allocation, and after full preparation.
+Real runtime/service integration additionally proves symmetric pending-allocation
+cleanup, late-sibling allocation failure cleanup, and that a late stale attempt
+cannot replace the current committed pair. Validation passed formatting, root
+type checking, lint, knip, 86 focused voice tests, and the full server suite (649
+tests).
 
 ### S3 — Existing-session atomic transport replacement
 

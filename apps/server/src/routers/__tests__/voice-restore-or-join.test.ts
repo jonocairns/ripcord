@@ -105,7 +105,7 @@ afterEach(async () => {
 });
 
 describe('voice.restoreOrJoin', () => {
-	test('keeps join and restore bootstrap on the independent transport wrappers', async () => {
+	test('uses a prepared pair only for fresh restore while legacy join, restore, and rebuild routes stay independent', async () => {
 		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 		const preparePairSpy = spyOn(runtime, 'prepareTransportPair');
 		const createProducerSpy = spyOn(runtime, 'createProducerTransport');
@@ -113,6 +113,14 @@ describe('voice.restoreOrJoin', () => {
 		const { caller } = await initTest(1);
 
 		try {
+			await caller.voice.restoreOrJoin({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: {
+					micMuted: false,
+					soundMuted: false,
+				},
+				reconnectAttemptId: 'prepared-fresh-bootstrap',
+			});
 			await caller.voice.join({
 				channelId: PRIMARY_VOICE_CHANNEL_ID,
 				state: {
@@ -126,12 +134,14 @@ describe('voice.restoreOrJoin', () => {
 					micMuted: false,
 					soundMuted: false,
 				},
-				reconnectAttemptId: 'legacy-bootstrap',
+				reconnectAttemptId: 'legacy-existing-bootstrap',
 			});
+			await caller.voice.createProducerTransport();
+			await caller.voice.createConsumerTransport();
 
-			expect(preparePairSpy).not.toHaveBeenCalled();
-			expect(createProducerSpy).toHaveBeenCalledTimes(2);
-			expect(createConsumerSpy).toHaveBeenCalledTimes(2);
+			expect(preparePairSpy).toHaveBeenCalledTimes(1);
+			expect(createProducerSpy).toHaveBeenCalledTimes(3);
+			expect(createConsumerSpy).toHaveBeenCalledTimes(3);
 		} finally {
 			preparePairSpy.mockRestore();
 			createProducerSpy.mockRestore();
@@ -146,6 +156,36 @@ describe('voice.restoreOrJoin', () => {
 		expect(toRestoreOrJoinPublicError(new VoiceRestoreAttemptSupersededServiceError())).toBeInstanceOf(
 			VoiceRestoreAttemptSupersededError,
 		);
+	});
+
+	test('does not prepare transports when fresh restore permission resolution fails', async () => {
+		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const preparePairSpy = spyOn(runtime, 'prepareTransportPair');
+		const ctx = await createMockContext({
+			customToken: await getMockedToken(1),
+		});
+		const caller = appRouter.createCaller(ctx);
+		const { handshakeHash } = await caller.others.handshake();
+		await caller.others.joinServer({ handshakeHash });
+		Reflect.set(ctx, 'needsPermission', async () => {
+			throw new Error('Insufficient permissions');
+		});
+
+		try {
+			await expect(
+				caller.voice.restoreOrJoin({
+					channelId: PRIMARY_VOICE_CHANNEL_ID,
+					state: { micMuted: false, soundMuted: false },
+					reconnectAttemptId: 'permission-failure',
+				}),
+			).rejects.toThrow('Insufficient permissions');
+			expect(preparePairSpy).not.toHaveBeenCalled();
+			expect(runtime.getUser(1)).toBeUndefined();
+			expect(runtime.getProducerTransport(1)).toBeUndefined();
+			expect(runtime.getConsumerTransport(1)).toBeUndefined();
+		} finally {
+			preparePairSpy.mockRestore();
+		}
 	});
 
 	test('joins normally and returns bootstrap when the user is not already in voice', async () => {

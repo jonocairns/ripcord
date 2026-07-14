@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { ServerEvents, StreamKind, type TTransportParams } from '@sharkord/shared';
 import type { AppData, Consumer, Producer, WebRtcTransport } from 'mediasoup/types';
+import {
+	createVoiceRestoreOrJoinService,
+	type TVoiceRestorePresenceEvent,
+	VoiceRestoreAttemptCancelledError,
+	VoiceRestoreAttemptSupersededServiceError,
+} from '../../routers/voice/restore-or-join-service';
 import { pubsub } from '../../utils/pubsub';
 import { VoiceRuntime } from '../voice';
 
@@ -166,6 +172,59 @@ const useTransportAllocations = (runtime: VoiceRuntime, allocations: Array<Promi
 };
 
 const resolvedAllocation = (transport: TControlledTransport) => Promise.resolve(transport);
+
+const createFreshRestoreHarness = (runtime: VoiceRuntime) => {
+	const events: TVoiceRestorePresenceEvent[] = [];
+	const bindings: Array<{ channelId: number; sessionIncarnation: symbol }> = [];
+	const connectionIdentity = {};
+	const service = createVoiceRestoreOrJoinService({
+		findRuntimeByChannelId: (channelId) => (channelId === runtime.id ? runtime : undefined),
+		findRuntimeByUserId: (userId) => (runtime.getUser(userId) ? runtime : undefined),
+		getPendingVoiceChannelIdsOwnedElsewhere: () => [],
+		consumeReconnectLabBehavior: () => undefined,
+		delay: async () => {},
+		createBootstrap: async () => {
+			throw new Error('Existing-session bootstrap was not expected');
+		},
+		prepareFreshBootstrap: async ({ userId }) => {
+			const pair = await runtime.prepareTransportPair(userId);
+
+			return {
+				commit: pair.commit,
+				dispose: pair.dispose,
+				buildCommittedResponse: () => ({
+					channelUsers: runtime.getState().users.map((user) => user.userId),
+				}),
+			};
+		},
+		isBootstrapCurrencyError: () => false,
+		logRestoreEvent: () => {},
+		logJoined: () => {},
+		logBootstrapRollback: () => {},
+	});
+
+	const restore = (reconnectAttemptId: string, signal?: AbortSignal) =>
+		service.restoreOrJoin({
+			channelId: runtime.id,
+			state: { micMuted: true, soundMuted: false },
+			reconnectAttemptId,
+			user: { id: 1, name: 'Test user' },
+			signal,
+			context: {
+				resolveTarget: async () => ({ channel: { id: runtime.id, name: 'Voice' }, runtime }),
+				getClientInstanceId: () => 'client-a',
+				getOwnConnection: () => ({ identity: connectionIdentity, clientInstanceId: 'client-a' }),
+				getUserConnections: () => [],
+				closeOwnConnection: () => {},
+				bindVoiceSession: (channelId, sessionIncarnation) => {
+					bindings.push({ channelId, sessionIncarnation });
+				},
+				publishPresence: (event) => events.push(event),
+			},
+		});
+
+	return { bindings, events, restore };
+};
 
 describe('VoiceRuntime prepared transport pairs', () => {
 	const runtimes: VoiceRuntime[] = [];
@@ -486,5 +545,116 @@ describe('VoiceRuntime prepared transport pairs', () => {
 		expect(producer.closeCalls).toBe(1);
 		expect(consumer.closeCalls).toBe(1);
 		expect(() => pair.commit()).toThrow('Voice transport pair is disposed');
+	});
+
+	test('abort while producer preparation is pending disposes both sides without fresh-session side effects', async () => {
+		const runtime = makeRuntime();
+		const producerAllocation = createDeferred<TControlledTransport>();
+		const consumerAllocation = createDeferred<TControlledTransport>();
+		const producer = makeControlledTransport('late-producer');
+		const consumer = makeControlledTransport('ready-consumer');
+		useTransportAllocations(runtime, [producerAllocation.promise, consumerAllocation.promise]);
+		const harness = createFreshRestoreHarness(runtime);
+		const abortController = new AbortController();
+		const restore = harness.restore('abort-producer', abortController.signal);
+
+		consumerAllocation.resolve(consumer);
+		await Promise.resolve();
+		abortController.abort();
+		producerAllocation.resolve(producer);
+
+		await expect(restore).rejects.toBeInstanceOf(VoiceRestoreAttemptCancelledError);
+		expect(producer.closeCalls).toBe(1);
+		expect(consumer.closeCalls).toBe(1);
+		expect(runtime.getProducerTransport(1)).toBeUndefined();
+		expect(runtime.getConsumerTransport(1)).toBeUndefined();
+		expect(runtime.getUser(1)).toBeUndefined();
+		expect(harness.bindings).toEqual([]);
+		expect(harness.events).toEqual([]);
+	});
+
+	test('transport allocation failure closes a late sibling without publishing fresh-session presence', async () => {
+		const runtime = makeRuntime();
+		const producerAllocation = createDeferred<TControlledTransport>();
+		const consumerAllocation = createDeferred<TControlledTransport>();
+		const consumer = makeControlledTransport('late-consumer');
+		useTransportAllocations(runtime, [producerAllocation.promise, consumerAllocation.promise]);
+		const harness = createFreshRestoreHarness(runtime);
+		const failure = new Error('Producer allocation failed');
+		const restore = harness.restore('allocation-failure');
+
+		producerAllocation.reject(failure);
+		await expect(restore).rejects.toBe(failure);
+		consumerAllocation.resolve(consumer);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(consumer.closeCalls).toBe(1);
+		expect(runtime.getProducerTransport(1)).toBeUndefined();
+		expect(runtime.getConsumerTransport(1)).toBeUndefined();
+		expect(runtime.getUser(1)).toBeUndefined();
+		expect(harness.bindings).toEqual([]);
+		expect(harness.events).toEqual([]);
+	});
+
+	test('abort while consumer preparation is pending disposes both sides without fresh-session side effects', async () => {
+		const runtime = makeRuntime();
+		const producerAllocation = createDeferred<TControlledTransport>();
+		const consumerAllocation = createDeferred<TControlledTransport>();
+		const producer = makeControlledTransport('ready-producer');
+		const consumer = makeControlledTransport('late-consumer');
+		useTransportAllocations(runtime, [producerAllocation.promise, consumerAllocation.promise]);
+		const harness = createFreshRestoreHarness(runtime);
+		const abortController = new AbortController();
+		const restore = harness.restore('abort-consumer', abortController.signal);
+
+		producerAllocation.resolve(producer);
+		await Promise.resolve();
+		abortController.abort();
+		consumerAllocation.resolve(consumer);
+
+		await expect(restore).rejects.toBeInstanceOf(VoiceRestoreAttemptCancelledError);
+		expect(producer.closeCalls).toBe(1);
+		expect(consumer.closeCalls).toBe(1);
+		expect(runtime.getProducerTransport(1)).toBeUndefined();
+		expect(runtime.getConsumerTransport(1)).toBeUndefined();
+		expect(runtime.getUser(1)).toBeUndefined();
+		expect(harness.bindings).toEqual([]);
+		expect(harness.events).toEqual([]);
+	});
+
+	test('a late superseded preparation cannot replace the current committed fresh session', async () => {
+		const runtime = makeRuntime();
+		const staleProducerAllocation = createDeferred<TControlledTransport>();
+		const staleConsumerAllocation = createDeferred<TControlledTransport>();
+		const staleProducer = makeControlledTransport('stale-producer');
+		const staleConsumer = makeControlledTransport('stale-consumer');
+		const currentProducer = makeControlledTransport('current-producer');
+		const currentConsumer = makeControlledTransport('current-consumer');
+		useTransportAllocations(runtime, [
+			staleProducerAllocation.promise,
+			staleConsumerAllocation.promise,
+			resolvedAllocation(currentProducer),
+			resolvedAllocation(currentConsumer),
+		]);
+		const harness = createFreshRestoreHarness(runtime);
+		const staleRestore = harness.restore('stale');
+		await Promise.resolve();
+		const currentRestore = harness.restore('current');
+
+		await expect(currentRestore).resolves.toEqual({ channelUsers: [1] });
+		staleProducerAllocation.resolve(staleProducer);
+		staleConsumerAllocation.resolve(staleConsumer);
+
+		await expect(staleRestore).rejects.toBeInstanceOf(VoiceRestoreAttemptSupersededServiceError);
+		expect(runtime.getProducerTransport(1)).toBe(currentProducer.transport);
+		expect(runtime.getConsumerTransport(1)).toBe(currentConsumer.transport);
+		expect(staleProducer.closeCalls).toBe(1);
+		expect(staleConsumer.closeCalls).toBe(1);
+		expect(currentProducer.closeCalls).toBe(0);
+		expect(currentConsumer.closeCalls).toBe(0);
+		expect(runtime.getUserState(1)).toMatchObject({ micMuted: true, soundMuted: false });
+		expect(harness.bindings).toHaveLength(1);
+		expect(harness.events.map((event) => event.type)).toEqual(['join']);
 	});
 });
