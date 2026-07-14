@@ -667,6 +667,10 @@ class VoiceRuntime {
 
 		transport.on('dtlsstatechange', (state) => {
 			if (state === 'failed') {
+				if (this.consumerTransports[userId] !== transport) {
+					return;
+				}
+
 				this.removeConsumerTransport(userId);
 				pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
 					userId,
@@ -716,6 +720,10 @@ class VoiceRuntime {
 
 		transport.on('dtlsstatechange', (state) => {
 			if (state === 'failed') {
+				if (this.producerTransports[userId] !== transport) {
+					return;
+				}
+
 				this.removeProducerTransport(userId);
 				pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
 					userId,

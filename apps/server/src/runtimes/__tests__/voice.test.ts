@@ -167,6 +167,32 @@ describe('VoiceRuntime in-session transport rebuild', () => {
 		expect(surviving!.closed).toBe(false);
 	});
 
+	test('late DTLS failures from replaced transports cannot close their successors', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		await runtime.createProducerTransport(1);
+		const oldProducerTransport = runtime.getProducerTransport(1);
+		await runtime.createProducerTransport(1);
+		const newProducerTransport = runtime.getProducerTransport(1);
+		await runtime.createConsumerTransport(1);
+		const oldConsumerTransport = runtime.getConsumerTransport(1);
+		await runtime.createConsumerTransport(1);
+		const newConsumerTransport = runtime.getConsumerTransport(1);
+
+		if (!oldProducerTransport || !newProducerTransport || !oldConsumerTransport || !newConsumerTransport) {
+			throw new Error('Expected both transport generations to be available');
+		}
+
+		oldProducerTransport.emit('dtlsstatechange', 'failed');
+		oldConsumerTransport.emit('dtlsstatechange', 'failed');
+
+		expect(runtime.getProducerTransport(1)).toBe(newProducerTransport);
+		expect(runtime.getConsumerTransport(1)).toBe(newConsumerTransport);
+		expect(newProducerTransport.closed).toBe(false);
+		expect(newConsumerTransport.closed).toBe(false);
+	});
+
 	test('targeted consumer cleanup skips a newer replacement consumer', async () => {
 		const runtime = await makeRuntime();
 		runtime.addUser(1, { micMuted: false, soundMuted: false });
