@@ -6,7 +6,7 @@ import { getMockedToken, initTest } from '../../__tests__/helpers';
 import { db } from '../../db';
 import { channels } from '../../db/schema';
 import { appRouter } from '../../routers';
-import { VoiceRuntime } from '../../runtimes/voice';
+import { VoiceRestoreAttemptSupersededError, VoiceRuntime } from '../../runtimes/voice';
 import { pubsub } from '../../utils/pubsub';
 import {
 	clearPendingVoiceDisconnect,
@@ -14,7 +14,15 @@ import {
 	resetVoiceDisconnectGraceForTests,
 	schedulePendingVoiceDisconnect,
 } from '../../utils/voice-disconnect-grace';
-import { VOICE_SESSION_OWNED_ELSEWHERE, VOICE_SESSION_WRONG_CHANNEL } from '../voice/restore-or-join';
+import {
+	toRestoreOrJoinPublicError,
+	VOICE_SESSION_OWNED_ELSEWHERE,
+	VOICE_SESSION_WRONG_CHANNEL,
+} from '../voice/restore-or-join';
+import {
+	VoiceRestoreAttemptCancelledError,
+	VoiceRestoreAttemptSupersededServiceError,
+} from '../voice/restore-or-join-service';
 
 const PRIMARY_VOICE_CHANNEL_ID = 2;
 const SECONDARY_VOICE_CHANNEL_ID = 3;
@@ -97,6 +105,15 @@ afterEach(async () => {
 });
 
 describe('voice.restoreOrJoin', () => {
+	test('keeps cancellation and supersession compatible with the existing public error', () => {
+		expect(toRestoreOrJoinPublicError(new VoiceRestoreAttemptCancelledError())).toBeInstanceOf(
+			VoiceRestoreAttemptSupersededError,
+		);
+		expect(toRestoreOrJoinPublicError(new VoiceRestoreAttemptSupersededServiceError())).toBeInstanceOf(
+			VoiceRestoreAttemptSupersededError,
+		);
+	});
+
 	test('joins normally and returns bootstrap when the user is not already in voice', async () => {
 		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 
@@ -334,90 +351,6 @@ describe('voice.restoreOrJoin', () => {
 		expect(result.channelUsers.some((user) => user.userId === 1)).toBe(true);
 	});
 
-	test('fences a delayed restore attempt when a newer attempt starts for the same client', async () => {
-		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
-
-		const { caller } = await initTest(1);
-
-		await caller.voice.join({
-			channelId: PRIMARY_VOICE_CHANNEL_ID,
-			state: {
-				micMuted: false,
-				soundMuted: false,
-			},
-		});
-
-		await caller.voice.reconnectLab.setNextRestoreBehavior({ delayMs: 100 });
-
-		const delayedRestore = caller.voice.restoreOrJoin({
-			channelId: PRIMARY_VOICE_CHANNEL_ID,
-			state: {
-				micMuted: false,
-				soundMuted: false,
-			},
-			reconnectAttemptId: 'attempt-delayed',
-		});
-
-		await new Promise((resolve) => setTimeout(resolve, 10));
-
-		const currentRestore = await caller.voice.restoreOrJoin({
-			channelId: PRIMARY_VOICE_CHANNEL_ID,
-			state: {
-				micMuted: false,
-				soundMuted: false,
-			},
-			reconnectAttemptId: 'attempt-current',
-		});
-
-		expect(currentRestore.channelUsers.some((user) => user.userId === 1)).toBe(true);
-		await expect(delayedRestore).rejects.toThrow('Voice restore attempt superseded');
-		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getProducerTransport(1)).toBeDefined();
-		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getConsumerTransport(1)).toBeDefined();
-	});
-
-	test('rejects a delayed restore after a manual join moved the user to another channel', async () => {
-		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
-		await ensureVoiceRuntime(SECONDARY_VOICE_CHANNEL_ID, 'Voice 2');
-
-		const { caller } = await initTest(1);
-
-		await caller.voice.join({
-			channelId: PRIMARY_VOICE_CHANNEL_ID,
-			state: {
-				micMuted: false,
-				soundMuted: false,
-			},
-		});
-
-		await caller.voice.reconnectLab.setNextRestoreBehavior({ delayMs: 100 });
-
-		const delayedRestore = caller.voice.restoreOrJoin({
-			channelId: PRIMARY_VOICE_CHANNEL_ID,
-			state: {
-				micMuted: false,
-				soundMuted: false,
-			},
-			reconnectAttemptId: 'attempt-delayed-vs-manual-join',
-		});
-
-		await new Promise((resolve) => setTimeout(resolve, 10));
-
-		// The user switches channels while the restore sits in the delay window.
-		await caller.voice.join({
-			channelId: SECONDARY_VOICE_CHANNEL_ID,
-			state: {
-				micMuted: false,
-				soundMuted: false,
-			},
-		});
-
-		// Without the post-await recheck the delayed restore re-seated the user
-		// in the channel they just left, creating a phantom double membership.
-		await expect(delayedRestore).rejects.toThrow(VOICE_SESSION_WRONG_CHANNEL);
-		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeUndefined();
-		expect(VoiceRuntime.findById(SECONDARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeDefined();
-	});
-
 	test('does not commit transports created by a superseded restore attempt', async () => {
 		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 		runtime.addUser(1, { micMuted: false, soundMuted: false });
@@ -442,7 +375,7 @@ describe('voice.restoreOrJoin', () => {
 		expect(runtime.getConsumerTransport(1)?.id).toBe(consumerParams.id);
 	});
 
-	test('rolls back an aborted provisional restore seat when no successor adopted it', async () => {
+	test('rolls back a matching provisional restore seat when no successor adopted it', async () => {
 		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 		runtime.addUser(1, { micMuted: false, soundMuted: false });
 		const claim = runtime.beginProvisionalRestoreSeat(1);
@@ -486,74 +419,6 @@ describe('voice.restoreOrJoin', () => {
 				},
 			]);
 		} finally {
-			leaveSub.unsubscribe();
-		}
-	});
-
-	test('does not let a superseded fresh restore roll back the seat adopted by its successor', async () => {
-		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
-		const originalCreateProducerTransport = runtime.createProducerTransport;
-		let producerCallCount = 0;
-		let releaseFirstProducer: () => void = () => {};
-		let markFirstProducerEntered: () => void = () => {};
-		const firstProducerEntered = new Promise<void>((resolve) => {
-			markFirstProducerEntered = resolve;
-		});
-		const firstProducerGate = new Promise<void>((resolve) => {
-			releaseFirstProducer = resolve;
-		});
-
-		runtime.createProducerTransport = async (userId, isCurrent) => {
-			producerCallCount += 1;
-
-			if (producerCallCount === 1) {
-				markFirstProducerEntered();
-				await firstProducerGate;
-			}
-
-			return originalCreateProducerTransport(userId, isCurrent);
-		};
-
-		const joinEvents: number[] = [];
-		const leaveEvents: number[] = [];
-		const joinSub = pubsub.subscribe(ServerEvents.USER_JOIN_VOICE).subscribe({
-			next: (event) => joinEvents.push(event.channelId),
-		});
-		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
-			next: (event) => leaveEvents.push(event.channelId),
-		});
-
-		try {
-			const { caller } = await initTest(1);
-			const staleRestore = caller.voice
-				.restoreOrJoin({
-					channelId: PRIMARY_VOICE_CHANNEL_ID,
-					state: { micMuted: false, soundMuted: false },
-					reconnectAttemptId: 'attempt-fresh-stale',
-				})
-				.catch((error: unknown) => error);
-
-			await firstProducerEntered;
-
-			const currentRestore = await caller.voice.restoreOrJoin({
-				channelId: PRIMARY_VOICE_CHANNEL_ID,
-				state: { micMuted: false, soundMuted: false },
-				reconnectAttemptId: 'attempt-fresh-current',
-			});
-
-			releaseFirstProducer();
-
-			expect(currentRestore.channelUsers.some((user) => user.userId === 1)).toBe(true);
-			expect(await staleRestore).toEqual(expect.objectContaining({ message: 'Voice restore attempt superseded' }));
-			expect(runtime.getUser(1)).toBeDefined();
-			expect(runtime.getProducerTransport(1)).toBeDefined();
-			expect(runtime.getConsumerTransport(1)).toBeDefined();
-			expect(joinEvents).toEqual([PRIMARY_VOICE_CHANNEL_ID]);
-			expect(leaveEvents).toEqual([]);
-		} finally {
-			releaseFirstProducer();
-			runtime.createProducerTransport = originalCreateProducerTransport;
-			joinSub.unsubscribe();
 			leaveSub.unsubscribe();
 		}
 	});
@@ -844,16 +709,7 @@ describe('voice.restoreOrJoin', () => {
 	});
 
 	test('restores its own pending grace seat when the tracked socket has not populated its clientInstanceId yet', async () => {
-		const runtime = await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
-		const originalCreateProducerTransport = runtime.createProducerTransport;
-		let releaseProducerTransport: () => void = () => {};
-		let markProducerTransportEntered: () => void = () => {};
-		const producerTransportEntered = new Promise<void>((resolve) => {
-			markProducerTransportEntered = resolve;
-		});
-		const producerTransportGate = new Promise<void>((resolve) => {
-			releaseProducerTransport = resolve;
-		});
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
 
 		const mockedToken = await getMockedToken(1);
 		const ctxA = await createMockContext({
@@ -913,13 +769,8 @@ describe('voice.restoreOrJoin', () => {
 				},
 			});
 			expect(getPendingVoiceReconnectChannelId(sessionA.clientInstanceId, 1)).toBe(PRIMARY_VOICE_CHANNEL_ID);
-			runtime.createProducerTransport = async (userId, isCurrent) => {
-				markProducerTransportEntered();
-				await producerTransportGate;
-				return originalCreateProducerTransport(userId, isCurrent);
-			};
 
-			const restore = callerB.voice.restoreOrJoin({
+			const result = await callerB.voice.restoreOrJoin({
 				channelId: PRIMARY_VOICE_CHANNEL_ID,
 				state: {
 					micMuted: false,
@@ -927,23 +778,12 @@ describe('voice.restoreOrJoin', () => {
 				},
 				reconnectAttemptId: 'attempt-pending-grace-restore',
 			});
-			await producerTransportEntered;
-
-			// Transport bootstrap has started, but the replacement socket must not
-			// clear the only disconnect cleanup path until bootstrap commits.
-			expect(sessionB.currentVoiceChannelId).toBeUndefined();
-			expect(getPendingVoiceReconnectChannelId(sessionA.clientInstanceId, 1)).toBe(PRIMARY_VOICE_CHANNEL_ID);
-
-			releaseProducerTransport();
-			const result = await restore;
 
 			expect(result.channelUsers.some((entry) => entry.userId === 1)).toBe(true);
 			expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeDefined();
 			expect(getPendingVoiceReconnectChannelId(sessionA.clientInstanceId, 1)).toBeUndefined();
 			expect(finalized).toBe(false);
 		} finally {
-			releaseProducerTransport();
-			runtime.createProducerTransport = originalCreateProducerTransport;
 			openSessions.length = 0;
 		}
 	});

@@ -2,9 +2,9 @@
 
 **Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
 landed in PR #280, C5 landed in PR #281, C6 landed in PR #282, C7 landed in PR
-#283, and C8 landed in PR #284. The remaining slices are planned. Completed
-slices carry a **Landed** note recording what was built and what later slices
-should inherit.
+#283, C8 landed in PR #284, and C9 landed in PR #285. The remaining slices are
+planned. Completed slices carry a **Landed** note recording what was built and
+what later slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -155,13 +155,13 @@ session store. It does not read the Zustand reconnect projection.
 | C5 | client 4 (#281) | Client | C2 | Transport rebuild command extracted |
 | C6 | client 5 (#282) | Client | C4 + C5 | React adapter cutover; embedded runner removed |
 | C7 | client 6 (#283) | Client | C6 | Mutable Zustand projection retired or UI-only |
-| C8 | client 7 | Client | C6 | Remote consume resource controller extracted |
-| C9 | client 8 | Client | C6 | Microphone pipeline resource controller extracted |
-| S0 | server 1 | Server | current PR #277 state | Restore service seam and explicit ownership contract |
-| S1 | server 1 | Server | S0 | Prepared transport-pair primitive, unwired |
-| S2 | server 2 | Server | S1 | Fresh restore/join uses prepare-then-commit |
-| S3 | server 3 | Server | S2 | Existing-session restore swaps transport pairs atomically |
-| S4 | server 4 | Server | S3 | Legacy mutation path removed (including `join.ts`); cancellation matrix complete |
+| C8 | client 7 (#284) | Client | C6 | Remote consume resource controller extracted |
+| C9 | client 8 (#285) | Client | C6 | Microphone pipeline resource controller extracted |
+| S0 | server 1 | Server | main after PR #285 | Restore service seam and explicit ownership contract |
+| S1 | server 2 | Server | S0 | Prepared transport-pair primitive, unwired |
+| S2 | server 3 | Server | S1 | Fresh restore/join uses prepare-then-commit |
+| S3 | server 4 | Server | S2 | Existing-session restore swaps transport pairs atomically |
+| S4 | server 5 | Server | S3 | Legacy mutation path removed (including `join.ts`); cancellation matrix complete |
 | V0 | gate | Both | client and server workstreams | E2E, observability, docs, and rollout gate |
 
 The client and server workstreams may proceed independently. Within the client
@@ -188,15 +188,16 @@ back to one slice per PR — the slice boundaries already support that.
 | client 4 (#281) | C5 | Extract voice transport rebuild execution |
 | client 5 (#282) | C6 | Cut voice provider over to command executor |
 | client 6 (#283) | C7 | Remove voice reconnect state projection |
-| client 7 (follow-on) | C8 | Extract remote media consume controller |
-| client 8 (follow-on) | C9 | Extract microphone pipeline controller |
-| server 1 | S0 + S1 | Add voice restore service seam and prepared transport pairs |
-| server 2 | S2 | Commit fresh voice restores transactionally |
-| server 3 | S3 | Replace restored voice transports atomically |
-| server 4 | S4 | Remove legacy voice restore rollback path |
+| client 7 (#284) | C8 | Extract remote media consume controller |
+| client 8 (#285) | C9 | Extract microphone pipeline controller |
+| server 1 | S0 | Extract voice restore orchestration service |
+| server 2 | S1 | Add prepared voice transport pairs |
+| server 3 | S2 | Commit fresh voice restores transactionally |
+| server 4 | S3 | Replace restored voice transports atomically |
+| server 5 | S4 | Remove legacy voice restore rollback path |
 
 V0 is not a PR: its observability and E2E items land incrementally with
-client 5 and server 2–4, and its rollout checklist gates marking this plan
+client 5 and server 3–5, and its rollout checklist gates marking this plan
 implemented.
 
 ## Client slices
@@ -695,6 +696,8 @@ close/replacement, or transport cancellation reject the start.
 
 ### C9 — Microphone pipeline resource controller
 
+**Landed** (PR #285).
+
 **Objective:** Put microphone ownership, preparation, installation, publishing,
 and teardown behind one testable owner.
 
@@ -798,7 +801,8 @@ behavior.
 - Add `apps/server/src/routers/voice/restore-or-join-service.ts` or an equivalent
   domain helper.
 - Keep `restore-or-join.ts` as validation/rate-limit/context wiring.
-- Extend `voice-restore-or-join.test.ts` with service-level deferred dependencies.
+- Add a focused service suite with deferred dependencies and retain compact
+  route-level integration coverage in `voice-restore-or-join.test.ts`.
 
 **Work:**
 
@@ -815,10 +819,23 @@ behavior.
   conflict, and latest-attempt fencing remain identical.
 - Abort and supersede can be triggered deterministically at named barriers.
 
-**Exit criteria:** Tests can pause immediately before and after transport
-preparation/commit without reconnect-lab sleeps.
+**Exit criteria:** Tests can pause before target resolution, before seat
+acquisition, during either transport bootstrap branch, and after bootstrap
+before provisional-claim commit without reconnect-lab sleeps.
 
 **Suggested commit:** `refactor: extract voice restore orchestration service`
+
+**Implementation decision:** Attempt invalidation is first-cause. An abort that
+invalidates an attempt before a successor starts is represented internally as
+cancellation; registering a successor first represents the predecessor as
+superseded. A later invalidation does not overwrite that outcome. S0 maps both
+internal outcomes to the existing public superseded-error behavior.
+
+The attempt registry is factory-scoped: production owns one module-lifetime
+service instance, while each service test owns an isolated registry. The service
+uses narrow target, connection, grace, lab, bootstrap, presence, context-binding,
+and logging ports; it does not import tRPC, database, WebSocket, or mediasoup
+implementations.
 
 ### S1 — Prepared transport-pair primitive
 
@@ -963,9 +980,9 @@ impossible by construction or passes under the documented post-commit owner.
 production diagnostics.
 
 V0 is a gate, not a standalone work item. The transport-pair and restore-outcome
-logs land with server 2–4; executor-wide structured command spans remain
+logs land with server 3–5; executor-wide structured command spans remain
 deferred to this gate rather than expanding the behavior-preserving client 5
-adapter cutover. The E2E scenarios are run as part of the client 5 and server 4
+adapter cutover. The E2E scenarios are run as part of the client 5 and server 5
 exit criteria. This section is the consolidated checklist for declaring the
 plan implemented.
 
