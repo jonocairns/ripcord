@@ -2,9 +2,9 @@
 
 **Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
 landed in PR #280, C5 landed in PR #281, C6 landed in PR #282, C7 landed in PR
-#283, C8 landed in PR #284, and C9 landed in PR #285. The remaining slices are
-planned. Completed slices carry a **Landed** note recording what was built and
-what later slices should inherit.
+#283, C8 landed in PR #284, C9 landed in PR #285, and S0 landed in PR #286. The
+remaining slices are planned. Completed slices carry a **Landed** note recording
+what was built and what later slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -157,7 +157,7 @@ session store. It does not read the Zustand reconnect projection.
 | C7 | client 6 (#283) | Client | C6 | Mutable Zustand projection retired or UI-only |
 | C8 | client 7 (#284) | Client | C6 | Remote consume resource controller extracted |
 | C9 | client 8 (#285) | Client | C6 | Microphone pipeline resource controller extracted |
-| S0 | server 1 | Server | main after PR #285 | Restore service seam and explicit ownership contract |
+| S0 | server 1 (#286) | Server | main after PR #285 | Restore service seam and explicit ownership contract |
 | S1 | server 2 | Server | S0 | Prepared transport-pair primitive, unwired |
 | S2 | server 3 | Server | S1 | Fresh restore/join uses prepare-then-commit |
 | S3 | server 4 | Server | S2 | Existing-session restore swaps transport pairs atomically |
@@ -190,7 +190,7 @@ back to one slice per PR — the slice boundaries already support that.
 | client 6 (#283) | C7 | Remove voice reconnect state projection |
 | client 7 (#284) | C8 | Extract remote media consume controller |
 | client 8 (#285) | C9 | Extract microphone pipeline controller |
-| server 1 | S0 | Extract voice restore orchestration service |
+| server 1 (#286) | S0 | Extract voice restore orchestration service |
 | server 2 | S1 | Add prepared voice transport pairs |
 | server 3 | S2 | Commit fresh voice restores transactionally |
 | server 4 | S3 | Replace restored voice transports atomically |
@@ -837,6 +837,11 @@ uses narrow target, connection, grace, lab, bootstrap, presence, context-binding
 and logging ports; it does not import tRPC, database, WebSocket, or mediasoup
 implementations.
 
+**Landed** in PR #286 as merge commit `1dcaf04a`. The production adapter remains
+on `createVoiceJoinBootstrap`, which installs producer and consumer transports
+independently. Cancellation and supersession are distinct inside the service but
+continue to map to the existing public restore error.
+
 ### S1 — Prepared transport-pair primitive
 
 **Objective:** Allocate a producer/consumer transport pair without mutating the
@@ -880,6 +885,29 @@ type TPreparedVoiceTransportPair = {
 **Exit criteria:** Primitive is fully tested but unused by production routes.
 
 **Suggested commit:** `refactor: add prepared voice transport pairs`
+
+**Implementation decision:** A prepared handle has one-way ownership states:
+prepared resources can be committed once or disposed once; repeated calls for
+the completed transition are harmless, disposal after commit is a no-op, and
+commit after disposal is an explicit invalid transition. Allocation failure
+invalidates the whole preparation immediately and closes a sibling even when
+that sibling finishes later, without waiting indefinitely for it.
+
+Pair commit installs both active map entries before closing the captured old
+pair. This keeps synchronous or delayed old close callbacks from observing and
+deleting a half-installed successor. Old producer and consumer resources are
+captured before the swap and closed by identity afterward, including the current
+legacy producer-replacement cleanup of `SCREEN_AUDIO`.
+
+Prepared handles remain independently owned when multiple preparations exist
+for one user. Runtime code does not choose the current restore attempt: the S2/S3
+orchestrator performs its currency assertion immediately before synchronous
+commit. Runtime destruction invalidates every allocating or prepared handle;
+already-created transports close immediately and later allocations close when
+they complete. A DTLS failure before commit disposes the private pair without
+publishing a client failure, while a committed active transport retains the
+existing side-specific failure publication. Legacy wrapper DTLS handlers are
+also identity guarded so a replaced transport cannot close its successor.
 
 ### S2 — Fresh restore/join prepare-then-commit
 

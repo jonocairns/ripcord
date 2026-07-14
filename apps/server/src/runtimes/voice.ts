@@ -192,6 +192,27 @@ type TVoiceRestoreSeatClaim = {
 	previousState?: TVoiceUserState;
 };
 
+type TPreparedVoiceTransportPair = {
+	producerParams: TTransportParams;
+	consumerParams: TTransportParams;
+	commit: () => void;
+	dispose: () => Promise<void>;
+};
+
+type TAllocatedVoiceTransport = {
+	transport: WebRtcTransport<AppData>;
+	params: TTransportParams;
+};
+
+type TPreparedTransportPairState = 'allocating' | 'prepared' | 'committed' | 'disposed';
+
+class VoicePreparedTransportPairDisposedError extends Error {
+	constructor() {
+		super('Voice transport pair is disposed');
+		this.name = 'VoicePreparedTransportPairDisposedError';
+	}
+}
+
 class VoiceRestoreAttemptSupersededError extends Error {
 	constructor() {
 		super('Voice restore attempt superseded');
@@ -236,6 +257,7 @@ class VoiceRuntime {
 	// attempt cannot remove a seat adopted by its successor, while an aborted
 	// attempt with no successor can still clean up the seat it owns.
 	private provisionalRestoreSeatClaims = new Map<number, symbol>();
+	private preparedTransportPairDisposals = new Set<() => void>();
 
 	private externalCounter = 0;
 	private externalStreamsInternal: {
@@ -333,6 +355,10 @@ class VoiceRuntime {
 	};
 
 	public destroy = async () => {
+		for (const dispose of [...this.preparedTransportPairDisposals]) {
+			dispose();
+		}
+
 		this.stopMediaLivenessMonitor();
 		this.clearAllVoiceActivity();
 
@@ -646,37 +672,7 @@ class VoiceRuntime {
 		this.removeConsumerTransport(userId);
 
 		this.consumerTransports[userId] = transport;
-
-		transport.observer.on('close', () => {
-			if (this.consumerTransports[userId] !== transport) {
-				return;
-			}
-
-			delete this.consumerTransports[userId];
-
-			if (this.consumers[userId]) {
-				Object.values(this.consumers[userId]).forEach((remoteConsumers) => {
-					Object.values(remoteConsumers).forEach((consumer) => {
-						consumer?.close();
-					});
-				});
-
-				delete this.consumers[userId];
-			}
-		});
-
-		transport.on('dtlsstatechange', (state) => {
-			if (state === 'failed') {
-				if (this.consumerTransports[userId] !== transport) {
-					return;
-				}
-
-				this.removeConsumerTransport(userId);
-				pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
-					userId,
-				});
-			}
-		});
+		this.setupConsumerTransportHandlers(userId, transport);
 
 		return params;
 	};
@@ -704,32 +700,7 @@ class VoiceRuntime {
 		this.removeProducerTransport(userId);
 
 		this.producerTransports[userId] = transport;
-
-		transport.observer.on('close', () => {
-			if (this.producerTransports[userId] !== transport) {
-				return;
-			}
-
-			delete this.producerTransports[userId];
-
-			this.removeProducer(userId, StreamKind.AUDIO);
-			this.removeProducer(userId, StreamKind.VIDEO);
-			this.removeProducer(userId, StreamKind.SCREEN);
-			this.removeProducer(userId, StreamKind.SCREEN_AUDIO);
-		});
-
-		transport.on('dtlsstatechange', (state) => {
-			if (state === 'failed') {
-				if (this.producerTransports[userId] !== transport) {
-					return;
-				}
-
-				this.removeProducerTransport(userId);
-				pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
-					userId,
-				});
-			}
-		});
+		this.setupProducerTransportHandlers(userId, transport);
 
 		return params;
 	};
@@ -744,6 +715,242 @@ class VoiceRuntime {
 
 	public getProducerTransport = (userId: number) => {
 		return this.producerTransports[userId];
+	};
+
+	public prepareTransportPair = async (userId: number): Promise<TPreparedVoiceTransportPair> => {
+		let state: TPreparedTransportPairState = 'allocating';
+		let producerAllocation: TAllocatedVoiceTransport | undefined;
+		let consumerAllocation: TAllocatedVoiceTransport | undefined;
+		let preparationError: unknown;
+
+		const closePreparedTransports = () => {
+			if (producerAllocation && !producerAllocation.transport.closed) {
+				producerAllocation.transport.close();
+			}
+
+			if (consumerAllocation && !consumerAllocation.transport.closed) {
+				consumerAllocation.transport.close();
+			}
+		};
+
+		const disposeOwnedTransports = () => {
+			if (state === 'committed' || state === 'disposed') {
+				return;
+			}
+
+			state = 'disposed';
+			this.preparedTransportPairDisposals.delete(disposeOwnedTransports);
+			closePreparedTransports();
+		};
+
+		const failPreparation = (error: unknown) => {
+			if (state !== 'allocating') {
+				return;
+			}
+
+			preparationError = error;
+			disposeOwnedTransports();
+		};
+
+		const allocateTransport = async (
+			initialAvailableOutgoingBitrate: number,
+			setAllocation: (allocation: TAllocatedVoiceTransport) => void,
+		): Promise<TAllocatedVoiceTransport> => {
+			try {
+				const allocation = await this.createTransport(initialAvailableOutgoingBitrate);
+
+				if (state !== 'allocating' || allocation.transport.closed) {
+					if (!allocation.transport.closed) {
+						allocation.transport.close();
+					}
+
+					throw preparationError ?? new VoicePreparedTransportPairDisposedError();
+				}
+
+				setAllocation(allocation);
+				return allocation;
+			} catch (error) {
+				failPreparation(error);
+				throw error;
+			}
+		};
+
+		this.preparedTransportPairDisposals.add(disposeOwnedTransports);
+
+		const producerAllocationPromise = allocateTransport(
+			PRODUCER_INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS,
+			(allocation) => {
+				producerAllocation = allocation;
+				this.setupProducerTransportHandlers(userId, allocation.transport, disposeOwnedTransports);
+			},
+		);
+		const consumerAllocationPromise = allocateTransport(
+			CONSUMER_INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS,
+			(allocation) => {
+				consumerAllocation = allocation;
+				this.setupConsumerTransportHandlers(userId, allocation.transport, disposeOwnedTransports);
+			},
+		);
+
+		await Promise.all([producerAllocationPromise, consumerAllocationPromise]);
+
+		if (state !== 'allocating' || !producerAllocation || !consumerAllocation) {
+			throw preparationError ?? new VoicePreparedTransportPairDisposedError();
+		}
+
+		const preparedProducerAllocation = producerAllocation;
+		const preparedConsumerAllocation = consumerAllocation;
+		state = 'prepared';
+
+		return {
+			producerParams: preparedProducerAllocation.params,
+			consumerParams: preparedConsumerAllocation.params,
+			commit: () => {
+				if (state === 'committed') {
+					return;
+				}
+
+				if (
+					state === 'disposed' ||
+					preparedProducerAllocation.transport.closed ||
+					preparedConsumerAllocation.transport.closed
+				) {
+					disposeOwnedTransports();
+					throw new VoicePreparedTransportPairDisposedError();
+				}
+
+				const oldProducerTransport = this.producerTransports[userId];
+				const oldConsumerTransport = this.consumerTransports[userId];
+				const oldProducers = oldProducerTransport ? this.captureUserProducers(userId) : [];
+				const oldConsumers = oldConsumerTransport ? this.captureUserConsumers(userId) : [];
+
+				this.producerTransports[userId] = preparedProducerAllocation.transport;
+				this.consumerTransports[userId] = preparedConsumerAllocation.transport;
+				state = 'committed';
+				this.preparedTransportPairDisposals.delete(disposeOwnedTransports);
+
+				if (oldProducerTransport && oldProducerTransport !== preparedProducerAllocation.transport) {
+					oldProducerTransport.close();
+				}
+
+				if (oldConsumerTransport && oldConsumerTransport !== preparedConsumerAllocation.transport) {
+					oldConsumerTransport.close();
+				}
+
+				for (const producer of oldProducers) {
+					if (!producer.closed) {
+						producer.close();
+					}
+				}
+
+				for (const consumer of oldConsumers) {
+					if (!consumer.closed) {
+						consumer.close();
+					}
+				}
+			},
+			dispose: async () => {
+				disposeOwnedTransports();
+			},
+		};
+	};
+
+	private setupConsumerTransportHandlers = (
+		userId: number,
+		transport: WebRtcTransport<AppData>,
+		onPreparedTransportFailure?: () => void,
+	) => {
+		transport.observer.on('close', () => {
+			if (this.consumerTransports[userId] !== transport) {
+				onPreparedTransportFailure?.();
+				return;
+			}
+
+			delete this.consumerTransports[userId];
+
+			if (this.consumers[userId]) {
+				Object.values(this.consumers[userId]).forEach((remoteConsumers) => {
+					Object.values(remoteConsumers).forEach((consumer) => {
+						consumer?.close();
+					});
+				});
+
+				delete this.consumers[userId];
+			}
+		});
+
+		transport.on('dtlsstatechange', (transportState) => {
+			if (transportState !== 'failed') {
+				return;
+			}
+
+			if (this.consumerTransports[userId] !== transport) {
+				onPreparedTransportFailure?.();
+				return;
+			}
+
+			this.removeConsumerTransport(userId);
+			pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
+				userId,
+			});
+		});
+	};
+
+	private setupProducerTransportHandlers = (
+		userId: number,
+		transport: WebRtcTransport<AppData>,
+		onPreparedTransportFailure?: () => void,
+	) => {
+		transport.observer.on('close', () => {
+			if (this.producerTransports[userId] !== transport) {
+				onPreparedTransportFailure?.();
+				return;
+			}
+
+			delete this.producerTransports[userId];
+
+			this.removeProducer(userId, StreamKind.AUDIO);
+			this.removeProducer(userId, StreamKind.VIDEO);
+			this.removeProducer(userId, StreamKind.SCREEN);
+			this.removeProducer(userId, StreamKind.SCREEN_AUDIO);
+		});
+
+		transport.on('dtlsstatechange', (transportState) => {
+			if (transportState !== 'failed') {
+				return;
+			}
+
+			if (this.producerTransports[userId] !== transport) {
+				onPreparedTransportFailure?.();
+				return;
+			}
+
+			this.removeProducerTransport(userId);
+			pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
+				userId,
+			});
+		});
+	};
+
+	private captureUserProducers = (userId: number): Producer<AppData>[] => {
+		return [
+			this.audioProducers[userId],
+			this.videoProducers[userId],
+			this.screenProducers[userId],
+			this.screenAudioProducers[userId],
+		].filter((producer) => producer !== undefined);
+	};
+
+	private captureUserConsumers = (userId: number): Consumer<AppData>[] => {
+		const consumerGroups = this.consumers[userId];
+
+		if (!consumerGroups) {
+			return [];
+		}
+
+		return Object.values(consumerGroups).flatMap((remoteConsumers) =>
+			Object.values(remoteConsumers).filter((consumer) => consumer !== undefined),
+		);
 	};
 
 	public getAppAudioIngest = (userId: number): TAppAudioIngest | undefined => {
@@ -1890,4 +2097,5 @@ class VoiceRuntime {
 	};
 }
 
+export type { TPreparedVoiceTransportPair };
 export { VoiceRestoreAttemptSupersededError, VoiceRuntime };
