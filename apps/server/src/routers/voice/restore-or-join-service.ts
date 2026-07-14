@@ -15,12 +15,19 @@ type TVoiceRestoreSeat = {
 
 type TVoiceRestoreRuntime = {
 	id: number;
+	addUser: (userId: number, state: TVoiceRestoreState) => void;
 	acquireRestoreSeat: (userId: number, state: TVoiceRestoreState, inheritedClaim?: symbol) => TVoiceRestoreSeat;
 	adoptProvisionalRestoreSeat: (userId: number) => symbol | undefined;
 	commitProvisionalRestoreSeat: (userId: number, claim: symbol) => boolean;
 	getUserState: (userId: number) => TVoiceUserState;
 	getVoiceSessionIncarnation: (userId: number) => symbol | undefined;
 	rollbackProvisionalRestoreSeat: (userId: number, claim: symbol) => boolean;
+};
+
+type TPreparedFreshVoiceBootstrap<TBootstrap> = {
+	commit: () => void;
+	dispose: () => void | Promise<void>;
+	buildCommittedResponse: () => TBootstrap;
 };
 
 type TVoiceRestoreConnection = {
@@ -92,6 +99,10 @@ type TVoiceRestoreOrJoinServiceDependencies<TRuntime extends TVoiceRestoreRuntim
 	consumeReconnectLabBehavior: (userId: number) => TVoiceReconnectLabRestoreBehavior | undefined;
 	delay: (milliseconds: number) => Promise<void>;
 	createBootstrap: (options: { runtime: TRuntime; userId: number; isCurrent: () => boolean }) => Promise<TBootstrap>;
+	prepareFreshBootstrap: (options: {
+		runtime: TRuntime;
+		userId: number;
+	}) => Promise<TPreparedFreshVoiceBootstrap<TBootstrap>>;
 	isBootstrapCurrencyError: (error: unknown) => boolean;
 	logRestoreEvent: (event: TVoiceRestoreLogEvent, fields: Record<string, unknown>) => void;
 	logJoined: (userName: string, channelName: string) => void;
@@ -321,6 +332,97 @@ const createVoiceRestoreOrJoinService = <TRuntime extends TVoiceRestoreRuntime, 
 						VOICE_SESSION_WRONG_CHANNEL,
 					);
 					throw new VoiceRestoreConflictError(VOICE_SESSION_WRONG_CHANNEL);
+				}
+
+				if (!runtimeWithUserAfterAwaits) {
+					let preparedBootstrap: TPreparedFreshVoiceBootstrap<TBootstrap> | undefined;
+					let ownershipTransferred = false;
+
+					try {
+						preparedBootstrap = await dependencies.prepareFreshBootstrap({
+							runtime,
+							userId: user.id,
+						});
+						attempt.assertCurrent();
+
+						// Preparation is fallible and may take long enough for a manual join or
+						// another client to establish a seat. Recheck synchronously beside the
+						// currency assertion so this fresh attempt cannot replace that session.
+						const runtimeWithUserBeforeCommit = dependencies.findRuntimeByUserId(user.id);
+
+						if (runtimeWithUserBeforeCommit) {
+							if (runtimeWithUserBeforeCommit.id !== channelId) {
+								logConflict(
+									dependencies,
+									request,
+									clientInstanceId,
+									runtimeWithUserBeforeCommit.id,
+									VOICE_SESSION_WRONG_CHANNEL,
+								);
+								throw new VoiceRestoreConflictError(VOICE_SESSION_WRONG_CHANNEL);
+							}
+
+							const ownConnectionBeforeCommit = context.getOwnConnection();
+							const sessionOwnedElsewhere =
+								context
+									.getUserConnections(user.id)
+									.some(
+										(connection) =>
+											!isSameVoiceClientSession(connection, ownConnectionBeforeCommit, clientInstanceId) &&
+											connection.currentVoiceChannelId === channelId,
+									) ||
+								dependencies.getPendingVoiceChannelIdsOwnedElsewhere(user.id, clientInstanceId).includes(channelId);
+
+							if (sessionOwnedElsewhere) {
+								logConflict(dependencies, request, clientInstanceId, channelId, VOICE_SESSION_OWNED_ELSEWHERE);
+								throw new VoiceRestoreConflictError(VOICE_SESSION_OWNED_ELSEWHERE);
+							}
+
+							// A same-client manual join completed while this request prepared. It
+							// must win even though it does not participate in this attempt registry.
+							throw new VoiceRestoreAttemptSupersededServiceError();
+						}
+
+						// There is deliberately no await from the final currency/seat checks
+						// through transport, membership, binding, and presence publication.
+						preparedBootstrap.commit();
+						ownershipTransferred = true;
+						runtime.addUser(user.id, state);
+
+						const sessionIncarnation = runtime.getVoiceSessionIncarnation(user.id);
+
+						if (sessionIncarnation === undefined) {
+							throw new Error('Fresh voice restore did not create a session incarnation');
+						}
+
+						const currentState = runtime.getUserState(user.id);
+						context.bindVoiceSession(channel.id, sessionIncarnation);
+						context.publishPresence({
+							type: 'join',
+							channelId,
+							userId: user.id,
+							state: currentState,
+							reconnecting: true,
+						});
+						dependencies.logJoined(user.name, channel.name);
+
+						const bootstrap = preparedBootstrap.buildCommittedResponse();
+
+						dependencies.logRestoreEvent('outcome', {
+							reconnectAttemptId,
+							userId: user.id,
+							clientInstanceId,
+							requestedChannelId: channelId,
+							activeChannelId: channelId,
+							outcome: 'joined',
+						});
+
+						return bootstrap;
+					} finally {
+						if (preparedBootstrap && !ownershipTransferred) {
+							await preparedBootstrap.dispose();
+						}
+					}
 				}
 
 				const seat = runtime.acquireRestoreSeat(user.id, state, inheritedSeatClaim);
