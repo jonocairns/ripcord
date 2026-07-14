@@ -2,9 +2,9 @@
 
 **Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
 landed in PR #280, C5 landed in PR #281, C6 landed in PR #282, C7 landed in PR
-#283, C8 landed in PR #284, C9 landed in PR #285, and S0 landed in PR #286. The
-remaining slices are planned. Completed slices carry a **Landed** note recording
-what was built and what later slices should inherit.
+#283, C8 landed in PR #284, C9 landed in PR #285, S0 landed in PR #286, and S1
+landed in PR #287. S2–S4 remain planned. Completed slices carry a **Landed** note
+recording what was built and what later slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -158,7 +158,7 @@ session store. It does not read the Zustand reconnect projection.
 | C8 | client 7 (#284) | Client | C6 | Remote consume resource controller extracted |
 | C9 | client 8 (#285) | Client | C6 | Microphone pipeline resource controller extracted |
 | S0 | server 1 (#286) | Server | main after PR #285 | Restore service seam and explicit ownership contract |
-| S1 | server 2 | Server | S0 | Prepared transport-pair primitive, unwired |
+| S1 | server 2 (#287) | Server | S0 | Prepared transport-pair primitive, unwired |
 | S2 | server 3 | Server | S1 | Fresh restore/join uses prepare-then-commit |
 | S3 | server 4 | Server | S2 | Existing-session restore swaps transport pairs atomically |
 | S4 | server 5 | Server | S3 | Legacy mutation path removed (including `join.ts`); cancellation matrix complete |
@@ -191,7 +191,7 @@ back to one slice per PR — the slice boundaries already support that.
 | client 7 (#284) | C8 | Extract remote media consume controller |
 | client 8 (#285) | C9 | Extract microphone pipeline controller |
 | server 1 (#286) | S0 | Extract voice restore orchestration service |
-| server 2 | S1 | Add prepared voice transport pairs |
+| server 2 (#287) | S1 | Add prepared voice transport pairs |
 | server 3 | S2 | Commit fresh voice restores transactionally |
 | server 4 | S3 | Replace restored voice transports atomically |
 | server 5 | S4 | Remove legacy voice restore rollback path |
@@ -847,13 +847,14 @@ continue to map to the existing public restore error.
 **Objective:** Allocate a producer/consumer transport pair without mutating the
 active runtime maps.
 
-**Files:**
+**Implemented files:**
 
 - `apps/server/src/runtimes/voice.ts`
-- `apps/server/src/routers/voice/bootstrap.ts`
-- Runtime/server tests.
+- `apps/server/src/runtimes/__tests__/voice-prepared-transport-pair.test.ts`
+- `apps/server/src/runtimes/__tests__/voice.test.ts`
+- `apps/server/src/routers/__tests__/voice-restore-or-join.test.ts`
 
-**Proposed contract:**
+**Contract:**
 
 ```ts
 type TPreparedVoiceTransportPair = {
@@ -908,6 +909,13 @@ they complete. A DTLS failure before commit disposes the private pair without
 publishing a client failure, while a committed active transport retains the
 existing side-specific failure publication. Legacy wrapper DTLS handlers are
 also identity guarded so a replaced transport cannot close its successor.
+
+**Landed** in PR #287 as merge commit `3e26b079`. Commit `6cc26753` isolates the
+stale legacy DTLS failure guard as a behavior fix; commit `f2e1b9d3` adds the
+prepared-pair primitive and coverage. The primitive remains unwired from
+bootstrap and all production routes. Validation passed formatting, root type
+checking, lint, knip, 101 focused voice tests, and the full server suite (639
+tests).
 
 ### S2 — Fresh restore/join prepare-then-commit
 
