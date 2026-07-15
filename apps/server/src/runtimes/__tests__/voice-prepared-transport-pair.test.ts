@@ -47,7 +47,7 @@ const makeTransportParams = (id: string): TTransportParams => ({
 	},
 });
 
-const makeControlledTransport = (id: string, fireObserverOnClose = true) => {
+const makeControlledTransport = (id: string, fireObserverOnClose = true, closeError?: Error) => {
 	const observerCloseHandlers = new Set<() => void>();
 	const dtlsStateHandlers = new Set<(state: 'failed') => void>();
 	let observerCloseDelivered = false;
@@ -92,6 +92,10 @@ const makeControlledTransport = (id: string, fireObserverOnClose = true) => {
 			closed = true;
 			if (fireObserverOnClose) {
 				fireObserverClose();
+			}
+
+			if (closeError) {
+				throw closeError;
 			}
 		},
 	} as unknown as WebRtcTransport<AppData>;
@@ -187,6 +191,7 @@ const createRestoreHarness = (runtime: VoiceRuntime) => {
 			const pair = await runtime.prepareTransportPair(userId);
 
 			return {
+				assertCommittable: pair.assertCommittable,
 				commit: pair.commit,
 				dispose: pair.dispose,
 				buildCommittedResponse: () => ({
@@ -196,7 +201,6 @@ const createRestoreHarness = (runtime: VoiceRuntime) => {
 		},
 		logRestoreEvent: () => {},
 		logJoined: () => {},
-		logBootstrapRollback: () => {},
 	});
 
 	const restore = (reconnectAttemptId: string, signal?: AbortSignal) =>
@@ -389,6 +393,38 @@ describe('VoiceRuntime prepared transport pairs', () => {
 		expect(consumer.closeCalls).toBe(1);
 		expect(newProducer.closeCalls).toBe(0);
 		expect(newConsumer.closeCalls).toBe(0);
+	});
+
+	test('committed ownership survives synchronous old close callback failures', async () => {
+		const runtime = makeRuntime();
+		const activeProducer = makeControlledTransport(
+			'active-producer',
+			true,
+			new Error('producer close callback failed'),
+		);
+		const activeConsumer = makeControlledTransport(
+			'active-consumer',
+			true,
+			new Error('consumer close callback failed'),
+		);
+		const preparedProducer = makeControlledTransport('prepared-producer');
+		const preparedConsumer = makeControlledTransport('prepared-consumer');
+		useTransportAllocations(runtime, [
+			resolvedAllocation(activeProducer),
+			resolvedAllocation(activeConsumer),
+			resolvedAllocation(preparedProducer),
+			resolvedAllocation(preparedConsumer),
+		]);
+
+		const activePair = await runtime.prepareTransportPair(1);
+		activePair.commit();
+		const replacementPair = await runtime.prepareTransportPair(1);
+
+		expect(() => replacementPair.commit()).not.toThrow();
+		expect(runtime.getProducerTransport(1)).toBe(preparedProducer.transport);
+		expect(runtime.getConsumerTransport(1)).toBe(preparedConsumer.transport);
+		expect(activeProducer.transport.closed).toBe(true);
+		expect(activeConsumer.transport.closed).toBe(true);
 	});
 
 	test('late old close callbacks cannot delete the committed successor', async () => {

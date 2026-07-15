@@ -186,17 +186,23 @@ type TExternalStreamInternal = {
 	producers: TExternalStreamProducers;
 };
 
-type TVoiceRestoreSeatClaim = {
-	claim?: symbol;
-	added: boolean;
-	previousState?: TVoiceUserState;
-};
-
 type TPreparedVoiceTransportPair = {
 	producerParams: TTransportParams;
 	consumerParams: TTransportParams;
+	assertCommittable: () => void;
 	commit: () => void;
 	dispose: () => Promise<void>;
+};
+
+type TVoiceSessionIdentity = {
+	incarnation: symbol;
+	mutationToken: symbol;
+};
+
+type TVoiceRestoreStateReconciliation = {
+	previousState: TVoiceUserState;
+	currentState: TVoiceUserState;
+	sessionIdentity: TVoiceSessionIdentity;
 };
 
 type TAllocatedVoiceTransport = {
@@ -249,14 +255,10 @@ class VoiceRuntime {
 	private clientVoiceActivityLeaseTimers = new Map<number, ReturnType<typeof setTimeout>>();
 	private clientVoiceStateSeqs = new Map<number, number>();
 	private voiceSessionIncarnations = new Map<number, symbol>();
+	private voiceSessionMutationTokens = new Map<number, symbol>();
 	private mediaLiveness = new Map<number, TMediaLivenessState>();
 	private mediaLivenessTimer?: ReturnType<typeof setInterval>;
 	private mediaLivenessCheckInFlight = false;
-	// Retained while existing-session and overlapping legacy restore paths still
-	// support provisional seats. Claims make rollback attempt-scoped: a
-	// superseded attempt cannot remove a seat adopted by its successor, while an
-	// aborted attempt with no successor can still clean up the seat it owns.
-	private provisionalRestoreSeatClaims = new Map<number, symbol>();
 	private preparedTransportPairDisposals = new Set<() => void>();
 
 	private externalCounter = 0;
@@ -398,6 +400,7 @@ class VoiceRuntime {
 		// (leave, join rollback), so an operation issued against one incarnation
 		// can never remove the seat of its successor.
 		this.voiceSessionIncarnations.set(userId, Symbol('voice-session-incarnation'));
+		this.voiceSessionMutationTokens.set(userId, Symbol('voice-session-mutation'));
 
 		this.state.users.push({
 			userId,
@@ -412,6 +415,56 @@ class VoiceRuntime {
 		return this.voiceSessionIncarnations.get(userId);
 	};
 
+	public getVoiceSessionIdentity = (userId: number): TVoiceSessionIdentity | undefined => {
+		const incarnation = this.voiceSessionIncarnations.get(userId);
+		const mutationToken = this.voiceSessionMutationTokens.get(userId);
+
+		if (incarnation === undefined || mutationToken === undefined || !this.getUser(userId)) {
+			return undefined;
+		}
+
+		return { incarnation, mutationToken };
+	};
+
+	public isVoiceSessionIdentityCurrent = (userId: number, identity: TVoiceSessionIdentity): boolean => {
+		return (
+			this.voiceSessionIncarnations.get(userId) === identity.incarnation &&
+			this.voiceSessionMutationTokens.get(userId) === identity.mutationToken &&
+			this.getUser(userId) !== undefined
+		);
+	};
+
+	private rotateVoiceSessionMutationToken = (userId: number) => {
+		if (this.getUser(userId)) {
+			this.voiceSessionMutationTokens.set(userId, Symbol('voice-session-mutation'));
+		}
+	};
+
+	public reconcileVoiceRestoreState = (
+		userId: number,
+		state: Pick<TVoiceUserState, 'micMuted' | 'soundMuted'>,
+	): TVoiceRestoreStateReconciliation | undefined => {
+		const existing = this.getUser(userId);
+
+		if (!existing) {
+			return undefined;
+		}
+
+		const previousState = { ...existing.state };
+		this.updateUserState(userId, state);
+		const sessionIdentity = this.getVoiceSessionIdentity(userId);
+
+		if (!sessionIdentity) {
+			return undefined;
+		}
+
+		return {
+			previousState,
+			currentState: this.getUserState(userId),
+			sessionIdentity,
+		};
+	};
+
 	public removeUserIfSessionMatches = (userId: number, sessionIncarnation: symbol | undefined): boolean => {
 		if (sessionIncarnation === undefined || this.getVoiceSessionIncarnation(userId) !== sessionIncarnation) {
 			return false;
@@ -421,83 +474,14 @@ class VoiceRuntime {
 		return true;
 	};
 
-	public beginProvisionalRestoreSeat = (userId: number): symbol => {
-		const claim = Symbol('voice-provisional-restore-seat');
-		this.provisionalRestoreSeatClaims.set(userId, claim);
-		return claim;
-	};
-
-	// Atomically resolves the seat shape for a restore attempt. A superseded
-	// provisional attempt can finish rollback between any two awaits in the
-	// router, so checking findRuntimeByUserId() and adopting its claim later is a
-	// TOCTOU race. This method contains no await: either the existing provisional
-	// claim is handed to the caller before its predecessor can roll it back, or a
-	// missing seat is recreated and claimed in the same turn.
-	public acquireRestoreSeat = (
-		userId: number,
-		state: Pick<TVoiceUserState, 'micMuted' | 'soundMuted'>,
-		inheritedClaim?: symbol,
-	): TVoiceRestoreSeatClaim => {
-		const existing = this.getUser(userId);
-
-		if (!existing) {
-			this.addUser(userId, state);
-
-			return {
-				added: true,
-				claim: this.beginProvisionalRestoreSeat(userId),
-			};
-		}
-
-		const previousState = { ...existing.state };
-		const claim =
-			inheritedClaim && this.provisionalRestoreSeatClaims.get(userId) === inheritedClaim
-				? inheritedClaim
-				: this.adoptProvisionalRestoreSeat(userId);
-		this.updateUserState(userId, state);
-
-		return { added: false, claim, previousState };
-	};
-
-	public adoptProvisionalRestoreSeat = (userId: number): symbol | undefined => {
-		if (!this.provisionalRestoreSeatClaims.has(userId)) {
-			return undefined;
-		}
-
-		return this.beginProvisionalRestoreSeat(userId);
-	};
-
-	public commitProvisionalRestoreSeat = (userId: number, claim: symbol): boolean => {
-		if (this.provisionalRestoreSeatClaims.get(userId) !== claim) {
-			return false;
-		}
-
-		this.provisionalRestoreSeatClaims.delete(userId);
-		return true;
-	};
-
-	public ownsProvisionalRestoreSeatClaim = (userId: number, claim: symbol): boolean => {
-		return this.provisionalRestoreSeatClaims.get(userId) === claim;
-	};
-
-	public rollbackProvisionalRestoreSeat = (userId: number, claim: symbol): boolean => {
-		if (this.provisionalRestoreSeatClaims.get(userId) !== claim) {
-			return false;
-		}
-
-		this.provisionalRestoreSeatClaims.delete(userId);
-		this.removeUser(userId);
-		return true;
-	};
-
 	public removeUser = (userId: number) => {
-		this.provisionalRestoreSeatClaims.delete(userId);
 		this.state.users = this.state.users.filter((u) => u.userId !== userId);
 
 		this.cleanupUserResources(userId);
 		this.clearClientVoiceActivity(userId);
 		this.clientVoiceStateSeqs.delete(userId);
 		this.voiceSessionIncarnations.delete(userId);
+		this.voiceSessionMutationTokens.delete(userId);
 		this.setUserSpeaking(userId, false);
 	};
 
@@ -676,6 +660,7 @@ class VoiceRuntime {
 		this.removeConsumerTransport(userId);
 
 		this.consumerTransports[userId] = transport;
+		this.rotateVoiceSessionMutationToken(userId);
 		this.setupConsumerTransportHandlers(userId, transport);
 
 		return params;
@@ -704,6 +689,7 @@ class VoiceRuntime {
 		this.removeProducerTransport(userId);
 
 		this.producerTransports[userId] = transport;
+		this.rotateVoiceSessionMutationToken(userId);
 		this.setupProducerTransportHandlers(userId, transport);
 
 		return params;
@@ -806,22 +792,27 @@ class VoiceRuntime {
 		const preparedConsumerAllocation = consumerAllocation;
 		state = 'prepared';
 
+		const assertCommittable = () => {
+			if (
+				state === 'disposed' ||
+				preparedProducerAllocation.transport.closed ||
+				preparedConsumerAllocation.transport.closed
+			) {
+				disposeOwnedTransports();
+				throw new VoicePreparedTransportPairDisposedError();
+			}
+		};
+
 		return {
 			producerParams: preparedProducerAllocation.params,
 			consumerParams: preparedConsumerAllocation.params,
+			assertCommittable,
 			commit: () => {
 				if (state === 'committed') {
 					return;
 				}
 
-				if (
-					state === 'disposed' ||
-					preparedProducerAllocation.transport.closed ||
-					preparedConsumerAllocation.transport.closed
-				) {
-					disposeOwnedTransports();
-					throw new VoicePreparedTransportPairDisposedError();
-				}
+				assertCommittable();
 
 				const oldProducerTransport = this.producerTransports[userId];
 				const oldConsumerTransport = this.consumerTransports[userId];
@@ -830,27 +821,24 @@ class VoiceRuntime {
 
 				this.producerTransports[userId] = preparedProducerAllocation.transport;
 				this.consumerTransports[userId] = preparedConsumerAllocation.transport;
+				this.rotateVoiceSessionMutationToken(userId);
 				state = 'committed';
 				this.preparedTransportPairDisposals.delete(disposeOwnedTransports);
 
 				if (oldProducerTransport && oldProducerTransport !== preparedProducerAllocation.transport) {
-					oldProducerTransport.close();
+					this.closeReplacedVoiceResource(oldProducerTransport, userId, 'producer transport');
 				}
 
 				if (oldConsumerTransport && oldConsumerTransport !== preparedConsumerAllocation.transport) {
-					oldConsumerTransport.close();
+					this.closeReplacedVoiceResource(oldConsumerTransport, userId, 'consumer transport');
 				}
 
 				for (const producer of oldProducers) {
-					if (!producer.closed) {
-						producer.close();
-					}
+					this.closeReplacedVoiceResource(producer, userId, 'producer');
 				}
 
 				for (const consumer of oldConsumers) {
-					if (!consumer.closed) {
-						consumer.close();
-					}
+					this.closeReplacedVoiceResource(consumer, userId, 'consumer');
 				}
 			},
 			dispose: async () => {
@@ -871,6 +859,7 @@ class VoiceRuntime {
 			}
 
 			delete this.consumerTransports[userId];
+			this.rotateVoiceSessionMutationToken(userId);
 
 			if (this.consumers[userId]) {
 				Object.values(this.consumers[userId]).forEach((remoteConsumers) => {
@@ -912,6 +901,7 @@ class VoiceRuntime {
 			}
 
 			delete this.producerTransports[userId];
+			this.rotateVoiceSessionMutationToken(userId);
 
 			this.removeProducer(userId, StreamKind.AUDIO);
 			this.removeProducer(userId, StreamKind.VIDEO);
@@ -955,6 +945,25 @@ class VoiceRuntime {
 		return Object.values(consumerGroups).flatMap((remoteConsumers) =>
 			Object.values(remoteConsumers).filter((consumer) => consumer !== undefined),
 		);
+	};
+
+	private closeReplacedVoiceResource = (
+		resource: { closed: boolean; close: () => void },
+		userId: number,
+		resourceType: string,
+	) => {
+		if (resource.closed) {
+			return;
+		}
+
+		try {
+			resource.close();
+		} catch (error) {
+			// Pair ownership has already transferred before old resources close.
+			// Cleanup callbacks must not turn a successful installation into a
+			// request-owned failure or prevent the remaining old resources closing.
+			logger.error('Failed to close replaced %s for user %s in voice channel %s', resourceType, userId, this.id, error);
+		}
 	};
 
 	public getAppAudioIngest = (userId: number): TAppAudioIngest | undefined => {
@@ -2088,6 +2097,7 @@ class VoiceRuntime {
 		this.clientVoiceActivityOrdering.clear();
 		this.clientVoiceStateSeqs.clear();
 		this.voiceSessionIncarnations.clear();
+		this.voiceSessionMutationTokens.clear();
 
 		for (const userId of this.speakingUserIds) {
 			pubsub.publishForChannel(this.id, ServerEvents.VOICE_ACTIVITY_UPDATE, {
@@ -2101,5 +2111,5 @@ class VoiceRuntime {
 	};
 }
 
-export type { TPreparedVoiceTransportPair };
+export type { TPreparedVoiceTransportPair, TVoiceRestoreStateReconciliation, TVoiceSessionIdentity };
 export { VoiceRestoreAttemptSupersededError, VoiceRuntime };

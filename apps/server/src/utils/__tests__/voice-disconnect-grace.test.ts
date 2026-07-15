@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { VoiceRuntime } from '../../runtimes/voice';
 import {
 	clearPendingVoiceDisconnect,
 	getPendingVoiceReconnectChannelId,
@@ -6,15 +7,55 @@ import {
 	getVoiceDisconnectGraceCounters,
 	resetVoiceDisconnectGraceForTests,
 	schedulePendingVoiceDisconnect,
+	setVoiceDisconnectGraceSchedulerForTests,
+	type TVoiceDisconnectGraceScheduler,
 } from '../voice-disconnect-grace';
 
-const sleep = (ms: number) =>
-	new Promise<void>((resolve) => {
-		setTimeout(resolve, ms);
-	});
+const createTestScheduler = () => {
+	type TTask = {
+		cancelled: boolean;
+		runAt: number;
+		callback: () => void;
+	};
+
+	let now = 0;
+	const tasks: TTask[] = [];
+	const scheduler: TVoiceDisconnectGraceScheduler = {
+		now: () => now,
+		schedule: (callback, delayMs) => {
+			const task: TTask = { cancelled: false, runAt: now + delayMs, callback };
+			tasks.push(task);
+			return { cancel: () => (task.cancelled = true) };
+		},
+	};
+
+	return {
+		scheduler,
+		advanceBy: (durationMs: number) => {
+			const target = now + durationMs;
+
+			while (true) {
+				const nextTask = tasks
+					.filter((task) => !task.cancelled && task.runAt <= target)
+					.sort((left, right) => left.runAt - right.runAt)[0];
+
+				if (!nextTask) {
+					break;
+				}
+
+				nextTask.cancelled = true;
+				now = nextTask.runAt;
+				nextTask.callback();
+			}
+
+			now = target;
+		},
+	};
+};
 
 afterEach(() => {
 	resetVoiceDisconnectGraceForTests();
+	setVoiceDisconnectGraceSchedulerForTests();
 });
 
 describe('voice disconnect grace', () => {
@@ -39,7 +80,9 @@ describe('voice disconnect grace', () => {
 		expect(getPendingVoiceReconnectSeatIncarnation('client-a', 7)).toBeUndefined();
 	});
 
-	test('cancels only the matching clientInstanceId grace entry', async () => {
+	test('cancels only the matching clientInstanceId grace entry', () => {
+		const testScheduler = createTestScheduler();
+		setVoiceDisconnectGraceSchedulerForTests(testScheduler.scheduler);
 		const finalized: string[] = [];
 
 		schedulePendingVoiceDisconnect({
@@ -69,7 +112,7 @@ describe('voice disconnect grace', () => {
 		expect(getPendingVoiceReconnectChannelId('client-a', 7)).toBeUndefined();
 		expect(getPendingVoiceReconnectChannelId('client-b', 7)).toBe(2);
 
-		await sleep(30);
+		testScheduler.advanceBy(15);
 
 		expect(finalized).toEqual(['client-b']);
 		expect(getVoiceDisconnectGraceCounters()).toEqual({
@@ -93,7 +136,9 @@ describe('voice disconnect grace', () => {
 		expect(getPendingVoiceReconnectChannelId('client-a', 8)).toBeUndefined();
 	});
 
-	test('does not let one user cancel another user with the same clientInstanceId', async () => {
+	test('does not let one user cancel another user with the same clientInstanceId', () => {
+		const testScheduler = createTestScheduler();
+		setVoiceDisconnectGraceSchedulerForTests(testScheduler.scheduler);
 		const finalized: string[] = [];
 
 		schedulePendingVoiceDisconnect({
@@ -123,12 +168,14 @@ describe('voice disconnect grace', () => {
 		expect(getPendingVoiceReconnectChannelId('shared-client', 7)).toBe(2);
 		expect(getPendingVoiceReconnectChannelId('shared-client', 8)).toBeUndefined();
 
-		await sleep(30);
+		testScheduler.advanceBy(15);
 
 		expect(finalized).toEqual(['user-7']);
 	});
 
-	test('falls back to a short uncancellable grace when clientInstanceId is missing', async () => {
+	test('falls back to a short uncancellable grace when clientInstanceId is missing', () => {
+		const testScheduler = createTestScheduler();
+		setVoiceDisconnectGraceSchedulerForTests(testScheduler.scheduler);
 		let finalized = 0;
 
 		schedulePendingVoiceDisconnect({
@@ -143,7 +190,7 @@ describe('voice disconnect grace', () => {
 		expect(getPendingVoiceReconnectChannelId(undefined, 7)).toBeUndefined();
 		expect(clearPendingVoiceDisconnect(undefined)).toBe(false);
 
-		await sleep(30);
+		testScheduler.advanceBy(15);
 
 		expect(finalized).toBe(1);
 		expect(getVoiceDisconnectGraceCounters()).toEqual({
@@ -152,5 +199,39 @@ describe('voice disconnect grace', () => {
 			graceExpired: 1,
 			missingClientInstanceId: 1,
 		});
+	});
+
+	test('expiry cannot remove a successor incarnation', async () => {
+		const testScheduler = createTestScheduler();
+		setVoiceDisconnectGraceSchedulerForTests(testScheduler.scheduler);
+		const runtime = new VoiceRuntime(99_901);
+		await runtime.init();
+
+		try {
+			runtime.addUser(7, { micMuted: false, soundMuted: false });
+			const disconnectedIncarnation = runtime.getVoiceSessionIncarnation(7);
+
+			schedulePendingVoiceDisconnect({
+				clientInstanceId: 'client-a',
+				userId: 7,
+				channelId: runtime.id,
+				seatIncarnation: disconnectedIncarnation,
+				finalize: () => {
+					runtime.removeUserIfSessionMatches(7, disconnectedIncarnation);
+				},
+				ttlMs: 15,
+			});
+
+			runtime.removeUser(7);
+			runtime.addUser(7, { micMuted: true, soundMuted: false });
+			const successorIncarnation = runtime.getVoiceSessionIncarnation(7);
+
+			testScheduler.advanceBy(15);
+
+			expect(runtime.getUser(7)).toBeDefined();
+			expect(runtime.getVoiceSessionIncarnation(7)).toBe(successorIncarnation);
+		} finally {
+			await runtime.destroy();
+		}
 	});
 });

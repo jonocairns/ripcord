@@ -7,6 +7,7 @@ import { logger } from '../../logger';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { getVoiceSessionAttemptOwner, voiceSessionAttemptRegistry } from './session-attempt-registry';
 
 const leaveVoiceRoute = protectedProcedure
 	.input(
@@ -20,6 +21,10 @@ const leaveVoiceRoute = protectedProcedure
 		if (!ctx.registerVoiceSessionMutation(input?.mutationSeq)) {
 			return;
 		}
+
+		voiceSessionAttemptRegistry.supersede(
+			getVoiceSessionAttemptOwner(ctx.user.id, ctx.getClientInstanceId(), ctx.getOwnWs()),
+		);
 
 		// Capture the session identity this leave was issued against before any
 		// await. The handler interleaves with concurrent join/restore handlers, so

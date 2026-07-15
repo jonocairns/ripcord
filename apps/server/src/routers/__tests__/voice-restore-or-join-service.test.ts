@@ -49,11 +49,9 @@ const defaultVoiceState = (): TVoiceUserState => ({
 class FakeVoiceRestoreRuntime implements TVoiceRestoreRuntime {
 	public readonly id: number;
 	public readonly order: string[];
-	public successfulCommits = 0;
-	public successfulRollbacks = 0;
 	private users = new Map<number, TVoiceUserState>();
 	private sessionIncarnations = new Map<number, symbol>();
-	private provisionalClaims = new Map<number, symbol>();
+	private sessionMutationTokens = new Map<number, symbol>();
 
 	constructor(id: number, order: string[]) {
 		this.id = id;
@@ -63,95 +61,63 @@ class FakeVoiceRestoreRuntime implements TVoiceRestoreRuntime {
 	public addUser(userId: number, state: Pick<TVoiceUserState, 'micMuted' | 'soundMuted'>) {
 		this.users.set(userId, { ...defaultVoiceState(), ...state });
 		this.sessionIncarnations.set(userId, Symbol('voice-session-incarnation'));
+		this.sessionMutationTokens.set(userId, Symbol('voice-session-mutation'));
 	}
 
 	public removeUser(userId: number) {
 		this.users.delete(userId);
 		this.sessionIncarnations.delete(userId);
-		this.provisionalClaims.delete(userId);
-	}
-
-	public beginProvisionalRestoreSeat(userId: number) {
-		const claim = Symbol('voice-provisional-restore-seat');
-		this.provisionalClaims.set(userId, claim);
-		return claim;
+		this.sessionMutationTokens.delete(userId);
 	}
 
 	public hasUser(userId: number) {
 		return this.users.has(userId);
 	}
 
-	public acquireRestoreSeat(
-		userId: number,
-		state: Pick<TVoiceUserState, 'micMuted' | 'soundMuted'>,
-		inheritedClaim?: symbol,
-	) {
-		this.order.push('seat:acquire');
+	public reconcileVoiceRestoreState(userId: number, state: Pick<TVoiceUserState, 'micMuted' | 'soundMuted'>) {
+		this.order.push('seat:reconcile');
 		const existingState = this.users.get(userId);
 
 		if (!existingState) {
-			this.addUser(userId, state);
-			return {
-				added: true,
-				claim: this.beginProvisionalRestoreSeat(userId),
-			};
-		}
-
-		const previousState = { ...existingState };
-		const claim =
-			inheritedClaim && this.provisionalClaims.get(userId) === inheritedClaim
-				? inheritedClaim
-				: this.adoptProvisionalRestoreSeat(userId);
-		this.users.set(userId, { ...existingState, ...state });
-
-		return { added: false, claim, previousState };
-	}
-
-	public adoptProvisionalRestoreSeat(userId: number) {
-		if (!this.provisionalClaims.has(userId)) {
 			return undefined;
 		}
 
-		this.order.push('seat:adopt');
-		return this.beginProvisionalRestoreSeat(userId);
-	}
+		const previousState = { ...existingState };
+		this.users.set(userId, { ...existingState, ...state });
+		const sessionIdentity = this.getVoiceSessionIdentity(userId);
 
-	public commitProvisionalRestoreSeat(userId: number, claim: symbol) {
-		this.order.push('seat:commit-attempt');
-
-		if (this.provisionalClaims.get(userId) !== claim) {
-			return false;
+		if (!sessionIdentity) {
+			return undefined;
 		}
 
-		this.provisionalClaims.delete(userId);
-		this.successfulCommits += 1;
-		this.order.push('seat:commit');
-		return true;
+		return {
+			previousState,
+			currentState: this.getUserState(userId),
+			sessionIdentity,
+		};
 	}
 
 	public getUserState(userId: number) {
 		return this.users.get(userId) ?? defaultVoiceState();
 	}
 
+	public getVoiceSessionIdentity(userId: number) {
+		const incarnation = this.sessionIncarnations.get(userId);
+		const mutationToken = this.sessionMutationTokens.get(userId);
+
+		return incarnation && mutationToken ? { incarnation, mutationToken } : undefined;
+	}
+
 	public getVoiceSessionIncarnation(userId: number) {
 		return this.sessionIncarnations.get(userId);
 	}
 
-	public ownsProvisionalRestoreSeatClaim(userId: number, claim: symbol) {
-		return this.provisionalClaims.get(userId) === claim;
-	}
-
-	public rollbackProvisionalRestoreSeat(userId: number, claim: symbol) {
-		this.order.push('seat:rollback-attempt');
-
-		if (this.provisionalClaims.get(userId) !== claim) {
-			return false;
-		}
-
-		this.successfulRollbacks += 1;
-		this.order.push('seat:rollback');
-		this.removeUser(userId);
-		return true;
+	public isVoiceSessionIdentityCurrent(userId: number, identity: { incarnation: symbol; mutationToken: symbol }) {
+		return (
+			this.sessionIncarnations.get(userId) === identity.incarnation &&
+			this.sessionMutationTokens.get(userId) === identity.mutationToken &&
+			this.users.has(userId)
+		);
 	}
 }
 
@@ -245,6 +211,11 @@ const createHarness = () => {
 			await controls.beforePreparationReturn(attempt);
 
 			return {
+				assertCommittable: () => {
+					if (state === 'disposed') {
+						throw new Error('Prepared fresh bootstrap is disposed');
+					}
+				},
 				commit: () => {
 					if (state === 'committed') {
 						return;
@@ -281,7 +252,6 @@ const createHarness = () => {
 		},
 		logRestoreEvent: (event) => order.push(`log:${event}`),
 		logJoined: () => order.push('log:joined'),
-		logBootstrapRollback: () => order.push('log:rollback'),
 	};
 	const service = createVoiceRestoreOrJoinService(dependencies);
 
@@ -360,7 +330,6 @@ describe('voice restore-or-join service', () => {
 
 		expect(result).toEqual({ attempt: 1, channelUsers: [1] });
 		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
-		expect(harness.primaryRuntime.successfulCommits).toBe(0);
 		expect(harness.preparedBootstrapStats).toEqual({ commits: 1, disposals: 0, responses: 1 });
 		expect(harness.bindings).toHaveLength(1);
 		expect(harness.events.map((event) => event.type)).toEqual(['join']);
@@ -390,7 +359,6 @@ describe('voice restore-or-join service', () => {
 
 		expect(harness.primaryRuntime.getUserState(1)).toMatchObject({ micMuted: true, soundMuted: false });
 		expect(harness.events.map((event) => event.type)).toEqual(['state-update']);
-		expect(harness.primaryRuntime.successfulCommits).toBe(0);
 
 		harness.events.length = 0;
 		await harness.service.restoreOrJoin(
@@ -428,7 +396,7 @@ describe('voice restore-or-join service', () => {
 		expect(harness.order).toEqual([
 			'target:resolve',
 			'log:attempt',
-			'seat:acquire',
+			'seat:reconcile',
 			'presence:state-update',
 			'prepared:1:start',
 			'prepared:1:producer',
@@ -499,55 +467,6 @@ describe('voice restore-or-join service', () => {
 		expect(harness.events).toEqual([]);
 	});
 
-	test('preserves inherited provisional ownership across overlapping existing restores', async () => {
-		const harness = createHarness();
-		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
-		harness.primaryRuntime.beginProvisionalRestoreSeat(1);
-		const stalePreparationEntered = createDeferred();
-		const stalePreparationRelease = createDeferred();
-		harness.controls.beforePreparationReturn = async (attempt) => {
-			if (attempt === 1) {
-				stalePreparationEntered.resolve();
-				await stalePreparationRelease.promise;
-			}
-		};
-		const staleRestore = harness.service.restoreOrJoin(harness.request({ reconnectAttemptId: 'stale-claim' }));
-		await stalePreparationEntered.promise;
-
-		await harness.service.restoreOrJoin(harness.request({ reconnectAttemptId: 'current-claim' }));
-		stalePreparationRelease.resolve();
-
-		await expectRejectedWith(staleRestore, VoiceRestoreAttemptSupersededServiceError);
-		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
-		expect(harness.primaryRuntime.successfulCommits).toBe(1);
-		expect(harness.primaryRuntime.successfulRollbacks).toBe(0);
-		expect(harness.preparedBootstrapStats).toEqual({ commits: 1, disposals: 1, responses: 1 });
-		expect(harness.bindings).toHaveLength(1);
-		expect(harness.events).toEqual([]);
-	});
-
-	test('rejects a prepared existing restore after its provisional claim is replaced', async () => {
-		const harness = createHarness();
-		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
-		harness.primaryRuntime.beginProvisionalRestoreSeat(1);
-		const preparationEntered = createDeferred();
-		const preparationRelease = createDeferred();
-		harness.controls.beforePreparationReturn = async () => {
-			preparationEntered.resolve();
-			await preparationRelease.promise;
-		};
-		const restore = harness.service.restoreOrJoin(harness.request());
-		await preparationEntered.promise;
-
-		harness.primaryRuntime.beginProvisionalRestoreSeat(1);
-		preparationRelease.resolve();
-
-		await expectRejectedWith(restore, VoiceRestoreAttemptSupersededServiceError);
-		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
-		expect(harness.preparedBootstrapStats).toEqual({ commits: 0, disposals: 1, responses: 0 });
-		expect(harness.bindings).toEqual([]);
-	});
-
 	test('does not dispose or roll back an existing pair when commit triggers abort', async () => {
 		const harness = createHarness();
 		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
@@ -614,7 +533,7 @@ describe('voice restore-or-join service', () => {
 			reason: VOICE_SESSION_OWNED_ELSEWHERE,
 		});
 		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
-		expect(harness.order).not.toContain('seat:acquire');
+		expect(harness.order).not.toContain('seat:reconcile');
 		expect(harness.order).not.toContain('prepared:1:start');
 	});
 
@@ -627,7 +546,7 @@ describe('voice restore-or-join service', () => {
 		});
 		expect(harness.primaryRuntime.hasUser(1)).toBe(false);
 		expect(harness.secondaryRuntime.hasUser(1)).toBe(true);
-		expect(harness.order).not.toContain('seat:acquire');
+		expect(harness.order).not.toContain('seat:reconcile');
 	});
 
 	test('excludes same-client sockets and passes client ownership to pending-grace conflict resolution', async () => {
@@ -652,20 +571,6 @@ describe('voice restore-or-join service', () => {
 		expect(pendingConflictHarness.primaryRuntime.hasUser(1)).toBe(true);
 	});
 
-	test('rolls back an inherited provisional claim before seat acquisition with exactly one leave', async () => {
-		const harness = createHarness();
-		harness.primaryRuntime.addUser(1, { micMuted: false, soundMuted: false });
-		harness.primaryRuntime.beginProvisionalRestoreSeat(1);
-		harness.setLabBehavior({ failMessage: 'forced failure' });
-
-		await expect(harness.service.restoreOrJoin(harness.request())).rejects.toThrow('forced failure');
-
-		expect(harness.primaryRuntime.hasUser(1)).toBe(false);
-		expect(harness.primaryRuntime.successfulRollbacks).toBe(1);
-		expect(harness.events.map((event) => event.type)).toEqual(['leave']);
-		expect(harness.order).not.toContain('seat:acquire');
-	});
-
 	test('leaves no fresh-seat presence or membership when preparation fails', async () => {
 		const harness = createHarness();
 		const failure = new Error('producer failed');
@@ -676,11 +581,9 @@ describe('voice restore-or-join service', () => {
 		await expect(harness.service.restoreOrJoin(harness.request())).rejects.toBe(failure);
 
 		expect(harness.primaryRuntime.hasUser(1)).toBe(false);
-		expect(harness.primaryRuntime.successfulRollbacks).toBe(0);
 		expect(harness.events).toEqual([]);
 		expect(harness.bindings).toEqual([]);
 		expect(harness.preparedBootstrapStats).toEqual({ commits: 0, disposals: 0, responses: 0 });
-		expect(harness.order).not.toContain('log:rollback');
 	});
 
 	test('lets a manual join during an await win without recreating the old seat', async () => {
@@ -699,7 +602,7 @@ describe('voice restore-or-join service', () => {
 		await expect(restore).rejects.toMatchObject({ reason: VOICE_SESSION_WRONG_CHANNEL });
 		expect(harness.primaryRuntime.hasUser(1)).toBe(false);
 		expect(harness.secondaryRuntime.hasUser(1)).toBe(true);
-		expect(harness.order).not.toContain('seat:acquire');
+		expect(harness.order).not.toContain('seat:reconcile');
 	});
 
 	test('treats an abort triggered by commit as post-commit ownership', async () => {
@@ -921,8 +824,6 @@ describe('voice restore attempt supersession', () => {
 			expect(currentRestore.channelUsers).toEqual([1]);
 			await expectRejectedWith(staleRestore, VoiceRestoreAttemptSupersededServiceError);
 			expect(harness.primaryRuntime.hasUser(1)).toBe(true);
-			expect(harness.primaryRuntime.successfulCommits).toBe(0);
-			expect(harness.primaryRuntime.successfulRollbacks).toBe(0);
 			expect(harness.preparedBootstrapStats.commits).toBe(1);
 			expect(harness.preparedBootstrapStats.disposals).toBe(barrier.expectedPreparedDisposals);
 			expect(harness.preparedBootstrapStats.responses).toBe(1);
@@ -983,7 +884,7 @@ describe('voice restore attempt supersession', () => {
 		await expectRejectedWith(supersededRestore, VoiceRestoreAttemptSupersededServiceError);
 	});
 
-	test('does not let an aborted attempt roll back a claim adopted and committed by its successor', async () => {
+	test('does not let an aborted preparation affect its committed successor', async () => {
 		const harness = createHarness();
 		const producerEntered = createDeferred();
 		const producerRelease = createDeferred();
@@ -1007,8 +908,6 @@ describe('voice restore attempt supersession', () => {
 		expect(successor.channelUsers).toEqual([1]);
 		await expectRejectedWith(cancelledRestore, VoiceRestoreAttemptCancelledError);
 		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
-		expect(harness.primaryRuntime.successfulCommits).toBe(0);
-		expect(harness.primaryRuntime.successfulRollbacks).toBe(0);
 		expect(harness.preparedBootstrapStats.commits).toBe(1);
 		expect(harness.events.map((event) => event.type)).toEqual(['join']);
 		expect(harness.bindings).toHaveLength(1);
@@ -1063,7 +962,6 @@ describe('voice restore attempt cancellation', () => {
 			expect(harness.preparedBootstrapStats.commits).toBe(0);
 			expect(harness.bindings).toEqual([]);
 			expect(harness.primaryRuntime.hasUser(1)).toBe(false);
-			expect(harness.primaryRuntime.successfulRollbacks).toBe(0);
 			expect(harness.events).toEqual([]);
 			expect(harness.preparedBootstrapStats.disposals).toBe(barrier.expectedPreparedDisposals);
 			expect(harness.preparedBootstrapStats.responses).toBe(0);
