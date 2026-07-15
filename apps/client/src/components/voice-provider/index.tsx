@@ -98,6 +98,7 @@ import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
 import { useVoiceSessionExecutor } from './hooks/use-voice-session-executor';
+import { voiceSessionCommandObserver } from './hooks/voice-session-command-observer';
 import {
 	type ActivityBroadcastState,
 	resolveActivityBroadcast,
@@ -1272,7 +1273,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					name: 'voice.restore_or_join',
 					op: 'voice.trpc',
 					attributes: {
-						'voice.channel_id': opts.channelId,
 						'voice.reconnect_attempt_id': opts.reconnectAttemptId,
 					},
 				},
@@ -1302,9 +1302,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				{
 					name: 'voice.rejoin_session',
 					op: 'voice.recovery',
-					attributes: {
-						'voice.channel_id': channelId,
-					},
+					attributes: {},
 				},
 				async () => {
 					const currentOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
@@ -3201,7 +3199,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					name: 'voice.init',
 					op: 'voice.join',
 					attributes: {
-						'voice.channel_id': channelId,
 						'voice.prefetched_transports': opts?.producerTransportParams !== undefined,
 						'voice.has_existing_producers': opts?.existingProducers !== undefined,
 						'voice.preserve_local_media': opts?.preserveLocalMedia === true,
@@ -3422,9 +3419,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				{
 					name: 'voice.transport_recovery',
 					op: 'voice.recovery',
-					attributes: {
-						'voice.channel_id': command.channelId,
-					},
+					attributes: {},
 				},
 				async () => {
 					try {
@@ -3704,6 +3699,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	useVoiceSessionExecutor({
+		commandObserver: voiceSessionCommandObserver,
 		now: Date.now,
 		random: Math.random,
 		delay: delayVoiceSessionCommand,
@@ -3729,21 +3725,30 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			});
 		},
 		reportRebuildDetached: (command) => {
-			logDebug('Voice transport rebuild detached a hung cancelled operation', {
+			reportError('Voice transport rebuild detached a hung cancelled operation', new Error('Voice rebuild detached'), {
+				commandType: command.type,
+				commandId: command.commandId,
+				generation: command.generation,
+				phase: 'rebuilding',
 				attempt: command.attempt + 1,
-				channelId: command.channelId,
 			});
 		},
 		reportRebuildTerminalFailure: (command, error) => {
 			reportError('Voice transport recovery failed', error, {
+				commandType: command.type,
+				commandId: command.commandId,
+				generation: command.generation,
+				phase: 'rebuilding',
 				attempt: command.attempt + 1,
-				channelId: command.channelId,
 			});
 		},
 		reportRestoreDetached: (command) => {
-			logDebug('Voice reconnect detached a hung cancelled operation', {
+			reportError('Voice reconnect detached a hung cancelled operation', new Error('Voice restore detached'), {
+				commandType: command.type,
+				commandId: command.commandId,
+				generation: command.generation,
+				phase: 'restoring',
 				attempt: command.attempt + 1,
-				channelId: command.pending.channelId,
 			});
 		},
 	});

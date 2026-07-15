@@ -1,8 +1,18 @@
 import type { TVoiceUserState } from '@sharkord/shared';
 import {
+	finishVoiceSessionAttemptObservation,
+	startVoiceSessionAttemptObservation,
+	type TVoiceSessionAttemptOutcome,
+	type TVoiceSessionAttemptPath,
+	type TVoiceSessionObserver,
+	type TVoiceTransportPairObserver,
+} from '../../voice-session-observability';
+import {
 	createVoiceSessionAttemptRegistry,
 	getVoiceSessionAttemptOwner,
 	type TVoiceSessionAttemptRegistry,
+	VoiceSessionAttemptCancelledError,
+	VoiceSessionAttemptSupersededError,
 } from './session-attempt-registry';
 
 type TVoiceJoinState = Pick<TVoiceUserState, 'micMuted' | 'soundMuted'>;
@@ -84,8 +94,13 @@ type TVoiceJoinRequest<TRuntime extends TVoiceJoinRuntime> = {
 type TVoiceJoinServiceDependencies<TRuntime extends TVoiceJoinRuntime, TBootstrap> = {
 	findRuntimeByChannelId: (channelId: number) => TRuntime | undefined;
 	findRuntimeByUserId: (userId: number) => TRuntime | undefined;
-	prepareBootstrap: (options: { runtime: TRuntime; userId: number }) => Promise<TPreparedVoiceJoin<TBootstrap>>;
+	prepareBootstrap: (options: {
+		runtime: TRuntime;
+		userId: number;
+		pairObserver?: TVoiceTransportPairObserver;
+	}) => Promise<TPreparedVoiceJoin<TBootstrap>>;
 	attemptRegistry?: TVoiceSessionAttemptRegistry;
+	observer?: TVoiceSessionObserver;
 	logJoined: (userName: string, channelName: string) => void;
 	logReplaced: (userName: string, channelId: number) => void;
 };
@@ -104,136 +119,205 @@ const createVoiceJoinService = <TRuntime extends TVoiceJoinRuntime, TBootstrap>(
 
 	const join = async (request: TVoiceJoinRequest<TRuntime>): Promise<TBootstrap> => {
 		const { channelId, state, mutationSeq, user, signal, context } = request;
-
-		if (!context.registerMutation(mutationSeq)) {
-			throw new VoiceJoinSupersededError();
-		}
-
 		const clientInstanceId = context.getClientInstanceId();
-		const attemptOwner = getVoiceSessionAttemptOwner(user.id, clientInstanceId, context.getConnectionIdentity());
+		const observation = startVoiceSessionAttemptObservation(dependencies.observer, {
+			kind: 'manual_join',
+			hasClientInstanceId: clientInstanceId !== undefined,
+		});
+		let path: TVoiceSessionAttemptPath = 'fresh';
+		let stage:
+			| 'resolving'
+			| 'preparing'
+			| 'final_checks'
+			| 'committing'
+			| 'membership'
+			| 'binding'
+			| 'presence'
+			| 'response' = 'resolving';
+		let ownershipTransferred = false;
 
-		return attemptRegistry.runLatest(attemptOwner, { kind: 'join', signal }, async (attempt) => {
-			attempt.assertCurrent();
-			assertMutationCurrent(context, mutationSeq);
-
-			const { channel, runtime } = await context.resolveTarget(channelId);
-			attempt.assertCurrent();
-			assertMutationCurrent(context, mutationSeq);
-
-			const oldRuntime = dependencies.findRuntimeByUserId(user.id);
-			const oldSessionIdentity = oldRuntime?.getVoiceSessionIdentity(user.id);
-
-			if (oldRuntime && !oldSessionIdentity) {
+		try {
+			if (!context.registerMutation(mutationSeq)) {
 				throw new VoiceJoinSupersededError();
 			}
 
-			const capturedBinding = context.getBinding();
-			const isReconnecting = oldRuntime?.id === channelId;
-			let preparedBootstrap: TPreparedVoiceJoin<TBootstrap> | undefined;
-			let ownershipTransferred = false;
-			let oldSeatRemoved = false;
+			const attemptOwner = getVoiceSessionAttemptOwner(user.id, clientInstanceId, context.getConnectionIdentity());
 
-			try {
-				preparedBootstrap = await dependencies.prepareBootstrap({ runtime, userId: user.id });
+			const result = await attemptRegistry.runLatest(attemptOwner, { kind: 'join', signal }, async (attempt) => {
 				attempt.assertCurrent();
 				assertMutationCurrent(context, mutationSeq);
 
-				if (dependencies.findRuntimeByChannelId(channelId) !== runtime) {
+				const { channel, runtime } = await context.resolveTarget(channelId);
+				attempt.assertCurrent();
+				assertMutationCurrent(context, mutationSeq);
+
+				const oldRuntime = dependencies.findRuntimeByUserId(user.id);
+				const oldSessionIdentity = oldRuntime?.getVoiceSessionIdentity(user.id);
+
+				if (oldRuntime && !oldSessionIdentity) {
 					throw new VoiceJoinSupersededError();
 				}
 
-				const currentRuntime = dependencies.findRuntimeByUserId(user.id);
+				const capturedBinding = context.getBinding();
+				const isReconnecting = oldRuntime?.id === channelId;
+				path = oldRuntime ? (isReconnecting ? 'same_channel_replacement' : 'cross_channel_replacement') : 'fresh';
+				let preparedBootstrap: TPreparedVoiceJoin<TBootstrap> | undefined;
+				let oldSeatRemoved = false;
 
-				if (oldRuntime) {
-					if (
-						currentRuntime !== oldRuntime ||
-						!oldSessionIdentity ||
-						!oldRuntime.isVoiceSessionIdentityCurrent(user.id, oldSessionIdentity)
-					) {
+				try {
+					stage = 'preparing';
+					preparedBootstrap = await dependencies.prepareBootstrap({
+						runtime,
+						userId: user.id,
+						pairObserver: observation.pairObserver,
+					});
+					stage = 'final_checks';
+					attempt.assertCurrent();
+					assertMutationCurrent(context, mutationSeq);
+
+					if (dependencies.findRuntimeByChannelId(channelId) !== runtime) {
 						throw new VoiceJoinSupersededError();
 					}
-				} else if (currentRuntime) {
-					throw new VoiceJoinSupersededError();
-				}
 
-				if (!bindingsMatch(context.getBinding(), capturedBinding)) {
-					throw new VoiceJoinSupersededError();
-				}
+					const currentRuntime = dependencies.findRuntimeByUserId(user.id);
 
-				preparedBootstrap.assertCommittable();
-
-				if (oldRuntime && oldSessionIdentity) {
-					// The identity checks above and this removal are in the same turn. Mark
-					// the fail-closed path first so even an unexpected synchronous cleanup
-					// exception cannot leave the old binding published as live.
-					oldSeatRemoved = true;
-
-					if (!oldRuntime.removeUserIfSessionMatches(user.id, oldSessionIdentity.incarnation)) {
-						oldSeatRemoved = false;
+					if (oldRuntime) {
+						if (
+							currentRuntime !== oldRuntime ||
+							!oldSessionIdentity ||
+							!oldRuntime.isVoiceSessionIdentityCurrent(user.id, oldSessionIdentity)
+						) {
+							throw new VoiceJoinSupersededError();
+						}
+					} else if (currentRuntime) {
 						throw new VoiceJoinSupersededError();
 					}
-				}
 
-				preparedBootstrap.commit();
-				ownershipTransferred = true;
-				runtime.addUser(user.id, state);
+					if (!bindingsMatch(context.getBinding(), capturedBinding)) {
+						throw new VoiceJoinSupersededError();
+					}
 
-				const newSessionIdentity = runtime.getVoiceSessionIdentity(user.id);
+					preparedBootstrap.assertCommittable();
 
-				if (!newSessionIdentity) {
-					throw new Error('Committed voice join did not create a session incarnation');
-				}
+					if (oldRuntime && oldSessionIdentity) {
+						// The identity checks above and this removal are in the same turn. Mark
+						// the fail-closed path first so even an unexpected synchronous cleanup
+						// exception cannot leave the old binding published as live.
+						oldSeatRemoved = true;
 
-				const currentState = runtime.getUserState(user.id);
-				context.bindVoiceSession(channel.id, newSessionIdentity.incarnation);
+						if (!oldRuntime.removeUserIfSessionMatches(user.id, oldSessionIdentity.incarnation)) {
+							oldSeatRemoved = false;
+							throw new VoiceJoinSupersededError();
+						}
+					}
 
-				if (oldRuntime) {
+					stage = 'committing';
+					preparedBootstrap.commit();
+					ownershipTransferred = true;
+					stage = 'membership';
+					runtime.addUser(user.id, state);
+
+					const newSessionIdentity = runtime.getVoiceSessionIdentity(user.id);
+
+					if (!newSessionIdentity) {
+						throw new Error('Committed voice join did not create a session incarnation');
+					}
+
+					const currentState = runtime.getUserState(user.id);
+					stage = 'binding';
+					context.bindVoiceSession(channel.id, newSessionIdentity.incarnation);
+
+					stage = 'presence';
+					if (oldRuntime) {
+						context.publishPresence({
+							type: 'leave',
+							channelId: oldRuntime.id,
+							userId: user.id,
+							reconnecting: isReconnecting,
+						});
+						context.publishPresence({
+							type: 'session-replaced',
+							channelId: oldRuntime.id,
+							userId: user.id,
+							replacedByClientInstanceId: clientInstanceId,
+						});
+						dependencies.logReplaced(user.name, oldRuntime.id);
+					}
+
 					context.publishPresence({
-						type: 'leave',
-						channelId: oldRuntime.id,
+						type: 'join',
+						channelId,
 						userId: user.id,
+						state: currentState,
 						reconnecting: isReconnecting,
 					});
-					context.publishPresence({
-						type: 'session-replaced',
-						channelId: oldRuntime.id,
-						userId: user.id,
-						replacedByClientInstanceId: clientInstanceId,
-					});
-					dependencies.logReplaced(user.name, oldRuntime.id);
-				}
+					dependencies.logJoined(user.name, channel.name);
 
-				context.publishPresence({
-					type: 'join',
-					channelId,
-					userId: user.id,
-					state: currentState,
-					reconnecting: isReconnecting,
-				});
-				dependencies.logJoined(user.name, channel.name);
+					stage = 'response';
+					return preparedBootstrap.buildCommittedResponse();
+				} catch (error) {
+					if (oldSeatRemoved && !ownershipTransferred) {
+						context.clearBindingIfMatches(capturedBinding);
+						context.publishPresence({
+							type: 'leave',
+							channelId: oldRuntime?.id ?? channelId,
+							userId: user.id,
+							reconnecting: isReconnecting,
+						});
+					}
 
-				return preparedBootstrap.buildCommittedResponse();
-			} catch (error) {
-				if (oldSeatRemoved && !ownershipTransferred) {
-					context.clearBindingIfMatches(capturedBinding);
-					context.publishPresence({
-						type: 'leave',
-						channelId: oldRuntime?.id ?? channelId,
-						userId: user.id,
-						reconnecting: isReconnecting,
-					});
+					throw error;
+				} finally {
+					if (preparedBootstrap && !ownershipTransferred) {
+						await preparedBootstrap.dispose();
+					}
 				}
-
-				throw error;
-			} finally {
-				if (preparedBootstrap && !ownershipTransferred) {
-					await preparedBootstrap.dispose();
-				}
-			}
-		});
+			});
+			finishVoiceSessionAttemptObservation(observation, { path, outcome: 'succeeded' });
+			return result;
+		} catch (error) {
+			finishVoiceSessionAttemptObservation(observation, {
+				path,
+				outcome: classifyJoinObservationOutcome(error, ownershipTransferred, stage),
+				error,
+			});
+			throw error;
+		}
 	};
 
 	return { join };
+};
+
+const classifyJoinObservationOutcome = (
+	error: unknown,
+	ownershipTransferred: boolean,
+	stage: 'resolving' | 'preparing' | 'final_checks' | 'committing' | 'membership' | 'binding' | 'presence' | 'response',
+): TVoiceSessionAttemptOutcome => {
+	if (error instanceof VoiceSessionAttemptCancelledError) {
+		return 'cancelled';
+	}
+	if (error instanceof VoiceSessionAttemptSupersededError || error instanceof VoiceJoinSupersededError) {
+		return 'superseded';
+	}
+	if (!ownershipTransferred) {
+		return stage === 'preparing' ? 'preparation_failed' : 'precommit_failed';
+	}
+
+	switch (stage) {
+		case 'membership':
+			return 'postcommit_membership_failed';
+		case 'binding':
+			return 'postcommit_binding_failed';
+		case 'presence':
+			return 'postcommit_presence_failed';
+		case 'response':
+			return 'postcommit_response_failed';
+		case 'resolving':
+		case 'preparing':
+		case 'final_checks':
+		case 'committing':
+			return 'precommit_failed';
+	}
 };
 
 const assertMutationCurrent = <TRuntime extends TVoiceJoinRuntime>(

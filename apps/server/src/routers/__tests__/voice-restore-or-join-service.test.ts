@@ -140,6 +140,10 @@ const createHarness = () => {
 		disposals: 0,
 		responses: 0,
 	};
+	const observations: {
+		pairs: unknown[];
+		finishes: unknown[];
+	} = { pairs: [], finishes: [] };
 	const primaryRuntime = new FakeVoiceRestoreRuntime(PRIMARY_CHANNEL_ID, order);
 	const secondaryRuntime = new FakeVoiceRestoreRuntime(SECONDARY_CHANNEL_ID, order);
 	const runtimes = new Map<number, FakeVoiceRestoreRuntime>([
@@ -209,6 +213,7 @@ const createHarness = () => {
 			order.push(`prepared:${attempt}:start`);
 			await Promise.all([controls.prepareProducer(attempt), controls.prepareConsumer(attempt)]);
 			await controls.beforePreparationReturn(attempt);
+			options.pairObserver?.({ outcome: 'prepared' });
 
 			return {
 				assertCommittable: () => {
@@ -226,6 +231,7 @@ const createHarness = () => {
 					}
 
 					state = 'committed';
+					options.pairObserver?.({ outcome: 'committed' });
 					preparedBootstrapStats.commits += 1;
 					order.push(`prepared:${attempt}:commit`);
 					controls.onCommit(attempt);
@@ -236,6 +242,7 @@ const createHarness = () => {
 					}
 
 					state = 'disposed';
+					options.pairObserver?.({ outcome: 'disposed', cause: 'request_cleanup' });
 					preparedBootstrapStats.disposals += 1;
 					order.push(`prepared:${attempt}:dispose`);
 				},
@@ -249,6 +256,12 @@ const createHarness = () => {
 					};
 				},
 			};
+		},
+		observer: {
+			startAttempt: () => ({
+				pairObserver: (event) => observations.pairs.push(event),
+				finish: (result) => observations.finishes.push(result),
+			}),
 		},
 		logRestoreEvent: (event) => order.push(`log:${event}`),
 		logJoined: () => order.push('log:joined'),
@@ -295,6 +308,7 @@ const createHarness = () => {
 		bindings,
 		pendingQueries,
 		preparedBootstrapStats,
+		observations,
 		primaryRuntime,
 		secondaryRuntime,
 		setLabBehavior: (behavior: TVoiceReconnectLabRestoreBehavior | undefined) => {
@@ -333,6 +347,10 @@ describe('voice restore-or-join service', () => {
 		expect(harness.preparedBootstrapStats).toEqual({ commits: 1, disposals: 0, responses: 1 });
 		expect(harness.bindings).toHaveLength(1);
 		expect(harness.events.map((event) => event.type)).toEqual(['join']);
+		expect(harness.observations).toEqual({
+			pairs: [{ outcome: 'prepared' }, { outcome: 'committed' }],
+			finishes: [{ path: 'fresh', outcome: 'succeeded' }],
+		});
 		expect(harness.order).toEqual([
 			'target:resolve',
 			'log:attempt',
@@ -438,6 +456,10 @@ describe('voice restore-or-join service', () => {
 		expect(harness.preparedBootstrapStats).toEqual({ commits: 0, disposals: 1, responses: 0 });
 		expect(harness.bindings).toEqual([]);
 		expect(harness.events.map((event) => event.type)).toEqual(['state-update']);
+		expect(harness.observations).toEqual({
+			pairs: [{ outcome: 'prepared' }, { outcome: 'disposed', cause: 'request_cleanup' }],
+			finishes: [{ path: 'existing', outcome: 'cancelled', error: expect.any(VoiceRestoreAttemptCancelledError) }],
+		});
 	});
 
 	test('lets only the newest overlapping existing-session preparation commit', async () => {
@@ -496,6 +518,10 @@ describe('voice restore-or-join service', () => {
 		expect(harness.preparedBootstrapStats).toEqual({ commits: 1, disposals: 0, responses: 1 });
 		expect(harness.bindings).toHaveLength(1);
 		expect(harness.events).toEqual([]);
+		expect(harness.observations).toEqual({
+			pairs: [{ outcome: 'prepared' }, { outcome: 'committed' }],
+			finishes: [{ path: 'existing', outcome: 'postcommit_response_failed', error: failure }],
+		});
 	});
 
 	test('disposes an existing pair when the seat incarnation changes before commit', async () => {

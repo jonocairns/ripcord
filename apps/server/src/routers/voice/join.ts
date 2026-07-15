@@ -11,12 +11,14 @@ import {
 	VoiceSessionAttemptSupersededError,
 	voiceSessionAttemptRegistry,
 } from './session-attempt-registry';
+import { voiceSessionTelemetry } from './voice-session-telemetry';
 
 const joinVoiceService = createVoiceJoinService({
 	findRuntimeByChannelId: VoiceRuntime.findById,
 	findRuntimeByUserId: VoiceRuntime.findRuntimeByUserId,
 	prepareBootstrap: prepareVoiceJoinBootstrap,
 	attemptRegistry: voiceSessionAttemptRegistry,
+	observer: voiceSessionTelemetry,
 	logJoined: (userName, channelName) => {
 		logger.info('%s joined voice channel %s', userName, channelName);
 	},

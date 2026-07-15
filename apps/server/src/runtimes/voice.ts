@@ -26,6 +26,11 @@ import { eventBus } from '../plugins/event-bus';
 import { invariant } from '../utils/invariant';
 import { mediaSoupWorker, webRtcServer, webRtcServerListenInfo, webRtcServerListenInfos } from '../utils/mediasoup';
 import { pubsub } from '../utils/pubsub';
+import type {
+	TVoiceTransportPairDisposalCause,
+	TVoiceTransportPairObservationEvent,
+	TVoiceTransportPairObserver,
+} from '../voice-session-observability';
 import {
 	APP_AUDIO_FIRST_MEDIA_TIMEOUT_MS,
 	APP_AUDIO_SRTP_CRYPTO_SUITE,
@@ -259,7 +264,7 @@ class VoiceRuntime {
 	private mediaLiveness = new Map<number, TMediaLivenessState>();
 	private mediaLivenessTimer?: ReturnType<typeof setInterval>;
 	private mediaLivenessCheckInFlight = false;
-	private preparedTransportPairDisposals = new Set<() => void>();
+	private preparedTransportPairDisposals = new Set<(cause: TVoiceTransportPairDisposalCause) => void>();
 
 	private externalCounter = 0;
 	private externalStreamsInternal: {
@@ -358,7 +363,7 @@ class VoiceRuntime {
 
 	public destroy = async () => {
 		for (const dispose of [...this.preparedTransportPairDisposals]) {
-			dispose();
+			dispose('runtime_destroyed');
 		}
 
 		this.stopMediaLivenessMonitor();
@@ -707,7 +712,10 @@ class VoiceRuntime {
 		return this.producerTransports[userId];
 	};
 
-	public prepareTransportPair = async (userId: number): Promise<TPreparedVoiceTransportPair> => {
+	public prepareTransportPair = async (
+		userId: number,
+		observer?: TVoiceTransportPairObserver,
+	): Promise<TPreparedVoiceTransportPair> => {
 		let state: TPreparedTransportPairState = 'allocating';
 		let producerAllocation: TAllocatedVoiceTransport | undefined;
 		let consumerAllocation: TAllocatedVoiceTransport | undefined;
@@ -723,13 +731,22 @@ class VoiceRuntime {
 			}
 		};
 
-		const disposeOwnedTransports = () => {
+		const observe = (event: TVoiceTransportPairObservationEvent): void => {
+			try {
+				observer?.(event);
+			} catch {
+				// Telemetry is never a transport ownership dependency.
+			}
+		};
+
+		const disposeOwnedTransports = (cause: TVoiceTransportPairDisposalCause) => {
 			if (state === 'committed' || state === 'disposed') {
 				return;
 			}
 
 			state = 'disposed';
 			this.preparedTransportPairDisposals.delete(disposeOwnedTransports);
+			observe({ outcome: 'disposed', cause });
 			closePreparedTransports();
 		};
 
@@ -739,7 +756,7 @@ class VoiceRuntime {
 			}
 
 			preparationError = error;
-			disposeOwnedTransports();
+			disposeOwnedTransports('allocation_failed');
 		};
 
 		const allocateTransport = async (
@@ -771,14 +788,18 @@ class VoiceRuntime {
 			PRODUCER_INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS,
 			(allocation) => {
 				producerAllocation = allocation;
-				this.setupProducerTransportHandlers(userId, allocation.transport, disposeOwnedTransports);
+				this.setupProducerTransportHandlers(userId, allocation.transport, () =>
+					disposeOwnedTransports('prepared_transport_failed'),
+				);
 			},
 		);
 		const consumerAllocationPromise = allocateTransport(
 			CONSUMER_INITIAL_AVAILABLE_OUTGOING_BITRATE_BPS,
 			(allocation) => {
 				consumerAllocation = allocation;
-				this.setupConsumerTransportHandlers(userId, allocation.transport, disposeOwnedTransports);
+				this.setupConsumerTransportHandlers(userId, allocation.transport, () =>
+					disposeOwnedTransports('prepared_transport_failed'),
+				);
 			},
 		);
 
@@ -791,6 +812,7 @@ class VoiceRuntime {
 		const preparedProducerAllocation = producerAllocation;
 		const preparedConsumerAllocation = consumerAllocation;
 		state = 'prepared';
+		observe({ outcome: 'prepared' });
 
 		const assertCommittable = () => {
 			if (
@@ -798,7 +820,7 @@ class VoiceRuntime {
 				preparedProducerAllocation.transport.closed ||
 				preparedConsumerAllocation.transport.closed
 			) {
-				disposeOwnedTransports();
+				disposeOwnedTransports('prepared_transport_failed');
 				throw new VoicePreparedTransportPairDisposedError();
 			}
 		};
@@ -824,6 +846,7 @@ class VoiceRuntime {
 				this.rotateVoiceSessionMutationToken(userId);
 				state = 'committed';
 				this.preparedTransportPairDisposals.delete(disposeOwnedTransports);
+				observe({ outcome: 'committed' });
 
 				if (oldProducerTransport && oldProducerTransport !== preparedProducerAllocation.transport) {
 					this.closeReplacedVoiceResource(oldProducerTransport, userId, 'producer transport');
@@ -842,7 +865,7 @@ class VoiceRuntime {
 				}
 			},
 			dispose: async () => {
-				disposeOwnedTransports();
+				disposeOwnedTransports('request_cleanup');
 			},
 		};
 	};

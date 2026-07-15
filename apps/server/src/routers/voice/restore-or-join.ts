@@ -20,6 +20,7 @@ import {
 	VoiceRestoreConflictError,
 } from './restore-or-join-service';
 import { voiceSessionAttemptRegistry } from './session-attempt-registry';
+import { voiceSessionTelemetry } from './voice-session-telemetry';
 
 const restoreOrJoinService = createVoiceRestoreOrJoinService({
 	findRuntimeByChannelId: VoiceRuntime.findById,
@@ -29,9 +30,10 @@ const restoreOrJoinService = createVoiceRestoreOrJoinService({
 	delay: wait,
 	prepareBootstrap: prepareVoiceJoinBootstrap,
 	attemptRegistry: voiceSessionAttemptRegistry,
+	observer: voiceSessionTelemetry,
 	logRestoreEvent: logRestoreOrJoinEvent,
-	logJoined: (userName, channelName) => {
-		logger.info('%s restoreOrJoin joined voice channel %s', userName, channelName);
+	logJoined: (_userName, _channelName) => {
+		logger.info('restoreOrJoin joined voice session');
 	},
 });
 

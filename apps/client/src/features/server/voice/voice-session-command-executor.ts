@@ -60,6 +60,36 @@ type TVoiceSessionRebuildContext = TVoiceSessionCommandContext & {
 	restartIfNonceChanged: (currentNonce: number) => boolean;
 };
 
+type TVoiceSessionCommandOutcome = 'succeeded' | 'failed' | 'expired' | 'cancelled' | 'superseded' | 'detached';
+
+type TVoiceSessionCommandPhase =
+	| 'rebuilding'
+	| 'reconnecting'
+	| 'waiting_online'
+	| 'waiting_auth'
+	| 'restoring'
+	| 'retry_delay'
+	| 'restore_watch'
+	| 'connected_finalization'
+	| 'failed_finalization';
+
+type TVoiceSessionCommandObservationContext = {
+	commandType: TVoiceSessionCommand['type'];
+	commandId: number;
+	generation: number;
+	phase: TVoiceSessionCommandPhase;
+	attempt?: number;
+};
+
+type TVoiceSessionCommandObservation = {
+	run: <T>(effect: () => T) => T;
+	finish: (result: { outcome: TVoiceSessionCommandOutcome; durationMs: number; error?: unknown }) => void;
+};
+
+type TVoiceSessionCommandObserver = {
+	start: (context: TVoiceSessionCommandObservationContext) => TVoiceSessionCommandObservation;
+};
+
 type TVoiceSessionExecutorPorts = {
 	// Injected environment: the executor never touches Date.now, Math.random,
 	// setTimeout, navigator, or window, so tests control time, jitter, and
@@ -85,6 +115,7 @@ type TVoiceSessionExecutorPorts = {
 	reportRebuildDetached: (command: TRebuildTransportsCommand) => void;
 	reportRebuildTerminalFailure: (command: TRebuildTransportsCommand, error: unknown) => void;
 	reportRestoreDetached: (command: TRestoreVoiceSessionCommand) => void;
+	commandObserver?: TVoiceSessionCommandObserver;
 };
 
 type TVoiceSessionCommandExecutor = {
@@ -127,6 +158,14 @@ type TActiveVoiceSessionOperation = {
 	controller: AbortController;
 };
 
+type TVoiceSessionCommandLifecycle = {
+	command: TVoiceSessionCommand;
+	startedAt: number;
+	observation: TVoiceSessionCommandObservation;
+	firstCause?: Extract<TVoiceSessionCommandOutcome, 'expired' | 'cancelled' | 'superseded'>;
+	finished: boolean;
+};
+
 type TActiveRestoreOperation = {
 	command: TRestoreVoiceSessionCommand;
 	controller: AbortController;
@@ -145,6 +184,41 @@ const VOICE_RECONNECT_TIMEOUT_MS = 12_000;
 const VOICE_RECONNECT_CANCELLED_DRAIN_MS = 2_000;
 const VOICE_REBUILD_BACKOFF_MS = [1_000, 2_000] as const;
 
+const noOpCommandObservation: TVoiceSessionCommandObservation = {
+	run: <T>(effect: () => T): T => effect(),
+	finish: () => {},
+};
+
+const getCommandObservationContext = (command: TVoiceSessionCommand): TVoiceSessionCommandObservationContext => {
+	const base = {
+		commandType: command.type,
+		commandId: command.commandId,
+		generation: command.generation,
+	};
+
+	switch (command.type) {
+		case 'CaptureRecoverySnapshot':
+			return { ...base, phase: command.recovery };
+		case 'RebuildTransports':
+			return { ...base, phase: 'rebuilding', attempt: command.attempt + 1 };
+		case 'WaitOnline':
+			return { ...base, phase: 'waiting_online' };
+		case 'WaitAuth':
+			return { ...base, phase: 'waiting_auth' };
+		case 'RestoreVoiceSession':
+			return { ...base, phase: 'restoring', attempt: command.attempt + 1 };
+		case 'RetryDelay':
+			return { ...base, phase: 'retry_delay', attempt: command.attempt + 1 };
+		case 'RestoreWatchIntent':
+			return { ...base, phase: 'restore_watch' };
+		case 'RecoverDesktopAppAudio':
+			return { ...base, phase: 'connected_finalization' };
+		case 'LeaveVoiceSession':
+		case 'ClearFailedSession':
+			return { ...base, phase: 'failed_finalization' };
+	}
+};
+
 const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): TVoiceSessionCommandExecutor => {
 	// Keyed by commandId, which the machine mints monotonically.
 	const activeOperations = new Map<number, TActiveVoiceSessionOperation>();
@@ -153,21 +227,136 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 	let activeRestoreOperation: TActiveRestoreOperation | undefined;
 	let queuedRestoreCommand: TRestoreVoiceSessionCommand | undefined;
 	let disposed = false;
+	const lifecycles = new Map<number, TVoiceSessionCommandLifecycle>();
+
+	const startLifecycle = (command: TVoiceSessionCommand): TVoiceSessionCommandLifecycle => {
+		let observation = noOpCommandObservation;
+
+		try {
+			observation = ports.commandObserver?.start(getCommandObservationContext(command)) ?? noOpCommandObservation;
+		} catch {
+			// Telemetry is never a command correctness dependency.
+		}
+
+		const lifecycle: TVoiceSessionCommandLifecycle = {
+			command,
+			startedAt: ports.now(),
+			observation,
+			finished: false,
+		};
+		lifecycles.set(command.commandId, lifecycle);
+		return lifecycle;
+	};
+
+	const recordFirstCause = (
+		command: TVoiceSessionCommand,
+		cause: NonNullable<TVoiceSessionCommandLifecycle['firstCause']>,
+	): void => {
+		const lifecycle = lifecycles.get(command.commandId);
+		if (lifecycle && lifecycle.firstCause === undefined) {
+			lifecycle.firstCause = cause;
+		}
+	};
+
+	const finishLifecycle = (
+		command: TVoiceSessionCommand,
+		outcome: TVoiceSessionCommandOutcome,
+		error?: unknown,
+	): void => {
+		const lifecycle = lifecycles.get(command.commandId);
+		if (!lifecycle || lifecycle.finished) {
+			return;
+		}
+
+		lifecycle.finished = true;
+		lifecycles.delete(command.commandId);
+		try {
+			lifecycle.observation.finish({
+				outcome,
+				durationMs: Math.max(0, ports.now() - lifecycle.startedAt),
+				error,
+			});
+		} catch {
+			// Telemetry is never a command correctness dependency.
+		}
+	};
+
+	const runObserved = <T>(command: TVoiceSessionCommand, effect: () => T): T => {
+		const lifecycle = lifecycles.get(command.commandId);
+		if (!lifecycle) {
+			return effect();
+		}
+
+		let effectThrew = false;
+		let effectStarted = false;
+		let effectError: unknown;
+		let readEffectResult = (): T => {
+			throw new Error('Voice session observed effect did not return');
+		};
+		try {
+			return lifecycle.observation.run(() => {
+				effectStarted = true;
+				try {
+					const result = effect();
+					readEffectResult = () => result;
+					return result;
+				} catch (error) {
+					effectThrew = true;
+					effectError = error;
+					throw error;
+				}
+			});
+		} catch (_error) {
+			if (effectThrew) {
+				throw effectError;
+			}
+			if (effectStarted) {
+				return readEffectResult();
+			}
+
+			// If only the observer failed before invoking the effect, execute it
+			// directly.
+			return effect();
+		}
+	};
+
+	const reportSafely = (report: () => void): void => {
+		try {
+			report();
+		} catch {
+			// Error reporting is telemetry, not command policy.
+		}
+	};
 
 	const abortSupersededOperations = (): void => {
 		for (const [commandId, operation] of activeOperations) {
 			if (isRecoveryStepCommand(operation.command) && !isVoiceSessionCommandCurrent(operation.command)) {
 				activeOperations.delete(commandId);
+				recordFirstCause(operation.command, 'superseded');
 				operation.controller.abort();
 			}
 		}
 
 		if (activeRestoreOperation !== undefined && !isVoiceSessionCommandCurrent(activeRestoreOperation.command)) {
+			recordFirstCause(activeRestoreOperation.command, 'superseded');
 			activeRestoreOperation.controller.abort();
 		}
 
 		if (activeRebuildOperation !== undefined && !isVoiceSessionCommandCurrent(activeRebuildOperation.command)) {
+			recordFirstCause(activeRebuildOperation.command, 'superseded');
 			activeRebuildOperation.controller.abort();
+		}
+
+		if (queuedRestoreCommand !== undefined && !isVoiceSessionCommandCurrent(queuedRestoreCommand)) {
+			recordFirstCause(queuedRestoreCommand, 'superseded');
+			finishLifecycle(queuedRestoreCommand, 'superseded');
+			queuedRestoreCommand = undefined;
+		}
+
+		if (queuedRebuildCommand !== undefined && !isVoiceSessionCommandCurrent(queuedRebuildCommand)) {
+			recordFirstCause(queuedRebuildCommand, 'superseded');
+			finishLifecycle(queuedRebuildCommand, 'superseded');
+			queuedRebuildCommand = undefined;
 		}
 	};
 
@@ -389,6 +578,8 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 
 	const runRebuildCommand = async (active: TActiveRebuildOperation): Promise<void> => {
 		const { command, controller } = active;
+		let terminalOutcome: TVoiceSessionCommandOutcome | undefined;
+		let terminalError: unknown;
 		const context: TVoiceSessionRebuildContext = {
 			signal: controller.signal,
 			isCurrent: () => !controller.signal.aborted && isVoiceSessionCommandCurrent(command),
@@ -416,11 +607,12 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 				const backoffMs = VOICE_REBUILD_BACKOFF_MS[command.attempt - 1] ?? VOICE_REBUILD_BACKOFF_MS.at(-1) ?? 1_000;
 				const outcome = await waitForDelay(backoffMs, controller.signal);
 				if (outcome === 'cancelled' || !context.isCurrent()) {
+					terminalOutcome = lifecycles.get(command.commandId)?.firstCause ?? 'superseded';
 					return;
 				}
 			}
 
-			const operation = ports.rebuildTransports(command, context);
+			const operation = runObserved(command, () => ports.rebuildTransports(command, context));
 			active.unsettledOperation = operation;
 			const settled = operation.then(
 				() => ({ outcome: 'succeeded' as const }),
@@ -444,6 +636,8 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 			removeAbortListener();
 
 			if (result.outcome === 'failed' && context.isCurrent()) {
+				terminalOutcome = 'failed';
+				terminalError = result.error;
 				dispatchVoiceSession({
 					type: 'RebuildFailed',
 					commandId: command.commandId,
@@ -456,20 +650,35 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 				// error or choosing retry versus teardown in the executor.
 				const phase = selectVoiceSessionState((state) => state.phase);
 				if (phase.phase === 'failed') {
-					ports.reportRebuildTerminalFailure(command, result.error);
+					reportSafely(() => ports.reportRebuildTerminalFailure(command, result.error));
 				}
 			} else if (result.outcome === 'succeeded' && context.isCurrent()) {
+				terminalOutcome = 'succeeded';
 				dispatchVoiceSession({
 					type: 'RebuildSucceeded',
 					commandId: command.commandId,
 					generation: command.generation,
 				});
+			} else {
+				terminalOutcome = lifecycles.get(command.commandId)?.firstCause ?? 'superseded';
 			}
+		} catch (error) {
+			terminalError = error;
+			terminalOutcome =
+				lifecycles.get(command.commandId)?.firstCause ??
+				(isVoiceSessionCommandCurrent(command) ? 'failed' : 'superseded');
+			throw error;
 		} finally {
 			const drainOutcome = await drainCancelledRebuildOperation(active.unsettledOperation);
 			if (drainOutcome === 'detached') {
-				ports.reportRebuildDetached(command);
+				reportSafely(() => ports.reportRebuildDetached(command));
+				terminalOutcome = 'detached';
 			}
+			finishLifecycle(
+				command,
+				terminalOutcome ?? lifecycles.get(command.commandId)?.firstCause ?? 'cancelled',
+				terminalError,
+			);
 
 			if (activeRebuildOperation === active) {
 				activeRebuildOperation = undefined;
@@ -485,10 +694,16 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 
 	const startRebuildCommand = (command: TRebuildTransportsCommand): void => {
 		if (disposed || !isVoiceSessionCommandCurrent(command)) {
+			finishLifecycle(command, disposed ? 'cancelled' : 'superseded');
 			return;
 		}
 
 		if (activeRebuildOperation !== undefined) {
+			if (queuedRebuildCommand !== undefined) {
+				recordFirstCause(queuedRebuildCommand, 'superseded');
+				finishLifecycle(queuedRebuildCommand, 'superseded');
+			}
+			recordFirstCause(activeRebuildOperation.command, 'superseded');
 			activeRebuildOperation.controller.abort();
 			queuedRebuildCommand = command;
 			return;
@@ -501,7 +716,7 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 
 		activeRebuildOperation = active;
 		void runRebuildCommand(active).catch((error: unknown) => {
-			ports.reportCommandError(command, error);
+			reportSafely(() => ports.reportCommandError(command, error));
 		});
 	};
 
@@ -558,6 +773,8 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 
 	const runRestoreCommand = async (active: TActiveRestoreOperation): Promise<void> => {
 		const { command, controller } = active;
+		let terminalOutcome: TVoiceSessionCommandOutcome | undefined;
+		let terminalError: unknown;
 		const context: TVoiceSessionRestoreContext = {
 			signal: controller.signal,
 			isCurrent: () => !controller.signal.aborted && isVoiceSessionCommandCurrent(command),
@@ -568,18 +785,28 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 		};
 
 		try {
-			const result = await ports.restoreVoiceSession(command, context);
+			const result = await runObserved(command, () => ports.restoreVoiceSession(command, context));
 			active.serverSessionEstablished = active.serverSessionEstablished || result.serverSessionEstablished;
 
 			if (context.isCurrent()) {
+				terminalOutcome = 'succeeded';
 				dispatchVoiceSession({
 					type: 'RestoreSucceeded',
 					commandId: command.commandId,
 					generation: command.generation,
 					serverSessionEstablished: active.serverSessionEstablished,
 				});
+			} else {
+				terminalOutcome = lifecycles.get(command.commandId)?.firstCause ?? 'superseded';
 			}
 		} catch (error) {
+			terminalError = error;
+			if (error instanceof VoiceReconnectTimeoutError) {
+				recordFirstCause(command, 'expired');
+			}
+			terminalOutcome =
+				lifecycles.get(command.commandId)?.firstCause ??
+				(isVoiceSessionCommandCurrent(command) ? 'failed' : 'superseded');
 			if (!disposed && isVoiceSessionCommandCurrent(command)) {
 				dispatchVoiceSession({
 					type: 'RestoreFailed',
@@ -595,8 +822,14 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 		} finally {
 			const drainOutcome = await drainCancelledRestoreOperation(active.unsettledOperation);
 			if (drainOutcome === 'detached') {
-				ports.reportRestoreDetached(command);
+				reportSafely(() => ports.reportRestoreDetached(command));
+				terminalOutcome = 'detached';
 			}
+			finishLifecycle(
+				command,
+				terminalOutcome ?? lifecycles.get(command.commandId)?.firstCause ?? 'cancelled',
+				terminalError,
+			);
 
 			if (activeRestoreOperation === active) {
 				activeRestoreOperation = undefined;
@@ -612,10 +845,16 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 
 	const startRestoreCommand = (command: TRestoreVoiceSessionCommand): void => {
 		if (disposed || !isVoiceSessionCommandCurrent(command)) {
+			finishLifecycle(command, disposed ? 'cancelled' : 'superseded');
 			return;
 		}
 
 		if (activeRestoreOperation !== undefined) {
+			if (queuedRestoreCommand !== undefined) {
+				recordFirstCause(queuedRestoreCommand, 'superseded');
+				finishLifecycle(queuedRestoreCommand, 'superseded');
+			}
+			recordFirstCause(activeRestoreOperation.command, 'superseded');
 			activeRestoreOperation.controller.abort();
 			queuedRestoreCommand = command;
 			return;
@@ -629,7 +868,7 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 
 		activeRestoreOperation = active;
 		void runRestoreCommand(active).catch((error: unknown) => {
-			ports.reportCommandError(command, error);
+			reportSafely(() => ports.reportCommandError(command, error));
 		});
 	};
 
@@ -639,7 +878,7 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 	const runCommandEffect = async (
 		command: TVoiceSessionCommand,
 		context: TVoiceSessionCommandContext,
-	): Promise<void> => {
+	): Promise<TVoiceSessionCommandOutcome> => {
 		switch (command.type) {
 			case 'CaptureRecoverySnapshot': {
 				const snapshot = ports.captureRecoverySnapshot();
@@ -651,15 +890,16 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 						generation: command.generation,
 						snapshot,
 					});
+					return 'succeeded';
 				}
 
-				return;
+				return lifecycles.get(command.commandId)?.firstCause ?? 'superseded';
 			}
 			case 'RebuildTransports': {
-				return;
+				return 'cancelled';
 			}
 			case 'RestoreVoiceSession':
-				return;
+				return 'cancelled';
 			case 'WaitOnline': {
 				const outcome = await waitForOnline(command, context);
 
@@ -671,7 +911,11 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 					});
 				}
 
-				return;
+				return outcome === 'expired'
+					? 'expired'
+					: outcome === 'cancelled'
+						? (lifecycles.get(command.commandId)?.firstCause ?? 'superseded')
+						: 'succeeded';
 			}
 			case 'WaitAuth': {
 				const outcome = await waitForAuthenticated(command, context);
@@ -684,7 +928,11 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 					});
 				}
 
-				return;
+				return outcome === 'expired'
+					? 'expired'
+					: outcome === 'cancelled'
+						? (lifecycles.get(command.commandId)?.firstCause ?? 'superseded')
+						: 'succeeded';
 			}
 			case 'RetryDelay': {
 				const outcome = await waitForRetryDelay(command, context);
@@ -697,7 +945,11 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 					});
 				}
 
-				return;
+				return outcome === 'expired'
+					? 'expired'
+					: outcome === 'cancelled'
+						? (lifecycles.get(command.commandId)?.firstCause ?? 'superseded')
+						: 'succeeded';
 			}
 			case 'RestoreWatchIntent': {
 				ports.restoreWatchIntent(command.snapshot);
@@ -709,19 +961,20 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 						generation: command.generation,
 						now: ports.now(),
 					});
+					return 'succeeded';
 				}
 
-				return;
+				return lifecycles.get(command.commandId)?.firstCause ?? 'superseded';
 			}
 			case 'RecoverDesktopAppAudio':
 				await ports.recoverDesktopAppAudio();
-				return;
+				return 'succeeded';
 			case 'LeaveVoiceSession':
 				await ports.leaveVoiceSession(command.channelId);
-				return;
+				return 'succeeded';
 			case 'ClearFailedSession':
 				await ports.clearFailedSession(command);
-				return;
+				return 'succeeded';
 		}
 	};
 
@@ -734,6 +987,8 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 		if (isFinalCommand(command) && !isFinalVoiceSessionCommandCurrent(command)) {
 			return;
 		}
+
+		startLifecycle(command);
 
 		// Normally the store-listener sweep already ran inside the superseding
 		// dispatch; this covers execute() being invoked outside a dispatch.
@@ -756,11 +1011,20 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 			? (): boolean => !controller.signal.aborted && isVoiceSessionCommandCurrent(command)
 			: (): boolean => !controller.signal.aborted;
 
-		void runCommandEffect(command, { signal: controller.signal, isCurrent })
+		void runObserved(command, () => runCommandEffect(command, { signal: controller.signal, isCurrent }))
+			.then((outcome) => {
+				finishLifecycle(command, outcome);
+			})
 			.catch((error: unknown) => {
 				// Port rejections without a machine-defined failure event (final
 				// commands, snapshot capture) must not strand executor bookkeeping.
-				ports.reportCommandError(command, error);
+				reportSafely(() => ports.reportCommandError(command, error));
+				finishLifecycle(
+					command,
+					lifecycles.get(command.commandId)?.firstCause ??
+						(isRecoveryStepCommand(command) && !isVoiceSessionCommandCurrent(command) ? 'superseded' : 'failed'),
+					error,
+				);
 			})
 			.finally(() => {
 				if (activeOperations.get(command.commandId) === operation) {
@@ -786,13 +1050,29 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 
 			disposed = true;
 			unsubscribeFromStore();
-			queuedRebuildCommand = undefined;
-			queuedRestoreCommand = undefined;
+			if (queuedRebuildCommand !== undefined) {
+				recordFirstCause(queuedRebuildCommand, 'cancelled');
+				finishLifecycle(queuedRebuildCommand, 'cancelled');
+				queuedRebuildCommand = undefined;
+			}
+			if (queuedRestoreCommand !== undefined) {
+				recordFirstCause(queuedRestoreCommand, 'cancelled');
+				finishLifecycle(queuedRestoreCommand, 'cancelled');
+				queuedRestoreCommand = undefined;
+			}
+			if (activeRebuildOperation !== undefined) {
+				recordFirstCause(activeRebuildOperation.command, 'cancelled');
+			}
+			if (activeRestoreOperation !== undefined) {
+				recordFirstCause(activeRestoreOperation.command, 'cancelled');
+			}
 			activeRebuildOperation?.controller.abort();
 			activeRestoreOperation?.controller.abort();
 
 			for (const operation of activeOperations.values()) {
+				recordFirstCause(operation.command, 'cancelled');
 				operation.controller.abort();
+				finishLifecycle(operation.command, 'cancelled');
 			}
 
 			activeOperations.clear();
@@ -803,6 +1083,11 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 export type {
 	TVoiceSessionCommandContext,
 	TVoiceSessionCommandExecutor,
+	TVoiceSessionCommandObservation,
+	TVoiceSessionCommandObservationContext,
+	TVoiceSessionCommandObserver,
+	TVoiceSessionCommandOutcome,
+	TVoiceSessionCommandPhase,
 	TVoiceSessionExecutorPorts,
 	TVoiceSessionRebuildContext,
 	TVoiceSessionRestoreContext,
