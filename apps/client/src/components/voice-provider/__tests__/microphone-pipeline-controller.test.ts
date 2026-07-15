@@ -345,11 +345,15 @@ const createHarness = (options: { activate?: boolean } = {}) => {
 	};
 };
 
-const prepare = (harness: THarness, overrides: Partial<{ processingEnabled: boolean; gainVolume: number }> = {}) =>
+const prepare = (
+	harness: THarness,
+	overrides: Partial<{ processingEnabled: boolean; gainVolume: number; isCurrent: () => boolean }> = {},
+) =>
 	harness.controller.prepare({
 		constraints: {},
 		processingEnabled: overrides.processingEnabled ?? true,
 		gainVolume: overrides.gainVolume ?? 100,
+		isCurrent: overrides.isCurrent,
 	});
 
 describe('microphone pipeline controller lifecycle', () => {
@@ -389,6 +393,35 @@ describe('microphone pipeline controller lifecycle', () => {
 		await expect(predecessorPrepare).rejects.toBeInstanceOf(MicPipelineSupersededError);
 
 		expect(staleStream.track.stopCalls).toBe(1);
+		expect(successorStream.track.stopCalls).toBe(0);
+		expect(harness.controller.owns(successor)).toBe(true);
+		expect(harness.producers[0]?.closed).toBe(false);
+		expect(harness.activityMonitors).toHaveLength(1);
+	});
+
+	it('rejects a pre-replay caller before it can clean up the published successor', async () => {
+		const harness = createHarness();
+		const predecessorLease = harness.controller.createLifecycleLease();
+
+		await harness.controller.deactivate();
+		harness.controller.activate();
+
+		const successorStream = createStream('successor');
+		harness.setGetUserMedia(async () => successorStream);
+		const successor = await prepare(harness);
+		await harness.controller.publish({ source: successor });
+
+		let staleCaptureCalls = 0;
+		harness.setGetUserMedia(async () => {
+			staleCaptureCalls += 1;
+			return createStream('unexpected-stale');
+		});
+
+		await expect(prepare(harness, { isCurrent: predecessorLease.isCurrent })).rejects.toBeInstanceOf(
+			MicPipelineSupersededError,
+		);
+
+		expect(staleCaptureCalls).toBe(0);
 		expect(successorStream.track.stopCalls).toBe(0);
 		expect(harness.controller.owns(successor)).toBe(true);
 		expect(harness.producers[0]?.closed).toBe(false);

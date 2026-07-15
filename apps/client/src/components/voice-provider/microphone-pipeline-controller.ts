@@ -68,6 +68,7 @@ type TPrepareMicrophonePipelineInput = {
 	processingEnabled: boolean;
 	gainVolume: number;
 	selectedMicrophoneId?: string;
+	isCurrent?: () => boolean;
 };
 
 type TPublishMicrophonePipelineInput = {
@@ -335,7 +336,10 @@ const createMicrophonePipelineController = <
 	};
 
 	const prepare = async (input: TPrepareMicrophonePipelineInput): Promise<TMicrophonePreparedPipeline> => {
-		if (!active) {
+		// Reject stale callers before cleanup snapshots the currently published
+		// pipeline. The controller may be active again after Strict Mode replay,
+		// while a caller holding the previous lifecycle lease is still stale.
+		if (!active || (input.isCurrent !== undefined && !input.isCurrent())) {
 			throw new MicPipelineSupersededError();
 		}
 
