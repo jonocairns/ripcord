@@ -3,10 +3,12 @@
 **Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
 landed in PR #280, C5 landed in PR #281, C6 landed in PR #282, C7 landed in PR
 #283, C8 landed in PR #284, C9 landed in PR #285, S0 landed in PR #286, S1
-landed in PR #287, S2 landed in PR #289, and S3 landed in PR #290. S4 is
-implemented on the local `refactor/remove-legacy-voice-restore-rollback-path`
-branch and is pending its standalone PR. Completed slices carry a **Landed** note
-recording what was built and what later slices should inherit.
+landed in PR #287, S2 landed in PR #289, S3 landed in PR #290, and S4 landed in
+PR #291. V0 observability is implemented in draft PR #292, and the PR #275
+Playwright recovery matrix passes against its commit. Final V0 closeout remains
+blocked on literal server-restart and hardware-backed desktop app-audio evidence.
+Completed slices carry a **Landed** note recording what was built and what later
+slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -42,7 +44,7 @@ The finished architecture has four explicit layers:
 On the server, make restore/join transactional: a request owns uncommitted
 transport resources; `VoiceRuntime` owns them only after one synchronous commit
 boundary. S2 and S3 completed that transition for fresh and existing-session
-`restoreOrJoin` transport allocation. S4 removes the now-dormant provisional-seat
+`restoreOrJoin` transport allocation. S4 removed the now-dormant provisional-seat
 compatibility mechanism (`acquireRestoreSeat` /
 `commitProvisionalRestoreSeat` / `rollbackProvisionalRestoreSeat`) and converts
 the user-initiated join path so no new membership, context, or presence side
@@ -164,8 +166,8 @@ session store. It does not read the Zustand reconnect projection.
 | S0 | server 1 (#286) | Server | main after PR #285 | Restore service seam and explicit ownership contract |
 | S1 | server 2 (#287) | Server | S0 | Prepared transport-pair primitive, unwired |
 | S2 | server 3 (#289) | Server | S1 | Fresh restore/join uses prepare-then-commit |
-| S3 | server 4 | Server | S2 | Existing-session restore swaps transport pairs atomically |
-| S4 | server 5 | Server | S3 | Legacy mutation path removed (including `join.ts`); cancellation matrix complete |
+| S3 | server 4 (#290) | Server | S2 | Existing-session restore swaps transport pairs atomically |
+| S4 | server 5 (#291) | Server | S3 | Legacy mutation path removed (including `join.ts`); cancellation matrix complete |
 | V0 | gate | Both | client and server workstreams | E2E, observability, docs, and rollout gate |
 
 The client and server workstreams may proceed independently. Within the client
@@ -198,11 +200,12 @@ back to one slice per PR — the slice boundaries already support that.
 | server 2 (#287) | S1 | Add prepared voice transport pairs |
 | server 3 (#289) | S2 | Commit fresh voice restores transactionally |
 | server 4 (#290) | S3 | Replace restored voice transports atomically |
-| server 5 | S4 | Remove legacy voice restore rollback path |
+| server 5 (#291) | S4 | Remove legacy voice restore rollback path |
+| V0 observability (#292) | V0 | Add voice session recovery observability |
 
-V0 is not a PR: its observability and E2E items land incrementally with
-client 5 and server 3–5, and its rollout checklist gates marking this plan
-implemented.
+V0 is not one PR. Its focused observability implementation is PR #292; integrated
+automation, environment-bound validation, and documentation closeout remain gate
+evidence rather than an artificial all-in-one change.
 
 ## Client slices
 
@@ -1143,9 +1146,9 @@ consumer, fully-prepared, and pre-final-check barriers. Synchronous commit and
 response hooks cover abort-on-commit and response failure. There is no barrier
 between the final currency/identity checks and the commit block.
 
-**Implemented on the local S4 branch, pending PR:** The provisional claim map,
-runtime methods, restore-service ports, adapters, rollback publication, and
-synthetic claim tests are gone. Existing restores now use
+**Landed in PR #291:** The provisional claim map, runtime methods,
+restore-service ports, adapters, rollback publication, and synthetic claim tests
+are gone. Existing restores now use
 `reconcileVoiceRestoreState` plus a captured `{ incarnation, mutationToken }`;
 the mutation token rotates on active transport installation, replacement, and
 closure so restore, join, and standalone rebuild completions invalidate stale
@@ -1171,7 +1174,8 @@ fallback expiry, and stale-incarnation expiry tests advance it synchronously;
 the existing join-server adoption tests continue to prove that only an
 unchanged incarnation is rebound. No FSM-reference edit is required: its
 server-fence and sticky post-commit ownership statements match the completed S4
-contract. V0 observability and integrated rollout remain deferred.
+contract. V0 observability is implemented in draft PR #292; integrated rollout
+evidence and documentation closeout remain in progress.
 
 Local validation after formatting: root type checking, lint, and knip pass; 145
 focused voice/permission/incarnation/grace tests pass; and all 679 server tests
@@ -1187,12 +1191,18 @@ impossible by construction or passes under the documented post-commit owner.
 **Objective:** Prove the extracted layers behave together and leave useful
 production diagnostics.
 
-V0 is a gate, not a standalone work item. The transport-pair and restore-outcome
-logs land with server 3–5; executor-wide structured command spans remain
-deferred to this gate rather than expanding the behavior-preserving client 5
-adapter cutover. The E2E scenarios are run as part of the client 5 and server 5
-exit criteria. This section is the consolidated checklist for declaring the
-plan implemented.
+V0 is a gate, not a standalone work item. Draft PR #292 adds the focused client
+command spans, Sentry error adapters, server attempt outcomes, and
+ownership-relative prepared-pair events. Integrated automation and
+environment-bound validation remain gate evidence rather than reasons to reopen
+the client FSM or server ownership architecture. This section is the
+consolidated checklist for declaring the plan implemented.
+
+**Current V0 evidence (2026-07-15):** PR #292 commit `23d79c68` passes formatting,
+root type checking, lint, and knip; 45 focused client observability/executor tests;
+75 focused server transaction/observability tests; all 495 client tests; and all
+683 server tests. The observer seams use injected clocks and deferred operations,
+so outcome ordering and duration do not depend on wall-clock sleeps.
 
 **Automated validation:**
 
@@ -1219,29 +1229,55 @@ plan implemented.
 - Two-tab conflict and same-client reconnect.
 - Desktop app/system audio recovery after rebuild.
 
+**Integrated scenario evidence:** The isolated PR #275 Playwright spike was
+loaded into a detached worktree at PR #292 commit `23d79c68`; it was not added to
+the workspace or PR. The old spike expected custom channel fixtures, so the
+temporary harness mapped them to the current fresh-checkout `General Voice` and
+`General Voice 2` fixtures without changing product code. The authoritative
+serial run completed eight scenarios directly and the offline-defer scenario on
+its configured retry. A separate offline-defer run with retries disabled passed
+in 13 seconds, confirming that its first failure was the spike's documented
+shared-dev login/sync flake rather than a recovery assertion.
+
+| Scenario | Evidence | Status |
+| --- | --- | --- |
+| In-session transport rebuild | PR #275 Playwright ICE-only failure; outbound camera bytes increased after rebuild | Satisfied |
+| WS drop and authenticated restore | PR #275 short-drop and one-shot failed-restore/retry scenarios; media resumed | Satisfied |
+| Offline pause beyond an original TTL | PR #275 offline-defer and >60-second offline-grace scenarios; executor live-deadline fake-clock coverage | Satisfied |
+| Rapid WS flap while restore is pending | PR #275 four-drop rapid-flap scenario converged with media flowing | Satisfied |
+| Server restart with fresh restore/join | Fresh prepare/commit is covered in `voice-restore-or-join-service.test.ts`, but no run killed and restarted the real server process | Environment-bound gap |
+| Stop Watching during pending consume, then re-watch | `remote-media-consume-controller.test.ts` closes the late allocation and proves a fresh re-watch cannot be cleared by the cancelled completion; the two-peer Playwright scenario proves producer-stop cleanup | Satisfied deterministically |
+| Provider remount during recovery/finalization | `use-voice-session-executor.test.ts`, `voice-session-command-executor.test.ts`, and `voice-session-store.test.ts` cover rebuild, restore, and buffered final-command remounts through the real executor/store seams | Satisfied deterministically |
+| Two-tab conflict and same-client reconnect | PR #275 genuine two-tab takeover scenario plus server same-client/conflict integration tests | Satisfied |
+| Desktop app/system audio recovery after rebuild | Client native app-audio recovery serialization and server ingest suites pass, but headless Chromium cannot exercise the shipped desktop capture/RTP backend with real application audio | Partial; hardware/desktop gap |
+
 **Observability:**
 
-- One structured span per executor command with command type, attempt, phase,
+- Draft PR #292 emits one structured span per accepted executor command with command type, attempt, phase,
   generation, duration, and outcome. Do not log snapshots or media identifiers
   unnecessarily.
-- Explicit outcomes for cancelled, superseded, detached, expired, failed, and
+- It distinguishes cancelled, superseded, detached, expired, failed, and
   succeeded.
-- Server logs for prepared/disposed/committed transport pairs and restore
-  outcomes, keyed by reconnect attempt id and safe session metadata.
-- Report bounded-drain detachment and terminal cleanup failure to Sentry with
+- Server telemetry reports prepared/disposed/committed transport pairs and
+  join/restore outcomes, correlated by an opaque operation id and a validated
+  reconnect attempt id when supplied.
+- Bounded-drain detachment and terminal cleanup failures reach Sentry with
   enough phase/generation context to correlate, but no auth or private media
   data.
 
 **Rollout gate:**
 
-- All existing reconnect-lab and Playwright recovery scenarios pass.
-- No source-inspection test is cited as correctness coverage.
-- No executor command implementation remains in `VoiceProvider`.
-- No command executor reads the Zustand reconnect projection.
-- No server restore path mutates membership before all fallible preparation has
-  completed.
-- Update this document to **Implemented** and update the superseded seam section
-  in `voice-session-fsm.md`.
+- [x] The PR #275 Playwright recovery matrix passes against PR #292.
+- [x] No source-inspection test is cited as correctness coverage.
+- [x] No executor command implementation remains in `VoiceProvider`.
+- [x] No command executor reads the Zustand reconnect projection.
+- [x] No server restore path mutates membership before all fallible preparation
+  and final checks have completed.
+- [ ] Record literal server-process restart/fresh-restore evidence.
+- [ ] Record hardware-backed desktop app/system-audio recovery evidence, or
+  explicitly accept it as a release-environment manual gate.
+- [ ] After those items are resolved, change this document to **Implemented** and
+  reconcile the superseded seam section in `voice-session-fsm.md`.
 
 ## Review checklist per slice
 
