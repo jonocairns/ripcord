@@ -142,7 +142,7 @@ const createVoiceRestoreOrJoinService = <TRuntime extends TVoiceRestoreRuntime, 
 		const clientInstanceId = context.getClientInstanceId();
 		const attemptOwner = getVoiceSessionAttemptOwner(user.id, clientInstanceId, context.getOwnConnection()?.identity);
 
-		return attemptRegistry.runLatest(attemptOwner, signal, async (attempt) => {
+		return attemptRegistry.runLatest(attemptOwner, { kind: 'restore', signal }, async (attempt) => {
 			const { channel, runtime } = await context.resolveTarget(channelId);
 			attempt.assertCurrent();
 

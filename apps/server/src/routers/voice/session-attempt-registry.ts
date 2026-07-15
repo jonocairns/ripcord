@@ -1,6 +1,8 @@
 type TVoiceSessionAttemptStatus = 'current' | 'cancelled' | 'superseded';
+type TVoiceSessionAttemptKind = 'join' | 'restore';
 
 type TVoiceSessionAttempt = {
+	kind: TVoiceSessionAttemptKind;
 	status: TVoiceSessionAttemptStatus;
 };
 
@@ -11,7 +13,7 @@ type TVoiceSessionAttemptContext = {
 type TVoiceSessionAttemptRegistry = {
 	runLatest: <T>(
 		owner: unknown,
-		signal: AbortSignal | undefined,
+		options: { kind: TVoiceSessionAttemptKind; signal?: AbortSignal },
 		run: (context: TVoiceSessionAttemptContext) => Promise<T>,
 	) => Promise<T>;
 	supersede: (owner: unknown) => void;
@@ -42,10 +44,20 @@ const createVoiceSessionAttemptRegistry = (): TVoiceSessionAttemptRegistry => {
 		}
 	};
 
-	const runLatest: TVoiceSessionAttemptRegistry['runLatest'] = async (owner, signal, run) => {
+	const runLatest: TVoiceSessionAttemptRegistry['runLatest'] = async (owner, options, run) => {
+		const { kind, signal } = options;
+		const previousAttempt = latestAttemptByOwner.get(owner);
+
+		// Explicit user intent outranks background recovery regardless of request
+		// arrival order. Joins still supersede restores and other joins, while a
+		// restore may replace only another restore for the same client owner.
+		if (kind === 'restore' && previousAttempt?.kind === 'join' && previousAttempt.status === 'current') {
+			throw new VoiceSessionAttemptSupersededError();
+		}
+
 		supersede(owner);
 
-		const attempt: TVoiceSessionAttempt = { status: 'current' };
+		const attempt: TVoiceSessionAttempt = { kind, status: 'current' };
 		latestAttemptByOwner.set(owner, attempt);
 
 		const cancel = () => {
@@ -115,7 +127,7 @@ const getVoiceSessionAttemptOwner = (
 
 const voiceSessionAttemptRegistry = createVoiceSessionAttemptRegistry();
 
-export type { TVoiceSessionAttemptContext, TVoiceSessionAttemptRegistry };
+export type { TVoiceSessionAttemptContext, TVoiceSessionAttemptKind, TVoiceSessionAttemptRegistry };
 export {
 	createVoiceSessionAttemptRegistry,
 	getVoiceSessionAttemptOwner,

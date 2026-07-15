@@ -9,6 +9,7 @@ import {
 } from '../voice/join-service';
 import {
 	createVoiceSessionAttemptRegistry,
+	getVoiceSessionAttemptOwner,
 	VoiceSessionAttemptCancelledError,
 	VoiceSessionAttemptSupersededError,
 } from '../voice/session-attempt-registry';
@@ -112,6 +113,7 @@ const createHarness = () => {
 	let latestMutationSeq: number | undefined;
 	let preparationAttempt = 0;
 	const connectionIdentity = {};
+	const attemptRegistry = createVoiceSessionAttemptRegistry();
 	const controls: {
 		resolveTarget: (channelId: number) => Promise<{ channel: { id: number; name: string }; runtime: FakeJoinRuntime }>;
 		prepareProducer: (attempt: number) => Promise<void>;
@@ -145,7 +147,7 @@ const createHarness = () => {
 	const service = createVoiceJoinService({
 		findRuntimeByChannelId: (channelId) => runtimes.get(channelId),
 		findRuntimeByUserId: (userId) => [...runtimes.values()].find((runtime) => runtime.hasUser(userId)),
-		attemptRegistry: createVoiceSessionAttemptRegistry(),
+		attemptRegistry,
 		prepareBootstrap: async ({ runtime, userId }) => {
 			preparationAttempt += 1;
 			const attempt = preparationAttempt;
@@ -237,6 +239,7 @@ const createHarness = () => {
 
 	return {
 		service,
+		attemptRegistry,
 		request,
 		controls,
 		order,
@@ -372,6 +375,66 @@ describe('voice join service', () => {
 		);
 		expect(responseHarness.primaryRuntime.hasUser(1)).toBe(true);
 		expect(responseHarness.stats).toEqual({ commits: 1, disposals: 0, responses: 1 });
+	});
+
+	test('does not let a later background restore supersede an active manual join', async () => {
+		const harness = createHarness();
+		const joinReady = createDeferred();
+		const releaseJoin = createDeferred();
+		harness.controls.beforePreparationReturn = async () => {
+			joinReady.resolve();
+			await releaseJoin.promise;
+		};
+		const join = harness.service.join(harness.request({ mutationSeq: 1 }));
+		await joinReady.promise;
+		let restoreStarted = false;
+		const owner = getVoiceSessionAttemptOwner(1, 'client-a', {});
+
+		await expect(
+			harness.attemptRegistry.runLatest(owner, { kind: 'restore' }, async () => {
+				restoreStarted = true;
+				return undefined;
+			}),
+		).rejects.toBeInstanceOf(VoiceSessionAttemptSupersededError);
+		expect(restoreStarted).toBe(false);
+
+		releaseJoin.resolve();
+		await expect(join).resolves.toEqual({ attempt: 1, joined: true });
+		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
+		expect(harness.stats).toEqual({ commits: 1, disposals: 0, responses: 1 });
+		expect(harness.events.map((event) => event.type)).toEqual(['join']);
+	});
+
+	test('manual join supersedes an active background restore and leaves its private cleanup scoped', async () => {
+		const harness = createHarness();
+		const restoreReady = createDeferred();
+		const releaseRestore = createDeferred();
+		const owner = getVoiceSessionAttemptOwner(1, 'client-a', {});
+		let restoreDisposals = 0;
+		const restore = harness.attemptRegistry
+			.runLatest(owner, { kind: 'restore' }, async (attempt) => {
+				restoreReady.resolve();
+				try {
+					await releaseRestore.promise;
+					attempt.assertCurrent();
+				} finally {
+					restoreDisposals += 1;
+				}
+			})
+			.catch((error: unknown) => error);
+		await restoreReady.promise;
+
+		await expect(harness.service.join(harness.request({ mutationSeq: 1 }))).resolves.toEqual({
+			attempt: 1,
+			joined: true,
+		});
+		releaseRestore.resolve();
+
+		expect(await restore).toBeInstanceOf(VoiceSessionAttemptSupersededError);
+		expect(restoreDisposals).toBe(1);
+		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
+		expect(harness.stats).toEqual({ commits: 1, disposals: 0, responses: 1 });
+		expect(harness.events.map((event) => event.type)).toEqual(['join']);
 	});
 });
 

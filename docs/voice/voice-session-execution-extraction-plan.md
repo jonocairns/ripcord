@@ -1152,7 +1152,11 @@ closure so restore, join, and standalone rebuild completions invalidate stale
 prepared work without changing the seat incarnation.
 
 Join and restore share a first-cause attempt registry keyed by user/client
-ownership, and an accepted leave explicitly supersedes the matching attempt.
+ownership, with explicit user intent taking priority over background recovery:
+join supersedes either kind, restore supersedes only restore, and an accepted
+leave explicitly supersedes the matching attempt. This priority is independent
+of request arrival order, so a late reconnect restore cannot cancel an active
+manual join.
 `joinVoiceRoute` delegates to the framework-free join service and uses the
 ordering above. Old-pair close errors after installation are contained and
 logged while the remaining captured resources close, so a synchronous callback
@@ -1169,8 +1173,8 @@ unchanged incarnation is rebound. No FSM-reference edit is required: its
 server-fence and sticky post-commit ownership statements match the completed S4
 contract. V0 observability and integrated rollout remain deferred.
 
-Local validation after formatting: root type checking, lint, and knip pass; 143
-focused voice/permission/incarnation/grace tests pass; and all 677 server tests
+Local validation after formatting: root type checking, lint, and knip pass; 145
+focused voice/permission/incarnation/grace tests pass; and all 679 server tests
 pass.
 
 **Exit criteria:** The exact `runtime.addUser` cancellation-point test is either

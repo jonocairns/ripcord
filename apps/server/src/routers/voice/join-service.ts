@@ -112,7 +112,7 @@ const createVoiceJoinService = <TRuntime extends TVoiceJoinRuntime, TBootstrap>(
 		const clientInstanceId = context.getClientInstanceId();
 		const attemptOwner = getVoiceSessionAttemptOwner(user.id, clientInstanceId, context.getConnectionIdentity());
 
-		return attemptRegistry.runLatest(attemptOwner, signal, async (attempt) => {
+		return attemptRegistry.runLatest(attemptOwner, { kind: 'join', signal }, async (attempt) => {
 			attempt.assertCurrent();
 			assertMutationCurrent(context, mutationSeq);
 
