@@ -336,10 +336,12 @@ const createMicrophonePipelineController = <
 	};
 
 	const prepare = async (input: TPrepareMicrophonePipelineInput): Promise<TMicrophonePreparedPipeline> => {
+		const isCallerCurrent = (): boolean => input.isCurrent === undefined || input.isCurrent();
+
 		// Reject stale callers before cleanup snapshots the currently published
 		// pipeline. The controller may be active again after Strict Mode replay,
 		// while a caller holding the previous lifecycle lease is still stale.
-		if (!active || (input.isCurrent !== undefined && !input.isCurrent())) {
+		if (!active || !isCallerCurrent()) {
 			throw new MicPipelineSupersededError();
 		}
 
@@ -349,10 +351,11 @@ const createMicrophonePipelineController = <
 		const cleanupPromise = cleanup();
 		epoch += 1;
 		const ownedEpoch = epoch;
+		const ownsPreparation = (): boolean => ownsEpoch(ownedEpoch) && isCallerCurrent();
 
 		await cleanupPromise;
 
-		if (!ownsEpoch(ownedEpoch)) {
+		if (!ownsPreparation()) {
 			throw new MicPipelineSupersededError();
 		}
 
@@ -361,7 +364,7 @@ const createMicrophonePipelineController = <
 		try {
 			stream = await ports.getUserMedia(input.constraints);
 
-			if (!ownsEpoch(ownedEpoch)) {
+			if (!ownsPreparation()) {
 				throw new MicPipelineSupersededError();
 			}
 
@@ -398,7 +401,7 @@ const createMicrophonePipelineController = <
 					},
 				});
 
-				if (!ownsEpoch(ownedEpoch)) {
+				if (!ownsPreparation()) {
 					if (createdProcessingPipeline) {
 						try {
 							await createdProcessingPipeline.destroy();
@@ -420,7 +423,7 @@ const createMicrophonePipelineController = <
 					throw error;
 				}
 
-				if (!ownsEpoch(ownedEpoch)) {
+				if (!ownsPreparation()) {
 					throw new MicPipelineSupersededError();
 				}
 
@@ -432,14 +435,14 @@ const createMicrophonePipelineController = <
 			try {
 				createdGainPipeline = await ports.createGainPipeline(outboundStream, input.gainVolume);
 			} catch (error) {
-				if (!ownsEpoch(ownedEpoch)) {
+				if (!ownsPreparation()) {
 					throw new MicPipelineSupersededError();
 				}
 
 				throw error;
 			}
 
-			if (!ownsEpoch(ownedEpoch)) {
+			if (!ownsPreparation()) {
 				if (createdGainPipeline) {
 					try {
 						await createdGainPipeline.destroy();
@@ -465,11 +468,13 @@ const createMicrophonePipelineController = <
 
 			return prepared;
 		} catch (error) {
-			if (error instanceof MicPipelineSupersededError || !ownsEpoch(ownedEpoch)) {
-				stream?.getTracks().forEach((track) => {
-					track.stop();
-				});
-			} else {
+			// The stream belongs to this attempt even when a successor owns the
+			// controller epoch. Shared refs may be cleaned only while this attempt
+			// still owns that epoch; otherwise successor cleanup already captured them.
+			stream?.getTracks().forEach((track) => {
+				track.stop();
+			});
+			if (ownsEpoch(ownedEpoch)) {
 				await cleanup();
 			}
 

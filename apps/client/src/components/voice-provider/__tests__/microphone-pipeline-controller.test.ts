@@ -428,6 +428,56 @@ describe('microphone pipeline controller lifecycle', () => {
 		expect(harness.activityMonitors).toHaveLength(1);
 	});
 
+	it('does not acquire media when caller currency expires during old graph cleanup', async () => {
+		const harness = createHarness();
+		const gainDestroy = createDeferred<void>();
+		const existingGain = createGainPipeline('existing-gain', { destroyDeferred: gainDestroy });
+		let captureCalls = 0;
+		harness.setGetUserMedia(async () => {
+			captureCalls += 1;
+			return createStream(`capture-${captureCalls}`);
+		});
+		harness.setCreateGainPipeline(async () => existingGain);
+
+		await prepare(harness);
+		expect(captureCalls).toBe(1);
+
+		let callerCurrent = true;
+		const cancelledPrepare = prepare(harness, { isCurrent: () => callerCurrent });
+		await flushMicrotasks();
+		expect(existingGain.destroyCalls).toBe(1);
+
+		callerCurrent = false;
+		gainDestroy.resolve();
+
+		await expect(cancelledPrepare).rejects.toBeInstanceOf(MicPipelineSupersededError);
+		expect(captureCalls).toBe(1);
+		expect(harness.controller.getRawTrack()).toBeUndefined();
+	});
+
+	it('stops a deferred capture when caller currency expires before capture resolves', async () => {
+		const harness = createHarness();
+		const capture = createDeferred<MediaStream>();
+		let callerCurrent = true;
+		let processingCalls = 0;
+		harness.setGetUserMedia(() => capture.promise);
+		harness.setCreateProcessingPipeline(async () => {
+			processingCalls += 1;
+			return undefined;
+		});
+
+		const cancelledPrepare = prepare(harness, { isCurrent: () => callerCurrent });
+		await flushMicrotasks();
+		callerCurrent = false;
+		const staleStream = createStream('stale-capture');
+		capture.resolve(staleStream);
+
+		await expect(cancelledPrepare).rejects.toBeInstanceOf(MicPipelineSupersededError);
+		expect(staleStream.track.stopCalls).toBe(1);
+		expect(processingCalls).toBe(0);
+		expect(harness.controller.getRawTrack()).toBeUndefined();
+	});
+
 	it('prevents a queued late preparation from acquiring media after final deactivation', async () => {
 		const harness = createHarness();
 		const queueGate = createDeferred<void>();
