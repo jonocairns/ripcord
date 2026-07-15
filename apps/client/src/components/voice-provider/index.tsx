@@ -88,6 +88,7 @@ import {
 	VoiceSessionExecutionSupersededError,
 } from './hooks/session-execution-ownership';
 import { useLocalStreams } from './hooks/use-local-streams';
+import { useMicrophonePipelineControllerLifecycle } from './hooks/use-microphone-pipeline-controller-lifecycle';
 import { getPendingStreamKey, type TExternalStreamTrackPresence } from './hooks/use-pending-streams';
 import { useRemoteMediaConsumeRunner } from './hooks/use-remote-media-consume-runner';
 import { useRemoteMediaRepairRunner } from './hooks/use-remote-media-repair-runner';
@@ -1437,6 +1438,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		});
 	}
 	const microphoneController = microphoneControllerRef.current;
+	useMicrophonePipelineControllerLifecycle(microphoneController);
 
 	const applyMicGainVolume = useCallback(
 		(volume: number) => {
@@ -1916,6 +1918,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const startMicStream = useCallback(async () => {
+		// Capture provider lifetime before entering the mutex. A request queued by
+		// the pre-replay lifecycle must not acquire media after reactivation.
+		const lifecycleLease = microphoneController.createLifecycleLease();
+
 		// Serialize mic pipeline operations so concurrent callers (device change,
 		// unmute, volume threshold) queue rather than race each other.
 		const previousMutex = micPipelineMutexRef.current;
@@ -1928,6 +1934,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 		try {
 			await previousMutex;
+			if (!lifecycleLease.isCurrent()) {
+				return;
+			}
 			logVoice('Starting microphone stream');
 			prepared = await prepareMicPipeline();
 			await produceMicTrack(prepared);
@@ -3190,9 +3199,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				isCurrentRecovery?: () => boolean;
 			},
 		) => {
+			const microphoneLifecycleLease = microphoneController.createLifecycleLease();
 			const ownsSessionExecution = claimVoiceSessionExecution(sessionExecutionOwnershipRef.current);
 			const isCurrent = (): boolean =>
-				ownsSessionExecution() && (opts?.isCurrentRecovery === undefined || opts.isCurrentRecovery());
+				microphoneLifecycleLease.isCurrent() &&
+				ownsSessionExecution() &&
+				(opts?.isCurrentRecovery === undefined || opts.isCurrentRecovery());
 
 			return traceSentrySpan(
 				{
@@ -3961,9 +3973,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		return () => {
 			logVoice('Voice provider unmounting, cleaning up resources');
 			voiceCleanupRef.current?.();
-			void microphoneController.dispose();
 		};
-	}, [microphoneController]);
+	}, []);
 
 	const contextValue = useMemo<TVoiceProvider>(
 		() => ({

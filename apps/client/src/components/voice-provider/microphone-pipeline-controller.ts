@@ -75,6 +75,15 @@ type TPublishMicrophonePipelineInput = {
 	isCurrent?: () => boolean;
 };
 
+type TMicrophonePipelineLifecycleLease = {
+	isCurrent: () => boolean;
+};
+
+type TMicrophonePipelineLifecycle = {
+	activate: () => void;
+	deactivate: () => Promise<void>;
+};
+
 class MicPipelineSupersededError extends Error {
 	constructor() {
 		super('Microphone pipeline superseded by a newer build');
@@ -92,7 +101,11 @@ const createMicrophonePipelineController = <
 	ports: TMicrophonePipelineControllerPorts<TProducer, TProcessingPipeline, TGainPipeline>,
 ) => {
 	let epoch = 0;
-	let disposed = false;
+	// The controller is created during render but may own media only while its
+	// provider lifecycle is committed. Strict Mode can deactivate and reactivate
+	// the same retained instance, so this fence must be reversible.
+	let lifecycleGeneration = 0;
+	let active = false;
 	let rawMicStream: MediaStream | undefined;
 	let removeRawLossListeners: (() => void) | undefined;
 	let processingPipeline: TProcessingPipeline | undefined;
@@ -108,9 +121,29 @@ const createMicrophonePipelineController = <
 		ports.log?.(message, context);
 	};
 
-	const ownsEpoch = (ownedEpoch: number): boolean => !disposed && epoch === ownedEpoch;
+	const ownsEpoch = (ownedEpoch: number): boolean => active && epoch === ownedEpoch;
 
-	const owns = (prepared: TMicrophonePreparedPipeline): boolean => !disposed && preparedPipeline === prepared;
+	const owns = (prepared: TMicrophonePreparedPipeline): boolean => active && preparedPipeline === prepared;
+
+	const activate = (): void => {
+		if (active) {
+			return;
+		}
+
+		// Activation is an ownership boundary even when the previous asynchronous
+		// cleanup tail is still destroying resources captured by deactivation.
+		active = true;
+		lifecycleGeneration += 1;
+		epoch += 1;
+	};
+
+	const createLifecycleLease = (): TMicrophonePipelineLifecycleLease => {
+		const ownedGeneration = lifecycleGeneration;
+
+		return {
+			isCurrent: () => active && lifecycleGeneration === ownedGeneration,
+		};
+	};
 
 	const stopActivity = (isSpeaking: boolean | undefined): void => {
 		const producerId = localProducer === undefined ? undefined : ports.getProducerId(localProducer);
@@ -302,7 +335,7 @@ const createMicrophonePipelineController = <
 	};
 
 	const prepare = async (input: TPrepareMicrophonePipelineInput): Promise<TMicrophonePreparedPipeline> => {
-		if (disposed) {
+		if (!active) {
 			throw new MicPipelineSupersededError();
 		}
 
@@ -517,16 +550,20 @@ const createMicrophonePipelineController = <
 		}
 	};
 
-	const dispose = async (): Promise<void> => {
-		if (disposed) {
+	const deactivate = async (): Promise<void> => {
+		if (!active) {
 			return;
 		}
 
-		disposed = true;
+		active = false;
+		lifecycleGeneration += 1;
 		await cleanup();
 	};
 
 	return {
+		activate,
+		deactivate,
+		createLifecycleLease,
 		prepare,
 		publish,
 		cleanup,
@@ -536,7 +573,6 @@ const createMicrophonePipelineController = <
 		syncActivity,
 		getRawTrack: (): MediaStreamTrack | undefined => rawMicStream?.getAudioTracks()[0],
 		hasGainPipeline: (): boolean => gainPipeline !== undefined,
-		dispose,
 	};
 };
 
@@ -551,6 +587,8 @@ export type {
 	TMicrophoneGainPipeline,
 	TMicrophonePipelineController,
 	TMicrophonePipelineControllerPorts,
+	TMicrophonePipelineLifecycle,
+	TMicrophonePipelineLifecycleLease,
 	TMicrophonePreparedPipeline,
 	TMicrophoneProcessingPipeline,
 	TMicrophoneProducerPublicationLease,

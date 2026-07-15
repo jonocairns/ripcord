@@ -205,7 +205,7 @@ const createManualScheduler = () => {
 
 type THarness = ReturnType<typeof createHarness>;
 
-const createHarness = () => {
+const createHarness = (options: { activate?: boolean } = {}) => {
 	type TFakePorts = TMicrophonePipelineControllerPorts<TFakeProducer, TFakeProcessingPipeline, TFakeGainPipeline>;
 
 	const scheduler = createManualScheduler();
@@ -300,6 +300,9 @@ const createHarness = () => {
 	};
 
 	const controller = createMicrophonePipelineController(ports);
+	if (options.activate ?? true) {
+		controller.activate();
+	}
 
 	return {
 		controller,
@@ -348,6 +351,67 @@ const prepare = (harness: THarness, overrides: Partial<{ processingEnabled: bool
 		processingEnabled: overrides.processingEnabled ?? true,
 		gainVolume: overrides.gainVolume ?? 100,
 	});
+
+describe('microphone pipeline controller lifecycle', () => {
+	it('survives lifecycle replay while fencing a deferred predecessor from its published successor', async () => {
+		const harness = createHarness({ activate: false });
+		const firstCapture = createDeferred<MediaStream>();
+		const successorCapture = createDeferred<MediaStream>();
+		const captures = [firstCapture, successorCapture];
+		let captureCalls = 0;
+		harness.setGetUserMedia(() => {
+			captureCalls += 1;
+			return captures.shift()?.promise ?? Promise.reject(new Error('unexpected capture'));
+		});
+
+		await expect(prepare(harness)).rejects.toBeInstanceOf(MicPipelineSupersededError);
+		expect(captureCalls).toBe(0);
+
+		harness.controller.activate();
+		const predecessorLease = harness.controller.createLifecycleLease();
+		const predecessorPrepare = prepare(harness);
+		await flushMicrotasks();
+		expect(captureCalls).toBe(1);
+
+		await harness.controller.deactivate();
+		expect(predecessorLease.isCurrent()).toBe(false);
+		harness.controller.activate();
+
+		const successorPrepare = prepare(harness);
+		await flushMicrotasks();
+		const successorStream = createStream('successor');
+		successorCapture.resolve(successorStream);
+		const successor = await successorPrepare;
+		await harness.controller.publish({ source: successor });
+
+		const staleStream = createStream('stale');
+		firstCapture.resolve(staleStream);
+		await expect(predecessorPrepare).rejects.toBeInstanceOf(MicPipelineSupersededError);
+
+		expect(staleStream.track.stopCalls).toBe(1);
+		expect(successorStream.track.stopCalls).toBe(0);
+		expect(harness.controller.owns(successor)).toBe(true);
+		expect(harness.producers[0]?.closed).toBe(false);
+		expect(harness.activityMonitors).toHaveLength(1);
+	});
+
+	it('prevents a queued late preparation from acquiring media after final deactivation', async () => {
+		const harness = createHarness();
+		const queueGate = createDeferred<void>();
+		let captureCalls = 0;
+		harness.setGetUserMedia(async () => {
+			captureCalls += 1;
+			return createStream('unexpected');
+		});
+		const latePrepare = queueGate.promise.then(() => prepare(harness));
+
+		await harness.controller.deactivate();
+		queueGate.resolve();
+
+		await expect(latePrepare).rejects.toBeInstanceOf(MicPipelineSupersededError);
+		expect(captureCalls).toBe(0);
+	});
+});
 
 describe('microphone pipeline controller ownership', () => {
 	it('stops a deferred old getUserMedia result without touching its successor', async () => {
