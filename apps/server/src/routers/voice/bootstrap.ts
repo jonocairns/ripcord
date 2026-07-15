@@ -6,6 +6,7 @@ import { channels } from '../../db/schema';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { invariant } from '../../utils/invariant';
 import type { Context } from '../../utils/trpc';
+import type { TVoiceTransportPairObserver } from '../../voice-session-observability';
 
 const voiceJoinStateSchema = z.object({
 	micMuted: z.boolean().default(false),
@@ -46,10 +47,14 @@ const getVoiceJoinTarget = async (ctx: Context, channelId: number) => {
 	return { channel, runtime };
 };
 
-const prepareVoiceJoinBootstrap = async (opts: { runtime: VoiceRuntime; userId: number }) => {
-	const { runtime, userId } = opts;
+const prepareVoiceJoinBootstrap = async (opts: {
+	runtime: VoiceRuntime;
+	userId: number;
+	pairObserver?: TVoiceTransportPairObserver;
+}) => {
+	const { runtime, userId, pairObserver } = opts;
 	const router = runtime.getRouter();
-	const pair = await runtime.prepareTransportPair(userId);
+	const pair = await runtime.prepareTransportPair(userId, pairObserver);
 
 	return {
 		assertCommittable: pair.assertCommittable,

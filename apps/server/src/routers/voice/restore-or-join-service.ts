@@ -1,5 +1,13 @@
 import type { TVoiceUserState } from '@sharkord/shared';
 import {
+	finishVoiceSessionAttemptObservation,
+	startVoiceSessionAttemptObservation,
+	type TVoiceSessionAttemptOutcome,
+	type TVoiceSessionAttemptPath,
+	type TVoiceSessionObserver,
+	type TVoiceTransportPairObserver,
+} from '../../voice-session-observability';
+import {
 	createVoiceSessionAttemptRegistry,
 	getVoiceSessionAttemptOwner,
 	type TVoiceSessionAttemptRegistry,
@@ -106,8 +114,13 @@ type TVoiceRestoreOrJoinServiceDependencies<TRuntime extends TVoiceRestoreRuntim
 	getPendingVoiceChannelIdsOwnedElsewhere: (userId: number, clientInstanceId?: string) => number[];
 	consumeReconnectLabBehavior: (userId: number) => TVoiceReconnectLabRestoreBehavior | undefined;
 	delay: (milliseconds: number) => Promise<void>;
-	prepareBootstrap: (options: { runtime: TRuntime; userId: number }) => Promise<TPreparedVoiceBootstrap<TBootstrap>>;
+	prepareBootstrap: (options: {
+		runtime: TRuntime;
+		userId: number;
+		pairObserver?: TVoiceTransportPairObserver;
+	}) => Promise<TPreparedVoiceBootstrap<TBootstrap>>;
 	attemptRegistry?: TVoiceSessionAttemptRegistry;
+	observer?: TVoiceSessionObserver;
 	logRestoreEvent: (event: TVoiceRestoreLogEvent, fields: Record<string, unknown>) => void;
 	logJoined: (userName: string, channelName: string) => void;
 };
@@ -141,170 +154,246 @@ const createVoiceRestoreOrJoinService = <TRuntime extends TVoiceRestoreRuntime, 
 		const { channelId, state, reconnectAttemptId, user, signal, context } = request;
 		const clientInstanceId = context.getClientInstanceId();
 		const attemptOwner = getVoiceSessionAttemptOwner(user.id, clientInstanceId, context.getOwnConnection()?.identity);
+		const observation = startVoiceSessionAttemptObservation(dependencies.observer, {
+			kind: 'restore',
+			reconnectAttemptId,
+			hasClientInstanceId: clientInstanceId !== undefined,
+		});
+		let path: TVoiceSessionAttemptPath = 'fresh';
+		let stage:
+			| 'resolving'
+			| 'preparing'
+			| 'final_checks'
+			| 'committing'
+			| 'membership'
+			| 'binding'
+			| 'presence'
+			| 'response' = 'resolving';
+		let ownershipTransferred = false;
 
-		return attemptRegistry.runLatest(attemptOwner, { kind: 'restore', signal }, async (attempt) => {
-			const { channel, runtime } = await context.resolveTarget(channelId);
-			attempt.assertCurrent();
+		try {
+			const result = await attemptRegistry.runLatest(attemptOwner, { kind: 'restore', signal }, async (attempt) => {
+				const { channel, runtime } = await context.resolveTarget(channelId);
+				attempt.assertCurrent();
 
-			const runtimeWithUser = dependencies.findRuntimeByUserId(user.id);
-			const ownConnection = context.getOwnConnection();
-			const otherActiveVoiceChannelIds = context.getUserConnections(user.id).flatMap((connection) => {
-				if (isSameVoiceClientSession(connection, ownConnection, clientInstanceId)) {
-					return [];
+				const runtimeWithUser = dependencies.findRuntimeByUserId(user.id);
+				const ownConnection = context.getOwnConnection();
+				const otherActiveVoiceChannelIds = context.getUserConnections(user.id).flatMap((connection) => {
+					if (isSameVoiceClientSession(connection, ownConnection, clientInstanceId)) {
+						return [];
+					}
+
+					return connection.currentVoiceChannelId === undefined ? [] : [connection.currentVoiceChannelId];
+				});
+				const otherPendingVoiceChannelIds = dependencies.getPendingVoiceChannelIdsOwnedElsewhere(
+					user.id,
+					clientInstanceId,
+				);
+				const activeChannelId = runtimeWithUser?.id ?? otherActiveVoiceChannelIds[0] ?? otherPendingVoiceChannelIds[0];
+				const hasOtherSessionInRequestedChannel =
+					otherActiveVoiceChannelIds.includes(channelId) || otherPendingVoiceChannelIds.includes(channelId);
+
+				dependencies.logRestoreEvent('attempt', {
+					hasClientInstanceId: clientInstanceId !== undefined,
+					hasActiveSession: activeChannelId !== undefined,
+				});
+
+				if (hasOtherSessionInRequestedChannel) {
+					logConflict(dependencies, clientInstanceId, VOICE_SESSION_OWNED_ELSEWHERE);
+					throw new VoiceRestoreConflictError(VOICE_SESSION_OWNED_ELSEWHERE);
 				}
 
-				return connection.currentVoiceChannelId === undefined ? [] : [connection.currentVoiceChannelId];
-			});
-			const otherPendingVoiceChannelIds = dependencies.getPendingVoiceChannelIdsOwnedElsewhere(
-				user.id,
-				clientInstanceId,
-			);
-			const activeChannelId = runtimeWithUser?.id ?? otherActiveVoiceChannelIds[0] ?? otherPendingVoiceChannelIds[0];
-			const hasOtherSessionInRequestedChannel =
-				otherActiveVoiceChannelIds.includes(channelId) || otherPendingVoiceChannelIds.includes(channelId);
+				if (activeChannelId !== undefined && activeChannelId !== channelId) {
+					logConflict(dependencies, clientInstanceId, VOICE_SESSION_WRONG_CHANNEL);
+					throw new VoiceRestoreConflictError(VOICE_SESSION_WRONG_CHANNEL);
+				}
 
-			dependencies.logRestoreEvent('attempt', {
-				reconnectAttemptId,
-				userId: user.id,
-				clientInstanceId,
-				requestedChannelId: channelId,
-				activeChannelId,
-			});
+				const reconnectLabBehavior = dependencies.consumeReconnectLabBehavior(user.id);
 
-			if (hasOtherSessionInRequestedChannel) {
-				logConflict(dependencies, request, clientInstanceId, channelId, VOICE_SESSION_OWNED_ELSEWHERE);
-				throw new VoiceRestoreConflictError(VOICE_SESSION_OWNED_ELSEWHERE);
-			}
+				if (reconnectLabBehavior?.delayMs) {
+					await dependencies.delay(reconnectLabBehavior.delayMs);
+					attempt.assertCurrent();
+				}
 
-			if (activeChannelId !== undefined && activeChannelId !== channelId) {
-				logConflict(dependencies, request, clientInstanceId, activeChannelId, VOICE_SESSION_WRONG_CHANNEL);
-				throw new VoiceRestoreConflictError(VOICE_SESSION_WRONG_CHANNEL);
-			}
+				if (reconnectLabBehavior?.closeWsCode) {
+					context.closeOwnConnection(
+						reconnectLabBehavior.closeWsCode,
+						reconnectLabBehavior.closeWsReason ?? 'voice reconnect lab',
+					);
 
-			const reconnectLabBehavior = dependencies.consumeReconnectLabBehavior(user.id);
+					throw new VoiceReconnectLabRestoreError('INTERNAL_SERVER_ERROR', 'VOICE_RECONNECT_LAB_SOCKET_CLOSED');
+				}
 
-			if (reconnectLabBehavior?.delayMs) {
-				await dependencies.delay(reconnectLabBehavior.delayMs);
+				if (reconnectLabBehavior?.failCode || reconnectLabBehavior?.failMessage) {
+					const failCode = reconnectLabBehavior.failCode ?? 'INTERNAL_SERVER_ERROR';
+
+					throw new VoiceReconnectLabRestoreError(
+						failCode,
+						reconnectLabBehavior.failMessage ?? getReconnectLabFailureMessage(failCode),
+					);
+				}
+
 				attempt.assertCurrent();
-			}
 
-			if (reconnectLabBehavior?.closeWsCode) {
-				context.closeOwnConnection(
-					reconnectLabBehavior.closeWsCode,
-					reconnectLabBehavior.closeWsReason ?? 'voice reconnect lab',
-				);
+				// Target and reconnect-lab work awaited above. A manual join can move the
+				// user during that window and must win instead of being double-seated.
+				const runtimeWithUserAfterAwaits = dependencies.findRuntimeByUserId(user.id);
 
-				throw new VoiceReconnectLabRestoreError('INTERNAL_SERVER_ERROR', 'VOICE_RECONNECT_LAB_SOCKET_CLOSED');
-			}
+				if (runtimeWithUserAfterAwaits && runtimeWithUserAfterAwaits.id !== channelId) {
+					logConflict(dependencies, clientInstanceId, VOICE_SESSION_WRONG_CHANNEL);
+					throw new VoiceRestoreConflictError(VOICE_SESSION_WRONG_CHANNEL);
+				}
 
-			if (reconnectLabBehavior?.failCode || reconnectLabBehavior?.failMessage) {
-				const failCode = reconnectLabBehavior.failCode ?? 'INTERNAL_SERVER_ERROR';
+				if (!runtimeWithUserAfterAwaits) {
+					path = 'fresh';
+					let preparedBootstrap: TPreparedVoiceBootstrap<TBootstrap> | undefined;
 
-				throw new VoiceReconnectLabRestoreError(
-					failCode,
-					reconnectLabBehavior.failMessage ?? getReconnectLabFailureMessage(failCode),
-				);
-			}
+					try {
+						stage = 'preparing';
+						preparedBootstrap = await dependencies.prepareBootstrap({
+							runtime,
+							userId: user.id,
+							pairObserver: observation.pairObserver,
+						});
+						stage = 'final_checks';
+						attempt.assertCurrent();
 
-			attempt.assertCurrent();
+						// Preparation is fallible and may take long enough for a manual join or
+						// another client to establish a seat. Recheck synchronously beside the
+						// currency assertion so this fresh attempt cannot replace that session.
+						const runtimeWithUserBeforeCommit = dependencies.findRuntimeByUserId(user.id);
 
-			// Target and reconnect-lab work awaited above. A manual join can move the
-			// user during that window and must win instead of being double-seated.
-			const runtimeWithUserAfterAwaits = dependencies.findRuntimeByUserId(user.id);
+						if (runtimeWithUserBeforeCommit) {
+							if (runtimeWithUserBeforeCommit.id !== channelId) {
+								logConflict(dependencies, clientInstanceId, VOICE_SESSION_WRONG_CHANNEL);
+								throw new VoiceRestoreConflictError(VOICE_SESSION_WRONG_CHANNEL);
+							}
 
-			if (runtimeWithUserAfterAwaits && runtimeWithUserAfterAwaits.id !== channelId) {
-				logConflict(
-					dependencies,
-					request,
-					clientInstanceId,
-					runtimeWithUserAfterAwaits.id,
-					VOICE_SESSION_WRONG_CHANNEL,
-				);
-				throw new VoiceRestoreConflictError(VOICE_SESSION_WRONG_CHANNEL);
-			}
+							const ownConnectionBeforeCommit = context.getOwnConnection();
+							const sessionOwnedElsewhere =
+								context
+									.getUserConnections(user.id)
+									.some(
+										(connection) =>
+											!isSameVoiceClientSession(connection, ownConnectionBeforeCommit, clientInstanceId) &&
+											connection.currentVoiceChannelId === channelId,
+									) ||
+								dependencies.getPendingVoiceChannelIdsOwnedElsewhere(user.id, clientInstanceId).includes(channelId);
 
-			if (!runtimeWithUserAfterAwaits) {
+							if (sessionOwnedElsewhere) {
+								logConflict(dependencies, clientInstanceId, VOICE_SESSION_OWNED_ELSEWHERE);
+								throw new VoiceRestoreConflictError(VOICE_SESSION_OWNED_ELSEWHERE);
+							}
+
+							// A same-client manual join completed while this request prepared. It
+							// must win even though it does not participate in this attempt registry.
+							throw new VoiceSessionAttemptSupersededError();
+						}
+
+						// There is deliberately no await from the final currency/seat checks
+						// through transport, membership, binding, and presence publication.
+						preparedBootstrap.assertCommittable();
+						stage = 'committing';
+						preparedBootstrap.commit();
+						ownershipTransferred = true;
+						stage = 'membership';
+						runtime.addUser(user.id, state);
+
+						const sessionIdentity = runtime.getVoiceSessionIdentity(user.id);
+
+						if (sessionIdentity === undefined) {
+							throw new Error('Fresh voice restore did not create a session incarnation');
+						}
+
+						const currentState = runtime.getUserState(user.id);
+						stage = 'binding';
+						context.bindVoiceSession(channel.id, sessionIdentity.incarnation);
+						stage = 'presence';
+						context.publishPresence({
+							type: 'join',
+							channelId,
+							userId: user.id,
+							state: currentState,
+							reconnecting: true,
+						});
+						dependencies.logJoined(user.name, channel.name);
+
+						stage = 'response';
+						const bootstrap = preparedBootstrap.buildCommittedResponse();
+
+						dependencies.logRestoreEvent('outcome', {
+							outcome: 'joined',
+						});
+
+						return bootstrap;
+					} finally {
+						if (preparedBootstrap && !ownershipTransferred) {
+							await preparedBootstrap.dispose();
+						}
+					}
+				}
+
+				path = 'existing';
+				const reconciliation = runtime.reconcileVoiceRestoreState(user.id, state);
+
+				if (!reconciliation) {
+					throw new VoiceSessionAttemptSupersededError();
+				}
+
 				let preparedBootstrap: TPreparedVoiceBootstrap<TBootstrap> | undefined;
-				let ownershipTransferred = false;
 
 				try {
+					if (
+						reconciliation.previousState.micMuted !== state.micMuted ||
+						reconciliation.previousState.soundMuted !== state.soundMuted
+					) {
+						context.publishPresence({
+							type: 'state-update',
+							channelId,
+							userId: user.id,
+							state: reconciliation.currentState,
+						});
+					}
+
+					stage = 'preparing';
 					preparedBootstrap = await dependencies.prepareBootstrap({
 						runtime,
 						userId: user.id,
+						pairObserver: observation.pairObserver,
 					});
+					stage = 'final_checks';
 					attempt.assertCurrent();
 
-					// Preparation is fallible and may take long enough for a manual join or
-					// another client to establish a seat. Recheck synchronously beside the
-					// currency assertion so this fresh attempt cannot replace that session.
 					const runtimeWithUserBeforeCommit = dependencies.findRuntimeByUserId(user.id);
 
-					if (runtimeWithUserBeforeCommit) {
-						if (runtimeWithUserBeforeCommit.id !== channelId) {
-							logConflict(
-								dependencies,
-								request,
-								clientInstanceId,
-								runtimeWithUserBeforeCommit.id,
-								VOICE_SESSION_WRONG_CHANNEL,
-							);
+					if (
+						runtimeWithUserBeforeCommit !== runtime ||
+						!runtime.isVoiceSessionIdentityCurrent(user.id, reconciliation.sessionIdentity)
+					) {
+						if (runtimeWithUserBeforeCommit && runtimeWithUserBeforeCommit.id !== channelId) {
+							logConflict(dependencies, clientInstanceId, VOICE_SESSION_WRONG_CHANNEL);
 							throw new VoiceRestoreConflictError(VOICE_SESSION_WRONG_CHANNEL);
 						}
 
-						const ownConnectionBeforeCommit = context.getOwnConnection();
-						const sessionOwnedElsewhere =
-							context
-								.getUserConnections(user.id)
-								.some(
-									(connection) =>
-										!isSameVoiceClientSession(connection, ownConnectionBeforeCommit, clientInstanceId) &&
-										connection.currentVoiceChannelId === channelId,
-								) ||
-							dependencies.getPendingVoiceChannelIdsOwnedElsewhere(user.id, clientInstanceId).includes(channelId);
-
-						if (sessionOwnedElsewhere) {
-							logConflict(dependencies, request, clientInstanceId, channelId, VOICE_SESSION_OWNED_ELSEWHERE);
-							throw new VoiceRestoreConflictError(VOICE_SESSION_OWNED_ELSEWHERE);
-						}
-
-						// A same-client manual join completed while this request prepared. It
-						// must win even though it does not participate in this attempt registry.
 						throw new VoiceSessionAttemptSupersededError();
 					}
 
-					// There is deliberately no await from the final currency/seat checks
-					// through transport, membership, binding, and presence publication.
+					// There is deliberately no await from the final attempt and session
+					// checks through pair installation and binding.
 					preparedBootstrap.assertCommittable();
+					stage = 'committing';
 					preparedBootstrap.commit();
 					ownershipTransferred = true;
-					runtime.addUser(user.id, state);
 
-					const sessionIdentity = runtime.getVoiceSessionIdentity(user.id);
+					// Binding also clears disconnect grace in the production adapter.
+					stage = 'binding';
+					context.bindVoiceSession(channel.id, reconciliation.sessionIdentity.incarnation);
 
-					if (sessionIdentity === undefined) {
-						throw new Error('Fresh voice restore did not create a session incarnation');
-					}
-
-					const currentState = runtime.getUserState(user.id);
-					context.bindVoiceSession(channel.id, sessionIdentity.incarnation);
-					context.publishPresence({
-						type: 'join',
-						channelId,
-						userId: user.id,
-						state: currentState,
-						reconnecting: true,
-					});
-					dependencies.logJoined(user.name, channel.name);
-
+					stage = 'response';
 					const bootstrap = preparedBootstrap.buildCommittedResponse();
 
 					dependencies.logRestoreEvent('outcome', {
-						reconnectAttemptId,
-						userId: user.id,
-						clientInstanceId,
-						requestedChannelId: channelId,
-						activeChannelId: channelId,
-						outcome: 'joined',
+						outcome: 'restored',
 					});
 
 					return bootstrap;
@@ -313,86 +402,55 @@ const createVoiceRestoreOrJoinService = <TRuntime extends TVoiceRestoreRuntime, 
 						await preparedBootstrap.dispose();
 					}
 				}
-			}
-
-			const reconciliation = runtime.reconcileVoiceRestoreState(user.id, state);
-
-			if (!reconciliation) {
-				throw new VoiceSessionAttemptSupersededError();
-			}
-
-			let preparedBootstrap: TPreparedVoiceBootstrap<TBootstrap> | undefined;
-			let ownershipTransferred = false;
-
-			try {
-				if (
-					reconciliation.previousState.micMuted !== state.micMuted ||
-					reconciliation.previousState.soundMuted !== state.soundMuted
-				) {
-					context.publishPresence({
-						type: 'state-update',
-						channelId,
-						userId: user.id,
-						state: reconciliation.currentState,
-					});
-				}
-
-				preparedBootstrap = await dependencies.prepareBootstrap({
-					runtime,
-					userId: user.id,
-				});
-				attempt.assertCurrent();
-
-				const runtimeWithUserBeforeCommit = dependencies.findRuntimeByUserId(user.id);
-
-				if (
-					runtimeWithUserBeforeCommit !== runtime ||
-					!runtime.isVoiceSessionIdentityCurrent(user.id, reconciliation.sessionIdentity)
-				) {
-					if (runtimeWithUserBeforeCommit && runtimeWithUserBeforeCommit.id !== channelId) {
-						logConflict(
-							dependencies,
-							request,
-							clientInstanceId,
-							runtimeWithUserBeforeCommit.id,
-							VOICE_SESSION_WRONG_CHANNEL,
-						);
-						throw new VoiceRestoreConflictError(VOICE_SESSION_WRONG_CHANNEL);
-					}
-
-					throw new VoiceSessionAttemptSupersededError();
-				}
-
-				// There is deliberately no await from the final attempt and session
-				// checks through pair installation and binding.
-				preparedBootstrap.assertCommittable();
-				preparedBootstrap.commit();
-				ownershipTransferred = true;
-
-				// Binding also clears disconnect grace in the production adapter.
-				context.bindVoiceSession(channel.id, reconciliation.sessionIdentity.incarnation);
-
-				const bootstrap = preparedBootstrap.buildCommittedResponse();
-
-				dependencies.logRestoreEvent('outcome', {
-					reconnectAttemptId,
-					userId: user.id,
-					clientInstanceId,
-					requestedChannelId: channelId,
-					activeChannelId: channelId,
-					outcome: 'restored',
-				});
-
-				return bootstrap;
-			} finally {
-				if (preparedBootstrap && !ownershipTransferred) {
-					await preparedBootstrap.dispose();
-				}
-			}
-		});
+			});
+			finishVoiceSessionAttemptObservation(observation, { path, outcome: 'succeeded' });
+			return result;
+		} catch (error) {
+			finishVoiceSessionAttemptObservation(observation, {
+				path,
+				outcome: classifyRestoreObservationOutcome(error, ownershipTransferred, stage),
+				error,
+			});
+			throw error;
+		}
 	};
 
 	return { restoreOrJoin };
+};
+
+const classifyRestoreObservationOutcome = (
+	error: unknown,
+	ownershipTransferred: boolean,
+	stage: 'resolving' | 'preparing' | 'final_checks' | 'committing' | 'membership' | 'binding' | 'presence' | 'response',
+): TVoiceSessionAttemptOutcome => {
+	if (error instanceof VoiceSessionAttemptCancelledError) {
+		return 'cancelled';
+	}
+	if (error instanceof VoiceSessionAttemptSupersededError) {
+		return 'superseded';
+	}
+	if (error instanceof VoiceRestoreConflictError) {
+		return 'conflict';
+	}
+	if (!ownershipTransferred) {
+		return stage === 'preparing' ? 'preparation_failed' : 'precommit_failed';
+	}
+
+	switch (stage) {
+		case 'membership':
+			return 'postcommit_membership_failed';
+		case 'binding':
+			return 'postcommit_binding_failed';
+		case 'presence':
+			return 'postcommit_presence_failed';
+		case 'response':
+			return 'postcommit_response_failed';
+		case 'resolving':
+		case 'preparing':
+		case 'final_checks':
+		case 'committing':
+			return 'precommit_failed';
+	}
 };
 
 const isSameVoiceClientSession = (
@@ -413,17 +471,11 @@ const isSameVoiceClientSession = (
 
 const logConflict = <TRuntime extends TVoiceRestoreRuntime, TBootstrap>(
 	dependencies: TVoiceRestoreOrJoinServiceDependencies<TRuntime, TBootstrap>,
-	request: TVoiceRestoreOrJoinRequest<TRuntime>,
 	clientInstanceId: string | undefined,
-	activeChannelId: number,
 	reason: TVoiceRestoreConflictReason,
 ) => {
 	dependencies.logRestoreEvent('conflict', {
-		reconnectAttemptId: request.reconnectAttemptId,
-		userId: request.user.id,
-		clientInstanceId,
-		requestedChannelId: request.channelId,
-		activeChannelId,
+		hasClientInstanceId: clientInstanceId !== undefined,
 		reason,
 	});
 };

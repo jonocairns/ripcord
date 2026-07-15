@@ -109,6 +109,10 @@ const createHarness = () => {
 	const order: string[] = [];
 	const events: TVoiceJoinPresenceEvent[] = [];
 	const stats = { commits: 0, disposals: 0, responses: 0 };
+	const observations: {
+		pairs: unknown[];
+		finishes: unknown[];
+	} = { pairs: [], finishes: [] };
 	let binding: TVoiceJoinBinding = {};
 	let latestMutationSeq: number | undefined;
 	let preparationAttempt = 0;
@@ -148,13 +152,14 @@ const createHarness = () => {
 		findRuntimeByChannelId: (channelId) => runtimes.get(channelId),
 		findRuntimeByUserId: (userId) => [...runtimes.values()].find((runtime) => runtime.hasUser(userId)),
 		attemptRegistry,
-		prepareBootstrap: async ({ runtime, userId }) => {
+		prepareBootstrap: async ({ runtime, userId, pairObserver }) => {
 			preparationAttempt += 1;
 			const attempt = preparationAttempt;
 			let state: 'prepared' | 'committed' | 'disposed' = 'prepared';
 			order.push(`prepare:${attempt}:start`);
 			await Promise.all([controls.prepareProducer(attempt), controls.prepareConsumer(attempt)]);
 			await controls.beforePreparationReturn(attempt);
+			pairObserver?.({ outcome: 'prepared' });
 
 			return {
 				assertCommittable: () => {
@@ -168,6 +173,7 @@ const createHarness = () => {
 					}
 
 					state = 'committed';
+					pairObserver?.({ outcome: 'committed' });
 					stats.commits += 1;
 					order.push(`prepare:${attempt}:commit`);
 					controls.onCommit(attempt);
@@ -178,6 +184,7 @@ const createHarness = () => {
 					}
 
 					state = 'disposed';
+					pairObserver?.({ outcome: 'disposed', cause: 'request_cleanup' });
 					stats.disposals += 1;
 					order.push(`prepare:${attempt}:dispose`);
 				},
@@ -188,6 +195,12 @@ const createHarness = () => {
 					return { attempt, joined: runtime.hasUser(userId) };
 				},
 			};
+		},
+		observer: {
+			startAttempt: () => ({
+				pairObserver: (event) => observations.pairs.push(event),
+				finish: (result) => observations.finishes.push(result),
+			}),
 		},
 		logJoined: () => order.push('log:joined'),
 		logReplaced: () => order.push('log:replaced'),
@@ -245,6 +258,7 @@ const createHarness = () => {
 		order,
 		events,
 		stats,
+		observations,
 		primaryRuntime,
 		secondaryRuntime,
 		getBinding: () => binding,
@@ -264,6 +278,10 @@ describe('voice join service', () => {
 		expect(harness.primaryRuntime.hasUser(1)).toBe(true);
 		expect(harness.stats).toEqual({ commits: 1, disposals: 0, responses: 1 });
 		expect(harness.events.map((event) => event.type)).toEqual(['join']);
+		expect(harness.observations).toEqual({
+			pairs: [{ outcome: 'prepared' }, { outcome: 'committed' }],
+			finishes: [{ path: 'fresh', outcome: 'succeeded' }],
+		});
 		expect(harness.order).toEqual([
 			'target',
 			'prepare:1:start',
@@ -375,6 +393,10 @@ describe('voice join service', () => {
 		);
 		expect(responseHarness.primaryRuntime.hasUser(1)).toBe(true);
 		expect(responseHarness.stats).toEqual({ commits: 1, disposals: 0, responses: 1 });
+		expect(responseHarness.observations).toEqual({
+			pairs: [{ outcome: 'prepared' }, { outcome: 'committed' }],
+			finishes: [{ path: 'fresh', outcome: 'postcommit_response_failed', error: responseFailure }],
+		});
 	});
 
 	test('does not let a later background restore supersede an active manual join', async () => {

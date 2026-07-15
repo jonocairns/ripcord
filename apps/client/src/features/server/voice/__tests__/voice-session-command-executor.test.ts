@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { VoiceReconnectTimeoutError } from '../reconnect-policy';
 import {
 	createVoiceSessionCommandExecutor,
 	type TVoiceSessionCommandExecutor,
+	type TVoiceSessionCommandObservationContext,
+	type TVoiceSessionCommandOutcome,
 	type TVoiceSessionExecutorPorts,
 } from '../voice-session-command-executor';
 import {
@@ -130,6 +133,34 @@ const createFakePorts = (overrides: Partial<TVoiceSessionExecutorPorts> = {}): T
 	reportRestoreDetached: () => {},
 	...overrides,
 });
+
+type TRecordedCommandOutcome = {
+	context: TVoiceSessionCommandObservationContext;
+	outcome: TVoiceSessionCommandOutcome;
+	durationMs: number;
+	error?: unknown;
+};
+
+const createRecordingCommandObserver = () => {
+	const started: TVoiceSessionCommandObservationContext[] = [];
+	const finished: TRecordedCommandOutcome[] = [];
+
+	return {
+		observer: {
+			start: (context: TVoiceSessionCommandObservationContext) => {
+				started.push(context);
+				return {
+					run: <T>(effect: () => T): T => effect(),
+					finish: (result: Omit<TRecordedCommandOutcome, 'context'>) => {
+						finished.push({ context, ...result });
+					},
+				};
+			},
+		},
+		started,
+		finished,
+	};
+};
 
 // Drives the machine to a live RebuildTransports command without any runner
 // registered, returning the command so tests control when/how it executes.
@@ -316,8 +347,166 @@ describe('voice session command executor', () => {
 		expect(phase.snapshot).toEqual(emptySnapshot);
 	});
 
+	it('observes one successful outcome with injected duration and safe command metadata', async () => {
+		let now = 100;
+		const commandObserver = createRecordingCommandObserver();
+		const [snapshotCommand] = dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+
+		if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
+			throw new Error('expected CaptureRecoverySnapshot command');
+		}
+
+		const executor = createExecutor(
+			createFakePorts({
+				now: () => now,
+				commandObserver: commandObserver.observer,
+				captureRecoverySnapshot: () => {
+					now = 125;
+					return emptySnapshot;
+				},
+			}),
+		);
+
+		executor.execute([snapshotCommand]);
+		await flushMicrotasks();
+
+		expect(commandObserver.finished).toEqual([
+			{
+				context: {
+					commandType: 'CaptureRecoverySnapshot',
+					commandId: snapshotCommand.commandId,
+					generation: snapshotCommand.generation,
+					phase: 'rebuilding',
+				},
+				outcome: 'succeeded',
+				durationMs: 25,
+			},
+		]);
+	});
+
+	it('observes expiry without waiting on wall-clock time', async () => {
+		const commandObserver = createRecordingCommandObserver();
+		const waitCommand = startOnlineWait();
+		const executor = createExecutor(
+			createFakePorts({
+				now: () => pendingReconnect.expiresAt + 1,
+				isOnline: () => false,
+				commandObserver: commandObserver.observer,
+			}),
+		);
+
+		executor.execute([waitCommand]);
+		await flushMicrotasks();
+
+		expect(commandObserver.finished).toEqual([
+			expect.objectContaining({
+				context: expect.objectContaining({ commandType: 'WaitOnline', phase: 'waiting_online' }),
+				outcome: 'expired',
+			}),
+		]);
+	});
+
+	it('finishes a disposed final command as cancelled and ignores its late settlement', async () => {
+		const commandObserver = createRecordingCommandObserver();
+		const recovery = createDeferred<void>();
+		const rebuildCommand = startRebuild();
+		const [recoverCommand] = dispatchVoiceSession({
+			type: 'RebuildSucceeded',
+			commandId: rebuildCommand.commandId,
+			generation: rebuildCommand.generation,
+		});
+
+		if (recoverCommand?.type !== 'RecoverDesktopAppAudio') {
+			throw new Error('expected RecoverDesktopAppAudio command');
+		}
+
+		const executor = createExecutor(
+			createFakePorts({
+				commandObserver: commandObserver.observer,
+				recoverDesktopAppAudio: () => recovery.promise,
+			}),
+		);
+		executor.execute([recoverCommand]);
+		executor.dispose();
+
+		expect(commandObserver.finished).toEqual([
+			expect.objectContaining({
+				context: expect.objectContaining({
+					commandType: 'RecoverDesktopAppAudio',
+					phase: 'connected_finalization',
+				}),
+				outcome: 'cancelled',
+			}),
+		]);
+
+		recovery.resolve();
+		await flushMicrotasks();
+		expect(commandObserver.finished).toHaveLength(1);
+	});
+
+	it('observes a final port rejection as failed exactly once', async () => {
+		const commandObserver = createRecordingCommandObserver();
+		const failure = new Error('desktop recovery failed');
+		const rebuildCommand = startRebuild();
+		const [recoverCommand] = dispatchVoiceSession({
+			type: 'RebuildSucceeded',
+			commandId: rebuildCommand.commandId,
+			generation: rebuildCommand.generation,
+		});
+
+		if (recoverCommand?.type !== 'RecoverDesktopAppAudio') {
+			throw new Error('expected RecoverDesktopAppAudio command');
+		}
+
+		const executor = createExecutor(
+			createFakePorts({
+				commandObserver: commandObserver.observer,
+				recoverDesktopAppAudio: () => Promise.reject(failure),
+			}),
+		);
+		executor.execute([recoverCommand]);
+		await flushMicrotasks();
+
+		expect(commandObserver.finished).toEqual([expect.objectContaining({ outcome: 'failed', error: failure })]);
+	});
+
+	it('contains observer failures without skipping or duplicating the command effect', async () => {
+		const [snapshotCommand] = dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
+		let captureCalls = 0;
+
+		if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
+			throw new Error('expected CaptureRecoverySnapshot command');
+		}
+
+		const executor = createExecutor(
+			createFakePorts({
+				captureRecoverySnapshot: () => {
+					captureCalls += 1;
+					return emptySnapshot;
+				},
+				commandObserver: {
+					start: () => ({
+						run: () => {
+							throw new Error('observer run failed');
+						},
+						finish: () => {
+							throw new Error('observer finish failed');
+						},
+					}),
+				},
+			}),
+		);
+
+		executor.execute([snapshotCommand]);
+		await flushMicrotasks();
+
+		expect(captureCalls).toBe(1);
+		expect(getVoiceSessionState().phase).toMatchObject({ phase: 'rebuilding', snapshot: emptySnapshot });
+	});
+
 	it('does not start a stale command', () => {
 		const rebuildCommand = startRebuild();
+		const commandObserver = createRecordingCommandObserver();
 
 		// The machine moved on before the command could run (terminal teardown).
 		dispatchVoiceSession({ type: 'Terminated', reason: 'kicked', channelId: 5 });
@@ -325,6 +514,7 @@ describe('voice session command executor', () => {
 		let rebuildCalls = 0;
 		const executor = createExecutor(
 			createFakePorts({
+				commandObserver: commandObserver.observer,
 				rebuildTransports: () => {
 					rebuildCalls += 1;
 					return Promise.resolve();
@@ -335,14 +525,17 @@ describe('voice session command executor', () => {
 		executor.execute([rebuildCommand]);
 
 		expect(rebuildCalls).toBe(0);
+		expect(commandObserver.started).toEqual([]);
 	});
 
 	it('aborts a superseded rebuild before its queued replacement starts', async () => {
+		const commandObserver = createRecordingCommandObserver();
 		const order: string[] = [];
 		const rebuildDeferreds: Array<TDeferred<void>> = [];
 		const startedRebuilds: Array<Extract<TVoiceSessionCommand, { type: 'RebuildTransports' }>> = [];
 		const executor = createExecutor(
 			createFakePorts({
+				commandObserver: commandObserver.observer,
 				rebuildTransports: (command, context) => {
 					const deferred = createDeferred<void>();
 
@@ -395,6 +588,9 @@ describe('voice session command executor', () => {
 				`start:${firstRebuild.commandId}`,
 				`abort:${firstRebuild.commandId}`,
 				`start:${secondRebuild.commandId}`,
+			]);
+			expect(commandObserver.finished.filter(({ context }) => context.commandId === firstRebuild.commandId)).toEqual([
+				expect.objectContaining({ outcome: 'superseded' }),
 			]);
 		} finally {
 			unregister();
@@ -927,11 +1123,13 @@ describe('voice session command executor', () => {
 
 	it('detaches a permanently pending cancelled restore and releases the queued retry', async () => {
 		const scheduler = createFakeScheduler();
+		const commandObserver = createRecordingCommandObserver();
 		const restoreRequests: Array<TDeferred<{ serverSessionEstablished: boolean }>> = [];
 		const startedCommands: Array<Extract<TVoiceSessionCommand, { type: 'RestoreVoiceSession' }>> = [];
 		const detachedCommandIds: number[] = [];
 		const executor = createExecutor(
 			createFakePorts({
+				commandObserver: commandObserver.observer,
 				now: scheduler.now,
 				delay: scheduler.delay,
 				random: () => 0.5,
@@ -967,6 +1165,18 @@ describe('voice session command executor', () => {
 			await scheduler.advanceBy(1_000);
 
 			expect(detachedCommandIds).toEqual([startedCommands[0]?.commandId]);
+			expect(commandObserver.finished).toContainEqual({
+				context: {
+					commandType: 'RestoreVoiceSession',
+					commandId: startedCommands[0]?.commandId,
+					generation: startedCommands[0]?.generation,
+					phase: 'restoring',
+					attempt: 1,
+				},
+				outcome: 'detached',
+				durationMs: 14_000,
+				error: expect.any(VoiceReconnectTimeoutError),
+			});
 			expect(startedCommands).toHaveLength(2);
 		} finally {
 			unregister();

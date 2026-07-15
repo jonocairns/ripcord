@@ -24,6 +24,20 @@ type TSentrySpanOptions = {
 	attributes?: Record<string, string | number | boolean | undefined>;
 };
 
+type TSentrySpanObservation = {
+	run: <T>(effect: () => T) => T;
+	finish: (options: {
+		attributes?: Record<string, string | number | boolean | undefined>;
+		status: 'ok' | 'error';
+		statusMessage: string;
+	}) => void;
+};
+
+const noOpSentrySpanObservation: TSentrySpanObservation = {
+	run: <T>(effect: () => T): T => effect(),
+	finish: () => {},
+};
+
 const capturedErrors = new WeakSet<object>();
 
 let initialized = false;
@@ -263,4 +277,35 @@ const traceSentrySpan = <T>({ name, op, attributes }: TSentrySpanOptions, callba
 	);
 };
 
-export { configureClientErrorReporting, getRuntimeTag, reportErrorToSentry, setSentryUser, traceSentrySpan };
+const startSentrySpanObservation = ({ name, op, attributes }: TSentrySpanOptions): TSentrySpanObservation => {
+	if (!Sentry.isEnabled()) {
+		return noOpSentrySpanObservation;
+	}
+
+	const span = Sentry.startInactiveSpan({ name, op, attributes });
+	let finished = false;
+
+	return {
+		run: <T>(effect: () => T): T => Sentry.withActiveSpan(span, effect),
+		finish: ({ attributes: finalAttributes, status, statusMessage }) => {
+			if (finished) {
+				return;
+			}
+
+			finished = true;
+			span.setAttributes(finalAttributes ?? {});
+			span.setStatus({ code: status === 'ok' ? 1 : 2, message: statusMessage });
+			span.end();
+		},
+	};
+};
+
+export type { TSentrySpanObservation };
+export {
+	configureClientErrorReporting,
+	getRuntimeTag,
+	reportErrorToSentry,
+	setSentryUser,
+	startSentrySpanObservation,
+	traceSentrySpan,
+};

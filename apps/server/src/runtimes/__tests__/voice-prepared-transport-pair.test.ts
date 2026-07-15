@@ -8,6 +8,7 @@ import {
 	VoiceRestoreAttemptSupersededServiceError,
 } from '../../routers/voice/restore-or-join-service';
 import { pubsub } from '../../utils/pubsub';
+import type { TVoiceTransportPairObservationEvent } from '../../voice-session-observability';
 import { VoiceRuntime } from '../voice';
 
 const CHANNEL_BASE = 98_000;
@@ -277,6 +278,43 @@ describe('VoiceRuntime prepared transport pairs', () => {
 		expect(consumer.closeCalls).toBe(0);
 
 		await preparedPair.dispose();
+	});
+
+	test('observes prepared and committed exactly at the ownership transfer boundary', async () => {
+		const runtime = makeRuntime();
+		const producer = makeControlledTransport('prepared-producer');
+		const consumer = makeControlledTransport('prepared-consumer');
+		const observations: TVoiceTransportPairObservationEvent[] = [];
+		useTransportAllocations(runtime, [resolvedAllocation(producer), resolvedAllocation(consumer)]);
+
+		const pair = await runtime.prepareTransportPair(1, (event) => observations.push(event));
+		expect(observations).toEqual([{ outcome: 'prepared' }]);
+
+		pair.commit();
+		await pair.dispose();
+
+		expect(observations).toEqual([{ outcome: 'prepared' }, { outcome: 'committed' }]);
+		expect(runtime.getProducerTransport(1)).toBe(producer.transport);
+		expect(runtime.getConsumerTransport(1)).toBe(consumer.transport);
+	});
+
+	test('observes runtime-owned disposal while allocation is still pending', async () => {
+		const runtime = makeRuntime();
+		const producerAllocation = createDeferred<TControlledTransport>();
+		const consumerAllocation = createDeferred<TControlledTransport>();
+		const producer = makeControlledTransport('prepared-producer');
+		const consumer = makeControlledTransport('late-consumer');
+		const observations: TVoiceTransportPairObservationEvent[] = [];
+		useTransportAllocations(runtime, [producerAllocation.promise, consumerAllocation.promise]);
+		const preparation = runtime.prepareTransportPair(1, (event) => observations.push(event));
+
+		producerAllocation.resolve(producer);
+		await Promise.resolve();
+		await runtime.destroy();
+		consumerAllocation.resolve(consumer);
+
+		await expect(preparation).rejects.toThrow('Voice transport pair is disposed');
+		expect(observations).toEqual([{ outcome: 'disposed', cause: 'runtime_destroyed' }]);
 	});
 
 	test('producer allocation failure closes a consumer that completes later', async () => {

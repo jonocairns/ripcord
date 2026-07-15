@@ -28,6 +28,9 @@ const createRefBackedExecutorPorts = (getPorts: TVoiceSessionExecutorPortsSource
 	reportRebuildDetached: (command) => getPorts().reportRebuildDetached(command),
 	reportRebuildTerminalFailure: (command, error) => getPorts().reportRebuildTerminalFailure(command, error),
 	reportRestoreDetached: (command) => getPorts().reportRestoreDetached(command),
+	commandObserver: {
+		start: (context) => getPorts().commandObserver?.start(context) ?? { run: (effect) => effect(), finish: () => {} },
+	},
 });
 
 // The imperative mount seam keeps lifecycle behavior testable with the real
