@@ -1,24 +1,18 @@
 #!/usr/bin/env bun
-import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
-import {
-	type CallExpression,
-	type ExportedDeclarations,
-	Node,
-	Project,
-	type SourceFile,
-} from "ts-morph";
-import { findRepoRoot, loadReviewConfig } from "./common";
+import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { type CallExpression, type ExportedDeclarations, Node, Project, type SourceFile } from 'ts-morph';
+import { findRepoRoot, loadReviewConfig } from './common';
 
-interface CallerLocation {
+interface ReferenceLocation {
 	file: string;
 	line: number;
 }
 
 interface CallShape {
 	// How many references appear in callee position (i.e. `symbol(...)` rather
-	// than being passed as a value). May be lower than callerCount when the
+	// than being passed as a value). May be lower than referenceCount when the
 	// symbol is also imported as a type or stored in a variable.
 	calleeCount: number;
 	// Of those, how many have an object-literal as their first argument — the
@@ -31,10 +25,14 @@ interface CallShape {
 interface SymbolImpact {
 	name: string;
 	kind: string;
-	callerCount: number;
-	callers: CallerLocation[];
-	truncated: boolean;
+	referenceCount: number;
+	references: ReferenceLocation[];
+	referencesTruncated: boolean;
+	callCount: number;
+	calls: ReferenceLocation[];
+	callsTruncated: boolean;
 	shape?: CallShape;
+	resolutionError?: string;
 }
 
 interface FileImpact {
@@ -52,12 +50,12 @@ interface ImpactReport {
 	summary: {
 		totalFiles: number;
 		totalSymbols: number;
-		totalCallers: number;
-		highImpactSymbols: { file: string; symbol: string; callers: number }[];
+		totalReferences: number;
+		highImpactSymbols: { file: string; symbol: string; references: number }[];
 	};
 }
 
-const MAX_CALLERS_PER_SYMBOL = 25;
+const MAX_LOCATIONS_PER_SYMBOL = 25;
 const HIGH_IMPACT_THRESHOLD = 10;
 
 function findNearestTsconfig(
@@ -66,7 +64,7 @@ function findNearestTsconfig(
 	config: ReturnType<typeof loadReviewConfig>,
 ): string | null {
 	let cur = dirname(resolve(filePath));
-	while (cur.startsWith(repoRoot) && cur !== "/") {
+	while (cur.startsWith(repoRoot) && cur !== '/') {
 		for (const configName of config.typescript.preferredTsconfigNames) {
 			const candidate = resolve(cur, configName);
 			if (existsSync(candidate)) return candidate;
@@ -77,26 +75,26 @@ function findNearestTsconfig(
 	return existsSync(rootCandidate) ? rootCandidate : null;
 }
 
-function parseArgs(argv: string[]): { files: string[]; pr: number | null; format: "json" | "markdown" } {
+function parseArgs(argv: string[]): { files: string[]; pr: number | null; format: 'json' | 'markdown' } {
 	const files: string[] = [];
 	let pr: number | null = null;
-	let format: "json" | "markdown" = "json";
+	let format: 'json' | 'markdown' = 'json';
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
-		if (arg === "--pr") {
+		if (arg === '--pr') {
 			const next = argv[++i];
-			if (!next) throw new Error("--pr requires a value");
+			if (!next) throw new Error('--pr requires a value');
 			pr = Number.parseInt(next, 10);
-			if (Number.isNaN(pr)) throw new Error("--pr must be a number");
-		} else if (arg === "--files") {
+			if (Number.isNaN(pr)) throw new Error('--pr must be a number');
+		} else if (arg === '--files') {
 			const next = argv[++i];
-			if (!next) throw new Error("--files requires a value");
-			for (const f of next.split(",")) files.push(f.trim());
-		} else if (arg === "--format") {
+			if (!next) throw new Error('--files requires a value');
+			for (const f of next.split(',')) files.push(f.trim());
+		} else if (arg === '--format') {
 			const next = argv[++i];
-			if (next !== "json" && next !== "markdown") throw new Error("--format must be json|markdown");
+			if (next !== 'json' && next !== 'markdown') throw new Error('--format must be json|markdown');
 			format = next;
-		} else if (arg && !arg.startsWith("--")) {
+		} else if (arg && !arg.startsWith('--')) {
 			files.push(arg);
 		}
 	}
@@ -104,8 +102,11 @@ function parseArgs(argv: string[]): { files: string[]; pr: number | null; format
 }
 
 function getChangedFilesFromPr(pr: number): string[] {
-	const out = execSync(`gh pr diff ${pr} --name-only`, { encoding: "utf8" });
-	return out.split("\n").map((s) => s.trim()).filter(Boolean);
+	const out = execSync(`gh pr diff ${pr} --name-only`, { encoding: 'utf8' });
+	return out
+		.split('\n')
+		.map((s) => s.trim())
+		.filter(Boolean);
 }
 
 function isAnalyzable(file: string): boolean {
@@ -148,26 +149,23 @@ function extractObjectLiteralKeys(call: CallExpression): string[] | null {
 			const name = p.getName();
 			if (name) keys.push(name);
 		} else if (Node.isSpreadAssignment(p)) {
-			keys.push("...spread");
+			keys.push('...spread');
 		}
 	}
 	return keys;
 }
 
 function declarationKind(decl: Node): string {
-	if (Node.isFunctionDeclaration(decl)) return "function";
-	if (Node.isClassDeclaration(decl)) return "class";
-	if (Node.isInterfaceDeclaration(decl)) return "interface";
-	if (Node.isTypeAliasDeclaration(decl)) return "type";
-	if (Node.isEnumDeclaration(decl)) return "enum";
-	if (Node.isVariableDeclaration(decl)) return "variable";
+	if (Node.isFunctionDeclaration(decl)) return 'function';
+	if (Node.isClassDeclaration(decl)) return 'class';
+	if (Node.isInterfaceDeclaration(decl)) return 'interface';
+	if (Node.isTypeAliasDeclaration(decl)) return 'type';
+	if (Node.isEnumDeclaration(decl)) return 'enum';
+	if (Node.isVariableDeclaration(decl)) return 'variable';
 	return decl.getKindName();
 }
 
-function analyzeFile(
-	sourceFile: SourceFile,
-	repoRoot: string,
-): SymbolImpact[] {
+export function analyzeFile(sourceFile: SourceFile, repoRoot: string): SymbolImpact[] {
 	const exports = sourceFile.getExportedDeclarations();
 	const out: SymbolImpact[] = [];
 	const sourceFilePath = sourceFile.getFilePath();
@@ -175,12 +173,16 @@ function analyzeFile(
 	for (const [name, decls] of exports) {
 		const decl: ExportedDeclarations | undefined = decls[0];
 		if (!decl) continue;
-		const callers: CallerLocation[] = [];
-		const seen = new Set<string>();
-		let truncated = false;
+		const references: ReferenceLocation[] = [];
+		const referenceSeen = new Set<string>();
+		const calls: ReferenceLocation[] = [];
+		const callSeen = new Set<string>();
+		let referencesTruncated = false;
+		let callsTruncated = false;
 		let calleeCount = 0;
 		let objectLiteralCount = 0;
 		const keyCounts: Record<string, number> = {};
+		let resolutionError: string | undefined;
 
 		const refNode = Node.isVariableDeclaration(decl)
 			? decl.getNameNode()
@@ -198,54 +200,64 @@ function analyzeFile(
 					const refIdent = ref.getNode();
 					const start = refIdent.getStartLineNumber();
 
-					// Shape sampling runs on every external ref, even after the caller
-					// list is truncated — gives accurate aggregate counts on big symbols.
 					const callExpr = findCallExprForRef(refIdent);
 					if (callExpr) {
-						calleeCount++;
-						const keys = extractObjectLiteralKeys(callExpr);
-						if (keys !== null) {
-							objectLiteralCount++;
-							for (const k of keys) {
-								keyCounts[k] = (keyCounts[k] ?? 0) + 1;
+						const callKey = `${refFile}:${callExpr.getStart()}`;
+						if (!callSeen.has(callKey)) {
+							callSeen.add(callKey);
+							calleeCount++;
+							const keys = extractObjectLiteralKeys(callExpr);
+							if (keys !== null) {
+								objectLiteralCount++;
+								for (const k of keys) {
+									keyCounts[k] = (keyCounts[k] ?? 0) + 1;
+								}
+							}
+							if (calls.length >= MAX_LOCATIONS_PER_SYMBOL) {
+								callsTruncated = true;
+							} else {
+								calls.push({
+									file: relative(repoRoot, refFile),
+									line: callExpr.getStartLineNumber(),
+								});
 							}
 						}
 					}
 
-					const key = `${refFile}:${start}`;
-					if (seen.has(key)) continue;
-					seen.add(key);
-					if (callers.length >= MAX_CALLERS_PER_SYMBOL) {
-						truncated = true;
+					const referenceKey = `${refFile}:${start}`;
+					if (referenceSeen.has(referenceKey)) continue;
+					referenceSeen.add(referenceKey);
+					if (references.length >= MAX_LOCATIONS_PER_SYMBOL) {
+						referencesTruncated = true;
 						continue;
 					}
-					callers.push({
+					references.push({
 						file: relative(repoRoot, refFile),
 						line: start,
 					});
 				}
 			}
-		} catch {
-			// Reference resolution can fail on malformed code or missing context;
-			// surface zero callers rather than aborting the whole report.
-			callers.length = 0;
+		} catch (error) {
+			resolutionError = error instanceof Error ? error.message : String(error);
 		}
 
-		const shape: CallShape | undefined = calleeCount > 0
-			? { calleeCount, objectLiteralCount, keyCounts }
-			: undefined;
+		const shape: CallShape | undefined = calleeCount > 0 ? { calleeCount, objectLiteralCount, keyCounts } : undefined;
 
 		out.push({
 			name,
 			kind: declarationKind(decl),
-			callerCount: seen.size,
-			callers,
-			truncated,
+			referenceCount: referenceSeen.size,
+			references,
+			referencesTruncated,
+			callCount: callSeen.size,
+			calls,
+			callsTruncated,
 			shape,
+			resolutionError,
 		});
 	}
 
-	out.sort((a, b) => b.callerCount - a.callerCount);
+	out.sort((a, b) => b.referenceCount - a.referenceCount);
 	return out;
 }
 
@@ -260,19 +272,19 @@ function buildProject(tsconfigPath: string): Project {
 function renderMarkdown(report: ImpactReport): string {
 	const lines: string[] = [];
 	lines.push(`# PR impact report`);
-	lines.push("");
+	lines.push('');
 	lines.push(
-		`Analyzed **${report.summary.totalFiles}** files, **${report.summary.totalSymbols}** exported symbols, **${report.summary.totalCallers}** total external callers.`,
+		`Analyzed **${report.summary.totalFiles}** files, **${report.summary.totalSymbols}** exported symbols, **${report.summary.totalReferences}** total external references.`,
 	);
-	lines.push("");
+	lines.push('');
 
 	if (report.summary.highImpactSymbols.length > 0) {
-		lines.push(`## High-impact symbols (>= ${HIGH_IMPACT_THRESHOLD} callers)`);
-		lines.push("");
+		lines.push(`## High-impact symbols (>= ${HIGH_IMPACT_THRESHOLD} references)`);
+		lines.push('');
 		for (const h of report.summary.highImpactSymbols) {
-			lines.push(`- \`${h.symbol}\` (${h.file}) — **${h.callers}** callers`);
+			lines.push(`- \`${h.symbol}\` (${h.file}) — **${h.references}** references`);
 		}
-		lines.push("");
+		lines.push('');
 	}
 
 	for (const f of report.files) {
@@ -282,17 +294,22 @@ function renderMarkdown(report: ImpactReport): string {
 			continue;
 		}
 		if (f.symbols.length === 0) {
-			lines.push("> no exported symbols");
+			lines.push('> no exported symbols');
 			continue;
 		}
 		for (const s of f.symbols) {
-			const truncated = s.truncated ? " (truncated)" : "";
-			lines.push(`- \`${s.name}\` (${s.kind}) — ${s.callerCount} callers${truncated}`);
-			for (const c of s.callers.slice(0, 5)) {
-				lines.push(`  - ${c.file}:${c.line}`);
+			const referenceSuffix = s.referencesTruncated ? ' (locations truncated)' : '';
+			lines.push(
+				`- \`${s.name}\` (${s.kind}) — ${s.referenceCount} references, ${s.callCount} calls${referenceSuffix}`,
+			);
+			if (s.resolutionError) {
+				lines.push(`  - reference resolution incomplete: ${s.resolutionError}`);
 			}
-			if (s.callers.length > 5) {
-				lines.push(`  - ...and ${s.callers.length - 5} more`);
+			for (const reference of s.references.slice(0, 5)) {
+				lines.push(`  - reference: ${reference.file}:${reference.line}`);
+			}
+			if (s.references.length > 5) {
+				lines.push(`  - ...and ${s.references.length - 5} more reference locations`);
 			}
 			if (s.shape && s.shape.objectLiteralCount > 0) {
 				const sortedKeys = Object.entries(s.shape.keyCounts).sort((a, b) => b[1] - a[1]);
@@ -304,10 +321,10 @@ function renderMarkdown(report: ImpactReport): string {
 				}
 			}
 		}
-		lines.push("");
+		lines.push('');
 	}
 
-	return lines.join("\n");
+	return lines.join('\n');
 }
 
 async function main() {
@@ -339,11 +356,11 @@ async function main() {
 			summary: {
 				totalFiles: 0,
 				totalSymbols: 0,
-				totalCallers: 0,
+				totalReferences: 0,
 				highImpactSymbols: [],
 			},
 		};
-		console.log(format === "markdown" ? renderMarkdown(empty) : JSON.stringify(empty, null, 2));
+		console.log(format === 'markdown' ? renderMarkdown(empty) : JSON.stringify(empty, null, 2));
 		return;
 	}
 
@@ -368,7 +385,7 @@ async function main() {
 						tsconfig: relative(repoRoot, tsconfig),
 						exportedSymbolCount: 0,
 						symbols: [],
-						error: "could not load source file",
+						error: 'could not load source file',
 					});
 					continue;
 				}
@@ -394,17 +411,14 @@ async function main() {
 	}
 
 	const totalSymbols = fileReports.reduce((acc, f) => acc + f.symbols.length, 0);
-	const totalCallers = fileReports.reduce(
-		(acc, f) => acc + f.symbols.reduce((a, s) => a + s.callerCount, 0),
-		0,
-	);
+	const totalReferences = fileReports.reduce((acc, f) => acc + f.symbols.reduce((a, s) => a + s.referenceCount, 0), 0);
 	const highImpact = fileReports
 		.flatMap((f) =>
 			f.symbols
-				.filter((s) => s.callerCount >= HIGH_IMPACT_THRESHOLD)
-				.map((s) => ({ file: f.file, symbol: s.name, callers: s.callerCount })),
+				.filter((s) => s.referenceCount >= HIGH_IMPACT_THRESHOLD)
+				.map((s) => ({ file: f.file, symbol: s.name, references: s.referenceCount })),
 		)
-		.sort((a, b) => b.callers - a.callers);
+		.sort((a, b) => b.references - a.references);
 
 	const report: ImpactReport = {
 		repoRoot,
@@ -413,15 +427,17 @@ async function main() {
 		summary: {
 			totalFiles: fileReports.length,
 			totalSymbols,
-			totalCallers,
+			totalReferences,
 			highImpactSymbols: highImpact,
 		},
 	};
 
-	console.log(format === "markdown" ? renderMarkdown(report) : JSON.stringify(report, null, 2));
+	console.log(format === 'markdown' ? renderMarkdown(report) : JSON.stringify(report, null, 2));
 }
 
-main().catch((err) => {
-	console.error(err);
-	process.exit(1);
-});
+if (import.meta.main) {
+	main().catch((err) => {
+		console.error(err);
+		process.exit(1);
+	});
+}

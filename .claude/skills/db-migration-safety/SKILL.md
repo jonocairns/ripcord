@@ -14,7 +14,7 @@ Use this skill whenever the PR contains changes (added or modified) to:
 - SQL files in the configured migration directories
 - Any file matching `**/migrations/*.sql`
 
-Run it BEFORE commenting on the migration. The output is the source of truth for safety concerns — do not invent migration concerns the tool didn't flag, and do not dismiss concerns the tool did flag without explicit reasoning.
+Run it before commenting on the migration. Its output is authoritative only for the rules listed below. Review the intended schema delta, application compatibility, data preservation, and deployment ordering separately.
 
 ## How to invoke
 
@@ -51,7 +51,7 @@ The `DUPLICATE_OF_OLDER_MIGRATION` rule is repo-specific and codifies a known pi
 1. **Errors must be addressed in the PR.** If the tool reports an error, leave a single inline comment on the offending line citing the rule, the message, and the suggested fix.
 2. **Warnings need confirmation, not necessarily a change.** For each warning, either confirm the intent in the PR description was clear, or ask the author to confirm in a single summary comment.
 3. **Do not duplicate the tool's output.** The tool already cites line, statement, rule, and fix. Reference these once per finding; do not re-explain.
-4. **Do not generate migration concerns the tool did not flag.** If the tool reports zero findings on a migration, do not speculate about edge cases. The tool's rule list is curated for real production failure modes; speculative concerns are noise.
+4. **Keep manual concerns evidence-based.** A zero-finding report means only that none of the listed static rules matched. Raise other concerns when the schema, surrounding code, generated delta, or deployment sequence demonstrates a concrete failure path.
 
 ## What this skill does NOT cover
 

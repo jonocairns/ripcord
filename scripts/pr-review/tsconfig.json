@@ -1,15 +1,15 @@
 {
 	"compilerOptions": {
 		"target": "esnext",
-		"module": "nodenext",
-		"moduleResolution": "nodenext",
+		"module": "esnext",
+		"moduleResolution": "bundler",
 		"strict": true,
 		"esModuleInterop": true,
 		"skipLibCheck": true,
 		"noEmit": true,
-		"types": ["node"],
+		"types": ["bun", "node"],
 		"resolveJsonModule": true,
 		"allowImportingTsExtensions": false
 	},
-	"include": ["./*.ts"]
+	"include": ["./**/*.ts", "../verify-web.ts"]
 }

@@ -50,6 +50,9 @@
                 docker-compose
               ];
 
+            PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+            PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+
             shellHook = nixpkgs.lib.optionalString pkgs.stdenv.isLinux ''
               export CC_x86_64_pc_windows_gnu=${mingwCc.targetPrefix}gcc
               export CXX_x86_64_pc_windows_gnu=${mingwCc.targetPrefix}g++

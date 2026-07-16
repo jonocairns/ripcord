@@ -54,17 +54,17 @@
 		"coreSkills": [
 			{
 				"name": "ts-impact",
-				"summary": "runs ts-morph over changed TS files to produce a precise caller list per exported symbol.",
+				"summary": "runs ts-morph over changed TS files to map external references and direct calls per exported symbol.",
 				"when": "Use before asserting a behavioral change is safe."
 			},
 			{
 				"name": "sentry-review",
-				"summary": "adds production telemetry priors via Sentry MCP.",
-				"when": "Use when Sentry is available and the diff touches production code."
+				"summary": "correlates concrete review concerns with production errors via Sentry MCP.",
+				"when": "Use when Sentry is available and a production issue can be matched to the changed code path."
 			},
 			{
 				"name": "typecheck",
-				"summary": "runs the configured workspace typechecker and filters compiler errors to PR-changed files.",
+				"summary": "runs the configured workspace typechecker and reports every current compiler error, plus an auxiliary changed-file location count.",
 				"when": "Use before asserting signature, type, or caller compatibility is safe."
 			},
 			{

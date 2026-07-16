@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { findRepoRoot, loadReviewConfig, renderTemplate, validateTypecheckErrorPatterns } from './common';
 
-interface TscError {
+export interface TscError {
 	file: string;
 	line: number;
 	col: number;
@@ -12,14 +12,14 @@ interface TscError {
 	message: string;
 }
 
-interface Report {
+export interface Report {
 	repoRoot: string;
 	generatedAt: string;
 	cmd: string;
 	exitCode: number;
 	passed: boolean;
 	totalErrors: number;
-	inScopeErrors: number;
+	errorsInChangedFiles: number;
 	pr: number | null;
 	changedFiles: string[];
 	errors: TscError[];
@@ -27,6 +27,43 @@ interface Report {
 }
 
 const MAX_ERRORS_RENDERED = 50;
+
+export function buildReport({
+	repoRoot,
+	cmd,
+	exitCode,
+	allErrors,
+	pr,
+	changedFiles,
+}: {
+	repoRoot: string;
+	cmd: string;
+	exitCode: number;
+	allErrors: TscError[];
+	pr: number | null;
+	changedFiles: string[];
+}): Report {
+	const errorsInChangedFiles =
+		changedFiles.length > 0
+			? allErrors.filter((error) =>
+					changedFiles.some((changedFile) => error.file === changedFile || error.file.endsWith(changedFile)),
+				)
+			: [];
+
+	return {
+		repoRoot,
+		generatedAt: new Date().toISOString(),
+		cmd,
+		exitCode,
+		passed: exitCode === 0,
+		totalErrors: allErrors.length,
+		errorsInChangedFiles: errorsInChangedFiles.length,
+		pr,
+		changedFiles,
+		errors: allErrors.slice(0, MAX_ERRORS_RENDERED),
+		truncated: allErrors.length > MAX_ERRORS_RENDERED,
+	};
+}
 
 function parseArgs(argv: string[]): {
 	pr: number | null;
@@ -62,7 +99,7 @@ function getChangedFiles(pr: number): string[] {
 		.filter((f) => /\.(ts|tsx|mts|cts)$/.test(f));
 }
 
-function parseTypecheckOutput(
+export function parseTypecheckOutput(
 	output: string,
 	repoRoot: string,
 	config: ReturnType<typeof loadReviewConfig>,
@@ -124,7 +161,8 @@ function renderMarkdown(report: Report): string {
 	lines.push(`Result: **${report.passed ? 'PASS' : 'FAIL'}**`);
 	if (report.pr !== null) {
 		lines.push(`Total errors: ${report.totalErrors}`);
-		lines.push(`Errors in PR-changed files (#${report.pr}): ${report.inScopeErrors}`);
+		lines.push(`Errors located in PR-changed files (#${report.pr}): ${report.errorsInChangedFiles}`);
+		lines.push('_File location does not establish whether an error was introduced by this PR._');
 	} else {
 		lines.push(`Errors: ${report.totalErrors}`);
 	}
@@ -144,7 +182,7 @@ function renderMarkdown(report: Report): string {
 		lines.push(`- ${e.file}:${e.line}:${e.col} \`${e.code}\` ${e.message}`);
 	}
 	if (report.truncated) {
-		lines.push(`- ...and ${report.inScopeErrors - report.errors.length} more (truncated)`);
+		lines.push(`- ...and ${report.totalErrors - report.errors.length} more (truncated)`);
 	}
 	return lines.join('\n');
 }
@@ -168,27 +206,21 @@ async function main() {
 	const { output, exitCode, cmd } = runTypecheck(repoRoot, scope, config);
 	const allErrors = parseTypecheckOutput(output, repoRoot, config);
 
-	const inScope =
-		changed.length > 0 ? allErrors.filter((e) => changed.some((c) => c === e.file || e.file.endsWith(c))) : allErrors;
-
-	const report: Report = {
+	const report = buildReport({
 		repoRoot,
-		generatedAt: new Date().toISOString(),
 		cmd,
 		exitCode,
-		passed: exitCode === 0,
-		totalErrors: allErrors.length,
-		inScopeErrors: inScope.length,
+		allErrors,
 		pr,
 		changedFiles: changed,
-		errors: inScope.slice(0, MAX_ERRORS_RENDERED),
-		truncated: inScope.length > MAX_ERRORS_RENDERED,
-	};
+	});
 
 	console.log(format === 'markdown' ? renderMarkdown(report) : JSON.stringify(report, null, 2));
 }
 
-main().catch((err) => {
-	console.error(err);
-	process.exit(1);
-});
+if (import.meta.main) {
+	main().catch((err) => {
+		console.error(err);
+		process.exit(1);
+	});
+}

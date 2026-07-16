@@ -1,11 +1,11 @@
 ---
 name: sentry-review
-description: Ground the review in production telemetry. For each TypeScript file changed in the PR, query Sentry for recent errors and use the result to set scrutiny priors. Files with active production errors get a stricter pass; files with no recent errors get a normal pass. Use whenever Sentry MCP tools are available and the diff touches production server or client code (excluding tests, types, and docs).
+description: Correlate a concrete review concern with recent production errors from Sentry. Use when Sentry MCP tools are available, the diff touches production runtime code, and an issue can be matched to the changed code path. Do not infer safety from absent telemetry or raise confidence merely because the same file has an unrelated issue.
 ---
 
 # Sentry-grounded review
 
-This skill fuses production telemetry into the review. It does not generate comments by itself — it changes *how* you review the diff by surfacing which files are currently failing in production.
+Use production telemetry to strengthen or falsify a concrete concern. Telemetry does not generate findings by itself.
 
 ## When to use
 
@@ -23,26 +23,18 @@ Skip this skill if:
 ## How to invoke
 
 1. Authenticate with Sentry via the MCP if not already authenticated.
-2. For each changed production file:
-   - Query Sentry for recent issues mentioning the file path or its stable module/component identifier.
-   - Note the issue count, frequency, and last-seen timestamp.
-3. Build a per-file "production prior" mental model:
-   - **Hot file**: ≥1 active issue in the last 7 days. Apply *stricter* scrutiny.
-   - **Quiet file**: no recent issues. Apply *normal* scrutiny.
-4. Use the prior to modulate review behavior, not to generate findings on its own.
+2. Query recent issues for a changed path only when the diff or a suspected failure gives you a stable filename, component, operation, or error identifier to search.
+3. Confirm that the issue stack or context reaches the changed code path. A filename-only match is insufficient when the failing frame is unrelated.
+4. Note the issue ID, event count, and last-seen timestamp only when they support the concern.
 
 ## How to use the prior
 
 For each finding you would otherwise comment on:
 
-- **Hot file + finding touches the failing code path**: comment with elevated confidence. Cite the Sentry issue ID in the comment so the author can verify. Example: "This change rewrites a session/token recovery path. Sentry issue SHRK-1234 (47 events in last 7d) currently throws from this exact path — verify the existing recovery behavior is preserved."
-- **Hot file + finding is unrelated to the failing path**: comment normally; do not mention Sentry.
-- **Quiet file**: comment normally with no telemetry context.
-
-For findings you are *uncertain about*:
-
-- **Hot file**: lean toward commenting (the file is fragile; uncertainty is more costly here).
-- **Quiet file**: lean toward staying silent (the file is stable; uncertainty is more costly the other way — you'll add noise).
+- **Same failing code path:** use the issue as supporting evidence and cite its ID.
+- **Unrelated issue in the same file:** ignore it for review confidence.
+- **No matching issue:** draw no safety conclusion. Missing events can reflect sampling, release coverage, source maps, environment filters, or an unexercised path.
+- **Uncertain concern:** resolve it from code or runtime evidence; file-level telemetry alone must not decide whether to comment.
 
 ## Hard rules
 

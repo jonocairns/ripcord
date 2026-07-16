@@ -75,16 +75,18 @@ review routing.
 
 ## Current tools
 
-- `pr-impact.ts`: resolves exported symbol callers and rough call-shape data so
-  the reviewer can reason about blast radius instead of guessing.
+- `pr-impact.ts`: resolves exported symbol references, direct calls, and rough
+  call-shape data so the reviewer can reason about blast radius without
+  conflating imports with invocations.
 - `symbol-diff.ts`: compares changed exported TypeScript symbols against the PR
   base, including signatures, public members, and added/removed callees.
 - `trpc-edges.ts`: maps server tRPC route handlers to client call sites, closing
   a gap that normal TS reference analysis cannot see.
 - `migration-check.ts`: codifies known migration failure modes, including a
   repo-specific duplicate-migration pitfall from Drizzle.
-- `typecheck.ts`: optional compiler-grounded validation when the reviewer needs
-  to confirm a claimed type break instead of speculating.
+- `typecheck.ts`: compiler-grounded validation that reports all current errors.
+  Changed-file counts describe error location only; they do not attribute an
+  error to the PR.
 - `build-import-graph.ts`: builds import topology for richer context queries.
 
 ## Configuration seam
@@ -184,7 +186,7 @@ The highest-value next step is to keep separating **tools** from **review
 methods**.
 
 - Tools are deterministic analyzers in `scripts/pr-review/`. They should produce
-  concrete evidence such as changed symbols, caller lists, import edges, compiler
+  concrete evidence such as changed symbols, reference and call lists, import edges, compiler
   errors, migration findings, previous review comments, or config surface
   changes.
 - Review methods are skills in `.claude/skills/`. They tell the reviewer how to
@@ -197,7 +199,7 @@ judgment; tools provide auditable facts.
 
 ### Implemented evidence tools
 
-- `pr-impact.ts`: exported-symbol caller and call-shape evidence.
+- `pr-impact.ts`: exported-symbol reference, direct-call, and call-shape evidence.
 - `symbol-diff.ts`: exported-symbol signature/member/callee deltas and coarse
   side-effect risk tags.
 - `build-import-graph.ts`: file-level import topology.
