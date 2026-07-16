@@ -1,49 +1,88 @@
 # Desktop Troubleshooting
 
-## macOS permissions
+Ripcord reports runtime capture and shortcut capability issues in the desktop
+device settings. Start with the displayed issue and guidance: capability flags
+come from the backend that will perform the operation and may be more specific
+than these general notes.
 
-If screen sharing or microphone capture fails on macOS:
+## Shared audio fallback
+
+Screen sharing can continue when shared audio is unavailable. Depending on the
+requested mode and runtime capabilities, Ripcord falls back from per-app audio to
+system audio, or continues with no shared audio and shows a warning.
+
+Per-app audio is not available when sharing an entire display. Ripcord uses
+system audio when supported. Linux also requires selecting a running app audio
+target; without one, it falls back to system or no audio.
+
+The desktop capture sidecar is a production dependency on Windows, macOS, and
+Linux. A missing or failed sidecar can disable per-app audio and other
+platform-specific capabilities; it is not a Windows-only experimental toggle.
+
+## macOS
+
+System and per-app audio capture use the sidecar and ScreenCaptureKit on macOS 13
+or newer.
+
+If screen or shared-audio capture fails:
 
 1. Open `System Settings > Privacy & Security > Screen Recording`.
-2. Ensure `Ripcord Desktop` is allowed.
-3. Open `System Settings > Privacy & Security > Microphone`.
-4. Ensure `Ripcord Desktop` is allowed.
-5. Restart the app after changing permissions.
+2. Allow Ripcord Desktop.
+3. Restart the app after changing permission.
+4. Retry the share and check the capability issue shown in device settings.
 
-In the current developer preview, macOS screen-share audio is not available. Screen video sharing continues without audio.
+If the app reports that the capture helper is unavailable, reinstall the
+packaged app or rebuild it so the macOS helper and sidecar are included.
 
-## Linux PipeWire and portal behavior
+Microphone permission is separate. Grant it under
+`System Settings > Privacy & Security > Microphone` when microphone capture
+fails, then restart the app.
 
-Linux screen/audio capture depends on your desktop session and portal stack.
+## Linux
 
-1. Verify PipeWire and xdg-desktop-portal services are running.
-2. Confirm your portal backend matches your compositor (GNOME/KDE/wlroots).
-3. Retry screen sharing after restarting the desktop portal services.
+Screen selection and audio support depend on the session, compositor, portal,
+and native audio runtime.
 
-Linux audio capture in this preview is best-effort. If audio is unavailable, Ripcord should continue sharing screen video and show a warning.
+- On Wayland, ensure PipeWire and the correct `xdg-desktop-portal` backend are
+  running for the current desktop environment.
+- Per-app capture requires choosing the application that is producing audio;
+  Ripcord does not infer it from the selected share source on Linux.
+- System and per-app audio are best-effort and may be reported unsupported when
+  the native PulseAudio-compatible backend is unavailable.
+- Global push-to-talk and push-to-mute currently require X11 or XWayland. A
+  detected Wayland Global Shortcuts portal does not mean the current build uses
+  that backend.
 
-## Fallback behavior
+Restart the relevant portal services and Ripcord after changing the desktop
+session or portal configuration.
 
-When shared audio cannot be captured on the current platform or environment:
+## Windows
 
-1. Ripcord continues with screen video if possible.
-2. A non-blocking warning is shown.
-3. You can switch audio mode to `No shared audio` to suppress audio capture attempts.
+System and per-app audio are supported through the capture sidecar. If per-app
+capture fails, restart Ripcord and confirm the app being captured is actively
+producing audio. A sidecar startup or runtime failure is surfaced in device
+settings; reinstall the packaged app if the binary is missing.
 
-## Rust sidecar capture (Windows experimental)
+## Development builds
 
-Per-app audio isolation depends on the Rust sidecar binary.
+Run repository Bun commands through the Nix shell. To build the sidecar from the
+directory expected by the desktop package:
 
-1. In desktop development mode, run `bun run build:sidecar` in `apps/desktop`.
-2. In app settings, enable `Use Rust sidecar capture (Experimental)`.
-3. Use Windows 10 22H2 or newer (Windows 11 recommended) for the best loopback compatibility.
-4. If startup fails, Ripcord falls back to system audio (or no audio) and displays a warning.
+```bash
+cd apps/desktop
+nix develop -c bun run build:sidecar
+```
 
-### Fallback matrix (audioMode = Per-app)
+The normal desktop development command runs the optional sidecar build first and
+watches sidecar sources. Packaged builds require the platform sidecar under
+`apps/desktop/sidecar/bin`; release workflows build and package it for each
+supported operating system.
 
-1. Sidecar startup fails before sharing:
-   Ripcord falls back to `System audio` when available, otherwise `No shared audio`.
-2. Target app exits during sharing:
-   Ripcord keeps screen video active and switches to standby system audio.
-3. Capture device lost/error:
-   Ripcord keeps screen video active and switches to standby system audio if available, otherwise no audio.
+Useful implementation references:
+
+- `apps/desktop/src/main/capture-capabilities.ts` maps backend reason codes to
+  user guidance.
+- `apps/desktop/src/main/platform-capabilities.ts` defines platform defaults and
+  audio fallback policy.
+- `apps/desktop/src/main/capture-sidecar-manager.ts` locates, starts, and monitors
+  the sidecar.

@@ -1,365 +1,198 @@
-# Voice Session FSM — Design Record
+# Voice Session FSM Design Record
 
-**Status:** Implemented — the machine (`voice-session-machine.ts` +
-`voice-session-store.ts`) is wired into `VoiceProvider` and both recovery paths
-run through it. Kept as the durable record of *what we built and why*; fold into
-the code's own docs and delete when convenient.
+**Status:** Implemented. The session machine foundation landed in PR #277, the
+executor and transactional restore work landed through PR #292, and lifecycle
+hardening followed in PRs #293 and #294.
 
 **Companion:** [`remote-media-subscription-state.md`](./remote-media-subscription-state.md)
-is the durable design for the #274 remote-media ledger. This machine **drives**
-that ledger; it does not refold it.
-
-## Problem
-
-The reconnect / transport-recovery orchestration lives as **two large imperative
-async loops inside the 4,500-line `VoiceProvider`**, plus a defer handler:
-
-- **In-session transport rebuild** — formerly the inline transport recovery loop
-  in `apps/client/src/components/voice-provider/index.tsx`. Triggered
-  by ICE/DTLS transport failure; keeps the server session (rejoins only if
-  missing); guards staleness with `voiceSessionReconnectNonce`.
-- **WS-level reconnect** — the effect at ~3927–4225. Triggered by a socket drop;
-  waits online → waits auth → `restoreOrJoin` → `init` → restore-watch; guards
-  with `reconnectingSince` / pending / auth.
-- **Transport-failure defer handler** (~856–928) — makes a transport failure
-  stand down when a WS reconnect is already in flight, so the two don't race into
-  a double teardown.
-
-Policies are already extracted and pure (`reconnect-policy.ts`,
-`reconnect-coordinator.ts`). **The orchestration
-control-flow is not.** Both paths are only covered by *structural mirror* tests
-(`recover-transport-session.test.ts`, `voice-reconnect-restore.test.ts`) that
-**hand-copy the control flow into the test file** — they import nothing real, so
-the real code can silently diverge from them. The two loops also duplicate a
-~45-line snapshot + restore-watch block.
+describes remote consume intent and recovery.
 
 ## Decision
 
-Model the voice **session lifecycle** as a single finite state machine, following
-the #274 precedent (pure reducer + `{ state, commands }` envelope + runner),
-**hand-rolled, no FSM library**.
+Voice session lifecycle is modeled as one hand-written finite state machine with
+a pure reducer, a command envelope, and an extracted asynchronous executor. The
+machine is the single source of truth for connection phase, recovery progress,
+retry policy, command currency, and terminal failure.
 
-### Why no library (XState etc.)
+The implementation is split across:
 
-- No FSM library exists in the repo today; it would be a net-new paradigm.
-- #274 just landed (21 commits, 40 reducer tests, production-verified) and
-  deliberately hand-rolled its reducer. Adopting a library only for reconnect
-  creates a **third** pattern and silently overrules that choice; it only pays
-  off if we also rewrite the freshly-hardened #274 onto it — expensive, risky,
-  zero behavior benefit.
-- We want the FSM *modelling* (enumerable states, pure transitions, real tests),
-  not a vendor lock-in. The state model is designed FSM-shaped so a **future**
-  library migration stays mechanical (states→states, events→events). The
-  irreversible decision (dependency + paradigm) is deferred until there are two
-  real consumers proving the shape.
+- `voice-session-machine.ts`: state, events, commands, reducer, and selectors
+- `voice-session-store.ts`: module-level state, dispatch, subscriptions, and
+  buffered command delivery
+- `voice-session-command-executor.ts`: asynchronous command lifecycle and
+  result-event dispatch
+- `use-voice-session-executor.ts`: thin React adapter with fresh provider ports
 
-### One machine, recovery as sub-states (Model "A1")
+These files live under `apps/client/src/features/server/voice/` and
+`apps/client/src/components/voice-provider/hooks/`.
 
-Connection status *is* session state. Today it is split across a `ConnectionStatus`
-`useState` and the separate `reconnect-coordinator` zustand store, mutated
-imperatively from three places — which is exactly why status drifts from reality.
-So the machine is the **single source of truth**:
+## Why one machine
 
-- It **subsumes `reconnect-coordinator`** — `reconnectingSince` /
-  `pendingVoiceReconnect` / `reconnectAuthenticated` / suppression become fields /
-  sub-states inside it.
-- It **owns `ConnectionStatus` as derived output** (`DISCONNECTED / CONNECTING /
-  CONNECTED / FAILED` is a projection of the phase).
+WebSocket reconnect and in-session transport rebuild used to be separate loops
+that could both tear down and rebuild the same media session. Connection status,
+retry counters, authentication gates, reconnect intent, and peer suppression
+also lived in different mutable stores or local variables.
 
-State is a **single-instance discriminated union** (unlike #274's keyed collection
-of per-slot lifecycles — same *envelope convention*, different *state shape*
-because the domains differ):
+One discriminated state makes the important exclusivity structural:
 
-```ts
-type TVoiceSessionState =
-  | { phase: 'idle' }
-  | { phase: 'joining'; channelId: number }
-  | { phase: 'connected'; channelId: number }
-  | { phase: 'rebuilding'; channelId: number; nonce: number; attempt: number;
-      nonceRestarts: number; snapshot: WatchedStreams }
-  | { phase: 'reconnecting'; step: 'waitingOnline' | 'waitingAuth' | 'restoring' | 'restoreWatch';
-      reconnectingSince: number; authenticated: boolean;
-      pending: PendingVoiceReconnect;         // { channelId, micMuted, soundMuted, peerUserIds, expiresAt }
-      retryAttempt: number; consecutiveUnknownErrors: number;
-      snapshot: WatchedStreams }
-  | { phase: 'failed'; reason: TClearReason; channelId?: number };
-```
+- `idle`
+- `joining`
+- `connected`
+- `rebuilding`
+- `reconnecting`
+- `failed`
 
-**This union must carry everything `reconnect-coordinator` holds *plus* the
-loop-local counters** — otherwise the store-subsume commit (Slice 1) is not
-mechanical. Explicit inventory to preserve:
+`rebuilding` and `reconnecting` cannot be active together. Connection status is
+a projection of the phase rather than a second mutable truth.
 
-| Concern | Today | Machine home |
-| --- | --- | --- |
-| in-reconnect marker | `reconnectingSince` | `reconnecting.reconnectingSince` |
-| pending intent + expiry | `pendingVoiceReconnect` (incl. `expiresAt`) | `reconnecting.pending` |
-| auth gate | `reconnectAuthenticated` | `reconnecting.authenticated` / `waitingAuth` step |
-| peer suppression | `voiceReconnectSuppression` | machine field, set on success (out-of-phase) |
-| clear reasons | `TClearReason` union | `Terminated` event payload → `failed.reason` |
-| WS retry attempt | loop-local `retryAttempt` | `reconnecting.retryAttempt` |
-| unknown-error cap | loop-local `consecutiveUnknownErrors` | `reconnecting.consecutiveUnknownErrors` |
-| nonce staleness | `voiceSessionReconnectNonce` + loop-local `nonceRestarts` | `rebuilding.nonce` / `.nonceRestarts` |
-| failure surface | `ConnectionStatus.FAILED` (no detail) | `failed.reason` / `.channelId` |
+The project uses a hand-written reducer because the repository already uses this
+state/command pattern for remote media, and the required value is explicit state
+and deterministic transitions rather than a new runtime dependency.
 
-`suppression` is deliberately *not* a phase field — it outlives recovery (it
-gates peer re-join events after success), so it stays a top-level machine field.
+## State and identity
 
-`rebuilding` and `reconnecting` are **mutually exclusive phases**, which makes the
-double-teardown race *structurally unrepresentable*.
+Recovery phases carry the data needed to make decisions without runner-owned
+bookkeeping:
 
-**Both preemption races are first-class transitions**, not just the one:
+- channel and reconnect intent
+- recovery generation and active command id
+- transport nonce and nonce-restart count for rebuilds
+- retry attempt and consecutive unknown-error count
+- authentication and online-wait progress
+- the captured watched-media snapshot
+- whether a reconnect attempt established a server session
 
-- `TransportFailed` while `phase === 'reconnecting'` → **ignored** (folds the
-  old transport-failure defer helper).
-- `WsDropped` while `phase === 'rebuilding'` → **`rebuilding → reconnecting`
-  preemption** (replaces the `index.tsx:888` handoff). The reducer transition is
-  clean, but the runner's in-flight rebuild is still awaiting, so this **requires
-  a runner cancellation token**: a superseded `rebuilding` command must not write
-  transports/consumers into the now-`reconnecting` session. Same guard class as
-  the existing nonce — make it explicit rather than implicit.
+Command ids and generations are monotonic. Result events echo both, and the
+reducer ignores stale results. Finalization commands are also generation-bound so
+a buffered cleanup from an old session cannot run against a later rejoin of the
+same channel.
 
-Runner cancellation also crosses the RPC boundary. A reconnect timeout aborts the
-client request, and `restoreOrJoin` fences concurrent attempts by client instance;
-server transport creation checks that fence before replacing the active transport.
-This prevents a request that finishes after its client-side timeout from replacing
-the transports created by a newer attempt. Because a timed-out mutation may have
-committed before cancellation arrived, server-session ownership is sticky for the
-whole reconnect generation and every later terminal/expiry path leaves it.
+Peer reconnect suppression is top-level machine state because it intentionally
+outlives the recovery phase that created it. The compatibility
+`reconnect-coordinator.ts` facade selects and dispatches through the machine; new
+execution code must not use it as a second mutable state owner.
 
-**Snapshot capture stays out of the reducer.** `snapshot` lives *in* the phase
-object, but the reducer never captures it — `captureWatchedRemoteStreams()` is an
-impure read of the ledger / stream maps. Instead the **runner** captures it at
-phase-entry and hands it to the machine as an event payload
-(`RecoveryStarted { snapshot }`), so the reducer stays pure and the snapshot is
-still captured exactly once, before `init` / `cleanupTransports` wipes the ledger.
+## Events, commands, and policy
 
-- **Defer = a pure reducer guard.** A `TransportFailed` event while
-  `phase === 'reconnecting'` is ignored (no transition). This folds the old
-  transport-failure defer helper into the reducer as a one-line,
-  trivially-testable transition.
-- **Nonce-restart** stays inside `rebuilding`: a `NonceChanged` event restarts the
-  attempt (capped), as an explicit transition.
-- **`restoreWatch` is shared behavior, not shared state** — both phases end by
-  emitting the *same* restore command, killing the ~45-line duplication without
-  merging the phases. See "Restore goes through the ledger" for what that command
-  is.
+World events trigger transitions, including:
 
-### Placement: module-level reducer and extracted command executor
+- join requested/succeeded/failed
+- WebSocket dropped or authenticated
+- transport failed or nonce changed
+- reconnect intent captured or cleared
+- terminal session exit
 
-The store is written **from outside the React tree** — `lib/trpc.ts` (socket
-close → start reconnect; kick/ban → clear), `features/server/actions.ts`
-(joinServer re-auth → authenticated; logout/teardown → clear),
-`features/server/voice/actions.ts` (leave / session-replaced / desktop-quit).
-So:
+The machine emits effect commands such as:
 
-- **Reducer + state live at module scope** (evolve `reconnect-coordinator`),
-  reachable by those non-React modules. Pure; unit-tested with zero mocks.
-- **External call-sites dispatch events** into the machine instead of hand-driving
-  the store — e.g. `trpc.ts` socket close → `dispatch({ type: 'WsDropped' })`;
-  joinServer success → `dispatch({ type: 'SocketAuthenticated' })`; kick →
-  `dispatch({ type: 'Terminated', reason: 'kicked' })`. The machine decides what
-  each event *means*.
-- **The command implementation lives outside `VoiceProvider`** in
-  `voice-session-command-executor.ts`. The thin
-  `use-voice-session-executor.ts` adapter subscribes to machine commands and
-  supplies the live React-scoped ports (transport creation, `consume`, `init`,
-  and `restoreOrJoin`). `VoiceProvider` only assembles those ports.
+- capture the recovery snapshot
+- rebuild transports
+- wait for network or authentication
+- restore the server voice session
+- wait before retrying
+- restore remote watch intent
+- recover desktop app audio
+- leave or clear a failed session
 
-**Desktop app-audio recovery is a runner-side command, not a machine phase.**
-`runDesktopAppAudioRecovery` (`index.tsx` ~2843), which rides along inside
-the transport rebuild path, becomes a fire-and-forget `RecoverDesktopAppAudio`
-command emitted on the recovery tail. It is native-only and self-healing, so it
-stays out of the phase model — the machine emits the command; the runner runs it
-without awaiting a result back into a transition.
+The executor reports explicit result events for success, failure, expiry, delay
+completion, and watch-intent rehydration. Raw errors return to the reducer, where
+`classifyVoiceReconnectError` owns retry-vs-terminal policy and the unknown-error
+cap. The executor performs effects; it does not classify errors or mutate session
+state directly.
 
-### Relationship to #274
+## Recovery transitions
 
-Directional: the session machine, in `reconnecting.restoreWatch` (and the
-`rebuilding` tail), **emits a command that drives the ledger to rehydrate watch
-intent; the ledger then mints its own consume commands.** The session machine
-never consumes directly and the ledger never drives the session machine. #274 is
-a **done FSM this machine commands** — not refolded.
+Transport failure while WebSocket recovery is active is ignored. A WebSocket
+drop during an in-session rebuild preempts that rebuild and starts reconnect
+recovery. Superseded executor work is aborted and must re-check command currency
+after every awaited boundary before mutating shared resources.
 
-### Events: triggers vs runner results
+Recovery is connectivity-gated:
 
-An async FSM needs **result events**, not just trigger events — otherwise attempt
-counters, classification, and terminal transitions end up living in the runner
-again, defeating the extraction. The reducer owns *all* of that; the runner only
-performs a command and reports back what happened.
+- offline reconnect waits without consuming retry budget
+- authentication is confirmed before restore proceeds
+- retry delays and reconnect deadlines are explicit machine steps
+- one-shot recovery state is not consumed during disconnect or cleanup
 
-**Trigger events (world → machine):** `JoinRequested`, `WsDropped`,
-`TransportFailed`, `SocketAuthenticated`, `NonceChanged`, `Terminated { reason }`,
-`RecoveryStarted { snapshot }` (runner-captured snapshot injected as payload).
+The executor owns per-command `AbortController`s, bounded cancellation drain,
+and queuing of successor rebuild or restore commands. Hung cancelled operations
+may be detached after the bounded drain, but their ports must stop shared writes
+once command currency is lost.
 
-**Result events (runner → machine)** — each command the runner runs dispatches its
-outcome back:
+## Remote media restoration
 
-| Command run by runner | Result events it dispatches |
-| --- | --- |
-| rebuild transports (in-session) | `RebuildSucceeded` · `RebuildFailed { error }` |
-| `restoreOrJoin` + `init` (WS) | `RestoreSucceeded` · `RestoreFailed { error }` |
-| wait-online | `OnlineReady` · `OnlineExpired` |
-| wait-auth | `AuthReady` · `AuthExpired` · `AuthCleared` |
-| retry delay | `RetryDelayElapsed` · `RetryDelayExpired` |
-| `RestoreWatchIntent` (ledger rehydrate) | `WatchIntentRehydrated` |
+Snapshot capture is an injected executor port because it reads live ledger state.
+The executor captures it once before cleanup and sends it back as a
+`RecoveryStarted` result so the reducer remains pure.
 
-Failure result events carry the **raw error**. The reducer calls the existing
-pure classifier (`classifyVoiceReconnectError(error, { consecutiveUnknownErrors:
-state.consecutiveUnknownErrors })`) while reducing `RebuildFailed` /
-`RestoreFailed`, so the retry/terminal decision and the count-dependent
-`unknown-error-cap` verdict stay entirely **in the reducer**. The runner never
-reads machine state to classify. Attempt counters (`retryAttempt`,
-`nonceRestarts`) advance on these result events, not in the runner loop.
+Recovery never consumes watched media through a private side path. The session
+machine emits `RestoreWatchIntent`; the remote-media ledger rehydrates desire and
+mints its own consume commands after producer reconciliation. An explicit
+stop-watch during recovery therefore remains authoritative.
 
-### Enforce the reducer / runner boundary in code
+See [`remote-media-subscription-state.md`](./remote-media-subscription-state.md)
+for the ledger’s identity, retry, and producer-replacement rules.
 
-This must be a code boundary, not a convention. The reducer owns decisions; the
-runner owns effects; the store owns dispatch.
+## Local media restoration
 
-Implementation shape:
+Local media pipelines remain separate resource controllers commanded by the
+session lifecycle:
 
-- `voice-session-machine.ts` exports the state, trigger-event, result-event,
-  event, command, reducer, and selectors. It exports no mutable store.
-- `voice-session-store.ts` owns the module-level state and exports
-  `dispatchVoiceSession(event)` plus read/select helpers. It does **not** export
-  raw `setState` or phase mutators.
-- `voice-session-command-executor.ts` accepts commands through injected ports
-  and returns/dispatches only result events. It forwards raw errors on failure
-  events; it may not classify them, read reducer-owned counters, increment
-  counters, choose retry vs terminal, clear recovery, or mutate
-  reconnect/session state directly. `use-voice-session-executor.ts` owns only
-  mount/unmount and ref-backed port freshness.
-- Commands carry an id/generation; result events echo it. The reducer drops stale
-  results, so superseded runner work cannot write into a newer phase.
-- The legacy `reconnect-coordinator` facade remains during migration, but its
-  bodies dispatch/select through the machine. New runner code must not import
-  facade mutators.
+- microphone recovery is ordered and reusable across React Strict Mode replay
+- desktop app-audio recovery is a connected-session finalization command
+- lifecycle leases prevent queued or in-flight work from publishing after the
+  provider that owns it unmounts
+- terminal exits stop local resources; expected recovery preserves intent and
+  rebuilds the resources under the new session generation
 
-Guardrails to add with the cutover:
+These controllers do not become additional session state machines and cannot
+decide reconnect policy.
 
-- Unit-test reducer transitions for retry counters, unknown-error cap, terminal
-  reasons, stale command ids/generations, and both preemption races.
-- Unit-test runner command handlers as effect adapters: command in → result event
-  out, with no direct store mutation.
-- Add a narrow lint/import restriction once the runner exists: the runner may
-  import `dispatchVoiceSession`, but not policy classifiers,
-  `clearVoiceReconnectRecovery`, `ensureVoiceReconnectStarted`,
-  `markVoiceReconnectSessionAuthenticated`,
-  `markVoiceReconnectSessionUnauthenticated`, or raw machine/store mutators.
+## Server restore ownership
 
-### Restore goes through the ledger — no parallel consume path
+Client cancellation alone cannot undo a restore request that has already
+committed on the server. Server join/restore therefore uses prepared transport
+pairs and a synchronous commit boundary:
 
-The current code snapshots `desired` streams before `cleanupTransports()` clears
-the ledger (`use-transports.ts` ~860), then **calls `consume()` manually** for
-each — a side path that bypasses ledger invariants. It needs a *second* intent
-ledger, `cancelledWatchedRestoreKeysRef`, so a stop-watch during recovery can veto
-a manual restore (`index.tsx:1075` writes both `markWatchStopped` **and**
-`cancelWatchedRestore`). That whole triad is scaffolding for not using the ledger.
+- fallible transport preparation happens before membership or active transport
+  ownership changes
+- current incarnation and mutation-token checks fence stale requests
+- a prepared pair is either committed once or disposed
+- existing-session replacement swaps the pair atomically
+- after a reconnect command establishes a server session, ownership is sticky
+  for that generation and terminal cleanup explicitly leaves it
 
-Target: the session machine emits **`RestoreWatchIntent(snapshot, generation)`**;
-the **ledger** rehydrates/validates `desired` from it, and the ledger's **own**
-command runner does the consuming. Consequences:
+This prevents a timed-out older request from replacing resources created by a
+newer attempt and prevents partial restore state from becoming visible.
 
-- **No manual `consume()` restore loop** in the session runner — the ~45-line
-  duplicated block disappears entirely rather than moving.
-- **`cancelledWatchedRestoreKeysRef` is deleted.** A stop-watch during recovery
-  becomes an ordinary `markWatchStopped` (`desired=false`) on a rehydrated ledger
-  slot — restore commands are minted from ledger state, so the veto is just
-  normal ledger flow. No second intent store kept by accident.
+## Invariants to preserve
 
-**Restore-slice resolution:** recovery cleanup preserves remote-media intent in
-the ledger, then rehydrates snapshot intent immediately as
-`desired:true, producerPresent:false` for missing slots. Later producer
-reconciliation mints the consume commands. A stop-watch during recovery therefore
-lands on a live ledger slot (`desired:false`), and retry cleanup preserves that
-stopped intent instead of resurrecting it from the old snapshot.
-
-## Execution plan
-
-Lands **atomically** — one PR, or a stacked-but-collapsed PR like #274 (bisectable
-commits, merged together). It does **not** ship in pieces, so there is no
-intermediate production window to protect. Ordering is therefore **store-first**
-(no throwaway read-old-store adapter):
-
-0. **Pure machine, unwired.** State union + event union + reducer +
-   `{ state, commands }` + full unit tests. Dead-but-tested; zero behavior change.
-   The event union covers **both trigger and result events** (see "Events:
-   triggers vs runner results") — the result events are what keep attempt
-   counters, error classification, and terminal transitions in the reducer rather
-   than the runner. The command union includes `RestoreWatchIntent { snapshot,
-   generation }` (drives the ledger; see "Restore goes through the ledger") and
-   `RecoverDesktopAppAudio` (fire-and-forget, runner-side). Tests cover both
-   preemption races, the nonce cap, stale command ids/generations, and each
-   result-event transition. Define the module boundary here: pure machine module
-   has no store writes; store module exposes dispatch/select only.
-1. **Subsume the store — behind the existing facade.** Change the *bodies* of the
-   exported `reconnect-coordinator` functions (`ensureVoiceReconnectStarted`,
-   `clearVoiceReconnectRecovery`, `markVoiceReconnectSession(Un)authenticated`,
-   `captureVoiceReconnectIntentForCurrentSession`, `getValidPendingVoiceReconnect`,
-   selectors) to `dispatch` / select against the machine — **keep the names**. The
-   `trpc.ts` / `actions.ts` call-sites stay untouched, so this commit's diff is
-   "facade internals + store shape," not an enormous cross-cutting rewrite.
-   Mechanical, green, no behavior change. (Per-call-site migration to raw
-   `dispatch` is optional and later — the facade is a reviewability boundary, not
-   throwaway architecture.)
-2. **Cut over `rebuilding`.** Replace the inline transport recovery loop
-   with dispatch → machine → runner, including the `WsDropped`-preemption
-   cancellation token. The runner command handlers return/dispatch only result
-   events (`RebuildSucceeded` / `RebuildFailed { error }` etc.); the reducer
-   classifies failures and owns retry, failure, and terminal decisions. Convert
-   `recover-transport-session.test.ts`
-   mirror → real (imports the machine), and add runner-adapter tests proving the
-   runner does not call reconnect/session mutators directly.
-3. **Cut over `reconnecting` + ledger-driven restore.** Same for the WS loop;
-   replace the manual snapshot-consume side path with `RestoreWatchIntent` →
-   ledger rehydrate → ledger runner consumes; delete `cancelledWatchedRestoreKeysRef`
-   (resolve the rehydration-window sub-question here). Reconnect wait/restore
-   handlers dispatch `Online*`, `Auth*`, `Restore*`, `RetryDelay*`, and
-   `WatchIntentRehydrated` result events only; the reducer owns retry scheduling
-   and terminal cleanup commands. Convert `voice-reconnect-restore.test.ts`
-   mirror → real. When adding reconnect runner precondition guards, do not map
-   "stop now" conditions to generic retryable failures; use explicit terminal /
-   expired result events so defensive branches do not burn retries with backoff.
-4. **Delete dead state / mirror remnants;** `ConnectionStatus` fully derived.
-   Add/enable the narrow lint restriction that prevents the session runner from
-   importing legacy facade mutators or raw state mutation APIs. Delete the
-   now-orphaned transport-failure policy helper/test and stale transport
-   recovery comments once both recovery paths are machine-run.
-   **Post-slice extraction:** the earlier embedded-runner seam decision is
-   superseded. `voice-session-command-executor.ts` now owns command execution,
-   `use-voice-session-executor.ts` is the narrow React adapter, and focused
-   executor/adapter/boundary tests cover command results, lifecycle replay, and
-   the prohibition on legacy reconnect mutation imports.
-
-   **Follow-ups intentionally left out of Slice 4:**
-
-   - Consider a reducer-owned completion event for terminal transport rebuild
-     cleanup, such as `LeaveAfterFailureCompleted`, if we want the stronger
-     invariant that clearing `currentVoiceChannelId` also returns the session
-     machine from `failed` to `idle`. Do not add an ad hoc runner dispatch for
-     this; keep phase cleanup as a reducer transition with a machine test.
-   - Consider moving retry delay calculation into the reducer command payload
-     (`RetryDelay { delayMs }`) if we want the runner to become fully mechanical.
-     The current runner still makes no retry-vs-terminal decision; it only
-     computes timing from the reducer-supplied attempt.
-
-Each *commit* is individually green and reviewable (bisect works), but no commit
-needs to be independently shippable.
-
-**Behavior-preserving, with quarantine.** Extraction commits change no behavior.
-Any latent bug found during extraction gets its **own** commit — never folded into
-a "refactor" commit, so `git bisect` can always separate a move from a fix.
+- The reducer is pure and owns all retry and terminal decisions.
+- At most one recovery phase and one active step exist at a time.
+- Commands and results are generation/id checked.
+- Executor ports re-check currency after awaited boundaries and before writes.
+- Recovery starts only with confirmed connectivity and authentication.
+- WebSocket recovery preempts transport rebuild; transport failure defers to an
+  active WebSocket recovery.
+- Remote watch restoration goes through the subscription ledger.
+- Local media mutations cannot publish after lifecycle ownership is lost.
+- Server restore preparation is private until one atomic commit.
+- Terminal failure cleans up both client resources and any server session already
+  established during that recovery generation.
 
 ## Verification
 
-Per-slice gate:
+Keep deterministic coverage at each boundary:
 
-1. Converted mirror → real tests pass (they now exercise the actual machine).
-2. Pure reducer unit tests (defer guard, nonce-restart cap, terminal
-   classification from raw errors, unknown-error cap, stale command
-   ids/generations, phase exclusivity).
-3. Runner adapter tests prove command handlers emit result events and do not
-   classify errors or mutate reconnect/session state directly.
-4. ReconnectLab manual scenarios (`reconnect-lab-debug.ts` panel).
-5. The #275 Playwright WebRTC scenarios: WS drop <60s, two-peer watch-intent
-   restore, producer-replaced-while-watched, offline < grace vs > grace.
+- reducer transition and stale-result tests in
+  `apps/client/src/features/server/voice/__tests__/voice-session-machine.test.ts`
+- store buffering and generation tests in the voice session store tests
+- executor cancellation, retry, timeout, detach, and finalization tests in
+  `voice-session-command-executor.test.ts`
+- React adapter remount/replay tests in `use-voice-session-executor.test.ts`
+- provider-level transport and watch restoration tests
+- server prepared-pair, join, restore, mutation-token, and cancellation tests
+
+Integrated validation should continue to cover WebSocket drops, offline deferral,
+rapid reconnects, transport rebuilds, server restarts, producer replacement,
+stop-watch races, provider remount, and desktop app-audio recovery where hardware
+is available.
