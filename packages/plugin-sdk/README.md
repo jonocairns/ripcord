@@ -1,175 +1,153 @@
 # Ripcord Plugin SDK
 
-The official SDK for building Ripcord plugins. This package provides TypeScript types and interfaces to extend Ripcord with custom functionality.
+TypeScript contracts for server plugins. Plugins are experimental, and the API
+may change between releases.
 
-> [!NOTE]
-> Ripcord plugins are an experimental feature and the SDK API may change in future releases.
+The package is currently private and is not published to a registry. Plugins in
+this repository can depend on `@sharkord/plugin-sdk` through the workspace.
+Standalone plugin projects must point their development dependency at a local
+Ripcord checkout or link the package locally. Type-only SDK imports are erased
+from the compiled plugin and are not needed by the server at runtime.
 
-## Creating a Plugin
+## Plugin layout
 
-### 1. Create Plugin Directory
-
-Create a plugin folder, e.g., `my-plugin`.
-
-### 2. Initialize Package
-
-Run `bun init` to bootstrap your plugin.
-
-### 3. Edit `package.json`
-
-Make sure your `package.json` includes the necessary fields.
-
-**Required fields:**
-
-- `name`: Plugin identifier
-- `version`: Semver version (e.g., `1.0.0`)
-- `sharkord.entry`: Entry file (must be `.js`)
-- `sharkord.author`: Plugin author name
-- `sharkord.description`: Brief description
-
-**Optional fields:**
-
-- `sharkord.homepage`: Plugin website/repository URL
-- `sharkord.logo`: Logo image filename
-
-Example `package.json`:
+Each plugin is a directory containing a `package.json` and a compiled JavaScript
+entry file. The manifest uses the existing `sharkord` compatibility key:
 
 ```json
 {
   "name": "my-plugin",
   "version": "0.0.1",
-  "module": "src/index.ts",
+  "type": "module",
   "sharkord": {
     "entry": "index.js",
     "author": "Me",
-    "homepage": "https://some-page.com",
-    "description": "This is my first Ripcord plugin!",
-    "logo": "https://some-page.com/logo.png"
-  },
-  "type": "module",
-  "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target bun --minify --format esm && cp package.json dist/"
-  },
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
+    "description": "Example Ripcord plugin",
+    "homepage": "https://example.com/my-plugin",
+    "logo": "https://example.com/logo.png"
   }
 }
 ```
 
-### 4. Install SDK
+Required fields are `name`, a semantic `version`, and `sharkord.entry`,
+`sharkord.author`, and `sharkord.description`. The entry must end in `.js`.
+`homepage` and `logo` are optional; `homepage`, when present, must be a URL.
 
-```bash
-bun add @sharkord/plugin-sdk
-```
+## Entry module
 
-> [!NOTE]
-> The SDK is not published to any package registry. For now, you need to link it locally using `bun link`.
+The entry must export `onLoad`. It may also export `onUnload`:
 
-### 3. Edit Entry File
-
-```typescript
-import type { PluginContext } from "@sharkord/plugin-sdk";
+```ts
+import type { PluginContext, UnloadPluginContext } from '@sharkord/plugin-sdk';
 
 const onLoad = (ctx: PluginContext) => {
-  ctx.log("My Plugin loaded");
+	ctx.log('Plugin loaded');
 
-  ctx.events.on("user:joined", ({ userId, username }) => {
-    ctx.log(`User joined: ${username} (ID: ${userId})`);
-  });
+	ctx.events.on('user:joined', ({ userId, username }) => {
+		ctx.log(`${username} joined as user ${userId}`);
+	});
 };
 
-const onUnload = (ctx: PluginContext) => {
-  ctx.log("My Plugin unloaded");
+const onUnload = (ctx: UnloadPluginContext) => {
+	ctx.log('Plugin unloaded');
 };
 
 export { onLoad, onUnload };
 ```
 
-Compile to JavaScript before loading:
+`onLoad` may be synchronous or asynchronous. Event listeners, commands, and
+registered setting definitions are removed when the plugin unloads.
+`UnloadPluginContext` deliberately exposes only logging methods; retain any
+resource handles your plugin needs to close in module state.
 
-```bash
-bun run build
+Compile TypeScript to the JavaScript entry named by the manifest before
+installing the plugin.
+
+## Context APIs
+
+### Logging
+
+`ctx.log`, `ctx.debug`, and `ctx.error` write to the plugin log surfaced in the
+server administration UI.
+
+### Events
+
+`ctx.events.on` supports these server events:
+
+- `user:joined`
+- `user:left`
+- `message:created`
+- `message:updated`
+- `message:deleted`
+- `voice:runtime_initialized`
+- `voice:runtime_closed`
+
+Handlers may be synchronous or asynchronous. Use the SDK’s `EventPayloads`
+typing rather than duplicating event payload shapes.
+
+### Commands
+
+Commands are available from the client command UI after registration:
+
+```ts
+ctx.commands.register({
+	name: 'greet',
+	description: 'Greet a user',
+	args: [
+		{
+			name: 'username',
+			type: 'string',
+			description: 'The user to greet',
+			required: true,
+		},
+	],
+	async executes(invoker, args: { username: string }) {
+		ctx.log(`Greeting requested by ${invoker.userId}`);
+		return `Hello, ${args.username}!`;
+	},
+});
 ```
 
-## Lifecycle
+Arguments may be strings, numbers, or booleans. Mark sensitive arguments with
+`sensitive: true` so the client masks their value. Command handlers receive the
+invoking user id and, when applicable, the user’s current voice channel id.
 
-### onLoad
+### Settings
 
-Called when the plugin is loaded. This is where you should:
+`ctx.settings.register` declares typed string, number, or boolean settings and
+returns `get`/`set` accessors. Settings appear in the plugin administration UI
+and are persisted by the server.
 
-- Register event listeners
-- Register commands
-- Initialize resources
-- Set up external connections
+### Voice integration
 
-### onUnload
+`ctx.actions.voice` can access a channel’s mediasoup router, create an external
+audio/video stream, and read the server listen configuration. External stream
+handles support `update` and `remove`. Treat mediasoup resources as owned
+resources and close them during unload.
 
-Called when the plugin is unloaded or the server shuts down. Use this to:
+## Installation
 
-- Clean up resources
-- Close connections
-- Save state
+Copy each built plugin directory into the server data directory’s `plugins`
+folder:
 
-**Note:** All event listeners and commands are automatically unregistered when the plugin unloads.
-
-## Commands
-
-Plugins can register custom commands that users can execute. Commands can accept arguments and return results.
-
-### Registering a Command
-
-```typescript
-import type { PluginContext, TInvokerContext } from "@sharkord/plugin-sdk";
-
-const onLoad = (ctx: PluginContext) => {
-  ctx.commands.register({
-    name: "greet",
-    description: "Greet a user",
-    args: [
-      {
-        name: "username",
-        type: "string",
-        description: "The user to greet",
-        required: true,
-        sensitive: false, // set to true if the argument is sensitive (e.g., passwords), in the interface it will be shown as ****
-      },
-    ],
-    async executes(invokerCtx: TInvokerContext, args: { username: string }) {
-      ctx.log(`Greeting ${args.username} invoked by user ${invokerCtx.userId}`);
-
-      return "Hello, " + args.username + "!";
-    },
-  });
-};
+```text
+<server data>/plugins/my-plugin/package.json
+<server data>/plugins/my-plugin/index.js
 ```
 
-## Adding The Plugin to Ripcord
+In development, server data is relative to the server working directory under
+`data/`. Production uses the platform application-data directory. The
+authoritative path construction is in `apps/server/src/helpers/paths.ts`.
 
-1. Go to the Ripcord data directory (usually `~/.config/sharkord`).
-2. Create a `plugins` folder if it doesn't exist.
-3. Create a folder for your plugin (e.g., `my-plugin`).
-4. Copy your compiled plugin files (e.g., from `dist/`) into the `my-plugin` folder.
-5. Enable your plugin in the server settings under the "Plugins" section.
-6. Restart Ripcord or reload plugins from the admin panel.
-7. Your plugin should now be loaded and active!
+Enable plugins globally in server settings, then enable the individual plugin in
+the Plugins administration section. Enabling and disabling an installed plugin
+loads and unloads it without a server restart.
 
-## Best Practices
+## Source of truth
 
-1. **Always handle errors**: Wrap async operations in try-catch blocks
-2. **Clean up resources**: Implement `onUnload` to prevent memory leaks
-3. **Use TypeScript**: Get type safety and better IDE support
-4. **Log appropriately**: Use `debug` for verbose info, `error` for failures
-5. **Validate inputs**: Check command arguments before using them
-6. **Version carefully**: Follow semver for plugin updates
-7. **Prevent blocking operations**: Do NOT block the event loop with long-running tasks (example: using Bun.spawnSync). Use asynchronous methods instead.
+- Public SDK types: `packages/plugin-sdk/src/index.ts`
+- Manifest validation and command types: `packages/shared/src/plugins.ts`
+- Runtime behavior: `apps/server/src/plugins/index.ts`
 
-## API Reference
-
-No documentation available yet. Use the types in `packages/plugin-sdk/src/index.ts` as a reference.
-
-## License
-
-This SDK is part of the Ripcord project. See the main repository for license information.
+The SDK has no separate generated API reference. Keep examples aligned with
+those files when the experimental contract changes.
