@@ -21,7 +21,7 @@ const makeDeps = () => {
 };
 
 describe('performGracefulShutdown', () => {
-	test('runs steps in order: broadcast → drain → closeServers → closeMedia → closeDb → flush → exit', async () => {
+	test('stops accepting connections before broadcast → drain → resource cleanup → flush → exit', async () => {
 		const { calls, deps } = makeDeps();
 
 		const resources: TShutdownResources = {
@@ -41,7 +41,7 @@ describe('performGracefulShutdown', () => {
 
 		await performGracefulShutdown('SIGTERM', resources, deps);
 
-		expect(calls).toEqual(['broadcast', 'drain', 'closeServers', 'closeMedia', 'closeDb', 'flush', 'exit:143']);
+		expect(calls).toEqual(['closeServers', 'broadcast', 'drain', 'closeMedia', 'closeDb', 'flush', 'exit:143']);
 	});
 
 	test('SIGINT exits 130', async () => {

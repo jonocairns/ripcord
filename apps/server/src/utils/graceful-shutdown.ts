@@ -54,17 +54,19 @@ const performGracefulShutdown = async (
 ): Promise<void> => {
 	logger.info('Graceful shutdown initiated by %s', signal);
 
-	// 1. Ask clients to reconnect now, then drain briefly. They re-enter the
-	//    (jittered) reconnect path proactively instead of all reacting to the
-	//    socket drop at the same instant when the process exits.
+	// 1. Stop accepting new connections before asking existing clients to
+	//    reconnect. tRPC reacts to the reconnect notification immediately; if the
+	//    listener remains open, clients can restore against this draining process
+	//    and then start an overlapping second recovery when it exits.
+	if (current.closeServers) {
+		await runStep('closeServers', current.closeServers);
+	}
+
+	// 2. Ask connected clients to reconnect, then drain briefly so the
+	//    notification flushes before media and database resources are released.
 	if (current.broadcastReconnect) {
 		await runStep('broadcastReconnect', current.broadcastReconnect);
 		await deps.sleep(deps.drainMs);
-	}
-
-	// 2. Stop accepting new connections.
-	if (current.closeServers) {
-		await runStep('closeServers', current.closeServers);
 	}
 
 	// 3. Release media + database handles cleanly (worker, WAL checkpoint).
@@ -105,9 +107,4 @@ const registerGracefulShutdown = (): void => {
 	process.once('SIGINT', () => handleSignal('SIGINT'));
 };
 
-export {
-	performGracefulShutdown,
-	registerGracefulShutdown,
-	setShutdownResources,
-	type TShutdownResources,
-};
+export { performGracefulShutdown, registerGracefulShutdown, setShutdownResources, type TShutdownResources };

@@ -695,6 +695,7 @@ export const markRemoteProducerClosed = (
 	kind: StreamKind,
 	now: number,
 	producerId?: string,
+	options: { preserveDesired?: boolean } = {},
 ): TRemoteMediaReducerResult => {
 	const key = getPendingStreamKey(remoteId, kind);
 	const existing = subscriptions.get(key);
@@ -708,7 +709,9 @@ export const markRemoteProducerClosed = (
 	}
 
 	const closeCommand = closeConsumerCommandFor(existing);
-	const desired = shouldKeepDesireOnProducerClose(kind, existing, subscriptions);
+	const desired = options.preserveDesired
+		? existing.desired
+		: shouldKeepDesireOnProducerClose(kind, existing, subscriptions);
 	let next = applySlotUpdate(
 		subscriptions,
 		existing,
@@ -725,7 +728,7 @@ export const markRemoteProducerClosed = (
 		now,
 	);
 
-	if (kind === StreamKind.SCREEN) {
+	if (kind === StreamKind.SCREEN && !options.preserveDesired) {
 		const audio = next.get(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO));
 
 		// Only revoke screen-audio desire while it is actually held, so repeated
@@ -1201,8 +1204,8 @@ export const useRemoteMediaSubscriptions = () => {
 		[update],
 	);
 	const removePendingStream = useCallback(
-		(remoteId: number, kind: StreamKind, producerId?: string) => {
-			update((prev, now) => markRemoteProducerClosed(prev, remoteId, kind, now, producerId));
+		(remoteId: number, kind: StreamKind, producerId?: string, options?: { preserveDesired?: boolean }) => {
+			update((prev, now) => markRemoteProducerClosed(prev, remoteId, kind, now, producerId, options));
 		},
 		[update],
 	);

@@ -191,6 +191,28 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 		publishSpy.mockRestore();
 	});
 
+	test('a producer transport rebuild marks the screen close as recoverable', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+
+		const screen = makeSyncCloseProducer('screen');
+		runtime.addProducer(1, StreamKind.SCREEN, screen.producer);
+
+		const publishSpy = spyOn(pubsub, 'publishForChannel');
+
+		runtime.removeProducer(1, StreamKind.SCREEN, { recoverable: true });
+
+		expect(publishSpy).toHaveBeenCalledWith(runtime.id, ServerEvents.VOICE_PRODUCER_CLOSED, {
+			channelId: runtime.id,
+			remoteId: 1,
+			kind: StreamKind.SCREEN,
+			producerId: 'screen',
+			recoverable: true,
+		});
+
+		publishSpy.mockRestore();
+	});
+
 	test('an unexpected webcam producer close resets webcamEnabled and broadcasts', async () => {
 		const runtime = await makeRuntime();
 		runtime.addUser(1, { micMuted: false, soundMuted: false });
