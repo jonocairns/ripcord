@@ -88,6 +88,7 @@ import {
 	VoiceSessionExecutionSupersededError,
 } from './hooks/session-execution-ownership';
 import { useLocalStreams } from './hooks/use-local-streams';
+import { useMicrophonePipelineControllerLifecycle } from './hooks/use-microphone-pipeline-controller-lifecycle';
 import { getPendingStreamKey, type TExternalStreamTrackPresence } from './hooks/use-pending-streams';
 import { useRemoteMediaConsumeRunner } from './hooks/use-remote-media-consume-runner';
 import { useRemoteMediaRepairRunner } from './hooks/use-remote-media-repair-runner';
@@ -1437,6 +1438,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		});
 	}
 	const microphoneController = microphoneControllerRef.current;
+	useMicrophonePipelineControllerLifecycle(microphoneController);
 
 	const applyMicGainVolume = useCallback(
 		(volume: number) => {
@@ -1882,29 +1884,33 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// Acquire mic stream and build the processing pipeline (WASM denoise + gain).
 	// This has no dependency on the mediasoup device or transports, so it can run
 	// concurrently with device.load() and transport creation during voice join.
-	const prepareMicPipeline = useCallback(async (): Promise<TMicrophonePreparedPipeline> => {
-		const micProcessingConfig = resolveMicProcessingConfig(devices);
-		const micConstraints: MediaTrackConstraints = {
-			...(devices.microphoneId
-				? {
-						deviceId: {
-							exact: devices.microphoneId,
-						},
-					}
-				: {}),
-			autoGainControl: micProcessingConfig.browserAutoGainControl,
-			echoCancellation: micProcessingConfig.browserEchoCancellation,
-			noiseSuppression: micProcessingConfig.browserNoiseSuppression,
-			sampleRate: 48000,
-		};
+	const prepareMicPipeline = useCallback(
+		async (isCurrent?: () => boolean): Promise<TMicrophonePreparedPipeline> => {
+			const micProcessingConfig = resolveMicProcessingConfig(devices);
+			const micConstraints: MediaTrackConstraints = {
+				...(devices.microphoneId
+					? {
+							deviceId: {
+								exact: devices.microphoneId,
+							},
+						}
+					: {}),
+				autoGainControl: micProcessingConfig.browserAutoGainControl,
+				echoCancellation: micProcessingConfig.browserEchoCancellation,
+				noiseSuppression: micProcessingConfig.browserNoiseSuppression,
+				sampleRate: 48000,
+			};
 
-		return microphoneController.prepare({
-			constraints: micConstraints,
-			processingEnabled: micProcessingConfig.wasmNoiseSuppressionEnabled,
-			gainVolume: getStoredVolume(OWN_MIC_VOLUME_KEY),
-			selectedMicrophoneId: devices.microphoneId,
-		});
-	}, [devices, microphoneController]);
+			return microphoneController.prepare({
+				constraints: micConstraints,
+				processingEnabled: micProcessingConfig.wasmNoiseSuppressionEnabled,
+				gainVolume: getStoredVolume(OWN_MIC_VOLUME_KEY),
+				selectedMicrophoneId: devices.microphoneId,
+				isCurrent,
+			});
+		},
+		[devices, microphoneController],
+	);
 
 	// Attach the prepared mic pipeline to the producer transport. Must be called
 	// after the producer transport is ready.
@@ -1916,6 +1922,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 
 	const startMicStream = useCallback(async () => {
+		// Capture provider lifetime before entering the mutex. A request queued by
+		// the pre-replay lifecycle must not acquire media after reactivation.
+		const lifecycleLease = microphoneController.createLifecycleLease();
+
 		// Serialize mic pipeline operations so concurrent callers (device change,
 		// unmute, volume threshold) queue rather than race each other.
 		const previousMutex = micPipelineMutexRef.current;
@@ -1928,8 +1938,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 		try {
 			await previousMutex;
+			if (!lifecycleLease.isCurrent()) {
+				return;
+			}
 			logVoice('Starting microphone stream');
-			prepared = await prepareMicPipeline();
+			prepared = await prepareMicPipeline(lifecycleLease.isCurrent);
 			await produceMicTrack(prepared);
 		} catch (error) {
 			logVoice('Error starting microphone stream', { error });
@@ -3190,9 +3203,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				isCurrentRecovery?: () => boolean;
 			},
 		) => {
+			const microphoneLifecycleLease = microphoneController.createLifecycleLease();
 			const ownsSessionExecution = claimVoiceSessionExecution(sessionExecutionOwnershipRef.current);
 			const isCurrent = (): boolean =>
-				ownsSessionExecution() && (opts?.isCurrentRecovery === undefined || opts.isCurrentRecovery());
+				microphoneLifecycleLease.isCurrent() &&
+				ownsSessionExecution() &&
+				(opts?.isCurrentRecovery === undefined || opts.isCurrentRecovery());
 
 			return traceSentrySpan(
 				{
@@ -3249,7 +3265,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						// dependency on the mediasoup device or transports and are the slowest
 						// part of startMicStream. Running them concurrently with device.load()
 						// and transport creation saves ~200-300ms on join.
-						micPrepPromise = prepareMicPipeline().catch((error) => {
+						micPrepPromise = prepareMicPipeline(isCurrent).catch((error) => {
 							// prepareMicPipeline cleans up after its own failures, and a
 							// superseded build must not touch the successor's pipeline —
 							// so no shared teardown here.
@@ -3961,9 +3977,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		return () => {
 			logVoice('Voice provider unmounting, cleaning up resources');
 			voiceCleanupRef.current?.();
-			void microphoneController.dispose();
 		};
-	}, [microphoneController]);
+	}, []);
 
 	const contextValue = useMemo<TVoiceProvider>(
 		() => ({
