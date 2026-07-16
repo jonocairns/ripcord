@@ -144,7 +144,7 @@ still captured exactly once, before `init` / `cleanupTransports` wipes the ledge
   merging the phases. See "Restore goes through the ledger" for what that command
   is.
 
-### Placement: module-level reducer, runner in the provider
+### Placement: module-level reducer and extracted command executor
 
 The store is written **from outside the React tree** — `lib/trpc.ts` (socket
 close → start reconnect; kick/ban → clear), `features/server/actions.ts`
@@ -159,10 +159,11 @@ So:
   joinServer success → `dispatch({ type: 'SocketAuthenticated' })`; kick →
   `dispatch({ type: 'Terminated', reason: 'kicked' })`. The machine decides what
   each event *means*.
-- **The runner is a `useEffect` in `VoiceProvider`** that subscribes to the
-  machine's `commands` and executes them with the live React-scoped deps
-  (transport creation, `consume`, `init`, `restoreOrJoin`) — the same shape as
-  #274's `useRemoteMediaConsumeRunner`.
+- **The command implementation lives outside `VoiceProvider`** in
+  `voice-session-command-executor.ts`. The thin
+  `use-voice-session-executor.ts` adapter subscribes to machine commands and
+  supplies the live React-scoped ports (transport creation, `consume`, `init`,
+  and `restoreOrJoin`). `VoiceProvider` only assembles those ports.
 
 **Desktop app-audio recovery is a runner-side command, not a machine phase.**
 `runDesktopAppAudioRecovery` (`index.tsx` ~2843), which rides along inside
@@ -222,10 +223,12 @@ Implementation shape:
 - `voice-session-store.ts` owns the module-level state and exports
   `dispatchVoiceSession(event)` plus read/select helpers. It does **not** export
   raw `setState` or phase mutators.
-- `use-voice-session-runner.ts` accepts commands and returns/dispatches only
-  result events. It forwards raw errors on failure events; it may not classify
-  them, read reducer-owned counters, increment counters, choose retry vs
-  terminal, clear recovery, or mutate reconnect/session state directly.
+- `voice-session-command-executor.ts` accepts commands through injected ports
+  and returns/dispatches only result events. It forwards raw errors on failure
+  events; it may not classify them, read reducer-owned counters, increment
+  counters, choose retry vs terminal, clear recovery, or mutate
+  reconnect/session state directly. `use-voice-session-executor.ts` owns only
+  mount/unmount and ref-backed port freshness.
 - Commands carry an id/generation; result events echo it. The reducer drops stale
   results, so superseded runner work cannot write into a newer phase.
 - The legacy `reconnect-coordinator` facade remains during migration, but its
@@ -322,19 +325,11 @@ intermediate production window to protect. Ordering is therefore **store-first**
    importing legacy facade mutators or raw state mutation APIs. Delete the
    now-orphaned transport-failure policy helper/test and stale transport
    recovery comments once both recovery paths are machine-run.
-   If the rebuild runner remains embedded in `VoiceProvider`, either extract a
-   narrow runner-adapter seam for command-in → result-event-out tests or record
-   why reducer-level coverage is the accepted substitute.
-
-   **Slice 4 seam decision:** the runner remains embedded in `VoiceProvider` for
-   now because it still needs React-scoped transport, media, and desktop-audio
-   dependencies that would make an extracted adapter mostly parameter plumbing.
-   The accepted seam is reducer-level command/result coverage plus a focused
-   boundary test that prevents the embedded runner from importing legacy
-   reconnect mutators or raw machine reset APIs. Extract a separate
-   `useVoiceSessionRunner` only when the effect surface is narrow enough for
-   command-in → result-event-out tests to cover behavior without mocking most of
-   `VoiceProvider`.
+   **Post-slice extraction:** the earlier embedded-runner seam decision is
+   superseded. `voice-session-command-executor.ts` now owns command execution,
+   `use-voice-session-executor.ts` is the narrow React adapter, and focused
+   executor/adapter/boundary tests cover command results, lifecycle replay, and
+   the prohibition on legacy reconnect mutation imports.
 
    **Follow-ups intentionally left out of Slice 4:**
 

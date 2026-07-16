@@ -25,7 +25,12 @@ type TEvents = {
 		producerId?: string,
 		externalStreamTracks?: TExternalStreamTrackPresence,
 	) => void;
-	removePendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
+	removePendingStream: (
+		remoteId: number,
+		kind: StreamKind,
+		producerId?: string,
+		options?: { preserveDesired?: boolean },
+	) => void;
 	removeRemoteUserStream: (userId: number, kind: TRemoteUserStreamKinds) => void;
 	removeExternalStreamTrack: (streamId: number, kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO) => void;
 	removeExternalStream: (streamId: number) => void;
@@ -159,7 +164,7 @@ const useVoiceEvents = ({
 		});
 
 		const onVoiceProducerClosedSub = trpc.voice.onProducerClosed.subscribe(undefined, {
-			onData: ({ channelId, remoteId, kind, producerId }) => {
+			onData: ({ channelId, remoteId, kind, producerId, recoverable }) => {
 				if (currentVoiceChannelId !== channelId || isCleaningUp) return;
 
 				if (
@@ -186,10 +191,13 @@ const useVoiceEvents = ({
 				});
 
 				try {
-					// A SCREEN close revokes SCREEN_AUDIO desire inside the reducer
-					// (markRemoteProducerClosed cascade), so audio intent cannot outlive
-					// the share while SCREEN_AUDIO producer churn alone still keeps it.
-					removePendingStream(remoteId, kind, producerId);
+					// A transport rebuild replaces every producer. Preserve explicit watch
+					// intent for those recoverable closes so the replacement is consumed
+					// automatically; an actual share stop remains terminal and revokes the
+					// SCREEN_AUDIO sibling inside markRemoteProducerClosed.
+					removePendingStream(remoteId, kind, producerId, {
+						preserveDesired: recoverable === true,
+					});
 
 					if (kind === StreamKind.EXTERNAL_VIDEO || kind === StreamKind.EXTERNAL_AUDIO) {
 						removeExternalStreamTrack(remoteId, kind);

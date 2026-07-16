@@ -8,6 +8,7 @@ type TVoiceProducerEvent = {
 	remoteId: number;
 	kind: StreamKind;
 	producerId?: string;
+	recoverable?: boolean;
 };
 
 type TVoiceActivityEvent = {

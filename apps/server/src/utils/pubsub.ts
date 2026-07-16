@@ -98,6 +98,7 @@ type Events = {
 		remoteId: number;
 		kind: StreamKind;
 		producerId?: string;
+		recoverable?: boolean;
 	};
 	[ServerEvents.VOICE_ACTIVITY_UPDATE]: {
 		channelId: number;

@@ -1,14 +1,19 @@
 # Voice Session Execution Extraction and Transactional Restore Plan
 
-**Status:** In progress. C0/C1 landed in PR #278, C2/C3 landed in PR #279, C4
-landed in PR #280, C5 landed in PR #281, C6 landed in PR #282, C7 landed in PR
-#283, C8 landed in PR #284, C9 landed in PR #285, S0 landed in PR #286, S1
-landed in PR #287, S2 landed in PR #289, S3 landed in PR #290, and S4 landed in
-PR #291. V0 observability is implemented in draft PR #292, and the PR #275
-Playwright recovery matrix passes against its commit. Final V0 closeout remains
-blocked on literal server-restart and hardware-backed desktop app-audio evidence.
-Completed slices carry a **Landed** note recording what was built and what later
-slices should inherit.
+**Status:** **Implemented.** All
+client slices C0-C9 and server slices S0-S4 have landed, and V0 observability
+landed in PR #292. PR #293 subsequently hardened the microphone controller
+against React Strict Mode lifecycle replay, and PR #294 fenced desktop app-audio
+recovery across provider unmount and replay. The PR #275 Playwright recovery
+matrix passed against PR #292. Post-hardening manual validation passed the
+microphone Strict Mode/rejoin path, and focused current-tip Playwright closeout
+proved both remaining failures fixed: an explicit screen watch now survives the
+sharer's ICE-only producer replacement, and two clients restore voice membership
+after a literal graceful server-process restart and remain joined beyond the old
+20-second teardown window. Hardware-backed desktop app-audio validation is
+explicitly deferred while that capability remains beta and is not a closeout
+blocker. Completed slices carry a **Landed** note recording what was built and
+what later slices should inherit.
 
 **Supersedes:** The Slice 4 seam decision in
 [`voice-session-fsm.md`](./voice-session-fsm.md), which accepted an embedded
@@ -1191,18 +1196,30 @@ impossible by construction or passes under the documented post-commit owner.
 **Objective:** Prove the extracted layers behave together and leave useful
 production diagnostics.
 
-V0 is a gate, not a standalone work item. Draft PR #292 adds the focused client
+V0 is a gate, not a standalone work item. PR #292 landed the focused client
 command spans, Sentry error adapters, server attempt outcomes, and
 ownership-relative prepared-pair events. Integrated automation and
 environment-bound validation remain gate evidence rather than reasons to reopen
 the client FSM or server ownership architecture. This section is the
 consolidated checklist for declaring the plan implemented.
 
-**Current V0 evidence (2026-07-15):** PR #292 commit `23d79c68` passes formatting,
-root type checking, lint, and knip; 45 focused client observability/executor tests;
-75 focused server transaction/observability tests; all 495 client tests; and all
-683 server tests. The observer seams use injected clocks and deferred operations,
-so outcome ordering and duration do not depend on wall-clock sleeps.
+**Current V0 evidence (2026-07-16):** PR #292 landed as `a491bd47` after passing
+formatting, root type checking, lint, and knip; 45 focused client
+observability/executor tests; 75 focused server transaction/observability tests;
+all 495 client tests; and all 683 server tests. The observer seams use injected
+clocks and deferred operations, so outcome ordering and duration do not depend
+on wall-clock sleeps.
+
+Post-V0 review found two provider-lifecycle gaps without changing the executor
+or server transaction architecture. PR #293 landed as `e77b6f23`; it replaced
+permanent microphone-controller disposal with a reversible lifecycle and added
+Strict Mode, stale-capture, successor-publication, and final-deactivation
+coverage. Its focused 34-test set, all 501 client tests, and root checks passed.
+PR #294 landed as `69259246`; it added a lifecycle lease for queued and in-flight
+desktop app-audio recovery, including native ingest, worklet fallback, and
+successor ownership coverage. Its focused 31-test set, all 504 client tests, and
+root checks passed. These deterministic suites strengthen the ownership proof,
+but they do not replace current-tip integrated or hardware-backed evidence.
 
 **Automated validation:**
 
@@ -1239,21 +1256,45 @@ its configured retry. A separate offline-defer run with retries disabled passed
 in 13 seconds, confirming that its first failure was the spike's documented
 shared-dev login/sync flake rather than a recovery assertion.
 
+This matrix remains historical evidence for PR #292. The complete matrix has not
+been repeated against the `main` tip containing PRs #293 and #294; the focused
+current-tip results below supersede it for the affected recovery paths.
+
+**Current-tip manual and Playwright evidence (2026-07-16):** The microphone
+Strict Mode/rejoin smoke path passed manually. Focused Playwright scenarios on a
+working tree based on `origin/main` at `69259246` proved that an explicitly
+watched screen share stays attached when either the watcher or sharer reconnects
+its WebSocket, when the watcher rebuilds its own transports, and now when the
+sharer performs an ICE-only transport rebuild. Producer-close events emitted by
+a transport replacement carry a recoverable disposition, so the watcher keeps
+SCREEN and SCREEN_AUDIO desire and consumes the replacement automatically. A
+normal share stop remains terminal and still revokes both intents.
+
+The same isolated Playwright environment killed and restarted the real server
+process while two peers remained open in voice. Both clients restored fresh
+voice sessions on the replacement process and remained joined after an
+additional 25-second stability wait, covering the old app-teardown timer. The
+client now treats graceful shutdown as voice-recoverable, and graceful shutdown
+stops accepting new connections before broadcasting tRPC's reconnect request;
+clients therefore cannot restore against the draining process and overlap that
+recovery with the replacement process. Hardware-backed desktop app/system-audio
+evidence remains explicitly deferred while that capability is beta.
+
 | Scenario | Evidence | Status |
 | --- | --- | --- |
-| In-session transport rebuild | PR #275 Playwright ICE-only failure; outbound camera bytes increased after rebuild | Satisfied |
+| In-session transport rebuild | PR #275 camera recovery passes. Current-tip Playwright proves an explicitly watched screen receives fresh inbound bytes after the sharer's ICE-only rebuild without showing `Watch` again | Satisfied |
 | WS drop and authenticated restore | PR #275 short-drop and one-shot failed-restore/retry scenarios; media resumed | Satisfied |
 | Offline pause beyond an original TTL | PR #275 offline-defer and >60-second offline-grace scenarios; executor live-deadline fake-clock coverage | Satisfied |
 | Rapid WS flap while restore is pending | PR #275 four-drop rapid-flap scenario converged with media flowing | Satisfied |
-| Server restart with fresh restore/join | Fresh prepare/commit is covered in `voice-restore-or-join-service.test.ts`, but no run killed and restarted the real server process | Environment-bound gap |
+| Server restart with fresh restore/join | Current-tip Playwright killed and restarted the real server process. Both clients restored fresh voice sessions and stayed joined beyond the old 20-second teardown window | Satisfied |
 | Stop Watching during pending consume, then re-watch | `remote-media-consume-controller.test.ts` closes the late allocation and proves a fresh re-watch cannot be cleared by the cancelled completion; the two-peer Playwright scenario proves producer-stop cleanup | Satisfied deterministically |
-| Provider remount during recovery/finalization | `use-voice-session-executor.test.ts`, `voice-session-command-executor.test.ts`, and `voice-session-store.test.ts` cover rebuild, restore, and buffered final-command remounts through the real executor/store seams | Satisfied deterministically |
+| Provider remount during recovery/finalization | `use-voice-session-executor.test.ts`, `voice-session-command-executor.test.ts`, and `voice-session-store.test.ts` cover rebuild, restore, and buffered final-command remounts through the real executor/store seams; current-tip microphone Strict Mode/rejoin smoke passed manually | Satisfied |
 | Two-tab conflict and same-client reconnect | PR #275 genuine two-tab takeover scenario plus server same-client/conflict integration tests | Satisfied |
-| Desktop app/system audio recovery after rebuild | Client native app-audio recovery serialization and server ingest suites pass, but headless Chromium cannot exercise the shipped desktop capture/RTP backend with real application audio | Partial; hardware/desktop gap |
+| Desktop app/system audio recovery after rebuild | Client native app-audio recovery serialization, PR #294 lifecycle fencing, and server ingest suites pass. Hardware-backed validation is deferred while the capability remains beta | Accepted beta deferral |
 
 **Observability:**
 
-- Draft PR #292 emits one structured span per accepted executor command with command type, attempt, phase,
+- PR #292 emits one structured span per accepted executor command with command type, attempt, phase,
   generation, duration, and outcome. Do not log snapshots or media identifiers
   unnecessarily.
 - It distinguishes cancelled, superseded, detached, expired, failed, and
@@ -1273,11 +1314,18 @@ shared-dev login/sync flake rather than a recovery assertion.
 - [x] No command executor reads the Zustand reconnect projection.
 - [x] No server restore path mutates membership before all fallible preparation
   and final checks have completed.
-- [ ] Record literal server-process restart/fresh-restore evidence.
-- [ ] Record hardware-backed desktop app/system-audio recovery evidence, or
-  explicitly accept it as a release-environment manual gate.
-- [ ] After those items are resolved, change this document to **Implemented** and
-  reconcile the superseded seam section in `voice-session-fsm.md`.
+- [x] Current-tip microphone Strict Mode/rejoin smoke passes manually.
+- [x] Current-tip Playwright proves watched screen media survives watcher and
+  sharer WS reconnects and a watcher-side ICE-only rebuild.
+- [x] Explicit SCREEN and SCREEN_AUDIO desire survive a recoverable sharer-side
+  ICE-only producer replacement; focused Playwright proves the watcher resumes
+  without another `Watch` action.
+- [x] Literal server-process restart/fresh-restore passes: both Playwright peers
+  restore voice and remain joined beyond the former teardown deadline.
+- [x] Hardware-backed desktop app/system-audio recovery is explicitly deferred
+  while the capability remains beta.
+- [x] This document is marked **Implemented**, and the superseded embedded-runner
+  seam in `voice-session-fsm.md` is reconciled with the extracted executor.
 
 ## Review checklist per slice
 

@@ -241,6 +241,7 @@ class VoiceRuntime {
 	private audioProducers: TProducerMap = {};
 	private screenProducers: TProducerMap = {};
 	private screenAudioProducers: TProducerMap = {};
+	private recoverableProducerClosures = new WeakSet<Producer<AppData>>();
 	private appAudioIngests: TAppAudioIngestMap = {};
 	private appAudioIngestCreations = new Map<number, Promise<void>>();
 	private consumers: TConsumerMap = {};
@@ -691,7 +692,7 @@ class VoiceRuntime {
 			throw new VoiceRestoreAttemptSupersededError();
 		}
 
-		this.removeProducerTransport(userId);
+		this.removeProducerTransport(userId, { recoverable: true });
 
 		this.producerTransports[userId] = transport;
 		this.rotateVoiceSessionMutationToken(userId);
@@ -700,11 +701,16 @@ class VoiceRuntime {
 		return params;
 	};
 
-	public removeProducerTransport = (userId: number) => {
+	public removeProducerTransport = (userId: number, options: { recoverable?: boolean } = {}) => {
 		const transport = this.producerTransports[userId];
 
 		if (!transport) return;
 
+		if (options.recoverable) {
+			for (const producer of this.captureUserProducers(userId)) {
+				this.recoverableProducerClosures.add(producer);
+			}
+		}
 		transport.close();
 	};
 
@@ -847,6 +853,9 @@ class VoiceRuntime {
 				state = 'committed';
 				this.preparedTransportPairDisposals.delete(disposeOwnedTransports);
 				observe({ outcome: 'committed' });
+				for (const producer of oldProducers) {
+					this.recoverableProducerClosures.add(producer);
+				}
 
 				if (oldProducerTransport && oldProducerTransport !== preparedProducerAllocation.transport) {
 					this.closeReplacedVoiceResource(oldProducerTransport, userId, 'producer transport');
@@ -942,7 +951,7 @@ class VoiceRuntime {
 				return;
 			}
 
-			this.removeProducerTransport(userId);
+			this.removeProducerTransport(userId, { recoverable: true });
 			pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
 				userId,
 			});
@@ -1389,11 +1398,12 @@ class VoiceRuntime {
 				remoteId: userId,
 				kind: type,
 				producerId: producer.id,
+				...(this.recoverableProducerClosures.delete(producer) ? { recoverable: true } : {}),
 			});
 		});
 	};
 
-	public removeProducer(userId: number, type: StreamKind) {
+	public removeProducer(userId: number, type: StreamKind, options: { recoverable?: boolean } = {}) {
 		let producer: Producer<AppData> | undefined;
 
 		switch (type) {
@@ -1415,6 +1425,9 @@ class VoiceRuntime {
 
 		if (!producer) return;
 
+		if (options.recoverable) {
+			this.recoverableProducerClosures.add(producer);
+		}
 		producer.close();
 		// Deletion from the map and VOICE_PRODUCER_CLOSED publish are handled
 		// by the producer.observer.on('close') registered in addProducer.

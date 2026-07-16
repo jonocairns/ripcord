@@ -250,6 +250,42 @@ describe('remote media subscriptions', () => {
 		});
 	});
 
+	it('preserves watched screen and audio intent through recoverable producer replacement', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 100, 'screen-old'));
+		state = remoteMediaState(markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 100, 'audio-old'));
+		state = remoteMediaState(markRemoteWatchRequested(state, 3, StreamKind.SCREEN, 110));
+		state = remoteMediaState(
+			markRemoteProducerClosed(state, 3, StreamKind.SCREEN, 120, 'screen-old', { preserveDesired: true }),
+		);
+		state = remoteMediaState(
+			markRemoteProducerClosed(state, 3, StreamKind.SCREEN_AUDIO, 120, 'audio-old', { preserveDesired: true }),
+		);
+
+		expect(state.get(getPendingStreamKey(3, StreamKind.SCREEN))).toMatchObject({
+			desired: true,
+			producerPresent: false,
+			status: 'failed',
+		});
+		expect(state.get(getPendingStreamKey(3, StreamKind.SCREEN_AUDIO))).toMatchObject({
+			desired: true,
+			producerPresent: false,
+			status: 'failed',
+		});
+
+		const screenReplacement = markRemoteProducerPresent(state, 3, StreamKind.SCREEN, 130, 'screen-new');
+		state = screenReplacement.state;
+		const audioReplacement = markRemoteProducerPresent(state, 3, StreamKind.SCREEN_AUDIO, 130, 'audio-new');
+
+		expect(screenReplacement.commands).toContainEqual(
+			expect.objectContaining({ type: 'consume', kind: StreamKind.SCREEN, producerId: 'screen-new' }),
+		);
+		expect(audioReplacement.commands).toContainEqual(
+			expect.objectContaining({ type: 'consume', kind: StreamKind.SCREEN_AUDIO, producerId: 'audio-new' }),
+		);
+	});
+
 	it('keeps screen-audio desire through audio producer churn while screen remains watched', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 

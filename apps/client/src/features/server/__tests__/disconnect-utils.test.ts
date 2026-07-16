@@ -8,6 +8,10 @@ describe('shouldRestoreVoiceAfterDisconnect', () => {
 		expect(shouldRestoreVoiceAfterDisconnect(1000)).toBe(true);
 	});
 
+	it('keeps the previous voice channel for a graceful server restart', () => {
+		expect(shouldRestoreVoiceAfterDisconnect(DisconnectCode.SERVER_SHUTDOWN)).toBe(true);
+	});
+
 	it('does not keep the previous voice channel for forced removals', () => {
 		expect(shouldRestoreVoiceAfterDisconnect(DisconnectCode.KICKED)).toBe(false);
 		expect(shouldRestoreVoiceAfterDisconnect(DisconnectCode.BANNED)).toBe(false);

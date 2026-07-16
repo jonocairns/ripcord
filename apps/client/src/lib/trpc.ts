@@ -4,6 +4,7 @@ import { createTRPCProxyClient, createWSClient, wsLink } from '@trpc/client';
 import { resetApp } from '@/features/app/actions';
 import { resetDialogs } from '@/features/dialogs/actions';
 import { resetServerState, setDisconnectInfo } from '@/features/server/actions';
+import { shouldRestoreVoiceAfterDisconnect } from '@/features/server/disconnect-utils';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
@@ -68,15 +69,6 @@ const reconnectRetryDelayMs = (attemptIndex: number): number => {
 };
 
 const WS_CLIENT_INSTANCE_ID_STORAGE_KEY = 'ripcord.ws-client-instance-id';
-
-// These codes represent deliberate server-side actions — retrying immediately is
-// pointless (KICKED/BANNED) or premature (SERVER_SHUTDOWN). All other codes
-// (e.g. 1006 UNEXPECTED) get silent tRPC-level retries before app teardown.
-const DELIBERATE_DISCONNECT_CODES = new Set<number>([
-	DisconnectCode.KICKED,
-	DisconnectCode.BANNED,
-	DisconnectCode.SERVER_SHUTDOWN,
-]);
 
 const createClientInstanceId = () => {
 	const randomUUID = globalThis.crypto?.randomUUID;
@@ -156,7 +148,7 @@ const initializeTRPC = (host: string) => {
 			const state = useServerStore.getState();
 			const wasConnected = state.connected;
 
-			if (DELIBERATE_DISCONNECT_CODES.has(cause.code)) {
+			if (!shouldRestoreVoiceAfterDisconnect(cause.code)) {
 				// Tear down immediately for intentional server-side disconnects
 				if (cause.code === DisconnectCode.KICKED) {
 					clearVoiceReconnectRecovery('kicked');
