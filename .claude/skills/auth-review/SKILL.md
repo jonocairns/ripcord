@@ -71,6 +71,6 @@ A new endpoint added to the router must use the correct base. Adding a sensitive
 
 ## What this skill does NOT replace
 
-- It does not check that the auth implementation itself is correct — assume the existing primitives (`protectedProcedure`, `hasPermission`, etc.) are correct and focus on whether the change uses them correctly.
+- When auth primitives such as `protectedProcedure`, `hasPermission`, or authentication context construction are unchanged, focus on whether callers use them correctly. When the PR changes a primitive, review its implementation and every affected trust boundary directly.
 - It does not run any tool. It is a structured review prompt.
 - It does not catch concurrency bugs (token race conditions). Those are out of scope for static review.
