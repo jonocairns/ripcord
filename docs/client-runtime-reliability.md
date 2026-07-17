@@ -37,6 +37,15 @@ URLs, desktop bridge compatibility, and client-side diagnostics.
 - `apps/client/src/runtime/desktop-capabilities.ts` normalizes older desktop
   bridge capability payloads. New desktop bridge fields should stay optional on
   the renderer side until shipped desktop clients have aged out.
+- Application WebSocket disconnect codes use the valid private range:
+  `4000` for kick, `4001` for ban, and `4002` for server shutdown. The earlier
+  `40000`-series values could not be sent in a WebSocket close frame, so there is
+  no valid legacy wire format to preserve. Server releases chain matching
+  desktop builds from the same tag; the first release containing these corrected
+  codes is the minimum client version for typed kick/ban/shutdown screens. Older
+  clients degrade to generic reconnect handling and should be upgraded with the
+  server. Do not renumber these codes again without an explicit negotiated
+  protocol version.
 - Client error reporting sanitizes request metadata, user identity, tokens,
   URLs, and nested context before sending to Sentry. Desktop stack frames are
   rewritten from `file://` asset paths to server-hosted assets when the desktop

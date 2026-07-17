@@ -42,9 +42,13 @@ jobs:
         working-directory: apps/server
         run: bun test
 
+      - name: Run shared tests
+        working-directory: packages/shared
+        run: bun test
+
       - name: Run client tests
         working-directory: apps/client
-        run: bun test
+        run: bun run test
 
       - name: Run desktop tests
         working-directory: apps/desktop

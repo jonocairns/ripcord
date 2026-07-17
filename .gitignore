@@ -18,6 +18,8 @@ pnpm-lock.yaml
 apps/desktop/pnpm-lock.yaml
 apps/desktop/sidecar/target/
 apps/desktop/sidecar/bin/
+apps/client/test-results/
+apps/client/playwright-report/
 audio-tests/.outputs/
 data-test/
 __pycache__/

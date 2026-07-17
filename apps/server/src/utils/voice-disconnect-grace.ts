@@ -1,7 +1,12 @@
+import { DisconnectCode } from '@sharkord/shared';
 import { logger } from '../logger';
 
 const VOICE_DISCONNECT_GRACE_MS = 60_000;
 const FALLBACK_VOICE_DISCONNECT_GRACE_MS = 5_000;
+
+const shouldScheduleVoiceDisconnectGrace = (wsCloseCode: number) => {
+	return wsCloseCode !== DisconnectCode.KICKED && wsCloseCode !== DisconnectCode.BANNED;
+};
 
 type TVoiceDisconnectCounterKey = 'graceScheduled' | 'graceCancelled' | 'graceExpired' | 'missingClientInstanceId';
 type TVoiceDisconnectLogLevel = 'info' | 'warn';
@@ -399,5 +404,6 @@ export {
 	resetVoiceDisconnectGraceForTests,
 	schedulePendingVoiceDisconnect,
 	setVoiceDisconnectGraceSchedulerForTests,
+	shouldScheduleVoiceDisconnectGrace,
 	VOICE_DISCONNECT_GRACE_MS,
 };

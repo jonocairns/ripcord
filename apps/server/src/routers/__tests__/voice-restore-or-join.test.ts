@@ -15,6 +15,11 @@ import {
 	schedulePendingVoiceDisconnect,
 } from '../../utils/voice-disconnect-grace';
 import {
+	blockVoiceRestoreAfterKick,
+	isVoiceRestoreBlockedAfterKick,
+	resetVoiceKickGuardsForTests,
+} from '../../utils/voice-kick-guard';
+import {
 	toRestoreOrJoinPublicError,
 	VOICE_SESSION_OWNED_ELSEWHERE,
 	VOICE_SESSION_WRONG_CHANNEL,
@@ -111,6 +116,7 @@ afterEach(async () => {
 	await clearVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID);
 	await clearVoiceRuntime(SECONDARY_VOICE_CHANNEL_ID);
 	resetVoiceDisconnectGraceForTests();
+	resetVoiceKickGuardsForTests();
 });
 
 describe('voice.restoreOrJoin', () => {
@@ -195,6 +201,35 @@ describe('voice.restoreOrJoin', () => {
 		} finally {
 			preparePairSpy.mockRestore();
 		}
+	});
+
+	test('blocks a shipped client from automatically restoring voice after a kick', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const ctx = await createMockContext({ customToken: await getMockedToken(1) });
+		const caller = appRouter.createCaller(ctx);
+		const { handshakeHash } = await caller.others.handshake();
+		await caller.others.joinServer({ handshakeHash });
+
+		const kickGuardIdentity = { clientInstanceId: ctx.getClientInstanceId(), token: ctx.token };
+		blockVoiceRestoreAfterKick(ctx.user.id, kickGuardIdentity);
+
+		await expect(
+			caller.voice.restoreOrJoin({
+				channelId: PRIMARY_VOICE_CHANNEL_ID,
+				state: { micMuted: false, soundMuted: false },
+				reconnectAttemptId: 'legacy-client-automatic-restore',
+			}),
+		).rejects.toMatchObject({ code: 'FORBIDDEN' });
+		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeUndefined();
+		expect(isVoiceRestoreBlockedAfterKick(ctx.user.id, kickGuardIdentity)).toBe(true);
+
+		await caller.voice.join({
+			channelId: PRIMARY_VOICE_CHANNEL_ID,
+			state: { micMuted: false, soundMuted: false },
+		});
+
+		expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeDefined();
+		expect(isVoiceRestoreBlockedAfterKick(ctx.user.id, kickGuardIdentity)).toBe(false);
 	});
 
 	test('joins normally and returns bootstrap when the user is not already in voice', async () => {

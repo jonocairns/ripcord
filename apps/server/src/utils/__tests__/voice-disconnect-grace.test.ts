@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { DisconnectCode } from '@sharkord/shared';
 import { VoiceRuntime } from '../../runtimes/voice';
 import {
 	clearPendingVoiceDisconnect,
@@ -8,6 +9,7 @@ import {
 	resetVoiceDisconnectGraceForTests,
 	schedulePendingVoiceDisconnect,
 	setVoiceDisconnectGraceSchedulerForTests,
+	shouldScheduleVoiceDisconnectGrace,
 	type TVoiceDisconnectGraceScheduler,
 } from '../voice-disconnect-grace';
 
@@ -59,6 +61,13 @@ afterEach(() => {
 });
 
 describe('voice disconnect grace', () => {
+	test('only preserves reconnect grace for recoverable closes', () => {
+		expect(shouldScheduleVoiceDisconnectGrace(DisconnectCode.UNEXPECTED)).toBe(true);
+		expect(shouldScheduleVoiceDisconnectGrace(DisconnectCode.SERVER_SHUTDOWN)).toBe(true);
+		expect(shouldScheduleVoiceDisconnectGrace(DisconnectCode.KICKED)).toBe(false);
+		expect(shouldScheduleVoiceDisconnectGrace(DisconnectCode.BANNED)).toBe(false);
+	});
+
 	test('stores the seat incarnation for the matching entry and drops it on cancel', () => {
 		const seatIncarnation = Symbol('seat');
 

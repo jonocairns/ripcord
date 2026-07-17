@@ -1,32 +1,33 @@
 {
-  "name": "sharkord",
-  "version": "1.4.20",
-  "private": true,
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
-  "trustedDependencies": [
-    "mediasoup",
-    "electron"
-  ],
-  "scripts": {
-    "format": "bun run --filter '*' format",
-    "check-types": "bun run --filter '*' check-types",
-    "lint": "bun run --filter '*' lint",
-    "knip": "knip",
-    "knip:production": "knip --production",
-    "magic": "bun run format && bun run check-types && bun run lint",
-    "start": "node ./scripts/start.mjs",
-    "start:web": "concurrently -k -n client,server -c blue,green \"bun run --filter client dev\" \"bun run --filter @sharkord/server dev\"",
-    "build:windows": "bun run --filter @sharkord/desktop build:windows",
-    "build:windows:dev": "bun run --filter @sharkord/desktop build:windows:dev"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.0.0",
-    "@types/node": "^25.6.0",
-    "concurrently": "^9.2.1",
-    "knip": "^5.80.0",
-    "ts-morph": "^25.0.1"
-  }
+	"name": "sharkord",
+	"version": "1.4.20",
+	"private": true,
+	"workspaces": [
+		"apps/*",
+		"packages/*"
+	],
+	"trustedDependencies": [
+		"mediasoup",
+		"electron"
+	],
+	"scripts": {
+		"format": "bun run --filter '*' format",
+		"check-types": "bun run --filter '*' check-types",
+		"lint": "bun run --filter '*' lint",
+		"knip": "knip",
+		"knip:production": "knip --production",
+		"test:e2e": "bun run --filter client test:e2e",
+		"magic": "bun run format && bun run check-types && bun run lint",
+		"start": "node ./scripts/start.mjs",
+		"start:web": "concurrently -k -n client,server -c blue,green \"bun run --filter client dev\" \"bun run --filter @sharkord/server dev\"",
+		"build:windows": "bun run --filter @sharkord/desktop build:windows",
+		"build:windows:dev": "bun run --filter @sharkord/desktop build:windows:dev"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.0.0",
+		"@types/node": "^25.6.0",
+		"concurrently": "^9.2.1",
+		"knip": "^5.80.0",
+		"ts-morph": "^25.0.1"
+	}
 }

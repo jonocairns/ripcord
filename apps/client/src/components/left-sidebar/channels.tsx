@@ -101,6 +101,7 @@ const ItemWrapper = memo(
 		return (
 			<div
 				{...dragHandleProps}
+				aria-disabled={disabled}
 				style={style}
 				className={cn(
 					'relative flex w-full cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1.5 text-sm font-normal text-muted-foreground/60 transition-colors hover:bg-accent/60 hover:text-foreground',

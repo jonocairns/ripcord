@@ -1,10 +1,17 @@
-import { describe, expect, test } from 'bun:test';
-import { type TTempFile, UserStatus } from '@sharkord/shared';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { DisconnectCode, type TTempFile, UserStatus } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
-import { initTest, uploadFile } from '../../__tests__/helpers';
+import { createMockContext } from '../../__tests__/context';
+import { getMockedToken, initTest, uploadFile } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
 import { refreshTokens, users } from '../../db/schema';
 import { verifyPassword } from '../../helpers/password';
+import { appRouter } from '../../routers';
+import { isVoiceRestoreBlockedAfterKick, resetVoiceKickGuardsForTests } from '../../utils/voice-kick-guard';
+
+afterEach(() => {
+	resetVoiceKickGuardsForTests();
+});
 
 describe('users router', () => {
 	test('should throw when user lacks permissions (getAll)', async () => {
@@ -910,6 +917,27 @@ describe('users router', () => {
 				userId: 999,
 			}),
 		).rejects.toThrow('User is not connected');
+	});
+
+	test('should block voice restore before closing a kicked legacy client', async () => {
+		const ctx = await createMockContext({ customToken: await getMockedToken(1) });
+		const caller = appRouter.createCaller(ctx);
+		const { handshakeHash } = await caller.others.handshake();
+		await caller.others.joinServer({ handshakeHash });
+		let closeCall: { code: number; reason?: string } | undefined;
+		const targetConnection = {
+			clientInstanceId: 'legacy-client',
+			token: 'legacy-token',
+			close: (code: number, reason?: string) => {
+				closeCall = { code, reason };
+			},
+		};
+		Reflect.set(ctx, 'getUserWs', () => targetConnection);
+
+		await caller.users.kick({ userId: 2, reason: 'Compatibility test' });
+
+		expect(closeCall).toEqual({ code: DisconnectCode.KICKED, reason: 'Compatibility test' });
+		expect(isVoiceRestoreBlockedAfterKick(2, { clientInstanceId: 'legacy-client', token: 'legacy-token' })).toBe(true);
 	});
 
 	test('should handle multiple role operations', async () => {

@@ -2,6 +2,7 @@ import type http from 'node:http';
 import {
 	ActivityLogType,
 	ChannelPermission,
+	DisconnectCode,
 	OWNER_ROLE_ID,
 	type Permission,
 	ServerEvents,
@@ -33,7 +34,9 @@ import {
 	getPendingVoiceReconnectChannelId,
 	getPendingVoiceReconnectSeatIncarnation,
 	schedulePendingVoiceDisconnect,
+	shouldScheduleVoiceDisconnectGrace,
 } from './voice-disconnect-grace';
+import { blockVoiceRestoreAfterKick } from './voice-kick-guard';
 
 let wss: WebSocketServer | undefined;
 
@@ -402,6 +405,14 @@ const createWsServer = async (server: http.Server) => {
 				if (!trackedWs.userId) return;
 
 				const userId = trackedWs.userId;
+
+				if (wsCloseCode === DisconnectCode.KICKED) {
+					blockVoiceRestoreAfterKick(userId, {
+						clientInstanceId: trackedWs.clientInstanceId,
+						token: trackedWs.token,
+					});
+				}
+
 				const hasOtherConnections = hasOtherOpenUserConnection(userId, trackedWs);
 				const hasOtherVoiceConnection =
 					trackedWs.currentVoiceChannelId !== undefined
@@ -438,14 +449,19 @@ const createWsServer = async (server: http.Server) => {
 						});
 					};
 
-					schedulePendingVoiceDisconnect({
-						clientInstanceId,
-						userId,
-						channelId,
-						seatIncarnation,
-						wsCloseCode,
-						finalize: finalizeVoiceDisconnect,
-					});
+					if (shouldScheduleVoiceDisconnectGrace(wsCloseCode)) {
+						schedulePendingVoiceDisconnect({
+							clientInstanceId,
+							userId,
+							channelId,
+							seatIncarnation,
+							wsCloseCode,
+							finalize: finalizeVoiceDisconnect,
+						});
+					} else {
+						clearPendingVoiceDisconnect(clientInstanceId, userId);
+						finalizeVoiceDisconnect();
+					}
 				}
 
 				trackedWs.currentVoiceChannelId = undefined;
