@@ -3,6 +3,7 @@ import z from 'zod';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { blockVoiceRestoreAfterKick, getVoiceKickGuardIdentity } from '../../utils/voice-kick-guard';
 
 const kickRoute = protectedProcedure
 	.input(
@@ -21,6 +22,7 @@ const kickRoute = protectedProcedure
 			message: 'User is not connected',
 		});
 
+		blockVoiceRestoreAfterKick(input.userId, getVoiceKickGuardIdentity(userWs));
 		userWs.close(DisconnectCode.KICKED, input.reason);
 
 		enqueueActivityLog({

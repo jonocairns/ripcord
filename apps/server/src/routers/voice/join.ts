@@ -4,6 +4,7 @@ import { config } from '../../config';
 import { logger } from '../../logger';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { type Context, protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
+import { clearVoiceRestoreBlockAfterKick } from '../../utils/voice-kick-guard';
 import { getVoiceJoinTarget, prepareVoiceJoinBootstrap, voiceJoinInputSchema } from './bootstrap';
 import { createVoiceJoinService, type TVoiceJoinPresenceEvent, VoiceJoinSupersededError } from './join-service';
 import {
@@ -35,7 +36,7 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 	.input(voiceJoinInputSchema)
 	.mutation(async ({ input, ctx, signal }) => {
 		try {
-			return await joinVoiceService.join({
+			const result = await joinVoiceService.join({
 				channelId: input.channelId,
 				state: input.state,
 				mutationSeq: input.mutationSeq,
@@ -43,6 +44,12 @@ const joinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 				signal,
 				context: createVoiceJoinRequestContext(ctx),
 			});
+
+			clearVoiceRestoreBlockAfterKick(ctx.user.id, {
+				clientInstanceId: ctx.getClientInstanceId(),
+				token: ctx.token,
+			});
+			return result;
 		} catch (error) {
 			if (
 				error instanceof VoiceJoinSupersededError ||

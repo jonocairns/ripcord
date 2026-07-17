@@ -6,6 +6,7 @@ import { logger } from '../../logger';
 import { VoiceRestoreAttemptSupersededError, VoiceRuntime } from '../../runtimes/voice';
 import { type Context, protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
 import { getPendingVoiceReconnectChannelIdsOwnedElsewhere } from '../../utils/voice-disconnect-grace';
+import { isVoiceRestoreBlockedAfterKick } from '../../utils/voice-kick-guard';
 import { getVoiceJoinTarget, prepareVoiceJoinBootstrap, voiceJoinInputSchema } from './bootstrap';
 import { consumeVoiceReconnectLabNextRestoreBehavior } from './reconnect-lab-state';
 import {
@@ -48,6 +49,18 @@ const restoreOrJoinVoiceRoute = rateLimitedProcedure(protectedProcedure, {
 		}),
 	)
 	.mutation(async ({ input, ctx, signal }) => {
+		if (
+			isVoiceRestoreBlockedAfterKick(ctx.user.id, {
+				clientInstanceId: ctx.getClientInstanceId(),
+				token: ctx.token,
+			})
+		) {
+			throw new TRPCError({
+				code: 'FORBIDDEN',
+				message: 'Voice session restore is unavailable after a kick. Join voice again manually.',
+			});
+		}
+
 		try {
 			return await restoreOrJoinService.restoreOrJoin({
 				channelId: input.channelId,
