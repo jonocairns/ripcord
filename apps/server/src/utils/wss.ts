@@ -34,6 +34,7 @@ import {
 	getPendingVoiceReconnectChannelId,
 	getPendingVoiceReconnectSeatIncarnation,
 	schedulePendingVoiceDisconnect,
+	shouldScheduleVoiceDisconnectGrace,
 } from './voice-disconnect-grace';
 import { blockVoiceRestoreAfterKick } from './voice-kick-guard';
 
@@ -404,8 +405,6 @@ const createWsServer = async (server: http.Server) => {
 				if (!trackedWs.userId) return;
 
 				const userId = trackedWs.userId;
-				const isTerminalVoiceDisconnect =
-					wsCloseCode === DisconnectCode.KICKED || wsCloseCode === DisconnectCode.BANNED;
 
 				if (wsCloseCode === DisconnectCode.KICKED) {
 					blockVoiceRestoreAfterKick(userId, {
@@ -450,10 +449,7 @@ const createWsServer = async (server: http.Server) => {
 						});
 					};
 
-					if (isTerminalVoiceDisconnect) {
-						clearPendingVoiceDisconnect(clientInstanceId, userId);
-						finalizeVoiceDisconnect();
-					} else {
+					if (shouldScheduleVoiceDisconnectGrace(wsCloseCode)) {
 						schedulePendingVoiceDisconnect({
 							clientInstanceId,
 							userId,
@@ -462,6 +458,9 @@ const createWsServer = async (server: http.Server) => {
 							wsCloseCode,
 							finalize: finalizeVoiceDisconnect,
 						});
+					} else {
+						clearPendingVoiceDisconnect(clientInstanceId, userId);
+						finalizeVoiceDisconnect();
 					}
 				}
 

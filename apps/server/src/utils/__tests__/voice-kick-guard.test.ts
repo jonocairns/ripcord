@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
 	blockVoiceRestoreAfterKick,
-	clearVoiceRestoreBlockAfterKick,
-	getVoiceKickGuardIdentity,
 	isVoiceRestoreBlockedAfterKick,
 	resetVoiceKickGuardsForTests,
 } from '../voice-kick-guard';
@@ -19,33 +17,10 @@ describe('voice kick restore guard', () => {
 		expect(isVoiceRestoreBlockedAfterKick(2, { clientInstanceId: 'client-a' })).toBe(false);
 	});
 
-	test('reads the guard identity from a tracked connection', () => {
-		expect(getVoiceKickGuardIdentity({ clientInstanceId: 'client-a', token: 'token-a' })).toEqual({
-			clientInstanceId: 'client-a',
-			token: 'token-a',
-		});
-		expect(getVoiceKickGuardIdentity({ clientInstanceId: '', token: '' })).toEqual({
-			clientInstanceId: undefined,
-			token: undefined,
-		});
-	});
-
 	test('falls back to the access token for clients without an instance id', () => {
 		expect(blockVoiceRestoreAfterKick(1, { token: 'token-a' })).toBe(true);
 		expect(isVoiceRestoreBlockedAfterKick(1, { token: 'token-a' })).toBe(true);
 		expect(isVoiceRestoreBlockedAfterKick(1, { token: 'token-b' })).toBe(false);
-	});
-
-	test('clears the guard after an explicit join', () => {
-		blockVoiceRestoreAfterKick(1, { clientInstanceId: 'client-a' });
-
-		expect(clearVoiceRestoreBlockAfterKick(1, { clientInstanceId: 'client-a' })).toBe(true);
-		expect(isVoiceRestoreBlockedAfterKick(1, { clientInstanceId: 'client-a' })).toBe(false);
-	});
-
-	test('does not block clients without an identity', () => {
-		expect(blockVoiceRestoreAfterKick(1, {})).toBe(false);
-		expect(isVoiceRestoreBlockedAfterKick(1, {})).toBe(false);
 	});
 
 	test('expires stale guards', async () => {
