@@ -325,6 +325,10 @@ body,
 	height: var(--scrollbar-width);
 }
 
+::-webkit-scrollbar-button {
+	display: none;
+}
+
 ::-webkit-scrollbar-track {
 	background: var(--scrollbar-track);
 	border-radius: 10px;
