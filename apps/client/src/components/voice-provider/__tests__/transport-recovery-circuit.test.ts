@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import { createInitialVoiceSessionState, reduceVoiceSession } from '@/features/server/voice/voice-session-machine';
 import {
+	resolveTransportFailureDispatchOutcome,
 	resolveTransportRecoveryCircuitDecision,
-	shouldReleaseTransportFailureLatch,
 	type TTransportRecoveryCircuitState,
 } from '../transport-recovery-circuit';
 
@@ -39,7 +39,60 @@ describe('transport recovery circuit', () => {
 		);
 	});
 
-	it('releases the failure latch when exhaustion is ignored during websocket recovery', () => {
+	it('preserves the recovery budget and releases the latch when recovery is ignored', () => {
+		const previousCircuitState = {
+			channelId: 7,
+			lastFailureAt: 50,
+			rapidFailureCount: 1,
+		};
+		const circuitDecision = resolveTransportRecoveryCircuitDecision({
+			state: previousCircuitState,
+			channelId: 7,
+			now: 100,
+		});
+		const reconnecting = reduceVoiceSession(createInitialVoiceSessionState(), {
+			type: 'WsDropped',
+			pending: {
+				channelId: 7,
+				micMuted: false,
+				soundMuted: false,
+				peerUserIds: [],
+				expiresAt: 10_000,
+			},
+			now: 100,
+			online: true,
+			authenticated: true,
+		}).state;
+		const ignoredRecovery = reduceVoiceSession(reconnecting, {
+			type: 'TransportFailed',
+			channelId: 7,
+			nonce: 1,
+		});
+
+		expect(
+			resolveTransportFailureDispatchOutcome({
+				circuitDecision,
+				commandCount: ignoredRecovery.commands.length,
+				phase: ignoredRecovery.state.phase.phase,
+				previousCircuitState,
+			}),
+		).toEqual({
+			circuitState: previousCircuitState,
+			releaseLatch: true,
+		});
+	});
+
+	it('preserves the exhausted budget and releases the latch when exhaustion is ignored', () => {
+		const previousCircuitState = {
+			channelId: 7,
+			lastFailureAt: 50,
+			rapidFailureCount: 3,
+		};
+		const circuitDecision = resolveTransportRecoveryCircuitDecision({
+			state: previousCircuitState,
+			channelId: 7,
+			now: 100,
+		});
 		const reconnecting = reduceVoiceSession(createInitialVoiceSessionState(), {
 			type: 'WsDropped',
 			pending: {
@@ -59,15 +112,29 @@ describe('transport recovery circuit', () => {
 		});
 
 		expect(
-			shouldReleaseTransportFailureLatch({
-				action: 'stop',
+			resolveTransportFailureDispatchOutcome({
+				circuitDecision,
 				commandCount: ignoredExhaustion.commands.length,
 				phase: ignoredExhaustion.state.phase.phase,
+				previousCircuitState,
 			}),
-		).toBe(true);
+		).toEqual({
+			circuitState: previousCircuitState,
+			releaseLatch: true,
+		});
 	});
 
-	it('keeps the failure latch until terminal cleanup when exhaustion is accepted', () => {
+	it('commits accepted exhaustion and keeps the latch until terminal cleanup', () => {
+		const previousCircuitState = {
+			channelId: 7,
+			lastFailureAt: 50,
+			rapidFailureCount: 3,
+		};
+		const circuitDecision = resolveTransportRecoveryCircuitDecision({
+			state: previousCircuitState,
+			channelId: 7,
+			now: 100,
+		});
 		const connected = reduceVoiceSession(createInitialVoiceSessionState(), {
 			type: 'JoinRequested',
 			channelId: 7,
@@ -79,11 +146,15 @@ describe('transport recovery circuit', () => {
 		});
 
 		expect(
-			shouldReleaseTransportFailureLatch({
-				action: 'stop',
+			resolveTransportFailureDispatchOutcome({
+				circuitDecision,
 				commandCount: acceptedExhaustion.commands.length,
 				phase: acceptedExhaustion.state.phase.phase,
+				previousCircuitState,
 			}),
-		).toBe(false);
+		).toEqual({
+			circuitState: circuitDecision.state,
+			releaseLatch: false,
+		});
 	});
 });

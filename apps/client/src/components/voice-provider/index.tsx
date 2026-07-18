@@ -130,8 +130,8 @@ import {
 	updatePushMicStateForKeyEvent,
 } from './push-mic-state';
 import {
+	resolveTransportFailureDispatchOutcome,
 	resolveTransportRecoveryCircuitDecision,
-	shouldReleaseTransportFailureLatch,
 	type TTransportRecoveryCircuitState,
 } from './transport-recovery-circuit';
 import { getVideoBitratePolicy, type TVideoBitrateCodec } from './video-bitrate-policy';
@@ -950,45 +950,38 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
+		const previousCircuitState = transportRecoveryCircuitRef.current;
 		const circuitDecision = resolveTransportRecoveryCircuitDecision({
-			state: transportRecoveryCircuitRef.current,
+			state: previousCircuitState,
 			channelId,
 			now: Date.now(),
 		});
-		transportRecoveryCircuitRef.current = circuitDecision.state;
+		const commands =
+			circuitDecision.action === 'stop'
+				? dispatchVoiceSession({ type: 'TransportRecoveryExhausted', channelId })
+				: dispatchVoiceSession({
+						type: 'TransportFailed',
+						channelId,
+						nonce: voiceSessionReconnectNonceRef.current,
+					});
+		const dispatchOutcome = resolveTransportFailureDispatchOutcome({
+			circuitDecision,
+			commandCount: commands.length,
+			phase: getVoiceSessionState().phase.phase,
+			previousCircuitState,
+		});
+		transportRecoveryCircuitRef.current = dispatchOutcome.circuitState;
+
+		if (dispatchOutcome.releaseLatch) {
+			hasHandledTransportFailureRef.current = false;
+			return;
+		}
 
 		if (circuitDecision.action === 'stop') {
 			logVoice('Rapid voice transport recovery exhausted', {
 				channelId,
 				rapidFailureCount: circuitDecision.state.rapidFailureCount,
 			});
-			const commands = dispatchVoiceSession({ type: 'TransportRecoveryExhausted', channelId });
-			if (
-				shouldReleaseTransportFailureLatch({
-					action: circuitDecision.action,
-					commandCount: commands.length,
-					phase: getVoiceSessionState().phase.phase,
-				})
-			) {
-				hasHandledTransportFailureRef.current = false;
-			}
-			return;
-		}
-
-		const commands = dispatchVoiceSession({
-			type: 'TransportFailed',
-			channelId,
-			nonce: voiceSessionReconnectNonceRef.current,
-		});
-
-		if (
-			shouldReleaseTransportFailureLatch({
-				action: circuitDecision.action,
-				commandCount: commands.length,
-				phase: getVoiceSessionState().phase.phase,
-			})
-		) {
-			hasHandledTransportFailureRef.current = false;
 		}
 	}, []);
 

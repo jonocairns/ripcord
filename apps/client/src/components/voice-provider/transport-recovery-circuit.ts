@@ -14,18 +14,29 @@ type TTransportRecoveryCircuitDecision = {
 	action: 'recover' | 'stop';
 };
 
-const shouldReleaseTransportFailureLatch = ({
-	action,
+type TTransportFailureDispatchOutcome = {
+	circuitState: TTransportRecoveryCircuitState | undefined;
+	releaseLatch: boolean;
+};
+
+const resolveTransportFailureDispatchOutcome = ({
+	circuitDecision,
 	commandCount,
 	phase,
+	previousCircuitState,
 }: {
-	action: TTransportRecoveryCircuitDecision['action'];
+	circuitDecision: TTransportRecoveryCircuitDecision;
 	commandCount: number;
 	phase: TVoiceSessionPhase['phase'];
-}): boolean => {
-	const acceptedPhase = action === 'stop' ? 'failed' : 'rebuilding';
+	previousCircuitState: TTransportRecoveryCircuitState | undefined;
+}): TTransportFailureDispatchOutcome => {
+	const acceptedPhase = circuitDecision.action === 'stop' ? 'failed' : 'rebuilding';
+	const releaseLatch = commandCount === 0 && phase !== acceptedPhase;
 
-	return commandCount === 0 && phase !== acceptedPhase;
+	return {
+		circuitState: releaseLatch ? previousCircuitState : circuitDecision.state,
+		releaseLatch,
+	};
 };
 
 const resolveTransportRecoveryCircuitDecision = (input: {
@@ -54,10 +65,10 @@ const resolveTransportRecoveryCircuitDecision = (input: {
 	};
 };
 
-export type { TTransportRecoveryCircuitDecision, TTransportRecoveryCircuitState };
+export type { TTransportFailureDispatchOutcome, TTransportRecoveryCircuitDecision, TTransportRecoveryCircuitState };
 export {
+	resolveTransportFailureDispatchOutcome,
 	resolveTransportRecoveryCircuitDecision,
-	shouldReleaseTransportFailureLatch,
 	TRANSPORT_RECOVERY_MAX_RAPID_FAILURES,
 	TRANSPORT_RECOVERY_STABILITY_MS,
 };
