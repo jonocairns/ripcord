@@ -57,7 +57,7 @@ import { logDebug, logVoice, reportError, traceSentrySpan } from '@/helpers/brow
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { getTrpcErrorData } from '@/helpers/trpc-error-data';
 import { useLatestRef } from '@/hooks/use-latest-ref';
-import { getTRPCClient } from '@/lib/trpc';
+import { getTRPCClient, getTRPCClientIfInitialized } from '@/lib/trpc';
 import { getDesktopBridge, isDesktopRuntime } from '@/runtime/desktop-bridge';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import {
@@ -1215,10 +1215,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			}
 
 			const seq = (voiceActivitySeqRef.current += 1);
+			const trpcClient = getTRPCClientIfInitialized();
 
-			void getTRPCClient()
-				.voice.updateActivity.mutate({ isSpeaking: broadcast, seq, producerId })
-				.catch(() => {});
+			if (trpcClient) {
+				void trpcClient.voice.updateActivity.mutate({ isSpeaking: broadcast, seq, producerId }).catch(() => {});
+			}
 		},
 		[ownUserId],
 	);

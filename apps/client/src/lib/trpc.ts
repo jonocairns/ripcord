@@ -318,6 +318,11 @@ const getTRPCClient = () => {
 	return trpc;
 };
 
+const getTRPCClientIfInitialized = () => trpc;
+
+const isTRPCSocketOpen = () =>
+	typeof WebSocket !== 'undefined' && wsClient?.connection?.ws?.readyState === WebSocket.OPEN;
+
 const debugCloseCurrentWs = (opts: { code?: number; reason?: string } = {}) => {
 	const ws = wsClient?.connection?.ws;
 
@@ -371,7 +376,9 @@ export {
 	connectToTRPC,
 	debugCloseCurrentWs,
 	getTRPCClient,
+	getTRPCClientIfInitialized,
 	getWsClientInstanceId,
+	isTRPCSocketOpen,
 	reconnectTRPC,
 	setOnWsReconnect,
 };

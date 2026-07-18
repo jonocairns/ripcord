@@ -5,7 +5,7 @@ import { Dialog } from '@/components/dialogs/dialogs';
 import { refreshAccessToken, revokeRefreshToken } from '@/helpers/auth';
 import { logDebug, setSentryUser } from '@/helpers/browser-logger';
 import { getHostFromServer } from '@/helpers/get-file-url';
-import { cleanup, connectToTRPC, getTRPCClient, reconnectTRPC, setOnWsReconnect } from '@/lib/trpc';
+import { cleanup, connectToTRPC, getTRPCClient, isTRPCSocketOpen, reconnectTRPC, setOnWsReconnect } from '@/lib/trpc';
 import { openDialog } from '../dialogs/actions';
 import { setPluginCommands } from './plugins/actions';
 import {
@@ -25,6 +25,7 @@ import {
 	markVoiceReconnectSessionAuthenticated,
 	resolveVoiceRecoveryAction,
 } from './voice/reconnect-coordinator';
+import { resolveWsRejoinFailureAction } from './ws-rejoin-failure-policy';
 
 let unsubscribeFromServer: (() => void) | null = null;
 let connectPromise: Promise<void> | null = null;
@@ -278,15 +279,25 @@ export const joinServer = async (
 					cleanupServerSubscriptions();
 				}
 			} catch (error) {
-				if (didGenerationChange(generation)) {
+				const isAuthError =
+					error instanceof TRPCClientError && (!error.data?.code || error.data.code === 'UNAUTHORIZED');
+				const failureAction = resolveWsRejoinFailureAction({
+					generationChanged: didGenerationChange(generation),
+					isAuthError,
+					isSocketOpen: isTRPCSocketOpen(),
+				});
+
+				if (failureAction === 'cancel-stale') {
 					clearReconnectSnapshotEventBuffer();
 					return;
 				}
 
-				const isAuthError =
-					error instanceof TRPCClientError && (!error.data?.code || error.data.code === 'UNAUTHORIZED');
+				if (failureAction === 'wait-for-reconnect') {
+					logDebug('WS dropped during server rejoin; waiting for the next reconnect');
+					return;
+				}
 
-				if (isAuthError) {
+				if (failureAction === 'refresh-auth') {
 					const refreshed = await refreshAccessToken();
 
 					if (didGenerationChange(generation)) {
