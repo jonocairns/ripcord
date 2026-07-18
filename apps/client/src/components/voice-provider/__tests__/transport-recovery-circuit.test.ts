@@ -77,6 +77,72 @@ describe('transport recovery circuit', () => {
 		).toMatchObject({ action: 'recover', state: { rapidFailureCount: 1 } });
 	});
 
+	it('starts a fresh budget when websocket reconnect follows a stable connection', () => {
+		const reconnected = recordTransportRecoverySucceeded({
+			state: {
+				channelId: 7,
+				generation: 3,
+				stabilityStartedAt: 1_000,
+				rapidFailureCount: 3,
+			},
+			transition: { type: 'reconnect-succeeded', channelId: 7, generation: 4, now: 31_000 },
+		});
+
+		expect(reconnected).toEqual({
+			channelId: 7,
+			generation: 4,
+			stabilityStartedAt: 31_000,
+			rapidFailureCount: 0,
+		});
+		expect(
+			resolveTransportRecoveryCircuitDecision({ state: reconnected, channelId: 7, generation: 4, now: 31_001 }),
+		).toMatchObject({ action: 'recover', state: { rapidFailureCount: 1 } });
+	});
+
+	it('preserves rapid failures when websocket reconnect occurs inside the stability window', () => {
+		const reconnected = recordTransportRecoverySucceeded({
+			state: {
+				channelId: 7,
+				generation: 3,
+				stabilityStartedAt: 1_000,
+				rapidFailureCount: 2,
+			},
+			transition: { type: 'reconnect-succeeded', channelId: 7, generation: 4, now: 30_999 },
+		});
+
+		expect(reconnected).toEqual({
+			channelId: 7,
+			generation: 4,
+			stabilityStartedAt: 30_999,
+			rapidFailureCount: 2,
+		});
+		expect(
+			resolveTransportRecoveryCircuitDecision({ state: reconnected, channelId: 7, generation: 4, now: 31_000 }),
+		).toMatchObject({ action: 'recover', state: { rapidFailureCount: 3 } });
+	});
+
+	it('ignores success transitions outside the current circuit identity', () => {
+		const state = {
+			channelId: 7,
+			generation: 3,
+			stabilityStartedAt: 1_000,
+			rapidFailureCount: 2,
+		};
+
+		expect(
+			recordTransportRecoverySucceeded({
+				state,
+				transition: { type: 'reconnect-succeeded', channelId: 8, generation: 4, now: 40_000 },
+			}),
+		).toBe(state);
+		expect(
+			recordTransportRecoverySucceeded({
+				state,
+				transition: { type: 'rebuild-succeeded', channelId: 7, generation: 4, now: 40_000 },
+			}),
+		).toBe(state);
+	});
+
 	it('preserves the budget when websocket recovery ignores a proposed failure', () => {
 		const previousCircuitState = {
 			channelId: 7,

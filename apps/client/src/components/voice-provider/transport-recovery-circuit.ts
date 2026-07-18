@@ -98,7 +98,17 @@ const recordTransportRecoverySucceeded = ({
 		return state;
 	}
 
-	return { ...state, generation: transition.generation, stabilityStartedAt: transition.now };
+	const completedStableReconnect =
+		transition.type === 'reconnect-succeeded' &&
+		state.stabilityStartedAt !== undefined &&
+		transition.now - state.stabilityStartedAt >= TRANSPORT_RECOVERY_STABILITY_MS;
+
+	return {
+		...state,
+		generation: transition.generation,
+		stabilityStartedAt: transition.now,
+		rapidFailureCount: completedStableReconnect ? 0 : state.rapidFailureCount,
+	};
 };
 
 export type { TTransportFailureDispatchOutcome, TTransportRecoveryCircuitDecision, TTransportRecoveryCircuitState };
