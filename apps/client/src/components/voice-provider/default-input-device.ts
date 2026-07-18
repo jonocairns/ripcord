@@ -10,6 +10,21 @@ type TDefaultInputChangeInput = {
 	defaultGroupId: string | undefined;
 };
 
+type TDefaultInputMove = {
+	capturedGroupId: string;
+	defaultGroupId: string;
+};
+
+type TDefaultInputRecoveryDecision = {
+	action: 'wait' | 'ignore-duplicate' | 'reacquire' | 'teardown-for-unmute';
+	handledMove: TDefaultInputMove | undefined;
+};
+
+type TDefaultInputRecoveryInput = TDefaultInputChangeInput & {
+	micMuted: boolean;
+	handledMove: TDefaultInputMove | undefined;
+};
+
 const resolveDefaultInputGroupId = (inputs: { deviceId: string; groupId: string }[]): string | undefined => {
 	const defaultEntry = inputs.find((input) => input.deviceId === DEFAULT_MEDIA_DEVICE_ID && input.groupId);
 	return defaultEntry?.groupId;
@@ -26,5 +41,33 @@ const didDefaultInputDeviceChange = ({ capturedGroupId, defaultGroupId }: TDefau
 	return defaultGroupId !== capturedGroupId;
 };
 
-export type { TDefaultInputChangeInput };
-export { didDefaultInputDeviceChange, resolveDefaultInputGroupId };
+const resolveDefaultInputRecoveryDecision = ({
+	capturedGroupId,
+	defaultGroupId,
+	micMuted,
+	handledMove,
+}: TDefaultInputRecoveryInput): TDefaultInputRecoveryDecision => {
+	if (!capturedGroupId || !defaultGroupId) {
+		return { action: 'wait', handledMove };
+	}
+
+	if (capturedGroupId === defaultGroupId) {
+		return { action: 'wait', handledMove: undefined };
+	}
+
+	const detectedMove = { capturedGroupId, defaultGroupId };
+	if (
+		handledMove?.capturedGroupId === detectedMove.capturedGroupId &&
+		handledMove.defaultGroupId === detectedMove.defaultGroupId
+	) {
+		return { action: 'ignore-duplicate', handledMove };
+	}
+
+	return {
+		action: micMuted ? 'teardown-for-unmute' : 'reacquire',
+		handledMove: detectedMove,
+	};
+};
+
+export type { TDefaultInputChangeInput, TDefaultInputMove };
+export { didDefaultInputDeviceChange, resolveDefaultInputGroupId, resolveDefaultInputRecoveryDecision };

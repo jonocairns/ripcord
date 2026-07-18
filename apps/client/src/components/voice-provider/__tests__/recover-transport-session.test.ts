@@ -121,6 +121,41 @@ describe('transport rebuild machine orchestration', () => {
 		]);
 	});
 
+	it('leaves voice when the cross-cycle recovery circuit is exhausted', () => {
+		const state: TVoiceSessionState = {
+			...createInitialVoiceSessionState(),
+			phase: { phase: 'connected', channelId: 7 },
+		};
+		const result = reduceVoiceSession(state, { type: 'TransportRecoveryExhausted', channelId: 7 });
+
+		expect(result.state.phase).toMatchObject({
+			phase: 'failed',
+			reason: 'restore-terminal-error',
+			channelId: 7,
+		});
+		expect(result.commands).toEqual([
+			expect.objectContaining({
+				type: 'LeaveVoiceSession',
+				channelId: 7,
+			}),
+		]);
+	});
+
+	it('ignores an exhausted transport circuit while websocket recovery owns the session', () => {
+		const pending = pendingReconnect();
+		const reconnecting = reduceVoiceSession(createInitialVoiceSessionState(), {
+			type: 'WsDropped',
+			pending,
+			now: 100,
+			online: true,
+			authenticated: true,
+		}).state;
+		const result = reduceVoiceSession(reconnecting, { type: 'TransportRecoveryExhausted', channelId: 7 });
+
+		expect(result.state).toBe(reconnecting);
+		expect(result.commands).toEqual([]);
+	});
+
 	it('retries transient rebuild failures from reducer-owned attempt state', () => {
 		const [state, generation, snapshot] = startRebuild();
 		const result = reduceVoiceSession(state, {

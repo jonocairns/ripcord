@@ -125,6 +125,7 @@ type TVoiceSessionTriggerEvent =
 	| { type: 'JoinFailed'; reason: TClearReason; channelId?: number }
 	| { type: 'WsDropped'; pending: TPendingVoiceReconnect; now: number; online: boolean; authenticated: boolean }
 	| { type: 'TransportFailed'; channelId: number; nonce: number }
+	| { type: 'TransportRecoveryExhausted'; channelId: number }
 	| { type: 'SocketAuthenticated' }
 	| { type: 'SocketUnauthenticated' }
 	| { type: 'NonceChanged'; commandId: number; generation: number; nonce: number }
@@ -764,6 +765,12 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			}
 
 			return startRebuilding(state, event);
+		case 'TransportRecoveryExhausted':
+			if (state.phase.phase === 'reconnecting') {
+				return emptyResult(state);
+			}
+
+			return failSession(state, 'restore-terminal-error', event.channelId, 'leave');
 		case 'SocketAuthenticated':
 			if (state.phase.phase !== 'reconnecting') {
 				return emptyResult({ ...state, reconnectAuthenticated: true });

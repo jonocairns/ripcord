@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from '../default-input-device';
+import {
+	didDefaultInputDeviceChange,
+	resolveDefaultInputGroupId,
+	resolveDefaultInputRecoveryDecision,
+} from '../default-input-device';
 
 describe('resolveDefaultInputGroupId', () => {
 	it('returns the groupId of the synthetic default entry', () => {
@@ -38,5 +42,86 @@ describe('didDefaultInputDeviceChange', () => {
 
 	it('does nothing when the default group is unresolvable', () => {
 		expect(didDefaultInputDeviceChange({ capturedGroupId: 'group-yeti', defaultGroupId: undefined })).toBe(false);
+	});
+});
+
+describe('resolveDefaultInputRecoveryDecision', () => {
+	it('re-acquires an unmuted microphone for a new default-device move', () => {
+		expect(
+			resolveDefaultInputRecoveryDecision({
+				capturedGroupId: 'group-yeti',
+				defaultGroupId: 'group-broadcast',
+				micMuted: false,
+				handledMove: undefined,
+			}),
+		).toEqual({
+			action: 'reacquire',
+			handledMove: {
+				capturedGroupId: 'group-yeti',
+				defaultGroupId: 'group-broadcast',
+			},
+		});
+	});
+
+	it('tears down a muted microphone without immediately republishing it', () => {
+		expect(
+			resolveDefaultInputRecoveryDecision({
+				capturedGroupId: 'group-yeti',
+				defaultGroupId: 'group-broadcast',
+				micMuted: true,
+				handledMove: undefined,
+			}),
+		).toEqual({
+			action: 'teardown-for-unmute',
+			handledMove: {
+				capturedGroupId: 'group-yeti',
+				defaultGroupId: 'group-broadcast',
+			},
+		});
+	});
+
+	it('ignores repeated reports of the same unresolved move', () => {
+		const handledMove = {
+			capturedGroupId: 'group-yeti',
+			defaultGroupId: 'group-broadcast',
+		};
+
+		expect(
+			resolveDefaultInputRecoveryDecision({
+				...handledMove,
+				micMuted: false,
+				handledMove,
+			}),
+		).toEqual({ action: 'ignore-duplicate', handledMove });
+	});
+
+	it('allows a future move after capture catches up to the default', () => {
+		expect(
+			resolveDefaultInputRecoveryDecision({
+				capturedGroupId: 'group-broadcast',
+				defaultGroupId: 'group-broadcast',
+				micMuted: false,
+				handledMove: {
+					capturedGroupId: 'group-yeti',
+					defaultGroupId: 'group-broadcast',
+				},
+			}),
+		).toEqual({ action: 'wait', handledMove: undefined });
+	});
+
+	it('preserves deduplication state while device identities are unavailable', () => {
+		const handledMove = {
+			capturedGroupId: 'group-yeti',
+			defaultGroupId: 'group-broadcast',
+		};
+
+		expect(
+			resolveDefaultInputRecoveryDecision({
+				capturedGroupId: undefined,
+				defaultGroupId: 'group-broadcast',
+				micMuted: false,
+				handledMove,
+			}),
+		).toEqual({ action: 'wait', handledMove });
 	});
 });

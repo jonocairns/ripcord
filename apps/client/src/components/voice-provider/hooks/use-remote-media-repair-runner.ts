@@ -1,8 +1,9 @@
 import type { TExternalStream, TRemoteProducerIds } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { logVoice } from '@/helpers/browser-logger';
 import { useLatestRef } from '@/hooks/use-latest-ref';
+import { getRemoteMediaRepairDelayMs, getRemoteMediaRepairIdentity } from './remote-media-repair-policy';
 import {
 	remoteMediaSubscriptionsToRepairScheduleCommand,
 	type TRemoteMediaSubscriptions,
@@ -38,9 +39,13 @@ export const useRemoteMediaRepairRunner = ({
 }: TUseRemoteMediaRepairRunnerInput) => {
 	const remoteMediaSubscriptionsRef = useLatestRef(remoteMediaSubscriptions);
 	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
+	const repairBudgetRef = useRef<{ identity: string; completedAttempts: number } | undefined>(undefined);
+	const loggedExhaustedIdentityRef = useRef<string | undefined>(undefined);
 
 	useEffect(() => {
 		if (currentVoiceChannelId === undefined || !rtpCapabilities || pendingStreams.size === 0) {
+			repairBudgetRef.current = undefined;
+			loggedExhaustedIdentityRef.current = undefined;
 			return;
 		}
 
@@ -51,19 +56,60 @@ export const useRemoteMediaRepairRunner = ({
 		);
 
 		if (command === undefined) {
+			repairBudgetRef.current = undefined;
+			loggedExhaustedIdentityRef.current = undefined;
+			return;
+		}
+
+		const repairIdentity = getRemoteMediaRepairIdentity({
+			channelId: currentVoiceChannelId,
+			subscriptions: remoteMediaSubscriptionsRef.current,
+			pendingStreams,
+			currentExternalStreams: currentChannelExternalStreams,
+		});
+		if (repairIdentity === undefined) {
+			return;
+		}
+
+		if (repairBudgetRef.current?.identity !== repairIdentity) {
+			repairBudgetRef.current = { identity: repairIdentity, completedAttempts: 0 };
+			loggedExhaustedIdentityRef.current = undefined;
+		}
+
+		const completedAttempts = repairBudgetRef.current.completedAttempts;
+		const repairIntervalMs = getRemoteMediaRepairDelayMs(completedAttempts);
+		if (repairIntervalMs === undefined) {
+			if (loggedExhaustedIdentityRef.current !== repairIdentity) {
+				loggedExhaustedIdentityRef.current = repairIdentity;
+				logVoice('Remote media repair budget exhausted', {
+					channelId: currentVoiceChannelId,
+					pendingCount: pendingStreams.size,
+					completedAttempts,
+				});
+			}
 			return;
 		}
 
 		const scheduledVoiceChannelId = currentVoiceChannelId;
-		const repairDelayMs = Math.max(0, command.retryAt - Date.now());
+		const firstRepairIntervalMs = getRemoteMediaRepairDelayMs(0) ?? 0;
+		const repairDelayMs = Math.max(0, command.retryAt + repairIntervalMs - firstRepairIntervalMs - Date.now());
 		const repairTimeout = setTimeout(() => {
 			if (currentVoiceChannelIdRef.current !== scheduledVoiceChannelId) {
 				return;
 			}
+			if (repairBudgetRef.current?.identity !== repairIdentity) {
+				return;
+			}
+
+			repairBudgetRef.current = {
+				identity: repairIdentity,
+				completedAttempts: completedAttempts + 1,
+			};
 
 			logVoice('Repairing stale pending voice streams', {
 				channelId: scheduledVoiceChannelId,
 				pendingCount: pendingStreams.size,
+				attempt: completedAttempts + 1,
 			});
 
 			// Reset every pending entry's age so the next repair pass is at least a

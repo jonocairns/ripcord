@@ -56,11 +56,14 @@ type TMicrophonePipelineControllerPorts<
 	isInVoiceChannel: () => boolean;
 	isMicMuted: () => boolean;
 	onRawLossRecover: (reason: TRawMicLossReason) => void;
+	onRawLossExhausted: (reason: TRawMicLossReason) => void;
 	onProcessingRuntimeError: (error: Error) => void;
 	setTimeout: (handler: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 	clearTimeout: (handle: ReturnType<typeof setTimeout>) => void;
 	log?: (message: string, context?: Record<string, unknown>) => void;
 	rawMuteSettleMs?: number;
+	rawRecoveryMaxAttempts?: number;
+	rawRecoveryStabilityMs?: number;
 };
 
 type TPrepareMicrophonePipelineInput = {
@@ -93,6 +96,8 @@ class MicPipelineSupersededError extends Error {
 }
 
 const DEFAULT_RAW_MUTE_SETTLE_MS = 400;
+const DEFAULT_RAW_RECOVERY_MAX_ATTEMPTS = 3;
+const DEFAULT_RAW_RECOVERY_STABILITY_MS = 10_000;
 
 const createMicrophonePipelineController = <
 	TProducer extends object,
@@ -116,6 +121,8 @@ const createMicrophonePipelineController = <
 	let localProducer: TProducer | undefined;
 	let activityCleanup: (() => void) | undefined;
 	let activityProducer: TProducer | undefined;
+	let rawRecoveryAttempts = 0;
+	let rawRecoveryStabilityTimer: ReturnType<typeof setTimeout> | undefined;
 	const handledProducerClosures = new WeakSet<TProducer>();
 
 	const log = (message: string, context?: Record<string, unknown>): void => {
@@ -125,6 +132,20 @@ const createMicrophonePipelineController = <
 	const ownsEpoch = (ownedEpoch: number): boolean => active && epoch === ownedEpoch;
 
 	const owns = (prepared: TMicrophonePreparedPipeline): boolean => active && preparedPipeline === prepared;
+
+	const clearRawRecoveryStabilityTimer = (): void => {
+		if (rawRecoveryStabilityTimer === undefined) {
+			return;
+		}
+
+		ports.clearTimeout(rawRecoveryStabilityTimer);
+		rawRecoveryStabilityTimer = undefined;
+	};
+
+	const resetRawRecoveryBudget = (): void => {
+		clearRawRecoveryStabilityTimer();
+		rawRecoveryAttempts = 0;
+	};
 
 	const activate = (): void => {
 		if (active) {
@@ -219,6 +240,7 @@ const createMicrophonePipelineController = <
 	const cleanup = async (): Promise<void> => {
 		epoch += 1;
 		stopActivity(false);
+		clearRawRecoveryStabilityTimer();
 
 		// Snapshot and clear every shared resource synchronously. Once this block
 		// completes, the async destruction tail touches captured resources only.
@@ -304,7 +326,19 @@ const createMicrophonePipelineController = <
 				return;
 			}
 
-			log('Raw mic capture interrupted, re-acquiring', { reason });
+			const maxAttempts = ports.rawRecoveryMaxAttempts ?? DEFAULT_RAW_RECOVERY_MAX_ATTEMPTS;
+			if (rawRecoveryAttempts >= maxAttempts) {
+				log('Raw mic recovery exhausted, stopping microphone', {
+					reason,
+					attempts: rawRecoveryAttempts,
+				});
+				void cleanup();
+				ports.onRawLossExhausted(reason);
+				return;
+			}
+
+			rawRecoveryAttempts += 1;
+			log('Raw mic capture interrupted, re-acquiring', { reason, attempt: rawRecoveryAttempts });
 			ports.onRawLossRecover(reason);
 		};
 
@@ -529,6 +563,11 @@ const createMicrophonePipelineController = <
 		localProducer = producer;
 		syncActivity();
 		log('Microphone audio producer created', { producer });
+		clearRawRecoveryStabilityTimer();
+		rawRecoveryStabilityTimer = ports.setTimeout(() => {
+			rawRecoveryStabilityTimer = undefined;
+			rawRecoveryAttempts = 0;
+		}, ports.rawRecoveryStabilityMs ?? DEFAULT_RAW_RECOVERY_STABILITY_MS);
 
 		const publishedProducer = producer;
 		prepared.outboundAudioTrack.onended = () => {
@@ -547,6 +586,10 @@ const createMicrophonePipelineController = <
 	};
 
 	const setMuted = (muted: boolean): void => {
+		if (!muted) {
+			resetRawRecoveryBudget();
+		}
+
 		preparedPipeline?.outboundStream.getAudioTracks().forEach((track) => {
 			track.enabled = !muted;
 		});
@@ -566,6 +609,7 @@ const createMicrophonePipelineController = <
 
 		active = false;
 		lifecycleGeneration += 1;
+		resetRawRecoveryBudget();
 		await cleanup();
 	};
 

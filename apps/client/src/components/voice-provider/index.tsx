@@ -73,7 +73,11 @@ import {
 import { type TDeviceSettings, VideoCodecPreference } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
 import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } from './audio-context';
-import { didDefaultInputDeviceChange, resolveDefaultInputGroupId } from './default-input-device';
+import {
+	resolveDefaultInputGroupId,
+	resolveDefaultInputRecoveryDecision,
+	type TDefaultInputMove,
+} from './default-input-device';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import {
 	createDesktopAppAudioRecoveryController,
@@ -125,6 +129,10 @@ import {
 	type TPushMicState,
 	updatePushMicStateForKeyEvent,
 } from './push-mic-state';
+import {
+	resolveTransportRecoveryCircuitDecision,
+	type TTransportRecoveryCircuitState,
+} from './transport-recovery-circuit';
 import { getVideoBitratePolicy, type TVideoBitrateCodec } from './video-bitrate-policy';
 import { VIDEO_DEGRADATION_PREFERENCE } from './video-encoding-constants';
 import { createVoiceActivityStore, type VoiceActivityStore } from './voice-activity';
@@ -772,6 +780,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const micPipelineMutexRef = useRef<Promise<void>>(Promise.resolve());
 	const sessionExecutionOwnershipRef = useRef(createVoiceSessionExecutionOwnership());
 	const startMicStreamRef = useRef<(() => Promise<void>) | undefined>(undefined);
+	const setMicMutedRef = useRef<TVoiceProvider['setMicMuted'] | undefined>(undefined);
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
 		if (!audioVideoRefsMap.current.has(remoteId)) {
@@ -913,10 +922,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const voiceCleanupRef = useRef<(() => void) | undefined>(undefined);
 	const hasHandledTransportFailureRef = useRef(false);
+	const transportRecoveryCircuitRef = useRef<TTransportRecoveryCircuitState | undefined>(undefined);
 	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
 	const isConnectedRef = useLatestRef(isConnected);
 	const ownUserIdRef = useLatestRef(ownUserId);
 	const voiceSessionReconnectNonceRef = useLatestRef(voiceSessionReconnectNonce);
+
+	useEffect(() => {
+		if (currentVoiceChannelId === undefined) {
+			transportRecoveryCircuitRef.current = undefined;
+		}
+	}, [currentVoiceChannelId]);
 
 	const onTransportFailure = useCallback(() => {
 		if (hasHandledTransportFailureRef.current) {
@@ -930,6 +946,22 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		const channelId = currentVoiceChannelIdRef.current;
 		if (!isConnectedRef.current || channelId === undefined) {
 			hasHandledTransportFailureRef.current = false;
+			return;
+		}
+
+		const circuitDecision = resolveTransportRecoveryCircuitDecision({
+			state: transportRecoveryCircuitRef.current,
+			channelId,
+			now: Date.now(),
+		});
+		transportRecoveryCircuitRef.current = circuitDecision.state;
+
+		if (circuitDecision.action === 'stop') {
+			logVoice('Rapid voice transport recovery exhausted', {
+				channelId,
+				rapidFailureCount: circuitDecision.state.rapidFailureCount,
+			});
+			dispatchVoiceSession({ type: 'TransportRecoveryExhausted', channelId });
 			return;
 		}
 
@@ -1441,6 +1473,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			isMicMuted: () => ownVoiceStateSelector(useServerStore.getState()).micMuted,
 			onRawLossRecover: () => {
 				void startMicStreamRef.current?.();
+			},
+			onRawLossExhausted: (reason) => {
+				logVoice('Raw microphone recovery exhausted', { reason });
+				toast.error('Microphone capture kept disconnecting and was stopped. Unmute to try again.');
+				void setMicMutedRef.current?.(true, { playSound: false });
 			},
 			onProcessingRuntimeError: (error) => {
 				logVoice('Browser WASM voice filter runtime error', { error });
@@ -2096,6 +2133,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 		let retryTimer: ReturnType<typeof setTimeout> | undefined;
 		let defaultInputCheckGeneration = 0;
+		let handledDefaultInputMove: TDefaultInputMove | undefined;
 
 		const clearRetryTimer = () => {
 			if (retryTimer !== undefined) {
@@ -2109,7 +2147,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			clearRetryTimer();
 		};
 
-		const checkSystemDefaultInput = async (): Promise<'reacquired' | 'pending' | 'stop'> => {
+		const checkSystemDefaultInput = async (): Promise<'handled' | 'pending' | 'stop'> => {
 			const rawTrack = microphoneController.getRawTrack();
 
 			if (rawTrack?.readyState !== 'live') {
@@ -2129,9 +2167,28 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			const capturedGroupId = rawTrack.getSettings().groupId;
 			const defaultGroupId = resolveDefaultInputGroupId(inputs);
+			const decision = resolveDefaultInputRecoveryDecision({
+				capturedGroupId,
+				defaultGroupId,
+				micMuted: ownVoiceStateSelector(useServerStore.getState()).micMuted,
+				handledMove: handledDefaultInputMove,
+			});
+			handledDefaultInputMove = decision.handledMove;
 
-			if (!didDefaultInputDeviceChange({ capturedGroupId, defaultGroupId })) {
+			if (decision.action === 'wait') {
 				return 'pending';
+			}
+			if (decision.action === 'ignore-duplicate') {
+				return 'stop';
+			}
+
+			if (decision.action === 'teardown-for-unmute') {
+				logVoice('System default input moved while muted, tearing down mic for next unmute', {
+					capturedGroupId,
+					defaultGroupId,
+				});
+				void cleanupMicAudioPipeline();
+				return 'handled';
 			}
 
 			logVoice('System default input moved under a Default selection, re-acquiring mic', {
@@ -2141,7 +2198,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			// startMicStream re-runs cleanup + getUserMedia and is mutex-serialized.
 			void startMicStreamRef.current?.();
-			return 'reacquired';
+			return 'handled';
 		};
 
 		const startDefaultInputMoveChecks = () => {
@@ -2189,7 +2246,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			mediaDevices.removeEventListener('devicechange', handleDeviceChange);
 		};
-	}, [currentVoiceChannelId, devices.microphoneId, microphoneController]);
+	}, [cleanupMicAudioPipeline, currentVoiceChannelId, devices.microphoneId, microphoneController]);
 
 	const cleanupDesktopAppAudio = useCallback(
 		async ({
@@ -3945,7 +4002,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			requestScreenShareSelection: getDesktopBridge() ? requestDesktopScreenShareSelection : undefined,
 		});
 
-	const setMicMutedRef = useLatestRef(setMicMuted);
+	setMicMutedRef.current = setMicMuted;
 	const ownMicMutedRef = useLatestRef(ownVoiceState.micMuted);
 	const ownSoundMutedRef = useLatestRef(ownVoiceState.soundMuted);
 	const canSpeakRef = useLatestRef(channelCan(ChannelPermission.SPEAK));
@@ -3999,7 +4056,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		const pushMicResolution = resolvePushMicState(getPushMicState(), ownSoundMutedRef.current);
 
 		if (pushMicResolution.targetMicMuted !== undefined) {
-			void setMicMutedRef.current(pushMicResolution.targetMicMuted, {
+			void setMicMutedRef.current?.(pushMicResolution.targetMicMuted, {
 				playSound: false,
 			});
 		}

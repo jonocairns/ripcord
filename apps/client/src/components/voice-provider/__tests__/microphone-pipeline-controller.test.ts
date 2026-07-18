@@ -217,6 +217,7 @@ const createHarness = (options: { activate?: boolean } = {}) => {
 	const activityUpdates: Array<{ isSpeaking: boolean | undefined; producerId: string | undefined }> = [];
 	const activityMonitors: TFakeActivityMonitor[] = [];
 	const rawRecoveries: string[] = [];
+	const rawRecoveryExhaustions: string[] = [];
 	let localStream: MediaStream | undefined;
 	let transportGeneration = 1;
 	let producerSequence = 0;
@@ -294,6 +295,9 @@ const createHarness = (options: { activate?: boolean } = {}) => {
 		onRawLossRecover: (reason) => {
 			rawRecoveries.push(reason);
 		},
+		onRawLossExhausted: (reason) => {
+			rawRecoveryExhaustions.push(reason);
+		},
 		onProcessingRuntimeError: () => {},
 		setTimeout: scheduler.setTimeout,
 		clearTimeout: scheduler.clearTimeout,
@@ -315,6 +319,7 @@ const createHarness = (options: { activate?: boolean } = {}) => {
 		activityUpdates,
 		activityMonitors,
 		rawRecoveries,
+		rawRecoveryExhaustions,
 		get localStream() {
 			return localStream;
 		},
@@ -860,5 +865,49 @@ describe('microphone pipeline controller cleanup and raw loss', () => {
 		await flushMicrotasks();
 		expect(harness.controller.owns(prepared)).toBe(false);
 		expect(harness.localStream).toBeUndefined();
+	});
+
+	it('stops capture after bounded consecutive raw-loss recovery attempts', async () => {
+		const harness = createHarness();
+
+		for (let attempt = 0; attempt < 4; attempt += 1) {
+			const prepared = await prepare(harness);
+			await harness.controller.publish({ source: prepared });
+			const rawTrack = harness.controller.getRawTrack();
+			if (!rawTrack || !('emit' in rawTrack)) {
+				throw new Error('expected fake raw track');
+			}
+
+			(rawTrack as TFakeTrack).emit('ended');
+			await flushMicrotasks();
+		}
+
+		expect(harness.rawRecoveries).toEqual(['ended', 'ended', 'ended']);
+		expect(harness.rawRecoveryExhaustions).toEqual(['ended']);
+		expect(harness.localStream).toBeUndefined();
+		expect(harness.producers.every((producer) => producer.closed)).toBe(true);
+	});
+
+	it('restores the raw-loss recovery budget after a stable publication', async () => {
+		const harness = createHarness();
+		let prepared = await prepare(harness);
+		await harness.controller.publish({ source: prepared });
+		const firstTrack = harness.controller.getRawTrack();
+		if (!firstTrack || !('emit' in firstTrack)) {
+			throw new Error('expected fake raw track');
+		}
+		(firstTrack as TFakeTrack).emit('ended');
+
+		prepared = await prepare(harness);
+		await harness.controller.publish({ source: prepared });
+		harness.scheduler.runAll();
+		const stableTrack = harness.controller.getRawTrack();
+		if (!stableTrack || !('emit' in stableTrack)) {
+			throw new Error('expected fake raw track');
+		}
+		(stableTrack as TFakeTrack).emit('ended');
+
+		expect(harness.rawRecoveries).toEqual(['ended', 'ended']);
+		expect(harness.rawRecoveryExhaustions).toEqual([]);
 	});
 });

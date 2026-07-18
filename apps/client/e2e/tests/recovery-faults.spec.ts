@@ -7,13 +7,33 @@ import {
 	dropAppWebSocket,
 	expectLocalVideoStopped,
 	expectOutboundVideoFlow,
+	installPcHook,
 	joinVoice,
+	login,
 	moderatePeer,
 	pcStats,
 	startCamera,
 	stopCamera,
+	suppressViteHmrReload,
 	waitForStats,
 } from '../helpers/app';
+
+const forceNewestConnectedPeerConnectionFailure = async (page: Parameters<typeof pcStats>[0]): Promise<void> => {
+	await page.evaluate(() => {
+		const peerConnection = window.__ripcordE2ePeerConnections?.findLast(
+			(candidate) => candidate.connectionState === 'connected',
+		);
+		if (!peerConnection) {
+			throw new Error('No connected peer connection was available to fail');
+		}
+
+		Object.defineProperty(peerConnection, 'connectionState', {
+			configurable: true,
+			get: () => 'failed',
+		});
+		peerConnection.dispatchEvent(new Event('connectionstatechange'));
+	});
+};
 
 test('deafened audio state survives a websocket reconnect', async ({ browser }, testInfo) => {
 	const peer = await createPeer(browser, credentialsFor(testInfo));
@@ -71,6 +91,244 @@ test('muted microphone state survives a websocket reconnect', async ({ browser }
 		await expect(peer.page.getByTitle('Unmute microphone')).toBeVisible();
 	} finally {
 		await disposePeer(peer);
+	}
+});
+
+test('repeated default-device changes do not republish a muted microphone', async ({ browser }, testInfo) => {
+	const context = await browser.newContext();
+	await installPcHook(context);
+	await context.addInitScript(() => {
+		const nativeGetSettings = MediaStreamTrack.prototype.getSettings;
+		MediaStreamTrack.prototype.getSettings = function () {
+			const settings = nativeGetSettings.call(this);
+			return this.kind === 'audio' ? { ...settings, groupId: 'captured-device-group' } : settings;
+		};
+
+		const nativeEnumerateDevices = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
+		navigator.mediaDevices.enumerateDevices = async () => {
+			const devices = await nativeEnumerateDevices();
+			return devices.map((device) => {
+				if (device.kind !== 'audioinput' || device.deviceId !== 'default') {
+					return device;
+				}
+
+				return {
+					deviceId: device.deviceId,
+					groupId: 'system-default-device-group',
+					kind: device.kind,
+					label: device.label,
+					toJSON: () => device.toJSON(),
+				};
+			});
+		};
+	});
+
+	const page = await context.newPage();
+	await suppressViteHmrReload(page);
+	const credentials = credentialsFor(testInfo);
+	await login(page, credentials);
+	const peer = { context, page, credentials };
+	const micLifecycleEvents: string[] = [];
+	page.on('console', (message) => {
+		const text = message.text();
+		if (text.includes('Microphone audio producer created') || text.includes('Audio producer closed')) {
+			micLifecycleEvents.push(text);
+		}
+	});
+
+	try {
+		await joinVoice(page);
+		await expect
+			.poll(() => micLifecycleEvents.filter((event) => event.includes('Microphone audio producer created')).length)
+			.toBeGreaterThanOrEqual(1);
+
+		await page.getByTitle('Mute microphone').click();
+		await expect(page.getByTitle('Unmute microphone')).toBeVisible();
+		const producerCountBeforeDeviceChanges = micLifecycleEvents.filter((event) =>
+			event.includes('Microphone audio producer created'),
+		).length;
+		const closeCountBeforeDeviceChanges = micLifecycleEvents.filter((event) =>
+			event.includes('Audio producer closed'),
+		).length;
+
+		await page.evaluate(async () => {
+			for (let eventIndex = 0; eventIndex < 6; eventIndex += 1) {
+				navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+				await new Promise((resolve) => setTimeout(resolve, 750));
+			}
+		});
+
+		await expect
+			.poll(() => micLifecycleEvents.filter((event) => event.includes('Audio producer closed')).length)
+			.toBe(closeCountBeforeDeviceChanges + 1);
+		await page.waitForTimeout(2_000);
+		expect(micLifecycleEvents.filter((event) => event.includes('Microphone audio producer created'))).toHaveLength(
+			producerCountBeforeDeviceChanges,
+		);
+		await expect(page.getByTitle('Unmute microphone')).toBeVisible();
+
+		await page.getByTitle('Unmute microphone').click();
+		await expect(page.getByTitle('Mute microphone')).toBeVisible();
+		await expect
+			.poll(() => micLifecycleEvents.filter((event) => event.includes('Microphone audio producer created')).length)
+			.toBe(producerCountBeforeDeviceChanges + 1);
+	} finally {
+		await disposePeer(peer);
+	}
+});
+
+test('repeated raw microphone loss stops after bounded recovery attempts', async ({ browser }, testInfo) => {
+	const context = await browser.newContext();
+	await installPcHook(context);
+	await context.addInitScript(() => {
+		const nativeGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+		navigator.mediaDevices.getUserMedia = async (constraints) => {
+			const stream = await nativeGetUserMedia(constraints);
+			if (constraints?.audio) {
+				for (const track of stream.getAudioTracks()) {
+					setTimeout(() => track.dispatchEvent(new Event('ended')), 600);
+				}
+			}
+			return stream;
+		};
+	});
+
+	const page = await context.newPage();
+	await suppressViteHmrReload(page);
+	const credentials = credentialsFor(testInfo);
+	await login(page, credentials);
+	const peer = { context, page, credentials };
+	const micLifecycleEvents: string[] = [];
+	page.on('console', (message) => {
+		const text = message.text();
+		if (
+			text.includes('Microphone audio producer created') ||
+			text.includes('Audio producer closed') ||
+			text.includes('Raw microphone recovery exhausted')
+		) {
+			micLifecycleEvents.push(text);
+		}
+	});
+
+	try {
+		await joinVoice(page);
+		await expect(page.getByTitle('Unmute microphone')).toBeVisible({ timeout: 15_000 });
+		await expect
+			.poll(() => micLifecycleEvents.filter((event) => event.includes('Raw microphone recovery exhausted')).length)
+			.toBe(1);
+
+		const producerCountAtExhaustion = micLifecycleEvents.filter((event) =>
+			event.includes('Microphone audio producer created'),
+		).length;
+		const closeCountAtExhaustion = micLifecycleEvents.filter((event) => event.includes('Audio producer closed')).length;
+		expect(producerCountAtExhaustion).toBe(4);
+		expect(closeCountAtExhaustion).toBe(4);
+
+		await page.waitForTimeout(2_000);
+		expect(micLifecycleEvents.filter((event) => event.includes('Microphone audio producer created'))).toHaveLength(
+			producerCountAtExhaustion,
+		);
+		expect(micLifecycleEvents.filter((event) => event.includes('Audio producer closed'))).toHaveLength(
+			closeCountAtExhaustion,
+		);
+	} finally {
+		await disposePeer(peer);
+	}
+});
+
+test('rapid successful transport rebuilds open the terminal recovery circuit', async ({ browser }, testInfo) => {
+	const peer = await createPeer(browser, credentialsFor(testInfo));
+	const recoveryEvents: string[] = [];
+	peer.page.on('console', (message) => {
+		const text = message.text();
+		if (
+			text.includes('Voice transport recovery completed successfully') ||
+			text.includes('Rapid voice transport recovery exhausted')
+		) {
+			recoveryEvents.push(text);
+		}
+	});
+
+	try {
+		await joinVoice(peer.page);
+
+		for (let cycle = 1; cycle <= 3; cycle += 1) {
+			await forceNewestConnectedPeerConnectionFailure(peer.page);
+			await expect
+				.poll(
+					() =>
+						recoveryEvents.filter((event) => event.includes('Voice transport recovery completed successfully')).length,
+					{ timeout: 20_000 },
+				)
+				.toBe(cycle);
+		}
+
+		await forceNewestConnectedPeerConnectionFailure(peer.page);
+		await expect(peer.page.getByTitle('Leave voice')).toHaveCount(0, { timeout: 20_000 });
+		await expect
+			.poll(() => recoveryEvents.filter((event) => event.includes('Rapid voice transport recovery exhausted')).length)
+			.toBe(1);
+		await peer.page.waitForTimeout(2_000);
+		expect(
+			recoveryEvents.filter((event) => event.includes('Voice transport recovery completed successfully')),
+		).toHaveLength(3);
+	} finally {
+		await clearServerVoiceSession(browser, peer.credentials).catch(() => {});
+		await disposePeer(peer);
+	}
+});
+
+test('unconsumable remote audio exhausts its producer-scoped repair budget', async ({ browser }, testInfo) => {
+	test.setTimeout(40_000);
+	const watcherContext = await browser.newContext();
+	await installPcHook(watcherContext);
+	await watcherContext.addInitScript(() => {
+		const nativeSetRemoteDescription = RTCPeerConnection.prototype.setRemoteDescription;
+		RTCPeerConnection.prototype.setRemoteDescription = function (description) {
+			if (description.type === 'offer' && description.sdp?.includes('m=audio')) {
+				return Promise.reject(new DOMException('Injected remote audio failure', 'OperationError'));
+			}
+			return Reflect.apply(nativeSetRemoteDescription, this, [description]);
+		};
+
+		const nativeSetTimeout = window.setTimeout.bind(window);
+		window.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+			const scaledDelay = delay !== undefined && delay >= 14_000 && delay <= 61_000 ? delay / 100 : delay;
+			return nativeSetTimeout(handler, scaledDelay, ...args);
+		}) as typeof window.setTimeout;
+	});
+	const watcherPage = await watcherContext.newPage();
+	await suppressViteHmrReload(watcherPage);
+	const watcherCredentials = credentialsFor(testInfo, 'watcher');
+	await login(watcherPage, watcherCredentials);
+	const watcher = { context: watcherContext, page: watcherPage, credentials: watcherCredentials };
+	const producer = await createPeer(browser, credentialsFor(testInfo, 'producer'));
+	const repairEvents: string[] = [];
+	watcher.page.on('console', (message) => {
+		const text = message.text();
+		if (
+			text.includes('Repairing stale pending voice streams') ||
+			text.includes('Remote media repair budget exhausted')
+		) {
+			repairEvents.push(text);
+		}
+	});
+
+	try {
+		await joinVoice(watcher.page);
+		await joinVoice(producer.page);
+		await expect
+			.poll(() => repairEvents.filter((event) => event.includes('Remote media repair budget exhausted')).length, {
+				timeout: 20_000,
+			})
+			.toBe(1);
+		expect(repairEvents.filter((event) => event.includes('Repairing stale pending voice streams'))).toHaveLength(3);
+
+		await watcher.page.waitForTimeout(2_000);
+		expect(repairEvents.filter((event) => event.includes('Repairing stale pending voice streams'))).toHaveLength(3);
+	} finally {
+		await disposePeer(producer);
+		await disposePeer(watcher);
 	}
 });
 
