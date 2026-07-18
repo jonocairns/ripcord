@@ -54,6 +54,8 @@ const createFakePorts = (overrides: Partial<TVoiceSessionExecutorPorts> = {}): T
 	restoreVoiceSession: () => Promise.resolve({ serverSessionEstablished: true }),
 	restoreWatchIntent: () => {},
 	recoverDesktopAppAudio: () => Promise.resolve(),
+	onRebuildSucceeded: () => {},
+	onReconnectSucceeded: () => {},
 	leaveVoiceSession: () => Promise.resolve(),
 	clearFailedSession: () => Promise.resolve(),
 	reportCommandError: () => {},
@@ -110,6 +112,7 @@ const bufferDesktopAudioRecovery = (): void => {
 		type: 'RebuildSucceeded',
 		commandId: rebuildCommand.commandId,
 		generation: rebuildCommand.generation,
+		now: 1_000,
 	});
 };
 

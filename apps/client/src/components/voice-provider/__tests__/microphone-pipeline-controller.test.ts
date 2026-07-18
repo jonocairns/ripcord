@@ -217,6 +217,7 @@ const createHarness = (options: { activate?: boolean } = {}) => {
 	const activityUpdates: Array<{ isSpeaking: boolean | undefined; producerId: string | undefined }> = [];
 	const activityMonitors: TFakeActivityMonitor[] = [];
 	const rawRecoveries: string[] = [];
+	const rawRecoveryExhaustions: string[] = [];
 	let localStream: MediaStream | undefined;
 	let transportGeneration = 1;
 	let producerSequence = 0;
@@ -230,6 +231,7 @@ const createHarness = (options: { activate?: boolean } = {}) => {
 	};
 	let createProcessingPipelineImpl: TFakePorts['createProcessingPipeline'] = async (_input) => undefined;
 	let createGainPipelineImpl: TFakePorts['createGainPipeline'] = async (_stream, _volume) => undefined;
+	let reacquireImpl: TFakePorts['reacquire'] = async (_reason) => ({ status: 'started' });
 	let publishProducerImpl: (track: MediaStreamTrack) => Promise<TFakeProducer> = async (_track) => {
 		producerSequence += 1;
 		const producer = createProducer(`producer-${producerSequence}`);
@@ -291,8 +293,12 @@ const createHarness = (options: { activate?: boolean } = {}) => {
 		},
 		isInVoiceChannel: () => inVoiceChannel,
 		isMicMuted: () => micMuted,
-		onRawLossRecover: (reason) => {
+		reacquire: (reason) => {
 			rawRecoveries.push(reason);
+			return reacquireImpl(reason);
+		},
+		onRecoveryExhausted: (reason) => {
+			rawRecoveryExhaustions.push(reason);
 		},
 		onProcessingRuntimeError: () => {},
 		setTimeout: scheduler.setTimeout,
@@ -315,6 +321,7 @@ const createHarness = (options: { activate?: boolean } = {}) => {
 		activityUpdates,
 		activityMonitors,
 		rawRecoveries,
+		rawRecoveryExhaustions,
 		get localStream() {
 			return localStream;
 		},
@@ -341,6 +348,9 @@ const createHarness = (options: { activate?: boolean } = {}) => {
 		},
 		setPublishProducer: (implementation: typeof publishProducerImpl) => {
 			publishProducerImpl = implementation;
+		},
+		setReacquire: (implementation: typeof reacquireImpl) => {
+			reacquireImpl = implementation;
 		},
 	};
 };
@@ -860,5 +870,81 @@ describe('microphone pipeline controller cleanup and raw loss', () => {
 		await flushMicrotasks();
 		expect(harness.controller.owns(prepared)).toBe(false);
 		expect(harness.localStream).toBeUndefined();
+	});
+
+	it('stops capture after bounded consecutive raw-loss recovery attempts', async () => {
+		const harness = createHarness();
+
+		for (let attempt = 0; attempt < 4; attempt += 1) {
+			const prepared = await prepare(harness);
+			await harness.controller.publish({ source: prepared });
+			const rawTrack = harness.controller.getRawTrack();
+			if (!rawTrack || !('emit' in rawTrack)) {
+				throw new Error('expected fake raw track');
+			}
+
+			(rawTrack as TFakeTrack).emit('ended');
+			await flushMicrotasks();
+		}
+
+		expect(harness.rawRecoveries).toEqual(['ended', 'ended', 'ended']);
+		expect(harness.rawRecoveryExhaustions).toEqual(['ended']);
+		expect(harness.localStream).toBeUndefined();
+		expect(harness.producers.every((producer) => producer.closed)).toBe(true);
+	});
+
+	it('counts failed acquisition or publication outcomes in the same bounded recovery operation', async () => {
+		const harness = createHarness();
+		harness.setReacquire(async () => ({ status: 'failed', error: new Error('injected acquisition failure') }));
+		const prepared = await prepare(harness);
+		await harness.controller.publish({ source: prepared });
+		const rawTrack = harness.controller.getRawTrack();
+		if (!rawTrack || !('emit' in rawTrack)) {
+			throw new Error('expected fake raw track');
+		}
+
+		(rawTrack as TFakeTrack).emit('ended');
+		await flushMicrotasks();
+
+		expect(harness.rawRecoveries).toEqual(['ended', 'ended', 'ended']);
+		expect(harness.rawRecoveryExhaustions).toEqual(['ended']);
+		expect(harness.localStream).toBeUndefined();
+		expect(harness.producers[0]?.closed).toBe(true);
+	});
+
+	it('does not consume recovery budget when reacquisition is superseded', async () => {
+		const harness = createHarness();
+		harness.setReacquire(async () => ({ status: 'superseded' }));
+
+		expect(await harness.controller.recover('default-input-move')).toEqual({ status: 'superseded' });
+		expect(await harness.controller.recover('default-input-move')).toEqual({ status: 'superseded' });
+		expect(await harness.controller.recover('default-input-move')).toEqual({ status: 'superseded' });
+		expect(await harness.controller.recover('default-input-move')).toEqual({ status: 'superseded' });
+
+		expect(harness.rawRecoveries).toHaveLength(4);
+		expect(harness.rawRecoveryExhaustions).toEqual([]);
+	});
+
+	it('restores the raw-loss recovery budget after a stable publication', async () => {
+		const harness = createHarness();
+		let prepared = await prepare(harness);
+		await harness.controller.publish({ source: prepared });
+		const firstTrack = harness.controller.getRawTrack();
+		if (!firstTrack || !('emit' in firstTrack)) {
+			throw new Error('expected fake raw track');
+		}
+		(firstTrack as TFakeTrack).emit('ended');
+
+		prepared = await prepare(harness);
+		await harness.controller.publish({ source: prepared });
+		harness.scheduler.runAll();
+		const stableTrack = harness.controller.getRawTrack();
+		if (!stableTrack || !('emit' in stableTrack)) {
+			throw new Error('expected fake raw track');
+		}
+		(stableTrack as TFakeTrack).emit('ended');
+
+		expect(harness.rawRecoveries).toEqual(['ended', 'ended']);
+		expect(harness.rawRecoveryExhaustions).toEqual([]);
 	});
 });

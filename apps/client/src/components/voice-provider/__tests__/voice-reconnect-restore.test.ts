@@ -120,7 +120,7 @@ describe('voice WS-reconnect watch restoration', () => {
 			now: restoredAt,
 		});
 
-		expect(state.phase).toEqual({ phase: 'connected', channelId: 5 });
+		expect(state.phase).toEqual({ phase: 'connected', channelId: 5, generation });
 		expect(state.pendingVoiceReconnect).toBeUndefined();
 		expect(state.reconnectingSince).toBeUndefined();
 		expect(state.suppression).toEqual({

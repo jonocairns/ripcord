@@ -139,6 +139,38 @@ describe('voice session machine', () => {
 		expect(result.commands).toEqual([]);
 	});
 
+	it('replaces an active restore command when microphone intent changes', () => {
+		const [state, generation] = startReconnectWithSnapshot(true);
+		const staleCommandId = activeCommandId(state);
+		const result = reduceVoiceSession(state, {
+			type: 'ReconnectIntentCaptured',
+			pending: pending({ micMuted: true }),
+		});
+
+		expect(result.state.phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'restoring',
+			pending: { micMuted: true },
+			generation: generation + 1,
+		});
+		expect(activeCommandId(result.state)).not.toBe(staleCommandId);
+		expect(result.commands).toEqual([
+			expect.objectContaining({
+				type: 'RestoreVoiceSession',
+				generation: generation + 1,
+				pending: expect.objectContaining({ micMuted: true }),
+			}),
+		]);
+
+		const staleResult = reduceVoiceSession(result.state, {
+			type: 'RestoreSucceeded',
+			commandId: staleCommandId,
+			generation,
+		});
+		expect(staleResult.state).toBe(result.state);
+		expect(staleResult.commands).toEqual([]);
+	});
+
 	it('ignores late join lifecycle events while ws reconnect owns recovery', () => {
 		// A manual join's init dispatched JoinRequested, then the socket dropped
 		// before the init settled: recovery now owns the session.
@@ -199,6 +231,7 @@ describe('voice session machine', () => {
 			type: 'RebuildSucceeded',
 			commandId: activeCommandId(rebuildingState),
 			generation: generation + 1,
+			now: 1_000,
 		});
 
 		expect(result.state).toBe(rebuildingState);
@@ -659,7 +692,7 @@ describe('voice session machine', () => {
 			now: restoredAt,
 		});
 
-		expect(state.phase).toEqual({ phase: 'connected', channelId: 5 });
+		expect(state.phase).toEqual({ phase: 'connected', channelId: 5, generation });
 		expect(state.pendingVoiceReconnect).toBeUndefined();
 		expect(state.reconnectingSince).toBeUndefined();
 		expect(state.reconnectAuthenticated).toBe(false);
@@ -728,6 +761,7 @@ describe('voice session machine', () => {
 			type: 'RebuildSucceeded',
 			commandId: activeCommandId(state),
 			generation,
+			now: 1_000,
 		});
 		expect(stale.state).toBe(resumed.state);
 		expect(stale.commands).toEqual([]);

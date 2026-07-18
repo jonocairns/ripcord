@@ -20,6 +20,12 @@ type TMicrophonePreparedPipeline = {
 
 type TMicrophoneActivityMode = 'monitor' | 'inactive' | 'unavailable';
 
+type TMicrophoneRecoveryReason = TRawMicLossReason | 'default-input-move';
+
+type TMicrophoneStartOutcome = { status: 'started' } | { status: 'failed'; error: unknown } | { status: 'superseded' };
+
+type TMicrophoneRecoveryOutcome = TMicrophoneStartOutcome | { status: 'exhausted' };
+
 type TMicrophoneProducerPublicationLease<TProducer extends object> = {
 	publish: (track: MediaStreamTrack) => Promise<TProducer>;
 	isCurrent: () => boolean;
@@ -55,12 +61,15 @@ type TMicrophonePipelineControllerPorts<
 	onActivityUpdate: (isSpeaking: boolean | undefined, producerId: string | undefined) => void;
 	isInVoiceChannel: () => boolean;
 	isMicMuted: () => boolean;
-	onRawLossRecover: (reason: TRawMicLossReason) => void;
+	reacquire: (reason: TMicrophoneRecoveryReason) => Promise<TMicrophoneStartOutcome>;
+	onRecoveryExhausted: (reason: TMicrophoneRecoveryReason) => void;
 	onProcessingRuntimeError: (error: Error) => void;
 	setTimeout: (handler: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 	clearTimeout: (handle: ReturnType<typeof setTimeout>) => void;
 	log?: (message: string, context?: Record<string, unknown>) => void;
 	rawMuteSettleMs?: number;
+	rawRecoveryMaxAttempts?: number;
+	rawRecoveryStabilityMs?: number;
 };
 
 type TPrepareMicrophonePipelineInput = {
@@ -93,6 +102,8 @@ class MicPipelineSupersededError extends Error {
 }
 
 const DEFAULT_RAW_MUTE_SETTLE_MS = 400;
+const DEFAULT_RAW_RECOVERY_MAX_ATTEMPTS = 3;
+const DEFAULT_RAW_RECOVERY_STABILITY_MS = 10_000;
 
 const createMicrophonePipelineController = <
 	TProducer extends object,
@@ -116,6 +127,9 @@ const createMicrophonePipelineController = <
 	let localProducer: TProducer | undefined;
 	let activityCleanup: (() => void) | undefined;
 	let activityProducer: TProducer | undefined;
+	let rawRecoveryAttempts = 0;
+	let recoveryOperation: Promise<TMicrophoneRecoveryOutcome> | undefined;
+	let rawRecoveryStabilityTimer: ReturnType<typeof setTimeout> | undefined;
 	const handledProducerClosures = new WeakSet<TProducer>();
 
 	const log = (message: string, context?: Record<string, unknown>): void => {
@@ -125,6 +139,83 @@ const createMicrophonePipelineController = <
 	const ownsEpoch = (ownedEpoch: number): boolean => active && epoch === ownedEpoch;
 
 	const owns = (prepared: TMicrophonePreparedPipeline): boolean => active && preparedPipeline === prepared;
+
+	const clearRawRecoveryStabilityTimer = (): void => {
+		if (rawRecoveryStabilityTimer === undefined) {
+			return;
+		}
+
+		ports.clearTimeout(rawRecoveryStabilityTimer);
+		rawRecoveryStabilityTimer = undefined;
+	};
+
+	const resetRawRecoveryBudget = (): void => {
+		clearRawRecoveryStabilityTimer();
+		rawRecoveryAttempts = 0;
+	};
+
+	const recover = (reason: TMicrophoneRecoveryReason): Promise<TMicrophoneRecoveryOutcome> => {
+		if (recoveryOperation) {
+			return recoveryOperation;
+		}
+
+		const operation = (async (): Promise<TMicrophoneRecoveryOutcome> => {
+			const maxAttempts = ports.rawRecoveryMaxAttempts ?? DEFAULT_RAW_RECOVERY_MAX_ATTEMPTS;
+
+			while (active && ports.isInVoiceChannel() && !ports.isMicMuted()) {
+				if (rawRecoveryAttempts >= maxAttempts) {
+					log('Microphone recovery exhausted, stopping microphone', {
+						reason,
+						attempts: rawRecoveryAttempts,
+					});
+					const cleanupPromise = cleanup();
+					// cleanup's synchronous prologue stops and detaches every local
+					// resource. Commit terminal intent immediately afterward so a user
+					// operation that starts while graph destruction drains is newer.
+					ports.onRecoveryExhausted(reason);
+					await cleanupPromise;
+					return { status: 'exhausted' };
+				}
+
+				rawRecoveryAttempts += 1;
+				log('Microphone capture interrupted, re-acquiring', { reason, attempt: rawRecoveryAttempts });
+				let outcome: TMicrophoneStartOutcome;
+				try {
+					outcome = await ports.reacquire(reason);
+				} catch (error) {
+					outcome = { status: 'failed', error };
+				}
+
+				if (outcome.status === 'superseded') {
+					// The recovery owner did not accept this attempt. Preserve the
+					// budget for the operation that superseded it.
+					rawRecoveryAttempts -= 1;
+					return outcome;
+				}
+
+				if (outcome.status === 'started') {
+					return outcome;
+				}
+
+				log('Microphone re-acquisition failed', {
+					reason,
+					attempt: rawRecoveryAttempts,
+					error: outcome.error,
+				});
+			}
+
+			return { status: 'superseded' };
+		})();
+
+		recoveryOperation = operation;
+		void operation.finally(() => {
+			if (recoveryOperation === operation) {
+				recoveryOperation = undefined;
+			}
+		});
+
+		return operation;
+	};
 
 	const activate = (): void => {
 		if (active) {
@@ -219,6 +310,7 @@ const createMicrophonePipelineController = <
 	const cleanup = async (): Promise<void> => {
 		epoch += 1;
 		stopActivity(false);
+		clearRawRecoveryStabilityTimer();
 
 		// Snapshot and clear every shared resource synchronously. Once this block
 		// completes, the async destruction tail touches captured resources only.
@@ -304,8 +396,7 @@ const createMicrophonePipelineController = <
 				return;
 			}
 
-			log('Raw mic capture interrupted, re-acquiring', { reason });
-			ports.onRawLossRecover(reason);
+			void recover(reason);
 		};
 
 		const handleMute = (): void => {
@@ -529,6 +620,11 @@ const createMicrophonePipelineController = <
 		localProducer = producer;
 		syncActivity();
 		log('Microphone audio producer created', { producer });
+		clearRawRecoveryStabilityTimer();
+		rawRecoveryStabilityTimer = ports.setTimeout(() => {
+			rawRecoveryStabilityTimer = undefined;
+			rawRecoveryAttempts = 0;
+		}, ports.rawRecoveryStabilityMs ?? DEFAULT_RAW_RECOVERY_STABILITY_MS);
 
 		const publishedProducer = producer;
 		prepared.outboundAudioTrack.onended = () => {
@@ -547,6 +643,10 @@ const createMicrophonePipelineController = <
 	};
 
 	const setMuted = (muted: boolean): void => {
+		if (!muted) {
+			resetRawRecoveryBudget();
+		}
+
 		preparedPipeline?.outboundStream.getAudioTracks().forEach((track) => {
 			track.enabled = !muted;
 		});
@@ -566,6 +666,7 @@ const createMicrophonePipelineController = <
 
 		active = false;
 		lifecycleGeneration += 1;
+		resetRawRecoveryBudget();
 		await cleanup();
 	};
 
@@ -573,6 +674,7 @@ const createMicrophonePipelineController = <
 		activate,
 		deactivate,
 		createLifecycleLease,
+		recover,
 		prepare,
 		publish,
 		cleanup,
@@ -601,6 +703,9 @@ export type {
 	TMicrophonePreparedPipeline,
 	TMicrophoneProcessingPipeline,
 	TMicrophoneProducerPublicationLease,
+	TMicrophoneRecoveryOutcome,
+	TMicrophoneRecoveryReason,
+	TMicrophoneStartOutcome,
 	TPrepareMicrophonePipelineInput,
 	TPublishMicrophonePipelineInput,
 };

@@ -54,6 +54,16 @@ URLs, desktop bridge compatibility, and client-side diagnostics.
   validation issue arrays. Unexpected values fall back to `_general` instead of
   leaking `null`, arrays, or arbitrary objects into form error state.
 
+## Deferred Follow-up
+
+- [`WebSocket Auth-Refresh Recovery Follow-up`](./voice/websocket-auth-refresh-recovery.md)
+  records the remaining callback-ownership gap when a controlled tRPC client
+  replacement loses its socket during the post-refresh server rejoin.
+- [`Voice Recovery Boundary Audit`](./voice/recovery-boundary-audit.md) defines
+  the ownership, terminal-state, and failure-injection checks needed where
+  browser media resources, local UI state, server state, and bounded recovery
+  policies meet.
+
 ## Small High-Value Wins
 
 - Keep focused tests around `getFileUrl()` covering spaces, unicode, reserved

@@ -1,18 +1,23 @@
-import type { TExternalStream, TRemoteProducerIds } from '@sharkord/shared';
+import type { TExternalStream } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { logVoice } from '@/helpers/browser-logger';
 import { useLatestRef } from '@/hooks/use-latest-ref';
+import { getRemoteMediaRepairDelayMs } from './remote-media-repair-policy';
 import {
-	remoteMediaSubscriptionsToRepairScheduleCommand,
+	isRemoteMediaRepairScheduleCommandCurrent,
+	remoteMediaRepairIdentityKey,
+	remoteMediaSubscriptionsToRepairScheduleCommands,
+	type TRemoteMediaRepairIdentity,
+	type TRemoteMediaRepairScheduleCommand,
 	type TRemoteMediaSubscriptions,
 } from './remote-media-subscriptions';
 import type { TExternalStreamTrackPresence, TPendingStream } from './use-pending-streams';
 
-type TConsumeExistingProducers = (
+type TRepairRemoteProducer = (
+	identity: TRemoteMediaRepairIdentity,
 	rtpCapabilities: RtpCapabilities,
 	externalStreamTracks?: TExternalStreamTrackPresence,
-	prefetchedProducers?: TRemoteProducerIds,
 ) => Promise<unknown>;
 
 type TUseRemoteMediaRepairRunnerInput = {
@@ -21,8 +26,12 @@ type TUseRemoteMediaRepairRunnerInput = {
 	remoteMediaSubscriptions: TRemoteMediaSubscriptions;
 	pendingStreams: Map<string, TPendingStream>;
 	currentChannelExternalStreams: Record<number, TExternalStream>;
-	refreshPendingStreamAges: () => void;
-	consumeExistingProducers: TConsumeExistingProducers;
+	markRepairAttemptStarted: (
+		command: TRemoteMediaRepairScheduleCommand,
+		currentVoiceChannelId: number | undefined,
+		currentExternalStreams: Record<number, unknown>,
+	) => void;
+	repairRemoteProducer: TRepairRemoteProducer;
 	getExternalStreamTrackPresence: () => TExternalStreamTrackPresence;
 };
 
@@ -32,62 +41,108 @@ export const useRemoteMediaRepairRunner = ({
 	remoteMediaSubscriptions,
 	pendingStreams,
 	currentChannelExternalStreams,
-	refreshPendingStreamAges,
-	consumeExistingProducers,
+	markRepairAttemptStarted,
+	repairRemoteProducer,
 	getExternalStreamTrackPresence,
 }: TUseRemoteMediaRepairRunnerInput) => {
 	const remoteMediaSubscriptionsRef = useLatestRef(remoteMediaSubscriptions);
 	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
+	const currentChannelExternalStreamsRef = useLatestRef(currentChannelExternalStreams);
+	const loggedExhaustedIdentitiesRef = useRef<Set<string>>(new Set());
 
 	useEffect(() => {
 		if (currentVoiceChannelId === undefined || !rtpCapabilities || pendingStreams.size === 0) {
+			loggedExhaustedIdentitiesRef.current.clear();
 			return;
 		}
 
-		const command = remoteMediaSubscriptionsToRepairScheduleCommand(
+		const commands = remoteMediaSubscriptionsToRepairScheduleCommands(
+			currentVoiceChannelId,
 			remoteMediaSubscriptionsRef.current,
 			pendingStreams,
 			currentChannelExternalStreams,
 		);
+		const currentIdentityKeys = new Set(commands.map((command) => remoteMediaRepairIdentityKey(command.identity)));
 
-		if (command === undefined) {
-			return;
-		}
+		loggedExhaustedIdentitiesRef.current.forEach((identityKey) => {
+			if (!currentIdentityKeys.has(identityKey)) {
+				loggedExhaustedIdentitiesRef.current.delete(identityKey);
+			}
+		});
 
-		const scheduledVoiceChannelId = currentVoiceChannelId;
-		const repairDelayMs = Math.max(0, command.retryAt - Date.now());
-		const repairTimeout = setTimeout(() => {
-			if (currentVoiceChannelIdRef.current !== scheduledVoiceChannelId) {
+		const repairTimeouts: ReturnType<typeof setTimeout>[] = [];
+		const firstRepairIntervalMs = getRemoteMediaRepairDelayMs(0) ?? 0;
+
+		commands.forEach((command) => {
+			const repairIdentityKey = remoteMediaRepairIdentityKey(command.identity);
+			const repairIntervalMs = getRemoteMediaRepairDelayMs(command.completedAttempts);
+
+			if (repairIntervalMs === undefined) {
+				if (!loggedExhaustedIdentitiesRef.current.has(repairIdentityKey)) {
+					loggedExhaustedIdentitiesRef.current.add(repairIdentityKey);
+					logVoice('Remote media repair budget exhausted', {
+						channelId: command.identity.channelId,
+						remoteId: command.identity.remoteId,
+						kind: command.identity.kind,
+						producerId: command.identity.producerId,
+						completedAttempts: command.completedAttempts,
+					});
+				}
 				return;
 			}
 
-			logVoice('Repairing stale pending voice streams', {
-				channelId: scheduledVoiceChannelId,
-				pendingCount: pendingStreams.size,
-			});
+			const repairDelayMs = Math.max(0, command.retryAt + repairIntervalMs - firstRepairIntervalMs - Date.now());
+			const repairTimeout = setTimeout(() => {
+				const currentSubscriptions = remoteMediaSubscriptionsRef.current;
+				const currentExternalStreams = currentChannelExternalStreamsRef.current;
 
-			// Reset every pending entry's age so the next repair pass is at least a
-			// full repair age away, even if this sweep cannot clear an entry.
-			refreshPendingStreamAges();
+				if (
+					!isRemoteMediaRepairScheduleCommandCurrent(
+						currentSubscriptions,
+						command,
+						currentVoiceChannelIdRef.current,
+						currentExternalStreams,
+					)
+				) {
+					return;
+				}
 
-			void consumeExistingProducers(rtpCapabilities, getExternalStreamTrackPresence()).catch((error) => {
-				logVoice('Failed to repair stale pending voice streams', {
-					error,
-					channelId: scheduledVoiceChannelId,
+				markRepairAttemptStarted(command, currentVoiceChannelIdRef.current, currentExternalStreams);
+
+				logVoice('Repairing stale pending voice stream', {
+					channelId: command.identity.channelId,
+					remoteId: command.identity.remoteId,
+					kind: command.identity.kind,
+					producerId: command.identity.producerId,
+					attempt: command.completedAttempts + 1,
 				});
-			});
-		}, repairDelayMs);
+
+				void repairRemoteProducer(command.identity, rtpCapabilities, getExternalStreamTrackPresence()).catch(
+					(error) => {
+						logVoice('Failed to repair stale pending voice stream', {
+							error,
+							channelId: command.identity.channelId,
+							remoteId: command.identity.remoteId,
+							kind: command.identity.kind,
+							producerId: command.identity.producerId,
+						});
+					},
+				);
+			}, repairDelayMs);
+
+			repairTimeouts.push(repairTimeout);
+		});
 
 		return () => {
-			clearTimeout(repairTimeout);
+			repairTimeouts.forEach((repairTimeout) => clearTimeout(repairTimeout));
 		};
 	}, [
-		consumeExistingProducers,
 		currentChannelExternalStreams,
 		currentVoiceChannelId,
 		getExternalStreamTrackPresence,
+		markRepairAttemptStarted,
 		pendingStreams,
-		refreshPendingStreamAges,
+		repairRemoteProducer,
 		rtpCapabilities,
 	]);
 };

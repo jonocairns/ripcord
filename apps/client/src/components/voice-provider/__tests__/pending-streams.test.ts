@@ -2,7 +2,6 @@ import { describe, expect, it } from 'bun:test';
 import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
 import {
 	buildActivePendingStreamKeys,
-	getOldestRepairEligiblePendingCreatedAt,
 	getPendingStreamKey,
 	reconcilePendingStreamMap,
 	type TPendingStream,
@@ -92,82 +91,5 @@ describe('pending stream reconciliation', () => {
 
 		expect(keys.has(getPendingStreamKey(50, StreamKind.EXTERNAL_AUDIO))).toBe(true);
 		expect(keys.has(getPendingStreamKey(50, StreamKind.EXTERNAL_VIDEO))).toBe(true);
-	});
-});
-
-describe('repair-eligible pending stream age', () => {
-	const makePendingMap = (streams: TPendingStream[]) =>
-		new Map(streams.map((stream) => [getPendingStreamKey(stream.remoteId, stream.kind), stream]));
-
-	it('ignores watch-on-demand kinds so an unwatched screen share never arms the repair timer', () => {
-		const oldest = getOldestRepairEligiblePendingCreatedAt(
-			makePendingMap([
-				makePending(3, StreamKind.SCREEN, 100),
-				makePending(3, StreamKind.SCREEN_AUDIO, 100),
-				makePending(2, StreamKind.VIDEO, 100),
-			]),
-			() => true,
-			() => false,
-		);
-
-		expect(oldest).toBeUndefined();
-	});
-
-	it('returns the oldest audio pending age', () => {
-		const oldest = getOldestRepairEligiblePendingCreatedAt(
-			makePendingMap([
-				makePending(1, StreamKind.AUDIO, 300),
-				makePending(3, StreamKind.SCREEN, 100),
-				makePending(4, StreamKind.AUDIO, 200),
-			]),
-			() => false,
-			() => false,
-		);
-
-		expect(oldest).toBe(200);
-	});
-
-	it('includes external pendings only while their stream is watched', () => {
-		const pendingStreams = makePendingMap([
-			makePending(50, StreamKind.EXTERNAL_AUDIO, 100),
-			makePending(50, StreamKind.EXTERNAL_VIDEO, 50),
-		]);
-
-		expect(
-			getOldestRepairEligiblePendingCreatedAt(
-				pendingStreams,
-				(_streamId, kind) => kind === StreamKind.EXTERNAL_AUDIO,
-				() => false,
-			),
-		).toBe(100);
-		expect(
-			getOldestRepairEligiblePendingCreatedAt(
-				pendingStreams,
-				() => false,
-				() => false,
-			),
-		).toBeUndefined();
-	});
-
-	it('includes screen-audio pendings only while their screen is watched', () => {
-		const pendingStreams = makePendingMap([
-			makePending(3, StreamKind.SCREEN, 100),
-			makePending(3, StreamKind.SCREEN_AUDIO, 200),
-		]);
-
-		expect(
-			getOldestRepairEligiblePendingCreatedAt(
-				pendingStreams,
-				() => false,
-				(remoteId) => remoteId === 3,
-			),
-		).toBe(200);
-		expect(
-			getOldestRepairEligiblePendingCreatedAt(
-				pendingStreams,
-				() => false,
-				() => false,
-			),
-		).toBeUndefined();
 	});
 });

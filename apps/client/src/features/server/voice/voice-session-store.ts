@@ -3,8 +3,10 @@ import {
 	isCurrentVoiceSessionCommand,
 	reduceVoiceSession,
 	shouldFlushBufferedVoiceSessionCommand,
+	type TTransportRecoveryTransition,
 	type TVoiceSessionCommand,
 	type TVoiceSessionEvent,
+	type TVoiceSessionReducerResult,
 	type TVoiceSessionState,
 } from './voice-session-machine';
 
@@ -12,6 +14,7 @@ type TVoiceSessionListener = (state: TVoiceSessionState, commands: TVoiceSession
 type TVoiceSessionStateListener = (state: TVoiceSessionState) => void;
 type TVoiceSessionCommandRunner = (commands: TVoiceSessionCommand[]) => void;
 type TVoiceSessionSelector<T> = (state: TVoiceSessionState) => T;
+type TTransportRecoveryTransitionHandler = (transition: TTransportRecoveryTransition) => void;
 
 let voiceSessionState = createInitialVoiceSessionState();
 const listeners = new Set<TVoiceSessionListener>();
@@ -31,10 +34,18 @@ const stateListeners = new Set<TVoiceSessionStateListener>();
 let commandRunner: TVoiceSessionCommandRunner | undefined;
 let bufferedCommands: TVoiceSessionCommand[] = [];
 
-const dispatchVoiceSession = (event: TVoiceSessionEvent): TVoiceSessionCommand[] => {
+const dispatchVoiceSessionWithResult = (
+	event: TVoiceSessionEvent,
+	onTransportRecoveryTransition?: TTransportRecoveryTransitionHandler,
+): TVoiceSessionReducerResult => {
 	const result = reduceVoiceSession(voiceSessionState, event);
 
 	voiceSessionState = result.state;
+	// Policy adapters commit only machine-accepted transport transitions here,
+	// before listeners or command runners can begin cleanup/rebuild side effects.
+	if (result.transportRecoveryTransition !== undefined) {
+		onTransportRecoveryTransition?.(result.transportRecoveryTransition);
+	}
 
 	// All listeners run before command delivery so a runner can never observe
 	// pre-dispatch state. State-only listeners are the direct machine
@@ -55,8 +66,11 @@ const dispatchVoiceSession = (event: TVoiceSessionEvent): TVoiceSessionCommand[]
 		}
 	}
 
-	return result.commands;
+	return result;
 };
+
+const dispatchVoiceSession = (event: TVoiceSessionEvent): TVoiceSessionCommand[] =>
+	dispatchVoiceSessionWithResult(event).commands;
 
 const registerVoiceSessionCommandRunner = (runner: TVoiceSessionCommandRunner): (() => void) => {
 	commandRunner = runner;
@@ -129,9 +143,16 @@ const resetVoiceSessionState = (): void => {
 	});
 };
 
-export type { TVoiceSessionCommandRunner, TVoiceSessionListener, TVoiceSessionSelector, TVoiceSessionStateListener };
+export type {
+	TTransportRecoveryTransitionHandler,
+	TVoiceSessionCommandRunner,
+	TVoiceSessionListener,
+	TVoiceSessionSelector,
+	TVoiceSessionStateListener,
+};
 export {
 	dispatchVoiceSession,
+	dispatchVoiceSessionWithResult,
 	getVoiceSessionState,
 	isFinalVoiceSessionCommandCurrent,
 	isVoiceSessionCommandCurrent,

@@ -16,15 +16,14 @@ type TWatchedRemoteStreamsSnapshot = {
 	externalStreams: Record<number, TWatchedExternalStreamsSnapshot>;
 };
 
-// `generation` on connected/failed identifies the session incarnation whose
-// finalization commands are still owed (set when a recovery transition emits
-// them, absent on plain joins). Buffered-command flushing matches on it so a
-// final command from one incarnation can never fire against a later session —
+// `generation` identifies the connected/recovering session incarnation.
+// Buffered-command flushing and transport-failure proposals match on it so a
+// result from one incarnation can never advance or finalize a later session —
 // even a rejoin of the same channel, which gets a fresh generation.
 type TVoiceSessionPhase =
 	| { phase: 'idle' }
 	| { phase: 'joining'; channelId: number }
-	| { phase: 'connected'; channelId: number; generation?: number }
+	| { phase: 'connected'; channelId: number; generation: number }
 	| {
 			phase: 'rebuilding';
 			channelId: number;
@@ -124,7 +123,8 @@ type TVoiceSessionTriggerEvent =
 	| { type: 'JoinSucceeded'; channelId: number }
 	| { type: 'JoinFailed'; reason: TClearReason; channelId?: number }
 	| { type: 'WsDropped'; pending: TPendingVoiceReconnect; now: number; online: boolean; authenticated: boolean }
-	| { type: 'TransportFailed'; channelId: number; nonce: number }
+	| { type: 'TransportFailed'; channelId: number; nonce: number; connectedGeneration?: number }
+	| { type: 'TransportRecoveryExhausted'; channelId: number; connectedGeneration?: number }
 	| { type: 'SocketAuthenticated' }
 	| { type: 'SocketUnauthenticated' }
 	| { type: 'NonceChanged'; commandId: number; generation: number; nonce: number }
@@ -138,7 +138,7 @@ type TVoiceSessionTriggerEvent =
 
 type TVoiceSessionResultEvent =
 	| { type: 'RecoveryStarted'; commandId: number; generation: number; snapshot: TWatchedRemoteStreamsSnapshot }
-	| { type: 'RebuildSucceeded'; commandId: number; generation: number }
+	| { type: 'RebuildSucceeded'; commandId: number; generation: number; now: number }
 	| { type: 'RebuildFailed'; commandId: number; generation: number; error: unknown }
 	| { type: 'RestoreSucceeded'; commandId: number; generation: number; serverSessionEstablished?: boolean }
 	| { type: 'RestoreFailed'; commandId: number; generation: number; error: unknown; serverSessionEstablished?: boolean }
@@ -156,7 +156,14 @@ type TVoiceSessionEvent = TVoiceSessionTriggerEvent | TVoiceSessionResultEvent;
 type TVoiceSessionReducerResult = {
 	state: TVoiceSessionState;
 	commands: TVoiceSessionCommand[];
+	transportRecoveryTransition?: TTransportRecoveryTransition;
 };
+
+type TTransportRecoveryTransition =
+	| { type: 'failure-accepted'; channelId: number; connectedGeneration?: number; recoveryGeneration: number }
+	| { type: 'exhaustion-accepted'; channelId: number; connectedGeneration?: number }
+	| { type: 'rebuild-succeeded'; channelId: number; generation: number; now: number }
+	| { type: 'reconnect-succeeded'; channelId: number; generation: number; now: number };
 
 const createInitialVoiceSessionState = (): TVoiceSessionState => ({
 	phase: { phase: 'idle' },
@@ -690,10 +697,14 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				return emptyResult(state);
 			}
 
-			return emptyResult({
-				...clearReconnectFacadeRecovery(state),
-				phase: { phase: 'connected', channelId: event.channelId },
-			});
+			{
+				const [baseState, generation] = nextGeneration(state);
+
+				return emptyResult({
+					...clearReconnectFacadeRecovery(baseState),
+					phase: { phase: 'connected', channelId: event.channelId, generation },
+				});
+			}
 		case 'JoinFailed':
 			if (state.phase.phase === 'reconnecting') {
 				return emptyResult(state);
@@ -736,10 +747,35 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			return startReconnecting(state, event);
 		case 'ReconnectIntentCaptured':
 			if (state.phase.phase === 'reconnecting') {
-				return emptyResult({
+				const nextPhase: Extract<TVoiceSessionPhase, { phase: 'reconnecting' }> = {
+					...state.phase,
+					pending: event.pending,
+				};
+				const nextState: TVoiceSessionState = {
 					...state,
 					pendingVoiceReconnect: event.pending,
-					phase: { ...state.phase, pending: event.pending },
+					phase: nextPhase,
+				};
+
+				if (
+					state.phase.step !== 'restoring' ||
+					(state.phase.pending.micMuted === event.pending.micMuted &&
+						state.phase.pending.soundMuted === event.pending.soundMuted)
+				) {
+					return emptyResult(nextState);
+				}
+
+				// The restore command owns a snapshot by value. Replace an active
+				// command when local mute intent changes so an older restore response
+				// cannot publish the pre-transition state after terminal capture loss.
+				const [nextStateWithGeneration, generation] = nextGeneration(nextState);
+				return scheduleReconnectStep({
+					...nextStateWithGeneration,
+					phase: {
+						...nextPhase,
+						generation,
+						activeCommandId: undefined,
+					},
 				});
 			}
 
@@ -759,11 +795,64 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 
 			return emptyResult({ ...state, reconnectingSince: undefined });
 		case 'TransportFailed':
+			if (
+				event.connectedGeneration !== undefined &&
+				(state.phase.phase !== 'connected' ||
+					state.phase.channelId !== event.channelId ||
+					state.phase.generation !== event.connectedGeneration)
+			) {
+				return emptyResult(state);
+			}
+
 			if (state.phase.phase === 'reconnecting') {
 				return emptyResult(state);
 			}
 
-			return startRebuilding(state, event);
+			{
+				const result = startRebuilding(state, event);
+				const recoveryGeneration =
+					result.state.phase.phase === 'rebuilding' ? result.state.phase.generation : undefined;
+
+				if (recoveryGeneration === undefined) {
+					return result;
+				}
+
+				return {
+					...result,
+					transportRecoveryTransition: {
+						type: 'failure-accepted',
+						channelId: event.channelId,
+						connectedGeneration: event.connectedGeneration,
+						recoveryGeneration,
+					},
+				};
+			}
+		case 'TransportRecoveryExhausted':
+			if (
+				event.connectedGeneration !== undefined &&
+				(state.phase.phase !== 'connected' ||
+					state.phase.channelId !== event.channelId ||
+					state.phase.generation !== event.connectedGeneration)
+			) {
+				return emptyResult(state);
+			}
+
+			if (state.phase.phase === 'reconnecting') {
+				return emptyResult(state);
+			}
+
+			{
+				const result = failSession(state, 'restore-terminal-error', event.channelId, 'leave');
+
+				return {
+					...result,
+					transportRecoveryTransition: {
+						type: 'exhaustion-accepted',
+						channelId: event.channelId,
+						connectedGeneration: event.connectedGeneration,
+					},
+				};
+			}
 		case 'SocketAuthenticated':
 			if (state.phase.phase !== 'reconnecting') {
 				return emptyResult({ ...state, reconnectAuthenticated: true });
@@ -819,13 +908,22 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				return emptyResult(state);
 			}
 
-			return withCommand(
-				{
-					...clearReconnectFacadeRecovery(state),
-					phase: { phase: 'connected', channelId: state.phase.channelId, generation: state.phase.generation },
-				},
-				{ type: 'RecoverDesktopAppAudio', generation: state.phase.generation },
-			);
+			{
+				const channelId = state.phase.channelId;
+				const generation = state.phase.generation;
+				const result = withCommand(
+					{
+						...clearReconnectFacadeRecovery(state),
+						phase: { phase: 'connected', channelId, generation },
+					},
+					{ type: 'RecoverDesktopAppAudio', generation },
+				);
+
+				return {
+					...result,
+					transportRecoveryTransition: { type: 'rebuild-succeeded', channelId, generation, now: event.now },
+				};
+			}
 		case 'RebuildFailed':
 			return reduceRebuildFailed(state, event);
 		case 'RestoreSucceeded':
@@ -922,15 +1020,23 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				return emptyResult(state);
 			}
 
-			return emptyResult({
-				...clearReconnectFacadeRecovery(state),
-				phase: { phase: 'connected', channelId: state.phase.pending.channelId },
-				suppression: {
-					channelId: state.phase.pending.channelId,
-					peerUserIds: [...state.phase.pending.peerUserIds],
-					expiresAt: event.now + VOICE_RECONNECT_SUPPRESSION_MS,
-				},
-			});
+			{
+				const channelId = state.phase.pending.channelId;
+				const generation = state.phase.generation;
+
+				return {
+					...emptyResult({
+						...clearReconnectFacadeRecovery(state),
+						phase: { phase: 'connected', channelId, generation },
+						suppression: {
+							channelId,
+							peerUserIds: [...state.phase.pending.peerUserIds],
+							expiresAt: event.now + VOICE_RECONNECT_SUPPRESSION_MS,
+						},
+					}),
+					transportRecoveryTransition: { type: 'reconnect-succeeded', channelId, generation, now: event.now },
+				};
+			}
 	}
 };
 
@@ -969,6 +1075,7 @@ const selectVoiceSessionConnectionStatus = (state: TVoiceSessionState): TVoiceSe
 };
 
 export type {
+	TTransportRecoveryTransition,
 	TVoiceSessionCommand,
 	TVoiceSessionConnectionStatus,
 	TVoiceSessionEvent,

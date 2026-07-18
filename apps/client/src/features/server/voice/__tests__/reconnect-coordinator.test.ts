@@ -12,6 +12,7 @@ import {
 	snapshotVoiceReconnectIntent,
 	type TPendingVoiceReconnect,
 	type TVoiceReconnectSuppression,
+	updateVoiceReconnectIntentState,
 	VOICE_RECONNECT_INTENT_TTL_MS,
 } from '../reconnect-coordinator';
 import {
@@ -177,6 +178,38 @@ describe('voice reconnect coordinator', () => {
 			});
 
 			expect(captureVoiceReconnectIntentForCurrentSession()).toBe(false);
+			expect(getPendingVoiceReconnect()).toBeUndefined();
+		});
+	});
+
+	describe('updateVoiceReconnectIntentState', () => {
+		it('merges terminal microphone intent into the active reconnect snapshot', () => {
+			dispatchVoiceSession({
+				type: 'WsDropped',
+				pending: {
+					channelId: 5,
+					micMuted: false,
+					soundMuted: false,
+					peerUserIds: [10],
+					expiresAt: Date.now() + 10_000,
+				},
+				now: Date.now(),
+				online: false,
+				authenticated: false,
+			});
+
+			expect(updateVoiceReconnectIntentState({ micMuted: true })).toBe(true);
+			expect(getPendingVoiceReconnect()).toEqual({
+				channelId: 5,
+				micMuted: true,
+				soundMuted: false,
+				peerUserIds: [10],
+				expiresAt: expect.any(Number),
+			});
+		});
+
+		it('does not create reconnect intent outside recovery', () => {
+			expect(updateVoiceReconnectIntentState({ micMuted: true })).toBe(false);
 			expect(getPendingVoiceReconnect()).toBeUndefined();
 		});
 	});

@@ -15,6 +15,8 @@ import {
 	createRemoteMediaConsumeController,
 	type TRemoteMediaConsumeController,
 } from './remote-media-consume-controller';
+import { runRemoteMediaProducerRepair } from './remote-media-producer-repair';
+import type { TRemoteMediaRepairIdentity } from './remote-media-subscriptions';
 import { isExternalTrackPresent, type TExternalStreamTrackPresence } from './use-pending-streams';
 
 // How long to wait for an ICE "disconnected" state to recover before closing
@@ -42,7 +44,18 @@ type TUseTransportParams = {
 		kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO,
 	) => void;
 	removeExternalStreamTrack: (streamId: number, kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO) => void;
-	addPendingStream: (remoteId: number, kind: StreamKind, producerId?: string) => void;
+	addPendingStream: (
+		remoteId: number,
+		kind: StreamKind,
+		producerId?: string,
+		externalStreamTracks?: TExternalStreamTrackPresence,
+	) => void;
+	removePendingStream: (
+		remoteId: number,
+		kind: StreamKind,
+		producerId?: string,
+		options?: { preserveDesired?: boolean },
+	) => void;
 	clearAllPendingStreams: (opts?: { preserveIntent?: boolean }) => void;
 	reconcilePendingStreams: (producers: TRemoteProducerIds, externalStreamTracks?: TExternalStreamTrackPresence) => void;
 	markWatchStopped: (remoteId: number, kind: StreamKind) => void;
@@ -64,6 +77,7 @@ type TUseTransportParams = {
 	markConsumeFailed: (remoteId: number, kind: StreamKind, reason?: string, consumeGeneration?: number) => void;
 	markConsumerClosed: (remoteId: number, kind: StreamKind, consumerId?: string) => void;
 	isProducerCurrent: (remoteId: number, kind: StreamKind, producerId: string) => boolean;
+	isRepairIdentityCurrent: (identity: TRemoteMediaRepairIdentity) => boolean;
 	onTransportFailure: () => void;
 };
 
@@ -73,6 +87,7 @@ const useTransports = ({
 	addExternalStreamTrack,
 	removeExternalStreamTrack,
 	addPendingStream,
+	removePendingStream,
 	clearAllPendingStreams,
 	reconcilePendingStreams,
 	markWatchStopped,
@@ -81,6 +96,7 @@ const useTransports = ({
 	markConsumeFailed,
 	markConsumerClosed,
 	isProducerCurrent,
+	isRepairIdentityCurrent,
 	onTransportFailure,
 }: TUseTransportParams) => {
 	const producerTransport = useRef<Transport<AppData> | undefined>(undefined);
@@ -502,6 +518,32 @@ const useTransports = ({
 		[consumeController],
 	);
 
+	const repairRemoteProducer = useCallback(
+		(
+			identity: TRemoteMediaRepairIdentity,
+			rtpCapabilities: RtpCapabilities,
+			externalStreamTracks?: TExternalStreamTrackPresence,
+		) =>
+			runRemoteMediaProducerRepair(identity, externalStreamTracks, {
+				getProducers: () =>
+					withConsumeAttemptTimeout(getTRPCClient().voice.getProducers.query(), EXISTING_PRODUCERS_RPC_TIMEOUT_MS),
+				isIdentityCurrent: isRepairIdentityCurrent,
+				markProducerMissing: (repairIdentity) => {
+					removePendingStream(repairIdentity.remoteId, repairIdentity.kind, repairIdentity.producerId, {
+						preserveDesired: true,
+					});
+				},
+				markProducerPresent: (repairIdentity, producerId, currentExternalStreamTracks) => {
+					addPendingStream(repairIdentity.remoteId, repairIdentity.kind, producerId, currentExternalStreamTracks);
+				},
+				consume: (repairIdentity) =>
+					consume(repairIdentity.remoteId, repairIdentity.kind, rtpCapabilities, repairIdentity.producerId, {
+						restartExisting: true,
+					}),
+			}),
+		[addPendingStream, consume, isRepairIdentityCurrent, removePendingStream],
+	);
+
 	const runConsumeExistingProducersSweep = useCallback(
 		async ({ rtpCapabilities, externalStreamTracks, prefetchedProducers }: TExistingProducersSweepRequest) => {
 			return traceSentrySpan(
@@ -700,6 +742,7 @@ const useTransports = ({
 		createProducerTransport,
 		createConsumerTransport,
 		consume,
+		repairRemoteProducer,
 		consumeExistingProducers,
 		closeConsumer,
 		stopWatchingStream,

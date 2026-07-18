@@ -7,6 +7,7 @@ import {
 } from '../voice-session-machine';
 import {
 	dispatchVoiceSession,
+	dispatchVoiceSessionWithResult,
 	getVoiceSessionState,
 	isVoiceSessionCommandCurrent,
 	registerVoiceSessionCommandRunner,
@@ -50,6 +51,7 @@ const driveRebuildToSuccessWithNoRunner = (): void => {
 		type: 'RebuildSucceeded',
 		commandId: rebuildCommand.commandId,
 		generation: rebuildCommand.generation,
+		now: 1_000,
 	});
 };
 
@@ -240,6 +242,7 @@ describe('voice session store', () => {
 			type: 'RebuildSucceeded',
 			commandId: rebuildCommand.commandId,
 			generation: rebuildCommand.generation,
+			now: 1_000,
 		});
 
 		if (finalCommand?.type !== 'RecoverDesktopAppAudio') {
@@ -266,6 +269,33 @@ describe('voice session store', () => {
 		unregister();
 
 		expect(order).toEqual(['listener', 'runner']);
+	});
+
+	it('publishes an accepted transport transition before delivering its cleanup command', () => {
+		dispatchVoiceSession({ type: 'JoinRequested', channelId: 5 });
+		dispatchVoiceSession({ type: 'JoinSucceeded', channelId: 5 });
+		const phase = getVoiceSessionState().phase;
+		if (phase.phase !== 'connected') throw new Error('expected connected session');
+
+		const order: string[] = [];
+		const unregister = registerVoiceSessionCommandRunner(() => {
+			order.push('runner');
+		});
+
+		dispatchVoiceSessionWithResult(
+			{
+				type: 'TransportFailed',
+				channelId: 5,
+				nonce: 1,
+				connectedGeneration: phase.generation,
+			},
+			(transition) => {
+				order.push(transition.type);
+			},
+		);
+		unregister();
+
+		expect(order).toEqual(['failure-accepted', 'runner']);
 	});
 
 	it('updates direct selectors from dispatch with no projection or listener involved', () => {

@@ -2,12 +2,14 @@ import { getVoiceReconnectRetryDelayMs, VoiceReconnectTimeoutError } from './rec
 import {
 	selectReconnectAuthenticated,
 	selectReconnectingSince,
+	type TTransportRecoveryTransition,
 	type TVoiceSessionCommand,
 	type TVoiceSessionState,
 	type TWatchedRemoteStreamsSnapshot,
 } from './voice-session-machine';
 import {
 	dispatchVoiceSession,
+	dispatchVoiceSessionWithResult,
 	isFinalVoiceSessionCommandCurrent,
 	isVoiceSessionCommandCurrent,
 	selectVoiceSessionState,
@@ -109,6 +111,8 @@ type TVoiceSessionExecutorPorts = {
 	) => Promise<{ serverSessionEstablished: boolean }>;
 	restoreWatchIntent: (snapshot: TWatchedRemoteStreamsSnapshot) => void;
 	recoverDesktopAppAudio: () => Promise<void>;
+	onRebuildSucceeded: (transition: Extract<TTransportRecoveryTransition, { type: 'rebuild-succeeded' }>) => void;
+	onReconnectSucceeded: (transition: Extract<TTransportRecoveryTransition, { type: 'reconnect-succeeded' }>) => void;
 	leaveVoiceSession: (channelId?: number) => Promise<void>;
 	clearFailedSession: (command: TClearFailedSessionCommand) => Promise<void>;
 	reportCommandError: (command: TVoiceSessionCommand, error: unknown) => void;
@@ -654,11 +658,17 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 				}
 			} else if (result.outcome === 'succeeded' && context.isCurrent()) {
 				terminalOutcome = 'succeeded';
-				dispatchVoiceSession({
-					type: 'RebuildSucceeded',
-					commandId: command.commandId,
-					generation: command.generation,
-				});
+				dispatchVoiceSessionWithResult(
+					{
+						type: 'RebuildSucceeded',
+						commandId: command.commandId,
+						generation: command.generation,
+						now: ports.now(),
+					},
+					(transition) => {
+						if (transition.type === 'rebuild-succeeded') ports.onRebuildSucceeded(transition);
+					},
+				);
 			} else {
 				terminalOutcome = lifecycles.get(command.commandId)?.firstCause ?? 'superseded';
 			}
@@ -955,12 +965,17 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 				ports.restoreWatchIntent(command.snapshot);
 
 				if (context.isCurrent()) {
-					dispatchVoiceSession({
-						type: 'WatchIntentRehydrated',
-						commandId: command.commandId,
-						generation: command.generation,
-						now: ports.now(),
-					});
+					dispatchVoiceSessionWithResult(
+						{
+							type: 'WatchIntentRehydrated',
+							commandId: command.commandId,
+							generation: command.generation,
+							now: ports.now(),
+						},
+						(transition) => {
+							if (transition.type === 'reconnect-succeeded') ports.onReconnectSucceeded(transition);
+						},
+					);
 					return 'succeeded';
 				}
 
