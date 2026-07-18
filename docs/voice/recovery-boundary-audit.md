@@ -149,6 +149,21 @@ terminal exhaustion, then verifies local muted controls, zero live microphone
 tracks, no duplicate microphone publication after reconnect, server-confirmed
 mute from a second client, and successful capture retry on a later unmute.
 
+## Non-blocking follow-ups
+
+These type and naming improvements do not change the closed audit findings or
+the current runtime guarantees:
+
+- Tighten the internal `TransportFailed` and `TransportRecoveryExhausted` event
+  contract by requiring `connectedGeneration`, or by unconditionally rejecting
+  those events outside the matching connected phase. The production transport
+  adapter already supplies the generation; the optional event field remains a
+  future-call-site escape hatch.
+- Rename the remote-media repair ledger's `completedAttempts` field to reflect
+  that an accepted attempt consumes its budget when work starts, before the
+  asynchronous repair settles. Charging at start is intentional because it
+  prevents overlapping or interrupted work from regaining a retry.
+
 ## Completion criteria
 
 All five findings now have explicit owners and focused coverage. Recovery

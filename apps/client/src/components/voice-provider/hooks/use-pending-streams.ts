@@ -23,48 +23,6 @@ export const isExternalTrackPresent = (
 	track: 'audio' | 'video',
 ): boolean => tracks?.[track] !== false;
 
-export type TIsExternalStreamWatched = (
-	streamId: number,
-	kind: StreamKind.EXTERNAL_AUDIO | StreamKind.EXTERNAL_VIDEO,
-) => boolean;
-
-export type TIsScreenAudioWatched = (remoteId: number) => boolean;
-
-/**
- * Oldest `createdAt` among pending streams the client auto-consumes and can
- * therefore repair. VIDEO/SCREEN pendings are watch-on-demand ("stream
- * available" markers) and stay pending indefinitely by design, so they must
- * never arm the stale-stream repair timer. External tracks and SCREEN_AUDIO
- * are only auto-consumed while their stream is watched.
- */
-export const getOldestRepairEligiblePendingCreatedAt = (
-	pendingStreams: Map<string, TPendingStream>,
-	isExternalStreamWatched: TIsExternalStreamWatched,
-	isScreenAudioWatched: TIsScreenAudioWatched,
-): number | undefined => {
-	let oldestCreatedAt: number | undefined;
-
-	pendingStreams.forEach((stream) => {
-		if (stream.kind === StreamKind.EXTERNAL_AUDIO || stream.kind === StreamKind.EXTERNAL_VIDEO) {
-			if (!isExternalStreamWatched(stream.remoteId, stream.kind)) {
-				return;
-			}
-		} else if (stream.kind === StreamKind.SCREEN_AUDIO) {
-			if (!isScreenAudioWatched(stream.remoteId)) {
-				return;
-			}
-		} else if (stream.kind !== StreamKind.AUDIO) {
-			return;
-		}
-
-		if (oldestCreatedAt === undefined || stream.createdAt < oldestCreatedAt) {
-			oldestCreatedAt = stream.createdAt;
-		}
-	});
-
-	return oldestCreatedAt;
-};
-
 const addActiveKeysForIds = (activeKeys: Set<string>, ids: number[], kind: StreamKind): void => {
 	ids.forEach((remoteId) => {
 		activeKeys.add(getPendingStreamKey(remoteId, kind));
