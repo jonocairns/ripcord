@@ -131,6 +131,7 @@ import {
 } from './push-mic-state';
 import {
 	resolveTransportRecoveryCircuitDecision,
+	shouldReleaseTransportFailureLatch,
 	type TTransportRecoveryCircuitState,
 } from './transport-recovery-circuit';
 import { getVideoBitratePolicy, type TVideoBitrateCodec } from './video-bitrate-policy';
@@ -961,7 +962,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				channelId,
 				rapidFailureCount: circuitDecision.state.rapidFailureCount,
 			});
-			dispatchVoiceSession({ type: 'TransportRecoveryExhausted', channelId });
+			const commands = dispatchVoiceSession({ type: 'TransportRecoveryExhausted', channelId });
+			if (
+				shouldReleaseTransportFailureLatch({
+					action: circuitDecision.action,
+					commandCount: commands.length,
+					phase: getVoiceSessionState().phase.phase,
+				})
+			) {
+				hasHandledTransportFailureRef.current = false;
+			}
 			return;
 		}
 
@@ -971,7 +981,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			nonce: voiceSessionReconnectNonceRef.current,
 		});
 
-		if (commands.length === 0 && getVoiceSessionState().phase.phase !== 'rebuilding') {
+		if (
+			shouldReleaseTransportFailureLatch({
+				action: circuitDecision.action,
+				commandCount: commands.length,
+				phase: getVoiceSessionState().phase.phase,
+			})
+		) {
 			hasHandledTransportFailureRef.current = false;
 		}
 	}, []);

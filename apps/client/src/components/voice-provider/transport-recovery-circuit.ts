@@ -1,3 +1,5 @@
+import type { TVoiceSessionPhase } from '@/features/server/voice/voice-session-machine';
+
 const TRANSPORT_RECOVERY_MAX_RAPID_FAILURES = 3;
 const TRANSPORT_RECOVERY_STABILITY_MS = 30_000;
 
@@ -10,6 +12,20 @@ type TTransportRecoveryCircuitState = {
 type TTransportRecoveryCircuitDecision = {
 	state: TTransportRecoveryCircuitState;
 	action: 'recover' | 'stop';
+};
+
+const shouldReleaseTransportFailureLatch = ({
+	action,
+	commandCount,
+	phase,
+}: {
+	action: TTransportRecoveryCircuitDecision['action'];
+	commandCount: number;
+	phase: TVoiceSessionPhase['phase'];
+}): boolean => {
+	const acceptedPhase = action === 'stop' ? 'failed' : 'rebuilding';
+
+	return commandCount === 0 && phase !== acceptedPhase;
 };
 
 const resolveTransportRecoveryCircuitDecision = (input: {
@@ -41,6 +57,7 @@ const resolveTransportRecoveryCircuitDecision = (input: {
 export type { TTransportRecoveryCircuitDecision, TTransportRecoveryCircuitState };
 export {
 	resolveTransportRecoveryCircuitDecision,
+	shouldReleaseTransportFailureLatch,
 	TRANSPORT_RECOVERY_MAX_RAPID_FAILURES,
 	TRANSPORT_RECOVERY_STABILITY_MS,
 };
