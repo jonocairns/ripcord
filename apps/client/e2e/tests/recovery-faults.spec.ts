@@ -356,6 +356,75 @@ test('failed raw microphone reacquisition exhausts once and a later unmute retri
 	}
 });
 
+test('transport recovery continues listen-only when microphone restart fails', async ({ browser }, testInfo) => {
+	const context = await browser.newContext();
+	await installPcHook(context);
+	await context.addInitScript(() => {
+		const nativeGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+		navigator.mediaDevices.getUserMedia = async (constraints) => {
+			if (constraints?.audio && window.__ripcordE2eFailMicAcquisition) {
+				throw new DOMException('Injected transport recovery microphone failure', 'NotReadableError');
+			}
+
+			return nativeGetUserMedia(constraints);
+		};
+	});
+
+	const page = await context.newPage();
+	await suppressViteHmrReload(page);
+	const credentials = credentialsFor(testInfo);
+	await login(page, credentials);
+	const peer = { context, page, credentials };
+	const recoveryEvents: string[] = [];
+	page.on('console', (message) => {
+		if (
+			message.text().includes('Microphone restart failed during transport recovery; continuing muted') ||
+			message.text().includes('Voice transport recovery completed successfully')
+		) {
+			recoveryEvents.push(message.text());
+		}
+	});
+
+	try {
+		await joinVoice(page);
+		await page.evaluate(() => {
+			window.__ripcordE2eFailMicAcquisition = true;
+			const peerConnection = window.__ripcordE2ePeerConnections?.findLast(
+				(candidate) => candidate.connectionState === 'connected',
+			);
+			const microphoneSender = peerConnection?.getSenders().find((sender) => sender.track?.kind === 'audio');
+			if (!microphoneSender?.track) {
+				throw new Error('No live microphone sender was available to stop');
+			}
+			microphoneSender.track.stop();
+		});
+
+		await forceNewestConnectedPeerConnectionFailure(page);
+
+		await expect
+			.poll(
+				() =>
+					recoveryEvents.filter((event) =>
+						event.includes('Microphone restart failed during transport recovery; continuing muted'),
+					).length,
+				{ timeout: 20_000 },
+			)
+			.toBe(1);
+		await expect
+			.poll(
+				() =>
+					recoveryEvents.filter((event) => event.includes('Voice transport recovery completed successfully')).length,
+				{ timeout: 20_000 },
+			)
+			.toBe(1);
+		await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible();
+		await expect(page.getByTitle('Leave voice')).toBeVisible();
+		await expect(page.getByTitle('Unmute microphone')).toBeVisible();
+	} finally {
+		await disposePeer(peer);
+	}
+});
+
 test('a failed user microphone mutation rolls back while reconnect converges on that rollback', async ({
 	browser,
 }, testInfo) => {

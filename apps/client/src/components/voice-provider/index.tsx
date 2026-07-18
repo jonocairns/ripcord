@@ -139,6 +139,7 @@ import {
 	resolveTransportRecoveryCircuitDecision,
 	type TTransportRecoveryCircuitState,
 } from './transport-recovery-circuit';
+import { recoverTransportMicrophone } from './transport-recovery-microphone';
 import { getVideoBitratePolicy, type TVideoBitrateCodec } from './video-bitrate-policy';
 import { VIDEO_DEGRADATION_PREFERENCE } from './video-encoding-constants';
 import { createVoiceActivityStore, type VoiceActivityStore } from './voice-activity';
@@ -3804,31 +3805,31 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 						const currentAudioStream = localAudioStreamRef.current;
 						const currentAudioTrack = currentAudioStream?.getAudioTracks()[0];
-						if (recoveryJoinResult && canSpeakRef.current && startMicStreamRef.current) {
-							republishTasks.push(
-								startMicStreamRef.current(isCurrentAttempt).then((outcome) => {
-									if (outcome.status === 'failed') {
-										throw outcome.error;
-									}
-									if (outcome.status === 'superseded') {
-										throw new VoiceSessionExecutionSupersededError();
-									}
-								}),
-							);
-						} else if (currentAudioStream && currentAudioTrack && currentAudioTrack.readyState === 'live') {
-							republishTasks.push(microphoneController.publish({ source: 'current', isCurrent: isCurrentAttempt }));
-						} else if (currentAudioStream && canSpeakRef.current && startMicStreamRef.current) {
-							republishTasks.push(
-								startMicStreamRef.current(isCurrentAttempt).then((outcome) => {
-									if (outcome.status === 'failed') {
-										throw outcome.error;
-									}
-									if (outcome.status === 'superseded') {
-										throw new VoiceSessionExecutionSupersededError();
-									}
-								}),
-							);
-						}
+						const startRecoveryMic = startMicStreamRef.current;
+						republishTasks.push(
+							recoverTransportMicrophone(
+								{
+									recoveryJoined: recoveryJoinResult !== undefined,
+									micMuted: ownVoiceStateSelector(useServerStore.getState()).micMuted,
+									canSpeak: canSpeakRef.current,
+									hasCurrentStream: currentAudioStream !== undefined,
+									currentTrackLive: currentAudioTrack?.readyState === 'live',
+								},
+								{
+									start: startRecoveryMic === undefined ? undefined : () => startRecoveryMic(isCurrentAttempt),
+									publishCurrent: () =>
+										microphoneController.publish({ source: 'current', isCurrent: isCurrentAttempt }),
+									onStartFailed: (error) => {
+										logVoice('Microphone restart failed during transport recovery; continuing muted', { error });
+										void commitTerminalMicMutedRef.current?.();
+									},
+								},
+							).then((result) => {
+								if (result === 'superseded') {
+									throw new VoiceSessionExecutionSupersededError();
+								}
+							}),
+						);
 
 						const localMediaRepublishPlan = buildLocalMediaRepublishPlan(isCurrentAttempt);
 						republishTasks.push(...localMediaRepublishPlan.tasks);
