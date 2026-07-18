@@ -1,9 +1,9 @@
 # Voice Recovery Boundary Audit
 
-**Status:** Audited. Remediation is required before the recovery work is ready
-to merge. The individual resource controllers are generally bounded, but five
-integration gaps still break those bounds or allow local, reconnect, and server
-state to disagree.
+**Status:** Closed. All five findings have explicit recovery owners, bounded
+adapter outcomes, and focused acceptance coverage. Browser fault injection also
+proves terminal microphone behavior across failed server synchronization and
+WebSocket recovery.
 
 ## Why this audit is needed
 
@@ -67,79 +67,50 @@ defines callback ownership across controlled tRPC client replacement.
 
 ## Audit findings
 
-### Merge blockers
+### Remediated findings
 
-1. **Terminal raw-microphone exhaustion can roll local mute state back.** The
-   controller correctly stops and detaches the exhausted capture before calling
-   the adapter, but the adapter sends the terminal mute through the ordinary
-   optimistic `setMicMuted` path. If `voice.updateState` fails, that path
-   restores the previous unmuted UI state even though no local capture remains.
-   Terminal mute needs a locally authoritative transition whose server update
-   is best-effort and cannot roll the stopped resource back to active.
-
-2. **Microphone reacquisition has no observable outcome.** Default-device moves
-   and raw-track recovery both invoke `startMicStream` without awaiting a
-   success or failure result, while `startMicStream` catches and consumes its
-   own error. A failed acquisition or publication can therefore remove the old
-   capture, leave the UI unmuted, and never advance the controller to bounded
-   exhaustion because there is no replacement track to emit another end event.
-   The recovery owner must receive a typed outcome and treat failure as part of
-   the same bounded operation.
-
-3. **Terminal microphone intent is not merged into an active reconnect.** The
-   reconnect machine snapshots `micMuted` when the socket first drops. A later
-   terminal mute updates local voice state but does not replace the pending
-   reconnect intent, so restore can publish the stale unmuted snapshot after
-   local capture has been stopped. Safety-driven mic transitions must use the
-   same ordering mechanism as user intent and update the current reconnect
-   command when one exists.
-
-4. **Transport stability is measured from the previous failure, not from
-   recovery completion.** The rapid-failure circuit resets when two failure
-   timestamps are at least 30 seconds apart. A rebuild contains several
-   sequential operations, each with its own 12-second timeout, so a slow
-   successful rebuild can consume that interval by itself. An immediately
-   failing replacement transport can then receive a fresh budget on every
-   cycle. Start the stability window when a rebuild succeeds, and let the
-   session machine or an explicit accepted result own circuit advancement.
-
-5. **Remote-media repair is not actually producer-scoped.** The runner joins
-   every eligible pending stream into one aggregate identity and one retry
-   counter. Replacing or adding any producer changes that aggregate and resets
-   the budget for every other stuck producer. Churn in one slot can therefore
-   keep repair alive indefinitely for another slot. Keep budgets per
-   `(channelId, remoteId, kind, producerId)` and bind scheduled or in-flight
-   work to that exact identity.
+1. **Terminal raw-microphone exhaustion is locally authoritative.** Capture is
+   stopped first, terminal mute bypasses optimistic rollback, reconnect intent
+   is updated, and server synchronization is best-effort.
+2. **Microphone reacquisition reports an explicit outcome.** Default-device and
+   raw-loss recovery receive `started`, `failed`, or `superseded`; accepted
+   failures advance the same bounded operation and exhaustion commits terminal
+   mute.
+3. **Terminal microphone intent replaces stale reconnect work.** Microphone
+   safety transitions use the shared operation ordering and replace an active
+   restore command when the pending reconnect snapshot changes.
+4. **Transport stability begins at accepted recovery completion.** The session
+   machine reports accepted failure and rebuild outcomes, ignored events retain
+   the prior latch and circuit state, and one terminal transition owns cleanup.
+5. **Remote-media repair is producer-scoped.** The subscription ledger owns one
+   budget per `(channelId, remoteId, kind, producerId)`, while scheduled and
+   in-flight work verifies that exact identity before mutating or consuming.
 
 ### Confirmed foundations
 
 - Default-device generation checks, duplicate-event suppression, and muted
-  teardown are sound once reacquisition reports its outcome.
+  teardown remain sound with explicit reacquisition outcomes.
 - The microphone controller owns track and producer cleanup and limits repeated
   raw-track loss for a stable capture generation.
 - The voice session machine serializes rebuild commands, rejects stale command
   completions, preempts rebuilds on WebSocket loss, and performs normal terminal
   leave cleanup when its own rebuild attempts exhaust.
 - The remote consume controller bounds RPC stages, owns late allocation cleanup,
-  and rejects stale transport or producer completions. The remaining defect is
-  the global repair scheduler layered above it.
+  and rejects stale transport or producer completions. The producer-scoped
+  repair scheduler now preserves those boundaries.
 
-## Remediation order
+## Completed remediation
 
-1. Introduce an explicit microphone transition boundary. Reacquisition must
-   return success, failure, or superseded; terminal mute must commit locally,
-   update pending reconnect intent, and synchronize to the server without
+1. The microphone transition boundary reports explicit outcomes, commits
+   terminal mute locally, updates reconnect intent, and synchronizes without
    rollback.
-2. Move transport circuit timing to accepted machine events. Record rebuild
-   success as the beginning of the stability interval and count only a later
-   accepted failure for the same channel generation.
-3. Replace the aggregate remote repair counter with per-producer budgets. A
-   producer replacement cancels or invalidates old scheduled work and starts
-   exactly one fresh budget for the replacement.
-4. Add integration tests at each adapter boundary before broad fault-injection
-   coverage. The tests must inject failed acquisition/publication, failed
-   `voice.updateState`, mutation during a single reconnect, slow rebuilds, and
-   two independently changing remote producer identities.
+2. Transport circuit timing advances from accepted machine events and records
+   successful rebuild completion as the beginning of the stability interval.
+3. Producer-scoped repair budgets invalidate replaced or channel-stale work and
+   give each replacement identity one fresh budget.
+4. Focused and browser integration tests inject failed acquisition, failed
+   `voice.updateState`, reconnect overlap, slow rebuilds, and independently
+   changing remote producer identities.
 
 ## Implementation direction
 
@@ -159,37 +130,28 @@ defines callback ownership across controlled tRPC client replacement.
 
 ## Acceptance coverage
 
-Focused tests should cover the integration boundaries, not only each pure
-policy:
+| Acceptance boundary | Focused or browser coverage |
+| --- | --- |
+| Normal user mute rolls back after server failure | `recovery-faults.spec.ts`: “a failed user microphone mutation rolls back while reconnect converges on that rollback” |
+| Terminal raw-capture exhaustion remains muted through failed sync or disconnect, then unmute retries capture | `recovery-faults.spec.ts`: “terminal microphone mute survives failed server sync and reconnect restore” |
+| Newer microphone intent wins over stale synchronization or restore completion | `voice-state-operation.test.ts`: “ignores an older async result after a newer operation starts”; `voice-session-machine.test.ts`: “replaces an active restore command when microphone intent changes”; `recovery-faults.spec.ts`: “the latest microphone intent wins across repeated reconnects” |
+| Failed default-device or raw-loss reacquisition advances bounded recovery | `default-input-device.test.ts`: default-device decision cases; `microphone-pipeline-controller.test.ts`: “counts failed acquisition or publication outcomes in the same bounded recovery operation”; `recovery-faults.spec.ts`: “failed raw microphone reacquisition exhausts once and a later unmute retries capture” |
+| WebSocket-owned transport failures preserve the latch and prior budget | `recover-transport-session.test.ts`: “ignores transport failure while websocket reconnect owns recovery”; `transport-recovery-circuit.test.ts`: “preserves the budget when websocket recovery ignores a proposed failure” and the corresponding exhausted-budget case |
+| Accepted failures advance once and terminal exhaustion cleans up once | `transport-recovery-circuit.test.ts`: duplicate and stale-generation coverage; `recover-transport-session.test.ts`: “accepts circuit exhaustion and emits terminal cleanup exactly once” |
+| Immediate replacement failure after a slow rebuild remains rapid | `transport-recovery-circuit.test.ts` and `recovery-faults.spec.ts`: “an immediate failure after a slow transport rebuild stays in the rapid circuit” |
+| Channel- or producer-stale repair is cancelled, and consume/resume is bounded | `remote-media-producer-repair.test.ts`: replacement, concurrent producer, and channel invalidation cases; `remote-media-consume-controller.test.ts`: cancellation, deterministic retries, failed resume cleanup, and resume timeout cases |
+| Producer churn cannot reset another slot's exhausted budget | `remote-media-subscriptions.test.ts`: “keeps an exhausted producer isolated from churn in another slot” |
 
-- A normal user mute mutation rolls back when its server update fails.
-- Terminal raw-capture exhaustion remains locally muted when the same update
-  fails or the socket is disconnected, and a later unmute retries capture.
-- A newer mic intent wins over stale success or failure from terminal mute
-  synchronization.
-- Failed default-device or raw-loss reacquisition advances the same bounded
-  microphone recovery operation instead of leaving an unmuted empty pipeline.
-- Ignored transport failures during WebSocket recovery preserve both the failure
-  latch and the prior circuit budget.
-- Accepted transport failures advance the circuit exactly once and terminal
-  exhaustion runs cleanup exactly once.
-- A replacement transport that fails immediately after a slow rebuild remains
-  in the same rapid-failure sequence.
-- Remote repair attempts are cancelled or ignored when channel or producer
-  identity changes, and consume/resume work is tracked to success or bounded
-  exhaustion.
-- Churn in one remote producer slot cannot reset another slot's exhausted repair
-  budget.
-
-Playwright fault injection should include server-mutation failure and socket
-loss at terminal media transitions. Assertions should cover resource count,
-local controls, server convergence after reconnect, retry affordance, and the
-absence of duplicate recovery work.
+The terminal-microphone Playwright case closes the fault-injection contract. It
+forces `voice.updateState` failure by closing the application socket during
+terminal exhaustion, then verifies local muted controls, zero live microphone
+tracks, no duplicate microphone publication after reconnect, server-confirmed
+mute from a second client, and successful capture retry on a later unmute.
 
 ## Completion criteria
 
-Remediation is complete when all five findings have explicit owners and focused
-coverage, every recovery adapter reports accepted, ignored, superseded, or
-terminal outcomes, and the fault-injection suite proves disconnect,
-supersession, identity change, slow recovery, and side-effect failure without
-unbounded work or contradictory local state.
+All five findings now have explicit owners and focused coverage. Recovery
+adapters report accepted, ignored, superseded, or terminal outcomes, and the
+fault-injection suite covers disconnect, supersession, identity change, slow
+recovery, and side-effect failure without unbounded work or contradictory local
+state.

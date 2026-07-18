@@ -44,6 +44,61 @@ const forceNewestConnectedPeerConnectionFailure = async (page: Parameters<typeof
 	});
 };
 
+const getOnlyRemoteMicMuted = async (page: Parameters<typeof pcStats>[0]): Promise<boolean | undefined> => {
+	return page.evaluate(async () => {
+		const modulePath = '/src/features/server/slice.ts';
+		const serverModule: unknown = await import(modulePath);
+		if (typeof serverModule !== 'object' || serverModule === null) {
+			throw new Error('Could not load the server store module');
+		}
+
+		const serverStore = Reflect.get(serverModule, 'useServerStore');
+		const getState =
+			serverStore !== null && (typeof serverStore === 'object' || typeof serverStore === 'function')
+				? Reflect.get(serverStore, 'getState')
+				: undefined;
+		if (typeof getState !== 'function') {
+			throw new Error('The server store does not expose getState');
+		}
+
+		const state: unknown = Reflect.apply(getState, serverStore, []);
+		if (typeof state !== 'object' || state === null) {
+			throw new Error('The server store returned an invalid state');
+		}
+
+		const ownUserId = Reflect.get(state, 'ownUserId');
+		const currentVoiceChannelId = Reflect.get(state, 'currentVoiceChannelId');
+		const voiceMap = Reflect.get(state, 'voiceMap');
+		if (
+			typeof ownUserId !== 'number' ||
+			typeof currentVoiceChannelId !== 'number' ||
+			typeof voiceMap !== 'object' ||
+			voiceMap === null
+		) {
+			return undefined;
+		}
+
+		const channel = Reflect.get(voiceMap, currentVoiceChannelId);
+		const users = typeof channel === 'object' && channel !== null ? Reflect.get(channel, 'users') : undefined;
+		if (typeof users !== 'object' || users === null) {
+			return undefined;
+		}
+
+		const remoteVoiceStates = Object.entries(users).filter(([userId]) => Number(userId) !== ownUserId);
+		if (remoteVoiceStates.length !== 1) {
+			return undefined;
+		}
+
+		const remoteVoiceState = remoteVoiceStates[0]?.[1];
+		if (typeof remoteVoiceState !== 'object' || remoteVoiceState === null) {
+			return undefined;
+		}
+
+		const micMuted = Reflect.get(remoteVoiceState, 'micMuted');
+		return typeof micMuted === 'boolean' ? micMuted : undefined;
+	});
+};
+
 test('deafened audio state survives a websocket reconnect', async ({ browser }, testInfo) => {
 	const peer = await createPeer(browser, credentialsFor(testInfo));
 
@@ -412,6 +467,22 @@ test('terminal microphone mute survives failed server sync and reconnect restore
 		await expect(page.getByTitle('Unmute microphone')).toBeVisible();
 		expect(await page.evaluate(() => window.__ripcordE2eFailNextVoiceStateUpdate)).toBe(false);
 		expect(await page.evaluate(() => window.__ripcordE2eRawAudioTracks?.length ?? 0)).toBe(4);
+		expect(
+			await page.evaluate(
+				() => window.__ripcordE2eRawAudioTracks?.filter((track) => track.readyState === 'live').length ?? 0,
+			),
+		).toBe(0);
+
+		const observer = await createPeer(browser, credentialsFor(testInfo, 'observer'));
+		try {
+			await joinVoice(observer.page);
+			await expect.poll(() => getOnlyRemoteMicMuted(observer.page)).toBe(true);
+		} finally {
+			await disposePeer(observer);
+		}
+
+		await page.waitForTimeout(2_000);
+		expect(microphonePublications).toHaveLength(4);
 
 		await page.getByTitle('Unmute microphone').click();
 		await expect(page.getByTitle('Mute microphone')).toBeVisible();
@@ -507,7 +578,7 @@ test('unconsumable remote audio exhausts its producer-scoped repair budget', asy
 	watcher.page.on('console', (message) => {
 		const text = message.text();
 		if (
-			text.includes('Repairing stale pending voice streams') ||
+			text.includes('Repairing stale pending voice stream') ||
 			text.includes('Remote media repair budget exhausted')
 		) {
 			repairEvents.push(text);
@@ -522,10 +593,10 @@ test('unconsumable remote audio exhausts its producer-scoped repair budget', asy
 				timeout: 20_000,
 			})
 			.toBe(1);
-		expect(repairEvents.filter((event) => event.includes('Repairing stale pending voice streams'))).toHaveLength(3);
+		expect(repairEvents.filter((event) => event.includes('Repairing stale pending voice stream'))).toHaveLength(3);
 
 		await watcher.page.waitForTimeout(2_000);
-		expect(repairEvents.filter((event) => event.includes('Repairing stale pending voice streams'))).toHaveLength(3);
+		expect(repairEvents.filter((event) => event.includes('Repairing stale pending voice stream'))).toHaveLength(3);
 	} finally {
 		await disposePeer(producer);
 		await disposePeer(watcher);
