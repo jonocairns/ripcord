@@ -222,19 +222,9 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 						)}
 					</div>
 				)}
-				<div className="flex items-center px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:h-14 md:p-2">
-					<div className="bg-muted/60 flex h-10 w-full items-center gap-1 rounded-md border border-border px-1 transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40">
+				<div className="px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:p-2">
+					<div className="bg-muted/60 flex w-full flex-col gap-1 rounded-xl border border-border px-2 py-2 transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40">
 						<input {...fileInputProps} />
-						<Button
-							size="icon"
-							variant="ghost"
-							className="h-8 w-8 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-							disabled={uploading || !canUploadFiles}
-							onClick={openFileDialog}
-							title="Upload files"
-						>
-							<Plus className="h-5 w-5" />
-						</Button>
 						<TiptapInput
 							value={newMessage}
 							onChange={setNewMessage}
@@ -243,20 +233,34 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 							readOnly={sending}
 							commands={pluginCommands}
 							variant="chat-composer"
+							leadingAction={
+								<Button
+									size="icon"
+									variant="ghost"
+									className="h-8 w-8 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+									disabled={uploading || !canUploadFiles}
+									onClick={openFileDialog}
+									title="Upload files"
+								>
+									<Plus className="h-5 w-5" />
+								</Button>
+							}
+							trailingAction={
+								<Button
+									size="icon"
+									variant={hasContent ? 'default' : 'ghost'}
+									className={cn(
+										'h-8 w-8 shrink-0 rounded-md transition-colors [&_svg]:-translate-x-px [&_svg]:translate-y-px',
+										!hasContent && 'text-muted-foreground hover:text-foreground',
+									)}
+									onClick={onSendMessage}
+									disabled={uploading || sending || !hasContent || !canSendMessages}
+									title="Send message"
+								>
+									<Send className="h-4 w-4" />
+								</Button>
+							}
 						/>
-						<Button
-							size="icon"
-							variant={hasContent ? 'default' : 'ghost'}
-							className={cn(
-								'h-8 w-8 shrink-0 rounded-md transition-colors [&_svg]:-translate-x-px [&_svg]:translate-y-px',
-								!hasContent && 'text-muted-foreground hover:text-foreground',
-							)}
-							onClick={onSendMessage}
-							disabled={uploading || sending || !hasContent || !canSendMessages}
-							title="Send message"
-						>
-							<Send className="h-4 w-4" />
-						</Button>
 					</div>
 				</div>
 			</div>

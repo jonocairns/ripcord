@@ -3,15 +3,21 @@ import Emoji, { gitHubEmojis } from '@tiptap/extension-emoji';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Smile } from 'lucide-react';
-import { memo, useEffect, useMemo, useRef } from 'react';
+import { memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from 'react';
 import { EmojiPicker } from '@/components/emoji-picker';
 import { Button } from '@/components/ui/button';
 import { useCustomEmojis } from '@/features/server/emojis/hooks';
 import { cn } from '@/lib/utils';
+import { reduceChatComposerLayout } from './chat-composer-layout';
 import { COMMANDS_STORAGE_KEY, CommandSuggestion } from './plugins/command-suggestion';
 import { SlashCommands } from './plugins/slash-commands-extension';
 import { EmojiSuggestion } from './suggestions';
 import type { TEmojiItem } from './types';
+
+// chat-composer text area renders at leading-5 (20px) with a 22px min-height for one
+// line; a second line pushes scrollHeight well past that, so this threshold sits safely
+// between the two without needing to measure a real single-line baseline on mount.
+const CHAT_COMPOSER_SINGLE_LINE_MAX_HEIGHT = 28;
 
 type TTiptapInputProps = {
 	disabled?: boolean;
@@ -23,6 +29,10 @@ type TTiptapInputProps = {
 	onTyping?: () => void;
 	commands?: TCommandInfo[];
 	variant?: 'chat-composer' | 'default';
+	// chat-composer only: rendered in the fixed-height action row below the text area,
+	// left and right of the emoji button, so they never move as the text grows.
+	leadingAction?: ReactNode;
+	trailingAction?: ReactNode;
 };
 
 const TiptapInput = memo(
@@ -36,6 +46,8 @@ const TiptapInput = memo(
 		readOnly,
 		commands,
 		variant = 'default',
+		leadingAction,
+		trailingAction,
 	}: TTiptapInputProps) => {
 		const readOnlyRef = useRef(readOnly);
 		readOnlyRef.current = readOnly;
@@ -208,29 +220,118 @@ const TiptapInput = memo(
 
 		const isChatComposer = variant === 'chat-composer';
 
+		const [chatComposerLayout, dispatchChatComposerLayout] = useReducer(reduceChatComposerLayout, 'inline');
+		const chatComposerRef = useRef<HTMLDivElement>(null);
+		const isMultiline = chatComposerLayout === 'multiline';
+
+		// Single line: text sits inline with the action buttons. Once it wraps to a
+		// second line (hard break or natural word-wrap), the actions drop to their own
+		// row below so they don't get squeezed by a growing text area — matches ChatGPT.
+		useEffect(() => {
+			if (!isChatComposer || !editor) return;
+
+			const dom = editor.view.dom;
+
+			const measureEditor = () => {
+				dispatchChatComposerLayout({
+					type: 'editor-resized',
+					isWrapped: dom.scrollHeight > CHAT_COMPOSER_SINGLE_LINE_MAX_HEIGHT,
+				});
+			};
+			const requestInlineProbe = () => {
+				dispatchChatComposerLayout({ type: 'inline-probe-requested' });
+			};
+
+			measureEditor();
+			editor.on('update', requestInlineProbe);
+
+			const observer = new ResizeObserver(measureEditor);
+			observer.observe(dom);
+
+			return () => {
+				editor.off('update', requestInlineProbe);
+				observer.disconnect();
+			};
+		}, [isChatComposer, editor]);
+
+		useEffect(() => {
+			if (!isChatComposer) return;
+
+			const composer = chatComposerRef.current;
+			if (!composer) return;
+
+			let previousWidth: number | undefined;
+			const observer = new ResizeObserver(([entry]) => {
+				if (!entry) return;
+
+				const width = entry.contentRect.width;
+				if (previousWidth !== undefined && width !== previousWidth) {
+					dispatchChatComposerLayout({ type: 'inline-probe-requested' });
+				}
+				previousWidth = width;
+			});
+			observer.observe(composer);
+
+			return () => observer.disconnect();
+		}, [isChatComposer]);
+
+		useLayoutEffect(() => {
+			if (!isChatComposer || !editor || chatComposerLayout !== 'inline-probe') return;
+
+			dispatchChatComposerLayout({
+				type: 'inline-probe-completed',
+				isWrapped: editor.view.dom.scrollHeight > CHAT_COMPOSER_SINGLE_LINE_MAX_HEIGHT,
+			});
+		}, [chatComposerLayout, editor, isChatComposer]);
+
+		const emojiButton = (
+			<EmojiPicker onEmojiSelect={handleEmojiSelect}>
+				<Button
+					variant="ghost"
+					size="icon"
+					disabled={disabled}
+					className={cn(isChatComposer && 'h-8 w-8 text-muted-foreground hover:text-foreground')}
+				>
+					<Smile className="h-5 w-5" />
+				</Button>
+			</EmojiPicker>
+		);
+
+		if (!isChatComposer) {
+			return (
+				<div className="flex min-w-0 flex-1 items-center gap-2">
+					<EditorContent
+						editor={editor}
+						className={cn(
+							'tiptap w-full overflow-auto min-h-[40px] max-h-[5rem] rounded border p-2',
+							disabled && 'opacity-50 cursor-not-allowed bg-muted',
+						)}
+					/>
+					{emojiButton}
+				</div>
+			);
+		}
+
+		// One tree shape for both single-line and multi-line: only classNames (order,
+		// basis, margin) change based on isMultiline, never the element types or their
+		// position in the tree. Branching into two different returns here would make React
+		// unmount/remount the EditorContent subtree on every mode switch, dropping focus
+		// and cursor position — flex-wrap + order lets the same elements just reflow.
 		return (
-			<div className={cn('flex min-w-0 flex-1 items-center', isChatComposer ? 'gap-1' : 'gap-2')}>
+			<div ref={chatComposerRef} className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+				{leadingAction}
 				<EditorContent
 					editor={editor}
 					className={cn(
-						'tiptap w-full overflow-auto',
-						isChatComposer
-							? 'min-h-[38px] max-h-[7rem] rounded-md pl-1 pr-2 py-1.5 text-[15px] [&_.ProseMirror]:min-h-[22px] [&_.ProseMirror]:break-words [&_.ProseMirror]:leading-5 [&_.ProseMirror]:outline-none'
-							: 'min-h-[40px] max-h-[5rem] rounded border p-2',
-						disabled && (isChatComposer ? 'opacity-50 cursor-not-allowed' : 'opacity-50 cursor-not-allowed bg-muted'),
+						'tiptap overflow-auto min-h-[22px] max-h-[7rem] text-[15px] leading-5 [&_.ProseMirror]:min-h-[22px] [&_.ProseMirror]:break-words [&_.ProseMirror]:leading-5 [&_.ProseMirror]:outline-none',
+						isMultiline ? 'order-first basis-full' : 'min-w-0 flex-1',
+						disabled && 'opacity-50 cursor-not-allowed',
 					)}
 				/>
-
-				<EmojiPicker onEmojiSelect={handleEmojiSelect}>
-					<Button
-						variant="ghost"
-						size="icon"
-						disabled={disabled}
-						className={cn(isChatComposer && 'h-8 w-8 text-muted-foreground hover:text-foreground')}
-					>
-						<Smile className="h-5 w-5" />
-					</Button>
-				</EmojiPicker>
+				<div className={cn('flex items-center gap-1', isMultiline && 'ml-auto')}>
+					{emojiButton}
+					{trailingAction}
+				</div>
 			</div>
 		);
 	},
