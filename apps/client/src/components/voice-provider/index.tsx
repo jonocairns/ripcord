@@ -91,7 +91,7 @@ import {
 	createRemoteMediaConsumeStartPublication,
 	type TRemoteMediaConsumeStartPublication,
 } from './hooks/remote-media-consume-start-publication';
-import { useRemoteMediaSubscriptions } from './hooks/remote-media-subscriptions';
+import { type TRemoteMediaRepairIdentity, useRemoteMediaSubscriptions } from './hooks/remote-media-subscriptions';
 import {
 	claimVoiceSessionExecution,
 	createVoiceSessionExecutionOwnership,
@@ -860,7 +860,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearPendingStreamsForUser,
 		clearAllPendingStreams,
 		reconcilePendingStreams,
-		refreshPendingStreamAges,
+		markRepairAttemptStarted,
 		markWatchRequested,
 		markWatchStopped,
 		markRetryRequested,
@@ -906,6 +906,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		return (
 			subscription?.producerPresent === true &&
 			(subscription.producerId === undefined || subscription.producerId === producerId)
+		);
+	}, []);
+	const isRemoteMediaRepairIdentityCurrent = useCallback((identity: TRemoteMediaRepairIdentity) => {
+		const subscription = remoteMediaSubscriptionsRef.current.get(identity.key);
+
+		return (
+			currentVoiceChannelIdRef.current === identity.channelId &&
+			subscription?.producerPresent === true &&
+			subscription.remoteId === identity.remoteId &&
+			subscription.kind === identity.kind &&
+			subscription.producerId === identity.producerId
 		);
 	}, []);
 
@@ -1016,6 +1027,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		createProducerTransport,
 		createConsumerTransport,
 		consume,
+		repairRemoteProducer,
 		consumeExistingProducers,
 		closeConsumer,
 		cleanupTransports,
@@ -1027,6 +1039,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		addRemoteUserStream,
 		removeRemoteUserStream,
 		addPendingStream,
+		removePendingStream,
 		clearAllPendingStreams,
 		reconcilePendingStreams,
 		markWatchStopped,
@@ -1035,6 +1048,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		markConsumeFailed,
 		markConsumerClosed,
 		isProducerCurrent: isRemoteMediaProducerCurrent,
+		isRepairIdentityCurrent: isRemoteMediaRepairIdentityCurrent,
 		onTransportFailure,
 	});
 
@@ -1312,8 +1326,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		remoteMediaSubscriptions,
 		pendingStreams,
 		currentChannelExternalStreams,
-		refreshPendingStreamAges,
-		consumeExistingProducers,
+		markRepairAttemptStarted,
+		repairRemoteProducer,
 		getExternalStreamTrackPresence,
 	});
 

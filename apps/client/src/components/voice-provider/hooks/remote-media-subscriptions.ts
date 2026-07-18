@@ -2,7 +2,6 @@ import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
 import { useCallback, useMemo, useState } from 'react';
 import type { TWatchedRemoteStreamsSnapshot } from '@/features/server/voice/voice-session-machine';
 import {
-	getOldestRepairEligiblePendingCreatedAt,
 	getPendingStreamKey,
 	isExternalTrackPresent,
 	PENDING_STREAM_REPAIR_AGE_MS,
@@ -28,6 +27,11 @@ export type TRemoteMediaSubscription = {
 	pendingSince?: number;
 	lastFailureAt?: number;
 	lastFailureReason?: string;
+	repairBudget?: {
+		channelId: number;
+		producerId?: string;
+		completedAttempts: number;
+	};
 };
 
 export type TRemoteMediaSubscriptions = Map<string, TRemoteMediaSubscription>;
@@ -62,14 +66,22 @@ export type TCloseConsumerCommand = {
 	generation?: number;
 };
 
-export type TScheduleRetryCommand = {
-	type: 'scheduleRetry';
+export type TRemoteMediaRepairIdentity = {
+	channelId: number;
 	key: string;
-	retryAt: number;
-	generation?: number;
+	remoteId: number;
+	kind: StreamKind;
+	producerId?: string;
 };
 
-export type TRemoteMediaCommand = TStreamsToConsumeCommand | TCloseConsumerCommand | TScheduleRetryCommand;
+export type TRemoteMediaRepairScheduleCommand = {
+	identity: TRemoteMediaRepairIdentity;
+	pendingSince: number;
+	retryAt: number;
+	completedAttempts: number;
+};
+
+export type TRemoteMediaCommand = TStreamsToConsumeCommand | TCloseConsumerCommand;
 
 export type TRemoteMediaReducerResult = {
 	state: TRemoteMediaSubscriptions;
@@ -339,7 +351,10 @@ const isMateriallyEqual = (a: TRemoteMediaSubscription, b: TRemoteMediaSubscript
 	a.consumeGeneration === b.consumeGeneration &&
 	a.pendingSince === b.pendingSince &&
 	a.lastFailureAt === b.lastFailureAt &&
-	a.lastFailureReason === b.lastFailureReason;
+	a.lastFailureReason === b.lastFailureReason &&
+	a.repairBudget?.channelId === b.repairBudget?.channelId &&
+	a.repairBudget?.producerId === b.repairBudget?.producerId &&
+	a.repairBudget?.completedAttempts === b.repairBudget?.completedAttempts;
 
 const applySlotUpdate = (
 	subscriptions: TRemoteMediaSubscriptions,
@@ -375,6 +390,7 @@ export const markRemoteProducerPresent = (
 	// consumer and hide the new producer from the pending map, so treat the slot
 	// as fresh and tear down the stale consumer.
 	const producerReplaced = producerId !== undefined && base.producerId !== undefined && base.producerId !== producerId;
+	const producerIdentityChanged = producerId !== undefined && base.producerId !== producerId;
 	const status =
 		!producerReplaced && (base.status === 'consuming' || base.status === 'retrying' || base.status === 'consumed')
 			? base.status
@@ -392,7 +408,8 @@ export const markRemoteProducerPresent = (
 			consumeGeneration: producerReplaced ? undefined : base.consumeGeneration,
 			desired,
 			status,
-			pendingSince: status === 'consumed' ? undefined : (base.pendingSince ?? now),
+			pendingSince: status === 'consumed' ? undefined : producerIdentityChanged ? now : (base.pendingSince ?? now),
+			repairBudget: producerIdentityChanged ? undefined : base.repairBudget,
 		},
 		now,
 	);
@@ -473,6 +490,7 @@ const rehydrateRemoteWatchIntentSlot = (
 			consumeGeneration: undefined,
 			pendingSince: undefined,
 			lastFailureReason: undefined,
+			repairBudget: undefined,
 		},
 		now,
 	);
@@ -501,6 +519,7 @@ export const markRemoteWatchStopped = (
 			// repeated stop-watch is a no-op rather than a ledger write.
 			pendingSince: !base.producerPresent ? undefined : base.desired ? now : (base.pendingSince ?? now),
 			lastFailureReason: undefined,
+			repairBudget: undefined,
 		},
 		now,
 	);
@@ -643,6 +662,7 @@ export const markRemoteConsumeSucceeded = (
 			consumerId,
 			consumeGeneration: undefined,
 			pendingSince: undefined,
+			repairBudget: undefined,
 			lastFailureReason: undefined,
 			lastFailureAt: undefined,
 		},
@@ -724,6 +744,7 @@ export const markRemoteProducerClosed = (
 			consumerId: undefined,
 			consumeGeneration: undefined,
 			pendingSince: undefined,
+			repairBudget: undefined,
 		},
 		now,
 	);
@@ -744,6 +765,7 @@ export const markRemoteProducerClosed = (
 					status: 'available',
 					consumeGeneration: undefined,
 					pendingSince: audio.producerPresent ? now : undefined,
+					repairBudget: undefined,
 				},
 				now,
 			);
@@ -798,6 +820,7 @@ export const markRemoteConsumerClosed = (
 			consumerId: undefined,
 			consumeGeneration: undefined,
 			pendingSince: existing.producerPresent ? now : undefined,
+			repairBudget: undefined,
 		},
 		now,
 	);
@@ -867,6 +890,7 @@ export const clearRemoteMediaProducerStateForTransportCleanup = (
 				consumerId: undefined,
 				consumeGeneration: undefined,
 				pendingSince: undefined,
+				repairBudget: undefined,
 			},
 			now,
 		);
@@ -993,31 +1017,88 @@ export const rehydrateRemoteMediaWatchIntentOnly = (
 	return emptyResult(next);
 };
 
-export const refreshRemoteMediaPendingAges = (
+const isRemoteMediaRepairEligible = (
+	subscription: TRemoteMediaSubscription,
+	currentExternalStreams: Record<number, unknown>,
+): boolean =>
+	subscription.producerPresent &&
+	subscription.status !== 'consumed' &&
+	(subscription.kind === StreamKind.AUDIO ||
+		(subscription.kind === StreamKind.SCREEN_AUDIO && subscription.desired) ||
+		((subscription.kind === StreamKind.EXTERNAL_AUDIO || subscription.kind === StreamKind.EXTERNAL_VIDEO) &&
+			currentExternalStreams[subscription.remoteId] !== undefined &&
+			subscription.desired));
+
+const repairBudgetMatchesIdentity = (
+	subscription: TRemoteMediaSubscription,
+	identity: TRemoteMediaRepairIdentity,
+): boolean =>
+	subscription.repairBudget?.channelId === identity.channelId &&
+	subscription.repairBudget.producerId === identity.producerId;
+
+export const remoteMediaRepairIdentityKey = (identity: TRemoteMediaRepairIdentity): string =>
+	`${identity.channelId}:${identity.remoteId}:${identity.kind}:${identity.producerId ?? 'unknown'}`;
+
+export const isRemoteMediaRepairScheduleCommandCurrent = (
 	subscriptions: TRemoteMediaSubscriptions,
+	command: TRemoteMediaRepairScheduleCommand,
+	currentVoiceChannelId: number | undefined,
+	currentExternalStreams: Record<number, unknown>,
+): boolean => {
+	const subscription = subscriptions.get(command.identity.key);
+
+	if (
+		currentVoiceChannelId !== command.identity.channelId ||
+		subscription === undefined ||
+		subscription.remoteId !== command.identity.remoteId ||
+		subscription.kind !== command.identity.kind ||
+		subscription.producerId !== command.identity.producerId ||
+		subscription.pendingSince !== command.pendingSince ||
+		!isRemoteMediaRepairEligible(subscription, currentExternalStreams)
+	) {
+		return false;
+	}
+
+	const completedAttempts = repairBudgetMatchesIdentity(subscription, command.identity)
+		? (subscription.repairBudget?.completedAttempts ?? 0)
+		: 0;
+
+	return completedAttempts === command.completedAttempts;
+};
+
+export const markRemoteMediaRepairAttemptStarted = (
+	subscriptions: TRemoteMediaSubscriptions,
+	command: TRemoteMediaRepairScheduleCommand,
 	now: number,
+	currentVoiceChannelId: number | undefined,
+	currentExternalStreams: Record<number, unknown>,
 ): TRemoteMediaSubscriptions => {
-	if (subscriptions.size === 0) {
+	if (
+		!isRemoteMediaRepairScheduleCommandCurrent(subscriptions, command, currentVoiceChannelId, currentExternalStreams)
+	) {
 		return subscriptions;
 	}
 
-	let changed = false;
-	const next = new Map<string, TRemoteMediaSubscription>();
+	const subscription = subscriptions.get(command.identity.key);
 
-	subscriptions.forEach((subscription, key) => {
-		// Refresh every non-consumed entry with a live producer — including
-		// 'available' ones. Repair eligibility is decided by kind and watch state,
-		// not status, so skipping a status would let an entry stuck in an
-		// unexpected state re-arm the repair timer with zero delay.
-		if (subscription.producerPresent && subscription.status !== 'consumed' && subscription.pendingSince !== now) {
-			changed = true;
-			next.set(key, { ...subscription, pendingSince: now, updatedAt: now });
-		} else {
-			next.set(key, subscription);
-		}
-	});
+	if (subscription === undefined) {
+		return subscriptions;
+	}
 
-	return changed ? next : subscriptions;
+	return applySlotUpdate(
+		subscriptions,
+		subscription,
+		{
+			...subscription,
+			pendingSince: now,
+			repairBudget: {
+				channelId: command.identity.channelId,
+				producerId: command.identity.producerId,
+				completedAttempts: command.completedAttempts + 1,
+			},
+		},
+		now,
+	);
 };
 
 export const remoteMediaSubscriptionsToPendingStreams = (
@@ -1111,29 +1192,41 @@ export const remoteMediaSubscriptionsToStreamsToConsume = (
 	return streamsToConsume;
 };
 
-export const remoteMediaSubscriptionsToRepairScheduleCommand = (
+export const remoteMediaSubscriptionsToRepairScheduleCommands = (
+	channelId: number,
 	subscriptions: TRemoteMediaSubscriptions,
 	pendingStreams: Map<string, TPendingStream>,
 	currentExternalStreams: Record<number, unknown>,
-): TScheduleRetryCommand | undefined => {
-	const oldestRepairEligibleCreatedAt = getOldestRepairEligiblePendingCreatedAt(
-		pendingStreams,
-		(streamId, kind) =>
-			currentExternalStreams[streamId] !== undefined &&
-			subscriptions.get(getPendingStreamKey(streamId, kind))?.desired === true,
-		(remoteId) => subscriptions.get(getPendingStreamKey(remoteId, StreamKind.SCREEN_AUDIO))?.desired === true,
-	);
+): TRemoteMediaRepairScheduleCommand[] => {
+	const commands: TRemoteMediaRepairScheduleCommand[] = [];
 
-	if (oldestRepairEligibleCreatedAt === undefined) {
-		return undefined;
-	}
+	pendingStreams.forEach((pendingStream, key) => {
+		const subscription = subscriptions.get(key);
 
-	return {
-		type: 'scheduleRetry',
-		key: 'remote-media-repair',
-		retryAt: oldestRepairEligibleCreatedAt + PENDING_STREAM_REPAIR_AGE_MS,
-		generation: oldestRepairEligibleCreatedAt,
-	};
+		if (subscription === undefined || !isRemoteMediaRepairEligible(subscription, currentExternalStreams)) {
+			return;
+		}
+
+		const identity: TRemoteMediaRepairIdentity = {
+			channelId,
+			key,
+			remoteId: pendingStream.remoteId,
+			kind: pendingStream.kind,
+			producerId: pendingStream.producerId ?? subscription.producerId,
+		};
+		const completedAttempts = repairBudgetMatchesIdentity(subscription, identity)
+			? (subscription.repairBudget?.completedAttempts ?? 0)
+			: 0;
+
+		commands.push({
+			identity,
+			pendingSince: pendingStream.createdAt,
+			retryAt: pendingStream.createdAt + PENDING_STREAM_REPAIR_AGE_MS,
+			completedAttempts,
+		});
+	});
+
+	return commands;
 };
 
 const hasSubscriptionChanged = (prev: TRemoteMediaSubscriptions, next: TRemoteMediaSubscriptions): boolean => {
@@ -1241,9 +1334,20 @@ export const useRemoteMediaSubscriptions = () => {
 		},
 		[update],
 	);
-	const refreshPendingStreamAges = useCallback(() => {
-		update((prev, now) => emptyResult(refreshRemoteMediaPendingAges(prev, now)));
-	}, [update]);
+	const markRepairAttemptStarted = useCallback(
+		(
+			command: TRemoteMediaRepairScheduleCommand,
+			currentVoiceChannelId: number | undefined,
+			currentExternalStreams: Record<number, unknown>,
+		) => {
+			update((prev, now) =>
+				emptyResult(
+					markRemoteMediaRepairAttemptStarted(prev, command, now, currentVoiceChannelId, currentExternalStreams),
+				),
+			);
+		},
+		[update],
+	);
 	const markWatchRequested = useCallback(
 		(remoteId: number, kind: StreamKind, externalStreamTracks?: TExternalStreamTrackPresence) => {
 			update((prev, now) => markRemoteWatchRequested(prev, remoteId, kind, now, { externalStreamTracks }));
@@ -1314,7 +1418,7 @@ export const useRemoteMediaSubscriptions = () => {
 		clearPendingStreamsForUser,
 		clearAllPendingStreams,
 		reconcilePendingStreams,
-		refreshPendingStreamAges,
+		markRepairAttemptStarted,
 		markWatchRequested,
 		markWatchStopped,
 		markRetryRequested,

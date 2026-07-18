@@ -6,16 +6,16 @@ import {
 	markRemoteConsumerClosed,
 	markRemoteConsumeStarted,
 	markRemoteConsumeSucceeded,
+	markRemoteMediaRepairAttemptStarted,
 	markRemoteProducerClosed,
 	markRemoteProducerPresent,
 	markRemoteRetryRequested,
 	markRemoteWatchRequested,
 	markRemoteWatchStopped,
 	reconcileRemoteMediaWithProducerSnapshot,
-	refreshRemoteMediaPendingAges,
 	remoteMediaState,
 	remoteMediaSubscriptionsToPendingStreams,
-	remoteMediaSubscriptionsToRepairScheduleCommand,
+	remoteMediaSubscriptionsToRepairScheduleCommands,
 	remoteMediaSubscriptionsToStreamsToConsume,
 	remoteMediaSubscriptionsToVisibleRemoteMedia,
 	type TRemoteMediaSubscriptions,
@@ -564,15 +564,99 @@ describe('remote media subscriptions', () => {
 		expect(presentAgain.state).toBe(state);
 	});
 
-	it('refreshes pending ages for available entries so repair backoff always widens', () => {
-		let state: TRemoteMediaSubscriptions = new Map();
+	describe('producer-scoped repair budgets', () => {
+		const channelId = 7;
+		const scheduleCommands = (state: TRemoteMediaSubscriptions) =>
+			remoteMediaSubscriptionsToRepairScheduleCommands(
+				channelId,
+				state,
+				remoteMediaSubscriptionsToPendingStreams(state),
+				{},
+			);
 
-		state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.VIDEO, 100, 'video-producer'));
-		state = refreshRemoteMediaPendingAges(state, 500);
+		const startAttempt = (state: TRemoteMediaSubscriptions, key: string, now: number) => {
+			const command = scheduleCommands(state).find((candidate) => candidate.identity.key === key);
 
-		expect(state.get(getPendingStreamKey(2, StreamKind.VIDEO))).toMatchObject({
-			status: 'available',
-			pendingSince: 500,
+			if (command === undefined) {
+				throw new Error(`Missing repair command for ${key}`);
+			}
+
+			return markRemoteMediaRepairAttemptStarted(state, command, now, channelId, {});
+		};
+
+		it('keeps an exhausted producer isolated from churn in another slot', () => {
+			const exhaustedKey = getPendingStreamKey(1, StreamKind.AUDIO);
+			const churningKey = getPendingStreamKey(2, StreamKind.AUDIO);
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'producer-1'));
+			state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.AUDIO, 100, 'producer-2-a'));
+			state = startAttempt(state, exhaustedKey, 200);
+			state = startAttempt(state, exhaustedKey, 300);
+			state = startAttempt(state, exhaustedKey, 400);
+
+			expect(state.get(exhaustedKey)?.repairBudget?.completedAttempts).toBe(3);
+			expect(state.get(churningKey)?.repairBudget).toBeUndefined();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.AUDIO, 500, 'producer-2-b'));
+			let commands = scheduleCommands(state);
+
+			expect(commands.find((command) => command.identity.key === exhaustedKey)?.completedAttempts).toBe(3);
+			expect(commands.find((command) => command.identity.key === churningKey)).toMatchObject({
+				identity: { producerId: 'producer-2-b' },
+				completedAttempts: 0,
+			});
+
+			state = startAttempt(state, churningKey, 600);
+			state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.AUDIO, 700, 'producer-2-c'));
+			commands = scheduleCommands(state);
+
+			expect(commands.find((command) => command.identity.key === exhaustedKey)?.completedAttempts).toBe(3);
+			expect(commands.filter((command) => command.identity.key === churningKey)).toHaveLength(1);
+			expect(commands.find((command) => command.identity.key === churningKey)).toMatchObject({
+				identity: { producerId: 'producer-2-c' },
+				completedAttempts: 0,
+			});
+		});
+
+		it('rejects stale scheduled work after producer or channel replacement', () => {
+			const key = getPendingStreamKey(1, StreamKind.AUDIO);
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'producer-old'));
+			const oldProducerCommand = scheduleCommands(state)[0];
+
+			if (oldProducerCommand === undefined) {
+				throw new Error('Missing initial repair command');
+			}
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 200, 'producer-new'));
+			expect(markRemoteMediaRepairAttemptStarted(state, oldProducerCommand, 300, channelId, {})).toBe(state);
+
+			const newProducerCommand = scheduleCommands(state)[0];
+
+			if (newProducerCommand === undefined) {
+				throw new Error('Missing replacement repair command');
+			}
+
+			expect(markRemoteMediaRepairAttemptStarted(state, newProducerCommand, 300, channelId + 1, {})).toBe(state);
+			expect(newProducerCommand.identity).toMatchObject({ key, producerId: 'producer-new' });
+		});
+
+		it('preserves an exhausted automatic budget across a manual retry failure', () => {
+			const key = getPendingStreamKey(1, StreamKind.AUDIO);
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'producer-1'));
+			state = startAttempt(state, key, 200);
+			state = startAttempt(state, key, 300);
+			state = startAttempt(state, key, 400);
+			state = remoteMediaState(markRemoteRetryRequested(state, 1, StreamKind.AUDIO, 500));
+			state = remoteMediaState(markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 510, 'producer-1', 1, true));
+			state = remoteMediaState(markRemoteConsumeFailed(state, 1, StreamKind.AUDIO, 520, 'failed', 1));
+
+			expect(state.get(key)?.repairBudget?.completedAttempts).toBe(3);
+			expect(scheduleCommands(state)[0]?.completedAttempts).toBe(3);
 		});
 	});
 
@@ -796,12 +880,20 @@ describe('remote media subscriptions', () => {
 			state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'audio-producer'));
 			const pendingStreams = remoteMediaSubscriptionsToPendingStreams(state);
 
-			expect(remoteMediaSubscriptionsToRepairScheduleCommand(state, pendingStreams, {})).toEqual({
-				type: 'scheduleRetry',
-				key: 'remote-media-repair',
-				retryAt: 15_100,
-				generation: 100,
-			});
+			expect(remoteMediaSubscriptionsToRepairScheduleCommands(7, state, pendingStreams, {})).toEqual([
+				{
+					identity: {
+						channelId: 7,
+						key: getPendingStreamKey(1, StreamKind.AUDIO),
+						remoteId: 1,
+						kind: StreamKind.AUDIO,
+						producerId: 'audio-producer',
+					},
+					pendingSince: 100,
+					retryAt: 15_100,
+					completedAttempts: 0,
+				},
+			]);
 		});
 	});
 
