@@ -231,6 +231,7 @@ describe('voice session machine', () => {
 			type: 'RebuildSucceeded',
 			commandId: activeCommandId(rebuildingState),
 			generation: generation + 1,
+			now: 1_000,
 		});
 
 		expect(result.state).toBe(rebuildingState);
@@ -691,7 +692,7 @@ describe('voice session machine', () => {
 			now: restoredAt,
 		});
 
-		expect(state.phase).toEqual({ phase: 'connected', channelId: 5 });
+		expect(state.phase).toEqual({ phase: 'connected', channelId: 5, generation });
 		expect(state.pendingVoiceReconnect).toBeUndefined();
 		expect(state.reconnectingSince).toBeUndefined();
 		expect(state.reconnectAuthenticated).toBe(false);
@@ -760,6 +761,7 @@ describe('voice session machine', () => {
 			type: 'RebuildSucceeded',
 			commandId: activeCommandId(state),
 			generation,
+			now: 1_000,
 		});
 		expect(stale.state).toBe(resumed.state);
 		expect(stale.commands).toEqual([]);

@@ -125,6 +125,8 @@ const createFakePorts = (overrides: Partial<TVoiceSessionExecutorPorts> = {}): T
 	restoreVoiceSession: () => Promise.resolve({ serverSessionEstablished: true }),
 	restoreWatchIntent: () => {},
 	recoverDesktopAppAudio: () => Promise.resolve(),
+	onRebuildSucceeded: () => {},
+	onReconnectSucceeded: () => {},
 	leaveVoiceSession: () => Promise.resolve(),
 	clearFailedSession: () => Promise.resolve(),
 	reportCommandError: () => {},
@@ -414,6 +416,7 @@ describe('voice session command executor', () => {
 			type: 'RebuildSucceeded',
 			commandId: rebuildCommand.commandId,
 			generation: rebuildCommand.generation,
+			now: 1_000,
 		});
 
 		if (recoverCommand?.type !== 'RecoverDesktopAppAudio') {
@@ -452,6 +455,7 @@ describe('voice session command executor', () => {
 			type: 'RebuildSucceeded',
 			commandId: rebuildCommand.commandId,
 			generation: rebuildCommand.generation,
+			now: 1_000,
 		});
 
 		if (recoverCommand?.type !== 'RecoverDesktopAppAudio') {
@@ -834,6 +838,24 @@ describe('voice session command executor', () => {
 		}
 	});
 
+	it('publishes an accepted rebuild completion with the machine timestamp exactly once', async () => {
+		const rebuildCommand = startRebuild();
+		const acceptedTransitions: Array<{ channelId: number; generation: number; now: number }> = [];
+		const executor = createExecutor(
+			createFakePorts({
+				now: () => 40_000,
+				onRebuildSucceeded: ({ channelId, generation, now }) => {
+					acceptedTransitions.push({ channelId, generation, now });
+				},
+			}),
+		);
+
+		executor.execute([rebuildCommand]);
+		await flushMicrotasks();
+
+		expect(acceptedTransitions).toEqual([{ channelId: 5, generation: rebuildCommand.generation, now: 40_000 }]);
+	});
+
 	it('emits terminal rebuild cleanup and reporting once after attempt exhaustion', async () => {
 		const scheduler = createFakeScheduler();
 		const startedAttempts: number[] = [];
@@ -979,6 +1001,7 @@ describe('voice session command executor', () => {
 			type: 'RebuildSucceeded',
 			commandId: rebuildCommand.commandId,
 			generation: rebuildCommand.generation,
+			now: 1_000,
 		});
 
 		if (recoverCommand?.type !== 'RecoverDesktopAppAudio') {
@@ -1308,6 +1331,7 @@ describe('voice session command executor', () => {
 			type: 'RebuildSucceeded',
 			commandId: rebuildCommand.commandId,
 			generation: rebuildCommand.generation,
+			now: 1_000,
 		});
 
 		if (recoverCommand?.type !== 'RecoverDesktopAppAudio') {
@@ -1338,6 +1362,7 @@ describe('voice session command executor', () => {
 			type: 'RebuildSucceeded',
 			commandId: rebuildCommand.commandId,
 			generation: rebuildCommand.generation,
+			now: 1_000,
 		});
 
 		if (recoverCommand?.type !== 'RecoverDesktopAppAudio') {
@@ -1371,6 +1396,7 @@ describe('voice session command executor', () => {
 			type: 'RebuildSucceeded',
 			commandId: rebuildCommand.commandId,
 			generation: rebuildCommand.generation,
+			now: 1_000,
 		});
 
 		if (recoverCommand?.type !== 'RecoverDesktopAppAudio') {
@@ -1688,6 +1714,7 @@ describe('voice session command executor', () => {
 		}
 
 		const rehydratedSnapshots: TWatchedRemoteStreamsSnapshot[] = [];
+		const acceptedTransitions: Array<{ channelId: number; generation: number; now: number }> = [];
 		const phasesDuringRestore: string[] = [];
 		const executor = createExecutor(
 			createFakePorts({
@@ -1697,6 +1724,9 @@ describe('voice session command executor', () => {
 					phasesDuringRestore.push(phase.phase === 'reconnecting' ? phase.step : phase.phase);
 					rehydratedSnapshots.push(snapshot);
 				},
+				onReconnectSucceeded: ({ channelId, generation, now }) => {
+					acceptedTransitions.push({ channelId, generation, now });
+				},
 			}),
 		);
 
@@ -1705,6 +1735,7 @@ describe('voice session command executor', () => {
 
 		expect(rehydratedSnapshots).toEqual([emptySnapshot]);
 		expect(phasesDuringRestore).toEqual(['restoreWatch']);
+		expect(acceptedTransitions).toEqual([{ channelId: 5, generation: watchCommand.generation, now: 123 }]);
 
 		const state = getVoiceSessionState();
 

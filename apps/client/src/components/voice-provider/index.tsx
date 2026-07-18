@@ -43,6 +43,7 @@ import type {
 } from '@/features/server/voice/voice-session-command-executor';
 import {
 	selectVoiceSessionConnectionStatus,
+	type TTransportRecoveryTransition,
 	type TVoiceSessionCommand,
 	type TVoiceSessionConnectionStatus,
 	type TWatchedExternalStreamsSnapshot,
@@ -50,6 +51,7 @@ import {
 } from '@/features/server/voice/voice-session-machine';
 import {
 	dispatchVoiceSession,
+	dispatchVoiceSessionWithResult,
 	getVoiceSessionState,
 	subscribeVoiceSession,
 } from '@/features/server/voice/voice-session-store';
@@ -132,6 +134,7 @@ import {
 	updatePushMicStateForKeyEvent,
 } from './push-mic-state';
 import {
+	recordTransportRecoverySucceeded,
 	resolveTransportFailureDispatchOutcome,
 	resolveTransportRecoveryCircuitDecision,
 	type TTransportRecoveryCircuitState,
@@ -946,41 +949,58 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			return;
 		}
 
-		hasHandledTransportFailureRef.current = true;
 		logVoice('Transport failure detected');
 
 		const channelId = currentVoiceChannelIdRef.current;
 		if (!isConnectedRef.current || channelId === undefined) {
-			hasHandledTransportFailureRef.current = false;
 			return;
 		}
+		const phase = getVoiceSessionState().phase;
+		if (phase.phase !== 'connected' || phase.channelId !== channelId) return;
 
 		const previousCircuitState = transportRecoveryCircuitRef.current;
 		const circuitDecision = resolveTransportRecoveryCircuitDecision({
 			state: previousCircuitState,
 			channelId,
+			generation: phase.generation,
 			now: Date.now(),
 		});
-		const commands =
-			circuitDecision.action === 'stop'
-				? dispatchVoiceSession({ type: 'TransportRecoveryExhausted', channelId })
-				: dispatchVoiceSession({
-						type: 'TransportFailed',
-						channelId,
-						nonce: voiceSessionReconnectNonceRef.current,
-					});
-		const dispatchOutcome = resolveTransportFailureDispatchOutcome({
-			circuitDecision,
-			commandCount: commands.length,
-			phase: getVoiceSessionState().phase.phase,
-			previousCircuitState,
-		});
-		transportRecoveryCircuitRef.current = dispatchOutcome.circuitState;
+		let accepted = false;
+		const commitAcceptedTransition = (transition: TTransportRecoveryTransition) => {
+			const dispatchOutcome = resolveTransportFailureDispatchOutcome({
+				circuitDecision,
+				transition,
+				previousCircuitState,
+			});
+			transportRecoveryCircuitRef.current = dispatchOutcome.circuitState;
+			if (dispatchOutcome.accepted) {
+				hasHandledTransportFailureRef.current = true;
+				accepted = true;
+			}
+		};
 
-		if (dispatchOutcome.releaseLatch) {
-			hasHandledTransportFailureRef.current = false;
-			return;
+		if (circuitDecision.action === 'stop') {
+			dispatchVoiceSessionWithResult(
+				{
+					type: 'TransportRecoveryExhausted',
+					channelId,
+					connectedGeneration: phase.generation,
+				},
+				commitAcceptedTransition,
+			);
+		} else {
+			dispatchVoiceSessionWithResult(
+				{
+					type: 'TransportFailed',
+					channelId,
+					nonce: voiceSessionReconnectNonceRef.current,
+					connectedGeneration: phase.generation,
+				},
+				commitAcceptedTransition,
+			);
 		}
+
+		if (!accepted) return;
 
 		if (circuitDecision.action === 'stop') {
 			logVoice('Rapid voice transport recovery exhausted', {
@@ -3484,8 +3504,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					if (opts?.restoreWatchSnapshot !== undefined) {
 						rehydrateWatchIntentOnly(opts.restoreWatchSnapshot);
 					}
-					hasHandledTransportFailureRef.current = false;
-
 					let micPrepPromise: Promise<TMicrophonePreparedPipeline | undefined> | undefined;
 					const dispatchJoinLifecycle = opts?.preserveLocalMedia !== true && opts?.restoreWatchSnapshot === undefined;
 
@@ -3576,6 +3594,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						startMonitoring(producerTransport.current, consumerTransport.current);
 						if (dispatchJoinLifecycle) {
 							dispatchVoiceSession({ type: 'JoinSucceeded', channelId });
+							hasHandledTransportFailureRef.current = false;
 						}
 						setLoading(false);
 
@@ -3977,10 +3996,21 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		restoreWatchIntent: rehydrateWatchIntentOnly,
 		recoverDesktopAppAudio: async () => {
 			const recovery = recoverDesktopAppAudioFromIntent();
-			// A completed rebuild must release the failure latch so a later,
-			// independent transport failure can start a new recovery cycle.
-			hasHandledTransportFailureRef.current = false;
 			await recovery;
+		},
+		onRebuildSucceeded: (transition) => {
+			transportRecoveryCircuitRef.current = recordTransportRecoverySucceeded({
+				state: transportRecoveryCircuitRef.current,
+				transition,
+			});
+			hasHandledTransportFailureRef.current = false;
+		},
+		onReconnectSucceeded: (transition) => {
+			transportRecoveryCircuitRef.current = recordTransportRecoverySucceeded({
+				state: transportRecoveryCircuitRef.current,
+				transition,
+			});
+			hasHandledTransportFailureRef.current = false;
 		},
 		leaveVoiceSession: leaveAfterFailedTransportRecovery,
 		clearFailedSession: clearFailedVoiceSession,

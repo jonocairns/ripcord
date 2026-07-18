@@ -110,6 +110,7 @@ describe('transport rebuild machine orchestration', () => {
 			type: 'RebuildSucceeded',
 			commandId: activeCommandId(state),
 			generation,
+			now: 1_000,
 		});
 
 		expect(result.state.phase).toEqual({ phase: 'connected', channelId: 7, generation: expect.any(Number) });
@@ -124,7 +125,7 @@ describe('transport rebuild machine orchestration', () => {
 	it('leaves voice when the cross-cycle recovery circuit is exhausted', () => {
 		const state: TVoiceSessionState = {
 			...createInitialVoiceSessionState(),
-			phase: { phase: 'connected', channelId: 7 },
+			phase: { phase: 'connected', channelId: 7, generation: 1 },
 		};
 		const result = reduceVoiceSession(state, { type: 'TransportRecoveryExhausted', channelId: 7 });
 
@@ -139,6 +140,33 @@ describe('transport rebuild machine orchestration', () => {
 				channelId: 7,
 			}),
 		]);
+	});
+
+	it('accepts circuit exhaustion and emits terminal cleanup exactly once', () => {
+		const connected: TVoiceSessionState = {
+			...createInitialVoiceSessionState(),
+			phase: { phase: 'connected', channelId: 7, generation: 4 },
+		};
+		const accepted = reduceVoiceSession(connected, {
+			type: 'TransportRecoveryExhausted',
+			channelId: 7,
+			connectedGeneration: 4,
+		});
+		const duplicate = reduceVoiceSession(accepted.state, {
+			type: 'TransportRecoveryExhausted',
+			channelId: 7,
+			connectedGeneration: 4,
+		});
+
+		expect(accepted.transportRecoveryTransition).toEqual({
+			type: 'exhaustion-accepted',
+			channelId: 7,
+			connectedGeneration: 4,
+		});
+		expect(accepted.commands).toEqual([expect.objectContaining({ type: 'LeaveVoiceSession', channelId: 7 })]);
+		expect(duplicate.state).toBe(accepted.state);
+		expect(duplicate.commands).toEqual([]);
+		expect(duplicate.transportRecoveryTransition).toBeUndefined();
 	});
 
 	it('ignores an exhausted transport circuit while websocket recovery owns the session', () => {
@@ -309,6 +337,7 @@ describe('transport rebuild machine orchestration', () => {
 			type: 'RebuildSucceeded',
 			commandId: rebuildCommandId,
 			generation,
+			now: 1_000,
 		});
 		expect(staleResult.state).toBe(preempted.state);
 		expect(staleResult.commands).toEqual([]);
@@ -402,10 +431,13 @@ describe('shouldFlushBufferedVoiceSessionCommand', () => {
 				recoverCommand,
 			),
 		).toBe(false);
-		// A plain join's connected phase carries no generation — a buffered
-		// recovery from an earlier session must not publish stale intent into it.
+		// A plain join mints a new generation, so buffered recovery from an
+		// earlier session must not publish stale intent into it.
 		expect(
-			shouldFlushBufferedVoiceSessionCommand(stateWithPhase({ phase: 'connected', channelId: 7 }), recoverCommand),
+			shouldFlushBufferedVoiceSessionCommand(
+				stateWithPhase({ phase: 'connected', channelId: 7, generation: 5 }),
+				recoverCommand,
+			),
 		).toBe(false);
 		expect(shouldFlushBufferedVoiceSessionCommand(stateWithPhase({ phase: 'idle' }), recoverCommand)).toBe(false);
 	});

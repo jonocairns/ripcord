@@ -22,6 +22,7 @@ declare global {
 	interface Window {
 		__ripcordE2eFailMicAcquisition?: boolean;
 		__ripcordE2eFailNextVoiceStateUpdate?: boolean;
+		__ripcordE2eNowOffsetMs?: number;
 		__ripcordE2eRawAudioTracks?: MediaStreamTrack[];
 	}
 }
@@ -420,7 +421,9 @@ test('terminal microphone mute survives failed server sync and reconnect restore
 	}
 });
 
-test('rapid successful transport rebuilds open the terminal recovery circuit', async ({ browser }, testInfo) => {
+test('an immediate failure after a slow transport rebuild stays in the rapid circuit', async ({
+	browser,
+}, testInfo) => {
 	const peer = await createPeer(browser, credentialsFor(testInfo));
 	const recoveryEvents: string[] = [];
 	peer.page.on('console', (message) => {
@@ -434,10 +437,23 @@ test('rapid successful transport rebuilds open the terminal recovery circuit', a
 	});
 
 	try {
+		await peer.page.evaluate(() => {
+			const nativeNow = Date.now.bind(Date);
+			window.__ripcordE2eNowOffsetMs = 0;
+			Date.now = () => nativeNow() + (window.__ripcordE2eNowOffsetMs ?? 0);
+		});
 		await joinVoice(peer.page);
 
 		for (let cycle = 1; cycle <= 3; cycle += 1) {
 			await forceNewestConnectedPeerConnectionFailure(peer.page);
+			if (cycle === 1) {
+				// Advance the application clock only after the first failure was
+				// accepted. The replacement succeeds more than one old stability
+				// interval later, then the next failure arrives immediately.
+				await peer.page.evaluate(() => {
+					window.__ripcordE2eNowOffsetMs = 31_000;
+				});
+			}
 			await expect
 				.poll(
 					() =>

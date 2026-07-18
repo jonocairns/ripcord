@@ -1,11 +1,12 @@
-import type { TVoiceSessionPhase } from '@/features/server/voice/voice-session-machine';
+import type { TTransportRecoveryTransition } from '@/features/server/voice/voice-session-machine';
 
 const TRANSPORT_RECOVERY_MAX_RAPID_FAILURES = 3;
 const TRANSPORT_RECOVERY_STABILITY_MS = 30_000;
 
 type TTransportRecoveryCircuitState = {
 	channelId: number;
-	lastFailureAt: number;
+	generation: number;
+	stabilityStartedAt?: number;
 	rapidFailureCount: number;
 };
 
@@ -15,47 +16,64 @@ type TTransportRecoveryCircuitDecision = {
 };
 
 type TTransportFailureDispatchOutcome = {
+	accepted: boolean;
 	circuitState: TTransportRecoveryCircuitState | undefined;
-	releaseLatch: boolean;
 };
 
 const resolveTransportFailureDispatchOutcome = ({
 	circuitDecision,
-	commandCount,
-	phase,
+	transition,
 	previousCircuitState,
 }: {
 	circuitDecision: TTransportRecoveryCircuitDecision;
-	commandCount: number;
-	phase: TVoiceSessionPhase['phase'];
+	transition: TTransportRecoveryTransition | undefined;
 	previousCircuitState: TTransportRecoveryCircuitState | undefined;
 }): TTransportFailureDispatchOutcome => {
-	const acceptedPhase = circuitDecision.action === 'stop' ? 'failed' : 'rebuilding';
-	const releaseLatch = commandCount === 0 && phase !== acceptedPhase;
+	const isFailureTransition = transition?.type === 'failure-accepted' || transition?.type === 'exhaustion-accepted';
+	const matchesProposedSession =
+		isFailureTransition &&
+		transition.channelId === circuitDecision.state.channelId &&
+		transition.connectedGeneration === circuitDecision.state.generation;
 
-	return {
-		circuitState: releaseLatch ? previousCircuitState : circuitDecision.state,
-		releaseLatch,
-	};
+	if (circuitDecision.action === 'recover' && transition?.type === 'failure-accepted' && matchesProposedSession) {
+		return {
+			accepted: true,
+			circuitState: {
+				...circuitDecision.state,
+				generation: transition.recoveryGeneration,
+			},
+		};
+	}
+
+	if (circuitDecision.action === 'stop' && transition?.type === 'exhaustion-accepted' && matchesProposedSession) {
+		return { accepted: true, circuitState: circuitDecision.state };
+	}
+
+	return { accepted: false, circuitState: previousCircuitState };
 };
 
 const resolveTransportRecoveryCircuitDecision = (input: {
 	state: TTransportRecoveryCircuitState | undefined;
 	channelId: number;
+	generation: number;
 	now: number;
 	maxRapidFailures?: number;
 	stabilityMs?: number;
 }): TTransportRecoveryCircuitDecision => {
 	const stabilityMs = input.stabilityMs ?? TRANSPORT_RECOVERY_STABILITY_MS;
 	const previousState = input.state;
-	const continuesRapidFailureSequence =
+	const matchesConnectedGeneration =
 		previousState !== undefined &&
 		previousState.channelId === input.channelId &&
-		input.now - previousState.lastFailureAt < stabilityMs;
+		previousState.generation === input.generation;
+	const continuesRapidFailureSequence =
+		matchesConnectedGeneration &&
+		(previousState.stabilityStartedAt === undefined || input.now - previousState.stabilityStartedAt < stabilityMs);
 	const rapidFailureCount = continuesRapidFailureSequence ? previousState.rapidFailureCount + 1 : 1;
 	const state = {
 		channelId: input.channelId,
-		lastFailureAt: input.now,
+		generation: input.generation,
+		stabilityStartedAt: continuesRapidFailureSequence ? previousState.stabilityStartedAt : undefined,
 		rapidFailureCount,
 	};
 
@@ -65,8 +83,27 @@ const resolveTransportRecoveryCircuitDecision = (input: {
 	};
 };
 
+const recordTransportRecoverySucceeded = ({
+	state,
+	transition,
+}: {
+	state: TTransportRecoveryCircuitState | undefined;
+	transition: Extract<TTransportRecoveryTransition, { type: 'rebuild-succeeded' | 'reconnect-succeeded' }>;
+}): TTransportRecoveryCircuitState | undefined => {
+	if (
+		state === undefined ||
+		state.channelId !== transition.channelId ||
+		(transition.type === 'rebuild-succeeded' && state.generation !== transition.generation)
+	) {
+		return state;
+	}
+
+	return { ...state, generation: transition.generation, stabilityStartedAt: transition.now };
+};
+
 export type { TTransportFailureDispatchOutcome, TTransportRecoveryCircuitDecision, TTransportRecoveryCircuitState };
 export {
+	recordTransportRecoverySucceeded,
 	resolveTransportFailureDispatchOutcome,
 	resolveTransportRecoveryCircuitDecision,
 	TRANSPORT_RECOVERY_MAX_RAPID_FAILURES,
