@@ -3,11 +3,12 @@ import Emoji, { gitHubEmojis } from '@tiptap/extension-emoji';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Smile } from 'lucide-react';
-import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from 'react';
 import { EmojiPicker } from '@/components/emoji-picker';
 import { Button } from '@/components/ui/button';
 import { useCustomEmojis } from '@/features/server/emojis/hooks';
 import { cn } from '@/lib/utils';
+import { reduceChatComposerLayout } from './chat-composer-layout';
 import { COMMANDS_STORAGE_KEY, CommandSuggestion } from './plugins/command-suggestion';
 import { SlashCommands } from './plugins/slash-commands-extension';
 import { EmojiSuggestion } from './suggestions';
@@ -219,7 +220,9 @@ const TiptapInput = memo(
 
 		const isChatComposer = variant === 'chat-composer';
 
-		const [isMultiline, setIsMultiline] = useState(false);
+		const [chatComposerLayout, dispatchChatComposerLayout] = useReducer(reduceChatComposerLayout, 'inline');
+		const chatComposerRef = useRef<HTMLDivElement>(null);
+		const isMultiline = chatComposerLayout === 'multiline';
 
 		// Single line: text sits inline with the action buttons. Once it wraps to a
 		// second line (hard break or natural word-wrap), the actions drop to their own
@@ -229,17 +232,57 @@ const TiptapInput = memo(
 
 			const dom = editor.view.dom;
 
-			const updateIsMultiline = () => {
-				setIsMultiline(dom.scrollHeight > CHAT_COMPOSER_SINGLE_LINE_MAX_HEIGHT);
+			const measureEditor = () => {
+				dispatchChatComposerLayout({
+					type: 'editor-resized',
+					isWrapped: dom.scrollHeight > CHAT_COMPOSER_SINGLE_LINE_MAX_HEIGHT,
+				});
+			};
+			const requestInlineProbe = () => {
+				dispatchChatComposerLayout({ type: 'inline-probe-requested' });
 			};
 
-			updateIsMultiline();
+			measureEditor();
+			editor.on('update', requestInlineProbe);
 
-			const observer = new ResizeObserver(updateIsMultiline);
+			const observer = new ResizeObserver(measureEditor);
 			observer.observe(dom);
 
-			return () => observer.disconnect();
+			return () => {
+				editor.off('update', requestInlineProbe);
+				observer.disconnect();
+			};
 		}, [isChatComposer, editor]);
+
+		useEffect(() => {
+			if (!isChatComposer) return;
+
+			const composer = chatComposerRef.current;
+			if (!composer) return;
+
+			let previousWidth: number | undefined;
+			const observer = new ResizeObserver(([entry]) => {
+				if (!entry) return;
+
+				const width = entry.contentRect.width;
+				if (previousWidth !== undefined && width !== previousWidth) {
+					dispatchChatComposerLayout({ type: 'inline-probe-requested' });
+				}
+				previousWidth = width;
+			});
+			observer.observe(composer);
+
+			return () => observer.disconnect();
+		}, [isChatComposer]);
+
+		useLayoutEffect(() => {
+			if (!isChatComposer || !editor || chatComposerLayout !== 'inline-probe') return;
+
+			dispatchChatComposerLayout({
+				type: 'inline-probe-completed',
+				isWrapped: editor.view.dom.scrollHeight > CHAT_COMPOSER_SINGLE_LINE_MAX_HEIGHT,
+			});
+		}, [chatComposerLayout, editor, isChatComposer]);
 
 		const emojiButton = (
 			<EmojiPicker onEmojiSelect={handleEmojiSelect}>
@@ -275,7 +318,7 @@ const TiptapInput = memo(
 		// unmount/remount the EditorContent subtree on every mode switch, dropping focus
 		// and cursor position — flex-wrap + order lets the same elements just reflow.
 		return (
-			<div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+			<div ref={chatComposerRef} className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
 				{leadingAction}
 				<EditorContent
 					editor={editor}
