@@ -20,6 +20,12 @@ type TMicrophonePreparedPipeline = {
 
 type TMicrophoneActivityMode = 'monitor' | 'inactive' | 'unavailable';
 
+type TMicrophoneRecoveryReason = TRawMicLossReason | 'default-input-move';
+
+type TMicrophoneStartOutcome = { status: 'started' } | { status: 'failed'; error: unknown } | { status: 'superseded' };
+
+type TMicrophoneRecoveryOutcome = TMicrophoneStartOutcome | { status: 'exhausted' };
+
 type TMicrophoneProducerPublicationLease<TProducer extends object> = {
 	publish: (track: MediaStreamTrack) => Promise<TProducer>;
 	isCurrent: () => boolean;
@@ -55,8 +61,8 @@ type TMicrophonePipelineControllerPorts<
 	onActivityUpdate: (isSpeaking: boolean | undefined, producerId: string | undefined) => void;
 	isInVoiceChannel: () => boolean;
 	isMicMuted: () => boolean;
-	onRawLossRecover: (reason: TRawMicLossReason) => void;
-	onRawLossExhausted: (reason: TRawMicLossReason) => void;
+	reacquire: (reason: TMicrophoneRecoveryReason) => Promise<TMicrophoneStartOutcome>;
+	onRecoveryExhausted: (reason: TMicrophoneRecoveryReason) => void;
 	onProcessingRuntimeError: (error: Error) => void;
 	setTimeout: (handler: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 	clearTimeout: (handle: ReturnType<typeof setTimeout>) => void;
@@ -122,6 +128,7 @@ const createMicrophonePipelineController = <
 	let activityCleanup: (() => void) | undefined;
 	let activityProducer: TProducer | undefined;
 	let rawRecoveryAttempts = 0;
+	let recoveryOperation: Promise<TMicrophoneRecoveryOutcome> | undefined;
 	let rawRecoveryStabilityTimer: ReturnType<typeof setTimeout> | undefined;
 	const handledProducerClosures = new WeakSet<TProducer>();
 
@@ -145,6 +152,69 @@ const createMicrophonePipelineController = <
 	const resetRawRecoveryBudget = (): void => {
 		clearRawRecoveryStabilityTimer();
 		rawRecoveryAttempts = 0;
+	};
+
+	const recover = (reason: TMicrophoneRecoveryReason): Promise<TMicrophoneRecoveryOutcome> => {
+		if (recoveryOperation) {
+			return recoveryOperation;
+		}
+
+		const operation = (async (): Promise<TMicrophoneRecoveryOutcome> => {
+			const maxAttempts = ports.rawRecoveryMaxAttempts ?? DEFAULT_RAW_RECOVERY_MAX_ATTEMPTS;
+
+			while (active && ports.isInVoiceChannel() && !ports.isMicMuted()) {
+				if (rawRecoveryAttempts >= maxAttempts) {
+					log('Microphone recovery exhausted, stopping microphone', {
+						reason,
+						attempts: rawRecoveryAttempts,
+					});
+					const cleanupPromise = cleanup();
+					// cleanup's synchronous prologue stops and detaches every local
+					// resource. Commit terminal intent immediately afterward so a user
+					// operation that starts while graph destruction drains is newer.
+					ports.onRecoveryExhausted(reason);
+					await cleanupPromise;
+					return { status: 'exhausted' };
+				}
+
+				rawRecoveryAttempts += 1;
+				log('Microphone capture interrupted, re-acquiring', { reason, attempt: rawRecoveryAttempts });
+				let outcome: TMicrophoneStartOutcome;
+				try {
+					outcome = await ports.reacquire(reason);
+				} catch (error) {
+					outcome = { status: 'failed', error };
+				}
+
+				if (outcome.status === 'superseded') {
+					// The recovery owner did not accept this attempt. Preserve the
+					// budget for the operation that superseded it.
+					rawRecoveryAttempts -= 1;
+					return outcome;
+				}
+
+				if (outcome.status === 'started') {
+					return outcome;
+				}
+
+				log('Microphone re-acquisition failed', {
+					reason,
+					attempt: rawRecoveryAttempts,
+					error: outcome.error,
+				});
+			}
+
+			return { status: 'superseded' };
+		})();
+
+		recoveryOperation = operation;
+		void operation.finally(() => {
+			if (recoveryOperation === operation) {
+				recoveryOperation = undefined;
+			}
+		});
+
+		return operation;
 	};
 
 	const activate = (): void => {
@@ -326,20 +396,7 @@ const createMicrophonePipelineController = <
 				return;
 			}
 
-			const maxAttempts = ports.rawRecoveryMaxAttempts ?? DEFAULT_RAW_RECOVERY_MAX_ATTEMPTS;
-			if (rawRecoveryAttempts >= maxAttempts) {
-				log('Raw mic recovery exhausted, stopping microphone', {
-					reason,
-					attempts: rawRecoveryAttempts,
-				});
-				void cleanup();
-				ports.onRawLossExhausted(reason);
-				return;
-			}
-
-			rawRecoveryAttempts += 1;
-			log('Raw mic capture interrupted, re-acquiring', { reason, attempt: rawRecoveryAttempts });
-			ports.onRawLossRecover(reason);
+			void recover(reason);
 		};
 
 		const handleMute = (): void => {
@@ -617,6 +674,7 @@ const createMicrophonePipelineController = <
 		activate,
 		deactivate,
 		createLifecycleLease,
+		recover,
 		prepare,
 		publish,
 		cleanup,
@@ -645,6 +703,9 @@ export type {
 	TMicrophonePreparedPipeline,
 	TMicrophoneProcessingPipeline,
 	TMicrophoneProducerPublicationLease,
+	TMicrophoneRecoveryOutcome,
+	TMicrophoneRecoveryReason,
+	TMicrophoneStartOutcome,
 	TPrepareMicrophonePipelineInput,
 	TPublishMicrophonePipelineInput,
 };

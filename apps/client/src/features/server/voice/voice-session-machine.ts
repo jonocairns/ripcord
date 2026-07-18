@@ -737,10 +737,35 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			return startReconnecting(state, event);
 		case 'ReconnectIntentCaptured':
 			if (state.phase.phase === 'reconnecting') {
-				return emptyResult({
+				const nextPhase: Extract<TVoiceSessionPhase, { phase: 'reconnecting' }> = {
+					...state.phase,
+					pending: event.pending,
+				};
+				const nextState: TVoiceSessionState = {
 					...state,
 					pendingVoiceReconnect: event.pending,
-					phase: { ...state.phase, pending: event.pending },
+					phase: nextPhase,
+				};
+
+				if (
+					state.phase.step !== 'restoring' ||
+					(state.phase.pending.micMuted === event.pending.micMuted &&
+						state.phase.pending.soundMuted === event.pending.soundMuted)
+				) {
+					return emptyResult(nextState);
+				}
+
+				// The restore command owns a snapshot by value. Replace an active
+				// command when local mute intent changes so an older restore response
+				// cannot publish the pre-transition state after terminal capture loss.
+				const [nextStateWithGeneration, generation] = nextGeneration(nextState);
+				return scheduleReconnectStep({
+					...nextStateWithGeneration,
+					phase: {
+						...nextPhase,
+						generation,
+						activeCommandId: undefined,
+					},
 				});
 			}
 

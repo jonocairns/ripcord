@@ -139,6 +139,38 @@ describe('voice session machine', () => {
 		expect(result.commands).toEqual([]);
 	});
 
+	it('replaces an active restore command when microphone intent changes', () => {
+		const [state, generation] = startReconnectWithSnapshot(true);
+		const staleCommandId = activeCommandId(state);
+		const result = reduceVoiceSession(state, {
+			type: 'ReconnectIntentCaptured',
+			pending: pending({ micMuted: true }),
+		});
+
+		expect(result.state.phase).toMatchObject({
+			phase: 'reconnecting',
+			step: 'restoring',
+			pending: { micMuted: true },
+			generation: generation + 1,
+		});
+		expect(activeCommandId(result.state)).not.toBe(staleCommandId);
+		expect(result.commands).toEqual([
+			expect.objectContaining({
+				type: 'RestoreVoiceSession',
+				generation: generation + 1,
+				pending: expect.objectContaining({ micMuted: true }),
+			}),
+		]);
+
+		const staleResult = reduceVoiceSession(result.state, {
+			type: 'RestoreSucceeded',
+			commandId: staleCommandId,
+			generation,
+		});
+		expect(staleResult.state).toBe(result.state);
+		expect(staleResult.commands).toEqual([]);
+	});
+
 	it('ignores late join lifecycle events while ws reconnect owns recovery', () => {
 		// A manual join's init dispatched JoinRequested, then the socket dropped
 		// before the init settled: recovery now owns the session.

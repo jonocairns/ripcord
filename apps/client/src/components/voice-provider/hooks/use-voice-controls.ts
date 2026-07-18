@@ -8,15 +8,18 @@ import { SoundType } from '@/features/server/types';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { sendOwnVoiceStateUpdate, updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
+import { updateVoiceReconnectIntentState } from '@/features/server/voice/reconnect-coordinator';
 import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
+import { logVoice } from '@/helpers/browser-logger';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
+import type { TMicrophoneStartOutcome } from '../microphone-pipeline-controller';
 import { shouldApplyVoiceStateOperationResult, startVoiceStateOperation } from '../voice-state-operation';
 import { useScreenShareStage } from './use-screen-share-stage';
 
 type TUseVoiceControlsParams = {
-	startMicStream: () => Promise<void>;
+	startMicStream: () => Promise<TMicrophoneStartOutcome>;
 	localAudioStream: MediaStream | undefined;
 	setMicProcessingMuted: (micMuted: boolean) => void;
 
@@ -145,26 +148,32 @@ const useVoiceControls = ({
 			const { operationToken } = voiceStateOperation;
 
 			updateOwnVoiceState({ micMuted: newState });
+			updateVoiceReconnectIntentState({ micMuted: newState });
 
 			if (shouldPlaySound) {
 				playSound(newState ? SoundType.OWN_USER_MUTED_MIC : SoundType.OWN_USER_UNMUTED_MIC);
 			}
 
-			if (!latestCurrentVoiceChannelId) return;
-
 			applyMicMuted(latestLocalAudioStream, newState);
 
+			if (!latestCurrentVoiceChannelId) return;
+
+			let serverUpdated = false;
 			try {
 				await sendOwnVoiceStateUpdate({
 					micMuted: newState,
 				});
+				serverUpdated = true;
 
 				if (
 					shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current) &&
 					!localAudioStreamRef.current &&
 					!newState
 				) {
-					await startMicStream();
+					const startOutcome = await startMicStream();
+					if (startOutcome.status === 'failed') {
+						throw startOutcome.error;
+					}
 				}
 			} catch (error) {
 				if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
@@ -172,12 +181,43 @@ const useVoiceControls = ({
 				}
 
 				updateOwnVoiceState({ micMuted: previousMicMuted });
+				updateVoiceReconnectIntentState({ micMuted: previousMicMuted });
 				applyMicMuted(localAudioStreamRef.current, previousMicMuted);
+				if (serverUpdated) {
+					void sendOwnVoiceStateUpdate({ micMuted: previousMicMuted }).catch((syncError) => {
+						logVoice('Failed to compensate server microphone state after local acquisition failure', {
+							error: syncError,
+						});
+					});
+				}
 				toast.error(getTrpcError(error, 'Failed to update microphone state'));
 			}
 		},
 		[applyMicMuted, startMicStream],
 	);
+
+	const commitTerminalMicMuted = useCallback(async () => {
+		const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
+		const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
+		voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
+
+		updateOwnVoiceState({ micMuted: true });
+		const updatedReconnectIntent = updateVoiceReconnectIntentState({ micMuted: true });
+		applyMicMuted(localAudioStreamRef.current, true);
+
+		if (latestCurrentVoiceChannelId === undefined && !updatedReconnectIntent) {
+			return;
+		}
+
+		try {
+			await sendOwnVoiceStateUpdate({ micMuted: true });
+		} catch (error) {
+			// Terminal capture loss is locally authoritative. The reconnect intent
+			// carries this state to restore, and a later user operation is sequenced
+			// after this best-effort synchronization.
+			logVoice('Failed to synchronize terminal microphone mute', { error });
+		}
+	}, [applyMicMuted]);
 
 	const toggleSound = useCallback(
 		async (options?: { forceUnmute?: boolean }) => {
@@ -211,6 +251,7 @@ const useVoiceControls = ({
 				soundMuted: newState,
 				micMuted: nextMicMuted,
 			});
+			updateVoiceReconnectIntentState({ soundMuted: newState, micMuted: nextMicMuted });
 
 			applyMicMuted(latestLocalAudioStream, nextMicMuted);
 
@@ -229,7 +270,10 @@ const useVoiceControls = ({
 					!localAudioStreamRef.current &&
 					!nextMicMuted
 				) {
-					await startMicStream();
+					const startOutcome = await startMicStream();
+					if (startOutcome.status === 'failed') {
+						throw startOutcome.error;
+					}
 				}
 			} catch (error) {
 				if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
@@ -241,6 +285,10 @@ const useVoiceControls = ({
 					soundMuted: previousSoundMuted,
 					micMuted: previousMicMuted,
 				} satisfies Partial<TVoiceUserState>);
+				updateVoiceReconnectIntentState({
+					soundMuted: previousSoundMuted,
+					micMuted: previousMicMuted,
+				});
 				applyMicMuted(localAudioStreamRef.current, previousMicMuted);
 				toast.error(getTrpcError(error, 'Failed to update sound state'));
 			}
@@ -433,6 +481,7 @@ const useVoiceControls = ({
 	return {
 		isStartingScreenShare,
 		setMicMuted,
+		commitTerminalMicMuted,
 		toggleMic,
 		toggleSound,
 		toggleWebcam,

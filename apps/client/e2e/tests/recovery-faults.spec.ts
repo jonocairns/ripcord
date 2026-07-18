@@ -18,6 +18,14 @@ import {
 	waitForStats,
 } from '../helpers/app';
 
+declare global {
+	interface Window {
+		__ripcordE2eFailMicAcquisition?: boolean;
+		__ripcordE2eFailNextVoiceStateUpdate?: boolean;
+		__ripcordE2eRawAudioTracks?: MediaStreamTrack[];
+	}
+}
+
 const forceNewestConnectedPeerConnectionFailure = async (page: Parameters<typeof pcStats>[0]): Promise<void> => {
 	await page.evaluate(() => {
 		const peerConnection = window.__ripcordE2ePeerConnections?.findLast(
@@ -231,6 +239,182 @@ test('repeated raw microphone loss stops after bounded recovery attempts', async
 		expect(micLifecycleEvents.filter((event) => event.includes('Audio producer closed'))).toHaveLength(
 			closeCountAtExhaustion,
 		);
+	} finally {
+		await disposePeer(peer);
+	}
+});
+
+test('failed raw microphone reacquisition exhausts once and a later unmute retries capture', async ({
+	browser,
+}, testInfo) => {
+	const context = await browser.newContext();
+	await installPcHook(context);
+	await context.addInitScript(() => {
+		window.__ripcordE2eRawAudioTracks = [];
+		const nativeGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+		navigator.mediaDevices.getUserMedia = async (constraints) => {
+			if (constraints?.audio && window.__ripcordE2eFailMicAcquisition) {
+				throw new DOMException('Injected microphone acquisition failure', 'NotReadableError');
+			}
+
+			const stream = await nativeGetUserMedia(constraints);
+			if (constraints?.audio) {
+				window.__ripcordE2eRawAudioTracks?.push(...stream.getAudioTracks());
+			}
+			return stream;
+		};
+	});
+
+	const page = await context.newPage();
+	await suppressViteHmrReload(page);
+	const credentials = credentialsFor(testInfo);
+	await login(page, credentials);
+	const peer = { context, page, credentials };
+	const recoveryEvents: string[] = [];
+	page.on('console', (message) => {
+		if (message.text().includes('Raw microphone recovery exhausted')) {
+			recoveryEvents.push(message.text());
+		}
+	});
+
+	try {
+		await joinVoice(page);
+		await page.waitForFunction(() => (window.__ripcordE2eRawAudioTracks?.length ?? 0) === 1);
+		await page.evaluate(() => {
+			window.__ripcordE2eFailMicAcquisition = true;
+			window.__ripcordE2eRawAudioTracks?.at(-1)?.dispatchEvent(new Event('ended'));
+		});
+
+		await expect(page.getByTitle('Unmute microphone')).toBeVisible({ timeout: 15_000 });
+		await expect.poll(() => recoveryEvents.length).toBe(1);
+		expect(await page.evaluate(() => window.__ripcordE2eRawAudioTracks?.length ?? 0)).toBe(1);
+
+		await page.evaluate(() => {
+			window.__ripcordE2eFailMicAcquisition = false;
+		});
+		await page.getByTitle('Unmute microphone').click();
+		await expect(page.getByTitle('Mute microphone')).toBeVisible();
+		await page.waitForFunction(() => (window.__ripcordE2eRawAudioTracks?.length ?? 0) === 2);
+	} finally {
+		await disposePeer(peer);
+	}
+});
+
+test('a failed user microphone mutation rolls back while reconnect converges on that rollback', async ({
+	browser,
+}, testInfo) => {
+	const context = await browser.newContext();
+	await installPcHook(context);
+	await context.addInitScript(() => {
+		const nativeSend = WebSocket.prototype.send;
+		WebSocket.prototype.send = function (data) {
+			if (
+				window.__ripcordE2eFailNextVoiceStateUpdate &&
+				typeof data === 'string' &&
+				data.includes('voice.updateState')
+			) {
+				window.__ripcordE2eFailNextVoiceStateUpdate = false;
+				this.close(4013, 'Injected user microphone state failure');
+				return;
+			}
+
+			nativeSend.call(this, data);
+		};
+	});
+
+	const page = await context.newPage();
+	await suppressViteHmrReload(page);
+	const credentials = credentialsFor(testInfo);
+	await login(page, credentials);
+	const peer = { context, page, credentials };
+
+	try {
+		await joinVoice(page);
+		await page.evaluate(() => {
+			window.__ripcordE2eFailNextVoiceStateUpdate = true;
+		});
+		await page.getByTitle('Mute microphone').click();
+
+		await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+		await expect(page.getByTitle('Mute microphone')).toBeVisible();
+		expect(await page.evaluate(() => window.__ripcordE2eFailNextVoiceStateUpdate)).toBe(false);
+	} finally {
+		await disposePeer(peer);
+	}
+});
+
+test('terminal microphone mute survives failed server sync and reconnect restore', async ({ browser }, testInfo) => {
+	const context = await browser.newContext();
+	await installPcHook(context);
+	await context.addInitScript(() => {
+		window.__ripcordE2eRawAudioTracks = [];
+		const nativeGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+		navigator.mediaDevices.getUserMedia = async (constraints) => {
+			const stream = await nativeGetUserMedia(constraints);
+			if (constraints?.audio) {
+				window.__ripcordE2eRawAudioTracks?.push(...stream.getAudioTracks());
+			}
+			return stream;
+		};
+
+		const nativeSend = WebSocket.prototype.send;
+		WebSocket.prototype.send = function (data) {
+			if (
+				window.__ripcordE2eFailNextVoiceStateUpdate &&
+				typeof data === 'string' &&
+				data.includes('voice.updateState')
+			) {
+				window.__ripcordE2eFailNextVoiceStateUpdate = false;
+				this.close(4013, 'Injected terminal microphone state failure');
+				return;
+			}
+
+			nativeSend.call(this, data);
+		};
+	});
+
+	const page = await context.newPage();
+	await suppressViteHmrReload(page);
+	const credentials = credentialsFor(testInfo);
+	await login(page, credentials);
+	const peer = { context, page, credentials };
+	const microphonePublications: string[] = [];
+	page.on('console', (message) => {
+		if (message.text().includes('Microphone audio producer created')) {
+			microphonePublications.push(message.text());
+		}
+	});
+
+	try {
+		await joinVoice(page);
+		await page.waitForFunction(() => (window.__ripcordE2eRawAudioTracks?.length ?? 0) === 1);
+		await expect.poll(() => microphonePublications.length).toBe(1);
+
+		for (let recoveryAttempt = 1; recoveryAttempt <= 3; recoveryAttempt += 1) {
+			await page.evaluate(() => {
+				window.__ripcordE2eRawAudioTracks?.at(-1)?.dispatchEvent(new Event('ended'));
+			});
+			await page.waitForFunction(
+				(expectedTrackCount) => (window.__ripcordE2eRawAudioTracks?.length ?? 0) === expectedTrackCount,
+				recoveryAttempt + 1,
+			);
+			await expect.poll(() => microphonePublications.length).toBe(recoveryAttempt + 1);
+		}
+
+		await page.evaluate(() => {
+			window.__ripcordE2eFailNextVoiceStateUpdate = true;
+			window.__ripcordE2eRawAudioTracks?.at(-1)?.dispatchEvent(new Event('ended'));
+		});
+
+		await expect(page.getByTitle('Unmute microphone')).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+		await expect(page.getByTitle('Unmute microphone')).toBeVisible();
+		expect(await page.evaluate(() => window.__ripcordE2eFailNextVoiceStateUpdate)).toBe(false);
+		expect(await page.evaluate(() => window.__ripcordE2eRawAudioTracks?.length ?? 0)).toBe(4);
+
+		await page.getByTitle('Unmute microphone').click();
+		await expect(page.getByTitle('Mute microphone')).toBeVisible();
+		await page.waitForFunction(() => (window.__ripcordE2eRawAudioTracks?.length ?? 0) === 5);
 	} finally {
 		await disposePeer(peer);
 	}

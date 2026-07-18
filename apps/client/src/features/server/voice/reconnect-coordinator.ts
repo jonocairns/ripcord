@@ -109,6 +109,26 @@ const captureVoiceReconnectIntentForCurrentSession = (): boolean => {
 	return true;
 };
 
+const updateVoiceReconnectIntentState = (
+	state: Partial<Pick<TPendingVoiceReconnect, 'micMuted' | 'soundMuted'>>,
+): boolean => {
+	const pendingVoiceReconnect = getMachinePendingVoiceReconnect();
+
+	if (!pendingVoiceReconnect) {
+		return false;
+	}
+
+	dispatchVoiceSession({
+		type: 'ReconnectIntentCaptured',
+		pending: {
+			...pendingVoiceReconnect,
+			...state,
+		},
+	});
+
+	return true;
+};
+
 const ensureVoiceReconnectStarted = (timestamp = Date.now()): void => {
 	const reconnectingSince = getMachineReconnectingSince();
 
@@ -197,5 +217,6 @@ export {
 	markVoiceReconnectSessionUnauthenticated,
 	resolveVoiceRecoveryAction,
 	snapshotVoiceReconnectIntent,
+	updateVoiceReconnectIntentState,
 	VOICE_RECONNECT_INTENT_TTL_MS,
 };
