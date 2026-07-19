@@ -556,7 +556,11 @@ describe('VoiceRuntime prepared transport pairs', () => {
 		expect(runtime.getConsumerTransport(1)).toBe(consumer.transport);
 		expect(producer.closeCalls).toBe(1);
 		expect(consumer.closeCalls).toBe(0);
-		expect(publishSpy).toHaveBeenCalledWith(1, ServerEvents.VOICE_TRANSPORT_FAILED, { userId: 1 });
+		expect(publishSpy).toHaveBeenCalledWith(1, ServerEvents.VOICE_TRANSPORT_FAILED, {
+			userId: 1,
+			source: 'producer-dtls',
+			transportId: 'committed-producer',
+		});
 		publishSpy.mockRestore();
 	});
 

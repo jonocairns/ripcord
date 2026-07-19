@@ -1,10 +1,17 @@
-import { getMediasoupKind, StreamKind, type TRemoteProducerIds, type TTransportParams } from '@sharkord/shared';
+import {
+	getMediasoupKind,
+	StreamKind,
+	type TRemoteProducerIds,
+	type TTransportParams,
+	type TVoiceTransportFailureEvent,
+} from '@sharkord/shared';
 import { TRPCClientError } from '@trpc/client';
 import type { AppData, Consumer, Device, RtpCapabilities, RtpParameters, Transport } from 'mediasoup-client/types';
 import { useCallback, useRef } from 'react';
 import { logVoice, traceSentrySpan } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
+import { shouldHandleVoiceTransportFailure } from '../voice-transport-failure-identity';
 import { withConsumeAttemptTimeout } from './consume-attempt-timeout';
 import {
 	createExistingProducersSweeper,
@@ -78,7 +85,7 @@ type TUseTransportParams = {
 	markConsumerClosed: (remoteId: number, kind: StreamKind, consumerId?: string) => void;
 	isProducerCurrent: (remoteId: number, kind: StreamKind, producerId: string) => boolean;
 	isRepairIdentityCurrent: (identity: TRemoteMediaRepairIdentity) => boolean;
-	onTransportFailure: () => void;
+	onTransportFailure: (failure?: TVoiceTransportFailureEvent) => void;
 };
 
 const useTransports = ({
@@ -668,6 +675,15 @@ const useTransports = ({
 		[consumeController],
 	);
 
+	const isTransportFailureCurrent = useCallback(
+		(failure: TVoiceTransportFailureEvent): boolean =>
+			shouldHandleVoiceTransportFailure(failure, {
+				producerTransportId: producerTransport.current?.id,
+				consumerTransportId: consumerTransport.current?.id,
+			}),
+		[],
+	);
+
 	const stopWatchingStream = useCallback(
 		async (remoteId: number, kind: StreamKind) => {
 			if (kind === StreamKind.AUDIO) {
@@ -748,6 +764,7 @@ const useTransports = ({
 		stopWatchingStream,
 		cleanupTransports,
 		getActiveConsumerProducerId,
+		isTransportFailureCurrent,
 	};
 };
 

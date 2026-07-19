@@ -13,6 +13,7 @@ import type {
 	TJoinedRole,
 	TLogEntry,
 	TPublicServerSettings,
+	TVoiceTransportFailureEvent,
 	TVoiceUserState,
 } from '@sharkord/shared';
 import type { Unsubscribable } from '@trpc/server/observable';
@@ -105,9 +106,7 @@ type Events = {
 		userId: number;
 		isSpeaking: boolean;
 	};
-	[ServerEvents.VOICE_TRANSPORT_FAILED]: {
-		userId: number;
-	};
+	[ServerEvents.VOICE_TRANSPORT_FAILED]: TVoiceTransportFailureEvent;
 	[ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY]: {
 		watcherId: number;
 		kind: StreamKind.VIDEO | StreamKind.SCREEN;

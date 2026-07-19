@@ -4,6 +4,7 @@ import {
 	type TExternalStream,
 	type TRemoteProducerIds,
 	type TTransportParams,
+	type TVoiceTransportFailureEvent,
 	type TVoiceUserState,
 } from '@sharkord/shared';
 import { Device } from 'mediasoup-client';
@@ -955,13 +956,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 	}, [currentVoiceChannelId]);
 
-	const onTransportFailure = useCallback(() => {
+	const onTransportFailure = useCallback((failure?: TVoiceTransportFailureEvent) => {
 		if (hasHandledTransportFailureRef.current) {
 			logVoice('Transport failure already handled, skipping duplicate cleanup');
 			return;
 		}
 
-		logVoice('Transport failure detected');
+		logVoice('Transport failure detected', { failure });
 
 		const channelId = currentVoiceChannelIdRef.current;
 		if (!isConnectedRef.current || channelId === undefined) {
@@ -1018,6 +1019,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			logVoice('Rapid voice transport recovery exhausted', {
 				channelId,
 				rapidFailureCount: circuitDecision.state.rapidFailureCount,
+				failure,
 			});
 		}
 	}, []);
@@ -1033,6 +1035,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		closeConsumer,
 		cleanupTransports,
 		getActiveConsumerProducerId,
+		isTransportFailureCurrent,
 		stopWatchingStream,
 	} = useTransports({
 		addExternalStreamTrack,
@@ -4270,6 +4273,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		clearPendingStreamsForUser,
 		onVoiceActivityUpdate: handleVoiceActivityUpdate,
 		onTransportFailure,
+		isTransportFailureCurrent,
 		getActiveConsumerProducerId,
 		getPendingStreamProducerId,
 		getExternalStreamTrackPresence,

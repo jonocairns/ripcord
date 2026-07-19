@@ -1,3 +1,9 @@
+import {
+	VOICE_MEDIA_LIVENESS_CHECK_INTERVAL_MS,
+	VOICE_MEDIA_LIVENESS_JITTER_MS,
+	VOICE_MEDIA_LIVENESS_TIMEOUT_MS,
+} from '@sharkord/shared';
+
 // Media-liveness watchdog policy (pure decision logic).
 //
 // A WebRTC media path can die without the client's transport ever transitioning
@@ -19,8 +25,8 @@
 // fires when the client genuinely cannot self-recover (e.g. ICE never even
 // transitioned to `disconnected`, so the client never started recovering).
 
-const MEDIA_LIVENESS_CHECK_INTERVAL_MS = 5_000;
-const MEDIA_LIVENESS_TIMEOUT_MS = 45_000;
+const MEDIA_LIVENESS_CHECK_INTERVAL_MS = VOICE_MEDIA_LIVENESS_CHECK_INTERVAL_MS;
+const MEDIA_LIVENESS_TIMEOUT_MS = VOICE_MEDIA_LIVENESS_TIMEOUT_MS;
 // Additive per-user spread on the timeout so a server-wide media failure (e.g.
 // the SFU's UDP path dies for everyone at once) does not fire VOICE_TRANSPORT_
 // FAILED for every consumer on the same tick — that would stampede the server
@@ -28,7 +34,7 @@ const MEDIA_LIVENESS_TIMEOUT_MS = 45_000;
 // the effective window stays at or above the base, preserving the "fires after
 // the client ICE grace" guarantee. Each user's spread is captured once per
 // transport generation so the deadline does not jitter tick to tick.
-const MEDIA_LIVENESS_JITTER_MS = 15_000;
+const MEDIA_LIVENESS_JITTER_MS = VOICE_MEDIA_LIVENESS_JITTER_MS;
 
 type TMediaLivenessSample = {
 	// Identity of the transports this sample was taken against. When the client
@@ -54,6 +60,20 @@ type TMediaLivenessState = {
 type TMediaLivenessDecision = {
 	next: TMediaLivenessState;
 	shouldSignalFailure: boolean;
+};
+
+const shouldApplyMediaLivenessSample = ({
+	sampledTransportId,
+	currentTransportId,
+	userPresent,
+	hasActiveConsumer,
+}: {
+	sampledTransportId: string;
+	currentTransportId: string | undefined;
+	userPresent: boolean;
+	hasActiveConsumer: boolean;
+}): boolean => {
+	return userPresent && hasActiveConsumer && sampledTransportId === currentTransportId;
 };
 
 const baseline = (sample: TMediaLivenessSample, timeoutMs: number): TMediaLivenessState => ({
@@ -106,6 +126,7 @@ export {
 	MEDIA_LIVENESS_CHECK_INTERVAL_MS,
 	MEDIA_LIVENESS_JITTER_MS,
 	MEDIA_LIVENESS_TIMEOUT_MS,
+	shouldApplyMediaLivenessSample,
 	type TMediaLivenessDecision,
 	type TMediaLivenessSample,
 	type TMediaLivenessState,

@@ -1,7 +1,8 @@
+import { VOICE_TRANSPORT_RECOVERY_PROBATION_MS } from '@sharkord/shared';
 import type { TTransportRecoveryTransition } from '@/features/server/voice/voice-session-machine';
 
 const TRANSPORT_RECOVERY_MAX_RAPID_FAILURES = 3;
-const TRANSPORT_RECOVERY_STABILITY_MS = 30_000;
+const TRANSPORT_RECOVERY_STABILITY_MS = VOICE_TRANSPORT_RECOVERY_PROBATION_MS;
 
 type TTransportRecoveryCircuitState = {
 	channelId: number;
@@ -98,16 +99,14 @@ const recordTransportRecoverySucceeded = ({
 		return state;
 	}
 
-	const completedStableReconnect =
-		transition.type === 'reconnect-succeeded' &&
-		state.stabilityStartedAt !== undefined &&
-		transition.now - state.stabilityStartedAt >= TRANSPORT_RECOVERY_STABILITY_MS;
-
+	// A completed rebuild or WebSocket restore proves signaling setup, not
+	// media health. Preserve the accumulated budget and start a new probation
+	// interval; only surviving the complete server watchdog horizon earns a
+	// fresh budget when a later failure is evaluated.
 	return {
 		...state,
 		generation: transition.generation,
 		stabilityStartedAt: transition.now,
-		rapidFailureCount: completedStableReconnect ? 0 : state.rapidFailureCount,
 	};
 };
 

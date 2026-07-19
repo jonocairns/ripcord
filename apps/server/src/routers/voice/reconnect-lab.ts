@@ -74,6 +74,8 @@ const voiceReconnectLabRouter = t.router({
 
 		ctx.pubsub.publishFor(ctx.user.id, ServerEvents.VOICE_TRANSPORT_FAILED, {
 			userId: ctx.user.id,
+			source: 'media-liveness',
+			transportId: runtime.getConsumerTransport(ctx.user.id)?.id,
 		});
 
 		return {

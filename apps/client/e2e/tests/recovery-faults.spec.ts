@@ -44,6 +44,43 @@ const forceNewestConnectedPeerConnectionFailure = async (page: Parameters<typeof
 	});
 };
 
+const emitServerTransportFailure = async (page: Parameters<typeof pcStats>[0]): Promise<void> => {
+	await page.evaluate(async () => {
+		const isReflectable = (value: unknown): value is object | ((...args: unknown[]) => unknown) =>
+			(typeof value === 'object' && value !== null) || typeof value === 'function';
+		const modulePath = '/src/lib/trpc.ts';
+		const trpcModule: unknown = await import(modulePath);
+		if (!isReflectable(trpcModule)) {
+			throw new Error('Could not load the tRPC client module');
+		}
+
+		const getTRPCClient = Reflect.get(trpcModule, 'getTRPCClient');
+		if (typeof getTRPCClient !== 'function') {
+			throw new Error('The tRPC client module does not expose getTRPCClient');
+		}
+
+		const client: unknown = Reflect.apply(getTRPCClient, trpcModule, []);
+		if (!isReflectable(client)) {
+			throw new Error('The tRPC client was unavailable');
+		}
+
+		const voice = Reflect.get(client, 'voice');
+		const reconnectLab = isReflectable(voice) ? Reflect.get(voice, 'reconnectLab') : undefined;
+		const emitTransportFailed = isReflectable(reconnectLab)
+			? Reflect.get(reconnectLab, 'emitTransportFailed')
+			: undefined;
+		const mutate = isReflectable(emitTransportFailed) ? Reflect.get(emitTransportFailed, 'mutate') : undefined;
+		if (typeof mutate !== 'function') {
+			throw new Error('The reconnect lab does not expose emitTransportFailed.mutate');
+		}
+
+		const result: unknown = await Reflect.apply(mutate, emitTransportFailed, []);
+		if (typeof result !== 'object' || result === null || Reflect.get(result, 'emitted') !== true) {
+			throw new Error('The server did not emit a transport failure');
+		}
+	});
+};
+
 const getOnlyRemoteMicMuted = async (page: Parameters<typeof pcStats>[0]): Promise<boolean | undefined> => {
 	return page.evaluate(async () => {
 		const modulePath = '/src/features/server/slice.ts';
@@ -612,6 +649,74 @@ test('an immediate failure after a slow transport rebuild stays in the rapid cir
 		expect(
 			recoveryEvents.filter((event) => event.includes('Voice transport recovery completed successfully')),
 		).toHaveLength(3);
+	} finally {
+		await clearServerVoiceSession(browser, peer.credentials).catch(() => {});
+		await disposePeer(peer);
+	}
+});
+
+test('server-liveness-paced transport failures exhaust the recovery circuit', async ({ browser }, testInfo) => {
+	const peer = await createPeer(browser, credentialsFor(testInfo));
+	const recoveryEvents: string[] = [];
+	peer.page.on('console', (message) => {
+		const text = message.text();
+		if (
+			text.includes('Microphone audio producer created') ||
+			text.includes('Voice transport recovery completed successfully') ||
+			text.includes('Rapid voice transport recovery exhausted')
+		) {
+			recoveryEvents.push(text);
+		}
+	});
+
+	try {
+		await peer.page.evaluate(() => {
+			const nativeNow = Date.now.bind(Date);
+			window.__ripcordE2eNowOffsetMs = 0;
+			Date.now = () => nativeNow() + (window.__ripcordE2eNowOffsetMs ?? 0);
+		});
+		await joinVoice(peer.page);
+		await expect
+			.poll(() => recoveryEvents.filter((event) => event.includes('Microphone audio producer created')).length)
+			.toBe(1);
+
+		for (let cycle = 1; cycle <= 3; cycle += 1) {
+			if (cycle > 1) {
+				// The server watchdog cannot report a dead media path until its
+				// 45-65s liveness detection window has elapsed. Move beyond that window before
+				// emitting the same failure signal the watchdog uses.
+				await peer.page.evaluate(() => {
+					window.__ripcordE2eNowOffsetMs = (window.__ripcordE2eNowOffsetMs ?? 0) + 65_000;
+				});
+			}
+
+			await emitServerTransportFailure(peer.page);
+			await expect
+				.poll(
+					() =>
+						recoveryEvents.filter((event) => event.includes('Voice transport recovery completed successfully')).length,
+					{ timeout: 20_000 },
+				)
+				.toBe(cycle);
+		}
+
+		await peer.page.evaluate(() => {
+			window.__ripcordE2eNowOffsetMs = (window.__ripcordE2eNowOffsetMs ?? 0) + 65_000;
+		});
+		await emitServerTransportFailure(peer.page);
+
+		await expect(peer.page.getByTitle('Leave voice')).toHaveCount(0, { timeout: 20_000 });
+		await expect
+			.poll(() => recoveryEvents.filter((event) => event.includes('Rapid voice transport recovery exhausted')).length)
+			.toBe(1);
+		await peer.page.waitForTimeout(2_000);
+		expect(recoveryEvents.filter((event) => event.includes('Rapid voice transport recovery exhausted'))).toHaveLength(
+			1,
+		);
+		expect(
+			recoveryEvents.filter((event) => event.includes('Voice transport recovery completed successfully')),
+		).toHaveLength(3);
+		expect(recoveryEvents.filter((event) => event.includes('Microphone audio producer created'))).toHaveLength(4);
 	} finally {
 		await clearServerVoiceSession(browser, peer.credentials).catch(() => {});
 		await disposePeer(peer);

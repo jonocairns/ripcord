@@ -42,6 +42,7 @@ import {
 	MEDIA_LIVENESS_CHECK_INTERVAL_MS,
 	MEDIA_LIVENESS_JITTER_MS,
 	MEDIA_LIVENESS_TIMEOUT_MS,
+	shouldApplyMediaLivenessSample,
 	type TMediaLivenessState,
 } from './media-liveness';
 import { recordMediaLivenessFailure } from './media-liveness-telemetry';
@@ -917,6 +918,8 @@ class VoiceRuntime {
 			this.removeConsumerTransport(userId);
 			pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
 				userId,
+				source: 'consumer-dtls',
+				transportId: transport.id,
 			});
 		});
 	};
@@ -954,6 +957,8 @@ class VoiceRuntime {
 			this.removeProducerTransport(userId, { recoverable: true });
 			pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
 				userId,
+				source: 'producer-dtls',
+				transportId: transport.id,
 			});
 		});
 	};
@@ -2069,8 +2074,17 @@ class VoiceRuntime {
 						const [stats] = await consumerTransport.getStats();
 						const bytesReceived = stats?.bytesReceived ?? 0;
 
-						// The user may have left or been torn down while getStats was inflight.
-						if (!this.getUser(userId)) {
+						// The user, active consumers, or transport may have changed while
+						// getStats was in flight. A sample from the replaced transport must
+						// never publish failure against its healthy successor.
+						if (
+							!shouldApplyMediaLivenessSample({
+								sampledTransportId: consumerTransport.id,
+								currentTransportId: this.consumerTransports[userId]?.id,
+								userPresent: this.getUser(userId) !== undefined,
+								hasActiveConsumer: this.userHasActiveConsumer(userId),
+							})
+						) {
 							this.mediaLiveness.delete(userId);
 							return;
 						}
@@ -2100,6 +2114,8 @@ class VoiceRuntime {
 
 							pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
 								userId,
+								source: 'media-liveness',
+								transportId: consumerTransport.id,
 							});
 						}
 					} catch (error) {

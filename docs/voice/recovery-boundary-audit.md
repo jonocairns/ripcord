@@ -35,6 +35,9 @@ changing resources. Isolated policy tests cannot prove those crossings.
   completion is still current.
 - A retry counter, circuit state, or one-shot latch advances only when the layer
   responsible for executing that recovery accepts the action.
+- Successful signaling setup begins transport probation but does not itself
+  prove media health or reset prior failure history. The probation interval must
+  exceed the complete server-side failure-detector horizon.
 - Ignored, disconnected, superseded, or cleanup-time events do not consume
   recovery budget or strand one-shot state.
 - Terminal local resource loss stops or detaches the local resource before the
@@ -51,6 +54,8 @@ changing resources. Isolated policy tests cannot prove those crossings.
 - Retry identity includes every value that makes an attempt materially new,
   such as channel and producer identity. A real identity change resets the
   budget; a rerender or repeated report of the same failure does not.
+- Asynchronous health samples and failure events carry transport identity.
+  Results for a replaced transport cannot trigger recovery of its successor.
 
 ## Recovery matrix
 
@@ -58,7 +63,7 @@ changing resources. Isolated policy tests cannot prove those crossings.
 | --- | --- | --- | --- |
 | Default microphone move | Microphone controller and device-change adapter | Muted capture is stopped until a later unmute; unmuted capture moves once to the new default | Repeated device events, unavailable identities, cleanup overlap, and unmute after teardown |
 | Raw microphone loss | Microphone controller, then the local mute adapter | Capture is stopped, local state remains muted, server sync is best-effort, and a later unmute reacquires capture | `voice.updateState` failure, WebSocket reconnect, missing server seat, and overlapping user mute intent |
-| Transport failure | Voice session machine and command executor | Only accepted failures consume the rapid-failure budget; exhaustion leaves voice through normal terminal cleanup | Failure during WebSocket reconnect, duplicate transport callbacks, stale rebuild completion, and channel changes |
+| Transport failure | Server liveness watchdog, voice session machine, and command executor | Only current, accepted failures consume the rapid-failure budget; rebuild/reconnect success begins probation, and exhaustion leaves voice through normal terminal cleanup | Watchdog-paced failure, failure during WebSocket reconnect, duplicate callbacks, in-flight samples from replaced transports, stale rebuild completion, and channel changes |
 | Remote-media repair | Producer-scoped subscription ledger and repair runner | Repair backs off and stops for the same channel/producer identity; replacement identity receives a fresh budget | Producer replacement, channel changes, timeout cleanup, failed consume/resume, and stale completion ordering |
 
 Application WebSocket authentication remains upstream of these media flows. The
@@ -79,9 +84,11 @@ defines callback ownership across controlled tRPC client replacement.
 3. **Terminal microphone intent replaces stale reconnect work.** Microphone
    safety transitions use the shared operation ordering and replace an active
    restore command when the pending reconnect snapshot changes.
-4. **Transport stability begins at accepted recovery completion.** The session
-   machine reports accepted failure and rebuild outcomes, ignored events retain
-   the prior latch and circuit state, and one terminal transition owns cleanup.
+4. **Transport stability requires surviving the server detector horizon.** The
+   session machine reports accepted failure and rebuild outcomes, rebuild or
+   WebSocket success begins a shared 90-second probation without erasing prior
+   failures, identity-less events from older servers remain bounded, and stale
+   identified events for replaced transports are ignored.
 5. **Remote-media repair is producer-scoped.** The subscription ledger owns one
    budget per `(channelId, remoteId, kind, producerId)`, while scheduled and
    in-flight work verifies that exact identity before mutating or consuming.
@@ -104,8 +111,9 @@ defines callback ownership across controlled tRPC client replacement.
 1. The microphone transition boundary reports explicit outcomes, commits
    terminal mute locally, updates reconnect intent, and synchronizes without
    rollback.
-2. Transport circuit timing advances from accepted machine events and records
-   successful rebuild completion as the beginning of the stability interval.
+2. Transport circuit timing advances from accepted machine events, records
+   successful rebuild completion as the beginning of probation, and preserves
+   the prior failure count until that probation outlives the server watchdog.
 3. Producer-scoped repair budgets invalidate replaced or channel-stale work and
    give each replacement identity one fresh budget.
 4. Focused and browser integration tests inject failed acquisition, failed
@@ -140,6 +148,8 @@ defines callback ownership across controlled tRPC client replacement.
 | WebSocket-owned transport failures preserve the latch and prior budget | `recover-transport-session.test.ts`: “ignores transport failure while websocket reconnect owns recovery”; `transport-recovery-circuit.test.ts`: “preserves the budget when websocket recovery ignores a proposed failure” and the corresponding exhausted-budget case |
 | Accepted failures advance once and terminal exhaustion cleans up once | `transport-recovery-circuit.test.ts`: duplicate and stale-generation coverage; `recover-transport-session.test.ts`: “accepts circuit exhaustion and emits terminal cleanup exactly once” |
 | Immediate replacement failure after a slow rebuild remains rapid | `transport-recovery-circuit.test.ts` and `recovery-faults.spec.ts`: “an immediate failure after a slow transport rebuild stays in the rapid circuit” |
+| Watchdog-paced failures cannot repeatedly reset the transport budget | `transport-recovery-circuit.test.ts`: “stops watchdog-paced failures that arrive after the old 30-second window”; `recovery-faults.spec.ts`: “server-liveness-paced transport failures exhaust the recovery circuit” |
+| Replaced transport health work cannot fail its successor | `media-liveness.test.ts`: “rejects an in-flight sample after its consumer transport is replaced”; `voice-transport-failure-identity.test.ts`: current, replaced, and identity-less event cases |
 | Channel- or producer-stale repair is cancelled, and consume/resume is bounded | `remote-media-producer-repair.test.ts`: replacement, concurrent producer, and channel invalidation cases; `remote-media-consume-controller.test.ts`: cancellation, deterministic retries, failed resume cleanup, and resume timeout cases |
 | Producer churn cannot reset another slot's exhausted budget | `remote-media-subscriptions.test.ts`: “keeps an exhausted producer isolated from churn in another slot” |
 

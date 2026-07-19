@@ -1,4 +1,4 @@
-import { StreamKind } from '@sharkord/shared';
+import { StreamKind, type TVoiceTransportFailureEvent } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { useEffect } from 'react';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
@@ -37,7 +37,8 @@ type TEvents = {
 	clearRemoteUserStreamsForUser: (userId: number) => void;
 	clearPendingStreamsForUser: (userId: number) => void;
 	onVoiceActivityUpdate: (activity: { userId: number; isSpeaking: boolean }) => void;
-	onTransportFailure: () => void;
+	onTransportFailure: (failure?: TVoiceTransportFailureEvent) => void;
+	isTransportFailureCurrent: (failure: TVoiceTransportFailureEvent) => boolean;
 	getActiveConsumerProducerId: (remoteId: number, kind: StreamKind) => string | undefined;
 	getPendingStreamProducerId: (remoteId: number, kind: StreamKind) => string | undefined;
 	getExternalStreamTrackPresence: () => TExternalStreamTrackPresence;
@@ -56,6 +57,7 @@ const useVoiceEvents = ({
 	clearPendingStreamsForUser,
 	onVoiceActivityUpdate,
 	onTransportFailure,
+	isTransportFailureCurrent,
 	getActiveConsumerProducerId,
 	getPendingStreamProducerId,
 	getExternalStreamTrackPresence,
@@ -188,6 +190,7 @@ const useVoiceEvents = ({
 					kind,
 					channelId,
 					producerId,
+					recoverable,
 				});
 
 				try {
@@ -263,11 +266,16 @@ const useVoiceEvents = ({
 		});
 
 		const onVoiceTransportFailedSub = trpc.voice.onTransportFailed.subscribe(undefined, {
-			onData: () => {
+			onData: (failure) => {
 				if (isCleaningUp) return;
 
-				logVoice('Server-side transport failure event received, triggering recovery');
-				onTransportFailure();
+				if (!isTransportFailureCurrent(failure)) {
+					logVoice('Ignoring transport failure event for a replaced transport', { failure });
+					return;
+				}
+
+				logVoice('Server-side transport failure event received, triggering recovery', { failure });
+				onTransportFailure(failure);
 			},
 			onError: (error) => {
 				logVoice('onVoiceTransportFailed subscription error', { error });
@@ -338,6 +346,7 @@ const useVoiceEvents = ({
 		clearPendingStreamsForUser,
 		onVoiceActivityUpdate,
 		onTransportFailure,
+		isTransportFailureCurrent,
 		getActiveConsumerProducerId,
 		getPendingStreamProducerId,
 		getExternalStreamTrackPresence,
