@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { VOICE_MEDIA_LIVENESS_MAX_DETECTION_MS } from '@sharkord/shared';
 import {
 	createInitialVoiceSessionState,
 	reduceVoiceSession,
@@ -8,6 +9,7 @@ import {
 	recordTransportRecoverySucceeded,
 	resolveTransportFailureDispatchOutcome,
 	resolveTransportRecoveryCircuitDecision,
+	TRANSPORT_RECOVERY_STABILITY_MS,
 	type TTransportRecoveryCircuitState,
 } from '../transport-recovery-circuit';
 
@@ -24,6 +26,10 @@ const connectedGeneration = (state: TVoiceSessionState): number => {
 };
 
 describe('transport recovery circuit', () => {
+	it('keeps probation beyond the complete server liveness detector horizon', () => {
+		expect(TRANSPORT_RECOVERY_STABILITY_MS).toBeGreaterThan(VOICE_MEDIA_LIVENESS_MAX_DETECTION_MS);
+	});
+
 	it('stops after the allowed accepted rapid recovery cycles', () => {
 		let state: TTransportRecoveryCircuitState | undefined;
 		let generation = 1;
@@ -61,7 +67,43 @@ describe('transport recovery circuit', () => {
 		expect(actions).toEqual(['recover', 'recover', 'recover', 'stop']);
 	});
 
-	it('starts a fresh budget only after the accepted connection is stable', () => {
+	it('stops watchdog-paced failures that arrive after the old 30-second window', () => {
+		let state: TTransportRecoveryCircuitState | undefined;
+		let generation = 1;
+		const actions: string[] = [];
+
+		for (let failure = 0; failure < 4; failure += 1) {
+			const now = failure * 65_000;
+			const decision = resolveTransportRecoveryCircuitDecision({ state, channelId: 7, generation, now });
+			actions.push(decision.action);
+			const transition =
+				decision.action === 'recover'
+					? {
+							type: 'failure-accepted' as const,
+							channelId: 7,
+							connectedGeneration: generation,
+							recoveryGeneration: generation + 1,
+						}
+					: { type: 'exhaustion-accepted' as const, channelId: 7, connectedGeneration: generation };
+			state = resolveTransportFailureDispatchOutcome({
+				circuitDecision: decision,
+				transition,
+				previousCircuitState: state,
+			}).circuitState;
+
+			if (decision.action === 'recover') {
+				generation += 1;
+				state = recordTransportRecoverySucceeded({
+					state,
+					transition: { type: 'rebuild-succeeded', channelId: 7, generation, now: now + 100 },
+				});
+			}
+		}
+
+		expect(actions).toEqual(['recover', 'recover', 'recover', 'stop']);
+	});
+
+	it('starts a fresh budget only after the accepted connection survives probation', () => {
 		const rapidSequence = {
 			channelId: 7,
 			generation: 3,
@@ -70,14 +112,20 @@ describe('transport recovery circuit', () => {
 		};
 
 		expect(
-			resolveTransportRecoveryCircuitDecision({ state: rapidSequence, channelId: 7, generation: 3, now: 32_000 }),
+			resolveTransportRecoveryCircuitDecision({
+				state: rapidSequence,
+				channelId: 7,
+				generation: 3,
+				now: 2_000 + TRANSPORT_RECOVERY_STABILITY_MS,
+			}),
 		).toMatchObject({ action: 'recover', state: { rapidFailureCount: 1 } });
 		expect(
 			resolveTransportRecoveryCircuitDecision({ state: rapidSequence, channelId: 8, generation: 3, now: 2_001 }),
 		).toMatchObject({ action: 'recover', state: { rapidFailureCount: 1 } });
 	});
 
-	it('starts a fresh budget when websocket reconnect follows a stable connection', () => {
+	it('preserves the budget when websocket reconnect completes after the previous probation interval', () => {
+		const reconnectCompletedAt = 1_000 + TRANSPORT_RECOVERY_STABILITY_MS;
 		const reconnected = recordTransportRecoverySucceeded({
 			state: {
 				channelId: 7,
@@ -85,18 +133,23 @@ describe('transport recovery circuit', () => {
 				stabilityStartedAt: 1_000,
 				rapidFailureCount: 3,
 			},
-			transition: { type: 'reconnect-succeeded', channelId: 7, generation: 4, now: 31_000 },
+			transition: { type: 'reconnect-succeeded', channelId: 7, generation: 4, now: reconnectCompletedAt },
 		});
 
 		expect(reconnected).toEqual({
 			channelId: 7,
 			generation: 4,
-			stabilityStartedAt: 31_000,
-			rapidFailureCount: 0,
+			stabilityStartedAt: reconnectCompletedAt,
+			rapidFailureCount: 3,
 		});
 		expect(
-			resolveTransportRecoveryCircuitDecision({ state: reconnected, channelId: 7, generation: 4, now: 31_001 }),
-		).toMatchObject({ action: 'recover', state: { rapidFailureCount: 1 } });
+			resolveTransportRecoveryCircuitDecision({
+				state: reconnected,
+				channelId: 7,
+				generation: 4,
+				now: reconnectCompletedAt + 1,
+			}),
+		).toMatchObject({ action: 'stop', state: { rapidFailureCount: 4 } });
 	});
 
 	it('preserves rapid failures when websocket reconnect occurs inside the stability window', () => {
@@ -107,17 +160,27 @@ describe('transport recovery circuit', () => {
 				stabilityStartedAt: 1_000,
 				rapidFailureCount: 2,
 			},
-			transition: { type: 'reconnect-succeeded', channelId: 7, generation: 4, now: 30_999 },
+			transition: {
+				type: 'reconnect-succeeded',
+				channelId: 7,
+				generation: 4,
+				now: TRANSPORT_RECOVERY_STABILITY_MS - 1,
+			},
 		});
 
 		expect(reconnected).toEqual({
 			channelId: 7,
 			generation: 4,
-			stabilityStartedAt: 30_999,
+			stabilityStartedAt: TRANSPORT_RECOVERY_STABILITY_MS - 1,
 			rapidFailureCount: 2,
 		});
 		expect(
-			resolveTransportRecoveryCircuitDecision({ state: reconnected, channelId: 7, generation: 4, now: 31_000 }),
+			resolveTransportRecoveryCircuitDecision({
+				state: reconnected,
+				channelId: 7,
+				generation: 4,
+				now: TRANSPORT_RECOVERY_STABILITY_MS,
+			}),
 		).toMatchObject({ action: 'recover', state: { rapidFailureCount: 3 } });
 	});
 
@@ -309,11 +372,12 @@ describe('transport recovery circuit', () => {
 		});
 		const rebuildCommand = recoveryStarted.commands[0];
 		if (rebuildCommand?.type !== 'RebuildTransports') throw new Error('expected rebuild command');
+		const rebuildCompletedAt = TRANSPORT_RECOVERY_STABILITY_MS + 10_000;
 		const rebuildSucceeded = reduceVoiceSession(recoveryStarted.state, {
 			type: 'RebuildSucceeded',
 			commandId: rebuildCommand.commandId,
 			generation: rebuildCommand.generation,
-			now: 40_000,
+			now: rebuildCompletedAt,
 		});
 		if (rebuildSucceeded.transportRecoveryTransition?.type !== 'rebuild-succeeded') {
 			throw new Error('expected accepted rebuild success');
@@ -328,7 +392,7 @@ describe('transport recovery circuit', () => {
 			state: circuitState,
 			channelId: 7,
 			generation: connectedGeneration(machineState),
-			now: 40_001,
+			now: rebuildCompletedAt + 1,
 		});
 
 		expect(immediateFailure.state.rapidFailureCount).toBe(2);

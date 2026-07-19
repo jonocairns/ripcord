@@ -1,9 +1,29 @@
 import { describe, expect, test } from 'bun:test';
-import { evaluateMediaLiveness, type TMediaLivenessState } from '../media-liveness';
+import { evaluateMediaLiveness, shouldApplyMediaLivenessSample, type TMediaLivenessState } from '../media-liveness';
 
 const TIMEOUT = 30_000;
 
 describe('evaluateMediaLiveness', () => {
+	test('rejects an in-flight sample after its consumer transport is replaced', () => {
+		expect(
+			shouldApplyMediaLivenessSample({
+				sampledTransportId: 'old-consumer',
+				currentTransportId: 'new-consumer',
+				userPresent: true,
+				hasActiveConsumer: true,
+			}),
+		).toBe(false);
+
+		expect(
+			shouldApplyMediaLivenessSample({
+				sampledTransportId: 'new-consumer',
+				currentTransportId: 'new-consumer',
+				userPresent: true,
+				hasActiveConsumer: true,
+			}),
+		).toBe(true);
+	});
+
 	test('first sample baselines without signalling and captures the timeout', () => {
 		const { next, shouldSignalFailure } = evaluateMediaLiveness(
 			undefined,
