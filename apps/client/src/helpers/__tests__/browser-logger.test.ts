@@ -1,6 +1,32 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 import type { Event } from '@sentry/react';
 import { sanitizeSentryEvent } from '../error-reporting/sanitize';
+
+describe('reportError', () => {
+	it('logs through the console reference captured before Sentry wraps it', async () => {
+		const originalConsoleError = console.error;
+		const preInitConsoleError = mock(() => {});
+		const sentryWrappedConsoleError = mock(() => {});
+
+		try {
+			// Stands in for the real console.error that browser-logger binds at module
+			// evaluation, before Sentry.init() installs captureConsoleIntegration.
+			console.error = preInitConsoleError;
+			const { reportError } = await import('../browser-logger');
+
+			// Sentry wraps console.error during init, i.e. after module evaluation.
+			console.error = sentryWrappedConsoleError;
+			reportError('Voice reconnect recovery gave up', undefined, { reason: 'reconnect-expired' });
+
+			// Routing around the wrapper is what stops captureConsoleIntegration from
+			// filing a second, differently-grouped issue for an already-reported error.
+			expect(sentryWrappedConsoleError).not.toHaveBeenCalled();
+			expect(preInitConsoleError).toHaveBeenCalledTimes(1);
+		} finally {
+			console.error = originalConsoleError;
+		}
+	});
+});
 
 describe('sanitizeSentryEvent', () => {
 	it('removes sensitive request metadata and redacts identifiers', () => {
