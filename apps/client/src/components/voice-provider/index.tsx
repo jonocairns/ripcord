@@ -60,7 +60,7 @@ import { logDebug, logVoice, reportError, traceSentrySpan } from '@/helpers/brow
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { getTrpcErrorData } from '@/helpers/trpc-error-data';
 import { useLatestRef } from '@/hooks/use-latest-ref';
-import { getTRPCClient, getTRPCClientIfInitialized } from '@/lib/trpc';
+import { getTRPCClient, getTRPCClientIfInitialized, TRPCClientUnavailableError } from '@/lib/trpc';
 import { getDesktopBridge, isDesktopRuntime } from '@/runtime/desktop-bridge';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import {
@@ -4033,6 +4033,19 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		leaveVoiceSession: leaveAfterFailedTransportRecovery,
 		clearFailedSession: clearFailedVoiceSession,
 		reportCommandError: (command, error) => {
+			// A command that raced the socket going down is expected fallout of the
+			// disconnect, not a command defect. The reconnect machinery already
+			// reports when recovery actually gives up, so filing this too just
+			// duplicates every drop under a misleading title.
+			if (error instanceof TRPCClientUnavailableError) {
+				logVoice('Voice session command skipped: server connection unavailable', {
+					commandType: command.type,
+					commandId: command.commandId,
+					generation: command.generation,
+				});
+				return;
+			}
+
 			reportError('Voice session command failed', error, {
 				commandType: command.type,
 				commandId: command.commandId,

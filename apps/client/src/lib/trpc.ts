@@ -310,9 +310,21 @@ const reconnectTRPC = (host: string) => {
 	return initializeTRPC(host);
 };
 
+// Thrown when a caller reaches for the client after cleanup() has nulled it —
+// i.e. the socket is down. That is an expected consequence of disconnecting, not
+// a defect, so reporting boundaries can recognize it and skip the Sentry report
+// instead of filing a generic "TRPC client is not initialized" error on every
+// connection drop that races an in-flight call.
+class TRPCClientUnavailableError extends Error {
+	constructor() {
+		super('TRPC client is not initialized');
+		this.name = 'TRPCClientUnavailableError';
+	}
+}
+
 const getTRPCClient = () => {
 	if (!trpc) {
-		throw new Error('TRPC client is not initialized');
+		throw new TRPCClientUnavailableError();
 	}
 
 	return trpc;
@@ -381,4 +393,5 @@ export {
 	isTRPCSocketOpen,
 	reconnectTRPC,
 	setOnWsReconnect,
+	TRPCClientUnavailableError,
 };

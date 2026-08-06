@@ -107,8 +107,12 @@ const buildIntegrations = (
 	// subscription layer) and would otherwise never reach Sentry — the SDK only
 	// auto-captures uncaught exceptions, unhandled rejections, and the
 	// ErrorBoundary. Captured events still pass through beforeSend (sanitization)
-	// and ignoreErrors; the default dedupeIntegration collapses the duplicate when
-	// a site both console.errors and reportErrorToSentry()s the same error.
+	// and ignoreErrors.
+	//
+	// dedupeIntegration only collapses a console copy against an explicit capture
+	// when both carry the same Error instance. reportError() therefore logs via a
+	// pre-init console reference rather than relying on dedupe — see
+	// helpers/browser-logger.ts.
 	integrations.push(Sentry.captureConsoleIntegration({ levels: ['error'] }));
 
 	if (tracingSampleRate !== undefined && tracingSampleRate > 0) {
