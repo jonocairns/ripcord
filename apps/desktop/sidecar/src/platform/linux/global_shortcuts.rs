@@ -9,9 +9,7 @@ use uuid::Uuid;
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
-use crate::{
-    enqueue_push_keybind_state_event, FrameQueue, PushKeybindKind, PushKeybindWatcher,
-};
+use crate::{enqueue_push_keybind_state_event, OutputQueue, PushKeybindKind, PushKeybindWatcher};
 
 use super::super::PushKeybindRegistration;
 use super::LinuxPushKeybind;
@@ -42,7 +40,7 @@ enum PortalWatcherEvent {
 }
 
 pub(super) fn register_push_keybinds_via_portal(
-    frame_queue: Arc<FrameQueue>,
+    output_queue: Arc<OutputQueue>,
     push_to_talk_keybind: Option<&LinuxPushKeybind>,
     push_to_mute_keybind: Option<&LinuxPushKeybind>,
 ) -> PushKeybindRegistration {
@@ -112,7 +110,7 @@ pub(super) fn register_push_keybinds_via_portal(
     }
 
     let watcher = match start_portal_push_keybind_watcher(
-        frame_queue,
+        output_queue,
         session_handle.clone(),
         shortcut_bindings.clone(),
     ) {
@@ -434,7 +432,7 @@ fn portal_key_name(key_code: &str) -> Option<String> {
 }
 
 fn start_portal_push_keybind_watcher(
-    frame_queue: Arc<FrameQueue>,
+    output_queue: Arc<OutputQueue>,
     session_handle: OwnedObjectPath,
     shortcut_bindings: Vec<PortalShortcutBinding>,
 ) -> Result<PushKeybindWatcher, String> {
@@ -504,7 +502,7 @@ fn start_portal_push_keybind_watcher(
                     PushKeybindKind::Talk if talk_active != active => {
                         talk_active = active;
                         enqueue_push_keybind_state_event(
-                            &frame_queue,
+                            &output_queue,
                             PushKeybindKind::Talk,
                             talk_active,
                         );
@@ -512,7 +510,7 @@ fn start_portal_push_keybind_watcher(
                     PushKeybindKind::Mute if mute_active != active => {
                         mute_active = active;
                         enqueue_push_keybind_state_event(
-                            &frame_queue,
+                            &output_queue,
                             PushKeybindKind::Mute,
                             mute_active,
                         );
@@ -537,10 +535,10 @@ fn start_portal_push_keybind_watcher(
         let _ = session_thread.join();
 
         if talk_active {
-            enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Talk, false);
+            enqueue_push_keybind_state_event(&output_queue, PushKeybindKind::Talk, false);
         }
         if mute_active {
-            enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Mute, false);
+            enqueue_push_keybind_state_event(&output_queue, PushKeybindKind::Mute, false);
         }
     });
 

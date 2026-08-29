@@ -15,7 +15,7 @@ use crate::protocol::{
 };
 use crate::runtime::{
     audio_capture_binary_egress_info, now_unix_ms, start_app_audio_binary_egress,
-    start_frame_writer, write_event, write_response, AppAudioBinaryEgress, FrameQueue,
+    start_output_writer, write_event, write_response, AppAudioBinaryEgress, OutputQueue,
     PushKeybindWatcher,
 };
 
@@ -36,15 +36,15 @@ struct SidecarState {
 
 struct SidecarApp {
     stdout: Arc<Mutex<io::Stdout>>,
-    frame_queue: Arc<FrameQueue>,
-    frame_writer: JoinHandle<()>,
+    output_queue: Arc<OutputQueue>,
+    output_writer: JoinHandle<()>,
     state: Mutex<SidecarState>,
     app_audio_binary_egress: Option<AppAudioBinaryEgress>,
 }
 
 fn start_capture_thread(
     stdout: Arc<Mutex<io::Stdout>>,
-    frame_queue: Arc<FrameQueue>,
+    frame_queue: Arc<OutputQueue>,
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
     session_id: String,
     source_id: Option<String>,
@@ -110,8 +110,8 @@ fn stop_push_keybind_watcher(state: &mut SidecarState) {
 impl SidecarApp {
     fn new() -> Self {
         let stdout = Arc::new(Mutex::new(io::stdout()));
-        let frame_queue = Arc::new(FrameQueue::new(JSON_EVENT_QUEUE_CAPACITY));
-        let frame_writer = start_frame_writer(Arc::clone(&stdout), Arc::clone(&frame_queue));
+        let output_queue = Arc::new(OutputQueue::new(JSON_EVENT_QUEUE_CAPACITY));
+        let output_writer = start_output_writer(Arc::clone(&stdout), Arc::clone(&output_queue));
         let app_audio_binary_egress = match start_app_audio_binary_egress() {
             Ok(app_audio_binary_egress) => {
                 eprintln!(
@@ -128,8 +128,8 @@ impl SidecarApp {
 
         Self {
             stdout,
-            frame_queue,
-            frame_writer,
+            output_queue,
+            output_writer,
             state: Mutex::new(SidecarState::default()),
             app_audio_binary_egress,
         }
@@ -296,7 +296,7 @@ impl SidecarApp {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let handle = start_capture_thread(
             Arc::clone(&self.stdout),
-            Arc::clone(&self.frame_queue),
+            Arc::clone(&self.output_queue),
             self.app_audio_binary_egress
                 .as_ref()
                 .map(|binary_egress| Arc::clone(&binary_egress.stream)),
@@ -352,7 +352,7 @@ impl SidecarApp {
         stop_push_keybind_watcher(state);
 
         let registration = platform::register_push_keybinds(
-            Arc::clone(&self.frame_queue),
+            Arc::clone(&self.output_queue),
             parsed.push_to_talk_keybind.as_deref(),
             parsed.push_to_mute_keybind.as_deref(),
         );
@@ -406,8 +406,8 @@ impl SidecarApp {
             eprintln!("[capture-sidecar] sidecar state lock poisoned during shutdown");
         }
 
-        self.frame_queue.close();
-        let _ = self.frame_writer.join();
+        self.output_queue.close();
+        let _ = self.output_writer.join();
     }
 }
 

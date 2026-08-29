@@ -38,7 +38,7 @@ use windows_core::implement;
 
 use crate::{
     enqueue_frame_event, enqueue_push_keybind_state_event, AudioTarget, CaptureEndReason,
-    CaptureOutcome, FrameQueue, PushKeybindKind, PushKeybindWatcher, APP_AUDIO_CHANNELS,
+    CaptureOutcome, OutputQueue, PushKeybindKind, PushKeybindWatcher, APP_AUDIO_CHANNELS,
     APP_AUDIO_FRAME_SIZE, APP_AUDIO_SAMPLE_RATE, PROTOCOL_VERSION,
 };
 
@@ -241,7 +241,7 @@ fn is_push_keybind_active(keybind: &WindowsPushKeybind) -> bool {
 }
 
 fn start_push_keybind_watcher(
-    frame_queue: Arc<FrameQueue>,
+    output_queue: Arc<OutputQueue>,
     talk_keybind: Option<WindowsPushKeybind>,
     mute_keybind: Option<WindowsPushKeybind>,
 ) -> PushKeybindWatcher {
@@ -258,23 +258,23 @@ fn start_push_keybind_watcher(
 
             if next_talk_active != talk_active {
                 talk_active = next_talk_active;
-                enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Talk, talk_active);
+                enqueue_push_keybind_state_event(&output_queue, PushKeybindKind::Talk, talk_active);
             }
 
             if next_mute_active != mute_active {
                 mute_active = next_mute_active;
-                enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Mute, mute_active);
+                enqueue_push_keybind_state_event(&output_queue, PushKeybindKind::Mute, mute_active);
             }
 
             thread::sleep(Duration::from_millis(8));
         }
 
         if talk_active {
-            enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Talk, false);
+            enqueue_push_keybind_state_event(&output_queue, PushKeybindKind::Talk, false);
         }
 
         if mute_active {
-            enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Mute, false);
+            enqueue_push_keybind_state_event(&output_queue, PushKeybindKind::Mute, false);
         }
     });
 
@@ -282,7 +282,7 @@ fn start_push_keybind_watcher(
 }
 
 pub(crate) fn register_push_keybinds(
-    frame_queue: Arc<FrameQueue>,
+    output_queue: Arc<OutputQueue>,
     push_to_talk_keybind: Option<&str>,
     push_to_mute_keybind: Option<&str>,
 ) -> PushKeybindRegistration {
@@ -311,7 +311,7 @@ pub(crate) fn register_push_keybinds(
 
     let watcher = if talk_keybind.is_some() || mute_keybind.is_some() {
         Some(start_push_keybind_watcher(
-            frame_queue,
+            output_queue,
             talk_keybind,
             mute_keybind,
         ))
@@ -592,7 +592,7 @@ pub(crate) fn capture_loopback_audio(
     target_pid: u32,
     self_exclude_pid: Option<u32>,
     stop_flag: Arc<AtomicBool>,
-    frame_queue: Arc<FrameQueue>,
+    frame_queue: Arc<OutputQueue>,
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
     let process_handle = if self_exclude_pid.is_none() {

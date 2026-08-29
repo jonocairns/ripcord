@@ -60,6 +60,18 @@ const resolveHeldPushMicTarget = (state: TPushMicState): boolean | undefined => 
 	return undefined;
 };
 
+type TMicOperationFailurePolicy = { shouldFailClosed: false } | { shouldFailClosed: true; micMuted: true };
+
+const resolveMicOperationFailurePolicy = (isOperationCurrent: boolean): TMicOperationFailurePolicy => {
+	// Fail closed on any *current* microphone-state failure: leave the mic muted
+	// and resync that safe muted state to the server. Whether the server update
+	// failed or microphone acquisition failed after it succeeded, the known-safe
+	// outcome is the same — muted — so there is no push-aware rollback to resolve.
+	// A stale operation is ignored so a newer user intent already in flight is not
+	// clobbered by this late failure.
+	return isOperationCurrent ? { shouldFailClosed: true, micMuted: true } : { shouldFailClosed: false };
+};
+
 const resolvePushMicState = (state: TPushMicState, soundMuted: boolean): TPushMicResolution => {
 	const heldTarget = resolveHeldPushMicTarget(state);
 
@@ -90,5 +102,11 @@ const resolvePushMicState = (state: TPushMicState, soundMuted: boolean): TPushMi
 	};
 };
 
-export type { TPushMicState };
-export { clearHeldPushMicState, resolveHeldPushMicTarget, resolvePushMicState, updatePushMicStateForKeyEvent };
+export type { TMicOperationFailurePolicy, TPushMicState };
+export {
+	clearHeldPushMicState,
+	resolveHeldPushMicTarget,
+	resolveMicOperationFailurePolicy,
+	resolvePushMicState,
+	updatePushMicStateForKeyEvent,
+};

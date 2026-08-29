@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import {
 	clearHeldPushMicState,
+	resolveHeldPushMicTarget,
+	resolveMicOperationFailurePolicy,
 	resolvePushMicState,
 	type TPushMicState,
 	updatePushMicStateForKeyEvent,
@@ -83,6 +85,50 @@ describe('push mic state', () => {
 		expect(resolvePushMicState(idlePushMicState(), false)).toEqual({
 			targetMicMuted: undefined,
 			shouldClearMicMutedBeforePush: false,
+		});
+	});
+
+	// resolvePushMicState and the confirmed-state reconciliation effect use this to
+	// know which mute state a currently held push key demands.
+	describe('resolveHeldPushMicTarget', () => {
+		it('demands muted while push-to-mute is held', () => {
+			expect(
+				resolveHeldPushMicTarget({ isPushToTalkHeld: false, isPushToMuteHeld: true, micMutedBeforePush: false }),
+			).toBe(true);
+		});
+
+		it('demands unmuted while push-to-talk is held', () => {
+			expect(
+				resolveHeldPushMicTarget({ isPushToTalkHeld: true, isPushToMuteHeld: false, micMutedBeforePush: true }),
+			).toBe(false);
+		});
+
+		it('prefers muted when both keys are held', () => {
+			expect(
+				resolveHeldPushMicTarget({ isPushToTalkHeld: true, isPushToMuteHeld: true, micMutedBeforePush: false }),
+			).toBe(true);
+		});
+
+		it('has no held target when neither key is down', () => {
+			expect(resolveHeldPushMicTarget(idlePushMicState())).toBeUndefined();
+		});
+	});
+
+	// setMicMuted consults this in its catch: a current microphone-state failure
+	// fails closed to muted (and resyncs that safe state), while a stale operation
+	// is ignored so it cannot clobber a newer in-flight user intent.
+	describe('resolveMicOperationFailurePolicy', () => {
+		it('fails closed to muted when the operation is still current', () => {
+			expect(resolveMicOperationFailurePolicy(true)).toEqual({
+				shouldFailClosed: true,
+				micMuted: true,
+			});
+		});
+
+		it('ignores the failure when the operation has been superseded', () => {
+			expect(resolveMicOperationFailurePolicy(false)).toEqual({
+				shouldFailClosed: false,
+			});
 		});
 	});
 });
