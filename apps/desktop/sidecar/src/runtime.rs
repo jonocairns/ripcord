@@ -36,37 +36,50 @@ pub(crate) struct AppAudioBinaryEgress {
 }
 
 #[derive(Default)]
-struct FrameQueueState {
-    queue: VecDeque<String>,
+struct OutputQueueState {
+    // Control events (e.g. push_keybind.state) are non-dropping and preserve
+    // FIFO ordering. They are drained ahead of any queued audio frames.
+    control_events: VecDeque<String>,
+    // Audio frames are bounded and drop-oldest under backpressure.
+    audio_frames: VecDeque<String>,
     closed: bool,
 }
 
+/// Two-lane output queue feeding the single stdout writer.
+///
+/// The audio-frame lane is bounded and drop-oldest so bulk capture cannot grow
+/// memory without bound. The control-event lane is unbounded, non-dropping, and
+/// drained before any queued audio frame, so latency-sensitive keybind edges
+/// are never lost or stuck behind the audio backlog.
 #[cfg_attr(
     not(any(windows, target_os = "macos", target_os = "linux")),
     allow(dead_code)
 )]
-pub(crate) struct FrameQueue {
-    capacity: usize,
+pub(crate) struct OutputQueue {
+    audio_frame_capacity: usize,
     dropped_count: AtomicU64,
-    state: Mutex<FrameQueueState>,
+    state: Mutex<OutputQueueState>,
     condvar: Condvar,
 }
 
-impl FrameQueue {
-    pub(crate) fn new(capacity: usize) -> Self {
+impl OutputQueue {
+    pub(crate) fn new(audio_frame_capacity: usize) -> Self {
         Self {
-            capacity,
+            audio_frame_capacity,
             dropped_count: AtomicU64::new(0),
-            state: Mutex::new(FrameQueueState::default()),
+            state: Mutex::new(OutputQueueState::default()),
             condvar: Condvar::new(),
         }
     }
 
+    /// Enqueue an audio-frame line. Bounded and drop-oldest: under sustained
+    /// backpressure the oldest queued frame is discarded and counted so the
+    /// next frame can advertise `droppedFrameCount`.
     #[cfg_attr(
         not(any(windows, target_os = "macos", target_os = "linux")),
         allow(dead_code)
     )]
-    fn push_line(&self, line: String) {
+    fn push_audio_frame(&self, line: String) {
         let mut lock = match self.state.lock() {
             Ok(guard) => guard,
             Err(_) => return,
@@ -76,23 +89,52 @@ impl FrameQueue {
             return;
         }
 
-        if lock.queue.len() >= self.capacity {
-            let _ = lock.queue.pop_front();
+        if lock.audio_frames.len() >= self.audio_frame_capacity {
+            let _ = lock.audio_frames.pop_front();
             self.dropped_count.fetch_add(1, Ordering::Relaxed);
         }
 
-        lock.queue.push_back(line);
+        lock.audio_frames.push_back(line);
         self.condvar.notify_one();
     }
 
-    fn pop_line(&self) -> Option<String> {
+    /// Enqueue a control-event line. Never dropped due to audio pressure and
+    /// FIFO-ordered. This only touches the queue's own mutex; it never performs
+    /// stdout I/O nor waits on the stdout mutex, so key-polling threads cannot
+    /// stall here.
+    #[cfg_attr(
+        not(any(windows, target_os = "macos", target_os = "linux")),
+        allow(dead_code)
+    )]
+    fn push_control_event(&self, line: String) {
+        let mut lock = match self.state.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+
+        if lock.closed {
+            return;
+        }
+
+        lock.control_events.push_back(line);
+        self.condvar.notify_one();
+    }
+
+    /// Pop the next line to write, draining all queued control events before any
+    /// queued audio frame. Blocks until a line is available, or the queue is
+    /// closed and both lanes are fully drained.
+    fn pop(&self) -> Option<String> {
         let mut lock = match self.state.lock() {
             Ok(guard) => guard,
             Err(_) => return None,
         };
 
         loop {
-            if let Some(line) = lock.queue.pop_front() {
+            if let Some(line) = lock.control_events.pop_front() {
+                return Some(line);
+            }
+
+            if let Some(line) = lock.audio_frames.pop_front() {
                 return Some(line);
             }
 
@@ -114,7 +156,10 @@ impl FrameQueue {
         }
     }
 
-    #[cfg_attr(not(any(windows, target_os = "macos", target_os = "linux")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(windows, target_os = "macos", target_os = "linux")),
+        allow(dead_code)
+    )]
     fn take_dropped_count(&self) -> u64 {
         self.dropped_count.swap(0, Ordering::Relaxed)
     }
@@ -171,12 +216,12 @@ pub(crate) fn write_event(stdout: &Arc<Mutex<io::Stdout>>, event: &str, params: 
     write_json_line(stdout, &envelope);
 }
 
-pub(crate) fn start_frame_writer(
+pub(crate) fn start_output_writer(
     stdout: Arc<Mutex<io::Stdout>>,
-    queue: Arc<FrameQueue>,
+    queue: Arc<OutputQueue>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        while let Some(line) = queue.pop_line() {
+        while let Some(line) = queue.pop() {
             let mut lock = match stdout.lock() {
                 Ok(guard) => guard,
                 Err(_) => break,
@@ -190,7 +235,7 @@ pub(crate) fn start_frame_writer(
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 pub(crate) fn enqueue_frame_event(
-    queue: &Arc<FrameQueue>,
+    queue: &Arc<OutputQueue>,
     session_id: &str,
     target_id: &str,
     sequence: u64,
@@ -220,7 +265,7 @@ pub(crate) fn enqueue_frame_event(
         event: "audio_capture.frame",
         params,
     }) {
-        queue.push_line(serialized);
+        queue.push_audio_frame(serialized);
     }
 }
 
@@ -316,24 +361,28 @@ pub(crate) fn try_write_app_audio_binary_frame(
 }
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
-pub(crate) fn emit_push_keybind_state_event(
-    stdout: &Arc<Mutex<io::Stdout>>,
+pub(crate) fn enqueue_push_keybind_state_event(
+    queue: &Arc<OutputQueue>,
     kind: PushKeybindKind,
     active: bool,
 ) {
-    // Push-keybind state changes must never be dropped or stalled behind bulk
-    // audio frames, so they bypass the bounded frame queue and write straight to
-    // stdout the way responses and lifecycle events do. A lost edge would leave
-    // the mic stuck muted or, worse, leak audio while the user believes
-    // push-to-mute is engaged.
-    write_event(
-        stdout,
-        "push_keybind.state",
-        json!({
+    // Push-keybind state changes ride the control-event lane: non-dropping and
+    // drained ahead of any queued audio frame, so an edge is never lost or stuck
+    // behind the audio backlog. Enqueueing only touches the output queue's own
+    // mutex — never stdout — so key-polling threads never block on stdout I/O.
+    // (A queued control event may still wait behind the single frame the writer
+    // is already flushing, but not behind the queued audio backlog.) A lost or
+    // stalled edge would leave the mic stuck muted or, worse, leak audio while
+    // the user believes push-to-mute is engaged.
+    if let Ok(serialized) = serde_json::to_string(&SidecarEvent {
+        event: "push_keybind.state",
+        params: json!({
             "kind": kind.as_str(),
             "active": active,
         }),
-    );
+    }) {
+        queue.push_control_event(serialized);
+    }
 }
 
 pub(crate) fn start_app_audio_binary_egress() -> Result<AppAudioBinaryEgress, String> {
@@ -395,4 +444,91 @@ pub(crate) fn audio_capture_binary_egress_info(
         "framing": APP_AUDIO_BINARY_EGRESS_FRAMING,
         "protocolVersion": PROTOCOL_VERSION,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OutputQueue;
+
+    fn audio_line(n: usize) -> String {
+        format!("audio-{n}")
+    }
+
+    #[test]
+    fn drains_control_events_before_queued_audio_frames() {
+        let queue = OutputQueue::new(8);
+
+        queue.push_audio_frame(audio_line(1));
+        queue.push_audio_frame(audio_line(2));
+        queue.push_control_event("control-1".to_string());
+        queue.push_control_event("control-2".to_string());
+
+        // Control events come out first, in FIFO order, ahead of the audio
+        // frames that were enqueued before them.
+        assert_eq!(queue.pop(), Some("control-1".to_string()));
+        assert_eq!(queue.pop(), Some("control-2".to_string()));
+        assert_eq!(queue.pop(), Some(audio_line(1)));
+        assert_eq!(queue.pop(), Some(audio_line(2)));
+    }
+
+    #[test]
+    fn overflowing_audio_lane_preserves_control_events() {
+        let capacity = 4;
+        let queue = OutputQueue::new(capacity);
+
+        queue.push_control_event("control".to_string());
+
+        // Push far more audio frames than the lane can hold.
+        let pushed = capacity * 3;
+        for n in 0..pushed {
+            queue.push_audio_frame(audio_line(n));
+        }
+
+        // The control event survives regardless of audio pressure and is drained
+        // first.
+        assert_eq!(queue.pop(), Some("control".to_string()));
+
+        // Only the most recent `capacity` audio frames remain; the rest were
+        // dropped-oldest.
+        let mut remaining = Vec::new();
+        for _ in 0..capacity {
+            remaining.push(queue.pop().expect("expected a queued audio frame"));
+        }
+        let expected: Vec<String> = ((pushed - capacity)..pushed).map(audio_line).collect();
+        assert_eq!(remaining, expected);
+        assert_eq!(queue.take_dropped_count(), (pushed - capacity) as u64);
+    }
+
+    #[test]
+    fn close_drains_queued_events_before_returning_none() {
+        let queue = OutputQueue::new(8);
+
+        queue.push_control_event("control".to_string());
+        queue.push_audio_frame(audio_line(1));
+        queue.close();
+
+        // Closing does not discard already-enqueued lines; they drain in
+        // priority order first, then `None` signals end-of-stream.
+        assert_eq!(queue.pop(), Some("control".to_string()));
+        assert_eq!(queue.pop(), Some(audio_line(1)));
+        assert_eq!(queue.pop(), None);
+    }
+
+    #[test]
+    fn audio_dropped_count_tracks_discarded_frames() {
+        let queue = OutputQueue::new(2);
+
+        queue.push_audio_frame(audio_line(1));
+        queue.push_audio_frame(audio_line(2));
+        assert_eq!(queue.take_dropped_count(), 0);
+
+        queue.push_audio_frame(audio_line(3)); // drops audio-1
+        queue.push_audio_frame(audio_line(4)); // drops audio-2
+        assert_eq!(queue.take_dropped_count(), 2);
+        // Taking the count resets it.
+        assert_eq!(queue.take_dropped_count(), 0);
+
+        assert_eq!(queue.pop(), Some(audio_line(3)));
+        assert_eq!(queue.pop(), Some(audio_line(4)));
+    }
 }

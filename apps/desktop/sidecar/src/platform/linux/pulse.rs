@@ -13,7 +13,7 @@ use base64::Engine;
 
 use crate::runtime::{enqueue_frame_event, try_write_app_audio_binary_frame};
 use crate::{
-    AudioTarget, CaptureEndReason, CaptureOutcome, FrameQueue, APP_AUDIO_CHANNELS,
+    AudioTarget, CaptureEndReason, CaptureOutcome, OutputQueue, APP_AUDIO_CHANNELS,
     APP_AUDIO_FRAME_BYTES, APP_AUDIO_FRAME_SIZE, APP_AUDIO_SAMPLE_RATE, PROTOCOL_VERSION,
 };
 
@@ -371,7 +371,7 @@ pub(super) fn capture_loopback_audio(
     target_pid: u32,
     self_exclude_pid: Option<u32>,
     stop_flag: Arc<AtomicBool>,
-    frame_queue: Arc<FrameQueue>,
+    frame_queue: Arc<OutputQueue>,
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
     if target_pid == 0 && self_exclude_pid.is_some() {
@@ -1270,7 +1270,7 @@ fn emit_linux_audio_frame(
     target_id: &str,
     sequence: u64,
     frame_samples: &[f32],
-    frame_queue: &Arc<FrameQueue>,
+    frame_queue: &Arc<OutputQueue>,
     app_audio_binary_stream: &Option<Arc<Mutex<Option<TcpStream>>>>,
 ) {
     let wrote_binary = app_audio_binary_stream

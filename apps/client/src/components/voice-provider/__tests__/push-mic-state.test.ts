@@ -2,8 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
 	clearHeldPushMicState,
 	resolveHeldPushMicTarget,
-	resolveMicMutedFailureRollbackTarget,
-	resolveMicMutedRollbackTarget,
+	resolveMicOperationFailurePolicy,
 	resolvePushMicState,
 	type TPushMicState,
 	updatePushMicStateForKeyEvent,
@@ -89,8 +88,8 @@ describe('push mic state', () => {
 		});
 	});
 
-	// The failed-server-sync revert in setMicMuted falls back on this to avoid
-	// unmuting a user who is still holding push-to-mute.
+	// resolvePushMicState and the confirmed-state reconciliation effect use this to
+	// know which mute state a currently held push key demands.
 	describe('resolveHeldPushMicTarget', () => {
 		it('demands muted while push-to-mute is held', () => {
 			expect(
@@ -115,72 +114,21 @@ describe('push mic state', () => {
 		});
 	});
 
-	// setMicMuted snapshots this before its server call so a failed sync rolls
-	// back to live push intent rather than the transient pre-operation state.
-	describe('resolveMicMutedRollbackTarget', () => {
-		it('stays muted when push-to-mute is held', () => {
-			expect(
-				resolveMicMutedRollbackTarget(
-					{ isPushToTalkHeld: false, isPushToMuteHeld: true, micMutedBeforePush: false },
-					false,
-				),
-			).toBe(true);
+	// setMicMuted consults this in its catch: a current microphone-state failure
+	// fails closed to muted (and resyncs that safe state), while a stale operation
+	// is ignored so it cannot clobber a newer in-flight user intent.
+	describe('resolveMicOperationFailurePolicy', () => {
+		it('fails closed to muted when the operation is still current', () => {
+			expect(resolveMicOperationFailurePolicy(true)).toEqual({
+				shouldFailClosed: true,
+				micMuted: true,
+			});
 		});
 
-		it('stays unmuted when push-to-talk is held', () => {
-			expect(
-				resolveMicMutedRollbackTarget(
-					{ isPushToTalkHeld: true, isPushToMuteHeld: false, micMutedBeforePush: true },
-					true,
-				),
-			).toBe(false);
-		});
-
-		it('restores the pre-push baseline when a release is pending and no key is held', () => {
-			// Push-to-talk release: key already up, baseline still set. A failed
-			// restore sync must return to the muted baseline, not the transient
-			// unmuted state the mic was in mid-hold.
-			expect(
-				resolveMicMutedRollbackTarget(
-					{ isPushToTalkHeld: false, isPushToMuteHeld: false, micMutedBeforePush: true },
-					false,
-				),
-			).toBe(true);
-		});
-
-		it('falls back to the pre-operation state when no push override is active', () => {
-			expect(resolveMicMutedRollbackTarget(idlePushMicState(), true)).toBe(true);
-			expect(resolveMicMutedRollbackTarget(idlePushMicState(), false)).toBe(false);
-		});
-
-		it('lets a push-to-mute press after the operation started override the captured fallback', () => {
-			const capturedRollback = resolveMicMutedRollbackTarget(idlePushMicState(), false);
-
-			expect(
-				resolveMicMutedRollbackTarget(
-					{ isPushToTalkHeld: false, isPushToMuteHeld: true, micMutedBeforePush: true },
-					capturedRollback,
-				),
-			).toBe(true);
-		});
-
-		it('preserves a captured release baseline after the live baseline is cleared', () => {
-			const capturedRollback = resolveMicMutedRollbackTarget(
-				{ isPushToTalkHeld: false, isPushToMuteHeld: false, micMutedBeforePush: true },
-				false,
-			);
-
-			expect(resolveMicMutedRollbackTarget(idlePushMicState(), capturedRollback)).toBe(true);
-		});
-	});
-
-	describe('resolveMicMutedFailureRollbackTarget', () => {
-		it('uses live push intent when server synchronization fails', () => {
-			expect(resolveMicMutedFailureRollbackTarget('server-sync', false, true)).toBe(true);
-		});
-
-		it('restores the previous safe state when microphone acquisition fails', () => {
-			expect(resolveMicMutedFailureRollbackTarget('microphone-acquisition', true, false)).toBe(true);
+		it('ignores the failure when the operation has been superseded', () => {
+			expect(resolveMicOperationFailurePolicy(false)).toEqual({
+				shouldFailClosed: false,
+			});
 		});
 	});
 });

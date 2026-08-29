@@ -9,13 +9,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use std::{fs, io, net::TcpStream, sync::Mutex};
+use std::{fs, net::TcpStream, sync::Mutex};
 
 use serde_json::{json, Value};
 use x11_dl::xlib;
 
 use crate::{
-    emit_push_keybind_state_event, AudioTarget, CaptureOutcome, FrameQueue, PushKeybindKind,
+    enqueue_push_keybind_state_event, AudioTarget, CaptureOutcome, OutputQueue, PushKeybindKind,
     PushKeybindWatcher,
 };
 
@@ -566,7 +566,7 @@ fn open_x11_and_resolve_keycodes(
 }
 
 fn start_push_keybind_watcher(
-    stdout: Arc<Mutex<io::Stdout>>,
+    output_queue: Arc<OutputQueue>,
     talk_keybind: Option<(LinuxPushKeybind, u8)>,
     mute_keybind: Option<(LinuxPushKeybind, u8)>,
 ) -> PushKeybindWatcher {
@@ -627,23 +627,23 @@ fn start_push_keybind_watcher(
 
             if next_talk_active != talk_active {
                 talk_active = next_talk_active;
-                emit_push_keybind_state_event(&stdout, PushKeybindKind::Talk, talk_active);
+                enqueue_push_keybind_state_event(&output_queue, PushKeybindKind::Talk, talk_active);
             }
 
             if next_mute_active != mute_active {
                 mute_active = next_mute_active;
-                emit_push_keybind_state_event(&stdout, PushKeybindKind::Mute, mute_active);
+                enqueue_push_keybind_state_event(&output_queue, PushKeybindKind::Mute, mute_active);
             }
 
             thread::sleep(Duration::from_millis(8));
         }
 
         if talk_active {
-            emit_push_keybind_state_event(&stdout, PushKeybindKind::Talk, false);
+            enqueue_push_keybind_state_event(&output_queue, PushKeybindKind::Talk, false);
         }
 
         if mute_active {
-            emit_push_keybind_state_event(&stdout, PushKeybindKind::Mute, false);
+            enqueue_push_keybind_state_event(&output_queue, PushKeybindKind::Mute, false);
         }
 
         unsafe { (xlib.XCloseDisplay)(display) };
@@ -653,7 +653,7 @@ fn start_push_keybind_watcher(
 }
 
 pub(crate) fn register_push_keybinds(
-    stdout: Arc<Mutex<io::Stdout>>,
+    output_queue: Arc<OutputQueue>,
     push_to_talk_keybind: Option<&str>,
     push_to_mute_keybind: Option<&str>,
 ) -> PushKeybindRegistration {
@@ -698,11 +698,13 @@ pub(crate) fn register_push_keybinds(
     );
 
     let mut registration = match push_keybind_support.backend {
-        LinuxPushKeybindBackend::Portal => {
-            register_push_keybinds_via_portal(stdout, talk_keybind.as_ref(), mute_keybind.as_ref())
-        }
+        LinuxPushKeybindBackend::Portal => register_push_keybinds_via_portal(
+            output_queue,
+            talk_keybind.as_ref(),
+            mute_keybind.as_ref(),
+        ),
         LinuxPushKeybindBackend::X11 => {
-            register_push_keybinds_via_x11(stdout, talk_keybind, mute_keybind)
+            register_push_keybinds_via_x11(output_queue, talk_keybind, mute_keybind)
         }
         LinuxPushKeybindBackend::Unsupported => {
             if let Some(reason) = push_keybind_support.global_push_keybinds_reason {
@@ -724,7 +726,7 @@ pub(crate) fn register_push_keybinds(
 }
 
 fn register_push_keybinds_via_x11(
-    stdout: Arc<Mutex<io::Stdout>>,
+    output_queue: Arc<OutputQueue>,
     talk_keybind: Option<LinuxPushKeybind>,
     mute_keybind: Option<LinuxPushKeybind>,
 ) -> PushKeybindRegistration {
@@ -750,7 +752,7 @@ fn register_push_keybinds_via_x11(
                 let talk_registered = resolved_talk.is_some();
                 let mute_registered = resolved_mute.is_some();
                 watcher = Some(start_push_keybind_watcher(
-                    stdout,
+                    output_queue,
                     resolved_talk.clone(),
                     resolved_mute.clone(),
                 ));
@@ -1126,7 +1128,7 @@ pub(crate) fn capture_loopback_audio(
     target_pid: u32,
     self_exclude_pid: Option<u32>,
     stop_flag: Arc<AtomicBool>,
-    frame_queue: Arc<FrameQueue>,
+    frame_queue: Arc<OutputQueue>,
     app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
 ) -> CaptureOutcome {
     pulse::capture_loopback_audio(

@@ -1,11 +1,10 @@
-use std::io;
 use std::net::TcpStream;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-use crate::{AudioTarget, CaptureOutcome, FrameQueue, PushKeybindWatcher};
+use crate::{AudioTarget, CaptureOutcome, OutputQueue, PushKeybindWatcher};
 
 pub(crate) struct PushKeybindRegistration {
     pub(crate) talk_registered: bool,
@@ -54,7 +53,7 @@ macro_rules! dispatch_platform_fn {
 
 dispatch_platform_fn! {
     fn register_push_keybinds(
-        stdout: Arc<Mutex<io::Stdout>>,
+        output_queue: Arc<OutputQueue>,
         push_to_talk_keybind: Option<&str>,
         push_to_mute_keybind: Option<&str>,
     ) -> PushKeybindRegistration {
@@ -123,7 +122,7 @@ dispatch_platform_fn! {
         target_pid: u32,
         self_exclude_pid: Option<u32>,
         stop_flag: Arc<AtomicBool>,
-        frame_queue: Arc<FrameQueue>,
+        frame_queue: Arc<OutputQueue>,
         app_audio_binary_stream: Option<Arc<Mutex<Option<TcpStream>>>>,
     ) -> CaptureOutcome {
         windows => windows::capture_loopback_audio,

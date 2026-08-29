@@ -60,34 +60,16 @@ const resolveHeldPushMicTarget = (state: TPushMicState): boolean | undefined => 
 	return undefined;
 };
 
-const resolveMicMutedRollbackTarget = (state: TPushMicState, previousMicMuted: boolean): boolean => {
-	// A failed mic sync must roll back to the live push intent, not the state
-	// captured before the operation. A held key's target wins; otherwise a pending
-	// restore baseline (e.g. after push-to-talk release, before it is cleared) wins.
-	// Only when no push override is in play is the pre-operation state the right
-	// fallback. Without this, a failed sync strands the mic open — while
-	// push-to-mute is held, or after push-to-talk release restores to unmuted.
-	const heldTarget = resolveHeldPushMicTarget(state);
-	if (heldTarget !== undefined) {
-		return heldTarget;
-	}
+type TMicOperationFailurePolicy = { shouldFailClosed: false } | { shouldFailClosed: true; micMuted: true };
 
-	if (state.micMutedBeforePush !== undefined) {
-		return state.micMutedBeforePush;
-	}
-
-	return previousMicMuted;
-};
-
-const resolveMicMutedFailureRollbackTarget = (
-	failureKind: 'server-sync' | 'microphone-acquisition',
-	previousMicMuted: boolean,
-	pushAwareRollbackMicMuted: boolean,
-): boolean => {
-	// A server-sync failure should preserve current push intent. An acquisition
-	// failure means that intent could not be fulfilled, so restore the known-safe
-	// state from before the attempted unmute instead.
-	return failureKind === 'microphone-acquisition' ? previousMicMuted : pushAwareRollbackMicMuted;
+const resolveMicOperationFailurePolicy = (isOperationCurrent: boolean): TMicOperationFailurePolicy => {
+	// Fail closed on any *current* microphone-state failure: leave the mic muted
+	// and resync that safe muted state to the server. Whether the server update
+	// failed or microphone acquisition failed after it succeeded, the known-safe
+	// outcome is the same — muted — so there is no push-aware rollback to resolve.
+	// A stale operation is ignored so a newer user intent already in flight is not
+	// clobbered by this late failure.
+	return isOperationCurrent ? { shouldFailClosed: true, micMuted: true } : { shouldFailClosed: false };
 };
 
 const resolvePushMicState = (state: TPushMicState, soundMuted: boolean): TPushMicResolution => {
@@ -120,12 +102,11 @@ const resolvePushMicState = (state: TPushMicState, soundMuted: boolean): TPushMi
 	};
 };
 
-export type { TPushMicState };
+export type { TMicOperationFailurePolicy, TPushMicState };
 export {
 	clearHeldPushMicState,
 	resolveHeldPushMicTarget,
-	resolveMicMutedFailureRollbackTarget,
-	resolveMicMutedRollbackTarget,
+	resolveMicOperationFailurePolicy,
 	resolvePushMicState,
 	updatePushMicStateForKeyEvent,
 };

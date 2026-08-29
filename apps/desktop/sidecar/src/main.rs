@@ -19,7 +19,7 @@ pub(crate) use protocol::{
 pub(crate) use protocol::{AudioTargetListResponse, ResolveSourceResult, MACOS_HELPER_BINARY_NAME};
 #[cfg(any(windows, target_os = "macos"))]
 pub(crate) use runtime::enqueue_frame_event;
-pub(crate) use runtime::{emit_push_keybind_state_event, FrameQueue, PushKeybindWatcher};
+pub(crate) use runtime::{enqueue_push_keybind_state_event, OutputQueue, PushKeybindWatcher};
 
 fn main() {
     app::run();
