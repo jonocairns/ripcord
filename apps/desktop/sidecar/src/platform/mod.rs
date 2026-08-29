@@ -1,3 +1,4 @@
+use std::io;
 use std::net::TcpStream;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -53,7 +54,7 @@ macro_rules! dispatch_platform_fn {
 
 dispatch_platform_fn! {
     fn register_push_keybinds(
-        frame_queue: Arc<FrameQueue>,
+        stdout: Arc<Mutex<io::Stdout>>,
         push_to_talk_keybind: Option<&str>,
         push_to_mute_keybind: Option<&str>,
     ) -> PushKeybindRegistration {

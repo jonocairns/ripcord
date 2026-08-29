@@ -4100,6 +4100,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startMicStream,
 		localAudioStream,
 		setMicProcessingMuted,
+		resolveHeldMicMutedIntent: () =>
+			resolveHeldPushMicTarget({
+				isPushToTalkHeld: isPushToTalkHeldRef.current,
+				isPushToMuteHeld: isPushToMuteHeldRef.current,
+				micMutedBeforePush: micMutedBeforePushRef.current,
+			}),
 		startWebcamStream,
 		stopWebcamStream,
 		startScreenShareStream,

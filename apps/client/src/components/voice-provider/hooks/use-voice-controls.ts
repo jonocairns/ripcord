@@ -22,6 +22,10 @@ type TUseVoiceControlsParams = {
 	startMicStream: () => Promise<TMicrophoneStartOutcome>;
 	localAudioStream: MediaStream | undefined;
 	setMicProcessingMuted: (micMuted: boolean) => void;
+	// Reports the mic-muted state a currently-held push key demands, or undefined
+	// when no push key is held. Used so a failed server sync reverts to the live
+	// push intent instead of unmuting a user who is still holding push-to-mute.
+	resolveHeldMicMutedIntent?: () => boolean | undefined;
 
 	startWebcamStream: () => Promise<void>;
 	stopWebcamStream: () => void;
@@ -66,6 +70,7 @@ const useVoiceControls = ({
 	startMicStream,
 	localAudioStream,
 	setMicProcessingMuted,
+	resolveHeldMicMutedIntent,
 	startWebcamStream,
 	stopWebcamStream,
 	startScreenShareStream,
@@ -81,6 +86,7 @@ const useVoiceControls = ({
 	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
 	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
 	const localAudioStreamRef = useLatestRef(localAudioStream);
+	const resolveHeldMicMutedIntentRef = useLatestRef(resolveHeldMicMutedIntent);
 	const voiceStateOperationSequenceRef = useRef(0);
 	const pendingShareMutateRef = useRef<Promise<unknown> | undefined>(undefined);
 	const isStartingWebcamRef = useRef(false);
@@ -180,11 +186,17 @@ const useVoiceControls = ({
 					return;
 				}
 
-				updateOwnVoiceState({ micMuted: previousMicMuted });
-				updateVoiceReconnectIntentState({ micMuted: previousMicMuted });
-				applyMicMuted(localAudioStreamRef.current, previousMicMuted);
+				// If a push key is still held, reverting to previousMicMuted would fight
+				// the live push intent — e.g. unmuting while push-to-mute is down, leaking
+				// audio. Honor the held target and fall back to the pre-call state only
+				// when no push key is engaged.
+				const revertMicMuted = resolveHeldMicMutedIntentRef.current?.() ?? previousMicMuted;
+
+				updateOwnVoiceState({ micMuted: revertMicMuted });
+				updateVoiceReconnectIntentState({ micMuted: revertMicMuted });
+				applyMicMuted(localAudioStreamRef.current, revertMicMuted);
 				if (serverUpdated) {
-					void sendOwnVoiceStateUpdate({ micMuted: previousMicMuted }).catch((syncError) => {
+					void sendOwnVoiceStateUpdate({ micMuted: revertMicMuted }).catch((syncError) => {
 						logVoice('Failed to compensate server microphone state after local acquisition failure', {
 							error: syncError,
 						});

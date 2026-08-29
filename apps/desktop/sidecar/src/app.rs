@@ -352,7 +352,7 @@ impl SidecarApp {
         stop_push_keybind_watcher(state);
 
         let registration = platform::register_push_keybinds(
-            Arc::clone(&self.frame_queue),
+            Arc::clone(&self.stdout),
             parsed.push_to_talk_keybind.as_deref(),
             parsed.push_to_mute_keybind.as_deref(),
         );

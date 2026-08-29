@@ -12,7 +12,7 @@ use std::{
 };
 
 use crate::{
-    enqueue_frame_event, enqueue_push_keybind_state_event, AudioTarget, AudioTargetListResponse,
+    emit_push_keybind_state_event, enqueue_frame_event, AudioTarget, AudioTargetListResponse,
     CaptureEndReason, CaptureOutcome, FrameQueue, PushKeybindKind, PushKeybindWatcher,
     ResolveSourceResult, APP_AUDIO_CHANNELS, APP_AUDIO_SAMPLE_RATE, MACOS_HELPER_BINARY_NAME,
     MAX_APP_AUDIO_BINARY_FRAME_BYTES, PROTOCOL_VERSION,
@@ -263,7 +263,7 @@ fn is_push_keybind_active(keybind: &MacosPushKeybind) -> bool {
 }
 
 fn start_push_keybind_watcher(
-    frame_queue: Arc<FrameQueue>,
+    stdout: Arc<Mutex<io::Stdout>>,
     talk_keybind: Option<MacosPushKeybind>,
     mute_keybind: Option<MacosPushKeybind>,
 ) -> PushKeybindWatcher {
@@ -280,23 +280,23 @@ fn start_push_keybind_watcher(
 
             if next_talk_active != talk_active {
                 talk_active = next_talk_active;
-                enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Talk, talk_active);
+                emit_push_keybind_state_event(&stdout, PushKeybindKind::Talk, talk_active);
             }
 
             if next_mute_active != mute_active {
                 mute_active = next_mute_active;
-                enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Mute, mute_active);
+                emit_push_keybind_state_event(&stdout, PushKeybindKind::Mute, mute_active);
             }
 
             thread::sleep(Duration::from_millis(8));
         }
 
         if talk_active {
-            enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Talk, false);
+            emit_push_keybind_state_event(&stdout, PushKeybindKind::Talk, false);
         }
 
         if mute_active {
-            enqueue_push_keybind_state_event(&frame_queue, PushKeybindKind::Mute, false);
+            emit_push_keybind_state_event(&stdout, PushKeybindKind::Mute, false);
         }
     });
 
@@ -304,7 +304,7 @@ fn start_push_keybind_watcher(
 }
 
 pub(crate) fn register_push_keybinds(
-    frame_queue: Arc<FrameQueue>,
+    stdout: Arc<Mutex<io::Stdout>>,
     push_to_talk_keybind: Option<&str>,
     push_to_mute_keybind: Option<&str>,
 ) -> PushKeybindRegistration {
@@ -332,11 +332,7 @@ pub(crate) fn register_push_keybinds(
     }
 
     let watcher = if talk_keybind.is_some() || mute_keybind.is_some() {
-        Some(start_push_keybind_watcher(
-            frame_queue,
-            talk_keybind,
-            mute_keybind,
-        ))
+        Some(start_push_keybind_watcher(stdout, talk_keybind, mute_keybind))
     } else {
         None
     };

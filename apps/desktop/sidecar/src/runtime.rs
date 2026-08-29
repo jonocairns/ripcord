@@ -316,22 +316,24 @@ pub(crate) fn try_write_app_audio_binary_frame(
 }
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
-pub(crate) fn enqueue_push_keybind_state_event(
-    queue: &Arc<FrameQueue>,
+pub(crate) fn emit_push_keybind_state_event(
+    stdout: &Arc<Mutex<io::Stdout>>,
     kind: PushKeybindKind,
     active: bool,
 ) {
-    let params = json!({
-        "kind": kind.as_str(),
-        "active": active,
-    });
-
-    if let Ok(serialized) = serde_json::to_string(&SidecarEvent {
-        event: "push_keybind.state",
-        params,
-    }) {
-        queue.push_line(serialized);
-    }
+    // Push-keybind state changes must never be dropped or stalled behind bulk
+    // audio frames, so they bypass the bounded frame queue and write straight to
+    // stdout the way responses and lifecycle events do. A lost edge would leave
+    // the mic stuck muted or, worse, leak audio while the user believes
+    // push-to-mute is engaged.
+    write_event(
+        stdout,
+        "push_keybind.state",
+        json!({
+            "kind": kind.as_str(),
+            "active": active,
+        }),
+    );
 }
 
 pub(crate) fn start_app_audio_binary_egress() -> Result<AppAudioBinaryEgress, String> {

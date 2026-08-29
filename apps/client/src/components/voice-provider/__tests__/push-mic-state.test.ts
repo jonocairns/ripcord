@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
 	clearHeldPushMicState,
+	resolveHeldPushMicTarget,
 	resolvePushMicState,
 	type TPushMicState,
 	updatePushMicStateForKeyEvent,
@@ -83,6 +84,32 @@ describe('push mic state', () => {
 		expect(resolvePushMicState(idlePushMicState(), false)).toEqual({
 			targetMicMuted: undefined,
 			shouldClearMicMutedBeforePush: false,
+		});
+	});
+
+	// The failed-server-sync revert in setMicMuted falls back on this to avoid
+	// unmuting a user who is still holding push-to-mute.
+	describe('resolveHeldPushMicTarget', () => {
+		it('demands muted while push-to-mute is held', () => {
+			expect(
+				resolveHeldPushMicTarget({ isPushToTalkHeld: false, isPushToMuteHeld: true, micMutedBeforePush: false }),
+			).toBe(true);
+		});
+
+		it('demands unmuted while push-to-talk is held', () => {
+			expect(
+				resolveHeldPushMicTarget({ isPushToTalkHeld: true, isPushToMuteHeld: false, micMutedBeforePush: true }),
+			).toBe(false);
+		});
+
+		it('prefers muted when both keys are held', () => {
+			expect(
+				resolveHeldPushMicTarget({ isPushToTalkHeld: true, isPushToMuteHeld: true, micMutedBeforePush: false }),
+			).toBe(true);
+		});
+
+		it('has no held target when neither key is down', () => {
+			expect(resolveHeldPushMicTarget(idlePushMicState())).toBeUndefined();
 		});
 	});
 });
