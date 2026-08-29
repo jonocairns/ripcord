@@ -60,6 +60,25 @@ const resolveHeldPushMicTarget = (state: TPushMicState): boolean | undefined => 
 	return undefined;
 };
 
+const resolveMicMutedRollbackTarget = (state: TPushMicState, previousMicMuted: boolean): boolean => {
+	// A failed mic sync must roll back to the live push intent, not the state
+	// captured before the operation. A held key's target wins; otherwise a pending
+	// restore baseline (e.g. after push-to-talk release, before it is cleared) wins.
+	// Only when no push override is in play is the pre-operation state the right
+	// fallback. Without this, a failed sync strands the mic open — while
+	// push-to-mute is held, or after push-to-talk release restores to unmuted.
+	const heldTarget = resolveHeldPushMicTarget(state);
+	if (heldTarget !== undefined) {
+		return heldTarget;
+	}
+
+	if (state.micMutedBeforePush !== undefined) {
+		return state.micMutedBeforePush;
+	}
+
+	return previousMicMuted;
+};
+
 const resolvePushMicState = (state: TPushMicState, soundMuted: boolean): TPushMicResolution => {
 	const heldTarget = resolveHeldPushMicTarget(state);
 
@@ -91,4 +110,10 @@ const resolvePushMicState = (state: TPushMicState, soundMuted: boolean): TPushMi
 };
 
 export type { TPushMicState };
-export { clearHeldPushMicState, resolveHeldPushMicTarget, resolvePushMicState, updatePushMicStateForKeyEvent };
+export {
+	clearHeldPushMicState,
+	resolveHeldPushMicTarget,
+	resolveMicMutedRollbackTarget,
+	resolvePushMicState,
+	updatePushMicStateForKeyEvent,
+};

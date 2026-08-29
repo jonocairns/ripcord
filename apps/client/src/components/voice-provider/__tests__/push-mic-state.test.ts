@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
 	clearHeldPushMicState,
 	resolveHeldPushMicTarget,
+	resolveMicMutedRollbackTarget,
 	resolvePushMicState,
 	type TPushMicState,
 	updatePushMicStateForKeyEvent,
@@ -110,6 +111,45 @@ describe('push mic state', () => {
 
 		it('has no held target when neither key is down', () => {
 			expect(resolveHeldPushMicTarget(idlePushMicState())).toBeUndefined();
+		});
+	});
+
+	// setMicMuted snapshots this before its server call so a failed sync rolls
+	// back to live push intent rather than the transient pre-operation state.
+	describe('resolveMicMutedRollbackTarget', () => {
+		it('stays muted when push-to-mute is held', () => {
+			expect(
+				resolveMicMutedRollbackTarget(
+					{ isPushToTalkHeld: false, isPushToMuteHeld: true, micMutedBeforePush: false },
+					false,
+				),
+			).toBe(true);
+		});
+
+		it('stays unmuted when push-to-talk is held', () => {
+			expect(
+				resolveMicMutedRollbackTarget(
+					{ isPushToTalkHeld: true, isPushToMuteHeld: false, micMutedBeforePush: true },
+					true,
+				),
+			).toBe(false);
+		});
+
+		it('restores the pre-push baseline when a release is pending and no key is held', () => {
+			// Push-to-talk release: key already up, baseline still set. A failed
+			// restore sync must return to the muted baseline, not the transient
+			// unmuted state the mic was in mid-hold.
+			expect(
+				resolveMicMutedRollbackTarget(
+					{ isPushToTalkHeld: false, isPushToMuteHeld: false, micMutedBeforePush: true },
+					false,
+				),
+			).toBe(true);
+		});
+
+		it('falls back to the pre-operation state when no push override is active', () => {
+			expect(resolveMicMutedRollbackTarget(idlePushMicState(), true)).toBe(true);
+			expect(resolveMicMutedRollbackTarget(idlePushMicState(), false)).toBe(false);
 		});
 	});
 });

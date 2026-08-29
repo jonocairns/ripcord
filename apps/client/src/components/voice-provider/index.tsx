@@ -130,6 +130,7 @@ import { prewarmVoiceEngines } from './prewarm';
 import {
 	clearHeldPushMicState,
 	resolveHeldPushMicTarget,
+	resolveMicMutedRollbackTarget,
 	resolvePushMicState,
 	type TPushMicState,
 	updatePushMicStateForKeyEvent,
@@ -4100,12 +4101,15 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startMicStream,
 		localAudioStream,
 		setMicProcessingMuted,
-		resolveHeldMicMutedIntent: () =>
-			resolveHeldPushMicTarget({
-				isPushToTalkHeld: isPushToTalkHeldRef.current,
-				isPushToMuteHeld: isPushToMuteHeldRef.current,
-				micMutedBeforePush: micMutedBeforePushRef.current,
-			}),
+		resolveMicMutedRollbackTarget: (previousMicMuted) =>
+			resolveMicMutedRollbackTarget(
+				{
+					isPushToTalkHeld: isPushToTalkHeldRef.current,
+					isPushToMuteHeld: isPushToMuteHeldRef.current,
+					micMutedBeforePush: micMutedBeforePushRef.current,
+				},
+				previousMicMuted,
+			),
 		startWebcamStream,
 		stopWebcamStream,
 		startScreenShareStream,

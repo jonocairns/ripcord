@@ -22,10 +22,12 @@ type TUseVoiceControlsParams = {
 	startMicStream: () => Promise<TMicrophoneStartOutcome>;
 	localAudioStream: MediaStream | undefined;
 	setMicProcessingMuted: (micMuted: boolean) => void;
-	// Reports the mic-muted state a currently-held push key demands, or undefined
-	// when no push key is held. Used so a failed server sync reverts to the live
-	// push intent instead of unmuting a user who is still holding push-to-mute.
-	resolveHeldMicMutedIntent?: () => boolean | undefined;
+	// Given the pre-operation mic-muted state, returns the state a failed server
+	// sync should roll back to — honoring live push intent (a held key, or a
+	// pending restore baseline) so a failed sync cannot strand the mic open while
+	// push-to-mute is held or after push-to-talk release. Snapshotted before the
+	// await so the baseline is still present when the rollback runs.
+	resolveMicMutedRollbackTarget?: (previousMicMuted: boolean) => boolean;
 
 	startWebcamStream: () => Promise<void>;
 	stopWebcamStream: () => void;
@@ -70,7 +72,7 @@ const useVoiceControls = ({
 	startMicStream,
 	localAudioStream,
 	setMicProcessingMuted,
-	resolveHeldMicMutedIntent,
+	resolveMicMutedRollbackTarget,
 	startWebcamStream,
 	stopWebcamStream,
 	startScreenShareStream,
@@ -86,7 +88,7 @@ const useVoiceControls = ({
 	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
 	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
 	const localAudioStreamRef = useLatestRef(localAudioStream);
-	const resolveHeldMicMutedIntentRef = useLatestRef(resolveHeldMicMutedIntent);
+	const resolveMicMutedRollbackTargetRef = useLatestRef(resolveMicMutedRollbackTarget);
 	const voiceStateOperationSequenceRef = useRef(0);
 	const pendingShareMutateRef = useRef<Promise<unknown> | undefined>(undefined);
 	const isStartingWebcamRef = useRef(false);
@@ -149,6 +151,10 @@ const useVoiceControls = ({
 
 			const shouldPlaySound = options?.playSound ?? true;
 			const previousMicMuted = latestOwnVoiceState.micMuted;
+			// Capture the rollback target now, before the await: a push-to-talk
+			// release fires this restore and then synchronously clears the baseline,
+			// so reading it in the catch would already have lost it.
+			const rollbackMicMuted = resolveMicMutedRollbackTargetRef.current?.(previousMicMuted) ?? previousMicMuted;
 			const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
 			voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
 			const { operationToken } = voiceStateOperation;
@@ -186,17 +192,11 @@ const useVoiceControls = ({
 					return;
 				}
 
-				// If a push key is still held, reverting to previousMicMuted would fight
-				// the live push intent — e.g. unmuting while push-to-mute is down, leaking
-				// audio. Honor the held target and fall back to the pre-call state only
-				// when no push key is engaged.
-				const revertMicMuted = resolveHeldMicMutedIntentRef.current?.() ?? previousMicMuted;
-
-				updateOwnVoiceState({ micMuted: revertMicMuted });
-				updateVoiceReconnectIntentState({ micMuted: revertMicMuted });
-				applyMicMuted(localAudioStreamRef.current, revertMicMuted);
+				updateOwnVoiceState({ micMuted: rollbackMicMuted });
+				updateVoiceReconnectIntentState({ micMuted: rollbackMicMuted });
+				applyMicMuted(localAudioStreamRef.current, rollbackMicMuted);
 				if (serverUpdated) {
-					void sendOwnVoiceStateUpdate({ micMuted: revertMicMuted }).catch((syncError) => {
+					void sendOwnVoiceStateUpdate({ micMuted: rollbackMicMuted }).catch((syncError) => {
 						logVoice('Failed to compensate server microphone state after local acquisition failure', {
 							error: syncError,
 						});
