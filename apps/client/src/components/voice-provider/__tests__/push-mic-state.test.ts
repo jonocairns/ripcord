@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
 	clearHeldPushMicState,
 	resolveHeldPushMicTarget,
+	resolveMicMutedFailureRollbackTarget,
 	resolveMicMutedRollbackTarget,
 	resolvePushMicState,
 	type TPushMicState,
@@ -150,6 +151,36 @@ describe('push mic state', () => {
 		it('falls back to the pre-operation state when no push override is active', () => {
 			expect(resolveMicMutedRollbackTarget(idlePushMicState(), true)).toBe(true);
 			expect(resolveMicMutedRollbackTarget(idlePushMicState(), false)).toBe(false);
+		});
+
+		it('lets a push-to-mute press after the operation started override the captured fallback', () => {
+			const capturedRollback = resolveMicMutedRollbackTarget(idlePushMicState(), false);
+
+			expect(
+				resolveMicMutedRollbackTarget(
+					{ isPushToTalkHeld: false, isPushToMuteHeld: true, micMutedBeforePush: true },
+					capturedRollback,
+				),
+			).toBe(true);
+		});
+
+		it('preserves a captured release baseline after the live baseline is cleared', () => {
+			const capturedRollback = resolveMicMutedRollbackTarget(
+				{ isPushToTalkHeld: false, isPushToMuteHeld: false, micMutedBeforePush: true },
+				false,
+			);
+
+			expect(resolveMicMutedRollbackTarget(idlePushMicState(), capturedRollback)).toBe(true);
+		});
+	});
+
+	describe('resolveMicMutedFailureRollbackTarget', () => {
+		it('uses live push intent when server synchronization fails', () => {
+			expect(resolveMicMutedFailureRollbackTarget('server-sync', false, true)).toBe(true);
+		});
+
+		it('restores the previous safe state when microphone acquisition fails', () => {
+			expect(resolveMicMutedFailureRollbackTarget('microphone-acquisition', true, false)).toBe(true);
 		});
 	});
 });

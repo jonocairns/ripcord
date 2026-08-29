@@ -15,6 +15,7 @@ import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
 import type { TMicrophoneStartOutcome } from '../microphone-pipeline-controller';
+import { resolveMicMutedFailureRollbackTarget } from '../push-mic-state';
 import { shouldApplyVoiceStateOperationResult, startVoiceStateOperation } from '../voice-state-operation';
 import { useScreenShareStage } from './use-screen-share-stage';
 
@@ -22,11 +23,9 @@ type TUseVoiceControlsParams = {
 	startMicStream: () => Promise<TMicrophoneStartOutcome>;
 	localAudioStream: MediaStream | undefined;
 	setMicProcessingMuted: (micMuted: boolean) => void;
-	// Given the pre-operation mic-muted state, returns the state a failed server
-	// sync should roll back to — honoring live push intent (a held key, or a
-	// pending restore baseline) so a failed sync cannot strand the mic open while
-	// push-to-mute is held or after push-to-talk release. Snapshotted before the
-	// await so the baseline is still present when the rollback runs.
+	// Given a fallback mic-muted state, resolves the current push-aware rollback
+	// target. Called before the await to preserve a pending release baseline, then
+	// again after a server-sync failure so a key pressed mid-operation still wins.
 	resolveMicMutedRollbackTarget?: (previousMicMuted: boolean) => boolean;
 
 	startWebcamStream: () => Promise<void>;
@@ -154,7 +153,8 @@ const useVoiceControls = ({
 			// Capture the rollback target now, before the await: a push-to-talk
 			// release fires this restore and then synchronously clears the baseline,
 			// so reading it in the catch would already have lost it.
-			const rollbackMicMuted = resolveMicMutedRollbackTargetRef.current?.(previousMicMuted) ?? previousMicMuted;
+			const rollbackMicMutedBeforeAwait =
+				resolveMicMutedRollbackTargetRef.current?.(previousMicMuted) ?? previousMicMuted;
 			const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
 			voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
 			const { operationToken } = voiceStateOperation;
@@ -191,6 +191,17 @@ const useVoiceControls = ({
 				if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
 					return;
 				}
+
+				const failureKind = serverUpdated ? 'microphone-acquisition' : 'server-sync';
+				const livePushRollbackMicMuted =
+					failureKind === 'server-sync'
+						? (resolveMicMutedRollbackTargetRef.current?.(rollbackMicMutedBeforeAwait) ?? rollbackMicMutedBeforeAwait)
+						: rollbackMicMutedBeforeAwait;
+				const rollbackMicMuted = resolveMicMutedFailureRollbackTarget(
+					failureKind,
+					previousMicMuted,
+					livePushRollbackMicMuted,
+				);
 
 				updateOwnVoiceState({ micMuted: rollbackMicMuted });
 				updateVoiceReconnectIntentState({ micMuted: rollbackMicMuted });

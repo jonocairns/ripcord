@@ -79,6 +79,17 @@ const resolveMicMutedRollbackTarget = (state: TPushMicState, previousMicMuted: b
 	return previousMicMuted;
 };
 
+const resolveMicMutedFailureRollbackTarget = (
+	failureKind: 'server-sync' | 'microphone-acquisition',
+	previousMicMuted: boolean,
+	pushAwareRollbackMicMuted: boolean,
+): boolean => {
+	// A server-sync failure should preserve current push intent. An acquisition
+	// failure means that intent could not be fulfilled, so restore the known-safe
+	// state from before the attempted unmute instead.
+	return failureKind === 'microphone-acquisition' ? previousMicMuted : pushAwareRollbackMicMuted;
+};
+
 const resolvePushMicState = (state: TPushMicState, soundMuted: boolean): TPushMicResolution => {
 	const heldTarget = resolveHeldPushMicTarget(state);
 
@@ -113,6 +124,7 @@ export type { TPushMicState };
 export {
 	clearHeldPushMicState,
 	resolveHeldPushMicTarget,
+	resolveMicMutedFailureRollbackTarget,
 	resolveMicMutedRollbackTarget,
 	resolvePushMicState,
 	updatePushMicStateForKeyEvent,
