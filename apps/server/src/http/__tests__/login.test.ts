@@ -102,7 +102,7 @@ describe('/login', () => {
 		const newUser = await tdb.select().from(users).where(eq(users.identity, 'newuser')).get();
 
 		expect(newUser).toBeTruthy();
-		expect(newUser?.name).toBe('SharkordUser');
+		expect(newUser?.name).toBe('RipcordUser');
 	});
 
 	test('should fail when allowNewUsers is false and no invite provided', async () => {
