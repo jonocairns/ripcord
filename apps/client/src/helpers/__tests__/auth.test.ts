@@ -40,7 +40,10 @@ const readStoredTokens = () => ({
 	refresh: (globalThis as { localStorage: Storage }).localStorage.getItem('sharkord-refresh-token'),
 });
 
+const actualServerConfig = await import('@/runtime/server-config');
+
 mock.module('@/runtime/server-config', () => ({
+	...actualServerConfig,
 	getRuntimeServerConfig: () => ({
 		source: 'web',
 		serverUrl: SERVER_URL,
