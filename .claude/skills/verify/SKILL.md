@@ -8,7 +8,7 @@ description: Drive the running Ripcord web client with Playwright to verify chan
 ## Launch the stack
 
 - Dev stack: `nix develop -c bun run start:web` from the repo root (concurrently runs client + server). Client: `http://127.0.0.1:5173`. Server logs go to wherever you redirected stdout; grep for `[voice-reconnect]` scope lines (`voice_disconnect_grace`, `voice_restore_or_join`) — they are the authoritative trace of reconnect behavior.
-- Accounts: `claude`/`claude` (display name "SharkordUser"), observer `e2e-peer-b`/`claude` (display name "E2E Peer B"). Voice channels seeded: Lounge, Gaming Room, Work Mode.
+- Accounts: `claude`/`claude` (display name "RipcordUser"), observer `e2e-peer-b`/`claude` (display name "E2E Peer B"). Voice channels seeded: Lounge, Gaming Room, Work Mode.
 
 ## Playwright setup (no repo dep)
 
