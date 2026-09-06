@@ -34,7 +34,7 @@ const seedDatabase = async () => {
 	const originalToken = IS_DEVELOPMENT ? 'dev' : randomUUIDv7();
 
 	const initialSettings: TISettings = {
-		name: 'sharkord',
+		name: 'ripcord',
 		description: 'This is the default Ripcord description. Change me in the server settings!',
 		password: '',
 		serverId: Bun.randomUUIDv7(),
