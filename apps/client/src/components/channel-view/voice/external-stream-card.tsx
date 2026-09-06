@@ -587,7 +587,7 @@ const ExternalStreamCard = memo(
 				<PopoutWindow
 					isOpen={isPoppedOut && !!hasVideo}
 					windowName={popoutWindowName}
-					title={`${stream.title || 'External Stream'} - Sharkord`}
+					title={`${stream.title || 'External Stream'} - Ripcord`}
 					onClose={handleClosePopout}
 					onBlocked={handlePopoutBlocked}
 					targetWindow={popoutWindow}

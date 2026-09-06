@@ -300,7 +300,7 @@ const moderatePeer = async (
 		}, displayName);
 	}
 
-	const owner = await createPeer(browser, { identity: 'sharkord', password: 'sharkord' });
+	const owner = await createPeer(browser, { identity: 'ripcord', password: 'ripcord' });
 
 	try {
 		await owner.page.evaluate(

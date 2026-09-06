@@ -48,7 +48,7 @@
 		]
 	},
 	"review": {
-		"repositoryLabel": "Sharkord (ripcord)",
+		"repositoryLabel": "Ripcord (ripcord)",
 		"highRiskAreas": ["auth", "migrations", "data access", "payments/billing", "critical workflows"],
 		"maxChangedFilesForFullReview": 100,
 		"coreSkills": [

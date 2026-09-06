@@ -393,9 +393,9 @@ pub(super) fn capture_loopback_audio(
         Err(error) => return CaptureOutcome::capture_error(error),
     };
 
-    let app_name = CString::new("Sharkord Capture Sidecar")
-        .unwrap_or_else(|_| CString::new("Sharkord").unwrap());
-    let stream_name = CString::new("Sharkord App Audio Capture")
+    let app_name = CString::new("Ripcord Capture Sidecar")
+        .unwrap_or_else(|_| CString::new("Ripcord").unwrap());
+    let stream_name = CString::new("Ripcord App Audio Capture")
         .unwrap_or_else(|_| CString::new("Capture").unwrap());
     let source_name = match CString::new(capture_source.monitor_source_name.clone()) {
         Ok(source_name) => source_name,
@@ -886,7 +886,7 @@ impl LinuxPulseConnection {
         unsafe { (lib.pa_threaded_mainloop_lock)(mainloop) };
 
         let app_name =
-            CString::new("Sharkord Capture Sidecar").map_err(|error| error.to_string())?;
+            CString::new("Ripcord Capture Sidecar").map_err(|error| error.to_string())?;
         let context = unsafe {
             (lib.pa_context_new)(
                 (lib.pa_threaded_mainloop_get_api)(mainloop),

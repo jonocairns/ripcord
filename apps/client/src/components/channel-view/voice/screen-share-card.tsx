@@ -478,7 +478,7 @@ const ScreenShareCard = memo(
 							<Monitor className="size-10 text-live-screen/80" />
 							<div className="space-y-1">
 								<p className="text-sm font-semibold text-white">You&apos;re sharing your screen</p>
-								<p className="text-xs text-white/60">Preview hidden while Sharkord is unfocused</p>
+								<p className="text-xs text-white/60">Preview hidden while Ripcord is unfocused</p>
 							</div>
 							{watcherCount > 0 && (
 								<div className="flex items-center gap-1.5 text-xs text-white/60">
@@ -546,7 +546,7 @@ const ScreenShareCard = memo(
 				<PopoutWindow
 					isOpen={isPoppedOut}
 					windowName={popoutWindowName}
-					title={`${user.name}'s screen - Sharkord`}
+					title={`${user.name}'s screen - Ripcord`}
 					onClose={handleClosePopout}
 					onBlocked={handlePopoutBlocked}
 					targetWindow={popoutWindow}
