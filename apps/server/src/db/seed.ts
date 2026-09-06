@@ -35,7 +35,7 @@ const seedDatabase = async () => {
 
 	const initialSettings: TISettings = {
 		name: 'sharkord',
-		description: 'This is the default Sharkord description. Change me in the server settings!',
+		description: 'This is the default Ripcord description. Change me in the server settings!',
 		password: '',
 		serverId: Bun.randomUUIDv7(),
 		secretToken: await sha256(originalToken),
@@ -127,12 +127,12 @@ const seedDatabase = async () => {
 	const initialUsers: TIUser[] = [
 		{
 			// In development, keep the bootstrap account identity predictable.
-			identity: IS_DEVELOPMENT ? 'sharkord' : await sha256(randomUUIDv7()),
-			name: 'Sharkord',
+			identity: IS_DEVELOPMENT ? 'ripcord' : await sha256(randomUUIDv7()),
+			name: 'Ripcord',
 			avatarId: null,
-			password: await hashPassword('sharkord'),
+			password: await hashPassword('ripcord'),
 			bannerId: null,
-			bio: 'Hey, I am Sharkord!',
+			bio: 'Hey, I am Ripcord!',
 			bannerColor: 'linear-gradient(90deg, rgba(67,49,215,1) 30%, rgba(182,1,116,1) 100%)',
 			createdAt: firstStart,
 		},
@@ -141,7 +141,7 @@ const seedDatabase = async () => {
 	const initialMessages: TIMessage[] = [
 		{
 			channelId: 1,
-			content: '<p>Welcome to sharkord!</p>',
+			content: '<p>Welcome to ripcord!</p>',
 			metadata: null,
 			userId: 1,
 			createdAt: firstStart,
