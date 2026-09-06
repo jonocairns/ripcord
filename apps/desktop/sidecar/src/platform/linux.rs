@@ -925,7 +925,7 @@ fn probe_linux_push_keybind_support(
         if portal_available {
             (
                 Some(format!(
-                    "This Wayland session advertises the Global Shortcuts portal backend `{backend_name}`, but Sharkord still relies on X11/XWayland polling for global push keybinds."
+                    "This Wayland session advertises the Global Shortcuts portal backend `{backend_name}`, but Ripcord still relies on X11/XWayland polling for global push keybinds."
                 )),
                 Some("linux-wayland-global-shortcuts-portal-available"),
             )

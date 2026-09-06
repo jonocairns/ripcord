@@ -69,7 +69,7 @@ const createIssueFromCode = (code: string | undefined, message: string): TDeskto
 				message,
 				guidance: [
 					'Ensure PipeWire or PulseAudio-compatible audio services are running for the current session, then retry screen sharing.',
-					'Restart Sharkord after fixing the Linux audio server or compatibility layer.',
+					'Restart Ripcord after fixing the Linux audio server or compatibility layer.',
 				],
 			};
 		case 'linux-pipewire-tools-missing':
@@ -80,7 +80,7 @@ const createIssueFromCode = (code: string | undefined, message: string): TDeskto
 				title: 'Linux audio tooling unavailable',
 				message,
 				guidance: [
-					'Install the required Linux audio capture tooling, or update Sharkord to a build with the native Linux backend.',
+					'Install the required Linux audio capture tooling, or update Ripcord to a build with the native Linux backend.',
 					'Use system audio or no shared audio until Linux audio capture is available.',
 				],
 			};
@@ -132,7 +132,7 @@ const createIssueFromCode = (code: string | undefined, message: string): TDeskto
 				message,
 				guidance: [
 					'Use an X11 or XWayland session for global push-to-talk and push-to-mute with the current desktop build.',
-					'A Wayland Global Shortcuts portal was detected, but this Sharkord build does not use that backend yet.',
+					'A Wayland Global Shortcuts portal was detected, but this Ripcord build does not use that backend yet.',
 				],
 			};
 		case 'linux-wayland-global-shortcuts-portal-required':
@@ -156,7 +156,7 @@ const createIssueFromCode = (code: string | undefined, message: string): TDeskto
 				message,
 				guidance: [
 					'Use an X11 or XWayland session for global push-to-talk and push-to-mute.',
-					'If your desktop environment adds a Global Shortcuts portal backend later, Sharkord still needs an explicit Wayland integration path.',
+					'If your desktop environment adds a Global Shortcuts portal backend later, Ripcord still needs an explicit Wayland integration path.',
 				],
 			};
 		case 'macos-helper-unavailable':
@@ -166,7 +166,7 @@ const createIssueFromCode = (code: string | undefined, message: string): TDeskto
 				severity: 'error',
 				title: 'macOS capture helper unavailable',
 				message,
-				guidance: ['Reinstall or rebuild Sharkord so the macOS audio helper is bundled correctly.'],
+				guidance: ['Reinstall or rebuild Ripcord so the macOS audio helper is bundled correctly.'],
 			};
 		case 'macos-version-unsupported':
 			return {
@@ -184,7 +184,7 @@ const createIssueFromCode = (code: string | undefined, message: string): TDeskto
 				severity: 'error',
 				title: 'Screen Recording permission required',
 				message,
-				guidance: ['Grant Sharkord Screen Recording access in System Settings, then try screen sharing again.'],
+				guidance: ['Grant Ripcord Screen Recording access in System Settings, then try screen sharing again.'],
 			};
 		case 'macos-screen-audio-unavailable':
 			return {
@@ -195,7 +195,7 @@ const createIssueFromCode = (code: string | undefined, message: string): TDeskto
 				message,
 				guidance: [
 					'Check Screen Recording permission and try again.',
-					'If the issue persists, reinstall Sharkord to restore the audio helper.',
+					'If the issue persists, reinstall Ripcord to restore the audio helper.',
 				],
 			};
 		case 'desktop-sidecar-unavailable':
@@ -207,8 +207,8 @@ const createIssueFromCode = (code: string | undefined, message: string): TDeskto
 				title: 'Desktop audio sidecar unavailable',
 				message,
 				guidance: [
-					'Restart Sharkord and retry screen sharing.',
-					'If the sidecar binary is missing, reinstall Sharkord.',
+					'Restart Ripcord and retry screen sharing.',
+					'If the sidecar binary is missing, reinstall Ripcord.',
 				],
 			};
 	}
