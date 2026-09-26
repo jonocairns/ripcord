@@ -1,4 +1,4 @@
-import { ActivityLogType } from '@sharkord/shared';
+import { ActivityLogType, DisconnectCode } from '@sharkord/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
@@ -14,10 +14,12 @@ import {
 	generateTotpSetup,
 	verifyAndConsumeTotpToken,
 } from '../../helpers/totp';
+import { issueAuthTokens } from '../../http/auth-tokens';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
-import { revokeOtherUserSessions } from '../../utils/user-sessions';
+import { revokeOtherUserSessions, revokeUserSessions } from '../../utils/user-sessions';
+import { blockVoiceRestoreAfterKick, getVoiceKickGuardIdentity } from '../../utils/voice-kick-guard';
 
 // The setup flow is stateless: we encode the pending secret + recovery codes
 // into a short-lived JWT (setupToken) so the client can send it back during
@@ -113,6 +115,7 @@ const totpConfirmSetupRoute = protectedProcedure
 		z.object({
 			setupToken: z.string().min(1),
 			code: z.string().length(6),
+			renewSession: z.boolean().optional(),
 		}),
 	)
 	.mutation(async ({ ctx, input }) => {
@@ -142,18 +145,25 @@ const totpConfirmSetupRoute = protectedProcedure
 		const newTokenVersion = await rotateUserTotp(ctx.userId, encryptedSecret, JSON.stringify(payload.hashedCodes));
 
 		// Sessions opened before 2FA existed never passed a second factor.
-		revokeOtherUserSessions(
-			ctx,
-			newTokenVersion,
-			'Two-factor authentication was enabled on your account. Please sign in again.',
-		);
+		const reason = 'Two-factor authentication was enabled on your account. Please sign in again.';
+		const legacyOwnWs = input.renewSession ? undefined : ctx.getOwnWs();
+		if (input.renewSession) {
+			revokeOtherUserSessions(ctx, newTokenVersion, reason);
+		} else {
+			// Legacy clients cannot store renewed tokens. Let the success response
+			// flush before closing their connection for an explicit sign-in.
+			revokeUserSessions(ctx.userId, { code: DisconnectCode.KICKED, reason, exceptWs: legacyOwnWs });
+			if (legacyOwnWs) blockVoiceRestoreAfterKick(ctx.userId, getVoiceKickGuardIdentity(legacyOwnWs));
+		}
 
 		enqueueActivityLog({
 			type: ActivityLogType.USER_ENABLED_2FA,
 			userId: ctx.userId,
 		});
 
-		return { success: true };
+		const authTokens = await issueAuthTokens(ctx.userId, newTokenVersion);
+		if (legacyOwnWs) setTimeout(() => legacyOwnWs.close(DisconnectCode.KICKED, reason), 0).unref();
+		return { success: true, ...authTokens };
 	});
 
 const totpDisableRoute = protectedProcedure

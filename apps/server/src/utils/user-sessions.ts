@@ -9,7 +9,7 @@ import { blockVoiceRestoreAfterKick, getVoiceKickGuardIdentity } from './voice-k
 
 type TTrackedWebSocket = WebSocket & {
 	userId?: number;
-	token: string;
+	token?: string;
 	clientInstanceId?: string;
 	currentVoiceChannelId?: number;
 	latestVoiceSessionMutationSeq?: number;
@@ -19,15 +19,15 @@ type TTrackedWebSocket = WebSocket & {
 // The websocket server registers its client set here so session revocation can
 // reach every connection without importing the server module (which imports the
 // routers that call it).
-let trackedClientsSource: (() => Iterable<WebSocket>) | undefined;
+let trackedClientsSource: (() => Iterable<TTrackedWebSocket>) | undefined;
 
-const setTrackedClientsSource = (source: (() => Iterable<WebSocket>) | undefined) => {
+const setTrackedClientsSource = (source: (() => Iterable<TTrackedWebSocket>) | undefined) => {
 	trackedClientsSource = source;
 };
 
 const getTrackedClients = (): TTrackedWebSocket[] => {
 	if (!trackedClientsSource) return [];
-	return Array.from(trackedClientsSource()) as TTrackedWebSocket[];
+	return Array.from(trackedClientsSource());
 };
 
 const getOpenUserSockets = (userId: number) =>
@@ -48,47 +48,42 @@ type TUserAuthState = {
 type TUserAuthStateEntry = {
 	state: TUserAuthState | undefined;
 	expiresAt: number;
+	timer: ReturnType<typeof setTimeout>;
 };
 
 const userAuthStateCache = new Map<number, TUserAuthStateEntry>();
-// Bumped on invalidation so a lookup that started before a write cannot store
-// the pre-write row after the invalidation ran.
-const userAuthStateGenerations = new Map<number, number>();
 
 const invalidateUserAuthState = (userId: number) => {
+	const entry = userAuthStateCache.get(userId);
+	if (entry) clearTimeout(entry.timer);
 	userAuthStateCache.delete(userId);
-	userAuthStateGenerations.set(userId, (userAuthStateGenerations.get(userId) ?? 0) + 1);
 };
 
-const getUserAuthState = async (userId: number): Promise<TUserAuthState | undefined> => {
+const getUserAuthState = (userId: number): TUserAuthState | undefined => {
 	const cached = userAuthStateCache.get(userId);
+	if (cached && cached.expiresAt > Date.now()) return cached.state;
+	invalidateUserAuthState(userId);
 
-	if (cached && cached.expiresAt > Date.now()) {
-		return cached.state;
-	}
-
-	const generation = userAuthStateGenerations.get(userId) ?? 0;
-	const row = await db
+	// Bun SQLite reads synchronously: no pending read can refill an invalidated entry.
+	const state = db
 		.select({ banned: users.banned, tokenVersion: users.tokenVersion })
 		.from(users)
 		.where(eq(users.id, userId))
 		.get();
-
-	if ((userAuthStateGenerations.get(userId) ?? 0) === generation) {
-		userAuthStateCache.set(userId, {
-			state: row,
-			expiresAt: Date.now() + USER_AUTH_STATE_TTL_MS,
-		});
-	}
-
-	return row;
+	const timer = setTimeout(() => {
+		if (userAuthStateCache.get(userId) === entry) userAuthStateCache.delete(userId);
+	}, USER_AUTH_STATE_TTL_MS);
+	timer.unref();
+	const entry: TUserAuthStateEntry = { state, expiresAt: Date.now() + USER_AUTH_STATE_TTL_MS, timer };
+	userAuthStateCache.set(userId, entry);
+	return state;
 };
 
 // Rejects a connection whose user was deleted or banned, or whose token was
 // issued before the user's current tokenVersion (password or 2FA change,
 // owner reset).
 const assertSessionIsValid = async (userId: number, sessionTokenVersion: number) => {
-	const state = await getUserAuthState(userId);
+	const state = getUserAuthState(userId);
 
 	invariant(state && state.tokenVersion === sessionTokenVersion, {
 		code: 'UNAUTHORIZED',
@@ -175,8 +170,7 @@ const revokeOtherUserSessions = (
 
 const resetUserSessionsForTests = () => {
 	trackedClientsSource = undefined;
-	userAuthStateCache.clear();
-	userAuthStateGenerations.clear();
+	for (const userId of userAuthStateCache.keys()) invalidateUserAuthState(userId);
 };
 
 export {

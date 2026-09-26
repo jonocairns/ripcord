@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { DisconnectCode } from '@sharkord/shared';
+import { eq } from 'drizzle-orm';
 import { Secret, TOTP } from 'otpauth';
 import { WebSocket } from 'ws';
 import { createMockContext } from '../../__tests__/context';
-import { getMockedToken, initTest } from '../../__tests__/helpers';
+import { getMockedToken, initTest, refresh, uploadFile } from '../../__tests__/helpers';
+import { tdb } from '../../__tests__/setup';
+import { users } from '../../db/schema';
+import { issueAuthTokens } from '../../http/auth-tokens';
 import { appRouter } from '../../routers';
 import { setTrackedClientsSource } from '../../utils/user-sessions';
 import { isVoiceRestoreBlockedAfterKick, resetVoiceKickGuardsForTests } from '../../utils/voice-kick-guard';
@@ -144,7 +148,7 @@ describe('user session revocation', () => {
 		const setup = await ownCaller.users.totpGenerateSetup({ password: 'password123' });
 		const code = new TOTP({ secret: Secret.fromBase32(setup.secret), digits: 6, period: 30 }).generate();
 
-		await ownCaller.users.totpConfirmSetup({ setupToken: setup.setupToken, code });
+		await ownCaller.users.totpConfirmSetup({ setupToken: setup.setupToken, code, renewSession: true });
 
 		expect(ownSocket.closeCalls).toEqual([]);
 		expect(otherSocket.closeCalls.map((call) => call.code)).toEqual([DisconnectCode.KICKED]);
@@ -152,6 +156,60 @@ describe('user session revocation', () => {
 		await expect(ownCaller.users.totpStatus()).resolves.toEqual({ enabled: true });
 		await expect(otherCaller.users.totpStatus()).rejects.toThrow('Your session is no longer valid');
 	});
+
+	test('enabling 2FA renews HTTP credentials while revoking old access and refresh tokens', async () => {
+		const { caller } = await initTest(1);
+		const previousTokens = await issueAuthTokens(1, 0);
+		const setup = await caller.users.totpGenerateSetup({ password: 'password123' });
+		const code = new TOTP({ secret: Secret.fromBase32(setup.secret), digits: 6, period: 30 }).generate();
+		const renewedTokens = await caller.users.totpConfirmSetup({
+			setupToken: setup.setupToken,
+			code,
+			renewSession: true,
+		});
+		const file = new File(['upload remains usable'], 'session.txt');
+
+		expect((await uploadFile(file, previousTokens.token)).status).toBe(401);
+		expect((await refresh(previousTokens.refreshToken)).status).toBe(401);
+		expect((await uploadFile(file, renewedTokens.token)).status).toBe(200);
+		expect((await refresh(renewedTokens.refreshToken)).status).toBe(200);
+		await expect(caller.users.totpStatus()).resolves.toEqual({ enabled: true });
+	});
+
+	test('legacy 2FA setup clients are closed for reauthentication after success', async () => {
+		const { caller, mockedToken } = await initTest(1);
+		const ownSocket = createFakeSocket(1, TEST_CLIENT_INSTANCE_ID, { token: mockedToken });
+		trackSockets([ownSocket]);
+		const setup = await caller.users.totpGenerateSetup({ password: 'password123' });
+		const code = new TOTP({ secret: Secret.fromBase32(setup.secret), digits: 6, period: 30 }).generate();
+		const result = await caller.users.totpConfirmSetup({ setupToken: setup.setupToken, code });
+		expect(result.success).toBe(true);
+		await Bun.sleep(5);
+		expect(ownSocket.closeCalls.map((call) => call.code)).toEqual([DisconnectCode.KICKED]);
+		await expect(caller.users.totpStatus()).rejects.toThrow('Your session is no longer valid');
+	});
+
+	test('a successful forced password change unblocks the retained context', async () => {
+		await tdb.update(users).set({ mustChangePassword: true }).where(eq(users.id, 1));
+		const { caller } = await initTest(1);
+		await expect(caller.users.totpStatus()).rejects.toThrow();
+		await caller.users.updatePassword({
+			currentPassword: 'password123',
+			newPassword: 'newpassword123',
+			confirmNewPassword: 'newpassword123',
+		});
+		await expect(caller.users.totpStatus()).resolves.toEqual({ enabled: false });
+	});
+
+	test('authentication state expires even without a subsequent publication', async () => {
+		const { caller } = await initTest(1);
+		await caller.users.totpStatus();
+		await tdb.update(users).set({ banned: true }).where(eq(users.id, 1));
+		// The cached state remains valid only for the documented five-second TTL.
+		await expect(caller.users.totpStatus()).resolves.toEqual({ enabled: false });
+		await Bun.sleep(5100);
+		await expect(caller.users.totpStatus()).rejects.toThrow('User is banned');
+	}, 7000);
 
 	test('owner password reset rejects calls on every session of the target', async () => {
 		const { caller: ownerCaller } = await initTest(1);

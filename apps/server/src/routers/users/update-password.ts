@@ -71,6 +71,7 @@ const updatePasswordRoute = protectedProcedure
 			return updatedUser.tokenVersion;
 		});
 
+		ctx.user.mustChangePassword = false;
 		revokeOtherUserSessions(ctx, newTokenVersion, 'Your password was changed. Please sign in again.');
 
 		enqueueActivityLog({

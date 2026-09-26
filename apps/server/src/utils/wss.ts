@@ -89,7 +89,7 @@ const getUserIp = (userId: number): string | undefined => {
 
 const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Promise<Context> => {
 	const { token, clientInstanceId } = info.connectionParams as TConnectionParams;
-	const connectionWs = res as TTrackedWebSocket | undefined;
+	const connectionWs: TTrackedWebSocket | undefined = res;
 
 	if (connectionWs) {
 		connectionWs.token = token;
@@ -372,7 +372,7 @@ const createWsServer = async (server: http.Server) => {
 		setTrackedClientsSource(() => wss?.clients ?? []);
 
 		wss.on('connection', (ws) => {
-			const trackedWs = ws as TTrackedWebSocket;
+			const trackedWs: TTrackedWebSocket = ws;
 			trackedWs.userId = undefined;
 			trackedWs.token = '';
 			trackedWs.clientInstanceId = undefined;
