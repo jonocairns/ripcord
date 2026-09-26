@@ -7,6 +7,7 @@ import { hashPassword, verifyPassword } from '../../helpers/password';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { revokeOtherUserSessions } from '../../utils/user-sessions';
 
 const updatePasswordRoute = protectedProcedure
 	.input(
@@ -18,7 +19,7 @@ const updatePasswordRoute = protectedProcedure
 	)
 	.mutation(async ({ ctx, input }) => {
 		const now = Date.now();
-		await db.transaction(async (tx) => {
+		const newTokenVersion = await db.transaction(async (tx) => {
 			const user = await tx
 				.select({
 					password: users.password,
@@ -51,7 +52,12 @@ const updatePasswordRoute = protectedProcedure
 				tokenVersion: sql`${users.tokenVersion} + 1`,
 			};
 
-			await tx.update(users).set(userUpdateData).where(eq(users.id, ctx.userId)).run();
+			const updatedUser = await tx
+				.update(users)
+				.set(userUpdateData)
+				.where(eq(users.id, ctx.userId))
+				.returning({ tokenVersion: users.tokenVersion })
+				.get();
 
 			await tx
 				.update(refreshTokens)
@@ -61,7 +67,11 @@ const updatePasswordRoute = protectedProcedure
 				})
 				.where(and(eq(refreshTokens.userId, ctx.userId), isNull(refreshTokens.revokedAt)))
 				.run();
+
+			return updatedUser.tokenVersion;
 		});
+
+		revokeOtherUserSessions(ctx, newTokenVersion, 'Your password was changed. Please sign in again.');
 
 		enqueueActivityLog({
 			type: ActivityLogType.USER_UPDATED_PASSWORD,

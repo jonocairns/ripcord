@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { DisconnectCode, type TTempFile, UserStatus } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
+import { WebSocket } from 'ws';
 import { createMockContext } from '../../__tests__/context';
 import { getMockedToken, initTest, uploadFile } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
 import { refreshTokens, users } from '../../db/schema';
 import { verifyPassword } from '../../helpers/password';
 import { appRouter } from '../../routers';
+import { setTrackedClientsSource } from '../../utils/user-sessions';
 import { isVoiceRestoreBlockedAfterKick, resetVoiceKickGuardsForTests } from '../../utils/voice-kick-guard';
 
 afterEach(() => {
@@ -926,13 +928,20 @@ describe('users router', () => {
 		await caller.others.joinServer({ handshakeHash });
 		let closeCall: { code: number; reason?: string } | undefined;
 		const targetConnection = {
+			userId: 2,
+			readyState: WebSocket.OPEN,
 			clientInstanceId: 'legacy-client',
 			token: 'legacy-token',
 			close: (code: number, reason?: string) => {
+				// The guard must already be in place when the close frame is sent.
+				expect(isVoiceRestoreBlockedAfterKick(2, { clientInstanceId: 'legacy-client', token: 'legacy-token' })).toBe(
+					true,
+				);
 				closeCall = { code, reason };
 			},
 		};
-		Reflect.set(ctx, 'getUserWs', () => targetConnection);
+		// Test-only partial mock: revocation only reads the tracked fields and close().
+		setTrackedClientsSource(() => [targetConnection] as unknown as WebSocket[]);
 
 		await caller.users.kick({ userId: 2, reason: 'Compatibility test' });
 

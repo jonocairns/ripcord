@@ -22,6 +22,7 @@ import { enqueueLogin } from '../../queues/logins';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { invariant } from '../../utils/invariant';
 import { rateLimitedProcedure, t } from '../../utils/trpc';
+import { assertSessionIsValid } from '../../utils/user-sessions';
 
 const JOIN_SERVER_MAX_REQUESTS_PER_MINUTE = 60;
 
@@ -67,6 +68,11 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
 			code: 'UNAUTHORIZED',
 			message: 'User not authenticated',
 		});
+
+		// A socket that connected before a ban or credential change has no user id
+		// attached yet, so session revocation cannot close it; refuse to
+		// authenticate it here instead.
+		await assertSessionIsValid(ctx.user.id, ctx.sessionTokenVersion);
 
 		ctx.authenticated = true;
 		ctx.setWsUserId(ctx.user.id);

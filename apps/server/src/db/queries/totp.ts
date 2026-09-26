@@ -24,18 +24,6 @@ const isUserTotpEnabled = async (userId: number): Promise<boolean> => {
 	return !!result?.totpSecret;
 };
 
-const setUserTotpData = async (
-	userId: number,
-	totpSecret: string | null,
-	totpRecoveryCodes: string | null,
-): Promise<void> => {
-	await db
-		.update(users)
-		.set({ totpSecret, totpRecoveryCodes, updatedAt: Date.now() })
-		.where(eq(users.id, userId))
-		.run();
-};
-
 const updateUserRecoveryCodes = async (userId: number, hashedCodes: string[]): Promise<void> => {
 	await db
 		.update(users)
@@ -47,4 +35,4 @@ const updateUserRecoveryCodes = async (userId: number, hashedCodes: string[]): P
 		.run();
 };
 
-export { getUserTotpData, isUserTotpEnabled, setUserTotpData, updateUserRecoveryCodes };
+export { getUserTotpData, isUserTotpEnabled, updateUserRecoveryCodes };

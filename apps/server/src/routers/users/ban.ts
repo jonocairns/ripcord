@@ -7,6 +7,7 @@ import { users } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { revokeUserSessions } from '../../utils/user-sessions';
 
 const banRoute = protectedProcedure
 	.input(
@@ -23,12 +24,6 @@ const banRoute = protectedProcedure
 			message: 'You cannot ban yourself.',
 		});
 
-		const userWs = ctx.getUserWs(input.userId);
-
-		if (userWs) {
-			userWs.close(DisconnectCode.BANNED, input.reason);
-		}
-
 		await db
 			.update(users)
 			.set({
@@ -37,6 +32,11 @@ const banRoute = protectedProcedure
 				bannedAt: Date.now(),
 			})
 			.where(eq(users.id, input.userId));
+
+		revokeUserSessions(input.userId, {
+			code: DisconnectCode.BANNED,
+			reason: input.reason,
+		});
 
 		publishUser(input.userId, 'update');
 
