@@ -576,44 +576,38 @@ describe('file manager', () => {
 		expect(path.extname(p)).toBe('');
 	});
 
-	describe('temporary upload isolation between tests', () => {
-		let leftoverTempFileId: string | undefined;
+	test('resetting temporary files releases leftover uploads and their capacity', async () => {
+		const leftoverPath = path.join(UPLOADS_PATH, `leftover-${Date.now()}.txt`);
 
-		test('leaves an unconsumed temporary upload behind', async () => {
-			const leftoverPath = path.join(UPLOADS_PATH, `leftover-${Date.now()}.txt`);
+		await fs.writeFile(leftoverPath, 'an upload the test never saves or removes');
 
-			await fs.writeFile(leftoverPath, 'an upload the test never saves or removes');
-
-			const stats = await fs.stat(leftoverPath);
-			const leftover = await fileManager.addTemporaryFile({
-				filePath: leftoverPath,
-				size: stats.size,
-				originalName: 'leftover.txt',
-				userId: 1,
-			});
-
-			// Deliberately not added to tempFilesToCleanup.
-			leftoverTempFileId = leftover.id;
+		const leftoverStats = await fs.stat(leftoverPath);
+		const leftover = await fileManager.addTemporaryFile({
+			filePath: leftoverPath,
+			size: leftoverStats.size,
+			originalName: 'leftover.txt',
+			userId: 1,
 		});
 
-		test('the next test does not inherit it', async () => {
-			expect(leftoverTempFileId).toBeDefined();
-			expect(fileManager.temporaryFileExists(leftoverTempFileId ?? '')).toBe(false);
+		// Smaller than the leftover plus the next upload, so the next upload only
+		// fits once the leftover is released.
+		await tdb.update(settings).set({ storageUploadMaxFileSize: 20 });
 
-			// Smaller than the leftover, so it only fits if the leftover was released.
-			await tdb.update(settings).set({ storageUploadMaxFileSize: 20 });
+		await fileManager.resetTemporaryFilesForTests();
 
-			const stats = await fs.stat(testFilePath);
-			const tempFile = await fileManager.addTemporaryFile({
-				filePath: testFilePath,
-				size: stats.size,
-				originalName: testFileName,
-				userId: 1,
-			});
+		expect(fileManager.temporaryFileExists(leftover.id)).toBe(false);
+		expect(await fs.exists(leftover.path)).toBe(false);
 
-			tempFilesToCleanup.push(tempFile.path);
-
-			expect(fileManager.temporaryFileExists(tempFile.id)).toBe(true);
+		const stats = await fs.stat(testFilePath);
+		const tempFile = await fileManager.addTemporaryFile({
+			filePath: testFilePath,
+			size: stats.size,
+			originalName: testFileName,
+			userId: 1,
 		});
+
+		tempFilesToCleanup.push(tempFile.path);
+
+		expect(fileManager.temporaryFileExists(tempFile.id)).toBe(true);
 	});
 });
