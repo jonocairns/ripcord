@@ -34,7 +34,12 @@ describe('configureClientErrorReporting', () => {
 			captureException: mock(() => undefined),
 			ErrorBoundary: () => null,
 		}));
+		// Bun module mocks apply to every test file in the run, so keep the real
+		// exports and override only what this test needs.
+		const actualServerConfig = await import('@/runtime/server-config');
+
 		mock.module('@/runtime/server-config', () => ({
+			...actualServerConfig,
 			getRuntimeServerConfig: () => ({
 				source: 'web',
 				serverUrl: 'https://server.example',

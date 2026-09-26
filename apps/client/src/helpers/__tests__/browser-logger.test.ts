@@ -12,7 +12,9 @@ describe('reportError', () => {
 			// Stands in for the real console.error that browser-logger binds at module
 			// evaluation, before Sentry.init() installs captureConsoleIntegration.
 			console.error = preInitConsoleError;
-			const { reportError } = await import('../browser-logger');
+			// A fresh module instance: another test file may already have evaluated
+			// browser-logger with the real console bound.
+			const { reportError }: typeof import('../browser-logger') = await import(`../browser-logger?fresh=${Date.now()}`);
 
 			// Sentry wraps console.error during init, i.e. after module evaluation.
 			console.error = sentryWrappedConsoleError;

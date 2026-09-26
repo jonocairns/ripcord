@@ -19,7 +19,12 @@ const DEFAULT_RUNTIME_CONFIG: TTestRuntimeConfig = {
 
 let runtimeConfig: TTestRuntimeConfig = DEFAULT_RUNTIME_CONFIG;
 
+// Bun module mocks apply to every test file in the run, so keep the real
+// exports and override only what this file needs.
+const actualServerConfig = await import('@/runtime/server-config');
+
 mock.module('@/runtime/server-config', () => ({
+	...actualServerConfig,
 	getRuntimeServerConfig: () => runtimeConfig,
 }));
 
