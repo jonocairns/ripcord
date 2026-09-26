@@ -909,6 +909,33 @@ describe('channel event visibility', () => {
 		}
 	});
 
+	test('public-to-private withdrawal lets shipped clients deselect without revealing new details', async () => {
+		const { caller } = await initTest(1);
+		const previousChannel = await getChannelRow(1);
+		const memberEvents = recordChannelEvents(2);
+		try {
+			await caller.channels.update({ channelId: 1, private: true, name: 'secret-name', topic: 'secret-topic' });
+			expect(memberEvents.events).toEqual([
+				{
+					type: 'update',
+					channel: expect.objectContaining({
+						id: 1,
+						private: true,
+						name: previousChannel.name,
+						topic: previousChannel.topic,
+					}),
+				},
+				{ type: 'permissions', canView: expect.objectContaining({ 1: false }) },
+				{ type: 'delete', channelId: 1 },
+			]);
+			for (const event of memberEvents.events) {
+				if (event.type === 'update') expect(event.channel).not.toHaveProperty('fileAccessToken');
+			}
+		} finally {
+			memberEvents.stop();
+		}
+	});
+
 	test('granting and revoking a user permission adds and removes the channel', async () => {
 		const { caller } = await initTest(1);
 
@@ -995,6 +1022,25 @@ describe('channel event visibility', () => {
 			]);
 		} finally {
 			memberEvents.stop();
+		}
+	});
+
+	test('unrelated role changes preserve an owners effective private channel permissions', async () => {
+		const { caller } = await initTest(1);
+		await caller.channels.update({ channelId: 1, private: true });
+		// Owner access also overrides an explicit user deny.
+		await caller.channels.updatePermissions({ channelId: 1, userId: 1, permissions: [] });
+		const ownerEvents = recordChannelEvents(1);
+		try {
+			await caller.users.addRole({ userId: 1, roleId: 3 });
+			expect(ownerEvents.events[0]).toEqual({ type: 'permissions', canView: expect.objectContaining({ 1: true }) });
+			expect(ownerEvents.events.some(isChannelDelete(1))).toBe(false);
+			ownerEvents.clear();
+			await caller.users.removeRole({ userId: 1, roleId: 3 });
+			expect(ownerEvents.events[0]).toEqual({ type: 'permissions', canView: expect.objectContaining({ 1: true }) });
+			expect(ownerEvents.events.some(isChannelDelete(1))).toBe(false);
+		} finally {
+			ownerEvents.stop();
 		}
 	});
 

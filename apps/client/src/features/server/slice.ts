@@ -560,8 +560,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({ channels: nextChannels });
 	},
 	removeChannel: ({ channelId }) => {
+		const state = get();
 		set({
-			channels: removeById(get().channels, channelId),
+			channels: removeById(state.channels, channelId),
+			selectedChannelId: state.selectedChannelId === channelId ? undefined : state.selectedChannelId,
+			lastTextChannelId: state.lastTextChannelId === channelId ? undefined : state.lastTextChannelId,
 		});
 	},
 	setSelectedChannelId: (channelId) => {

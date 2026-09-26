@@ -22,6 +22,11 @@ const updateChannelRoute = protectedProcedure
 	.mutation(async ({ ctx, input }) => {
 		await ctx.needsPermission(Permission.MANAGE_CHANNELS);
 
+		const previousChannel =
+			input.private !== undefined
+				? await db.select().from(channels).where(eq(channels.id, input.channelId)).get()
+				: undefined;
+
 		const updatedChannel = await db
 			.update(channels)
 			.set({
@@ -45,6 +50,7 @@ const updateChannelRoute = protectedProcedure
 			await publishChannelVisibility(
 				updatedChannel.id,
 				allUsers.map((user) => user.id),
+				previousChannel,
 			);
 			await revalidateActiveVoiceSessions({
 				channelIds: [updatedChannel.id],

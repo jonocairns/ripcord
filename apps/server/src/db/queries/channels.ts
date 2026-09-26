@@ -69,14 +69,12 @@ const getPermissions = async (userId: number, roleIds: number[], permission: Cha
 	return { userPermissionMap, rolePermissionMap };
 };
 
-const getChannelsForUser = async (userId: number): Promise<TChannel[]> => {
+const getChannelsForUser = async (userId: number, channelRows?: TChannel[]): Promise<TChannel[]> => {
 	const roleIds = await getUserRoleIds(userId);
 
-	if (roleIds.includes(OWNER_ROLE_ID)) {
-		return await db.select().from(channels);
-	}
+	const allChannels = channelRows ?? (await db.select().from(channels));
 
-	const allChannels = await db.select().from(channels);
+	if (roleIds.includes(OWNER_ROLE_ID)) return allChannels;
 
 	const { userPermissionMap, rolePermissionMap } = await getPermissions(
 		userId,
@@ -103,9 +101,12 @@ const getChannelsForUser = async (userId: number): Promise<TChannel[]> => {
 	return accessibleChannels;
 };
 
-const getAllChannelUserPermissions = async (userId: number): Promise<TChannelUserPermissionsMap> => {
+const getAllChannelUserPermissions = async (
+	userId: number,
+	channelRows?: TChannel[],
+): Promise<TChannelUserPermissionsMap> => {
 	const roleIds = await getUserRoleIds(userId);
-	const allChannels = await db.select().from(channels);
+	const allChannels = channelRows ?? (await db.select().from(channels));
 
 	const userPermissions = await db
 		.select({
@@ -160,6 +161,10 @@ const getAllChannelUserPermissions = async (userId: number): Promise<TChannelUse
 		const permissions: Record<string, boolean> = {};
 
 		for (const permissionType of allPermissionTypes) {
+			if (roleIds.includes(OWNER_ROLE_ID)) {
+				permissions[permissionType] = true;
+				continue;
+			}
 			const userPerm = userPermMap.get(channel.id)?.get(permissionType);
 
 			if (userPerm !== undefined) {

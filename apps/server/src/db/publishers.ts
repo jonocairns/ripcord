@@ -1,4 +1,10 @@
-import { ChannelPermission, Permission, ServerEvents, type TChannelUserPermissionsMap } from '@sharkord/shared';
+import {
+	ChannelPermission,
+	Permission,
+	ServerEvents,
+	type TChannel,
+	type TChannelUserPermissionsMap,
+} from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { toPublicChannel } from '../helpers/to-public-channel';
 import { pluginManager } from '../plugins';
@@ -146,7 +152,7 @@ const publishChannel = async (channelId: number | undefined, type: 'create' | 'u
 // so users whose access did not change are unaffected. Call it after
 // publishChannelPermissions: a client that loses the channel it has open
 // checks the new permissions while the channel is still in its store.
-const publishChannelVisibility = async (channelId: number, userIds: number[]) => {
+const publishChannelVisibility = async (channelId: number, userIds: number[], previousChannel?: TChannel) => {
 	if (userIds.length === 0) return;
 
 	const channel = await db.select().from(channels).where(eq(channels.id, channelId)).get();
@@ -162,6 +168,16 @@ const publishChannelVisibility = async (channelId: number, userIds: number[]) =>
 	}
 
 	if (cannotView.length > 0) {
+		if (previousChannel && !previousChannel.private && channel.private) {
+			// Shipped clients deselect on a permission update only if their stored
+			// channel is private. Send only its formerly public details, never the
+			// new private name/topic, before the permission update and withdrawal.
+			pubsub.publishFor(cannotView, ServerEvents.CHANNEL_UPDATE, {
+				...toPublicChannel(previousChannel),
+				private: true,
+			});
+			await publishChannelPermissions(cannotView);
+		}
 		pubsub.publishFor(cannotView, ServerEvents.CHANNEL_DELETE, channelId);
 	}
 };
@@ -171,13 +187,14 @@ const publishChannelVisibility = async (channelId: number, userIds: number[]) =>
 const publishUserChannelVisibility = async (userIds: number[]) => {
 	if (userIds.length === 0) return;
 
-	const privateChannels = await db.select({ id: channels.id }).from(channels).where(eq(channels.private, true));
+	const allChannels = await db.select().from(channels);
+	const privateChannels = allChannels.filter((channel) => channel.private);
 
 	if (privateChannels.length === 0) return;
 
 	await Promise.all(
 		userIds.map(async (userId) => {
-			const visibleChannels = await getChannelsForUser(userId);
+			const visibleChannels = await getChannelsForUser(userId, allChannels);
 			const visibleChannelIds = new Set(visibleChannels.map((channel) => channel.id));
 
 			for (const channel of visibleChannels) {
@@ -219,9 +236,11 @@ const publishCategory = async (categoryId: number | undefined, type: 'create' | 
 };
 
 const publishChannelPermissions = async (affectedUserIds: number[]) => {
+	if (affectedUserIds.length === 0) return;
+	const allChannels = await db.select().from(channels);
 	const permissionsMap = new Map<number, TChannelUserPermissionsMap>();
 	const promises = affectedUserIds.map(async (userId) => {
-		const updatedPermissions = await getAllChannelUserPermissions(userId);
+		const updatedPermissions = await getAllChannelUserPermissions(userId, allChannels);
 
 		permissionsMap.set(userId, updatedPermissions);
 	});
