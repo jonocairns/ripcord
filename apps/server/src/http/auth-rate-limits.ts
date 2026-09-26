@@ -9,18 +9,22 @@ import { HttpRateLimitError } from './utils';
 const AUTH_ACCOUNT_MAX_ATTEMPTS = 10;
 const AUTH_ACCOUNT_WINDOW_MS = 15 * 60_000;
 
-const loginIdentityRateLimiter = createRateLimiter({
+const loginAccountRateLimiter = createRateLimiter({
 	maxRequests: AUTH_ACCOUNT_MAX_ATTEMPTS,
 	windowMs: AUTH_ACCOUNT_WINDOW_MS,
+	// Cardinality is bounded by persisted accounts; expiry removes idle budgets.
+	retainActiveEntries: true,
 });
 
 const twoFactorUserRateLimiter = createRateLimiter({
 	maxRequests: AUTH_ACCOUNT_MAX_ATTEMPTS,
 	windowMs: AUTH_ACCOUNT_WINDOW_MS,
+	// Cardinality is bounded by persisted accounts; expiry removes idle budgets.
+	retainActiveEntries: true,
 });
 
-const consumeLoginIdentityAttempt = (identity: string) => {
-	const rateLimit = loginIdentityRateLimiter.consume(`identity:${identity}`);
+const consumeLoginAccountAttempt = (userId: number) => {
+	const rateLimit = loginAccountRateLimiter.consume(`user:${userId}`);
 
 	if (!rateLimit.allowed) {
 		throw new HttpRateLimitError(
@@ -41,4 +45,4 @@ const consumeTwoFactorAttempt = (userId: number) => {
 	}
 };
 
-export { AUTH_ACCOUNT_MAX_ATTEMPTS, consumeLoginIdentityAttempt, consumeTwoFactorAttempt };
+export { AUTH_ACCOUNT_MAX_ATTEMPTS, consumeLoginAccountAttempt, consumeTwoFactorAttempt };

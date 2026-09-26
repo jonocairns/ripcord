@@ -34,15 +34,14 @@ const verify2faRouteHandler = async (req: http.IncomingMessage, res: http.Server
 		throw new HttpValidationError('challengeToken', 'Invalid or expired challenge token. Please log in again.');
 	}
 
-	// Keyed by user rather than challenge token: a fresh token is one password
-	// sign-in away, so a per-token budget would not bound code guessing.
-	consumeTwoFactorAttempt(challenge.userId);
-
 	const user = await getUserById(challenge.userId);
 
 	if (!user) {
 		throw new HttpValidationError('challengeToken', 'User not found');
 	}
+
+	// Keyed by the persisted user rather than a replaceable challenge token.
+	consumeTwoFactorAttempt(user.id);
 
 	if (user.banned) {
 		throw new HttpValidationError('challengeToken', `Identity banned: ${user.banReason || 'No reason provided'}`);

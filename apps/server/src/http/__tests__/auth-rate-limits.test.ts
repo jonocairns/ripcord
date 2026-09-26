@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { tdb, testsBaseUrl } from '../../__tests__/setup';
-import { users } from '../../db/schema';
+import { settings, users } from '../../db/schema';
 import { setClientIpOptionsForTests } from '../../helpers/client-ip-options';
 import { createChallengeToken } from '../../helpers/totp';
 import { AUTH_ACCOUNT_MAX_ATTEMPTS } from '../auth-rate-limits';
@@ -108,6 +108,59 @@ describe('auth rate limits', () => {
 			expect(response.status).toBe(200);
 		}
 	});
+
+	test('invalid identities cannot accumulate account budgets when registration is closed', async () => {
+		setClientIpOptionsForTests({ trustProxy: true });
+		await tdb.update(settings).set({ allowNewUsers: false });
+		for (let index = 0; index <= AUTH_ACCOUNT_MAX_ATTEMPTS; index += 1) {
+			const response = await postJson(
+				'/login',
+				{ identity: 'nonexistent', password: 'wrongpassword' },
+				{ 'x-forwarded-for': spoofedIp(index) },
+			);
+			expect(response.status).toBe(400);
+		}
+		const valid = await postJson(
+			'/login',
+			{ identity: 'testowner', password: 'password123' },
+			{ 'x-forwarded-for': spoofedIp(30) },
+		);
+		expect(valid.status).toBe(200);
+	});
+
+	test('saturated IP storage still admits a new login and does not reset the account budget', async () => {
+		setClientIpOptionsForTests({ trustProxy: true });
+		for (let index = 0; index < AUTH_ACCOUNT_MAX_ATTEMPTS; index += 1) {
+			await postJson(
+				'/login',
+				{ identity: 'testowner', password: 'wrongpassword' },
+				{ 'x-forwarded-for': spoofedIp(index) },
+			);
+		}
+		// Invalid bodies still consume the IP budget, without creating accounts.
+		for (let start = 0; start < 10001; start += 50) {
+			await Promise.all(
+				Array.from({ length: Math.min(50, 10001 - start) }, (_, offset) =>
+					postJson('/login', {}, { 'x-forwarded-for': `2001:db8::${(start + offset + 1).toString(16)}` }),
+				),
+			);
+		}
+		const blocked = await postJson(
+			'/login',
+			{ identity: 'testowner', password: 'password123' },
+			{ 'x-forwarded-for': '198.51.100.10' },
+		);
+		expect(blocked.status).toBe(429);
+		expect(await blocked.json()).toEqual({
+			error: 'Too many login attempts for this account. Please try again later.',
+		});
+		const valid = await postJson(
+			'/login',
+			{ identity: 'testuser', password: 'password123' },
+			{ 'x-forwarded-for': '198.51.100.11' },
+		);
+		expect(valid.status).toBe(200);
+	}, 30000);
 
 	test('the per-user 2FA limiter trips across different client IPs', async () => {
 		setClientIpOptionsForTests({ trustProxy: true, trustedProxies: '' });

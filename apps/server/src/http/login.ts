@@ -16,7 +16,7 @@ import { hashPassword, isArgon2Hash, verifyPassword } from '../helpers/password'
 import { createChallengeToken } from '../helpers/totp';
 import { enqueueActivityLog } from '../queues/activity-log';
 import { invariant } from '../utils/invariant';
-import { consumeLoginIdentityAttempt } from './auth-rate-limits';
+import { consumeLoginAccountAttempt } from './auth-rate-limits';
 import { issueAuthTokens } from './auth-tokens';
 import { getJsonBody } from './helpers';
 import { HttpValidationError } from './utils';
@@ -84,8 +84,6 @@ const registerUser = async (
 const loginRouteHandler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
 	const data = zBody.parse(await getJsonBody(req, { maxBytes: AUTH_REQUEST_MAX_BODY_BYTES }));
 
-	consumeLoginIdentityAttempt(data.identity);
-
 	const settings = await getSettings();
 	let existingUser = await getUserByIdentity(data.identity);
 	const connectionInfo = getWsInfo(undefined, req, getClientIpOptions());
@@ -102,6 +100,8 @@ const loginRouteHandler = async (req: http.IncomingMessage, res: http.ServerResp
 		// user doesn't exist, but registration is open OR invite was valid - create the user automatically
 		existingUser = await registerUser(data.identity, data.password, data.invite, connectionInfo?.ip);
 	}
+
+	consumeLoginAccountAttempt(existingUser.id);
 
 	if (existingUser.banned) {
 		throw new HttpValidationError('identity', `Identity banned: ${existingUser.banReason || 'No reason provided'}`);

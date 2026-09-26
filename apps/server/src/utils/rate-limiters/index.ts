@@ -2,6 +2,8 @@ type TFixedWindowRateLimiterOptions = {
 	maxRequests: number;
 	windowMs: number;
 	maxEntries?: number;
+	// Only for keys drawn from persisted accounts, never arbitrary request input.
+	retainActiveEntries?: boolean;
 };
 
 type TRateLimitResult = {
@@ -13,6 +15,7 @@ type TRateLimitResult = {
 type TRateLimitEntry = {
 	count: number;
 	resetAt: number;
+	cleanupTimer?: ReturnType<typeof setTimeout>;
 };
 
 // this is a pretty basic implementation of a fixed window rate limiter, but for now it's better than nothing
@@ -21,15 +24,18 @@ class FixedWindowRateLimiter {
 	private readonly maxRequests: number;
 	private readonly windowMs: number;
 	private readonly maxEntries: number;
+	private readonly retainActiveEntries: boolean;
 
 	constructor({
 		maxRequests,
 		windowMs,
 		maxEntries = 10_000, // default to 10k entries
+		retainActiveEntries = false,
 	}: TFixedWindowRateLimiterOptions) {
 		this.maxRequests = maxRequests;
 		this.windowMs = windowMs;
 		this.maxEntries = maxEntries;
+		this.retainActiveEntries = retainActiveEntries;
 	}
 
 	public consume = (key: string): TRateLimitResult => {
@@ -38,15 +44,16 @@ class FixedWindowRateLimiter {
 		const existing = this.entries.get(key);
 
 		if (!existing || existing.resetAt <= now) {
-			const retryAfterMs = this.makeRoom(now);
-			if (retryAfterMs > 0) {
-				return { allowed: false, remaining: 0, retryAfterMs };
-			}
+			if (existing?.cleanupTimer) clearTimeout(existing.cleanupTimer);
+			if (!this.retainActiveEntries) this.makeRoom(now);
 
-			this.entries.set(key, {
-				count: 1,
-				resetAt: now + this.windowMs,
-			});
+			const entry: TRateLimitEntry = { count: 1, resetAt: now + this.windowMs };
+			if (this.retainActiveEntries) {
+				entry.cleanupTimer = setTimeout(() => {
+					if (this.entries.get(key) === entry) this.entries.delete(key);
+				}, this.windowMs).unref();
+			}
+			this.entries.set(key, entry);
 
 			return {
 				allowed: true,
@@ -73,24 +80,23 @@ class FixedWindowRateLimiter {
 	};
 
 	public clear = () => {
+		for (const entry of this.entries.values()) {
+			if (entry.cleanupTimer) clearTimeout(entry.cleanupTimer);
+		}
 		this.entries.clear();
 	};
 
-	// Expired budgets may be reclaimed; active budgets must survive key churn.
-	// When full, reject new keys until the earliest existing window expires.
-	private makeRoom = (now: number): number => {
-		if (this.entries.size < this.maxEntries) return 0;
-
-		let earliestResetAt = Number.POSITIVE_INFINITY;
+	// Request-controlled keys use best-effort budgets: saturation must not deny
+	// every new address. Existing keys are checked before this eviction path.
+	private makeRoom = (now: number): void => {
+		if (this.entries.size < this.maxEntries) return;
 		for (const [key, value] of this.entries) {
-			if (value.resetAt <= now) {
-				this.entries.delete(key);
-			} else {
-				earliestResetAt = Math.min(earliestResetAt, value.resetAt);
-			}
+			if (value.resetAt <= now) this.entries.delete(key);
 		}
-
-		return this.entries.size < this.maxEntries ? 0 : earliestResetAt - now;
+		if (this.entries.size >= this.maxEntries) {
+			const oldestKey = this.entries.keys().next().value;
+			if (oldestKey !== undefined) this.entries.delete(oldestKey);
+		}
 	};
 }
 

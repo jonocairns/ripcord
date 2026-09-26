@@ -95,23 +95,37 @@ describe('FixedWindowRateLimiter', () => {
 		});
 	});
 
-	test('preserves active budgets at capacity despite repeated new keys', () => {
-		const limiter = new FixedWindowRateLimiter({ maxRequests: 2, windowMs: 60_000, maxEntries: 2 });
-		limiter.consume('target');
-		limiter.consume('target');
-		now += 1000;
-		limiter.consume('legitimate');
+	test('saturated request-key storage admits new keys without resetting the current key', () => {
+		const limiter = new FixedWindowRateLimiter({ maxRequests: 1, windowMs: 60_000, maxEntries: 2 });
+		limiter.consume('oldest');
+		limiter.consume('other');
+		expect(limiter.consume('oldest').allowed).toBe(false);
+		expect(limiter.consume('new-address').allowed).toBe(true);
+		expect(limiter.consume('other').allowed).toBe(false);
+	});
 
-		for (let index = 0; index < 10; index += 1) {
-			expect(limiter.consume(`churn-${index}`)).toEqual({ allowed: false, remaining: 0, retryAfterMs: 59_000 });
-			expect(limiter.consume('target').allowed).toBe(false);
+	test('account budgets survive more than 10000 other accounts and admit new accounts', () => {
+		const limiter = new FixedWindowRateLimiter({ maxRequests: 1, windowMs: 60_000, retainActiveEntries: true });
+		limiter.consume('target');
+		for (let index = 0; index < 10001; index += 1) {
+			expect(limiter.consume(`user:${index}`).allowed).toBe(true);
 		}
-		expect(limiter.consume('legitimate').allowed).toBe(true);
-		expect(limiter.consume('legitimate').allowed).toBe(false);
+		expect(limiter.consume('target').allowed).toBe(false);
+		limiter.clear();
+	});
 
-		now += 59_000;
-		expect(limiter.consume('new-key').allowed).toBe(true);
-		expect(limiter.consume('legitimate')).toEqual({ allowed: false, remaining: 0, retryAfterMs: 1000 });
+	test('retained account budgets expire and clear cannot delete a replacement budget', async () => {
+		Date.now = originalDateNow;
+		const limiter = new FixedWindowRateLimiter({ maxRequests: 1, windowMs: 40, retainActiveEntries: true });
+		limiter.consume('account');
+		await Bun.sleep(25);
+		limiter.clear();
+		limiter.consume('account');
+		await Bun.sleep(25);
+		expect(limiter.consume('account').allowed).toBe(false);
+		await Bun.sleep(25);
+		expect(limiter.consume('account').allowed).toBe(true);
+		limiter.clear();
 	});
 
 	test('an expired existing key starts a fresh window at capacity', () => {
