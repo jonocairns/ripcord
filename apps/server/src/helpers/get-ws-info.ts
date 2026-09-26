@@ -56,7 +56,13 @@ const parseTrustedProxies = (spec: string): TIpRange[] => {
 
 		try {
 			if (trimmed.includes('/')) {
-				ranges.push(ipaddr.parseCIDR(trimmed));
+				const [address, prefixLength] = ipaddr.parseCIDR(trimmed);
+				if (address instanceof ipaddr.IPv6 && address.isIPv4MappedAddress()) {
+					if (prefixLength < 96) throw new Error('mapped CIDR extends beyond IPv4');
+					ranges.push([address.toIPv4Address(), prefixLength - 96]);
+				} else {
+					ranges.push([address, prefixLength]);
+				}
 				continue;
 			}
 

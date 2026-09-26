@@ -20,7 +20,7 @@ const twoFactorUserRateLimiter = createRateLimiter({
 });
 
 const consumeLoginIdentityAttempt = (identity: string) => {
-	const rateLimit = loginIdentityRateLimiter.consume(`identity:${identity.trim().toLowerCase()}`);
+	const rateLimit = loginIdentityRateLimiter.consume(`identity:${identity}`);
 
 	if (!rateLimit.allowed) {
 		throw new HttpRateLimitError(

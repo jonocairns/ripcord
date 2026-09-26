@@ -35,11 +35,14 @@ class FixedWindowRateLimiter {
 	public consume = (key: string): TRateLimitResult => {
 		const now = Date.now();
 
-		this.gc(now);
-
 		const existing = this.entries.get(key);
 
 		if (!existing || existing.resetAt <= now) {
+			const retryAfterMs = this.makeRoom(now);
+			if (retryAfterMs > 0) {
+				return { allowed: false, remaining: 0, retryAfterMs };
+			}
+
 			this.entries.set(key, {
 				count: 1,
 				resetAt: now + this.windowMs,
@@ -73,26 +76,21 @@ class FixedWindowRateLimiter {
 		this.entries.clear();
 	};
 
-	private gc = (now: number) => {
-		if (this.entries.size < this.maxEntries) {
-			return;
-		}
+	// Expired budgets may be reclaimed; active budgets must survive key churn.
+	// When full, reject new keys until the earliest existing window expires.
+	private makeRoom = (now: number): number => {
+		if (this.entries.size < this.maxEntries) return 0;
 
+		let earliestResetAt = Number.POSITIVE_INFINITY;
 		for (const [key, value] of this.entries) {
 			if (value.resetAt <= now) {
 				this.entries.delete(key);
+			} else {
+				earliestResetAt = Math.min(earliestResetAt, value.resetAt);
 			}
 		}
 
-		if (this.entries.size < this.maxEntries) {
-			return;
-		}
-
-		const oldestKey = this.entries.keys().next().value;
-
-		if (oldestKey) {
-			this.entries.delete(oldestKey);
-		}
+		return this.entries.size < this.maxEntries ? 0 : earliestResetAt - now;
 	};
 }
 

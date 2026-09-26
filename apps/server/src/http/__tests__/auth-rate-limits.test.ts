@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { testsBaseUrl } from '../../__tests__/setup';
+import { eq } from 'drizzle-orm';
+import { tdb, testsBaseUrl } from '../../__tests__/setup';
+import { users } from '../../db/schema';
 import { setClientIpOptionsForTests } from '../../helpers/client-ip-options';
 import { createChallengeToken } from '../../helpers/totp';
 import { AUTH_ACCOUNT_MAX_ATTEMPTS } from '../auth-rate-limits';
@@ -48,7 +50,7 @@ describe('auth rate limits', () => {
 		for (let index = 0; index < AUTH_ACCOUNT_MAX_ATTEMPTS; index += 1) {
 			const response = await postJson(
 				'/login',
-				{ identity: index % 2 === 0 ? 'testowner' : ' TestOwner', password: 'wrongpassword' },
+				{ identity: 'testowner', password: 'wrongpassword' },
 				{ 'x-forwarded-for': spoofedIp(index) },
 			);
 
@@ -74,6 +76,37 @@ describe('auth rate limits', () => {
 		);
 
 		expect(otherAccount.status).toBe(200);
+	});
+
+	test('case and whitespace distinct accounts retain independent login budgets', async () => {
+		setClientIpOptionsForTests({ trustProxy: true });
+		const owner = await tdb.select().from(users).where(eq(users.id, 1)).get();
+		expect(owner).toBeDefined();
+		if (!owner) throw new Error('Missing seeded owner');
+		for (const identity of ['TestOwner', ' testowner']) {
+			await tdb.insert(users).values({ identity, name: identity, password: owner.password, createdAt: Date.now() });
+		}
+		for (let index = 0; index < AUTH_ACCOUNT_MAX_ATTEMPTS; index += 1) {
+			await postJson(
+				'/login',
+				{ identity: 'testowner', password: 'wrongpassword' },
+				{ 'x-forwarded-for': spoofedIp(index) },
+			);
+		}
+		const blocked = await postJson(
+			'/login',
+			{ identity: 'testowner', password: 'password123' },
+			{ 'x-forwarded-for': spoofedIp(20) },
+		);
+		expect(blocked.status).toBe(429);
+		for (const [index, identity] of ['TestOwner', ' testowner'].entries()) {
+			const response = await postJson(
+				'/login',
+				{ identity, password: 'password123' },
+				{ 'x-forwarded-for': spoofedIp(21 + index) },
+			);
+			expect(response.status).toBe(200);
+		}
 	});
 
 	test('the per-user 2FA limiter trips across different client IPs', async () => {

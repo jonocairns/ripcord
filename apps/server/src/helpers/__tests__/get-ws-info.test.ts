@@ -63,6 +63,19 @@ describe('getWsInfo IP extraction', () => {
 			expect(ipOf({ 'x-forwarded-for': '9.9.9.9' }, LOCAL_PROXY, options)).toBe(LOCAL_PROXY);
 		});
 
+		test('matches IPv4-mapped proxy CIDRs against mapped and IPv4 peers', () => {
+			const options = { trustedProxies: '::ffff:172.17.0.0/120' };
+			expect(ipOf({ 'x-forwarded-for': '9.9.9.9' }, '::ffff:172.17.0.1', options)).toBe('9.9.9.9');
+			expect(ipOf({ 'x-forwarded-for': '9.9.9.9' }, '172.17.0.1', options)).toBe('9.9.9.9');
+			expect(ipOf({ 'x-forwarded-for': '9.9.9.9' }, '172.17.1.1', options)).toBe('172.17.1.1');
+		});
+
+		test('rejects mapped CIDRs broader than the IPv4 mapping', () => {
+			expect(ipOf({ 'x-forwarded-for': '9.9.9.9' }, DOCKER_GATEWAY, { trustedProxies: '::ffff:0:0/80' })).toBe(
+				DOCKER_GATEWAY,
+			);
+		});
+
 		test('skips invalid trusted proxy entries without trusting everything', () => {
 			expect(ipOf({ 'x-forwarded-for': '9.9.9.9' }, PUBLIC_PEER, { trustedProxies: 'not-an-ip, 10.0.0.0/99' })).toBe(
 				PUBLIC_PEER,

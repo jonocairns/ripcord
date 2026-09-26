@@ -12,6 +12,7 @@ import { getFileUrl, getPublicAssetUrl, getUrlFromServer } from '@/helpers/get-f
 import { getLocalStorageItem, LocalStorageKey, setAuthTokens, setLocalStorageItem } from '@/helpers/storage';
 import { useForm } from '@/hooks/use-form';
 import { getRuntimeServerConfig, normalizeServerUrl, updateDesktopServerUrl } from '@/runtime/server-config';
+import { getLoginErrors } from './login-errors';
 
 type TLoginResponse =
 	| {
@@ -120,7 +121,7 @@ const Connect = memo(() => {
 			if (!response.ok) {
 				const data = await response.json();
 
-				setErrors(data.errors || {});
+				setErrors(getLoginErrors(data, response.headers.get('retry-after')));
 				return;
 			}
 

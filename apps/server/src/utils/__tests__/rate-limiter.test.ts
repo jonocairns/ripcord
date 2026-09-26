@@ -95,23 +95,33 @@ describe('FixedWindowRateLimiter', () => {
 		});
 	});
 
-	test('evicts oldest key when maxEntries is reached', () => {
-		const limiter = new FixedWindowRateLimiter({
-			maxRequests: 2,
-			windowMs: 60_000,
-			maxEntries: 2,
-		});
+	test('preserves active budgets at capacity despite repeated new keys', () => {
+		const limiter = new FixedWindowRateLimiter({ maxRequests: 2, windowMs: 60_000, maxEntries: 2 });
+		limiter.consume('target');
+		limiter.consume('target');
+		now += 1000;
+		limiter.consume('legitimate');
 
-		limiter.consume('a');
-		limiter.consume('b');
-		limiter.consume('c');
+		for (let index = 0; index < 10; index += 1) {
+			expect(limiter.consume(`churn-${index}`)).toEqual({ allowed: false, remaining: 0, retryAfterMs: 59_000 });
+			expect(limiter.consume('target').allowed).toBe(false);
+		}
+		expect(limiter.consume('legitimate').allowed).toBe(true);
+		expect(limiter.consume('legitimate').allowed).toBe(false);
 
-		const aAfterEviction = limiter.consume('a');
+		now += 59_000;
+		expect(limiter.consume('new-key').allowed).toBe(true);
+		expect(limiter.consume('legitimate')).toEqual({ allowed: false, remaining: 0, retryAfterMs: 1000 });
+	});
 
-		expect(aAfterEviction).toEqual({
-			allowed: true,
-			remaining: 1,
-			retryAfterMs: 0,
-		});
+	test('an expired existing key starts a fresh window at capacity', () => {
+		const limiter = new FixedWindowRateLimiter({ maxRequests: 1, windowMs: 5000, maxEntries: 2 });
+		limiter.consume('old');
+		now += 1000;
+		limiter.consume('later');
+		now += 4000;
+		expect(limiter.consume('old').allowed).toBe(true);
+		expect(limiter.consume('old').allowed).toBe(false);
+		expect(limiter.consume('later').allowed).toBe(false);
 	});
 });
