@@ -19,6 +19,7 @@ import { db } from '../db';
 import { getAllChannelUserPermissions } from '../db/queries/channels';
 import { getUserById, getUserByToken } from '../db/queries/users';
 import { channels } from '../db/schema';
+import { getClientIpOptions } from '../helpers/client-ip-options';
 import { getWsInfo } from '../helpers/get-ws-info';
 import { logger } from '../logger';
 import { enqueueActivityLog } from '../queues/activity-log';
@@ -258,18 +259,14 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 
 	const getConnectionInfo = () => {
 		if (!wss) {
-			return getWsInfo(undefined, req, {
-				trustProxy: config.server.trustProxy,
-			});
+			return getWsInfo(undefined, req, getClientIpOptions());
 		}
 
 		const ws = connectionWs ?? getTrackedClients().find(isCurrentClient);
 
 		if (!ws) return undefined;
 
-		return getWsInfo(ws, req, {
-			trustProxy: config.server.trustProxy,
-		});
+		return getWsInfo(ws, req, getClientIpOptions());
 	};
 
 	const needsPermission = async (targetPermission: Permission | Permission[]) => {

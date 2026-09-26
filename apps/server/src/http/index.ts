@@ -2,6 +2,7 @@ import http from 'node:http';
 import chalk from 'chalk';
 import z from 'zod';
 import { config } from '../config';
+import { getClientIpOptions } from '../helpers/client-ip-options';
 import { getWsInfo } from '../helpers/get-ws-info';
 import { logger } from '../logger';
 import {
@@ -17,7 +18,7 @@ import { logoutRouteHandler } from './logout';
 import { publicRouteHandler } from './public';
 import { refreshRouteHandler } from './refresh';
 import { uploadFileRouteHandler } from './upload';
-import { HttpPayloadTooLargeError, HttpValidationError } from './utils';
+import { HttpPayloadTooLargeError, HttpRateLimitError, HttpValidationError } from './utils';
 import { verify2faRouteHandler } from './verify-2fa';
 
 // 5 attempts per minute per IP for login route
@@ -57,9 +58,7 @@ const createHttpServer = async (port: number = config.server.port) => {
 				res.setHeader('Vary', 'Origin');
 			}
 
-			const info = getWsInfo(undefined, req, {
-				trustProxy: config.server.trustProxy,
-			});
+			const info = getWsInfo(undefined, req, getClientIpOptions());
 
 			logger.debug(`${chalk.dim('[HTTP]')} ${req.method} ${req.url} - ${info?.ip}`);
 
@@ -215,6 +214,11 @@ const createHttpServer = async (port: number = config.server.port) => {
 
 					res.writeHead(400, { 'Content-Type': 'application/json' });
 					res.end(JSON.stringify({ errors: errorsMap }));
+					return;
+				} else if (error instanceof HttpRateLimitError) {
+					res.setHeader('Retry-After', getRateLimitRetrySeconds(error.retryAfterMs));
+					res.writeHead(429, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: error.message }));
 					return;
 				} else if (error instanceof HttpPayloadTooLargeError) {
 					res.writeHead(413, { 'Content-Type': 'application/json' });

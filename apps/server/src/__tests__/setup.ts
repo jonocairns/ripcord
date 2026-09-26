@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import { createServer as createTcpServer } from 'node:net';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
+import { setClientIpOptionsForTests } from '../helpers/client-ip-options';
 import { DATA_PATH } from '../helpers/paths';
 import { createHttpServer } from '../http';
 import { loadMediasoup } from '../utils/mediasoup';
@@ -127,6 +128,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
 	clearRateLimitersForTests();
+	setClientIpOptionsForTests(undefined);
 
 	if (sqlite) {
 		try {

@@ -10,6 +10,7 @@ import {
 	verifyRecoveryCode,
 } from '../helpers/totp';
 import { enqueueActivityLog } from '../queues/activity-log';
+import { consumeTwoFactorAttempt } from './auth-rate-limits';
 import { issueAuthTokens } from './auth-tokens';
 import { getJsonBody } from './helpers';
 import { HttpValidationError } from './utils';
@@ -32,6 +33,10 @@ const verify2faRouteHandler = async (req: http.IncomingMessage, res: http.Server
 	if (!challenge) {
 		throw new HttpValidationError('challengeToken', 'Invalid or expired challenge token. Please log in again.');
 	}
+
+	// Keyed by user rather than challenge token: a fresh token is one password
+	// sign-in away, so a per-token budget would not bound code guessing.
+	consumeTwoFactorAttempt(challenge.userId);
 
 	const user = await getUserById(challenge.userId);
 
