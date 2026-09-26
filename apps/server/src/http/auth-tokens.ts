@@ -1,9 +1,11 @@
 import { sha256 } from '@sharkord/shared';
 import { randomUUIDv7 } from 'bun';
+import { eq } from 'drizzle-orm';
 import jwt from 'jsonwebtoken';
 import { db } from '../db';
 import { getServerToken } from '../db/queries/server';
-import { refreshTokens } from '../db/schema';
+import { refreshTokens, users } from '../db/schema';
+import { invariant } from '../utils/invariant';
 
 const ACCESS_TOKEN_EXPIRES_IN = '86400s'; // 1 day
 const REFRESH_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
@@ -25,12 +27,27 @@ const issueAuthTokens = async (userId: number, tokenVersion: number) => {
 	const refreshTokenHash = await sha256(refreshToken);
 	const now = Date.now();
 
-	await db.insert(refreshTokens).values({
-		userId,
-		tokenHash: refreshTokenHash,
-		expiresAt: now + REFRESH_TOKEN_TTL_MS,
-		createdAt: now,
-		updatedAt: now,
+	// Token signing/hashing can yield while a credential change revokes sessions.
+	// Recheck the version and insert synchronously in the same SQLite transaction.
+	db.transaction((tx) => {
+		const user = tx
+			.select({ tokenVersion: users.tokenVersion, banned: users.banned })
+			.from(users)
+			.where(eq(users.id, userId))
+			.get();
+		invariant(user && !user.banned && user.tokenVersion === tokenVersion, {
+			code: 'UNAUTHORIZED',
+			message: 'Your session is no longer valid. Please sign in again.',
+		});
+		tx.insert(refreshTokens)
+			.values({
+				userId,
+				tokenHash: refreshTokenHash,
+				expiresAt: now + REFRESH_TOKEN_TTL_MS,
+				createdAt: now,
+				updatedAt: now,
+			})
+			.run();
 	});
 
 	return { token, refreshToken };

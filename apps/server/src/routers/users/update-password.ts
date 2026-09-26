@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { db } from '../../db';
 import { refreshTokens, users } from '../../db/schema';
 import { hashPassword, verifyPassword } from '../../helpers/password';
+import { issueAuthTokens } from '../../http/auth-tokens';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
@@ -15,6 +16,7 @@ const updatePasswordRoute = protectedProcedure
 			currentPassword: z.string().min(4).max(128),
 			newPassword: z.string().min(8).max(128),
 			confirmNewPassword: z.string().min(8).max(128),
+			renewSession: z.boolean().optional(),
 		}),
 	)
 	.mutation(async ({ ctx, input }) => {
@@ -78,6 +80,7 @@ const updatePasswordRoute = protectedProcedure
 			type: ActivityLogType.USER_UPDATED_PASSWORD,
 			userId: ctx.user.id,
 		});
+		if (input.renewSession) return issueAuthTokens(ctx.userId, newTokenVersion);
 	});
 
 export { updatePasswordRoute };

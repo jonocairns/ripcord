@@ -151,10 +151,12 @@ const TwoFactor = memo(() => {
 		setDisableError('');
 		try {
 			const trpc = getTRPCClient();
-			await trpc.users.totpDisable.mutate({
+			const result = await trpc.users.totpDisable.mutate({
 				password: disablePassword,
 				code: disableCode,
+				renewSession: true,
 			});
+			if (result.token && result.refreshToken) setAuthTokens(result.token, result.refreshToken);
 			setEnabled(false);
 			setStep('idle');
 			setDisablePassword('');

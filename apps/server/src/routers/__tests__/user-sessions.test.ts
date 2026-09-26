@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { DisconnectCode } from '@sharkord/shared';
-import { eq } from 'drizzle-orm';
+import { applyWSSHandler } from '@trpc/server/adapters/ws';
+import { and, eq, isNull } from 'drizzle-orm';
 import { Secret, TOTP } from 'otpauth';
-import { WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { createMockContext } from '../../__tests__/context';
 import { getMockedToken, initTest, refresh, uploadFile } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
-import { users } from '../../db/schema';
+import { refreshTokens, users } from '../../db/schema';
 import { issueAuthTokens } from '../../http/auth-tokens';
 import { appRouter } from '../../routers';
 import { setTrackedClientsSource } from '../../utils/user-sessions';
@@ -122,12 +123,13 @@ describe('user session revocation', () => {
 
 		trackSockets([ownSocket, otherSocket]);
 
-		await ownCaller.users.updatePassword({
+		const result = await ownCaller.users.updatePassword({
 			currentPassword: 'password123',
 			newPassword: 'newpassword123',
 			confirmNewPassword: 'newpassword123',
 		});
 
+		expect(result).toBeUndefined();
 		expect(ownSocket.closeCalls).toEqual([]);
 		expect(otherSocket.closeCalls).toEqual([
 			{ code: DisconnectCode.KICKED, reason: 'Your password was changed. Please sign in again.' },
@@ -167,6 +169,7 @@ describe('user session revocation', () => {
 			code,
 			renewSession: true,
 		});
+		if (!renewedTokens.token || !renewedTokens.refreshToken) throw new Error('Expected renewed credentials');
 		const file = new File(['upload remains usable'], 'session.txt');
 
 		expect((await uploadFile(file, previousTokens.token)).status).toBe(401);
@@ -176,6 +179,57 @@ describe('user session revocation', () => {
 		await expect(caller.users.totpStatus()).resolves.toEqual({ enabled: true });
 	});
 
+	test('a credential rotation during token issuance cannot create a surviving refresh token', async () => {
+		const pendingTokens = issueAuthTokens(1, 0);
+		// Synchronous update occurs while signing/hashing is awaiting.
+		tdb.update(users).set({ tokenVersion: 1 }).where(eq(users.id, 1)).run();
+		await expect(pendingTokens).rejects.toThrow('Your session is no longer valid');
+		expect(await tdb.select().from(refreshTokens).where(eq(refreshTokens.userId, 1))).toEqual([]);
+	});
+
+	test('password change renews caller HTTP credentials only when requested', async () => {
+		const { caller } = await initTest(1);
+		const previous = await issueAuthTokens(1, 0);
+		const renewed = await caller.users.updatePassword({
+			currentPassword: 'password123',
+			newPassword: 'newpassword123',
+			confirmNewPassword: 'newpassword123',
+			renewSession: true,
+		});
+		if (!renewed) throw new Error('Expected renewed credentials');
+		const file = new File(['password changed'], 'session.txt');
+		expect((await uploadFile(file, previous.token)).status).toBe(401);
+		expect((await refresh(previous.refreshToken)).status).toBe(401);
+		expect((await uploadFile(file, renewed.token)).status).toBe(200);
+		expect((await refresh(renewed.refreshToken)).status).toBe(200);
+		await expect(caller.users.totpStatus()).resolves.toEqual({ enabled: false });
+	});
+
+	test('disabling 2FA renews caller HTTP credentials and revokes older credentials', async () => {
+		const { caller } = await initTest(1);
+		const setup = await caller.users.totpGenerateSetup({ password: 'password123' });
+		const totp = new TOTP({ secret: Secret.fromBase32(setup.secret), digits: 6, period: 30 });
+		const enabled = await caller.users.totpConfirmSetup({
+			setupToken: setup.setupToken,
+			code: totp.generate(),
+			renewSession: true,
+		});
+		if (!enabled.token || !enabled.refreshToken) throw new Error('Expected renewed credentials');
+		// The adjacent accepted time step avoids replaying the setup code.
+		const renewed = await caller.users.totpDisable({
+			password: 'password123',
+			code: totp.generate({ timestamp: Date.now() + 30_000 }),
+			renewSession: true,
+		});
+		if (!renewed.token || !renewed.refreshToken) throw new Error('Expected renewed credentials');
+		const file = new File(['2FA disabled'], 'session.txt');
+		expect((await uploadFile(file, enabled.token)).status).toBe(401);
+		expect((await refresh(enabled.refreshToken)).status).toBe(401);
+		expect((await uploadFile(file, renewed.token)).status).toBe(200);
+		expect((await refresh(renewed.refreshToken)).status).toBe(200);
+		await expect(caller.users.totpStatus()).resolves.toEqual({ enabled: false });
+	});
+
 	test('legacy 2FA setup clients are closed for reauthentication after success', async () => {
 		const { caller, mockedToken } = await initTest(1);
 		const ownSocket = createFakeSocket(1, TEST_CLIENT_INSTANCE_ID, { token: mockedToken });
@@ -183,10 +237,67 @@ describe('user session revocation', () => {
 		const setup = await caller.users.totpGenerateSetup({ password: 'password123' });
 		const code = new TOTP({ secret: Secret.fromBase32(setup.secret), digits: 6, period: 30 }).generate();
 		const result = await caller.users.totpConfirmSetup({ setupToken: setup.setupToken, code });
-		expect(result.success).toBe(true);
+		expect(result).toEqual({ success: true });
+		expect(
+			await tdb
+				.select()
+				.from(refreshTokens)
+				.where(and(eq(refreshTokens.userId, 1), isNull(refreshTokens.revokedAt))),
+		).toEqual([]);
 		await Bun.sleep(5);
 		expect(ownSocket.closeCalls.map((call) => call.code)).toEqual([DisconnectCode.KICKED]);
 		await expect(caller.users.totpStatus()).rejects.toThrow('Your session is no longer valid');
+	});
+
+	test('legacy 2FA setup queues its success over real WebSocket transport before closing', async () => {
+		const token = await getMockedToken(1);
+		const ctx = await createMockContext({ customToken: token });
+		const caller = appRouter.createCaller(ctx);
+		const { handshakeHash } = await caller.others.handshake();
+		await caller.others.joinServer({ handshakeHash });
+		const setup = await caller.users.totpGenerateSetup({ password: 'password123' });
+		const wss = new WebSocketServer({ port: 0 });
+		applyWSSHandler({ wss, router: appRouter, createContext: async () => ctx });
+		if (!wss.address()) await new Promise<void>((resolve) => wss.once('listening', resolve));
+		const address = wss.address();
+		if (!address || typeof address === 'string') throw new Error('Missing WebSocket port');
+		const client = new WebSocket(`ws://127.0.0.1:${address.port}`);
+		const received: unknown[] = [];
+		try {
+			const closed = new Promise<number>((resolve, reject) => {
+				client.on('message', (message) => received.push(JSON.parse(message.toString())));
+				client.once('close', (code) => resolve(code));
+				client.once('error', reject);
+			});
+			await new Promise<void>((resolve) => client.once('open', resolve));
+			setTrackedClientsSource(() =>
+				Array.from(wss.clients, (socket) =>
+					Object.assign(socket, {
+						userId: 1,
+						token,
+						clientInstanceId: TEST_CLIENT_INSTANCE_ID,
+					}),
+				),
+			);
+			client.send(
+				JSON.stringify({
+					id: 1,
+					method: 'mutation',
+					params: {
+						path: 'users.totpConfirmSetup',
+						input: {
+							setupToken: setup.setupToken,
+							code: new TOTP({ secret: Secret.fromBase32(setup.secret), digits: 6, period: 30 }).generate(),
+						},
+					},
+				}),
+			);
+			expect(await closed).toBe(DisconnectCode.KICKED);
+			expect(received).toContainEqual({ id: 1, result: { type: 'data', data: { success: true } } });
+		} finally {
+			client.terminate();
+			wss.close();
+		}
 	});
 
 	test('a successful forced password change unblocks the retained context', async () => {

@@ -161,7 +161,9 @@ const totpConfirmSetupRoute = protectedProcedure
 			userId: ctx.userId,
 		});
 
-		const authTokens = await issueAuthTokens(ctx.userId, newTokenVersion);
+		const authTokens = input.renewSession ? await issueAuthTokens(ctx.userId, newTokenVersion) : undefined;
+		// The tRPC WS adapter queues the mutation response synchronously after this
+		// promise resolves. Keep this timer after all awaits so close follows send.
 		if (legacyOwnWs) setTimeout(() => legacyOwnWs.close(DisconnectCode.KICKED, reason), 0).unref();
 		return { success: true, ...authTokens };
 	});
@@ -171,6 +173,7 @@ const totpDisableRoute = protectedProcedure
 		z.object({
 			password: z.string().min(1),
 			code: z.string().length(6),
+			renewSession: z.boolean().optional(),
 		}),
 	)
 	.mutation(async ({ ctx, input }) => {
@@ -210,7 +213,8 @@ const totpDisableRoute = protectedProcedure
 			userId: ctx.userId,
 		});
 
-		return { success: true };
+		const authTokens = input.renewSession ? await issueAuthTokens(ctx.userId, newTokenVersion) : undefined;
+		return { success: true, ...authTokens };
 	});
 
 const totpRegenerateRecoveryCodesRoute = protectedProcedure
