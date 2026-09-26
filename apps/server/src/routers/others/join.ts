@@ -14,6 +14,7 @@ import { getSettings } from '../../db/queries/server';
 import { getPublicUsers } from '../../db/queries/users';
 import { categories, users } from '../../db/schema';
 import { hashPassword, isArgon2Hash, verifyPassword } from '../../helpers/password';
+import { toPublicChannel } from '../../helpers/to-public-channel';
 import { logger } from '../../logger';
 import { pluginManager } from '../../plugins';
 import { eventBus } from '../../plugins/event-bus';
@@ -180,7 +181,7 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
 
 		return {
 			categories: allCategories,
-			channels: channelsForUser,
+			channels: channelsForUser.map(toPublicChannel),
 			users: processedPublicUsers,
 			serverId: settings.serverId,
 			serverName: settings.name,

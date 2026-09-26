@@ -1,7 +1,7 @@
 import { closestCenter, DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ChannelPermission, ChannelType, Permission, type TChannel } from '@sharkord/shared';
+import { ChannelPermission, ChannelType, Permission, type TPublicChannel } from '@sharkord/shared';
 import { Hash, Volume2 } from 'lucide-react';
 import { memo, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
@@ -23,7 +23,7 @@ import { useVoiceChannelNavigation } from './use-voice-channel-navigation';
 import { VoiceUser } from './voice-user';
 
 type TVoiceProps = Omit<TItemWrapperProps, 'children'> & {
-	channel: TChannel;
+	channel: TPublicChannel;
 };
 
 const Voice = memo(({ channel, ...props }: TVoiceProps) => {
@@ -60,7 +60,7 @@ const Voice = memo(({ channel, ...props }: TVoiceProps) => {
 });
 
 type TTextProps = Omit<TItemWrapperProps, 'children'> & {
-	channel: TChannel;
+	channel: TPublicChannel;
 };
 
 const Text = memo(({ channel, ...props }: TTextProps) => {

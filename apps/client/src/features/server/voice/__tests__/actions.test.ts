@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { ChannelType, StreamKind, type TChannel } from '@sharkord/shared';
+import { ChannelType, StreamKind, type TPublicChannel } from '@sharkord/shared';
 import { useServerStore } from '../../slice';
 import { SoundType } from '../../types';
 import type { TPendingVoiceReconnect, TVoiceReconnectSuppression } from '../reconnect-coordinator';
@@ -69,11 +69,11 @@ const updateStateMutate = mock(async (_input?: unknown) => {
 
 type TPinnedCardState = NonNullable<ReturnType<typeof useServerStore.getState>['pinnedCard']>;
 
-const createChannel = (id: number, type: ChannelType): TChannel =>
+const createChannel = (id: number, type: ChannelType): TPublicChannel =>
 	({
 		id,
 		type,
-	}) as unknown as TChannel;
+	}) as unknown as TPublicChannel;
 
 class MockAudioParam {
 	setValueAtTime() {}

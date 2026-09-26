@@ -212,13 +212,12 @@ const getAffectedUserIdsForChannel = async (
 	const permission = options?.permission;
 
 	const usersWithDirectPerms = await db
-		.select({ userId: channelUserPermissions.userId })
+		.select({ userId: channelUserPermissions.userId, allow: channelUserPermissions.allow })
 		.from(channelUserPermissions)
 		.where(
 			and(
 				eq(channelUserPermissions.channelId, channelId),
 				permission ? eq(channelUserPermissions.permission, permission) : undefined,
-				permission ? eq(channelUserPermissions.allow, true) : undefined,
 			),
 		);
 
@@ -250,10 +249,19 @@ const getAffectedUserIdsForChannel = async (
 		.from(userRoles)
 		.where(eq(userRoles.roleId, OWNER_ROLE_ID));
 
+	// A user-level permission overrides the user's roles (as in getChannelsForUser
+	// and getAllChannelUserPermissions), so an explicit deny excludes a user that a
+	// role would otherwise let in.
+	const deniedUserIds = new Set(permission ? usersWithDirectPerms.filter((u) => !u.allow).map((u) => u.userId) : []);
+
 	const userIdSet = new Set<number>();
 
-	usersWithDirectPerms.forEach((u) => userIdSet.add(u.userId));
-	usersWithRoles.forEach((u) => userIdSet.add(u.userId));
+	usersWithDirectPerms.forEach((u) => {
+		if (!permission || u.allow) userIdSet.add(u.userId);
+	});
+	usersWithRoles.forEach((u) => {
+		if (!deniedUserIds.has(u.userId)) userIdSet.add(u.userId);
+	});
 	owners.forEach((u) => userIdSet.add(u.userId));
 
 	return Array.from(userIdSet);

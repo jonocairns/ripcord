@@ -1,15 +1,16 @@
 import { ChannelPermission, Permission, ServerEvents, type TChannelUserPermissionsMap } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
+import { toPublicChannel } from '../helpers/to-public-channel';
 import { pluginManager } from '../plugins';
 import { pubsub } from '../utils/pubsub';
 import { db } from '.';
-import { getAffectedUserIdsForChannel, getAllChannelUserPermissions } from './queries/channels';
+import { getAffectedUserIdsForChannel, getAllChannelUserPermissions, getChannelsForUser } from './queries/channels';
 import { getEmojiById } from './queries/emojis';
 import { getMessage } from './queries/messages';
 import { getRole } from './queries/roles';
 import { getPublicSettings } from './queries/server';
 import { getPublicUserById, getUserIdsWithPermission } from './queries/users';
-import { categories, channels } from './schema';
+import { categories, channels, users } from './schema';
 
 const publishMessage = async (
 	messageId: number | undefined,
@@ -109,11 +110,24 @@ const publishUser = async (userId: number | undefined, type: 'create' | 'update'
 	pubsub.publish(targetEvent, user);
 };
 
+const getChannelViewerIds = (channelId: number) =>
+	getAffectedUserIdsForChannel(channelId, { permission: ChannelPermission.VIEW_CHANNEL });
+
+// Channel events only reach users who may see the channel, so a private
+// channel's name and topic stay hidden from everyone else.
 const publishChannel = async (channelId: number | undefined, type: 'create' | 'update' | 'delete') => {
 	if (!channelId) return;
 
 	if (type === 'delete') {
-		pubsub.publish(ServerEvents.CHANNEL_DELETE, channelId);
+		// The row is already gone, so viewers can no longer be resolved. The
+		// payload is only the id, so every user may receive it.
+		const allUsers = await db.select({ id: users.id }).from(users);
+
+		pubsub.publishFor(
+			allUsers.map((user) => user.id),
+			ServerEvents.CHANNEL_DELETE,
+			channelId,
+		);
 		return;
 	}
 
@@ -123,7 +137,62 @@ const publishChannel = async (channelId: number | undefined, type: 'create' | 'u
 
 	const targetEvent = type === 'create' ? ServerEvents.CHANNEL_CREATE : ServerEvents.CHANNEL_UPDATE;
 
-	pubsub.publish(targetEvent, channel);
+	pubsub.publishFor(await getChannelViewerIds(channelId), targetEvent, toPublicChannel(channel));
+};
+
+// After a change to who may view `channelId` (channel permission edits, the
+// channel turning private or public), sends each of `userIds` a create if they
+// can see it now and a delete if they cannot. Both are idempotent on clients,
+// so users whose access did not change are unaffected. Call it after
+// publishChannelPermissions: a client that loses the channel it has open
+// checks the new permissions while the channel is still in its store.
+const publishChannelVisibility = async (channelId: number, userIds: number[]) => {
+	if (userIds.length === 0) return;
+
+	const channel = await db.select().from(channels).where(eq(channels.id, channelId)).get();
+
+	if (!channel) return;
+
+	const viewerIds = new Set(await getChannelViewerIds(channelId));
+	const canView = userIds.filter((userId) => viewerIds.has(userId));
+	const cannotView = userIds.filter((userId) => !viewerIds.has(userId));
+
+	if (canView.length > 0) {
+		pubsub.publishFor(canView, ServerEvents.CHANNEL_CREATE, toPublicChannel(channel));
+	}
+
+	if (cannotView.length > 0) {
+		pubsub.publishFor(cannotView, ServerEvents.CHANNEL_DELETE, channelId);
+	}
+};
+
+// Same convergence for a change to the users themselves (role added, removed or
+// deleted), which can change their access to every private channel at once.
+const publishUserChannelVisibility = async (userIds: number[]) => {
+	if (userIds.length === 0) return;
+
+	const privateChannels = await db.select({ id: channels.id }).from(channels).where(eq(channels.private, true));
+
+	if (privateChannels.length === 0) return;
+
+	await Promise.all(
+		userIds.map(async (userId) => {
+			const visibleChannels = await getChannelsForUser(userId);
+			const visibleChannelIds = new Set(visibleChannels.map((channel) => channel.id));
+
+			for (const channel of visibleChannels) {
+				if (!channel.private) continue;
+
+				pubsub.publishFor(userId, ServerEvents.CHANNEL_CREATE, toPublicChannel(channel));
+			}
+
+			for (const { id } of privateChannels) {
+				if (visibleChannelIds.has(id)) continue;
+
+				pubsub.publishFor(userId, ServerEvents.CHANNEL_DELETE, id);
+			}
+		}),
+	);
 };
 
 const publishSettings = async () => {
@@ -178,10 +247,12 @@ export {
 	publishCategory,
 	publishChannel,
 	publishChannelPermissions,
+	publishChannelVisibility,
 	publishEmoji,
 	publishMessage,
 	publishPluginCommands,
 	publishRole,
 	publishSettings,
 	publishUser,
+	publishUserChannelVisibility,
 };

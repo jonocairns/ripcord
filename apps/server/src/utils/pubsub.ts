@@ -3,7 +3,6 @@ import type {
 	ServerEvents,
 	StreamKind,
 	TCategory,
-	TChannel,
 	TChannelUserPermissionsMap,
 	TCommandsMapByPlugin,
 	TExternalStream,
@@ -12,6 +11,7 @@ import type {
 	TJoinedPublicUser,
 	TJoinedRole,
 	TLogEntry,
+	TPublicChannel,
 	TPublicServerSettings,
 	TVoiceTransportFailureEvent,
 	TVoiceUserState,
@@ -37,8 +37,8 @@ type Events = {
 	[ServerEvents.USER_UPDATE]: TJoinedPublicUser;
 	[ServerEvents.USER_DELETE]: number;
 
-	[ServerEvents.CHANNEL_CREATE]: TChannel;
-	[ServerEvents.CHANNEL_UPDATE]: TChannel;
+	[ServerEvents.CHANNEL_CREATE]: TPublicChannel;
+	[ServerEvents.CHANNEL_UPDATE]: TPublicChannel;
 	[ServerEvents.CHANNEL_DELETE]: number;
 	[ServerEvents.CHANNEL_PERMISSIONS_UPDATE]: TChannelUserPermissionsMap;
 	[ServerEvents.CHANNEL_READ_STATES_UPDATE]: {

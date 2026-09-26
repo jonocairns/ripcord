@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { channels } from '../../db/schema';
+import { toPublicChannel } from '../../helpers/to-public-channel';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 
@@ -22,7 +23,7 @@ const getChannelRoute = protectedProcedure
 			message: 'Channel not found',
 		});
 
-		return channel;
+		return toPublicChannel(channel);
 	});
 
 export { getChannelRoute };

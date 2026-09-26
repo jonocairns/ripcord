@@ -2,7 +2,7 @@ import { Permission } from '@sharkord/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
-import { publishUser } from '../../db/publishers';
+import { publishChannelPermissions, publishUser, publishUserChannelVisibility } from '../../db/publishers';
 import { userRoles } from '../../db/schema';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
@@ -35,6 +35,10 @@ const addRoleRoute = protectedProcedure
 		});
 
 		publishUser(input.userId, 'update');
+
+		// Role channel permissions may grant access to private channels.
+		await publishChannelPermissions([input.userId]);
+		await publishUserChannelVisibility([input.userId]);
 	});
 
 export { addRoleRoute };

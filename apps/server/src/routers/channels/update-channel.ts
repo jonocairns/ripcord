@@ -2,8 +2,8 @@ import { ActivityLogType, Permission } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
-import { publishChannel } from '../../db/publishers';
-import { channels } from '../../db/schema';
+import { publishChannel, publishChannelVisibility } from '../../db/publishers';
+import { channels, users } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
 import { protectedProcedure } from '../../utils/trpc';
@@ -38,6 +38,14 @@ const updateChannelRoute = protectedProcedure
 		await publishChannel(updatedChannel.id, 'update');
 
 		if (input.private !== undefined) {
+			const allUsers = await db.select({ id: users.id }).from(users);
+
+			// Turning private hides the channel from users without VIEW_CHANNEL;
+			// turning public reveals it to users who never received it.
+			await publishChannelVisibility(
+				updatedChannel.id,
+				allUsers.map((user) => user.id),
+			);
 			await revalidateActiveVoiceSessions({
 				channelIds: [updatedChannel.id],
 			});

@@ -2,7 +2,7 @@ import { Permission } from '@sharkord/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
-import { publishUser } from '../../db/publishers';
+import { publishChannelPermissions, publishUser, publishUserChannelVisibility } from '../../db/publishers';
 import { userRoles } from '../../db/schema';
 import { invariant } from '../../utils/invariant';
 import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
@@ -33,10 +33,12 @@ const removeRoleRoute = protectedProcedure
 
 		await Promise.all([
 			publishUser(input.userId, 'update'),
+			publishChannelPermissions([input.userId]),
 			revalidateActiveVoiceSessions({
 				userIds: [input.userId],
 			}),
 		]);
+		await publishUserChannelVisibility([input.userId]);
 	});
 
 export { removeRoleRoute };
