@@ -267,6 +267,22 @@ class TemporaryFileManager {
 		// on disk indefinitely).
 		await Promise.all([this.cleanupDirectory(UPLOADS_PATH, 0), this.cleanupDirectory(TMP_PATH, 0)]);
 	};
+
+	// Temporary uploads outlive a test by up to TEMP_FILE_TTL and count against
+	// the per-user and global temporary capacity, so tests start from none.
+	public resetForTests = async (): Promise<void> => {
+		const files = this.temporaryFiles;
+
+		this.temporaryFiles = [];
+
+		for (const timeout of Object.values(this.timeouts)) {
+			clearTimeout(timeout);
+		}
+
+		this.timeouts = {};
+
+		await Promise.all(files.map((file) => fs.rm(file.path, { force: true })));
+	};
 }
 
 class FileManager {
@@ -281,6 +297,7 @@ class FileManager {
 	public getTemporaryFile = this.tempFileManager.getTemporaryFile;
 	public temporaryFileExists = this.tempFileManager.temporaryFileExists;
 	public initialize = this.tempFileManager.cleanupStaleFiles;
+	public resetTemporaryFilesForTests = this.tempFileManager.resetForTests;
 
 	private handleStorageLimits = async (tempFile: TTempFile) => {
 		const [settings, userStorage, serverStorage] = await Promise.all([
