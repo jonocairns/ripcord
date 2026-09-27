@@ -1,4 +1,12 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
+
+const serverConfig = await import('@/runtime/server-config');
+let restoreRuntimeConfig: (() => void) | undefined;
+
+afterEach(() => {
+	restoreRuntimeConfig?.();
+	restoreRuntimeConfig = undefined;
+});
 
 describe('configureClientErrorReporting', () => {
 	test('initializes Sentry once when a dsn is provided and skips when empty', async () => {
@@ -34,17 +42,14 @@ describe('configureClientErrorReporting', () => {
 			captureException: mock(() => undefined),
 			ErrorBoundary: () => null,
 		}));
-		// Bun module mocks apply to every test file in the run, so keep the real
-		// exports and override only what this test needs.
-		const actualServerConfig = await import('@/runtime/server-config');
-
-		mock.module('@/runtime/server-config', () => ({
-			...actualServerConfig,
-			getRuntimeServerConfig: () => ({
-				source: 'web',
-				serverUrl: 'https://server.example',
-			}),
-		}));
+		const configSpy = spyOn(serverConfig, 'getRuntimeServerConfig').mockReturnValue({
+			source: 'web',
+			serverUrl: 'https://server.example',
+			serverHost: 'server.example',
+			isConfigured: true,
+			needsSetup: false,
+		});
+		restoreRuntimeConfig = () => configSpy.mockRestore();
 
 		Reflect.set(globalThis, 'VITE_APP_VERSION', 'test-version');
 
