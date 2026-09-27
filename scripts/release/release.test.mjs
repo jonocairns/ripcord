@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
 	assertTagSource,
+	checkoutQualitySource,
 	publishRelease,
 	resolveQualitySource,
 	resolveRelease,
@@ -104,6 +105,73 @@ test('quality checks reject mismatched verification output', () => {
 			}),
 		/verified quality source/,
 	);
+});
+
+test('quality source checkout validates ancestry before fetching and checks the fetched SHA', () => {
+	const commands = [];
+	const run = (binary, args) => {
+		if (binary === 'gh')
+			return mockGitHub({
+				[`compare/${sourceSha}...${testedSha}`]: { status: 'ahead', merge_base_commit: { sha: sourceSha } },
+			})(binary, args);
+		commands.push(args);
+		return args[1] === 'HEAD' ? testedSha : sourceSha;
+	};
+	checkoutQualitySource({
+		repository,
+		workflowSha: testedSha,
+		workflowRef: 'refs/heads/main',
+		requestedSha: sourceSha,
+		run,
+	});
+	assert.deepEqual(commands, [
+		['rev-parse', 'HEAD'],
+		['fetch', '--no-tags', '--depth=1', 'origin', sourceSha],
+		['rev-parse', 'FETCH_HEAD'],
+		['checkout', '--detach', sourceSha],
+	]);
+});
+
+test('quality source checkout rejects a fetched SHA mismatch before checkout', () => {
+	const commands = [];
+	const run = (binary, args) => {
+		if (binary === 'gh')
+			return mockGitHub({
+				[`compare/${sourceSha}...${testedSha}`]: { status: 'ahead', merge_base_commit: { sha: sourceSha } },
+			})(binary, args);
+		commands.push(args);
+		return testedSha;
+	};
+	assert.throws(
+		() =>
+			checkoutQualitySource({
+				repository,
+				workflowSha: testedSha,
+				workflowRef: 'refs/heads/main',
+				requestedSha: sourceSha,
+				run,
+			}),
+		/fetched quality source/,
+	);
+	assert.equal(
+		commands.some((args) => args[0] === 'checkout'),
+		false,
+	);
+});
+
+test('ordinary PR checkout retains its workflow merge commit without fetching', () => {
+	const commands = [];
+	checkoutQualitySource({
+		repository,
+		workflowSha: testedSha,
+		workflowRef: 'refs/pull/308/merge',
+		run: (binary, args) => {
+			assert.equal(binary, 'git');
+			commands.push(args);
+			return testedSha;
+		},
+	});
+	assert.deepEqual(commands, [['rev-parse', 'HEAD']]);
 });
 
 function fixture(t) {

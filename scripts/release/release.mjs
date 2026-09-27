@@ -34,6 +34,17 @@ export function resolveQualitySource({ repository, workflowSha, workflowRef, req
 	return comparison.merge_base_commit.sha;
 }
 
+export function checkoutQualitySource(options) {
+	const run = options.run || command;
+	const sha = resolveQualitySource(options);
+	if (run('git', ['rev-parse', 'HEAD']) === sha) return;
+	run('git', ['fetch', '--no-tags', '--depth=1', 'origin', sha]);
+	if (run('git', ['rev-parse', 'FETCH_HEAD']) !== sha) {
+		throw new Error('The fetched quality source must match the verified commit.');
+	}
+	run('git', ['checkout', '--detach', sha]);
+}
+
 export function validateReleaseTag(tag) {
 	if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
 		throw new Error('Expected a stable vX.Y.Z release tag.');

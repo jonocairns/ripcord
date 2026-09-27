@@ -21,8 +21,6 @@ jobs:
   source:
     name: Verify quality source
     runs-on: ubuntu-latest
-    outputs:
-      sha: ${{ steps.source.outputs.sha }}
     steps:
       # Run verification from the workflow commit before checking out caller input.
       - uses: actions/checkout@v5
@@ -46,8 +44,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
+
+      - name: Checkout verified quality source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_SOURCE_SHA: ${{ inputs.ref }}
+        run: node scripts/release/cli.mjs checkout-quality
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -98,8 +101,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
+
+      - name: Checkout verified quality source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_SOURCE_SHA: ${{ inputs.ref }}
+        run: node scripts/release/cli.mjs checkout-quality
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -143,8 +151,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
+
+      - name: Checkout verified quality source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_SOURCE_SHA: ${{ inputs.ref }}
+        run: node scripts/release/cli.mjs checkout-quality
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -188,8 +201,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
+
+      - name: Checkout verified quality source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_SOURCE_SHA: ${{ inputs.ref }}
+        run: node scripts/release/cli.mjs checkout-quality
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2

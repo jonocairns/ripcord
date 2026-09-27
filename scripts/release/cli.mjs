@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import {
 	api,
 	assertTagSource,
+	checkoutQualitySource,
 	command,
 	output,
 	publishRelease,
@@ -18,6 +19,14 @@ const repository = process.env.GITHUB_REPOSITORY;
 const tag = process.env.RELEASE_TAG;
 
 switch (process.argv[2]) {
+	case 'checkout-quality':
+		checkoutQualitySource({
+			repository,
+			workflowSha: process.env.GITHUB_SHA,
+			workflowRef: process.env.GITHUB_REF,
+			requestedSha: process.env.QUALITY_SOURCE_SHA,
+		});
+		break;
 	case 'quality-source':
 		output({
 			sha: resolveQualitySource({
