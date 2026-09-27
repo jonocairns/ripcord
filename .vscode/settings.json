@@ -3,5 +3,8 @@
 	"editor.formatOnSave": true,
 	"editor.codeActionsOnSave": {
 		"source.organizeImports.biome": "explicit"
-	}
+	},
+	"nixEnvSelector.nixFile": "${workspaceFolder}/flake.nix",
+	"nixEnvSelector.useFlakes": true,
+	"nixEnvSelector.flakeShell": "default"
 }
