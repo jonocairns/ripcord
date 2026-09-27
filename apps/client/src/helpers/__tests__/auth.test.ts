@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 
 const SERVER_URL = 'http://example.test';
 
@@ -40,26 +40,28 @@ const readStoredTokens = () => ({
 	refresh: (globalThis as { localStorage: Storage }).localStorage.getItem('sharkord-refresh-token'),
 });
 
-const actualServerConfig = await import('@/runtime/server-config');
-
-mock.module('@/runtime/server-config', () => ({
-	...actualServerConfig,
-	getRuntimeServerConfig: () => ({
-		source: 'web',
-		serverUrl: SERVER_URL,
-		serverHost: 'example.test',
-	}),
-}));
+const serverConfig = await import('@/runtime/server-config');
+let restoreRuntimeConfig: (() => void) | undefined;
 
 let originalFetch: typeof fetch | undefined;
 
 describe('refreshAccessToken — rotation race', () => {
 	beforeEach(() => {
 		installStorageStubs();
+		const configSpy = spyOn(serverConfig, 'getRuntimeServerConfig').mockReturnValue({
+			source: 'web',
+			serverUrl: SERVER_URL,
+			serverHost: 'example.test',
+			isConfigured: true,
+			needsSetup: false,
+		});
+		restoreRuntimeConfig = () => configSpy.mockRestore();
 		originalFetch = (globalThis as { fetch?: typeof fetch }).fetch;
 	});
 
 	afterEach(async () => {
+		restoreRuntimeConfig?.();
+		restoreRuntimeConfig = undefined;
 		if (originalFetch) {
 			Reflect.set(globalThis, 'fetch', originalFetch);
 		}
