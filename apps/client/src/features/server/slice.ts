@@ -1,6 +1,5 @@
 import type {
 	TCategory,
-	TChannel,
 	TChannelUserPermissionsMap,
 	TCommandInfo,
 	TCommandsMapByPlugin,
@@ -10,6 +9,7 @@ import type {
 	TJoinedMessage,
 	TJoinedPublicUser,
 	TJoinedRole,
+	TPublicChannel,
 	TPublicServerSettings,
 	TReadStateMap,
 	TServerInfo,
@@ -28,7 +28,7 @@ export interface IServerState {
 	disconnectInfo?: TDisconnectInfo;
 	serverId?: string;
 	categories: TCategory[];
-	channels: TChannel[];
+	channels: TPublicChannel[];
 	emojis: TJoinedEmoji[];
 	ownUserId: number | undefined;
 	selectedChannelId: number | undefined;
@@ -58,7 +58,7 @@ export interface IServerState {
 export type TInitialServerData = {
 	serverId: string;
 	categories: TCategory[];
-	channels: TChannel[];
+	channels: TPublicChannel[];
 	users: TJoinedPublicUser[];
 	ownUserId: number;
 	mustChangePassword: boolean;
@@ -93,9 +93,9 @@ type TServerStore = IServerState & {
 	updateRole: (payload: { roleId: number; role: Partial<TJoinedRole> }) => void;
 	addRole: (role: TJoinedRole) => void;
 	removeRole: (payload: { roleId: number }) => void;
-	setChannels: (channels: TChannel[]) => void;
-	updateChannel: (payload: { channelId: number; channel: Partial<TChannel> }) => void;
-	addChannel: (channel: TChannel) => void;
+	setChannels: (channels: TPublicChannel[]) => void;
+	updateChannel: (payload: { channelId: number; channel: Partial<TPublicChannel> }) => void;
+	addChannel: (channel: TPublicChannel) => void;
 	removeChannel: (payload: { channelId: number }) => void;
 	setSelectedChannelId: (channelId: number | undefined) => void;
 	setCurrentVoiceChannelId: (channelId: number | undefined) => void;
@@ -560,8 +560,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({ channels: nextChannels });
 	},
 	removeChannel: ({ channelId }) => {
+		const state = get();
 		set({
-			channels: removeById(get().channels, channelId),
+			channels: removeById(state.channels, channelId),
+			selectedChannelId: state.selectedChannelId === channelId ? undefined : state.selectedChannelId,
+			lastTextChannelId: state.lastTextChannelId === channelId ? undefined : state.lastTextChannelId,
 		});
 	},
 	setSelectedChannelId: (channelId) => {

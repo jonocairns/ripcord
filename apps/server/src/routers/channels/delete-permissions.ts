@@ -2,7 +2,7 @@ import { ActivityLogType, Permission } from '@sharkord/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
-import { publishChannelPermissions } from '../../db/publishers';
+import { publishChannelPermissions, publishChannelVisibility } from '../../db/publishers';
 import { getAffectedUserIdsForChannel } from '../../db/queries/channels';
 import { channelRolePermissions, channelUserPermissions } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
@@ -52,6 +52,8 @@ const deletePermissionsRoute = protectedProcedure
 				channelIds: [input.channelId],
 			}),
 		]);
+		await publishChannelVisibility(input.channelId, affectedUserIds);
+
 		enqueueActivityLog({
 			type: ActivityLogType.DELETED_CHANNEL_PERMISSIONS,
 			userId: ctx.user.id,

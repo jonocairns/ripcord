@@ -5,7 +5,6 @@ import {
 	STORAGE_QUOTA,
 	type StorageOverflowAction,
 	type TCategory,
-	type TChannel,
 	type TChannelRolePermission,
 	type TChannelUserPermission,
 	type TDiskMetrics,
@@ -17,6 +16,7 @@ import {
 	type TLogin,
 	type TMessage,
 	type TPluginInfo,
+	type TPublicChannel,
 	type TRole,
 	type TStorageSettings,
 } from '@sharkord/shared';
@@ -227,7 +227,7 @@ const normalizeVoiceBitrate = (value: number | null | undefined) => {
 export const useAdminChannelGeneral = (channelId: number) => {
 	const [loading, setLoading] = useState(true);
 	const [errors, setErrors] = useState<TTrpcErrors>({});
-	const [channel, setChannel] = useState<TChannel | undefined>(undefined);
+	const [channel, setChannel] = useState<TPublicChannel | undefined>(undefined);
 
 	const fetchChannel = useCallback(async () => {
 		setLoading(true);
@@ -260,7 +260,7 @@ export const useAdminChannelGeneral = (channelId: number) => {
 	}, [channel, channelId]);
 
 	const onChange = useCallback(
-		(field: keyof TChannel, value: string | null | boolean | number) => {
+		(field: keyof TPublicChannel, value: string | null | boolean | number) => {
 			if (!channel) return;
 			setChannel((c) => (c ? { ...c, [field]: value } : c));
 			setErrors((e) => ({ ...e, [field]: undefined }));

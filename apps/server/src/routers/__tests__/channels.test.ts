@@ -1,8 +1,21 @@
 import { describe, expect, test } from 'bun:test';
-import { ChannelPermission, ChannelType } from '@sharkord/shared';
+import { ChannelPermission, ChannelType, ServerEvents } from '@sharkord/shared';
+import { eq } from 'drizzle-orm';
 import { initTest } from '../../__tests__/helpers';
-import { getChannelsReadStatesForUser } from '../../db/queries/channels';
+import { tdb } from '../../__tests__/setup';
+import { getAffectedUserIdsForChannel, getChannelsReadStatesForUser } from '../../db/queries/channels';
+import { channels } from '../../db/schema';
 import { generateFileToken, verifyFileToken } from '../../helpers/files-crypto';
+import { pubsub } from '../../utils/pubsub';
+
+// The file access token never leaves the server, so token tests read the row.
+const getChannelRow = async (channelId: number) => {
+	const channel = await tdb.select().from(channels).where(eq(channels.id, channelId)).get();
+
+	if (!channel) throw new Error(`Channel ${channelId} not found`);
+
+	return channel;
+};
 
 describe('channels router', () => {
 	test('should throw when user lacks permissions (add)', async () => {
@@ -677,7 +690,7 @@ describe('channels router', () => {
 	test('should rotate file access token for a channel', async () => {
 		const { caller } = await initTest();
 
-		const channelBefore = await caller.channels.get({ channelId: 1 });
+		const channelBefore = await getChannelRow(1);
 		const originalToken = channelBefore.fileAccessToken;
 
 		expect(originalToken).toBeDefined();
@@ -687,7 +700,7 @@ describe('channels router', () => {
 			channelId: 1,
 		});
 
-		const channelAfter = await caller.channels.get({ channelId: 1 });
+		const channelAfter = await getChannelRow(1);
 		const newToken = channelAfter.fileAccessToken;
 
 		expect(newToken).toBeDefined();
@@ -708,21 +721,21 @@ describe('channels router', () => {
 	test('should generate unique tokens on multiple rotations', async () => {
 		const { caller } = await initTest();
 
-		const channel = await caller.channels.get({ channelId: 1 });
+		const channel = await getChannelRow(1);
 		const originalToken = channel.fileAccessToken;
 
 		await caller.channels.rotateFileAccessToken({
 			channelId: 1,
 		});
 
-		const afterFirstRotation = await caller.channels.get({ channelId: 1 });
+		const afterFirstRotation = await getChannelRow(1);
 		const firstNewToken = afterFirstRotation.fileAccessToken;
 
 		await caller.channels.rotateFileAccessToken({
 			channelId: 1,
 		});
 
-		const afterSecondRotation = await caller.channels.get({ channelId: 1 });
+		const afterSecondRotation = await getChannelRow(1);
 		const secondNewToken = afterSecondRotation.fileAccessToken;
 
 		expect(originalToken).not.toBe(firstNewToken);
@@ -738,7 +751,7 @@ describe('channels router', () => {
 			private: true,
 		});
 
-		const channelBefore = await caller.channels.get({ channelId: 1 });
+		const channelBefore = await getChannelRow(1);
 		const oldToken = channelBefore.fileAccessToken;
 
 		const oldFileToken = generateFileToken(123, oldToken);
@@ -747,7 +760,7 @@ describe('channels router', () => {
 			channelId: 1,
 		});
 
-		const channelAfter = await caller.channels.get({ channelId: 1 });
+		const channelAfter = await getChannelRow(1);
 		const newToken = channelAfter.fileAccessToken;
 
 		const newFileToken = generateFileToken(123, newToken);
@@ -764,14 +777,14 @@ describe('channels router', () => {
 	test('should allow rotating token for both public and private channels', async () => {
 		const { caller } = await initTest();
 
-		const publicChannelBefore = await caller.channels.get({ channelId: 1 });
+		const publicChannelBefore = await getChannelRow(1);
 		const publicTokenBefore = publicChannelBefore.fileAccessToken;
 
 		await caller.channels.rotateFileAccessToken({
 			channelId: 1,
 		});
 
-		const publicChannelAfter = await caller.channels.get({ channelId: 1 });
+		const publicChannelAfter = await getChannelRow(1);
 		const publicTokenAfter = publicChannelAfter.fileAccessToken;
 
 		expect(publicTokenAfter).not.toBe(publicTokenBefore);
@@ -781,16 +794,330 @@ describe('channels router', () => {
 			private: true,
 		});
 
-		const privateChannelBefore = await caller.channels.get({ channelId: 2 });
+		const privateChannelBefore = await getChannelRow(2);
 		const privateTokenBefore = privateChannelBefore.fileAccessToken;
 
 		await caller.channels.rotateFileAccessToken({
 			channelId: 2,
 		});
 
-		const privateChannelAfter = await caller.channels.get({ channelId: 2 });
+		const privateChannelAfter = await getChannelRow(2);
 		const privateTokenAfter = privateChannelAfter.fileAccessToken;
 
 		expect(privateTokenAfter).not.toBe(privateTokenBefore);
+	});
+});
+
+type TChannelEvent =
+	| { type: 'create' | 'update'; channel: Record<string, unknown> }
+	| { type: 'delete'; channelId: number }
+	| { type: 'permissions'; canView: Record<number, boolean> };
+
+// Records the channel events delivered to one user, in delivery order.
+const recordChannelEvents = (userId: number) => {
+	const events: TChannelEvent[] = [];
+	const subscriptions = [
+		pubsub.subscribeFor(userId, ServerEvents.CHANNEL_CREATE).subscribe({
+			next: (channel) => events.push({ type: 'create', channel }),
+		}),
+		pubsub.subscribeFor(userId, ServerEvents.CHANNEL_UPDATE).subscribe({
+			next: (channel) => events.push({ type: 'update', channel }),
+		}),
+		pubsub.subscribeFor(userId, ServerEvents.CHANNEL_DELETE).subscribe({
+			next: (channelId) => events.push({ type: 'delete', channelId }),
+		}),
+		pubsub.subscribeFor(userId, ServerEvents.CHANNEL_PERMISSIONS_UPDATE).subscribe({
+			next: (permissions) =>
+				events.push({
+					type: 'permissions',
+					canView: Object.fromEntries(
+						Object.values(permissions).map((entry) => [entry.channelId, entry.permissions.VIEW_CHANNEL]),
+					),
+				}),
+		}),
+	];
+
+	return {
+		events,
+		clear: () => {
+			events.length = 0;
+		},
+		stop: () => {
+			for (const subscription of subscriptions) subscription.unsubscribe();
+		},
+	};
+};
+
+// Some routes publish without awaiting; wait until an expected event arrives.
+const waitForEvent = async (events: TChannelEvent[], predicate: (event: TChannelEvent) => boolean) => {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		if (events.some(predicate)) return;
+		await Bun.sleep(5);
+	}
+
+	throw new Error('Timed out waiting for channel event');
+};
+
+const isChannelPayload = (channelId: number, type: 'create' | 'update') => (event: TChannelEvent) =>
+	event.type === type && event.channel.id === channelId;
+
+const isChannelDelete = (channelId: number) => (event: TChannelEvent) =>
+	event.type === 'delete' && event.channelId === channelId;
+
+describe('channel event visibility', () => {
+	test('private channel updates only reach users with VIEW_CHANNEL', async () => {
+		const { caller } = await initTest(1);
+		const ownerEvents = recordChannelEvents(1);
+		const memberEvents = recordChannelEvents(2);
+
+		try {
+			await caller.channels.update({ channelId: 1, private: true });
+
+			expect(memberEvents.events.some(isChannelDelete(1))).toBe(true);
+
+			ownerEvents.clear();
+			memberEvents.clear();
+
+			await caller.channels.update({ channelId: 1, topic: 'secret plans' });
+			await waitForEvent(ownerEvents.events, isChannelPayload(1, 'update'));
+
+			expect(memberEvents.events).toEqual([]);
+		} finally {
+			ownerEvents.stop();
+			memberEvents.stop();
+		}
+	});
+
+	test('a channel created then made private is withdrawn from users without access', async () => {
+		const { caller } = await initTest(1);
+		const memberEvents = recordChannelEvents(2);
+
+		try {
+			const channelId = await caller.channels.add({ type: ChannelType.TEXT, name: 'staff', categoryId: 1 });
+
+			await waitForEvent(memberEvents.events, isChannelPayload(channelId, 'create'));
+			await caller.channels.update({ channelId, private: true, topic: 'staff only' });
+
+			expect(memberEvents.events.at(-1)).toEqual({ type: 'delete', channelId });
+			expect(
+				memberEvents.events.some(
+					(event) => event.type !== 'delete' && event.type !== 'permissions' && event.channel.topic,
+				),
+			).toBe(false);
+		} finally {
+			memberEvents.stop();
+		}
+	});
+
+	test('public-to-private withdrawal lets shipped clients deselect without revealing new details', async () => {
+		const { caller } = await initTest(1);
+		const previousChannel = await getChannelRow(1);
+		const memberEvents = recordChannelEvents(2);
+		try {
+			await caller.channels.update({ channelId: 1, private: true, name: 'secret-name', topic: 'secret-topic' });
+			expect(memberEvents.events).toEqual([
+				{
+					type: 'update',
+					channel: expect.objectContaining({
+						id: 1,
+						private: true,
+						name: previousChannel.name,
+						topic: previousChannel.topic,
+					}),
+				},
+				{ type: 'permissions', canView: expect.objectContaining({ 1: false }) },
+				{ type: 'delete', channelId: 1 },
+			]);
+			for (const event of memberEvents.events) {
+				if (event.type === 'update') expect(event.channel).not.toHaveProperty('fileAccessToken');
+			}
+		} finally {
+			memberEvents.stop();
+		}
+	});
+
+	test('granting and revoking a user permission adds and removes the channel', async () => {
+		const { caller } = await initTest(1);
+
+		await caller.channels.update({ channelId: 1, private: true, topic: 'secret plans' });
+
+		const memberEvents = recordChannelEvents(2);
+
+		try {
+			await caller.channels.updatePermissions({
+				channelId: 1,
+				userId: 2,
+				permissions: [ChannelPermission.VIEW_CHANNEL],
+			});
+
+			expect(memberEvents.events.map((event) => event.type)).toEqual(['permissions', 'create']);
+			expect(memberEvents.events[1]).toMatchObject({
+				type: 'create',
+				channel: { id: 1, private: true, topic: 'secret plans' },
+			});
+
+			memberEvents.clear();
+
+			await caller.channels.update({ channelId: 1, topic: 'new plans' });
+			await waitForEvent(memberEvents.events, isChannelPayload(1, 'update'));
+
+			memberEvents.clear();
+
+			await caller.channels.updatePermissions({ channelId: 1, userId: 2, permissions: [] });
+
+			// Permissions first, so a client viewing the channel can still see it is
+			// private when it learns it lost access.
+			expect(memberEvents.events).toEqual([
+				{ type: 'permissions', canView: expect.objectContaining({ 1: false }) },
+				{ type: 'delete', channelId: 1 },
+			]);
+		} finally {
+			memberEvents.stop();
+		}
+	});
+
+	test('deleting a user permission override re-evaluates access', async () => {
+		const { caller } = await initTest(1);
+
+		await caller.channels.update({ channelId: 1, private: true });
+		await caller.channels.updatePermissions({ channelId: 1, userId: 2, permissions: [ChannelPermission.VIEW_CHANNEL] });
+
+		const memberEvents = recordChannelEvents(2);
+
+		try {
+			await caller.channels.deletePermissions({ channelId: 1, userId: 2 });
+
+			expect(memberEvents.events.at(-1)).toEqual({ type: 'delete', channelId: 1 });
+		} finally {
+			memberEvents.stop();
+		}
+	});
+
+	test('gaining and losing a role with channel access adds and removes the channel', async () => {
+		const { caller } = await initTest(1);
+		const guestRoleId = 3;
+
+		await caller.channels.update({ channelId: 1, private: true });
+		await caller.channels.updatePermissions({
+			channelId: 1,
+			roleId: guestRoleId,
+			permissions: [ChannelPermission.VIEW_CHANNEL],
+		});
+
+		const memberEvents = recordChannelEvents(2);
+
+		try {
+			await caller.users.addRole({ userId: 2, roleId: guestRoleId });
+
+			expect(memberEvents.events.map((event) => event.type)).toEqual(['permissions', 'create']);
+			expect(memberEvents.events[0]).toEqual({ type: 'permissions', canView: expect.objectContaining({ 1: true }) });
+
+			memberEvents.clear();
+
+			await caller.users.removeRole({ userId: 2, roleId: guestRoleId });
+
+			expect(memberEvents.events).toEqual([
+				{ type: 'permissions', canView: expect.objectContaining({ 1: false }) },
+				{ type: 'delete', channelId: 1 },
+			]);
+		} finally {
+			memberEvents.stop();
+		}
+	});
+
+	test('unrelated role changes preserve an owners effective private channel permissions', async () => {
+		const { caller } = await initTest(1);
+		await caller.channels.update({ channelId: 1, private: true });
+		// Owner access also overrides an explicit user deny.
+		await caller.channels.updatePermissions({ channelId: 1, userId: 1, permissions: [] });
+		const ownerEvents = recordChannelEvents(1);
+		try {
+			await caller.users.addRole({ userId: 1, roleId: 3 });
+			expect(ownerEvents.events[0]).toEqual({ type: 'permissions', canView: expect.objectContaining({ 1: true }) });
+			expect(ownerEvents.events.some(isChannelDelete(1))).toBe(false);
+			ownerEvents.clear();
+			await caller.users.removeRole({ userId: 1, roleId: 3 });
+			expect(ownerEvents.events[0]).toEqual({ type: 'permissions', canView: expect.objectContaining({ 1: true }) });
+			expect(ownerEvents.events.some(isChannelDelete(1))).toBe(false);
+		} finally {
+			ownerEvents.stop();
+		}
+	});
+
+	test('a user-level deny overrides a role that grants VIEW_CHANNEL', async () => {
+		const { caller } = await initTest(1);
+		const memberRoleId = 2;
+
+		await caller.channels.update({ channelId: 1, private: true });
+		await caller.channels.updatePermissions({
+			channelId: 1,
+			roleId: memberRoleId,
+			permissions: [ChannelPermission.VIEW_CHANNEL],
+		});
+		await caller.channels.updatePermissions({ channelId: 1, userId: 2, permissions: [] });
+
+		expect(await getAffectedUserIdsForChannel(1, { permission: ChannelPermission.VIEW_CHANNEL })).not.toContain(2);
+
+		const memberEvents = recordChannelEvents(2);
+		const ownerEvents = recordChannelEvents(1);
+
+		try {
+			await caller.channels.update({ channelId: 1, topic: 'not for you' });
+			await waitForEvent(ownerEvents.events, isChannelPayload(1, 'update'));
+
+			expect(memberEvents.events).toEqual([]);
+		} finally {
+			memberEvents.stop();
+			ownerEvents.stop();
+		}
+	});
+
+	test('making a private channel public delivers it to everyone', async () => {
+		const { caller } = await initTest(1);
+
+		await caller.channels.update({ channelId: 1, private: true });
+
+		const memberEvents = recordChannelEvents(2);
+
+		try {
+			await caller.channels.update({ channelId: 1, private: false });
+
+			expect(memberEvents.events.some(isChannelPayload(1, 'create'))).toBe(true);
+		} finally {
+			memberEvents.stop();
+		}
+	});
+
+	test('no channel payload sent to clients contains the file access token', async () => {
+		const { caller, initialData } = await initTest(1);
+		const ownerEvents = recordChannelEvents(1);
+
+		try {
+			await caller.channels.update({ channelId: 1, topic: 'token check' });
+			await waitForEvent(ownerEvents.events, isChannelPayload(1, 'update'));
+
+			const channelId = await caller.channels.add({ type: ChannelType.TEXT, name: 'token-check', categoryId: 1 });
+			await waitForEvent(ownerEvents.events, isChannelPayload(channelId, 'create'));
+
+			await caller.channels.update({ channelId, private: true });
+			await caller.channels.updatePermissions({ channelId, userId: 2, permissions: [ChannelPermission.VIEW_CHANNEL] });
+
+			const payloads = [
+				...initialData.channels,
+				await caller.channels.get({ channelId: 1 }),
+				...ownerEvents.events.flatMap((event) =>
+					event.type === 'create' || event.type === 'update' ? [event.channel] : [],
+				),
+			];
+
+			expect(initialData.channels.length).toBeGreaterThan(0);
+
+			for (const payload of payloads) {
+				expect(payload).not.toHaveProperty('fileAccessToken');
+				expect(payload).toHaveProperty('fileAccessTokenUpdatedAt');
+			}
+		} finally {
+			ownerEvents.stop();
+		}
 	});
 });

@@ -26,6 +26,9 @@ export type TSettings = InferSelectModel<typeof settings>;
 export type TRole = InferSelectModel<typeof roles>;
 export type TCategory = InferSelectModel<typeof categories>;
 export type TChannel = InferSelectModel<typeof channels>;
+// Channel shape sent to clients. The file access token signs file URLs for the
+// channel and must stay server-side.
+export type TPublicChannel = Omit<TChannel, 'fileAccessToken'>;
 export type TFile = InferSelectModel<typeof files> & {
 	_accessToken?: string;
 };

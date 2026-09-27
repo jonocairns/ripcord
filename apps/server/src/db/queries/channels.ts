@@ -69,14 +69,12 @@ const getPermissions = async (userId: number, roleIds: number[], permission: Cha
 	return { userPermissionMap, rolePermissionMap };
 };
 
-const getChannelsForUser = async (userId: number): Promise<TChannel[]> => {
+const getChannelsForUser = async (userId: number, channelRows?: TChannel[]): Promise<TChannel[]> => {
 	const roleIds = await getUserRoleIds(userId);
 
-	if (roleIds.includes(OWNER_ROLE_ID)) {
-		return await db.select().from(channels);
-	}
+	const allChannels = channelRows ?? (await db.select().from(channels));
 
-	const allChannels = await db.select().from(channels);
+	if (roleIds.includes(OWNER_ROLE_ID)) return allChannels;
 
 	const { userPermissionMap, rolePermissionMap } = await getPermissions(
 		userId,
@@ -103,9 +101,12 @@ const getChannelsForUser = async (userId: number): Promise<TChannel[]> => {
 	return accessibleChannels;
 };
 
-const getAllChannelUserPermissions = async (userId: number): Promise<TChannelUserPermissionsMap> => {
+const getAllChannelUserPermissions = async (
+	userId: number,
+	channelRows?: TChannel[],
+): Promise<TChannelUserPermissionsMap> => {
 	const roleIds = await getUserRoleIds(userId);
-	const allChannels = await db.select().from(channels);
+	const allChannels = channelRows ?? (await db.select().from(channels));
 
 	const userPermissions = await db
 		.select({
@@ -160,6 +161,10 @@ const getAllChannelUserPermissions = async (userId: number): Promise<TChannelUse
 		const permissions: Record<string, boolean> = {};
 
 		for (const permissionType of allPermissionTypes) {
+			if (roleIds.includes(OWNER_ROLE_ID)) {
+				permissions[permissionType] = true;
+				continue;
+			}
 			const userPerm = userPermMap.get(channel.id)?.get(permissionType);
 
 			if (userPerm !== undefined) {
@@ -212,13 +217,12 @@ const getAffectedUserIdsForChannel = async (
 	const permission = options?.permission;
 
 	const usersWithDirectPerms = await db
-		.select({ userId: channelUserPermissions.userId })
+		.select({ userId: channelUserPermissions.userId, allow: channelUserPermissions.allow })
 		.from(channelUserPermissions)
 		.where(
 			and(
 				eq(channelUserPermissions.channelId, channelId),
 				permission ? eq(channelUserPermissions.permission, permission) : undefined,
-				permission ? eq(channelUserPermissions.allow, true) : undefined,
 			),
 		);
 
@@ -250,10 +254,19 @@ const getAffectedUserIdsForChannel = async (
 		.from(userRoles)
 		.where(eq(userRoles.roleId, OWNER_ROLE_ID));
 
+	// A user-level permission overrides the user's roles (as in getChannelsForUser
+	// and getAllChannelUserPermissions), so an explicit deny excludes a user that a
+	// role would otherwise let in.
+	const deniedUserIds = new Set(permission ? usersWithDirectPerms.filter((u) => !u.allow).map((u) => u.userId) : []);
+
 	const userIdSet = new Set<number>();
 
-	usersWithDirectPerms.forEach((u) => userIdSet.add(u.userId));
-	usersWithRoles.forEach((u) => userIdSet.add(u.userId));
+	usersWithDirectPerms.forEach((u) => {
+		if (!permission || u.allow) userIdSet.add(u.userId);
+	});
+	usersWithRoles.forEach((u) => {
+		if (!deniedUserIds.has(u.userId)) userIdSet.add(u.userId);
+	});
 	owners.forEach((u) => userIdSet.add(u.userId));
 
 	return Array.from(userIdSet);
