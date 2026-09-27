@@ -1,0 +1,37 @@
+name: Conventional PR title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions: {}
+
+jobs:
+  validate:
+    name: conventional-title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+        run: |
+          node <<'NODE'
+          const title = process.env.PR_TITLE ?? "";
+          const author = process.env.PR_AUTHOR ?? "";
+          const head = process.env.PR_HEAD ?? "";
+          const conventional = /^(?:feat|fix|docs|refactor)(?:\([a-z0-9][a-z0-9-]*\))?!?: \S(?:.*\S)?$/;
+          const release =
+            author === "ripcord-release-bot[bot]" &&
+            head.startsWith("release-please--branches--main--") &&
+            /^chore\(main\): release \S+$/.test(title);
+          const dependabot =
+            author === "dependabot[bot]" &&
+            head.startsWith("dependabot/") &&
+            /^chore\(deps\): \S(?:.*\S)?$/.test(title);
+          if (!conventional.test(title) && !release && !dependabot) {
+            console.error("::error::Use feat:, fix:, docs:, or refactor: with a nonempty summary. Optional lowercase scope and ! are supported.");
+            process.exitCode = 1;
+          }
+          NODE
