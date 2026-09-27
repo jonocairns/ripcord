@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
 import { logoutFromServer, setMustChangePassword } from '@/features/server/actions';
+import { setAuthTokens } from '@/helpers/storage';
 import { useForm } from '@/hooks/use-form';
 import { getTRPCClient } from '@/lib/trpc';
 
@@ -46,7 +47,9 @@ const Password = memo(({ forceMode = false, onSuccess }: TPasswordProps) => {
 		const trpc = getTRPCClient();
 
 		try {
-			await trpc.users.updatePassword.mutate(values);
+			const result = await trpc.users.updatePassword.mutate({ ...values, renewSession: !forceMode });
+			// Older servers return no payload after a password change.
+			if (result?.token && result.refreshToken) setAuthTokens(result.token, result.refreshToken);
 			setMustChangePassword(false);
 			toast.success('Password updated!');
 

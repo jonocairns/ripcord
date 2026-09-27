@@ -10,6 +10,7 @@ import { createHttpServer } from '../http';
 import { fileManager } from '../utils/file-manager';
 import { loadMediasoup } from '../utils/mediasoup';
 import { clearRateLimitersForTests } from '../utils/rate-limiters/rate-limiter';
+import { resetUserSessionsForTests } from '../utils/user-sessions';
 import { DRIZZLE_PATH, setTestDb } from './mock-db';
 import { seedDatabase } from './seed';
 
@@ -128,6 +129,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
 	clearRateLimitersForTests();
+	resetUserSessionsForTests();
 	await fileManager.resetTemporaryFilesForTests();
 
 	if (sqlite) {
