@@ -108,8 +108,6 @@ jobs:
             exit 1
           fi
 
-          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release create "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes ""
-          fi
+          gh release view "${RELEASE_TAG}" >/dev/null
 
           gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber

@@ -1,98 +1,154 @@
 name: Release Server / Web
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
-      bump:
-        description: "Version bump"
-        required: true
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
-        default: "patch"
+      tag:
+        description: "Existing release tag to rebuild after a failed release (leave empty to run Release Please)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: release-server
   cancel-in-progress: false
 
 jobs:
-  build-and-publish:
+  quality:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/pull-request.yml
+
+  release-please:
+    needs: quality
+    if: inputs.tag == ''
     runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - name: Check the tested main commit is the release context
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          main_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [ "$main_sha" != "$EXPECTED_SHA" ]; then
+            echo "main advanced; its own CI run will maintain the release."
+            exit 0
+          fi
+          echo "current=true" >> "$GITHUB_OUTPUT"
+          pending_pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$EXPECTED_SHA/pulls" \
+            --jq ".[] | select(.base.ref == \"main\" and .merge_commit_sha == \"$EXPECTED_SHA\" and any(.labels[]?; .name == \"autorelease: pending\")) | .number")
+          if [ -n "$pending_pr" ]; then
+            echo "create-release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A bot token lets the release PR trigger the ordinary PR checks.
+      - name: Mint release bot token
+        id: app-token
+        if: steps.context.outputs.current == 'true' && steps.context.outputs.create-release != 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Create tag and draft release
+        id: release
+        if: steps.context.outputs.create-release == 'true'
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          target-branch: main
+          skip-github-pull-request: true
+
+      - name: Create or update release PR
+        if: steps.context.outputs.current == 'true' && steps.context.outputs.create-release != 'true'
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          target-branch: main
+          token: ${{ steps.app-token.outputs.token }}
+          skip-github-release: true
+
+  build-and-publish:
+    needs: [quality, release-please]
+    if: >-
+      always() && needs.quality.result == 'success' &&
+      (needs.release-please.outputs.released == 'true' || inputs.tag != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      RELEASE_TAG: ${{ needs.release-please.outputs.tag || inputs.tag }}
+      EXPECTED_SHA: ${{ needs.release-please.outputs.sha }}
+      GH_TOKEN: ${{ github.token }}
     outputs:
-      version: ${{ steps.compute_version.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      image: ${{ steps.ghcr.outputs.image }}
+      digest: ${{ steps.docker.outputs.digest }}
     steps:
-      - name: Checkout repository
+      - name: Checkout repository at release tag
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
 
-      - name: Compute next version from git tags
-        id: compute_version
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Verify release identity and package versions
+        id: release
         run: |
-          LATEST_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
-
-          if [ -z "$LATEST_TAG" ]; then
-            LATEST_VERSION="0.0.0"
-          else
-            LATEST_VERSION="${LATEST_TAG#v}"
-          fi
-
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
-
-          case "${{ inputs.bump }}" in
-            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-            patch) PATCH=$((PATCH + 1)) ;;
-          esac
-
-          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
-          NEW_TAG="v${NEW_VERSION}"
-
-          # Tag format enforcement
-          if ! echo "$NEW_TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Invalid tag format: ${NEW_TAG} (expected vX.Y.Z)"
+          set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a stable vX.Y.Z release tag."
             exit 1
           fi
-
-          # Ensure tag doesn't already exist
-          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
-            echo "::error::Tag ${NEW_TAG} already exists"
-            exit 1
+          release=$(gh release view "$RELEASE_TAG" --json tagName,isPrerelease)
+          test "$(jq -r .tagName <<< "$release")" = "$RELEASE_TAG"
+          test "$(jq -r .isPrerelease <<< "$release")" = false
+          if [ -n "$EXPECTED_SHA" ]; then
+            test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+            test "$EXPECTED_SHA" = "$GITHUB_SHA"
           fi
-
-          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Releasing ${NEW_TAG} (previous: ${LATEST_TAG:-none})"
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.5"
+          version="${RELEASE_TAG#v}"
+          for manifest in package.json apps/client/package.json apps/server/package.json apps/desktop/package.json packages/shared/package.json; do
+            test "$(jq -r .version "$manifest")" = "$version"
+          done
+          test "$(jq -r '.["."]' .release-please-manifest.json)" = "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: nix develop -c bun install --frozen-lockfile
 
-      # ── Build everything first (rollback safety) ──────────────────────
       - name: Build app
+        working-directory: apps/server
         env:
-          SHARKORD_VERSION: ${{ steps.compute_version.outputs.version }}
+          SHARKORD_VERSION: ${{ steps.release.outputs.version }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-        run: |
-          cd apps/server
-          bun run build
+        run: nix develop ../.. -c bun run build
 
-      - name: Resolve GHCR owner
+      - name: Resolve GHCR image
         id: ghcr
-        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Docker context
         run: |
@@ -102,8 +158,7 @@ jobs:
           FROM debian:bookworm-slim
           ENV RUNNING_IN_DOCKER=true
           ENV SHARKORD_TRUST_PROXY=true
-          COPY sharkord-linux-x64 /usr/local/bin/sharkord
-          RUN chmod +x /usr/local/bin/sharkord
+          COPY --chmod=755 sharkord-linux-x64 /usr/local/bin/sharkord
           ENTRYPOINT ["/usr/local/bin/sharkord"]
           DOCKERFILE
 
@@ -117,118 +172,83 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Build and push versioned Docker image
+        id: docker
         uses: docker/build-push-action@v7
         with:
           context: docker-release
           platforms: linux/amd64
           push: true
-          tags: |
-            ghcr.io/${{ steps.ghcr.outputs.owner }}/ripcord:latest
-            ghcr.io/${{ steps.ghcr.outputs.owner }}/ripcord:v${{ steps.compute_version.outputs.version }}
+          tags: ${{ steps.ghcr.outputs.image }}:${{ steps.release.outputs.tag }}
 
-      # ── Everything built successfully — now tag and release ───────────
-      - name: Create Git tag
+      - name: Upload server assets to existing release
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "v${{ steps.compute_version.outputs.version }}" -m "Release v${{ steps.compute_version.outputs.version }}"
-          git push origin "v${{ steps.compute_version.outputs.version }}"
+          gh release upload "$RELEASE_TAG" \
+            apps/server/build/out/sharkord-linux-x64 \
+            apps/server/build/out/sharkord-windows-x64.exe \
+            apps/server/build/out/sharkord-macos-arm64 \
+            apps/server/build/out/release.json \
+            --clobber
 
-      - name: Generate release notes from commits
-        run: |
-          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n '2p' || true)
-          NEW_TAG="v${{ steps.compute_version.outputs.version }}"
-
-          if [ -z "$PREV_TAG" ]; then
-            RANGE="HEAD"
-          else
-            RANGE="${PREV_TAG}..HEAD"
-          fi
-
-          # Generate changelog grouped by conventional commit type
-          {
-            echo "## What's Changed"
-            echo ""
-
-            FEATS=$(git log "$RANGE" --pretty=format:"%s" --no-merges | grep -E "^feat(\(.+\))?:" | sed -E 's/^feat\(([^)]*)\): /- **\1:** /' | sed -E 's/^feat: /- /' || true)
-            if [ -n "$FEATS" ]; then
-              echo "### Features"
-              echo "$FEATS"
-              echo ""
-            fi
-
-            FIXES=$(git log "$RANGE" --pretty=format:"%s" --no-merges | grep -E "^fix(\(.+\))?:" | sed -E 's/^fix\(([^)]*)\): /- **\1:** /' | sed -E 's/^fix: /- /' || true)
-            if [ -n "$FIXES" ]; then
-              echo "### Bug Fixes"
-              echo "$FIXES"
-              echo ""
-            fi
-
-            PERFS=$(git log "$RANGE" --pretty=format:"%s" --no-merges | grep -E "^perf(\(.+\))?:" | sed -E 's/^perf\(([^)]*)\): /- **\1:** /' | sed -E 's/^perf: /- /' || true)
-            if [ -n "$PERFS" ]; then
-              echo "### Performance"
-              echo "$PERFS"
-              echo ""
-            fi
-
-            OTHERS=$(git log "$RANGE" --pretty=format:"%s" --no-merges | grep -vE "^(feat|fix|perf|chore|ci|docs|style|test|build)(\(.+\))?:" || true)
-            if [ -n "$OTHERS" ]; then
-              echo "### Other Changes"
-              echo "$OTHERS" | sed 's/^/- /'
-              echo ""
-            fi
-
-            if [ -n "$PREV_TAG" ]; then
-              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${NEW_TAG}"
-            fi
-          } > /tmp/release-notes.md
-
-          cat /tmp/release-notes.md
-
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          release_tag="v${{ steps.compute_version.outputs.version }}"
-          assets=(
-            apps/server/build/out/sharkord-linux-x64
-            apps/server/build/out/sharkord-windows-x64.exe
-            apps/server/build/out/sharkord-macos-arm64
-            apps/server/build/out/release.json
-          )
-
-          if gh release view "${release_tag}" >/dev/null 2>&1; then
-            gh release edit "${release_tag}" \
-              --draft=false \
-              --title "${release_tag}" \
-              --notes-file /tmp/release-notes.md
-            gh release upload "${release_tag}" "${assets[@]}" --clobber
-          else
-            gh release create "${release_tag}" "${assets[@]}" \
-              --draft=false \
-              --title "${release_tag}" \
-              --notes-file /tmp/release-notes.md
-          fi
-
-  # ── Desktop builds chain automatically after server release ────────
   release-desktop-windows:
     needs: build-and-publish
+    if: always() && needs.build-and-publish.result == 'success'
     uses: ./.github/workflows/release-desktop-windows.yml
+    permissions:
+      contents: write
     with:
-      tag: v${{ needs.build-and-publish.outputs.version }}
+      tag: ${{ needs.build-and-publish.outputs.tag }}
     secrets: inherit
 
   release-desktop-macos:
     needs: build-and-publish
+    if: always() && needs.build-and-publish.result == 'success'
     uses: ./.github/workflows/release-desktop-macos.yml
+    permissions:
+      contents: write
     with:
-      tag: v${{ needs.build-and-publish.outputs.version }}
+      tag: ${{ needs.build-and-publish.outputs.tag }}
     secrets: inherit
 
   release-desktop-linux:
     needs: build-and-publish
+    if: always() && needs.build-and-publish.result == 'success'
     uses: ./.github/workflows/release-desktop-linux.yml
+    permissions:
+      contents: write
     with:
-      tag: v${{ needs.build-and-publish.outputs.version }}
+      tag: ${{ needs.build-and-publish.outputs.tag }}
     secrets: inherit
+
+  publish:
+    needs: [build-and-publish, release-desktop-windows, release-desktop-macos, release-desktop-linux]
+    if: >-
+      always() && needs.build-and-publish.result == 'success' &&
+      needs.release-desktop-windows.result == 'success' &&
+      needs.release-desktop-macos.result == 'success' &&
+      needs.release-desktop-linux.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.build-and-publish.outputs.tag }}
+      IMAGE: ${{ needs.build-and-publish.outputs.image }}
+      IMAGE_DIGEST: ${{ needs.build-and-publish.outputs.digest }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote Docker image and publish release
+        run: |
+          docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$IMAGE_DIGEST"
+          gh release edit "$RELEASE_TAG" --draft=false --latest
