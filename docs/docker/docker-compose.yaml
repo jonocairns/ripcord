@@ -17,8 +17,22 @@ services:
       # Server configuration
       SHARKORD_PORT: "4991"
       SHARKORD_DEBUG: "false"
-      # Only enable when Ripcord is behind a trusted reverse proxy that rewrites forwarded headers.
+      # Read the client IP from forwarding headers (X-Forwarded-For, then X-Real-IP),
+      # but only on requests whose TCP peer is a trusted proxy. Rate limits and audit
+      # logs use this IP. Headers from any other peer are ignored, so exposing the
+      # port directly cannot be used to spoof addresses.
       SHARKORD_TRUST_PROXY: "true"
+      # Proxies whose headers are trusted: comma-separated IPs/CIDRs. Defaults to
+      # loopback + private ranges (127.0.0.0/8, ::1, 10.0.0.0/8, 172.16.0.0/12,
+      # 192.168.0.0/16, fc00::/7), which covers nginx/Caddy on the host or on the
+      # same Docker network and a cloudflared sidecar. Narrow it to your proxy's
+      # address if untrusted clients can reach Ripcord from a private network.
+      # RIPCORD_TRUSTED_PROXIES: "172.18.0.2"
+      # Read one specific header instead of X-Forwarded-For, e.g. when Cloudflare's
+      # edge reaches Ripcord through a proxy that does not append X-Forwarded-For.
+      # That proxy must overwrite this header or append the address it observed;
+      # forwarding a client-supplied value unchanged is unsafe.
+      # RIPCORD_CLIENT_IP_HEADER: "cf-connecting-ip"
 
       # WebRTC configuration
       SHARKORD_WEBRTC_PORT: "40000"

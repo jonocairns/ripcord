@@ -51,6 +51,8 @@ const zConfig = z.object({
 		debug: z.coerce.boolean(),
 		autoupdate: z.coerce.boolean(),
 		trustProxy: z.coerce.boolean(),
+		trustedProxies: z.coerce.string(),
+		clientIpHeader: z.coerce.string(),
 		corsOrigin: z.string(),
 		clientErrorReportingSentryDsn: z.string(),
 		serverErrorReportingSentryDsn: z.string(),
@@ -88,7 +90,19 @@ const defaultConfig: TConfig = {
 		port: 4991,
 		debug: IS_DEVELOPMENT,
 		autoupdate: false,
+		// Honour client-address forwarding headers (X-Forwarded-For etc.). Only
+		// takes effect for requests whose TCP peer is in `trustedProxies`.
 		trustProxy: false,
+		// Comma-separated IPs/CIDRs of reverse proxies whose forwarding headers are
+		// believed when `trustProxy` is on. Empty trusts loopback and private
+		// ranges (127.0.0.0/8, ::1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+		// fc00::/7), which covers a proxy on the same host or Docker network.
+		trustedProxies: '',
+		// Header a trusted proxy puts the client address in. Empty walks
+		// X-Forwarded-For right to left, falling back to X-Real-IP. Set to
+		// "cf-connecting-ip" when Cloudflare's edge reaches Ripcord through a
+		// proxy that does not rewrite X-Forwarded-For.
+		clientIpHeader: '',
 		// When empty, CORS reflects the request Origin (allows all origins).
 		// Set to a specific origin (e.g. "https://app.example.com") to restrict.
 		// Note: setting this will reject desktop (Electron) clients whose
@@ -214,6 +228,8 @@ config = applyEnvOverrides(config, {
 	'server.debug': 'SHARKORD_DEBUG',
 	'server.autoupdate': 'SHARKORD_AUTOUPDATE',
 	'server.trustProxy': 'SHARKORD_TRUST_PROXY',
+	'server.trustedProxies': 'RIPCORD_TRUSTED_PROXIES',
+	'server.clientIpHeader': 'RIPCORD_CLIENT_IP_HEADER',
 	'webRtc.port': 'SHARKORD_WEBRTC_PORT',
 	'webRtc.preferredFamily': 'SHARKORD_WEBRTC_PREFERRED_FAMILY',
 	'webRtc.ipv4.enabled': 'SHARKORD_WEBRTC_IPV4_ENABLED',

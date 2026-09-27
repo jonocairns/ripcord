@@ -5,11 +5,13 @@ import fs from 'node:fs/promises';
 import { createServer as createTcpServer } from 'node:net';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
+import { setClientIpOptionsForTests } from '../helpers/client-ip-options';
 import { DATA_PATH } from '../helpers/paths';
 import { createHttpServer } from '../http';
 import { fileManager } from '../utils/file-manager';
 import { loadMediasoup } from '../utils/mediasoup';
 import { clearRateLimitersForTests } from '../utils/rate-limiters/rate-limiter';
+import { resetUserSessionsForTests } from '../utils/user-sessions';
 import { DRIZZLE_PATH, setTestDb } from './mock-db';
 import { seedDatabase } from './seed';
 
@@ -128,6 +130,8 @@ beforeAll(async () => {
 
 beforeEach(async () => {
 	clearRateLimitersForTests();
+	setClientIpOptionsForTests(undefined);
+	resetUserSessionsForTests();
 	await fileManager.resetTemporaryFilesForTests();
 
 	if (sqlite) {

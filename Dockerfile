@@ -23,6 +23,8 @@ RUN cd apps/server && bun run build
 FROM debian:bookworm-slim
 
 ENV RUNNING_IN_DOCKER=true
+# Forwarding headers are only honoured from trusted proxy peers (loopback and
+# private ranges by default; see RIPCORD_TRUSTED_PROXIES).
 ENV SHARKORD_TRUST_PROXY=true
 
 COPY --chmod=755 --from=build /app/apps/server/build/out/sharkord-linux-x64 /usr/local/bin/sharkord

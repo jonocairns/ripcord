@@ -3,7 +3,7 @@ import z from 'zod';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
-import { blockVoiceRestoreAfterKick, getVoiceKickGuardIdentity } from '../../utils/voice-kick-guard';
+import { revokeUserSessions } from '../../utils/user-sessions';
 
 const kickRoute = protectedProcedure
 	.input(
@@ -15,15 +15,15 @@ const kickRoute = protectedProcedure
 	.mutation(async ({ ctx, input }) => {
 		await ctx.needsPermission(Permission.MANAGE_USERS);
 
-		const userWs = ctx.getUserWs(input.userId);
+		const kickedCount = revokeUserSessions(input.userId, {
+			code: DisconnectCode.KICKED,
+			reason: input.reason,
+		});
 
-		invariant(userWs, {
+		invariant(kickedCount > 0, {
 			code: 'NOT_FOUND',
 			message: 'User is not connected',
 		});
-
-		blockVoiceRestoreAfterKick(input.userId, getVoiceKickGuardIdentity(userWs));
-		userWs.close(DisconnectCode.KICKED, input.reason);
 
 		enqueueActivityLog({
 			type: ActivityLogType.USER_KICKED,

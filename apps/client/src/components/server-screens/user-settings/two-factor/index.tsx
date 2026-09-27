@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
+import { setAuthTokens } from '@/helpers/storage';
 import { getTRPCClient } from '@/lib/trpc';
 
 type TSetupData = {
@@ -123,10 +124,13 @@ const TwoFactor = memo(() => {
 		setConfirmError('');
 		try {
 			const trpc = getTRPCClient();
-			await trpc.users.totpConfirmSetup.mutate({
+			const result = await trpc.users.totpConfirmSetup.mutate({
 				setupToken: setupData.setupToken,
 				code: confirmCode,
+				renewSession: true,
 			});
+			// Older servers return only success; keep their setup flow compatible.
+			if (result.token && result.refreshToken) setAuthTokens(result.token, result.refreshToken);
 			setEnabled(true);
 			setStep('idle');
 			setSetupData(null);
@@ -147,10 +151,12 @@ const TwoFactor = memo(() => {
 		setDisableError('');
 		try {
 			const trpc = getTRPCClient();
-			await trpc.users.totpDisable.mutate({
+			const result = await trpc.users.totpDisable.mutate({
 				password: disablePassword,
 				code: disableCode,
+				renewSession: true,
 			});
+			if (result.token && result.refreshToken) setAuthTokens(result.token, result.refreshToken);
 			setEnabled(false);
 			setStep('idle');
 			setDisablePassword('');

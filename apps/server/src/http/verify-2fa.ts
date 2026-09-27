@@ -10,6 +10,7 @@ import {
 	verifyRecoveryCode,
 } from '../helpers/totp';
 import { enqueueActivityLog } from '../queues/activity-log';
+import { consumeTwoFactorAttempt } from './auth-rate-limits';
 import { issueAuthTokens } from './auth-tokens';
 import { getJsonBody } from './helpers';
 import { HttpValidationError } from './utils';
@@ -38,6 +39,9 @@ const verify2faRouteHandler = async (req: http.IncomingMessage, res: http.Server
 	if (!user) {
 		throw new HttpValidationError('challengeToken', 'User not found');
 	}
+
+	// Keyed by the persisted user rather than a replaceable challenge token.
+	consumeTwoFactorAttempt(user.id);
 
 	if (user.banned) {
 		throw new HttpValidationError('challengeToken', `Identity banned: ${user.banReason || 'No reason provided'}`);
