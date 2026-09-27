@@ -110,25 +110,24 @@ export function assertTagSource(repository, tag, expectedSha, run = command) {
 }
 
 export function mergedReleasePrs(repository, label, run = command) {
+	// Label filters route `gh pr list` through the search index, which can lag
+	// behind the merge push that triggered this run. List PRs directly instead.
+	// Project only the fields used below; full PR bodies overflow execFileSync's buffer.
 	const prs = JSON.parse(
 		run('gh', [
-			'pr',
-			'list',
-			'--repo',
-			repository,
-			'--base',
-			'main',
-			'--state',
-			'merged',
-			'--label',
-			label,
-			'--limit',
-			'100',
-			'--json',
-			'number,mergeCommit,headRefName',
+			'api',
+			`repos/${repository}/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100`,
+			'--jq',
+			'map({merged_at, merge_commit_sha, head: {ref: .head.ref}, labels: [.labels[] | {name}]})',
 		]),
 	);
-	return prs.filter((pr) => pr.headRefName.startsWith('release-please--branches--main') && pr.mergeCommit?.oid);
+	return prs.filter(
+		(pr) =>
+			pr.merged_at &&
+			/^[a-f0-9]{40}$/.test(pr.merge_commit_sha ?? '') &&
+			pr.head?.ref?.startsWith('release-please--branches--main') &&
+			pr.labels?.some((prLabel) => prLabel.name === label),
+	);
 }
 
 export function stableRelease(repository, tag, run = command) {
@@ -149,7 +148,8 @@ export function resolveRelease({ repository, testedSha, tag = '', run = command 
 	if (tag) {
 		const sha = tagCommit(repository, tag, run);
 		assertAncestor(api(repository, `compare/${sha}...${testedSha}`, run));
-		stableRelease(repository, tag, run);
+		// Draft releases are invisible to this read-only token; the build job's
+		// verify step checks the release with write access before any upload.
 		const prs = api(repository, `commits/${sha}/pulls`, run);
 		if (
 			!prs.some(
@@ -177,7 +177,7 @@ export function resolveRelease({ repository, testedSha, tag = '', run = command 
 		throw new Error('Multiple pending release PRs require investigation before publication.');
 	}
 	if (pending.length === 1) {
-		const sha = pending[0].mergeCommit.oid;
+		const sha = pending[0].merge_commit_sha;
 		const comparison = api(repository, `compare/${sha}...${testedSha}`, run);
 		if (comparison.status === 'behind') {
 			return { sha: testedSha, tag: '', create: false, update: false, build: false };

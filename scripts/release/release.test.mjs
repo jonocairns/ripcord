@@ -23,22 +23,20 @@ const tagObjectSha = 'c'.repeat(40);
 const tag = 'v2.1.54';
 const repository = 'owner/ripcord';
 const digest = `sha256:${'d'.repeat(64)}`;
+const mergedPrs = 'pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100';
 const pendingPr = {
 	number: 42,
-	headRefName: 'release-please--branches--main--components--sharkord',
-	mergeCommit: { oid: sourceSha },
-};
-const taggedPr = {
 	merged_at: '2026-09-27',
 	base: { ref: 'main' },
-	head: { ref: pendingPr.headRefName },
+	head: { ref: 'release-please--branches--main--components--sharkord' },
 	merge_commit_sha: sourceSha,
-	labels: [{ name: 'autorelease: tagged' }],
+	labels: [{ name: 'autorelease: pending' }],
 };
+const taggedPr = { ...pendingPr, labels: [{ name: 'autorelease: tagged' }] };
 
 function mockGitHub(overrides = {}) {
 	const responses = {
-		'pr list': [pendingPr],
+		[mergedPrs]: [pendingPr],
 		'git/ref/heads/main': { object: { sha: testedSha } },
 		[`compare/${sourceSha}...${testedSha}`]: { status: 'ahead' },
 		[`git/ref/tags/${tag}`]: { object: { type: 'tag', sha: tagObjectSha } },
@@ -230,20 +228,34 @@ test('divergent pending release history fails closed', () => {
 });
 
 test('multiple pending release PRs fail rather than testing only one and releasing both', () => {
-	assert.throws(() => resolve({ 'pr list': [pendingPr, { ...pendingPr, number: 43 }] }), /Multiple pending/);
+	assert.throws(() => resolve({ [mergedPrs]: [pendingPr, { ...pendingPr, number: 43 }] }), /Multiple pending/);
 });
 
 test('PR maintenance proceeds only for the current main commit without a pending release', () => {
-	assert.equal(resolve({ 'pr list': [] }).update, true);
-	assert.equal(resolve({ 'pr list': [], 'git/ref/heads/main': { object: { sha: sourceSha } } }).update, false);
+	assert.equal(resolve({ [mergedPrs]: [] }).update, true);
+	assert.equal(resolve({ [mergedPrs]: [], 'git/ref/heads/main': { object: { sha: sourceSha } } }).update, false);
 });
 
 test('labels on unrelated branches do not grant release provenance', () => {
-	assert.equal(resolve({ 'pr list': [{ ...pendingPr, headRefName: 'ordinary-feature' }] }).create, false);
+	assert.equal(resolve({ [mergedPrs]: [{ ...pendingPr, head: { ref: 'ordinary-feature' } }] }).create, false);
+});
+
+test('unmerged or unlabelled release branches are not pending releases', () => {
+	assert.equal(resolve({ [mergedPrs]: [{ ...pendingPr, merged_at: null }] }).create, false);
+	assert.equal(resolve({ [mergedPrs]: [taggedPr] }).create, false);
 });
 
 test('recovery resolves an annotated tag to a pipeline release commit on main', () => {
 	assert.deepEqual(resolve({}, tag), { sha: sourceSha, tag, create: false, update: false, build: true });
+});
+
+test('recovery resolution does not require draft release visibility', () => {
+	const run = mockGitHub();
+	const readOnly = (binary, args) => {
+		assert.notEqual(`${args[0]} ${args[1]}`, 'release view', 'Draft releases are invisible to read-only tokens');
+		return run(binary, args);
+	};
+	assert.equal(resolveRelease({ repository, testedSha, tag, run: readOnly }).build, true);
 });
 
 test('draft releases are accepted through the CLI lookup used during staged builds', () => {
@@ -286,9 +298,13 @@ test('recovery rejects a tag without a merged tagged Release Please PR', () => {
 	assert.throws(() => resolve({ [`commits/${sourceSha}/pulls`]: [{ ...taggedPr, labels: [] }] }, tag), /historical/);
 });
 
-test('recovery rejects prereleases and mismatched tag metadata', () => {
-	assert.throws(() => resolve({ 'release view': { tagName: tag, isPrerelease: true } }, tag), /stable release/);
-	assert.throws(() => resolve({ 'release view': { tagName: 'v2.1.55', isPrerelease: false } }, tag), /stable release/);
+test('staged builds reject prereleases and mismatched tag metadata', () => {
+	for (const release of [
+		{ tagName: tag, isPrerelease: true },
+		{ tagName: 'v2.1.55', isPrerelease: false },
+	]) {
+		assert.throws(() => stableRelease(repository, tag, mockGitHub({ 'release view': release })), /stable release/);
+	}
 });
 
 test('recovery requires the manifest version to match the requested tag', () => {

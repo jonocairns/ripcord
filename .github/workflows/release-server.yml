@@ -22,6 +22,9 @@ jobs:
   resolve:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       sha: ${{ steps.source.outputs.sha }}
       tag: ${{ steps.source.outputs.tag }}

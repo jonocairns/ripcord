@@ -3,7 +3,7 @@
 - Release Please owns release versions and `CHANGELOG.md`. `feat:` bumps minor, `fix:` bumps patch, and breaking-change commits bump major; `docs:` and `refactor:` do not release. Keep squash commit messages conventional when they should ship.
 - Release by merging the Release Please PR. Do not manually bump app versions or create stable tags/releases. Keep the `x-release-please-version` annotations on app/shared workspace versions in `bun.lock`; they let the bot update the lockfile without changing dependency resolutions. See `docs/releases.md` for setup and recovery. CI verifies marker placement and workspace version agreement.
 - Release discovery must handle a pending release whose merge commit is older than the current main head. Verify the release commit belongs to main history, and use that same immutable SHA for quality checks, server builds, and desktop builds, including recovery.
-- PR titles should be plain sentence case summaries of the feature or fix.
+- PR titles use a conventional prefix followed by a plain sentence case summary of the feature or fix, such as `fix: stop broadcasting private channel details`. Squash merges use the PR title as the commit subject, so a title without a prefix never reaches a release.
 - PR descriptions should use Markdown sections such as `## Summary` and `## Validation`, with bullets for scanability.
 
 - Run repo Bun commands through Nix. Before committing, run `nix develop -c bunx biome check --write <changed paths>` on files intentionally modified by the current task. This matches the editor's formatting, safe lint fixes, and import organization; review the resulting diff.
