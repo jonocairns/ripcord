@@ -7,12 +7,22 @@ on:
         description: "Release tag (e.g. v0.0.4)"
         required: true
         type: string
+      ref:
+        description: "Verified source commit (defaults to the release tag for standalone runs)"
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       tag:
         description: "Release tag (for manual reruns, e.g. v0.0.4)"
         required: true
         type: string
+      ref:
+        description: "Verified source commit (defaults to the release tag for standalone runs)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -44,7 +54,7 @@ jobs:
       - name: Checkout repository at release tag
         uses: actions/checkout@v5
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ inputs.ref || env.RELEASE_TAG }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2

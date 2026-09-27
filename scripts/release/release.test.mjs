@@ -1,0 +1,322 @@
+import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import {
+	assertTagSource,
+	publishRelease,
+	resolveRelease,
+	stableRelease,
+	tagCommit,
+	validateLockfile,
+	validateReleaseVersions,
+	workspacePaths,
+} from './release.mjs';
+
+const sourceSha = 'a'.repeat(40);
+const testedSha = 'b'.repeat(40);
+const tagObjectSha = 'c'.repeat(40);
+const tag = 'v2.1.54';
+const repository = 'owner/ripcord';
+const digest = `sha256:${'d'.repeat(64)}`;
+const pendingPr = {
+	number: 42,
+	headRefName: 'release-please--branches--main--components--sharkord',
+	mergeCommit: { oid: sourceSha },
+};
+const taggedPr = {
+	merged_at: '2026-09-27',
+	base: { ref: 'main' },
+	head: { ref: pendingPr.headRefName },
+	merge_commit_sha: sourceSha,
+	labels: [{ name: 'autorelease: tagged' }],
+};
+
+function mockGitHub(overrides = {}) {
+	const responses = {
+		'pr list': [pendingPr],
+		'git/ref/heads/main': { object: { sha: testedSha } },
+		[`compare/${sourceSha}...${testedSha}`]: { status: 'ahead' },
+		[`git/ref/tags/${tag}`]: { object: { type: 'tag', sha: tagObjectSha } },
+		[`git/tags/${tagObjectSha}`]: { object: { type: 'commit', sha: sourceSha } },
+		'release view': { tagName: tag, isPrerelease: false, isDraft: true },
+		[`commits/${sourceSha}/pulls`]: [taggedPr],
+		[`contents/.release-please-manifest.json?ref=${sourceSha}`]: {
+			content: Buffer.from(JSON.stringify({ '.': '2.1.54' })).toString('base64'),
+		},
+		...overrides,
+	};
+	return (binary, args) => {
+		assert.equal(binary, 'gh');
+		const key = args[0] === 'api' ? args[1].slice(`repos/${repository}/`.length) : `${args[0]} ${args[1]}`;
+		assert(Object.hasOwn(responses, key), `Unexpected GitHub request: ${key}`);
+		return JSON.stringify(responses[key]);
+	};
+}
+
+function resolve(overrides = {}, recoveryTag = '') {
+	return resolveRelease({ repository, testedSha, tag: recoveryTag, run: mockGitHub(overrides) });
+}
+
+function fixture(t) {
+	const directory = mkdtempSync(path.join(os.tmpdir(), 'ripcord-release-'));
+	t.after(() => rmSync(directory, { recursive: true, force: true }));
+	for (const workspace of ['', ...workspacePaths]) {
+		mkdirSync(path.join(directory, workspace), { recursive: true });
+		writeFileSync(path.join(directory, workspace, 'package.json'), JSON.stringify({ version: '2.1.54' }));
+	}
+	writeFileSync(path.join(directory, '.release-please-manifest.json'), JSON.stringify({ '.': '2.1.54' }));
+	writeFileSync(
+		path.join(directory, 'bun.lock'),
+		`{
+  "workspaces": {
+${workspacePaths
+	.map(
+		(workspace) => `    "${workspace}": {
+      "name": "${workspace}",
+      "version": "2.1.54", // x-release-please-version
+    },`,
+	)
+	.join('\n')}
+    "packages/plugin-sdk": {
+      "name": "plugin-sdk",
+      "version": "0.0.1",
+    },
+  },
+}`,
+	);
+	return directory;
+}
+
+function editLockfile(directory, edit) {
+	const file = path.join(directory, 'bun.lock');
+	writeFileSync(file, edit(readFileSync(file, 'utf8')));
+}
+
+test('a pending release merged before a later tested main commit is still released', () => {
+	assert.deepEqual(resolve(), { sha: sourceSha, tag: '', create: true, update: false, build: false });
+});
+
+test('the original release run remains valid when main has advanced', () => {
+	const run = mockGitHub({ [`compare/${sourceSha}...${sourceSha}`]: { status: 'identical' } });
+	assert.equal(resolveRelease({ repository, testedSha: sourceSha, run }).create, true);
+});
+
+test('a pending release newer than this run waits for its own tested history', () => {
+	assert.equal(resolve({ [`compare/${sourceSha}...${testedSha}`]: { status: 'behind' } }).create, false);
+});
+
+test('divergent pending release history fails closed', () => {
+	assert.throws(
+		() => resolve({ [`compare/${sourceSha}...${testedSha}`]: { status: 'diverged' } }),
+		/tested main history/,
+	);
+});
+
+test('multiple pending release PRs fail rather than testing only one and releasing both', () => {
+	assert.throws(() => resolve({ 'pr list': [pendingPr, { ...pendingPr, number: 43 }] }), /Multiple pending/);
+});
+
+test('PR maintenance proceeds only for the current main commit without a pending release', () => {
+	assert.equal(resolve({ 'pr list': [] }).update, true);
+	assert.equal(resolve({ 'pr list': [], 'git/ref/heads/main': { object: { sha: sourceSha } } }).update, false);
+});
+
+test('labels on unrelated branches do not grant release provenance', () => {
+	assert.equal(resolve({ 'pr list': [{ ...pendingPr, headRefName: 'ordinary-feature' }] }).create, false);
+});
+
+test('recovery resolves an annotated tag to a pipeline release commit on main', () => {
+	assert.deepEqual(resolve({}, tag), { sha: sourceSha, tag, create: false, update: false, build: true });
+});
+
+test('draft releases are accepted through the CLI lookup used during staged builds', () => {
+	assert.equal(stableRelease(repository, tag, mockGitHub()).isDraft, true);
+});
+
+test('lightweight tags are resolved without annotation requests', () => {
+	assert.equal(
+		tagCommit(repository, tag, mockGitHub({ [`git/ref/tags/${tag}`]: { object: { type: 'commit', sha: sourceSha } } })),
+		sourceSha,
+	);
+});
+
+test('source checks reject missing identities and tags moved after resolution', () => {
+	assertTagSource(repository, tag, sourceSha, mockGitHub());
+	assert.throws(() => assertTagSource(repository, tag, testedSha, mockGitHub()), /verified immutable/);
+	assert.throws(() => assertTagSource(repository, tag, '', mockGitHub()), /verified immutable/);
+});
+
+test('recovery rejects malformed tags before requesting or checking out source', () => {
+	assert.throws(() => resolve({}, 'beta'), /stable vX.Y.Z/);
+});
+
+test('recovery rejects a tag outside main history', () => {
+	assert.throws(
+		() => resolve({ [`compare/${sourceSha}...${testedSha}`]: { status: 'diverged' } }, tag),
+		/tested main history/,
+	);
+});
+
+test('recovery rejects moved tags even if package versions could match', () => {
+	assert.throws(
+		() => resolve({ [`commits/${sourceSha}/pulls`]: [{ ...taggedPr, merge_commit_sha: testedSha }] }, tag),
+		/moved tags/,
+	);
+});
+
+test('recovery rejects a tag without a merged tagged Release Please PR', () => {
+	assert.throws(() => resolve({ [`commits/${sourceSha}/pulls`]: [] }, tag), /historical/);
+	assert.throws(() => resolve({ [`commits/${sourceSha}/pulls`]: [{ ...taggedPr, labels: [] }] }, tag), /historical/);
+});
+
+test('recovery rejects prereleases and mismatched tag metadata', () => {
+	assert.throws(() => resolve({ 'release view': { tagName: tag, isPrerelease: true } }, tag), /stable release/);
+	assert.throws(() => resolve({ 'release view': { tagName: 'v2.1.55', isPrerelease: false } }, tag), /stable release/);
+});
+
+test('recovery requires the manifest version to match the requested tag', () => {
+	const manifest = { content: Buffer.from(JSON.stringify({ '.': '1.4.20' })).toString('base64') };
+	assert.throws(
+		() => resolve({ [`contents/.release-please-manifest.json?ref=${sourceSha}`]: manifest }, tag),
+		/manifest must match/,
+	);
+});
+
+test('version checks accept synchronized pipeline releases', (t) => {
+	validateReleaseVersions(fixture(t), '2.1.54');
+});
+
+test('legacy releases receive an actionable unsupported recovery error', (t) => {
+	const directory = fixture(t);
+	rmSync(path.join(directory, '.release-please-manifest.json'));
+	assert.throws(
+		() => validateReleaseVersions(directory, '2.1.53'),
+		/historical releases such as v2.1.53 are unsupported/,
+	);
+});
+
+test('version checks reject stale package and manifest versions', (t) => {
+	const directory = fixture(t);
+	assert.throws(() => validateReleaseVersions(directory, '2.1.55'), /manifest does not match/);
+	writeFileSync(path.join(directory, 'apps/client/package.json'), JSON.stringify({ version: '1.4.20' }));
+	assert.throws(() => validateReleaseVersions(directory, '2.1.54'), /apps\/client/);
+});
+
+test('the real lockfile and correctly annotated fixtures pass', (t) => {
+	validateLockfile(fixture(t));
+	validateLockfile(fileURLToPath(new URL('../../', import.meta.url)));
+});
+
+test('four markers with one moved to the plugin SDK fail', (t) => {
+	const directory = fixture(t);
+	editLockfile(directory, (lock) =>
+		lock
+			.replace(' // x-release-please-version', '')
+			.replace('"version": "0.0.1",', '"version": "0.0.1", // x-release-please-version'),
+	);
+	assert.throws(() => validateLockfile(directory), /apps\/client/);
+});
+
+test('markers with stale workspace versions fail', (t) => {
+	const directory = fixture(t);
+	editLockfile(directory, (lock) => lock.replace('"version": "2.1.54",', '"version": "1.4.20",'));
+	assert.throws(() => validateLockfile(directory), /matching apps\/client/);
+});
+
+test('missing or duplicate markers fail', (t) => {
+	const directory = fixture(t);
+	editLockfile(directory, (lock) => lock.replace(' // x-release-please-version', ''));
+	assert.throws(() => validateLockfile(directory), /exactly four/);
+	editLockfile(directory, (lock) => `${lock}\n// x-release-please-version\n// x-release-please-version`);
+	assert.throws(() => validateLockfile(directory), /exactly four/);
+});
+
+test('publication completes GitHub availability before promoting the immutable Docker image', async () => {
+	const calls = [];
+	await publishRelease({
+		repository,
+		tag,
+		image: 'ghcr.io/owner/ripcord',
+		digest,
+		run: (binary, args) => calls.push([binary, args]),
+	});
+	assert.equal(calls[0][0], 'gh');
+	assert.deepEqual(calls[1], [
+		'docker',
+		['buildx', 'imagetools', 'create', '--tag', 'ghcr.io/owner/ripcord:latest', `ghcr.io/owner/ripcord@${digest}`],
+	]);
+});
+
+test('GitHub failure never changes Docker latest', async () => {
+	let attempts = 0;
+	await assert.rejects(
+		publishRelease({
+			repository,
+			tag,
+			image: 'image',
+			digest,
+			pause: async () => {},
+			run: (binary) => {
+				assert.equal(binary, 'gh');
+				attempts++;
+				throw new Error('GitHub unavailable');
+			},
+		}),
+		/GitHub unavailable/,
+	);
+	assert.equal(attempts, 3);
+});
+
+test('transient failures in each publication service retry and converge', async () => {
+	const attempts = { gh: 0, docker: 0 };
+	const delays = [];
+	await publishRelease({
+		repository,
+		tag,
+		image: 'image',
+		digest,
+		pause: async (ms) => delays.push(ms),
+		run: (binary) => {
+			attempts[binary]++;
+			if (attempts[binary] < 3) throw new Error('Temporary failure');
+		},
+	});
+	assert.deepEqual(attempts, { gh: 3, docker: 3 });
+	assert.deepEqual(delays, [1000, 2000, 1000, 2000]);
+});
+
+test('permanent Docker failure preserves available GitHub assets and a rerun completes publication', async () => {
+	let published = false;
+	let promoted = false;
+	const options = { repository, tag, image: 'image', digest, pause: async () => {} };
+	await assert.rejects(
+		publishRelease({
+			...options,
+			run: (binary) => {
+				if (binary === 'gh') published = true;
+				else throw new Error('Registry unavailable');
+			},
+		}),
+		/Re-run the failed publish job/,
+	);
+	assert.equal(published, true);
+	await publishRelease({
+		...options,
+		run: (binary) => {
+			if (binary === 'docker') {
+				assert.equal(published, true);
+				promoted = true;
+			}
+		},
+	});
+	assert.equal(promoted, true);
+});
+
+test('invalid publication inputs fail before either service changes', async () => {
+	const run = () => assert.fail('No publication operation should run');
+	await assert.rejects(publishRelease({ repository, tag: 'beta', image: 'image', digest, run }), /stable/);
+	await assert.rejects(publishRelease({ repository, tag, image: 'image', digest: 'latest', run }), /immutable/);
+});

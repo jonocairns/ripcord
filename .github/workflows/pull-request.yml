@@ -3,6 +3,12 @@ name: Pull Request
 on:
   pull_request:
   workflow_call:
+    inputs:
+      ref:
+        description: "Immutable release commit to check (blank uses the PR checkout)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -21,6 +27,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -30,14 +39,10 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Bun removes comments when regenerating the lockfile. Without these
-      # markers Release Please cannot synchronize the frozen workspace versions.
-      - name: Check release version annotations
+      - name: Check release version annotations and regressions
         run: |
-          if [ "$(grep -c '// x-release-please-version' bun.lock)" -ne 4 ]; then
-            echo "::error::Restore the release annotations on the client, server, desktop, and shared workspace versions in bun.lock. See docs/releases.md."
-            exit 1
-          fi
+          node scripts/release/cli.mjs check-lockfile
+          node --test scripts/release/release.test.mjs
 
       - name: Check types
         run: bun run check-types
@@ -73,6 +78,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -114,6 +122,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -155,6 +166,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2

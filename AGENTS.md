@@ -1,7 +1,8 @@
 - Base branches and PRs on `main`.
 - Commits use conventional prefixes: `feat:`, `fix:`, `docs:`, `refactor:`.
 - Release Please owns release versions and `CHANGELOG.md`. `feat:` bumps minor, `fix:` bumps patch, and breaking-change commits bump major; `docs:` and `refactor:` do not release. Keep squash commit messages conventional when they should ship.
-- Release by merging the Release Please PR. Do not manually bump app versions or create stable tags/releases. Keep the `x-release-please-version` annotations on app/shared workspace versions in `bun.lock`; they let the bot update the lockfile without changing dependency resolutions. See `docs/releases.md` for setup and recovery.
+- Release by merging the Release Please PR. Do not manually bump app versions or create stable tags/releases. Keep the `x-release-please-version` annotations on app/shared workspace versions in `bun.lock`; they let the bot update the lockfile without changing dependency resolutions. See `docs/releases.md` for setup and recovery. CI verifies marker placement and workspace version agreement.
+- Release discovery must handle a pending release whose merge commit is older than the current main head. Verify the release commit belongs to main history, and use that same immutable SHA for quality checks, server builds, and desktop builds, including recovery.
 - PR titles should be plain sentence case summaries of the feature or fix.
 - PR descriptions should use Markdown sections such as `## Summary` and `## Validation`, with bullets for scanability.
 
