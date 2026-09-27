@@ -20,4 +20,15 @@ class HttpPayloadTooLargeError extends Error {
 	}
 }
 
-export { HttpPayloadTooLargeError, HttpValidationError };
+class HttpRateLimitError extends Error {
+	retryAfterMs: number;
+
+	constructor(message: string, retryAfterMs: number) {
+		super(message);
+		this.name = 'HttpRateLimitError';
+		this.retryAfterMs = retryAfterMs;
+		Object.setPrototypeOf(this, new.target.prototype);
+	}
+}
+
+export { HttpPayloadTooLargeError, HttpRateLimitError, HttpValidationError };

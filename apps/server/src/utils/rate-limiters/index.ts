@@ -2,6 +2,8 @@ type TFixedWindowRateLimiterOptions = {
 	maxRequests: number;
 	windowMs: number;
 	maxEntries?: number;
+	// Only for keys drawn from persisted accounts, never arbitrary request input.
+	retainActiveEntries?: boolean;
 };
 
 type TRateLimitResult = {
@@ -13,6 +15,7 @@ type TRateLimitResult = {
 type TRateLimitEntry = {
 	count: number;
 	resetAt: number;
+	cleanupTimer?: ReturnType<typeof setTimeout>;
 };
 
 // this is a pretty basic implementation of a fixed window rate limiter, but for now it's better than nothing
@@ -21,29 +24,39 @@ class FixedWindowRateLimiter {
 	private readonly maxRequests: number;
 	private readonly windowMs: number;
 	private readonly maxEntries: number;
+	private readonly retainActiveEntries: boolean;
 
 	constructor({
 		maxRequests,
 		windowMs,
 		maxEntries = 10_000, // default to 10k entries
+		retainActiveEntries = false,
 	}: TFixedWindowRateLimiterOptions) {
 		this.maxRequests = maxRequests;
 		this.windowMs = windowMs;
 		this.maxEntries = maxEntries;
+		this.retainActiveEntries = retainActiveEntries;
 	}
 
 	public consume = (key: string): TRateLimitResult => {
-		const now = Date.now();
-
-		this.gc(now);
+		// Monotonic time keeps insertion and expiry order aligned across clock corrections.
+		const now = performance.now();
 
 		const existing = this.entries.get(key);
 
 		if (!existing || existing.resetAt <= now) {
-			this.entries.set(key, {
-				count: 1,
-				resetAt: now + this.windowMs,
-			});
+			if (existing?.cleanupTimer) clearTimeout(existing.cleanupTimer);
+			// A renewed window belongs at the end of the expiry-ordered map.
+			if (existing) this.entries.delete(key);
+			if (!this.retainActiveEntries) this.makeRoom(now);
+
+			const entry: TRateLimitEntry = { count: 1, resetAt: now + this.windowMs };
+			if (this.retainActiveEntries) {
+				entry.cleanupTimer = setTimeout(() => {
+					if (this.entries.get(key) === entry) this.entries.delete(key);
+				}, this.windowMs).unref();
+			}
+			this.entries.set(key, entry);
 
 			return {
 				allowed: true,
@@ -70,28 +83,23 @@ class FixedWindowRateLimiter {
 	};
 
 	public clear = () => {
+		for (const entry of this.entries.values()) {
+			if (entry.cleanupTimer) clearTimeout(entry.cleanupTimer);
+		}
 		this.entries.clear();
 	};
 
-	private gc = (now: number) => {
-		if (this.entries.size < this.maxEntries) {
-			return;
-		}
-
+	// Request-controlled keys use best-effort budgets: saturation must not deny
+	// every new address. Existing keys are checked before this eviction path.
+	private makeRoom = (now: number): void => {
+		if (this.entries.size < this.maxEntries) return;
 		for (const [key, value] of this.entries) {
-			if (value.resetAt <= now) {
-				this.entries.delete(key);
-			}
+			if (value.resetAt > now) break;
+			this.entries.delete(key);
 		}
-
-		if (this.entries.size < this.maxEntries) {
-			return;
-		}
-
-		const oldestKey = this.entries.keys().next().value;
-
-		if (oldestKey) {
-			this.entries.delete(oldestKey);
+		if (this.entries.size >= this.maxEntries) {
+			const oldestKey = this.entries.keys().next().value;
+			if (oldestKey !== undefined) this.entries.delete(oldestKey);
 		}
 	};
 }
