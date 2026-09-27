@@ -2,6 +2,13 @@ name: Pull Request
 
 on:
   pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Immutable release commit to check (blank uses the PR checkout)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -11,7 +18,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  source:
+    name: Verify quality source
+    runs-on: ubuntu-latest
+    steps:
+      # Run verification from the workflow commit before checking out caller input.
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Verify the requested commit belongs to main
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_SOURCE_SHA: ${{ inputs.ref }}
+        run: node scripts/release/cli.mjs quality-source
+
   test:
+    needs: source
     name: Quality + Server Tests
     runs-on: ubuntu-latest
     env:
@@ -20,6 +43,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Checkout verified quality source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_SOURCE_SHA: ${{ inputs.ref }}
+        run: node scripts/release/cli.mjs checkout-quality
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -28,6 +59,11 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Check release version annotations and regressions
+        run: |
+          node scripts/release/cli.mjs check-lockfile
+          node --test scripts/release/release.test.mjs
 
       - name: Check types
         run: bun run check-types
@@ -55,6 +91,7 @@ jobs:
         run: bun test
 
   sidecar-windows:
+    needs: source
     name: Desktop Build + Sidecar (Windows)
     runs-on: windows-latest
     env:
@@ -63,6 +100,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Checkout verified quality source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_SOURCE_SHA: ${{ inputs.ref }}
+        run: node scripts/release/cli.mjs checkout-quality
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -96,6 +141,7 @@ jobs:
           bun run prepare:renderer
 
   sidecar-macos:
+    needs: source
     name: Desktop Build + Sidecar (macOS)
     runs-on: macos-latest
     env:
@@ -104,6 +150,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Checkout verified quality source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_SOURCE_SHA: ${{ inputs.ref }}
+        run: node scripts/release/cli.mjs checkout-quality
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -137,6 +191,7 @@ jobs:
           bun run prepare:renderer
 
   sidecar-linux:
+    needs: source
     name: Desktop Build + Sidecar (Linux)
     runs-on: ubuntu-latest
     env:
@@ -145,6 +200,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Checkout verified quality source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_SOURCE_SHA: ${{ inputs.ref }}
+        run: node scripts/release/cli.mjs checkout-quality
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2

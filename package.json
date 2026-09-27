@@ -13,7 +13,7 @@
 	"scripts": {
 		"format": "bun run --filter '*' format",
 		"check-types": "bun run --filter '*' check-types",
-		"lint": "bun run --filter '*' lint",
+		"lint": "bun run --filter '*' lint && biome lint --error-on-warnings ./scripts/release",
 		"knip": "knip",
 		"knip:production": "knip --production",
 		"test:e2e": "bun run --filter client test:e2e",

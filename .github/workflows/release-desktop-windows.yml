@@ -195,16 +195,13 @@ jobs:
             exit 1
           fi
 
-          prerelease_flag=""
-          if [ "${RELEASE_PRERELEASE}" = "true" ]; then
-            prerelease_flag="--prerelease"
-          fi
-
-          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+          if [ "${RELEASE_PRERELEASE}" != "true" ]; then
+            gh release view "${RELEASE_TAG}" >/dev/null
+          elif ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             gh release create "${RELEASE_TAG}" \
               --title "${RELEASE_TAG}" \
               --notes "" \
-              ${prerelease_flag}
+              --prerelease
           elif [ "${RELEASE_PRERELEASE}" = "true" ]; then
             gh release edit "${RELEASE_TAG}" --prerelease
           fi

@@ -50,7 +50,7 @@ const fetchArrayBufferWithRetry = async (url: string, attempts = 5): Promise<Arr
 				const retryableStatus = RETRYABLE_HTTP_STATUS_CODES.has(response.status);
 
 				if (!retryableStatus || attempt === attempts) {
-					throw new Error(`Failed to download mediasoup binary: HTTP ${response.status} ${response.statusText}`);
+					throw new Error(`Failed to download ${url}: HTTP ${response.status} ${response.statusText}`);
 				}
 
 				const waitMs = Math.min(1000 * 2 ** (attempt - 1), 10_000);
@@ -78,7 +78,7 @@ const fetchArrayBufferWithRetry = async (url: string, attempts = 5): Promise<Arr
 		}
 	}
 
-	throw new Error('Failed to download mediasoup binary after retries');
+	throw new Error(`Failed to download ${url} after retries`);
 };
 
 const downloadMediasoupBinary = async (version: string, target: Bun.Build.Target) => {
@@ -114,6 +114,43 @@ const downloadMediasoupBinary = async (version: string, target: Bun.Build.Target
 	return fileName;
 };
 
+// When compiling for its host target, Bun copies its own executable into the
+// output. Nix's Bun is patched to load its ELF interpreter from /nix/store, which
+// would make the Linux release unrunnable outside Nix. Compile Linux from the
+// upstream runtime instead, fetched from the same npm packages Bun uses for
+// cross-compilation and pinned to the bundler's exact version.
+const downloadPortableBunRuntime = async (target: Bun.Build.Target) => {
+	if (target !== 'bun-linux-x64') {
+		return undefined;
+	}
+
+	const packageName = '@oven/bun-linux-x64';
+	const metadataUrl = `https://registry.npmjs.org/${packageName}/${Bun.version}`;
+	const metadata = JSON.parse(new TextDecoder().decode(await fetchArrayBufferWithRetry(metadataUrl)));
+	const tarballUrl: unknown = metadata?.dist?.tarball;
+	const integrity: unknown = metadata?.dist?.integrity;
+
+	if (typeof tarballUrl !== 'string' || typeof integrity !== 'string' || !integrity.startsWith('sha512-')) {
+		throw new Error(`Missing tarball integrity for ${packageName}@${Bun.version}`);
+	}
+
+	const tarball = await fetchArrayBufferWithRetry(tarballUrl);
+	const digest = Buffer.from(await crypto.subtle.digest('SHA-512', tarball)).toString('base64');
+
+	if (`sha512-${digest}` !== integrity) {
+		throw new Error(`Integrity mismatch for ${packageName}@${Bun.version}`);
+	}
+
+	const runtimeDir = path.join(serverCwd, 'build', 'temp', `bun-runtime-${target}`);
+	const tarballPath = `${runtimeDir}.tgz`;
+
+	await fs.mkdir(runtimeDir, { recursive: true });
+	await fs.writeFile(tarballPath, Buffer.from(tarball));
+	await unpack(tarballPath, runtimeDir);
+
+	return path.join(runtimeDir, 'package', 'bin', 'bun');
+};
+
 const getCurrentVersion = async () => {
 	if (process.env.SHARKORD_VERSION) {
 		return process.env.SHARKORD_VERSION;
@@ -139,6 +176,7 @@ const compile = async ({ out, target }: TTarget) => {
 	const version = await getCurrentVersion();
 	const mediasoupVersion = await getMediasoupVersion();
 	const mediasoupBinary = await downloadMediasoupBinary(mediasoupVersion, target);
+	const executablePath = await downloadPortableBunRuntime(target);
 
 	const entryPoints = [
 		path.join(serverCwd, 'src', 'index.ts'),
@@ -152,6 +190,7 @@ const compile = async ({ out, target }: TTarget) => {
 		compile: {
 			outfile: out,
 			target,
+			...(executablePath ? { executablePath } : {}),
 		},
 		define: {
 			'process.env.SHARKORD_ENV': '"production"',

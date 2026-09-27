@@ -7,6 +7,11 @@ on:
         description: "Release tag (e.g. v0.0.4)"
         required: true
         type: string
+      ref:
+        description: "Verified source commit (defaults to the release tag for standalone runs)"
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       tag:
@@ -47,7 +52,7 @@ jobs:
       - name: Checkout repository at release tag
         uses: actions/checkout@v5
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ inputs.ref || env.RELEASE_TAG }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -108,8 +113,6 @@ jobs:
             exit 1
           fi
 
-          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release create "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes ""
-          fi
+          gh release view "${RELEASE_TAG}" >/dev/null
 
           gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber

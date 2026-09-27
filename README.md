@@ -24,6 +24,10 @@ ripcord is a self-hosted communication platform that brings the most important D
   <img src="./docs/settings.png" alt="ripcord settings view" width="800" />
 </p>
 
+## Releases
+
+Ripcord uses Release Please to maintain a release PR from conventional commits. Merging it builds and publishes the server, Docker image, and desktop apps automatically. See [the release guide](docs/releases.md) for setup and failed-release recovery.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
