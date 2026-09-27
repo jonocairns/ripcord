@@ -18,11 +18,6 @@ on:
         description: "Release tag (for manual reruns, e.g. v0.0.4)"
         required: true
         type: string
-      ref:
-        description: "Verified source commit (defaults to the release tag for standalone runs)"
-        required: false
-        type: string
-        default: ""
 
 permissions:
   contents: write
