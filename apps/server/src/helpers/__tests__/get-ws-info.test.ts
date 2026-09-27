@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type http from 'node:http';
 import { getWsInfo, type TClientIpOptions } from '../get-ws-info';
 
-const makeReq = (headers: Record<string, string>, remoteAddress?: string): http.IncomingMessage =>
+const makeReq = (headers: Record<string, string | string[]>, remoteAddress?: string): http.IncomingMessage =>
 	({
 		headers,
 		socket: remoteAddress ? { remoteAddress } : undefined,
@@ -12,8 +12,11 @@ const LOCAL_PROXY = '127.0.0.1';
 const DOCKER_GATEWAY = '172.17.0.1';
 const PUBLIC_PEER = '198.51.100.7';
 
-const ipOf = (headers: Record<string, string>, remoteAddress: string | undefined, options?: TClientIpOptions) =>
-	getWsInfo(undefined, makeReq(headers, remoteAddress), { trustProxy: true, ...options })?.ip;
+const ipOf = (
+	headers: Record<string, string | string[]>,
+	remoteAddress: string | undefined,
+	options?: TClientIpOptions,
+) => getWsInfo(undefined, makeReq(headers, remoteAddress), { trustProxy: true, ...options })?.ip;
 
 describe('getWsInfo IP extraction', () => {
 	describe('untrusted peer', () => {
@@ -90,6 +93,19 @@ describe('getWsInfo IP extraction', () => {
 			expect(ipOf({ 'cf-connecting-ip': '1.1.1.1' }, LOCAL_PROXY)).toBe(LOCAL_PROXY);
 			expect(ipOf({ 'cf-connecting-ip': '1.1.1.1' }, LOCAL_PROXY, { clientIpHeader: 'CF-Connecting-IP' })).toBe(
 				'1.1.1.1',
+			);
+		});
+
+		test('configured headers use the address appended by the trusted proxy', () => {
+			const options = { clientIpHeader: 'x-client-ip' };
+			expect(ipOf({ 'x-client-ip': '1.1.1.1, 9.9.9.9' }, LOCAL_PROXY, options)).toBe('9.9.9.9');
+			expect(ipOf({ 'x-client-ip': ['1.1.1.1', '::ffff:9.9.9.9'] }, LOCAL_PROXY, options)).toBe('9.9.9.9');
+			expect(ipOf({ 'x-client-ip': '1.1.1.1, 2001:db8::10, , ' }, LOCAL_PROXY, options)).toBe('2001:db8::10');
+			expect(ipOf({ 'x-client-ip': '1.1.1.1, invalid' }, LOCAL_PROXY, options)).toBe(LOCAL_PROXY);
+			expect(ipOf({ 'x-client-ip': ', , ' }, LOCAL_PROXY, options)).toBe(LOCAL_PROXY);
+			expect(ipOf({ 'x-client-ip': '1.1.1.1, 9.9.9.9' }, PUBLIC_PEER, options)).toBe(PUBLIC_PEER);
+			expect(ipOf({ 'x-client-ip': '1.1.1.1, 9.9.9.9' }, LOCAL_PROXY, { ...options, trustProxy: false })).toBe(
+				LOCAL_PROXY,
 			);
 		});
 

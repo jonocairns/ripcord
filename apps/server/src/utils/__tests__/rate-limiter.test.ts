@@ -3,16 +3,16 @@ import { FixedWindowRateLimiter } from '../rate-limiters';
 
 describe('FixedWindowRateLimiter', () => {
 	let now = 1000;
-	let originalDateNow: typeof Date.now;
+	let originalNow: typeof performance.now;
 
 	beforeEach(() => {
 		now = 1000;
-		originalDateNow = Date.now;
-		Date.now = () => now;
+		originalNow = performance.now;
+		performance.now = () => now;
 	});
 
 	afterEach(() => {
-		Date.now = originalDateNow;
+		performance.now = originalNow;
 	});
 
 	test('allows requests until max, then blocks', () => {
@@ -104,6 +104,51 @@ describe('FixedWindowRateLimiter', () => {
 		expect(limiter.consume('other').allowed).toBe(false);
 	});
 
+	test('renewing an expired key moves it behind older active windows before eviction', () => {
+		const limiter = new FixedWindowRateLimiter({ maxRequests: 1, windowMs: 100, maxEntries: 3 });
+		limiter.consume('renewed');
+		now += 10;
+		limiter.consume('older-active');
+		now += 90;
+		limiter.consume('renewed');
+		limiter.consume('third');
+		limiter.consume('new');
+		expect(limiter.consume('renewed').allowed).toBe(false);
+		expect(limiter.consume('third').allowed).toBe(false);
+		expect(limiter.consume('older-active').allowed).toBe(true);
+	});
+
+	test('wall-clock corrections do not change active budgets or expiry order', () => {
+		const limiter = new FixedWindowRateLimiter({ maxRequests: 1, windowMs: 100, maxEntries: 2 });
+		limiter.consume('active');
+		const originalWallClock = Date.now;
+		try {
+			Date.now = () => -1_000_000;
+			now += 10;
+			limiter.consume('newer');
+			expect(limiter.consume('active').allowed).toBe(false);
+			Date.now = () => 1_000_000;
+			expect(limiter.consume('newer').allowed).toBe(false);
+			now += 90;
+			expect(limiter.consume('replacement').allowed).toBe(true);
+			expect(limiter.consume('newer').allowed).toBe(false);
+		} finally {
+			Date.now = originalWallClock;
+		}
+	});
+
+	test('capacity cleanup reclaims expired windows before evicting active ones', () => {
+		const limiter = new FixedWindowRateLimiter({ maxRequests: 1, windowMs: 100, maxEntries: 3 });
+		limiter.consume('expired-one');
+		limiter.consume('expired-two');
+		now += 10;
+		limiter.consume('active');
+		now += 90;
+		expect(limiter.consume('new-one').allowed).toBe(true);
+		expect(limiter.consume('new-two').allowed).toBe(true);
+		expect(limiter.consume('active').allowed).toBe(false);
+	});
+
 	test('account budgets survive more than 10000 other accounts and admit new accounts', () => {
 		const limiter = new FixedWindowRateLimiter({ maxRequests: 1, windowMs: 60_000, retainActiveEntries: true });
 		limiter.consume('target');
@@ -115,7 +160,7 @@ describe('FixedWindowRateLimiter', () => {
 	});
 
 	test('retained account budgets expire and clear cannot delete a replacement budget', async () => {
-		Date.now = originalDateNow;
+		performance.now = originalNow;
 		const limiter = new FixedWindowRateLimiter({ maxRequests: 1, windowMs: 40, retainActiveEntries: true });
 		limiter.consume('account');
 		await Bun.sleep(25);

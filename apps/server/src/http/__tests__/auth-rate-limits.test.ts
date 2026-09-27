@@ -43,6 +43,25 @@ describe('auth rate limits', () => {
 		expect(await limited.json()).toEqual({ error: IP_LIMIT_MESSAGE });
 	});
 
+	test('rotating configured-header prefixes does not escape an appending proxy IP budget', async () => {
+		setClientIpOptionsForTests({ trustProxy: true, clientIpHeader: 'x-client-ip' });
+		for (let index = 0; index < 5; index += 1) {
+			const response = await postJson(
+				'/login',
+				{ identity: 'testowner', password: 'wrongpassword' },
+				{ 'x-client-ip': `${spoofedIp(index)}, 198.51.100.25` },
+			);
+			expect(response.status).toBe(400);
+		}
+		const blocked = await postJson(
+			'/login',
+			{ identity: 'testowner', password: 'password123' },
+			{ 'x-client-ip': '203.0.113.99, 198.51.100.25' },
+		);
+		expect(blocked.status).toBe(429);
+		expect(await blocked.json()).toEqual({ error: IP_LIMIT_MESSAGE });
+	});
+
 	test('the per-identity login limiter trips across different client IPs', async () => {
 		// Loopback is a trusted proxy by default, so each request gets its own IP.
 		setClientIpOptionsForTests({ trustProxy: true, trustedProxies: '' });

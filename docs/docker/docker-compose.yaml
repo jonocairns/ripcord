@@ -30,6 +30,8 @@ services:
       # RIPCORD_TRUSTED_PROXIES: "172.18.0.2"
       # Read one specific header instead of X-Forwarded-For, e.g. when Cloudflare's
       # edge reaches Ripcord through a proxy that does not append X-Forwarded-For.
+      # That proxy must overwrite this header or append the address it observed;
+      # forwarding a client-supplied value unchanged is unsafe.
       # RIPCORD_CLIENT_IP_HEADER: "cf-connecting-ip"
 
       # WebRTC configuration

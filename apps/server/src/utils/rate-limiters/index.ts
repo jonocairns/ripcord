@@ -39,12 +39,15 @@ class FixedWindowRateLimiter {
 	}
 
 	public consume = (key: string): TRateLimitResult => {
-		const now = Date.now();
+		// Monotonic time keeps insertion and expiry order aligned across clock corrections.
+		const now = performance.now();
 
 		const existing = this.entries.get(key);
 
 		if (!existing || existing.resetAt <= now) {
 			if (existing?.cleanupTimer) clearTimeout(existing.cleanupTimer);
+			// A renewed window belongs at the end of the expiry-ordered map.
+			if (existing) this.entries.delete(key);
 			if (!this.retainActiveEntries) this.makeRoom(now);
 
 			const entry: TRateLimitEntry = { count: 1, resetAt: now + this.windowMs };
@@ -91,7 +94,8 @@ class FixedWindowRateLimiter {
 	private makeRoom = (now: number): void => {
 		if (this.entries.size < this.maxEntries) return;
 		for (const [key, value] of this.entries) {
-			if (value.resetAt <= now) this.entries.delete(key);
+			if (value.resetAt > now) break;
+			this.entries.delete(key);
 		}
 		if (this.entries.size >= this.maxEntries) {
 			const oldestKey = this.entries.keys().next().value;

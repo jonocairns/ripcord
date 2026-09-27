@@ -17,7 +17,8 @@ type TClientIpOptions = {
 	// Comma-separated IPs/CIDRs whose forwarding headers are believed
 	// (`server.trustedProxies`). Empty means DEFAULT_TRUSTED_PROXY_RANGES.
 	trustedProxies?: string;
-	// Header a trusted proxy puts the client address in (`server.clientIpHeader`).
+	// Header a trusted proxy overwrites or appends its observed client address to
+	// (`server.clientIpHeader`). The last non-empty value is authoritative.
 	// Empty means X-Forwarded-For, falling back to X-Real-IP when it is absent.
 	clientIpHeader?: string;
 };
@@ -154,7 +155,11 @@ const getWsIp = (ws: unknown, req: http.IncomingMessage, options?: TClientIpOpti
 		.toLowerCase();
 
 	if (clientIpHeader && clientIpHeader !== 'x-forwarded-for') {
-		const value = normalizeHeaderValue(headers[clientIpHeader])?.split(',')[0];
+		const values = normalizeHeaderValue(headers[clientIpHeader])
+			?.split(',')
+			.map((value) => value.trim())
+			.filter((value) => value.length > 0);
+		const value = values?.at(-1);
 		const client = value ? parseIpAddress(value) : undefined;
 
 		return (client ?? peer).toString();
