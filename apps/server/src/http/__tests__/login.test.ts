@@ -1,11 +1,15 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { sha256 } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import jwt from 'jsonwebtoken';
+import { TOTP } from 'otpauth';
 import { login, logout, refresh } from '../../__tests__/helpers';
 import { TEST_AUTH_TOKEN_SECRET, TEST_SECRET_TOKEN } from '../../__tests__/seed';
 import { tdb, testsBaseUrl } from '../../__tests__/setup';
+import * as serverQueries from '../../db/queries/server';
 import { invites, refreshTokens, roles, settings, userRoles, users } from '../../db/schema';
+import { createChallengeToken, encryptTotpSecret } from '../../helpers/totp';
+import { logger } from '../../logger';
 import { REFRESH_REUSE_GRACE_MS } from '../auth-tokens';
 
 type TLoginResponse = {
@@ -15,6 +19,47 @@ type TLoginResponse = {
 	error?: string;
 	errors: Record<string, string>;
 };
+
+describe('credential changes during HTTP token issuance', () => {
+	for (const route of ['/login', '/verify-2fa']) {
+		test(`${route} returns 401 without logging an internal error when issuance races a reset`, async () => {
+			let body: unknown = { identity: 'testowner', password: 'password123' };
+			if (route === '/verify-2fa') {
+				const totp = new TOTP({ digits: 6, period: 30 });
+				await tdb
+					.update(users)
+					.set({ totpSecret: await encryptTotpSecret(totp.secret.base32) })
+					.where(eq(users.id, 1));
+				body = { challengeToken: await createChallengeToken(1), code: totp.generate() };
+			}
+			const getServerToken = serverQueries.getServerToken;
+			let tokenReads = 0;
+			const tokenSpy = spyOn(serverQueries, 'getServerToken').mockImplementation(async () => {
+				const token = await getServerToken();
+				tokenReads += 1;
+				// 2FA first reads the signing key to verify its challenge.
+				if (route === '/login' || tokenReads === 2)
+					tdb.update(users).set({ tokenVersion: 1 }).where(eq(users.id, 1)).run();
+				return token;
+			});
+			const errorSpy = spyOn(logger, 'error');
+			try {
+				const response = await fetch(`${testsBaseUrl}${route}`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(body),
+				});
+				expect(response.status).toBe(401);
+				expect(await response.json()).toEqual({ error: 'Your session is no longer valid. Please sign in again.' });
+				expect(errorSpy).not.toHaveBeenCalled();
+				expect(await tdb.select().from(refreshTokens).where(eq(refreshTokens.userId, 1))).toEqual([]);
+			} finally {
+				tokenSpy.mockRestore();
+				errorSpy.mockRestore();
+			}
+		});
+	}
+});
 
 describe('/login', () => {
 	test('should successfully login with valid credentials', async () => {
