@@ -158,7 +158,9 @@ jobs:
         run: node ../automation/scripts/release/cli.mjs verify
 
       - name: Install dependencies
-        run: nix develop -c bun install --frozen-lockfile
+        # Use the automation shell so recovery works for older release commits
+        # that predate this shell. Dependencies and builds still run in source.
+        run: nix develop ../automation#server-release -c bun install --frozen-lockfile
 
       - name: Build app
         working-directory: source/apps/server
@@ -167,7 +169,7 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-        run: nix develop ../.. -c bun run build
+        run: nix develop ../../../automation#server-release -c bun run build
 
       - name: Resolve GHCR image
         id: ghcr

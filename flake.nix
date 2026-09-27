@@ -32,6 +32,15 @@
           mingwPthreads = pkgs.pkgsCross.mingwW64.windows.pthreads;
         in
         {
+          # Server binaries are compiled by Bun, including Windows targets.
+          # Keep desktop toolchains out of the server release environment.
+          server-release = pkgs.mkShell {
+            buildInputs = with pkgs; [
+              nodejs
+              bun
+            ];
+          };
+
           default = pkgs.mkShell {
             buildInputs =
               with pkgs;
