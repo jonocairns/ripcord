@@ -5,6 +5,7 @@ import {
 	command,
 	output,
 	publishRelease,
+	resolveQualitySource,
 	resolveRelease,
 	stableRelease,
 	validateLockfile,
@@ -17,6 +18,16 @@ const repository = process.env.GITHUB_REPOSITORY;
 const tag = process.env.RELEASE_TAG;
 
 switch (process.argv[2]) {
+	case 'quality-source':
+		output({
+			sha: resolveQualitySource({
+				repository,
+				workflowSha: process.env.GITHUB_SHA,
+				workflowRef: process.env.GITHUB_REF,
+				requestedSha: process.env.QUALITY_SOURCE_SHA,
+			}),
+		});
+		break;
 	case 'resolve': {
 		const result = resolveRelease({ repository, testedSha: process.env.GITHUB_SHA, tag: process.env.RECOVERY_TAG });
 		output({ sha: result.sha, tag: result.tag, create: result.create, update: result.update, build: result.build });

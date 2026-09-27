@@ -18,6 +18,22 @@ export function assertAncestor(comparison) {
 	}
 }
 
+export function resolveQualitySource({ repository, workflowSha, workflowRef, requestedSha = '', run = command }) {
+	if (!/^[a-f0-9]{40}$/.test(workflowSha)) {
+		throw new Error('Expected a full workflow commit SHA.');
+	}
+	if (!requestedSha) return workflowSha;
+	if (workflowRef !== 'refs/heads/main' || !/^[a-f0-9]{40}$/.test(requestedSha)) {
+		throw new Error('An explicit quality source must be an immutable commit on main.');
+	}
+	const comparison = api(repository, `compare/${requestedSha}...${workflowSha}`, run);
+	assertAncestor(comparison);
+	if (comparison.merge_base_commit?.sha !== requestedSha) {
+		throw new Error('The verified quality source must match the requested commit.');
+	}
+	return comparison.merge_base_commit.sha;
+}
+
 export function validateReleaseTag(tag) {
 	if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
 		throw new Error('Expected a stable vX.Y.Z release tag.');

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
 	assertTagSource,
 	publishRelease,
+	resolveQualitySource,
 	resolveRelease,
 	stableRelease,
 	tagCommit,
@@ -59,6 +60,51 @@ function mockGitHub(overrides = {}) {
 function resolve(overrides = {}, recoveryTag = '') {
 	return resolveRelease({ repository, testedSha, tag: recoveryTag, run: mockGitHub(overrides) });
 }
+
+function qualitySource(requestedSha = sourceSha, overrides = {}, workflowRef = 'refs/heads/main') {
+	return resolveQualitySource({
+		repository,
+		workflowSha: testedSha,
+		workflowRef,
+		requestedSha,
+		run: mockGitHub({
+			[`compare/${sourceSha}...${testedSha}`]: { status: 'ahead', merge_base_commit: { sha: sourceSha } },
+			...overrides,
+		}),
+	});
+}
+
+test('ordinary PR quality checks use the workflow merge commit without accepting caller code', () => {
+	assert.equal(qualitySource('', {}, 'refs/pull/308/merge'), testedSha);
+});
+
+test('explicit quality checks accept a verified ancestor of the workflow main commit', () => {
+	assert.equal(qualitySource(), sourceSha);
+});
+
+test('explicit quality checks reject non-main workflows and mutable refs', () => {
+	assert.throws(() => qualitySource(sourceSha, {}, 'refs/pull/308/merge'), /immutable commit on main/);
+	assert.throws(() => qualitySource('main'), /immutable commit on main/);
+});
+
+test('explicit quality checks reject newer and divergent commits', () => {
+	for (const status of ['behind', 'diverged']) {
+		assert.throws(
+			() => qualitySource(sourceSha, { [`compare/${sourceSha}...${testedSha}`]: { status } }),
+			/tested main history/,
+		);
+	}
+});
+
+test('quality checks reject mismatched verification output', () => {
+	assert.throws(
+		() =>
+			qualitySource(sourceSha, {
+				[`compare/${sourceSha}...${testedSha}`]: { status: 'ahead', merge_base_commit: { sha: testedSha } },
+			}),
+		/verified quality source/,
+	);
+});
 
 function fixture(t) {
 	const directory = mkdtempSync(path.join(os.tmpdir(), 'ripcord-release-'));

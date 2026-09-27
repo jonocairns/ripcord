@@ -18,7 +18,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  source:
+    name: Verify quality source
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      # Run verification from the workflow commit before checking out caller input.
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Verify the requested commit belongs to main
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_SOURCE_SHA: ${{ inputs.ref }}
+        run: node scripts/release/cli.mjs quality-source
+
   test:
+    needs: source
     name: Quality + Server Tests
     runs-on: ubuntu-latest
     env:
@@ -28,7 +46,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
 
       - name: Setup Bun
@@ -70,6 +88,7 @@ jobs:
         run: bun test
 
   sidecar-windows:
+    needs: source
     name: Desktop Build + Sidecar (Windows)
     runs-on: windows-latest
     env:
@@ -79,7 +98,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
 
       - name: Setup Bun
@@ -114,6 +133,7 @@ jobs:
           bun run prepare:renderer
 
   sidecar-macos:
+    needs: source
     name: Desktop Build + Sidecar (macOS)
     runs-on: macos-latest
     env:
@@ -123,7 +143,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
 
       - name: Setup Bun
@@ -158,6 +178,7 @@ jobs:
           bun run prepare:renderer
 
   sidecar-linux:
+    needs: source
     name: Desktop Build + Sidecar (Linux)
     runs-on: ubuntu-latest
     env:
@@ -167,7 +188,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
 
       - name: Setup Bun
