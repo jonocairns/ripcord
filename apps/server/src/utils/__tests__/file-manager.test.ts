@@ -1,7 +1,6 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { afterEach } from 'node:test';
 import { StorageOverflowAction } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { tdb } from '../../__tests__/setup';
@@ -575,5 +574,40 @@ describe('file manager', () => {
 
 		expect(p.startsWith(UPLOADS_PATH)).toBe(true);
 		expect(path.extname(p)).toBe('');
+	});
+
+	test('resetting temporary files releases leftover uploads and their capacity', async () => {
+		const leftoverPath = path.join(UPLOADS_PATH, `leftover-${Date.now()}.txt`);
+
+		await fs.writeFile(leftoverPath, 'an upload the test never saves or removes');
+
+		const leftoverStats = await fs.stat(leftoverPath);
+		const leftover = await fileManager.addTemporaryFile({
+			filePath: leftoverPath,
+			size: leftoverStats.size,
+			originalName: 'leftover.txt',
+			userId: 1,
+		});
+
+		// Smaller than the leftover plus the next upload, so the next upload only
+		// fits once the leftover is released.
+		await tdb.update(settings).set({ storageUploadMaxFileSize: 20 });
+
+		await fileManager.resetTemporaryFilesForTests();
+
+		expect(fileManager.temporaryFileExists(leftover.id)).toBe(false);
+		expect(await fs.exists(leftover.path)).toBe(false);
+
+		const stats = await fs.stat(testFilePath);
+		const tempFile = await fileManager.addTemporaryFile({
+			filePath: testFilePath,
+			size: stats.size,
+			originalName: testFileName,
+			userId: 1,
+		});
+
+		tempFilesToCleanup.push(tempFile.path);
+
+		expect(fileManager.temporaryFileExists(tempFile.id)).toBe(true);
 	});
 });

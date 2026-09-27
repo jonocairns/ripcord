@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import type { TFile } from '@sharkord/shared';
 
 type TTestRuntimeConfig = {
@@ -19,9 +19,8 @@ const DEFAULT_RUNTIME_CONFIG: TTestRuntimeConfig = {
 
 let runtimeConfig: TTestRuntimeConfig = DEFAULT_RUNTIME_CONFIG;
 
-mock.module('@/runtime/server-config', () => ({
-	getRuntimeServerConfig: () => runtimeConfig,
-}));
+const serverConfig = await import('@/runtime/server-config');
+let restoreRuntimeConfig: (() => void) | undefined;
 
 const originalWindow = (globalThis as { window?: Window }).window;
 
@@ -48,10 +47,14 @@ const createFile = (overrides: Partial<TFile> = {}): TFile => ({
 describe('get-file-url helpers', () => {
 	beforeEach(() => {
 		runtimeConfig = { ...DEFAULT_RUNTIME_CONFIG };
+		const configSpy = spyOn(serverConfig, 'getRuntimeServerConfig').mockImplementation(() => runtimeConfig);
+		restoreRuntimeConfig = () => configSpy.mockRestore();
 		installWindowLocation('https://client.example/app/index.html');
 	});
 
 	afterEach(() => {
+		restoreRuntimeConfig?.();
+		restoreRuntimeConfig = undefined;
 		if (originalWindow) {
 			Reflect.set(globalThis, 'window', originalWindow);
 			return;
