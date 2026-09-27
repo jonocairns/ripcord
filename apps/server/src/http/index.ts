@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { TRPCError } from '@trpc/server';
 import chalk from 'chalk';
 import z from 'zod';
 import { config } from '../config';
@@ -222,6 +223,10 @@ const createHttpServer = async (port: number = config.server.port) => {
 					return;
 				} else if (error instanceof HttpPayloadTooLargeError) {
 					res.writeHead(413, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: error.message }));
+					return;
+				} else if (error instanceof TRPCError && error.code === 'UNAUTHORIZED') {
+					res.writeHead(401, { 'Content-Type': 'application/json' });
 					res.end(JSON.stringify({ error: error.message }));
 					return;
 				} else if (error instanceof SyntaxError) {

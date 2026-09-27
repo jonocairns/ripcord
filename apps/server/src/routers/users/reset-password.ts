@@ -7,6 +7,7 @@ import { hashPassword } from '../../helpers/password';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { revokeUserSessions } from '../../utils/user-sessions';
 import { requireOwner } from './require-owner';
 
 const resetPasswordRoute = protectedProcedure
@@ -55,11 +56,10 @@ const resetPasswordRoute = protectedProcedure
 				.run();
 		});
 
-		const userWss = ctx.getUserWss(input.userId);
-
-		for (const userWs of userWss) {
-			userWs.close(DisconnectCode.KICKED, 'Your password was reset by a server owner. Please sign in again.');
-		}
+		revokeUserSessions(input.userId, {
+			code: DisconnectCode.KICKED,
+			reason: 'Your password was reset by a server owner. Please sign in again.',
+		});
 
 		enqueueActivityLog({
 			type: ActivityLogType.USER_RESET_PASSWORD,

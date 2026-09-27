@@ -6,6 +6,7 @@ import { refreshTokens, users } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { revokeUserSessions } from '../../utils/user-sessions';
 import { requireOwner } from './require-owner';
 
 const resetTotpRoute = protectedProcedure
@@ -64,14 +65,10 @@ const resetTotpRoute = protectedProcedure
 				.run();
 		});
 
-		const userWss = ctx.getUserWss(input.userId);
-
-		for (const userWs of userWss) {
-			userWs.close(
-				DisconnectCode.KICKED,
-				'Your two-factor authentication was reset by a server owner. Please sign in again.',
-			);
-		}
+		revokeUserSessions(input.userId, {
+			code: DisconnectCode.KICKED,
+			reason: 'Your two-factor authentication was reset by a server owner. Please sign in again.',
+		});
 
 		enqueueActivityLog({
 			type: ActivityLogType.USER_RESET_2FA,

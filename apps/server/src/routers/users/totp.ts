@@ -1,10 +1,10 @@
-import { ActivityLogType } from '@sharkord/shared';
+import { ActivityLogType, DisconnectCode } from '@sharkord/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { db } from '../../db';
 import { getServerToken, getSettings } from '../../db/queries/server';
-import { getUserTotpData, isUserTotpEnabled, setUserTotpData, updateUserRecoveryCodes } from '../../db/queries/totp';
+import { getUserTotpData, isUserTotpEnabled, updateUserRecoveryCodes } from '../../db/queries/totp';
 import { refreshTokens, users } from '../../db/schema';
 import { verifyPassword } from '../../helpers/password';
 import {
@@ -14,9 +14,12 @@ import {
 	generateTotpSetup,
 	verifyAndConsumeTotpToken,
 } from '../../helpers/totp';
+import { issueAuthTokens } from '../../http/auth-tokens';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { revokeOtherUserSessions, revokeUserSessions } from '../../utils/user-sessions';
+import { blockVoiceRestoreAfterKick, getVoiceKickGuardIdentity } from '../../utils/voice-kick-guard';
 
 // The setup flow is stateless: we encode the pending secret + recovery codes
 // into a short-lived JWT (setupToken) so the client can send it back during
@@ -32,6 +35,34 @@ const zSetupPayload = z.object({
 });
 
 type TSetupPayload = z.infer<typeof zSetupPayload>;
+
+// Enabling or disabling 2FA changes what a sign-in requires, so every existing
+// token (access and refresh) is invalidated in the same transaction.
+const rotateUserTotp = async (userId: number, totpSecret: string | null, totpRecoveryCodes: string | null) => {
+	const now = Date.now();
+
+	return db.transaction(async (tx) => {
+		const updatedUser = await tx
+			.update(users)
+			.set({
+				totpSecret,
+				totpRecoveryCodes,
+				tokenVersion: sql`${users.tokenVersion} + 1`,
+				updatedAt: now,
+			})
+			.where(eq(users.id, userId))
+			.returning({ tokenVersion: users.tokenVersion })
+			.get();
+
+		await tx
+			.update(refreshTokens)
+			.set({ revokedAt: now, updatedAt: now })
+			.where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)))
+			.run();
+
+		return updatedUser.tokenVersion;
+	});
+};
 
 const totpStatusRoute = protectedProcedure.query(async ({ ctx }) => {
 	const enabled = await isUserTotpEnabled(ctx.userId);
@@ -84,6 +115,7 @@ const totpConfirmSetupRoute = protectedProcedure
 		z.object({
 			setupToken: z.string().min(1),
 			code: z.string().length(6),
+			renewSession: z.boolean().optional(),
 		}),
 	)
 	.mutation(async ({ ctx, input }) => {
@@ -110,15 +142,30 @@ const totpConfirmSetupRoute = protectedProcedure
 		}
 
 		const encryptedSecret = await encryptTotpSecret(payload.secret);
+		const newTokenVersion = await rotateUserTotp(ctx.userId, encryptedSecret, JSON.stringify(payload.hashedCodes));
 
-		await setUserTotpData(ctx.userId, encryptedSecret, JSON.stringify(payload.hashedCodes));
+		// Sessions opened before 2FA existed never passed a second factor.
+		const reason = 'Two-factor authentication was enabled on your account. Please sign in again.';
+		const legacyOwnWs = input.renewSession ? undefined : ctx.getOwnWs();
+		if (input.renewSession) {
+			revokeOtherUserSessions(ctx, newTokenVersion, reason);
+		} else {
+			// Legacy clients cannot store renewed tokens. Let the success response
+			// flush before closing their connection for an explicit sign-in.
+			revokeUserSessions(ctx.userId, { code: DisconnectCode.KICKED, reason, exceptWs: legacyOwnWs });
+			if (legacyOwnWs) blockVoiceRestoreAfterKick(ctx.userId, getVoiceKickGuardIdentity(legacyOwnWs));
+		}
 
 		enqueueActivityLog({
 			type: ActivityLogType.USER_ENABLED_2FA,
 			userId: ctx.userId,
 		});
 
-		return { success: true };
+		const authTokens = input.renewSession ? await issueAuthTokens(ctx.userId, newTokenVersion) : undefined;
+		// The tRPC WS adapter queues the mutation response synchronously after this
+		// promise resolves. Keep this timer after all awaits so close follows send.
+		if (legacyOwnWs) setTimeout(() => legacyOwnWs.close(DisconnectCode.KICKED, reason), 0).unref();
+		return { success: true, ...authTokens };
 	});
 
 const totpDisableRoute = protectedProcedure
@@ -126,11 +173,10 @@ const totpDisableRoute = protectedProcedure
 		z.object({
 			password: z.string().min(1),
 			code: z.string().length(6),
+			renewSession: z.boolean().optional(),
 		}),
 	)
 	.mutation(async ({ ctx, input }) => {
-		const now = Date.now();
-
 		const user = await db.select({ password: users.password }).from(users).where(eq(users.id, ctx.userId)).get();
 
 		invariant(user, { code: 'NOT_FOUND', message: 'User not found' });
@@ -154,32 +200,21 @@ const totpDisableRoute = protectedProcedure
 			return ctx.throwValidationError('code', 'Invalid authentication code');
 		}
 
-		await db.transaction(async (tx) => {
-			await tx
-				.update(users)
-				.set({
-					totpSecret: null,
-					totpRecoveryCodes: null,
-					tokenVersion: sql`${users.tokenVersion} + 1`,
-					updatedAt: now,
-				})
-				.where(eq(users.id, ctx.userId))
-				.run();
+		const newTokenVersion = await rotateUserTotp(ctx.userId, null, null);
 
-			// Revoke all refresh tokens to force re-authentication
-			await tx
-				.update(refreshTokens)
-				.set({ revokedAt: now, updatedAt: now })
-				.where(and(eq(refreshTokens.userId, ctx.userId), isNull(refreshTokens.revokedAt)))
-				.run();
-		});
+		revokeOtherUserSessions(
+			ctx,
+			newTokenVersion,
+			'Two-factor authentication was disabled on your account. Please sign in again.',
+		);
 
 		enqueueActivityLog({
 			type: ActivityLogType.USER_DISABLED_2FA,
 			userId: ctx.userId,
 		});
 
-		return { success: true };
+		const authTokens = input.renewSession ? await issueAuthTokens(ctx.userId, newTokenVersion) : undefined;
+		return { success: true, ...authTokens };
 	});
 
 const totpRegenerateRecoveryCodesRoute = protectedProcedure

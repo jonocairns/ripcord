@@ -2,6 +2,7 @@ import { ChannelPermission, Permission, ServerEvents, type TChannelUserPermissio
 import { eq } from 'drizzle-orm';
 import { pluginManager } from '../plugins';
 import { pubsub } from '../utils/pubsub';
+import { invalidateUserAuthState } from '../utils/user-sessions';
 import { db } from '.';
 import { getAffectedUserIdsForChannel, getAllChannelUserPermissions } from './queries/channels';
 import { getEmojiById } from './queries/emojis';
@@ -92,6 +93,8 @@ const publishRole = async (roleId: number | undefined, type: 'create' | 'update'
 
 const publishUser = async (userId: number | undefined, type: 'create' | 'update' | 'delete') => {
 	if (!userId) return;
+
+	invalidateUserAuthState(userId);
 
 	if (type === 'delete') {
 		const affectedUserIds = await getUserIdsWithPermission(Permission.MANAGE_USERS);

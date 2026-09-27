@@ -7,6 +7,7 @@ import { users } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { revokeUserSessions } from '../../utils/user-sessions';
 import { requireOwner } from './require-owner';
 
 const deleteUserRoute = protectedProcedure
@@ -30,11 +31,13 @@ const deleteUserRoute = protectedProcedure
 			message: 'User not found',
 		});
 
-		const userWss = ctx.getUserWss(input.userId);
-
-		for (const userWs of userWss) {
-			userWs.close(DisconnectCode.KICKED, 'Your account was deleted by a server owner.');
-		}
+		// Close before deleting: the close handler needs the user row to announce
+		// USER_LEAVE. The auth-state cache is invalidated again by publishUser once
+		// the row is gone.
+		revokeUserSessions(input.userId, {
+			code: DisconnectCode.KICKED,
+			reason: 'Your account was deleted by a server owner.',
+		});
 
 		await db.delete(users).where(eq(users.id, input.userId)).run();
 

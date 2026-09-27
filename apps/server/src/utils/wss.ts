@@ -31,6 +31,12 @@ import { invariant } from './invariant';
 import { pubsub } from './pubsub';
 import type { Context } from './trpc';
 import {
+	getOpenUserSockets,
+	getTrackedClients,
+	setTrackedClientsSource,
+	type TTrackedWebSocket,
+} from './user-sessions';
+import {
 	clearPendingVoiceDisconnect,
 	getPendingVoiceReconnectChannelId,
 	getPendingVoiceReconnectSeatIncarnation,
@@ -46,23 +52,16 @@ let wss: WebSocketServer | undefined;
 const WS_KEEPALIVE_PING_INTERVAL_MS = 30_000;
 const WS_KEEPALIVE_PONG_WAIT_MS = 10_000;
 
-type TTrackedWebSocket = WebSocket & {
-	userId?: number;
-	token: string;
-	clientInstanceId?: string;
-	currentVoiceChannelId?: number;
-	latestVoiceSessionMutationSeq?: number;
-	presenceStatus?: TUserPresenceStatus;
-};
-
-const getTrackedClients = () => {
-	if (!wss) return [] as TTrackedWebSocket[];
-	return Array.from(wss.clients) as TTrackedWebSocket[];
-};
-
-const hasOtherOpenUserConnection = (userId: number, currentWs: TTrackedWebSocket) => {
+// `ws` drops a client from `wss.clients` before our close handler runs, so a
+// sibling that is still CLOSING has not run its own handler yet. Counting it
+// here leaves USER_LEAVE to whichever connection closes last, instead of every
+// connection closed together (ban, session revocation) announcing the leave.
+const hasOtherLiveUserConnection = (userId: number, currentWs: TTrackedWebSocket) => {
 	return getTrackedClients().some(
-		(client) => client !== currentWs && client.userId === userId && client.readyState === WebSocket.OPEN,
+		(client) =>
+			client !== currentWs &&
+			client.userId === userId &&
+			(client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CLOSING),
 	);
 };
 
@@ -91,7 +90,7 @@ const getUserIp = (userId: number): string | undefined => {
 
 const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Promise<Context> => {
 	const { token, clientInstanceId } = info.connectionParams as TConnectionParams;
-	const connectionWs = res as TTrackedWebSocket | undefined;
+	const connectionWs: TTrackedWebSocket | undefined = res;
 
 	if (connectionWs) {
 		connectionWs.token = token;
@@ -181,21 +180,11 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 	const getClientInstanceId = () => connectionWs?.clientInstanceId ?? clientInstanceId;
 
 	const getOwnWs = () => {
-		if (!wss) return undefined;
 		if (connectionWs) return connectionWs;
 		return getTrackedClients().find(isCurrentClient);
 	};
 
-	const getUserWs = (userId: number) => {
-		if (!wss) return undefined;
-		return getTrackedClients().find((client) => client.userId === userId);
-	};
-
-	const getUserWss = (userId: number) => {
-		if (!wss) return [];
-
-		return getTrackedClients().filter((client) => client.userId === userId && client.readyState === WebSocket.OPEN);
-	};
+	const getUserWss = (userId: number) => getOpenUserSockets(userId);
 
 	const getStatusById = (userId: number) => {
 		if (!wss) return UserStatus.OFFLINE;
@@ -330,6 +319,7 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 		pubsub,
 		token,
 		user: decodedUser,
+		sessionTokenVersion: decodedUser.tokenVersion,
 		authenticated: false,
 		userId: decodedUser.id,
 		handshakeHash: '',
@@ -354,7 +344,6 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 		setUserPresenceStatus,
 		setWsUserId,
 		setWsVoiceChannelId,
-		getUserWs,
 		getUserWss,
 		getConnectionInfo,
 		throwValidationError,
@@ -377,9 +366,10 @@ const createWsServer = async (server: http.Server) => {
 			server,
 			verifyClient: corsOrigin ? ({ origin }: { origin?: string }) => origin === corsOrigin : undefined,
 		});
+		setTrackedClientsSource(() => wss?.clients ?? []);
 
 		wss.on('connection', (ws) => {
-			const trackedWs = ws as TTrackedWebSocket;
+			const trackedWs: TTrackedWebSocket = ws;
 			trackedWs.userId = undefined;
 			trackedWs.token = '';
 			trackedWs.clientInstanceId = undefined;
@@ -410,7 +400,7 @@ const createWsServer = async (server: http.Server) => {
 					});
 				}
 
-				const hasOtherConnections = hasOtherOpenUserConnection(userId, trackedWs);
+				const hasOtherConnections = hasOtherLiveUserConnection(userId, trackedWs);
 				const hasOtherVoiceConnection =
 					trackedWs.currentVoiceChannelId !== undefined
 						? hasOtherOpenUserVoiceConnection(userId, trackedWs, trackedWs.currentVoiceChannelId)

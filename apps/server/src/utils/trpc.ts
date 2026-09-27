@@ -8,6 +8,7 @@ import type { TConnectionInfo } from '../types';
 import { invariant } from './invariant';
 import type { pubsub } from './pubsub';
 import { createRateLimiter, getClientRateLimitKey } from './rate-limiters/rate-limiter';
+import { assertSessionIsValid } from './user-sessions';
 
 export type Context = {
 	handshakeHash: string;
@@ -15,6 +16,9 @@ export type Context = {
 	pubsub: typeof pubsub;
 	user: Omit<TUser, 'totpSecret' | 'totpRecoveryCodes'>;
 	userId: number;
+	// tokenVersion of the access token this connection authenticated with. Moved
+	// forward only when the connection itself rotates the user's credentials.
+	sessionTokenVersion: number;
 	token: string;
 	currentVoiceChannelId: number | undefined;
 	// Incarnation token of the voice seat this connection established (see
@@ -36,7 +40,6 @@ export type Context = {
 	setUserPresenceStatus: (status: TUserPresenceStatus) => void;
 	setWsUserId: (userId: number) => void;
 	setWsVoiceChannelId: (channelId: number | undefined) => void;
-	getUserWs: (userId: number) => WebSocket | undefined;
 	getUserWss: (userId: number) => WebSocket[];
 	getConnectionInfo: () => TConnectionInfo | undefined;
 	throwValidationError: (field: string, message: string) => never;
@@ -65,6 +68,10 @@ const authMiddleware = t.middleware(async ({ ctx, next }) => {
 		code: 'UNAUTHORIZED',
 		message: 'You must be authenticated to perform this action.',
 	});
+
+	// The context outlives the checks done when the socket connected, so a ban or
+	// credential change must also be enforced per call.
+	await assertSessionIsValid(ctx.userId, ctx.sessionTokenVersion);
 
 	return next();
 });
