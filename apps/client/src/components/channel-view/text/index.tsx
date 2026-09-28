@@ -222,7 +222,6 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 						)}
 					</div>
 				)}
-				{/* md:min-h-14 matches the sidebar UserControl (h-14) so the two top borders line up */}
 				<div className="flex flex-col justify-center px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:min-h-14 md:py-1.5">
 					<div className="bg-muted/60 flex w-full flex-col gap-1 rounded-xl border border-border px-2 py-1 transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40">
 						<input {...fileInputProps} />
