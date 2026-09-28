@@ -10,6 +10,7 @@ import {
 	MessageChannelMain,
 	type MessagePortMain,
 	powerMonitor,
+	screen,
 	session,
 	shell,
 } from 'electron';
@@ -41,7 +42,7 @@ import {
 	listShareSources,
 	prepareScreenShareSelection,
 } from './screen-share';
-import { getServerUrl, setServerUrl } from './settings-store';
+import { getServerUrl, getWindowState, setServerUrl, setWindowState } from './settings-store';
 import type {
 	TAppAudioPcmFrame,
 	TDesktopCapabilities,
@@ -56,6 +57,7 @@ import type {
 } from './types';
 import { desktopUpdater } from './updater';
 import { classifyWindowOpenUrl } from './window-open-policy';
+import { resolveInitialWindowSize } from './window-state';
 import { installYoutubeEmbedRefererHandler } from './youtube-embed-referrer';
 
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
@@ -68,6 +70,7 @@ const DESKTOP_QUIT_FLUSH_TIMEOUT_MS = 2_000;
 const DESKTOP_DEBUG_IPC_ENABLED = Boolean(TRUSTED_RENDERER_URL);
 const USES_CUSTOM_TITLEBAR = process.platform === 'win32' || process.platform === 'linux';
 let mainWindow: BrowserWindow | null = null;
+let mainWindowOpening = false;
 let appAudioFrameEgressPort: MessagePortMain | undefined;
 // When set, native RTP ingest owns the sidecar PCM egress: PCM is encoded and
 // sent here in main and is NOT forwarded to the renderer worklet. The two are
@@ -389,17 +392,37 @@ const onTrusted = <TArgs extends unknown[]>(
 	});
 };
 
-const createMainWindow = () => {
+// First launch opens at the minimum size; after that the last size is restored.
+const MAIN_WINDOW_MIN_WIDTH = 1120;
+const MAIN_WINDOW_MIN_HEIGHT = 720;
+
+const saveWindowSize = async (window: BrowserWindow | null) => {
+	if (!window || window.isDestroyed()) {
+		return;
+	}
+
+	// getNormalBounds preserves the chosen size while maximized or minimized.
+	const { width, height } = window.getNormalBounds();
+	await setWindowState({ width, height }).catch((error) => {
+		console.warn('[desktop] Failed to save window size', error);
+	});
+};
+
+const createMainWindow = async () => {
 	const icon = resolveAppIconPath();
 	const indexPath = resolveRendererIndexPath();
 	let windowCloseFlushCompleted = false;
 	let rendererUnresponsiveSince: number | undefined;
+	const initialSize = resolveInitialWindowSize(await getWindowState(), screen.getPrimaryDisplay().workAreaSize, {
+		width: MAIN_WINDOW_MIN_WIDTH,
+		height: MAIN_WINDOW_MIN_HEIGHT,
+	});
 
 	mainWindow = new BrowserWindow({
-		width: 1440,
-		height: 920,
-		minWidth: 1120,
-		minHeight: 720,
+		width: initialSize.width,
+		height: initialSize.height,
+		minWidth: MAIN_WINDOW_MIN_WIDTH,
+		minHeight: MAIN_WINDOW_MIN_HEIGHT,
 		frame: !USES_CUSTOM_TITLEBAR,
 		autoHideMenuBar: true,
 		show: false,
@@ -452,6 +475,7 @@ const createMainWindow = () => {
 
 		void (async () => {
 			const result = await requestDesktopQuitFlush();
+			await saveWindowSize(windowToClose);
 
 			if (result.status === 'skipped') {
 				console.warn('[desktop] Window close flush skipped', {
@@ -953,7 +977,7 @@ configureGpuCommandLineSwitches();
 
 void app
 	.whenReady()
-	.then(() => {
+	.then(async () => {
 		captureSidecarManager.onFrame((frame) => {
 			// Native RTP ingest owns the egress — never also forward to the renderer.
 			if (appAudioRtpSender || appAudioFrameEgressPort) {
@@ -1029,15 +1053,22 @@ void app
 		setupDisplayMediaHandler();
 		setupYoutubeEmbedRefererHandler();
 		setupRendererCspHandler();
-		createMainWindow();
+		await createMainWindow();
 		requestDesktopCapabilitiesRefresh({
 			broadcast: true,
 			forceBroadcast: true,
 		});
 
 		app.on('activate', () => {
-			if (BrowserWindow.getAllWindows().length === 0) {
-				createMainWindow();
+			if (BrowserWindow.getAllWindows().length === 0 && !mainWindowOpening) {
+				mainWindowOpening = true;
+				void createMainWindow()
+					.catch((error) => {
+						console.error('[desktop] Failed to create main window', error);
+					})
+					.finally(() => {
+						mainWindowOpening = false;
+					});
 			}
 		});
 	})
@@ -1069,6 +1100,7 @@ app.on('before-quit', (event) => {
 
 	void (async () => {
 		const result = await requestDesktopQuitFlush();
+		await saveWindowSize(mainWindow);
 
 		if (result.status === 'skipped') {
 			console.warn('[desktop] Quit flush skipped', {
