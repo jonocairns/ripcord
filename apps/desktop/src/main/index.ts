@@ -444,11 +444,11 @@ const createMainWindow = async () => {
 		}
 		sizeSaveTimer = setTimeout(() => {
 			sizeSaveTimer = undefined;
-			if (windowForSize.isDestroyed()) {
+			if (windowForSize.isDestroyed() || !windowForSize.isNormal()) {
 				return;
 			}
 
-			// Keep the normal size when a window is maximized or minimized.
+			// Normal bounds also preserve the unsnapped size on Windows.
 			const { width, height } = windowForSize.getNormalBounds();
 			void setWindowSize({ width, height }).catch((error) => {
 				console.warn('[desktop] Failed to save window size', error);
