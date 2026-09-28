@@ -10,6 +10,7 @@ import {
 	MessageChannelMain,
 	type MessagePortMain,
 	powerMonitor,
+	screen,
 	session,
 	shell,
 } from 'electron';
@@ -56,6 +57,8 @@ import type {
 } from './types';
 import { desktopUpdater } from './updater';
 import { classifyWindowOpenUrl } from './window-open-policy';
+import { resolveWindowSizing } from './window-size';
+import { getWindowSize, setWindowSize } from './window-size-store';
 import { installYoutubeEmbedRefererHandler } from './youtube-embed-referrer';
 
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
@@ -68,6 +71,7 @@ const DESKTOP_QUIT_FLUSH_TIMEOUT_MS = 2_000;
 const DESKTOP_DEBUG_IPC_ENABLED = Boolean(TRUSTED_RENDERER_URL);
 const USES_CUSTOM_TITLEBAR = process.platform === 'win32' || process.platform === 'linux';
 let mainWindow: BrowserWindow | null = null;
+let mainWindowOpening = false;
 let appAudioFrameEgressPort: MessagePortMain | undefined;
 // When set, native RTP ingest owns the sidecar PCM egress: PCM is encoded and
 // sent here in main and is NOT forwarded to the renderer worklet. The two are
@@ -389,17 +393,29 @@ const onTrusted = <TArgs extends unknown[]>(
 	});
 };
 
-const createMainWindow = () => {
+const MAIN_WINDOW_MIN_WIDTH = 1120;
+const MAIN_WINDOW_MIN_HEIGHT = 720;
+const WINDOW_SIZE_SAVE_DELAY_MS = 500;
+
+const createMainWindow = async () => {
 	const icon = resolveAppIconPath();
 	const indexPath = resolveRendererIndexPath();
 	let windowCloseFlushCompleted = false;
 	let rendererUnresponsiveSince: number | undefined;
+	const { initialSize, minimumSize } = resolveWindowSizing(
+		await getWindowSize(),
+		screen.getPrimaryDisplay().workAreaSize,
+		{
+			width: MAIN_WINDOW_MIN_WIDTH,
+			height: MAIN_WINDOW_MIN_HEIGHT,
+		},
+	);
 
 	mainWindow = new BrowserWindow({
-		width: 1440,
-		height: 920,
-		minWidth: 1120,
-		minHeight: 720,
+		width: initialSize.width,
+		height: initialSize.height,
+		minWidth: minimumSize.width,
+		minHeight: minimumSize.height,
 		frame: !USES_CUSTOM_TITLEBAR,
 		autoHideMenuBar: true,
 		show: false,
@@ -420,6 +436,25 @@ const createMainWindow = () => {
 		},
 	});
 	mainWindow.setMenuBarVisibility(false);
+	const windowForSize = mainWindow;
+	let sizeSaveTimer: ReturnType<typeof setTimeout> | undefined;
+	mainWindow.on('resize', () => {
+		if (sizeSaveTimer) {
+			clearTimeout(sizeSaveTimer);
+		}
+		sizeSaveTimer = setTimeout(() => {
+			sizeSaveTimer = undefined;
+			if (windowForSize.isDestroyed() || !windowForSize.isNormal()) {
+				return;
+			}
+
+			// Normal bounds also preserve the unsnapped size on Windows.
+			const { width, height } = windowForSize.getNormalBounds();
+			void setWindowSize({ width, height }).catch((error) => {
+				console.warn('[desktop] Failed to save window size', error);
+			});
+		}, WINDOW_SIZE_SAVE_DELAY_MS);
+	});
 
 	mainWindow.once('ready-to-show', () => {
 		mainWindow?.show();
@@ -475,6 +510,9 @@ const createMainWindow = () => {
 		})();
 	});
 	mainWindow.on('closed', () => {
+		if (sizeSaveTimer) {
+			clearTimeout(sizeSaveTimer);
+		}
 		mainWindow = null;
 	});
 
@@ -953,7 +991,7 @@ configureGpuCommandLineSwitches();
 
 void app
 	.whenReady()
-	.then(() => {
+	.then(async () => {
 		captureSidecarManager.onFrame((frame) => {
 			// Native RTP ingest owns the egress — never also forward to the renderer.
 			if (appAudioRtpSender || appAudioFrameEgressPort) {
@@ -1029,15 +1067,22 @@ void app
 		setupDisplayMediaHandler();
 		setupYoutubeEmbedRefererHandler();
 		setupRendererCspHandler();
-		createMainWindow();
+		await createMainWindow();
 		requestDesktopCapabilitiesRefresh({
 			broadcast: true,
 			forceBroadcast: true,
 		});
 
 		app.on('activate', () => {
-			if (BrowserWindow.getAllWindows().length === 0) {
-				createMainWindow();
+			if (BrowserWindow.getAllWindows().length === 0 && !mainWindowOpening) {
+				mainWindowOpening = true;
+				void createMainWindow()
+					.catch((error) => {
+						console.error('[desktop] Failed to create main window', error);
+					})
+					.finally(() => {
+						mainWindowOpening = false;
+					});
 			}
 		});
 	})
