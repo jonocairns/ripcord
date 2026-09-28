@@ -42,7 +42,7 @@ import {
 	listShareSources,
 	prepareScreenShareSelection,
 } from './screen-share';
-import { getServerUrl, getWindowState, setServerUrl, setWindowState } from './settings-store';
+import { getServerUrl, setServerUrl } from './settings-store';
 import type {
 	TAppAudioPcmFrame,
 	TDesktopCapabilities,
@@ -57,7 +57,8 @@ import type {
 } from './types';
 import { desktopUpdater } from './updater';
 import { classifyWindowOpenUrl } from './window-open-policy';
-import { resolveWindowSizing } from './window-state';
+import { resolveWindowSizing } from './window-size';
+import { getWindowSize, setWindowSize } from './window-size-store';
 import { installYoutubeEmbedRefererHandler } from './youtube-embed-referrer';
 
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
@@ -407,7 +408,7 @@ const saveWindowSize = async (window: BrowserWindow | null) => {
 	let saveTimeout: ReturnType<typeof setTimeout> | undefined;
 	try {
 		await Promise.race([
-			setWindowState({ width, height }),
+			setWindowSize({ width, height }),
 			new Promise<never>((_, reject) => {
 				saveTimeout = setTimeout(() => reject(new Error('Window size save timed out')), WINDOW_SIZE_SAVE_TIMEOUT_MS);
 			}),
@@ -427,7 +428,7 @@ const createMainWindow = async () => {
 	let windowCloseFlushCompleted = false;
 	let rendererUnresponsiveSince: number | undefined;
 	const { initialSize, minimumSize } = resolveWindowSizing(
-		await getWindowState(),
+		await getWindowSize(),
 		screen.getPrimaryDisplay().workAreaSize,
 		{
 			width: MAIN_WINDOW_MIN_WIDTH,

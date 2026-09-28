@@ -1,25 +1,25 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseWindowState, resolveWindowSizing } from '../window-state';
+import { parseWindowSize, resolveWindowSizing } from '../window-size';
 
 const MINIMUM_SIZE = { width: 1120, height: 720 };
 const WORK_AREA_SIZE = { width: 1920, height: 1040 };
 
-void describe('parseWindowState', () => {
-	void it('accepts saved dimensions and ignores legacy position and maximized state', () => {
-		assert.deepEqual(parseWindowState({ x: 10, y: 20, width: 1300.4, height: 800.6, isMaximized: true }), {
+void describe('parseWindowSize', () => {
+	void it('accepts saved dimensions and ignores unrelated position and maximized fields', () => {
+		assert.deepEqual(parseWindowSize({ x: 10, y: 20, width: 1300.4, height: 800.6, isMaximized: true }), {
 			width: 1300,
 			height: 801,
 		});
 	});
 
 	void it('rejects missing, malformed, or empty dimensions', () => {
-		assert.equal(parseWindowState(undefined), undefined);
-		assert.equal(parseWindowState('1300x800'), undefined);
-		assert.equal(parseWindowState({ width: 1300 }), undefined);
-		assert.equal(parseWindowState({ width: '1300', height: 800 }), undefined);
-		assert.equal(parseWindowState({ width: 1300, height: Number.NaN }), undefined);
-		assert.equal(parseWindowState({ width: 0, height: 800 }), undefined);
+		assert.equal(parseWindowSize(undefined), undefined);
+		assert.equal(parseWindowSize('1300x800'), undefined);
+		assert.equal(parseWindowSize({ width: 1300 }), undefined);
+		assert.equal(parseWindowSize({ width: '1300', height: 800 }), undefined);
+		assert.equal(parseWindowSize({ width: 1300, height: Number.NaN }), undefined);
+		assert.equal(parseWindowSize({ width: 0, height: 800 }), undefined);
 	});
 });
 

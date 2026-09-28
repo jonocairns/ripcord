@@ -1,4 +1,4 @@
-type TWindowState = {
+type TWindowSize = {
 	width: number;
 	height: number;
 };
@@ -7,7 +7,7 @@ const isFiniteNumber = (value: unknown): value is number => {
 	return typeof value === 'number' && Number.isFinite(value);
 };
 
-const parseWindowState = (value: unknown): TWindowState | undefined => {
+const parseWindowSize = (value: unknown): TWindowSize | undefined => {
 	if (!value || typeof value !== 'object') {
 		return undefined;
 	}
@@ -26,9 +26,9 @@ const parseWindowState = (value: unknown): TWindowState | undefined => {
 };
 
 const resolveWindowSizing = (
-	saved: TWindowState | undefined,
-	workAreaSize: TWindowState,
-	configuredMinimumSize: TWindowState,
+	saved: TWindowSize | undefined,
+	workAreaSize: TWindowSize,
+	configuredMinimumSize: TWindowSize,
 ) => {
 	const minimumSize = {
 		width: Math.min(configuredMinimumSize.width, workAreaSize.width),
@@ -47,5 +47,5 @@ const resolveWindowSizing = (
 	};
 };
 
-export type { TWindowState };
-export { parseWindowState, resolveWindowSizing };
+export type { TWindowSize };
+export { parseWindowSize, resolveWindowSizing };
