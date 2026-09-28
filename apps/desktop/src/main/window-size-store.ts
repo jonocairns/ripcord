@@ -1,10 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { app } from 'electron';
-import { replaceFileAtomically } from './atomic-file';
+import { createLatestAtomicFileWriter } from './atomic-file';
 import { parseWindowSize, type TWindowSize } from './window-size';
 
 const WINDOW_SIZE_FILENAME = 'desktop-window-size.json';
+const replaceLatestWindowSize = createLatestAtomicFileWriter();
 
 const getWindowSizePath = () => path.join(app.getPath('userData'), WINDOW_SIZE_FILENAME);
 
@@ -19,8 +20,7 @@ const getWindowSize = async () => {
 const setWindowSize = async (windowSize: TWindowSize) => {
 	const windowSizePath = getWindowSizePath();
 
-	await fs.mkdir(path.dirname(windowSizePath), { recursive: true });
-	await replaceFileAtomically(windowSizePath, JSON.stringify(windowSize, null, 2));
+	await replaceLatestWindowSize(windowSizePath, JSON.stringify(windowSize, null, 2));
 };
 
 export { getWindowSize, setWindowSize };
