@@ -393,34 +393,9 @@ const onTrusted = <TArgs extends unknown[]>(
 	});
 };
 
-// First launch opens at the minimum size; after that the last size is restored.
 const MAIN_WINDOW_MIN_WIDTH = 1120;
 const MAIN_WINDOW_MIN_HEIGHT = 720;
-const WINDOW_SIZE_SAVE_TIMEOUT_MS = 2_000;
-
-const saveWindowSize = async (window: BrowserWindow | null) => {
-	if (!window || window.isDestroyed()) {
-		return;
-	}
-
-	// getNormalBounds preserves the chosen size while maximized or minimized.
-	const { width, height } = window.getNormalBounds();
-	let saveTimeout: ReturnType<typeof setTimeout> | undefined;
-	try {
-		await Promise.race([
-			setWindowSize({ width, height }),
-			new Promise<never>((_, reject) => {
-				saveTimeout = setTimeout(() => reject(new Error('Window size save timed out')), WINDOW_SIZE_SAVE_TIMEOUT_MS);
-			}),
-		]);
-	} catch (error) {
-		console.warn('[desktop] Failed to save window size', error);
-	} finally {
-		if (saveTimeout) {
-			clearTimeout(saveTimeout);
-		}
-	}
-};
+const WINDOW_SIZE_SAVE_DELAY_MS = 500;
 
 const createMainWindow = async () => {
 	const icon = resolveAppIconPath();
@@ -461,6 +436,25 @@ const createMainWindow = async () => {
 		},
 	});
 	mainWindow.setMenuBarVisibility(false);
+	const windowForSize = mainWindow;
+	let sizeSaveTimer: ReturnType<typeof setTimeout> | undefined;
+	mainWindow.on('resize', () => {
+		if (sizeSaveTimer) {
+			clearTimeout(sizeSaveTimer);
+		}
+		sizeSaveTimer = setTimeout(() => {
+			sizeSaveTimer = undefined;
+			if (windowForSize.isDestroyed()) {
+				return;
+			}
+
+			// Keep the normal size when a window is maximized or minimized.
+			const { width, height } = windowForSize.getNormalBounds();
+			void setWindowSize({ width, height }).catch((error) => {
+				console.warn('[desktop] Failed to save window size', error);
+			});
+		}, WINDOW_SIZE_SAVE_DELAY_MS);
+	});
 
 	mainWindow.once('ready-to-show', () => {
 		mainWindow?.show();
@@ -493,7 +487,6 @@ const createMainWindow = async () => {
 
 		void (async () => {
 			const result = await requestDesktopQuitFlush();
-			await saveWindowSize(windowToClose);
 
 			if (result.status === 'skipped') {
 				console.warn('[desktop] Window close flush skipped', {
@@ -517,6 +510,9 @@ const createMainWindow = async () => {
 		})();
 	});
 	mainWindow.on('closed', () => {
+		if (sizeSaveTimer) {
+			clearTimeout(sizeSaveTimer);
+		}
 		mainWindow = null;
 	});
 
@@ -1118,7 +1114,6 @@ app.on('before-quit', (event) => {
 
 	void (async () => {
 		const result = await requestDesktopQuitFlush();
-		await saveWindowSize(mainWindow);
 
 		if (result.status === 'skipped') {
 			console.warn('[desktop] Quit flush skipped', {

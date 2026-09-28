@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { app } from 'electron';
-import { replaceFileAtomically } from './atomic-file';
 
 type TDesktopSettings = {
 	serverUrl?: string;
@@ -32,7 +31,7 @@ const writeSettings = async (settings: TDesktopSettings) => {
 	const settingsPath = getSettingsPath();
 
 	await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-	await replaceFileAtomically(settingsPath, JSON.stringify(settings, null, 2));
+	await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
 };
 
 const getServerUrl = async () => {

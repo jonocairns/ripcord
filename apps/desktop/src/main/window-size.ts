@@ -3,6 +3,8 @@ type TWindowSize = {
 	height: number;
 };
 
+const DEFAULT_WINDOW_SIZE = { width: 1440, height: 920 };
+
 const isFiniteNumber = (value: unknown): value is number => {
 	return typeof value === 'number' && Number.isFinite(value);
 };
@@ -41,8 +43,8 @@ const resolveWindowSizing = (
 	return {
 		minimumSize,
 		initialSize: {
-			width: clamp(saved?.width ?? minimumSize.width, minimumSize.width, workAreaSize.width),
-			height: clamp(saved?.height ?? minimumSize.height, minimumSize.height, workAreaSize.height),
+			width: clamp(saved?.width ?? DEFAULT_WINDOW_SIZE.width, minimumSize.width, workAreaSize.width),
+			height: clamp(saved?.height ?? DEFAULT_WINDOW_SIZE.height, minimumSize.height, workAreaSize.height),
 		},
 	};
 };

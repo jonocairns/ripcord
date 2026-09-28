@@ -24,9 +24,9 @@ void describe('parseWindowSize', () => {
 });
 
 void describe('resolveWindowSizing', () => {
-	void it('opens at the minimum size when nothing was saved', () => {
+	void it('keeps the previous default size when nothing was saved', () => {
 		assert.deepEqual(resolveWindowSizing(undefined, WORK_AREA_SIZE, MINIMUM_SIZE), {
-			initialSize: MINIMUM_SIZE,
+			initialSize: { width: 1440, height: 920 },
 			minimumSize: MINIMUM_SIZE,
 		});
 	});
