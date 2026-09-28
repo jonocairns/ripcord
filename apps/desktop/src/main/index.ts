@@ -57,7 +57,7 @@ import type {
 } from './types';
 import { desktopUpdater } from './updater';
 import { classifyWindowOpenUrl } from './window-open-policy';
-import { resolveInitialWindowSize } from './window-state';
+import { resolveWindowSizing } from './window-state';
 import { installYoutubeEmbedRefererHandler } from './youtube-embed-referrer';
 
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
@@ -395,6 +395,7 @@ const onTrusted = <TArgs extends unknown[]>(
 // First launch opens at the minimum size; after that the last size is restored.
 const MAIN_WINDOW_MIN_WIDTH = 1120;
 const MAIN_WINDOW_MIN_HEIGHT = 720;
+const WINDOW_SIZE_SAVE_TIMEOUT_MS = 2_000;
 
 const saveWindowSize = async (window: BrowserWindow | null) => {
 	if (!window || window.isDestroyed()) {
@@ -403,9 +404,21 @@ const saveWindowSize = async (window: BrowserWindow | null) => {
 
 	// getNormalBounds preserves the chosen size while maximized or minimized.
 	const { width, height } = window.getNormalBounds();
-	await setWindowState({ width, height }).catch((error) => {
+	let saveTimeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			setWindowState({ width, height }),
+			new Promise<never>((_, reject) => {
+				saveTimeout = setTimeout(() => reject(new Error('Window size save timed out')), WINDOW_SIZE_SAVE_TIMEOUT_MS);
+			}),
+		]);
+	} catch (error) {
 		console.warn('[desktop] Failed to save window size', error);
-	});
+	} finally {
+		if (saveTimeout) {
+			clearTimeout(saveTimeout);
+		}
+	}
 };
 
 const createMainWindow = async () => {
@@ -413,16 +426,20 @@ const createMainWindow = async () => {
 	const indexPath = resolveRendererIndexPath();
 	let windowCloseFlushCompleted = false;
 	let rendererUnresponsiveSince: number | undefined;
-	const initialSize = resolveInitialWindowSize(await getWindowState(), screen.getPrimaryDisplay().workAreaSize, {
-		width: MAIN_WINDOW_MIN_WIDTH,
-		height: MAIN_WINDOW_MIN_HEIGHT,
-	});
+	const { initialSize, minimumSize } = resolveWindowSizing(
+		await getWindowState(),
+		screen.getPrimaryDisplay().workAreaSize,
+		{
+			width: MAIN_WINDOW_MIN_WIDTH,
+			height: MAIN_WINDOW_MIN_HEIGHT,
+		},
+	);
 
 	mainWindow = new BrowserWindow({
 		width: initialSize.width,
 		height: initialSize.height,
-		minWidth: MAIN_WINDOW_MIN_WIDTH,
-		minHeight: MAIN_WINDOW_MIN_HEIGHT,
+		minWidth: minimumSize.width,
+		minHeight: minimumSize.height,
 		frame: !USES_CUSTOM_TITLEBAR,
 		autoHideMenuBar: true,
 		show: false,

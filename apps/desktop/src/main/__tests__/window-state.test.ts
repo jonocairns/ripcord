@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseWindowState, resolveInitialWindowSize } from '../window-state';
+import { parseWindowState, resolveWindowSizing } from '../window-state';
 
 const MINIMUM_SIZE = { width: 1120, height: 720 };
 const WORK_AREA_SIZE = { width: 1920, height: 1040 };
@@ -23,13 +23,16 @@ void describe('parseWindowState', () => {
 	});
 });
 
-void describe('resolveInitialWindowSize', () => {
+void describe('resolveWindowSizing', () => {
 	void it('opens at the minimum size when nothing was saved', () => {
-		assert.deepEqual(resolveInitialWindowSize(undefined, WORK_AREA_SIZE, MINIMUM_SIZE), MINIMUM_SIZE);
+		assert.deepEqual(resolveWindowSizing(undefined, WORK_AREA_SIZE, MINIMUM_SIZE), {
+			initialSize: MINIMUM_SIZE,
+			minimumSize: MINIMUM_SIZE,
+		});
 	});
 
 	void it('restores saved dimensions without a position', () => {
-		assert.deepEqual(resolveInitialWindowSize({ width: 1600, height: 1000 }, WORK_AREA_SIZE, MINIMUM_SIZE), {
+		assert.deepEqual(resolveWindowSizing({ width: 1600, height: 1000 }, WORK_AREA_SIZE, MINIMUM_SIZE).initialSize, {
 			width: 1600,
 			height: 1000,
 		});
@@ -37,12 +40,24 @@ void describe('resolveInitialWindowSize', () => {
 
 	void it('shrinks saved dimensions that no longer fit the primary display', () => {
 		assert.deepEqual(
-			resolveInitialWindowSize({ width: 2560, height: 1400 }, WORK_AREA_SIZE, MINIMUM_SIZE),
+			resolveWindowSizing({ width: 2560, height: 1400 }, WORK_AREA_SIZE, MINIMUM_SIZE).initialSize,
 			WORK_AREA_SIZE,
 		);
 	});
 
 	void it('never restores below the minimum size', () => {
-		assert.deepEqual(resolveInitialWindowSize({ width: 800, height: 600 }, WORK_AREA_SIZE, MINIMUM_SIZE), MINIMUM_SIZE);
+		assert.deepEqual(
+			resolveWindowSizing({ width: 800, height: 600 }, WORK_AREA_SIZE, MINIMUM_SIZE).initialSize,
+			MINIMUM_SIZE,
+		);
+	});
+
+	void it('caps both the initial size and resizable minimum to a small work area', () => {
+		const smallWorkArea = { width: 1024, height: 700 };
+
+		assert.deepEqual(resolveWindowSizing({ width: 1600, height: 1000 }, smallWorkArea, MINIMUM_SIZE), {
+			initialSize: smallWorkArea,
+			minimumSize: smallWorkArea,
+		});
 	});
 });

@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { app } from 'electron';
+import { replaceFileAtomically } from './atomic-file';
 import { parseWindowState, type TWindowState } from './window-state';
 
 type TDesktopSettings = {
@@ -33,7 +34,7 @@ const writeSettings = async (settings: TDesktopSettings) => {
 	const settingsPath = getSettingsPath();
 
 	await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-	await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
+	await replaceFileAtomically(settingsPath, JSON.stringify(settings, null, 2));
 };
 
 // Settings are read-modify-written as one JSON file, so chain updates to keep

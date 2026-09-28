@@ -25,20 +25,27 @@ const parseWindowState = (value: unknown): TWindowState | undefined => {
 	};
 };
 
-const resolveInitialWindowSize = (
+const resolveWindowSizing = (
 	saved: TWindowState | undefined,
 	workAreaSize: TWindowState,
-	minimumSize: TWindowState,
-): TWindowState => {
+	configuredMinimumSize: TWindowState,
+) => {
+	const minimumSize = {
+		width: Math.min(configuredMinimumSize.width, workAreaSize.width),
+		height: Math.min(configuredMinimumSize.height, workAreaSize.height),
+	};
 	const clamp = (size: number, minimum: number, available: number) => {
 		return Math.max(minimum, Math.min(size, available));
 	};
 
 	return {
-		width: clamp(saved?.width ?? minimumSize.width, minimumSize.width, workAreaSize.width),
-		height: clamp(saved?.height ?? minimumSize.height, minimumSize.height, workAreaSize.height),
+		minimumSize,
+		initialSize: {
+			width: clamp(saved?.width ?? minimumSize.width, minimumSize.width, workAreaSize.width),
+			height: clamp(saved?.height ?? minimumSize.height, minimumSize.height, workAreaSize.height),
+		},
 	};
 };
 
 export type { TWindowState };
-export { parseWindowState, resolveInitialWindowSize };
+export { parseWindowState, resolveWindowSizing };
