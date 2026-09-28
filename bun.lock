@@ -14,7 +14,7 @@
     },
     "apps/client": {
       "name": "client",
-      "version": "2.2.0", // x-release-please-version
+      "version": "2.3.0", // x-release-please-version
       "dependencies": {
         "@dnd-kit/core": "^6.3.1",
         "@dnd-kit/sortable": "^10.0.0",
@@ -80,7 +80,7 @@
     },
     "apps/desktop": {
       "name": "@sharkord/desktop",
-      "version": "2.2.0", // x-release-please-version
+      "version": "2.3.0", // x-release-please-version
       "dependencies": {
         "@evan/opus": "^1.0.3",
         "@sentry/electron": "^7.13.0",
@@ -101,7 +101,7 @@
     },
     "apps/server": {
       "name": "@sharkord/server",
-      "version": "2.2.0", // x-release-please-version
+      "version": "2.3.0", // x-release-please-version
       "dependencies": {
         "@sentry/bun": "^10.56.0",
         "@sharkord/plugin-sdk": "workspace:*",
@@ -160,7 +160,7 @@
     },
     "packages/shared": {
       "name": "@sharkord/shared",
-      "version": "2.2.0", // x-release-please-version
+      "version": "2.3.0", // x-release-please-version
       "dependencies": {
         "drizzle-orm": "^0.44.6",
         "js-sha256": "^0.11.1",

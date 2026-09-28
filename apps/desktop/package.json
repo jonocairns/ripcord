@@ -1,7 +1,7 @@
 {
 	"name": "@sharkord/desktop",
 	"private": true,
-	"version": "2.2.0",
+	"version": "2.3.0",
 	"productName": "Ripcord",
 	"description": "Ripcord Desktop",
 	"author": "Ripcord",
