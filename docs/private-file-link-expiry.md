@@ -230,7 +230,7 @@ links, and every way of opening one uses the current token.
 7. **Moderator sheet.** Its files live in `useAdminUserInfo`
    (`features/server/admin/hooks.ts:572`), outside the message store, so the
    message refresh never reaches them. While open, it refetches
-   `users.getUserInfo` on window focus, when any listed token expires within
+   `users.getInfo` on window focus, when any listed token expires within
    12 hours (same helper), on any `CHANNEL_FILE_ACCESS_CHANGED`, and after a
    confirmed rejoin (the same counter). The rejoin refetch covers a rotation
    missed while disconnected.
@@ -302,7 +302,7 @@ a day.
       named channel, signs that channel's files when it is private, leaves out
       files from other channels and from public channels, and refuses more
       than 100 IDs.
-- [ ] `users.getUserInfo` called by a `MANAGE_USERS` holder without
+- [ ] `users.getInfo` called by a `MANAGE_USERS` holder without
       `VIEW_CHANNEL` on a private channel leaves that channel's files out, and
       still returns public channel files without a token.
 - [ ] Rotating a channel's token, and changing `private` in either direction,
@@ -361,7 +361,7 @@ a day.
 - [ ] **Links shared outside the app.** Does anyone rely on pasting private
       channel file links elsewhere? Those links will stop working within 48
       hours.
-- [ ] **Moderator message history.** `users.getUserInfo` also returns the
+- [ ] **Moderator message history.** `users.getInfo` also returns the
       user's messages from every channel, private ones included, on
       `MANAGE_USERS` alone (`db/queries/messages.ts:83`). That is outside this
       plan. Is it intended for moderation, or does it need the same channel
