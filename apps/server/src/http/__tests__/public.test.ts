@@ -504,6 +504,62 @@ describe('/public', () => {
 		expect(responseText).toBe(fileContent);
 	});
 
+	test('should keep private channel files out of shared caches', async () => {
+		const { caller } = await initTest();
+
+		const channelId = await caller.channels.add({
+			name: 'Private Cache Channel',
+			categoryId: 1,
+			type: ChannelType.TEXT,
+		});
+
+		await caller.channels.update({
+			channelId,
+			private: true,
+		});
+
+		const channel = await tdb.select().from(channels).where(eq(channels.id, channelId)).get();
+
+		expect(channel).toBeDefined();
+		if (!channel) return;
+
+		const tempFile = await upload(
+			new File(['Private cached content'], 'private-cache.txt', {
+				type: 'text/plain',
+			}),
+			token,
+		);
+
+		const messageId = await caller.messages.send({
+			content: 'Message with private file',
+			channelId,
+			files: [tempFile.id],
+		});
+
+		const dbFile = await getFileByMessageId(messageId);
+
+		expect(dbFile).toBeDefined();
+		if (!dbFile) return;
+
+		const url = `${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}?accessToken=${generateFileToken(dbFile.id, channel.fileAccessToken)}`;
+		const expectedCacheControl = 'private, max-age=31536000, immutable';
+
+		const fullResponse = await fetch(url);
+
+		expect(fullResponse.status).toBe(200);
+		expect(fullResponse.headers.get('Cache-Control')).toBe(expectedCacheControl);
+
+		const rangeResponse = await fetch(url, { headers: { Range: 'bytes=0-3' } });
+
+		expect(rangeResponse.status).toBe(206);
+		expect(rangeResponse.headers.get('Cache-Control')).toBe(expectedCacheControl);
+
+		const notModifiedResponse = await fetch(url, { headers: { 'If-None-Match': `"${dbFile.md5}"` } });
+
+		expect(notModifiedResponse.status).toBe(304);
+		expect(notModifiedResponse.headers.get('Cache-Control')).toBe(expectedCacheControl);
+	});
+
 	test('should return 403 when using token from different channel', async () => {
 		const { caller } = await initTest();
 
@@ -602,6 +658,7 @@ describe('/public', () => {
 		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}`);
 
 		expect(response.status).toBe(200);
+		expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable');
 
 		const responseText = await response.text();
 

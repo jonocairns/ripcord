@@ -110,6 +110,7 @@ const publicRouteHandler = async (req: http.IncomingMessage, res: http.ServerRes
 	// otherwise is something like an avatar or banner or something else
 	// we can assume this because of the orphaned check above
 	const associatedMessage = await getMessageByFileId(dbFile.id);
+	let isPrivateChannelFile = false;
 
 	if (associatedMessage) {
 		const channel = await db.select().from(channels).where(eq(channels.id, associatedMessage.channelId)).get();
@@ -123,8 +124,14 @@ const publicRouteHandler = async (req: http.IncomingMessage, res: http.ServerRes
 				res.end(JSON.stringify({ error: 'Forbidden' }));
 				return;
 			}
+
+			isPrivateChannelFile = true;
 		}
 	}
+
+	// Private channel files are gated by a rotatable token, so shared caches
+	// (CDNs, proxies) must not keep serving them after the token changes.
+	const cacheControl = `${isPrivateChannelFile ? 'private' : 'public'}, max-age=31536000, immutable`;
 
 	const filePath = path.join(PUBLIC_PATH, dbFile.name);
 
@@ -164,7 +171,7 @@ const publicRouteHandler = async (req: http.IncomingMessage, res: http.ServerRes
 				'Content-Range': `bytes ${parsed.start}-${parsed.end}/${dbFile.size}`,
 				'Accept-Ranges': 'bytes',
 				'Content-Disposition': dispositionHeader,
-				'Cache-Control': 'public, max-age=31536000, immutable',
+				'Cache-Control': cacheControl,
 				ETag: etag,
 			});
 
@@ -200,7 +207,7 @@ const publicRouteHandler = async (req: http.IncomingMessage, res: http.ServerRes
 	}
 
 	if (req.headers['if-none-match'] === etag) {
-		res.writeHead(304);
+		res.writeHead(304, { 'Cache-Control': cacheControl, ETag: etag });
 		res.end();
 		return;
 	}
@@ -209,7 +216,7 @@ const publicRouteHandler = async (req: http.IncomingMessage, res: http.ServerRes
 		'Content-Type': dbFile.mimeType,
 		'Content-Length': dbFile.size,
 		'Content-Disposition': dispositionHeader,
-		'Cache-Control': 'public, max-age=31536000, immutable',
+		'Cache-Control': cacheControl,
 		'Accept-Ranges': 'bytes',
 		ETag: etag,
 	});
