@@ -21,7 +21,7 @@ import {
 	type TStorageSettings,
 } from '@sharkord/shared';
 import { filesize } from 'filesize';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { requestConfirmation } from '@/features/dialogs/actions';
 import { logDebug } from '@/helpers/browser-logger';
@@ -36,7 +36,7 @@ import {
 	getExpiringFileIds,
 	getFileIds,
 } from '../messages/file-access-tokens';
-import { subscribeToFileListInvalidations } from '../nonce-signals';
+import { getFileLinkVersion, subscribeToFileListInvalidations } from '../nonce-signals';
 import { useServerStore } from '../slice';
 // TODO: review this whole file for optimizations and improvements
 
@@ -587,31 +587,10 @@ export const useAdminUserInfo = (userId: number) => {
 	const [files, setFiles] = useState<TFile[]>([]);
 	const [messages, setMessages] = useState<TMessage[]>([]);
 	const filesRef = useLatestRef(files);
+	const userIdRef = useLatestRef(userId);
+	const requestCountRef = useRef(0);
+	const appliedRequestIdRef = useRef(0);
 
-	const fetchUser = useCallback(async () => {
-		setLoading(true);
-
-		const trpc = getTRPCClient();
-		const { user, logins, files, messages } = await trpc.users.getInfo.query({
-			userId,
-		});
-
-		setUser(user);
-		setLoading(false);
-		setLogins(logins);
-		setFiles(files);
-		setMessages(messages);
-	}, [userId]);
-
-	useEffect(() => {
-		fetchUser();
-	}, [fetchUser]);
-
-	// The listed files live outside the message store, so their links are
-	// refreshed here, through the same endpoint and on the same triggers: when a
-	// token is close to expiry (timer and window focus), on
-	// CHANNEL_FILE_ACCESS_CHANGED, and after a confirmed rejoin, which covers a
-	// rotation missed while disconnected.
 	const fileAccessRefresher = useMemo(
 		() =>
 			createFileAccessRefresher({
@@ -623,6 +602,44 @@ export const useAdminUserInfo = (userId: number) => {
 		[],
 	);
 
+	const fetchUser = useCallback(async () => {
+		const requestId = ++requestCountRef.current;
+		const fileLinkVersion = getFileLinkVersion();
+
+		setLoading(true);
+
+		const trpc = getTRPCClient();
+		const { user, logins, files, messages } = await trpc.users.getInfo.query({
+			userId,
+		});
+
+		// Drop a response for a user the sheet no longer shows, or one older than
+		// data already applied.
+		if (userId !== userIdRef.current || requestId < appliedRequestIdRef.current) return;
+
+		appliedRequestIdRef.current = requestId;
+		setUser(user);
+		setLoading(false);
+		setLogins(logins);
+		setFiles(files);
+		setMessages(messages);
+
+		// A rotation or rejoin during the request may already have refreshed links
+		// that this response just replaced with older ones.
+		if (getFileLinkVersion() !== fileLinkVersion) {
+			void fileAccessRefresher.refreshFiles(getFileIds(files.filter((file) => file._accessToken)));
+		}
+	}, [userId, fileAccessRefresher]);
+
+	useEffect(() => {
+		fetchUser();
+	}, [fetchUser]);
+
+	// The listed files live outside the message store, so their links are
+	// refreshed here, through the same endpoint and on the same triggers: when a
+	// token is close to expiry (timer and window focus), on
+	// CHANNEL_FILE_ACCESS_CHANGED, and after a confirmed rejoin, which covers a
+	// rotation missed while disconnected.
 	useEffect(() => {
 		// Only attachments carry a token; avatars and emojis need no refresh.
 		const refreshListedFiles = () => {

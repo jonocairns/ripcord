@@ -24,4 +24,10 @@ const subscribeToFileListInvalidations = (refresh: () => void) => {
 	};
 };
 
-export { subscribeToFileListInvalidations, subscribeToNonceBumps };
+// Changes whenever file links may have been invalidated (a rotation or a
+// confirmed rejoin). A response requested under an older version can carry
+// links that predate the change.
+const getFileLinkVersion = (state: IServerState = useServerStore.getState()) =>
+	`${serverRejoinNonceSelector(state)}:${fileAccessChangeNonceSelector(state)}`;
+
+export { getFileLinkVersion, subscribeToFileListInvalidations, subscribeToNonceBumps };

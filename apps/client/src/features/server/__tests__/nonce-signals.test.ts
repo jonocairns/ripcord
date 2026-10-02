@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
-import { subscribeToFileListInvalidations } from '../nonce-signals';
+import { getFileLinkVersion, subscribeToFileListInvalidations } from '../nonce-signals';
 import type { TInitialServerData } from '../slice';
 import { useServerStore } from '../slice';
 
@@ -67,5 +67,31 @@ describe('subscribeToFileListInvalidations', () => {
 		useServerStore.getState().bumpServerRejoinNonce();
 
 		expect(refetch).not.toHaveBeenCalled();
+	});
+});
+
+describe('getFileLinkVersion', () => {
+	beforeEach(() => {
+		useServerStore.getState().resetState();
+	});
+
+	it('changes after a rotation or a confirmed rejoin, not after a raw reconnect', () => {
+		const store = useServerStore.getState();
+		const initial = getFileLinkVersion();
+
+		store.setConnected(false);
+		store.setConnected(true);
+		store.setInitialData(createInitialData(false));
+
+		expect(getFileLinkVersion()).toBe(initial);
+
+		store.bumpFileAccessChangeNonce();
+		const afterRotation = getFileLinkVersion();
+
+		expect(afterRotation).not.toBe(initial);
+
+		store.bumpServerRejoinNonce();
+
+		expect(getFileLinkVersion()).not.toBe(afterRotation);
 	});
 });
