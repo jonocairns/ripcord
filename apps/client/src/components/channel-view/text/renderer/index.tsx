@@ -10,6 +10,7 @@ import { MessageReactions } from '../message-reactions';
 import { AudioOverride } from '../overrides/audio';
 import { ImageOverride } from '../overrides/image';
 import { VideoOverride } from '../overrides/video';
+import { FileMedia } from './file-media';
 import { parseMessageHtml } from './serializer';
 import type { TFoundMedia } from './types';
 
@@ -83,25 +84,36 @@ const MessageRenderer = memo(({ message }: TMessageRendererProps) => {
 			<div className="prose max-w-full break-words msg-content">{messageHtml}</div>
 
 			{allMedia.map((media, index) => {
+				const mediaFile = media.file;
+
+				if (mediaFile) {
+					return (
+						<FileMedia
+							channelId={message.channelId}
+							file={mediaFile}
+							type={media.type}
+							onRemove={isOwnMessage ? () => onRemoveFileClick(mediaFile.id) : undefined}
+							key={`media-file-${mediaFile.id}`}
+						/>
+					);
+				}
+
+				// Keyed by URL so an edited link remounts with a clean error state.
 				if (media.type === 'image') {
-					return <ImageOverride src={media.url} key={`media-image-${index}`} />;
+					return <ImageOverride src={media.url} key={`media-image-${index}-${media.url}`} />;
 				}
 
 				if (media.type === 'video') {
-					return <VideoOverride src={media.url} key={`media-video-${index}`} />;
+					return <VideoOverride src={media.url} key={`media-video-${index}-${media.url}`} />;
 				}
 
 				if (media.type === 'audio') {
-					const mediaFile = media.file;
-
 					return (
 						<AudioOverride
 							src={media.url}
-							name={mediaFile?.originalName ?? 'Audio file'}
-							size={mediaFile?.size}
+							name="Audio file"
 							href={media.url}
-							onRemove={mediaFile && isOwnMessage ? () => onRemoveFileClick(mediaFile.id) : undefined}
-							key={`media-audio-${index}`}
+							key={`media-audio-${index}-${media.url}`}
 						/>
 					);
 				}

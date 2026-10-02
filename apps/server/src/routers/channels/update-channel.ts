@@ -2,7 +2,7 @@ import { ActivityLogType, Permission } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
-import { publishChannel, publishChannelVisibility } from '../../db/publishers';
+import { publishChannel, publishChannelFileAccessChanged, publishChannelVisibility } from '../../db/publishers';
 import { channels, users } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
@@ -55,6 +55,12 @@ const updateChannelRoute = protectedProcedure
 			await revalidateActiveVoiceSessions({
 				channelIds: [updatedChannel.id],
 			});
+
+			// Turning private gives files loaded while the channel was public their
+			// tokens; turning public clears tokens that are no longer needed.
+			if (previousChannel && previousChannel.private !== updatedChannel.private) {
+				await publishChannelFileAccessChanged(updatedChannel.id);
+			}
 		}
 
 		enqueueActivityLog({

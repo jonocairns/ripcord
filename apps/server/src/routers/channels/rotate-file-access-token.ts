@@ -3,6 +3,7 @@ import { randomUUIDv7 } from 'bun';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
+import { publishChannelFileAccessChanged } from '../../db/publishers';
 import { channels } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
@@ -33,6 +34,8 @@ const rotateFileAccessTokenRoute = protectedProcedure
 				fileAccessTokenUpdatedAt: Date.now(),
 			})
 			.where(eq(channels.id, input.channelId));
+
+		await publishChannelFileAccessChanged(input.channelId);
 
 		enqueueActivityLog({
 			type: ActivityLogType.ROTATE_CHANNEL_FILE_ACCESS_TOKEN,

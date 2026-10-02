@@ -1,8 +1,11 @@
 import type { TJoinedMessage } from '@sharkord/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getTRPCClient } from '@/lib/trpc';
+import { subscribeToNonceBumps } from '../nonce-signals';
+import { serverRejoinNonceSelector } from '../selectors';
 import { useServerStore } from '../slice';
-import { addMessages } from './actions';
+import { addMessages, refreshExpiringFileAccessTokens, refreshLoadedFileAccessTokens } from './actions';
+import { FILE_ACCESS_TOKEN_CHECK_INTERVAL_MS } from './file-access-tokens';
 import { messagesByChannelIdSelector } from './selectors';
 
 const INITIAL_MESSAGES_LIMIT = 20;
@@ -109,4 +112,32 @@ export const useMessages = (channelId: number) => {
 		groupedMessages,
 		isEmpty,
 	};
+};
+
+// Keeps the file links of loaded messages working for the whole session. Tokens
+// close to expiry are refreshed on mount, on window focus and on a timer. After
+// a confirmed rejoin every loaded channel refreshes, since a rotation or private
+// toggle may have happened while disconnected. CHANNEL_FILE_ACCESS_CHANGED and
+// media load failures refresh single channels elsewhere.
+export const useFileAccessTokenRefresh = () => {
+	useEffect(() => {
+		const refreshExpiring = () => {
+			void refreshExpiringFileAccessTokens(Date.now());
+		};
+
+		refreshExpiring();
+
+		const interval = setInterval(refreshExpiring, FILE_ACCESS_TOKEN_CHECK_INTERVAL_MS);
+		const unsubscribeFromRejoins = subscribeToNonceBumps(serverRejoinNonceSelector, () => {
+			void refreshLoadedFileAccessTokens();
+		});
+
+		window.addEventListener('focus', refreshExpiring);
+
+		return () => {
+			clearInterval(interval);
+			unsubscribeFromRejoins();
+			window.removeEventListener('focus', refreshExpiring);
+		};
+	}, []);
 };

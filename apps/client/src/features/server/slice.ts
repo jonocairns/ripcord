@@ -19,6 +19,7 @@ import type {
 import { ChannelType } from '@sharkord/shared';
 import { create } from 'zustand';
 import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-card-controller';
+import { applyFileAccessTokens, type TFileAccessToken } from './messages/file-access-tokens';
 import type { TDisconnectInfo, TMessagesMap } from './types';
 
 export interface IServerState {
@@ -35,6 +36,12 @@ export interface IServerState {
 	lastTextChannelId: number | undefined;
 	currentVoiceChannelId: number | undefined;
 	voiceSessionReconnectNonce: number;
+	// Bumped after a reconnect joinServer succeeds without mustChangePassword,
+	// so state that may have missed events while disconnected can refetch.
+	serverRejoinNonce: number;
+	// Bumped on every CHANNEL_FILE_ACCESS_CHANGED, for file lists kept outside
+	// the message store.
+	fileAccessChangeNonce: number;
 	messagesMap: TMessagesMap;
 	protectedMessagePrefixCounts: Record<number, number>;
 	users: TJoinedPublicUser[];
@@ -84,6 +91,7 @@ type TServerStore = IServerState & {
 	addMessages: (payload: { channelId: number; messages: TJoinedMessage[]; opts?: { prepend?: boolean } }) => void;
 	updateMessage: (payload: { channelId: number; message: TJoinedMessage }) => void;
 	deleteMessage: (payload: { channelId: number; messageId: number }) => void;
+	setFileAccessTokens: (payload: { channelId: number; requestedFileIds: number[]; tokens: TFileAccessToken[] }) => void;
 	setUsers: (users: TJoinedPublicUser[]) => void;
 	updateUser: (payload: { userId: number; user: Partial<TJoinedPublicUser> }) => void;
 	addUser: (user: TJoinedPublicUser) => void;
@@ -100,6 +108,8 @@ type TServerStore = IServerState & {
 	setSelectedChannelId: (channelId: number | undefined) => void;
 	setCurrentVoiceChannelId: (channelId: number | undefined) => void;
 	bumpVoiceSessionReconnectNonce: () => void;
+	bumpServerRejoinNonce: () => void;
+	bumpFileAccessChangeNonce: () => void;
 	setChannelPermissions: (channelPermissions: TChannelUserPermissionsMap) => void;
 	setChannelReadState: (payload: { channelId: number; count: number | undefined }) => void;
 	setEmojis: (emojis: TJoinedEmoji[]) => void;
@@ -143,6 +153,8 @@ const initialState: IServerState = {
 	lastTextChannelId: undefined,
 	currentVoiceChannelId: undefined,
 	voiceSessionReconnectNonce: 0,
+	serverRejoinNonce: 0,
+	fileAccessChangeNonce: 0,
 	messagesMap: {},
 	protectedMessagePrefixCounts: {},
 	users: [],
@@ -480,6 +492,27 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			),
 		});
 	},
+	setFileAccessTokens: ({ channelId, requestedFileIds, tokens }) => {
+		const state = get();
+		const messages = state.messagesMap[channelId];
+
+		if (!messages) {
+			return;
+		}
+
+		const nextMessages = applyFileAccessTokens(messages, requestedFileIds, tokens);
+
+		if (nextMessages === messages) {
+			return;
+		}
+
+		set({
+			messagesMap: {
+				...state.messagesMap,
+				[channelId]: nextMessages,
+			},
+		});
+	},
 	setUsers: (users) => {
 		set({ users });
 	},
@@ -590,6 +623,12 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 	},
 	bumpVoiceSessionReconnectNonce: () => {
 		set((state) => ({ voiceSessionReconnectNonce: state.voiceSessionReconnectNonce + 1 }));
+	},
+	bumpServerRejoinNonce: () => {
+		set((state) => ({ serverRejoinNonce: state.serverRejoinNonce + 1 }));
+	},
+	bumpFileAccessChangeNonce: () => {
+		set((state) => ({ fileAccessChangeNonce: state.fileAccessChangeNonce + 1 }));
 	},
 	setChannelPermissions: (channelPermissions) => {
 		set({ channelPermissions });

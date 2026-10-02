@@ -1,6 +1,5 @@
 import type { TFile } from '@sharkord/shared';
 import { asc, eq, sql, sum } from 'drizzle-orm';
-import { generateFileToken } from '../../helpers/files-crypto';
 import { db } from '..';
 import { channels, files, messageFiles, messages } from '../schema';
 import { getSettings } from './server';
@@ -61,11 +60,24 @@ const getFilesByMessageId = async (messageId: number): Promise<TFile[]> =>
 		.all()
 		.map((row) => row.files);
 
-const getFilesByUserId = async (userId: number): Promise<TFile[]> => {
-	const result = await db
+type TUserFile = {
+	file: TFile;
+	// The channel of the message the file is attached to, or null for files that
+	// are not message attachments (avatars, banners, emojis).
+	channel: { id: number; private: boolean; fileAccessToken: string } | null;
+};
+
+// Returns unsigned files. Callers decide which private channel files the viewer
+// may see and sign those themselves.
+const getFilesByUserId = async (userId: number): Promise<TUserFile[]> =>
+	db
 		.select({
 			file: files,
-			channel: channels,
+			channel: {
+				id: channels.id,
+				private: channels.private,
+				fileAccessToken: channels.fileAccessToken,
+			},
 		})
 		.from(files)
 		.leftJoin(messageFiles, eq(files.id, messageFiles.fileId))
@@ -73,19 +85,6 @@ const getFilesByUserId = async (userId: number): Promise<TFile[]> => {
 		.leftJoin(channels, eq(messages.channelId, channels.id))
 		.where(eq(files.userId, userId))
 		.all();
-
-	const results = result.map((r) => {
-		const rowCopy: TFile = { ...r.file };
-
-		if (r.channel?.private) {
-			rowCopy._accessToken = generateFileToken(r.file.id, r.channel.fileAccessToken);
-		}
-
-		return rowCopy;
-	});
-
-	return results;
-};
 
 const getUsedFileQuota = async (): Promise<number> => {
 	const result = await db

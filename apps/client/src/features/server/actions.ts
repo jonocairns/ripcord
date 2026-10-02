@@ -166,6 +166,9 @@ export const joinServer = async (
 
 		if (opts?.reconnect && !data.mustChangePassword) {
 			flushReconnectSnapshotEventBuffer();
+			// The reconnected context is authenticated and the snapshot applied, so
+			// state that may have missed events while disconnected can refetch now.
+			useServerStore.getState().bumpServerRejoinNonce();
 		} else if (opts?.reconnect) {
 			clearReconnectSnapshotEventBuffer();
 		}

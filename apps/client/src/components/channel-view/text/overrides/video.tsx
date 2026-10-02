@@ -9,15 +9,17 @@ import '@vidstack/react/player/styles/default/layouts/video.css';
 
 type TVideoOverrideProps = {
 	src: string;
+	onError?: () => void;
 };
 
-const VideoOverride = memo(({ src }: TVideoOverrideProps) => {
+const VideoOverride = memo(({ src, onError: onLoadError }: TVideoOverrideProps) => {
 	const [error, setError] = useState(false);
 	const playerRef = useRef<MediaPlayerInstance>(null);
 
 	const onError = useCallback(() => {
 		setError(true);
-	}, []);
+		onLoadError?.();
+	}, [onLoadError]);
 
 	const mediaPreferences = useSyncSharedMediaPreferences(playerRef);
 

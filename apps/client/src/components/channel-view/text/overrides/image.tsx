@@ -8,9 +8,10 @@ type TImageOverrideProps = {
 	src: string;
 	alt?: string;
 	title?: string;
+	onError?: () => void;
 };
 
-const ImageOverride = memo(({ src, alt }: TImageOverrideProps) => {
+const ImageOverride = memo(({ src, alt, onError: onLoadError }: TImageOverrideProps) => {
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState(false);
 
@@ -22,7 +23,8 @@ const ImageOverride = memo(({ src, alt }: TImageOverrideProps) => {
 
 	const onError = useCallback(() => {
 		setError(true);
-	}, []);
+		onLoadError?.();
+	}, [onLoadError]);
 
 	useEffect(() => {
 		setTimeout(() => {

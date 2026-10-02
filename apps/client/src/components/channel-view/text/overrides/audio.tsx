@@ -32,6 +32,7 @@ type TAudioOverrideProps = {
 	size?: number;
 	href?: string;
 	onRemove?: () => void;
+	onError?: () => void;
 };
 
 const playbackRates = [1, 1.25, 1.5, 2];
@@ -71,7 +72,7 @@ const Waveform = memo(({ bars, className }: { bars: number[]; className: string 
 });
 
 const AudioPlayerChrome = memo(
-	({ name, size, href, onRemove, bars }: Omit<TAudioOverrideProps, 'src'> & { bars: number[] }) => {
+	({ name, size, href, onRemove, bars }: Omit<TAudioOverrideProps, 'src' | 'onError'> & { bars: number[] }) => {
 		const isPaused = useMediaState('paused');
 		const isMuted = useMediaState('muted');
 		const volume = useMediaState('volume');
@@ -224,13 +225,14 @@ const AudioPlayerChrome = memo(
 	},
 );
 
-const AudioOverride = memo(({ src, name, size, href, onRemove }: TAudioOverrideProps) => {
+const AudioOverride = memo(({ src, name, size, href, onRemove, onError: onLoadError }: TAudioOverrideProps) => {
 	const [error, setError] = useState(false);
 	const playerRef = useRef<MediaPlayerInstance>(null);
 
 	const onError = useCallback(() => {
 		setError(true);
-	}, []);
+		onLoadError?.();
+	}, [onLoadError]);
 
 	const bars = useMemo(() => generateBars(src || name, BAR_COUNT), [src, name]);
 	const mediaPreferences = useSyncSharedMediaPreferences(playerRef);

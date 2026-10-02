@@ -49,6 +49,9 @@ type Events = {
 		channelId: number;
 		delta: number;
 	};
+	[ServerEvents.CHANNEL_FILE_ACCESS_CHANGED]: {
+		channelId: number;
+	};
 
 	[ServerEvents.USER_JOIN_VOICE]: {
 		channelId: number;

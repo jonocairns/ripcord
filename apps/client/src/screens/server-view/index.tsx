@@ -6,6 +6,7 @@ import { Protect } from '@/components/protect';
 import { RightSidebar } from '@/components/right-sidebar';
 import { VoiceChatSidebar } from '@/components/voice-chat-sidebar';
 import { VoiceProvider } from '@/components/voice-provider';
+import { useFileAccessTokenRefresh } from '@/features/server/messages/hooks';
 import { getLocalStorageItem, LocalStorageKey, setLocalStorageItem } from '@/helpers/storage';
 import { useIdleAwayChecker } from '@/hooks/use-idle-away-checker';
 import { useSwipeGestures } from '@/hooks/use-swipe-gestures';
@@ -22,6 +23,7 @@ const ServerView = memo(() => {
 	const isVoiceChatSidebarOpen = false;
 
 	useIdleAwayChecker();
+	useFileAccessTokenRefresh();
 
 	const handleSwipeRight = useCallback(() => {
 		if (isMobileMenuOpen || isMobileUsersOpen) {
