@@ -27,7 +27,8 @@ refresh path, no expiry yet) is implemented; release N+1 (expiry) is not.
 **Out of scope**
 
 - Immediate revocation. The existing rotate button stays the tool for that.
-- Public channel files, avatars and banners. They stay public and non-expiring.
+- Public channel files, avatars and banners. Their links stay public and
+  non-expiring.
 - Copies already cached at the CDN. One Cloudflare purge after the cache-header
   change ships covers them.
 - Per-user tokens or session-authenticated file requests.
@@ -112,7 +113,12 @@ dies at its `exp`. That includes the moderator file list, which today signs on
 
 - Private channel responses send `private, max-age=<exp − now>, immutable`. No
   cache that honours the header can serve a file past its link's expiry.
-- Public files keep `public, max-age=31536000, immutable`.
+- Every message attachment is `private`, public channels included. A channel
+  can turn private after an edge cached a tokenless link, and that URL does not
+  change, so the edge would keep serving it past the new token check. Until
+  expiry ships, attachments send `private, max-age=172800, immutable`.
+- Avatars, banners, emojis and the server logo keep
+  `public, max-age=31536000, immutable`.
 - Expiry and rotation stop the server serving a link. They do not reach a copy
   a browser already downloaded: that browser can keep showing it without
   contacting `/public` until its `max-age` runs out, at most 48 hours. Those
@@ -243,8 +249,10 @@ Ship in three steps, so desktop apps already in use have the refresh code
 before any link starts expiring.
 
 1. **Cache-header change, then a purge.** Merge and deploy the
-   `Cache-Control: private` fix for private channel files. Then run one Purge
-   Everything in Cloudflare. No private file is held at the edge after that.
+   `Cache-Control: private` fix for message attachments, with a 48-hour browser
+   lifetime. Then run one Purge Everything in Cloudflare. No attachment is held
+   at the edge after that. Browsers may still hold copies cached under the old
+   one-year lifetime; nothing on the server can retract those.
 2. **Release N: refresh path, no expiry yet.** Add `files.getAccessTokens`,
    `CHANNEL_FILE_ACCESS_CHANGED`, the moderator file list channel check, and
    all the client changes. The server still issues and accepts today's
