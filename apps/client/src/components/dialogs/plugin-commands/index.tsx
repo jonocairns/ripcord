@@ -15,11 +15,12 @@ import type { TCommandResponse } from './types';
 
 type TPluginCommandsDialogProps = TDialogBaseProps & {
 	pluginId: string;
+	initialCommandName?: string;
 };
 
-const PluginCommandsDialog = memo(({ isOpen, close, pluginId }: TPluginCommandsDialogProps) => {
+const PluginCommandsDialog = memo(({ isOpen, close, pluginId, initialCommandName }: TPluginCommandsDialogProps) => {
 	const commandsMap = usePluginCommands();
-	const [selectedCommand, setSelectedCommand] = useState<string>('');
+	const [selectedCommand, setSelectedCommand] = useState<string>(initialCommandName ?? '');
 	const [commandArgs, setCommandArgs] = useState<Record<string, unknown>>({});
 	const [isExecuting, setIsExecuting] = useState(false);
 	const [commandResponse, setCommandResponse] = useState<TCommandResponse | null>(null);
@@ -95,7 +96,10 @@ const PluginCommandsDialog = memo(({ isOpen, close, pluginId }: TPluginCommandsD
 
 		if (selectedCommandInfo.args) {
 			for (const arg of selectedCommandInfo.args) {
-				if (arg.required && !commandArgs[arg.name]) {
+				const value = commandArgs[arg.name];
+
+				// false and 0 are valid values, only unset or empty inputs are missing
+				if (arg.required && (value === undefined || value === '')) {
 					return false;
 				}
 			}

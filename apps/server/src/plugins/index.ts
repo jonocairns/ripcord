@@ -137,22 +137,6 @@ class PluginManager {
 		});
 	};
 
-	public getCommandByName = (commandName: string | undefined): RegisteredCommand | undefined => {
-		if (!commandName) {
-			return undefined;
-		}
-
-		for (const commands of this.commands.values()) {
-			const foundCommand = commands.find((c) => c.name === commandName);
-
-			if (foundCommand) {
-				return foundCommand;
-			}
-		}
-
-		return undefined;
-	};
-
 	public getPluginsFromPath = async (): Promise<string[]> => {
 		const files = await fs.readdir(PLUGINS_PATH);
 		const result: string[] = [];
