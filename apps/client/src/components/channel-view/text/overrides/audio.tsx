@@ -32,6 +32,7 @@ type TAudioOverrideProps = {
 	size?: number;
 	href?: string;
 	onRemove?: () => void;
+	onLoaded?: () => void;
 	onError?: () => void;
 };
 
@@ -72,7 +73,13 @@ const Waveform = memo(({ bars, className }: { bars: number[]; className: string 
 });
 
 const AudioPlayerChrome = memo(
-	({ name, size, href, onRemove, bars }: Omit<TAudioOverrideProps, 'src' | 'onError'> & { bars: number[] }) => {
+	({
+		name,
+		size,
+		href,
+		onRemove,
+		bars,
+	}: Omit<TAudioOverrideProps, 'src' | 'onLoaded' | 'onError'> & { bars: number[] }) => {
 		const isPaused = useMediaState('paused');
 		const isMuted = useMediaState('muted');
 		const volume = useMediaState('volume');
@@ -225,39 +232,42 @@ const AudioPlayerChrome = memo(
 	},
 );
 
-const AudioOverride = memo(({ src, name, size, href, onRemove, onError: onLoadError }: TAudioOverrideProps) => {
-	const [error, setError] = useState(false);
-	const playerRef = useRef<MediaPlayerInstance>(null);
+const AudioOverride = memo(
+	({ src, name, size, href, onRemove, onLoaded, onError: onLoadError }: TAudioOverrideProps) => {
+		const [error, setError] = useState(false);
+		const playerRef = useRef<MediaPlayerInstance>(null);
 
-	const onError = useCallback(() => {
-		setError(true);
-		onLoadError?.();
-	}, [onLoadError]);
+		const onError = useCallback(() => {
+			setError(true);
+			onLoadError?.();
+		}, [onLoadError]);
 
-	const bars = useMemo(() => generateBars(src || name, BAR_COUNT), [src, name]);
-	const mediaPreferences = useSyncSharedMediaPreferences(playerRef);
+		const bars = useMemo(() => generateBars(src || name, BAR_COUNT), [src, name]);
+		const mediaPreferences = useSyncSharedMediaPreferences(playerRef);
 
-	if (error) return null;
+		if (error) return null;
 
-	return (
-		<OverrideLayout>
-			<MediaPlayer
-				ref={playerRef}
-				src={src}
-				load="visible"
-				viewType="audio"
-				storage="ripcord-media"
-				onError={onError}
-				title={name}
-				volume={mediaPreferences.volume}
-				muted={mediaPreferences.muted}
-				className="w-full max-w-[560px]"
-			>
-				<MediaProvider />
-				<AudioPlayerChrome name={name} size={size} href={href} onRemove={onRemove} bars={bars} />
-			</MediaPlayer>
-		</OverrideLayout>
-	);
-});
+		return (
+			<OverrideLayout>
+				<MediaPlayer
+					ref={playerRef}
+					src={src}
+					load="visible"
+					viewType="audio"
+					storage="ripcord-media"
+					onCanPlay={onLoaded}
+					onError={onError}
+					title={name}
+					volume={mediaPreferences.volume}
+					muted={mediaPreferences.muted}
+					className="w-full max-w-[560px]"
+				>
+					<MediaProvider />
+					<AudioPlayerChrome name={name} size={size} href={href} onRemove={onRemove} bars={bars} />
+				</MediaPlayer>
+			</OverrideLayout>
+		);
+	},
+);
 
 export { AudioOverride };
