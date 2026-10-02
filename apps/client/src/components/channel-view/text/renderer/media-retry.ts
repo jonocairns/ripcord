@@ -2,8 +2,10 @@
 // is keyed by its URL, so a new token remounts it with a clean state; this state
 // lives in its parent and survives that remount.
 type TMediaRetryState = {
-	// Each element gets one refresh, on its first tokened failure.
-	retried: boolean;
+	// The link whose failure started the last refresh. Each link gets one
+	// refresh, so a later link (a later rotation) can recover again, while a
+	// refresh that returns the same link cannot loop.
+	refreshedUrl?: string;
 	refreshing: boolean;
 	// The URL that failed for good. A later URL (a newer token) is tried again.
 	unavailableUrl?: string;
@@ -14,22 +16,22 @@ type TMediaLoadErrorResult = {
 	refresh: boolean;
 };
 
-const INITIAL_MEDIA_RETRY_STATE: TMediaRetryState = { retried: false, refreshing: false };
+const INITIAL_MEDIA_RETRY_STATE: TMediaRetryState = { refreshing: false };
 
 const resolveMediaLoadError = (
 	state: TMediaRetryState,
 	failedUrl: string,
 	hasAccessToken: boolean,
 ): TMediaLoadErrorResult => {
-	// Repeat errors from an element already waiting on its refresh.
+	// Repeat errors from a load already waiting on its refresh.
 	if (state.refreshing) {
 		return { state, refresh: false };
 	}
 
 	// A tokened link may have been rotated or expired: refresh the channel's
-	// tokens once, then render again.
-	if (hasAccessToken && !state.retried) {
-		return { state: { ...state, retried: true, refreshing: true }, refresh: true };
+	// tokens once for this link, then render again.
+	if (hasAccessToken && failedUrl !== state.refreshedUrl) {
+		return { state: { ...state, refreshedUrl: failedUrl, refreshing: true }, refresh: true };
 	}
 
 	return { state: { ...state, unavailableUrl: failedUrl }, refresh: false };

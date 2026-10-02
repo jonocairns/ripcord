@@ -24,8 +24,9 @@ type TFileMediaProps = {
 
 // An attached image, video or audio file. The URL is built from the store on
 // every render, so a refreshed token reaches it; the player is keyed by URL so
-// the new link remounts it with a clean error state. On a tokened load failure
-// the channel's tokens are refreshed once before the file shows as unavailable.
+// the new link remounts it with a clean error state. When a tokened link fails
+// to load, the channel's tokens are refreshed once for that link before the
+// file shows as unavailable.
 const FileMedia = memo(({ channelId, file, type, onRemove }: TFileMediaProps) => {
 	const url = getFileUrl(file);
 	const hasAccessToken = Boolean(file._accessToken);
