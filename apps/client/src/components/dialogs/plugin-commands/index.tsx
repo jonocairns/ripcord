@@ -96,7 +96,10 @@ const PluginCommandsDialog = memo(({ isOpen, close, pluginId, initialCommandName
 
 		if (selectedCommandInfo.args) {
 			for (const arg of selectedCommandInfo.args) {
-				if (arg.required && !commandArgs[arg.name]) {
+				const value = commandArgs[arg.name];
+
+				// false and 0 are valid values, only unset or empty inputs are missing
+				if (arg.required && (value === undefined || value === '')) {
 					return false;
 				}
 			}
