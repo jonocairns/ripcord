@@ -1,15 +1,8 @@
-import type { TCommandArg, TCommandInfo } from '@sharkord/shared';
+import type { TCommandInfo } from '@sharkord/shared';
 import { memo } from 'react';
 import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-
-const getInputType = (arg: TCommandArg) => {
-	// numbers keep the native input, a password field would accept any text
-	if (arg.type === 'number') return 'number';
-
-	return arg.sensitive ? 'password' : 'text';
-};
 
 type TArgsProps = {
 	selectedCommandInfo: TCommandInfo;
@@ -37,8 +30,7 @@ const Args = memo(({ selectedCommandInfo, commandArgs, handleArgChange }: TArgsP
 						</Select>
 					) : (
 						<Input
-							type={getInputType(arg)}
-							autoComplete={arg.sensitive ? 'off' : undefined}
+							type={arg.type === 'number' ? 'number' : 'text'}
 							value={commandArgs[arg.name] !== undefined ? String(commandArgs[arg.name]) : ''}
 							onChange={(e) => handleArgChange(arg.name, e.target.value, arg.type)}
 							placeholder={`Enter ${arg.name}...`}

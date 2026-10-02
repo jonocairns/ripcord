@@ -40,7 +40,6 @@ export type TCommandArg = {
 	description?: string;
 	type: 'string' | 'number' | 'boolean';
 	required?: boolean;
-	sensitive?: boolean;
 };
 
 export type TInvokerContext = {
