@@ -10,13 +10,13 @@ const subscribeToNonceBumps = (selectNonce: (state: IServerState) => number, onB
 		}
 	});
 
-// File lists kept outside the message store (the moderator sheet) cannot be
-// patched by the message token refresh. They refetch when a channel's file
-// links change, and after a confirmed rejoin, which covers changes missed while
-// disconnected.
-const subscribeToFileListInvalidations = (refetch: () => void) => {
-	const unsubscribeFromRejoins = subscribeToNonceBumps(serverRejoinNonceSelector, refetch);
-	const unsubscribeFromFileAccessChanges = subscribeToNonceBumps(fileAccessChangeNonceSelector, refetch);
+// File lists kept outside the message store (the moderator sheet) are not
+// reached by the message token refresh. They refresh their own links when a
+// channel's token rotates, and after a confirmed rejoin, which covers a
+// rotation missed while disconnected.
+const subscribeToFileListInvalidations = (refresh: () => void) => {
+	const unsubscribeFromRejoins = subscribeToNonceBumps(serverRejoinNonceSelector, refresh);
+	const unsubscribeFromFileAccessChanges = subscribeToNonceBumps(fileAccessChangeNonceSelector, refresh);
 
 	return () => {
 		unsubscribeFromRejoins();

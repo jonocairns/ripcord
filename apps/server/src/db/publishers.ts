@@ -149,10 +149,10 @@ const publishChannel = async (channelId: number | undefined, type: 'create' | 'u
 	pubsub.publishFor(await getChannelViewerIds(channelId), targetEvent, toPublicChannel(channel));
 };
 
-// Tells viewers of `channelId` that its file links changed (token rotation, or
-// the channel turning private or public), so clients refresh the tokens on the
-// files they have loaded. It serves availability, not revocation: a client that
-// misses it falls back to its rejoin and media-retry refreshes.
+// Tells viewers of `channelId` that its file access token rotated, so clients
+// refresh the links on the files they have loaded. It serves availability, not
+// revocation: a client that misses it falls back to its rejoin and media-retry
+// refreshes.
 const publishChannelFileAccessChanged = async (channelId: number) => {
 	pubsub.publishFor(await getChannelViewerIds(channelId), ServerEvents.CHANNEL_FILE_ACCESS_CHANGED, { channelId });
 };

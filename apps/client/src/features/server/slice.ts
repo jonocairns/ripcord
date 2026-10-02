@@ -91,7 +91,7 @@ type TServerStore = IServerState & {
 	addMessages: (payload: { channelId: number; messages: TJoinedMessage[]; opts?: { prepend?: boolean } }) => void;
 	updateMessage: (payload: { channelId: number; message: TJoinedMessage }) => void;
 	deleteMessage: (payload: { channelId: number; messageId: number }) => void;
-	setFileAccessTokens: (payload: { channelId: number; requestedFileIds: number[]; tokens: TFileAccessToken[] }) => void;
+	setFileAccessTokens: (payload: { tokens: TFileAccessToken[] }) => void;
 	setUsers: (users: TJoinedPublicUser[]) => void;
 	updateUser: (payload: { userId: number; user: Partial<TJoinedPublicUser> }) => void;
 	addUser: (user: TJoinedPublicUser) => void;
@@ -492,26 +492,24 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			),
 		});
 	},
-	setFileAccessTokens: ({ channelId, requestedFileIds, tokens }) => {
+	setFileAccessTokens: ({ tokens }) => {
 		const state = get();
-		const messages = state.messagesMap[channelId];
+		let changed = false;
+		const nextMessagesMap: TMessagesMap = {};
 
-		if (!messages) {
+		// File IDs are unique across channels, so tokens apply wherever the file is loaded.
+		for (const [channelId, messages] of Object.entries(state.messagesMap)) {
+			const nextMessages = applyFileAccessTokens(messages, tokens);
+
+			changed ||= nextMessages !== messages;
+			nextMessagesMap[Number(channelId)] = nextMessages;
+		}
+
+		if (!changed) {
 			return;
 		}
 
-		const nextMessages = applyFileAccessTokens(messages, requestedFileIds, tokens);
-
-		if (nextMessages === messages) {
-			return;
-		}
-
-		set({
-			messagesMap: {
-				...state.messagesMap,
-				[channelId]: nextMessages,
-			},
-		});
+		set({ messagesMap: nextMessagesMap });
 	},
 	setUsers: (users) => {
 		set({ users });

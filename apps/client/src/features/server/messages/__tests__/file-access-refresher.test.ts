@@ -1,177 +1,125 @@
 import { describe, expect, it, mock } from 'bun:test';
-import type { TFile, TJoinedMessage } from '@sharkord/shared';
-import type { TMessagesMap } from '../../types';
 import { createFileAccessRefresher, type TFileAccessTokensClient } from '../file-access-refresher';
-import { applyFileAccessTokens, type TFileAccessToken } from '../file-access-tokens';
+import type { TFileAccessToken } from '../file-access-tokens';
 
-type TQueryInput = { channelId: number; fileIds: number[] };
+type TQueryInput = { fileIds: number[] };
 
-const createFile = (id: number, accessToken?: string): TFile =>
-	({
-		id,
-		name: `file-${id}.txt`,
-		...(accessToken !== undefined ? { _accessToken: accessToken } : {}),
-	}) as unknown as TFile;
+const signAll = async ({ fileIds }: TQueryInput) => fileIds.map((fileId) => ({ fileId, accessToken: `new-${fileId}` }));
 
-const createMessage = (id: number, files: TFile[]): TJoinedMessage =>
-	({ id, files, reactions: [], content: '', createdAt: id }) as unknown as TJoinedMessage;
-
-// A refresher over an in-memory messages map that applies tokens like the store.
-const setup = (initialMessagesMap: TMessagesMap, query: (input: TQueryInput) => Promise<TFileAccessToken[]>) => {
-	let messagesMap = initialMessagesMap;
+// A refresher that records every batch of tokens it applies.
+const setup = (query: (input: TQueryInput) => Promise<TFileAccessToken[]>) => {
 	let serverId: string | undefined = 'server-a';
+	const applied: TFileAccessToken[][] = [];
+	const onError = mock((_error: unknown) => {});
 	const queryMock = mock(query);
-	const client: TFileAccessTokensClient = { files: { getAccessTokens: { query: queryMock } } };
+	const client: TFileAccessTokensClient = { files: { refreshAccessTokens: { query: queryMock } } };
 	const refresher = createFileAccessRefresher({
 		getClient: () => client,
 		getServerId: () => serverId,
-		getMessagesMap: () => messagesMap,
-		setFileAccessTokens: (channelId, requestedFileIds, tokens) => {
-			const messages = messagesMap[channelId];
-
-			if (!messages) return;
-
-			messagesMap = { ...messagesMap, [channelId]: applyFileAccessTokens(messages, requestedFileIds, tokens) };
-		},
+		applyTokens: (tokens) => applied.push(tokens),
+		onError,
 	});
 
 	return {
 		refresher,
 		queryMock,
-		getMessagesMap: () => messagesMap,
-		switchServer: (nextServerId: string | undefined, nextMessagesMap: TMessagesMap) => {
+		applied,
+		onError,
+		switchServer: (nextServerId: string | undefined) => {
 			serverId = nextServerId;
-			messagesMap = nextMessagesMap;
 		},
 	};
 };
 
-const signAll = async ({ fileIds }: TQueryInput) => fileIds.map((fileId) => ({ fileId, accessToken: `new-${fileId}` }));
-
-describe('createFileAccessRefresher', () => {
-	it('sends every loaded file ID in the channel, tokened or not', async () => {
-		const { refresher, queryMock, getMessagesMap } = setup(
-			{ 1: [createMessage(1, [createFile(1, 'old-1'), createFile(2)]), createMessage(2, [createFile(3)])] },
-			signAll,
-		);
-
-		await refresher.refreshChannel(1);
-
-		expect(queryMock.mock.calls).toEqual([[{ channelId: 1, fileIds: [1, 2, 3] }]]);
-		expect(getMessagesMap()[1]?.flatMap((message) => message.files.map((file) => file._accessToken))).toEqual([
-			'new-1',
-			'new-2',
-			'new-3',
-		]);
-	});
-
-	it('requests at most 100 file IDs per call', async () => {
-		const files = Array.from({ length: 150 }, (_, index) => createFile(index + 1));
-		const { refresher, queryMock } = setup({ 1: [createMessage(1, files)] }, signAll);
-
-		await refresher.refreshChannel(1);
-
-		expect(queryMock.mock.calls.map(([input]) => input.fileIds.length)).toEqual([100, 50]);
-	});
-
-	it('leaves the store unchanged when the request fails or the route is missing', async () => {
-		const initialMessagesMap = { 1: [createMessage(1, [createFile(1, 'old-1'), createFile(2)])] };
-		const { refresher, getMessagesMap } = setup(initialMessagesMap, async () => {
-			throw new Error('No procedure found on path "files.getAccessTokens"');
+// A query that resolves only when the test says so.
+const controlledQuery = () => {
+	const pending: Array<() => void> = [];
+	const query = (input: TQueryInput) =>
+		new Promise<TFileAccessToken[]>((resolve) => {
+			pending.push(() => resolve(input.fileIds.map((fileId) => ({ fileId, accessToken: `new-${fileId}` }))));
 		});
 
-		await refresher.refreshChannel(1);
+	return { query, resolveNext: () => pending.shift()?.() };
+};
 
-		expect(getMessagesMap()).toBe(initialMessagesMap);
+describe('createFileAccessRefresher', () => {
+	it('requests the given files across channels in batches of 100', async () => {
+		const fileIds = Array.from({ length: 150 }, (_, index) => index + 1);
+		const { refresher, queryMock, applied } = setup(signAll);
+
+		await refresher.refreshFiles(fileIds);
+
+		expect(queryMock.mock.calls.map(([input]) => input.fileIds.length)).toEqual([100, 50]);
+		expect(applied.flat().map(({ fileId }) => fileId)).toEqual(fileIds);
+	});
+
+	it('makes no request when there is nothing to refresh', async () => {
+		const { refresher, queryMock } = setup(signAll);
+
+		await refresher.refreshFiles([]);
+
+		expect(queryMock).not.toHaveBeenCalled();
+	});
+
+	it('applies nothing when the request fails or the route is missing', async () => {
+		const { refresher, applied, onError } = setup(async () => {
+			throw new Error('No procedure found on path "files.refreshAccessTokens"');
+		});
+
+		await refresher.refreshFiles([1, 2]);
+
+		expect(applied).toEqual([]);
+		expect(onError).toHaveBeenCalledTimes(1);
 	});
 
 	it('keeps earlier batches when a later batch fails', async () => {
-		const files = Array.from({ length: 150 }, (_, index) => createFile(index + 1, 'old'));
 		let calls = 0;
-		const { refresher, getMessagesMap } = setup({ 1: [createMessage(1, files)] }, async (input) => {
+		const { refresher, applied } = setup(async (input) => {
 			calls += 1;
 			if (calls === 2) throw new Error('socket closed');
 			return signAll(input);
 		});
 
-		await refresher.refreshChannel(1);
-
-		const tokens = getMessagesMap()[1]?.[0]?.files.map((file) => file._accessToken) ?? [];
+		await refresher.refreshFiles(Array.from({ length: 150 }, (_, index) => index + 1));
 
 		// The first request's tokens are valid on their own; the failed request's
 		// files keep their old tokens for the next trigger.
-		expect(tokens.slice(0, 100).every((token, index) => token === `new-${index + 1}`)).toBe(true);
-		expect(tokens.slice(100).every((token) => token === 'old')).toBe(true);
+		expect(applied).toHaveLength(1);
+		expect(applied[0]).toHaveLength(100);
 	});
 
 	it('drops a response that lands after the client moved to another server', async () => {
-		let resolveQuery: () => void = () => {};
-		const { refresher, queryMock, getMessagesMap, switchServer } = setup(
-			{ 1: [createMessage(1, [createFile(1, 'server-a-token')])] },
-			(input) =>
-				new Promise((resolve) => {
-					resolveQuery = () => resolve(input.fileIds.map((fileId) => ({ fileId, accessToken: 'server-a-new' })));
-				}),
-		);
-		// Same channel and file IDs on the next server.
-		const nextServerMessages = { 1: [createMessage(1, [createFile(1, 'server-b-token')])] };
+		const { query, resolveNext } = controlledQuery();
+		const { refresher, applied, switchServer } = setup(query);
 
-		const refresh = refresher.refreshChannel(1);
+		const refresh = refresher.refreshFiles([1]);
 
-		switchServer('server-b', nextServerMessages);
-		resolveQuery();
+		switchServer('server-b');
+		resolveNext();
 		await refresh;
 
-		expect(queryMock).toHaveBeenCalledTimes(1);
-		expect(getMessagesMap()).toBe(nextServerMessages);
+		expect(applied).toEqual([]);
 	});
 
-	it('makes no request for a channel with no loaded messages', async () => {
-		const { refresher, queryMock } = setup({ 1: [createMessage(1, [createFile(1)])] }, signAll);
+	it('requests a file again when asked while its request is in flight', async () => {
+		const { query, resolveNext } = controlledQuery();
+		const { refresher, queryMock } = setup(query);
 
-		await refresher.refreshChannel(2);
-
-		expect(queryMock).not.toHaveBeenCalled();
-	});
-
-	it('refreshes every channel with loaded files, and skips channels with none', async () => {
-		const { refresher, queryMock } = setup(
-			{
-				1: [createMessage(1, [createFile(1)])],
-				2: [],
-				3: [createMessage(2, [])],
-				4: [createMessage(3, [createFile(4, 'old-4')])],
-			},
-			signAll,
-		);
-
-		await refresher.refreshLoadedChannels();
-
-		expect(queryMock.mock.calls.map(([input]) => input.channelId).sort()).toEqual([1, 4]);
-	});
-
-	it('runs once more after an in-flight refresh when asked again', async () => {
-		const pending: Array<() => void> = [];
-		const { refresher, queryMock } = setup({ 1: [createMessage(1, [createFile(1)])] }, (input) => {
-			return new Promise((resolve) => {
-				pending.push(() => resolve(input.fileIds.map((fileId) => ({ fileId, accessToken: 'token' }))));
-			});
-		});
-
-		const first = refresher.refreshChannel(1);
-		// Both arrive while the first request is in flight (e.g. a rotation event
-		// and a media failure); they collapse into one follow-up request.
-		const second = refresher.refreshChannel(1);
-		const third = refresher.refreshChannel(1);
+		const first = refresher.refreshFiles([1, 2]);
+		// A rotation event and a media failure arrive mid-flight; they collapse
+		// into one follow-up request.
+		const second = refresher.refreshFiles([1]);
+		const third = refresher.refreshFiles([1, 3]);
 
 		expect(queryMock).toHaveBeenCalledTimes(1);
 
-		pending.shift()?.();
+		resolveNext();
 		await Bun.sleep(0);
 
 		expect(queryMock).toHaveBeenCalledTimes(2);
+		expect(queryMock.mock.calls[1]?.[0]).toEqual({ fileIds: [1, 3] });
 
-		pending.shift()?.();
+		resolveNext();
 		await Promise.all([first, second, third]);
 
 		expect(queryMock).toHaveBeenCalledTimes(2);

@@ -1,16 +1,9 @@
-import type { TMessagesMap } from '../types';
-import {
-	chunkFileIds,
-	getChannelIdsWithExpiringFileTokens,
-	getChannelIdsWithLoadedFiles,
-	getMessageFileIds,
-	type TFileAccessToken,
-} from './file-access-tokens';
+import { chunkFileIds, type TFileAccessToken } from './file-access-tokens';
 
 type TFileAccessTokensClient = {
 	files: {
-		getAccessTokens: {
-			query: (input: { channelId: number; fileIds: number[] }) => Promise<TFileAccessToken[]>;
+		refreshAccessTokens: {
+			query: (input: { fileIds: number[] }) => Promise<TFileAccessToken[]>;
 		};
 	};
 };
@@ -18,88 +11,71 @@ type TFileAccessTokensClient = {
 type TFileAccessRefresherDeps = {
 	getClient: () => TFileAccessTokensClient;
 	getServerId: () => string | undefined;
-	getMessagesMap: () => TMessagesMap;
-	setFileAccessTokens: (channelId: number, requestedFileIds: number[], tokens: TFileAccessToken[]) => void;
-	onError?: (channelId: number, error: unknown) => void;
+	applyTokens: (tokens: TFileAccessToken[]) => void;
+	onError?: (error: unknown) => void;
 };
 
-type TChannelRefresh = {
-	running: Promise<void>;
-	rerun: boolean;
-};
-
-// Keeps the file tokens of loaded messages current by asking the server to
-// re-sign them. File URLs are built from the store at render time, so media and
-// download cards pick up the new tokens on their next render.
+// Re-signs attachment links the client holds, like Discord's attachment
+// refresh: file URLs are built from the tokens at render time, so cards and
+// media pick up the new links on their next render.
 const createFileAccessRefresher = (deps: TFileAccessRefresherDeps) => {
-	const activeRefreshes = new Map<number, TChannelRefresh>();
+	// IDs waiting for a request. A file asked for again while its request is in
+	// flight is requested once more after it, because the in-flight request may
+	// have been signed before the change that prompted the new one (a rotation).
+	const pendingFileIds = new Set<number>();
+	let running: Promise<void> | undefined;
 
-	const requestChannelTokens = async (channelId: number) => {
-		const serverId = deps.getServerId();
-		const fileIds = getMessageFileIds(deps.getMessagesMap()[channelId] ?? []);
+	const drain = async () => {
+		try {
+			while (pendingFileIds.size > 0) {
+				const [batch = []] = chunkFileIds([...pendingFileIds]);
+				const serverId = deps.getServerId();
 
-		for (const batch of chunkFileIds(fileIds)) {
-			let tokens: TFileAccessToken[];
+				for (const fileId of batch) {
+					pendingFileIds.delete(fileId);
+				}
 
-			try {
-				tokens = await deps.getClient().files.getAccessTokens.query({ channelId, fileIds: batch });
-			} catch (error) {
-				// An older server without the route, a dropped socket, or lost access.
-				// Keep the current tokens; the next trigger tries again.
-				deps.onError?.(channelId, error);
-				return;
+				let tokens: TFileAccessToken[];
+
+				try {
+					tokens = await deps.getClient().files.refreshAccessTokens.query({ fileIds: batch });
+				} catch (error) {
+					// An older server without the route, or a dropped socket. Keep the
+					// current tokens; the next trigger tries again.
+					pendingFileIds.clear();
+					deps.onError?.(error);
+					return;
+				}
+
+				// File IDs only identify files within one server. Drop a response
+				// that lands after the client moved to another server.
+				if (deps.getServerId() !== serverId) {
+					pendingFileIds.clear();
+					return;
+				}
+
+				// Each batch applies on its own: its tokens are valid whatever happens
+				// to the next request.
+				deps.applyTokens(tokens);
 			}
-
-			// Channel and file IDs only identify files within one server. Drop a
-			// response that lands after the client moved to another server.
-			if (deps.getServerId() !== serverId) return;
-
-			// Each batch applies on its own: its tokens are valid whatever happens
-			// to the next request.
-			deps.setFileAccessTokens(channelId, batch, tokens);
+		} finally {
+			running = undefined;
 		}
 	};
 
-	// One refresh per channel at a time. A request made while one is in flight
-	// runs once more after it, because the in-flight request may have been
-	// signed before the change that prompted the new one (a rotation).
-	const refreshChannel = (channelId: number): Promise<void> => {
-		const active = activeRefreshes.get(channelId);
-
-		if (active) {
-			active.rerun = true;
-			return active.running;
+	const refreshFiles = (fileIds: number[]): Promise<void> => {
+		for (const fileId of fileIds) {
+			pendingFileIds.add(fileId);
 		}
 
-		const refresh: TChannelRefresh = { running: Promise.resolve(), rerun: false };
+		if (!running && pendingFileIds.size > 0) {
+			running = drain();
+		}
 
-		refresh.running = (async () => {
-			try {
-				do {
-					refresh.rerun = false;
-					await requestChannelTokens(channelId);
-				} while (refresh.rerun);
-			} finally {
-				activeRefreshes.delete(channelId);
-			}
-		})();
-
-		activeRefreshes.set(channelId, refresh);
-
-		return refresh.running;
+		return running ?? Promise.resolve();
 	};
 
-	const refreshChannels = async (channelIds: number[]) => {
-		await Promise.all(channelIds.map(refreshChannel));
-	};
-
-	// After a confirmed rejoin: events may have been missed while disconnected.
-	const refreshLoadedChannels = () => refreshChannels(getChannelIdsWithLoadedFiles(deps.getMessagesMap()));
-
-	const refreshExpiringChannels = (now: number) =>
-		refreshChannels(getChannelIdsWithExpiringFileTokens(deps.getMessagesMap(), now));
-
-	return { refreshChannel, refreshLoadedChannels, refreshExpiringChannels };
+	return { refreshFiles };
 };
 
 export type { TFileAccessTokensClient };

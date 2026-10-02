@@ -7,7 +7,13 @@ import { playSound } from '../sounds/actions';
 import { SoundType } from '../types';
 import { ownUserIdSelector } from '../users/selectors';
 import { createFileAccessRefresher } from './file-access-refresher';
-import type { TFileAccessToken } from './file-access-tokens';
+import {
+	getExpiringFileIds,
+	getFileIds,
+	getLoadedFiles,
+	getMessageFiles,
+	type TFileAccessToken,
+} from './file-access-tokens';
 
 export const addMessages = (
 	channelId: number,
@@ -51,8 +57,8 @@ export const deleteMessage = (channelId: number, messageId: number) => {
 	useServerStore.getState().deleteMessage({ channelId, messageId });
 };
 
-export const setFileAccessTokens = (channelId: number, requestedFileIds: number[], tokens: TFileAccessToken[]) => {
-	useServerStore.getState().setFileAccessTokens({ channelId, requestedFileIds, tokens });
+export const setFileAccessTokens = (tokens: TFileAccessToken[]) => {
+	useServerStore.getState().setFileAccessTokens({ tokens });
 };
 
 const fileAccessRefresher = createFileAccessRefresher({
@@ -60,20 +66,26 @@ const fileAccessRefresher = createFileAccessRefresher({
 	// reading getTRPCClient at module load would hit its temporal dead zone.
 	getClient: () => getTRPCClient(),
 	getServerId: () => useServerStore.getState().serverId,
-	getMessagesMap: () => useServerStore.getState().messagesMap,
-	setFileAccessTokens,
-	onError: (channelId, error) => logDebug('File access token refresh failed', { channelId, error }),
+	applyTokens: setFileAccessTokens,
+	onError: (error) => logDebug('File access token refresh failed', error),
 });
 
-export const refreshChannelFileAccessTokens = fileAccessRefresher.refreshChannel;
+const getLoadedChannelFiles = (channelId: number) =>
+	getMessageFiles(useServerStore.getState().messagesMap[channelId] ?? []);
 
-export const refreshLoadedFileAccessTokens = fileAccessRefresher.refreshLoadedChannels;
+export const refreshChannelFileAccessTokens = (channelId: number) =>
+	fileAccessRefresher.refreshFiles(getFileIds(getLoadedChannelFiles(channelId)));
 
-export const refreshExpiringFileAccessTokens = fileAccessRefresher.refreshExpiringChannels;
+// After a confirmed rejoin: a rotation may have been missed while disconnected.
+export const refreshLoadedFileAccessTokens = () =>
+	fileAccessRefresher.refreshFiles(getFileIds(getLoadedFiles(useServerStore.getState().messagesMap)));
 
-// CHANNEL_FILE_ACCESS_CHANGED: the channel's token rotated, or it turned private
-// or public. Refresh its loaded files, and let file lists kept outside the
-// message store (the moderator sheet) refetch.
+export const refreshExpiringFileAccessTokens = (now: number) =>
+	fileAccessRefresher.refreshFiles(getExpiringFileIds(getLoadedFiles(useServerStore.getState().messagesMap), now));
+
+// CHANNEL_FILE_ACCESS_CHANGED: the channel's file access token rotated. Refresh
+// its loaded files, and let file lists kept outside the message store (the
+// moderator sheet) refresh theirs.
 export const handleChannelFileAccessChanged = (channelId: number) => {
 	void refreshChannelFileAccessTokens(channelId);
 	useServerStore.getState().bumpFileAccessChangeNonce();

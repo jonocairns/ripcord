@@ -49,22 +49,41 @@ const addTextChannel = async (caller: TCaller, name: string, isPrivate: boolean)
 	return channelId;
 };
 
-describe('files.getAccessTokens', () => {
-	test('signs files attached to messages in a private channel', async () => {
+const uploadAvatar = async (caller: TCaller, uploadToken: string) => {
+	const response = await uploadFile(new File(['avatar'], 'avatar.png', { type: 'image/png' }), uploadToken);
+	const tempFile = (await response.json()) as TTempFile;
+
+	await caller.users.changeAvatar({ fileId: tempFile.id });
+
+	const { user } = await caller.users.getInfo({ userId: OWNER_ID });
+
+	if (!user.avatarId) throw new Error('Avatar not stored');
+
+	return user.avatarId;
+};
+
+describe('files.refreshAccessTokens', () => {
+	test('signs attachments across public and private channels the caller can view', async () => {
 		const { caller } = await initTest(OWNER_ID);
 		const uploadToken = await getOwnerUploadToken();
-		const channelId = await addTextChannel(caller, 'private-files', true);
-		const firstFileId = await sendFile(caller, uploadToken, channelId, 'first.txt');
-		const secondFileId = await sendFile(caller, uploadToken, channelId, 'second.txt');
+		const privateChannelId = await addTextChannel(caller, 'private-files', true);
+		const privateFileId = await sendFile(caller, uploadToken, privateChannelId, 'private.txt');
+		const publicFileId = await sendFile(caller, uploadToken, 1, 'public.txt');
 
-		const tokens = await caller.files.getAccessTokens({ channelId, fileIds: [firstFileId, secondFileId] });
-		const channelToken = await getChannelFileAccessToken(channelId);
+		const tokens = await caller.files.refreshAccessTokens({ fileIds: [privateFileId, publicFileId] });
+		const tokenByFileId = new Map(tokens.map(({ fileId, accessToken }) => [fileId, accessToken]));
 
-		expect(tokens.map(({ fileId }) => fileId).sort()).toEqual([firstFileId, secondFileId].sort());
-
-		for (const { fileId, accessToken } of tokens) {
-			expect(verifyFileToken(fileId, channelToken, accessToken)).toBe(true);
-		}
+		expect([...tokenByFileId.keys()].sort()).toEqual([privateFileId, publicFileId].sort());
+		expect(
+			verifyFileToken(
+				privateFileId,
+				await getChannelFileAccessToken(privateChannelId),
+				tokenByFileId.get(privateFileId) ?? '',
+			),
+		).toBe(true);
+		expect(
+			verifyFileToken(publicFileId, await getChannelFileAccessToken(1), tokenByFileId.get(publicFileId) ?? ''),
+		).toBe(true);
 	});
 
 	test('returns tokens for the rotated channel token', async () => {
@@ -72,69 +91,44 @@ describe('files.getAccessTokens', () => {
 		const uploadToken = await getOwnerUploadToken();
 		const channelId = await addTextChannel(caller, 'rotated-files', true);
 		const fileId = await sendFile(caller, uploadToken, channelId, 'rotated.txt');
-		const [before] = await caller.files.getAccessTokens({ channelId, fileIds: [fileId] });
+		const [before] = await caller.files.refreshAccessTokens({ fileIds: [fileId] });
 
 		await caller.channels.rotateFileAccessToken({ channelId });
 
-		const [after] = await caller.files.getAccessTokens({ channelId, fileIds: [fileId] });
-		const channelToken = await getChannelFileAccessToken(channelId);
+		const [after] = await caller.files.refreshAccessTokens({ fileIds: [fileId] });
 
 		expect(after?.accessToken).not.toBe(before?.accessToken);
-		expect(verifyFileToken(fileId, channelToken, after?.accessToken ?? '')).toBe(true);
+		expect(verifyFileToken(fileId, await getChannelFileAccessToken(channelId), after?.accessToken ?? '')).toBe(true);
 	});
 
-	test('leaves out files from other channels and unknown IDs', async () => {
-		const { caller } = await initTest(OWNER_ID);
-		const uploadToken = await getOwnerUploadToken();
-		const channelId = await addTextChannel(caller, 'private-a', true);
-		const otherPrivateChannelId = await addTextChannel(caller, 'private-b', true);
-		const ownFileId = await sendFile(caller, uploadToken, channelId, 'own.txt');
-		const otherPrivateFileId = await sendFile(caller, uploadToken, otherPrivateChannelId, 'other-private.txt');
-		const publicFileId = await sendFile(caller, uploadToken, 1, 'public.txt');
-
-		const tokens = await caller.files.getAccessTokens({
-			channelId,
-			fileIds: [ownFileId, otherPrivateFileId, publicFileId, 99_999],
-		});
-
-		expect(tokens.map(({ fileId }) => fileId)).toEqual([ownFileId]);
-	});
-
-	test('returns nothing for a public channel', async () => {
-		const { caller } = await initTest(OWNER_ID);
-		const uploadToken = await getOwnerUploadToken();
-		const fileId = await sendFile(caller, uploadToken, 1, 'public.txt');
-
-		expect(await caller.files.getAccessTokens({ channelId: 1, fileIds: [fileId] })).toEqual([]);
-	});
-
-	test('refuses a caller without VIEW_CHANNEL on the channel', async () => {
+	test('leaves out files in private channels the caller cannot view', async () => {
 		const { caller: ownerCaller } = await initTest(OWNER_ID);
 		const { caller: memberCaller } = await initTest(MEMBER_ID);
 		const uploadToken = await getOwnerUploadToken();
-		const channelId = await addTextChannel(ownerCaller, 'staff', true);
-		const fileId = await sendFile(ownerCaller, uploadToken, channelId, 'staff.txt');
+		const staffChannelId = await addTextChannel(ownerCaller, 'staff', true);
+		const staffFileId = await sendFile(ownerCaller, uploadToken, staffChannelId, 'staff.txt');
+		const publicFileId = await sendFile(ownerCaller, uploadToken, 1, 'public.txt');
 
-		await expect(memberCaller.files.getAccessTokens({ channelId, fileIds: [fileId] })).rejects.toThrow(
-			'Insufficient channel permissions',
-		);
+		const tokens = await memberCaller.files.refreshAccessTokens({ fileIds: [staffFileId, publicFileId] });
+
+		expect(tokens.map(({ fileId }) => fileId)).toEqual([publicFileId]);
 	});
 
-	test('refuses a channel that does not exist', async () => {
+	test('leaves out unknown IDs and files that are not attachments', async () => {
 		const { caller } = await initTest(OWNER_ID);
+		const uploadToken = await getOwnerUploadToken();
+		const avatarId = await uploadAvatar(caller, uploadToken);
 
-		await expect(caller.files.getAccessTokens({ channelId: 999, fileIds: [1] })).rejects.toThrow(
-			'Insufficient channel permissions',
-		);
+		expect(await caller.files.refreshAccessTokens({ fileIds: [avatarId, 99_999] })).toEqual([]);
+		expect(await caller.files.refreshAccessTokens({ fileIds: [] })).toEqual([]);
 	});
 
 	test('refuses more than 100 file IDs', async () => {
 		const { caller } = await initTest(OWNER_ID);
-		const channelId = await addTextChannel(caller, 'many-files', true);
 		const fileIds = Array.from({ length: 101 }, (_, index) => index + 1);
 
-		await expect(caller.files.getAccessTokens({ channelId, fileIds })).rejects.toThrow();
-		expect(await caller.files.getAccessTokens({ channelId, fileIds: fileIds.slice(0, 100) })).toEqual([]);
+		await expect(caller.files.refreshAccessTokens({ fileIds })).rejects.toThrow();
+		expect(await caller.files.refreshAccessTokens({ fileIds: fileIds.slice(0, 100) })).toEqual([]);
 	});
 });
 
@@ -152,7 +146,7 @@ describe('users.getInfo files', () => {
 		});
 	};
 
-	test('leaves out private channel files the caller cannot view', async () => {
+	test('leaves out private channel files the caller cannot view and signs the rest', async () => {
 		const { caller: ownerCaller, initialData } = await initTest(OWNER_ID);
 		const uploadToken = await getOwnerUploadToken();
 		const privateChannelId = await addTextChannel(ownerCaller, 'secret', true);
@@ -165,25 +159,42 @@ describe('users.getInfo files', () => {
 		const { files } = await moderatorCaller.users.getInfo({ userId: OWNER_ID });
 
 		expect(files.map((file) => file.id)).toEqual([publicFileId]);
-		expect(files[0]?._accessToken).toBeUndefined();
 		expect(files.some((file) => file.id === privateFileId)).toBe(false);
+		expect(verifyFileToken(publicFileId, await getChannelFileAccessToken(1), files[0]?._accessToken ?? '')).toBe(true);
 	});
 
-	test('signs private channel files the caller can view', async () => {
+	test('signs private channel files the caller can view and leaves other files unsigned', async () => {
 		const { caller } = await initTest(OWNER_ID);
 		const uploadToken = await getOwnerUploadToken();
 		const privateChannelId = await addTextChannel(caller, 'secret', true);
 		const privateFileId = await sendFile(caller, uploadToken, privateChannelId, 'secret-plans.txt');
-		const publicFileId = await sendFile(caller, uploadToken, 1, 'public-notes.txt');
+		const avatarId = await uploadAvatar(caller, uploadToken);
 
 		const { files } = await caller.users.getInfo({ userId: OWNER_ID });
 		const privateFile = files.find((file) => file.id === privateFileId);
-		const publicFile = files.find((file) => file.id === publicFileId);
-		const channelToken = await getChannelFileAccessToken(privateChannelId);
+		const avatar = files.find((file) => file.id === avatarId);
 
-		expect(verifyFileToken(privateFileId, channelToken, privateFile?._accessToken ?? '')).toBe(true);
-		expect(publicFile).toBeDefined();
-		expect(publicFile?._accessToken).toBeUndefined();
+		expect(
+			verifyFileToken(
+				privateFileId,
+				await getChannelFileAccessToken(privateChannelId),
+				privateFile?._accessToken ?? '',
+			),
+		).toBe(true);
+		expect(avatar).toBeDefined();
+		expect(avatar?._accessToken).toBeUndefined();
+	});
+});
+
+describe('message attachments', () => {
+	test('are signed in public channels too', async () => {
+		const { caller } = await initTest(OWNER_ID);
+		const uploadToken = await getOwnerUploadToken();
+		const fileId = await sendFile(caller, uploadToken, 1, 'public.txt');
+		const { messages } = await caller.messages.get({ channelId: 1 });
+		const file = messages.flatMap((message) => message.files).find((candidate) => candidate.id === fileId);
+
+		expect(verifyFileToken(fileId, await getChannelFileAccessToken(1), file?._accessToken ?? '')).toBe(true);
 	});
 });
 
@@ -200,9 +211,6 @@ const recordFileAccessEvents = (userIds: number[]) => {
 
 	return {
 		received,
-		clear: () => {
-			for (const userId of userIds) received[userId] = [];
-		},
 		stop: () => {
 			for (const subscription of subscriptions) subscription.unsubscribe();
 		},
@@ -237,34 +245,16 @@ describe('CHANNEL_FILE_ACCESS_CHANGED', () => {
 		}
 	});
 
-	test('turning a channel private or public publishes to its viewers', async () => {
+	test('channel updates, private toggles included, publish nothing', async () => {
 		const { caller } = await initTest(OWNER_ID);
 		const channelId = await addTextChannel(caller, 'toggled', false);
 		const events = recordFileAccessEvents([OWNER_ID, MEMBER_ID]);
 
 		try {
+			// Every attachment is already signed, so a toggle leaves held tokens valid.
 			await caller.channels.update({ channelId, private: true });
-
-			// The member lost access, so only the owner refreshes.
-			expect(events.received).toEqual({ [OWNER_ID]: [channelId], [MEMBER_ID]: [] });
-
-			events.clear();
 			await caller.channels.update({ channelId, private: false });
-
-			expect(events.received).toEqual({ [OWNER_ID]: [channelId], [MEMBER_ID]: [channelId] });
-		} finally {
-			events.stop();
-		}
-	});
-
-	test('an update that leaves private alone publishes nothing', async () => {
-		const { caller } = await initTest(OWNER_ID);
-		const channelId = await addTextChannel(caller, 'unchanged', true);
-		const events = recordFileAccessEvents([OWNER_ID, MEMBER_ID]);
-
-		try {
 			await caller.channels.update({ channelId, topic: 'new topic' });
-			await caller.channels.update({ channelId, private: true });
 
 			expect(events.received).toEqual({ [OWNER_ID]: [], [MEMBER_ID]: [] });
 		} finally {

@@ -25,38 +25,38 @@ describe('useServerStore.setFileAccessTokens', () => {
 	beforeEach(() => {
 		useServerStore.setState({
 			messagesMap: {
-				1: [createMessage(1, 1, [createFile(1, 'old-1'), createFile(2, 'old-2'), createFile(3, 'old-3')])],
-				2: [createMessage(2, 2, [createFile(1, 'other-channel')])],
+				1: [createMessage(1, 1, [createFile(1, 'old-1'), createFile(2, 'old-2')])],
+				2: [createMessage(2, 2, [createFile(3, 'old-3')])],
+				3: [createMessage(3, 3, [createFile(4, 'old-4')])],
 			},
 		});
 	});
 
-	it('touches only requested files in the named channel', () => {
-		const otherChannel = useServerStore.getState().messagesMap[2];
+	it('sets returned tokens wherever the file is loaded and leaves the rest', () => {
+		const untouchedChannel = useServerStore.getState().messagesMap[3];
 
 		useServerStore.getState().setFileAccessTokens({
-			channelId: 1,
-			requestedFileIds: [1, 2],
-			tokens: [{ fileId: 1, accessToken: 'new-1' }],
+			tokens: [
+				{ fileId: 1, accessToken: 'new-1' },
+				{ fileId: 3, accessToken: 'new-3' },
+			],
 		});
 
-		const [message] = useServerStore.getState().messagesMap[1] ?? [];
+		const { messagesMap } = useServerStore.getState();
 
-		expect(message?.files[0]?._accessToken).toBe('new-1');
-		// Requested but left out of the response: the channel went public.
-		expect(message?.files[1]).not.toHaveProperty('_accessToken');
-		// Not requested: keeps its token.
-		expect(message?.files[2]?._accessToken).toBe('old-3');
-		expect(useServerStore.getState().messagesMap[2]).toBe(otherChannel);
+		expect(messagesMap[1]?.[0]?.files.map((file) => file._accessToken)).toEqual(['new-1', 'old-2']);
+		expect(messagesMap[2]?.[0]?.files[0]?._accessToken).toBe('new-3');
+		expect(messagesMap[3]).toBe(untouchedChannel);
 	});
 
-	it('ignores a channel with no loaded messages', () => {
+	it('keeps the store unchanged when no token differs', () => {
 		const before = useServerStore.getState().messagesMap;
 
 		useServerStore.getState().setFileAccessTokens({
-			channelId: 3,
-			requestedFileIds: [1],
-			tokens: [{ fileId: 1, accessToken: 'new-1' }],
+			tokens: [
+				{ fileId: 1, accessToken: 'old-1' },
+				{ fileId: 99, accessToken: 'unknown' },
+			],
 		});
 
 		expect(useServerStore.getState().messagesMap).toBe(before);

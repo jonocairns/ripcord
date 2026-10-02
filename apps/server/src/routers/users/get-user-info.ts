@@ -10,7 +10,7 @@ import { type Context, protectedProcedure } from '../../utils/trpc';
 
 // MANAGE_USERS alone does not grant access to private channels. Leave out files
 // in private channels the caller cannot view (their names alone can leak private
-// content) and sign the rest, so every listed file opens.
+// content) and sign every other attachment, so every listed file opens.
 const getVisibleUserFiles = async (ctx: Context, userId: number): Promise<TFile[]> => {
 	const userFiles = await getFilesByUserId(userId);
 	const canViewByChannelId = new Map<number, Promise<boolean>>();
@@ -29,12 +29,13 @@ const getVisibleUserFiles = async (ctx: Context, userId: number): Promise<TFile[
 	const visibleFiles: TFile[] = [];
 
 	for (const { file, channel } of userFiles) {
-		if (!channel?.private) {
+		// Not a message attachment (avatar, banner, emoji): public and unsigned.
+		if (!channel) {
 			visibleFiles.push(file);
 			continue;
 		}
 
-		if (!(await canViewChannel(channel.id))) continue;
+		if (channel.private && !(await canViewChannel(channel.id))) continue;
 
 		visibleFiles.push({ ...file, _accessToken: generateFileToken(file.id, channel.fileAccessToken) });
 	}

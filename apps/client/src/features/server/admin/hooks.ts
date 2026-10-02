@@ -21,7 +21,7 @@ import {
 	type TStorageSettings,
 } from '@sharkord/shared';
 import { filesize } from 'filesize';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { requestConfirmation } from '@/features/dialogs/actions';
 import { logDebug } from '@/helpers/browser-logger';
@@ -29,8 +29,15 @@ import { parseTrpcErrors, type TTrpcErrors } from '@/helpers/parse-trpc-errors';
 import { useForm } from '@/hooks/use-form';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getTRPCClient } from '@/lib/trpc';
-import { FILE_ACCESS_TOKEN_CHECK_INTERVAL_MS, hasExpiringFileAccessToken } from '../messages/file-access-tokens';
+import { createFileAccessRefresher } from '../messages/file-access-refresher';
+import {
+	applyFileAccessTokensToFiles,
+	FILE_ACCESS_TOKEN_CHECK_INTERVAL_MS,
+	getExpiringFileIds,
+	getFileIds,
+} from '../messages/file-access-tokens';
 import { subscribeToFileListInvalidations } from '../nonce-signals';
+import { useServerStore } from '../slice';
 // TODO: review this whole file for optimizations and improvements
 
 export const useAdminGeneral = () => {
@@ -579,73 +586,64 @@ export const useAdminUserInfo = (userId: number) => {
 	const [logins, setLogins] = useState<TLogin[]>([]);
 	const [files, setFiles] = useState<TFile[]>([]);
 	const [messages, setMessages] = useState<TMessage[]>([]);
-	const requestCountRef = useRef(0);
-	const appliedRequestIdRef = useRef(0);
 	const filesRef = useLatestRef(files);
 
-	// A background load keeps the current view instead of showing the loading
-	// state. A response older than the last applied one is dropped, so a slow
-	// request cannot overwrite newer data.
-	const loadUserInfo = useCallback(
-		async ({ background }: { background: boolean }) => {
-			const requestId = ++requestCountRef.current;
+	const fetchUser = useCallback(async () => {
+		setLoading(true);
 
-			if (!background) {
-				setLoading(true);
-			}
+		const trpc = getTRPCClient();
+		const { user, logins, files, messages } = await trpc.users.getInfo.query({
+			userId,
+		});
 
-			const trpc = getTRPCClient();
-			const { user, logins, files, messages } = await trpc.users.getInfo.query({
-				userId,
-			});
-
-			if (requestId < appliedRequestIdRef.current) return;
-
-			appliedRequestIdRef.current = requestId;
-			setUser(user);
-			setLoading(false);
-			setLogins(logins);
-			setFiles(files);
-			setMessages(messages);
-		},
-		[userId],
-	);
-
-	const fetchUser = useCallback(() => loadUserInfo({ background: false }), [loadUserInfo]);
+		setUser(user);
+		setLoading(false);
+		setLogins(logins);
+		setFiles(files);
+		setMessages(messages);
+	}, [userId]);
 
 	useEffect(() => {
 		fetchUser();
 	}, [fetchUser]);
 
-	// The listed files live outside the message store, so the message token
-	// refresh never reaches them. While this is mounted (the moderator sheet is
-	// open), refetch when their links may have changed: on window focus, when a
-	// token is close to expiry, on CHANNEL_FILE_ACCESS_CHANGED and after a
-	// confirmed rejoin, which covers a rotation missed while disconnected.
+	// The listed files live outside the message store, so their links are
+	// refreshed here, through the same endpoint and on the same triggers: when a
+	// token is close to expiry (timer and window focus), on
+	// CHANNEL_FILE_ACCESS_CHANGED, and after a confirmed rejoin, which covers a
+	// rotation missed while disconnected.
+	const fileAccessRefresher = useMemo(
+		() =>
+			createFileAccessRefresher({
+				getClient: () => getTRPCClient(),
+				getServerId: () => useServerStore.getState().serverId,
+				applyTokens: (tokens) => setFiles((current) => applyFileAccessTokensToFiles(current, tokens)),
+				onError: (error) => logDebug('Moderator file link refresh failed', error),
+			}),
+		[],
+	);
+
 	useEffect(() => {
-		const refetchInBackground = () => {
-			loadUserInfo({ background: true }).catch((error) => {
-				logDebug('Moderator file list refetch failed', error);
-			});
+		// Only attachments carry a token; avatars and emojis need no refresh.
+		const refreshListedFiles = () => {
+			void fileAccessRefresher.refreshFiles(getFileIds(filesRef.current.filter((file) => file._accessToken)));
 		};
 
-		const refetchIfExpiring = () => {
-			if (hasExpiringFileAccessToken(filesRef.current, Date.now())) {
-				refetchInBackground();
-			}
+		const refreshExpiringFiles = () => {
+			void fileAccessRefresher.refreshFiles(getExpiringFileIds(filesRef.current, Date.now()));
 		};
 
-		const interval = setInterval(refetchIfExpiring, FILE_ACCESS_TOKEN_CHECK_INTERVAL_MS);
-		const unsubscribeFromInvalidations = subscribeToFileListInvalidations(refetchInBackground);
+		const interval = setInterval(refreshExpiringFiles, FILE_ACCESS_TOKEN_CHECK_INTERVAL_MS);
+		const unsubscribeFromInvalidations = subscribeToFileListInvalidations(refreshListedFiles);
 
-		window.addEventListener('focus', refetchInBackground);
+		window.addEventListener('focus', refreshExpiringFiles);
 
 		return () => {
 			clearInterval(interval);
 			unsubscribeFromInvalidations();
-			window.removeEventListener('focus', refetchInBackground);
+			window.removeEventListener('focus', refreshExpiringFiles);
 		};
-	}, [loadUserInfo]);
+	}, [fileAccessRefresher]);
 
 	return {
 		user,

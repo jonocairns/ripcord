@@ -6,11 +6,11 @@ type TFileAccessToken = {
 	accessToken: string;
 };
 
-// The server signs at most this many file IDs per `files.getAccessTokens` call.
+// The server signs at most this many file IDs per `files.refreshAccessTokens` call.
 const FILE_ACCESS_TOKEN_BATCH_SIZE = 100;
 
 // Refresh this long before a token expires. It absorbs client clock skew, and a
-// refreshed token still has at least 24 hours left.
+// refreshed token still has most of its lifetime left.
 const FILE_ACCESS_TOKEN_REFRESH_THRESHOLD_MS = 12 * 60 * 60 * 1000;
 
 // How often an open session checks loaded tokens for an upcoming expiry.
@@ -42,32 +42,15 @@ const isFileAccessTokenExpiring = (
 	return expiresAt !== undefined && expiresAt - now <= thresholdMs;
 };
 
-const hasExpiringFileAccessToken = (files: TFile[], now: number): boolean =>
-	files.some((file) => isFileAccessTokenExpiring(file._accessToken, now));
+const getFileIds = (files: TFile[]): number[] => [...new Set(files.map((file) => file.id))];
 
-// Every file in the loaded messages, tokened or not, so a channel that just
-// went private gets tokens for files loaded while it was public.
-const getMessageFileIds = (messages: TJoinedMessage[]): number[] => {
-	const fileIds = new Set<number>();
+const getMessageFiles = (messages: TJoinedMessage[]): TFile[] => messages.flatMap((message) => message.files);
 
-	for (const message of messages) {
-		for (const file of message.files) {
-			fileIds.add(file.id);
-		}
-	}
+// Every attachment in every loaded channel.
+const getLoadedFiles = (messagesMap: TMessagesMap): TFile[] => Object.values(messagesMap).flatMap(getMessageFiles);
 
-	return [...fileIds];
-};
-
-const getChannelIdsWithLoadedFiles = (messagesMap: TMessagesMap): number[] =>
-	Object.entries(messagesMap)
-		.filter(([, messages]) => messages.some((message) => message.files.length > 0))
-		.map(([channelId]) => Number(channelId));
-
-const getChannelIdsWithExpiringFileTokens = (messagesMap: TMessagesMap, now: number): number[] =>
-	Object.entries(messagesMap)
-		.filter(([, messages]) => messages.some((message) => hasExpiringFileAccessToken(message.files, now)))
-		.map(([channelId]) => Number(channelId));
+const getExpiringFileIds = (files: TFile[], now: number): number[] =>
+	getFileIds(files.filter((file) => isFileAccessTokenExpiring(file._accessToken, now)));
 
 const chunkFileIds = (fileIds: number[], size = FILE_ACCESS_TOKEN_BATCH_SIZE): number[][] => {
 	const chunks: number[][] = [];
@@ -79,41 +62,40 @@ const chunkFileIds = (fileIds: number[], size = FILE_ACCESS_TOKEN_BATCH_SIZE): n
 	return chunks;
 };
 
-// Sets the returned token on each requested file, and clears `_accessToken` on
-// requested files the response leaves out (the channel went public, or the
-// file is gone). Files that were not requested keep their token. Returns the
-// same array when nothing changed.
-const applyFileAccessTokens = (
-	messages: TJoinedMessage[],
-	requestedFileIds: number[],
-	tokens: TFileAccessToken[],
-): TJoinedMessage[] => {
-	const requested = new Set(requestedFileIds);
-	const tokenByFileId = new Map(tokens.map(({ fileId, accessToken }) => [fileId, accessToken]));
+const toTokenMap = (tokens: TFileAccessToken[]) =>
+	new Map(tokens.map(({ fileId, accessToken }) => [fileId, accessToken]));
+
+const applyTokenMap = (files: TFile[], tokenByFileId: Map<number, string>): TFile[] => {
+	let changed = false;
+
+	const nextFiles = files.map((file) => {
+		const accessToken = tokenByFileId.get(file.id);
+
+		if (accessToken === undefined || accessToken === file._accessToken) return file;
+
+		changed = true;
+
+		return { ...file, _accessToken: accessToken };
+	});
+
+	return changed ? nextFiles : files;
+};
+
+// Sets each returned token on its file. Files the response leaves out (no
+// access, or not an attachment) keep their token. Returns the same array when
+// nothing changed.
+const applyFileAccessTokensToFiles = (files: TFile[], tokens: TFileAccessToken[]): TFile[] =>
+	applyTokenMap(files, toTokenMap(tokens));
+
+// Same as applyFileAccessTokensToFiles, over the files of loaded messages.
+const applyFileAccessTokens = (messages: TJoinedMessage[], tokens: TFileAccessToken[]): TJoinedMessage[] => {
+	const tokenByFileId = toTokenMap(tokens);
 	let changed = false;
 
 	const nextMessages = messages.map((message) => {
-		let messageChanged = false;
+		const files = applyTokenMap(message.files, tokenByFileId);
 
-		const files = message.files.map((file) => {
-			if (!requested.has(file.id)) return file;
-
-			const accessToken = tokenByFileId.get(file.id);
-
-			if (accessToken === file._accessToken) return file;
-
-			messageChanged = true;
-
-			if (accessToken === undefined) {
-				const { _accessToken: _removedToken, ...fileWithoutToken } = file;
-
-				return fileWithoutToken;
-			}
-
-			return { ...file, _accessToken: accessToken };
-		});
-
-		if (!messageChanged) return message;
+		if (files === message.files) return message;
 
 		changed = true;
 
@@ -126,12 +108,13 @@ const applyFileAccessTokens = (
 export type { TFileAccessToken };
 export {
 	applyFileAccessTokens,
+	applyFileAccessTokensToFiles,
 	chunkFileIds,
 	FILE_ACCESS_TOKEN_CHECK_INTERVAL_MS,
-	getChannelIdsWithExpiringFileTokens,
-	getChannelIdsWithLoadedFiles,
+	getExpiringFileIds,
 	getFileAccessTokenExpiry,
-	getMessageFileIds,
-	hasExpiringFileAccessToken,
+	getFileIds,
+	getLoadedFiles,
+	getMessageFiles,
 	isFileAccessTokenExpiring,
 };
