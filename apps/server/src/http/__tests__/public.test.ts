@@ -542,7 +542,7 @@ describe('/public', () => {
 		if (!dbFile) return;
 
 		const url = `${testsBaseUrl}/public/${encodeURIComponent(dbFile.name)}?accessToken=${generateFileToken(dbFile.id, channel.fileAccessToken)}`;
-		const expectedCacheControl = 'private, max-age=31536000, immutable';
+		const expectedCacheControl = 'private, max-age=172800, immutable';
 
 		const fullResponse = await fetch(url);
 
@@ -658,11 +658,29 @@ describe('/public', () => {
 		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(dbFile!.name)}`);
 
 		expect(response.status).toBe(200);
-		expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable');
+		// The channel can turn private later, so its files stay out of shared caches too.
+		expect(response.headers.get('Cache-Control')).toBe('private, max-age=172800, immutable');
 
 		const responseText = await response.text();
 
 		expect(responseText).toBe(fileContent);
+	});
+
+	test('should let shared caches keep public assets', async () => {
+		const { caller } = await initTest();
+		const avatar = await upload(new File(['avatar content'], 'avatar.png', { type: 'image/png' }), token);
+
+		await caller.users.changeAvatar({ fileId: avatar.id });
+
+		const { user } = await caller.users.getInfo({ userId: 1 });
+		const avatarFile = await tdb.select().from(files).where(eq(files.id, user.avatarId!)).get();
+
+		expect(avatarFile).toBeDefined();
+
+		const response = await fetch(`${testsBaseUrl}/public/${encodeURIComponent(avatarFile!.name)}`);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable');
 	});
 
 	test('should allow access to non-message files without token', async () => {

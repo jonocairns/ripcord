@@ -37,6 +37,15 @@ const INLINE_ALLOWLIST = new Set([
 	'audio/x-ms-wma',
 ]);
 
+// Message attachments never enter shared caches (CDNs, proxies): a channel can
+// turn private or rotate its token after an edge cached a link, and the edge
+// would keep serving it without the token check. Browsers keep them for at
+// most 48 hours, the longest a private link lives once links expire.
+const CHANNEL_ATTACHMENT_CACHE_CONTROL = 'private, max-age=172800, immutable';
+
+// Avatars, banners, emojis and the server logo are public in every channel.
+const PUBLIC_ASSET_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+
 type TParsedRange = {
 	start: number;
 	end: number;
@@ -110,7 +119,6 @@ const publicRouteHandler = async (req: http.IncomingMessage, res: http.ServerRes
 	// otherwise is something like an avatar or banner or something else
 	// we can assume this because of the orphaned check above
 	const associatedMessage = await getMessageByFileId(dbFile.id);
-	let isPrivateChannelFile = false;
 
 	if (associatedMessage) {
 		const channel = await db.select().from(channels).where(eq(channels.id, associatedMessage.channelId)).get();
@@ -124,14 +132,10 @@ const publicRouteHandler = async (req: http.IncomingMessage, res: http.ServerRes
 				res.end(JSON.stringify({ error: 'Forbidden' }));
 				return;
 			}
-
-			isPrivateChannelFile = true;
 		}
 	}
 
-	// Private channel files are gated by a rotatable token, so shared caches
-	// (CDNs, proxies) must not keep serving them after the token changes.
-	const cacheControl = `${isPrivateChannelFile ? 'private' : 'public'}, max-age=31536000, immutable`;
+	const cacheControl = associatedMessage ? CHANNEL_ATTACHMENT_CACHE_CONTROL : PUBLIC_ASSET_CACHE_CONTROL;
 
 	const filePath = path.join(PUBLIC_PATH, dbFile.name);
 
