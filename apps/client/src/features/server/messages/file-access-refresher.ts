@@ -17,6 +17,7 @@ type TFileAccessTokensClient = {
 
 type TFileAccessRefresherDeps = {
 	getClient: () => TFileAccessTokensClient;
+	getServerId: () => string | undefined;
 	getMessagesMap: () => TMessagesMap;
 	setFileAccessTokens: (channelId: number, requestedFileIds: number[], tokens: TFileAccessToken[]) => void;
 	onError?: (channelId: number, error: unknown) => void;
@@ -34,6 +35,7 @@ const createFileAccessRefresher = (deps: TFileAccessRefresherDeps) => {
 	const activeRefreshes = new Map<number, TChannelRefresh>();
 
 	const requestChannelTokens = async (channelId: number) => {
+		const serverId = deps.getServerId();
 		const fileIds = getMessageFileIds(deps.getMessagesMap()[channelId] ?? []);
 
 		for (const batch of chunkFileIds(fileIds)) {
@@ -48,6 +50,12 @@ const createFileAccessRefresher = (deps: TFileAccessRefresherDeps) => {
 				return;
 			}
 
+			// Channel and file IDs only identify files within one server. Drop a
+			// response that lands after the client moved to another server.
+			if (deps.getServerId() !== serverId) return;
+
+			// Each batch applies on its own: its tokens are valid whatever happens
+			// to the next request.
 			deps.setFileAccessTokens(channelId, batch, tokens);
 		}
 	};

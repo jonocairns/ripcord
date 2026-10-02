@@ -59,6 +59,7 @@ const fileAccessRefresher = createFileAccessRefresher({
 	// Resolved per call: this module loads inside the lib/trpc import cycle, so
 	// reading getTRPCClient at module load would hit its temporal dead zone.
 	getClient: () => getTRPCClient(),
+	getServerId: () => useServerStore.getState().serverId,
 	getMessagesMap: () => useServerStore.getState().messagesMap,
 	setFileAccessTokens,
 	onError: (channelId, error) => logDebug('File access token refresh failed', { channelId, error }),

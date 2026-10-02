@@ -19,10 +19,12 @@ const createMessage = (id: number, files: TFile[]): TJoinedMessage =>
 // A refresher over an in-memory messages map that applies tokens like the store.
 const setup = (initialMessagesMap: TMessagesMap, query: (input: TQueryInput) => Promise<TFileAccessToken[]>) => {
 	let messagesMap = initialMessagesMap;
+	let serverId: string | undefined = 'server-a';
 	const queryMock = mock(query);
 	const client: TFileAccessTokensClient = { files: { getAccessTokens: { query: queryMock } } };
 	const refresher = createFileAccessRefresher({
 		getClient: () => client,
+		getServerId: () => serverId,
 		getMessagesMap: () => messagesMap,
 		setFileAccessTokens: (channelId, requestedFileIds, tokens) => {
 			const messages = messagesMap[channelId];
@@ -33,7 +35,15 @@ const setup = (initialMessagesMap: TMessagesMap, query: (input: TQueryInput) => 
 		},
 	});
 
-	return { refresher, queryMock, getMessagesMap: () => messagesMap };
+	return {
+		refresher,
+		queryMock,
+		getMessagesMap: () => messagesMap,
+		switchServer: (nextServerId: string | undefined, nextMessagesMap: TMessagesMap) => {
+			serverId = nextServerId;
+			messagesMap = nextMessagesMap;
+		},
+	};
 };
 
 const signAll = async ({ fileIds }: TQueryInput) => fileIds.map((fileId) => ({ fileId, accessToken: `new-${fileId}` }));
@@ -73,6 +83,47 @@ describe('createFileAccessRefresher', () => {
 		await refresher.refreshChannel(1);
 
 		expect(getMessagesMap()).toBe(initialMessagesMap);
+	});
+
+	it('keeps earlier batches when a later batch fails', async () => {
+		const files = Array.from({ length: 150 }, (_, index) => createFile(index + 1, 'old'));
+		let calls = 0;
+		const { refresher, getMessagesMap } = setup({ 1: [createMessage(1, files)] }, async (input) => {
+			calls += 1;
+			if (calls === 2) throw new Error('socket closed');
+			return signAll(input);
+		});
+
+		await refresher.refreshChannel(1);
+
+		const tokens = getMessagesMap()[1]?.[0]?.files.map((file) => file._accessToken) ?? [];
+
+		// The first request's tokens are valid on their own; the failed request's
+		// files keep their old tokens for the next trigger.
+		expect(tokens.slice(0, 100).every((token, index) => token === `new-${index + 1}`)).toBe(true);
+		expect(tokens.slice(100).every((token) => token === 'old')).toBe(true);
+	});
+
+	it('drops a response that lands after the client moved to another server', async () => {
+		let resolveQuery: () => void = () => {};
+		const { refresher, queryMock, getMessagesMap, switchServer } = setup(
+			{ 1: [createMessage(1, [createFile(1, 'server-a-token')])] },
+			(input) =>
+				new Promise((resolve) => {
+					resolveQuery = () => resolve(input.fileIds.map((fileId) => ({ fileId, accessToken: 'server-a-new' })));
+				}),
+		);
+		// Same channel and file IDs on the next server.
+		const nextServerMessages = { 1: [createMessage(1, [createFile(1, 'server-b-token')])] };
+
+		const refresh = refresher.refreshChannel(1);
+
+		switchServer('server-b', nextServerMessages);
+		resolveQuery();
+		await refresh;
+
+		expect(queryMock).toHaveBeenCalledTimes(1);
+		expect(getMessagesMap()).toBe(nextServerMessages);
 	});
 
 	it('makes no request for a channel with no loaded messages', async () => {
