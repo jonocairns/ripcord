@@ -1,16 +1,19 @@
-# Expiring Private Channel File Links
+# Expiring File Attachment Links
 
-Plan for making private channel file links stop working within 48 hours of
-being issued. Losing access to a channel then ends file access on its own,
-without breaking links for anyone who keeps access. Status: release N (the
-refresh path, no expiry yet) is implemented; release N+1 (expiry) is not.
+Plan for making file attachment links expire about 24 hours after they are
+issued, the way Discord's attachment CDN links do. Losing access to a channel
+then ends file access on its own, links pasted outside the app stop working,
+and nobody who keeps access sees a broken file. Status: release N (every
+attachment signed, the refresh path, no expiry yet) is implemented; release
+N+1 (expiry) is not.
 
 ## Problem and goals
 
-**The problem today**
+**The problem before this work**
 
-- A file link carries an HMAC over the file ID and the channel's
-  `fileAccessToken`. Nothing in it names a user or a time.
+- Only private channel attachments carried a token: an HMAC over the file ID
+  and the channel's `fileAccessToken`. Public channel attachments had none.
+  Nothing in either link names a user or a time.
 - That token only changes when an admin presses rotate in channel settings.
   Kicks, bans, role changes and permission edits leave it alone.
 - `/public` checks no session. Whoever holds the URL keeps access indefinitely:
@@ -18,351 +21,266 @@ refresh path, no expiry yet) is implemented; release N+1 (expiry) is not.
 
 **Goals**
 
-- A private channel file link expires no later than 48 hours after it was
-  issued.
+- Every message attachment link, in every channel, expires about 24 hours after
+  it was issued.
 - Members who keep access never see a broken file, including in a desktop
-  session left open for days.
+  session left open for days. Healthy media does not reload or restart when its
+  link is refreshed.
 - No revocation hooks in the kick, ban, role or permission code paths.
 
 **Out of scope**
 
+- Avatars, banners, emojis and the server logo. They stay unsigned and
+  non-expiring, as on Discord.
 - Immediate revocation. The existing rotate button stays the tool for that.
-- Public channel files, avatars and banners. Their links stay public and
-  non-expiring.
-- Copies already cached at the CDN. One Cloudflare purge after the cache-header
-  change ships covers them.
 - Per-user tokens or session-authenticated file requests.
+- Re-signing attachment links pasted into message text. Discord refreshes those
+  when it renders a message; Ripcord does not yet.
 
-## Current behaviour
+## Alignment with Discord
 
-The server signs a fresh token every time it sends a private channel file to a
-client. The token is deterministic, so every signing produces the same value
-until an admin rotates.
+| Discord | Ripcord |
+| --- | --- |
+| Every attachment URL is signed (`ex`, `is`, `hm`) and expires after about 24 hours | Every attachment is signed from release N; links expire after about 24 hours from release N+1 |
+| Avatars, emojis and other non-attachment CDN files are unsigned and never expire | Same |
+| API payloads carry freshly signed URLs, and the client refreshes links silently | Same: message lists, push events and the moderator file list sign every attachment, and the client refreshes before expiry, on rotation, after a rejoin and on a load failure |
+| A refresh endpoint takes a list of URLs from any channel | `files.refreshAccessTokens({ fileIds })` takes up to 100 file IDs from any channel |
+| Expired or unsigned links return 404 ("This content is no longer available") | 404 from release N+1; 403 until then |
+| The CDN checks signatures and caches attachments | Optional in release N+1: edge caching capped at each link's expiry |
 
-| Step | Where | What happens |
-| --- | --- | --- |
-| Sign | `apps/server/src/helpers/files-crypto.ts:4` | HMAC-SHA256 over `fileId:fileAccessToken`, keyed by the server token |
-| Issue on message list | `apps/server/src/routers/messages/get-messages.ts:111` | Every page of messages carries a signed `_accessToken` per file |
-| Issue on push | `apps/server/src/db/queries/messages.ts:47`, called from `db/publishers.ts:42` | `NEW_MESSAGE` and `MESSAGE_UPDATE` events carry signed files |
-| Issue on user file list | `apps/server/src/db/queries/files.ts:81`, called from `routers/users/get-user-info.ts:28` | Moderator view of a user's uploads. The route checks only `MANAGE_USERS`, so it signs every private file regardless of the caller's channel access |
-| Verify | `apps/server/src/http/public.ts:119` | Constant-time compare; 403 on mismatch |
-| Rotate | `apps/server/src/routers/channels/rotate-file-access-token.ts:32` | New `fileAccessToken`; no event is sent to clients |
-| Build URL | `apps/client/src/helpers/get-file-url.ts:37` | `/public/<name>?accessToken=<token>&v=<fileId>`; the token is opaque to the client |
+**Deliberate deviations**
 
-**Client behaviour that matters here**
-
-- `useMessages` fetches each channel once and keeps the messages for the
-  session. A later fetch skips message IDs it already holds, so their tokens
-  are never replaced (`apps/client/src/features/server/messages/hooks.ts:39-40`).
-- A `MESSAGE_UPDATE` event replaces the whole message through `updateMessage`,
-  files included (`features/server/messages/actions.ts:43`).
-- A failed inline image renders nothing
-  (`components/channel-view/text/overrides/image.tsx:23` and `:37`).
-- Download cards are plain `<a href>` links
-  (`components/channel-view/text/file-card.tsx:51`). Messages and the
-  moderator sheet both use them; the sheet renders nothing else
-  (`components/mod-view-sheet/server-activity/files.tsx`).
-- The packaged desktop app runs its own bundled client from `file://`. Client
-  changes only reach it through an app update.
-
-The comment at `get-messages.ts:104-110` calls shareable, non-expiring links
-"by design". This change reverses that decision.
+- **One opaque `accessToken` parameter** instead of `ex`, `is` and `hm`. Shipped
+  desktop apps build file URLs by passing that token through untouched, so
+  keeping it lets them work unchanged. It carries the same information:
+  `<exp>.<hmac>`.
+- **The refresh endpoint checks `VIEW_CHANNEL`.** Discord's is documented as
+  accepting any URL. The point here is that a user who loses access to a
+  channel gets no fresh link, so it signs only attachments in channels the
+  caller can view.
+- **The rotate button stays.** Discord has no equivalent. It makes the server
+  refuse every link in a channel at once.
 
 ## Design
 
-The expiry goes inside the existing token: `<exp>.<hmac>`, where the HMAC now
-covers `fileId:fileAccessToken:exp`. The client still passes the token through
-untouched, so the URL shape does not change.
-
 ```mermaid
 flowchart LR
-    sign["Server signs link<br/>exp = next UTC midnight + 24 h"] --> load["Client loads file<br/>token passed through untouched"]
+    sign["Server signs every attachment<br/>exp ≈ 24 h (N+1)"] --> load["Client loads file<br/>token passed through untouched"]
     load --> verify["/public verifies<br/>HMAC matches and exp is in future"]
-    verify -- valid --> serve["Serves the file<br/>private, max-age = exp − now"]
-    verify -- "403: expired or rotated" --> refresh["Client refreshes<br/>files.getAccessTokens<br/>before exp, on rotation,<br/>after rejoin, or on 403"]
-    refresh --> access{"Access check<br/>VIEW_CHANNEL on each file's channel"}
+    verify -- valid --> serve["Serves the file"]
+    verify -- "404: expired or rotated (N+1)" --> refresh["Client refreshes<br/>files.refreshAccessTokens<br/>before exp, on rotation,<br/>after rejoin, or on a load failure"]
+    refresh --> access{"VIEW_CHANNEL on<br/>each file's channel"}
     access -- "member: fresh token" --> load
     access -- "not a member" --> ends["Access ends<br/>no fresh token; link dies at exp"]
 ```
 
 Revocation happens wherever a token is signed. Every signing path checks the
 caller's `VIEW_CHANNEL` on the file's channel, so a removed user's last link
-dies at its `exp`. That includes the moderator file list, which today signs on
-`MANAGE_USERS` alone.
+dies at its `exp`.
 
 **Token**
 
-- `exp` is a Unix timestamp in seconds: the next UTC midnight plus 24 hours. A
-  link therefore lives between 24 and 48 hours.
-- Every token issued for a file on the same UTC day is identical. The URL stays
-  stable all day, so the browser cache keeps working.
-- `fileAccessToken` stays in the HMAC. The rotate button still makes the
-  server refuse every link in a channel at once.
-- This mirrors Discord's signed CDN links (`ex`, `is`, `hm`, about 24 hours),
-  folded into our one opaque parameter.
+- Today: an HMAC over `fileId:fileAccessToken`, keyed by the server token.
+- From N+1: `<exp>.<hmac>`, where the HMAC covers `fileId:fileAccessToken:exp`
+  and `exp` is a Unix timestamp in seconds: the start of the current 6-hour UTC
+  window plus 24 hours. A link lives 18 to 24 hours, and every signing of a
+  file within one window gives the same URL, so browser caching keeps working.
+- `fileAccessToken` stays in the HMAC, so rotation still refuses every link in
+  a channel. A private toggle changes nothing about tokens: every attachment is
+  already signed.
 
-**Verification**
+**Verification (N+1)**
 
 - Split on the first `.`. Reject a missing or non-numeric `exp`, or one at or
   before the current time.
-- Recompute the HMAC with that `exp` and compare in constant time, as today.
-- Old-format tokens (a bare 64-character hex HMAC) are rejected. That is what
-  ends access through links issued before the change.
+- Recompute the HMAC with that `exp` and compare in constant time.
+- Require a valid token on every attachment, public channels included.
+  Old-format tokens and tokenless attachment URLs stop working, which ends
+  access through every link issued before N+1, including ones shared outside
+  the app.
+- Answer an invalid, expired or missing signature with 404, like Discord.
 
 **Caching**
 
-- Private channel responses send `private, max-age=<exp − now>, immutable`. No
-  cache that honours the header can serve a file past its link's expiry.
-- Every message attachment is `private`, public channels included. A channel
-  can turn private after an edge cached a tokenless link, and that URL does not
-  change, so the edge would keep serving it past the new token check. Until
-  expiry ships, attachments send `private, max-age=172800, immutable`.
-- Avatars, banners, emojis and the server logo keep
+- Today (#318): every attachment is `private, max-age=172800, immutable`, so no
+  shared cache keeps one. Avatars, banners, emojis and the logo are
   `public, max-age=31536000, immutable`.
-- Expiry and rotation stop the server serving a link. They do not reach a copy
-  a browser already downloaded: that browser can keep showing it without
-  contacting `/public` until its `max-age` runs out, at most 48 hours. Those
-  bytes are already on that machine, so `no-cache` would cost a revalidation on
-  every image load without taking anything back. The plan keeps browser
-  caching and only claims server-side revocation.
+- From N+1: attachments send `max-age=<exp − now>`, so no cache that honours
+  the header holds a file past its link's expiry.
+- Optional in N+1: once every attachment link is signed and expiring, the CDN
+  can cache attachments again (`public`, capped at `exp − now`). The cost is
+  that rotation stops the origin immediately, but copies already at the edge
+  live until their link expires unless someone purges. That would change
+  #318's headers again.
+- Expiry and rotation do not reach a copy a browser already downloaded. Those
+  bytes are already on that machine; the plan claims server-side revocation
+  only.
 
 **Why expiry instead of rotating on membership changes**
 
 - One place to get right. Rotation needs a hook in every path that changes
   access: role assignment, channel permission overrides, kick, ban, user
   deletion and the private toggle. A missed path is a silent hole.
-- No disruption for members who keep access. Rotation breaks every loaded link
-  in the channel each time one person leaves.
 - It also ends links that leaked outside the app, which rotation only does when
   someone remembers to press the button.
 
-## Server changes
+## Release N (implemented)
 
-The token change lives in one helper. Two of the three places that issue
-tokens pick it up without edits; the moderator file list needs a channel check
-it lacks today. The new pieces are a small route that lets the client refresh
-tokens, and an event that tells it when to.
+**Server**
 
-1. **`apps/server/src/helpers/files-crypto.ts`**
-    - `generateFileToken(fileId, channelAccessToken, now = Date.now())` computes
-      `exp` and returns `${exp}.${hmac}`.
-    - `verifyFileToken(...)` returns the parsed `exp` on success and `null`
-      otherwise, so the handler can set `max-age`.
-    - `now` is a parameter so tests can pin the clock.
-2. **`apps/server/src/http/public.ts`**
-    - Use the returned `exp` to set `private, max-age=<exp − now>, immutable` on
-      the 200, 206 and 304 responses.
-3. **Message token issuers** (`get-messages.ts:111`, `db/queries/messages.ts:47`)
-    - No code change. They already sign only for users with `VIEW_CHANNEL` on
-      the channel, and get the new format from `generateFileToken`.
-4. **Moderator file list** (`db/queries/files.ts:81`, `routers/users/get-user-info.ts`)
-    - Move signing out of `getFilesByUserId` into the route, and have the
-      query return each file's channel ID instead.
-    - Leave out files in private channels where `ctx.hasChannelPermission(channelId,
-      ChannelPermission.VIEW_CHANNEL)` fails, checked once per distinct
-      channel. Their names alone can leak private content, and the client never
-      has to render a private file it cannot open.
-    - This is an existing access-control gap. It can ship before expiry does.
-5. **New route `files.getAccessTokens({ channelId, fileIds })`**
-    - `ctx.needsChannelPermission(channelId, ChannelPermission.VIEW_CHANNEL)`,
-      the same check `messages.get` makes. Every caller refreshes one channel.
-    - Signs only files attached to messages in that channel, and only when the
-      channel is private. Other IDs are left out of the result.
-    - Caps `fileIds` at 100 per call.
-    - Returns `{ fileId, accessToken }[]`.
-6. **New event `CHANNEL_FILE_ACCESS_CHANGED { channelId }`**
-    - Published to users with `VIEW_CHANNEL`, the same audience as message
-      events (`db/publishers.ts:48`).
-    - Sent by the rotate route (`rotate-file-access-token.ts`), which sends no
-      event today.
-    - Sent by `update-channel.ts` when `private` changes in either direction.
-      Turning it on gives files loaded while the channel was public their
-      tokens; turning it off clears tokens that are no longer needed.
-    - The event serves availability, not revocation. A client that misses it
-      falls back to the rejoin and retry triggers.
+1. **Every attachment is signed** in the message list (`messages.get`), push
+   events (`getMessage` in `db/queries/messages.ts`) and the moderator file
+   list (`users.getInfo`), whatever the channel's privacy.
+2. **Moderator file list.** `getFilesByUserId` returns unsigned files with
+   their channel. `users.getInfo` leaves out files in private channels the
+   caller cannot view (checked once per channel; their names alone can leak
+   private content) and signs every other attachment. `MANAGE_USERS` alone used
+   to sign every private file.
+3. **`files.refreshAccessTokens({ fileIds })`**, up to 100 IDs from any
+   channels. Checks `VIEW_CHANNEL` once per distinct channel and signs only
+   message attachments in channels the caller can view. Unknown IDs,
+   non-attachments and files the caller cannot view are left out. Returns
+   `{ fileId, accessToken }[]`.
+4. **`CHANNEL_FILE_ACCESS_CHANGED { channelId }`**, sent by the rotate route to
+   users with `VIEW_CHANNEL`. It serves availability, not revocation: a client
+   that misses it falls back to the rejoin and retry refreshes.
 
-## Client changes
+`/public` still accepts tokenless public-channel requests and today's tokens.
 
-Every file URL is built from the store at render time, so the client keeps
-the store's tokens current instead of intercepting clicks. Cards stay plain
-links, and every way of opening one uses the current token.
+**Client**
 
-1. **Store action** `setFileAccessTokens(channelId, requestedIds, tokens)` in
-   `features/server/messages`. For each requested file in that channel's
-   loaded messages, it sets the returned token, or clears `_accessToken` when
-   the response leaves that file out. Clearing handles a channel that went
-   public: its links work without a token, and the expiry trigger stops
-   asking for them. Images, videos, audio and download cards all pick up the
-   change on the next render.
-2. **One refresh function** requests tokens for every loaded file in a
-   channel, in batches of 100, and hands each response to the store action.
-   It sends all file IDs, not only tokened ones, so a channel that just went
-   private gets tokens. A failed request changes nothing in the store.
+File URLs are built from the store at render time, so keeping the store's
+tokens current keeps every card, link and player current. Cards stay plain
+links, so no click waits on a request.
+
+1. **`setFileAccessTokens(tokens)`** sets each returned token wherever that
+   file is loaded. Files the response leaves out keep their token.
+2. **One refresh function** (`features/server/messages/file-access-refresher.ts`)
+   requests tokens in batches of 100. A file asked for again while its request
+   is in flight is requested once more after it. A failed request leaves its
+   files unchanged, and a response that lands after the client moved to another
+   server is dropped.
 3. **Refresh triggers**
-    - *Before expiry.* On mount, on window focus and on a timer, when any
-      loaded token expires within 12 hours. The client reads `exp` from the
-      token's prefix; a token with no `exp` never triggers. Refreshing 12
-      hours early absorbs client clock skew, and a refreshed token still has
-      at least 24 hours left.
-    - *On `CHANNEL_FILE_ACCESS_CHANGED`* for a channel with loaded messages.
-      This covers rotation and the private toggle.
-    - *After a confirmed rejoin*, for every channel with loaded messages. This
-      covers events missed while disconnected, and the server restart that
-      delivers release N+1. The trigger is the reconnect `joinServer` call
-      succeeding without `mustChangePassword` (`features/server/actions.ts:141-166`),
-      not the raw socket reconnect, whose server context is still
-      unauthenticated. No rejoin signal exists yet: add a counter to the server
-      store, bumped there, that this refresh and the moderator sheet both
-      watch.
-    - *On a media load failure*, once per element (next item).
-4. **Retry on failure.** When a tokened image, video or audio fails to load,
-   refresh that channel once, then render again. A second failure shows a "file
+    - *Before expiry*: on mount, window focus and a 15-minute timer, for loaded
+      files whose token expires within 12 hours. A token without `exp` never
+      triggers.
+    - *On `CHANNEL_FILE_ACCESS_CHANGED`*: that channel's loaded files.
+    - *After a confirmed rejoin* (a reconnect `joinServer` that succeeds
+      without `mustChangePassword`, signalled by a counter in the server store):
+      every loaded file. This covers rotations missed while disconnected, and
+      the server restart that delivers N+1.
+    - *On a media load failure*: the file's channel (next item).
+4. **Media players keep a working link.** A player that loaded keeps the URL
+   it loaded with when a refresh changes the stored one, so healthy images do
+   not reload and playing media does not restart. A player that has not loaded
+   yet, or that failed, takes the stored URL and is keyed by it.
+5. **Retry on failure.** A failed player first tries a newer stored link if
+   there is one. Otherwise a tokened link refreshes the channel's tokens once
+   for that link, then renders again; a link that still fails shows a "File
    unavailable" placeholder instead of nothing.
-5. **Remount on new URL.** `ImageOverride` and `VideoOverride` latch `error` and
-   never reset it (`overrides/image.tsx:15` and `:37`, `overrides/video.tsx:15`
-   and `:24`). The renderer keys them by index (`renderer/index.tsx:87` and
-   `:91`). Key them by URL instead, so a new token remounts the element with a
-   clean state.
-6. **Download cards stay as they are.** `FileCard` remains a `target="_blank"`
-   anchor (`file-card.tsx:49-54`). Left click, middle click, the context menu's
-   open-in-new-tab and copy-link all use whatever `href` the store holds. No
-   click waits on a request, so popup blockers never apply.
-7. **Moderator sheet.** Its files live in `useAdminUserInfo`
-   (`features/server/admin/hooks.ts:572`), outside the message store, so the
-   message refresh never reaches them. While open, it refetches
-   `users.getInfo` on window focus, when any listed token expires within
-   12 hours (same helper), on any `CHANNEL_FILE_ACCESS_CHANGED`, and after a
-   confirmed rejoin (the same counter). The rejoin refetch covers a rotation
-   missed while disconnected.
+6. **Moderator sheet.** Its files live outside the message store, so it
+   refreshes their tokens through the same endpoint on the same triggers:
+   expiry (timer and focus), `CHANNEL_FILE_ACCESS_CHANGED` and a confirmed
+   rejoin.
 
 **Accepted gaps**
 
-- A card opened between a rotation and the refresh landing gets a 403. The
-  next attempt works.
-- A client clock more than 12 hours slow can refresh too late and open a 403.
-  Media recovers through the retry; a card works after the next refresh
-  trigger.
+- A card opened between a rotation and the refresh landing fails once. The next
+  attempt works.
+- A client clock more than 12 hours slow can refresh too late. Media recovers
+  through the retry; a card works after the next refresh trigger.
+
+## Release N+1 (to do)
+
+1. `generateFileToken(fileId, channelAccessToken, now = Date.now())` adds `exp`;
+   `verifyFileToken` returns the parsed `exp` or `null`. `now` lets tests pin
+   the clock.
+2. `/public` requires a valid, unexpired token on every attachment, answers
+   failures with 404, and sends `max-age=<exp − now>` on 200, 206 and 304.
+3. Optionally, edge caching capped at expiry (see Caching).
 
 ## Compatibility and rollout
 
-Ship in three steps, so desktop apps already in use have the refresh code
-before any link starts expiring.
-
-1. **Cache-header change, then a purge.** Merge and deploy the
-   `Cache-Control: private` fix for message attachments, with a 48-hour browser
-   lifetime. Then run one Purge Everything in Cloudflare. No attachment is held
-   at the edge after that. Browsers may still hold copies cached under the old
-   one-year lifetime; nothing on the server can retract those.
-2. **Release N: refresh path, no expiry yet.** Add `files.getAccessTokens`,
-   `CHANNEL_FILE_ACCESS_CHANGED`, the moderator file list channel check, and
-   all the client changes. The server still issues and accepts today's
-   tokens. They carry no `exp`, so the before-expiry trigger never fires, but
-   rotation and rejoin refreshes already work.
-3. **Release N+1: turn on expiry.** Switch `generateFileToken` and
-   `verifyFileToken` to the new format. Old tokens stop validating, so every
-   link issued before this release dies at once, including ones shared outside
-   the app.
+1. **Cache-header change (#318), then a purge.** Every attachment is `private`
+   with a 48-hour browser lifetime. One Purge Everything in Cloudflare clears
+   what the edge held. Browsers may still hold copies cached under the old
+   one-year lifetime.
+2. **Release N.** Every attachment signed, the refresh endpoint, the rotation
+   event, the moderator list check and the client changes. Links keep working
+   exactly as before.
+3. **Release N+1, once desktop installs have N.** Expiry on. Every link issued
+   before it stops working at once, including public channel links shared
+   outside the app, as on Discord.
 
 **Compatibility checks**
 
-- **Browser client.** The server serves it, so it updates on deploy.
+- **Browser client.** The server serves it; open tabs pick it up on reload.
 - **Packaged desktop app.** It runs its own bundled client. The token is opaque
-  to it, so links still work on first load. A session left open past the
-  link's lifetime on an app older than release N loses its images until it
-  reloads or updates. That is an annoyance, not a security gap.
-- **Release N client, release N+1 server.** Deploying N+1 restarts the server,
-  so every client reconnects. The rejoin refresh replaces the old tokens
-  before anyone needs them.
-- **New desktop app, older self-hosted server.** The server issues no `exp`
-  and sends no `CHANNEL_FILE_ACCESS_CHANGED`. Rejoin and retry refreshes
-  call a route the server lacks; the client treats that error as no refresh.
-  Media shows the placeholder after rotation, and cards behave as they do
-  today.
-- **Rotate button.** The server refuses every link in the channel
-  immediately, and members' clients refresh on the new event. Browsers that
-  already cached a file can still show it until its `max-age` runs out.
+  to it, so links work on first load. A session left open past a link's
+  lifetime on an app older than N loses its images until it reloads or updates.
+- **Release N client, N+1 server.** Deploying N+1 restarts the server, so every
+  client reconnects, and the rejoin refresh replaces the old tokens.
+- **New desktop app, older self-hosted server.** The rotation event
+  subscription is rejected (logged as a warning) and refresh requests fail; the
+  client treats that as no refresh. Media shows the placeholder after a
+  rotation, and cards behave as they did.
 
 ## Tests and validation
 
-Unit tests pin the clock through the `now` parameter, so no test waits for a
-real expiry. The rotate button exercises the retry path by hand without waiting
-a day.
-
 **Server** (`apps/server`, `bun test`)
 
-- [ ] Token round-trips: a freshly issued token verifies and returns its `exp`.
-- [ ] A token past `exp` is rejected.
-- [ ] A token with an edited `exp` fails the HMAC check.
-- [ ] An old-format token is rejected (release N+1 only).
-- [ ] Two tokens for the same file on the same UTC day are identical. A token
-      issued at 23:59 UTC lives at least 24 hours.
-- [ ] `/public` sends `private, max-age=<exp − now>` on 200, 206 and 304, and
-      403 for an expired token.
-- [ ] `files.getAccessTokens` refuses a caller without `VIEW_CHANNEL` on the
-      named channel, signs that channel's files when it is private, leaves out
-      files from other channels and from public channels, and refuses more
-      than 100 IDs.
-- [ ] `users.getInfo` called by a `MANAGE_USERS` holder without
-      `VIEW_CHANNEL` on a private channel leaves that channel's files out, and
-      still returns public channel files without a token.
-- [ ] Rotating a channel's token, and changing `private` in either direction,
-      publish `CHANNEL_FILE_ACCESS_CHANGED` to users with `VIEW_CHANNEL` only.
-      An update that leaves `private` alone publishes nothing.
+- [x] `files.refreshAccessTokens` signs attachments across public and private
+      channels the caller can view, re-signs after rotation, leaves out files
+      in private channels the caller cannot view, unknown IDs and
+      non-attachments, and refuses more than 100 IDs.
+- [x] Message lists sign public channel attachments.
+- [x] `users.getInfo` for a `MANAGE_USERS` holder without `VIEW_CHANNEL` leaves
+      that channel's files out and signs public channel files; non-attachments
+      stay unsigned.
+- [x] Rotation publishes `CHANNEL_FILE_ACCESS_CHANGED` to users with
+      `VIEW_CHANNEL` only; channel updates, private toggles included, publish
+      nothing.
+- [ ] Token round-trips, expiry, an edited `exp`, old-format and tokenless
+      attachment requests, stable tokens within a window, 404s and
+      `max-age=<exp − now>` (N+1).
 
 **Client** (`apps/client`, `bun test`)
 
-- [ ] `setFileAccessTokens` touches only requested files in the named channel.
-      It sets returned tokens and clears `_accessToken` on requested files the
-      response leaves out.
-- [ ] The refresh check, extracted as a pure helper, never refreshes a token
-      without `exp`, and refreshes one expiring within 12 hours.
-- [ ] The refresh function sends every loaded file ID in the channel, tokened
-      or not. A failed or missing route leaves the store unchanged.
-- [ ] `CHANNEL_FILE_ACCESS_CHANGED` and a confirmed rejoin each refresh
-      channels with loaded messages, and skip channels with none. A raw socket
-      reconnect, or a rejoin that ends in `mustChangePassword`, refreshes
-      nothing.
-- [ ] An open moderator sheet refetches after a confirmed rejoin.
+- [x] `setFileAccessTokens` sets returned tokens across channels and leaves the
+      rest.
+- [x] The expiry check never refreshes a token without `exp`, and refreshes one
+      expiring within 12 hours.
+- [x] The refresh function batches by 100, applies nothing on failure, keeps
+      earlier batches when a later one fails, drops responses from a previous
+      server, and re-requests files asked for mid-flight.
+- [x] Media keeps a loaded link across refreshes, takes a newer stored link
+      after a failure, refreshes once per link, and shows the placeholder.
+- [x] The moderator sheet's signals fire on a confirmed rejoin and on
+      `CHANNEL_FILE_ACCESS_CHANGED`, not on a raw reconnect.
 
 **By hand** (the `/verify` Playwright flow)
 
-- [ ] Open a private channel with an image that is not in the browser cache,
-      press rotate in channel settings, and confirm the image recovers
-      through the retry path.
-- [ ] After the rotate, open a download card in the channel and one in the
-      moderator sheet by left click, middle click, and the context menu's
-      open-in-new-tab. Each opens the file, in the browser and in the packaged
-      desktop app.
-- [ ] Throttle the network, rotate, and open a card before the refresh lands.
-      Confirm it gets a 403 (the accepted gap) and the next attempt works.
-- [ ] Open a public channel's download card and confirm it opens unchanged.
-- [ ] With a channel and a moderator sheet open in one client, take that
-      client offline. Rotate the channel's token from a second client, then
-      bring the first back online. After it rejoins, cards in both the
-      channel and the sheet open without a focus change.
-- [ ] Make a private channel public and confirm its cards' `href`s lose the
-      `accessToken` parameter and still open.
-
-**CI**
-
-- [ ] `bun run check-types`, `bun run lint`, and `bun run knip` for the new
-      route, event and store action.
+- [x] Public and private channel cards carry `accessToken` and open.
+- [x] Rotation: cards switch to the new link, and an already-loaded image does
+      not reload.
+- [x] Rotation with the event missed: a stale image gets a real 403 and
+      recovers through the retry path; a link that keeps failing shows the
+      placeholder.
+- [x] Offline, rotate, rejoin with the moderator sheet open: both the channel
+      and the sheet hold working links without a focus change.
+- [ ] The packaged desktop app.
 
 ## Open questions
 
-- [ ] **Link lifetime.** 24 to 48 hours as proposed, or longer, such as 7 days?
-      A longer window means a removed user keeps access longer, but older
-      desktop apps break less often and files are downloaded again less often.
-- [ ] **Two releases or one?** The staged rollout costs a release cycle.
-      Shipping in one release breaks long sessions on desktop apps that have
-      not updated.
+- [ ] **Link lifetime.** 18 to 24 hours as proposed, or longer? A longer window
+      means a removed user keeps access longer, but older desktop apps break
+      less often and files are downloaded again less often.
 - [ ] **Desktop update uptake.** How quickly do desktop installs pick up a new
-      release? That sets how long to wait between release N and N+1.
-- [ ] **Links shared outside the app.** Does anyone rely on pasting private
-      channel file links elsewhere? Those links will stop working within 48
-      hours.
-- [ ] **Moderator message history.** `users.getInfo` also returns the
-      user's messages from every channel, private ones included, on
-      `MANAGE_USERS` alone (`db/queries/messages.ts:83`). That is outside this
-      plan. Is it intended for moderation, or does it need the same channel
+      release? That sets how long to wait between N and N+1.
+- [ ] **Edge caching in N+1.** Worth the rotation caveat for the bandwidth?
+- [ ] **Links pasted into messages.** Should the server re-sign attachment
+      links found in message text, as Discord does?
+- [ ] **Moderator message history.** `users.getInfo` also returns the user's
+      messages from every channel, private ones included, on `MANAGE_USERS`
+      alone. Is that intended for moderation, or does it need the same channel
       check?
