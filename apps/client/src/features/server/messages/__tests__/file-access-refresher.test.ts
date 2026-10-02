@@ -88,6 +88,30 @@ describe('createFileAccessRefresher', () => {
 		expect(applied[0]).toHaveLength(100);
 	});
 
+	it('still requests files queued while a failing request was in flight', async () => {
+		let rejectFirst: (error: Error) => void = () => {};
+		let calls = 0;
+		const { refresher, queryMock, applied } = setup((input) => {
+			calls += 1;
+			if (calls === 1) {
+				return new Promise((_resolve, reject) => {
+					rejectFirst = reject;
+				});
+			}
+			return signAll(input);
+		});
+
+		const expiring = refresher.refreshFiles([1]);
+		// A rotation queues another channel's files while the first request runs.
+		const rotation = refresher.refreshFiles([7, 8]);
+
+		rejectFirst(new Error('internal server error'));
+		await Promise.all([expiring, rotation]);
+
+		expect(queryMock.mock.calls.map(([input]) => input.fileIds)).toEqual([[1], [7, 8]]);
+		expect(applied.flat().map(({ fileId }) => fileId)).toEqual([7, 8]);
+	});
+
 	it('drops a response that lands after the client moved to another server', async () => {
 		const { query, resolveNext } = controlledQuery();
 		const { refresher, applied, switchServer } = setup(query);

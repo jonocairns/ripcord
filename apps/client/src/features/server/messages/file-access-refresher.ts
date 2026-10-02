@@ -40,11 +40,12 @@ const createFileAccessRefresher = (deps: TFileAccessRefresherDeps) => {
 				try {
 					tokens = await deps.getClient().files.refreshAccessTokens.query({ fileIds: batch });
 				} catch (error) {
-					// An older server without the route, or a dropped socket. Keep the
-					// current tokens; the next trigger tries again.
-					pendingFileIds.clear();
+					// An older server without the route, or a dropped socket. Only this
+					// batch keeps its current tokens; IDs other triggers queued in the
+					// meantime are still requested. After a dropped socket, the rejoin
+					// refresh retries everything loaded.
 					deps.onError?.(error);
-					return;
+					continue;
 				}
 
 				// File IDs only identify files within one server. Drop a response
