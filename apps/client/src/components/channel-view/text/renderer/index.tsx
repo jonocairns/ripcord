@@ -1,5 +1,4 @@
 import { FileCategory, getFileCategory, type TJoinedMessage } from '@sharkord/shared';
-import parse from 'html-react-parser';
 import { memo, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { requestConfirmation } from '@/features/dialogs/actions';
@@ -11,7 +10,7 @@ import { MessageReactions } from '../message-reactions';
 import { AudioOverride } from '../overrides/audio';
 import { ImageOverride } from '../overrides/image';
 import { VideoOverride } from '../overrides/video';
-import { serializer } from './serializer';
+import { parseMessageHtml } from './serializer';
 import type { TFoundMedia } from './types';
 
 type TMessageRendererProps = {
@@ -25,9 +24,7 @@ const MessageRenderer = memo(({ message }: TMessageRendererProps) => {
 	const { foundMedia, messageHtml } = useMemo(() => {
 		const foundMedia: TFoundMedia[] = [];
 
-		const messageHtml = parse(message.content ?? '', {
-			replace: (domNode) => serializer(domNode, (found) => foundMedia.push(found), message.id),
-		});
+		const messageHtml = parseMessageHtml(message.content ?? '', (found) => foundMedia.push(found), message.id);
 
 		return { messageHtml, foundMedia };
 	}, [message.content, message.id]);

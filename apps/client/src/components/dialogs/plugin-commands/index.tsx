@@ -15,11 +15,12 @@ import type { TCommandResponse } from './types';
 
 type TPluginCommandsDialogProps = TDialogBaseProps & {
 	pluginId: string;
+	initialCommandName?: string;
 };
 
-const PluginCommandsDialog = memo(({ isOpen, close, pluginId }: TPluginCommandsDialogProps) => {
+const PluginCommandsDialog = memo(({ isOpen, close, pluginId, initialCommandName }: TPluginCommandsDialogProps) => {
 	const commandsMap = usePluginCommands();
-	const [selectedCommand, setSelectedCommand] = useState<string>('');
+	const [selectedCommand, setSelectedCommand] = useState<string>(initialCommandName ?? '');
 	const [commandArgs, setCommandArgs] = useState<Record<string, unknown>>({});
 	const [isExecuting, setIsExecuting] = useState(false);
 	const [commandResponse, setCommandResponse] = useState<TCommandResponse | null>(null);

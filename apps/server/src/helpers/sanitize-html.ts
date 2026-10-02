@@ -1,33 +1,19 @@
+import {
+	MESSAGE_HTML_ALLOWED_ATTRIBUTES,
+	MESSAGE_HTML_ALLOWED_SCHEMES,
+	MESSAGE_HTML_DROPPED_CONTENT_TAGS,
+} from '@sharkord/shared';
 import sanitize from 'sanitize-html';
 
 const sanitizeMessageHtml = (html: string): string => {
 	return sanitize(html, {
-		// this might need some tweaking in the future
-		allowedTags: [
-			// basic text structure
-			'p',
-			'br',
-			// inline formatting
-			'strong',
-			'em',
-			'code',
-			'pre',
-			// links
-			'a',
-			// emoji (span wrapper + img fallback)
-			'span',
-			'img',
-		],
+		allowedTags: Object.keys(MESSAGE_HTML_ALLOWED_ATTRIBUTES),
 		allowedAttributes: {
-			a: ['href', 'target', 'rel'],
-			span: ['data-type', 'data-name', 'class'],
-			img: ['src', 'alt', 'draggable', 'loading', 'align', 'class'],
-			code: ['class'],
-			pre: ['class'],
-			br: ['class'],
+			...MESSAGE_HTML_ALLOWED_ATTRIBUTES,
 			'*': [],
 		},
-		allowedSchemes: ['http', 'https', 'mailto'],
+		allowedSchemes: [...MESSAGE_HTML_ALLOWED_SCHEMES],
+		nonTextTags: [...MESSAGE_HTML_DROPPED_CONTENT_TAGS],
 		// disallow any script or event handler attributes globally
 		disallowedTagsMode: 'discard',
 	});

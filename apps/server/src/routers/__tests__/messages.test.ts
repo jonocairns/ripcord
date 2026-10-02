@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { Permission } from '@sharkord/shared';
 import { initTest } from '../../__tests__/helpers';
+import { loadMockedPlugins, resetPluginMocks } from '../../__tests__/mocks';
+import { pluginManager } from '../../plugins';
 
 const SEND_AND_EDIT_MESSAGE_MAX_REQUESTS_PER_MINUTE = 60;
 
@@ -129,6 +131,32 @@ describe('messages router', () => {
 				files: [],
 			}),
 		).rejects.toThrow('Message cannot be empty.');
+	});
+
+	test('should store text naming a plugin command as a plain message', async () => {
+		await loadMockedPlugins();
+		await resetPluginMocks();
+		await pluginManager.load('plugin-b');
+
+		try {
+			const { caller } = await initTest();
+
+			await caller.messages.send({
+				channelId: 1,
+				content: `/test-command "x'></command><iframe srcdoc=&lt;script&gt;alert(1)&lt;/script&gt; "`,
+				files: [],
+			});
+
+			const { messages } = await caller.messages.get({ channelId: 1, cursor: null, limit: 50 });
+			const sentMessage = messages[0];
+
+			expect(sentMessage!.content).toStartWith('/test-command');
+			expect(sentMessage!.content).not.toContain('<command');
+			expect(sentMessage!.content).not.toContain('<iframe');
+			expect(sentMessage!.editable).toBe(true);
+		} finally {
+			await pluginManager.unloadPlugins();
+		}
 	});
 
 	test('should get messages from channel', async () => {
