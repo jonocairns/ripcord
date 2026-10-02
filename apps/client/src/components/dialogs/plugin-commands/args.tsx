@@ -5,9 +5,10 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 const getInputType = (arg: TCommandArg) => {
-	if (arg.sensitive) return 'password';
+	// numbers keep the native input, a password field would accept any text
+	if (arg.type === 'number') return 'number';
 
-	return arg.type === 'number' ? 'number' : 'text';
+	return arg.sensitive ? 'password' : 'text';
 };
 
 type TArgsProps = {

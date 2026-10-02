@@ -108,10 +108,10 @@ ctx.commands.register({
 });
 ```
 
-Arguments may be strings, numbers, or booleans. Mark sensitive arguments with
-`sensitive: true` so the commands dialog masks their input. Command handlers
-receive the invoking user id and, when applicable, the user’s current voice
-channel id.
+Arguments may be strings, numbers, or booleans. Mark sensitive string arguments
+with `sensitive: true` so the commands dialog masks their input. Command
+handlers receive the invoking user id and, when applicable, the user’s current
+voice channel id.
 
 ### Settings
 
