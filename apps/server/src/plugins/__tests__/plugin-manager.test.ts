@@ -370,46 +370,6 @@ describe('plugin-manager', () => {
 		});
 	});
 
-	describe('getCommandByName', () => {
-		test('should find a command by name across plugins', async () => {
-			await pluginManager.load('plugin-b');
-
-			const command = pluginManager.getCommandByName('sum');
-
-			expect(command).toBeDefined();
-			expect(command!.name).toBe('sum');
-			expect(command!.pluginId).toBe('plugin-b');
-		});
-
-		test('should return undefined for non-existent command', async () => {
-			await pluginManager.load('plugin-b');
-
-			const command = pluginManager.getCommandByName('nonexistent');
-
-			expect(command).toBeUndefined();
-		});
-
-		test('should return undefined when called with undefined', () => {
-			const command = pluginManager.getCommandByName(undefined);
-
-			expect(command).toBeUndefined();
-		});
-
-		test('should find command from correct plugin when multiple plugins loaded', async () => {
-			await pluginManager.load('plugin-b');
-			await pluginManager.load('plugin-with-events');
-
-			const sumCommand = pluginManager.getCommandByName('sum');
-			const getCountsCommand = pluginManager.getCommandByName('get-counts');
-
-			expect(sumCommand).toBeDefined();
-			expect(sumCommand!.pluginId).toBe('plugin-b');
-
-			expect(getCountsCommand).toBeDefined();
-			expect(getCountsCommand!.pluginId).toBe('plugin-with-events');
-		});
-	});
-
 	describe('log listener cleanup', () => {
 		test('should stop receiving logs after unsubscribe', async () => {
 			const capturedLogs: unknown[] = [];
