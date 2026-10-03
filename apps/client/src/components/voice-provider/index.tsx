@@ -10,7 +10,6 @@ import {
 import { Device } from 'mediasoup-client';
 import type { AppData, Producer, RtpCapabilities, RtpCodecCapability } from 'mediasoup-client/types';
 import {
-	createContext,
 	type MutableRefObject,
 	memo,
 	useCallback,
@@ -46,7 +45,6 @@ import {
 	selectVoiceSessionConnectionStatus,
 	type TTransportRecoveryTransition,
 	type TVoiceSessionCommand,
-	type TVoiceSessionConnectionStatus,
 	type TWatchedExternalStreamsSnapshot,
 	type TWatchedRemoteStreamsSnapshot,
 } from '@/features/server/voice/voice-session-machine';
@@ -107,7 +105,7 @@ import { useRemoteMediaConsumeRunner } from './hooks/use-remote-media-consume-ru
 import { useRemoteMediaRepairRunner } from './hooks/use-remote-media-repair-runner';
 import { useRemoteStreams } from './hooks/use-remote-streams';
 import { useScreenShareQualityGuard } from './hooks/use-screen-share-quality-guard';
-import { type TransportStatsStore, useTransportStats } from './hooks/use-transport-stats';
+import { useTransportStats } from './hooks/use-transport-stats';
 import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
@@ -141,21 +139,19 @@ import {
 	type TTransportRecoveryCircuitState,
 } from './transport-recovery-circuit';
 import { recoverTransportMicrophone } from './transport-recovery-microphone';
+import type { AudioVideoRefs, TConnectionStatus, TRepublishedLocalMediaState, TVoiceProvider } from './types';
 import { getVideoBitratePolicy, type TVideoBitrateCodec } from './video-bitrate-policy';
 import { VIDEO_DEGRADATION_PREFERENCE } from './video-encoding-constants';
-import { createVoiceActivityStore, type VoiceActivityStore } from './voice-activity';
+import { createVoiceActivityStore } from './voice-activity';
+import {
+	createEmptyAudioVideoRefs,
+	TransportStatsContext,
+	VoiceActivityContext,
+	VoiceProviderContext,
+} from './voice-provider-context';
 import { VolumeControlProvider } from './volume-control-provider';
 import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
 import { getStoredVolume, OWN_MIC_VOLUME_KEY, VOLUME_SETTINGS_UPDATED_EVENT } from './volume-control-storage';
-
-type AudioVideoRefs = {
-	videoRef: React.RefObject<HTMLVideoElement | null>;
-	audioRef: React.RefObject<HTMLAudioElement | null>;
-	screenShareRef: React.RefObject<HTMLVideoElement | null>;
-	screenShareAudioRef: React.RefObject<HTMLAudioElement | null>;
-	externalAudioRef: React.RefObject<HTMLAudioElement | null>;
-	externalVideoRef: React.RefObject<HTMLVideoElement | null>;
-};
 
 type TScreenShareStreamHandlers = {
 	onVideoTrackStarted?: () => void;
@@ -190,29 +186,10 @@ type TVoiceBootstrapResult = {
 	consumerTransportParams?: TTransportParams;
 };
 
-type TRepublishedLocalMediaState = Partial<Pick<TVoiceUserState, 'webcamEnabled' | 'sharingScreen'>>;
-
 type TLocalMediaRepublishPlan = {
 	tasks: Promise<void>[];
 	state: TRepublishedLocalMediaState;
 };
-
-type TInitResult = {
-	republishedLocalMediaState: TRepublishedLocalMediaState;
-};
-
-export type { AudioVideoRefs };
-
-const createEmptyAudioVideoRefs = (): AudioVideoRefs => ({
-	videoRef: { current: null },
-	audioRef: { current: null },
-	screenShareRef: { current: null },
-	screenShareAudioRef: { current: null },
-	externalAudioRef: { current: null },
-	externalVideoRef: { current: null },
-});
-
-type TConnectionStatus = TVoiceSessionConnectionStatus;
 
 const getVoiceSessionConnectionStatusSnapshot = (): TConnectionStatus =>
 	selectVoiceSessionConnectionStatus(getVoiceSessionState());
@@ -565,76 +542,6 @@ const createMicGainPipeline = async (
 		},
 	};
 };
-
-export type TVoiceProvider = {
-	loading: boolean;
-	connectionStatus: TConnectionStatus;
-	audioVideoRefsMap: Map<number, AudioVideoRefs>;
-	ownVoiceState: TVoiceUserState;
-	getOrCreateRefs: (remoteId: number) => AudioVideoRefs;
-	acceptStream: (remoteId: number, kind: StreamKind) => void;
-	retryRemoteMedia: (remoteId: number, kind: StreamKind) => void;
-	stopWatchingStream: (remoteId: number, kind: StreamKind) => void;
-	init: (
-		routerRtpCapabilities: RtpCapabilities,
-		channelId: number,
-		opts?: {
-			producerTransportParams?: TTransportParams;
-			consumerTransportParams?: TTransportParams;
-			existingProducers?: TRemoteProducerIds;
-			preserveLocalMedia?: boolean;
-		},
-	) => Promise<TInitResult>;
-} & Pick<
-	ReturnType<typeof useLocalStreams>,
-	'localAudioStream' | 'localVideoStream' | 'localScreenShareStream' | 'localScreenShareAudioStream'
-> &
-	Pick<ReturnType<typeof useRemoteStreams>, 'remoteUserStreams' | 'externalStreams'> &
-	Pick<
-		ReturnType<typeof useRemoteMediaSubscriptions>,
-		'pendingStreams' | 'remoteMediaSubscriptions' | 'visibleRemoteMedia'
-	> &
-	Omit<ReturnType<typeof useVoiceControls>, 'commitTerminalMicMuted'>;
-
-const VoiceProviderContext = createContext<TVoiceProvider>({
-	loading: false,
-	connectionStatus: 'disconnected',
-	audioVideoRefsMap: new Map(),
-	getOrCreateRefs: () => createEmptyAudioVideoRefs(),
-	acceptStream: () => undefined,
-	retryRemoteMedia: () => undefined,
-	stopWatchingStream: () => undefined,
-	init: () => Promise.resolve({ republishedLocalMediaState: {} }),
-	isStartingScreenShare: false,
-	setMicMuted: () => Promise.resolve(),
-	toggleMic: () => Promise.resolve(),
-	toggleSound: () => Promise.resolve(),
-	toggleWebcam: () => Promise.resolve(),
-	toggleScreenShare: () => Promise.resolve(),
-	ownVoiceState: {
-		micMuted: false,
-		soundMuted: false,
-		webcamEnabled: false,
-		sharingScreen: false,
-	},
-	localAudioStream: undefined,
-	localVideoStream: undefined,
-	localScreenShareStream: undefined,
-	localScreenShareAudioStream: undefined,
-
-	remoteUserStreams: {},
-	externalStreams: {},
-	pendingStreams: new Map(),
-	remoteMediaSubscriptions: new Map(),
-	visibleRemoteMedia: [],
-});
-
-const VoiceActivityContext = createContext<VoiceActivityStore | null>(null);
-
-// Transport stats update at 1 Hz for the whole voice session. They live in a
-// dedicated subscribe/snapshot store (separate from VoiceProviderContext) so
-// only the components that display them re-render on each sample.
-const TransportStatsContext = createContext<TransportStatsStore | null>(null);
 
 type TVoiceProviderProps = {
 	children: React.ReactNode;
@@ -4381,4 +4288,4 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	);
 });
 
-export { TransportStatsContext, VoiceActivityContext, VoiceProvider, VoiceProviderContext };
+export { VoiceProvider };
