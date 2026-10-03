@@ -22,7 +22,6 @@ import {
 import { toast } from 'sonner';
 import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
-import { channelByIdSelector } from '@/features/server/channels/selectors';
 import { useChannelCan, useIsConnected } from '@/features/server/hooks';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
@@ -58,7 +57,7 @@ import { logDebug, logVoice, reportError, traceSentrySpan } from '@/helpers/brow
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { getTrpcErrorData } from '@/helpers/trpc-error-data';
 import { useLatestRef } from '@/hooks/use-latest-ref';
-import { getTRPCClient, getTRPCClientIfInitialized, TRPCClientUnavailableError } from '@/lib/trpc';
+import { getTRPCClient, TRPCClientUnavailableError } from '@/lib/trpc';
 import { getDesktopBridge, isDesktopRuntime } from '@/runtime/desktop-bridge';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
 import {
@@ -72,12 +71,7 @@ import {
 } from '@/runtime/types';
 import type { TDeviceSettings } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
-import { getAudioOpusConfig, getScreenShareAudioOpusConfig } from './audio-producer-config';
-import {
-	resolveDefaultInputGroupId,
-	resolveDefaultInputRecoveryDecision,
-	type TDefaultInputMove,
-} from './default-input-device';
+import { getScreenShareAudioOpusConfig } from './audio-producer-config';
 import { createDesktopAppAudioPipeline, type TDesktopAppAudioPipeline } from './desktop-app-audio';
 import {
 	createDesktopAppAudioRecoveryController,
@@ -98,7 +92,7 @@ import {
 } from './hooks/session-execution-ownership';
 import { useDesktopAppAudioRecoveryLifecycle } from './hooks/use-desktop-app-audio-recovery-lifecycle';
 import { useLocalStreams } from './hooks/use-local-streams';
-import { useMicrophonePipelineControllerLifecycle } from './hooks/use-microphone-pipeline-controller-lifecycle';
+import { useMicrophone } from './hooks/use-microphone';
 import { getPendingStreamKey, type TExternalStreamTrackPresence } from './hooks/use-pending-streams';
 import { usePushMicKeybinds } from './hooks/use-push-mic-keybinds';
 import { useRemoteMediaConsumeRunner } from './hooks/use-remote-media-consume-runner';
@@ -111,26 +105,8 @@ import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
 import { useVoiceSessionExecutor } from './hooks/use-voice-session-executor';
 import { voiceSessionCommandObserver } from './hooks/voice-session-command-observer';
-import {
-	type ActivityBroadcastState,
-	resolveActivityBroadcast,
-	startLocalVoiceActivityMonitor,
-} from './local-voice-activity';
-import { createMicAudioProcessingPipeline, type TMicAudioProcessingPipeline } from './mic-audio-processing';
-import { didMicCaptureSettingsChange, resolveMicCaptureConfig } from './mic-capture-config';
-import {
-	clampVolumePercent,
-	createMicGainPipeline,
-	shouldUseMicGainPipeline,
-	type TMicGainPipeline,
-} from './mic-gain-pipeline';
-import {
-	createMicrophonePipelineController,
-	MicPipelineSupersededError,
-	type TMicrophonePipelineController,
-	type TMicrophonePreparedPipeline,
-	type TMicrophoneStartOutcome,
-} from './microphone-pipeline-controller';
+import { didMicCaptureSettingsChange } from './mic-capture-config';
+import type { TMicrophonePreparedPipeline } from './microphone-pipeline-controller';
 import { prewarmVoiceEngines } from './prewarm';
 import {
 	recordTransportRecoverySucceeded,
@@ -153,8 +129,6 @@ import {
 	VoiceProviderContext,
 } from './voice-provider-context';
 import { VolumeControlProvider } from './volume-control-provider';
-import type { TVolumeSettingsUpdatedDetail } from './volume-control-storage';
-import { getStoredVolume, OWN_MIC_VOLUME_KEY, VOLUME_SETTINGS_UPDATED_EVENT } from './volume-control-storage';
 
 type TScreenShareStreamHandlers = {
 	onVideoTrackStarted?: () => void;
@@ -199,14 +173,6 @@ const getVoiceSessionConnectionStatusSnapshot = (): TConnectionStatus =>
 
 const subscribeVoiceSessionConnectionStatus = (onStoreChange: () => void): (() => void) =>
 	subscribeVoiceSession(onStoreChange);
-
-// Debounce the burst of `devicechange` events the OS emits while a driver
-// settles before we re-check whether the system default input moved. The window
-// also gives Chromium's synthetic "default" entry time to repoint to the new
-// physical input before the first retry below.
-const DEFAULT_INPUT_DEVICE_CHANGE_DEBOUNCE_MS = 500;
-const DEFAULT_INPUT_DEVICE_CHANGE_RETRY_INTERVAL_MS = 250;
-const DEFAULT_INPUT_DEVICE_CHANGE_RETRY_WINDOW_MS = 1500;
 
 const didWebcamCaptureSettingsChange = (previousDevices: TDeviceSettings, nextDevices: TDeviceSettings) => {
 	return (
@@ -385,12 +351,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const screenShareTrackEndedHandlerRef = useRef<(() => void | Promise<void>) | undefined>(undefined);
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
-	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
-	const micPipelineMutexRef = useRef<Promise<void>>(Promise.resolve());
 	const sessionExecutionOwnershipRef = useRef(createVoiceSessionExecutionOwnership());
-	const startMicStreamRef = useRef<((isCurrent?: () => boolean) => Promise<TMicrophoneStartOutcome>) | undefined>(
-		undefined,
-	);
 	const commitTerminalMicMutedRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
@@ -547,7 +508,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const transportRecoveryCircuitRef = useRef<TTransportRecoveryCircuitState | undefined>(undefined);
 	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
 	const isConnectedRef = useLatestRef(isConnected);
-	const ownUserIdRef = useLatestRef(ownUserId);
 	const voiceSessionReconnectNonceRef = useLatestRef(voiceSessionReconnectNonce);
 
 	useEffect(() => {
@@ -834,49 +794,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		});
 	}, []);
 
-	// Updates the own ring instantly from the local fast-path and broadcasts the
-	// transition so remote peers light up our ring without waiting on the
-	// server's 250ms audio observer. A monotonic sequence number lets the server
-	// drop reordered fire-and-forget mutations — a late `false` must never
-	// clobber a newer `true`. The broadcast state is scoped to the active audio
-	// producer so a replacement's initial `false` cannot inherit authority from
-	// its predecessor. A client that can't meter locally therefore never claims
-	// server-side authority.
-	const voiceActivitySeqRef = useRef(0);
-	const activityBroadcastStateRef = useRef<ActivityBroadcastState>({
-		producerId: undefined,
-		hasAnnouncedSpeaking: false,
-	});
-
-	const applyOwnLocalActivity = useCallback(
-		(isSpeaking: boolean | undefined, producerId: string | undefined) => {
-			if (ownUserId === undefined) {
-				return;
-			}
-
-			voiceActivityStoreRef.current.setLocalUserActivity(ownUserId, isSpeaking);
-
-			// The microphone controller supplies the producer identity it fenced the
-			// activity sample against. No producer means nothing to bind to (and
-			// nothing to be speaking through).
-			const { broadcast, state } = resolveActivityBroadcast(isSpeaking, producerId, activityBroadcastStateRef.current);
-			activityBroadcastStateRef.current = state;
-
-			if (broadcast === undefined || producerId === undefined) {
-				return;
-			}
-
-			const seq = (voiceActivitySeqRef.current += 1);
-			const trpcClient = getTRPCClientIfInitialized();
-
-			if (trpcClient) {
-				void trpcClient.voice.updateActivity.mutate({ isSpeaking: broadcast, seq, producerId }).catch(() => {});
-			}
-		},
-		[ownUserId],
-	);
-	const applyOwnLocalActivityRef = useLatestRef(applyOwnLocalActivity);
-
 	useRemoteMediaConsumeRunner({
 		currentVoiceChannelId,
 		rtpCapabilities: voiceEventRtpCapabilities,
@@ -1042,179 +959,27 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		[requestVoiceRestoreOrJoin],
 	);
 
-	const microphoneControllerRef = useRef<
-		TMicrophonePipelineController<Producer<AppData>, TMicAudioProcessingPipeline, TMicGainPipeline> | undefined
-	>(undefined);
-	if (!microphoneControllerRef.current) {
-		microphoneControllerRef.current = createMicrophonePipelineController<
-			Producer<AppData>,
-			TMicAudioProcessingPipeline,
-			TMicGainPipeline
-		>({
-			getUserMedia: (constraints) =>
-				navigator.mediaDevices.getUserMedia({
-					audio: constraints,
-					video: false,
-				}),
-			createProcessingPipeline: ({ inputTrack, enabled, onRuntimeError }) =>
-				createMicAudioProcessingPipeline({
-					inputTrack,
-					wasmNoiseSuppressionEnabled: enabled,
-					onWasmError: onRuntimeError,
-				}),
-			createGainPipeline: (inputStream, volume) =>
-				shouldUseMicGainPipeline(volume) ? createMicGainPipeline(inputStream, volume) : Promise.resolve(undefined),
-			setGainVolume: (pipeline, volume) => {
-				const nextVolume = clampVolumePercent(volume) / 100;
-				const currentTime = pipeline.audioContext.currentTime;
-				pipeline.gainNode.gain.cancelScheduledValues(currentTime);
-				pipeline.gainNode.gain.setValueAtTime(nextVolume, currentTime);
-			},
-			createProducerPublicationLease: () => {
-				const transport = producerTransport.current;
-				if (!transport || transport.closed) {
-					return undefined;
-				}
-
-				return {
-					publish: (track) => {
-						const channelId = currentVoiceChannelIdRef.current;
-						const channel =
-							channelId === undefined ? undefined : channelByIdSelector(useServerStore.getState(), channelId);
-						const audioConfig = getAudioOpusConfig(channel);
-						return transport.produce({
-							track,
-							encodings: [{ maxBitrate: audioConfig.maxBitrate }],
-							codecOptions: audioConfig.codecOptions,
-							appData: { kind: StreamKind.AUDIO },
-						});
-					},
-					isCurrent: () => producerTransport.current === transport && !transport.closed,
-				};
-			},
-			publishLocalStream: (stream) => {
-				setLocalAudioStream(stream);
-				return {
-					stream,
-					remove: () => {
-						setLocalAudioStream((currentStream) => (currentStream === stream ? undefined : currentStream));
-					},
-				};
-			},
-			getProducerId: (producer) => producer.id,
-			isProducerClosed: (producer) => producer.closed,
-			closeProducer: (producer) => producer.close(),
-			observeProducerClosed: (producer, onClosed) => {
-				producer.on('@close', onClosed);
-			},
-			closeProducerOnServer: (producerId) => {
-				void closeProducerOnServer(StreamKind.AUDIO, producerId);
-			},
-			getActivityMode: () => {
-				if (!isConnectedRef.current || ownVoiceStateSelector(useServerStore.getState()).micMuted) {
-					return 'inactive';
-				}
-
-				return ownUserIdRef.current === undefined ? 'unavailable' : 'monitor';
-			},
-			startActivityMonitor: (producer, onUpdate) =>
-				startLocalVoiceActivityMonitor({
-					statsProvider: producer,
-					onUpdate,
-				}),
-			onActivityUpdate: (isSpeaking, producerId) => {
-				applyOwnLocalActivityRef.current(isSpeaking, producerId);
-			},
-			isInVoiceChannel: () => currentVoiceChannelIdRef.current !== undefined,
-			isMicMuted: () => ownVoiceStateSelector(useServerStore.getState()).micMuted,
-			reacquire: async () => {
-				return (await startMicStreamRef.current?.()) ?? { status: 'superseded' };
-			},
-			onRecoveryExhausted: (reason) => {
-				logVoice('Raw microphone recovery exhausted', { reason });
-				toast.error('Microphone capture kept disconnecting and was stopped. Unmute to try again.');
-				void commitTerminalMicMutedRef.current?.();
-			},
-			onProcessingRuntimeError: (error) => {
-				logVoice('Browser WASM voice filter runtime error', { error });
-				toast.error('Noise suppression encountered an error. Audio will continue without noise reduction.');
-			},
-			setTimeout: (handler, delayMs) => setTimeout(handler, delayMs),
-			clearTimeout: (handle) => clearTimeout(handle),
-			log: (message, context) => logVoice(message, context),
-		});
-	}
-	const microphoneController = microphoneControllerRef.current;
-	useMicrophonePipelineControllerLifecycle(microphoneController);
-
-	const applyMicGainVolume = useCallback(
-		(volume: number) => {
-			microphoneController.setGainVolume(volume);
+	const microphone = useMicrophone({
+		devices,
+		currentVoiceChannelId,
+		localAudioStream,
+		isConnected,
+		ownUserId,
+		micMuted: ownVoiceState.micMuted,
+		producerTransport,
+		setLocalAudioStream,
+		closeProducerOnServer,
+		setLocalActivity: (userId, isSpeaking) => voiceActivityStoreRef.current.setLocalUserActivity(userId, isSpeaking),
+		commitTerminalMicMuted: () => {
+			void commitTerminalMicMutedRef.current?.();
 		},
-		[microphoneController],
-	);
-
-	useEffect(() => {
-		// These render values trigger re-evaluation; the controller reads their
-		// latest ref/store values through its injected activity-mode adapter.
-		void isConnected;
-		void ownUserId;
-		void ownVoiceState.micMuted;
-		microphoneController.syncActivity();
-	}, [isConnected, microphoneController, ownUserId, ownVoiceState.micMuted]);
-
-	useEffect(() => {
-		const handleVolumeSettingsUpdated = (event: Event) => {
-			if (!(event instanceof CustomEvent)) return;
-			const detail: TVolumeSettingsUpdatedDetail = event.detail;
-
-			if (detail.key !== OWN_MIC_VOLUME_KEY) {
-				return;
-			}
-
-			const nextVolume = clampVolumePercent(detail.volume);
-			const hasMicGainPipeline = microphoneController.hasGainPipeline();
-			const nextShouldUseMicGainPipeline = shouldUseMicGainPipeline(nextVolume);
-
-			if (hasMicGainPipeline !== nextShouldUseMicGainPipeline) {
-				if (
-					currentVoiceChannelId !== undefined &&
-					localAudioStream !== undefined &&
-					micVolumeRestartPromiseRef.current === undefined
-				) {
-					// Crossing the neutral-volume threshold adds or removes the
-					// gain graph entirely, so live gain updates are not enough.
-					logVoice('Rebuilding microphone pipeline after mic volume crossed neutral threshold', {
-						nextVolume,
-						hadMicGainPipeline: hasMicGainPipeline,
-						nextShouldUseMicGainPipeline,
-					});
-
-					micVolumeRestartPromiseRef.current = (async () => {
-						const outcome = await startMicStreamRef.current?.();
-						if (outcome?.status === 'failed') {
-							logVoice('Failed to rebuild microphone pipeline after mic volume change', {
-								error: outcome.error,
-								nextVolume,
-							});
-							toast.error('Failed to apply microphone volume');
-						}
-						micVolumeRestartPromiseRef.current = undefined;
-					})();
-				}
-
-				return;
-			}
-
-			applyMicGainVolume(detail.volume);
-		};
-
-		window.addEventListener(VOLUME_SETTINGS_UPDATED_EVENT, handleVolumeSettingsUpdated);
-
-		return () => {
-			window.removeEventListener(VOLUME_SETTINGS_UPDATED_EVENT, handleVolumeSettingsUpdated);
-		};
-	}, [applyMicGainVolume, currentVoiceChannelId, localAudioStream, microphoneController]);
+	});
+	const {
+		cleanup: cleanupMicAudioPipeline,
+		prepare: prepareMicPipeline,
+		publish: produceMicTrack,
+		start: startMicStream,
+	} = microphone;
 
 	const publishWebcamTrack = useCallback(
 		async (
@@ -1507,82 +1272,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		active: localScreenShareStream !== undefined,
 	});
 
-	const cleanupMicAudioPipeline = useCallback(() => microphoneController.cleanup(), [microphoneController]);
-
-	// Acquire mic stream and build the processing pipeline (WASM denoise + gain).
-	// This has no dependency on the mediasoup device or transports, so it can run
-	// concurrently with device.load() and transport creation during voice join.
-	const prepareMicPipeline = useCallback(
-		async (isCurrent?: () => boolean): Promise<TMicrophonePreparedPipeline> => {
-			const micCaptureConfig = resolveMicCaptureConfig(devices);
-
-			return microphoneController.prepare({
-				...micCaptureConfig,
-				gainVolume: getStoredVolume(OWN_MIC_VOLUME_KEY),
-				selectedMicrophoneId: devices.microphoneId,
-				isCurrent,
-			});
-		},
-		[devices, microphoneController],
-	);
-
-	// Attach the prepared mic pipeline to the producer transport. Must be called
-	// after the producer transport is ready.
-	const produceMicTrack = useCallback(
-		async (prepared: TMicrophonePreparedPipeline, isCurrent?: () => boolean) => {
-			await microphoneController.publish({ source: prepared, isCurrent });
-		},
-		[microphoneController],
-	);
-
-	const startMicStream = useCallback(
-		async (isCurrent?: () => boolean): Promise<TMicrophoneStartOutcome> => {
-			// Capture provider lifetime before entering the mutex. A request queued by
-			// the pre-replay lifecycle must not acquire media after reactivation.
-			const lifecycleLease = microphoneController.createLifecycleLease();
-			const isStartCurrent = (): boolean => lifecycleLease.isCurrent() && (isCurrent?.() ?? true);
-
-			// Serialize mic pipeline operations so concurrent callers (device change,
-			// unmute, volume threshold) queue rather than race each other.
-			const previousMutex = micPipelineMutexRef.current;
-			let resolve: () => void = () => {};
-			micPipelineMutexRef.current = new Promise<void>((r) => {
-				resolve = r;
-			});
-
-			let prepared: TMicrophonePreparedPipeline | undefined;
-
-			try {
-				await previousMutex;
-				if (!isStartCurrent()) {
-					return { status: 'superseded' };
-				}
-				logVoice('Starting microphone stream');
-				prepared = await prepareMicPipeline(isStartCurrent);
-				await produceMicTrack(prepared, isStartCurrent);
-				return { status: 'started' };
-			} catch (error) {
-				logVoice('Error starting microphone stream', { error });
-
-				// A failed prepare cleans up after itself (prepared stays undefined);
-				// after a successful prepare, tear down only while this build still
-				// owns the shared refs so a superseded start cannot destroy the
-				// pipeline a newer build installed.
-				if (prepared && microphoneController.owns(prepared)) {
-					await cleanupMicAudioPipeline();
-				}
-
-				return error instanceof MicPipelineSupersededError || !isStartCurrent()
-					? { status: 'superseded' }
-					: { status: 'failed', error };
-			} finally {
-				resolve();
-			}
-		},
-		[prepareMicPipeline, produceMicTrack, cleanupMicAudioPipeline, microphoneController],
-	);
-	startMicStreamRef.current = startMicStream;
-
 	const startWebcamStream = useCallback(async () => {
 		try {
 			logVoice('Starting webcam stream');
@@ -1679,144 +1368,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startWebcamStream,
 		stopWebcamStream,
 	]);
-
-	// A "Default" mic selection follows the *system* default input, but the
-	// microphoneId-diff restart above can't see that move (its id stays
-	// undefined). When a driver like NVIDIA Broadcast starts, it makes itself the
-	// default mic and fires a `devicechange`, yet our open capture stays pinned to
-	// the previous device — so peers keep hearing the unfiltered input until a
-	// manual rejoin. Re-acquire when the resolved system default no longer matches
-	// the device we're actually capturing. Only relevant for a Default selection;
-	// a specific device is handled by didMicCaptureSettingsChange.
-	useEffect(() => {
-		if (currentVoiceChannelId === undefined || devices.microphoneId !== undefined) {
-			return;
-		}
-
-		const mediaDevices = navigator.mediaDevices;
-
-		if (!mediaDevices?.addEventListener) {
-			return;
-		}
-
-		let debounceTimer: ReturnType<typeof setTimeout> | undefined;
-		let retryTimer: ReturnType<typeof setTimeout> | undefined;
-		let defaultInputCheckGeneration = 0;
-		let handledDefaultInputMove: TDefaultInputMove | undefined;
-
-		const clearRetryTimer = () => {
-			if (retryTimer !== undefined) {
-				clearTimeout(retryTimer);
-				retryTimer = undefined;
-			}
-		};
-
-		const cancelDefaultInputChecks = () => {
-			defaultInputCheckGeneration += 1;
-			clearRetryTimer();
-		};
-
-		const checkSystemDefaultInput = async (): Promise<'handled' | 'pending' | 'stop'> => {
-			const rawTrack = microphoneController.getRawTrack();
-
-			if (rawTrack?.readyState !== 'live') {
-				return 'stop';
-			}
-
-			let inputs: { deviceId: string; groupId: string }[];
-
-			try {
-				inputs = (await mediaDevices.enumerateDevices())
-					.filter((device) => device.kind === 'audioinput')
-					.map((device) => ({ deviceId: device.deviceId, groupId: device.groupId }));
-			} catch (error) {
-				logVoice('Failed to inspect default input after device change', { error });
-				return 'pending';
-			}
-
-			const capturedGroupId = rawTrack.getSettings().groupId;
-			const defaultGroupId = resolveDefaultInputGroupId(inputs);
-			const decision = resolveDefaultInputRecoveryDecision({
-				capturedGroupId,
-				defaultGroupId,
-				micMuted: ownVoiceStateSelector(useServerStore.getState()).micMuted,
-				handledMove: handledDefaultInputMove,
-			});
-			handledDefaultInputMove = decision.handledMove;
-
-			if (decision.action === 'wait') {
-				return 'pending';
-			}
-			if (decision.action === 'ignore-duplicate') {
-				return 'stop';
-			}
-
-			if (decision.action === 'teardown-for-unmute') {
-				logVoice('System default input moved while muted, tearing down mic for next unmute', {
-					capturedGroupId,
-					defaultGroupId,
-				});
-				void cleanupMicAudioPipeline();
-				return 'handled';
-			}
-
-			logVoice('System default input moved under a Default selection, re-acquiring mic', {
-				capturedGroupId,
-				defaultGroupId,
-			});
-
-			// Recovery owns the bounded retry budget across capture/publication
-			// failures as well as later loss from a successfully replaced track.
-			await microphoneController.recover('default-input-move');
-			return 'handled';
-		};
-
-		const startDefaultInputMoveChecks = () => {
-			const generation = (defaultInputCheckGeneration += 1);
-			const retryUntilMs = Date.now() + DEFAULT_INPUT_DEVICE_CHANGE_RETRY_WINDOW_MS;
-
-			const runCheck = async () => {
-				retryTimer = undefined;
-
-				const result = await checkSystemDefaultInput();
-
-				if (generation !== defaultInputCheckGeneration) {
-					return;
-				}
-
-				if (result !== 'pending' || Date.now() >= retryUntilMs) {
-					return;
-				}
-
-				retryTimer = setTimeout(runCheck, DEFAULT_INPUT_DEVICE_CHANGE_RETRY_INTERVAL_MS);
-			};
-
-			void runCheck();
-		};
-
-		const handleDeviceChange = () => {
-			if (debounceTimer !== undefined) {
-				clearTimeout(debounceTimer);
-			}
-			cancelDefaultInputChecks();
-
-			debounceTimer = setTimeout(() => {
-				debounceTimer = undefined;
-				startDefaultInputMoveChecks();
-			}, DEFAULT_INPUT_DEVICE_CHANGE_DEBOUNCE_MS);
-		};
-
-		mediaDevices.addEventListener('devicechange', handleDeviceChange);
-
-		return () => {
-			if (debounceTimer !== undefined) {
-				clearTimeout(debounceTimer);
-			}
-			cancelDefaultInputChecks();
-
-			mediaDevices.removeEventListener('devicechange', handleDeviceChange);
-		};
-	}, [cleanupMicAudioPipeline, currentVoiceChannelId, devices.microphoneId, microphoneController]);
 
 	const cleanupDesktopAppAudio = useCallback(
 		async ({
@@ -2987,7 +2538,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				isCurrentRecovery?: () => boolean;
 			},
 		) => {
-			const microphoneLifecycleLease = microphoneController.createLifecycleLease();
+			const microphoneLifecycleLease = microphone.createLifecycleLease();
 			const ownsSessionExecution = claimVoiceSessionExecution(sessionExecutionOwnershipRef.current);
 			const isCurrent = (): boolean =>
 				microphoneLifecycleLease.isCurrent() &&
@@ -3086,7 +2637,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 								// Tear down only while this build's pipeline is still the
 								// installed one — a detached attempt failing late must not
 								// destroy the successor's mic.
-								if (microphoneController.owns(micPrepResult)) {
+								if (microphone.owns(micPrepResult)) {
 									await cleanupMicAudioPipeline();
 								}
 							}
@@ -3133,7 +2684,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 						// detaches it) may settle this catch after its successor installed
 						// a new pipeline — destroying it here would kill the live mic.
 						// When the prep itself failed, it already cleaned up after itself.
-						if (preparedMic && microphoneController.owns(preparedMic)) {
+						if (preparedMic && microphone.owns(preparedMic)) {
 							await cleanupMicAudioPipeline();
 						}
 
@@ -3155,7 +2706,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			prepareMicPipeline,
 			produceMicTrack,
 			cleanupMicAudioPipeline,
-			microphoneController,
+			microphone,
 			createProducerTransport,
 			createConsumerTransport,
 			consumeExistingProducers,
@@ -3312,7 +2863,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 						const currentAudioStream = localAudioStreamRef.current;
 						const currentAudioTrack = currentAudioStream?.getAudioTracks()[0];
-						const startRecoveryMic = startMicStreamRef.current;
 						republishTasks.push(
 							recoverTransportMicrophone(
 								{
@@ -3323,9 +2873,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 									currentTrackLive: currentAudioTrack?.readyState === 'live',
 								},
 								{
-									start: startRecoveryMic === undefined ? undefined : () => startRecoveryMic(isCurrentAttempt),
-									publishCurrent: () =>
-										microphoneController.publish({ source: 'current', isCurrent: isCurrentAttempt }),
+									start: () => microphone.start(isCurrentAttempt),
+									publishCurrent: () => microphone.publish('current', isCurrentAttempt),
 									onStartFailed: (error) => {
 										logVoice('Microphone restart failed during transport recovery; continuing muted', { error });
 										void commitTerminalMicMutedRef.current?.();
@@ -3402,7 +2951,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			ensureVoiceDeviceLoaded,
 			producerTransport,
 			consumerTransport,
-			microphoneController,
+			microphone,
 			rehydrateWatchIntentOnly,
 			resetStats,
 			rejoinVoiceSession,
@@ -3585,13 +3134,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		},
 	});
 
-	const setMicProcessingMuted = useCallback(
-		(micMuted: boolean) => {
-			microphoneController.setMuted(micMuted);
-		},
-		[microphoneController],
-	);
-
 	const {
 		isStartingScreenShare,
 		setMicMuted,
@@ -3603,7 +3145,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	} = useVoiceControls({
 		startMicStream,
 		localAudioStream,
-		setMicProcessingMuted,
+		setMicProcessingMuted: microphone.setMuted,
 		startWebcamStream,
 		stopWebcamStream,
 		startScreenShareStream,
