@@ -13,3 +13,7 @@ export const publicServerSettingsSelector = (state: IServerState) => state.publi
 export const pluginsEnabledSelector = (state: IServerState) => !!state.publicSettings?.enablePlugins;
 
 export const infoSelector = (state: IServerState) => state.info;
+
+export const serverRejoinNonceSelector = (state: IServerState) => state.serverRejoinNonce;
+
+export const fileAccessChangeNonceSelector = (state: IServerState) => state.fileAccessChangeNonce;

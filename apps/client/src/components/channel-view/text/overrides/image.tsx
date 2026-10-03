@@ -8,21 +8,30 @@ type TImageOverrideProps = {
 	src: string;
 	alt?: string;
 	title?: string;
+	// Where "Open in new tab" points; defaults to `src`.
+	linkUrl?: string;
+	onLoaded?: () => void;
+	onError?: () => void;
 };
 
-const ImageOverride = memo(({ src, alt }: TImageOverrideProps) => {
+const ImageOverride = memo(({ src, alt, linkUrl, onLoaded, onError: onLoadError }: TImageOverrideProps) => {
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState(false);
 
-	const onLoad = useCallback((event: React.SyntheticEvent<HTMLImageElement>) => {
-		setLoading(false);
-		// @ts-expect-error - green what is your problem green what is your problem me say alone ramp
-		event.target.style.opacity = 1;
-	}, []);
+	const onLoad = useCallback(
+		(event: React.SyntheticEvent<HTMLImageElement>) => {
+			setLoading(false);
+			// @ts-expect-error - green what is your problem green what is your problem me say alone ramp
+			event.target.style.opacity = 1;
+			onLoaded?.();
+		},
+		[onLoaded],
+	);
 
 	const onError = useCallback(() => {
 		setError(true);
-	}, []);
+		onLoadError?.();
+	}, [onLoadError]);
 
 	useEffect(() => {
 		setTimeout(() => {
@@ -52,7 +61,7 @@ const ImageOverride = memo(({ src, alt }: TImageOverrideProps) => {
 				/>
 			)}
 
-			<LinkOverride link={src} label="Open in new tab" />
+			<LinkOverride link={linkUrl ?? src} label="Open in new tab" />
 		</OverrideLayout>
 	);
 });

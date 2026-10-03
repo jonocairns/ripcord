@@ -23,7 +23,6 @@ const getMessage = async (messageId: number): Promise<TJoinedMessage | undefined
 	const channel = await db
 		.select({
 			fileAccessToken: channels.fileAccessToken,
-			private: channels.private,
 		})
 		.from(channels)
 		.where(eq(channels.id, message.channelId))
@@ -40,16 +39,11 @@ const getMessage = async (messageId: number): Promise<TJoinedMessage | undefined
 		.innerJoin(files, eq(messageFiles.fileId, files.id))
 		.where(eq(messageFiles.messageId, messageId));
 
-	const filesForMessage: TFile[] = fileRows.map((r) => {
-		if (channel.private) {
-			return {
-				...r.file,
-				_accessToken: generateFileToken(r.file.id, channel.fileAccessToken),
-			};
-		}
-
-		return r.file;
-	});
+	// Every attachment is signed, whatever the channel's privacy.
+	const filesForMessage: TFile[] = fileRows.map((r) => ({
+		...r.file,
+		_accessToken: generateFileToken(r.file.id, channel.fileAccessToken),
+	}));
 
 	const reactionRows = await db
 		.select({

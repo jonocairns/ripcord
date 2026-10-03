@@ -9,15 +9,18 @@ import '@vidstack/react/player/styles/default/layouts/video.css';
 
 type TVideoOverrideProps = {
 	src: string;
+	onLoaded?: () => void;
+	onError?: () => void;
 };
 
-const VideoOverride = memo(({ src }: TVideoOverrideProps) => {
+const VideoOverride = memo(({ src, onLoaded, onError: onLoadError }: TVideoOverrideProps) => {
 	const [error, setError] = useState(false);
 	const playerRef = useRef<MediaPlayerInstance>(null);
 
 	const onError = useCallback(() => {
 		setError(true);
-	}, []);
+		onLoadError?.();
+	}, [onLoadError]);
 
 	const mediaPreferences = useSyncSharedMediaPreferences(playerRef);
 
@@ -32,6 +35,7 @@ const VideoOverride = memo(({ src }: TVideoOverrideProps) => {
 					load="visible"
 					viewType="video"
 					storage="ripcord-media"
+					onCanPlay={onLoaded}
 					onError={onError}
 					aspectRatio="16/9"
 					volume={mediaPreferences.volume}

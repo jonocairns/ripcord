@@ -25,9 +25,14 @@ const onChannelReadStatesDeltaRoute = protectedProcedure.subscription(async ({ c
 	return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.CHANNEL_READ_STATES_DELTA);
 });
 
+const onChannelFileAccessChangeRoute = protectedProcedure.subscription(async ({ ctx }) => {
+	return ctx.pubsub.subscribeFor(ctx.userId, ServerEvents.CHANNEL_FILE_ACCESS_CHANGED);
+});
+
 export {
 	onChannelCreateRoute,
 	onChannelDeleteRoute,
+	onChannelFileAccessChangeRoute,
 	onChannelPermissionsUpdateRoute,
 	onChannelReadStatesDeltaRoute,
 	onChannelReadStatesUpdateRoute,

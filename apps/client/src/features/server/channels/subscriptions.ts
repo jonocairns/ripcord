@@ -1,4 +1,5 @@
 import { getTRPCClient } from '@/lib/trpc';
+import { handleChannelFileAccessChanged } from '../messages/actions';
 import { bufferReconnectSnapshotEvent } from '../reconnect-event-buffer';
 import { addChannel, removeChannel, setChannelPermissions, setChannelReadState, updateChannel } from './actions';
 
@@ -83,6 +84,15 @@ const subscribeToChannels = () => {
 		onError: (err) => console.error('onChannelReadStatesDelta subscription error:', err),
 	});
 
+	// A refresh fetches current tokens, so it needs no reconnect buffering; the
+	// rejoin refresh covers events missed while disconnected.
+	const onChannelFileAccessChangeSub = trpc.channels.onFileAccessChange.subscribe(undefined, {
+		onData: ({ channelId }) => handleChannelFileAccessChanged(channelId),
+		// Servers older than this event reject the subscription. Warn instead of
+		// error so that expected case stays out of error reporting.
+		onError: (err) => console.warn('onChannelFileAccessChange subscription error:', err),
+	});
+
 	return () => {
 		onChannelCreateSub.unsubscribe();
 		onChannelDeleteSub.unsubscribe();
@@ -90,6 +100,7 @@ const subscribeToChannels = () => {
 		onChannelPermissionsUpdateSub.unsubscribe();
 		onChannelReadStatesUpdateSub.unsubscribe();
 		onChannelReadStatesDeltaSub.unsubscribe();
+		onChannelFileAccessChangeSub.unsubscribe();
 	};
 };
 

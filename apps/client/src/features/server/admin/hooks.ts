@@ -21,12 +21,23 @@ import {
 	type TStorageSettings,
 } from '@sharkord/shared';
 import { filesize } from 'filesize';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { requestConfirmation } from '@/features/dialogs/actions';
+import { logDebug } from '@/helpers/browser-logger';
 import { parseTrpcErrors, type TTrpcErrors } from '@/helpers/parse-trpc-errors';
 import { useForm } from '@/hooks/use-form';
+import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getTRPCClient } from '@/lib/trpc';
+import { createFileAccessRefresher } from '../messages/file-access-refresher';
+import {
+	applyFileAccessTokensToFiles,
+	FILE_ACCESS_TOKEN_CHECK_INTERVAL_MS,
+	getExpiringFileIds,
+	getFileIds,
+} from '../messages/file-access-tokens';
+import { getFileLinkVersion, subscribeToFileListInvalidations } from '../nonce-signals';
+import { useServerStore } from '../slice';
 // TODO: review this whole file for optimizations and improvements
 
 export const useAdminGeneral = () => {
@@ -575,8 +586,26 @@ export const useAdminUserInfo = (userId: number) => {
 	const [logins, setLogins] = useState<TLogin[]>([]);
 	const [files, setFiles] = useState<TFile[]>([]);
 	const [messages, setMessages] = useState<TMessage[]>([]);
+	const filesRef = useLatestRef(files);
+	const userIdRef = useLatestRef(userId);
+	const requestCountRef = useRef(0);
+	const appliedRequestIdRef = useRef(0);
+
+	const fileAccessRefresher = useMemo(
+		() =>
+			createFileAccessRefresher({
+				getClient: () => getTRPCClient(),
+				getServerId: () => useServerStore.getState().serverId,
+				applyTokens: (tokens) => setFiles((current) => applyFileAccessTokensToFiles(current, tokens)),
+				onError: (error) => logDebug('Moderator file link refresh failed', error),
+			}),
+		[],
+	);
 
 	const fetchUser = useCallback(async () => {
+		const requestId = ++requestCountRef.current;
+		const fileLinkVersion = getFileLinkVersion();
+
 		setLoading(true);
 
 		const trpc = getTRPCClient();
@@ -584,16 +613,54 @@ export const useAdminUserInfo = (userId: number) => {
 			userId,
 		});
 
+		// Drop a response for a user the sheet no longer shows, or one older than
+		// data already applied.
+		if (userId !== userIdRef.current || requestId < appliedRequestIdRef.current) return;
+
+		appliedRequestIdRef.current = requestId;
 		setUser(user);
 		setLoading(false);
 		setLogins(logins);
 		setFiles(files);
 		setMessages(messages);
-	}, [userId]);
+
+		// A rotation or rejoin during the request may already have refreshed links
+		// that this response just replaced with older ones.
+		if (getFileLinkVersion() !== fileLinkVersion) {
+			void fileAccessRefresher.refreshFiles(getFileIds(files.filter((file) => file._accessToken)));
+		}
+	}, [userId, fileAccessRefresher]);
 
 	useEffect(() => {
 		fetchUser();
 	}, [fetchUser]);
+
+	// The listed files live outside the message store, so their links are
+	// refreshed here, through the same endpoint and on the same triggers: when a
+	// token is close to expiry (timer and window focus), on
+	// CHANNEL_FILE_ACCESS_CHANGED, and after a confirmed rejoin, which covers a
+	// rotation missed while disconnected.
+	useEffect(() => {
+		// Only attachments carry a token; avatars and emojis need no refresh.
+		const refreshListedFiles = () => {
+			void fileAccessRefresher.refreshFiles(getFileIds(filesRef.current.filter((file) => file._accessToken)));
+		};
+
+		const refreshExpiringFiles = () => {
+			void fileAccessRefresher.refreshFiles(getExpiringFileIds(filesRef.current, Date.now()));
+		};
+
+		const interval = setInterval(refreshExpiringFiles, FILE_ACCESS_TOKEN_CHECK_INTERVAL_MS);
+		const unsubscribeFromInvalidations = subscribeToFileListInvalidations(refreshListedFiles);
+
+		window.addEventListener('focus', refreshExpiringFiles);
+
+		return () => {
+			clearInterval(interval);
+			unsubscribeFromInvalidations();
+			window.removeEventListener('focus', refreshExpiringFiles);
+		};
+	}, [fileAccessRefresher]);
 
 	return {
 		user,

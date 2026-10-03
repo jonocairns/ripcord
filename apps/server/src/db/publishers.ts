@@ -149,6 +149,14 @@ const publishChannel = async (channelId: number | undefined, type: 'create' | 'u
 	pubsub.publishFor(await getChannelViewerIds(channelId), targetEvent, toPublicChannel(channel));
 };
 
+// Tells viewers of `channelId` that its file access token rotated, so clients
+// refresh the links on the files they have loaded. It serves availability, not
+// revocation: a client that misses it falls back to its rejoin and media-retry
+// refreshes.
+const publishChannelFileAccessChanged = async (channelId: number) => {
+	pubsub.publishFor(await getChannelViewerIds(channelId), ServerEvents.CHANNEL_FILE_ACCESS_CHANGED, { channelId });
+};
+
 // After a change to who may view `channelId` (channel permission edits, the
 // channel turning private or public), sends each of `userIds` a create if they
 // can see it now and a delete if they cannot. Both are idempotent on clients,
@@ -268,6 +276,7 @@ const publishPluginCommands = async () => {
 export {
 	publishCategory,
 	publishChannel,
+	publishChannelFileAccessChanged,
 	publishChannelPermissions,
 	publishChannelVisibility,
 	publishEmoji,
