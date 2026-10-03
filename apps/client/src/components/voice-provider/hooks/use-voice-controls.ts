@@ -17,6 +17,7 @@ import type { TDesktopScreenShareSelection } from '@/runtime/types';
 import type { TMicrophoneStartOutcome } from '../microphone-pipeline-controller';
 import { resolveMicOperationFailurePolicy } from '../push-mic-state';
 import { shouldApplyVoiceStateOperationResult, startVoiceStateOperation } from '../voice-state-operation';
+import { VoiceSessionExecutionSupersededError } from './session-execution-ownership';
 import { useScreenShareStage } from './use-screen-share-stage';
 
 type TUseVoiceControlsParams = {
@@ -355,6 +356,7 @@ const useVoiceControls = ({
 				webcamEnabled: newState,
 			});
 		} catch (error) {
+			if (error instanceof VoiceSessionExecutionSupersededError) return;
 			if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
 				return;
 			}
@@ -452,6 +454,7 @@ const useVoiceControls = ({
 				sharingScreen: false,
 			});
 		} catch (error) {
+			if (error instanceof VoiceSessionExecutionSupersededError) return;
 			if (newState && transition.isCurrent()) {
 				transition.invalidate();
 				stopScreenShareStream();

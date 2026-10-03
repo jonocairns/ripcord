@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { StreamKind } from '@sharkord/shared';
 import type { AppData, Producer } from 'mediasoup-client/types';
 import { ScreenAudioMode, type TDesktopBridge } from '@/runtime/types';
@@ -10,6 +10,7 @@ const createScreenFixture = () => {
 	const audio = {
 		stop: mock(async () => {}),
 		awaitTeardown: mock(async () => {}),
+		discardDisplayAudio: mock((_stream: MediaStream) => {}),
 		adoptDisplayAudio: mock((_stream: MediaStream) => {}),
 		start: mock(async (_options: { displayStream: MediaStream }) => 'none' as const),
 	};
@@ -29,12 +30,21 @@ const createScreenFixture = () => {
 	};
 	return { ...f, deps, audio };
 };
+const disposers: Array<() => void> = [];
+afterEach(() => {
+	for (const dispose of disposers.splice(0)) dispose();
+});
+const createMountedScreenShare = (...args: Parameters<typeof createScreenShareController>) => {
+	const controller = createScreenShareController(...args);
+	disposers.push(mountScreenShareController(controller));
+	return controller;
+};
 describe('screen-video production owner', () => {
 	it('notifies video start before deferred optional audio, using unchanged display constraints', async () => {
 		const f = createScreenFixture();
 		const pending = deferred<'none'>();
 		f.audio.start.mockImplementation(() => pending.promise);
-		const c = createScreenShareController(f.deps);
+		const c = createMountedScreenShare(f.deps);
 		const started = mock(() => {});
 		expect(f.acquire).not.toHaveBeenCalled();
 		const start = c.start(undefined, { onVideoTrackStarted: started });
@@ -54,7 +64,7 @@ describe('screen-video production owner', () => {
 		const f = createScreenFixture();
 		const capture = createCapture(true);
 		f.acquisitions.push(Promise.resolve(capture.stream));
-		const c = createScreenShareController(f.deps);
+		const c = createMountedScreenShare(f.deps);
 		await c.start();
 		c.stop();
 		expect(capture.videoTrack.readyState).toBe('ended');
@@ -64,7 +74,7 @@ describe('screen-video production owner', () => {
 	});
 	it('detaches and republishes surviving capture while retaining its ended handler', async () => {
 		const f = createScreenFixture();
-		const c = createScreenShareController(f.deps);
+		const c = createMountedScreenShare(f.deps);
 		const ended = mock(() => {});
 		await c.start(undefined, { onVideoTrackEnded: ended });
 		const capture = f.captures[0];
@@ -80,7 +90,7 @@ describe('screen-video production owner', () => {
 	});
 	it('retains capture after failed republish and stops it on lifecycle cleanup', async () => {
 		const f = createScreenFixture();
-		const c = createScreenShareController(f.deps);
+		const c = createMountedScreenShare(f.deps);
 		const unmount = mountScreenShareController(c);
 		await c.start();
 		c.detachProducer();
@@ -95,7 +105,7 @@ describe('screen-video production owner', () => {
 		const f = createScreenFixture();
 		const pending = deferred<Producer<AppData>>();
 		f.publications.push(pending.promise);
-		const c = createScreenShareController(f.deps);
+		const c = createMountedScreenShare(f.deps);
 		const start = c.start();
 		await flush();
 		f.replaceTransport();
@@ -111,7 +121,7 @@ describe('screen-video production owner', () => {
 		const prepare = mock(async () => ({ effectiveMode: ScreenAudioMode.APP, warning: 'mode changed' }));
 		const reset = mock(async () => {});
 		const bridge = { prepareScreenShare: prepare, resetScreenSharePicker: reset } as unknown as TDesktopBridge;
-		const c = createScreenShareController({ ...f.deps, getDesktopBridge: () => bridge });
+		const c = createMountedScreenShare({ ...f.deps, getDesktopBridge: () => bridge });
 		const selection = {
 			sourceId: 'window:42',
 			audioMode: ScreenAudioMode.APP,
@@ -138,7 +148,7 @@ describe('screen-video production owner', () => {
 			getCapabilities: mock(async () => ({})),
 		} as unknown as TDesktopBridge;
 		let loaded = false;
-		const c = createScreenShareController({
+		const c = createMountedScreenShare({
 			...f.deps,
 			getDesktopBridge: () => bridge,
 			requestSelection: async (input) => {
@@ -154,5 +164,88 @@ describe('screen-video production owner', () => {
 		expect(loaded).toBe(true);
 		expect(f.acquire).not.toHaveBeenCalled();
 		c.stop();
+	});
+});
+
+describe('screen startup boundary fencing', () => {
+	for (const phase of ['teardown', 'preparation', 'capabilities', 'optional audio'] as const) {
+		it.each(['stop', 'supersession', 'cleanup'] as const)(`fences %s during ${phase}`, async (action) => {
+			const f = createScreenFixture();
+			const pending = deferred<void>();
+			const bridge = {
+				prepareScreenShare: async () => {
+					if (phase === 'preparation') await pending.promise;
+					return { requestedMode: ScreenAudioMode.SYSTEM, effectiveMode: ScreenAudioMode.SYSTEM };
+				},
+				getCapabilities: async () => {
+					if (phase === 'capabilities') await pending.promise;
+					return {
+						platform: 'linux',
+						perAppAudio: 'unsupported',
+						systemAudio: 'supported',
+						globalPushKeybinds: 'supported',
+						issues: [],
+						notes: [],
+					};
+				},
+			} as unknown as TDesktopBridge;
+			if (phase === 'teardown') f.audio.awaitTeardown.mockImplementationOnce(() => pending.promise);
+			if (phase === 'optional audio')
+				f.audio.start.mockImplementationOnce(async () => {
+					await pending.promise;
+					return 'none';
+				});
+			const c = createMountedScreenShare({ ...f.deps, getDesktopBridge: () => bridge });
+			const started = mock(() => {});
+			const start = c.start(
+				{ sourceId: 'screen:1', audioMode: ScreenAudioMode.SYSTEM },
+				{ onVideoTrackStarted: started },
+			);
+			const result = start.then(
+				() => 'started',
+				() => 'superseded',
+			);
+			await flush();
+			if (action === 'stop') c.stop();
+			else if (action === 'cleanup') c.deactivate();
+			else {
+				// The successor uses the ordinary browser path so its own platform lookup
+				// is independent of the held predecessor's preparation/capability result.
+				f.setDevices({ ...f.getDevices(), screenAudioMode: ScreenAudioMode.NONE });
+				await c.start();
+			}
+			const replacement = action === 'supersession' ? c.getProducer() : undefined;
+			const audioStops = f.audio.stop.mock.calls.length;
+			pending.resolve();
+			expect(await result).toBe('superseded');
+			expect(f.audio.stop.mock.calls.length).toBe(audioStops);
+			if (phase === 'optional audio') expect(started).toHaveBeenCalledTimes(1);
+			else expect(started).not.toHaveBeenCalled();
+			if (replacement) {
+				expect(c.getProducer()).toBe(replacement);
+				expect(c.isLive()).toBe(true);
+			} else {
+				expect(c.getStream()).toBeUndefined();
+				expect(c.getProducer()).toBeUndefined();
+			}
+		});
+	}
+	it('does not start optional audio when the early video notification stops capture', async () => {
+		const f = createScreenFixture();
+		const c = createMountedScreenShare(f.deps);
+		await expect(c.start(undefined, { onVideoTrackStarted: c.stop })).rejects.toThrow();
+		expect(f.audio.start).not.toHaveBeenCalled();
+		expect(c.getProducer()).toBeUndefined();
+		expect(f.captures[0]?.videoTrack.readyState).toBe('ended');
+	});
+	it('discards a stale picker selection after stop without acquiring media', async () => {
+		const f = createScreenFixture();
+		const pending = deferred<{ sourceId: string; audioMode: ScreenAudioMode } | null>();
+		const c = createMountedScreenShare({ ...f.deps, requestSelection: () => pending.promise });
+		const selection = c.requestSelection();
+		c.stop();
+		pending.resolve({ sourceId: 'screen:1', audioMode: ScreenAudioMode.NONE });
+		expect(await selection).toBeNull();
+		expect(f.acquire).not.toHaveBeenCalled();
 	});
 });

@@ -1,13 +1,22 @@
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 import { StreamKind } from '@sharkord/shared';
 import type { AppData, Producer } from 'mediasoup-client/types';
 import { createWebcamController, didWebcamCaptureSettingsChange, mountWebcamController } from '../webcam-controller';
 import { createProducer, createVideoFixture, deferred, flush } from './video-controller-fixture';
 
+const disposers: Array<() => void> = [];
+afterEach(() => {
+	for (const dispose of disposers.splice(0)) dispose();
+});
+const createMountedWebcam = (...args: Parameters<typeof createWebcamController>) => {
+	const controller = createWebcamController(...args);
+	disposers.push(mountWebcamController(controller));
+	return controller;
+};
 describe('webcam production owner', () => {
 	it('acquires only on start, publishes configured video and stops the current capture before clearing its snapshot', async () => {
 		const f = createVideoFixture();
-		const c = createWebcamController(f.deps);
+		const c = createMountedWebcam(f.deps);
 		const unmount = mountWebcamController(c);
 		expect(f.acquire).not.toHaveBeenCalled();
 		await c.start();
@@ -23,7 +32,7 @@ describe('webcam production owner', () => {
 	});
 	it('detaches and republishes without reacquiring or stopping capture', async () => {
 		const f = createVideoFixture();
-		const c = createWebcamController(f.deps);
+		const c = createMountedWebcam(f.deps);
 		await c.start();
 		const capture = f.captures[0];
 		c.detachProducer();
@@ -35,7 +44,7 @@ describe('webcam production owner', () => {
 	});
 	it('preserves surviving capture after failed republish', async () => {
 		const f = createVideoFixture();
-		const c = createWebcamController(f.deps);
+		const c = createMountedWebcam(f.deps);
 		await c.start();
 		c.detachProducer();
 		f.publications.push(Promise.reject(new Error('publish failed')));
@@ -46,7 +55,7 @@ describe('webcam production owner', () => {
 	});
 	it('rejects transport replacement across awaited publication', async () => {
 		const f = createVideoFixture();
-		const c = createWebcamController(f.deps);
+		const c = createMountedWebcam(f.deps);
 		const pending = deferred<Producer<AppData>>();
 		f.publications.push(pending.promise);
 		const start = c.start();
@@ -61,7 +70,7 @@ describe('webcam production owner', () => {
 	});
 	it('stops on lifecycle cleanup and keeps track-ended notification through republishing', async () => {
 		const f = createVideoFixture();
-		const c = createWebcamController(f.deps);
+		const c = createMountedWebcam(f.deps);
 		const unmount = mountWebcamController(c);
 		await c.start();
 		c.detachProducer();
@@ -73,7 +82,7 @@ describe('webcam production owner', () => {
 	});
 	it('restarts for camera constraints and codec changes, while ignoring unrelated device settings', async () => {
 		const f = createVideoFixture();
-		const c = createWebcamController(f.deps);
+		const c = createMountedWebcam(f.deps);
 		await c.start();
 		const previous = f.getDevices();
 		const next = { ...previous, webcamFramerate: 60, webcamId: 'camera-b' };

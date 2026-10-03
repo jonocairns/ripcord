@@ -29,6 +29,7 @@ const useScreenShare = (inputs: TUseScreenShareInputs) => {
 				stop: () => inputsRef.current.shareAudio.stop(),
 				awaitTeardown: () => inputsRef.current.shareAudio.awaitTeardown(),
 				adoptDisplayAudio: (stream) => inputsRef.current.shareAudio.adoptDisplayAudio(stream),
+				discardDisplayAudio: (stream) => inputsRef.current.shareAudio.discardDisplayAudio(stream),
 				start: (options) => inputsRef.current.shareAudio.start(options),
 			},
 			getDesktopBridge,

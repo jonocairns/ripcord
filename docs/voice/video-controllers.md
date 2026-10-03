@@ -65,3 +65,91 @@ Each invocation decides which media to restart before its microphone await;
 webcam restart then reads current committed settings. Cleanup unsubscribes but
 does not cancel an invocation already awaiting microphone restart. Any owner
 fencing of overlapping webcam acquisition is in the separate lifecycle fix.
+
+## Separate lifecycle fix layer
+
+The three extraction commits are followed by `fix: fence video capture lifecycle
+completions`. This layer deliberately changes races instead of hiding them in
+mechanical moves:
+
+| Boundary | Previous race | New behavior and production test evidence |
+| --- | --- | --- |
+| Deferred capture/publication | Stop, a later start or layout cleanup could be followed by an older acquisition/publication installing resources. | Lifecycle activation and operation generations fence acquisition, publication and sender-configuration completion. A late attempt closes only its allocation and capture. Both owners have a stop/supersession/cleanup matrix and lifecycle-replay tests. |
+| Overlapping webcam restarts | Settings starts could finish in the opposite order and overwrite current capture. | The latest invoked webcam start owns completion. Acquisition is not serialized; stale work is rejected and cleaned. The production settings mount plus webcam factory verifies mic-before-webcam order and late restart completion; superseded work does not show a failure toast. |
+| Track-ended identity | A callback retained an old producer, and an old screen callback could clear replacement video/audio. | Capture-scoped listeners survive detach, successful republish and failed republish, closing the current producer. Replaced-capture callbacks cannot mutate the successor or notify its controls. Tests invoke retained old callbacks directly. |
+| Control-hook supersession | A superseded start rejection could make the existing catch handler stop preserved or replacement capture. | Video controls ignore explicit owner supersession while retaining successful-start state publication and ordinary failure cleanup. Expired recovery commands reject before detaching a current producer; production factory tests cover that boundary and the full browser suites validate the control wiring. |
+| Late server allocations | A superseded producer could close before its server-close listener was installed. | Register allocation cleanup before awaiting sender configuration. Stale transport/sender completions close the allocated server producer by its immutable ID. |
+| Screen startup and optional audio | Stop during picker preparation, acquisition or audio setup could be followed by early/final success or global cleanup of a successor. | Check the video attempt after every await and after early video notification. A stale picker selection returns null. Scoped audio discard delegates late mixed-stream audio tracks to their sole owner without stopping replacement audio. Tests hold teardown, preparation, capabilities and optional-audio completion, and exercise both real controller owners together. |
+| Quality guard | A sender adjustment completing after disposal/replacement could still update guard bookkeeping. | Recheck producer identity and disposal after `setParameters`, including rejection, in addition to the existing stats check. Tests hold stats and sender adjustment across disposal/replacement. |
+
+Detaching a producer invalidates pending publication but preserves capture and
+its loss listener. Republish failure never stops preserved video. Terminal stop
+revokes capture before clearing its React snapshot. Layout cleanup fences work
+before passive session cleanup; mount cleanup is idempotent during replay.
+The guard is mounted with the screen owner and skips samples without a current
+producer. Its floor thresholds, cooldown and codec/degradation policy are unchanged.
+Session cleanup now delegates audio terminal stop once through screen stop;
+recovery still detaches video and audio separately and calls their existing
+republish/recovery operations. No session machine or retry policy was extracted.
+
+The settings mount itself still starts independent invocations and preserves its
+original mic-before-webcam decisions. It does not serialize them or cancel an
+invocation waiting for microphone restart. Webcam lifecycle fencing governs
+acquisition/publication, and reports supersession to that integration.
+
+## Validation and evidence
+
+Dependencies installed in `/tmp/ripcord-video-stage-5` through
+`nix develop -c bun install --frozen-lockfile`. Existing worktrees and the untracked
+plan were preserved. Biome `check --write` was scoped to the intentionally changed
+TypeScript files; the formatted diff and `git diff --check` were reviewed. No root
+`magic` command, development database reset or unrelated process termination was
+used. No server/API, desktop bridge, codec policy, E2E fixture or lockfile changed.
+
+- `nix develop -c bun run check-types`: passed across all workspaces.
+- `nix develop -c bun run lint`: passed without lint warnings.
+- `nix develop -c bun run knip`: passed; the existing 11 configuration hints remain.
+- From `apps/client`, `nix develop -c bun test ./src/components/voice-provider ./src/features/server/voice`: 661 passed, 0 failed, 57 files (87 added tests).
+- `CI=true nix develop -c bun run test:e2e e2e/tests/screen-share.spec.ts`: 4 passed, 0 failed, 28.6 seconds, zero retries.
+- `nix develop -c bun run test:e2e e2e/tests/reconnect.spec.ts e2e/tests/remote-media.spec.ts e2e/tests/recovery-faults.spec.ts e2e/tests/session-conflict.spec.ts`: 24 passed, 0 failed, 3.5 minutes, zero retries.
+- From `apps/desktop`, `nix develop -c bun run build`: passed, producing a fresh Linux package, client production bundle, main/preload and release sidecar.
+
+The final control-boundary review added explicit supersession handling and a
+pre-detach recovery lease check, followed by a new full check/unit/browser run.
+Initial checks found an unused test-helper export, an overly broad audio-discard
+signature, and a missing required RTP payload type in the new getter fixture.
+These were corrected and rechecked; no assertion was removed or relaxed. No unit
+or requested E2E assertion failed. The first direct sidecar health probe used an
+unsupported `ping` method; reading the production dispatch identified `health.ping`,
+which returned status `ok` and protocol version 1. This was a smoke-harness error.
+
+Unit tests import production factories/mounts and mock browser tracks, acquisition,
+transport, bridge and reporting dependencies. The combined video/audio suite uses
+both production owners with injected browser resources/signaling. These tests prove
+ownership and race handling, not native capture or encoded media.
+
+The screen baseline's video-only `canvas.captureStream(30)` acquisition is unchanged.
+E2E start/watch/stop and recovery use real application signaling, mediasoup, WebRTC,
+RTP and decoded remote media. Camera/microphone acquisition remains Chromium fake
+media; screen acquisition is the explicit canvas fixture. Neither proves physical
+camera/microphone, OS picker permissions or actual tab/window/monitor capture, and
+the screen fixture supplies no audio. Display-audio ownership is controller-tested.
+The existing isolated E2E runner recreated only this worktree's `e2e/.runtime`.
+Both required ports were free before each run; no existing process was killed.
+
+T3 preview navigated to the running isolated app and successfully inspected its
+rendered connection screen, semantic inputs/buttons and console. This supplements
+the automated integration evidence without claiming preview capture coverage.
+
+A fresh packaged Linux Electron 42.3.0 run used an isolated `XDG_CONFIG_HOME` under
+`/tmp/ripcord-stage5-desktop-smoke`. Logs show the production `file://.../app.asar`
+renderer loading and its bundled sidecar starting binary audio egress. The bounded
+20-second smoke exited via its own timeout (124), with no remaining package/sidecar
+process; it did not exercise normal window-close flushing or capture. Direct bundled
+sidecar capability probing reported native audio unavailable because `libpulse.so`
+could not load; X11 integration could not load `libX11.so`; and the session bus had
+no desktop portal. These are environment coverage limits. Actual picker permission,
+physical-device/display-audio capture, native RTP/worklet capture and packaged
+stop/reconnect remain unverified. macOS/Windows packaged runtime was unavailable.
+The old March package in the original workspace was left untouched and is not used
+as evidence for this change.

@@ -2,7 +2,8 @@ import { describe, expect, it, mock } from 'bun:test';
 import { DEFAULT_DEVICE_SETTINGS } from '../../devices-provider/migrate-device-settings';
 import { mountMediaSettingsIntegration, type TMediaSettingsInputs } from '../media-settings-integration';
 import type { TMicrophoneStartOutcome } from '../microphone-pipeline-controller';
-import { deferred, flush } from './video-controller-fixture';
+import { createWebcamController, mountWebcamController } from '../webcam-controller';
+import { createCapture, createVideoFixture, deferred, flush } from './video-controller-fixture';
 
 const fixture = () => {
 	let inputs: TMediaSettingsInputs = {
@@ -148,4 +149,52 @@ describe('media settings production integration mount', () => {
 		await flush();
 		expect(f.events).toEqual(['mic', 'webcam']);
 	});
+});
+
+it('uses the production webcam owner to reject stale overlapping settings restart completion', async () => {
+	const f = createVideoFixture();
+	const webcam = createWebcamController(f.deps);
+	const disposeWebcam = mountWebcamController(webcam);
+	await webcam.start();
+	let notify = () => {};
+	const events: string[] = [];
+	const error = mock((_message: string) => {});
+	const disposeSettings = mountMediaSettingsIntegration({
+		getInputs: () => ({ devices: f.getDevices(), currentVoiceChannelId: 1, webcamEnabled: true }),
+		subscribeInputs: (listener) => {
+			notify = listener;
+			return () => {
+				notify = () => {};
+			};
+		},
+		startMicrophone: async () => {
+			events.push('mic');
+			return { status: 'started' };
+		},
+		restartWebcam: () => {
+			events.push('webcam');
+			return webcam.restart();
+		},
+		log: () => {},
+		error,
+	});
+	const old = createCapture();
+	const pending = deferred<MediaStream>();
+	f.acquisitions.push(pending.promise);
+	f.setDevices({ ...f.getDevices(), microphoneId: 'mic-b', webcamId: 'camera-b' });
+	notify();
+	await flush();
+	f.setDevices({ ...f.getDevices(), microphoneId: 'mic-c', webcamId: 'camera-c' });
+	notify();
+	await flush();
+	const replacement = webcam.getStream();
+	pending.resolve(old.stream);
+	await flush();
+	expect(events).toEqual(['mic', 'webcam', 'mic', 'webcam']);
+	expect(webcam.getStream()).toBe(replacement);
+	expect(webcam.isLive()).toBe(true);
+	expect(old.videoTrack.readyState).toBe('ended');
+	expect(error).not.toHaveBeenCalled();
+	disposeSettings();
+	disposeWebcam();
 });
