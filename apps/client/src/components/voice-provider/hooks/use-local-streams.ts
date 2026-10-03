@@ -7,7 +7,6 @@ const useLocalStreams = () => {
 	const [localScreenShareStream, setLocalScreenShare] = useState<MediaStream | undefined>(undefined);
 	const [localScreenShareAudioStream, setLocalScreenShareAudio] = useState<MediaStream | undefined>(undefined);
 
-	const localVideoProducer = useRef<Producer<AppData> | undefined>(undefined);
 	const localScreenShareProducer = useRef<Producer<AppData> | undefined>(undefined);
 
 	// keepVideoAndScreen preserves the live webcam + screen-share capture tracks
@@ -22,20 +21,16 @@ const useLocalStreams = () => {
 			const keepVideoAndScreen = opts?.keepVideoAndScreen ?? false;
 
 			if (!keepVideoAndScreen) {
-				localVideoStream?.getTracks().forEach((track) => track.stop());
 				localScreenShareStream?.getVideoTracks().forEach((track) => track.stop());
 
-				setLocalVideoStream(undefined);
 				setLocalScreenShare(undefined);
 			}
 
-			localVideoProducer.current?.close();
 			localScreenShareProducer.current?.close();
 
-			localVideoProducer.current = undefined;
 			localScreenShareProducer.current = undefined;
 		},
-		[localScreenShareStream, localVideoStream],
+		[localScreenShareStream],
 	);
 
 	return {
@@ -51,7 +46,6 @@ const useLocalStreams = () => {
 		localScreenShareAudioStream,
 		setLocalScreenShareAudio,
 
-		localVideoProducer,
 		localScreenShareProducer,
 
 		clearLocalStreams,
