@@ -39,8 +39,13 @@ Existing explicit launch flags:
 
 Playwright adds its normal launch defaults. These observations do not establish
 reliable real display capture in headless CI. No headed/Xvfb setup was proven,
-and no hosted CI capture result is claimed. The current PR workflow runs unit
-tests and quality checks, but does not invoke the Playwright suites.
+and no native hosted CI capture result is claimed. The PR workflow runs the four
+screen cases in a dedicated `Screen-share E2E` job, alongside unit tests and
+quality checks. It installs the matching Chromium browser and Linux dependencies,
+keeps the existing serial runner and zero retries, and uploads the HTML report
+and retained failure traces, screenshots, and video for seven days. The job also
+uses the verified immutable source when called by release automation. Other
+Playwright suites remain local validation commands.
 
 ## Chosen integration boundary
 
@@ -107,11 +112,15 @@ Completed locally through Nix:
 
 - Scoped Biome formatting and `git diff --check`: passed; resulting source diff
   reviewed.
+- CI automation follow-up changes only YAML and Markdown, which Biome does not
+  format. Reviewed that diff, passed `git diff --check`, and validated the
+  updated workflow with `actionlint` through Nix.
 - `check-types`: passed across all workspaces.
 - `lint`: passed without warnings.
 - `knip`: passed; the existing 11 configuration hints remain.
 - Requested voice-provider/server-voice unit tests: 440 passed, 0 failed.
-- Screen-share Playwright suite: 4 passed, 0 failed (30 seconds).
+- Screen-share Playwright suite: 4 passed, 0 failed (30 seconds), including a
+  follow-up run with `CI=true` to exercise the CI report configuration.
 - Reconnect/remote-media/recovery-faults/session-conflict Playwright suites:
   24 passed, 0 failed (3.9 minutes).
 
