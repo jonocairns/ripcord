@@ -7,6 +7,7 @@ import {
 	dropAppWebSocket,
 	expectLocalVideoStopped,
 	expectOutboundVideoFlow,
+	forceNewestConnectedPeerConnectionFailure,
 	installPcHook,
 	joinVoice,
 	login,
@@ -26,23 +27,6 @@ declare global {
 		__ripcordE2eRawAudioTracks?: MediaStreamTrack[];
 	}
 }
-
-const forceNewestConnectedPeerConnectionFailure = async (page: Parameters<typeof pcStats>[0]): Promise<void> => {
-	await page.evaluate(() => {
-		const peerConnection = window.__ripcordE2ePeerConnections?.findLast(
-			(candidate) => candidate.connectionState === 'connected',
-		);
-		if (!peerConnection) {
-			throw new Error('No connected peer connection was available to fail');
-		}
-
-		Object.defineProperty(peerConnection, 'connectionState', {
-			configurable: true,
-			get: () => 'failed',
-		});
-		peerConnection.dispatchEvent(new Event('connectionstatechange'));
-	});
-};
 
 const emitServerTransportFailure = async (page: Parameters<typeof pcStats>[0]): Promise<void> => {
 	await page.evaluate(async () => {
