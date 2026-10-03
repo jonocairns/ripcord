@@ -627,7 +627,6 @@ const createReconnectAttemptId = (): string => {
 };
 
 const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
-	const [loading, setLoading] = useState(false);
 	const connectionStatus = useSyncExternalStore(
 		subscribeVoiceSessionConnectionStatus,
 		getVoiceSessionConnectionStatusSnapshot,
@@ -3433,7 +3432,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 					const dispatchJoinLifecycle = opts?.preserveLocalMedia !== true && opts?.restoreWatchSnapshot === undefined;
 
 					try {
-						setLoading(true);
 						if (dispatchJoinLifecycle) {
 							dispatchVoiceSession({ type: 'JoinRequested', channelId });
 						}
@@ -3521,7 +3519,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							dispatchVoiceSession({ type: 'JoinSucceeded', channelId });
 							hasHandledTransportFailureRef.current = false;
 						}
-						setLoading(false);
 
 						return { republishedLocalMediaState };
 					} catch (error) {
@@ -3539,13 +3536,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 							await cleanupMicAudioPipeline();
 						}
 
-						// UI/lifecycle state belongs to the current attempt; a superseded
-						// recovery attempt must not stomp its successor's loading state.
+						// Lifecycle state belongs to the current attempt; a superseded
+						// recovery attempt must not fail its successor's join.
 						if (isCurrent()) {
 							if (dispatchJoinLifecycle) {
 								dispatchVoiceSession({ type: 'JoinFailed', reason: 'join-failed', channelId });
 							}
-							setLoading(false);
 						}
 
 						throw error;
@@ -4210,9 +4206,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const contextValue = useMemo<TVoiceProvider>(
 		() => ({
-			loading,
 			connectionStatus,
-			audioVideoRefsMap: audioVideoRefsMap.current,
 			getOrCreateRefs,
 			acceptStream,
 			retryRemoteMedia,
@@ -4239,7 +4233,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			visibleRemoteMedia,
 		}),
 		[
-			loading,
 			connectionStatus,
 			getOrCreateRefs,
 			acceptStream,

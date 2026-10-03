@@ -24,9 +24,7 @@ type TInitResult = {
 };
 
 type TVoiceProvider = {
-	loading: boolean;
 	connectionStatus: TConnectionStatus;
-	audioVideoRefsMap: Map<number, AudioVideoRefs>;
 	ownVoiceState: TVoiceUserState;
 	getOrCreateRefs: (remoteId: number) => AudioVideoRefs;
 	acceptStream: (remoteId: number, kind: StreamKind) => void;

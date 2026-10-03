@@ -13,9 +13,7 @@ const createEmptyAudioVideoRefs = (): AudioVideoRefs => ({
 });
 
 const VoiceProviderContext = createContext<TVoiceProvider>({
-	loading: false,
 	connectionStatus: 'disconnected',
-	audioVideoRefsMap: new Map(),
 	getOrCreateRefs: () => createEmptyAudioVideoRefs(),
 	acceptStream: () => undefined,
 	retryRemoteMedia: () => undefined,
