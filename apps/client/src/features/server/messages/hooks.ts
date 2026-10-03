@@ -1,11 +1,17 @@
 import type { TJoinedMessage } from '@sharkord/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getTRPCClient } from '@/lib/trpc';
-import { subscribeToNonceBumps } from '../nonce-signals';
+import { getFileLinkVersion, subscribeToNonceBumps } from '../nonce-signals';
 import { serverRejoinNonceSelector } from '../selectors';
 import { useServerStore } from '../slice';
-import { addMessages, refreshExpiringFileAccessTokens, refreshLoadedFileAccessTokens } from './actions';
+import {
+	addMessages,
+	refreshChannelFileAccessTokens,
+	refreshExpiringFileAccessTokens,
+	refreshLoadedFileAccessTokens,
+} from './actions';
 import { FILE_ACCESS_TOKEN_CHECK_INTERVAL_MS } from './file-access-tokens';
+import { loadMessagePage } from './load-message-page';
 import { messagesByChannelIdSelector } from './selectors';
 
 const INITIAL_MESSAGES_LIMIT = 20;
@@ -31,23 +37,13 @@ export const useMessages = (channelId: number) => {
 			setFetching(true);
 
 			try {
-				const { messages: rawPage, nextCursor } = await trpcClient.messages.get.query({
-					channelId,
-					cursor: cursorToFetch,
-					limit,
+				const nextCursor = await loadMessagePage({
+					query: () => trpcClient.messages.get.query({ channelId, cursor: cursorToFetch, limit }),
+					getLoadedMessages: () => messagesRef.current,
+					getFileLinkVersion,
+					addMessages: (page) => addMessages(channelId, page, { prepend: cursorToFetch !== null }),
+					refreshFileAccessTokens: () => refreshChannelFileAccessTokens(channelId),
 				});
-
-				const page = [...rawPage].reverse();
-				const existingIds = new Set(messagesRef.current.map((m) => m.id));
-				const filtered = page.filter((m) => !existingIds.has(m.id));
-
-				if (cursorToFetch === null) {
-					// initial load (latest page) — append (or replace if you prefer)
-					addMessages(channelId, filtered);
-				} else {
-					// loading older messages -> they must go *before* current list
-					addMessages(channelId, filtered, { prepend: true });
-				}
 
 				setCursor(nextCursor);
 				setHasMore(nextCursor !== null);
