@@ -1,5 +1,5 @@
 import { mock } from 'bun:test';
-import type { AppData, Producer, ProducerOptions, Transport } from 'mediasoup-client/types';
+import type { AppData, Producer, ProducerOptions, RtpCapabilities, Transport } from 'mediasoup-client/types';
 import { DEFAULT_DEVICE_SETTINGS } from '../../devices-provider/migrate-device-settings';
 
 const deferred = <T>() => {
@@ -18,7 +18,7 @@ const deferred = <T>() => {
 const flush = async () => {
 	for (let i = 0; i < 40; i += 1) await Promise.resolve();
 };
-const createCapture = (audio = false) => {
+const createCapture = (audio = false, settings: MediaTrackSettings = { width: 1280, height: 720, frameRate: 30 }) => {
 	const makeTrack = (kind: string) => {
 		let readyState: MediaStreamTrackState = 'live';
 		const track = {
@@ -28,7 +28,7 @@ const createCapture = (audio = false) => {
 			get readyState() {
 				return readyState;
 			},
-			getSettings: () => ({ width: 1280, height: 720, frameRate: 30 }),
+			getSettings: () => settings,
 			stop: mock(() => {
 				readyState = 'ended';
 			}),
@@ -70,6 +70,7 @@ const createProducer = (id: string, track?: MediaStreamTrack, sender?: RTCRtpSen
 };
 const createVideoFixture = () => {
 	let devices = { ...DEFAULT_DEVICE_SETTINGS };
+	let capabilities: RtpCapabilities | null = null;
 	const acquisitions: Array<Promise<MediaStream>> = [];
 	const publications: Array<Promise<Producer<AppData>>> = [];
 	const captures: ReturnType<typeof createCapture>[] = [];
@@ -95,7 +96,7 @@ const createVideoFixture = () => {
 	const deps = {
 		getDevices: () => devices,
 		getProducerTransport: () => transport,
-		getRtpCapabilities: () => null,
+		getRtpCapabilities: () => capabilities,
 		acquire,
 		publishStream,
 		closeProducer,
@@ -113,6 +114,9 @@ const createVideoFixture = () => {
 		publishStream,
 		closeProducer,
 		onTrackEnded,
+		setCapabilities: (next: RtpCapabilities) => {
+			capabilities = next;
+		},
 		setDevices: (next: typeof devices) => {
 			devices = next;
 		},

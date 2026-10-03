@@ -72,3 +72,43 @@ describe('screen quality guard production mount', () => {
 		dispose();
 	});
 });
+
+it.each([
+	'replacement',
+	'cleanup',
+])('does not commit a floor adjustment after %s during setParameters', async (action) => {
+	let tick = () => {};
+	const completed = deferred<void>();
+	const log = mock((_message: string, _data?: Record<string, unknown>) => {});
+	const sender = {
+		getParameters: () => ({ encodings: [{}] }),
+		setParameters: () => completed.promise,
+		getStats: async () =>
+			new Map([
+				['out', { type: 'outbound-rtp', kind: 'video', frameHeight: 180, qualityLimitationReason: 'bandwidth' }],
+			]),
+	} as unknown as RTCRtpSender;
+	let producer: Producer<AppData> | undefined = createProducer('old', createCapture().videoTrack, sender);
+	const dispose = mountScreenShareQualityGuard({
+		getProducer: () => producer,
+		log,
+		now: () => 0,
+		setInterval: (handler) => {
+			tick = handler;
+			const timer = setInterval(() => {}, 2_000_000_000);
+			timer.unref();
+			return timer;
+		},
+		clearInterval,
+	});
+	for (let i = 0; i < 3; i += 1) {
+		tick();
+		await flush();
+	}
+	if (action === 'cleanup') dispose();
+	else producer = createProducer('replacement');
+	completed.resolve();
+	await flush();
+	expect(log).not.toHaveBeenCalled();
+	dispose();
+});

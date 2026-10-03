@@ -1,4 +1,5 @@
 import type { TDeviceSettings } from '@/types';
+import { VoiceSessionExecutionSupersededError } from './hooks/session-execution-ownership';
 import { didMicCaptureSettingsChange } from './mic-capture-config';
 import type { TMicrophoneStartOutcome } from './microphone-pipeline-controller';
 import { didWebcamCaptureSettingsChange } from './webcam-controller';
@@ -43,6 +44,7 @@ const mountMediaSettingsIntegration = (deps: TMediaSettingsDependencies): (() =>
 					deps.log('Applying updated webcam settings live');
 					await deps.restartWebcam();
 				} catch (error) {
+					if (error instanceof VoiceSessionExecutionSupersededError) return;
 					deps.log('Failed to apply webcam settings live', { error });
 					deps.error('Failed to apply webcam settings');
 				}

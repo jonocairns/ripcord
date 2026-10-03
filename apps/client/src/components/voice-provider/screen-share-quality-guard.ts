@@ -47,7 +47,12 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 		floorCooldownUntil = 0;
 	};
 
-	const applyResolutionFloor = async (sender: RTCRtpSender, captureHeight: number, floorHeight: number) => {
+	const applyResolutionFloor = async (
+		producer: Producer<AppData>,
+		sender: RTCRtpSender,
+		captureHeight: number,
+		floorHeight: number,
+	) => {
 		try {
 			// getParameters/setParameters are coupled by transactionId — keep this
 			// read-modify-write free of awaits in between (see the note on
@@ -62,6 +67,7 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 			encoding.scaleResolutionDownBy = Math.max(1, captureHeight / floorHeight);
 			params.degradationPreference = 'maintain-resolution';
 			await sender.setParameters(params);
+			if (disposed || deps.getProducer() !== producer || producer.closed) return;
 
 			floorApplied = true;
 			belowFloorSamples = 0;
@@ -71,12 +77,13 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 				floorHeight,
 			});
 		} catch (error) {
+			if (disposed || deps.getProducer() !== producer || producer.closed) return;
 			belowFloorSamples = 0;
 			deps.log('Failed to apply screen share resolution floor', { error });
 		}
 	};
 
-	const releaseResolutionFloor = async (sender: RTCRtpSender) => {
+	const releaseResolutionFloor = async (producer: Producer<AppData>, sender: RTCRtpSender) => {
 		try {
 			const params = sender.getParameters();
 			const encoding = params.encodings?.[0];
@@ -87,6 +94,7 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 
 			params.degradationPreference = VIDEO_DEGRADATION_PREFERENCE;
 			await sender.setParameters(params);
+			if (disposed || deps.getProducer() !== producer || producer.closed) return;
 
 			floorApplied = false;
 			belowFloorSamples = 0;
@@ -94,13 +102,14 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 			floorCooldownUntil = deps.now() + FLOOR_REAPPLY_COOLDOWN_MS;
 			deps.log('Screen share resolution floor released');
 		} catch (error) {
+			if (disposed || deps.getProducer() !== producer || producer.closed) return;
 			recoveredSamples = 0;
 			deps.log('Failed to release screen share resolution floor', { error });
 		}
 	};
 
 	const tick = async () => {
-		if (isTicking) {
+		if (disposed || isTicking) {
 			return;
 		}
 
@@ -126,7 +135,7 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 				return;
 			}
 
-			if (disposed || deps.getProducer() !== producer) {
+			if (disposed || deps.getProducer() !== producer || producer.closed) {
 				return;
 			}
 
@@ -172,7 +181,7 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 					belowFloorSamples += 1;
 
 					if (belowFloorSamples >= FLOOR_SAMPLES_BEFORE_APPLY) {
-						await applyResolutionFloor(sender, captureHeight, floorHeight);
+						await applyResolutionFloor(producer, sender, captureHeight, floorHeight);
 					}
 				} else {
 					belowFloorSamples = 0;
@@ -192,7 +201,7 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 				recoveredSamples += 1;
 
 				if (recoveredSamples >= FLOOR_SAMPLES_BEFORE_RESTORE) {
-					await releaseResolutionFloor(sender);
+					await releaseResolutionFloor(producer, sender);
 				}
 			} else {
 				recoveredSamples = 0;

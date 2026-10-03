@@ -1017,6 +1017,7 @@ const createShareAudioController = (deps: TShareAudioDependencies) => {
 		activate,
 		deactivate,
 		adoptDisplayAudio,
+		discardDisplayAudio: (stream: MediaStream) => stopAudioTracks(stream),
 		start,
 		stop,
 		detachProducer,
