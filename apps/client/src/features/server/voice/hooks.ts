@@ -1,7 +1,11 @@
 import { useContext, useMemo, useSyncExternalStore } from 'react';
-import { TransportStatsContext, VoiceActivityContext, VoiceProviderContext } from '@/components/voice-provider';
 import { EMPTY_TRANSPORT_STATS } from '@/components/voice-provider/hooks/use-transport-stats';
 import { EMPTY_VOICE_ACTIVITY } from '@/components/voice-provider/voice-activity';
+import {
+	TransportStatsContext,
+	VoiceActivityContext,
+	VoiceProviderContext,
+} from '@/components/voice-provider/voice-provider-context';
 import { useServerStore } from '../slice';
 import {
 	ownConfirmedVoiceStateSelector,
