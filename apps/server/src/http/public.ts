@@ -37,6 +37,15 @@ const INLINE_ALLOWLIST = new Set([
 	'audio/x-ms-wma',
 ]);
 
+// Message attachments never enter shared caches (CDNs, proxies): a channel can
+// turn private or rotate its token after an edge cached a link, and the edge
+// would keep serving it without the token check. Browsers keep them for at
+// most 48 hours, the longest a private link lives once links expire.
+const CHANNEL_ATTACHMENT_CACHE_CONTROL = 'private, max-age=172800, immutable';
+
+// Avatars, banners, emojis and the server logo are public in every channel.
+const PUBLIC_ASSET_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+
 type TParsedRange = {
 	start: number;
 	end: number;
@@ -126,6 +135,8 @@ const publicRouteHandler = async (req: http.IncomingMessage, res: http.ServerRes
 		}
 	}
 
+	const cacheControl = associatedMessage ? CHANNEL_ATTACHMENT_CACHE_CONTROL : PUBLIC_ASSET_CACHE_CONTROL;
+
 	const filePath = path.join(PUBLIC_PATH, dbFile.name);
 
 	if (!fs.existsSync(filePath)) {
@@ -164,7 +175,7 @@ const publicRouteHandler = async (req: http.IncomingMessage, res: http.ServerRes
 				'Content-Range': `bytes ${parsed.start}-${parsed.end}/${dbFile.size}`,
 				'Accept-Ranges': 'bytes',
 				'Content-Disposition': dispositionHeader,
-				'Cache-Control': 'public, max-age=31536000, immutable',
+				'Cache-Control': cacheControl,
 				ETag: etag,
 			});
 
@@ -200,7 +211,7 @@ const publicRouteHandler = async (req: http.IncomingMessage, res: http.ServerRes
 	}
 
 	if (req.headers['if-none-match'] === etag) {
-		res.writeHead(304);
+		res.writeHead(304, { 'Cache-Control': cacheControl, ETag: etag });
 		res.end();
 		return;
 	}
@@ -209,7 +220,7 @@ const publicRouteHandler = async (req: http.IncomingMessage, res: http.ServerRes
 		'Content-Type': dbFile.mimeType,
 		'Content-Length': dbFile.size,
 		'Content-Disposition': dispositionHeader,
-		'Cache-Control': 'public, max-age=31536000, immutable',
+		'Cache-Control': cacheControl,
 		'Accept-Ranges': 'bytes',
 		ETag: etag,
 	});
