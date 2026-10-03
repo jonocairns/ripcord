@@ -8,19 +8,9 @@ import {
 	type TVoiceUserState,
 } from '@sharkord/shared';
 import { Device } from 'mediasoup-client';
-import type { AppData, Producer, RtpCapabilities } from 'mediasoup-client/types';
-import {
-	type MutableRefObject,
-	memo,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-	useSyncExternalStore,
-} from 'react';
+import type { RtpCapabilities } from 'mediasoup-client/types';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
-import { requestScreenShareSelection as requestScreenShareSelectionDialog } from '@/features/dialogs/actions';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useChannelCan, useIsConnected } from '@/features/server/hooks';
 import { useServerStore } from '@/features/server/slice';
@@ -54,13 +44,10 @@ import {
 	subscribeVoiceSession,
 } from '@/features/server/voice/voice-session-store';
 import { logDebug, logVoice, reportError, traceSentrySpan } from '@/helpers/browser-logger';
-import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { getTrpcErrorData } from '@/helpers/trpc-error-data';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getTRPCClient, TRPCClientUnavailableError } from '@/lib/trpc';
 import { getDesktopBridge, isDesktopRuntime } from '@/runtime/desktop-bridge';
-import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
-import { ScreenAudioMode, type TDesktopScreenShareSelection, type TStartAppAudioCaptureInput } from '@/runtime/types';
 import type { TDeviceSettings } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
 import { FloatingPinnedCard } from './floating-pinned-card';
@@ -82,7 +69,7 @@ import { usePushMicKeybinds } from './hooks/use-push-mic-keybinds';
 import { useRemoteMediaConsumeRunner } from './hooks/use-remote-media-consume-runner';
 import { useRemoteMediaRepairRunner } from './hooks/use-remote-media-repair-runner';
 import { useRemoteStreams } from './hooks/use-remote-streams';
-import { useScreenShareQualityGuard } from './hooks/use-screen-share-quality-guard';
+import { useScreenShare } from './hooks/use-screen-share';
 import { useShareAudio } from './hooks/use-share-audio';
 import { useTransportStats } from './hooks/use-transport-stats';
 import { useTransports } from './hooks/use-transports';
@@ -102,7 +89,6 @@ import {
 } from './transport-recovery-circuit';
 import { recoverTransportMicrophone } from './transport-recovery-microphone';
 import type { AudioVideoRefs, TConnectionStatus, TRepublishedLocalMediaState, TVoiceProvider } from './types';
-import { applyVideoDegradationPreference, getScreenShareVideoProducerConfig } from './video-producer-config';
 import { createVoiceActivityStore } from './voice-activity';
 import {
 	createEmptyAudioVideoRefs,
@@ -112,11 +98,6 @@ import {
 } from './voice-provider-context';
 import { VolumeControlProvider } from './volume-control-provider';
 import { didWebcamCaptureSettingsChange } from './webcam-controller';
-
-type TScreenShareStreamHandlers = {
-	onVideoTrackStarted?: () => void;
-	onVideoTrackEnded?: () => void | Promise<void>;
-};
 
 type TRecoveryJoinResult = {
 	device: Device;
@@ -240,9 +221,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		return state.externalStreamsMap[currentVoiceChannelId] ?? EMPTY_CHANNEL_EXTERNAL_STREAMS;
 	});
 	const { devices } = useDevices();
-	// Last onTrackEnded handler passed to publishScreenShareTrack. Transport
-	// recovery reuses it so stop-sync side effects survive a producer restart.
-	const screenShareTrackEndedHandlerRef = useRef<(() => void | Promise<void>) | undefined>(undefined);
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
 	const sessionExecutionOwnershipRef = useRef(createVoiceSessionExecutionOwnership());
@@ -382,16 +360,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		localVideoStream,
 		localScreenShareStream,
 		localScreenShareAudioStream,
-		localScreenShareProducer,
 		setLocalAudioStream,
 		setLocalVideoStream,
 		setLocalScreenShare,
 		setLocalScreenShareAudio,
-		clearLocalStreams,
 	} = useLocalStreams();
 
 	const localAudioStreamRef = useLatestRef(localAudioStream);
-	const localScreenShareStreamRef = useLatestRef(localScreenShareStream);
 
 	const voiceCleanupRef = useRef<(() => void) | undefined>(undefined);
 	const hasHandledTransportFailureRef = useRef(false);
@@ -584,35 +559,28 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	});
 	const { start: startWebcamStream, stop: stopWebcamStream } = webcam;
 
-	const bindProducerCloseHandler = useCallback(
-		({
-			producer,
-			kind,
-			producerRef,
-			logLabel,
-			onCurrentProducerClose,
-		}: {
-			producer: Producer<AppData>;
-			kind: StreamKind;
-			producerRef: MutableRefObject<Producer<AppData> | undefined>;
-			logLabel: string;
-			onCurrentProducerClose?: () => void;
-		}) => {
-			producer.on('@close', () => {
-				logVoice(`${logLabel} producer closed`, {
-					producerId: producer.id,
-				});
-
-				if (producerRef.current === producer) {
-					producerRef.current = undefined;
-					onCurrentProducerClose?.();
-				}
-
-				void closeProducerOnServer(kind, producer.id);
-			});
+	// Inject video liveness through composition; audio never imports or mutates video.
+	const screenVideoLiveRef = useRef<() => boolean>(() => false);
+	const shareAudio = useShareAudio({
+		nativeAppAudioIngestEnabled: devices.nativeAppAudioIngestEnabled,
+		getProducerTransport: () => producerTransport.current,
+		isScreenVideoLive: () => screenVideoLiveRef.current(),
+		publishStream: setLocalScreenShareAudio,
+	});
+	const { controller: screenShare, start: startScreenShareStream } = useScreenShare({
+		devices,
+		getProducerTransport: () => producerTransport.current,
+		getRtpCapabilities: () => sendRtpCapabilities.current,
+		publishStream: setLocalScreenShare,
+		closeProducer: (id) => {
+			void closeProducerOnServer(StreamKind.SCREEN, id);
 		},
-		[closeProducerOnServer],
-	);
+		shareAudio,
+	});
+	useLayoutEffect(() => {
+		screenVideoLiveRef.current = screenShare.isLive;
+	}, [screenShare]);
+	const { stop: stopScreenShareStream, requestSelection: requestDesktopScreenShareSelection } = screenShare;
 
 	const removeExternalStreamAndSubscription = useCallback(
 		(streamId: number) => {
@@ -652,7 +620,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	> => {
 		const metadataBySsrc = new Map<number, { configuredMaxBitrate: number | null; label: string }>();
 		const producers = [
-			{ producer: localScreenShareProducer.current, label: 'Screen share' },
+			{ producer: screenShare.getProducer(), label: 'Screen share' },
 			{ producer: webcam.getProducer(), label: 'Webcam' },
 		];
 
@@ -677,7 +645,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 
 		return metadataBySsrc;
-	}, [localScreenShareProducer, webcam]);
+	}, [screenShare, webcam]);
 
 	const {
 		store: transportStatsStore,
@@ -882,128 +850,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		start: startMicStream,
 	} = microphone;
 
-	const shareAudio = useShareAudio({
-		nativeAppAudioIngestEnabled: devices.nativeAppAudioIngestEnabled,
-		getProducerTransport: () => producerTransport.current,
-		isScreenVideoLive: () =>
-			(localScreenShareProducer.current?.track ?? localScreenShareStreamRef.current?.getVideoTracks()[0])
-				?.readyState === 'live',
-		publishStream: setLocalScreenShareAudio,
-	});
-
-	const publishScreenShareTrack = useCallback(
-		async (
-			stream: MediaStream,
-			track: MediaStreamTrack,
-			options: {
-				onTrackEnded?: () => void | Promise<void>;
-				clearStreamOnFailure?: boolean;
-				isCurrent?: () => boolean;
-			} = {},
-		) => {
-			const transport = producerTransport.current;
-			if (!transport || transport.closed || (options.isCurrent && !options.isCurrent())) {
-				throw new VoiceSessionExecutionSupersededError();
-			}
-			setLocalScreenShare(stream);
-			const clearStreamOnFailure = options.clearStreamOnFailure ?? true;
-			let screenShareProducer: Producer<AppData> | undefined;
-
-			if (options.onTrackEnded) {
-				screenShareTrackEndedHandlerRef.current = options.onTrackEnded;
-			}
-
-			const onTrackEnded = options.onTrackEnded ?? screenShareTrackEndedHandlerRef.current;
-
-			try {
-				logVoice('Obtained video track', { videoTrack: track });
-
-				track.contentHint = 'motion';
-
-				const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
-				const screenTrackSettings = track.getSettings();
-				const videoConfig = getScreenShareVideoProducerConfig({
-					rtpCapabilities: sendRtpCapabilities.current,
-					preference: devices.videoCodec,
-					width: screenTrackSettings.width ?? requestedScreenResolution.width,
-					height: screenTrackSettings.height ?? requestedScreenResolution.height,
-					frameRate: screenTrackSettings.frameRate ?? devices.screenFramerate,
-				});
-
-				screenShareProducer = await transport.produce({
-					track,
-					...videoConfig,
-					// Keep explicit stream cleanup as the only path that stops the
-					// browser screen-share capture.
-					stopTracks: false,
-					appData: { kind: StreamKind.SCREEN },
-				});
-
-				if (!screenShareProducer) {
-					throw new Error('Failed to create screen share producer');
-				}
-
-				const createdScreenShareProducer = screenShareProducer;
-				await applyVideoDegradationPreference(createdScreenShareProducer.rtpSender, 'screen share');
-				if (
-					producerTransport.current !== transport ||
-					transport.closed ||
-					(options.isCurrent && !options.isCurrent())
-				) {
-					throw new VoiceSessionExecutionSupersededError();
-				}
-
-				localScreenShareProducer.current = createdScreenShareProducer;
-
-				bindProducerCloseHandler({
-					producer: createdScreenShareProducer,
-					kind: StreamKind.SCREEN,
-					producerRef: localScreenShareProducer,
-					logLabel: 'Screen share',
-				});
-
-				track.onended = () => {
-					logVoice('Screen share track ended, cleaning up screen share');
-
-					stream.getVideoTracks().forEach((currentTrack) => {
-						currentTrack.stop();
-					});
-					createdScreenShareProducer.close();
-					void shareAudio.stop();
-
-					setLocalScreenShare(undefined);
-					void onTrackEnded?.();
-				};
-			} catch (error) {
-				screenShareProducer?.close();
-				if (localScreenShareProducer.current === screenShareProducer) {
-					localScreenShareProducer.current = undefined;
-				}
-				if (clearStreamOnFailure) {
-					setLocalScreenShare((currentStream) => {
-						return currentStream === stream ? undefined : currentStream;
-					});
-				}
-				throw error;
-			}
-		},
-		[
-			bindProducerCloseHandler,
-			shareAudio,
-			devices.screenFramerate,
-			devices.screenResolution,
-			devices.videoCodec,
-			localScreenShareProducer,
-			producerTransport,
-			setLocalScreenShare,
-		],
-	);
-
-	useScreenShareQualityGuard({
-		screenShareProducerRef: localScreenShareProducer,
-		active: localScreenShareStream !== undefined,
-	});
-
 	useEffect(() => {
 		const previousDevices = previousDevicesRef.current;
 		previousDevicesRef.current = devices;
@@ -1049,180 +895,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		stopWebcamStream,
 	]);
 
-	const stopScreenShareStream = useCallback(() => {
-		logVoice('Stopping screen share stream');
-
-		localScreenShareStream?.getVideoTracks().forEach((track) => {
-			logVoice('Stopping screen share track', { track });
-
-			track.stop();
-			localScreenShareStream.removeTrack(track);
-		});
-
-		localScreenShareProducer.current?.close();
-		localScreenShareProducer.current = undefined;
-		screenShareTrackEndedHandlerRef.current = undefined;
-		void shareAudio.stop();
-
-		setLocalScreenShare(undefined);
-	}, [shareAudio, localScreenShareStream, setLocalScreenShare, localScreenShareProducer]);
-
-	const requestDesktopScreenShareSelection = useCallback(async (): Promise<TDesktopScreenShareSelection | null> => {
-		// The dialog opens immediately in a loading state and is populated once
-		// the desktop bridge returns. See requestScreenShareSelection.
-		return requestScreenShareSelectionDialog({
-			defaultAudioMode: devices.screenAudioMode,
-			loadData: async () => {
-				const desktopBridge = getDesktopBridge();
-
-				if (!desktopBridge) {
-					throw new Error('Desktop bridge unavailable');
-				}
-
-				const [sources, capabilities] = await Promise.all([
-					desktopBridge.listShareSources(),
-					desktopBridge.getCapabilities(),
-				]);
-
-				return {
-					sources,
-					capabilities: normalizeDesktopCapabilities(capabilities),
-				};
-			},
-		});
-	}, [devices.screenAudioMode]);
-
-	const startScreenShareStream = useCallback(
-		async (desktopSelection?: TDesktopScreenShareSelection, handlers: TScreenShareStreamHandlers = {}) => {
-			return traceSentrySpan(
-				{
-					name: 'voice.screen_share_start',
-					op: 'voice.screen_share',
-					attributes: {
-						'voice.screen_audio_mode': devices.screenAudioMode,
-						'voice.desktop_selection': desktopSelection !== undefined,
-					},
-				},
-				async () => {
-					// Wait for any in-flight desktop audio cleanup from a previous screen
-					// share stop so the new sidecar session doesn't conflict with it.
-					await shareAudio.awaitTeardown();
-
-					let stream: MediaStream | undefined;
-
-					try {
-						logVoice('Starting screen share stream');
-
-						let audioMode = devices.screenAudioMode;
-						const desktopBridge = getDesktopBridge();
-
-						if (desktopBridge && desktopSelection) {
-							const resolved = await desktopBridge.prepareScreenShare(desktopSelection);
-							audioMode = resolved.effectiveMode;
-
-							if (resolved.warning) {
-								toast.warning(resolved.warning);
-							}
-						}
-
-						// Only route system audio through the sidecar when the desktop
-						// capture stack advertises support for the sidecar-backed path.
-						// Linux uses a best-effort PipeWire mix with self-exclusion, and
-						// macOS uses the ScreenCaptureKit helper-backed sidecar path.
-						let sidecarSupported = false;
-						if (desktopBridge && audioMode === ScreenAudioMode.SYSTEM) {
-							try {
-								const caps = normalizeDesktopCapabilities(await desktopBridge.getCapabilities());
-								sidecarSupported = caps.sidecarAvailable === true && caps.perAppAudio !== 'unsupported';
-							} catch {
-								// If capabilities check fails, don't attempt sidecar for system audio.
-							}
-						}
-
-						const sidecarAudioMode =
-							audioMode === ScreenAudioMode.APP || (audioMode === ScreenAudioMode.SYSTEM && sidecarSupported)
-								? audioMode
-								: undefined;
-						const useSidecarAudio = desktopBridge && desktopSelection && sidecarAudioMode !== undefined;
-
-						// Always request loopback audio from getDisplayMedia in system mode
-						// so it is available as a fallback if the sidecar fails.  When the
-						// sidecar successfully captures audio, the loopback track is stopped
-						// and removed before the producer is created.
-						const shouldCaptureDisplayAudio = audioMode === ScreenAudioMode.SYSTEM;
-						const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
-
-						try {
-							stream = await navigator.mediaDevices.getDisplayMedia({
-								video: {
-									...requestedScreenResolution,
-									frameRate: devices?.screenFramerate,
-								},
-								audio: shouldCaptureDisplayAudio
-									? {
-											echoCancellation: false,
-											noiseSuppression: false,
-											autoGainControl: false,
-										}
-									: false,
-							});
-						} finally {
-							if (desktopSelection?.useSystemPicker) {
-								void desktopBridge?.resetScreenSharePicker?.();
-							}
-						}
-
-						shareAudio.adoptDisplayAudio(stream);
-						logVoice('Screen share stream obtained', { stream });
-
-						const videoTrack = stream.getVideoTracks()[0];
-
-						if (videoTrack) {
-							await publishScreenShareTrack(stream, videoTrack, {
-								onTrackEnded: handlers.onVideoTrackEnded,
-							});
-							// Surface the active share as soon as the video producer exists.
-							// Optional audio setup can continue after the preview is already live.
-							handlers.onVideoTrackStarted?.();
-
-							if (useSidecarAudio && desktopBridge && desktopSelection && sidecarAudioMode) {
-								const captureInput: TStartAppAudioCaptureInput = {
-									sourceId: desktopSelection.sourceId,
-								};
-
-								if (sidecarAudioMode === ScreenAudioMode.APP) {
-									captureInput.appAudioTargetId = desktopSelection.appAudioTargetId;
-								}
-
-								await shareAudio.start({
-									displayStream: stream,
-									desktopBridge,
-									captureInput,
-									audioMode: sidecarAudioMode,
-								});
-							} else {
-								await shareAudio.start({ displayStream: stream });
-							}
-
-							return videoTrack;
-						} else {
-							throw new Error('No video track obtained for screen share');
-						}
-					} catch (error) {
-						stream?.getVideoTracks().forEach((track) => {
-							track.stop();
-						});
-						await shareAudio.stop();
-
-						logVoice('Error starting screen share stream', { error });
-						throw error;
-					}
-				},
-			);
-		},
-		[shareAudio, devices.screenAudioMode, devices.screenFramerate, devices.screenResolution, publishScreenShareTrack],
-	);
-
 	const cleanup = useCallback(
 		(opts?: {
 			preserveLocalMedia?: boolean;
@@ -1248,7 +920,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			voiceActivityStoreRef.current.clearAll();
 			if (opts?.preserveLocalMedia) webcam.detachProducer();
 			else webcam.stop();
-			clearLocalStreams({ keepVideoAndScreen: opts?.preserveLocalMedia });
+			if (opts?.preserveLocalMedia) screenShare.detachProducer();
+			else screenShare.stop();
 			clearRemoteUserStreams();
 			clearExternalStreams();
 			cleanupTransports({ preserveRemoteMediaIntent: opts?.preserveRemoteMediaIntent === true });
@@ -1263,7 +936,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			stopMonitoring,
 			resetStats,
 			cleanupMicAudioPipeline,
-			clearLocalStreams,
+			screenShare,
 			webcam,
 			clearRemoteUserStreams,
 			clearExternalStreams,
@@ -1307,16 +980,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 				tasks.push(republishWebcam);
 			}
 
-			const screenShareStream = localScreenShareStreamRef.current;
-			const screenShareTrack = screenShareStream?.getVideoTracks()[0];
-			if (screenShareStream && screenShareTrack && screenShareTrack.readyState === 'live') {
+			const republishScreen = screenShare.republish(isCurrent);
+			if (republishScreen) {
 				state.sharingScreen = true;
-				tasks.push(
-					publishScreenShareTrack(screenShareStream, screenShareTrack, {
-						clearStreamOnFailure: false,
-						isCurrent,
-					}),
-				);
+				tasks.push(republishScreen);
 			}
 
 			const republishAudio = shareAudio.republish(isCurrent);
@@ -1324,7 +991,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			return { tasks, state };
 		},
-		[webcam, publishScreenShareTrack, shareAudio],
+		[webcam, screenShare, shareAudio],
 	);
 
 	const syncRepublishedLocalMediaState = useCallback(
