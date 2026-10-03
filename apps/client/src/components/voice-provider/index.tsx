@@ -67,7 +67,6 @@ import {
 	type TAppAudioStatusEvent,
 	type TDesktopBridge,
 	type TDesktopCapabilities,
-	type TDesktopPushKeybindEvent,
 	type TDesktopScreenShareSelection,
 	type TStartAppAudioCaptureInput,
 } from '@/runtime/types';
@@ -101,6 +100,7 @@ import { useDesktopAppAudioRecoveryLifecycle } from './hooks/use-desktop-app-aud
 import { useLocalStreams } from './hooks/use-local-streams';
 import { useMicrophonePipelineControllerLifecycle } from './hooks/use-microphone-pipeline-controller-lifecycle';
 import { getPendingStreamKey, type TExternalStreamTrackPresence } from './hooks/use-pending-streams';
+import { usePushMicKeybinds } from './hooks/use-push-mic-keybinds';
 import { useRemoteMediaConsumeRunner } from './hooks/use-remote-media-consume-runner';
 import { useRemoteMediaRepairRunner } from './hooks/use-remote-media-repair-runner';
 import { useRemoteStreams } from './hooks/use-remote-streams';
@@ -132,13 +132,6 @@ import {
 	type TMicrophoneStartOutcome,
 } from './microphone-pipeline-controller';
 import { prewarmVoiceEngines } from './prewarm';
-import {
-	clearHeldPushMicState,
-	resolveHeldPushMicTarget,
-	resolvePushMicState,
-	type TPushMicState,
-	updatePushMicStateForKeyEvent,
-} from './push-mic-state';
 import {
 	recordTransportRecoverySucceeded,
 	resolveTransportFailureDispatchOutcome,
@@ -390,13 +383,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// Last onTrackEnded handler passed to publishScreenShareTrack. Transport
 	// recovery reuses it so stop-sync side effects survive a producer restart.
 	const screenShareTrackEndedHandlerRef = useRef<(() => void | Promise<void>) | undefined>(undefined);
-	const isPushToTalkHeldRef = useRef(false);
-	const isPushToMuteHeldRef = useRef(false);
-	const micMutedBeforePushRef = useRef<boolean | undefined>(undefined);
-	const pushReleaseTimersRef = useRef<{ talk?: ReturnType<typeof setTimeout>; mute?: ReturnType<typeof setTimeout> }>(
-		{},
-	);
-	const pushReleaseDelayMsRef = useLatestRef(devices.pushReleaseDelayMs);
 	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
 	const micVolumeRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
@@ -405,7 +391,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const startMicStreamRef = useRef<((isCurrent?: () => boolean) => Promise<TMicrophoneStartOutcome>) | undefined>(
 		undefined,
 	);
-	const setMicMutedRef = useRef<TVoiceProvider['setMicMuted'] | undefined>(undefined);
 	const commitTerminalMicMutedRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
 	const getOrCreateRefs = useCallback((remoteId: number): AudioVideoRefs => {
@@ -3626,160 +3611,20 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		requestScreenShareSelection: getDesktopBridge() ? requestDesktopScreenShareSelection : undefined,
 	});
 
-	setMicMutedRef.current = setMicMuted;
 	commitTerminalMicMutedRef.current = commitTerminalMicMuted;
-	const ownMicMutedRef = useLatestRef(ownVoiceState.micMuted);
-	const ownSoundMutedRef = useLatestRef(ownVoiceState.soundMuted);
 	const canSpeakRef = useLatestRef(channelCan(ChannelPermission.SPEAK));
 
-	useEffect(() => {
-		const pushTarget = resolveHeldPushMicTarget({
-			isPushToTalkHeld: isPushToTalkHeldRef.current,
-			isPushToMuteHeld: isPushToMuteHeldRef.current,
-			micMutedBeforePush: micMutedBeforePushRef.current,
-		});
-
-		if (pushTarget === undefined || micMutedBeforePushRef.current === undefined || confirmedOwnMicMuted === undefined) {
-			return;
-		}
-
-		if (confirmedOwnMicMuted !== pushTarget) {
-			micMutedBeforePushRef.current = confirmedOwnMicMuted;
-		}
-	}, [confirmedOwnMicMuted]);
-
-	const getPushMicState = useCallback(
-		(): TPushMicState => ({
-			isPushToTalkHeld: isPushToTalkHeldRef.current,
-			isPushToMuteHeld: isPushToMuteHeldRef.current,
-			micMutedBeforePush: micMutedBeforePushRef.current,
-		}),
-		[],
-	);
-
-	const setPushMicState = useCallback((state: TPushMicState) => {
-		isPushToTalkHeldRef.current = state.isPushToTalkHeld;
-		isPushToMuteHeldRef.current = state.isPushToMuteHeld;
-		micMutedBeforePushRef.current = state.micMutedBeforePush;
-	}, []);
-
-	const clearPendingPushRelease = useCallback((kind?: TDesktopPushKeybindEvent['kind']) => {
-		const timers = pushReleaseTimersRef.current;
-
-		if ((kind === undefined || kind === 'talk') && timers.talk !== undefined) {
-			clearTimeout(timers.talk);
-			timers.talk = undefined;
-		}
-
-		if ((kind === undefined || kind === 'mute') && timers.mute !== undefined) {
-			clearTimeout(timers.mute);
-			timers.mute = undefined;
-		}
-	}, []);
-
-	const applyPushMicOverride = useCallback(() => {
-		const pushMicResolution = resolvePushMicState(getPushMicState(), ownSoundMutedRef.current);
-
-		if (pushMicResolution.targetMicMuted !== undefined) {
-			void setMicMutedRef.current?.(pushMicResolution.targetMicMuted, {
-				playSound: false,
-			});
-		}
-
-		if (pushMicResolution.shouldClearMicMutedBeforePush) {
-			micMutedBeforePushRef.current = undefined;
-		}
-	}, [getPushMicState]);
-
-	useEffect(() => {
-		const desktopBridge = getDesktopBridge();
-
-		if (!desktopBridge) {
-			return;
-		}
-
-		void desktopBridge
-			.setGlobalPushKeybinds({
-				pushToTalkKeybind: devices.pushToTalkKeybind,
-				pushToMuteKeybind: devices.pushToMuteKeybind,
-			})
-			.then((result) => {
-				if (result.errors.length > 0) {
-					logVoice('Global push keybind registration issues', result);
-					toast.warning(result.errors[0]);
-				}
-			})
-			.catch((error) => {
-				logVoice('Failed to register global push keybinds', { error });
-			});
-
-		const applyPushKeybindEvent = (event: TDesktopPushKeybindEvent) => {
-			setPushMicState(updatePushMicStateForKeyEvent(getPushMicState(), event, ownMicMutedRef.current));
-			applyPushMicOverride();
-		};
-
-		const removeGlobalKeybindSubscription = desktopBridge.subscribeGlobalPushKeybindEvents((event) => {
-			if (currentVoiceChannelIdRef.current === undefined || !canSpeakRef.current) {
-				clearPendingPushRelease();
-				setPushMicState(clearHeldPushMicState(getPushMicState()));
-				applyPushMicOverride();
-				return;
-			}
-
-			// A new event supersedes any pending release for THAT key only. An event
-			// for the other key must not cancel it — otherwise that key's deferred
-			// release would be dropped and its state left stuck held (e.g. a talk
-			// press cancelling a pending mute release leaves the mic stuck muted).
-			clearPendingPushRelease(event.kind);
-
-			const releaseDelayMs = pushReleaseDelayMsRef.current;
-
-			if (!event.active && releaseDelayMs > 0) {
-				// Hold the push key's state briefly past key-up so a quick tap doesn't
-				// clip the tail of speech (push-to-talk keeps the mic open;
-				// push-to-mute keeps it muted). The other key's state is untouched.
-				pushReleaseTimersRef.current[event.kind] = setTimeout(() => {
-					pushReleaseTimersRef.current[event.kind] = undefined;
-					applyPushKeybindEvent(event);
-				}, releaseDelayMs);
-				return;
-			}
-
-			applyPushKeybindEvent(event);
-		});
-
-		return () => {
-			removeGlobalKeybindSubscription();
-			clearPendingPushRelease();
-			setPushMicState(clearHeldPushMicState(getPushMicState()));
-			applyPushMicOverride();
-			void desktopBridge.setGlobalPushKeybinds({}).catch((error) => {
-				logVoice('Failed to clear global push keybinds', { error });
-			});
-		};
-	}, [
-		applyPushMicOverride,
-		clearPendingPushRelease,
-		devices.pushToMuteKeybind,
-		devices.pushToTalkKeybind,
-		getPushMicState,
-		setPushMicState,
-	]);
-
-	useEffect(() => {
-		if (currentVoiceChannelId === undefined || !channelCan(ChannelPermission.SPEAK)) {
-			clearPendingPushRelease();
-			setPushMicState(clearHeldPushMicState(getPushMicState()));
-			applyPushMicOverride();
-		}
-	}, [
-		applyPushMicOverride,
-		channelCan,
-		clearPendingPushRelease,
+	usePushMicKeybinds({
+		pushToTalkKeybind: devices.pushToTalkKeybind,
+		pushToMuteKeybind: devices.pushToMuteKeybind,
+		pushReleaseDelayMs: devices.pushReleaseDelayMs,
 		currentVoiceChannelId,
-		getPushMicState,
-		setPushMicState,
-	]);
+		canSpeak: channelCan(ChannelPermission.SPEAK),
+		micMuted: ownVoiceState.micMuted,
+		soundMuted: ownVoiceState.soundMuted,
+		confirmedMicMuted: confirmedOwnMicMuted,
+		setMicMuted,
+	});
 
 	useEffect(() => {
 		// Reference the dep so the effect re-runs on channel change; the body
