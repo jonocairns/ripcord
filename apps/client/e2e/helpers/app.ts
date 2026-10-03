@@ -173,6 +173,23 @@ const dropAppWebSocket = async (page: Page, options: { waitForReconnect?: boolea
 	}
 };
 
+const forceNewestConnectedPeerConnectionFailure = async (page: Page): Promise<void> => {
+	await page.evaluate(() => {
+		const peerConnection = window.__ripcordE2ePeerConnections?.findLast(
+			(candidate) => candidate.connectionState === 'connected',
+		);
+		if (!peerConnection) {
+			throw new Error('No connected peer connection was available to fail');
+		}
+
+		Object.defineProperty(peerConnection, 'connectionState', {
+			configurable: true,
+			get: () => 'failed',
+		});
+		peerConnection.dispatchEvent(new Event('connectionstatechange'));
+	});
+};
+
 const expectOutboundVideoFlow = async (page: Page, label: string, timeout = 30_000): Promise<void> => {
 	const baseline = await pcStats(page);
 
@@ -441,6 +458,7 @@ export {
 	expectInboundVideoIdle,
 	expectLocalVideoStopped,
 	expectOutboundVideoFlow,
+	forceNewestConnectedPeerConnectionFailure,
 	installPcHook,
 	joinVoice,
 	leaveVoice,
