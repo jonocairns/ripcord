@@ -1,6 +1,8 @@
 import { describe, expect, it, mock } from 'bun:test';
-import { createDesktopAppAudioRecoveryController } from '../desktop-app-audio-recovery-controller';
-import { mountDesktopAppAudioRecoveryController } from '../hooks/use-desktop-app-audio-recovery-lifecycle';
+import {
+	createDesktopAppAudioRecoveryController,
+	mountDesktopAppAudioRecoveryController,
+} from '../desktop-app-audio-recovery-controller';
 
 type TDeferred<T> = {
 	promise: Promise<T>;
@@ -23,6 +25,43 @@ const flushMicrotasks = async (): Promise<void> => {
 };
 
 describe('desktop app audio recovery controller', () => {
+	it('runs overlapping recoveries sequentially while its lifecycle remains mounted', async () => {
+		const controller = createDesktopAppAudioRecoveryController();
+		const cleanup = mountDesktopAppAudioRecoveryController(controller);
+		const gate = createDeferred();
+		const events: string[] = [];
+		const first = controller.recover(async () => {
+			events.push('first:start');
+			await gate.promise;
+			events.push('first:end');
+		});
+		const second = controller.recover(async () => {
+			events.push('second:start');
+		});
+		await flushMicrotasks();
+		expect(events).toEqual(['first:start']);
+		gate.resolve();
+		await Promise.all([first, second]);
+		expect(events).toEqual(['first:start', 'first:end', 'second:start']);
+		cleanup();
+	});
+	it('runs later recovery after the preceding recovery rejects', async () => {
+		const controller = createDesktopAppAudioRecoveryController();
+		const cleanup = mountDesktopAppAudioRecoveryController(controller);
+		const events: string[] = [];
+		const first = controller.recover(async () => {
+			events.push('first');
+			throw new Error('recovery failed');
+		});
+		const second = controller.recover(async () => {
+			events.push('second');
+		});
+		await expect(first).rejects.toThrow('recovery failed');
+		await second;
+		expect(events).toEqual(['first', 'second']);
+		cleanup();
+	});
+
 	it('stays reusable across lifecycle replay', async () => {
 		const controller = createDesktopAppAudioRecoveryController();
 		const runs: string[] = [];
