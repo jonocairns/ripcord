@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.3.1](https://github.com/jonocairns/ripcord/compare/v2.3.0...v2.3.1) (2026-10-03)
+
+
+### Bug Fixes
+
+* keep channel attachments out of shared caches ([#318](https://github.com/jonocairns/ripcord/issues/318)) ([e13070e](https://github.com/jonocairns/ripcord/commit/e13070ef0e6f141561043757e5941fb2a9fd1a4c))
+* sign every attachment and refresh links across channels ([#319](https://github.com/jonocairns/ripcord/issues/319)) ([a720cef](https://github.com/jonocairns/ripcord/commit/a720cefd3288215a77b5c576a6252f847e559d72))
+* stop plugin commands from posting unescaped message HTML ([#316](https://github.com/jonocairns/ripcord/issues/316)) ([476b648](https://github.com/jonocairns/ripcord/commit/476b64841e98d6b697536be76c18c575d1ce2c8b))
+
 ## [2.3.0](https://github.com/jonocairns/ripcord/compare/v2.2.0...v2.3.0) (2026-09-28)
 
 
