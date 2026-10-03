@@ -89,6 +89,7 @@ import { useTransports } from './hooks/use-transports';
 import { useVoiceControls } from './hooks/use-voice-controls';
 import { useVoiceEvents } from './hooks/use-voice-events';
 import { useVoiceSessionExecutor } from './hooks/use-voice-session-executor';
+import { useWebcam } from './hooks/use-webcam';
 import { voiceSessionCommandObserver } from './hooks/voice-session-command-observer';
 import { didMicCaptureSettingsChange } from './mic-capture-config';
 import type { TMicrophonePreparedPipeline } from './microphone-pipeline-controller';
@@ -101,11 +102,7 @@ import {
 } from './transport-recovery-circuit';
 import { recoverTransportMicrophone } from './transport-recovery-microphone';
 import type { AudioVideoRefs, TConnectionStatus, TRepublishedLocalMediaState, TVoiceProvider } from './types';
-import {
-	applyVideoDegradationPreference,
-	getScreenShareVideoProducerConfig,
-	getWebcamVideoProducerConfig,
-} from './video-producer-config';
+import { applyVideoDegradationPreference, getScreenShareVideoProducerConfig } from './video-producer-config';
 import { createVoiceActivityStore } from './voice-activity';
 import {
 	createEmptyAudioVideoRefs,
@@ -114,6 +111,7 @@ import {
 	VoiceProviderContext,
 } from './voice-provider-context';
 import { VolumeControlProvider } from './volume-control-provider';
+import { didWebcamCaptureSettingsChange } from './webcam-controller';
 
 type TScreenShareStreamHandlers = {
 	onVideoTrackStarted?: () => void;
@@ -147,15 +145,6 @@ const getVoiceSessionConnectionStatusSnapshot = (): TConnectionStatus =>
 
 const subscribeVoiceSessionConnectionStatus = (onStoreChange: () => void): (() => void) =>
 	subscribeVoiceSession(onStoreChange);
-
-const didWebcamCaptureSettingsChange = (previousDevices: TDeviceSettings, nextDevices: TDeviceSettings) => {
-	return (
-		previousDevices.webcamId !== nextDevices.webcamId ||
-		previousDevices.webcamResolution !== nextDevices.webcamResolution ||
-		previousDevices.webcamFramerate !== nextDevices.webcamFramerate ||
-		previousDevices.videoCodec !== nextDevices.videoCodec
-	);
-};
 
 type TChannelExternalStreams = {
 	[streamId: number]: TExternalStream;
@@ -389,7 +378,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	}, []);
 
 	const {
-		localVideoProducer,
 		localAudioStream,
 		localVideoStream,
 		localScreenShareStream,
@@ -403,7 +391,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	} = useLocalStreams();
 
 	const localAudioStreamRef = useLatestRef(localAudioStream);
-	const localVideoStreamRef = useLatestRef(localVideoStream);
 	const localScreenShareStreamRef = useLatestRef(localScreenShareStream);
 
 	const voiceCleanupRef = useRef<(() => void) | undefined>(undefined);
@@ -586,6 +573,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 	}, []);
 
+	const webcam = useWebcam({
+		devices,
+		getProducerTransport: () => producerTransport.current,
+		getRtpCapabilities: () => sendRtpCapabilities.current,
+		publishStream: setLocalVideoStream,
+		closeProducer: (id) => {
+			void closeProducerOnServer(StreamKind.VIDEO, id);
+		},
+	});
+	const { start: startWebcamStream, stop: stopWebcamStream } = webcam;
+
 	const bindProducerCloseHandler = useCallback(
 		({
 			producer,
@@ -654,12 +652,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	> => {
 		const metadataBySsrc = new Map<number, { configuredMaxBitrate: number | null; label: string }>();
 		const producers = [
-			{ producerRef: localScreenShareProducer, label: 'Screen share' },
-			{ producerRef: localVideoProducer, label: 'Webcam' },
+			{ producer: localScreenShareProducer.current, label: 'Screen share' },
+			{ producer: webcam.getProducer(), label: 'Webcam' },
 		];
 
-		for (const { producerRef, label } of producers) {
-			const sender = producerRef.current?.rtpSender;
+		for (const { producer, label } of producers) {
+			const sender = producer?.rtpSender;
 
 			if (!sender) {
 				continue;
@@ -679,7 +677,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		}
 
 		return metadataBySsrc;
-	}, [localScreenShareProducer, localVideoProducer]);
+	}, [localScreenShareProducer, webcam]);
 
 	const {
 		store: transportStatsStore,
@@ -884,122 +882,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		start: startMicStream,
 	} = microphone;
 
-	const publishWebcamTrack = useCallback(
-		async (
-			stream: MediaStream,
-			track: MediaStreamTrack,
-			options: {
-				stopTracksOnFailure?: boolean;
-				isCurrent?: () => boolean;
-			} = {},
-		) => {
-			const transport = producerTransport.current;
-			if (!transport || transport.closed || (options.isCurrent && !options.isCurrent())) {
-				throw new VoiceSessionExecutionSupersededError();
-			}
-			setLocalVideoStream(stream);
-			const stopTracksOnFailure = options.stopTracksOnFailure ?? true;
-			let videoProducer: Producer<AppData> | undefined;
-
-			try {
-				logVoice('Obtained video track', { videoTrack: track });
-
-				track.contentHint = 'motion';
-
-				const requestedWebcamResolution = getResWidthHeight(devices?.webcamResolution);
-				const webcamTrackSettings = track.getSettings();
-				const videoConfig = getWebcamVideoProducerConfig({
-					rtpCapabilities: sendRtpCapabilities.current,
-					preference: devices.videoCodec,
-					width: webcamTrackSettings.width ?? requestedWebcamResolution.width,
-					height: webcamTrackSettings.height ?? requestedWebcamResolution.height,
-					frameRate: webcamTrackSettings.frameRate ?? devices.webcamFramerate,
-				});
-				videoProducer = await transport.produce({
-					track,
-					...videoConfig,
-					stopTracks: false,
-					appData: { kind: StreamKind.VIDEO },
-				});
-
-				if (!videoProducer) {
-					throw new Error('Failed to create webcam producer');
-				}
-
-				const createdVideoProducer = videoProducer;
-				await applyVideoDegradationPreference(createdVideoProducer.rtpSender, 'webcam');
-				if (
-					producerTransport.current !== transport ||
-					transport.closed ||
-					(options.isCurrent && !options.isCurrent())
-				) {
-					throw new VoiceSessionExecutionSupersededError();
-				}
-
-				localVideoProducer.current = createdVideoProducer;
-
-				logVoice('Webcam video producer created', {
-					producer: createdVideoProducer,
-				});
-
-				bindProducerCloseHandler({
-					producer: createdVideoProducer,
-					kind: StreamKind.VIDEO,
-					producerRef: localVideoProducer,
-					logLabel: 'Video',
-				});
-
-				track.onended = () => {
-					logVoice('Video track ended, cleaning up webcam');
-
-					stream.getVideoTracks().forEach((currentTrack) => {
-						currentTrack.stop();
-					});
-					createdVideoProducer.close();
-
-					setLocalVideoStream((currentStream) => {
-						return currentStream === stream ? undefined : currentStream;
-					});
-
-					updateOwnVoiceState({ webcamEnabled: false });
-
-					void (async () => {
-						try {
-							await sendOwnVoiceStateUpdate({
-								webcamEnabled: false,
-							});
-						} catch (error) {
-							logVoice('Error syncing webcam state after native track end', { error });
-						}
-					})();
-				};
-			} catch (error) {
-				videoProducer?.close();
-				if (localVideoProducer.current === videoProducer) {
-					localVideoProducer.current = undefined;
-				}
-				if (stopTracksOnFailure) {
-					stream.getVideoTracks().forEach((currentTrack) => {
-						currentTrack.stop();
-					});
-					setLocalVideoStream((currentStream) => {
-						return currentStream === stream ? undefined : currentStream;
-					});
-				}
-				throw error;
-			}
-		},
-		[
-			bindProducerCloseHandler,
-			devices.videoCodec,
-			devices.webcamFramerate,
-			devices.webcamResolution,
-			localVideoProducer,
-			producerTransport,
-			setLocalVideoStream,
-		],
-	);
-
 	const shareAudio = useShareAudio({
 		nativeAppAudioIngestEnabled: devices.nativeAppAudioIngestEnabled,
 		getProducerTransport: () => producerTransport.current,
@@ -1121,58 +1003,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		screenShareProducerRef: localScreenShareProducer,
 		active: localScreenShareStream !== undefined,
 	});
-
-	const startWebcamStream = useCallback(async () => {
-		try {
-			logVoice('Starting webcam stream');
-
-			const requestedWebcamResolution = getResWidthHeight(devices?.webcamResolution);
-
-			const stream = await navigator.mediaDevices.getUserMedia({
-				audio: false,
-				video: {
-					...(devices?.webcamId
-						? {
-								deviceId: {
-									exact: devices.webcamId,
-								},
-							}
-						: {}),
-					frameRate: devices.webcamFramerate,
-					...requestedWebcamResolution,
-				},
-			});
-
-			logVoice('Webcam stream obtained', { stream });
-
-			const videoTrack = stream.getVideoTracks()[0];
-
-			if (videoTrack) {
-				await publishWebcamTrack(stream, videoTrack);
-			} else {
-				throw new Error('Failed to obtain video track from webcam');
-			}
-		} catch (error) {
-			logVoice('Error starting webcam stream', { error });
-			throw error;
-		}
-	}, [devices.webcamFramerate, devices.webcamId, devices.webcamResolution, publishWebcamTrack]);
-
-	const stopWebcamStream = useCallback(() => {
-		logVoice('Stopping webcam stream');
-
-		localVideoStream?.getVideoTracks().forEach((track) => {
-			logVoice('Stopping video track', { track });
-
-			track.stop();
-			localVideoStream.removeTrack(track);
-		});
-
-		localVideoProducer.current?.close();
-		localVideoProducer.current = undefined;
-
-		setLocalVideoStream(undefined);
-	}, [localVideoStream, setLocalVideoStream, localVideoProducer]);
 
 	useEffect(() => {
 		const previousDevices = previousDevicesRef.current;
@@ -1416,6 +1246,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			stopMonitoring();
 			resetStats();
 			voiceActivityStoreRef.current.clearAll();
+			if (opts?.preserveLocalMedia) webcam.detachProducer();
+			else webcam.stop();
 			clearLocalStreams({ keepVideoAndScreen: opts?.preserveLocalMedia });
 			clearRemoteUserStreams();
 			clearExternalStreams();
@@ -1432,6 +1264,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			resetStats,
 			cleanupMicAudioPipeline,
 			clearLocalStreams,
+			webcam,
 			clearRemoteUserStreams,
 			clearExternalStreams,
 			cleanupTransports,
@@ -1468,16 +1301,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			const tasks: Promise<void>[] = [];
 			const state: TRepublishedLocalMediaState = {};
 
-			const videoStream = localVideoStreamRef.current;
-			const videoTrack = videoStream?.getVideoTracks()[0];
-			if (videoStream && videoTrack && videoTrack.readyState === 'live') {
+			const republishWebcam = webcam.republish(isCurrent);
+			if (republishWebcam) {
 				state.webcamEnabled = true;
-				tasks.push(
-					publishWebcamTrack(videoStream, videoTrack, {
-						stopTracksOnFailure: false,
-						isCurrent,
-					}),
-				);
+				tasks.push(republishWebcam);
 			}
 
 			const screenShareStream = localScreenShareStreamRef.current;
@@ -1497,7 +1324,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 			return { tasks, state };
 		},
-		[publishWebcamTrack, publishScreenShareTrack, shareAudio],
+		[webcam, publishScreenShareTrack, shareAudio],
 	);
 
 	const syncRepublishedLocalMediaState = useCallback(
