@@ -46,9 +46,7 @@ mechanisms, server/API contracts, desktop bridge contracts and the consumed
 ## Mechanical extraction versus deliberate race changes
 
 The native/worklet algorithms, status messages, settings, fallback decisions
-and recovery serialization move together. The final stack separately fixes native
-teardown completion and display-fallback ownership during recovery. The following
-ownership changes have
+and recovery serialization move together. The following ownership changes have
 separate regression assertions; they are not claims of a purely mechanical move:
 
 | Boundary | Previous behavior / potential race | Deliberate behavior and test evidence |
@@ -57,7 +55,9 @@ separate regression assertions; they are not claims of a purely mechanical move:
 | Native setting | Native rollout read a value captured by the provider callback. | The native entry reads the latest committed rollout setting after pending teardown. A setting changed while teardown is held switches the successor to worklet. LocalStorage/build overrides keep their precedence. |
 | Video liveness | Recovery read the passive screen-stream ref. | The injected getter checks the current installed video track, falling back to preserved capture during reconnect. Startup and recovery check liveness without waiting for a stream-state render. The recovery test supplies changing liveness. |
 | Browser publication | Deferred browser publication and old track callbacks lacked capture-generation fencing. | Stop, supersession and layout cleanup fence publication. Callback identity prevents an old handler from clearing a republished stream. Track cleanup survives expiry of the completed session command's publication lease. |
-| Pending cleanup | Queued cleanup detached shared resources only after waiting for its predecessor. | Cleanup detaches its own resource snapshot synchronously, then queues destruction. A new start waits for committed-resource teardown. Attempt-local late teardown uses its own session and transport IDs. |
+| Pending cleanup | Queued cleanup detached shared resources only after waiting for its predecessor. | Cleanup detaches its own resource snapshot synchronously, then queues destruction. A new start waits for committed-resource teardown. Attempt-local late teardown can finish independently and cannot clear replacement resources. |
+| Native teardown completion | `ownsGlobalState` was captured before awaited RTP/capture/ingest teardown, then used to clear active state afterward. | Recheck native generation after the awaits. The old-native-teardown regression publishes a successor while the predecessor's RTP stop is held, then proves successor cleanup still closes its native producer. Server close uses the retained native producer ID. |
+| Fallback during recovery | Cleanup temporarily cleared the published display-loopback stream; a successful native recovery dropped the stream without stopping that track. Screen-video cleanup previously also stopped audio tracks. | Retain fallback ownership across recovery awaits so audio-only stop still reaches it. Native takeover releases the fallback audio track. Both regressions verify the mixed display stream's video remains live. |
 
 Lifecycle cleanup fences startup and recovery before passive session effects can
 run. Obsolete work cleans its own session/ingest/pipeline. `awaitTeardown` drains
@@ -104,9 +104,9 @@ was reviewed and `git diff --check` passed. No root `magic` command was used.
 - `bun run check-types`: passed across all workspaces.
 - `bun run lint`: passed without lint warnings.
 - `bun run knip`: passed, with the existing 11 configuration hints.
-- Client voice-provider/server-voice unit suites: 571 passed, 0 failed, 51 files.
+- Client voice-provider/server-voice unit suites: 574 passed, 0 failed, 51 files.
 - `CI=true bun run test:e2e e2e/tests/screen-share.spec.ts`: 4 passed, 0 failed,
-  26.0 seconds, zero retries.
+  28.9 seconds, zero retries.
 - Reconnect/remote-media/recovery-faults/session-conflict E2E: 24 passed, 0 failed,
   3.9 minutes, zero retries.
 

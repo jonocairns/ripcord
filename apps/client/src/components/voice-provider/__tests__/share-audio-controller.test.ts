@@ -340,6 +340,26 @@ describe('share audio worklet ownership', () => {
 		await f.controller.awaitTeardown();
 	});
 
+	it('old native teardown finishing after replacement cannot reset replacement active state', async () => {
+		const f = makeFixture();
+		const gate = deferred();
+		const entered = deferred();
+		f.deps.produceNative = mock(async () => ({ fallback: true as const }));
+		f.bridge.stopAppAudioRtp = mock(async () => {
+			entered.resolve();
+			await gate.promise;
+		});
+		const old = startWorklet(f);
+		await entered.promise;
+		f.deps.produceNative = mock(async () => ({ producerId: 'new-native' }));
+		expect(await startWorklet(f)).toBe('published');
+		gate.resolve();
+		expect(await old).toBe('abandoned');
+		await f.controller.stop();
+		expect(f.deps.closeProducer).toHaveBeenCalledWith('new-native');
+		expect(f.bridge.stopAppAudioCapture).toHaveBeenCalledWith('session-2');
+		f.cleanup();
+	});
 	it('old pipeline destruction finishing after replacement cannot clear its stream', async () => {
 		const f = makeFixture();
 		f.setNativeEnabled(false);
@@ -398,6 +418,52 @@ describe('share audio recovery integration', () => {
 		expect(f.getStream()).toBe(stream);
 		expect(stream?.getAudioTracks()[0]?.readyState).toBe('live');
 		cleanup();
+		await f.controller.awaitTeardown();
+	});
+	it('stop reaches live display fallback while recovery has temporarily unpublished it', async () => {
+		const f = makeFixture();
+		f.setNativeEnabled(false);
+		const audio = makeTrack();
+		const video = makeTrack('video');
+		f.deps.createPipeline = mock(async () => {
+			throw new Error('worklet unavailable');
+		});
+		await startWorklet(f, makeStream([audio.track, video.track]), ScreenAudioMode.SYSTEM);
+		f.setNativeEnabled(true);
+		const gate = deferred();
+		const entered = deferred();
+		f.bridge.startAppAudioCapture = mock(async () => {
+			entered.resolve();
+			await gate.promise;
+			return makeSession('recovering');
+		});
+		const recovery = f.controller.recover();
+		await entered.promise;
+		expect(f.getStream()).toBeUndefined();
+		expect(audio.track.readyState).toBe('live');
+		await f.controller.stop();
+		expect(audio.track.readyState).toBe('ended');
+		expect(video.track.readyState).toBe('live');
+		gate.resolve();
+		await recovery;
+		expect(f.produce).toHaveBeenCalledTimes(1);
+		f.cleanup();
+	});
+	it('native recovery releases the live display fallback after taking over publication', async () => {
+		const f = makeFixture();
+		f.setNativeEnabled(false);
+		const audio = makeTrack();
+		const video = makeTrack('video');
+		f.deps.createPipeline = mock(async () => {
+			throw new Error('worklet unavailable');
+		});
+		await startWorklet(f, makeStream([audio.track, video.track]), ScreenAudioMode.SYSTEM);
+		f.setNativeEnabled(true);
+		await f.controller.recover();
+		expect(audio.track.readyState).toBe('ended');
+		expect(video.track.readyState).toBe('live');
+		expect(f.getStream()).toBeUndefined();
+		f.cleanup();
 		await f.controller.awaitTeardown();
 	});
 

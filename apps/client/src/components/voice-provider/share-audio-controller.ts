@@ -351,7 +351,7 @@ const createShareAudioController = (deps: TShareAudioDependencies) => {
 			if (session === attemptSession) {
 				session = undefined;
 			}
-			if (ownsGlobalState) {
+			if (ownsCurrentAttempt()) {
 				nativeActive = false;
 			}
 		};
@@ -811,76 +811,85 @@ const createShareAudioController = (deps: TShareAudioDependencies) => {
 				? currentScreenShareAudioTrack
 				: undefined;
 
-		deps.log('Recovering desktop app audio from publish intent', {
-			sourceId: recoveryIntent.captureInput.sourceId,
-			appAudioTargetId: recoveryIntent.captureInput.appAudioTargetId,
-			mode: recoveryIntent.audioMode === ScreenAudioMode.SYSTEM ? 'system-exclude' : 'per-app',
-			hasDisplayFallbackTrack: displayFallbackTrack !== undefined,
-		});
+		// Cleanup can temporarily unpublish loopback while native/worklet recovery
+		// awaits. Retain its ownership so a concurrent stop still reaches the track.
+		const ownedDisplayFallbackStream = displayFallbackTrack ? currentScreenShareAudioStream : undefined;
+		if (ownedDisplayFallbackStream) pendingDisplayStream = ownedDisplayFallbackStream;
+		try {
+			deps.log('Recovering desktop app audio from publish intent', {
+				sourceId: recoveryIntent.captureInput.sourceId,
+				appAudioTargetId: recoveryIntent.captureInput.appAudioTargetId,
+				mode: recoveryIntent.audioMode === ScreenAudioMode.SYSTEM ? 'system-exclude' : 'per-app',
+				hasDisplayFallbackTrack: displayFallbackTrack !== undefined,
+			});
 
-		audioProducer?.close();
-		audioProducer = undefined;
+			audioProducer?.close();
+			audioProducer = undefined;
 
-		await cleanupDesktopAppAudio({
-			stopCapture: true,
-			preserveCurrentAudio: false,
-		});
-		if (!ownsRecovery()) {
-			return;
-		}
-
-		const captureInput = { ...recoveryIntent.captureInput };
-		const nativeIngestResult = await startNativeAppAudioIngest({
-			desktopBridge,
-			captureInput,
-			audioMode: recoveryIntent.audioMode,
-			isCurrent: ownsRecovery,
-		});
-
-		if (nativeIngestResult === 'published' || nativeIngestResult === 'abandoned') {
-			// 'published': native owns SCREEN_AUDIO. 'abandoned': the attempt tore
-			// itself down because the intent was cleared/superseded mid-recovery.
-			// Either way do not fall back to the worklet path.
-			if (ownsRecovery()) {
-				setLocalScreenShareAudio(undefined);
-			} else if (nativeIngestResult === 'published') {
-				await cleanupDesktopAppAudio();
-			}
-			return;
-		}
-		if (!ownsRecovery()) {
-			return;
-		}
-
-		const workletResult = await startDesktopAppAudioWorklet({
-			desktopBridge,
-			captureInput,
-			audioMode: recoveryIntent.audioMode,
-			displayStream: currentScreenShareAudioStream,
-			displayAudioTrack: displayFallbackTrack,
-			showWarnings: false,
-			isCurrent: ownsRecovery,
-		});
-
-		if (workletResult.kind === 'display-fallback') {
+			await cleanupDesktopAppAudio({
+				stopCapture: true,
+				preserveCurrentAudio: false,
+			});
 			if (!ownsRecovery()) {
 				return;
 			}
-			deps.log('Recovering desktop app audio with display-media loopback fallback');
-			const fallbackStream = deps.createStream([workletResult.displayAudioTrack]);
-			try {
-				await publishScreenShareAudioTrack(fallbackStream, workletResult.displayAudioTrack, {
-					isCurrent: ownsRecovery,
-				});
-			} catch (error) {
-				setLocalScreenShareAudio((currentStream) => (currentStream === fallbackStream ? undefined : currentStream));
-				throw error;
-			}
-			return;
-		}
 
-		if (workletResult.kind === 'none') {
-			deps.log('Desktop app audio recovery completed without a recoverable audio path');
+			const captureInput = { ...recoveryIntent.captureInput };
+			const nativeIngestResult = await startNativeAppAudioIngest({
+				desktopBridge,
+				captureInput,
+				audioMode: recoveryIntent.audioMode,
+				isCurrent: ownsRecovery,
+			});
+
+			if (nativeIngestResult === 'published' || nativeIngestResult === 'abandoned') {
+				// 'published': native owns SCREEN_AUDIO. 'abandoned': the attempt tore
+				// itself down because the intent was cleared/superseded mid-recovery.
+				// Either way do not fall back to the worklet path.
+				if (ownsRecovery()) {
+					if (nativeIngestResult === 'published') stopAudioTracks(ownedDisplayFallbackStream);
+					setLocalScreenShareAudio(undefined);
+				} else if (nativeIngestResult === 'published') {
+					await cleanupDesktopAppAudio();
+				}
+				return;
+			}
+			if (!ownsRecovery()) {
+				return;
+			}
+
+			const workletResult = await startDesktopAppAudioWorklet({
+				desktopBridge,
+				captureInput,
+				audioMode: recoveryIntent.audioMode,
+				displayStream: currentScreenShareAudioStream,
+				displayAudioTrack: displayFallbackTrack,
+				showWarnings: false,
+				isCurrent: ownsRecovery,
+			});
+
+			if (workletResult.kind === 'display-fallback') {
+				if (!ownsRecovery()) {
+					return;
+				}
+				deps.log('Recovering desktop app audio with display-media loopback fallback');
+				const fallbackStream = deps.createStream([workletResult.displayAudioTrack]);
+				try {
+					await publishScreenShareAudioTrack(fallbackStream, workletResult.displayAudioTrack, {
+						isCurrent: ownsRecovery,
+					});
+				} catch (error) {
+					setLocalScreenShareAudio((currentStream) => (currentStream === fallbackStream ? undefined : currentStream));
+					throw error;
+				}
+				return;
+			}
+
+			if (workletResult.kind === 'none') {
+				deps.log('Desktop app audio recovery completed without a recoverable audio path');
+			}
+		} finally {
+			if (pendingDisplayStream === ownedDisplayFallbackStream) pendingDisplayStream = undefined;
 		}
 	};
 
