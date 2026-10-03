@@ -8,7 +8,7 @@ import {
 	type TVoiceUserState,
 } from '@sharkord/shared';
 import { Device } from 'mediasoup-client';
-import type { AppData, Producer, RtpCapabilities, RtpCodecCapability } from 'mediasoup-client/types';
+import type { AppData, Producer, RtpCapabilities } from 'mediasoup-client/types';
 import {
 	type MutableRefObject,
 	memo,
@@ -71,9 +71,9 @@ import {
 	type TDesktopScreenShareSelection,
 	type TStartAppAudioCaptureInput,
 } from '@/runtime/types';
-import { type TDeviceSettings, VideoCodecPreference } from '@/types';
+import type { TDeviceSettings } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
-import { createAudioContextWithSampleRateFallback, resolveAudioContextClass } from './audio-context';
+import { getAudioOpusConfig, getScreenShareAudioOpusConfig } from './audio-producer-config';
 import {
 	resolveDefaultInputGroupId,
 	resolveDefaultInputRecoveryDecision,
@@ -117,6 +117,13 @@ import {
 	startLocalVoiceActivityMonitor,
 } from './local-voice-activity';
 import { createMicAudioProcessingPipeline, type TMicAudioProcessingPipeline } from './mic-audio-processing';
+import { didMicCaptureSettingsChange, resolveMicCaptureConfig } from './mic-capture-config';
+import {
+	clampVolumePercent,
+	createMicGainPipeline,
+	shouldUseMicGainPipeline,
+	type TMicGainPipeline,
+} from './mic-gain-pipeline';
 import {
 	createMicrophonePipelineController,
 	MicPipelineSupersededError,
@@ -140,8 +147,11 @@ import {
 } from './transport-recovery-circuit';
 import { recoverTransportMicrophone } from './transport-recovery-microphone';
 import type { AudioVideoRefs, TConnectionStatus, TRepublishedLocalMediaState, TVoiceProvider } from './types';
-import { getVideoBitratePolicy, type TVideoBitrateCodec } from './video-bitrate-policy';
-import { VIDEO_DEGRADATION_PREFERENCE } from './video-encoding-constants';
+import {
+	applyVideoDegradationPreference,
+	getScreenShareVideoProducerConfig,
+	getWebcamVideoProducerConfig,
+} from './video-producer-config';
 import { createVoiceActivityStore } from './voice-activity';
 import {
 	createEmptyAudioVideoRefs,
@@ -197,157 +207,6 @@ const getVoiceSessionConnectionStatusSnapshot = (): TConnectionStatus =>
 const subscribeVoiceSessionConnectionStatus = (onStoreChange: () => void): (() => void) =>
 	subscribeVoiceSession(onStoreChange);
 
-const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
-	[VideoCodecPreference.VP8]: 'video/VP8',
-	[VideoCodecPreference.VP9]: 'video/VP9',
-	[VideoCodecPreference.H264]: 'video/H264',
-};
-const DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS = 96_000;
-// Desktop/game audio is music-grade, full-band content (not voice), so it gets
-// stereo, high-bitrate opus with FEC on and DTX off — DTX gates "silence" and
-// audibly clips sustained music.
-const SCREEN_SHARE_AUDIO_TARGET_BITRATE_BPS = 256_000;
-
-// Temporal SVC for video producers: one spatial layer (single encode, single
-// resolution) split into three temporal layers (~T0/T1/T2 frame-rate tiers).
-// This is the cheap kind of layering — reference-structure bookkeeping, not
-// re-encoding — so there's no meaningful streamer CPU cost. It lets the SFU
-// shed a temporal layer per slow viewer (graceful frame-rate drop instead of a
-// frozen/stuttering stream + PLI storms), and reinforces the degradation
-// preference under bitrate pressure. No maxBitrate is set, preserving the
-// "let congestion control settle the rate" policy. Best on VP9; hardware H264
-// may fall back to a single layer (L1T1), which is harmless.
-const VIDEO_SCALABILITY_MODE = 'L1T3';
-
-type TVideoProducerEncoding = {
-	scalabilityMode?: string;
-	maxBitrate?: number;
-};
-
-const createVideoProducerEncodings = (): TVideoProducerEncoding[] => {
-	return [{ scalabilityMode: VIDEO_SCALABILITY_MODE }];
-};
-
-// Map the resolved/effective send codec to a bitrate-policy codec so the
-// max-bitrate ceiling can be scaled per codec. When no codec is resolved (AUTO
-// where mediasoup-client picks a default internally) we fall back to 'auto'.
-const getBitrateCodecFromMimeType = (codec: RtpCodecCapability | undefined): TVideoBitrateCodec => {
-	const mimeType = codec?.mimeType.toLowerCase();
-
-	if (mimeType === 'video/h264') return 'h264';
-	if (mimeType === 'video/vp8') return 'vp8';
-	if (mimeType === 'video/vp9') return 'vp9';
-
-	return 'auto';
-};
-
-type ResolvedMicProcessingConfig = {
-	wasmNoiseSuppressionEnabled: boolean;
-	browserAutoGainControl: boolean;
-	browserNoiseSuppression: boolean;
-	browserEchoCancellation: boolean;
-};
-
-const resolvePreferredVideoCodec = (
-	rtpCapabilities: RtpCapabilities | null,
-	preference: VideoCodecPreference,
-): RtpCodecCapability | undefined => {
-	if (!rtpCapabilities || preference === VideoCodecPreference.AUTO) {
-		return undefined;
-	}
-
-	const preferredMimeType = VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE[preference]?.toLowerCase();
-
-	if (!preferredMimeType) {
-		return undefined;
-	}
-
-	return (rtpCapabilities.codecs ?? []).find((codec) => {
-		return codec.mimeType.toLowerCase() === preferredMimeType;
-	});
-};
-
-const findVideoCodecByMime = (
-	rtpCapabilities: RtpCapabilities | null,
-	mimeType: string,
-): RtpCodecCapability | undefined => {
-	const lowerMimeType = mimeType.toLowerCase();
-
-	return (rtpCapabilities?.codecs ?? []).find((codec) => {
-		return codec.mimeType.toLowerCase() === lowerMimeType;
-	});
-};
-
-type TScreenShareEncodeParams = {
-	width: number;
-	height: number;
-	framerate: number;
-	bitrate: number;
-};
-
-// Resolve the screen share send codec.
-// - AUTO: prefer H264; it has broad hardware-encoder support and is universally
-//   decodable by viewers. Without this, mediasoup-client's default pick is the
-//   first negotiated codec (VP8), silently landing software encoding on
-//   demanding shares.
-// - Explicit VP9/VP8/H264: use as chosen; the caller knowingly accepts the
-//   (often software-encoded) CPU trade-off for VP9/VP8.
-const resolveScreenShareVideoCodec = (
-	rtpCapabilities: RtpCapabilities | null,
-	preference: VideoCodecPreference,
-	encodeParams: TScreenShareEncodeParams,
-): RtpCodecCapability | undefined => {
-	const h264Codec = findVideoCodecByMime(rtpCapabilities, 'video/H264');
-
-	if (preference === VideoCodecPreference.AUTO) {
-		if (!h264Codec) {
-			logVoice('H264 screen share codec unavailable for auto selection, falling back to mediasoup default codec', {
-				...encodeParams,
-			});
-		}
-
-		return h264Codec;
-	}
-
-	return resolvePreferredVideoCodec(rtpCapabilities, preference);
-};
-
-const applyVideoDegradationPreference = async (sender: RTCRtpSender | undefined, label: string): Promise<void> => {
-	if (!sender) {
-		logVoice('RTCRtpSender unavailable, skipping degradationPreference override', { label });
-		return;
-	}
-
-	try {
-		// setParameters must be passed the object from the immediately preceding
-		// getParameters — they're coupled by its transactionId. Keep this read /
-		// modify / write atomic: any other setParameters landing on this sender
-		// in between would invalidate the transactionId and reject with
-		// InvalidStateError. A future concurrent path (e.g. simulcast layer
-		// toggling) must serialise against this, not interleave.
-		const params = sender.getParameters();
-
-		if (params.degradationPreference === VIDEO_DEGRADATION_PREFERENCE) {
-			return;
-		}
-
-		params.degradationPreference = VIDEO_DEGRADATION_PREFERENCE;
-		await sender.setParameters(params);
-	} catch (error) {
-		logVoice('Failed to set degradationPreference', { label, error });
-	}
-};
-
-const resolveMicProcessingConfig = (devices: TDeviceSettings): ResolvedMicProcessingConfig => {
-	const browserWasmNoiseSuppressionEnabled = devices.wasmNoiseSuppressionEnabled && devices.noiseSuppression;
-	return {
-		wasmNoiseSuppressionEnabled: browserWasmNoiseSuppressionEnabled,
-		browserAutoGainControl: devices.autoGainControl,
-		browserNoiseSuppression: browserWasmNoiseSuppressionEnabled ? false : devices.noiseSuppression,
-		browserEchoCancellation: devices.echoCancellation,
-	};
-};
-
 // Debounce the burst of `devicechange` events the OS emits while a driver
 // settles before we re-check whether the system default input moved. The window
 // also gives Chromium's synthetic "default" entry time to repoint to the new
@@ -355,16 +214,6 @@ const resolveMicProcessingConfig = (devices: TDeviceSettings): ResolvedMicProces
 const DEFAULT_INPUT_DEVICE_CHANGE_DEBOUNCE_MS = 500;
 const DEFAULT_INPUT_DEVICE_CHANGE_RETRY_INTERVAL_MS = 250;
 const DEFAULT_INPUT_DEVICE_CHANGE_RETRY_WINDOW_MS = 1500;
-
-const didMicCaptureSettingsChange = (previousDevices: TDeviceSettings, nextDevices: TDeviceSettings) => {
-	return (
-		previousDevices.microphoneId !== nextDevices.microphoneId ||
-		previousDevices.echoCancellation !== nextDevices.echoCancellation ||
-		previousDevices.noiseSuppression !== nextDevices.noiseSuppression ||
-		previousDevices.wasmNoiseSuppressionEnabled !== nextDevices.wasmNoiseSuppressionEnabled ||
-		previousDevices.autoGainControl !== nextDevices.autoGainControl
-	);
-};
 
 const didWebcamCaptureSettingsChange = (previousDevices: TDeviceSettings, nextDevices: TDeviceSettings) => {
 	return (
@@ -375,52 +224,11 @@ const didWebcamCaptureSettingsChange = (previousDevices: TDeviceSettings, nextDe
 	);
 };
 
-type TMicGainPipeline = {
-	audioContext: AudioContext;
-	gainNode: GainNode;
-	track: MediaStreamTrack;
-	stream: MediaStream;
-	destroy: () => Promise<void>;
-};
-
-const clampVolumePercent = (value: number) => {
-	return Math.min(100, Math.max(0, value));
-};
-
-const shouldUseMicGainPipeline = (volume: number) => {
-	return clampVolumePercent(volume) !== 100;
-};
-
 type TChannelExternalStreams = {
 	[streamId: number]: TExternalStream;
 };
 
 const EMPTY_CHANNEL_EXTERNAL_STREAMS: TChannelExternalStreams = {};
-
-const getAudioOpusConfig = (channelId: number | undefined) => {
-	let bitrate = DEFAULT_AUDIO_OPUS_TARGET_BITRATE_BPS;
-	let dtx = false;
-
-	if (channelId !== undefined) {
-		const channel = channelByIdSelector(useServerStore.getState(), channelId);
-
-		if (channel?.voiceBitrate != null) {
-			bitrate = channel.voiceBitrate;
-		}
-
-		if (channel?.voiceDtx != null) {
-			dtx = channel.voiceDtx;
-		}
-	}
-
-	return {
-		maxBitrate: bitrate,
-		codecOptions: {
-			opusMaxAverageBitrate: bitrate,
-			opusDtx: dtx,
-		},
-	};
-};
 
 const getDesktopAudioIssueToastMessage = (
 	capabilities: TDesktopCapabilities | undefined,
@@ -442,105 +250,6 @@ const getDesktopAudioIssueToastMessage = (
 	return relevantIssue.guidance[0]
 		? `${relevantIssue.title}: ${relevantIssue.guidance[0]}`
 		: `${relevantIssue.title}: ${relevantIssue.message}`;
-};
-
-const createMicGainPipeline = async (
-	inputStream: MediaStream,
-	volume: number,
-): Promise<TMicGainPipeline | undefined> => {
-	const inputTrack = inputStream.getAudioTracks()[0];
-
-	if (!inputTrack) {
-		return undefined;
-	}
-
-	const AudioContextClass = resolveAudioContextClass();
-
-	if (!AudioContextClass) {
-		return undefined;
-	}
-
-	const audioContext = createAudioContextWithSampleRateFallback({
-		AudioContextClass,
-		sampleRate: 48_000,
-		onPreferredSampleRateError: (preferredSampleRateError) => {
-			logVoice('Falling back to a browser-default AudioContext for microphone gain processing', {
-				preferredSampleRateError,
-			});
-		},
-		onFallbackError: (fallbackError) => {
-			logVoice('Failed to create an AudioContext for microphone gain processing', {
-				fallbackError,
-			});
-		},
-	});
-
-	if (!audioContext) {
-		return undefined;
-	}
-
-	try {
-		if (audioContext.state === 'suspended') {
-			await audioContext.resume();
-		}
-	} catch {
-		// ignore resume failures and continue with the browser-managed state
-	}
-
-	const sourceNode = audioContext.createMediaStreamSource(new MediaStream([inputTrack]));
-	const gainNode = audioContext.createGain();
-	const destinationNode = audioContext.createMediaStreamDestination();
-	const outputTrack = destinationNode.stream.getAudioTracks()[0];
-
-	if (!outputTrack) {
-		await audioContext.close().catch(() => {
-			// ignore close failures
-		});
-		return undefined;
-	}
-
-	gainNode.gain.value = clampVolumePercent(volume) / 100;
-	sourceNode.connect(gainNode);
-	gainNode.connect(destinationNode);
-
-	const handleInputEnded = () => {
-		outputTrack.stop();
-	};
-
-	inputTrack.addEventListener('ended', handleInputEnded);
-
-	return {
-		audioContext,
-		gainNode,
-		track: outputTrack,
-		stream: destinationNode.stream,
-		destroy: async () => {
-			inputTrack.removeEventListener('ended', handleInputEnded);
-			outputTrack.stop();
-
-			try {
-				sourceNode.disconnect();
-			} catch {
-				// ignore disconnect failures
-			}
-
-			try {
-				gainNode.disconnect();
-			} catch {
-				// ignore disconnect failures
-			}
-
-			try {
-				destinationNode.disconnect();
-			} catch {
-				// ignore disconnect failures
-			}
-
-			await audioContext.close().catch(() => {
-				// ignore close failures
-			});
-		},
-	};
 };
 
 type TVoiceProviderProps = {
@@ -1384,7 +1093,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				return {
 					publish: (track) => {
-						const audioConfig = getAudioOpusConfig(currentVoiceChannelIdRef.current);
+						const channelId = currentVoiceChannelIdRef.current;
+						const channel =
+							channelId === undefined ? undefined : channelByIdSelector(useServerStore.getState(), channelId);
+						const audioConfig = getAudioOpusConfig(channel);
 						return transport.produce({
 							track,
 							encodings: [{ maxBitrate: audioConfig.maxBitrate }],
@@ -1541,48 +1253,18 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				track.contentHint = 'motion';
 
-				const preferredVideoCodec = resolvePreferredVideoCodec(sendRtpCapabilities.current, devices.videoCodec);
-
-				if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
-					logVoice('Preferred webcam codec unavailable, falling back to auto', {
-						preferredCodec: devices.videoCodec,
-					});
-				}
-
 				const requestedWebcamResolution = getResWidthHeight(devices?.webcamResolution);
 				const webcamTrackSettings = track.getSettings();
-				const webcamWidth = webcamTrackSettings.width ?? requestedWebcamResolution.width;
-				const webcamHeight = webcamTrackSettings.height ?? requestedWebcamResolution.height;
-				const webcamFramerate = webcamTrackSettings.frameRate ?? devices.webcamFramerate;
-				const webcamBitratePolicy = getVideoBitratePolicy({
-					profile: 'camera',
-					width: webcamWidth,
-					height: webcamHeight,
-					frameRate: webcamFramerate,
-					codec: getBitrateCodecFromMimeType(preferredVideoCodec),
+				const videoConfig = getWebcamVideoProducerConfig({
+					rtpCapabilities: sendRtpCapabilities.current,
+					preference: devices.videoCodec,
+					width: webcamTrackSettings.width ?? requestedWebcamResolution.width,
+					height: webcamTrackSettings.height ?? requestedWebcamResolution.height,
+					frameRate: webcamTrackSettings.frameRate ?? devices.webcamFramerate,
 				});
-
-				logVoice('Webcam bitrate policy resolved', {
-					width: webcamWidth,
-					height: webcamHeight,
-					frameRate: webcamFramerate,
-					codec: preferredVideoCodec?.mimeType,
-					startKbps: webcamBitratePolicy.startKbps,
-					maxKbps: webcamBitratePolicy.maxKbps,
-				});
-
-				const webcamEncodings = createVideoProducerEncodings().map((encoding) => ({
-					...encoding,
-					maxBitrate: webcamBitratePolicy.maxKbps * 1000,
-				}));
 				videoProducer = await transport.produce({
 					track,
-					encodings: webcamEncodings,
-					codec: preferredVideoCodec,
-					codecOptions: {
-						videoGoogleStartBitrate: webcamBitratePolicy.startKbps,
-						videoGoogleMaxBitrate: webcamBitratePolicy.maxKbps,
-					},
+					...videoConfig,
 					stopTracks: false,
 					appData: { kind: StreamKind.VIDEO },
 				});
@@ -1696,64 +1378,17 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 				const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
 				const screenTrackSettings = track.getSettings();
-				const screenWidth = screenTrackSettings.width ?? requestedScreenResolution.width;
-				const screenHeight = screenTrackSettings.height ?? requestedScreenResolution.height;
-				const screenFramerate = screenTrackSettings.frameRate ?? devices.screenFramerate;
-				// The bitrate policy's max ceiling is per-codec, so resolve the codec
-				// first using a codec-agnostic base policy, then recompute the policy
-				// with the resolved codec.
-				const baseScreenBitratePolicy = getVideoBitratePolicy({
-					profile: 'screen',
-					width: screenWidth,
-					height: screenHeight,
-					frameRate: screenFramerate,
+				const videoConfig = getScreenShareVideoProducerConfig({
+					rtpCapabilities: sendRtpCapabilities.current,
+					preference: devices.videoCodec,
+					width: screenTrackSettings.width ?? requestedScreenResolution.width,
+					height: screenTrackSettings.height ?? requestedScreenResolution.height,
+					frameRate: screenTrackSettings.frameRate ?? devices.screenFramerate,
 				});
-
-				const preferredVideoCodec = resolveScreenShareVideoCodec(sendRtpCapabilities.current, devices.videoCodec, {
-					width: screenWidth,
-					height: screenHeight,
-					framerate: screenFramerate,
-					bitrate: baseScreenBitratePolicy.startKbps * 1000,
-				});
-				if (devices.videoCodec !== VideoCodecPreference.AUTO && !preferredVideoCodec) {
-					logVoice('Preferred screen share codec unavailable, falling back to auto', {
-						preferredCodec: devices.videoCodec,
-					});
-				}
-
-				const screenBitratePolicy = getVideoBitratePolicy({
-					profile: 'screen',
-					width: screenWidth,
-					height: screenHeight,
-					frameRate: screenFramerate,
-					codec: getBitrateCodecFromMimeType(preferredVideoCodec),
-				});
-
-				logVoice('Screen share bitrate policy resolved', {
-					width: screenWidth,
-					height: screenHeight,
-					frameRate: screenFramerate,
-					codec: preferredVideoCodec?.mimeType,
-					startKbps: screenBitratePolicy.startKbps,
-					maxKbps: screenBitratePolicy.maxKbps,
-				});
-
-				// Add a max-bitrate ceiling (bps) so congestion control has headroom to
-				// ramp during high-motion content before it resorts to downscaling. Spread
-				// onto the existing encoding so scalabilityMode/temporal SVC is preserved.
-				const screenShareEncodings = createVideoProducerEncodings().map((encoding) => ({
-					...encoding,
-					maxBitrate: screenBitratePolicy.maxKbps * 1000,
-				}));
 
 				screenShareProducer = await transport.produce({
 					track,
-					encodings: screenShareEncodings,
-					codecOptions: {
-						videoGoogleStartBitrate: screenBitratePolicy.startKbps,
-						videoGoogleMaxBitrate: screenBitratePolicy.maxKbps,
-					},
-					codec: preferredVideoCodec,
+					...videoConfig,
 					// Keep explicit stream cleanup as the only path that stops the
 					// browser screen-share capture.
 					stopTracks: false,
@@ -1845,12 +1480,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			const screenAudioProducer = await transport.produce({
 				track,
 				stopTracks: false,
-				codecOptions: {
-					opusStereo: true,
-					opusFec: true,
-					opusDtx: false,
-					opusMaxAverageBitrate: SCREEN_SHARE_AUDIO_TARGET_BITRATE_BPS,
-				},
+				...getScreenShareAudioOpusConfig(),
 				appData: { kind: StreamKind.SCREEN_AUDIO },
 			});
 
@@ -1899,24 +1529,10 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// concurrently with device.load() and transport creation during voice join.
 	const prepareMicPipeline = useCallback(
 		async (isCurrent?: () => boolean): Promise<TMicrophonePreparedPipeline> => {
-			const micProcessingConfig = resolveMicProcessingConfig(devices);
-			const micConstraints: MediaTrackConstraints = {
-				...(devices.microphoneId
-					? {
-							deviceId: {
-								exact: devices.microphoneId,
-							},
-						}
-					: {}),
-				autoGainControl: micProcessingConfig.browserAutoGainControl,
-				echoCancellation: micProcessingConfig.browserEchoCancellation,
-				noiseSuppression: micProcessingConfig.browserNoiseSuppression,
-				sampleRate: 48000,
-			};
+			const micCaptureConfig = resolveMicCaptureConfig(devices);
 
 			return microphoneController.prepare({
-				constraints: micConstraints,
-				processingEnabled: micProcessingConfig.wasmNoiseSuppressionEnabled,
+				...micCaptureConfig,
 				gainVolume: getStoredVolume(OWN_MIC_VOLUME_KEY),
 				selectedMicrophoneId: devices.microphoneId,
 				isCurrent,

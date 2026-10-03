@@ -1,7 +1,7 @@
 import type { AppData, Producer } from 'mediasoup-client/types';
 import { type MutableRefObject, useEffect } from 'react';
 import { logVoice } from '@/helpers/browser-logger';
-import { VIDEO_DEGRADATION_PREFERENCE } from '../video-encoding-constants';
+import { VIDEO_DEGRADATION_PREFERENCE } from '../video-producer-config';
 
 // Runtime quality guard for the local screen-share producer, driven by the
 // sender's outbound-rtp stats.
@@ -57,7 +57,7 @@ const useScreenShareQualityGuard = ({ screenShareProducerRef, active }: TScreenS
 			try {
 				// getParameters/setParameters are coupled by transactionId — keep this
 				// read-modify-write free of awaits in between (see the note on
-				// applyVideoDegradationPreference in the voice provider).
+				// applyVideoDegradationPreference in video-producer-config).
 				const params = sender.getParameters();
 				const encoding = params.encodings?.[0];
 
