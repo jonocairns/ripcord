@@ -125,7 +125,7 @@ jobs:
 
       - name: Run screen-share regression tests
         working-directory: apps/client
-        run: bun run test:e2e e2e/tests/screen-share.spec.ts
+        run: bun run test:e2e e2e/tests/screen-share.spec.ts e2e/tests/screen-share-lifecycle.spec.ts
 
       - name: Upload screen-share report and failure artifacts
         if: ${{ !cancelled() }}
