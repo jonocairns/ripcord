@@ -393,6 +393,80 @@ describe('share audio worklet ownership', () => {
 });
 
 describe('share audio recovery integration', () => {
+	for (const failure of ['native authorization', 'fallback republication'] as const) {
+		it(`releases unpublished display fallback after failed ${failure} recovery`, async () => {
+			const f = makeFixture();
+			const audio = makeTrack();
+			const video = makeTrack('video');
+			f.setNativeEnabled(false);
+			f.deps.createPipeline = mock(async () => {
+				throw new Error('worklet unavailable');
+			});
+			await startWorklet(f, makeStream([audio.track, video.track]), ScreenAudioMode.SYSTEM);
+			if (failure === 'native authorization') {
+				f.setNativeEnabled(true);
+				f.deps.produceNative = mock(async () => {
+					throw Object.assign(new Error('denied'), { data: { code: 'FORBIDDEN' } });
+				});
+			} else {
+				f.produce.mockImplementation(async () => {
+					throw new Error('fallback publication failed');
+				});
+			}
+			await expect(f.controller.recover()).rejects.toThrow();
+			expect(f.getStream()).toBeUndefined();
+			expect(audio.track.readyState).toBe('ended');
+			expect(video.track.readyState).toBe('live');
+			await f.controller.stop();
+			f.cleanup();
+			await f.controller.awaitTeardown();
+		});
+	}
+	it('transfers display fallback ownership to successful recovery publication', async () => {
+		const f = makeFixture();
+		const audio = makeTrack();
+		f.setNativeEnabled(false);
+		f.deps.createPipeline = mock(async () => {
+			throw new Error('worklet unavailable');
+		});
+		await startWorklet(f, makeStream([audio.track]), ScreenAudioMode.SYSTEM);
+		const previous = f.getStream();
+		await f.controller.recover();
+		expect(f.getStream()).not.toBe(previous);
+		expect(f.getStream()?.getAudioTracks()[0]).toBe(audio.track);
+		expect(audio.track.readyState).toBe('live');
+		await f.controller.stop();
+		expect(audio.track.readyState).toBe('ended');
+		f.cleanup();
+	});
+	it('does not release replacement audio when old fallback recovery rejects late', async () => {
+		const f = makeFixture();
+		const old = makeTrack();
+		f.setNativeEnabled(false);
+		f.deps.createPipeline = mock(async () => {
+			throw new Error('worklet unavailable');
+		});
+		await startWorklet(f, makeStream([old.track]), ScreenAudioMode.SYSTEM);
+		const pending = deferred<ReturnType<typeof makeProducer>['producer']>();
+		const entered = deferred();
+		f.produce.mockImplementationOnce(() => {
+			entered.resolve();
+			return pending.promise;
+		});
+		const recovery = f.controller.recover().catch(() => {});
+		await entered.promise;
+		await f.controller.stop();
+		const replacement = makeTrack();
+		await f.controller.start({ displayStream: makeStream([replacement.track]) });
+		const stream = f.getStream();
+		pending.reject(new Error('old fallback failed'));
+		await recovery;
+		expect(f.getStream()).toBe(stream);
+		expect(replacement.track.readyState).toBe('live');
+		expect(old.track.readyState).toBe('ended');
+		f.cleanup();
+		await f.controller.awaitTeardown();
+	});
 	it('cancels queued recovery across lifecycle cleanup and remount before acquiring media', async () => {
 		const f = makeFixture();
 		f.setNativeEnabled(false);
