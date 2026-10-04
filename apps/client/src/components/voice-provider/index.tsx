@@ -871,8 +871,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 			// to be republished; tearing it down would end the track.
 			if (opts?.preserveLocalMedia) {
 				shareAudio.detachProducer();
-			} else {
-				void shareAudio.stop();
 			}
 			void cleanupMicAudioPipeline();
 			stopMonitoring();

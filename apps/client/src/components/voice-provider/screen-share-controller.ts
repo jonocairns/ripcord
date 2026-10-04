@@ -32,7 +32,10 @@ type TScreenShareDependencies = {
 	}) => Promise<TDesktopScreenShareSelection | null>;
 	publishStream: (stream: MediaStream | undefined) => void;
 	closeProducer: (producerId: string) => void;
-	shareAudio: Pick<TShareAudioController, 'stop' | 'awaitTeardown' | 'adoptDisplayAudio' | 'start'>;
+	shareAudio: Pick<
+		TShareAudioController,
+		'stop' | 'awaitTeardown' | 'adoptDisplayAudio' | 'discardDisplayAudio' | 'start'
+	>;
 	warning: (message: string) => void;
 	log: (message: string, data?: Record<string, unknown>) => void;
 	setInterval: (handler: () => void, delayMs: number) => ReturnType<typeof setInterval>;
@@ -40,45 +43,55 @@ type TScreenShareDependencies = {
 	now: () => number;
 };
 const createScreenShareController = (deps: TScreenShareDependencies) => {
+	let active = false;
+	let generation = 0;
 	let stream: MediaStream | undefined;
 	let producer: Producer<AppData> | undefined;
-	let onTrackEnded: (() => void | Promise<void>) | undefined;
+	let disposeQualityGuard: (() => void) | undefined;
 	const setStream = (next: MediaStream | undefined) => {
 		stream = next;
 		deps.publishStream(next);
 	};
-	const detachProducer = () => {
+	const closeCurrentProducer = () => {
 		const previous = producer;
 		producer = undefined;
 		previous?.close();
 	};
-	const stop = () => {
-		stream?.getVideoTracks().forEach((track) => {
+	const releaseCapture = () => {
+		const capture = stream;
+		stream = undefined;
+		capture?.getVideoTracks().forEach((track) => {
+			track.onended = null;
 			track.stop();
-			stream?.removeTrack(track);
+			capture.removeTrack(track);
 		});
-		detachProducer();
-		onTrackEnded = undefined;
-		void deps.shareAudio.stop();
+		closeCurrentProducer();
 		setStream(undefined);
+	};
+	const stop = () => {
+		++generation;
+		releaseCapture();
+		void deps.shareAudio.stop();
+	};
+	const detachProducer = () => {
+		++generation;
+		closeCurrentProducer();
+	};
+	const assertCurrent = (ownedGeneration: number) => {
+		if (!active || generation !== ownedGeneration) throw new VoiceSessionExecutionSupersededError();
 	};
 	const publish = async (
 		capture: MediaStream,
 		track: MediaStreamTrack,
-		options: {
-			onTrackEnded?: () => void | Promise<void>;
-			clearStreamOnFailure?: boolean;
-			isCurrent?: () => boolean;
-		} = {},
+		ownedGeneration: number,
+		options: { preserveCapture?: boolean; isCurrent?: () => boolean } = {},
 	) => {
-		const transport = deps.getProducerTransport();
-		if (!transport || transport.closed || (options.isCurrent && !options.isCurrent()))
-			throw new VoiceSessionExecutionSupersededError();
-		setStream(capture);
-		if (options.onTrackEnded) onTrackEnded = options.onTrackEnded;
-		const endedHandler = onTrackEnded;
 		let created: Producer<AppData> | undefined;
 		try {
+			assertCurrent(ownedGeneration);
+			const transport = deps.getProducerTransport();
+			if (!transport || transport.closed || track.readyState !== 'live' || (options.isCurrent && !options.isCurrent()))
+				throw new VoiceSessionExecutionSupersededError();
 			track.contentHint = 'motion';
 			const devices = deps.getDevices();
 			const requested = getResWidthHeight(devices.screenResolution);
@@ -97,33 +110,32 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 			});
 			if (!created) throw new Error('Failed to create screen share producer');
 			const published = created;
-			await applyVideoDegradationPreference(published.rtpSender, 'screen share');
-			if (deps.getProducerTransport() !== transport || transport.closed || (options.isCurrent && !options.isCurrent()))
-				throw new VoiceSessionExecutionSupersededError();
-			producer = published;
 			published.on('@close', () => {
 				if (producer === published) producer = undefined;
 				deps.closeProducer(published.id);
 			});
-			track.onended = () => {
-				capture.getVideoTracks().forEach((current) => current.stop());
-				published.close();
-				void deps.shareAudio.stop();
-				setStream(undefined);
-				void endedHandler?.();
-			};
+			assertCurrent(ownedGeneration);
+			await applyVideoDegradationPreference(published.rtpSender, 'screen share');
+			assertCurrent(ownedGeneration);
+			if (
+				deps.getProducerTransport() !== transport ||
+				transport.closed ||
+				track.readyState !== 'live' ||
+				stream !== capture ||
+				(options.isCurrent && !options.isCurrent())
+			)
+				throw new VoiceSessionExecutionSupersededError();
+			closeCurrentProducer();
+			producer = published;
 		} catch (error) {
 			created?.close();
-			if (producer === created) producer = undefined;
-			if (options.clearStreamOnFailure ?? true) {
-				capture.getVideoTracks().forEach((current) => current.stop());
-				if (stream === capture) setStream(undefined);
-			}
+			if (!options.preserveCapture && generation === ownedGeneration && stream === capture) releaseCapture();
 			throw error;
 		}
 	};
-	const requestSelection = () =>
-		deps.requestSelection({
+	const requestSelection = async () => {
+		const ownedGeneration = generation;
+		const selection = await deps.requestSelection({
 			defaultAudioMode: deps.getDevices().screenAudioMode,
 			loadData: async () => {
 				const bridge = deps.getDesktopBridge();
@@ -132,25 +144,35 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 				return { sources, capabilities: normalizeDesktopCapabilities(capabilities) };
 			},
 		});
+		return active && generation === ownedGeneration ? selection : null;
+	};
 	const start = async (
 		desktopSelection?: TDesktopScreenShareSelection,
 		handlers: TScreenShareStreamHandlers = {},
 	): Promise<MediaStreamTrack> => {
+		if (!active) throw new VoiceSessionExecutionSupersededError();
+		const ownedGeneration = ++generation;
+		if (stream) {
+			releaseCapture();
+			void deps.shareAudio.stop();
+		}
 		const devices = deps.getDevices();
 		// Wait for any in-flight desktop audio cleanup from a previous screen
 		// share stop so the new sidecar session doesn't conflict with it.
 		await deps.shareAudio.awaitTeardown();
+		assertCurrent(ownedGeneration);
 
-		let stream: MediaStream | undefined;
+		let capture: MediaStream | undefined;
 
 		try {
-			deps.log('Starting screen share stream');
+			deps.log('Starting screen share capture');
 
 			let audioMode = devices.screenAudioMode;
 			const desktopBridge = deps.getDesktopBridge();
 
 			if (desktopBridge && desktopSelection) {
 				const resolved = await desktopBridge.prepareScreenShare(desktopSelection);
+				assertCurrent(ownedGeneration);
 				audioMode = resolved.effectiveMode;
 
 				if (resolved.warning) {
@@ -172,6 +194,7 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 				}
 			}
 
+			assertCurrent(ownedGeneration);
 			const sidecarAudioMode =
 				audioMode === ScreenAudioMode.APP || (audioMode === ScreenAudioMode.SYSTEM && sidecarSupported)
 					? audioMode
@@ -186,7 +209,7 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 			const requestedScreenResolution = getResWidthHeight(devices?.screenResolution);
 
 			try {
-				stream = await deps.acquire({
+				capture = await deps.acquire({
 					video: {
 						...requestedScreenResolution,
 						frameRate: devices?.screenFramerate,
@@ -205,18 +228,26 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 				}
 			}
 
-			deps.shareAudio.adoptDisplayAudio(stream);
-			deps.log('Screen share stream obtained', { stream });
+			assertCurrent(ownedGeneration);
+			deps.shareAudio.adoptDisplayAudio(capture);
+			deps.log('Screen share capture obtained', { capture });
 
-			const videoTrack = stream.getVideoTracks()[0];
+			const videoTrack = capture.getVideoTracks()[0];
 
 			if (videoTrack) {
-				await publish(stream, videoTrack, {
-					onTrackEnded: handlers.onVideoTrackEnded,
-				});
+				const ownedCapture = capture;
+				setStream(ownedCapture);
+				videoTrack.onended = () => {
+					if (!active || getStream() !== ownedCapture || ownedCapture.getVideoTracks()[0] !== videoTrack) return;
+					stop();
+					void handlers.onVideoTrackEnded?.();
+				};
+				await publish(ownedCapture, videoTrack, ownedGeneration);
+				assertCurrent(ownedGeneration);
 				// Surface the active share as soon as the video producer exists.
 				// Optional audio setup can continue after the preview is already live.
 				handlers.onVideoTrackStarted?.();
+				assertCurrent(ownedGeneration);
 
 				if (useSidecarAudio && desktopBridge && desktopSelection && sidecarAudioMode) {
 					const captureInput: TStartAppAudioCaptureInput = {
@@ -228,54 +259,81 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 					}
 
 					await deps.shareAudio.start({
-						displayStream: stream,
+						displayStream: capture,
 						desktopBridge,
 						captureInput,
 						audioMode: sidecarAudioMode,
 					});
 				} else {
-					await deps.shareAudio.start({ displayStream: stream });
+					await deps.shareAudio.start({ displayStream: capture });
 				}
 
+				assertCurrent(ownedGeneration);
 				return videoTrack;
 			} else {
 				throw new Error('No video track obtained for screen share');
 			}
 		} catch (error) {
-			stream?.getVideoTracks().forEach((track) => {
-				track.stop();
-			});
-			await deps.shareAudio.stop();
-
+			if (capture && getStream() !== capture) {
+				capture.getVideoTracks().forEach((track) => {
+					track.onended = null;
+					track.stop();
+				});
+				// Audio's scoped disposal also covers late mixed-stream acquisition that
+				// was never adopted. It cannot clear or stop a replacement audio session.
+				deps.shareAudio.discardDisplayAudio(capture);
+			}
+			if (generation === ownedGeneration) {
+				releaseCapture();
+				await deps.shareAudio.stop();
+			}
 			deps.log('Error starting screen share stream', { error });
 			throw error;
 		}
 	};
+
+	const getStream = () => stream;
 	const republish = (isCurrent?: () => boolean): Promise<void> | undefined => {
 		const capture = stream;
 		const track = capture?.getVideoTracks()[0];
-		if (capture && track?.readyState === 'live')
-			return publish(capture, track, { clearStreamOnFailure: false, isCurrent });
+		if (capture && track?.readyState === 'live') {
+			if (!active || (isCurrent && !isCurrent())) return Promise.reject(new VoiceSessionExecutionSupersededError());
+			const ownedGeneration = ++generation;
+			closeCurrentProducer();
+			return publish(capture, track, ownedGeneration, { preserveCapture: true, isCurrent });
+		}
 	};
 	const getProducer = () => producer;
-	const mountQualityGuard = () => mountScreenShareQualityGuard({ ...deps, getProducer });
+	const activate = () => {
+		active = true;
+		disposeQualityGuard ??= mountScreenShareQualityGuard({ ...deps, getProducer });
+	};
+	const deactivate = () => {
+		active = false;
+		disposeQualityGuard?.();
+		disposeQualityGuard = undefined;
+		stop();
+	};
 	return {
 		start,
 		stop,
 		detachProducer,
 		republish,
 		requestSelection,
-		mountQualityGuard,
+		activate,
+		deactivate,
 		getProducer,
-		getStream: () => stream,
+		getStream,
 		isLive: () => (producer?.track ?? stream?.getVideoTracks()[0])?.readyState === 'live',
 	};
 };
 const mountScreenShareController = (controller: ReturnType<typeof createScreenShareController>) => {
-	const disposeGuard = controller.mountQualityGuard();
+	controller.activate();
+	let mounted = true;
 	return () => {
-		disposeGuard();
-		controller.stop();
+		if (!mounted) return;
+		mounted = false;
+		controller.deactivate();
 	};
 };
 
