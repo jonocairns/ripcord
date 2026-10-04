@@ -58,6 +58,8 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 		previous?.close();
 	};
 	const releaseCapture = () => {
+		disposeQualityGuard?.();
+		disposeQualityGuard = undefined;
 		const capture = stream;
 		stream = undefined;
 		capture?.getVideoTracks().forEach((track) => {
@@ -127,6 +129,7 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 				throw new VoiceSessionExecutionSupersededError();
 			closeCurrentProducer();
 			producer = published;
+			disposeQualityGuard ??= mountScreenShareQualityGuard({ ...deps, getProducer });
 		} catch (error) {
 			created?.close();
 			if (!options.preserveCapture && generation === ownedGeneration && stream === capture) releaseCapture();
@@ -306,12 +309,9 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 	const getProducer = () => producer;
 	const activate = () => {
 		active = true;
-		disposeQualityGuard ??= mountScreenShareQualityGuard({ ...deps, getProducer });
 	};
 	const deactivate = () => {
 		active = false;
-		disposeQualityGuard?.();
-		disposeQualityGuard = undefined;
 		stop();
 	};
 	return {
