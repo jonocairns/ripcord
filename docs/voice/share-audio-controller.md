@@ -1,7 +1,6 @@
 # Share-audio ownership (provider refactor stage 4)
 
 Stage 4 is based on `main` at `50b1c74b474659ef5e39034827496991503ae9ae`.
-The original untracked provider-refactor plan remains in `/home/jonoc/ripcord`.
 Stage 5 (webcam and screen-video controller extraction) is outside this change.
 
 ## Production boundary
@@ -58,6 +57,14 @@ separate regression assertions; they are not claims of a purely mechanical move:
 | Pending cleanup | Queued cleanup detached shared resources only after waiting for its predecessor. | Cleanup detaches its own resource snapshot synchronously, then queues destruction. A new start waits for committed-resource teardown. Attempt-local late teardown can finish independently and cannot clear replacement resources. |
 | Native teardown completion | `ownsGlobalState` was captured before awaited RTP/capture/ingest teardown, then used to clear active state afterward. | Recheck native generation after the awaits. The old-native-teardown regression publishes a successor while the predecessor's RTP stop is held, then proves successor cleanup still closes its native producer. Server close uses the retained native producer ID. |
 | Fallback during recovery | Cleanup temporarily cleared the published display-loopback stream; a successful native recovery dropped the stream without stopping that track. Screen-video cleanup previously also stopped audio tracks. | Retain fallback ownership across recovery awaits so audio-only stop still reaches it. Native takeover releases the fallback audio track. Both regressions verify the mixed display stream's video remains live. |
+
+The review follow-up also releases retained fallback audio if recovery rejects
+before transferring its track to a published stream. Native authorization denial
+and failed loopback republication previously dropped the last owner while the track
+remained live, making a subsequent stop ineffective. Production-controller tests
+cover both failures, successful transfer to a new fallback stream, and late failure
+after replacement audio starts. Cleanup still targets audio tracks only and cannot
+release a successor's resources.
 
 Lifecycle cleanup fences startup and recovery before passive session effects can
 run. Obsolete work cleans its own session/ingest/pipeline. `awaitTeardown` drains

@@ -889,7 +889,14 @@ const createShareAudioController = (deps: TShareAudioDependencies) => {
 				deps.log('Desktop app audio recovery completed without a recoverable audio path');
 			}
 		} finally {
-			if (pendingDisplayStream === ownedDisplayFallbackStream) pendingDisplayStream = undefined;
+			if (ownedDisplayFallbackStream && pendingDisplayStream === ownedDisplayFallbackStream) {
+				// Successful fallback publication transfers the track to audioStream.
+				// Failed recovery must release it before dropping its last owner.
+				if (displayFallbackTrack && !audioStream?.getAudioTracks().includes(displayFallbackTrack)) {
+					stopAudioTracks(ownedDisplayFallbackStream);
+				}
+				pendingDisplayStream = undefined;
+			}
 		}
 	};
 
