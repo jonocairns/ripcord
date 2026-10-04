@@ -1,11 +1,9 @@
 /**
  * Unit tests for the produce-and-commit tail of startNativeAppAudioIngest.
  *
- * Like recover-transport-session.test.ts, the real logic is a useCallback deep
- * inside VoiceProvider that can't be rendered headlessly, so we reproduce its
- * control-flow as a standalone function driven by injected mocks. Kept
- * structurally identical to the real branch so a refactor that changes it will
- * break these tests and surface the divergence.
+ * These tests currently reproduce the native provider control flow with
+ * injected mocks. The share-audio extraction replaces this copy with tests
+ * importing the production controller.
  *
  * What we verify: once produceAppAudio reports a live producer, the attempt only
  * commits (sets the active ref, returns 'published') while it still owns the
@@ -190,79 +188,5 @@ describe('startNativeAppAudioIngest setup gates', () => {
 		expect(await runNativeAttemptSetup(deps)).toBe('abandoned');
 		expect((deps.produce as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
 		expect((deps.teardownNativeAttempt as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
-	});
-});
-
-// Mirror of the serialization wrapper that chains overlapping recoveries so a
-// retry-fired recovery never interleaves its cleanup with a sibling's publish.
-const makeSerializedRecovery = () => {
-	let inFlight: Promise<void> | undefined;
-
-	return (body: () => Promise<void>): Promise<void> => {
-		const previous = inFlight;
-
-		const recovery = (async () => {
-			if (previous) {
-				await previous.catch(() => undefined);
-			}
-			await body();
-		})().finally(() => {
-			if (inFlight === recovery) {
-				inFlight = undefined;
-			}
-		});
-
-		inFlight = recovery;
-		return recovery;
-	};
-};
-
-const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-describe('recoverDesktopAppAudioFromIntent serialization', () => {
-	it('runs overlapping recoveries sequentially instead of interleaving them', async () => {
-		const run = makeSerializedRecovery();
-		const events: string[] = [];
-		let releaseFirst!: () => void;
-		const firstGate = new Promise<void>((resolve) => {
-			releaseFirst = resolve;
-		});
-
-		const first = run(async () => {
-			events.push('first:start');
-			await firstGate;
-			events.push('first:end');
-		});
-		const second = run(async () => {
-			events.push('second:start');
-		});
-
-		// The second recovery must not begin its body until the first has finished,
-		// so its cleanup can never stop the first's in-flight/just-published ingest.
-		await tick();
-		expect(events).toEqual(['first:start']);
-
-		releaseFirst();
-		await Promise.all([first, second]);
-
-		expect(events).toEqual(['first:start', 'first:end', 'second:start']);
-	});
-
-	it('still runs a later recovery after the previous one rejects', async () => {
-		const run = makeSerializedRecovery();
-		const events: string[] = [];
-
-		const first = run(async () => {
-			events.push('first');
-			throw new Error('recovery failed');
-		});
-		const second = run(async () => {
-			events.push('second');
-		});
-
-		await expect(first).rejects.toThrow('recovery failed');
-		await second;
-
-		expect(events).toEqual(['first', 'second']);
 	});
 });

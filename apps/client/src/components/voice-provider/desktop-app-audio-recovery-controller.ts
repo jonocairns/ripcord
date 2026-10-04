@@ -64,9 +64,24 @@ const createDesktopAppAudioRecoveryController = (): TDesktopAppAudioRecoveryCont
 	return { activate, deactivate, recover };
 };
 
+const mountDesktopAppAudioRecoveryController = (controller: TDesktopAppAudioRecoveryLifecycle): (() => void) => {
+	controller.activate();
+
+	let mounted = true;
+
+	return () => {
+		if (!mounted) {
+			return;
+		}
+
+		mounted = false;
+		controller.deactivate();
+	};
+};
+
 export {
 	createDesktopAppAudioRecoveryController,
+	mountDesktopAppAudioRecoveryController,
 	type TDesktopAppAudioRecoveryController,
 	type TDesktopAppAudioRecoveryLease,
-	type TDesktopAppAudioRecoveryLifecycle,
 };
