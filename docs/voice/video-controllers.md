@@ -1,7 +1,6 @@
 # Video ownership (provider refactor stage 5)
 
 Stage 5 extends native stack 1714928 above stage 4 at `c6943784`.
-The original untracked plan remains in `/home/jonoc/ripcord`; its status is stale.
 Session runtime extraction (stage 6) is outside this work.
 
 ## Webcam extraction
@@ -86,8 +85,9 @@ Detaching a producer invalidates pending publication but preserves capture and
 its loss listener. Republish failure never stops preserved video. Terminal stop
 revokes capture before clearing its React snapshot. Layout cleanup fences work
 before passive session cleanup; mount cleanup is idempotent during replay.
-The guard is mounted with the screen owner and skips samples without a current
-producer. Its floor thresholds, cooldown and codec/degradation policy are unchanged.
+The guard is mounted after screen publication, retained through producer detachment,
+and disposed when capture stops. Idle owners install no polling interval. Its floor
+thresholds, cooldown and codec/degradation policy are unchanged.
 Session cleanup now delegates audio terminal stop once through screen stop;
 recovery still detaches video and audio separately and calls their existing
 republish/recovery operations. No session machine or retry policy was extracted.
@@ -96,6 +96,41 @@ The settings mount itself still starts independent invocations and preserves its
 original mic-before-webcam decisions. It does not serialize them or cancel an
 invocation waiting for microphone restart. Webcam lifecycle fencing governs
 acquisition/publication, and reports supersession to that integration.
+
+## Review follow-up
+
+Superseded screen starts now settle only the current control transition's UI.
+Composition injects the screen owner's current `isLive` getter: surviving capture
+finishes the starting indicator without restoring the pinned view; absent capture
+restores the stage. Neither path stops capture or invalidates its track-ended
+callback. An older transition cannot settle a newer transition's UI. Tests import
+the production settlement function and screen controller, holding acquisition and
+publication through stop, replacement, successful republish and failed republish.
+This getter is deliberately current owner state, not a render-captured snapshot.
+
+Quality polling now starts with successful screen publication and stops with
+capture, while producer detach retains the same guard for recovery. Mounting an
+idle provider installs no interval. The production controller test verifies timer
+ownership across pending publication, detach, republish, stop and native track end.
+
+Failed desktop-audio recovery now releases retained loopback that did not transfer
+to a published audio stream. This audio-only failure cleanup differs from video
+republish failure, which continues preserving video capture.
+
+Follow-up validation passed root type/lint/Knip checks, 670 voice unit tests in
+58 files, the four unchanged screen-baseline E2E tests, one new acquisition/leave/
+rejoin E2E test, and all 24 reconnect/remote-media/recovery-fault/session-conflict
+tests. Browser retries remain zero. The new regression initially failed because
+the baseline helper required one acquisition after this scenario's expected second
+acquisition (expected 1, observed 2). Its scenario-specific assertion now requires
+exactly two tracks, the abandoned one ended and the second live, then both ended
+after stop. Existing baseline assertions and capture mechanism remain unchanged.
+
+A fresh Linux desktop build and isolated, bounded packaged startup also passed:
+the production renderer and bundled sidecar loaded. The smoke's own 20-second
+timeout exited 124; it does not establish normal-close, capture or stop/reconnect
+coverage. The native-device, permission/display-audio and macOS/Windows runtime
+limits below still apply. T3 preview inspected the running isolated app again.
 
 ## Validation and evidence
 

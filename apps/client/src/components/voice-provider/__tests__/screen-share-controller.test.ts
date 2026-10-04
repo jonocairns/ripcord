@@ -40,6 +40,31 @@ const createMountedScreenShare = (...args: Parameters<typeof createScreenShareCo
 	return controller;
 };
 describe('screen-video production owner', () => {
+	it('polls only published capture, retains the guard during detach and releases it on stop or track end', async () => {
+		const f = createScreenFixture();
+		const setInterval = mock(f.deps.setInterval);
+		const clearInterval = mock(f.deps.clearInterval);
+		const c = createMountedScreenShare({ ...f.deps, setInterval, clearInterval });
+		expect(setInterval).not.toHaveBeenCalled();
+		const pending = deferred<Producer<AppData>>();
+		f.publications.push(pending.promise);
+		const start = c.start();
+		await flush();
+		expect(setInterval).not.toHaveBeenCalled();
+		pending.resolve(createProducer('first', f.captures[0]?.videoTrack));
+		await start;
+		expect(setInterval).toHaveBeenCalledTimes(1);
+		c.detachProducer();
+		expect(clearInterval).not.toHaveBeenCalled();
+		await c.republish();
+		expect(setInterval).toHaveBeenCalledTimes(1);
+		c.stop();
+		expect(clearInterval).toHaveBeenCalledTimes(1);
+		await c.start();
+		expect(setInterval).toHaveBeenCalledTimes(2);
+		f.captures[1]?.end();
+		expect(clearInterval).toHaveBeenCalledTimes(2);
+	});
 	it('notifies video start before deferred optional audio, using unchanged display constraints', async () => {
 		const f = createScreenFixture();
 		const pending = deferred<'none'>();
