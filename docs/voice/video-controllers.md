@@ -51,3 +51,17 @@ publication reads committed current codec/resolution/frame rate. Production test
 cover optional-audio ordering, mixed-track delegation, failed republish, transport
 replacement, retained track-ended handling and desktop adapter routing with
 mocked bridge dependencies. They do not prove native capture or permissions.
+
+## Combined media settings integration
+
+`mountMediaSettingsIntegration` subscribes to committed input changes and owns
+the previous-device comparison. `useMediaSettings` mounts it and supplies React
+notifications. Tests import this production mount, covering mic-before-webcam
+order, failed-mic continuation, individual-media changes, channel absence,
+disabled webcam, independent overlaps and unsubscribe.
+
+The mount retains the original effect's independent, uncancelled invocations.
+Each invocation decides which media to restart before its microphone await;
+webcam restart then reads current committed settings. Cleanup unsubscribes but
+does not cancel an invocation already awaiting microphone restart. Any owner
+fencing of overlapping webcam acquisition is in the separate lifecycle fix.

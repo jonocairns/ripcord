@@ -48,7 +48,6 @@ import { getTrpcErrorData } from '@/helpers/trpc-error-data';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getTRPCClient, TRPCClientUnavailableError } from '@/lib/trpc';
 import { getDesktopBridge, isDesktopRuntime } from '@/runtime/desktop-bridge';
-import type { TDeviceSettings } from '@/types';
 import { useDevices } from '../devices-provider/hooks/use-devices';
 import { FloatingPinnedCard } from './floating-pinned-card';
 import {
@@ -63,6 +62,7 @@ import {
 	VoiceSessionExecutionSupersededError,
 } from './hooks/session-execution-ownership';
 import { useLocalStreams } from './hooks/use-local-streams';
+import { useMediaSettings } from './hooks/use-media-settings';
 import { useMicrophone } from './hooks/use-microphone';
 import { getPendingStreamKey, type TExternalStreamTrackPresence } from './hooks/use-pending-streams';
 import { usePushMicKeybinds } from './hooks/use-push-mic-keybinds';
@@ -78,7 +78,6 @@ import { useVoiceEvents } from './hooks/use-voice-events';
 import { useVoiceSessionExecutor } from './hooks/use-voice-session-executor';
 import { useWebcam } from './hooks/use-webcam';
 import { voiceSessionCommandObserver } from './hooks/voice-session-command-observer';
-import { didMicCaptureSettingsChange } from './mic-capture-config';
 import type { TMicrophonePreparedPipeline } from './microphone-pipeline-controller';
 import { prewarmVoiceEngines } from './prewarm';
 import {
@@ -97,7 +96,6 @@ import {
 	VoiceProviderContext,
 } from './voice-provider-context';
 import { VolumeControlProvider } from './volume-control-provider';
-import { didWebcamCaptureSettingsChange } from './webcam-controller';
 
 type TRecoveryJoinResult = {
 	device: Device;
@@ -221,7 +219,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		return state.externalStreamsMap[currentVoiceChannelId] ?? EMPTY_CHANNEL_EXTERNAL_STREAMS;
 	});
 	const { devices } = useDevices();
-	const previousDevicesRef = useRef<TDeviceSettings | undefined>(undefined);
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
 	const sessionExecutionOwnershipRef = useRef(createVoiceSessionExecutionOwnership());
 	const commitTerminalMicMutedRef = useRef<(() => Promise<void>) | undefined>(undefined);
@@ -850,50 +847,13 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		start: startMicStream,
 	} = microphone;
 
-	useEffect(() => {
-		const previousDevices = previousDevicesRef.current;
-		previousDevicesRef.current = devices;
-
-		if (!previousDevices || currentVoiceChannelId === undefined) {
-			return;
-		}
-
-		const shouldRestartMic = didMicCaptureSettingsChange(previousDevices, devices);
-		const shouldRestartWebcam = ownVoiceState.webcamEnabled && didWebcamCaptureSettingsChange(previousDevices, devices);
-
-		if (!shouldRestartMic && !shouldRestartWebcam) {
-			return;
-		}
-
-		void (async () => {
-			if (shouldRestartMic) {
-				logVoice('Applying updated microphone settings live');
-				const outcome = await startMicStream();
-				if (outcome.status === 'failed') {
-					logVoice('Failed to apply microphone settings live', { error: outcome.error });
-					toast.error('Failed to apply microphone settings');
-				}
-			}
-
-			if (shouldRestartWebcam) {
-				try {
-					logVoice('Applying updated webcam settings live');
-					stopWebcamStream();
-					await startWebcamStream();
-				} catch (error) {
-					logVoice('Failed to apply webcam settings live', { error });
-					toast.error('Failed to apply webcam settings');
-				}
-			}
-		})();
-	}, [
+	useMediaSettings({
 		devices,
 		currentVoiceChannelId,
-		ownVoiceState.webcamEnabled,
-		startMicStream,
-		startWebcamStream,
-		stopWebcamStream,
-	]);
+		webcamEnabled: ownVoiceState.webcamEnabled,
+		startMicrophone: startMicStream,
+		restartWebcam: webcam.restart,
+	});
 
 	const cleanup = useCallback(
 		(opts?: {
