@@ -9,7 +9,6 @@ const useLocalStreams = () => {
 
 	const localVideoProducer = useRef<Producer<AppData> | undefined>(undefined);
 	const localScreenShareProducer = useRef<Producer<AppData> | undefined>(undefined);
-	const localScreenShareAudioProducer = useRef<Producer<AppData> | undefined>(undefined);
 
 	// keepVideoAndScreen preserves the live webcam + screen-share capture tracks
 	// (and their store state) across a teardown so they can be republished onto a
@@ -24,23 +23,19 @@ const useLocalStreams = () => {
 
 			if (!keepVideoAndScreen) {
 				localVideoStream?.getTracks().forEach((track) => track.stop());
-				localScreenShareStream?.getTracks().forEach((track) => track.stop());
-				localScreenShareAudioStream?.getTracks().forEach((track) => track.stop());
+				localScreenShareStream?.getVideoTracks().forEach((track) => track.stop());
 
 				setLocalVideoStream(undefined);
 				setLocalScreenShare(undefined);
-				setLocalScreenShareAudio(undefined);
 			}
 
 			localVideoProducer.current?.close();
 			localScreenShareProducer.current?.close();
-			localScreenShareAudioProducer.current?.close();
 
 			localVideoProducer.current = undefined;
 			localScreenShareProducer.current = undefined;
-			localScreenShareAudioProducer.current = undefined;
 		},
-		[localScreenShareStream, localVideoStream, localScreenShareAudioStream],
+		[localScreenShareStream, localVideoStream],
 	);
 
 	return {
@@ -58,7 +53,6 @@ const useLocalStreams = () => {
 
 		localVideoProducer,
 		localScreenShareProducer,
-		localScreenShareAudioProducer,
 
 		clearLocalStreams,
 	};
