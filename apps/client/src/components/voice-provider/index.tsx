@@ -1599,6 +1599,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startScreenShareStream,
 		stopScreenShareStream,
 		requestScreenShareSelection: getDesktopBridge() ? requestDesktopScreenShareSelection : undefined,
+		isScreenShareLive: screenShare.isLive,
 	});
 
 	commitTerminalMicMutedRef.current = commitTerminalMicMuted;
