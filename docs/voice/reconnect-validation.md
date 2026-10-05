@@ -225,3 +225,31 @@ Stage 7's ownership refactor remains complete. `VoiceProvider` is still 359 line
 with the same controller/runtime/session-machine/runner ownership and public API.
 The original untracked sequencing plan remains untouched, SHA-256
 `480ad3b7d16213cab640a7b643f8ab5e39f0510b3a215d519df238be3904a5c9`.
+
+## Recovery-test teardown follow-up
+
+The confirmed-grace-expiry test now runs its scenario, server-log diagnostics,
+outage release and peer disposal through a framework-free orchestration helper.
+A rejected log read or attachment cannot skip outage release or either peer's
+disposal. A failed outage release or first peer disposal also cannot prevent the
+remaining cleanup attempts. A single failure is rethrown unchanged; multiple
+failures retain the original as the cause and include each failure in the error
+message, because Playwright does not expand `AggregateError.errors` in its report.
+
+Seven unit cases exercise the helper used by the Playwright test, including
+failed log reads, failed attachments, overlapping scenario/diagnostic/cleanup
+errors, first-peer disposal rejection and non-Error failures. The client
+`bun run test` command includes these E2E helper unit tests, so CI runs them.
+The frozen Nix/Bun install leaves the lockfile unchanged. Root `check-types`,
+`lint` and `knip` pass, with no lint warnings and the same 11 knip hints. The full
+client unit command passes 929 tests across 93 files, including the seven new
+cases and the existing voice architecture assertions.
+
+From `apps/client`, `CI=true nix develop -c bun run test:e2e
+e2e/tests/reconnect.spec.ts` passes all four reconnect cases (2.7 minutes), with
+zero retries and the same media, grace-expiry and fresh-restore assertions. The
+runner uses only this worktree's `e2e/.runtime/data/db.sqlite`. Its HTML report,
+test results, command output and isolated server logs are retained under
+`/tmp/ripcord-voice-cleanup-evidence-v3cu0o9_`. The earlier screen/full-recovery
+validation above remains historical; those unchanged suites were not rerun for
+this focused harness correction.

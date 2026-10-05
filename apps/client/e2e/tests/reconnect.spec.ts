@@ -14,6 +14,7 @@ import {
 	waitForStats,
 } from '../helpers/app';
 import { expectMicrophoneFlow, microphoneMediaStats } from '../helpers/microphone';
+import { runVoiceRecoveryTest } from '../helpers/voice-recovery-test';
 import { readVoiceServerEvents } from '../helpers/voice-server-events';
 import { installAppWebSocketOutage } from '../helpers/websocket-outage';
 
@@ -98,87 +99,89 @@ test('microphone and camera recover after confirmed server grace expiry', async 
 	const credentials = credentialsFor(testInfo, 'producer');
 	const producer = { context, page, credentials };
 
-	try {
-		await login(page, credentials);
-		await joinVoice(watcher.page);
-		await joinVoice(page);
-		await startCamera(page);
-		await expectOutboundVideoFlow(page, 'camera to send before grace expiry');
-		const beforeMic = await expectMicrophoneFlow(page, 'outbound');
-		const beforeReceivedMic = await expectMicrophoneFlow(watcher.page, 'inbound');
-		const clientInstanceId = await page.evaluate(async () => {
-			const modulePath = '/src/lib/trpc.ts';
-			const module: unknown = await import(modulePath);
-			if (typeof module !== 'object' || module === null) throw new Error('Could not load tRPC module');
-			const getId: unknown = Reflect.get(module, 'getWsClientInstanceId');
-			if (typeof getId !== 'function') throw new Error('Client instance getter is unavailable');
-			const id: unknown = Reflect.apply(getId, module, []);
-			if (typeof id !== 'string') throw new Error('Client instance ID is unavailable');
-			return id;
-		});
+	await runVoiceRecoveryTest({
+		run: async () => {
+			await login(page, credentials);
+			await joinVoice(watcher.page);
+			await joinVoice(page);
+			await startCamera(page);
+			await expectOutboundVideoFlow(page, 'camera to send before grace expiry');
+			const beforeMic = await expectMicrophoneFlow(page, 'outbound');
+			const beforeReceivedMic = await expectMicrophoneFlow(watcher.page, 'inbound');
+			const clientInstanceId = await page.evaluate(async () => {
+				const modulePath = '/src/lib/trpc.ts';
+				const module: unknown = await import(modulePath);
+				if (typeof module !== 'object' || module === null) throw new Error('Could not load tRPC module');
+				const getId: unknown = Reflect.get(module, 'getWsClientInstanceId');
+				if (typeof getId !== 'function') throw new Error('Client instance getter is unavailable');
+				const id: unknown = Reflect.apply(getId, module, []);
+				if (typeof id !== 'string') throw new Error('Client instance ID is unavailable');
+				return id;
+			});
 
-		// Offline recovery intentionally preserves the session beyond the normal
-		// online reconnect deadline. Close the server socket explicitly so its
-		// grace clock starts now rather than at a later TCP detection timeout.
-		await context.setOffline(true);
-		await outage.disconnect();
-		await expect
-			.poll(async () =>
-				(await readVoiceServerEvents()).find(
-					(event) => event.event === 'grace_scheduled' && event.clientInstanceId === clientInstanceId,
-				),
-			)
-			.toMatchObject({ scope: 'voice_disconnect_grace', ttlRemainingMs: 60_000 });
-		await expect
-			.poll(
-				async () =>
+			// Offline recovery intentionally preserves the session beyond the normal
+			// online reconnect deadline. Close the server socket explicitly so its
+			// grace clock starts now rather than at a later TCP detection timeout.
+			await context.setOffline(true);
+			await outage.disconnect();
+			await expect
+				.poll(async () =>
 					(await readVoiceServerEvents()).find(
-						(event) => event.event === 'grace_expired' && event.clientInstanceId === clientInstanceId,
+						(event) => event.event === 'grace_scheduled' && event.clientInstanceId === clientInstanceId,
 					),
-				{ timeout: 70_000 },
-			)
-			.toMatchObject({ scope: 'voice_disconnect_grace', graceAgeMs: expect.any(Number), ttlRemainingMs: 0 });
-		const expired = (await readVoiceServerEvents()).find(
-			(event) => event.event === 'grace_expired' && event.clientInstanceId === clientInstanceId,
-		);
-		if (!expired || expired.graceAgeMs === undefined) throw new Error('No confirmed grace expiry');
-		expect(expired.graceAgeMs).toBeGreaterThanOrEqual(60_000);
-		await expect.poll(async () => (await microphoneMediaStats(watcher.page)).inbound.length).toBe(0);
+				)
+				.toMatchObject({ scope: 'voice_disconnect_grace', ttlRemainingMs: 60_000 });
+			await expect
+				.poll(
+					async () =>
+						(await readVoiceServerEvents()).find(
+							(event) => event.event === 'grace_expired' && event.clientInstanceId === clientInstanceId,
+						),
+					{ timeout: 70_000 },
+				)
+				.toMatchObject({ scope: 'voice_disconnect_grace', graceAgeMs: expect.any(Number), ttlRemainingMs: 0 });
+			const expired = (await readVoiceServerEvents()).find(
+				(event) => event.event === 'grace_expired' && event.clientInstanceId === clientInstanceId,
+			);
+			if (!expired || expired.graceAgeMs === undefined) throw new Error('No confirmed grace expiry');
+			expect(expired.graceAgeMs).toBeGreaterThanOrEqual(60_000);
+			await expect.poll(async () => (await microphoneMediaStats(watcher.page)).inbound.length).toBe(0);
 
-		await context.setOffline(false);
-		outage.resume();
-		await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible({ timeout: 50_000 });
-		await expect
-			.poll(async () =>
-				(await readVoiceServerEvents()).find(
-					(event) =>
-						event.event === 'voice_session_attempt_finished' &&
-						event.kind === 'restore' &&
-						event.reconnectAttemptId !== undefined &&
-						outage.getRestoreAttemptIds().includes(event.reconnectAttemptId) &&
-						event.lineIndex > expired.lineIndex,
-				),
-			)
-			.toMatchObject({ path: 'fresh', outcome: 'succeeded' });
-		const afterMic = await expectMicrophoneFlow(page, 'outbound');
-		const afterReceivedMic = await expectMicrophoneFlow(watcher.page, 'inbound');
-		expect(afterMic.peerConnectionIndex).toBeGreaterThan(beforeMic.peerConnectionIndex);
-		expect(afterMic.trackId).not.toBe(beforeMic.trackId);
-		expect(afterReceivedMic.trackId).not.toBe(beforeReceivedMic.trackId);
-		await expectOutboundVideoFlow(page, 'camera RTP to resume after confirmed server grace expiry', 45_000);
-		await expect(page.getByTitle('Leave voice')).toBeVisible();
-		await expect(page.getByText(/failed to reconnect|something went wrong/i)).toHaveCount(0);
-		await testInfo.attach('microphone-identities', {
-			body: JSON.stringify({ beforeMic, beforeReceivedMic, afterMic, afterReceivedMic }, null, 2),
-			contentType: 'application/json',
-		});
-	} finally {
-		await testInfo.attach('server-voice-events', {
-			body: JSON.stringify(await readVoiceServerEvents(), null, 2),
-			contentType: 'application/json',
-		});
-		outage.resume();
-		await disposePeer(producer);
-		await disposePeer(watcher);
-	}
+			await context.setOffline(false);
+			outage.resume();
+			await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible({ timeout: 50_000 });
+			await expect
+				.poll(async () =>
+					(await readVoiceServerEvents()).find(
+						(event) =>
+							event.event === 'voice_session_attempt_finished' &&
+							event.kind === 'restore' &&
+							event.reconnectAttemptId !== undefined &&
+							outage.getRestoreAttemptIds().includes(event.reconnectAttemptId) &&
+							event.lineIndex > expired.lineIndex,
+					),
+				)
+				.toMatchObject({ path: 'fresh', outcome: 'succeeded' });
+			const afterMic = await expectMicrophoneFlow(page, 'outbound');
+			const afterReceivedMic = await expectMicrophoneFlow(watcher.page, 'inbound');
+			expect(afterMic.peerConnectionIndex).toBeGreaterThan(beforeMic.peerConnectionIndex);
+			expect(afterMic.trackId).not.toBe(beforeMic.trackId);
+			expect(afterReceivedMic.trackId).not.toBe(beforeReceivedMic.trackId);
+			await expectOutboundVideoFlow(page, 'camera RTP to resume after confirmed server grace expiry', 45_000);
+			await expect(page.getByTitle('Leave voice')).toBeVisible();
+			await expect(page.getByText(/failed to reconnect|something went wrong/i)).toHaveCount(0);
+			await testInfo.attach('microphone-identities', {
+				body: JSON.stringify({ beforeMic, beforeReceivedMic, afterMic, afterReceivedMic }, null, 2),
+				contentType: 'application/json',
+			});
+		},
+		attachDiagnostics: async () => {
+			await testInfo.attach('server-voice-events', {
+				body: JSON.stringify(await readVoiceServerEvents(), null, 2),
+				contentType: 'application/json',
+			});
+		},
+		resumeOutage: outage.resume,
+		disposePeers: [() => disposePeer(producer), () => disposePeer(watcher)],
+	});
 });
