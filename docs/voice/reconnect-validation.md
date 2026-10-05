@@ -236,6 +236,13 @@ remaining cleanup attempts. A single failure is rethrown unchanged; multiple
 failures retain the original as the cause and include each failure in the error
 message, because Playwright does not expand `AggregateError.errors` in its report.
 
+Producer setup also runs inside this cleanup scope. Context-close cleanup is
+registered immediately after allocation, before installing hooks or creating the
+page, then replaced by full peer disposal once the peer exists. If allocation
+itself rejects, watcher disposal still runs; if a later setup step rejects, the
+allocated producer context is closed and the watcher is disposed. Outage release
+is registered only after the route is installed.
+
 Seven unit cases exercise the helper used by the Playwright test, including
 failed log reads, failed attachments, overlapping scenario/diagnostic/cleanup
 errors, first-peer disposal rejection and non-Error failures. The client
@@ -245,7 +252,8 @@ The frozen Nix/Bun install leaves the lockfile unchanged. Root `check-types`,
 client unit command passes 929 tests across 93 files, including the seven new
 cases and the existing voice architecture assertions.
 
-From `apps/client`, `CI=true nix develop -c bun run test:e2e
+For the initial teardown correction, from `apps/client`,
+`CI=true nix develop -c bun run test:e2e
 e2e/tests/reconnect.spec.ts` passes all four reconnect cases (2.7 minutes), with
 zero retries and the same media, grace-expiry and fresh-restore assertions. The
 runner uses only this worktree's `e2e/.runtime/data/db.sqlite`. Its HTML report,
@@ -253,3 +261,22 @@ test results, command output and isolated server logs are retained under
 `/tmp/ripcord-voice-cleanup-evidence-v3cu0o9_`. The earlier screen/full-recovery
 validation above remains historical; those unchanged suites were not rerun for
 this focused harness correction.
+
+After moving producer setup into the cleanup scope, root types/lint and all 929
+client unit tests pass again. The first focused grace-expiry run fails the
+unchanged `graceAgeMs >= 60_000` assertion: the server reports 57,897 ms. Its
+trace records 69,195 ms of monotonic time against 61,287 ms of wall time across
+producer snapshots. The server's age measurement uses `Date.now()`, while its
+expiry callback is scheduled with `setTimeout`. The trace, report and server
+logs remain under the evidence directory's `setup-failed` subdirectory.
+
+One subsequent controlled run records host realtime, monotonic and raw
+monotonic clocks while executing the same test, with unchanged assertions and
+zero retries. It passes, confirms expiry at 60,569 ms and verifies microphone
+and camera recovery. Across the command, realtime advances 73.738 seconds,
+monotonic time 79.051 seconds and raw monotonic time 72.000 seconds. Its clock
+samples, command output, report and server logs remain under `clock-observed*`.
+These observations establish clock divergence in this environment; the precise
+clock/runtime cause remains unresolved, and the passing controlled run does not
+erase the earlier failure. No grace threshold, production scheduler or retry
+policy was changed.

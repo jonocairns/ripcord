@@ -91,16 +91,22 @@ test('voice returns to a coherent session after a long offline interval', async 
 test('microphone and camera recover after confirmed server grace expiry', async ({ browser }, testInfo) => {
 	test.setTimeout(200_000);
 	const watcher = await createPeer(browser, credentialsFor(testInfo, 'watcher'));
-	const context = await browser.newContext();
-	await installPcHook(context);
-	const page = await context.newPage();
-	await suppressViteHmrReload(page);
-	const outage = await installAppWebSocketOutage(page);
-	const credentials = credentialsFor(testInfo, 'producer');
-	const producer = { context, page, credentials };
+	let disposeProducer: (() => Promise<void>) | undefined;
+	let resumeOutage: (() => void) | undefined;
 
 	await runVoiceRecoveryTest({
 		run: async () => {
+			const context = await browser.newContext();
+			disposeProducer = () => context.close();
+			await installPcHook(context);
+			const page = await context.newPage();
+			await suppressViteHmrReload(page);
+			const outage = await installAppWebSocketOutage(page);
+			resumeOutage = outage.resume;
+			const credentials = credentialsFor(testInfo, 'producer');
+			const producer = { context, page, credentials };
+			disposeProducer = () => disposePeer(producer);
+
 			await login(page, credentials);
 			await joinVoice(watcher.page);
 			await joinVoice(page);
@@ -181,7 +187,12 @@ test('microphone and camera recover after confirmed server grace expiry', async 
 				contentType: 'application/json',
 			});
 		},
-		resumeOutage: outage.resume,
-		disposePeers: [() => disposePeer(producer), () => disposePeer(watcher)],
+		resumeOutage: () => resumeOutage?.(),
+		disposePeers: [
+			async () => {
+				await disposeProducer?.();
+			},
+			() => disposePeer(watcher),
+		],
 	});
 });
