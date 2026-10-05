@@ -57,7 +57,10 @@ It does not own:
 subscriptions and the existing consume/repair runners. The framework-free
 `createRemoteMediaIntegration` connects producer identity, committed consume
 publication, watch snapshots and external-track reconciliation. It is an
-integration seam, not another ledger or retry owner. See
+integration seam, not another ledger or retry owner. Its layout mount owns only
+consume-start acknowledgement lifetime: cleanup settles waiters, inactive
+mutations are fenced and replay creates a fresh publication. Ledger, stream and
+transport cleanup remain with their existing owners. See
 [provider-composition.md](./provider-composition.md).
 
 The implementation lives in

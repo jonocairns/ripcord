@@ -44,8 +44,13 @@ retained. Surviving ids retain the same ref objects, including across recovery
 while channel membership remains. Pruning or terminal clearing makes later
 lookup create new refs; it does not mutate detached element refs or stop tracks.
 
-Remote consume-start acknowledgement still waits for the committed ledger before
-transport work proceeds. Exact producer/channel identity protects repair, while
+Remote consume-start acknowledgement waits for the committed ledger before
+transport work proceeds. The integration mounts in a layout effect. Cleanup
+settles pending acknowledgements and fences inactive mutations without clearing
+ledger state or tearing down resources owned by transports/stream maps. Each
+activation has its own publication generation; Strict Mode replay uses a fresh
+publication, and an old cleanup cannot dispose its replacement. Currency is
+rechecked when the acknowledgement promise settles. Exact producer/channel identity protects repair, while
 id-only producer compatibility remains supported. Reconnect snapshots describe
 watch intent, and restore rehydrates the authoritative ledger rather than
 consuming privately. An explicit stop during recovery stays authoritative.
@@ -61,3 +66,20 @@ recovery-specific microphone decisions, immediate/delayed producer refresh and
 stale terminal-leave protection remain documented in
 [session-runtime.md](./session-runtime.md). The long-offline microphone/restore
 hang remains a separate unresolved defect, not unfinished ownership extraction.
+
+## Lifecycle corrections
+
+A separate layer adds the acknowledgement lifecycle fencing above. Construction
+remains inactive and effect-free. A disposed publication is never reused during
+replay. The corresponding factory/mount tests cover activation replacement,
+cleanup after acknowledgement but before promise delivery, inactive callbacks
+and preservation of transport/ledger cleanup ownership.
+
+The same layer corrects rebuild completion at awaited boundaries: losing runtime
+or command currency, or confirmed server connectivity, throws a supersession
+error instead of returning normally. The executor therefore cannot interpret
+that incomplete effect as `RebuildSucceeded`. Nonce restart still belongs to the
+executor, and existing failure/retry/draining policy stays unchanged. Disconnect
+after transport creation and after republishing reproduced false success before
+the correction. State synchronization already checked currency and retains that
+regression coverage. This does not repair the long-offline restore hang.

@@ -84,3 +84,11 @@ neither mint commands nor retry work. `useVoice` and server/desktop contracts ar
 unchanged. Tests also cover timeout detachment, late microphone publication,
 partial rebuild failure, lifecycle replay, disconnected boundaries and terminal
 leave completion after a successor is initialized.
+
+Rebuild currency checks after awaited boundaries reject superseded or disconnected
+work instead of returning normally. Returning while a command remains current
+would let the executor dispatch `RebuildSucceeded` with incomplete media setup.
+The nonce-change path still asks the executor to restart its command; no policy
+or command identity moves into runtime. Production-runtime tests cover loss
+of connectivity after transport creation, republication and state sync, along
+with cleanup before passive executor disposal.
