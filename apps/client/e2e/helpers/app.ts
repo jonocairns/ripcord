@@ -1,4 +1,5 @@
 import { type Browser, type BrowserContext, expect, type Page, type TestInfo } from '@playwright/test';
+import { callTrpc } from './trpc';
 
 const DEFAULT_VOICE_CHANNEL = 'General Voice';
 
@@ -112,6 +113,9 @@ type Peer = {
 };
 
 type ModerationAction = 'ban' | 'kick' | 'unban';
+
+// The seeded owner account; development servers keep its identity predictable.
+const OWNER_CREDENTIALS: PeerCredentials = { identity: 'ripcord', password: 'ripcord' };
 
 const installPcHook = async (context: BrowserContext): Promise<void> => {
 	await context.addInitScript(`${PC_HOOK}\n${WS_HOOK}`);
@@ -284,102 +288,34 @@ const moderatePeer = async (
 ): Promise<void> => {
 	const displayName = displayNameFor(peer.credentials);
 	if (options.updateDisplayName !== false) {
-		await peer.page.evaluate(async (name) => {
-			const modulePath = '/src/lib/trpc.ts';
-			const trpcModule: unknown = await import(modulePath);
-			if (typeof trpcModule !== 'object' || trpcModule === null) {
-				throw new Error('Could not load the tRPC client module');
-			}
-
-			const getClient = Reflect.get(trpcModule, 'getTRPCClient');
-			if (typeof getClient !== 'function') {
-				throw new Error('The tRPC client module does not export getTRPCClient');
-			}
-
-			const client: unknown = Reflect.apply(getClient, undefined, []);
-			const users =
-				client !== null && (typeof client === 'object' || typeof client === 'function')
-					? Reflect.get(client, 'users')
-					: undefined;
-			const update =
-				users !== null && (typeof users === 'object' || typeof users === 'function')
-					? Reflect.get(users, 'update')
-					: undefined;
-			const mutate =
-				update !== null && (typeof update === 'object' || typeof update === 'function')
-					? Reflect.get(update, 'mutate')
-					: undefined;
-			if (typeof mutate !== 'function') {
-				throw new Error('The users.update mutation is unavailable');
-			}
-
-			await Reflect.apply(mutate, update, [{ name, bannerColor: '#FFFFFF' }]);
-		}, displayName);
+		await callTrpc(peer.page, {
+			path: ['users', 'update'],
+			method: 'mutate',
+			input: { name: displayName, bannerColor: '#FFFFFF' },
+		});
 	}
 
-	const owner = await createPeer(browser, { identity: 'ripcord', password: 'ripcord' });
+	const owner = await createPeer(browser, OWNER_CREDENTIALS);
 
 	try {
-		await owner.page.evaluate(
-			async ({ moderationAction, targetName }) => {
-				const modulePath = '/src/lib/trpc.ts';
-				const trpcModule: unknown = await import(modulePath);
-				if (typeof trpcModule !== 'object' || trpcModule === null) {
-					throw new Error('Could not load the tRPC client module');
-				}
+		const allUsers = await callTrpc(owner.page, { path: ['users', 'getAll'], method: 'query' });
+		if (!Array.isArray(allUsers)) {
+			throw new Error('The users.getAll query returned an invalid response');
+		}
 
-				const getClient = Reflect.get(trpcModule, 'getTRPCClient');
-				if (typeof getClient !== 'function') {
-					throw new Error('The tRPC client module does not export getTRPCClient');
-				}
-
-				const client: unknown = Reflect.apply(getClient, undefined, []);
-				const users =
-					client !== null && (typeof client === 'object' || typeof client === 'function')
-						? Reflect.get(client, 'users')
-						: undefined;
-				const getAll =
-					users !== null && (typeof users === 'object' || typeof users === 'function')
-						? Reflect.get(users, 'getAll')
-						: undefined;
-				const query =
-					getAll !== null && (typeof getAll === 'object' || typeof getAll === 'function')
-						? Reflect.get(getAll, 'query')
-						: undefined;
-				if (typeof query !== 'function') {
-					throw new Error('The users.getAll query is unavailable');
-				}
-
-				const allUsers: unknown = await Reflect.apply(query, getAll, []);
-				if (!Array.isArray(allUsers)) {
-					throw new Error('The users.getAll query returned an invalid response');
-				}
-
-				const target = allUsers.find(
-					(user) => typeof user === 'object' && user !== null && Reflect.get(user, 'name') === targetName,
-				);
-				const userId = typeof target === 'object' && target !== null ? Reflect.get(target, 'id') : undefined;
-				if (typeof userId !== 'number') {
-					throw new Error(`Could not find moderation target ${targetName}`);
-				}
-
-				const procedure =
-					users !== null && (typeof users === 'object' || typeof users === 'function')
-						? Reflect.get(users, moderationAction)
-						: undefined;
-				const mutate =
-					procedure !== null && (typeof procedure === 'object' || typeof procedure === 'function')
-						? Reflect.get(procedure, 'mutate')
-						: undefined;
-				if (typeof mutate !== 'function') {
-					throw new Error(`The users.${moderationAction} mutation is unavailable`);
-				}
-
-				const input = moderationAction === 'unban' ? { userId } : { userId, reason: `Playwright ${moderationAction}` };
-				await Reflect.apply(mutate, procedure, [input]);
-			},
-			{ moderationAction: action, targetName: displayName },
+		const target: unknown = allUsers.find(
+			(user) => typeof user === 'object' && user !== null && Reflect.get(user, 'name') === displayName,
 		);
+		const userId = typeof target === 'object' && target !== null ? Reflect.get(target, 'id') : undefined;
+		if (typeof userId !== 'number') {
+			throw new Error(`Could not find moderation target ${displayName}`);
+		}
+
+		await callTrpc(owner.page, {
+			path: ['users', action],
+			method: 'mutate',
+			input: action === 'unban' ? { userId } : { userId, reason: `Playwright ${action}` },
+		});
 	} finally {
 		await disposePeer(owner);
 	}
@@ -464,6 +400,7 @@ export {
 	leaveVoice,
 	login,
 	moderatePeer,
+	OWNER_CREDENTIALS,
 	pcStats,
 	remoteCameraIndicator,
 	startCamera,
