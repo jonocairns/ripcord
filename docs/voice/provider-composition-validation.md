@@ -109,6 +109,13 @@ The requested ownership refactor is implemented. Remaining work is diagnosis and
 repair of the long-offline restore hang, deterministic server-grace-expiry
 coverage and the unavailable physical/native/packaged runtime validation.
 
+The subsequent [reconnect validation follow-up](./reconnect-validation.md)
+identifies the pending native microphone acquisition and isolates automated
+browser output from the host audio backend. It retains this historical failure
+record and adds confirmed server-grace-expiry and received microphone coverage.
+Its validation results are recorded separately; the original untracked plan
+remains untouched.
+
 ## Environment and evidence limits
 
 The repository Playwright harness starts its isolated server on 4991 and Vite on

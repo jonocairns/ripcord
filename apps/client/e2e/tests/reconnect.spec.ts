@@ -5,11 +5,17 @@ import {
 	disposePeer,
 	dropAppWebSocket,
 	expectOutboundVideoFlow,
+	installPcHook,
 	joinVoice,
+	login,
 	pcStats,
 	startCamera,
+	suppressViteHmrReload,
 	waitForStats,
 } from '../helpers/app';
+import { expectMicrophoneFlow, microphoneMediaStats } from '../helpers/microphone';
+import { readVoiceServerEvents } from '../helpers/voice-server-events';
+import { installAppWebSocketOutage } from '../helpers/websocket-outage';
 
 test('local camera survives a short websocket drop', async ({ browser }, testInfo) => {
 	const peer = await createPeer(browser, credentialsFor(testInfo));
@@ -18,6 +24,7 @@ test('local camera survives a short websocket drop', async ({ browser }, testInf
 		await joinVoice(peer.page);
 		await startCamera(peer.page);
 		await expectOutboundVideoFlow(peer.page, 'camera to start sending');
+		await expectMicrophoneFlow(peer.page, 'outbound');
 		const beforeDrop = await pcStats(peer.page);
 
 		await dropAppWebSocket(peer.page);
@@ -28,6 +35,7 @@ test('local camera survives a short websocket drop', async ({ browser }, testInf
 		);
 		await expect(peer.page.getByText('Connected', { exact: true }).first()).toBeVisible();
 		await expectOutboundVideoFlow(peer.page, 'camera to resume after websocket reconnect');
+		await expectMicrophoneFlow(peer.page, 'outbound');
 		await expect(peer.page.getByText(/failed to reconnect|connection lost/i)).toHaveCount(0);
 	} finally {
 		await disposePeer(peer);
@@ -54,7 +62,7 @@ test('voice teardown waits while the browser is offline and recovers when online
 	}
 });
 
-test('voice returns to a coherent session after the reconnect grace expires', async ({ browser }, testInfo) => {
+test('voice returns to a coherent session after a long offline interval', async ({ browser }, testInfo) => {
 	test.setTimeout(150_000);
 	const peer = await createPeer(browser, credentialsFor(testInfo));
 
@@ -62,6 +70,7 @@ test('voice returns to a coherent session after the reconnect grace expires', as
 		await joinVoice(peer.page);
 		await startCamera(peer.page);
 		await expectOutboundVideoFlow(peer.page, 'camera to start sending');
+		await expectMicrophoneFlow(peer.page, 'outbound');
 
 		await peer.context.setOffline(true);
 		await peer.page.waitForTimeout(65_000);
@@ -70,9 +79,106 @@ test('voice returns to a coherent session after the reconnect grace expires', as
 		await expect(peer.page.getByText('VOICE CHANNELS')).toBeVisible({ timeout: 45_000 });
 		await expect(peer.page.getByText('Connected', { exact: true }).first()).toBeVisible({ timeout: 45_000 });
 		await expect(peer.page.getByTitle('Leave voice')).toBeVisible();
-		await expectOutboundVideoFlow(peer.page, 'camera to resume after the reconnect grace expires', 45_000);
+		await expectOutboundVideoFlow(peer.page, 'camera to resume after a long offline interval', 45_000);
+		await expectMicrophoneFlow(peer.page, 'outbound');
 		await expect(peer.page.getByText(/failed to reconnect|something went wrong/i)).toHaveCount(0);
 	} finally {
 		await disposePeer(peer);
+	}
+});
+
+test('microphone and camera recover after confirmed server grace expiry', async ({ browser }, testInfo) => {
+	test.setTimeout(200_000);
+	const watcher = await createPeer(browser, credentialsFor(testInfo, 'watcher'));
+	const context = await browser.newContext();
+	await installPcHook(context);
+	const page = await context.newPage();
+	await suppressViteHmrReload(page);
+	const outage = await installAppWebSocketOutage(page);
+	const credentials = credentialsFor(testInfo, 'producer');
+	const producer = { context, page, credentials };
+
+	try {
+		await login(page, credentials);
+		await joinVoice(watcher.page);
+		await joinVoice(page);
+		await startCamera(page);
+		await expectOutboundVideoFlow(page, 'camera to send before grace expiry');
+		const beforeMic = await expectMicrophoneFlow(page, 'outbound');
+		const beforeReceivedMic = await expectMicrophoneFlow(watcher.page, 'inbound');
+		const clientInstanceId = await page.evaluate(async () => {
+			const modulePath = '/src/lib/trpc.ts';
+			const module: unknown = await import(modulePath);
+			if (typeof module !== 'object' || module === null) throw new Error('Could not load tRPC module');
+			const getId: unknown = Reflect.get(module, 'getWsClientInstanceId');
+			if (typeof getId !== 'function') throw new Error('Client instance getter is unavailable');
+			const id: unknown = Reflect.apply(getId, module, []);
+			if (typeof id !== 'string') throw new Error('Client instance ID is unavailable');
+			return id;
+		});
+
+		// Offline recovery intentionally preserves the session beyond the normal
+		// online reconnect deadline. Close the server socket explicitly so its
+		// grace clock starts now rather than at a later TCP detection timeout.
+		await context.setOffline(true);
+		await outage.disconnect();
+		await expect
+			.poll(async () =>
+				(await readVoiceServerEvents()).find(
+					(event) => event.event === 'grace_scheduled' && event.clientInstanceId === clientInstanceId,
+				),
+			)
+			.toMatchObject({ scope: 'voice_disconnect_grace', ttlRemainingMs: 60_000 });
+		await expect
+			.poll(
+				async () =>
+					(await readVoiceServerEvents()).find(
+						(event) => event.event === 'grace_expired' && event.clientInstanceId === clientInstanceId,
+					),
+				{ timeout: 70_000 },
+			)
+			.toMatchObject({ scope: 'voice_disconnect_grace', graceAgeMs: expect.any(Number), ttlRemainingMs: 0 });
+		const expired = (await readVoiceServerEvents()).find(
+			(event) => event.event === 'grace_expired' && event.clientInstanceId === clientInstanceId,
+		);
+		if (!expired || expired.graceAgeMs === undefined) throw new Error('No confirmed grace expiry');
+		expect(expired.graceAgeMs).toBeGreaterThanOrEqual(60_000);
+		await expect.poll(async () => (await microphoneMediaStats(watcher.page)).inbound.length).toBe(0);
+
+		await context.setOffline(false);
+		outage.resume();
+		await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible({ timeout: 50_000 });
+		await expect
+			.poll(async () =>
+				(await readVoiceServerEvents()).find(
+					(event) =>
+						event.event === 'voice_session_attempt_finished' &&
+						event.kind === 'restore' &&
+						event.reconnectAttemptId !== undefined &&
+						outage.getRestoreAttemptIds().includes(event.reconnectAttemptId) &&
+						event.lineIndex > expired.lineIndex,
+				),
+			)
+			.toMatchObject({ path: 'fresh', outcome: 'succeeded' });
+		const afterMic = await expectMicrophoneFlow(page, 'outbound');
+		const afterReceivedMic = await expectMicrophoneFlow(watcher.page, 'inbound');
+		expect(afterMic.peerConnectionIndex).toBeGreaterThan(beforeMic.peerConnectionIndex);
+		expect(afterMic.trackId).not.toBe(beforeMic.trackId);
+		expect(afterReceivedMic.trackId).not.toBe(beforeReceivedMic.trackId);
+		await expectOutboundVideoFlow(page, 'camera RTP to resume after confirmed server grace expiry', 45_000);
+		await expect(page.getByTitle('Leave voice')).toBeVisible();
+		await expect(page.getByText(/failed to reconnect|something went wrong/i)).toHaveCount(0);
+		await testInfo.attach('microphone-identities', {
+			body: JSON.stringify({ beforeMic, beforeReceivedMic, afterMic, afterReceivedMic }, null, 2),
+			contentType: 'application/json',
+		});
+	} finally {
+		await testInfo.attach('server-voice-events', {
+			body: JSON.stringify(await readVoiceServerEvents(), null, 2),
+			contentType: 'application/json',
+		});
+		outage.resume();
+		await disposePeer(producer);
+		await disposePeer(watcher);
 	}
 });
