@@ -1,7 +1,12 @@
 # WebRTC end-to-end tests
 
-These Playwright tests run Chromium with synthetic microphone and camera devices. The runner starts its own client and
+These Playwright tests run Chromium with synthetic microphone, camera and audio output devices. The runner starts its own client and
 server, recreates `e2e/.runtime/` for every run, and never reads or modifies the normal development database.
+
+`--disable-audio-output` replaces the OS output stream while preserving Chromium's audio processing and WebRTC.
+Muting alone still opens the host audio backend. The long-offline microphone acquisition investigation and its
+fail–pass–fail comparison are recorded in [reconnect-validation.md](../../../docs/voice/reconnect-validation.md).
+These tests do not prove physical playback or native device behavior.
 
 From the repository root:
 
