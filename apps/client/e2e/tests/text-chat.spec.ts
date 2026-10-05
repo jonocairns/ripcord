@@ -85,7 +85,9 @@ test('attachments reach live and late readers and are removed with their message
 			await openTextChannel(lateReader.page, ATTACHMENT_CHANNEL);
 			const historyBody = messageBody(lateReader.page, caption);
 			await expectImageDecoded(historyBody);
-			await expect(historyBody.getByRole('link', { name: notes.name })).toBeVisible();
+			const historyDownload = await lateReader.page.request.get(await fileCardHref(historyBody, notes.name));
+			expect(historyDownload.status()).toBe(200);
+			expect(await historyDownload.text()).toBe(notesContent);
 		} finally {
 			await disposePeer(lateReader);
 		}
