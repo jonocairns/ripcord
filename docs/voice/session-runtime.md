@@ -1,8 +1,10 @@
 # Voice session runtime
 
-Stage 6 extracts concrete session effects from `VoiceProvider`. Stage 7 has not
-started. The provider still composes resource owners, controls, remote ledger
-integration, media-element refs, events, and context publication.
+`VoiceProvider` composes resource owners, controls, the remote-media adapter,
+media-element refs and context publication. The seven-stage extraction is
+implemented; [provider-composition.md](./provider-composition.md) describes the
+final ownership and public operations. Stage 6 extracted the runtime effects
+described here.
 
 `createVoiceSessionRuntime` is a framework-free factory with injected current
 value getters, resource APIs, signaling, device creation, state publication,

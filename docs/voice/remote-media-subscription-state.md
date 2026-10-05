@@ -53,6 +53,13 @@ It does not own:
 - volume or layout state
 - server voice membership
 
+`useRemoteMedia` composes ledger transitions, transport/stream owners, event
+subscriptions and the existing consume/repair runners. The framework-free
+`createRemoteMediaIntegration` connects producer identity, committed consume
+publication, watch snapshots and external-track reconciliation. It is an
+integration seam, not another ledger or retry owner. See
+[provider-composition.md](./provider-composition.md).
+
 The implementation lives in
 `apps/client/src/components/voice-provider/hooks/remote-media-subscriptions.ts`.
 

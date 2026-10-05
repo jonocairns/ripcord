@@ -95,11 +95,12 @@ Existing controller and subscription tests are retained, including
 `desktop-app-audio-recovery-controller.test.ts` lifecycle leases, queued
 cancellation and fallback fencing, and `remote-media-subscriptions.test.ts` /
 `voice-reconnect-restore.test.ts` screen-audio watch coupling and restoration.
-The current browser display-audio publisher remains inside the provider and
-has no isolated production controller test. The existing native ingest suite
-also contains mirrored provider logic; this prerequisite does not convert it
-or treat it as native integration evidence. Stage 4 must retain these suites
-and add direct production share-audio controller coverage as planned.
+At baseline creation the display-audio publisher remained in the provider and
+the native ingest suite mirrored provider logic. Stage 4 subsequently moved
+those paths into the production share-audio controller and replaced the mirrored
+startup tests; see [share-audio-controller.md](./share-audio-controller.md). Those
+unit tests prove lifecycle behavior, not native integration. The original
+video-only baseline fixture remains unchanged.
 
 Packaged Electron selection, OS permission, native RTP ingest, worklet/sidecar
 capture, and Linux/macOS/Windows desktop smoke tests were unavailable in this
