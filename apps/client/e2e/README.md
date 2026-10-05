@@ -27,3 +27,8 @@ timing failures; use the retained trace, screenshot, and video to diagnose them.
 Assertions use `RTCPeerConnection.getStats()` and live sender/receiver tracks. A visible card alone is not proof that
 media recovered. Faults are driven by Playwright browser instrumentation or real product operations; do not add E2E
 switches or control routes to shipped client/server code.
+
+The reconnect suite checks microphone RTP and non-concealed received samples attached to the app's audio player.
+Its grace-expiry case closes the real server WebSocket while the browser is offline, verifies the isolated server's
+60-second grace expiry and fresh restore path, then checks replacement microphone media and camera RTP. Browser
+offline duration by itself is not evidence that the server's grace timer expired.

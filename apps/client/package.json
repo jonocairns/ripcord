@@ -9,7 +9,7 @@
 		"lint": "biome lint --error-on-warnings ./src ./e2e ./playwright.config.ts",
 		"lint:fix": "biome lint --fix ./src",
 		"check-types": "tsc --noEmit --project tsconfig.app.json && tsc --noEmit --project e2e/tsconfig.json",
-		"test": "bun test ./src",
+		"test": "bun test ./src ./e2e/helpers/__tests__",
 		"test:e2e": "playwright test",
 		"test:e2e:install": "playwright install chromium",
 		"format": "biome format --write ./src",
