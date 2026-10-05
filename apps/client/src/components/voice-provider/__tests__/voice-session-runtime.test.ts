@@ -512,4 +512,282 @@ describe('voice session runtime effects', () => {
 		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(1);
 		cleanup();
 	});
+	it('rejects an already stale init before it can clean up the current session', async () => {
+		const h = createHarness();
+		await h.runtime.init(capabilities, 5);
+		const successor = h.state.currentPrepared;
+		const cleanupCount = h.ports.cleanupTransports.mock.calls.length;
+		await expect(h.runtime.init(capabilities, 5, { isCurrentRecovery: () => false })).rejects.toBeInstanceOf(
+			VoiceSessionExecutionSupersededError,
+		);
+		expect(h.state.currentPrepared).toBe(successor);
+		expect(h.ports.cleanupTransports).toHaveBeenCalledTimes(cleanupCount);
+	});
+
+	it('checks init currency after deferred device construction before preparing media or loading', async () => {
+		const h = createHarness();
+		const factory = deferred<Device>();
+		h.ports.createDevice.mockImplementation(() => factory.promise);
+		const result = h.runtime.init(capabilities, 5).catch((error: unknown) => error);
+		h.runtime.terminalCleanup();
+		factory.resolve(h.device.device);
+		expect(await result).toBeInstanceOf(VoiceSessionExecutionSupersededError);
+		expect(h.ports.microphone.prepare).not.toHaveBeenCalled();
+		expect(h.device.load).not.toHaveBeenCalled();
+	});
+
+	it('does not trigger desktop audio recovery when preserved republishing finishes after cleanup', async () => {
+		const h = createHarness();
+		const publication = deferred<void>();
+		h.ports.screenShare.republish.mockImplementation(() => publication.promise);
+		h.ports.shareAudio.hasDesktopIntent = () => true;
+		const result = h.runtime.init(capabilities, 5, { preserveLocalMedia: true }).catch((error: unknown) => error);
+		await flush();
+		h.runtime.terminalCleanup();
+		publication.resolve();
+		expect(await result).toBeInstanceOf(VoiceSessionExecutionSupersededError);
+		expect(h.ports.shareAudio.recover).not.toHaveBeenCalled();
+	});
+
+	it('fences the other transport allocation immediately after partial init failure', async () => {
+		const h = createHarness();
+		const consumer = deferred<void>();
+		let lateCommits = 0;
+		h.ports.createProducerTransport.mockRejectedValueOnce(new Error('producer creation failed'));
+		h.ports.createConsumerTransport.mockImplementation(async (_device, _params, isCurrent) => {
+			await consumer.promise;
+			if (isCurrent?.()) lateCommits++;
+		});
+		await expect(h.runtime.init(capabilities, 5)).rejects.toThrow('producer creation failed');
+		consumer.resolve();
+		await flush();
+		expect(lateCommits).toBe(0);
+		expect(h.runtime.getRtpCapabilities()).toBeNull();
+		expect(h.ports.cleanupTransports).toHaveBeenCalledTimes(2);
+	});
+
+	it('keeps successor resources after a late rejected microphone publication', async () => {
+		const h = createHarness();
+		const publication = deferred<void>();
+		h.ports.microphone.publish.mockImplementationOnce(() => publication.promise);
+		const old = h.runtime.init(capabilities, 5).catch((error: unknown) => error);
+		await flush();
+		await h.runtime.init(capabilities, 5);
+		const successor = h.state.currentPrepared;
+		const cleanupCount = h.ports.microphone.cleanup.mock.calls.length;
+		publication.reject(new Error('old publication failed'));
+		expect(await old).toBeInstanceOf(VoiceSessionExecutionSupersededError);
+		expect(h.state.currentPrepared).toBe(successor);
+		expect(h.ports.microphone.cleanup).toHaveBeenCalledTimes(cleanupCount);
+	});
+
+	it('fences rebuild completion after local cleanup before passive executor disposal', async () => {
+		const h = createHarness();
+		await h.runtime.init(capabilities, 5);
+		const transport = deferred<void>();
+		h.ports.createProducerTransport.mockImplementation(() => transport.promise);
+		const rebuild = h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext);
+		await flush();
+		h.runtime.terminalCleanup();
+		transport.resolve();
+		await rebuild;
+		expect(h.runtime.getRtpCapabilities()).toBeNull();
+		expect(h.ports.consumeExistingProducers).toHaveBeenCalledTimes(1);
+		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not rejoin a missing seat after failed transport creation has lost currency', async () => {
+		const h = createHarness();
+		await h.runtime.init(capabilities, 5);
+		const transport = deferred<void>();
+		h.ports.createProducerTransport.mockImplementation(() => transport.promise);
+		const result = h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext).catch((error: unknown) => error);
+		await flush();
+		h.contextState.current = false;
+		transport.reject(missingSession);
+		await result;
+		expect(h.ports.requestVoiceRestoreOrJoin).not.toHaveBeenCalled();
+	});
+
+	it('checks missing-seat rejoin currency immediately after its server response', async () => {
+		const h = createHarness();
+		await h.runtime.init(capabilities, 5);
+		const request = deferred<typeof h.bootstrap>();
+		h.ports.createProducerTransport.mockRejectedValueOnce(missingSession);
+		h.ports.requestVoiceRestoreOrJoin.mockImplementation(() => request.promise);
+		const result = h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext).catch((error: unknown) => error);
+		await flush();
+		h.contextState.current = false;
+		request.resolve(h.bootstrap);
+		await result;
+		expect(h.ports.createDevice).toHaveBeenCalledTimes(1);
+		expect(h.server.reconcileVoiceChannelUsers).not.toHaveBeenCalled();
+	});
+
+	it('does not initialize a restore whose RPC returns after runtime deactivation', async () => {
+		const h = createHarness();
+		const request = deferred<typeof h.bootstrap>();
+		h.ports.requestVoiceRestoreOrJoin.mockImplementation(() => request.promise);
+		const result = h.runtime.restoreVoiceSession(restoreCommand, h.restoreContext).catch((error: unknown) => error);
+		h.unmount();
+		request.resolve(h.bootstrap);
+		expect(await result).toBeInstanceOf(VoiceSessionExecutionSupersededError);
+		expect(h.markServerSessionEstablished).toHaveBeenCalledTimes(1);
+		expect(h.ports.cleanupTransports).not.toHaveBeenCalled();
+	});
+
+	it('does not let a detached restore RPC clean up a successor init', async () => {
+		const h = createHarness();
+		const request = deferred<typeof h.bootstrap>();
+		h.ports.requestVoiceRestoreOrJoin.mockImplementation(() => request.promise);
+		const result = h.runtime.restoreVoiceSession(restoreCommand, h.restoreContext).catch((error: unknown) => error);
+		await h.runtime.init(capabilities, 5);
+		const successor = h.state.currentPrepared;
+		const cleanupCount = h.ports.cleanupTransports.mock.calls.length;
+		request.resolve(h.bootstrap);
+		expect(await result).toBeInstanceOf(VoiceSessionExecutionSupersededError);
+		expect(h.state.currentPrepared).toBe(successor);
+		expect(h.ports.cleanupTransports).toHaveBeenCalledTimes(cleanupCount);
+	});
+
+	it('rejects disconnected restore before calling the server or consuming watch intent', async () => {
+		const h = createHarness();
+		h.state.connected = false;
+		await expect(h.runtime.restoreVoiceSession(restoreCommand, h.restoreContext)).rejects.toThrow(
+			'server connection unavailable',
+		);
+		expect(h.ports.requestVoiceRestoreOrJoin).not.toHaveBeenCalled();
+		expect(h.ports.rehydrateWatchIntentOnly).not.toHaveBeenCalled();
+	});
+
+	it('fences restore server-state synchronization after republishing loses runtime ownership', async () => {
+		const h = createHarness();
+		const publication = deferred<void>();
+		h.ports.webcam.republish.mockImplementation(() => publication.promise);
+		const result = h.runtime.restoreVoiceSession(restoreCommand, h.restoreContext).catch((error: unknown) => error);
+		await flush();
+		h.runtime.recoveryCleanup();
+		publication.resolve();
+		expect(await result).toBeInstanceOf(VoiceSessionExecutionSupersededError);
+		expect(h.server.reconcileVoiceChannelUsers).not.toHaveBeenCalled();
+		expect(h.ports.updateOwnVoiceState).not.toHaveBeenCalled();
+	});
+
+	it('obsolete runtime finalization callbacks cannot mutate the replacement session', async () => {
+		const h = createHarness();
+		h.unmount();
+		h.runtime.restoreWatchIntent(snapshot);
+		await h.runtime.recoverDesktopAppAudio();
+		await h.runtime.clearFailedSession(clearCommand);
+		await h.runtime.leaveVoiceSession(5);
+		expect(h.ports.rehydrateWatchIntentOnly).not.toHaveBeenCalled();
+		expect(h.ports.shareAudio.recover).not.toHaveBeenCalled();
+		expect(h.ports.clearOwnVoiceSessionAfterReconnectFailure).not.toHaveBeenCalled();
+		expect(h.ports.leaveVoiceSessionAfterRecoveryFailure).not.toHaveBeenCalled();
+		expect(h.ports.screenShare.stop).not.toHaveBeenCalled();
+	});
+	it('a stale rebuild invocation does not revoke the live initialization lease', async () => {
+		const h = createHarness();
+		await h.runtime.init(capabilities, 5);
+		const lease = h.ports.microphone.publish.mock.calls[0]?.[1];
+		if (!lease) throw new Error('expected microphone publication currency getter');
+		h.contextState.current = false;
+		await expect(h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext)).rejects.toBeInstanceOf(
+			VoiceSessionExecutionSupersededError,
+		);
+		expect(lease()).toBe(true);
+	});
+
+	it('restore stops at its server boundary if confirmed connectivity is lost', async () => {
+		const h = createHarness();
+		const request = deferred<typeof h.bootstrap>();
+		h.ports.requestVoiceRestoreOrJoin.mockImplementation(() => request.promise);
+		const result = h.runtime.restoreVoiceSession(restoreCommand, h.restoreContext).catch((error: unknown) => error);
+		h.state.connected = false;
+		request.resolve(h.bootstrap);
+		expect(await result).toBeInstanceOf(VoiceSessionExecutionSupersededError);
+		expect(h.markServerSessionEstablished).toHaveBeenCalledTimes(1);
+		expect(h.ports.createDevice).not.toHaveBeenCalled();
+		expect(h.ports.rehydrateWatchIntentOnly).not.toHaveBeenCalled();
+	});
+
+	it('rebuild does not republish or resynchronize while disconnected after transport creation', async () => {
+		const h = createHarness();
+		await h.runtime.init(capabilities, 5);
+		const transport = deferred<void>();
+		h.ports.createProducerTransport.mockImplementation(() => transport.promise);
+		const rebuild = h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext);
+		await flush();
+		h.state.connected = false;
+		transport.resolve();
+		await rebuild;
+		expect(h.ports.consumeExistingProducers).toHaveBeenCalledTimes(1);
+		expect(h.ports.microphone.publish).toHaveBeenCalledTimes(1);
+		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(1);
+	});
+
+	it('disconnected finalization preserves watch intent and desktop audio recovery work', async () => {
+		const h = createHarness();
+		h.state.connected = false;
+		h.runtime.restoreWatchIntent(snapshot);
+		await h.runtime.recoverDesktopAppAudio();
+		expect(h.ports.rehydrateWatchIntentOnly).not.toHaveBeenCalled();
+		expect(h.ports.shareAudio.recover).not.toHaveBeenCalled();
+		h.state.connected = true;
+		h.runtime.restoreWatchIntent(snapshot);
+		await h.runtime.recoverDesktopAppAudio();
+		expect(h.ports.rehydrateWatchIntentOnly).toHaveBeenCalledTimes(1);
+		expect(h.ports.shareAudio.recover).toHaveBeenCalledTimes(1);
+	});
+
+	it('cleans a failed rebuild transport pair without stopping preserved captures', async () => {
+		const h = createHarness();
+		await h.runtime.init(capabilities, 5);
+		const consumer = deferred<void>();
+		let lateCommits = 0;
+		h.ports.createProducerTransport.mockRejectedValueOnce(new Error('transport failed'));
+		h.ports.createConsumerTransport.mockImplementation(async (_device, _params, isCurrent) => {
+			await consumer.promise;
+			if (isCurrent?.()) lateCommits++;
+		});
+		const stopCount = h.ports.screenShare.stop.mock.calls.length;
+		await expect(h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext)).rejects.toThrow('transport failed');
+		consumer.resolve();
+		await flush();
+		expect(lateCommits).toBe(0);
+		expect(h.ports.screenShare.stop).toHaveBeenCalledTimes(stopCount);
+		expect(h.ports.cleanupTransports).toHaveBeenLastCalledWith({ preserveRemoteMediaIntent: true });
+	});
+
+	it('timed-out restore initialization completing late cannot change a successor', async () => {
+		const h = createHarness();
+		const load = deferred<void>();
+		const timeout = deferred<void>();
+		h.device.load.mockImplementationOnce(() => load.promise);
+		let boundaries = 0;
+		h.restoreContext.withTimeout = <T>(operation: Promise<T>): Promise<T> => {
+			boundaries++;
+			return boundaries === 2
+				? Promise.race([
+						operation,
+						timeout.promise.then(() => {
+							throw new Error('restore timeout');
+						}),
+					])
+				: operation;
+		};
+		const old = h.runtime.restoreVoiceSession(restoreCommand, h.restoreContext).catch((error: unknown) => error);
+		await flush();
+		timeout.resolve();
+		expect(await old).toEqual(new Error('restore timeout'));
+		await h.runtime.init(capabilities, 5);
+		const successor = h.state.currentPrepared;
+		const cleanupCount = h.ports.cleanupTransports.mock.calls.length;
+		load.resolve();
+		await flush();
+		expect(h.state.currentPrepared).toBe(successor);
+		expect(h.ports.cleanupTransports).toHaveBeenCalledTimes(cleanupCount);
+		expect(h.markServerSessionEstablished).toHaveBeenCalledTimes(1);
+		expect(h.server.reconcileVoiceChannelUsers).not.toHaveBeenCalled();
+	});
 });

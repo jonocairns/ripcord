@@ -54,3 +54,31 @@ real signaling, mediasoup, WebRTC and decoded-media assertions with fake camera
 and microphone and the unchanged video-only canvas screen fixture. Browser
 screen audio, physical devices, native picker permissions, OS capture, sidecar
 capture and packaged desktop cleanup/reconnect need separate platform validation.
+
+## Currency hardening
+
+The mechanical extraction is a separate stack layer from these deliberate
+behavior changes. Deferred-operation tests reproduced eleven missing-currency
+failures before the fixes. The fixes add effect fencing rather than changing
+retry, timeout, phase or command-identity policy.
+
+- An already stale init or rebuild rejects before claiming execution or cleaning
+  shared state. Device construction, rejoin signaling and local republication
+  each recheck currency before the next effect.
+- Restore claims one concrete execution lease before its server request and
+  retains that lease through initialization. Runtime deactivation, cleanup or a
+  successor init fences a response even before passive executor disposal runs.
+  Server establishment is still recorded before rejecting a stale response.
+- Failed init/rebuild effects revoke their attempt's publication currency before
+  awaiting other work. They detach and clean transport resources only while they
+  still own the runtime, retaining capture for recovery. A pending half of a
+  failed transport pair cannot publish after the other half rejects.
+- Recovery publication and finalization require confirmed connectivity. Inactive
+  runtime callbacks cannot restore watch intent, recover desktop audio or run
+  terminal server/local finalization against a replacement provider.
+
+These checks supplement the existing executor and media-controller leases; they
+neither mint commands nor retry work. `useVoice` and server/desktop contracts are
+unchanged. Tests also cover timeout detachment, late microphone publication,
+partial rebuild failure, lifecycle replay, disconnected boundaries and terminal
+leave completion after a successor is initialized.

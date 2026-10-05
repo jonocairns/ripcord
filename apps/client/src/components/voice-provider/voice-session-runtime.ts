@@ -133,6 +133,18 @@ type TVoiceSessionRuntimeDependencies = Pick<
 		waitForProducerRefresh: () => Promise<void>;
 	};
 
+type TVoiceSessionRuntimeInitOptions = {
+	producerTransportParams?: TTransportParams;
+	consumerTransportParams?: TTransportParams;
+	existingProducers?: TRemoteProducerIds;
+	// Keep live webcam/screen-share capture alive across the teardown and
+	// republish it onto the new transport (WS-reconnect restore). Without
+	// this an in-progress screen share is silently dropped on reconnect.
+	preserveLocalMedia?: boolean;
+	restoreWatchSnapshot?: TWatchedRemoteStreamsSnapshot;
+	isCurrentRecovery?: () => boolean;
+};
+
 // Concrete session effects coordinate resource owners. The machine and executor
 // retain phase, command, retry, scheduling and bounded-drain ownership.
 const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDependencies) => {
@@ -220,6 +232,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 	};
 
 	const ensureVoiceDeviceLoaded = async (isCurrent: () => boolean = () => true) => {
+		if (!active || !isCurrent()) throw new VoiceSessionExecutionSupersededError();
 		if (currentDevice) {
 			return currentDevice;
 		}
@@ -231,6 +244,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		}
 
 		const device = await getDependencies().createDevice();
+		if (!active || !isCurrent()) throw new VoiceSessionExecutionSupersededError();
 		await device.load({
 			routerRtpCapabilities: currentRouterRtpCapabilities,
 		});
@@ -255,6 +269,10 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 				attributes: {},
 			},
 			async () => {
+				const throwIfSuperseded = (): void => {
+					if (!active || (options.isCurrent && !options.isCurrent())) throw new VoiceSessionExecutionSupersededError();
+				};
+				throwIfSuperseded();
 				const currentOwnVoiceState = getDependencies().getOwnVoiceState();
 				const {
 					routerRtpCapabilities: nextRouterRtpCapabilities,
@@ -270,7 +288,9 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 					signal: options.signal,
 				});
 
+				throwIfSuperseded();
 				const device = await getDependencies().createDevice();
+				throwIfSuperseded();
 				await device.load({
 					routerRtpCapabilities: nextRouterRtpCapabilities,
 				});
@@ -372,28 +392,23 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		getDependencies().updateOwnVoiceState(state);
 	};
 
-	const init = async (
+	const initialize = async (
 		incomingRouterRtpCapabilities: RtpCapabilities,
 		channelId: number,
-		opts?: {
-			producerTransportParams?: TTransportParams;
-			consumerTransportParams?: TTransportParams;
-			existingProducers?: TRemoteProducerIds;
-			// Keep live webcam/screen-share capture alive across the teardown and
-			// republish it onto the new transport (WS-reconnect restore). Without
-			// this an in-progress screen share is silently dropped on reconnect.
-			preserveLocalMedia?: boolean;
-			restoreWatchSnapshot?: TWatchedRemoteStreamsSnapshot;
-			isCurrentRecovery?: () => boolean;
-		},
+		opts?: TVoiceSessionRuntimeInitOptions,
+		executionLease?: () => boolean,
 	) => {
+		if (!active || (opts?.isCurrentRecovery && !opts.isCurrentRecovery()))
+			throw new VoiceSessionExecutionSupersededError();
 		const microphoneLifecycleLease = getDependencies().microphone.createLifecycleLease();
-		const ownsSessionExecution = claimVoiceSessionExecution(executionOwnership);
-		const isCurrent = (): boolean =>
+		const ownsSessionExecution = executionLease ?? claimVoiceSessionExecution(executionOwnership);
+		let attemptOpen = true;
+		const isOwnerCurrent = (): boolean =>
 			active &&
 			microphoneLifecycleLease.isCurrent() &&
 			ownsSessionExecution() &&
 			(opts?.isCurrentRecovery === undefined || opts.isCurrentRecovery());
+		const isCurrent = (): boolean => attemptOpen && isOwnerCurrent();
 
 		return getDependencies().traceSentrySpan(
 			{
@@ -421,6 +436,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 
 				let republishedLocalMediaState: TRepublishedLocalMediaState = {};
 
+				throwIfRecoverySuperseded();
 				cleanup({
 					preserveLocalMedia: opts?.preserveLocalMedia,
 					preserveRemoteMediaIntent: opts?.restoreWatchSnapshot !== undefined,
@@ -442,6 +458,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 					routerCapabilities = incomingRouterRtpCapabilities;
 
 					const device = await getDependencies().createDevice();
+					throwIfRecoverySuperseded();
 
 					if (!getDependencies().getOwnVoiceState().micMuted) {
 						// Start mic acquisition + WASM pipeline immediately — these have no
@@ -509,6 +526,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 							republishedLocalMediaState = republishPlan.state;
 						}
 
+						throwIfRecoverySuperseded();
 						if (getDependencies().shareAudio.hasDesktopIntent()) {
 							void getDependencies()
 								.shareAudio.recover()
@@ -531,6 +549,21 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 
 					return { republishedLocalMediaState };
 				} catch (error) {
+					// Revoke attempt currency before awaiting microphone preparation:
+					// the other half of a failed transport pair may still finish.
+					attemptOpen = false;
+					if (isOwnerCurrent()) {
+						getDependencies().webcam.detachProducer();
+						getDependencies().screenShare.detachProducer();
+						getDependencies().shareAudio.detachProducer();
+						getDependencies().cleanupTransports({
+							preserveRemoteMediaIntent: opts?.restoreWatchSnapshot !== undefined,
+						});
+						currentDevice = undefined;
+						routerCapabilities = null;
+						sendCapabilities = null;
+						getDependencies().publishRtpCapabilities(null);
+					}
 					getDependencies().logVoice('Error initializing voice provider', { error });
 
 					const preparedMic = await micPrepPromise;
@@ -547,7 +580,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 
 					// Lifecycle state belongs to the current attempt; a superseded
 					// recovery attempt must not fail its successor's join.
-					if (isCurrent()) {
+					if (isOwnerCurrent()) {
 						if (dispatchJoinLifecycle) {
 							getDependencies().dispatchVoiceSession({ type: 'JoinFailed', reason: 'join-failed', channelId });
 						}
@@ -558,6 +591,9 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 			},
 		);
 	};
+
+	const init = (capabilities: RtpCapabilities, channelId: number, options?: TVoiceSessionRuntimeInitOptions) =>
+		initialize(capabilities, channelId, options);
 
 	const requestRecoveryFailureLeave = async (): Promise<void> => {
 		// Offline terminal cleanup deliberately leaves the server seat to
@@ -573,6 +609,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 	};
 
 	const leaveAfterFailedTransportRecovery = async (channelId?: number): Promise<void> => {
+		if (!active) return;
 		const leaveRequest = channelId === undefined ? undefined : requestRecoveryFailureLeave();
 
 		if (getDependencies().getChannelId() !== undefined) {
@@ -595,9 +632,14 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		command: Extract<TVoiceSessionCommand, { type: 'RebuildTransports' }>,
 		context: TVoiceSessionRebuildContext,
 	): Promise<void> => {
+		if (!active || !context.isCurrent()) throw new VoiceSessionExecutionSupersededError();
 		const ownsSessionExecution = claimVoiceSessionExecution(executionOwnership);
-		const isCurrentAttempt = (): boolean => active && ownsSessionExecution() && context.isCurrent();
-		const restartIfNonceChanged = (): boolean => context.restartIfNonceChanged(getDependencies().getReconnectNonce());
+		let attemptOpen = true;
+		let transportsTouched = false;
+		const isOwnerCurrent = (): boolean => active && ownsSessionExecution() && context.isCurrent();
+		const isCurrentAttempt = (): boolean => attemptOpen && isOwnerCurrent() && getDependencies().isConnected();
+		const restartIfNonceChanged = (): boolean =>
+			!isCurrentAttempt() || context.restartIfNonceChanged(getDependencies().getReconnectNonce());
 
 		return getDependencies().traceSentrySpan(
 			{
@@ -607,7 +649,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 			},
 			async () => {
 				try {
-					if (!isCurrentAttempt()) {
+					if (!isOwnerCurrent()) {
 						throw new VoiceSessionExecutionSupersededError();
 					}
 
@@ -623,6 +665,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 						throw new Error('Voice transport recovery skipped: router RTP capabilities unavailable');
 					}
 
+					transportsTouched = true;
 					getDependencies().logVoice('Attempting in-session voice transport recovery', {
 						attempt: command.attempt + 1,
 						channelId: command.channelId,
@@ -650,6 +693,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 							]),
 						);
 					} catch (error) {
+						if (!isCurrentAttempt()) throw new VoiceSessionExecutionSupersededError();
 						const recoveryChannelId = getDependencies().getChannelId();
 
 						if (getDependencies().getErrorCode(error) !== 'BAD_REQUEST' || recoveryChannelId === undefined) {
@@ -783,6 +827,13 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 					);
 					getDependencies().logVoice('Voice transport recovery completed successfully');
 				} catch (error) {
+					attemptOpen = false;
+					if (isOwnerCurrent() && transportsTouched) {
+						getDependencies().webcam.detachProducer();
+						getDependencies().screenShare.detachProducer();
+						getDependencies().shareAudio.detachProducer();
+						getDependencies().cleanupTransports({ preserveRemoteMediaIntent: true });
+					}
 					getDependencies().logVoice('Voice transport recovery attempt failed', {
 						attempt: command.attempt + 1,
 						error,
@@ -797,6 +848,12 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		command: Extract<TVoiceSessionCommand, { type: 'RestoreVoiceSession' }>,
 		context: TVoiceSessionRestoreContext,
 	): Promise<{ serverSessionEstablished: boolean }> => {
+		if (!active || !context.isCurrent()) throw new VoiceSessionExecutionSupersededError();
+		if (!getDependencies().isConnected()) throw new Error('Voice restore skipped: server connection unavailable');
+		const ownsSessionExecution = claimVoiceSessionExecution(executionOwnership);
+		let attemptOpen = true;
+		const isCurrent = (): boolean =>
+			attemptOpen && active && ownsSessionExecution() && context.isCurrent() && getDependencies().isConnected();
 		const reconnectAttemptId = getDependencies().createReconnectAttemptId();
 		const attemptNumber = command.attempt + 1;
 
@@ -817,50 +874,56 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 				}),
 			);
 			context.markServerSessionEstablished();
-			if (!context.isCurrent()) {
+			if (!isCurrent()) {
 				throw new VoiceSessionExecutionSupersededError();
 			}
 
 			const initResult = await context.withTimeout(
-				init(bootstrap.routerRtpCapabilities, command.pending.channelId, {
-					producerTransportParams: bootstrap.producerTransportParams,
-					consumerTransportParams: bootstrap.consumerTransportParams,
-					existingProducers: bootstrap.existingProducers,
-					preserveLocalMedia: true,
-					restoreWatchSnapshot: command.snapshot,
-					isCurrentRecovery: context.isCurrent,
-				}),
+				initialize(
+					bootstrap.routerRtpCapabilities,
+					command.pending.channelId,
+					{
+						producerTransportParams: bootstrap.producerTransportParams,
+						consumerTransportParams: bootstrap.consumerTransportParams,
+						existingProducers: bootstrap.existingProducers,
+						preserveLocalMedia: true,
+						restoreWatchSnapshot: command.snapshot,
+						isCurrentRecovery: isCurrent,
+					},
+					ownsSessionExecution,
+				),
 			);
-			if (!context.isCurrent()) {
+			if (!isCurrent()) {
 				throw new VoiceSessionExecutionSupersededError();
 			}
 
 			const serverStore = getDependencies().getServerState();
 			serverStore.setCurrentVoiceChannelId(command.pending.channelId);
-			if (!context.isCurrent()) {
+			if (!isCurrent()) {
 				throw new VoiceSessionExecutionSupersededError();
 			}
 			serverStore.reconcileVoiceChannelUsers({
 				channelId: command.pending.channelId,
 				users: bootstrap.channelUsers,
 			});
-			if (!context.isCurrent()) {
+			if (!isCurrent()) {
 				throw new VoiceSessionExecutionSupersededError();
 			}
 			serverStore.bumpVoiceSessionReconnectNonce();
 
 			await context.withTimeout(
 				syncRepublishedLocalMediaState(initResult.republishedLocalMediaState, {
-					isCurrent: context.isCurrent,
+					isCurrent,
 					signal: context.signal,
 				}),
 			);
-			if (!context.isCurrent()) {
+			if (!isCurrent()) {
 				throw new VoiceSessionExecutionSupersededError();
 			}
 
 			return { serverSessionEstablished: true };
 		} catch (error) {
+			attemptOpen = false;
 			getDependencies().logDebug('Voice reconnect restore attempt failed', {
 				attempt: attemptNumber,
 				error,
@@ -872,6 +935,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 	const clearFailedVoiceSession = async (
 		command: Extract<TVoiceSessionCommand, { type: 'ClearFailedSession' }>,
 	): Promise<void> => {
+		if (!active) return;
 		// restoreOrJoin already bound a server-side session this cycle; without an
 		// explicit leave the runtime would keep us resident in the channel even
 		// though the client is giving up.
@@ -906,9 +970,11 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		leaveVoiceSession: leaveAfterFailedTransportRecovery,
 		clearFailedSession: clearFailedVoiceSession,
 		captureRecoverySnapshot: () => getDependencies().captureWatchedRemoteStreams(),
-		restoreWatchIntent: (snapshot: TWatchedRemoteStreamsSnapshot) =>
-			getDependencies().rehydrateWatchIntentOnly(snapshot),
+		restoreWatchIntent: (snapshot: TWatchedRemoteStreamsSnapshot) => {
+			if (active && getDependencies().isConnected()) getDependencies().rehydrateWatchIntentOnly(snapshot);
+		},
 		recoverDesktopAppAudio: async () => {
+			if (!active || !getDependencies().isConnected()) return;
 			await getDependencies().shareAudio.recover();
 		},
 		getRtpCapabilities: () => sendCapabilities,
