@@ -439,7 +439,7 @@ describe('voice session runtime effects', () => {
 		await flush();
 		h.contextState.current = false;
 		transport.resolve();
-		await rebuild;
+		await expect(rebuild).rejects.toBeInstanceOf(VoiceSessionExecutionSupersededError);
 		expect(h.ports.consumeExistingProducers).toHaveBeenCalledTimes(1);
 		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(1);
 	});
@@ -590,7 +590,7 @@ describe('voice session runtime effects', () => {
 		await flush();
 		h.runtime.terminalCleanup();
 		transport.resolve();
-		await rebuild;
+		await expect(rebuild).rejects.toBeInstanceOf(VoiceSessionExecutionSupersededError);
 		expect(h.runtime.getRtpCapabilities()).toBeNull();
 		expect(h.ports.consumeExistingProducers).toHaveBeenCalledTimes(1);
 		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(1);
@@ -711,7 +711,7 @@ describe('voice session runtime effects', () => {
 		expect(h.ports.rehydrateWatchIntentOnly).not.toHaveBeenCalled();
 	});
 
-	it('rebuild does not republish or resynchronize while disconnected after transport creation', async () => {
+	it('disconnected rebuild rejects instead of reporting successful transport recovery', async () => {
 		const h = createHarness();
 		await h.runtime.init(capabilities, 5);
 		const transport = deferred<void>();
@@ -720,10 +720,24 @@ describe('voice session runtime effects', () => {
 		await flush();
 		h.state.connected = false;
 		transport.resolve();
-		await rebuild;
+		await expect(rebuild).rejects.toBeInstanceOf(VoiceSessionExecutionSupersededError);
 		expect(h.ports.consumeExistingProducers).toHaveBeenCalledTimes(1);
 		expect(h.ports.microphone.publish).toHaveBeenCalledTimes(1);
 		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(1);
+	});
+	it.each(['republish', 'state-sync'] as const)('rejects disconnected rebuild after deferred %s', async (boundary) => {
+		const h = createHarness();
+		await h.runtime.init(capabilities, 5);
+		const gate = deferred<void>();
+		h.ports.webcam.republish.mockImplementation(() => (boundary === 'republish' ? gate.promise : Promise.resolve()));
+		if (boundary === 'state-sync') h.ports.sendOwnVoiceStateUpdate.mockImplementation(() => gate.promise);
+		const rebuild = h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext);
+		await flush();
+		h.state.connected = false;
+		gate.resolve();
+		await expect(rebuild).rejects.toBeInstanceOf(VoiceSessionExecutionSupersededError);
+		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(1);
+		expect(h.ports.cleanupTransports).toHaveBeenLastCalledWith({ preserveRemoteMediaIntent: true });
 	});
 
 	it('disconnected finalization preserves watch intent and desktop audio recovery work', async () => {

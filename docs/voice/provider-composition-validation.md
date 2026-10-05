@@ -34,12 +34,80 @@ untracked sequencing plan is untouched (SHA-256
 Its active role is retired by the tracked architecture record; it is not added,
 deleted or overwritten.
 
-## Remaining validation and known defect
+## Final lifecycle corrections
 
-Full reconnect/remote-media/recovery-faults/session-conflict validation is recorded
-below when completed. The stage 6 validation record documents the existing
-65-second offline reconnect failure on untouched `main`; it remains unresolved.
-An isolated exact starting-commit comparison uses `/tmp/ripcord-voice-stage-7-start`.
+The second layer adds six production integration/mount tests and two runtime
+cases, and strengthens three existing runtime assertions. The layering suite
+retains all original executor import restrictions, construction/registration
+bans and React adapter ownership assertions, and extends them to the new remote
+integration modules.
+
+- Root `bun run check-types`, `bun run lint` and `bun run knip`: passed after
+  formatting, with no lint warnings and the same 11 knip configuration hints.
+- Client voice unit command: 742 passed across 62 files.
+- The two screen E2E specs: 6 passed again (39.1 seconds), zero retries.
+- Client `nix develop -c bun run test:e2e e2e/tests/reconnect.spec.ts
+  e2e/tests/remote-media.spec.ts e2e/tests/recovery-faults.spec.ts
+  e2e/tests/session-conflict.spec.ts`: 23 passed and 1 failed (4.1 minutes),
+  exit 1, zero retries. Only the existing long-offline case failed.
+
+Two added/strengthened disconnect assertions failed on the composition layer
+before the runtime fix: transport creation and local republication could return
+normally after connectivity loss. They pass when those awaited boundaries reject
+superseded work, preventing false `RebuildSucceeded`. State sync already checked
+currency and retains coverage. Nonce restart and executor policy are unchanged.
+
+The remote integration now activates in layout, settles pending acknowledgements
+on cleanup and checks activation identity after acknowledgement delivery. Cleanup
+owns no transport or ledger teardown. Replay replaces its private publication;
+old cleanup is inert against the replacement. Tests cover inactive/aborted work,
+pending and just-acknowledged cleanup, replay, replacement and stale callbacks.
+
+## Exact starting-commit defect comparison
+
+The focused reconnect case failed on untouched `6834c8d4` in
+`/tmp/ripcord-voice-stage-7-start`, after a frozen dependency install:
+
+```sh
+# From apps/client, with required ports free:
+nix develop -c bun run test:e2e e2e/tests/reconnect.spec.ts \
+  --grep 'voice returns to a coherent session after the reconnect grace expires'
+```
+
+The unchanged test takes the browser offline for 65 seconds, then expects
+`Connected` and resumed camera RTP. Authentication/channel UI returned, but voice
+stayed `Connecting...` and line 71's 45-second assertion timed out. No retry or
+assertion change was used. This independently confirms the failure on the exact
+stage 7 starting head, supplementing the untouched-main reproduction in
+[session-runtime-validation.md](./session-runtime-validation.md).
+
+Starting-head trace logs show prepared producer/consumer transports and completed
+producer snapshots at 73.28, 87.30 and 101.60 seconds, followed by cancelled
+restore detachment at 87.26, 101.28 and 115.58 seconds. Server logs show successful
+`voice.restoreOrJoin` requests and committed transport pairs, with no server
+error-log entries. The microphone's initial acquisition logs appear, but no new
+`Microphone stream obtained` follows the restore attempts. Initialization next
+awaits producer synchronization and microphone preparation together. Acquisition,
+processing and captured pipeline teardown remain investigation leads; these logs
+do not establish which internal await hangs.
+
+The test name also overstates evidence of server grace expiry: in this exact-start
+run the server cancelled grace at an age of 22,495 ms and all restore requests
+used the existing-session path. A 65-second browser offline interval does not
+prove when the server observed socket loss. The existing test and assertions
+remain unchanged; deterministic expiry coverage needs separate follow-up.
+
+Final-stack traces show the same pattern: initial microphone acquisition,
+prepared transports and completed producer snapshots during three restores, then
+cancelled-operation detachment with voice still connecting. The final server
+cancelled grace after 22,245 ms and committed the three restore transport pairs.
+There is no changed failure to attribute to the extraction or lifecycle layer.
+
+Logs, failure trace/screenshot/video, before-fix unit output and both starting-head
+and final server logs are retained under `/tmp/ripcord-voice-stage-7-evidence`.
+The requested ownership refactor is implemented. Remaining work is diagnosis and
+repair of the long-offline restore hang, deterministic server-grace-expiry
+coverage and the unavailable physical/native/packaged runtime validation.
 
 ## Environment and evidence limits
 

@@ -1,10 +1,10 @@
 import type { TExternalStream, TVoiceTransportFailureEvent } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { useServerStore } from '@/features/server/slice';
 import { logVoice } from '@/helpers/browser-logger';
 import { useLatestRef } from '@/hooks/use-latest-ref';
-import { createRemoteMediaIntegration } from '../remote-media-integration';
+import { createRemoteMediaIntegration, mountRemoteMediaIntegration } from '../remote-media-integration';
 import { useRemoteMediaSubscriptions } from './remote-media-subscriptions';
 import type { TExternalStreamTrackPresence } from './use-pending-streams';
 import { useRemoteMediaConsumeRunner } from './use-remote-media-consume-runner';
@@ -91,6 +91,7 @@ const useRemoteMedia = ({
 	const integrationRef = useRef<ReturnType<typeof createRemoteMediaIntegration> | undefined>(undefined);
 	if (!integrationRef.current) integrationRef.current = createRemoteMediaIntegration(() => inputsRef.current);
 	const integration = integrationRef.current;
+	useLayoutEffect(() => mountRemoteMediaIntegration(integration), [integration]);
 	const {
 		publishRemoteMediaConsumeStarted,
 		isRemoteMediaProducerCurrent,

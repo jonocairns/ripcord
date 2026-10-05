@@ -14,9 +14,13 @@ import {
 	type TRemoteMediaReducerResult,
 } from '../hooks/remote-media-subscriptions';
 import { getPendingStreamKey } from '../hooks/use-pending-streams';
-import { createRemoteMediaIntegration, type TRemoteMediaIntegrationInputs } from '../remote-media-integration';
+import {
+	createRemoteMediaIntegration,
+	mountRemoteMediaIntegration,
+	type TRemoteMediaIntegrationInputs,
+} from '../remote-media-integration';
 
-const fixture = () => {
+const fixture = (activate = true) => {
 	const commit = (result: TRemoteMediaReducerResult) => {
 		inputs.remoteMediaSubscriptions = result.state;
 		inputs.pendingStreams = remoteMediaSubscriptionsToPendingStreams(result.state);
@@ -52,10 +56,132 @@ const fixture = () => {
 		log: mock(() => {}),
 	};
 	const integration = createRemoteMediaIntegration(() => inputs);
-	return { inputs, integration, commit };
+	const unmount = activate ? mountRemoteMediaIntegration(integration) : () => {};
+	return { inputs, integration, commit, unmount };
 };
 
 describe('remote media composition integration', () => {
+	it('refuses inactive and already aborted consume publication without changing the ledger', async () => {
+		const f = fixture(false);
+		const abort = new AbortController();
+		expect(
+			await f.integration.publishRemoteMediaConsumeStarted(7, StreamKind.AUDIO, 'mic', 1, false, abort.signal),
+		).toBe(false);
+		const unmount = mountRemoteMediaIntegration(f.integration);
+		abort.abort();
+		expect(
+			await f.integration.publishRemoteMediaConsumeStarted(7, StreamKind.AUDIO, 'mic', 2, false, abort.signal),
+		).toBe(false);
+		expect(f.inputs.remoteMediaSubscriptions.size).toBe(0);
+		unmount();
+	});
+	it('settles pending publication on layout cleanup while preserving ledger and stream ownership', async () => {
+		const f = fixture();
+		const pending = f.integration.publishRemoteMediaConsumeStarted(
+			7,
+			StreamKind.AUDIO,
+			'mic',
+			1,
+			false,
+			new AbortController().signal,
+		);
+		const subscriptions = f.inputs.remoteMediaSubscriptions;
+		f.unmount();
+		expect(await pending).toBe(false);
+		expect(f.inputs.remoteMediaSubscriptions).toBe(subscriptions);
+		expect(f.inputs.removeExternalStream).not.toHaveBeenCalled();
+	});
+	it('replays activation with fresh publication and rejects the old completion after acknowledgement', async () => {
+		const f = fixture();
+		const old = f.integration.publishRemoteMediaConsumeStarted(
+			7,
+			StreamKind.AUDIO,
+			'mic',
+			1,
+			false,
+			new AbortController().signal,
+		);
+		f.integration.reconcileConsumeStarts();
+		f.unmount();
+		const replayCleanup = mountRemoteMediaIntegration(f.integration);
+		const replay = f.integration.publishRemoteMediaConsumeStarted(
+			7,
+			StreamKind.AUDIO,
+			'mic',
+			2,
+			false,
+			new AbortController().signal,
+		);
+		f.unmount();
+		f.integration.reconcileConsumeStarts();
+		expect(await old).toBe(false);
+		expect(await replay).toBe(true);
+		replayCleanup();
+	});
+	it('replacing an activation cancels only its pending acknowledgement and makes old cleanup inert', async () => {
+		const f = fixture();
+		const old = f.integration.publishRemoteMediaConsumeStarted(
+			7,
+			StreamKind.AUDIO,
+			'mic',
+			1,
+			false,
+			new AbortController().signal,
+		);
+		const replacementCleanup = mountRemoteMediaIntegration(f.integration);
+		expect(await old).toBe(false);
+		f.unmount();
+		const replacement = f.integration.publishRemoteMediaConsumeStarted(
+			7,
+			StreamKind.AUDIO,
+			'mic',
+			2,
+			false,
+			new AbortController().signal,
+		);
+		f.integration.reconcileConsumeStarts();
+		expect(await replacement).toBe(true);
+		replacementCleanup();
+	});
+	it('old provider cleanup cannot dispose a replacement provider acknowledgement', async () => {
+		const old = fixture();
+		const replacement = fixture();
+		const pending = replacement.integration.publishRemoteMediaConsumeStarted(
+			7,
+			StreamKind.AUDIO,
+			'mic',
+			1,
+			false,
+			new AbortController().signal,
+		);
+		old.unmount();
+		replacement.integration.reconcileConsumeStarts();
+		expect(await pending).toBe(true);
+		replacement.unmount();
+	});
+	it('ignores stale mutation callbacks and rejects producer/repair currency after cleanup', () => {
+		const f = fixture();
+		f.inputs.addPendingStream(7, StreamKind.SCREEN, 'screen');
+		f.integration.acceptStream(7, StreamKind.SCREEN);
+		const subscriptions = f.inputs.remoteMediaSubscriptions;
+		f.unmount();
+		f.integration.acceptStream(8, StreamKind.VIDEO);
+		f.integration.retryRemoteMedia(7, StreamKind.SCREEN);
+		f.integration.removeExternalStreamAndSubscription(99);
+		f.integration.reconcileExternalStreams();
+		expect(f.inputs.remoteMediaSubscriptions).toBe(subscriptions);
+		expect(f.inputs.removeExternalStream).not.toHaveBeenCalled();
+		expect(f.integration.isRemoteMediaProducerCurrent(7, StreamKind.SCREEN, 'screen')).toBe(false);
+		expect(
+			f.integration.isRemoteMediaRepairIdentityCurrent({
+				channelId: 5,
+				key: getPendingStreamKey(7, StreamKind.SCREEN),
+				remoteId: 7,
+				kind: StreamKind.SCREEN,
+				producerId: 'screen',
+			}),
+		).toBe(false);
+	});
 	it('seeds only declared missing external tracks and keeps stopped pending intent unchanged', () => {
 		const f = fixture();
 		f.inputs.currentChannelExternalStreams = {
@@ -80,7 +206,7 @@ describe('remote media composition integration', () => {
 		expect(f.inputs.remoteMediaSubscriptions.size).toBe(0);
 	});
 	it('constructs without publishing ledger state or touching stream resources', () => {
-		const f = fixture();
+		const f = fixture(false);
 		expect(f.inputs.remoteMediaSubscriptions.size).toBe(0);
 		expect(f.inputs.removeExternalStream).not.toHaveBeenCalled();
 	});

@@ -35,7 +35,20 @@ type TRemoteMediaIntegrationInputs = Pick<
 // Connects projections and identity checks to their authoritative owners. It
 // acquires no media and owns neither ledger state nor transports/retry policy.
 const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationInputs) => {
-	const consumeStartPublication = createRemoteMediaConsumeStartPublication();
+	let consumeStartPublication = createRemoteMediaConsumeStartPublication();
+	let active = false;
+	let lifecycleGeneration = 0;
+	const activate = (): (() => void) => {
+		consumeStartPublication.dispose();
+		consumeStartPublication = createRemoteMediaConsumeStartPublication();
+		active = true;
+		const generation = ++lifecycleGeneration;
+		return () => {
+			if (!active || generation !== lifecycleGeneration) return;
+			active = false;
+			consumeStartPublication.dispose();
+		};
+	};
 	const getExternalStreamTrackPresence = (): TExternalStreamTrackPresence => {
 		const tracks: TExternalStreamTrackPresence = {};
 		for (const [id, stream] of Object.entries(getInputs().currentChannelExternalStreams)) {
@@ -51,17 +64,21 @@ const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationIn
 		isManualRetry: boolean,
 		signal: AbortSignal,
 	): Promise<boolean> => {
+		if (!active || signal.aborted) return Promise.resolve(false);
+		const generation = lifecycleGeneration;
 		const publication = consumeStartPublication.wait(
 			{ remoteId, kind, expectedProducerId: producerId },
 			consumeGeneration,
 			signal,
 		);
 		getInputs().markConsumeStarted(remoteId, kind, producerId, consumeGeneration, isManualRetry);
-		return publication;
+		return publication.then((published) => published && active && generation === lifecycleGeneration);
 	};
-	const reconcileConsumeStarts = (subscriptions = getInputs().remoteMediaSubscriptions): void =>
-		consumeStartPublication.reconcile(subscriptions);
+	const reconcileConsumeStarts = (subscriptions = getInputs().remoteMediaSubscriptions): void => {
+		if (active) consumeStartPublication.reconcile(subscriptions);
+	};
 	const isRemoteMediaProducerCurrent = (remoteId: number, kind: StreamKind, producerId: string): boolean => {
+		if (!active) return false;
 		const subscription = getInputs().remoteMediaSubscriptions.get(getPendingStreamKey(remoteId, kind));
 		return (
 			subscription?.producerPresent === true &&
@@ -69,6 +86,7 @@ const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationIn
 		);
 	};
 	const isRemoteMediaRepairIdentityCurrent = (identity: TRemoteMediaRepairIdentity): boolean => {
+		if (!active) return false;
 		const inputs = getInputs();
 		const subscription = inputs.remoteMediaSubscriptions.get(identity.key);
 		return (
@@ -105,13 +123,16 @@ const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationIn
 		return { remoteUserStreams, externalStreams };
 	};
 	const removeExternalStreamAndSubscription = (streamId: number): void => {
+		if (!active) return;
 		getInputs().clearRemoteMediaExternalStream(streamId);
 		getInputs().removeExternalStream(streamId);
 	};
 	const acceptStream = (remoteId: number, kind: StreamKind): void => {
+		if (!active) return;
 		getInputs().markWatchRequested(remoteId, kind, getExternalStreamTrackPresence());
 	};
 	const retryRemoteMedia = (remoteId: number, kind: StreamKind): void => {
+		if (!active) return;
 		if (!getInputs().getRtpCapabilities()) {
 			getInputs().log('Cannot retry remote media before voice is initialized', { remoteId, kind });
 			return;
@@ -119,6 +140,7 @@ const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationIn
 		getInputs().markRetryRequested(remoteId, kind, getExternalStreamTrackPresence());
 	};
 	const reconcileExternalStreams = (inputs = getInputs()): void => {
+		if (!active) return;
 		const tracks = getExternalStreamTrackPresence();
 		for (const [id, stream] of Object.entries(inputs.currentChannelExternalStreams)) {
 			const remoteId = Number(id);
@@ -138,6 +160,7 @@ const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationIn
 		}
 	};
 	return {
+		activate,
 		publishRemoteMediaConsumeStarted,
 		reconcileConsumeStarts,
 		isRemoteMediaProducerCurrent,
@@ -151,5 +174,8 @@ const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationIn
 	};
 };
 
+const mountRemoteMediaIntegration = (integration: ReturnType<typeof createRemoteMediaIntegration>): (() => void) =>
+	integration.activate();
+
 export type { TRemoteMediaIntegrationInputs };
-export { createRemoteMediaIntegration };
+export { createRemoteMediaIntegration, mountRemoteMediaIntegration };

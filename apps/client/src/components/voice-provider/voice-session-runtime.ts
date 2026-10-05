@@ -638,8 +638,10 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		let transportsTouched = false;
 		const isOwnerCurrent = (): boolean => active && ownsSessionExecution() && context.isCurrent();
 		const isCurrentAttempt = (): boolean => attemptOpen && isOwnerCurrent() && getDependencies().isConnected();
-		const restartIfNonceChanged = (): boolean =>
-			!isCurrentAttempt() || context.restartIfNonceChanged(getDependencies().getReconnectNonce());
+		const restartIfNonceChanged = (): boolean => {
+			if (!isCurrentAttempt()) throw new VoiceSessionExecutionSupersededError();
+			return context.restartIfNonceChanged(getDependencies().getReconnectNonce());
+		};
 
 		return getDependencies().traceSentrySpan(
 			{

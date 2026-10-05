@@ -33,13 +33,31 @@ describe('voice session runner layering', () => {
 		const environmentSource = await Bun.file(
 			new URL('../../../../components/voice-provider/hooks/voice-session-runtime-environment.ts', import.meta.url),
 		).text();
-		for (const source of [runtimeSource, runtimeHookSource, environmentSource]) {
+		const remoteIntegrationSource = await Bun.file(
+			new URL('../../../../components/voice-provider/remote-media-integration.ts', import.meta.url),
+		).text();
+		const remoteHookSource = await Bun.file(
+			new URL('../../../../components/voice-provider/hooks/use-remote-media.ts', import.meta.url),
+		).text();
+		for (const source of [
+			runtimeSource,
+			runtimeHookSource,
+			environmentSource,
+			remoteIntegrationSource,
+			remoteHookSource,
+		]) {
 			expect(source).not.toContain('createVoiceSessionCommandExecutor');
 			expect(source).not.toContain('registerVoiceSessionCommandRunner');
 			expect(source).not.toContain('isVoiceSessionExecutorCommand');
 			expect(source).not.toContain('TLegacyVoiceSessionCommand');
 		}
 		expect(extractModuleImports(runtimeSource)).not.toContain('react');
+		expect(extractModuleImports(remoteIntegrationSource)).not.toContain('react');
+		expect(remoteHookSource).toContain('useRemoteMediaSubscriptions()');
+		expect(remoteHookSource).toContain('useRemoteMediaConsumeRunner({');
+		expect(remoteHookSource).toContain('useRemoteMediaRepairRunner({');
+		expect(remoteHookSource).toContain('useTransports({');
+		expect(remoteHookSource).toContain('useVoiceEvents({');
 		expect(providerSource).not.toContain('createVoiceSessionCommandExecutor');
 		expect(providerSource).not.toContain('registerVoiceSessionCommandRunner');
 		expect(providerSource).not.toContain('isVoiceSessionExecutorCommand');
