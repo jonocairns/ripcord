@@ -23,7 +23,23 @@ describe('voice session runner layering', () => {
 			new URL('../../../../components/voice-provider/hooks/use-voice-session-executor.ts', import.meta.url),
 		).text();
 
-		expect(providerSource).toContain('useVoiceSessionExecutor({');
+		const runtimeHookSource = await Bun.file(
+			new URL('../../../../components/voice-provider/hooks/use-voice-session-runtime.ts', import.meta.url),
+		).text();
+		const runtimeSource = await Bun.file(
+			new URL('../../../../components/voice-provider/voice-session-runtime.ts', import.meta.url),
+		).text();
+		expect(runtimeHookSource).toContain('useVoiceSessionExecutor({');
+		const environmentSource = await Bun.file(
+			new URL('../../../../components/voice-provider/hooks/voice-session-runtime-environment.ts', import.meta.url),
+		).text();
+		for (const source of [runtimeSource, runtimeHookSource, environmentSource]) {
+			expect(source).not.toContain('createVoiceSessionCommandExecutor');
+			expect(source).not.toContain('registerVoiceSessionCommandRunner');
+			expect(source).not.toContain('isVoiceSessionExecutorCommand');
+			expect(source).not.toContain('TLegacyVoiceSessionCommand');
+		}
+		expect(extractModuleImports(runtimeSource)).not.toContain('react');
 		expect(providerSource).not.toContain('createVoiceSessionCommandExecutor');
 		expect(providerSource).not.toContain('registerVoiceSessionCommandRunner');
 		expect(providerSource).not.toContain('isVoiceSessionExecutorCommand');
