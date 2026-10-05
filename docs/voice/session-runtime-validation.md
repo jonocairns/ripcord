@@ -2,7 +2,9 @@
 
 Stage 6 is implemented in a new stack based on `main` at
 `cfe0f366f0f00ed771692d6d2d4a73f6bd530bde`. The extraction and currency fixes are
-separate layers. Stage 7 is unstarted. `VoiceProvider` is 721 lines, down from
+separate layers. This record covers stage 6; subsequent composition completion
+and validation are recorded in [provider-composition-validation.md](./provider-composition-validation.md).
+At the end of stage 6, `VoiceProvider` was 721 lines, down from
 1,736. The original worktree and untracked sequencing plan are preserved.
 
 ## Checks

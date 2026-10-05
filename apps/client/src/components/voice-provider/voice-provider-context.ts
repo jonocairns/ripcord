@@ -1,16 +1,8 @@
 import { createContext } from 'react';
 import type { TransportStatsStore } from './hooks/use-transport-stats';
-import type { AudioVideoRefs, TVoiceProvider } from './types';
+import { createEmptyAudioVideoRefs } from './media-element-refs';
+import type { TVoiceProvider } from './types';
 import type { VoiceActivityStore } from './voice-activity';
-
-const createEmptyAudioVideoRefs = (): AudioVideoRefs => ({
-	videoRef: { current: null },
-	audioRef: { current: null },
-	screenShareRef: { current: null },
-	screenShareAudioRef: { current: null },
-	externalAudioRef: { current: null },
-	externalVideoRef: { current: null },
-});
 
 const VoiceProviderContext = createContext<TVoiceProvider>({
 	connectionStatus: 'disconnected',
@@ -50,4 +42,4 @@ const VoiceActivityContext = createContext<VoiceActivityStore | null>(null);
 // only the components that display them re-render on each sample.
 const TransportStatsContext = createContext<TransportStatsStore | null>(null);
 
-export { createEmptyAudioVideoRefs, TransportStatsContext, VoiceActivityContext, VoiceProviderContext };
+export { TransportStatsContext, VoiceActivityContext, VoiceProviderContext };

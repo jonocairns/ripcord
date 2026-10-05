@@ -72,7 +72,4 @@ const createRemoteMediaConsumeStartPublication = () => {
 	return { wait, reconcile, dispose };
 };
 
-type TRemoteMediaConsumeStartPublication = ReturnType<typeof createRemoteMediaConsumeStartPublication>;
-
-export type { TRemoteMediaConsumeStartPublication };
 export { createRemoteMediaConsumeStartPublication };
