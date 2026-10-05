@@ -137,6 +137,59 @@ jobs:
             apps/client/test-results/e2e/
           retention-days: 7
 
+  # Throwaway trial: measures how reliable the full suite is on hosted runners
+  # before it becomes a release gate. Not for merge.
+  e2e-full-trial:
+    needs: source
+    name: Full E2E trial (${{ matrix.attempt }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2, 3, 4, 5, 6]
+    env:
+      CI: "true"
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Checkout verified quality source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_SOURCE_SHA: ${{ inputs.ref }}
+        run: node scripts/release/cli.mjs checkout-quality
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Chromium and system dependencies
+        working-directory: apps/client
+        run: bun run test:e2e:install --with-deps
+
+      - name: Run the full end-to-end suite
+        working-directory: apps/client
+        run: bun run test:e2e
+
+      - name: Upload report and failure artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-full-trial-${{ matrix.attempt }}
+          path: |
+            apps/client/playwright-report/
+            apps/client/test-results/e2e/
+          retention-days: 7
+
   sidecar-windows:
     needs: source
     name: Desktop Build + Sidecar (Windows)
