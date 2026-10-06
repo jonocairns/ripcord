@@ -32,6 +32,9 @@ The suite is intentionally serial because it shares one server and its fixed Web
 users and must leave voice or close its browser contexts during teardown. Do not add retries to hide shared-state or
 timing failures; use the retained trace, screenshot, and video to diagnose them.
 
+Pull requests run the screen-share specs in CI. Release automation runs the full suite before Release Please or any
+build proceeds, so a failing test blocks releases until it is fixed or its job is re-run.
+
 Assertions use `RTCPeerConnection.getStats()` and live sender/receiver tracks. A visible card alone is not proof that
 media recovered. Faults are driven by Playwright browser instrumentation or real product operations; do not add E2E
 switches or control routes to shipped client/server code.

@@ -39,13 +39,13 @@ Existing explicit launch flags:
 
 Playwright adds its normal launch defaults. These observations do not establish
 reliable real display capture in headless CI. No headed/Xvfb setup was proven,
-and no native hosted CI capture result is claimed. The PR workflow runs the four
+and no native hosted CI capture result is claimed. The PR workflow runs the
 screen cases in a dedicated `Screen-share E2E` job, alongside unit tests and
 quality checks. It installs the matching Chromium browser and Linux dependencies,
 keeps the existing serial runner and zero retries, and uploads the HTML report
-and retained failure traces, screenshots, and video for seven days. The job also
-uses the verified immutable source when called by release automation. Other
-Playwright suites remain local validation commands.
+and retained failure traces, screenshots, and video for seven days. When release
+automation calls the workflow, the same job runs every Playwright suite as
+`Full E2E` against the verified immutable source.
 
 ## Chosen integration boundary
 

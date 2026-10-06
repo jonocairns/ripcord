@@ -90,14 +90,18 @@ jobs:
         working-directory: apps/desktop
         run: bun test
 
-  screen-share:
+  # PRs run the screen-share specs. Release automation calls this workflow and
+  # runs every Playwright suite, so a failure blocks Release Please and builds.
+  e2e:
     needs: source
-    name: Screen-share E2E
+    name: ${{ github.event_name == 'pull_request' && 'Screen-share E2E' || 'Full E2E' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       CI: "true"
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      # Empty runs the whole suite.
+      E2E_SPECS: ${{ github.event_name == 'pull_request' && 'e2e/tests/screen-share.spec.ts e2e/tests/screen-share-lifecycle.spec.ts' || '' }}
 
     steps:
       - name: Checkout code
@@ -123,15 +127,17 @@ jobs:
         working-directory: apps/client
         run: bun run test:e2e:install --with-deps
 
-      - name: Run screen-share regression tests
+      - name: Run end-to-end tests
         working-directory: apps/client
-        run: bun run test:e2e e2e/tests/screen-share.spec.ts e2e/tests/screen-share-lifecycle.spec.ts
+        run: |
+          read -ra specs <<< "$E2E_SPECS"
+          bun run test:e2e "${specs[@]}"
 
-      - name: Upload screen-share report and failure artifacts
+      - name: Upload report and failure artifacts
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: screen-share-e2e
+          name: e2e-report
           path: |
             apps/client/playwright-report/
             apps/client/test-results/e2e/
