@@ -60,6 +60,7 @@ type TMicrophoneIntegrationPorts = {
 	startActivityMonitor: typeof startLocalVoiceActivityMonitor;
 	setLocalActivity: (userId: number, isSpeaking: boolean | undefined) => void;
 	broadcastActivity: (activity: { isSpeaking: boolean; seq: number; producerId: string }) => void;
+	// Commits shared muted state through the provider's voice-state sequence.
 	commitTerminalMicMuted: () => void;
 	error: (message: string) => void;
 	log: (message: string, context?: Record<string, unknown>) => void;
@@ -144,7 +145,7 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		onRecoveryExhausted: (reason) => {
 			ports.log('Raw microphone recovery exhausted', { reason });
 			ports.error('Microphone capture kept disconnecting and was stopped. Unmute to try again.');
-			ports.commitTerminalMicMuted();
+			commitTerminalMute();
 		},
 		onProcessingRuntimeError: (error) => {
 			ports.log('Browser WASM voice filter runtime error', { error });
@@ -154,6 +155,13 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		clearTimeout: ports.clearTimeout,
 		log: ports.log,
 	});
+
+	// Terminal capture loss: mute this owner's outbound track and processing
+	// first, then commit muted state through the shared voice-state sequence.
+	const commitTerminalMute = (): void => {
+		controller.setMuted(true);
+		ports.commitTerminalMicMuted();
+	};
 
 	// Preparation deliberately has no transport dependency: session setup starts
 	// capture/processing in parallel with device loading and transport creation.
@@ -376,6 +384,7 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		start,
 		cleanup: controller.cleanup,
 		setMuted: controller.setMuted,
+		commitTerminalMute,
 		owns: controller.owns,
 		getRawTrack: controller.getRawTrack,
 		createLifecycleLease: controller.createLifecycleLease,

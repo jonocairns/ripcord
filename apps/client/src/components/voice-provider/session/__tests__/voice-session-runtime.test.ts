@@ -15,7 +15,10 @@ import {
 	getVoiceSessionState,
 	resetVoiceSessionState,
 } from '@/features/server/voice/voice-session-store';
-import type { TMicrophonePreparedPipeline } from '../../microphone/microphone-pipeline-controller';
+import type {
+	TMicrophonePreparedPipeline,
+	TMicrophoneStartOutcome,
+} from '../../microphone/microphone-pipeline-controller';
 import { VoiceSessionExecutionSupersededError } from '../../session-execution-ownership';
 import {
 	createVoiceSessionRuntime,
@@ -126,11 +129,12 @@ const createHarness = () => {
 			return prepared;
 		}),
 		publish: mock(async (_source: TMicrophonePreparedPipeline | 'current', _isCurrent?: () => boolean) => {}),
-		start: mock(async () => ({ status: 'started' as const })),
+		start: mock(async (_isCurrent?: () => boolean): Promise<TMicrophoneStartOutcome> => ({ status: 'started' })),
 		cleanup: mock(async () => {
 			state.currentPrepared = undefined;
 		}),
 		owns: (prepared: TMicrophonePreparedPipeline) => state.currentPrepared === prepared,
+		commitTerminalMute: mock(() => {}),
 	};
 	const webcam = {
 		stop: mock(() => {}),
@@ -170,7 +174,6 @@ const createHarness = () => {
 		clearOwnVoiceSessionAfterReconnectFailure: mock(() => {}),
 		leaveVoiceSessionAfterRecoveryFailure: mock(async () => true),
 		notifyConnectionLost: mock(() => {}),
-		commitTerminalMicMuted: mock(() => {}),
 		clearRemoteUserStreams: mock(() => {}),
 		clearExternalStreams: mock(() => {}),
 		clearMediaElementRefs: mock(() => {}),
@@ -822,5 +825,19 @@ describe('voice session runtime composition boundaries', () => {
 		expect(isScreenVideoLive?.()).toBe(true);
 		live = false;
 		expect(isScreenVideoLive?.()).toBe(false);
+	});
+
+	it('continues rebuild listen-only through the microphone terminal mute when restart fails', async () => {
+		const h = createHarness();
+		await h.runtime.init(capabilities, 5);
+		h.ports.createProducerTransport.mockRejectedValueOnce(missingSession);
+		h.ports.microphone.start.mockImplementationOnce(async () => ({
+			status: 'failed',
+			error: new Error('microphone unavailable'),
+		}));
+		await h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext);
+		expect(h.ports.microphone.start).toHaveBeenCalledTimes(1);
+		expect(h.ports.microphone.commitTerminalMute).toHaveBeenCalledTimes(1);
+		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(2);
 	});
 });

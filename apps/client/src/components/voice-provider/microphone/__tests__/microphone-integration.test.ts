@@ -120,6 +120,7 @@ const createHarness = () => {
 	const errors: string[] = [];
 	const closedOnServer: string[] = [];
 	const processingInputs: Array<Parameters<TMicrophoneIntegrationPorts['createProcessingPipeline']>[0]> = [];
+	const terminalCommitTrackStates: Array<boolean | undefined> = [];
 	const inputs: TMicrophoneIntegrationInputs = {
 		devices: { ...DEFAULT_DEVICE_SETTINGS },
 		currentVoiceChannelId: 1,
@@ -245,6 +246,7 @@ const createHarness = () => {
 			broadcasts.push(activity);
 		},
 		commitTerminalMicMuted: () => {
+			terminalCommitTrackStates.push(inputs.localAudioStream?.getAudioTracks()[0]?.enabled);
 			state.terminalMutes += 1;
 			state.micMuted = true;
 		},
@@ -272,6 +274,7 @@ const createHarness = () => {
 		broadcasts,
 		localActivity,
 		processingInputs,
+		terminalCommitTrackStates,
 		errors,
 		closedOnServer,
 		scheduler,
@@ -602,6 +605,18 @@ describe('microphone integration', () => {
 		h.state.micMuted = false;
 		h.integration.setMuted(false);
 		expect(await h.integration.start()).toEqual({ status: 'started' });
+		cleanup();
+	});
+	it('mutes its own live capture before committing terminal muted state', async () => {
+		const h = createHarness();
+		const cleanup = h.mount();
+		await h.integration.start();
+		const track = h.inputs.localAudioStream?.getAudioTracks()[0];
+		expect(track?.enabled).toBe(true);
+		h.integration.commitTerminalMute();
+		expect(h.terminalCommitTrackStates).toEqual([false]);
+		expect(h.state.terminalMutes).toBe(1);
+		expect(track?.readyState).toBe('live');
 		cleanup();
 	});
 	for (const boundary of ['cleanup', 'replacement', 'selection', 'channel'] as const) {

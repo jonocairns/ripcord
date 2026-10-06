@@ -70,7 +70,7 @@ type TVoiceSessionRuntimeDependencies = Pick<
 	Pick<ReturnType<typeof useTransportStats>, 'startMonitoring' | 'stopMonitoring' | 'resetStats'> & {
 		microphone: Pick<
 			ReturnType<typeof createMicrophoneIntegration>,
-			'createLifecycleLease' | 'prepare' | 'publish' | 'start' | 'cleanup' | 'owns'
+			'createLifecycleLease' | 'prepare' | 'publish' | 'start' | 'cleanup' | 'owns' | 'commitTerminalMute'
 		>;
 		webcam: Pick<ReturnType<typeof createWebcamController>, 'stop' | 'detachProducer' | 'republish'>;
 		screenShare: Pick<
@@ -112,7 +112,6 @@ type TVoiceSessionRuntimeDependencies = Pick<
 		) => void;
 		leaveVoiceSessionAfterRecoveryFailure: () => Promise<boolean>;
 		notifyConnectionLost: () => void;
-		commitTerminalMicMuted: () => void;
 		clearRemoteUserStreams: () => void;
 		clearExternalStreams: () => void;
 		clearMediaElementRefs: () => void;
@@ -775,7 +774,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 									getDependencies().logVoice('Microphone restart failed during transport recovery; continuing muted', {
 										error,
 									});
-									void getDependencies().commitTerminalMicMuted();
+									getDependencies().microphone.commitTerminalMute();
 								},
 							},
 						).then((result) => {

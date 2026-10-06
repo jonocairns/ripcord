@@ -24,6 +24,7 @@ import { useLocalStreams } from './use-local-streams';
 import { useMediaSettings } from './use-media-settings';
 import { useTransportStats } from './use-transport-stats';
 import { useVoiceControls } from './use-voice-controls';
+import { useVoiceStateOperations } from './use-voice-state-operations';
 import { useScreenShare } from './video/use-screen-share';
 import { useWebcam } from './video/use-webcam';
 import { collectVideoSenderMetadata } from './video/video-sender-metadata';
@@ -57,7 +58,9 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const channelCan = useChannelCan(currentVoiceChannelId);
 	const { devices } = useDevices();
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
-	const commitTerminalMicMutedRef = useRef<(() => Promise<void>) | undefined>(undefined);
+	// Built before the microphone and runtime, which commit terminal mute through
+	// it; controls share the same sequence for later user mute/deafen changes.
+	const voiceStateOperations = useVoiceStateOperations(currentVoiceChannelId);
 
 	const { getOrCreateRefs, clear: clearMediaElementRefs } = useMediaElementRefs(currentVoiceChannelId);
 
@@ -186,7 +189,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		closeProducerOnServer,
 		setLocalActivity: (userId, isSpeaking) => voiceActivityStoreRef.current.setLocalUserActivity(userId, isSpeaking),
 		commitTerminalMicMuted: () => {
-			void commitTerminalMicMutedRef.current?.();
+			void voiceStateOperations.commitTerminalMicMuted();
 		},
 	});
 	const { start: startMicStream } = microphone;
@@ -225,36 +228,25 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		publishRtpCapabilities: setVoiceEventRtpCapabilities,
 		captureWatchedRemoteStreams,
 		rehydrateWatchIntentOnly,
-		commitTerminalMicMuted: () => {
-			void commitTerminalMicMutedRef.current?.();
-		},
 	});
 	useLayoutEffect(() => {
 		runtimeRef.current = runtime;
 	}, [runtime]);
 	const { init } = runtime;
 
-	const {
-		isStartingScreenShare,
-		setMicMuted,
-		commitTerminalMicMuted,
-		toggleMic,
-		toggleSound,
-		toggleWebcam,
-		toggleScreenShare,
-	} = useVoiceControls({
-		startMicStream,
-		localAudioStream,
-		setMicProcessingMuted: microphone.setMuted,
-		startWebcamStream,
-		stopWebcamStream,
-		startScreenShareStream,
-		stopScreenShareStream,
-		requestScreenShareSelection: getDesktopBridge() ? requestDesktopScreenShareSelection : undefined,
-		isScreenShareLive: screenShare.isLive,
-	});
-
-	commitTerminalMicMutedRef.current = commitTerminalMicMuted;
+	const { isStartingScreenShare, setMicMuted, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =
+		useVoiceControls({
+			voiceStateOperations,
+			startMicStream,
+			localAudioStream,
+			setMicProcessingMuted: microphone.setMuted,
+			startWebcamStream,
+			stopWebcamStream,
+			startScreenShareStream,
+			stopScreenShareStream,
+			requestScreenShareSelection: getDesktopBridge() ? requestDesktopScreenShareSelection : undefined,
+			isScreenShareLive: screenShare.isLive,
+		});
 
 	usePushMicKeybinds({
 		pushToTalkKeybind: devices.pushToTalkKeybind,
