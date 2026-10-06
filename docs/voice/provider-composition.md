@@ -32,6 +32,25 @@ Committed current-value getters and layout-effect owner activation precede passi
 executor work, including Strict Mode replay. Awaited operations retain lifecycle
 and operation currency checks before shared writes.
 
+## Microphone layers
+
+[`microphone/microphone-pipeline-controller.ts`](../../apps/client/src/components/voice-provider/microphone/microphone-pipeline-controller.ts)
+is the resource owner. It owns raw capture, processing and gain pipelines,
+prepared output, producer identity, activity-monitor lifetime and teardown. It
+fences asynchronous publication and bounds raw-track-loss recovery through
+injected ports.
+
+[`microphone/microphone-integration.ts`](../../apps/client/src/components/voice-provider/microphone/microphone-integration.ts)
+connects that controller to application settings, browser devices, mediasoup,
+volume events and activity reporting. It serializes microphone mutations and
+owns default-input change subscriptions and recovery decisions. Its operations
+delegate resource ownership to the pipeline controller.
+
+[`microphone/use-microphone.ts`](../../apps/client/src/components/voice-provider/microphone/use-microphone.ts)
+retains the integration and supplies committed React inputs and production
+adapters. The adjacent pipeline lifecycle hook mounts activation and cleanup;
+it does not add another resource owner.
+
 ## Public context
 
 The consumed `useVoice` API remains intact: `init`, microphone/mute/deafen and
