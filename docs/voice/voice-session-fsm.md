@@ -21,10 +21,10 @@ The implementation is split across:
   buffered command delivery
 - `voice-session-command-executor.ts`: asynchronous command lifecycle and
   result-event dispatch
-- `use-voice-session-executor.ts`: thin React adapter with fresh provider ports
+- `session/use-voice-session-executor.ts`: thin React adapter with fresh provider ports
 
 These files live under `apps/client/src/features/server/voice/` and
-`apps/client/src/components/voice-provider/hooks/`.
+`apps/client/src/components/voice-provider/session/`.
 
 ## Why one machine
 
@@ -188,7 +188,7 @@ Keep deterministic coverage at each boundary:
 - store buffering and generation tests in the voice session store tests
 - executor cancellation, retry, timeout, detach, and finalization tests in
   `voice-session-command-executor.test.ts`
-- React adapter remount/replay tests in `use-voice-session-executor.test.ts`
+- React adapter remount/replay tests in `session/__tests__/use-voice-session-executor.test.ts`
 - provider-level transport and watch restoration tests
 - server prepared-pair, join, restore, mutation-token, and cancellation tests
 

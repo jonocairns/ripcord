@@ -1,13 +1,16 @@
 # Video ownership
 
-**Status:** Implemented as stage 5 of the voice-provider refactor. This record
-describes the ownership and lifecycle contracts; implementation sequencing and
+**Status:** Implemented. This record describes the ownership and lifecycle
+contracts; implementation sequencing and
 merge-time validation notes are kept in the pull requests.
+
+Controllers, adapters, configuration and tests live together under
+`apps/client/src/components/voice-provider/video/`.
 
 ## Webcam
 
-`webcam-controller.ts` owns acquisition, stream and producer identity, publication,
-track-ended cleanup, stop, detach and republish. `useWebcam` supplies browser,
+`video/webcam-controller.ts` owns acquisition, stream and producer identity,
+publication, track-ended cleanup, stop, detach and republish. `useWebcam` supplies browser,
 settings and server adapters and mounts cleanup in a layout effect. Construction
 acquires no media. The existing control hook still publishes successful starts.
 Webcam codec, bitrate, motion hint and `stopTracks: false` configuration are retained.
@@ -26,8 +29,8 @@ settings.
 
 ## Screen video
 
-`screen-share-controller.ts` owns picker integration, display/video publication,
-track-ended handling, detach/republish, capture stop and quality-guard mounting.
+`video/screen-share-controller.ts` owns picker integration, display/video
+publication, track-ended handling, detach/republish, capture stop and quality-guard mounting.
 `useScreenShare` supplies browser/dialog/desktop/timer adapters and the existing
 tracing span. Selection normalization, sidecar capability gating, loopback
 fallback acquisition and early video notification remain explicit. Optional
@@ -92,8 +95,32 @@ acquisition, transport, the desktop bridge and reporting. They prove ownership
 and race handling, not native capture or encoded media.
 
 Browser E2E uses real signaling, mediasoup, WebRTC and decoded remote media, with
-Chromium fake camera/microphone and the video-only canvas fixture described in
-the [screen-share baseline](./screen-share-baseline.md).
+Chromium fake camera/microphone and the video-only canvas fixture described below.
 `screen-share-lifecycle.spec.ts` covers leaving and rejoining voice while a
 screen acquisition is held. Neither proves physical devices, OS picker
 permissions, real tab/window/monitor capture or packaged desktop stop/reconnect.
+
+## Browser screen fixture
+
+`screen-share.spec.ts` replaces display acquisition in the producer page with a
+live 640×360 `canvas.captureStream(30)` video track: a blue center and moving
+white marker. It supplies no audio. Screen start, watch and stop use the app UI;
+publication, signaling, mediasoup, consumption/resume and playback run production
+paths against the isolated test server.
+
+Outbound checks match the captured track ID and require advancing screen RTP
+and encoded frames. Inbound checks identify the blue marker in decoded video
+and require advancing track-specific RTP, decoded frames and playback. The
+explicit-stop case keeps a concurrent webcam flowing, so webcam traffic cannot
+satisfy screen assertions.
+
+Coverage includes start/watch/stop, producer reconnect retaining the same
+capture with one acquisition, watcher reconnect restoring watch intent, and
+stop while transport creation is held during recovery. The lifecycle spec
+also holds acquisition across leave/rejoin and recovery supersession. These
+fixtures do not cover every deferred publication/audio boundary; controller
+unit tests cover the finer ownership races.
+
+The PR workflow runs both screen specs. Release automation runs the full
+Playwright suite against the verified immutable release source. Both use the
+serial runner with zero retries and retain CI reports and failure artifacts.

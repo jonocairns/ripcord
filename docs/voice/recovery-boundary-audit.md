@@ -138,20 +138,24 @@ defines callback ownership across controlled tRPC client replacement.
 
 ## Acceptance coverage
 
+Owner-relative test paths below are under
+`apps/client/src/components/voice-provider/`; E2E specs remain under
+`apps/client/e2e/tests/`.
+
 | Acceptance boundary | Focused or browser coverage |
 | --- | --- |
 | Normal user mute rolls back after server failure | `recovery-faults.spec.ts`: “a failed user microphone mutation rolls back while reconnect converges on that rollback” |
 | Terminal raw-capture exhaustion remains muted through failed sync or disconnect, then unmute retries capture | `recovery-faults.spec.ts`: “terminal microphone mute survives failed server sync and reconnect restore” |
 | Newer microphone intent wins over stale synchronization or restore completion | `voice-state-operation.test.ts`: “ignores an older async result after a newer operation starts”; `voice-session-machine.test.ts`: “replaces an active restore command when microphone intent changes”; `recovery-faults.spec.ts`: “the latest microphone intent wins across repeated reconnects” |
-| Failed default-device or raw-loss reacquisition advances bounded recovery | `default-input-device.test.ts`: default-device decision cases; `microphone-pipeline-controller.test.ts`: “counts failed acquisition or publication outcomes in the same bounded recovery operation”; `recovery-faults.spec.ts`: “failed raw microphone reacquisition exhausts once and a later unmute retries capture” |
-| Muted fresh rejoins skip acquisition, and a failed transport-recovery microphone restart continues listen-only | `transport-recovery-microphone.test.ts`: muted fresh-rejoin, failed restart, live capture, and supersession cases; `recovery-faults.spec.ts`: “transport recovery continues listen-only when microphone restart fails” |
-| WebSocket-owned transport failures preserve the latch and prior budget | `recover-transport-session.test.ts`: “ignores transport failure while websocket reconnect owns recovery”; `transport-recovery-circuit.test.ts`: “preserves the budget when websocket recovery ignores a proposed failure” and the corresponding exhausted-budget case |
-| Accepted failures advance once and terminal exhaustion cleans up once | `transport-recovery-circuit.test.ts`: duplicate and stale-generation coverage; `recover-transport-session.test.ts`: “accepts circuit exhaustion and emits terminal cleanup exactly once” |
-| Immediate replacement failure after a slow rebuild remains rapid | `transport-recovery-circuit.test.ts` and `recovery-faults.spec.ts`: “an immediate failure after a slow transport rebuild stays in the rapid circuit” |
-| Watchdog-paced failures cannot repeatedly reset the transport budget | `transport-recovery-circuit.test.ts`: “stops watchdog-paced failures that arrive after the old 30-second window”; `recovery-faults.spec.ts`: “server-liveness-paced transport failures exhaust the recovery circuit” |
-| Replaced transport health work cannot fail its successor | `media-liveness.test.ts`: “rejects an in-flight sample after its consumer transport is replaced”; `voice-transport-failure-identity.test.ts`: current, replaced, and identity-less event cases |
-| Channel- or producer-stale repair is cancelled, and consume/resume is bounded | `remote-media-producer-repair.test.ts`: replacement, concurrent producer, and channel invalidation cases; `remote-media-consume-controller.test.ts`: cancellation, deterministic retries, failed resume cleanup, and resume timeout cases |
-| Producer churn cannot reset another slot's exhausted budget | `remote-media-subscriptions.test.ts`: “keeps an exhausted producer isolated from churn in another slot” |
+| Failed default-device or raw-loss reacquisition advances bounded recovery | `microphone/__tests__/default-input-device.test.ts`: default-device decision cases; `microphone/__tests__/microphone-pipeline-controller.test.ts`: “counts failed acquisition or publication outcomes in the same bounded recovery operation”; `recovery-faults.spec.ts`: “failed raw microphone reacquisition exhausts once and a later unmute retries capture” |
+| Muted fresh rejoins skip acquisition, and a failed transport-recovery microphone restart continues listen-only | `session/__tests__/transport-recovery-microphone.test.ts`: muted fresh-rejoin, failed restart, live capture, and supersession cases; `recovery-faults.spec.ts`: “transport recovery continues listen-only when microphone restart fails” |
+| WebSocket-owned transport failures preserve the latch and prior budget | `session/__tests__/recover-transport-session.test.ts`: “ignores transport failure while websocket reconnect owns recovery”; `session/__tests__/transport-recovery-circuit.test.ts`: “preserves the budget when websocket recovery ignores a proposed failure” and the corresponding exhausted-budget case |
+| Accepted failures advance once and terminal exhaustion cleans up once | `session/__tests__/transport-recovery-circuit.test.ts`: duplicate and stale-generation coverage; `session/__tests__/recover-transport-session.test.ts`: “accepts circuit exhaustion and emits terminal cleanup exactly once” |
+| Immediate replacement failure after a slow rebuild remains rapid | `session/__tests__/transport-recovery-circuit.test.ts` and `recovery-faults.spec.ts`: “an immediate failure after a slow transport rebuild stays in the rapid circuit” |
+| Watchdog-paced failures cannot repeatedly reset the transport budget | `session/__tests__/transport-recovery-circuit.test.ts`: “stops watchdog-paced failures that arrive after the old 30-second window”; `recovery-faults.spec.ts`: “server-liveness-paced transport failures exhaust the recovery circuit” |
+| Replaced transport health work cannot fail its successor | `media-liveness.test.ts`: “rejects an in-flight sample after its consumer transport is replaced”; `remote-media/__tests__/voice-transport-failure-identity.test.ts`: current, replaced, and identity-less event cases |
+| Channel- or producer-stale repair is cancelled, and consume/resume is bounded | `remote-media/__tests__/remote-media-producer-repair.test.ts`: replacement, concurrent producer, and channel invalidation cases; `remote-media/__tests__/remote-media-consume-controller.test.ts`: cancellation, deterministic retries, failed resume cleanup, and resume timeout cases |
+| Producer churn cannot reset another slot's exhausted budget | `remote-media/__tests__/remote-media-subscriptions.test.ts`: “keeps an exhausted producer isolated from churn in another slot” |
 
 The terminal-microphone Playwright case closes the fault-injection contract. It
 forces `voice.updateState` failure by closing the application socket during

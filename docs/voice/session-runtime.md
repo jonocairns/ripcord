@@ -3,8 +3,8 @@
 `VoiceProvider` composes resource owners, controls, the remote-media adapter,
 media-element refs and context publication. The seven-stage extraction is
 implemented; [provider-composition.md](./provider-composition.md) describes the
-final ownership and public operations. Stage 6 extracted the runtime effects
-described here.
+final ownership and public operations. Runtime modules and their tests live in
+`apps/client/src/components/voice-provider/session/`.
 
 `createVoiceSessionRuntime` is a framework-free factory with injected current
 value getters, resource APIs, signaling, device creation, state publication,
@@ -18,6 +18,13 @@ activation in a layout effect ahead of passive executor work, and supplies its
 effects to the existing `useVoiceSessionExecutor`. The environment module keeps
 production server/browser adapters, reporting and the existing 12-second
 rebuild boundary timeout and 350-ms post-rejoin producer refresh delay.
+
+The production entry points are
+[`session/voice-session-runtime.ts`](../../apps/client/src/components/voice-provider/session/voice-session-runtime.ts),
+[`session/use-voice-session-runtime.ts`](../../apps/client/src/components/voice-provider/session/use-voice-session-runtime.ts),
+[`session/voice-session-runtime-environment.ts`](../../apps/client/src/components/voice-provider/session/voice-session-runtime-environment.ts)
+and [`session/use-voice-session-executor.ts`](../../apps/client/src/components/voice-provider/session/use-voice-session-executor.ts).
+The machine and command executor remain under `features/server/voice/`.
 
 The session machine still owns phases, retry and terminal decisions, command
 identity and accepted transport-recovery transitions. The executor still owns
@@ -56,6 +63,48 @@ real signaling, mediasoup, WebRTC and decoded-media assertions with fake camera
 and microphone and the unchanged video-only canvas screen fixture. Browser
 screen audio, physical devices, native picker permissions, OS capture, sidecar
 capture and packaged desktop cleanup/reconnect need separate platform validation.
+
+## Automated recovery coverage
+
+The Playwright runner starts Vite on 5173 and an isolated server on 4991. It
+recreates `apps/client/e2e/.runtime/` and uses only that directory's database and
+logs. Chromium supplies synthetic microphone/camera capture; `--disable-audio-output`
+isolates OS playback while retaining browser audio processing and WebRTC.
+Muting alone still opens the host audio backend. On WSLg, long-offline fake
+microphone reacquisition hung with host output and completed with isolated
+output, including a fail/pass/fail control. This implicates the host output path;
+the precise blocked native operation remains unidentified. The harness change
+does not establish physical device behavior or add a production capture fallback.
+
+`reconnect.spec.ts` checks advancing microphone RTP after short reconnects and
+a long offline interval, alongside camera flow. Its two-peer grace-expiry case
+closes the real server WebSocket while withholding the client close notification
+to model a half-open connection. It holds replacement messages until recovery
+is released, then forwards admitted signaling unchanged. Browser offline
+duration alone does not prove server grace expiry.
+
+The test correlates `grace_scheduled`, `grace_expired` and the succeeding `fresh`
+restore to the producer's client and reconnect attempt IDs. It requires the
+watcher's old microphone subscription to disappear before release, replacement
+sender/receiver track identities after restore, advancing RTP and non-concealed
+received samples attached to an unmuted, playing app audio element. Cleanup
+attempts outage release and both peer disposals even when setup, diagnostics or
+an earlier cleanup fails. The CI HTML report retains event and media-identity
+attachments; tests run with zero retries.
+
+### Open clock-divergence limitation
+
+The grace-expiry assertion requires a server-reported age of at least 60,000 ms.
+The age uses `Date.now()` while the expiry callback uses `setTimeout`. An
+unchanged test failed with a reported age of 57,897 ms; its trace observed
+69,195 ms of monotonic time against 61,287 ms of wall time across producer
+snapshots. A controlled subsequent run passed, but observed realtime, monotonic
+and raw monotonic clocks advancing by 73.738, 79.051 and 72.000 seconds.
+
+The clock/runtime cause remains unresolved. A passing run does not erase that
+failure, and the assertion, grace threshold and scheduler remain unchanged.
+Follow-up must establish reliable elapsed-time evidence when these clocks
+diverge; preserve the server-event correlation and received-media assertions.
 
 ## Currency hardening
 

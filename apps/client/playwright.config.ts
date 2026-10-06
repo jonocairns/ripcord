@@ -8,7 +8,7 @@ const FAKE_MEDIA_ARGS = [
 	'--use-fake-device-for-media-stream',
 	'--use-fake-ui-for-media-stream',
 	// Isolate OS output too: muted output still opens the host audio backend,
-	// which can hang microphone reacquisition in WSLg. See reconnect-validation.md.
+	// which can hang microphone reacquisition in WSLg. See docs/voice/session-runtime.md.
 	'--disable-audio-output',
 	'--autoplay-policy=no-user-gesture-required',
 	'--disable-features=WebRtcHideLocalIpsWithMdns',
