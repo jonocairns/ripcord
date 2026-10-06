@@ -73,7 +73,10 @@ type TVoiceSessionRuntimeDependencies = Pick<
 			'createLifecycleLease' | 'prepare' | 'publish' | 'start' | 'cleanup' | 'owns'
 		>;
 		webcam: Pick<ReturnType<typeof createWebcamController>, 'stop' | 'detachProducer' | 'republish'>;
-		screenShare: Pick<ReturnType<typeof createScreenShareController>, 'stop' | 'detachProducer' | 'republish'>;
+		screenShare: Pick<
+			ReturnType<typeof createScreenShareController>,
+			'stop' | 'detachProducer' | 'republish' | 'isLive'
+		>;
 		shareAudio: Pick<TShareAudioController, 'detachProducer' | 'republish' | 'recover' | 'hasDesktopIntent'>;
 		getChannelId: () => number | undefined;
 		isConnected: () => boolean;
@@ -230,6 +233,10 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 			});
 		}
 	};
+
+	// Desktop audio recovery may queue behind earlier work; it reads the screen
+	// owner's liveness when each recovery step runs, not when it was requested.
+	const isScreenVideoLive = (): boolean => getDependencies().screenShare.isLive();
 
 	const ensureVoiceDeviceLoaded = async (isCurrent: () => boolean = () => true) => {
 		if (!active || !isCurrent()) throw new VoiceSessionExecutionSupersededError();
@@ -529,7 +536,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 						throwIfRecoverySuperseded();
 						if (getDependencies().shareAudio.hasDesktopIntent()) {
 							void getDependencies()
-								.shareAudio.recover()
+								.shareAudio.recover(isScreenVideoLive)
 								.catch((error) => {
 									getDependencies().logVoice('Error recovering desktop app audio after reconnect restore', { error });
 								});
@@ -977,7 +984,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		},
 		recoverDesktopAppAudio: async () => {
 			if (!active || !getDependencies().isConnected()) return;
-			await getDependencies().shareAudio.recover();
+			await getDependencies().shareAudio.recover(isScreenVideoLive);
 		},
 		getRtpCapabilities: () => sendCapabilities,
 		syncChannel,

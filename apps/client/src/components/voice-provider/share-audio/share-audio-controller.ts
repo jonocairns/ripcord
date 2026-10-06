@@ -27,7 +27,6 @@ type TShareAudioDependencies = {
 	getDesktopBridge: () => TDesktopBridge | undefined;
 	getProducerTransport: () => Transport<AppData> | undefined;
 	isNativeIngestEnabled: () => boolean;
-	isScreenVideoLive: () => boolean;
 	createIngest: () => Promise<{
 		id: string;
 		ip: string;
@@ -781,11 +780,17 @@ const createShareAudioController = (deps: TShareAudioDependencies) => {
 			return { kind: 'none', displayAudioTrack: undefined };
 		}
 	};
-	const runDesktopAppAudioRecovery = async (lease: TDesktopAppAudioRecoveryLease): Promise<void> => {
+	const runDesktopAppAudioRecovery = async (
+		lease: TDesktopAppAudioRecoveryLease,
+		isScreenVideoLive: () => boolean,
+	): Promise<void> => {
 		const recoveryIntent = intent;
-		const ownsRecovery = () => lease.isCurrent() && intent === recoveryIntent;
+		const ownsRecoveryIntent = () => lease.isCurrent() && intent === recoveryIntent;
+		// Read liveness at each boundary: a queued or awaited recovery must not act
+		// on a screen share that ended after the caller requested recovery.
+		const ownsRecovery = () => ownsRecoveryIntent() && isScreenVideoLive();
 
-		if (!recoveryIntent || !ownsRecovery()) {
+		if (!recoveryIntent || !ownsRecoveryIntent()) {
 			return;
 		}
 
@@ -795,7 +800,7 @@ const createShareAudioController = (deps: TShareAudioDependencies) => {
 			return;
 		}
 
-		if (!deps.isScreenVideoLive()) {
+		if (!isScreenVideoLive()) {
 			deps.log('Skipping desktop app audio recovery because screen share is no longer live');
 			intent = undefined;
 			return;
@@ -943,19 +948,20 @@ const createShareAudioController = (deps: TShareAudioDependencies) => {
 		desktopBridge,
 		captureInput,
 		audioMode,
+		isScreenVideoLive,
 	}: {
 		displayStream: MediaStream;
 		desktopBridge?: TDesktopBridge;
 		captureInput?: TStartAppAudioCaptureInput;
 		audioMode?: ScreenAudioMode.APP | ScreenAudioMode.SYSTEM;
+		// The screen owner passes its own liveness getter; audio reads it at each
+		// boundary and never imports or mutates the video owner.
+		isScreenVideoLive: () => boolean;
 	}): Promise<'published' | 'abandoned' | 'none'> => {
 		const ownedOperation = ++operationGeneration;
 		const ownedLifecycle = lifecycleGeneration;
 		const isCurrent = () =>
-			active &&
-			lifecycleGeneration === ownedLifecycle &&
-			operationGeneration === ownedOperation &&
-			deps.isScreenVideoLive();
+			active && lifecycleGeneration === ownedLifecycle && operationGeneration === ownedOperation && isScreenVideoLive();
 		pendingDisplayStream = displayStream;
 		await awaitTeardown();
 		if (!isCurrent()) {
@@ -1030,7 +1036,8 @@ const createShareAudioController = (deps: TShareAudioDependencies) => {
 		detachProducer,
 		awaitTeardown,
 		republish,
-		recover: () => recoveryController.recover(runDesktopAppAudioRecovery),
+		recover: (isScreenVideoLive: () => boolean) =>
+			recoveryController.recover((lease) => runDesktopAppAudioRecovery(lease, isScreenVideoLive)),
 		hasDesktopIntent: () => intent !== undefined,
 	};
 };

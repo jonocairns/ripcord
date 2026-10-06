@@ -139,12 +139,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	});
 	const { start: startWebcamStream, stop: stopWebcamStream } = webcam;
 
-	// Inject video liveness through composition; audio never imports or mutates video.
-	const screenVideoLiveRef = useRef<() => boolean>(() => false);
+	// Audio receives video liveness per start/recovery call, so it needs no
+	// reference to the screen owner built after it.
 	const shareAudio = useShareAudio({
 		nativeAppAudioIngestEnabled: devices.nativeAppAudioIngestEnabled,
 		getProducerTransport: () => producerTransport.current,
-		isScreenVideoLive: () => screenVideoLiveRef.current(),
 		publishStream: setLocalScreenShareAudio,
 	});
 	const { controller: screenShare, start: startScreenShareStream } = useScreenShare({
@@ -157,9 +156,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		},
 		shareAudio,
 	});
-	useLayoutEffect(() => {
-		screenVideoLiveRef.current = screenShare.isLive;
-	}, [screenShare]);
 	const { stop: stopScreenShareStream, requestSelection: requestDesktopScreenShareSelection } = screenShare;
 
 	const getVideoSenderMetadata = useCallback(

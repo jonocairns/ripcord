@@ -12,10 +12,7 @@ import {
 	type TShareAudioDependencies,
 } from './share-audio-controller';
 
-type TUseShareAudioInputs = Pick<
-	TShareAudioDependencies,
-	'getProducerTransport' | 'isScreenVideoLive' | 'publishStream'
-> & {
+type TUseShareAudioInputs = Pick<TShareAudioDependencies, 'getProducerTransport' | 'publishStream'> & {
 	nativeAppAudioIngestEnabled: boolean;
 };
 
@@ -38,7 +35,6 @@ const useShareAudio = (inputs: TUseShareAudioInputs) => {
 		controllerRef.current = createShareAudioController({
 			getDesktopBridge,
 			getProducerTransport: () => inputsRef.current.getProducerTransport(),
-			isScreenVideoLive: () => inputsRef.current.isScreenVideoLive(),
 			isNativeIngestEnabled: () => isNativeAppAudioIngestEnabled(inputsRef.current.nativeAppAudioIngestEnabled),
 			createIngest: () => getTRPCClient().voice.createAppAudioIngest.mutate(),
 			produceNative: (input) => getTRPCClient().voice.produceAppAudio.mutate(input),

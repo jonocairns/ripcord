@@ -169,6 +169,8 @@ describe('screen-video production owner', () => {
 			desktopBridge: bridge,
 			captureInput: { sourceId: 'window:42', appAudioTargetId: 'app:42' },
 			audioMode: ScreenAudioMode.APP,
+			// Audio reads the screen owner's own liveness, not a composition bridge.
+			isScreenVideoLive: c.isLive,
 		});
 		c.stop();
 	});

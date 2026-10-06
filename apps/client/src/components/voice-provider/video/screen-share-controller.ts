@@ -52,6 +52,9 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 		stream = next;
 		deps.publishStream(next);
 	};
+	// Share audio reads this at each of its boundaries; the getter is passed per
+	// operation so audio needs no construction-time reference to video.
+	const isLive = () => (producer?.track ?? stream?.getVideoTracks()[0])?.readyState === 'live';
 	const closeCurrentProducer = () => {
 		const previous = producer;
 		producer = undefined;
@@ -266,9 +269,10 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 						desktopBridge,
 						captureInput,
 						audioMode: sidecarAudioMode,
+						isScreenVideoLive: isLive,
 					});
 				} else {
-					await deps.shareAudio.start({ displayStream: capture });
+					await deps.shareAudio.start({ displayStream: capture, isScreenVideoLive: isLive });
 				}
 
 				assertCurrent(ownedGeneration);
@@ -324,7 +328,7 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 		deactivate,
 		getProducer,
 		getStream,
-		isLive: () => (producer?.track ?? stream?.getVideoTracks()[0])?.readyState === 'live',
+		isLive,
 	};
 };
 const mountScreenShareController = (controller: ReturnType<typeof createScreenShareController>) => {

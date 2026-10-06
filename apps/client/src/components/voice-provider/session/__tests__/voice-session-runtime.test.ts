@@ -141,12 +141,13 @@ const createHarness = () => {
 		stop: mock(() => {}),
 		detachProducer: mock(() => {}),
 		republish: mock((_isCurrent?: () => boolean): Promise<void> | undefined => undefined),
+		isLive: mock(() => true),
 	};
 	const shareAudio = {
 		detachProducer: mock(() => {}),
 		hasDesktopIntent: () => false,
 		republish: mock((_isCurrent?: () => boolean): Promise<void> | undefined => undefined),
-		recover: mock(async () => {}),
+		recover: mock(async (_isScreenVideoLive: () => boolean) => {}),
 	};
 	const ports = {
 		microphone,
@@ -803,5 +804,23 @@ describe('voice session runtime effects', () => {
 		expect(h.ports.cleanupTransports).toHaveBeenCalledTimes(cleanupCount);
 		expect(h.markServerSessionEstablished).toHaveBeenCalledTimes(1);
 		expect(h.server.reconcileVoiceChannelUsers).not.toHaveBeenCalled();
+	});
+});
+
+describe('voice session runtime composition boundaries', () => {
+	it.each([
+		'reconnect restore',
+		'recovery finalization',
+	] as const)('%s passes desktop audio recovery a live screen getter, not a captured value', async (path) => {
+		const h = createHarness();
+		let live = true;
+		h.ports.screenShare.isLive.mockImplementation(() => live);
+		h.ports.shareAudio.hasDesktopIntent = () => true;
+		if (path === 'reconnect restore') await h.runtime.init(capabilities, 5, { preserveLocalMedia: true });
+		else await h.runtime.recoverDesktopAppAudio();
+		const isScreenVideoLive = h.ports.shareAudio.recover.mock.calls[0]?.[0];
+		expect(isScreenVideoLive?.()).toBe(true);
+		live = false;
+		expect(isScreenVideoLive?.()).toBe(false);
 	});
 });

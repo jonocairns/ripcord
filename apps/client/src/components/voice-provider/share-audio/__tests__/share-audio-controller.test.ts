@@ -21,7 +21,14 @@ const startWorklet = (
 	f: ReturnType<typeof makeFixture>,
 	displayStream = makeStream([]),
 	audioMode: ScreenAudioMode.APP | ScreenAudioMode.SYSTEM = ScreenAudioMode.APP,
-) => f.controller.start({ displayStream, desktopBridge: f.bridge, captureInput: { sourceId: 'source' }, audioMode });
+) =>
+	f.controller.start({
+		displayStream,
+		desktopBridge: f.bridge,
+		captureInput: { sourceId: 'source' },
+		audioMode,
+		isScreenVideoLive: f.isVideoLive,
+	});
 const transport = (produce: () => Promise<ReturnType<typeof makeProducer>['producer']>) =>
 	({ closed: false, produce }) as unknown as Transport<AppData>;
 
@@ -30,7 +37,12 @@ describe('share audio browser publication', () => {
 		const f = makeFixture();
 		const audio = makeTrack();
 		const video = makeTrack('video');
-		expect(await f.controller.start({ displayStream: makeStream([video.track, audio.track]) })).toBe('published');
+		expect(
+			await f.controller.start({
+				displayStream: makeStream([video.track, audio.track]),
+				isScreenVideoLive: f.isVideoLive,
+			}),
+		).toBe('published');
 		expect(f.produce).toHaveBeenCalledWith({
 			track: audio.track,
 			stopTracks: false,
@@ -59,7 +71,7 @@ describe('share audio browser publication', () => {
 	it('republishes surviving capture and ignores the old ended callback even with the same stream', async () => {
 		const f = makeFixture();
 		const audio = makeTrack();
-		await f.controller.start({ displayStream: makeStream([audio.track]) });
+		await f.controller.start({ displayStream: makeStream([audio.track]), isScreenVideoLive: f.isVideoLive });
 		const oldEnded = audio.track.onended;
 		const stream = f.getStream();
 		f.controller.detachProducer();
@@ -88,14 +100,18 @@ describe('share audio browser publication', () => {
 				return gate.promise;
 			});
 			f.deps.getProducerTransport = () => oldTransport;
-			const first = f.controller.start({ displayStream: makeStream([audio.track]) });
+			const first = f.controller.start({ displayStream: makeStream([audio.track]), isScreenVideoLive: f.isVideoLive });
 			await entered.promise;
 			if (action === 'stop') await f.controller.stop();
 			if (action === 'cleanup') f.cleanup();
 			if (action === 'supersede' || action === 'transport') {
 				const nextTransport = transport(f.produce);
 				f.deps.getProducerTransport = () => nextTransport;
-				if (action === 'supersede') await f.controller.start({ displayStream: makeStream([makeTrack().track]) });
+				if (action === 'supersede')
+					await f.controller.start({
+						displayStream: makeStream([makeTrack().track]),
+						isScreenVideoLive: f.isVideoLive,
+					});
 			}
 			gate.resolve(old.producer);
 			if (action === 'transport') await expect(first).rejects.toThrow('superseded');
@@ -109,7 +125,7 @@ describe('share audio browser publication', () => {
 	it('failed republish retains live audio for a later transport attempt', async () => {
 		const f = makeFixture();
 		const audio = makeTrack();
-		await f.controller.start({ displayStream: makeStream([audio.track]) });
+		await f.controller.start({ displayStream: makeStream([audio.track]), isScreenVideoLive: f.isVideoLive });
 		f.controller.detachProducer();
 		f.deps.getProducerTransport = () => undefined;
 		await expect(f.controller.republish()).rejects.toThrow('superseded');
@@ -121,7 +137,7 @@ describe('share audio browser publication', () => {
 	it('stop reads the newly published stream before a React snapshot could update', async () => {
 		const f = makeFixture();
 		const audio = makeTrack();
-		await f.controller.start({ displayStream: makeStream([audio.track]) });
+		await f.controller.start({ displayStream: makeStream([audio.track]), isScreenVideoLive: f.isVideoLive });
 		const stopping = f.controller.stop();
 		expect(audio.track.readyState).toBe('ended');
 		expect(f.getStream()).toBeUndefined();
@@ -413,7 +429,7 @@ describe('share audio recovery integration', () => {
 					throw new Error('fallback publication failed');
 				});
 			}
-			await expect(f.controller.recover()).rejects.toThrow();
+			await expect(f.controller.recover(f.isVideoLive)).rejects.toThrow();
 			expect(f.getStream()).toBeUndefined();
 			expect(audio.track.readyState).toBe('ended');
 			expect(video.track.readyState).toBe('live');
@@ -431,7 +447,7 @@ describe('share audio recovery integration', () => {
 		});
 		await startWorklet(f, makeStream([audio.track]), ScreenAudioMode.SYSTEM);
 		const previous = f.getStream();
-		await f.controller.recover();
+		await f.controller.recover(f.isVideoLive);
 		expect(f.getStream()).not.toBe(previous);
 		expect(f.getStream()?.getAudioTracks()[0]).toBe(audio.track);
 		expect(audio.track.readyState).toBe('live');
@@ -453,11 +469,11 @@ describe('share audio recovery integration', () => {
 			entered.resolve();
 			return pending.promise;
 		});
-		const recovery = f.controller.recover().catch(() => {});
+		const recovery = f.controller.recover(f.isVideoLive).catch(() => {});
 		await entered.promise;
 		await f.controller.stop();
 		const replacement = makeTrack();
-		await f.controller.start({ displayStream: makeStream([replacement.track]) });
+		await f.controller.start({ displayStream: makeStream([replacement.track]), isScreenVideoLive: f.isVideoLive });
 		const stream = f.getStream();
 		pending.reject(new Error('old fallback failed'));
 		await recovery;
@@ -478,9 +494,9 @@ describe('share audio recovery integration', () => {
 			await gate.promise;
 			return makeSession('old-recovery');
 		});
-		const first = f.controller.recover();
+		const first = f.controller.recover(f.isVideoLive);
 		await entered.promise;
-		const queued = f.controller.recover();
+		const queued = f.controller.recover(f.isVideoLive);
 		f.cleanup();
 		const cleanup = mountShareAudioController(f.controller);
 		f.bridge.startAppAudioCapture = mock(async () => makeSession('fresh-session'));
@@ -511,7 +527,7 @@ describe('share audio recovery integration', () => {
 			await gate.promise;
 			return makeSession('recovering');
 		});
-		const recovery = f.controller.recover();
+		const recovery = f.controller.recover(f.isVideoLive);
 		await entered.promise;
 		expect(f.getStream()).toBeUndefined();
 		expect(audio.track.readyState).toBe('live');
@@ -533,7 +549,7 @@ describe('share audio recovery integration', () => {
 		});
 		await startWorklet(f, makeStream([audio.track, video.track]), ScreenAudioMode.SYSTEM);
 		f.setNativeEnabled(true);
-		await f.controller.recover();
+		await f.controller.recover(f.isVideoLive);
 		expect(audio.track.readyState).toBe('ended');
 		expect(video.track.readyState).toBe('live');
 		expect(f.getStream()).toBeUndefined();
@@ -545,9 +561,66 @@ describe('share audio recovery integration', () => {
 		const f = makeFixture();
 		await startWorklet(f);
 		f.setVideoLive(false);
-		await f.controller.recover();
+		await f.controller.recover(f.isVideoLive);
 		expect(f.bridge.startAppAudioCapture).toHaveBeenCalledTimes(1);
 		expect(f.controller.hasDesktopIntent()).toBe(false);
+		f.cleanup();
+		await f.controller.awaitTeardown();
+	});
+	it('reads screen liveness when awaited and queued recovery steps run, not when requested', async () => {
+		const f = makeFixture();
+		f.setNativeEnabled(false);
+		await startWorklet(f);
+		const gate = deferred();
+		const entered = deferred();
+		f.bridge.startAppAudioCapture = mock(async () => {
+			entered.resolve();
+			await gate.promise;
+			return makeSession('recovering');
+		});
+		const first = f.controller.recover(f.isVideoLive);
+		await entered.promise;
+		const queued = f.controller.recover(f.isVideoLive);
+		f.setVideoLive(false);
+		gate.resolve();
+		await Promise.all([first, queued]);
+		expect(f.bridge.startAppAudioCapture).toHaveBeenCalledTimes(1);
+		expect(f.bridge.stopAppAudioCapture).toHaveBeenCalledWith('recovering');
+		expect(f.deps.createPipeline).toHaveBeenCalledTimes(1);
+		expect(f.produce).toHaveBeenCalledTimes(1);
+		expect(f.getStream()).toBeUndefined();
+		expect(f.controller.hasDesktopIntent()).toBe(false);
+		f.cleanup();
+		await f.controller.awaitTeardown();
+	});
+	it('screen stop and replacement during native recovery leave the replacement audio intact', async () => {
+		const f = makeFixture();
+		expect(await startWorklet(f)).toBe('published');
+		const gate = deferred();
+		const entered = deferred();
+		let captures = 0;
+		f.bridge.startAppAudioCapture = mock(async () => {
+			captures += 1;
+			if (captures > 1) return makeSession('replacement');
+			entered.resolve();
+			await gate.promise;
+			return makeSession('old-recovery');
+		});
+		const recovery = f.controller.recover(f.isVideoLive);
+		await entered.promise;
+		await f.controller.stop();
+		expect(await startWorklet(f)).toBe('published');
+		const rtpStops = f.stopRtp.mock.calls.length;
+		// The replacement share is live again, so only intent identity can reject the old recovery.
+		gate.resolve();
+		await recovery;
+		expect(f.bridge.stopAppAudioCapture).toHaveBeenCalledWith('old-recovery');
+		expect(f.bridge.stopAppAudioCapture).not.toHaveBeenCalledWith('replacement');
+		expect(f.stopRtp).toHaveBeenCalledTimes(rtpStops);
+		expect(f.deps.produceNative).toHaveBeenCalledTimes(2);
+		expect(f.controller.hasDesktopIntent()).toBe(true);
+		await f.controller.stop();
+		expect(f.bridge.stopAppAudioCapture).toHaveBeenCalledWith('replacement');
 		f.cleanup();
 		await f.controller.awaitTeardown();
 	});

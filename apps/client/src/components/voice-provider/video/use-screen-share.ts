@@ -24,7 +24,7 @@ const useScreenShare = (inputs: TUseScreenShareInputs) => {
 			getRtpCapabilities: () => inputsRef.current.getRtpCapabilities(),
 			publishStream: (stream) => inputsRef.current.publishStream(stream),
 			closeProducer: (id) => inputsRef.current.closeProducer(id),
-			// Keep coordination one-way. Share audio receives video liveness in composition.
+			// Keep coordination one-way: video passes its liveness getter to audio start.
 			shareAudio: {
 				stop: () => inputsRef.current.shareAudio.stop(),
 				awaitTeardown: () => inputsRef.current.shareAudio.awaitTeardown(),
