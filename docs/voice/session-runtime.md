@@ -126,15 +126,19 @@ repository root:
 
 ### Open clock-divergence limitation
 
-The grace-expiry assertion requires a server-reported age of at least 60,000 ms.
-The age uses `Date.now()` while the expiry callback uses `setTimeout`. An
-unchanged test failed with a reported age of 57,897 ms; its trace observed
-69,195 ms of monotonic time against 61,287 ms of wall time across producer
+The grace-expiry assertion allows 100 ms of wall-clock reporting tolerance
+against the server's 60,000 ms grace period (a minimum reported age of 59,900 ms).
+The age uses `Date.now()` while the expiry callback uses `setTimeout`. Before
+adding that tolerance, the test failed with a reported age of 57,897 ms; its trace
+observed 69,195 ms of monotonic time against 61,287 ms of wall time across producer
 snapshots. A controlled subsequent run passed, but observed realtime, monotonic
 and raw monotonic clocks advancing by 73.738, 79.051 and 72.000 seconds.
 
-The clock/runtime cause remains unresolved. A passing run does not erase that
-failure, and the assertion, grace threshold and scheduler remain unchanged.
+The tolerance accommodates a later 59,998 ms report; it does not accommodate
+the earlier seconds-scale divergence. The server grace period and scheduler
+remain unchanged, as do the correlated expiry, fresh-restore and received-media
+assertions. The clock/runtime cause remains unresolved. A passing run does not
+erase the earlier failure.
 Follow-up must establish reliable elapsed-time evidence when these clocks
 diverge; preserve the server-event correlation and received-media assertions.
 
