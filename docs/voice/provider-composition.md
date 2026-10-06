@@ -18,11 +18,11 @@ dissolved. Tests live in their subject's adjacent `__tests__/` directory.
 
 | Folder | Contents |
 | --- | --- |
-| Root | Provider/context/types, voice controls, local stream snapshots, combined media settings, activity and transport stats, shared audio context/config, execution ownership, operation ordering, volume and floating-card UI. |
+| Root | Provider/context/types, voice controls, voice-state operation ordering and terminal mute commit, local stream snapshots, combined media settings, activity and transport stats, shared audio context/config, execution ownership, volume and floating-card UI. |
 | `microphone/` | Microphone integration and pipeline controller, lifecycle hook, capture/default-device configuration, processing/gain/WASM workers and worklets, raw-loss recovery, local activity and push-to-talk. |
 | `video/` | Webcam and screen-video controllers and hooks, screen stage/control lifecycle, quality guard, video configuration/bitrate policy and sender metadata. |
 | `share-audio/` | Share-audio controller and hook, desktop app-audio capture/worklet, recovery, PCM and queue policies. |
-| `session/` | Runtime, environment, executor adapter, command observer, transport recovery and prewarm. |
+| `session/` | Runtime, environment, executor adapter, command observer, device RTP-capability holder, transport-failure port, transport recovery and prewarm. |
 | `remote-media/` | Remote integration, subscription ledger, transport/stream hooks, consume/repair controllers and runners, producer sweeps/event identity, and element-ref cache. |
 
 `session-execution-ownership.ts` stays at the root because session, video,
@@ -46,7 +46,7 @@ fixture stays in root `__tests__/` because combined-settings tests also use it.
 | Microphone | The pipeline controller and microphone integration own raw/processed capture, publication, activity and cleanup. Runtime retains early `prepare` and later `publish`; controls use ordered `start` and `setMuted`. |
 | Webcam | The webcam controller owns capture and producer identity: `start`, `restart`, `stop`, `detachProducer`, `republish`, `getStream`, `getProducer`. |
 | Screen video | The screen controller owns selection, video capture, producer identity, capture-ended callbacks and quality-guard mounting: `requestSelection`, `start`, `stop`, `detachProducer`, `republish`, `isLive`, `getProducer`. |
-| Share audio | The audio controller owns every display-audio/native/worklet path and teardown: adoption/discard, `start`, `stop`, `detachProducer`, `republish`, `recover`, `awaitTeardown`. Video calls audio; audio receives a video-liveness getter and calls no video lifecycle operation. |
+| Share audio | The audio controller owns every display-audio/native/worklet path and teardown: adoption/discard, `start`, `stop`, `detachProducer`, `republish`, `recover`, `awaitTeardown`. Video calls audio; each `start` and `recover` call supplies a video-liveness getter, and audio calls no video lifecycle operation. |
 | Session runtime | `init`, restore, rejoin and rebuild effects, terminal/recovery cleanup and server-session establishment integration. It invokes public owner operations. |
 | Session machine and executor | Phases, command identity, retry/timeout policy, scheduling, cancellation and bounded draining remain in the existing machine, store, executor and runners. |
 | Remote media | `useRemoteMedia` composes the existing ledger, stream maps, transports, consume/repair runners and event subscriptions. `createRemoteMediaIntegration` connects identity checks, consume-start acknowledgement, external-track reconciliation and watched-intent snapshots; it owns no ledger state, transport resources or retry policy. |
@@ -58,6 +58,50 @@ Construction performs no media acquisition, signaling, subscriptions or timers.
 Committed current-value getters and layout-effect owner activation precede passive
 executor work, including Strict Mode replay. Awaited operations retain lifecycle
 and operation currency checks before shared writes.
+
+## Construction order
+
+`index.tsx` constructs every owner in one pass. No owner reads a ref that a
+later owner fills in, apart from the transport-failure port below.
+
+1. Shared state with no media dependency: the activity store, voice-state
+   operations (`voice-state-operation.ts`), the device RTP-capability holder
+   (`session/device-rtp-capabilities.ts`) and the transport-failure port
+   (`session/transport-failure-port.ts`).
+2. Media-element refs and local stream snapshots.
+3. Remote media, which reads the capability holder and reports to the port.
+4. Webcam, share audio, then screen video, which receives share audio. Both
+   video owners read the capability holder when they choose a codec.
+5. Transport stats, the microphone and combined media settings.
+6. The session runtime, which receives the owners, transports, holder and port.
+7. Controls and push-to-mute/talk keybinds, which use the same voice-state
+   operation sequence.
+
+Three ref bridges previously closed loops back to later owners:
+
+| Former bridge | Replacement |
+| --- | --- |
+| `screenVideoLiveRef` | Liveness is an argument rather than a dependency. The screen owner passes its `isLive` to `shareAudio.start`; the runtime passes a getter that reads the screen owner to `shareAudio.recover`. Audio reads it at each startup and recovery boundary, including after queued recovery and awaits. Intent, lease and operation identity still reject superseded work. |
+| `commitTerminalMicMutedRef` | `createVoiceStateOperations` owns the operation sequence shared by mute, deafen and webcam controls. It commits terminal mute: local state, reconnect intent and best-effort server synchronization. The microphone's `commitTerminalMute` mutes its own outbound track and processing first. Raw-capture exhaustion and a failed transport-recovery restart both use it. |
+| `runtimeRef` | The runtime writes device capabilities to the holder at each currency-checked device load, rejoin and reset. Remote-media retry gating and video codec selection read the holder when they act. Transport failures use the port. |
+
+The capability holder is deliberately separate from the runtime's React
+publication of the same capabilities. That publication is cleared during
+rebuild and set only after both transports exist, because consume, repair and
+event-sync runners render from it. Unifying the two would change retry gating
+and runner timing during rebuild.
+
+### Transport-failure port
+
+Remote media detects transport failure, but the runtime that handles it depends
+on remote media's transports and is built later. This is the one late-bound edge.
+`report` forwards to the bound handler and drops the report while nothing is
+bound. The runtime binds in `activate`, a layout effect that runs before passive
+executor work, and releases in `deactivate`. A release clears only its own
+binding, so a repeated or Strict Mode replay cleanup cannot remove a replacement.
+Each provider instance owns its own port, and the runtime handler also ignores
+failures while inactive. As with the former ref, failures reported before the
+first layout commit or after unmount are dropped.
 
 ## Microphone layers
 
@@ -71,7 +115,9 @@ injected ports.
 connects that controller to application settings, browser devices, mediasoup,
 volume events and activity reporting. It serializes microphone mutations and
 owns default-input change subscriptions and recovery decisions. Its operations
-delegate resource ownership to the pipeline controller.
+delegate resource ownership to the pipeline controller. Its terminal mute mutes
+the microphone's own resources, then commits shared state through the
+provider's voice-state operations.
 
 [`microphone/use-microphone.ts`](../../apps/client/src/components/voice-provider/microphone/use-microphone.ts)
 retains the integration and supplies committed React inputs and production

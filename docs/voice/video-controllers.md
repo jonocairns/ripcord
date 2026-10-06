@@ -37,9 +37,11 @@ fallback acquisition and early video notification remain explicit. Optional
 audio starts through the [share-audio](./share-audio-controller.md) API after
 video publication.
 
-Composition injects `isScreenVideoLive` into audio. Video calls audio operations;
-audio imports no video controller and writes no video state. Video stop targets
-video tracks; audio stop remains with its owner for mixed display streams.
+Video passes its `isLive` getter to audio `start`, and the session runtime
+passes the same owner's liveness to audio `recover`. Video calls audio
+operations; audio imports no video controller and writes no video state. Video
+stop targets video tracks; audio stop remains with its owner for mixed display
+streams.
 Session cleanup calls the owners directly, while `useLocalStreams` retains only
 React snapshots/setters. Stats and the quality guard use producer getters.
 

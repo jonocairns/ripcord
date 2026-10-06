@@ -14,7 +14,8 @@ display audio, native RTP ingest, renderer worklet capture, the published audio 
 producer identity, desktop publish intent, subscriptions, startup timeout,
 fallback, recovery and teardown. Construction acquires no media. Dependencies
 supply the bridge, signaling, transport getter, pipeline factory, stream factory
-and publication, timers, reporting and `isScreenVideoLive()`.
+and publication, timers and reporting. Video liveness is not a dependency: each
+`start` and `recover` call supplies an `isScreenVideoLive` getter.
 
 `share-audio/use-share-audio.ts` retains one instance, supplies committed current
 inputs and production adapters, and mounts it in a layout effect. The existing desktop
@@ -33,12 +34,13 @@ calls `detachProducer`, retaining capture and desktop intent. The republish plan
 delegates audio to `republish`, and session recovery call sites delegate to
 `recover`.
 
-Audio calls no screen lifecycle operation. Composition supplies video liveness
-from the installed video producer or the preserved screen stream. All screen
-audio producer and stream writes are private to its owner; `useLocalStreams`
-retains the React snapshot/setter and no audio teardown or producer ref. Video
-cleanup targets video tracks; audio cleanup targets audio tracks, even for a
-mixed display stream.
+Audio calls no screen lifecycle operation. The screen owner passes its `isLive`
+to `start`, and the session runtime passes a getter that reads the screen owner
+to `recover`. Liveness reflects the installed video producer or the preserved
+screen stream. All screen audio producer and stream writes are private to its
+owner; `useLocalStreams` retains the React snapshot/setter and no audio teardown
+or producer ref. Video cleanup targets video tracks; audio cleanup targets audio
+tracks, even for a mixed display stream.
 
 Native startup returns publication, abandonment or operational fallback.
 Authorization denial rejects without another publication path. Session and
@@ -58,7 +60,7 @@ deliberately, and each has a production-controller regression test:
 | --- | --- | --- |
 | Stream reads | Stop captured rendered streams; cleanup/republish read passive-effect stream refs. | Operations read the owner's immediately current stream, so stop reaches audio published before a React snapshot updates. Failed republish retains live capture. |
 | Native setting | Native rollout read a value captured by the provider callback. | The native entry reads the latest committed rollout setting after pending teardown. LocalStorage/build overrides keep their precedence. |
-| Video liveness | Recovery read the passive screen-stream ref. | The injected getter checks the current installed video track, falling back to preserved capture during reconnect. Startup and recovery check liveness without waiting for a stream-state render. |
+| Video liveness | Recovery read the passive screen-stream ref. | The getter supplied with each start or recovery checks the current installed video track, falling back to preserved capture during reconnect. Startup and every recovery step, including queued recovery, read liveness when they run rather than when they were requested, without waiting for a stream-state render. |
 | Browser publication | Deferred browser publication and old track callbacks lacked capture-generation fencing. | Stop, supersession and layout cleanup fence publication. Callback identity prevents an old handler from clearing a republished stream. Track cleanup survives expiry of the completed session command's publication lease. |
 | Pending cleanup | Queued cleanup detached shared resources only after waiting for its predecessor. | Cleanup detaches its own resource snapshot synchronously, then queues destruction. A new start waits for committed-resource teardown. Attempt-local late teardown cannot clear replacement resources. |
 | Native teardown completion | `ownsGlobalState` was captured before awaited RTP/capture/ingest teardown, then used to clear active state afterward. | Native generation is rechecked after the awaits, so an old teardown cannot hide a successor's native producer from cleanup. Server close uses the retained native producer ID. |
