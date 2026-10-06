@@ -92,6 +92,38 @@ attempts outage release and both peer disposals even when setup, diagnostics or
 an earlier cleanup fails. The CI HTML report retains event and media-identity
 attachments; tests run with zero retries.
 
+### Repeat the host-output comparison
+
+Use a fresh isolated checkout on the affected WSLg host, with ports 4991 and
+5173 free, frozen dependencies installed through Nix and the matching Playwright
+browser available (see [E2E setup](../../apps/client/e2e/README.md)). From the
+repository root:
+
+1. Save `apps/client/playwright.config.ts` outside the checkout so it can be
+   restored after each control and on interruption.
+2. For **host-first**, remove only `--disable-audio-output` from that config and
+   run the focused test from `apps/client`:
+
+   ```sh
+   CI=true nix develop -c bun run test:e2e e2e/tests/reconnect.spec.ts \
+     --grep 'voice returns to a coherent session after a long offline interval'
+   ```
+
+3. Before another run recreates `.runtime/` or replaces reports, save the command
+   output and exit status, `apps/client/e2e/.runtime/data/logs/app.log`,
+   `apps/client/test-results/e2e/` and `apps/client/playwright-report/` under a
+   separate directory for that control.
+4. Restore the saved config and repeat the command and artifact capture as
+   **fake-output**. Remove the same flag again and repeat as **host-second**.
+   Keep every other flag, assertion, capture setting and retry count unchanged.
+5. Restore the saved config before leaving the checkout; do not commit the
+   temporary flag removal. Compare all three retained results. On the affected
+   host, the historical result was a failed `Connected` assertion with host
+   output, a pass with fake output, then the same failure with host output.
+   Successful server restores with stalled microphone reacquisition and browser
+   audio-backend diagnostics distinguish this failure from a signaling failure.
+   Other hosts may not reproduce it; retain their actual outcomes.
+
 ### Open clock-divergence limitation
 
 The grace-expiry assertion requires a server-reported age of at least 60,000 ms.
