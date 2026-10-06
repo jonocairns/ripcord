@@ -35,6 +35,8 @@ type TUseVoiceSessionRuntimeParams = Pick<
 	| 'startMonitoring'
 	| 'stopMonitoring'
 	| 'resetStats'
+	| 'deviceRtpCapabilities'
+	| 'transportFailures'
 	| 'publishRtpCapabilities'
 	| 'captureWatchedRemoteStreams'
 	| 'rehydrateWatchIntentOnly'

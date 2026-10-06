@@ -1,6 +1,6 @@
-import { ChannelPermission, StreamKind, type TVoiceTransportFailureEvent } from '@sharkord/shared';
+import { ChannelPermission, StreamKind } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useChannelCan, useIsConnected } from '@/features/server/hooks';
 import { useServerStore } from '@/features/server/slice';
@@ -17,6 +17,8 @@ import { useMicrophone } from './microphone/use-microphone';
 import { usePushMicKeybinds } from './microphone/use-push-mic-keybinds';
 import { useMediaElementRefs } from './remote-media/use-media-element-refs';
 import { useRemoteMedia } from './remote-media/use-remote-media';
+import { createDeviceRtpCapabilities } from './session/device-rtp-capabilities';
+import { createTransportFailurePort } from './session/transport-failure-port';
 import { useVoiceSessionRuntime } from './session/use-voice-session-runtime';
 import { useShareAudio } from './share-audio/use-share-audio';
 import type { TConnectionStatus, TVoiceProvider } from './types';
@@ -61,6 +63,11 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	// Built before the microphone and runtime, which commit terminal mute through
 	// it; controls share the same sequence for later user mute/deafen changes.
 	const voiceStateOperations = useVoiceStateOperations(currentVoiceChannelId);
+	// Remote media and the video owners read device capabilities written by the
+	// runtime built after them. Transport failures are the one late-bound edge:
+	// the runtime binds this port while mounted.
+	const [deviceRtpCapabilities] = useState(createDeviceRtpCapabilities);
+	const [transportFailures] = useState(createTransportFailurePort);
 
 	const { getOrCreateRefs, clear: clearMediaElementRefs } = useMediaElementRefs(currentVoiceChannelId);
 
@@ -76,10 +83,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	} = useLocalStreams();
 
 	const localAudioStreamRef = useLatestRef(localAudioStream);
-	const runtimeRef = useRef<ReturnType<typeof useVoiceSessionRuntime> | undefined>(undefined);
-	const onTransportFailure = useCallback((failure?: TVoiceTransportFailureEvent) => {
-		runtimeRef.current?.onTransportFailure(failure);
-	}, []);
 	const [voiceEventRtpCapabilities, setVoiceEventRtpCapabilities] = useState<RtpCapabilities | null>(null);
 
 	const handleVoiceActivityUpdate = useCallback((activity: { userId: number; isSpeaking: boolean }) => {
@@ -91,7 +94,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		});
 	}, []);
 
-	const getRtpCapabilities = useCallback(() => runtimeRef.current?.getRtpCapabilities() ?? null, []);
 	const {
 		producerTransport,
 		consumerTransport,
@@ -115,8 +117,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		currentVoiceChannelId,
 		rtpCapabilities: voiceEventRtpCapabilities,
 		reconnectNonce: voiceSessionReconnectNonce,
-		getRtpCapabilities,
-		onTransportFailure,
+		getRtpCapabilities: deviceRtpCapabilities.get,
+		onTransportFailure: transportFailures.report,
 		onVoiceActivityUpdate: handleVoiceActivityUpdate,
 	});
 
@@ -134,7 +136,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const webcam = useWebcam({
 		devices,
 		getProducerTransport: () => producerTransport.current,
-		getRtpCapabilities: () => runtimeRef.current?.getRtpCapabilities() ?? null,
+		getRtpCapabilities: deviceRtpCapabilities.get,
 		publishStream: setLocalVideoStream,
 		closeProducer: (id) => {
 			void closeProducerOnServer(StreamKind.VIDEO, id);
@@ -152,7 +154,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const { controller: screenShare, start: startScreenShareStream } = useScreenShare({
 		devices,
 		getProducerTransport: () => producerTransport.current,
-		getRtpCapabilities: () => runtimeRef.current?.getRtpCapabilities() ?? null,
+		getRtpCapabilities: deviceRtpCapabilities.get,
 		publishStream: setLocalScreenShare,
 		closeProducer: (id) => {
 			void closeProducerOnServer(StreamKind.SCREEN, id);
@@ -225,13 +227,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startMonitoring,
 		stopMonitoring,
 		resetStats,
+		deviceRtpCapabilities,
+		transportFailures,
 		publishRtpCapabilities: setVoiceEventRtpCapabilities,
 		captureWatchedRemoteStreams,
 		rehydrateWatchIntentOnly,
 	});
-	useLayoutEffect(() => {
-		runtimeRef.current = runtime;
-	}, [runtime]);
 	const { init } = runtime;
 
 	const { isStartingScreenShare, setMicMuted, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =

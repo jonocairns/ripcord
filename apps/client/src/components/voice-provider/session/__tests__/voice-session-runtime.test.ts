@@ -20,6 +20,8 @@ import type {
 	TMicrophoneStartOutcome,
 } from '../../microphone/microphone-pipeline-controller';
 import { VoiceSessionExecutionSupersededError } from '../../session-execution-ownership';
+import { createDeviceRtpCapabilities } from '../device-rtp-capabilities';
+import { createTransportFailurePort } from '../transport-failure-port';
 import {
 	createVoiceSessionRuntime,
 	mountVoiceSessionRuntime,
@@ -153,6 +155,8 @@ const createHarness = () => {
 		republish: mock((_isCurrent?: () => boolean): Promise<void> | undefined => undefined),
 		recover: mock(async (_isScreenVideoLive: () => boolean) => {}),
 	};
+	const deviceRtpCapabilities = createDeviceRtpCapabilities();
+	const transportFailures = createTransportFailurePort();
 	const ports = {
 		microphone,
 		webcam,
@@ -178,6 +182,8 @@ const createHarness = () => {
 		clearExternalStreams: mock(() => {}),
 		clearMediaElementRefs: mock(() => {}),
 		clearActivity: mock(() => {}),
+		deviceRtpCapabilities,
+		transportFailures,
 		publishRtpCapabilities: mock((_caps: RtpCapabilities | null) => {}),
 		rehydrateWatchIntentOnly: mock((_snapshot: TWatchedRemoteStreamsSnapshot) => {}),
 		captureWatchedRemoteStreams: () => snapshot,
@@ -219,6 +225,8 @@ const createHarness = () => {
 		runtime,
 		unmount,
 		ports,
+		deviceRtpCapabilities,
+		transportFailures,
 		state,
 		device,
 		bootstrap,
@@ -280,7 +288,7 @@ describe('voice session runtime effects', () => {
 		else h.unmount();
 		load.resolve();
 		expect(await result).toBeInstanceOf(VoiceSessionExecutionSupersededError);
-		expect(h.runtime.getRtpCapabilities()).toBeNull();
+		expect(h.deviceRtpCapabilities.get()).toBeNull();
 		expect(h.ports.createProducerTransport).not.toHaveBeenCalled();
 		expect(h.ports.startMonitoring).not.toHaveBeenCalled();
 	});
@@ -566,7 +574,7 @@ describe('voice session runtime effects', () => {
 		consumer.resolve();
 		await flush();
 		expect(lateCommits).toBe(0);
-		expect(h.runtime.getRtpCapabilities()).toBeNull();
+		expect(h.deviceRtpCapabilities.get()).toBeNull();
 		expect(h.ports.cleanupTransports).toHaveBeenCalledTimes(2);
 	});
 
@@ -595,7 +603,7 @@ describe('voice session runtime effects', () => {
 		h.runtime.terminalCleanup();
 		transport.resolve();
 		await expect(rebuild).rejects.toBeInstanceOf(VoiceSessionExecutionSupersededError);
-		expect(h.runtime.getRtpCapabilities()).toBeNull();
+		expect(h.deviceRtpCapabilities.get()).toBeNull();
 		expect(h.ports.consumeExistingProducers).toHaveBeenCalledTimes(1);
 		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(1);
 	});
@@ -811,6 +819,87 @@ describe('voice session runtime effects', () => {
 });
 
 describe('voice session runtime composition boundaries', () => {
+	it('exposes loaded device capabilities while React publication waits for both transports', async () => {
+		const h = createHarness();
+		const producer = deferred<void>();
+		h.ports.createProducerTransport.mockImplementation(() => producer.promise);
+		const init = h.runtime.init(capabilities, 5);
+		await flush();
+		expect(h.deviceRtpCapabilities.get()).toBe(capabilities);
+		expect(h.ports.publishRtpCapabilities).not.toHaveBeenCalledWith(capabilities);
+		producer.resolve();
+		await init;
+		expect(h.ports.publishRtpCapabilities).toHaveBeenLastCalledWith(capabilities);
+	});
+
+	it('keeps device capabilities through rebuild, replaces them after rejoin and resets them on cleanup', async () => {
+		const h = createHarness();
+		await h.runtime.init(capabilities, 5);
+		const rejoinedCapabilities: RtpCapabilities = { codecs: [], headerExtensions: [] };
+		// Partial device: the runtime reads only load and rtpCapabilities.
+		const rejoinedDevice = { load: mock(async () => {}), rtpCapabilities: rejoinedCapabilities } as unknown as Device;
+		const rejoin = deferred<typeof h.bootstrap>();
+		h.ports.createDevice.mockImplementationOnce(async () => rejoinedDevice);
+		h.ports.requestVoiceRestoreOrJoin.mockImplementationOnce(() => rejoin.promise);
+		h.ports.createProducerTransport.mockRejectedValueOnce(missingSession);
+		const rebuild = h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext);
+		await flush();
+		// Rebuild clears the render-driven publication but keeps retry and codec reads.
+		expect(h.ports.publishRtpCapabilities).toHaveBeenLastCalledWith(null);
+		expect(h.deviceRtpCapabilities.get()).toBe(capabilities);
+		rejoin.resolve(h.bootstrap);
+		await rebuild;
+		expect(h.deviceRtpCapabilities.get()).toBe(rejoinedCapabilities);
+		expect(h.ports.publishRtpCapabilities).toHaveBeenLastCalledWith(rejoinedCapabilities);
+		h.runtime.recoveryCleanup();
+		expect(h.deviceRtpCapabilities.get()).toBeNull();
+		await h.runtime.init(capabilities, 5);
+		expect(h.deviceRtpCapabilities.get()).toBe(capabilities);
+		h.runtime.terminalCleanup();
+		expect(h.deviceRtpCapabilities.get()).toBeNull();
+		expect(h.ports.publishRtpCapabilities).toHaveBeenLastCalledWith(null);
+	});
+
+	it('does not let an obsolete init replace a successor device capabilities', async () => {
+		const h = createHarness();
+		const oldCapabilities: RtpCapabilities = { codecs: [] };
+		const oldLoad = deferred<void>();
+		const oldDevice = { load: mock(() => oldLoad.promise), rtpCapabilities: oldCapabilities } as unknown as Device;
+		h.ports.createDevice.mockImplementationOnce(async () => oldDevice);
+		const oldInit = h.runtime.init(capabilities, 5).catch((error: unknown) => error);
+		await flush();
+		await h.runtime.init(capabilities, 5);
+		oldLoad.resolve();
+		expect(await oldInit).toBeInstanceOf(VoiceSessionExecutionSupersededError);
+		expect(h.deviceRtpCapabilities.get()).toBe(capabilities);
+		expect(h.ports.publishRtpCapabilities).toHaveBeenLastCalledWith(capabilities);
+	});
+
+	it('routes reported transport failures only while the runtime is mounted, including Strict Mode replay', () => {
+		const h = createHarness();
+		dispatchVoiceSession({ type: 'JoinSucceeded', channelId: 5 });
+		h.unmount();
+		h.transportFailures.report();
+		expect(getVoiceSessionState().phase.phase).toBe('connected');
+		const remount = mountVoiceSessionRuntime(h.runtime);
+		h.unmount();
+		h.transportFailures.report();
+		expect(getVoiceSessionState().phase.phase).toBe('rebuilding');
+		remount();
+	});
+
+	it('does not route an unmounted provider port to its replacement runtime', () => {
+		const old = createHarness();
+		old.unmount();
+		const successor = createHarness();
+		dispatchVoiceSession({ type: 'JoinSucceeded', channelId: 5 });
+		old.transportFailures.report();
+		expect(getVoiceSessionState().phase.phase).toBe('connected');
+		successor.transportFailures.report();
+		expect(getVoiceSessionState().phase.phase).toBe('rebuilding');
+		successor.unmount();
+	});
+
 	it.each([
 		'reconnect restore',
 		'recovery finalization',

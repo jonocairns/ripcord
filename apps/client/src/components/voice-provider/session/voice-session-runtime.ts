@@ -33,6 +33,8 @@ import type { TRepublishedLocalMediaState } from '../types';
 import type { useTransportStats } from '../use-transport-stats';
 import type { createScreenShareController } from '../video/screen-share-controller';
 import type { createWebcamController } from '../video/webcam-controller';
+import type { TDeviceRtpCapabilities } from './device-rtp-capabilities';
+import type { TTransportFailurePort } from './transport-failure-port';
 import {
 	recordTransportRecoverySucceeded,
 	resolveTransportFailureDispatchOutcome,
@@ -116,6 +118,8 @@ type TVoiceSessionRuntimeDependencies = Pick<
 		clearExternalStreams: () => void;
 		clearMediaElementRefs: () => void;
 		clearActivity: () => void;
+		deviceRtpCapabilities: Pick<TDeviceRtpCapabilities, 'set'>;
+		transportFailures: Pick<TTransportFailurePort, 'bind'>;
 		publishRtpCapabilities: (capabilities: RtpCapabilities | null) => void;
 		rehydrateWatchIntentOnly: (snapshot: TWatchedRemoteStreamsSnapshot) => void;
 		captureWatchedRemoteStreams: () => TWatchedRemoteStreamsSnapshot;
@@ -152,16 +156,24 @@ type TVoiceSessionRuntimeInitOptions = {
 const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDependencies) => {
 	let currentDevice: Device | undefined;
 	let routerCapabilities: RtpCapabilities | null = null;
-	let sendCapabilities: RtpCapabilities | null = null;
 	let hasHandledTransportFailure = false;
 	let transportRecoveryCircuit: TTransportRecoveryCircuitState | undefined;
+	let releaseTransportFailures: (() => void) | undefined;
 	const executionOwnership = createVoiceSessionExecutionOwnership();
 	let active = false;
+	// Every write follows the caller's currency check; consumers read the holder.
+	const setDeviceRtpCapabilities = (capabilities: RtpCapabilities | null): void => {
+		getDependencies().deviceRtpCapabilities.set(capabilities);
+	};
 	const activate = (): void => {
 		active = true;
+		releaseTransportFailures?.();
+		releaseTransportFailures = getDependencies().transportFailures.bind(onTransportFailure);
 	};
 	const deactivate = (): void => {
 		active = false;
+		releaseTransportFailures?.();
+		releaseTransportFailures = undefined;
 		invalidateVoiceSessionExecution(executionOwnership);
 	};
 	const onTransportFailure = (failure?: TVoiceTransportFailureEvent) => {
@@ -259,7 +271,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		}
 
 		currentDevice = device;
-		sendCapabilities = device.rtpCapabilities;
+		setDeviceRtpCapabilities(device.rtpCapabilities);
 
 		return device;
 	};
@@ -348,7 +360,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		getDependencies().clearMediaElementRefs();
 		currentDevice = undefined;
 		routerCapabilities = null;
-		sendCapabilities = null;
+		setDeviceRtpCapabilities(null);
 		getDependencies().publishRtpCapabilities(null);
 	};
 
@@ -487,7 +499,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 					});
 					throwIfRecoverySuperseded();
 					currentDevice = device;
-					sendCapabilities = device.rtpCapabilities;
+					setDeviceRtpCapabilities(device.rtpCapabilities);
 
 					await Promise.all([
 						getDependencies().createProducerTransport(device, opts?.producerTransportParams, isCurrent),
@@ -567,7 +579,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 						});
 						currentDevice = undefined;
 						routerCapabilities = null;
-						sendCapabilities = null;
+						setDeviceRtpCapabilities(null);
 						getDependencies().publishRtpCapabilities(null);
 					}
 					getDependencies().logVoice('Error initializing voice provider', { error });
@@ -725,7 +737,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 						currentRtpCapabilities = device.rtpCapabilities;
 						currentDevice = device;
 						routerCapabilities = recoveryJoinResult.routerRtpCapabilities;
-						sendCapabilities = device.rtpCapabilities;
+						setDeviceRtpCapabilities(device.rtpCapabilities);
 						const store = getDependencies().getServerState();
 						store.setCurrentVoiceChannelId(recoveryChannelId);
 						store.reconcileVoiceChannelUsers({
@@ -751,7 +763,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 
 					if (restartIfNonceChanged()) return;
 
-					sendCapabilities = currentRtpCapabilities;
+					setDeviceRtpCapabilities(currentRtpCapabilities);
 					getDependencies().publishRtpCapabilities(currentRtpCapabilities);
 
 					const republishTasks: Promise<void>[] = [];
@@ -985,7 +997,6 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 			if (!active || !getDependencies().isConnected()) return;
 			await getDependencies().shareAudio.recover(isScreenVideoLive);
 		},
-		getRtpCapabilities: () => sendCapabilities,
 		syncChannel,
 	};
 };
