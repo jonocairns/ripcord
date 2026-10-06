@@ -1,7 +1,7 @@
 import { createContext } from 'react';
-import type { TransportStatsStore } from './hooks/use-transport-stats';
-import { createEmptyAudioVideoRefs } from './media-element-refs';
+import { createEmptyAudioVideoRefs } from './remote-media/media-element-refs';
 import type { TVoiceProvider } from './types';
+import type { TransportStatsStore } from './use-transport-stats';
 import type { VoiceActivityStore } from './voice-activity';
 
 const VoiceProviderContext = createContext<TVoiceProvider>({

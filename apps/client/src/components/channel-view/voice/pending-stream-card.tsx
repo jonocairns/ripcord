@@ -1,10 +1,10 @@
 import { StreamKind } from '@sharkord/shared';
 import { EyeOff, Headphones, Monitor, RefreshCw, Router, Video } from 'lucide-react';
 import { memo } from 'react';
-import type { TVisibleRemoteMediaStatus } from '@/components/voice-provider/hooks/remote-media-subscriptions';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { UserAvatar } from '@/components/user-avatar';
+import type { TVisibleRemoteMediaStatus } from '@/components/voice-provider/remote-media/remote-media-subscriptions';
 import { useUserById } from '@/features/server/users/hooks';
 import { cn } from '@/lib/utils';
 import { CardGradient } from './card-gradient';

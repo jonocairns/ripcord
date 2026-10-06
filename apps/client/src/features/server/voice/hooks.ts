@@ -1,5 +1,5 @@
 import { useContext, useMemo, useSyncExternalStore } from 'react';
-import { EMPTY_TRANSPORT_STATS } from '@/components/voice-provider/hooks/use-transport-stats';
+import { EMPTY_TRANSPORT_STATS } from '@/components/voice-provider/use-transport-stats';
 import { EMPTY_VOICE_ACTIVITY } from '@/components/voice-provider/voice-activity';
 import {
 	TransportStatsContext,

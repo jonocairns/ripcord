@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { isAuxiliaryVideoCodec, isAuxiliaryVideoStat } from '../hooks/use-transport-stats';
+import { isAuxiliaryVideoCodec, isAuxiliaryVideoStat } from '../use-transport-stats';
 
 describe('isAuxiliaryVideoCodec', () => {
 	test('identifies RTX codec records', () => {

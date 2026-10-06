@@ -1,8 +1,8 @@
 import type { TDeviceSettings } from '@/types';
-import { VoiceSessionExecutionSupersededError } from './hooks/session-execution-ownership';
-import { didMicCaptureSettingsChange } from './mic-capture-config';
-import type { TMicrophoneStartOutcome } from './microphone-pipeline-controller';
-import { didWebcamCaptureSettingsChange } from './webcam-controller';
+import { didMicCaptureSettingsChange } from './microphone/mic-capture-config';
+import type { TMicrophoneStartOutcome } from './microphone/microphone-pipeline-controller';
+import { VoiceSessionExecutionSupersededError } from './session-execution-ownership';
+import { didWebcamCaptureSettingsChange } from './video/webcam-controller';
 
 type TMediaSettingsInputs = {
 	devices: TDeviceSettings;
