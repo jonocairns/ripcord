@@ -460,9 +460,9 @@ export const joinVoice = (
 		silent?: boolean;
 	} = {},
 ): Promise<TJoinVoiceResult> => {
-	// A leave still waiting for the replacement socket must not later evict
-	// this new session. Already-sent leaves retain mutation-queue ordering.
-	for (const controller of pendingLeaveAuthenticationControllers) controller.abort();
+	// Keep terminal leaves ahead of replacement joins, including while they
+	// await authentication. A failed join must not discard the old cleanup,
+	// and a successful join must not be evicted by a late leave.
 	// A manual join replaces reconnect intent. Invalidate the recovery command
 	// before enqueuing the join so an in-flight restore is aborted and cannot
 	// later enqueue a terminal leave behind the user's new session.
