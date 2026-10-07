@@ -12,6 +12,7 @@ const startNative = (fixture: ReturnType<typeof makeFixture>, sourceId = 'source
 		desktopBridge: fixture.bridge,
 		captureInput: { sourceId },
 		audioMode: ScreenAudioMode.APP,
+		isScreenVideoLive: fixture.isVideoLive,
 	});
 
 describe('native share audio production startup', () => {
@@ -110,6 +111,7 @@ describe('native share audio production startup', () => {
 						desktopBridge: f.bridge,
 						captureInput: { sourceId: 'source' },
 						audioMode: ScreenAudioMode.SYSTEM,
+						isScreenVideoLive: f.isVideoLive,
 					}),
 				).rejects.toEqual(error);
 				expect(f.deps.createPipeline).not.toHaveBeenCalled();

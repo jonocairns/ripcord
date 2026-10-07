@@ -35,10 +35,11 @@ type TUseVoiceSessionRuntimeParams = Pick<
 	| 'startMonitoring'
 	| 'stopMonitoring'
 	| 'resetStats'
+	| 'deviceRtpCapabilities'
+	| 'transportFailures'
 	| 'publishRtpCapabilities'
 	| 'captureWatchedRemoteStreams'
 	| 'rehydrateWatchIntentOnly'
-	| 'commitTerminalMicMuted'
 > & {
 	currentVoiceChannelId: number | undefined;
 	isConnected: boolean;

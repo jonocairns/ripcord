@@ -1,6 +1,6 @@
-import { ChannelPermission, StreamKind, type TVoiceTransportFailureEvent } from '@sharkord/shared';
+import { ChannelPermission, StreamKind } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useChannelCan, useIsConnected } from '@/features/server/hooks';
 import { useServerStore } from '@/features/server/slice';
@@ -17,6 +17,8 @@ import { useMicrophone } from './microphone/use-microphone';
 import { usePushMicKeybinds } from './microphone/use-push-mic-keybinds';
 import { useMediaElementRefs } from './remote-media/use-media-element-refs';
 import { useRemoteMedia } from './remote-media/use-remote-media';
+import { createDeviceRtpCapabilities } from './session/device-rtp-capabilities';
+import { createTransportFailurePort } from './session/transport-failure-port';
 import { useVoiceSessionRuntime } from './session/use-voice-session-runtime';
 import { useShareAudio } from './share-audio/use-share-audio';
 import type { TConnectionStatus, TVoiceProvider } from './types';
@@ -24,6 +26,7 @@ import { useLocalStreams } from './use-local-streams';
 import { useMediaSettings } from './use-media-settings';
 import { useTransportStats } from './use-transport-stats';
 import { useVoiceControls } from './use-voice-controls';
+import { useVoiceStateOperations } from './use-voice-state-operations';
 import { useScreenShare } from './video/use-screen-share';
 import { useWebcam } from './video/use-webcam';
 import { collectVideoSenderMetadata } from './video/video-sender-metadata';
@@ -57,7 +60,14 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const channelCan = useChannelCan(currentVoiceChannelId);
 	const { devices } = useDevices();
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
-	const commitTerminalMicMutedRef = useRef<(() => Promise<void>) | undefined>(undefined);
+	// Built before the microphone and runtime, which commit terminal mute through
+	// it; controls share the same sequence for later user mute/deafen changes.
+	const voiceStateOperations = useVoiceStateOperations(currentVoiceChannelId);
+	// Remote media and the video owners read device capabilities written by the
+	// runtime built after them. Transport failures are the one late-bound edge:
+	// the runtime binds this port while mounted.
+	const [deviceRtpCapabilities] = useState(createDeviceRtpCapabilities);
+	const [transportFailures] = useState(createTransportFailurePort);
 
 	const { getOrCreateRefs, clear: clearMediaElementRefs } = useMediaElementRefs(currentVoiceChannelId);
 
@@ -73,10 +83,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	} = useLocalStreams();
 
 	const localAudioStreamRef = useLatestRef(localAudioStream);
-	const runtimeRef = useRef<ReturnType<typeof useVoiceSessionRuntime> | undefined>(undefined);
-	const onTransportFailure = useCallback((failure?: TVoiceTransportFailureEvent) => {
-		runtimeRef.current?.onTransportFailure(failure);
-	}, []);
 	const [voiceEventRtpCapabilities, setVoiceEventRtpCapabilities] = useState<RtpCapabilities | null>(null);
 
 	const handleVoiceActivityUpdate = useCallback((activity: { userId: number; isSpeaking: boolean }) => {
@@ -88,7 +94,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		});
 	}, []);
 
-	const getRtpCapabilities = useCallback(() => runtimeRef.current?.getRtpCapabilities() ?? null, []);
 	const {
 		producerTransport,
 		consumerTransport,
@@ -112,8 +117,8 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		currentVoiceChannelId,
 		rtpCapabilities: voiceEventRtpCapabilities,
 		reconnectNonce: voiceSessionReconnectNonce,
-		getRtpCapabilities,
-		onTransportFailure,
+		getRtpCapabilities: deviceRtpCapabilities.get,
+		onTransportFailure: transportFailures.report,
 		onVoiceActivityUpdate: handleVoiceActivityUpdate,
 	});
 
@@ -131,7 +136,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const webcam = useWebcam({
 		devices,
 		getProducerTransport: () => producerTransport.current,
-		getRtpCapabilities: () => runtimeRef.current?.getRtpCapabilities() ?? null,
+		getRtpCapabilities: deviceRtpCapabilities.get,
 		publishStream: setLocalVideoStream,
 		closeProducer: (id) => {
 			void closeProducerOnServer(StreamKind.VIDEO, id);
@@ -139,27 +144,23 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	});
 	const { start: startWebcamStream, stop: stopWebcamStream } = webcam;
 
-	// Inject video liveness through composition; audio never imports or mutates video.
-	const screenVideoLiveRef = useRef<() => boolean>(() => false);
+	// Audio receives video liveness per start/recovery call, so it needs no
+	// reference to the screen owner built after it.
 	const shareAudio = useShareAudio({
 		nativeAppAudioIngestEnabled: devices.nativeAppAudioIngestEnabled,
 		getProducerTransport: () => producerTransport.current,
-		isScreenVideoLive: () => screenVideoLiveRef.current(),
 		publishStream: setLocalScreenShareAudio,
 	});
 	const { controller: screenShare, start: startScreenShareStream } = useScreenShare({
 		devices,
 		getProducerTransport: () => producerTransport.current,
-		getRtpCapabilities: () => runtimeRef.current?.getRtpCapabilities() ?? null,
+		getRtpCapabilities: deviceRtpCapabilities.get,
 		publishStream: setLocalScreenShare,
 		closeProducer: (id) => {
 			void closeProducerOnServer(StreamKind.SCREEN, id);
 		},
 		shareAudio,
 	});
-	useLayoutEffect(() => {
-		screenVideoLiveRef.current = screenShare.isLive;
-	}, [screenShare]);
 	const { stop: stopScreenShareStream, requestSelection: requestDesktopScreenShareSelection } = screenShare;
 
 	const getVideoSenderMetadata = useCallback(
@@ -190,7 +191,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		closeProducerOnServer,
 		setLocalActivity: (userId, isSpeaking) => voiceActivityStoreRef.current.setLocalUserActivity(userId, isSpeaking),
 		commitTerminalMicMuted: () => {
-			void commitTerminalMicMutedRef.current?.();
+			void voiceStateOperations.commitTerminalMicMuted();
 		},
 	});
 	const { start: startMicStream } = microphone;
@@ -226,39 +227,27 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startMonitoring,
 		stopMonitoring,
 		resetStats,
+		deviceRtpCapabilities,
+		transportFailures,
 		publishRtpCapabilities: setVoiceEventRtpCapabilities,
 		captureWatchedRemoteStreams,
 		rehydrateWatchIntentOnly,
-		commitTerminalMicMuted: () => {
-			void commitTerminalMicMutedRef.current?.();
-		},
 	});
-	useLayoutEffect(() => {
-		runtimeRef.current = runtime;
-	}, [runtime]);
 	const { init } = runtime;
 
-	const {
-		isStartingScreenShare,
-		setMicMuted,
-		commitTerminalMicMuted,
-		toggleMic,
-		toggleSound,
-		toggleWebcam,
-		toggleScreenShare,
-	} = useVoiceControls({
-		startMicStream,
-		localAudioStream,
-		setMicProcessingMuted: microphone.setMuted,
-		startWebcamStream,
-		stopWebcamStream,
-		startScreenShareStream,
-		stopScreenShareStream,
-		requestScreenShareSelection: getDesktopBridge() ? requestDesktopScreenShareSelection : undefined,
-		isScreenShareLive: screenShare.isLive,
-	});
-
-	commitTerminalMicMutedRef.current = commitTerminalMicMuted;
+	const { isStartingScreenShare, setMicMuted, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =
+		useVoiceControls({
+			voiceStateOperations,
+			startMicStream,
+			localAudioStream,
+			setMicProcessingMuted: microphone.setMuted,
+			startWebcamStream,
+			stopWebcamStream,
+			startScreenShareStream,
+			stopScreenShareStream,
+			requestScreenShareSelection: getDesktopBridge() ? requestDesktopScreenShareSelection : undefined,
+			isScreenShareLive: screenShare.isLive,
+		});
 
 	usePushMicKeybinds({
 		pushToTalkKeybind: devices.pushToTalkKeybind,

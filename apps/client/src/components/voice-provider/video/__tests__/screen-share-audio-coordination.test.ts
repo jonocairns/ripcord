@@ -15,12 +15,10 @@ afterEach(() => {
 });
 const fixture = () => {
 	const f = createVideoFixture();
-	let isVideoLive = () => false;
 	let audioStream: MediaStream | undefined;
 	const audio = createShareAudioController({
 		getDesktopBridge: () => undefined,
 		getProducerTransport: f.deps.getProducerTransport,
-		isScreenVideoLive: () => isVideoLive(),
 		isNativeIngestEnabled: () => false,
 		createIngest: async () => {
 			throw new Error('Unexpected ingest');
@@ -64,7 +62,6 @@ const fixture = () => {
 		},
 		clearInterval,
 	});
-	isVideoLive = c.isLive;
 	disposers.push(mountScreenShareController(c));
 	const capture = createCapture(true);
 	f.acquisitions.push(Promise.resolve(capture.stream));

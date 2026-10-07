@@ -19,9 +19,10 @@ import { resolveMicOperationFailurePolicy } from './microphone/push-mic-state';
 import { VoiceSessionExecutionSupersededError } from './session-execution-ownership';
 import { settleSupersededScreenShareStart } from './video/screen-share-control-lifecycle';
 import { useScreenShareStage } from './video/use-screen-share-stage';
-import { shouldApplyVoiceStateOperationResult, startVoiceStateOperation } from './voice-state-operation';
+import type { TVoiceStateOperations } from './voice-state-operation';
 
 type TUseVoiceControlsParams = {
+	voiceStateOperations: Pick<TVoiceStateOperations, 'begin' | 'isCurrent'>;
 	startMicStream: () => Promise<TMicrophoneStartOutcome>;
 	localAudioStream: MediaStream | undefined;
 	setMicProcessingMuted: (micMuted: boolean) => void;
@@ -67,6 +68,7 @@ const setLocalAudioTrackEnabled = (stream: MediaStream | undefined, micMuted: bo
 };
 
 const useVoiceControls = ({
+	voiceStateOperations,
 	startMicStream,
 	localAudioStream,
 	setMicProcessingMuted,
@@ -86,7 +88,6 @@ const useVoiceControls = ({
 	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
 	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
 	const localAudioStreamRef = useLatestRef(localAudioStream);
-	const voiceStateOperationSequenceRef = useRef(0);
 	const pendingShareMutateRef = useRef<Promise<unknown> | undefined>(undefined);
 	const isStartingWebcamRef = useRef(false);
 
@@ -147,9 +148,7 @@ const useVoiceControls = ({
 			}
 
 			const shouldPlaySound = options?.playSound ?? true;
-			const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
-			voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
-			const { operationToken } = voiceStateOperation;
+			const operationToken = voiceStateOperations.begin();
 
 			updateOwnVoiceState({ micMuted: newState });
 			updateVoiceReconnectIntentState({ micMuted: newState });
@@ -167,20 +166,14 @@ const useVoiceControls = ({
 					micMuted: newState,
 				});
 
-				if (
-					shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current) &&
-					!localAudioStreamRef.current &&
-					!newState
-				) {
+				if (voiceStateOperations.isCurrent(operationToken) && !localAudioStreamRef.current && !newState) {
 					const startOutcome = await startMicStream();
 					if (startOutcome.status === 'failed') {
 						throw startOutcome.error;
 					}
 				}
 			} catch (error) {
-				const failurePolicy = resolveMicOperationFailurePolicy(
-					shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current),
-				);
+				const failurePolicy = resolveMicOperationFailurePolicy(voiceStateOperations.isCurrent(operationToken));
 				if (!failurePolicy.shouldFailClosed) {
 					return;
 				}
@@ -203,31 +196,8 @@ const useVoiceControls = ({
 				toast.error(getTrpcError(error, 'Failed to update microphone state'));
 			}
 		},
-		[applyMicMuted, startMicStream],
+		[applyMicMuted, startMicStream, voiceStateOperations],
 	);
-
-	const commitTerminalMicMuted = useCallback(async () => {
-		const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
-		const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
-		voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
-
-		updateOwnVoiceState({ micMuted: true });
-		const updatedReconnectIntent = updateVoiceReconnectIntentState({ micMuted: true });
-		applyMicMuted(localAudioStreamRef.current, true);
-
-		if (latestCurrentVoiceChannelId === undefined && !updatedReconnectIntent) {
-			return;
-		}
-
-		try {
-			await sendOwnVoiceStateUpdate({ micMuted: true });
-		} catch (error) {
-			// Terminal capture loss is locally authoritative. The reconnect intent
-			// carries this state to restore, and a later user operation is sequenced
-			// after this best-effort synchronization.
-			logVoice('Failed to synchronize terminal microphone mute', { error });
-		}
-	}, [applyMicMuted]);
 
 	const toggleSound = useCallback(
 		async (options?: { forceUnmute?: boolean }) => {
@@ -242,9 +212,7 @@ const useVoiceControls = ({
 			const previousSoundMuted = latestOwnVoiceState.soundMuted;
 			const previousMicMutedBeforeDeafen = micMutedBeforeDeafenRef.current;
 			let nextMicMuted = previousMicMuted;
-			const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
-			voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
-			const { operationToken } = voiceStateOperation;
+			const operationToken = voiceStateOperations.begin();
 
 			if (newState) {
 				micMutedBeforeDeafenRef.current = previousMicMuted;
@@ -275,18 +243,14 @@ const useVoiceControls = ({
 					micMuted: nextMicMuted,
 				});
 
-				if (
-					shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current) &&
-					!localAudioStreamRef.current &&
-					!nextMicMuted
-				) {
+				if (voiceStateOperations.isCurrent(operationToken) && !localAudioStreamRef.current && !nextMicMuted) {
 					const startOutcome = await startMicStream();
 					if (startOutcome.status === 'failed') {
 						throw startOutcome.error;
 					}
 				}
 			} catch (error) {
-				if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
+				if (!voiceStateOperations.isCurrent(operationToken)) {
 					return;
 				}
 
@@ -303,7 +267,7 @@ const useVoiceControls = ({
 				toast.error(getTrpcError(error, 'Failed to update sound state'));
 			}
 		},
-		[applyMicMuted, startMicStream],
+		[applyMicMuted, startMicStream, voiceStateOperations],
 	);
 
 	const toggleMic = useCallback(async () => {
@@ -328,9 +292,7 @@ const useVoiceControls = ({
 
 		const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
 		const newState = !latestOwnVoiceState.webcamEnabled;
-		const voiceStateOperation = startVoiceStateOperation(voiceStateOperationSequenceRef.current);
-		voiceStateOperationSequenceRef.current = voiceStateOperation.latestOperationToken;
-		const { operationToken } = voiceStateOperation;
+		const operationToken = voiceStateOperations.begin();
 
 		try {
 			if (newState) {
@@ -360,7 +322,7 @@ const useVoiceControls = ({
 			});
 		} catch (error) {
 			if (error instanceof VoiceSessionExecutionSupersededError) return;
-			if (!shouldApplyVoiceStateOperationResult(operationToken, voiceStateOperationSequenceRef.current)) {
+			if (!voiceStateOperations.isCurrent(operationToken)) {
 				return;
 			}
 
@@ -371,7 +333,7 @@ const useVoiceControls = ({
 
 			toast.error(getTrpcError(error, 'Failed to update webcam state'));
 		}
-	}, [startWebcamStream, stopWebcamStream]);
+	}, [startWebcamStream, stopWebcamStream, voiceStateOperations]);
 
 	const toggleScreenShare = useCallback(async () => {
 		if (!currentVoiceChannelId) return;
@@ -504,7 +466,6 @@ const useVoiceControls = ({
 	return {
 		isStartingScreenShare,
 		setMicMuted,
-		commitTerminalMicMuted,
 		toggleMic,
 		toggleSound,
 		toggleWebcam,

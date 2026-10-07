@@ -8,16 +8,19 @@ final ownership and public operations. Runtime modules and their tests live in
 
 `createVoiceSessionRuntime` is a framework-free factory with injected current
 value getters, resource APIs, signaling, device creation, state publication,
-tracing and timing. It owns the mediasoup device and RTP-capability integration,
-initialization, rejoin, transport rebuild effects, reconnect restore effects,
-local media republish coordination and terminal cleanup. Construction acquires
-no media, creates no transports and calls no server API.
+tracing and timing. It owns the mediasoup device and writes its RTP capabilities
+to the provider's capability holder. It also owns initialization, rejoin,
+transport rebuild effects, reconnect restore effects, local media republish
+coordination and terminal cleanup. Construction acquires no media, creates no
+transports and calls no server API.
 
 `useVoiceSessionRuntime` retains the runtime, supplies committed inputs, mounts
 activation in a layout effect ahead of passive executor work, and supplies its
-effects to the existing `useVoiceSessionExecutor`. The environment module keeps
-production server/browser adapters, reporting and the existing 12-second
-rebuild boundary timeout and 350-ms post-rejoin producer refresh delay.
+effects to the existing `useVoiceSessionExecutor`. Activation binds the
+provider's [transport-failure port](./provider-composition.md#transport-failure-port),
+and deactivation releases it. The environment module keeps production
+server/browser adapters, reporting and the existing 12-second rebuild boundary
+timeout and 350-ms post-rejoin producer refresh delay.
 
 The production entry points are
 [`session/voice-session-runtime.ts`](../../apps/client/src/components/voice-provider/session/voice-session-runtime.ts),
@@ -36,7 +39,8 @@ Microphone, webcam, screen video and share audio remain the sole owners of their
 resources. Runtime effects call their public APIs and never mutate controller
 state. Microphone preparation still starts before device loading finishes, and
 producer/consumer transport creation remains parallel. Rebuild retains the
-recovery-specific microphone decision helper; WebSocket restore cleans and
+recovery-specific microphone decision helper. A failed restart continues
+listen-only through the microphone's terminal mute. WebSocket restore cleans and
 reacquires the microphone while preserving video/audio capture for republishing.
 
 `terminalCleanup` stops capture through the resource owners, clears remote

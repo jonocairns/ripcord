@@ -49,6 +49,6 @@ type TVoiceProvider = {
 		ReturnType<typeof useRemoteMediaSubscriptions>,
 		'pendingStreams' | 'remoteMediaSubscriptions' | 'visibleRemoteMedia'
 	> &
-	Omit<ReturnType<typeof useVoiceControls>, 'commitTerminalMicMuted'>;
+	ReturnType<typeof useVoiceControls>;
 
 export type { AudioVideoRefs, TConnectionStatus, TRepublishedLocalMediaState, TVoiceProvider };

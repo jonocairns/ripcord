@@ -132,7 +132,6 @@ const makeFixture = () => {
 		getDesktopBridge: () => bridge,
 		getProducerTransport: () => transport,
 		isNativeIngestEnabled: () => nativeEnabled,
-		isScreenVideoLive: () => videoLive,
 		createIngest: mock(async () => ({
 			id: 'ingest-1',
 			ip: '127.0.0.1',
@@ -185,6 +184,8 @@ const makeFixture = () => {
 		setNativeEnabled: (value: boolean) => {
 			nativeEnabled = value;
 		},
+		// Production callers pass the screen owner's getter per start/recovery call.
+		isVideoLive: () => videoLive,
 		setVideoLive: (value: boolean) => {
 			videoLive = value;
 		},
