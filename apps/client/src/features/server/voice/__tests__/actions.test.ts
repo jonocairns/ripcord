@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { ChannelType, StreamKind, type TPublicChannel } from '@sharkord/shared';
+import { createSessionAuthenticationGate } from '@/lib/session-authentication-gate';
 import { useServerStore } from '../../slice';
 import { SoundType } from '../../types';
 import type { TPendingVoiceReconnect, TVoiceReconnectSuppression } from '../reconnect-coordinator';
@@ -25,8 +26,10 @@ let handleVoiceSessionReplaced: typeof import('../actions').handleVoiceSessionRe
 let resetVoiceSwitchStateForTests: typeof import('../actions').__resetVoiceSwitchStateForTests;
 const playSound = mock(() => {});
 const runVoiceProviderCleanup = mock(() => {});
+const sessionAuthentication = createSessionAuthenticationGate();
 let leaveShouldFail = false;
 let joinShouldFail = false;
+let joinFailureCode: 'UNAUTHORIZED' | 'FORBIDDEN' | undefined;
 let joinAbortObserved = false;
 let beforeJoinResolve: (() => void) | undefined;
 let waitBeforeJoinResolve: Promise<void> | undefined;
@@ -43,7 +46,7 @@ const joinMutate = mock(async (_input?: unknown, opts?: { signal?: AbortSignal }
 	await waitBeforeJoinResolve;
 
 	if (joinShouldFail) {
-		throw new Error('join failed');
+		throw Object.assign(new Error('join failed'), { data: { code: joinFailureCode } });
 	}
 
 	beforeJoinResolve?.();
@@ -164,6 +167,7 @@ describe('voice actions', () => {
 			playSound,
 		}));
 		mock.module('@/lib/trpc', () => ({
+			waitForTRPCSessionAuthentication: sessionAuthentication.wait,
 			getWsClientInstanceId: () => 'own-client-instance',
 			getTRPCClient: () => ({
 				voice: {
@@ -209,7 +213,10 @@ describe('voice actions', () => {
 		updateStateMutate.mockClear();
 		waitBeforeUpdateStateResolve = undefined;
 		resetVoiceSwitchStateForTests();
+		sessionAuthentication.cancel(new Error('Test reset'));
+		sessionAuthentication.authenticate();
 		joinShouldFail = false;
+		joinFailureCode = undefined;
 		leaveShouldFail = false;
 		joinAbortObserved = false;
 		beforeJoinResolve = undefined;
@@ -447,6 +454,65 @@ describe('voice actions', () => {
 		setJoinedVoiceChannelState({ ownUserId: 42, connected: false });
 
 		expect(await leaveVoiceSessionAfterRecoveryFailure()).toBe(false);
+		expect(leaveMutate).not.toHaveBeenCalled();
+	});
+
+	it('stops local capture immediately but waits for replacement socket authentication before leaving', async () => {
+		setJoinedVoiceChannelState({ ownUserId: 42 });
+		sessionAuthentication.invalidate();
+		const leave = leaveVoice();
+		expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
+		expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
+		expect(leaveMutate).not.toHaveBeenCalled();
+		sessionAuthentication.authenticate();
+		await leave;
+		expect(leaveMutate).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps a replacement join behind the leave while authentication is pending', async () => {
+		setJoinedVoiceChannelState({ ownUserId: 42 });
+		sessionAuthentication.invalidate();
+		const leave = leaveVoice();
+		const join = joinVoice(8, { silent: true });
+		for (let i = 0; i < 5; i += 1) await Promise.resolve();
+		expect(joinMutate).not.toHaveBeenCalled();
+		expect(leaveMutate).not.toHaveBeenCalled();
+		sessionAuthentication.authenticate();
+		await leave;
+		expect((await join).kind).toBe('joined');
+		expect(leaveMutate).toHaveBeenCalledTimes(1);
+		expect(leaveMutate.mock.calls[0]?.[0]).toEqual({ mutationSeq: 1 });
+		expect(joinMutate.mock.calls[0]?.[0]).toMatchObject({ channelId: 8, mutationSeq: 2 });
+		expect(useServerStore.getState().currentVoiceChannelId).toBe(8);
+	});
+
+	for (const failureCode of [undefined, 'UNAUTHORIZED', 'FORBIDDEN'] as const) {
+		it(`preserves pending leave cleanup when a replacement join fails with ${failureCode ?? 'a transport error'}`, async () => {
+			setJoinedVoiceChannelState({ ownUserId: 42 });
+			sessionAuthentication.invalidate();
+			const leave = leaveVoice();
+			joinShouldFail = true;
+			joinFailureCode = failureCode;
+			const join = joinVoice(8, { silent: true });
+			sessionAuthentication.authenticate();
+			await leave;
+			expect((await join).kind).toBe(failureCode ? 'non-retriable-failure' : 'retryable-failure');
+			expect(leaveMutate).toHaveBeenCalledTimes(1);
+			expect(leaveMutate.mock.calls[0]?.[0]).toEqual({ mutationSeq: 1 });
+			expect(joinMutate.mock.calls[0]?.[0]).toMatchObject({ mutationSeq: 2 });
+			expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
+			expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
+		});
+	}
+
+	it('does not replay a pending leave after application teardown', async () => {
+		setJoinedVoiceChannelState({ ownUserId: 42 });
+		sessionAuthentication.invalidate();
+		const leave = leaveVoice();
+		sessionAuthentication.cancel(new Error('Connection closed'));
+		await leave;
+		sessionAuthentication.authenticate();
+		await Promise.resolve();
 		expect(leaveMutate).not.toHaveBeenCalled();
 	});
 

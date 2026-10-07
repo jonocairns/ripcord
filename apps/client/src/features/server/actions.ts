@@ -5,7 +5,15 @@ import { Dialog } from '@/components/dialogs/dialogs';
 import { refreshAccessToken, revokeRefreshToken } from '@/helpers/auth';
 import { logDebug, setSentryUser } from '@/helpers/browser-logger';
 import { getHostFromServer } from '@/helpers/get-file-url';
-import { cleanup, connectToTRPC, getTRPCClient, isTRPCSocketOpen, reconnectTRPC, setOnWsReconnect } from '@/lib/trpc';
+import {
+	cleanup,
+	connectToTRPC,
+	getTRPCClient,
+	isTRPCSocketOpen,
+	markTRPCSessionAuthenticated,
+	reconnectTRPC,
+	setOnWsReconnect,
+} from '@/lib/trpc';
 import { openDialog } from '../dialogs/actions';
 import { setPluginCommands } from './plugins/actions';
 import {
@@ -172,6 +180,7 @@ export const joinServer = async (
 		} else if (opts?.reconnect) {
 			clearReconnectSnapshotEventBuffer();
 		}
+		if (!data.mustChangePassword) markTRPCSessionAuthenticated(trpc);
 	} catch (error) {
 		if (opts?.reconnect) {
 			// Pause (not clear) so events buffered during this failed attempt are
