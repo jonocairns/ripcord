@@ -2,7 +2,7 @@ import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
 import { useCallback } from 'react';
 import { toast } from 'sonner';
 import { PinnedCardType } from '@/components/channel-view/voice/hooks/use-pin-card-controller';
-import { getPendingStreamKey } from '@/components/voice-provider/hooks/use-pending-streams';
+import { getPendingStreamKey } from '@/components/voice-provider/remote-media/use-pending-streams';
 import { setSelectedChannelId } from '@/features/server/channels/actions';
 import { useCurrentVoiceChannelId, useSelectedChannelId } from '@/features/server/channels/hooks';
 import { currentVoiceChannelIdSelector } from '@/features/server/channels/selectors';

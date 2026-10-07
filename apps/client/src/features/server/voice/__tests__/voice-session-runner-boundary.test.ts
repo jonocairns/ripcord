@@ -20,24 +20,24 @@ describe('voice session runner layering', () => {
 			new URL('../../../../components/voice-provider/index.tsx', import.meta.url),
 		).text();
 		const adapterSource = await Bun.file(
-			new URL('../../../../components/voice-provider/hooks/use-voice-session-executor.ts', import.meta.url),
+			new URL('../../../../components/voice-provider/session/use-voice-session-executor.ts', import.meta.url),
 		).text();
 
 		const runtimeHookSource = await Bun.file(
-			new URL('../../../../components/voice-provider/hooks/use-voice-session-runtime.ts', import.meta.url),
+			new URL('../../../../components/voice-provider/session/use-voice-session-runtime.ts', import.meta.url),
 		).text();
 		const runtimeSource = await Bun.file(
-			new URL('../../../../components/voice-provider/voice-session-runtime.ts', import.meta.url),
+			new URL('../../../../components/voice-provider/session/voice-session-runtime.ts', import.meta.url),
 		).text();
 		expect(runtimeHookSource).toContain('useVoiceSessionExecutor({');
 		const environmentSource = await Bun.file(
-			new URL('../../../../components/voice-provider/hooks/voice-session-runtime-environment.ts', import.meta.url),
+			new URL('../../../../components/voice-provider/session/voice-session-runtime-environment.ts', import.meta.url),
 		).text();
 		const remoteIntegrationSource = await Bun.file(
-			new URL('../../../../components/voice-provider/remote-media-integration.ts', import.meta.url),
+			new URL('../../../../components/voice-provider/remote-media/remote-media-integration.ts', import.meta.url),
 		).text();
 		const remoteHookSource = await Bun.file(
-			new URL('../../../../components/voice-provider/hooks/use-remote-media.ts', import.meta.url),
+			new URL('../../../../components/voice-provider/remote-media/use-remote-media.ts', import.meta.url),
 		).text();
 		for (const source of [
 			runtimeSource,

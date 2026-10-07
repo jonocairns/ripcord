@@ -8,8 +8,8 @@ import type { TRemoteStreams } from '@/types';
 import { CardControls } from '../channel-view/voice/card-controls';
 import { PinnedCardType } from '../channel-view/voice/hooks/use-pin-card-controller';
 import { IconButton } from '../ui/icon-button';
-import { useFloatingCard } from './hooks/use-floating-card';
-import type { TExternalStreamsMap } from './hooks/use-remote-streams';
+import type { TExternalStreamsMap } from './remote-media/use-remote-streams';
+import { useFloatingCard } from './use-floating-card';
 
 type TFloatingPinnedCardProps = {
 	remoteUserStreams: TRemoteStreams;

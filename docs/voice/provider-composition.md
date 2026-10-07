@@ -1,16 +1,43 @@
 # Voice provider composition
 
-The planned seven-stage voice-provider refactor is implemented. This record is
-the durable architecture contract; the original untracked
-`provider-refactor-plan.md` is preserved in the original workspace as historical
-sequencing material. Its proposed status, line counts and next-stage instructions
-are stale and no longer direct implementation. Validation is recorded separately
-in [provider-composition-validation.md](./provider-composition-validation.md).
+The voice-provider ownership refactor is implemented. This record is the durable
+architecture contract. Implementation sequencing and validation evidence live
+in the pull requests.
 
 `VoiceProvider` constructs and connects owners, controls and event adapters,
 publishes context, and renders children and the floating card. It does not
 implement acquisition, publication, recovery policy or capture teardown. This is
 composition across focused modules, rather than one replacement provider hook.
+
+## Module layout
+
+Paths below are relative to `apps/client/src/components/voice-provider/`. A
+module used by one media owner lives beside that owner's controller, React
+adapter, configuration and tests. Shared modules stay at the root; `hooks/` is
+dissolved. Tests live in their subject's adjacent `__tests__/` directory.
+
+| Folder | Contents |
+| --- | --- |
+| Root | Provider/context/types, voice controls, local stream snapshots, combined media settings, activity and transport stats, shared audio context/config, execution ownership, operation ordering, volume and floating-card UI. |
+| `microphone/` | Microphone integration and pipeline controller, lifecycle hook, capture/default-device configuration, processing/gain/WASM workers and worklets, raw-loss recovery, local activity and push-to-talk. |
+| `video/` | Webcam and screen-video controllers and hooks, screen stage/control lifecycle, quality guard, video configuration/bitrate policy and sender metadata. |
+| `share-audio/` | Share-audio controller and hook, desktop app-audio capture/worklet, recovery, PCM and queue policies. |
+| `session/` | Runtime, environment, executor adapter, command observer, transport recovery and prewarm. |
+| `remote-media/` | Remote integration, subscription ledger, transport/stream hooks, consume/repair controllers and runners, producer sweeps/event identity, and element-ref cache. |
+
+`session-execution-ownership.ts` stays at the root because session, video,
+share-audio, controls and combined settings all use its fence. Audio context and
+producer config are shared by microphone and share audio. The shared video test
+fixture stays in root `__tests__/` because combined-settings tests also use it.
+
+## Lifecycle glossary
+
+| Term | Meaning |
+| --- | --- |
+| Currency | Whether an operation still has authority to act: its owner is active and its lifecycle, operation, command and resource identities still match. Check it again after awaited work before publishing shared state. |
+| Fence | An identity or activation check that rejects obsolete work. Cleanup or supersession invalidates the old authority, so late results can release their own allocations without overwriting a successor. |
+| Lease | A captured grant of authority with an `isCurrent()` check, such as a lifecycle, execution or producer-publication lease. Holding it across an await does not guarantee that it remains current. |
+| Generation | A monotonic counter that identifies one activation, capture, publication or session attempt. Each counter belongs to its own owner; a generation from one boundary does not confer authority at another. |
 
 ## Ownership and operations
 
@@ -31,6 +58,25 @@ Construction performs no media acquisition, signaling, subscriptions or timers.
 Committed current-value getters and layout-effect owner activation precede passive
 executor work, including Strict Mode replay. Awaited operations retain lifecycle
 and operation currency checks before shared writes.
+
+## Microphone layers
+
+[`microphone/microphone-pipeline-controller.ts`](../../apps/client/src/components/voice-provider/microphone/microphone-pipeline-controller.ts)
+is the resource owner. It owns raw capture, processing and gain pipelines,
+prepared output, producer identity, activity-monitor lifetime and teardown. It
+fences asynchronous publication and bounds raw-track-loss recovery through
+injected ports.
+
+[`microphone/microphone-integration.ts`](../../apps/client/src/components/voice-provider/microphone/microphone-integration.ts)
+connects that controller to application settings, browser devices, mediasoup,
+volume events and activity reporting. It serializes microphone mutations and
+owns default-input change subscriptions and recovery decisions. Its operations
+delegate resource ownership to the pipeline controller.
+
+[`microphone/use-microphone.ts`](../../apps/client/src/components/voice-provider/microphone/use-microphone.ts)
+retains the integration and supplies committed React inputs and production
+adapters. The adjacent pipeline lifecycle hook mounts activation and cleanup;
+it does not add another resource owner.
 
 ## Public context
 
@@ -64,8 +110,8 @@ Terminal cleanup stops local capture through its owners; recovery preserves the
 appropriate capture and remote watch intent. Prepared transport parallelism,
 recovery-specific microphone decisions, immediate/delayed producer refresh and
 stale terminal-leave protection remain documented in
-[session-runtime.md](./session-runtime.md). The long-offline microphone/restore
-hang remains a separate unresolved defect, not unfinished ownership extraction.
+[session-runtime.md](./session-runtime.md), including automated recovery coverage
+and its unresolved clock-divergence limitation.
 
 ## Lifecycle corrections
 

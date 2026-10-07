@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import {
 	createMicAudioProcessingPipeline,
 	type TMicAudioProcessingPipeline,
-} from '@/components/voice-provider/mic-audio-processing';
+} from '@/components/voice-provider/microphone/mic-audio-processing';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { sendOwnVoiceStateUpdate, updateOwnVoiceState } from '@/features/server/voice/actions';
 import { useConfirmedOwnVoiceState, useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';

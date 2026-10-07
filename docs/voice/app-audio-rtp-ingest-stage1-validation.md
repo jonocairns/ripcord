@@ -91,7 +91,8 @@ Routes under test (`apps/server/src/routers/voice/`):
 
 The Electron-main sender is `apps/desktop/src/main/app-audio-rtp-sender.ts`
 (resample → Opus via `@evan/opus` → RTP+SRTP via `werift-rtp` → UDP). The client
-gate is `startNativeAppAudioIngest` in `apps/client/src/components/voice-provider/index.tsx`.
+gate is `startNativeAppAudioIngest` in
+`apps/client/src/components/voice-provider/share-audio/share-audio-controller.ts`.
 It is opt-in from the desktop app's user device settings. `VITE_VOICE_NATIVE_APP_AUDIO=true`
 or `localStorage['voice.nativeAppAudio']='true'` can still force it on for smoke tests. It falls back
 to the worklet path on older builds, blocked UDP, no first media, or the default-off rollout gate.

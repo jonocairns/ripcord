@@ -1,10 +1,10 @@
 import type { StreamKind, TRemoteProducerIds, TTransportParams, TVoiceUserState } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import type { TVoiceSessionConnectionStatus } from '@/features/server/voice/voice-session-machine';
-import type { useRemoteMediaSubscriptions } from './hooks/remote-media-subscriptions';
-import type { useLocalStreams } from './hooks/use-local-streams';
-import type { useRemoteStreams } from './hooks/use-remote-streams';
-import type { useVoiceControls } from './hooks/use-voice-controls';
+import type { useRemoteMediaSubscriptions } from './remote-media/remote-media-subscriptions';
+import type { useRemoteStreams } from './remote-media/use-remote-streams';
+import type { useLocalStreams } from './use-local-streams';
+import type { useVoiceControls } from './use-voice-controls';
 
 type AudioVideoRefs = {
 	videoRef: React.RefObject<HTMLVideoElement | null>;

@@ -1,8 +1,8 @@
 import { describe, expect, it, mock } from 'bun:test';
 import { DEFAULT_DEVICE_SETTINGS } from '../../devices-provider/migrate-device-settings';
 import { mountMediaSettingsIntegration, type TMediaSettingsInputs } from '../media-settings-integration';
-import type { TMicrophoneStartOutcome } from '../microphone-pipeline-controller';
-import { createWebcamController, mountWebcamController } from '../webcam-controller';
+import type { TMicrophoneStartOutcome } from '../microphone/microphone-pipeline-controller';
+import { createWebcamController, mountWebcamController } from '../video/webcam-controller';
 import { createCapture, createVideoFixture, deferred, flush } from './video-controller-fixture';
 
 const fixture = () => {

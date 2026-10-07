@@ -3,7 +3,7 @@ import {
 	claimVoiceSessionExecution,
 	createVoiceSessionExecutionOwnership,
 	invalidateVoiceSessionExecution,
-} from '../hooks/session-execution-ownership';
+} from '../session-execution-ownership';
 
 describe('voice session execution ownership', () => {
 	test('only the latest claimed execution remains current', () => {

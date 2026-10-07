@@ -1,7 +1,7 @@
 import { ExternalLink, Eye, EyeOff, Maximize2, Minimize2, Monitor, RefreshCw, VolumeX } from 'lucide-react';
 import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { TVisibleRemoteMedia } from '@/components/voice-provider/hooks/remote-media-subscriptions';
+import type { TVisibleRemoteMedia } from '@/components/voice-provider/remote-media/remote-media-subscriptions';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
 import { useScreenShareWatcherCount } from '@/features/server/voice/hooks';

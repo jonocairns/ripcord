@@ -1,20 +1,23 @@
 # Share-audio ownership
 
-**Status:** Implemented as stage 4 of the voice-provider refactor. This record
-describes the ownership and lifecycle contracts; implementation sequencing and
+**Status:** Implemented. This record describes the ownership and lifecycle
+contracts; implementation sequencing and
 merge-time validation notes are kept in the pull requests.
+
+The controller, React adapter, desktop app-audio modules/worklet and tests live
+together under `apps/client/src/components/voice-provider/share-audio/`.
 
 ## Production boundary
 
-`share-audio-controller.ts` is the framework-free owner of browser display
-audio, native RTP ingest, renderer worklet capture, the published audio stream,
+`share-audio/share-audio-controller.ts` is the framework-free owner of browser
+display audio, native RTP ingest, renderer worklet capture, the published audio stream,
 producer identity, desktop publish intent, subscriptions, startup timeout,
 fallback, recovery and teardown. Construction acquires no media. Dependencies
 supply the bridge, signaling, transport getter, pipeline factory, stream factory
 and publication, timers, reporting and `isScreenVideoLive()`.
 
-`use-share-audio.ts` retains one instance, supplies committed current inputs and
-production adapters, and mounts it in a layout effect. The existing desktop
+`share-audio/use-share-audio.ts` retains one instance, supplies committed current
+inputs and production adapters, and mounts it in a layout effect. The existing desktop
 recovery controller still owns its serialized recovery queue and lifecycle
 leases; its mount helper lives beside that framework-free controller. No
 session/retry policy is introduced.
@@ -72,12 +75,13 @@ and cleaned with attempt-owned IDs.
 
 ## Coverage limits
 
-`share-audio-controller.test.ts` and `native-app-audio-ingest.test.ts` import the
-production controller and mock acquisition, the desktop bridge, signaling and
+`share-audio/__tests__/share-audio-controller.test.ts` and
+`share-audio/__tests__/native-app-audio-ingest.test.ts` import the production
+controller and mock acquisition, the desktop bridge, signaling and
 transport, pipeline creation and media objects. They prove ownership and
 branching, not physical capture, SRTP encoding, UDP ingress or WebRTC media flow.
 
-The [screen-share baseline](./screen-share-baseline.md) fixture is video-only, so
-browser display-audio acquisition has no end-to-end coverage. Native RTP ingest,
+The [browser screen fixture](./video-controllers.md#browser-screen-fixture) is
+video-only, so browser display-audio acquisition has no end-to-end coverage. Native RTP ingest,
 the renderer worklet with real sidecar capture, system loopback and OS
 permission flows need packaged desktop smoke tests on each platform.

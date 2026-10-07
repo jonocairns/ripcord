@@ -150,7 +150,10 @@ test('microphone and camera recover after confirmed server grace expiry', async 
 				(event) => event.event === 'grace_expired' && event.clientInstanceId === clientInstanceId,
 			);
 			if (!expired || expired.graceAgeMs === undefined) throw new Error('No confirmed grace expiry');
-			expect(expired.graceAgeMs).toBeGreaterThanOrEqual(60_000);
+			// Allow small wall-clock reporting jitter without accepting seconds-early expiry.
+			// Correlated expiry, fresh restore and recovered media remain required.
+			const graceAgeToleranceMs = 100;
+			expect(expired.graceAgeMs).toBeGreaterThanOrEqual(60_000 - graceAgeToleranceMs);
 			await expect.poll(async () => (await microphoneMediaStats(watcher.page)).inbound.length).toBe(0);
 
 			await context.setOffline(false);

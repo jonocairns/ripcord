@@ -64,7 +64,7 @@ transport cleanup remain with their existing owners. See
 [provider-composition.md](./provider-composition.md).
 
 The implementation lives in
-`apps/client/src/components/voice-provider/hooks/remote-media-subscriptions.ts`.
+`apps/client/src/components/voice-provider/remote-media/remote-media-subscriptions.ts`.
 
 ## State model
 
@@ -191,9 +191,9 @@ a second cancellation model.
 
 Keep focused coverage in:
 
-- `apps/client/src/components/voice-provider/__tests__/remote-media-subscriptions.test.ts`
-- `apps/client/src/components/voice-provider/hooks/__tests__/remote-media-consume-controller.test.ts`
-- `apps/client/src/components/voice-provider/__tests__/voice-reconnect-restore.test.ts`
+- `apps/client/src/components/voice-provider/remote-media/__tests__/remote-media-subscriptions.test.ts`
+- `apps/client/src/components/voice-provider/remote-media/__tests__/remote-media-consume-controller.test.ts`
+- `apps/client/src/components/voice-provider/remote-media/__tests__/voice-reconnect-restore.test.ts`
 - the consume and repair runner hook tests
 
 Tests should cover stop-vs-consume races, producer replacement, screen-audio

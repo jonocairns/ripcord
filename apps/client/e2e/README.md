@@ -6,8 +6,8 @@ normal development database. Most specs cover voice and WebRTC recovery; `text-c
 attachments.
 
 `--disable-audio-output` replaces the OS output stream while preserving Chromium's audio processing and WebRTC.
-Muting alone still opens the host audio backend. The long-offline microphone acquisition investigation and its
-fail–pass–fail comparison are recorded in [reconnect-validation.md](../../../docs/voice/reconnect-validation.md).
+Muting alone still opens the host audio backend. The host-output acquisition finding, recovery coverage and
+unresolved grace-clock divergence are documented in [session-runtime.md](../../../docs/voice/session-runtime.md#automated-recovery-coverage).
 These tests do not prove physical playback or native device behavior.
 
 From the repository root:
