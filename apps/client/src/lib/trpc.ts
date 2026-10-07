@@ -18,6 +18,7 @@ import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-de
 import { resetServerScreens } from '@/features/server-screens/actions';
 import { clearAuthToken, getAuthToken } from '@/helpers/storage';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
+import { createSessionAuthenticationGate } from './session-authentication-gate';
 import { markSocketCloseEventIgnored, shouldIgnoreSocketCloseEvent } from './websocket-close-ignore';
 import {
 	getWsReconnectOpenAction,
@@ -32,6 +33,7 @@ let teardownTimer: ReturnType<typeof setTimeout> | null = null;
 let onWsReconnect: (() => void) | null = null;
 let cachedClientInstanceId: string | null = null;
 let deferredWsReconnectOnlineListener: (() => void) | null = null;
+const sessionAuthentication = createSessionAuthenticationGate();
 
 // How long to keep silently reconnecting before tearing the app down to the
 // disconnect screen. Generous (Discord-style: keep trying, don't hard-fail) so a
@@ -118,6 +120,7 @@ const clearDeferredWsReconnectOnlineListener = () => {
 };
 
 const initializeTRPC = (host: string) => {
+	sessionAuthentication.invalidate();
 	const runtimeServerUrl = getRuntimeServerConfig().serverUrl;
 	const serverProtocol = runtimeServerUrl ? new URL(runtimeServerUrl).protocol : window.location.protocol;
 	const protocol = serverProtocol === 'https:' ? 'wss' : 'ws';
@@ -142,6 +145,7 @@ const initializeTRPC = (host: string) => {
 			if (shouldIgnoreSocketCloseEvent(cause)) {
 				return;
 			}
+			sessionAuthentication.invalidate();
 
 			clearDeferredWsReconnectOnlineListener();
 
@@ -211,6 +215,7 @@ const initializeTRPC = (host: string) => {
 			teardownTimer = setTimeout(runTeardown, RETRY_GRACE_PERIOD_MS);
 		},
 		onOpen: () => {
+			sessionAuthentication.invalidate();
 			const resumeReconnect = () => {
 				const pendingTeardownTimer = teardownTimer;
 
@@ -332,6 +337,17 @@ const getTRPCClient = () => {
 
 const getTRPCClientIfInitialized = () => trpc;
 
+const markTRPCSessionAuthenticated = (client: ReturnType<typeof createTRPCProxyClient<AppRouter>>) => {
+	if (client === trpc && isTRPCSocketOpen()) sessionAuthentication.authenticate();
+};
+
+const waitForTRPCSessionAuthentication = (signal: AbortSignal): Promise<void> => {
+	if (!trpc) return Promise.reject(new TRPCClientUnavailableError());
+	// close() changes readyState before its close event invalidates the gate.
+	if (!isTRPCSocketOpen()) sessionAuthentication.invalidate();
+	return sessionAuthentication.wait(signal);
+};
+
 const isTRPCSocketOpen = () =>
 	typeof WebSocket !== 'undefined' && wsClient?.connection?.ws?.readyState === WebSocket.OPEN;
 
@@ -348,6 +364,7 @@ const debugCloseCurrentWs = (opts: { code?: number; reason?: string } = {}) => {
 };
 
 const cleanup = (opts: { clearAuth?: boolean; ignoreSocketCloseEvent?: boolean; skipSocketClose?: boolean } = {}) => {
+	sessionAuthentication.cancel(new TRPCClientUnavailableError());
 	clearDeferredWsReconnectOnlineListener();
 
 	if (teardownTimer) {
@@ -391,7 +408,9 @@ export {
 	getTRPCClientIfInitialized,
 	getWsClientInstanceId,
 	isTRPCSocketOpen,
+	markTRPCSessionAuthenticated,
 	reconnectTRPC,
 	setOnWsReconnect,
 	TRPCClientUnavailableError,
+	waitForTRPCSessionAuthentication,
 };

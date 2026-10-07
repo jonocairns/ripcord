@@ -11,7 +11,7 @@ import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-
 import { logDebug, logVoice, reportError } from '@/helpers/browser-logger';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
-import { getTRPCClient, getWsClientInstanceId } from '@/lib/trpc';
+import { getTRPCClient, getWsClientInstanceId, waitForTRPCSessionAuthentication } from '@/lib/trpc';
 import { setCurrentVoiceChannelId, setSelectedChannelId } from '../channels/actions';
 import { currentVoiceChannelIdSelector, selectedChannelIdSelector } from '../channels/selectors';
 import { useServerStore } from '../slice';
@@ -38,6 +38,7 @@ type TLeaveVoiceOptions = {
 const pendingVoiceSwitchFromChannelIds: Set<number> = new Set();
 const completedVoiceSwitchFromChannelIds: Set<number> = new Set();
 const pendingJoinAbortControllers: Set<AbortController> = new Set();
+const pendingLeaveAuthenticationControllers: Set<AbortController> = new Set();
 let voiceSessionMutationQueue: Promise<void> = Promise.resolve();
 let joinVoiceGeneration = 0;
 let voiceSessionMutationSeq = 0;
@@ -86,6 +87,8 @@ const resetVoiceSwitchState = (): void => {
 export const __resetVoiceSwitchStateForTests = (): void => {
 	resetVoiceSwitchState();
 	pendingJoinAbortControllers.clear();
+	for (const controller of pendingLeaveAuthenticationControllers) controller.abort();
+	pendingLeaveAuthenticationControllers.clear();
 	voiceSessionMutationQueue = Promise.resolve();
 	joinVoiceGeneration = 0;
 	voiceSessionMutationSeq = 0;
@@ -457,6 +460,9 @@ export const joinVoice = (
 		silent?: boolean;
 	} = {},
 ): Promise<TJoinVoiceResult> => {
+	// A leave still waiting for the replacement socket must not later evict
+	// this new session. Already-sent leaves retain mutation-queue ordering.
+	for (const controller of pendingLeaveAuthenticationControllers) controller.abort();
 	// A manual join replaces reconnect intent. Invalidate the recovery command
 	// before enqueuing the join so an in-flight restore is aborted and cannot
 	// later enqueue a terminal leave behind the user's new session.
@@ -508,21 +514,29 @@ const leaveVoiceMutation = (options: { suppressErrors?: boolean }): Promise<bool
 	// the leave reach the server without waiting for a superseded request.
 	joinVoiceGeneration += 1;
 	const mutationSeq = (voiceSessionMutationSeq += 1);
+	const authenticationController = new AbortController();
+	pendingLeaveAuthenticationControllers.add(authenticationController);
 	for (const abortController of pendingJoinAbortControllers) {
 		abortController.abort();
 	}
 
 	const result = (async () => {
-		const client = getTRPCClient();
-
 		try {
+			// A queued mutation on a replacement socket otherwise runs before
+			// joinServer, fails UNAUTHORIZED, and leaves the adopted seat behind.
+			await waitForTRPCSessionAuthentication(authenticationController.signal);
+			if (authenticationController.signal.aborted) return false;
+			pendingLeaveAuthenticationControllers.delete(authenticationController);
+			const client = getTRPCClient();
 			await client.voice.leave.mutate({ mutationSeq });
 			return true;
 		} catch (error) {
-			if (!options.suppressErrors) {
+			if (!options.suppressErrors && !authenticationController.signal.aborted) {
 				toast.error(getTrpcError(error, 'Failed to leave voice channel'));
 			}
 			return false;
+		} finally {
+			pendingLeaveAuthenticationControllers.delete(authenticationController);
 		}
 	})();
 	voiceSessionMutationQueue = result.then(
