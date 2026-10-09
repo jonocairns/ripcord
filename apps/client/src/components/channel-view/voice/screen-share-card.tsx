@@ -501,6 +501,7 @@ const ScreenShareCard = memo(
 						>
 							<PopoutWindowControls
 								windowName={popoutWindowName}
+								title={`${user.name}'s screen`}
 								onClose={handleClosePopout}
 								isFullscreen={isPopoutFullscreen}
 								onToggleFullscreen={handleTogglePopoutFullscreen}

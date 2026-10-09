@@ -8,6 +8,7 @@ import { POPOUT_BUTTON_STYLE } from './popout-control-styles';
 
 type TPopoutWindowControlsProps = {
 	windowName: string;
+	title: string;
 	isFullscreen: boolean;
 	onToggleFullscreen: () => void;
 	onClose: () => void;
@@ -15,7 +16,7 @@ type TPopoutWindowControlsProps = {
 };
 
 const PopoutWindowControls = memo(
-	({ windowName, isFullscreen, onToggleFullscreen, onClose, children }: TPopoutWindowControlsProps) => {
+	({ windowName, title, isFullscreen, onToggleFullscreen, onClose, children }: TPopoutWindowControlsProps) => {
 		// The portal runs in the opener. Route native controls through its trusted
 		// bridge with the popout name, so they never act on the main window.
 		const desktopBridge = getDesktopBridge();
@@ -29,14 +30,15 @@ const PopoutWindowControls = memo(
 		};
 
 		return (
-			<>
-				{controlPopoutWindow && !isFullscreen && <div className="ripcord-popout-drag-region" aria-hidden="true" />}
-				<fieldset
-					ref={controlsRef}
-					className="ripcord-popout-controls"
-					data-visible={visible}
-					aria-label="Pop-out controls"
-				>
+			// Frameless Electron popouts use this bar as their title bar. It stays
+			// draggable while faded out, so users can always move the window.
+			<div
+				className="ripcord-popout-titlebar"
+				data-visible={visible}
+				data-draggable={Boolean(controlPopoutWindow) && !isFullscreen}
+			>
+				{controlPopoutWindow && <span className="ripcord-popout-title">{title}</span>}
+				<fieldset ref={controlsRef} className="ripcord-popout-controls" aria-label="Pop-out controls">
 					<fieldset className="ripcord-popout-control-group" aria-label="Playback controls">
 						{children}
 						<button
@@ -99,7 +101,7 @@ const PopoutWindowControls = memo(
 						</fieldset>
 					)}
 				</fieldset>
-			</>
+			</div>
 		);
 	},
 );

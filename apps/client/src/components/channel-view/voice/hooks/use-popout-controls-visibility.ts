@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPopoutControlsVisibility } from '../popout-controls-visibility';
 
-const IDLE_HIDE_MS = 2500;
+const IDLE_HIDE_MS = 1500;
 
 const usePopoutControlsVisibility = () => {
 	const [controlsElement, setControlsElement] = useState<HTMLElement | null>(null);

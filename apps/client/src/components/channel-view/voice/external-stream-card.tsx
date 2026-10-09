@@ -542,6 +542,7 @@ const ExternalStreamCard = memo(
 						>
 							<PopoutWindowControls
 								windowName={popoutWindowName}
+								title={stream.title || 'External Stream'}
 								onClose={handleClosePopout}
 								isFullscreen={isPopoutFullscreen}
 								onToggleFullscreen={handleTogglePopoutFullscreen}

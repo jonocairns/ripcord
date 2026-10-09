@@ -27,26 +27,61 @@ const POPOUT_STYLES = `
 		padding: 0;
 		border: 0;
 	}
-	.ripcord-popout-controls {
+	.ripcord-popout-titlebar {
 		position: absolute;
-		top: 12px;
-		right: 12px;
+		top: 0;
+		left: 0;
+		right: 0;
 		z-index: 20;
+		box-sizing: border-box;
+		display: flex;
+		align-items: flex-start;
+		gap: 12px;
+		min-height: 64px;
+		padding: 12px;
+		background: rgba(10, 12, 20, 0.85);
+		backdrop-filter: blur(16px);
+		border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 350ms ease-out;
+		user-select: none;
+	}
+	.ripcord-popout-titlebar[data-visible="true"],
+	.ripcord-popout-titlebar:hover,
+	.ripcord-popout-titlebar:focus-within {
+		opacity: 1;
+		transition-duration: 120ms;
+	}
+	.ripcord-popout-titlebar[data-draggable="true"] {
+		pointer-events: auto;
+		-webkit-app-region: drag;
+	}
+	.ripcord-popout-title {
+		flex: 1;
+		min-width: 0;
+		align-self: center;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font: 600 14px system-ui, sans-serif;
+		text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+	}
+	.ripcord-popout-controls {
 		display: flex;
 		align-items: center;
 		justify-content: flex-end;
 		flex-wrap: wrap;
 		gap: 8px;
-		max-width: calc(100% - 24px);
-		opacity: 0;
+		max-width: 100%;
+		margin-left: auto;
 		pointer-events: none;
-		transition: opacity 140ms ease;
 		-webkit-app-region: no-drag;
 	}
-	.ripcord-popout-controls[data-visible="true"],
+	.ripcord-popout-titlebar[data-visible="true"] .ripcord-popout-controls,
 	.ripcord-popout-controls:hover,
 	.ripcord-popout-controls:focus-within {
-		opacity: 1;
 		pointer-events: auto;
 	}
 	.ripcord-popout-control-group {
@@ -62,19 +97,11 @@ const POPOUT_STYLES = `
 		outline: 2px solid white;
 		outline-offset: 3px;
 	}
-	.ripcord-popout-drag-region {
-		position: absolute;
-		top: 0;
-		left: 0;
-		right: 0;
-		height: 64px;
-		z-index: 10;
-		user-select: none;
-		-webkit-app-region: drag;
-	}
 	@media (hover: none) {
-		.ripcord-popout-controls {
+		.ripcord-popout-titlebar {
 			opacity: 1;
+		}
+		.ripcord-popout-controls {
 			pointer-events: auto;
 		}
 	}
