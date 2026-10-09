@@ -517,6 +517,7 @@ const ScreenShareCard = memo(
 							</PopoutWindowControls>
 							<video
 								ref={setPopoutVideoElement}
+								onDoubleClick={handleTogglePopoutFullscreen}
 								autoPlay
 								playsInline
 								style={{

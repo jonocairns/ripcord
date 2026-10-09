@@ -619,6 +619,9 @@ const createMainWindow = async () => {
 			};
 			childWindow.on('maximize', emitPopoutWindowState);
 			childWindow.on('unmaximize', emitPopoutWindowState);
+			// Native title bar drags send no pointer events to the renderer. Report
+			// moves so the pop-out treats dragging as activity and keeps its controls.
+			childWindow.on('move', emitPopoutWindowState);
 			childWindow.once('closed', () => {
 				if (mediaPopoutWindows.get(details.frameName) === childWindow) {
 					mediaPopoutWindows.delete(details.frameName);

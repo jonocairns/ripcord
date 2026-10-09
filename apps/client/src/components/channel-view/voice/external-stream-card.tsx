@@ -22,7 +22,6 @@ import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { type StreamStats, useStreamStats } from './hooks/use-stream-stats';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
-import { POPOUT_ENABLE_AUDIO_BUTTON_STYLE } from './popout-control-styles';
 import { PopoutVolumePanel } from './popout-volume-panel';
 import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
 import { PopoutWindowControls } from './popout-window-controls';
@@ -561,15 +560,16 @@ const ExternalStreamCard = memo(
 											onClick={enablePopoutAudio}
 											title="Enable stream audio"
 											aria-label="Enable stream audio"
-											style={POPOUT_ENABLE_AUDIO_BUTTON_STYLE}
+											className="ripcord-popout-button ripcord-popout-text-button"
 										>
-											<Volume2 size={16} />
+											<Volume2 size={14} strokeWidth={1.5} />
 											Enable Audio
 										</button>
 									))}
 							</PopoutWindowControls>
 							<video
 								ref={setPopoutVideoElement}
+								onDoubleClick={handleTogglePopoutFullscreen}
 								autoPlay
 								muted={!hasAudio || isMuted || !isPopoutAudioEnabled}
 								playsInline

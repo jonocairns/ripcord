@@ -1,10 +1,9 @@
-import { ArrowDownLeft, Copy, Maximize2, Minimize2, Minus, Square, X } from 'lucide-react';
+import { ArrowDownLeft, Maximize2, Minimize2, Minus, Square, X } from 'lucide-react';
 import { memo, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { usePopoutControlsVisibility } from './hooks/use-popout-controls-visibility';
 import { usePopoutWindowState } from './hooks/use-popout-window-state';
-import { POPOUT_BUTTON_STYLE } from './popout-control-styles';
 
 type TPopoutWindowControlsProps = {
 	windowName: string;
@@ -22,7 +21,7 @@ const PopoutWindowControls = memo(
 		const desktopBridge = getDesktopBridge();
 		const controlPopoutWindow = desktopBridge?.controlPopoutWindow;
 		const isMaximized = usePopoutWindowState(windowName);
-		const { visible, controlsRef } = usePopoutControlsVisibility();
+		const { visible, controlsRef } = usePopoutControlsVisibility(windowName);
 		const handleWindowAction = (action: 'minimize' | 'toggle-maximize') => {
 			void controlPopoutWindow?.(windowName, action).catch(() => {
 				toast.error('Could not update the pop-out window.');
@@ -46,9 +45,9 @@ const PopoutWindowControls = memo(
 							onClick={onToggleFullscreen}
 							title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
 							aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-							style={POPOUT_BUTTON_STYLE}
+							className="ripcord-popout-button"
 						>
-							{isFullscreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
+							{isFullscreen ? <Minimize2 size={14} strokeWidth={1.5} /> : <Maximize2 size={14} strokeWidth={1.5} />}
 						</button>
 						{!desktopBridge && (
 							<button
@@ -56,9 +55,9 @@ const PopoutWindowControls = memo(
 								onClick={onClose}
 								title="Return to app"
 								aria-label="Return to app"
-								style={POPOUT_BUTTON_STYLE}
+								className="ripcord-popout-button"
 							>
-								<ArrowDownLeft size={20} />
+								<ArrowDownLeft size={14} strokeWidth={1.5} />
 							</button>
 						)}
 					</fieldset>
@@ -74,18 +73,33 @@ const PopoutWindowControls = memo(
 										onClick={() => handleWindowAction('minimize')}
 										title="Minimize window"
 										aria-label="Minimize window"
-										style={POPOUT_BUTTON_STYLE}
+										className="ripcord-popout-button"
 									>
-										<Minus size={20} />
+										<Minus size={14} strokeWidth={1.2} />
 									</button>
 									<button
 										type="button"
 										onClick={() => handleWindowAction('toggle-maximize')}
 										title={isMaximized ? 'Restore window' : 'Maximize window'}
 										aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
-										style={POPOUT_BUTTON_STYLE}
+										className="ripcord-popout-button"
 									>
-										{isMaximized ? <Copy size={18} /> : <Square size={18} />}
+										{isMaximized ? (
+											<svg
+												viewBox="0 0 12 12"
+												width={12}
+												height={12}
+												fill="none"
+												stroke="currentColor"
+												strokeWidth="1.2"
+												aria-hidden="true"
+											>
+												<rect x="4" y="1" width="7" height="7" />
+												<rect x="1" y="4" width="7" height="7" />
+											</svg>
+										) : (
+											<Square size={12} strokeWidth={1.2} />
+										)}
 									</button>
 								</>
 							)}
@@ -94,9 +108,9 @@ const PopoutWindowControls = memo(
 								onClick={onClose}
 								title="Close pop-out"
 								aria-label="Close pop-out"
-								style={POPOUT_BUTTON_STYLE}
+								className="ripcord-popout-button ripcord-popout-close-button"
 							>
-								<X size={20} />
+								<X size={16} strokeWidth={1.5} />
 							</button>
 						</fieldset>
 					)}

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
+import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { createPopoutControlsVisibility } from '../popout-controls-visibility';
 
 const IDLE_HIDE_MS = 1500;
 
-const usePopoutControlsVisibility = () => {
+const usePopoutControlsVisibility = (windowName: string) => {
 	const [controlsElement, setControlsElement] = useState<HTMLElement | null>(null);
 	const [visible, setVisible] = useState(true);
 
@@ -29,10 +30,16 @@ const usePopoutControlsVisibility = () => {
 		controlsElement.addEventListener('focusin', visibility.reveal);
 		controlsElement.addEventListener('focusout', visibility.reveal);
 		popoutWindow.addEventListener('focus', visibility.reveal);
+		// Native window events (moves while dragging the title bar, maximize and
+		// restore) bypass the renderer's pointer events, so count them as activity.
+		const unsubscribeWindowState = getDesktopBridge()?.subscribePopoutWindowState?.((state) => {
+			if (state.windowName === windowName) visibility.reveal();
+		});
 		visibility.reveal();
 
 		return () => {
 			visibility.dispose();
+			unsubscribeWindowState?.();
 			surface.removeEventListener('pointermove', visibility.reveal);
 			surface.removeEventListener('pointerdown', visibility.reveal);
 			controlsElement.removeEventListener('pointerleave', visibility.reveal);
@@ -40,7 +47,7 @@ const usePopoutControlsVisibility = () => {
 			controlsElement.removeEventListener('focusout', visibility.reveal);
 			popoutWindow.removeEventListener('focus', visibility.reveal);
 		};
-	}, [controlsElement]);
+	}, [controlsElement, windowName]);
 
 	return { visible, controlsRef: setControlsElement };
 };

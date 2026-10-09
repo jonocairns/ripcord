@@ -33,16 +33,11 @@ const POPOUT_STYLES = `
 		left: 0;
 		right: 0;
 		z-index: 20;
-		box-sizing: border-box;
 		display: flex;
-		align-items: flex-start;
-		gap: 12px;
-		min-height: 64px;
-		padding: 12px;
-		background: rgba(10, 12, 20, 0.85);
-		backdrop-filter: blur(16px);
-		border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+		align-items: stretch;
+		min-height: 32px;
+		background: oklch(0.125 0.012 285);
+		color: oklch(0.74 0.014 286);
 		opacity: 0;
 		pointer-events: none;
 		transition: opacity 350ms ease-out;
@@ -62,18 +57,20 @@ const POPOUT_STYLES = `
 		flex: 1;
 		min-width: 0;
 		align-self: center;
+		padding: 0 14px;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font: 600 14px system-ui, sans-serif;
-		text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+		font-size: 11px;
+		font-weight: 900;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
 	}
 	.ripcord-popout-controls {
 		display: flex;
-		align-items: center;
+		align-items: stretch;
 		justify-content: flex-end;
 		flex-wrap: wrap;
-		gap: 8px;
 		max-width: 100%;
 		margin-left: auto;
 		pointer-events: none;
@@ -86,16 +83,64 @@ const POPOUT_STYLES = `
 	}
 	.ripcord-popout-control-group {
 		display: flex;
-		align-items: center;
-		gap: 8px;
+		align-items: stretch;
 	}
 	.ripcord-popout-window-controls {
-		border-left: 1px solid rgba(255, 255, 255, 0.4);
-		padding-left: 12px;
+		border-left: 1px solid rgba(255, 255, 255, 0.08);
+	}
+	.ripcord-popout-button {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		width: 46px;
+		min-height: 32px;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		font-size: 12px;
+		cursor: default;
+		transition: background-color 140ms ease-in-out, color 140ms ease-in-out;
+	}
+	.ripcord-popout-button:hover {
+		background: oklch(0.97 0.005 286 / 0.07);
+		color: oklch(0.97 0.005 286);
+	}
+	.ripcord-popout-button:active {
+		background: oklch(0.97 0.005 286 / 0.12);
+	}
+	.ripcord-popout-close-button:hover {
+		background: oklch(0.704 0.191 22.216);
+		color: #ffffff;
+	}
+	.ripcord-popout-text-button {
+		width: auto;
+		padding: 0 12px;
+	}
+	.ripcord-popout-small-button {
+		width: 28px;
+		min-height: 24px;
+	}
+	.ripcord-popout-volume-panel {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 0 10px 0 6px;
+	}
+	.ripcord-popout-volume-panel input {
+		width: 88px;
+		cursor: pointer;
+	}
+	.ripcord-popout-volume-panel span {
+		width: 32px;
+		text-align: right;
+		font-size: 11px;
 	}
 	.ripcord-popout-controls :focus-visible {
 		outline: 2px solid white;
-		outline-offset: 3px;
+		outline-offset: -2px;
 	}
 	@media (hover: none) {
 		.ripcord-popout-titlebar {
