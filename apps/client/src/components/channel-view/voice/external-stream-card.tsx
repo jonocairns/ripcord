@@ -10,7 +10,7 @@ import {
 	Video,
 	Volume2,
 } from 'lucide-react';
-import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
@@ -22,8 +22,9 @@ import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { type StreamStats, useStreamStats } from './hooks/use-stream-stats';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
+import { PopoutVolumePanel } from './popout-volume-panel';
 import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
-import { POPOUT_ENABLE_AUDIO_BUTTON_STYLE, PopoutVolumePanel, PopoutWindowControls } from './popout-window-controls';
+import { PopoutWindowControls } from './popout-window-controls';
 import { StreamSettingsPopover } from './stream-settings-popover';
 import { VoiceSurface } from './voice-surface';
 
@@ -118,8 +119,6 @@ type TExternalStreamCardProps = {
 	onRetryAudio?: () => void;
 };
 
-const POPOUT_CONTROLS_IDLE_HIDE_MS = 2500;
-
 const ExternalStreamCard = memo(
 	({
 		streamId,
@@ -139,7 +138,6 @@ const ExternalStreamCard = memo(
 		const [popoutVideoElement, setPopoutVideoElement] = useState<HTMLVideoElement | null>(null);
 		const [isPopoutFullscreen, setIsPopoutFullscreen] = useState(false);
 		const [isPopoutAudioEnabled, setIsPopoutAudioEnabled] = useState(false);
-		const [showPopoutWindowControls, setShowPopoutWindowControls] = useState(true);
 		const {
 			externalVideoRef,
 			hasExternalVideoStream,
@@ -175,7 +173,6 @@ const ExternalStreamCard = memo(
 			() => `external-stream-${stream.pluginId}-${stream.key}`,
 			[stream.pluginId, stream.key],
 		);
-		const hidePopoutWindowControlsTimeoutRef = useRef<number | null>(null);
 		const { controlsVisible: fullscreenControlsVisible, trackPointerActivity } = useFullscreenIdleControls({
 			isFullscreen,
 		});
@@ -239,25 +236,6 @@ const ExternalStreamCard = memo(
 			},
 			[enablePopoutAudio, setVolume, volumeKey],
 		);
-
-		const clearPopoutControlsHideTimeout = useCallback(() => {
-			if (hidePopoutWindowControlsTimeoutRef.current === null) {
-				return;
-			}
-
-			window.clearTimeout(hidePopoutWindowControlsTimeoutRef.current);
-			hidePopoutWindowControlsTimeoutRef.current = null;
-		}, []);
-
-		const revealPopoutWindowControls = useCallback(() => {
-			setShowPopoutWindowControls(true);
-			clearPopoutControlsHideTimeout();
-
-			hidePopoutWindowControlsTimeoutRef.current = window.setTimeout(() => {
-				setShowPopoutWindowControls(false);
-				hidePopoutWindowControlsTimeoutRef.current = null;
-			}, POPOUT_CONTROLS_IDLE_HIDE_MS);
-		}, [clearPopoutControlsHideTimeout]);
 
 		const handleTogglePopout = useCallback(() => {
 			if (isPoppedOut) {
@@ -344,10 +322,8 @@ const ExternalStreamCard = memo(
 
 			setIsPoppedOut(false);
 			setIsPopoutAudioEnabled(false);
-			clearPopoutControlsHideTimeout();
-			setShowPopoutWindowControls(true);
 			setPopoutWindow(null);
-		}, [clearPopoutControlsHideTimeout, hasVideo]);
+		}, [hasVideo]);
 
 		useEffect(() => {
 			if (hasAudio) {
@@ -356,23 +332,6 @@ const ExternalStreamCard = memo(
 
 			setIsPopoutAudioEnabled(false);
 		}, [hasAudio]);
-
-		useEffect(() => {
-			if (!isPoppedOut) {
-				clearPopoutControlsHideTimeout();
-				setShowPopoutWindowControls(true);
-				setIsPopoutFullscreen(false);
-				return;
-			}
-
-			revealPopoutWindowControls();
-		}, [clearPopoutControlsHideTimeout, isPoppedOut, revealPopoutWindowControls]);
-
-		useEffect(() => {
-			return () => {
-				clearPopoutControlsHideTimeout();
-			};
-		}, [clearPopoutControlsHideTimeout]);
 
 		useEffect(() => {
 			if (!isPoppedOut || !popoutVideoElement) {
@@ -418,52 +377,17 @@ const ExternalStreamCard = memo(
 			}
 
 			const popoutDocument = popoutVideoElement.ownerDocument;
-			const activePopoutWindow = popoutDocument.defaultView;
-
-			if (!activePopoutWindow) {
-				return;
-			}
-
-			const handlePopoutMouseMove = () => {
-				if (!popoutDocument.hasFocus()) {
-					return;
-				}
-
-				revealPopoutWindowControls();
-			};
-
-			const handlePopoutFocus = () => {
-				revealPopoutWindowControls();
-			};
-
-			const handlePopoutBlur = () => {
-				clearPopoutControlsHideTimeout();
-				setShowPopoutWindowControls(false);
-			};
-
 			const handlePopoutFullscreenChange = () => {
 				setIsPopoutFullscreen(!!popoutDocument.fullscreenElement);
 			};
 
-			popoutDocument.addEventListener('mousemove', handlePopoutMouseMove);
 			popoutDocument.addEventListener('fullscreenchange', handlePopoutFullscreenChange);
-			activePopoutWindow.addEventListener('focus', handlePopoutFocus);
-			activePopoutWindow.addEventListener('blur', handlePopoutBlur);
 			handlePopoutFullscreenChange();
 
-			if (popoutDocument.hasFocus()) {
-				revealPopoutWindowControls();
-			} else {
-				setShowPopoutWindowControls(false);
-			}
-
 			return () => {
-				popoutDocument.removeEventListener('mousemove', handlePopoutMouseMove);
 				popoutDocument.removeEventListener('fullscreenchange', handlePopoutFullscreenChange);
-				activePopoutWindow.removeEventListener('focus', handlePopoutFocus);
-				activePopoutWindow.removeEventListener('blur', handlePopoutBlur);
 			};
-		}, [clearPopoutControlsHideTimeout, isPoppedOut, popoutVideoElement, revealPopoutWindowControls]);
+		}, [isPoppedOut, popoutVideoElement]);
 
 		return (
 			<>
@@ -593,6 +517,7 @@ const ExternalStreamCard = memo(
 					targetWindow={popoutWindow}
 				>
 					<div
+						className="ripcord-popout-surface"
 						style={{
 							width: '100%',
 							height: '100%',
@@ -605,32 +530,6 @@ const ExternalStreamCard = memo(
 					>
 						<div
 							style={{
-								display: 'flex',
-								alignItems: 'center',
-								gap: '8px',
-								padding: '6px 12px',
-								backgroundColor: '#18181b',
-								borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
-								flexShrink: 0,
-								minWidth: 0,
-							}}
-						>
-							<Router size={14} style={{ flexShrink: 0, color: '#a78bfa' }} />
-							<span
-								style={{
-									fontSize: '13px',
-									fontWeight: 500,
-									whiteSpace: 'nowrap',
-									overflow: 'hidden',
-									textOverflow: 'ellipsis',
-								}}
-							>
-								{stream.title || 'External Stream'}
-							</span>
-						</div>
-
-						<div
-							style={{
 								position: 'relative',
 								display: 'flex',
 								alignItems: 'center',
@@ -641,7 +540,9 @@ const ExternalStreamCard = memo(
 							}}
 						>
 							<PopoutWindowControls
-								visible={showPopoutWindowControls}
+								windowName={popoutWindowName}
+								title={stream.title || 'External Stream'}
+								onClose={handleClosePopout}
 								isFullscreen={isPopoutFullscreen}
 								onToggleFullscreen={handleTogglePopoutFullscreen}
 							>
@@ -659,15 +560,16 @@ const ExternalStreamCard = memo(
 											onClick={enablePopoutAudio}
 											title="Enable stream audio"
 											aria-label="Enable stream audio"
-											style={POPOUT_ENABLE_AUDIO_BUTTON_STYLE}
+											className="ripcord-popout-button ripcord-popout-text-button"
 										>
-											<Volume2 size={16} />
+											<Volume2 size={14} strokeWidth={1.5} />
 											Enable Audio
 										</button>
 									))}
 							</PopoutWindowControls>
 							<video
 								ref={setPopoutVideoElement}
+								onDoubleClick={handleTogglePopoutFullscreen}
 								autoPlay
 								muted={!hasAudio || isMuted || !isPopoutAudioEnabled}
 								playsInline

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+	validateControlPopoutWindowArgs,
 	validateDesktopQuitFlushResultArgs,
+	validateGetPopoutWindowStateArgs,
 	validateListAppAudioTargetsArgs,
 	validatePrepareScreenShareArgs,
 	validateSetGlobalPushKeybindsArgs,
@@ -10,6 +12,34 @@ import {
 	validateStartAppAudioRtpArgs,
 	validateStopAppAudioCaptureArgs,
 } from '../ipc-validators';
+
+void describe('validateGetPopoutWindowStateArgs', () => {
+	void it('accepts a named window and rejects missing, malformed, or oversized names', () => {
+		assert.deepEqual(validateGetPopoutWindowStateArgs(['screen-share-1']), ['screen-share-1']);
+		for (const name of [undefined, null, 42, '', ' ', 'x'.repeat(513)]) {
+			assert.throws(() => validateGetPopoutWindowStateArgs([name]), /windowName/);
+		}
+	});
+});
+
+void describe('validateControlPopoutWindowArgs', () => {
+	void it('accepts supported actions for a named popout', () => {
+		assert.deepEqual(validateControlPopoutWindowArgs(['screen-share-1', 'minimize']), ['screen-share-1', 'minimize']);
+		assert.deepEqual(validateControlPopoutWindowArgs(['external-stream-plugin-key', 'toggle-maximize']), [
+			'external-stream-plugin-key',
+			'toggle-maximize',
+		]);
+	});
+
+	void it('rejects missing, malformed, or oversized names and unsupported actions', () => {
+		for (const name of [undefined, null, 42, '', ' ', 'x'.repeat(513)]) {
+			assert.throws(() => validateControlPopoutWindowArgs([name, 'minimize']), /windowName/);
+		}
+		for (const action of [undefined, null, 42, 'close', 'maximize']) {
+			assert.throws(() => validateControlPopoutWindowArgs(['screen-share-1', action]), /action/);
+		}
+	});
+});
 
 void describe('validateSetServerUrlArgs', () => {
 	void it('accepts empty string (clears the setting)', () => {

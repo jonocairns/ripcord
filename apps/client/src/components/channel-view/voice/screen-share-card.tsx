@@ -1,5 +1,5 @@
 import { ExternalLink, Eye, EyeOff, Maximize2, Minimize2, Monitor, RefreshCw, VolumeX } from 'lucide-react';
-import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import type { TVisibleRemoteMedia } from '@/components/voice-provider/remote-media/remote-media-subscriptions';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
@@ -14,8 +14,9 @@ import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { useStreamStats } from './hooks/use-stream-stats';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
+import { PopoutVolumePanel } from './popout-volume-panel';
 import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
-import { PopoutVolumePanel, PopoutWindowControls } from './popout-window-controls';
+import { PopoutWindowControls } from './popout-window-controls';
 import { buildCombinedScreenShareStream } from './screen-share-stream';
 import { StreamSettingsPopover } from './stream-settings-popover';
 import { VoiceSurface } from './voice-surface';
@@ -101,8 +102,6 @@ type TScreenShareCardProps = {
 	onStopWatching?: () => void;
 };
 
-const POPOUT_CONTROLS_IDLE_HIDE_MS = 2500;
-
 const ScreenShareCard = memo(
 	({
 		userId,
@@ -131,7 +130,6 @@ const ScreenShareCard = memo(
 		const [isPoppedOut, setIsPoppedOut] = useState(false);
 		const [popoutWindow, setPopoutWindow] = useState<Window | null>(null);
 		const [isPopoutFullscreen, setIsPopoutFullscreen] = useState(false);
-		const [showPopoutWindowControls, setShowPopoutWindowControls] = useState(true);
 		const {
 			screenShareRef,
 			screenShareAudioRef,
@@ -163,7 +161,6 @@ const ScreenShareCard = memo(
 			getCursor,
 			resetZoom,
 		} = useScreenShareZoom();
-		const hidePopoutWindowControlsTimeoutRef = useRef<number | null>(null);
 		const popoutWindowName = useMemo(() => `screen-share-${userId}`, [userId]);
 		const { controlsVisible: fullscreenControlsVisible, trackPointerActivity } = useFullscreenIdleControls({
 			isFullscreen,
@@ -258,25 +255,6 @@ const ScreenShareCard = memo(
 			[setVolume, volumeKey],
 		);
 
-		const clearPopoutControlsHideTimeout = useCallback(() => {
-			if (hidePopoutWindowControlsTimeoutRef.current === null) {
-				return;
-			}
-
-			window.clearTimeout(hidePopoutWindowControlsTimeoutRef.current);
-			hidePopoutWindowControlsTimeoutRef.current = null;
-		}, []);
-
-		const revealPopoutWindowControls = useCallback(() => {
-			setShowPopoutWindowControls(true);
-			clearPopoutControlsHideTimeout();
-
-			hidePopoutWindowControlsTimeoutRef.current = window.setTimeout(() => {
-				setShowPopoutWindowControls(false);
-				hidePopoutWindowControlsTimeoutRef.current = null;
-			}, POPOUT_CONTROLS_IDLE_HIDE_MS);
-		}, [clearPopoutControlsHideTimeout]);
-
 		useEffect(() => {
 			const handleFullscreenChange = () => {
 				setIsFullscreen(document.fullscreenElement === containerRef.current);
@@ -289,23 +267,6 @@ const ScreenShareCard = memo(
 				document.removeEventListener('fullscreenchange', handleFullscreenChange);
 			};
 		}, [containerRef]);
-
-		useEffect(() => {
-			if (!isPoppedOut) {
-				clearPopoutControlsHideTimeout();
-				setShowPopoutWindowControls(true);
-				setIsPopoutFullscreen(false);
-				return;
-			}
-
-			revealPopoutWindowControls();
-		}, [clearPopoutControlsHideTimeout, isPoppedOut, revealPopoutWindowControls]);
-
-		useEffect(() => {
-			return () => {
-				clearPopoutControlsHideTimeout();
-			};
-		}, [clearPopoutControlsHideTimeout]);
 
 		useEffect(() => {
 			const popoutVideo = popoutVideoElement;
@@ -347,53 +308,17 @@ const ScreenShareCard = memo(
 			}
 
 			const popoutDocument = popoutVideoElement.ownerDocument;
-			const popoutWindow = popoutDocument.defaultView;
-
-			if (!popoutWindow) {
-				return;
-			}
-
-			const handlePopoutMouseMove = () => {
-				if (!popoutDocument.hasFocus()) {
-					return;
-				}
-
-				revealPopoutWindowControls();
-			};
-
-			const handlePopoutFocus = () => {
-				revealPopoutWindowControls();
-			};
-
-			const handlePopoutBlur = () => {
-				clearPopoutControlsHideTimeout();
-				setShowPopoutWindowControls(false);
-			};
-
 			const handlePopoutFullscreenChange = () => {
 				setIsPopoutFullscreen(!!popoutDocument.fullscreenElement);
 			};
 
-			popoutDocument.addEventListener('mousemove', handlePopoutMouseMove);
 			popoutDocument.addEventListener('fullscreenchange', handlePopoutFullscreenChange);
-			popoutWindow.addEventListener('focus', handlePopoutFocus);
-			popoutWindow.addEventListener('blur', handlePopoutBlur);
-
 			handlePopoutFullscreenChange();
 
-			if (popoutDocument.hasFocus()) {
-				revealPopoutWindowControls();
-			} else {
-				setShowPopoutWindowControls(false);
-			}
-
 			return () => {
-				popoutDocument.removeEventListener('mousemove', handlePopoutMouseMove);
 				popoutDocument.removeEventListener('fullscreenchange', handlePopoutFullscreenChange);
-				popoutWindow.removeEventListener('focus', handlePopoutFocus);
-				popoutWindow.removeEventListener('blur', handlePopoutBlur);
 			};
-		}, [clearPopoutControlsHideTimeout, isPoppedOut, popoutVideoElement, revealPopoutWindowControls]);
+		}, [isPoppedOut, popoutVideoElement]);
 
 		useEffect(() => {
 			if (hasScreenShareStream) {
@@ -552,6 +477,7 @@ const ScreenShareCard = memo(
 					targetWindow={popoutWindow}
 				>
 					<div
+						className="ripcord-popout-surface"
 						style={{
 							width: '100%',
 							height: '100%',
@@ -564,32 +490,6 @@ const ScreenShareCard = memo(
 					>
 						<div
 							style={{
-								display: 'flex',
-								alignItems: 'center',
-								gap: '8px',
-								padding: '6px 12px',
-								backgroundColor: '#18181b',
-								borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
-								flexShrink: 0,
-								minWidth: 0,
-							}}
-						>
-							<Monitor size={14} style={{ flexShrink: 0, color: '#a78bfa' }} />
-							<span
-								style={{
-									fontSize: '13px',
-									fontWeight: 500,
-									whiteSpace: 'nowrap',
-									overflow: 'hidden',
-									textOverflow: 'ellipsis',
-								}}
-							>
-								{user.name}'s screen
-							</span>
-						</div>
-
-						<div
-							style={{
 								position: 'relative',
 								display: 'flex',
 								alignItems: 'center',
@@ -600,7 +500,9 @@ const ScreenShareCard = memo(
 							}}
 						>
 							<PopoutWindowControls
-								visible={showPopoutWindowControls}
+								windowName={popoutWindowName}
+								title={`${user.name}'s screen`}
+								onClose={handleClosePopout}
 								isFullscreen={isPopoutFullscreen}
 								onToggleFullscreen={handleTogglePopoutFullscreen}
 							>
@@ -615,6 +517,7 @@ const ScreenShareCard = memo(
 							</PopoutWindowControls>
 							<video
 								ref={setPopoutVideoElement}
+								onDoubleClick={handleTogglePopoutFullscreen}
 								autoPlay
 								playsInline
 								style={{

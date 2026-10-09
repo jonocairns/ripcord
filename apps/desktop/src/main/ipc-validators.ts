@@ -1,3 +1,4 @@
+import type { TPopoutWindowAction } from './media-popout-windows';
 import type {
 	TAppAudioRtpTarget,
 	TDesktopErrorReportingConfig,
@@ -100,6 +101,19 @@ const validateSetServerUrlArgs = (args: unknown[]): [string] => {
 	}
 
 	return [serverUrl];
+};
+
+const validateControlPopoutWindowArgs = (args: unknown[]): [string, TPopoutWindowAction] => {
+	const windowName = assertNonEmptyString(args[0], 'windowName', MAX_ID_LENGTH);
+	const action = args[1];
+	if (action !== 'minimize' && action !== 'toggle-maximize') {
+		return fail('action must be minimize or toggle-maximize');
+	}
+	return [windowName, action];
+};
+
+const validateGetPopoutWindowStateArgs = (args: unknown[]): [string] => {
+	return [assertNonEmptyString(args[0], 'windowName', MAX_ID_LENGTH)];
 };
 
 const validateListAppAudioTargetsArgs = (args: unknown[]): [string | undefined] => {
@@ -238,7 +252,9 @@ const validateDesktopQuitFlushResultArgs = (args: unknown[]): [TDesktopQuitFlush
 
 export {
 	validateConfigureErrorReportingArgs,
+	validateControlPopoutWindowArgs,
 	validateDesktopQuitFlushResultArgs,
+	validateGetPopoutWindowStateArgs,
 	validateListAppAudioTargetsArgs,
 	validatePrepareScreenShareArgs,
 	validateSetGlobalPushKeybindsArgs,
