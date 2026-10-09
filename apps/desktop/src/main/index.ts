@@ -20,7 +20,9 @@ import { captureSidecarManager } from './capture-sidecar-manager';
 import { configureMainErrorReporting } from './error-reporting';
 import {
 	validateConfigureErrorReportingArgs,
+	validateControlPopoutWindowArgs,
 	validateDesktopQuitFlushResultArgs,
+	validateGetPopoutWindowStateArgs,
 	validateListAppAudioTargetsArgs,
 	validatePrepareScreenShareArgs,
 	validateSetGlobalPushKeybindsArgs,
@@ -29,6 +31,7 @@ import {
 	validateStartAppAudioRtpArgs,
 	validateStopAppAudioCaptureArgs,
 } from './ipc-validators';
+import { controlPopoutWindow, getPopoutWindowState, isMediaPopoutWindowName } from './media-popout-windows';
 import { classifyMainFrameNavigationUrl } from './navigation-policy';
 import { isPermissionAllowed } from './permission-policy';
 import { getDesktopCapabilities, resolvePreparedScreenAudioMode } from './platform-capabilities';
@@ -71,6 +74,7 @@ const DESKTOP_QUIT_FLUSH_TIMEOUT_MS = 2_000;
 const DESKTOP_DEBUG_IPC_ENABLED = Boolean(TRUSTED_RENDERER_URL);
 const USES_CUSTOM_TITLEBAR = process.platform === 'win32' || process.platform === 'linux';
 let mainWindow: BrowserWindow | null = null;
+const mediaPopoutWindows = new Map<string, BrowserWindow>();
 let mainWindowOpening = false;
 let appAudioFrameEgressPort: MessagePortMain | undefined;
 // When set, native RTP ingest owns the sidecar PCM egress: PCM is encoded and
@@ -553,13 +557,14 @@ const createMainWindow = async () => {
 		});
 	});
 
-	mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+	mainWindow.webContents.setWindowOpenHandler(({ url, frameName }) => {
 		const policy = classifyWindowOpenUrl(url);
 
 		if (policy.action === 'allow') {
 			return {
 				action: 'allow',
 				overrideBrowserWindowOptions: {
+					...(isMediaPopoutWindowName(frameName) ? { frame: false, minWidth: 320, minHeight: 180 } : {}),
 					icon,
 					autoHideMenuBar: true,
 					backgroundColor: '#000000',
@@ -603,6 +608,23 @@ const createMainWindow = async () => {
 
 		childWindow.setAutoHideMenuBar(true);
 		childWindow.setMenuBarVisibility(false);
+		if (isMediaPopoutWindowName(details.frameName)) {
+			mediaPopoutWindows.set(details.frameName, childWindow);
+			const emitPopoutWindowState = () => {
+				if (childWindow.isDestroyed()) return;
+				sendToRenderer('desktop:popout-window-state-changed', {
+					windowName: details.frameName,
+					isMaximized: childWindow.isMaximized(),
+				});
+			};
+			childWindow.on('maximize', emitPopoutWindowState);
+			childWindow.on('unmaximize', emitPopoutWindowState);
+			childWindow.once('closed', () => {
+				if (mediaPopoutWindows.get(details.frameName) === childWindow) {
+					mediaPopoutWindows.delete(details.frameName);
+				}
+			});
+		}
 	});
 
 	if (TRUSTED_RENDERER_URL) {
@@ -753,6 +775,30 @@ const registerIpcHandlers = () => {
 		const window = BrowserWindow.fromWebContents(event.sender);
 		window?.close();
 	});
+
+	// about:blank popouts do not pass the renderer URL trust check. The opener
+	// controls only its registered media windows through its existing bridge.
+	handleTrusted(
+		'desktop:get-popout-window-state',
+		(event, windowName) => {
+			if (event.sender !== mainWindow?.webContents) {
+				throw new Error('Only the main renderer can read pop-out window state');
+			}
+			return getPopoutWindowState(mediaPopoutWindows, windowName);
+		},
+		validateGetPopoutWindowStateArgs,
+	);
+
+	handleTrusted(
+		'desktop:control-popout-window',
+		(event, windowName, action) => {
+			if (event.sender !== mainWindow?.webContents) {
+				throw new Error('Only the main renderer can control pop-out windows');
+			}
+			controlPopoutWindow(mediaPopoutWindows, windowName, action);
+		},
+		validateControlPopoutWindowArgs,
+	);
 
 	handleTrusted(
 		'desktop:set-server-url',

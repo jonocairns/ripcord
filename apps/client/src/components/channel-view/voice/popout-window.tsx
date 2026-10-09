@@ -18,6 +18,68 @@ const DEFAULT_WINDOW_FEATURES =
 
 const ROOT_ID = 'sharkord-popout-root';
 
+// Popouts have their own document, so application styles do not reach the
+// portal. Keep overlay positioning and hover/focus behavior together here.
+const POPOUT_STYLES = `
+	.ripcord-popout-controls, .ripcord-popout-control-group {
+		min-inline-size: 0;
+		margin: 0;
+		padding: 0;
+		border: 0;
+	}
+	.ripcord-popout-controls {
+		position: absolute;
+		top: 12px;
+		right: 12px;
+		z-index: 20;
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		flex-wrap: wrap;
+		gap: 8px;
+		max-width: calc(100% - 24px);
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 140ms ease;
+		-webkit-app-region: no-drag;
+	}
+	.ripcord-popout-controls[data-visible="true"],
+	.ripcord-popout-controls:hover,
+	.ripcord-popout-controls:focus-within {
+		opacity: 1;
+		pointer-events: auto;
+	}
+	.ripcord-popout-control-group {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.ripcord-popout-window-controls {
+		border-left: 1px solid rgba(255, 255, 255, 0.4);
+		padding-left: 12px;
+	}
+	.ripcord-popout-controls :focus-visible {
+		outline: 2px solid white;
+		outline-offset: 3px;
+	}
+	.ripcord-popout-drag-region {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		height: 64px;
+		z-index: 10;
+		user-select: none;
+		-webkit-app-region: drag;
+	}
+	@media (hover: none) {
+		.ripcord-popout-controls {
+			opacity: 1;
+			pointer-events: auto;
+		}
+	}
+`;
+
 const syncPopoutIcons = (targetWindow: Window) => {
 	const sourceIcons = Array.from(
 		window.document.querySelectorAll<HTMLLinkElement>("link[rel~='icon'], link[rel='apple-touch-icon']"),
@@ -55,12 +117,12 @@ const syncPopoutIcons = (targetWindow: Window) => {
 	});
 };
 
-const setupPopoutDocument = (targetWindow: Window, title: string): HTMLDivElement => {
+const setupPopoutDocument = (targetWindow: Window, title: string): HTMLElement => {
 	const popoutDocument = targetWindow.document;
 	popoutDocument.title = title;
 	syncPopoutIcons(targetWindow);
 
-	let root = popoutDocument.getElementById(ROOT_ID) as HTMLDivElement | null;
+	let root = popoutDocument.getElementById(ROOT_ID);
 
 	if (!root) {
 		popoutDocument.body.style.margin = '0';
@@ -73,6 +135,9 @@ const setupPopoutDocument = (targetWindow: Window, title: string): HTMLDivElemen
 		root.id = ROOT_ID;
 		root.style.height = '100vh';
 		root.style.width = '100vw';
+		const style = popoutDocument.createElement('style');
+		style.textContent = POPOUT_STYLES;
+		popoutDocument.head.appendChild(style);
 
 		popoutDocument.body.appendChild(root);
 	}
@@ -93,7 +158,7 @@ const PopoutWindow = memo(
 		preserveOnUnmount = false,
 	}: TPopoutWindowProps) => {
 		const popoutWindowRef = useRef<Window | null>(null);
-		const [container, setContainer] = useState<HTMLDivElement | null>(null);
+		const [container, setContainer] = useState<HTMLElement | null>(null);
 
 		useEffect(() => {
 			if (!isOpen) {

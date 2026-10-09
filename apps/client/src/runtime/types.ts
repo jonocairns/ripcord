@@ -201,6 +201,9 @@ export type TDesktopBridge = {
 	minimizeWindow?: () => Promise<void>;
 	toggleMaximizeWindow?: () => Promise<void>;
 	closeWindow?: () => Promise<void>;
+	controlPopoutWindow?: (windowName: string, action: 'minimize' | 'toggle-maximize') => Promise<void>;
+	getPopoutWindowState?: (windowName: string) => Promise<TPopoutWindowState>;
+	subscribePopoutWindowState?: (callback: (state: TPopoutWindowState) => void) => () => void;
 	setServerUrl: (serverUrl: string) => Promise<void>;
 	getCapabilities: () => Promise<TDesktopCapabilities>;
 	getSystemIdleSeconds: () => Promise<number>;
@@ -231,4 +234,9 @@ export type TDesktopBridge = {
 	subscribeBeforeQuit: (cb: () => void | Promise<void>) => () => void;
 	debugRequestBeforeQuitFlush?: () => Promise<TDesktopQuitFlushResult>;
 	prepareScreenShare: (selection: TDesktopScreenShareSelection) => Promise<TResolvedScreenAudioMode>;
+};
+
+export type TPopoutWindowState = {
+	windowName: string;
+	isMaximized: boolean;
 };

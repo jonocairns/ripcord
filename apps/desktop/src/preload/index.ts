@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { TPopoutWindowAction, TPopoutWindowState } from '../main/media-popout-windows';
 import type {
 	TAppAudioFrame,
 	TAppAudioPcmFrame,
@@ -393,6 +394,15 @@ const desktopBridge = {
 	minimizeWindow: (): Promise<void> => ipcRenderer.invoke('desktop:minimize-window'),
 	toggleMaximizeWindow: (): Promise<void> => ipcRenderer.invoke('desktop:toggle-maximize-window'),
 	closeWindow: (): Promise<void> => ipcRenderer.invoke('desktop:close-window'),
+	controlPopoutWindow: (windowName: string, action: TPopoutWindowAction): Promise<void> =>
+		ipcRenderer.invoke('desktop:control-popout-window', windowName, action),
+	getPopoutWindowState: (windowName: string): Promise<TPopoutWindowState> =>
+		ipcRenderer.invoke('desktop:get-popout-window-state', windowName),
+	subscribePopoutWindowState: (callback: (state: TPopoutWindowState) => void) => {
+		const listener = (_event: unknown, state: TPopoutWindowState) => callback(state);
+		ipcRenderer.on('desktop:popout-window-state-changed', listener);
+		return () => ipcRenderer.removeListener('desktop:popout-window-state-changed', listener);
+	},
 	setServerUrl: (serverUrl: string): Promise<void> => ipcRenderer.invoke('desktop:set-server-url', serverUrl),
 	getCapabilities: () => ipcRenderer.invoke('desktop:get-capabilities'),
 	getSystemIdleSeconds: (): Promise<number> => ipcRenderer.invoke('desktop:get-system-idle-seconds'),
