@@ -87,7 +87,7 @@ const createDiagnosticLog = (options: TDiagnosticLogOptions) => {
 	let fileBytes: number | undefined;
 	const append = async (line: string): Promise<void> => {
 		if (fileBytes === undefined) {
-			await mkdir(options.directory, { recursive: true });
+			await mkdir(options.directory, { recursive: true, mode: 0o700 });
 			try {
 				fileBytes = (await stat(filePath)).size;
 			} catch (error) {

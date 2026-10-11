@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { resolveDesktopCaptureCapabilities } from '../capture-capabilities';
 import { CaptureSidecarManager, toPcmAppAudioFrame } from '../capture-sidecar-manager';
+import { createDiagnosticLog } from '../diagnostic-log';
 import { getDesktopCapabilitiesForPlatform, resolvePreparedScreenAudioMode } from '../platform-capabilities';
 import type { TAppAudioFrame, TAppAudioPcmFrame, TAppAudioStatusEvent, TDesktopPushKeybindEvent } from '../types';
 
@@ -566,14 +569,81 @@ void describe('CaptureSidecarManager', () => {
 
 			await manager.dispose();
 
-			// Give the process 'exit' event time to fire after the kill.
-			await new Promise((resolve) => {
-				setTimeout(resolve, 150);
-			});
-
 			assert.equal(crashEvents.length, 0);
 		} finally {
 			offCrash();
+			await manager.dispose();
+		}
+	});
+
+	void it('persists final lifecycle and stderr diagnostics before shutdown resolves', async () => {
+		const directory = await mkdtemp(path.join(tmpdir(), 'ripcord-sidecar-shutdown-'));
+		const log = createDiagnosticLog({ directory, appVersion: 'test', platform: process.platform, homeDirectory: '' });
+		const manager = new CaptureSidecarManager({
+			spawnSidecar: () =>
+				spawn(process.execPath, [fakeSidecarPath], {
+					stdio: ['pipe', 'pipe', 'pipe'],
+					env: {
+						...process.env,
+						FAKE_SIDECAR_SHUTDOWN_DELAY_MS: '50',
+						FAKE_SIDECAR_SHUTDOWN_STDERR: 'sidecar shutdown complete\nfinal shutdown fragment',
+					},
+				}),
+		});
+		manager.onDiagnostic((message) => {
+			void log.write({ event: 'sidecar_stderr', level: 'info', data: { message } });
+		});
+		manager.onLifecycle((event) => {
+			void log.write({ event: 'sidecar_lifecycle', level: 'info', data: event });
+		});
+		try {
+			assert.equal((await manager.getStatus()).available, true);
+			await manager.startAppAudioCapture({ sourceId: 'window:1:0' });
+			await manager.dispose();
+			await log.flush();
+			const records = (await readFile(path.join(directory, 'diagnostics.jsonl'), 'utf8'))
+				.trim()
+				.split('\n')
+				.map((line) => JSON.parse(line));
+			assert.ok(records.some((record) => record.event === 'sidecar_lifecycle' && record.data.kind === 'exit'));
+			assert.ok(records.some((record) => record.data.message === 'sidecar shutdown complete'));
+			assert.ok(records.some((record) => record.data.message === 'final shutdown fragment'));
+			assert.equal(records.filter((record) => record.data.kind === 'exit').length, 1);
+			assert.match(records.find((record) => record.data.kind === 'exit')?.data.reason ?? '', /code=0/);
+		} finally {
+			await manager.dispose();
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	void it('force-stops a stalled shutdown within the deadline without restarting', async () => {
+		let spawnCount = 0;
+		const manager = new CaptureSidecarManager({
+			shutdownTimeoutMs: 200,
+			restartDelayMs: 10,
+			spawnSidecar: () => {
+				spawnCount += 1;
+				return spawn(process.execPath, [fakeSidecarPath], {
+					stdio: ['pipe', 'pipe', 'pipe'],
+					env: { ...process.env, FAKE_SIDECAR_HANG_ON_SHUTDOWN: 'true' },
+				});
+			},
+		});
+		const exitReasons: string[] = [];
+		manager.onLifecycle((event) => {
+			if (event.kind === 'exit' && event.reason) exitReasons.push(event.reason);
+		});
+		try {
+			assert.equal((await manager.getStatus()).available, true);
+			const startedAt = Date.now();
+			const disposal = manager.dispose();
+			assert.equal(manager.dispose(), disposal);
+			await disposal;
+			assert.ok(Date.now() - startedAt < 1_500);
+			assert.equal(exitReasons.length, 1);
+			assert.equal((await manager.getStatus()).available, false);
+			assert.equal(spawnCount, 1);
+		} finally {
 			await manager.dispose();
 		}
 	});

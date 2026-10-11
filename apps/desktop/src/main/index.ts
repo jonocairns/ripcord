@@ -66,6 +66,12 @@ import { resolveWindowSizing } from './window-size';
 import { getWindowSize, setWindowSize } from './window-size-store';
 import { installYoutubeEmbedRefererHandler } from './youtube-embed-referrer';
 
+// Preview configuration has already selected userData. Only its owning
+// process may write settings or rotate the shared diagnostic files.
+if (!app.requestSingleInstanceLock()) {
+	app.exit(0);
+}
+
 let diagnosticLog: ReturnType<typeof createDiagnosticLog> | undefined;
 const recordMainDiagnostic = (event: string, data?: unknown, level: 'info' | 'warn' | 'error' = 'info'): void => {
 	void diagnosticLog?.write({ event, level, data });
@@ -96,6 +102,7 @@ let displayMediaUsesSystemPicker = false;
 let appIsShuttingDown = false;
 let desktopQuitFlushInterceptInProgress = false;
 let desktopQuitFlushCompleted = false;
+let rendererQuitFlushResult: TDesktopQuitFlushResult | undefined;
 let resolveDesktopQuitFlush: ((result: TDesktopQuitFlushResult) => void) | undefined;
 
 const sendToRenderer = (channel: string, ...args: unknown[]): boolean => {
@@ -210,11 +217,11 @@ const emitWindowControlsState = () => {
 	sendToRenderer('desktop:window-controls-state-changed', getWindowControlsState());
 };
 
-const disposeDesktopServicesForShutdown = () => {
+const disposeDesktopServicesForShutdown = async (): Promise<void> => {
 	stopAppAudioRtpSender();
 	disposeAppAudioFrameEgressPort();
 	desktopUpdater.dispose();
-	void captureSidecarManager.dispose();
+	await captureSidecarManager.dispose();
 };
 
 const completeDesktopQuitFlush = (result: TDesktopQuitFlushResult) => {
@@ -510,7 +517,7 @@ const createMainWindow = async () => {
 
 			if (process.platform !== 'darwin' || appIsShuttingDown) {
 				appIsShuttingDown = true;
-				desktopQuitFlushCompleted = true;
+				rendererQuitFlushResult = result;
 				app.quit();
 				return;
 			}
@@ -1052,6 +1059,27 @@ const configureGpuCommandLineSwitches = () => {
 
 configureGpuCommandLineSwitches();
 
+const showMainWindow = () => {
+	if (appIsShuttingDown) return;
+	if (mainWindow && !mainWindow.isDestroyed()) {
+		if (mainWindow.isMinimized()) mainWindow.restore();
+		mainWindow.show();
+		mainWindow.focus();
+		return;
+	}
+	if (!app.isReady() || mainWindowOpening) return;
+	mainWindowOpening = true;
+	void createMainWindow()
+		.catch((error) => {
+			console.error('[desktop] Failed to create main window', error);
+		})
+		.finally(() => {
+			mainWindowOpening = false;
+		});
+};
+
+app.on('second-instance', showMainWindow);
+
 void app
 	.whenReady()
 	.then(async () => {
@@ -1141,24 +1169,18 @@ void app
 		setupDisplayMediaHandler();
 		setupYoutubeEmbedRefererHandler();
 		setupRendererCspHandler();
-		await createMainWindow();
+		mainWindowOpening = true;
+		try {
+			await createMainWindow();
+		} finally {
+			mainWindowOpening = false;
+		}
 		requestDesktopCapabilitiesRefresh({
 			broadcast: true,
 			forceBroadcast: true,
 		});
 
-		app.on('activate', () => {
-			if (BrowserWindow.getAllWindows().length === 0 && !mainWindowOpening) {
-				mainWindowOpening = true;
-				void createMainWindow()
-					.catch((error) => {
-						console.error('[desktop] Failed to create main window', error);
-					})
-					.finally(() => {
-						mainWindowOpening = false;
-					});
-			}
-		});
+		app.on('activate', showMainWindow);
 	})
 	.catch((error) => {
 		console.error('[desktop] Failed to initialize app', error);
@@ -1174,7 +1196,6 @@ app.on('before-quit', (event) => {
 	appIsShuttingDown = true;
 
 	if (desktopQuitFlushCompleted) {
-		disposeDesktopServicesForShutdown();
 		return;
 	}
 
@@ -1187,8 +1208,11 @@ app.on('before-quit', (event) => {
 	desktopQuitFlushInterceptInProgress = true;
 
 	void (async () => {
-		const result = await requestDesktopQuitFlush();
+		const result = rendererQuitFlushResult ?? (await requestDesktopQuitFlush());
 		recordMainDiagnostic('desktop_quit_flush', result);
+		await disposeDesktopServicesForShutdown().catch((error: unknown) => {
+			recordMainDiagnostic('desktop_shutdown_failed', { error }, 'error');
+		});
 		// Give accepted diagnostics a bounded chance to reach disk while the
 		// renderer's leave confirmation is still available. Disk stalls cannot
 		// prevent quitting.

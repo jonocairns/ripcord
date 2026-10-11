@@ -10,15 +10,19 @@ user-data directory. For the installed app this is normally:
 Preview builds use their own user-data directory. Logging starts at app startup
 and does not require a Sentry DSN or tracing configuration. Existing console
 output and Sentry error reporting continue to work.
+Each user-data directory has one running desktop instance. Launching another
+copy focuses the existing window, so only one process rotates its log files.
 
 The active file rotates at 2 MiB with four retained archives, named
 `diagnostics.jsonl.1` through `.4`. Records are capped at 8 KiB and writes use a
 bounded, ordered queue. Oversized data is replaced by a truncation marker;
 main-process queue drops or failed writes are counted on the next accepted event.
 The renderer limits outstanding writes to 128 and drops additional events.
-Disk failures
-do not interrupt media or recovery. Quit waits at most one second for accepted
-writes after the renderer's voice-leave flush.
+Disk failures do not interrupt media or recovery. After the renderer's voice-leave
+flush, quit gives the sidecar up to one second to shut down and drain its output,
+force-stopping it halfway through that deadline if necessary. It then waits at
+most one second for accepted diagnostic writes, including the final sidecar
+events. New diagnostic directories are private to the user on POSIX systems.
 
 Every record includes UTC time, desktop version, platform, and a process-session
 ID. Renderer voice logs, command attempts and outcomes, WebSocket closes/opens,

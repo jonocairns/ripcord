@@ -332,7 +332,20 @@ rl.on('line', (line) => {
 
 rl.on('close', () => {
 	stopSession();
-	process.exit(0);
+	if (parseBooleanEnv(process.env.FAKE_SIDECAR_HANG_ON_SHUTDOWN)) {
+		setInterval(() => {}, 1_000);
+		return;
+	}
+	const shutdownDelayMs = Number(process.env.FAKE_SIDECAR_SHUTDOWN_DELAY_MS || 0);
+	setTimeout(() => {
+		const shutdownMessage = process.env.FAKE_SIDECAR_SHUTDOWN_STDERR;
+		if (!shutdownMessage) {
+			process.exit(0);
+		}
+		process.stderr.write(shutdownMessage, () => {
+			process.exit(0);
+		});
+	}, shutdownDelayMs);
 });
 
 if (crashAfterMs > 0) {

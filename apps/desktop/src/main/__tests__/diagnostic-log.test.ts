@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -15,6 +15,18 @@ const createLog = (directory: string, maxFileBytes?: number) =>
 	});
 
 void describe('desktop diagnostics', () => {
+	void it('creates private diagnostic directories and files on POSIX systems', async () => {
+		if (process.platform === 'win32') return;
+		const directory = await mkdtemp(path.join(tmpdir(), 'ripcord-diagnostics-'));
+		try {
+			const logsDirectory = path.join(directory, 'logs');
+			await createLog(logsDirectory).write({ event: 'desktop_started', level: 'info' });
+			assert.equal((await stat(logsDirectory)).mode & 0o777, 0o700);
+			assert.equal((await stat(path.join(logsDirectory, 'diagnostics.jsonl'))).mode & 0o777, 0o600);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	void it('redacts credentials and private payloads while retaining correlation IDs and errors', () => {
 		assert.deepEqual(
 			sanitizeDiagnosticData(

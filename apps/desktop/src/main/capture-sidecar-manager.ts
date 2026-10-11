@@ -103,6 +103,7 @@ type TAppAudioBinaryEgressInfo = {
 
 type TCaptureSidecarManagerOptions = {
 	restartDelayMs?: number;
+	shutdownTimeoutMs?: number;
 	resolveBinaryPath?: () => string | undefined;
 	spawnSidecar?: () => ChildProcessWithoutNullStreams;
 };
@@ -440,8 +441,9 @@ const toPcmAppAudioFrame = (frame: TAppAudioFrame): TAppAudioPcmFrame | undefine
 
 class CaptureSidecarManager {
 	private sidecarProcess: ChildProcessWithoutNullStreams | undefined;
+	private sidecarClosePromise: Promise<void> | undefined;
+	private disposePromise: Promise<void> | undefined;
 	private stdoutBuffer = '';
-	private stderrBuffer = '';
 	private requestId = 0;
 	private pendingRequests = new Map<string, TPendingRequest>();
 	private activeSessionId: string | undefined;
@@ -463,11 +465,13 @@ class CaptureSidecarManager {
 	private appAudioBinaryEgressUnsupported = false;
 	private readonly events = new EventEmitter();
 	private readonly restartDelayMs: number;
+	private readonly shutdownTimeoutMs: number;
 	private readonly resolveBinaryPathOverride: (() => string | undefined) | undefined;
 	private readonly spawnSidecarOverride: (() => ChildProcessWithoutNullStreams) | undefined;
 
 	constructor(options: TCaptureSidecarManagerOptions = {}) {
 		this.restartDelayMs = options.restartDelayMs ?? 1_000;
+		this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? 1_000;
 		this.resolveBinaryPathOverride = options.resolveBinaryPath;
 		this.spawnSidecarOverride = options.spawnSidecar;
 	}
@@ -613,16 +617,36 @@ class CaptureSidecarManager {
 		return expectSidecarResult(response, isGlobalPushKeybindRegistrationResult, 'push_keybinds.set');
 	}
 
-	async dispose() {
+	dispose(): Promise<void> {
+		if (this.disposePromise) return this.disposePromise;
 		this.shuttingDown = true;
 		clearTimeout(this.restartTimer);
-
-		await this.stopAppAudioCapture();
 		this.closeAppAudioBinaryEgressSocket();
 
-		if (this.sidecarProcess && !this.sidecarProcess.killed) {
-			this.sidecarProcess.kill();
-		}
+		const processRef = this.sidecarProcess;
+		const closed = this.sidecarClosePromise;
+		if (!closed) return Promise.resolve();
+
+		this.disposePromise = new Promise<void>((resolve) => {
+			// EOF runs the native sidecar's shutdown routine. Reserve half the
+			// deadline for draining output after a stalled process is force-stopped.
+			const killTimeout = setTimeout(() => {
+				if (processRef && processRef.exitCode === null && processRef.signalCode === null) {
+					processRef.kill('SIGKILL');
+				}
+			}, this.shutdownTimeoutMs / 2);
+			const finish = () => {
+				clearTimeout(killTimeout);
+				clearTimeout(closeTimeout);
+				resolve();
+			};
+			const closeTimeout = setTimeout(finish, this.shutdownTimeoutMs);
+			void closed.then(finish);
+			if (processRef && !processRef.killed && processRef.stdin.writable) {
+				processRef.stdin.end();
+			}
+		});
+		return this.disposePromise;
 	}
 
 	private getCandidatePaths() {
@@ -662,6 +686,26 @@ class CaptureSidecarManager {
 	private setupProcessListeners(processRef: ChildProcessWithoutNullStreams) {
 		processRef.stdout.setEncoding('utf8');
 		processRef.stderr.setEncoding('utf8');
+		let stderrBuffer = '';
+		const recordStderr = (line: string) => {
+			if (!line) return;
+			console.info('[capture-sidecar]', line);
+			this.events.emit('diagnostic', line);
+			this.recentStderrLines.push(line);
+			if (this.recentStderrLines.length > SIDECAR_STDERR_TAIL_LINES) {
+				this.recentStderrLines.shift();
+			}
+		};
+		this.sidecarClosePromise = new Promise<void>((resolve) => {
+			processRef.once('close', () => {
+				recordStderr(stderrBuffer.trim());
+				stderrBuffer = '';
+				resolve();
+			});
+		});
+		processRef.stdin.on('error', (error: Error) => {
+			recordStderr(`Capture sidecar stdin error: ${error.message}`);
+		});
 
 		processRef.stdout.on('data', (chunk: string) => {
 			this.stdoutBuffer += chunk;
@@ -680,24 +724,20 @@ class CaptureSidecarManager {
 		});
 
 		processRef.stderr.on('data', (chunk: string) => {
-			this.stderrBuffer += chunk;
+			stderrBuffer += chunk;
 
-			let newlineIndex = this.stderrBuffer.indexOf('\n');
+			let newlineIndex = stderrBuffer.indexOf('\n');
 			while (newlineIndex >= 0) {
-				const line = this.stderrBuffer.slice(0, newlineIndex).trim();
-				this.stderrBuffer = this.stderrBuffer.slice(newlineIndex + 1);
+				const line = stderrBuffer.slice(0, newlineIndex).trim();
+				stderrBuffer = stderrBuffer.slice(newlineIndex + 1);
+				recordStderr(line);
 
-				if (line) {
-					console.info('[capture-sidecar]', line);
-					this.events.emit('diagnostic', line);
-					this.recentStderrLines.push(line);
-					if (this.recentStderrLines.length > SIDECAR_STDERR_TAIL_LINES) {
-						this.recentStderrLines.shift();
-					}
-				}
-
-				newlineIndex = this.stderrBuffer.indexOf('\n');
+				newlineIndex = stderrBuffer.indexOf('\n');
 			}
+		});
+		processRef.stderr.once('end', () => {
+			recordStderr(stderrBuffer.trim());
+			stderrBuffer = '';
 		});
 
 		processRef.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
@@ -716,7 +756,6 @@ class CaptureSidecarManager {
 
 			this.sidecarProcess = processRef;
 			this.stdoutBuffer = '';
-			this.stderrBuffer = '';
 			this.recentStderrLines = [];
 			this.setupProcessListeners(processRef);
 			return;
@@ -735,12 +774,12 @@ class CaptureSidecarManager {
 
 		this.sidecarProcess = processRef;
 		this.stdoutBuffer = '';
-		this.stderrBuffer = '';
 		this.recentStderrLines = [];
 		this.setupProcessListeners(processRef);
 	}
 
 	private async ensureSidecarReady() {
+		if (this.shuttingDown) throw new Error('Capture sidecar is shutting down.');
 		if (!this.sidecarProcess || this.sidecarProcess.killed) {
 			this.startSidecarProcess();
 			await this.sendRequestInternal('health.ping', {});
