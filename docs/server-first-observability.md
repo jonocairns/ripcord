@@ -128,3 +128,7 @@ On-error replay is explicitly flushed using its existing configured probability
 through the server); its replay ID is forwarded for optional error correlation.
 
 Locally produced exceptions are fitted to the 11 KB record budget after scrubbing: shorten the raw stack first, discard oldest breadcrumbs next, shorten context strings next, and discard oldest source frames only if still necessary. Identity, client time, release and correlation remain intact. The server rejects untrusted oversized records.
+
+Dedupe caches evict their oldest entries at capacity so fresh reports from other
+users remain eligible. Retries of evicted entries can be delivered again under
+load; deduplication is bounded best effort, not an exactly-once guarantee.

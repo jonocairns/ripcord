@@ -87,3 +87,32 @@ describe('server diagnostic acceptance', () => {
 		expect(calls).toBe(0);
 	});
 });
+
+test('dedupe saturation keeps accepting other users and bounds retained retry evidence', () => {
+	let deliveries = 0;
+	const ingest = createDiagnosticIngest({
+		now: () => 100,
+		log: () => {
+			deliveries++;
+		},
+		forward: () => {},
+	});
+	const oldest = batch();
+	ingest.accept(oldest, 1);
+	ingest.flush();
+	for (let i = 1; i < 4096; i++) {
+		ingest.accept(batch(), 1);
+		ingest.flush();
+	}
+	const otherUser = batch();
+	ingest.accept(otherUser, 2);
+	ingest.flush();
+	expect(deliveries).toBe(4097);
+	ingest.accept(otherUser, 2);
+	ingest.flush();
+	expect(deliveries).toBe(4097);
+	// Capacity pressure evicted the oldest retry key, instead of growing memory.
+	ingest.accept(oldest, 1);
+	ingest.flush();
+	expect(deliveries).toBe(4098);
+});

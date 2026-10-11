@@ -44,8 +44,11 @@ export const createDiagnosticIngest = (deps: {
 					continue;
 				const key = `${userId}:${batch.clientSessionId}:${record.id}`;
 				if (seen.has(key)) continue;
-				// Keep dedupe bounded; new records are shed rather than evicting retry evidence.
-				if (seen.size >= 4096) continue;
+				// Keep the cache bounded without blocking every user's fresh reports.
+				if (seen.size >= 4096) {
+					const oldest = seen.keys().next().value;
+					if (oldest !== undefined) seen.delete(oldest);
+				}
 				seen.set(key, receivedAt + 300_000);
 				queue.push({
 					record: sanitizeDiagnosticRecord(record),
