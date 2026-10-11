@@ -4,9 +4,11 @@
 
 Clients upload versioned diagnostic records to their configured Ripcord server
 through the authenticated WebSocket connection. The server writes
-`[client-telemetry]` JSON to its existing Winston/container logging pipeline.
+newline-delimited JSON to its existing Winston/container logging pipeline.
 VictoriaLogs receives these through the existing Docker log shipper; no new
-collector is required. Server exceptions use `[server-exception]` records.
+collector is required. Console and file records use the same uncolored JSON format;
+owned boot markers and startup/debug output are JSON too. Dependencies can still
+write their own runtime output.
 Errors are structured exception logs, not an additional OpenTelemetry signal.
 
 Logs work without an error tracker. `RIPCORD_CLIENT_ERROR_REPORTING_SENTRY_DSN`
@@ -100,22 +102,26 @@ tests prove. See [Sentry's source-map troubleshooting](https://docs.sentry.io/pl
 ## Investigation and alerting
 
 In the current Alloy pipeline the label is `container="ripcord"`; a future shipper
-may rename it. Query the JSON after the stable prefix:
+may rename it. Unpack the JSON container message:
 
 ```logsql
-{container="ripcord"} "[client-telemetry]"
-{container="ripcord"} "[client-telemetry]" | extract "[client-telemetry] <payload>" | unpack_json from payload | filter kind:exception
+{container="ripcord"} | unpack_json | filter source:client
+{container="ripcord"} | unpack_json | filter source:client kind:exception
 {container="ripcord"} "<trace-id>"
 {container="ripcord"} "<producer-id>"
-{container="ripcord"} "[server-exception]"
+{container="ripcord"} | unpack_json | filter source:server level:error
+{container="ripcord"} | unpack_json | filter kind:telemetry_health
 ```
 
 Correlate original `occurredAt` against server `receivedAt`; ingestion time is not
 client event time. `clientSessionId`, sequence, operation/reconnect/media IDs and
-trace/span IDs complement #355's stream timelines. Structured client errors use
-info-level container lines to avoid recapture by the server error adapter; alert
-on `kind:exception`/record level, not solely Docker stderr. Configure rate/count
-alerts in your existing log alerting service, or grouping/issue alerts in the
+trace/span IDs complement #355's stream timelines. Client records keep their actual
+severity (`error`, `warn`, `info` or `debug`; the wire-level `warning` maps to
+Winston's `warn` and remains `warning` in Sentry). The server error adapter explicitly
+skips `source:client`, so a forwarded error is sent only through the client adapter.
+Alert on `source`, `kind:exception` and `level`, not solely Docker stderr. The
+existing debug threshold still controls whether debug records reach transports.
+Configure rate/count alerts in your existing log alerting service, or grouping/issue alerts in the
 optional error tracker. Neither automatic alert provisioning nor a trace store
 is introduced here. VictoriaLogs is a log destination; it is not a trace backend.
 
@@ -132,3 +138,27 @@ Locally produced exceptions are fitted to the 11 KB record budget after scrubbin
 Dedupe caches evict their oldest entries at capacity so fresh reports from other
 users remain eligible. Retries of evicted entries can be delivered again under
 load; deduplication is bounded best effort, not an exactly-once guarantee.
+
+## Delivery health
+
+The server emits at most one `kind:telemetry_health`, `source:telemetry_health`
+warning per minute while known failures accumulate, plus a final summary after
+provider shutdown flushing. Counters have a fixed set of reason keys and saturate
+at 4,294,967,295 per window; no session IDs, user IDs, provider URLs or error text
+become labels. Idle periods produce no summaries. The timer does not keep the
+process alive, and shutdown cancels it. Health summaries bypass Sentry forwarding
+and failures writing a summary are not recursively reported.
+
+`diagnostic_stale`, `diagnostic_future`, `diagnostic_queue_full` and
+`diagnostic_queue_expired` count discarded records. `diagnostic_log_failure` and
+`error_adapter_failure` count synchronous sink failures. `error_export_failure`
+counts Sentry transport sends rejected by the network or a non-2xx response;
+`error_transport_dropped` counts SDK transport drop notifications, and
+`error_flush_timeout` counts failed/incomplete transport flushes. These different
+units can overlap and must not be summed as an exact lost-event total. SDK
+processing losses outside transport callbacks, provider-side rejection/grouping,
+crashes, pre-authentication loss, and a failing local logging sink are not fully
+observable here. Client `droppedEvents` remains separate reported context and
+stream events retain their existing independent upload policy. Configure alerts
+on sustained health-counter increases with the existing log alerting service;
+no metrics backend or new collector is required.

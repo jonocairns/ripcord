@@ -49,3 +49,31 @@ test('actual SDK export retains client release, stack frames, source maps and tr
 	await disabled.flush();
 	expect(envelopes).toHaveLength(1);
 });
+
+test('client warning severity survives actual optional error-tracker export', async () => {
+	const envelopes: unknown[] = [];
+	const adapter = createSentryErrorAdapter('https://public@sentry.invalid/1', () => ({
+		send: async (envelope) => {
+			envelopes.push(envelope);
+			return { statusCode: 200 };
+		},
+		flush: async () => true,
+	}));
+	adapter.forward(
+		{
+			id: crypto.randomUUID(),
+			sequence: 1,
+			occurredAt: 100,
+			kind: 'exception',
+			level: 'warning',
+			message: 'handled',
+			runtime: 'web',
+			release: 'client-version',
+			environment: 'test',
+		},
+		1,
+		'client-session',
+	);
+	await adapter.flush();
+	expect(JSON.stringify(envelopes)).toContain('"level":"warning"');
+});

@@ -116,3 +116,34 @@ test('dedupe saturation keeps accepting other users and bounds retained retry ev
 	ingest.flush();
 	expect(deliveries).toBe(4098);
 });
+
+test('counts known loss boundaries without counting acknowledgement retries as new loss', () => {
+	let now = 400_000;
+	const counts: string[] = [];
+	const ingest = createDiagnosticIngest({
+		now: () => now,
+		health: {
+			count: (reason) => {
+				counts.push(reason);
+			},
+		},
+		log: () => {
+			throw new Error('sink');
+		},
+		forward: () => {
+			throw new Error('provider');
+		},
+	});
+	ingest.accept(batch(0), 1);
+	ingest.accept(batch(500_000), 1);
+	const accepted = batch(now);
+	ingest.accept(accepted, 1);
+	ingest.accept(accepted, 1);
+	ingest.flush();
+	expect(counts).toEqual(['diagnostic_stale', 'diagnostic_future', 'diagnostic_log_failure', 'error_adapter_failure']);
+	for (let i = 0; i < 257; i++) ingest.accept(batch(now), 1);
+	now += 30_001;
+	ingest.flush();
+	expect(counts.filter((reason) => reason === 'diagnostic_queue_full')).toHaveLength(1);
+	expect(counts.filter((reason) => reason === 'diagnostic_queue_expired')).toHaveLength(256);
+});

@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/bun';
 import type { TDiagnosticRecord } from '@sharkord/shared';
+import { withErrorDeliveryHealth } from './sentry-delivery-health';
 
 export const createSentryErrorAdapter = (dsn: string, transport = Sentry.makeFetchTransport) => {
 	let client: Sentry.BunClient | undefined;
@@ -7,7 +8,7 @@ export const createSentryErrorAdapter = (dsn: string, transport = Sentry.makeFet
 		if (!dsn || record.kind !== 'exception') return;
 		client ??= new Sentry.BunClient({
 			dsn,
-			transport,
+			transport: withErrorDeliveryHealth(transport),
 			stackParser: Sentry.defaultStackParser,
 			integrations: [],
 			sendDefaultPii: false,
@@ -20,7 +21,7 @@ export const createSentryErrorAdapter = (dsn: string, transport = Sentry.makeFet
 			platform: 'javascript',
 			release: record.release,
 			environment: record.environment,
-			level: 'error',
+			level: record.level,
 			user: { id: String(userId) },
 			tags: { source: 'client', runtime: record.runtime, client_session_id: clientSessionId },
 			contexts: {

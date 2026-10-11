@@ -44,13 +44,14 @@ describe('authenticated stream diagnostics ingestion', () => {
 		});
 		restoreLogger = () => log.mockRestore();
 		await caller.voice.reportStreamEvents(batch());
-		expect(messages[0]?.[0]).toBe('[stream-event] %s');
-		const message = String(messages[0]?.[1]);
-		expect(message).toContain(`"reporterUserId":${ctx.user.id}`);
-		expect(message).toContain('"source":"client"');
-		expect(message).toContain('"remoteId":2');
-		expect(message).toContain('"occurredAt":100');
-		expect(message).not.toContain(ctx.token);
+		expect(messages[0]?.[0]).toMatchObject({
+			message: '[stream-event]',
+			reporterUserId: ctx.user.id,
+			source: 'client',
+			remoteId: 2,
+			occurredAt: 100,
+		});
+		expect(JSON.stringify(messages)).not.toContain(ctx.token);
 	});
 	test('rejects unauthenticated callers, forged actors, arbitrary content and oversized batches', async () => {
 		const { ctx, caller } = await authenticated();

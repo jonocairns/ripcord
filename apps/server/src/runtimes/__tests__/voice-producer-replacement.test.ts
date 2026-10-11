@@ -121,8 +121,11 @@ describe('VoiceRuntime producer replacement', () => {
 			second.fireCloseEvent();
 			first.fireCloseEvent();
 			const records = messages
-				.filter(([message]) => message === '[stream-event] %s')
-				.map(([, record]) => (typeof record === 'string' ? JSON.parse(record) : undefined));
+				.map(([record]) => record)
+				.filter(
+					(record) =>
+						typeof record === 'object' && record !== null && 'message' in record && record.message === '[stream-event]',
+				);
 			expect(records).toContainEqual(
 				expect.objectContaining({
 					event: 'producer_replaced',
@@ -170,8 +173,11 @@ describe('VoiceRuntime producer replacement', () => {
 			runtime.addProducer(1, StreamKind.SCREEN, terminal.producer, 'new-transport');
 			runtime.removeProducer(1, StreamKind.SCREEN);
 			const records = messages
-				.filter(([message]) => message === '[stream-event] %s')
-				.map(([, record]) => (typeof record === 'string' ? JSON.parse(record) : undefined));
+				.map(([record]) => record)
+				.filter(
+					(record) =>
+						typeof record === 'object' && record !== null && 'message' in record && record.message === '[stream-event]',
+				);
 			expect(records).toContainEqual(
 				expect.objectContaining({
 					event: 'producer_closed',
@@ -200,7 +206,13 @@ describe('VoiceRuntime producer replacement', () => {
 		const runtime = await makeRuntime();
 		runtime.addUser(1, { micMuted: false, soundMuted: false });
 		const log = spyOn(logger, 'info').mockImplementation((message: unknown) => {
-			if (message === '[stream-event] %s') throw new Error('Unavailable logger');
+			if (
+				typeof message === 'object' &&
+				message !== null &&
+				'message' in message &&
+				message.message === '[stream-event]'
+			)
+				throw new Error('Unavailable logger');
 			return logger;
 		});
 		try {

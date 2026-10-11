@@ -41,7 +41,7 @@ const createVoiceSessionTelemetry = (options: TVoiceSessionTelemetryOptions = {}
 				if (options.log) {
 					options.log(event);
 				} else {
-					logger.info('[voice-session] %s', JSON.stringify(event));
+					logger.info({ message: '[voice-session]', ...event });
 				}
 			} catch {
 				// Telemetry must never change voice-session behavior.

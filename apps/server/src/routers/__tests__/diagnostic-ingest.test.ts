@@ -43,6 +43,36 @@ describe('authenticated diagnostic ingestion', () => {
 		await caller.telemetry.reportDiagnostics(batch());
 		diagnosticIngest.flush();
 	});
+	test('routes errors and warnings at their actual severity while preserving authenticated original context', async () => {
+		const { ctx, caller } = await authenticated();
+		const records: unknown[] = [];
+		const log = spyOn(logger, 'log').mockImplementation((...args: unknown[]) => {
+			records.push(args[0]);
+			return logger;
+		});
+		restoreLogger = () => log.mockRestore();
+		for (const level of ['error', 'warning'] as const) {
+			const input = batch();
+			const record = input.records[0];
+			if (!record) throw new Error('missing fixture record');
+			record.level = level;
+			record.traceId = 'a'.repeat(32);
+			record.spanId = 'b'.repeat(16);
+			await caller.telemetry.reportDiagnostics(input);
+			diagnosticIngest.flush();
+			expect(records.at(-1)).toMatchObject({
+				source: 'client',
+				level: level === 'warning' ? 'warn' : level,
+				occurredAt: record.occurredAt,
+				release: record.release,
+				runtime: record.runtime,
+				reporterUserId: ctx.user.id,
+				clientSessionId: input.clientSessionId,
+				traceId: record.traceId,
+				spanId: record.spanId,
+			});
+		}
+	});
 	test('rejects unauthenticated callers, forged actors, arbitrary content and oversized batches', async () => {
 		const { ctx, caller } = await authenticated();
 		ctx.authenticated = false;

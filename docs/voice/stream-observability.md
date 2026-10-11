@@ -1,9 +1,9 @@
 # Investigating watched stream drops
 
 Stream lifecycle diagnostics use the existing server/container logging pipeline.
-Both server events and authenticated client uploads produce `[stream-event]`
-followed by JSON. They do not require an OTEL collector, Sentry Logs or desktop
-diagnostics. Deploy the server and client to enable the complete timeline.
+Both server events and authenticated client uploads produce JSON records with
+`message: '[stream-event]'`; correlation fields are at the top level. They do not
+require an OTEL collector, Sentry Logs or desktop diagnostics. Deploy the server and client to enable the complete timeline.
 
 ## Compatibility, privacy and limits
 
@@ -70,15 +70,14 @@ starts a media repair.
 
 These queries assume the container message is stored in `_msg`; add your Ripcord
 container stream filter if the log store contains other applications. JSON is
-embedded after the existing logger prefix. The extraction/JSON pipes follow the
+stored as one uncolored object per line. The JSON pipes follow the
 [LogsQL documentation](https://docs.victoriametrics.com/victorialogs/logsql/).
 
 Find the original 10 October 2026 8:30–11 pm NZDT window (07:30–10:00 UTC):
 
 ```logsql
 _time:[2026-10-10T07:30:00Z,2026-10-10T10:00:00Z] "[stream-event]"
-| extract_regexp '(?P<stream_json>[{].*[}])' from _msg
-| unpack_json from stream_json
+| unpack_json
 | sort by (occurredAt, clientSessionId, sequence)
 ```
 
@@ -86,8 +85,7 @@ Find all broadcaster/viewer events for a producer (replace `PRODUCER_ID`):
 
 ```logsql
 _time:24h "[stream-event]"
-| extract_regexp '(?P<stream_json>[{].*[}])' from _msg
-| unpack_json from stream_json
+| unpack_json
 | filter producerId:="PRODUCER_ID" OR previousProducerId:="PRODUCER_ID"
 | sort by (occurredAt, clientSessionId, sequence)
 ```
@@ -97,11 +95,13 @@ session/operation/producer IDs:
 
 ```logsql
 _time:24h "[stream-event]"
-| extract_regexp '(?P<stream_json>[{].*[}])' from _msg
-| unpack_json from stream_json
+| unpack_json
 | filter event:in(consume_exhausted,playback_stalled,playback_inactive,playback_recovered)
 | sort by (occurredAt, clientSessionId, sequence)
 ```
 
 These changes add future evidence; they cannot reconstruct missing client events
 from incidents before deployment.
+
+For historical prefix + JSON records, replace `unpack_json` with
+`extract_regexp '(?P<stream_json>[{].*[}])' from _msg | unpack_json from stream_json`.

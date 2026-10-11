@@ -54,18 +54,16 @@ const leaveVoiceRoute = protectedProcedure
 
 		const logLeave = (outcome: string): void => {
 			try {
-				logger.info(
-					'[voice-session] %s',
-					JSON.stringify({
-						event: 'voice_leave',
-						userId: ctx.user.id,
-						channelId,
-						clientInstanceId: ctx.getClientInstanceId(),
-						reason: input?.reason ?? 'unknown',
-						mutationSeq: input?.mutationSeq,
-						outcome,
-					}),
-				);
+				logger.info({
+					message: '[voice-session]',
+					event: 'voice_leave',
+					userId: ctx.user.id,
+					channelId,
+					clientInstanceId: ctx.getClientInstanceId(),
+					reason: input?.reason ?? 'unknown',
+					mutationSeq: input?.mutationSeq,
+					outcome,
+				});
 			} catch {
 				/* Diagnostics must not change leave behavior. */
 			}

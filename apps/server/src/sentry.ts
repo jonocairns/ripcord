@@ -10,6 +10,7 @@ import * as Sentry from '@sentry/bun';
 import { format } from 'winston';
 import { config } from './config';
 import { configureServerTracing } from './helpers/tracing';
+import { withErrorDeliveryHealth } from './telemetry/sentry-delivery-health';
 import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';
 
 let errorClient: Sentry.BunClient | undefined;
@@ -18,7 +19,7 @@ const getErrorClient = () => {
 	if (!dsn) return undefined;
 	errorClient ??= new Sentry.BunClient({
 		dsn,
-		transport: Sentry.makeFetchTransport,
+		transport: withErrorDeliveryHealth(Sentry.makeFetchTransport),
 		stackParser: Sentry.defaultStackParser,
 		integrations: [],
 		release: SERVER_VERSION,
@@ -29,10 +30,7 @@ const getErrorClient = () => {
 	return errorClient;
 };
 const SPLAT = Symbol.for('splat');
-// Winston's canonical, immutable level. We must read this rather than
-// `info.level`, because `colorize()` runs earlier in the format chain and
-// rewrites `info.level` to an ANSI-wrapped string (e.g. "\x1b[31merror\x1b[39m")
-// that never equals "error" — which would silently skip every Sentry capture.
+// Read Winston's canonical level and explicitly exclude forwarded/health records.
 const LEVEL = Symbol.for('level');
 
 // Scrub credentials and PII before any event leaves the process. The server now
@@ -161,7 +159,12 @@ const initSentry = (): void => {
 };
 
 const sentryFormat = format((info) => {
-	if (!config.server.serverErrorReportingSentryDsn.trim() || (info as Record<symbol, unknown>)[LEVEL] !== 'error') {
+	if (
+		info.source === 'client' ||
+		info.source === 'telemetry_health' ||
+		!config.server.serverErrorReportingSentryDsn.trim() ||
+		(info as Record<symbol, unknown>)[LEVEL] !== 'error'
+	) {
 		return info;
 	}
 
