@@ -388,6 +388,8 @@ ipcRenderer.on('desktop:before-quit', () => {
 });
 
 const desktopBridge = {
+	writeDiagnosticEvent: (event: { event: string; level: 'info' | 'warn' | 'error'; data?: unknown }): Promise<void> =>
+		ipcRenderer.invoke('desktop:write-diagnostic-event', event),
 	getServerUrl: (): Promise<string> => ipcRenderer.invoke('desktop:get-server-url'),
 	getWindowControlsState: (): Promise<TDesktopWindowControlsState> =>
 		ipcRenderer.invoke('desktop:get-window-controls-state'),

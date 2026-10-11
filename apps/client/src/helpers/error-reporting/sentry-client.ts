@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/react';
+import { configureClientTracing } from '@/helpers/telemetry/tracing';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { sanitizeContextData, sanitizeSentryEvent, sanitizeString } from './sanitize';
 
@@ -16,26 +17,6 @@ type TCaptureSentryErrorOptions = {
 	context?: unknown;
 	error?: unknown;
 	message?: string;
-};
-
-type TSentrySpanOptions = {
-	name: string;
-	op?: string;
-	attributes?: Record<string, string | number | boolean | undefined>;
-};
-
-type TSentrySpanObservation = {
-	run: <T>(effect: () => T) => T;
-	finish: (options: {
-		attributes?: Record<string, string | number | boolean | undefined>;
-		status: 'ok' | 'error';
-		statusMessage: string;
-	}) => void;
-};
-
-const noOpSentrySpanObservation: TSentrySpanObservation = {
-	run: <T>(effect: () => T): T => effect(),
-	finish: () => {},
 };
 
 const capturedErrors = new WeakSet<object>();
@@ -187,6 +168,29 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 		},
 	});
 
+	if (tracingSampleRate !== undefined && tracingSampleRate > 0) {
+		configureClientTracing({
+			start: ({ name, attributes }) => {
+				const operation = attributes['ripcord.operation'];
+				const span = Sentry.startInactiveSpan({
+					name,
+					op: typeof operation === 'string' ? operation : undefined,
+					attributes,
+				});
+				return {
+					run: (effect) => Sentry.withActiveSpan(span, effect),
+					setAttributes: (values) => {
+						span.setAttributes(values);
+					},
+					setStatus: (status) => {
+						span.setStatus(status);
+					},
+					end: () => span.end(),
+				};
+			},
+		});
+	}
+
 	initialized = true;
 };
 
@@ -266,50 +270,4 @@ const reportErrorToSentry = (message: string, error?: unknown, context?: unknown
 	});
 };
 
-const traceSentrySpan = <T>({ name, op, attributes }: TSentrySpanOptions, callback: () => T): T => {
-	if (!Sentry.isEnabled()) {
-		return callback();
-	}
-
-	return Sentry.startSpan(
-		{
-			name,
-			op,
-			attributes,
-		},
-		() => callback(),
-	);
-};
-
-const startSentrySpanObservation = ({ name, op, attributes }: TSentrySpanOptions): TSentrySpanObservation => {
-	if (!Sentry.isEnabled()) {
-		return noOpSentrySpanObservation;
-	}
-
-	const span = Sentry.startInactiveSpan({ name, op, attributes });
-	let finished = false;
-
-	return {
-		run: <T>(effect: () => T): T => Sentry.withActiveSpan(span, effect),
-		finish: ({ attributes: finalAttributes, status, statusMessage }) => {
-			if (finished) {
-				return;
-			}
-
-			finished = true;
-			span.setAttributes(finalAttributes ?? {});
-			span.setStatus({ code: status === 'ok' ? 1 : 2, message: statusMessage });
-			span.end();
-		},
-	};
-};
-
-export type { TSentrySpanObservation };
-export {
-	configureClientErrorReporting,
-	getRuntimeTag,
-	reportErrorToSentry,
-	setSentryUser,
-	startSentrySpanObservation,
-	traceSentrySpan,
-};
+export { configureClientErrorReporting, getRuntimeTag, reportErrorToSentry, setSentryUser };

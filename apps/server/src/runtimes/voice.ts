@@ -880,6 +880,27 @@ class VoiceRuntime {
 		};
 	};
 
+	private logTransportFailure = (userId: number, transport: WebRtcTransport<AppData>, source: string): void => {
+		try {
+			logger.warn(
+				'[voice-transport] %s',
+				JSON.stringify({
+					event: 'voice_transport_failed',
+					userId,
+					channelId: this.id,
+					transportId: transport.id,
+					source,
+					iceState: transport.iceState,
+					dtlsState: source.endsWith('-dtls') ? 'failed' : transport.dtlsState,
+					protocol: transport.iceSelectedTuple?.protocol,
+					producerCount: this.captureUserProducers(userId).length,
+				}),
+			);
+		} catch {
+			/* Diagnostics must not change recovery behavior. */
+		}
+	};
+
 	private setupConsumerTransportHandlers = (
 		userId: number,
 		transport: WebRtcTransport<AppData>,
@@ -915,6 +936,7 @@ class VoiceRuntime {
 				return;
 			}
 
+			this.logTransportFailure(userId, transport, 'consumer-dtls');
 			this.removeConsumerTransport(userId);
 			pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
 				userId,
@@ -954,6 +976,7 @@ class VoiceRuntime {
 				return;
 			}
 
+			this.logTransportFailure(userId, transport, 'producer-dtls');
 			this.removeProducerTransport(userId, { recoverable: true });
 			pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {
 				userId,
@@ -2110,6 +2133,7 @@ class VoiceRuntime {
 								}ms, signalling transport failure`,
 							);
 
+							this.logTransportFailure(userId, consumerTransport, 'media-liveness');
 							recordMediaLivenessFailure(this.id, userId);
 
 							pubsub.publishFor(userId, ServerEvents.VOICE_TRANSPORT_FAILED, {

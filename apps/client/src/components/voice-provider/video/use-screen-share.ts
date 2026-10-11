@@ -1,7 +1,8 @@
 import { useCallback, useLayoutEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { requestScreenShareSelection } from '@/features/dialogs/actions';
-import { logVoice, traceSentrySpan } from '@/helpers/browser-logger';
+import { logVoice } from '@/helpers/browser-logger';
+import { traceSpan } from '@/helpers/telemetry/tracing';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import {
@@ -45,7 +46,7 @@ const useScreenShare = (inputs: TUseScreenShareInputs) => {
 	useLayoutEffect(() => mountScreenShareController(controller), [controller]);
 	const start = useCallback(
 		(...args: Parameters<typeof controller.start>) =>
-			traceSentrySpan(
+			traceSpan(
 				{
 					name: 'voice.screen_share_start',
 					op: 'voice.screen_share',

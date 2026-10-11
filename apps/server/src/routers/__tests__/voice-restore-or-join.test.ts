@@ -5,6 +5,7 @@ import { createMockContext } from '../../__tests__/context';
 import { getMockedToken, initTest } from '../../__tests__/helpers';
 import { db } from '../../db';
 import { channels } from '../../db/schema';
+import { logger } from '../../logger';
 import { appRouter } from '../../routers';
 import { VoiceRestoreAttemptSupersededError, VoiceRuntime } from '../../runtimes/voice';
 import { pubsub } from '../../utils/pubsub';
@@ -1158,6 +1159,27 @@ describe('voice session incarnation ownership', () => {
 			expect(ctxB.currentVoiceChannelId).toBeUndefined();
 		} finally {
 			leaveSub.unsubscribe();
+		}
+	});
+
+	test('records client leave reasons while remaining compatible with clients that omit them', async () => {
+		await ensureVoiceRuntime(PRIMARY_VOICE_CHANNEL_ID, 'Voice');
+		const { caller } = await initTest(1);
+		const info = spyOn(logger, 'info');
+		try {
+			for (const reason of [undefined, 'recovery_exhausted', 'app_quit', 'user_action', 'join_failed'] as const) {
+				await caller.voice.join({ channelId: PRIMARY_VOICE_CHANNEL_ID, state: { micMuted: false, soundMuted: false } });
+				info.mockClear();
+				await caller.voice.leave(reason ? { reason } : undefined);
+				expect(info).toHaveBeenCalledWith(
+					'[voice-session] %s',
+					expect.stringContaining(`"reason":"${reason ?? 'unknown'}"`),
+				);
+				expect(info).toHaveBeenCalledWith('[voice-session] %s', expect.stringContaining('"outcome":"removed"'));
+				expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeUndefined();
+			}
+		} finally {
+			info.mockRestore();
 		}
 	});
 

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import * as Sentry from '@sentry/electron/main';
 import {
@@ -17,6 +18,7 @@ import {
 import { AppAudioRtpSender, type TAppAudioRtpTarget } from './app-audio-rtp-sender';
 import { resolveDesktopCaptureCapabilities } from './capture-capabilities';
 import { captureSidecarManager } from './capture-sidecar-manager';
+import { createDiagnosticLog, validateDiagnosticEvent } from './diagnostic-log';
 import { configureMainErrorReporting } from './error-reporting';
 import {
 	validateConfigureErrorReportingArgs,
@@ -64,6 +66,17 @@ import { resolveWindowSizing } from './window-size';
 import { getWindowSize, setWindowSize } from './window-size-store';
 import { installYoutubeEmbedRefererHandler } from './youtube-embed-referrer';
 
+// Preview configuration has already selected userData. Only its owning
+// process may write settings or rotate the shared diagnostic files.
+if (!app.requestSingleInstanceLock()) {
+	app.exit(0);
+}
+
+let diagnosticLog: ReturnType<typeof createDiagnosticLog> | undefined;
+const recordMainDiagnostic = (event: string, data?: unknown, level: 'info' | 'warn' | 'error' = 'info'): void => {
+	void diagnosticLog?.write({ event, level, data });
+};
+
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
 const TRUSTED_RENDERER_URL = resolveTrustedRendererUrl({
 	isPackaged: app.isPackaged,
@@ -89,6 +102,7 @@ let displayMediaUsesSystemPicker = false;
 let appIsShuttingDown = false;
 let desktopQuitFlushInterceptInProgress = false;
 let desktopQuitFlushCompleted = false;
+let rendererQuitFlushResult: TDesktopQuitFlushResult | undefined;
 let resolveDesktopQuitFlush: ((result: TDesktopQuitFlushResult) => void) | undefined;
 
 const sendToRenderer = (channel: string, ...args: unknown[]): boolean => {
@@ -111,6 +125,7 @@ const sendToRenderer = (channel: string, ...args: unknown[]): boolean => {
 // minidumps. We keep these handlers purely so a crash is visible in stdout even
 // when no DSN is configured.
 const reportProcessCrash = (event: TDesktopProcessCrashEvent): void => {
+	recordMainDiagnostic('desktop_process_crashed', event, 'error');
 	console.error('[desktop] Process crashed', event);
 };
 
@@ -202,11 +217,11 @@ const emitWindowControlsState = () => {
 	sendToRenderer('desktop:window-controls-state-changed', getWindowControlsState());
 };
 
-const disposeDesktopServicesForShutdown = () => {
+const disposeDesktopServicesForShutdown = async (): Promise<void> => {
 	stopAppAudioRtpSender();
 	disposeAppAudioFrameEgressPort();
 	desktopUpdater.dispose();
-	void captureSidecarManager.dispose();
+	await captureSidecarManager.dispose();
 };
 
 const completeDesktopQuitFlush = (result: TDesktopQuitFlushResult) => {
@@ -502,7 +517,7 @@ const createMainWindow = async () => {
 
 			if (process.platform !== 'darwin' || appIsShuttingDown) {
 				appIsShuttingDown = true;
-				desktopQuitFlushCompleted = true;
+				rendererQuitFlushResult = result;
 				app.quit();
 				return;
 			}
@@ -911,6 +926,12 @@ const registerIpcHandlers = () => {
 		event.sender.postMessage('desktop:app-audio-frame-channel-ready', null, [port1]);
 	});
 
+	handleTrusted('desktop:write-diagnostic-event', (_event, input: unknown) => {
+		const diagnostic = validateDiagnosticEvent(input);
+		if (!diagnostic) return;
+		return diagnosticLog?.write({ ...diagnostic, source: 'renderer' });
+	});
+
 	onTrusted(
 		'desktop:before-quit-finished',
 		(_event: IpcMainEvent, result: TDesktopQuitFlushResult) => {
@@ -1038,9 +1059,38 @@ const configureGpuCommandLineSwitches = () => {
 
 configureGpuCommandLineSwitches();
 
+const showMainWindow = () => {
+	if (appIsShuttingDown) return;
+	if (mainWindow && !mainWindow.isDestroyed()) {
+		if (mainWindow.isMinimized()) mainWindow.restore();
+		mainWindow.show();
+		mainWindow.focus();
+		return;
+	}
+	if (!app.isReady() || mainWindowOpening) return;
+	mainWindowOpening = true;
+	void createMainWindow()
+		.catch((error) => {
+			console.error('[desktop] Failed to create main window', error);
+		})
+		.finally(() => {
+			mainWindowOpening = false;
+		});
+};
+
+app.on('second-instance', showMainWindow);
+
 void app
 	.whenReady()
 	.then(async () => {
+		diagnosticLog = createDiagnosticLog({
+			directory: path.join(app.getPath('userData'), 'logs'),
+			appVersion: app.getVersion(),
+			platform: process.platform,
+			homeDirectory: homedir(),
+		});
+		recordMainDiagnostic('desktop_started', { electronVersion: process.versions.electron });
+		captureSidecarManager.onDiagnostic((message) => recordMainDiagnostic('sidecar_stderr', { message }));
 		captureSidecarManager.onFrame((frame) => {
 			// Native RTP ingest owns the egress — never also forward to the renderer.
 			if (appAudioRtpSender || appAudioFrameEgressPort) {
@@ -1083,12 +1133,14 @@ void app
 			}
 		});
 		captureSidecarManager.onStatus((event) => {
+			recordMainDiagnostic('app_audio_status', event);
 			sendToRenderer('desktop:app-audio-status', event);
 		});
 		captureSidecarManager.onPushKeybind((event) => {
 			emitPushKeybindEvent(event);
 		});
 		captureSidecarManager.onCrash((event) => {
+			recordMainDiagnostic('sidecar_crashed', event, 'error');
 			// The Rust capture sidecar is a spawned native process, not an Electron
 			// child, so the SDK's childProcessIntegration doesn't see it. Report
 			// abnormal exits here, with recent stderr (incl. any panic) as context.
@@ -1098,6 +1150,7 @@ void app
 			});
 		});
 		captureSidecarManager.onLifecycle((event) => {
+			recordMainDiagnostic('sidecar_lifecycle', event);
 			if (appIsShuttingDown && event.kind === 'exit') {
 				return;
 			}
@@ -1116,24 +1169,18 @@ void app
 		setupDisplayMediaHandler();
 		setupYoutubeEmbedRefererHandler();
 		setupRendererCspHandler();
-		await createMainWindow();
+		mainWindowOpening = true;
+		try {
+			await createMainWindow();
+		} finally {
+			mainWindowOpening = false;
+		}
 		requestDesktopCapabilitiesRefresh({
 			broadcast: true,
 			forceBroadcast: true,
 		});
 
-		app.on('activate', () => {
-			if (BrowserWindow.getAllWindows().length === 0 && !mainWindowOpening) {
-				mainWindowOpening = true;
-				void createMainWindow()
-					.catch((error) => {
-						console.error('[desktop] Failed to create main window', error);
-					})
-					.finally(() => {
-						mainWindowOpening = false;
-					});
-			}
-		});
+		app.on('activate', showMainWindow);
 	})
 	.catch((error) => {
 		console.error('[desktop] Failed to initialize app', error);
@@ -1149,7 +1196,6 @@ app.on('before-quit', (event) => {
 	appIsShuttingDown = true;
 
 	if (desktopQuitFlushCompleted) {
-		disposeDesktopServicesForShutdown();
 		return;
 	}
 
@@ -1162,7 +1208,22 @@ app.on('before-quit', (event) => {
 	desktopQuitFlushInterceptInProgress = true;
 
 	void (async () => {
-		const result = await requestDesktopQuitFlush();
+		const result = rendererQuitFlushResult ?? (await requestDesktopQuitFlush());
+		recordMainDiagnostic('desktop_quit_flush', result);
+		await disposeDesktopServicesForShutdown().catch((error: unknown) => {
+			recordMainDiagnostic('desktop_shutdown_failed', { error }, 'error');
+		});
+		// Give accepted diagnostics a bounded chance to reach disk while the
+		// renderer's leave confirmation is still available. Disk stalls cannot
+		// prevent quitting.
+		let diagnosticFlushTimeout: ReturnType<typeof setTimeout> | undefined;
+		await Promise.race([
+			diagnosticLog?.flush(),
+			new Promise<void>((resolve) => {
+				diagnosticFlushTimeout = setTimeout(resolve, 1_000);
+			}),
+		]);
+		clearTimeout(diagnosticFlushTimeout);
 
 		if (result.status === 'skipped') {
 			console.warn('[desktop] Quit flush skipped', {

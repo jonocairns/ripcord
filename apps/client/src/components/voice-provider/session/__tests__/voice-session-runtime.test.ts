@@ -192,7 +192,7 @@ const createHarness = () => {
 		getVoiceSessionState,
 		logVoice: () => {},
 		logDebug: () => {},
-		traceSentrySpan: <T>(_context: unknown, effect: () => Promise<T>) => effect(),
+		traceSpan: <T>(_context: unknown, effect: () => Promise<T>) => effect(),
 		now: () => 1000,
 		createReconnectAttemptId: () => 'attempt-1',
 		getErrorCode: (error: unknown) => (error === missingSession ? 'BAD_REQUEST' : undefined),

@@ -128,7 +128,7 @@ type TVoiceSessionRuntimeDependencies = Pick<
 		getVoiceSessionState: typeof getVoiceSessionState;
 		logVoice: (message: string, data?: Record<string, unknown>) => void;
 		logDebug: (message: string, data?: Record<string, unknown>) => void;
-		traceSentrySpan: <T>(
+		traceSpan: <T>(
 			context: { name: string; op: string; attributes: Record<string, string | number | boolean> },
 			effect: () => Promise<T>,
 		) => Promise<T>;
@@ -280,7 +280,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		channelId: number,
 		options: { isCurrent?: () => boolean; signal?: AbortSignal } = {},
 	): Promise<TRecoveryJoinResult> => {
-		return getDependencies().traceSentrySpan(
+		return getDependencies().traceSpan(
 			{
 				name: 'voice.rejoin_session',
 				op: 'voice.recovery',
@@ -428,7 +428,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 			(opts?.isCurrentRecovery === undefined || opts.isCurrentRecovery());
 		const isCurrent = (): boolean => attemptOpen && isOwnerCurrent();
 
-		return getDependencies().traceSentrySpan(
+		return getDependencies().traceSpan(
 			{
 				name: 'voice.init',
 				op: 'voice.join',
@@ -661,7 +661,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 			return context.restartIfNonceChanged(getDependencies().getReconnectNonce());
 		};
 
-		return getDependencies().traceSentrySpan(
+		return getDependencies().traceSpan(
 			{
 				name: 'voice.transport_recovery',
 				op: 'voice.recovery',

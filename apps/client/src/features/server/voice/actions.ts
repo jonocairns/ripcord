@@ -9,6 +9,7 @@ import type { RtpCapabilities } from 'mediasoup-client/types';
 import { toast } from 'sonner';
 import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-card-controller';
 import { logDebug, logVoice, reportError } from '@/helpers/browser-logger';
+import { recordDesktopDiagnostic } from '@/helpers/desktop-diagnostics';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getTRPCClient, getWsClientInstanceId, waitForTRPCSessionAuthentication } from '@/lib/trpc';
@@ -29,7 +30,10 @@ import {
 } from './reconnect-coordinator';
 import { ownVoiceStateSelector, pinnedCardSelector } from './selectors';
 
+type TVoiceLeaveReason = 'user_action' | 'recovery_exhausted' | 'app_quit' | 'join_failed';
+
 type TLeaveVoiceOptions = {
+	reason?: TVoiceLeaveReason;
 	playOwnLeaveSound: boolean;
 	clearReconnectReason?: TClearReason | false;
 	suppressErrors?: boolean;
@@ -504,16 +508,19 @@ const leaveVoiceInternal = async (options: TLeaveVoiceOptions): Promise<boolean>
 	}
 
 	return leaveVoiceMutation({
+		reason: options.reason ?? 'user_action',
 		suppressErrors: options.suppressErrors,
 	});
 };
 
-const leaveVoiceMutation = (options: { suppressErrors?: boolean }): Promise<boolean> => {
+const leaveVoiceMutation = (options: { suppressErrors?: boolean; reason: TVoiceLeaveReason }): Promise<boolean> => {
 	// The newer server-visible sequence prevents an already-sent join from
 	// committing after this leave, so aborting its client wait is safe and lets
 	// the leave reach the server without waiting for a superseded request.
 	joinVoiceGeneration += 1;
 	const mutationSeq = (voiceSessionMutationSeq += 1);
+	const diagnosticContext = { reason: options.reason, mutationSeq, clientInstanceId: getWsClientInstanceId() };
+	recordDesktopDiagnostic('voice_leave_requested', diagnosticContext);
 	const authenticationController = new AbortController();
 	pendingLeaveAuthenticationControllers.add(authenticationController);
 	for (const abortController of pendingJoinAbortControllers) {
@@ -528,9 +535,15 @@ const leaveVoiceMutation = (options: { suppressErrors?: boolean }): Promise<bool
 			if (authenticationController.signal.aborted) return false;
 			pendingLeaveAuthenticationControllers.delete(authenticationController);
 			const client = getTRPCClient();
-			await client.voice.leave.mutate({ mutationSeq });
+			await client.voice.leave.mutate({ mutationSeq, reason: options.reason });
+			recordDesktopDiagnostic('voice_leave_confirmed', diagnosticContext);
 			return true;
 		} catch (error) {
+			recordDesktopDiagnostic(
+				'voice_leave_failed',
+				{ ...diagnosticContext, aborted: authenticationController.signal.aborted, error },
+				'warn',
+			);
 			if (!options.suppressErrors && !authenticationController.signal.aborted) {
 				toast.error(getTrpcError(error, 'Failed to leave voice channel'));
 			}
@@ -555,6 +568,7 @@ const leaveVoiceSessionAfterRecoveryFailure = (): Promise<boolean> => {
 	}
 
 	return leaveVoiceMutation({
+		reason: 'recovery_exhausted',
 		suppressErrors: true,
 	});
 };
@@ -564,7 +578,7 @@ export const leaveVoice = async (): Promise<void> => {
 };
 
 export const leaveVoiceSilently = async (): Promise<void> => {
-	await leaveVoiceInternal({ playOwnLeaveSound: false });
+	await leaveVoiceInternal({ playOwnLeaveSound: false, reason: 'join_failed' });
 };
 
 export const flushVoiceForDesktopQuit = async (): Promise<'skipped' | 'succeeded'> => {
@@ -585,11 +599,13 @@ export const flushVoiceForDesktopQuit = async (): Promise<'skipped' | 'succeeded
 		const didLeave =
 			currentChannelId !== undefined
 				? await leaveVoiceInternal({
+						reason: 'app_quit',
 						playOwnLeaveSound: false,
 						clearReconnectReason: false,
 						suppressErrors: true,
 					})
 				: await leaveVoiceMutation({
+						reason: 'app_quit',
 						suppressErrors: true,
 					});
 
