@@ -53,10 +53,9 @@ describe('configureClientErrorReporting', () => {
 
 		Reflect.set(globalThis, 'VITE_APP_VERSION', 'test-version');
 
-		const { configureClientErrorReporting, startSentrySpanObservation } = await import(
-			'../error-reporting/sentry-client'
-		);
-		const disabledObservation = startSentrySpanObservation({ name: 'disabled' });
+		const { configureClientErrorReporting } = await import('../error-reporting/sentry-client');
+		const { startSpanObservation } = await import('../telemetry/tracing');
+		const disabledObservation = startSpanObservation({ name: 'disabled' });
 		expect(disabledObservation.run(() => 'ran')).toBe('ran');
 		disabledObservation.finish({ status: 'ok', statusMessage: 'succeeded' });
 		expect(startInactiveSpanMock).not.toHaveBeenCalled();
@@ -78,7 +77,7 @@ describe('configureClientErrorReporting', () => {
 			integrations: [{ name: 'captureConsoleIntegration' }, { name: 'browserTracingIntegration' }],
 		});
 
-		const observation = startSentrySpanObservation({ name: 'voice.session_command', op: 'voice.session' });
+		const observation = startSpanObservation({ name: 'voice.session_command', op: 'voice.session' });
 		expect(observation.run(() => 'observed')).toBe('observed');
 		observation.finish({
 			attributes: { 'voice.outcome': 'succeeded', 'voice.duration_ms': 25 },

@@ -3,6 +3,7 @@ import { initTRPC, TRPCError } from '@trpc/server';
 import chalk from 'chalk';
 import type WebSocket from 'ws';
 import { config } from '../config';
+import { startSpanObservation } from '../helpers/tracing';
 import { logger } from '../logger';
 import type { TConnectionInfo } from '../types';
 import { invariant } from './invariant';
@@ -47,6 +48,22 @@ export type Context = {
 };
 
 const t = initTRPC.context<Context>().create();
+
+const tracingMiddleware = t.middleware(async ({ path, type, next }) => {
+	const observation = startSpanObservation({
+		name: `rpc.${path}`,
+		op: 'rpc.server',
+		attributes: { 'rpc.method': path, 'rpc.type': type },
+	});
+	try {
+		const result = await observation.run(next);
+		observation.finish({ status: result.ok ? 'ok' : 'error' });
+		return result;
+	} catch (error) {
+		observation.finish({ status: 'error' });
+		throw error;
+	}
+});
 
 const timingMiddleware = t.middleware(async ({ path, next }) => {
 	if (!config.server.debug) {
@@ -159,8 +176,12 @@ const rateLimitedProcedure = (procedure: typeof t.procedure, options: TRateLimit
 
 // this should be used for all queries and mutations apart from the join server one
 // it prevents users that only are connected to the wss but did not join the server from accessing protected procedures
-const protectedProcedure = t.procedure.use(timingMiddleware).use(authMiddleware).use(passwordResetRequiredMiddleware);
+const protectedProcedure = t.procedure
+	.use(tracingMiddleware)
+	.use(timingMiddleware)
+	.use(authMiddleware)
+	.use(passwordResetRequiredMiddleware);
 
-const publicProcedure = t.procedure.use(timingMiddleware);
+const publicProcedure = t.procedure.use(tracingMiddleware).use(timingMiddleware);
 
 export { protectedProcedure, publicProcedure, rateLimitedProcedure, t };

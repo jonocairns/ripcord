@@ -1,9 +1,5 @@
-import {
-	configureClientErrorReporting,
-	reportErrorToSentry,
-	setSentryUser,
-	traceSentrySpan,
-} from './error-reporting/sentry-client';
+import { recordDesktopDiagnostic } from './desktop-diagnostics';
+import { configureClientErrorReporting, reportErrorToSentry, setSentryUser } from './error-reporting/sentry-client';
 
 const OVERRIDE_DEBUG = false;
 
@@ -16,6 +12,7 @@ const logDebug = (...args: unknown[]) => {
 };
 
 const logVoice = (...args: unknown[]) => {
+	recordDesktopDiagnostic('voice', { details: args });
 	console.log('%c[VOICE-PROVIDER]', 'color: salmon; font-weight: bold;', ...args);
 };
 
@@ -32,8 +29,9 @@ const logVoice = (...args: unknown[]) => {
 const nativeConsoleError = console.error.bind(console);
 
 const reportError = (message: string, error?: unknown, context?: unknown) => {
+	recordDesktopDiagnostic('reported_error', { message, error, context }, 'error');
 	nativeConsoleError(message, error, context);
 	reportErrorToSentry(message, error, context);
 };
 
-export { configureClientErrorReporting, logDebug, logVoice, reportError, setSentryUser, traceSentrySpan };
+export { configureClientErrorReporting, logDebug, logVoice, reportError, setSentryUser };

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { TSpanObservation } from '@sharkord/shared/telemetry/tracing';
 import { createVoiceSessionTelemetry } from '../voice/voice-session-telemetry';
 
 describe('voice session telemetry', () => {
@@ -71,5 +72,30 @@ describe('voice session telemetry', () => {
 
 		expect(() => observation.pairObserver({ outcome: 'disposed', cause: 'request_cleanup' })).not.toThrow();
 		expect(() => observation.finish({ path: 'fresh', outcome: 'preparation_failed' })).not.toThrow();
+	});
+	test('reports completed, failed and cancelled attempts without raw error details', () => {
+		for (const outcome of ['succeeded', 'preparation_failed', 'cancelled', 'superseded'] as const) {
+			const finishes: Parameters<TSpanObservation['finish']>[0][] = [];
+			const telemetry = createVoiceSessionTelemetry({
+				now: () => 10,
+				log: () => {},
+				startSpan: () => ({
+					run: (effect) => effect(),
+					finish: (value) => {
+						finishes.push(value);
+					},
+				}),
+			});
+			const observation = telemetry.startAttempt({ kind: 'restore', hasClientInstanceId: false });
+			observation.finish({ path: 'fresh', outcome, error: new Error('Bearer secret') });
+			observation.finish({ path: 'fresh', outcome: 'succeeded' });
+			expect(finishes).toEqual([
+				{
+					attributes: { 'voice.path': 'fresh', 'voice.outcome': outcome, 'voice.duration_ms': 0 },
+					status: outcome === 'succeeded' ? 'ok' : outcome === 'preparation_failed' ? 'error' : 'unset',
+					statusMessage: outcome,
+				},
+			]);
+		}
 	});
 });

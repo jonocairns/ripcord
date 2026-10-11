@@ -16,6 +16,7 @@ import {
 } from '@/features/server/voice/reconnect-coordinator';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import { resetServerScreens } from '@/features/server-screens/actions';
+import { recordDesktopDiagnostic } from '@/helpers/desktop-diagnostics';
 import { clearAuthToken, getAuthToken } from '@/helpers/storage';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { createSessionAuthenticationGate } from './session-authentication-gate';
@@ -145,6 +146,18 @@ const initializeTRPC = (host: string) => {
 			if (shouldIgnoreSocketCloseEvent(cause)) {
 				return;
 			}
+			recordDesktopDiagnostic(
+				'websocket_closed',
+				{
+					clientInstanceId: getWsClientInstanceId(),
+					code: cause.code,
+					reason: cause.reason,
+					wasClean: cause.wasClean,
+					online: isVoiceReconnectOnline(),
+					wasConnected: useServerStore.getState().connected,
+				},
+				'warn',
+			);
 			sessionAuthentication.invalidate();
 
 			clearDeferredWsReconnectOnlineListener();
@@ -215,6 +228,10 @@ const initializeTRPC = (host: string) => {
 			teardownTimer = setTimeout(runTeardown, RETRY_GRACE_PERIOD_MS);
 		},
 		onOpen: () => {
+			recordDesktopDiagnostic('websocket_opened', {
+				clientInstanceId: getWsClientInstanceId(),
+				reconnecting: teardownTimer !== null,
+			});
 			sessionAuthentication.invalidate();
 			const resumeReconnect = () => {
 				const pendingTeardownTimer = teardownTimer;

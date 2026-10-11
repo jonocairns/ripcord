@@ -196,6 +196,7 @@ export type TDesktopErrorReportingConfig = {
 };
 
 export type TDesktopBridge = {
+	writeDiagnosticEvent?: (event: { event: string; level: 'info' | 'warn' | 'error'; data?: unknown }) => Promise<void>;
 	getServerUrl: () => Promise<string>;
 	getWindowControlsState?: () => Promise<TDesktopWindowControlsState>;
 	minimizeWindow?: () => Promise<void>;

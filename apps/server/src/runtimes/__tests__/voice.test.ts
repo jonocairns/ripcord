@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { StreamKind } from '@sharkord/shared';
 import type { AppData, Consumer } from 'mediasoup/types';
+import { logger } from '../../logger';
 import { VoiceRuntime } from '../voice';
 
 /**
@@ -191,6 +192,48 @@ describe('VoiceRuntime in-session transport rebuild', () => {
 		expect(runtime.getConsumerTransport(1)).toBe(newConsumerTransport);
 		expect(newProducerTransport.closed).toBe(false);
 		expect(newConsumerTransport.closed).toBe(false);
+	});
+
+	test('records current DTLS failures before cleanup and ignores failures from superseded transports', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		await runtime.createConsumerTransport(1);
+		const oldTransport = runtime.getConsumerTransport(1);
+		await runtime.createConsumerTransport(1);
+		const transport = runtime.getConsumerTransport(1);
+		if (!oldTransport || !transport) throw new Error('Expected transports');
+		const warn = spyOn(logger, 'warn');
+		try {
+			oldTransport.emit('dtlsstatechange', 'failed');
+			expect(warn).not.toHaveBeenCalled();
+			transport.emit('dtlsstatechange', 'failed');
+			expect(warn).toHaveBeenCalledWith('[voice-transport] %s', expect.stringContaining('"source":"consumer-dtls"'));
+			expect(warn).toHaveBeenCalledWith(
+				'[voice-transport] %s',
+				expect.stringContaining(`"transportId":"${transport.id}"`),
+			);
+			expect(warn).toHaveBeenCalledWith('[voice-transport] %s', expect.stringContaining('"dtlsState":"failed"'));
+			expect(runtime.getConsumerTransport(1)).toBeUndefined();
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	test('a diagnostic logger failure cannot stop producer transport cleanup', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		await runtime.createProducerTransport(1);
+		const transport = runtime.getProducerTransport(1);
+		if (!transport) throw new Error('Expected producer transport');
+		const warn = spyOn(logger, 'warn').mockImplementation(() => {
+			throw new Error('logging failed');
+		});
+		try {
+			expect(() => transport.emit('dtlsstatechange', 'failed')).not.toThrow();
+			expect(runtime.getProducerTransport(1)).toBeUndefined();
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	test('targeted consumer cleanup skips a newer replacement consumer', async () => {

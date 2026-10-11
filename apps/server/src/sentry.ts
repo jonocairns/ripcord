@@ -2,13 +2,14 @@
 // the first-class @sentry/bun SDK rather than @sentry/node. It re-exports the
 // Node API — captureException, captureMessage, close, etc. all behave the same
 // — but is built for the Bun runtime. Note: Sentry auto-instrumentation (and
-// thus tracesSampleRate) does not attach inside a compiled single-file
-// executable; error capture, which is what we rely on, is unaffected.
+// automatic spans) does not attach inside a compiled single-file executable.
+// Manual OpenTelemetry spans still use its provider, async context and sampler.
 
 import type { ErrorEvent } from '@sentry/bun';
 import * as Sentry from '@sentry/bun';
 import { format } from 'winston';
 import { config } from './config';
+import { configureServerTracing } from './helpers/tracing';
 import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';
 
 const SPLAT = Symbol.for('splat');
@@ -133,6 +134,7 @@ const initSentry = (): void => {
 		beforeSend: sanitizeServerEvent,
 		...tracingOptions,
 	});
+	configureServerTracing(serverTracingSampleRate > 0);
 };
 
 const sentryFormat = format((info) => {

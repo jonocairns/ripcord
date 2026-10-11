@@ -446,6 +446,7 @@ describe('voice actions', () => {
 		resolveLeave?.();
 
 		expect(await leaveResult).toBe(true);
+		expect(leaveMutate.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ reason: 'recovery_exhausted' }));
 		expect((await joinResult).kind).toBe('joined');
 		expect(joinMutate).toHaveBeenCalledTimes(1);
 	});
@@ -481,7 +482,7 @@ describe('voice actions', () => {
 		await leave;
 		expect((await join).kind).toBe('joined');
 		expect(leaveMutate).toHaveBeenCalledTimes(1);
-		expect(leaveMutate.mock.calls[0]?.[0]).toEqual({ mutationSeq: 1 });
+		expect(leaveMutate.mock.calls[0]?.[0]).toEqual({ mutationSeq: 1, reason: 'user_action' });
 		expect(joinMutate.mock.calls[0]?.[0]).toMatchObject({ channelId: 8, mutationSeq: 2 });
 		expect(useServerStore.getState().currentVoiceChannelId).toBe(8);
 	});
@@ -498,7 +499,7 @@ describe('voice actions', () => {
 			await leave;
 			expect((await join).kind).toBe(failureCode ? 'non-retriable-failure' : 'retryable-failure');
 			expect(leaveMutate).toHaveBeenCalledTimes(1);
-			expect(leaveMutate.mock.calls[0]?.[0]).toEqual({ mutationSeq: 1 });
+			expect(leaveMutate.mock.calls[0]?.[0]).toEqual({ mutationSeq: 1, reason: 'user_action' });
 			expect(joinMutate.mock.calls[0]?.[0]).toMatchObject({ mutationSeq: 2 });
 			expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
 			expect(runVoiceProviderCleanup).toHaveBeenCalledTimes(1);
@@ -550,7 +551,7 @@ describe('voice actions', () => {
 		expect(joinAbortObserved).toBe(true);
 		expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
 		expect(joinMutate.mock.calls[0]?.[0]).toMatchObject({ mutationSeq: 1 });
-		expect(leaveMutate.mock.calls[0]?.[0]).toEqual({ mutationSeq: 2 });
+		expect(leaveMutate.mock.calls[0]?.[0]).toEqual({ mutationSeq: 2, reason: 'user_action' });
 
 		resolveJoin?.();
 		expect((await joinResult).kind).toBe('retryable-failure');
@@ -784,6 +785,7 @@ describe('voice actions', () => {
 
 		expect(result).toBe('succeeded');
 		expect(leaveMutate).toHaveBeenCalledTimes(1);
+		expect(leaveMutate.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ reason: 'app_quit' }));
 		expect(playSound).not.toHaveBeenCalledWith(SoundType.OWN_USER_LEFT_VOICE_CHANNEL);
 		expect(useServerStore.getState().currentVoiceChannelId).toBeUndefined();
 		expect(useServerStore.getState().selectedChannelId).toBe(9);
@@ -833,6 +835,7 @@ describe('voice actions', () => {
 
 		expect(result).toBe('succeeded');
 		expect(leaveMutate).toHaveBeenCalledTimes(1);
+		expect(leaveMutate.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ reason: 'app_quit' }));
 		expect(getPendingVoiceReconnect()).toBeUndefined();
 		expect(getReconnectingSince()).toBeUndefined();
 		expect(getVoiceReconnectSuppression()).toBeUndefined();

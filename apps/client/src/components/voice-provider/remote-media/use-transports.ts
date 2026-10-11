@@ -8,7 +8,8 @@ import {
 import { TRPCClientError } from '@trpc/client';
 import type { AppData, Consumer, Device, RtpCapabilities, RtpParameters, Transport } from 'mediasoup-client/types';
 import { useCallback, useRef } from 'react';
-import { logVoice, traceSentrySpan } from '@/helpers/browser-logger';
+import { logVoice } from '@/helpers/browser-logger';
+import { traceSpan } from '@/helpers/telemetry/tracing';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
 import { withConsumeAttemptTimeout } from './consume-attempt-timeout';
@@ -215,7 +216,7 @@ const useTransports = ({
 			onConsumerClosed: markConsumerClosed,
 			log: (message, context) => logVoice(message, context),
 			trace: (request, operation) =>
-				traceSentrySpan(
+				traceSpan(
 					{
 						name: 'voice.consume',
 						op: 'voice.consume',
@@ -553,7 +554,7 @@ const useTransports = ({
 
 	const runConsumeExistingProducersSweep = useCallback(
 		async ({ rtpCapabilities, externalStreamTracks, prefetchedProducers }: TExistingProducersSweepRequest) => {
-			return traceSentrySpan(
+			return traceSpan(
 				{
 					name: 'voice.consume_existing_producers',
 					op: 'voice.consume',

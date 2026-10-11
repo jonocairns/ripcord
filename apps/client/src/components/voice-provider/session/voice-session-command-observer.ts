@@ -2,14 +2,16 @@ import type {
 	TVoiceSessionCommandObserver,
 	TVoiceSessionCommandOutcome,
 } from '@/features/server/voice/voice-session-command-executor';
-import { startSentrySpanObservation } from '@/helpers/error-reporting/sentry-client';
+import { recordDesktopDiagnostic } from '@/helpers/desktop-diagnostics';
+import { startSpanObservation } from '@/helpers/telemetry/tracing';
 
 const isErrorOutcome = (outcome: TVoiceSessionCommandOutcome): boolean =>
 	outcome === 'failed' || outcome === 'expired' || outcome === 'detached';
 
 const voiceSessionCommandObserver: TVoiceSessionCommandObserver = {
 	start: (context) => {
-		const span = startSentrySpanObservation({
+		recordDesktopDiagnostic('voice_command_started', context);
+		const span = startSpanObservation({
 			name: 'voice.session_command',
 			op: 'voice.session',
 			attributes: {
@@ -23,13 +25,18 @@ const voiceSessionCommandObserver: TVoiceSessionCommandObserver = {
 
 		return {
 			run: span.run,
-			finish: ({ outcome, durationMs }) => {
+			finish: ({ outcome, durationMs, error }) => {
+				recordDesktopDiagnostic(
+					'voice_command_finished',
+					{ ...context, outcome, durationMs, error },
+					isErrorOutcome(outcome) ? 'warn' : 'info',
+				);
 				span.finish({
 					attributes: {
 						'voice.outcome': outcome,
 						'voice.duration_ms': durationMs,
 					},
-					status: isErrorOutcome(outcome) ? 'error' : 'ok',
+					status: isErrorOutcome(outcome) ? 'error' : outcome === 'succeeded' ? 'ok' : 'unset',
 					statusMessage: outcome,
 				});
 			},

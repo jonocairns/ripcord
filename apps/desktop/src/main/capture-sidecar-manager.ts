@@ -500,6 +500,13 @@ class CaptureSidecarManager {
 		};
 	}
 
+	onDiagnostic(listener: (message: string) => void) {
+		this.events.on('diagnostic', listener);
+		return () => {
+			this.events.off('diagnostic', listener);
+		};
+	}
+
 	onLifecycle(listener: (event: TSidecarLifecycleEvent) => void) {
 		this.events.on('lifecycle', listener);
 		return () => {
@@ -682,6 +689,7 @@ class CaptureSidecarManager {
 
 				if (line) {
 					console.info('[capture-sidecar]', line);
+					this.events.emit('diagnostic', line);
 					this.recentStderrLines.push(line);
 					if (this.recentStderrLines.length > SIDECAR_STDERR_TAIL_LINES) {
 						this.recentStderrLines.shift();

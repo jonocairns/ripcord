@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import * as Sentry from '@sentry/electron/main';
 import {
@@ -17,6 +18,7 @@ import {
 import { AppAudioRtpSender, type TAppAudioRtpTarget } from './app-audio-rtp-sender';
 import { resolveDesktopCaptureCapabilities } from './capture-capabilities';
 import { captureSidecarManager } from './capture-sidecar-manager';
+import { createDiagnosticLog, validateDiagnosticEvent } from './diagnostic-log';
 import { configureMainErrorReporting } from './error-reporting';
 import {
 	validateConfigureErrorReportingArgs,
@@ -63,6 +65,11 @@ import { classifyWindowOpenUrl } from './window-open-policy';
 import { resolveWindowSizing } from './window-size';
 import { getWindowSize, setWindowSize } from './window-size-store';
 import { installYoutubeEmbedRefererHandler } from './youtube-embed-referrer';
+
+let diagnosticLog: ReturnType<typeof createDiagnosticLog> | undefined;
+const recordMainDiagnostic = (event: string, data?: unknown, level: 'info' | 'warn' | 'error' = 'info'): void => {
+	void diagnosticLog?.write({ event, level, data });
+};
 
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
 const TRUSTED_RENDERER_URL = resolveTrustedRendererUrl({
@@ -111,6 +118,7 @@ const sendToRenderer = (channel: string, ...args: unknown[]): boolean => {
 // minidumps. We keep these handlers purely so a crash is visible in stdout even
 // when no DSN is configured.
 const reportProcessCrash = (event: TDesktopProcessCrashEvent): void => {
+	recordMainDiagnostic('desktop_process_crashed', event, 'error');
 	console.error('[desktop] Process crashed', event);
 };
 
@@ -911,6 +919,12 @@ const registerIpcHandlers = () => {
 		event.sender.postMessage('desktop:app-audio-frame-channel-ready', null, [port1]);
 	});
 
+	handleTrusted('desktop:write-diagnostic-event', (_event, input: unknown) => {
+		const diagnostic = validateDiagnosticEvent(input);
+		if (!diagnostic) return;
+		return diagnosticLog?.write({ ...diagnostic, source: 'renderer' });
+	});
+
 	onTrusted(
 		'desktop:before-quit-finished',
 		(_event: IpcMainEvent, result: TDesktopQuitFlushResult) => {
@@ -1041,6 +1055,14 @@ configureGpuCommandLineSwitches();
 void app
 	.whenReady()
 	.then(async () => {
+		diagnosticLog = createDiagnosticLog({
+			directory: path.join(app.getPath('userData'), 'logs'),
+			appVersion: app.getVersion(),
+			platform: process.platform,
+			homeDirectory: homedir(),
+		});
+		recordMainDiagnostic('desktop_started', { electronVersion: process.versions.electron });
+		captureSidecarManager.onDiagnostic((message) => recordMainDiagnostic('sidecar_stderr', { message }));
 		captureSidecarManager.onFrame((frame) => {
 			// Native RTP ingest owns the egress — never also forward to the renderer.
 			if (appAudioRtpSender || appAudioFrameEgressPort) {
@@ -1083,12 +1105,14 @@ void app
 			}
 		});
 		captureSidecarManager.onStatus((event) => {
+			recordMainDiagnostic('app_audio_status', event);
 			sendToRenderer('desktop:app-audio-status', event);
 		});
 		captureSidecarManager.onPushKeybind((event) => {
 			emitPushKeybindEvent(event);
 		});
 		captureSidecarManager.onCrash((event) => {
+			recordMainDiagnostic('sidecar_crashed', event, 'error');
 			// The Rust capture sidecar is a spawned native process, not an Electron
 			// child, so the SDK's childProcessIntegration doesn't see it. Report
 			// abnormal exits here, with recent stderr (incl. any panic) as context.
@@ -1098,6 +1122,7 @@ void app
 			});
 		});
 		captureSidecarManager.onLifecycle((event) => {
+			recordMainDiagnostic('sidecar_lifecycle', event);
 			if (appIsShuttingDown && event.kind === 'exit') {
 				return;
 			}
@@ -1163,6 +1188,18 @@ app.on('before-quit', (event) => {
 
 	void (async () => {
 		const result = await requestDesktopQuitFlush();
+		recordMainDiagnostic('desktop_quit_flush', result);
+		// Give accepted diagnostics a bounded chance to reach disk while the
+		// renderer's leave confirmation is still available. Disk stalls cannot
+		// prevent quitting.
+		let diagnosticFlushTimeout: ReturnType<typeof setTimeout> | undefined;
+		await Promise.race([
+			diagnosticLog?.flush(),
+			new Promise<void>((resolve) => {
+				diagnosticFlushTimeout = setTimeout(resolve, 1_000);
+			}),
+		]);
+		clearTimeout(diagnosticFlushTimeout);
 
 		if (result.status === 'skipped') {
 			console.warn('[desktop] Quit flush skipped', {

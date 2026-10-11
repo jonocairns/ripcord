@@ -14,6 +14,7 @@ const leaveVoiceRoute = protectedProcedure
 		z
 			.object({
 				mutationSeq: z.number().int().nonnegative().optional(),
+				reason: z.enum(['user_action', 'recovery_exhausted', 'app_quit', 'join_failed']).optional(),
 			})
 			.optional(),
 	)
@@ -51,6 +52,24 @@ const leaveVoiceRoute = protectedProcedure
 			message: 'Channel is not a voice channel',
 		});
 
+		const logLeave = (outcome: string): void => {
+			try {
+				logger.info(
+					'[voice-session] %s',
+					JSON.stringify({
+						event: 'voice_leave',
+						userId: ctx.user.id,
+						channelId,
+						clientInstanceId: ctx.getClientInstanceId(),
+						reason: input?.reason ?? 'unknown',
+						mutationSeq: input?.mutationSeq,
+						outcome,
+					}),
+				);
+			} catch {
+				/* Diagnostics must not change leave behavior. */
+			}
+		};
 		const runtime = VoiceRuntime.findById(channelId);
 
 		invariant(runtime, {
@@ -78,6 +97,7 @@ const leaveVoiceRoute = protectedProcedure
 		// kill the replacement, so treat the leave as already satisfied.
 		if (!userInChannel || seatSuperseded) {
 			clearOwnSessionBookkeeping();
+			logLeave(userInChannel ? 'superseded' : 'already_removed');
 
 			logger.info(
 				'%s voice leave for channel %s was a no-op (%s)',
@@ -96,6 +116,7 @@ const leaveVoiceRoute = protectedProcedure
 		});
 		clearOwnSessionBookkeeping();
 
+		logLeave('removed');
 		logger.info('%s left voice channel %s', ctx.user.name, channel.name);
 	});
 

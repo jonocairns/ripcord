@@ -17,7 +17,9 @@ import {
 	dispatchVoiceSessionWithResult,
 	getVoiceSessionState,
 } from '@/features/server/voice/voice-session-store';
-import { logDebug, logVoice, reportError, traceSentrySpan } from '@/helpers/browser-logger';
+import { logDebug, logVoice, reportError } from '@/helpers/browser-logger';
+import { recordDesktopDiagnostic } from '@/helpers/desktop-diagnostics';
+import { traceSpan } from '@/helpers/telemetry/tracing';
 import { getTrpcErrorData } from '@/helpers/trpc-error-data';
 import { getTRPCClient, TRPCClientUnavailableError } from '@/lib/trpc';
 import { voiceSessionCommandObserver } from './voice-session-command-observer';
@@ -80,7 +82,9 @@ const requestVoiceRestoreOrJoin = async (opts: {
 	reconnectAttemptId: string;
 	signal?: AbortSignal;
 }): ReturnType<TVoiceSessionRuntimeDependencies['requestVoiceRestoreOrJoin']> => {
-	return traceSentrySpan(
+	const diagnosticContext = { channelId: opts.channelId, reconnectAttemptId: opts.reconnectAttemptId };
+	recordDesktopDiagnostic('voice_restore_requested', diagnosticContext);
+	return traceSpan(
 		{
 			name: 'voice.restore_or_join',
 			op: 'voice.trpc',
@@ -89,17 +93,28 @@ const requestVoiceRestoreOrJoin = async (opts: {
 			},
 		},
 		() =>
-			getTRPCClient().voice.restoreOrJoin.mutate(
-				{
-					channelId: opts.channelId,
-					state: {
-						micMuted: opts.micMuted,
-						soundMuted: opts.soundMuted,
+			getTRPCClient()
+				.voice.restoreOrJoin.mutate(
+					{
+						channelId: opts.channelId,
+						state: {
+							micMuted: opts.micMuted,
+							soundMuted: opts.soundMuted,
+						},
+						reconnectAttemptId: opts.reconnectAttemptId,
 					},
-					reconnectAttemptId: opts.reconnectAttemptId,
-				},
-				{ signal: opts.signal },
-			),
+					{ signal: opts.signal },
+				)
+				.then(
+					(bootstrap) => {
+						recordDesktopDiagnostic('voice_restore_rpc_succeeded', diagnosticContext);
+						return bootstrap;
+					},
+					(error: unknown) => {
+						recordDesktopDiagnostic('voice_restore_rpc_failed', { ...diagnosticContext, error }, 'warn');
+						throw error;
+					},
+				),
 	);
 };
 
@@ -123,7 +138,7 @@ const voiceSessionRuntimeEnvironment = {
 	getVoiceSessionState,
 	logVoice,
 	logDebug,
-	traceSentrySpan,
+	traceSpan,
 	now: Date.now,
 	createReconnectAttemptId,
 	getErrorCode: (error: unknown) => getTrpcErrorData(error)?.code,
