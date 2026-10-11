@@ -4,15 +4,10 @@ import { config } from './config';
 import { bootLog } from './helpers/boot-log';
 import { ensureDir } from './helpers/fs';
 import { LOGS_PATH } from './helpers/paths';
+import { serverLogFormat } from './helpers/server-log-format';
 import { sentryFormat } from './sentry';
 
-const { combine, colorize, printf, errors, splat } = format;
-
-const logFormat = printf((info) => {
-	if (info[Symbol.for('level')] === 'error')
-		return `${info.level}: [server-exception] ${JSON.stringify({ source: 'server', runtime: 'bun', occurredAt: Date.now(), message: info.message, 'exception.stacktrace': info.stack })}`;
-	return `${info.level}: ${info.stack || info.message}`;
-});
+const { combine, colorize, errors, splat } = format;
 
 const appLog = path.join(LOGS_PATH, 'app.log');
 const errorLog = path.join(LOGS_PATH, 'error.log');
@@ -26,7 +21,7 @@ const level = config.server.debug ? 'debug' : 'info';
 bootLog('logger: creating transports');
 const logger = createLogger({
 	level,
-	format: combine(colorize(), splat(), errors({ stack: true }), sentryFormat(), logFormat),
+	format: combine(colorize(), splat(), errors({ stack: true }), sentryFormat(), serverLogFormat),
 	transports: [
 		new transports.Console(),
 		new transports.File({

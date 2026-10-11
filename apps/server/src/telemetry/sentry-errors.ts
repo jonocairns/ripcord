@@ -24,6 +24,7 @@ export const createSentryErrorAdapter = (dsn: string, transport = Sentry.makeFet
 			user: { id: String(userId) },
 			tags: { source: 'client', runtime: record.runtime, client_session_id: clientSessionId },
 			contexts: {
+				...(typeof record.context?.replayId === 'string' ? { replay: { replay_id: record.context.replayId } } : {}),
 				...(record.traceId && record.spanId ? { trace: { trace_id: record.traceId, span_id: record.spanId } } : {}),
 			},
 			extra: record.context,

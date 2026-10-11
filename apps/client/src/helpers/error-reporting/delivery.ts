@@ -1,4 +1,4 @@
-import { diagnosticRecordSchema, sanitizeDiagnosticRecord, type TDiagnosticRecord } from '@sharkord/shared';
+import { fitDiagnosticRecord, type TDiagnosticRecord } from '@sharkord/shared';
 import { createDiagnosticCollector } from './collector';
 
 let identity: string | undefined;
@@ -32,8 +32,8 @@ export const flushDiagnosticDelivery = async () => {
 };
 export const recordDiagnostic = (record: Omit<TDiagnosticRecord, 'sequence'>): void => {
 	try {
-		const parsed = diagnosticRecordSchema.safeParse({ ...record, sequence: 0 });
-		if (parsed.success) collector?.record(sanitizeDiagnosticRecord(parsed.data));
+		const fitted = fitDiagnosticRecord({ ...record, sequence: 0 });
+		if (fitted) collector?.record(fitted);
 	} catch {
 		/* Never report reporting failures. */
 	}

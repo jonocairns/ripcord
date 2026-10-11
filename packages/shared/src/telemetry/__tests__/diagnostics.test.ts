@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
 	diagnosticBatchSchema,
 	diagnosticRecordSchema,
+	fitDiagnosticRecord,
 	sanitizeDiagnosticRecord,
 	type TDiagnosticRecord,
 } from '../diagnostics';
@@ -96,4 +97,30 @@ describe('diagnostic records', () => {
 		expect(result.exception?.frames[0]?.debugId).toBe(debugId);
 		expect(result.context?.producerId).toBe('producer-1');
 	});
+});
+
+test('fits long parsed exceptions without losing identity or normal source-map frames', () => {
+	const frames = Array.from({ length: 40 }, (_, i) => ({
+		filename: 'https://server/assets/a.js',
+		lineno: i,
+		colno: 3,
+	}));
+	const input = {
+		...record(),
+		traceId: 'a'.repeat(32),
+		exception: { type: 'TypeError', message: 'failure', stack: 's'.repeat(8000), frames },
+		breadcrumbs: Array.from({ length: 30 }, () => ({ occurredAt: 1, message: 'b'.repeat(400) })),
+		context: { operationId: crypto.randomUUID(), token: 'secret' },
+	};
+	expect(diagnosticRecordSchema.safeParse(input).success).toBe(false);
+	const fitted = fitDiagnosticRecord(input);
+	expect(diagnosticRecordSchema.safeParse(fitted).success).toBe(true);
+	expect(fitted?.exception?.frames).toEqual(frames.map((f) => ({ ...f, function: undefined })));
+	expect(fitted?.id).toBe(input.id);
+	expect(fitted?.occurredAt).toBe(input.occurredAt);
+	expect(fitted?.traceId).toBe(input.traceId);
+	expect(fitted?.context?.operationId).toBe(input.context.operationId);
+	expect(JSON.stringify(fitted)).not.toContain('secret');
+	expect(input.breadcrumbs).toHaveLength(30);
+	expect(fitDiagnosticRecord({ ...input, userId: 123 })).toBeUndefined();
 });

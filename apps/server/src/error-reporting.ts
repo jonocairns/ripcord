@@ -1,7 +1,13 @@
 import { logger } from './logger';
 export const reportServerError = (error: unknown, context?: Record<string, unknown>): void => {
 	try {
-		logger.error('[server-exception] %s', error instanceof Error ? error.message : String(error), error, context);
+		logger.error({
+			message: error instanceof Error ? error.message : String(error),
+			originalError: error,
+			stack: error instanceof Error ? error.stack : undefined,
+			exceptionType: error instanceof Error ? error.name : 'Error',
+			context,
+		});
 	} catch {
 		/* Reporting cannot affect RPCs. */
 	}

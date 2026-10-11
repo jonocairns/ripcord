@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import type { ErrorEvent } from '@sentry/electron/main';
 import * as Sentry from '@sentry/electron/main';
-import { sanitizeDiagnosticRecord, sdkEventRecord, type TDiagnosticRecord } from '@sharkord/shared';
+import { fitDiagnosticRecord, sdkEventRecord, type TDiagnosticRecord } from '@sharkord/shared';
 import { app, crashReporter } from 'electron';
 import type { TDesktopErrorReportingConfig } from './types';
 
@@ -203,11 +203,11 @@ const configureMainErrorReporting = (config: TDesktopErrorReportingConfig): void
 			beforeSend: (event, hint) => {
 				try {
 					if (routingIdentity && event.tags?.['ripcord.telemetry.identity'] === routingIdentity) {
-						const record = sanitizeDiagnosticRecord({
+						const record = fitDiagnosticRecord({
 							...sdkEventRecord(sanitizeEvent(event), hint, 'desktop-main'),
 							sequence: 0,
 						});
-						sendRecord?.({ identity: routingIdentity, record });
+						if (record) sendRecord?.({ identity: routingIdentity, record });
 					}
 				} catch {
 					/* Never report IPC/reporting failures. */

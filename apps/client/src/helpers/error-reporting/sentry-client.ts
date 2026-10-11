@@ -4,6 +4,7 @@ import { configureClientTracing } from '@/helpers/telemetry/tracing';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { getDiagnosticIdentity, recordDiagnostic } from './delivery';
+import { flushErrorReplay } from './replay';
 import { sanitizeString } from './sanitize';
 
 type TClientErrorReportingConfig = {
@@ -132,7 +133,12 @@ const buildIntegrations = (
 
 const configureClientErrorReporting = (config: TClientErrorReportingConfig = {}): void => {
 	if (!config.serverRouted && !config.sentryDsn && !config.tracingSentryDsn) return;
-	const dsn = config.tracingSentryDsn?.trim() || config.sentryDsn?.trim() || 'https://ripcord@telemetry.invalid/1';
+	const replayEnabled = (config.replaySessionSampleRate ?? 0) > 0 || (config.replayOnErrorSampleRate ?? 0) > 0;
+	const dsn =
+		(replayEnabled ? config.sentryDsn?.trim() : undefined) ||
+		config.tracingSentryDsn?.trim() ||
+		config.sentryDsn?.trim() ||
+		'https://ripcord@telemetry.invalid/1';
 
 	if (initialized) {
 		if (initializedServerUrl !== getRuntimeServerConfig().serverUrl) {
@@ -175,8 +181,21 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 		beforeSend: (event, hint) => {
 			try {
 				const identity = getDiagnosticIdentity();
-				if (identity && event.tags?.['ripcord.telemetry.identity'] === identity)
-					recordDiagnostic(sdkEventRecord(event, hint, getRuntimeTag()));
+				if (identity && event.tags?.['ripcord.telemetry.identity'] === identity) {
+					const record = sdkEventRecord(event, hint, getRuntimeTag());
+					const replay = Sentry.getReplay?.();
+					const replayId = replay?.getReplayId();
+					recordDiagnostic({
+						...record,
+						context: {
+							...Object.fromEntries(Object.entries(record.context ?? {}).slice(0, 19)),
+							...(replayId ? { replayId } : {}),
+						},
+					});
+					// Direct error sends are suppressed, so Replay's afterSendEvent hook cannot
+					// trigger the buffer. Preserve its opt-in error sampling explicitly.
+					if (record.kind === 'exception') flushErrorReplay(replay, replayOnErrorSampleRate ?? 0);
+				}
 			} catch {
 				/* Parsing/reporting is best effort. */
 			}

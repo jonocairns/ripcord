@@ -166,7 +166,8 @@ const sentryFormat = format((info) => {
 	}
 
 	const splat = (info as Record<symbol, unknown[]>)[SPLAT] ?? [];
-	const errorFromSplat = splat.find((arg): arg is Error => arg instanceof Error);
+	const errorFromSplat =
+		info.originalError instanceof Error ? info.originalError : splat.find((arg): arg is Error => arg instanceof Error);
 	const additionalSplat = splat.filter((arg) => arg !== errorFromSplat);
 
 	const extra: Record<string, unknown> = {

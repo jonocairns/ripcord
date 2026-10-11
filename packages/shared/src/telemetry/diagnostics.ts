@@ -12,7 +12,7 @@ export const diagnosticFrameSchema = z
 		debugId: z.string().uuid().optional(),
 	})
 	.strict();
-export const diagnosticRecordSchema = z
+const diagnosticRecordFields = z
 	.object({
 		id: z.string().uuid(),
 		occurredAt: z.number().int().min(0).max(8_640_000_000_000_000),
@@ -51,8 +51,11 @@ export const diagnosticRecordSchema = z
 			.regex(/^[0-9a-f]{16}$/)
 			.optional(),
 	})
-	.strict()
-	.refine((v) => new TextEncoder().encode(JSON.stringify(v)).length <= 11_000, 'Record too large');
+	.strict();
+export const diagnosticRecordSchema = diagnosticRecordFields.refine(
+	(v) => new TextEncoder().encode(JSON.stringify(v)).length <= 11_000,
+	'Record too large',
+);
 export const diagnosticBatchSchema = z
 	.object({
 		clientSessionId: z.string().uuid(),
@@ -116,3 +119,24 @@ export const sanitizeDiagnosticRecord = (record: TDiagnosticRecord): TDiagnostic
 			}
 		: undefined,
 });
+
+// Fit locally produced records; the server still rejects oversized/untrusted input.
+// Preserve newest stack frames, identities and timestamps ahead of optional details.
+export const fitDiagnosticRecord = (input: unknown): TDiagnosticRecord | undefined => {
+	const parsed = diagnosticRecordFields.safeParse(input);
+	if (!parsed.success) return;
+	const record = sanitizeDiagnosticRecord(parsed.data);
+	const oversized = () => new TextEncoder().encode(JSON.stringify(record)).length > 11_000;
+	while (oversized() && record.exception?.stack)
+		record.exception.stack = record.exception.stack.slice(0, Math.floor(record.exception.stack.length / 2));
+	while (oversized() && record.breadcrumbs?.length) record.breadcrumbs.shift();
+	if (oversized() && record.context) {
+		for (const key of Object.keys(record.context)) {
+			if (!oversized()) break;
+			const value = record.context[key];
+			if (typeof value === 'string') record.context[key] = value.slice(0, 80);
+		}
+	}
+	while (oversized() && record.exception?.frames.length) record.exception.frames.shift();
+	return oversized() ? undefined : record;
+};

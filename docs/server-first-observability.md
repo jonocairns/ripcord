@@ -118,3 +118,13 @@ on `kind:exception`/record level, not solely Docker stderr. Configure rate/count
 alerts in your existing log alerting service, or grouping/issue alerts in the
 optional error tracker. Neither automatic alert provisioning nor a trace store
 is introduced here. VictoriaLogs is a log destination; it is not a trace backend.
+
+During PR 1's transitional browser Sentry backend, replay and tracing share an
+SDK. If replay is enabled, the legacy client DSN takes precedence so replay
+continues to reach its existing project. A differing trace-only DSN cannot be
+used concurrently with replay until PR 2 replaces the browser tracing backend.
+On-error replay is explicitly flushed using its existing configured probability
+(the SDK's successful-error-send trigger is unavailable when errors are routed
+through the server); its replay ID is forwarded for optional error correlation.
+
+Locally produced exceptions are fitted to the 11 KB record budget after scrubbing: shorten the raw stack first, discard oldest breadcrumbs next, shorten context strings next, and discard oldest source frames only if still necessary. Identity, client time, release and correlation remain intact. The server rejects untrusted oversized records.
