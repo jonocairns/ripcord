@@ -11,8 +11,7 @@ const tracing = createTracing(
 	() => adapter !== undefined,
 );
 
-// The browser SDK adapter is installed at the same time as error reporting.
-// No second global provider competes with Sentry's browser async context.
+// The authenticated server capability installs the standard OTel adapter.
 const configureClientTracing = (configuredAdapter: TTracingAdapter | undefined): void => {
 	adapter = configuredAdapter;
 };

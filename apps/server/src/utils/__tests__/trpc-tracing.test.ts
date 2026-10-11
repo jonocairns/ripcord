@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import type { TSpanObservation } from '@sharkord/shared/telemetry/tracing';
 import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import { createMockContext } from '../../__tests__/context';
 import { getMockedToken } from '../../__tests__/helpers';
 import * as tracing from '../../helpers/tracing';
@@ -112,5 +113,25 @@ describe('application RPC tracing middleware', () => {
 		expect(succeed).toHaveBeenCalledTimes(1);
 		expect(fail).toHaveBeenCalledTimes(1);
 		expect(observations).toEqual([disabled, disabled]);
+	});
+});
+
+test('trace carrier unwrapping preserves handler validation and old-client inputs', async () => {
+	const ctx = await createMockContext({ customToken: await getMockedToken(1) });
+	const caller = t
+		.router({ echo: publicProcedure.input(z.object({ channelId: z.number() })).mutation(({ input }) => input) })
+		.createCaller(ctx);
+	expect(await caller.echo({ channelId: 42 })).toEqual({ channelId: 42 });
+	const envelope = {
+		__ripcordTrace: { traceparent: `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01` },
+		input: { channelId: 43 },
+	};
+	// Internal caller's static input is the app schema; transport envelopes precede that schema.
+	const call: unknown = Reflect.get(caller, 'echo');
+	if (typeof call !== 'function') throw Error('Missing fixture procedure');
+	expect(await call(envelope)).toEqual({ channelId: 43 });
+	await expect(call({ ...envelope, input: { channelId: 'wrong' } })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+	await expect(call({ ...envelope, __ripcordTrace: { traceparent: 'invalid' } })).rejects.toMatchObject({
+		code: 'BAD_REQUEST',
 	});
 });

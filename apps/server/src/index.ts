@@ -18,11 +18,13 @@ bootLog('embedded assets: loaded');
 
 // ----------------------------------------
 import { initSentry } from './sentry';
+import { initializeServerTracing } from './telemetry/traces';
 // ----------------------------------------
 import { IS_PRODUCTION } from './utils/env';
 
 bootLog('sentry: initializing');
 initSentry();
+initializeServerTracing();
 bootLog('sentry: initialized');
 
 // ----------------------------------------

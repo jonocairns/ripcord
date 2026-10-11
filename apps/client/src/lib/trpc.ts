@@ -29,9 +29,11 @@ import {
 	clearStreamObservability,
 	pauseStreamObservability,
 } from '@/helpers/stream-observability';
+import { stopClientTracing } from '@/helpers/telemetry/backend';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { createSessionAuthenticationGate } from './session-authentication-gate';
 import { streamDiagnosticsLink } from './stream-diagnostics-link';
+import { tracingLink } from './tracing-link';
 import { markSocketCloseEventIgnored, shouldIgnoreSocketCloseEvent } from './websocket-close-ignore';
 import {
 	getWsReconnectOpenAction,
@@ -135,6 +137,7 @@ const clearDeferredWsReconnectOnlineListener = () => {
 const initializeTRPC = (host: string) => {
 	pauseStreamObservability();
 	pauseDiagnosticDelivery();
+	stopClientTracing();
 	sessionAuthentication.invalidate();
 	const runtimeServerUrl = getRuntimeServerConfig().serverUrl;
 	const serverProtocol = runtimeServerUrl ? new URL(runtimeServerUrl).protocol : window.location.protocol;
@@ -175,6 +178,7 @@ const initializeTRPC = (host: string) => {
 			sessionAuthentication.invalidate();
 			pauseStreamObservability();
 			pauseDiagnosticDelivery();
+			stopClientTracing();
 
 			clearDeferredWsReconnectOnlineListener();
 
@@ -250,6 +254,7 @@ const initializeTRPC = (host: string) => {
 			});
 			pauseStreamObservability();
 			pauseDiagnosticDelivery();
+			stopClientTracing();
 			sessionAuthentication.invalidate();
 			const resumeReconnect = () => {
 				const pendingTeardownTimer = teardownTimer;
@@ -313,7 +318,7 @@ const initializeTRPC = (host: string) => {
 	});
 
 	trpc = createTRPCProxyClient<AppRouter>({
-		links: [streamDiagnosticsLink, wsLink({ client: wsClient })],
+		links: [streamDiagnosticsLink, tracingLink, wsLink({ client: wsClient })],
 	});
 
 	currentHost = host;
@@ -405,6 +410,7 @@ const debugCloseCurrentWs = (opts: { code?: number; reason?: string } = {}) => {
 const cleanup = (opts: { clearAuth?: boolean; ignoreSocketCloseEvent?: boolean; skipSocketClose?: boolean } = {}) => {
 	clearStreamObservability();
 	clearDiagnosticDelivery();
+	stopClientTracing();
 	setErrorReportingIdentity();
 	sessionAuthentication.cancel(new TRPCClientUnavailableError());
 	clearDeferredWsReconnectOnlineListener();

@@ -9,7 +9,7 @@ afterEach(() => {
 });
 
 describe('configureClientErrorReporting', () => {
-	test('initializes Sentry once when a dsn is provided and skips when empty', async () => {
+	test('error SDK configuration cannot initialize tracing or redirect replay to a trace DSN', async () => {
 		const initMock = mock((_options: unknown) => undefined);
 		const browserTracingIntegrationMock = mock((_options: unknown) => ({
 			name: 'browserTracingIntegration',
@@ -66,32 +66,20 @@ describe('configureClientErrorReporting', () => {
 		configureClientErrorReporting({
 			sentryDsn: 'https://public@example.ingest.sentry.io/123456',
 			tracingSampleRate: 0.01,
+			tracingSentryDsn: 'https://trace@example.ingest.sentry.io/654321',
 		});
 		expect(initMock).toHaveBeenCalledTimes(1);
-		expect(browserTracingIntegrationMock).toHaveBeenCalledTimes(1);
+		expect(browserTracingIntegrationMock).not.toHaveBeenCalled();
 		expect(captureConsoleIntegrationMock).toHaveBeenCalledTimes(1);
 		expect(initMock.mock.calls[0]?.[0]).toMatchObject({
-			tracesSampleRate: 0.01,
-			tracePropagationTargets: ['https://server.example'],
+			dsn: 'https://public@example.ingest.sentry.io/123456',
 			maxBreadcrumbs: 50,
-			integrations: [{ name: 'captureConsoleIntegration' }, { name: 'browserTracingIntegration' }],
+			integrations: [{ name: 'captureConsoleIntegration' }],
 		});
 
-		const observation = startSpanObservation({ name: 'voice.session_command', op: 'voice.session' });
-		expect(observation.run(() => 'observed')).toBe('observed');
-		observation.finish({
-			attributes: { 'voice.outcome': 'succeeded', 'voice.duration_ms': 25 },
-			status: 'ok',
-			statusMessage: 'succeeded',
-		});
-		observation.finish({ status: 'error', statusMessage: 'failed' });
-		expect(startInactiveSpanMock).toHaveBeenCalledTimes(1);
-		expect(spanSetAttributesMock).toHaveBeenCalledWith({
-			'voice.outcome': 'succeeded',
-			'voice.duration_ms': 25,
-		});
-		expect(spanSetStatusMock).toHaveBeenCalledWith({ code: 1, message: 'succeeded' });
-		expect(spanEndMock).toHaveBeenCalledTimes(1);
+		expect(startInactiveSpanMock).not.toHaveBeenCalled();
+		expect(initMock.mock.calls[0]?.[0]).not.toHaveProperty('tracesSampleRate');
+		expect(initMock.mock.calls[0]?.[0]).not.toHaveProperty('tracePropagationTargets');
 
 		configureClientErrorReporting({
 			sentryDsn: 'https://public@example.ingest.sentry.io/123456',

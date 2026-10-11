@@ -1,48 +1,83 @@
 import assert from 'node:assert/strict';
-import * as Sentry from '@sentry/bun';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { resourceFromAttributes } from '@opentelemetry/resources';
+import { BatchSpanProcessor, ParentBasedSampler, TraceIdRatioBasedSampler } from '@opentelemetry/sdk-trace-base';
+import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { createOpenTelemetryAdapter } from '@sharkord/shared/telemetry/opentelemetry';
+import { context, propagation, trace } from '@sharkord/shared/telemetry/propagation';
 import { createTracing } from '@sharkord/shared/telemetry/tracing';
 import { configureServerTracing, startSpanObservation } from '../../tracing';
 
-const captured: Sentry.Event[] = [];
-Sentry.init({
-	dsn: 'https://public@example.invalid/1',
-	tracesSampleRate: 1,
-	defaultIntegrations: false,
-	transport: () => ({ send: async () => ({}), flush: async () => true }),
-	beforeSendTransaction: (event) => {
-		captured.push(event);
-		return event;
+const bodies: unknown[] = [];
+const backend = Bun.serve({
+	port: 0,
+	fetch: async (request) => {
+		bodies.push(await request.json());
+		return new Response('{}');
 	},
 });
-configureServerTracing(true);
-const tracing = createTracing(createOpenTelemetryAdapter('ripcord.tracing-test'));
-const parent = startSpanObservation({ name: 'rpc.voice.restore', op: 'rpc.server' });
-await parent.run(async () => {
-	await Promise.all(
-		['first', 'second'].map((name) =>
-			tracing.traceSpan({ name }, async () => {
-				const activeId = Sentry.getActiveSpan()?.spanContext().spanId;
-				assert.ok(activeId);
-				await new Promise((resolve) => setTimeout(resolve, 5));
-				assert.equal(Sentry.getActiveSpan()?.spanContext().spanId, activeId);
-			}),
-		),
-	);
+const provider = new NodeTracerProvider({
+	resource: resourceFromAttributes({
+		'service.name': 'ripcord.server',
+		'service.version': 'test',
+		'ripcord.runtime': 'bun',
+	}),
+	sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(0) }),
+	spanProcessors: [
+		new BatchSpanProcessor(new OTLPTraceExporter({ url: `http://localhost:${backend.port}/v1/traces` })),
+	],
 });
-parent.finish({ status: 'ok' });
-parent.finish({ status: 'error' });
+provider.register();
+configureServerTracing(true);
+const tracing = createTracing(createOpenTelemetryAdapter('ripcord.server'));
+const remote = propagation.extract(context.active(), { traceparent: `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01` });
+await context.with(remote, async () => {
+	const parent = startSpanObservation({ name: 'rpc.voice.restore', op: 'rpc.server' });
+	await parent.run(async () => {
+		await Promise.all(
+			['first', 'second'].map((name) =>
+				tracing.traceSpan({ name }, async () => {
+					const id = trace.getActiveSpan()?.spanContext().spanId;
+					assert.ok(id);
+					await new Promise((resolve) => setTimeout(resolve, 5));
+					assert.equal(trace.getActiveSpan()?.spanContext().spanId, id);
+				}),
+			),
+		);
+	});
+	parent.finish({ status: 'ok' });
+	parent.finish({ status: 'error' });
+});
+tracing.traceSpan({ name: 'unsampled-root' }, () => {});
+const unsampled = propagation.extract(context.active(), { traceparent: `00-${'c'.repeat(32)}-${'d'.repeat(16)}-00` });
+context.with(unsampled, () => tracing.traceSpan({ name: 'unsampled-child' }, () => {}));
 configureServerTracing(false);
 startSpanObservation({ name: 'disabled' }).finish({ status: 'ok' });
-await Sentry.flush(2000);
-assert.equal(captured.length, 1);
-const transaction = captured[0];
-assert.ok(transaction);
-assert.equal(transaction.transaction, 'rpc.voice.restore');
-assert.equal(transaction.spans?.length, 2);
-const parentId = transaction.contexts?.trace?.span_id;
-assert.ok(parentId);
-for (const span of transaction.spans ?? []) assert.equal(span.parent_span_id, parentId);
-assert.equal(new Set(transaction.spans?.map((span) => span.span_id)).size, 2);
+await provider.forceFlush();
+const spans: { name: string; traceId: string; spanId: string; parentSpanId?: string; flags: number }[] = [];
+for (const body of bodies) {
+	assert.ok(body && typeof body === 'object' && 'resourceSpans' in body && Array.isArray(body.resourceSpans));
+	for (const resource of body.resourceSpans) {
+		assert.ok(
+			resource.resource.attributes.some(
+				(a: { key: string; value: { stringValue?: string } }) =>
+					a.key === 'service.name' && a.value.stringValue === 'ripcord.server',
+			),
+		);
+		for (const scope of resource.scopeSpans) spans.push(...scope.spans);
+	}
+}
+assert.equal(spans.length, 3);
+const parent = spans.find((s) => s.name === 'rpc.voice.restore');
+assert.ok(parent);
+assert.equal(parent.traceId, 'a'.repeat(32));
+assert.equal(parent.parentSpanId, 'b'.repeat(16));
+assert.ok(parent.flags & 1);
+for (const span of spans.filter((s) => s !== parent)) {
+	assert.equal(span.traceId, parent.traceId);
+	assert.equal(span.parentSpanId, parent.spanId);
+}
+assert.equal(new Set(spans.map((s) => s.spanId)).size, 3);
+await provider.shutdown();
+backend.stop(true);
 console.log('OTel bridge, parent context, concurrent async isolation, disabled tracing: passed');
-await Sentry.close(2000);

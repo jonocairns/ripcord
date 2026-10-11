@@ -25,6 +25,7 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./telemetry/tracing": "./src/telemetry/tracing.ts",
-		"./telemetry/opentelemetry": "./src/telemetry/opentelemetry.ts"
+		"./telemetry/opentelemetry": "./src/telemetry/opentelemetry.ts",
+		"./telemetry/propagation": "./src/telemetry/propagation.ts"
 	}
 }
