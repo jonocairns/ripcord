@@ -110,6 +110,7 @@
       "name": "@sharkord/server",
       "version": "2.4.0", // x-release-please-version
       "dependencies": {
+        "@opentelemetry/core": "2.7.1",
         "@opentelemetry/exporter-trace-otlp-http": "0.214.0",
         "@opentelemetry/resources": "2.7.1",
         "@opentelemetry/sdk-trace-base": "2.7.1",

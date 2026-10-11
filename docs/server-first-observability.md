@@ -251,3 +251,33 @@ when no active trace exists. Use existing log-based alerts for unsampled excepti
 counts and your backend's sampled latency/error analysis for traces; sampled
 traces do not provide complete event counts. Actual deployed backend ingestion,
 provider replay and source-map symbolication remain deployment validation limits.
+
+Tracing uses the same bounded health summaries. `trace_relay_stale` and
+`trace_relay_future` count refused client spans; `trace_relay_queue_full` counts
+fresh batches refused for capacity (all-duplicate acknowledgement retries are
+excluded). Rejected fresh spans are not inserted into the dedupe cache and remain
+eligible on a later retry. `trace_relay_queue_expired`,
+`trace_relay_failed_batch` and `trace_relay_shutdown_drop` count batches discarded
+at expiry, after permanent/exhausted failures, or while queued/in flight at
+shutdown. An in-flight shutdown drop means delivery is unconfirmed; a backend
+may already have accepted it. `trace_relay_export_failure` counts failed HTTP
+attempts and `trace_relay_retry` counts additional attempts actually started. These units
+can overlap; retry warnings do not imply final loss when a later attempt succeeds.
+
+The standard server SpanExporter decorator reports `trace_export_failure` per
+failed SDK export callback or synchronous export failure, and
+`trace_export_failed_spans` counts spans in those batches. It passes original
+span objects and callback results through unchanged, delegates optional
+`forceFlush`, and adds no queue, sampling, retries or deadlines. Standard exporter
+shutdown rejection or the existing overall trace shutdown deadline increments
+`trace_shutdown_failure`. Invalid configured destinations and failed provider
+initialization increment `trace_configuration_invalid` and
+`trace_initialize_failure`; an absent endpoint intentionally disables tracing
+without reporting a failure. Health records have no inherited request trace IDs.
+
+These counters do not observe browser/server BatchSpanProcessor internal queue
+overflows, unsampled spans, successful HTTP responses containing OTLP partial
+rejection, or all downstream storage failures. Provider credentials/error strings
+are never health labels. Deployments should monitor their backend/collector's
+own rejected-span/drop counters as well; local acceptance and HTTP success remain
+best-effort boundaries rather than proof of durable storage.

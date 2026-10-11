@@ -120,9 +120,15 @@ test('relay bounds memory, expires queued work, rejects stale times and retries 
 });
 test('shutdown cancels an uncooperative external request within its budget and rejects later work', async () => {
 	let calls = 0;
+	const counters: Record<string, number> = {};
 	let signal: AbortSignal | null | undefined;
 	const relay = createTraceRelay({
 		destination,
+		health: {
+			count: (reason, quantity = 1) => {
+				counters[reason] = (counters[reason] ?? 0) + quantity;
+			},
+		},
 		now: () => 100,
 		fetch: async (_url, init) => {
 			calls++;
@@ -131,7 +137,11 @@ test('shutdown cancels an uncooperative external request within its budget and r
 		},
 	});
 	relay.accept(batch(), 1);
+	relay.accept(batch(), 1);
 	await relay.shutdown();
+	expect(counters.trace_relay_shutdown_drop).toBe(2);
+	await relay.shutdown();
+	expect(counters.trace_relay_shutdown_drop).toBe(2);
 	expect(signal?.aborted).toBe(true);
 	const atShutdown = calls;
 	expect(atShutdown).toBeGreaterThan(0);
@@ -170,4 +180,149 @@ test('dedupe capacity cannot block fresh spans from other users and evicts oldes
 	relay.accept(oldest, 1);
 	await relay.shutdown();
 	expect(calls).toBe(4098);
+});
+
+test('health distinguishes failed attempts, actual retries, permanent losses and eventual success', async () => {
+	const counters: Record<string, number> = {};
+	let attempts = 0;
+	const relay = createTraceRelay({
+		destination,
+		now: () => 100,
+		health: {
+			count: (reason, quantity = 1) => {
+				counters[reason] = (counters[reason] ?? 0) + quantity;
+			},
+		},
+		fetch: async () => {
+			attempts++;
+			return new Response('', { status: attempts === 1 ? 503 : 200 });
+		},
+	});
+	relay.accept(batch(), 1);
+	await relay.shutdown();
+	expect(counters).toEqual({ trace_relay_export_failure: 1, trace_relay_retry: 1 });
+	const permanent = createTraceRelay({
+		destination,
+		now: () => 100,
+		health: {
+			count: (reason, quantity = 1) => {
+				counters[reason] = (counters[reason] ?? 0) + quantity;
+			},
+		},
+		fetch: async () => new Response('', { status: 400 }),
+	});
+	permanent.accept(batch(), 1);
+	await permanent.shutdown();
+	expect(counters).toEqual({ trace_relay_export_failure: 2, trace_relay_retry: 1, trace_relay_failed_batch: 1 });
+	const exhausted = createTraceRelay({
+		destination,
+		now: () => 100,
+		health: {
+			count: (reason, quantity = 1) => {
+				counters[reason] = (counters[reason] ?? 0) + quantity;
+			},
+		},
+		fetch: async () => new Response('', { status: 503 }),
+	});
+	exhausted.accept(batch(), 1);
+	await exhausted.shutdown();
+	expect(counters).toEqual({ trace_relay_export_failure: 5, trace_relay_retry: 3, trace_relay_failed_batch: 2 });
+});
+
+test('capacity accounting excludes duplicates and rejected fresh spans remain eligible on retry', async () => {
+	const counts: string[] = [];
+	let calls = 0;
+	const relay = createTraceRelay({
+		destination,
+		now: () => 100,
+		health: {
+			count: (reason) => {
+				counts.push(reason);
+			},
+		},
+		fetch: async () => {
+			calls++;
+			return new Response();
+		},
+	});
+	const accepted = batch();
+	relay.accept(accepted, 1);
+	for (let i = 1; i < 64; i++) relay.accept(batch(), 1);
+	relay.accept(accepted, 1);
+	expect(counts).toEqual([]);
+	const rejected = batch();
+	relay.accept(rejected, 1);
+	expect(counts).toEqual(['trace_relay_queue_full']);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	relay.accept(rejected, 1);
+	await relay.shutdown();
+	expect(calls).toBe(65);
+	expect(counts).toEqual(['trace_relay_queue_full']);
+});
+
+test('health records age/queue expiry and bounds exhausted retries despite failing observers', async () => {
+	let now = 400_000;
+	const counters: Record<string, number> = {};
+	const relay = createTraceRelay({
+		destination,
+		now: () => now,
+		health: {
+			count: (reason, quantity = 1) => {
+				counters[reason] = (counters[reason] ?? 0) + quantity;
+			},
+		},
+		fetch: async () => {
+			throw new Error('must not export expired work');
+		},
+	});
+	relay.accept(batch(0), 1);
+	relay.accept(batch(500_000), 1);
+	relay.accept(batch(now), 1);
+	now += 30_001;
+	await relay.shutdown();
+	expect(counters).toEqual({ trace_relay_stale: 1, trace_relay_future: 1, trace_relay_queue_expired: 1 });
+	let calls = 0;
+	const isolated = createTraceRelay({
+		destination,
+		now: () => 100,
+		health: {
+			count: () => {
+				throw new Error('health');
+			},
+		},
+		fetch: async () => {
+			calls++;
+			throw new Error('network');
+		},
+	});
+	isolated.accept(batch(), 1);
+	await isolated.shutdown();
+	expect(calls).toBe(3);
+});
+
+test('a retained retry key does not become a new stale-span loss as client time ages', async () => {
+	let now = 300_000;
+	const counts: string[] = [];
+	let exports = 0;
+	const relay = createTraceRelay({
+		destination,
+		now: () => now,
+		health: {
+			count: (reason) => {
+				counts.push(reason);
+			},
+		},
+		fetch: async () => {
+			exports++;
+			return new Response();
+		},
+	});
+	const input = batch(100);
+	relay.accept(input, 1);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	now = 400_000;
+	relay.accept(input, 1);
+	await relay.shutdown();
+	expect(counts).toEqual([]);
+	expect(exports).toBe(1);
 });

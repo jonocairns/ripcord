@@ -6,13 +6,17 @@ import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { createOpenTelemetryAdapter } from '@sharkord/shared/telemetry/opentelemetry';
 import { context, propagation, trace } from '@sharkord/shared/telemetry/propagation';
 import { createTracing } from '@sharkord/shared/telemetry/tracing';
+import { withTraceDeliveryHealth } from '../../../telemetry/trace-delivery-health';
 import { configureServerTracing, startSpanObservation } from '../../tracing';
 
 const bodies: unknown[] = [];
+let rejectExport = false;
+const health: Record<string, number> = {};
 const backend = Bun.serve({
 	port: 0,
 	fetch: async (request) => {
 		bodies.push(await request.json());
+		if (rejectExport) return new Response('', { status: 400 });
 		return new Response('{}');
 	},
 });
@@ -24,7 +28,13 @@ const provider = new NodeTracerProvider({
 	}),
 	sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(0) }),
 	spanProcessors: [
-		new BatchSpanProcessor(new OTLPTraceExporter({ url: `http://localhost:${backend.port}/v1/traces` })),
+		new BatchSpanProcessor(
+			withTraceDeliveryHealth(new OTLPTraceExporter({ url: `http://localhost:${backend.port}/v1/traces` }), {
+				count: (reason, quantity = 1) => {
+					health[reason] = (health[reason] ?? 0) + quantity;
+				},
+			}),
+		),
 	],
 });
 provider.register();
@@ -78,6 +88,12 @@ for (const span of spans.filter((s) => s !== parent)) {
 	assert.equal(span.parentSpanId, parent.spanId);
 }
 assert.equal(new Set(spans.map((s) => s.spanId)).size, 3);
+assert.deepEqual(health, {});
+rejectExport = true;
+context.with(remote, () => tracing.traceSpan({ name: 'failed-export' }, () => {}));
+await assert.rejects(provider.forceFlush());
+assert.equal(health.trace_export_failure, 1);
+assert.equal(health.trace_export_failed_spans, 1);
 await provider.shutdown();
 backend.stop(true);
 console.log('OTel bridge, parent context, concurrent async isolation, disabled tracing: passed');

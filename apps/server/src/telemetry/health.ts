@@ -8,7 +8,20 @@ type TTelemetryHealthReason =
 	| 'error_adapter_failure'
 	| 'error_export_failure'
 	| 'error_transport_dropped'
-	| 'error_flush_timeout';
+	| 'error_flush_timeout'
+	| 'trace_relay_stale'
+	| 'trace_relay_future'
+	| 'trace_relay_queue_full'
+	| 'trace_relay_queue_expired'
+	| 'trace_relay_export_failure'
+	| 'trace_relay_retry'
+	| 'trace_relay_failed_batch'
+	| 'trace_relay_shutdown_drop'
+	| 'trace_export_failure'
+	| 'trace_export_failed_spans'
+	| 'trace_shutdown_failure'
+	| 'trace_configuration_invalid'
+	| 'trace_initialize_failure';
 type TTelemetryHealthSummary = {
 	message: 'Telemetry delivery health';
 	source: 'telemetry_health';
