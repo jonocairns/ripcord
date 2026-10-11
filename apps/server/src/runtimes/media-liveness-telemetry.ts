@@ -1,5 +1,5 @@
+import { reportServerDiagnostic } from '../error-reporting';
 import { logger } from '../logger';
-import { Sentry } from '../sentry';
 
 // The media-liveness watchdog is an automated remediation, so we want a baseline
 // on how often it fires — but reported in a way that cannot spam Sentry. A
@@ -50,10 +50,7 @@ const flushMediaLivenessReport = () => {
 
 	// `level: 'warning'` keeps these out of the error stream; counts only, no ids.
 	// A no-op when Sentry has no DSN configured (self-hosted / dev).
-	Sentry.captureMessage('voice.media_liveness_timeouts', {
-		level: 'warning',
-		extra: summary,
-	});
+	reportServerDiagnostic('voice.media_liveness_timeouts', summary);
 };
 
 const ensureReportTimer = () => {

@@ -190,6 +190,7 @@ export type TGlobalPushKeybindRegistrationResult = {
 };
 
 export type TDesktopErrorReportingConfig = {
+	routingIdentity?: string;
 	dsn?: string;
 	ignoreErrors?: string[];
 	tracingSampleRate?: number;
@@ -230,6 +231,7 @@ export type TDesktopBridge = {
 	subscribeGlobalPushKeybindEvents: (cb: (event: TDesktopPushKeybindEvent) => void) => () => void;
 	subscribeCapabilities: (cb: (capabilities: TDesktopCapabilities) => void) => () => void;
 	subscribeUpdateStatus: (cb: (status: TDesktopUpdateStatus) => void) => () => void;
+	subscribeDiagnosticRecord?: (callback: (payload: unknown) => void) => () => void;
 	configureErrorReporting?: (config: TDesktopErrorReportingConfig) => Promise<void>;
 	subscribeWindowControlsState?: (cb: (state: TDesktopWindowControlsState) => void) => () => void;
 	subscribeBeforeQuit: (cb: () => void | Promise<void>) => () => void;

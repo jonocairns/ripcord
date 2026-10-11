@@ -188,6 +188,7 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
 		return {
 			categories: allCategories,
 			streamObservabilityVersion: 1,
+			diagnosticsVersion: 1,
 			channels: channelsForUser.map(toPublicChannel),
 			users: processedPublicUsers,
 			serverId: settings.serverId,

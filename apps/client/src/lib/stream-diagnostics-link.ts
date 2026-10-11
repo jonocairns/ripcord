@@ -9,7 +9,12 @@ export const streamDiagnosticsLink: TRPCLink<AppRouter> =
 	() =>
 	({ op, next }) => {
 		const signal = op.signal;
-		if (op.type !== 'mutation' || op.path !== 'voice.reportStreamEvents' || !signal) return next(op);
+		if (
+			op.type !== 'mutation' ||
+			!['voice.reportStreamEvents', 'telemetry.reportDiagnostics'].includes(op.path) ||
+			!signal
+		)
+			return next(op);
 		return observable((observer) => {
 			const onAbort = () => observer.error(TRPCClientError.from(new Error('Stream diagnostics upload cancelled')));
 			if (signal.aborted) {

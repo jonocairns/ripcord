@@ -211,6 +211,7 @@ const validateConfigureErrorReportingArgs = (args: unknown[]): [TDesktopErrorRep
 	const config = assertRecord(args[0], 'config');
 	const validated: TDesktopErrorReportingConfig = {
 		dsn: assertOptionalString(config.dsn, 'config.dsn', MAX_DSN_LENGTH),
+		routingIdentity: assertOptionalString(config.routingIdentity, 'config.routingIdentity', 1000),
 	};
 
 	if (config.ignoreErrors !== undefined) {

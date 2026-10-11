@@ -3,7 +3,9 @@ import { TRPCClientError } from '@trpc/client';
 import { toast } from 'sonner';
 import { Dialog } from '@/components/dialogs/dialogs';
 import { refreshAccessToken, revokeRefreshToken } from '@/helpers/auth';
-import { logDebug, setSentryUser } from '@/helpers/browser-logger';
+import { logDebug, setErrorReportingUser } from '@/helpers/browser-logger';
+import { setErrorReportingIdentity } from '@/helpers/error-reporting';
+import { configureDiagnosticDelivery } from '@/helpers/error-reporting/delivery';
 import { getHostFromServer } from '@/helpers/get-file-url';
 import { configureStreamObservability } from '@/helpers/stream-observability';
 import {
@@ -51,7 +53,7 @@ const cleanupServerSubscriptions = () => {
 
 export const resetServerState = () => {
 	useServerStore.getState().resetState();
-	setSentryUser(undefined);
+	setErrorReportingUser(undefined);
 };
 
 export const setDisconnectInfo = (info: TDisconnectInfo | undefined) => {
@@ -159,8 +161,21 @@ export const joinServer = async (
 
 		// Attach the authenticated user to Sentry so issues report affected-user
 		// counts and Session Replays are tied to a user (opaque id only).
-		setSentryUser(data.ownUserId);
+		setErrorReportingUser(data.ownUserId);
 		if (!data.mustChangePassword) {
+			configureDiagnosticDelivery(
+				{
+					createId: () => crypto.randomUUID(),
+					upload: async (batch, signal) => {
+						if (signal.aborted || trpc !== getTRPCClientIfInitialized() || !isTRPCSocketOpen())
+							throw new Error('Diagnostics disconnected');
+						await trpc.telemetry.reportDiagnostics.mutate(batch, { signal });
+					},
+				},
+				`${getHostFromServer()}:${data.serverId}:${data.ownUserId}`,
+				'diagnosticsVersion' in data && data.diagnosticsVersion === 1,
+			);
+			setErrorReportingIdentity();
 			configureStreamObservability(
 				{
 					clientVersion: typeof VITE_APP_VERSION === 'string' ? VITE_APP_VERSION : 'unknown',
@@ -384,7 +399,7 @@ export const logoutFromServer = async () => {
 	await revokeRefreshToken();
 	cleanup({ clearAuth: true, ignoreSocketCloseEvent: true });
 	cleanupServerSubscriptions();
-	setSentryUser(undefined);
+	setErrorReportingUser(undefined);
 };
 
 window.useToken = async (token: string) => {

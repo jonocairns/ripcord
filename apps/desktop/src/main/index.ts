@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import * as Sentry from '@sentry/electron/main';
 import {
 	app,
 	BrowserWindow,
@@ -19,7 +18,13 @@ import { AppAudioRtpSender, type TAppAudioRtpTarget } from './app-audio-rtp-send
 import { resolveDesktopCaptureCapabilities } from './capture-capabilities';
 import { captureSidecarManager } from './capture-sidecar-manager';
 import { createDiagnosticLog, validateDiagnosticEvent } from './diagnostic-log';
-import { configureMainErrorReporting } from './error-reporting';
+import {
+	captureMainDiagnostic,
+	captureMainError,
+	configureMainErrorReporting,
+	flushMainErrorReporting,
+	setMainDiagnosticSink,
+} from './error-reporting';
 import {
 	validateConfigureErrorReportingArgs,
 	validateControlPopoutWindowArgs,
@@ -554,7 +559,7 @@ const createMainWindow = async () => {
 	mainWindow.webContents.on('unresponsive', () => {
 		rendererUnresponsiveSince = Date.now();
 		console.error('[desktop] Renderer unresponsive');
-		Sentry.captureMessage('Renderer unresponsive', {
+		captureMainDiagnostic('Renderer unresponsive', {
 			level: 'warning',
 			tags: { component: 'renderer', event: 'unresponsive' },
 		});
@@ -565,7 +570,7 @@ const createMainWindow = async () => {
 			rendererUnresponsiveSince === undefined ? undefined : Date.now() - rendererUnresponsiveSince;
 		rendererUnresponsiveSince = undefined;
 		console.info('[desktop] Renderer responsive again', { unresponsiveDurationMs });
-		Sentry.captureMessage('Renderer responsive again', {
+		captureMainDiagnostic('Renderer responsive again', {
 			level: 'info',
 			tags: { component: 'renderer', event: 'responsive' },
 			...(unresponsiveDurationMs === undefined ? {} : { extra: { unresponsiveDurationMs } }),
@@ -758,6 +763,9 @@ const setupRendererCspHandler = () => {
 };
 
 const registerIpcHandlers = () => {
+	setMainDiagnosticSink((payload) => {
+		sendToRenderer('desktop:diagnostic-record', payload);
+	});
 	handleTrusted('desktop:get-server-url', () => {
 		return getServerUrl();
 	});
@@ -1144,7 +1152,7 @@ void app
 			// The Rust capture sidecar is a spawned native process, not an Electron
 			// child, so the SDK's childProcessIntegration doesn't see it. Report
 			// abnormal exits here, with recent stderr (incl. any panic) as context.
-			Sentry.captureException(new Error(event.reason), {
+			captureMainError(new Error(event.reason), {
 				tags: { component: 'capture-sidecar' },
 				...(event.stderrTail ? { extra: { sidecarStderr: event.stderrTail } } : {}),
 			});
@@ -1218,7 +1226,7 @@ app.on('before-quit', (event) => {
 		// prevent quitting.
 		let diagnosticFlushTimeout: ReturnType<typeof setTimeout> | undefined;
 		await Promise.race([
-			diagnosticLog?.flush(),
+			Promise.allSettled([diagnosticLog?.flush(), flushMainErrorReporting()]),
 			new Promise<void>((resolve) => {
 				diagnosticFlushTimeout = setTimeout(resolve, 1_000);
 			}),

@@ -1,10 +1,15 @@
 import * as Sentry from '@sentry/react';
+import { sdkEventRecord } from '@sharkord/shared';
 import { configureClientTracing } from '@/helpers/telemetry/tracing';
+import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
-import { sanitizeContextData, sanitizeSentryEvent, sanitizeString } from './sanitize';
+import { getDiagnosticIdentity, recordDiagnostic } from './delivery';
+import { sanitizeString } from './sanitize';
 
 type TClientErrorReportingConfig = {
 	sentryDsn?: string;
+	tracingSentryDsn?: string;
+	serverRouted?: boolean;
 	ignoreErrors?: string[];
 	tracingSampleRate?: number;
 	replaySessionSampleRate?: number;
@@ -22,6 +27,8 @@ type TCaptureSentryErrorOptions = {
 const capturedErrors = new WeakSet<object>();
 
 let initialized = false;
+let initializedServerUrl: string | undefined;
+let scopeIdentity: string | undefined;
 
 const getRuntimeTag = (): 'desktop' | 'web' => {
 	return getRuntimeServerConfig().source === 'desktop' ? 'desktop' : 'web';
@@ -124,13 +131,20 @@ const buildIntegrations = (
 };
 
 const configureClientErrorReporting = (config: TClientErrorReportingConfig = {}): void => {
-	const dsn = config.sentryDsn?.trim();
+	if (!config.serverRouted && !config.sentryDsn && !config.tracingSentryDsn) return;
+	const dsn = config.tracingSentryDsn?.trim() || config.sentryDsn?.trim() || 'https://ripcord@telemetry.invalid/1';
 
-	if (!dsn || initialized) {
+	if (initialized) {
+		if (initializedServerUrl !== getRuntimeServerConfig().serverUrl) {
+			configureClientTracing(undefined);
+			void Sentry.getReplay?.()?.stop();
+		}
 		return;
 	}
+	initializedServerUrl = getRuntimeServerConfig().serverUrl;
 
-	const tracingSampleRate = normalizeSampleRate(config.tracingSampleRate);
+	const tracingSampleRate =
+		config.tracingSentryDsn?.trim() || config.sentryDsn?.trim() ? normalizeSampleRate(config.tracingSampleRate) : 0;
 	const tracingOptions =
 		tracingSampleRate !== undefined && tracingSampleRate > 0
 			? {
@@ -157,7 +171,17 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 		sendDefaultPii: false,
 		maxBreadcrumbs: 50,
 		ignoreErrors: config.ignoreErrors,
-		beforeSend: (event) => sanitizeSentryEvent(event),
+		beforeSendTransaction: (event) => (initializedServerUrl === getRuntimeServerConfig().serverUrl ? event : null),
+		beforeSend: (event, hint) => {
+			try {
+				const identity = getDiagnosticIdentity();
+				if (identity && event.tags?.['ripcord.telemetry.identity'] === identity)
+					recordDiagnostic(sdkEventRecord(event, hint, getRuntimeTag()));
+			} catch {
+				/* Parsing/reporting is best effort. */
+			}
+			return null; // JS errors never leave the client through the provider transport.
+		},
 		integrations: buildIntegrations(tracingSampleRate, replaySessionSampleRate, replayOnErrorSampleRate),
 		...tracingOptions,
 		...replayOptions,
@@ -229,7 +253,14 @@ const captureSentryError = ({
 			: error instanceof Error
 				? sanitizeString(error.message)
 				: undefined);
-	const sanitizedContext = sanitizeContextData(context);
+	const sanitizedContext =
+		context && typeof context === 'object'
+			? Object.fromEntries(
+					Object.entries(context)
+						.slice(0, 20)
+						.filter(([_key, value]) => value === null || ['string', 'number', 'boolean'].includes(typeof value)),
+				)
+			: undefined;
 
 	Sentry.withScope((scope) => {
 		scope.setTag('capture_source', captureSource);
@@ -270,4 +301,18 @@ const reportErrorToSentry = (message: string, error?: unknown, context?: unknown
 	});
 };
 
-export { configureClientErrorReporting, getRuntimeTag, reportErrorToSentry, setSentryUser };
+const setErrorReportingIdentity = (): void => {
+	try {
+		const identity = getDiagnosticIdentity();
+		if (scopeIdentity && scopeIdentity !== identity) void Sentry.getReplay?.()?.stop();
+		scopeIdentity = identity;
+		Sentry.setTag('ripcord.telemetry.identity', identity);
+		void getDesktopBridge()
+			?.configureErrorReporting?.({ routingIdentity: getDiagnosticIdentity() })
+			.catch(() => {});
+	} catch {
+		/* Optional SDK. */
+	}
+};
+
+export { configureClientErrorReporting, getRuntimeTag, reportErrorToSentry, setErrorReportingIdentity, setSentryUser };

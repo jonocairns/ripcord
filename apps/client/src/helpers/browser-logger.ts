@@ -1,5 +1,11 @@
 import { recordDesktopDiagnostic } from './desktop-diagnostics';
-import { configureClientErrorReporting, reportErrorToSentry, setSentryUser } from './error-reporting/sentry-client';
+import {
+	captureError,
+	configureClientErrorReporting,
+	getRuntimeTag,
+	recordDiagnostic,
+	setErrorReportingUser,
+} from './error-reporting';
 
 const OVERRIDE_DEBUG = false;
 
@@ -13,6 +19,23 @@ const logDebug = (...args: unknown[]) => {
 
 const logVoice = (...args: unknown[]) => {
 	recordDesktopDiagnostic('voice', { details: args });
+	try {
+		recordDiagnostic({
+			id: crypto.randomUUID(),
+			occurredAt: Date.now(),
+			kind: 'diagnostic',
+			level: 'info',
+			message: args
+				.filter((v) => typeof v === 'string')
+				.join(' ')
+				.slice(0, 1000),
+			runtime: getRuntimeTag(),
+			release: typeof VITE_APP_VERSION === 'string' ? VITE_APP_VERSION : 'unknown',
+			environment: import.meta.env.MODE,
+		});
+	} catch {
+		/* Optional. */
+	}
 	console.log('%c[VOICE-PROVIDER]', 'color: salmon; font-weight: bold;', ...args);
 };
 
@@ -31,7 +54,7 @@ const nativeConsoleError = console.error.bind(console);
 const reportError = (message: string, error?: unknown, context?: unknown) => {
 	recordDesktopDiagnostic('reported_error', { message, error, context }, 'error');
 	nativeConsoleError(message, error, context);
-	reportErrorToSentry(message, error, context);
+	captureError(message, error, context);
 };
 
-export { configureClientErrorReporting, logDebug, logVoice, reportError, setSentryUser };
+export { configureClientErrorReporting, logDebug, logVoice, reportError, setErrorReportingUser };

@@ -1,4 +1,3 @@
-import * as Sentry from '@sentry/react';
 import { Toaster } from '@/components/ui/sonner';
 import 'prosemirror-view/style/prosemirror.css';
 import { StrictMode } from 'react';
@@ -40,8 +39,10 @@ const bootstrap = async () => {
 	// intentionally omitted — the <ErrorBoundary> below already reports caught
 	// errors with richer scope tags, and adding it here would double-report.
 	createRoot(document.getElementById('root')!, {
-		onUncaughtError: Sentry.reactErrorHandler(),
-		onRecoverableError: Sentry.reactErrorHandler(),
+		onUncaughtError: (error, info) =>
+			reportError('Uncaught React error', error, { componentStack: info.componentStack }),
+		onRecoverableError: (error, info) =>
+			reportError('Recoverable React error', error, { componentStack: info.componentStack }),
 	}).render(
 		<StrictMode>
 			<ErrorBoundary>

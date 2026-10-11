@@ -17,6 +17,12 @@ import {
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import { resetServerScreens } from '@/features/server-screens/actions';
 import { recordDesktopDiagnostic } from '@/helpers/desktop-diagnostics';
+import { setErrorReportingIdentity } from '@/helpers/error-reporting';
+import {
+	authenticateDiagnosticDelivery,
+	clearDiagnosticDelivery,
+	pauseDiagnosticDelivery,
+} from '@/helpers/error-reporting/delivery';
 import { clearAuthToken, getAuthToken } from '@/helpers/storage';
 import {
 	authenticateStreamObservability,
@@ -128,6 +134,7 @@ const clearDeferredWsReconnectOnlineListener = () => {
 
 const initializeTRPC = (host: string) => {
 	pauseStreamObservability();
+	pauseDiagnosticDelivery();
 	sessionAuthentication.invalidate();
 	const runtimeServerUrl = getRuntimeServerConfig().serverUrl;
 	const serverProtocol = runtimeServerUrl ? new URL(runtimeServerUrl).protocol : window.location.protocol;
@@ -167,6 +174,7 @@ const initializeTRPC = (host: string) => {
 			);
 			sessionAuthentication.invalidate();
 			pauseStreamObservability();
+			pauseDiagnosticDelivery();
 
 			clearDeferredWsReconnectOnlineListener();
 
@@ -241,6 +249,7 @@ const initializeTRPC = (host: string) => {
 				reconnecting: teardownTimer !== null,
 			});
 			pauseStreamObservability();
+			pauseDiagnosticDelivery();
 			sessionAuthentication.invalidate();
 			const resumeReconnect = () => {
 				const pendingTeardownTimer = teardownTimer;
@@ -367,6 +376,7 @@ const markTRPCSessionAuthenticated = (client: ReturnType<typeof createTRPCProxyC
 	if (client === trpc && isTRPCSocketOpen()) {
 		sessionAuthentication.authenticate();
 		authenticateStreamObservability();
+		authenticateDiagnosticDelivery();
 	}
 };
 
@@ -394,6 +404,8 @@ const debugCloseCurrentWs = (opts: { code?: number; reason?: string } = {}) => {
 
 const cleanup = (opts: { clearAuth?: boolean; ignoreSocketCloseEvent?: boolean; skipSocketClose?: boolean } = {}) => {
 	clearStreamObservability();
+	clearDiagnosticDelivery();
+	setErrorReportingIdentity();
 	sessionAuthentication.cancel(new TRPCClientUnavailableError());
 	clearDeferredWsReconnectOnlineListener();
 

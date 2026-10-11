@@ -498,6 +498,11 @@ const desktopBridge = {
 			ipcRenderer.removeListener('desktop:capabilities-changed', listener);
 		};
 	},
+	subscribeDiagnosticRecord: (callback: (payload: unknown) => void) => {
+		const listener = (_event: unknown, payload: unknown) => callback(payload);
+		ipcRenderer.on('desktop:diagnostic-record', listener);
+		return () => ipcRenderer.removeListener('desktop:diagnostic-record', listener);
+	},
 	configureErrorReporting: (config: TDesktopErrorReportingConfig): Promise<void> =>
 		ipcRenderer.invoke('desktop:configure-error-reporting', config),
 	subscribeUpdateStatus: (callback: (status: TDesktopUpdateStatus) => void) => {

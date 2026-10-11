@@ -9,6 +9,7 @@ import { messagesRouter } from './messages';
 import { othersRouter } from './others';
 import { pluginsRouter } from './plugins';
 import { rolesRouter } from './roles';
+import { telemetryRouter } from './telemetry';
 import { usersRouter } from './users';
 import { voiceRouter } from './voice';
 
@@ -23,6 +24,7 @@ const appRouter = t.router({
 	invites: invitesRouter,
 	iptv: iptvRouter,
 	voice: voiceRouter,
+	telemetry: telemetryRouter,
 	categories: categoriesRouter,
 	plugins: pluginsRouter,
 });

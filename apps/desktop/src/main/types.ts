@@ -194,6 +194,7 @@ export type TDesktopWindowControlsState = {
 };
 
 export type TDesktopErrorReportingConfig = {
+	routingIdentity?: string;
 	dsn?: string;
 	ignoreErrors?: string[];
 	tracingSampleRate?: number;

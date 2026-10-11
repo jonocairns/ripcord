@@ -39,9 +39,11 @@ export const loadApp = async () => {
 		const sentryDsn = info.clientErrorReporting?.provider === 'sentry' ? info.clientErrorReporting.dsn : undefined;
 
 		configureClientErrorReporting({
+			serverRouted: true,
 			sentryDsn,
+			tracingSentryDsn: info.clientTracing?.legacySentryDsn,
 			ignoreErrors: info.clientErrorReporting?.ignoreErrors,
-			tracingSampleRate: info.clientErrorReporting?.tracingSampleRate,
+			tracingSampleRate: info.clientTracing?.sampleRate ?? info.clientErrorReporting?.tracingSampleRate,
 			replaySessionSampleRate: info.clientErrorReporting?.replaySessionSampleRate,
 			replayOnErrorSampleRate: info.clientErrorReporting?.replayOnErrorSampleRate,
 		});
@@ -51,7 +53,7 @@ export const loadApp = async () => {
 		void getDesktopBridge()?.configureErrorReporting?.({
 			dsn: sentryDsn,
 			ignoreErrors: info.clientErrorReporting?.ignoreErrors,
-			tracingSampleRate: info.clientErrorReporting?.tracingSampleRate,
+			tracingSampleRate: info.clientTracing?.sampleRate ?? info.clientErrorReporting?.tracingSampleRate,
 		});
 
 		setInfo(info);

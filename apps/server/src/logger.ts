@@ -8,8 +8,10 @@ import { sentryFormat } from './sentry';
 
 const { combine, colorize, printf, errors, splat } = format;
 
-const logFormat = printf(({ level, message, stack }) => {
-	return `${level}: ${stack || message}`;
+const logFormat = printf((info) => {
+	if (info[Symbol.for('level')] === 'error')
+		return `${info.level}: [server-exception] ${JSON.stringify({ source: 'server', runtime: 'bun', occurredAt: Date.now(), message: info.message, 'exception.stacktrace': info.stack })}`;
+	return `${info.level}: ${info.stack || info.message}`;
 });
 
 const appLog = path.join(LOGS_PATH, 'app.log');
