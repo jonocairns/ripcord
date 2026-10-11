@@ -1,0 +1,69 @@
+import { describe, expect, it } from 'bun:test';
+import { createStreamPlaybackPolicy, type TPlaybackSample } from '../stream-playback-policy';
+
+const sample = (now: number, extra: Partial<TPlaybackSample> = {}): TPlaybackSample => ({
+	now,
+	eligible: true,
+	transportConnected: true,
+	framesReceived: 1,
+	framesDecoded: 1,
+	framesRendered: 1,
+	...extra,
+});
+
+describe('screen playback evidence', () => {
+	it('records a first rendered frame and leaves static screens as ambiguous inactivity', () => {
+		const observe = createStreamPlaybackPolicy();
+		expect(observe(sample(0)).map((event) => event.event)).toEqual(['playback_first_frame']);
+		expect(observe(sample(15_000))).toEqual([]);
+		expect(observe(sample(30_000))).toMatchObject([{ event: 'playback_inactive', reason: 'static_or_idle' }]);
+		expect(observe(sample(60_000))).toEqual([]);
+		expect(observe(sample(63_000, { framesReceived: 2, framesDecoded: 2, framesRendered: 2 }))).toMatchObject([
+			{ event: 'playback_recovered' },
+		]);
+	});
+	it('keeps an incoming-but-undecoded diagnosis until decoded frames actually progress', () => {
+		const observe = createStreamPlaybackPolicy();
+		observe(sample(0));
+		for (let second = 3; second <= 15; second += 3)
+			expect(observe(sample(second * 1000, { framesReceived: second }))).toEqual([]);
+		expect(observe(sample(18_000, { framesReceived: 18 }))).toMatchObject([
+			{ event: 'playback_stalled', reason: 'no_decoding' },
+		]);
+		for (let second = 21; second <= 36; second += 3)
+			expect(observe(sample(second * 1000, { framesReceived: second }))).toEqual([]);
+		expect(observe(sample(39_000, { framesReceived: 39, framesDecoded: 2, framesRendered: 2 }))).toMatchObject([
+			{ event: 'playback_recovered' },
+		]);
+	});
+	it('distinguishes a stuck visible renderer from an unsupported renderer counter', () => {
+		const observe = createStreamPlaybackPolicy();
+		observe(sample(0));
+		for (let second = 3; second <= 15; second += 3)
+			observe(sample(second * 1000, { framesReceived: second, framesDecoded: second }));
+		expect(observe(sample(18_000, { framesReceived: 18, framesDecoded: 18 }))).toMatchObject([
+			{ event: 'playback_stalled', reason: 'no_playback' },
+		]);
+		expect(observe(sample(21_000, { framesReceived: 21, framesDecoded: 21 }))).toEqual([]);
+		expect(observe(sample(24_000, { framesReceived: 24, framesDecoded: 24, framesRendered: 2 }))).toMatchObject([
+			{ event: 'playback_recovered' },
+		]);
+		const unsupported = createStreamPlaybackPolicy();
+		for (let second = 0; second <= 60; second += 3)
+			expect(
+				unsupported(
+					sample(second * 1000, { framesReceived: second, framesDecoded: second, framesRendered: undefined }),
+				),
+			).toEqual([]);
+	});
+	it('suppresses paused, hidden and detached samples and distinguishes disconnected inactivity', () => {
+		const observe = createStreamPlaybackPolicy();
+		observe(sample(0));
+		for (let second = 3; second <= 60; second += 3)
+			expect(observe(sample(second * 1000, { eligible: false }))).toEqual([]);
+		expect(observe(sample(63_000, { transportConnected: false }))).toEqual([]);
+		expect(observe(sample(93_000, { transportConnected: false }))).toMatchObject([
+			{ event: 'playback_inactive', reason: 'no_incoming_media' },
+		]);
+	});
+});

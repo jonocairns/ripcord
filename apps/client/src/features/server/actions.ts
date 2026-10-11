@@ -5,10 +5,12 @@ import { Dialog } from '@/components/dialogs/dialogs';
 import { refreshAccessToken, revokeRefreshToken } from '@/helpers/auth';
 import { logDebug, setSentryUser } from '@/helpers/browser-logger';
 import { getHostFromServer } from '@/helpers/get-file-url';
+import { configureStreamObservability } from '@/helpers/stream-observability';
 import {
 	cleanup,
 	connectToTRPC,
 	getTRPCClient,
+	getTRPCClientIfInitialized,
 	isTRPCSocketOpen,
 	markTRPCSessionAuthenticated,
 	reconnectTRPC,
@@ -158,6 +160,21 @@ export const joinServer = async (
 		// Attach the authenticated user to Sentry so issues report affected-user
 		// counts and Session Replays are tied to a user (opaque id only).
 		setSentryUser(data.ownUserId);
+		if (!data.mustChangePassword) {
+			configureStreamObservability(
+				{
+					clientVersion: typeof VITE_APP_VERSION === 'string' ? VITE_APP_VERSION : 'unknown',
+					createId: () => crypto.randomUUID(),
+					upload: async (batch, signal) => {
+						if (signal.aborted || trpc !== getTRPCClientIfInitialized() || !isTRPCSocketOpen())
+							throw new Error('Stream diagnostics disconnected');
+						await trpc.voice.reportStreamEvents.mutate(batch, { signal });
+					},
+				},
+				`${getHostFromServer()}:${data.serverId}:${data.ownUserId}`,
+				'streamObservabilityVersion' in data && data.streamObservabilityVersion === 1,
+			);
+		}
 
 		if (!data.mustChangePassword) {
 			if (!opts?.reconnect) {

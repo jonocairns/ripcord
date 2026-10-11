@@ -1,6 +1,7 @@
 import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TWatchedRemoteStreamsSnapshot } from '@/features/server/voice/voice-session-machine';
+import { recordStreamEvent } from '@/helpers/stream-observability';
 import {
 	getPendingStreamKey,
 	isExternalTrackPresent,
@@ -8,6 +9,7 @@ import {
 	type TExternalStreamTrackPresence,
 	type TPendingStream,
 } from './use-pending-streams';
+import { getWatchIntentEvents } from './watch-intent-observability';
 
 export type TRemoteMediaStatus = 'available' | 'wanted' | 'consuming' | 'retrying' | 'consumed' | 'failed';
 
@@ -1258,6 +1260,14 @@ export const useRemoteMediaSubscriptions = () => {
 		commands: TRemoteMediaCommand[];
 	}>(() => ({ subscriptions: new Map(), commands: [] }));
 	const { subscriptions: remoteMediaSubscriptions, commands: remoteMediaCommands } = remoteMediaState;
+	const previousSubscriptions = useRef<TRemoteMediaSubscriptions>(new Map());
+	// Observe committed ledger transitions outside React's pure state updater.
+	// StrictMode may replay an effect, but the saved snapshot makes replay a no-op.
+	useEffect(() => {
+		for (const event of getWatchIntentEvents(previousSubscriptions.current, remoteMediaSubscriptions))
+			recordStreamEvent(event);
+		previousSubscriptions.current = remoteMediaSubscriptions;
+	}, [remoteMediaSubscriptions]);
 	const update = useCallback((nextFor: (prev: TRemoteMediaSubscriptions, now: number) => TRemoteMediaReducerResult) => {
 		setRemoteMediaState((prev) => {
 			const result = nextFor(prev.subscriptions, Date.now());
@@ -1350,18 +1360,21 @@ export const useRemoteMediaSubscriptions = () => {
 	);
 	const markWatchRequested = useCallback(
 		(remoteId: number, kind: StreamKind, externalStreamTracks?: TExternalStreamTrackPresence) => {
+			recordStreamEvent({ event: 'watch_requested', remoteId, kind, mode: 'manual' });
 			update((prev, now) => markRemoteWatchRequested(prev, remoteId, kind, now, { externalStreamTracks }));
 		},
 		[update],
 	);
 	const markWatchStopped = useCallback(
 		(remoteId: number, kind: StreamKind) => {
+			recordStreamEvent({ event: 'watch_stopped', remoteId, kind, mode: 'manual' });
 			update((prev, now) => markRemoteWatchStopped(prev, remoteId, kind, now));
 		},
 		[update],
 	);
 	const markRetryRequested = useCallback(
 		(remoteId: number, kind: StreamKind, externalStreamTracks?: TExternalStreamTrackPresence) => {
+			recordStreamEvent({ event: 'watch_retry_requested', remoteId, kind, mode: 'manual' });
 			update((prev, now) => markRemoteRetryRequested(prev, remoteId, kind, now, { externalStreamTracks }));
 		},
 		[update],

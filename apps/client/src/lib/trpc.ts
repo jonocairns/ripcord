@@ -18,6 +18,11 @@ import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-de
 import { resetServerScreens } from '@/features/server-screens/actions';
 import { recordDesktopDiagnostic } from '@/helpers/desktop-diagnostics';
 import { clearAuthToken, getAuthToken } from '@/helpers/storage';
+import {
+	authenticateStreamObservability,
+	clearStreamObservability,
+	pauseStreamObservability,
+} from '@/helpers/stream-observability';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { createSessionAuthenticationGate } from './session-authentication-gate';
 import { markSocketCloseEventIgnored, shouldIgnoreSocketCloseEvent } from './websocket-close-ignore';
@@ -121,6 +126,7 @@ const clearDeferredWsReconnectOnlineListener = () => {
 };
 
 const initializeTRPC = (host: string) => {
+	pauseStreamObservability();
 	sessionAuthentication.invalidate();
 	const runtimeServerUrl = getRuntimeServerConfig().serverUrl;
 	const serverProtocol = runtimeServerUrl ? new URL(runtimeServerUrl).protocol : window.location.protocol;
@@ -159,6 +165,7 @@ const initializeTRPC = (host: string) => {
 				'warn',
 			);
 			sessionAuthentication.invalidate();
+			pauseStreamObservability();
 
 			clearDeferredWsReconnectOnlineListener();
 
@@ -232,6 +239,7 @@ const initializeTRPC = (host: string) => {
 				clientInstanceId: getWsClientInstanceId(),
 				reconnecting: teardownTimer !== null,
 			});
+			pauseStreamObservability();
 			sessionAuthentication.invalidate();
 			const resumeReconnect = () => {
 				const pendingTeardownTimer = teardownTimer;
@@ -355,7 +363,10 @@ const getTRPCClient = () => {
 const getTRPCClientIfInitialized = () => trpc;
 
 const markTRPCSessionAuthenticated = (client: ReturnType<typeof createTRPCProxyClient<AppRouter>>) => {
-	if (client === trpc && isTRPCSocketOpen()) sessionAuthentication.authenticate();
+	if (client === trpc && isTRPCSocketOpen()) {
+		sessionAuthentication.authenticate();
+		authenticateStreamObservability();
+	}
 };
 
 const waitForTRPCSessionAuthentication = (signal: AbortSignal): Promise<void> => {
@@ -381,6 +392,7 @@ const debugCloseCurrentWs = (opts: { code?: number; reason?: string } = {}) => {
 };
 
 const cleanup = (opts: { clearAuth?: boolean; ignoreSocketCloseEvent?: boolean; skipSocketClose?: boolean } = {}) => {
+	clearStreamObservability();
 	sessionAuthentication.cancel(new TRPCClientUnavailableError());
 	clearDeferredWsReconnectOnlineListener();
 

@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { requestScreenShareSelection } from '@/features/dialogs/actions';
 import { logVoice } from '@/helpers/browser-logger';
+import { recordStreamEvent } from '@/helpers/stream-observability';
 import { traceSpan } from '@/helpers/telemetry/tracing';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
@@ -38,6 +39,7 @@ const useScreenShare = (inputs: TUseScreenShareInputs) => {
 			acquire: (options) => navigator.mediaDevices.getDisplayMedia(options),
 			warning: (message) => toast.warning(message),
 			log: logVoice,
+			observe: recordStreamEvent,
 			setInterval: (handler, delayMs) => setInterval(handler, delayMs),
 			clearInterval: (handle) => clearInterval(handle),
 			now: () => Date.now(),

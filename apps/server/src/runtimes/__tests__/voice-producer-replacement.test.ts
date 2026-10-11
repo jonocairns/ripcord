@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { ServerEvents, StreamKind } from '@sharkord/shared';
 import type { AppData, Producer } from 'mediasoup/types';
+import { logger } from '../../logger';
 import { pubsub } from '../../utils/pubsub';
 import { VoiceRuntime } from '../voice';
 
@@ -99,6 +100,120 @@ describe('VoiceRuntime producer replacement', () => {
 		await runtime.init();
 		return runtime;
 	};
+
+	test('logs original transport ownership on replacement and late close', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const messages: unknown[][] = [];
+		const log = spyOn(logger, 'info').mockImplementation((...args: unknown[]) => {
+			messages.push(args);
+			return logger;
+		});
+		try {
+			const first = makeManualCloseProducer('first');
+			runtime.addProducer(1, StreamKind.SCREEN, first.producer, 'original-transport');
+			const second = makeManualCloseProducer('second');
+			runtime.addProducer(1, StreamKind.SCREEN, second.producer, 'replacement-transport');
+			// The successor can itself stop before the predecessor delivers its
+			// delayed close. Preserve the original close cause rather than inferring
+			// replacement from whichever producer currently occupies the map.
+			second.producer.close();
+			second.fireCloseEvent();
+			first.fireCloseEvent();
+			const records = messages
+				.filter(([message]) => message === '[stream-event] %s')
+				.map(([, record]) => (typeof record === 'string' ? JSON.parse(record) : undefined));
+			expect(records).toContainEqual(
+				expect.objectContaining({
+					event: 'producer_replaced',
+					source: 'server',
+					reporterUserId: 1,
+					producerId: 'second',
+					previousProducerId: 'first',
+					transportId: 'replacement-transport',
+				}),
+			);
+			expect(records).toContainEqual(
+				expect.objectContaining({
+					event: 'producer_closed',
+					producerId: 'first',
+					transportId: 'original-transport',
+					reason: 'producer_replaced',
+				}),
+			);
+			expect(records).toContainEqual(
+				expect.objectContaining({
+					event: 'producer_closed',
+					producerId: 'second',
+					reason: 'terminal_close',
+				}),
+			);
+			expect(runtime.getProducer(StreamKind.SCREEN, 1)).toBeUndefined();
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	test('distinguishes recoverable and terminal closes without changing producer ownership', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const messages: unknown[][] = [];
+		const log = spyOn(logger, 'info').mockImplementation((...args: unknown[]) => {
+			messages.push(args);
+			return logger;
+		});
+		try {
+			const recovering = makeSyncCloseProducer('recovering');
+			runtime.addProducer(1, StreamKind.SCREEN, recovering.producer, 'old-transport');
+			runtime.removeProducer(1, StreamKind.SCREEN, { recoverable: true });
+			const terminal = makeSyncCloseProducer('terminal');
+			runtime.addProducer(1, StreamKind.SCREEN, terminal.producer, 'new-transport');
+			runtime.removeProducer(1, StreamKind.SCREEN);
+			const records = messages
+				.filter(([message]) => message === '[stream-event] %s')
+				.map(([, record]) => (typeof record === 'string' ? JSON.parse(record) : undefined));
+			expect(records).toContainEqual(
+				expect.objectContaining({
+					event: 'producer_closed',
+					producerId: 'recovering',
+					transportId: 'old-transport',
+					reason: 'recoverable_close',
+					recoverable: true,
+				}),
+			);
+			expect(records).toContainEqual(
+				expect.objectContaining({
+					event: 'producer_closed',
+					producerId: 'terminal',
+					transportId: 'new-transport',
+					reason: 'terminal_close',
+					recoverable: false,
+				}),
+			);
+			expect(runtime.getProducer(StreamKind.SCREEN, 1)).toBeUndefined();
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	test('contains diagnostic logger failures during registration and close', async () => {
+		const runtime = await makeRuntime();
+		runtime.addUser(1, { micMuted: false, soundMuted: false });
+		const log = spyOn(logger, 'info').mockImplementation((message: unknown) => {
+			if (message === '[stream-event] %s') throw new Error('Unavailable logger');
+			return logger;
+		});
+		try {
+			const producer = makeSyncCloseProducer('screen');
+			runtime.addProducer(1, StreamKind.SCREEN, producer.producer, 'transport');
+			expect(runtime.getProducer(StreamKind.SCREEN, 1)).toBe(producer.producer);
+			runtime.removeProducer(1, StreamKind.SCREEN);
+			expect(producer.producer.closed).toBe(true);
+			expect(runtime.getProducer(StreamKind.SCREEN, 1)).toBeUndefined();
+		} finally {
+			log.mockRestore();
+		}
+	});
 
 	test('registering a same-kind producer closes the replaced one', async () => {
 		const runtime = await makeRuntime();
