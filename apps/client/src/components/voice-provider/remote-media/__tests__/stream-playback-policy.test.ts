@@ -75,6 +75,43 @@ describe('screen playback evidence', () => {
 			]);
 		});
 	}
+	for (const stage of ['no_decoding', 'no_playback'] as const) {
+		it(`diagnoses ${stage} when the screen advances every six seconds`, () => {
+			const observe = createStreamPlaybackPolicy();
+			observe(sample(0));
+			for (let second = 3; second <= 18; second += 3) {
+				const frames = Math.floor(second / 6) + 1;
+				expect(
+					observe(
+						sample(second * 1000, {
+							framesReceived: frames,
+							framesDecoded: stage === 'no_playback' ? frames : 1,
+						}),
+					),
+				).toEqual([]);
+			}
+			expect(
+				observe(
+					sample(21_000, {
+						framesReceived: 4,
+						framesDecoded: stage === 'no_playback' ? 4 : 1,
+					}),
+				),
+			).toMatchObject([{ event: 'playback_stalled', reason: stage }]);
+			expect(observe(sample(24_000, { framesReceived: 5, framesDecoded: 5, framesRendered: 2 }))).toMatchObject([
+				{ event: 'playback_recovered' },
+			]);
+		});
+	}
+	it('clears undiagnosed blocked-stage evidence after source inactivity', () => {
+		const observe = createStreamPlaybackPolicy();
+		observe(sample(0));
+		expect(observe(sample(6_000, { framesReceived: 2 }))).toEqual([]);
+		expect(observe(sample(36_000, { framesReceived: 2 }))).toMatchObject([
+			{ event: 'playback_inactive', reason: 'static_or_idle' },
+		]);
+		expect(observe(sample(42_000, { framesReceived: 3 }))).toMatchObject([{ event: 'playback_recovered' }]);
+	});
 	it('suppresses paused, hidden and detached samples and distinguishes disconnected inactivity', () => {
 		const observe = createStreamPlaybackPolicy();
 		observe(sample(0));

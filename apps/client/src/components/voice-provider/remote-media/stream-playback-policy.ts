@@ -16,6 +16,8 @@ export const createStreamPlaybackPolicy = () => {
 	let previous: TPlaybackSample | undefined;
 	let firstFrame = false;
 	let lastIncoming: number | undefined;
+	let lastReceived: number | undefined;
+	let lastDecoded: number | undefined;
 	let decodeBlockedSince: number | undefined;
 	let renderBlockedSince: number | undefined;
 	let diagnosed: TStreamEventDetails['reason'];
@@ -30,6 +32,8 @@ export const createStreamPlaybackPolicy = () => {
 		if (!sample.eligible) {
 			previous = undefined;
 			lastIncoming = undefined;
+			lastReceived = undefined;
+			lastDecoded = undefined;
 			decodeBlockedSince = undefined;
 			renderBlockedSince = undefined;
 			diagnosed = undefined;
@@ -46,10 +50,22 @@ export const createStreamPlaybackPolicy = () => {
 			events.push({ event: 'playback_first_frame', ...counters });
 		}
 		if (!previous || received || decoded || rendered) lastIncoming = sample.now;
+		if (received) lastReceived = sample.now;
+		if (decoded) lastDecoded = sample.now;
+		// A changing screen may advance on only some polls. Keep evidence across
+		// those gaps, but stop accumulating it once that stage's source is idle.
 		decodeBlockedSince =
-			received && sample.framesDecoded !== undefined && !decoded ? (decodeBlockedSince ?? sample.now) : undefined;
+			decoded || sample.framesDecoded === undefined || lastReceived === undefined || sample.now - lastReceived >= 30_000
+				? undefined
+				: received
+					? (decodeBlockedSince ?? sample.now)
+					: decodeBlockedSince;
 		renderBlockedSince =
-			decoded && sample.framesRendered !== undefined && !rendered ? (renderBlockedSince ?? sample.now) : undefined;
+			rendered || sample.framesRendered === undefined || lastDecoded === undefined || sample.now - lastDecoded >= 30_000
+				? undefined
+				: decoded
+					? (renderBlockedSince ?? sample.now)
+					: renderBlockedSince;
 		let reason: TStreamEventDetails['reason'];
 		if (decodeBlockedSince !== undefined && sample.now - decodeBlockedSince >= 15_000) reason = 'no_decoding';
 		else if (renderBlockedSince !== undefined && sample.now - renderBlockedSince >= 15_000) reason = 'no_playback';

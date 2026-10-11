@@ -33,6 +33,7 @@ export const createStreamEventCollector = (options: TCollectorOptions) => {
 	let inFlightSequences = new Set<number>();
 	let reconnectAttemptId: string | undefined;
 	let attempts = 0;
+	let retrySequences = new Set<number>();
 	let disposed = false;
 	let upload = options.upload;
 
@@ -50,6 +51,7 @@ export const createStreamEventCollector = (options: TCollectorOptions) => {
 		reconnectAttemptId = undefined;
 		queue = [];
 		attempts = 0;
+		retrySequences.clear();
 		droppedEvents = 0;
 		sequence = 0;
 		clientSessionId = undefined;
@@ -66,8 +68,16 @@ export const createStreamEventCollector = (options: TCollectorOptions) => {
 		const fresh = queue.filter((event) => now() - event.occurredAt <= 600_000);
 		droppedEvents += queue.length - fresh.length;
 		queue = fresh;
-		const batch = queue.slice(0, 32);
-		if (batch.length === 0) return;
+		const retryBatch = queue.filter((event) => retrySequences.has(event.sequence));
+		// Retry the same sequence set. Expiry or overflow creates a new batch
+		// with its own budget; newly queued events cannot inherit old failures.
+		if (retryBatch.length !== retrySequences.size) attempts = 0;
+		const batch = retryBatch.length > 0 ? retryBatch : queue.slice(0, 32);
+		retrySequences = new Set(batch.map((event) => event.sequence));
+		if (batch.length === 0) {
+			attempts = 0;
+			return;
+		}
 		const batchGeneration = generation;
 		const batchUpload = upload;
 		const payload: TStreamEventBatch = {
@@ -103,6 +113,7 @@ export const createStreamEventCollector = (options: TCollectorOptions) => {
 			});
 			if (batchGeneration !== generation) return;
 			dropBatch();
+			retrySequences.clear();
 			attempts = 0;
 			droppedEvents = Math.max(0, droppedEvents - payload.droppedEvents);
 		} catch {
@@ -110,6 +121,7 @@ export const createStreamEventCollector = (options: TCollectorOptions) => {
 			if (authenticated) attempts += 1;
 			if (attempts >= 3) {
 				dropBatch();
+				retrySequences.clear();
 				droppedEvents += batch.length;
 				attempts = 0;
 			}

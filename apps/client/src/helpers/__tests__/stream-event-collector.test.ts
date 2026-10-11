@@ -200,6 +200,56 @@ describe('bounded stream event collector', () => {
 		expect(f.jobs.size).toBe(0);
 		f.collector.dispose();
 	});
+	it('gives a fresh batch three attempts after failed events expire', async () => {
+		const batches: TStreamEventBatch[] = [];
+		const f = fixture(async (batch) => {
+			batches.push(batch);
+			throw new Error('unavailable');
+		});
+		f.collector.configure('server:user', true);
+		f.collector.authenticate();
+		f.collector.record({ event: 'watch_requested' });
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			f.runNext();
+			await flushPromises();
+		}
+		f.collector.pause();
+		f.setTime(700_000);
+		f.collector.record({ event: 'watch_stopped' });
+		f.collector.authenticate();
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			f.runNext();
+			await flushPromises();
+		}
+		expect(batches.map((batch) => batch.events.map((event) => event.sequence))).toEqual([[1], [1], [2], [2], [2]]);
+		expect(f.jobs.size).toBe(0);
+		f.collector.dispose();
+	});
+	it('retries the same failed batch without adding newly recorded events', async () => {
+		const batches: TStreamEventBatch[] = [];
+		const f = fixture(async (batch) => {
+			batches.push(batch);
+			throw new Error('unavailable');
+		});
+		f.collector.configure('server:user', true);
+		f.collector.authenticate();
+		f.collector.record({ event: 'watch_requested' });
+		f.runNext();
+		await flushPromises();
+		f.collector.record({ event: 'watch_stopped' });
+		f.runNext();
+		await flushPromises();
+		f.runNext();
+		await flushPromises();
+		expect(batches.map((batch) => batch.events.map((event) => event.sequence))).toEqual([[1], [1], [1]]);
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			f.runNext();
+			await flushPromises();
+		}
+		expect(batches.slice(3).map((batch) => batch.events.map((event) => event.sequence))).toEqual([[2], [2], [2]]);
+		expect(f.jobs.size).toBe(0);
+		f.collector.dispose();
+	});
 	it('does not dispatch a deferred upload after disconnect or identity reset', async () => {
 		const f = fixture();
 		f.collector.configure('server:user', true);
