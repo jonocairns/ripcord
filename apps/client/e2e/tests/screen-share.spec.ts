@@ -24,6 +24,8 @@ import {
 	startScreenShare,
 	watchScreenShare,
 } from '../helpers/screen-share';
+import { readStreamServerEvents } from '../helpers/stream-server-events';
+import { readVoiceServerEvents } from '../helpers/voice-server-events';
 
 test('screen start, remote watch and explicit stop clean up screen media while a camera stays live', async ({
 	browser,
@@ -95,6 +97,7 @@ test('producer reconnect preserves the captured screen and republishes it to the
 test('watcher reconnect retains screen watch intent and restores decoded screen media', async ({
 	browser,
 }, testInfo) => {
+	const baselineLine = (await readStreamServerEvents()).at(-1)?.lineIndex ?? -1;
 	const watcher = await createPeer(browser, credentialsFor(testInfo, 'watcher'));
 	const producer = await createPeer(browser, credentialsFor(testInfo, 'producer'));
 	try {
@@ -103,6 +106,41 @@ test('watcher reconnect retains screen watch intent and restores decoded screen 
 		await joinVoice(producer.page);
 		await startScreenShare(producer.page);
 		const originalReceiver = await watchScreenShare(watcher.page);
+		// Let the real renderer collector upload playback evidence. Server resume
+		// alone cannot prove that this viewer rendered its screen consumer.
+		let initialPlayback: Awaited<ReturnType<typeof readStreamServerEvents>>[number] | undefined;
+		await expect
+			.poll(
+				async () => {
+					initialPlayback = (await readStreamServerEvents()).find(
+						(event) =>
+							event.lineIndex > baselineLine && event.source === 'client' && event.event === 'playback_first_frame',
+					);
+					return initialPlayback !== undefined;
+				},
+				{ timeout: 20_000 },
+			)
+			.toBe(true);
+		if (!initialPlayback?.consumerId || !initialPlayback.clientSessionId)
+			throw new Error('Missing initial playback identity');
+		const initialEvents = await readStreamServerEvents();
+		expect(initialEvents).toContainEqual(
+			expect.objectContaining({
+				event: 'consumer_created',
+				source: 'server',
+				consumerId: initialPlayback.consumerId,
+				producerId: initialPlayback.producerId,
+				reporterUserId: initialPlayback.reporterUserId,
+			}),
+		);
+		expect(initialEvents).toContainEqual(
+			expect.objectContaining({
+				event: 'consume_succeeded',
+				source: 'client',
+				consumerId: initialPlayback.consumerId,
+				clientSessionId: initialPlayback.clientSessionId,
+			}),
+		);
 		const beforeDrop = await pcStats(watcher.page);
 
 		await dropAppWebSocket(watcher.page);
@@ -117,6 +155,40 @@ test('watcher reconnect retains screen watch intent and restores decoded screen 
 		expect(replacementReceiver.peerConnectionIndex).toBeGreaterThan(originalReceiver.peerConnectionIndex);
 		expect(replacementReceiver.trackId).not.toBe(originalReceiver.trackId);
 		await expectCapture(producer.page, 'live');
+		const originalPlayback = initialPlayback;
+		await expect
+			.poll(
+				async () => {
+					const [streamEvents, voiceEvents] = await Promise.all([readStreamServerEvents(), readVoiceServerEvents()]);
+					return streamEvents.some(
+						(event) =>
+							event.source === 'client' &&
+							event.event === 'playback_first_frame' &&
+							event.clientSessionId === originalPlayback.clientSessionId &&
+							event.reporterUserId === originalPlayback.reporterUserId &&
+							event.consumerId !== originalPlayback.consumerId &&
+							event.sequence !== undefined &&
+							event.sequence > (originalPlayback.sequence ?? 0) &&
+							event.reconnectAttemptId !== undefined &&
+							voiceEvents.some(
+								(attempt) =>
+									attempt.event === 'voice_session_attempt_finished' &&
+									attempt.outcome === 'succeeded' &&
+									attempt.reconnectAttemptId === event.reconnectAttemptId,
+							) &&
+							streamEvents.some(
+								(consumer) =>
+									consumer.source === 'server' &&
+									consumer.event === 'consumer_created' &&
+									consumer.consumerId === event.consumerId &&
+									consumer.producerId === event.producerId &&
+									consumer.reporterUserId === event.reporterUserId,
+							),
+					);
+				},
+				{ timeout: 20_000 },
+			)
+			.toBe(true);
 
 		await producer.page.getByTitle('Stop sharing', { exact: true }).click();
 		await expectScreenStopped(producer.page, watcher.page);

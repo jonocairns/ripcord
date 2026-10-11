@@ -60,7 +60,7 @@ const produceRoute = protectedProcedure
 			});
 		}
 
-		runtime.addProducer(ctx.user.id, input.kind, producer);
+		runtime.addProducer(ctx.user.id, input.kind, producer, producerTransport.id);
 
 		ctx.pubsub.publishForChannel(channelId, ServerEvents.VOICE_NEW_PRODUCER, {
 			channelId,

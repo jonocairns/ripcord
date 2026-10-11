@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { StreamKind } from '@sharkord/shared';
+import { StreamKind, type TStreamEventDetails } from '@sharkord/shared';
 import {
 	createRemoteMediaConsumeController,
 	type TRemoteMediaConsumeRequest,
@@ -126,7 +126,7 @@ const request = (
 	...options,
 });
 
-const createHarness = () => {
+const createHarness = (observer?: (event: TStreamEventDetails) => void) => {
 	const scheduler = createScheduler();
 	const consumeDeferreds: TDeferred<TServerConsumerAllocation<TTestConsumerRtpParameters>>[] = [];
 	const resumeDeferreds: TDeferred<void>[] = [];
@@ -149,6 +149,7 @@ const createHarness = () => {
 		TTestRtpCapabilities,
 		TTestConsumerRtpParameters
 	>({
+		observe: observer,
 		delay: scheduler.delay,
 		getTransportId: (transport) => transport.id,
 		isTransportClosed: (transport) => transport.closed,
@@ -239,6 +240,40 @@ const installTransport = (harness: ReturnType<typeof createHarness>, id = 'trans
 };
 
 describe('remote media consume controller', () => {
+	it('correlates automatic and manual success separately and contains observer failures', async () => {
+		const events: TStreamEventDetails[] = [];
+		const harness = createHarness((event) => {
+			events.push(event);
+			if (event.event === 'consume_attempt') throw new Error('telemetry failed');
+		});
+		installTransport(harness);
+		harness.setCurrentProducer(2, StreamKind.SCREEN, 'screen-2');
+		const automatic = harness.controller.consume(request(2, StreamKind.SCREEN, 'screen-2'));
+		harness.consumeDeferreds[0]?.resolve(allocation('screen-2', 'consumer-automatic', StreamKind.SCREEN));
+		await flush();
+		harness.resumeDeferreds[0]?.resolve();
+		await automatic;
+		const manual = harness.controller.consume(
+			request(2, StreamKind.SCREEN, 'screen-2', { isManualRetry: true, restartExisting: true }),
+		);
+		harness.consumeDeferreds[1]?.resolve(allocation('screen-2', 'consumer-manual', StreamKind.SCREEN));
+		await flush();
+		harness.resumeDeferreds[1]?.resolve();
+		await manual;
+		const succeeded = events.filter((event) => event.event === 'consume_succeeded');
+		expect(succeeded.map((event) => event.mode)).toEqual(['automatic', 'manual']);
+		expect(succeeded[0]?.operationId).toBeString();
+		expect(succeeded[0]?.operationId).not.toBe(succeeded[1]?.operationId);
+		expect(succeeded[0]?.transportId).toBe('transport-1');
+		harness.controller.dispose();
+		const closed = events.filter((event) => event.event === 'consumer_closed');
+		expect(closed.map((event) => [event.consumerId, event.reason, event.transportId])).toEqual([
+			['consumer-automatic', 'consumer_replaced', 'transport-1'],
+			['consumer-manual', 'transport_cleanup', 'transport-1'],
+		]);
+		expect(closed[0]?.operationId).toBe(succeeded[0]?.operationId);
+		expect(closed[1]?.operationId).toBe(succeeded[1]?.operationId);
+	});
 	it('waits for consume-start publication before crossing the server RPC boundary', async () => {
 		const harness = createHarness();
 		installTransport(harness);

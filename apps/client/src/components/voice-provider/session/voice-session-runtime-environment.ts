@@ -19,6 +19,7 @@ import {
 } from '@/features/server/voice/voice-session-store';
 import { logDebug, logVoice, reportError } from '@/helpers/browser-logger';
 import { recordDesktopDiagnostic } from '@/helpers/desktop-diagnostics';
+import { setStreamReconnectAttemptId } from '@/helpers/stream-observability';
 import { traceSpan } from '@/helpers/telemetry/tracing';
 import { getTrpcErrorData } from '@/helpers/trpc-error-data';
 import { getTRPCClient, TRPCClientUnavailableError } from '@/lib/trpc';
@@ -82,6 +83,7 @@ const requestVoiceRestoreOrJoin = async (opts: {
 	reconnectAttemptId: string;
 	signal?: AbortSignal;
 }): ReturnType<TVoiceSessionRuntimeDependencies['requestVoiceRestoreOrJoin']> => {
+	setStreamReconnectAttemptId(opts.reconnectAttemptId);
 	const diagnosticContext = { channelId: opts.channelId, reconnectAttemptId: opts.reconnectAttemptId };
 	recordDesktopDiagnostic('voice_restore_requested', diagnosticContext);
 	return traceSpan(

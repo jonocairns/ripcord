@@ -28,6 +28,7 @@ import { leaveVoiceRoute } from './leave';
 import { produceRoute } from './produce';
 import { produceAppAudioRoute } from './produce-app-audio';
 import { voiceReconnectLabRouter } from './reconnect-lab';
+import { reportStreamEventsRoute } from './report-stream-events';
 import { restartConsumerIceRoute } from './restart-consumer-ice';
 import { restartProducerIceRoute } from './restart-producer-ice';
 import { restoreOrJoinVoiceRoute } from './restore-or-join';
@@ -36,6 +37,7 @@ import { updateVoiceActivityRoute } from './update-activity';
 import { updateVoiceStateRoute } from './update-state';
 
 export const voiceRouter = t.router({
+	reportStreamEvents: reportStreamEventsRoute,
 	join: joinVoiceRoute,
 	restoreOrJoin: restoreOrJoinVoiceRoute,
 	leave: leaveVoiceRoute,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test';
-import { StreamKind } from '@sharkord/shared';
+import { StreamKind, type TStreamEventDetails } from '@sharkord/shared';
 import type { AppData, Producer } from 'mediasoup-client/types';
 import { ScreenAudioMode, type TDesktopBridge } from '@/runtime/types';
 import {
@@ -46,6 +46,54 @@ const createMountedScreenShare = (...args: Parameters<typeof createScreenShareCo
 	return controller;
 };
 describe('screen-video production owner', () => {
+	it('observes recoverable detach and terminal stop while retaining capture ownership', async () => {
+		const f = createScreenFixture();
+		const events: TStreamEventDetails[] = [];
+		const c = createMountedScreenShare({
+			...f.deps,
+			observe: (event) => {
+				events.push(event);
+			},
+		});
+		await c.start();
+		const first = c.getProducer();
+		c.detachProducer();
+		expect(f.captures[0]?.videoTrack.readyState).toBe('live');
+		await c.republish();
+		const second = c.getProducer();
+		c.stop();
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				event: 'producer_closed',
+				producerId: first?.id,
+				reason: 'transport_replaced',
+				recoverable: true,
+			}),
+		);
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				event: 'producer_closed',
+				producerId: second?.id,
+				reason: 'terminal_close',
+				recoverable: false,
+			}),
+		);
+		expect(f.captures[0]?.videoTrack.readyState).toBe('ended');
+	});
+	it('contains observer failures without changing publication or local stop', async () => {
+		const f = createScreenFixture();
+		const c = createMountedScreenShare({
+			...f.deps,
+			observe: () => {
+				throw new Error('Observer failed');
+			},
+		});
+		await c.start();
+		expect(c.getProducer()).toBeDefined();
+		c.stop();
+		expect(c.getProducer()).toBeUndefined();
+		expect(f.captures[0]?.videoTrack.readyState).toBe('ended');
+	});
 	it('polls only published capture, retains the guard during detach and releases it on stop or track end', async () => {
 		const f = createScreenFixture();
 		const setInterval = mock(f.deps.setInterval);

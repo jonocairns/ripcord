@@ -6,6 +6,7 @@ import { useOwnUserId } from '@/features/server/users/hooks';
 import { useVoiceSessionSelector } from '@/features/server/voice/voice-session-hooks';
 import { selectReconnectAuthenticated, selectReconnectingSince } from '@/features/server/voice/voice-session-machine';
 import { logVoice } from '@/helpers/browser-logger';
+import { recordStreamEvent } from '@/helpers/stream-observability';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
 import type { TExternalStreamTrackPresence } from './use-pending-streams';
@@ -191,6 +192,14 @@ const useVoiceEvents = ({
 					channelId,
 					producerId,
 					recoverable,
+				});
+				recordStreamEvent({
+					event: 'producer_closed_received',
+					channelId,
+					remoteId,
+					kind,
+					producerId,
+					recoverable: recoverable === true,
 				});
 
 				try {

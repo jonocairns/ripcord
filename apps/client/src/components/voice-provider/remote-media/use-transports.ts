@@ -8,7 +8,10 @@ import {
 import { TRPCClientError } from '@trpc/client';
 import type { AppData, Consumer, Device, RtpCapabilities, RtpParameters, Transport } from 'mediasoup-client/types';
 import { useCallback, useRef } from 'react';
-import { logVoice } from '@/helpers/browser-logger';
+import { useServerStore } from '@/features/server/slice';
+import { logVoice, reportError } from '@/helpers/browser-logger';
+import { createStreamFailureReporter } from '@/helpers/stream-failure-reporting';
+import { recordStreamEvent } from '@/helpers/stream-observability';
 import { traceSpan } from '@/helpers/telemetry/tracing';
 import { getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
@@ -24,6 +27,7 @@ import {
 } from './remote-media-consume-controller';
 import { runRemoteMediaProducerRepair } from './remote-media-producer-repair';
 import type { TRemoteMediaRepairIdentity } from './remote-media-subscriptions';
+import { monitorScreenPlayback } from './stream-playback-monitor';
 import { isExternalTrackPresent, type TExternalStreamTrackPresence } from './use-pending-streams';
 import { shouldHandleVoiceTransportFailure } from './voice-transport-failure-identity';
 
@@ -87,6 +91,7 @@ type TUseTransportParams = {
 	isProducerCurrent: (remoteId: number, kind: StreamKind, producerId: string) => boolean;
 	isRepairIdentityCurrent: (identity: TRemoteMediaRepairIdentity) => boolean;
 	onTransportFailure: (failure?: TVoiceTransportFailureEvent) => void;
+	getScreenVideoElement: (remoteId: number) => HTMLVideoElement | null;
 };
 
 const useTransports = ({
@@ -106,6 +111,7 @@ const useTransports = ({
 	isProducerCurrent,
 	isRepairIdentityCurrent,
 	onTransportFailure,
+	getScreenVideoElement,
 }: TUseTransportParams) => {
 	const producerTransport = useRef<Transport<AppData> | undefined>(undefined);
 	const consumerTransport = useRef<Transport<AppData> | undefined>(undefined);
@@ -127,6 +133,9 @@ const useTransports = ({
 	}
 
 	if (consumeControllerRef.current === undefined) {
+		const reportFailure = createStreamFailureReporter((event) =>
+			reportError('Screen stream consume recovery exhausted', undefined, event),
+		);
 		consumeControllerRef.current = createRemoteMediaConsumeController<
 			Transport<AppData>,
 			Consumer<AppData>,
@@ -189,7 +198,21 @@ const useTransports = ({
 				}
 
 				addRemoteUserStream(remoteId, stream, kind);
-				return () => removeRemoteUserStream(remoteId, kind);
+				const disposeMonitor =
+					kind === StreamKind.SCREEN
+						? monitorScreenPlayback({
+								consumer,
+								remoteId,
+								getVideoElement: () => getScreenVideoElement(remoteId),
+								transportConnected: () => consumerTransport.current?.connectionState === 'connected',
+								emit: (event) =>
+									recordStreamEvent({ ...event, channelId: useServerStore.getState().currentVoiceChannelId }),
+							})
+						: undefined;
+				return () => {
+					disposeMonitor?.();
+					removeRemoteUserStream(remoteId, kind);
+				};
 			},
 			isProducerCurrent,
 			onConsumeStarted: (request, operationToken, signal) =>
@@ -215,6 +238,11 @@ const useTransports = ({
 			},
 			onConsumerClosed: markConsumerClosed,
 			log: (message, context) => logVoice(message, context),
+			observe: (event) => {
+				const details = { ...event, channelId: useServerStore.getState().currentVoiceChannelId };
+				recordStreamEvent(details);
+				reportFailure(details);
+			},
 			trace: (request, operation) =>
 				traceSpan(
 					{
@@ -251,6 +279,10 @@ const useTransports = ({
 				logVoice('Got producer transport parameters', { params });
 
 				const transport = device.createSendTransport(params);
+				recordStreamEvent({ event: 'transport_created', transportId: transport.id });
+				transport.observer.on('close', () =>
+					recordStreamEvent({ event: 'transport_closed', transportId: transport.id }),
+				);
 				producerTransport.current = transport;
 
 				transport.on('connect', async ({ dtlsParameters }, callback, errback) => {
@@ -399,6 +431,10 @@ const useTransports = ({
 				logVoice('Got consumer transport parameters', { params });
 
 				const transport = device.createRecvTransport(params);
+				recordStreamEvent({ event: 'transport_created', transportId: transport.id });
+				transport.observer.on('close', () =>
+					recordStreamEvent({ event: 'transport_closed', transportId: transport.id }),
+				);
 				consumeController.replaceTransport(transport);
 				consumerTransport.current = transport;
 

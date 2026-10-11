@@ -1,4 +1,4 @@
-import { StreamKind } from '@sharkord/shared';
+import { StreamKind, type TStreamEventDetails } from '@sharkord/shared';
 import type { AppData, Producer, RtpCapabilities, Transport } from 'mediasoup-client/types';
 import { getResWidthHeight } from '@/helpers/get-res-with-height';
 import { normalizeDesktopCapabilities } from '@/runtime/desktop-capabilities';
@@ -41,6 +41,7 @@ type TScreenShareDependencies = {
 	setInterval: (handler: () => void, delayMs: number) => ReturnType<typeof setInterval>;
 	clearInterval: (handle: ReturnType<typeof setInterval>) => void;
 	now: () => number;
+	observe?: (event: TStreamEventDetails) => void;
 };
 const createScreenShareController = (deps: TScreenShareDependencies) => {
 	let active = false;
@@ -48,6 +49,13 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 	let stream: MediaStream | undefined;
 	let producer: Producer<AppData> | undefined;
 	let disposeQualityGuard: (() => void) | undefined;
+	const observe = (event: TStreamEventDetails) => {
+		try {
+			deps.observe?.({ kind: StreamKind.SCREEN, ...event });
+		} catch {
+			/* Optional telemetry. */
+		}
+	};
 	const setStream = (next: MediaStream | undefined) => {
 		stream = next;
 		deps.publishStream(next);
@@ -55,10 +63,14 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 	// Share audio reads this at each of its boundaries; the getter is passed per
 	// operation so audio needs no construction-time reference to video.
 	const isLive = () => (producer?.track ?? stream?.getVideoTracks()[0])?.readyState === 'live';
-	const closeCurrentProducer = () => {
+	const closeCurrentProducer = (
+		reason: 'terminal_close' | 'transport_replaced' | 'producer_replaced' = 'producer_replaced',
+	) => {
 		const previous = producer;
 		producer = undefined;
 		previous?.close();
+		if (previous)
+			observe({ event: 'producer_closed', producerId: previous.id, reason, recoverable: reason !== 'terminal_close' });
 	};
 	const releaseCapture = () => {
 		disposeQualityGuard?.();
@@ -70,7 +82,7 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 			track.stop();
 			capture.removeTrack(track);
 		});
-		closeCurrentProducer();
+		closeCurrentProducer('terminal_close');
 		setStream(undefined);
 	};
 	const stop = () => {
@@ -80,7 +92,7 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 	};
 	const detachProducer = () => {
 		++generation;
-		closeCurrentProducer();
+		closeCurrentProducer('transport_replaced');
 	};
 	const assertCurrent = (ownedGeneration: number) => {
 		if (!active || generation !== ownedGeneration) throw new VoiceSessionExecutionSupersededError();
@@ -101,6 +113,7 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 			const devices = deps.getDevices();
 			const requested = getResWidthHeight(devices.screenResolution);
 			const settings = track.getSettings();
+			observe({ event: 'producer_publish_started', transportId: transport.id });
 			created = await transport.produce({
 				track,
 				stopTracks: false,
@@ -132,8 +145,14 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 				throw new VoiceSessionExecutionSupersededError();
 			closeCurrentProducer();
 			producer = published;
+			observe({ event: 'producer_published', producerId: published.id, transportId: transport.id });
 			disposeQualityGuard ??= mountScreenShareQualityGuard({ ...deps, getProducer });
 		} catch (error) {
+			observe({
+				event: 'producer_publish_failed',
+				producerId: created?.id,
+				reason: error instanceof VoiceSessionExecutionSupersededError ? 'cancelled' : 'attempt_failed',
+			});
 			created?.close();
 			if (!options.preserveCapture && generation === ownedGeneration && stream === capture) releaseCapture();
 			throw error;
@@ -306,7 +325,7 @@ const createScreenShareController = (deps: TScreenShareDependencies) => {
 		if (capture && track?.readyState === 'live') {
 			if (!active || (isCurrent && !isCurrent())) return Promise.reject(new VoiceSessionExecutionSupersededError());
 			const ownedGeneration = ++generation;
-			closeCurrentProducer();
+			closeCurrentProducer('transport_replaced');
 			return publish(capture, track, ownedGeneration, { preserveCapture: true, isCurrent });
 		}
 	};

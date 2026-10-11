@@ -23,6 +23,7 @@ type TUseRemoteMediaParams = {
 	getRtpCapabilities: () => RtpCapabilities | null;
 	onTransportFailure: (failure?: TVoiceTransportFailureEvent) => void;
 	onVoiceActivityUpdate: (activity: { userId: number; isSpeaking: boolean }) => void;
+	getScreenVideoElement: (remoteId: number) => HTMLVideoElement | null;
 };
 
 const useRemoteMedia = ({
@@ -32,6 +33,7 @@ const useRemoteMedia = ({
 	getRtpCapabilities,
 	onTransportFailure,
 	onVoiceActivityUpdate,
+	getScreenVideoElement,
 }: TUseRemoteMediaParams) => {
 	const currentChannelExternalStreams = useServerStore<TChannelExternalStreams>((state) =>
 		currentVoiceChannelId === undefined
@@ -120,6 +122,7 @@ const useRemoteMedia = ({
 		isTransportFailureCurrent,
 		stopWatchingStream,
 	} = useTransports({
+		getScreenVideoElement,
 		addExternalStreamTrack,
 		removeExternalStreamTrack,
 		addRemoteUserStream,

@@ -114,6 +114,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		remoteMediaSubscriptions,
 		visibleRemoteMedia,
 	} = useRemoteMedia({
+		getScreenVideoElement: (remoteId) => getOrCreateRefs(remoteId).screenShareRef.current,
 		currentVoiceChannelId,
 		rtpCapabilities: voiceEventRtpCapabilities,
 		reconnectNonce: voiceSessionReconnectNonce,

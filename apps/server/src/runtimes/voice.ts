@@ -23,6 +23,7 @@ import type {
 } from 'mediasoup/types';
 import { logger } from '../logger';
 import { eventBus } from '../plugins/event-bus';
+import { recordServerStreamEvent } from '../stream-observability';
 import { invariant } from '../utils/invariant';
 import { mediaSoupWorker, webRtcServer, webRtcServerListenInfo, webRtcServerListenInfos } from '../utils/mediasoup';
 import { pubsub } from '../utils/pubsub';
@@ -243,6 +244,7 @@ class VoiceRuntime {
 	private screenProducers: TProducerMap = {};
 	private screenAudioProducers: TProducerMap = {};
 	private recoverableProducerClosures = new WeakSet<Producer<AppData>>();
+	private replacedProducerClosures = new WeakSet<Producer<AppData>>();
 	private appAudioIngests: TAppAudioIngestMap = {};
 	private appAudioIngestCreations = new Map<number, Promise<void>>();
 	private consumers: TConsumerMap = {};
@@ -1261,7 +1263,7 @@ class VoiceRuntime {
 			return { fallback: true };
 		}
 
-		this.addProducer(userId, StreamKind.SCREEN_AUDIO, producer);
+		this.addProducer(userId, StreamKind.SCREEN_AUDIO, producer, ingest.transport.id);
 
 		// Closing the SCREEN_AUDIO producer (e.g. via closeProducer when the user
 		// stops sharing but stays in voice) must also release the PlainTransport so
@@ -1378,8 +1380,16 @@ class VoiceRuntime {
 		}
 	};
 
-	public addProducer = (userId: number, type: StreamKind, producer: Producer<AppData>) => {
+	public addProducer = (userId: number, type: StreamKind, producer: Producer<AppData>, transportId?: string) => {
 		const existingProducer = this.getUserProducerByKind(userId, type);
+		recordServerStreamEvent(userId, {
+			event: existingProducer && existingProducer !== producer ? 'producer_replaced' : 'producer_published',
+			channelId: this.id,
+			kind: type,
+			producerId: producer.id,
+			previousProducerId: existingProducer?.id,
+			transportId,
+		});
 
 		if (type === StreamKind.VIDEO) {
 			this.videoProducers[userId] = producer;
@@ -1392,6 +1402,7 @@ class VoiceRuntime {
 		}
 
 		if (existingProducer && existingProducer !== producer && !existingProducer.closed) {
+			this.replacedProducerClosures.add(existingProducer);
 			existingProducer.close();
 		}
 
@@ -1400,6 +1411,19 @@ class VoiceRuntime {
 		}
 
 		producer.observer.on('close', () => {
+			recordServerStreamEvent(userId, {
+				event: 'producer_closed',
+				channelId: this.id,
+				kind: type,
+				producerId: producer.id,
+				transportId,
+				recoverable: this.recoverableProducerClosures.has(producer),
+				reason: this.replacedProducerClosures.delete(producer)
+					? 'producer_replaced'
+					: this.recoverableProducerClosures.has(producer)
+						? 'recoverable_close'
+						: 'terminal_close',
+			});
 			// A replaced producer can close after its successor was registered.
 			// Only the active producer may clear the map entry and broadcast
 			// VOICE_PRODUCER_CLOSED — a stale close would otherwise drop a live
@@ -1462,6 +1486,16 @@ class VoiceRuntime {
 	}
 
 	public addConsumer = (userId: number, remoteId: number, kind: StreamKind, consumer: Consumer<AppData>) => {
+		const transportId = this.consumerTransports[userId]?.id;
+		recordServerStreamEvent(userId, {
+			event: 'consumer_created',
+			channelId: this.id,
+			remoteId,
+			kind,
+			consumerId: consumer.id,
+			producerId: consumer.producerId,
+			transportId,
+		});
 		if (!this.consumers[userId]) {
 			this.consumers[userId] = {};
 		}
@@ -1487,6 +1521,15 @@ class VoiceRuntime {
 		}
 
 		consumer.observer.on('close', () => {
+			recordServerStreamEvent(userId, {
+				event: 'consumer_closed',
+				channelId: this.id,
+				remoteId,
+				kind,
+				transportId,
+				consumerId: consumer.id,
+				producerId: consumer.producerId,
+			});
 			const activeConsumer = this.consumers[userId]?.[remoteId]?.[kind];
 
 			if (activeConsumer !== consumer) {
@@ -1539,6 +1582,14 @@ class VoiceRuntime {
 		}
 
 		await consumer.resume();
+		recordServerStreamEvent(userId, {
+			event: 'consumer_resumed',
+			channelId: this.id,
+			remoteId,
+			kind,
+			consumerId: consumer.id,
+			producerId: consumer.producerId,
+		});
 		return true;
 	};
 

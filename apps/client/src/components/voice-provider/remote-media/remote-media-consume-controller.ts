@@ -1,4 +1,4 @@
-import { StreamKind } from '@sharkord/shared';
+import { StreamKind, type TStreamEventDetails } from '@sharkord/shared';
 import { CONSUME_ATTEMPT_RPC_TIMEOUT_MS } from './consume-attempt-timeout';
 import { getConsumeRetryDelayMs } from './consume-retry-policy';
 
@@ -68,6 +68,7 @@ type TRemoteMediaConsumeControllerPorts<
 	log?: (message: string, context?: Record<string, unknown>) => void;
 	trace?: <T>(request: TRemoteMediaConsumeRequest<TRtpCapabilities>, operation: () => Promise<T>) => Promise<T>;
 	rpcTimeoutMs?: number;
+	observe?: (event: TStreamEventDetails) => void;
 };
 
 type TConsumeOperation<TTransport extends object, TRtpCapabilities> = {
@@ -77,6 +78,7 @@ type TConsumeOperation<TTransport extends object, TRtpCapabilities> = {
 	transport: TTransport;
 	request: TRemoteMediaConsumeRequest<TRtpCapabilities>;
 	abortController: AbortController;
+	observationId?: string;
 };
 
 type TActiveConsumer<TLocalConsumer extends object> = {
@@ -88,6 +90,7 @@ type TActiveConsumer<TLocalConsumer extends object> = {
 	producerId: string;
 	consumerId: string;
 	consumer: TLocalConsumer;
+	observation: Pick<TStreamEventDetails, 'operationId' | 'transportId' | 'mode'>;
 	detach?: () => void;
 	cleanedUp: boolean;
 };
@@ -129,6 +132,21 @@ const createRemoteMediaConsumeController = <
 
 	const log = (message: string, context?: Record<string, unknown>): void => {
 		ports.log?.(message, context);
+	};
+	const observe = (operation: TConsumeOperation<TTransport, TRtpCapabilities>, event: TStreamEventDetails): void => {
+		try {
+			ports.observe?.({
+				remoteId: operation.request.remoteId,
+				kind: operation.request.kind,
+				producerId: operation.request.expectedProducerId,
+				transportId: ports.getTransportId(operation.transport),
+				operationId: operation.observationId,
+				mode: operation.request.isManualRetry ? 'manual' : 'automatic',
+				...event,
+			});
+		} catch {
+			/* Observer failure cannot change a consume operation. */
+		}
 	};
 
 	const trackCleanupTask = (task: Promise<void>): void => {
@@ -225,7 +243,7 @@ const createRemoteMediaConsumeController = <
 
 	const cleanupActiveConsumer = (
 		record: TActiveConsumer<TLocalConsumer>,
-		options: { closeLocal: boolean; notifyLedger: boolean },
+		options: { closeLocal: boolean; notifyLedger: boolean; reason?: TStreamEventDetails['reason'] },
 	): void => {
 		if (record.cleanedUp) return;
 		record.cleanedUp = true;
@@ -245,6 +263,20 @@ const createRemoteMediaConsumeController = <
 					consumerId: record.consumerId,
 				});
 			}
+		}
+		try {
+			if (ports.isLocalConsumerClosed(record.consumer))
+				ports.observe?.({
+					...record.observation,
+					event: 'consumer_closed',
+					remoteId: record.remoteId,
+					kind: record.kind,
+					producerId: record.producerId,
+					consumerId: record.consumerId,
+					reason: options.reason ?? 'local_closed',
+				});
+		} catch {
+			/* Optional observer cannot affect local cleanup. */
 		}
 
 		try {
@@ -294,7 +326,7 @@ const createRemoteMediaConsumeController = <
 
 		const activeConsumer = activeConsumers.get(operation.key);
 		if (activeConsumer?.operationToken === operation.token) {
-			cleanupActiveConsumer(activeConsumer, { closeLocal: true, notifyLedger: true });
+			cleanupActiveConsumer(activeConsumer, { closeLocal: true, notifyLedger: true, reason: 'cancelled' });
 		}
 	};
 
@@ -338,7 +370,7 @@ const createRemoteMediaConsumeController = <
 
 			const existingConsumer = activeConsumers.get(operation.key);
 			if (existingConsumer) {
-				cleanupActiveConsumer(existingConsumer, { closeLocal: true, notifyLedger: true });
+				cleanupActiveConsumer(existingConsumer, { closeLocal: true, notifyLedger: true, reason: 'consumer_replaced' });
 			}
 
 			const localConsumerPromise = ports.createLocalConsumer(operation.transport, allocation);
@@ -369,6 +401,11 @@ const createRemoteMediaConsumeController = <
 				producerId: allocation.producerId,
 				consumerId: allocation.consumerId,
 				consumer: localConsumer,
+				observation: {
+					operationId: operation.observationId,
+					transportId: ports.getTransportId(operation.transport),
+					mode: request.isManualRetry ? 'manual' : 'automatic',
+				},
 				cleanedUp: false,
 			};
 			const installedRecord = activeRecord;
@@ -388,7 +425,7 @@ const createRemoteMediaConsumeController = <
 			);
 
 			if (!isOperationCurrent(operation) || !isProducerCurrent(operation, allocation.producerId)) {
-				cleanupActiveConsumer(activeRecord, { closeLocal: true, notifyLedger: true });
+				cleanupActiveConsumer(activeRecord, { closeLocal: true, notifyLedger: true, reason: 'cancelled' });
 				await cleanupServerAllocation('consume superseded before success commit');
 				return 'cancelled';
 			}
@@ -404,10 +441,19 @@ const createRemoteMediaConsumeController = <
 				consumerId: allocation.consumerId,
 				operationToken: operation.token,
 			});
+			observe(operation, {
+				event: 'consume_succeeded',
+				producerId: allocation.producerId,
+				consumerId: allocation.consumerId,
+			});
 			return 'success';
 		} catch (error) {
 			if (activeRecord) {
-				cleanupActiveConsumer(activeRecord, { closeLocal: true, notifyLedger: true });
+				cleanupActiveConsumer(activeRecord, {
+					closeLocal: true,
+					notifyLedger: true,
+					reason: error instanceof VoiceRemoteMediaConsumeCancelledError ? 'cancelled' : 'attempt_failed',
+				});
 			} else if (localConsumer && !ports.isLocalConsumerClosed(localConsumer)) {
 				ports.closeLocalConsumer(localConsumer);
 			}
@@ -426,6 +472,10 @@ const createRemoteMediaConsumeController = <
 				error,
 				remoteId: request.remoteId,
 				kind: request.kind,
+			});
+			observe(operation, {
+				event: 'consume_attempt_failed',
+				reason: error instanceof VoiceRemoteMediaConsumeTimeoutError ? 'timeout' : 'attempt_failed',
 			});
 			return 'failure';
 		}
@@ -464,9 +514,15 @@ const createRemoteMediaConsumeController = <
 			request,
 			abortController: new AbortController(),
 		};
+		try {
+			operation.observationId = crypto.randomUUID();
+		} catch {
+			/* Optional correlation. */
+		}
 		operations.set(key, operation);
 
 		let failedAttemptIndex = 0;
+		let observationFinished = false;
 
 		try {
 			let consumeStartPublished: boolean;
@@ -490,15 +546,20 @@ const createRemoteMediaConsumeController = <
 					reason: 'consume start publication failed',
 					operationToken: operation.token,
 				});
+				observationFinished = true;
+				observe(operation, { event: 'consume_exhausted', reason: 'publication_failed' });
 				return;
 			}
 
 			if (!consumeStartPublished || !isOperationCurrent(operation)) return;
+			observe(operation, { event: 'consume_started' });
 
 			while (isOperationCurrent(operation)) {
+				observe(operation, { event: 'consume_attempt', attempt: failedAttemptIndex + 1 });
 				const result = await runAttempt(operation);
 
 				if (result === 'success' || result === 'cancelled' || !isOperationCurrent(operation)) {
+					observationFinished = result === 'success';
 					return;
 				}
 
@@ -508,10 +569,17 @@ const createRemoteMediaConsumeController = <
 						reason: 'consume retry exhausted',
 						operationToken: operation.token,
 					});
+					observationFinished = true;
+					observe(operation, {
+						event: 'consume_exhausted',
+						reason: 'retry_exhausted',
+						attempt: failedAttemptIndex + 1,
+					});
 					return;
 				}
 
 				failedAttemptIndex += 1;
+				observe(operation, { event: 'consume_retry', attempt: failedAttemptIndex + 1 });
 				log('Retrying remote consume after failure', {
 					remoteId: request.remoteId,
 					kind: request.kind,
@@ -529,6 +597,7 @@ const createRemoteMediaConsumeController = <
 				}
 			}
 		} finally {
+			if (!observationFinished) observe(operation, { event: 'consume_cancelled', reason: 'cancelled' });
 			if (operations.get(key) === operation) {
 				operations.delete(key);
 			}
@@ -550,7 +619,7 @@ const createRemoteMediaConsumeController = <
 
 		const activeConsumer = activeConsumers.get(key);
 		if (activeConsumer) {
-			cleanupActiveConsumer(activeConsumer, { closeLocal: true, notifyLedger: true });
+			cleanupActiveConsumer(activeConsumer, { closeLocal: true, notifyLedger: true, reason: 'cancelled' });
 			trackCleanupTask(
 				closeServerConsumer({ remoteId, kind, consumerId: activeConsumer.consumerId }, 'cancel active consumer'),
 			);
@@ -589,7 +658,7 @@ const createRemoteMediaConsumeController = <
 		const currentConsumers = [...activeConsumers.values()];
 		activeConsumers.clear();
 		currentConsumers.forEach((consumer) => {
-			cleanupActiveConsumer(consumer, { closeLocal: true, notifyLedger: true });
+			cleanupActiveConsumer(consumer, { closeLocal: true, notifyLedger: true, reason: 'transport_cleanup' });
 		});
 	};
 
