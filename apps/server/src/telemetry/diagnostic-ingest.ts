@@ -52,6 +52,8 @@ export const createDiagnosticIngest = (deps: {
 			const receivedAt = now();
 			for (const [key, expiresAt] of seen) if (expiresAt <= receivedAt) seen.delete(key);
 			for (const record of batch.records) {
+				const key = `${userId}:${batch.clientSessionId}:${record.id}`;
+				if (seen.has(key)) continue;
 				if (receivedAt - record.occurredAt > 300_000) {
 					count('diagnostic_stale');
 					continue;
@@ -64,8 +66,6 @@ export const createDiagnosticIngest = (deps: {
 					count('diagnostic_queue_full');
 					continue;
 				}
-				const key = `${userId}:${batch.clientSessionId}:${record.id}`;
-				if (seen.has(key)) continue;
 				// Keep the cache bounded without blocking every user's fresh reports.
 				if (seen.size >= 4096) {
 					const oldest = seen.keys().next().value;

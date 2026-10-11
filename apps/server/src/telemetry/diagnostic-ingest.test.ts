@@ -88,6 +88,37 @@ describe('server diagnostic acceptance', () => {
 	});
 });
 
+test('full queues count fresh discarded records while acknowledgement retries stay deduplicated', () => {
+	let deliveries = 0;
+	const reasons: string[] = [];
+	const ingest = createDiagnosticIngest({
+		now: () => 100,
+		log: () => {
+			deliveries++;
+		},
+		forward: () => {},
+		health: {
+			count: (reason) => {
+				reasons.push(reason);
+			},
+		},
+	});
+	const accepted = batch();
+	ingest.accept(accepted, 1);
+	for (let i = 1; i < 256; i++) ingest.accept(batch(), 1);
+	ingest.accept(accepted, 1);
+	expect(reasons).toEqual([]);
+	const fresh = batch();
+	ingest.accept(fresh, 1);
+	expect(reasons).toEqual(['diagnostic_queue_full']);
+	ingest.flush();
+	expect(deliveries).toBe(256);
+	// A rejected fresh record must remain eligible after capacity recovers.
+	ingest.accept(fresh, 1);
+	ingest.flush();
+	expect(deliveries).toBe(257);
+});
+
 test('dedupe saturation keeps accepting other users and bounds retained retry evidence', () => {
 	let deliveries = 0;
 	const ingest = createDiagnosticIngest({
