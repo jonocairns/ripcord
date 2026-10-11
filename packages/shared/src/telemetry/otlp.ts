@@ -119,7 +119,10 @@ export const sanitizeClientTraceBatch = (batch: TClientTraceBatch, userId: numbe
 	})),
 });
 export const traceCarrierSchema = z
-	.object({ traceparent: z.string().regex(/^00-(?!0{32}-)[a-f0-9]{32}-(?!0{16}-)[a-f0-9]{16}-0[01]$/) })
+	.object({
+		traceparent: z.string().regex(/^00-(?!0{32}-)[a-f0-9]{32}-(?!0{16}-)[a-f0-9]{16}-0[01]$/),
+		tracestate: z.string().max(512).optional(),
+	})
 	.strict();
 export const traceEnvelopeSchema = z
 	.object({ __ripcordTrace: traceCarrierSchema, input: z.unknown().optional() })

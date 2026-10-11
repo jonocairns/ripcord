@@ -1,5 +1,10 @@
+import type { getActiveTraceContext } from '@sharkord/shared/telemetry/opentelemetry';
 import { logger } from './logger';
-export const reportServerError = (error: unknown, context?: Record<string, unknown>): void => {
+export const reportServerError = (
+	error: unknown,
+	context?: Record<string, unknown>,
+	traceContext?: ReturnType<typeof getActiveTraceContext>,
+): void => {
 	try {
 		logger.error({
 			message: error instanceof Error ? error.message : String(error),
@@ -7,6 +12,7 @@ export const reportServerError = (error: unknown, context?: Record<string, unkno
 			stack: error instanceof Error ? error.stack : undefined,
 			exceptionType: error instanceof Error ? error.name : 'Error',
 			context,
+			...traceContext,
 		});
 	} catch {
 		/* Reporting cannot affect RPCs. */

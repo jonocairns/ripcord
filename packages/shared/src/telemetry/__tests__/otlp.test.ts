@@ -77,3 +77,17 @@ test('OTLP validation and scrub preserve span graph, time and sampling with auth
 			.success,
 	).toBe(false);
 });
+
+test('W3C envelope round-trips bounded trace state while rejecting oversized or unexpected carrier fields', () => {
+	const carrier = { traceparent: `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01`, tracestate: 'vendor=value' };
+	expect(traceEnvelopeSchema.parse({ __ripcordTrace: carrier, input: { channelId: 1 } })).toEqual({
+		__ripcordTrace: carrier,
+		input: { channelId: 1 },
+	});
+	expect(traceEnvelopeSchema.safeParse({ __ripcordTrace: { ...carrier, tracestate: 'x'.repeat(513) } }).success).toBe(
+		false,
+	);
+	expect(
+		traceEnvelopeSchema.safeParse({ __ripcordTrace: { ...carrier, authorization: 'Bearer secret' } }).success,
+	).toBe(false);
+});

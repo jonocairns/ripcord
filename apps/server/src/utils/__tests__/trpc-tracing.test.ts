@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import * as otel from '@sharkord/shared/telemetry/opentelemetry';
 import type { TSpanObservation } from '@sharkord/shared/telemetry/tracing';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { createMockContext } from '../../__tests__/context';
 import { getMockedToken } from '../../__tests__/helpers';
+import { consumeErrorTraceContext } from '../../helpers/error-trace-context';
 import * as tracing from '../../helpers/tracing';
 import { publicProcedure, t } from '../trpc';
 
@@ -123,7 +125,7 @@ test('trace carrier unwrapping preserves handler validation and old-client input
 		.createCaller(ctx);
 	expect(await caller.echo({ channelId: 42 })).toEqual({ channelId: 42 });
 	const envelope = {
-		__ripcordTrace: { traceparent: `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01` },
+		__ripcordTrace: { traceparent: `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01`, tracestate: 'vendor=value' },
 		input: { channelId: 43 },
 	};
 	// Internal caller's static input is the app schema; transport envelopes precede that schema.
@@ -134,4 +136,43 @@ test('trace carrier unwrapping preserves handler validation and old-client input
 	await expect(call({ ...envelope, __ripcordTrace: { traceparent: 'invalid' } })).rejects.toMatchObject({
 		code: 'BAD_REQUEST',
 	});
+});
+
+test('production middleware saves the failing RPC context inside its observation scope', async () => {
+	let inside = false;
+	const ids = { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16) };
+	const active = spyOn(otel, 'getActiveTraceContext').mockImplementation(() => (inside ? ids : {}));
+	const start = spyOn(tracing, 'startSpanObservation').mockImplementation(() => ({
+		run: (effect) => {
+			inside = true;
+			const value = effect();
+			void Promise.resolve(value).then(
+				() => {
+					inside = false;
+				},
+				() => {
+					inside = false;
+				},
+			);
+			return value;
+		},
+		finish: () => {},
+	}));
+	try {
+		const caller = t
+			.router({
+				fail: publicProcedure.query(() => {
+					throw new Error('failed');
+				}),
+			})
+			.createCaller(await createMockContext({ customToken: await getMockedToken(1) }));
+		const error: unknown = await caller.fail().catch((error: unknown) => error);
+		if (!(error instanceof TRPCError)) throw Error('Expected original RPC failure');
+		expect(inside).toBe(false);
+		expect(consumeErrorTraceContext(error)).toEqual(ids);
+		expect(consumeErrorTraceContext(error)).toBeUndefined();
+	} finally {
+		active.mockRestore();
+		start.mockRestore();
+	}
 });

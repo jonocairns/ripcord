@@ -21,6 +21,7 @@ import { getUserById, getUserByToken } from '../db/queries/users';
 import { channels } from '../db/schema';
 import { reportServerError } from '../error-reporting';
 import { getClientIpOptions } from '../helpers/client-ip-options';
+import { consumeErrorTraceContext } from '../helpers/error-trace-context';
 import { getWsInfo } from '../helpers/get-ws-info';
 import { logger } from '../logger';
 import { enqueueActivityLog } from '../queues/activity-log';
@@ -504,7 +505,7 @@ const createWsServer = async (server: http.Server) => {
 			},
 			onError: ({ error, path }) => {
 				if (error.code === 'INTERNAL_SERVER_ERROR') {
-					reportServerError(error.cause ?? error, { path });
+					reportServerError(error.cause ?? error, { path }, consumeErrorTraceContext(error));
 				}
 			},
 		});

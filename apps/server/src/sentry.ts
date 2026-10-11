@@ -1,4 +1,4 @@
-import { getActiveTraceContext } from '@sharkord/shared/telemetry/opentelemetry';
+import { getReportedTraceContext } from './helpers/error-trace-context';
 // The server runs on Bun (compiled single-file binary in production), so use
 // the first-class @sentry/bun SDK rather than @sentry/node. It re-exports the
 // Node API — captureException, captureMessage, close, etc. all behave the same
@@ -180,7 +180,7 @@ const sentryFormat = format((info) => {
 	try {
 		const scope = new Sentry.Scope();
 		scope.setExtras(extra);
-		const active = getActiveTraceContext();
+		const active = getReportedTraceContext(info);
 		if (active.traceId && active.spanId)
 			scope.setContext('trace', { trace_id: active.traceId, span_id: active.spanId });
 		if (errorFromSplat) {

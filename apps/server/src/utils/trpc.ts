@@ -4,6 +4,7 @@ import { initTRPC, TRPCError } from '@trpc/server';
 import chalk from 'chalk';
 import type WebSocket from 'ws';
 import { config } from '../config';
+import { rememberErrorTraceContext } from '../helpers/error-trace-context';
 import { withRemoteTraceContext } from '../helpers/remote-trace-context';
 import { startSpanObservation } from '../helpers/tracing';
 import { logger } from '../logger';
@@ -65,7 +66,11 @@ const tracingMiddleware = t.middleware(async ({ path, type, next, getRawInput, c
 				attributes: { 'rpc.method': path, 'rpc.type': type },
 			});
 			try {
-				const result = await observation.run(runNext);
+				const result = await observation.run(async () => {
+					const result = await runNext();
+					if (!result.ok) rememberErrorTraceContext(result.error);
+					return result;
+				});
 				observation.finish({ status: result.ok ? 'ok' : 'error' });
 				return result;
 			} catch (error) {

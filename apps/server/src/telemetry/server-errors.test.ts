@@ -12,7 +12,7 @@ test('RPC reporting retains original stack and context through the actual Winsto
 		return logger;
 	});
 	try {
-		reportServerError(error, { path: 'voice.join' });
+		reportServerError(error, { path: 'voice.join' }, { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16) });
 	} finally {
 		spy.mockRestore();
 	}
@@ -25,6 +25,8 @@ test('RPC reporting retains original stack and context through the actual Winsto
 	if (!formatted || typeof formatted !== 'object') throw new Error('Missing formatted log');
 	const output = String(formatted[Symbol.for('message')]);
 	expect(output).toContain('voice.join');
+	expect(output).toContain('a'.repeat(32));
+	expect(output).toContain('b'.repeat(16));
 	expect(output).toContain('TypeError');
 	expect(output).toContain('server-errors.test.ts');
 	expect(output).toContain('"source":"server"');

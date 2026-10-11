@@ -22,11 +22,21 @@ export const createRpcTraceExporter = (
 				callback({ code: ExportResultCode.FAILED });
 				return;
 			}
+			// A user can keep a picker open past the ingestion duration limit. Drop
+			// that span alone so it cannot poison unrelated spans in an SDK batch.
+			const eligible = spans.filter((span) => {
+				const seconds = span.duration[0] + span.duration[1] / 1e9;
+				return Number.isFinite(seconds) && seconds >= 0 && seconds <= 600;
+			});
+			if (eligible.length === 0) {
+				callback({ code: ExportResultCode.SUCCESS });
+				return;
+			}
 			const controller = new AbortController();
 			active.add(controller);
 			let timeout: ReturnType<typeof setTimeout> | undefined;
 			const send = async () => {
-				const bytes = JsonTraceSerializer.serializeRequest(spans);
+				const bytes = JsonTraceSerializer.serializeRequest(eligible);
 				if (!bytes) throw new Error('Empty trace export');
 				const batch = clientTraceBatchSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
 				for (let attempt = 0; attempt < 3; attempt++) {

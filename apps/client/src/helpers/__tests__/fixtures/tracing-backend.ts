@@ -46,6 +46,8 @@ const rpc = createTRPCProxyClient<AppRouter>({ links: [tracingLink, terminal] })
 await parent.run(() => rpc.others.handshake.query());
 assert.equal(carrierCount, 1);
 parent.finish({ status: 'ok' });
+const longPicker = trace.getTracer('ripcord.client').startSpan('long-picker', { startTime: Date.now() - 601_000 });
+longPicker.end();
 await flushClientTracing();
 const spans = sent.flatMap((b) => b.resourceSpans.flatMap((r) => r.scopeSpans.flatMap((s) => s.spans)));
 assert.equal(spans.length, 3);
@@ -62,6 +64,13 @@ assert.ok(
 		(a) => a.key === 'service.name' && 'stringValue' in a.value && a.value.stringValue === 'ripcord.client',
 	),
 );
+const beforeExcludedOnly = sent.length;
+trace
+	.getTracer('ripcord.client')
+	.startSpan('long-picker-only', { startTime: Date.now() - 601_000 })
+	.end();
+await flushClientTracing();
+assert.equal(sent.length, beforeExcludedOnly);
 // A pending batch is canceled on identity change; stale observations cannot inject old context.
 const stale = startSpanObservation({ name: 'stale' });
 traceSpan({ name: 'discard-old-queue' }, () => {});

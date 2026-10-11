@@ -213,8 +213,10 @@ IDs. Explicit error captures snapshot a real active context before SDK parsing;
 automatic SDK events without that snapshot omit trace IDs rather than forwarding
 the SDK's unrelated fallback IDs. Voice diagnostic logs use real active IDs.
 Client-session, operation, reconnect, producer, consumer and transport IDs remain
-useful where asynchronous boundaries lack an active span. Server ALS parent
-isolation across concurrent async operations is covered by real exporter tests.
+useful where asynchronous boundaries lack an active span. Failed RPCs retain their
+span IDs for structured exception logging and optional error forwarding after the
+WebSocket callback leaves the handler context. Server ALS parent isolation across
+concurrent async operations is covered by real exporter tests.
 Desktop main has no shared manual tracing call sites; its previous optional Sentry automatic spans are disabled, while main diagnostics and native crash capture remain separate. No browser document/fetch auto-instrumentation is added: the former Sentry browser
 integration's automatic navigation/network spans are an explicit migration limit.
 
@@ -226,6 +228,8 @@ identity change/disconnect. Pending observations cannot activate an old identity
 context. Telemetry RPCs are excluded from instrumentation to prevent recursion.
 The schema limits batches to 64 KB and only the existing primitive manual span
 attributes; events, links and spans lasting over ten minutes are not exported.
+The client exporter excludes long spans individually so they cannot discard other
+valid spans in the batch.
 There is no persistent browser spool. Quit attempts a one-second tracing flush
 after local voice cleanup, alongside diagnostics; abrupt crashes/tab termination
 can still lose spans.
