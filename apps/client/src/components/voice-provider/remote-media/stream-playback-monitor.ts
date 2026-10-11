@@ -79,12 +79,15 @@ export const monitorScreenPlayback = (options: TMonitorOptions): (() => void) =>
 				video.srcObject instanceof MediaStream &&
 				video.srcObject.getVideoTracks().some((track) => track.id === options.consumer.track.id);
 			observeVideo(ownsVideo ? video : null);
+			const style = video?.ownerDocument.defaultView?.getComputedStyle(video);
 			const eligible =
 				!!video &&
 				ownsVideo &&
 				video.isConnected &&
 				video.getClientRects().length > 0 &&
 				video.ownerDocument.visibilityState === 'visible' &&
+				style?.visibility === 'visible' &&
+				Number(style.opacity) > 0 &&
 				!video.paused &&
 				!video.ended &&
 				!options.consumer.paused &&

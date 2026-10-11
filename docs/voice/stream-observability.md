@@ -24,7 +24,9 @@ disconnect and uploads only after server authentication. Switching server origin
 server ID or user, or terminal cleanup, clears the queue. A process exit can lose
 buffered events. `droppedEvents` exposes bounded-buffer/retry losses; network
 acknowledgement loss can produce duplicates with the same session and sequence.
-The backend limits uploads to 30 batches/minute per authenticated user.
+The backend limits uploads to 30 batches/minute per authenticated user. Timeout
+and identity-change cancellation release the client WebSocket request subscription;
+they cannot undo a mutation already executing on the server.
 
 Sentry keeps its existing tracing/sampling settings. Only exhausted SCREEN
 consume retries produce a new error, limited to three reports per ten minutes
@@ -58,8 +60,11 @@ of inactivity is labelled `static_or_idle` when connected and
 `no_incoming_media` when the receive transport is disconnected. Static screens
 alone cannot prove failure. Paused, ended, hidden or absent video elements suppress
 diagnoses; browsers lacking frame callbacks omit render-specific conclusions.
-Recovery requires progress in the counter corresponding to the diagnosed stage.
-Monitoring stops with consumer ownership and never starts a media repair.
+Recovery requires progress in the counter corresponding to the diagnosed stage,
+even if incoming media goes idle and later resumes. CSS-hidden video is suppressed,
+including the transparent in-app element during popout; the separate popout
+element is not monitored. Monitoring stops with consumer ownership and never
+starts a media repair.
 
 ## VictoriaLogs queries
 

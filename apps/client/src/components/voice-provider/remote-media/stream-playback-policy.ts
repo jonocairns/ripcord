@@ -65,7 +65,9 @@ export const createStreamPlaybackPolicy = () => {
 			events.push({ event: 'playback_recovered', ...counters });
 			diagnosed = undefined;
 		}
-		if (reason && reason !== diagnosed) {
+		// Inactivity cannot resolve or downgrade a blocked decode/render stage.
+		// Keep that diagnosis until the stage itself advances.
+		if (reason && reason !== diagnosed && diagnosed !== 'no_decoding' && diagnosed !== 'no_playback') {
 			events.push({
 				event: reason === 'no_decoding' || reason === 'no_playback' ? 'playback_stalled' : 'playback_inactive',
 				reason,

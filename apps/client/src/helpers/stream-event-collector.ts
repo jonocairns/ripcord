@@ -85,8 +85,8 @@ export const createStreamEventCollector = (options: TCollectorOptions) => {
 			queue = queue.filter((event) => !sequences.has(event.sequence));
 		};
 		try {
-			// Race abort as well: tRPC cannot cancel a dispatched mutation, and a
-			// permanently pending upload must not strand this bounded queue.
+			// Race abort as well: an uploader may ignore cancellation. The network
+			// adapter must also release its request subscription on abort.
 			await new Promise<void>((resolve, reject) => {
 				const onAbort = () => reject(new Error('Stream diagnostics upload cancelled'));
 				controller.signal.addEventListener('abort', onAbort, { once: true });

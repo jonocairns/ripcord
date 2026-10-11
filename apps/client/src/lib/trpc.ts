@@ -25,6 +25,7 @@ import {
 } from '@/helpers/stream-observability';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { createSessionAuthenticationGate } from './session-authentication-gate';
+import { streamDiagnosticsLink } from './stream-diagnostics-link';
 import { markSocketCloseEventIgnored, shouldIgnoreSocketCloseEvent } from './websocket-close-ignore';
 import {
 	getWsReconnectOpenAction,
@@ -303,7 +304,7 @@ const initializeTRPC = (host: string) => {
 	});
 
 	trpc = createTRPCProxyClient<AppRouter>({
-		links: [wsLink({ client: wsClient })],
+		links: [streamDiagnosticsLink, wsLink({ client: wsClient })],
 	});
 
 	currentHost = host;

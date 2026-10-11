@@ -56,6 +56,25 @@ describe('screen playback evidence', () => {
 				),
 			).toEqual([]);
 	});
+	for (const stage of ['no_decoding', 'no_playback'] as const) {
+		it(`retains ${stage} across source inactivity and upstream-only progress`, () => {
+			const observe = createStreamPlaybackPolicy();
+			const counters = (value: number) => ({
+				framesReceived: value,
+				framesDecoded: stage === 'no_playback' ? value : 1,
+				framesRendered: 1,
+			});
+			observe(sample(0));
+			for (let second = 3; second <= 15; second += 3) observe(sample(second * 1000, counters(second)));
+			expect(observe(sample(18_000, counters(18)))).toMatchObject([{ event: 'playback_stalled', reason: stage }]);
+			// The source stops, then resumes, while the diagnosed stage stays stuck.
+			expect(observe(sample(48_000, counters(18)))).toEqual([]);
+			expect(observe(sample(51_000, counters(19)))).toEqual([]);
+			expect(observe(sample(54_000, { framesReceived: 20, framesDecoded: 20, framesRendered: 2 }))).toMatchObject([
+				{ event: 'playback_recovered' },
+			]);
+		});
+	}
 	it('suppresses paused, hidden and detached samples and distinguishes disconnected inactivity', () => {
 		const observe = createStreamPlaybackPolicy();
 		observe(sample(0));

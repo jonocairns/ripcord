@@ -25,6 +25,7 @@ import {
 	watchScreenShare,
 } from '../helpers/screen-share';
 import { readStreamServerEvents } from '../helpers/stream-server-events';
+import { readVoiceServerEvents } from '../helpers/voice-server-events';
 
 test('screen start, remote watch and explicit stop clean up screen media while a camera stays live', async ({
 	browser,
@@ -157,8 +158,9 @@ test('watcher reconnect retains screen watch intent and restores decoded screen 
 		const originalPlayback = initialPlayback;
 		await expect
 			.poll(
-				async () =>
-					(await readStreamServerEvents()).some(
+				async () => {
+					const [streamEvents, voiceEvents] = await Promise.all([readStreamServerEvents(), readVoiceServerEvents()]);
+					return streamEvents.some(
 						(event) =>
 							event.source === 'client' &&
 							event.event === 'playback_first_frame' &&
@@ -167,8 +169,23 @@ test('watcher reconnect retains screen watch intent and restores decoded screen 
 							event.consumerId !== originalPlayback.consumerId &&
 							event.sequence !== undefined &&
 							event.sequence > (originalPlayback.sequence ?? 0) &&
-							event.reconnectAttemptId !== undefined,
-					),
+							event.reconnectAttemptId !== undefined &&
+							voiceEvents.some(
+								(attempt) =>
+									attempt.event === 'voice_session_attempt_finished' &&
+									attempt.outcome === 'succeeded' &&
+									attempt.reconnectAttemptId === event.reconnectAttemptId,
+							) &&
+							streamEvents.some(
+								(consumer) =>
+									consumer.source === 'server' &&
+									consumer.event === 'consumer_created' &&
+									consumer.consumerId === event.consumerId &&
+									consumer.producerId === event.producerId &&
+									consumer.reporterUserId === event.reporterUserId,
+							),
+					);
+				},
 				{ timeout: 20_000 },
 			)
 			.toBe(true);
