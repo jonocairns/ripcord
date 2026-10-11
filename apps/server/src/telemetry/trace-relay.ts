@@ -73,7 +73,11 @@ export const createTraceRelay = (options: {
 									const age = now() - Number(BigInt(span.endTimeUnixNano) / 1_000_000n);
 									if (age > 300_000 || age < -60_000) return false;
 									const key = `${userId}:${span.traceId}:${span.spanId}`;
-									if (seen.has(key) || seen.size >= 4096) return false;
+									if (seen.has(key)) return false;
+									if (seen.size >= 4096) {
+										const oldest = seen.keys().next().value;
+										if (oldest !== undefined) seen.delete(oldest);
+									}
 									seen.set(key, now() + 300_000);
 									return true;
 								}),

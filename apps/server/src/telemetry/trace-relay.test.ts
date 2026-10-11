@@ -140,3 +140,34 @@ test('shutdown cancels an uncooperative external request within its budget and r
 	await new Promise((r) => setTimeout(r, 1));
 	expect(calls).toBe(atShutdown);
 }, 5000);
+
+test('dedupe capacity cannot block fresh spans from other users and evicts oldest retry evidence', async () => {
+	let calls = 0;
+	const relay = createTraceRelay({
+		destination,
+		now: () => 100,
+		fetch: async () => {
+			calls++;
+			return new Response('{}');
+		},
+	});
+	const oldest = batch();
+	relay.accept(oldest, 1);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	for (let i = 1; i < 4096; i++) {
+		relay.accept(batch(), 1);
+		// Drain below queue capacity without expiring deduplication evidence.
+		if (i % 32 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	const otherUser = batch();
+	relay.accept(otherUser, 2);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(calls).toBe(4097);
+	relay.accept(otherUser, 2);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(calls).toBe(4097);
+	relay.accept(oldest, 1);
+	await relay.shutdown();
+	expect(calls).toBe(4098);
+});
