@@ -11,6 +11,12 @@ owned boot markers and startup/debug output are JSON too. Dependencies can still
 write their own runtime output.
 Errors are structured exception logs, not an additional OpenTelemetry signal.
 
+With no provider configured, this server console/file pipeline is the default
+destination. The browser SDK only parses and captures errors locally for upload
+to Ripcord; its session and client-report uploads are disabled. Its external
+transport accepts only replay envelopes when a real DSN and a positive replay
+sample rate are explicitly configured.
+
 Logs work without an error tracker. `RIPCORD_CLIENT_ERROR_REPORTING_SENTRY_DSN`
 optionally forwards client exception records **from the server** to Sentry;
 `RIPCORD_SERVER_ERROR_REPORTING_SENTRY_DSN` controls server error forwarding.

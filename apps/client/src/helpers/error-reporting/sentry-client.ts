@@ -4,6 +4,7 @@ import { getActiveTraceContext } from '@sharkord/shared/telemetry/opentelemetry'
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { getDiagnosticIdentity, recordDiagnostic } from './delivery';
+import { createReplayOnlyTransport } from './provider-transport';
 import { flushErrorReplay } from './replay';
 import { sanitizeString } from './sanitize';
 
@@ -118,7 +119,8 @@ const buildIntegrations = (
 
 const configureClientErrorReporting = (config: TClientErrorReportingConfig = {}): void => {
 	if (!config.serverRouted && !config.sentryDsn) return;
-	const dsn = config.sentryDsn?.trim() || 'https://ripcord@telemetry.invalid/1';
+	const providerDsn = config.sentryDsn?.trim();
+	const dsn = providerDsn || 'https://ripcord@telemetry.invalid/1';
 
 	if (initialized) {
 		if (initializedServerUrl !== getRuntimeServerConfig().serverUrl) {
@@ -128,19 +130,22 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 	}
 	initializedServerUrl = getRuntimeServerConfig().serverUrl;
 
-	const replaySessionSampleRate = normalizeSampleRate(config.replaySessionSampleRate);
-	const replayOnErrorSampleRate = normalizeSampleRate(config.replayOnErrorSampleRate);
-	const replayOptions =
+	const replaySessionSampleRate = providerDsn ? normalizeSampleRate(config.replaySessionSampleRate) : undefined;
+	const replayOnErrorSampleRate = providerDsn ? normalizeSampleRate(config.replayOnErrorSampleRate) : undefined;
+	const replayEnabled =
 		(replaySessionSampleRate !== undefined && replaySessionSampleRate > 0) ||
-		(replayOnErrorSampleRate !== undefined && replayOnErrorSampleRate > 0)
-			? {
-					replaysSessionSampleRate: replaySessionSampleRate ?? 0,
-					replaysOnErrorSampleRate: replayOnErrorSampleRate ?? 0,
-				}
-			: {};
+		(replayOnErrorSampleRate !== undefined && replayOnErrorSampleRate > 0);
+	const replayOptions = replayEnabled
+		? {
+				replaysSessionSampleRate: replaySessionSampleRate ?? 0,
+				replaysOnErrorSampleRate: replayOnErrorSampleRate ?? 0,
+			}
+		: {};
 
 	Sentry.init({
 		dsn,
+		transport: (options) => createReplayOnlyTransport(replayEnabled ? Sentry.makeFetchTransport(options) : undefined),
+		sendClientReports: false,
 		environment: import.meta.env.MODE,
 		release: VITE_APP_VERSION,
 		sendDefaultPii: false,
@@ -183,7 +188,10 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 			return null; // JS errors never leave the client through the provider transport.
 		},
 		beforeSendTransaction: () => null,
-		integrations: buildIntegrations(replaySessionSampleRate, replayOnErrorSampleRate),
+		integrations: (defaults) => [
+			...defaults.filter((integration) => integration.name !== 'BrowserSession'),
+			...(buildIntegrations(replaySessionSampleRate, replayOnErrorSampleRate) ?? []),
+		],
 		...replayOptions,
 		initialScope: {
 			tags: {
