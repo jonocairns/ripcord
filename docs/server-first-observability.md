@@ -241,7 +241,8 @@ after local voice cleanup, alongside diagnostics; abrupt crashes/tab termination
 can still lose spans.
 
 The authenticated trace route allows 30 requests/minute/user and acknowledges
-validated input before export. The server relay queues at most 64 batches, expires
+validated input before export. Each enabled server relay output queues at most
+64 batches, expires
 queued work after 30 seconds, rejects records older than five minutes or over one
 minute in the future, and deduplicates user/trace/span IDs in a bounded 4096-entry
 five-minute map. It exports the sanitized original client resource/spans as OTLP
@@ -271,6 +272,8 @@ shutdown. An in-flight shutdown drop means delivery is unconfirmed; a backend
 may already have accepted it. `trace_relay_export_failure` counts failed HTTP
 attempts and `trace_relay_retry` counts additional attempts actually started. These units
 can overlap; retry warnings do not imply final loss when a later attempt succeeds.
+Relay loss counters count work per enabled output, so the same spans or batch can
+contribute to both outputs' counters when both local and OTLP output are enabled.
 
 The standard server SpanExporter decorator reports `trace_export_failure` per
 failed SDK export callback or synchronous export failure, and
@@ -323,7 +326,8 @@ after server restart/rejoin. No endpoint credentials are advertised to clients.
 IDs, service/runtime/release, start/end nanosecond timestamps, duration, status and
 bounded scrubbed attributes. Client records also carry authenticated reporter
 identity. They are searchable log records, not a trace-store UI. Client batches
-use the existing bounded queue, expiry and deduplication; OTLP retries do not
+use independent bounded queues, expiry and deduplication for local and OTLP
+output; OTLP retries do not
 repeat local log writes. A failing local client trace sink increments
 `trace_log_failure` once per affected batch and cannot block optional OTLP export.
 Server exporter failures use the existing trace export counters. Each server sink

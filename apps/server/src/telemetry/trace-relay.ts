@@ -1,12 +1,15 @@
 import { sanitizeClientTraceBatch, type TClientTraceBatch } from '@sharkord/shared';
 import type { telemetryHealth } from './health';
-export const createTraceRelay = (options: {
+
+type TTraceRelayOptions = {
 	destination?: { url: string; headers: Record<string, string> };
 	log?: (batch: TClientTraceBatch) => void;
 	fetch: (url: string, init: RequestInit) => Promise<Response>;
 	now?: () => number;
 	health?: Pick<typeof telemetryHealth, 'count'>;
-}) => {
+};
+
+const createTraceOutputRelay = (options: TTraceRelayOptions) => {
 	const now = options.now ?? Date.now;
 	const count: NonNullable<typeof options.health>['count'] = (reason, quantity = 1) => {
 		try {
@@ -161,6 +164,24 @@ export const createTraceRelay = (options: {
 			if (dropped) count('trace_relay_shutdown_drop', dropped);
 			controller.abort();
 			queue = [];
+		},
+	};
+};
+
+export const createTraceRelay = (options: TTraceRelayOptions) => {
+	// Each output owns its bounded queue and dedupe cache. An OTLP outage or
+	// saturation cannot delay local writes, and rejected OTLP work stays retryable
+	// even when the same spans have already been logged locally.
+	const outputs = [
+		...(options.log ? [createTraceOutputRelay({ ...options, destination: undefined })] : []),
+		...(options.destination ? [createTraceOutputRelay({ ...options, log: undefined })] : []),
+	];
+	return {
+		accept: (batch: TClientTraceBatch, userId: number) => {
+			for (const output of outputs) output.accept(batch, userId);
+		},
+		shutdown: async () => {
+			await Promise.all(outputs.map((output) => output.shutdown()));
 		},
 	};
 };

@@ -35,6 +35,88 @@ const batch = (time = 100): TClientTraceBatch => ({
 });
 const destination = { url: 'https://backend/v1/traces', headers: { Authorization: 'server-only' } };
 
+test('an OTLP outage cannot delay local traces or expire their independent queue', async () => {
+	let now = 100;
+	let complete: ((response: Response) => void) | undefined;
+	const logged: TClientTraceBatch[] = [];
+	const counters: Record<string, number> = {};
+	const relay = createTraceRelay({
+		destination,
+		now: () => now,
+		log: (input) => logged.push(input),
+		fetch: async () =>
+			new Promise((resolve) => {
+				complete = resolve;
+			}),
+		health: {
+			count: (reason, quantity = 1) => {
+				counters[reason] = (counters[reason] ?? 0) + quantity;
+			},
+		},
+	});
+	try {
+		relay.accept(batch(), 1);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const second = batch();
+		relay.accept(second, 2);
+		relay.accept(second, 2);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(logged).toHaveLength(2);
+		now += 30_001;
+		complete?.(new Response());
+		await relay.shutdown();
+		expect(logged).toHaveLength(2);
+		expect(counters.trace_relay_queue_expired).toBe(1);
+	} finally {
+		complete?.(new Response());
+		await relay.shutdown();
+	}
+});
+
+test('OTLP saturation does not reject local output or deduplicate a refused OTLP retry', async () => {
+	let complete: ((response: Response) => void) | undefined;
+	let calls = 0;
+	let logs = 0;
+	const relay = createTraceRelay({
+		destination,
+		now: () => 100,
+		log: () => {
+			logs++;
+		},
+		fetch: async () => {
+			calls++;
+			if (calls === 1)
+				return new Promise((resolve) => {
+					complete = resolve;
+				});
+			return new Response();
+		},
+	});
+	try {
+		relay.accept(batch(), 1);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		for (let i = 0; i < 64; i++) {
+			relay.accept(batch(), 1);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		}
+		const refused = batch();
+		relay.accept(refused, 1);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(logs).toBe(66);
+		expect(calls).toBe(1);
+		complete?.(new Response());
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(calls).toBe(65);
+		relay.accept(refused, 1);
+		await relay.shutdown();
+		expect(calls).toBe(66);
+		expect(logs).toBe(66);
+	} finally {
+		complete?.(new Response());
+		await relay.shutdown();
+	}
+});
+
 test('console-only relay logs sanitized original client spans once without any network destination', async () => {
 	const logged: TClientTraceBatch[] = [];
 	let requests = 0;
