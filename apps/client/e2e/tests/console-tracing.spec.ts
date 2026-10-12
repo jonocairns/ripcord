@@ -18,7 +18,12 @@ test('voice recovery uploads useful state and command outcomes without private p
 	browser,
 }, testInfo) => {
 	const peer = await createPeer(browser, credentialsFor(testInfo));
-	const marker = `E2E voice context ${crypto.randomUUID()}`;
+	const marker = crypto.randomUUID();
+	const findProbe = async () =>
+		(await readRecords()).find(
+			(record) =>
+				record.context && typeof record.context === 'object' && Reflect.get(record.context, 'operationId') === marker,
+		);
 	try {
 		await joinVoice(peer.page);
 		await peer.page.evaluate(async (marker) => {
@@ -26,7 +31,8 @@ test('voice recovery uploads useful state and command outcomes without private p
 			const logger: unknown = await import(path);
 			if (!logger || typeof logger !== 'object' || !('logVoice' in logger) || typeof logger.logVoice !== 'function')
 				throw new Error('Voice logger unavailable');
-			logger.logVoice(marker, {
+			logger.logVoice('Producer transport connection state changed', 'private-extra-argument', {
+				operationId: marker,
 				state: 'disconnected',
 				attempt: 2,
 				micMuted: true,
@@ -38,11 +44,10 @@ test('voice recovery uploads useful state and command outcomes without private p
 			});
 		}, marker);
 		await dropAppWebSocket(peer.page);
-		await expect
-			.poll(async () => (await readRecords()).find((r) => r.message === marker))
-			.toMatchObject({
-				context: { state: 'disconnected', attempt: 2, micMuted: true, durationMs: 25, errorType: 'TypeError' },
-			});
+		await expect.poll(findProbe).toMatchObject({
+			message: 'Producer transport connection state changed',
+			context: { state: 'disconnected', attempt: 2, micMuted: true, durationMs: 25, errorType: 'TypeError' },
+		});
 		await expect
 			.poll(
 				async () =>
@@ -56,9 +61,10 @@ test('voice recovery uploads useful state and command outcomes without private p
 					(await readRecords()).filter((r) => r.message === 'Voice WebSocket closed' && r.source === 'client').length,
 			)
 			.toBeGreaterThan(0);
-		const probe = (await readRecords()).find((r) => r.message === marker);
+		const probe = await findProbe();
 		const output = JSON.stringify(probe);
 		for (const value of [
+			'private-extra-argument',
 			'private-device-label',
 			'private-sdp-payload',
 			'private arbitrary reason',

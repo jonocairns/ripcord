@@ -8,6 +8,7 @@ import {
 	setErrorReportingUser,
 } from './error-reporting';
 import { getVoiceDiagnosticContext } from './voice-diagnostic-context';
+import { getVoiceDiagnosticMessage, type TVoiceDiagnosticMessage } from './voice-diagnostic-events';
 
 const OVERRIDE_DEBUG = false;
 
@@ -19,7 +20,11 @@ const logDebug = (...args: unknown[]) => {
 	}
 };
 
-const recordVoiceDiagnostic = (message: string, args: readonly unknown[], level: 'info' | 'warning' = 'info') => {
+const recordVoiceDiagnostic = (
+	message: TVoiceDiagnosticMessage,
+	args: readonly unknown[],
+	level: 'info' | 'warning' = 'info',
+) => {
 	try {
 		recordDiagnostic({
 			context: getVoiceDiagnosticContext(args),
@@ -28,7 +33,7 @@ const recordVoiceDiagnostic = (message: string, args: readonly unknown[], level:
 			occurredAt: Date.now(),
 			kind: 'diagnostic',
 			level,
-			message: message.slice(0, 1000),
+			message: getVoiceDiagnosticMessage(message),
 			runtime: getRuntimeTag(),
 			release: typeof VITE_APP_VERSION === 'string' ? VITE_APP_VERSION : 'unknown',
 			environment: import.meta.env.MODE,
@@ -37,9 +42,10 @@ const recordVoiceDiagnostic = (message: string, args: readonly unknown[], level:
 		/* Optional. */
 	}
 };
-const logVoice = (...args: unknown[]) => {
+const logVoice = (message: string, ...details: unknown[]) => {
+	const args = [message, ...details];
 	recordDesktopDiagnostic('voice', { details: args });
-	recordVoiceDiagnostic(args.filter((v) => typeof v === 'string').join(' '), args);
+	recordVoiceDiagnostic(getVoiceDiagnosticMessage(message), details);
 	console.log('%c[VOICE-PROVIDER]', 'color: salmon; font-weight: bold;', ...args);
 };
 

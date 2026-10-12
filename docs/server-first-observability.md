@@ -355,5 +355,20 @@ labels, arbitrary close reasons, addresses, SDP, credentials, user content and
 raw nested error data are excluded from this voice context allowlist. During
 bursts, the diagnostic collector retains and dispatches exceptions, warnings, and
 structured state/outcome records before repetitive informational lines. Retries
-keep their original record set; original timestamps and sequences are preserved,
+keep their original records and order through overflow until acknowledgement,
+expiry or retry exhaustion; original timestamps and sequences are preserved,
 so use those fields to order an incident timeline rather than upload order.
+
+Uploaded voice message labels come from one owned event registry. Additional
+string arguments never become the uploaded message, and unrecognized runtime
+labels become `Voice diagnostic` while approved context is retained. Local debug
+logging still accepts its existing callback messages. The dedicated diagnostic
+API also checks owned labels at compile time.
+
+Privacy-approved command types, recovery phases/outcomes, transport states and
+failure sources use exhaustive maps checked against their owning domain types;
+adding or renaming a domain value fails type checking until its diagnostic
+treatment is reviewed. Stream kinds reuse the existing shared enum. This catches
+vocabulary drift without allowing arbitrary objects or free text. New context
+fields still need explicit privacy review and inclusion in the central context
+filter; unknown keys and nested payloads remain excluded.

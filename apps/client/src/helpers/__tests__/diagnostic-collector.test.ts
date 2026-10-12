@@ -101,6 +101,51 @@ describe('diagnostic delivery boundaries', () => {
 		expect(batches[2]?.records.map((r) => r.message)).toEqual(['new-error']);
 		f.collector.dispose();
 	});
+	test('overflow preserves every pending retry record in its original priority order', async () => {
+		const batches: TDiagnosticBatch[] = [];
+		const f = fixture(async (batch) => {
+			batches.push(batch);
+			if (batches.length === 1) throw new Error('Acknowledgement lost');
+		});
+		f.collector.configure('server:user', true);
+		f.collector.authenticate();
+		for (let i = 0; i < 64; i++)
+			f.collector.record({
+				...record(),
+				kind: 'diagnostic',
+				level: i === 7 ? 'warning' : 'info',
+				message: `original-${i}`,
+			});
+		await f.run();
+		for (let i = 0; i < 64; i++) f.collector.record({ ...record(), message: `new-error-${i}` });
+		await f.run();
+		expect(batches[1]?.records).toEqual(batches[0]?.records);
+		expect(batches[1]?.records).toHaveLength(8);
+		expect(batches[1]?.records[0]?.message).toBe('original-7');
+		expect(batches[1]?.droppedEvents).toBe(64);
+		while (f.jobs.size > 0) await f.run();
+		expect(batches.slice(1).flatMap((batch) => batch.records)).toHaveLength(64);
+		f.collector.dispose();
+	});
+	test('pending retry protection still expires old records and allows fresh reports', async () => {
+		const batches: TDiagnosticBatch[] = [];
+		const f = fixture(async (batch) => {
+			batches.push(batch);
+			if (batches.length === 1) throw new Error('Acknowledgement lost');
+		});
+		f.collector.configure('server:user', true);
+		f.collector.authenticate();
+		f.collector.record(record());
+		await f.run();
+		f.collector.pause();
+		f.time(300_101);
+		f.collector.authenticate();
+		f.collector.record({ ...record(300_101), message: 'fresh-report' });
+		await f.run();
+		expect(batches[1]?.records.map((r) => r.message)).toEqual(['fresh-report']);
+		expect(batches[1]?.droppedEvents).toBe(1);
+		f.collector.dispose();
+	});
 	test('drops startup, unsupported and disconnected errors, bounds memory and preserves client time', async () => {
 		const f = fixture();
 		f.collector.record(record());

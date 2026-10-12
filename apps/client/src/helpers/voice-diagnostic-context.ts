@@ -1,50 +1,90 @@
+import { StreamKind, type TVoiceTransportFailureSource } from '@sharkord/shared';
+import type {
+	TVoiceSessionCommandOutcome,
+	TVoiceSessionCommandPhase,
+} from '@/features/server/voice/voice-session-command-executor';
+import type { TVoiceSessionCommand, TVoiceSessionState } from '@/features/server/voice/voice-session-machine';
+
 type TVoiceContext = Record<string, string | number | boolean>;
 
+// Exhaustive maps keep privacy-approved vocabularies tied to their owning domain
+// types. Adding/removing a domain value fails type checking until reviewed here.
+const connectionStates = {
+	new: true,
+	connecting: true,
+	connected: true,
+	disconnected: true,
+	failed: true,
+	closed: true,
+} satisfies Record<RTCPeerConnectionState, true>;
+const iceStates = {
+	new: true,
+	checking: true,
+	connected: true,
+	completed: true,
+	disconnected: true,
+	failed: true,
+	closed: true,
+} satisfies Record<RTCIceTransportState, true>;
+const dtlsStates = {
+	new: true,
+	connecting: true,
+	connected: true,
+	failed: true,
+	closed: true,
+} satisfies Record<RTCDtlsTransportState, true>;
+const failureSources = {
+	'consumer-dtls': true,
+	'producer-dtls': true,
+	'media-liveness': true,
+} satisfies Record<TVoiceTransportFailureSource, true>;
+const phases = {
+	idle: true,
+	joining: true,
+	connected: true,
+	rebuilding: true,
+	reconnecting: true,
+	failed: true,
+	waiting_online: true,
+	waiting_auth: true,
+	restoring: true,
+	retry_delay: true,
+	restore_watch: true,
+	connected_finalization: true,
+	failed_finalization: true,
+} satisfies Record<TVoiceSessionState['phase']['phase'] | TVoiceSessionCommandPhase, true>;
+const outcomes = {
+	succeeded: true,
+	failed: true,
+	expired: true,
+	cancelled: true,
+	superseded: true,
+	detached: true,
+} satisfies Record<TVoiceSessionCommandOutcome, true>;
+const commandTypes = {
+	CaptureRecoverySnapshot: true,
+	RebuildTransports: true,
+	WaitOnline: true,
+	WaitAuth: true,
+	RestoreVoiceSession: true,
+	RetryDelay: true,
+	RestoreWatchIntent: true,
+	RecoverDesktopAppAudio: true,
+	LeaveVoiceSession: true,
+	ClearFailedSession: true,
+} satisfies Record<TVoiceSessionCommand['type'], true>;
+
 const enums: Record<string, readonly string[]> = {
-	state: ['new', 'connecting', 'connected', 'disconnected', 'failed', 'closed'],
-	connectionState: ['new', 'connecting', 'connected', 'disconnected', 'failed', 'closed'],
-	iceState: ['new', 'checking', 'connected', 'completed', 'disconnected', 'failed', 'closed'],
-	dtlsState: ['new', 'connecting', 'connected', 'failed', 'closed'],
+	state: Object.keys(connectionStates),
+	connectionState: Object.keys(connectionStates),
+	iceState: Object.keys(iceStates),
+	dtlsState: Object.keys(dtlsStates),
 	protocol: ['udp', 'tcp'],
-	kind: ['audio', 'video', 'screen', 'screen_audio'],
-	source: [
-		'consumer-dtls',
-		'producer-dtls',
-		'media-liveness',
-		'producer',
-		'consumer',
-		'microphone',
-		'camera',
-		'screen',
-	],
-	phase: [
-		'idle',
-		'joining',
-		'connected',
-		'rebuilding',
-		'reconnecting',
-		'failed',
-		'waiting_online',
-		'waiting_auth',
-		'restoring',
-		'retry_delay',
-		'restore_watch',
-		'connected_finalization',
-		'failed_finalization',
-	],
-	outcome: ['succeeded', 'failed', 'expired', 'cancelled', 'superseded', 'detached'],
-	commandType: [
-		'CaptureRecoverySnapshot',
-		'RebuildTransports',
-		'WaitOnline',
-		'WaitAuth',
-		'RestoreVoiceSession',
-		'RetryDelay',
-		'RestoreWatchIntent',
-		'RecoverDesktopAppAudio',
-		'LeaveVoiceSession',
-		'ClearFailedSession',
-	],
+	kind: Object.values(StreamKind),
+	source: [...Object.keys(failureSources), 'producer', 'consumer', 'microphone', 'camera', 'screen'],
+	phase: Object.keys(phases),
+	outcome: Object.keys(outcomes),
+	commandType: Object.keys(commandTypes),
 	reason: [
 		'user_action',
 		'recovery_exhausted',

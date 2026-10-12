@@ -1,6 +1,66 @@
-import { describe, expect, it, mock } from 'bun:test';
+import { describe, expect, it, mock, spyOn } from 'bun:test';
 import type { Event } from '@sentry/react';
+import type { TDiagnosticBatch } from '@sharkord/shared';
+import { logVoice, recordVoiceDiagnostic } from '../browser-logger';
+import {
+	authenticateDiagnosticDelivery,
+	clearDiagnosticDelivery,
+	configureDiagnosticDelivery,
+	flushDiagnosticDelivery,
+} from '../error-reporting/delivery';
 import { sanitizeSentryEvent } from '../error-reporting/sanitize';
+
+describe('uploaded voice messages', () => {
+	it('keeps owned labels and safe context while excluding private strings, including runtime callers', async () => {
+		const batches: TDiagnosticBatch[] = [];
+		const previousMode = process.env.MODE;
+		process.env.MODE = 'test';
+		const consoleLog = spyOn(console, 'log').mockImplementation(() => {});
+		configureDiagnosticDelivery(
+			{
+				createId: () => crypto.randomUUID(),
+				upload: async (batch) => {
+					batches.push(batch);
+				},
+			},
+			'server:voice-privacy-test',
+			true,
+		);
+		authenticateDiagnosticDelivery();
+		try {
+			logVoice('Producer transport connection state changed', 'private-extra-argument', {
+				state: 'failed',
+				transportId: 'transport-1',
+				deviceLabel: 'private-device-label',
+				error: new TypeError('private-error-message'),
+			});
+			Reflect.apply(logVoice, undefined, ['private-event-label', { attempt: 2 }]);
+			Reflect.apply(recordVoiceDiagnostic, undefined, ['private-direct-label', [{ attempt: 3 }], 'warning']);
+			await flushDiagnosticDelivery();
+			const records = batches.flatMap((batch) => batch.records);
+			expect(records).toHaveLength(3);
+			expect(records.find((record) => record.message === 'Producer transport connection state changed')).toMatchObject({
+				message: 'Producer transport connection state changed',
+				context: { state: 'failed', transportId: 'transport-1', errorType: 'TypeError' },
+			});
+			expect(records.find((record) => record.context?.attempt === 2)).toMatchObject({
+				message: 'Voice diagnostic',
+				context: { attempt: 2 },
+			});
+			expect(records.find((record) => record.context?.attempt === 3)).toMatchObject({
+				message: 'Voice diagnostic',
+				level: 'warning',
+				context: { attempt: 3 },
+			});
+			expect(JSON.stringify(records)).not.toContain('private-');
+		} finally {
+			clearDiagnosticDelivery();
+			consoleLog.mockRestore();
+			if (previousMode === undefined) delete process.env.MODE;
+			else process.env.MODE = previousMode;
+		}
+	});
+});
 
 describe('reportError', () => {
 	it('logs through the console reference captured before Sentry wraps it', async () => {

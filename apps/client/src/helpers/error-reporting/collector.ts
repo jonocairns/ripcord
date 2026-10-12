@@ -73,8 +73,10 @@ export const createDiagnosticCollector = (options: TCollectorOptions) => {
 		const fresh = queue.filter((event) => now() - event.occurredAt <= 300_000);
 		droppedEvents += queue.length - fresh.length;
 		queue = fresh;
-		const retryBatch = queue.filter((event) => retrySequences.has(event.sequence));
-		// Retry the same sequence set. Expiry or overflow creates a new batch
+		const retryBatch = Array.from(retrySequences, (sequence) =>
+			queue.find((event) => event.sequence === sequence),
+		).filter((event) => event !== undefined);
+		// Retry the same records in their original order. Expiry creates a new batch
 		// with its own budget; newly queued events cannot inherit old failures.
 		if (retryBatch.length !== retrySequences.size) attempts = 0;
 		const batch =
@@ -169,13 +171,15 @@ export const createDiagnosticCollector = (options: TCollectorOptions) => {
 				sequence += 1;
 				queue.push(parsed.data);
 				if (queue.length > 64) {
-					// Preserve dispatched events until acknowledgement/retry exhaustion.
+					// Preserve dispatched and pending retry events until acknowledgement,
+					// expiry or retry exhaustion.
 					// Dropping them here would count successfully delivered data as lost.
 					let discardIndex = -1;
 					let lowestPriority = Infinity;
 					for (let index = 0; index < queue.length; index++) {
 						const candidate = queue[index];
-						if (!candidate || inFlightSequences.has(candidate.sequence)) continue;
+						if (!candidate || inFlightSequences.has(candidate.sequence) || retrySequences.has(candidate.sequence))
+							continue;
 						const priority = retentionPriority(candidate);
 						if (priority < lowestPriority) {
 							lowestPriority = priority;
