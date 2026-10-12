@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+	validateConfigureErrorReportingArgs,
 	validateControlPopoutWindowArgs,
 	validateDesktopQuitFlushResultArgs,
 	validateGetPopoutWindowStateArgs,
@@ -188,4 +189,13 @@ void describe('validateSetGlobalPushKeybindsArgs', () => {
 		assert.throws(() => validateSetGlobalPushKeybindsArgs([{ pushToTalkKeybind: 123 }]), /must be a string/);
 		assert.throws(() => validateSetGlobalPushKeybindsArgs([{ pushToMuteKeybind: 'a'.repeat(129) }]), /exceeds/);
 	});
+});
+
+void it('routing-only reporting updates cannot disable the native uploader', () => {
+	const [routing] = validateConfigureErrorReportingArgs([{ routingIdentity: 'server:user' }]);
+	assert.equal('dsn' in routing, false);
+	assert.equal(routing.routingIdentity, 'server:user');
+	const [native] = validateConfigureErrorReportingArgs([{ dsn: undefined }]);
+	assert.equal('dsn' in native, true);
+	assert.equal('routingIdentity' in native, false);
 });

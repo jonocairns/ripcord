@@ -19,6 +19,7 @@ import { db } from '../db';
 import { getAllChannelUserPermissions } from '../db/queries/channels';
 import { getUserById, getUserByToken } from '../db/queries/users';
 import { channels } from '../db/schema';
+import { reportServerError } from '../error-reporting';
 import { getClientIpOptions } from '../helpers/client-ip-options';
 import { getWsInfo } from '../helpers/get-ws-info';
 import { logger } from '../logger';
@@ -26,7 +27,6 @@ import { enqueueActivityLog } from '../queues/activity-log';
 import { appRouter } from '../routers';
 import { getUserRoles } from '../routers/users/get-user-roles';
 import { VoiceRuntime } from '../runtimes/voice';
-import { Sentry } from '../sentry';
 import { invariant } from './invariant';
 import { pubsub } from './pubsub';
 import type { Context } from './trpc';
@@ -504,7 +504,7 @@ const createWsServer = async (server: http.Server) => {
 			},
 			onError: ({ error, path }) => {
 				if (error.code === 'INTERNAL_SERVER_ERROR') {
-					Sentry.captureException(error.cause ?? error, { extra: { path } });
+					reportServerError(error.cause ?? error, { path });
 				}
 			},
 		});

@@ -16,6 +16,11 @@ const infoRouteHandler = async (_req: http.IncomingMessage, res: http.ServerResp
 	const info: TServerInfo = {
 		serverId: settings.serverId,
 		version: SERVER_VERSION,
+		clientTracing: {
+			sampleRate: config.server.clientTracingSampleRate,
+			legacySentryDsn:
+				config.server.clientTracingSentryDsn.trim() || config.server.clientErrorReportingSentryDsn.trim() || undefined,
+		},
 		name: settings.name,
 		description: settings.description,
 		logo: settings.logo,

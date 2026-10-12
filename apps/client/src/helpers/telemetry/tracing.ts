@@ -13,7 +13,7 @@ const tracing = createTracing(
 
 // The browser SDK adapter is installed at the same time as error reporting.
 // No second global provider competes with Sentry's browser async context.
-const configureClientTracing = (configuredAdapter: TTracingAdapter): void => {
+const configureClientTracing = (configuredAdapter: TTracingAdapter | undefined): void => {
 	adapter = configuredAdapter;
 };
 

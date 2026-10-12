@@ -1,10 +1,44 @@
 import { homedir } from 'node:os';
-import * as Sentry from '@sentry/electron/main';
 import type { ErrorEvent } from '@sentry/electron/main';
-import { app } from 'electron';
+import * as Sentry from '@sentry/electron/main';
+import { fitDiagnosticRecord, sdkEventRecord, type TDiagnosticRecord } from '@sharkord/shared';
+import { app, crashReporter } from 'electron';
 import type { TDesktopErrorReportingConfig } from './types';
 
 let initialized = false;
+let nativeDsn: string | undefined;
+let routingIdentity: string | undefined;
+let sendRecord: ((payload: { identity: string; record: TDiagnosticRecord }) => void) | undefined;
+export const setMainDiagnosticSink = (sink: typeof sendRecord) => {
+	sendRecord = sink;
+};
+export const captureMainError = (
+	error: unknown,
+	context?: { level?: 'warning' | 'info' | 'error'; tags?: Record<string, string>; extra?: Record<string, unknown> },
+): void => {
+	try {
+		Sentry.captureException(error, context);
+	} catch {
+		/* Optional. */
+	}
+};
+export const captureMainDiagnostic = (
+	message: string,
+	context?: { level?: 'warning' | 'info' | 'error'; tags?: Record<string, string>; extra?: Record<string, unknown> },
+): void => {
+	try {
+		Sentry.captureMessage(message, context);
+	} catch {
+		/* Optional. */
+	}
+};
+export const flushMainErrorReporting = async () => {
+	try {
+		await Sentry.flush(1000);
+	} catch {
+		/* Bounded SDK flush. */
+	}
+};
 
 const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
@@ -122,9 +156,22 @@ const normalizeSampleRate = (sampleRate: number | undefined): number | undefined
 // which are safe to register at any time, and the renderer doesn't use the
 // @sentry/electron bridge anyway.
 const configureMainErrorReporting = (config: TDesktopErrorReportingConfig): void => {
+	if ('routingIdentity' in config) {
+		routingIdentity = config.routingIdentity;
+		try {
+			Sentry.setTag('ripcord.telemetry.identity', routingIdentity);
+		} catch {
+			/* Optional. */
+		}
+	}
 	const dsn = config.dsn?.trim();
+	// Native uploader has a process-wide destination. Never upload dumps to the
+	// previous server after a switch; retargeting requires restarting Electron.
+	if ('dsn' in config && initialized) {
+		crashReporter.setUploadToServer(Boolean(dsn && dsn === nativeDsn));
+	}
 
-	if (!dsn || initialized) {
+	if (initialized) {
 		return;
 	}
 
@@ -137,6 +184,7 @@ const configureMainErrorReporting = (config: TDesktopErrorReportingConfig): void
 	// anyway: a given DSN that fails will fail the same way, and the !initialized
 	// guard above already commits us to "first DSN wins".
 	initialized = true;
+	nativeDsn = dsn;
 
 	// Never let error-reporting setup throw back across the IPC boundary. The
 	// handler is invoked fire-and-forget from the renderer, so a rejection here
@@ -144,14 +192,28 @@ const configureMainErrorReporting = (config: TDesktopErrorReportingConfig): void
 	// reporting path reporting on itself. If init fails, log locally and move on.
 	try {
 		Sentry.init({
-			dsn,
+			dsn: dsn || 'https://ripcord@telemetry.invalid/1',
+			integrations: (defaults) => (dsn ? defaults : defaults.filter((i) => i.name !== 'ElectronMinidump')),
 			release: app.getVersion(),
 			environment: app.isPackaged ? 'production' : 'development',
 			sendDefaultPii: false,
 			ignoreErrors: config.ignoreErrors,
 			ipcMode: Sentry.IPCMode.Classic,
 			getSessions: () => [],
-			beforeSend: sanitizeEvent,
+			beforeSend: (event, hint) => {
+				try {
+					if (routingIdentity && event.tags?.['ripcord.telemetry.identity'] === routingIdentity) {
+						const record = fitDiagnosticRecord({
+							...sdkEventRecord(sanitizeEvent(event), hint, 'desktop-main'),
+							sequence: 0,
+						});
+						if (record) sendRecord?.({ identity: routingIdentity, record });
+					}
+				} catch {
+					/* Never report IPC/reporting failures. */
+				}
+				return null;
+			},
 			...(tracesSampleRate !== undefined && tracesSampleRate > 0 ? { tracesSampleRate } : {}),
 			initialScope: {
 				tags: {

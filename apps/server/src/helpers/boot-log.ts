@@ -10,7 +10,9 @@
 const bootLog = (message: string): void => {
 	if (process.env.NODE_ENV === 'test') return;
 
-	process.stdout.write(`[boot] ${new Date().toISOString()} ${message}\n`);
+	process.stdout.write(
+		`${JSON.stringify({ level: 'info', source: 'server', runtime: 'bun', kind: 'boot', message, occurredAt: Date.now() })}\n`,
+	);
 };
 
 export { bootLog };

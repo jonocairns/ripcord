@@ -1172,10 +1172,9 @@ describe('voice session incarnation ownership', () => {
 				info.mockClear();
 				await caller.voice.leave(reason ? { reason } : undefined);
 				expect(info).toHaveBeenCalledWith(
-					'[voice-session] %s',
-					expect.stringContaining(`"reason":"${reason ?? 'unknown'}"`),
+					expect.objectContaining({ message: '[voice-session]', reason: reason ?? 'unknown' }),
 				);
-				expect(info).toHaveBeenCalledWith('[voice-session] %s', expect.stringContaining('"outcome":"removed"'));
+				expect(info).toHaveBeenCalledWith(expect.objectContaining({ message: '[voice-session]', outcome: 'removed' }));
 				expect(VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.getUser(1)).toBeUndefined();
 			}
 		} finally {

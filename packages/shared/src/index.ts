@@ -8,6 +8,8 @@ export * from './plugins';
 export * from './statics/index';
 export * from './stream-observability';
 export * from './tables';
+export * from './telemetry/diagnostics';
+export * from './telemetry/parsed-error';
 export * from './trpc';
 export * from './types';
 export * from './voice';

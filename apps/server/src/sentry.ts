@@ -10,13 +10,27 @@ import * as Sentry from '@sentry/bun';
 import { format } from 'winston';
 import { config } from './config';
 import { configureServerTracing } from './helpers/tracing';
+import { withErrorDeliveryHealth } from './telemetry/sentry-delivery-health';
 import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';
 
+let errorClient: Sentry.BunClient | undefined;
+const getErrorClient = () => {
+	const dsn = config.server.serverErrorReportingSentryDsn.trim();
+	if (!dsn) return undefined;
+	errorClient ??= new Sentry.BunClient({
+		dsn,
+		transport: withErrorDeliveryHealth(Sentry.makeFetchTransport),
+		stackParser: Sentry.defaultStackParser,
+		integrations: [],
+		release: SERVER_VERSION,
+		environment: IS_PRODUCTION ? 'production' : 'development',
+		sendDefaultPii: false,
+		beforeSend: sanitizeServerEvent,
+	});
+	return errorClient;
+};
 const SPLAT = Symbol.for('splat');
-// Winston's canonical, immutable level. We must read this rather than
-// `info.level`, because `colorize()` runs earlier in the format chain and
-// rewrites `info.level` to an ANSI-wrapped string (e.g. "\x1b[31merror\x1b[39m")
-// that never equals "error" — which would silently skip every Sentry capture.
+// Read Winston's canonical level and explicitly exclude forwarded/health records.
 const LEVEL = Symbol.for('level');
 
 // Scrub credentials and PII before any event leaves the process. The server now
@@ -110,14 +124,14 @@ const sanitizeServerEvent = (event: ErrorEvent): ErrorEvent => ({
 // shutdown aren't lost.
 const flushSentry = async (): Promise<void> => {
 	try {
-		await Sentry.close(2000);
+		await Promise.allSettled([Sentry.close(2000), errorClient?.close(2000)]);
 	} catch {
 		// Flush failed (network/SDK error) — never block shutdown on telemetry.
 	}
 };
 
 const initSentry = (): void => {
-	const dsn = config.server.serverErrorReportingSentryDsn.trim();
+	const dsn = config.server.serverTracingSentryDsn.trim() || config.server.serverErrorReportingSentryDsn.trim();
 
 	if (!dsn) {
 		return;
@@ -131,19 +145,32 @@ const initSentry = (): void => {
 		environment: IS_PRODUCTION ? 'production' : 'development',
 		release: SERVER_VERSION,
 		sendDefaultPii: false,
-		beforeSend: sanitizeServerEvent,
+		beforeSend: (event) => {
+			try {
+				getErrorClient()?.captureEvent(sanitizeServerEvent(event));
+			} catch {
+				/* Error adapter isolated. */
+			}
+			return null;
+		},
 		...tracingOptions,
 	});
 	configureServerTracing(serverTracingSampleRate > 0);
 };
 
 const sentryFormat = format((info) => {
-	if ((info as Record<symbol, unknown>)[LEVEL] !== 'error') {
+	if (
+		info.source === 'client' ||
+		info.source === 'telemetry_health' ||
+		!config.server.serverErrorReportingSentryDsn.trim() ||
+		(info as Record<symbol, unknown>)[LEVEL] !== 'error'
+	) {
 		return info;
 	}
 
 	const splat = (info as Record<symbol, unknown[]>)[SPLAT] ?? [];
-	const errorFromSplat = splat.find((arg): arg is Error => arg instanceof Error);
+	const errorFromSplat =
+		info.originalError instanceof Error ? info.originalError : splat.find((arg): arg is Error => arg instanceof Error);
 	const additionalSplat = splat.filter((arg) => arg !== errorFromSplat);
 
 	const extra: Record<string, unknown> = {
@@ -154,18 +181,20 @@ const sentryFormat = format((info) => {
 		extra.splat = additionalSplat;
 	}
 
-	if (errorFromSplat) {
-		Sentry.captureException(errorFromSplat, { extra });
-	} else if (info instanceof Error) {
-		Sentry.captureException(info, { extra });
-	} else {
-		Sentry.captureMessage(String(info.message), {
-			level: 'error',
-			extra,
-		});
+	try {
+		const scope = new Sentry.Scope();
+		scope.setExtras(extra);
+		if (errorFromSplat) {
+			getErrorClient()?.captureException(errorFromSplat, undefined, scope);
+		} else if (info instanceof Error) {
+			getErrorClient()?.captureException(info, undefined, scope);
+		} else {
+			getErrorClient()?.captureMessage(String(info.message), 'error', undefined, scope);
+		}
+	} catch {
+		/* Adapter errors must not break Winston or recurse. */
 	}
-
 	return info;
 });
 
-export { flushSentry, initSentry, Sentry, sentryFormat };
+export { flushSentry, initSentry, sentryFormat };

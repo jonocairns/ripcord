@@ -209,9 +209,10 @@ const validateSetGlobalPushKeybindsArgs = (args: unknown[]): [TDesktopPushKeybin
 
 const validateConfigureErrorReportingArgs = (args: unknown[]): [TDesktopErrorReportingConfig] => {
 	const config = assertRecord(args[0], 'config');
-	const validated: TDesktopErrorReportingConfig = {
-		dsn: assertOptionalString(config.dsn, 'config.dsn', MAX_DSN_LENGTH),
-	};
+	const validated: TDesktopErrorReportingConfig = {};
+	if ('dsn' in config) validated.dsn = assertOptionalString(config.dsn, 'config.dsn', MAX_DSN_LENGTH);
+	if ('routingIdentity' in config)
+		validated.routingIdentity = assertOptionalString(config.routingIdentity, 'config.routingIdentity', 1000);
 
 	if (config.ignoreErrors !== undefined) {
 		if (!Array.isArray(config.ignoreErrors)) {

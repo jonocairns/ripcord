@@ -19,7 +19,7 @@ bootLog('embedded assets: loaded');
 // ----------------------------------------
 import { initSentry } from './sentry';
 // ----------------------------------------
-import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';
+import { IS_PRODUCTION } from './utils/env';
 
 bootLog('sentry: initializing');
 initSentry();
@@ -27,11 +27,11 @@ bootLog('sentry: initialized');
 
 // ----------------------------------------
 import { ActivityLogType } from '@sharkord/shared';
-import chalk from 'chalk';
 import { config, SERVER_PRIVATE_IPS } from './config';
 import { loadCrons } from './crons';
 import { loadDb } from './db';
 import { formatHostForUrl, resolvePreferredAddress } from './helpers/ip-addresses';
+import { logger } from './logger';
 import { pluginManager } from './plugins';
 import { enqueueActivityLog } from './queues/activity-log';
 import { initVoiceRuntimes } from './runtimes';
@@ -86,14 +86,7 @@ const host = IS_PRODUCTION
 	: 'localhost';
 const url = `http://${formatHostForUrl(host)}:${config.server.port}/`;
 
-const message = [
-	`${chalk.green.bold('SHARKORD')} ${chalk.white.bold(`v${SERVER_VERSION}`)}`,
-	chalk.dim('────────────────────────────────────────────────────'),
-	`${chalk.yellow('Port:')} ${chalk.bold(String(config.server.port))}`,
-	`${chalk.yellow('Interface:')} ${chalk.underline.cyan(url)}`,
-].join('\n');
-
-console.log('%s', message);
+logger.info({ message: 'Ripcord server ready', port: config.server.port, interface: url });
 
 printDebug();
 

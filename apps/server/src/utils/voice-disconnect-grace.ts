@@ -127,11 +127,11 @@ const logVoiceDisconnectEvent = (
 	};
 
 	if (level === 'warn') {
-		logger.warn('[voice-reconnect] %s', JSON.stringify(payload));
+		logger.warn({ message: '[voice-reconnect]', ...payload });
 		return;
 	}
 
-	logger.info('[voice-reconnect] %s', JSON.stringify(payload));
+	logger.info({ message: '[voice-reconnect]', ...payload });
 };
 
 const clearPendingVoiceDisconnect = (clientInstanceId?: string, userId?: number) => {

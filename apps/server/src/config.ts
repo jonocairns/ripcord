@@ -56,6 +56,8 @@ const zConfig = z.object({
 		corsOrigin: z.string(),
 		clientErrorReportingSentryDsn: z.string(),
 		serverErrorReportingSentryDsn: z.string(),
+		clientTracingSentryDsn: z.string(),
+		serverTracingSentryDsn: z.string(),
 		clientErrorReportingIgnoreErrors: z.string(),
 		clientTracingSampleRate: z.coerce.number().min(0).max(1),
 		serverTracingSampleRate: z.coerce.number().min(0).max(1),
@@ -110,6 +112,8 @@ const defaultConfig: TConfig = {
 		corsOrigin: '',
 		clientErrorReportingSentryDsn: '',
 		serverErrorReportingSentryDsn: '',
+		clientTracingSentryDsn: '',
+		serverTracingSentryDsn: '',
 		clientTracingSampleRate: 0,
 		serverTracingSampleRate: 0,
 		// Session Replay is opt-in (default 0). The recommended setup is on-error
@@ -285,6 +289,13 @@ if (process.env.RIPCORD_SERVER_ERROR_REPORTING_SENTRY_DSN !== undefined) {
 	};
 }
 
+for (const [field, variable] of [
+	['clientTracingSentryDsn', 'RIPCORD_CLIENT_TRACING_SENTRY_DSN'],
+	['serverTracingSentryDsn', 'RIPCORD_SERVER_TRACING_SENTRY_DSN'],
+] as const) {
+	const value = process.env[variable];
+	if (value !== undefined) config.server[field] = value;
+}
 // Applied separately: applyEnvOverrides skips falsy values, but empty string
 // is a valid corsOrigin (means "allow all origins"), so we handle it manually.
 if (process.env.SHARKORD_CORS_ORIGIN !== undefined) {

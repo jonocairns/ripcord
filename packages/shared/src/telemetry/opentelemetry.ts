@@ -21,3 +21,12 @@ const createOpenTelemetryAdapter = (instrumentationName: string): TTracingAdapte
 });
 
 export { createOpenTelemetryAdapter };
+
+export const getActiveTraceContext = (): { traceId?: string; spanId?: string } => {
+	try {
+		const active = trace.getActiveSpan()?.spanContext();
+		return active ? { traceId: active.traceId, spanId: active.spanId } : {};
+	} catch {
+		return {};
+	}
+};

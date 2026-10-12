@@ -40,6 +40,7 @@ if (DISABLE_CONSOLE) {
 
 	mock.module('../logger', () => ({
 		logger: {
+			log: noop,
 			info: noop,
 			warn: noop,
 			error: noop,

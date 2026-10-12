@@ -14,17 +14,15 @@ export const reportStreamEventsRoute = rateLimitedProcedure(protectedProcedure, 
 		for (const event of input.events) {
 			// Reporter identity is authenticated. remoteId is an untrusted claim about
 			// a stream target, never authority to act on another user or channel.
-			logger.info(
-				'[stream-event] %s',
-				JSON.stringify({
-					...event,
-					source: 'client',
-					reporterUserId: ctx.user.id,
-					clientSessionId: input.clientSessionId,
-					clientVersion: input.clientVersion,
-					droppedEvents: input.droppedEvents,
-					receivedAt,
-				}),
-			);
+			logger.info({
+				message: '[stream-event]',
+				...event,
+				source: 'client',
+				reporterUserId: ctx.user.id,
+				clientSessionId: input.clientSessionId,
+				clientVersion: input.clientVersion,
+				droppedEvents: input.droppedEvents,
+				receivedAt,
+			});
 		}
 	});

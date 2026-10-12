@@ -126,6 +126,7 @@ export type TTempFile = {
 export type TServerInfo = Pick<TSettings, 'serverId' | 'name' | 'description' | 'allowNewUsers'> & {
 	logo: TFile | null;
 	version: string;
+	clientTracing?: { sampleRate: number; legacySentryDsn?: string };
 	clientErrorReporting?: {
 		provider: 'sentry';
 		dsn: string;

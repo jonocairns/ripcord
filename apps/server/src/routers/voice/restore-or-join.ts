@@ -173,14 +173,12 @@ const getTrackedWsString = (value: unknown, key: string): string | undefined => 
 };
 
 function logRestoreOrJoinEvent(event: 'attempt' | 'conflict' | 'outcome', fields: Record<string, unknown>) {
-	logger.info(
-		'[voice-reconnect] %s',
-		JSON.stringify({
-			scope: 'voice_restore_or_join',
-			event,
-			...fields,
-		}),
-	);
+	logger.info({
+		message: '[voice-reconnect]',
+		scope: 'voice_restore_or_join',
+		event,
+		...fields,
+	});
 }
 
 async function wait(ms: number) {
