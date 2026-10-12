@@ -11,7 +11,7 @@ export const streamDiagnosticsLink: TRPCLink<AppRouter> =
 		const signal = op.signal;
 		if (
 			op.type !== 'mutation' ||
-			!['voice.reportStreamEvents', 'telemetry.reportDiagnostics'].includes(op.path) ||
+			!['voice.reportStreamEvents', 'telemetry.reportDiagnostics', 'telemetry.reportTraces'].includes(op.path) ||
 			!signal
 		)
 			return next(op);

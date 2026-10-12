@@ -132,14 +132,6 @@ const sanitizeEvent = (event: ErrorEvent): ErrorEvent => {
 	};
 };
 
-const normalizeSampleRate = (sampleRate: number | undefined): number | undefined => {
-	if (sampleRate === undefined || Number.isNaN(sampleRate)) {
-		return undefined;
-	}
-
-	return Math.min(1, Math.max(0, sampleRate));
-};
-
 // Lazily initialize the main-process SDK once the renderer has fetched the
 // per-server DSN and forwarded it over IPC. The main process has no DSN of its
 // own, so native crashes (incl. GPU) that occur before the user connects to a
@@ -175,8 +167,6 @@ const configureMainErrorReporting = (config: TDesktopErrorReportingConfig): void
 		return;
 	}
 
-	const tracesSampleRate = normalizeSampleRate(config.tracingSampleRate);
-
 	// Mark the attempt before init runs, not after success: this is an
 	// attempt-once guard, not a success guard. If init throws partway through
 	// (e.g. after registering Classic-mode ipcMain handlers), we must not run it
@@ -204,7 +194,11 @@ const configureMainErrorReporting = (config: TDesktopErrorReportingConfig): void
 				try {
 					if (routingIdentity && event.tags?.['ripcord.telemetry.identity'] === routingIdentity) {
 						const record = fitDiagnosticRecord({
-							...sdkEventRecord(sanitizeEvent(event), hint, 'desktop-main'),
+							...sdkEventRecord(
+								{ ...sanitizeEvent(event), contexts: { ...event.contexts, trace: undefined } },
+								hint,
+								'desktop-main',
+							),
 							sequence: 0,
 						});
 						if (record) sendRecord?.({ identity: routingIdentity, record });
@@ -214,7 +208,6 @@ const configureMainErrorReporting = (config: TDesktopErrorReportingConfig): void
 				}
 				return null;
 			},
-			...(tracesSampleRate !== undefined && tracesSampleRate > 0 ? { tracesSampleRate } : {}),
 			initialScope: {
 				tags: {
 					runtime: 'desktop-main',

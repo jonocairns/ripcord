@@ -3,6 +3,7 @@ import { memo, useEffect } from 'react';
 import { flushVoiceForDesktopQuit } from '@/features/server/voice/actions';
 import { flushDiagnosticDelivery } from '@/helpers/error-reporting';
 import { getDiagnosticIdentity, recordDiagnostic } from '@/helpers/error-reporting/delivery';
+import { flushClientTracing } from '@/helpers/telemetry/backend';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 
 const DesktopQuitCoordinator = memo(() => {
@@ -34,7 +35,8 @@ const DesktopQuitCoordinator = memo(() => {
 		const unsubscribeQuit = desktopBridge.subscribeBeforeQuit(() => {
 			if (!flushPromise) {
 				flushPromise = flushVoiceForDesktopQuit()
-					.then(() => flushDiagnosticDelivery())
+					.then(() => Promise.allSettled([flushDiagnosticDelivery(), flushClientTracing()]))
+					.then(() => {})
 					.finally(() => {
 						flushPromise = undefined;
 					});

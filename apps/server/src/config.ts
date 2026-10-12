@@ -58,6 +58,8 @@ const zConfig = z.object({
 		serverErrorReportingSentryDsn: z.string(),
 		clientTracingSentryDsn: z.string(),
 		serverTracingSentryDsn: z.string(),
+		tracingOtlpEndpoint: z.string(),
+		tracingOtlpHeaders: z.string(),
 		clientErrorReportingIgnoreErrors: z.string(),
 		clientTracingSampleRate: z.coerce.number().min(0).max(1),
 		serverTracingSampleRate: z.coerce.number().min(0).max(1),
@@ -114,6 +116,8 @@ const defaultConfig: TConfig = {
 		serverErrorReportingSentryDsn: '',
 		clientTracingSentryDsn: '',
 		serverTracingSentryDsn: '',
+		tracingOtlpEndpoint: '',
+		tracingOtlpHeaders: '',
 		clientTracingSampleRate: 0,
 		serverTracingSampleRate: 0,
 		// Session Replay is opt-in (default 0). The recommended setup is on-error
@@ -292,6 +296,8 @@ if (process.env.RIPCORD_SERVER_ERROR_REPORTING_SENTRY_DSN !== undefined) {
 for (const [field, variable] of [
 	['clientTracingSentryDsn', 'RIPCORD_CLIENT_TRACING_SENTRY_DSN'],
 	['serverTracingSentryDsn', 'RIPCORD_SERVER_TRACING_SENTRY_DSN'],
+	['tracingOtlpEndpoint', 'RIPCORD_TRACING_OTLP_ENDPOINT'],
+	['tracingOtlpHeaders', 'RIPCORD_TRACING_OTLP_HEADERS'],
 ] as const) {
 	const value = process.env[variable];
 	if (value !== undefined) config.server[field] = value;

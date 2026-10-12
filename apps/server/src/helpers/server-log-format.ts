@@ -1,6 +1,6 @@
-import { getActiveTraceContext } from '@sharkord/shared/telemetry/opentelemetry';
 import { format } from 'winston';
 import { SERVER_VERSION } from '../utils/env';
+import { getReportedTraceContext } from './error-trace-context';
 
 // Winston splat() consumes trailing metadata. Preserve the Error before it loses
 // non-enumerable stack/name fields so structured logs and adapters see one cause.
@@ -35,7 +35,8 @@ export const serverLogFormat = format.combine(
 					: undefined;
 		const { originalError: _originalError, ...fields } = info;
 		const stack = typeof info.stack === 'string' ? info.stack : originalError?.stack;
-		const activeContext = info.source === 'client' || info.source === 'telemetry_health' ? {} : getActiveTraceContext();
+		const activeContext =
+			info.source === 'client' || info.source === 'telemetry_health' ? {} : getReportedTraceContext(info);
 		return {
 			source: 'server',
 			...(info.source === 'client' ? {} : { runtime: 'bun', release: SERVER_VERSION }),

@@ -21,6 +21,7 @@ import { eventBus } from '../../plugins/event-bus';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { enqueueLogin } from '../../queues/logins';
 import { VoiceRuntime } from '../../runtimes/voice';
+import { clientTraceRelay } from '../../telemetry/traces';
 import { invariant } from '../../utils/invariant';
 import { rateLimitedProcedure, t } from '../../utils/trpc';
 import { assertSessionIsValid } from '../../utils/user-sessions';
@@ -189,6 +190,8 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
 			categories: allCategories,
 			streamObservabilityVersion: 1,
 			diagnosticsVersion: 1,
+			tracingVersion: 1,
+			tracingEnabled: clientTraceRelay !== undefined,
 			channels: channelsForUser.map(toPublicChannel),
 			users: processedPublicUsers,
 			serverId: settings.serverId,

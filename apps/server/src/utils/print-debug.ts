@@ -19,6 +19,8 @@ const printDebug = () => {
 				serverErrorReportingSentryDsn: '[redacted]',
 				clientTracingSentryDsn: '[redacted]',
 				serverTracingSentryDsn: '[redacted]',
+				tracingOtlpHeaders: '[redacted]',
+				tracingOtlpEndpoint: '[redacted]',
 			},
 		},
 		environment: envVars,

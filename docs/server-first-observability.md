@@ -22,15 +22,15 @@ Downstream changes do not require changing error-reporting call sites or clients
 
 ## Capability inventory and migration limits
 
-| Capability | Treatment in the logs/errors PR |
+| Capability | Treatment in the final stack |
 | --- | --- |
 | Handled errors, console errors, unhandled errors/rejections | Browser SDK remains a parsing/automatic capture adapter; `beforeSend` produces bounded neutral records and drops direct JS error sends. React hooks/boundaries call the neutral interface. |
 | Client logs | Owned voice diagnostic logs upload; closed-vocabulary stream events retain #355's independent delivery policy. Arbitrary console.info/debug output is not collected. |
 | Server errors | Existing logger remains authoritative, with structured exception records and optional provider forwarding. RPC capture uses the same path. |
 | Stack frames/source maps | Original release, stack and frame filename/line/column plus matching debug IDs survive forwarding. No backend stack is substituted. See verification below. |
 | Context/breadcrumbs | Bounded primitive context and last 30 breadcrumbs. Credentials, emails, URLs in prose and local account paths are scrubbed; opaque operation/media/reconnect IDs are retained. Request bodies, user content, attachments and arbitrary nested SDK context are excluded. |
-| Tracing | #354's tracing API and existing Sentry span implementation remain in this PR. Separate transitional trace DSN configuration is available; server-first OTLP tracing follows in the dependent PR. Rates still default to zero. |
-| Replay | Existing explicitly configured masked Sentry replay remains provider-specific and direct. It is not uploaded as diagnostic records. It still requires the legacy client DSN and is not generic pipeline parity. On a server/user switch replay is stopped; restarting the page initializes it for the new server. Transitional browser tracing likewise stops on server switches to prevent exports to the previous destination. |
+| Tracing | #354's shared tracing API remains; PR 2 installs standard OTel providers/exporters independently of Sentry. Client OTLP batches relay through authenticated Ripcord. Rates still default to zero. |
+| Replay | Existing explicitly configured masked Sentry replay remains provider-specific and direct. It is not uploaded as diagnostic records. It still requires the legacy client DSN and is not generic pipeline parity. On a server/user switch replay is stopped; restarting the page initializes it for the new server. OTel tracing cancels and recreates its provider/exporter on identity or connection changes. |
 | Desktop JS errors | Main-process events route via a validated IPC record to the renderer's authenticated server connection. Local rotating diagnostic files and sidecar lifecycle/shutdown behavior remain. |
 | Native crashes/minidumps | The existing optional Electron Sentry uploader remains a separate direct path, configured by the legacy client DSN. Native dumps cannot be delivered by a crashed renderer. The process-wide native destination cannot be retargeted safely here; changing DSN disables native uploads until Electron restarts. No claim of crash capture parity without that SDK/provider. |
 
@@ -42,12 +42,12 @@ The legacy client DSN is still public for old clients, replay and native capture
 private credentials for server forwarding stay server-side. Removing those legacy
 fields requires a separate compatibility decision.
 
-Transitional trace-only destinations use `RIPCORD_CLIENT_TRACING_SENTRY_DSN` and
-`RIPCORD_SERVER_TRACING_SENTRY_DSN` (`clientTracingSentryDsn` and
-`serverTracingSentryDsn` in INI), falling back to the existing respective DSNs.
-Turning off the optional server error adapter does not turn off tracing when a
-trace-only DSN and positive existing sample rate are configured. This PR still
-uses Sentry's tracing backend; the next PR replaces that initialization.
+PR 1 kept transitional Sentry tracing initialization separately configurable so it
+could ship alone. With PR 2 applied, `clientTracingSentryDsn` and
+`serverTracingSentryDsn` are legacy compatibility configuration only; new code
+ignores them for export. Legacy `/info` fields remain for older clients. Existing
+Sentry replay and native crash configuration is unaffected by OTLP destination
+changes.
 
 ## Delivery and security
 
@@ -125,10 +125,8 @@ Configure rate/count alerts in your existing log alerting service, or grouping/i
 optional error tracker. Neither automatic alert provisioning nor a trace store
 is introduced here. VictoriaLogs is a log destination; it is not a trace backend.
 
-During PR 1's transitional browser Sentry backend, replay and tracing share an
-SDK. If replay is enabled, the legacy client DSN takes precedence so replay
-continues to reach its existing project. A differing trace-only DSN cannot be
-used concurrently with replay until PR 2 replaces the browser tracing backend.
+Replay uses the legacy client Sentry DSN and remains independent of OpenTelemetry
+tracing. Trace-only Sentry DSNs are ignored by new clients.
 On-error replay is explicitly flushed using its existing configured probability
 (the SDK's successful-error-send trigger is unavailable when errors are routed
 through the server); its replay ID is forwarded for optional error correlation.
@@ -162,3 +160,124 @@ observable here. Client `droppedEvents` remains separate reported context and
 stream events retain their existing independent upload policy. Configure alerts
 on sustained health-counter increases with the existing log alerting service;
 no metrics backend or new collector is required.
+
+## Provider-neutral tracing (PR 2)
+
+No compatible trace backend was identified in the current homelab infrastructure.
+VictoriaLogs receives logs, not traces. With no OTLP endpoint, tracing export is
+deferred and the instrumentation API stays available as a no-op. Installing a
+collector is optional; it is useful for a backend requiring protocol conversion,
+central tail sampling or durable queues, and is not required by this change.
+
+Configure an existing OTLP/HTTP backend that accepts **JSON** traces on its exact
+trace endpoint, normally `/v1/traces`:
+
+```sh
+RIPCORD_TRACING_OTLP_ENDPOINT=https://traces.example/v1/traces
+RIPCORD_TRACING_OTLP_HEADERS='{"Authorization":"Bearer server-credential"}'
+RIPCORD_CLIENT_TRACING_SAMPLE_RATE=0.01
+RIPCORD_SERVER_TRACING_SAMPLE_RATE=0.01
+```
+
+INI equivalents in `[server]` are `tracingOtlpEndpoint`, `tracingOtlpHeaders`,
+`clientTracingSampleRate` and `serverTracingSampleRate`. Headers are a JSON object;
+invalid endpoint/header configuration disables export. HTTPS is recommended
+outside a trusted local network. Credentials stay in server configuration and
+are never included in join or `/info`. The independently configured error adapter
+can be absent. No collector or automatic alert provisioning is installed.
+
+Both existing root sampling defaults remain **0**. Standard ParentBased sampling
+preserves inherited sampled/unsampled decisions; the server can continue a
+sampled client parent even when its own root rate is zero. Without a trace backend
+or authenticated `tracingVersion=1`/`tracingEnabled`, new clients export no traces
+and send ordinary tRPC inputs. Older clients keep their legacy behavior. Logs and
+error reporting work regardless of trace enablement.
+
+The browser uses WebTracerProvider, BatchSpanProcessor and W3C propagation. The
+thin authenticated RPC exporter uses OTel's standard JSON serializer; it does not
+invent spans. Query/mutation calls attach a bounded W3C carrier before their
+validated input, and the server extracts it before starting its real RPC span.
+Subscription spans retain the existing server setup lifetime. The Bun server
+uses NodeTracerProvider with AsyncLocalStorage context and the standard
+OTLPTraceExporter. Client and server resources are `ripcord.client` and
+`ripcord.server`, with release/runtime identity; the relay assigns authenticated
+reporter identity to the client resource and preserves IDs, parents, nanosecond
+times, trace state and flags. Trace batches never create replacement server spans.
+
+Browser StackContextManager scopes synchronous callbacks and explicit
+`observation.run` blocks. It does **not** propagate context automatically across
+native `await` continuations; no parent is inferred from timing, session or media
+IDs. Explicit error captures snapshot a real active context before SDK parsing;
+automatic SDK events without that snapshot omit trace IDs rather than forwarding
+the SDK's unrelated fallback IDs. Voice diagnostic logs use real active IDs.
+Client-session, operation, reconnect, producer, consumer and transport IDs remain
+useful where asynchronous boundaries lack an active span. Failed RPCs retain their
+span IDs for structured exception logging and optional error forwarding after the
+WebSocket callback leaves the handler context. Server ALS parent isolation across
+concurrent async operations is covered by real exporter tests.
+Desktop main has no shared manual tracing call sites; its previous optional Sentry automatic spans are disabled, while main diagnostics and native crash capture remain separate. No browser document/fetch auto-instrumentation is added: the former Sentry browser
+integration's automatic navigation/network spans are an explicit migration limit.
+
+The client SDK queues at most 64 ended spans, batches at most 16, and flushes on a
+two-second schedule (standard browser visibility flushing also applies). The RPC
+exporter permits four concurrent batches, makes at most three attempts with
+two-second request deadlines and a 6.5-second overall deadline, and cancels on
+identity change/disconnect. Pending observations cannot activate an old identity's
+context. Telemetry RPCs are excluded from instrumentation to prevent recursion.
+The schema limits batches to 64 KB and only the existing primitive manual span
+attributes; events, links and spans lasting over ten minutes are not exported.
+The client exporter excludes long spans individually so they cannot discard other
+valid spans in the batch.
+There is no persistent browser spool. Quit attempts a one-second tracing flush
+after local voice cleanup, alongside diagnostics; abrupt crashes/tab termination
+can still lose spans.
+
+The authenticated trace route allows 30 requests/minute/user and acknowledges
+validated input before export. The server relay queues at most 64 batches, expires
+queued work after 30 seconds, rejects records older than five minutes or over one
+minute in the future, and deduplicates user/trace/span IDs in a bounded 4096-entry
+five-minute map. It exports the sanitized original client resource/spans as OTLP
+JSON, with at most three two-second attempts. Permanent HTTP 4xx errors (except
+429) are not retried. Partial OTLP backend rejection and saturation can drop spans;
+acceptance is not a durable delivery promise. Server manual spans use the standard
+exporter with a 256-span queue, 32-span batches and bounded export deadlines.
+Server shutdown gives trace delivery at most 2.5 seconds. Provider failures are
+contained and cannot recursively capture themselves or fail chat/media requests.
+
+In your trace backend, find a trace by the `traceId` recorded in structured logs,
+then compare `service.name`, `service.version`, `ripcord.runtime` and
+`ripcord.client_session.id`. Search producer/consumer/transport or operation IDs
+when no active trace exists. Use existing log-based alerts for unsampled exception
+counts and your backend's sampled latency/error analysis for traces; sampled
+traces do not provide complete event counts. Actual deployed backend ingestion,
+provider replay and source-map symbolication remain deployment validation limits.
+
+Tracing uses the same bounded health summaries. `trace_relay_stale` and
+`trace_relay_future` count refused client spans; `trace_relay_queue_full` counts
+fresh batches refused for capacity (all-duplicate acknowledgement retries are
+excluded). Rejected fresh spans are not inserted into the dedupe cache and remain
+eligible on a later retry. `trace_relay_queue_expired`,
+`trace_relay_failed_batch` and `trace_relay_shutdown_drop` count batches discarded
+at expiry, after permanent/exhausted failures, or while queued/in flight at
+shutdown. An in-flight shutdown drop means delivery is unconfirmed; a backend
+may already have accepted it. `trace_relay_export_failure` counts failed HTTP
+attempts and `trace_relay_retry` counts additional attempts actually started. These units
+can overlap; retry warnings do not imply final loss when a later attempt succeeds.
+
+The standard server SpanExporter decorator reports `trace_export_failure` per
+failed SDK export callback or synchronous export failure, and
+`trace_export_failed_spans` counts spans in those batches. It passes original
+span objects and callback results through unchanged, delegates optional
+`forceFlush`, and adds no queue, sampling, retries or deadlines. Standard exporter
+shutdown rejection or the existing overall trace shutdown deadline increments
+`trace_shutdown_failure`. Invalid configured destinations and failed provider
+initialization increment `trace_configuration_invalid` and
+`trace_initialize_failure`; an absent endpoint intentionally disables tracing
+without reporting a failure. Health records have no inherited request trace IDs.
+
+These counters do not observe browser/server BatchSpanProcessor internal queue
+overflows, unsampled spans, successful HTTP responses containing OTLP partial
+rejection, or all downstream storage failures. Provider credentials/error strings
+are never health labels. Deployments should monitor their backend/collector's
+own rejected-span/drop counters as well; local acceptance and HTTP success remain
+best-effort boundaries rather than proof of durable storage.

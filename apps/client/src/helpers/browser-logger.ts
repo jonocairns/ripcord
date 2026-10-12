@@ -1,3 +1,4 @@
+import { getActiveTraceContext } from '@sharkord/shared/telemetry/opentelemetry';
 import { recordDesktopDiagnostic } from './desktop-diagnostics';
 import {
 	captureError,
@@ -21,6 +22,19 @@ const logVoice = (...args: unknown[]) => {
 	recordDesktopDiagnostic('voice', { details: args });
 	try {
 		recordDiagnostic({
+			context: Object.fromEntries(
+				args
+					.flatMap((value) => {
+						if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+						return Object.entries(value).filter(
+							([key, v]) =>
+								/^(channelId|userId|producerId|consumerId|transportId|operationId|reconnectAttemptId)$/.test(key) &&
+								(typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'),
+						);
+					})
+					.slice(0, 20),
+			),
+			...getActiveTraceContext(),
 			id: crypto.randomUUID(),
 			occurredAt: Date.now(),
 			kind: 'diagnostic',

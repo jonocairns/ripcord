@@ -7,7 +7,8 @@ import { logDebug, setErrorReportingUser } from '@/helpers/browser-logger';
 import { setErrorReportingIdentity } from '@/helpers/error-reporting';
 import { configureDiagnosticDelivery } from '@/helpers/error-reporting/delivery';
 import { getHostFromServer } from '@/helpers/get-file-url';
-import { configureStreamObservability } from '@/helpers/stream-observability';
+import { configureStreamObservability, getStreamClientSessionId } from '@/helpers/stream-observability';
+import { configureTraceBackend } from '@/helpers/telemetry/backend';
 import {
 	cleanup,
 	connectToTRPC,
@@ -18,6 +19,7 @@ import {
 	reconnectTRPC,
 	setOnWsReconnect,
 } from '@/lib/trpc';
+import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { openDialog } from '../dialogs/actions';
 import { setPluginCommands } from './plugins/actions';
 import {
@@ -189,6 +191,19 @@ export const joinServer = async (
 				`${getHostFromServer()}:${data.serverId}:${data.ownUserId}`,
 				'streamObservabilityVersion' in data && data.streamObservabilityVersion === 1,
 			);
+			configureTraceBackend({
+				identity: `${getHostFromServer()}:${data.serverId}:${data.ownUserId}`,
+				enabled: 'tracingVersion' in data && data.tracingVersion === 1 && data.tracingEnabled === true,
+				sampleRate: infoSelector(useServerStore.getState())?.clientTracing?.sampleRate ?? 0,
+				runtime: getRuntimeServerConfig().source === 'desktop' ? 'desktop' : 'web',
+				release: typeof VITE_APP_VERSION === 'string' ? VITE_APP_VERSION : 'unknown',
+				clientSessionId: getStreamClientSessionId() ?? crypto.randomUUID(),
+				upload: async (batch, signal) => {
+					if (signal.aborted || trpc !== getTRPCClientIfInitialized() || !isTRPCSocketOpen())
+						throw new Error('Trace upload disconnected');
+					await trpc.telemetry.reportTraces.mutate(batch, { signal });
+				},
+			});
 		}
 
 		if (!data.mustChangePassword) {

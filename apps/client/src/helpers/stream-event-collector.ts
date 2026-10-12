@@ -136,6 +136,7 @@ export const createStreamEventCollector = (options: TCollectorOptions) => {
 	};
 
 	return {
+		getClientSessionId: () => clientSessionId,
 		configure: (nextIdentity: string, featureSupported: boolean, nextUpload = options.upload) => {
 			if (disposed) return;
 			if (identity !== nextIdentity || supported !== featureSupported) reset();

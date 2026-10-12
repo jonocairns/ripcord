@@ -2,6 +2,7 @@ import { logger } from '../logger';
 import { flushSentry } from '../sentry';
 import { diagnosticIngest, flushClientErrorAdapter } from '../telemetry/diagnostics';
 import { telemetryHealth } from '../telemetry/health';
+import { flushServerTracing } from '../telemetry/traces';
 
 // How long to let the "please reconnect" broadcast flush and in-flight requests
 // settle before we tear connections down. Kept short so shutdown stays well
@@ -96,7 +97,7 @@ const handleSignal = (signal: NodeJS.Signals): void => {
 	void performGracefulShutdown(signal, resources, {
 		flush: async () => {
 			diagnosticIngest.flush();
-			await Promise.allSettled([flushSentry(), flushClientErrorAdapter()]);
+			await Promise.allSettled([flushSentry(), flushClientErrorAdapter(), flushServerTracing()]);
 			telemetryHealth.close();
 		},
 		exit: (code) => process.exit(code),

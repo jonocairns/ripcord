@@ -1,15 +1,15 @@
+import { getReportedTraceContext } from './helpers/error-trace-context';
 // The server runs on Bun (compiled single-file binary in production), so use
 // the first-class @sentry/bun SDK rather than @sentry/node. It re-exports the
 // Node API — captureException, captureMessage, close, etc. all behave the same
 // — but is built for the Bun runtime. Note: Sentry auto-instrumentation (and
 // automatic spans) does not attach inside a compiled single-file executable.
-// Manual OpenTelemetry spans still use its provider, async context and sampler.
+// Manual spans use the independent standard OTel provider in telemetry/traces.ts.
 
 import type { ErrorEvent } from '@sentry/bun';
 import * as Sentry from '@sentry/bun';
 import { format } from 'winston';
 import { config } from './config';
-import { configureServerTracing } from './helpers/tracing';
 import { withErrorDeliveryHealth } from './telemetry/sentry-delivery-health';
 import { IS_PRODUCTION, SERVER_VERSION } from './utils/env';
 
@@ -131,14 +131,11 @@ const flushSentry = async (): Promise<void> => {
 };
 
 const initSentry = (): void => {
-	const dsn = config.server.serverTracingSentryDsn.trim() || config.server.serverErrorReportingSentryDsn.trim();
+	const dsn = config.server.serverErrorReportingSentryDsn.trim();
 
 	if (!dsn) {
 		return;
 	}
-
-	const serverTracingSampleRate = config.server.serverTracingSampleRate;
-	const tracingOptions = serverTracingSampleRate > 0 ? { tracesSampleRate: serverTracingSampleRate } : {};
 
 	Sentry.init({
 		dsn,
@@ -153,9 +150,8 @@ const initSentry = (): void => {
 			}
 			return null;
 		},
-		...tracingOptions,
+		skipOpenTelemetrySetup: true,
 	});
-	configureServerTracing(serverTracingSampleRate > 0);
 };
 
 const sentryFormat = format((info) => {
@@ -184,6 +180,9 @@ const sentryFormat = format((info) => {
 	try {
 		const scope = new Sentry.Scope();
 		scope.setExtras(extra);
+		const active = getReportedTraceContext(info);
+		if (active.traceId && active.spanId)
+			scope.setContext('trace', { trace_id: active.traceId, span_id: active.spanId });
 		if (errorFromSplat) {
 			getErrorClient()?.captureException(errorFromSplat, undefined, scope);
 		} else if (info instanceof Error) {

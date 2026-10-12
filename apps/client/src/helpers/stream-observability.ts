@@ -22,3 +22,5 @@ export const pauseStreamObservability = () => collector?.pause();
 export const clearStreamObservability = () => collector?.clear();
 export const setStreamReconnectAttemptId = (attemptId: string) => collector?.setReconnectAttemptId(attemptId);
 export const recordStreamEvent = (details: TStreamEventDetails) => collector?.record(details);
+
+export const getStreamClientSessionId = () => collector?.getClientSessionId();

@@ -5,27 +5,39 @@ Ripcord's custom application spans use a portable boundary in
 middleware call `traceSpan` or `startSpanObservation`; they do not call Sentry's
 span APIs directly.
 
-The server uses the real `@opentelemetry/api` tracer and context APIs. The
-installed `@sentry/bun` 10.x SDK initializes the tracing provider, sampler,
-async context manager and Sentry exporter. Manual spans work without automatic
-module instrumentation, including Bun's compiled executable. There is no
-collector or additional tracing provider to run.
+The server initializes a standard OpenTelemetry NodeTracerProvider with
+AsyncLocalStorage context, ParentBased sampling, BatchSpanProcessor and the
+OTLP/HTTP exporter. Manual spans work without automatic module instrumentation,
+including Bun's compiled executable.
 
-The React browser SDK has a different tracing implementation. Its adapter is
-installed by `configureClientErrorReporting` and implements the same portable
-boundary using Sentry's existing browser spans and active context. This is a
-portable application API, **not a native browser OpenTelemetry pipeline**.
-Replacing the browser backend requires replacing that adapter. Browser async
-parenting retains the installed SDK's existing behavior; the server's async
-context guarantees do not imply equivalent browser support.
+The browser initializes WebTracerProvider and BatchSpanProcessor. Its thin RPC
+exporter uses the standard OTLP JSON serializer and the authenticated Ripcord
+connection. The server relays original client resources and spans to its configured
+backend; it does not recreate them as server spans. StackContextManager preserves
+synchronous scopes and explicit `observation.run` blocks, but does not automatically
+carry context across native `await`. No absent parent is inferred from timing or
+session/media identifiers. Browser and server async context guarantees differ.
+
+See [Server-first observability](server-first-observability.md) for deployment,
+configuration, migration limits, correlation, delivery guarantees and health
+queries. Logs use the existing server/container pipeline; structured exception
+logs can additionally reach independently configured error adapters. Sentry remains
+an optional error/replay/native-crash integration, separate from tracing.
 
 ## Configuration and cost
 
-Existing server/client DSNs and tracing sample rates still control capture.
-Without a configured SDK and a positive sample rate, the application tracing
-boundary is a no-op. Sampling remains with Sentry, so parent/child sampling
-stays consistent. No new configuration, exporter, analytics service or metrics
-pipeline is introduced.
+Configure `RIPCORD_TRACING_OTLP_ENDPOINT` and optional server-only
+`RIPCORD_TRACING_OTLP_HEADERS` for a compatible OTLP/HTTP JSON backend. A collector
+is optional; VictoriaLogs is the existing log destination, not a trace store.
+Without a valid destination, export is deferred and instrumentation is a no-op.
+New clients also require authenticated server tracing capability and enablement.
+
+Client/server root sample rates retain their zero defaults. Standard ParentBased
+sampling preserves real sampled/unsampled parent decisions, so a server can
+continue a sampled client parent even with its own root rate at zero. Legacy
+Sentry tracing DSNs remain compatibility fields for shipped older clients; new
+tracing does not use them. Changing the downstream destination does not require
+changing application call sites or releasing new clients.
 
 Server RPC spans cover middleware/handler execution, including unsuccessful
 `tRPC` results. For subscriptions they cover subscription setup, not the entire
@@ -46,28 +58,26 @@ Each attribute update accepts at most 20 application attributes, with string
 values bounded to 200 characters. Creation additionally reserves an operation
 attribute. Attribute names must be fixed application-defined keys; they are not
 length-bounded by the sanitizer. Credentials, token-like attribute names, email addresses and
-URLs are scrubbed before either adapter receives them. Do not add arbitrary
+URLs are scrubbed before the adapter receives them. Do not add arbitrary
 request payloads, device labels, user content or error messages as span data;
 redaction is a safeguard rather than permission to collect those fields. The
-existing Sentry error reporting, React boundaries, replay and source map setup
-remain separate.
+error-reporting interface, React boundaries, replay, native crash capture and source
+map setup remain separate. Replay/native crashes retain provider-specific paths;
+generic telemetry parity is not claimed.
 
-## Validation and future backends
+## Validation and backend independence
 
 The portable boundary tests exercise disabled capture, exporter/context failures,
 async completion, original rejection preservation, idempotence and redaction.
-The server integration fixture initializes the actual Sentry SDK in an isolated
-Bun subprocess and checks exported parent/child spans and concurrent async
-context. It can also be built with `bun build --compile` for release verification.
-Browser adapter tests cover configuration and observation behavior; browser or
-Electron capture must still be verified in its runtime when changing the SDK.
+The server fixture uses the actual standard OTLP exporter in an isolated Bun
+subprocess and checks IDs, parents, resource identity, inherited sampling,
+concurrent async context and exporter failure observation. The fixture can also
+be compiled for release verification. Browser SDK tests cover real RPC context,
+identity cancellation, disabled sampling, original span graphs and bounded export.
 
-A future server backend can initialize a different OTel provider/exporter while
-keeping application call sites and the shared OTel adapter. A future browser
-backend implements `TTracingAdapter`. Logs, errors/replay, analytics and metrics
-are not migrated to OTLP by this first pass.
-
-References:
-
-- [Sentry Bun 10.x support for OpenTelemetry APIs](https://docs.sentry.io/platforms/javascript/guides/bun/opentelemetry/using-opentelemetry-apis__v10.x/)
-- [OpenTelemetry JavaScript API](https://opentelemetry.io/docs/languages/js/instrumentation/)
+Server configuration selects the downstream trace backend while the shared API
+and client exporter remain unchanged. Bounded health summaries expose known relay
+losses and exporter failures without adding another processor or metrics backend.
+They cannot observe all SDK queue drops, OTLP partial rejection or downstream
+storage failures. Deployed backend ingestion, hosted symbolication and packaged
+desktop/native/replay behavior still require runtime validation.

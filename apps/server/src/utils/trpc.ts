@@ -1,8 +1,11 @@
 import type { ChannelPermission, Permission, TUser, TUserPresenceStatus, UserStatus } from '@sharkord/shared';
+import { traceEnvelopeSchema } from '@sharkord/shared';
 import { initTRPC, TRPCError } from '@trpc/server';
 import chalk from 'chalk';
 import type WebSocket from 'ws';
 import { config } from '../config';
+import { rememberErrorTraceContext } from '../helpers/error-trace-context';
+import { withRemoteTraceContext } from '../helpers/remote-trace-context';
 import { startSpanObservation } from '../helpers/tracing';
 import { logger } from '../logger';
 import type { TConnectionInfo } from '../types';
@@ -49,20 +52,33 @@ export type Context = {
 
 const t = initTRPC.context<Context>().create();
 
-const tracingMiddleware = t.middleware(async ({ path, type, next }) => {
-	const observation = startSpanObservation({
-		name: `rpc.${path}`,
-		op: 'rpc.server',
-		attributes: { 'rpc.method': path, 'rpc.type': type },
-	});
-	try {
-		const result = await observation.run(next);
-		observation.finish({ status: result.ok ? 'ok' : 'error' });
-		return result;
-	} catch (error) {
-		observation.finish({ status: 'error' });
-		throw error;
-	}
+const tracingMiddleware = t.middleware(async ({ path, type, next, getRawInput, ctx }) => {
+	const raw = await getRawInput();
+	const envelope = traceEnvelopeSchema.safeParse(raw);
+	const runNext = () => (envelope.success ? next({ getRawInput: async () => envelope.data.input }) : next());
+	if (path.startsWith('telemetry.')) return runNext();
+	return withRemoteTraceContext(
+		ctx.authenticated && envelope.success ? envelope.data.__ripcordTrace : undefined,
+		async () => {
+			const observation = startSpanObservation({
+				name: `rpc.${path}`,
+				op: 'rpc.server',
+				attributes: { 'rpc.method': path, 'rpc.type': type },
+			});
+			try {
+				const result = await observation.run(async () => {
+					const result = await runNext();
+					if (!result.ok) rememberErrorTraceContext(result.error);
+					return result;
+				});
+				observation.finish({ status: result.ok ? 'ok' : 'error' });
+				return result;
+			} catch (error) {
+				observation.finish({ status: 'error' });
+				throw error;
+			}
+		},
+	);
 });
 
 const timingMiddleware = t.middleware(async ({ path, next }) => {

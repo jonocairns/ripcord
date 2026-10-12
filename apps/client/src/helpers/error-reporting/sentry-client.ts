@@ -1,6 +1,6 @@
 import * as Sentry from '@sentry/react';
 import { sdkEventRecord } from '@sharkord/shared';
-import { configureClientTracing } from '@/helpers/telemetry/tracing';
+import { getActiveTraceContext } from '@sharkord/shared/telemetry/opentelemetry';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { getDiagnosticIdentity, recordDiagnostic } from './delivery';
@@ -73,18 +73,7 @@ const normalizeSampleRate = (sampleRate: number | undefined): number | undefined
 	return Math.min(1, Math.max(0, sampleRate));
 };
 
-const buildTracePropagationTargets = (): string[] | undefined => {
-	const runtimeConfig = getRuntimeServerConfig();
-
-	if (!runtimeConfig.serverUrl) {
-		return undefined;
-	}
-
-	return [runtimeConfig.serverUrl];
-};
-
 const buildIntegrations = (
-	tracingSampleRate: number | undefined,
 	replaySessionSampleRate: number | undefined,
 	replayOnErrorSampleRate: number | undefined,
 ) => {
@@ -103,10 +92,6 @@ const buildIntegrations = (
 	// pre-init console reference rather than relying on dedupe — see
 	// helpers/browser-logger.ts.
 	integrations.push(Sentry.captureConsoleIntegration({ levels: ['error'] }));
-
-	if (tracingSampleRate !== undefined && tracingSampleRate > 0) {
-		integrations.push(Sentry.browserTracingIntegration());
-	}
 
 	// Session Replay. Only attach when a rate is configured so the replay bundle
 	// and recording overhead stay out of deployments that haven't opted in. Text
@@ -132,32 +117,16 @@ const buildIntegrations = (
 };
 
 const configureClientErrorReporting = (config: TClientErrorReportingConfig = {}): void => {
-	if (!config.serverRouted && !config.sentryDsn && !config.tracingSentryDsn) return;
-	const replayEnabled = (config.replaySessionSampleRate ?? 0) > 0 || (config.replayOnErrorSampleRate ?? 0) > 0;
-	const dsn =
-		(replayEnabled ? config.sentryDsn?.trim() : undefined) ||
-		config.tracingSentryDsn?.trim() ||
-		config.sentryDsn?.trim() ||
-		'https://ripcord@telemetry.invalid/1';
+	if (!config.serverRouted && !config.sentryDsn) return;
+	const dsn = config.sentryDsn?.trim() || 'https://ripcord@telemetry.invalid/1';
 
 	if (initialized) {
 		if (initializedServerUrl !== getRuntimeServerConfig().serverUrl) {
-			configureClientTracing(undefined);
 			void Sentry.getReplay?.()?.stop();
 		}
 		return;
 	}
 	initializedServerUrl = getRuntimeServerConfig().serverUrl;
-
-	const tracingSampleRate =
-		config.tracingSentryDsn?.trim() || config.sentryDsn?.trim() ? normalizeSampleRate(config.tracingSampleRate) : 0;
-	const tracingOptions =
-		tracingSampleRate !== undefined && tracingSampleRate > 0
-			? {
-					tracesSampleRate: tracingSampleRate,
-					tracePropagationTargets: buildTracePropagationTargets(),
-				}
-			: {};
 
 	const replaySessionSampleRate = normalizeSampleRate(config.replaySessionSampleRate);
 	const replayOnErrorSampleRate = normalizeSampleRate(config.replayOnErrorSampleRate);
@@ -177,12 +146,24 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 		sendDefaultPii: false,
 		maxBreadcrumbs: 50,
 		ignoreErrors: config.ignoreErrors,
-		beforeSendTransaction: (event) => (initializedServerUrl === getRuntimeServerConfig().serverUrl ? event : null),
 		beforeSend: (event, hint) => {
 			try {
 				const identity = getDiagnosticIdentity();
 				if (identity && event.tags?.['ripcord.telemetry.identity'] === identity) {
-					const record = sdkEventRecord(event, hint, getRuntimeTag());
+					const snapshot = event.contexts?.ripcord_trace;
+					const traceId = typeof snapshot?.traceId === 'string' ? snapshot.traceId : undefined;
+					const spanId = typeof snapshot?.spanId === 'string' ? snapshot.spanId : undefined;
+					const record = sdkEventRecord(
+						{
+							...event,
+							contexts: {
+								...event.contexts,
+								trace: traceId && spanId ? { trace_id: traceId, span_id: spanId } : undefined,
+							},
+						},
+						hint,
+						getRuntimeTag(),
+					);
 					const replay = Sentry.getReplay?.();
 					const replayId = replay?.getReplayId();
 					recordDiagnostic({
@@ -201,8 +182,8 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 			}
 			return null; // JS errors never leave the client through the provider transport.
 		},
-		integrations: buildIntegrations(tracingSampleRate, replaySessionSampleRate, replayOnErrorSampleRate),
-		...tracingOptions,
+		beforeSendTransaction: () => null,
+		integrations: buildIntegrations(replaySessionSampleRate, replayOnErrorSampleRate),
 		...replayOptions,
 		initialScope: {
 			tags: {
@@ -210,29 +191,6 @@ const configureClientErrorReporting = (config: TClientErrorReportingConfig = {})
 			},
 		},
 	});
-
-	if (tracingSampleRate !== undefined && tracingSampleRate > 0) {
-		configureClientTracing({
-			start: ({ name, attributes }) => {
-				const operation = attributes['ripcord.operation'];
-				const span = Sentry.startInactiveSpan({
-					name,
-					op: typeof operation === 'string' ? operation : undefined,
-					attributes,
-				});
-				return {
-					run: (effect) => Sentry.withActiveSpan(span, effect),
-					setAttributes: (values) => {
-						span.setAttributes(values);
-					},
-					setStatus: (status) => {
-						span.setStatus(status);
-					},
-					end: () => span.end(),
-				};
-			},
-		});
-	}
 
 	initialized = true;
 };
@@ -282,6 +240,7 @@ const captureSentryError = ({
 			: undefined;
 
 	Sentry.withScope((scope) => {
+		scope.setContext('ripcord_trace', getActiveTraceContext());
 		scope.setTag('capture_source', captureSource);
 		scope.setTag('runtime', getRuntimeTag());
 
