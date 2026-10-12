@@ -1,10 +1,8 @@
-import { readFile } from 'node:fs/promises';
 import { parseServerEvent } from './parse-server-event';
-
-const isolatedAppLog = new URL('../.runtime/data/logs/app.log', import.meta.url);
+import { readServerLog } from './server-log';
 
 export const readStreamServerEvents = async () => {
-	const contents = await readFile(isolatedAppLog, 'utf8');
+	const contents = await readServerLog();
 	return contents.split('\n').flatMap((line, lineIndex) => {
 		const payload = parseServerEvent(line, ['[stream-event]']);
 		if (!payload) return [];

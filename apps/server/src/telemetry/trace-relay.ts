@@ -1,7 +1,8 @@
 import { sanitizeClientTraceBatch, type TClientTraceBatch } from '@sharkord/shared';
 import type { telemetryHealth } from './health';
 export const createTraceRelay = (options: {
-	destination: { url: string; headers: Record<string, string> };
+	destination?: { url: string; headers: Record<string, string> };
+	log?: (batch: TClientTraceBatch) => void;
 	fetch: (url: string, init: RequestInit) => Promise<Response>;
 	now?: () => number;
 	health?: Pick<typeof telemetryHealth, 'count'>;
@@ -30,6 +31,16 @@ export const createTraceRelay = (options: {
 				continue;
 			}
 			activeBatch = true;
+			try {
+				options.log?.(entry.body);
+			} catch {
+				count('trace_log_failure');
+			}
+			const destination = options.destination;
+			if (!destination) {
+				activeBatch = false;
+				continue;
+			}
 			let delivered = false;
 			for (let attempt = 0; attempt < 3 && !closed && entry.expiresAt >= now(); attempt++) {
 				if (attempt > 0) count('trace_relay_retry');
@@ -42,9 +53,9 @@ export const createTraceRelay = (options: {
 						const onAbort = () => reject(new Error('Trace destination timeout'));
 						request.signal.addEventListener('abort', onAbort, { once: true });
 						void options
-							.fetch(options.destination.url, {
+							.fetch(destination.url, {
 								method: 'POST',
-								headers: { ...options.destination.headers, 'Content-Type': 'application/json' },
+								headers: { ...destination.headers, 'Content-Type': 'application/json' },
 								body: JSON.stringify(entry.body),
 								signal: request.signal,
 								redirect: 'error',

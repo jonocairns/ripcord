@@ -16,6 +16,7 @@ import {
 } from '@/features/server/voice/reconnect-coordinator';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import { resetServerScreens } from '@/features/server-screens/actions';
+import { recordVoiceDiagnostic } from '@/helpers/browser-logger';
 import { recordDesktopDiagnostic } from '@/helpers/desktop-diagnostics';
 import { setErrorReportingIdentity } from '@/helpers/error-reporting';
 import {
@@ -163,6 +164,19 @@ const initializeTRPC = (host: string) => {
 			if (shouldIgnoreSocketCloseEvent(cause)) {
 				return;
 			}
+			recordVoiceDiagnostic(
+				'Voice WebSocket closed',
+				[
+					{
+						clientInstanceId: getWsClientInstanceId(),
+						closeCode: cause.code,
+						wasClean: cause.wasClean,
+						online: isVoiceReconnectOnline(),
+						wasConnected: useServerStore.getState().connected,
+					},
+				],
+				'warning',
+			);
 			recordDesktopDiagnostic(
 				'websocket_closed',
 				{

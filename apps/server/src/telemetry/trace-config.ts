@@ -28,3 +28,15 @@ export const parseTraceDestination = (
 		return undefined;
 	}
 };
+
+export const resolveTraceOutputs = (options: {
+	tracingConsoleEnabled: boolean;
+	tracingConsoleLevel: 'info' | 'debug';
+	debug: boolean;
+	tracingOtlpEndpoint: string;
+	tracingOtlpHeaders: string;
+}) => ({
+	// Advertising a filtered-out console sink would silently discard client spans.
+	consoleEnabled: options.tracingConsoleEnabled && (options.tracingConsoleLevel === 'info' || options.debug),
+	destination: parseTraceDestination(options.tracingOtlpEndpoint, options.tracingOtlpHeaders),
+});

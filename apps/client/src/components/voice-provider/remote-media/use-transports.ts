@@ -308,7 +308,7 @@ const useTransports = ({
 				});
 
 				transport.on('connectionstatechange', (state) => {
-					logVoice('Producer transport connection state changed', { state });
+					logVoice('Producer transport connection state changed', { state, transportId: transport.id });
 
 					if (producerDisconnectTimer.current !== undefined) {
 						clearTimeout(producerDisconnectTimer.current);
@@ -475,7 +475,7 @@ const useTransports = ({
 				};
 
 				transport.on('connectionstatechange', (state) => {
-					logVoice('Consumer transport connection state changed', { state });
+					logVoice('Consumer transport connection state changed', { state, transportId: transport.id });
 
 					if (consumerDisconnectTimer.current !== undefined) {
 						clearTimeout(consumerDisconnectTimer.current);

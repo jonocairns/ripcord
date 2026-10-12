@@ -34,6 +34,59 @@ const batch = (time = 100): TClientTraceBatch => ({
 	],
 });
 const destination = { url: 'https://backend/v1/traces', headers: { Authorization: 'server-only' } };
+
+test('console-only relay logs sanitized original client spans once without any network destination', async () => {
+	const logged: TClientTraceBatch[] = [];
+	let requests = 0;
+	const relay = createTraceRelay({
+		now: () => 100,
+		log: (b) => logged.push(b),
+		fetch: async () => {
+			requests++;
+			return new Response('{}');
+		},
+	});
+	const input = batch();
+	relay.accept(input, 7);
+	relay.accept(input, 7);
+	expect(logged).toHaveLength(0);
+	await relay.shutdown();
+	expect(requests).toBe(0);
+	expect(logged).toHaveLength(1);
+	expect(JSON.stringify(logged)).not.toContain('secret');
+	expect(logged[0]?.resourceSpans[0]?.scopeSpans[0]?.spans[0]?.spanId).toBe(
+		input.resourceSpans[0]?.scopeSpans[0]?.spans[0]?.spanId,
+	);
+});
+
+test('OTLP retries do not duplicate local trace logs and local failures cannot stop forwarding', async () => {
+	let logs = 0;
+	let requests = 0;
+	const health: Record<string, number> = {};
+	const relay = createTraceRelay({
+		destination,
+		now: () => 100,
+		log: () => {
+			logs++;
+			throw new Error('sink failed');
+		},
+		fetch: async () => {
+			requests++;
+			return new Response('', { status: requests < 3 ? 503 : 200 });
+		},
+		health: {
+			count: (reason, n = 1) => {
+				health[reason] = (health[reason] ?? 0) + n;
+			},
+		},
+	});
+	relay.accept(batch(), 7);
+	await relay.shutdown();
+	expect(logs).toBe(1);
+	expect(requests).toBe(3);
+	expect(health.trace_log_failure).toBe(1);
+	expect(health.trace_relay_failed_batch).toBeUndefined();
+});
 test('relay acknowledges asynchronously, deduplicates per actor and forwards original graph with client resource', async () => {
 	const bodies: unknown[] = [];
 	const relay = createTraceRelay({

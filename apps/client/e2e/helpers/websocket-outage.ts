@@ -1,6 +1,7 @@
 import type { Page, WebSocketRoute } from '@playwright/test';
+import { traceEnvelopeSchema } from '@sharkord/shared';
 
-const restoreIds = (message: string | Buffer): string[] => {
+export const restoreIds = (message: string | Buffer): string[] => {
 	if (typeof message !== 'string') return [];
 	let payload: unknown;
 	try {
@@ -15,7 +16,9 @@ const restoreIds = (message: string | Buffer): string[] => {
 		if (typeof params !== 'object' || params === null || Reflect.get(params, 'path') !== 'voice.restoreOrJoin') {
 			continue;
 		}
-		const input: unknown = Reflect.get(params, 'input');
+		const rawInput: unknown = Reflect.get(params, 'input');
+		const envelope = traceEnvelopeSchema.safeParse(rawInput);
+		const input: unknown = envelope.success ? envelope.data.input : rawInput;
 		if (typeof input !== 'object' || input === null) continue;
 		const id: unknown = Reflect.get(input, 'reconnectAttemptId');
 		if (typeof id === 'string') ids.push(id);
