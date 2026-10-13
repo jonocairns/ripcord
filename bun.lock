@@ -90,11 +90,11 @@
       "dependencies": {
         "@evan/opus": "^1.0.3",
         "@sentry/electron": "^7.13.0",
-        "@sharkord/shared": "workspace:*",
         "electron-updater": "^6.8.3",
         "werift-rtp": "^0.8.8",
       },
       "devDependencies": {
+        "@sharkord/shared": "workspace:*",
         "@types/node": "^24.5.2",
         "concurrently": "^9.2.1",
         "cross-env": "^10.0.0",
