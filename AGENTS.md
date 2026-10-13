@@ -46,6 +46,7 @@
 - Inspect the existing platform backend structure before changing desktop capture, shortcuts, or OS integration.
 - Keep Linux, macOS, and Windows capability reporting aligned with the backend path that actually performs the operation.
 - Treat OS integration APIs as product/backend integrations, not drop-in transport swaps. Account for user approval, session semantics, packaging, and runtime availability.
+- Desktop `dependencies` are what electron-builder ships in `app.asar`. Workspace packages (e.g. `@sharkord/shared`) ship TypeScript source and must stay in `devDependencies` so tsup bundles them; `build:main` runs `scripts/check-main-bundle.mjs` to enforce this. Dev runs and Bun tests resolve workspace `.ts` fine, so only a packaged build shows the crash.
 - Fix packaged Electron behavior at the Electron/session layer when the issue comes from `file://` origins, request headers, window lifecycle, or renderer teardown.
 - For close-time or quit-time cleanup that must reach the renderer, intercept the window lifecycle while the renderer is still alive, flush required state, then continue closing.
 
