@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { parse } from 'ini';
 import { deepMerge } from '../deep-merge';
 
 describe('deepMerge', () => {
@@ -194,6 +195,24 @@ describe('deepMerge', () => {
 					announcedAddress: '',
 				},
 			},
+		});
+	});
+
+	test('fills keys missing from parsed ini sections', () => {
+		const defaultConfig = {
+			server: { port: 4991, debug: false, logMaxFiles: 5 },
+			webRtc: { port: 40000, ipv4: { enabled: true, announcedAddress: '' } },
+		};
+		const existingConfig = parse(
+			'[server]\nport=5000\n\n[webRtc]\nport=50000\n\n[webRtc.ipv4]\nannouncedAddress=203.0.113.7\n',
+		) as Partial<typeof defaultConfig>;
+
+		// ini values stay strings; zConfig coerces them after the merge.
+		const result: unknown = deepMerge(defaultConfig, existingConfig);
+
+		expect(result).toEqual({
+			server: { port: '5000', debug: false, logMaxFiles: 5 },
+			webRtc: { port: '50000', ipv4: { enabled: true, announcedAddress: '203.0.113.7' } },
 		});
 	});
 });
