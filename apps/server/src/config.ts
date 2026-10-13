@@ -229,9 +229,15 @@ if (!configExists) {
 
 		await fs.writeFile(CONFIG_INI_PATH, stringify(config));
 	} catch (error) {
-		// something went wrong, just log the error and overwrite the config file with the default config
+		// something went wrong: keep the unreadable file for recovery, then overwrite it with the default config
+		const backupPath = `${CONFIG_INI_PATH}.invalid-${Date.now()}`;
+		const backedUp = await fs
+			.copyFile(CONFIG_INI_PATH, backupPath)
+			.then(() => true)
+			.catch(() => false);
+
 		console.error(
-			`Error reading or parsing config.ini. Overwriting with default config. Error: ${getErrorMessage(error)}`,
+			`Error reading or parsing config.ini. Overwriting with default config${backedUp ? ` (previous file saved to ${backupPath})` : ''}. Error: ${getErrorMessage(error)}`,
 		);
 
 		await fs.writeFile(CONFIG_INI_PATH, stringify(config));
