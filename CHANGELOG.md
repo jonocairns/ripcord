@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.5.0](https://github.com/jonocairns/ripcord/compare/v2.4.0...v2.5.0) (2026-10-13)
+
+
+### Features
+
+* add application tracing and voice diagnostics ([#354](https://github.com/jonocairns/ripcord/issues/354)) ([5d1633d](https://github.com/jonocairns/ripcord/commit/5d1633d49a17902dfd30bc7e4b8fa22b00ecd1c3))
+* add local trace logging and richer voice diagnostics ([#360](https://github.com/jonocairns/ripcord/issues/360)) ([b85221b](https://github.com/jonocairns/ripcord/commit/b85221bce86f2a693b5d388958576c2b192b0909))
+* add stream lifecycle and playback diagnostics ([#355](https://github.com/jonocairns/ripcord/issues/355)) ([2c0cfd3](https://github.com/jonocairns/ripcord/commit/2c0cfd3a9878a16f29657b9b8cdab74b015f8702))
+* route client diagnostics and errors through the server ([#357](https://github.com/jonocairns/ripcord/issues/357)) ([c690815](https://github.com/jonocairns/ripcord/commit/c6908155e955c0430837813ac52eb4e8ce60e863))
+* route provider-neutral traces through the server ([#358](https://github.com/jonocairns/ripcord/issues/358)) ([12cb23d](https://github.com/jonocairns/ripcord/commit/12cb23d65015041aae39c5c20dffdbf64fd02274))
+
+
+### Bug Fixes
+
+* keep browser diagnostics on the server by default ([#359](https://github.com/jonocairns/ripcord/issues/359)) ([ef7bcdb](https://github.com/jonocairns/ripcord/commit/ef7bcdb9968cc1e555bf6a5cd4cf7c478b1c7591))
+
 ## [2.4.0](https://github.com/jonocairns/ripcord/compare/v2.3.1...v2.4.0) (2026-10-09)
 
 
