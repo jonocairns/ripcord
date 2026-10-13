@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.1](https://github.com/jonocairns/ripcord/compare/v2.5.0...v2.5.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* bundle shared package into desktop main process ([#361](https://github.com/jonocairns/ripcord/issues/361)) ([6fdd68a](https://github.com/jonocairns/ripcord/commit/6fdd68a517e8620a354353d2d52e816c81315f51))
+
 ## [2.5.0](https://github.com/jonocairns/ripcord/compare/v2.4.0...v2.5.0) (2026-10-13)
 
 
