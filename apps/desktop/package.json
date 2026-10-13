@@ -21,7 +21,7 @@
 		"launch:windows:dev": "wait-on tcp:5173 && node ./scripts/launch-windows.mjs --dev",
 		"build:sidecar": "node ./scripts/build-sidecar.mjs --release",
 		"build:sidecar:optional": "node ./scripts/build-sidecar.mjs --release --optional",
-		"build:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --external @evan/opus --clean",
+		"build:main": "tsup src/main/index.ts src/preload/index.ts --format cjs --platform node --out-dir dist --external electron --external @evan/opus --clean && node ./scripts/check-main-bundle.mjs",
 		"prepare:renderer": "node ./scripts/prepare-renderer-dist.mjs",
 		"build": "cd ../client && bun run build && cd ../desktop && bun run prepare:renderer && bun run build:sidecar && bun run build:main && bun run package:preview",
 		"package:preview": "electron-builder --dir",
