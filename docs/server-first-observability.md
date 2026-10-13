@@ -170,8 +170,9 @@ no metrics backend or new collector is required.
 ## Provider-neutral tracing (PR 2)
 
 No compatible trace backend was identified in the current homelab infrastructure.
-VictoriaLogs receives logs, not traces. With no OTLP endpoint, tracing export is
-deferred and the instrumentation API stays available as a no-op. Installing a
+VictoriaLogs receives logs, not traces. With no OTLP endpoint and console tracing
+disabled, the instrumentation API stays available as a no-op. Local trace logging
+is a separate opt-in output described below. Installing a
 collector is optional; it is useful for a backend requiring protocol conversion,
 central tail sampling or durable queues, and is not required by this change.
 
@@ -187,14 +188,15 @@ RIPCORD_SERVER_TRACING_SAMPLE_RATE=0.01
 
 INI equivalents in `[server]` are `tracingOtlpEndpoint`, `tracingOtlpHeaders`,
 `clientTracingSampleRate` and `serverTracingSampleRate`. Headers are a JSON object;
-invalid endpoint/header configuration disables export. HTTPS is recommended
+invalid endpoint/header configuration disables OTLP export. Local trace logging
+can remain enabled independently. HTTPS is recommended
 outside a trusted local network. Credentials stay in server configuration and
 are never included in join or `/info`. The independently configured error adapter
 can be absent. No collector or automatic alert provisioning is installed.
 
 Both existing root sampling defaults remain **0**. Standard ParentBased sampling
 preserves inherited sampled/unsampled decisions; the server can continue a
-sampled client parent even when its own root rate is zero. Without a trace backend
+sampled client parent even when its own root rate is zero. Without an enabled trace output
 or authenticated `tracingVersion=1`/`tracingEnabled`, new clients export no traces
 and send ordinary tRPC inputs. Older clients keep their legacy behavior. Logs and
 error reporting work regardless of trace enablement.
@@ -239,7 +241,8 @@ after local voice cleanup, alongside diagnostics; abrupt crashes/tab termination
 can still lose spans.
 
 The authenticated trace route allows 30 requests/minute/user and acknowledges
-validated input before export. The server relay queues at most 64 batches, expires
+validated input before export. Each enabled server relay output queues at most
+64 batches, expires
 queued work after 30 seconds, rejects records older than five minutes or over one
 minute in the future, and deduplicates user/trace/span IDs in a bounded 4096-entry
 five-minute map. It exports the sanitized original client resource/spans as OTLP
@@ -269,6 +272,8 @@ shutdown. An in-flight shutdown drop means delivery is unconfirmed; a backend
 may already have accepted it. `trace_relay_export_failure` counts failed HTTP
 attempts and `trace_relay_retry` counts additional attempts actually started. These units
 can overlap; retry warnings do not imply final loss when a later attempt succeeds.
+Relay loss counters count work per enabled output, so the same spans or batch can
+contribute to both outputs' counters when both local and OTLP output are enabled.
 
 The standard server SpanExporter decorator reports `trace_export_failure` per
 failed SDK export callback or synchronous export failure, and
@@ -278,8 +283,9 @@ span objects and callback results through unchanged, delegates optional
 shutdown rejection or the existing overall trace shutdown deadline increments
 `trace_shutdown_failure`. Invalid configured destinations and failed provider
 initialization increment `trace_configuration_invalid` and
-`trace_initialize_failure`; an absent endpoint intentionally disables tracing
-without reporting a failure. Health records have no inherited request trace IDs.
+`trace_initialize_failure`; an absent endpoint with console tracing disabled
+intentionally disables tracing without reporting a failure. Health records have
+no inherited request trace IDs.
 
 These counters do not observe browser/server BatchSpanProcessor internal queue
 overflows, unsampled spans, successful HTTP responses containing OTLP partial
@@ -287,3 +293,82 @@ rejection, or all downstream storage failures. Provider credentials/error string
 are never health labels. Deployments should monitor their backend/collector's
 own rejected-span/drop counters as well; local acceptance and HTTP success remain
 best-effort boundaries rather than proof of durable storage.
+
+## Local trace logging and server retention
+
+Console trace logging is opt-in and needs no OTLP backend or collector. To collect
+sampled client and server spans in the existing JSON console/file pipeline:
+
+```sh
+RIPCORD_TRACING_CONSOLE_ENABLED=true
+RIPCORD_CLIENT_TRACING_SAMPLE_RATE=0.1
+RIPCORD_SERVER_TRACING_SAMPLE_RATE=0.1
+```
+
+Set both rates to `1` for full root sampling while investigating a drop. Existing
+rates still default to `0`; enabling an output alone does not change sampling.
+Standard parent-based sampling preserves an actual parent's sampling decision.
+
+`RIPCORD_TRACING_CONSOLE_LEVEL` defaults to `info` and also accepts `debug`.
+Debug trace logs require `SHARKORD_DEBUG=true`; a console sink filtered out by the
+logger threshold does not advertise client tracing support. Sampling controls
+span capture volume, independently of severity. Failed spans retain `status:error`
+in trace records at the selected trace level. Actual exceptions and telemetry
+health warnings keep their existing error/warn levels.
+
+INI equivalents in `[server]` are `tracingConsoleEnabled` and
+`tracingConsoleLevel`. Console and optional OTLP export can run together. Turn
+console tracing off with `RIPCORD_TRACING_CONSOLE_ENABLED=false`. With console off
+and an empty OTLP endpoint, tracing is disabled. Configuration changes take effect
+after server restart/rejoin. No endpoint credentials are advertised to clients.
+
+`kind:trace`, `message:"[trace-span]"` records preserve original trace/span/parent
+IDs, service/runtime/release, start/end nanosecond timestamps, duration, status and
+bounded scrubbed attributes. Client records also carry authenticated reporter
+identity. They are searchable log records, not a trace-store UI. Client batches
+use independent bounded queues, expiry and deduplication for local and OTLP
+output; OTLP retries do not
+repeat local log writes. A failing local client trace sink increments
+`trace_log_failure` once per affected batch and cannot block optional OTLP export.
+Server exporter failures use the existing trace export counters. Each server sink
+has its own bounded standard SDK batch processor, so OTLP failures do not delay
+local trace logging.
+
+Server `app.log` and `error.log` now rotate at 10 MiB, retaining five files per
+stream including the active file (two files minimum). Configure `[server].logMaxSizeMb` and
+`logMaxFiles`, or `RIPCORD_LOG_MAX_SIZE_MB` and `RIPCORD_LOG_MAX_FILES`. Size is a
+rotation threshold, not a strict disk quota: a final record can cross it. Stdout
+and Docker log retention remain the deployment's responsibility; desktop
+rotation remains independent. Older archives are discarded, so use the existing
+log shipper for longer retention.
+
+Voice diagnostics now retain closed-vocabulary connection state, recovery
+command type/phase/outcome, attempt counters, durations, media intent flags,
+WebSocket close codes and standard error type/code. Known transport-failure
+metadata is flattened without raw payloads. Command start/finish records upload
+independently of trace sampling; failures use warning severity. Client-instance,
+producer/consumer/transport and reconnect IDs support incident correlation.
+These operational events can show successful versus failed recovery and broad
+media usage; they are not a complete or durable usage-analytics counter. Queues
+remain bounded and disconnected/crashed clients can lose pending data. Device
+labels, arbitrary close reasons, addresses, SDP, credentials, user content and
+raw nested error data are excluded from this voice context allowlist. During
+bursts, the diagnostic collector retains and dispatches exceptions, warnings, and
+structured state/outcome records before repetitive informational lines. Retries
+keep their original records and order through overflow until acknowledgement,
+expiry or retry exhaustion; original timestamps and sequences are preserved,
+so use those fields to order an incident timeline rather than upload order.
+
+Uploaded voice message labels come from one owned event registry. Additional
+string arguments never become the uploaded message, and unrecognized runtime
+labels become `Voice diagnostic` while approved context is retained. Local debug
+logging still accepts its existing callback messages. The dedicated diagnostic
+API also checks owned labels at compile time.
+
+Privacy-approved command types, recovery phases/outcomes, transport states and
+failure sources use exhaustive maps checked against their owning domain types;
+adding or renaming a domain value fails type checking until its diagnostic
+treatment is reviewed. Stream kinds reuse the existing shared enum. This catches
+vocabulary drift without allowing arbitrary objects or free text. New context
+fields still need explicit privacy review and inclusion in the central context
+filter; unknown keys and nested payloads remain excluded.

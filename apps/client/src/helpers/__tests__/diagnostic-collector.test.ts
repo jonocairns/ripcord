@@ -56,6 +56,96 @@ const fixture = (upload?: (batch: TDiagnosticBatch, signal: AbortSignal) => Prom
 	};
 };
 describe('diagnostic delivery boundaries', () => {
+	test('bursts retain and deliver exceptions, warnings and state evidence ahead of repetitive info', async () => {
+		const f = fixture();
+		f.collector.configure('server:user', true);
+		f.collector.authenticate();
+		for (let i = 0; i < 64; i++)
+			f.collector.record({ ...record(), kind: 'diagnostic', level: 'info', message: `noise-${i}` });
+		f.collector.record({
+			...record(),
+			kind: 'diagnostic',
+			level: 'info',
+			message: 'transport-state',
+			context: { state: 'disconnected' },
+		});
+		f.collector.record({ ...record(), kind: 'diagnostic', level: 'warning', message: 'recovery-warning' });
+		f.collector.record({ ...record(), message: 'capture-error' });
+		for (let i = 0; i < 10; i++)
+			f.collector.record({ ...record(), kind: 'diagnostic', level: 'info', message: `new-noise-${i}` });
+		await f.run();
+		expect(f.batches[0]?.records.slice(0, 3).map((r) => r.message)).toEqual([
+			'capture-error',
+			'recovery-warning',
+			'transport-state',
+		]);
+		expect(f.batches[0]?.droppedEvents).toBe(13);
+		const sequences = f.batches[0]?.records.slice(0, 3).map((r) => r.sequence);
+		expect(sequences).toEqual([67, 66, 65]);
+		f.collector.dispose();
+	});
+	test('higher-priority arrivals cannot replace an unacknowledged retry batch', async () => {
+		const batches: TDiagnosticBatch[] = [];
+		const f = fixture(async (batch) => {
+			batches.push(batch);
+			if (batches.length === 1) throw new Error('Acknowledgement lost');
+		});
+		f.collector.configure('server:user', true);
+		f.collector.authenticate();
+		f.collector.record({ ...record(), kind: 'diagnostic', level: 'info', message: 'original-info' });
+		await f.run();
+		f.collector.record({ ...record(), message: 'new-error' });
+		await f.run();
+		expect(batches[1]?.records).toEqual(batches[0]?.records);
+		await f.run();
+		expect(batches[2]?.records.map((r) => r.message)).toEqual(['new-error']);
+		f.collector.dispose();
+	});
+	test('overflow preserves every pending retry record in its original priority order', async () => {
+		const batches: TDiagnosticBatch[] = [];
+		const f = fixture(async (batch) => {
+			batches.push(batch);
+			if (batches.length === 1) throw new Error('Acknowledgement lost');
+		});
+		f.collector.configure('server:user', true);
+		f.collector.authenticate();
+		for (let i = 0; i < 64; i++)
+			f.collector.record({
+				...record(),
+				kind: 'diagnostic',
+				level: i === 7 ? 'warning' : 'info',
+				message: `original-${i}`,
+			});
+		await f.run();
+		for (let i = 0; i < 64; i++) f.collector.record({ ...record(), message: `new-error-${i}` });
+		await f.run();
+		expect(batches[1]?.records).toEqual(batches[0]?.records);
+		expect(batches[1]?.records).toHaveLength(8);
+		expect(batches[1]?.records[0]?.message).toBe('original-7');
+		expect(batches[1]?.droppedEvents).toBe(64);
+		while (f.jobs.size > 0) await f.run();
+		expect(batches.slice(1).flatMap((batch) => batch.records)).toHaveLength(64);
+		f.collector.dispose();
+	});
+	test('pending retry protection still expires old records and allows fresh reports', async () => {
+		const batches: TDiagnosticBatch[] = [];
+		const f = fixture(async (batch) => {
+			batches.push(batch);
+			if (batches.length === 1) throw new Error('Acknowledgement lost');
+		});
+		f.collector.configure('server:user', true);
+		f.collector.authenticate();
+		f.collector.record(record());
+		await f.run();
+		f.collector.pause();
+		f.time(300_101);
+		f.collector.authenticate();
+		f.collector.record({ ...record(300_101), message: 'fresh-report' });
+		await f.run();
+		expect(batches[1]?.records.map((r) => r.message)).toEqual(['fresh-report']);
+		expect(batches[1]?.droppedEvents).toBe(1);
+		f.collector.dispose();
+	});
 	test('drops startup, unsupported and disconnected errors, bounds memory and preserves client time', async () => {
 		const f = fixture();
 		f.collector.record(record());

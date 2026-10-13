@@ -21,7 +21,8 @@ type TTelemetryHealthReason =
 	| 'trace_export_failed_spans'
 	| 'trace_shutdown_failure'
 	| 'trace_configuration_invalid'
-	| 'trace_initialize_failure';
+	| 'trace_initialize_failure'
+	| 'trace_log_failure';
 type TTelemetryHealthSummary = {
 	message: 'Telemetry delivery health';
 	source: 'telemetry_health';

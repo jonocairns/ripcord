@@ -3,7 +3,7 @@ import { TRPCClientError } from '@trpc/client';
 import { toast } from 'sonner';
 import { Dialog } from '@/components/dialogs/dialogs';
 import { refreshAccessToken, revokeRefreshToken } from '@/helpers/auth';
-import { logDebug, setErrorReportingUser } from '@/helpers/browser-logger';
+import { logDebug, recordVoiceDiagnostic, setErrorReportingUser } from '@/helpers/browser-logger';
 import { setErrorReportingIdentity } from '@/helpers/error-reporting';
 import { configureDiagnosticDelivery } from '@/helpers/error-reporting/delivery';
 import { getHostFromServer } from '@/helpers/get-file-url';
@@ -14,6 +14,7 @@ import {
 	connectToTRPC,
 	getTRPCClient,
 	getTRPCClientIfInitialized,
+	getWsClientInstanceId,
 	isTRPCSocketOpen,
 	markTRPCSessionAuthenticated,
 	reconnectTRPC,
@@ -227,7 +228,14 @@ export const joinServer = async (
 		} else if (opts?.reconnect) {
 			clearReconnectSnapshotEventBuffer();
 		}
-		if (!data.mustChangePassword) markTRPCSessionAuthenticated(trpc);
+		if (!data.mustChangePassword) {
+			markTRPCSessionAuthenticated(trpc);
+			if (trpc === getTRPCClientIfInitialized() && isTRPCSocketOpen()) {
+				recordVoiceDiagnostic('Server connection authenticated', [
+					{ clientInstanceId: getWsClientInstanceId(), reconnect: opts?.reconnect ?? false },
+				]);
+			}
+		}
 	} catch (error) {
 		if (opts?.reconnect) {
 			// Pause (not clear) so events buffered during this failed attempt are

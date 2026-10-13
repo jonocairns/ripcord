@@ -3,6 +3,7 @@ import { createLogger, format, transports } from 'winston';
 import { config } from './config';
 import { bootLog } from './helpers/boot-log';
 import { ensureDir } from './helpers/fs';
+import { createRotatingFileTransport } from './helpers/log-retention';
 import { LOGS_PATH } from './helpers/paths';
 import { serverErrorFormat, serverLogFormat } from './helpers/server-log-format';
 import { sentryFormat } from './sentry';
@@ -18,6 +19,7 @@ await ensureDir(LOGS_PATH);
 bootLog('logger: log directory ready');
 
 const level = config.server.debug ? 'debug' : 'info';
+const retention = { maxSizeBytes: config.server.logMaxSizeMb * 1024 * 1024, maxFiles: config.server.logMaxFiles };
 
 bootLog('logger: creating transports');
 const logger = createLogger({
@@ -25,14 +27,8 @@ const logger = createLogger({
 	format: combine(serverErrorFormat(), splat(), errors({ stack: true }), sentryFormat(), uncolorize(), serverLogFormat),
 	transports: [
 		new transports.Console(),
-		new transports.File({
-			filename: appLog,
-			level,
-		}),
-		new transports.File({
-			filename: errorLog,
-			level: 'error',
-		}),
+		createRotatingFileTransport(appLog, level, retention),
+		createRotatingFileTransport(errorLog, 'error', retention),
 	],
 });
 setTelemetryHealthReporter((summary) => logger.warn(summary));

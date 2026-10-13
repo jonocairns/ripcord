@@ -29,7 +29,9 @@ an optional error/replay/native-crash integration, separate from tracing.
 Configure `RIPCORD_TRACING_OTLP_ENDPOINT` and optional server-only
 `RIPCORD_TRACING_OTLP_HEADERS` for a compatible OTLP/HTTP JSON backend. A collector
 is optional; VictoriaLogs is the existing log destination, not a trace store.
-Without a valid destination, export is deferred and instrumentation is a no-op.
+Without a valid destination or enabled local trace logging, instrumentation is a
+no-op. Opt-in console tracing can write spans to the existing server JSON logs
+without a trace backend; see the [local trace logging configuration](server-first-observability.md#local-trace-logging-and-server-retention).
 New clients also require authenticated server tracing capability and enablement.
 
 Client/server root sample rates retain their zero defaults. Standard ParentBased

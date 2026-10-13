@@ -9,6 +9,16 @@ type TCollectorOptions = {
 	cancel?: (timer: ReturnType<typeof setTimeout>) => void;
 };
 
+const retentionPriority = (record: TDiagnosticRecord): number => {
+	if (record.kind === 'exception' || record.level === 'error') return 4;
+	if (record.level === 'warning') return 3;
+	if (record.level === 'debug') return 0;
+	const context = record.context;
+	if (context && ['state', 'connectionState', 'commandType', 'outcome', 'closeCode'].some((key) => key in context))
+		return 2;
+	return 1;
+};
+
 // At most 64 records in memory, eight per request, one request every two seconds.
 // A failed batch is abandoned after three attempts; diagnostics never block media.
 export const createDiagnosticCollector = (options: TCollectorOptions) => {
@@ -63,11 +73,16 @@ export const createDiagnosticCollector = (options: TCollectorOptions) => {
 		const fresh = queue.filter((event) => now() - event.occurredAt <= 300_000);
 		droppedEvents += queue.length - fresh.length;
 		queue = fresh;
-		const retryBatch = queue.filter((event) => retrySequences.has(event.sequence));
-		// Retry the same sequence set. Expiry or overflow creates a new batch
+		const retryBatch = Array.from(retrySequences, (sequence) =>
+			queue.find((event) => event.sequence === sequence),
+		).filter((event) => event !== undefined);
+		// Retry the same records in their original order. Expiry creates a new batch
 		// with its own budget; newly queued events cannot inherit old failures.
 		if (retryBatch.length !== retrySequences.size) attempts = 0;
-		const batch = retryBatch.length > 0 ? retryBatch : queue.slice(0, 8);
+		const batch =
+			retryBatch.length > 0
+				? retryBatch
+				: [...queue].sort((a, b) => retentionPriority(b) - retentionPriority(a) || a.sequence - b.sequence).slice(0, 8);
 		retrySequences = new Set(batch.map((event) => event.sequence));
 		if (batch.length === 0) {
 			attempts = 0;
@@ -156,9 +171,21 @@ export const createDiagnosticCollector = (options: TCollectorOptions) => {
 				sequence += 1;
 				queue.push(parsed.data);
 				if (queue.length > 64) {
-					// Preserve dispatched events until acknowledgement/retry exhaustion.
+					// Preserve dispatched and pending retry events until acknowledgement,
+					// expiry or retry exhaustion.
 					// Dropping them here would count successfully delivered data as lost.
-					const discardIndex = queue.findIndex((event) => !inFlightSequences.has(event.sequence));
+					let discardIndex = -1;
+					let lowestPriority = Infinity;
+					for (let index = 0; index < queue.length; index++) {
+						const candidate = queue[index];
+						if (!candidate || inFlightSequences.has(candidate.sequence) || retrySequences.has(candidate.sequence))
+							continue;
+						const priority = retentionPriority(candidate);
+						if (priority < lowestPriority) {
+							lowestPriority = priority;
+							discardIndex = index;
+						}
+					}
 					if (discardIndex >= 0) queue.splice(discardIndex, 1);
 					droppedEvents += 1;
 				}

@@ -7,6 +7,8 @@ import {
 	recordDiagnostic,
 	setErrorReportingUser,
 } from './error-reporting';
+import { getVoiceDiagnosticContext } from './voice-diagnostic-context';
+import { getVoiceDiagnosticMessage, type TVoiceDiagnosticMessage } from './voice-diagnostic-events';
 
 const OVERRIDE_DEBUG = false;
 
@@ -18,31 +20,20 @@ const logDebug = (...args: unknown[]) => {
 	}
 };
 
-const logVoice = (...args: unknown[]) => {
-	recordDesktopDiagnostic('voice', { details: args });
+const recordVoiceDiagnostic = (
+	message: TVoiceDiagnosticMessage,
+	args: readonly unknown[],
+	level: 'info' | 'warning' = 'info',
+) => {
 	try {
 		recordDiagnostic({
-			context: Object.fromEntries(
-				args
-					.flatMap((value) => {
-						if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
-						return Object.entries(value).filter(
-							([key, v]) =>
-								/^(channelId|userId|producerId|consumerId|transportId|operationId|reconnectAttemptId)$/.test(key) &&
-								(typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'),
-						);
-					})
-					.slice(0, 20),
-			),
+			context: getVoiceDiagnosticContext(args),
 			...getActiveTraceContext(),
 			id: crypto.randomUUID(),
 			occurredAt: Date.now(),
 			kind: 'diagnostic',
-			level: 'info',
-			message: args
-				.filter((v) => typeof v === 'string')
-				.join(' ')
-				.slice(0, 1000),
+			level,
+			message: getVoiceDiagnosticMessage(message),
 			runtime: getRuntimeTag(),
 			release: typeof VITE_APP_VERSION === 'string' ? VITE_APP_VERSION : 'unknown',
 			environment: import.meta.env.MODE,
@@ -50,6 +41,11 @@ const logVoice = (...args: unknown[]) => {
 	} catch {
 		/* Optional. */
 	}
+};
+const logVoice = (message: string, ...details: unknown[]) => {
+	const args = [message, ...details];
+	recordDesktopDiagnostic('voice', { details: args });
+	recordVoiceDiagnostic(getVoiceDiagnosticMessage(message), details);
 	console.log('%c[VOICE-PROVIDER]', 'color: salmon; font-weight: bold;', ...args);
 };
 
@@ -71,4 +67,4 @@ const reportError = (message: string, error?: unknown, context?: unknown) => {
 	captureError(message, error, context);
 };
 
-export { configureClientErrorReporting, logDebug, logVoice, reportError, setErrorReportingUser };
+export { configureClientErrorReporting, logDebug, logVoice, recordVoiceDiagnostic, reportError, setErrorReportingUser };
