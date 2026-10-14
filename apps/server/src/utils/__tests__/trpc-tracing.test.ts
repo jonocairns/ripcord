@@ -90,6 +90,29 @@ describe('application RPC tracing middleware', () => {
 		expect(finish).toHaveBeenCalledWith({ status: 'error' });
 	});
 
+	test('speaking-indicator updates run untraced and still unwrap old-client trace envelopes', async () => {
+		const { start } = observeMiddleware();
+		const handler = mock(({ input }: { input: { speaking: boolean } }) => input);
+		const caller = t
+			.router({
+				voice: t.router({
+					updateActivity: publicProcedure.input(z.object({ speaking: z.boolean() })).mutation(handler),
+				}),
+			})
+			.createCaller(await createMockContext({ customToken: await getMockedToken(1) }));
+		const envelope = {
+			__ripcordTrace: { traceparent: `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01` },
+			input: { speaking: true },
+		};
+		// Clients released before the skip still wrap this procedure's input.
+		const call: unknown = Reflect.get(caller.voice, 'updateActivity');
+		if (typeof call !== 'function') throw Error('Missing fixture procedure');
+		expect(await call(envelope)).toEqual({ speaking: true });
+		expect(await caller.voice.updateActivity({ speaking: false })).toEqual({ speaking: false });
+		expect(handler).toHaveBeenCalledTimes(2);
+		expect(start).not.toHaveBeenCalled();
+	});
+
 	test('disabled tracing uses the no-op observation and preserves success and failure', async () => {
 		tracing.configureServerTracing(false);
 		const originalStart = tracing.startSpanObservation;
