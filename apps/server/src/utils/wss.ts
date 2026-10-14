@@ -466,7 +466,7 @@ const createWsServer = async (server: http.Server) => {
 				usersIpMap.delete(userId);
 				pubsub.publish(ServerEvents.USER_LEAVE, userId);
 
-				logger.info('%s left the server', user.name);
+				logger.info('%s left the server', user.name, { userId, wsCloseCode });
 
 				enqueueActivityLog({
 					type: ActivityLogType.USER_LEFT,

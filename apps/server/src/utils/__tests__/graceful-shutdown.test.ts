@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { performGracefulShutdown, type TShutdownResources } from '../graceful-shutdown';
+import { handleFatalError, performGracefulShutdown, type TShutdownResources } from '../graceful-shutdown';
 
 const makeDeps = () => {
 	const calls: string[] = [];
@@ -93,5 +93,46 @@ describe('performGracefulShutdown', () => {
 		const exitIndex = calls.findIndex((c) => c.startsWith('exit:'));
 		expect(flushIndex).toBeGreaterThanOrEqual(0);
 		expect(exitIndex).toBe(flushIndex + 1);
+	});
+});
+
+describe('handleFatalError', () => {
+	test('reports the failure with its origin, flushes telemetry, then exits non-zero', async () => {
+		const calls: string[] = [];
+		const failure = new Error('unhandled promise');
+		const report = mock((error: unknown, context: Record<string, unknown>) => {
+			calls.push('report');
+			expect(error).toBe(failure);
+			expect(context).toEqual({ origin: 'unhandledRejection', fatal: true });
+		});
+
+		await handleFatalError('unhandledRejection', failure, {
+			report,
+			flush: async () => {
+				calls.push('flush');
+			},
+			exit: (code) => {
+				calls.push(`exit:${code}`);
+			},
+		});
+
+		expect(report).toHaveBeenCalledTimes(1);
+		expect(calls).toEqual(['report', 'flush', 'exit:1']);
+	});
+
+	test('still exits when reporting or flushing throws', async () => {
+		const exit = mock((_code: number) => {});
+
+		await handleFatalError('uncaughtException', 'not an error', {
+			report: () => {
+				throw new Error('logger unavailable');
+			},
+			flush: async () => {
+				throw new Error('flush failed');
+			},
+			exit,
+		});
+
+		expect(exit).toHaveBeenCalledWith(1);
 	});
 });
