@@ -1,3 +1,4 @@
+import { reportServerError } from '../error-reporting';
 import { logger } from '../logger';
 import { flushSentry } from '../sentry';
 import { diagnosticIngest, flushClientErrorAdapter } from '../telemetry/diagnostics';
@@ -87,6 +88,34 @@ const performGracefulShutdown = async (
 	deps.exit(exitCodeForSignal(signal));
 };
 
+type TFatalErrorOrigin = 'uncaughtException' | 'unhandledRejection';
+
+type TFatalErrorDeps = Pick<TShutdownDeps, 'flush' | 'exit'> & {
+	report: (error: unknown, context: Record<string, unknown>) => void;
+};
+
+let crashing = false;
+
+// Without a Sentry DSN nothing else catches these, and the runtime's default
+// handler prints an unstructured stack to stderr. Report through the logger,
+// flush telemetry, then exit non-zero like the default handler would: the
+// process state is unknown, so the supervisor should restart it.
+const handleFatalError = async (origin: TFatalErrorOrigin, error: unknown, deps: TFatalErrorDeps): Promise<void> => {
+	try {
+		deps.report(error, { origin, fatal: true });
+	} catch {
+		/* Reporting must not prevent the exit. */
+	}
+	await runStep('flush', deps.flush);
+	deps.exit(1);
+};
+
+const flushTelemetry = async (): Promise<void> => {
+	diagnosticIngest.flush();
+	await Promise.allSettled([flushSentry(), flushClientErrorAdapter(), flushServerTracing()]);
+	telemetryHealth.close();
+};
+
 const handleSignal = (signal: NodeJS.Signals): void => {
 	if (shuttingDown) {
 		return;
@@ -95,11 +124,7 @@ const handleSignal = (signal: NodeJS.Signals): void => {
 	shuttingDown = true;
 
 	void performGracefulShutdown(signal, resources, {
-		flush: async () => {
-			diagnosticIngest.flush();
-			await Promise.allSettled([flushSentry(), flushClientErrorAdapter(), flushServerTracing()]);
-			telemetryHealth.close();
-		},
+		flush: flushTelemetry,
 		exit: (code) => process.exit(code),
 		sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 		drainMs: SHUTDOWN_DRAIN_MS,
@@ -112,6 +137,27 @@ const handleSignal = (signal: NodeJS.Signals): void => {
 const registerGracefulShutdown = (): void => {
 	process.once('SIGTERM', () => handleSignal('SIGTERM'));
 	process.once('SIGINT', () => handleSignal('SIGINT'));
+
+	for (const origin of ['uncaughtException', 'unhandledRejection'] as const) {
+		process.on(origin, (error: unknown) => {
+			// A second failure while flushing must not restart the sequence, and a
+			// signal arriving now must not start a competing graceful shutdown.
+			if (crashing) return;
+			crashing = true;
+			shuttingDown = true;
+			void handleFatalError(origin, error, {
+				report: reportServerError,
+				flush: flushTelemetry,
+				exit: (code) => process.exit(code),
+			});
+		});
+	}
 };
 
-export { performGracefulShutdown, registerGracefulShutdown, setShutdownResources, type TShutdownResources };
+export {
+	handleFatalError,
+	performGracefulShutdown,
+	registerGracefulShutdown,
+	setShutdownResources,
+	type TShutdownResources,
+};

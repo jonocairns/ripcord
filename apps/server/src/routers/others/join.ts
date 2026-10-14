@@ -143,7 +143,7 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
 			message: 'User not present in public users',
 		});
 
-		logger.info(`%s joined the server`, ctx.user.name);
+		logger.info('%s joined the server', ctx.user.name, { userId: ctx.user.id });
 
 		const publicSettings: TPublicServerSettings = {
 			description: settings.description ?? '',
