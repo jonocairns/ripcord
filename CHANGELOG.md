@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.5.2](https://github.com/jonocairns/ripcord/compare/v2.5.1...v2.5.2) (2026-10-14)
+
+
+### Bug Fixes
+
+* **desktop:** fail builds that externalize workspace packages ([#364](https://github.com/jonocairns/ripcord/issues/364)) ([3953031](https://github.com/jonocairns/ripcord/commit/3953031313ba97a5e6b1477ecced024c04e2f609))
+* keep config.ini settings when new keys are added ([#363](https://github.com/jonocairns/ripcord/issues/363)) ([64cd41c](https://github.com/jonocairns/ripcord/commit/64cd41c32e3f78527c0af6b6bd1cbdc1a65dd397))
+* log server presence with user IDs and report fatal errors ([#367](https://github.com/jonocairns/ripcord/issues/367)) ([d661dff](https://github.com/jonocairns/ripcord/commit/d661dff83aca08488b8fb31afb2bd853eec2e9ac))
+* stop tracing voice activity updates ([#366](https://github.com/jonocairns/ripcord/issues/366)) ([e4a41c4](https://github.com/jonocairns/ripcord/commit/e4a41c4fd58534959ec7c95cb9c87689a2c6bea8))
+
 ## [2.5.1](https://github.com/jonocairns/ripcord/compare/v2.5.0...v2.5.1) (2026-10-13)
 
 
