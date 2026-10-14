@@ -1,5 +1,6 @@
 import type { ChannelPermission, Permission, TUser, TUserPresenceStatus, UserStatus } from '@sharkord/shared';
 import { traceEnvelopeSchema } from '@sharkord/shared';
+import { isUntracedRpcPath } from '@sharkord/shared/telemetry/tracing';
 import { initTRPC, TRPCError } from '@trpc/server';
 import chalk from 'chalk';
 import type WebSocket from 'ws';
@@ -56,7 +57,7 @@ const tracingMiddleware = t.middleware(async ({ path, type, next, getRawInput, c
 	const raw = await getRawInput();
 	const envelope = traceEnvelopeSchema.safeParse(raw);
 	const runNext = () => (envelope.success ? next({ getRawInput: async () => envelope.data.input }) : next());
-	if (path.startsWith('telemetry.')) return runNext();
+	if (isUntracedRpcPath(path)) return runNext();
 	return withRemoteTraceContext(
 		ctx.authenticated && envelope.success ? envelope.data.__ripcordTrace : undefined,
 		async () => {
@@ -142,6 +143,10 @@ const rateLimitedProcedure = (procedure: typeof t.procedure, options: TRateLimit
 		windowMs: options.windowMs,
 		maxEntries: options.maxEntries,
 	});
+	// Rejections are otherwise debug-only, so production would never see a
+	// misbehaving client. Warn at most once per window to keep a flood bounded.
+	let lastWarnedAt = Number.NEGATIVE_INFINITY;
+	let suppressedRejections = 0;
 
 	const rateLimitMiddleware = t.middleware(async ({ ctx, next, path }) => {
 		const hasUserId = Number.isInteger(ctx.userId) && ctx.userId > 0;
@@ -177,6 +182,20 @@ const rateLimitedProcedure = (procedure: typeof t.procedure, options: TRateLimit
 
 		if (!rateLimit.allowed) {
 			logger.debug(`${chalk.dim('[Rate Limiter tRPC]')} ${options.logLabel} rate limited for key "${key}"`);
+
+			const now = performance.now();
+			if (now - lastWarnedAt >= options.windowMs) {
+				logger.warn(
+					'[Rate Limiter tRPC] %s rate limited for key "%s" (%d other rejections suppressed since the last warning)',
+					options.logLabel,
+					key.startsWith('user:') ? key : 'ip',
+					suppressedRejections,
+				);
+				lastWarnedAt = now;
+				suppressedRejections = 0;
+			} else {
+				suppressedRejections += 1;
+			}
 
 			throw new TRPCError({
 				code: 'TOO_MANY_REQUESTS',

@@ -59,6 +59,11 @@ const safely = (effect: () => void): void => {
 	}
 };
 
+// Telemetry relays would trace themselves, and speaking-indicator updates fire
+// on every talk/pause transition, burying the spans that explain a session.
+const UNTRACED_RPC_PATHS = new Set(['voice.updateActivity']);
+const isUntracedRpcPath = (path: string): boolean => path.startsWith('telemetry.') || UNTRACED_RPC_PATHS.has(path);
+
 const noOpObservation: TSpanObservation = { run: (effect) => effect(), finish: () => {} };
 
 const createTracing = (adapter: TTracingAdapter, isEnabled: () => boolean = () => true) => {
@@ -146,4 +151,4 @@ const createTracing = (adapter: TTracingAdapter, isEnabled: () => boolean = () =
 };
 
 export type { TSpanObservation, TSpanOptions, TTracingAdapter };
-export { createTracing };
+export { createTracing, isUntracedRpcPath };

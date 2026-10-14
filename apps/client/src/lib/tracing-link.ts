@@ -1,5 +1,6 @@
 import type { AppRouter } from '@sharkord/shared';
 import { context, propagation } from '@sharkord/shared/telemetry/propagation';
+import { isUntracedRpcPath } from '@sharkord/shared/telemetry/tracing';
 import type { TRPCLink } from '@trpc/client';
 import { observable } from '@trpc/server/observable';
 import { isTracePropagationEnabled } from '@/helpers/telemetry/backend';
@@ -7,7 +8,7 @@ import { startSpanObservation } from '@/helpers/telemetry/tracing';
 export const tracingLink: TRPCLink<AppRouter> =
 	() =>
 	({ op, next }) => {
-		if (!isTracePropagationEnabled() || op.type === 'subscription' || op.path.startsWith('telemetry.')) return next(op);
+		if (!isTracePropagationEnabled() || op.type === 'subscription' || isUntracedRpcPath(op.path)) return next(op);
 		return observable((observer) => {
 			const span = startSpanObservation({
 				name: `rpc.${op.path}`,
