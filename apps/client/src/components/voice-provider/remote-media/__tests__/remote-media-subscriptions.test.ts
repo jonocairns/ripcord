@@ -486,6 +486,26 @@ describe('remote media subscriptions', () => {
 		});
 	});
 
+	it('labels the consumer close emitted when a consume restarts over a live consumer', () => {
+		let state: TRemoteMediaSubscriptions = new Map();
+
+		state = remoteMediaState(markRemoteProducerPresent(state, 1, StreamKind.AUDIO, 100, 'producer-a'));
+		state = remoteMediaState(markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 110, 'producer-a', 1));
+		state = remoteMediaState(markRemoteConsumeSucceeded(state, 1, StreamKind.AUDIO, 120, 'producer-a', 'consumer-a'));
+
+		const restarted = markRemoteConsumeStarted(state, 1, StreamKind.AUDIO, 130, 'producer-a', 2);
+
+		expect(restarted.commands).toContainEqual({
+			type: 'closeConsumer',
+			key: getPendingStreamKey(1, StreamKind.AUDIO),
+			remoteId: 1,
+			kind: StreamKind.AUDIO,
+			consumerId: 'consumer-a',
+			generation: undefined,
+			reason: 'consumer_replaced',
+		});
+	});
+
 	it('reconciles a replaced producer through the snapshot path', () => {
 		let state: TRemoteMediaSubscriptions = new Map();
 

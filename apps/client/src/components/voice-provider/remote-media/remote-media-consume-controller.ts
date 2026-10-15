@@ -633,16 +633,42 @@ const createRemoteMediaConsumeController = <
 		}
 	};
 
-	const closeConsumer = async (remoteId: number, kind: StreamKind, consumerId?: string): Promise<void> => {
+	const closeConsumer = async (
+		remoteId: number,
+		kind: StreamKind,
+		consumerId?: string,
+		reason?: TStreamEventDetails['reason'],
+	): Promise<void> => {
 		const key = getConsumeOperationKey(remoteId, kind);
 		const activeConsumer = activeConsumers.get(key);
 		const targetConsumerId = consumerId ?? activeConsumer?.consumerId;
 
 		if (activeConsumer && (consumerId === undefined || consumerId === activeConsumer.consumerId)) {
-			cleanupActiveConsumer(activeConsumer, { closeLocal: true, notifyLedger: true });
+			cleanupActiveConsumer(activeConsumer, { closeLocal: true, notifyLedger: true, reason });
 		}
 
 		await closeServerConsumer({ remoteId, kind, consumerId: targetConsumerId }, 'explicit close');
+	};
+
+	// True only for a committed consumer that is still playing this exact
+	// producer on the current transport. An in-flight operation returns false:
+	// runConsume already dedupes those, and they have not proven success yet.
+	const hasLiveConsumer = (remoteId: number, kind: StreamKind, producerId: string): boolean => {
+		const key = getConsumeOperationKey(remoteId, kind);
+		if (disposed || operations.has(key)) return false;
+
+		const transport = currentTransport;
+		const record = activeConsumers.get(key);
+
+		return (
+			record !== undefined &&
+			!record.cleanedUp &&
+			record.producerId === producerId &&
+			record.transportGeneration === transportGeneration &&
+			transport !== undefined &&
+			!ports.isTransportClosed(transport) &&
+			!ports.isLocalConsumerClosed(record.consumer)
+		);
 	};
 
 	const invalidateTransport = (): void => {
@@ -683,6 +709,7 @@ const createRemoteMediaConsumeController = <
 		getTransportGeneration: () => transportGeneration,
 		getActiveConsumerProducerId: (remoteId: number, kind: StreamKind): string | undefined =>
 			activeConsumers.get(getConsumeOperationKey(remoteId, kind))?.producerId,
+		hasLiveConsumer,
 		dispose,
 	};
 };

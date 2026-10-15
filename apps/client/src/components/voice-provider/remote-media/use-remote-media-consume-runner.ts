@@ -1,4 +1,4 @@
-import type { StreamKind } from '@sharkord/shared';
+import type { StreamKind, TStreamEventDetails } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { useEffect } from 'react';
 import { useLatestRef } from '@/hooks/use-latest-ref';
@@ -25,7 +25,7 @@ type TCloseRemoteConsumer = (
 	remoteId: number,
 	kind: StreamKind,
 	consumerId?: string,
-	generation?: number,
+	reason?: TStreamEventDetails['reason'],
 ) => Promise<unknown>;
 
 type TUseRemoteMediaConsumeRunnerInput = {
@@ -96,7 +96,7 @@ export const useRemoteMediaConsumeRunner = ({
 			}
 
 			if (command.type === 'closeConsumer') {
-				void closeConsumer(command.remoteId, command.kind, command.consumerId, command.generation);
+				void closeConsumer(command.remoteId, command.kind, command.consumerId, command.reason);
 			}
 		});
 	}, [
