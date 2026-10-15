@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.3](https://github.com/jonocairns/ripcord/compare/v2.5.2...v2.5.3) (2026-10-15)
+
+
+### Bug Fixes
+
+* keep live audio consumers during existing producer sync ([#368](https://github.com/jonocairns/ripcord/issues/368)) ([c4a8296](https://github.com/jonocairns/ripcord/commit/c4a829619b7861bc418a34a33f9d5a8e64215410))
+
 ## [2.5.2](https://github.com/jonocairns/ripcord/compare/v2.5.1...v2.5.2) (2026-10-14)
 
 
