@@ -61,6 +61,7 @@ const messages = [
 	'Ignoring transport failure event for a replaced transport',
 	'Initializing voice provider',
 	'Joining active existing producer sync',
+	'Keeping live audio consumers from existing producer sync',
 	'Late remote consumer cleanup failed',
 	'Microphone restart failed during transport recovery; continuing muted',
 	'New producer event received',

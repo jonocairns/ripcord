@@ -2,6 +2,7 @@ import {
 	getMediasoupKind,
 	StreamKind,
 	type TRemoteProducerIds,
+	type TStreamEventDetails,
 	type TTransportParams,
 	type TVoiceTransportFailureEvent,
 } from '@sharkord/shared';
@@ -18,6 +19,7 @@ import type { TRemoteUserStreamKinds } from '@/types';
 import { withConsumeAttemptTimeout } from './consume-attempt-timeout';
 import {
 	createExistingProducersSweeper,
+	selectAudioRemotesToConsume,
 	type TExistingProducersSweeper,
 	type TExistingProducersSweepRequest,
 } from './existing-producers-sweep';
@@ -646,7 +648,21 @@ const useTransports = ({
 							return;
 						}
 
-						await Promise.all(remoteAudioIds.map((remoteId) => consume(remoteId, StreamKind.AUDIO, rtpCapabilities)));
+						const audioRemotesToConsume = selectAudioRemotesToConsume(producers, (remoteId, producerId) =>
+							consumeController.hasLiveConsumer(remoteId, StreamKind.AUDIO, producerId),
+						);
+						const liveAudioRemoteIds = remoteAudioIds.filter((remoteId) => !audioRemotesToConsume.includes(remoteId));
+
+						if (liveAudioRemoteIds.length > 0) {
+							logVoice('Keeping live audio consumers from existing producer sync', {
+								remoteIds: liveAudioRemoteIds,
+								consumerCount: liveAudioRemoteIds.length,
+							});
+						}
+
+						await Promise.all(
+							audioRemotesToConsume.map((remoteId) => consume(remoteId, StreamKind.AUDIO, rtpCapabilities)),
+						);
 
 						// Re-check after the consume await: a cleanup may have landed while
 						// audio was being consumed, and the pending/reconcile tail below writes
@@ -707,8 +723,8 @@ const useTransports = ({
 	);
 
 	const closeConsumer = useCallback(
-		(remoteId: number, kind: StreamKind, consumerId?: string) =>
-			consumeController.closeConsumer(remoteId, kind, consumerId),
+		(remoteId: number, kind: StreamKind, consumerId?: string, reason?: TStreamEventDetails['reason']) =>
+			consumeController.closeConsumer(remoteId, kind, consumerId, reason),
 		[consumeController],
 	);
 

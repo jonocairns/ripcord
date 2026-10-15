@@ -1,4 +1,4 @@
-import { StreamKind, type TRemoteProducerIds } from '@sharkord/shared';
+import { StreamKind, type TRemoteProducerIds, type TStreamEventDetails } from '@sharkord/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TWatchedRemoteStreamsSnapshot } from '@/features/server/voice/voice-session-machine';
 import { recordStreamEvent } from '@/helpers/stream-observability';
@@ -66,6 +66,7 @@ export type TCloseConsumerCommand = {
 	kind: StreamKind;
 	consumerId?: string;
 	generation?: number;
+	reason?: TStreamEventDetails['reason'];
 };
 
 export type TRemoteMediaRepairIdentity = {
@@ -609,7 +610,13 @@ export const markRemoteConsumeStarted = (
 		return { state: next, commands: cascadedCommands };
 	}
 
-	const closeCommand = closeConsumerCommandFor(existing);
+	// Starting a consume over a live consumer replaces it; label the close so the
+	// stream events show a replacement rather than an ordinary local teardown.
+	const replacedConsumerCommand = closeConsumerCommandFor(existing);
+	const closeCommand: TCloseConsumerCommand | undefined = replacedConsumerCommand && {
+		...replacedConsumerCommand,
+		reason: 'consumer_replaced',
+	};
 	const state = applySlotUpdate(
 		next,
 		existing,

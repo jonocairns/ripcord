@@ -15,6 +15,9 @@ import {
 	waitForStats,
 	watchRemoteCamera,
 } from '../helpers/app';
+import { expectMicrophoneFlow } from '../helpers/microphone';
+import { readServerLog } from '../helpers/server-log';
+import { readStreamServerEvents } from '../helpers/stream-server-events';
 
 test('a remote camera watch survives reconnect and clears when the producer stops', async ({ browser }, testInfo) => {
 	test.setTimeout(150_000);
@@ -126,5 +129,44 @@ test('a remote participant leaving while live removes the camera and stops its m
 		if (producer.context.pages().length > 0) {
 			await disposePeer(producer);
 		}
+	}
+});
+
+test('a late joiner keeps its first audio consumer for a speaker already in the channel', async ({
+	browser,
+}, testInfo) => {
+	const baselineLine = (await readServerLog()).split('\n').length - 1;
+	const speaker = await createPeer(browser, credentialsFor(testInfo, 'speaker'));
+	const joiner = await createPeer(browser, credentialsFor(testInfo, 'joiner'));
+
+	try {
+		await joinVoice(speaker.page);
+		await expectMicrophoneFlow(speaker.page, 'outbound');
+		await joinVoice(joiner.page);
+		await expectMicrophoneFlow(joiner.page, 'inbound');
+
+		// Startup runs a prefetched sweep, then a follow-up sync once voice events
+		// subscribe. The follow-up must keep the speaker's live consumer instead of
+		// closing and re-consuming the same producer.
+		await expect
+			.poll(
+				async () =>
+					(await readServerLog())
+						.split('\n')
+						.slice(baselineLine)
+						.some((line) => line.includes('Keeping live audio consumers from existing producer sync')),
+				{ timeout: 20_000 },
+			)
+			.toBe(true);
+
+		const serverEvents = (await readStreamServerEvents()).filter(
+			(event) => event.lineIndex >= baselineLine && event.source === 'server',
+		);
+		// One consumer each way: joiner -> speaker and speaker -> joiner.
+		expect(serverEvents.filter((event) => event.event === 'consumer_created')).toHaveLength(2);
+		expect(serverEvents.filter((event) => event.event === 'consumer_closed')).toEqual([]);
+	} finally {
+		await disposePeer(joiner);
+		await disposePeer(speaker);
 	}
 });

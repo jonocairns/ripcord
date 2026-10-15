@@ -615,4 +615,61 @@ describe('remote media consume controller', () => {
 		});
 		expect(harness.failedTokens).toEqual([1]);
 	});
+
+	it('reports a live consumer only for a committed consumer of the same producer', async () => {
+		const harness = createHarness();
+		installTransport(harness);
+		harness.setCurrentProducer(4, StreamKind.AUDIO, 'producer-4');
+
+		const consume = harness.controller.consume(request(4, StreamKind.AUDIO, 'producer-4'));
+		harness.consumeDeferreds[0].resolve(allocation('producer-4', 'consumer-4', StreamKind.AUDIO));
+		await flush();
+
+		// Attached but not yet resumed: the operation has not proven success.
+		expect(harness.controller.hasLiveConsumer(4, StreamKind.AUDIO, 'producer-4')).toBe(false);
+
+		harness.resumeDeferreds[0].resolve();
+		await consume;
+
+		expect(harness.controller.hasLiveConsumer(4, StreamKind.AUDIO, 'producer-4')).toBe(true);
+		expect(harness.controller.hasLiveConsumer(4, StreamKind.AUDIO, 'producer-4-republished')).toBe(false);
+		expect(harness.controller.hasLiveConsumer(4, StreamKind.SCREEN_AUDIO, 'producer-4')).toBe(false);
+
+		harness.createdConsumers[0].close();
+		expect(harness.controller.hasLiveConsumer(4, StreamKind.AUDIO, 'producer-4')).toBe(false);
+	});
+
+	it('does not report a live consumer across a transport replacement', async () => {
+		const harness = createHarness();
+		installTransport(harness);
+		harness.setCurrentProducer(4, StreamKind.AUDIO, 'producer-4');
+
+		const consume = harness.controller.consume(request(4, StreamKind.AUDIO, 'producer-4'));
+		harness.consumeDeferreds[0].resolve(allocation('producer-4', 'consumer-4', StreamKind.AUDIO));
+		await flush();
+		harness.resumeDeferreds[0].resolve();
+		await consume;
+
+		installTransport(harness, 'transport-2');
+
+		expect(harness.controller.hasLiveConsumer(4, StreamKind.AUDIO, 'producer-4')).toBe(false);
+	});
+
+	it('labels an explicit close with the caller reason', async () => {
+		const events: TStreamEventDetails[] = [];
+		const harness = createHarness((event) => events.push(event));
+		installTransport(harness);
+		harness.setCurrentProducer(4, StreamKind.AUDIO, 'producer-4');
+
+		const consume = harness.controller.consume(request(4, StreamKind.AUDIO, 'producer-4'));
+		harness.consumeDeferreds[0].resolve(allocation('producer-4', 'consumer-4', StreamKind.AUDIO));
+		await flush();
+		harness.resumeDeferreds[0].resolve();
+		await consume;
+
+		await harness.controller.closeConsumer(4, StreamKind.AUDIO, 'consumer-4', 'consumer_replaced');
+
+		const closed = events.filter((event) => event.event === 'consumer_closed');
+		expect(closed.map((event) => [event.consumerId, event.reason])).toEqual([['consumer-4', 'consumer_replaced']]);
+	});
 });

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import type { TRemoteProducerIds } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
-import { createExistingProducersSweeper, type TExistingProducersSweepRequest } from '../existing-producers-sweep';
+import {
+	createExistingProducersSweeper,
+	selectAudioRemotesToConsume,
+	type TExistingProducersSweepRequest,
+} from '../existing-producers-sweep';
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -151,5 +155,54 @@ describe('existing producers sweeper', () => {
 		expect(tagsOf(calls)).toEqual(['stalled', 'fresh', 'after']);
 		deferreds[2].resolve();
 		await fresh;
+	});
+});
+
+describe('selectAudioRemotesToConsume', () => {
+	const liveConsumers = new Map([
+		[4, 'producer-4'],
+		[7, 'producer-7'],
+	]);
+	const hasLiveConsumer = (remoteId: number, producerId: string) => liveConsumers.get(remoteId) === producerId;
+
+	it('keeps remotes that already play the snapshot producer', () => {
+		const remoteIds = selectAudioRemotesToConsume(
+			{
+				remoteAudioIds: [4, 7],
+				remoteAudioProducers: [
+					{ remoteId: 4, producerId: 'producer-4' },
+					{ remoteId: 7, producerId: 'producer-7' },
+				],
+			},
+			hasLiveConsumer,
+		);
+
+		expect(remoteIds).toEqual([]);
+	});
+
+	it('consumes remotes whose producer changed or that have no live consumer', () => {
+		const remoteIds = selectAudioRemotesToConsume(
+			{
+				remoteAudioIds: [4, 7, 9],
+				remoteAudioProducers: [
+					{ remoteId: 4, producerId: 'producer-4' },
+					{ remoteId: 7, producerId: 'producer-7-republished' },
+					{ remoteId: 9, producerId: 'producer-9' },
+				],
+			},
+			hasLiveConsumer,
+		);
+
+		expect(remoteIds).toEqual([7, 9]);
+	});
+
+	it('consumes every remote when the snapshot has no producer ids', () => {
+		expect(selectAudioRemotesToConsume({ remoteAudioIds: [4, 7] }, hasLiveConsumer)).toEqual([4, 7]);
+		expect(
+			selectAudioRemotesToConsume(
+				{ remoteAudioIds: [4, 7], remoteAudioProducers: [{ remoteId: 4, producerId: 'producer-4' }] },
+				hasLiveConsumer,
+			),
+		).toEqual([7]);
 	});
 });

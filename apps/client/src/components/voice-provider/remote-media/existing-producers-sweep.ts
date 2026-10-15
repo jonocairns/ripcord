@@ -91,5 +91,25 @@ const createExistingProducersSweeper = (
 	return { schedule, reset };
 };
 
+/**
+ * Audio remotes a sweep still needs to consume.
+ *
+ * Startup runs a prefetched sweep and then a follow-up sweep once voice events
+ * subscribe, so a producer published between the two is not missed. The
+ * follow-up must not rebuild a remote that is already playing the producer the
+ * snapshot reports: starting a consume closes the live consumer first, which
+ * cuts that remote's audio. Snapshots without producer ids (older servers) keep
+ * consuming every remote.
+ */
+const selectAudioRemotesToConsume = (
+	producers: Pick<TRemoteProducerIds, 'remoteAudioIds' | 'remoteAudioProducers'>,
+	hasLiveConsumer: (remoteId: number, producerId: string) => boolean,
+): number[] =>
+	producers.remoteAudioIds.filter((remoteId) => {
+		const producerId = producers.remoteAudioProducers?.find((producer) => producer.remoteId === remoteId)?.producerId;
+
+		return producerId === undefined || !hasLiveConsumer(remoteId, producerId);
+	});
+
 export type { TExistingProducersSweeper, TExistingProducersSweepRequest, TRunExistingProducersSweep };
-export { createExistingProducersSweeper };
+export { createExistingProducersSweeper, selectAudioRemotesToConsume };
