@@ -159,8 +159,78 @@ describe('fetchPreviewResource', () => {
 		expect(resource?.data.length).toBe(MAX_PREVIEW_BYTES);
 	});
 
+	test('falls through to the next vetted address when a connection fails', async () => {
+		requests.length = 0;
+
+		// The server only listens on IPv4, so the IPv6 loopback refuses the connection.
+		const resource = await fetchPreviewResource(
+			`http://public.test:${port}/page`,
+			network({ 'public.test': ['::1', '127.0.0.1'] }, ['::1', '127.0.0.1']),
+		);
+
+		expect(resource?.status).toBe(200);
+		expect(requests).toEqual([{ path: '/page', host: `public.test:${port}` }]);
+	});
+
+	test('fails when no vetted address accepts the connection', async () => {
+		await expect(
+			fetchPreviewResource(`http://public.test:${port}/page`, network({ 'public.test': ['::1'] }, ['::1'])),
+		).rejects.toThrow();
+	});
+
 	test('refuses non-public addresses by default', async () => {
 		expect(await fetchPreviewResource(`http://127.0.0.1:${port}/page`)).toBeUndefined();
 		expect(await fetchPreviewResource(`http://localhost:${port}/page`)).toBeUndefined();
+	});
+});
+
+// The connection goes to an IP, so the certificate must still be checked against
+// the posted hostname. The fixture is a self-signed certificate for public.test.
+describe('fetchPreviewResource over HTTPS', () => {
+	const fixture = (name: string) => Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).text();
+
+	// A fresh server per test gives each fetch a new port, so a pooled
+	// connection from an earlier test can't skip the certificate check.
+	const withHttpsServer = async (run: (port: number, ca: string) => Promise<void>) => {
+		const ca = await fixture('preview-tls-cert.pem');
+		const server = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			tls: { cert: ca, key: await fixture('preview-tls-key.pem') },
+			fetch: () => new Response('<html><head><title>ok</title></head></html>'),
+		});
+
+		try {
+			await run(server.port ?? 0, ca);
+		} finally {
+			server.stop(true);
+		}
+	};
+
+	const network = (hostname: string, ca?: string) => ({
+		resolveHost: async (name: string) => (name === hostname ? ['127.0.0.1'] : []),
+		isAllowedAddress: (address: string) => address === '127.0.0.1',
+		ca,
+	});
+
+	test('validates the certificate against the original hostname', async () => {
+		await withHttpsServer(async (port, ca) => {
+			const resource = await fetchPreviewResource(`https://public.test:${port}/`, network('public.test', ca));
+
+			expect(resource?.status).toBe(200);
+			expect(resource?.data).toContain('<title>ok</title>');
+		});
+	});
+
+	test('rejects a certificate issued for a different hostname', async () => {
+		await withHttpsServer(async (port, ca) => {
+			await expect(fetchPreviewResource(`https://other.test:${port}/`, network('other.test', ca))).rejects.toThrow();
+		});
+	});
+
+	test('rejects a certificate from an untrusted issuer', async () => {
+		await withHttpsServer(async (port) => {
+			await expect(fetchPreviewResource(`https://public.test:${port}/`, network('public.test'))).rejects.toThrow();
+		});
 	});
 });

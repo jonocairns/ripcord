@@ -12,6 +12,8 @@ const MAX_PREVIEW_BYTES = 1024 * 1024;
 type TPreviewNetwork = {
 	resolveHost: (hostname: string) => Promise<string[]>;
 	isAllowedAddress: (address: string) => boolean;
+	// Extra trusted CA, so tests can serve HTTPS with a self-signed certificate.
+	ca?: string;
 };
 
 const stripIpv6Brackets = (hostname: string) => hostname.replace(/^\[|\]$/g, '');
@@ -51,22 +53,23 @@ const publicNetwork: TPreviewNetwork = {
 	isAllowedAddress: isPublicAddress,
 };
 
-const resolveAllowedAddress = async (hostname: string, network: TPreviewNetwork): Promise<string | undefined> => {
+const resolveAllowedAddresses = async (hostname: string, network: TPreviewNetwork): Promise<string[] | undefined> => {
 	const literal = stripIpv6Brackets(hostname);
 	const addresses = isIP(literal) ? [literal] : await network.resolveHost(literal);
-	const [first] = addresses;
 
 	// Reject if any record is private so a mixed answer can't be retried into one.
-	if (!first || !addresses.every(network.isAllowedAddress)) return undefined;
+	if (addresses.length === 0 || !addresses.every(network.isAllowedAddress)) return undefined;
 
-	return first;
+	return addresses;
 };
 
 // Connect to the vetted address rather than letting fetch() resolve the name
 // again, which a DNS-rebinding host could answer with an internal address.
 // Host and TLS SNI keep the original name, so virtual hosting and certificate
-// validation still apply to the hostname the user posted.
-const fetchPinned = (target: URL, address: string, signal: AbortSignal) => {
+// validation still apply to the hostname the user posted. Bun 1.3 ignored
+// tls.serverName and validated against the raw Host header, port included;
+// the HTTPS tests guard this.
+const fetchPinned = (target: URL, address: string, signal: AbortSignal, ca: string | undefined) => {
 	const pinned = new URL(target);
 	pinned.hostname = isIP(address) === 6 ? `[${address}]` : address;
 
@@ -76,8 +79,26 @@ const fetchPinned = (target: URL, address: string, signal: AbortSignal) => {
 		redirect: 'manual',
 		signal,
 		headers: { Host: target.host },
-		...(isIP(hostname) ? {} : { tls: { serverName: hostname } }),
+		tls: { ...(isIP(hostname) ? {} : { serverName: hostname }), ...(ca ? { ca } : {}) },
 	});
+};
+
+// Every address is already vetted, so a failed connection falls through to the
+// next one. All attempts share the caller's deadline.
+const fetchFirstReachable = async (target: URL, addresses: string[], signal: AbortSignal, ca: string | undefined) => {
+	let lastError: unknown;
+
+	for (const address of addresses) {
+		try {
+			return await fetchPinned(target, address, signal, ca);
+		} catch (error) {
+			if (signal.aborted) throw error;
+
+			lastError = error;
+		}
+	}
+
+	throw lastError;
 };
 
 const readCappedText = async (response: Response): Promise<string> => {
@@ -116,11 +137,11 @@ const fetchPreviewResource = async (
 	for (let hop = 0; hop <= MAX_PREVIEW_REDIRECTS; hop++) {
 		if (!isUrlSafeForPreview(target.href)) return undefined;
 
-		const address = await resolveAllowedAddress(target.hostname, network);
+		const addresses = await resolveAllowedAddresses(target.hostname, network);
 
-		if (!address) return undefined;
+		if (!addresses) return undefined;
 
-		const response = await fetchPinned(target, address, signal);
+		const response = await fetchFirstReachable(target, addresses, signal, network.ca);
 		const location = response.headers.get('location');
 
 		if (response.status >= 300 && response.status < 400 && location) {
