@@ -1,4 +1,4 @@
-import { OWNER_ROLE_ID, Permission } from '@sharkord/shared';
+import { Permission } from '@sharkord/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
@@ -7,7 +7,8 @@ import { getRole } from '../../db/queries/roles';
 import { userRoles } from '../../db/schema';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
-import { assertCanActOnUser, requireOwner } from './require-owner';
+import { assertCanGrantRole } from './assert-can-grant-role';
+import { assertCanActOnUser } from './require-owner';
 
 const addRoleRoute = protectedProcedure
 	.input(
@@ -26,15 +27,7 @@ const addRoleRoute = protectedProcedure
 			message: 'Role not found',
 		});
 
-		if (role.id === OWNER_ROLE_ID) {
-			await requireOwner(ctx);
-		}
-
-		invariant(await ctx.hasPermission(role.permissions), {
-			code: 'FORBIDDEN',
-			message: 'You cannot assign a role with permissions that you do not have',
-		});
-
+		await assertCanGrantRole(ctx, role);
 		await assertCanActOnUser(ctx, input.userId);
 
 		const existing = await db

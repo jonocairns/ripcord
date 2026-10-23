@@ -3,7 +3,7 @@ import { ChannelPermission, ChannelType, OWNER_ROLE_ID, Permission, type TJoined
 import { and, eq } from 'drizzle-orm';
 import { initTest } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
-import { rolePermissions, userRoles, users } from '../../db/schema';
+import { rolePermissions, roles, userRoles, users } from '../../db/schema';
 
 type TCaller = Awaited<ReturnType<typeof initTest>>['caller'];
 
@@ -112,6 +112,40 @@ describe('owner protection', () => {
 		expect(await hasRole(MEMBER_ID, GUEST_ROLE_ID)).toBe(false);
 	});
 
+	test('a MANAGE_USERS holder cannot assign a role that opens a private channel', async () => {
+		const { ownerCaller, moderatorCaller } = await initModerator([Permission.MANAGE_USERS]);
+		const privateChannelId = await ownerCaller.channels.add({ type: ChannelType.TEXT, name: 'secret', categoryId: 1 });
+
+		await ownerCaller.channels.update({ channelId: privateChannelId, private: true });
+		await ownerCaller.channels.updatePermissions({
+			channelId: privateChannelId,
+			roleId: GUEST_ROLE_ID,
+			permissions: [ChannelPermission.VIEW_CHANNEL],
+		});
+
+		await expect(moderatorCaller.users.addRole({ userId: MEMBER_ID, roleId: GUEST_ROLE_ID })).rejects.toThrow(
+			'You need the Manage channel permissions permission to assign a role with channel permissions',
+		);
+		expect(await hasRole(MEMBER_ID, GUEST_ROLE_ID)).toBe(false);
+	});
+
+	test('a MANAGE_CHANNEL_PERMISSIONS holder can assign a role with channel permissions', async () => {
+		const { ownerCaller, moderatorCaller } = await initModerator([
+			Permission.MANAGE_USERS,
+			Permission.MANAGE_CHANNEL_PERMISSIONS,
+		]);
+
+		await ownerCaller.channels.updatePermissions({
+			channelId: 1,
+			roleId: GUEST_ROLE_ID,
+			permissions: [ChannelPermission.VIEW_CHANNEL],
+		});
+
+		await moderatorCaller.users.addRole({ userId: MEMBER_ID, roleId: GUEST_ROLE_ID });
+
+		expect(await hasRole(MEMBER_ID, GUEST_ROLE_ID)).toBe(true);
+	});
+
 	test('the owner can still assign the owner role', async () => {
 		const { caller } = await initTest(OWNER_ID);
 
@@ -158,6 +192,58 @@ describe('role permission escalation', () => {
 		const granted = await tdb.select().from(rolePermissions).where(eq(rolePermissions.roleId, GUEST_ROLE_ID));
 
 		expect(granted.map((row) => row.permission)).toEqual([Permission.MANAGE_SETTINGS]);
+	});
+
+	test('a MANAGE_ROLES holder cannot make the owner role the default', async () => {
+		const { moderatorCaller } = await initModerator([Permission.MANAGE_ROLES]);
+
+		await expect(moderatorCaller.roles.setDefault({ roleId: OWNER_ROLE_ID })).rejects.toThrow(
+			'Only server owners can perform this action',
+		);
+
+		const ownerRole = await tdb
+			.select({ isDefault: roles.isDefault })
+			.from(roles)
+			.where(eq(roles.id, OWNER_ROLE_ID))
+			.get();
+
+		expect(ownerRole?.isDefault).toBe(false);
+	});
+
+	test('a MANAGE_ROLES holder cannot make a role with permissions they lack the default', async () => {
+		const { moderatorCaller } = await initModerator([Permission.MANAGE_ROLES]);
+
+		await tdb.insert(rolePermissions).values({
+			roleId: GUEST_ROLE_ID,
+			permission: Permission.MANAGE_SETTINGS,
+			createdAt: Date.now(),
+		});
+
+		await expect(moderatorCaller.roles.setDefault({ roleId: GUEST_ROLE_ID })).rejects.toThrow(
+			'You cannot assign a role with permissions that you do not have',
+		);
+
+		const guestRole = await tdb
+			.select({ isDefault: roles.isDefault })
+			.from(roles)
+			.where(eq(roles.id, GUEST_ROLE_ID))
+			.get();
+
+		expect(guestRole?.isDefault).toBe(false);
+	});
+
+	test('a MANAGE_ROLES holder can still make a role within their permissions the default', async () => {
+		const { moderatorCaller } = await initModerator([Permission.MANAGE_ROLES]);
+
+		await moderatorCaller.roles.setDefault({ roleId: GUEST_ROLE_ID });
+
+		const guestRole = await tdb
+			.select({ isDefault: roles.isDefault })
+			.from(roles)
+			.where(eq(roles.id, GUEST_ROLE_ID))
+			.get();
+
+		expect(guestRole?.isDefault).toBe(true);
 	});
 
 	test('updating a missing role is NOT_FOUND', async () => {
