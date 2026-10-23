@@ -40,21 +40,27 @@ const urlMetadataParser = async (content: string): Promise<TMessageMetadata[]> =
 
 		if (!urls) return [];
 
+		// Each URL catches its own failure so one unreachable link doesn't drop the
+		// previews of the others in the same message.
 		const promises = urls.map(async (url) => {
-			const cached = lruGet(url);
-			if (cached !== undefined) return cached;
+			try {
+				const cached = lruGet(url);
+				if (cached !== undefined) return cached;
 
-			const resource = await fetchPreviewResource(url);
+				const resource = await fetchPreviewResource(url);
 
-			if (!resource) return;
+				if (!resource) return;
 
-			const metadata = await getPreviewFromContent(resource);
+				const metadata = await getPreviewFromContent(resource);
 
-			if (!metadata) return;
+				if (!metadata) return;
 
-			lruSet(url, metadata);
+				lruSet(url, metadata);
 
-			return metadata;
+				return metadata;
+			} catch {
+				return;
+			}
 		});
 
 		const metadata = (await Promise.all(promises)) as TMessageMetadata[]; // TODO: fix these types
