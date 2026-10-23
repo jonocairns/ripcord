@@ -4,6 +4,7 @@ import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 import { revokeUserSessions } from '../../utils/user-sessions';
+import { assertCanActOnUser } from './require-owner';
 
 const kickRoute = protectedProcedure
 	.input(
@@ -14,6 +15,8 @@ const kickRoute = protectedProcedure
 	)
 	.mutation(async ({ ctx, input }) => {
 		await ctx.needsPermission(Permission.MANAGE_USERS);
+
+		await assertCanActOnUser(ctx, input.userId);
 
 		const kickedCount = revokeUserSessions(input.userId, {
 			code: DisconnectCode.KICKED,

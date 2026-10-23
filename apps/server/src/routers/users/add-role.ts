@@ -1,11 +1,13 @@
-import { Permission } from '@sharkord/shared';
+import { OWNER_ROLE_ID, Permission } from '@sharkord/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannelPermissions, publishUser, publishUserChannelVisibility } from '../../db/publishers';
+import { getRole } from '../../db/queries/roles';
 import { userRoles } from '../../db/schema';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { assertCanActOnUser, requireOwner } from './require-owner';
 
 const addRoleRoute = protectedProcedure
 	.input(
@@ -16,6 +18,24 @@ const addRoleRoute = protectedProcedure
 	)
 	.mutation(async ({ ctx, input }) => {
 		await ctx.needsPermission(Permission.MANAGE_USERS);
+
+		const role = await getRole(input.roleId);
+
+		invariant(role, {
+			code: 'NOT_FOUND',
+			message: 'Role not found',
+		});
+
+		if (role.id === OWNER_ROLE_ID) {
+			await requireOwner(ctx);
+		}
+
+		invariant(await ctx.hasPermission(role.permissions), {
+			code: 'FORBIDDEN',
+			message: 'You cannot assign a role with permissions that you do not have',
+		});
+
+		await assertCanActOnUser(ctx, input.userId);
 
 		const existing = await db
 			.select()

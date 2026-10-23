@@ -1,9 +1,11 @@
 import { ChannelPermission, Permission, type TFile } from '@sharkord/shared';
 import z from 'zod';
+import { getChannelsForUser } from '../../db/queries/channels';
 import { getFilesByUserId } from '../../db/queries/files';
 import { getLastLogins } from '../../db/queries/logins';
 import { getMessagesByUserId } from '../../db/queries/messages';
 import { getUserById } from '../../db/queries/users';
+import { clearFields } from '../../helpers/clear-fields';
 import { generateFileToken } from '../../helpers/files-crypto';
 import { invariant } from '../../utils/invariant';
 import { type Context, protectedProcedure } from '../../utils/trpc';
@@ -59,13 +61,18 @@ const getUserInfoRoute = protectedProcedure
 			message: 'User not found',
 		});
 
-		const [logins, files, messages] = await Promise.all([
+		const [logins, files, userMessages, visibleChannels] = await Promise.all([
 			getLastLogins(user.id, 6),
 			getVisibleUserFiles(ctx, user.id),
 			getMessagesByUserId(user.id),
+			getChannelsForUser(ctx.userId),
 		]);
 
-		return { user, logins, files, messages };
+		// Same rule as files: MANAGE_USERS does not open private channels.
+		const visibleChannelIds = new Set(visibleChannels.map((channel) => channel.id));
+		const messages = userMessages.filter((message) => visibleChannelIds.has(message.channelId));
+
+		return { user: clearFields(user, ['password']), logins, files, messages };
 	});
 
 export { getUserInfoRoute };

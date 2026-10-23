@@ -8,6 +8,7 @@ import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 import { revokeUserSessions } from '../../utils/user-sessions';
+import { assertCanActOnUser } from './require-owner';
 
 const banRoute = protectedProcedure
 	.input(
@@ -23,6 +24,8 @@ const banRoute = protectedProcedure
 			code: 'BAD_REQUEST',
 			message: 'You cannot ban yourself.',
 		});
+
+		await assertCanActOnUser(ctx, input.userId);
 
 		await db
 			.update(users)

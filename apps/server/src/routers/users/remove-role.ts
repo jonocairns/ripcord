@@ -1,4 +1,4 @@
-import { Permission } from '@sharkord/shared';
+import { OWNER_ROLE_ID, Permission } from '@sharkord/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
@@ -7,6 +7,7 @@ import { userRoles } from '../../db/schema';
 import { invariant } from '../../utils/invariant';
 import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
 import { protectedProcedure } from '../../utils/trpc';
+import { assertCanActOnUser, requireOwner } from './require-owner';
 
 const removeRoleRoute = protectedProcedure
 	.input(
@@ -17,6 +18,12 @@ const removeRoleRoute = protectedProcedure
 	)
 	.mutation(async ({ ctx, input }) => {
 		await ctx.needsPermission(Permission.MANAGE_USERS);
+
+		if (input.roleId === OWNER_ROLE_ID) {
+			await requireOwner(ctx);
+		}
+
+		await assertCanActOnUser(ctx, input.userId);
 
 		const existing = await db
 			.select()
