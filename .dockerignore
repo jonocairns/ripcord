@@ -4,7 +4,6 @@
 node_modules
 **/node_modules
 apps/client/dist
-apps/client/src/
 apps/desktop/build
 apps/desktop/src/
 apps/desktop/sidecar/
