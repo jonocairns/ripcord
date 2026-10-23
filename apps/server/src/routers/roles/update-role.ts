@@ -4,8 +4,10 @@ import { z } from 'zod';
 import { db } from '../../db';
 import { syncRolePermissions } from '../../db/mutations/roles';
 import { publishRole } from '../../db/publishers';
+import { getRole } from '../../db/queries/roles';
 import { roles, userRoles } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
+import { invariant } from '../../utils/invariant';
 import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
 import { protectedProcedure } from '../../utils/trpc';
 
@@ -20,6 +22,22 @@ const updateRoleRoute = protectedProcedure
 	)
 	.mutation(async ({ ctx, input }) => {
 		await ctx.needsPermission(Permission.MANAGE_ROLES);
+
+		const existingRole = await getRole(input.roleId);
+
+		invariant(existingRole, {
+			code: 'NOT_FOUND',
+			message: 'Role not found',
+		});
+
+		// Only newly granted permissions are checked, so a role holding permissions
+		// the caller lacks can still be renamed or have permissions removed.
+		const grantedPermissions = input.permissions.filter((permission) => !existingRole.permissions.includes(permission));
+
+		invariant(await ctx.hasPermission(grantedPermissions), {
+			code: 'FORBIDDEN',
+			message: 'You cannot grant permissions that you do not have',
+		});
 
 		const affectedUsers = await db
 			.select({ userId: userRoles.userId })

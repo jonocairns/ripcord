@@ -8,6 +8,7 @@ import { roles } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { assertCanGrantRole } from '../users/assert-can-grant-role';
 
 const setDefaultRoleRoute = protectedProcedure
 	.input(
@@ -33,6 +34,9 @@ const setDefaultRoleRoute = protectedProcedure
 			code: 'NOT_FOUND',
 			message: 'Role not found',
 		});
+
+		// Every new account gets the default role, so this is a role grant.
+		await assertCanGrantRole(ctx, newDefaultRole);
 
 		await db.transaction(async (tx) => {
 			await tx.update(roles).set({ isDefault: false }).where(eq(roles.id, defaultRole.id));
