@@ -1,12 +1,13 @@
-import dns from 'node:dns';
-import { isIP } from 'node:net';
 import type { TGenericObject, TMessageMetadata } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
-import ipaddr from 'ipaddr.js';
-import { getLinkPreview } from 'link-preview-js';
+// Parse-only entry point: fetching is done by fetchPreviewResource, whose
+// address pinning works under Bun (link-preview-js pins via undici, which Bun
+// replaces with a built-in that ignores custom dispatchers).
+import { getPreviewFromContent } from 'link-preview-js/mobile';
 import { db } from '../../db';
 import { messages } from '../../db/schema';
 import { extractUrls } from '../../helpers/urls-extractor';
+import { fetchPreviewResource } from './fetch-preview-resource';
 
 const METADATA_CACHE_MAX = 500;
 
@@ -33,43 +34,6 @@ const lruSet = (key: string, value: TGenericObject): void => {
 	metadataCache.set(key, value);
 };
 
-const isPrivateIP = (ip: string): boolean => {
-	try {
-		const addr = ipaddr.parse(ip);
-		const range = addr.range();
-
-		const blockedRanges = ['unspecified', 'broadcast', 'multicast', 'linkLocal', 'loopback', 'private', 'uniqueLocal'];
-
-		return blockedRanges.includes(range);
-	} catch {
-		return true; // if we can't parse it, block it
-	}
-};
-
-// First-hop guard, reusable per redirect hop: http/https only + literal private-IP block.
-// DNS-based private-IP rejection is handled separately by resolveDNSHost.
-export const isUrlSafeForPreview = (url: string): boolean => {
-	if (!URL.canParse(url)) return false;
-
-	const parsed = new URL(url);
-
-	// allow only http and https protocols
-	if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-		return false;
-	}
-
-	// it's already an ip address, check if it's private.
-	// URL.hostname keeps the brackets around IPv6 literals ([::1]) but node:net's
-	// isIP() rejects bracketed input, so strip them before the literal-IP check —
-	// otherwise IPv6 loopback/link-local/private literals bypass the guard.
-	const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
-	if (isIP(hostname) && isPrivateIP(hostname)) {
-		return false;
-	}
-
-	return true;
-};
-
 const urlMetadataParser = async (content: string): Promise<TMessageMetadata[]> => {
 	try {
 		const urls = extractUrls(content);
@@ -80,50 +44,11 @@ const urlMetadataParser = async (content: string): Promise<TMessageMetadata[]> =
 			const cached = lruGet(url);
 			if (cached !== undefined) return cached;
 
-			if (!isUrlSafeForPreview(url)) {
-				return;
-			}
+			const resource = await fetchPreviewResource(url);
 
-			const metadata = await getLinkPreview(url, {
-				timeout: 5000,
-				// Don't transparently follow redirects: a 3xx Location could point at a
-				// private/internal target (SSRF). Handle them manually so the same
-				// protocol + private-IP guard (and resolveDNSHost) re-runs on each hop.
-				followRedirects: 'manual',
-				handleRedirects: (_baseURL: string, forwardedURL: string) => isUrlSafeForPreview(forwardedURL),
-				resolveDNSHost: async (url: string) => {
-					return new Promise((resolve, reject) => {
-						try {
-							const hostname = new URL(url).hostname;
+			if (!resource) return;
 
-							dns.lookup(hostname, { all: true }, (err, addresses) => {
-								if (err) {
-									reject(err);
-									return;
-								}
-
-								for (const entry of addresses) {
-									if (isPrivateIP(entry.address)) {
-										reject(new Error('Cannot resolve private IP addresses'));
-										return;
-									}
-								}
-
-								const firstAddress = addresses[0]?.address;
-
-								if (!firstAddress) {
-									reject(new Error('No addresses found'));
-									return;
-								}
-
-								resolve(firstAddress);
-							});
-						} catch (error) {
-							reject(error);
-						}
-					});
-				},
-			});
+			const metadata = await getPreviewFromContent(resource);
 
 			if (!metadata) return;
 
