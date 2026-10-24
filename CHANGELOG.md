@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.5.3](https://github.com/jonocairns/ripcord/compare/v2.5.2...v2.5.3) (2026-10-24)
+
+
+### Bug Fixes
+
+* **desktop:** upgrade Electron to 42.11.18 for security fixes ([#373](https://github.com/jonocairns/ripcord/issues/373)) ([a74c711](https://github.com/jonocairns/ripcord/commit/a74c711e66e6cced38b71d8026db2656aa9f9a62))
+* keep live audio consumers during existing producer sync ([#368](https://github.com/jonocairns/ripcord/issues/368)) ([c4a8296](https://github.com/jonocairns/ripcord/commit/c4a829619b7861bc418a34a33f9d5a8e64215410))
+* pin link preview fetches and update vulnerable server deps ([#372](https://github.com/jonocairns/ripcord/issues/372)) ([70a1ed0](https://github.com/jonocairns/ripcord/commit/70a1ed08bb61f08c954933a74109dfac024a67c2))
+* stop moderators from escalating to owner or past their own permissions ([#371](https://github.com/jonocairns/ripcord/issues/371)) ([4d6ca2f](https://github.com/jonocairns/ripcord/commit/4d6ca2f6ed25a4d95c60344ad57dd8eed1a2d551))
+* upgrade Bun to 1.4.4 for Brotli RCE CVE-2026-111497 ([#370](https://github.com/jonocairns/ripcord/issues/370)) ([c8c7cb9](https://github.com/jonocairns/ripcord/commit/c8c7cb9d82ba8b92666be3224d955b7ed8dfdcc3))
+
 ## [2.5.2](https://github.com/jonocairns/ripcord/compare/v2.5.1...v2.5.2) (2026-10-14)
 
 
