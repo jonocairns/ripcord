@@ -167,6 +167,8 @@ const errorTypes = new Set([
 	'OverconstrainedError',
 	'NotSupportedError',
 	'InvalidStateError',
+	'InvalidModificationError',
+	'OperationError',
 	'TRPCClientError',
 ]);
 const errorCodes = new Set([
