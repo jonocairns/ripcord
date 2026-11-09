@@ -16,6 +16,11 @@ The GitHub workflow in `.github/workflows/claude-review.yml` is label-gated.
 - `workflow_dispatch` remains available for manual runs once the workflow exists
   on the default branch.
 
+The workflow reviews open same-repository PRs only. Fork label events are skipped,
+and manual runs reject fork or closed PRs before checkout. This prevents fork code
+from running dependency installation and review tools with the workflow's write
+token and Anthropic API key.
+
 This keeps the trigger self-serve for repos that do not use GitHub teams for
 review routing.
 
