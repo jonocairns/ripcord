@@ -17,19 +17,22 @@ import { invariant } from '../../utils/invariant';
 import { pubsub } from '../../utils/pubsub';
 import { protectedProcedure } from '../../utils/trpc';
 
+const MAX_MESSAGES_PAGE_SIZE = 100;
+
 const getMessagesRoute = protectedProcedure
 	.input(
 		z.object({
 			channelId: z.number(),
 			cursor: z.number().nullish(),
-			limit: z.number().default(DEFAULT_MESSAGES_LIMIT),
+			limit: z.number().int().min(1).default(DEFAULT_MESSAGES_LIMIT),
 		}),
 	)
 	.meta({ infinite: true })
 	.query(async ({ ctx, input }) => {
 		await ctx.needsChannelPermission(input.channelId, ChannelPermission.VIEW_CHANNEL);
 
-		const { channelId, cursor, limit } = input;
+		const { channelId, cursor } = input;
+		const limit = Math.min(input.limit, MAX_MESSAGES_PAGE_SIZE);
 
 		const channel = await db
 			.select({
@@ -52,15 +55,27 @@ const getMessagesRoute = protectedProcedure
 					? and(eq(messages.channelId, channelId), lt(messages.createdAt, cursor))
 					: eq(messages.channelId, channelId),
 			)
-			.orderBy(desc(messages.createdAt))
+			.orderBy(desc(messages.createdAt), desc(messages.id))
 			.limit(limit + 1);
 
 		let nextCursor: number | null = null;
 
 		if (rows.length > limit) {
-			const next = rows.pop();
+			const lookAhead = rows.pop();
 
-			nextCursor = next ? next.createdAt : null;
+			if (lookAhead) {
+				// Include the look-ahead row on the next page. Clients dedupe timestamp ties by id.
+				nextCursor = lookAhead.createdAt + 1;
+
+				// A timestamp group larger than one page cannot fit on a page with a
+				// numeric cursor. Advance past it rather than returning the same page
+				// forever; that group's oldest rows beyond the page size are skipped.
+				// Messages are inserted one per request with Date.now(), so this does
+				// not happen in practice.
+				if (nextCursor === cursor) {
+					nextCursor = lookAhead.createdAt;
+				}
+			}
 		}
 
 		if (rows.length === 0) {
