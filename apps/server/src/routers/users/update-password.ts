@@ -7,10 +7,10 @@ import { hashPassword, verifyPassword } from '../../helpers/password';
 import { issueAuthTokens } from '../../http/auth-tokens';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
-import { protectedProcedure } from '../../utils/trpc';
 import { revokeOtherUserSessions } from '../../utils/user-sessions';
+import { passwordCheckProcedure } from './password-check-procedure';
 
-const updatePasswordRoute = protectedProcedure
+const updatePasswordRoute = passwordCheckProcedure
 	.input(
 		z.object({
 			currentPassword: z.string().min(4).max(128),

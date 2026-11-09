@@ -103,14 +103,14 @@ const loginRouteHandler = async (req: http.IncomingMessage, res: http.ServerResp
 
 	consumeLoginAccountAttempt(existingUser.id);
 
-	if (existingUser.banned) {
-		throw new HttpValidationError('identity', `Identity banned: ${existingUser.banReason || 'No reason provided'}`);
-	}
-
 	const passwordMatches = await verifyPassword(data.password, existingUser.password);
 
 	if (!passwordMatches) {
 		throw new HttpValidationError('password', 'Invalid password');
+	}
+
+	if (existingUser.banned) {
+		throw new HttpValidationError('identity', `Identity banned: ${existingUser.banReason || 'No reason provided'}`);
 	}
 
 	if (!isArgon2Hash(existingUser.password)) {

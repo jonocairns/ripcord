@@ -4,10 +4,16 @@ import { db } from '../../db';
 import { publishUser } from '../../db/publishers';
 import { getSettings } from '../../db/queries/server';
 import { userRoles } from '../../db/schema';
+import { logger } from '../../logger';
 import { invariant } from '../../utils/invariant';
-import { protectedProcedure } from '../../utils/trpc';
+import { protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
 
-const useSecretTokenRoute = protectedProcedure
+const useSecretTokenRoute = rateLimitedProcedure(protectedProcedure, {
+	maxRequests: 5,
+	windowMs: 15 * 60_000,
+	keyBy: 'user',
+	logLabel: 'useSecretToken',
+})
 	.input(
 		z.object({
 			token: z.string(),
@@ -16,6 +22,10 @@ const useSecretTokenRoute = protectedProcedure
 	.mutation(async ({ input, ctx }) => {
 		const settings = await getSettings();
 		const hashedToken = await sha256(input.token);
+
+		if (hashedToken !== settings.secretToken) {
+			logger.warn('Failed secret token attempt by user %d', ctx.userId);
+		}
 
 		invariant(hashedToken === settings.secretToken, {
 			code: 'FORBIDDEN',
@@ -28,6 +38,7 @@ const useSecretTokenRoute = protectedProcedure
 			createdAt: Date.now(),
 		});
 
+		logger.info('Secret token used successfully by user %d', ctx.userId);
 		publishUser(ctx.userId, 'update');
 	});
 

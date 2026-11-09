@@ -20,6 +20,7 @@ import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
 import { revokeOtherUserSessions, revokeUserSessions } from '../../utils/user-sessions';
 import { blockVoiceRestoreAfterKick, getVoiceKickGuardIdentity } from '../../utils/voice-kick-guard';
+import { passwordCheckProcedure } from './password-check-procedure';
 
 // The setup flow is stateless: we encode the pending secret + recovery codes
 // into a short-lived JWT (setupToken) so the client can send it back during
@@ -69,7 +70,7 @@ const totpStatusRoute = protectedProcedure.query(async ({ ctx }) => {
 	return { enabled };
 });
 
-const totpGenerateSetupRoute = protectedProcedure
+const totpGenerateSetupRoute = passwordCheckProcedure
 	.input(
 		z.object({
 			password: z.string().min(1),
@@ -168,7 +169,7 @@ const totpConfirmSetupRoute = protectedProcedure
 		return { success: true, ...authTokens };
 	});
 
-const totpDisableRoute = protectedProcedure
+const totpDisableRoute = passwordCheckProcedure
 	.input(
 		z.object({
 			password: z.string().min(1),
@@ -217,7 +218,7 @@ const totpDisableRoute = protectedProcedure
 		return { success: true, ...authTokens };
 	});
 
-const totpRegenerateRecoveryCodesRoute = protectedProcedure
+const totpRegenerateRecoveryCodesRoute = passwordCheckProcedure
 	.input(
 		z.object({
 			password: z.string().min(1),
