@@ -365,6 +365,8 @@ const createWsServer = async (server: http.Server) => {
 		const corsOrigin = config.server.corsOrigin;
 		wss = new WebSocketServer({
 			server,
+			// Allow diagnostics batches, the largest legitimate client frames.
+			maxPayload: 2 * 1024 * 1024,
 			verifyClient: corsOrigin ? ({ origin }: { origin?: string }) => origin === corsOrigin : undefined,
 		});
 		setTrackedClientsSource(() => wss?.clients ?? []);

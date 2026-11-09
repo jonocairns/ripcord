@@ -1,4 +1,11 @@
-import { ChannelPermission, isEmptyMessage, Permission } from '@sharkord/shared';
+import {
+	ChannelPermission,
+	getMessageTextLength,
+	isEmptyMessage,
+	MESSAGE_MAX_HTML_LENGTH,
+	MESSAGE_MAX_TEXT_LENGTH,
+	Permission,
+} from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { config } from '../../config';
@@ -51,12 +58,22 @@ const editMessageRoute = rateLimitedProcedure(protectedProcedure, {
 			message: 'You do not have permission to edit this message',
 		});
 
+		invariant(input.content.length <= MESSAGE_MAX_HTML_LENGTH, {
+			code: 'BAD_REQUEST',
+			message: 'Message is too long. The limit is 4000 characters.',
+		});
+
 		invariant(!isEmptyMessage(input.content), {
 			code: 'BAD_REQUEST',
 			message: 'Message cannot be empty.',
 		});
 
 		const sanitizedContent = sanitizeMessageHtml(input.content);
+
+		invariant(getMessageTextLength(sanitizedContent) <= MESSAGE_MAX_TEXT_LENGTH, {
+			code: 'BAD_REQUEST',
+			message: 'Message is too long. The limit is 4000 characters.',
+		});
 
 		invariant(!isEmptyMessage(sanitizedContent), {
 			code: 'BAD_REQUEST',

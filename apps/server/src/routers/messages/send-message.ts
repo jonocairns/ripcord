@@ -1,4 +1,11 @@
-import { ChannelPermission, isEmptyMessage, Permission } from '@sharkord/shared';
+import {
+	ChannelPermission,
+	getMessageTextLength,
+	isEmptyMessage,
+	MESSAGE_MAX_HTML_LENGTH,
+	MESSAGE_MAX_TEXT_LENGTH,
+	Permission,
+} from '@sharkord/shared';
 import { z } from 'zod';
 import { config } from '../../config';
 import { db } from '../../db';
@@ -31,12 +38,22 @@ const sendMessageRoute = rateLimitedProcedure(protectedProcedure, {
 			ctx.needsChannelPermission(input.channelId, ChannelPermission.SEND_MESSAGES),
 		]);
 
+		invariant(input.content.length <= MESSAGE_MAX_HTML_LENGTH, {
+			code: 'BAD_REQUEST',
+			message: 'Message is too long. The limit is 4000 characters.',
+		});
+
 		invariant(!isEmptyMessage(input.content) || input.files.length !== 0, {
 			code: 'BAD_REQUEST',
 			message: 'Message cannot be empty.',
 		});
 
 		const targetContent = sanitizeMessageHtml(input.content);
+
+		invariant(getMessageTextLength(targetContent) <= MESSAGE_MAX_TEXT_LENGTH, {
+			code: 'BAD_REQUEST',
+			message: 'Message is too long. The limit is 4000 characters.',
+		});
 
 		invariant(!isEmptyMessage(targetContent) || input.files.length !== 0, {
 			code: 'BAD_REQUEST',

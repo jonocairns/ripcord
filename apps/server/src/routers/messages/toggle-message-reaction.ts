@@ -7,13 +7,17 @@ import { getEmojiFileIdByEmojiName } from '../../db/queries/emojis';
 import { getReaction } from '../../db/queries/messages';
 import { messageReactions, messages } from '../../db/schema';
 import { invariant } from '../../utils/invariant';
-import { protectedProcedure } from '../../utils/trpc';
+import { protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
 
-const toggleMessageReactionRoute = protectedProcedure
+const toggleMessageReactionRoute = rateLimitedProcedure(protectedProcedure, {
+	maxRequests: 120,
+	windowMs: 60_000,
+	logLabel: 'toggleReaction',
+})
 	.input(
 		z.object({
 			messageId: z.number(),
-			emoji: z.string(),
+			emoji: z.string().min(1).max(128),
 		}),
 	)
 	.mutation(async ({ input, ctx }) => {

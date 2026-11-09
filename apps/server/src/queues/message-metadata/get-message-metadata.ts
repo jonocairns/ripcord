@@ -34,9 +34,19 @@ const lruSet = (key: string, value: TGenericObject): void => {
 	metadataCache.set(key, value);
 };
 
+const MAX_PREVIEW_URLS = 5;
+
+// Custom emoji are stored as <img src="https://<server>/public/..."> and are
+// not links, so they must not count toward (or use up) the preview budget.
+// Content is sanitized HTML, so attribute values never contain a raw `>`.
+const IMG_TAG_PATTERN = /<img\b[^>]*>/gi;
+
+export const selectPreviewUrls = (content: string): string[] =>
+	extractUrls(content.replace(IMG_TAG_PATTERN, ' ')).slice(0, MAX_PREVIEW_URLS);
+
 const urlMetadataParser = async (content: string): Promise<TMessageMetadata[]> => {
 	try {
-		const urls = extractUrls(content);
+		const urls = selectPreviewUrls(content);
 
 		if (!urls) return [];
 
