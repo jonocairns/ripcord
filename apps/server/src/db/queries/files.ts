@@ -1,13 +1,13 @@
 import type { TFile } from '@sharkord/shared';
-import { asc, eq, sql, sum } from 'drizzle-orm';
+import { asc, eq, inArray, sql, sum } from 'drizzle-orm';
 import { db } from '..';
 import { channels, files, messageFiles, messages } from '../schema';
 import { getSettings } from './server';
 
 const getExceedingOldFiles = async (newFileSize: number) => {
-	const { storageUploadMaxFileSize } = await getSettings();
+	const { storageQuota } = await getSettings();
 
-	if (newFileSize > storageUploadMaxFileSize) {
+	if (newFileSize > storageQuota) {
 		throw new Error('File size exceeds total server storage quota');
 	}
 
@@ -19,7 +19,7 @@ const getExceedingOldFiles = async (newFileSize: number) => {
 		.get();
 
 	const currentTotalSize = Number(currentUsage?.totalSize ?? 0);
-	const wouldExceedBy = currentTotalSize + newFileSize - storageUploadMaxFileSize;
+	const wouldExceedBy = currentTotalSize + newFileSize - storageQuota;
 
 	if (wouldExceedBy <= 0) {
 		return [];
@@ -34,7 +34,8 @@ const getExceedingOldFiles = async (newFileSize: number) => {
 			createdAt: files.createdAt,
 		})
 		.from(files)
-		.orderBy(asc(files.createdAt));
+		.where(inArray(files.id, db.select({ fileId: messageFiles.fileId }).from(messageFiles)))
+		.orderBy(asc(files.createdAt), asc(files.id));
 
 	const filesToDelete = [];
 	let freedSpace = 0;
@@ -46,6 +47,13 @@ const getExceedingOldFiles = async (newFileSize: number) => {
 		if (freedSpace >= wouldExceedBy) {
 			break;
 		}
+	}
+
+	// Only message attachments are eligible. If deleting all of them still
+	// would not make room, delete nothing rather than wipe every attachment
+	// and store the upload over quota anyway.
+	if (freedSpace < wouldExceedBy) {
+		throw new Error('Server storage limit exceeded.');
 	}
 
 	return filesToDelete;

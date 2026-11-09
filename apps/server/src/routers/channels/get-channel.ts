@@ -1,4 +1,4 @@
-import { Permission } from '@sharkord/shared';
+import { ChannelPermission, Permission } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
@@ -22,6 +22,10 @@ const getChannelRoute = protectedProcedure
 			code: 'NOT_FOUND',
 			message: 'Channel not found',
 		});
+
+		if (channel.private) {
+			await ctx.needsChannelPermission(channel.id, ChannelPermission.VIEW_CHANNEL);
+		}
 
 		return toPublicChannel(channel);
 	});
