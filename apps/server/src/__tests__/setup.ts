@@ -51,6 +51,12 @@ if (DISABLE_CONSOLE) {
 	}));
 }
 
+// Login recording looks up ipinfo.io. Tests must not reach the network, and a
+// slow lookup would let one test's login row land in the next test's database.
+mock.module('../utils/logins', () => ({
+	getIpInfo: async () => undefined,
+}));
+
 let tdb: BunSQLiteDatabase;
 let sqlite: Database | null = null;
 let testsBaseUrl: string;

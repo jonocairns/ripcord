@@ -9,6 +9,7 @@ import { clearFields } from '../../helpers/clear-fields';
 import { generateFileToken } from '../../helpers/files-crypto';
 import { invariant } from '../../utils/invariant';
 import { type Context, protectedProcedure } from '../../utils/trpc';
+import { isOwner } from './require-owner';
 
 // MANAGE_USERS alone does not grant access to private channels. Leave out files
 // in private channels the caller cannot view (their names alone can leak private
@@ -72,7 +73,10 @@ const getUserInfoRoute = protectedProcedure
 		const visibleChannelIds = new Set(visibleChannels.map((channel) => channel.id));
 		const messages = userMessages.filter((message) => visibleChannelIds.has(message.channelId));
 
-		return { user: clearFields(user, ['password']), logins, files, messages };
+		// A login identity is half of a credential, so only Owners may read it.
+		const hiddenFields: (keyof typeof user)[] = (await isOwner(ctx.userId)) ? ['password'] : ['password', 'identity'];
+
+		return { user: clearFields(user, hiddenFields), logins, files, messages };
 	});
 
 export { getUserInfoRoute };

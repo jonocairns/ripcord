@@ -45,7 +45,9 @@ const Details = memo(() => {
 				<div className="space-y-2">
 					<Row icon={<IdCard className="h-4 w-4 text-muted-foreground" />} label="User ID" value={user.id} />
 
-					<Row icon={<IdCard className="h-4 w-4 text-muted-foreground" />} label="Identity" value={user.identity} />
+					{user.identity && (
+						<Row icon={<IdCard className="h-4 w-4 text-muted-foreground" />} label="Identity" value={user.identity} />
+					)}
 
 					<Row
 						icon={<Calendar className="h-4 w-4 text-muted-foreground" />}

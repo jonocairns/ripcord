@@ -27,4 +27,4 @@ const assertCanActOnUser = async (ctx: Context, targetUserId: number) => {
 	});
 };
 
-export { assertCanActOnUser, requireOwner };
+export { assertCanActOnUser, isOwner, requireOwner };

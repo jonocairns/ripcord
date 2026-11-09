@@ -4,6 +4,7 @@ import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
 import { DB_PATH, DRIZZLE_PATH } from '../helpers/paths';
 import { logger } from '../logger';
 import { seedDatabase } from './seed';
+import { rotateDefaultSeedOwnerPassword } from './seed-owner';
 
 let db: BunSQLiteDatabase;
 let sqlite: Database | undefined;
@@ -26,6 +27,7 @@ const loadDb = async () => {
 
 	await migrate(db, { migrationsFolder: DRIZZLE_PATH });
 	await seedDatabase();
+	await rotateDefaultSeedOwnerPassword();
 };
 
 // Lightweight readiness probe — confirms the database handle is open and
