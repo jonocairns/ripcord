@@ -22,6 +22,9 @@ const sanitizeMessageHtml = (html: string): string => {
 		nonTextTags: [...MESSAGE_HTML_DROPPED_CONTENT_TAGS],
 		// disallow any script or event handler attributes globally
 		disallowedTagsMode: 'discard',
+		// Deeply nested crafted markup makes sanitizing (and later parsing) slow.
+		// Editor output never nests this deep; deeper tags are dropped, text kept.
+		nestingLimit: 32,
 	});
 };
 

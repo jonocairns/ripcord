@@ -37,6 +37,13 @@ describe('sanitizeMessageHtml', () => {
 		expect(html).not.toContain('rel="opener"');
 	});
 
+	test('drops tags nested deeper than the nesting limit but keeps their text', () => {
+		const html = sanitizeMessageHtml(`${'<span>'.repeat(40)}deep${'</span>'.repeat(40)}`);
+
+		expect(html).toContain('deep');
+		expect(html.match(/<span>/g)?.length).toBe(32);
+	});
+
 	test('preserves emoji metadata while removing its class', () => {
 		expect(sanitizeMessageHtml('<span data-type="emoji" data-name="smile" class="emoji-image">😄</span>')).toBe(
 			'<span data-type="emoji" data-name="smile">😄</span>',
