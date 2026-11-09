@@ -65,8 +65,13 @@ const serializer = (
 	// returning null below falls back to default rendering, which reads these attribs
 	domNode.attribs = pickAllowedAttributes(domNode.attribs, allowedAttributes);
 
-	if (domNode.name === 'a' && domNode.attribs.href !== undefined && hasDisallowedScheme(domNode.attribs.href)) {
-		delete domNode.attribs.href;
+	if (domNode.name === 'a') {
+		domNode.attribs.target = '_blank';
+		domNode.attribs.rel = 'noopener noreferrer';
+
+		if (domNode.attribs.href !== undefined && hasDisallowedScheme(domNode.attribs.href)) {
+			delete domNode.attribs.href;
+		}
 	}
 
 	try {

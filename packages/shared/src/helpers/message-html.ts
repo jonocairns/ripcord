@@ -4,17 +4,17 @@
 const MESSAGE_HTML_ALLOWED_ATTRIBUTES: Readonly<Partial<Record<string, readonly string[]>>> = {
 	// basic text structure
 	p: [],
-	br: ['class'],
+	br: [],
 	// inline formatting
 	strong: [],
 	em: [],
-	code: ['class'],
-	pre: ['class'],
+	code: [],
+	pre: [],
 	// links
 	a: ['href', 'target', 'rel'],
 	// emoji (span wrapper + img fallback)
-	span: ['data-type', 'data-name', 'class'],
-	img: ['src', 'alt', 'draggable', 'loading', 'align', 'class'],
+	span: ['data-type', 'data-name'],
+	img: ['src', 'alt', 'draggable', 'loading', 'align'],
 };
 
 const MESSAGE_HTML_ALLOWED_SCHEMES: readonly string[] = ['http', 'https', 'mailto'];

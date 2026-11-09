@@ -12,6 +12,12 @@ const sanitizeMessageHtml = (html: string): string => {
 			...MESSAGE_HTML_ALLOWED_ATTRIBUTES,
 			'*': [],
 		},
+		transformTags: {
+			a: sanitize.simpleTransform('a', {
+				target: '_blank',
+				rel: 'noopener noreferrer',
+			}),
+		},
 		allowedSchemes: [...MESSAGE_HTML_ALLOWED_SCHEMES],
 		nonTextTags: [...MESSAGE_HTML_DROPPED_CONTENT_TAGS],
 		// disallow any script or event handler attributes globally
