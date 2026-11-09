@@ -143,6 +143,7 @@ const initializeTRPC = (host: string) => {
 	const runtimeServerUrl = getRuntimeServerConfig().serverUrl;
 	const serverProtocol = runtimeServerUrl ? new URL(runtimeServerUrl).protocol : window.location.protocol;
 	const protocol = serverProtocol === 'https:' ? 'wss' : 'ws';
+	const tokenOrigin = new URL(`${serverProtocol}//${host}`).origin;
 
 	wsClient = createWSClient({
 		url: `${protocol}://${host}`,
@@ -325,7 +326,7 @@ const initializeTRPC = (host: string) => {
 		},
 		connectionParams: async (): Promise<TConnectionParams> => {
 			return {
-				token: getAuthToken() || '',
+				token: getAuthToken(tokenOrigin) || '',
 				clientInstanceId: getWsClientInstanceId(),
 			};
 		},
