@@ -1,4 +1,4 @@
-import { ActivityLogType, Permission } from '@sharkord/shared';
+import { ActivityLogType, ChannelPermission, Permission } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
@@ -18,7 +18,18 @@ const deleteChannelRoute = protectedProcedure
 	.mutation(async ({ input, ctx }) => {
 		await ctx.needsPermission(Permission.MANAGE_CHANNELS);
 
-		const removedChannel = await db.delete(channels).where(eq(channels.id, input.channelId)).returning().get();
+		const channel = await db.select().from(channels).where(eq(channels.id, input.channelId)).get();
+
+		invariant(channel, {
+			code: 'NOT_FOUND',
+			message: 'Channel not found',
+		});
+
+		if (channel.private) {
+			await ctx.needsChannelPermission(channel.id, ChannelPermission.VIEW_CHANNEL);
+		}
+
+		const removedChannel = await db.delete(channels).where(eq(channels.id, channel.id)).returning().get();
 
 		invariant(removedChannel, {
 			code: 'NOT_FOUND',
