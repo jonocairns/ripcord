@@ -29,7 +29,11 @@ const revalidateActiveVoiceSessions = async (options?: {
 			continue;
 		}
 
-		const activeUsers = [...runtime.getState().users];
+		// Snapshot every seat identity before permission awaits can yield to a rejoin.
+		const activeUsers = runtime.getState().users.map((user) => ({
+			userId: user.userId,
+			sessionIncarnation: runtime.getVoiceSessionIncarnation(user.userId),
+		}));
 
 		for (const activeUser of activeUsers) {
 			if (userIdSet && !userIdSet.has(activeUser.userId)) {
@@ -42,7 +46,9 @@ const revalidateActiveVoiceSessions = async (options?: {
 				continue;
 			}
 
-			runtime.removeUser(activeUser.userId);
+			if (!runtime.removeUserIfSessionMatches(activeUser.userId, activeUser.sessionIncarnation)) {
+				continue;
+			}
 
 			publishVoiceSidebarEvent(ServerEvents.USER_LEAVE_VOICE, {
 				channelId: runtime.id,
