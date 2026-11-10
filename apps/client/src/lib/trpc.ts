@@ -36,7 +36,6 @@ import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { createSessionAuthenticationGate } from './session-authentication-gate';
 import { streamDiagnosticsLink } from './stream-diagnostics-link';
 import { tracingLink } from './tracing-link';
-import { markSocketCloseEventIgnored, shouldIgnoreSocketCloseEvent } from './websocket-close-ignore';
 import {
 	getWsReconnectOpenAction,
 	shouldDeferAppTeardownWhileOffline,
@@ -50,6 +49,7 @@ let teardownTimer: ReturnType<typeof setTimeout> | null = null;
 let onWsReconnect: (() => void) | null = null;
 let cachedClientInstanceId: string | null = null;
 let deferredWsReconnectOnlineListener: (() => void) | null = null;
+let connectionEpoch = 0;
 const sessionAuthentication = createSessionAuthenticationGate();
 
 // How long to keep silently reconnecting before tearing the app down to the
@@ -136,6 +136,17 @@ const clearDeferredWsReconnectOnlineListener = () => {
 	deferredWsReconnectOnlineListener = null;
 };
 
+const retireTRPCClient = () => {
+	const client = wsClient;
+	connectionEpoch += 1;
+	wsClient = null;
+	trpc = null;
+	currentHost = null;
+	onWsReconnect = null;
+	// Clear ownership before close() can notify callbacks; it disables retries synchronously.
+	void client?.close().catch(() => {});
+};
+
 const initializeTRPC = (host: string) => {
 	pauseStreamObservability();
 	pauseDiagnosticDelivery();
@@ -146,7 +157,8 @@ const initializeTRPC = (host: string) => {
 	const protocol = serverProtocol === 'https:' ? 'wss' : 'ws';
 	const tokenOrigin = new URL(`${serverProtocol}//${host}`).origin;
 
-	wsClient = createWSClient({
+	// tRPC prepares the URL in a promise before creating the socket, so callbacks run after assignment.
+	const client = createWSClient({
 		url: `${protocol}://${host}`,
 		retryDelayMs: reconnectRetryDelayMs,
 		// Application-level liveness probe. A WebSocket can become a "zombie" on a
@@ -163,7 +175,7 @@ const initializeTRPC = (host: string) => {
 		},
 		// @ts-expect-error - the onclose type is not correct in trpc
 		onClose: (cause: CloseEvent) => {
-			if (shouldIgnoreSocketCloseEvent(cause)) {
+			if (wsClient !== client) {
 				return;
 			}
 			recordVoiceDiagnostic(
@@ -208,7 +220,7 @@ const initializeTRPC = (host: string) => {
 				} else if (cause.code === DisconnectCode.BANNED) {
 					clearVoiceReconnectRecovery('banned');
 				}
-				cleanup({ skipSocketClose: true });
+				cleanup();
 				if (wasConnected) {
 					playSound(SoundType.SERVER_DISCONNECTED);
 				}
@@ -232,21 +244,16 @@ const initializeTRPC = (host: string) => {
 			// Give tRPC's internal retry a grace period before tearing down.
 			// If tRPC reconnects (onOpen fires), the teardown is cancelled.
 			const runTeardown = () => {
-				// Stay paused while offline instead of giving up: the disconnect screen
-				// is pointless when we already know why we can't reach the server, and
-				// tearing down here would orphan a socket that has already reopened
-				// (skipSocketClose leaves it spamming UNAUTHORIZED) and clear the
-				// deferred-reconnect machinery. Keeping teardownTimer non-null preserves
-				// the "re-join needed on next open" signal so the online path runs a
-				// proper authenticated re-join instead of stranding an unauthenticated
-				// socket.
+				// Stay paused while offline: the disconnect screen cannot help while
+				// the network is unavailable. Preserve deferred recovery and the
+				// teardownTimer signal so the next online open re-authenticates.
 				if (shouldDeferAppTeardownWhileOffline(isVoiceReconnectOnline())) {
 					teardownTimer = setTimeout(runTeardown, RETRY_GRACE_PERIOD_MS);
 					return;
 				}
 
 				teardownTimer = null;
-				cleanup({ skipSocketClose: true });
+				cleanup();
 				if (wasConnected) {
 					playSound(SoundType.SERVER_DISCONNECTED);
 				}
@@ -264,6 +271,14 @@ const initializeTRPC = (host: string) => {
 			teardownTimer = setTimeout(runTeardown, RETRY_GRACE_PERIOD_MS);
 		},
 		onOpen: () => {
+			if (wsClient !== client) {
+				// tRPC close() waits for pending requests before closing the socket,
+				// and an in-flight request can call open() and re-enable retries.
+				// Retired clients must close even if that work finishes after retirement.
+				void client.close().catch(() => {});
+				client.connection?.ws.close();
+				return;
+			}
 			recordDesktopDiagnostic('websocket_opened', {
 				clientInstanceId: getWsClientInstanceId(),
 				reconnecting: teardownTimer !== null,
@@ -333,8 +348,9 @@ const initializeTRPC = (host: string) => {
 		},
 	});
 
+	wsClient = client;
 	trpc = createTRPCProxyClient<AppRouter>({
-		links: [streamDiagnosticsLink, tracingLink, wsLink({ client: wsClient })],
+		links: [streamDiagnosticsLink, tracingLink, wsLink({ client })],
 	});
 
 	currentHost = host;
@@ -347,7 +363,7 @@ const connectToTRPC = (host: string) => {
 		return trpc;
 	}
 
-	return initializeTRPC(host);
+	return reconnectTRPC(host);
 };
 
 const reconnectTRPC = (host: string) => {
@@ -358,15 +374,7 @@ const reconnectTRPC = (host: string) => {
 		teardownTimer = null;
 	}
 
-	if (wsClient) {
-		markSocketCloseEventIgnored(wsClient.connection?.ws);
-		wsClient.close();
-	}
-
-	wsClient = null;
-	trpc = null;
-	currentHost = null;
-	onWsReconnect = null;
+	retireTRPCClient();
 
 	return initializeTRPC(host);
 };
@@ -389,6 +397,13 @@ const getTRPCClient = () => {
 	}
 
 	return trpc;
+};
+
+// Attempts survive socket reopen; only retirement invalidates client ownership.
+const captureTRPCAttempt = () => {
+	const client = trpc;
+	const epoch = connectionEpoch;
+	return () => client !== null && client === trpc && epoch === connectionEpoch;
 };
 
 const getTRPCClientIfInitialized = () => trpc;
@@ -424,7 +439,7 @@ const debugCloseCurrentWs = (opts: { code?: number; reason?: string } = {}) => {
 	return true;
 };
 
-const cleanup = (opts: { clearAuth?: boolean; ignoreSocketCloseEvent?: boolean; skipSocketClose?: boolean } = {}) => {
+const cleanup = (opts: { clearAuth?: boolean } = {}) => {
 	clearStreamObservability();
 	clearDiagnosticDelivery();
 	stopClientTracing();
@@ -437,18 +452,7 @@ const cleanup = (opts: { clearAuth?: boolean; ignoreSocketCloseEvent?: boolean; 
 		teardownTimer = null;
 	}
 
-	if (wsClient && !opts.skipSocketClose) {
-		if (opts.ignoreSocketCloseEvent) {
-			markSocketCloseEventIgnored(wsClient.connection?.ws);
-		}
-
-		wsClient.close();
-	}
-	wsClient = null;
-	onWsReconnect = null;
-
-	trpc = null;
-	currentHost = null;
+	retireTRPCClient();
 
 	resetServerScreens();
 	resetServerState();
@@ -466,6 +470,7 @@ const setOnWsReconnect = (cb: (() => void) | null) => {
 
 export {
 	type AppRouter,
+	captureTRPCAttempt,
 	cleanup,
 	connectToTRPC,
 	debugCloseCurrentWs,

@@ -10,6 +10,7 @@ import { getHostFromServer } from '@/helpers/get-file-url';
 import { configureStreamObservability, getStreamClientSessionId } from '@/helpers/stream-observability';
 import { configureTraceBackend } from '@/helpers/telemetry/backend';
 import {
+	captureTRPCAttempt,
 	cleanup,
 	connectToTRPC,
 	getTRPCClient,
@@ -19,6 +20,7 @@ import {
 	markTRPCSessionAuthenticated,
 	reconnectTRPC,
 	setOnWsReconnect,
+	TRPCClientUnavailableError,
 } from '@/lib/trpc';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { openDialog } from '../dialogs/actions';
@@ -42,6 +44,7 @@ import { resolveWsRejoinFailureAction } from './ws-rejoin-failure-policy';
 
 let unsubscribeFromServer: (() => void) | null = null;
 let connectPromise: Promise<void> | null = null;
+let isConnectCurrent = () => false;
 // Incremented on each WS reconnect attempt to discard stale async work.
 let wsReconnectGeneration = 0;
 
@@ -78,11 +81,12 @@ export const setInfo = (info: TServerInfo | undefined) => {
 };
 
 export const connect = async () => {
-	if (connectPromise) {
+	if (connectPromise && isConnectCurrent()) {
 		return connectPromise;
 	}
 
-	connectPromise = (async () => {
+	let isCurrent = () => false;
+	const promise = (async () => {
 		setConnecting(true);
 
 		const state = useServerStore.getState();
@@ -91,9 +95,12 @@ export const connect = async () => {
 
 		const attemptConnect = async () => {
 			const host = getHostFromServer();
-			const trpc = await connectToTRPC(host);
+			const trpc = connectToTRPC(host);
+			isCurrent = captureTRPCAttempt();
+			isConnectCurrent = isCurrent;
 
 			const { hasPassword, handshakeHash } = await trpc.others.handshake.query();
+			if (!isCurrent()) return;
 
 			if (hasPassword) {
 				// show password prompt
@@ -101,12 +108,13 @@ export const connect = async () => {
 				return;
 			}
 
-			await joinServer(handshakeHash, undefined, trpc);
+			await joinServer(handshakeHash, undefined, trpc, { isCurrent });
 		};
 
 		try {
 			await attemptConnect();
 		} catch (error) {
+			if (!isCurrent()) return;
 			const trpcErrorCode = error instanceof TRPCClientError ? error.data?.code : undefined;
 
 			// Some auth failures from the WS handshake surface as TRPC "Unknown error"
@@ -116,32 +124,39 @@ export const connect = async () => {
 			}
 
 			const refreshed = await refreshAccessToken();
+			if (!isCurrent()) return;
 
 			if (!refreshed) {
 				throw error;
 			}
 
-			cleanup({ ignoreSocketCloseEvent: true });
+			cleanup();
 			await attemptConnect();
 		} finally {
-			setConnecting(false);
-			connectPromise = null;
+			if (isCurrent()) {
+				setConnecting(false);
+				connectPromise = null;
+			}
 		}
 	})();
 
-	return connectPromise;
+	connectPromise = promise;
+	return promise;
 };
 
 export const joinServer = async (
 	handshakeHash: string,
 	password?: string,
 	trpcClient?: ReturnType<typeof connectToTRPC>,
-	opts?: { reconnect?: boolean },
+	opts?: { reconnect?: boolean; isCurrent?: () => boolean },
 ) => {
 	const trpc = trpcClient ?? getTRPCClient();
+	const ownsConnection = captureTRPCAttempt();
+	const isCurrent = () => ownsConnection() && (opts?.isCurrent?.() ?? true);
 
 	try {
 		const data = await trpc.others.joinServer.query({ handshakeHash, password });
+		if (!isCurrent() || trpc !== getTRPCClientIfInitialized()) throw new TRPCClientUnavailableError();
 
 		logDebug('joinServer', data);
 
@@ -237,7 +252,7 @@ export const joinServer = async (
 			}
 		}
 	} catch (error) {
-		if (opts?.reconnect) {
+		if (isCurrent() && opts?.reconnect) {
 			// Pause (not clear) so events buffered during this failed attempt are
 			// preserved for the next retry. The caller is responsible for calling
 			// clearReconnectSnapshotEventBuffer() on final teardown.
@@ -261,6 +276,8 @@ export const joinServer = async (
 
 		wsReconnectGeneration += 1;
 		const generation = wsReconnectGeneration;
+		let ownsConnection = captureTRPCAttempt();
+		const isCurrent = () => !didGenerationChange(generation) && ownsConnection();
 
 		const attemptSilentRejoin = async (
 			trpcClient?: ReturnType<typeof connectToTRPC>,
@@ -268,7 +285,7 @@ export const joinServer = async (
 			const trpc = trpcClient ?? getTRPCClient();
 			const { hasPassword, handshakeHash } = await trpc.others.handshake.query();
 
-			if (didGenerationChange(generation)) {
+			if (!isCurrent()) {
 				return 'cancelled';
 			}
 
@@ -276,9 +293,9 @@ export const joinServer = async (
 				return 'password-required';
 			}
 
-			await joinServer(handshakeHash, undefined, trpc, { reconnect: true });
+			await joinServer(handshakeHash, undefined, trpc, { reconnect: true, isCurrent });
 
-			if (didGenerationChange(generation)) {
+			if (!isCurrent()) {
 				return 'cancelled';
 			}
 
@@ -324,6 +341,7 @@ export const joinServer = async (
 		void (async () => {
 			try {
 				const result = await attemptSilentRejoin();
+				if (!isCurrent()) return;
 
 				if (result === 'cancelled') {
 					return;
@@ -334,10 +352,11 @@ export const joinServer = async (
 					// fall through to teardown so the user sees the password prompt
 					// on next connect.
 					clearReconnectSnapshotEventBuffer();
-					cleanup({ ignoreSocketCloseEvent: true });
+					cleanup();
 					cleanupServerSubscriptions();
 				}
 			} catch (error) {
+				if (!isCurrent()) return;
 				const isAuthError =
 					error instanceof TRPCClientError && (!error.data?.code || error.data.code === 'UNAUTHORIZED');
 				const failureAction = resolveWsRejoinFailureAction({
@@ -347,7 +366,6 @@ export const joinServer = async (
 				});
 
 				if (failureAction === 'cancel-stale') {
-					clearReconnectSnapshotEventBuffer();
 					return;
 				}
 
@@ -359,8 +377,7 @@ export const joinServer = async (
 				if (failureAction === 'refresh-auth') {
 					const refreshed = await refreshAccessToken();
 
-					if (didGenerationChange(generation)) {
-						clearReconnectSnapshotEventBuffer();
+					if (!isCurrent()) {
 						return;
 					}
 
@@ -370,21 +387,21 @@ export const joinServer = async (
 						try {
 							const host = getHostFromServer();
 							const trpc = reconnectTRPC(host);
+							ownsConnection = captureTRPCAttempt();
 							const result = await attemptSilentRejoin(trpc);
 
-							if (result === 'joined' || result === 'cancelled') {
+							if (!isCurrent() || result === 'joined' || result === 'cancelled') {
 								return;
 							}
 
 							if (result === 'password-required') {
 								clearReconnectSnapshotEventBuffer();
-								cleanup({ ignoreSocketCloseEvent: true });
+								cleanup();
 								cleanupServerSubscriptions();
 								return;
 							}
 						} catch (retryError) {
-							if (didGenerationChange(generation)) {
-								clearReconnectSnapshotEventBuffer();
+							if (!isCurrent()) {
 								return;
 							}
 
@@ -401,7 +418,7 @@ export const joinServer = async (
 
 				clearReconnectSnapshotEventBuffer();
 				clearVoiceReconnectRecovery('app-teardown');
-				cleanup({ ignoreSocketCloseEvent: true });
+				cleanup();
 			}
 		})();
 	});
@@ -412,7 +429,7 @@ export const logoutFromServer = async () => {
 	setOnWsReconnect(null);
 	clearVoiceReconnectRecovery('logout');
 	await revokeRefreshToken();
-	cleanup({ clearAuth: true, ignoreSocketCloseEvent: true });
+	cleanup({ clearAuth: true });
 	cleanupServerSubscriptions();
 	setErrorReportingUser(undefined);
 };

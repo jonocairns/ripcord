@@ -12,43 +12,55 @@ import { expectMicrophoneFlow } from '../helpers/microphone';
 import { installServerUnreachableFault } from '../helpers/server-unreachable';
 import { runVoiceRecoveryTest } from '../helpers/voice-recovery-test';
 
-test('voice restores after an online server outage reaches the disconnect screen', async ({ browser }, testInfo) => {
-	test.setTimeout(150_000);
-	const watcher = await createPeer(browser, credentialsFor(testInfo, 'watcher'));
-	let disposeProducer: (() => Promise<void>) | undefined;
-	let restoreOutage: (() => void) | undefined;
+for (const muted of [false, true]) {
+	test(`voice restores after an online server outage reaches the disconnect screen (muted: ${muted})`, async ({
+		browser,
+	}, testInfo) => {
+		test.setTimeout(150_000);
+		const watcher = await createPeer(browser, credentialsFor(testInfo, 'watcher'));
+		let disposeProducer: (() => Promise<void>) | undefined;
+		let restoreOutage: (() => void) | undefined;
 
-	await runVoiceRecoveryTest({
-		run: async () => {
-			const context = await browser.newContext();
-			disposeProducer = () => context.close();
-			await installPcHook(context);
-			const page = await context.newPage();
-			await suppressViteHmrReload(page);
-			const fault = await installServerUnreachableFault(page);
-			restoreOutage = fault.restore;
-			const credentials = credentialsFor(testInfo, 'producer');
-			disposeProducer = () => disposePeer({ context, page, credentials });
-			await login(page, credentials);
+		await runVoiceRecoveryTest({
+			run: async () => {
+				const context = await browser.newContext();
+				disposeProducer = () => context.close();
+				await installPcHook(context);
+				const page = await context.newPage();
+				await suppressViteHmrReload(page);
+				const fault = await installServerUnreachableFault(page);
+				restoreOutage = fault.restore;
+				const credentials = credentialsFor(testInfo, 'producer');
+				disposeProducer = () => disposePeer({ context, page, credentials });
+				await login(page, credentials);
 
-			await joinVoice(watcher.page);
-			await joinVoice(page);
-			await expectMicrophoneFlow(page, 'outbound');
-			await expectMicrophoneFlow(watcher.page, 'inbound');
+				await joinVoice(watcher.page);
+				await joinVoice(page);
+				await expectMicrophoneFlow(page, 'outbound');
+				await expectMicrophoneFlow(watcher.page, 'inbound');
 
-			await fault.cut();
-			await expect(page.getByText('Connection lost', { exact: true })).toBeVisible({ timeout: 45_000 });
-			expect(await page.evaluate(() => navigator.onLine)).toBe(true);
-			fault.restore();
+				if (muted) {
+					await page.getByTitle('Mute microphone').click();
+					await expect(page.getByTitle('Unmute microphone')).toBeVisible();
+				}
+				await fault.cut();
+				await expect(page.getByText('Connection lost', { exact: true })).toBeVisible({ timeout: 45_000 });
+				expect(await page.evaluate(() => navigator.onLine)).toBe(true);
+				fault.restore();
 
-			await expect(page.getByText('VOICE CHANNELS')).toBeVisible({ timeout: 30_000 });
-			await expect(page.getByTitle('Leave voice')).toBeVisible({ timeout: 30_000 });
-			await expectMicrophoneFlow(page, 'outbound');
-			await expectMicrophoneFlow(watcher.page, 'inbound');
-			await expect(page.getByText(/reconnect failed|failed to reconnect|something went wrong/i)).toHaveCount(0);
-		},
-		attachDiagnostics: async () => {},
-		resumeOutage: () => restoreOutage?.(),
-		disposePeers: [async () => disposeProducer?.(), () => disposePeer(watcher)],
+				await expect(page.getByText('VOICE CHANNELS')).toBeVisible({ timeout: 30_000 });
+				await expect(page.getByTitle('Leave voice')).toBeVisible({ timeout: 30_000 });
+				if (muted) {
+					await expect(page.getByTitle('Unmute microphone')).toBeVisible();
+					await page.getByTitle('Unmute microphone').click();
+				}
+				await expectMicrophoneFlow(page, 'outbound');
+				await expectMicrophoneFlow(watcher.page, 'inbound');
+				await expect(page.getByText(/reconnect failed|failed to reconnect|something went wrong/i)).toHaveCount(0);
+			},
+			attachDiagnostics: async () => {},
+			resumeOutage: () => restoreOutage?.(),
+			disposePeers: [async () => disposeProducer?.(), () => disposePeer(watcher)],
+		});
 	});
-});
+}

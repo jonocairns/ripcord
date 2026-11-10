@@ -5,21 +5,37 @@ import type { Page, WebSocketRoute } from '@playwright/test';
 const installServerUnreachableFault = async (page: Page) => {
 	let cut = false;
 	const pairs = new Set<{ socket: WebSocketRoute; server: WebSocketRoute }>();
-	const waiting = new Set<() => void>();
+	const waiting: (() => void)[] = [];
+	let connectedCount = 0;
+	let attemptCount = 0;
+	const serverCloses: { code?: number; reason?: string }[] = [];
 
 	await page.routeWebSocket(
 		(url) => url.port === '4991',
 		async (socket) => {
-			if (cut) await new Promise<void>((resolve) => waiting.add(resolve));
-			const server = socket.connectToServer();
-			const pair = { socket, server };
-			pairs.add(pair);
+			attemptCount += 1;
+			let closed = false;
+			let server: WebSocketRoute | undefined;
+			let pair: { socket: WebSocketRoute; server: WebSocketRoute } | undefined;
 			socket.onClose(async (code, reason) => {
-				pairs.delete(pair);
-				await server.close({ code, reason });
+				if (closed) return;
+				closed = true;
+				if (pair) pairs.delete(pair);
+				await server?.close({ code, reason });
+				// Acknowledge page closes so routed sockets cannot remain CLOSING.
+				await socket.close({ code, reason });
 			});
+			if (cut) await new Promise<void>((resolve) => waiting.push(resolve));
+			if (closed) return;
+			server = socket.connectToServer();
+			connectedCount += 1;
+			pair = { socket, server };
+			pairs.add(pair);
 			server.onClose(async (code, reason) => {
-				pairs.delete(pair);
+				serverCloses.push({ code, reason });
+				if (pair) pairs.delete(pair);
+				if (closed) return;
+				closed = true;
 				await socket.close({ code, reason });
 			});
 		},
@@ -37,10 +53,16 @@ const installServerUnreachableFault = async (page: Page) => {
 				}),
 			);
 		},
+		// Historical unreleased handlers, including retired attempts awaiting open to close.
+		heldCount: () => waiting.length,
+		attemptCount: () => attemptCount,
+		serverCloses: () => [...serverCloses],
+		connectedCount: () => connectedCount,
+		openCount: () => pairs.size,
+		restoreNewest: () => waiting.pop()?.(),
 		restore: () => {
 			cut = false;
-			for (const resolve of waiting) resolve();
-			waiting.clear();
+			for (const resolve of waiting.splice(0)) resolve();
 		},
 	};
 };
