@@ -236,7 +236,18 @@ if (mode?.startsWith('rejoin-')) {
 		assert.equal(disconnectInfo.wasClean, false);
 		assert.ok(disconnectInfo.time instanceof Date);
 		assert.equal(hasAuth, true, 'recoverable teardown must preserve credentials');
-	} else assert.equal(disconnectInfo, undefined, 'auth/password exits must keep connect screen');
+		assert.ok(
+			!effects.includes('clearVoiceReconnectRecovery'),
+			'recoverable teardown must keep voice recovery for the next join',
+		);
+	} else {
+		assert.equal(disconnectInfo, undefined, 'auth/password exits must keep connect screen');
+		// The password-required exit returns early without touching voice recovery,
+		// unchanged from main.
+		if (mode !== 'rejoin-password') {
+			assert.ok(effects.includes('clearVoiceReconnectRecovery'), 'terminal exits must drop voice recovery');
+		}
+	}
 } else if (mode === 'kicked' || mode === 'banned') {
 	const code = mode === 'kicked' ? DisconnectCode.KICKED : DisconnectCode.BANNED;
 	oldSocket.onClose({ code, reason: 'moderation reason', wasClean: true });
@@ -269,7 +280,10 @@ if (mode?.startsWith('rejoin-')) {
 	assert.equal(trpc.getTRPCClientIfInitialized(), null, 'failed replacement must tear down rather than strand');
 	assert.ok(effects.slice(before).includes('reset'), 'teardown must reset server state for disconnect screen');
 	assert.equal(disconnectInfo?.code, DisconnectCode.UNEXPECTED, 'failed replacement must show disconnect screen');
-	assert.ok(effects.slice(before).includes('clearVoiceReconnectRecovery'));
+	assert.ok(
+		!effects.slice(before).includes('clearVoiceReconnectRecovery'),
+		'disconnect-screen teardown must keep voice recovery',
+	);
 } else if (mode === 'connect-failure' || mode === 'connect-refresh') {
 	trpc.cleanup();
 	holdHandshake = true;

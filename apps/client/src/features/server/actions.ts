@@ -430,7 +430,12 @@ export const joinServer = async (
 				}
 
 				clearReconnectSnapshotEventBuffer();
-				clearVoiceReconnectRecovery('app-teardown');
+				// The disconnect screen is a recovery path: keep voice recovery so the
+				// next successful join restores voice, as the grace-period teardown does.
+				// Terminal exits (auth/password) still drop it.
+				if (!showDisconnectScreen) {
+					clearVoiceReconnectRecovery('app-teardown');
+				}
 				cleanup();
 				if (showDisconnectScreen) {
 					// cleanup resets disconnectInfo, so publish the recovery screen afterwards.
