@@ -3,6 +3,7 @@ import {
 	createPeer,
 	credentialsFor,
 	disposePeer,
+	dropAppWebSocket,
 	installPcHook,
 	joinVoice,
 	login,
@@ -64,3 +65,61 @@ for (const muted of [false, true]) {
 		});
 	});
 }
+
+test('failed silent rejoin shows the disconnect screen and retries with saved credentials', async ({
+	browser,
+}, testInfo) => {
+	const context = await browser.newContext();
+	await installPcHook(context);
+	const page = await context.newPage();
+	const credentials = credentialsFor(testInfo);
+	const peer = { context, page, credentials };
+	let rejectRejoin = false;
+	let rejectedHandshakes = 0;
+	try {
+		await suppressViteHmrReload(page);
+		await page.routeWebSocket(
+			(url) => url.port === '4991',
+			(socket) => {
+				const server = socket.connectToServer();
+				socket.onMessage((message) => {
+					if (rejectRejoin && typeof message === 'string' && message !== 'PING' && message !== 'PONG') {
+						const payload: unknown = JSON.parse(message);
+						const requests: unknown[] = Array.isArray(payload) ? payload : [payload];
+						for (const request of requests) {
+							if (typeof request !== 'object' || request === null) continue;
+							const params: unknown = Reflect.get(request, 'params');
+							if (typeof params !== 'object' || params === null || Reflect.get(params, 'path') !== 'others.handshake') {
+								server.send(JSON.stringify(request));
+								continue;
+							}
+							rejectedHandshakes += 1;
+							socket.send(
+								JSON.stringify({
+									id: Reflect.get(request, 'id'),
+									error: {
+										message: 'Injected rejoin failure',
+										code: -32603,
+										data: { code: 'INTERNAL_SERVER_ERROR', httpStatus: 500 },
+									},
+								}),
+							);
+						}
+						return;
+					}
+					server.send(message);
+				});
+			},
+		);
+		await login(page, credentials);
+		rejectRejoin = true;
+		await dropAppWebSocket(page, { waitForReconnect: false });
+		await expect(page.getByRole('heading', { name: 'Connection lost', exact: true })).toBeVisible();
+		expect(rejectedHandshakes).toBeGreaterThan(0);
+		await expect(page.getByText('Trying to reconnect every 5 seconds.')).toBeVisible();
+		rejectRejoin = false;
+		await expect(page.getByText('VOICE CHANNELS')).toBeVisible({ timeout: 30_000 });
+	} finally {
+		await disposePeer(peer);
+	}
+});

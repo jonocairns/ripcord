@@ -1,4 +1,4 @@
-import type { TPublicServerSettings, TServerInfo } from '@sharkord/shared';
+import { DisconnectCode, type TPublicServerSettings, type TServerInfo } from '@sharkord/shared';
 import { TRPCClientError } from '@trpc/client';
 import { toast } from 'sonner';
 import { Dialog } from '@/components/dialogs/dialogs';
@@ -7,6 +7,7 @@ import { logDebug, recordVoiceDiagnostic, setErrorReportingUser } from '@/helper
 import { setErrorReportingIdentity } from '@/helpers/error-reporting';
 import { configureDiagnosticDelivery } from '@/helpers/error-reporting/delivery';
 import { getHostFromServer } from '@/helpers/get-file-url';
+import { getAuthToken, getRefreshToken } from '@/helpers/storage';
 import { configureStreamObservability, getStreamClientSessionId } from '@/helpers/stream-observability';
 import { configureTraceBackend } from '@/helpers/telemetry/backend';
 import {
@@ -47,6 +48,10 @@ let connectPromise: Promise<void> | null = null;
 let isConnectCurrent = () => false;
 // Incremented on each WS reconnect attempt to discard stale async work.
 let wsReconnectGeneration = 0;
+
+// Only confirmed credential or permission rejection makes rejoin terminal.
+const isTerminalRejoinError = (error: unknown): boolean =>
+	error instanceof TRPCClientError && (error.data?.code === 'UNAUTHORIZED' || error.data?.code === 'FORBIDDEN');
 
 const didGenerationChange = (generation: number): boolean => generation !== wsReconnectGeneration;
 
@@ -374,12 +379,18 @@ export const joinServer = async (
 					return;
 				}
 
+				let showDisconnectScreen = !isTerminalRejoinError(error);
+
 				if (failureAction === 'refresh-auth') {
 					const refreshed = await refreshAccessToken();
 
 					if (!isCurrent()) {
 						return;
 					}
+
+					// Rejected refresh credentials are cleared by refreshAccessToken; a
+					// transient refresh failure leaves saved auth available for recovery.
+					showDisconnectScreen = Boolean(getAuthToken() || getRefreshToken());
 
 					if (refreshed) {
 						logDebug('Token refreshed after WS reconnect, retrying join');
@@ -405,6 +416,8 @@ export const joinServer = async (
 								return;
 							}
 
+							showDisconnectScreen = !isTerminalRejoinError(retryError);
+
 							logDebug('Failed to rejoin after token refresh, tearing down', {
 								error: retryError,
 							});
@@ -419,6 +432,15 @@ export const joinServer = async (
 				clearReconnectSnapshotEventBuffer();
 				clearVoiceReconnectRecovery('app-teardown');
 				cleanup();
+				if (showDisconnectScreen) {
+					// cleanup resets disconnectInfo, so publish the recovery screen afterwards.
+					setDisconnectInfo({
+						code: DisconnectCode.UNEXPECTED,
+						reason: 'Failed to rejoin the server after reconnecting.',
+						wasClean: false,
+						time: new Date(),
+					});
+				}
 			}
 		})();
 	});
