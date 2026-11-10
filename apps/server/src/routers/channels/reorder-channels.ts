@@ -1,12 +1,13 @@
-import { ActivityLogType, OWNER_ROLE_ID, Permission } from '@sharkord/shared';
-import { and, asc, eq } from 'drizzle-orm';
+import { ActivityLogType, ChannelPermission, Permission } from '@sharkord/shared';
+import { asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannel } from '../../db/publishers';
-import { getChannelViewerIdsSync } from '../../db/queries/channels';
-import { channels, rolePermissions, userRoles, users } from '../../db/schema';
+import { loadChannelGrants, loadUserGrants } from '../../db/queries/permissions';
+import { channels } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
+import { hasChannelAccess, hasGlobalPermission } from '../../utils/permission-policy';
 import { protectedProcedure } from '../../utils/trpc';
 
 const reorderChannelsRoute = protectedProcedure
@@ -22,19 +23,11 @@ const reorderChannelsRoute = protectedProcedure
 		const categoryIds = db.transaction((tx) => {
 			// The asynchronous authorization lookup can overlap a role change. Recheck
 			// the current global grant in the same snapshot as membership and visibility.
-			const user = tx.select({ banned: users.banned }).from(users).where(eq(users.id, ctx.user.id)).get();
-			const roleIds = tx
-				.select({ id: userRoles.roleId })
-				.from(userRoles)
-				.where(eq(userRoles.userId, ctx.user.id))
-				.all();
-			const globalGrant = tx
-				.select({ id: userRoles.roleId })
-				.from(userRoles)
-				.innerJoin(rolePermissions, eq(rolePermissions.roleId, userRoles.roleId))
-				.where(and(eq(userRoles.userId, ctx.user.id), eq(rolePermissions.permission, Permission.MANAGE_CHANNELS)))
-				.get();
-			invariant(user && !user.banned && (roleIds.some((role) => role.id === OWNER_ROLE_ID) || globalGrant), {
+			// Drizzle's bun-sqlite transaction shares db's session and SQLite connection
+			// (verified for drizzle-orm 0.45.4), so these synchronous loaders read inside
+			// this transaction too. Recheck this if drizzle or the driver changes.
+			const userGrants = loadUserGrants(ctx.user.id);
+			invariant(hasGlobalPermission(userGrants, Permission.MANAGE_CHANNELS), {
 				code: 'FORBIDDEN',
 				message: 'Insufficient permissions',
 			});
@@ -48,7 +41,7 @@ const reorderChannelsRoute = protectedProcedure
 			// No await may separate this visibility decision from the writes. Build
 			// a bijection over current members, including members added during lookup.
 			const viewableChannels = currentChannels.filter((channel) =>
-				getChannelViewerIdsSync(channel.id)?.includes(ctx.user.id),
+				hasChannelAccess(userGrants, loadChannelGrants(ctx.user.id, channel.id), ChannelPermission.VIEW_CHANNEL),
 			);
 			const viewableIds = new Set(viewableChannels.map((channel) => channel.id));
 			const orderedIds = new Set(input.channelIds.filter((id) => viewableIds.has(id)));
