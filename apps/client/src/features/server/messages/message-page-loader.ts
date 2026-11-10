@@ -27,6 +27,8 @@ type TLoaderDeps = {
 	onError: (error: unknown) => void;
 };
 
+const MAX_EMPTY_PAGE_FOLLOW_UPS = 3;
+
 // Owns request lifetime independently of React render timing. Session identity
 // is captured at dispatch, including subscription replacement on a reused socket.
 export const createMessagePageLoader = (deps: TLoaderDeps) => {
@@ -64,18 +66,33 @@ export const createMessagePageLoader = (deps: TLoaderDeps) => {
 		fetching = true;
 		deps.setFetching(true);
 		try {
-			const nextCursor = await loadMessagePage({
-				query: () => deps.query(cursor, limit),
-				isCurrent: request.isCurrent,
-				getLoadedMessages: deps.getLoadedMessages,
-				getFileLinkVersion: deps.getFileLinkVersion,
-				applyLatestMessagePage: reconcile ? (page) => deps.applyLatestMessagePage(request.reconcile(page)) : undefined,
-				addMessages: (page) => deps.addMessages(page, cursor !== null),
-				refreshFileAccessTokens: deps.refreshFileAccessTokens,
-			});
-			if (request.isCurrent()) {
+			let pageCursor = cursor;
+			let followUps = 0;
+			while (request.isCurrent()) {
+				let empty = false;
+				const nextCursor = await loadMessagePage({
+					query: () => deps.query(pageCursor, limit),
+					isCurrent: request.isCurrent,
+					getLoadedMessages: deps.getLoadedMessages,
+					getFileLinkVersion: deps.getFileLinkVersion,
+					applyLatestMessagePage: reconcile
+						? (page) => {
+								const reconciled = request.reconcile(page);
+								empty = reconciled.length === 0;
+								deps.applyLatestMessagePage(reconciled);
+							}
+						: undefined,
+					addMessages: (page) => deps.addMessages(page, pageCursor !== null),
+					refreshFileAccessTokens: deps.refreshFileAccessTokens,
+				});
+				if (!request.isCurrent()) break;
+				// Retain progress even if the next fetch fails. The empty-list button
+				// can continue from here after a failure or the automatic fetch cap.
 				deps.setCursor(nextCursor);
 				deps.setHasMore(nextCursor !== null);
+				if (!empty || nextCursor === null || followUps >= MAX_EMPTY_PAGE_FOLLOW_UPS) break;
+				pageCursor = nextCursor;
+				followUps += 1;
 			}
 		} catch (error) {
 			if (request.isCurrent()) deps.onError(error);

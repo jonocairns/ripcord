@@ -56,10 +56,12 @@ const setup = () => {
 	const errors: unknown[] = [];
 	let response = deferred<{ messages: TJoinedMessage[]; nextCursor: number | null }>();
 	let queries = 0;
+	const cursors: (number | null)[] = [];
 	const loader = createMessagePageLoader({
 		channelId: 1,
 		getSession: () => session,
-		query: () => {
+		query: (cursor) => {
+			cursors.push(cursor);
 			queries += 1;
 			return response.promise;
 		},
@@ -90,6 +92,11 @@ const setup = () => {
 	};
 	return {
 		start,
+		nextResponse: () => {
+			response = deferred();
+			return response;
+		},
+		cursors,
 		requests: loader,
 		unsubscribe: loader.invalidate,
 		endSession: () => {
@@ -134,6 +141,112 @@ describe('deferred reconnect page reconciliation', () => {
 		expect(h.hasMore()).toBe(true);
 		expect(h.loading()).toBe(false);
 		expect(h.fetching()).toBe(false);
+		h.unsubscribe();
+	});
+	it('loads older history when live deletes empty the latest page', async () => {
+		const h = setup();
+		insert(message(1));
+		const load = h.start();
+		actions.deleteMessage(1, 3);
+		const older = h.nextResponse();
+		load.response.resolve({ messages: [message(3)], nextCursor: 3 });
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(h.cursors).toEqual([null, 3]);
+		expect(h.fetching()).toBe(true);
+		// Keep replaying the same journal, including mutations during follow-up.
+		actions.deleteMessage(1, 2);
+		insert(message(4));
+		older.resolve({ messages: [message(2), message(1)], nextCursor: null });
+		await load.done;
+		expect(useServerStore.getState().messagesMap[1]).toEqual([message(1), message(4)]);
+		expect(h.cursor()).toBeNull();
+		expect(h.hasMore()).toBe(false);
+		expect(h.fetching()).toBe(false);
+		h.unsubscribe();
+	});
+	it('bounds empty-page follow-ups and retains a usable older cursor', async () => {
+		const h = setup();
+		const load = h.start();
+		let response = load.response;
+		for (const id of [5, 4, 3, 2]) {
+			actions.deleteMessage(1, id);
+			const next = h.nextResponse();
+			response.resolve({ messages: [message(id)], nextCursor: id });
+			await Promise.resolve();
+			await Promise.resolve();
+			response = next;
+		}
+		await load.done;
+		expect(h.cursors).toEqual([null, 5, 4, 3]);
+		expect(h.cursor()).toBe(2);
+		expect(h.hasMore()).toBe(true);
+		expect(h.fetching()).toBe(false);
+		expect(useServerStore.getState().messagesMap[1]).toEqual([]);
+		const manual = h.start(false);
+		expect(h.cursors).toEqual([null, 5, 4, 3, 2]);
+		manual.response.resolve({ messages: [message(1)], nextCursor: null });
+		await manual.done;
+		expect(useServerStore.getState().messagesMap[1]).toEqual([message(1)]);
+		h.unsubscribe();
+	});
+	it('retains the older cursor for retry when a follow-up fails', async () => {
+		const h = setup();
+		const load = h.start();
+		actions.deleteMessage(1, 3);
+		const older = h.nextResponse();
+		load.response.resolve({ messages: [message(3)], nextCursor: 3 });
+		await Promise.resolve();
+		await Promise.resolve();
+		const error = new Error('follow-up failed');
+		older.reject(error);
+		await load.done;
+		expect(h.cursor()).toBe(3);
+		expect(h.hasMore()).toBe(true);
+		expect(h.fetching()).toBe(false);
+		expect(h.errors).toEqual([error]);
+		const retry = h.start(false);
+		expect(h.cursors).toEqual([null, 3, 3]);
+		retry.response.resolve({ messages: [message(1)], nextCursor: null });
+		await retry.done;
+		expect(useServerStore.getState().messagesMap[1]).toEqual([message(1)]);
+		h.unsubscribe();
+	});
+	it('keeps an empty terminal page empty without fetching again', async () => {
+		const h = setup();
+		insert(message(1));
+		const load = h.start();
+		actions.deleteMessage(1, 3);
+		load.response.resolve({ messages: [message(3)], nextCursor: null });
+		await load.done;
+		expect(useServerStore.getState().messagesMap[1]).toEqual([]);
+		expect(h.queries()).toBe(1);
+		expect(h.hasMore()).toBe(false);
+		h.unsubscribe();
+	});
+	it.each(['replacement', 'session', 'teardown'])('discards an obsolete follow-up after %s', async (reason) => {
+		const h = setup();
+		const load = h.start();
+		actions.deleteMessage(1, 3);
+		const older = h.nextResponse();
+		load.response.resolve({ messages: [message(3)], nextCursor: 3 });
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(h.cursors).toEqual([null, 3]);
+		if (reason === 'replacement') {
+			const latest = h.start();
+			latest.response.resolve({ messages: [message(9)], nextCursor: 9 });
+			await latest.done;
+		} else if (reason === 'session') h.endSession();
+		else h.requests.invalidate();
+		const messages = useServerStore.getState().messagesMap[1];
+		const cursor = h.cursor();
+		const fetching = h.fetching();
+		older.resolve({ messages: [message(1)], nextCursor: null });
+		await load.done;
+		expect(useServerStore.getState().messagesMap[1]).toEqual(messages);
+		expect(h.cursor()).toBe(cursor);
+		expect(h.fetching()).toBe(fetching);
 		h.unsubscribe();
 	});
 	it('fences overlapping reloads including stale failure/finally and preserves the newest journal', async () => {
