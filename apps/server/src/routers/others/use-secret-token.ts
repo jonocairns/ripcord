@@ -1,7 +1,8 @@
 import { ActivityLogType, OWNER_ROLE_ID, sha256 } from '@sharkord/shared';
 import { z } from 'zod';
 import { db } from '../../db';
-import { publishUser } from '../../db/publishers';
+import { publishChannelPermissions, publishUser, publishUserChannelVisibility } from '../../db/publishers';
+import { getVisibleChannelIdsByUserSync } from '../../db/queries/channels';
 import { getSettings } from '../../db/queries/server';
 import { userRoles } from '../../db/schema';
 import { logger } from '../../logger';
@@ -33,11 +34,14 @@ const useSecretTokenRoute = rateLimitedProcedure(protectedProcedure, {
 			message: 'Invalid secret token',
 		});
 
-		await db.insert(userRoles).values({
-			userId: ctx.userId,
-			roleId: OWNER_ROLE_ID,
-			createdAt: Date.now(),
-		});
+		const previousVisibleByUser = getVisibleChannelIdsByUserSync([ctx.userId]);
+		db.insert(userRoles)
+			.values({
+				userId: ctx.userId,
+				roleId: OWNER_ROLE_ID,
+				createdAt: Date.now(),
+			})
+			.run();
 
 		enqueueActivityLog({
 			type: ActivityLogType.USER_USED_SECRET_TOKEN,
@@ -46,6 +50,8 @@ const useSecretTokenRoute = rateLimitedProcedure(protectedProcedure, {
 
 		logger.info('Secret token used successfully by user %d', ctx.userId);
 		publishUser(ctx.userId, 'update');
+		await publishChannelPermissions([ctx.userId]);
+		publishUserChannelVisibility([ctx.userId], previousVisibleByUser);
 	});
 
 export { useSecretTokenRoute };
