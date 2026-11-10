@@ -55,6 +55,46 @@ test('a sent message reaches another member live and follows its edit and delete
 	}
 });
 
+test('a rejected edit keeps its text and can be corrected and saved', async ({ browser }, testInfo) => {
+	const author = await createPeer(browser, credentialsFor(testInfo, 'author'));
+	const id = nonce();
+	const original = `Before rejection ${id}`;
+	const corrected = `Corrected edit ${id}`;
+	const longText = 'x'.repeat(4001);
+
+	try {
+		await openTextChannel(author.page, TEXT_CHANNEL);
+		await sendMessage(author.page, original);
+		const row = messageRow(author.page, original);
+		await row.hover();
+		await row.getByTitle('Edit Message').click();
+
+		const editor = author.page
+			.locator('div')
+			.filter({ has: author.page.getByText('Press Enter to save, Esc to cancel') })
+			.last()
+			.getByRole('textbox');
+		await expect(editor).toHaveText(original);
+		await editor.press('ControlOrMeta+a');
+		await author.page.keyboard.insertText(longText);
+		await expect(editor).toHaveText(longText);
+		await editor.press('Enter');
+
+		await expect(author.page.locator('[data-sonner-toast]').filter({ hasText: 'Message is too long' })).toBeVisible();
+		await expect(editor).toBeVisible();
+		await expect(editor).toHaveText(longText);
+
+		await editor.press('ControlOrMeta+a');
+		await author.page.keyboard.insertText(corrected);
+		await editor.press('Enter');
+		await expect(messageContent(author.page, corrected)).toBeVisible();
+		await expect(messageContent(author.page, original)).toHaveCount(0);
+		await expect(editor).toHaveCount(0);
+	} finally {
+		await disposePeer(author);
+	}
+});
+
 test('attachments reach live and late readers and are removed with their message', async ({ browser }, testInfo) => {
 	const author = await createPeer(browser, credentialsFor(testInfo, 'author'));
 	const reader = await createPeer(browser, credentialsFor(testInfo, 'reader'));

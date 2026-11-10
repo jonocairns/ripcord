@@ -1,8 +1,9 @@
 import { isEmptyMessage, type TMessage } from '@sharkord/shared';
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { TiptapInput } from '@/components/tiptap-input';
 import { AutoFocus } from '@/components/ui/auto-focus';
+import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { getTRPCClient } from '@/lib/trpc';
 
 type TMessageEditInlineProps = {
@@ -12,6 +13,8 @@ type TMessageEditInlineProps = {
 
 const MessageEditInline = memo(({ message, onBlur }: TMessageEditInlineProps) => {
 	const [value, setValue] = useState<string>(message.content ?? '');
+	// The editor stays open after a rejected save, so ignore Enter while a save is in flight.
+	const savingRef = useRef(false);
 
 	const onSubmit = useCallback(
 		async (newValue: string) => {
@@ -21,6 +24,9 @@ const MessageEditInline = memo(({ message, onBlur }: TMessageEditInlineProps) =>
 				return;
 			}
 
+			if (savingRef.current) return;
+			savingRef.current = true;
+
 			const trpc = getTRPCClient();
 
 			try {
@@ -29,10 +35,11 @@ const MessageEditInline = memo(({ message, onBlur }: TMessageEditInlineProps) =>
 					content: newValue,
 				});
 				toast.success('Message edited');
-			} catch {
-				toast.error('Failed to edit message');
-			} finally {
 				onBlur();
+			} catch (error) {
+				toast.error(getTrpcError(error, 'Failed to edit message'));
+			} finally {
+				savingRef.current = false;
 			}
 		},
 		[message.id, onBlur],
