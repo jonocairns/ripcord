@@ -229,7 +229,7 @@ const isDesktopServerSetupRequired = () => {
 
 const updateDesktopServerUrl = async (
 	serverUrl: string,
-	onOriginUpgrade?: (fromOrigin: string, toOrigin: string) => void,
+	onOriginUpgrade: (fromOrigin: string, toOrigin: string) => void,
 ) => {
 	const desktopBridge = getDesktopBridge();
 
@@ -242,10 +242,10 @@ const updateDesktopServerUrl = async (
 
 	await desktopBridge.setServerUrl(upgraded.url);
 
-	// Report save-time upgrades before the caller reloads. Runtime must not depend
+	// Required so every save screen moves credentials before it reloads. Runtime must not depend
 	// on credential storage; the caller applies the same policy used at startup.
 	if (upgraded.url !== normalized.url) {
-		onOriginUpgrade?.(new URL(normalized.url).origin, new URL(upgraded.url).origin);
+		onOriginUpgrade(new URL(normalized.url).origin, new URL(upgraded.url).origin);
 	}
 
 	runtimeServerConfig = {
