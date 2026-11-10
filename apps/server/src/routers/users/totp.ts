@@ -42,8 +42,8 @@ type TSetupPayload = z.infer<typeof zSetupPayload>;
 const rotateUserTotp = async (userId: number, totpSecret: string | null, totpRecoveryCodes: string | null) => {
 	const now = Date.now();
 
-	return db.transaction(async (tx) => {
-		const updatedUser = await tx
+	return db.transaction((tx) => {
+		const updatedUser = tx
 			.update(users)
 			.set({
 				totpSecret,
@@ -55,8 +55,7 @@ const rotateUserTotp = async (userId: number, totpSecret: string | null, totpRec
 			.returning({ tokenVersion: users.tokenVersion })
 			.get();
 
-		await tx
-			.update(refreshTokens)
+		tx.update(refreshTokens)
 			.set({ revokedAt: now, updatedAt: now })
 			.where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)))
 			.run();
