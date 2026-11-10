@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.5.5](https://github.com/jonocairns/ripcord/compare/v2.5.4...v2.5.5) (2026-11-10)
+
+
+### Bug Fixes
+
+* clean up after a plugin fails to load and keep plugins loaded when saving other settings ([#393](https://github.com/jonocairns/ripcord/issues/393)) ([7d79679](https://github.com/jonocairns/ripcord/commit/7d7967908215510175c72823c208a4c9f387770f))
+* keep the edit open and show the reason when a message edit is rejected ([#384](https://github.com/jonocairns/ripcord/issues/384)) ([42477da](https://github.com/jonocairns/ripcord/commit/42477da4898a41466c9261aa92f7fe0b378516b3))
+* make channel, role and ordering changes atomic ([#388](https://github.com/jonocairns/ripcord/issues/388)) ([0d47add](https://github.com/jonocairns/ripcord/commit/0d47addc2243269ed252a7f09ea462f017236b89))
+* make password, two-factor and token refresh changes atomic ([#386](https://github.com/jonocairns/ripcord/issues/386)) ([421c810](https://github.com/jonocairns/ripcord/commit/421c8102401fc1ebbe01418b0195082fb73b4e4e))
+* require channel access to delete channels and clean up when a category is deleted ([#391](https://github.com/jonocairns/ripcord/issues/391)) ([6e77ba2](https://github.com/jonocairns/ripcord/commit/6e77ba229f0e57dfed814af5bf8435cad0ad17f0))
+* restore voice after the server is unreachable long enough to show the disconnect screen ([#390](https://github.com/jonocairns/ripcord/issues/390)) ([ba66402](https://github.com/jonocairns/ripcord/commit/ba664023d9c94798473c48df40c6b1eca73ffc2a))
+* stop edits and reactions from marking channels unread ([#385](https://github.com/jonocairns/ripcord/issues/385)) ([0960dcb](https://github.com/jonocairns/ripcord/commit/0960dcba412c7fef224d16c18607ae7db2e9347d))
+* stop sending private voice channel activity to users who cannot view the channel ([#392](https://github.com/jonocairns/ripcord/issues/392)) ([635e3e5](https://github.com/jonocairns/ripcord/commit/635e3e5f933e7257a1a1c9531a8f42dc84bd7fe9))
+* stop sending server stack traces to clients and rewriting read state on history pages ([#387](https://github.com/jonocairns/ripcord/issues/387)) ([4a97b12](https://github.com/jonocairns/ripcord/commit/4a97b1283043a475c35ba5e7b79315c8a1afdd36))
+
 ## [2.5.4](https://github.com/jonocairns/ripcord/compare/v2.5.3...v2.5.4) (2026-11-10)
 
 
