@@ -1,5 +1,4 @@
 import Queue from 'queue';
-import { publishMessage } from '../../db/publishers';
 import { logger } from '../../logger';
 import { processMessageMetadata } from './get-message-metadata';
 
@@ -15,11 +14,8 @@ messageMetadataQueue.addEventListener('error', (event) => {
 
 const enqueueProcessMetadata = (content: string, messageId: number) => {
 	messageMetadataQueue.push(async (callback) => {
-		const updatedMessage = await processMessageMetadata(content, messageId);
-
-		if (updatedMessage) {
-			publishMessage(messageId, undefined, 'update');
-		}
+		// Previews are stored but not published because no client reads them.
+		await processMessageMetadata(content, messageId);
 
 		callback?.();
 	});

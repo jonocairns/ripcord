@@ -90,7 +90,6 @@ export const processMessageMetadata = async (content: string, messageId: number)
 		.update(messages)
 		.set({
 			metadata,
-			updatedAt: Date.now(),
 		})
 		.where(eq(messages.id, messageId))
 		.returning()
