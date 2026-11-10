@@ -19,13 +19,7 @@ import { getPublicSettings } from './queries/server';
 import { getPublicUserById, getUserIdsWithPermission } from './queries/users';
 import { categories, channels, users } from './schema';
 
-const publishMessage = async (
-	messageId: number | undefined,
-	channelId: number | undefined,
-	type: 'create' | 'update' | 'delete',
-) => {
-	if (!messageId || !channelId) return;
-
+const publishMessage = async (messageId: number, channelId: number, type: 'create' | 'update' | 'delete') => {
 	if (type === 'delete') {
 		const affectedUserIds = await getAffectedUserIdsForChannel(channelId, {
 			permission: ChannelPermission.VIEW_CHANNEL,
@@ -54,7 +48,7 @@ const publishMessage = async (
 	// only send unread updates to users OTHER than the message author
 	const usersToNotify = affectedUserIds.filter((id) => id !== message.userId);
 
-	if (usersToNotify.length > 0) {
+	if (type === 'create' && usersToNotify.length > 0) {
 		pubsub.publishFor(usersToNotify, ServerEvents.CHANNEL_READ_STATES_DELTA, {
 			channelId,
 			// this was sending the whole unread count before which was causing performance issues, now it just sends a delta of 1 which the client can use to update the unread count
