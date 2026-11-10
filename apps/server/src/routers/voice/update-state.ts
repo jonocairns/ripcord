@@ -11,9 +11,8 @@ const updateVoiceStateRoute = protectedProcedure
 			soundMuted: z.boolean().optional(),
 			webcamEnabled: z.boolean().optional(),
 			sharingScreen: z.boolean().optional(),
-			// Client-monotonic ordering token. Updates can reach the server out of
-			// order (separate requests, awaited middleware), so without it two rapid
-			// updates could apply in the wrong order.
+			// Client-monotonic ordering token. The permission checks below are
+			// async, so two rapid updates can apply out of order without it.
 			seq: z.number().int().nonnegative().optional(),
 		}),
 	)
@@ -25,10 +24,11 @@ const updateVoiceStateRoute = protectedProcedure
 		const { seq, ...stateInput } = input;
 		const validatedInput = { ...stateInput };
 
-		const can = ctx.createChannelPermissionChecker(channelId);
-		const canSpeak = can(ChannelPermission.SPEAK);
-		const canUseWebcam = can(ChannelPermission.WEBCAM);
-		const canShareScreen = can(ChannelPermission.SHARE_SCREEN);
+		const [canSpeak, canUseWebcam, canShareScreen] = await Promise.all([
+			ctx.hasChannelPermission(channelId, ChannelPermission.SPEAK),
+			ctx.hasChannelPermission(channelId, ChannelPermission.WEBCAM),
+			ctx.hasChannelPermission(channelId, ChannelPermission.SHARE_SCREEN),
+		]);
 
 		if (!canSpeak) {
 			delete validatedInput.micMuted;
