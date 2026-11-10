@@ -1,14 +1,15 @@
 use std::collections::VecDeque;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use crate::protocol::{
     PushKeybindKind, SidecarError, SidecarEvent, SidecarResponse, APP_AUDIO_BINARY_EGRESS_FRAMING,
@@ -27,12 +28,22 @@ impl PushKeybindWatcher {
     }
 }
 
-#[derive(Debug)]
 pub(crate) struct AppAudioBinaryEgress {
     pub(crate) port: u16,
+    pub(crate) auth_token: String,
     pub(crate) stream: Arc<Mutex<Option<TcpStream>>>,
     pub(crate) stop_flag: Arc<AtomicBool>,
     pub(crate) handle: JoinHandle<()>,
+}
+
+// Hand-written so a debug print can never put the stream's auth token in a log.
+impl std::fmt::Debug for AppAudioBinaryEgress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppAudioBinaryEgress")
+            .field("port", &self.port)
+            .field("auth_token", &"<redacted>")
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Default)]
@@ -385,6 +396,57 @@ pub(crate) fn enqueue_push_keybind_state_event(
     }
 }
 
+// Bound the whole handshake, including clients that trickle bytes. Never hold the
+// active stream lock while authenticating a new connection.
+fn authenticate_app_audio_stream(stream: &mut TcpStream, token: &[u8]) -> io::Result<()> {
+    stream.set_nonblocking(false)?;
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let mut received = [0_u8; 64];
+    let mut offset = 0;
+    while offset < received.len() {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "Authentication timed out"))?;
+        stream.set_read_timeout(Some(remaining))?;
+        match stream.read(&mut received[offset..]) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "Incomplete authentication",
+                ))
+            }
+            Ok(count) => offset += count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    if Instant::now() >= deadline {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "Authentication timed out",
+        ));
+    }
+    let mut difference = 0_u8;
+    for (actual, expected) in received.iter().zip(token) {
+        difference |= actual ^ expected;
+    }
+    if difference != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Invalid authentication",
+        ));
+    }
+
+    stream.set_read_timeout(None)?;
+    // Preserve the pre-authentication write behavior explicitly: accept inherits
+    // nonblocking on Windows/macOS; Linux accept4 uses only SOCK_CLOEXEC.
+    stream.set_nonblocking(cfg!(any(windows, target_os = "macos")))?;
+    stream.set_nodelay(true)?;
+    stream.set_write_timeout(Some(Duration::from_millis(15)))?;
+    Ok(())
+}
+
 pub(crate) fn start_app_audio_binary_egress() -> Result<AppAudioBinaryEgress, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .map_err(|error| format!("Failed to bind app-audio binary egress listener: {error}"))?;
@@ -397,6 +459,8 @@ pub(crate) fn start_app_audio_binary_egress() -> Result<AppAudioBinaryEgress, St
         .map_err(|error| format!("Failed to read app-audio binary egress listener port: {error}"))?
         .port();
 
+    let auth_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let worker_auth_token = auth_token.clone();
     let stream = Arc::new(Mutex::new(None::<TcpStream>));
     let worker_stream = Arc::clone(&stream);
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -405,12 +469,21 @@ pub(crate) fn start_app_audio_binary_egress() -> Result<AppAudioBinaryEgress, St
     let handle = thread::spawn(move || {
         while !worker_stop_flag.load(Ordering::Relaxed) {
             match listener.accept() {
-                Ok((accepted_stream, _peer)) => {
-                    let _ = accepted_stream.set_nodelay(true);
-                    let _ = accepted_stream.set_write_timeout(Some(Duration::from_millis(15)));
-
+                Ok((mut accepted_stream, _peer)) => {
+                    if authenticate_app_audio_stream(
+                        &mut accepted_stream,
+                        worker_auth_token.as_bytes(),
+                    )
+                    .is_err()
+                    {
+                        eprintln!("[capture-sidecar] app-audio binary egress client rejected");
+                        continue;
+                    }
                     if let Ok(mut lock) = worker_stream.lock() {
                         *lock = Some(accepted_stream);
+                        eprintln!("[capture-sidecar] app-audio binary egress client accepted");
+                    } else {
+                        eprintln!("[capture-sidecar] app-audio binary egress client rejected");
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -430,6 +503,7 @@ pub(crate) fn start_app_audio_binary_egress() -> Result<AppAudioBinaryEgress, St
 
     Ok(AppAudioBinaryEgress {
         port,
+        auth_token,
         stream,
         stop_flag,
         handle,
@@ -441,6 +515,7 @@ pub(crate) fn audio_capture_binary_egress_info(
 ) -> Value {
     json!({
         "port": app_audio_binary_egress.port,
+        "authToken": app_audio_binary_egress.auth_token,
         "framing": APP_AUDIO_BINARY_EGRESS_FRAMING,
         "protocolVersion": PROTOCOL_VERSION,
     })
@@ -449,6 +524,103 @@ pub(crate) fn audio_capture_binary_egress_info(
 #[cfg(test)]
 mod tests {
     use super::OutputQueue;
+
+    use super::{start_app_audio_binary_egress, AppAudioBinaryEgress};
+    use std::io::{Read, Write};
+    use std::net::{Shutdown, SocketAddr, TcpStream};
+    use std::sync::atomic::Ordering;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    struct TestEgress(Option<AppAudioBinaryEgress>);
+
+    impl Drop for TestEgress {
+        fn drop(&mut self) {
+            if let Some(egress) = self.0.take() {
+                egress.stop_flag.store(true, Ordering::Relaxed);
+                egress.handle.join().unwrap();
+            }
+        }
+    }
+
+    fn wait_for_client(egress: &AppAudioBinaryEgress, address: SocketAddr) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if egress
+                .stream
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|stream| stream.peer_addr().unwrap() == address)
+            {
+                return;
+            }
+            assert!(Instant::now() < deadline, "Client was not installed");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn binary_egress_authenticates_before_replacing_active_stream() {
+        let guard = TestEgress(Some(start_app_audio_binary_egress().unwrap()));
+        let egress = guard.0.as_ref().unwrap();
+        assert_eq!(egress.auth_token.len(), 64);
+        assert!(egress
+            .auth_token
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit()));
+        let mut first = TcpStream::connect(("127.0.0.1", egress.port)).unwrap();
+        first.write_all(egress.auth_token.as_bytes()).unwrap();
+        let first_address = first.local_addr().unwrap();
+        wait_for_client(egress, first_address);
+
+        for bytes in [
+            &[b'x'; 64][..],
+            &egress.auth_token.as_bytes()[..10],
+            &[][..],
+        ] {
+            let mut rejected = TcpStream::connect(("127.0.0.1", egress.port)).unwrap();
+            rejected
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            rejected.write_all(bytes).unwrap();
+            if !bytes.is_empty() && bytes.len() < 64 {
+                rejected.shutdown(Shutdown::Write).unwrap();
+            }
+            // Silent clients stay open: the server must enforce its own deadline.
+            let started = Instant::now();
+            let mut byte = [0];
+            match rejected.read(&mut byte) {
+                Ok(0) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+                result => panic!("Rejected connection was not closed: {result:?}"),
+            }
+            assert!(started.elapsed() < Duration::from_secs(2));
+            wait_for_client(egress, first_address);
+            // Rejections must preserve actual delivery, not just slot identity.
+            egress
+                .stream
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .write_all(b"a")
+                .unwrap();
+            first
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            first.read_exact(&mut byte).unwrap();
+            assert_eq!(byte, [b'a']);
+        }
+
+        let mut second = TcpStream::connect(("127.0.0.1", egress.port)).unwrap();
+        second.write_all(egress.auth_token.as_bytes()).unwrap();
+        wait_for_client(egress, second.local_addr().unwrap());
+        first
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        assert_eq!(first.read(&mut [0]).unwrap(), 0);
+    }
 
     fn audio_line(n: usize) -> String {
         format!("audio-{n}")
