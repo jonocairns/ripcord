@@ -1,6 +1,7 @@
 import { ServerEvents, type StreamKind } from '@sharkord/shared';
 import { observable } from '@trpc/server/observable';
 import { VoiceRuntime } from '../../runtimes/voice';
+import type { Events } from '../../utils/pubsub';
 import { protectedProcedure } from '../../utils/trpc';
 
 type TVoiceProducerEvent = {
@@ -33,7 +34,17 @@ const onUserLeaveVoiceRoute = protectedProcedure.subscription(async ({ ctx }) =>
 });
 
 const onUserUpdateVoiceStateRoute = protectedProcedure.subscription(async ({ ctx }) => {
-	return ctx.pubsub.subscribeFor(ctx.user.id, ServerEvents.USER_VOICE_STATE_UPDATE);
+	return observable<Events[ServerEvents.USER_VOICE_STATE_UPDATE]>((observer) => {
+		// A restore batched with this subscription can reconcile state before
+		// tRPC attaches the observable. Subscribe first, then replay own state so
+		// faster permission checks cannot lose the reconnect mute confirmation.
+		const subscription = ctx.pubsub.subscribeFor(ctx.user.id, ServerEvents.USER_VOICE_STATE_UPDATE).subscribe(observer);
+		const runtime = VoiceRuntime.findRuntimeByUserId(ctx.user.id);
+		if (runtime) {
+			observer.next({ channelId: runtime.id, userId: ctx.user.id, state: runtime.getUserState(ctx.user.id) });
+		}
+		return () => subscription.unsubscribe();
+	});
 });
 
 const onVoiceSessionReplacedRoute = protectedProcedure.subscription(async ({ ctx }) => {

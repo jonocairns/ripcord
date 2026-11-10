@@ -203,3 +203,22 @@ test('visibility changes replay and withdraw plugin streams', async () => {
 	await owner.channels.deletePermissions({ channelId: 2, userId: 2 });
 	expect(removes).toEqual([{ channelId: 2, streamId }]);
 });
+
+test('voice state subscription replays a restore that reconciled before listener attachment', async () => {
+	const { runtime, owner } = await setup();
+	await owner.voice.join({ channelId: 2, state });
+	const stream = await owner.voice.onUpdateState();
+	// Faster permission checks let a batched restore reconcile before tRPC
+	// subscribes to the returned observable. Its one-shot event is already gone.
+	runtime.reconcileVoiceRestoreState(1, { micMuted: true, soundMuted: false });
+	publishVoiceSidebarEvent(ServerEvents.USER_VOICE_STATE_UPDATE, {
+		channelId: 2,
+		userId: 1,
+		state: runtime.getUserState(1),
+	});
+	const events: Events[ServerEvents.USER_VOICE_STATE_UPDATE][] = [];
+	subscriptions.push(stream.subscribe({ next: (event) => events.push(event) }));
+	expect(events).toEqual([{ channelId: 2, userId: 1, state: { ...state, micMuted: true } }]);
+	await owner.voice.updateState({ micMuted: false });
+	expect(events.map((event) => event.state.micMuted)).toEqual([true, false]);
+});
