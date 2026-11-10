@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { db } from '../../db';
 import { fallbackUsersToDefaultRole } from '../../db/mutations/users';
 import { publishChannelPermissions, publishRole, publishUserChannelVisibility } from '../../db/publishers';
+import { getVisibleChannelIdsByUserSync } from '../../db/queries/channels';
 import { getRole } from '../../db/queries/roles';
 import { roles, userRoles } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
@@ -40,10 +41,11 @@ const deleteRoleRoute = protectedProcedure
 			.from(userRoles)
 			.where(eq(userRoles.roleId, role.id));
 
+		const affectedUserIds = affectedUsers.map((user) => user.userId);
+		const previousVisibleByUser = getVisibleChannelIdsByUserSync(affectedUserIds);
+
 		await fallbackUsersToDefaultRole(role.id);
 		await db.delete(roles).where(eq(roles.id, role.id));
-
-		const affectedUserIds = affectedUsers.map((user) => user.userId);
 
 		await Promise.all([
 			publishRole(role.id, 'delete'),
@@ -52,7 +54,7 @@ const deleteRoleRoute = protectedProcedure
 				userIds: affectedUserIds,
 			}),
 		]);
-		await publishUserChannelVisibility(affectedUserIds);
+		await publishUserChannelVisibility(affectedUserIds, previousVisibleByUser);
 		enqueueActivityLog({
 			type: ActivityLogType.DELETED_ROLE,
 			userId: ctx.user.id,

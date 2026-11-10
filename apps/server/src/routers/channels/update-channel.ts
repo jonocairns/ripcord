@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannel, publishChannelVisibility } from '../../db/publishers';
+import { getChannelViewerIdsSync } from '../../db/queries/channels';
 import { channels, users } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
@@ -34,6 +35,8 @@ const updateChannelRoute = protectedProcedure
 			await ctx.needsChannelPermission(previousChannel.id, ChannelPermission.VIEW_CHANNEL);
 		}
 
+		const previousViewerIds = new Set(getChannelViewerIdsSync(input.channelId) ?? []);
+
 		const updatedChannel = await db
 			.update(channels)
 			.set({
@@ -57,6 +60,7 @@ const updateChannelRoute = protectedProcedure
 			await publishChannelVisibility(
 				updatedChannel.id,
 				allUsers.map((user) => user.id),
+				previousViewerIds,
 				previousChannel,
 			);
 			await revalidateActiveVoiceSessions({

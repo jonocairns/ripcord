@@ -284,6 +284,18 @@ const getAffectedUserIdsForChannel = async (
 export const getChannelViewerIdsSync = (channelId: number): number[] | undefined =>
 	resolveAffectedUserIdsForChannel(channelId, { permission: ChannelPermission.VIEW_CHANNEL });
 
+// Resolve both sides of role changes with the same synchronous viewer rules used
+// by live publishers. Snapshot before mutating roles; never await while resolving.
+export const getVisibleChannelIdsByUserSync = (userIds: number[]): Map<number, Set<number>> => {
+	const visibleByUser = new Map(userIds.map((userId) => [userId, new Set<number>()]));
+	for (const { id } of db.select({ id: channels.id }).from(channels).all()) {
+		for (const userId of getChannelViewerIdsSync(id) ?? []) {
+			visibleByUser.get(userId)?.add(id);
+		}
+	}
+	return visibleByUser;
+};
+
 const getChannelsReadStatesForUser = async (userId: number, channelId?: number): Promise<TReadStateMap> => {
 	const results = await db
 		.select({

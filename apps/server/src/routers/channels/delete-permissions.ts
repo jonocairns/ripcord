@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannelPermissions, publishChannelVisibility } from '../../db/publishers';
-import { getAffectedUserIdsForChannel } from '../../db/queries/channels';
+import { getAffectedUserIdsForChannel, getChannelViewerIdsSync } from '../../db/queries/channels';
 import { channelRolePermissions, channelUserPermissions } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
@@ -29,6 +29,8 @@ const deletePermissionsRoute = protectedProcedure
 
 		const affectedUserIds = await getAffectedUserIdsForChannel(input.channelId);
 
+		const previousViewerIds = new Set(getChannelViewerIdsSync(input.channelId) ?? []);
+
 		await db.transaction((tx) => {
 			if (input.userId) {
 				tx.delete(channelUserPermissions)
@@ -52,7 +54,7 @@ const deletePermissionsRoute = protectedProcedure
 				channelIds: [input.channelId],
 			}),
 		]);
-		await publishChannelVisibility(input.channelId, affectedUserIds);
+		await publishChannelVisibility(input.channelId, affectedUserIds, previousViewerIds);
 
 		enqueueActivityLog({
 			type: ActivityLogType.DELETED_CHANNEL_PERMISSIONS,
