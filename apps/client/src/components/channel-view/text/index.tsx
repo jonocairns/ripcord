@@ -148,7 +148,13 @@ const TextChannel = memo(({ channelId }: TChannelProps) => {
 				onScroll={onScroll}
 				className="flex-1 overflow-y-auto overflow-x-hidden p-2 animate-in fade-in duration-500"
 			>
-				{isEmpty ? (
+				{isEmpty && hasMore ? (
+					<div className="flex min-h-full items-center justify-center">
+						<Button variant="secondary" onClick={loadMore}>
+							Load older messages
+						</Button>
+					</div>
+				) : isEmpty ? (
 					<div className="flex min-h-full items-end px-3 pb-6">
 						<div className="max-w-2xl space-y-5">
 							<div className="bg-muted/70 flex h-20 w-20 items-center justify-center rounded-full border border-border">
