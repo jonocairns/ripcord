@@ -269,7 +269,14 @@ const initializeTRPC = (host: string) => {
 			teardownTimer = setTimeout(runTeardown, RETRY_GRACE_PERIOD_MS);
 		},
 		onOpen: () => {
-			if (wsClient !== client) return;
+			if (wsClient !== client) {
+				// tRPC close() waits for pending requests before closing the socket,
+				// and an in-flight request can call open() and re-enable retries.
+				// Retired clients must close even if that work finishes after retirement.
+				void client.close().catch(() => {});
+				client.connection?.ws.close();
+				return;
+			}
 			recordDesktopDiagnostic('websocket_opened', {
 				clientInstanceId: getWsClientInstanceId(),
 				reconnecting: teardownTimer !== null,
