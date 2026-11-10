@@ -77,10 +77,9 @@ execution code must not use it as a second mutable state owner.
 World events trigger transitions, including:
 
 - join requested/succeeded/failed
-- WebSocket dropped or authenticated
+- WebSocket dropped, authenticated, or unauthenticated
 - transport failed or nonce changed
-- reconnect intent captured or cleared
-- terminal session exit
+- reconnect intent captured, `ReconnectStarted`, or recovery cleared
 
 The machine emits effect commands such as:
 

@@ -30,6 +30,7 @@ const createRefBackedExecutorPorts = (getPorts: TVoiceSessionExecutorPortsSource
 	reportRebuildDetached: (command) => getPorts().reportRebuildDetached(command),
 	reportRebuildTerminalFailure: (command, error) => getPorts().reportRebuildTerminalFailure(command, error),
 	reportRestoreDetached: (command) => getPorts().reportRestoreDetached(command),
+	reportRebuildNonceRestart: (command, currentNonce) => getPorts().reportRebuildNonceRestart(command, currentNonce),
 	commandObserver: {
 		start: (context) => getPorts().commandObserver?.start(context) ?? { run: (effect) => effect(), finish: () => {} },
 	},

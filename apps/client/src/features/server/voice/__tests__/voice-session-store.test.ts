@@ -4,6 +4,7 @@ import {
 	selectReconnectAuthenticated,
 	selectReconnectingSince,
 	selectVoiceReconnectSuppression,
+	VOICE_RECONNECT_SUPPRESSION_MS,
 } from '../voice-session-machine';
 import {
 	dispatchVoiceSession,
@@ -79,7 +80,7 @@ describe('voice session store', () => {
 
 		dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
 		unsubscribe();
-		dispatchVoiceSession({ type: 'Terminated', reason: 'kicked', channelId: 5 });
+		dispatchVoiceSession({ type: 'RecoveryCleared', reason: 'kicked' });
 
 		expect(notifications).toEqual([
 			{
@@ -110,7 +111,7 @@ describe('voice session store', () => {
 
 		dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
 		unregister();
-		dispatchVoiceSession({ type: 'Terminated', reason: 'kicked', channelId: 5 });
+		dispatchVoiceSession({ type: 'RecoveryCleared', reason: 'kicked' });
 
 		expect(executed).toEqual(['CaptureRecoverySnapshot']);
 	});
@@ -215,7 +216,7 @@ describe('voice session store', () => {
 		expect(isVoiceSessionCommandCurrent(rebuildCommand)).toBe(true);
 
 		// Leaving the recovery phase invalidates the rebuild command too.
-		dispatchVoiceSession({ type: 'Terminated', reason: 'kicked', channelId: 5 });
+		dispatchVoiceSession({ type: 'RecoveryCleared', reason: 'kicked' });
 
 		expect(isVoiceSessionCommandCurrent(rebuildCommand)).toBe(false);
 	});
@@ -301,7 +302,7 @@ describe('voice session store', () => {
 	it('updates direct selectors from dispatch with no projection or listener involved', () => {
 		// Direct selectors must be correct from the dispatch alone, without any
 		// secondary store or synchronization listener.
-		dispatchVoiceSession({
+		const [capture] = dispatchVoiceSession({
 			type: 'WsDropped',
 			pending: pendingReconnect,
 			now: 111,
@@ -319,7 +320,22 @@ describe('voice session store', () => {
 
 		const suppression = { channelId: 5, peerUserIds: [10], expiresAt: 20_000 };
 
-		dispatchVoiceSession({ type: 'ReconnectSuppressionChanged', suppression });
+		if (capture?.type !== 'CaptureRecoverySnapshot') throw new Error('expected snapshot command');
+		const [auth] = dispatchVoiceSession({
+			...capture,
+			type: 'RecoveryStarted',
+			snapshot: { remoteUserStreams: {}, externalStreams: {} },
+		});
+		if (auth?.type !== 'WaitAuth') throw new Error('expected authentication command');
+		const [restore] = dispatchVoiceSession({ ...auth, type: 'AuthReady' });
+		if (restore?.type !== 'RestoreVoiceSession') throw new Error('expected restore command');
+		const [watch] = dispatchVoiceSession({ ...restore, type: 'RestoreSucceeded' });
+		if (watch?.type !== 'RestoreWatchIntent') throw new Error('expected watch command');
+		dispatchVoiceSession({
+			...watch,
+			type: 'WatchIntentRehydrated',
+			now: suppression.expiresAt - VOICE_RECONNECT_SUPPRESSION_MS,
+		});
 
 		expect(selectVoiceSessionState(selectVoiceReconnectSuppression)).toEqual(suppression);
 	});

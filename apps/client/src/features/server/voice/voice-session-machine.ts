@@ -128,12 +128,9 @@ type TVoiceSessionTriggerEvent =
 	| { type: 'SocketAuthenticated' }
 	| { type: 'SocketUnauthenticated' }
 	| { type: 'NonceChanged'; commandId: number; generation: number; nonce: number }
-	| { type: 'Terminated'; reason: TClearReason; channelId?: number }
 	| { type: 'ReconnectIntentCaptured'; pending: TPendingVoiceReconnect }
 	| { type: 'ReconnectStarted'; now: number; online: boolean; authenticated: boolean }
-	| { type: 'ReconnectStartCleared' }
 	| { type: 'RecoveryCleared'; reason: TClearReason }
-	| { type: 'ReconnectSuppressionChanged'; suppression: TVoiceReconnectSuppression | undefined }
 	| { type: 'Resumed' };
 
 type TVoiceSessionResultEvent =
@@ -782,18 +779,6 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			return emptyResult({ ...state, pendingVoiceReconnect: event.pending });
 		case 'ReconnectStarted':
 			return startCapturedReconnect(state, event);
-		case 'ReconnectStartCleared':
-			if (state.phase.phase === 'reconnecting') {
-				return emptyResult({
-					...state,
-					phase: { phase: 'idle' },
-					pendingVoiceReconnect: state.phase.pending,
-					reconnectingSince: undefined,
-					reconnectAuthenticated: state.phase.authenticated,
-				});
-			}
-
-			return emptyResult({ ...state, reconnectingSince: undefined });
 		case 'TransportFailed':
 			if (
 				event.connectedGeneration !== undefined &&
@@ -886,8 +871,6 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			});
 		case 'NonceChanged':
 			return reduceNonceChanged(state, event);
-		case 'Terminated':
-			return failSession(state, event.reason, event.channelId);
 		case 'RecoveryCleared':
 			return emptyResult({
 				...state,
@@ -897,8 +880,6 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 				suppression: undefined,
 				reconnectAuthenticated: false,
 			});
-		case 'ReconnectSuppressionChanged':
-			return emptyResult({ ...state, suppression: event.suppression });
 		case 'RecoveryStarted':
 			return reduceRecoveryStarted(state, event);
 		case 'Resumed':

@@ -119,6 +119,9 @@ type TVoiceSessionExecutorPorts = {
 	reportRebuildDetached: (command: TRebuildTransportsCommand) => void;
 	reportRebuildTerminalFailure: (command: TRebuildTransportsCommand, error: unknown) => void;
 	reportRestoreDetached: (command: TRestoreVoiceSessionCommand) => void;
+	// Temporary (D4): proves in production whether the nonce restart still fires
+	// before it is deleted.
+	reportRebuildNonceRestart: (command: TRebuildTransportsCommand, currentNonce: number) => void;
 	commandObserver?: TVoiceSessionCommandObserver;
 };
 
@@ -600,6 +603,8 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 				if (currentNonce === command.nonce) {
 					return false;
 				}
+
+				reportSafely(() => ports.reportRebuildNonceRestart(command, currentNonce));
 
 				dispatchVoiceSession({
 					type: 'NonceChanged',

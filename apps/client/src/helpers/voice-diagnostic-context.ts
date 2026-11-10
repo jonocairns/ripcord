@@ -133,6 +133,8 @@ const counters = new Set([
 	'remoteId',
 	'commandId',
 	'generation',
+	'commandNonce',
+	'currentNonce',
 	'attempt',
 	'retryAttempt',
 	'rapidFailureCount',
