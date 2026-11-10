@@ -25,7 +25,7 @@ describe('secret token activity log', () => {
 		expect(entries[0]).toMatchObject({
 			type: 'USER_USED_SECRET_TOKEN',
 			userId: 2,
-			details: {},
+			details: null,
 		});
 		const serialized = JSON.stringify(entries);
 		expect(serialized).not.toContain(TEST_SECRET_TOKEN);
@@ -33,6 +33,7 @@ describe('secret token activity log', () => {
 	});
 
 	test('does not record a grant when the owner role insert fails', async () => {
+		// Seed user 1 is already the owner, so the duplicate user/role insert fails.
 		const { caller } = await initTest(1);
 		await tdb.delete(activityLog);
 

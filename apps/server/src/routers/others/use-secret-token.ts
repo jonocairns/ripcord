@@ -42,7 +42,6 @@ const useSecretTokenRoute = rateLimitedProcedure(protectedProcedure, {
 		enqueueActivityLog({
 			type: ActivityLogType.USER_USED_SECRET_TOKEN,
 			userId: ctx.userId,
-			details: {},
 		});
 
 		logger.info('Secret token used successfully by user %d', ctx.userId);
