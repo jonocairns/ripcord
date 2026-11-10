@@ -151,44 +151,40 @@ const getMessagesRoute = protectedProcedure
 			reactions: reactionsByMessage[msg.id] ?? [],
 		}));
 
-		// always update read state to the absolute latest message in the channel
-		// (not just the newest in this batch, in case user is scrolling back through history)
-		// this is not ideal, but it's good enough for now
-		const [, , latestMessage] = await Promise.all([
-			Promise.resolve(fileRows),
-			Promise.resolve(reactionRows),
-			db
+		// Opening a channel marks its latest message read; history pages leave read state alone.
+		if (cursor == null) {
+			const latestMessage = await db
 				.select()
 				.from(messages)
 				.where(eq(messages.channelId, channelId))
 				.orderBy(desc(messages.createdAt))
 				.limit(1)
-				.get(),
-		]);
+				.get();
 
-		if (latestMessage) {
-			await db
-				.insert(channelReadStates)
-				.values({
-					channelId,
-					userId: ctx.userId,
-					lastReadMessageId: latestMessage.id,
-					lastReadAt: Date.now(),
-				})
-				.onConflictDoUpdate({
-					target: [channelReadStates.channelId, channelReadStates.userId],
-					set: {
+			if (latestMessage) {
+				await db
+					.insert(channelReadStates)
+					.values({
+						channelId,
+						userId: ctx.userId,
 						lastReadMessageId: latestMessage.id,
 						lastReadAt: Date.now(),
-					},
+					})
+					.onConflictDoUpdate({
+						target: [channelReadStates.channelId, channelReadStates.userId],
+						set: {
+							lastReadMessageId: latestMessage.id,
+							lastReadAt: Date.now(),
+						},
+					});
+
+				const updatedReadStates = await getChannelsReadStatesForUser(ctx.userId, channelId);
+
+				pubsub.publishFor(ctx.userId, ServerEvents.CHANNEL_READ_STATES_UPDATE, {
+					channelId,
+					count: updatedReadStates[channelId] ?? 0,
 				});
-
-			const updatedReadStates = await getChannelsReadStatesForUser(ctx.userId, channelId);
-
-			pubsub.publishFor(ctx.userId, ServerEvents.CHANNEL_READ_STATES_UPDATE, {
-				channelId,
-				count: updatedReadStates[channelId] ?? 0,
-			});
+			}
 		}
 
 		return { messages: messagesWithFiles, nextCursor };
