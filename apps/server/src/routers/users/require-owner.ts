@@ -1,13 +1,8 @@
-import { OWNER_ROLE_ID } from '@sharkord/shared';
+import { loadUserGrants } from '../../db/queries/permissions';
 import { invariant } from '../../utils/invariant';
 import type { Context } from '../../utils/trpc';
-import { getUserRoles } from './get-user-roles';
 
-const isOwner = async (userId: number) => {
-	const roles = await getUserRoles(userId);
-
-	return roles.some((role) => role.id === OWNER_ROLE_ID);
-};
+const isOwner = async (userId: number) => loadUserGrants(userId)?.isOwner === true;
 
 const requireOwner = async (ctx: Context) => {
 	invariant(await isOwner(ctx.userId), {
