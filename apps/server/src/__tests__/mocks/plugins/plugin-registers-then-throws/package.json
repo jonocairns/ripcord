@@ -1,0 +1,9 @@
+{
+	"name": "plugin-registers-then-throws",
+	"version": "1.0.0",
+	"sharkord": {
+		"entry": "index.js",
+		"author": "Test Author",
+		"description": "Registers resources before failing to load"
+	}
+}

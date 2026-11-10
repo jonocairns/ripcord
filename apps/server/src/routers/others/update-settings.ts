@@ -1,7 +1,7 @@
 import { ActivityLogType, Permission, StorageOverflowAction } from '@sharkord/shared';
 import { z } from 'zod';
 import { updateSettings } from '../../db/mutations/server';
-import { publishSettings } from '../../db/publishers';
+import { publishPluginCommands, publishSettings } from '../../db/publishers';
 import { getSettings } from '../../db/queries/server';
 import { hashPassword } from '../../helpers/password';
 import { pluginManager } from '../../plugins';
@@ -42,12 +42,13 @@ const updateSettingsRoute = protectedProcedure
 			enablePlugins: input.enablePlugins,
 		});
 
-		if (oldEnablePlugins !== input.enablePlugins) {
+		if (input.enablePlugins !== undefined && input.enablePlugins !== oldEnablePlugins) {
 			if (input.enablePlugins) {
 				await pluginManager.loadPlugins();
 			} else {
 				await pluginManager.unloadPlugins();
 			}
+			publishPluginCommands();
 		}
 
 		publishSettings();
