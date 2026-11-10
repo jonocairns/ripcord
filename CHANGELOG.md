@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.5.8](https://github.com/jonocairns/ripcord/compare/v2.5.7...v2.5.8) (2026-11-10)
+
+
+### Bug Fixes
+
+* evict voice seats only for the current session and in a fixed order after role changes ([#407](https://github.com/jonocairns/ripcord/issues/407)) ([8f3d5a8](https://github.com/jonocairns/ripcord/commit/8f3d5a85a824a83a381267909d592fda55e9f269))
+* keep older history reachable when a catch-up reload ends up empty ([#414](https://github.com/jonocairns/ripcord/issues/414)) ([55bf105](https://github.com/jonocairns/ripcord/commit/55bf105267b4a76185d6aadf0ed5b40f3f98e0f2))
+* keep sign-in when a saved server URL is upgraded to HTTPS ([#411](https://github.com/jonocairns/ripcord/issues/411)) ([a3dffe8](https://github.com/jonocairns/ripcord/commit/a3dffe86f44cb92634a30c10a0a5c75c8b3998d7))
+* record secret token use in the activity log ([#412](https://github.com/jonocairns/ripcord/issues/412)) ([e0e0646](https://github.com/jonocairns/ripcord/commit/e0e064664715af3c090a2b2e0ef175b97cbbd923))
+* send the unread count when a user gains access to a channel ([#413](https://github.com/jonocairns/ripcord/issues/413)) ([41ab2eb](https://github.com/jonocairns/ripcord/commit/41ab2eb6fc4026cd49e18c69ce7225946fca9768))
+* show the disconnect screen when the final silent rejoin gives up ([#408](https://github.com/jonocairns/ripcord/issues/408)) ([e8d4c7a](https://github.com/jonocairns/ripcord/commit/e8d4c7aef3626cefc6de92133a45f6e10d563591))
+
 ## [2.5.7](https://github.com/jonocairns/ripcord/compare/v2.5.6...v2.5.7) (2026-11-10)
 
 
