@@ -5,6 +5,7 @@ import { initTest, login } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
 import { syncRolePermissions } from '../../db/mutations/roles';
 import { fallbackUsersToDefaultRole } from '../../db/mutations/users';
+import * as channelQueries from '../../db/queries/channels';
 import { refreshTokens, rolePermissions, roles, userRoles, users } from '../../db/schema';
 import * as passwordHelpers from '../../helpers/password';
 
@@ -157,6 +158,26 @@ describe('password and role atomicity', () => {
 		expect(tdb.select().from(rolePermissions).where(eq(rolePermissions.roleId, OWNER_ROLE_ID)).all()).toEqual(
 			permissions,
 		);
+	});
+
+	test('role deletion is refused if the role becomes the default during the request', async () => {
+		const { caller } = await initTest();
+		const roleId = await caller.roles.add();
+		tdb.insert(userRoles).values({ userId: 2, roleId, createdAt: 1 }).run();
+		const original = channelQueries.getVisibleChannelIdsByUserSync;
+		// Runs after the route's up-front checks and before its transaction.
+		const spy = spyOn(channelQueries, 'getVisibleChannelIdsByUserSync').mockImplementation((userIds) => {
+			tdb.update(roles).set({ isDefault: false }).run();
+			tdb.update(roles).set({ isDefault: true }).where(eq(roles.id, roleId)).run();
+			return original(userIds);
+		});
+		try {
+			await expect(caller.roles.delete({ roleId })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+		} finally {
+			spy.mockRestore();
+		}
+		expect(tdb.select().from(roles).where(eq(roles.id, roleId)).get()?.isDefault).toBe(true);
+		expect(tdb.select().from(userRoles).where(eq(userRoles.roleId, roleId)).all()).toHaveLength(1);
 	});
 
 	for (const failDelete of [true, false]) {

@@ -5,7 +5,7 @@ import { db } from '../../db';
 import { fallbackUsersToDefaultRoleSync } from '../../db/mutations/users';
 import { publishChannelPermissions, publishRole, publishUserChannelVisibility } from '../../db/publishers';
 import { getVisibleChannelIdsByUserSync } from '../../db/queries/channels';
-import { getDefaultRole, getRole } from '../../db/queries/roles';
+import { getRole } from '../../db/queries/roles';
 import { roles, userRoles } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
@@ -44,13 +44,26 @@ const deleteRoleRoute = protectedProcedure
 		const affectedUserIds = affectedUsers.map((user) => user.userId);
 		const previousVisibleByUser = getVisibleChannelIdsByUserSync(affectedUserIds);
 
-		const defaultRole = await getDefaultRole();
-		invariant(defaultRole, {
-			code: 'NOT_FOUND',
-			message: 'Default role not found',
-		});
-
 		db.transaction((tx) => {
+			// Re-read inside the transaction: another admin may have deleted this role
+			// or made it the default since the checks above. Deleting the default
+			// would leave the server without one and break new sign-ups.
+			const currentRole = tx.select({ isDefault: roles.isDefault }).from(roles).where(eq(roles.id, role.id)).get();
+			invariant(currentRole, {
+				code: 'NOT_FOUND',
+				message: 'Role not found',
+			});
+			invariant(!currentRole.isDefault, {
+				code: 'FORBIDDEN',
+				message: 'Cannot delete the default role',
+			});
+
+			const defaultRole = tx.select({ id: roles.id }).from(roles).where(eq(roles.isDefault, true)).get();
+			invariant(defaultRole, {
+				code: 'NOT_FOUND',
+				message: 'Default role not found',
+			});
+
 			fallbackUsersToDefaultRoleSync(tx, role.id, defaultRole.id);
 			tx.delete(roles).where(eq(roles.id, role.id)).run();
 		});

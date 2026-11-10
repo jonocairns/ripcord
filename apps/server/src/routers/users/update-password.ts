@@ -61,7 +61,9 @@ const updatePasswordRoute = passwordCheckProcedure
 				message: 'Your password was changed in another session. Please try again.',
 			});
 
-			invariant(currentUser.tokenVersion === user.tokenVersion, {
+			// Compare with the version this session authenticated with, not just the
+			// earlier read, so a revocation landing before that read is still caught.
+			invariant(currentUser.tokenVersion === ctx.sessionTokenVersion, {
 				code: 'CONFLICT',
 				message: 'Your session changed while updating the password. Please sign in and try again.',
 			});
