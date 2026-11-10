@@ -21,32 +21,32 @@ const updatePasswordRoute = passwordCheckProcedure
 	)
 	.mutation(async ({ ctx, input }) => {
 		const now = Date.now();
-		const newTokenVersion = await db.transaction(async (tx) => {
-			const user = await tx
-				.select({
-					password: users.password,
-					mustChangePassword: users.mustChangePassword,
-				})
-				.from(users)
-				.where(eq(users.id, ctx.userId))
-				.get();
+		const user = db.select({ password: users.password }).from(users).where(eq(users.id, ctx.userId)).get();
 
-			invariant(user, {
-				code: 'NOT_FOUND',
-				message: 'User not found',
+		invariant(user, {
+			code: 'NOT_FOUND',
+			message: 'User not found',
+		});
+
+		const isCurrentPasswordValid = await verifyPassword(input.currentPassword, user.password);
+
+		if (!isCurrentPasswordValid) {
+			ctx.throwValidationError('currentPassword', 'Current password is incorrect');
+		}
+
+		if (input.newPassword !== input.confirmNewPassword) {
+			ctx.throwValidationError('confirmNewPassword', 'New password and confirmation do not match');
+		}
+
+		const hashedNewPassword = await hashPassword(input.newPassword);
+
+		const newTokenVersion = db.transaction((tx) => {
+			const currentUser = tx.select({ password: users.password }).from(users).where(eq(users.id, ctx.userId)).get();
+
+			invariant(currentUser?.password === user.password, {
+				code: 'CONFLICT',
+				message: 'Your password was changed in another session. Please try again.',
 			});
-
-			const isCurrentPasswordValid = await verifyPassword(input.currentPassword, user.password);
-
-			if (!isCurrentPasswordValid) {
-				ctx.throwValidationError('currentPassword', 'Current password is incorrect');
-			}
-
-			if (input.newPassword !== input.confirmNewPassword) {
-				ctx.throwValidationError('confirmNewPassword', 'New password and confirmation do not match');
-			}
-
-			const hashedNewPassword = await hashPassword(input.newPassword);
 
 			const userUpdateData = {
 				password: hashedNewPassword,
@@ -54,15 +54,14 @@ const updatePasswordRoute = passwordCheckProcedure
 				tokenVersion: sql`${users.tokenVersion} + 1`,
 			};
 
-			const updatedUser = await tx
+			const updatedUser = tx
 				.update(users)
 				.set(userUpdateData)
 				.where(eq(users.id, ctx.userId))
 				.returning({ tokenVersion: users.tokenVersion })
 				.get();
 
-			await tx
-				.update(refreshTokens)
+			tx.update(refreshTokens)
 				.set({
 					revokedAt: now,
 					updatedAt: now,

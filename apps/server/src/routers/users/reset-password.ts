@@ -28,16 +28,15 @@ const resetPasswordRoute = protectedProcedure
 		const now = Date.now();
 		const hashedPassword = await hashPassword(input.newPassword);
 
-		await db.transaction(async (tx) => {
-			const targetUser = await tx.select({ id: users.id }).from(users).where(eq(users.id, input.userId)).get();
+		await db.transaction((tx) => {
+			const targetUser = tx.select({ id: users.id }).from(users).where(eq(users.id, input.userId)).get();
 
 			invariant(targetUser, {
 				code: 'NOT_FOUND',
 				message: 'User not found',
 			});
 
-			await tx
-				.update(users)
+			tx.update(users)
 				.set({
 					password: hashedPassword,
 					tokenVersion: sql`${users.tokenVersion} + 1`,
@@ -46,8 +45,7 @@ const resetPasswordRoute = protectedProcedure
 				.where(eq(users.id, input.userId))
 				.run();
 
-			await tx
-				.update(refreshTokens)
+			tx.update(refreshTokens)
 				.set({
 					revokedAt: now,
 					updatedAt: now,

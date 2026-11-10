@@ -25,8 +25,8 @@ const refreshRouteHandler = async (req: http.IncomingMessage, res: http.ServerRe
 	const newRefreshToken = createRefreshTokenValue();
 	const newRefreshTokenHash = await sha256(newRefreshToken);
 
-	const rotationResult = await db.transaction(async (tx) => {
-		const existingSession = await tx
+	const rotationResult = await db.transaction((tx) => {
+		const existingSession = tx
 			.update(refreshTokens)
 			.set({
 				revokedAt: now,
@@ -51,7 +51,7 @@ const refreshRouteHandler = async (req: http.IncomingMessage, res: http.ServerRe
 			// that was already rotated/revoked (reuse/theft signal). Only the latter
 			// -- an actual row exists for this hash -- triggers revocation, so a
 			// random/never-issued token can never cause mass revocation.
-			const revokedSession = await tx
+			const revokedSession = tx
 				.select({
 					userId: refreshTokens.userId,
 					revokedAt: refreshTokens.revokedAt,
@@ -80,14 +80,13 @@ const refreshRouteHandler = async (req: http.IncomingMessage, res: http.ServerRe
 				while (nextHash && !seen.has(nextHash)) {
 					seen.add(nextHash);
 
-					const node = await tx
+					const node = tx
 						.select({ replacedByTokenHash: refreshTokens.replacedByTokenHash })
 						.from(refreshTokens)
 						.where(eq(refreshTokens.tokenHash, nextHash))
 						.get();
 
-					await tx
-						.update(refreshTokens)
+					tx.update(refreshTokens)
 						.set({ revokedAt: now, updatedAt: now })
 						.where(and(eq(refreshTokens.tokenHash, nextHash), isNull(refreshTokens.revokedAt)))
 						.run();
@@ -99,7 +98,7 @@ const refreshRouteHandler = async (req: http.IncomingMessage, res: http.ServerRe
 			return { status: 'invalid' as const };
 		}
 
-		const user = await tx
+		const user = tx
 			.select({
 				id: users.id,
 				banned: users.banned,
@@ -113,16 +112,17 @@ const refreshRouteHandler = async (req: http.IncomingMessage, res: http.ServerRe
 			return { status: 'unauthorized' as const };
 		}
 
-		await tx.insert(refreshTokens).values({
-			userId: user.id,
-			tokenHash: newRefreshTokenHash,
-			expiresAt: now + REFRESH_TOKEN_TTL_MS,
-			createdAt: now,
-			updatedAt: now,
-		});
+		tx.insert(refreshTokens)
+			.values({
+				userId: user.id,
+				tokenHash: newRefreshTokenHash,
+				expiresAt: now + REFRESH_TOKEN_TTL_MS,
+				createdAt: now,
+				updatedAt: now,
+			})
+			.run();
 
-		await tx
-			.update(refreshTokens)
+		tx.update(refreshTokens)
 			.set({
 				replacedByTokenHash: newRefreshTokenHash,
 				updatedAt: now,

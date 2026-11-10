@@ -25,8 +25,8 @@ const resetTotpRoute = protectedProcedure
 
 		const now = Date.now();
 
-		await db.transaction(async (tx) => {
-			const targetUser = await tx
+		await db.transaction((tx) => {
+			const targetUser = tx
 				.select({
 					id: users.id,
 					totpSecret: users.totpSecret,
@@ -45,8 +45,7 @@ const resetTotpRoute = protectedProcedure
 				message: 'Two-factor authentication is not enabled for this user',
 			});
 
-			await tx
-				.update(users)
+			tx.update(users)
 				.set({
 					totpSecret: null,
 					totpRecoveryCodes: null,
@@ -55,8 +54,7 @@ const resetTotpRoute = protectedProcedure
 				.where(eq(users.id, input.userId))
 				.run();
 
-			await tx
-				.update(refreshTokens)
+			tx.update(refreshTokens)
 				.set({
 					revokedAt: now,
 					updatedAt: now,
