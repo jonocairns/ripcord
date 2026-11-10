@@ -37,7 +37,6 @@ import {
 	clearVoiceReconnectRecovery,
 	ensureVoiceReconnectStarted,
 	getValidPendingVoiceReconnect,
-	markVoiceReconnectSessionAuthenticated,
 	resolveVoiceRecoveryAction,
 } from './voice/reconnect-coordinator';
 import { resolveWsRejoinFailureAction } from './ws-rejoin-failure-policy';
@@ -281,10 +280,6 @@ export const joinServer = async (
 			if (didGenerationChange(generation)) {
 				return 'cancelled';
 			}
-
-			// The reconnected WS context is now authenticated — release the gate so
-			// voice recovery can safely issue the protected restoreOrJoin.
-			markVoiceReconnectSessionAuthenticated();
 
 			const state = useServerStore.getState();
 			if (state.currentVoiceChannelId !== undefined) {

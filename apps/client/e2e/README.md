@@ -44,6 +44,11 @@ Its grace-expiry case closes the real server WebSocket while the browser is offl
 60-second grace expiry and fresh restore path, then checks replacement microphone media and camera RTP. Browser
 offline duration by itself is not evidence that the server's grace timer expired.
 
+The server-unreachable spec holds replacement WebSockets in CONNECTING while the browser stays online, waits for
+the disconnect screen, then restores connectivity and checks automatic voice recovery with outbound and inbound
+microphone media. It does not use browser offline mode because offline defers application teardown and would hide
+the authentication gap after reconnecting from the disconnect screen. It waits on UI events rather than elapsed time.
+
 The text-chat suite sends, edits and deletes messages between members, uploads attachments, and checks that the
 browser decodes the real image bytes and that file links download, survive a history load, and stop working once their
 message is deleted. Its private-channel case checks that attachment links need the channel token and that the open

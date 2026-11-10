@@ -1597,6 +1597,31 @@ describe('voice session command executor', () => {
 		expect(scheduler.pendingCount()).toBe(0);
 	});
 
+	it('expires an auth wait whose deadline passed even when the socket is already authenticated', async () => {
+		const commandObserver = createRecordingCommandObserver();
+		const waitCommand = startAuthWait();
+		// Authentication lands long after the reconnect intent expired, as when the
+		// disconnect screen reconnects minutes after an app teardown.
+		dispatchVoiceSession({ type: 'SocketAuthenticated' });
+		const executor = createExecutor(
+			createFakePorts({
+				now: () => pendingReconnect.expiresAt + 1,
+				commandObserver: commandObserver.observer,
+			}),
+		);
+
+		executor.execute([waitCommand]);
+		await flushMicrotasks();
+
+		expect(commandObserver.finished).toEqual([
+			expect.objectContaining({
+				context: expect.objectContaining({ commandType: 'WaitAuth' }),
+				outcome: 'expired',
+			}),
+		]);
+		expect(getVoiceSessionState().phase).not.toMatchObject({ phase: 'reconnecting', step: 'restoring' });
+	});
+
 	it('cancels an auth wait on recovery clear or executor disposal without reporting failure', async () => {
 		const scheduler = createFakeScheduler();
 		const reportedFailures: unknown[] = [];

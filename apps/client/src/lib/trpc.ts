@@ -12,6 +12,7 @@ import {
 	captureVoiceReconnectIntentForCurrentSession,
 	clearVoiceReconnectRecovery,
 	ensureVoiceReconnectStarted,
+	markVoiceReconnectSessionAuthenticated,
 	markVoiceReconnectSessionUnauthenticated,
 } from '@/features/server/voice/reconnect-coordinator';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
@@ -395,6 +396,7 @@ const getTRPCClientIfInitialized = () => trpc;
 const markTRPCSessionAuthenticated = (client: ReturnType<typeof createTRPCProxyClient<AppRouter>>) => {
 	if (client === trpc && isTRPCSocketOpen()) {
 		sessionAuthentication.authenticate();
+		markVoiceReconnectSessionAuthenticated();
 		authenticateStreamObservability();
 		authenticateDiagnosticDelivery();
 	}
