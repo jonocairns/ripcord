@@ -49,6 +49,9 @@ export const addMessages = (
 	}
 };
 
+export const applyLatestMessagePage = (channelId: number, messages: TJoinedMessage[]) =>
+	useServerStore.getState().applyLatestMessagePage({ channelId, messages });
+
 export const updateMessage = (channelId: number, message: TJoinedMessage) => {
 	useServerStore.getState().updateMessage({ channelId, message });
 };

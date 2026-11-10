@@ -1,11 +1,13 @@
 import type { TJoinedMessage } from '@sharkord/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { logDebug } from '@/helpers/browser-logger';
 import { getTRPCClient } from '@/lib/trpc';
 import { getFileLinkVersion, subscribeToNonceBumps } from '../nonce-signals';
 import { serverRejoinNonceSelector } from '../selectors';
 import { useServerStore } from '../slice';
 import {
 	addMessages,
+	applyLatestMessagePage,
 	refreshChannelFileAccessTokens,
 	refreshExpiringFileAccessTokens,
 	refreshLoadedFileAccessTokens,
@@ -31,24 +33,35 @@ export const useMessages = (channelId: number) => {
 	const [hasMore, setHasMore] = useState(true);
 
 	const fetchMessages = useCallback(
-		async (cursorToFetch: number | null, limit: number) => {
-			const trpcClient = getTRPCClient();
-
+		async (cursorToFetch: number | null, limit: number, preservePagination = false) => {
 			setFetching(true);
 
 			try {
+				const trpcClient = getTRPCClient();
+				let replaced = false;
 				const nextCursor = await loadMessagePage({
 					query: () => trpcClient.messages.get.query({ channelId, cursor: cursorToFetch, limit }),
 					getLoadedMessages: () => messagesRef.current,
 					getFileLinkVersion,
+					applyLatestMessagePage:
+						cursorToFetch === null
+							? (page) => {
+									replaced = applyLatestMessagePage(channelId, page);
+								}
+							: undefined,
 					addMessages: (page) => addMessages(channelId, page, { prepend: cursorToFetch !== null }),
 					refreshFileAccessTokens: () => refreshChannelFileAccessTokens(channelId),
 				});
 
-				setCursor(nextCursor);
-				setHasMore(nextCursor !== null);
+				if (!preservePagination || replaced) {
+					setCursor(nextCursor);
+					setHasMore(nextCursor !== null);
+				}
 
 				return { success: true };
+			} catch (error) {
+				logDebug('Message page load failed', error);
+				return { success: false };
 			} finally {
 				setFetching(false);
 				setLoading(false);
@@ -70,6 +83,14 @@ export const useMessages = (channelId: number) => {
 
 		inited.current = true;
 	}, [fetchMessages]);
+
+	useEffect(
+		() =>
+			subscribeToNonceBumps(serverRejoinNonceSelector, () => {
+				void fetchMessages(null, INITIAL_MESSAGES_LIMIT, true);
+			}),
+		[fetchMessages],
+	);
 
 	const isEmpty = useMemo(() => !messages.length && !fetching, [messages.length, fetching]);
 

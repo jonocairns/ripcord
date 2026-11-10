@@ -1,0 +1,136 @@
+import { beforeEach, describe, expect, it } from 'bun:test';
+import type { TJoinedMessage } from '@sharkord/shared';
+import { useServerStore } from '../../slice';
+import { applyLatestMessagePage } from '../latest-message-page';
+import { loadMessagePage } from '../load-message-page';
+
+const message = (id: number, content = `message ${id}`, createdAt = id) => ({ id, content, createdAt });
+
+describe('applyLatestMessagePage', () => {
+	it('replaces an empty list with the page', () => {
+		const page = [message(1), message(2)];
+		expect(applyLatestMessagePage([], page)).toEqual({ messages: page, replaced: true });
+	});
+	it('merges an overlapping page without duplicates in createdAt order', () => {
+		const loaded = [message(9, 'older', 1), message(2)];
+		expect(applyLatestMessagePage(loaded, [message(2), message(3)])).toEqual({
+			messages: [loaded[0], message(2), message(3)],
+			replaced: false,
+		});
+	});
+	it('replaces an edited message in the page range', () => {
+		expect(applyLatestMessagePage([message(1), message(2), message(3)], [message(2, 'edited'), message(3)])).toEqual({
+			messages: [message(1), message(2, 'edited'), message(3)],
+			replaced: false,
+		});
+	});
+	it('drops a deleted message from the authoritative page range', () => {
+		expect(applyLatestMessagePage([message(1), message(2), message(3), message(4)], [message(2), message(4)])).toEqual({
+			messages: [message(1), message(2), message(4)],
+			replaced: false,
+		});
+	});
+	it('replaces the list when continuity cannot be proven', () => {
+		const page = [message(5), message(6)];
+		expect(applyLatestMessagePage([message(1), message(2)], page)).toEqual({ messages: page, replaced: true });
+	});
+	it('keeps identical page content unchanged', () => {
+		const page = [message(1), message(2)];
+		expect(applyLatestMessagePage(page, page)).toEqual({ messages: page, replaced: false });
+	});
+	it('clears the loaded list for an empty authoritative page', () => {
+		expect(applyLatestMessagePage([message(1)], [])).toEqual({ messages: [], replaced: true });
+	});
+});
+
+const joinedMessage = (id: number): TJoinedMessage => ({
+	id,
+	channelId: 1,
+	userId: 1,
+	content: `message ${id}`,
+	createdAt: id,
+	editable: true,
+	metadata: null,
+	updatedAt: null,
+	files: [],
+	reactions: [],
+});
+
+describe('latest page in the message store', () => {
+	beforeEach(() => useServerStore.getState().resetState());
+
+	it('clears the protected prefix on replacement and caps the new tail', () => {
+		useServerStore.setState({
+			messagesMap: { 1: [joinedMessage(1)] },
+			protectedMessagePrefixCounts: { 1: 1 },
+		});
+		const replaced = useServerStore.getState().applyLatestMessagePage({
+			channelId: 1,
+			messages: Array.from({ length: 1005 }, (_, index) => joinedMessage(index + 10)),
+		});
+		expect(replaced).toBe(true);
+		expect(useServerStore.getState().protectedMessagePrefixCounts[1]).toBeUndefined();
+		expect(useServerStore.getState().messagesMap[1]).toHaveLength(1000);
+		expect(useServerStore.getState().messagesMap[1]?.[0]?.id).toBe(15);
+	});
+
+	it('keeps explicitly paged history protected when merging and caps the live tail', () => {
+		useServerStore.setState({
+			messagesMap: { 1: [joinedMessage(1), joinedMessage(2), joinedMessage(3)] },
+			protectedMessagePrefixCounts: { 1: 2 },
+		});
+		const replaced = useServerStore.getState().applyLatestMessagePage({
+			channelId: 1,
+			messages: Array.from({ length: 1005 }, (_, index) => joinedMessage(index + 3)),
+		});
+		expect(replaced).toBe(false);
+		expect(useServerStore.getState().protectedMessagePrefixCounts[1]).toBe(2);
+		expect(useServerStore.getState().messagesMap[1]).toHaveLength(1002);
+		expect(useServerStore.getState().messagesMap[1]?.slice(0, 2)).toEqual([joinedMessage(1), joinedMessage(2)]);
+	});
+
+	it('applies duplicate first-page messages as authoritative and refreshes their invalidated files', async () => {
+		const loaded = joinedMessage(1);
+		useServerStore.setState({ messagesMap: { 1: [loaded] } });
+		let version = 'before';
+		let refreshes = 0;
+		const pageMessage = {
+			...loaded,
+			content: 'edited',
+			files: [
+				{
+					id: 1,
+					name: 'file',
+					originalName: 'file',
+					extension: 'txt',
+					mimeType: 'text/plain',
+					md5: 'hash',
+					size: 1,
+					userId: 1,
+					createdAt: 1,
+					updatedAt: null,
+				},
+			],
+		};
+		const cursor = await loadMessagePage({
+			query: async () => {
+				version = 'after';
+				return { messages: [pageMessage], nextCursor: null };
+			},
+			getLoadedMessages: () => useServerStore.getState().messagesMap[1] ?? [],
+			getFileLinkVersion: () => version,
+			applyLatestMessagePage: (messages) => {
+				useServerStore.getState().applyLatestMessagePage({ channelId: 1, messages });
+			},
+			addMessages: () => {
+				throw new Error('First pages must use the authoritative action');
+			},
+			refreshFileAccessTokens: async () => {
+				refreshes += 1;
+			},
+		});
+		expect(cursor).toBeNull();
+		expect(useServerStore.getState().messagesMap[1]).toEqual([pageMessage]);
+		expect(refreshes).toBe(1);
+	});
+});

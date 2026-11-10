@@ -20,6 +20,7 @@ import { ChannelType } from '@sharkord/shared';
 import { create } from 'zustand';
 import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-card-controller';
 import { applyFileAccessTokens, type TFileAccessToken } from './messages/file-access-tokens';
+import { applyLatestMessagePage } from './messages/latest-message-page';
 import type { TDisconnectInfo, TMessagesMap } from './types';
 
 export interface IServerState {
@@ -89,6 +90,7 @@ type TServerStore = IServerState & {
 	setDisconnectInfo: (disconnectInfo: TDisconnectInfo | undefined) => void;
 	setInitialData: (data: TInitialServerData) => void;
 	addMessages: (payload: { channelId: number; messages: TJoinedMessage[]; opts?: { prepend?: boolean } }) => void;
+	applyLatestMessagePage: (payload: { channelId: number; messages: TJoinedMessage[] }) => boolean;
 	updateMessage: (payload: { channelId: number; message: TJoinedMessage }) => void;
 	deleteMessage: (payload: { channelId: number; messageId: number }) => void;
 	setFileAccessTokens: (payload: { tokens: TFileAccessToken[] }) => void;
@@ -378,6 +380,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 	},
 	setInitialData: (data) => {
 		const ownVoiceState = findVoiceStateForUser(data.voiceMap, data.ownUserId);
+		const selectedChannelId = get().selectedChannelId;
 
 		set({
 			connected: true,
@@ -393,7 +396,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			externalStreamsMap: data.externalStreamsMap,
 			serverId: data.serverId,
 			channelPermissions: data.channelPermissions,
-			readStatesMap: data.readStates,
+			readStatesMap: selectedChannelId === undefined ? data.readStates : { ...data.readStates, [selectedChannelId]: 0 },
 			ownVoiceDefaults: ownVoiceState
 				? mergeOwnVoiceDefaults(get().ownVoiceDefaults, ownVoiceState)
 				: get().ownVoiceDefaults,
@@ -436,6 +439,20 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 				nextProtectedPrefixCount,
 			),
 		});
+	},
+	applyLatestMessagePage: ({ channelId, messages }) => {
+		const state = get();
+		const result = applyLatestMessagePage(state.messagesMap[channelId] ?? [], messages);
+		const protectedPrefixCount = result.replaced ? 0 : (state.protectedMessagePrefixCounts[channelId] ?? 0);
+		set({
+			messagesMap: { ...state.messagesMap, [channelId]: capChannelMessages(result.messages, protectedPrefixCount) },
+			protectedMessagePrefixCounts: setProtectedMessagePrefixCount(
+				state.protectedMessagePrefixCounts,
+				channelId,
+				protectedPrefixCount,
+			),
+		});
+		return result.replaced;
 	},
 	updateMessage: ({ channelId, message }) => {
 		const state = get();
